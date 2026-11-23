@@ -270,12 +270,13 @@ class TestRunStep(unittest.TestCase):
 
         def fake(step, out, dry_run):
             calls.append(step.name)
-            return busbar.Check(name=step.name, status=FAIL if step.name == "qb" else PASS)
+            return busbar.Check(name=step.name, status=FAIL if step.name == "qb" else PASS, data=data)
 
-        phase = Phase(name="busbar")
-        with mock.patch.object(busbar, "run_step", fake):
-            self.assertTrue(busbar.run_busbar(phase, Path("/tmp"), "smoke"))
-        self.assertEqual(calls, ["qb", "mix", "step", "heavy", "code"])
+        for data, want in (({}, False), ({"hung": True}, True)):  # a plain failure is no link fault, a hang is
+            calls.clear()
+            with mock.patch.object(busbar, "run_step", fake):
+                self.assertEqual(busbar.run_busbar(Phase(name="busbar"), Path("/tmp"), "smoke"), want)
+            self.assertEqual(calls, ["qb", "mix", "step", "heavy", "code"])
 
 
 class TestLinks(unittest.TestCase):
@@ -337,7 +338,7 @@ class TestLinks(unittest.TestCase):
     def _sweep_reset(self, reset_fails=False, skip_reset=False, no_reset=False):
         return self._run_load(reset_fails, skip_reset, no_reset)["why"]
 
-    def _run_load(self, reset_fails=False, skip_reset=False, no_reset=False, steps=None):
+    def _run_load(self, reset_fails=False, skip_reset=False, no_reset=False, steps=None, busbar_stub=None):
         """run_diag's galaxy load with the bus-bar and links phases stubbed: ``busbar`` is how often the bus-bar
         phase ran, ``links`` whether the links phase ran and ``why`` what its reset callback said after a failed
         pair test (the real run_post_test_reset over a glx_reset that fails or not)."""
@@ -348,14 +349,14 @@ class TestLinks(unittest.TestCase):
 
         def fake_busbar(*args, **kw):
             got["busbar"] += 1
-            return True
+            return busbar_stub(*args, **kw) if busbar_stub else True
 
         def fake_loop(tt_smi, plan, phase, dry_run):
             phase.add(Check(name="reset_glx", status=FAIL if reset_fails else PASS, details=""))
 
         def fake_links(phase, out, fault, reset, dry_run):
             phase.add(Check(name="galaxy_pair", status=FAIL, details="pair 00-01 failed", ip="eth"))
-            got["links"], got["why"] = True, reset()
+            got["links"], got["fault"], got["why"] = True, fault, reset()
 
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
             diag_runner, "run_links", fake_links
@@ -563,6 +564,109 @@ class TestLinks(unittest.TestCase):
         data = phase.checks[0].data
         self.assertEqual([e["a"]["tray"] for e in data["link_ends"]], [1, 1])
         self.assertEqual(data["link_ends"], [e for f in data["failed"] for e in f["ends"]])
+
+    def _grid_disc(self):
+        return {"bdfs": {i: f"0000:{i + 1:02x}:00.0" for i in range(6)}, "links": self.links}
+
+    def _pair_test(self, wait, tick=0, **kw):
+        """pair_test over the grid with the pair programs faked: *wait(timeout)* is each program's p.wait, and each wait
+        moves the clock *tick* s on; returns the failed flag, the phase's check and the timeouts wait got."""
+        now, timeouts = [0.0], []
+
+        class P:
+            pid = 1
+
+            def wait(self, timeout=None):
+                timeouts.append(timeout)
+                now[0] += tick
+                return wait(timeout)
+
+        phase = Phase(name="links")
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(
+            links, "umd_index", return_value=[0, 1]
+        ), mock.patch.object(links.subprocess, "Popen", return_value=P()), mock.patch.object(
+            links.os, "killpg"
+        ), mock.patch.object(
+            links.time, "monotonic", lambda: now[0]
+        ):
+            failed = links.pair_test(phase, Path(d), "sweep", 10, self._grid_disc(), **kw)
+        return failed, phase.checks[0], timeouts
+
+    def test_pair_test_cap_reports_pairs_not_reached_never_a_pass(self):
+        rounds = links.pairs(self.links)
+        self.assertGreater(len(rounds), 1)
+        failed, c, _ = self._pair_test(lambda t: 0, cap_s=0)
+        self.assertFalse(failed)
+        self.assertEqual((c.status, len(c.data["not_reached"])), (SKIP, sum(len(r) for r in rounds)))
+        self.assertIn("not reached in the 0 s cap", c.details)
+        failed, c, _ = self._pair_test(lambda t: 0)  # no cap: every round runs
+        self.assertEqual((failed, c.status, c.data["not_reached"]), (False, PASS, []))
+        # the first round takes 400 s, past the 300 s cap: the rest are not reached
+        failed, c, _ = self._pair_test(lambda t: 0, tick=400, cap_s=300)
+        self.assertEqual((failed, c.status), (False, SKIP))
+        self.assertEqual(len(c.data["not_reached"]), sum(len(r) for r in rounds[1:]))
+
+    def test_pair_test_a_failed_pair_is_a_fail_even_when_the_cap_cut_rounds(self):
+        failed, c, _ = self._pair_test(lambda t: 4, tick=400, cap_s=300)
+        self.assertTrue(failed)
+        self.assertEqual((c.status, c.data["failed"][0]["why"]), (FAIL, "data mismatch"))
+        self.assertTrue(c.data["not_reached"])
+        self.assertIn("not reached in the 300 s cap", c.details)
+
+    def test_pair_test_waits_one_limit_per_round_and_calls_a_late_pair_hung(self):
+        def hang(t):
+            if t:
+                raise subprocess.TimeoutExpired("p", t)
+            return 0
+
+        failed, c, timeouts = self._pair_test(hang)
+        self.assertTrue(failed)
+        self.assertEqual({f["why"] for f in c.data["failed"]}, {"hung"})
+        self.assertEqual(max(t for t in timeouts if t is not None), links.PAIR_S + links.OP_TIMEOUT_S + links.COMPILE_S)
+
+    def test_link_fault_counts_ccl_errors_and_the_op_timeout_hang_line(self):
+        def fault(*lines, status=FAIL, **data):
+            with tempfile.TemporaryDirectory() as d:
+                log = Path(d) / "step.log"
+                log.write_text("\n".join(lines))
+                return busbar.link_fault(Check(name="b", status=status, ip="eth", data={"log": str(log), **data}))
+
+        hang = "TT_THROW TIMEOUT: device timeout, potential hang detected, the device is unrecoverable"
+        self.assertTrue(fault(hang))  # the step exited with an error after the op timeout: no 'hung' flag
+        self.assertFalse(fault("2026 | info | device timeout, potential hang detected"))  # a log line, not an error
+        self.assertFalse(fault(hang, status=PASS))
+        self.assertFalse(fault("a plain error"))
+        self.assertTrue(fault("fine", hung=True))
+        self.assertFalse(fault(*[hang] + ["x"] * 40))  # older than the last 40 lines
+
+    def test_a_hang_still_arms_the_sweep_when_a_later_bus_bar_step_raises(self):
+        def stub(phase, *args, **kw):
+            phase.add(Check(name="step1", status=FAIL, ip="eth", data={"hung": True}))
+            raise RuntimeError("a later step blew up")
+
+        self.assertTrue(self._run_load(busbar_stub=stub)["fault"])
+        self.assertFalse(
+            self._run_load(
+                busbar_stub=lambda phase, *a, **k: phase.add(
+                    Check(name="step1", status=FAIL, ip="eth", data={"log": "/nonexistent"})
+                )
+            )["fault"]
+        )
+
+    def test_link_fault_reads_the_verify_rows_but_not_a_numeric_fault_spread_by_the_all_gather(self):
+        def fault(*chips):
+            with tempfile.TemporaryDirectory() as d:
+                (Path(d) / "step.log").write_text("fine")
+                row = {"event": "verify", "chips": {str(i): {"bad_parts": b} for i, b in enumerate(chips)}}
+                (Path(d) / "rows.jsonl").write_text(json.dumps(row) + "\n")
+                return busbar.link_fault(
+                    Check(name="b", status=FAIL, ip="eth", data={"log": str(Path(d) / "step.log")})
+                )
+
+        self.assertTrue(fault(["h3"], [], []))  # a CCL mismatch alone
+        self.assertTrue(fault(["heavy", "h3"], ["h3"]))  # the chip with its own fault also has the h3 mismatch
+        self.assertFalse(fault(["heavy"], ["h3"], ["h3-ref"]))  # h3-only beside a local fault: its spread
+        self.assertFalse(fault(["heavy"], []))
 
     def test_sweep_reset_says_why_it_skips(self):
         self.assertEqual(self._sweep_reset(), "")

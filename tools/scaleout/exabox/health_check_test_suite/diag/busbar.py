@@ -59,6 +59,8 @@ CCL_ERR = re.compile(
     r"|(all_gather|reduce_scatter|fabric|erisc|ccl).*(Traceback|RuntimeError|TT_THROW)",
     re.I,
 )
+# the op timeout's hang line (TT_METAL_OPERATION_TIMEOUT_SECONDS set: a hung op exits with it instead of being killed)
+HANG_ERR = re.compile(r"device timeout|potential hang detected", re.I)
 LOG_LEVEL = re.compile(r"\| *(info|warning|debug|trace) *\|", re.I)
 
 GAP_MS, HEAVY_N = 50, 16  # the burst's pause after each 8 heavy ops; heavy ops per launch
@@ -337,8 +339,10 @@ def run_step(step: Step, out: Path, dry_run: bool = False) -> Check:
 
 
 def link_fault(c: Check) -> bool:
-    """True when a step's check is a hang or a CCL failure: a mismatch in a CCL part (its rows' chunk-end verify) or a CCL
-    error in the last 40 lines of its log. A numeric fault in another part, a tray trip or a plain error is not one."""
+    """True when a step's check is a hang or a CCL failure: killed with no exit, an op-timeout hang line or a CCL error in
+    the last 40 lines of its log, or a mismatch in a CCL part (its rows' chunk-end verify; h3-only chips beside a chip
+    with a chip-local fault are its spread, as in chunk_sched). A numeric fault in another part or a plain error is
+    not one."""
     if c.status != FAIL:
         return False
     if c.data.get("hung"):
@@ -353,17 +357,21 @@ def link_fault(c: Check) -> bool:
                 r = json.loads(ln)
             except ValueError:
                 continue
-            if r.get("event") == "verify" and any(
-                CCL_PARTS & set(x.get("bad_parts") or []) for x in (r.get("chips") or {}).values()
-            ):
+            if r.get("event") != "verify":
+                continue
+            bad = [set(x.get("bad_parts") or []) for x in (r.get("chips") or {}).values()]
+            local = any(
+                b - CCL_PARTS for b in bad
+            )  # a chip failing a chip-local part spreads it to the others' h3 output
+            if any(b & CCL_PARTS and not (local and b <= CCL_PARTS) for b in bad):
                 return True
     tail = log_path.read_text(errors="replace").splitlines()[-40:] if log_path.is_file() else []
-    return any(CCL_ERR.search(ln) and not LOG_LEVEL.search(ln) for ln in tail)
+    return any((CCL_ERR.search(ln) or HANG_ERR.search(ln)) and not LOG_LEVEL.search(ln) for ln in tail)
 
 
 def run_busbar(phase: Phase, out: Path, mode: str, dry_run: bool = False, steps: str | None = None, **over) -> bool:
     """The bus-bar steps (see plan), in order, into *phase*. True when one hung or had a CCL failure (link_fault; the
-    links phase then sweeps); a numeric fault or a tray trip alone is not one."""
+    links phase then sweeps); a numeric fault alone is not one."""
     fault = False
     for step in plan(mode, steps, **over):
         log(f"busbar {step.line()}")

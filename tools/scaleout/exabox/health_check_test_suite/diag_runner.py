@@ -40,7 +40,16 @@ if _SUITE_DIR not in sys.path:
 from diag.common import default_tt_metal_path, log, print_phase_line, print_phase_summary  # noqa: E402
 from diag.aer import AerWindow  # noqa: E402
 from diag.device_tests import run_tests  # noqa: E402
-from diag.busbar import MODES, OVERRIDES, SELECTABLE, STEPS, parse_steps, plan as busbar_plan, run_busbar  # noqa: E402
+from diag.busbar import (  # noqa: E402
+    MODES,
+    OVERRIDES,
+    SELECTABLE,
+    STEPS,
+    parse_steps,
+    link_fault,
+    plan as busbar_plan,
+    run_busbar,
+)
 from diag.eth_status import run_eth_status  # noqa: E402
 from diag.links import name_chips, run_links  # noqa: E402
 from diag.eth_summary import SUMMARY_FILE, render_eth_summary  # noqa: E402
@@ -431,12 +440,12 @@ def run_diag(
     _finish(report, test_phase, t0, summary=False)
 
     # Phase 3b: the galaxy load (--mode): the bus-bar parts, then the pair link
-    # test, its sweep on a link/CCL failure or a hang (never on a numeric fault or
-    # a tray trip) and the fabric open/close. Inside the AER window.
+    # test, its sweep on a link/CCL failure or a hang (never on a numeric fault)
+    # and the fabric open/close. Inside the AER window.
     # --steps picks the parts: the bus-bar phase runs for its steps, the links phase for "links".
     if plan.busbar and mode:
         load_dir = output.parent / "galaxy"
-        busbar_phase, fault = Phase(name="busbar"), []
+        busbar_phase = Phase(name="busbar")
         t0 = time.time()
         want = parse_steps(steps) if steps is not None else SELECTABLE
         if any(w in STEPS for w in want):
@@ -444,7 +453,7 @@ def run_diag(
                 busbar_phase,
                 "busbar",
                 FAIL,
-                lambda: fault.append(run_busbar(busbar_phase, load_dir, mode, dry_run, steps, **(overrides or {}))),
+                lambda: run_busbar(busbar_phase, load_dir, mode, dry_run, steps, **(overrides or {})),
             )
             _finish(report, busbar_phase, t0, summary=True)
         links_phase = Phase(name="links")
@@ -464,7 +473,9 @@ def run_diag(
                 links_phase,
                 "links",
                 FAIL,
-                lambda: run_links(links_phase, load_dir, any(fault), sweep_reset, dry_run),
+                lambda: run_links(
+                    links_phase, load_dir, any(map(link_fault, busbar_phase.checks)), sweep_reset, dry_run
+                ),
             )
             _finish(report, links_phase, t0, summary=True)
 

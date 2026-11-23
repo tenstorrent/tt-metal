@@ -147,8 +147,9 @@ reset to the end of the run. Pass `--skip-reset` to read the unit as found.
   non-zero exit, a `<NAME> FAIL` line in its output, or no exit within its planned
   length plus 300 s. A failed step does not stop the next ones.
 - the `links` phase (`diag/links.py`): a 2-chip all-gather on every linked chip
-  pair UMD finds (10 s per pair, in rounds, each op cut at 30 s). After a link or
-  CCL failure or a hang, here or in `busbar` (not a numeric fault or a tray trip),
+  pair UMD finds (10 s per pair, in rounds, each op cut at 30 s; a pair with no exit 100 s after
+  its traffic ends counts as hung). After a link or
+  CCL failure or a hang, here or in `busbar` (not a numeric fault),
   it runs `tt-smi -glx_reset` and the pair test again (the sweep): 10 s per pair,
   no new round after 300 s in total, pairs not reached reported as such, never as
   a pass. Then one whole-box fabric open and close.

@@ -6,7 +6,7 @@
 
 pair    every chip-to-chip Ethernet link UMD discovers, tested as a 2-chip all-gather of each linked pair (data
         checked bit for bit); pairs run in rounds, no chip in two pairs of a round
-sweep   after a link/CCL failure or a hang (in the pair test or a bus-bar step; not a numeric fault or a tray trip):
+sweep   after a link/CCL failure or a hang (in the pair test or a bus-bar step; not a numeric fault):
         glx_reset, then the pair test again, PAIR_S per pair, no new round past SWEEP_S in total
 fabric  one whole-box fabric open and close
 """
@@ -25,8 +25,9 @@ from .common import log
 from .model import FAIL, PASS, SKIP, Check, Phase
 from .naming import chip, link_end
 
-# each pair runs PAIR_S s of all-gathers, every op cut at OP_TIMEOUT_S; SWEEP_S caps the whole sweep, not one round
-PAIR_S, SWEEP_S, OP_TIMEOUT_S = 10, 300, 30
+# each pair runs PAIR_S s of all-gathers, every op cut at OP_TIMEOUT_S; a round waits at most PAIR_S + OP_TIMEOUT_S + COMPILE_S
+# (a pair past it is hung); SWEEP_S caps the whole sweep, not one round
+PAIR_S, SWEEP_S, OP_TIMEOUT_S, COMPILE_S = 10, 300, 30, 60
 DISCOVER = """import json, tt_umd as u
 cd = u.TopologyDiscovery.create_cluster_descriptor()
 print(json.dumps({"bdfs": {int(k): v for k, v in cd.get_chip_pci_bdfs().items()},
@@ -179,9 +180,10 @@ def pair_test(
                         ),
                     )
                 )
+        deadline = time.monotonic() + seconds + OP_TIMEOUT_S + COMPILE_S  # the round's pairs run together: one limit
         for lab, ch, ends, p in jobs:
             try:
-                rc = p.wait(timeout=seconds + SETUP_S)
+                rc = p.wait(timeout=max(0.0, deadline - time.monotonic()))
             except subprocess.TimeoutExpired:
                 os.killpg(p.pid, signal.SIGKILL)
                 p.wait()
