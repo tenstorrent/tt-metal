@@ -1,0 +1,228 @@
+[
+ {
+  "op": "tilize",
+  "shapes": [
+   [
+    1,
+    1,
+    3136,
+    64
+   ],
+   [
+    1,
+    1,
+    1024,
+    64
+   ],
+   [
+    1,
+    1,
+    1024,
+    256
+   ]
+  ],
+  "dtype": "bfloat16",
+  "layout": "ROW_MAJOR",
+  "memcfg": "DRAM",
+  "variant": "mainline",
+  "kwargs": {}
+ },
+ {
+  "op": "tilize",
+  "shapes": [
+   [
+    1,
+    1,
+    8192,
+    64
+   ],
+   [
+    1,
+    1,
+    8192,
+    256
+   ]
+  ],
+  "dtype": "bfloat16",
+  "layout": "ROW_MAJOR",
+  "memcfg": "DRAM",
+  "variant": "mainline",
+  "kwargs": {}
+ },
+ {
+  "op": "untilize",
+  "shapes": [
+   [
+    1,
+    1,
+    1024,
+    64
+   ],
+   [
+    1,
+    1,
+    1024,
+    256
+   ],
+   [
+    1,
+    1,
+    256,
+    512
+   ]
+  ],
+  "dtype": "bfloat16",
+  "layout": "TILE",
+  "memcfg": "DRAM",
+  "variant": "mainline",
+  "kwargs": {}
+ },
+ {
+  "op": "untilize",
+  "shapes": [
+   [
+    1,
+    1,
+    8192,
+    256
+   ]
+  ],
+  "dtype": "bfloat16",
+  "layout": "TILE",
+  "memcfg": "DRAM",
+  "variant": "mainline",
+  "kwargs": {}
+ },
+ {
+  "op": "reshape",
+  "shapes": [
+   [
+    1,
+    64,
+    8400
+   ]
+  ],
+  "dtype": "bfloat16",
+  "layout": "TILE",
+  "memcfg": "DRAM",
+  "variant": "mainline",
+  "kwargs": {
+   "new_shape": [
+    1,
+    4,
+    16,
+    8400
+   ]
+  }
+ },
+ {
+  "op": "reshape",
+  "shapes": [
+   [
+    1,
+    1,
+    11008,
+    1024
+   ]
+  ],
+  "dtype": "bfloat16",
+  "layout": "TILE",
+  "memcfg": "DRAM",
+  "variant": "mainline",
+  "kwargs": {
+   "new_shape": [
+    1,
+    1,
+    2752,
+    4096
+   ]
+  }
+ },
+ {
+  "op": "slice",
+  "shapes": [
+   [
+    1,
+    1,
+    25344,
+    128
+   ]
+  ],
+  "dtype": "bfloat16",
+  "layout": "TILE",
+  "memcfg": "DRAM",
+  "variant": "mainline",
+  "kwargs": {
+   "starts": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "ends": [
+    1,
+    1,
+    25281,
+    128
+   ]
+  }
+ },
+ {
+  "op": "slice",
+  "shapes": [
+   [
+    1,
+    1,
+    1024,
+    2048
+   ]
+  ],
+  "dtype": "bfloat16",
+  "layout": "TILE",
+  "memcfg": "DRAM",
+  "variant": "mainline",
+  "kwargs": {
+   "starts": [
+    0,
+    0,
+    480,
+    0
+   ],
+   "ends": [
+    1,
+    1,
+    512,
+    2048
+   ]
+  }
+ },
+ {
+  "op": "slice",
+  "shapes": [
+   [
+    1,
+    1,
+    4096,
+    2560
+   ]
+  ],
+  "dtype": "bfloat16",
+  "layout": "TILE",
+  "memcfg": "DRAM",
+  "variant": "mainline",
+  "kwargs": {
+   "starts": [
+    0,
+    0,
+    2752,
+    0
+   ],
+   "ends": [
+    1,
+    1,
+    2784,
+    2560
+   ]
+  }
+ }
+]
