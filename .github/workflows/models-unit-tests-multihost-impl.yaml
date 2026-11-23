@@ -61,9 +61,6 @@ jobs:
       TTRUN_CWD: /ci/models-unit-${{ github.run_id }}-${{ strategy.job-index }}/ttrun-cwd
       TRIAGE_OUTPUT_DIR: /ci/triage_output/${{ github.run_id }}-${{ github.run_attempt }}/models-unit-${{ strategy.job-index }}
       TTRUN_PY: /home/user/tt-metal/ttnn/ttnn/distributed/ttrun.py
-      # Forwarded to the mpirun ranks (PRTE_MCA_prte_fwd_environment) so gated HF models can be
-      # downloaded. Requires the token's HF account to have accepted the model's license.
-      HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
     strategy:
       fail-fast: false
       matrix:
@@ -92,9 +89,20 @@ jobs:
         shell: bash
         run: mkdir -p "$PIPELINE_DIR"
 
+      # Short-lived HF read token from GitHub OIDC (no stored secret). Directly before the
+      # test step so the 60-minute token lifetime starts late.
+      - name: 🤗 Get Hugging Face token (OIDC)
+        id: hf-oidc
+        timeout-minutes: 5
+        uses: ./.github/actions/hf-oidc-token
+
       - name: ${{ matrix.test-group.name }}
         id: run-test
         timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          # Forwarded to the mpirun ranks (PRTE_MCA_prte_fwd_environment) so gated HF models can be
+          # downloaded. Requires the HF account of the OIDC identity to have accepted the model's license.
+          HF_TOKEN: ${{ steps.hf-oidc.outputs.token }}
         # Automapper cmds cd to $PIPELINE_DIR/ttrun-cwd (empty NFS dir) themselves.
         # Keep runtime compilation and tt-run working directory on a single source root.
         working-directory: /home/user/tt-metal
@@ -107,7 +115,10 @@ jobs:
 
           echo "Running: ${{ matrix.test-group.name }}"
           echo "$CMD"
-          eval "$CMD"
+          # Replace this shell (exec) with one that has no OIDC request variables, so the
+          # test processes cannot read them from the parent's /proc/<pid>/environ.
+          exec env -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \
+            CMD="$CMD" bash -eo pipefail -c 'eval "$CMD"'
 
       - name: Prepare artifacts for upload
         if: always()

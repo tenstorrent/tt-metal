@@ -119,6 +119,8 @@ public:
     DeviceAddr get_metadata_addr(const distributed::MeshCoordinate& coord) const;
     // Service-core control words: [0] terminate, [1] abandon data the host never read (owner only).
     DeviceAddr get_termination_addr(const distributed::MeshCoordinate& coord) const;
+    // Every coordinate's write-ack counter, service core, metadata input and control words (owner only).
+    std::shared_ptr<const StreamSenderCoordTable> get_sender_coord_table() const;
 
     std::string export_descriptor(const std::string& service_id);
     static std::unique_ptr<D2HStreamService> connect(
@@ -183,6 +185,7 @@ private:
     std::shared_ptr<distributed::MeshBuffer> metadata_worker_buffer_;
     DeviceAddr metadata_worker_l1_addr_ = 0;
     std::map<distributed::MeshCoordinate, DeviceAddr> metadata_input_addrs_;
+    mutable StreamSenderCoordTableCache sender_coord_table_cache_;
     uint32_t num_workers_ = 0;
     CoreCoord metadata_master_core_{0, 0};
 

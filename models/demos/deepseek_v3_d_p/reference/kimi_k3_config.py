@@ -50,9 +50,12 @@ class KimiK3Config:
     # the top of L1, so each byte of it lowers the L1 buffers toward MLA's static circular buffers:
     # 24576 (this package's usual value) starves chunked attention as soon as there is a second
     # chunk to attend over, and 4096 left ring_mla 1,408 B short (chunked L24) once the fused
-    # matmul + reduce-scatter kept 2,176 B/bank of L1. The K3 L24 tests use 960 B/bank of the pool;
-    # AttnRes uses none since #54834 (tests/attn_res/model/test_l1_small_footprint.py).
-    L1_SMALL_SIZE = 1536
+    # matmul + reduce-scatter kept 2,176 B/bank of L1. AttnRes uses none since #54834
+    # (tests/attn_res/model/test_l1_small_footprint.py).
+    # 5104 = the model's own ops' 3328 B (KDA / MLA / all-gather semaphores and matmul_reduce_scatter_prefill's
+    # semaphores and mailbox; measured on the K3 L24 tests, untraced then traced in one process, + 64 B headroom)
+    # + the MoE block's persistent words' slab (1712 B, KimiK3Adapter.moe_block_words_slab) + 64 B allocator alignment.
+    L1_SMALL_SIZE = 5104
     MOE_INTERMEDIATE_SIZE = 3072  # MoE FFN hidden dimension
     INTERMEDIATE_SIZE = 33792  # Dense FFN hidden dimension
 

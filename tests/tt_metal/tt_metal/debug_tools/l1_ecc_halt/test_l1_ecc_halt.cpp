@@ -65,7 +65,7 @@ protected:
     }
 
     distributed::MeshWorkload single_core_workload(const char* kernel_path, const std::vector<uint32_t>& runtime_args) {
-        Program program = CreateProgram();
+        Program program = CreateProgram(*devices_[0]);
         KernelHandle kernel = CreateKernel(
             program,
             kernel_path,
