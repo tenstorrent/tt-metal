@@ -2952,3 +2952,11 @@ a test rewrote is the test's. Selftest: test_waste_fixes.py::test_an_agents_repo
   reserve; the run stopped WAITING FOR A PERSON on an A/B whose 'on' gate showed MISSING metrics.
 - Fix: Orchestrator.perf_pick is false for `device: false` tasks; they take the normal gate. Unmarked perf picks keep
   their A/B. Selftest: selftest/test_cpu_perf_task.py.
+
+## F303 (2026-11-23, DeepSeek-V4.1 PS.1): repo-wide pre-commit hooks are checked on the gate commit's own files
+- Seen: PS.1's gate passed but git refused its commit: check-models-do-not-import-tests (pass_filenames: false, the
+  whole of models/) failed on two pre-existing `from tests...` imports (deepseek_v41_flash_d_p/tests/test_expert_x_pieces.py,
+  moe_block_main/tests/test_moe_block_models.py) the commit never touched. Every gate staging a models/*.py would stop.
+- Fix: core/gate.REPO_WIDE_HOOKS / repo_wide_hook_env: the gate commit runs the hook's checker on its own files
+  (a violation there refuses the commit, as before) and SKIPs the repo-wide run. Selftest: selftest/test_repo_wide_hooks.py.
+  The two old violations are still there (not the framework's files): open item for the owner.
