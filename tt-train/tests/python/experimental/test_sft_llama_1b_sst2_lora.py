@@ -6,7 +6,8 @@
 it trains, validates, logs the metrics of both, and saves PEFT adapter checkpoints that rotate and load back.
 The runs read only the first examples of each SST-2 split, so validation is a few batches, not 872 examples.
 
-Downloads ``meta-llama/Llama-3.2-1B-Instruct``, a gated repo (``HF_TOKEN``), and SST-2 unless they are cached.
+The model is read from ``unsloth/Llama-3.2-1B-Instruct``, a non-gated mirror of the recipe's gated
+``meta-llama/Llama-3.2-1B-Instruct``: CI has no ``HF_TOKEN``. It and SST-2 are downloaded unless they are cached.
 """
 
 import gc
@@ -22,6 +23,7 @@ import pytest
 import ttml
 import ttml.experimental
 from ttml.experimental.datasets.provider.sft import SST2Provider
+from ttml.experimental.models.provider import LlamaProvider
 from ttml.experimental.models.utils.checkpoint import ADAPTER_CONFIG, ADAPTER_WEIGHTS, read_adapter
 from ttml.experimental.models.utils.hub import load_hf_config
 from ttml.experimental.trainer.__main__ import main
@@ -31,6 +33,7 @@ from ttml.experimental.trainer.managers.logging import TrainingLogger
 from ttml.experimental.trainer.utils import TRAINER_STATE
 
 RECIPE = Path(ttml.experimental.__file__).parent / "training_configs" / "llama_3_2_1b_instruct_sst2_lora.yaml"
+MODEL_SOURCE = "unsloth/Llama-3.2-1B-Instruct"  # not gated
 STEPS = 2
 # The examples read of each split: enough train batches that every run stays in epoch 0.
 SPLIT_SIZES = {"train": 256, "validation": 64}
@@ -65,6 +68,7 @@ def run_recipe(overrides: list[str]) -> SimpleNamespace:
             patch.setattr(TrainingLogger, "log_metrics", record_metrics)
             patch.setattr(TrainingLogger, "info", record_message)
             patch.setattr(SST2Provider, "_load_raw_dataset", load_head)
+            patch.setattr(LlamaProvider, "model_source", lambda self: MODEL_SOURCE)
             main(["--config", str(RECIPE), *(arg for override in overrides for arg in ("--set", override))])
     finally:
         gc.collect()
@@ -139,7 +143,7 @@ def test_a_checkpoint_carries_the_metrics_of_its_step(recipe):
 def test_the_last_checkpoint_is_a_peft_adapter(recipe):
     last = recipe.last
     lora = recipe.config.model.lora
-    hf_config = load_hf_config(recipe.config.model.name)
+    hf_config = load_hf_config(MODEL_SOURCE)
     hidden, heads, kv_heads = (hf_config[k] for k in ("hidden_size", "num_attention_heads", "num_key_value_heads"))
     head_dim = hf_config.get("head_dim") or hidden // heads
     rows = {"q_proj": heads * head_dim, "k_proj": kv_heads * head_dim, "v_proj": kv_heads * head_dim, "o_proj": hidden}
@@ -165,7 +169,8 @@ def test_the_last_checkpoint_is_a_peft_adapter(recipe):
     assert config["peft_type"] == "LORA" and config["task_type"] == lora.task_type
     assert (config["r"], config["lora_alpha"]) == (lora.r, lora.alpha)
     assert config["target_modules"] == sorted(lora.target_modules)
-    assert config["base_model_name_or_path"] == recipe.config.model.name
+    # PEFT loads the base model from where the weights are.
+    assert config["base_model_name_or_path"] == MODEL_SOURCE
 
 
 def test_a_run_initialized_from_the_checkpoint_starts_from_its_adapters(recipe, tmp_path):
