@@ -4,21 +4,22 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Compare production (TT/TTI) and HAL codegen of one thread for one test.
-# usage: compare_codegen.sh <test_x.py> <unpack|math|pack> [--perf] [--match REGEX]
+# usage: compare_codegen.sh <test_x.py> <unpack|math|pack> [--perf] [--match REGEX] [--impl DIR]
 #   --perf         build the perf variants (asserts off, as perf runs) instead of the functional ones
 #   --match REGEX  pick the variant whose build.h matches REGEX (default: the first variant built by both)
+#   --impl DIR     HAL include dir (default hal_llk); pass a thread_view.sh directory while other threads are unported
 # Run from a tt-llk worktree. Builds land in private trees, so it is safe next to other agents' builds.
 set -euo pipefail
 TEST=$1; THREAD=$2; shift 2
-PERF=""; MATCH=""
-while [[ $# -gt 0 ]]; do case "$1" in --perf) PERF="--perf"; shift ;; --match) MATCH="$2"; shift 2 ;; *) echo "unknown arg $1"; exit 2 ;; esac; done
+PERF=""; MATCH=""; HALDIR="hal_llk"
+while [[ $# -gt 0 ]]; do case "$1" in --perf) PERF="--perf"; shift ;; --match) MATCH="$2"; shift 2 ;; --impl) HALDIR="$2"; shift 2 ;; *) echo "unknown arg $1"; exit 2 ;; esac; done
 LLK=$(pwd)
 [[ -x "$LLK/.claude/scripts/run_test.sh" || -f "$LLK/.claude/scripts/run_test.sh" ]] || { echo "run from a tt-llk directory"; exit 2; }
 OUT=$(mktemp -d /tmp/bh-port-cg.XXXXXX)
 OD=$LLK/tests/sfpi/compiler/bin/riscv-tt-elf-objdump
 SZ=$LLK/tests/sfpi/compiler/bin/riscv-tt-elf-size
 for impl in tt hal; do
-  if [[ $impl == hal ]]; then IMPL="hal_llk"; else IMPL=""; fi
+  if [[ $impl == hal ]]; then IMPL="$HALDIR"; else IMPL=""; fi
   RUNNER_TEMP=$OUT/$impl TT_LLK_DISABLE_ASSERTS=1 TT_LLK_IMPL_INCLUDE_DIRS=$IMPL \
     bash .claude/scripts/run_test.sh compile --worktree "$LLK" --arch blackhole --test "$TEST" $PERF --jobs 6 2>&1 \
     | grep -E "VERDICT|error:" | sed "s#.*/tests/##;s/^/[$impl] /" | sort -u | head -12
