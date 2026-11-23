@@ -23,6 +23,8 @@ from transformers.configuration_utils import PretrainedConfig
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.reference.glm_5_4.schedule import LoopStep, loop_schedule
+from models.demos.deepseek_v3_d_p.tt.glm54.damp_gate import TtDampGate
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
@@ -314,6 +316,9 @@ class TtPrefillTransformer(LightweightModule):
             )
             self.layers.append(layer)
 
+        # GLM-5.4 loop: the order the blocks run in, and one damp gate per loop pass (see _build_schedule).
+        self.steps, self.loop_gates = self._build_schedule(config, state_dict, num_links, tp_topology, tp_axis)
+
         build_tail = mtp_predictor is not None and is_last_rank and not kv_only_last_layer
         self.norm = (
             TtDistributedRmsNorm(
@@ -430,6 +435,56 @@ class TtPrefillTransformer(LightweightModule):
         )
 
         logger.info(f"TtPrefillTransformer construction complete ({num_layers} layers)")
+
+    def _build_schedule(self, config, state_dict: dict, num_links: int, tp_topology, tp_axis: int):
+        """(steps, gates): the blocks' execution order as ``LoopStep``s and the damp gates, one per loop pass.
+
+        Without loop fields in ``config`` every block runs once, in order. With them (GLM-5.4: layers
+        loop_first_layer..loop_last_layer run loop_count times with shared weights), the order is the reference
+        ``loop_schedule`` restricted to this instance's layers: prelude, then per loop pass the loop's blocks
+        (the same TtPrefillBlock objects every pass) and that pass's gate, then coda. Gate k reads the pass input
+        x_{k-1} and the pass output h_k (A1c); its weights are ``state_dict["loop_gates"][k - 1]``
+        (``synthetic_gates`` form), always host tensors.
+
+        An instance holds the whole loop or none of it; splitting the loop across pipeline stages (one pass per
+        stage) is the four-stage placement's (q171.2.8).
+        """
+        first, end = self.first_layer_idx, self.first_layer_idx + self.num_layers
+        plain = [LoopStep("layer", 0, i) for i in range(first, end)]
+        loop_count = getattr(config, "loop_count", None)
+        if loop_count is None:
+            return plain, []
+        loop_first, loop_last = config.loop_first_layer, config.loop_last_layer
+        if loop_last < first or loop_first >= end:
+            return plain, []
+        if not (first <= loop_first and loop_last < end):
+            raise NotImplementedError(
+                f"layers {first}..{end - 1} hold part of the loop {loop_first}..{loop_last}; an instance runs the "
+                "whole loop or none of it"
+            )
+        if self.kv_only_last_layer and loop_last == end - 1:
+            raise ValueError("a kv-only last layer cannot be a loop layer: its pass-1 output feeds pass 2")
+        gate_weights = state_dict.get("loop_gates")
+        if gate_weights is None or len(gate_weights) != loop_count:
+            raise ValueError(
+                f"the loop runs {loop_count} passes, so state_dict['loop_gates'] needs {loop_count} gate weight "
+                f"dicts, got {None if gate_weights is None else len(gate_weights)}"
+            )
+        steps = [
+            s
+            for s in loop_schedule(config.num_hidden_layers, loop_first, loop_last, loop_count)
+            if s.kind == "gate" or first <= s.layer < end
+        ]
+        gates = [
+            TtDampGate(
+                self.mesh_device, w, eps=config.rms_norm_eps, tp_axis=tp_axis, num_links=num_links, topology=tp_topology
+            )
+            for w in gate_weights
+        ]
+        logger.info(
+            f"GLM-5.4 loop: layers {loop_first}..{loop_last} x{loop_count}, gate widths {[g.width for g in gates]}"
+        )
+        return steps, gates
 
     def set_trace_controller(self, controller):
         """Attach (or clear with None) a SubDeviceTraceController on every layer's MoE, so a ttnn
@@ -621,6 +676,13 @@ class TtPrefillTransformer(LightweightModule):
             "d2h_service and on_layer_complete are mutually exclusive ack transports; the block takes "
             "d2h_service and would silently drop on_layer_complete"
         )
+        # While pass 2 runs the GLM-5.3 attention stand-in it rewrites the pass-1 KV slot and would ack the same
+        # layer id twice, so a loop model takes no layer acks until two-bank pass 2 (q171.2.5) and the stage ack
+        # identities (q171.2.8) exist.
+        assert not self.loop_gates or (d2h_service is None and on_layer_complete is None), (
+            "a GLM-5.4 loop model takes no layer acks (d2h_service / on_layer_complete) while pass 2 runs the "
+            "GLM-5.3 attention stand-in"
+        )
         if chunks is not None:
             assert (
                 metadata is None and mtp_union is None
@@ -688,10 +750,31 @@ class TtPrefillTransformer(LightweightModule):
             )
         indexer_indices = seed_indexer_indices if reuse else None
         self.last_indexer_indices = None
-        for i, layer in enumerate(self.layers):
-            signpost(f"forward_layer_{i}_start")
-            mode = self.indexer_types[self.first_layer_idx + i] if reuse else "full"
+        # GLM-5.4 loop: the input of the loop pass in flight (x_{k-1}), held for that pass's gate.
+        pass_input = None
+        for step in self.steps:
+            if step.kind == "gate":
+                name = f"gate{step.loop_pass}"
+                signpost(f"forward_{name}_start")
+                h = self.loop_gates[step.loop_pass - 1](pass_input, h)
+                pass_input = None
+                signpost(f"forward_{name}_end")
+                if return_intermediates:
+                    ttnn.synchronize_device(self.mesh_device)
+                    intermediates[name] = self._to_host(h)
+                continue
+            i = step.layer - self.first_layer_idx
+            layer = self.layers[i]
+            if step.loop_pass and pass_input is None:  # first block of a loop pass
+                pass_input = h
+            # A later loop pass reruns the pass-1 block (shared weights) and names its output by pass.
+            name = f"layer_{i}" if step.loop_pass <= 1 else f"layer_{i}.pass{step.loop_pass}"
+            signpost(f"forward_{name}_start")
+            mode = self.indexer_types[step.layer] if reuse else "full"
             inject = indexer_indices if (reuse and mode == "shared") else None
+            # STAND-IN until q171.2.5: a later loop pass runs the block's own (GLM-5.3) attention, which computes
+            # a fresh top-k and writes this layer's KVPE / index-cache slot for the chunk over pass 1's. GLM-5.4
+            # pass 2 instead reads pass-1 KVPE at pass-1 top-k plus its own window (two-bank sparse MLA).
             ret = layer(
                 h,
                 rope_tensors,
@@ -722,14 +805,14 @@ class TtPrefillTransformer(LightweightModule):
                     indexer_indices = new_idx
             else:
                 h, _ = ret
-            signpost(f"forward_layer_{i}_end")
+            signpost(f"forward_{name}_end")
             if self.kv_only_last_layer and i == len(self.layers) - 1:
                 # Last layer was kv-only: KV cache filled, migration callback fired, no hidden state
                 # produced. Nothing more to run or snapshot; the populated cache is the output.
                 return intermediates
             if return_intermediates:
                 ttnn.synchronize_device(self.mesh_device)
-                intermediates[f"layer_{i}"] = self._to_host(h)
+                intermediates[name] = self._to_host(h)
             if read_profiler:
                 ttnn.ReadDeviceProfiler(self.mesh_device)
         if self.forwards_indexer_indices:
@@ -847,6 +930,7 @@ class TtPrefillTransformer(LightweightModule):
         (run_mtp_packed_traced).
         """
         assert self.is_chunked, "a packed forward is chunked prefill; build with is_chunked=True"
+        assert not self.loop_gates, "a packed forward does not run the GLM-5.4 loop; use forward() per chunk"
         n = len(metadata) if metadata is not None else len(chunks)
         assert n == self.forward_chunks, f"{n} chunks for a model built for {self.forward_chunks}"
         assert (mtp_unions is not None) == (
