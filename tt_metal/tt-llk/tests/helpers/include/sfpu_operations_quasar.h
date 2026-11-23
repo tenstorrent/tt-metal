@@ -1723,9 +1723,9 @@ template <
 void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t src1_tile, std::uint32_t dst_tile, [[maybe_unused]] DataFormat math_format)
 {
     static_assert(
-        TILE_SHAPE == ckernel::trisc::DstTileShape::Tile32x32 || OP == BinaryOp::ADD || OP == BinaryOp::SUB || OP == BinaryOp::MUL || OP == BinaryOp::DIV ||
-            OP == BinaryOp::GT || OP == BinaryOp::LT || OP == BinaryOp::LE || OP == BinaryOp::GE || OP == BinaryOp::ATAN2 || OP == BinaryOp::COPY_DEST ||
-            OP == BinaryOp::GCD || OP == BinaryOp::LCM || quasar_binary_op_is_quant(OP) || quasar_binary_op_is_max_min(OP),
+        TILE_SHAPE == ckernel::trisc::DstTileShape::Tile32x32 || OP == BinaryOp::ADD || OP == BinaryOp::SUB || OP == BinaryOp::RSUB || OP == BinaryOp::MUL ||
+            OP == BinaryOp::DIV || OP == BinaryOp::GT || OP == BinaryOp::LT || OP == BinaryOp::LE || OP == BinaryOp::GE || OP == BinaryOp::ATAN2 ||
+            OP == BinaryOp::COPY_DEST || OP == BinaryOp::GCD || OP == BinaryOp::LCM || quasar_binary_op_is_quant(OP) || quasar_binary_op_is_max_min(OP),
         "This Quasar binary SFPU operation requires 32x32 tiles");
 
     if constexpr (BCAST_TYPE != BroadcastType::NONE)
@@ -1773,6 +1773,20 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
             TILE_SHAPE,
             calculate_sfpu_binary,
             (APPROXIMATION_MODE, BinaryOp::SUB, is_fp32_dest_acc_en, dst_rounding_mode, ITERATIONS),
+            src0_tile,
+            src1_tile,
+            dst_tile,
+            vector_mode);
+    }
+    else if constexpr (OP == BinaryOp::RSUB)
+    {
+        // Float path only (dst = src1 - src0); int RSUB is BinaryOp::RSUB_INT32.
+        SFPU_BINARY_CALL_TINY_TILE(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            TILE_SHAPE,
+            calculate_sfpu_binary,
+            (APPROXIMATION_MODE, BinaryOp::RSUB, is_fp32_dest_acc_en, dst_rounding_mode, ITERATIONS),
             src0_tile,
             src1_tile,
             dst_tile,
