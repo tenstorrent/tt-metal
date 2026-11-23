@@ -57,10 +57,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats.unpack_B_src,
             formats.unpack_A_dst,
             formats.unpack_B_dst,
-            test_face_r_dim,
-            test_face_r_dim,
-            test_num_faces,
-            test_num_faces);
+            ckernel::make_tensor_shape_from_legacy(test_face_r_dim, test_num_faces),
+            ckernel::make_tensor_shape_from_legacy(test_face_r_dim, test_num_faces));
         _llk_unpack_AB_sub_bcast_col_init_custom_(tensor_shape);
         PROFILER_SYNC();
     }

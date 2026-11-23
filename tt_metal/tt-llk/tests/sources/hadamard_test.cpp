@@ -53,10 +53,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats.unpack_B_src,
             formats.unpack_A_dst,
             formats.unpack_B_dst,
-            FACE_R_DIM,
-            FACE_R_DIM,
-            HADAMARD_NUM_FACES,
-            HADAMARD_NUM_FACES);
+            ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, HADAMARD_NUM_FACES),
+            ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, HADAMARD_NUM_FACES));
         _llk_unpack_hadamard_h128_init_(L1_ADDRESS(buffer_A[HADAMARD_H16_TILE_INDEX]));
         PROFILER_SYNC();
     }

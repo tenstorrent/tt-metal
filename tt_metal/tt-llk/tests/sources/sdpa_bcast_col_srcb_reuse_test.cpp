@@ -144,7 +144,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, TEST_FACE_R_DIM, TEST_FACE_R_DIM, num_faces, num_faces);
+            formats.unpack_A_src,
+            formats.unpack_B_src,
+            formats.unpack_A_dst,
+            formats.unpack_B_dst,
+            ckernel::make_tensor_shape_from_legacy(TEST_FACE_R_DIM, num_faces),
+            ckernel::make_tensor_shape_from_legacy(TEST_FACE_R_DIM, num_faces));
         PROFILER_SYNC();
     }
     {

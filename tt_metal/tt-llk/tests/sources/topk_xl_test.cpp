@@ -221,7 +221,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-            src_format, src_format, dst_format, dst_format, FACE_R_DIM, FACE_R_DIM, TILE_NUM_FACES /* unpA_num_faces */, TILE_NUM_FACES /* unpB_num_faces */);
+            src_format, src_format, dst_format, dst_format, ckernel::DEFAULT_TENSOR_SHAPE, ckernel::DEFAULT_TENSOR_SHAPE);
         ckernel::_llk_unpack_topk_xl_copy_init_(src_format, dst_format);
         PROFILER_SYNC();
     }
