@@ -177,6 +177,9 @@ class DSparkDrafter:
         self.kv_cores = [ttnn.CoreCoord(x, y) for y in range(2) for x in range(NKV)]
         self.trace = None
         self.tokens = None
+        self.top_probs = False  # early stop (spec_generator.py): also compute each step's argmax probability
+        self.probs = None  # [1, 1, 1, k] fp32 TILE: per-step top prob (top_probs)
+        self._prob_mask = None
         # anchor token, written by the target's step (TappedModel); allocated before any trace capture
         self.anchor = ttnn.from_torch(
             torch.zeros(1, 1, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev
@@ -379,7 +382,7 @@ class DSparkDrafter:
         hb = ttnn.add(ttnn.typecast(hid, ttnn.float32), self.w["ho_b"])  # hid rows + hidden_out bias
         state = None
         prev = tok
-        out = []
+        out, probs = [], []
         for i in range(self.k):
             pe = ttnn.reshape(ttnn.embedding(prev, self.w["markov_w1"], layout=ttnn.TILE_LAYOUT), [1, 1, 1, RANK])
             st = ttnn.zeros_like(pe) if state is None else ttnn.typecast(state, ttnn.bfloat16)
@@ -394,11 +397,33 @@ class DSparkDrafter:
             state = upd if state is None else ttnn.add(ttnn.multiply(gate, state), upd)
             x = ttnn.add(ttnn.matmul(self.onehot[i + 1], hb, dtype=ttnn.float32, compute_kernel_config=self.ckc),
                          self._lin(ttnn.typecast(lat, ttnn.bfloat16), "ho_w", ttnn.float32))  # fmt: skip
-            _, am = self.head(ttnn.typecast(x, ttnn.bfloat16))  # softcap 30 + vocab mask + argmax, [1,1,1,1]
+            lg, am = self.head(ttnn.typecast(x, ttnn.bfloat16))  # softcap 30 + vocab mask + argmax, [1,1,1,1]
             am = ttnn.clone(am)  # the head's token buffer is rewritten by the next step
             out.append(am)
+            if self.top_probs:
+                probs.append(self._top_prob(lg))
             prev = ttnn.reshape(am, [1, 1])
+        if self.top_probs:
+            self.probs = ttnn.concat(probs, dim=-1) if len(probs) > 1 else probs[0]
         return ttnn.concat(out, dim=-1) if len(out) > 1 else out[0]
+
+    def _top_prob(self, lg):
+        """Softmax probability of the argmax of one step's softcapped logits (early stop, tt/spec_generator.py):
+        1 / sum(exp(l - max l)) over the real vocab. The [1, V] row is folded to [V / 32, 32] tiles (no 32-row
+        padding of the whole row). Returns [1, 1, 1, 1] fp32 TILE."""
+        V = lg.shape[-1]
+        if self._prob_mask is None:  # first (eager) draft: allocated before any capture
+            from models.demos.inkling2_mini.tt import model as tmodel
+
+            mask = torch.zeros(V)
+            mask[tmodel.VOCAB_REAL :] = -1.0e4
+            self._prob_mask = ttnn.from_torch(mask.reshape(1, 1, V // 32, 32), dtype=ttnn.float32,
+                                              layout=ttnn.TILE_LAYOUT, device=self.device)  # fmt: skip
+        x = ttnn.to_layout(ttnn.reshape(lg, [1, 1, V // 32, 32]), ttnn.TILE_LAYOUT)
+        x = ttnn.add(x, self._prob_mask)
+        mx = ttnn.max(ttnn.max(x, dim=-1, keepdim=True), dim=-2, keepdim=True)
+        e = ttnn.exp(ttnn.subtract(x, mx))
+        return ttnn.reciprocal(ttnn.sum(ttnn.sum(e, dim=-1, keepdim=True), dim=-2, keepdim=True))
 
     # ------------------------------------------------------------ trace
     def capture(self, compile=True):
@@ -414,6 +439,8 @@ class DSparkDrafter:
         ttnn.synchronize_device(self.device)
         # rewritten by every draft replay and read right after it, before any target replay: corruptible by design
         acknowledge_corruptible(self.tokens)
+        if self.top_probs:
+            acknowledge_corruptible(self.probs)
 
     def run(self, p):
         """Traced draft at anchor position p -> k host ints."""
