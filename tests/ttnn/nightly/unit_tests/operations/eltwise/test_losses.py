@@ -95,6 +95,21 @@ def test_l1_loss(device, input_shapes, loss_mode):
         assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
 
 
+@pytest.mark.parametrize("input_shapes", [[1, 1, 32, 32], [2, 3, 64, 96], [1, 1, 33, 70]])
+def test_l1_loss_int32(device, input_shapes):
+    torch.manual_seed(0)
+    torch_ref = torch.randint(-(2**20), 2**20, input_shapes, dtype=torch.int32)
+    torch_pred = torch.randint(-(2**20), 2**20, input_shapes, dtype=torch.int32)
+    expected = (torch_ref - torch_pred).abs()
+
+    ref = ttnn.from_torch(torch_ref, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    pred = ttnn.from_torch(torch_pred, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.to_torch(ttnn.l1_loss(ref, pred, reduction=ttnn.LossReductionMode.NONE))
+
+    assert output.dtype == torch.int32
+    assert torch.equal(output, expected)
+
+
 @pytest.mark.parametrize(
     "input_shapes",
     [

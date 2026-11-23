@@ -139,6 +139,17 @@ _MESH_PARAMS = [
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
         id="torus-x-4x4-sp1",
     ),
+    pytest.param(
+        (4, 4),
+        torus_xy_device_params(
+            fabric_payload_size=GLM53Config.FABRIC_PAYLOAD_SIZE,
+            worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
+        ),
+        2,
+        1,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+        id="torus-xy-4x4-sp1",
+    ),
 ]
 
 

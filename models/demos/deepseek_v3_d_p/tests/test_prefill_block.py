@@ -368,7 +368,7 @@ def run_model(
     if gate_fallback_mode is not None:
         block_kwargs["gate_fallback_mode"] = gate_fallback_mode
 
-    block = TtPrefillBlock(**block_kwargs)
+    block = TtPrefillBlock(**block_kwargs, moe_impl="ttmoe")  # (TtMoe: tt/moe_impl.py)
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_block_creation")
 
@@ -668,6 +668,17 @@ def _glm_pretrained_weights(config, model_dir, layer_idx, is_moe):
             0,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="fabric2d-2x4",
+        ),
+        pytest.param(
+            (4, 4),
+            torus_xy_device_params(
+                fabric_payload_size=moe_fabric_payload(GLM53Config),
+                worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
+            ),
+            2,
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-xy-4x4-sp1",
         ),
     ],
     indirect=["mesh_device", "device_params"],
