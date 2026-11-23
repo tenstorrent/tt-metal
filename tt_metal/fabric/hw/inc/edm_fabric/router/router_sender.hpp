@@ -80,8 +80,7 @@ struct SenderChannel {
 };
 
 // VC's sender features, from its channels' (each channel's VC and role are the host's): its serviced sender channels,
-// its worker channels (its main one and any others) and its forwarding channels, and where its free-slots registers are
-// read.
+// its worker channel and its forwarding channels, and where its free-slots registers are read.
 template <size_t VC>
 struct SenderVc {
 private:
@@ -95,7 +94,7 @@ private:
     }();
 
 public:
-    // VC's serviced sender channels, one bit each: its worker channels (where serviced) and its forwarding channels.
+    // VC's serviced sender channels, one bit each: its worker channel (where serviced) and its forwarding channels.
     static constexpr uint32_t sender_channels = [] {
         uint32_t mask = 0;
         for (size_t ch = 0; ch < NUM_SENDER_CHANNELS; ch++) {
@@ -105,10 +104,7 @@ public:
     }();
     static constexpr uint32_t worker_channels = sender_channels & worker_positions;
     static constexpr uint32_t forwarding_channels = sender_channels & ~worker_channels;
-    // VC's main worker channel, its first, where this router serves one (named only under has_worker_channel): its
-    // state is in VC's send state. Its other worker channels keep theirs with the forwarding channels' and are visited,
-    // as those are, when they hold a packet or have packets in flight; every worker channel's connection is checked
-    // every pass.
+    // VC's worker channel, where this router serves one (named only under has_worker_channel).
     static constexpr bool has_worker_channel = worker_channels != 0;
     static constexpr size_t worker_channel = has_worker_channel ? lowest_bit(worker_channels) : 0;
     static constexpr uint32_t other_worker_channels = has_worker_channel ? without_lowest_bit(worker_channels) : 0u;
@@ -670,11 +666,11 @@ FORCE_INLINE void visit_worker(
     }
 }
 
-// A channel with work whose state stays in memory (a forwarding channel, a later VC's worker channel or a VC's other
-// worker channel): send if it
-// has a packet and the remote receiver channel has room, take completions (and acks), credit the producer, and keep its
-// bit in `channels_in_flight` equal to "packets not yet completed (or acked)". Fields are taken into locals where first
-// needed and written back where changed (the send's read group would make the compiler store and reload memory state).
+// A channel with work whose state stays in memory (a forwarding channel, a later VC's worker channel, or another worker
+// channel): send if it has a packet and the remote receiver channel has room, take completions (and acks), credit the
+// producer, and keep its bit in `channels_in_flight` equal to "packets not yet completed (or acked)". Fields are taken
+// into locals where first needed and written back where changed (the send's read group would make the compiler store
+// and reload memory state).
 template <size_t CH>
 FORCE_INLINE void visit_channel_with_work(
     SenderChannelState<CH>& state,
@@ -730,19 +726,17 @@ FORCE_INLINE void visit_channel_with_work(
 // Where the channel states live, and the loop
 // ---------------------------------------------------------------------------------------------------------------------
 
-// Every serviced VC's send state (vcs.get<VC>()), every forwarding channel's state (forwarding.get<CH>()) and every
-// other worker channel's (other_workers.get<CH>(); SenderVc::other_worker_channels). The
-// loop-local VC's send state (its remote receiver progress and worker channel state) is copied into a local of run()'s
-// loop, so it can stay in registers. Every other state stays in memory: visited only when the pass's reads show it work
-// (a packet held, or packets in flight: channels_in_flight), its fields taken into locals where first needed, written
-// back where changed, and kept in memory after the visit (keep_in_memory), so it does not take the loop-local VC's
-// registers (measured without that: forwarding rows 6 to 9 cycles per packet slower, single-ERISC rows about 8). A
-// one-ERISC router keeps every state in memory. The accessors are templates on VC so an absent VC's state is named only
-// in template-dependent code.
+// Every serviced VC's send state (vcs.get<VC>()) and every other channel's state (forwarding.get<CH>(),
+// other_workers.get<CH>()). The loop-local VC's send state (its remote receiver progress and worker channel state) is
+// copied into a local of run()'s loop, so it can stay in registers. Every other state stays in memory: visited only
+// when the pass's reads show it work (a packet held, or packets in flight: channels_in_flight), its fields taken into
+// locals where first needed, written back where changed, and kept in memory after the visit (keep_in_memory), so it
+// does not take the loop-local VC's registers (measured without that: forwarding rows 6 to 9 cycles per packet slower,
+// single-ERISC rows about 8). A one-ERISC router keeps every state in memory. The accessors are templates on VC so an
+// absent VC's state is named only in template-dependent code.
 struct SenderChannelStates {
     Each<SenderChannels::serviced_vcs, SenderVcState> vcs;
     Each<SenderChannels::forwarding_channels, SenderChannelState> forwarding;
-    // Empty (and taking no space) without other worker channels: the router's states are laid out as without them.
     [[no_unique_address]] Each<SenderChannels::other_worker_channels, SenderChannelState> other_workers;
 
     // The VC whose send state run() carries as a loop local: the lowest VC this router sends on (channel trimming can
@@ -804,7 +798,6 @@ FORCE_INLINE void visit_forwarding_channels(
     }
 }
 
-// The other worker channels in MASK (SenderVc::other_worker_channels) that have a packet or packets in flight.
 template <uint32_t MASK, typename Remote>
 FORCE_INLINE void visit_other_worker_channels(
     SenderChannelStates& states, uint32_t holding, uint32_t& channels_in_flight, Remote& remote, bool& send_yielded) {
@@ -820,9 +813,9 @@ FORCE_INLINE void visit_other_worker_channels(
     }
 }
 
-// VC's channels against its remote receiver progress (`remote`): its main worker channel (visited every pass where VC
-// is the loop-local VC, otherwise when it holds a packet or has packets in flight), then its other worker channels and
-// its forwarding channels, each group skipped with one test when none holds a packet or has packets in flight.
+// VC's channels against its remote receiver progress (`remote`): its worker channel (visited every pass where VC is the
+// loop-local VC, otherwise when it holds a packet or has packets in flight), then its other worker channels and its
+// forwarding channels, each group skipped with one test when none holds a packet or has packets in flight.
 template <size_t VC, typename Remote>
 FORCE_INLINE void visit_channels(
     SenderChannelStates& states,
@@ -895,7 +888,6 @@ FORCE_INLINE uint32_t forwarded(SenderChannelStates& states) {
     }
 }
 
-// Packets sent so far on the other worker channels in MASK.
 template <uint32_t MASK>
 FORCE_INLINE uint32_t sent_by_other_workers(SenderChannelStates& states) {
     if constexpr (MASK != 0) {
@@ -906,7 +898,7 @@ FORCE_INLINE uint32_t sent_by_other_workers(SenderChannelStates& states) {
     }
 }
 
-// Packets sent so far on VC's main worker channel (0 where it has none).
+// Packets sent so far on VC's worker channel (0 where it has none).
 template <size_t VC, typename LoopCopy>
 FORCE_INLINE uint32_t sent_by_worker(LoopCopy& loop_copy, SenderChannelStates& states) {
     if constexpr (SenderVc<VC>::has_worker_channel) {

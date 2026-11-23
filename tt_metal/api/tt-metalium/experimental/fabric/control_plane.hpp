@@ -291,9 +291,6 @@ public:
 
     RoutingDirection eth_direction_to_routing_direction(eth_chan_directions direction) const;
 
-    // The connection to the host_rdma sender channel of the router on `fabric_node_id` at `eth_chan`
-    // (TT_METAL_ENABLE_FABRIC_HOST_RDMA=1 only): VC0's last sender channel, a worker channel only the host_rdma
-    // service kernel connects to. The worker connection APIs and tables never hand it out.
     tt::tt_fabric::fabric_connection_info_t get_host_rdma_connection_info(
         FabricNodeId fabric_node_id, chan_id_t eth_chan) const;
 

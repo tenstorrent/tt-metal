@@ -3516,7 +3516,6 @@ tt::tt_fabric::fabric_connection_info_t ControlPlane::get_host_rdma_connection_i
     TT_FATAL(
         builder_context.requires_host_rdma(),
         "The fabric was built without host_rdma channels: set TT_METAL_ENABLE_FABRIC_HOST_RDMA=1 before fabric init");
-    // VC0's last sender channel, as the router lays it out.
     const auto& layout = builder_context.get_router_channel_layout(fabric_node_id, eth_chan);
     TT_FATAL(!layout.senders[0].empty(), "Router {} eth chan {} has no VC0 senders", fabric_node_id, eth_chan);
     const auto sender_channel = static_cast<uint32_t>(layout.senders[0].size() - 1);

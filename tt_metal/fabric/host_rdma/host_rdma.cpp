@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <cstring>
 
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -34,16 +33,41 @@ namespace tt::tt_fabric::host_rdma {
 
 namespace {
 
-// How long the host waits for the service kernel before declaring it stuck.
 constexpr std::chrono::seconds kServiceTimeout{10};
 
-}  // namespace
-
-// ---------------------------------------------------------------------------------------------------------------------
-// HostRdmaService
-// ---------------------------------------------------------------------------------------------------------------------
-
 namespace sabi = tt::tt_fabric::host_rdma::service_abi;
+
+void launch_service_kernel(
+    tt_metal::distributed::MeshDevice& mesh_device, tt_metal::CoreCoord logical_core, uint32_t layout_addr) {
+    tt_metal::Program program = tt_metal::CreateProgram();
+    const auto kernel = tt_metal::CreateKernel(
+        program,
+        "tt_metal/fabric/impl/kernels/host_rdma_service.cpp",
+        logical_core,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+    tt_metal::SetRuntimeArgs(program, kernel, logical_core, {layout_addr});
+    tt_metal::distributed::MeshWorkload workload;
+    workload.add_program(tt_metal::distributed::MeshCoordinateRange(mesh_device.shape()), std::move(program));
+    tt_metal::distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/false);
+}
+
+sabi::Channel inactive_channel_entry(const fabric_connection_info_t& router, uint32_t max_payload) {
+    sabi::Channel entry{};
+    entry.max_payload = sabi::align_down(max_payload, sabi::NOC_ALIGNMENT);
+    entry.router_x = router.edm_noc_x;
+    entry.router_y = router.edm_noc_y;
+    entry.slots_base = router.edm_buffer_base_addr;
+    entry.num_slots = router.num_buffers_per_channel;
+    entry.slot_bytes = router.buffer_size_bytes;
+    entry.free_slots_stream = router.worker_free_slots_stream_id;
+    entry.connection_semaphore_addr = router.edm_connection_handshake_addr;
+    entry.connection_info_addr = router.edm_worker_location_info_addr;
+    entry.producer_cursor_addr = router.buffer_index_semaphore_id;
+    return entry;
+}
+
+}  // namespace
 
 std::shared_ptr<HostRdmaService> HostRdmaService::create(
     std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device, tt_metal::CoreCoord logical_core) {
@@ -61,19 +85,17 @@ HostRdmaService::HostRdmaService(
     TT_FATAL(mesh_device_->get_devices().size() == 1, "The host_rdma service runs on a unit mesh (one chip)");
     chip_ = mesh_device_->get_devices().front()->id();
     node_ = context_.get_control_plane().get_fabric_node_id_from_physical_chip_id(chip_);
-    core_ = mesh_device_->worker_core_from_logical_core(logical_core);
+    virtual_core_ = mesh_device_->worker_core_from_logical_core(logical_core);
 
-    // L1 of the service core from the unreserved base: the layout (header, channel table), then the staging slots,
-    // one packet each.
     const uint32_t l1_base = static_cast<uint32_t>(hal.get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED));
     const uint32_t l1_end = l1_base + static_cast<uint32_t>(hal.get_dev_size(
                                           tt::tt_metal::HalProgrammableCoreType::TENSIX,
                                           tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED));
-    layout_addr_ = (l1_base + 63) & ~63u;
-    const uint32_t staging_addr = (layout_addr_ + sizeof(sabi::Layout) + 63) & ~63u;
-    const uint32_t staging_stride =
-        (static_cast<uint32_t>(fabric_context.get_fabric_channel_buffer_size_bytes()) + 63) & ~63u;
+    layout_addr_ = sabi::align_up(l1_base, sabi::LAYOUT_ALIGNMENT);
+    const uint32_t staging_addr = sabi::align_up(layout_addr_ + sizeof(sabi::Layout), sabi::LAYOUT_ALIGNMENT);
+    const uint32_t staging_stride = sabi::align_up(
+        static_cast<uint32_t>(fabric_context.get_fabric_channel_buffer_size_bytes()), sabi::LAYOUT_ALIGNMENT);
     TT_FATAL(
         staging_addr + sabi::WINDOW * staging_stride <= l1_end,
         "The host_rdma service core's L1 cannot hold {} staging slots of {} B",
@@ -81,35 +103,20 @@ HostRdmaService::HostRdmaService(
         staging_stride);
 
     auto layout = std::make_unique<sabi::Layout>();
-    std::memset(static_cast<void*>(layout.get()), 0, sizeof(sabi::Layout));
     layout->header.staging_addr = staging_addr;
     layout->header.staging_stride = staging_stride;
-    // Requests, counts and flags go through a window onto the core where one is free (#64622: strict MMIO writes
-    // into Tensix L1 cost about a microsecond each). The layout goes first and is flushed before the kernel starts.
     writer_ = std::make_unique<tt_metal::distributed::CoreWriter>(
-        cluster_, chip_, core_, staging_addr, /*l1_offset=*/0, "host_rdma service");
+        cluster_, chip_, virtual_core_, staging_addr, /*l1_offset=*/0, "host_rdma service");
     writer_->write(layout.get(), sizeof(sabi::Layout), layout_addr_);
     tt_driver_atomics::sfence();
-    cluster_.l1_barrier(chip_, {core_});
+    cluster_.l1_barrier(chip_, {virtual_core_});
 
-    tt_metal::Program program = tt_metal::CreateProgram();
-    const auto kernel = tt_metal::CreateKernel(
-        program,
-        "tt_metal/fabric/impl/kernels/host_rdma_service.cpp",
-        logical_core,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
-    tt_metal::SetRuntimeArgs(program, kernel, logical_core, {layout_addr_});
-    tt_metal::distributed::MeshWorkload workload;
-    workload.add_program(tt_metal::distributed::MeshCoordinateRange(mesh_device_->shape()), std::move(program));
-    tt_metal::distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, /*blocking=*/false);
+    launch_service_kernel(*mesh_device_, logical_core, layout_addr_);
 }
 
 HostRdmaService::~HostRdmaService() noexcept {
-    // No drain: the owner drains before closing (draining could wait on the device indefinitely; #66677). The kernel
-    // stops as soon as it sees `terminate`, closing its connections.
     try {
-        write_word(layout_addr_ + offsetof(sabi::Header, terminate), 1);
+        publish_word(layout_addr_ + offsetof(sabi::Header, terminate), 1);
         tt_metal::distributed::Finish(mesh_device_->mesh_command_queue());
     } catch (const std::exception& e) {
         log_warning(tt::LogFabric, "host_rdma: stopping the service on chip {} failed: {}", chip_, e.what());
@@ -125,29 +132,31 @@ uint32_t HostRdmaService::channel_addr(uint32_t entry) const {
 
 uint32_t HostRdmaService::read_word(uint32_t addr) const {
     uint32_t value = 0;
-    cluster_.read_reg(&value, tt_cxy_pair(chip_, core_), addr);
+    cluster_.read_reg(&value, tt_cxy_pair(chip_, virtual_core_), addr);
     return value;
 }
 
-void HostRdmaService::write_word(uint32_t addr, uint32_t value) {
-    // A word publishes what the host wrote before it (a produced count, an active flag): the earlier writes leave
-    // the host first, and on the writer's one static VC they reach the core first.
+uint32_t HostRdmaService::read_consumed(Channel& ch) const {
+    ch.consumed_as_last_read = read_word(channel_addr(ch.entry) + offsetof(sabi::Channel, consumed));
+    return ch.consumed_as_last_read;
+}
+
+void HostRdmaService::publish_word(uint32_t addr, uint32_t value) {
     tt_driver_atomics::sfence();
     writer_->write(&value, sizeof(value), addr);
     tt_driver_atomics::sfence();
 }
 
 size_t HostRdmaService::channel_toward(FabricNodeId dst) {
-    if (const auto it = channel_toward_.find(dst); it != channel_toward_.end()) {
+    if (const auto it = channel_index_by_destination_.find(dst); it != channel_index_by_destination_.end()) {
         return it->second;
     }
     TT_FATAL(dst != node_, "A host_rdma write goes to another chip (the destination is the source, {})", node_);
-    // Resolving a route walks the routing tables; requests take the cached result.
     const auto eth_chans = context_.get_control_plane().get_forwarding_eth_chans_to_chip(node_, dst);
     TT_FATAL(!eth_chans.empty(), "No router on {} forwards toward {}", node_, dst);
     const chan_id_t eth_chan = eth_chans.front();
     const size_t index = channel_on(eth_chan);
-    channel_toward_.emplace(dst, index);
+    channel_index_by_destination_.emplace(dst, index);
     return index;
 }
 
@@ -172,22 +181,11 @@ size_t HostRdmaService::channel_on(chan_id_t eth_chan) {
         fabric_context.get_fabric_max_payload_size_bytes(),
         ch.router.buffer_size_bytes - fabric_context.get_fabric_packet_header_size_bytes()));
 
-    // The entry, inactive, then active (the kernel then opens the connection).
-    sabi::Channel entry{};
-    std::memset(static_cast<void*>(&entry), 0, sizeof(entry));
-    entry.max_payload = max_payload & ~15u;
-    entry.router_x = ch.router.edm_noc_x;
-    entry.router_y = ch.router.edm_noc_y;
-    entry.slots_base = ch.router.edm_buffer_base_addr;
-    entry.num_slots = ch.router.num_buffers_per_channel;
-    entry.slot_bytes = ch.router.buffer_size_bytes;
-    entry.free_slots_stream = ch.router.worker_free_slots_stream_id;
-    entry.connection_semaphore_addr = ch.router.edm_connection_handshake_addr;
-    entry.connection_info_addr = ch.router.edm_worker_location_info_addr;
-    entry.producer_cursor_addr = ch.router.buffer_index_semaphore_id;
-    cluster_.write_core(&entry, offsetof(sabi::Channel, queue), tt_cxy_pair(chip_, core_), channel_addr(ch.entry));
-    cluster_.l1_barrier(chip_, {core_});
-    write_word(channel_addr(ch.entry) + offsetof(sabi::Channel, active), 1);
+    const sabi::Channel entry = inactive_channel_entry(ch.router, max_payload);
+    cluster_.write_core(
+        &entry, offsetof(sabi::Channel, queue), tt_cxy_pair(chip_, virtual_core_), channel_addr(ch.entry));
+    cluster_.l1_barrier(chip_, {virtual_core_});
+    publish_word(channel_addr(ch.entry) + offsetof(sabi::Channel, active), 1);
     log_debug(
         tt::LogFabric,
         "host_rdma: service on chip {} serves {} eth chan {} as entry {} ({} slots, {} B payload per packet)",
@@ -205,13 +203,13 @@ sabi::Request HostRdmaService::encode(const WriteRequest& request) const {
     TT_FATAL(request.size > 0, "A host_rdma write needs data");
     TT_FATAL(request.dst != node_, "A host_rdma write goes to another chip (the destination is the source, {})", node_);
     TT_FATAL(
-        request.src.addr % 16 == 0 && request.dst_at.addr % 16 == 0 && request.size % 16 == 0,
+        request.src.addr % sabi::NOC_ALIGNMENT == 0 && request.dst_at.addr % sabi::NOC_ALIGNMENT == 0 &&
+            request.size % sabi::NOC_ALIGNMENT == 0,
         "host_rdma write addresses and sizes are 16 B aligned (src 0x{:x}, dst 0x{:x}, {} B)",
         request.src.addr,
         request.dst_at.addr,
         request.size);
     sabi::Request r{};
-    std::memset(static_cast<void*>(&r), 0, sizeof(r));
     r.src = {
         request.src.addr,
         static_cast<uint16_t>(request.src.virtual_core.x),
@@ -236,14 +234,10 @@ sabi::Request HostRdmaService::encode(const WriteRequest& request) const {
 void HostRdmaService::post(Channel& ch, std::span<const sabi::Request> requests) {
     size_t done = 0;
     while (done < requests.size()) {
-        // Room in the queue: fewer than QUEUE_DEPTH posted and not yet consumed (the kernel's count is read only
-        // when the host's last reading leaves too little room).
-        uint32_t room = sabi::QUEUE_DEPTH - (ch.produced - ch.consumed);
-        if (room == 0) {
+        const auto room_as_last_read = [&] { return sabi::QUEUE_DEPTH - (ch.produced - ch.consumed_as_last_read); };
+        if (room_as_last_read() == 0) {
             const auto deadline = std::chrono::steady_clock::now() + kServiceTimeout;
-            while ((room = sabi::QUEUE_DEPTH -
-                           (ch.produced - (ch.consumed = read_word(
-                                               channel_addr(ch.entry) + offsetof(sabi::Channel, consumed))))) == 0) {
+            while (read_consumed(ch) == ch.produced - sabi::QUEUE_DEPTH) {
                 TT_FATAL(
                     std::chrono::steady_clock::now() < deadline,
                     "host_rdma: the service on chip {} took no request for {} s: {}",
@@ -252,18 +246,16 @@ void HostRdmaService::post(Channel& ch, std::span<const sabi::Request> requests)
                     describe());
             }
         }
-        // As many as fit, up to the queue's end: one block write, then (fenced after it) one produced count covering
-        // them all.
         const uint32_t slot = ch.produced % sabi::QUEUE_DEPTH;
-        const uint32_t count =
-            static_cast<uint32_t>(std::min<size_t>({requests.size() - done, room, sabi::QUEUE_DEPTH - slot}));
+        const uint32_t count = static_cast<uint32_t>(
+            std::min<size_t>({requests.size() - done, room_as_last_read(), sabi::QUEUE_DEPTH - slot}));
         writer_->write(
             requests.data() + done,
             count * sizeof(sabi::Request),
             channel_addr(ch.entry) + offsetof(sabi::Channel, queue) +
                 slot * static_cast<uint32_t>(sizeof(sabi::Request)));
         ch.produced += count;
-        write_word(channel_addr(ch.entry) + offsetof(sabi::Channel, produced), ch.produced);
+        publish_word(channel_addr(ch.entry) + offsetof(sabi::Channel, produced), ch.produced);
         done += count;
     }
 }
@@ -271,7 +263,6 @@ void HostRdmaService::post(Channel& ch, std::span<const sabi::Request> requests)
 void HostRdmaService::write(const WriteRequest& request) { write_batch(std::span<const WriteRequest>(&request, 1)); }
 
 void HostRdmaService::write_batch(std::span<const WriteRequest> requests) {
-    // Each request to the router toward its destination, in order per router; then each router's requests as blocks.
     std::vector<std::pair<size_t, std::vector<sabi::Request>>> by_channel;
     for (const auto& request : requests) {
         const size_t index = channel_toward(request.dst);
@@ -290,7 +281,7 @@ void HostRdmaService::write_batch(std::span<const WriteRequest> requests) {
 void HostRdmaService::drain() {
     const auto deadline = std::chrono::steady_clock::now() + kServiceTimeout;
     for (auto& ch : channels_) {
-        while ((ch.consumed = read_word(channel_addr(ch.entry) + offsetof(sabi::Channel, consumed))) != ch.produced) {
+        while (read_consumed(ch) != ch.produced) {
             TT_FATAL(
                 std::chrono::steady_clock::now() < deadline,
                 "host_rdma: the service on chip {} did not drain in {} s: {}",
@@ -305,11 +296,12 @@ std::string HostRdmaService::describe() const {
     std::string out = fmt::format(
         "service on chip {} core {}: heartbeat {}",
         chip_,
-        core_.str(),
+        virtual_core_.str(),
         read_word(layout_addr_ + offsetof(sabi::Header, heartbeat)));
     for (const auto& ch : channels_) {
         sabi::Channel entry{};
-        cluster_.read_core(&entry, offsetof(sabi::Channel, queue), tt_cxy_pair(chip_, core_), channel_addr(ch.entry));
+        cluster_.read_core(
+            &entry, offsetof(sabi::Channel, queue), tt_cxy_pair(chip_, virtual_core_), channel_addr(ch.entry));
         out += fmt::format(
             "; eth chan {}: produced {} (host {}), consumed {}, router credits {} ({} slots)",
             ch.eth_chan,

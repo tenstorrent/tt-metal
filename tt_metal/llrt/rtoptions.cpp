@@ -849,9 +849,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_ENABLE_FABRIC_VC2: this->enable_fabric_vc2 = true; break;
 
         // TT_METAL_ENABLE_FABRIC_HOST_RDMA
-        // Adds a host_rdma sender channel to every fabric router's VC0: a worker channel for the host_rdma request
-        // service kernel (host-initiated RDMA), which the fabric's worker connection APIs do not hand out. Blackhole
-        // and 2D fabrics only; not supported with express routing or the Tensix mux/UDM extensions.
+        // Adds a host_rdma sender channel to every fabric router's VC0 (Blackhole, 2D fabrics).
         // Default: false
         // Usage: export TT_METAL_ENABLE_FABRIC_HOST_RDMA=1
         case EnvVarID::TT_METAL_ENABLE_FABRIC_HOST_RDMA: this->enable_fabric_host_rdma = is_env_enabled(value); break;

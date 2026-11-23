@@ -69,6 +69,14 @@ TurnRole turn_role(RoutingDirection dir, EdgeCapability cap, ExpressAxis express
 
 }  // namespace
 
+std::array<uint32_t, builder_config::MAX_NUM_VCS> RouterVcShape::producer_sender_counts() const {
+    auto counts = sender_counts;
+    if (host_rdma_channel.has_value()) {
+        counts[0] -= 1;
+    }
+    return counts;
+}
+
 // Emit flat-index prefix sums and enforce capacity ceilings at the common construction site.
 // Express with VC2 reaches the sender ceiling exactly (5+4+1).
 void finalize_vc_shape_bases(RouterVcShape& shape) {
@@ -349,9 +357,6 @@ RouterVcShape router_vc_shape(
         vc2_receivers = (requires_vc2 && !z_boundary_router) ? 1 : 0;
     }
 
-    // The host_rdma channel (2D fabrics only): one more VC0 sender, after the worker and every forwarding channel. It
-    // has no producer router, so it stays out of the direction-to-slot bijection
-    // (RouterVcShape::producer_sender_counts).
     if (vc_config && vc_config->requires_host_rdma) {
         TT_FATAL(!express_routing_enabled, "TT_METAL_ENABLE_FABRIC_HOST_RDMA is not supported with express routing");
         shape.host_rdma_channel = vc0_senders;

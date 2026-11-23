@@ -349,7 +349,7 @@ constexpr std::array<size_t, MAX_NUM_SENDER_CHANNELS> sender_connection_info_add
     local_sender_channel_8_connection_info_addr,
     local_sender_channel_9_connection_info_addr};
 // Each worker channel's connection semaphore (0 for any other channel), at a compile-time address: the router reads it
-// every pass. A forwarding channel's semaphore is used only at init, from its runtime arg.
+// every pass.
 constexpr std::array<size_t, MAX_NUM_SENDER_CHANNELS> worker_connection_semaphore_addrs = {
     NAMED_CT_ARG("SENDER_CH_0_WORKER_CONNECTION_SEMAPHORE_ADDR"),
     NAMED_CT_ARG("SENDER_CH_1_WORKER_CONNECTION_SEMAPHORE_ADDR"),
@@ -380,9 +380,8 @@ constexpr uint32_t notify_worker_of_read_counter_update_src_address =
 // ============================================================================
 // Channel servicing flags
 // ============================================================================
-// Whether a sender channel position takes a worker (SENDER_CH_<i>_IS_WORKER_CHANNEL; erisc_datamover_builder.cpp),
-// whether or not trimming services it: the first sender channel of each VC whose routing mode has a worker, and VC0's
-// host_rdma channel where the fabric builds one.
+// Whether a sender channel position takes a worker: the first sender channel of each VC whose routing mode has a worker
+// (SENDER_CH_<i>_IS_WORKER_CHANNEL; erisc_datamover_builder.cpp), whether or not trimming services it.
 constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> is_sender_channel_worker = {
     static_cast<bool>(NAMED_CT_ARG("SENDER_CH_0_IS_WORKER_CHANNEL")),
     static_cast<bool>(NAMED_CT_ARG("SENDER_CH_1_IS_WORKER_CHANNEL")),

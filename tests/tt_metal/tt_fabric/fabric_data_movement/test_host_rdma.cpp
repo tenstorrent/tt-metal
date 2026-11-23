@@ -2,11 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Host-initiated RDMA over TT-Fabric, single domain: the host posts write requests to a chip's request service, whose
-// Tensix kernel reads the data, forms the packets and injects them into a router's host_rdma channel
-// (TT_METAL_ENABLE_FABRIC_HOST_RDMA); each write's last packet bumps a completion counter on the destination chip (the
-// self-domain ack).
-
 #include <gtest/gtest.h>
 
 #include <bit>
@@ -39,11 +34,8 @@ namespace {
 using tt::tt_fabric::host_rdma::Completion;
 using tt::tt_fabric::host_rdma::WriteRequest;
 
-// Where writes land on a destination chip: L1 of logical worker core (0, 0), past the reserved region. The completion
-// counter sits at the base, the data 64 B after it.
 constexpr uint32_t kCounterOffset = 0;
 constexpr uint32_t kDataOffset = 64;
-// Where the tests stage a write's source on the source chip (past any destination window).
 constexpr uint32_t kSrcOffset = 768 * 1024;
 
 template <tt_fabric::FabricConfig CONFIG>
@@ -78,11 +70,10 @@ public:
     }
 
     void TearDown() override {
-        // Drained first: stopping a service does not wait for its traffic.
         for (auto& [chip, svc] : services_) {
             svc->drain();
         }
-        services_.clear();  // stops the service kernels, which close their router connections
+        services_.clear();
         chips_.clear();
     }
 
@@ -90,11 +81,9 @@ protected:
     struct Chip {
         ChipId chip;
         FabricNodeId node;
-        tt::tt_metal::CoreCoord core;  // virtual coordinates of the destination worker core
+        tt::tt_metal::CoreCoord core;
     };
 
-    // The request service of `chip`, on logical core (1, 1) (not (0, 0), which holds the tests' source and
-    // destination data).
     tt::tt_fabric::host_rdma::HostRdmaService& service(const Chip& chip) {
         auto it = services_.find(chip.chip);
         if (it == services_.end()) {
@@ -121,7 +110,6 @@ protected:
         return words;
     }
 
-    // Waits for the completion counter on `chip` to reach `expected`.
     void wait_for_counter(const Chip& chip, uint32_t expected) {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
         uint32_t value = 0;
@@ -149,12 +137,10 @@ protected:
         return words;
     }
 
-    // One write from `src` to `dst` of `num_words` words, then check the counter and the data.
     void write_and_check(Chip& src, const Chip& dst, size_t num_words, uint32_t seed) {
         reset_destination(dst, num_words);
         const auto data = pattern(num_words, seed);
         const Completion completion{.virtual_core = dst.core, .addr = l1_base_ + kCounterOffset, .increment = 1};
-        // The source is on the source chip: the service reads it there.
         write_l1(src, l1_base_ + kSrcOffset, data);
         service(src).write(WriteRequest{
             .src = {src.core, l1_base_ + kSrcOffset},
@@ -167,10 +153,6 @@ protected:
             << "chip " << src.chip << " -> chip " << dst.chip << ", " << num_words * 4 << " B";
     }
 
-    // Workers see the fabric as they would without host_rdma: one worker sender channel per routing plane. The
-    // connection table every worker core reads (written at device init) holds exactly one entry per active router
-    // (one per routing plane in each direction), and each names the router's sender channel 0, never its host_rdma
-    // channel.
     void check_one_worker_channel_per_routing_plane() {
         auto& context = tt::tt_metal::MetalContext::instance();
         const auto& control_plane = context.get_control_plane();
@@ -180,10 +162,9 @@ protected:
             tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS);
         size_t routers = 0;
         for (const auto& chip : chips_) {
-            // Any worker core: every one holds the same table.
-            const auto worker = devices_map_.at(chip.chip)->worker_core_from_logical_core({2, 2});
+            const auto any_worker = devices_map_.at(chip.chip)->worker_core_from_logical_core({2, 2});
             tt::tt_fabric::tensix_fabric_connections_l1_info_t table{};
-            cluster.read_core(&table, sizeof(table), tt_cxy_pair(chip.chip, worker), table_addr);
+            cluster.read_core(&table, sizeof(table), tt_cxy_pair(chip.chip, any_worker), table_addr);
             uint32_t routing_planes = 0;
             for (const auto direction :
                  {RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W}) {
@@ -223,15 +204,17 @@ protected:
         return tt::tt_fabric::are_intra_mesh_neighbors(*devices_map_.at(a.chip), a.node, b.node);
     }
 
-    // For every ordered pair of chips (optionally neighbours only), writes of each size.
     void run_a_to_b(bool neighbours_only) {
         const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
         const size_t max_payload_words = [&] {
             const auto& fabric_context = control_plane.get_fabric_context();
             return fabric_context.get_fabric_max_payload_size_bytes() / sizeof(uint32_t);
         }();
-        // One word; under one packet; exactly one packet; several packets with a partial last one.
-        const std::vector<size_t> sizes = {4, 256, max_payload_words, 5 * max_payload_words + 12};
+        const size_t smallest_aligned = 16 / sizeof(uint32_t);
+        const size_t under_one_packet = 256;
+        const size_t several_packets_partial_last = 5 * max_payload_words + 12;
+        const std::vector<size_t> sizes = {
+            smallest_aligned, under_one_packet, max_payload_words, several_packets_partial_last};
         uint32_t seed = 1;
         size_t pairs = 0;
         for (auto& src : chips_) {
@@ -255,8 +238,6 @@ protected:
         EXPECT_GT(pairs, 0u);
     }
 
-    // All-gather: chip i holds shard i; the host writes every shard to every other chip at slot i, each write
-    // completing on the destination's counter. Every chip ends up with every shard.
     void run_all_gather(size_t shard_words, uint32_t rounds) {
         std::vector<Chip*> group;
         group.reserve(chips_.size());
@@ -274,11 +255,8 @@ protected:
             }
             for (size_t d = 0; d < n; ++d) {
                 reset_destination(*group[d], n * shard_words);
-                // A chip's own shard is local: the host puts it there directly.
                 write_l1(*group[d], l1_base_ + kDataOffset + d * shard_words * sizeof(uint32_t), shards[d]);
             }
-            // Issue every write before waiting on any, so the writes of every source are in flight together; each
-            // source chip's writes go to its service as one batch.
             for (size_t s = 0; s < n; ++s) {
                 std::vector<WriteRequest> batch;
                 for (size_t d = 0; d < n; ++d) {
@@ -289,7 +267,6 @@ protected:
                         l1_base_ + kDataOffset + static_cast<uint32_t>(s * shard_words * sizeof(uint32_t));
                     const Completion completion{
                         .virtual_core = group[d]->core, .addr = l1_base_ + kCounterOffset, .increment = 1};
-                    // Chip s's own slot holds its shard: its service copies it to the same slot on chip d.
                     batch.push_back(WriteRequest{
                         .src = {group[s]->core, slot},
                         .dst = group[d]->node,
@@ -327,11 +304,9 @@ TEST_F(HostRdmaFabric2DFixture, AToBNeighbours) { run_a_to_b(/*neighbours_only=*
 TEST_F(HostRdmaFabric2DFixture, AToBAllPairs) { run_a_to_b(/*neighbours_only=*/false); }
 TEST_F(HostRdmaFabric2DFixture, AllGather) { run_all_gather(/*shard_words=*/4096, /*rounds=*/3); }
 
-// With the host_rdma channel built, a worker still sees one worker sender channel per routing plane.
 TEST_F(HostRdmaFabric2DFixture, OneWorkerChannelPerRoutingPlane) { check_one_worker_channel_per_routing_plane(); }
 
-// Host-injection bandwidth from one chip to a neighbour (disabled by default: a benchmark, not a check). Run with
-// --gtest_also_run_disabled_tests --gtest_filter=*HostRdma*Bandwidth*.
+// A benchmark: --gtest_also_run_disabled_tests --gtest_filter=*HostRdma*Bandwidth*
 TEST_F(HostRdmaFabric2DFixture, DISABLED_Bandwidth) {
     auto& src = chips_[0];
     const Chip* dst = nullptr;
@@ -342,15 +317,12 @@ TEST_F(HostRdmaFabric2DFixture, DISABLED_Bandwidth) {
         }
     }
     ASSERT_NE(dst, nullptr);
-    // The request service: requests of each size from a source window in the source chip's L1, round-robin over a
-    // destination window, the last with a completion. The service reads, packetizes and injects; the host only posts.
     {
         constexpr uint32_t window_bytes = 256 * 1024;
         constexpr size_t total_bytes = 64ull * 1024 * 1024;
         write_l1(src, l1_base_ + kSrcOffset, pattern(window_bytes / sizeof(uint32_t), 11));
         auto& svc = service(src);
-        // Warm-up, untimed: the service's kernel starts and opens its router connection, and the host's posting path
-        // warms up (without it the first measurement reads about 40% low).
+        // Without a warm-up the first measurement reads about 40% low.
         reset_destination(*dst, 1);
         constexpr uint32_t warmup_requests = total_bytes / 1024;
         for (uint32_t i = 0; i < warmup_requests; ++i) {

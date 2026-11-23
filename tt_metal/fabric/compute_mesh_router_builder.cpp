@@ -394,6 +394,10 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
         const InjectionPolicy& injection_policy = express_enabled
                                                       ? static_cast<const InjectionPolicy&>(express_policy)
                                                       : static_cast<const InjectionPolicy&>(non_express_policy);
+        const auto worker_channel_injects = [&](uint32_t vc) {
+            return builder_config::bubble_flow_control_enabled_on_vc(vc) && injection_policy.participates(vc) &&
+                   injection_policy.worker_is_injection(vc);
+        };
 
         for (uint32_t vc = 0; vc < num_vcs; ++vc) {
             uint32_t num_channels_in_vc = vc_shape.sender_counts[vc];
@@ -405,15 +409,11 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
             auto vc_injection_flags = builder_config::bubble_flow_control_enabled_on_vc(vc)
                                           ? compute_sender_channel_injection_flags(producer_slots, vc, injection_policy)
                                           : std::vector<bool>(producer_slots.sender_count(vc), false);
-            // The host_rdma channel (last on VC0, outside the producer slots) injects like the worker channel: it starts
-            // packets on this router, so it takes the worker's bubble on a torus.
             if (vc == 0 && vc_shape.host_rdma_channel.has_value()) {
                 TT_FATAL(
                     vc_injection_flags.size() == *vc_shape.host_rdma_channel,
                     "The host_rdma channel must follow every other VC0 sender channel");
-                const bool participates = builder_config::bubble_flow_control_enabled_on_vc(vc) &&
-                                          injection_policy.participates(vc) && injection_policy.worker_is_injection(vc);
-                vc_injection_flags.push_back(participates);
+                vc_injection_flags.push_back(worker_channel_injects(vc));
             }
             // Flatten into router-level vector
             for (uint32_t ch_idx = 0; ch_idx < num_channels_in_vc; ++ch_idx) {

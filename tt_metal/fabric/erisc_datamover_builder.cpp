@@ -1125,18 +1125,15 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
                                           ? actual_sender_channels_per_vc_.value()[2]
                                           : config.num_used_sender_channels_per_vc[2];
 
-    // The host_rdma channel (IntermeshVCConfig::requires_host_rdma): VC0's last sender channel, a worker channel the
-    // host_rdma service kernel connects to (tt_metal/fabric/host_rdma). The fabric's worker connection APIs do not hand
-    // it out (get_worker_connected_sender_channel is VC0's first), and no router forwards into it.
     const bool router_has_host_rdma_channel =
         fabric_context.get_builder_context().requires_host_rdma() && actual_sender_channels_vc0 > 0;
     auto is_host_rdma_channel = [&](size_t channel_id) -> bool {
         return router_has_host_rdma_channel && channel_id == actual_sender_channels_vc0 - 1;
     };
-    // A worker channel, which a worker (or the fabric's mux) connects to at run time; every other sender channel is
-    // forwarded into by an upstream router. VC0: the worker-connected channel, and the host_rdma channel where built;
-    // VC1 (inter-mesh): none; VC2 (neighbour exchange): its one channel. A channel position's role, whether or not
-    // trimming services it.
+    // A worker channel: the first sender channel of each VC whose routing mode has a worker, which a worker (or the
+    // fabric's mux) connects to at run time; every other sender channel is forwarded into by an upstream router.
+    // VC0: the worker-connected channel; VC1 (inter-mesh): none; VC2 (neighbour exchange): its one channel. A channel
+    // position's role, whether or not trimming services it.
     auto is_worker_channel = [&](size_t channel_id) -> bool {
         const size_t vc2_first = actual_sender_channels_vc0 + actual_sender_channels_vc1;
         return channel_id == get_worker_connected_sender_channel() || is_host_rdma_channel(channel_id) ||
@@ -1461,9 +1458,6 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
                                             this->is_sender_channel_serviced_[risc_id][i])
                                       : 0;
     }
-    // Each worker channel's connection semaphore (0 for any other channel). The router checks a worker's connection
-    // every pass, reading the semaphore at this compile-time address with the pass's first reads; the runtime args
-    // carry every channel's, for init.
     for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
         named_args[fmt::format("SENDER_CH_{}_WORKER_CONNECTION_SEMAPHORE_ADDR", i)] =
             (i < num_sender_channels && is_worker_channel(i))
@@ -1487,15 +1481,14 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
             (i < num_sender_channels) ? static_cast<uint32_t>(config.sender_channel_ack_noc_ids[i]) : 0;
     }
     // A worker channel's credits go out on a command buffer of their own, so the router can keep it programmed for
-    // them: VC0's worker channel on WR, VC2's on WR_REG, the host_rdma channel's on RD where this ERISC is not also the
-    // receiver (whose forward credits are on RD); with both roles on one ERISC, worker credits are not kept programmed,
-    // and it shares WR with VC0's worker channel. Every other channel keeps the config's (the atomics buffer).
+    // them: VC0's worker channel on WR, VC2's on WR_REG. Every other channel keeps the config's (the atomics buffer).
     using NocCmdBuf = FabricEriscDatamoverConfig::NocCmdBuf;
-    const bool sender_only_erisc = !should_risc_service_receiver_channels(config.arch, config.num_riscv_cores, risc_id);
+    const bool rd_cmd_buf_unused_by_receiver =
+        !should_risc_service_receiver_channels(config.arch, config.num_riscv_cores, risc_id);
     for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
         NocCmdBuf ack_cmd_buf = config.sender_channel_ack_cmd_buf_ids[i];
         if (i < num_sender_channels && is_host_rdma_channel(i)) {
-            ack_cmd_buf = sender_only_erisc ? NocCmdBuf::RD_CMD_BUF : NocCmdBuf::WR_CMD_BUF;
+            ack_cmd_buf = rd_cmd_buf_unused_by_receiver ? NocCmdBuf::RD_CMD_BUF : NocCmdBuf::WR_CMD_BUF;
         } else if (i < num_sender_channels && is_worker_channel(i)) {
             ack_cmd_buf =
                 i == get_worker_connected_sender_channel() ? NocCmdBuf::WR_CMD_BUF : NocCmdBuf::WR_REG_CMD_BUF;
