@@ -42,9 +42,22 @@ P2D_HOLES = 8  # (P2d: at most this many consumed positions without taps; more -
 
 
 def taps_usable(rec, n, window):
-    """whether a ResidentDFlashRows.capture_taps record serves a promotion at n consumed tokens: its window still covers
-    the drafter's (n - window ..) and at most P2D_HOLES positions since lack taps"""
-    return rec is not None and rec["n"] <= n <= rec["n"] + P2D_HOLES and n - rec["s0"] <= window + 128
+    """whether a ResidentDFlashRows.capture_taps record serves a promotion at n consumed tokens: at most P2D_HOLES
+    positions since lack taps, and its parts run contiguously from the drafter's window start (n - window, down to a
+    block) to its last whole block"""
+    if rec is None or not rec["n"] <= n <= rec["n"] + P2D_HOLES:
+        return False
+    start, parts = max(0, n - window) // 64 * 64, rec["parts"]
+    if not parts:
+        return rec["n"] - start < 64  # (a prompt within one block: the tail alone)
+    if parts[0]["s0"] > start or parts[-1]["hb"] != rec["n"] // 64 * 64:
+        return False
+    return all(a["hb"] == b["s0"] for a, b in zip(parts, parts[1:]))
+
+
+def window_parts(parts, start):
+    """the P2d parts that reach into a window starting at `start` (older ones dropped)"""
+    return [p for p in (parts or []) if p["hb"] > start]
 
 
 class AdaptiveEngine:

@@ -611,18 +611,27 @@ class ResidentDFlashRows:
         return ResidentDFlash._context_taps(self, s0, n_tokens)
 
     # ------------------------------------------------------------------ P2d: promotions from the prefill's taps
-    def capture_taps(self, n_tokens):
-        """the last prefill's taps of its window (positions s0 .. n_tokens - 1, s0 = n_tokens - window down to a block),
-        kept for a later fill (fill_from_taps): the whole blocks as device-format host tensors (the fractured taps the
-        fill reads: no host conversion either way, ~18 ms out / ~15 ms back for a full window), the last partial
-        block's rows as torch [taps, rows, H] (its fill pads them with zeros). Must run before the next prefill
-        overwrites the ring"""
-        s0 = max(0, n_tokens - self.window) // 64 * 64
+    def capture_part(self, s0, n):
+        """the last prefill's taps of positions s0 .. n - 1 (s0, n block multiples, n - s0 <= fill_rows) as a part of a
+        P2d record: {s0, hb, main: device-format host tensors of the fractured taps}"""
+        dev = self._context_taps(s0, n)
+        part = dict(s0=s0, hb=n, main=[ttnn.from_device(x) for x in dev])
+        for x in dev:
+            ttnn.deallocate(x)
+        return part
+
+    def capture_taps(self, n_tokens, s0=None):
+        """the last prefill's taps of its window (positions s0 .. n_tokens - 1, s0 = n_tokens - window down to a block
+        unless given: a pass that started at a restored prefix), kept for a later fill (fill_from_taps): the whole
+        blocks as a part (device-format host tensors of the fractured taps the fill reads: no host conversion either
+        way, ~34 ms out / ~15 ms back for a full window), the last partial block's rows as torch [taps, rows, H] (its
+        fill pads them with zeros). Must run before the next prefill overwrites the ring"""
+        s0 = max(0, n_tokens - self.window) // 64 * 64 if s0 is None else s0
         hb = n_tokens // 64 * 64  # (the last whole block's end)
         dev = self._context_taps(s0, n_tokens)
-        rec = dict(s0=s0, hb=hb, n=n_tokens, main=None, tail=None)
+        rec = dict(parts=[], n=n_tokens, tail=None)
         if hb > s0:
-            rec["main"] = [ttnn.from_device(x) for x in dev]
+            rec["parts"].append(dict(s0=s0, hb=hb, main=[ttnn.from_device(x) for x in dev]))
         if n_tokens > hb:
             comp = ttnn.ConcatMeshToTensor(self.mesh, dim=-1)
             rec["tail"] = torch.stack(
@@ -640,16 +649,18 @@ class ResidentDFlashRows:
         return rec
 
     def fill_from_taps(self, phys, rec, n_hist):
-        """user phys's drafter window from a capture_taps record: positions rec's s0 .. n - 1 exact, n .. n_hist - 1
+        """user phys's drafter window from a capture_taps record: its parts' positions (up to n - 1) exact, n .. n_hist - 1
         (consumed since without taps: the first-token launch, plain steps) zero rows (acceptance 3.06 vs exact 3.08 for
         two such positions, results/20261124-p2d-probe). n_hist - s0 must fit the drafter's ring (window + 2 blocks)"""
-        s0, hb, n = rec["s0"], rec["hb"], rec["n"]
-        assert n <= n_hist <= hb + P2D_TAIL and n_hist - s0 <= self.window + 128, (s0, n, n_hist)
-        # (copies into the persistent buffers: no device allocation while traces exist)
-        if rec["main"] is not None:
-            for h, d in zip(rec["main"], self._p2d_main):
+        n = rec["n"]
+        hb = n // 64 * 64
+        assert n <= n_hist <= hb + P2D_TAIL, (n, n_hist)
+        # (copies into the persistent buffers: no device allocation while traces exist). Parts oldest first: a part
+        # from a prefix-cache entry may reach before the window, and a newer position's ring slot is written last
+        for part in rec["parts"]:
+            for h, d in zip(part["main"], self._p2d_main):
                 ttnn.copy_host_to_device_tensor(h, d)
-            self.drafter.fill_context(self._p2d_main, s0, phys=phys, valid_len=hb - s0)
+            self.drafter.fill_context(self._p2d_main, part["s0"], phys=phys, valid_len=part["hb"] - part["s0"])
         if n_hist > hb:  # (the partial block's exact rows, then zeros: the P2D_TAIL bucket)
             vals = torch.zeros(len(self._p2d_tail), P2D_TAIL, H)
             if rec["tail"] is not None:

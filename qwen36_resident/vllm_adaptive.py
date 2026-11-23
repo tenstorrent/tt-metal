@@ -35,7 +35,7 @@ from loguru import logger
 
 from qwen36_resident import weights as Q
 from qwen36_resident.model import TOP_K
-from qwen36_resident.adaptive import taps_usable
+from qwen36_resident.adaptive import taps_usable, window_parts
 from qwen36_resident.vllm_rows import CHUNK_UNIT, ResidentRowsAdapter, RowsEngine, expand_blocks, resident_capabilities
 
 SPEC_USERS = 8
@@ -198,21 +198,43 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
             self.ae.plain, self.ae.pp, self.ae.emb, self.vocab, d.vocab_chip, PLAIN_ROWS, CHUNK_UNIT, self.mesh
         )
         if P2D:
-            self.engine.on_taps = self._on_taps
+            self.engine.on_taps, self.engine.entry_taps = self._on_taps, self._entry_taps
         return []
 
-    def _on_taps(self, r, lo, n):
-        """(P2d) a prompt just prefilled into plain row r: keep its window's taps (ResidentDFlashRows.capture_taps, ~18 ms)
-        when the pass covered the window and the user may be promoted (a spec user free); a later promotion fills its
-        drafter from them instead of re-prefilling the window (~0.35 s at 2K+ tokens)"""
+    def _entry_taps(self, parts, lo, H):
+        """(P2d) the taps a prefix-cache entry at boundary H keeps: its window (H - window .. H) from the restored
+        entry's parts and this pass's ring (from lo), or None when they do not cover it"""
+        e = self.ae.spec
+        start = max(0, H - e.window) // 64 * 64
+        if lo <= start:
+            return [e.capture_part(start, H)]
+        old = window_parts(parts, start)
+        if not old or old[0]["s0"] > start or old[-1]["hb"] != lo:
+            return None
+        return old + [e.capture_part(lo, H)]
+
+    def _on_taps(self, r, lo, n, parts=None):
+        """(P2d) a prompt just prefilled into plain row r: keep its window's taps (ResidentDFlashRows.capture_taps, ~34 ms)
+        when the user may be promoted (a spec user free) and the pass covered the window — or, a prefix-cache hit
+        (lo: the restored prefix), the entry's parts cover the window up to lo; a later promotion fills its drafter
+        from them instead of re-prefilling the window (~0.36 s at 2K+ tokens)"""
         import time
 
         t0 = time.perf_counter()
         self.taps_of.pop(r, None)
         e = self.ae.spec
-        if lo > max(0, n - e.window) // 64 * 64 or len(self.live) >= SPEC_USERS:
+        start = max(0, n - e.window) // 64 * 64
+        if len(self.live) >= SPEC_USERS:
             return
-        self.taps_of[r] = e.capture_taps(n)
+        if lo <= start:
+            self.taps_of[r] = e.capture_taps(n)
+        else:
+            old = window_parts(parts, start)
+            if not old or old[0]["s0"] > start or old[-1]["hb"] != lo:
+                return
+            rec = e.capture_taps(n, s0=lo)
+            rec["parts"] = old + rec["parts"]
+            self.taps_of[r] = rec
         self._lap("capture_taps", t0)
 
     def warmup_model_prefill(self, *args, **kwargs):

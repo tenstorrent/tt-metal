@@ -528,6 +528,7 @@ class ResidentRowsAdapter:
                 return None
             h, snap = pc.lookup(tokens[: upto + 1] if final else tokens)
             st["live"], st["h"] = True, h
+            st["parts"] = snap.get("taps") if h else None
             if h:
                 model.restore_slot(r, model.snapshot_from_host(snap), table=blocks)
                 if h < upto:
@@ -550,7 +551,7 @@ class ResidentRowsAdapter:
                 pp.run_span(torch.as_tensor(tokens[start:start]), start // c, start, drain=True, chunk=c)
                 pp.handoff(model, start, block_table=blocks, slot=r)
                 host = model.snapshot_to_host(model.snapshot_slot(r, n_tokens=start, table=blocks))
-                pc.insert(tokens, start, host, _host_bytes(host))
+                pc.insert(tokens, start, host, eng._entry_bytes(host, st.get("parts"), st["h"], start))
                 if start < upto:
                     pp.load_prefix(model, start, slot=r, block_table=blocks)
                     pp.run_from(torch.as_tensor(tokens[:upto]), start, chunk=c)
@@ -561,7 +562,7 @@ class ResidentRowsAdapter:
             self.pp_partial = (r, end, total, c, calls + 1)
             return None
         self.pp_partial, self.pp_cache = None, None
-        eng._taps(r, st["h"], end - 1)
+        eng._taps(r, st["h"], end - 1, st.get("parts"))
         logger.info(f"split prefill (prefix cache): resident slot {r}, {end} tokens, cached prefix {st['h']}")
         return r, int(ids[end - 1]), end - 1, table_row
 
@@ -787,6 +788,9 @@ class RowsEngine:
         # (P2d) on_taps(slot, lo, n): called right after a single prompt's PP pass handed it off — the PP's tap ring then
         # holds that prompt's taps of positions lo .. n - 1 (its last ring-full); a drafter-serving class keeps them
         self.on_taps = None
+        # (P2d) entry_taps(parts, lo, H): the taps a prefix-cache entry at boundary H keeps (the window before H, from the
+        # restored entry's parts and this pass's ring from lo), or None; a hit hands them to on_taps
+        self.entry_taps = None
         if SWAP_GB > 0 and hasattr(model, "snapshot_slot"):
             from qwen36_resident.prefix_cache import SwapStore
 
@@ -839,9 +843,19 @@ class RowsEngine:
         self.pp.handoff(self.model, len(ids), block_table=blocks, slot=r)
         self._taps(r, 0, len(ids))
 
-    def _taps(self, r, lo, n):
+    def _taps(self, r, lo, n, parts=None):
         if self.on_taps is not None:
-            self.on_taps(r, lo, n)
+            self.on_taps(r, lo, n, parts)
+
+    def _entry_bytes(self, host, parts, lo, H):
+        """(P2d) a prefix-cache entry's bytes, its window taps attached to it when the class keeps them"""
+        nb = _host_bytes(host)
+        if self.entry_taps is not None:
+            tp = self.entry_taps(parts, lo, H)
+            if tp:
+                host["taps"] = tp
+                nb += sum(_host_bytes(dict(enumerate(p["main"]))) for p in tp)
+        return nb
 
     def _prefill_cached(self, ids, r, blocks, chunk):
         """prefill_whole through the host-tier prefix cache: the longest cached prefix h (a multiple of its block)
@@ -863,6 +877,7 @@ class RowsEngine:
         n, ids_t = len(ids), torch.as_tensor(ids)
         h, snap = pc.lookup(ids)
         h0 = h  # (this pass's taps start at the restored prefix)
+        entry_parts = snap.get("taps") if h else None
         H = max(pc.boundaries(n), default=0)
         if h and H - h < PREFIX_CACHE_STEP:
             H = 0
@@ -886,7 +901,7 @@ class RowsEngine:
             lap("snapshot: slot -> staging")
             host = model.snapshot_to_host(dev)
             lap("snapshot: device -> host")
-            pc.insert(ids, H, host, _host_bytes(host))
+            pc.insert(ids, H, host, self._entry_bytes(host, entry_parts, h0, H))
             h = H
         if h:
             pp.load_prefix(model, h, slot=r, block_table=blocks)
@@ -898,10 +913,10 @@ class RowsEngine:
         lap("prefill of the rest")
         pp.handoff(model, n, block_table=blocks, slot=r)
         lap("handoff")
-        self._taps(r, h0, n)
+        self._taps(r, h0, n, entry_parts)
         if H and H == n and H > h:  # (a prompt of whole blocks: its handed-off state is the boundary's)
             host = model.snapshot_to_host(model.snapshot_slot(r, n_tokens=H, table=blocks))
-            pc.insert(ids, H, host, _host_bytes(host))
+            pc.insert(ids, H, host, self._entry_bytes(host, entry_parts, h0, H))
 
     @property
     def can_batch(self):

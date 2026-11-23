@@ -518,15 +518,54 @@ def test_preempted_user_swaps_and_resumes(monkeypatch, while_spec):
     run.check()
 
 
+def _fake_spec(caps=None, window=2048):
+    """ResidentDFlashRows' P2d captures as bookkeeping only (parts without tensors)"""
+
+    def capture_taps(n, s0=None):
+        s0 = max(0, n - window) // 64 * 64 if s0 is None else s0
+        if caps is not None:
+            caps.append(n)
+        hb = n // 64 * 64
+        return dict(parts=[dict(s0=s0, hb=hb, main=[])] if hb > s0 else [], n=n, tail=None if n == hb else "rows")
+
+    return SimpleNamespace(
+        window=window, capture_taps=capture_taps, capture_part=lambda s0, n: dict(s0=s0, hb=n, main=[])
+    )
+
+
+def test_p2d_prefix_cache_entry_taps(monkeypatch):
+    """P2d-2: an entry at boundary H keeps its window's taps (the ring's when the pass covered it, else the restored
+    entry's parts + the ring's); a hit's request record joins the entry's parts to the pass's, usable by a promotion;
+    parts that do not reach the window start make no record"""
+    from qwen36_resident.adaptive import taps_usable
+
+    m, pf = make(monkeypatch)
+    m.ae.spec = _fake_spec()
+    # turn 1 (a miss, the pass from 0) stores at 11264: its window 9216 .. 11264 from the ring
+    e1 = m._entry_taps(None, 0, 11264)
+    assert [(p["s0"], p["hb"]) for p in e1] == [(9216, 11264)]
+    # turn 2 hits 11264, prefills 11264 .. 12125: its record joins the entry's part and the ring's
+    m._on_taps(3, 11264, 12125, e1)
+    rec = m.taps_of[3]
+    assert [(p["s0"], p["hb"]) for p in rec["parts"]] == [(9216, 11264), (11264, 12096)], rec
+    assert taps_usable(rec, 12126, 2048) and taps_usable(rec, 12125 + 8, 2048) and not taps_usable(rec, 12125 + 9, 2048)
+    # an entry stored at 12288 after that pass: the old part reaching its window (10240 ..) + the ring's
+    e2 = m._entry_taps(e1, 11264, 12288)
+    assert [(p["s0"], p["hb"]) for p in e2] == [(9216, 11264), (11264, 12288)]
+    # a hit whose entry kept no taps (or a gap): no record, the promotion refills
+    m._on_taps(4, 11264, 12125, None)
+    assert 4 not in m.taps_of
+    m._on_taps(4, 11264, 14000, e1)  # (the window starts at 11904: e1 does not reach it, but the ring does not either)
+    assert 4 not in m.taps_of or taps_usable(m.taps_of[4], 14001, 2048)
+
+
 def test_p2d_promotions_use_the_prefill_taps(monkeypatch):
     """P2d: a prompt's prefill reports its taps (RowsEngine.on_taps); the class keeps the window's capture and the
     promotion hands it to move_to_spec_many (no PP refill for that user); the gate counts it as a fill; a released
     slot drops it; a pass that did not cover the window (a restored prefix past its start) keeps none"""
     m, pf = make(monkeypatch)
     caps = []
-    m.ae.spec = SimpleNamespace(
-        window=2048, capture_taps=lambda n: caps.append(n) or dict(s0=max(0, n - 2048) // 64 * 64, hb=n, n=n)
-    )
+    m.ae.spec = _fake_spec(caps)
     m.engine.on_taps = m._on_taps
     run = Runner(m)
     run.arrive([0], [[3, 1, 4, 1, 5, 9, 2, 6]])  # (one prompt a call: a batched gang's pass keeps no taps)
