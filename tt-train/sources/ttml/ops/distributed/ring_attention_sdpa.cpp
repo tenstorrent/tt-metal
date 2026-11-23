@@ -117,10 +117,15 @@ void online_softmax_merge(
     //    into an FP32 Dest (bf16 -> FP32 is exact) and the output takes the accumulator's FP32
     //    dtype, so the whole combine stays FP32 without a separate typecast. The FP32
     //    accumulator matters: backward consumes the saved O in u = rowsum(dO * O).
-    //    lerp is not overflow-safe: it forms O_i - O, which overflows FP32 once |O| and |O_i|
-    //    approach FLT_MAX/2, even with both finite (NaN at w = 0). Tracked in
-    //    https://github.com/tenstorrent/tt-metal/issues/65873.
-    output_accum = ttnn::lerp(output_accum, step_output, new_weight);
+    //    fast_interpolate evaluates (O - w * O) + w * O_i, valid since w is in [0, 1]: no
+    //    intermediate overflow, and w = 0 returns O bit-exact.
+    output_accum = ttnn::lerp(
+        output_accum,
+        step_output,
+        new_weight,
+        /*memory_config=*/std::nullopt,
+        /*output=*/std::nullopt,
+        /*fast_interpolate=*/true);
     running_lse = std::move(new_lse);
 }
 
