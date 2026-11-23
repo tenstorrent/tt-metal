@@ -4,8 +4,13 @@
 # Uses flock to serialize device access across multiple agents/terminals.
 # Uses TT_METAL_OPERATION_TIMEOUT_SECONDS for precise hang detection at the
 # dispatch layer (does not penalize setup/compilation time).
-# Automatically resets the device after hangs, ensuring the next runner
-# always gets a clean device.
+# Automatically resets the device after hangs and crashes, ensuring the next runner
+# always gets a clean device. Resets go through scripts/device_safety.sh: the board
+# must be idle before a reset and pass a health gate after it; repeated fault resets
+# open a circuit breaker that refuses new runs (DEVICE_BREAKER_OPEN); a failed reset
+# marks the board unhealthy (DEVICE_UNHEALTHY) until a person runs
+# `scripts/device_safety.sh clear`. After the first hang the test session is stopped
+# (TT_SAFE_PYTEST_CONTINUE_AFTER_HANG=1 keeps running the remaining tests).
 #
 # Simulator mode (TT_METAL_SIMULATOR set):
 #   Exports TT_METAL_SLOW_DISPATCH_MODE=1 and TT_METAL_DISABLE_SFPLOADMACRO=1.
@@ -90,6 +95,10 @@ WATCHER_LOG="${REPO_DIR}/generated/watcher/watcher.log"
 TRIAGE_OUT_DIR="${REPO_DIR}/generated/tt-triage"
 LOCK_FILE="/tmp/tt-device.lock"
 DIRTY_FLAG="/tmp/tt-device.dirty"
+# Guarded resets, health gate, circuit breaker and unhealthy flag (shared with tt-probe.sh and tt-blaze's runner).
+DS_TAG=SAFE_PYTEST
+# shellcheck source=device_safety.sh
+source "${REPO_DIR}/scripts/device_safety.sh"
 TRIAGE_LOG="/tmp/safe-pytest-triage-$$.log"
 TRIAGE_REPORT="${TRIAGE_OUT_DIR}/triage.txt"
 PROFILE_REPORTS_DIR="${REPO_DIR}/generated/profiler/reports"
@@ -488,11 +497,17 @@ if [[ "$SIM_MODE" == false ]]; then
     # idle queueing behind other runners and is deliberately excluded.
     RUN_START=$(date +%s)
 
+    # --- Refuse to run on an unhealthy board or with the reset circuit breaker open ---
+    if ! ds_preflight; then
+        echo "SAFE_PYTEST_ERROR: device refused (see the DEVICE_UNHEALTHY / DEVICE_BREAKER_OPEN line above)"
+        exit 3
+    fi
+
     # --- Check if device needs reset from previous hang ---
     if [[ -f "$DIRTY_FLAG" ]]; then
         echo "SAFE_PYTEST: Device marked dirty from previous hang, resetting..."
-        if ! tt-smi -r; then
-            echo "SAFE_PYTEST_ERROR: Device reset (tt-smi -r) failed"
+        if ! ds_reset fault "dirty flag left by an earlier run"; then
+            echo "SAFE_PYTEST_ERROR: Device reset failed (device marked unhealthy)"
             exit 3
         fi
         rm -f "$DIRTY_FLAG"
@@ -622,7 +637,7 @@ if [[ "$SIM_MODE" == false ]]; then
         MISSING_TTEXALENS=true
     fi
     mkdir -p "${TRIAGE_OUT_DIR}"
-    export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${TRIAGE_SCRIPT} --disable-progress --skip-version-check --llm-output --llm-output-path=${TRIAGE_REPORT} > ${TRIAGE_LOG} 2>&1"
+    export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${TRIAGE_SCRIPT} --disable-progress --skip-version-check --llm-output --llm-output-path=${TRIAGE_REPORT} > ${TRIAGE_LOG} 2>&1$(ds_stop_after_hang_suffix)"
 fi
 
 emit_missing_ttexalens_warning() {
@@ -795,8 +810,7 @@ fi
 _clear_dirty_flag() {
     if [[ "$ETH_STUCK" == true ]]; then
         echo "SAFE_PYTEST: Active Ethernet cores stuck after the run, resetting device..."
-        if tt-smi -r; then
-            sleep 2
+        if ds_reset fault "active ethernet cores stuck after ${TEST_PATH}"; then
             rm -f "$DIRTY_FLAG"
             echo "SAFE_PYTEST: Device reset complete"
         else
@@ -854,12 +868,11 @@ fi
 if [[ "$IS_HANG" == true ]]; then
     if [[ "$SIM_MODE" == false ]]; then
         echo "SAFE_PYTEST: Resetting device..."
-        if tt-smi -r; then
-            sleep 2
+        if ds_reset fault "hang in ${TEST_PATH}"; then
             rm -f "$DIRTY_FLAG"
             echo "SAFE_PYTEST: Device reset complete"
         else
-            echo "SAFE_PYTEST: Device reset FAILED; leaving device marked dirty"
+            echo "SAFE_PYTEST: Device reset FAILED; leaving device marked dirty (and unhealthy)"
         fi
     fi
 
@@ -890,6 +903,22 @@ if [[ "$IS_HANG" == true ]]; then
     rm -f "$TRIAGE_LOG"
     rm -f "$PYTEST_STDOUT_LOG"
     exit 2
+fi
+
+# A crash (killed by a signal, pytest interrupted or internal error) may have stopped mid device operation: reset
+# instead of handing the board on as clean.
+if [[ "$SIM_MODE" == false && ( $EXIT_CODE -ge 128 || $EXIT_CODE -eq 2 || $EXIT_CODE -eq 3 ) ]]; then
+    echo "SAFE_PYTEST: pytest crashed or was interrupted (exit $EXIT_CODE), resetting device..."
+    if ds_reset fault "crash (exit ${EXIT_CODE}) in ${TEST_PATH}"; then
+        rm -f "$DIRTY_FLAG"
+        echo "SAFE_PYTEST: Device reset complete"
+    else
+        echo "SAFE_PYTEST: Device reset FAILED; leaving device marked dirty (and unhealthy)"
+    fi
+    rm -f "$TRIAGE_LOG"
+    rm -f "$PYTEST_STDOUT_LOG"
+    echo "SAFE_PYTEST_RESULT: CRASH (pytest exit code: $EXIT_CODE; wrapper exit: 1)"
+    exit 1
 fi
 
 _clear_dirty_flag

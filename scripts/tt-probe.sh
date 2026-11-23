@@ -3,7 +3,8 @@
 #
 # Drop-in replacement for raw "python3 << 'PYEOF'" heredocs.
 # Reads a Python script from stdin, saves it to disk, and runs it with
-# the same device protections as run_safe_pytest.sh (flock, timeout, reset).
+# the same device protections as run_safe_pytest.sh (flock, timeout, guarded
+# reset with health gate, circuit breaker; see scripts/device_safety.sh).
 #
 # Saved scripts persist as debugging artifacts — they document what was
 # tried and can be re-run later.
@@ -46,6 +47,10 @@ TRIAGE_OUT_DIR="${REPO_DIR}/generated/tt-triage"
 TRIAGE_REPORT="${TRIAGE_OUT_DIR}/triage.txt"
 LOCK_FILE="/tmp/tt-device.lock"
 DIRTY_FLAG="/tmp/tt-device.dirty"
+# Guarded resets, health gate, circuit breaker and unhealthy flag (shared with run_safe_pytest.sh).
+DS_TAG=TT_PROBE
+# shellcheck source=device_safety.sh
+source "${REPO_DIR}/scripts/device_safety.sh"
 TRIAGE_LOG="/tmp/tt-probe-triage-$$.log"
 
 # --- Device-lock contention profiling (see run_safe_pytest.sh for details) ---
@@ -160,12 +165,12 @@ MISSING_TTEXALENS=false
 if [[ "$SIM_MODE" == false ]]; then
     if python3 -c "import ttexalens" 2>/dev/null; then
         mkdir -p "${TRIAGE_OUT_DIR}"
-        export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${TRIAGE_SCRIPT} --disable-progress --skip-version-check --llm-output --llm-output-path=${TRIAGE_REPORT} > ${TRIAGE_LOG} 2>&1"
+        export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${TRIAGE_SCRIPT} --disable-progress --skip-version-check --llm-output --llm-output-path=${TRIAGE_REPORT} > ${TRIAGE_LOG} 2>&1$(ds_stop_after_hang_suffix)"
     else
         # Defer the missing-tool warning to EXIT via trap — otherwise it gets
         # buried in probe output and users never see it.
         MISSING_TTEXALENS=true
-        export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="echo HANG_NO_TRIAGE > ${TRIAGE_LOG}"
+        export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="echo HANG_NO_TRIAGE > ${TRIAGE_LOG}$(ds_stop_after_hang_suffix)"
     fi
 fi
 
@@ -215,10 +220,15 @@ if [[ "$SIM_MODE" == false ]]; then
     TT_TIMING_LOCK_ACQUIRED_MS=$(date +%s%3N)
     echo "TT_PROBE: Device lock acquired"
 
+    if ! ds_preflight; then
+        echo "TT_PROBE_ERROR: device refused (see the DEVICE_UNHEALTHY / DEVICE_BREAKER_OPEN line above)"
+        exit 3
+    fi
+
     if [[ -f "$DIRTY_FLAG" ]]; then
         echo "TT_PROBE: Device dirty from previous run, resetting..."
-        if ! tt-smi -r; then
-            echo "TT_PROBE_ERROR: Device reset failed"
+        if ! ds_reset fault "dirty flag left by an earlier run"; then
+            echo "TT_PROBE_ERROR: Device reset failed (device marked unhealthy)"
             exit 3
         fi
         rm -f "$DIRTY_FLAG"
@@ -285,13 +295,19 @@ fi
 
 # --- Reset device (hardware only) ---
 if [[ "$SIM_MODE" == false ]]; then
+    # Every probe ends with a reset; it counts toward the circuit breaker only after a hang or a crash (a signal exit).
+    # An ordinary Python failure (exception, assert) leaves the device healthy.
+    if [[ -s "$TRIAGE_LOG" || $EXIT_CODE -ge 128 ]]; then
+        RESET_KIND=fault
+    else
+        RESET_KIND=routine
+    fi
     echo "TT_PROBE: Resetting device..."
-    if tt-smi -r; then
-        sleep 2
+    if ds_reset "$RESET_KIND" "after probe ${PROBE_REL} (exit ${EXIT_CODE})"; then
         rm -f "$DIRTY_FLAG"
         echo "TT_PROBE: Device reset complete"
     else
-        echo "TT_PROBE: Device reset FAILED; leaving dirty"
+        echo "TT_PROBE: Device reset FAILED; leaving dirty (and unhealthy)"
     fi
 fi
 
