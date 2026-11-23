@@ -49,23 +49,8 @@ constexpr uint32_t kProbeSleepCapUs = 100;
 // and 12 of the Blackhole PCIE_SS spec).
 constexpr uint64_t kSiiBase = 0xFFFFFFFFF0000000ull;
 constexpr uint32_t kCfrLo = 0xA8, kCfrHi = 0xAC;
-// A Tensix core's RISC debug register block, and its wall clock's low and high words inside it
-// (RISCV_DEBUG_REG_WALL_CLOCK_L and _H). Reading the low word latches the high word.
-constexpr uint64_t kRiscDebugRegs = 0xFFB12000ull;
-constexpr uint32_t kWallClockLo = 0x1F0, kWallClockHi = 0x1F8;
-
+// Reads of the fallback wall clock per sample; the one with the shortest round trip is kept.
 constexpr uint32_t kWallClockReads = 30;
-
-// Returns the host address of the word at `offset` in `window`'s mapping. The clocks are read with plain loads from it,
-// because UMD's read32 times every access and, past its budget, runs a NoC hang check behind a lock that all slow
-// accesses share, which can hold a timed read for milliseconds.
-const volatile uint32_t* mapped_word(tt::umd::IoWindow& window, uint64_t offset) {
-    auto& tlb = dynamic_cast<tt::umd::TlbWindow&>(window);
-    const tt::umd::TlbHandle& handle = tlb.handle_ref();
-    TT_FATAL(handle.get_base() != nullptr, "streaming profiler: I/O window has no host mapping");
-    return reinterpret_cast<const volatile uint32_t*>(
-        handle.get_base() + (tlb.get_base_address() - handle.get_config().local_offset) + offset);
-}
 
 // Returns an uncached window onto the SII registers of chip `chip_id`'s PCIe tile.
 std::unique_ptr<tt::umd::IoWindow> open_sii_window(tt::Cluster& cluster, uint32_t chip_id) {
@@ -76,26 +61,6 @@ std::unique_ptr<tt::umd::IoWindow> open_sii_window(tt::Cluster& cluster, uint32_
         pcie.front(),
         kSiiBase,
         tt::umd::HostIoWindowConfig{.mapping = tt::umd::HostMemoryCaching::UC, .size = kCfrHi + sizeof(uint32_t)});
-}
-
-// Reads the wall clock through `window` kWallClockReads times and returns the read with the shortest round trip, as the
-// host TSC at its midpoint and the wall clock.
-std::pair<int64_t, uint64_t> read_wall_clock(tt::umd::IoWindow& window) {
-    const volatile uint32_t* lo_word = mapped_word(window, kWallClockLo);
-    const volatile uint32_t* hi_word = mapped_word(window, kWallClockHi);
-    int64_t best_rtt = std::numeric_limits<int64_t>::max(), best_tsc = 0;
-    uint64_t best_wall = 0;
-    for (uint32_t i = 0; i < kWallClockReads; i++) {
-        const int64_t before = tsc_now();
-        const uint32_t lo = *lo_word;
-        const int64_t after = tsc_now();
-        if (after - before < best_rtt) {
-            best_rtt = after - before;
-            best_tsc = std::midpoint(before, after);
-            best_wall = kernel_profiler::join_words(*hi_word, lo);
-        }
-    }
-    return {best_tsc, best_wall};
 }
 
 }  // namespace
@@ -142,12 +107,7 @@ Receiver::Receiver(tt::Cluster& cluster, std::unique_ptr<DevicePrograms> program
     if (root.fallback_wall_clock_core) {
         const CoreCoord core = cluster.get_virtual_coordinate_from_logical_coordinates(
             root.chip_id, *root.fallback_wall_clock_core, CoreType::WORKER);
-        fallback_wall_clock_ = cluster.get_driver()->create_io_window(
-            root.chip_id,
-            tt::umd::CoreCoord(core, CoreType::TENSIX, CoordSystem::TRANSLATED),
-            kRiscDebugRegs,
-            tt::umd::HostIoWindowConfig{
-                .mapping = tt::umd::HostMemoryCaching::UC, .size = kWallClockHi + sizeof(uint32_t)});
+        fallback_wall_clock_ = std::make_unique<DeviceWallClock>(cluster, root.chip_id, core);
     }
     std::vector<std::unique_ptr<Stream>> sync_streams;
     for (const CapturedSocket& captured : programs_->sockets()) {
@@ -439,8 +399,8 @@ void Receiver::sync_thread(const std::stop_token& stop) {
         if (!fallback_wall_clock_) {
             return false;
         }
-        const auto [tsc, wall] = read_wall_clock(*fallback_wall_clock_);
-        return clock_solver_.on_fallback_wall_clock(CaptureContext::kRootDevice, tsc, wall);
+        const DeviceWallClock::Reading reading = fallback_wall_clock_->read(kWallClockReads, tsc_now);
+        return clock_solver_.on_fallback_wall_clock(CaptureContext::kRootDevice, reading.host, reading.wall);
     };
     // On a chip with no Ethernet cores (p100a), a wall clock read needs the refclk-to-TSC map, so the map is fitted
     // before the first read. Then even a short capture gets a read at its start and one at its end.
