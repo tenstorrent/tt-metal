@@ -64,6 +64,11 @@ KNOBS = {
     # 45-layer step at 1 M 31.73 -> 29.83 ms (8 rows) / 36.07 -> 34.16 ms (16 rows); ids identical at 32 K x 4 spec and
     # the 1 M warm turn (B attached == B_cold); served 1 M x 2 / 4 / 8 decode +4.3 / +6.4 / +7.1 %, 1-user text unchanged
     "GLM53_DSA_SHARD_RS1_SPLIT": "1",
+    # GLM53_DSA_SHARD_RS1_TSPLIT (on RS1_SPLIT + RSNP): the split RS1's two lanes send the two halves of every
+    # destination block (3.5 of a source's 7 blocks per link instead of 4 / 3 by parity: the link-0 lane landed 28 us
+    # late and gated the roots' round 1): plain step B 16 x 16 live 32 K 27,192.8 -> 27,102.0 us, 1 M 30,132.3 -> 30,055.8 us; same pages
+    # and bytes (CI pins ids identical, 16 identical rows 1 class); an explicit RS1_SPLIT / RSB / RSNP = 0 drops it
+    "GLM53_DSA_SHARD_RS1_TSPLIT": "1",
     # GLM53_DSA_SHARD_MFAST (rev 77, on R8 + AGK + PREFILTER): the merge helpers' compute in fewer instructions with the
     # same integers (no pack copy of the key pages, the PF_RANK-th largest key in registers, the round histograms without
     # the per-round zero): plain step B 16 x 16 live 32 K 27,625.6 -> 27,179.1 us, 1 M 30,940.7 -> 30,120.9 us; CI pins
@@ -179,6 +184,11 @@ def apply(mesh_shape, seq: int, isl: int | None = None) -> dict:
         for k in ("GLM53_DSA_SHARD_R8", "GLM53_DSA_SHARD_AGK", "GLM53_DSA_SHARD_PREFILTER")
     ):
         want.pop("GLM53_DSA_SHARD_MFAST")  # MFAST rides on R8 + AGK + PREFILTER: an explicit 0 on any drops it
+    if any(
+        os.environ.get(k, want.get(k, "0")) != "1"
+        for k in ("GLM53_DSA_SHARD_RS1_SPLIT", "GLM53_DSA_SHARD_RSB", "GLM53_DSA_SHARD_RSNP")
+    ):
+        want.pop("GLM53_DSA_SHARD_RS1_TSPLIT")  # TSPLIT rides on RS1_SPLIT + RSNP (RSNP on RSB): an explicit 0 drops it
     if os.environ.get("GLM53_MLA_ATT_OBF16") == "1":
         want.pop("GLM53_DSA_SHARD_COMB")  # COMB needs fp32 O partials: an explicit OBF16=1 drops the COMB default
     want["GLM53_MODEL_TRACE_MB"] = str(trace_mb(int(seq)))

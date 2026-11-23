@@ -61,6 +61,7 @@ assert MK.SHARD_RS2_PPC == MK.SHARD_AG8_PPC
 _PREFILTER_LOGGED: list = []  # the TPMlaShard prefilter log line, once per process
 _MFAST_LOGGED: list = []  # the TPMlaShard MFAST log line, once per process
 _RS1S_LOGGED: list = []  # rev 76: the TPMlaShard RS1-split log line, once per process (the chains assert it)
+_RS1T_LOGGED: list = []  # GLM53_DSA_SHARD_RS1_TSPLIT: the halves-of-every-block log line, once per process
 
 
 class TPMlaShard(TPM.TPMla):
@@ -305,11 +306,26 @@ class TPMlaShard(TPM.TPMla):
             # allocation sharded over both lane cores (no extra L1 per bank)
             half = lambda link: dict(subset=lambda p: SP.rs1_split_dsts(p, self.P, link),  # noqa: E731
                                      srcs=lambda p: SP.rs1_split_srcs(p, self.P, link))  # fmt: skip
+            # GLM53_DSA_SHARD_RS1_TSPLIT (on RS1_SPLIT + RSNP): instead, each lane sends its HALF of every destination
+            # block (rs1_tsplit_args: the span of the staged pages) and each waiter counts every source
+            rs1t = SP.shard_rs1_tsplit(self.P, rs1s, rsnp)  # (an explicit TSPLIT=1 without RS1_SPLIT / RSNP raises)
+            if rs1t:
+                SP.rs1_tsplit_header_check()
+                tsa = SP.rs1_tsplit_args(t)
+                assert all(
+                    (v["rows"], v["width"]) == (rsa["rs1"]["rows"], rsa["rs1"]["width"]) for v in tsa.values()
+                ), tsa
+                half = lambda link: dict(tsa[link]["extra"])  # noqa: E731
+                if not _RS1T_LOGGED:  # one line per process: the chains assert the knob reached the build
+                    logger.info(f"TPMlaShard: GLM53_DSA_SHARD_RS1_TSPLIT active (RS1 lanes = the halves of every block: "
+                                f"spans {SP.rs1_tsplit_spans(t)} of {SP.rs_sent_pages(t, SP.RS1_DATA_PAGES)} pages at t {t})")  # fmt: skip
+                    _RS1T_LOGGED.append(True)
+            rs1e = {} if rs1t else dict(rsa["rs1"]["extra"])  # (RS1_TSPLIT: each half's nb / slots / sub span)
             rs1_sc = [self.lane_core["rs1"], self.lane_core[SP.RS1S_NAME]] if rs1s else None
             rs1x = dict(**half(1), sync_cores=rs1_sc) if rs1s else {}
             rs1 = FS.FabricStreamScatter(mesh, rsa["rs1"]["rows"], rsa["rs1"]["width"], axis=geo.pair_axis, lanes=lane("rs1"),
                                          **sy("rs1"), wait=rs_wait, cons=(MK.SEM_RSC, roots), link_base=1, after=MK.SEM_FSA,
-                                         **split, **rsa["rs1"]["extra"], **rs1x)  # fmt: skip
+                                         **split, **rs1e, **rs1x)  # fmt: skip
             # both scatters signal the roots' SEM_RSC and the root reads it ordinally (wait_min 1 = round 1 landed,
             # 2 = round 2 landed): sound because rs2's waiter is its own lane BRISC, which signals after that lane's
             # sends, and those sends wait on rs2_sem, which the root raises only past its round-1 wait -- the second
@@ -321,7 +337,8 @@ class TPMlaShard(TPM.TPMla):
             objs = dict(ag1=ag1, ag2=ag2, rs1=rs1, rs2=rs2)
             xs = dict(ag1=x_ag, ag2=ag1.y, rs1=x_rs1, rs2=x_rs2b)
             rs1s_keys = {}
-            if rs1s:  # rev 76: RS1's link-0 half -- x_rs1 -> y_rs1 as rs1, the destinations q with p + q odd
+            if rs1s:  # rev 76: RS1's link-0 lane -- x_rs1 -> y_rs1 as rs1: the parity split's destinations q with p + q
+                # odd, or (RS1_TSPLIT) every destination's second half of the staged pages
                 # its producers' gate is SEM_FSA (the roots signal it with that id: never in an AR lane's release list)
                 # and its link opens on SEM_FSW (AG1's consumers' signal, ag1_cons); it signals the roots' SEM_RSC like
                 # rs1: round 1 = 2 signals, then rs2's -- still ordinal (rs2's sends wait on the roots' rs2_sem, raised
@@ -329,11 +346,19 @@ class TPMlaShard(TPM.TPMla):
                 rs1a = FS.FabricStreamScatter(mesh, rsa["rs1"]["rows"], rsa["rs1"]["width"], axis=geo.pair_axis,
                                               lanes=lane(SP.RS1S_NAME), sync=rs1.sync, sync_cores=rs1_sc, y=rs1.y,
                                               wait=(MK.SEM_FSA, rs_wait[1]), cons=(MK.SEM_RSC, roots), link_base=0,
-                                              after=MK.SEM_FSW, **split, **rsa["rs1"]["extra"], **half(0))  # fmt: skip
+                                              after=MK.SEM_FSW, **split, **rs1e, **half(0))  # fmt: skip
                 rs1a.released_by = SP.RS1S_RELEASED_BY
-                assert rs1a.sub == rs1.sub and rs1a.y is rs1.y, (rs1a.sub, rs1.sub)
+                assert rs1a.y is rs1.y
+                if rs1t:  # the two spans cover each block chunk's staged pages exactly once: rs1 [0, h), rs1a [h, spc)
+                    assert rs1a.sub[:2] == rs1.sub[:2] and rs1.sub[3] == 0 and rs1a.sub[3] == rs1.sub[4], (
+                        rs1.sub,
+                        rs1a.sub,
+                    )
+                    assert sum(rs1a.sub[3:]) == SP.rs_sent_pages(t, SP.RS1_DATA_PAGES), (rs1a.sub, t)
+                else:
+                    assert rs1a.sub == rs1.sub, (rs1a.sub, rs1.sub)
                 objs[SP.RS1S_NAME], xs[SP.RS1S_NAME] = rs1a, x_rs1
-                rs1s_keys = dict(rs1_split=True, rs1a_lane=rs1a.lane_noc()[0], rs1a_sem=MK.SEM_FSA)
+                rs1s_keys = dict(rs1_split=True, rs1_tsplit=rs1t, rs1a_lane=rs1a.lane_noc()[0], rs1a_sem=MK.SEM_FSA)
             assert int(ag1.y.shape[-2]) == geo.n * rows1
             pages = lambda ten: int(ten.shape[-2]) * int(ten.shape[-1]) // 1024  # noqa: E731
             # the scatters' x / y hold the knob-off pages (RSB: the same page ids in block chunks)
@@ -396,7 +421,8 @@ class TPMlaShard(TPM.TPMla):
             p_, line = o._pos(r, c)
             src, dst, local, up, dn = o._block(p_, line)
             want = geo.block(name, st["t"], r, c, rs1_early=bool(st.get("rs1_early")), agk=bool(st.get("agk")),
-                             agb=bool(st.get("agb")), rsb=bool(st.get("rsb")), rs1s=rs1s)  # fmt: skip
+                             agb=bool(st.get("agb")), rsb=bool(st.get("rsb")), rs1s=rs1s,
+                             rs1t=bool(st.get("rs1_tsplit")))  # fmt: skip
             got = dict(p=p_, src=src if not o.scatter else None, dst=dst, local=bool(local), up=up, dn=dn,
                        dsts=list(o._dsts(p_)))  # fmt: skip
             if got != {k: want[k] for k in got}:
@@ -614,7 +640,7 @@ class TPMlaShard(TPM.TPMla):
                 lk, lcbs = fab.lane_parts(r, c, 1, n_readers, self.mk.owner_noc, cons_sem=MK.SEM_A, late_open=late)
                 sk, scbs, sems = [], [], list(desc.semaphores)
                 idx = {}
-                for nm in order:  # (rev 76: rs1a has no probe row -- rows 236..239 are the four streams')
+                for nm in order:  # (rev 76's rs1a: row 240, past the four streams' 236..239)
                     probe = (pa, SP.PROBE_LANE_ROW[nm]) if pa is not None and nm in SP.PROBE_LANE_ROW else None
                     assert probe is None or SP.PROBE_LANE_ROW[nm] < MK.PROBE_ROWS, (nm, MK.PROBE_ROWS)
                     k_, cb_, _, _ = objs[nm].parts(st["x"][nm], r, c, probe=probe)
