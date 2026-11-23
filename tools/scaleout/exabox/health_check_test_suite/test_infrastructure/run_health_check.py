@@ -75,6 +75,11 @@ log = logging.getLogger(__name__)
 # key is loaded — dispatch on this. Default preserves the Slurm behavior.
 LAUNCH_MODES = ("slurm", "orchestration")
 
+# Whole-run timeout when --timeout-minutes is not given. full runs weekly's
+# tests and then the galaxy load (about 30 min at its default length) on top.
+DEFAULT_TIMEOUT_MINUTES = 60
+TIER_TIMEOUT_MINUTES = {"full": 120}
+
 
 # ---------------------------------------------------------------------------
 # Argument parsing
@@ -104,7 +109,6 @@ def parse_args() -> argparse.Namespace:
             "daily",
             "weekly",
             "full",
-            "galaxy",
             "pre_bmc_reboot",
             "post_bmc_reboot",
             "light",
@@ -131,7 +135,12 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="tt-metal repo root (defaults to $TT_METAL_HOME / the diag suite's own default).",
     )
-    p.add_argument("--timeout-minutes", type=int, default=60, help="Timeout for the diag run")
+    p.add_argument(
+        "--timeout-minutes",
+        type=int,
+        default=None,
+        help=f"Timeout for the diag run. Default: {DEFAULT_TIMEOUT_MINUTES}, or {TIER_TIMEOUT_MINUTES['full']} for full.",
+    )
     p.add_argument(
         "--telemetry-port",
         type=int,
@@ -335,7 +344,7 @@ def main() -> int:
     log_dir = args.log_dir
     slurm_job_id = os.environ.get("SLURM_JOB_ID", "unknown")
     log_file = Path(log_dir) / f"{node}-{slurm_job_id}.log"
-    timeout_seconds = args.timeout_minutes * 60
+    timeout_seconds = (args.timeout_minutes or TIER_TIMEOUT_MINUTES.get(args.tier, DEFAULT_TIMEOUT_MINUTES)) * 60
 
     launch_mode = args.launch_mode
     jira_bearer_token = load_jira_secrets(log_dir, launch_mode)

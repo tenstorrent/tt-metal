@@ -18,8 +18,9 @@ whose phase is left out of the report when there is nothing to run.
 
 Where the steps a tier can name are defined:
 
-    resets, post_test_resets  tt-smi flags: "-r" or "-glx_reset" (never "-r" in a glx_reset_only tier)
-    tests                     TESTS (gtest) and PYTESTS (pytest) in diag/device_tests.py
+    resets, post_test_resets  tt-smi flags: "-r" or "-glx_reset"
+    tests                     TESTS (gtest) and PYTESTS (pytest) in diag/device_tests.py, then
+                              LOAD_TESTS (the galaxy load) in diag/busbar.py
     triage                    TRIAGE_TOOLS in diag/triage.py
 
 A name that isn't defined there fails at import, so a typo stops
@@ -36,6 +37,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
+from diag.busbar import LOAD_TESTS
 from diag.device_tests import PYTESTS, TESTS
 from diag.resets import RESET_FLAGS
 from diag.triage import TRIAGE_TOOLS
@@ -47,7 +49,9 @@ class Tier:
     # stick to -glx_reset. Each is followed by a fresh snapshot, revalidated.
     resets: tuple[str, ...] = ()
 
-    # Device tests, in order: names from TESTS / PYTESTS.
+    # Device tests, in order: names from TESTS / PYTESTS, then the galaxy load
+    # (LOAD_TESTS: the bus-bar steps, then the links test), which runs last at
+    # --mode's length.
     tests: tuple[str, ...] = ()
 
     # Reset run between the tests and the triage phase. Two reasons it sits
@@ -78,23 +82,20 @@ class Tier:
     # ETH sweep; it sits in the same slot as triage, after the post-test reset.
     qsfp_tests: bool = False
 
-    # The only reset the tier may run is -glx_reset. _validate() rejects a -r in
-    # its resets or post-test resets.
-    glx_reset_only: bool = False
-
     # Judge the new PCIe AER errors per chip over the whole run (diag/aer.py
-    # AerWindow): marked before the first load and before each reset.
+    # AerWindow): marked after the pre-test resets and before each later reset,
+    # so errors from the tests survive the post-test reset.
     aer_diff: bool = False
-
-    # With --mode: the galaxy load phases after the tests (diag/busbar.py, then
-    # diag/links.py), inside the AER window. Needs glx_reset_only: the links
-    # phase's sweep resets with -glx_reset.
-    busbar: bool = False
 
     # Collect the syseng sys-triage bundle. It is the record of a unit's state
     # taken before the BMC power cycles it, and its vuart and scratch reads are
     # worth most on a unit that has not been reset since it misbehaved.
     sys_triage: bool = False
+
+    @property
+    def galaxy_load(self) -> bool:
+        """Whether the tests include the galaxy load, the only tests --mode, --steps and the bus-bar overrides set."""
+        return any(t in LOAD_TESTS for t in self.tests)
 
 
 _WEEKLY = Tier(
@@ -131,22 +132,16 @@ TIERS: dict[str, Tier] = {
     ),
     # daily, with every test and the full GDDR pattern set.
     "weekly": _WEEKLY,
-    # weekly plus the sys-triage bundle: everything, for a unit with an issue,
-    # so the run's logs can go straight on its DIIM ticket.
-    "full": replace(_WEEKLY, sys_triage=True),
-    # What a caller that runs its own load wants of the unit's health: the
-    # snapshot checks (chips by BDF, tray and ASIC, thermal, telemetry), a
-    # -glx_reset (callers pass --skip-reset to read the unit as found), and the
-    # host-side triage with its AER diff and the ETH status read. With --mode
-    # it also runs the bus-bar and links phases (the galaxy load); its AER diff
-    # then spans them.
-    "galaxy": Tier(
-        resets=("-glx_reset",),
-        triage=("host_side",),
-        eth_status=True,
+    # weekly plus the galaxy load (the bus-bar steps and the links test), the
+    # AER errors over the run, the ETH status read and the sys-triage bundle:
+    # everything, for a unit with an issue, so the run's logs can go straight
+    # on its DIIM ticket.
+    "full": replace(
+        _WEEKLY,
+        tests=(*_WEEKLY.tests, *LOAD_TESTS),
         aer_diff=True,
-        glx_reset_only=True,
-        busbar=True,
+        eth_status=True,
+        sys_triage=True,
     ),
     # Data collection before a BMC reboot. No resets and no tests: a reset
     # would wipe the state the triage, QSFP and sys-triage phases are there to
@@ -184,12 +179,15 @@ def _validate() -> None:
         problems += [
             f"{name}: unknown post-test reset flag {f!r}" for f in tier.post_test_resets if f not in RESET_FLAGS
         ]
-        if tier.glx_reset_only:
-            problems += [f"{name}: -r is not allowed" for f in (*tier.resets, *tier.post_test_resets) if f == "-r"]
-        problems += [f"{name}: unknown test {t!r}" for t in tier.tests if t not in TESTS and t not in PYTESTS]
+        problems += [
+            f"{name}: unknown test {t!r}"
+            for t in tier.tests
+            if t not in TESTS and t not in PYTESTS and t not in LOAD_TESTS
+        ]
+        load = tuple(t for t in tier.tests if t in LOAD_TESTS)
+        if load and (tier.tests[-len(load) :] != load or load != tuple(t for t in LOAD_TESTS if t in load)):
+            problems.append(f"{name}: the galaxy load runs last, in the order {', '.join(LOAD_TESTS)}")
         problems += [f"{name}: unknown triage tool {t!r}" for t in tier.triage if t not in TRIAGE_TOOLS]
-        if tier.busbar and not tier.glx_reset_only:
-            problems.append(f"{name}: busbar needs glx_reset_only")
         if tier.eth_summary and not tier.eth_status:
             problems.append(f"{name}: eth_summary needs eth_status")
     problems += [

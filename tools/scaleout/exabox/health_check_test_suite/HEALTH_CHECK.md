@@ -5,7 +5,8 @@ In works
 Pre-cluster hardware sanity check for Blackhole Galaxy 6U systems. Captures a
 `tt-smi` snapshot, decodes per-chip telemetry, runs a reset stability loop,
 invokes the `unit_tests_deployment` gtest binary, and on the longer tiers folds
-in the first-step triage tools, the QSFP tests and the sys-triage bundle. The
+in the pytest stress tests, the first-step triage tools, the QSFP tests and the
+sys-triage bundle; `full` adds the galaxy load (the bus-bar and links tests). The
 `flash` tier reads every on-host ETH link twice with tt-triage instead, with no
 resets and no tests. Emits a single JSON report with per-check
 PASS/WARN/FAIL/SKIP status grouped by IP.
@@ -76,7 +77,9 @@ BMC_IP=... BMC_USER=... BMC_PASSWORD=... \
   `--output-dir`. Most flags in [Flags](#flags) are forwarded directly; pass
   `--tt-metal-path` after a `--` separator, using an in-container repo path.
   Host paths (`--input-snapshot`, `--qsfp-descriptor`, `--triage-dir`) supplied
-  before the separator are mounted read-only for you.
+  before the separator are mounted read-only for you. The galaxy load's flags
+  (`--mode`, `--steps` and the overrides) go after the separator too, e.g.
+  `run_diag_docker.sh full -- --mode smoke`.
 - The exit code is the suite's own: `1` on FAIL, `0` on PASS/WARN.
 
 ## Tiers
@@ -86,8 +89,7 @@ BMC_IP=... BMC_USER=... BMC_PASSWORD=... \
 | `flash` | none | — | — | 2 reads, 30 s apart | — | — | snapshot + 2 triage reads + 30 s | Quick ETH link health, the unit read as found |
 | `daily` | `tt-smi -r`, `tt-smi -glx_reset`, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + gddr_fast (DRAM_TEST_FAST=1)                | host_side + device_side | — | yes, if installed | — | ~5 min + triage + ~7 min | The scheduled fleet run |
 | `weekly` | `tt-smi -r`, `tt-smi -glx_reset` × 2, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + didt_matmul_galaxy (pytest, bf16 and bf8 variants, ~12 min measured) + fabric_all_gather_matmul_galaxy (pytest, ~1 min measured) + HSC input-voltage and chip recount around the tests | host_side + device_side | — | yes, if installed | — | ~17 min measured + triage + ~7 min | Every test, less often |
-| `full` | as `weekly` | as `weekly` | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | `weekly` + sys-triage | A unit with an issue: everything, for the logs on its DIIM ticket |
-| `galaxy` | `tt-smi -glx_reset` only (`-r` is rejected) | — | host_side + AER diff over the whole run (marked before each reset) | yes | — | — | snapshot + one reset + triage; with `--mode` plus the bus-bar and links phases (plain ~30 min) | A caller that runs its own load and needs the unit's health: chips by BDF, tray and ASIC, thermal, telemetry |
+| `full` | as `weekly` | as `weekly`, then the [galaxy load](#the-galaxy-load-full): `busbar` (the `qb`, `mix`, `step`, `heavy` and `code` steps, ~19 min planned at `--mode plain`) + `links` (pair link test, sweep on a fault, fabric open/close) | host_side + device_side + AER diff over the whole run | yes | yes, if installed | yes, if installed and BMC credentials set | `weekly` + galaxy load (~30 min at `plain`) + ETH status + sys-triage | A unit with an issue: everything, for the logs on its DIIM ticket |
 | `pre_bmc_reboot` | none | — | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | snapshot + triage + ~7 min + sys-triage | Collect data before a BMC reboot |
 | `post_bmc_reboot` | none | — | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | snapshot + triage + ~7 min + sys-triage | Collect data after a BMC reboot; for now the same as `pre_bmc_reboot` |
 
@@ -113,8 +115,9 @@ reset, the triage tools, and whether the ETH status read, the QSFP tests and
 sys-triage run. To add a
 step to a tier, or drop one, edit its entry there. The steps it can name are
 defined beside the phase that runs them: gtests in `TESTS` and pytests in
-`PYTESTS` (`diag/device_tests.py`), triage tools in `TRIAGE_TOOLS`
-(`diag/triage.py`). An unknown name fails at import. The phase order is fixed in
+`PYTESTS` (`diag/device_tests.py`), the galaxy load in `LOAD_TESTS`
+(`diag/busbar.py`; it goes last in a tier's tests), triage tools in
+`TRIAGE_TOOLS` (`diag/triage.py`). An unknown name fails at import. The phase order is fixed in
 `diag_runner.run_diag()` and is not a per-tier choice. A new tier also has to be
 added to the tier lists in `run_diag.sh`, `run_diag_docker.sh` and
 `test_infrastructure/run_health_check.py`, and to the table above;
@@ -134,24 +137,27 @@ is no `post_test_reset` phase.
 `pre_bmc_reboot`; it has its own entry in `tiers.py` so the two can change
 independently.
 
-### The `galaxy` tier
+### The galaxy load (`full`)
 
-`galaxy` checks a unit's health for a caller that runs its own load. It runs the
-snapshot checks, one `tt-smi -glx_reset` (never `-r`; `tiers.py` rejects a `-r`
-in this tier), the `host_side` triage and the ETH status read. A
-`pcie_aer_delta` check counts the new PCIe AER errors per chip from after the
-reset to the end of the run. Pass `--skip-reset` to read the unit as found.
+`full` ends its tests with the galaxy load: `busbar`, then `links`, the last two
+names in its `tests` (`LOAD_TESTS` in `diag/busbar.py`). They run in the tests
+phase after the gtests and pytests, so the HSC reads and the chip recount
+[around the tests](#around-the-tests) cover them too. A `pcie_aer_delta` check
+in the triage phase counts the new PCIe AER errors per chip over the whole run,
+from after the pre-test resets to the end, across every reset in between.
 
-`--mode` adds the galaxy load, after the (empty) tests phase:
+- `busbar` (`diag/busbar.py`): the steps `qb`, `mix`, `step`, `heavy` and
+  `code`, in that order, each one program from `galaxy/` and its own check
+  (`busbar_qb`, ...). A step fails on a non-zero exit, a `<NAME> FAIL` line in
+  its output, or no exit within its planned length plus 300 s. A failed step
+  does not stop the next ones.
+- `links` (`diag/links.py`): a 2-chip all-gather on every linked chip pair UMD
+  finds (10 s per pair, in rounds: `links_pair`). After a fault here or in
+  `busbar`, it runs `tt-smi -glx_reset` and the pair test again at 300 s per
+  pair (`links_sweep`; skipped under `--skip-reset`). Then one whole-box fabric
+  open and close (`links_fabric`).
 
-- the `busbar` phase (`diag/busbar.py`): the steps `qb`, `mix`, `step`, `heavy`
-  and `code`, in that order, each one program from `galaxy/`. A step fails on a
-  non-zero exit, a `<NAME> FAIL` line in its output, or no exit within its planned
-  length plus 300 s. A failed step does not stop the next ones.
-- the `links` phase (`diag/links.py`): a 2-chip all-gather on every linked chip
-  pair UMD finds (10 s per pair, in rounds). After a fault here or in `busbar`,
-  it runs `tt-smi -glx_reset` and the pair test again at 300 s per pair (the
-  sweep). Then one whole-box fabric open and close.
+`--mode` sets the load's length, `plain` when not given:
 
 | `--mode` | Bus-bar steps, planned | What changes |
 |---|---|---|
@@ -159,15 +165,20 @@ reset to the end of the run. Pass `--skip-reset` to read the unit as found.
 | `plain` | about 19 min | chunks of 1, 2, 3, 4 min; heavy 90 s |
 | `full` | about 56 min | last chunk 25 min, longer G3b/N1/N2/register-file checks, full L1 march, heavy 750 s, code readback 60 s |
 
-Mesh open, compile and the links phase come on top. Without `--mode` no load
-runs. `--mode` on any other tier is an error. `--steps` picks parts of the load,
-and the flags in [Flags](#flags) change single values of the plan. Each step
-writes its log to `galaxy/busbar/<step>/run.log` next to the report.
+Mesh open, compile and the links test come on top: about 30 min for the load at
+`plain`, which is why `run_health_check.py` gives `full` a 120 min whole-run
+timeout (60 for the other tiers). `--mode`, `--plan`, `--steps` and the
+override flags are an error on any other tier.
+`--steps` picks parts of the load (the gtests and pytests still run;
+`--skip-tests` skips them and the load), and the flags in [Flags](#flags) change
+single values of the plan. Each step writes its log to
+`logs/galaxy/busbar/<step>/busbar_<step>.log`, the pair tests theirs under
+`logs/galaxy/links/`.
 
-`--plan` prints the bus-bar steps for `--mode` (plain when not given), with the
-`--steps` and override flags applied, and exits without touching the unit. One
-line per step: its name, its planned seconds and what it runs. For example,
-`./run_diag.sh galaxy --mode plain --plan`:
+`--plan` prints the bus-bar steps for `--mode`, with the `--steps` and override
+flags applied, and exits without touching the unit. One line per step: its
+name, its planned seconds and what it runs. For example,
+`./run_diag.sh full --plan`:
 
 ```
 qb        180 s  2 x (60 s clock-checked quiet + 30 s lofi_all burst)
@@ -222,7 +233,8 @@ the torus.
 
 **Around the tests** (any tier with tests, live runs only, `--skip-reset`
 included): the eight tray HSCs' `STATUS_WORD` and `STATUS_INPUT` are read before
-and after, and the chips are recounted from a fresh `tt-smi` snapshot. The reads
+and after (on `full`, after the galaxy load), and the chips are recounted from a
+fresh `tt-smi` snapshot. The reads
 are `ipmitool raw 0x06 0x52` reads of those two registers only; nothing is
 written and the latches are not cleared. A weak bus bar often does not fail the
 test that sags it: the chip survives and the input under-voltage flag stays
@@ -337,8 +349,8 @@ in the container's PID namespace — the holder count is right, the names are no
 
 ## ETH status phase
 
-`flash` reads every on-host ETH link twice with tt-triage's `check_eth_status`,
-30 s apart, and judges the two reads against the BH Galaxy UBB port map. It is
+`flash` and `full` read every on-host ETH link twice with tt-triage's `check_eth_status`,
+30 s apart, and judge the two reads against the BH Galaxy UBB port map. It is
 `diag/eth_status.py`; whether a tier runs it is `eth_status` in `tiers.py`.
 
 ### What it runs
@@ -616,7 +628,7 @@ wiring.
 **Budget.** The cage sweep is the dominant cost and the tool self-bounds it at
 its own 600 s `--qsfp-budget`; a full run measures ~7 min. The phase's own
 timeout is 1200 s as a backstop. That has to stay well inside
-`run_health_check.py`'s whole-run `--timeout-minutes` (60 by default), which
+`run_health_check.py`'s whole-run `--timeout-minutes` (60 by default, 120 on `full`), which
 kills the process group and takes the report with it — so raise it when running
 any tier on a host that has the package.
 
@@ -683,16 +695,15 @@ whose baked-in suite predates the phase has the `--skip-sys-triage` and
 
 | Flag | Default | Purpose |
 |---|---|---|
-| `--tier {flash,daily,weekly,full,galaxy,pre_bmc_reboot,post_bmc_reboot}` | required | Selects reset cadence + gtest matrix |
-| `--mode {plain,full,smoke}` | off | `galaxy` tier: run the bus-bar phase (`diag/busbar.py`: quiet clocks, CCL mix, G3/G3b numeric, N1/N2, step, heavy, code readback) and then the links phase (`diag/links.py`: pair link test, sweep on a fault, fabric open/close) at this length. Not given: neither runs. |
-| `--plan` | off | Print the bus-bar step list for `--mode` (default plain) and exit. Use with `--tier galaxy`. |
-| `--steps LIST` | all | With `--mode`: run only these parts (`qb`, `mix`, `step`, `heavy`, `code`, `links`, comma-separated): the bus-bar steps, in plan order, and the links phase. The bus-bar phase runs only for a step named, the links phase only for `links`; an unknown name is an error. |
-| `--no-reset` | off | With `--mode`: the links sweep does not run `tt-smi -glx_reset` first, for `--steps links` right after the caller's own reset. It still sweeps after a fault. |
-| `--heavy-s N`, `--heavy-ops OPS`, `--heavy-x-s N`, `--heavy-x-ops OPS` | plan's own | With `--mode`: the heavy step's seconds, DIDT ops, seconds of extra ops at its end, and extra ops. |
-| `--heavy-n N`, `--burst-gap-ms N`, `--trays LIST`, `--mm-throttle 1-5` | plan's own | With `--mode`: heavy ops per launch (mix, heavy), pause after each burst, load only these trays (mix, heavy), matmul di/dt throttle (`TT_MM_THROTTLE_PERF`). |
+| `--tier {flash,daily,weekly,full,pre_bmc_reboot,post_bmc_reboot}` | required | Selects reset cadence + gtest matrix |
+| `--mode {plain,full,smoke}` | `plain` | `full` tier: the length of the galaxy load, the `busbar` test (`diag/busbar.py`: quiet clocks, CCL mix, G3/G3b numeric, N1/N2, step, heavy, code readback) and the `links` test (`diag/links.py`: pair link test, sweep on a fault, fabric open/close). |
+| `--plan` | off | `full` tier: print the bus-bar step list for `--mode` and exit. |
+| `--steps LIST` | all | `full` tier: run only these parts of the galaxy load (`qb`, `mix`, `step`, `heavy`, `code`, `links`, comma-separated): the bus-bar steps, in plan order, and the links test. `busbar` runs only for a step named, `links` only for `links`; an unknown name is an error. The gtests and pytests still run. |
+| `--heavy-s N`, `--heavy-ops OPS`, `--heavy-x-s N`, `--heavy-x-ops OPS` | plan's own | `full` tier: the heavy step's seconds, DIDT ops, seconds of extra ops at its end, and extra ops (op names: letters, digits and `_`). |
+| `--heavy-n N`, `--burst-gap-ms N`, `--trays LIST`, `--mm-throttle 1-5` | plan's own | `full` tier: heavy ops per launch (mix, heavy), pause after each burst, load only these trays (mix, heavy), matmul di/dt throttle (`TT_MM_THROTTLE_PERF`). |
 | `--dry-run` | off | Print intended subprocess calls; skip destructive steps |
 | `--skip-reset` | off | Skip the reset loop phase entirely |
-| `--skip-tests` | off | Skip the gtest phase entirely |
+| `--skip-tests` | off | Skip the tests phase entirely: the gtests, the pytests and the galaxy load |
 | `--skip-triage` | off | Skip the post-test reset and the triage phase entirely. `--skip-reset` also suppresses the post-test reset. |
 | `--triage-dir PATH` | `$HC_TRIAGE_DIR`, else `<repo>/tools/scaleout/kmd_triage` | Directory holding the triage scripts. Override only to run a working copy against a deployed checkout. |
 | `--triage-gating` | off | Let triage FAILs gate the run. Off holds them at WARN (noted in `details`); findings are recorded either way. |
@@ -738,7 +749,7 @@ The detected rev is also recorded at the top of the JSON report as `detected_boa
 |---|---|---|
 | `pcie_enum_count` | All 32 chips enumerated | **FAIL** |
 | `recount_N` (reset loop) | After reset N, `lspci` lists all 32 chips; each missing one is named by BDF, tray and ASIC (`data.missing`) | **FAIL** |
-| `pcie_aer_delta` (triage phase, `galaxy` tier) | New AER errors per chip over the whole run, from a mark taken before the first load and before each reset (a reset restarts the counters), so errors from the load survive the post-test reset. Any uncorrectable: **FAIL**. Correctable: **WARN** at 2 or more and 6 or more per hour. | **FAIL** / **WARN** |
+| `pcie_aer_delta` (triage phase, `full`) | New AER errors per chip over the whole run, from a mark taken after the pre-test resets and before each later reset (a reset restarts the counters), so errors from the tests survive the post-test reset. Any uncorrectable: **FAIL**. Correctable: **WARN** at 2 or more and 6 or more per hour. | **FAIL** / **WARN** |
 | `pcie_lane_width` | x8 on host-PCIe chips (`ASIC_LOCATION==0x6`); x1 elsewhere | **FAIL** |
 | `pcie_gen` | Host-PCIe (U6) chips trained to at least the rev's expected gen (Gen4 on RevA/B, Gen5 on RevC). Above-spec is rendered with `(^)` but doesn't degrade status; under-spec is rendered with `(!)` and WARNs. | **WARN** (known: occasional Gen1 fallback). **SKIP** when `board_rev` is indeterminate. |
 
@@ -747,6 +758,14 @@ The detected rev is also recorded at the top of the JSON report as `detected_boa
 |---|---|---|
 | `hsc_input_status` | The 8 tray HSCs' `VIN_UV_WARN`, `VIN_UV_FAULT`, `IOUT_OC_FAULT` and OFF flags, read before and after the tests (via `ipmitool raw`, as root or `sudo -n`). | **FAIL** on a flag newly set during the tests. **WARN** on a flag already set before them (cannot be told apart) or an HSC that did not answer. **SKIP** when none answered. |
 | `pcie_enum_count_after_tests` | All 32 chips enumerated in a fresh snapshot taken after the tests. | **FAIL** |
+
+### Galaxy load (`full`)
+| Check | Rule | On fail |
+|---|---|---|
+| `busbar_<step>` (`qb`, `mix`, `step`, `heavy`, `code`) | The step's program exits 0, prints no `<NAME> FAIL` line, and exits within its planned length plus 300 s | **FAIL** with the first FAIL line, or the exit code or hang and the last line of the log. **SKIP** on a dry run. |
+| `links_pair` | Every linked chip pair passes a 2-chip all-gather, data checked bit for bit | **FAIL** naming the pairs and channels; each link end, by tray, ASIC, port and BDF, in `link_ends` |
+| `links_sweep` | After a bus-bar or pair fault: a `tt-smi -glx_reset`, then the pair test again at 300 s per pair | **FAIL** as `links_pair`. **SKIP** when the reset failed or under `--skip-reset`. |
+| `links_fabric` | One whole-box fabric open and close | **FAIL** on a non-zero exit, a FAIL line or a hang |
 
 ### GDDR
 | Check | Rule | On fail |
@@ -787,7 +806,7 @@ while `eth_links_up` reads the `ETH_LIVE_STATUS` telemetry from the snapshot.
 ### Thermal and telemetry
 `asic_thermal_precheck` judges each chip's `asic_temperature` against its own `thm_limit`: **FAIL** at the limit, **WARN** within 20 C of it. A reading that is not plausible (0, a 65535 sentinel, text) is listed in `data.ignored` and never judged. `c8_telemetry` is **WARN** only: a chip at 75 C, 320 W or 400 A or more, or under 0.66 V, named by BDF, tray and ASIC.
 
-### ETH status (flash)
+### ETH status (flash, full)
 
 From the two `check_eth_status` reads; see [the phase section](#eth-status-phase)
 for how they are taken and the thresholds. Links are named
@@ -949,6 +968,10 @@ tools/scaleout/exabox/health_check_test_suite/
 │   ├── snapshot_checks.py  # phase 1: the checks over a snapshot
 │   ├── resets.py           # phase 2: pre-test reset loop; phase 4: post-test reset
 │   ├── device_tests.py     # phase 3: deployment gtests (TESTS) and pytests (PYTESTS)
+│   ├── hsc.py              # phase 3: tray HSC input-voltage flags, read before and after the tests
+│   ├── busbar.py           # phase 3: the galaxy load's bus-bar test (LOAD_TESTS), its plan and steps
+│   ├── links.py            # phase 3: the galaxy load's links test: pair test, sweep, fabric open/close
+│   ├── aer.py              # phase 5: PCIe AER errors over the run (pcie_aer_delta)
 │   ├── external.py         # ingesting checks written by external tools
 │   ├── triage.py           # phase 5: kmd_triage tools (TRIAGE_TOOLS)
 │   ├── eth_status.py       # phase 6: ETH status read: PCIe gate, two tt-triage reads, and the
@@ -958,6 +981,7 @@ tools/scaleout/exabox/health_check_test_suite/
 │   ├── qsfp_ingest.py      # phase 7: cluster-debug JSONL dump -> checks. No hardware in it: a stored
 │   │                       #   dump is all it needs, so it is tested at a desk. Runnable standalone.
 │   └── sys_triage.py       # phase 8: sys-triage bundle
+├── galaxy/             # the device programs the galaxy load runs (see below)
 ├── HEALTH_CHECK.md     # this file
 └── test_infrastructure/  # scheduled/CI harness around the diag suite
     ├── run_health_check.py              # entrypoint: run diag as a subprocess, then JIRA + CSV + SFTP
@@ -993,7 +1017,8 @@ hand.
 
 ## Galaxy device programs
 
-`galaxy/` holds the single-galaxy device programs an outside harness drives: the load stages
+`galaxy/` holds the single-galaxy device programs the [galaxy load](#the-galaxy-load-full) runs,
+which an outside harness can drive too: the load stages
 (`chunk_load.py`, `agloop.py`, `ub0_repro.py`), the numeric checks (G3 `numeric_check.py`, G3b
 `dram_dbi.py`, `numeric_pinpoint.py`, `l1_march.py`, `rf_walk.py`, `noc_a2a.py`), the link tests
 (`link_pattern.py`, `fabric_open.py`), the quiet-clock check (`quiet_clock.py`) and the firmware

@@ -28,7 +28,7 @@ import time
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Sequence
 
 # Run as a script this directory is already sys.path[0], but run_diag() is also a
 # programmatic entry point, and a caller that loads this file by path need not
@@ -40,7 +40,17 @@ if _SUITE_DIR not in sys.path:
 from diag.common import default_tt_metal_path, log, print_phase_line, print_phase_summary  # noqa: E402
 from diag.aer import AerWindow  # noqa: E402
 from diag.device_tests import run_tests  # noqa: E402
-from diag.busbar import MODES, OVERRIDES, SELECTABLE, STEPS, parse_steps, plan as busbar_plan, run_busbar  # noqa: E402
+from diag.busbar import (  # noqa: E402
+    DEFAULT_MODE,
+    LOAD_TESTS,
+    MODES,
+    OVERRIDES,
+    SELECTABLE,
+    STEPS,
+    parse_steps,
+    plan as busbar_plan,
+    run_busbar,
+)
 from diag.eth_status import run_eth_status  # noqa: E402
 from diag.links import name_chips, run_links  # noqa: E402
 from diag.eth_summary import SUMMARY_FILE, render_eth_summary  # noqa: E402
@@ -157,24 +167,17 @@ def build_diag_arg_parser() -> argparse.ArgumentParser:
         "--mode",
         choices=MODES,
         default=None,
-        help="Tiers with the galaxy load (galaxy): run the bus-bar and links phases at this length. Not given: neither runs.",
+        help=f"The length of the galaxy load (the bus-bar and links tests of the full tier). Default: {DEFAULT_MODE}.",
     )
-    ap.add_argument(
-        "--plan", action="store_true", help="Print the bus-bar step list for --mode (default plain) and exit."
-    )
+    ap.add_argument("--plan", action="store_true", help="Print the galaxy load's bus-bar steps for --mode and exit.")
     ap.add_argument(
         "--steps",
         default=None,
-        help=f"With --mode: run only these parts, comma-separated (any of {', '.join(SELECTABLE)}): the bus-bar steps "
-        "and the links phase. Not given: all of them.",
+        help=f"Run only these parts of the galaxy load, comma-separated (any of {', '.join(SELECTABLE)}): the bus-bar "
+        "steps and the links test. Not given: all of them.",
     )
     for key, (flag, typ, what) in OVERRIDES.items():
-        ap.add_argument(flag, dest=key, type=typ, default=None, help=f"With --mode: {what}. Not given: the plan's own.")
-    ap.add_argument(
-        "--no-reset",
-        action="store_true",
-        help="With --mode: the links sweep does not reset first (for a call of --steps links right after the caller's own reset); it still runs after a fault.",
-    )
+        ap.add_argument(flag, dest=key, type=typ, default=None, help=f"Galaxy load: {what}. Not given: the plan's own.")
     ap.add_argument("--output", type=Path, default=Path("diag_report.json"))
     ap.add_argument("--snapshot-out", type=Path, default=Path("/tmp/diag_snapshot.json"))
     return ap
@@ -214,6 +217,27 @@ def recount_after_tests(snapshot: Callable[[], dict]) -> Check:
     except Exception as e:
         return Check(name=name, status=FAIL, details=f"no snapshot after the tests: {_short_error(e)}", ip="other")
     return pcie_enum_check(snap.get("device_info") or [], name)
+
+
+def _run_galaxy_load(
+    tests: Sequence[str],
+    phase: Phase,
+    out: Path,
+    mode: str,
+    steps: str | None,
+    overrides: dict,
+    dry_run: bool,
+    sweep_reset: Callable[[], str],
+) -> None:
+    """The LOAD_TESTS among *tests* into *phase*, only the parts --steps names: the bus-bar steps, then the links
+    test, which sweeps after a fault in either. One that raises is its own FAIL and does not stop the other."""
+    want = parse_steps(steps) if steps is not None else SELECTABLE
+    held = len(phase.checks)
+    if "busbar" in tests and any(w in STEPS for w in want):
+        _guarded(phase, "busbar", FAIL, lambda: run_busbar(phase, out, mode, dry_run, steps, **overrides))
+    fault = any(c.status == FAIL for c in phase.checks[held:])
+    if "links" in tests and "links" in want:
+        _guarded(phase, "links", FAIL, lambda: run_links(phase, out, fault, sweep_reset, dry_run))
 
 
 def _finish(report: dict, phase: Phase, t0: float, *, summary: bool, all_skip_stays_skip: bool = False) -> None:
@@ -309,7 +333,6 @@ def run_diag(
     mode: str | None = None,
     steps: str | None = None,
     overrides: dict | None = None,
-    no_reset: bool = False,
 ) -> tuple[int, dict]:
     """Run the full pipeline (snapshot → resets → gtests → triage → ETH status → QSFP tests → sys-triage).
 
@@ -406,8 +429,18 @@ def run_diag(
         if aer:
             aer.mark()
 
-    # Phase 3: gtest
+    # Phase 3: the tests, in the tier's order: gtests and pytests, then the
+    # galaxy load (the bus-bar steps, then the pair link test, its sweep on a
+    # fault and the fabric open/close) at --mode's length. Inside the AER window.
     test_phase = Phase(name="tests")
+
+    def sweep_reset() -> str:
+        """The links sweep's tt-smi -glx_reset: "" when it ran clean, else why the sweep is skipped."""
+        if skip_reset:
+            return "no reset (--skip-reset)"
+        aer_mark()
+        return "" if run_post_test_reset(tt_smi_path, ("-glx_reset",), test_phase, dry_run) else "reset failed"
+
     t0 = time.time()
     if skip_tests:
         test_phase.add(Check(name="tests", status=SKIP, details="--skip-tests"))
@@ -421,7 +454,21 @@ def run_diag(
         # input snapshot or a dry run: no live hardware to read.
         live = not (input_snapshot or dry_run)
         hsc_before = read_hsc_status() if live else None
-        _guarded(test_phase, "tests", FAIL, lambda: run_tests(tt_metal_path, plan.tests, test_phase, dry_run, logs_dir))
+        device_tests = [t for t in plan.tests if t not in LOAD_TESTS]
+        _guarded(
+            test_phase, "tests", FAIL, lambda: run_tests(tt_metal_path, device_tests, test_phase, dry_run, logs_dir)
+        )
+        if plan.galaxy_load:
+            _run_galaxy_load(
+                plan.tests,
+                test_phase,
+                logs_dir / "galaxy",
+                mode or DEFAULT_MODE,
+                steps,
+                overrides or {},
+                dry_run,
+                sweep_reset,
+            )
         if live:
             _guarded(test_phase, "hsc_input_status", WARN, lambda: judge_hsc(hsc_before, read_hsc_status(), test_phase))
 
@@ -429,43 +476,6 @@ def run_diag(
             test_phase.add(recount_after_tests(lambda: take_snapshot(resolve_tt_smi(tt_smi_path), after_out)))
     # tests phase prints its own per-test lines as they run — no inline summary.
     _finish(report, test_phase, t0, summary=False)
-
-    # Phase 3b: the galaxy load (--mode): the bus-bar parts, then the pair link
-    # test, its sweep on a fault and the fabric open/close. Inside the AER window.
-    # --steps picks the parts: the bus-bar phase runs for its steps, the links phase for "links".
-    if plan.busbar and mode:
-        load_dir = output.parent / "galaxy"
-        busbar_phase, fault = Phase(name="busbar"), []
-        t0 = time.time()
-        want = parse_steps(steps) if steps is not None else SELECTABLE
-        if any(w in STEPS for w in want):
-            _guarded(
-                busbar_phase,
-                "busbar",
-                FAIL,
-                lambda: fault.append(run_busbar(busbar_phase, load_dir, mode, dry_run, steps, **(overrides or {}))),
-            )
-            _finish(report, busbar_phase, t0, summary=True)
-        links_phase = Phase(name="links")
-        t0 = time.time()
-
-        def sweep_reset() -> str:
-            """ "" when the reset ran clean (or was not asked for), else why the sweep is skipped."""
-            if no_reset:
-                return ""
-            if skip_reset:
-                return "no reset (--skip-reset)"
-            aer_mark()
-            return "" if run_post_test_reset(tt_smi_path, ("-glx_reset",), links_phase, dry_run) else "reset failed"
-
-        if "links" in want:
-            _guarded(
-                links_phase,
-                "links",
-                FAIL,
-                lambda: run_links(links_phase, load_dir, any(fault) or busbar_phase.error != "", sweep_reset, dry_run),
-            )
-            _finish(report, links_phase, t0, summary=True)
 
     aer_mark()
 
@@ -621,13 +631,15 @@ def main() -> int:
     args = ap.parse_args()
     overrides = {k: getattr(args, k) for k in OVERRIDES}
     try:
-        steps = busbar_plan(args.mode or "plain", args.steps, **overrides)
+        steps = busbar_plan(args.mode or DEFAULT_MODE, args.steps, **overrides)
     except ValueError as e:
         ap.error(str(e))
-    if (args.steps is not None or any(v is not None for v in overrides.values())) and not (args.mode or args.plan):
-        ap.error("--steps and the bus-bar overrides need --mode (without it no bus-bar step runs)")
-    if args.mode and not TIERS[DEPRECATED_TIER_ALIASES.get(args.tier, args.tier)].busbar:
-        ap.error(f"--mode runs the galaxy load, which tier {args.tier} does not have; use --tier galaxy")
+    load_args = args.mode or args.plan or args.steps is not None or any(v is not None for v in overrides.values())
+    if load_args and not TIERS[DEPRECATED_TIER_ALIASES.get(args.tier, args.tier)].galaxy_load:
+        ap.error(
+            f"--mode, --plan, --steps and the bus-bar overrides set the galaxy load, which tier {args.tier} does not "
+            "run; use --tier full"
+        )
     if args.plan:
         for step in steps:
             print(step.line())
@@ -658,7 +670,6 @@ def main() -> int:
         mode=args.mode,
         steps=args.steps,
         overrides=overrides,
-        no_reset=args.no_reset,
     )
     return rc
 

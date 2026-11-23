@@ -2,7 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""The galaxy tier's links phase: the pair link test, the sweep on fault and the fabric open/close.
+"""The links test of the galaxy load (tiers.py LOAD_TESTS): the pair link test, the sweep on a fault and the fabric
+open/close.
 
 pair    every chip-to-chip Ethernet link UMD discovers, tested as a 2-chip all-gather of each linked pair (data
         checked bit for bit); pairs run in rounds, no chip in two pairs of a round
@@ -16,10 +17,11 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from .busbar import GALAXY_DIR, SETUP_S, Step, run_step
-from .common import log
+from .common import emit_result, emit_running, log
 from .model import FAIL, PASS, SKIP, Check, Phase
 from .naming import chip, link_end
 
@@ -107,14 +109,17 @@ def pair_test(
     phase: Phase, out: Path, name: str, seconds: int, disc: dict, dry_run: bool = False, sys_root: str = "/sys"
 ) -> bool:
     """One 2-chip all-gather per linked pair, a round at a time. Adds one check; True when a pair failed or hung."""
-    rounds, failed = pairs(disc["links"]), []
+    rounds, failed, check = pairs(disc["links"]), [], f"links_{name}"
     n = sum(len(r) for r in rounds)
     if dry_run:
         log(f"[dry-run] {name}: {n} pairs in {len(rounds)} rounds, {seconds} s each")
-        phase.add(Check(name=f"galaxy_{name}", status=SKIP, details="dry run", ip="eth"))
+        print(f"  {check:30} (dry-run)")
+        phase.add(Check(name=check, status=SKIP, details="dry run", ip="eth"))
         return False
     d = out / name
     d.mkdir(parents=True, exist_ok=True)
+    emit_running(check)
+    t0 = time.time()
     for r in rounds:
         jobs = []
         for a, b, ch in r:
@@ -130,6 +135,7 @@ def pair_test(
                 "TT_VISIBLE_DEVICES": ",".join(map(str, idx)),
                 "TT_METAL_OPERATION_TIMEOUT_SECONDS": str(OP_TIMEOUT_S),
             }
+            # Run as an argv list, no shell: a galaxy/ program, ints, paths under *out* and a label of UMD's BDFs.
             argv = [
                 sys.executable,
                 str(GALAXY_DIR / "fabric_repro.py"),
@@ -169,9 +175,10 @@ def pair_test(
             elif rc is None:
                 failed.append({"pair": lab, "channels": ch, "why": "hung", "ends": ends})
     what = "; ".join(f"{f['pair']} (channels {','.join(map(str, f['channels']))}): {f['why']}" for f in failed)
+    emit_result(check, FAIL if failed else PASS, suffix=f"({time.time() - t0:.1f}s, {n} pairs)")
     phase.add(
         Check(
-            name=f"galaxy_{name}",
+            name=check,
             status=FAIL if failed else PASS,
             ip="eth",
             details=what[:400] or f"{n} linked pairs, {len(rounds)} rounds",
@@ -198,24 +205,25 @@ def fabric_open(phase: Phase, out: Path, dry_run: bool = False) -> None:
             ),
             out,
             dry_run,
+            test="links",
         )
     )
 
 
 def run_links(phase: Phase, out: Path, fault: bool, reset, dry_run: bool = False) -> None:
-    """Pair test; on a fault here or in the bus-bar phase, *reset* (the glx_reset; "" when it ran clean, else why not) and the
+    """Pair test; on a fault here or in the bus-bar test, *reset* (the glx_reset; "" when it ran clean, else why not) and the
     sweep, which is skipped with that reason; then the fabric open/close."""
     try:
         disc = discover() if not dry_run else {"bdfs": {}, "links": {}}
     except Exception as e:
-        phase.add(Check(name="galaxy_pair", status=FAIL, details=f"UMD discovery failed: {e!r}"[:400], ip="eth"))
+        phase.add(Check(name="links_pair", status=FAIL, details=f"UMD discovery failed: {e!r}"[:400], ip="eth"))
         disc = None
     if disc is not None:
         fault |= pair_test(phase, out / "links", "pair", PAIR_S, disc, dry_run)
     if fault and disc is not None:
         why = reset()
         if why:
-            phase.add(Check(name="galaxy_sweep", status=SKIP, details=why, ip="eth"))
+            phase.add(Check(name="links_sweep", status=SKIP, details=why, ip="eth"))
         else:
             pair_test(phase, out / "links", "sweep", SWEEP_S, disc, dry_run)
     fabric_open(phase, out / "links", dry_run)

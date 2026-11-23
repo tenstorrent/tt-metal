@@ -4,7 +4,8 @@
 
 """Phase 3: the device tests — deployment gtests and pytest stress tests.
 
-TESTS and PYTESTS define the steps a tier can list under ``tests`` in tiers.py.
+TESTS and PYTESTS define the steps a tier can list under ``tests`` in tiers.py,
+ahead of the galaxy load (LOAD_TESTS in diag/busbar.py).
 """
 from __future__ import annotations
 

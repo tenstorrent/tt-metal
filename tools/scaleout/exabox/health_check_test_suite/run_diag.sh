@@ -20,11 +20,11 @@
 #                   + tray HSC input-voltage and chip recount around the tests
 #                   + post-test -glx_reset + triage (host_side + device_side)
 #                   + QSFP tests (ETH link, cabling and module state), if the host has the package
-#   full            weekly + sys-triage bundle, if the host has the package and BMC credentials:
+#   full            weekly + the galaxy load after the tests (bus-bar steps, then the pair link
+#                   test with a sweep on a fault and a fabric open/close; --mode sets its length)
+#                   + AER errors over the run + ETH status read
+#                   + sys-triage bundle, if the host has the package and BMC credentials:
 #                   everything, for the logs on a DIIM ticket
-#   galaxy          the unit's health for a caller that runs its own load: snapshot validate
-#                   (chips by BDF, tray and ASIC, thermal, telemetry) + one -glx_reset (never -r)
-#                   + host_side triage. No tests
 #   pre_bmc_reboot  data collection before a BMC reboot, no resets: snapshot
 #                   + triage (host_side + device_side)
 #                   + QSFP tests (ETH link, cabling and module state), if the host has the package
@@ -42,7 +42,7 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
 show_help() {
     cat <<EOF
-Usage: $0 {flash|daily|weekly|full|galaxy|pre_bmc_reboot|post_bmc_reboot} [diag_runner.py options]
+Usage: $0 {flash|daily|weekly|full|pre_bmc_reboot|post_bmc_reboot} [diag_runner.py options]
 
 Tiers:
   flash           Quick ETH link health, the unit read as found: snapshot validate + two
@@ -52,11 +52,10 @@ Tiers:
   weekly          3 resets + full GDDR pattern set + eth link_up + eth bandwidth
                   + didt matmul stress + fabric all-gather under matmul (pytest)
                   + HSC and chip recount around the tests + post-test reset + triage + QSFP tests
-  full            weekly + sys-triage: everything, for the logs on a DIIM ticket
-  galaxy          Snapshot validate + one -glx_reset (never -r) + host_side triage
-                  + ETH status + run-long AER window. --mode {plain,full,smoke} adds
-                  the bus-bar and links load phases (--plan lists the steps);
-                  without --mode no load runs. --skip-reset reads the unit as found.
+  full            weekly + the galaxy load (bus-bar steps, pair link test, sweep on a
+                  fault, fabric open/close; --mode {plain,full,smoke}, plain by default,
+                  --plan lists the steps) + AER errors over the run + ETH status
+                  + sys-triage: everything, for the logs on a DIIM ticket
   pre_bmc_reboot  Data collection before a BMC reboot: snapshot + triage + QSFP tests
                   + sys-triage. No resets, no tests.
   post_bmc_reboot The same as pre_bmc_reboot for now, run after the BMC reboot.
@@ -64,7 +63,7 @@ Tiers:
 The old names still work and print a deprecation warning: light and medium run daily,
 deploy runs weekly, pre_reboot runs pre_bmc_reboot.
 
-The ETH status read (flash) runs tools/triage/triage.py from this checkout under
+The ETH status read (flash, full) runs tools/triage/triage.py from this checkout under
 python_env/bin/python (create_venv.sh installs the triage requirements there), else
 the python running this script. It checks PCIe in sysfs first and does not open the
 chips if one has dropped off; the raw reads land in <output dir>/logs/eth_status_read_*.
@@ -87,15 +86,14 @@ Forwarded options (see diag_runner.py --help for details):
   --tt-metal-path PATH   Override tt-metal repo root (for unit_tests_deployment binary)
   --output PATH          Write JSON report to PATH (default: ./diag_report.json)
   --triage-dir PATH      Triage scripts dir (default: \$HC_TRIAGE_DIR, else tools/scaleout/kmd_triage)
-  --mode MODE            galaxy tier: run the bus-bar and links phases at this length (plain, full, smoke)
-  --steps LIST           With --mode: run only these parts (qb, mix, step, heavy, code, links; comma-separated):
-                         the bus-bar steps and the links phase. Not given: all of them
-  --no-reset             With --mode: the links sweep does not run tt-smi -glx_reset first; for --steps links
-                         right after the caller's own reset
+  --mode MODE            full tier: the galaxy load's length (plain, full, smoke; default plain)
+  --plan                 full tier: print the galaxy load's bus-bar steps for --mode and exit
+  --steps LIST           full tier: run only these parts of the galaxy load (qb, mix, step, heavy, code, links;
+                         comma-separated): the bus-bar steps and the links test. Not given: all of them
   --heavy-s N, --heavy-ops OPS, --heavy-x-s N, --heavy-x-ops OPS
-                         With --mode: the heavy step's seconds, DIDT ops, seconds of extra ops and extra ops
+                         full tier: the heavy step's seconds, DIDT ops, seconds of extra ops and extra ops
   --heavy-n N, --burst-gap-ms N, --trays LIST, --mm-throttle 1-5
-                         With --mode: heavy ops per launch, pause after each burst, load only these trays,
+                         full tier: heavy ops per launch, pause after each burst, load only these trays,
                          matmul di/dt throttle. Not given: the plan's own values (--plan lists them)
   --skip-triage          Skip the post-test reset and the triage phase
   --triage-gating        Let triage FAILs gate the run (default: held at WARN)
@@ -122,13 +120,13 @@ EOF
 
 TIER="${1:-}"
 case "$TIER" in
-    flash|daily|weekly|full|galaxy|pre_bmc_reboot|post_bmc_reboot|light|medium|deploy|pre_reboot) ;;
+    flash|daily|weekly|full|pre_bmc_reboot|post_bmc_reboot|light|medium|deploy|pre_reboot) ;;
     -h|--help|"")
         show_help
         exit 0
         ;;
     *)
-        echo "Error: unknown tier '$TIER'. Expected: flash, daily, weekly, full, galaxy, pre_bmc_reboot, post_bmc_reboot" >&2
+        echo "Error: unknown tier '$TIER'. Expected: flash, daily, weekly, full, pre_bmc_reboot, post_bmc_reboot" >&2
         show_help
         exit 1
         ;;

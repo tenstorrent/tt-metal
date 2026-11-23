@@ -69,6 +69,7 @@ def take_snapshot(tt_smi: str, out_path: Path, timeout: float = SNAPSHOT_TIMEOUT
     other failed snapshot. Use --input-snapshot for fully-offline runs."""
     log(f"$ {tt_smi} -f {out_path}")
     try:
+        # An argv list, no shell: tt_smi is the executable file resolve_tt_smi() found.
         cp = subprocess.run([tt_smi, "-f", str(out_path)], capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         raise RuntimeError(f"tt-smi -f timed out after {timeout:g} s") from None

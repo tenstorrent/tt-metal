@@ -2,7 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""The galaxy tier's bus-bar phase: the bus-bar stage's parts in order, each one galaxy/ program.
+"""The bus-bar test of the galaxy load (tiers.py LOAD_TESTS): the bus-bar stage's parts in order, each one
+galaxy/ program.
 
 qb     2 x (60 s clock-checked quiet + 30 s full-load burst), one process
 mix    the chunked load: 1, 2, 3, 4 min chunks (full: 1, 2, 3, 25), a quiet and a numeric readback after each, and
@@ -12,10 +13,10 @@ heavy  the DIDT ops back to back, each output checked bit-exact and voted across
 code   code readback: each core's firmware and kernel code in L1, voted across chips (exalens, no load)
 
 --mode smoke keeps every part and cuts each length to min(SMOKE_S, plain's). A part that fails does not end the
-phase: the next parts still run and are judged on the chips that are left.
+test: the next parts still run and are judged on the chips that are left.
 
 --steps runs only the parts named (still in the order above). OVERRIDES set one value of the parts that have it,
-whatever the mode says. A caller that resets between parts runs the phase once per part.
+whatever the mode says.
 """
 from __future__ import annotations
 
@@ -28,13 +29,17 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from .common import log
+from .common import emit_result, emit_running, log
 from .model import FAIL, PASS, SKIP, Check, Phase
 
 GALAXY_DIR = Path(__file__).resolve().parent.parent / "galaxy"
+# What a tier lists under tests for the galaxy load, after its other tests: this bus-bar test, then the links test
+# (diag/links.py), which sweeps the links after a bus-bar fault.
+LOAD_TESTS = ("busbar", "links")
 MODES = ("plain", "full", "smoke")
+DEFAULT_MODE = "plain"
 STEPS = ("qb", "mix", "step", "heavy", "code")
-SELECTABLE = (*STEPS, "links")  # what --steps names: the bus-bar steps, and the links phase run by diag_runner
+SELECTABLE = (*STEPS, "links")  # what --steps names: the bus-bar steps, and the links test
 # plan() keyword -> (diag_runner flag, type, what it sets). Unset by default: the plan is then unchanged.
 OVERRIDES = {
     "heavy_s": ("--heavy-s", int, "heavy: seconds of DIDT ops"),
@@ -49,6 +54,7 @@ OVERRIDES = {
 SMOKE_S = 2
 SETUP_S = 300  # mesh open, upload and close on top of a part's planned length; past both it counts as hung
 FAIL_LINE = re.compile(r"\b[A-Z][A-Z0-9]* FAIL\b")  # NUMERIC FAIL, QUIET FAIL, G3 FAIL, ...
+OP_NAME = re.compile(r"[A-Za-z0-9_]+")
 
 GAP_MS, HEAVY_N = 50, 16  # the burst's pause after each 8 heavy ops; heavy ops per launch
 DIDT_OPS = "16k_hifi2,16k_bf8_lofi"
@@ -108,11 +114,14 @@ def _overrides(over: dict) -> dict:
             ov[k] = _csv(OVERRIDES[k][0], ov[k], empty_ok=k == "x_ops")
     if "trays" in ov and not all(t in ("1", "2", "3", "4") for t in ov["trays"].split(",")):
         raise ValueError(f"--trays: tray numbers 1-4, comma-separated (got {ov['trays']!r})")
+    for k in ("ops", "x_ops"):
+        if k in ov and not all(OP_NAME.fullmatch(o) for o in ov[k].split(",") if o):
+            raise ValueError(f"{OVERRIDES[k][0]}: op names (letters, digits, _), comma-separated (got {ov[k]!r})")
     return ov
 
 
 def parse_steps(steps: str) -> tuple[str, ...]:
-    """The parts named in the comma-separated *steps*, in plan order, the links phase last."""
+    """The parts named in the comma-separated *steps*, in plan order, the links test last."""
     names = steps.replace(" ", "").split(",")
     if bad := [n for n in names if n not in SELECTABLE]:
         raise ValueError(
@@ -272,21 +281,26 @@ def plan(mode: str = "plain", steps: str | None = None, **over: int | str | None
     return [st for st in parts if st.name in want]
 
 
-def run_step(step: Step, out: Path, dry_run: bool = False) -> Check:
-    """Run one step's program in its own process group; FAIL on a non-zero exit, a '<X> FAIL' line or a hang."""
-    d = out / step.name
+def run_step(step: Step, out: Path, dry_run: bool = False, test: str = "busbar") -> Check:
+    """Run one step's program in its own process group as the check ``<test>_<step>``; FAIL on a non-zero exit, a
+    '<X> FAIL' line or a hang."""
+    name, d = f"{test}_{step.name}", out / step.name
     argv = [sys.executable, str(GALAXY_DIR / step.argv[0]), *(a.format(out=d) for a in step.argv[1:])]
     if dry_run:
         log(f"[dry-run] {' '.join(argv)}")
+        print(f"  {name:30} (dry-run)")
         return Check(
-            name=f"galaxy_{step.name}",
+            name=name,
             status=SKIP,
             details="dry run",
             data={"argv": argv, **({"env": dict(step.env)} if step.env else {})},
         )
     d.mkdir(parents=True, exist_ok=True)
+    log_path = d / f"{name}.log"
+    emit_running(name)
     t0, rc, limit = time.time(), None, step.seconds + SETUP_S
-    with open(d / "run.log", "w") as f:
+    with open(log_path, "w") as f:
+        # An argv list, no shell: a galaxy/ program and plan()'s args, every override checked by _overrides().
         p = subprocess.Popen(
             argv,
             cwd=GALAXY_DIR,
@@ -300,33 +314,35 @@ def run_step(step: Step, out: Path, dry_run: bool = False) -> Check:
         except subprocess.TimeoutExpired:
             os.killpg(p.pid, signal.SIGKILL)
             p.wait()
-    text = (d / "run.log").read_text(errors="replace").splitlines()
+    dt = time.time() - t0
+    text = log_path.read_text(errors="replace").splitlines()
     bad = [ln.strip() for ln in text if FAIL_LINE.search(ln)]
     why = (f"hung: no exit in {limit} s" if rc is None else f"rc {rc}" if rc else "") or (bad[0] if bad else "")
+    emit_result(name, FAIL if why else PASS, suffix=f"({dt:.1f}s)")
     if not why:
         return Check(
-            name=f"galaxy_{step.name}",
+            name=name,
             status=PASS,
             details=step.what,
-            data={"seconds": round(time.time() - t0), "log": str(d / "run.log")},
+            data={"seconds": round(dt), "log": str(log_path)},
         )
     last = next((ln.strip() for ln in reversed(text) if ln.strip()), "")
     return Check(
-        name=f"galaxy_{step.name}",
+        name=name,
         status=FAIL,
         details=f"{why}: {(bad or [last])[0][:200]}",
         data={
             "rc": rc,
             "hung": rc is None,
             "fails": bad[:20],
-            "seconds": round(time.time() - t0),
-            "log": str(d / "run.log"),
+            "seconds": round(dt),
+            "log": str(log_path),
         },
     )
 
 
 def run_busbar(phase: Phase, out: Path, mode: str, dry_run: bool = False, steps: str | None = None, **over) -> bool:
-    """The bus-bar steps (see plan), in order, into *phase*. True when one hung or failed (the links phase then sweeps)."""
+    """The bus-bar steps (see plan), in order, into *phase*. True when one hung or failed (the links test then sweeps)."""
     fault = False
     for step in plan(mode, steps, **over):
         log(f"busbar {step.line()}")

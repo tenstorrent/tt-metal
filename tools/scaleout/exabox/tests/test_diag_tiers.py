@@ -63,9 +63,9 @@ class TestShellWrappersAgree(unittest.TestCase):
     def test_docker_qsfp_tiers(self):
         # run_diag_docker.sh sets WANT_QSFP, which installs the syseng package and
         # warns about missing BMC API credentials, on every tier but these.
-        self.assertEqual({name for name, tier in TIERS.items() if not tier.qsfp_tests}, {"flash", "galaxy"})
+        self.assertEqual({name for name, tier in TIERS.items() if not tier.qsfp_tests}, {"flash"})
         text = (SUITE_DIR / "run_diag_docker.sh").read_text()
-        self.assertIn("[[ ${TIER} != flash && ${TIER} != galaxy ]]", text)
+        self.assertIn("[[ ${TIER} != flash ]]", text)
 
     def test_only_flash_prints_the_eth_summary(self):
         self.assertEqual({name for name, tier in TIERS.items() if tier.eth_summary}, {"flash"})

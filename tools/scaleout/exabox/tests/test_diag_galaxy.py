@@ -3,24 +3,21 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""The galaxy tier without hardware: its reset is -glx_reset and never -r, the
-chip recount names missing chips by BDF/tray/ASIC, the thermal and telemetry
-checks ignore garbage readings."""
+"""The Galaxy chip checks without hardware: a chip is named by BDF/tray/ASIC, the
+chip recount after a reset names the missing ones, the thermal and telemetry
+checks ignore garbage readings, and the AER diff counts the errors over a run."""
 
 from __future__ import annotations
 
 import sys
 import tempfile
 import unittest
-from dataclasses import replace
 from pathlib import Path
-from unittest import mock
 
 TESTS_DIR = Path(__file__).resolve().parent
 SUITE_DIR = TESTS_DIR.parent / "health_check_test_suite"
 sys.path.insert(0, str(SUITE_DIR))
 
-import tiers  # noqa: E402
 from diag import resets  # noqa: E402
 from diag.aer import AerWindow, aer_check, aer_new, read_aer  # noqa: E402
 from diag.galaxy import TRAY_TO_UBB_NIBBLE, expected_bdf  # noqa: E402
@@ -56,47 +53,6 @@ class TestNaming(unittest.TestCase):
 
     def test_off_map_bdf_has_no_tray(self):
         self.assertEqual(chip("0000:ff:00.0"), {"bdf": "0000:ff:00.0", "tray": None, "asic": None})
-
-
-class TestGalaxyTier(unittest.TestCase):
-    def test_only_glx_reset(self):
-        t = tiers.TIERS["galaxy"]
-        self.assertEqual(t.resets, ("-glx_reset",))
-        self.assertNotIn("-r", t.post_test_resets)
-        self.assertTrue(t.glx_reset_only)
-        self.assertEqual(t.tests, ())
-
-    def test_only_galaxy_is_glx_reset_only(self):
-        self.assertEqual([n for n, t in tiers.TIERS.items() if t.glx_reset_only], ["galaxy"])
-
-    def test_validator_rejects_r(self):
-        for bad in (dict(resets=("-r",)), dict(post_test_resets=("-r",)), dict(resets=("-glx_reset", "-r"))):
-            with self.subTest(bad):
-                broken = {**tiers.TIERS, "galaxy": replace(tiers.TIERS["galaxy"], **bad)}
-                with mock.patch.object(tiers, "TIERS", broken):
-                    with self.assertRaisesRegex(Exception, "-r is not allowed"):
-                        tiers._validate()
-
-    def test_validator_accepts_shipped_tiers(self):
-        tiers._validate()
-
-
-class TestDryRunResets(unittest.TestCase):
-    def test_no_r_command_is_reachable(self):
-        cmds = []
-
-        def fake_run(cmd, dry_run=False, **kw):
-            cmds.append(cmd)
-            import subprocess
-
-            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-        phase = Phase(name="reset_loop")
-        with mock.patch.object(resets, "run", fake_run):
-            resets.reset_loop("tt-smi", tiers.TIERS["galaxy"].resets, phase, dry_run=True)
-        self.assertEqual(cmds, [["tt-smi", "-glx_reset"]])
-        self.assertNotIn("-r", [a for c in cmds for a in c])
-        self.assertTrue(all(c.status == PASS for c in phase.checks))
 
 
 class TestRecount(unittest.TestCase):

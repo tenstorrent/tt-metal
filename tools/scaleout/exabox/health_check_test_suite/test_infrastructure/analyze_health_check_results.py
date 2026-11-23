@@ -46,12 +46,15 @@ IP_TO_CATEGORY = {
     "board": "board",
     "eth": "eth",
 }
-# eth deployment tests live in the "tests" phase with ip="other". Route them to
-# the eth category by name so they don't land in stress_test.
+# eth deployment tests and the galaxy load's links test live in the "tests"
+# phase. Route them to the eth category by name so they don't land in stress_test.
 CHECK_CATEGORY = {
     "post_reset_state_stable": "reset",
     "eth_bandwidth": "eth",
     "eth_link_up": "eth",
+    "links_pair": "eth",
+    "links_sweep": "eth",
+    "links_fabric": "eth",
 }
 STRESS_PHASE = "tests"
 
@@ -89,6 +92,8 @@ DETAIL_RICH = {
     "eth_status_cable_lanes",
     "eth_status_cable_trays_alike",
     "eth_status_cabling",
+    "links_pair",
+    "links_sweep",
 }
 
 # numeric forensic checks: dropped from checks_fact, folded into runs rollups.

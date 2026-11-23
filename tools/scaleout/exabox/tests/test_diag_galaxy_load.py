@@ -3,9 +3,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""The galaxy tier's load phases without hardware: the bus-bar plan per mode, every planned flag exists in its
+"""The full tier's galaxy load without hardware: the bus-bar plan per mode, every planned flag exists in its
 program, --plan prints it, a step is judged by its exit, its FAIL lines and its hang, the pair rounds never put a
-chip in two pairs, and the UMD index follows the sorted BDFs of a fake sysfs."""
+chip in two pairs, the UMD index follows the sorted BDFs of a fake sysfs, and the load runs in the tests phase
+after the device tests."""
 
 from __future__ import annotations
 
@@ -16,7 +17,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from unittest import mock
 
@@ -143,6 +144,8 @@ class TestPlan(unittest.TestCase):
             {"trays": "1,x"},
             {"trays": ","},
             {"ops": ""},
+            {"ops": "16k_hifi2;reboot"},
+            {"x_ops": "16k_hifi4,$(id)"},
             {"heavy_s": 0},
             {"heavy_n": 0},
             {"gap_ms": -1},
@@ -170,9 +173,9 @@ class TestPlan(unittest.TestCase):
             for flag in (a for a in step.argv[1:] if a.startswith("--")):
                 self.assertIn(f'"{flag}"', src, f"{step.name}: {step.argv[0]} has no {flag}")
 
-    def _plan_cli(self, *args):
+    def _plan_cli(self, *args, tier="full"):
         return subprocess.run(
-            [sys.executable, str(SUITE_DIR / "diag_runner.py"), "--tier", "galaxy", *args],
+            [sys.executable, str(SUITE_DIR / "diag_runner.py"), "--tier", tier, *args],
             capture_output=True,
             text=True,
         )
@@ -188,28 +191,22 @@ class TestPlan(unittest.TestCase):
             self.assertEqual(r.returncode, 2, args)
             self.assertTrue(r.stderr.strip(), args)
 
-    def test_cli_steps_without_mode_is_an_error(self):
-        r = self._plan_cli("--steps", "qb")
-        self.assertEqual(r.returncode, 2)
-        self.assertIn("need --mode", r.stderr)
-
-    def test_cli_mode_on_a_tier_without_the_load_is_an_error(self):
-        r = subprocess.run(
-            [sys.executable, str(SUITE_DIR / "diag_runner.py"), "--tier", "weekly", "--mode", "plain", "--plan"],
-            capture_output=True,
-            text=True,
-        )
-        self.assertEqual(r.returncode, 2)
-        self.assertIn("use --tier galaxy", r.stderr)
+    def test_cli_load_flags_on_a_tier_without_the_load_are_an_error(self):
+        for args in (("--mode", "plain"), ("--plan",), ("--steps", "qb"), ("--heavy-s", "40")):
+            for tier in ("weekly", "deploy"):
+                r = self._plan_cli(*args, tier=tier)
+                self.assertEqual(r.returncode, 2, (tier, args))
+                self.assertIn("use --tier full", r.stderr, (tier, args))
 
     def test_plan_cli(self):
-        out = subprocess.run(
-            [sys.executable, str(SUITE_DIR / "diag_runner.py"), "--tier", "galaxy", "--mode", "smoke", "--plan"],
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.splitlines()
-        self.assertEqual([ln.split()[0] for ln in out], ["qb", "mix", "step", "heavy", "code"])
+        r = self._plan_cli("--mode", "smoke", "--plan")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual([ln.split()[0] for ln in r.stdout.splitlines()], ["qb", "mix", "step", "heavy", "code"])
+
+    def test_plan_cli_defaults_to_plain(self):
+        r = self._plan_cli("--plan")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.splitlines(), [s.line() for s in busbar.plan(busbar.DEFAULT_MODE)])
 
 
 class TestRunStep(unittest.TestCase):
@@ -222,6 +219,15 @@ class TestRunStep(unittest.TestCase):
 
     def test_pass(self):
         self.assertEqual(self._run("print('ok')").status, PASS)
+
+    def test_check_and_log_are_named_after_the_test_and_step(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "prog.py").write_text("print('ok')")
+            with mock.patch.object(busbar, "GALAXY_DIR", Path(d)):
+                c = busbar.run_step(busbar.Step("qb", "test", ("prog.py",), 5), Path(d))
+                f = busbar.run_step(busbar.Step("fabric", "test", ("prog.py",), 5), Path(d), test="links")
+        self.assertEqual((c.name, Path(c.data["log"]).name), ("busbar_qb", "busbar_qb.log"))
+        self.assertEqual((f.name, Path(f.data["log"]).name), ("links_fabric", "links_fabric.log"))
 
     def test_rc(self):
         c = self._run("import sys; print('lost'); sys.exit(3)")
@@ -244,7 +250,7 @@ class TestRunStep(unittest.TestCase):
             step = busbar.Step("x", "test", ("prog.py",), 5, (("TT_MM_THROTTLE_PERF", "4"),))
             with mock.patch.object(busbar, "GALAXY_DIR", Path(d)):
                 self.assertEqual(busbar.run_step(step, Path(d)).status, PASS)
-            self.assertEqual((Path(d) / "x" / "run.log").read_text().strip(), "4")
+            self.assertEqual((Path(d) / "x" / "busbar_x.log").read_text().strip(), "4")
 
     def test_dry_run_shows_the_env(self):
         c = busbar.run_step(busbar.plan("smoke", mm_throttle=2)[0], Path("/nonexistent"), dry_run=True)
@@ -331,47 +337,61 @@ class TestLinks(unittest.TestCase):
     def test_no_sweep_when_no_reset_ran(self):
         phase, pt = self._run_links(True, lambda: "no reset (--skip-reset)")
         self.assertEqual(pt.call_count, 1)
-        sweep = [c for c in phase.checks if c.name == "galaxy_sweep"]
+        sweep = [c for c in phase.checks if c.name == "links_sweep"]
         self.assertEqual([(c.status, c.details) for c in sweep], [(SKIP, "no reset (--skip-reset)")])
 
-    def _sweep_reset(self, reset_fails=False, skip_reset=False, no_reset=False):
-        return self._run_load(reset_fails, skip_reset, no_reset)["why"]
+    def _sweep_reset(self, reset_fails=False, skip_reset=False):
+        return self._run_load(reset_fails, skip_reset)["why"]
 
-    def _run_load(self, reset_fails=False, skip_reset=False, no_reset=False, steps=None):
-        """run_diag's galaxy load with the bus-bar and links phases stubbed: ``busbar`` is how often the bus-bar
-        phase ran, ``links`` whether the links phase ran and ``why`` what its reset callback said after a failed
-        pair test (the real run_post_test_reset over a glx_reset that fails or not)."""
+    def _run_load(self, reset_fails=False, skip_reset=False, steps=None, busbar_fails=True, skip_tests=False):
+        """run_diag's full tier with its device tests, bus-bar and links tests stubbed: ``order`` is what ran, in
+        order, ``device`` the names run_tests got, ``fault`` whether the links test was told of a bus-bar fault,
+        ``why`` what its reset callback said after a failed pair test (the real run_post_test_reset over a
+        glx_reset that fails or not) and ``report`` the run's report."""
         import diag_runner
         from diag import resets
 
-        got = {"busbar": 0, "links": False}
+        got = {"order": [], "device": None, "fault": None, "why": None}
 
-        def fake_busbar(*args, **kw):
-            got["busbar"] += 1
-            return True
+        def fake_tests(tt_metal, names, phase, dry_run, logs_dir):
+            got["order"].append("device")
+            got["device"] = list(names)
+
+        def fake_busbar(phase, *args, **kw):
+            got["order"].append("busbar")
+            phase.add(Check(name="busbar_qb", status=FAIL if busbar_fails else PASS))
+            return busbar_fails
 
         def fake_loop(tt_smi, plan, phase, dry_run):
             phase.add(Check(name="reset_glx", status=FAIL if reset_fails else PASS, details=""))
 
         def fake_links(phase, out, fault, reset, dry_run):
-            phase.add(Check(name="galaxy_pair", status=FAIL, details="pair 00-01 failed", ip="eth"))
-            got["links"], got["why"] = True, reset()
+            got["order"].append("links")
+            phase.add(Check(name="links_pair", status=FAIL, details="pair 00-01 failed", ip="eth"))
+            got["fault"], got["why"] = fault, reset()
 
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
-            diag_runner, "run_links", fake_links
-        ), mock.patch.object(diag_runner, "run_busbar", fake_busbar), mock.patch.object(
+            diag_runner, "run_tests", fake_tests
+        ), mock.patch.object(diag_runner, "run_links", fake_links), mock.patch.object(
+            diag_runner, "run_busbar", fake_busbar
+        ), mock.patch.object(
+            diag_runner, "resolve_tt_smi", return_value="tt-smi"
+        ), mock.patch.object(
             resets, "resolve_tt_smi", return_value="tt-smi"
         ), mock.patch.object(
             resets, "reset_loop", fake_loop
         ), contextlib.redirect_stdout(
             io.StringIO()
+        ), contextlib.redirect_stderr(
+            io.StringIO()
         ):
             d = Path(tmp)
-            diag_runner.run_diag(
-                "galaxy",
+            _rc, got["report"] = diag_runner.run_diag(
+                "full",
                 mode="smoke",
                 dry_run=True,
-                skip_tests=True,
+                input_snapshot=d / "missing.json",
+                skip_tests=skip_tests,
                 skip_triage=True,
                 skip_eth_status=True,
                 skip_qsfp_tests=True,
@@ -379,19 +399,28 @@ class TestLinks(unittest.TestCase):
                 output=d / "report.json",
                 snapshot_out=d / "snapshot.json",
                 skip_reset=skip_reset,
-                no_reset=no_reset,
                 steps=steps,
             )
         return got
 
-    def test_no_reset_sweeps_without_resetting(self):
-        import diag_runner
+    def test_load_runs_in_the_tests_phase_after_the_device_tests(self):
+        got = self._run_load()
+        self.assertEqual(got["order"], ["device", "busbar", "links"])
+        self.assertEqual(got["device"], [t for t in tiers.TIERS["full"].tests if t not in busbar.LOAD_TESTS])
+        names = [c["name"] for c in got["report"]["phases"]["tests"]["checks"]]
+        self.assertIn("busbar_qb", names)
+        self.assertIn("links_pair", names)
+        self.assertFalse({"busbar", "links"} & set(got["report"]["phases"]))
 
-        self.assertEqual(self._sweep_reset(no_reset=True, reset_fails=True), "")
-        self.assertEqual(self._sweep_reset(no_reset=True, skip_reset=True), "")
-        args = diag_runner.build_diag_arg_parser().parse_args(["--tier", "galaxy", "--mode", "smoke"])
-        self.assertFalse(args.no_reset)
-        self.assertTrue(diag_runner.build_diag_arg_parser().parse_args(["--tier", "galaxy", "--no-reset"]).no_reset)
+    def test_a_bus_bar_fault_makes_the_links_test_sweep(self):
+        self.assertTrue(self._run_load(busbar_fails=True)["fault"])
+        self.assertFalse(self._run_load(busbar_fails=False)["fault"])
+        self.assertFalse(self._run_load(steps="links")["fault"])
+
+    def test_skip_tests_skips_the_load(self):
+        got = self._run_load(skip_tests=True)
+        self.assertEqual(got["order"], [])
+        self.assertEqual([c["name"] for c in got["report"]["phases"]["tests"]["checks"]], ["tests"])
 
     def _disc(self):
         bdfs = {0: "0000:01:00.0", 1: "0000:02:00.0", 2: "0000:c1:00.0"}  # tray 1 U1, tray 1 U2, tray 3 U1
@@ -409,20 +438,15 @@ class TestLinks(unittest.TestCase):
             ],
         )
 
-    def test_steps_pick_the_phases(self):
-        for steps, busbar_runs, links_ran in (
-            (None, 1, True),
-            ("heavy", 1, False),
-            ("qb,links", 1, True),
-            ("links", 0, True),
+    def test_steps_pick_the_load_tests(self):
+        for steps, ran in (
+            (None, ["device", "busbar", "links"]),
+            ("heavy", ["device", "busbar"]),
+            ("qb,links", ["device", "busbar", "links"]),
+            ("links", ["device", "links"]),
         ):
             with self.subTest(steps=steps):
-                got = self._run_load(steps=steps)
-                self.assertEqual((got["busbar"], got["links"]), (busbar_runs, links_ran))
-
-    def test_links_only_call_sweeps_without_resetting(self):
-        got = self._run_load(reset_fails=True, no_reset=True, steps="links")
-        self.assertEqual((got["busbar"], got["why"]), (0, ""))
+                self.assertEqual(self._run_load(steps=steps)["order"], ran)
 
     def test_steps_accept_links_but_the_plan_stays_bus_bar(self):
         self.assertEqual(busbar.parse_steps("links, qb"), ("qb", "links"))
@@ -526,7 +550,7 @@ class TestLinks(unittest.TestCase):
                 "links": {
                     "checks": [
                         {
-                            "name": "galaxy_pair",
+                            "name": "links_pair",
                             "status": "FAIL",
                             "details": "01:00.0-02:00.0 (channels 0): hung",
                             "data": {"failed": [{"pair": "01:00.0-02:00.0", "ends": ends}], "link_ends": ends},
@@ -571,10 +595,31 @@ class TestLinks(unittest.TestCase):
 
 
 class TestTierAndAer(unittest.TestCase):
-    def test_galaxy_has_the_load_and_eth_status(self):
-        t = tiers.TIERS["galaxy"]
-        self.assertTrue(t.busbar and t.eth_status)
-        self.assertEqual([n for n, t in tiers.TIERS.items() if t.busbar], ["galaxy"])
+    def test_full_is_weekly_plus_the_galaxy_load(self):
+        full, weekly = tiers.TIERS["full"], tiers.TIERS["weekly"]
+        self.assertEqual(full.tests, (*weekly.tests, *busbar.LOAD_TESTS))
+        self.assertEqual(
+            (full.resets, full.post_test_resets, full.triage), (weekly.resets, weekly.post_test_resets, weekly.triage)
+        )
+        self.assertTrue(full.aer_diff and full.eth_status and full.sys_triage)
+
+    def test_only_full_runs_the_load(self):
+        self.assertEqual([n for n, t in tiers.TIERS.items() if t.galaxy_load], ["full"])
+        self.assertEqual([n for n, t in tiers.TIERS.items() if t.aer_diff], ["full"])
+
+    def test_the_load_runs_last_in_its_own_order(self):
+        weekly = tiers.TIERS["weekly"].tests
+        for tests in ((*busbar.LOAD_TESTS, *weekly), (*weekly, "links", "busbar"), ("busbar", "gddr_full", "links")):
+            with self.subTest(tests=tests):
+                broken = {**tiers.TIERS, "full": replace(tiers.TIERS["full"], tests=tests)}
+                with mock.patch.object(tiers, "TIERS", broken):
+                    with self.assertRaisesRegex(ValueError, "the galaxy load runs last"):
+                        tiers._validate()
+        for tests in ((*weekly, "links"), ("busbar",)):
+            with self.subTest(tests=tests):
+                ok = {**tiers.TIERS, "full": replace(tiers.TIERS["full"], tests=tests)}
+                with mock.patch.object(tiers, "TIERS", ok):
+                    tiers._validate()
 
     def test_aer_data_holds_only_the_diff(self):
         c = aer_check(aer_new({"0000:01:00.0": {"corr": 0}}, {"0000:01:00.0": {"corr": 1}}), 1.0)

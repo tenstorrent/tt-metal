@@ -57,7 +57,7 @@ Every option has a default, so a bare \`$(basename "$0")\` runs the daily tier
 into ./test_output_<date>-<time>/.
 
 Wrapper options:
-  -t, --tier {flash|daily|weekly|full|galaxy|pre_bmc_reboot|post_bmc_reboot}
+  -t, --tier {flash|daily|weekly|full|pre_bmc_reboot|post_bmc_reboot}
                          Tier to run (default: ${TIER}). Also accepted
                          positionally, like run_diag.sh itself. The old
                          names light, medium, deploy and pre_reboot are
@@ -116,7 +116,7 @@ Forwarded to run_diag.sh (see its --help, and diag_runner.py --help, for detail)
       --skip-triage          Skip the post-test reset and the triage phase
       --triage-gating        Let triage FAILs gate the run (default: held at WARN)
       --triage-dir PATH      Host triage scripts dir; mounted read-only
-      --skip-eth-status      Skip the ETH status read (flash)
+      --skip-eth-status      Skip the ETH status read (flash, full)
       --skip-qsfp-tests      Skip the QSFP tests
       --qsfp-gating          Report QSFP findings at their real severity and let
                              them gate the run
@@ -131,7 +131,8 @@ Forwarded to run_diag.sh (see its --help, and diag_runner.py --help, for detail)
       --snapshot-out PATH    In-container path for the raw tt-smi snapshot
                              (default: <output-dir>/diag_snapshot.json)
 
-  Anything after \`--\` is passed to run_diag.sh untouched.
+  Anything after \`--\` is passed to run_diag.sh untouched: the galaxy load's
+  flags, for one (\`full -- --mode smoke\`).
 
   --output is not forwardable: it is the bind mount this script manages. Note
   that it also wants a *file* path, not a directory — \`--output output/\` is
@@ -180,12 +181,12 @@ while (( $# )); do
 
         # Old names are passed on as given, not translated: this script is
         # fetched on its own and may drive an image that predates the rename.
-        flash|daily|weekly|full|galaxy|pre_bmc_reboot|post_bmc_reboot|light|medium|deploy|pre_reboot) TIER="$1"; shift ;;
+        flash|daily|weekly|full|pre_bmc_reboot|post_bmc_reboot|light|medium|deploy|pre_reboot) TIER="$1"; shift ;;
         -t|--tier)
             require_value "$1" "${2:-}"
             case "$2" in
-                flash|daily|weekly|full|galaxy|pre_bmc_reboot|post_bmc_reboot|light|medium|deploy|pre_reboot) ;;
-                *) die "unknown tier '$2'. Expected: flash, daily, weekly, full, galaxy, pre_bmc_reboot, post_bmc_reboot" ;;
+                flash|daily|weekly|full|pre_bmc_reboot|post_bmc_reboot|light|medium|deploy|pre_reboot) ;;
+                *) die "unknown tier '$2'. Expected: flash, daily, weekly, full, pre_bmc_reboot, post_bmc_reboot" ;;
             esac
             TIER="$2"; shift 2 ;;
 
@@ -245,10 +246,10 @@ case "${TIER}" in
     full|pre_bmc_reboot|pre_reboot|post_bmc_reboot) ${SKIP_SYS_TRIAGE} || WANT_SYS_TRIAGE=true ;;
 esac
 
-# flash and galaxy run no QSFP tests, so they need neither the syseng package
-# nor the stub and BMC API credentials its collector reads.
+# flash runs no QSFP tests, so it needs neither the syseng package nor the
+# stub and BMC API credentials its collector reads.
 WANT_QSFP=false
-[[ ${TIER} != flash && ${TIER} != galaxy ]] && ! ${SKIP_QSFP} && WANT_QSFP=true
+[[ ${TIER} != flash ]] && ! ${SKIP_QSFP} && WANT_QSFP=true
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Output directory. Bind-mounted at the same path inside the container so the
