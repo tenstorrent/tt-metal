@@ -7,7 +7,11 @@ The tier-2 tests read the GLM-5.3 checkpoint, golden trace and TTNN cache on Wek
 are absent; a skip is not evidence for them.
 """
 
+import copy
 import math
+import os
+import time
+import types
 from pathlib import Path
 
 import pytest
@@ -31,6 +35,8 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_4.synthetic_gates import (
     synthetic_gates,
 )
 from models.demos.deepseek_v3_d_p.reference.glm_5_4_config import GLM54Config, glm_5_4_hf_config
+from models.demos.deepseek_v3_d_p.tests import glm54_weights as gw
+from models.demos.deepseek_v3_d_p.tests import glm_synthetic_weights
 from models.demos.deepseek_v3_d_p.tests.glm54_weights import (
     GLM53_CHECKPOINT,
     GLM53_TTNN_CACHE,
@@ -175,6 +181,133 @@ def test_tier1_weights_run_the_reference_stack():
 
 
 # --- tier 2 ---------------------------------------------------------------------------------------------------
+
+
+# --- tier-1 disk cache -------------------------------------------------------------------------------------------
+
+
+def _tiny_tier1_config(monkeypatch):
+    """The reduced stack's layer roles at toy widths (and few, narrow experts), so the generator runs in a second."""
+    monkeypatch.setattr(GLM54ReducedConfig, "NUM_ROUTED_EXPERTS", 4)
+    monkeypatch.setattr(GLM54ReducedConfig, "MOE_INTERMEDIATE_SIZE", 32)
+    c = glm54_reduced_config(64)
+    for k, v in dict(hidden_size=64, intermediate_size=96, vocab_size=128, q_lora_rank=32, kv_lora_rank=32).items():
+        setattr(c, k, v)
+    for k, v in dict(num_attention_heads=2, qk_nope_head_dim=16, qk_rope_head_dim=8, v_head_dim=16).items():
+        setattr(c, k, v)
+    c.index_n_heads, c.index_head_dim = 2, 16
+    return c
+
+
+def _flat(w) -> list[torch.Tensor]:
+    out = []
+
+    def walk(x):
+        if isinstance(x, torch.Tensor):
+            out.append(x)
+        elif isinstance(x, dict):
+            for k in sorted(x):
+                walk(x[k])
+        elif isinstance(x, (list, tuple)):
+            for v in x:
+                walk(v)
+
+    walk([w.state_dict, w.gates])
+    return out
+
+
+def _same(a, b) -> bool:
+    fa, fb = _flat(a), _flat(b)
+    return len(fa) == len(fb) and all(x.dtype == y.dtype and torch.equal(x, y) for x, y in zip(fa, fb))
+
+
+def test_tier1_cache_key_tracks_generator_config_and_seed(monkeypatch, tmp_path):
+    """The key moves with every input of the tier-1 bytes (seed, a config field, a model constant, a generator module's
+    source, a generator function's source, the torch version) and not with the fields the generator does not read."""
+    c = glm54_reduced_config(5120)
+    base = gw.tier1_cache_key(c)
+    assert gw.tier1_cache_key(c) == base
+
+    def moved(**config_changes) -> bool:
+        changed = copy.deepcopy(c)
+        for k, v in config_changes.items():
+            setattr(changed, k, v)
+        return gw.tier1_cache_key(changed) != base
+
+    assert gw.tier1_cache_key(c, seed=GLM54_SYNTHETIC_SEED + 1) != base
+    assert moved(hidden_size=c.hidden_size + 64)
+    assert moved(indexer_types=["full"] * c.num_hidden_layers)
+    assert moved(mla_use_output_gate=True)  # a field the generator reads with a default, absent from the config
+    assert not moved(max_seq_len=3 * 5120, rope_scaling={**c.rope_scaling, "original_max_position_embeddings": 1})
+    assert not moved(loop_window_format="bf16")
+
+    with monkeypatch.context() as m:
+        m.setattr(GLM54ReducedConfig, "NUM_ROUTED_EXPERTS", 8)
+        assert gw.tier1_cache_key(c) != base
+    with monkeypatch.context() as m:
+        edited = tmp_path / "glm_synthetic_weights.py"
+        edited.write_text(Path(glm_synthetic_weights.__file__).read_text() + "\n# edited\n")
+        m.setattr(glm_synthetic_weights, "__file__", str(edited))
+        assert gw.tier1_cache_key(c) != base
+    with monkeypatch.context() as m:
+
+        def indexer_layer_is_reused(config, layer_idx):  # same name, other source
+            return False
+
+        m.setattr(gw, "_TIER1_GENERATOR_FUNCTIONS", (gw._generate_tier1, indexer_layer_is_reused))
+        assert gw.tier1_cache_key(c) != base
+    with monkeypatch.context() as m:
+        m.setattr(torch, "__version__", "0.0.0")
+        assert gw.tier1_cache_key(c) != base
+    assert gw.tier1_cache_key(c) == base
+
+
+def test_tier1_key_excluded_fields_are_not_read(monkeypatch):
+    """Every hf-config field left out of the key is unread by the generator (recorded on a toy-width config)."""
+    reads = set()
+
+    class Recorder(types.SimpleNamespace):
+        def __getattribute__(self, name):
+            reads.add(name)
+            return object.__getattribute__(self, name)
+
+    gw._generate_tier1(Recorder(**vars(_tiny_tier1_config(monkeypatch))), GLM54_SYNTHETIC_SEED)
+    assert {"hidden_size", "indexer_types", "num_hidden_layers"} <= reads  # the recorder sees the reads
+    assert not reads & gw.TIER1_KEY_EXCLUDED_FIELDS, reads & gw.TIER1_KEY_EXCLUDED_FIELDS
+
+
+def test_tier1_cache_round_trip_and_bounds(monkeypatch, tmp_path):
+    """A miss writes one entry that a hit returns bit-identical without generating; entries beyond the cap are evicted
+    least recently used first (a hit counts as use); a write that would leave the disk under the floor is skipped and
+    the generated weights are still returned."""
+    c = _tiny_tier1_config(monkeypatch)
+    monkeypatch.setenv("TT_GLM54_CACHE_DIR", str(tmp_path))
+    root = gw.tier1_cache_dir()
+    expected = {seed: gw.Glm54Weights(*gw._generate_tier1(c, seed)) for seed in (1, 2, 3)}
+    size = gw._tensor_bytes(gw._generate_tier1(c, 1))
+
+    first = gw.glm54_tier1_weights(c, seed=1)
+    assert _same(first, expected[1]) and [p.name for p in root.glob("*.pt")] == [f"{gw.tier1_cache_key(c, 1)}.pt"]
+    assert first.provenance["cache_key"] == gw.tier1_cache_key(c, 1)
+    with monkeypatch.context() as m:
+        m.setattr(gw, "_generate_tier1", lambda *a: pytest.fail("a hit must not generate"))
+        assert _same(gw.glm54_tier1_weights(c, seed=1), expected[1])
+
+    # Cap: two entries. Seed 2 fits; seed 1 is used again; seed 3 then evicts seed 2 (least recently used).
+    monkeypatch.setenv("TT_GLM54_TIER1_CACHE_GB", str(2.5 * size / 1e9))
+    t = time.time()
+    os.utime(root / f"{gw.tier1_cache_key(c, 1)}.pt", (t - 30, t - 30))
+    assert _same(gw.glm54_tier1_weights(c, seed=2), expected[2])
+    os.utime(root / f"{gw.tier1_cache_key(c, 2)}.pt", (t - 20, t - 20))
+    gw.glm54_tier1_weights(c, seed=1)  # hit: seed 1 becomes the most recently used
+    assert _same(gw.glm54_tier1_weights(c, seed=3), expected[3])
+    assert {p.name for p in root.glob("*.pt")} == {f"{gw.tier1_cache_key(c, s)}.pt" for s in (1, 3)}
+    assert not list(root.glob(".*.tmp"))
+
+    # Disk floor: no write, weights still returned.
+    monkeypatch.setattr(gw, "TIER1_CACHE_MIN_FREE_GB", 1e9)
+    assert _same(gw.glm54_tier1_weights(c, seed=2), expected[2])
+    assert not (root / f"{gw.tier1_cache_key(c, 2)}.pt").exists()
 
 
 def test_tier2_provenance_follows_the_runner_environment(monkeypatch, tmp_path):

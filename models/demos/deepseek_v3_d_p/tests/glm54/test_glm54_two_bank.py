@@ -20,6 +20,9 @@ top-k sets) matches the chunked device output (PCC >= 0.99 per chunk and over ea
 the previous shard's rows) and the ring's rows (PCC >= 0.998). The reference is chunk-invariant (q171.2.2), so this is
 chunked vs single-shot. ``test_two_bank_traced`` replays one captured pass-2 forward over the whole interleaved
 schedule bit-identically to eager; ``test_two_bank_index_list`` checks the device index list row for row.
+
+The single-shot reference checks (``single_shot_checks``, minutes of CPU) can run after the device lock is released
+(``GLM54_DEFER_ACCURACY``, see ``deferred_accuracy``).
 """
 
 import copy
@@ -37,6 +40,7 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_4 import LoopPass2MLAReference
 from models.demos.deepseek_v3_d_p.reference.glm_5_4.synthetic_gates import GLM54_SYNTHETIC_SEED
 from models.demos.deepseek_v3_d_p.reference.glm_5_4_config import glm_5_4_hf_config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.glm54.deferred_accuracy import run_or_defer
 from models.demos.deepseek_v3_d_p.tests.glm54_weights import glm54_reduced_config
 from models.demos.deepseek_v3_d_p.tests.glm_synthetic_weights import glm_random_mla_weights
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
@@ -445,22 +449,36 @@ def test_two_bank_device(mesh_device, window_format, schedule):
         for t in sets:
             ttnn.deallocate(t)
     final = stage.cache_natural()
+    cases = []
     for slot in range(NUM_SLOTS):
         chunks = [(s, e) for sl, s, e in SCHEDULES[schedule] if sl == slot]
         total = chunks[-1][1]
         for L in LOOP_LAYERS:
             cache = final[slot, LOOP_LAYERS.index(L)]
-            _check_vs_single_shot(
-                stage.config,
-                f"{window_format} {schedule} slot {slot}",
-                L,
-                slot,
-                chunks,
-                out=torch.cat(outputs[(slot, L)], dim=1),
-                ring=torch.cat(rings[(slot, L)], dim=0),
-                bank_a=stage.logical(cache[:total]),
-                indices=torch.cat(set_rows[(slot, pass1_index_set(stage.config, L))], dim=0).view(1, 1, total, -1),
+            cases.append(
+                dict(
+                    case=f"{window_format} {schedule} slot {slot}",
+                    layer=L,
+                    slot=slot,
+                    chunks=chunks,
+                    out=torch.cat(outputs[(slot, L)], dim=1),
+                    ring=torch.cat(rings[(slot, L)], dim=0),
+                    bank_a=stage.logical(cache[:total]),
+                    indices=torch.cat(set_rows[(slot, pass1_index_set(stage.config, L))], dim=0).view(1, 1, total, -1),
+                )
             )
+    failures = run_or_defer(
+        single_shot_checks, f"two_bank-{window_format}-{schedule}", window_format=window_format, cases=cases
+    )
+    assert not failures, failures
+
+
+def single_shot_checks(window_format: str, cases: list[dict]) -> None:
+    """test_two_bank_device's CPU checks (``_check_vs_single_shot`` per slot and layer) on the device tensors in
+    ``cases``. Runs in the test or after the device lock (``deferred_accuracy``)."""
+    config = _config(window_format)
+    for c in cases:
+        _check_vs_single_shot(config, **c)
 
 
 def _pearson(a: torch.Tensor, b: torch.Tensor) -> float:

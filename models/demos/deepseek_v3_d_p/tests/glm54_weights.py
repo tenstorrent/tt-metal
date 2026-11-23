@@ -30,13 +30,35 @@ function reads its paths from it, so the recorded provenance is the source actua
 
 ``tier1_provenance`` / ``tier2_provenance`` return what a run must record to be reproducible: generator,
 seeds and constants for synthetic tensors; checkpoint path, revision and file digests for real ones.
+
+Tier-1 disk cache. Generating tier 1 takes ~80 s of host CPU, which device tests used to spend holding the device
+lock, so ``glm54_tier1_weights`` keeps one file per key under ``tier1_cache_dir()`` (``$TT_GLM54_CACHE_DIR``, default
+``~/.cache/tt-glm54``, then ``tier1-weights``; never Weka) and memory-maps it on a hit (~0.1 s). The key
+(``tier1_key_inputs``) is everything the bytes depend on: the generator's source (whole files plus the functions it
+calls elsewhere), the torch version, every hf-config field except those the generator does not read
+(``TIER1_KEY_EXCLUDED_FIELDS``, so runs at different sequence lengths share one entry), the model constants and the
+seed. A miss generates, writes the entry atomically (~23 GB, ~30 s) and returns the mapped copy. Disk use is
+bounded: before a write, least recently used entries are deleted until the total fits ``$TT_GLM54_TIER1_CACHE_GB``
+(default 50, two entries), and the write is skipped (with a warning; the generated weights are still returned) when
+it would leave less than ``TIER1_CACHE_MIN_FREE_GB`` free on the disk. Fill the cache outside the device lock with
+``python -m models.demos.deepseek_v3_d_p.tests.glm54_weights`` (host only, opens no device).
 """
 
 import hashlib
+import inspect
+import json
 import os
+import shutil
+import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import torch
+from loguru import logger
+
+from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import reference as _mla_reference
+from models.demos.deepseek_v3_d_p.reference.glm_5_4 import synthetic_gates as _synthetic_gates_module
 from models.demos.deepseek_v3_d_p.reference.glm_5_4.synthetic_gates import (
     GATE_BETA_CENTER,
     GATE_LOGIT_STD,
@@ -47,7 +69,9 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_4.synthetic_gates import (
     synthetic_gates,
 )
 from models.demos.deepseek_v3_d_p.reference.glm_5_4_config import GLM54Config, glm_5_4_hf_config
+from models.demos.deepseek_v3_d_p.tests import glm_synthetic_weights as _layer_generator_module
 from models.demos.deepseek_v3_d_p.tests.glm_synthetic_weights import glm_random_transformer_state_dict
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import indexer_layer_is_reused
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3 import GLM53Adapter
 
 # GLM-5.4 = GLM-5.3 + loop fields (A8): tier 2 reads GLM-5.3's checkpoint and TTNN cache.
@@ -116,16 +140,145 @@ def tier1_provenance(seed: int = GLM54_SYNTHETIC_SEED) -> dict:
     }
 
 
-def glm54_tier1_weights(config, seed: int = GLM54_SYNTHETIC_SEED) -> Glm54Weights:
-    """Seeded random weights for ``glm54_reduced_config``: embedding, 4 layers (MoE layers share one expert
-    set), and the scalar synthetic gates. About 21 GB of host RAM."""
-    if config.num_hidden_layers != GLM54ReducedConfig.NUM_LAYERS:
-        raise ValueError(f"tier 1 is the {GLM54ReducedConfig.NUM_LAYERS}-layer reduced stack, got {config}")
+def _generate_tier1(config, seed: int) -> tuple[dict, list[dict]]:
+    """The tier-1 draw: (state_dict, gates). Its source is part of the cache key."""
     state_dict = glm_random_transformer_state_dict(
         config, GLM54ReducedConfig, config.num_hidden_layers, seed=seed, share_experts=True
     )
-    gates = synthetic_gates(config.hidden_size, config.loop_count, seed=seed)
-    return Glm54Weights(state_dict, gates, tier1_provenance(seed))
+    return state_dict, synthetic_gates(config.hidden_size, config.loop_count, seed=seed)
+
+
+# Bump when the entry layout changes.
+TIER1_CACHE_FORMAT = 1
+# hf-config fields the tier-1 generator does not read (test_glm54_weights records the reads), left out of the key.
+TIER1_KEY_EXCLUDED_FIELDS = frozenset({"max_seq_len", "rope_scaling", "loop_window_format"})
+# Where the tier-1 bytes come from: these modules hashed whole, plus single functions of larger modules.
+_TIER1_GENERATOR_MODULES = (_layer_generator_module, _synthetic_gates_module, _mla_reference)
+_TIER1_GENERATOR_FUNCTIONS = (_generate_tier1, indexer_layer_is_reused)
+TIER1_CACHE_MIN_FREE_GB = 30
+
+
+def tier1_cache_dir() -> Path:
+    return Path(os.environ.get("TT_GLM54_CACHE_DIR") or Path.home() / ".cache" / "tt-glm54") / "tier1-weights"
+
+
+def _tier1_cache_cap_bytes() -> int:
+    return int(float(os.environ.get("TT_GLM54_TIER1_CACHE_GB", "50")) * 1e9)
+
+
+def _sha256_text(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def tier1_key_inputs(config, seed: int = GLM54_SYNTHETIC_SEED) -> dict:
+    """Everything the tier-1 bytes depend on (``tier1_cache_key`` hashes it; stored in each entry)."""
+    m = GLM54ReducedConfig
+    return {
+        "format": TIER1_CACHE_FORMAT,
+        "generator": {
+            **{mod.__name__: _sha256_text(Path(mod.__file__).read_text()) for mod in _TIER1_GENERATOR_MODULES},
+            **{f.__qualname__: _sha256_text(inspect.getsource(f)) for f in _TIER1_GENERATOR_FUNCTIONS},
+        },
+        "torch": torch.__version__,
+        "config": {k: v for k, v in sorted(vars(config).items()) if k not in TIER1_KEY_EXCLUDED_FIELDS},
+        "model_cfg": {k: getattr(m, k) for k in dir(m) if k.isupper()},
+        "seed": seed,
+    }
+
+
+def tier1_cache_key(config, seed: int = GLM54_SYNTHETIC_SEED) -> str:
+    return _sha256_text(json.dumps(tier1_key_inputs(config, seed), sort_keys=True, default=repr))[:24]
+
+
+def _tensor_bytes(obj) -> int:
+    """Bytes ``torch.save`` writes for the tensors in ``obj``: each storage once (MoE layers share their experts)."""
+    storages = {}
+
+    def walk(x):
+        if isinstance(x, torch.Tensor):
+            st = x.untyped_storage()
+            storages[st.data_ptr()] = st.nbytes()
+        elif isinstance(x, dict):
+            for v in x.values():
+                walk(v)
+        elif isinstance(x, (list, tuple)):
+            for v in x:
+                walk(v)
+
+    walk(obj)
+    return sum(storages.values())
+
+
+def _evict(root: Path, budget: int) -> None:
+    """Delete least recently used entries until the entries total at most ``budget`` bytes; delete writers'
+    temporary files older than an hour (crashed writers)."""
+    for tmp in root.glob(".*.tmp"):
+        if time.time() - tmp.stat().st_mtime > 3600:
+            tmp.unlink(missing_ok=True)
+    entries = sorted(root.glob("*.pt"), key=lambda p: p.stat().st_mtime)
+    total = sum(p.stat().st_size for p in entries)
+    for p in entries:
+        if total <= budget:
+            break
+        total -= p.stat().st_size
+        p.unlink(missing_ok=True)
+        logger.info(f"tier-1 cache: evicted {p.name}")
+
+
+def _store(path: Path, entry: dict) -> bool:
+    """Write ``entry`` to ``path`` atomically within the cache bounds; False (and a warning) when it is skipped."""
+    root, size, cap = path.parent, _tensor_bytes(entry), _tier1_cache_cap_bytes()
+    root.mkdir(parents=True, exist_ok=True)
+    if size > cap:
+        logger.warning(f"tier-1 cache: entry ({size / 1e9:.1f} GB) exceeds the cap ({cap / 1e9:.1f} GB); not cached")
+        return False
+    _evict(root, cap - size)
+    free = shutil.disk_usage(root).free
+    if free - size < TIER1_CACHE_MIN_FREE_GB * 1e9:
+        logger.warning(
+            f"tier-1 cache: writing {size / 1e9:.1f} GB would leave {(free - size) / 1e9:.1f} GB free on {root} "
+            f"(< {TIER1_CACHE_MIN_FREE_GB} GB); not cached"
+        )
+        return False
+    tmp = root / f".{path.name}.{os.getpid()}.tmp"
+    try:
+        torch.save(entry, tmp)
+        os.replace(tmp, path)
+    except OSError as e:
+        tmp.unlink(missing_ok=True)
+        logger.warning(f"tier-1 cache: write to {path} failed ({e}); not cached")
+        return False
+    return True
+
+
+def _load(path: Path) -> dict:
+    entry = torch.load(path, mmap=True, weights_only=True)
+    os.utime(path)  # recency for eviction
+    return entry
+
+
+def glm54_tier1_weights(config, seed: int = GLM54_SYNTHETIC_SEED) -> Glm54Weights:
+    """Seeded random weights for ``glm54_reduced_config``: embedding, 4 layers (MoE layers share one expert
+    set), and the scalar synthetic gates. About 23 GB, served from the tier-1 disk cache (module docstring)
+    when present; the returned tensors are then memory-mapped (copy on write)."""
+    if config.num_hidden_layers != GLM54ReducedConfig.NUM_LAYERS:
+        raise ValueError(f"tier 1 is the {GLM54ReducedConfig.NUM_LAYERS}-layer reduced stack, got {config}")
+    key = tier1_cache_key(config, seed)
+    path = tier1_cache_dir() / f"{key}.pt"
+    t0 = time.perf_counter()
+    if path.is_file():
+        entry = _load(path)
+        logger.info(f"tier-1 weights: cache hit {path} ({time.perf_counter() - t0:.1f} s)")
+    else:
+        state_dict, gates = _generate_tier1(config, seed)
+        logger.info(f"tier-1 weights: cache miss {key}, generated in {time.perf_counter() - t0:.1f} s")
+        key_inputs = json.dumps(tier1_key_inputs(config, seed), sort_keys=True, default=repr)
+        entry = {"key_inputs": key_inputs, "state_dict": state_dict, "gates": gates}
+        t1 = time.perf_counter()
+        if _store(path, entry):
+            entry = _load(path)  # page-cache backed instead of ~23 GB of process memory
+            logger.info(f"tier-1 weights: cached to {path} in {time.perf_counter() - t1:.1f} s")
+    return Glm54Weights(entry["state_dict"], entry["gates"], {**tier1_provenance(seed), "cache_key": key})
 
 
 def _sha256(path: Path) -> str:
@@ -199,7 +352,18 @@ __all__ = [
     "glm54_reduced_config",
     "glm54_tier1_weights",
     "glm54_tier2_weights",
+    "tier1_cache_dir",
+    "tier1_cache_key",
+    "tier1_key_inputs",
     "tier1_provenance",
     "tier2_provenance",
     "tier2_sources",
 ]
+
+
+if __name__ == "__main__":
+    # Fill the tier-1 cache outside the device lock (host only: generation imports ttnn but opens no device).
+    w = glm54_tier1_weights(glm54_reduced_config(8192))  # any length: max_seq_len is not in the key
+    entry = tier1_cache_dir() / f"{w.provenance['cache_key']}.pt"
+    print(f"tier-1 cache {'ready' if entry.is_file() else 'NOT written'}: {entry}")
+    sys.exit(0 if entry.is_file() else 1)
