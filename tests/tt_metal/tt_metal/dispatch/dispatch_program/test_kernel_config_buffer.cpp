@@ -42,8 +42,8 @@ protected:
         }
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         if (arch_ == tt::ARCH::QUASAR) {
-            GTEST_SKIP() << "Quasar caps a data-movement kernel at MEM_DM_KERNEL_SIZE (48 KiB of text), below the "
-                            "kernel sizes these tests load";
+            GTEST_SKIP() << "Quasar caps data movement kernel text at MEM_DM_KERNEL_SIZE, so kernels large enough "
+                            "to reach the kernel config buffer limit fail to link";
         }
 
         uint32_t worker_l1_size = max_worker_l1_size_ - DEFAULT_KERNEL_CONFIG_BUFFER_SIZE;
@@ -92,8 +92,8 @@ protected:
         }
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         if (arch_ == tt::ARCH::QUASAR) {
-            GTEST_SKIP() << "Quasar caps a data-movement kernel at MEM_DM_KERNEL_SIZE (48 KiB of text), below the "
-                            "kernel sizes these tests load";
+            GTEST_SKIP() << "Quasar caps data movement kernel text at MEM_DM_KERNEL_SIZE, so kernels large enough "
+                            "to reach the kernel config buffer limit fail to link";
         }
 
         create_devices(DEFAULT_TRACE_REGION_SIZE, MIN_WORKER_L1_SIZE);
