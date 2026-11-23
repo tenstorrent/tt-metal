@@ -117,15 +117,6 @@ RowSplit choose_row_split(
     return RowSplit{.balanced = balanced, .num_cores = std::min(num_available_cores, units)};
 }
 
-// An optional buffer's runtime arg: the buffer when present, 0 when not.
-void push_buffer_or_zero(tt::tt_metal::KernelDescriptor::RTArgList& args, tt::tt_metal::Buffer* buffer) {
-    if (buffer != nullptr) {
-        args.push_back(buffer);
-    } else {
-        args.push_back(0U);
-    }
-}
-
 }  // namespace
 
 namespace ttml::metal::ops::sdpa_bw::device {
@@ -549,7 +540,8 @@ tt::tt_metal::ProgramDescriptor SDPABackwardKVProgramFactory::create_descriptor(
                 reader_args.push_back(query_buffer);
                 reader_args.push_back(key_buffer);
                 reader_args.push_back(value_buffer);
-                push_buffer_or_zero(reader_args, mask_buffer);
+                // An absent optional tensor's buffer is null: RTArgList writes 0 for it, with no binding.
+                reader_args.push_back(mask_buffer);
                 reader_args.push_back(intermediates_buffer);
                 reader_args.push_back(u_scaler_buffer);
                 reader_args.push_back(num_rows);

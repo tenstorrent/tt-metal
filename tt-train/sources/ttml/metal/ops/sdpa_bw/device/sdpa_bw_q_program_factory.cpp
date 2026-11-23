@@ -125,15 +125,6 @@ RowSplit choose_row_split(
     return RowSplit{.balanced = balanced, .num_cores = std::min(num_available_cores, units)};
 }
 
-// An optional buffer's runtime arg: the buffer when present, 0 when not.
-void push_buffer_or_zero(tt::tt_metal::KernelDescriptor::RTArgList& args, tt::tt_metal::Buffer* buffer) {
-    if (buffer != nullptr) {
-        args.push_back(buffer);
-    } else {
-        args.push_back(0U);
-    }
-}
-
 }  // namespace
 
 namespace ttml::metal::ops::sdpa_bw::device {
@@ -179,7 +170,8 @@ void assign_per_core_runtime_args_balanced(
         reader_args.push_back(value_buffer);
         reader_args.push_back(0U);  // mask_addr unused for balanced causal
         reader_args.push_back(intermediates_buffer);
-        push_buffer_or_zero(reader_args, gate_buffer);
+        // An absent optional tensor's buffer is null: RTArgList writes 0 for it, with no binding.
+        reader_args.push_back(gate_buffer);
         reader_args.push_back(num_pairs);
         reader_args.push_back(start_pair_idx);
         desc.kernels[kReaderKernel].emplace_runtime_args(core, reader_args);
@@ -188,8 +180,8 @@ void assign_per_core_runtime_args_balanced(
         tt::tt_metal::KernelDescriptor::RTArgList writer_args;
         writer_args.push_back(grad_query_buffer);
         writer_args.push_back(u_scaler_buffer);
-        push_buffer_or_zero(writer_args, grad_gate_buffer);
-        push_buffer_or_zero(writer_args, gated_grad_output_buffer);
+        writer_args.push_back(grad_gate_buffer);
+        writer_args.push_back(gated_grad_output_buffer);
         writer_args.push_back(num_pairs);
         writer_args.push_back(start_pair_idx);
         desc.kernels[kWriterKernel].emplace_runtime_args(core, writer_args);
@@ -569,17 +561,17 @@ tt::tt_metal::ProgramDescriptor SDPABackwardQProgramFactory::create_descriptor(
                 reader_args.push_back(query_buffer);
                 reader_args.push_back(key_buffer);
                 reader_args.push_back(value_buffer);
-                push_buffer_or_zero(reader_args, attn_mask_buffer);
+                reader_args.push_back(attn_mask_buffer);
                 reader_args.push_back(intermediates_buffer);
-                push_buffer_or_zero(reader_args, gate_buffer);
+                reader_args.push_back(gate_buffer);
                 reader_args.push_back(num_rows);
                 reader_args.push_back(start_row);
                 desc.kernels[kReaderKernel].emplace_runtime_args(core, reader_args);
                 tt::tt_metal::KernelDescriptor::RTArgList writer_args;
                 writer_args.push_back(grad_query_buffer);
                 writer_args.push_back(u_scaler_buffer);
-                push_buffer_or_zero(writer_args, grad_gate_buffer);
-                push_buffer_or_zero(writer_args, gated_grad_output_buffer);
+                writer_args.push_back(grad_gate_buffer);
+                writer_args.push_back(gated_grad_output_buffer);
                 writer_args.push_back(num_rows);
                 writer_args.push_back(start_row);
                 desc.kernels[kWriterKernel].emplace_runtime_args(core, writer_args);
