@@ -110,6 +110,8 @@ enum class BinaryOp : std::uint8_t
     RESHUFFLE_ROWS,
     RSUB,
     MUL_SM_SHIFT23,
+    GEGLU_TANH,
+    MOE_GATE_SQRT_SOFTPLUS_ADD_BIAS,
 };
 
 enum class DataLayout

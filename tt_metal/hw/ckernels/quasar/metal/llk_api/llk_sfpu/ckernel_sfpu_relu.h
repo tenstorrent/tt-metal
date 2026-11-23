@@ -109,6 +109,44 @@ inline void _calculate_lrelu_(const std::uint32_t slope) {
     }
 }
 
+/**
+ * @brief Leaky relu with the Blackhole calculate_lrelu signature: x for x >= 0, x * slope otherwise.
+ *
+ * @tparam APPROXIMATION_MODE: unused; keeps the compute API's (APPROX) template list.
+ * @param slope: fp32 bit pattern of the negative slope.
+ */
+template <bool APPROXIMATION_MODE, int ITERATIONS = SFPU_ITERATIONS>
+inline void calculate_lrelu(const std::uint32_t slope) {
+    _calculate_lrelu_<ITERATIONS>(slope);
+}
+
+/**
+ * @brief Int32 relu clamp on two's-complement Dest: max(x, t) or max(min(x, t), 0).
+ *
+ * Blackhole splits each compare on the sign of the threshold because its signed compare subtracts and
+ * overflows for operands 2^31 or more apart. On Quasar sfpi::max/min on vInt lower to SFPSWAP with a
+ * true two's-complement compare (see ckernel_sfpu_unary_max_min.h), so the full int32 range needs no
+ * split.
+ *
+ * @tparam IS_LOWER_BOUND: true for relu_min (max(x, t)), false for relu_max (max(min(x, t), 0)).
+ * @param threshold: two's-complement int32 threshold.
+ * @note No SFPNOP after SFPSWAP: SFPSWAP always stalls the next SFPU instruction (TEN-4581).
+ */
+template <bool APPROXIMATION_MODE, bool IS_LOWER_BOUND, int ITERATIONS = SFPU_ITERATIONS>
+inline void relu_clamp_int(const std::uint32_t threshold) {
+    const sfpi::vInt t = static_cast<std::int32_t>(threshold);
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        const sfpi::vInt x = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
+        if constexpr (IS_LOWER_BOUND) {
+            sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>() = sfpi::max(x, t);
+        } else {
+            sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>() = sfpi::max(sfpi::min(x, t), sfpi::vInt(0));
+        }
+        sfpi::dst_reg++;
+    }
+}
+
 // Calculates RELU MIN for number of rows of output SFPU ops (Quasar = 2 rows)
 inline void _calculate_relu_min_sfp_rows_() {
     TTI_SFPLOAD(
@@ -126,16 +164,25 @@ inline void _calculate_relu_min_sfp_rows_() {
     TTI_SFPSTORE(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0);
 }
 
+// VectorType = sfpi::vInt is relu_tile_int32's two's-complement path (relu_clamp_int); vFloat runs
+// the SFPGT kernel above.
 template <typename VectorType, bool APPROXIMATION_MODE, int ITERATIONS, typename T>
 inline void _relu_min_(T threshold) {
     static_assert(ITERATIONS == SFPU_ITERATIONS);
-    static_assert(std::is_same_v<VectorType, sfpi::vFloat>, "Quasar relu_min is float-only");
-    _relu_load_threshold_(_relu_threshold_bits_(threshold));
+    static_assert(
+        std::is_same_v<VectorType, sfpi::vFloat> || std::is_same_v<VectorType, sfpi::vInt>,
+        "VectorType must be sfpi::vFloat or sfpi::vInt");
+    if constexpr (std::is_same_v<VectorType, sfpi::vInt>) {
+        static_assert(std::is_same_v<T, std::uint32_t>, "An int32 relu_min takes a uint32_t threshold");
+        relu_clamp_int<APPROXIMATION_MODE, true /*IS_LOWER_BOUND*/, ITERATIONS>(threshold);
+    } else {
+        _relu_load_threshold_(_relu_threshold_bits_(threshold));
 #pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        _calculate_relu_min_sfp_rows_();
-        ckernel::math::_incr_counters_<0x0, 0x0, ckernel::math::SFP_ROWS, 0x0>();  // does the dest_reg++ (increments by
-                                                                                   // 2 rows)
+        for (int d = 0; d < ITERATIONS; d++) {
+            _calculate_relu_min_sfp_rows_();
+            ckernel::math::_incr_counters_<0x0, 0x0, ckernel::math::SFP_ROWS, 0x0>();  // does the dest_reg++
+                                                                                       // (increments by 2 rows)
+        }
     }
 }
 

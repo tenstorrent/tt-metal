@@ -24,9 +24,82 @@ inline void _calculate_tanh_sfp_rows_() {
     TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_7, 0, 0);                           // store from lreg[1] into dest register
 }
 
+// Blackhole's accurate fp32 tanh (gelu_tanh's fp32 Dest path), copied verbatim. It reads the constants
+// _init_tanh_fp32_accurate_ programs, not the polynomial coefficients tanh_init loads.
+// tanh(x): t = 0.5*expm1(abs(2*x)); sgn(x) * t / (t + 1)
+sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
+    sfpi::vFloat a, r, s, f, w, y, scale, bias0;
+    sfpi::vFloat j, t, rcp, x0, x1, y0;
+    sfpi::vInt i, e, x_exp;
+    sfpi::vMag m;
+
+    // Calculate j = x * (2 * log2(e)), interleaved with a = abs(2*x), and i = round(abs(j)), clamped to [0, 255].
+
+    j = x * sfpi::vConstFloatPrgm0;  // j = x * 2 * log2(e)
+    a = x + x;
+    // i = round(abs(j)), clamped to [0, 255].
+    m = sfpi::convert<sfpi::vUInt8>(j, sfpi::RoundMode::Nearest);
+    i = m;
+    j = sfpi::convert<sfpi::vFloat>(m, sfpi::RoundMode::Nearest);
+
+    a = sfpi::setsgn(a, 0);
+    f = j * sfpi::vConstFloatPrgm1 + a;  // f = a - j * ln(2)
+
+    // expm1(f)
+    r = 1.974105835e-04f;
+    r = r * f + 1.393318176e-3f;
+    r = r * f + 8.331298828e-3f;
+    r = r * f + 4.166680202e-2f;
+    s = f * f;  // hide SFPMAD latency
+    r = r * f + sfpi::vConstFloatPrgm2;
+    w = 0.5f;
+    r = __builtin_rvtt_sfpmad(r.get(), f.get(), w.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+
+    e = i + 126;
+    r = r * s + f;
+    scale = sfpi::setexp(sfpi::vFloat(0.0f), e);
+    bias0 = scale - w;
+
+    // If a=±inf, converts to a finite value, otherwise if a=±NaN, converts to ±inf or ±NaN.
+    // This gives y = <finite value> * 0.0 + 1.0 = 1.0 for non-NaN x, otherwise y = NaN.
+    a = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(a) - 1);
+    x0 = r * scale + bias0;
+    y = a * 0.0f + 1.0f;
+    x1 = x0 + 1.0f;
+
+    // `i` is round(abs(2*x/log(2))). For i >= 61, |x| is about 21 or larger,
+    // so x0/(x0 + 1) is far within 0.5 ulp of 1.0f. Keep the preinitialized
+    // saturated result; below that, refine the reciprocal estimate.
+    v_if(i < 61) {
+        // computes x0/x1 via reciprocal and residual correction
+        rcp = sfpi::approx_recip(x1);
+        t = -x1 * rcp + 1.0f;
+        y = x;
+        rcp = rcp * t + rcp;
+        y0 = x0 * rcp;
+        x_exp = sfpi::exexp(x, sfpi::ExponentMode::Biased);
+        t = -x1 * y0 + x0;
+
+        // For tiny inputs, tanh(x) rounds to x in fp32. `x_exp` is biased, so
+        // 115 is 127 - 12; keep y=x for |x| < 2^-12 and use the corrected
+        // ratio otherwise.
+        v_if(x_exp >= 115) { y = t * rcp + y0; }
+        v_endif;
+    }
+    v_endif;
+
+    return sfpi::copysgn(y, x);
+}
+
+// Programs the constants _sfpu_tanh_fp32_accurate_ reads: Blackhole's tanh_init<false, true>.
+inline void _init_tanh_fp32_accurate_() {
+    sfpi::vConstFloatPrgm0 = 2.0f * 1.442695f;      // 2 * log2(e) == 2 / ln(2)
+    sfpi::vConstFloatPrgm1 = -0.6931471805599453f;  // ln(2)
+    sfpi::vConstFloatPrgm2 = 1.666667163e-1f;       // c1
+}
+
 // Blackhole's SFPI tanh polynomial and its init (softcap and situ_glu call them), copied from the
 // Blackhole metal ckernel_sfpu_tanh.h; the SFPNONLINEAR kernel above stays Quasar's calculate_tanh.
-// tanh(x): t = 0.5*expm1(abs(2*x)); sgn(x) * t / (t + 1)
 // val * (0.999004364013671875 + val * (3.0897438526153564453125e-2 + val * (-0.4890659749507904052734375 + val *
 // (0.281917631626129150390625 + val * (-6.6649019718170166015625e-2 + val *
 // (5.876733921468257904052734375e-3))))));

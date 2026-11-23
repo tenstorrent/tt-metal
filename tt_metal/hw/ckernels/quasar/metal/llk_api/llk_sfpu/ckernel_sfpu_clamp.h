@@ -49,5 +49,28 @@ inline void calculate_clamp(std::uint32_t min_val, std::uint32_t max_val) {
     }
 }
 
+/**
+ * @brief Element-wise int32 clamp on two's-complement Dest: out = min(max(x, min_val), max_val).
+ *
+ * Same order as Blackhole's calculate_clamp_int32, so min_val > max_val yields max_val. sfpi::max/min
+ * on vInt lower to SFPSWAP with a true two's-complement compare (see ckernel_sfpu_unary_max_min.h).
+ *
+ * @tparam APPROXIMATION_MODE: accepted for ABI parity but ignored (clamp is exact).
+ * @param min_val: lower bound as a two's-complement int32.
+ * @param max_val: upper bound as a two's-complement int32.
+ * @note No SFPNOP after SFPSWAP: SFPSWAP always stalls the next SFPU instruction (TEN-4581).
+ */
+template <bool APPROXIMATION_MODE, int ITERATIONS = SFPU_ITERATIONS>
+inline void calculate_clamp_int32(const std::uint32_t min_val, const std::uint32_t max_val) {
+    const sfpi::vInt lo = static_cast<std::int32_t>(min_val);
+    const sfpi::vInt hi = static_cast<std::int32_t>(max_val);
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        const sfpi::vInt x = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
+        sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>() = sfpi::min(sfpi::max(x, lo), hi);
+        sfpi::dst_reg++;
+    }
+}
+
 }  // namespace sfpu
 }  // namespace ckernel

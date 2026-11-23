@@ -49,11 +49,13 @@
 #include "llk_sfpu/ckernel_sfpu_identity.h"
 #include "llk_sfpu/ckernel_sfpu_isinf_isnan.h"
 #include "llk_sfpu/ckernel_sfpu_lgamma.h"
+#include "llk_sfpu/ckernel_sfpu_log1p.h"
 #include "llk_sfpu/ckernel_sfpu_logical_not.h"
 #include "llk_sfpu/ckernel_sfpu_mish.h"
 #include "llk_sfpu/ckernel_sfpu_negative.h"
 #include "llk_sfpu/ckernel_sfpu_polygamma.h"
 #include "llk_sfpu/ckernel_sfpu_prelu.h"
+#include "llk_sfpu/ckernel_sfpu_quick_gelu.h"
 #include "llk_sfpu/ckernel_sfpu_rand.h"
 #include "llk_sfpu/ckernel_sfpu_rdiv.h"
 #include "llk_sfpu/ckernel_sfpu_recip.h"
@@ -115,6 +117,7 @@
 #include "llk_sfpu/ckernel_sfpu_div_int32.h"        // calculate_div_int32 / div_init (int32 / int32 -> fp32)
 #include "llk_sfpu/ckernel_sfpu_div_int32_floor.h"  // calculate_div_int32_trunc / calculate_div_int32_floor
 #include "llk_sfpu/ckernel_sfpu_gcd.h"              // calculate_gcd / calculate_gcd_init
+#include "llk_sfpu/ckernel_sfpu_geglu_tanh.h"       // calculate_geglu_tanh (gelu_tanh(gate) * up)
 #include "llk_sfpu/ckernel_sfpu_int_sum.h"          // add_int (Dest tile += the next tile) / sum_int_init
 #include "llk_sfpu/ckernel_sfpu_isclose.h"          // calculate_sfpu_isclose / isclose_init
 #include "llk_sfpu/ckernel_sfpu_lcm.h"              // calculate_lcm / calculate_lcm_init
@@ -122,6 +125,7 @@
 #include "llk_sfpu/ckernel_sfpu_logaddexp2.h"       // calculate_sfpu_logaddexp2 / calculate_sfpu_logaddexp2_init
 #include "llk_sfpu/ckernel_sfpu_logsigmoid.h"       // calculate_logsigmoid (x, exp(-x) -> logsigmoid(x))
 #include "llk_sfpu/ckernel_sfpu_mask.h"             // calculate_mask / calculate_mask_posinf / calculate_int_mask
+#include "llk_sfpu/ckernel_sfpu_moe_gate_sqrt_softplus.h" // calculate_moe_gate_sqrt_softplus_add_bias
 #include "llk_sfpu/ckernel_sfpu_mul_int32.h"        // _mul_int32_ (int mul)
 #include "llk_sfpu/ckernel_sfpu_quant.h"            // quant_family / quant_family_init (quant/requant/dequant)
 #include "llk_sfpu/ckernel_sfpu_shift.h"            // calculate_binary_left_shift / right / logical right
@@ -433,6 +437,30 @@ void init_unary_sfpu_operation_quasar()
     {
         // The test's approximation mode selects log's FAST_APPROX path.
         log_init<APPROX, APPROX /* FAST_APPROX */, is_fp32_dest_acc_en>();
+    }
+    else if constexpr (OPERATION == SfpuType::log1p)
+    {
+        log1p_init<APPROX, false /* FAST_APPROX */, is_fp32_dest_acc_en>();
+    }
+    else if constexpr (OPERATION == SfpuType::quick_gelu)
+    {
+        quick_gelu_init();
+    }
+    else if constexpr (OPERATION == SfpuType::gelu_tanh)
+    {
+        // APPROX selects gelu_tanh_tile's fast template path.
+        if constexpr (APPROX)
+        {
+            gelu_tanh_fast_init();
+        }
+        else
+        {
+            gelu_tanh_init<is_fp32_dest_acc_en>();
+        }
+    }
+    else if constexpr (OPERATION == SfpuType::gelu_derivative)
+    {
+        gelu_derivative_polynomial_init<APPROX>();
     }
     else if constexpr (OPERATION == SfpuType::digamma)
     {
@@ -805,7 +833,23 @@ void call_unary_sfpu_operation_quasar(
     }
     else if constexpr (OPERATION == SfpuType::relu)
     {
-        SFPU_UNARY_CALL_TINY_TILE(DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, _calculate_relu_, (ITERATIONS), dst_index, vector_mode);
+        if (sfpu_format == DataFormat::Int32)
+        {
+            // relu_tile_int32's expression: the vInt branch of _relu_min_ against 0.
+            SFPU_UNARY_CALL_TINY_TILE(
+                DST_SYNC,
+                is_fp32_dest_acc_en,
+                TILE_SHAPE,
+                _relu_min_,
+                (sfpi::vInt, APPROX, ITERATIONS, std::uint32_t),
+                dst_index,
+                vector_mode,
+                0u /* threshold */);
+        }
+        else
+        {
+            SFPU_UNARY_CALL_TINY_TILE(DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, _calculate_relu_, (ITERATIONS), dst_index, vector_mode);
+        }
     }
     else if constexpr (OPERATION == SfpuType::lrelu)
     {
@@ -814,27 +858,69 @@ void call_unary_sfpu_operation_quasar(
     }
     else if constexpr (OPERATION == SfpuType::relu_min)
     {
-        SFPU_UNARY_CALL_TINY_TILE(
-            DST_SYNC,
-            is_fp32_dest_acc_en,
-            TILE_SHAPE,
-            _relu_min_,
-            (sfpi::vFloat, APPROX, ITERATIONS, std::uint32_t),
-            dst_index,
-            vector_mode,
-            kReluThresholdBits /* threshold: 5.0f */);
+        if (sfpu_format == DataFormat::Int32)
+        {
+            // relu_min_tile_int32: the threshold comes from SFPU_RELU_MIN_INT_THRESHOLD (two's complement).
+#ifdef SFPU_RELU_MIN_INT_THRESHOLD
+            constexpr std::uint32_t RELU_MIN_INT_THRESHOLD = SFPU_RELU_MIN_INT_THRESHOLD;
+#else
+            constexpr std::uint32_t RELU_MIN_INT_THRESHOLD = 5u;
+#endif
+            SFPU_UNARY_CALL_TINY_TILE(
+                DST_SYNC,
+                is_fp32_dest_acc_en,
+                TILE_SHAPE,
+                relu_clamp_int,
+                (APPROX, true /* IS_LOWER_BOUND */, ITERATIONS),
+                dst_index,
+                vector_mode,
+                RELU_MIN_INT_THRESHOLD);
+        }
+        else
+        {
+            SFPU_UNARY_CALL_TINY_TILE(
+                DST_SYNC,
+                is_fp32_dest_acc_en,
+                TILE_SHAPE,
+                _relu_min_,
+                (sfpi::vFloat, APPROX, ITERATIONS, std::uint32_t),
+                dst_index,
+                vector_mode,
+                kReluThresholdBits /* threshold: 5.0f */);
+        }
     }
     else if constexpr (OPERATION == SfpuType::relu_max)
     {
-        SFPU_UNARY_CALL_TINY_TILE(
-            DST_SYNC,
-            is_fp32_dest_acc_en,
-            TILE_SHAPE,
-            _relu_max_,
-            (sfpi::vFloat, APPROX, ITERATIONS, std::uint32_t),
-            dst_index,
-            vector_mode,
-            kReluThresholdBits /* threshold: 5.0f */);
+        if (sfpu_format == DataFormat::Int32)
+        {
+            // relu_max_tile_int32: the threshold comes from SFPU_RELU_MAX_INT_THRESHOLD (two's complement).
+#ifdef SFPU_RELU_MAX_INT_THRESHOLD
+            constexpr std::uint32_t RELU_MAX_INT_THRESHOLD = SFPU_RELU_MAX_INT_THRESHOLD;
+#else
+            constexpr std::uint32_t RELU_MAX_INT_THRESHOLD = 5u;
+#endif
+            SFPU_UNARY_CALL_TINY_TILE(
+                DST_SYNC,
+                is_fp32_dest_acc_en,
+                TILE_SHAPE,
+                relu_clamp_int,
+                (APPROX, false /* IS_LOWER_BOUND */, ITERATIONS),
+                dst_index,
+                vector_mode,
+                RELU_MAX_INT_THRESHOLD);
+        }
+        else
+        {
+            SFPU_UNARY_CALL_TINY_TILE(
+                DST_SYNC,
+                is_fp32_dest_acc_en,
+                TILE_SHAPE,
+                _relu_max_,
+                (sfpi::vFloat, APPROX, ITERATIONS, std::uint32_t),
+                dst_index,
+                vector_mode,
+                kReluThresholdBits /* threshold: 5.0f */);
+        }
     }
     else if constexpr (OPERATION == SfpuType::reciprocal)
     {
@@ -906,7 +992,49 @@ void call_unary_sfpu_operation_quasar(
     }
     else if constexpr (OPERATION == SfpuType::negative)
     {
-        SFPU_UNARY_CALL_TINY_TILE(DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, _calculate_negative_, (false, ITERATIONS), dst_index, vector_mode);
+        if (sfpu_format == DataFormat::Int32)
+        {
+            SFPU_UNARY_CALL_TINY_TILE(DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, _calculate_negative_int_, (false, ITERATIONS), dst_index, vector_mode);
+        }
+        else
+        {
+            SFPU_UNARY_CALL_TINY_TILE(DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, _calculate_negative_, (false, ITERATIONS), dst_index, vector_mode);
+        }
+    }
+    else if constexpr (OPERATION == SfpuType::log1p)
+    {
+        SFPU_UNARY_CALL_TINY_TILE(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            TILE_SHAPE,
+            calculate_log1p,
+            (APPROX, false /* FAST_APPROX */, is_fp32_dest_acc_en, ITERATIONS),
+            dst_index,
+            vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::quick_gelu)
+    {
+        SFPU_UNARY_CALL_TINY_TILE(
+            DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, calculate_quick_gelu, (APPROX, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::gelu_tanh)
+    {
+        // APPROX selects gelu_tanh_tile's fast template path.
+        if constexpr (APPROX)
+        {
+            SFPU_UNARY_CALL_TINY_TILE(
+                DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, calculate_gelu_tanh_fast, (is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
+        }
+        else
+        {
+            SFPU_UNARY_CALL_TINY_TILE(
+                DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, calculate_gelu_tanh, (is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
+        }
+    }
+    else if constexpr (OPERATION == SfpuType::gelu_derivative)
+    {
+        SFPU_UNARY_CALL_TINY_TILE(
+            DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, calculate_gelu_derivative_polynomial, (APPROX, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::softplus)
     {
@@ -926,18 +1054,42 @@ void call_unary_sfpu_operation_quasar(
     }
     else if constexpr (OPERATION == SfpuType::clamp)
     {
-        // Clamp bounds fixed to [-1.0, +1.0] as fp32 bit patterns (matching the UnarySFPUGolden._clamp
-        // reference). Extra args are forwarded to the per-face functor call.
-        SFPU_UNARY_CALL_TINY_TILE(
-            DST_SYNC,
-            is_fp32_dest_acc_en,
-            TILE_SHAPE,
-            calculate_clamp,
-            (false, ITERATIONS),
-            dst_index,
-            vector_mode,
-            static_cast<std::uint32_t>(0xBF800000),  // min = -1.0 (fp32)
-            static_cast<std::uint32_t>(0x3F800000)); // max = +1.0 (fp32)
+        if (sfpu_format == DataFormat::Int32)
+        {
+            // clamp_tile_int32: bounds from SFPU_CLAMP_INT32_MIN / _MAX (two's complement).
+#ifdef SFPU_CLAMP_INT32_MIN
+            constexpr std::uint32_t CLAMP_INT32_MIN = SFPU_CLAMP_INT32_MIN;
+            constexpr std::uint32_t CLAMP_INT32_MAX = SFPU_CLAMP_INT32_MAX;
+#else
+            constexpr std::uint32_t CLAMP_INT32_MIN = static_cast<std::uint32_t>(-1000);
+            constexpr std::uint32_t CLAMP_INT32_MAX = 1000u;
+#endif
+            SFPU_UNARY_CALL_TINY_TILE(
+                DST_SYNC,
+                is_fp32_dest_acc_en,
+                TILE_SHAPE,
+                calculate_clamp_int32,
+                (false, ITERATIONS),
+                dst_index,
+                vector_mode,
+                CLAMP_INT32_MIN,
+                CLAMP_INT32_MAX);
+        }
+        else
+        {
+            // Clamp bounds fixed to [-1.0, +1.0] as fp32 bit patterns (matching the UnarySFPUGolden._clamp
+            // reference). Extra args are forwarded to the per-face functor call.
+            SFPU_UNARY_CALL_TINY_TILE(
+                DST_SYNC,
+                is_fp32_dest_acc_en,
+                TILE_SHAPE,
+                calculate_clamp,
+                (false, ITERATIONS),
+                dst_index,
+                vector_mode,
+                static_cast<std::uint32_t>(0xBF800000),  // min = -1.0 (fp32)
+                static_cast<std::uint32_t>(0x3F800000)); // max = +1.0 (fp32)
+        }
     }
     else if constexpr (OPERATION == SfpuType::unary_max || OPERATION == SfpuType::unary_min)
     {
@@ -1715,6 +1867,14 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
     {
         situ_glu_init();
     }
+    else if constexpr (OP == BinaryOp::GEGLU_TANH)
+    {
+        geglu_tanh_init();
+    }
+    else if constexpr (OP == BinaryOp::MOE_GATE_SQRT_SOFTPLUS_ADD_BIAS)
+    {
+        moe_gate_sqrt_softplus_init();
+    }
     else if constexpr (OP == BinaryOp::ADD_TOP_ROW)
     {
         init_add_top_row();
@@ -2246,6 +2406,27 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
     {
         // gate = src0, up = src1; the betas are the kernel's compile-time Kimi config.
         SFPU_BINARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_situ_glu, (is_fp32_dest_acc_en, ITERATIONS), src0_tile, src1_tile, dst_tile, VectorMode::RC);
+    }
+    else if constexpr (OP == BinaryOp::GEGLU_TANH)
+    {
+        // gate = src0, up = src1; is_fp32_dest_acc_en selects the in-kernel BF16 round.
+        SFPU_BINARY_CALL(
+            DST_SYNC, is_fp32_dest_acc_en, calculate_geglu_tanh, (is_fp32_dest_acc_en, ITERATIONS), src0_tile, src1_tile, dst_tile, VectorMode::RC);
+    }
+    else if constexpr (OP == BinaryOp::MOE_GATE_SQRT_SOFTPLUS_ADD_BIAS)
+    {
+        // x = src0, bias = src1: the kernel writes the score over src0 and the key over src1 and ignores
+        // dst_tile, so only out = src1 matches the compute API's moe_gate_sqrt_softplus_add_bias_tile.
+        LLK_ASSERT(dst_tile == src1_tile, "MOE_GATE_SQRT_SOFTPLUS_ADD_BIAS needs out = in1");
+        SFPU_BINARY_CALL(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            calculate_moe_gate_sqrt_softplus_add_bias,
+            (ITERATIONS, is_fp32_dest_acc_en),
+            src0_tile,
+            src1_tile,
+            dst_tile,
+            VectorMode::RC);
     }
     else if constexpr (OP == BinaryOp::ADD_TOP_ROW)
     {
