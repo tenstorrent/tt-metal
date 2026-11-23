@@ -9,25 +9,25 @@ TtPrefillRuntime per stage on one 8x4 mesh, chained in process the way the runne
 plus the undivided runtime (all four layers, both passes) the stages are compared with. The reduced schedule is
 the 106-pass one in small: 6 positions, split (0,1) (1,2) (3,2) (5,1) by ``pass_schedule``.
 
-PASS-2 ATTENTION IS THE GLM-5.3 STAND-IN until q171.2.5: G2's 'shared' loop layers attend at the injected pass-1
-top-k and write their own pass-2 KV over the chunk's bank-A rows; the undivided runtime's pass 2 recomputes its
-top-k. So past pass 1 the stages are not expected to equal the undivided run; what is checked there is the wiring.
+Pass 2 is the two-bank attention (tt/mla/two_bank.py) on both the stages and the undivided runtime, and the stages
+carry nothing but the activation and the loop handoff (G1 -> G2: pass 1's KVPE rows and top-k sets), so every stage
+equals the undivided run block for block.
 
 Checks, two chunks (a full one, then a partial one reading the first from cache), eager:
 
-* Pass 1 is the undivided model's: G0's block output bit-identical to the undivided runtime's on both chunks, G1's
-  on chunk 0 (on chunk 1 the undivided runtime's pass-2 stand-in has overwritten the loop KV that G1 keeps).
+* The stages are the undivided model: every block output (G0 L0; G1 L1 L2 pass 1; G2 L1 L2 pass 2; G3 L3)
+  bit-identical to the undivided runtime's same block, on both chunks.
 * Each stage runs its own gate: G1's output fits damp gate 1 on (G1 input, G1's last block output) at the gate bar
   and not gate 2's weights; G2's output fits gate 2 and not gate 1's weights.
 * Handoff: the KVPE rows G1 sends, written at the chunk's metadata into a fresh copy, equal G1's whole cache after
-  every chunk; on chunk 0 G2's own cache just before its forward equals G1's (bank A, written by the runtime); G2
-  receives G1's top-k set.
+  every chunk; on chunk 0 the chunk's rows of G2's cache just before its forward equal the rows G1 sent (bank A,
+  written by the runtime into G2's longer cache: pass-1 positions, then the window ring); G2 receives G1's top-k sets.
 * Layer acks: G0 0, G1 1 2, G2 5 6 (layer + 4: pass 2's own ids), G3 3; the undivided runtime 0 1 2 5 6 3.
 * Finite outputs; a second eager chain is bit-identical (caches compared after the last chunk).
 
 Traced: each stage rebuilt with use_trace alone on the mesh (one traced runtime per mesh, as on a rank), captured,
 replayed twice for the same two chunks (records as the runner forwards them), fed the previous stage's outputs;
-G0/G1 outputs at PCC >= 0.999 against the eager chain's (the traced MoE is not bit-identical to eager), G0-G2
+G0-G2 outputs at PCC >= 0.999 against the eager chain's (the traced MoE is not bit-identical to eager), G0-G2
 repeat-identical and G2 finite, G1's traced send of the KVPE rows bit-exact against its cache, acks as above.
 """
 
@@ -48,7 +48,7 @@ from models.demos.deepseek_v3_d_p.tests.glm54_weights import (
     glm54_reduced_config,
     glm54_tier1_weights,
 )
-from models.demos.deepseek_v3_d_p.tt.loop_handoff import write_kvpe_copy
+from models.demos.deepseek_v3_d_p.tt.loop_handoff import LoopHandoffSender, write_kvpe_copy
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3 import GLM53Adapter
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_4 import GLM54Adapter
@@ -165,32 +165,36 @@ class _Rig:
             types = stage_indexer_types(config, loop_passes or ())
             n_index = sum(1 for t in types[rs.first_layer : rs.first_layer + rs.num_layers] if t == "full")
             slots = rt_config.cache_num_users
+            # A stage running pass 2 (U, G2) keeps the window ring past each slot's pass-1 positions; it is never
+            # migrated, so unaligned (GLM54Adapter.kv_cache_slot_rows).
+            cache_seq = rt.model.kv_cache_seq_len
+            aligned = cache_seq == SEQ
             self.caches[name] = MlaKvCaches(
                 kvpe=init_mla_kv_cache(
                     cache_format=FORMAT,
                     hf_config=config,
                     mesh_device=mesh_device,
-                    seq_len=SEQ,
+                    seq_len=cache_seq,
                     mesh_shape=list(mesh_device.shape),
                     sp_axis=0,
                     tp_axis=1,
                     num_kvpe_cache_layers=rs.num_layers,
                     num_users=slots,
-                    bank_aligned=True,
+                    bank_aligned=aligned,
                 ),
                 index=None
                 if n_index == 0
                 else init_kvpe_cache(
                     kvpe_cache_head_dim=config.index_head_dim,
                     mesh_device=mesh_device,
-                    seq_len=SEQ,
+                    seq_len=cache_seq,
                     mesh_shape=list(mesh_device.shape),
                     sp_axis=0,
                     tp_axis=1,
                     num_kvpe_cache_layers=n_index,
                     num_users=slots,
                     dtype=ttnn.bfloat8_b,
-                    bank_aligned=True,
+                    bank_aligned=aligned,
                 ),
             )
             rt.compile(self.caches[name])
@@ -251,7 +255,15 @@ def test_glm54_stages_on_device(mesh_device, device_params, num_links):
     g2_bank_a = {}
 
     def g2_forward_snapshot(*args, **kwargs):
-        g2_bank_a.setdefault("before", _raw(rig.caches["G2"].kvpe.storage))
+        # The chunk's rows of G2's cache, read back the way G1 read its own (bank A is written by now).
+        if "before" not in g2_bank_a:
+            r = rt["G2"]
+            md = r._loop_metadata_dev(kwargs["cache_user_id"], kwargs["actual_start"], kwargs["actual_end"])
+            probe = LoopHandoffSender(
+                mesh_device, r._loop_handoff, index_sets=r.model.loop_index_sets, **r._loop_kv_layers
+            )
+            probe.collect(rig.caches["G2"].kvpe.storage, md)
+            g2_bank_a["before"] = _raw(probe.kvpe)
         return g2_forward(*args, **kwargs)
 
     rt["G2"].model.forward = g2_forward_snapshot
@@ -292,6 +304,7 @@ def test_glm54_stages_on_device(mesh_device, device_params, num_links):
             x1, kvpe_rows, *sets = g1
             outs[f"G1.{c}"] = _raw(x1)
             outs[f"G1.cache.{c}"] = _raw(rig.caches["G1"].kvpe.storage)
+            outs[f"G1.rows.{c}"] = _raw(kvpe_rows)
             sent_sets.append([_raw(t) for t in sets])
             x1_host = _host(mesh_device, x1)
             md = tuple(rt["G1"]._meta1_dev(v) for v in (0, start, end))
@@ -325,15 +338,13 @@ def test_glm54_stages_on_device(mesh_device, device_params, num_links):
             failures.append(f"{name} acked {first['acks'][name]}, expected {ids} per chunk")
     for c in range(len(CHUNKS)):
         taps = first[f"taps.{c}"]
-        # Pass 1 equals the undivided model, bit for bit: G0's L0, G1's L1 L2. G1 only on chunk 0: the undivided
-        # runtime's pass-2 stand-in overwrites the loop layers' KV, so its pass 1 on chunk 1 reads chunk 0's pass-2
-        # KV where G1 reads pass 1's (bank A); the two-bank pass 2 (q171.2.6) removes the difference.
+        # Every stage block equals the undivided model's, bit for bit. U's taps run in pass order:
+        # L0, L1 L2 (pass 1), L1 L2 (pass 2), L3.
         u = taps["U"]
-        if not (_same(taps["G0"][0][1], u[0][1]) and taps["G0"][0][0] == u[0][0] == 0):
-            failures.append(f"chunk {c}: G0 L0 differs from the undivided L0")
-        for i in range(2 if c == 0 else 0):
-            if not (_same(taps["G1"][i][1], u[1 + i][1]) and taps["G1"][i][0] == u[1 + i][0]):
-                failures.append(f"chunk {c}: G1 block {i} differs from the undivided pass-1 block")
+        for name, first_tap in (("G0", 0), ("G1", 1), ("G2", 3), ("G3", 5)):
+            for i, (layer, h) in enumerate(taps[name]):
+                if not (_same(h, u[first_tap + i][1]) and layer == u[first_tap + i][0]):
+                    failures.append(f"chunk {c}: {name} block {i} (L{layer}) differs from the undivided block")
         # Each stage's own gate.
         for k, own, other in ((1, 0, 1), (2, 1, 0)):
             x_prev, h, x_k = first[f"gate{k}.{c}"]
@@ -353,8 +364,8 @@ def test_glm54_stages_on_device(mesh_device, device_params, num_links):
             failures.append(f"chunk {c}: KVPE rows G1 sends do not rebuild its cache")
         if not all(_same(a, b) for a, b in zip(got_sets[c], sent_sets[c])):
             failures.append(f"chunk {c}: G2 received other top-k sets than G1 sent")
-    if not _same(g2_bank_a["before"], first["G1.cache.0"]):
-        failures.append("chunk 0: G2's bank A before its forward differs from G1's cache")
+    if not _same(g2_bank_a["before"], first["G1.rows.0"]):
+        failures.append("chunk 0: G2's bank A rows before its forward differ from the rows G1 sent")
     # Determinism. Caches only after the last chunk: the second chain's chunk 0 writes into caches that still hold the
     # first chain's later rows.
     last = len(CHUNKS) - 1
@@ -455,7 +466,7 @@ def test_glm54_stages_on_device(mesh_device, device_params, num_links):
         # Traced vs eager: not bit-identical through the MoE (as for GLM-5.3, test_prefill_chunk_traced_vs_eager).
         # Over the chunk's valid rows only (a partial chunk's tail is padding).
         n_valid = CHUNKS[c][1] - CHUNKS[c][0]
-        for name in ("G0", "G1"):
+        for name in ("G0", "G1", "G2"):
             got, want = (_token_rows(mesh_device, d)[:n_valid] for d in (traced[f"{name}.{c}.0"], first[f"{name}.{c}"]))
             bad = int((~torch.isfinite(got)).sum()), int((~torch.isfinite(want)).sum())
             pcc = _pcc(got, want)
@@ -469,8 +480,6 @@ def test_glm54_stages_on_device(mesh_device, device_params, num_links):
                 failures.append(f"traced {name} chunk {c} differs between two replays")
         if not all(torch.isfinite(t.float()).all() for t in traced[f"G2.{c}.0"]):
             failures.append(f"traced G2 chunk {c} not finite")
-        if not _same(traced[f"G2.{c}.0"], first[f"G2.{c}"]):
-            logger.info(f"traced G2 chunk {c} differs from eager (stand-in pass 2; reported only)")
     for name, ids in ACKS.items():
         if name != "U" and traced_acks[name] != ids * 2 * len(CHUNKS):
             failures.append(f"traced {name} acked {traced_acks[name]}, expected {ids} per chunk")

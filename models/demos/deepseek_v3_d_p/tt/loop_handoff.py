@@ -87,10 +87,23 @@ def _check_mesh(mesh_device, handoff: LoopHandoff) -> None:
 
 
 class LoopHandoffSender:
-    """G1 side: persistent buffers the handoff is collected into and sent from, at fixed addresses for trace."""
+    """G1 side: the KVPE rows buffer the handoff is collected into, sent with the top-k sets ``index_sets`` (the
+    model's persistent sets, which pass 1 fills as it makes them, or a caller's copies), at fixed addresses for trace.
+    G2 receives into the same layout: a sender's segments with G2's model sets."""
 
-    def __init__(self, mesh_device, handoff: LoopHandoff, *, first_kv_layer: int, num_kv_layers: int):
+    def __init__(
+        self,
+        mesh_device,
+        handoff: LoopHandoff,
+        *,
+        index_sets: Sequence[ttnn.Tensor],
+        first_kv_layer: int,
+        num_kv_layers: int,
+    ):
         _check_mesh(mesh_device, handoff)
+        assert (
+            len(index_sets) == handoff.num_index_sets
+        ), f"{len(index_sets)} top-k sets, the handoff carries {handoff.num_index_sets}"
         self.handoff = handoff
         self.first_kv_layer = first_kv_layer
         self.num_kv_layers = num_kv_layers
@@ -103,28 +116,12 @@ class LoopHandoffSender:
             ),
             mesh_device,
         )
-        self.index_sets = [
-            ttnn.allocate_tensor_on_device(
-                ttnn.TensorSpec(
-                    shape=ttnn.Shape(list(handoff.index_shape)),
-                    dtype=ttnn.uint32,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    buffer_type=ttnn.BufferType.DRAM,
-                ),
-                mesh_device,
-            )
-            for _ in range(handoff.num_index_sets)
-        ]
-
-    def store_index_set(self, set_idx: int, indices: ttnn.Tensor) -> None:
-        """Copy one full loop layer's top-k into its set's buffer, as soon as the layer made it: a later full
-        layer's top-k may reuse the same (gather scratch) buffer. Device-only, so it may be captured."""
-        ttnn.copy(indices, self.index_sets[set_idx])
+        self.index_sets = list(index_sets)
 
     def collect(self, kvpe_cache: ttnn.Tensor, metadata: Sequence[ttnn.Tensor]):
         """Gather this chunk's KVPE rows after every loop layer has written its KV: the rows each chip stored at the
-        chunk's (slot, start) in ``metadata`` (the same tensors the writes read). The top-k sets are stored as they
-        are made (:meth:`store_index_set`). Device-only, so it may be captured."""
+        chunk's (slot, start) in ``metadata`` (the same tensors the writes read). The top-k sets are filled by pass 1 as
+        it makes them. Device-only, so it may be captured."""
         self.kvpe.update_tensor_topology(kvpe_cache.tensor_topology())
         ttnn.experimental.deepseek_prefill.read_padded_kv_cache(
             kvpe_cache,

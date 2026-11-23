@@ -877,21 +877,23 @@ class TtPrefillRuntime:
             kv_width=int(storage.shape[-1]),
             kv_dtype=storage.dtype,
             index_shape=tuple(self.model.indexer_indices_shape()),
-            num_index_sets=self.model.num_loop_index_sets,
+            num_index_sets=len(self.model.loop_index_sets),
         )
         # The loop layers' slots in this stage's cache: the stage starts at or before the loop (G1, G2: slot 0).
         self._loop_kv_layers = {
             "first_kv_layer": hf.loop_first_layer - self.config.first_layer_idx,
             "num_kv_layers": self.model.num_kvpe_cache_layers,
         }
+        # The top-k sets are the model's: G1 sends what its pass 1 filled, G2 receives straight into what its pass 2
+        # reads.
         if self.sends_loop_handoff:
-            self._loop_sender = self._new_loop_sender()
+            self._loop_sender = self._new_loop_sender(self.model.loop_index_sets)
         if self.receives_loop_handoff:
             # The traced forward's inbound buffers; the eager warm-up reads them too (zeros: an empty bank A).
-            self._loop_handoff_in = self._new_loop_sender().segments()
+            self._loop_handoff_in = self._new_loop_sender(self.model.loop_index_sets).segments()
 
-    def _new_loop_sender(self) -> LoopHandoffSender:
-        return LoopHandoffSender(self.mesh_device, self._loop_handoff, **self._loop_kv_layers)
+    def _new_loop_sender(self, index_sets: list) -> LoopHandoffSender:
+        return LoopHandoffSender(self.mesh_device, self._loop_handoff, index_sets=index_sets, **self._loop_kv_layers)
 
     def _loop_metadata_dev(self, slot_id: int, actual_start: int, actual_end: int) -> tuple:
         """Eager loop handoff: the chunk's (slot, start, end) as the device scalars collect / write_kvpe_copy read."""
@@ -1695,13 +1697,10 @@ class TtPrefillRuntime:
             )
             if self.config.is_first_rank:
                 model_input = union.trunk
-        loop_kwargs = {}
         if self.receives_loop_handoff:
             # Bank A at the received record's (slot, start, end): _trace_metadata is filled from the D2D record.
+            # The sets arrived in the model's own (_loop_handoff_in[1:] are model.loop_index_sets).
             self._write_loop_kvpe(kv_caches, self._loop_handoff_in[0], self._trace_metadata)
-            loop_kwargs["loop_index_sets"] = self._loop_handoff_in[1:]
-        if self.sends_loop_handoff:
-            loop_kwargs["loop_index_sets_out"] = self._loop_sender.index_sets
         out = self.model.forward(
             model_input,
             kv_caches.kvpe,  # unwrap the engine-owned container to the primary MLA cache (mirrors prefill_chunk)
@@ -1724,7 +1723,6 @@ class TtPrefillRuntime:
             mtp_union=union if self.mtp_predictor is not None else None,
             mtp_geometry=self._trace_mtp_geometry,
             input_is_embedded=union is not None and self.config.is_first_rank,
-            **loop_kwargs,
         )
         if self._loop_sender is not None:
             self._loop_sender.collect(kv_caches.kvpe.storage, self._trace_metadata)
@@ -2261,17 +2259,15 @@ class TtPrefillRuntime:
             mtp_union, model_input, mtp_ids_fwd = self._mtp_prepare_input(input_tensor, mtp_tokens, mtp_id_segments)
             mtp_owns_input = self.config.is_first_rank
 
-        loop_kwargs, loop_md, loop_sender = {}, None, None
+        loop_md, loop_sender = None, None
         if loop_handoff is not None or self.sends_loop_handoff:
             loop_md = self._loop_metadata_dev(slot_id, actual_start, actual_end)
         if loop_handoff is not None:
             assert len(loop_handoff) == len(self._loop_handoff.segments()), "loop handoff segments missing"
             self._write_loop_kvpe(kv_caches, loop_handoff[0], loop_md)
-            loop_kwargs["loop_index_sets"] = loop_handoff[1:]
-        if self.sends_loop_handoff:
-            # Fresh buffers per eager chunk: the caller owns (and frees) what this call returns.
-            loop_sender = self._new_loop_sender()
-            loop_kwargs["loop_index_sets_out"] = loop_sender.index_sets
+            if loop_handoff is not self._loop_handoff_in:  # else they already are the model's sets
+                for src, dst in zip(loop_handoff[1:], self.model.loop_index_sets):
+                    ttnn.copy(src, dst)
 
         out = self.model.forward(
             model_input,
@@ -2290,13 +2286,15 @@ class TtPrefillRuntime:
             provided_levels=provided_levels,
             on_mtp_complete=on_mtp_complete,
             input_is_embedded=mtp_owns_input,
-            **loop_kwargs,
         )
         if not mtp_owns_input:
             ttnn.deallocate(model_input)
         if indexer_indices is not None and indexer_indices is not getattr(self.model, "last_indexer_indices", None):
             ttnn.deallocate(indexer_indices)
-        if loop_sender is not None:
+        if self.sends_loop_handoff:
+            # Fresh buffers per eager chunk (copies of the model's sets): the caller owns (and frees) what this call
+            # returns.
+            loop_sender = self._new_loop_sender([ttnn.clone(t) for t in self.model.loop_index_sets])
             loop_sender.collect(kv_caches.kvpe.storage, loop_md)
         if loop_handoff is not None and loop_handoff is not self._loop_handoff_in:
             for t in loop_handoff:

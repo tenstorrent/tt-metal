@@ -34,6 +34,10 @@ WARMUP_CHUNKS="${STAGE_PROBE_WARMUP_CHUNKS:-10}"
 # Extra runner exports, e.g. "export PREFILL_USE_TRACE=0;" for a debug run. tt-run does not forward PREFILL_*,
 # so they go into the rank's own shell line.
 RUNNER_EXTRA_ENV="${STAGE_PROBE_RUNNER_ENV:-}"
+# Extra producer exports (e.g. MTP: "export PREFILL_MTP_LEVELS=1;"), evaluated in the producer's shell.
+PRODUCER_EXTRA_ENV="${STAGE_PROBE_PRODUCER_ENV:-}"
+# The runner module: the stock prefill_runner, or a probe launcher that wraps it (capacity_probe_runner).
+RUNNER_MODULE="${STAGE_PROBE_RUNNER_MODULE:-models.demos.common.prefill.runners.prefill_runner}"
 
 TT_METAL_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../../.." && pwd)"
 LOG_DIR="${STAGE_PROBE_LOG_DIR:?set STAGE_PROBE_LOG_DIR}"
@@ -59,6 +63,7 @@ cat > "${RUN_DIR}/command.txt" <<EOF
 $0 $*
 TT_METAL_HOME=${TT_METAL_HOME} sha=$(git -C "${TT_METAL_HOME}" rev-parse HEAD) host=$(hostname) start=${STAMP}
 warmup_chunks=${WARMUP_CHUNKS} runner_extra_env=${RUNNER_EXTRA_ENV:-<none>}
+producer_extra_env=${PRODUCER_EXTRA_ENV:-<none>} runner_module=${RUNNER_MODULE}
 EOF
 
 cd "${TT_METAL_HOME}"
@@ -100,6 +105,8 @@ stage "power: ${POWER}"
 
 RUNNER_PID=""
 CLEAN=0
+PROD_RC="n/a"
+RUNNER_RC="n/a"
 cleanup() {
   if [ -n "${RUNNER_PID}" ] && kill -0 "${RUNNER_PID}" 2>/dev/null; then
     stage "stopping runner process group ${RUNNER_PID}"
@@ -118,6 +125,8 @@ cleanup() {
   else
     stage "FAILED: device left marked dirty (/tmp/tt-device.dirty); the next lock holder resets it"
   fi
+  # Printed on every exit path once the lock is held, so callers find this run's directory without guessing.
+  echo "STAGE_PROBE_RESULT name=${NAME} first_layer=${FIRST_LAYER} num_layers=${NUM_LAYERS} producer_rc=${PROD_RC} runner_rc=${RUNNER_RC} dir=${RUN_DIR}" | tee -a "${STAGE_LOG}"
 }
 trap cleanup EXIT
 
@@ -148,13 +157,17 @@ stage "launching runner (tt-run, 1 rank, ${BINDING##*/})"
       export PREFILL_H2D_SERVICE_ID='${SERVICE_ID}'; \
       export PREFILL_LAYER_COMPLETION_RING='/${SERVICE_ID}_ring'; \
       export LOGURU_LEVEL=INFO; ${RUNNER_EXTRA_ENV} \
-      exec python3 -m models.demos.common.prefill.runners.prefill_runner"
+      exec python3 -m ${RUNNER_MODULE}"
 ) > "${RUNNER_LOG}" 2>&1 &
 RUNNER_PID=$!
 
 waited=0
 until grep -q "setup complete, entering request loop" "${RUNNER_LOG}" 2>/dev/null; do
   kill -0 "${RUNNER_PID}" 2>/dev/null || { stage "runner exited during setup (see runner.log)"; tail -30 "${RUNNER_LOG}"; exit 1; }
+  if grep -q "PREFILL_UNCAUGHT_EXCEPTION" "${RUNNER_LOG}" 2>/dev/null; then
+    stage "runner failed during setup: $(grep -m1 -E 'Out of Memory|Error' "${RUNNER_LOG}" | cut -c1-200)"
+    exit 1
+  fi
   [ "${waited}" -lt "${RUNNER_READY_SECS}" ] || { stage "runner not ready after ${waited}s"; exit 1; }
   sleep 10
   waited=$((waited + 10))
@@ -171,17 +184,33 @@ stage "runner ready after ~${waited}s; starting producer"
   export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/glm53-1020k-last5120
   export PREFILL_H2D_SERVICE_ID="${SERVICE_ID}" PREFILL_H2D_CONNECT_TIMEOUT=120
   export PYTHONUNBUFFERED=1 LOGURU_LEVEL=INFO
+  eval "${PRODUCER_EXTRA_ENV}"
   exec python3 -m models.demos.deepseek_v3_d_p.scripts.stage_probe.stage_probe_producer
 ) > "${PRODUCER_LOG}" 2>&1 &
 PRODUCER_PID=$!
+RUNNER_CRASHED=0
+runner_gone() { grep -q "PREFILL_UNCAUGHT_EXCEPTION" "${RUNNER_LOG}" 2>/dev/null || ! kill -0 "${RUNNER_PID}" 2>/dev/null; }
 while kill -0 "${PRODUCER_PID}" 2>/dev/null; do
   sleep 20
   stage "request: $(grep -c 'CHUNK_RETIRE' "${PRODUCER_LOG}" 2>/dev/null || true) chunks retired"
+  # A rank that dies mid-request leaves tt-run and the producer waiting (the producer's layer-completion wait
+  # times out only after 600 s per phase): stop instead of holding the device lock. A runner that exits after the
+  # SHUTDOWN sentinel is normal, and the producer then exits too: only a producer still waiting 30 s later is a crash.
+  if runner_gone && ! timeout 30 tail --pid="${PRODUCER_PID}" -f /dev/null 2>/dev/null; then
+    stage "runner failed during the request: $(grep -m1 -E 'Error|Out of Memory' "${RUNNER_LOG}" | cut -c1-200)"
+    RUNNER_CRASHED=1
+    kill "${PRODUCER_PID}" 2>/dev/null || true
+    break
+  fi
 done
 set +e
 wait "${PRODUCER_PID}"
 PROD_RC=$?
 set -e
+if [ "${RUNNER_CRASHED}" = 1 ]; then
+  RUNNER_RC=crashed
+  exit 1
+fi
 stage "producer rc=${PROD_RC}; $(grep -c 'CHUNK_RETIRE.*warmup=0' "${PRODUCER_LOG}" || true) measured chunks"
 
 # The SHUTDOWN sentinel makes the runner drain, release its trace and close the mesh.
@@ -196,5 +225,4 @@ else
 fi
 stage "runner rc=${RUNNER_RC}"
 [ "${PROD_RC}" = 0 ] && [ "${RUNNER_RC}" = 0 ] && CLEAN=1
-echo "STAGE_PROBE_RESULT name=${NAME} first_layer=${FIRST_LAYER} num_layers=${NUM_LAYERS} producer_rc=${PROD_RC} runner_rc=${RUNNER_RC} dir=${RUN_DIR}" | tee -a "${STAGE_LOG}"
 [ "${CLEAN}" = 1 ]

@@ -191,6 +191,7 @@ class TT_CCL:
         self.sparse_mla_overlap_semaphores: dict[str, tuple] = {}
 
         self.sparse_kv_push_planner = None  # SparseKvPushPlanner, created on first use
+        self.two_bank_indices = {}  # GLM-5.4 pass-2 index math (TwoBankIndex), one per geometry; see get_two_bank_index
 
         # The routed expert / combine_fabric2d overlap's fwd_arrived, final_arrived and expert_go, then its channel
         # counters, shared by every MoE layer; one set per combine axis. Created on first use; see
@@ -521,6 +522,17 @@ class TT_CCL:
                 ),
             )
         return self.mla_chunked_kv_buffers[key]
+
+    def get_two_bank_index(self, **geometry):
+        """The GLM-5.4 pass-2 index math for ``geometry`` (TwoBankIndex's arguments); pass-2 layers run serially
+        and share it."""
+        key = tuple(sorted((k, v if isinstance(v, (int, bool, str)) else repr(v)) for k, v in geometry.items()))
+        if key not in self.two_bank_indices:
+            # Imported here: the tt.mla package imports this module.
+            from models.demos.deepseek_v3_d_p.tt.mla.two_bank import TwoBankIndex
+
+            self.two_bank_indices[key] = TwoBankIndex(self.mesh_device, **geometry)
+        return self.two_bank_indices[key]
 
     def get_sparse_kv_push_planner(self, links: int):
         """The sparse KVPE push planner; layers run serially and share it."""

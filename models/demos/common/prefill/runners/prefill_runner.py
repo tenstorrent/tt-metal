@@ -1544,17 +1544,15 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     )
 
     if PASS_SCHEDULE is not None:
-        # The rank's blocks (the split above is in pass positions).
-        first_layer_idx, num_my_layers = runtime.config.first_layer_idx, runtime.config.num_layers
-    if PASS_SCHEDULE is not None and num_ranks > 1:
         # A looped model's decode KV handoff is not defined yet (GLM-5.4 Q2.3, deferred): no chunk table, so a loop
-        # pass-2 stage's copy of pass 1's KV (G2's bank A) can never be published as a layer's KV.
+        # pass-2 stage's copy of pass 1's KV (G2's bank A) can never be published as a layer's KV, and no table
+        # describes a pass-2 cache's slots (pass-1 positions, then the window ring: two_bank.pass2_kv_cache_seq_len).
         if migration_publish_enabled() or migration_file_export_enabled():
             raise RuntimeError(
-                f"{ADAPTER.name}: KV migration of a looped model across pipeline ranks is not supported (its decode "
-                "KV handoff is deferred); run with PREFILL_ENABLE_MIGRATION=0 PREFILL_MIGRATION_EXPORT_TO_FILE=0"
+                f"{ADAPTER.name}: KV migration of a looped model is not supported (its decode KV handoff is "
+                "deferred); run with PREFILL_ENABLE_MIGRATION=0 PREFILL_MIGRATION_EXPORT_TO_FILE=0"
             )
-        logger.info(f"[migration] rank {rank}: looped model across {num_ranks} ranks, no KV chunk table")
+        logger.info(f"[migration] rank {rank}: looped model, no KV chunk table")
         migration_endpoint = None
     else:
         migration_endpoint = setup_kv_chunk_table(

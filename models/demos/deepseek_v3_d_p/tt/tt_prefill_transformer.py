@@ -27,8 +27,6 @@ from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.runners.pass_schedule import loop_ack_id
 from models.demos.deepseek_v3_d_p.reference.glm_5_4.schedule import (
     LoopStep,
-    loop_index_set,
-    loop_index_sets,
     loop_schedule,
     runs_loop_without_indexer,
     stage_indexer_types,
@@ -36,6 +34,7 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_4.schedule import (
 from models.demos.deepseek_v3_d_p.tt.glm54.damp_gate import TtDampGate
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
+from models.demos.deepseek_v3_d_p.tt.mla.two_bank import loop_pass2_layers, pass1_index_set, pass2_kv_cache_seq_len
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     create_balanced_chunk_order,
     global_to_local_token_id,
@@ -280,6 +279,21 @@ class TtPrefillTransformer(LightweightModule):
 
         self.num_kvpe_cache_layers = num_layers + num_mtp_levels
 
+        # GLM-5.4 loop pass 2 (two-bank attention, A2-A6): the loop layers this instance holds run it with the
+        # pass-1 blocks (shared weights) when this stage runs pass 2 (all passes, or G2; not G1). Their window lives
+        # in a ring past each cache slot's pass-1 positions, so the KVPE cache holds kv_cache_seq_len positions per
+        # slot; allocate it (and the index cache) with that (pass2_kv_cache_seq_len).
+        self._model_config = model_config
+        runs_pass2 = self._loop_passes is None or any(p >= 2 for p in self._loop_passes)
+        self._pass2_layers = [
+            i for i in loop_pass2_layers(config) if runs_pass2 and first_layer_idx <= i < first_layer_idx + num_layers
+        ]
+        if self._pass2_layers:
+            assert is_chunked and max_seq_len is not None, "loop pass 2 runs chunked over a max_seq_len cache"
+            self.kv_cache_seq_len = pass2_kv_cache_seq_len(max_seq_len, seq_len)
+        else:
+            self.kv_cache_seq_len = max_seq_len
+
         # --- Transformer layers ---
         # layer_idx is the GLOBAL index (drives weight cache keys + dense/MoE selection);
         # sparse indexer which stage it is, so its (separately numbered) key cache is rank-local too.
@@ -319,7 +333,7 @@ class TtPrefillTransformer(LightweightModule):
                 is_chunked=is_chunked,
                 slot_num=slot_num,
                 layer_num=self.num_kvpe_cache_layers,
-                max_seq_len=max_seq_len,
+                max_seq_len=self.kv_cache_seq_len,
                 kv_only=kv_only_last_layer and is_last,
                 next_kv_only=kv_only_last_layer and local_idx == num_layers - 2,
                 routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
@@ -331,6 +345,7 @@ class TtPrefillTransformer(LightweightModule):
                 llama4_scale_cache=self._llama4_scale_cache,
                 use_fused_rmsnorm=use_fused_rmsnorm,
                 forward_chunks=forward_chunks,
+                loop_pass2=layer_idx in self._pass2_layers,
             )
             self.layers.append(layer)
 
@@ -338,16 +353,21 @@ class TtPrefillTransformer(LightweightModule):
         self.steps, self.loop_gates = self._build_schedule(config, state_dict, num_links, tp_topology, tp_axis)
         self._num_model_layers = config.num_hidden_layers
         self._loop_count = getattr(config, "loop_count", 0) or 0
-        # Stage handoff of a looped model (G1 -> G2): pass 1's top-k sets, one per full loop layer, in layer order.
-        self._loop_set_of = (
-            {
-                layer: loop_index_set(model_config, layer)
-                for layer in range(config.loop_first_layer, config.loop_last_layer + 1)
-            }
-            if self.loop_gates
-            else {}
-        )
-        self.num_loop_index_sets = loop_index_sets(model_config) if self.loop_gates else 0
+        # The loop's pass-1 top-k sets (A5), one persistent set per full loop layer in layer order, numbered by the
+        # model's own indexer map (pass1_index_set). Pass 1 fills them as each full layer makes its top-k (its output
+        # can alias scratch the next full layer reuses); pass 2 injects them into every layer of that reuse group;
+        # the loop handoff sends them G1 -> G2 (tt.loop_handoff), so G2 receives straight into them.
+        self.loop_index_sets = []
+        if self.loop_gates:
+            mla = self.layers[max(config.loop_first_layer, first_layer_idx) - first_layer_idx].mla
+            num_sets = pass1_index_set(model_config, config.loop_last_layer) + 1
+            spec = ttnn.TensorSpec(
+                shape=ttnn.Shape(list(mla.indexer_indices_shape())),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                buffer_type=ttnn.BufferType.DRAM,
+            )
+            self.loop_index_sets = [ttnn.allocate_tensor_on_device(spec, mesh_device) for _ in range(num_sets)]
 
         build_tail = mtp_predictor is not None and is_last_rank and not kv_only_last_layer
         self.norm = (
@@ -402,6 +422,7 @@ class TtPrefillTransformer(LightweightModule):
         self._has_indexer = resolve_has_indexer(config)
         self.indexed_rope = (
             self.rope_setup.get_rope_tensors_indexed(
+                # Positions only: pass 2's window ring past them is written from already-rotated KV.
                 cache_seq_len_global=max_seq_len if max_seq_len is not None else seq_len,
                 chunk_size_global=seq_len,
                 tail_slack=is_chunked,
@@ -667,8 +688,6 @@ class TtPrefillTransformer(LightweightModule):
         seed_indexer_indices: Optional[ttnn.Tensor] = None,
         chunks: Optional[list] = None,
         mtp_unions: Optional[list] = None,
-        loop_index_sets: Optional[list] = None,
-        loop_index_sets_out: Optional[list] = None,
     ):
         """
         Forward pass: [embed] -> [block x N]. The populated KV cache is the output.
@@ -728,11 +747,6 @@ class TtPrefillTransformer(LightweightModule):
                         caller sending the forward's acks once it is done.
             mtp_unions: a packed forward's MTP input, one `MTPUnionEmbedding` per chunk position (see
                         forward_packed); `provided_levels` is then one count per chunk.
-            loop_index_sets: GLM-5.4 loop pass >= 2 stage (receives_loop_handoff): pass 1's top-k sets, one per
-                        full loop layer in layer order (indexer_indices_shape() each); loop layer L takes the set
-                        of its reuse group, as pass-1 layer L did (A5).
-            loop_index_sets_out: GLM-5.4 stage sending the loop handoff (sends_loop_handoff): one persistent
-                        buffer per set, each full loop layer's top-k copied into its set's buffer as it is made.
 
         Returns:
             On a non-last rank: the hidden-state activation tensor to hand to the next rank.
@@ -750,18 +764,6 @@ class TtPrefillTransformer(LightweightModule):
             "d2h_service and on_layer_complete are mutually exclusive ack transports; the block takes "
             "d2h_service and would silently drop on_layer_complete"
         )
-        assert (loop_index_sets is not None) == self.receives_loop_handoff, (
-            f"loop_index_sets must be passed exactly when this stage runs the loop only in passes >= 2 "
-            f"(receives_loop_handoff={self.receives_loop_handoff})"
-        )
-        assert (loop_index_sets_out is not None) == self.sends_loop_handoff, (
-            f"loop_index_sets_out must be passed exactly when this stage sends the loop handoff "
-            f"(sends_loop_handoff={self.sends_loop_handoff})"
-        )
-        for sets in (loop_index_sets, loop_index_sets_out):
-            assert (
-                sets is None or len(sets) == self.num_loop_index_sets
-            ), f"{len(sets)} top-k sets, the loop's pass 1 makes {self.num_loop_index_sets}"
         if chunks is not None:
             assert (
                 metadata is None and mtp_union is None
@@ -826,7 +828,7 @@ class TtPrefillTransformer(LightweightModule):
             assert (
                 self.indexer_types[self.first_layer_idx] == "full"
                 or seed_indexer_indices is not None
-                or loop_index_sets is not None
+                or self.receives_loop_handoff  # its loop layers take the received sets (self.loop_index_sets)
             ), (
                 f"first layer {self.first_layer_idx} is '{self.indexer_types[self.first_layer_idx]}': "
                 "a stack starting on a shared layer needs seed_indexer_indices from the upstream rank"
@@ -853,15 +855,38 @@ class TtPrefillTransformer(LightweightModule):
             # A later loop pass reruns the pass-1 block (shared weights) and names its output by pass.
             name = f"layer_{i}" if step.loop_pass <= 1 else f"layer_{i}.pass{step.loop_pass}"
             signpost(f"forward_{name}_start")
+            if step.loop_pass >= 2:
+                # Loop pass 2 (A2-A6): two-bank attention at the pass-1 group's top-k; no indexer, no pass-1 writes.
+                h, _ = layer(
+                    h,
+                    rope_tensors,
+                    kvpe_cache,
+                    cache_layer_idx=i,
+                    return_intermediates=return_intermediates,
+                    on_layer_hidden=on_layer_hidden,
+                    actual_start=actual_start,
+                    actual_end=actual_end,
+                    cache_user_id=cache_user_id,
+                    actual_isl=actual_isl,
+                    padding_side=self.padding_side,
+                    indexer_indices=self.loop_index_sets[pass1_index_set(self._model_config, step.layer)],
+                    metadata=metadata,
+                    loop_pass2=True,
+                    d2h_service=d2h_service,
+                    metadata_msg=metadata_msg,
+                    on_layer_complete=on_layer_complete,
+                    # A later loop pass acks under its own id, never under the pass-1 layer's (pass_schedule).
+                    ack_layer_idx=loop_ack_id(step.layer, step.loop_pass, self._num_model_layers),
+                )
+                signpost(f"forward_{name}_end")
+                if return_intermediates:
+                    ttnn.synchronize_device(self.mesh_device)
+                    intermediates[name] = self._to_host(h)
+                if read_profiler:
+                    ttnn.ReadDeviceProfiler(self.mesh_device)
+                continue
             mode = self.indexer_types[step.layer] if reuse else "full"
-            if loop_index_sets is not None and step.loop_pass:
-                # Loop pass >= 2 stage: every loop layer is 'shared' and takes pass-1 layer L's set (A5).
-                indexer_indices = loop_index_sets[self._loop_set_of[step.layer]]
             inject = indexer_indices if (reuse and mode == "shared") else None
-            # STAND-IN until q171.2.5: a later loop pass runs the block's own (GLM-5.3) attention, which computes
-            # a fresh top-k and writes this layer's KVPE / index-cache slot for the chunk over pass 1's (on a pass-2
-            # stage: shared-layer attention at the injected pass-1 top-k, writing the stage's bank-A copy). GLM-5.4
-            # pass 2 instead reads pass-1 KVPE at pass-1 top-k plus its own window (two-bank sparse MLA).
             ret = layer(
                 h,
                 rope_tensors,
@@ -881,22 +906,17 @@ class TtPrefillTransformer(LightweightModule):
                 return_indexer_indices=reuse,
                 index_kv_cache=index_kv_cache,
                 metadata=metadata,
-                # A later loop pass acks under its own id, never under the pass-1 layer's (pass_schedule).
-                ack_layer_idx=(
-                    loop_ack_id(step.layer, step.loop_pass, self._num_model_layers) if step.loop_pass >= 2 else None
-                ),
             )
             if reuse:
                 h, _, new_idx = ret
+                if mode == "full" and step.loop_pass == 1:
+                    ttnn.copy(new_idx, self.loop_index_sets[pass1_index_set(self._model_config, step.layer)])
                 if mode == "full":
                     # Keep the full layer's indices alive through every shared consumer. TP sequence
                     # shards own their top-k allocation; reference replacement releases it when no
                     # consumer holds it. Gathered outputs can alias persistent scratch, so do not
                     # explicitly deallocate the old tensor (it may back new_idx as well).
                     indexer_indices = new_idx
-                    if loop_index_sets_out is not None and step.loop_pass == 1:
-                        # Copied now: a later full layer's top-k can reuse this one's (gather scratch) buffer.
-                        ttnn.copy(new_idx, loop_index_sets_out[self._loop_set_of[step.layer]])
             else:
                 h, _ = ret
             signpost(f"forward_{name}_end")

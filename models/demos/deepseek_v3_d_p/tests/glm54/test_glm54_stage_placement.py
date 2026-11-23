@@ -18,13 +18,9 @@ from models.demos.common.prefill.runners.layer_completion_layout import layer_co
 from models.demos.common.prefill.runners.pass_schedule import PassSchedule, RankSlice
 from models.demos.common.prefill.runners.runner_utils import compute_layer_split
 from models.demos.deepseek_v3_d_p.reference.glm_5_4 import LoopStep
-from models.demos.deepseek_v3_d_p.reference.glm_5_4.schedule import (
-    loop_index_set,
-    loop_index_sets,
-    pass_schedule,
-    stage_indexer_types,
-)
+from models.demos.deepseek_v3_d_p.reference.glm_5_4.schedule import pass_schedule, stage_indexer_types
 from models.demos.deepseek_v3_d_p.reference.glm_5_4_config import glm_5_4_hf_config
+from models.demos.deepseek_v3_d_p.tt.mla.two_bank import pass1_index_set
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_4 import GLM54Adapter
 
 G0, G1, G2, G3 = (0, 26), (26, 28), (54, 28), (82, 24)
@@ -133,9 +129,9 @@ def test_g2_runs_no_indexer_and_injects_layer_ls_own_set():
     assert g2[:26] == config.indexer_types[:26] and g2[54:] == config.indexer_types[54:]
     assert stage_indexer_types(config, (1,)) == config.indexer_types
     assert stage_indexer_types(config, (1, 2)) == config.indexer_types
-    assert loop_index_sets(config) == 7
-    # Reuse groups of 4 from layer 26: layer L takes the set of the full layer that starts its group.
-    assert [loop_index_set(config, layer) for layer in range(26, 54)] == [g for g in range(7) for _ in range(4)]
+    # Pass 1 makes 7 top-k sets, reuse groups of 4 from layer 26: layer L takes the set of its group's full layer.
+    assert pass1_index_set(config, 53) + 1 == 7
+    assert [pass1_index_set(config, layer) for layer in range(26, 54)] == [g for g in range(7) for _ in range(4)]
 
 
 def test_adapter_reads_glm53_cache_dir_and_creates_none(tmp_path, monkeypatch):

@@ -193,7 +193,7 @@ def test_read_padded_kv_cache_round_trip(mesh_device):
         num_index_sets=0,
     )
     assert handoff.chunk_rows == 160
-    sender = LoopHandoffSender(mesh_device, handoff, first_kv_layer=first, num_kv_layers=num_layers)
+    sender = LoopHandoffSender(mesh_device, handoff, index_sets=[], first_kv_layer=first, num_kv_layers=num_layers)
     meta = [_scalar(mesh_device, 0) for _ in range(3)]
     generator = torch.Generator().manual_seed(27)
     rows_mapper = ttnn.create_mesh_mapper(
@@ -291,7 +291,20 @@ def test_glm54_loop_handoff(mesh_device, traced):
         index_shape=(1, 1, CHUNK // (half * cols), TOP_K),
         num_index_sets=INDEX_SETS,
     )
-    sender_handoff = LoopHandoffSender(g1, handoff, first_kv_layer=0, num_kv_layers=KV_LAYERS)
+    # G1's model sets (TtPrefillTransformer.loop_index_sets), which its pass 1 fills and the sender sends.
+    model_sets = [
+        ttnn.allocate_tensor_on_device(
+            ttnn.TensorSpec(
+                shape=ttnn.Shape(list(handoff.index_shape)),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                buffer_type=ttnn.BufferType.DRAM,
+            ),
+            g1,
+        )
+        for _ in range(INDEX_SETS)
+    ]
+    sender_handoff = LoopHandoffSender(g1, handoff, index_sets=model_sets, first_kv_layer=0, num_kv_layers=KV_LAYERS)
 
     act_spec = ttnn.TensorSpec(
         shape=ttnn.Shape([1, 1, CHUNK, HIDDEN]),
@@ -345,7 +358,7 @@ def test_glm54_loop_handoff(mesh_device, traced):
 
     def g1_send():
         for set_idx, indices in enumerate(index_src):
-            sender_handoff.store_index_set(set_idx, indices)
+            ttnn.copy(indices, model_sets[set_idx])  # as pass 1 does when the full layer makes its top-k
         sender_handoff.collect(g1_cache, g1_meta)
         ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(
             sender, [activation, *sender_handoff.segments()], metadata=record

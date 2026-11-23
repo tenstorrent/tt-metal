@@ -12,8 +12,10 @@
   split is G0 = L1-26, G1 = L27-54 pass 1 + gate 1, G2 = L27-54 pass 2 + gate 2 (its own copy of the loop weights,
   read from the same cache files, and of pass 1's KVPE), G3 = L55-78 (+ MTP). A rank holds whole loop passes. G1
   sends G2 the loop handoff (``tt/loop_handoff.py``) after the activation.
-* Not supported yet: a packed forward (the loop runs per chunk) and KV migration across ranks (the decode handoff of
-  a looped model is deferred, Q2.3; ``prefill_runner`` builds no chunk table for a looped multi-rank run).
+* Caches: a stage running loop pass 2 (one rank, or G2) keeps pass 2's window in a ring past each slot's pass-1
+  positions (``kv_cache_slot_rows``, ``tt.mla.two_bank``).
+* Not supported yet: a packed forward (the loop runs per chunk) and KV migration (the decode handoff of a looped model
+  is deferred, Q2.3; ``prefill_runner`` builds no chunk table for a looped model).
 """
 
 from __future__ import annotations
@@ -80,6 +82,16 @@ class GLM54Adapter(GLM53Adapter):
         assert not (params.mtp_levels and params.is_last_rank), "MTP runs after the coda, not on a loop pass-2 stage"
         stage_config = _with_indexer_types(hf_config, stage_indexer_types(hf_config, loop_passes))
         return super().allocate_kv_cache(mesh_device=mesh_device, hf_config=stage_config, params=params)
+
+    def kv_cache_slot_rows(self, hf_config, params) -> tuple[int, bool]:
+        """A stage that runs loop pass 2 (one rank, or G2) keeps pass 2's window in a ring past each slot's pass-1
+        positions (tt.mla.two_bank). Such a cache is never migrated (prefill_runner builds no chunk table for a looped
+        model), so its slots need no bank alignment."""
+        from models.demos.deepseek_v3_d_p.tt.mla.two_bank import pass2_kv_cache_seq_len
+
+        if not any(p >= 2 for p in params.loop_passes or ()):
+            return super().kv_cache_slot_rows(hf_config, params)
+        return pass2_kv_cache_seq_len(params.max_seq_len, params.chunk_size), False
 
 
 def _with_indexer_types(hf_config, indexer_types: list):
