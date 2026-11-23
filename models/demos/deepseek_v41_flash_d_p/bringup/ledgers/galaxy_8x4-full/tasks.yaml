@@ -6279,3 +6279,72 @@ tasks:
       ids_uploads_per_chunk*: == 0
       steady_tok_s_p*: '> 0'
       idx_block_select_set_mismatches*: == 0
+- id: MB.9
+  title: 'OWNER 2026-11-23: re-sweep EVERY matmul the model runs at the 5120 chunk (layers 0-20, 160 rows a chip) for faster
+    program configs within the accuracy limits; measured on the 5120 ladder'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - MB.8
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.9_ladder.md
+  - ttnn/ttnn/bringup
+  ab:
+    env:
+      DS41_MM_TUNED160: 'off'
+    change:
+      DS41_MM_TUNED160: 'on'
+  ab_mode: full
+  ab_rungs:
+  - last
+  brief:
+    prior_work: 'Projsplit PS.2 (dnijemcevic/model_bringup_projsplit 3f9b309b676, results/PS.2_probe.md, tests/projsplit/test_projsplit_probe.py):
+      at 160 rows the shipped replicated wq_b is 197.8 us a layer, 1d c110 out_block 5x2 in0_block_w 20 is 185.0 us, bit-identical
+      (DS41-306 claims that config ships; the GALAXY table holds bw8 ob5x10: KNOWLEDGE CONTRADICTED); wo_b 141.5 -> 141.0 (already
+      tuned). Batching branch PB.MM256 = d6bc91514d5 (accepted 2026-11-23): the same re-sweep at 8192; port its machinery path-limited
+      (git show d6bc91514d5 -- tests/perf/test_matmul_sweep.py tests/test_mm256_offon.py tt/mm_configs.py tt/settings.py
+      bringup/hooks.py; results/PB.MM256_ladder.md there): capture of a real chunk, 12 single-card processes in parallel,
+      GALAXY256 / GMM256 + switch pattern. At 8192 it gained q_a 79 -> 50 us, wo_b 181 -> 157, wq_b 250 -> 238 (minimal, order
+      change), wo_a gmm bw2 depth2, engram_kv, indexer, hc.fn, compressor: device -1.0..-1.5 ms a chunk, accuracy well within
+      limits (err_final_hidden 0.1345 / 0.2422), determinism 0. moe_block fork matmuls not sweepable at call time.
+      DS41-139 (1D mcast for Mt <= 8), P.81 grouped wo_a, P.9 / P.10 tunings.'
+    details: 'OWNER 2026-11-23: re-sweep EVERY matmul the model runs at the 5120 chunk (layers 0-20, DECODER_SKIP=decode; 160
+      rows a chip, plus any other M the model passes). (1) Inventory every matmul call of a real chunk (ttnn.matmul / linear
+      / minimal_matmul and every ttnn.bringup fork matmul: grouped_matmul, MoE / shared expert / dense / engram / mhc / compressor
+      / indexer projections): shape, dtypes, fidelity, current config and source (mm_configs key or rule), device us a chunk
+      from the real-time profile, largest first. (2) Sweep IN PARALLEL ACROSS CHIPS (owner 2026-11-23, binding): tests/perf/test_matmul_sweep.py
+      (P.19 / OV-27): -k capture at the 5120 chunk, N parallel single-card processes (P23_SHARD=i/N --device auto -k test_sweep_card),
+      merge_shards; resident runner stopped first, bounded timeouts, grid 11 x 10 (FIX.15), winners confirmed on the whole
+      mesh once; largest first, deterministic: program configs (1D / 2D / minimal_matmul / DRAM-sharded where it applies, grid within 110 cores
+      (FIX.15), in0_block_w, per_core M / N, out_subblock; fork knobs); fidelity, dtypes and accumulation unchanged; keep
+      every faster config (OWNER rule 3, 2026-11-23: bit-identity with today''s config or its summation order is NOT a criterion;
+      judged on speed, the accuracy limits and its own bit-identical repeats; wq_b 185.0 us first; DS41-390 is why the
+      accuracy gate runs on a real chunk). Fix DS41-306 to match the code. (3) Every winner
+      behind the CALL-TIME switch DS41_MM_TUNED160 (off | on; default off until accepted; tt/settings.py, bringup/hooks.py
+      batch_call_settings). (4) Test models/demos/deepseek_v41_flash_d_p/tests/test_mm160_offon.py (BATCH_SHARED, resident
+      runner, one load, layers 0-20): a real 5120 chunk at a long history, off vs on: mm160_repeat_max_abs_diff_<case> (two runs with
+      on) == 0, mm160_offon_rel_l2_<case> per layer (diagnostic), device ms per section off vs on; accuracy by the gate''s
+      test_ladder (last rung, switch on) and the fresh-process determinism check. Report results/MB.9_ladder.md: inventory, tuned
+      table (gain us a chunk), sections off vs on, the gate''s 5120 ladder off vs on. Every Python-built op through ttnn.bringup.prepare_program
+      / run_prepared. Read rule 20 of models/demos/common/bringup/agents/bringup-engineer.md. Only the tests you add plus the
+      gate; no fork regression suites on the 8x4.'
+  gate:
+    cmd: BRINGUP_RUNG=last DS41_MM_TUNED160=on scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_CHUNK=5120 DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode DS41_MM_TUNED160=on scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_mm160_offon.py
+      && BRINGUP_CHUNK=5120 DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode SKIP_POS=51200,131072,139264,262144,524288,786432,1024000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+      && BRINGUP_CHUNK=5120 DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_no_rebuild.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      mm160_repeat_max_abs_diff*: == 0
+      steady_tok_s_p*: '> 0'
+      program_builds_after_warmup_serving*: == 0
+      ids_uploads_per_chunk*: == 0

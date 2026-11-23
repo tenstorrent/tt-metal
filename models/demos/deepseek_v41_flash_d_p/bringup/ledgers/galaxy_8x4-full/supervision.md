@@ -695,3 +695,10 @@
 - 06:20 OWNER: run the full ladder on the batching branch: PB.LAD (scripted, patch_lad) after MB.8 finishes and the branch switch.
 - 06:38 heartbeat: MB.8 agent active; watch armed.
 - 06:55 MB.8 ACCEPTED (8 units PASS, sets 0 mismatches, cold no-rebuild 0): at 5120 the compute-side block max is an exact device win at 1M (75.6 vs 76.1 ms) but no wall gain (host-bound; the crossover stays 262144 keys); accepted under the owner's device-win rule, same code on both branches.
+
+### 2026-11-23 15:58 UTC (overseer session 38eaa954) on dnijemcevic/model_bringup for MB.9
+- OWNER: re-sweep the matmuls on both branches; batching done (PB.MM256 d6bc91514d5). Framework parity: F301-F303
+  cherry-picked. QUEUED MB.9: every matmul of layers 0-20 at 5120 (160 rows a chip), swept in parallel across chips
+  (P.19 / PB.MM256 machinery), judged on accuracy limits (test_ladder last rung, switch on) + fresh-process determinism +
+  on-repeats exact + 5120 ladder + cold no-rebuild (owner rule 3: no bit-identity criterion). Switch DS41_MM_TUNED160.
+  Starts with wq_b 197.8 -> 185.0 (PS.2) and DS41-306's fix. Rebuilt for this branch.
