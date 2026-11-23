@@ -34,9 +34,6 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
         return;
     }
 
-    // Before any dispatch mode writes the workload to a device, so an unbound CB fails cleanly in each.
-    mesh_workload.impl().check_circular_buffers_bound();
-
     // Route service workloads to the SD path. Done here, not in add_program, because the physical
     // device needed to device-scope the service-core check is only known at enqueue. Common case -
     // no service claimed so skip entirely.
@@ -130,6 +127,8 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
     // Emulated devices have no dispatch firmware: tt-emule's queue compiles and launches each program itself
     // through the slow-dispatch path, so the fast-dispatch compile, binary upload and command generation are skipped.
     const bool emulated = env.get_cluster().get_target_device_type() == tt::TargetDevice::Emule;
+    // Fail on an unbound CB before either dispatch mode writes anything to the device.
+    mesh_workload.impl().check_circular_buffers_bound();
     if (env.get_rtoptions().get_fast_dispatch() && !emulated) {
         mesh_workload.impl().compile(mesh_cq.device());
         mesh_workload.impl().load_binaries(mesh_cq);
