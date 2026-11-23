@@ -10,12 +10,16 @@ runs and the torch reference see the same weights. Each case runs one warm-up in
 preparation), then:
 - MEASURED_RUNS untraced inferences, each on a fresh input (the model frees its input), bracketed by tracy
   signposts `pdl|<label>|<i>` / `pdl|<label>|end`, so a `--profile` run sums the device kernel time of every op in
-  one inference;
+  one inference; with PDL_E2E_CONV_SIGNPOSTS=1 every conv call in those runs is also bracketed by
+  `conv|<i>|<kh>x<kw>` / `conv|end`, i the call's index in conv_specs;
 - the production traced path (CustomTracedModelExecutor, as test_pipeline_e2e.py runs it): TRACED_RUNS replays timed
   one at a time (latency) and back to back (throughput).
-Results go to PDL_E2E_RESULTS as JSON lines.
+Results go to PDL_E2E_RESULTS as JSON lines. PDL_E2E_CONV_CAPTURE=<path> also writes, per conv call of the first
+inference, its TtConv2d configuration (weights excluded) and the input's memory config as JSON lines, for
+replaying the calls standalone.
 """
 
+import dataclasses
 import gc
 import json
 import os
@@ -48,6 +52,8 @@ TRACED_RUNS = 20
 # PDL_E2E_DEVICE_TIME=1 (with --profile): only the signposted untraced runs, the profiler read after each, so the
 # device buffer does not overflow.
 DEVICE_TIME_ONLY = os.environ.get("PDL_E2E_DEVICE_TIME") == "1"
+CONV_SIGNPOSTS = os.environ.get("PDL_E2E_CONV_SIGNPOSTS") == "1"
+CONV_CAPTURE = os.environ.get("PDL_E2E_CONV_CAPTURE")
 RESULTS = os.environ.get("PDL_E2E_RESULTS", "/tmp/pdl_e2e_results.jsonl")
 
 
@@ -60,12 +66,67 @@ def _in_collect_pass():
 def _spec(t):
     mc = t.memory_config()
     cores = mc.shard_spec.grid.num_cores() if mc.is_sharded() and mc.shard_spec is not None else None
+    dtype = f"{t.dtype}".split(".")[-1]
+    layout = f"{t.layout}".split(".")[-1].replace("_LAYOUT", "")
     where = f"{mc.buffer_type}".split(".")[-1]
-    return (
-        f"{t.dtype}".split(".")[-1]
-        + f", {t.layout}".split(".")[-1].replace("_LAYOUT", "")
-        + (f", {where} {mc.memory_layout}".split(".")[-1].replace("_SHARDED", "") + (f" ({cores})" if cores else ""))
-    )
+    placement = f"{mc.memory_layout}".split(".")[-1].replace("_SHARDED", "")
+    return f"{dtype}, {layout}, {where} {placement}" + (f" ({cores})" if cores else "")
+
+
+def _enum(v):
+    return None if v is None else f"{v}".split(".")[-1]
+
+
+def _grid(core_range_set):
+    if core_range_set is None:
+        return None
+    return [[r.start.x, r.start.y, r.end.x, r.end.y] for r in core_range_set.ranges()]
+
+
+def _jsonable(name, v):
+    if name == "override_core_grid":
+        return _grid(v)
+    if isinstance(v, (bool, int, float, str)) or v is None:
+        return v
+    if isinstance(v, (tuple, list)):
+        return list(v)
+    return _enum(v)
+
+
+def _capture(conv, x):
+    """TtConv2d's configuration without weights, and the memory config of the input it was handed."""
+    c = conv.configuration
+    record = {}
+    for f in dataclasses.fields(c):
+        v = getattr(c, f.name)
+        if f.name == "weight":
+            continue
+        if f.name == "bias":
+            record["has_bias"] = v is not None
+        elif f.name == "activation":
+            record[f.name] = None if v is None else {"op_type": _enum(v.op_type), "params": list(v.params)}
+        elif f.name in ("sharding_strategy", "slice_strategy"):
+            record[f.name] = (
+                None
+                if v is None
+                else {"type": type(v).__name__}
+                | {g.name: _jsonable(g.name, getattr(v, g.name)) for g in dataclasses.fields(v)}
+            )
+        else:
+            record[f.name] = _jsonable(f.name, v)
+    mc = x.memory_config()
+    shard = mc.shard_spec if mc.is_sharded() else None
+    record["input"] = {
+        "shape": list(x.shape),
+        "dtype": _enum(x.dtype),
+        "layout": _enum(x.layout),
+        "memory_layout": _enum(mc.memory_layout),
+        "buffer_type": _enum(mc.buffer_type),
+        "shard_grid": _grid(shard.grid) if shard else None,
+        "shard_shape": list(shard.shape) if shard else None,
+        "shard_orientation": _enum(shard.orientation) if shard else None,
+    }
+    return record
 
 
 def _pcc(torch_nchw, tt_out):
@@ -125,20 +186,35 @@ def test_pdl_conv2d_3x3_e2e(device, conv):
     )
     model_convs = [o for o in gc.get_objects() if isinstance(o, TtConv2d) and id(o) not in before]
 
-    # Tensor specs every 3x3 conv sees (and returns) in the model, recorded on the first inference.
-    specs = []
+    # Tensor specs every conv sees (and returns) in the model, in call order, recorded on the first inference.
+    specs, conv_specs, captured = [], [], []
     original_call = TtConv2d.__call__
 
     def recording_call(self, x, *args, **kwargs):
         x_spec = _spec(x)  # before the call: the conv may free its input
+        if CONV_CAPTURE and len(captured) < len(model_convs):
+            captured.append(_capture(self, x))
         out = original_call(self, x, *args, **kwargs)
         c = self.configuration
-        if tuple(c.kernel_size) == (3, 3) and len(specs) < len(model_convs):
+        if len(conv_specs) < len(model_convs):
             y = out[0] if isinstance(out, tuple) else out
-            specs.append(
+            shape = (
                 f"{c.input_height}x{c.input_width} {c.in_channels}->{c.out_channels} s{c.stride[0]} "
                 f"d{c.dilation[0]} | in: {x_spec} | out: {_spec(y)}"
             )
+            conv_specs.append(f"k{c.kernel_size[0]}x{c.kernel_size[1]} p{c.padding[0]} {shape}")
+            if tuple(c.kernel_size) == (3, 3):
+                specs.append(shape)
+        return out
+
+    call_index = [0]
+
+    def signposted_call(self, x, *args, **kwargs):
+        k = self.configuration.kernel_size
+        signpost(header=f"conv|{call_index[0] % len(conv_specs)}|{k[0]}x{k[1]}")
+        call_index[0] += 1
+        out = original_call(self, x, *args, **kwargs)
+        signpost(header="conv|end")
         return out
 
     with torch.no_grad(), bf16_conv_via_fp32():
@@ -156,6 +232,10 @@ def test_pdl_conv2d_3x3_e2e(device, conv):
         ttnn.synchronize_device(device)
         if _in_collect_pass():
             return
+        if CONV_CAPTURE:
+            with open(CONV_CAPTURE, "w") as fh:
+                for i, record in enumerate(captured):
+                    fh.write(json.dumps({"call": i} | record) + "\n")
         pcc = {n: _pcc(t, o) for n, t, o in zip(["semantic", "center", "offset"], torch_outputs, outputs[:3])}
 
         wall_ms = []
@@ -164,13 +244,20 @@ def test_pdl_conv2d_3x3_e2e(device, conv):
             ttnn.synchronize_device(device)
             signpost(header=f"pdl|{label}|{i}")
             t0 = time.perf_counter()
-            ttnn_model.forward(tt_input)
+            if CONV_SIGNPOSTS:
+                TtConv2d.__call__ = signposted_call
+            try:
+                ttnn_model.forward(tt_input)
+            finally:
+                TtConv2d.__call__ = original_call
             ttnn.synchronize_device(device)
             wall_ms.append((time.perf_counter() - t0) * 1000)
             if DEVICE_TIME_ONLY:
                 ttnn.ReadDeviceProfiler(device)
         signpost(header=f"pdl|{label}|end")
         if DEVICE_TIME_ONLY:
+            with open(RESULTS, "a") as fh:
+                fh.write(json.dumps({"model": model_category, "conv": conv, "conv_specs": conv_specs}) + "\n")
             return
 
         host_inputs, _, l1_memory_config = create_host_input_tensors_random(device, 1, height, width, TRACED_RUNS)
@@ -205,6 +292,7 @@ def test_pdl_conv2d_3x3_e2e(device, conv):
         "other_convs": other,
         "conv3x3_skip_reasons": sorted(set(skipped)) if conv == "conv2d_3x3" else [],
         "conv3x3_specs": specs,
+        "conv_specs": conv_specs,
     }
     logger.info(f"PDL_E2E: {json.dumps(record)}")
     with open(RESULTS, "a") as fh:
