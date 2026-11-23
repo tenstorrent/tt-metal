@@ -657,6 +657,7 @@ void Hal::initialize_qa(
     this->noc_addr_local_bits_ = NOC_ADDR_LOCAL_BITS;
     this->noc_addr_node_id_bits_ = NOC_ADDR_NODE_ID_BITS;
     this->noc_max_burst_size_bytes_ = NOC_MAX_BURST_SIZE;
+    this->noc_max_bytes_in_packet_ = NOC_OVERLAY_MAX_BYTES_IN_PACKET;
     this->noc_encoding_reg_ = NOC_NODE_ID;                                   // TODO: add correct value
     this->noc_coord_reg_offset_ = NOC_COORD_REG_OFFSET;                      // TODO: add correct value
     this->noc_overlay_start_addr_ = 0;                                       // TODO: add correct value
