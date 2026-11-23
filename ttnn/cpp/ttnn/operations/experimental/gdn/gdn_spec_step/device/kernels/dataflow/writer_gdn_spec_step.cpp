@@ -467,6 +467,7 @@ TT_KERNEL void writer(
                     auto lock = ridx.scoped_write_lock(1);
                     page0 = lock.template get_ptr<volatile uint32_t>()[T * Nv + t * Nv + h];
                 }
+                ASSERT(page_run_in_one_pool(page0, 4, 0, GDN_HIST_PAGES));
                 for (uint32_t slot = 1; slot < 4; ++slot) {
 #if GDN_QKSHARE
                     const uint32_t src = t + slot - 1;
@@ -617,6 +618,11 @@ TT_KERNEL void writer(
                     auto lock = ridx.scoped_write_lock(1);
                     page0 = lock.template get_ptr<volatile uint32_t>()[t * Nv + h] + v0;
                 }
+#ifdef GDN_RING_POOL2
+                ASSERT(page_run_in_one_pool(page0 - v0, KV, GDN_RING_POOL2, GDN_RING_PAGES));
+#else
+                ASSERT(page_run_in_one_pool(page0 - v0, KV, 0, GDN_RING_PAGES));
+#endif
 #else
                 const uint32_t page0 = (t * BH + bh) * KV + v0;
 #endif

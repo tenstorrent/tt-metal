@@ -6,6 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
+#include "api/debug/assert.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
@@ -111,9 +112,18 @@ inline Acc same_layout_accessor(const Acc& a, Token token) {
         typename Acc::DSpec{}, tensor_accessor::detail::TransferAccess::bank_base(other), a.get_aligned_page_size());
 }
 
+// Whether the run [page, page + count) lies inside one pool of a page space of pages_total pages: pages [0, pages_a)
+// are pool a's and the rest pool b's, or with pages_a 0 there is one pool. Page indices come from device tensors that
+// the host cannot validate, so the kernels ASSERT this on every indexed run (compiled in only with the watcher or
+// lightweight kernel asserts).
+inline bool page_run_in_one_pool(uint32_t page, uint32_t count, uint32_t pages_a, uint32_t pages_total) {
+    const uint32_t end = page + count;
+    return end >= page && end <= pages_total && (pages_a == 0 || page >= pages_a || end <= pages_a);
+}
+
 // Two-pool page space: pages [0, pages_a) are pool a's, pages from pages_a on are pool b's (page - pages_a). A run of
-// pages never straddles the two (the caller's contract). With two_pools false only pool a exists and the code is the
-// plain single-pool read.
+// pages never straddles the two (the caller's contract, see page_run_in_one_pool). With two_pools false only pool a
+// exists and the code is the plain single-pool read.
 template <bool two_pools, typename Acc>
 inline void read_tiles_at_2(
     const Acc& a,
