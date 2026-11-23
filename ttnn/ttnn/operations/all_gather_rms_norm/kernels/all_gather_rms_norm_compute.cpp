@@ -175,6 +175,15 @@ struct SfpuRowSum : UnaryOp<SfpuRowSum<Slot>, Slot> {
         sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_ROW>(to_u32(Slot) + off);
     }
 };
+// x * scalar (fp32 bits) as a chain element (the reduce post-op MulScalarPost)
+template <Dst Slot>
+struct MulScalarElem : UnaryOp<MulScalarElem<Slot>, Slot> {
+    uint32_t bits;
+    static ALWI void init() { binop_with_scalar_tile_init(); }
+    ALWI void exec(uint32_t /*i*/, uint32_t off) const { mul_unary_tile(to_u32(Slot) + off, bits); }
+};
+// LN local stats over a one-tile-column block take the chain paths above (exact SFPU row sums need fp32 DEST)
+constexpr bool ln_fused_local = DST_ACCUM_MODE;
 struct LnCombFinalize : compute_kernel_lib::BinaryOp<LnCombFinalize, Dst::D0, Dst::D1, Dst::D0> {
     uint32_t inv_w_bits;
     uint32_t eps_bits;
@@ -548,7 +557,18 @@ ALWI void ln_local_stats(uint32_t crt, uint32_t cw, uint32_t inv_n_bits, bool ta
             masked_row_sum<cbx, cb_ln_m>(crt, cw, MulScalarPost{inv_n_bits});
         }
     }
-    if (!masked_tail_path || !tail) {
+    // one tile-column (cw == 1, fp32 DEST): ONE exact row sum packed twice (cb_partial for the writer, cb_ln_m for the
+    // shift broadcast) instead of two Accurate reduces over the block
+    const bool s1_once = ln_fused_local && cw == 1 && !(masked_tail_path && tail);
+    if (s1_once) {
+        eltwise_chain(
+            IterationShape::grid(crt, 1),
+            x_elem<CopyTile<x_input<cbx>, Dst::D0>>(),
+            SfpuRowSum<Dst::D0>{},
+            MulScalarElem<Dst::D0>{{}, inv_n_bits},
+            PackTile<output(cb_partial), Dst::D0>{},
+            PackTile<output(cb_ln_m), Dst::D0>{});
+    } else if (!masked_tail_path || !tail) {
         reduce<
             PoolType::SUM,
             ReduceDim::REDUCE_ROW,
@@ -600,7 +620,17 @@ ALWI void ln_local_stats(uint32_t crt, uint32_t cw, uint32_t inv_n_bits, bool ta
             masked_block_row_sum<cb_partial>(crt, cw, NoOp{});
         }
     }
-    if (!masked_tail_path || !tail) {
+    if (ln_fused_local && cw == 1 && !tail) {
+        // one tile-column, no W tail: the row sum of (x - K)^2 in the same chain (no cb_ln_sq round trip)
+        eltwise_chain(
+            IterationShape::grid(crt, 1),
+            x_elem<CopyTile<xs_blk, Dst::D0>>(),
+            CopyTile<shift_col, Dst::D1>{},
+            SubBinary<Dst::D0, Dst::D1, Dst::D0>{},
+            Square<Dst::D0>{},
+            SfpuRowSum<Dst::D0>{},
+            PackTile<output(cb_partial), Dst::D0>{});
+    } else if (!masked_tail_path || !tail) {
         eltwise_chain(
             IterationShape::grid(crt, cw),
             x_elem<CopyTile<xs_blk, Dst::D0>>(),
