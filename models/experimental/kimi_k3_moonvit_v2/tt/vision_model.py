@@ -9,9 +9,9 @@ merger). `TT_MoonViT_Vision_Model` adds the projector (`mm_projector`), so it ma
 language-model embeddings.
 
 One still image per call. Its patches are put in window order and padded to `config.max_patches`
-rows on the host (`host_prep.prepare_host_inputs`), written split along `sp_axis` into
-device inputs allocated once (`DeviceInput`, so a trace can replay them), run through the tower,
-merger and projector, and gathered back with the padding dropped. The merged tokens come out in the
+rows on the host (`host_prep.prepare_host_inputs`, built fast by `host_fill`), written split along
+`sp_axis` into device inputs allocated once (`DeviceInput`, so a trace can replay them), run through
+the tower, merger and projector, and gathered back with the padding dropped. The merged tokens come out in the
 reference's order. Weights are replicated and activations are DRAM interleaved.
 
 Child names match the reference, so `load_torch_state_dict(reference.state_dict())` loads it, and
@@ -26,8 +26,9 @@ import torch
 import ttnn
 
 from .ccl import ParallelFactor, TT_CCL, ccl_slot_for_layer
+from . import host_fill
 from .device_input import DeviceInput
-from .host_prep import prepare_host_inputs
+from .image_prep import check_pixels
 from .model_config import MoonViTConfig, VisionParallel, check_grid, compute_kernel_config, resolve_parallel
 from .module import Module, ModuleList
 from .patch_embed import TT_Patch_Embed
@@ -154,46 +155,82 @@ class TT_MoonViT_Vision_Model(Module):
         self.logical_n = DeviceInput(
             (1, 1, 1, 1), mesh_device=mesh_device, sp_axis=None, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
         )
+        # The grid whose position embeddings, RoPE tables and logical_n the chips hold: they depend on nothing else,
+        # so an image of the same grid writes only its patches.
+        self._grid: tuple[int, int] | None = None
+        self._pos_table: host_fill.PosEmbedTable | None = None
+        # read_output's host buffer for one chip's shard: (output shape, uint16 rows, host tensor that borrows them).
+        self._readback: tuple | None = None
 
     def prepare_inputs(self, pixel_values: torch.Tensor, grid_thws: torch.Tensor) -> dict:
-        """Host prep (`host_prep.prepare_host_inputs`), then write it, split along `sp_axis`,
-        into the same device tensors on every call.
+        """Write one image's inputs, split along `sp_axis`, into the same device tensors on every call: the values of
+        `host_prep.prepare_host_inputs`, built only for the image's rows (`host_fill`) and written into the staging
+        buffers of the `DeviceInput`s, whose padding rows stay zero.
 
         Returns `patches` [1, 1, S/sp, padded_patch_dim], `pos_emb` [1, 1, S/sp, hidden], `rope` and
         `logical_n` (the unpadded length, [1, 1, 1, 1] uint32), rows in window order.
         """
-        pos_emb_weight = self.vision_tower.patch_embed.pos_emb_weight
-        if pos_emb_weight is None:
+        self._pos_emb_weight()
+        h, w = check_grid(grid_thws, self.config)
+        expected = (h * w, self.config.in_channels, self.config.patch_size, self.config.patch_size)
+        if tuple(pixel_values.shape) != expected:
+            raise ValueError(f"pixel_values {tuple(pixel_values.shape)} != {expected} for grid {h}x{w}")
+        self.patches.fill_rows(h * w, lambda rows: host_fill.patch_values_into(rows, pixel_values, h, w, self.config))
+        return self._write_grid(h, w)
+
+    def prepare_image(self, pixels: np.ndarray) -> dict:
+        """`prepare_inputs(*image_prep.pixels_to_patches(pixels, config))` from `image_prep.resize_image`'s uint8
+        [H, W, 3] pixels, with the same device inputs, bit for bit: the patches are normalized straight into their
+        bf16 rows, with no float32 `pixel_values`."""
+        self._pos_emb_weight()
+        h, w = check_pixels(pixels, self.config)
+        self.patches.fill_rows(h * w, lambda rows: host_fill.normalized_patches_into(rows, pixels, self.config))
+        return self._write_grid(h, w)
+
+    def _pos_emb_weight(self) -> torch.Tensor:
+        weight = self.vision_tower.patch_embed.pos_emb_weight
+        if weight is None:
             raise RuntimeError("weights not loaded; call load_torch_state_dict or load_cached first")
-        host = prepare_host_inputs(self.config, pos_emb_weight, pixel_values, grid_thws)
+        return weight
+
+    def _write_grid(self, h: int, w: int) -> dict:
+        """Write the inputs that depend only on the grid, unless the chips hold this grid's already, from these
+        weights."""
+        weight = self._pos_emb_weight()
+        if self._pos_table is None or self._pos_table.weight is not weight:  # first call, or weights reloaded
+            self._pos_table = host_fill.PosEmbedTable(weight, self.config)
+            self._grid = None
+        if self._grid != (h, w):
+            self._grid = None  # until every write below has completed
+            self.pos_emb.write_rows(self._pos_table.window_rows(h, w))
+            self.rope.write_rows(*host_fill.rope_window_rows(self.config, h, w))
+            self.logical_n.write(torch.tensor(h * w, dtype=torch.int64))
+            self._grid = (h, w)
         return {
-            "patches": self.patches.write(host["patches"]),
-            "pos_emb": self.pos_emb.write(host["pos_emb"]),
-            "rope": self.rope.write(host["cos"], host["sin"]),
-            "logical_n": self.logical_n.write(torch.tensor(host["logical_n"], dtype=torch.int64)),
+            "patches": self.patches.tensor,
+            "pos_emb": self.pos_emb.tensor,
+            "rope": self.rope.tensors(),
+            "logical_n": self.logical_n.tensor,
         }
 
-    def _data_shards(self, shards: list, rows_per_chip: int, logical_n: int) -> list:
-        """The shards that hold rows 0..logical_n-1, in order: the first line of chips along `sp_axis`, cut at the
-        last chip with real rows. Without sequence parallelism, the first replica. `shards` is row-major over the
-        mesh."""
+    def _data_coords(self, rows_per_chip: int, logical_n: int) -> list:
+        """The mesh coordinates of the chips that hold rows 0..logical_n-1, in order: the first line of chips along
+        `sp_axis`, cut at the last chip with real rows; any other lines hold replicas. Without sequence parallelism,
+        the first replica."""
         sp_axis = self.parallel.sp_axis
         if sp_axis is None:
-            return shards[:1]
-        mesh_cols = self.mesh_device.shape[1]
-        # The first line of chips along `sp_axis`; any other lines hold replicas.
-        shards = shards[:mesh_cols] if sp_axis == 1 else shards[::mesh_cols]
-        return shards[: -(-logical_n // rows_per_chip)]
+            return [ttnn.MeshCoordinate(0, 0)]
+        chips = -(-logical_n // rows_per_chip)
+        return [ttnn.MeshCoordinate(*((0, k) if sp_axis == 1 else (k, 0))) for k in range(chips)]
 
     def gather_output(self, out: ttnn.Tensor, *, logical_n: int) -> torch.Tensor:
         """Concatenate the shards along `sp_axis` and drop the padding -> (logical_n, C). The merger
         keeps the reference's token order, so no reordering is needed. Without sequence parallelism the
         first replica is kept.
 
-        Each chip's shard is converted on its own and joined with `torch.cat`, which is faster than
-        `ttnn.to_torch` with a mesh composer. Chips that hold only padding are skipped."""
-        shards = ttnn.get_device_tensors(ttnn.from_device(out))  # row-major over the mesh
-        shards = self._data_shards(shards, out.shape[2], logical_n)
+        Only the chips with real rows are read, in one batch (`Tensor.cpu_shards`); each shard is converted on its
+        own and joined with `torch.cat`, which is faster than `ttnn.to_torch` with a mesh composer."""
+        shards = out.cpu_shards(self._data_coords(out.shape[2], logical_n))
         return torch.cat([ttnn.to_torch(shard)[0, 0] for shard in shards])[:logical_n]
 
     def read_output(self, out: ttnn.Tensor, rows: np.ndarray) -> None:
@@ -201,9 +238,9 @@ class TT_MoonViT_Vision_Model(Module):
 
         rows: writable, C-contiguous [logical_n, C] array that holds bf16 bits (uint16, int16 or ml_dtypes' bfloat16),
         for example the rows of a stored value in shared memory. Each chip's real rows are copied straight to their
-        place, with no tensor of the whole output and no host untilize. When one chip holds every real row only that
-        chip is read; otherwise the whole mesh is read in one call, which reads the chips in parallel and is faster
-        than reading the data chips one by one. The reads release the GIL.
+        place, with no tensor of the whole output and no host untilize. Only the chips that hold real rows are read:
+        when that is the first chip alone, into a host buffer kept across calls (`_read_first_chip`); otherwise in one
+        batch (`Tensor.cpu_shards`). Chips that hold only padding are never read. The reads release the GIL.
 
         Raises TypeError or ValueError (`check_output_rows`) for a bad `rows`, and ValueError for an `out` that is not
         forward's output or holds fewer than `logical_n` rows of width C, all before reading the chips.
@@ -219,18 +256,44 @@ class TT_MoonViT_Vision_Model(Module):
         if logical_n > capacity:
             raise ValueError(f"{logical_n} rows for an output of {capacity}")
         rows = rows.view(np.uint16)  # the same bits, whichever of BF16_HOLDERS rows is
-        if logical_n <= rows_per_chip:
-            shards = [self._data_shards(ttnn.get_device_tensors(out), rows_per_chip, logical_n)[0].cpu()]
+        coords = self._data_coords(rows_per_chip, logical_n)
+        if len(coords) == 1:
+            # The first chip holds every real row: read it into the host buffer kept for this.
+            shards = [self._read_first_chip(out)]
         else:
-            shards = self._data_shards(ttnn.get_device_tensors(ttnn.from_device(out)), rows_per_chip, logical_n)
+            # Row major with no tile padding, so the padded shape is the logical one; unlike `to_torch`, it hands back
+            # the host buffer without a copy.
+            shards = [s.to_torch_with_padded_shape()[0, 0].view(torch.uint16).numpy() for s in out.cpu_shards(coords)]
+        # TODO: read straight into `rows` (copy_device_to_host_tensor into a host tensor that borrows its memory) to
+        # skip this copy, but the watcher's NOC check aborts that read.
         for i, shard in enumerate(shards):
             start = i * rows_per_chip
             n = min(rows_per_chip, logical_n - start)
-            # Row major with no tile padding, so the padded shape is the logical one; unlike `to_torch`, it hands back
-            # the host buffer without a copy. TODO: read straight into `rows` (copy_device_to_host_tensor into a host
-            # tensor that borrows its memory) to skip this copy, but the watcher's NOC check aborts that read.
-            host = shard.to_torch_with_padded_shape()[0, 0, :n]
-            np.copyto(rows[start : start + n], host.view(torch.uint16).numpy())
+            np.copyto(rows[start : start + n], shard[:n])
+
+    def _read_first_chip(self, out: ttnn.Tensor) -> np.ndarray:
+        """Read the shard of `out` on the first chip, mesh coordinate (0, 0), into a host buffer allocated once ->
+        uint16 [rows per chip, C], valid until the next call. Saves allocating, zeroing and freeing a buffer of the
+        whole shard on every read, as `cpu_shards` does.
+
+        The buffer is borrowed by a host tensor of `out`'s topology (`ttnn.from_local_host_shards`) whose shards all
+        alias it: a copy from the first chip's own device tensor writes only that chip's shard."""
+        shape = tuple(out.shape)
+        if self._readback is None or self._readback[0] != shape:
+            self._readback = None  # drop the old buffer first
+            rows_per_chip, width = shape[2], shape[3]
+            buffer = np.empty(rows_per_chip * width, np.uint16)
+            spec = ttnn.TensorSpec(
+                ttnn.Shape([1, 1, rows_per_chip, width]), out.dtype, out.layout, ttnn.DRAM_MEMORY_CONFIG
+            )
+            shard = ttnn.host_tensor_from_bytes(buffer.view(np.uint8), spec)
+            host = ttnn.from_local_host_shards(
+                {coord: shard for coord in out.device_coords()}, self.mesh_device, out.tensor_topology()
+            )
+            self._readback = (shape, buffer.reshape(rows_per_chip, width), host)
+        _, buffer, host = self._readback
+        ttnn.copy_device_to_host_tensor(ttnn.get_device_tensors(out)[0], host)
+        return buffer
 
     def forward(
         self, patches: ttnn.Tensor, pos_emb: ttnn.Tensor, rope: RopeTensors, logical_n: ttnn.Tensor

@@ -42,6 +42,18 @@ class TT_Rope:
 
     def write(self, cos: torch.Tensor, sin: torch.Tensor) -> RopeTensors:
         """Fill the tables from `host_prep.rope_tables` (or `prepare_host_inputs`) cos/sin."""
+        return self._tensors(self.cos.write(cos), self.sin.write(sin))
+
+    def write_rows(self, cos: torch.Tensor, sin: torch.Tensor) -> RopeTensors:
+        """Fill the first rows of the tables from cos/sin [n, head_dim] (`host_fill.rope_window_rows`); the rest are
+        zero, as `host_prep.rope_tables` pads them."""
+        return self._tensors(self.cos.write_rows(cos), self.sin.write_rows(sin))
+
+    def tensors(self) -> RopeTensors:
+        """The tables as the last write left them."""
+        return RopeTensors(self.cos.tensor, self.sin.tensor, self.trans_mat.tensor)
+
+    def _tensors(self, cos: ttnn.Tensor, sin: ttnn.Tensor) -> RopeTensors:
         if self.trans_mat.tensor is None:
             self.trans_mat.write(host_prep.rot_transformation_mat())
-        return RopeTensors(self.cos.write(cos), self.sin.write(sin), self.trans_mat.tensor)
+        return RopeTensors(cos, sin, self.trans_mat.tensor)

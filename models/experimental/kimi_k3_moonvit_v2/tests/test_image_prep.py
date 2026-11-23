@@ -168,6 +168,54 @@ def test_image_to_patches_matches_hf(config, processor, size):
     assert pixel_values.dtype == hf_pixel_values.dtype and torch.equal(pixel_values, hf_pixel_values)
 
 
+def test_normalization_matches_hf_for_every_value(config):
+    """pixels_to_patches normalizes in float32 where HF divides in float64 and casts: the same for all 256 values."""
+    pixels = np.resize(np.arange(256, dtype=np.uint8), (56, 56, 3))  # every value, repeated
+    expected = (pixels / 255.0).astype(np.float32)
+    expected -= image_prep.IMAGE_MEAN
+    expected *= 1.0 / image_prep.IMAGE_STD
+    pixel_values, _ = image_prep.pixels_to_patches(pixels, config)
+    raster = pixel_values.reshape(4, 4, 3, 14, 14).permute(0, 3, 1, 4, 2).reshape(56, 56, 3)
+    assert torch.equal(raster, torch.from_numpy(expected))
+
+
+@pytest.mark.parametrize("size", SIZES, ids=[f"{w}x{h}" for w, h in SIZES])
+def test_resize_array_matches_resize_image(config, size):
+    image = random_image(*size)
+    expected = image_prep.resize_image(image, config)
+    actual = image_prep.resize_array(np.asarray(image), config)
+    assert actual.dtype == np.uint8 and np.array_equal(actual, expected)
+
+
+def test_resize_array_skips_pil_at_scale_one(config, monkeypatch):
+    """An image the plan does not shrink is only padded: at scale 1 Pillow's resize returns a copy."""
+
+    def no_resize(*args, **kwargs):
+        raise AssertionError("an image that needs no resize must not go through PIL")
+
+    pixels = np.asarray(random_image(100, 57))
+    monkeypatch.setattr(Image.Image, "resize", no_resize)
+    monkeypatch.setattr(Image, "fromarray", no_resize)
+    padded = image_prep.resize_array(pixels, config)
+    assert padded.shape == (84, 112, 3)
+    assert np.array_equal(padded[:57, :100], pixels) and not padded[57:].any() and not padded[:, 100:].any()
+
+
+@pytest.mark.parametrize(
+    "media",
+    [
+        np.zeros((28, 28, 3), np.float32),
+        np.zeros((28, 28), np.uint8),
+        np.zeros((28, 28, 4), np.uint8),
+        np.zeros((0, 28, 3), np.uint8),
+    ],
+    ids=["float32", "2d", "rgba", "empty"],
+)
+def test_resize_array_rejects(config, expect_error, media):
+    with expect_error(ValueError, "expected a non-empty uint8 RGB"):
+        image_prep.resize_array(media, config)
+
+
 def test_padding_is_black(config):
     """35x35 is padded to 56x56: patches 0 and 1 of each side are real, 2 is half pad, 3 is all pad."""
     image = random_image(35, 35)

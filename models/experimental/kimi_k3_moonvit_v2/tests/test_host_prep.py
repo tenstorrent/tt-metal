@@ -2,14 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""CPU: `tt.host_prep` (the host-side prep for the device) against the reference modules."""
+"""CPU: `tt.host_prep` (the host-side prep for the device) against the reference modules, and `tt.host_fill` (the same
+inputs built fast for the device inputs) against `tt.host_prep`, bit for bit."""
 
 from __future__ import annotations
 
 import pytest
 import torch
 
-from models.experimental.kimi_k3_moonvit_v2.tt import host_prep
+import numpy as np
+
+from models.experimental.kimi_k3_moonvit_v2.tt import host_fill, host_prep, image_prep
 from models.experimental.kimi_k3_moonvit_v2.reference.kimi_k3_vision import load_vision_config
 from models.experimental.kimi_k3_moonvit_v2.reference.modeling_kimi_k3 import (
     MoonViT3dPretrainedModel,
@@ -111,3 +114,46 @@ def test_prepare_host_inputs_rejects_wrong_row_count(config, tower, expect_error
     pixels, _ = random_patches(config, [(1, h * w + extra, 1)])
     with expect_error(ValueError, "pixel_values"):
         host_prep.prepare_host_inputs(config, tower.patch_embed.pos_emb.weight, pixels, torch.tensor([[1, h, w]]))
+
+
+# Grids for host_fill: window order needs h and w to be multiples of 2, interpolation is skipped only at 64x64, and the
+# extremes of the side limit stress the RoPE tables.
+FILL_GRIDS = [(2, 2), (6, 20), (20, 6), (64, 64), (100, 6), (2, 512), (512, 2), (148, 148)]
+
+
+@pytest.fixture(scope="module")
+def fill_weight(config):
+    return torch.randn(64, 64, config.hidden_size, generator=torch.Generator().manual_seed(0))
+
+
+@pytest.mark.parametrize("h,w", FILL_GRIDS, ids=[f"{h}x{w}" for h, w in FILL_GRIDS])
+def test_host_fill_matches_prepare_host_inputs(config, fill_weight, h, w):
+    """Every input host_fill builds is prepare_host_inputs' (before its padding), bit for bit, and the patches are
+    also bit for bit after the cast to the device's bf16."""
+    pixels = np.random.default_rng(h * 1000 + w).integers(0, 256, (h * 14, w * 14, 3), dtype=np.uint8)
+    pixel_values, grid_thws = image_prep.pixels_to_patches(pixels, config)
+    expected = host_prep.prepare_host_inputs(config, fill_weight, pixel_values, grid_thws)
+    n = h * w
+    for dtype in (torch.bfloat16, torch.float32):
+        want = expected["patches"][:n].to(dtype)
+        from_pixels = torch.zeros(n, config.padded_patch_dim, dtype=dtype)
+        host_fill.normalized_patches_into(from_pixels, pixels, config)
+        assert torch.equal(from_pixels, want), f"normalized_patches_into, {dtype}"
+        from_values = torch.zeros(n, config.padded_patch_dim, dtype=dtype)
+        host_fill.patch_values_into(from_values, pixel_values, h, w, config)
+        assert torch.equal(from_values, want), f"patch_values_into, {dtype}"
+    pos = host_fill.PosEmbedTable(fill_weight, config).window_rows(h, w)
+    assert torch.equal(pos, expected["pos_emb"][:n])
+    cos, sin = host_fill.rope_window_rows(config, h, w)
+    assert torch.equal(cos, expected["cos"][:n]) and torch.equal(sin, expected["sin"][:n])
+
+
+def test_pos_embed_table_falls_back_for_other_weights(config):
+    """A weight the batched interpolation cannot take (non-contiguous here) goes through pos_embeds itself."""
+    weight = torch.randn(config.hidden_size, 64, 64).permute(1, 2, 0)
+    table = host_fill.PosEmbedTable(weight, config)
+    assert not table.batched
+    expected = host_prep.to_window_order(
+        host_prep.pos_embeds(weight, 6, 20, config.pos_emb_interpolation_mode), 6, 20, config.merge_kernel_size
+    )
+    assert torch.equal(table.window_rows(6, 20), expected)
