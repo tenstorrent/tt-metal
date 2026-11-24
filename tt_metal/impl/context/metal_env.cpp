@@ -35,6 +35,7 @@
 #include "fabric/channel_trimming_export.hpp"
 #include "fabric/fabric_context.hpp"
 #include "fabric/fabric_builder_context.hpp"
+#include "fabric/link_retrainer.hpp"
 
 namespace tt::tt_metal {
 
@@ -68,6 +69,8 @@ MetalEnvImpl::MetalEnvImpl(MetalEnvDescriptor descriptor) : descriptor_(std::mov
 
     // Initialize distributed context
     distributed_context_ = distributed::multihost::DistributedContext::get_current_world();
+
+    link_retrainer_ = std::make_unique<tt::tt_fabric::ClusterLinkRetrainer>(*cluster_, *hal_, distributed_context_);
 
     std::call_once(s_atfork_registered_, []() { pthread_atfork(prefork_check_all, nullptr, nullptr); });
 
@@ -598,6 +601,7 @@ void MetalEnvImpl::initialize_control_plane_impl() {
 }
 
 void MetalEnvImpl::construct_control_plane(const std::filesystem::path& mesh_graph_desc_path) {
+    const auto link_retrainer = std::move(link_retrainer_);
     if (!logical_mesh_chip_id_to_physical_chip_id_mapping_.empty()) {
         log_info(tt::LogDistributed, "Using custom Fabric Node Id to physical chip mapping.");
         control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(
@@ -607,7 +611,8 @@ void MetalEnvImpl::construct_control_plane(const std::filesystem::path& mesh_gra
             *distributed_context_,
             mesh_graph_desc_path.string(),
             logical_mesh_chip_id_to_physical_chip_id_mapping_,
-            this->control_plane_config());
+            this->control_plane_config(),
+            link_retrainer.get());
     } else {
         control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(
             get_cluster(),
@@ -615,7 +620,8 @@ void MetalEnvImpl::construct_control_plane(const std::filesystem::path& mesh_gra
             get_hal(),
             *distributed_context_,
             mesh_graph_desc_path.string(),
-            this->control_plane_config());
+            this->control_plane_config(),
+            link_retrainer.get());
     }
     fabric_config_ = control_plane_->get_fabric_config();
 }
@@ -629,8 +635,14 @@ void MetalEnvImpl::construct_control_plane() {
             "physical mapping.");
     }
     log_info(tt::LogDistributed, "Constructing control plane using auto-discovery (no mesh graph descriptor).");
+    const auto link_retrainer = std::move(link_retrainer_);
     control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(
-        get_cluster(), *rtoptions_, get_hal(), *distributed_context_, this->control_plane_config());
+        get_cluster(),
+        *rtoptions_,
+        get_hal(),
+        *distributed_context_,
+        this->control_plane_config(),
+        link_retrainer.get());
     fabric_config_ = control_plane_->get_fabric_config();
 }
 
@@ -752,6 +764,7 @@ std::shared_ptr<distributed::multihost::DistributedContext> MetalEnvImpl::get_di
 void MetalEnvImpl::teardown_fabric_objects() {
     system_mesh_.reset();
     control_plane_.reset();
+    link_retrainer_.reset();
     distributed_context_.reset();
     compute_only_distributed_context_.reset();
 }

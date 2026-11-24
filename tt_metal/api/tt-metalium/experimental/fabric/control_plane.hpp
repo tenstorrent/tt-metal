@@ -60,6 +60,7 @@ namespace tt::tt_fabric {
 
 class TopologyMapper;
 class FabricFlatAddressRoutingTableGenerator;
+class LinkRetrainer;
 
 // TODO: remove this once UMD provides API for UBB ID and bus ID
 struct UbbId {
@@ -97,13 +98,17 @@ using PortDescriptorTable = std::unordered_map<MeshId, std::unordered_map<MeshId
 
 class ControlPlane {
 public:
+    // link_retrainer, when given, retrains the factory cables live discovery did not find, if
+    // TT_METAL_FSD_LINK_RETRAIN_ATTEMPTS asks for it. Used only during construction.
+
     // Create control plane with auto-discovery
     explicit ControlPlane(
         const ::tt::Cluster& cluster,
         const ::tt::llrt::RunTimeOptions& rtoptions,
         const ::tt::tt_metal::Hal& hal,
         const tt_metal::distributed::multihost::DistributedContext& distributed_context,
-        const tt_metal::FabricSettings& config = {});
+        const tt_metal::FabricSettings& config = {},
+        LinkRetrainer* link_retrainer = nullptr);
 
     // Create control plane with custom mesh graph descriptor
     explicit ControlPlane(
@@ -112,7 +117,8 @@ public:
         const ::tt::tt_metal::Hal& hal,
         const tt_metal::distributed::multihost::DistributedContext& distributed_context,
         const std::string& mesh_graph_desc_file,
-        const tt_metal::FabricSettings& config = {});
+        const tt_metal::FabricSettings& config = {},
+        LinkRetrainer* link_retrainer = nullptr);
 
     // Create control plane with custom mesh graph descriptor and logical mesh chip id to physical chip id mapping
     explicit ControlPlane(
@@ -122,7 +128,8 @@ public:
         const tt_metal::distributed::multihost::DistributedContext& distributed_context,
         const std::string& mesh_graph_desc_file,
         const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping,
-        const tt_metal::FabricSettings& config = {});
+        const tt_metal::FabricSettings& config = {},
+        LinkRetrainer* link_retrainer = nullptr);
 
     ~ControlPlane();
 
@@ -437,6 +444,10 @@ private:
     std::reference_wrapper<const ::tt::llrt::RunTimeOptions> rtoptions_;
     std::reference_wrapper<const ::tt::tt_metal::Hal> hal_;
     std::reference_wrapper<const tt_metal::distributed::multihost::DistributedContext> distributed_context_;
+    // Not owned, and only dereferenced during construction. Null when this control plane must not retrain.
+    LinkRetrainer* link_retrainer_ = nullptr;
+    // Factory link retrain rounds run during construction.
+    uint32_t fsd_link_retrain_rounds_ = 0;
 
     // Fabric settings. Strict system health mode (reliability_mode) requires (expects) all links/devices to be
     // live: any downed devices/links result in an error. Otherwise the control plane is free to instantiate
@@ -541,6 +552,12 @@ private:
     // instead would disagree with its peers about which cables exist, and any collective gated on that
     // deadlocks.
     void ingest_factory_system_descriptor();
+
+    // Retrain the factory cables live discovery did not find, then replace the live descriptor with what
+    // discovery finds afterwards. Collective, and run by ingest_factory_system_descriptor() before anything
+    // holds a reference to the live descriptor. Runs only when every rank has a retrainer that can retrain
+    // and asks for at least one round.
+    void retrain_missing_fsd_links();
 
     // A STRICT mesh graph may run with relaxed system health. A RELAXED mesh graph may not run with
     // STRICT system health.

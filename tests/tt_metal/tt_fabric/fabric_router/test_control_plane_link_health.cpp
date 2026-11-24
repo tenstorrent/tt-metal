@@ -12,17 +12,30 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <memory>
 #include <set>
 #include <string>
+#include <vector>
 
+#include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/link_health.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
+#include <tt_stl/cleanup.hpp>
+#include <tt_stl/span.hpp>
 
 #include "fabric_fixture.hpp"
 #include "impl/context/metal_context.hpp"
 #include "llrt/tt_cluster.hpp"
+#include "tests/tt_metal/tt_fabric/common/utils.hpp"
+#include "tt_metal/fabric/link_retrainer.hpp"
+#include "tt_metal/fabric/physical_system_discovery.hpp"
 
 namespace tt::tt_fabric::fabric_router_tests {
 namespace {
@@ -567,6 +580,112 @@ TEST_F(FactoryDescriptorControlPlaneFixture, AnIncompatibleDescriptorFailsAtInge
         EXPECT_NE(what.find("Factory System Descriptor host filter"), std::string::npos) << what;
         EXPECT_NE(what.find("local_ok_min=0"), std::string::npos) << what;
     }
+}
+
+// Stands in for the cluster's retrainer, which a mock cannot run. The retrain does nothing, so rediscovery
+// finds the same cables: what a cable that will not come back looks like.
+class NoOpLinkRetrainer final : public LinkRetrainer {
+public:
+    explicit NoOpLinkRetrainer(bool can_retrain) : can_retrain_(can_retrain) {}
+
+    bool can_retrain() const override { return can_retrain_; }
+
+    std::vector<EthLinkEndpoint> retrain(const std::vector<EthLinkEndpoint>& local_endpoints) override {
+        endpoints_per_round.push_back(local_endpoints.size());
+        return {};
+    }
+
+    tt::tt_metal::PhysicalSystemDescriptor rediscover() override {
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        return tt::tt_metal::run_physical_system_discovery(
+            *cluster.get_cluster_desc(),
+            tt::tt_metal::distributed::multihost::DistributedContext::get_current_world(),
+            cluster.get_target_device_type());
+    }
+
+    std::vector<std::size_t> endpoints_per_round;
+
+private:
+    bool can_retrain_;
+};
+
+std::unique_ptr<ControlPlane> control_plane_with_retrainer(LinkRetrainer& retrainer, uint32_t attempts) {
+    auto& context = tt::tt_metal::MetalContext::instance();
+    auto& rtoptions = context.rtoptions();
+    rtoptions.set_fsd_link_retrain_attempts(attempts);
+    auto reset = ttsl::make_cleanup([&rtoptions] { rtoptions.set_fsd_link_retrain_attempts(0); });
+    return std::make_unique<ControlPlane>(
+        context.get_cluster(),
+        rtoptions,
+        context.hal(),
+        *tt::tt_metal::distributed::multihost::DistributedContext::get_current_world(),
+        rtoptions.get_custom_fabric_mesh_graph_desc_path(),
+        make_control_plane_config(
+            tt::tt_fabric::FabricConfig::FABRIC_2D,
+            tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE),
+        &retrainer);
+}
+
+std::uint64_t sum_over_ranks(std::uint64_t local) {
+    std::array<std::uint64_t, 1> mine{local};
+    std::array<std::uint64_t, 1> total{};
+    using tt::tt_metal::distributed::multihost::ReduceOp;
+    tt::tt_metal::distributed::multihost::DistributedContext::get_current_world()->all_reduce(
+        ttsl::Span<std::uint64_t>(mine), ttsl::Span<std::uint64_t>(total), ReduceOp::SUM);
+    return total[0];
+}
+
+// The missing-links pod. Its four missing factory cables are retrained from both ends, each end by the
+// rank that discovered it, in every round, because on a mock nothing comes back.
+TEST_F(FactoryDescriptorControlPlaneFixture, RetrainSpendsEveryRoundOnCablesThatDoNotComeBack) {
+    NoOpLinkRetrainer retrainer(/*can_retrain=*/true);
+    const auto control_plane = control_plane_with_retrainer(retrainer, 2);
+
+    // The round count is agreed across ranks, so every rank takes part in the same number of sums.
+    ASSERT_EQ(retrainer.endpoints_per_round.size(), 2u);
+    for (const auto endpoints : retrainer.endpoints_per_round) {
+        EXPECT_EQ(sum_over_ranks(endpoints), 8u);
+    }
+
+    // Retraining in vain leaves the same records as not retraining at all.
+    const auto* link_health = control_plane->get_link_health();
+    ASSERT_NE(link_health, nullptr);
+    EXPECT_EQ(link_health->get_downed_links().size() + link_health->get_unused_downed_links().size(), 8u);
+
+    if (*tt::tt_metal::distributed::multihost::DistributedContext::get_current_world()->rank() != 0) {
+        return;
+    }
+    const auto report = std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_logs_dir()) /
+                        "generated" / "fabric" / "unretrainable_channels.yaml";
+    std::ifstream in(report);
+    ASSERT_TRUE(in.is_open()) << report;
+    const std::string contents((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    in.close();
+    std::filesystem::remove(report);
+    EXPECT_NE(contents.find("total_retrain_iterations: 2\n"), std::string::npos) << contents;
+    std::size_t entries = 0;
+    for (auto at = contents.find("  - host: "); at != std::string::npos; at = contents.find("  - host: ", at + 1)) {
+        ++entries;
+    }
+    EXPECT_EQ(entries, 8u) << contents;
+}
+
+// One rank that cannot retrain stops all of them: half a collective retrain would hang the other half.
+TEST_F(FactoryDescriptorControlPlaneFixture, RetrainNeedsEveryRankToBeAble) {
+    const bool rank_zero = *tt::tt_metal::distributed::multihost::DistributedContext::get_current_world()->rank() == 0;
+    NoOpLinkRetrainer retrainer(/*can_retrain=*/!rank_zero);
+    const auto control_plane = control_plane_with_retrainer(retrainer, 2);
+
+    EXPECT_TRUE(retrainer.endpoints_per_round.empty());
+    ASSERT_NE(control_plane->get_link_health(), nullptr);
+}
+
+TEST_F(FactoryDescriptorControlPlaneFixture, RetrainIsOffByDefault) {
+    NoOpLinkRetrainer retrainer(/*can_retrain=*/true);
+    const auto control_plane = control_plane_with_retrainer(retrainer, 0);
+
+    EXPECT_TRUE(retrainer.endpoints_per_round.empty());
+    ASSERT_NE(control_plane->get_link_health(), nullptr);
 }
 
 }  // namespace

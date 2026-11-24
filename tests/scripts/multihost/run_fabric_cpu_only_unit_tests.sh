@@ -389,6 +389,7 @@ run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Physi
 run_test ./build/test/tools/scaleout/test_factory_system_descriptor --gtest_filter="Cluster.TestFactorySystemDescriptorSingleNodeTypes"
 run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FsdHostFilter.*"
 run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FsdChipsAbsentFromLive.*"
+run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FactoryLinkRetrain.*"
 run_test ./build/test/tools/scaleout/test_factory_system_descriptor --gtest_filter="Cluster.TestGenerate*ClusterDescriptorFromFSD:Cluster.TestNodeTypeArchitectureAndBoardRevision"
 run_test python3 -m pytest tests/ttnn/distributed/test_ttrun.py
 
@@ -714,7 +715,7 @@ fi # bh-subtorus-sc16
 if run_group "bh-fsd-reliability"; then
 
 # Healthy-pod tests only; the excluded ones need missing links or an incompatible pairing.
-FSD_HEALTHY_FILTER="FactoryDescriptorControlPlaneFixture.*-FactoryDescriptorControlPlaneFixture.ACableTheMeshGraphDoesNotUseIsUnused:FactoryDescriptorControlPlaneFixture.StrictSystemHealthRejectsARelaxedMeshGraph:FactoryDescriptorControlPlaneFixture.MeshGraphCountAboveTheFactoryDropsTheRoutingPlane:FactoryDescriptorControlPlaneFixture.StrictIntermeshAllowsAnUnusedHoleWhenBothDescriptorsCoverTheCount:FactoryDescriptorControlPlaneFixture.AnIncompatibleDescriptorFailsAtIngest:FactoryDescriptorControlPlaneFixture.RelaxedConnectionWithNoFactoryCableIsLogicalOnly"
+FSD_HEALTHY_FILTER="FactoryDescriptorControlPlaneFixture.*-FactoryDescriptorControlPlaneFixture.ACableTheMeshGraphDoesNotUseIsUnused:FactoryDescriptorControlPlaneFixture.StrictSystemHealthRejectsARelaxedMeshGraph:FactoryDescriptorControlPlaneFixture.MeshGraphCountAboveTheFactoryDropsTheRoutingPlane:FactoryDescriptorControlPlaneFixture.StrictIntermeshAllowsAnUnusedHoleWhenBothDescriptorsCoverTheCount:FactoryDescriptorControlPlaneFixture.AnIncompatibleDescriptorFailsAtIngest:FactoryDescriptorControlPlaneFixture.RelaxedConnectionWithNoFactoryCableIsLogicalOnly:FactoryDescriptorControlPlaneFixture.Retrain*"
 
 # Healthy single host against the multi-host FSD; the host filter narrows it to this rank's slice.
 FSD_AISLEC_DIR=tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC16_32x4_revC_aisleC
@@ -737,6 +738,9 @@ run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD
 # Missing-links pod: holes the mesh graph still needs stay downed, holes past its count are unused.
 FSD_MISSING_LINKS_MAPPING="${FSD_SUBTORUS_POD_DIR}/SC16_32x4_revC_subtorus_aisleD_missing_links/SC16_32x4_revC_subtorus_aisleD_missing_links_mapping.yaml"
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${FSD_QUAD_HOST_MGD}" --mock-cluster-rank-binding "${FSD_MISSING_LINKS_MAPPING}" --factory-system-descriptor "${FSD_QUAD_HOST_DESCRIPTOR}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FactoryDescriptorControlPlaneFixture.ACableTheMeshGraphDoesNotUseIsUnused:FactoryDescriptorControlPlaneFixture.StrictSystemHealthRejectsARelaxedMeshGraph"
+
+# In-workload retraining of the same holes, with a retrainer that cannot bring them back on a mock.
+run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${FSD_QUAD_HOST_MGD}" --mock-cluster-rank-binding "${FSD_MISSING_LINKS_MAPPING}" --factory-system-descriptor "${FSD_QUAD_HOST_DESCRIPTOR}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FactoryDescriptorControlPlaneFixture.Retrain*"
 
 # Mesh graph asks for more channels than the factory has: planes drop to the factory count.
 FSD_QUAD_HOST_INTRA4_MGD="${MGD_CUSTOM}/fsd_quad_host_intra_count4_mesh_graph_descriptor.textproto"
