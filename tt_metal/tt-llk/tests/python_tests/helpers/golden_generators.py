@@ -5602,9 +5602,8 @@ class UntilizeGolden:
 
         operand = quantize_input_to_unpack_format(operand, input_format)
 
-        # untilize_block's plain torch cast wraps; the packer saturates, to a sign-magnitude range
-        # with no INT_MIN. Callers that omit input_format are reshaping a device result, not
-        # modelling a pack, so leave those untouched.
+        # untilize_block's cast wraps where the packer clamps to sign-magnitude, so a modelled pack
+        # saturates first; a caller that omits input_format is reshaping a device result, not packing.
         if (
             input_format is not None
             and input_format.is_integer()
