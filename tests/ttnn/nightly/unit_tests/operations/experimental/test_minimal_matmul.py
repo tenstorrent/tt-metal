@@ -543,8 +543,9 @@ def test_linear_core_grid(device, core_grid):
 # the throttled MOP (MM_THROTTLE). These activations' SFPU bodies walk Dest two rows at a time and, outside
 # that define, advance it through ADDR_MOD_6 from their own init; under it they must advance Dest
 # explicitly, or every activation call after the first block rewrites the tile's first rows.
+@pytest.mark.parametrize("fp32_acc", [True, False], ids=["fp32_acc", "bf16_acc"])
 @pytest.mark.parametrize("activation", list(FUSED_PARAM_ACTIVATIONS))
-def test_linear_throttled_fused_activation(device, activation):
+def test_linear_throttled_fused_activation(device, activation, fp32_acc):
     grid = device.compute_with_storage_grid_size()
     if not is_wormhole_b0() or grid.x * grid.y <= 48:
         pytest.skip("matmul throttling (MM_THROTTLE) applies only to Wormhole with more than 48 cores")
@@ -568,6 +569,7 @@ def test_linear_throttled_fused_activation(device, activation):
         subblock_w=2,
         activation=activation,
         math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_acc=fp32_acc,
         throttle_level=ttnn.ThrottleLevel(1),
     )
     assert check_result["pcc"] > 0.999_500

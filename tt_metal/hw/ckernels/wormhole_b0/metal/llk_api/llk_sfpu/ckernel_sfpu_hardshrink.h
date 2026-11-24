@@ -55,21 +55,21 @@ inline void calculate_hardshrink(std::uint32_t param0) {
     // FP32→FP19b truncation, keeping comparisons consistent.
     sfpi::vFloat lambda = Converter::as_float(param0);
     // Two rows per body: the second row's store also advances Dest (see ckernel_sfpu_row_pair.h).
-    // The add that forms each difference has a 2-cycle result shadow, and the compiler pads a
-    // one-row body with an SFPNOP before the SFPSETCC; with two independent rows it interleaves the
-    // second row's setsgn/add into that shadow instead.
+    // The add that forms each difference has a 2-cycle result shadow before its SFPSETCC; row 1's
+    // setsgn/add are independent of row 0, so they fill row 0's shadow.
 #pragma GCC unroll 4
     for (int d = 0; d < ITERATIONS; d += 2) {
         sfpi::vFloat v0 = sfpi::dst_reg[0];
         sfpi::vFloat v1 = sfpi::dst_reg[1];
         // Per row, |v| <= lambda is written as d = -|v| + lambda >= 0. Wormhole SFPSETCC only
         // has LT0/GTE0/EQ0/NE0, so the <= form costs two SFPSETCCs plus an SFPCOMPC while this
-        // one lands directly on GTE0. Both terms are magnitudes of opposite sign, so the sum cannot
-        // overflow and equality still lands on +0.
+        // one lands directly on GTE0. For lambda >= 0 the terms have opposite signs, so the sum
+        // cannot overflow and equality lands on +0. For lambda < 0, d < 0 (possibly -inf), which
+        // keeps x as required.
         //
-        // setsgn(v, 1) forms -|v| in one instruction, NaN included, so no separate negation is
-        // needed. sfpi::abs is not an option: SFPABS in float mode leaves a -NaN sign-set (see
-        // ckernel_sfpu_isclose.h), which would feed a different operand into the compare for -NaN.
+        // setsgn(v, 1) forms -|v| in one instruction, NaN included. sfpi::abs is not an option:
+        // SFPABS in float mode leaves a -NaN sign-set (see ckernel_sfpu_isclose.h), which would
+        // feed a different operand into the compare for -NaN.
         sfpi::vFloat neg_abs_v0 = sfpi::setsgn(v0, 1 /* sgn */);
         sfpi::vFloat neg_abs_v1 = sfpi::setsgn(v1, 1 /* sgn */);
         sfpi::vFloat d0 = neg_abs_v0 + lambda;

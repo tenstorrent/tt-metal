@@ -55,10 +55,10 @@ inline void _calculate_threshold_(T threshold, T value) {
         v_threshold = Converter::as_float(threshold);
         v_value = Converter::as_float(value);
     }
-    // Two rows per body: the second row's store carries the Dest increment (see ckernel_sfpu_row_pair.h),
-    // which drops the per-row TTINCRWC. `in <= t` is tested as d = -1 * in + t >= 0: that is the SFPMAD
+    // Two rows per body: the second row's store carries the Dest increment (see ckernel_sfpu_row_pair.h).
+    // `in <= t` is tested as d = -1 * in + t >= 0: that is the SFPMAD
     // the compiler emits for the compare, with the constant -1 as the first multiplicand. Forming both
-    // rows' d before either SFPSETCC lets row 1's MAD fill row 0's result shadow instead of an SFPNOP.
+    // rows' d before either SFPSETCC lets row 1's MAD fill row 0's result shadow.
     // The MAD is spelled out with the builtin because the operand order matters: the sign of a NaN it
     // produces (t = +-inf against in = +-inf, or a NaN threshold against a NaN input) follows the
     // operand order, and `t - in` would be emitted as `in * -1 + t`.

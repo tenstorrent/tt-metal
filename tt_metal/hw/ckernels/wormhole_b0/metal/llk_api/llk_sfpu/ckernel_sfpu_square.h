@@ -35,8 +35,9 @@ inline void calculate_square() {
     static_assert(ITERATIONS % 2 == 0, "calculate_square() processes dest rows in pairs.");
 
 #if defined(MM_THROTTLE) && MM_THROTTLE > 0
-    // A throttled matmul owns replay entries 16+, and a pair body with its Dest increment needs 19.
-    // Addressing the rows absolutely keeps the increment out of the repeated body. Dest is left
+    // A throttled matmul owns the replay entries from ckernel::math::replay_buf_offset up, so the
+    // compiler's replayed SFPU body must fit below that offset; the paired body with its Dest increment
+    // does not. Addressing the rows absolutely leaves no repeated body to replay. Dest is left
     // where it was: the face walk advances from the counter's CR copy, which TTINCRWC never moves.
     static_assert(ITERATIONS <= 32, "calculate_square() unrolls the throttled walk fully.");
 #pragma GCC unroll 16
@@ -52,8 +53,7 @@ inline void calculate_square() {
         sfpi::dst_reg[d] = r0;
         sfpi::dst_reg[d + 1] = r1;
     }
-    return;
-#endif
+#else
 #pragma GCC unroll 4
     for (int d = 0; d < ITERATIONS; d += 2) {
         sfpi::vFloat v0 = sfpi::dst_reg[0];
@@ -68,6 +68,7 @@ inline void calculate_square() {
         _sfpu_row_pair_store_second_(r1);
         _sfpu_row_pair_end_();
     }
+#endif
 }
 
 }  // namespace ckernel::sfpu
