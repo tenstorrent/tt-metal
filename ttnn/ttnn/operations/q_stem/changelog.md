@@ -235,3 +235,60 @@ init + fp32 pack overheads).
 - Issues encountered: None (first device run correct).
 - Tests added: `test_q_stem_precision_baseline.py::test_q_stem_rope_precision` (4 shapes × 2 DEST widths, nope /
   rope reported separately).
+
+## Refinement 6 — Local stage-1 throughput on the PERF FOCUS (block / buffer / injector co-tune)
+- Date: 2026-11-24
+- **Breakdown on the R5 tree** (`perf_ablate.py`, ccl_perf protocol, 3 exp, fastest chip): full 147.7; S1_COMPUTE
+  stubbed 148.6 (0: compute hidden); QB_READ 131.6 (−16); SEND_PAYLOAD 156.0 (noisy, stdev 4.6 — **no saving: the
+  exchange is hidden in the full op**, so no TRANSPORT 6b is filed per the Done-when); S3+OUT_WRITE+WKV_READ 118.5;
+  +QB_READ 102.7; +S1_COMPUTE 101.4; +SEND_PAYLOAD 69.4 (the x-multicast + scaffold floor). Stage 1 was x-supply bound:
+  the helper handshake acks a round only when the receiver starts waiting for it, so the 20 rounds of 96 KiB run
+  strictly one after another (ack fan-in from 72 receivers → multicast → flag).
+- **Calculator (written before building)**: `estimate.py sweep`, phase "Refinement 6" (`dm_estimates.json`): one
+  injector to the 9x8 rect, current schedule (6 x 16 KiB per round) 83.3 µs, path-reservation bound (586 cyc per
+  multicast); 2 rotating injectors, half the rounds each: 41.6 µs (NoC0) / 46.5 µs (NoC1), max 46.5 →
+  predicted x supply −37 µs. Shared-link contention between the two trees is not modelled.
+  **Measured** (`estimate.py measure`): x floor 69.5 µs (1 inj) → 51.5 µs (2 inj, NoC 0/1): −18 µs, same order as
+  predicted, ~half the predicted gain.
+- What was done (Reused: the Mcast helper transfer, injector/reader/compute kernels, the for_each_block send order;
+  Added: a credit semaphore, a second multicast family, per-K-block q_b push):
+  1. `X_INJECTORS` (1|2) + `X_INJECTOR_NOCS`: injector i (a free row-0 core, lamp L9) owns the global x rounds
+     r % NI == i; its DRAM/L1 half reads only those rounds, its multicast half sends them on its own Mcast family
+     (fixed sender, `handshake=False`, Flag data-ready, linked) into slot r % depth (one shared CB base).
+     Flow control is the receivers' slot credits (`SEM_X_CREDIT`, cumulative count per injector): a receiver credits
+     round r to injector r % NI as soon as its slot is free, up to min(NI, depth) rounds ahead — one outstanding round
+     per injector, so each injector's flag is seen and cleared before it is credited again (no flag race; Counter
+     signalling was tried first and costs a write barrier per round: 1 inj 147.7 → 172.6).
+     **Parked at 1** (behaviour identical to the handshake: 147.64 µs). With 2: stage 1 ends ~14 µs earlier
+     (zones: S1 end 103–111 → 89–91 µs), stage-1 + exchange with stage 3 stubbed 93.4 → 82.6 µs; but the full op is
+     flat (149.8–151.6) and the slowest chip +10 µs (160 → 170): the stage-3-only cores finish later (their reads /
+     writes contend with the second multicast tree), and the stage-3 tail on the stage-1 cores (~40–50 µs after S1)
+     sets the end. NoCs (0,0): 148.3 / slowest 165; (1,0): 150.5.
+  2. q_b slice streamed per K-block: the reader pushes `s1_kb * cols` tiles per K-block (reserved once, resident);
+     the compute waits cumulatively per K-block through the matmul helper's `PreKBlockFn` (`QbKBlockWait`, no state
+     change → `InitMode::Short` unchanged). At nkb = 1 (PERF FOCUS default, s1_kb = Q_t) the schedule is unchanged.
+     With nkb > 1 the first block overlaps the q_b read: X_ROUND_TILES_CAP 24 (nkb 2) 148.4, 16 (nkb 3) 153.4 (2 inj)
+     — the extra rounds cost more than the overlap saves. Kept (correct, live via X_ROUND_TILES_CAP).
+  3. Knobs re-swept: `S1_BLOCK_M_TILES` 5 (L1) 173.8 / slowest 220.6 (first send delayed; the exchange then trails);
+     `QB_READ_BATCH` 4 149.7 / 16 150.3 (vs 8: 149.8, all 2 inj; tie); `X_ROUND_DEPTH` 2 147.9 (1 inj; tie), 4 149.2
+     (2 inj); `S3_COST_FACTOR` 1.8: fastest 140.5–142.9 but slowest 183–194 (chip skew; ccl_perf would call it a
+     loss), 3.5 150.3; `FREE_CORE_START` 0.5 150.2. All kept at their previous values.
+- **Result** (`perf_measure.py`, 5 exp; `agent_logs/perf_r6_focus.json`): fastest chip 147.66 → **147.61 µs**,
+  slowest 161.28 → 161.13; `ccl_perf compare` verdict **null (within noise)**. Not dispatch-bound.
+- Finding (what binds now): stage 1 is no longer the binding part once x supply is doubled. The end is set by the
+  stage-3 tail: stage-1 cores' one-head tail (~40–50 µs past S1) and the stage-3-only cores, whose traffic slows when
+  the second multicast tree is added. Output writes stubbed: 134.6 (1 inj) / 134.8 (2 inj) — the same. With stage 3
+  stubbed the exchange binds (payload stub −25 µs at 1 inj, −38 µs at 2 inj), so TRANSPORT becomes the next wall
+  once the tail shrinks. Next lever: move the stage-1 cores' heads/output off the tail (interleave landed rows into the
+  stage-1 loop, L2) together with X_INJECTORS=2; not done here (L2 restructures all three compute-core kernels).
+- Accuracy achieved: unchanged (x rounds and q_b are exact copies; same matmul accumulation order); PERF FOCUS and
+  every slice cell pass `check_output` at their tolerance. X_INJECTORS=2 also checked on K-blocked Q=4096,
+  m_non_aligned S=160 and B=2 cells (8/8).
+- Golden test progress: targeted slice 21/22 (4 loose cases, K-blocked Q=4096, m_non_aligned S=160, B=2, S=2048,
+  S=48 — bfp8 + 16-bit DEST + L1 + RM and bf16 + fp32 + DRAM + TILE); the one failure is a pre-existing order
+  dependence (Q=4096 bf16 after the S=2048 cells in one session: the grow-only landing scratch lowers the CB budget;
+  fails identically at HEAD, passes alone). test_regression.py 11/11, test_q_stem.py 9/9.
+- Issues encountered: the `QSTEM_ABLATE` hook replaced kernel defines (now appends). X_MCAST ablation hangs by design
+  (receivers wait for rounds).
+- Tests added: none (tools only: `perf_ablate.py` / `zone_probe.py` take `QSTEM_KNOBS="K=V;K=V"` overrides,
+  `zone_summary.py` prints the S1 start).

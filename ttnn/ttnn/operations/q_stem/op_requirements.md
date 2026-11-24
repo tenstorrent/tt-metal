@@ -207,7 +207,7 @@ rotation then one fused chain `rope*cos + rot*sin`). All 546 RoPE golden cells p
 three RoPE regression tests; rope part PCC 0.999997 at fp32 DEST. Guard-set baselines: DSV3.2 227.8 µs, GLM-5.3
 154.0 µs fastest chip.
 
-### [ ] Refinement 6 — Local stage-1 throughput on the PERF FOCUS (block / buffer / injector co-tune)
+### [x] Refinement 6 — Local stage-1 throughput on the PERF FOCUS (block / buffer / injector co-tune)
 
 **Type**: perf
 
@@ -240,6 +240,15 @@ PERF FOCUS and record it. If the exchange is no longer hidden (stubbing the payl
 **TRANSPORT** follow-up `Refinement 6b`: link balance (R4 relay of the antipodal quarter), arrival-increment
 interval (L4), port batch (L5), and Ethernet-probe port placement. Measure it against `fabric_ring_exchange` /
 `fabric_all_gather`'s numbers.
+
+**Outcome**: PERF FOCUS fastest chip 147.66 → 147.61 µs, slowest 161.28 → 161.13 (`ccl_perf compare`: null). Built
+`X_INJECTORS` (rotating injectors with receiver slot credits, one Mcast family per NoC) and per-K-block q_b streaming.
+2 injectors cut the x floor 69.5 → 51.5 µs and stage 1 ends ~14 µs earlier, but the full op is flat and the slowest
+chip is +10 µs, so the knob is parked at 1. `S1_BLOCK_M_TILES` 5, `X_ROUND_*`, `QB_READ_BATCH` and the placement
+knobs re-swept: none wins. SEND_PAYLOAD ablation in the full op: no saving (exchange hidden), so no 6b filed. Binding
+now: the stage-3 tail (stage-1 cores' heads ~40–50 µs past stage 1, and stage-3-only cores slowed by the extra
+multicast). Next: L2 (interleave landed rows into the stage-1 loop) combined with `X_INJECTORS=2`. Not done here
+because L2 restructures all three compute-core kernels.
 
 ### [ ] Refinement 7 — K-split stage 1 (regime R6) on the PERF FOCUS
 

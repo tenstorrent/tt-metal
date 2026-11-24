@@ -11,6 +11,8 @@ summarize with tests/ttnn/unit_tests/operations/q_stem/zone_summary.py.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 import ttnn
 
@@ -18,6 +20,13 @@ from eval.golden_tests.q_stem.conftest import _fabric_mesh_cache, focus_mesh_or_
 from eval.golden_tests.q_stem.helpers import prepare_q_stem
 from eval.golden_tests.q_stem.test_golden import _loose_cases
 from ttnn.operations.q_stem import q_stem  # type: ignore
+from ttnn.operations.q_stem import q_stem_program_descriptor as _pd
+
+# QSTEM_KNOBS="X_INJECTORS=1;...": program-descriptor knob overrides (as in perf_ablate.py)
+for _kv in filter(None, os.environ.get("QSTEM_KNOBS", "").split(";")):
+    _k, _v = _kv.split("=")
+    assert hasattr(_pd, _k), _k
+    setattr(_pd, _k, type(getattr(_pd, _k))(eval(_v)))
 
 
 @pytest.fixture

@@ -31,18 +31,61 @@
 using namespace dataflow_kernel_lib;
 
 namespace {
-// x rounds of stage 1 (receiver side of `x_round_multicast_block`). A template so the receiver pipe is only
-// instantiated for the stage-1 kernel (the other compute cores carry an absent multicast tag).
-template <typename MC, typename F>
-void receive_x_rounds(const MC& mc, uint32_t cb_x_round, uint32_t round_tiles, uint32_t num_rounds, F&& after_round) {
-    if constexpr (MC::active) {
+// x rounds of stage 1 (receiver side of `x_round_multicast_block`). Templates so the receiver pipes are only
+// instantiated for the stage-1 kernel (the other compute cores carry absent multicast tags).
+//
+// NI rotating injectors (host X_INJECTORS; one Mcast family each, alternating NoCs): round r comes from injector
+// r % NI, as that family's round r / NI. Flow control is ours, not the helper's handshake (which acks a round only
+// when the receiver starts waiting for it, so the injectors would take turns): a receiver credits slot r to
+// injector r % NI (an atomic inc on its credit semaphore) as soon as the slot is free, up to `ahead` =
+// min(NI, x_round_depth) rounds ahead — one outstanding round per injector, so each injector's data-ready flag is
+// seen and cleared before that injector is credited again (Flag signal: linked multicast, no per-round barrier).
+template <uint32_t NI, typename MC0, typename MC1, typename F>
+void receive_x_rounds(
+    const MC0& mc0,
+    const MC1& mc1,
+    uint32_t cb_x_round,
+    uint32_t round_tiles,
+    uint32_t num_rounds,
+    uint32_t ahead,
+    const uint64_t* injector_credit,
+    F&& after_round) {
+    if constexpr (MC0::active) {
+        static_assert(NI == 1 || MC1::active, "a second injector needs its multicast family");
         Noc noc;
-        auto pipe = mc.receiver(noc);
-        for (uint32_t r = 0; r < num_rounds; ++r) {
-            cb_reserve_back(cb_x_round, round_tiles);  // slot free -> the write ptr is the multicast destination
-            pipe.receive();                            // ack (slot free), wait for the round
-            cb_push_back(cb_x_round, round_tiles);
-            after_round();
+        auto pipe0 = mc0.receiver(noc);
+        uint32_t acked = 0;
+        auto credit = [&](uint32_t r, bool block_first) {
+            while (acked < num_rounds && acked < r + ahead) {
+                const uint32_t pages = (acked - r + 1) * round_tiles;  // slots r .. acked free
+                if (block_first && acked == r) {
+                    cb_reserve_back(cb_x_round, pages);
+                } else if (!cb_pages_reservable_at_back(cb_x_round, pages)) {
+                    break;
+                }
+                noc_semaphore_inc(injector_credit[acked % NI], 1);
+                ++acked;
+            }
+        };
+        if constexpr (NI > 1) {
+            auto pipe1 = mc1.receiver(noc);
+            for (uint32_t r = 0; r < num_rounds; ++r) {
+                credit(r, true);
+                if (r % NI == 0) {
+                    pipe0.receive(r / NI);
+                } else {
+                    pipe1.receive(r / NI);
+                }
+                cb_push_back(cb_x_round, round_tiles);
+                after_round();
+            }
+        } else {
+            for (uint32_t r = 0; r < num_rounds; ++r) {
+                credit(r, true);
+                pipe0.receive(r);
+                cb_push_back(cb_x_round, round_tiles);
+                after_round();
+            }
         }
     }
 }
@@ -81,8 +124,14 @@ void kernel_main() {
     constexpr uint32_t cb_sin = get_named_compile_time_arg_val("cb_sin");
     constexpr uint32_t cb_trans = get_named_compile_time_arg_val("cb_trans");
     constexpr auto mc = McastArgs<
-        get_named_compile_time_arg_val("mcast_ct_offset"),
-        get_named_compile_time_arg_val("mcast_rt_offset")>();
+        get_named_compile_time_arg_val("mcast0_ct_offset"),
+        get_named_compile_time_arg_val("mcast0_rt_offset")>();
+    constexpr auto mc1 = McastArgs<
+        get_named_compile_time_arg_val("mcast1_ct_offset"),
+        get_named_compile_time_arg_val("mcast1_rt_offset")>();
+    constexpr uint32_t x_injectors = get_named_compile_time_arg_val("x_injectors");
+    constexpr uint32_t x_round_depth = get_named_compile_time_arg_val("x_round_depth");
+    constexpr uint32_t sem_x_credit = get_named_compile_time_arg_val("sem_x_credit");
 
     constexpr uint32_t rows_per_head = B * qrt;
     constexpr uint32_t unit_tiles = Dn_t * s3n;  // one wkv unit (R1: s3n == N_t, one head)
@@ -146,8 +195,11 @@ void kernel_main() {
     // ---- stage 1 --------------------------------------------------------------------------------------------------
     uint32_t prefetched = 0;
     if constexpr (mc.active) {
-        // qb_slice_load_block: pages k * Cq_t + c0 + c, laid out [k][c] (in1 width = cols)
+        // qb_slice_load_block: pages k * Cq_t + c0 + c, laid out [k][c] (in1 width = cols). Pushed one K-block
+        // (s1_kb rows) at a time: the compute waits per K-block, so the first block's matmul overlaps the rest of
+        // the slice read (the slice stays resident; reserved once).
         const auto qb = TensorAccessor(qb_args, qb_addr, qb_tile_bytes);
+        constexpr uint32_t s1_kb = Q_t / nkb;
         cb_reserve_back(cb_qb_slice, Q_t * cols);
         uint32_t l1 = get_write_ptr(cb_qb_slice);
         uint32_t n = 0;
@@ -162,9 +214,12 @@ void kernel_main() {
                     n = 0;
                 }
             }
+            if ((k + 1) % s1_kb == 0) {
+                noc_async_read_barrier();
+                n = 0;
+                cb_push_back(cb_qb_slice, s1_kb * cols);
+            }
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_qb_slice, Q_t * cols);
     }
 
     // wkv prefetch (`wkv_load_block` for the first units): they need no remote data. On a stage-1 core the reads are
@@ -181,11 +236,25 @@ void kernel_main() {
     }
     constexpr uint32_t num_rounds = num_blocks * nkb;
     const uint32_t per_round = mc.active ? (prefetch_tiles + num_rounds - 1) / num_rounds : prefetch_tiles;
-    receive_x_rounds(mc, cb_x_round, round_tiles, num_rounds, [&]() {
-        const uint32_t to = issued + per_round < prefetch_tiles ? issued + per_round : prefetch_tiles;
-        issue_tiles(0, issued, to, prefetch_l1);
-        issued = to;
-    });
+    uint64_t injector_credit[x_injectors];  // credit semaphore of every injector (packed virtual x/y in named args)
+    for (uint32_t i = 0; i < x_injectors; ++i) {
+        const uint32_t xy =
+            i == 0 ? get_named_compile_time_arg_val("x_inj0_xy") : get_named_compile_time_arg_val("x_inj1_xy");
+        injector_credit[i] = get_noc_addr(q_stem::unpack_x(xy), q_stem::unpack_y(xy), get_semaphore(sem_x_credit));
+    }
+    receive_x_rounds<x_injectors>(
+        mc,
+        mc1,
+        cb_x_round,
+        round_tiles,
+        num_rounds,
+        x_injectors < x_round_depth ? x_injectors : x_round_depth,
+        injector_credit,
+        [&]() {
+            const uint32_t to = issued + per_round < prefetch_tiles ? issued + per_round : prefetch_tiles;
+            issue_tiles(0, issued, to, prefetch_l1);
+            issued = to;
+        });
     if (prefetched > 0) {
         issue_tiles(0, issued, prefetch_tiles, prefetch_l1);
         noc_async_read_barrier();

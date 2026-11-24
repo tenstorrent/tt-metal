@@ -34,7 +34,9 @@ void kernel_main() {
     constexpr uint32_t Sq = get_compile_time_arg_val(10);    // rows per quarter
     constexpr uint32_t x_St = get_compile_time_arg_val(11);  // latent row tiles per image
     constexpr uint32_t cb_x_stage = get_compile_time_arg_val(12);
-    constexpr auto x_args = TensorAccessorArgs<13>();
+    constexpr uint32_t inj_idx = get_compile_time_arg_val(13);  // this injector owns global rounds r % NI == inj_idx
+    constexpr uint32_t num_injectors = get_compile_time_arg_val(14);
+    constexpr auto x_args = TensorAccessorArgs<15>();
     constexpr uint32_t round_tiles = m * s1_kb;
     // 32 x 32 tile of four 16 x 16 faces (f0 f1 / f2 f3), each face row-major: face row = 16 elements
     constexpr uint32_t face_bytes = x_tile_bytes / 4;
@@ -87,8 +89,11 @@ void kernel_main() {
         noc_async_read_barrier();  // the stage is reused by the next realigned row tile
     };
 
-    q_stem::for_each_block(B, qrt, m, G, p, rorder, [&](uint32_t, uint32_t b, uint32_t d, uint32_t r0) {
+    q_stem::for_each_block(B, qrt, m, G, p, rorder, [&](uint32_t j, uint32_t b, uint32_t d, uint32_t r0) {
         for (uint32_t kb = 0; kb < nkb; ++kb) {
+            if ((j * nkb + kb) % num_injectors != inj_idx) {
+                continue;  // another injector's round
+            }
             cb_reserve_back(cb_x_round, round_tiles);
             uint32_t off = get_write_ptr(cb_x_round);
             for (uint32_t i = 0; i < m; ++i) {

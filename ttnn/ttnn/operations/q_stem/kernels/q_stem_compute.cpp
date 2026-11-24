@@ -38,6 +38,13 @@ struct TileOffset {
     uint32_t tiles;
     ALWI uint32_t operator()(uint32_t) const { return tiles; }
 };
+// q_b slice streaming: the reader pushes the resident slice one K-block (s1_kb x cols tiles) at a time, so the
+// first block's matmul starts on K-block 0 while later K-blocks are still in flight. Cumulative wait (the slice is
+// never popped until stage 1 ends); after the first block every wait is already satisfied.
+struct QbKBlockWait {
+    uint32_t cb, tiles_per_kblock;
+    ALWI void operator()(uint32_t kb, uint32_t, bool) const { cb_wait_front(cb, (kb + 1) * tiles_per_kblock); }
+};
 struct QbKBlockOffset {
     uint32_t tiles_per_kblock;
     ALWI uint32_t operator()(uint32_t block) const { return block * tiles_per_kblock; }
@@ -101,7 +108,7 @@ void kernel_main() {
     // ---- stage 1 ----------------------------------------------------------------------------------------------------
     if (cols > 0) {
         DeviceZoneScopedN("S1");
-        cb_wait_front(cb_qb_slice, Q_t * cols);  // resident in1 (NoWaitNoPop below: the lifecycle is mine)
+        // resident in1 (NoWaitNoPop below: the lifecycle is mine), waited per K-block (QbKBlockWait)
         const auto shape = MatmulBlockShape::of(m, cols / sbw1, 1, sbw1, s1_kb, nkb);
         for (uint32_t j = 0; j < num_blocks; ++j) {
 #ifdef ABLATE_S1_COMPUTE
@@ -122,7 +129,7 @@ void kernel_main() {
                 InputPolicy::WaitAndPopPerKBlock,
                 InputPolicy::NoWaitNoPop,
                 NoPostCompute,
-                NoPreKBlock,
+                QbKBlockWait,
                 NoPostKBlock,
                 0,
                 NoKBlockInnerDimFn,
@@ -134,7 +141,7 @@ void kernel_main() {
                 k_blocked ? q_partial_buf : q_buf,
                 shape,
                 {},
-                {},
+                QbKBlockWait{cb_qb_slice, s1_kb * cols},
                 cols,
                 0,
                 {},

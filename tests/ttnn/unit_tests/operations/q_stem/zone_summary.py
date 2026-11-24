@@ -39,7 +39,15 @@ for chip in sorted(last):
         tr = d.get(("TRISC_1", "TRISC-KERNEL", "ZONE_END"))
         if s3s is None:
             continue
-        rec = (c, us(s1e) if s1e else None, us(tr), us(br) if br else None, us(nc) if nc else None)
+        s1s = d.get(("TRISC_1", "S1", "ZONE_START"))
+        rec = (
+            c,
+            us(s1e) if s1e else None,
+            us(tr),
+            us(br) if br else None,
+            us(nc) if nc else None,
+            us(s1s) if s1s else None,
+        )
         (s1 if s1e else other).append(rec)
 
     def stat(name, recs, i):
@@ -49,6 +57,7 @@ for chip in sorted(last):
 
     allend = max(us(v) for d in ev.values() for k, v in d.items() if k[1].endswith("KERNEL") and k[2] == "ZONE_END")
     print(f"chip {chip}: program end {allend:.1f} us")
+    stat("stage-1 cores S1 start", s1, 5)
     stat("stage-1 cores S1 end", s1, 1)
     stat("stage-1 cores compute end", s1, 2)
     stat("stage-1 cores writer end", s1, 3)

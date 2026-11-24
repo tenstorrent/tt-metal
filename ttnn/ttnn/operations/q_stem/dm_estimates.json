@@ -1200,6 +1200,410 @@
    },
    "calculator": "5c96a38e1499653a",
    "measurements": []
+  },
+  {
+   "id": "3a0fa7a1",
+   "kind": "sweep",
+   "utc": "2026-11-24T21:24:20.260246+00:00",
+   "phase": "Refinement 6",
+   "label": "sweep",
+   "schedule": {
+    "op": "q_stem",
+    "case": "PERF FOCUS: x multicast, one injector (5,0) -> stage-1 rect 9x8 (cols 0-8, rows 1-8), 20 rounds x 96 KiB bf16",
+    "work_bytes": 1966080,
+    "top": 4,
+    "max_l1_bytes": 393216,
+    "candidates": [
+     {
+      "name": "x_mcast_1inj",
+      "family": "multicast",
+      "sender": [
+       5,
+       0
+      ],
+      "rect": [
+       0,
+       1,
+       8,
+       8
+      ]
+     }
+    ],
+    "vary": {
+     "bytes": [
+      2048,
+      8192,
+      16384
+     ],
+     "batch": [
+      6,
+      24,
+      48
+     ],
+     "noc": [
+      0,
+      1
+     ]
+    }
+   },
+   "result": {
+    "op": "q_stem",
+    "case": "PERF FOCUS: x multicast, one injector (5,0) -> stage-1 rect 9x8 (cols 0-8, rows 1-8), 20 rounds x 96 KiB bf16",
+    "work_bytes": 1966080,
+    "stats": {
+     "evaluated": 16,
+     "estimated": 16,
+     "refused": 0,
+     "over_l1_cap": 2,
+     "shortlisted": 4,
+     "wall_s": 1.75
+    },
+    "groups": [
+     {
+      "name": "x_mcast_1inj batch=24 bytes=16384 noc=0",
+      "family": "multicast",
+      "status": "estimated",
+      "pass_ns": 77021.06481481482,
+      "details": {
+       "pass_cycles": 103978.4375,
+       "steady_cycles_per_pass": 103978.4375,
+       "binding": "path reservation (586 cycles per multicast) and tree delivery",
+       "recipients": 72,
+       "tree_depth_hops": 32,
+       "noc": 0,
+       "issue_cycles_per_request": 65.6875
+      },
+      "steady_ns_per_pass": 77021.06481481482,
+      "rank": 1,
+      "candidate_id": "9d3c8c1c8f95ed82",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 393216,
+      "config": {
+       "family": "multicast",
+       "sender": [
+        5,
+        0
+       ],
+       "rect": [
+        0,
+        1,
+        8,
+        8
+       ],
+       "batch": 24,
+       "bytes": 16384,
+       "noc": 0,
+       "name": "x_mcast_1inj batch=24 bytes=16384 noc=0",
+       "pages": 120
+      },
+      "tie_with_best": true,
+      "error_band_pct": 10.0
+     },
+     {
+      "name": "x_mcast_1inj batch=24 bytes=16384 noc=1",
+      "family": "multicast",
+      "status": "estimated",
+      "pass_ns": 78639.35185185185,
+      "details": {
+       "pass_cycles": 106163.125,
+       "steady_cycles_per_pass": 106163.125,
+       "binding": "path reservation (604 cycles per multicast) and tree delivery",
+       "recipients": 72,
+       "tree_depth_hops": 33,
+       "noc": 1,
+       "issue_cycles_per_request": 64.625
+      },
+      "steady_ns_per_pass": 78639.35185185185,
+      "rank": 2,
+      "candidate_id": "1872e391460a3333",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 393216,
+      "config": {
+       "family": "multicast",
+       "sender": [
+        5,
+        0
+       ],
+       "rect": [
+        0,
+        1,
+        8,
+        8
+       ],
+       "batch": 24,
+       "bytes": 16384,
+       "noc": 1,
+       "name": "x_mcast_1inj batch=24 bytes=16384 noc=1",
+       "pages": 120
+      },
+      "tie_with_best": true,
+      "error_band_pct": 10.0
+     },
+     {
+      "name": "x_mcast_1inj batch=6 bytes=16384 noc=0",
+      "family": "multicast",
+      "status": "estimated",
+      "pass_ns": 83284.25925925926,
+      "details": {
+       "pass_cycles": 112433.75,
+       "steady_cycles_per_pass": 112433.75,
+       "binding": "path reservation (586 cycles per multicast) and tree delivery",
+       "recipients": 72,
+       "tree_depth_hops": 32,
+       "noc": 0,
+       "issue_cycles_per_request": 65.6875
+      },
+      "steady_ns_per_pass": 83284.25925925926,
+      "rank": 3,
+      "candidate_id": "e8b3ec3e44c3ac44",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 98304,
+      "config": {
+       "family": "multicast",
+       "sender": [
+        5,
+        0
+       ],
+       "rect": [
+        0,
+        1,
+        8,
+        8
+       ],
+       "batch": 6,
+       "bytes": 16384,
+       "noc": 0,
+       "name": "x_mcast_1inj batch=6 bytes=16384 noc=0",
+       "pages": 120
+      },
+      "tie_with_best": true,
+      "error_band_pct": 10.0
+     },
+     {
+      "name": "x_mcast_1inj batch=6 bytes=16384 noc=1",
+      "family": "multicast",
+      "status": "estimated",
+      "pass_ns": 84957.4074074074,
+      "details": {
+       "pass_cycles": 114692.5,
+       "steady_cycles_per_pass": 114692.5,
+       "binding": "path reservation (604 cycles per multicast) and tree delivery",
+       "recipients": 72,
+       "tree_depth_hops": 33,
+       "noc": 1,
+       "issue_cycles_per_request": 64.625
+      },
+      "steady_ns_per_pass": 84957.4074074074,
+      "rank": 4,
+      "candidate_id": "87337cb632c7cd91",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 98304,
+      "config": {
+       "family": "multicast",
+       "sender": [
+        5,
+        0
+       ],
+       "rect": [
+        0,
+        1,
+        8,
+        8
+       ],
+       "batch": 6,
+       "bytes": 16384,
+       "noc": 1,
+       "name": "x_mcast_1inj batch=6 bytes=16384 noc=1",
+       "pages": 120
+      },
+      "tie_with_best": false,
+      "error_band_pct": 10.0
+     }
+    ],
+    "refusals": {},
+    "cross_family": false,
+    "note": "One family: the order is as reliable as that family's ranking."
+   },
+   "calculator": "5c96a38e1499653a",
+   "measurements": [
+    {
+     "group": "x_mcast_1inj batch=6 bytes=16384 noc=0",
+     "measured_ns": 69467.0,
+     "measured_at": "2026-11-24T21:27:00+00:00",
+     "recorded_utc": "2026-11-24T21:50:32.612466+00:00",
+     "estimate_ns": 83284.25925925926,
+     "error_pct": 19.89039293370847,
+     "frozen_first": true,
+     "verdict": "recorded: estimates rank schedules only; compare the measured candidates' order with the estimated order",
+     "note": ""
+    }
+   ]
+  },
+  {
+   "id": "6a1261ad",
+   "kind": "sweep",
+   "utc": "2026-11-24T21:24:20.624021+00:00",
+   "phase": "Refinement 6",
+   "label": "sweep",
+   "schedule": {
+    "op": "q_stem",
+    "case": "PERF FOCUS: x multicast, 2 rotating injectors, each half the rounds (10 x 96 KiB), estimated per injector (concurrency on shared links not modelled)",
+    "work_bytes": 983040,
+    "top": 4,
+    "max_l1_bytes": 393216,
+    "candidates": [
+     {
+      "name": "x_mcast_inj_a_noc0",
+      "family": "multicast",
+      "sender": [
+       5,
+       0
+      ],
+      "rect": [
+       0,
+       1,
+       8,
+       8
+      ],
+      "noc": 0
+     },
+     {
+      "name": "x_mcast_inj_b_noc1",
+      "family": "multicast",
+      "sender": [
+       6,
+       0
+      ],
+      "rect": [
+       0,
+       1,
+       8,
+       8
+      ],
+      "noc": 1
+     }
+    ],
+    "vary": {
+     "bytes": [
+      16384
+     ],
+     "batch": [
+      6
+     ]
+    }
+   },
+   "result": {
+    "op": "q_stem",
+    "case": "PERF FOCUS: x multicast, 2 rotating injectors, each half the rounds (10 x 96 KiB), estimated per injector (concurrency on shared links not modelled)",
+    "work_bytes": 983040,
+    "stats": {
+     "evaluated": 2,
+     "estimated": 2,
+     "refused": 0,
+     "over_l1_cap": 0,
+     "shortlisted": 2,
+     "wall_s": 0.32
+    },
+    "groups": [
+     {
+      "name": "x_mcast_inj_a_noc0 batch=6 bytes=16384",
+      "family": "multicast",
+      "status": "estimated",
+      "pass_ns": 41642.12962962963,
+      "details": {
+       "pass_cycles": 56216.875,
+       "steady_cycles_per_pass": 56216.875,
+       "binding": "path reservation (586 cycles per multicast) and tree delivery",
+       "recipients": 72,
+       "tree_depth_hops": 32,
+       "noc": 0,
+       "issue_cycles_per_request": 65.6875
+      },
+      "steady_ns_per_pass": 41642.12962962963,
+      "rank": 1,
+      "candidate_id": "57da3754c307eae3",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 98304,
+      "config": {
+       "family": "multicast",
+       "sender": [
+        5,
+        0
+       ],
+       "rect": [
+        0,
+        1,
+        8,
+        8
+       ],
+       "noc": 0,
+       "batch": 6,
+       "bytes": 16384,
+       "name": "x_mcast_inj_a_noc0 batch=6 bytes=16384",
+       "pages": 60
+      },
+      "tie_with_best": true,
+      "error_band_pct": 10.0
+     },
+     {
+      "name": "x_mcast_inj_b_noc1 batch=6 bytes=16384",
+      "family": "multicast",
+      "status": "estimated",
+      "pass_ns": 46478.7037037037,
+      "details": {
+       "pass_cycles": 62746.25,
+       "steady_cycles_per_pass": 62746.25,
+       "binding": "path reservation (694 cycles per multicast) and tree delivery",
+       "recipients": 72,
+       "tree_depth_hops": 38,
+       "noc": 1,
+       "issue_cycles_per_request": 64.625
+      },
+      "steady_ns_per_pass": 46478.7037037037,
+      "rank": 2,
+      "candidate_id": "2e4222d27b35e2a0",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 98304,
+      "config": {
+       "family": "multicast",
+       "sender": [
+        6,
+        0
+       ],
+       "rect": [
+        0,
+        1,
+        8,
+        8
+       ],
+       "noc": 1,
+       "batch": 6,
+       "bytes": 16384,
+       "name": "x_mcast_inj_b_noc1 batch=6 bytes=16384",
+       "pages": 60
+      },
+      "tie_with_best": false,
+      "error_band_pct": 10.0
+     }
+    ],
+    "refusals": {},
+    "cross_family": false,
+    "note": "One family: the order is as reliable as that family's ranking."
+   },
+   "calculator": "5c96a38e1499653a",
+   "measurements": [
+    {
+     "group": "x_mcast_inj_b_noc1 batch=6 bytes=16384",
+     "measured_ns": 51498.0,
+     "measured_at": "2026-11-24T21:27:30+00:00",
+     "recorded_utc": "2026-11-24T21:50:32.646908+00:00",
+     "estimate_ns": 46478.7037037037,
+     "error_pct": -9.74658490872713,
+     "frozen_first": true,
+     "verdict": "recorded: estimates rank schedules only; compare the measured candidates' order with the estimated order",
+     "note": ""
+    }
+   ]
   }
  ]
 }

@@ -4,3 +4,5 @@
 {"event":"tool_use","tool":"Skill","skill":"perf-calculator","args":"","ts":"2026-11-24T19:12:56+00:00"}
 {"event":"test_run","what":"R3 final","perf_fastest_us":147.66,"base_us":167.43,"golden_slice":"30/30","unit":"9/9","regression":"8 pass 3 xfail","ts":"2026-11-24T19:35:41+00:00"}
 {"event":"test_run","refinement":5,"result":"pass","detail":"546/546 rope golden cells, 3 rope regression, 9 acceptance, 8 rope precision","ts":"2026-11-24T20:47:54+00:00"}
+{"event":"tool_use","tool":"Skill","skill":"perf-calculator","args":"","ts":"2026-11-24T21:24:02+00:00"}
+{"event":"test_run","what":"R6 final perf_measure","fastest_us":147.61,"slowest_us":161.13,"verdict":"null","note":"X_INJECTORS parked at 1; 2 inj x floor 69.5->51.5us, full op flat","ts":"2026-11-24T21:51:21+00:00"}

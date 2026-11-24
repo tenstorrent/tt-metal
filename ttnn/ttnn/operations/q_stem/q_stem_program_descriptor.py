@@ -6,7 +6,8 @@
 Per-chip core roles (op_design.md, Blocking Model):
   port cores   row 0, 2 * num_links (direction x link): pull remote q head-rows from the stage-1 cores' L1 (NoC0),
                send them over the fabric into the destination core's landing scratch (NoC1), ready fence first.
-  injector     one free row-0 core: reads x rows from DRAM in send order and multicasts them to the stage-1 rect.
+  injectors    X_INJECTORS free row-0 cores: read x rows in send order and multicast them (rotating rounds) to the
+               stage-1 rect.
   compute rect rows 1 .. gy-1: stage 1 (column split of q = x @ q_b, rect W1 x R1 anchored at (0, 1)) and stage 3
                (heads over every compute core: prefix = nope @ wkv_b1[h], rope pass-through, output write).
 
@@ -14,7 +15,8 @@ Knobs (single source each; every dependent quantity derives from them):
   S1_BLOCK_M_TILES   stage-1 row block (the exchange's send unit), clamped to a divisor of quarter_row_tiles
   S1_COLS_PER_CORE   stage-1 columns per core -> the stage-1 rect (smallest W1 x R1 holding ceil(Cq_t / it) cores)
   X_ROUND_TILES_CAP  x round size cap -> s1_kb (largest divisor of Q_t <= cap / s1_block_m)
-  X_ROUND_DEPTH      cb_x_round depth (rounds)
+  X_ROUND_DEPTH      cb_x_round depth (rounds) = how many rounds ahead the receivers credit the injectors
+  X_INJECTORS        x injectors (row-0 cores, one Mcast family each, alternating NoCs X_INJECTOR_NOCS)
   S3_BLOCK_M_TILES   stage-3 row block (1: the landing row layout interleaves nope / rope per row)
   S3_BLOCK_N_CAP     stage-3 N block cap in the streamed-wkv regime (R2)
   S3_LATE_REMOTE_ROWS stage-3 consumption order: remote rows < ts, local heads, remote rows >= ts (ts = rows - late)
@@ -50,6 +52,11 @@ S3_COST_FACTOR = 2.5
 FREE_CORE_START = 0.35
 X_ROUND_TILES_CAP = 64
 X_ROUND_DEPTH = 3
+# x injectors (lamp L3/L9: free row-0 cores): injector i multicasts the global x rounds r % X_INJECTORS == i on NoC
+# X_INJECTOR_NOCS[i % 2] (its DRAM/L1 half reads on the other NoC); receivers credit every free slot to its injector
+# ahead of time, so the injectors' rounds overlap. 1 or 2.
+X_INJECTORS = 1  # 2 measured: x floor -18 us, stage 1 ends -14 us, full op flat / slowest chip +10 us (Refinement 6)
+X_INJECTOR_NOCS = (0, 1)
 S3_BLOCK_M_TILES = 1
 S3_BLOCK_N_CAP = 16
 # Remote rows consumed AFTER the local heads (the last S3_LATE_REMOTE_ROWS rows of every remote head). The own quarter
@@ -96,6 +103,7 @@ CB_ROPE_TMP = 15
 
 # ---- program semaphore ids (port cores; declared on every core the program uses) -------------------------------------
 SEM_BLOCK_READY = 0
+SEM_X_CREDIT = 1  # injectors: cumulative slot credits from the stage-1 receivers
 
 FWD, BWD = 0, 1
 
@@ -297,12 +305,14 @@ def port_cores(gx, num_links):
     return {(d, l): cores[2 * l + d] for l in range(num_links) for d in (FWD, BWD)}
 
 
-def injector_core(gx, ports):
+def injector_cores(gx, ports, n=None):
+    """X_INJECTORS free row-0 cores, nearest the row centre first."""
+    n = X_INJECTORS if n is None else n
     busy = {c.x for c in ports.values()}
     free = sorted((x for x in range(gx) if x not in busy), key=lambda x: (abs(x - gx // 2), x))
-    if not free:
-        raise RuntimeError("q_stem: row 0 has no free core for the x injector")
-    return ttnn.CoreCoord(free[0], 0)
+    if len(free) < n:
+        raise RuntimeError(f"q_stem: row 0 has {len(free)} free core(s) for {n} x injector(s)")
+    return [ttnn.CoreCoord(x, 0) for x in free[:n]]
 
 
 def remote_order(p, G):
@@ -425,12 +435,19 @@ def _alloc_scratch(mesh, geo, tiles):
     return ttnn.allocate_tensor_on_device(ttnn.Shape([geo.C * shard_h, 32]), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh, mc)
 
 
-def _resources(mesh, geo, ports, injector):
+def _resources(mesh, geo, ports, injectors):
     """Per mesh (and core layout): G + 1 global semaphores (ready, arrive[0..G-1]) and ONE landing scratch (L1,
     height-sharded over the compute rect), grown when a call needs more rows than it holds. Created outside any
     trace on the first call (and after a mesh reopen); every call re-arms the counters, so they stay valid."""
-    used = _merge(_rect(0, 1, geo.gx - 1, geo.gy - 1), _crs(list(ports.values()) + [injector]))
-    key = (id(mesh), geo.gx, geo.gy, tuple(sorted((c.x, c.y) for c in ports.values())), geo.G)
+    used = _merge(_rect(0, 1, geo.gx - 1, geo.gy - 1), _crs(list(ports.values()) + list(injectors)))
+    key = (
+        id(mesh),
+        geo.gx,
+        geo.gy,
+        tuple(sorted((c.x, c.y) for c in ports.values())),
+        tuple((c.x, c.y) for c in injectors),
+        geo.G,
+    )
     entry = _RESOURCES.get(key)
     if entry is not None and (entry["mesh"] is not mesh or not entry["scratch"].is_allocated()):
         _RESOURCES.pop(key)
@@ -527,8 +544,8 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
     geo = Geometry(x, q_b, wkv, G, grid, bool(compute_config.fp32_dest_acc_en), output_layout, rope)
     L = num_links
     ports = port_cores(geo.gx, L)
-    injector = injector_core(geo.gx, ports)
-    ready_addr, arrive_addrs, scratch = _resources(mesh, geo, ports, injector)
+    injectors = injector_cores(geo.gx, ports)
+    ready_addr, arrive_addrs, scratch = _resources(mesh, geo, ports, injectors)
     landing_addr = int(scratch.buffer_address())
     payload = int(ttnn.get_tt_fabric_max_payload_size_bytes())
     pkt_tiles = max(1, payload // geo.tile_bytes)
@@ -546,7 +563,7 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
     other_compute = [c for c in compute_cores if (c.x, c.y) not in s1_set]
     port_list = [ports[(d, l)] for l in range(L) for d in (FWD, BWD)]
     port_crs = _crs(port_list)
-    inj_crs = _crs([injector])
+    inj_crs = _crs(injectors)
     all_crs = _merge(compute_rect, port_crs, inj_crs)
 
     x_ct = list(ttnn.TensorAccessorArgs(x).get_compile_time_args())
@@ -554,6 +571,13 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
     wkv_ct = list(ttnn.TensorAccessorArgs(wkv).get_compile_time_args())
     out_ct = list(ttnn.TensorAccessorArgs(out).get_compile_time_args())
     cs_ct = list(ttnn.TensorAccessorArgs(cos).get_compile_time_args()) if rope else wkv_ct  # NoPE: stand-in
+    x_named = [
+        ("x_injectors", len(injectors)),
+        ("x_round_depth", X_ROUND_DEPTH),
+        ("sem_x_credit", SEM_X_CREDIT),
+        ("x_inj0_xy", _pack(virt(injectors[0]))),
+        ("x_inj1_xy", _pack(virt(injectors[-1]))),
+    ]
     rope_named = [
         ("rope", int(rope)),
         ("cb_cos", CB_COS),
@@ -612,6 +636,12 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
                 S1_BLOCK_M_TILES,
                 X_ROUND_TILES_CAP,
                 X_ROUND_DEPTH,
+                X_INJECTORS,
+                tuple(X_INJECTOR_NOCS),
+                S1_COLS_PER_CORE,
+                QB_READ_BATCH,
+                S3_COST_FACTOR,
+                FREE_CORE_START,
                 S3_BLOCK_M_TILES,
                 S3_BLOCK_N_CAP,
                 S3_LATE_REMOTE_ROWS,
@@ -629,7 +659,10 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
             )
         )
         program.custom_program_hash = int.from_bytes(hashlib.sha1(key.encode()).digest()[:8], "little") >> 1
-        program.semaphores = [ttnn.SemaphoreDescriptor(id=SEM_BLOCK_READY, core_ranges=all_crs, initial_value=0)]
+        program.semaphores = [
+            ttnn.SemaphoreDescriptor(id=SEM_BLOCK_READY, core_ranges=all_crs, initial_value=0),
+            ttnn.SemaphoreDescriptor(id=SEM_X_CREDIT, core_ranges=all_crs, initial_value=0),
+        ]
 
         # ---------------- CBs (allocation order matters only for address identity of cb_q_slice / cb_x_round) ------
         bf16 = ttnn.bfloat16
@@ -796,37 +829,55 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
             kernel_source=str(KERNEL_DIR / "q_stem_reader.cpp"),
             core_ranges=s1_rect,
             compile_time_args=reader_ct_s1,
-            named_compile_time_args=rope_named,
+            named_compile_time_args=rope_named + x_named,
             runtime_args=reader_rt_s1,
             config=_dm("RISCV_1", ttnn.NOC.NOC_1 if S1_WRITER_NOC == 0 else ttnn.NOC.NOC_0),
         )
-        inj_rt = ttnn.RuntimeArgs()
-        inj_rt[injector.x][injector.y] = [int(x.buffer_address()), p] + rorder
-        injector_reader_k = ttnn.KernelDescriptor(
-            kernel_source=str(KERNEL_DIR / "q_stem_injector_reader.cpp"),
-            core_ranges=inj_crs,
-            compile_time_args=[
-                CB_X_ROUND,
-                geo.x_tile_bytes,
-                geo.Q_t,
-                geo.s1_kb,
-                geo.nkb,
-                *geo_ct,
-                geo.Sq,
-                geo.x_St,
-                CB_X_STAGE,
-                *x_ct,
-            ],
-            runtime_args=inj_rt,
-            config=_dm("RISCV_0", ttnn.NOC.NOC_1),
-        )
-        injector_k = ttnn.KernelDescriptor(
-            kernel_source=str(KERNEL_DIR / "q_stem_injector.cpp"),
-            core_ranges=inj_crs,
-            compile_time_args=[CB_X_ROUND, geo.x_tile_bytes, geo.round_tiles, geo.num_blocks * geo.nkb],
-            runtime_args=ttnn.RuntimeArgs(),
-            config=_dm("RISCV_1", ttnn.NOC.NOC_0),
-        )
+        injector_ks = []  # per injector: (DRAM/L1 half, multicast half)
+        for i, inj in enumerate(injectors):
+            send_noc = X_INJECTOR_NOCS[i % len(X_INJECTOR_NOCS)]
+            noc_of = lambda n: ttnn.NOC.NOC_0 if n == 0 else ttnn.NOC.NOC_1
+            inj_rt = ttnn.RuntimeArgs()
+            inj_rt[inj.x][inj.y] = [int(x.buffer_address()), p] + rorder
+            reader_k = ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "q_stem_injector_reader.cpp"),
+                core_ranges=_crs([inj]),
+                compile_time_args=[
+                    CB_X_ROUND,
+                    geo.x_tile_bytes,
+                    geo.Q_t,
+                    geo.s1_kb,
+                    geo.nkb,
+                    *geo_ct,
+                    geo.Sq,
+                    geo.x_St,
+                    CB_X_STAGE,
+                    i,
+                    len(injectors),
+                    *x_ct,
+                ],
+                runtime_args=inj_rt,
+                config=_dm("RISCV_0", noc_of(1 - send_noc)),
+            )
+            send_k = ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "q_stem_injector.cpp"),
+                core_ranges=_crs([inj]),
+                compile_time_args=[
+                    CB_X_ROUND,
+                    geo.x_tile_bytes,
+                    geo.round_tiles,
+                    geo.num_blocks * geo.nkb,
+                    i,
+                    len(injectors),
+                    X_ROUND_DEPTH,
+                    geo.C1,
+                    SEM_X_CREDIT,
+                ],
+                defines=[("Q_STEM_INJECTOR_IDX", str(i))],
+                runtime_args=ttnn.RuntimeArgs(),
+                config=_dm("RISCV_1", noc_of(send_noc)),
+            )
+            injector_ks.append((reader_k, send_k, send_noc))
         kernels_tail = []
         # stage-3-only cores, grouped by their writer NoC (FREE_WRITER_NOC per region); one reader/writer pair each
         free_groups = {}
@@ -844,11 +895,12 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
                 kernel_source=str(KERNEL_DIR / "q_stem_reader.cpp"),
                 core_ranges=_crs(cores),
                 compile_time_args=reader_ct_other,
-                named_compile_time_args=rope_named,
+                named_compile_time_args=rope_named + x_named,
                 runtime_args=_rt_subset(reader_rt_other, cores),
                 config=_dm("RISCV_1", ttnn.NOC.NOC_1 if wnoc == 0 else ttnn.NOC.NOC_0),
             )
-            ttnn.attach_absent(reader_other, "mcast")
+            ttnn.attach_absent(reader_other, "mcast0")
+            ttnn.attach_absent(reader_other, "mcast1")
             kernels_tail.append(reader_other)
 
         compute_k = ttnn.KernelDescriptor(
@@ -958,16 +1010,20 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
             config=_dm("RISCV_0", ttnn.NOC.NOC_1),
         )
 
-        mc = ttnn.Mcast2D(
-            mesh,
-            s1_rect,
-            ttnn.Mcast2DFixedSenderConfig(injector),
-            ttnn.McastConfig(noc=ttnn.NOC.NOC_0, handshake=True),
-        )
-        mc.attach(program, "mcast", [injector_k, reader_s1])
+        # one multicast family per injector; flow control is the receivers' slot credits (SEM_X_CREDIT), so no
+        # helper handshake. Flag data-ready (linked multicast, no write barrier per round): safe because a receiver
+        # credits an injector's next round only after it has seen (and cleared) that injector's previous flag
+        for i, (inj, (_, send_k, send_noc)) in enumerate(zip(injectors, injector_ks)):
+            cfg = ttnn.McastConfig()
+            cfg.noc = ttnn.NOC.NOC_0 if send_noc == 0 else ttnn.NOC.NOC_1
+            cfg.handshake = False
+            ttnn.Mcast2D(mesh, s1_rect, ttnn.Mcast2DFixedSenderConfig(inj), cfg).attach(
+                program, f"mcast{i}", [send_k, reader_s1]
+            )
+        if len(injectors) < 2:
+            ttnn.attach_absent(reader_s1, "mcast1")
         program.kernels = [
-            injector_reader_k,
-            injector_k,
+            *[k for rk, sk, _ in injector_ks for k in (rk, sk)],
             reader_s1,
             *kernels_tail,
             compute_k,
@@ -980,7 +1036,7 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
         ablate = [a for a in os.environ.get("QSTEM_ABLATE", "").split(",") if a]
         if ablate:
             for kd in program.kernels:
-                kd.defines = [(f"ABLATE_{a}", "1") for a in ablate]
+                kd.defines = list(kd.defines) + [(f"ABLATE_{a}", "1") for a in ablate]
         r, c = coord
         mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = program
     return mesh_desc, scratch
