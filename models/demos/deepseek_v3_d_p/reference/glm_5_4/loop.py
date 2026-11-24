@@ -25,7 +25,7 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_4.ops import (
     two_bank_sparse_mla,
     window_indices,
 )
-from models.demos.deepseek_v3_d_p.reference.glm_5_4.schedule import LoopStep, loop_schedule  # noqa: F401 (re-export)
+from models.demos.deepseek_v3_d_p.reference.glm_5_4.schedule import loop_schedule
 
 
 class Pass2Result(NamedTuple):
@@ -122,13 +122,14 @@ def glm54_pass2_layer_reference(
     return attn._replace(output=out)
 
 
-def _ffn_kwargs(layer: dict) -> dict:
+def ffn_weight_kwargs(layer: dict) -> dict:
+    """A TtPrefillBlock-form layer's FFN weights as the GLM-5.3 reference layer takes them (dense or MoE)."""
     if "ffn_weights" in layer:
         return {"ffn_weights": layer["ffn_weights"]}
     return {"moe_weights": {k: layer[k] for k in ("gate_weights", "routed_expert_weights", "shared_expert_weights")}}
 
 
-def _mla_weights_with_indexer(config, mla_weights: dict) -> dict:
+def mla_weights_with_indexer(config, mla_weights: dict) -> dict:
     """A ``shared`` layer's state dict carries no indexer weights; the CPU MLA still builds an indexer, whose
     selection is then overridden by the reused top-k. Fill the absent keys with unused placeholders."""
     if any(k.startswith("indexer.") for k in mla_weights):
@@ -188,7 +189,7 @@ def glm54_stack_reference(
     seq_len = hidden_states.shape[-2]
     chunk_size = seq_len if chunk_size is None else chunk_size
     mla = {
-        i: SparseMLAReference(config, _mla_weights_with_indexer(config, w["mla_weights"]), seq_len=seq_len)
+        i: SparseMLAReference(config, mla_weights_with_indexer(config, w["mla_weights"]), seq_len=seq_len)
         for i, w in enumerate(layer_weights)
     }
     pass2 = {
@@ -240,7 +241,7 @@ def glm54_stack_reference(
                     indices_a=pass1_topk[i],
                     actual_start=start,
                     window_carry=carries[i],
-                    **_ffn_kwargs(w),
+                    **ffn_weight_kwargs(w),
                 )
                 keep(f"L{i}.pass2.kvpe", kvpe2)
                 continue
@@ -256,7 +257,7 @@ def glm54_stack_reference(
                 return_indexer_topk=True,
                 mla_ref=mla[i],
                 actual_start=start,
-                **_ffn_kwargs(w),
+                **ffn_weight_kwargs(w),
             )
             full_topk = topk
             if step.loop_pass == 1:

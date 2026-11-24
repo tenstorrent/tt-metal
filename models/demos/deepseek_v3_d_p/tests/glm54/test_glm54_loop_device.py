@@ -23,9 +23,9 @@ so the CPU reference needs only those rows):
   with gate 1's weights or reading x0; gate 1 reading its pass output) must fail, or they could not see them.
 * Free-running: the device chain against the CPU chain, reported, no bar (synthetic weights: q171.2.3 measured
   0.953 at the pass-1 output; the bar there is on loading, not on accumulated noise).
-* Determinism: a second eager forward is bit-identical, every step.
-* Traced: the forward on the trace-safe metadata path captured once and replayed twice; every block output and
-  every KVPE / index-cache slot is bit-identical to the same metadata forward run eagerly.
+
+This is the one owner of layer loading on device. Determinism and trace replay of the looped stack are
+``test_glm54_loop_chunks_on_device``'s (its first chunk is this test's chunk).
 """
 
 import time
@@ -46,7 +46,8 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_4 import (
     loop_schedule,
     pass1_indices,
 )
-from models.demos.deepseek_v3_d_p.reference.glm_5_4.loop import _ffn_kwargs, _mla_weights_with_indexer
+from models.demos.deepseek_v3_d_p.reference.glm_5_4.loop import ffn_weight_kwargs, mla_weights_with_indexer
+from models.demos.deepseek_v3_d_p.reference.glm_5_4.tests.helpers import pcc
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import moe_fabric_payload, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.glm54_weights import (
     GLM54ReducedConfig,
@@ -77,10 +78,6 @@ def _stage(msg: str, t0: float) -> None:
     logger.info(f"[stage +{time.perf_counter() - t0:7.1f}s] {msg}")
 
 
-def _pcc(a, b):
-    return float(torch.corrcoef(torch.stack([a.detach().flatten().double(), b.detach().flatten().double()]))[0, 1])
-
-
 def _step_names(config) -> list[tuple[str, object]]:
     """(intermediate name, LoopStep) in execution order: the device forward's names for the reference schedule."""
     names = []
@@ -105,7 +102,7 @@ class _CpuSteps:
 
     def _mla(self, idx: int):
         w = self.layers[idx]
-        return SparseMLAReference(self.config, _mla_weights_with_indexer(self.config, w["mla_weights"]), seq_len=ROWS)
+        return SparseMLAReference(self.config, mla_weights_with_indexer(self.config, w["mla_weights"]), seq_len=ROWS)
 
     def layer(self, idx: int, x: torch.Tensor, topk=None, *, weights_of: int | None = None, loop_pass: int = 1):
         if loop_pass >= 2:
@@ -123,7 +120,7 @@ class _CpuSteps:
             indexer_topk=topk if shared else None,
             return_indexer_topk=True,
             mla_ref=mla,
-            **_ffn_kwargs(w),
+            **ffn_weight_kwargs(w),
         )
         used = topk if shared else tk
         if weights_of is None:
@@ -148,7 +145,7 @@ class _CpuSteps:
             x.unsqueeze(0).to(torch.bfloat16),
             kvpe_a=bank_a.kvpe_cache,
             indices_a=pass1_indices(topk, 0, self.config.index_topk),
-            **_ffn_kwargs(w),
+            **ffn_weight_kwargs(w),
         )
         return res.output[0].float()
 
@@ -188,12 +185,12 @@ def _implied_beta(x_prev, h, x_k):
 
 def _gate_check(dev_in, dev_h, dev_out, ref_out, ref_beta) -> tuple[dict, list]:
     scores = {
-        "x_k": _pcc(dev_out, ref_out),
-        "update": _pcc(dev_out - dev_in, ref_out - dev_in),
+        "x_k": pcc(dev_out, ref_out),
+        "update": pcc(dev_out - dev_in, ref_out - dev_in),
     }
     failures = [f"{k} PCC {v:.6f} < {GATE_PCC}" for k, v in scores.items() if v < GATE_PCC]
     beta = _implied_beta(dev_in, dev_h, dev_out)
-    scores["beta"] = _pcc(beta, ref_beta)
+    scores["beta"] = pcc(beta, ref_beta)
     scores["beta_max_abs_err"] = float((beta - ref_beta).abs().max())
     if scores["beta"] < GATE_PCC:
         failures.append(f"implied beta PCC {scores['beta']:.6f} < {GATE_PCC}")
@@ -203,7 +200,7 @@ def _gate_check(dev_in, dev_h, dev_out, ref_out, ref_beta) -> tuple[dict, list]:
 
 
 def _layer_check(dev_in, dev_out, ref_out) -> tuple[dict, list]:
-    p = _pcc(dev_out - dev_in, ref_out - dev_in)
+    p = pcc(dev_out - dev_in, ref_out - dev_in)
     return {"contribution": p}, ([] if p >= LAYER_DELTA_PCC else [f"contribution PCC {p:.5f} < {LAYER_DELTA_PCC}"])
 
 
@@ -356,7 +353,7 @@ def loop_accuracy(config, weights, dev: dict) -> list[str]:
     free_ref = _free_reference(cpu, names, dev["embed"])
     logger.info(
         "free-running device vs reference PCC: "
-        + ", ".join(f"{name} {_pcc(dev[name], free_ref[name]):.5f}" for name, _ in names)
+        + ", ".join(f"{name} {pcc(dev[name], free_ref[name]):.5f}" for name, _ in names)
     )
     _stage("free-running reference done", t0)
     return failures
@@ -436,8 +433,7 @@ def test_glm54_loop_on_device(mesh_device, device_params, num_links):
     before = dict(planner.pushes)
     first = eager()
     pushes = {k: planner.pushes[k] - before.get(k, 0) for k in ("ALL", "PREFIX", "REST")}
-    second = eager()
-    _stage("eager forwards x2 done", t0)
+    _stage("eager forward done", t0)
     failures = []
     # Sparse-KV pushes per forward of the FFSF stack (loop L1..L2, L2 reuses L1's top-k): pass 1's L1 pre-sends L2's
     # prefix and L2 pushes the rest; pass 2's L1 pushes all its rows and pre-sends L2's bank A (q171.3.18), L2 pushes
@@ -446,49 +442,6 @@ def test_glm54_loop_on_device(mesh_device, device_params, num_links):
         failures.append(f"sparse-KV pushes per forward {pushes}, expected ALL 1, PREFIX 2, REST 2")
     for name, _ in [("embed", None)] + names:
         assert torch.isfinite(first[name]).all(), f"{name} not finite"
-        if not torch.equal(first[name], second[name]):
-            failures.append(f"eager {name} differs between two runs")
-
-    # --- traced: metadata path, captured once, replayed twice, against the same metadata forward run eagerly.
-    metadata = ChunkMetadata(_scalar(mesh_device, 0), _scalar(mesh_device, 0), _scalar(mesh_device, CHUNK))
-    taps: list[ttnn.Tensor] = []
-
-    def meta_forward():
-        taps.clear()
-        transformer.forward(
-            tt_tokens,
-            kvpe_cache,
-            actual_isl=CHUNK,
-            actual_start=None,
-            actual_end=None,
-            cache_user_id=0,
-            index_kv_cache=index_kv_cache,
-            metadata=metadata,
-            on_layer_hidden=lambda _layer, x: taps.append(x),
-        )
-        return list(taps)
-
-    def snapshot(blocks):
-        return [_raw_host(t) for t in blocks], [_raw_host(t) for t in _cache_tensors(kvpe_cache, index_kv_cache)]
-
-    meta_eager = snapshot(meta_forward())
-    ttnn.synchronize_device(mesh_device)
-    _stage("metadata eager forward done", t0)
-    with TracedStep(
-        mesh_device,
-        meta_forward,
-        attach=transformer.set_trace_controller,
-        detach=lambda: transformer.set_trace_controller(None),
-    ) as traced:
-        traced.capture()
-        _stage(f"trace captured ({traced.controller.num_segments} segments)", t0)
-        for rep in range(2):
-            traced.replay()
-            got = snapshot(traced.output)
-            for kind, a, b in (("block output", got[0], meta_eager[0]), ("cache", got[1], meta_eager[1])):
-                if len(a) != len(b) or not all(all(torch.equal(x, y) for x, y in zip(p, q)) for p, q in zip(a, b)):
-                    failures.append(f"traced replay {rep}: {kind}s differ from the eager metadata forward")
-    _stage("traced replays checked", t0)
 
     # --- accuracy on rows < ROWS: teacher-forced on the device's own step inputs (``loop_accuracy``).
     failures += loop_accuracy(config, weights, {k: v[:ROWS] for k, v in first.items()})

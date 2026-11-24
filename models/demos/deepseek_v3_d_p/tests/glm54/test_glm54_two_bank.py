@@ -36,6 +36,7 @@ from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import SparseMLARef
 from models.demos.deepseek_v3_d_p.reference.glm_5_4 import LoopPass2MLAReference
 from models.demos.deepseek_v3_d_p.reference.glm_5_4.schedule import stage_indexer_types
 from models.demos.deepseek_v3_d_p.reference.glm_5_4.synthetic_gates import GLM54_SYNTHETIC_SEED
+from models.demos.deepseek_v3_d_p.reference.glm_5_4.tests.helpers import pcc
 from models.demos.deepseek_v3_d_p.reference.glm_5_4_config import glm_5_4_hf_config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.glm54_weights import glm54_reduced_config
@@ -45,10 +46,10 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import num_full_indexer_layers
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import PushStep
 from models.demos.deepseek_v3_d_p.tt.mla.two_bank import (
+    RING_PERIOD_CHUNKS,
     WINDOW_FORMATS,
     TwoBankIndex,
     pass1_index_set,
-    ring_id,
     ring_rows,
 )
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
@@ -81,6 +82,13 @@ SCHEDULES = {
     "short": [(0, 0, 100), (1, 0, 1500)],  # < W and < index_topk: every row's window or top-k is short
 }
 FORMATS = list(WINDOW_FORMATS)
+
+
+def ring_id(position: int, ring_base: int, chunk_global: int) -> int:
+    """Cache row (natural position in the slot) holding pass 2's KV of ``position``: the test's host mirror of the ring
+    ids the device computes (TwoBankIndex)."""
+    period = RING_PERIOD_CHUNKS * chunk_global
+    return ring_base + period + position % period
 
 
 def _config(window_format: str, capacity: int = CAPACITY):
@@ -485,18 +493,12 @@ def test_two_bank_device(mesh_device, window_format, schedule):
         _check_vs_single_shot(config, **c)
 
 
-def _pearson(a: torch.Tensor, b: torch.Tensor) -> float:
-    a, b = a.double().flatten(), b.double().flatten()
-    a, b = a - a.mean(), b - b.mean()
-    return float((a @ b) / (a.norm() * b.norm()))
-
-
 def window_pccs(got: torch.Tensor, exp: torch.Tensor, window: int) -> list[float]:
     """PCC of the first `window` rows from each SP shard start of a chunk ([1, n, D] rows), offset 0 included: the
     chunk's own first rows read the window carried from the previous chunk, each later shard's first rows read the
     previous shard's rows."""
     n, shard = got.shape[1], CHUNK // 8
-    return [_pearson(got[:, s : min(s + window, n)], exp[:, s : min(s + window, n)]) for s in range(0, n, shard)]
+    return [pcc(got[:, s : min(s + window, n)], exp[:, s : min(s + window, n)]) for s in range(0, n, shard)]
 
 
 def _window_failures(got, exp, window) -> list[str]:
@@ -522,11 +524,11 @@ def _check_vs_single_shot(config, case, layer, slot, chunks, *, out, ring, bank_
     ref = LoopPass2MLAReference(mla_ref, window=window, latent_dim=config.kv_lora_rank).forward(
         _prompt(slot, layer, 2, total), kvpe_a=bank_a, indices_a=indices, actual_start=0
     )
-    ring_pcc = _pearson(ring, ref.kvpe)
+    ring_pcc = pcc(ring, ref.kvpe)
     logger.info(f"[{case}] L{layer}: ring rows PCC {ring_pcc:.5f} over {total} positions")
     for start, end in chunks:
         got, exp = out[:, start:end], ref.output[:, start:end]
-        out_pcc, windows = _pearson(got, exp), window_pccs(got, exp, window)
+        out_pcc, windows = pcc(got, exp), window_pccs(got, exp, window)
         logger.info(
             f"[{case}] L{layer} chunk {start}-{end}: output PCC {out_pcc:.5f}, chunk-start window PCC {windows[0]:.5f}, "
             f"shard-start window PCC min {min(windows):.5f}"
@@ -713,9 +715,9 @@ def test_two_bank_presend_matches_inline_push(mesh_device, reuse_dense):
     # its split-K plan (sparse_sdpa_program_factory), so its output is close but not bit-equal (as pass 1's pre-send).
     for k, (a, b) in enumerate(zip(present, inline)):
         layer = LOOP_LAYERS[k % 2]
-        pcc, diff = _pearson(a, b), (a.float() - b.float()).abs().max().item()
-        logger.info(f"[presend] output {k} (L{layer}): PCC {pcc:.6f} max|diff| {diff:.3e} equal {torch.equal(a, b)}")
+        score, diff = pcc(a, b), (a.float() - b.float()).abs().max().item()
+        logger.info(f"[presend] output {k} (L{layer}): PCC {score:.6f} max|diff| {diff:.3e} equal {torch.equal(a, b)}")
         if layer == LOOP_LAYERS[1]:
             assert torch.equal(a, b), f"pass-2 output {k} of the pre-sent layer L{layer} differs from the in-line push"
         else:
-            assert pcc >= PRESEND_GRID_PCC, f"pass-2 output {k} of L{layer}: PCC {pcc:.6f} < {PRESEND_GRID_PCC}"
+            assert score >= PRESEND_GRID_PCC, f"pass-2 output {k} of L{layer}: PCC {score:.6f} < {PRESEND_GRID_PCC}"

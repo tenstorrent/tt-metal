@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared helpers for the GLM-5.4 reference tests: a tiny GLM-5.4 config and random weights for it."""
+"""Shared helpers for the GLM-5.4 tests: a tiny GLM-5.4 config and random weights for the reference tests, and the
+PCC every GLM-5.4 test reports."""
 
 import torch
 
@@ -86,4 +87,5 @@ def tiny_gate_weights(config, loop_pass: int, *, per_channel: bool = False) -> d
 
 
 def pcc(a: torch.Tensor, b: torch.Tensor) -> float:
-    return float(torch.corrcoef(torch.stack([a.flatten().double(), b.flatten().double()]))[0, 1])
+    """Pearson correlation of two tensors' elements: the one PCC helper of the GLM-5.4 reference and device tests."""
+    return float(torch.corrcoef(torch.stack([a.detach().flatten().double(), b.detach().flatten().double()]))[0, 1])

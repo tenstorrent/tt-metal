@@ -92,12 +92,6 @@ def pass2_kv_cache_seq_len(max_seq_len: int, chunk_global: int) -> int:
     return max_seq_len + ring_rows(chunk_global)
 
 
-def ring_id(position: int, ring_base: int, chunk_global: int) -> int:
-    """Cache row (natural position in the slot) holding pass 2's KV of ``position``. Host mirror of the device ids."""
-    period = RING_PERIOD_CHUNKS * chunk_global
-    return ring_base + period + position % period
-
-
 def pass1_index_set(config, layer: int) -> int:
     """Which of the loop's pass-1 top-k sets (the full layers of the loop, in layer order, as
     ``tt.loop_handoff`` sends them) pass-2 layer ``layer`` reuses: its pass-1 reuse group's (A5). ``config`` is the
