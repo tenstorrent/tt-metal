@@ -2188,13 +2188,8 @@ def test_cumsum_tilized_dest_quasar(formats, dest_acc):
     ), f"cumsum mismatch:\ngot\n{result}\nexpected\n{expected}"
 
 
-# ---------------------------------------------------------------------------
-# hardshrink and threshold, exact.
-#
-# Both kernels overwrite the lanes that satisfy a compare and leave the rest of Dest as it is, two
-# sfpi rows per body, and step Dest from the second row's store. The stimulus puts values on either
-# side of the bound and gives each body a row in which no lane, or every lane, is overwritten.
-# ---------------------------------------------------------------------------
+# hardshrink and threshold, exact: values on either side of the bound, and rows in which no lane,
+# or every lane, is overwritten (both kernels step Dest from the second row's store).
 _SFPI_ROW_ELEMS = 2 * FACE_C_DIM  # one sfpi row is two 16-lane Dest rows
 _BODY_ELEMS = 2 * _SFPI_ROW_ELEMS
 _BODIES_PER_FACE = MAX_FACE_R_DIM * FACE_C_DIM // _BODY_ELEMS
@@ -2245,13 +2240,7 @@ def _bound_neighbours(bound: float, dtype: torch.dtype) -> torch.Tensor:
 def prepare_overwrite_inputs(
     mathop: MathOperation, input_format: DataFormat, tile_count: int
 ) -> torch.Tensor:
-    """
-    Per face, four two-row bodies, rotated by one body per face:
-      - both rows a mix of overwritten and kept lanes,
-      - a mixed row, then a row in which no lane is overwritten,
-      - a row in which no lane is overwritten, then one in which every lane is,
-      - a mix with the bound's neighbours planted in both rows.
-    """
+    """Four two-row bodies per face (see ``bodies``), rotated by one body per face."""
     op = OVERWRITE_OPS[mathop]
     dtype = format_dict[input_format]
 
@@ -2268,14 +2257,18 @@ def prepare_overwrite_inputs(
     faces = []
     for face in range(tile_count * MAX_NUM_FACES):
         bodies = [
+            # Both rows mixed.
             mixed(_BODY_ELEMS),
+            # A mixed row, then one in which no lane is overwritten.
             torch.cat([mixed(_SFPI_ROW_ELEMS), uniform(*op.kept, _SFPI_ROW_ELEMS)]),
+            # A row in which no lane is overwritten, then one in which every lane is.
             torch.cat(
                 [
                     uniform(*op.kept, _SFPI_ROW_ELEMS),
                     uniform(*op.overwritten, _SFPI_ROW_ELEMS),
                 ]
             ),
+            # Mixed, with the bound's neighbours planted in both rows below.
             mixed(_BODY_ELEMS),
         ]
         bodies = [body.to(dtype) for body in bodies]
@@ -2299,11 +2292,7 @@ def prepare_overwrite_inputs(
     input_dimensions=runtime(list(TENSOR_DIMS)),
 )
 def test_eltwise_unary_sfpu_overwrite_quasar(mathop, format_variant, input_dimensions):
-    """hardshrink and threshold, exact, around the bound and with rows in which no lane is overwritten.
-
-    See prepare_overwrite_inputs for the stimulus. One and four tiles: a Dest step the second row's
-    store missed shows as rows shifted in every later body, face and tile.
-    """
+    """hardshrink and threshold, exact, on one and four tiles; see prepare_overwrite_inputs."""
     formats = format_variant.formats
     tile_count = (
         input_dimensions[0]
