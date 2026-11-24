@@ -525,7 +525,12 @@ int main(int argc, char** argv) {
     }
     g_child = -1;  // reaped: its pid may belong to another process from now on
     const bool signalled = wait_errno == 0 && WIFSIGNALED(status);
-    const int code = wait_errno != 0 ? 1 : signalled ? 128 + WTERMSIG(status) : WEXITSTATUS(status);
+    int code = WEXITSTATUS(status);
+    if (wait_errno != 0) {
+        code = 1;  // the program's status is unknown: a failure
+    } else if (signalled) {
+        code = 128 + WTERMSIG(status);
+    }
 
     std::string
         note;  // everything the program wrote: "context" (tt-metal's context was up), "stopped" (it stopped the job)

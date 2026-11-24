@@ -242,11 +242,16 @@ def mpi_probe_path(prefix: str | None = None) -> str:
 
 def primary_nic() -> str | None:
     """This host's first real interface (not loopback, a container bridge or an overlay), or None."""
-    out = subprocess.run(["ip", "-o", "-4", "addr", "show"], capture_output=True, text=True).stdout
-    for line in out.splitlines():
-        name = line.split()[1]
-        if not name.startswith(("lo", "docker", "flannel", "veth", "br-", "cni", "virbr")):
-            return name
+    import socket
+
+    for _, name in sorted(socket.if_nameindex()):  # no ip command needed (CI containers lack it)
+        if name.startswith(("lo", "docker", "flannel", "veth", "br-", "cni", "virbr")):
+            continue
+        try:
+            if Path(f"/sys/class/net/{name}/operstate").read_text().strip() in ("up", "unknown"):
+                return name
+        except OSError:
+            continue
     return None
 
 

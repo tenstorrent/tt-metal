@@ -54,6 +54,10 @@ LAUNCHER_STDERR_DRAIN_S = 2.0
 # fixed: `mpirun --version`, run to tell Open MPI's major version.
 MPI_VERSION_PROBE_TIMEOUT_S = 10.0
 
+# The launcher's own transport to other hosts (prterun's ssh / srun to each remote daemon): not part of the job's ranks,
+# so never a leftover; each ends when its remote daemon exits.
+LAUNCHER_TRANSPORT = frozenset({"ssh", "srun", "rsh", "qrsh", "blaunch"})
+
 # --- exit codes ------------------------------------------------------------------------------------------------------
 PRTE_TIMEOUT_EXIT_CODE = 241  # a job stopped at tt-run's --job-timeout, or by PRRTE's own --timeout (its code)
 
@@ -929,14 +933,18 @@ class LaunchedJob:
 
     def _survivors(self) -> List[int]:
         """Live pids of this job on this host — session id catches the ranks, process group catches a re-sessioned
-        launcher — excluding this harness and the launcher itself. Best effort: /proc is racy."""
+        launcher — excluding this harness, the launcher itself and the launcher's transport to other hosts (its ssh
+        or srun sessions to the remote daemons, which end with them). Best effort: /proc is racy."""
         out = []
         for d in os.listdir("/proc"):
             if not d.isdigit():
                 continue
             try:
                 with open(f"/proc/{d}/stat") as fh:
-                    fields = fh.read().rsplit(")", 1)[1].split()
+                    head, tail = fh.read().rsplit(")", 1)
+                if head.split("(", 1)[1] in LAUNCHER_TRANSPORT:
+                    continue  # the launcher's session to a remote daemon, not a rank: it ends when that daemon does
+                fields = tail.split()
                 pgrp, session = int(fields[2]), int(fields[3])  # after comm: state ppid pgrp session ...
                 pid = int(d)
                 if fields[0] == "Z":
@@ -2397,8 +2405,17 @@ def default_multihost_mpi_args(tcp_interface: Optional[str], mpi_args: Optional[
     if not user_chose and tcp_interface:
         args += ["--mca", "btl_tcp_if_include", tcp_interface]
     line_sets = user_chose or (["btl_tcp_if_include"] if tcp_interface else [])
+
+    def line_value(k: str) -> Optional[str]:
+        if not user_chose:
+            return tcp_interface
+        for i, a in enumerate(user):
+            if a in ("--mca", "-mca") and i + 2 < len(user) and user[i + 1] == k:
+                return user[i + 2]
+        return None
+
     for k in line_sets:  # the same parameter on the line silently wins; the opposite one is dropped by launch_env
-        if k in env_chose:
+        if k in env_chose and line_value(k) != env_chose[k]:  # the same value replaces nothing
             _log_once(
                 logger.warning,
                 f"{TT_RUN_PREFIX} the launch line's {k} replaces the environment's OMPI_MCA_{k}={env_chose[k]}",

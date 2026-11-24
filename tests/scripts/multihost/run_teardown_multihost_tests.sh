@@ -329,6 +329,11 @@ if [ ! -x "$tt_run_rank" ]; then
   echo "::error::  FAIL  multihost_phase1_interrupt  (tt-run-rank is not built: $tt_run_rank)"; failures=$((failures + 1))
 else
   grb="$(mktemp)"; printf '#!/bin/sh\nexec %s\n' "$probe" >"$grb"
+  # tt-run looks generate_rank_bindings up on the launch host (CI's runner is not one of the hosts), the ranks on theirs
+  mkdir -p "$tree/build/tools/scaleout" && ln -sfn "$repo/tt_metal" "$tree/tt_metal" && ln -sfn "$repo/tests" "$tree/tests" \
+    && cp -f "$grb" "$tree/build/tools/scaleout/generate_rank_bindings" && chmod +x "$tree/build/tools/scaleout/generate_rank_bindings" \
+    && cp -f "$tt_run_rank" "$tree/build/tools/scaleout/tt-run-rank" \
+    || { echo "::error::could not build the Phase 1 tree on the launch host"; exit 1; }
   for host in $(host_names); do
     remote_sh "$host" "mkdir -p '$tree/build/tools/scaleout' && ln -sfn '$repo/tt_metal' '$tree/tt_metal' && ln -sfn '$repo/tests' '$tree/tests'" \
       && stage_file "$host" "$grb" "$tree/build/tools/scaleout/generate_rank_bindings" \

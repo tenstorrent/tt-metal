@@ -1337,9 +1337,12 @@ class TestNewModeFlow:
         rank_bindings_path.write_text("rank_bindings:\n  - rank: 0\n")
         rankfile_path.write_text("rank 0=localhost slot=0\n")
 
-        with patch.object(
-            ttrun_module, "run_phase1_generate_rank_bindings", return_value=(rank_bindings_path, rankfile_path)
-        ) as mock_phase1, patch.object(ttrun_module, "legacy_flow"):
+        with (
+            patch.object(
+                ttrun_module, "run_phase1_generate_rank_bindings", return_value=(rank_bindings_path, rankfile_path)
+            ) as mock_phase1,
+            patch.object(ttrun_module, "legacy_flow"),
+        ):
             result = runner.invoke(
                 main,
                 [
@@ -2281,6 +2284,7 @@ class TestJobOwnership:
                 "replaces the environment's OMPI_MCA_btl_tcp_if_include=eth3",
             ),
             ("eth0", ["--mca", "btl_tcp_if_include", "eth1"], None, [], "Ignoring --tcp-interface=eth0"),
+            ("eth3", [], "eth3", ["btl_tcp_if_include", "eth3"], None),  # the same interface replaces nothing
         ],
         ids=[
             "default",
@@ -2289,6 +2293,7 @@ class TestJobOwnership:
             "tcp_interface_over_site",
             "mpi_args_over_site",
             "mpi_args_over_flag",
+            "tcp_interface_same_as_site",
         ],
     )
     def test_phase1_and_phase2_take_the_same_tcp_choice(
@@ -2623,6 +2628,23 @@ class TestJobOwnership:
         rank_env = m.get_rank_environment(config.rank_bindings[0], config)
         assert {k: seen["env"][k] for k in rank_env} == rank_env, "not the rank environment mpirun's ranks get"
         assert seen["env"]["TT_RUN_RANK"] == "0" and "TT_METAL_RUNTIME_ROOT" in seen["env"], seen["env"]
+
+    def test_the_launchers_ssh_sessions_are_not_leftovers(self, tmp_path):
+        import shutil
+        import subprocess
+        import time
+
+        from ttnn.distributed.ttrun import run_launcher
+
+        # prterun reaches the remote daemons through ssh (or srun); those sessions can outlive prterun by a moment
+        # and end with their daemon. They are not ranks: a clean job must not wait on them (SC4 failed on that).
+        ssh = tmp_path / "ssh"
+        shutil.copy("/bin/sleep", ssh)  # a process whose name is ssh
+        t0 = time.time()
+        text, rc = self._logged_rc(lambda: run_launcher(["bash", "-c", f"({ssh} 20 &) ; exit 0"], cwd=tmp_path))
+        assert rc == 0 and time.time() - t0 < 10, text
+        assert "still running" not in text and "outcome=clean exit=0" in text, text
+        subprocess.run(["pkill", "-f", f"{ssh} 2[0]"], check=False)
 
     def test_the_prterun_address_is_read_only_from_this_users_own_files(self, tmp_path, monkeypatch):
         import tempfile
