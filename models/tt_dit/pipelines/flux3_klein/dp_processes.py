@@ -23,9 +23,10 @@ from pathlib import Path
 from loguru import logger
 
 GROUP_SHAPE = (4, 2)
-# A (4, 2) group's throughput defaults: requests in flight and queued prompts encoded together, one per sequence-parallel
-# row (the same images, DP4 loaded img/s +1.3 to +3.0 %)
-SERVE_DEFAULTS = {(4, 2): {"depth": 8, "text_batch": 4}}
+# A (4, 2) group's throughput defaults: requests in flight, queued prompts encoded together, one per sequence-parallel
+# row (the same images, DP4 loaded img/s +1.3 to +3.0 %), and queued 1024 images decoded as one VAE batch (golden within
+# 0.03 dB, +0.4 to +2.1 %)
+SERVE_DEFAULTS = {(4, 2): {"depth": 8, "text_batch": 4, "decode_batch": 4}}
 # Each group shape's (sp_axis, tp_axis): the sequence runs on the group's ring axis. (2, 8) keeps the Galaxy's 8-chip
 # ring (SP8 x TP2); (4, 4) is a 4x4 half (SP4 x TP4, the TP axis a line).
 GROUP_AXES = {(4, 2): (0, 1), (2, 8): (1, 0), (4, 4): (0, 1), (2, 2): (0, 1)}
@@ -199,8 +200,9 @@ class Flux3KleinProcessGroups:
     is left, every request fails. A hung device hangs its request, as in one process.
 
     `depth` > 1: each group holds up to that many requests and answers them in order, preparing the next while one runs
-    (throughput; a queued request waits for the one ahead of it). Unset, `depth` and the pipelines' `text_batch` (unless
-    given) take the group shape's SERVE_DEFAULTS; with the upsampler, which `serve` does not run, depth 1."""
+    (throughput; a queued request waits for the one ahead of it). Unset, `depth` and the pipelines' `text_batch` and
+    `decode_batch` (unless given) take the group shape's SERVE_DEFAULTS; with the upsampler, which `serve` does not run,
+    depth 1."""
 
     def __init__(
         self,
@@ -214,7 +216,8 @@ class Flux3KleinProcessGroups:
         defaults = {} if pipeline_kwargs.get("upsample") else SERVE_DEFAULTS.get(tuple(group_shape), {})
         if depth is None:
             depth = defaults.get("depth", 1)
-            pipeline_kwargs = {"text_batch": defaults.get("text_batch", 1), **pipeline_kwargs}
+            batches = {key: defaults.get(key, 1) for key in ("text_batch", "decode_batch")}
+            pipeline_kwargs = {**batches, **pipeline_kwargs}
         processes = [tuple(p) for p in processes]
         used = [i for p in processes for i in p]
         if len(used) != len(set(used)):
