@@ -84,6 +84,8 @@ inline void _llk_unpack_fast_tilize_mop_config_()
 // Formula: ct_dim > 5 ? 4 : ct_dim == 5 ? 2 : ct_dim.
 inline void _llk_unpack_fast_tilize_init_(const std::uint32_t unpack_dst_format, const std::uint32_t ct_dim, const std::uint32_t init_unit_dim)
 {
+    // Two-context handshake op: an earlier op's init may have left Auto TTSync on, and tt-metal calls no uninit.
+    hal_port::unpack_sync_mode<hal_port::UnpackSyncMode::Handshake>();
     namespace cfg  = hal::cfg;
     namespace sync = hal::sync;
     namespace adc  = hal::counters::adc;

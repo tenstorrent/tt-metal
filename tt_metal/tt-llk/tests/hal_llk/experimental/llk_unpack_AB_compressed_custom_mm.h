@@ -171,6 +171,8 @@ inline void _llk_unpack_AB_compressed_custom_mm_mop_config_()
 template <bool transpose = false, bool clear_src = true>
 inline void _llk_unpack_AB_compressed_custom_mm_init_(const std::uint32_t unpB_face_r_dim)
 {
+    // Two-context handshake op: an earlier op's init may have left Auto TTSync on, and tt-metal calls no uninit.
+    hal_port::unpack_sync_mode<hal_port::UnpackSyncMode::Handshake>();
     namespace hcfg = hal::cfg;
     namespace adc  = hal::counters::adc;
 

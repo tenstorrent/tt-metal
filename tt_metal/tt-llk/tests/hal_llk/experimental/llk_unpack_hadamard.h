@@ -74,6 +74,8 @@ constexpr std::uint32_t HADAMARD_H128_INPUT_DATUMS = 8 * FACE_C_DIM;
 //   3. Reset to context 0 so the first tile's phase-1 unpack runs there.
 inline void _llk_unpack_hadamard_h128_init_(const std::uint32_t h16_address)
 {
+    // Two-context handshake op: an earlier op's init may have left Auto TTSync on, and tt-metal calls no uninit.
+    hal_port::unpack_sync_mode<hal_port::UnpackSyncMode::Handshake>();
     LLK_ASSERT(is_valid_L1_address(h16_address), "H_16 L1 address must be in valid L1 memory region");
 
     // ── Single-face config ────────────────────────────────────────────
