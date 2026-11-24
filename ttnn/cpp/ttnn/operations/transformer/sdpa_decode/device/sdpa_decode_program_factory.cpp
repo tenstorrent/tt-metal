@@ -1008,8 +1008,8 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     }
     if (program_config.has_value() && program_config->unit_v_tile_col) {
         TT_FATAL(
-            two_noc_k && !reuse_k && !use_pending && use_mla,
-            "unit_v_tile_col needs non-paged flash MLA decode with a V tensor, no K multicast, no pending_kv");
+            two_noc_k && !reuse_k && !use_pending && !use_attention_mask && use_mla,
+            "unit_v_tile_col needs non-paged flash MLA decode with a V tensor, no K multicast, mask or pending_kv");
         reader_desc.defines.emplace_back("SDPA_DECODE_V_UNIT_COL", "1");
     }
     reader_desc.config = DataMovementConfigDescriptor{
