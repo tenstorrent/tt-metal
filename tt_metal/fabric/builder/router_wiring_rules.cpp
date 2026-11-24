@@ -349,7 +349,6 @@ RouterVcShape router_vc_shape(
             }
         }
 
-        // VC2: one sender by VC2's own definition; as wide as VC0 where it forwards (inter-domain).
         if (requires_vc2) {
             vc2_senders = vc_config->vc2_forwards ? vc0_senders : 1;
         } else {

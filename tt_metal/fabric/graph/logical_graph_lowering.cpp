@@ -67,7 +67,7 @@ private:
         for (auto& router : g_.routers) {
             const auto& p = router.port;
             if (p.capability == EdgeCapability::INTERDOMAIN) {
-                continue;  // its peer is bound at connect
+                continue;
             }
             std::optional<RouterIndex> match;
             if (p.capability != EdgeCapability::INTERMESH) {
@@ -135,8 +135,6 @@ private:
         }
     }
 
-    // A perimeter router's senders get dynamic edges, to its own receiver: the stand-in for the peer's until connect
-    // (both ends are built alike).
     void add_eth_edges(uint32_t vc) {
         for (RouterIndex r = 0; r < g_.routers.size(); ++r) {
             const auto peer = g_.routers[r].peer;

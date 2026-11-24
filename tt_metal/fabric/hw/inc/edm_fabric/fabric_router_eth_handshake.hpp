@@ -86,7 +86,6 @@ FORCE_INLINE void fabric_receiver_side_handshake(
         invalidate_l1_cache();
     }
 #ifndef ARCH_WORMHOLE
-    // aborted before the sender's value arrived: no reply
     const bool replies = !abort() || handshake_info->local_value == MAGIC_HANDSHAKE_VALUE;
     if (replies &&
         !tt::tt_fabric::got_immediate_termination_signal<RISC_CPU_DATA_CACHE_ENABLED>(termination_signal_ptr)) {

@@ -53,8 +53,6 @@ FORCE_INLINE bool terminating() {
     return got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal());
 }
 
-// Inter-domain routers: the host's control block (InterDomainRouterControl), and whether the host asked this router to
-// leave its peer. Always false elsewhere.
 FORCE_INLINE volatile tt_l1_ptr InterDomainRouterControl* inter_domain_control() {
     return reinterpret_cast<volatile tt_l1_ptr InterDomainRouterControl*>(inter_domain_ctrl_addr);
 }
@@ -67,7 +65,6 @@ FORCE_INLINE bool disconnect_requested() {
     }
 }
 
-// Whether a loop keeps running: no termination, no disconnect.
 FORCE_INLINE bool keep_running() { return !terminating() && !disconnect_requested(); }
 
 FORCE_INLINE InterDomainCommand inter_domain_command() {

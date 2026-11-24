@@ -56,7 +56,7 @@ struct IntermeshVCConfig {
     bool requires_vc1_mesh_pass_through = false;    // True if VC1 must support inter-mesh pass-through
     bool requires_vc2 = false;                      // True if VC2 needed (Blackhole + 2D + no UDM/mux)
     bool requires_host_rdma = false;                // TT_METAL_ENABLE_FABRIC_HOST_RDMA=1 to enable
-    bool vc2_forwards = false;                      // inter-domain: VC2 spans the domain, routers forward on it
+    bool vc2_forwards = false;
     // TT_METAL_FABRIC_DISABLE_INTERMESH_VC=1: inter-mesh traffic lands on VC0 and goes only N or S from the
     // landing chip. Deadlock-free only for traffic that cannot form a buffer cycle across meshes.
     bool intermesh_vc_disabled = false;

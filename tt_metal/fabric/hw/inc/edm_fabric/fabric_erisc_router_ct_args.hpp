@@ -22,8 +22,6 @@
 // Convenience macro for named compile-time arg lookup
 #define NAMED_CT_ARG(name) get_named_compile_time_arg_val(name)
 
-// Whether the host passed a named arg: inter-domain args are passed only where they apply, so every other router's
-// arg map is unchanged.
 constexpr bool has_named_ct_arg(std::string_view name) {
     for (const auto& [arg_name, arg_value] : named_args_map) {
         if (name == arg_name) {
@@ -77,7 +75,6 @@ constexpr uint32_t vc_1_free_slots_from_downstream_edge_3_stream_id =
     NAMED_CT_ARG("VC1_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_3_STREAM_ID");
 constexpr uint32_t vc_1_free_slots_from_downstream_edge_4_stream_id =
     NAMED_CT_ARG("VC1_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_4_STREAM_ID");
-// VC2's downstreams: inter-domain fabrics only (VC2 forwards there).
 constexpr uint32_t vc_2_free_slots_from_downstream_edge_1_stream_id =
     NAMED_CT_ARG_OR("VC2_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_1_STREAM_ID", tt::tt_fabric::k_unused_stream_id);
 constexpr uint32_t vc_2_free_slots_from_downstream_edge_2_stream_id =
@@ -205,7 +202,6 @@ constexpr size_t NUM_DOWNSTREAM_CHANNELS = NAMED_CT_ARG("NUM_DOWNSTREAM_CHANNELS
 constexpr size_t NUM_DOWNSTREAM_SENDERS_VC0 = NAMED_CT_ARG("NUM_DOWNSTREAM_SENDERS_VC0");
 constexpr size_t NUM_DOWNSTREAM_SENDERS_VC1 = NAMED_CT_ARG("NUM_DOWNSTREAM_SENDERS_VC1");
 constexpr size_t NUM_DOWNSTREAM_SENDERS_VC2 = NAMED_CT_ARG_OR("NUM_DOWNSTREAM_SENDERS_VC2", 0);
-// VC2 forwards (inter-domain fabrics): its receiver decodes and forwards, its runtime args list its downstreams.
 constexpr bool vc2_forwards = has_named_ct_arg("VC2_DOWNSTREAM_EDM_SIZE");
 constexpr bool wait_for_host_signal = NAMED_CT_ARG("WAIT_FOR_HOST_SIGNAL");
 

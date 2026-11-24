@@ -108,10 +108,6 @@ INSTANTIATE_TEST_SUITE_P(
         FabricConfig::FABRIC_2D_TORUS_XY),
     [](const auto& info) { return std::string(enchantum::to_string(info.param)); });
 
-// Inter-domain on: builds every chip, then checks the perimeter inferred from the mock's unused links.
-// TT_FABRIC_EXPECT_PERIMETER / _UNTRAINED=<n> pin the counts for the mock (and FSD) in use. For an untrained
-// link, take an SC16 aisle D host's mock, delete one ethernet_connections_to_remote_devices entry, and run with
-// that pod's FSD: the cable comes back as one untrained port.
 class GraphFabricInterDomain : public ::testing::Test {
 protected:
     void SetUp() override {
@@ -131,7 +127,6 @@ protected:
 };
 
 TEST_F(GraphFabricInterDomain, PerimeterLeavesTheDomain) {
-    // relaxed: FSD and subset-MGD runs need it
     SetFabricConfig(FabricConfig::FABRIC_2D, FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     using namespace tt::tt_metal::distributed;
     auto mesh = MeshDevice::create(MeshDeviceConfig(SystemMesh::instance().shape()));
@@ -169,7 +164,6 @@ TEST_F(GraphFabricInterDomain, PerimeterLeavesTheDomain) {
         EXPECT_EQ(untrained, std::stol(expect));
     }
 
-    // a router on every trained port, with a VC2 receiver for the peer to send into
     const auto api_ports = experimental::get_inter_domain_ports(*mesh);
     EXPECT_EQ(api_ports.size(), ports.size());
     for (const auto& port : api_ports) {

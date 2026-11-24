@@ -43,7 +43,6 @@ enum class Phase : uint32_t {
     TEARDOWN_START = 7,
     TRANSACTIONS_DONE = 8,
     TEARDOWN_DONE = 9,
-    // inter-domain steps
     DRAINED = 10,
     PEER_CONNECTED = 11,
     SERVICE_DONE = 12,
@@ -72,14 +71,11 @@ __attribute__((noinline)) void sync_erisc(Phase phase) {
     }
 }
 
-// The other ERISC: whether the teardown master waits at `phase`.
 FORCE_INLINE bool sync_requested(Phase phase) {
     return (read_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>() & 0x1FFF) ==
            (0x0A00 | static_cast<uint32_t>(phase));
 }
 
-// Inter-domain steps end in a sync where the teardown master (ERISC 0) passes on its outcome: true when its control
-// block state is `s`. The other ERISC reads it while the master waits.
 template <Phase PHASE>
 FORCE_INLINE bool finish_step(bool outcome, InterDomainState s) {
     if constexpr (!is_teardown_master) {
@@ -358,8 +354,6 @@ __attribute__((noinline)) void read_runtime_args(RuntimeArgs& a) {
 // The Ethernet handshake with the remote router, then (with the host's start signal) the handshake among this chip's
 // routers: the local master collects every router's arrival, releases them, and passes on READY_FOR_TRAFFIC.
 // Compiled for size: it runs once, and at -O3 it takes 0.6-0.8 KB more code space in every image that sends it.
-// An inter-domain router has no peer yet: it skips the Ethernet handshake (its connect does it) and only joins the
-// chip's.
 __attribute__((noinline, optimize("Os"))) void run_handshakes() {
     if constexpr (enable_ethernet_handshake) {
         const auto& routing_table = l1_routing_table();

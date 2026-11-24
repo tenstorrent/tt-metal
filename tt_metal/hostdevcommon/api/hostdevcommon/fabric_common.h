@@ -1118,14 +1118,12 @@ struct RouterStateManager {
     }
 };
 
-// Inter-domain router control block, in the router's L1. The host writes the command and the
-// connect fields; the router writes the state and counters; the peer router writes peer_marker.
 enum class InterDomainCommand : std::uint32_t {
     NONE = 0,
     CONNECT = 1,
-    DISCONNECT = 2,        // healthy: exchange markers with the peer
-    FORCE_DISCONNECT = 3,  // peer gone: reset without it
-    ABORT = 4,             // give up a connect still waiting on the peer
+    DISCONNECT = 2,
+    FORCE_DISCONNECT = 3,
+    ABORT = 4,
 };
 
 enum class InterDomainState : std::uint32_t {
@@ -1140,20 +1138,20 @@ enum class InterDomainState : std::uint32_t {
 };
 
 struct InterDomainRouterControl {
-    InterDomainCommand command;  // host
-    InterDomainState state;      // router
-    uint32_t local_domain_id;    // host, with CONNECT
+    InterDomainCommand command;
+    InterDomainState state;
+    uint32_t local_domain_id;
     uint32_t peer_domain_id;
     uint32_t peer_vc2_receiver_addr;
     uint32_t peer_vc2_receiver_slots;
     uint32_t peer_max_packet_size_bytes;
-    uint32_t connect_failures;  // router
-    uint32_t drained_packets;   // router: packets dropped while not connected
-    uint32_t connects;          // router: completed connects
+    uint32_t connect_failures;
+    uint32_t drained_packets;
+    uint32_t connects;
     uint32_t padding0[2];
-    uint32_t peer_marker;  // the peer's disconnect marker, written over eth
+    uint32_t peer_marker;
     uint32_t padding1[3];
-    uint32_t marker[4];  // what this router sends as its marker
+    uint32_t marker[4];
 };
 static_assert(sizeof(InterDomainRouterControl) == 80);
 static_assert(offsetof(InterDomainRouterControl, peer_marker) % 16 == 0);

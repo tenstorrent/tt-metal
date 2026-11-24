@@ -2,13 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Inter-domain sanity: one process per fabric domain. Each side opens its chips with
-// TT_METAL_FABRIC_INTER_DOMAIN=1, swaps router metadata with the peer domain through files, connects
-// one cable per linked chip pair, sends a buffer across each, checks what the peer sent, and
-// disconnects. run_inter_domain_sanity.sh starts both sides.
-//
-// Env: TT_INTER_DOMAIN_ID (this domain), TT_INTER_DOMAIN_PEER_ID, TT_INTER_DOMAIN_DIR (shared dir).
-
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -54,13 +47,12 @@ namespace fs = std::filesystem;
 constexpr uint32_t kNumPackets = 64;
 constexpr uint32_t kPacketSize = 1024;
 constexpr uint32_t kBytes = kNumPackets * kPacketSize;
-// the 2D header's route entries (one per hop), packed into runtime-arg words as the sender kernel unpacks them
 using RouteEntry = std::remove_extent_t<decltype(HybridMeshPacketHeader::route_buffer)>;
 constexpr size_t kEntriesPerArg = sizeof(uint32_t) / sizeof(RouteEntry);
 constexpr size_t kEntryBits = sizeof(RouteEntry) * CHAR_BIT;
 constexpr uint32_t kHeaderOffset = 0;
 constexpr uint32_t kSrcOffset = 4096;
-constexpr uint32_t kDstOffset = kSrcOffset + kBytes;  // kSlots receive slots
+constexpr uint32_t kDstOffset = kSrcOffset + kBytes;
 const CoreCoord kCore{0, 0};
 const CoreCoord kBehindCore{1, 0};
 const CoreCoord kFarCore{2, 0};
@@ -71,7 +63,6 @@ std::optional<uint32_t> env_u32(const char* name) {
     return v ? std::optional<uint32_t>(std::stoul(v)) : std::nullopt;
 }
 
-// what one side publishes: its routers' metadata and where each chip takes the peer's data
 struct PortInfo {
     uint64_t asic = 0;
     uint32_t chan = 0;
@@ -81,11 +72,11 @@ struct PortInfo {
 };
 struct RxInfo {
     uint32_t x = 0, y = 0, addr = 0;
-    uint32_t mesh = 0, chip = 0;  // the chip in its own domain
+    uint32_t mesh = 0, chip = 0;
 };
 struct Side {
     std::vector<PortInfo> ports;
-    std::map<uint64_t, RxInfo> rx;  // by asic
+    std::map<uint64_t, RxInfo> rx;
 };
 
 void write_file(const fs::path& path, const std::string& text) {
@@ -155,7 +146,6 @@ TEST(InterDomain, Sanity) {
     auto mesh =
         distributed::MeshDevice::create(distributed::MeshDeviceConfig(distributed::SystemMesh::instance().shape()));
 
-    // every chip in this mesh, by asic: fabric node -> asic, as the prefill runner resolves it
     std::map<uint64_t, distributed::MeshCoordinate> coord_of;
     std::map<uint64_t, IDevice*> device_of;
     std::map<uint64_t, tt::tt_fabric::FabricNodeId> node_of;
@@ -167,7 +157,6 @@ TEST(InterDomain, Sanity) {
         node_of.emplace(asic, node);
     }
 
-    // publish ours: metadata per port, a receive buffer per chip
     Side me;
     std::vector<InterDomainPort> ports;
     for (const auto& port : get_inter_domain_ports(*mesh)) {
@@ -200,14 +189,12 @@ TEST(InterDomain, Sanity) {
     wait_file(theirs("meta"));
     const Side peer = from_text(theirs("meta"));
 
-    // one cable per linked chip pair, picked the same way on both sides: lowest chan on the lower domain's end
     struct Cable {
         InterDomainPort port;
         PortInfo peer;
         uint32_t rank = 0;
-        std::pair<uint64_t, uint64_t> chips;  // (our asic, their asic)
+        std::pair<uint64_t, uint64_t> chips;
     };
-    // (lower domain's asic, higher's): both sides connect in the same order, as each connect waits on the peer
     std::map<std::pair<uint64_t, uint64_t>, Cable> cables;
     for (size_t i = 0; i < ports.size(); ++i) {
         const auto& p = me.ports[i];
@@ -226,7 +213,6 @@ TEST(InterDomain, Sanity) {
     }
     ASSERT_FALSE(cables.empty()) << "no cable to domain " << *peer_domain;
 
-    // Rounds of connect, traffic, disconnect: the second and later rounds reconnect the same routers.
     const uint32_t rounds = env_u32("TT_INTER_DOMAIN_ROUNDS").value_or(2);
     for (uint32_t round = 0; round < rounds; ++round) {
         auto step = [&](const std::string& what) {
@@ -234,7 +220,6 @@ TEST(InterDomain, Sanity) {
             write_file(mine(std::to_string(round) + "." + what), "");
             wait_file(theirs(std::to_string(round) + "." + what));
         };
-        // slot 0: from across the cable; 1: from behind the chip across it; 2: through the chip across from another
         for (const auto& [asic, dev] : device_of) {
             std::vector<uint32_t> zeros(kSlots * kBytes / 4, 0);
             detail::WriteToDeviceL1(dev, kCore, me.rx.at(asic).addr, zeros);
@@ -258,10 +243,6 @@ TEST(InterDomain, Sanity) {
         }
         step("connected");
 
-        // Each chip with a cable sends straight across it (into slot 0 there), and across it to every other chip of the
-        // peer domain (slot 2: the peer's inter-domain router lands it and forwards it on VC2). Each other chip of this
-        // domain next to it sends through it (slot 1): VC0 to the exit chip, whose route leaves by the cable's
-        // inter-domain router.
         const auto& control_plane = MetalContext::instance().get_control_plane();
         const auto& mesh_graph = control_plane.get_mesh_graph();
         struct Send {
@@ -271,8 +252,6 @@ TEST(InterDomain, Sanity) {
             std::vector<RouteEntry> route;
             std::function<void(Program&, std::vector<uint32_t>&)> connect;
         };
-        // by pass, then sending chip: a router's worker channel takes one worker at a time, so the sends through the
-        // chip across (pass 1) go after the ones straight across it
         std::map<std::pair<uint32_t, uint64_t>, std::vector<Send>> sends;
         for (const auto& [_, cable] : cables) {
             const auto& chips = cable.chips;
@@ -296,7 +275,6 @@ TEST(InterDomain, Sanity) {
                 if (asic == chips.first || !out || control_plane.get_chip_neighbors(from, *out).empty()) {
                     continue;
                 }
-                // the exit chip's ingress router reads one byte: X if it faces E/W, else Y
                 const auto shape = mesh_graph.get_mesh_shape(exit.mesh_id);
                 const auto at = mesh_graph.chip_to_coordinate(exit.mesh_id, exit.chip_id);
                 const auto ingress = get_opposite_direction(*out);
@@ -369,8 +347,6 @@ TEST(InterDomain, Sanity) {
         }
         step("sent");
 
-        // what the peer sent each of our chips with a cable: slot 0 from across it, slots 1 and 2 from the chip behind
-        // that. The peer's "sent" only means its workers returned, so poll until it all lands.
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
         for (const auto& [_, cable] : cables) {
             const auto& chips = cable.chips;
@@ -382,7 +358,7 @@ TEST(InterDomain, Sanity) {
                     expected.push_back({2, asic});
                 }
             }
-            std::map<uint32_t, uint32_t> bad;  // [slot] wrong words
+            std::map<uint32_t, uint32_t> bad;
             while (true) {
                 std::vector<uint32_t> got;
                 detail::ReadFromDeviceL1(dev, kCore, me.rx.at(chips.first).addr, kSlots * kBytes, got);
@@ -403,7 +379,6 @@ TEST(InterDomain, Sanity) {
                                          << bad[slot] << " bad words from asic " << from;
             }
         }
-        // both sides have everything before either disconnects
         step("received");
 
         for (const auto& [_, cable] : cables) {

@@ -71,8 +71,7 @@ std::vector<chan_id_t> bind_eth_channels(const LogicalGraph& g, const LiveEthCha
 std::map<FabricNodeId, RouterIndex> legacy_handshake_masters(
     const LogicalGraph& g, const std::vector<chan_id_t>& eth_chans) {
     // FabricBuilder::discover_channels, then create_routers: directions in FabricContext::routing_directions
-    // order into one hash map, then each direction's channels by plane into another, then the perimeter routers by
-    // channel; the master is its first.
+    // order into one hash map, then each direction's channels by plane into another; the master is its first.
     std::map<FabricNodeId, std::map<RoutingDirection, std::vector<RouterIndex>>> chips;
     std::map<FabricNodeId, std::map<chan_id_t, RouterIndex>> perimeter;
     for (RouterIndex r = 0; r < g.routers.size(); ++r) {

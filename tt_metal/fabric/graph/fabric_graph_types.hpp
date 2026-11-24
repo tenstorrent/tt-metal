@@ -37,14 +37,13 @@ struct Vc {
     std::string name;
 };
 
-// A live eth link that leaves the fabric domain. Its peer is bound at connect time.
 struct PerimeterPort {
     FabricNodeId node{MeshId{0}, 0};
     chan_id_t eth_chan = 0;
     PortDirection direction{RoutingDirection::N};
     uint32_t plane = 0;
-    bool link_trained = true;  // false: the link was down at build, connect on it will fail
-    uint64_t peer_asic = 0;    // the chip and chan across the link, as discovery saw them
+    bool link_trained = true;
+    uint64_t peer_asic = 0;
     chan_id_t peer_chan = 0;
 };
 
@@ -70,9 +69,9 @@ struct LogicalChannel {
 };
 
 enum class Transport : uint8_t {
-    Eth,      // sender -> peer's receiver
-    Noc,      // receiver -> sender on another router of the same chip
-    Dynamic,  // sender -> a remote domain's receiver, bound at connect
+    Eth,
+    Noc,
+    Dynamic,
 };
 
 struct LogicalEdge {

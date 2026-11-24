@@ -330,7 +330,6 @@ void FabricFirmwareInitializer::init(
         // Reject fabric launch on a single-host mesh with fewer than 2 opened chips.
         // Multi-host meshes with 1 local chip per rank are unaffected: peers live on other ranks. So are
         // multi-mesh graphs (e.g. a pipeline of one-chip stages): peers live in the other meshes.
-        // So is a 1-chip inter-domain fabric: its peers are other domains'.
         const auto local_mesh_ids = control_plane_.get_local_mesh_id_bindings();
         const auto& mesh_graph = control_plane_.get_mesh_graph();
         const size_t num_hosts = mesh_graph.get_host_ranks(local_mesh_ids.front()).size();

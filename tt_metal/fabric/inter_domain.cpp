@@ -26,7 +26,6 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
-// the context that owns the port, not whichever one MetalContext::instance() picks
 tt::tt_metal::MetalContext& metal(const InterDomainPort& port) {
     return tt::tt_metal::MetalContext::instance(tt::tt_metal::ContextId{port.context});
 }
@@ -39,7 +38,6 @@ const FabricEriscDatamoverConfig& router_config(const InterDomainPort& port) {
     return fabric_context(port).get_builder_context().get_fabric_router_config();
 }
 
-// the router's eth core, as the cluster addresses it
 tt_cxy_pair router_core(const InterDomainPort& port) {
     const auto& control_plane = fabric_context(port).get_control_plane();
     const ChipId chip = control_plane.get_physical_chip_id_from_fabric_node_id(port.node);
@@ -58,7 +56,6 @@ InterDomainRouterControl read_control(const InterDomainPort& port) {
     return c;
 }
 
-// writes, then reads back so the write has landed (a chip-wide barrier would poke routers mid-traffic)
 void write_and_flush(const tt::Cluster& cluster, const void* data, uint32_t size, tt_cxy_pair core, uint64_t addr) {
     cluster.write_core(data, size, core, addr);
     uint32_t readback = 0;
@@ -73,7 +70,6 @@ void send_command(const InterDomainPort& port, InterDomainCommand command) {
     write_word(port, offsetof(InterDomainRouterControl, command), static_cast<uint32_t>(command));
 }
 
-// polls the control block until `done` or the deadline
 template <typename Done>
 std::optional<InterDomainRouterControl> wait_for(const InterDomainPort& port, Clock::time_point deadline, Done done) {
     while (true) {
@@ -94,10 +90,9 @@ const RouterChannelLayout& layout_of(const InterDomainPort& port) {
     return *layout;
 }
 
-// Connect and disconnect write the far router's L1 at this router's addresses (the handshake, the control block).
 uint32_t layout_fingerprint(const InterDomainPort& port) {
     const auto& config = router_config(port);
-    uint32_t h = 2166136261u;  // FNV-1a
+    uint32_t h = 2166136261u;
     for (const size_t v :
          {config.handshake_addr,
           config.inter_domain_ctrl_address,
@@ -219,7 +214,6 @@ void append_inter_domain_connection_rt_args(
     tt::tt_metal::Program& program,
     const tt::tt_metal::CoreCoord& worker_core,
     std::vector<uint32_t>& rt_args) {
-    // the router's worker channel (VC0's channel 0), listed in the worker's fabric connection table like any router's
     const auto& config = router_config(port);
     const auto& channel = layout_of(port).senders[0].at(0);
     const auto router = router_core(port);

@@ -157,7 +157,7 @@ struct FabricEriscDatamoverConfig {
     // Global
     static constexpr std::size_t eth_channel_sync_size = 16;
     std::size_t handshake_addr = 0;
-    std::size_t inter_domain_ctrl_address = 0;  // inter-domain fabrics only
+    std::size_t inter_domain_ctrl_address = 0;
     std::size_t edm_channel_ack_addr = 0;
     std::size_t termination_signal_address = 0;  // pad extra bytes to match old EDM so handshake logic will still work
     std::size_t edm_local_sync_address = 0;
@@ -350,8 +350,8 @@ struct RouterGraphInputs {
     RouterChannelLayout layout;       // this router's channels
     std::vector<bool> injection;      // acquires a protected ring (bubble flow control)
     std::vector<bool> serviced;       // a channel, or a slot stock services anyway
-    bool inter_domain = false;        // a perimeter router: its peer is bound at connect
-    bool on_domain_edge = false;      // on a chip with perimeter routers: turns like an edge router
+    bool inter_domain = false;
+    bool on_domain_edge = false;
 };
 
 /*

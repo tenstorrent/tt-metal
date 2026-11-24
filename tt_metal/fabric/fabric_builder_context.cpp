@@ -398,7 +398,6 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
 
     // VC2 is independent of VC1 — only requires: RT option + Blackhole + no UDM/mux + 2D topology
     // (2D topology check happens in initialize_vc2_mappings, not here)
-    // inter-domain traffic rides VC2
     if (fabric_context_.get_rtoptions().get_enable_fabric_vc2() ||
         fabric_context_.get_rtoptions().get_fabric_inter_domain()) {
         auto arch = fabric_context_.get_hal().get_arch();
@@ -408,8 +407,6 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
         bool is_mux_extension = (tensix_config == FabricTensixConfig::MUX);
         config.requires_vc2 = is_blackhole && !is_udm_mode && !is_mux_extension;
     }
-    // Inter-domain: VC2 spans the domain. Not yet with VC1 (multi-mesh domains): there VC2 only delivers, so traffic
-    // from another domain lands on the chip across the link.
     if (fabric_context_.get_rtoptions().get_fabric_inter_domain()) {
         TT_FATAL(config.requires_vc2, "inter-domain fabric needs VC2: Blackhole, no UDM or mux");
         config.vc2_forwards = !config.requires_vc1;

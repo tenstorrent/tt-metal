@@ -114,7 +114,7 @@ struct StreamPlacementInputs {
     std::array<uint32_t, builder_config::MAX_NUM_VCS> max_receiver_counts;  // FabricBuilderContext
     bool vc2_present;           // IntermeshVCConfig::requires_vc2 -- config, not per router
     bool tensix_relay_present;  // UDM mode -- config, not per router
-    bool vc2_forwards = false;  // inter-domain: VC2's forwarding senders and downstreams
+    bool vc2_forwards = false;
 };
 
 // What one fabric configuration needs, derived from the placement inputs (the fabric's family

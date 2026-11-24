@@ -196,9 +196,6 @@ FORCE_INLINE void run_loop(Downstreams& downstreams) {
     }
 }
 
-// An inter-domain router after init: DRAIN, then per host CONNECT the loop until the host's DISCONNECT. As in
-// kernel_main, each role does its part of a step and the ERISCs meet at its end; ERISC 0 drives the host's control
-// block and passes its outcome on (finish_step).
 template <typename Downstreams>
 FORCE_INLINE void run_inter_domain(const RuntimeArgs& args, Downstreams& downstreams) {
     for (;;) {
@@ -224,7 +221,7 @@ FORCE_INLINE void run_inter_domain(const RuntimeArgs& args, Downstreams& downstr
         if (!finish_step<Phase::SERVICE_DONE>(on, InterDomainState::DISCONNECT)) {
             break;
         }
-        init_context_switch_state();  // a switch the disconnect cut short
+        init_context_switch_state();
         if constexpr (is_teardown_master) {
             sender::exchange_markers();
         }

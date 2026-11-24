@@ -809,7 +809,6 @@ std::vector<PerimeterPort> perimeter(
 const auto kP150 = tt::tt_metal::ClusterType::P150;
 const auto kGalaxy = tt::tt_metal::ClusterType::BLACKHOLE_GALAXY;
 
-// bringup: one chip per domain, two links to the other domain's chip
 TEST(FabricGraphPerimeter, OneChipDomain) {
     const auto p = perimeter("p150_mesh_graph_descriptor.textproto", kP150, {unused(0, 9, 7), unused(0, 8, 7)});
     ASSERT_EQ(p.size(), 2u);
@@ -821,7 +820,6 @@ TEST(FabricGraphPerimeter, OneChipDomain) {
     }
 }
 
-// like intermesh: a side per peer chip, N, E, S, W then Z; past that the link is dropped
 TEST(FabricGraphPerimeter, SidePerPeer) {
     std::vector<UnusedLink> links;
     for (chan_id_t c = 1; c <= 6; ++c) {
@@ -838,7 +836,6 @@ TEST(FabricGraphPerimeter, SidePerPeer) {
     }
 }
 
-// a link back into the domain (a torus wrap under a mesh MGD) is not perimeter; sides the MGD uses are taken
 TEST(FabricGraphPerimeter, FoldBackExcluded) {
     const auto p = perimeter(
         "single_bh_galaxy_mesh_graph_descriptor.textproto",
@@ -849,12 +846,11 @@ TEST(FabricGraphPerimeter, FoldBackExcluded) {
          unused(5, 3, 300)});
     ASSERT_EQ(p.size(), 2u);
     EXPECT_EQ(p[0].node, FabricNodeId(MeshId{0}, 0));
-    EXPECT_EQ(p[0].direction, PortDirection{RoutingDirection::N});  // corner chip 0 uses E and S
+    EXPECT_EQ(p[0].direction, PortDirection{RoutingDirection::N});
     EXPECT_EQ(p[1].node, FabricNodeId(MeshId{0}, 5));
-    EXPECT_EQ(p[1].direction, PortDirection{RoutingDirection::Z});  // interior chip: only Z is free
+    EXPECT_EQ(p[1].direction, PortDirection{RoutingDirection::Z});
 }
 
-// a dead link still makes a port, with the failed link train recorded
 TEST(FabricGraphPerimeter, DeadLinkRecorded) {
     const auto p = perimeter(
         "p150_mesh_graph_descriptor.textproto",
@@ -865,7 +861,6 @@ TEST(FabricGraphPerimeter, DeadLinkRecorded) {
     EXPECT_TRUE(p[1].link_trained);
 }
 
-// an FSD cable that never trained isn't in UMD's list; it comes back untrained so the side keeps the FSD count
 TEST(FabricGraphPerimeter, UntrainedFsdLinkKeepsTheCount) {
     const auto links = with_missing_links(
         {unused(0, 9, 7), unused(0, 11, 7)}, {unused(0, 10, 7, /*in_domain=*/false, /*trained=*/false)});
@@ -879,7 +874,6 @@ TEST(FabricGraphPerimeter, UntrainedFsdLinkKeepsTheCount) {
     }
 }
 
-// a peer chip whose cables are all down still takes its side, in channel order
 TEST(FabricGraphPerimeter, AllDownPeerTakesItsSide) {
     const auto links =
         with_missing_links({unused(0, 5, 8)}, {unused(0, 2, 7, false, false), unused(0, 3, 7, false, false)});
@@ -894,7 +888,6 @@ TEST(FabricGraphPerimeter, AllDownPeerTakesItsSide) {
     EXPECT_TRUE(p[2].link_trained);
 }
 
-// a chan UMD lists (miswired against the FSD) stays as listed; a missing link back into the domain is dropped
 TEST(FabricGraphPerimeter, MissingLinksMerge) {
     const auto links = with_missing_links(
         {unused(0, 4, 7)}, {unused(0, 4, 9, false, false), unused(0, 6, 31, /*in_domain=*/true, false)});
@@ -906,7 +899,6 @@ TEST(FabricGraphPerimeter, MissingLinksMerge) {
     EXPECT_TRUE(p[0].link_trained);
 }
 
-// no FSD: nothing missing, the list is unchanged
 TEST(FabricGraphPerimeter, NoFsdNoChange) {
     const std::vector<UnusedLink> live = {unused(0, 9, 7), unused(0, 8, 7)};
     const auto links = with_missing_links(live, {});
@@ -930,14 +922,13 @@ TEST(FabricGraphPerimeter, NoLinksNoPorts) {
 
 const auto kP300 = tt::tt_metal::ClusterType::P300;
 
-// a P300's 1x2 mesh with each chip's north links leaving the domain (QuietBox 2 split into two domains)
 Lowered lower_with_perimeter(const std::vector<UnusedLink>& links) {
     MeshGraph mesh_graph(kP300, metal_mgd("p300_mesh_graph_descriptor.textproto").string());
     auto ports = ports_from_mesh_graph(mesh_graph, {});
     const auto open = ports_from_perimeter(perimeter_ports(links, ports, mesh_graph, Topology::Mesh));
     ports.insert(ports.end(), open.begin(), open.end());
     auto vc_config = vc2_only();
-    vc_config.vc2_forwards = true;  // as inter-domain sets it
+    vc_config.vc2_forwards = true;
     const WiringOptions options{.topology = Topology::Mesh, .vc_config = vc_config};
     std::shared_ptr<WiringRules> rules = stock_wiring_rules(ports, options);
     auto graph = lower_to_logical(ports, *rules);
@@ -947,8 +938,6 @@ Lowered lower_with_perimeter(const std::vector<UnusedLink>& links) {
 
 const std::vector<UnusedLink> kQuietBoxSplit = {unused(0, 8, 7), unused(0, 9, 7), unused(1, 8, 9), unused(1, 9, 9)};
 
-// a perimeter router: dynamic peer, every sender on a dynamic edge, a VC2 receiver, every other local router feeding
-// its VC0, and nothing fed from its VC0 receiver
 TEST(FabricGraphInterDomain, PerimeterRouterShape) {
     const auto [ports, g, rules] = lower_with_perimeter(kQuietBoxSplit);
     for (uint32_t chip = 0; chip < 2; ++chip) {
@@ -966,19 +955,15 @@ TEST(FabricGraphInterDomain, PerimeterRouterShape) {
             }
             const std::string side = chip == 0 ? "E" : "W";
             const std::string mesh_router = "m0.c" + std::to_string(chip) + "." + side + ".p" + std::to_string(plane);
-            // leaving on VC0: the in-domain router turns into it, even off the X axis; nothing comes in on VC0
             EXPECT_EQ(forwarding(g, id), (Names{side}));
             EXPECT_TRUE(forwarding(g, mesh_router).empty());
-            // coming in on VC2: it lands and feeds the in-domain router; nothing leaves on VC2
             EXPECT_EQ(forwarding(g, mesh_router, 2), (Names{"N"}));
             EXPECT_TRUE(forwarding(g, id, 2).empty());
         }
     }
-    // the mesh link still links
     EXPECT_TRUE(g.routers[*g.find_router("m0.c0.E.p0")].peer.has_value());
 }
 
-// a dead perimeter link is recorded but gets no router
 TEST(FabricGraphInterDomain, DeadLinkNoRouter) {
     const auto [ports, g, rules] =
         lower_with_perimeter({unused(0, 8, 7), unused(0, 9, 7, /*in_domain=*/false, /*trained=*/false)});
@@ -986,7 +971,6 @@ TEST(FabricGraphInterDomain, DeadLinkNoRouter) {
     EXPECT_FALSE(g.find_router("m0.c0.N.p1").has_value());
 }
 
-// dynamic edges belong to perimeter routers only
 TEST(FabricGraphInterDomain, ValidationRejectsDynamicEdgeOffThePerimeter) {
     auto [ports, g, rules] = lower_with_perimeter(kQuietBoxSplit);
     EXPECT_TRUE(find_problems(g, *rules, ValidationLimits{}).empty());
@@ -1000,7 +984,6 @@ TEST(FabricGraphInterDomain, ValidationRejectsDynamicEdgeOffThePerimeter) {
     EXPECT_FALSE(find_problems(g, *rules, ValidationLimits{}).empty());
 }
 
-// no perimeter ports: the graph is the stock one
 TEST(FabricGraphInterDomain, EmptyPerimeterIsANoOp) {
     MeshGraph mesh_graph(kP300, metal_mgd("p300_mesh_graph_descriptor.textproto").string());
     auto vc_config = vc2_only();
@@ -1013,13 +996,12 @@ TEST(FabricGraphInterDomain, EmptyPerimeterIsANoOp) {
     EXPECT_EQ(with.graph.edges.size(), without.graph.edges.size());
 }
 
-// the channel graph gives a perimeter router stock-indexed slots: worker 0, forwarding by arrival side
 TEST(FabricGraphInterDomain, ChannelIndexing) {
     const auto cg = lower_to_channels(lower_with_perimeter(kQuietBoxSplit).graph, Topology::Mesh);
     EXPECT_EQ(index_of(cg, "m0.c0.N.p0", 0, "worker"), 0u);
     EXPECT_NE(index_of(cg, "m0.c0.N.p0", 0, "E"), 0u);
-    EXPECT_EQ(index_of(cg, "m0.c0.E.p0", 2, "worker"), 0u);  // VC2 forwards after its worker, as VC0 does
-    EXPECT_EQ(index_of(cg, "m0.c0.E.p0", 2, "N"), 2u);       // 1 + N's compact index on an E-facing router (W, N, S)
+    EXPECT_EQ(index_of(cg, "m0.c0.E.p0", 2, "worker"), 0u);
+    EXPECT_EQ(index_of(cg, "m0.c0.E.p0", 2, "N"), 2u);
 }
 
 }  // namespace

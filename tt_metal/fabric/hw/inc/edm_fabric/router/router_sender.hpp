@@ -151,11 +151,10 @@ struct SenderChannels {
         "a static upstream connection is a forwarding channel's");
 };
 
-// The remote router's receiver channel of VC: its slots and its packets-received register. An inter-domain router
-// sends into its peer's VC2 receiver on every VC (it only sends on VC0).
+// The remote router's receiver channel of VC: its slots and its packets-received register.
 template <size_t VC>
 struct RemoteReceiverChannel {
-    static constexpr size_t rx = receiver_channel_by_vc[is_inter_domain_router ? 2 : VC];  // the host's index
+    static constexpr size_t rx = receiver_channel_by_vc[is_inter_domain_router ? 2 : VC];
     static constexpr uint32_t num_slots = REMOTE_RECEIVER_NUM_BUFFERS_ARRAY[rx];
     static constexpr uint32_t first_slot_addr =
         eth_remote_channel_allocs::Entry<REMOTE_RECEIVER_TO_ENTRY_IDX[rx]>::base_address;
@@ -286,7 +285,6 @@ struct SenderChannelInterfaces {
         for_each_index<NUM_SENDER_CHANNELS>([&](auto i) { start_one<decltype(i)::value>(connection_semaphores); });
     }
 
-    // Channel CH's interface, from its start: no producer, no credits returned.
     template <size_t CH>
     static FORCE_INLINE void start_one(const std::array<size_t, MAX_NUM_SENDER_CHANNELS>& connection_semaphores) {
         constexpr bool worker = is_sender_channel_worker[CH];  // the host's role, serviced or not
@@ -1048,13 +1046,10 @@ FORCE_INLINE void start_forwarding_channels(SenderChannelStates& states) {
     }
 }
 
-// Inter-domain: the forwarding channels' state between connects. Each connect's loop starts the link-facing state over
-// (the remote receiver's progress, the worker channels); the forwarding channels face this chip and carry over.
 decltype(SenderChannelStates::forwarding) carried_forwarding;
 
 // The sender loop: rounds of passes over the sender channels, with router commands between runs of rounds. A function
 // of its own: its code depends only on this body, and once-per-round work is out of line (router_round.hpp).
-// An inter-domain router runs it once per connect.
 __attribute__((noinline)) void run() {
     SenderChannelStates states;
     if constexpr (is_inter_domain_router) {
@@ -1102,8 +1097,6 @@ __attribute__((noinline)) void init_channel_streams() {
     });
 }
 
-// Channel CH's connection semaphore (its runtime arg's address) at 0, and its producer-cursor block zeroed (the
-// producer reads the whole block when it connects).
 template <size_t CH>
 FORCE_INLINE void reset_connection(
     const std::array<size_t, MAX_NUM_SENDER_CHANNELS>& connection_semaphores,
@@ -1115,7 +1108,8 @@ FORCE_INLINE void reset_connection(
     }
 }
 
-// At init, first: each serviced channel's connection.
+// At init, first: each serviced channel's connection semaphore (its runtime arg's address) at 0, and its
+// producer-cursor block zeroed (the producer reads the whole block when it connects).
 FORCE_INLINE void reset_connections(
     const std::array<size_t, MAX_NUM_SENDER_CHANNELS>& connection_semaphores,
     const std::array<size_t, MAX_NUM_SENDER_CHANNELS>& producer_cursors) {
@@ -1127,8 +1121,6 @@ FORCE_INLINE void reset_connections(
     });
 }
 
-// Inter-domain disconnect: the worker channels back to their start (connection, producer cursor, free slots,
-// interface) for the next peer's traffic. Forwarding channels face this chip and keep theirs.
 __attribute__((noinline)) void restart_worker_channels(
     const std::array<size_t, MAX_NUM_SENDER_CHANNELS>& connection_semaphores,
     const std::array<size_t, MAX_NUM_SENDER_CHANNELS>& producer_cursors) {
@@ -1194,7 +1186,6 @@ __attribute__((noinline)) void wait_for_upstream_routers() {
 // Inter-domain: the sender ERISC (ERISC 0) drives the host's control block
 // ---------------------------------------------------------------------------------------------------------------------
 
-// The base firmware's routing every POLLS_PER_ROUTING_RUN polls while a step waits, as init's waits do.
 FORCE_INLINE void run_routing_now_and_then(uint32_t& polls) {
     if (polls++ == POLLS_PER_ROUTING_RUN) {
         polls = 0;
@@ -1202,7 +1193,6 @@ FORCE_INLINE void run_routing_now_and_then(uint32_t& polls) {
     }
 }
 
-// DRAIN until the host's CONNECT (true) or termination (the receiver ERISC drops stray packets meanwhile).
 FORCE_INLINE bool drain() {
     set_inter_domain_state(InterDomainState::DRAIN);
     uint32_t polls = 0;
@@ -1216,9 +1206,6 @@ FORCE_INLINE bool drain() {
     return false;
 }
 
-// CONNECT: the peer's metadata, then the Ethernet handshake with it (the lower domain id sends). The peer's VC2
-// receiver must be where this router's senders send, with the same packet size; domain ids must differ. False (then
-// DRAIN) on a mismatch, the host's ABORT or termination.
 __attribute__((noinline, cold)) bool connect() {
     using namespace erisc::datamover::handshake;
     using Remote = RemoteReceiverChannel<0>;
@@ -1259,13 +1246,11 @@ __attribute__((noinline, cold)) bool connect() {
     } else {
         c->connect_failures++;
     }
-    // the state first: the host reads it once the command clears
     set_inter_domain_state(connected ? InterDomainState::SERVICE_TRAFFIC : InterDomainState::DRAIN);
     c->command = InterDomainCommand::NONE;
     return connected;
 }
 
-// After the loop: true (DISCONNECT) unless terminating.
 FORCE_INLINE bool start_disconnect() {
     if (terminating()) {
         return false;
@@ -1274,11 +1259,10 @@ FORCE_INLINE bool start_disconnect() {
     return true;
 }
 
-// DISCONNECT, healthy: this router's marker to the peer, then the peer's (the host may force it on). Forced: none.
 __attribute__((noinline, cold)) void exchange_markers() {
     auto* c = inter_domain_control();
     if (inter_domain_command() == InterDomainCommand::DISCONNECT) {
-        c->marker[0] = c->connects;  // nonzero after a connect
+        c->marker[0] = c->connects;
         SenderLinkTransport::send_with_context_switch(
             reinterpret_cast<uint32_t>(&c->marker[0]),
             reinterpret_cast<uint32_t>(&c->peer_marker),
@@ -1294,9 +1278,6 @@ __attribute__((noinline, cold)) void exchange_markers() {
     c->command = InterDomainCommand::NONE;
 }
 
-// After the markers: the sender's link-facing state back to its start (the remote receiver's credits, the worker
-// channels). The forwarding channels keep their slots, but their counts start over with the new peer's credits: slots
-// the old peer never credited go back to the upstream router.
 __attribute__((noinline, cold)) void reset_link(const RuntimeArgs& args) {
     zero_credit_counters(to_sender_remote_ack_counters_base_address);
     zero_credit_counters(to_sender_remote_completion_counters_base_address);

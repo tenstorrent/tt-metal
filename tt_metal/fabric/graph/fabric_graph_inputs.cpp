@@ -28,7 +28,6 @@ namespace {
 using tt::tt_metal::AsicID;
 using tt::tt_metal::PhysicalSystemDescriptor;
 
-// The far end, if the PSD knows its chip, lists the same cable back. A chip outside the job isn't in it.
 bool both_ends_agree(
     const PhysicalSystemDescriptor& psd, AsicID asic, chan_id_t chan, AsicID peer, chan_id_t peer_chan) {
     if (!psd.get_asic_descriptors().contains(peer)) {
@@ -39,8 +38,6 @@ bool both_ends_agree(
         back.begin(), back.end(), [&](const auto& c) { return c.src_chan == peer_chan && c.dst_chan == chan; });
 }
 
-// every trained chan on `asic` -> the asic and chan across it, with both ends agreeing. The PSD first; cables to
-// chips outside the job, which global discovery drops from it, from the cluster.
 std::map<chan_id_t, std::pair<AsicID, chan_id_t>> trained_links(
     const PhysicalSystemDescriptor& psd, const tt::Cluster& cluster, AsicID asic, ChipId chip) {
     std::map<chan_id_t, std::pair<AsicID, chan_id_t>> live;
@@ -76,7 +73,6 @@ PortDirection port_direction(RoutingDirection direction) {
     return PortDirection{direction};
 }
 
-// first mesh-edge side (N, E, S, W), then Z, that the chip isn't using yet
 std::optional<RoutingDirection> free_direction(
     const FabricNodeId& node, const MeshGraph& mesh_graph, const std::set<RoutingDirection>& taken) {
     const auto c = mesh_graph.chip_to_coordinate(node.mesh_id, node.chip_id);
@@ -170,14 +166,11 @@ std::vector<UnusedLink> unused_links(
         return id ? mapper.find_fabric_node_id_from_physical_node_id(*id) : std::nullopt;
     };
 
-    // UMD only lists trained links, so a cable that never came up is only in the FSD. The whole FSD, not
-    // the job's slice: perimeter cables mostly go to hosts outside the job.
     std::optional<tt::tt_metal::PhysicalSystemDescriptor> fsd;
     if (!fsd_path.empty()) {
         fsd.emplace(tt::tt_metal::experimental::tt_fabric::build_physical_descriptor_from_file(fsd_path));
     }
 
-    // this host's chips only: each host builds its own routers, so it only needs its own ports
     std::vector<UnusedLink> links;
     std::vector<UnusedLink> missing;
     for (const auto& [node, chip] : mapper.get_local_logical_mesh_chip_id_to_physical_chip_id_mapping()) {
@@ -209,8 +202,6 @@ std::vector<UnusedLink> unused_links(
         for (const auto& peer : fsd->get_asic_neighbors(*fsd_asic)) {
             const auto peer_address = fsd->get_physical_node_id(peer);
             const auto cables = fsd->get_eth_connections(*fsd_asic, peer);
-            // the peer chip as live knows it: a trained cable to it, else discovery. Else a placeholder, not an asic
-            // id: a hash of its address, which only groups its cables.
             std::optional<uint64_t> key;
             for (const auto& c : cables) {
                 if (auto it = live.find(c.src_chan); it != live.end()) {
@@ -271,13 +262,12 @@ std::vector<PerimeterPort> perimeter_ports(
         return std::tie(a.node, a.chan) < std::tie(b.node, b.chan);
     });
 
-    // one direction per peer chip, like an intermesh link
     std::map<std::pair<FabricNodeId, uint64_t>, std::optional<RoutingDirection>> direction_of;
     std::map<std::pair<FabricNodeId, RoutingDirection>, uint32_t> planes;
     std::vector<PerimeterPort> out;
     for (const auto& l : sorted) {
         if (l.peer_in_domain) {
-            continue;  // folds back into the domain
+            continue;
         }
         auto [it, fresh] = direction_of.try_emplace({l.node, l.peer_asic});
         if (fresh) {
@@ -311,7 +301,6 @@ std::vector<PerimeterPort> perimeter_ports(
 std::vector<Port> ports_from_perimeter(const std::vector<PerimeterPort>& perimeter) {
     std::vector<Port> ports;
     for (const auto& p : perimeter) {
-        // no router on a dead link, or (not yet) on Z: recorded only, and connect on it fails
         if (!p.link_trained || *p.direction == RoutingDirection::Z) {
             continue;
         }

@@ -95,7 +95,6 @@ GraphFabricBuildSession::GraphFabricBuildSession(FabricContext& fabric_context) 
     const auto mgd_ports = ports_from_mesh_graph(control_plane.get_mesh_graph(), express_axis);
     auto ports = with_live_planes(mgd_ports, control_plane);
     if (inter_domain) {
-        // this host's perimeter; other hosts add theirs
         perimeter_ = perimeter_ports(
             unused_links(
                 control_plane,
@@ -155,7 +154,6 @@ GraphFabricBuildSession::GraphFabricBuildSession(FabricContext& fabric_context) 
             return FabricStaticSizedChannelsAllocator(reference, sender_counts).get_layout();
         },
         [local = local_meshes(control_plane)](const FabricNodeId& node) { return local.contains(node.mesh_id); });
-    // perimeter routers sit on the perimeter's links, the rest on the control plane's
     std::map<std::pair<FabricNodeId, RoutingDirection>, std::vector<chan_id_t>> perimeter_chans;
     for (const auto& p : perimeter_) {
         perimeter_chans[{p.node, *p.direction}].push_back(p.eth_chan);

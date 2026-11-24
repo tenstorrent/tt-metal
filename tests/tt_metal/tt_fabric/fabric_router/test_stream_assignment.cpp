@@ -118,8 +118,6 @@ TEST(StreamAssignmentTest, Vc2ReceiverTakesChannelOneWhenVc1IsAbsent) {
     EXPECT_FALSE(a.has(StreamRole::RECEIVER_PKTS_SENT, 2, 0));
 }
 
-// Inter-domain: VC2 forwards, as wide as VC0. Its worker keeps the pinned register; its forwarding senders and its
-// downstreams get registers of their own, named only in this configuration.
 TEST(StreamAssignmentTest, Vc2ForwardingGetsSendersAndDownstreams) {
     auto placement = vc2_without_vc1_placement();
     placement.max_sender_counts[2] = 4;
@@ -131,7 +129,7 @@ TEST(StreamAssignmentTest, Vc2ForwardingGetsSendersAndDownstreams) {
     for (const auto& [name, value] : a.named_args()) {
         args[name] = value;
     }
-    const uint32_t vc2_base = 4;  // after VC0's four
+    const uint32_t vc2_base = 4;
     EXPECT_EQ(
         args.at("SENDER_CHANNEL_" + std::to_string(vc2_base) + "_FREE_SLOTS_STREAM_ID"),
         StreamRegAssignments::IncrementOnWrite::vc2_sender_free_slots_stream_id);
@@ -146,9 +144,8 @@ TEST(StreamAssignmentTest, Vc2ForwardingGetsSendersAndDownstreams) {
         EXPECT_LT(id, StreamRegAssignments::num_eth_stream_registers);
         ids.insert(id);
     }
-    EXPECT_EQ(ids.size(), 7u);  // all distinct
+    EXPECT_EQ(ids.size(), 7u);
 
-    // without forwarding, none of the VC2 downstream names exist
     const auto plain = make_stream_assignment(stream_requirements(vc2_without_vc1_placement(), plan));
     EXPECT_FALSE(emitted_names(plain).contains("VC2_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_1_STREAM_ID"));
 }

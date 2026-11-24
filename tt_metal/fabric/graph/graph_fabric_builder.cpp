@@ -61,7 +61,6 @@ RouterGraphInputs GraphFabricBuilder::inputs_of(RouterIndex router) const {
         .layout = graph_.layouts[router],
         .injection = std::vector<bool>(num_senders, false),
         .serviced = std::vector<bool>(num_senders, false)};
-    // a perimeter router's peer is bound at connect
     in.inter_domain = !g.routers[router].peer.has_value();
     in.on_domain_edge = std::any_of(g.routers.begin(), g.routers.end(), [&](const LogicalRouter& r) {
         return r.port.node == g.routers[router].port.node && r.port.capability == EdgeCapability::INTERDOMAIN;
@@ -133,7 +132,6 @@ std::unique_ptr<FabricRouterBuilder> GraphFabricBuilder::make_router(const Route
         inputs_of(r));
 }
 
-// perimeter routers have no peer yet: they stand in for it with their own node
 std::vector<RouterLocation> GraphFabricBuilder::perimeter_router_locations() const {
     std::vector<RouterLocation> locations;
     for (const auto& [chan, r] : on_chip_) {

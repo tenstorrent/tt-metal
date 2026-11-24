@@ -78,8 +78,6 @@ StreamRequirements stream_requirements(const StreamPlacementInputs& placement, c
     need.add(StreamRole::DOWNSTREAM_FREE_SLOTS, 0, placement.max_receiver_counts[0] > 0 ? downstream_span_per_vc : 0);
     need.add(StreamRole::DOWNSTREAM_FREE_SLOTS, 1, placement.max_receiver_counts[1] > 0 ? downstream_span_per_vc : 0);
 
-    // VC2's worker sender and receiver ride pinned registers. Where VC2 forwards (inter-domain), its forwarding
-    // senders (index 0 is the first after the worker) and its downstreams take groups like VC0's.
     need.add(StreamRole::SENDER_FREE_SLOTS, 0, placement.max_sender_counts[0]);
     need.add(StreamRole::SENDER_FREE_SLOTS, 1, placement.max_sender_counts[1]);
     if (placement.vc2_forwards) {
@@ -126,7 +124,8 @@ std::set<std::string> expected_stream_name_set(bool vc2_forwards) {
     for (uint32_t flat = 0; flat < num_pkts_completed_names; ++flat) {
         names.insert(fmt::format("TO_SENDER_{}_PKTS_COMPLETED_ID", flat));
     }
-    for (uint32_t vc = 0; vc <= (vc2_forwards ? 2u : 1u); ++vc) {
+    const uint32_t last_forwarding_vc = vc2_forwards ? 2u : 1u;
+    for (uint32_t vc = 0; vc <= last_forwarding_vc; ++vc) {
         for (uint32_t compact = 1; compact <= num_downstream_free_slots_names_per_vc; ++compact) {
             names.insert(fmt::format("VC{}_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_{}_STREAM_ID", vc, compact));
         }
@@ -190,8 +189,7 @@ void StreamAssignment::emit_flat_table(
     // kernel's declared extent, and that failure belongs to this table, not the aggregate count.
     TT_FATAL(flat <= extent, "Table {} walked {} flat positions, the kernel declares {}", pattern, flat, extent);
     for (; flat < extent; ++flat) {
-        // The VC2 worker sender's flat slot rides its pinned register, not the sentinel; its forwarding senders their
-        // group's.
+        // The VC2 sender's flat slot rides its pinned register, not the sentinel.
         const bool is_vc2_slot = role == StreamRole::SENDER_FREE_SLOTS && vc2_present_ && flat == sender_flat_base_[2];
         const bool is_vc2_forwarding = role == StreamRole::SENDER_FREE_SLOTS && vc2_present_ &&
                                        flat > sender_flat_base_[2] && has(role, 2, flat - sender_flat_base_[2] - 1);
@@ -220,8 +218,9 @@ std::vector<std::pair<std::string, uint32_t>> StreamAssignment::named_args() con
     emit_flat_table(StreamRole::SENDER_PKTS_ACKED, "TO_SENDER_{}_PKTS_ACKED_ID", num_pkts_acked_names, out);
     emit_flat_table(StreamRole::SENDER_PKTS_COMPLETED, "TO_SENDER_{}_PKTS_COMPLETED_ID", num_pkts_completed_names, out);
 
-    // Downstream free slots: direction-keyed, per VC (VC2's only where it forwards).
-    for (uint32_t vc = 0; vc <= (vc2_forwards_ ? 2u : 1u); ++vc) {
+    // Downstream free slots: direction-keyed, per VC.
+    const uint32_t last_forwarding_vc = vc2_forwards_ ? 2u : 1u;
+    for (uint32_t vc = 0; vc <= last_forwarding_vc; ++vc) {
         for (uint32_t compact = 0; compact < num_downstream_free_slots_names_per_vc; ++compact) {
             out.emplace_back(
                 fmt::format("VC{}_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_{}_STREAM_ID", vc, compact + 1),

@@ -48,15 +48,11 @@ public:
             options_.topology == Topology::NeighborExchange) {
             return false;
         }
-        // Inter-domain, like an intermesh boundary: traffic leaves on VC0 (every other router feeds a perimeter
-        // router's VC0) and comes in on VC2 (a perimeter router's VC2 lands and feeds any direction). Nothing comes in
-        // on VC0, nothing leaves on VC2, and domains don't route through.
         const bool from_perimeter = in.capability == EdgeCapability::INTERDOMAIN;
         const bool to_perimeter = out.capability == EdgeCapability::INTERDOMAIN;
         if (from_perimeter || to_perimeter) {
             return vc != 1 && from_perimeter != to_perimeter && (vc == 0 ? to_perimeter : from_perimeter);
         }
-        // in the domain VC2 forwards as VC0 does
         if (vc2_forwards) {
             vc = 0;
         }

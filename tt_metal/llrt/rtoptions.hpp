@@ -398,7 +398,6 @@ class RunTimeOptions {
     // EXPERIMENTAL: Build fabric routers from the fabric graph instead of the stock builder
     bool fabric_graph_builder = false;
 
-    // EXPERIMENTAL: inter-domain fabric (graph builder only)
     bool fabric_inter_domain = false;
 
     // Enable fabric telemetry
@@ -993,7 +992,6 @@ public:
     bool get_fabric_graph_builder() const { return fabric_graph_builder; }
     void set_fabric_graph_builder(bool enable) { fabric_graph_builder = enable; }
 
-    // EXPERIMENTAL: inter-domain fabric
     bool get_fabric_inter_domain() const { return fabric_inter_domain; }
     void set_fabric_inter_domain(bool enable) { fabric_inter_domain = enable; }
 

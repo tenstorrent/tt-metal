@@ -21,7 +21,7 @@ std::vector<std::string> find_problems(
         return g.routers[ch.router].id + ".vc" + std::to_string(ch.vc) + "." + channel_name(ch);
     };
 
-    std::vector<std::vector<const LogicalEdge*>> link_out(g.channels.size());  // eth or dynamic
+    std::vector<std::vector<const LogicalEdge*>> link_out(g.channels.size());
     std::vector<bool> noc_fed(g.channels.size(), false);
     for (const auto& e : g.edges) {
         if (e.transport == Transport::Noc) {
@@ -41,7 +41,6 @@ std::vector<std::string> find_problems(
             continue;
         }
         ++senders;
-        // a link sender has one eth edge to its peer's receiver; a perimeter sender one dynamic edge, to its own
         const bool perimeter = router.port.capability == EdgeCapability::INTERDOMAIN;
         const Transport link = perimeter ? Transport::Dynamic : Transport::Eth;
         size_t links = 0;

@@ -874,8 +874,8 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_FABRIC_GRAPH_BUILDER: this->fabric_graph_builder = true; break;
 
         // TT_METAL_FABRIC_INTER_DOMAIN
-        // EXPERIMENTAL: Inter-domain fabric. Unused live eth links that leave the domain become perimeter
-        // ports. Needs TT_METAL_FABRIC_GRAPH_BUILDER=1 and a 2D fabric.
+        // EXPERIMENTAL: Inter-domain routers on unused eth links that leave the domain.
+        // Needs TT_METAL_FABRIC_GRAPH_BUILDER=1.
         // Default: false
         // Usage: export TT_METAL_FABRIC_INTER_DOMAIN=1
         case EnvVarID::TT_METAL_FABRIC_INTER_DOMAIN: this->fabric_inter_domain = is_env_enabled(value); break;
