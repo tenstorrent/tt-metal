@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""The routed experts' activation mover / weight streamer (kernels/mkx/xa.cpp, xw.cpp), host only (no ttnn, no
-device). Two subjects:
+"""The routed experts' activation mover / weight streamer / compute (kernels/mkx/xa.cpp, xw.cpp, xc.cpp), host only
+(no ttnn, no device). Three subjects:
 
 MKX_XROWS_COAL (GLM53_MKX_XROWS_COAL=1, opt-in): xa reads the T decode rows of x as ONE span per face instead of one
 32-B read per row per face.
@@ -33,12 +33,26 @@ layer l + 1 writes into both before its router-tail hand-off.
 * test_kernel_source: where xw's wait and xa's reset sit; test_host_knob: raw_sync on by default, xw / xa defines only,
   MKX_RW_XA opt-in.
 
+MKX_EARLY (GLM53_MKX_EARLY, a galaxy default; =0 = the knob-off binaries) with the folded shared expert (fold_y2,
+MKX_Y2_INIT): y2 is read only by xc's add_y2 at the last group (n == 0: y2 is the output), so xc waits for it there, xa
+reads it after the first two groups' routing-weight tiles, and (MKX_EARLY_XROWS) x's decode rows are issued before the
+hand-off wait of the reader phase ahead of the experts.
+
+* test_early_protocol: every interleaving of 2 readers' xa / xc over 2 stacked layers with mk_common.hpp's hand-off
+  semantics (exact-count wait, then 0) and the CB depths of mk_experts.py: no violation and no deadlock with or without
+  the knob; a late y2 read, an early y2 signal and an extra one are caught;
+* test_early_kernel_source / test_early_xrows_source: the wait / read / hook positions, the guards, the shared row-read
+  helper; test_early_x_is_final: the router phase waits for every hn2 producer before the hook's phase;
+* test_early_host_knob / test_early_galaxy_default: the define (xa / xc only), its refusals, the galaxy default and an
+  explicit 0.
+
     pytest --noconftest models/demos/glm53_flash/tests/test_mkx_xrows_coal_host.py -q
 """
 
 from __future__ import annotations
 
 import ast
+import contextlib
 import os
 import re
 from pathlib import Path
@@ -390,14 +404,19 @@ def _block(src: str, start: int) -> str:
 
 def test_kernel_source():
     src = XA.read_text()
-    coal, off = _branches(src)
-    assert off == OLD_LOOP, "the knob-off branch must stay the 44adcb9ba40 per-row loop verbatim"
-    assert src.count("#if defined(MKX_XROWS_COAL)") == 1
-    # the block sits inside MKX_XROWS, between the zero-fill barrier and the push's barrier
-    i = src.index("#if defined(MKX_XROWS_COAL)")
+    # the row reads: xrows_read (one helper for the expert phase and xrows_early); its #else branch is the 44adcb9ba40
+    # per-row loop verbatim, one indent level up
+    h = src.index("FORCE_INLINE void xrows_read(const XAcc& x, uint32_t xl1, uint32_t xpage) {")
+    coal, off = _branches(src[h:])
+    assert "\n".join(("    " + x) if x else x for x in off.split("\n")) == OLD_LOOP, "the knob-off per-row loop"
+    assert src.count("#if defined(MKX_XROWS_COAL)") == 1 and h < src.index("#if defined(MKX_XROWS_COAL)")
+    # the expert phase calls it inside MKX_XROWS, between the zero-fill barrier and the push's barrier
+    k = src.index("void kernel_main() {")
+    i = src.index("        xrows_read<KT_GU>(x, xl1, xpage);\n", k)
     assert src.index("#if defined(MKX_XROWS)\n    // decode rows only") < i < src.index("#elif defined(MKX_XPROG)")
-    assert "the zeros land before the row reads" in src[i - 200 : i]
-    assert src[src.index("#endif\n", i) + 7 :].lstrip().startswith("noc_async_read_barrier();")
+    assert src[:i].endswith("noc_async_read_barrier();  // the zeros land before the row reads into the same tiles\n")
+    rest = src[i:].split("\n", 1)[1].removeprefix("#endif  // MKX_EARLY_XROWS\n").lstrip()
+    assert rest.startswith("noc_async_read_barrier();\n        cb_push_back(CB_X, KT_GU);")
     assert "constexpr uint32_t XROW_BYTES = MKX_XROWS * 32;" in coal
     reads = re.findall(r"noc_async_read\(x\.get_noc_addr\(k, (\d+)\), (dst(?: \+ \d+)?), ([^)]+)\);", coal)
     assert reads == [("0", "dst", "2 * XROW_BYTES"), ("0", "dst", "XROW_BYTES"), ("512", "dst + 512", "XROW_BYTES")]
@@ -478,3 +497,404 @@ def test_host_knob(monkeypatch):
     assert src.count('"MKX_RAW_SYNC", "1"') == 2
     # MKX_RW_XA is opt-in since 2026-11-10 (the race of test_raw_sync_model); MKX_REV unchanged (above)
     assert 'os.environ.get("GLM53_MKX_RW_XA", "0") == "1"' in src
+
+
+# ---- GLM53_MKX_EARLY (xa.cpp / xc.cpp MKX_EARLY, mk_experts.early_defines; a galaxy default) ---------------------------
+# The rule: y2 (the folded shared expert's down output, fold_y2 / MKX_Y2_INIT) is read only by xc's add_y2 at the last
+# group, or copied to the output when no local expert is selected (n == 0). With the knob xc waits for CB_Y2 there, xa
+# reads y2 after the first two groups' routing-weight tiles, and (MKX_EARLY_XROWS, with the coalesced row reads in a
+# megakernel composite) x's decode rows are issued before the hand-off wait of the reader phase ahead of the experts.
+
+XC = TT / "kernels" / "mkx" / "xc.cpp"
+RA = TT / "kernels" / "mk" / "reader_a.cpp"
+RMA = TT / "kernels" / "mk" / "reader_moe_a.cpp"
+GD_SRC = TT / "galaxy_defaults.py"
+Y2_WAIT = "cb_wait_front(CB_Y2, 2 * nsh);"
+
+# the y2 hand-off model: R readers' activation mover (xa) and compute (xc) over stacked layers, every interleaving (a DFS
+# over the reachable states, as _explore). Its operations are the kernels' (mk_common.hpp): signal_handoff = +1 on every
+# reader's semaphore; wait_handoff = wait until the semaphore is EXACTLY the count, then set it to 0; CB pushes / pops /
+# waits in pages against the depths parts_raw gives the CBs (mk_experts.py, read from its source). The layers are
+# separated by the all-reduce: no reader starts layer l + 1 (its shared down rewrites y2) before every reader's xa(l)
+# wrote its output. The y2 a reader reads must hold layer l on every reader (each reader's y2 tiles are written by the
+# other readers' shared down). Per reader: CBs X, RS, MO, M, Y2C, Y; semaphores Y2S, MW0, MW1, MR0, MR1; SD = the layer
+# of its last shared-down write, DN = the layer of its last output; then one violation flag.
+_CBS, _SEMS = ("X", "RS", "MO", "M", "Y2C", "Y"), ("Y2S", "MW0", "MW1", "MR0", "MR1")
+_CB_INDEX = dict(M=2, MO=4, RS=5, Y=8, Y2C=11)  # mkx_common.hpp: CB_M / CB_MO / CB_RS / CB_Y / CB_Y2 = MKX_CB0 + i
+
+
+def _cb_depths(nsh: int, m_buffers: int) -> dict:
+    """the page counts parts_raw gives CB_M / CB_MO / CB_RS / CB_Y / CB_Y2 (mk_experts.py's cb(...) list, evaluated
+    for the batched expert TP with nsh owned shards); m_tiles = I tiles = 64"""
+    import types
+
+    src = MKX.read_text()
+    consts = dict(re.findall(r"^(XSL_RS_PAGES) = (\d+)", src, re.M))
+    me = types.SimpleNamespace(m_buffers=m_buffers, m_tiles=64, xsl=0)
+    ns = {"nsh": nsh, "self": me, "XSL_RS_PAGES": int(consts["XSL_RS_PAGES"])}
+    out = {}
+    for name, i in _CB_INDEX.items():
+        exprs = re.findall(rf"\bcb\({i}, [^,]+, [^,]+, ([^)]+)\)", src)
+        assert len(exprs) == 1, (name, exprs)
+        out[name] = eval(exprs[0], {}, ns)  # noqa: S307 (our own source)
+    return out
+
+
+def _y2_slots(R: int) -> dict:
+    names = list(_CBS) + list(_SEMS) + ["SD", "DN"]
+    return {(nm, r): i * R + r for i, nm in enumerate(names) for r in range(R)} | {"VIOL": len(names) * R}
+
+
+def _y2_procs(*, readers: list, n: int, layers: int, early: bool, mbuf: int, mut: str = "") -> list:
+    """[xa(0), xc(0), xa(1), xc(1), ...]; readers = each reader's owned shards (shard j carries the group's expert
+    j // 8, MKX_XSL_W 8); n = the chip's union. mut: "late" = y2 read after xa waited for the output; "early_sig" = the
+    y2 signal before the shared-down write; "extra_sig" = reader 0 signals twice; "xc_nowait" = xc adds y2 without
+    waiting for it"""
+    R, S = len(readers), _y2_slots(len(readers))
+    npos = (n + 7) // 8
+    out = []
+    for r, shards in enumerate(readers):
+        nsh = len(shards)
+        dep = _cb_depths(nsh, mbuf)
+        has = lambda p, sh: 8 * p + sh // 8 < n  # noqa: E731
+        c = lambda nm: S[(nm, r)]  # noqa: E731
+        xa, xc = [], []
+        for lay in range(layers):
+            read_y2 = [("wexact", c("Y2S"), R), ("y2chk", lay), ("push", c("Y2C"), 2 * nsh, dep["Y2C"])]
+            xa += [("bar", lay - 1)]
+            sig = [("sig", "Y2S")] * (2 if (mut == "extra_sig" and r == 0) else 1)
+            sd = [("set", c("SD"), lay)]
+            xa += sig + sd if mut == "early_sig" else sd + sig  # signal_handoff(MKX_Y2_SEM) at the expert phase start
+            xa += [("push", c("X"), 1, 1)]
+            if not early:
+                xa += read_y2  # knob off: before the list
+            rs = lambda p: [("push", c("RS"), 1, dep["RS"]) for sh in shards if has(p, sh)]  # noqa: E731
+            xa += rs(0) if npos else []
+            if early and npos == 0 and mut != "late":
+                xa += read_y2
+            for pos in range(npos):
+                p = pos & 1
+                xa += rs(pos + 1) if pos + 1 < npos else []
+                if early and pos == 0 and mut != "late":
+                    xa += read_y2
+                xa += [("wexact", c(f"MR{p}"), R)] if pos >= 2 else []
+                xa += [("pop", c("MO"), 1)] * nsh + [("sig", f"MW{p}"), ("wexact", c(f"MW{p}"), R)]
+                xa += [("push", c("M"), 64, dep["M"]), ("sig", f"MR{p}")]
+            for pos in range(max(npos - 2, 0), npos):  # stack: the last two positions' read acknowledgements
+                xa += [("wexact", c(f"MR{pos & 1}"), R)]
+            xa += [("pop", c("Y"), 2 * nsh)]
+            xa += read_y2 if (early and mut == "late") else []
+            xa += [("set", c("DN"), lay)]
+            # compute
+            xc += [("wait", c("X"), 1)]
+            if (not early or npos == 0) and mut != "xc_nowait":
+                xc += [("wait", c("Y2C"), 2 * nsh)]
+            xc += ([("need", c("Y2C"), 2 * nsh)] + [("push", c("Y"), 2, dep["Y"])] * nsh) if npos == 0 else []
+
+            def gu(p):
+                ops = []
+                for sh in shards:  # per owned shard: SwiGLU x its weight tile (an expert of the union), then m
+                    ops += ([("pop", c("RS"), 1)] if has(p, sh) else []) + [("push", c("MO"), 1, dep["MO"])]
+                return ops
+
+            def dn(p):
+                last = p + 1 == npos
+                w = [("wait", c("M"), 64)] + (
+                    [("wait", c("Y2C"), 2 * nsh)] if (early and last and mut != "xc_nowait") else []
+                )
+                y = [("need", c("Y2C"), 2 * nsh)] + [("push", c("Y"), 2, dep["Y"])] * nsh  # add_y2, then the output
+                return w + (y if last else []) + [("pop", c("M"), 64)]
+
+            if npos:
+                xc += gu(0)
+                for pos in range(1, npos):
+                    xc += gu(pos) + dn(pos - 1)
+                xc += dn(npos - 1)
+            xc += [("pop", c("Y2C"), 2 * nsh), ("pop", c("X"), 1)]
+        out += [xa, xc]
+    return out
+
+
+def _y2_enabled(op, s, R, S) -> bool:
+    k = op[0]
+    if k == "push":
+        return s[op[1]] + op[2] <= op[3]
+    if k in ("pop", "wait"):
+        return s[op[1]] >= op[2]
+    if k == "wexact":
+        return s[op[1]] == op[2]
+    if k == "bar":
+        return op[1] < 0 or all(s[S[("DN", q)]] >= op[1] for q in range(R))
+    return True
+
+
+def _y2_apply(op, s, R, S) -> tuple:
+    s = list(s)
+    k = op[0]
+    if k == "push":
+        s[op[1]] += op[2]
+    elif k == "pop":
+        s[op[1]] -= op[2]
+    elif k == "wexact":
+        s[op[1]] = 0
+    elif k == "set":
+        s[op[1]] = op[2]
+    elif k == "sig":
+        for q in range(R):
+            s[S[(op[1], q)]] += 1
+    elif k == "y2chk" and any(s[S[("SD", q)]] != op[1] for q in range(R)):
+        s[S["VIOL"]] = 1  # y2 read before a reader's shared down wrote this layer's tiles (or after the next layer's)
+    elif k == "need" and s[op[1]] < op[2]:
+        s[S["VIOL"]] = 1  # add_y2 / the n == 0 copy on a CB_Y2 that has not landed
+    return tuple(s)
+
+
+def _y2_explore(*, readers: list, **kw) -> dict:
+    """every interleaving: violations (y2 read before a reader's shared down wrote this layer's, or after the next
+    layer's), deadlocks, finished states"""
+    R, S = len(readers), _y2_slots(len(readers))
+    procs = _y2_procs(readers=readers, **kw)
+    init = [0] * (S["VIOL"] + 1)
+    for q in range(R):
+        init[S[("SD", q)]] = init[S[("DN", q)]] = -1
+    init = tuple([0] * len(procs)) + tuple(init)
+    seen, todo, n = {init}, [init], len(procs)
+    out = dict(viol=0, dead=0, done=0)
+    while todo:
+        st = todo.pop()
+        pcs, sh = st[:n], st[n:]
+        if sh[S["VIOL"]]:
+            out["viol"] += 1
+            continue
+        moved = False
+        for i in range(n):
+            if pcs[i] < len(procs[i]) and _y2_enabled(procs[i][pcs[i]], sh, R, S):
+                moved = True
+                nxt = tuple(pcs[j] + (j == i) for j in range(n)) + _y2_apply(procs[i][pcs[i]], sh, R, S)
+                if nxt not in seen:
+                    seen.add(nxt)
+                    todo.append(nxt)
+        if all(pcs[i] == len(procs[i]) for i in range(n)):
+            out["done"] += 1
+        elif not moved:
+            out["dead"] += 1
+    return out
+
+
+# a 3-shard reader (bank 0, index 0: shards 0 / 24 / 48 -> experts 0 / 3 / 6 of a group) and a 2-shard one (bank 2,
+# index 2: shards 18 / 42 -> experts 2 / 5); unions with no group, a partial group, a full one, 2 and 3 groups
+Y2_READERS = [[0, 24, 48], [18, 42]]
+Y2_UNIONS = (0, 1, 3, 8, 9, 20)
+
+
+@pytest.mark.parametrize("early", [False, True])
+def test_early_protocol(early):
+    """2 readers x 2 stacked layers, the unions above, CB_M 1 or 2 gathers deep (GLM53_MKX_MBUF; the sparse stack's
+    default 1): no violation and no deadlock with or without MKX_EARLY; the model catches a y2 read after xa's output
+    wait (a deadlock), an early y2 signal (a read before that reader's shared down landed) and an extra signal (the
+    exact-count wait overshoots); a compute that copies y2 out (n == 0) without its wait reads an unlanded CB_Y2"""
+    common = COMMON.read_text()
+    for nm, i in _CB_INDEX.items():
+        assert f"constexpr uint32_t CB_{nm.replace('Y2C', 'Y2')} = MKX_CB0 + {i};" in common, nm
+    assert _cb_depths(3, 1) == dict(M=64, MO=6, RS=6, Y=6, Y2C=6) and _cb_depths(2, 2)["M"] == 128
+    assert re.search(r'm_buffers=int\(os\.environ\.get\("GLM53_MKX_MBUF", "1"\)\)', (TT / "mk_sparse.py").read_text())
+    for n in Y2_UNIONS:
+        for mbuf in (1, 2):
+            r = _y2_explore(readers=Y2_READERS, n=n, layers=2, early=early, mbuf=mbuf)
+            assert r["viol"] == 0 and r["dead"] == 0 and r["done"] > 0, (early, n, mbuf, r)
+    for n in (0, 3, 9):
+        if early:
+            assert _y2_explore(readers=Y2_READERS, n=n, layers=2, early=True, mbuf=1, mut="late")["dead"] > 0, n
+        r = _y2_explore(readers=Y2_READERS, n=n, layers=2, early=early, mbuf=1, mut="early_sig")
+        assert r["viol"] > 0, (n, r)
+        r = _y2_explore(readers=Y2_READERS, n=n, layers=2, early=early, mbuf=1, mut="extra_sig")
+        assert r["viol"] > 0 or r["dead"] > 0, (n, r)
+    # n == 0: the compute copies y2 out at once, so a missing wait reads an unlanded CB_Y2; with n > 0 xa's y2 read also
+    # precedes its first CB_M push, so the last group's wait is implied by the gather order as well
+    assert _y2_explore(readers=Y2_READERS, n=0, layers=2, early=early, mbuf=1, mut="xc_nowait")["viol"] > 0
+
+
+def test_early_kernel_source():
+    xa, xc = XA.read_text(), XC.read_text()
+    common = (TT / "kernels" / "mk" / "mk_common.hpp").read_text()
+    # the model's semantics are mk_common.hpp's: an exact-count wait, then 0
+    wh = common[common.index("FORCE_INLINE void wait_handoff(") :]
+    assert "noc_semaphore_wait(s, count);\n    noc_semaphore_set(s, 0);" in wh[: wh.index("\n}\n")]
+    # xc: knob off waits at the start; knob on at n == 0 and at the XSL down's last group, before both XSL add_y2s
+    assert xc.count(Y2_WAIT) == 3
+    off = xc.index("#if !defined(MKX_EARLY)\n    " + Y2_WAIT + "\n#endif\n    if (n == 0) {")
+    on0 = xc.index("if (n == 0) {\n#if defined(MKX_EARLY)\n        " + Y2_WAIT)
+    assert off < on0 < xc.index("auto gate_up = [&]()")
+    last = xc.index("#if defined(MKX_EARLY)\n            if (last) {\n                " + Y2_WAIT)
+    xsl = xc.index("const uint32_t nq = n - GS * pos < GS ? n - GS * pos : GS;")
+    assert xsl < last < xc.index("#if defined(MKX_XSL_SEED)", xsl)
+    end = xc.index("        cb_wait_front(CB_RS, 1);\n        const bool first = pos == 0, last = pos + 1 == n;", xsl)
+    adds = [xsl + m.start() for m in re.finditer(r"if \(Y2 && last\) \{\n\s+add_y2\(s\);", xc[xsl:end])]
+    assert len(adds) == 2 and all(last < a for a in adds), adds
+    assert "cb_pop_front(CB_Y2, 2 * nsh);" in xc[xc.index("down(npos - 1);") :]
+    guard = '#error "MKX_EARLY: the batched expert TP (MKX_XSL) with the folded shared expert (MKX_Y2_INIT) only"'
+    assert xc.count(guard) == 1 and xa.count(guard) == 1 and xc.index(guard) < xc.index("void kernel_main() {")
+    # xa: the knob-off y2 block where it was (after x, before the list); knob on: read_y2() after push_rs(0) when
+    # npos == 0, else in the gather loop at pos 0 after push_rs(1), before the first gather
+    assert "#if defined(MKX_Y2_INIT) && !defined(MKX_EARLY)\n    mk::wait_handoff(MKX_Y2_SEM, NREAD);" in xa
+    blk = xa[xa.index("auto read_y2 = [&]() {") :]
+    assert blk.index("mk::wait_handoff(MKX_Y2_SEM, NREAD);") < blk.index("cb_push_back(CB_Y2, 2 * nsh);")
+    sig = xa.index("mk::signal_handoff(MKX_Y2_SEM, ph_rt0 + COORDS, NREAD);")
+    assert sig < xa.index("cb_reserve_back(CB_X, KT_GU);")  # (one Y2 signal, at the expert phase start)
+    assert xa.count("signal_handoff(MKX_Y2_SEM") == 1
+    assert xa.count("read_y2();") == 2 and xa.count("auto read_y2 = [&]()") == 1
+    calls = [m.start() for m in re.finditer(r"read_y2\(\);", xa)]
+    assert xa.index("        push_rs(0);\n    }\n#if defined(MKX_EARLY)\n    if (npos == 0) {") < calls[0]
+    assert (
+        xa.index("            push_rs(pos + 1);\n        }\n#if defined(MKX_EARLY)\n        if (pos == 0) {") < calls[1]
+    )
+    assert calls[1] < xa.index("// m all-gather through buffer p") < xa.index("cb_wait_front(CB_Y, 2 * nsh);")
+    # every MKX_EARLY line is a guard, a comment, the #error or the macro defined under the guard: knob off preprocesses
+    # to the old text
+    ok = ("#error", "#define MKX_EARLY_XROWS 1")
+    for src in (xa, xc):
+        code = [x.split("//")[0] for x in src.split("\n")]
+        bad = [x for x in code if "MKX_EARLY" in x and "defined(MKX_EARLY" not in x and not x.lstrip().startswith(ok)]
+        assert not bad, bad
+
+
+@contextlib.contextmanager
+def expect_error(error, message):
+    """The root conftest's ``expect_error`` fixture (the CI triager's [EXPECTED_ERROR] markers), local to this module:
+    the host file runs with ``--noconftest`` (the root conftest imports ttnn at collection)."""
+    print(f'[EXPECTED_ERROR BEGIN] {error.__name__} message="{message}"')
+    try:
+        with pytest.raises(error, match=message) as exc_info:  # allow-pytest.raises: the fixture body, no conftest here
+            yield exc_info
+    finally:
+        print(f'[EXPECTED_ERROR END] {error.__name__} message="{message}"')
+
+
+def _galaxy_defaults():
+    """tt/galaxy_defaults.py (no ttnn import), loaded from its file"""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("glm53_galaxy_defaults_host", GD_SRC)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_early_host_knob(monkeypatch):
+    early = _host_fn("early_defines")
+    monkeypatch.delenv("GLM53_MKX_EARLY", raising=False)
+    assert early(True, True) == [], "the raw default (the galaxy default sets it: test_early_galaxy_default)"
+    monkeypatch.setenv("GLM53_MKX_EARLY", "0")
+    assert early(True, True) == []
+    monkeypatch.setenv("GLM53_MKX_EARLY", "1")
+    assert early(True, True) == [("MKX_EARLY", "1")]
+    assert early(False, True) == [] and early(False, False) == [], "no y2 (the sparse_dsa MoE): inactive, no define"
+    with expect_error(ValueError, "needs the batched expert TP"):
+        early(True, False)
+    for bad in ("2", "on", "true", ""):
+        monkeypatch.setenv("GLM53_MKX_EARLY", bad)
+        with expect_error(ValueError, "0 or 1"):
+            early(True, True)
+    src = MKX.read_text()
+    # xa / xc only, after MKX_Y2_INIT; xw's defines (its JIT hash) and MKX_REV never change
+    i = src.index("edefs = early_defines(y2 is not None, self.xsl is not None)")
+    add = src.index("adefs += edefs")
+    assert src.index("if raw_sync():") < i < src.index('cdefs.append(("MKX_Y2_INIT", "1"))') < add
+    assert "\n            cdefs += edefs\n" in src[add : add + 200]
+    assert "wdefs += edefs" not in src and src.count("edefs") == 4
+    assert re.search(r"^MKX_REV = 24 ", src, re.M)
+
+
+def _protect_env(monkeypatch, keys) -> None:
+    """keys absent now and restored after the test (galaxy_defaults.apply writes os.environ directly)"""
+    for k in keys:
+        monkeypatch.setenv(k, "x")
+        monkeypatch.delenv(k)
+
+
+def test_early_galaxy_default(monkeypatch):
+    """GLM53_MKX_EARLY is a galaxy default: apply() sets it on the 8x4 when unset; an explicit 0 stays 0 (no define);
+    other meshes get nothing"""
+    GD = _galaxy_defaults()
+    early = _host_fn("early_defines")
+    keys = list(GD.KNOBS) + ["GLM53_MODEL_TRACE_MB", "GLM53_PF_SPARSE_T", "GLM53_PREFILL_BUCKETS"]
+    assert GD.KNOBS["GLM53_MKX_EARLY"] == "1"
+    _protect_env(monkeypatch, keys)
+    got = GD.apply((8, 4), 1048576)
+    assert got["GLM53_MKX_EARLY"] == "1" == os.environ["GLM53_MKX_EARLY"]
+    assert early(True, True) == [("MKX_EARLY", "1")] and early(False, True) == []
+    _protect_env(monkeypatch, keys)
+    monkeypatch.setenv("GLM53_MKX_EARLY", "0")
+    got = GD.apply((8, 4), 1048576)
+    assert "GLM53_MKX_EARLY" not in got and os.environ["GLM53_MKX_EARLY"] == "0" and early(True, True) == []
+    _protect_env(monkeypatch, keys)
+    assert GD.apply((2, 4), 1048576) == {} and "GLM53_MKX_EARLY" not in os.environ
+
+
+def test_early_xrows_source():
+    """MKX_EARLY_XROWS (GLM53_MKX_EARLY with MKX_XROWS_COAL in a megakernel composite): xrows_early() issues the row
+    reads through the expert phase's own helper (xrows_read) into CB_X's base before the hand-off wait of the reader
+    phase ahead of the experts (reader_a.cpp MK_BEFORE_WAIT_HOOK at MK_SPLIT - 1, wired by reader_moe_a.cpp under the
+    same macro); the expert phase then only retires them and pushes CB_X"""
+    xa, ra, rma = XA.read_text(), RA.read_text(), RMA.read_text()
+    k = xa.index("void kernel_main() {")
+    h = xa.index("FORCE_INLINE void xrows_read(const XAcc& x, uint32_t xl1, uint32_t xpage) {")
+    d = xa.index("#if defined(MKX_EARLY) && defined(MKX_XROWS_COAL)\n")
+    assert (
+        h < xa.index("#if defined(MKX_XROWS) && defined(MKX_XROWS_PRE)") < d < xa.index("#define MKX_EARLY_XROWS 1") < k
+    )
+    e0 = xa.index("FORCE_INLINE void xrows_early() {")
+    early = xa[e0 : xa.index("\n}\n", e0) + 1]
+    order = ["mk::cb_rewind(CB_X);", "const uint32_t xl1 = get_write_ptr(CB_X), xpage = get_tile_size(CB_X);",
+             "noc_async_read_barrier();  // the prologue's zeros land before the row reads into the same tiles",
+             "xrows_read<KT_GU>(x, xl1, xpage);", "MK_MARK();"]  # fmt: skip
+    pos = [early.index(s) for s in order]
+    assert pos == sorted(pos) and "cb_push_back" not in early and early.count("noc_async_read_barrier();") == 1
+    assert xa.count("xrows_read<KT_GU>(x, xl1, xpage);") == 2 and xa.count("noc_async_read(x.get_noc_addr(k, ") == 5
+    # the expert phase: MKX_EARLY_XROWS skips the zero-fill barrier + the reads, keeps the retiring barrier + the push
+    on = xa.index("#if defined(MKX_EARLY_XROWS)\n        // GLM53_MKX_EARLY: xrows_early()", k)
+    end = xa.index("#endif  // MKX_EARLY_XROWS\n        noc_async_read_barrier();\n        cb_push_back(CB_X, KT_GU);")
+    assert on < xa.index("xrows_read<KT_GU>(x, xl1, xpage);", k) < end and "(void)xl1;" in xa[on:end]
+    # the hook: before phase P's hand-off wait only, inert without MK_BEFORE_WAIT_PHASE; wired under MKX_EARLY_XROWS
+    hk = ra.index("#if defined(MK_BEFORE_WAIT_PHASE)\n    if constexpr (P == MK_BEFORE_WAIT_PHASE) {")
+    assert ra.index("FORCE_INLINE void move_phase() {") < hk < ra.index("mk::wait_handoff(WAIT_SEM, WAIT_COUNT);")
+    assert ra.count("MK_BEFORE_WAIT") == 3 and "#if defined(MK_BEFORE_WAIT" not in xa
+    w = rma.index("#if defined(MKX_EARLY_XROWS)\n")
+    blk = rma[w : rma.index("namespace dense {")]
+    assert rma.index("namespace experts {") < w and rma.index("#define MKX_XROWS_PRE 1") < w
+    for s in ('#error "MKX_EARLY_XROWS', "static_assert(MK_SPLIT >= 1,", "static_assert(MK_SPLIT - 1 > MK_AFTER_PHASE,",
+              "#define MK_BEFORE_WAIT_PHASE (MK_SPLIT - 1)", "#define MK_BEFORE_WAIT_HOOK() ::experts::xrows_early()",
+              "#if defined(MKX_EARLY_XROWS) && !defined(MK_BEFORE_WAIT_PHASE)"):  # fmt: skip
+        assert s in blk, s
+
+
+def test_early_x_is_final():
+    """the hook's x reads go out at phase MK_SPLIT - 1 (shared down with fold_y2), after the router phase (3) on the same
+    RISC waited for SEM_HN's count = every hn2 producer: the FFN mhc_pre's GRID_X x GRID_Y K cores each signal every
+    reader once (mhc_pre.py MK_SIGNAL_N = the readers); the attention's mhc_pre signals the same semaphore for hn, waited
+    by phase 0 with the same count; x of the experts is hn2"""
+    ms, mp = (TT / "mk_sparse.py").read_text(), (TT / "mhc_pre.py").read_text()
+    g = re.search(r"^GRID_X = GRID_Y = (\d+)  # K cores", mp, re.M)
+    producers = int(g.group(1)) ** 2
+    assert producers == 64
+    assert 'k_defines += [("MK_SIGNAL_SEM_ID", str(sem_id)), ("MK_SIGNAL_N", str(len(targets)))]' in mp
+    p0 = ms.index("        phases = [\n")
+    ph = ms[p0 : ms.index("        ]\n", p0)]
+    firsts = [ph.index(s) for s in ('lins["kda_qkv"]', 'lins["kda_lowrank"]', 'lins["kda_o"]',
+                                    "self._router_ds(router)", "shared.ds_gate_up", "shared.ds_down")]  # fmt: skip
+    assert firsts == sorted(firsts)
+    router = ph[firsts[3] : firsts[4]]
+    assert f"wait=(SEM_HN, {producers})," in router and f"wait=(SEM_HN, {producers})," in ph[firsts[0] : firsts[1]]
+    assert ph.count("SEM_HN") == 2  # phases 0 (hn) and 3 (hn2): nothing else consumes the count in between
+    assert "sig = (SEM_HN, rd.noc_coords())" in ms
+    assert re.search(r"mf\.parts\(s1, hn2, [^)]*signal=sig", ms) and re.search(r"ma\.parts\(x, hn, ", ms)
+    assert 'defs_ += [("MK_SPLIT", "6" if self.fold_y2 else "5"), ' in ms  # the hook's phase 5 > the router's 3
+    assert "self.experts.parts_raw(hn2, ids, scores, y, t=t," in ms
+
+
+def test_zz_no_ttnn_was_imported_by_the_suite():
+    """The unit CI runs this file without the root conftest: a host suite must never pull ttnn in (it would open
+    every chip of the box beside a running mesh job)."""
+    import sys
+
+    assert "ttnn" not in sys.modules

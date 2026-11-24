@@ -35,6 +35,23 @@ uint32_t ph_rt0 = MK_X_RT;
 #define MK_AFTER_PHASE 1
 #define MK_AFTER_HOOK() ::experts::xrows_prologue()
 #endif
+#if defined(MKX_EARLY_XROWS)
+// GLM53_MKX_EARLY (mkx/xa.cpp MKX_EARLY_XROWS): x's decode rows go into CB_X while the phase ahead of the experts
+// (fold_y2: shared down) waits for its hand-off (x = the FFN mhc_pre output, final once the router phase waited for all
+// of its producers); the expert phase only retires them
+#if !defined(MK_SPLIT)
+#error "MKX_EARLY_XROWS: the x-row hook sits before the hand-off wait of phase MK_SPLIT - 1"
+#endif
+static_assert(MK_SPLIT >= 1, "MKX_EARLY_XROWS: a reader phase ahead of the experts");
+#if defined(MK_QKV_ALIAS)
+static_assert(MK_SPLIT - 1 > MK_AFTER_PHASE, "MKX_EARLY_XROWS: the row reads follow CB_X's zero fill (MK_AFTER_HOOK)");
+#endif
+#define MK_BEFORE_WAIT_PHASE (MK_SPLIT - 1)
+#define MK_BEFORE_WAIT_HOOK() ::experts::xrows_early()
+#endif
+#if defined(MKX_EARLY_XROWS) && !defined(MK_BEFORE_WAIT_PHASE)
+#error "MKX_EARLY_XROWS: xa skips its row reads only when the hook issues them"
+#endif
 
 namespace dense {
 constexpr uint32_t PH_CT0 = 0;

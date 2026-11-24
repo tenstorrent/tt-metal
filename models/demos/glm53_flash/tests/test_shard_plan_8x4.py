@@ -369,7 +369,14 @@ def test_helper_merge_prefilter(case):
     their 16th-largest list key as L, the keys >= L kept before the rounds, round 0's done check on the union's total)
     == the unfiltered merge and the serial merge -- T_g, k_rem, done, the per-chip quotas, every chip's per-core quotas
     -- at kph 1 / 2 / 4, 4- and 8-bit digits; one message more; on full lists (the >= 64 K regime) the survivors stay
-    near 512 instead of 32 x 512"""
+    near 512 instead of 32 x 512. Rev 77 MFAST (dsa_shard.hpp): pf_kth_fast's register merge (pf_kth_regs) == pf_kth on
+    every list, pf_keep in place over a helper's KPH key pages == the survivors list by list, and r8_hist_lean's rounds
+    (direct coarse counts, the fine bins cleared after each round's pull) == r8_hist's counts from a zero fine area.
+    Rev 81 MSPLIT (dsa_shard.hpp): the kernels' two-RISC flow on a KPH >= 2 helper (msplit_helper_pass: the bound pass
+    records every block's max, the keep passes skip the blocks below L, the BRISC compacts from list KPH / 2's base, the
+    forward move, the count words) == the one-RISC array, counts and bound for any stale block-maxima words; two
+    mutations (a max recorded only for blocks the bound test keeps; no forward move) must change the result. The
+    exactness proof is the device gates (CI pins, 16 identical rows, 1 M spec ids with the split engaged)"""
     gen = torch.Generator().manual_seed(74 + len(case))
     if case == "full":  # every chip a full local top-512 of a different random population (the long-context regime)
         lists = []
@@ -397,6 +404,64 @@ def test_helper_merge_prefilter(case):
         got = SP.helper_merge(lists, 0, kph=4, digit_bits=8, prefilter=True)
         logger.info(f"PREFILTER full lists: L {got['prefilter_l']:#x} survivors {got['survivors']} of {32 * 512}")
         assert got["survivors"] < 4 * 512, got["survivors"]
+    # rev 77 MFAST: the helpers' new loops on these lists (+ short / all-equal / duplicate-heavy edge lists)
+    keys = [[kk for kk, _ in v] for v in lists]
+    for v in keys + [list(range(16)), [7] * 40, [0] * 20, [5, 9] * 9 + [1], list(range(40, 0, -1)), [3] * 15]:
+        assert SP.pf_kth_regs(v) == SP.pf_kth(v, 16), (case, v[:8])
+    got = SP.helper_merge(lists, 0, kph=4, digit_bits=8, prefilter=True)
+    pf_l = 0 if got["done"] else got["prefilter_l"]
+    caught = {"bmax_after_test": 0, "no_move": 0}  # rev 81 MSPLIT mutations seen to change a helper's array
+    for kph in (1, 2, 4):
+        for h in range(32 // kph):
+            own = keys[h * kph : (h + 1) * kph]
+            arr = [0] * (kph * 512)  # the helper's key pages (AGK: list i at i x CAND_MAX, zero-filled)
+            for i, v in enumerate(own):
+                arr[i * 512 : i * 512 + len(v)] = v
+            m, lens = 0, []
+            for i, v in enumerate(own):  # in place, list by list (the write index never passes an unread key)
+                m0, m = m, SP.pf_keep(arr, m, i * 512, len(v), pf_l)
+                lens.append(m - m0)
+            want = [[kk for kk in v if kk >= pf_l] for v in own]
+            assert arr[:m] == [kk for w in want for kk in w] and lens == [len(w) for w in want], (case, kph, h)
+            if kph >= 2:  # rev 81 MSPLIT: the kernels' two-RISC flow (msplit_helper_pass) == one RISC's array, counts
+                # and bound, whatever the staging pages held (the block maxima area's stale words)
+                for stale in (0, 0xFFFFFFFF, 0x5A5A5A5A):
+                    got_ms = SP.msplit_helper_pass(own, pf_l, stale=stale)
+                    assert (got_ms["keys"], got_ms["lens"]) == (arr[:m], lens), (case, kph, h, stale)
+                    assert got_ms["kmin"] == min(SP.pf_kth(v, 16) for v in own), (case, kph, h)
+                for mut in caught:  # the regressions the emulation must expose (asserted on the full lists below)
+                    bad = SP.msplit_helper_pass(own, pf_l, stale=0, mutate=mut)
+                    caught[mut] += (bad["keys"], bad["lens"]) != (arr[:m], lens)
+            fine, prefix, src = [0] * 256, 0, arr[:m]  # r8_hist_lean + r8_unbin along T_g's digits
+            for r in range(4):
+                shift = 24 - 8 * r
+                if r > 0:
+                    # (this model clears what it counted, so it cannot catch a kernel compaction that skips a key: the
+                    # CI pins and the 16-identical-rows gate on the device are the coverage for that)
+                    assert fine == [0] * 256, (case, kph, h, r)  # the previous round's compaction cleared its bins
+                else:
+                    fine = [0] * 256
+                coarse = [0] * 16
+                for kk in src:
+                    fine[(kk >> shift) & 255] += 1
+                    coarse[((kk >> shift) & 255) >> 4] += 1
+                ref = [sum(1 for kk in src if (kk >> shift) & 255 == d) for d in range(256)]
+                assert fine == ref and coarse == [sum(ref[16 * b : 16 * b + 16]) for b in range(16)], (case, kph, h, r)
+                mask = (0xFFFFFFFF << shift) & 0xFFFFFFFF
+                prefix = got["T_g"] & mask
+                for kk in src:
+                    fine[(kk >> shift) & 255] = 0
+                src = [kk for kk in src if kk & mask == prefix]
+
+    if case == "full":  # every mutation changes some helper's array on full lists (the emulation can fail)
+        assert all(caught.values()), caught
+        # deterministic: list 0's first 16 keys lift its running bound above a later block's max (500) whose key still
+        # survives L = 400 (L below this list's bound, as when another chip's list sets it)
+        lists2 = [[1000 + k for k in range(16)] + [500, 1, 2, 3] + [5] * 12, list(range(600, 632))]
+        want2 = [k for v in lists2 for k in v if k >= 400]
+        assert SP.msplit_helper_pass(lists2, 400)["keys"] == want2
+        for mut in caught:
+            assert SP.msplit_helper_pass(lists2, 400, mutate=mut)["keys"] != want2, mut
 
 
 @pytest.mark.parametrize(
@@ -1381,7 +1446,8 @@ def test_galaxy_defaults_shard_tail(monkeypatch):
     bit-identical to knob-off over 3 runs; 32 K x 4 ids identical), the fused prefill mHC mix and COMB (2026-11-18:
     not bitwise -- ids move at near-ties -- gated on tau / coherence and the served 1 M / AgentX rows); an
     explicit environment value wins (an explicit AGK=0 drops the AGB default with it, an explicit RSB=0 the RSNP
-    default, an explicit GLM53_MLA_ATT_OBF16=1 the COMB default); the speculative verify's step cuts and its kda_rec
+    default, an explicit MFAST=0 (or R8 / AGK / PREFILTER = 0) the MSPLIT default, an explicit GLM53_MLA_ATT_OBF16=1 the
+    COMB default); the speculative verify's step cuts and its kda_rec
     value split (GLM53_REC_SPLIT_VERIFY: no default is a GLM53_SPEC_* name, so apply_spec's speculative defaults still
     follow apply); the 1 M prefill window ladder; other meshes get nothing"""
     import os
@@ -1442,6 +1508,65 @@ def test_galaxy_defaults_shard_tail(monkeypatch):
     assert got["GLM53_DSA_SHARD_PREFILTER"] == "1" and SP.shard_prefilter(8)
     assert got["GLM53_DSA_SHARD_RS1_SPLIT"] == "1" and SP.shard_rs1_split(8)
     assert not SP.shard_prefilter(2) and not SP.shard_rs1_split(2)  # (the pair / the 2x4 never take them)
+    # rev 77 GLM53_DSA_SHARD_MFAST: a galaxy default; needs R8 + AGK + PREFILTER; the define names the kernels and
+    # mk_mla.py carry (a renamed define would silently build knob-off)
+    assert GD.KNOBS["GLM53_DSA_SHARD_MFAST"] == got["GLM53_DSA_SHARD_MFAST"] == "1" and SP.shard_mfast(8)
+    monkeypatch.delenv("GLM53_DSA_SHARD_MFAST", raising=False)
+    assert not SP.shard_mfast(8)
+    monkeypatch.setenv("GLM53_DSA_SHARD_MFAST", "1")
+    assert SP.shard_mfast(8, r8=True, agk=True, prefilter=True) and not SP.shard_mfast(2, False, False, False)
+    for need in (dict(r8=False), dict(agk=False), dict(prefilter=False)):
+        with expect_error(ValueError, "GLM53_DSA_SHARD_MFAST=1 needs"):
+            SP.shard_mfast(8, **need)
+    monkeypatch.delenv("GLM53_DSA_SHARD_MFAST")
+    # rev 81 GLM53_DSA_SHARD_MSPLIT: off by default, a galaxy default on MFAST; KPH 2 / 4 builds only (rev 81 + the define
+    # = CB_AKEY's index there; KPH 1 keeps rev 77; any other KPH refused before the JIT)
+    assert GD.KNOBS["GLM53_DSA_SHARD_MSPLIT"] == got["GLM53_DSA_SHARD_MSPLIT"] == "1" and SP.shard_msplit(8)
+    monkeypatch.delenv("GLM53_DSA_SHARD_MSPLIT", raising=False)
+    assert not SP.shard_msplit(8)  # (the raw default)
+    monkeypatch.setenv("GLM53_DSA_SHARD_MSPLIT", "1")
+    assert SP.shard_msplit(8, mfast=True) and not SP.shard_msplit(2, mfast=False)
+    with expect_error(ValueError, "GLM53_DSA_SHARD_MSPLIT=1 needs"):
+        SP.shard_msplit(8, mfast=False)
+    monkeypatch.delenv("GLM53_DSA_SHARD_MSPLIT")
+    assert SP.MSPLIT_REV == 81 and SP.MSPLIT_KPH == (2, 4)
+    for kph in (2, 4):
+        assert SP.msplit_build(dict(msplit=True, kph=kph))
+        assert SP.msplit_defines(dict(msplit=True, kph=kph), 59) == [("MLA_DSA_SHARD_MSPLIT", "59")]
+        assert (
+            not SP.msplit_build(dict(msplit=False, kph=kph))
+            and SP.msplit_defines(dict(msplit=False, kph=kph), 59) == []
+        )
+    assert not SP.msplit_build(dict(msplit=True, kph=1)) and SP.msplit_defines(dict(msplit=True, kph=1), 59) == []
+    assert not SP.msplit_build(None) and not SP.msplit_build({})
+    for kph in (3, 8, 16):
+        with expect_error(ValueError, "GLM53_DSA_SHARD_MSPLIT=1 supports KPH"):
+            SP.msplit_build(dict(msplit=True, kph=kph))
+    kd = os.path.join(SP.KDIR, "mla")
+    for f, names in (
+        ("att_dsa_shard_dm1.cpp", ("MLA_DSA_SHARD_MFAST", "pf_kth_fast", "pf_keep", "r8_hist_lean", "r8_unbin")),
+        ("dsa_shard.hpp", ("MLA_DSA_SHARD_MFAST", "pf_kth_fast", "pf_keep", "r8_hist_lean", "r8_unbin")),
+        ("att_dsa_shard_dm1.cpp", ("MLA_DSA_SHARD_MSPLIT", "pf_kth_bm", "pf_keep_bm", "MS_W_KDONE", "MS_W_SDONE")),
+        ("att_dsa_shard_dm0.cpp", ("MLA_DSA_SHARD_MSPLIT", "pf_kth_bm", "pf_keep_bm", "merge_mstg", "MS_W_L")),
+        ("dsa_shard.hpp", ("MLA_DSA_SHARD_MSPLIT", "pf_kth_bm", "pf_keep_bm", "merge_mstg", "MS_BMAX_OFF")),
+    ):
+        with open(os.path.join(kd, f)) as fh:
+            src = fh.read()
+        assert all(nm in src for nm in names), (f, names)
+    with open(os.path.join(os.path.dirname(SP.KDIR), "mk_mla.py")) as fh:
+        src = fh.read()
+    assert '("MLA_DSA_SHARD_MFAST", "1")' in src and "MLA_REV_MFAST = 77" in src
+    # rev 81: mk_mla.py's rev and define come from msplit_build / msplit_defines with CB_AKEY (index 59, one page)
+    assert (
+        "MLA_REV_MSPLIT = 81" in src
+        and "SP.msplit_build(shard)" in src
+        and 'SP.msplit_defines(shard, DCB["AKEY"])' in src
+    )
+    assert (
+        "AKEY=59)" in src
+        and "AKEY_PAGES = 1 " in src
+        and "_akey_bytes(dsa_keys, dsa_cand, shard_t, shard_tl, shard_kph), AKEY_PAGES)" in src
+    )
     assert got["GLM53_MLA_DSA_BATON_GROUPS"] == got["GLM53_KDA_VERIFY_PIPE"] == "1"
     assert got["GLM53_MK_READER_PLACE"] == "row" and got["GLM53_REC_SPLIT_VERIFY"] == "2"
     _protect_env(monkeypatch, [k for k in os.environ if k.startswith("GLM53_SPEC_")] + list(GD.SPEC_KNOBS_B16))
@@ -1468,7 +1593,23 @@ def test_galaxy_defaults_shard_tail(monkeypatch):
     got = GD.apply((8, 4), 4096, 4096)
     assert "GLM53_DSA_SHARD_AGK" not in got and not SP.shard_agk(8)
     assert "GLM53_DSA_SHARD_AGB" not in got and not SP.shard_agb(8)  # dropped with AGK, no AGB-needs-AGK error
+    assert "GLM53_DSA_SHARD_MSPLIT" not in got  # (dropped with MFAST: no MSPLIT-needs-MFAST error)
+    assert "GLM53_DSA_SHARD_MFAST" not in got and not SP.shard_mfast(
+        8, SP.shard_r8(8), SP.shard_agk(8), SP.shard_prefilter(8)
+    )
     assert got["GLM53_DSA_SHARD_RSNP"] == "1" and SP.shard_rsnp(8)  # (RSB still on)
+    for need in ("GLM53_DSA_SHARD_R8", "GLM53_DSA_SHARD_PREFILTER"):  # MFAST rides on R8 + AGK + PREFILTER
+        _protect_env(monkeypatch, keys)
+        monkeypatch.setenv(need, "0")
+        got = GD.apply((8, 4), 4096, 4096)
+        assert need not in got and "GLM53_DSA_SHARD_MFAST" not in got, need
+        assert not SP.shard_mfast(8, SP.shard_r8(8), SP.shard_agk(8), SP.shard_prefilter(8)), need
+        assert "GLM53_DSA_SHARD_MSPLIT" not in got and not SP.shard_msplit(8, False), need  # (MSPLIT rides on MFAST)
+    _protect_env(monkeypatch, keys)
+    monkeypatch.setenv("GLM53_DSA_SHARD_MFAST", "0")  # an explicit MFAST=0 drops the MSPLIT default with it
+    got = GD.apply((8, 4), 4096, 4096)
+    assert "GLM53_DSA_SHARD_MFAST" not in got and "GLM53_DSA_SHARD_MSPLIT" not in got
+    assert not SP.shard_msplit(8, SP.shard_mfast(8, SP.shard_r8(8), SP.shard_agk(8), SP.shard_prefilter(8)))
     _protect_env(monkeypatch, keys)
     monkeypatch.setenv("GLM53_DSA_SHARD_RSB", "0")  # an explicit RSB=0 drops the RSNP default with it
     got = GD.apply((8, 4), 4096, 4096)

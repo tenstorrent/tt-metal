@@ -168,7 +168,8 @@ void kernel_main() {
     constexpr uint32_t OG = 4;
     static_assert(mlaatt::DT % OG == 0, "O groups");
     volatile tt_l1_ptr uint32_t* dato = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_DATO));
-    // CB_AKEY (scratch, never pushed): [0, 64) histogram / tie count, [64, 64 + POS_BYTES) cur_pos, then the region U
+    // CB_AKEY (one-page scratch; pushed only by rev 81 MSPLIT's go / L pages, dsa_shard.hpp): [0, 64) histogram / tie
+    // count, [64, 64 + POS_BYTES) cur_pos, then the region U
     // of UB bytes = the phase-A keys (MLA_DSA_KEYS words) + compacted candidates (MLA_DSA_KEYS words), overlaid in
     // phase B by the merge helpers' scratch (rev 60, review 2 item 1: dead keys by then), then per lane token j the
     // kept (key, local pool) pairs (2 KW words each, TL blocks: a core keeps <= min(CAND_MAX, its MLA_DSA_KEYS) pools
@@ -179,6 +180,11 @@ void kernel_main() {
     constexpr uint32_t UB =
         2 * MLA_DSA_KEYS * 4 > mlashard::MERGE_SCR_BYTES + 64 ? 2 * MLA_DSA_KEYS * 4 : mlashard::MERGE_SCR_BYTES + 64;
     const uint32_t kbase = get_write_ptr(CB_AKEY);
+    // rev 81 MSPLIT: the define names this CB (the BRISC waits on its pages: dsa_shard.hpp MSPLIT)
+#if defined(MLA_DSA_SHARD_MSPLIT)
+    static_assert(MLA_DSA_SHARD_MSPLIT == CB_AKEY, "MSPLIT: MLA_DSA_SHARD_MSPLIT is CB_AKEY's index");
+    ASSERT(kbase == get_local_cb_interface(CB_AKEY).fifo_limit - get_local_cb_interface(CB_AKEY).fifo_size);
+#endif
     volatile tt_l1_ptr uint32_t* hist = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kbase);
     volatile tt_l1_ptr int32_t* pos_l1 = reinterpret_cast<volatile tt_l1_ptr int32_t*>(kbase + 64);
     const uint32_t ubase = kbase + 64 + mladsa::POS_BYTES;
@@ -456,7 +462,18 @@ void kernel_main() {
         uint32_t prefix = 0, mask = 0;
         volatile tt_l1_ptr uint32_t* src = mkeys;
         uint32_t nsrc = n;
-#if defined(MLA_DSA_SHARD_PREFILTER)
+#if defined(MLA_DSA_SHARD_PREFILTER) && defined(MLA_DSA_SHARD_MFAST)
+        // rev 77 MFAST (dsa_shard.hpp): PREFILTER's report and survivors below with pf_kth_fast / pf_keep (the same
+        // values); mkeys stays whole for the per-core tie count below
+        hist[0] = mlashard::pf_kth_fast(mkeys, n);
+        hist[1] = n;
+        report();
+        noc_semaphore_wait_min(sel_sem, ++msgs);
+        invalidate_l1_cache();
+        nsrc = mlashard::pf_keep(
+            mcand, 0, mkeys, n, reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mbox + mlashard::merge_msg(j, 0))[0]);
+        src = mcand;
+#elif defined(MLA_DSA_SHARD_PREFILTER)
         // rev 75 PREFILTER (dsa_shard.hpp): report (this list's PF_RANK-th largest key, its count), take L (merge slot
         // 0), keep the keys >= L in mcand (list order); mkeys stays whole for the per-core tie count below
         hist[0] = mlashard::pf_kth(mkeys, n);
@@ -479,7 +496,9 @@ void kernel_main() {
 #endif
         for (uint32_t r = 0; r < mladsa::ROUNDS; ++r) {
             const uint32_t shift = 32 - mladsa::RADIX_BITS * (r + 1);
-#if defined(MLA_DSA_R8)
+#if defined(MLA_DSA_SHARD_MFAST)  // dsa_shard.hpp MFAST: every key in src matches (mask, prefix)
+            mlashard::r8_hist_lean(mbox + mlashard::R8_FINE_OFF, hist, src, nsrc, shift, r == 0);
+#elif defined(MLA_DSA_R8)
             mlashard::r8_hist(mbox + mlashard::R8_FINE_OFF, hist, src, nsrc, mask, prefix, shift);
 #else
             for (uint32_t b = 0; b < mladsa::BINS; ++b) {
@@ -505,6 +524,9 @@ void kernel_main() {
             uint32_t m = 0;
             for (uint32_t i = 0; i < nsrc; ++i) {
                 const uint32_t k = src[i];
+#if defined(MLA_DSA_SHARD_MFAST)
+                mlashard::r8_unbin(mbox + mlashard::R8_FINE_OFF, k, shift);  // (the coordinator's pull has landed)
+#endif
                 if ((k & mask) == prefix) {
                     mcand[m++] = k;
                 }
@@ -635,9 +657,11 @@ void kernel_main() {
             ASSERT(n == 0 || src[n - 1] != 0);  // (a finite score's key is never 0: the pack's zero fill starts at n)
             ASSERT(n == mlashard::CAND_MAX || src[n] == 0);
             len[i] = n;
+#if !defined(MLA_DSA_SHARD_MFAST)  // (dsa_shard.hpp MFAST: list i stays in its page for pf_kth_fast / pf_keep)
             for (uint32_t e = 0; e < n; ++e) {
                 mkeys[ntot + e] = src[e];
             }
+#endif
             ntot += n;
         }
 #else
@@ -657,7 +681,82 @@ void kernel_main() {
                 return true;
             });
 #endif
-#if defined(MLA_DSA_SHARD_PREFILTER)
+#if defined(MLA_DSA_SHARD_PREFILTER) && defined(MLA_DSA_SHARD_MFAST)
+        // rev 77 MFAST (dsa_shard.hpp): PREFILTER's report and survivors below, read from the KPH key pages in place
+        // (no pack): list i's keys >= L appended to mkeys from 0 in list order (len[i] = the survivors)
+        {
+#if defined(MLA_DSA_SHARD_MSPLIT)
+            // rev 81 MSPLIT (dsa_shard.hpp): lists [MS_N, KPH) on this core's BRISC (att_dsa_shard_dm0.cpp) -- go once
+            // the key pages are in L1, its bound in MS_W_KMIN (MS_W_KDONE = j + 1); the same min over the KPH lists
+            ASSERT(mstg == mlashard::merge_mstg(kbase));
+            volatile tt_l1_ptr uint32_t* xw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mstg);
+            volatile tt_l1_ptr uint32_t* bmx = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mstg + mlashard::MS_BMAX_OFF);
+            xw[mlashard::MS_W_KDONE] = 0;
+            xw[mlashard::MS_W_SDONE] = 0;
+            invalidate_l1_cache();
+            cb_push_back(MLA_DSA_SHARD_MSPLIT, 1);  // go: the KPH key pages landed (the read barrier above)
+            uint32_t kmin = 0xFFFFFFFFu;
+            for (uint32_t i = 0; i < mlashard::MS_N; ++i) {
+                const uint32_t kq =
+                    mlashard::pf_kth_bm(mkeys + i * mlashard::CAND_MAX, len[i], bmx + i * mlashard::MS_BLOCKS);
+                kmin = kq < kmin ? kq : kmin;
+            }
+            do {
+                invalidate_l1_cache();
+            } while (xw[mlashard::MS_W_KDONE] != j + 1);
+            const uint32_t kb = xw[mlashard::MS_W_KMIN];
+            kmin = kb < kmin ? kb : kmin;
+#else
+            uint32_t kmin = 0xFFFFFFFFu;
+            for (uint32_t i = 0; i < mlashard::KPH; ++i) {
+                const uint32_t kq = mlashard::pf_kth_fast(mkeys + i * mlashard::CAND_MAX, len[i]);
+                kmin = kq < kmin ? kq : kmin;
+            }
+#endif
+            hist[0] = kmin;
+            hist[1] = ntot;
+            report();
+            noc_semaphore_wait_min(sel_sem, ++msgs);
+            invalidate_l1_cache();
+            const uint32_t pf_l = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mbox + mlashard::merge_msg(j, 0))[0];
+            uint32_t m = 0;
+#if defined(MLA_DSA_SHARD_MSPLIT)
+            // L to the BRISC (second page), this RISC's lists' survivors, then the BRISC's (contiguous from list
+            // MS_N's base, MS_W_SDONE = j + 1) moved after them: the rev-77 array in list order
+            xw[mlashard::MS_W_L] = pf_l;
+            invalidate_l1_cache();
+            cb_push_back(MLA_DSA_SHARD_MSPLIT, 1);
+            for (uint32_t i = 0; i < mlashard::MS_N; ++i) {
+                const uint32_t m0 = m;
+                m = mlashard::pf_keep_bm(
+                    mkeys, m, mkeys + i * mlashard::CAND_MAX, len[i], pf_l, bmx + i * mlashard::MS_BLOCKS);
+                len[i] = m - m0;
+            }
+            do {
+                invalidate_l1_cache();
+            } while (xw[mlashard::MS_W_SDONE] != j + 1);
+            {
+                volatile tt_l1_ptr uint32_t* sb = mkeys + mlashard::MS_N * mlashard::CAND_MAX;
+                uint32_t mb = 0;
+                for (uint32_t i = mlashard::MS_N; i < mlashard::KPH; ++i) {
+                    len[i] = xw[mlashard::MS_W_LEN + i - mlashard::MS_N];
+                    mb += len[i];
+                }
+                for (uint32_t e = 0; e < mb; ++e) {  // (forward: m <= MS_N CAND_MAX, the write never passes the read)
+                    mkeys[m + e] = sb[e];
+                }
+                m += mb;
+            }
+#else
+            for (uint32_t i = 0; i < mlashard::KPH; ++i) {
+                const uint32_t m0 = m;
+                m = mlashard::pf_keep(mkeys, m, mkeys + i * mlashard::CAND_MAX, len[i], pf_l);
+                len[i] = m - m0;
+            }
+#endif
+            ntot = m;
+        }
+#elif defined(MLA_DSA_SHARD_PREFILTER)
         // rev 75 PREFILTER (dsa_shard.hpp): report (the min over the KPH lists of their PF_RANK-th largest key, the
         // keys), take L (merge slot 0), keep the keys >= L in place list by list (stable; len[i] = the survivors)
         {
@@ -695,7 +794,9 @@ void kernel_main() {
         uint32_t nsrc = ntot;
         for (uint32_t r = 0; r < mladsa::ROUNDS; ++r) {
             const uint32_t shift = 32 - mladsa::RADIX_BITS * (r + 1);
-#if defined(MLA_DSA_R8)
+#if defined(MLA_DSA_SHARD_MFAST)  // dsa_shard.hpp MFAST: every key in mkeys[0, nsrc) matches (mask, prefix)
+            mlashard::r8_hist_lean(mbox + mlashard::R8_FINE_OFF, hist, mkeys, nsrc, shift, r == 0);
+#elif defined(MLA_DSA_R8)
             mlashard::r8_hist(mbox + mlashard::R8_FINE_OFF, hist, mkeys, nsrc, mask, prefix, shift);
 #else
             for (uint32_t b = 0; b < mladsa::BINS; ++b) {
@@ -726,6 +827,9 @@ void kernel_main() {
                 uint32_t mi = 0;
                 for (uint32_t e = 0; e < li; ++e) {
                     const uint32_t k = mkeys[b0 + e];
+#if defined(MLA_DSA_SHARD_MFAST)
+                    mlashard::r8_unbin(mbox + mlashard::R8_FINE_OFF, k, shift);  // (the coordinator's pull has landed)
+#endif
                     if ((k & mask) == prefix) {
                         mkeys[m++] = k;
                         ++mi;
