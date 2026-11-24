@@ -1285,23 +1285,29 @@ class TestLinks(unittest.TestCase):
         self.assertEqual({f["why"] for f in c.data["failed"]}, {"hung"})
         self.assertEqual(max(t for t in timeouts if t is not None), links.PAIR_S + links.OP_TIMEOUT_S + links.COMPILE_S)
 
-    def _bw_test(self, runs, name="pair", bw=True):
+    def _bw_test(self, runs, name="pair", bw=True, fail_on=lambda lab, n: False):
         """pair_test over the grid with each pair program faked to write its rows: *runs(lab)* gives the GBps_total of
-        each launch of that pair's next run, launch 0 first. Returns the failed flag, the checks and the run dir."""
+        each launch of that pair's next run, launch 0 first; *fail_on(lab, n)* makes run n of that pair exit 1. Returns
+        the failed flag, the checks, the run dir and the pairs started."""
         started = []
 
         class P:
             pid = 1
 
+            def __init__(self, rc):
+                self.rc = rc
+
             def wait(self, timeout=None):
-                return 0
+                return self.rc
 
         def start(d, lab, idx, seconds):
             started.append(lab)
+            if fail_on(lab, started.count(lab)):
+                return P(1)
             rows = [{"event": "iter", "i": i, "s": 1.0, "GBps_total": g} for i, g in enumerate(runs(lab))]
             (d / f"{lab}.rows").write_text("".join(json.dumps(r) + "\n" for r in rows))
             (d / f"{lab}.log").write_text("")
-            return P()
+            return P(0)
 
         phase = Phase(name="links")
         d = Path(tempfile.mkdtemp())
@@ -1370,6 +1376,20 @@ class TestLinks(unittest.TestCase):
             (c.status, c.data["judged"], c.data["not_judged"]), (WARN, len(labs) - 1, [f"{stuck} (1 warm)"])
         )
         self.assertIn("1 not judged (under 2 warm launches)", c.details)
+
+    def test_a_cold_pair_whose_rerun_fails_is_a_link_failure_not_a_bandwidth_one(self):
+        labs = self._labs()
+        cold = sorted(labs)[0]
+
+        def runs(lab):
+            return [0] + [self._gbps(176, labs[lab])] * (1 if lab == cold else 2)
+
+        failed, checks, _, started = self._bw_test(runs, fail_on=lambda lab, n: lab == cold and n == 2)
+        self.assertEqual(started.count(cold), 2)
+        self.assertTrue(failed)  # the rerun's failure is the pair test's: it arms the sweep
+        self.assertEqual([f["pair"] for f in checks["links_pair"].data["failed"]], [cold])
+        c = checks["links_bandwidth"]
+        self.assertEqual((c.status, c.data["judged"], c.data["not_judged"]), (PASS, len(labs) - 1, []))
 
     def test_the_sweep_is_not_judged_on_bandwidth(self):
         failed, checks, _, started = self._bw_test(lambda lab: [0], name="sweep", bw=False)
