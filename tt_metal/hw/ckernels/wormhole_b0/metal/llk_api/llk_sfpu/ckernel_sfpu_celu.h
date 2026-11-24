@@ -12,7 +12,13 @@
 
 namespace ckernel::sfpu {
 
-inline void celu_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
+// Programs the Cody-Waite constants of expm1_cw_clamped into vConstFloatPrgm0/1/2, which calculate_celu
+// reads on every row. Nothing else may program Prgm0..2 between this init and calculate_celu; on Wormhole
+// sfpu_reciprocal_init owns all three (its Newton-seed coefficients), so no reciprocal may run in between.
+inline void celu_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    expm1_cw_init_prgm_consts();
+}
 
 // celu(x) = x for x>=0, alpha*(exp(x/alpha)-1) for x<0
 
@@ -25,16 +31,22 @@ inline void celu_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 // through unchanged, which keeps NaN and gives -inf for x = -inf, as the reference does.
 template <bool is_fp32_dest_acc_en, int ITERATIONS, bool NEG_ALPHA>
 sfpi_inline void celu_loop(sfpi::vFloat alpha, sfpi::vFloat alpha_recip) {
-// unroll 2: with expm1_cw_clamped inlined the loop body is large enough that
-// partial unroll outperforms both full (unroll 8) and no-unroll (~0.8us on WH)
-#pragma GCC unroll 2
+    // expm1's top Horner coefficient, loaded once and held in an LReg for the whole loop (the three
+    // Cody-Waite constants come from Prgm0/1/2, see the init above; sfpi (as of 7.93.0) never hoists a literal out
+    // of a loop by itself). With alpha_recip live as well there is no LReg for the second one, so it
+    // stays a per-row literal.
+    sfpi::vFloat h_top1 = CW_EXPM1_H_TOP1;
+    constexpr float h_top0 = CW_EXPM1_H_TOP0;
+// Full unroll: measured fastest on WH (each of unroll 4, 2 and 1 is slower). sfpi replays the
+// repeated row body, so the code grows little.
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
         sfpi::vFloat arg = alpha_recip * x;
         if constexpr (NEG_ALPHA) {
             arg = sfpi::min(arg, 89.0f);
         }
-        sfpi::vFloat result = alpha * expm1_cw_clamped(arg);
+        sfpi::vFloat result = alpha * expm1_cw_clamped_prgm(arg, h_top1, h_top0);
 
         if constexpr (NEG_ALPHA) {
             v_if(!sfpi::is_finite(x)) { result = x; }

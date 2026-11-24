@@ -17,6 +17,7 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     NUM_FACES,
+    NUM_GUARD_TILES,
     TILE_COUNT,
     generate_input_dim,
 )
@@ -32,13 +33,14 @@ from helpers.test_variant_parameters import (
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
     rt_dim=[1],
     ct_dim=[1, 2, 3, 4, 5, 6, 7, 8],
+    loop_factor=[32],
 )
-def test_perf_fast_tilize(perf_report, formats, rt_dim, ct_dim):
+def test_perf_fast_tilize(perf_report, formats, rt_dim, ct_dim, loop_factor):
     # Width 1 uses standard tilize fallback — not representative of fast path
     if ct_dim < 2:
         pytest.skip("ct_dim < 2 uses standard tilize fallback")
 
-    _run_fast_tilize_perf(perf_report, formats, rt_dim, ct_dim)
+    _run_fast_tilize_perf(perf_report, formats, rt_dim, ct_dim, loop_factor)
 
 
 # ---------------------------------------------------------------------------
@@ -57,15 +59,16 @@ def test_perf_fast_tilize(perf_report, formats, rt_dim, ct_dim):
     ],
     rt_dim=[1],
     ct_dim=[2, 4, 8],
+    loop_factor=[32],
 )
-def test_perf_fast_tilize_bfp(perf_report, formats, rt_dim, ct_dim):
-    _run_fast_tilize_perf(perf_report, formats, rt_dim, ct_dim)
+def test_perf_fast_tilize_bfp(perf_report, formats, rt_dim, ct_dim, loop_factor):
+    _run_fast_tilize_perf(perf_report, formats, rt_dim, ct_dim, loop_factor)
 
 
 # ---------------------------------------------------------------------------
 # Shared helper
 # ---------------------------------------------------------------------------
-def _run_fast_tilize_perf(perf_report, formats, rt_dim, ct_dim):
+def _run_fast_tilize_perf(perf_report, formats, rt_dim, ct_dim, loop_factor):
     tile_count = rt_dim * ct_dim
     dimensions = (rt_dim * 32, ct_dim * 32)
 
@@ -77,8 +80,9 @@ def _run_fast_tilize_perf(perf_report, formats, rt_dim, ct_dim):
         runtimes=[
             generate_input_dim(dimensions, dimensions),
             TILE_COUNT(tile_count),
-            LOOP_FACTOR(32),
+            LOOP_FACTOR(loop_factor),
             NUM_FACES(4),
+            NUM_GUARD_TILES(0),
         ],
         variant_stimuli=StimuliConfig(
             None,

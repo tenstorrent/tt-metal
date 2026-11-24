@@ -11,7 +11,7 @@ from fuser.fuser_config import GlobalConfig
 from fuser.golden.unpack.reduce_block_max import unpack_reduce_block_max_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
-from fuser.operand import BfdResource
+from fuser.operand import BfdId
 
 
 class ReduceBlockMaxRuntimeUnpacker(Unpacker):
@@ -55,11 +55,9 @@ class ReduceBlockMaxRuntimeUnpacker(Unpacker):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        bfd_program = compute_unit.src_a.bfd_alloc_and_program(
-            BfdResource.UNP0, result_name="bfd_a"
-        ) + compute_unit.src_b.bfd_alloc_and_program(
-            BfdResource.UNP1, result_name="bfd_b"
-        )
+        bfd_program = compute_unit.src_a.program_bfd(
+            BfdId.UNP0, result_name="bfd_a"
+        ) + compute_unit.src_b.program_bfd(BfdId.UNP1, result_name="bfd_b")
         tensor_shape = compute_unit.src_a.tile_shape.cpp_value
         dest_acc = config.dest_acc.cpp_enum_value
         return (
@@ -81,7 +79,7 @@ class ReduceBlockMaxRuntimeUnpacker(Unpacker):
         return (
             f"_llk_unpack_AB_reduce_block_max_row_runtime_({block.block_cols}, "
             f"{block.tile_id_src_a}, {block.tile_id_src_b}, "
-            f"ckernel::trisc::bfd_current<{BfdResource.UNP1.value}>(), {tensor_shape});\n"
+            f"{BfdId.UNP1.value}, {tensor_shape});\n"
         )
 
     def uninit(

@@ -22,12 +22,17 @@ from models.experimental.ops.quasar.tests.vad_variant_ops import op_utils as U
 C, Q = U.NUM_CAMS, U.NUM_QUERY
 
 
+# The model-sized cases keep L1 tensors of 3.85 MB (10000 queries padded to 32-wide tiles), more than the
+# emulator's two ~3.9 MB banks hold with an output, so they are blackhole_scale (excluded from -m emulator).
+# The proxies keep the op, dims and layout at 1000 queries (~0.4 MB per tensor).
 @U.with_default_mesh()
 @pytest.mark.parametrize(
     "shape, dim",
     [
-        pytest.param((C, 1, Q, 4), -1, id="R1-bev_mask-sum-zanchors-135669"),
-        pytest.param((C, 1, Q, 32), 0, id="R2-sum-over-cams-300812"),
+        pytest.param((C, 1, Q, 4), -1, id="R1-bev_mask-sum-zanchors-135669", marks=pytest.mark.blackhole_scale),
+        pytest.param((C, 1, Q, 32), 0, id="R2-sum-over-cams-300812", marks=pytest.mark.blackhole_scale),
+        pytest.param((C, 1, 1000, 4), -1, id="proxy-R1-sum-zanchors"),
+        pytest.param((C, 1, 1000, 32), 0, id="proxy-R2-sum-over-cams"),
     ],
 )
 def test_sum(ttnn_mesh_device, reset_seeds, shape, dim):

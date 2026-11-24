@@ -38,7 +38,7 @@ void tti_pool_instr_func()
     }
 }
 
-constexpr static std::uint32_t REDUCE_ROW_GROUPS = FACE_R_DIM / ELTWISE_MATH_ROWS;
+constexpr std::uint32_t REDUCE_ROW_GROUPS = FACE_R_DIM / ELTWISE_MATH_ROWS;
 
 /**
  * @brief Dest rows one face occupies; faces shorter than MAX_FPU_ROWS are padded to MAX_FPU_ROWS rows.

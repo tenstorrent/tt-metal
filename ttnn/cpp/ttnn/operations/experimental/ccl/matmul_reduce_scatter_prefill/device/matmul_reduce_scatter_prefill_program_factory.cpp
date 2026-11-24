@@ -31,6 +31,7 @@
 #include "ttnn/kernel_lib/mcast/host/mcast.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/per_device_program_merge.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
@@ -70,6 +71,11 @@ KernelDescriptor::RTArgList mrs_rt_list(const std::vector<SlotValue>& slots) {
         std::visit([&list](auto value) { list.push_back(value); }, slot);
     }
     return list;
+}
+
+// Appends schedule words to a common runtime-arg list.
+void mrs_append(std::vector<SlotValue>& dst, const std::vector<uint32_t>& src) {
+    dst.insert(dst.end(), src.begin(), src.end());
 }
 
 void mrs_append(std::vector<uint32_t>& dst, const std::vector<uint32_t>& src) {
@@ -563,6 +569,7 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
     compute_ct[args::compute_ct::NUM_CHUNKS] = num_chunks;
     compute_ct[args::compute_ct::N_INNER] = n_inner;
     compute_ct[args::compute_ct::RESIDENT] = resident ? 1 : 0;
+    compute_ct[args::compute_ct::ROW_MOP] = mesh->arch() == tt::ARCH::BLACKHOLE ? 1 : 0;
 
     std::vector<uint32_t> writer_ct(args::writer_ct::COUNT);
     writer_ct[args::writer_ct::CB_FINISHED] = args::cb::FINISHED;
@@ -719,12 +726,12 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
         r_rt[args::reader_rt::SLOTS_BWD] = n_arr[kBwd];
         r_rt[args::reader_rt::REP_FWD_XY] = n_arr[kFwd] != 0 ? mrs_xy16(*rep[kFwd]) : 0;
         r_rt[args::reader_rt::REP_BWD_XY] = n_arr[kBwd] != 0 ? mrs_xy16(*rep[kBwd]) : 0;
-        mrs_append(r_rt, wave_words);
-        mrs_append(r_rt, ent_words[h]);
+        // The schedule tables are common args (one copy per half); a core only says which half it follows.
+        r_rt[args::reader_rt::HALF] = h;
         reader.runtime_args.emplace_back(core, std::move(r_rt));
 
-        std::vector<uint32_t> c_rt = wave_mm_words;
-        mrs_append(c_rt, roles_words[h]);
+        std::vector<uint32_t> c_rt(args::compute_rt::COUNT);
+        c_rt[args::compute_rt::HALF] = h;
         compute.runtime_args.emplace_back(core, std::move(c_rt));
 
         std::vector<uint32_t> w_rt(args::writer_rt::COUNT);
@@ -733,8 +740,7 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
         w_rt[args::writer_rt::FWD_PORT_XY] = pf.has_value() ? mrs_xy16(*pf) : 0;
         w_rt[args::writer_rt::BWD_PORT_XY] = pb.has_value() ? mrs_xy16(*pb) : 0;
         w_rt[args::writer_rt::MAILBOX_SLOT_OFFSET] = k * detail::kMailboxStride;
-        mrs_append(w_rt, wave_words);
-        mrs_append(w_rt, kind_words[h]);
+        w_rt[args::writer_rt::HALF] = h;
         writer.runtime_args.emplace_back(core, std::move(w_rt));
     }
 
@@ -744,11 +750,23 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
     reader_common[args::reader_common::ARR_FWD_ADDR] = arr_addr[kFwd];
     reader_common[args::reader_common::ARR_BWD_ADDR] = arr_addr[kBwd];
     reader_common[args::reader_common::REPORT_CHUNKS] = credit_chunks;
+    mrs_append(reader_common, wave_words);
+    mrs_append(reader_common, ent_words[0]);
+    mrs_append(reader_common, ent_words[1]);
     reader.emplace_common_runtime_args(mrs_rt_list(reader_common));
+
+    std::vector<SlotValue> compute_common;
+    mrs_append(compute_common, wave_mm_words);
+    mrs_append(compute_common, roles_words[0]);
+    mrs_append(compute_common, roles_words[1]);
+    compute.emplace_common_runtime_args(mrs_rt_list(compute_common));
 
     std::vector<SlotValue> writer_common(args::writer_common::COUNT, 0u);
     writer_common[args::writer_common::OUT_ADDR] = output.buffer();
     writer_common[args::writer_common::MAILBOX_ADDR] = res.mailbox.buffer();
+    mrs_append(writer_common, wave_words);
+    mrs_append(writer_common, kind_words[0]);
+    mrs_append(writer_common, kind_words[1]);
     writer.emplace_common_runtime_args(mrs_rt_list(writer_common));
 
     // ---- multicast families (after the reader's own args) ----
@@ -770,16 +788,19 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
     }
 
     // ---- port cores ----
+    // use_column_major_ccl stacks every port in one column: on NoC0 (+x, then +y) the reader's pulls all funnel through
+    // that column's links, so there it pulls on NoC1 (-y, then -x) and the sender takes NoC0.
+    const bool reader_noc1 = attrs.plan_inputs.column_major_ccl;
     KernelDescriptor port_reader;
     port_reader.kernel_source = mrs_kernel_path("matmul_reduce_scatter_prefill_port_reader.cpp");
     port_reader.compile_time_args = port_ct;
-    port_reader.config =
-        DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_0_default};
+    port_reader.config = DataMovementConfigDescriptor{
+        .processor = DataMovementProcessor::RISCV_1, .noc = reader_noc1 ? NOC::NOC_1 : NOC::NOC_0};
     KernelDescriptor port_sender;
     port_sender.kernel_source = mrs_kernel_path("matmul_reduce_scatter_prefill_port_sender.cpp");
     port_sender.compile_time_args = std::move(port_ct);
-    port_sender.config =
-        DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_1_default};
+    port_sender.config = DataMovementConfigDescriptor{
+        .processor = DataMovementProcessor::RISCV_0, .noc = reader_noc1 ? NOC::NOC_0 : NOC::NOC_1};
 
     const auto src_node = mesh->get_fabric_node_id(coord);
     std::vector<CoreRange> port_ranges;
@@ -929,17 +950,54 @@ MatmulReduceScatterPrefillMeshWorkloadFactory::create_mesh_workload(
     Tensor& output) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared;
-    for (const auto& coord : tensor_coords.coords()) {
-        Program program{MatmulReduceScatterPrefillProgramFactory::create_descriptor(attrs, tensor_args, output, coord)};
+    auto& mesh_device = *tensor_args.input_tensor.device();
+    auto add = [&](const ttnn::MeshCoordinateRange& range, Program program) {
         shared_variables_t sv{
             .reader = GetCommonRuntimeArgs(program, args::kernel_index::READER),
             .writer = GetCommonRuntimeArgs(program, args::kernel_index::WRITER),
             .port_reader = GetCommonRuntimeArgs(program, args::kernel_index::PORT_READER),
             .port_sender = GetCommonRuntimeArgs(program, args::kernel_index::PORT_SENDER),
         };
-        const ttnn::MeshCoordinateRange range(coord);
         workload.add_program(range, std::move(program));
         shared.emplace(range, sv);
+    };
+    // The chips' programs differ in runtime-arg values and in which strip cells run the port kernels (each chip places
+    // its ports near its own Ethernet cores; the strip holds no matmul core). One program per range runs the port
+    // kernels on the union of the chips' port cells, idle where a chip has no port: zero cores, units, ready fence and
+    // credits make both port kernels return before touching the fabric or a mailbox.
+    ttnn::ProgramMergeOptions options;
+    options.pad_runtime_args = true;
+    options.idle_runtime_args = [](size_t kernel_index, const CoreCoord&) -> std::optional<std::vector<uint32_t>> {
+        if (kernel_index == args::kernel_index::PORT_READER) {
+            return std::vector<uint32_t>(args::port_reader_rt::COUNT, 0u);
+        }
+        if (kernel_index == args::kernel_index::PORT_SENDER) {
+            std::vector<uint32_t> idle(args::port_sender_rt::COUNT, 0u);
+            idle[args::port_sender_rt::ZONE_CB] = args::cb::ARRIVALS_FWD;
+            return idle;
+        }
+        return std::nullopt;
+    };
+    for (const auto& range : tensor_coords.ranges()) {
+        std::vector<ProgramDescriptor> descriptors;
+        descriptors.reserve(range.shape().mesh_size());
+        for (const auto& coord : range) {
+            descriptors.push_back(
+                MatmulReduceScatterPrefillProgramFactory::create_descriptor(attrs, tensor_args, output, coord));
+        }
+        auto merged = descriptors.size() > 1 && tt::tt_metal::distributed::ArePerDeviceRuntimeArgsSupported(
+                                                    *tensor_args.input_tensor.device(), range)
+                          ? ttnn::merge_per_device_program_descriptors(descriptors, options)
+                          : std::nullopt;
+        if (merged.has_value()) {
+            add(range, Program{mesh_device, merged->descriptor});
+            ttnn::apply_per_device_runtime_args(workload, range, merged->per_device_runtime_args);
+            continue;
+        }
+        size_t i = 0;
+        for (const auto& coord : range) {
+            add(ttnn::MeshCoordinateRange(coord), Program{mesh_device, descriptors[i++]});
+        }
     }
     return cached_mesh_workload_t{std::move(workload), std::move(shared)};
 }

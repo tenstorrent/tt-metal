@@ -4,13 +4,14 @@
 
 #include "impl/metal2_host_api/program_spec/validation/resource/resource.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 void ValidateResourceBindings(const KernelSpec& kernel, const ValidationContext& ctx, tt::ARCH arch) {
     ValidateDFBBindings(kernel, ctx);
     ValidateSemaphoreBindings(kernel, arch);
     ValidateScratchpadBindings(kernel);
     ValidateTensorBindings(kernel);
+    ValidateGlobalSemaphoreBindings(kernel);
     ValidatePrefetcherPipeBindings(kernel);
 }
 
@@ -22,7 +23,7 @@ void ValidateResourceSpecs(
     const ProgramSpec& spec = ctx.spec;
     const CollectedSpecData& collected = ctx.collected;
     for (const auto& parameter : spec.advanced_options.sram_arena_parameters) {
-        ValidateSRAMArenaParameter(parameter);
+        experimental::ValidateSRAMArenaParameter(parameter);
     }
     for (const auto& dfb : spec.dataflow_buffers) {
         ValidateDFBSpec(dfb, collected, l1_alignment, arch, num_banks_from_buffer_type);
@@ -49,8 +50,9 @@ void ValidateResourceUsage(const ValidationContext& ctx, tt::ARCH arch) {
     ValidateScratchpadsUsed(ctx);
     ValidateTensorParametersUsed(ctx);
     ValidatePerNodeTensorPlacement(ctx);
+    ValidateGlobalSemaphoreParametersUsed(ctx);
     ValidatePrefetcherPipesUsed(ctx);
-    ValidateSRAMArenaParametersUsed(ctx);
+    experimental::ValidateSRAMArenaParametersUsed(ctx);
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

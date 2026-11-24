@@ -10,10 +10,14 @@ later scan sees only code, while offsets and line numbers stay the same.
 the repository.
 ``safe_git_rev`` validates a git revision string against an allowlist so option
 flags cannot be injected into git commands.
+``precommit_revisions``, ``git_output`` and ``name_status_entries`` read the range
+a pre-commit run covers, run git at the repository root and parse
+``git diff --name-status -z``.
 """
 
 import os
 import re
+import subprocess
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -41,6 +45,51 @@ def safe_repo_path(path):
     if resolved != REPO_ROOT and not resolved.startswith(REPO_ROOT + os.sep):
         return None
     return resolved
+
+
+def precommit_revisions():
+    """``[from, to]`` for ``pre-commit run --from-ref/--to-ref``, as CI runs it.
+
+    ``[]`` for a local run. None when either revision from the environment is rejected.
+    """
+    from_ref = os.environ.get("PRE_COMMIT_FROM_REF")
+    to_ref = os.environ.get("PRE_COMMIT_TO_REF")
+    if not (from_ref or to_ref):
+        return []
+    revisions = [safe_git_rev(from_ref), safe_git_rev(to_ref)]
+    return None if None in revisions else revisions
+
+
+def git_output(args):
+    """Standard output of ``git <args>`` at the repository root, or None when git fails."""
+    try:
+        return subprocess.check_output(
+            ["git", *args],
+            cwd=REPO_ROOT,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+
+
+def name_status_entries(payload):
+    """``(status, paths)`` for each entry of ``git diff --name-status -z``.
+
+    A rename or copy lists the old path, then the new one. Every other status lists one path.
+    """
+    parts = payload.split("\0")
+    entries = []
+    index = 0
+    while index < len(parts) and parts[index]:
+        status = parts[index]
+        count = 2 if status[0] in "RC" else 1
+        paths = parts[index + 1 : index + 1 + count]
+        if len(paths) < count:
+            break
+        entries.append((status, paths))
+        index += 1 + count
+    return entries
 
 
 # u8R"delim( ... )delim" and the other raw-string prefixes.
