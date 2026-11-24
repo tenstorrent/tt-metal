@@ -228,11 +228,11 @@ constexpr bool any_forwards_on_vc(size_t vc) {
 }
 
 template <typename T, size_t N>
-constexpr std::array<T, MAX_NUM_VCS> by_vc(const std::array<T, N>& by_channel) {
+constexpr std::array<T, MAX_NUM_VCS> receiver_channel_entry_by_vc(const std::array<T, N>& by_receiver_channel) {
     std::array<T, MAX_NUM_VCS> out{};
     for (size_t vc = 0; vc < MAX_NUM_VCS; vc++) {
         const size_t rx = vc == 2 ? receiver_channel_of(2) : vc;
-        out[vc] = rx < N ? by_channel[rx] : T{};
+        out[vc] = rx < N ? by_receiver_channel[rx] : T{};
     }
     return out;
 }
@@ -247,8 +247,8 @@ struct CommandBuffers {
     static constexpr uint8_t atomics = write_at_cmd_buf;
     static constexpr uint8_t local_writes = tt::tt_fabric::local_chip_data_cmd_buf;               // receiver
     static constexpr const auto& worker_credits = sender_channel_ack_cmd_buf_ids;                 // sender, by channel
-    static constexpr auto forward_data = by_vc(receiver_channel_forwarding_data_cmd_buf_ids);
-    static constexpr auto forward_credits = by_vc(receiver_channel_forwarding_sync_cmd_buf_ids);
+    static constexpr auto forward_data = receiver_channel_entry_by_vc(receiver_channel_forwarding_data_cmd_buf_ids);
+    static constexpr auto forward_credits = receiver_channel_entry_by_vc(receiver_channel_forwarding_sync_cmd_buf_ids);
 
     // Which kinds keep presets:
     //   - two ERISCs: every kind but atomics (`presets`);
