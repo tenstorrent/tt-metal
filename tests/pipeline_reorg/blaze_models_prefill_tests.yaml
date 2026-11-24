@@ -480,8 +480,9 @@
 
 - name: "(Kimi-K3-2.8T, Kimi-K3.1) MoE block perf 8x4 5k, 4x4 2.5k"
   # Host time (test_kimi_moe_perf) and per-op device time (test_moe_block_perf) of one MoE block layer: K3 on 8x4 at
-  # 5,120 tokens, K3.1's 4x4 stage (top tray half) at 2,560. Stops at the first failure; a run that passes no test
-  # (skipped) fails too.
+  # 5,120 tokens, K3.1's 4x4 stage (top tray half) at 2,560. Every step runs even after a failure (each is its own
+  # pytest process), so one run reports every number; the leg fails at the end if any step failed or passed no test
+  # (skipped).
   # Tagged k3_mla_perf: the dispatch is at GitHub's 25-input limit, so that checkbox selects every K3 perf leg.
   fabric_profile: torus_xy
   cmd: |
@@ -491,16 +492,23 @@
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
       T=models/demos/deepseek_v3_d_p/tests
+      failed=0
       gated() {
         "$@" 2>&1 | tee /tmp/k3_moe_perf.out
         local status=${PIPESTATUS[0]}
-        [ "$status" -eq 0 ] || exit "$status"
-        grep -qE "[0-9]+ passed" /tmp/k3_moe_perf.out || { echo "::error::k3_moe_perf: no test passed (skipped?): $*"; exit 1; }
+        if [ "$status" -ne 0 ]; then
+          echo "::error::k3_moe_perf: exit $status: $*"
+          failed=1
+        elif ! grep -qE "[0-9]+ passed" /tmp/k3_moe_perf.out; then
+          echo "::error::k3_moe_perf: no test passed (skipped?): $*"
+          failed=1
+        fi
       }
       gated python3 -m pytest $T/perf/test_kimi_moe_perf.py -k "kimi_k3-8x4-5120" -vvv --tb=short
       gated python3 -m pytest $T/moe_block/test_moe_block_models.py::test_moe_block_perf -k "kimi_k3-8x4-5120 and not weka and not real" -vvv --tb=short
       gated $T/run_4x4_stage_tests.sh --half top -- $T/perf/test_kimi_moe_perf.py -k "kimi_k3_1-4x4-sp1-2560" -vvv --tb=short
       gated $T/run_4x4_stage_tests.sh --half top -- $T/moe_block/test_moe_block_models.py::test_moe_block_perf -k "kimi_k3_1-4x4-sp1-2560" -vvv --tb=short
+      exit $failed
     '
   test_type: k3_moe_perf
   test_tags: [kimi_k3, kimi_k3_1, moe, k3_mla_perf]
