@@ -600,9 +600,11 @@ class TestRankCpuBinding:
         [(None, "none"), (["--bind-to", "core"], "auto")],
         ids=["opted_out", "mpi_binds_cores"],
     )
-    def test_exclude_without_the_binding_script_is_an_error(self, sample_rank_binding_yaml, mpi_args, binding):
+    def test_exclude_without_the_binding_script_is_an_error(
+        self, sample_rank_binding_yaml, mpi_args, binding, expect_error
+    ):
         config = parse_binding_config(sample_rank_binding_yaml)
-        with pytest.raises(click.UsageError, match="--rank-cpu-exclude has no effect"):
+        with expect_error(click.UsageError, "--rank-cpu-exclude has no effect"):
             build_mpi_command(
                 config,
                 ["echo", "hello"],

@@ -46,8 +46,8 @@ def test_parse_cpu_list(text, cpus):
 
 
 @pytest.mark.parametrize("text", ["a", "1-", "3-1", "1,,x"])
-def test_parse_cpu_list_rejects_garbage(text):
-    with pytest.raises(ValueError):
+def test_parse_cpu_list_rejects_garbage(text, expect_error):
+    with expect_error(ValueError, "invalid CPU"):
         rcb.parse_cpu_list(text)
 
 
@@ -165,8 +165,8 @@ def test_main_leaves_the_mask_alone_without_mpi_or_exclude(run_main):
     assert pinned is None and execd == ["prog"]
 
 
-def test_main_exits_127_when_the_program_is_missing(monkeypatch):
+def test_main_exits_127_when_the_program_is_missing(monkeypatch, expect_error):
     monkeypatch.delenv(rcb.LOCAL_SIZE_ENV, raising=False)
-    with pytest.raises(SystemExit) as e:
+    with expect_error(SystemExit, str(rcb.EXEC_FAILED_EXIT_CODE)) as e:
         rcb.main(["--", "/nonexistent/tt-run-test-program"])
     assert e.value.code == rcb.EXEC_FAILED_EXIT_CODE
