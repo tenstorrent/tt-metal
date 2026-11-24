@@ -608,13 +608,13 @@ constexpr bool matmul_prod_main_section_end = ckernel::matmul_main_section_end(
     MATMUL_PK_KT,
     THROTTLE_LEVEL,
     matmul_prod_l1_acc);
-#elif defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS) && !defined(RUNTIME_FORMATS)
+#elif defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
 constexpr bool matmul_prod_main_section_end = ckernel::matmul_main_section_end_class(
     MATH_FIDELITY,
     dest_sync == ckernel::DstSync::SyncHalf,
-    static_cast<DataFormat>(UNPACK_A_IN),
-    static_cast<DataFormat>(UNPACK_B_IN),
-    static_cast<DataFormat>(PACK_OUT),
+    MATMUL_KEY_IN1,
+    MATMUL_KEY_IN0,
+    MATMUL_OUT_FORMAT,
     THROTTLE_LEVEL,
 #if defined(MATMUL_L1_ACC) && MATMUL_L1_ACC == 1
     true);
