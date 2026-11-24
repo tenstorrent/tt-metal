@@ -4,6 +4,165 @@
 
 #pragma once
 
+#ifdef ARCH_QUASAR
+
+#include <cstdint>
+#include "api/compute/common_globals.h"
+#include "api/compute/experimental/2_0/internal/op_hooks.h"
+#include "api/compute/reg_api.h"
+#include "api/compute/experimental/2_0/llk_operand.h"
+#include "experimental/2_0/llk_2_0.h"  // id-free Quasar LLK API
+
+namespace ckernel {
+namespace experimental {
+
+namespace detail {
+
+// Legacy rule: a 32-bit L1 format (Float32) at a 32-bit Dest (DST_ACCUM_MODE) unpacks straight to Dest (UNPACK, which
+// borrows the Dest section from MATH); anything else is an FPU datacopy through SrcA (MATH), including a 16-bit format
+// at a 32-bit Dest.
+template <DataFormat Format, TensorShape Shape>
+constexpr bool copy_to_dest = DST_ACCUM_MODE && Format == DataFormat::Float32;
+
+template <DataFormat Format, TensorShape Shape>
+constexpr DstClient copy_client = copy_to_dest<Format, Shape> ? DstClient::UNPACK : DstClient::MATH;
+
+// One tile of copy_tile / copy_block.
+template <DataFormat Format, TensorShape Shape>
+inline void copy_one(LLKOperand<Format, Shape> src, std::uint32_t itile, std::uint32_t idst) {
+    if constexpr (copy_to_dest<Format, Shape>) {
+        UNPACK((llk_2_0::unpack_to_dest(src.l1_address, src.tile(itile), idst)));
+    } else {
+        UNPACK((llk_2_0::unpack_A<LLKOperand<Format, Shape>::descriptor>(src.l1_address, src.tile(itile))));
+        MATH((llk_2_0::math_datacopy(idst)));
+    }
+}
+
+}  // namespace detail
+
+// clang-format off
+/**
+ * Id-free copy init, Quasar. The path follows the L1 format and the Dest width (legacy rule):
+ *   * FPU datacopy (16-bit L1 format, either Dest width): unpack TRISC programs an Unp0 buffer descriptor at src's
+ *     base and the unpack-to-SrcA MOP; math TRISC programs the SrcA -> Dest datacopy.
+ *   * Unpack-to-dest (Float32 L1 format at a 32-bit Dest): unpack TRISC programs the descriptor and the UNP_DEST
+ *     MOP; the unpacker writes all 32 bits of Dest directly. Full 32x32 tiles only.
+ * src's base is the DFB ring base, so one init serves every front() of the ring. Re-init when another op ran in
+ * between (Quasar rule). No uninit. Float16_b / Float16, and Float32 at a 32-bit Dest.
+ *
+ * | Param Type | Name                | Description                                          | Type        | Valid Range        | Required |
+ * |------------|---------------------|------------------------------------------------------|-------------|--------------------|----------|
+ * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                            | bool        | DST_ACCUM_MODE     | False    |
+ * | Template   | Format / Shape      | Source L1 format + geometry (deduced)                | DataFormat/TensorShape | Float16_b, Float16, Float32 (32-bit Dest) | True |
+ * | Function   | src                 | Source operand (e.g. DataflowBuffer::front)          | LLKOperand  | N/A                | True     |
+ */
+// clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
+inline void copy_init(LLKOperand<Format, Shape> src) {
+    static_assert(
+        llk_2_0::is_supported_format(Format, DST_ACCUM_MODE),
+        "copy_init (Quasar 2.0): only Float16_b / Float16, or Float32 at a 32-bit Dest (unpack-to-dest).");
+    static_assert(is_legal_tile_shape(Shape), "copy_init: illegal tile shape.");
+    static_assert(is_fp32_dest_acc_en == DST_ACCUM_MODE, "copy_init: Dest mode is kernel-wide (DST_ACCUM_MODE)");
+    constexpr LLKMemDescriptor D = LLKOperand<Format, Shape>::descriptor;
+    detail::op_init<detail::copy_client<Format, Shape>>();
+    if constexpr (detail::copy_to_dest<Format, Shape>) {
+        UNPACK((llk_2_0::unpack_to_dest_init<D>(src.l1_address)));  // no math side: the unpacker writes all 32 bits
+    } else {
+        UNPACK((llk_2_0::unpack_A_init<D, is_fp32_dest_acc_en>(src.l1_address)));
+        MATH((llk_2_0::math_datacopy_init<D, is_fp32_dest_acc_en>()));
+    }
+}
+
+// clang-format off
+/**
+ * Id-free copy of one tile, Quasar: source tile `itile` of `src` (L1 tile src.entry_idx + itile * src.stride_tiles)
+ * to Dest tile `idst`. On the unpack-to-dest path UNPACK borrows the
+ * Dest section from MATH for the call. Call between tile_regs_acquire and tile_regs_commit.
+ *
+ * | Param Type | Name           | Description                                     | Type        | Valid Range            | Required |
+ * |------------|----------------|-------------------------------------------------|-------------|------------------------|----------|
+ * | Template   | Format / Shape | Source L1 format + geometry (deduced)           | DataFormat/TensorShape | N/A   | True     |
+ * | Function   | src            | Source operand (its base = the copy_init's)     | LLKOperand  | N/A                    | True     |
+ * | Function   | itile          | Source tile index within src                    | uint32_t    | N/A                    | True     |
+ * | Function   | idst           | Dest tile index                                 | uint32_t    | < Dest tiles / section | True     |
+ */
+// clang-format on
+template <DataFormat Format, TensorShape Shape>
+inline void copy_tile(LLKOperand<Format, Shape> src, std::uint32_t itile, std::uint32_t idst) {
+    if constexpr (detail::copy_to_dest<Format, Shape>) {
+        tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
+    }
+    detail::copy_one(src, itile, idst);
+    if constexpr (detail::copy_to_dest<Format, Shape>) {
+        tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
+    }
+}
+
+// clang-format off
+/**
+ * Id-free block copy with a runtime tile count, Quasar: a copy of each of `ntiles` tiles, source tiles
+ * start_itile + i -> Dest tiles start_idst + i, borrowing Dest once like copy_tile. No tails: every block op
+ * between two inits must cover the same tile count (LLK_ASSERT); for leftover tiles re-init, then run the shorter block.
+ *
+ * | Param Type | Name                | Description                               | Type       | Valid Range                          | Required |
+ * |------------|---------------------|-------------------------------------------|------------|--------------------------------------|----------|
+ * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                 | bool       | DST_ACCUM_MODE                       | False    |
+ * | Function   | src                 | Source operand                            | LLKOperand | N/A                                  | True     |
+ * | Function   | start_itile         | First source tile within src              | uint32_t   | N/A                                  | True     |
+ * | Function   | start_idst          | First Dest tile                           | uint32_t   | N/A                                  | True     |
+ * | Function   | ntiles              | Number of tiles                           | uint32_t   | start_idst + ntiles <= section size  | True     |
+ */
+// clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
+inline void copy_block(
+    LLKOperand<Format, Shape> src, std::uint32_t start_itile, std::uint32_t start_idst, std::uint32_t ntiles) {
+    LLK_ASSERT(
+        start_idst + ntiles <= detail::dest_section_tiles<is_fp32_dest_acc_en>(), "copy_block: block exceeds Dest");
+    detail::check_block_tiles<detail::copy_client<Format, Shape>>(ntiles);
+    if constexpr (detail::copy_to_dest<Format, Shape>) {
+        tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
+    }
+    for (std::uint32_t i = 0; i < ntiles; ++i) {
+        detail::copy_one(src, start_itile + i, start_idst + i);
+    }
+    if constexpr (detail::copy_to_dest<Format, Shape>) {
+        tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
+    }
+}
+
+// clang-format off
+/**
+ * Id-free block copy, Quasar: copy_block over a ct_dim x rt_dim block (source tiles start_itile + i -> Dest tiles
+ * start_idst + i). The block must fit one Dest section (static_assert).
+ *
+ * | Param Type | Name                | Description                               | Type       | Valid Range                     | Required |
+ * |------------|---------------------|-------------------------------------------|------------|---------------------------------|----------|
+ * | Template   | ct_dim / rt_dim     | Block columns / rows (tiles)              | uint32_t   | ct_dim * rt_dim <= section size | True     |
+ * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                 | bool       | DST_ACCUM_MODE                  | False    |
+ * | Function   | src                 | Source operand                            | LLKOperand | N/A                             | True     |
+ * | Function   | start_itile         | First source tile within src              | uint32_t   | N/A                             | True     |
+ * | Function   | start_idst          | First Dest tile                           | uint32_t   | N/A                             | False    |
+ */
+// clang-format on
+template <
+    std::uint32_t ct_dim,
+    std::uint32_t rt_dim,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    DataFormat Format,
+    TensorShape Shape>
+inline void copy_block(LLKOperand<Format, Shape> src, std::uint32_t start_itile, std::uint32_t start_idst = 0) {
+    static_assert(
+        ct_dim * rt_dim <= detail::dest_section_tiles<is_fp32_dest_acc_en>(),
+        "copy_block: block exceeds the Dest section");
+    copy_block<is_fp32_dest_acc_en>(src, start_itile, start_idst, ct_dim * rt_dim);
+}
+
+}  // namespace experimental
+}  // namespace ckernel
+
+#else  // Blackhole
+
 #include <cstdint>
 #include "api/compute/common_globals.h"
 #include "api/compute/experimental/2_0/llk_operand.h"
@@ -29,6 +188,9 @@ namespace experimental {
  *
  * fp8 (Fp8_e4m3 / Lf8 e5m2) is supported: the format-driven Src zero-substitution flag is programmed so fp8
  * zeros read back correctly, while other formats (e.g. bf16 -0.0 / 16b-int) keep their residual value.
+ *
+ * Unpack-to-dest is automatic: a 32-bit register format (32-bit L1 format with fp32 dest-accumulate) unpacks
+ * straight to DST; everything else goes through SrcA.
  *
  * transpose / transpose_within_16x16_face support copy-with-transpose; both default off (0), so the default
  * copy path is unaffected.
@@ -58,7 +220,7 @@ ALWI void copy_init(
             BroadcastType::NONE,
             false,
             EltwiseBinaryReuseDestType::NONE,
-            UnpackToDestEn>(transpose, transpose_within_16x16_face)));
+            is_unpack_to_dest<Format, is_fp32_dest_acc_en>()>(transpose, transpose_within_16x16_face)));
     MATH((llk_math_eltwise_unary_datacopy_init<
           LLKOperand<Format, Shape>::descriptor,
           DataCopyType::A2D,
@@ -103,13 +265,13 @@ ALWI void copy_tile(LLKOperand<Format, Shape> src, std::uint32_t itile, std::uin
             BroadcastType::NONE,
             false,
             EltwiseBinaryReuseDestType::NONE,
-            UnpackToDestEn>(detail::tile_address(src, itile))));
+            is_unpack_to_dest<Format, is_fp32_dest_acc_en>()>(detail::tile_address(src, itile))));
     MATH((llk_math_eltwise_unary_datacopy<
           LLKOperand<Format, Shape>::descriptor,
           DataCopyType::A2D,
           is_fp32_dest_acc_en,
           BroadcastType::NONE,
-          UnpackToDestEn>(dst_tile_index)));
+          is_unpack_to_dest<Format, is_fp32_dest_acc_en>()>(dst_tile_index)));
 }
 
 // clang-format off
@@ -150,3 +312,5 @@ ALWI void copy_block(
 
 }  // namespace experimental
 }  // namespace ckernel
+
+#endif  // ARCH_QUASAR
