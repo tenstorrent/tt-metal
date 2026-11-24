@@ -377,7 +377,7 @@ RelayChunkScanOperation::spec_return_value_t RelayChunkScanOperation::compute_ou
         attrs.num_heads,
         heads);
     const uint32_t value_dim = in.initial_state.logical_shape()[-1];
-    spec_return_value_t specs = {
+    return {
         spec(
             Shape({heads / attrs.num_heads, attrs.local_rows, attrs.num_heads * value_dim}),
             attrs.output_dtype,
@@ -385,18 +385,6 @@ RelayChunkScanOperation::spec_return_value_t RelayChunkScanOperation::compute_ou
         in.slab_index
             ? in.initial_state.tensor_spec()
             : spec(Shape({heads, key_dim, value_dim}), tt::tt_metal::DataType::FLOAT32, ttnn::DRAM_MEMORY_CONFIG)};
-    // In-place terms: cb_diff's scratch, kept out of the static CB region.
-    if (const auto& shard = in.terms.memory_config().shard_spec()) {
-        const std::array<uint32_t, 2> shape = {shard->shape[0] / 2, shard->shape[1]};
-        specs.push_back(spec(
-            Shape({shard->grid.num_cores() * shape[0], shape[1]}),
-            tt::tt_metal::DataType::FLOAT32,
-            tt::tt_metal::MemoryConfig(
-                tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-                tt::tt_metal::BufferType::L1,
-                tt::tt_metal::ShardSpec(shard->grid, shape, shard->orientation))));
-    }
-    return specs;
 }
 
 RelayChunkScanOperation::tensor_return_value_t RelayChunkScanOperation::create_output_tensors(
@@ -406,9 +394,6 @@ RelayChunkScanOperation::tensor_return_value_t RelayChunkScanOperation::create_o
     outputs.push_back(create_device_tensor(specs[0], in.packed.device()));
     // With a slab, the final carry is written into the slab's entry, in place.
     outputs.push_back(in.slab_index ? in.initial_state : create_device_tensor(specs[1], in.packed.device()));
-    for (size_t i = 2; i < specs.size(); ++i) {
-        outputs.push_back(create_device_tensor(specs[i], in.packed.device()));
-    }
     return outputs;
 }
 
