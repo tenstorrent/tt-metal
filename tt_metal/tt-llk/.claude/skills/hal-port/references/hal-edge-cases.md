@@ -68,6 +68,65 @@ Each item: what happened, how it showed up, where to look, what to do. Measured 
 - Rejected: carrying the LoFi source release on the last ELW (some configs +3.7%).
 - Code size: whole-word config writes and immediates make unpack 3-6%, pack 1.4-2.5% smaller.
 
+## Lessons from porting all of Blackhole (18 work packages, 72 headers)
+
+### Correctness and state
+13. **Auto TTSync leaks across kernels.** The enable lives in ThreadConfig TENSIX_TRISC_SYNC, which no soft reset,
+    boot code or production configure touches. A HAL kernel that skips its uninit (11 test sources do) left it on for
+    every following kernel on that core, production included, until `tt-smi -r`. Confirmed on silicon by reading the
+    register. The test boot (`tests/helpers/src/trisc.cpp`) now clears CFG_STATE_ID and TENSIX_TRISC_SYNC per TRISC,
+    and the unpack sync-mode helper is idempotent. Perf baselines taken before that fix are suspect.
+14. **A STALLWAIT on TRISC_CFG can deadlock under Auto TTSync**: it waits for a RISC config store that Auto TTSync is
+    holding behind the stalled instruction. This is the likely cause of the sdpa_custom_mm hang when Auto TTSync was
+    global. Keep Auto TTSync scoped to ops that never mix it with that pattern.
+15. **Turning Auto TTSync off costs ~46 cycles** (a RISC-visible semaphore round trip; the ISA has nothing cheaper and
+    skipping the wait risks item 14). Ops with short kernels, such as unpack_A_sdpa, can lose more in uninit than the
+    single-context loop gains.
+16. **`hal_port` name clashes across the common headers.** Tests include unpack, math and pack common headers in one
+    translation unit; two packages added `UNPACK_TO_DEST_SEM` to different common headers and only the full-tree
+    build (not the per-thread views) caught it. Grep all three before adding a name; validate one test with
+    `--impl hal`.
+17. **Per-thread views can hide cross-thread interactions.** Always finish with a full-tree run.
+18. **Tests that never run.** `test_hw_cleanup` is skipped on every backend (it wedges BH), and several headers have
+    no test at all (deepseek gate, softmax_k, unpack_reduce, unpack_dummy, compensated sub_bcast_col). Compile them
+    at least once (temporarily un-skip in a scratch copy, compile only) and compare codegen.
+
+### HAL gaps hit repeatedly (production lines kept, marked HAL-GAP)
+- UNPACR_NOP flavours: CLR_SRC (incl. NEGINF / both banks), SET_DVALID + UNP_ZEROSRC, WAIT_LIKE_UNPACR.
+- MOVB2A (SrcB to SrcA); note its three-cycle undefined window after an arithmetic op starts.
+- `rwc::set` encodes a lone carriage-return advance as INCRWC, not SETRWC.
+- Single-counter SETADCZW/SETADCXY: the planner emits SETADC (same effect, accepted); forcing the masked packed form
+  needs `adc::detail::packed`.
+- No public runtime single-counter encoder: the public `adc::set` made GCC re-derive and spill per tile, or refuse to
+  inline the per-tile function. `adc::detail::single` is used in pack `set_dst_write_addr` and untilize for this.
+- SETADC/SETADCXY thread override; CFGSHIFTMASK; TT_INSN for pre-encoded runtime words; tensix_sync, mailbox,
+  regfile stores; FPU sticky-bit registers.
+- `mop::cfg::patch(last_inner)` refuses an outer count of 1, even when the count is overwritten at run time; an
+  all-NOP Template 1 MOP is rejected at compile time (hw_cleanup builds one on purpose).
+- `hal::mop::program` skips MOP config words the expander never reads (end_op1, unused Template 0 slots). This is
+  accepted everywhere; it saves 1 to 5 stores per init.
+
+### Code size and inlining
+19. **Runtime HAL encoders can stop a per-tile function from inlining.** datacopy's runtime `move::Transfer` cost a
+    call plus 20 save/restore instructions per tile; untilize lost inlining and got 35% slower on short blocks. Fix:
+    encode at compile time and add the runtime field (with a static_assert on its position), or use the detail
+    single-counter encoder. Check the per-tile RISC count with compare_codegen after every port.
+20. **Typical size effect of a faithful port:** unpack .text -5% to -10% (compile-time immediates, branch-free
+    context select), math -0.1% to -1.5%, pack -1% to -3%. The unpack context switch costs ~2 RISC instructions per
+    block more than production's branch.
+21. **Masking 4-bit format fields** (`fmt & 0xF`) is needed for HAL range asserts (UInt8, UInt32, Fp8_e4m3); about 2
+    RISC instructions per reconfig with runtime formats.
+
+### Where the optimisation gains came from (measured, kept only if no config >2% slower)
+- **Per-tile RISC bookkeeping in math**: reduce ROW MAX computed its zero flag per tile (~100 RISC instructions per
+  tile); once per call gives -52.6% end to end on those configs.
+- **RISC-driven loops that a straight run of immediates can replace**: bcast_cols custom -29.3% (up to -60.6%).
+- **Pack is instruction-count bound (1 per cycle)**: fewer instructions per row: pack rows 4 rows per PACR -13.6%
+  (up to -42.6%); untilize steps tiles with the PACR ADDR_MOD instead of an INCADCZW per tile, -29.3% (up to -41%).
+- **Two-context unpack handshakes** cost 15 to 17 RISC instructions per tile; single context with Auto TTSync is the
+  eltwise pilot's -35% unpack gain and gives datacopy -16.7%, but see item 15.
+- **Matmul is already at the hardware rate**; only ~2 instructions per tile of headroom.
+
 ## How to investigate a small regression
 
 Pair builds by `build.h`; diff `run_kernel` with registers masked; split the cost into INIT / TILE_LOOP / outside
