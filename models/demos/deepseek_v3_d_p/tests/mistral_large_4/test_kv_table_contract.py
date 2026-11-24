@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """The prefill KV table against the Mistral Large 4 decode ring's table, without a device.
 
-The ring publishes config "0" (KV, bfloat16 ROW_MAJOR, 32 x 576 per record, every layer, KV-shared layers holding a
-copy of their source's rows) and config "1" (index keys, bfloat8_b TILE, 32 x 128 per record, the 44 index generator
+The ring publishes config "00" (KV, bfloat16 ROW_MAJOR, 32 x 576 per record, every layer, KV-shared layers holding a
+copy of their source's rows) and config "01" (index keys, bfloat8_b TILE, 32 x 128 per record, the 44 index generator
 layers). The KV manager copies records byte for byte, so names, record sizes and covered layers must match.
 """
 
@@ -39,8 +39,8 @@ def _geometry(monkeypatch, mirrors=True):
 
 
 def test_config_names_match_ring():
-    assert KT.CONFIGS == ("0", "1")
-    assert KT.KINDS == {"0": "kvpe", "1": "index"}
+    assert KT.CONFIGS == ("00", "01")
+    assert KT.KINDS == {"00": "kvpe", "01": "index"}
 
 
 def test_kv_covers_every_layer_with_mirrors(monkeypatch):

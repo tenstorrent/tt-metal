@@ -7,9 +7,9 @@ Caches (model.py alloc_caches, DeepSeek's init_kvpe_cache): per chip [slots * re
 bfloat8_b TILE, ND-sharded [1, 1, 32, width] ROUND_ROBIN_1D over the chip's B DRAM banks, replicated over TP. The
 region of (slot, layer) is batch slot * regions + region, as the device model indexes them (model.py State):
 
-- config 0 (``"0"``, kind ``kvpe``), width 576 = [kv_latent 512 | k_rope 64]: one region per layer that owns its KV
+- config 0 (``"00"``, kind ``kvpe``), width 576 = [kv_latent 512 | k_rope 64]: one region per layer that owns its KV
   (NoPE layers keep the pe columns zero); shared-KV layers read their source layer's region and have no entry.
-- config 1 (``"1"``, kind ``index``), width 128, the DSA indexer key: one region per full-indexer layer; shared-index
+- config 1 (``"01"``, kind ``index``), width 128, the DSA indexer key: one region per full-indexer layer; shared-index
   layers have no entry. With INDEXER_HADAMARD the keys are rotated by H128 / sqrt(128), as the decode caches them.
 
 Shard j of a cache (flat over [batch, rows / 32]) sits in bank j % B at buffer_address + (j // B) * record_bytes: one
@@ -18,7 +18,7 @@ Shard j of a cache (flat over [batch, rows / 32]) sits in bank j % B at buffer_a
 never crosses a chip (W % 32 == 0); its device group is the TP chips of that SP row, which hold identical replicas.
 
 Table layer k is model layer first + k (the served layers are one contiguous run). The table numbers configs in name
-order, so "0" / "1" keep the KVPE cache at config id 0 and the index cache at 1.
+order, so "00" / "01" keep the KVPE cache at config id 0 and the index cache at 1.
 """
 
 from __future__ import annotations
@@ -32,7 +32,10 @@ import torch
 import ttnn
 
 RECORD_TOKENS = 32
-KV, INDEX = "0", "1"  # table config names, as the decode ring names them
+KV, INDEX = (
+    "00",
+    "01",
+)  # zero-padded positional names: the decode ring's table (blaze build_kv_table) names its configs this way
 CONFIGS = (KV, INDEX)  # in id order
 KINDS = {KV: "kvpe", INDEX: "index"}
 _TILE_BYTES = {"BFLOAT8_B": 1088, "BFLOAT16": 2048}
