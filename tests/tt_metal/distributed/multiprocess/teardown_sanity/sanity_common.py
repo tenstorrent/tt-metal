@@ -240,6 +240,25 @@ def mpi_probe_path(prefix: str | None = None) -> str:
     return _MPI_PROBE_CACHE[key]
 
 
+def primary_nic() -> str | None:
+    """This host's first real interface (not loopback, a container bridge or an overlay), or None."""
+    out = subprocess.run(["ip", "-o", "-4", "addr", "show"], capture_output=True, text=True).stdout
+    for line in out.splitlines():
+        name = line.split()[1]
+        if not name.startswith(("lo", "docker", "flannel", "veth", "br-", "cni", "virbr")):
+            return name
+    return None
+
+
+def pinned_tcp_interface() -> list:
+    """The interface choice a production line carries: the site's (OMPI_MCA_btl_tcp_if_*) if it made one, else this
+    host's real NIC. Unpinned, TCP also tries docker0 / flannel.1 and the ranks may never connect."""
+    if os.environ.get("OMPI_MCA_btl_tcp_if_include") or os.environ.get("OMPI_MCA_btl_tcp_if_exclude"):
+        return []
+    nic = primary_nic()
+    return ["--mca", "btl_tcp_if_include", nic] if nic else []
+
+
 def mpi_cmd(ulfm: bool = True, extra: str = "", btl: str = "self,tcp", np: int = 3) -> list:
     """Direct mpirun with the C probe: the production transport line (btl self,tcp) unless told otherwise."""
     cmd = [mpirun_path()]

@@ -43,6 +43,7 @@ from sanity_common import (
     mpi_probe_path,
     mpirun_path,
     nonzero,
+    pinned_tcp_interface,
     run_case,
     ttrun_mpi_cmd,
 )
@@ -464,6 +465,59 @@ def test_phase1_job_timeout():
     assert r.exit == 241 and "the job reached its --job-timeout of 15 s" in r.log, r
 
 
+# The offline Phase 1 (--offline, from a factory system descriptor): one process without MPI, through the same
+# launcher (direct) and inside tt-run-rank. Its generate_rank_bindings is a script here.
+def offline_case(name: str, script: str, deadline: float, **kw):
+    tree = phase1_tree()
+    grb = tree / "build" / "tools" / "scaleout" / "generate_rank_bindings"
+    grb.write_text("#!/bin/bash\n" + script + "\n")
+    fsd = next(ROOT.glob("tt_metal/third_party/tt-cluster-descriptors/**/*factory_system_descriptor.textproto"), None)
+    if fsd is None:
+        pytest.skip("no factory system descriptor in the tree")
+    cmd = [
+        TTRUN,
+        "-m",
+        str(MGD),
+        "--factory-system-descriptor",
+        str(fsd),
+        "--offline",
+        "--force-rediscovery",
+        "/bin/true",
+    ]
+    try:
+        return run_case(name, {"TT_METAL_HOME": str(tree)}, deadline, cmd=cmd, cwd=tree, **kw)
+    finally:
+        shutil.rmtree(tree, ignore_errors=True)
+
+
+def test_offline_phase1_stop():
+    """Ctrl-C while the offline Phase 1 runs: tt-run sends it SIGTERM itself (no job control without MPI), it exits
+    gracefully, tt-run returns 130 and nothing is left."""
+    r = offline_case(
+        "offline_ctrl_c",
+        'trap "echo offline: caught TERM; exit 0" TERM; touch "$PROBE_PIDDIR/rank_0.ready"; while :; do sleep 0.1; done',
+        DEADLINE_HANG,
+        launcher_signal=signal.SIGINT,
+        launcher_ready=(0, "ready"),
+        signal_after=0.5,
+    )
+    fault_delivered(r)
+    ended(r)
+    clean(r)
+    assert "offline: caught TERM" in r.log and r.exit == 130, r
+    assert "job forced down" not in r.log, r.log[-3000:]
+
+
+def test_offline_phase1_dead_process():
+    """The offline Phase 1 process is killed: its tt-run-rank names it (rank 0, from tt-run's TT_RUN_RANK) and tt-run
+    returns its 137."""
+    r = offline_case("offline_killed", "kill -9 $$", DEADLINE_END)
+    ended(r)
+    clean(r)
+    assert re.search(r"rank 0 on \S+ \(pid \d+\): was killed by signal 9 \(SIGKILL\)", r.log), r.log[-3000:]
+    assert r.exit == 137, r
+
+
 # ---------------------------------------------------------------------------------------------------------------
 # group E: one-variable departures from the production mpirun line, through tt-run; each needs a known teardown shape
 # production line: pml ob1, --mca btl self,tcp, --mca btl_tcp_if_include <nic>. Departures go through --mpi-args.
@@ -520,7 +574,7 @@ def test_production_transport_line_runs_clean():
     carry traffic. Run the probe's clean two-rank scenario (MPI_Init, a barrier, MPI_Finalize) over that line, so
     ob1/TCP is initialised and the ranks exchange a collective: the line tt-run builds is proven working, not
     merely accepted. (A bare ``true`` never calls MPI_Init and would pass even with an unusable transport.)"""
-    cmd = mpi_cmd(ulfm=False, extra="--mca pml ob1", btl="self,tcp", np=2)
+    cmd = mpi_cmd(ulfm=False, extra=" ".join(["--mca", "pml", "ob1", *pinned_tcp_interface()]), btl="self,tcp", np=2)
     env = {**os.environ, "PROBE_SCENARIO": "clean", "PROBE_NP": "2"}
     r = _run(cmd, env=env)
     assert r.returncode == 0, f"the self,tcp / ob1 line failed on this install: {r.stderr[:300]}"

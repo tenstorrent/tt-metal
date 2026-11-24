@@ -2467,7 +2467,7 @@ class TestJobOwnership:
         # code instead of becoming a generic failure.
         seen = {}
 
-        def fake_launcher(cmd, cwd, job_timeout=None, prrte_timeout=False):
+        def fake_launcher(cmd, cwd, job_timeout=None, prrte_timeout=False, **kw):
             seen.update(job_timeout=job_timeout, prrte_timeout=prrte_timeout)
             return 130
 
@@ -2545,6 +2545,84 @@ class TestJobOwnership:
         assert rc == 241, text
         assert ("PRRTE --timeout from --mpi-args" in text) == prrte_timeout, text
         assert ("cause=--timeout" in text) == prrte_timeout, text
+
+    @pytest.mark.parametrize("sig", ["SIGINT", "SIGUSR1"])
+    def test_a_direct_launch_is_stopped_and_signalled_like_an_mpi_job(self, sig, tmp_path):
+        import signal
+        import threading
+        import time
+
+        from ttnn.distributed.ttrun import run_launcher
+
+        # One process run without MPI (the offline Phase 1) goes through the same launcher: a Ctrl-C at tt-run is a
+        # graceful stop (SIGTERM to the process, the grace, exit 130), another signal is passed on and it goes on.
+        rec = tmp_path / "got"
+        program = (
+            f'trap "echo TERM >> {rec}; exit 0" TERM; trap "echo USR1 >> {rec}" USR1; '
+            f"touch {tmp_path}/ready; i=0; while [ $i -lt 30 ]; do sleep 0.1; i=$((i+1)); done"
+        )
+        signum = getattr(signal, sig)
+        running = threading.Event()
+
+        def poke():
+            end = time.time() + 30
+            while not (tmp_path / "ready").exists() and time.time() < end:
+                time.sleep(0.02)
+            if running.is_set():
+                os.kill(os.getpid(), signum)
+
+        def launch():
+            running.set()
+            try:
+                return run_launcher(["bash", "-c", program], cwd=tmp_path, direct=True)
+            finally:
+                running.clear()
+
+        threading.Thread(target=poke, daemon=True).start()
+        text, rc = self._logged_rc(launch)
+        if sig == "SIGINT":
+            assert rc == 130 and rec.read_text().split() == ["TERM"], text
+            assert "outcome=stopped" in text and "job forced down" not in text, text
+        else:
+            assert rc == 0 and rec.read_text().split() == ["USR1"], text
+            assert "SIGUSR1 received: passed it on to all ranks" in text, text
+
+    def test_the_offline_phase1_runs_in_the_launcher_with_the_rank_environment(
+        self, tmp_path, monkeypatch, expect_error
+    ):
+        from ttnn.distributed import ttrun as m
+
+        # The offline Phase 1 is one process without mpirun, run through the launcher (direct) inside tt-run-rank,
+        # with the same rank environment mpirun gives its ranks with -x (get_rank_environment), not a hand-built one.
+        wrapper, exe = tmp_path / "tt-run-rank", tmp_path / "generate_rank_bindings"
+        monkeypatch.setattr(m, "find_tt_run_rank_executable", lambda: str(wrapper))
+        monkeypatch.setattr(m, "find_generate_rank_bindings_executable", lambda: exe)
+        seen = {}
+
+        def fake_launcher(cmd, cwd, job_timeout=None, prrte_timeout=False, env=None, direct=False):
+            seen.update(cmd=cmd, env=env, direct=direct, job_timeout=job_timeout)
+            return 0
+
+        monkeypatch.setattr(m, "run_launcher", fake_launcher)
+        mgd, fsd = tmp_path / "mesh.textproto", tmp_path / "fsd.textproto"
+        mgd.write_text("")
+        fsd.write_text("")
+        with expect_error(
+            RuntimeError, "Phase 1 output not found"
+        ):  # the fake wrote nothing; the launch is what counts
+            m.run_phase1_generate_rank_bindings(
+                mgd, None, tmp_path, factory_system_descriptor=fsd, offline=True, job_timeout=30.0
+            )
+        assert seen["direct"] is True and seen["job_timeout"] == 30.0, seen
+        assert seen["cmd"][:3] == [str(wrapper), "--", str(exe.resolve())] and "--offline" in seen["cmd"], seen["cmd"]
+        config = m.TTRunConfig(
+            rank_bindings=[m.RankBinding(rank=0, mesh_id=0)],
+            mesh_graph_desc_path=mgd,
+            factory_system_descriptor_path=fsd,
+        )
+        rank_env = m.get_rank_environment(config.rank_bindings[0], config)
+        assert {k: seen["env"][k] for k in rank_env} == rank_env, "not the rank environment mpirun's ranks get"
+        assert seen["env"]["TT_RUN_RANK"] == "0" and "TT_METAL_RUNTIME_ROOT" in seen["env"], seen["env"]
 
     def test_the_prterun_address_is_read_only_from_this_users_own_files(self, tmp_path, monkeypatch):
         import tempfile
