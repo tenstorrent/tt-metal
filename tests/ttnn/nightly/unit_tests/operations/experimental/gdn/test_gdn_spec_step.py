@@ -7,38 +7,49 @@ writes into win[1 - par], or, with conv_hist, slots 1..3 of gdn_decode_step's pa
 takes the state after token t.
 
 The states live in 1024-token bfloat8_b K / V cache blocks of a TP=8 layer slot through alias_view (KvBlocks of
-test_gdn_decode_step_paged.py: heads 0..3 in K, heads 4..5 in V). Every per-position output, state and history is
+gdn_decode_step_test_utils.py: heads 0..3 in K, heads 4..5 in V). Every per-position output, state and history is
 compared with gdn_decode_step run token by token from the same start state, bit for bit, and with the torch
 reference. The value_blocks / kernel_opts programs the qwen36 model runs are compared with the minimal program and with
 the sequential decode, bit for bit, in both history modes."""
-
-import time
 
 import pytest
 import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tests.measure.determinism import (
+    device_mismatch_marker_is_set,
+    fold_mismatches,
+    mismatch_report,
+)
 from tests.ttnn.nightly.unit_tests.operations.experimental.gdn.gdn_decode_step_test_utils import (
     AZ,
+    DETERMINISM_RUNS,
+    DEVICE_PARAMS,
     DK,
     DV,
     HP,
     KV,
     MODE_IDS,
+    MODEL_MODE,
     MODES,
     NK,
     NV,
+    PERF_MARGIN,
     SCALE,
     VD,
     C,
     W,
+    assert_close_to_reference,
+    bf16_tile_raw,
     bits,
     consts_dev,
+    fp32_tile_raw,
     from_pooled,
     inputs,
+    kv_blocks_or_skip,
     pack_rows,
-    pcc,
+    raw_fp32_tile,
     run,
     step_reference,
     tile_dev,
@@ -46,17 +57,16 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.gdn.gdn_decode_step_t
     to_pooled,
     token_rows,
 )
-from tests.ttnn.nightly.unit_tests.operations.experimental.gdn.test_gdn_decode_step_paged import (
-    MODEL_MODE,
-    TRACE_PARAMS,
-    _bf16_tile_raw,
-    _fp32_tile_raw,
-    _kv_blocks_or_skip,
-    _raw_fp32_tile,
-)
-from tt_py_test_utils_common.utility_functions import run_for_blackhole
+from tt_py_test_utils_common.realtime_profiler_utils import profile_realtime_program, require_realtime_profiler
+from tt_py_test_utils_common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
 
-pytestmark = run_for_blackhole()
+pytestmark = [run_for_blackhole(), pytest.mark.use_module_device(DEVICE_PARAMS)]
+
+# Device time of one gdn_spec_step in the model's verify call at PERF_B users and PERF_T tokens (conv_hist, FLOAT32
+# gate constants, value_blocks=4 and all kernel_opts), on a P150; the band is PERF_MARGIN on both sides.
+# Measured 102.4 to 106.6 us over six runs on a host-IOMMU P150b.
+PERF_B, PERF_T = 8, 4
+SPEC_STEP_DURATION_NS = 104_000
 
 CONV_K = 4
 HOLD = -1  # int32 bit pattern of the HOLD sentinel 0xFFFFFFFF
@@ -179,7 +189,7 @@ class Verify:
     def windows(self):
         return self.win_dev[0], self.win_dev[1]
 
-    def run(self, consts, taps, users=None, **kw):
+    def run(self, consts, taps, users=None, key_dim=DK, value_dim=DV, **kw):
         """``users``: run only users 0 .. users-1 of the ctrl page and index (default all B)."""
         return ttnn.experimental.gdn.gdn_spec_step(
             self.qkv,
@@ -192,8 +202,8 @@ class Verify:
             consts["w"],
             NV,
             NK,
-            DK,
-            DV,
+            key_dim,
+            value_dim,
             self.T,
             self.B if users is None else users,
             AZ,
@@ -288,7 +298,7 @@ def test_spec_step_matches_sequential_decode(device, B, K_draft, fast_mode, fp32
     inp = inputs(B, seed=B + T)
     consts, taps = consts_dev(device, inp), spec_taps(device, inp)
     starts, dests = distinct_blocks(B, T, num_blocks_for(B, T), gen)
-    kv = _kv_blocks_or_skip(device, num_blocks_for(B, T), gen)
+    kv = kv_blocks_or_skip(device, num_blocks_for(B, T), gen)
     kv.place([(starts[u], inp["h"][u], inp["hist2"][u]) for u in range(B)])
     kv.write()
     v = Verify(device, kv, B, T, gen, starts, dests, par=(B + T) & 1, mode=mode)
@@ -320,7 +330,8 @@ def test_spec_step_matches_sequential_decode(device, B, K_draft, fast_mode, fp32
             assert torch.equal(ref[t][2][u], batched[t][2][u]), f"position {t} user {u}: batched history"
     k, vv, _ = kv.read()
     taps_f = [t.float() for t in inp["tap_rows"]]
-    worst_out, worst_state = 1.0, 1.0
+    out_ref = torch.zeros(B * T, VD)
+    state_ref, state = (torch.zeros(B * T, NV, KV, 32, 32) for _ in range(2))
     for u in range(B):
         h_ref, hist_ref = inp["h"][u].clone(), [r.float() for r in inp["rows"][u]]
         for t in range(T):
@@ -333,11 +344,10 @@ def test_spec_step_matches_sequential_decode(device, B, K_draft, fast_mode, fp32
                 h_ref,
                 inp["w"].float(),
             )
-            worst_out = min(worst_out, pcc(out[u * T + t], o_ref))
-            h_dev = block_state(kv, (k, vv), dests[u][t])
-            worst_state = min(worst_state, pcc(h_dev, torch.stack([tiles(x) for x in h_ref])))
-    logger.info(f"B={B} T={T} mode={mode}: worst out pcc {worst_out:.7f}, worst state pcc {worst_state:.7f} vs torch")
-    assert worst_out > 0.999 and worst_state > (0.999 if fast_mode else 0.9999), (worst_out, worst_state)
+            out_ref[u * T + t] = o_ref
+            state[u * T + t] = block_state(kv, (k, vv), dests[u][t])
+            state_ref[u * T + t] = torch.stack([tiles(x) for x in h_ref])
+    assert_close_to_reference(f"B={B} T={T}", fast_mode, fp32_state, out_ref, out[: B * T], state_ref, state)
 
 
 @pytest.mark.parametrize("opts", FAST_OPTIONS)
@@ -399,7 +409,7 @@ def check_options_against_minimal_and_decode(device, B, T, opts, seed, fp32_gate
     starts, dests = distinct_blocks(B, T, n, torch.Generator().manual_seed(seed))
     runs = {}
     for name in ("minimal", opts):
-        kv = _kv_blocks_or_skip(device, n, torch.Generator().manual_seed(seed + 1))
+        kv = kv_blocks_or_skip(device, n, torch.Generator().manual_seed(seed + 1))
         kv.place([(starts[u], inp["h"][u], inp["hist2"][u]) for u in range(B)])
         kv.write()
         gen = torch.Generator().manual_seed(seed + 2)
@@ -455,7 +465,7 @@ def test_spec_step_destination_aliases_the_start(device, K_draft, alias_at):
     starts = [1 + u * (T + 1) for u in range(B)]
     pos = 0 if alias_at == "first" else T - 1
     dests = [[starts[u] if t == pos else starts[u] + 1 + t for t in range(T)] for u in range(B)]
-    kv = _kv_blocks_or_skip(device, n, gen)
+    kv = kv_blocks_or_skip(device, n, gen)
     kv.place([(starts[u], inp["h"][u], inp["hist2"][u]) for u in range(B)])
     kv.write()
     v = Verify(device, kv, B, T, gen, starts, dests)
@@ -486,7 +496,7 @@ def test_spec_step_padding_rows(device, B, opts):
     starts, dests = distinct_blocks(B, T, num_blocks_for(B, T), gen)
     for u in nulls:
         starts[u], dests[u] = 0, [0] * T
-    kv = _kv_blocks_or_skip(device, num_blocks_for(B, T), gen)
+    kv = kv_blocks_or_skip(device, num_blocks_for(B, T), gen)
     kv.place([(starts[u], inp["h"][u], inp["hist2"][u]) for u in live + list(held)])
     for h in range(NV):
         pool, page = kv.state_page(0, h)
@@ -518,7 +528,7 @@ def test_spec_step_ignores_destination_contents(device, poison):
     starts, dests = distinct_blocks(B, T, num_blocks_for(B, T), gen)
     results = []
     for fill in (None, float(poison)):
-        kv = _kv_blocks_or_skip(device, num_blocks_for(B, T), torch.Generator().manual_seed(3))
+        kv = kv_blocks_or_skip(device, num_blocks_for(B, T), torch.Generator().manual_seed(3))
         kv.place([(starts[u], inp["h"][u], inp["hist2"][u]) for u in range(B)])
         if fill is not None:
             for u in range(B):
@@ -623,13 +633,12 @@ def test_spec_step_chained_verifies(device, K_draft, fast_mode, fp32_state):
     inp = inputs(B, seed=400 + T)
     consts, taps = consts_dev(device, inp), spec_taps(device, inp)
     n, starts, sets = chain_blocks(B, T, steps, gen)
-    kv = _kv_blocks_or_skip(device, n, gen)
+    kv = kv_blocks_or_skip(device, n, gen)
     kv.place([(starts[u], inp["h"][u], inp["hist2"][u]) for u in range(B)])
     kv.write()
     run_chain(device, kv, B, T, gen, inp, consts, taps, steps, (fast_mode, fp32_state), starts, sets)
 
 
-@pytest.mark.parametrize("device_params", TRACE_PARAMS, indirect=True)
 @pytest.mark.parametrize("opts", ["minimal", "vb4_opts"])
 @pytest.mark.parametrize("B", [2, 8])
 @pytest.mark.parametrize("K_draft", [1, 3])
@@ -643,7 +652,7 @@ def test_spec_step_trace_follows_index_contents(device, K_draft, B, opts):
     inp = inputs(B, seed=500 + T)
     consts, taps = consts_dev(device, inp), spec_taps(device, inp)
     n, starts, sets = chain_blocks(B, T, steps, gen)
-    kv = _kv_blocks_or_skip(device, n, gen)
+    kv = kv_blocks_or_skip(device, n, gen)
     kv.place([(starts[u], inp["h"][u], inp["hist2"][u]) for u in range(B)])
     kv.write()
     run_chain(device, kv, B, T, gen, inp, consts, taps, steps, MODEL_MODE, starts, sets, trace=True, opts=opts)
@@ -660,7 +669,7 @@ def test_spec_step_program_cache_follows_new_buffers(device, opts):
     starts, dests = distinct_blocks(B, T, num_blocks_for(B, T), gen)
     first, entries = None, None
     for allocation in range(2):
-        kv = _kv_blocks_or_skip(device, num_blocks_for(B, T), torch.Generator().manual_seed(8))
+        kv = kv_blocks_or_skip(device, num_blocks_for(B, T), torch.Generator().manual_seed(8))
         kv.place([(starts[u], inp["h"][u], inp["hist2"][u]) for u in range(B)])
         kv.write()
         v = Verify(device, kv, B, T, torch.Generator().manual_seed(9), starts, dests)
@@ -682,23 +691,24 @@ def test_spec_step_program_cache_follows_new_buffers(device, opts):
 
 
 def test_spec_step_refuses_unsupported_options(device, expect_error):
-    """hnew_depth accepts only its default; max_users is 0, B, or above B with a ctrl page of that many users;
-    value_blocks is at most 4; kernel_opts accepts only the GdnSpecStepKernelOpt bits, and only with fast_mode and
-    fp32_state. fp32_state needs fast_mode, and B * Nv cores must fit the grid."""
+    """key_dim must equal value_dim, and value_dim is at most 128; max_users is 0, B, or above B with a ctrl page of
+    that many users; value_blocks is at most 4; kernel_opts accepts only the GdnSpecStepKernelOpt bits, and only with
+    fast_mode and fp32_state. fp32_state needs fast_mode, and B * Nv cores must fit the grid."""
     B, T = 2, 4
     gen = torch.Generator().manual_seed(0)
     inp = inputs(B, seed=0)
     consts, taps = consts_dev(device, inp), spec_taps(device, inp)
     starts, dests = distinct_blocks(B, T, num_blocks_for(B, T), gen)
-    kv = _kv_blocks_or_skip(device, num_blocks_for(B, T), gen)
+    kv = kv_blocks_or_skip(device, num_blocks_for(B, T), gen)
     v = Verify(device, kv, B, T, gen, starts, dests)
     for kw, msg in [
         (dict(value_blocks=5), "value_blocks must be in"),
         (dict(kernel_opts=ALL_KERNEL_OPTS | 1), "unsupported kernel_opts bits 0x1"),
         (dict(kernel_opts=4), "unsupported kernel_opts bits 0x4"),
         (dict(kernel_opts=256 | 512), "unsupported kernel_opts bits 0x300"),
-        (dict(hnew_depth=4), "hnew_depth must be 2"),
-        (dict(max_users=B - 1), "max_users must be 0, B, or with ring_page_idx larger than B"),
+        (dict(key_dim=64), "must equal value_dim"),
+        (dict(key_dim=256, value_dim=256), "must be <= 128"),
+        (dict(max_users=B - 1), "or, with ring_page_idx, larger than B"),
         (dict(max_users=B + 1), "ctrl must be one row-major page"),  # the ctrl page holds B users only
     ]:
         with expect_error(RuntimeError, msg):
@@ -715,77 +725,10 @@ def test_spec_step_refuses_unsupported_options(device, expect_error):
         v.run(consts, taps)
     grid = device.compute_with_storage_grid_size()
     big = grid.x * grid.y // NV + 1
-    kv_big = _kv_blocks_or_skip(device, 2, gen)
+    kv_big = kv_blocks_or_skip(device, 2, gen)
     vb = Verify(device, kv_big, big, 1, gen, [0] * big, [[0]] * big)
     with expect_error(RuntimeError, "exceed"):
         vb.run(consts, taps)
-
-
-@pytest.mark.parametrize("device_params", TRACE_PARAMS, indirect=True)
-@pytest.mark.parametrize("K_draft", [1, 3])
-@pytest.mark.parametrize("B", [1, 8, 16])
-def test_spec_step_traced_latency(device, B, K_draft):
-    """Traced time per verify in the model's mode (states in KV blocks, two pools), minimal and with the model's
-    options, against T gdn_decode_step calls on one state, and against T (copy the previous state and history, then
-    step them in place) rounds that keep every position's state. One trace holds N back-to-back calls; the median of
-    REPS replays is reported. Not a pass / fail gate."""
-    T, n_calls, reps = K_draft + 1, 32, 11
-    gen = torch.Generator().manual_seed(3)
-    inp = inputs(B, seed=B)
-    consts, taps = consts_dev(device, inp), spec_taps(device, inp)
-    starts, dests = distinct_blocks(B, T, num_blocks_for(B, T), gen)
-    kv = _kv_blocks_or_skip(device, num_blocks_for(B, T), gen)
-    kv.place([(starts[u], inp["h"][u], inp["hist2"][u]) for u in range(B)])
-    kv.write()
-    v = Verify(device, kv, B, T, gen, starts, dests)
-    v.set_history(inp["rows"])
-    xs = [tile_dev(device, token_rows(B, gen).reshape(1, B, W), ttnn.bfloat16) for _ in range(T)]
-    hist_host = torch.stack([from_pooled(inp["hist2"][b], b) for b in range(B)])
-    states = [tile_dev(device, inp["h"].clone(), ttnn.float32) for _ in range(T + 1)]
-    hists = [tile_dev(device, hist_host, ttnn.bfloat16) for _ in range(T + 1)]
-
-    def decode_t():
-        outs = [run(xs[t], consts, states[0], hists[0], *MODEL_MODE) for t in range(T)]
-        for o in outs[:-1]:
-            ttnn.deallocate(o)
-        return outs[-1]
-
-    def copy_decode_t():
-        outs = []
-        for t in range(T):
-            ttnn.copy(states[t], states[t + 1])
-            ttnn.copy(hists[t], hists[t + 1])
-            outs.append(run(xs[t], consts, states[t + 1], hists[t + 1], *MODEL_MODE))
-        for o in outs[:-1]:
-            ttnn.deallocate(o)
-        return outs[-1]
-
-    def per_call_us(call):
-        ttnn.deallocate(call())
-        tid = ttnn.begin_trace_capture(device, cq_id=0)
-        for _ in range(n_calls):
-            ttnn.deallocate(call())
-        ttnn.end_trace_capture(device, tid, cq_id=0)
-        ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
-        times = []
-        for _ in range(reps):
-            t0 = time.perf_counter()
-            ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
-            times.append((time.perf_counter() - t0) / n_calls * 1e6)
-        ttnn.release_trace(device, tid)
-        return sorted(times)[reps // 2]
-
-    calls = {
-        "gdn_spec_step": lambda: v.run(consts, taps),
-        "gdn_spec_step vb4_opts": lambda: v.run(consts, taps, **OPTION_SETS["vb4_opts"]),
-        f"{T}x gdn_decode_step": decode_t,
-        f"{T}x (copy + gdn_decode_step)": copy_decode_t,
-    }
-    res = {k: [] for k in calls}
-    for _ in range(2):  # alternate so that drift hits all of them
-        for k, call in calls.items():
-            res[k].append(per_call_us(call))
-    logger.info(f"LATENCY B={B} T={T}: " + ", ".join(f"{k} {min(x):.2f} us" for k, x in res.items()))
 
 
 # ---- conv_hist: the convolution history in gdn_decode_step's packed pages of the blocks, no window pair
@@ -822,13 +765,13 @@ def expected_pages_hist(kv, writes):
     """expected_pages with the history: writes = [(block, state [NV, DK, DV], paged history [NV, 4, 32, 32])]. Slots
     1..3 of the block's history pages take the history; slot 0 keeps its bytes."""
     k, v = expected_pages(kv, [(block, state) for block, state, _ in writes])
-    raw16 = _fp32_tile_raw(v).view(torch.int16)
+    raw16 = fp32_tile_raw(v).view(torch.int16)
     for block, _, hist in writes:
         for h in range(NV):
             for s in range(1, HP):
                 q, off = kv._v_slot(kv.hist_page(block, h) + s)
-                raw16[q, off : off + 1024] = _bf16_tile_raw(hist[h, s])[0]
-    return k, _raw_fp32_tile(raw16.view(torch.int32))
+                raw16[q, off : off + 1024] = bf16_tile_raw(hist[h, s])[0]
+    return k, raw_fp32_tile(raw16.view(torch.int32))
 
 
 @pytest.mark.parametrize("K_draft", [1, 3])
@@ -842,7 +785,7 @@ def test_spec_step_history_pages_match_sequential_decode(device, B, K_draft):
     inp = inputs(B, seed=B + T + 7)
     consts, taps = consts_dev(device, inp), spec_taps(device, inp)
     starts, dests = distinct_blocks(B, T, num_blocks_for(B, T), gen)
-    kv = _kv_blocks_or_skip(device, num_blocks_for(B, T), gen)
+    kv = kv_blocks_or_skip(device, num_blocks_for(B, T), gen)
     kv.place([(starts[u], inp["h"][u], inp["hist2"][u]) for u in range(B)])
     kv.write()
     v = HistVerify(device, kv, B, T, gen, starts, dests, par=(B + T) & 1)
@@ -874,7 +817,6 @@ def test_spec_step_history_pages_match_sequential_decode(device, B, K_draft):
         assert torch.equal(bits(nxt[u]), bits(ref_next[0][0][u])), f"user {u}: decode after the verify"
 
 
-@pytest.mark.parametrize("device_params", TRACE_PARAMS, indirect=True)
 @pytest.mark.parametrize("opts", ["minimal", "vb4_opts", "vb4"])
 @pytest.mark.parametrize("B", [2, 8])
 @pytest.mark.parametrize("K_draft", [1, 3])
@@ -894,7 +836,7 @@ def test_spec_step_history_pages_chain_through_blocks(device, K_draft, B, opts):
     for s in range(steps):
         alias = s % T  # position whose destination is the step's start block
         sets[s] = [[None if t == alias else d for t, d in enumerate(row)] for row in sets[s]]
-    kv = _kv_blocks_or_skip(device, n, gen)
+    kv = kv_blocks_or_skip(device, n, gen)
     kv.place([(starts[u], inp["h"][u], inp["hist2"][u]) for u in range(B)])
     kv.write()
 
@@ -955,7 +897,7 @@ def test_spec_step_history_pages_padding_rows(device, B, opts):
     starts, dests = distinct_blocks(B, T, num_blocks_for(B, T), gen)
     for u in nulls:
         starts[u], dests[u] = 0, [0] * T
-    kv = _kv_blocks_or_skip(device, num_blocks_for(B, T), gen)
+    kv = kv_blocks_or_skip(device, num_blocks_for(B, T), gen)
     kv.place([(starts[u], inp["h"][u], inp["hist2"][u]) for u in live + list(held)])
     for h in range(NV):
         pool, page = kv.state_page(0, h)
@@ -985,7 +927,7 @@ def test_spec_step_history_pages_refuse_bad_layouts(device, expect_error):
     inp = inputs(B, seed=1)
     consts, taps = consts_dev(device, inp), spec_taps(device, inp)
     starts, dests = distinct_blocks(B, T, num_blocks_for(B, T), gen)
-    kv = _kv_blocks_or_skip(device, num_blocks_for(B, T), gen)
+    kv = kv_blocks_or_skip(device, num_blocks_for(B, T), gen)
     v = Verify(device, kv, B, T, gen, starts, dests)
     with expect_error(RuntimeError, "pass either win_a and win_b"):
         v.run(consts, taps, conv_hist=kv.hist)
@@ -1009,7 +951,7 @@ def test_spec_step_long_verifies(device, K_draft, B, hist):
     inp = inputs(B, seed=B + T + 3)
     consts, taps = consts_dev(device, inp), spec_taps(device, inp)
     starts, dests = distinct_blocks(B, T, num_blocks_for(B, T), gen)
-    kv = _kv_blocks_or_skip(device, num_blocks_for(B, T), gen)
+    kv = kv_blocks_or_skip(device, num_blocks_for(B, T), gen)
     kv.place([(starts[u], inp["h"][u], inp["hist2"][u]) for u in range(B)])
     kv.write()
     v = (HistVerify if hist else Verify)(device, kv, B, T, gen, starts, dests)
@@ -1029,79 +971,6 @@ def test_spec_step_long_verifies(device, K_draft, B, hist):
         check_pages(kv, expected_pages(kv, [(b, s) for b, s, _ in writes]))
 
 
-@pytest.mark.parametrize("device_params", TRACE_PARAMS, indirect=True)
-@pytest.mark.parametrize("K_draft", [1, 3])
-@pytest.mark.parametrize("B", [1, 8, 16, 32])
-def test_spec_step_history_pages_traced_latency(device, B, K_draft):
-    """Traced time per verify in the model's mode (FLOAT32 dt_bias / -exp(A)) with the history in the window pair and
-    in the blocks (conv_hist), each minimal and with the model's verify options (vb4_opts), against T gdn_decode_step
-    calls on the blocks. B = 32 is two B = 16 calls (110 cores fit B * Nv <= 110). One trace holds N back-to-back
-    calls; the median of REPS replays is reported. Not a pass / fail gate."""
-    T, n_calls, reps = K_draft + 1, 32, 11
-    part = min(B, 16)
-    gen = torch.Generator().manual_seed(33)
-    inp = inputs(B, seed=B + 33)
-    consts, taps = consts_dev(device, inp), spec_taps(device, inp)
-    for key in ("dtb", "nea"):
-        consts[key] = tile_dev(device, inp[key].float(), ttnn.float32)
-    starts, dests = distinct_blocks(B, T, num_blocks_for(B, T), gen)
-    kv = _kv_blocks_or_skip(device, num_blocks_for(B, T), gen)
-    kv.place([(starts[u], inp["h"][u], inp["hist2"][u]) for u in range(B)])
-    kv.write()
-    win, pages = [], []
-    for p0 in range(0, B, part):
-        users = slice(p0, p0 + part)
-        win.append(Verify(device, kv, part, T, gen, starts[users], dests[users]))
-        win[-1].set_history(inp["rows"][users])
-        pages.append(HistVerify(device, kv, part, T, gen, starts[users], dests[users]))
-    xs = [tile_dev(device, token_rows(B, gen).reshape(1, B, W), ttnn.bfloat16) for _ in range(T)]
-    idx = ttnn.from_torch(kv.index_host(starts), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-
-    def decode_t():
-        outs = [kv.run(xs[t], consts, idx) for t in range(T)]
-        for o in outs[:-1]:
-            ttnn.deallocate(o)
-        return outs[-1]
-
-    def spec_calls(verifies, kw):
-        def call():
-            out = None
-            for v in verifies:
-                if out is not None:
-                    ttnn.deallocate(out)
-                out = v.run(consts, taps, **kw)
-            return out
-
-        return call
-
-    def per_call_us(call):
-        ttnn.deallocate(call())
-        tid = ttnn.begin_trace_capture(device, cq_id=0)
-        for _ in range(n_calls):
-            ttnn.deallocate(call())
-        ttnn.end_trace_capture(device, tid, cq_id=0)
-        ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
-        times = []
-        for _ in range(reps):
-            t0 = time.perf_counter()
-            ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
-            times.append((time.perf_counter() - t0) / n_calls * 1e6)
-        ttnn.release_trace(device, tid)
-        return sorted(times)[reps // 2]
-
-    calls = {}
-    for name in ("minimal", "vb4_opts"):
-        calls[f"window pair {name}"] = spec_calls(win, OPTION_SETS[name])
-        calls[f"conv_hist {name}"] = spec_calls(pages, OPTION_SETS[name])
-    if B <= 16:
-        calls[f"{T}x gdn_decode_step"] = decode_t
-    res = {k: [] for k in calls}
-    for _ in range(2):  # alternate so that drift hits all of them
-        for k, call in calls.items():
-            res[k].append(per_call_us(call))
-    logger.info(f"LATENCY B={B} T={T}: " + ", ".join(f"{k} {min(x):.2f} us" for k, x in res.items()))
-
-
 @pytest.mark.parametrize("opts", ["minimal", "vb4_opts"])
 @pytest.mark.parametrize("b", [1, 2, 4])
 def test_spec_step_history_pages_run_the_leading_users_of_a_wider_ctrl_page(device, b, opts):
@@ -1114,7 +983,7 @@ def test_spec_step_history_pages_run_the_leading_users_of_a_wider_ctrl_page(devi
     inp = inputs(M, seed=3100 + b)
     consts, taps = consts_dev(device, inp), spec_taps(device, inp)
     starts, dests = distinct_blocks(M, T, num_blocks_for(M, T), gen)
-    kv = _kv_blocks_or_skip(device, num_blocks_for(M, T), gen)
+    kv = kv_blocks_or_skip(device, num_blocks_for(M, T), gen)
     kv.place([(starts[u], inp["h"][u], inp["hist2"][u]) for u in range(M)])
     kv.write()
     v = HistVerify(device, kv, M, T, gen, starts, dests)
@@ -1127,3 +996,72 @@ def test_spec_step_history_pages_run_the_leading_users_of_a_wider_ctrl_page(devi
             assert torch.equal(bits(out[u * T + t]), bits(ref[t][0][u])), f"position {t} user {u}: output"
             writes.append((dests[u][t], ref[t][1][u], ref[t][2][u]))
     check_pages(kv, expected_pages_hist(kv, writes))
+
+
+# ---- determinism and device time of the model's verify call
+
+
+def _model_verify(device, B, T, seed, hist=True):
+    """The model's verify call: B users of T tokens on distinct start and destination blocks, FLOAT32 dt_bias and
+    -exp(A), fast_mode and fp32_state, value_blocks=4 and all kernel_opts. hist=True keeps the history in the blocks
+    (conv_hist), as the model does; hist=False uses the window pair. Returns (v, call), where call() runs the op once
+    and returns its output."""
+    gen = torch.Generator().manual_seed(seed)
+    inp = inputs(B, seed=seed)
+    consts, taps = consts_dev(device, inp), spec_taps(device, inp)
+    for key in ("dtb", "nea"):
+        consts[key] = tile_dev(device, inp[key].float(), ttnn.float32)
+    starts, dests = distinct_blocks(B, T, num_blocks_for(B, T), gen)
+    kv = kv_blocks_or_skip(device, num_blocks_for(B, T), gen)
+    kv.place([(starts[u], inp["h"][u], inp["hist2"][u]) for u in range(B)])
+    kv.write()
+    if hist:
+        v = HistVerify(device, kv, B, T, gen, starts, dests)
+    else:
+        v = Verify(device, kv, B, T, gen, starts, dests)
+        v.set_history(inp["rows"])
+    return v, lambda: v.run(consts, taps, **OPTION_SETS["vb4_opts"])
+
+
+@pytest.mark.parametrize("hist", [False, True], ids=["window", "conv_hist"])
+@pytest.mark.parametrize("B", [2, 8, 16])
+def test_spec_step_is_device_deterministic(device, B, hist):
+    """DETERMINISM_RUNS back-to-back calls of the model's verify at T = 4, with no sync between them: every run's
+    output, every K / V byte and the window the op writes equal the first run's. value_blocks=4 runs 4 blocks per head
+    at B = 2, 2 at B = 8 and 1 at B = 16, so the semaphores between a head's blocks are covered. The start and
+    destination blocks are distinct, so every run reads the same start state. The comparison stays on device; one
+    marker is read back at the end."""
+    v, call = _model_verify(device, B, 4, seed=4100 + B, hist=hist)
+    written = [v.kv.rec_k, v.kv.rec_v] + ([] if hist else [v.win_dev[1 - v.par]])
+    names = ["output", "K fp32 view", "V fp32 view", "window"][: 1 + len(written)]
+    reference = [call()] + [ttnn.clone(t) for t in written]
+    marker, outputs = None, None
+    for _ in range(1, DETERMINISM_RUNS):
+        if outputs is not None:
+            ttnn.deallocate(outputs[0])
+        outputs = [call()] + written
+        marker = fold_mismatches(marker, reference, outputs)
+    if device_mismatch_marker_is_set(marker):
+        raise AssertionError(
+            f"gdn_spec_step B={B} is not deterministic:\n" + mismatch_report(names, reference, outputs)
+        )
+    logger.info(f"gdn_spec_step B={B}: {DETERMINISM_RUNS} runs bit-identical")
+
+
+@pytest.mark.requires_host_iommu
+@skip_with_llk_assert("LLK asserts change kernel timing.")
+@skip_with_watcher("The watcher changes kernel timing.")
+def test_spec_step_performance(device):
+    """Device time of the model's verify at PERF_B users and PERF_T tokens, inside +/- PERF_MARGIN of
+    SPEC_STEP_DURATION_NS."""
+    require_realtime_profiler("gdn_spec_step performance")
+    _, call = _model_verify(device, PERF_B, PERF_T, seed=33)
+    ttnn.deallocate(call())  # compile outside the measured call
+    out, record = profile_realtime_program(device, call)
+    ttnn.deallocate(out)
+    duration_ns = record["duration_ns"]
+    logger.info(f"gdn_spec_step B={PERF_B} T={PERF_T}: {duration_ns:.0f} ns (reference {SPEC_STEP_DURATION_NS} ns)")
+    if SPEC_STEP_DURATION_NS is None:
+        pytest.fail(f"no reference duration: set SPEC_STEP_DURATION_NS from the measured {duration_ns:.0f} ns")
+    lower, upper = SPEC_STEP_DURATION_NS * (1 - PERF_MARGIN), SPEC_STEP_DURATION_NS * (1 + PERF_MARGIN)
+    assert lower <= duration_ns <= upper, f"duration {duration_ns:.0f} ns outside [{lower:.0f}, {upper:.0f}] ns"

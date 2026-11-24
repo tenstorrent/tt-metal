@@ -10,6 +10,12 @@
 
 namespace ttnn::prim {
 
+// Depth of the RM factory's destination staging ring. Depends on live L1 occupancy when pages are
+// not NoC-aligned, so compute_program_hash must key on it; otherwise a cache hit replays a slot
+// count budgeted against a different L1 state.
+uint32_t reshape_rm_num_dest_write_slots(
+    const ReshapeViewParams& operation_attributes, const ReshapeViewInputs& tensor_args);
+
 struct ReshapeViewRMProgramFactory {
     static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const ReshapeViewParams& operation_attributes,

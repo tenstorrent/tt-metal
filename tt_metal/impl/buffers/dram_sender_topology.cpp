@@ -150,7 +150,10 @@ std::vector<uint32_t> recv_index_bases_per_sender(const std::vector<std::pair<Co
 }
 
 std::optional<DramSenderPlacement> dram_sender_placement(ContextId context_id, uint8_t num_hw_cqs) {
-    auto& metal_ctx = MetalContext::instance(context_id);
+    return dram_sender_placement(MetalContext::instance(context_id), num_hw_cqs);
+}
+
+std::optional<DramSenderPlacement> dram_sender_placement(MetalContext& metal_ctx, uint8_t num_hw_cqs) {
     const Hal& hal = metal_ctx.hal();
     if (hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
         return DramSenderPlacement::DramCore;
@@ -174,11 +177,7 @@ bool dram_senders_on_dispatch_engine(const distributed::MeshDevice& mesh_device)
 }
 
 CoreCoord dram_sender_dispatch_engine(ContextId context_id, ChipId device_id) {
-    auto& metal_ctx = MetalContext::instance(context_id);
-    const uint16_t channel = metal_ctx.get_cluster().get_assigned_channel_for_device(device_id);
-    // The Tensor prefetcher kernels share CQ 0's dispatch engine (TensorPrefetcherKernel).
-    const tt_cxy_pair dispatch_engine = metal_ctx.get_dispatch_core_manager().dispatcher_core(device_id, channel, 0);
-    return CoreCoord(dispatch_engine.x, dispatch_engine.y);
+    return tensor_prefetcher_dispatch_engine(MetalContext::instance(context_id).get_dispatch_core_manager(), device_id);
 }
 
 namespace {
@@ -188,23 +187,33 @@ namespace {
 struct DramSenderStateCore {
     CoreCoord logical;
     CoreType core_type = CoreType::DRAM;
-    HalProgrammableCoreType programmable_core_type = HalProgrammableCoreType::DRAM;
 };
+
+DramSenderPlacement placement_of(const distributed::MeshDevice& mesh_device) {
+    const auto placement = mesh_device.impl().dram_sender_placement();
+    TT_FATAL(placement.has_value(), "Mesh device {} runs no DRAM-sender endpoints", mesh_device.id());
+    return *placement;
+}
+
+HalProgrammableCoreType state_core_programmable_type(DramSenderPlacement placement) {
+    return placement == DramSenderPlacement::DispatchEngine ? HalProgrammableCoreType::DISPATCH
+                                                            : HalProgrammableCoreType::DRAM;
+}
 
 DramSenderStateCore dram_sender_state_core(
     const distributed::MeshDevice& mesh_device, const IDevice* device, const CoreCoord& sender_logical) {
-    const auto placement = mesh_device.impl().dram_sender_placement();
-    TT_FATAL(placement.has_value(), "Device {} runs no DRAM-sender endpoints", device->id());
-    if (*placement == DramSenderPlacement::DispatchEngine) {
-        return {
-            dram_sender_dispatch_engine(mesh_device.impl().get_context_id(), device->id()),
-            CoreType::DISPATCH,
-            HalProgrammableCoreType::DISPATCH};
+    if (placement_of(mesh_device) == DramSenderPlacement::DispatchEngine) {
+        return {dram_sender_dispatch_engine(mesh_device.impl().get_context_id(), device->id()), CoreType::DISPATCH};
     }
-    return {sender_logical, CoreType::DRAM, HalProgrammableCoreType::DRAM};
+    return {sender_logical, CoreType::DRAM};
 }
 
 }  // namespace
+
+uint64_t dram_sender_l1_noc_addr(const distributed::MeshDevice& mesh_device, DeviceAddr local_addr) {
+    const HalProgrammableCoreType core_type = state_core_programmable_type(placement_of(mesh_device));
+    return mesh_device.impl().metal_env().get_hal().get_l1_noc_offset(core_type) + static_cast<uint64_t>(local_addr);
+}
 
 CoreCoord dram_sender_virtual_core(
     const distributed::MeshDevice& mesh_device, const IDevice* device, const CoreCoord& sender_logical) {
@@ -218,12 +227,9 @@ void write_dram_sender_l1(
     const CoreCoord& sender_logical,
     DeviceAddr local_addr,
     std::span<const std::byte> bytes) {
-    const DramSenderStateCore state = dram_sender_state_core(mesh_device, device, sender_logical);
-    auto& env = mesh_device.impl().metal_env();
-    const uint64_t write_addr =
-        env.get_hal().get_l1_noc_offset(state.programmable_core_type) + static_cast<uint64_t>(local_addr);
-    const CoreCoord virtual_core = device->virtual_core_from_logical_core(state.logical, state.core_type);
-    env.get_cluster().write_core(device->id(), tt_cxy_pair(device->id(), virtual_core), bytes, write_addr);
+    const CoreCoord virtual_core = dram_sender_virtual_core(mesh_device, device, sender_logical);
+    mesh_device.impl().metal_env().get_cluster().write_core(
+        device->id(), tt_cxy_pair(device->id(), virtual_core), bytes, dram_sender_l1_noc_addr(mesh_device, local_addr));
 }
 
 }  // namespace tt::tt_metal

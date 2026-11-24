@@ -75,6 +75,8 @@ TT_KERNEL void writer(uint32_t head, uint32_t u0, uint32_t nu) {
 #ifdef GDN_STATE_PAGE_IDX
         const uint32_t state_page = state_page_idx_at(pidx, 0, b);
         const uint32_t hist_page = state_page_idx_at(pidx, 1, b);
+        ASSERT(page_run_in_one_pool(state_page, KV, state_pages_a, GDN_STATE_PAGES));
+        ASSERT(page_run_in_one_pool(hist_page, 4, hist_pages_a, GDN_HIST_PAGES));
 #else
         const uint32_t state_page = (b * Nv + h) * KV;
         const uint32_t hist_page = (b * Nv + h) * 4;

@@ -234,9 +234,13 @@ private:
         MeshCommandQueue& cq, ttsl::optional_reference<const MeshCoordinateRangeSet> device_subset);
     // One WAIT_SIGNAL page on signal slot `slot_index` for `wait_value`.
     std::vector<uint8_t> wait_signal_page(uint32_t slot_index, uint32_t wait_value) const;
+    // If `request` is a wait on an op signal, replaces it with a copy carrying its WAIT_SIGNAL page, which waits
+    // for the next count of that signal. The worker thread calls it as it takes each request.
+    void add_op_signal_wait_page(std::shared_ptr<const Request>& request);
     // TT_FATAL unless op signal `signal_id`, which `api_name`'s caller passed in, is in range.
     static void validate_signal_id(uint32_t signal_id, std::string_view api_name);
-    // DRISC L1 address of signal slot `slot_index`, uniform across every sender core of every device.
+    // L1 address of signal slot `slot_index` on every core that keeps a signal slot table: each DRAM-core sender,
+    // or the dispatch engine that keeps the one table for all of its senders.
     uint32_t signal_slot_addr(uint32_t slot_index) const;
     // Add the pipe config page at `config_page_addr` to sender slot `sender`'s drain targets, dropping
     // the ones whose memory is gone.
@@ -313,9 +317,9 @@ private:
     // over NOC.
     uint32_t socket_config_l1_addr_ = 0;
     uint32_t socket_data_l1_addr_ = 0;
-    // Base (local DRISC L1) of this prefetcher's signal slot table: kNumCqSignalSlots CQ fence slots,
-    // then kTensorPrefetcherNumSignals op signal slots. Uniform across all sender cores of every device,
-    // carved at the front of the kernel working region.
+    // Base (local L1) of this prefetcher's signal slot table: kNumCqSignalSlots CQ fence slots, then
+    // kNumOpSignalSlots op signal slots. Uniform across all sender cores of every device, carved at the front of
+    // the DRISC kernel working region, or the table in the dispatch engine's region.
     uint32_t signal_slots_l1_addr_ = 0;
     // Base (local DRISC L1) of the kTensorPrefetcherSelectorScratchBytes a selector page is read into;
     // uniform across all sender cores.
@@ -346,6 +350,9 @@ private:
     // Waits on each op signal handed to the worker since start, i.e. the count the latest of them waits
     // for. Zeroed by start, as the slots are, before the worker starts; only worker_loop touches it after.
     std::array<uint32_t, experimental::kTensorPrefetcherNumSignals> op_signal_waits_{};
+    // How much one op signal raises a slot the kernels wait on: one per DRAM bank whose counter that slot is. A
+    // DRAM-core sender keeps its own bank's counter; a dispatch engine's one table holds every bank's.
+    uint32_t op_signal_increments_ = 1;
 
     // sender_logical_cores_[s] is the logical DRAM core for sender slot s, a (bank,
     // primary/secondary role) pair. Both sender cores per bank are provisioned at start; each

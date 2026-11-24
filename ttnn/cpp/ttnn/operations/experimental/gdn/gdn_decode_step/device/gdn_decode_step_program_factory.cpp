@@ -16,6 +16,7 @@
 
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/core/program_cache_l1.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::tt_metal;
@@ -186,6 +187,23 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
             });
         }
     }
+    // Program compile also fails on an overflow, but without the sizes that cause it.
+    uint64_t dfb_bytes = 0;
+    for (const auto& d : dfbs) {
+        dfb_bytes += static_cast<uint64_t>(d.entry_size) * d.num_entries;
+    }
+    const uint64_t l1_budget = ttnn::operations::core::available_program_l1_capacity(&device);
+    TT_FATAL(
+        dfb_bytes <= l1_budget,
+        "gdn_decode_step: dataflow buffers need {} B per core but only {} B of L1 are available (key_dim={}, "
+        "value_dim={}, fast_mode={}, fp32_state={}, paged={})",
+        dfb_bytes,
+        l1_budget,
+        a.key_dim,
+        a.value_dim,
+        a.fast_mode,
+        fp32_state,
+        paged);
     using EP = m2::DFBEndpointType;
     auto bind = [](const std::string& name, EP type) { return m2::DFBBinding{m2::DFBSpecName{name}, name, type}; };
 
@@ -248,6 +266,15 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
         writer.dfb_bindings.push_back(bind("pidx_w", EP::CONSUMER));
         writer.tensor_bindings.push_back(m2::TensorBinding{PIDX, "pidx"});
         writer.compiler_options.defines.emplace("GDN_STATE_PAGE_IDX", "1");
+        // page counts of the two index spaces (both pools), for the kernels' page_run_in_one_pool checks
+        const auto state_pages =
+            std::to_string(in.state.buffer()->num_pages() + (state2 ? in.state_pool2->buffer()->num_pages() : 0));
+        const auto hist_pages = std::to_string(
+            in.conv_hist->buffer()->num_pages() + (hist2 ? in.conv_hist_pool2->buffer()->num_pages() : 0));
+        for (auto* kernel : {&reader, &writer}) {
+            kernel->compiler_options.defines.emplace("GDN_STATE_PAGES", state_pages);
+            kernel->compiler_options.defines.emplace("GDN_HIST_PAGES", hist_pages);
+        }
     }
     // second pools: the define carries the first pool's page count, where the second pool's pages start in the index
     if (state2) {

@@ -277,8 +277,7 @@ static std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard
 // QUASAR matmul program config (ttnn::operations::experimental::quasar::matmul) so the 1x1-conv
 // GEMM runs on the quasar matmul/linear instead of the original. Mirrors the shared helper
 // field-for-field; the config structs are identical copies.
-static ttnn::operations::experimental::quasar::matmul::MatmulProgramConfig
-determine_matmul_op_config_from_conv_op_config_qsr(
+ttnn::operations::experimental::quasar::matmul::MatmulProgramConfig determine_matmul_op_config_from_conv_op_config_qsr(
     Conv2dParallelizationConfig conv_parallelization_config,
     Conv2dBlockConfig conv_blocking_config,
     bool height_sharded,

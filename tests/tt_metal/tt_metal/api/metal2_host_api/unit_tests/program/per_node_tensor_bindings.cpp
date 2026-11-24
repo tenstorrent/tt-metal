@@ -6,7 +6,7 @@
 #include <cstdint>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
@@ -32,7 +32,7 @@ TEST_F(ProgramSpecTestGen1, CPU_PerNodeTensorBinding_TakesRtaSlotAfterNamedRtas)
     BindTensorParameterToKernel(spec.kernels[0], "per_node_a", "per_node_a");
     BindTensorParameterToKernel(spec.kernels[0], "plain_tensor", "plain_ta");
     BindTensorParameterToKernel(spec.kernels[0], "per_node_b", "per_node_b");
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
     auto kernel = program.impl().get_kernel_by_spec_name("dm_kernel");
     const auto& handles = kernel->tensor_binding_handles();
     ASSERT_EQ(handles.size(), 3u);
@@ -63,7 +63,7 @@ TEST_F(ProgramSpecTestGen1, CPU_PerNodeTensorBinding_RejectsDynamicTensorShape) 
     spec.tensor_parameters = {MakePerNodeTensorParameter("per_node", /*num_cores=*/2)};
     spec.tensor_parameters[0].relaxations = {.dynamic_tensor_shape = true};
     BindTensorParameterToKernel(spec.kernels[0], "per_node", "per_node");
-    EXPECT_ANY_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_ANY_THROW(Program(*mesh_device_, spec));
 }
 
 }  // namespace

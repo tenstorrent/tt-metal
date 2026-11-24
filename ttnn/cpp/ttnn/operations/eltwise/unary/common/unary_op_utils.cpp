@@ -30,6 +30,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::EXP: return "SFPU_OP_EXP_INCLUDE";
         case UnaryOpType::GELU:
         case UnaryOpType::GELU_TANH: return "SFPU_OP_GELU_INCLUDE";
+        case UnaryOpType::QUICK_GELU: return "SFPU_OP_QUICK_GELU_INCLUDE";
         case UnaryOpType::RECIP: return "SFPU_OP_RECIP_INCLUDE";
         case UnaryOpType::SQRT: return "SFPU_OP_SQRT_INCLUDE";
         case UnaryOpType::RSQRT: return "SFPU_OP_RSQRT_INCLUDE";
@@ -1047,6 +1048,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             return {"rounding_op_tile_init();", fmt::format("frac_tile({});", idst)};
+        case UnaryOpType::QUICK_GELU: return {"quick_gelu_tile_init();", fmt::format("quick_gelu_tile({});", idst)};
         case UnaryOpType::RELU6:
             if (input_dtype == DataType::UINT16) {
                 return {"relu_max_tile_init();", fmt::format("relu_max_tile_uint16({}, 6u);", idst)};
@@ -1285,6 +1287,37 @@ std::optional<DataType> typecast_target_dtype(const EltwiseUnaryWithParam& op) {
         op.get_params());
 }
 
+std::optional<std::map<std::string, std::string>> get_bf16_kernel_defines(
+    const std::vector<EltwiseUnaryWithParam>& op_chain,
+    DataType input_dtype,
+    DataType output_dtype,
+    bool fp32_dest_acc_en,
+    tt::ARCH arch) {
+    // The generated kernels are fitted for BF16 data in a 16-bit DEST and exist for Blackhole and
+    // Wormhole only.
+    if (op_chain.size() != 1 || input_dtype != DataType::BFLOAT16 || output_dtype != DataType::BFLOAT16 ||
+        fp32_dest_acc_en || (arch != tt::ARCH::BLACKHOLE && arch != tt::ARCH::WORMHOLE_B0)) {
+        return std::nullopt;
+    }
+    const auto& op = op_chain[0];
+    // Each case names its op where its kernel serves the call: on the boards it installs on, with the
+    // parameters it is fitted for.
+    std::string op_name;
+    switch (op.type()) {
+        case UnaryOpType::QUICK_GELU: op_name = arch == tt::ARCH::BLACKHOLE ? "quick_gelu" : ""; break;
+        default: return std::nullopt;
+    }
+    if (op_name.empty()) {
+        return std::nullopt;
+    }
+    return std::map<std::string, std::string>{
+        {"SFPU_OP_CHAIN_0", "SFPU_OP_CHAIN_0_INIT_0 SFPU_OP_CHAIN_0_FUNC_0"},
+        {"SFPU_OP_CHAIN_0_INIT_0", fmt::format("{}_tile_init();", op_name)},
+        {"SFPU_OP_CHAIN_0_FUNC_0", fmt::format("{}_tile(0);", op_name)},
+        {get_macro_definition(op.type()), "1"},
+    };
+}
+
 std::map<std::string, std::string> get_block_defines(
     const std::vector<EltwiseUnaryWithParam>& op_chain,
     const std::string& block_id,
@@ -1438,5 +1471,28 @@ uint32_t pack_scalar_runtime_arg(const EltwiseUnaryWithParam& op, size_t index, 
             TT_THROW("Unsupported parameter type for index {}", index);
         },
         op.base);
+}
+
+bool is_non_finite_at_zero(const EltwiseUnaryWithParam& op) {
+    switch (op.type()) {
+        case UnaryOpType::RECIP:
+        case UnaryOpType::RSQRT:
+        case UnaryOpType::LOG:
+        case UnaryOpType::LOG2:
+        case UnaryOpType::LOG10:
+        case UnaryOpType::ACOSH:
+        case UnaryOpType::LGAMMA:
+        case UnaryOpType::DIGAMMA:
+        case UnaryOpType::POLYGAMMA:
+        case UnaryOpType::RDIV: return true;
+        case UnaryOpType::POWER:
+            return op.get_param_if<float>(0).value_or(0.0f) < 0.0f || op.get_param_if<std::int32_t>(0).value_or(0) < 0;
+        case UnaryOpType::LOGIT: {
+            // eps < 0 (None) skips the clamp, and a clamp range reaching 0 keeps it: log(0 / (1 - 0)) is -inf.
+            const float eps = op.get_param_if<float>(0).value_or(-1.0f);
+            return std::min(eps, 1.0f - eps) <= 0.0f;
+        }
+        default: return false;
+    }
 }
 }  // namespace ttnn::operations::unary::utils

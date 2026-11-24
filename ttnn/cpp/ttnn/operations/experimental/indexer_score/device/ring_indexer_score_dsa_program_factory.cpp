@@ -725,7 +725,7 @@ operation_attributes_t resolve_full_mesh_route(const operation_attributes_t& arg
     }
     auto resolved = args;
     auto& fused = *resolved.fused_ring;
-    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig(*q.device());
     const std::array<tt::tt_fabric::Topology, 2> axis_topology{
         ttnn::ccl::get_axis_topology(q, fabric_config, 0), ttnn::ccl::get_axis_topology(q, fabric_config, 1)};
     const auto route = ttnn::operations::ccl::common::resolve_mesh_ring_plan(

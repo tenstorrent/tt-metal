@@ -44,6 +44,7 @@
 
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/core/program_cache_l1.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::tt_metal;
@@ -296,6 +297,24 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
             });
         }
     }
+    // Several dataflow buffers grow with T. Program compile also fails on an overflow, but without the sizes that
+    // cause it.
+    uint64_t dfb_bytes = 0;
+    for (const auto& d : dfbs) {
+        dfb_bytes += static_cast<uint64_t>(d.entry_size) * d.num_entries;
+    }
+    const uint64_t l1_budget = ttnn::operations::core::available_program_l1_capacity(&device);
+    TT_FATAL(
+        dfb_bytes <= l1_budget,
+        "gdn_spec_step: dataflow buffers need {} B per core but only {} B of L1 are available (T={}, key_dim={}, "
+        "value_dim={}, value blocks={}, kernel_opts={})",
+        dfb_bytes,
+        l1_budget,
+        T,
+        a.key_dim,
+        a.value_dim,
+        VB,
+        a.kernel_opts);
     using EP = m2::DFBEndpointType;
     auto bind = [](const std::string& name, EP type) { return m2::DFBBinding{m2::DFBSpecName{name}, name, type}; };
 
@@ -454,6 +473,18 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
     } else {
         writer.tensor_bindings.push_back(m2::TensorBinding{WIN_A, "win_a_w"});
         writer.tensor_bindings.push_back(m2::TensorBinding{WIN_B, "win_b_w"});
+    }
+    // page counts of the index spaces (ring: both pools), for the kernels' page_run_in_one_pool checks
+    for (auto* kernel : {&reader, &writer}) {
+        if (ring_paged) {
+            kernel->compiler_options.defines.emplace(
+                "GDN_RING_PAGES",
+                std::to_string(in.ring.buffer()->num_pages() + (ring2 ? in.ring_pool2->buffer()->num_pages() : 0)));
+        }
+        if (hist_paged) {
+            kernel->compiler_options.defines.emplace(
+                "GDN_HIST_PAGES", std::to_string(in.conv_hist->buffer()->num_pages()));
+        }
     }
     writer.compile_time_args = {
         {"Kt", Kt},

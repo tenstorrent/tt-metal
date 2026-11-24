@@ -13,7 +13,7 @@ using namespace tt::tt_metal::blackhole::tensix;
 #include "blackhole/bh_hal.hpp"
 #include "blackhole/bh_hal_tensix_asserts.hpp"
 #include "dev_mem_map.h"
-#include "hal_types.hpp"
+#include "llrt/hal_types.hpp"
 #include "hostdev/l1_ecc_halt_constants.h"
 #include "llrt/hal.hpp"
 #include "noc/noc_parameters.h"

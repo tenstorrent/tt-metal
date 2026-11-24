@@ -5,7 +5,7 @@
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "impl/allocator/allocator.hpp"
@@ -92,7 +92,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverrideUsesKernelPlacementWhenUnset
     spec.work_units[0].target_nodes = NodeRange({0, 0}, {1, 0});
     spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = 64}};
     spec.kernels[0].scratchpad_bindings = {{ScratchpadSpecName{"pad"}, "pad"}};
-    auto program = MakeProgramFromSpec(fixture_device, spec);
+    Program program(fixture_device, spec);
     const auto kernel = program.impl().get_kernel_by_spec_name("dm_kernel");
     EXPECT_EQ(kernel->scratchpad_binding_handles()[0].placement, kernel->core_range_set());
     EXPECT_EQ(kernel->core_range_set(), CoreRangeSet(CoreRange({0, 0}, {1, 0})));
@@ -106,7 +106,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverrideResolvesSubset) {
     spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = 64}};
     spec.kernels[0].scratchpad_bindings = {{ScratchpadSpecName{"pad"}, "pad"}};
     spec.scratchpads[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}));
-    auto program = MakeProgramFromSpec(fixture_device, spec);
+    Program program(fixture_device, spec);
     const auto kernel = program.impl().get_kernel_by_spec_name("dm_kernel");
     EXPECT_EQ(kernel->scratchpad_binding_handles()[0].placement, CoreRangeSet(CoreRange({0, 0})));
     EXPECT_EQ(kernel->core_range_set(), CoreRangeSet(CoreRange({0, 0}, {1, 0})));
@@ -116,7 +116,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverrideAllocatesOnceForAllBindings)
     // Every binding sees one shared scratchpad address, including a binding on an excluded node.
     distributed::MeshDevice& fixture_device = *mesh_device_;
     auto spec = test_helpers::MakeScratchpadOverrideWithProbesForTest();
-    auto program = MakeProgramFromSpec(fixture_device, spec);
+    Program program(fixture_device, spec);
     const auto& first = test_helpers::ScratchpadBindingForTest(program, "a");
     EXPECT_NE(first.allocated_address, 0u);
     EXPECT_EQ(test_helpers::ScratchpadBindingForTest(program, "b").allocated_address, first.allocated_address);
@@ -127,7 +127,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverrideAvoidsOverlapOnSelectedNode)
     // An overridden scratchpad does not overlap another scratchpad on a selected node.
     distributed::MeshDevice& fixture_device = *mesh_device_;
     auto spec = test_helpers::MakeScratchpadOverrideWithProbesForTest();
-    auto program = MakeProgramFromSpec(fixture_device, spec);
+    Program program(fixture_device, spec);
     const auto& shared = test_helpers::ScratchpadBindingForTest(program, "a");
     const auto& reserved_probe = test_helpers::ScratchpadBindingForTest(program, "probe_reserved");
     EXPECT_GE(shared.allocated_address, reserved_probe.allocated_address + reserved_probe.size_bytes);
@@ -137,7 +137,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverrideDoesNotReserveExcludedNodes)
     // Storage on an excluded node does not raise the overridden scratchpad's allocation address.
     distributed::MeshDevice& fixture_device = *mesh_device_;
     auto spec = test_helpers::MakeScratchpadOverrideWithProbesForTest();
-    auto program = MakeProgramFromSpec(fixture_device, spec);
+    Program program(fixture_device, spec);
     const auto& shared = test_helpers::ScratchpadBindingForTest(program, "a");
     const auto& excluded = program.impl().get_kernel_by_spec_name("b")->scratchpad_binding_handles()[1];
     EXPECT_LT(shared.allocated_address, excluded.allocated_address + excluded.size_bytes);
@@ -147,9 +147,9 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverrideRepeatedArgsDeliverEveryBind
     // Repeated runtime argument updates keep the shared address available to every binding.
     distributed::MeshDevice& fixture_device = *mesh_device_;
     auto spec = test_helpers::MakeScratchpadOverrideWithProbesForTest();
-    auto program = MakeProgramFromSpec(fixture_device, spec);
-    SetProgramRunArgs(program, {});
-    SetProgramRunArgs(program, {});
+    Program program(fixture_device, spec);
+    program.set_program_run_args({});
+    program.set_program_run_args({});
     const auto address = test_helpers::ScratchpadBindingForTest(program, "a").allocated_address;
     for (const auto* name : {"a", "b", "c"}) {
         const auto kernel = program.impl().get_kernel_by_spec_name(name);
@@ -162,7 +162,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverrideReallocationPreservesAddress
     // Reallocating an unchanged program preserves the shared scratchpad address.
     distributed::MeshDevice& fixture_device = *mesh_device_;
     auto spec = test_helpers::MakeScratchpadOverrideWithProbesForTest();
-    auto program = MakeProgramFromSpec(fixture_device, spec);
+    Program program(fixture_device, spec);
     const auto address = test_helpers::ScratchpadBindingForTest(program, "a").allocated_address;
     program.impl().invalidate_dataflow_buffer_allocation();
     program.impl().compile_and_allocate(&fixture_device, false);
@@ -174,10 +174,10 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverrideAddressIsRepatchedAfterDFBRe
     // Growing a DFB moves the scratchpad and supplies the new address to every binding.
     distributed::MeshDevice& fixture_device = *mesh_device_;
     auto spec = test_helpers::MakeScratchpadWithResizableDFBForTest();
-    auto program = MakeProgramFromSpec(fixture_device, spec);
+    Program program(fixture_device, spec);
     const auto before = test_helpers::ScratchpadBindingForTest(program, "dm_kernel").allocated_address;
     ProgramRunArgs args{.dfb_run_overrides = {{.dfb = DFBSpecName{"dfb_0"}, .num_entries = 128}}};
-    SetProgramRunArgs(program, args);
+    program.set_program_run_args(args);
     program.impl().compile_and_allocate(&fixture_device, false);
     const auto& first = test_helpers::ScratchpadBindingForTest(program, "dm_kernel");
     const auto second = program.impl().get_kernel_by_spec_name("second");
@@ -198,7 +198,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverrideValidatesL1OnSelectedNodes) 
     spec.scratchpads[0].advanced_options.override_placement = reserved;
     spec.scratchpads[0].advanced_options.allow_instance_multi_binding = true;
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        [&] { Program(fixture_device, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("beyond max L1 size")));
 }
 
@@ -208,7 +208,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverrideRequiresMultiBindingPermissi
     auto spec = test_helpers::MakeTwoScratchpadBindersForTest(tt::ARCH::QUASAR);
     spec.scratchpads[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}));
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        [&] { Program(fixture_device, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("allow_instance_multi_binding")));
 }
 
@@ -218,7 +218,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverrideAllowsSharedDMStorage) {
     auto spec = test_helpers::MakeTwoScratchpadBindersForTest(tt::ARCH::QUASAR);
     spec.scratchpads[0].advanced_options = {
         .allow_instance_multi_binding = true, .override_placement = CoreRangeSet(CoreRange({0, 0}))};
-    auto program = MakeProgramFromSpec(fixture_device, spec);
+    Program program(fixture_device, spec);
     const auto& first = test_helpers::ScratchpadBindingForTest(program, "dm_kernel");
     EXPECT_NE(first.allocated_address, 0u);
     EXPECT_EQ(test_helpers::ScratchpadBindingForTest(program, "second").allocated_address, first.allocated_address);
@@ -231,7 +231,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverridePreservesGen2SharingRestrict
     spec.scratchpads[0].advanced_options = {
         .allow_instance_multi_binding = true, .override_placement = CoreRangeSet(CoreRange({0, 0}))};
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        [&] { Program(fixture_device, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("only between DM kernels on Gen2")));
 }
 
@@ -242,7 +242,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverrideIgnoresExcludedSharing) {
     spec.work_units.push_back(MakeMinimalWorkUnit("selected", NodeCoord{1, 0}, {"dm_kernel"}));
     spec.scratchpads[0].advanced_options = {
         .allow_instance_multi_binding = true, .override_placement = CoreRangeSet(CoreRange({1, 0}))};
-    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device, spec));
+    EXPECT_NO_THROW(Program(fixture_device, spec));
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_ScratchpadOverrideSharedDMAndCompute) {
@@ -251,7 +251,7 @@ TEST_F(ProgramSpecTestGen1, CPU_ScratchpadOverrideSharedDMAndCompute) {
     auto spec = test_helpers::MakeTwoScratchpadBindersForTest(tt::ARCH::WORMHOLE_B0, true);
     spec.scratchpads[0].advanced_options = {
         .allow_instance_multi_binding = true, .override_placement = CoreRangeSet(CoreRange({0, 0}))};
-    auto program = MakeProgramFromSpec(fixture_device, spec);
+    Program program(fixture_device, spec);
     EXPECT_EQ(
         test_helpers::ScratchpadBindingForTest(program, "dm_kernel").allocated_address,
         test_helpers::ScratchpadBindingForTest(program, "compute_kernel").allocated_address);

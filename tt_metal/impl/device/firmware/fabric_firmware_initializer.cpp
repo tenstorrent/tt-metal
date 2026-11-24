@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <exception>
 #include <optional>
 #include <string_view>
 
@@ -319,6 +320,8 @@ void FabricFirmwareInitializer::init(
         if (has_flag(fabric_manager, tt_fabric::FabricManagerMode::INIT_FABRIC) ||
             has_flag(fabric_manager, tt_fabric::FabricManagerMode::TERMINATE_FABRIC)) {
             compile_fabric_only();
+        } else {
+            build_fabric_programs(/*parallel=*/false, {}, /*compile=*/false);
         }
         return;
     }
@@ -363,6 +366,8 @@ void FabricFirmwareInitializer::init(
         log_info(tt::LogMetal, "Compiling fabric to setup fabric context for fabric termination");
         build_fabric_programs(/*parallel=*/false);
     } else {
+        // The fabric manager launched the routers; build them again, uncompiled, for their channel layouts.
+        build_fabric_programs(/*parallel=*/false, {}, /*compile=*/false);
         log_info(tt::LogMetal, "Fabric initialized through Fabric Manager");
     }
 }
@@ -512,29 +517,51 @@ void FabricFirmwareInitializer::for_each_device(
     }
 }
 
-void FabricFirmwareInitializer::build_fabric_programs(bool parallel, const std::function<void(size_t)>& on_compiled) {
+void FabricFirmwareInitializer::build_fabric_programs(
+    bool parallel, const std::function<void(size_t)>& on_compiled, bool compile) {
     // Each task writes only its own slot, and the vector is not resized while tasks are running.
     fabric_programs_.clear();
     fabric_programs_.resize(devices_.size());
-    // One session per launch, created on this thread before the per-device builds that read it.
-    build_session_ = tt::tt_fabric::begin_fabric_build_session(descriptor_->env_impl());
-    for_each_device(parallel, [this](size_t i) { fabric_programs_[i] = compile_fabric(devices_[i]); }, on_compiled);
+    // Every device's routers exist, and have published their channel layouts, before any router kernel is created.
+    std::vector<std::optional<tt::tt_fabric::FabricDeviceBuild>> builds(devices_.size());
+    std::exception_ptr phase1_error;
+    try {
+        // One session per launch, created on this thread before the per-device builds that read it.
+        build_session_ = tt::tt_fabric::begin_fabric_build_session(descriptor_->env_impl());
+        if (!build_session_) {
+            return;
+        }
+        for_each_device(parallel, [this, &builds](size_t i) { builds[i] = build_fabric(devices_[i]); });
+    } catch (...) {
+        // the other ranks are on their way to the exchange: fail there, with them
+        phase1_error = std::current_exception();
+    }
+    tt::tt_fabric::exchange_fabric_router_channel_layouts(descriptor_->env_impl(), phase1_error);
+    if (!compile) {
+        return;
+    }
+    for_each_device(
+        parallel,
+        [this, &builds](size_t i) { fabric_programs_[i] = compile_fabric(devices_[i], std::move(builds[i])); },
+        on_compiled);
 }
 
-std::unique_ptr<Program> FabricFirmwareInitializer::compile_fabric(Device* dev) const {
-    if (!build_session_) {
-        return nullptr;
-    }
-    auto fabric_program = tt::tt_fabric::create_and_compile_fabric_program(
+std::optional<tt::tt_fabric::FabricDeviceBuild> FabricFirmwareInitializer::build_fabric(Device* dev) const {
+    return tt::tt_fabric::build_fabric_routers(
         descriptor_->env_impl(),
         descriptor_->metal_context().get_dispatch_core_manager().get_dispatch_core_config(),
         dev,
         *build_session_);
-    if (!fabric_program) {
+}
+
+std::unique_ptr<Program> FabricFirmwareInitializer::compile_fabric(
+    Device* dev, std::optional<tt::tt_fabric::FabricDeviceBuild> build) const {
+    if (!build) {
         // Compile failure mostly comes from Nebula (TG)
         log_trace(tt::LogMetal, "Did not build fabric on Device {}", dev->id());
-        return fabric_program;
+        return nullptr;
     }
+    auto fabric_program = tt::tt_fabric::compile_fabric_program(descriptor_->env_impl(), dev, std::move(*build));
     fabric_program->impl().finalize_offsets(dev);
     return fabric_program;
 }
@@ -590,16 +617,17 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
 
 void FabricFirmwareInitializer::compile_fabric_only() {
     // ERISC debug builds run from L1 and may exceed the fabric router's L1 budget.
-    // Skipping only leaves the cache cold.
-    if (!rtoptions_.get_erisc_iram_enabled()) {
+    // Skipping only leaves the cache cold. The routers are still built, so this rank reaches the layout exchange.
+    const bool compile = rtoptions_.get_erisc_iram_enabled();
+    if (compile) {
+        log_info(tt::LogMetal, "Compiling fabric on mock devices (no router programming or sync)");
+    } else {
         log_info(tt::LogMetal, "Skipping mock fabric compile: erisc IRAM disabled by debug tooling");
-        return;
     }
-    log_info(tt::LogMetal, "Compiling fabric on mock devices (no router programming or sync)");
 
     // Serial on purpose: the shared tensix mux config mutates state from a const getter, which
     // races when devices compile in parallel.
-    build_fabric_programs(/*parallel=*/false);
+    build_fabric_programs(/*parallel=*/false, {}, compile);
 }
 
 void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms) const {

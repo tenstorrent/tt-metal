@@ -46,7 +46,9 @@ fixed inside a `PerfConfig` call: read the code for those (`perf-test`,
   `_quasar`. One lumped wrapper cannot pair with several functional families;
   split it.
 - `CROSS_ARCH_FUNCTION_EXCEPTIONS` pairs a function that lives in a different
-  module on the other side.
+  module on the other side. Use it only for that. Two modules of one op whose
+  stems differ (`pack_dest_bank` against `pack_l1_acc`) are a naming bug: rename
+  the module (`perf-test`, "Renames").
 
 **Axes**
 
@@ -57,9 +59,11 @@ fixed inside a `PerfConfig` call: read the code for those (`perf-test`,
   `formats_dest_acc.formats.input` and never meet. Tuples flatten to type
   names (`str`, `MathOperation`), which collide across ops. Unbundle the test
   axes; do not special-case a dataclass in the comparer.
-- The comparer joins `math_op` with `mathop`, and splits a tuple axis whose
-  name is exactly the other side's axes (`dest_sync_dest_acc`) when each slot
-  has the same type. It does not read schema `aliases`.
+- The comparer joins axes by exact name; `AXIS_ALIASES` is empty (a spelling
+  mismatch is fixed in the test, see the table below). It splits a tuple axis whose name is exactly
+  the other side's axes (`dest_sync_dest_acc`) when each slot has the same
+  type. It does not read schema `aliases`; those serve the perf gate
+  (`perf-regression-check`).
 - Ignored: only the measurement axes `run_types`, `loop_factor`,
   `iterations`, `is_perf`. Everything else is coverage.
 
@@ -80,6 +84,7 @@ and reloads already-imported modules. Pass Quasar paths as
    | Functional-only value | perf has no tilize | share the sweep (`perf-test`, "Python") |
    | Functional-only axis that changes the MOP | `num_faces` swept only in functional | share it; perf must measure each MOP functional checks |
    | Perf-only packaging | a shared sweep multiplied by the run types is too big | narrow in the perf module, as below |
+   | Same axis, different spelling | `math_op` against `mathop`, `reduce_pool` against `pool_type` | rename in the test (`perf-test`, "Canonical axis names"); never alias in the comparer |
    | Documented perf generator | Quasar `PERF_TILE_SIZES`, `DestSync.Half` | keep; it is the architecture's documented narrowing |
    | Functional-only axis | `runtime(...)` axes such as `tile_indices`, edge stimuli | keep; not a separate MOP |
 
@@ -104,6 +109,15 @@ A keyword after `**FLOAT_SWEEP` for a key the dict already holds raises
 assertion. Pin a perf axis that the kernel ignores (for example
 `approx_mode=No` for kernels that never read it) instead of multiplying
 builds by it.
+
+### Unbundling an existing generator
+
+A generator that returns a list of tuples becomes flat axes with
+`helpers.param_config.flat_axes(names, combinations)`:
+`@parametrize(**flat_axes(NAMES, COMBOS))`. The cross product equals the
+original list as a set of cases; the order can differ, because cases are grouped
+by first-seen value. Columns wrapped in `runtime()` stay runtime-only. Prefer a
+callable axis (`dest_acc=lambda formats: ...`) when the dependency is simple.
 
 ## Commands
 

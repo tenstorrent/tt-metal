@@ -544,19 +544,6 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
             "spec_multi_pos_tiles={} must equal PNHt={} (one 32-row Q tile per candidate)",
             spec_multi_pos_tiles,
             PNHt_q);
-        if (spec_packed) {
-            TT_FATAL(
-                spec_pack_heads <= tt::constants::FACE_HEIGHT &&
-                    spec_multi_pos_tiles * spec_pack_stride <= tt::constants::TILE_HEIGHT,
-                "spec_pack_heads={}: {} candidates x {} rows do not fit one packed q tile",
-                spec_pack_heads,
-                spec_multi_pos_tiles,
-                spec_pack_stride);
-            TT_FATAL(!is_output_sharded, "spec_pack_heads requires an interleaved output");
-            TT_FATAL(
-                q_df == tt::DataFormat::Float16_b && out_df == tt::DataFormat::Float16_b,
-                "spec_pack_heads moves bf16 face rows: Q and the output must be BFLOAT16");
-        }
         TT_FATAL(q_heads_parallel_factor == 1, "spec_multi_pos_tiles requires q_heads_parallel_factor == 1");
         TT_FATAL(num_heads_per_core == 1, "spec_multi_pos_tiles requires num_heads_per_core == 1");
         // The mask CB is now push/pop cycled (one block per masked chunk) instead of pushed

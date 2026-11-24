@@ -14,11 +14,9 @@ a row's last written block.
 """
 
 import math
-import time
 
 import pytest
 import torch
-from loguru import logger
 
 import ttnn
 
@@ -87,13 +85,14 @@ class _Case:
         self.pos_tt = ttnn.from_torch(self.pos, dtype=ttnn.int32, device=device)
         self.q_tt = ttnn.from_torch(self.q, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
-    def call(self, cfg, pack, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+    def call(self, cfg, pack, memory_config=ttnn.DRAM_MEMORY_CONFIG, attention_sink=None):
         return ttnn.transformer.paged_scaled_dot_product_attention_decode(
             self.q_tt,
             self.k_tt,
             self.v_tt,
             page_table_tensor=self.pt_tt,
             cur_pos_tensor=self.pos_tt,
+            attention_sink=attention_sink,
             scale=HD**-0.5,
             program_config=cfg,
             memory_config=memory_config,
@@ -191,14 +190,27 @@ def test_spec_pack_heads_l1_output(device):
 
 
 @pytest.mark.parametrize(
-    "Tg, NH, match",
-    [(4, 9, "do not fit one"), (2, 17, "must be <=")],
-    ids=["rows_do_not_fit", "heads_past_face"],
+    "Tg, NH, bad, match",
+    [
+        (4, 9, None, "do not fit one"),
+        (2, 17, None, "must be <="),
+        (4, 3, "attention_sink", "not supported with attention_sink"),
+    ],
+    ids=["rows_do_not_fit", "heads_past_face", "attention_sink"],
 )
-def test_spec_pack_heads_refuses_a_shape_that_does_not_pack(device, expect_error, Tg, NH, match):
+def test_spec_pack_heads_refuses_a_shape_that_does_not_pack(device, expect_error, Tg, NH, bad, match):
+    """A packed call refuses candidate rows that do not fit one tile or pass the top faces, and an attention sink: the
+    reader loads only the sink's unpacked row-tile 0."""
     case = _Case(device, Tg, NH, 2, [100, 200], ttnn.bfloat8_b, seed=3)
+    sink_tt = None
+    if bad == "attention_sink":
+        sink_tt = ttnn.from_torch(
+            torch.zeros(Tg * TILE, TILE), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
     with expect_error(RuntimeError, match):
-        case.call(_cfg(device, 2, 0), pack=True)
+        case.call(_cfg(device, 2, 0), pack=True, attention_sink=sink_tt)
+    if sink_tt is not None:
+        ttnn.deallocate(sink_tt)
     case.free()
 
 
@@ -218,27 +230,4 @@ def test_spec_pack_heads_refuses_without_spec_mode(device, expect_error):
             spec_pack_heads=3,
         )
     ttnn.deallocate(pt_rows)
-    case.free()
-
-
-@pytest.mark.parametrize("first", [1990, 32765], ids=["2k", "32k"])
-def test_spec_pack_heads_latency(device, first):
-    """Per-call time at the 8-user TP=8 verify shape, unpacked and packed, calls back to back (reported, not a gate)."""
-    case = _Case(device, 4, 3, 8, [first - 8 * i for i in range(8)], ttnn.bfloat8_b, seed=11)
-    cfg = _cfg(device, 8, 0)
-    n = 50
-    times = {False: [], True: []}
-    for pack in (False, True, False, True):
-        for _ in range(3):
-            ttnn.deallocate(case.call(cfg, pack, memory_config=ttnn.L1_MEMORY_CONFIG))
-        ttnn.synchronize_device(device)
-        t0 = time.perf_counter()
-        for _ in range(n):
-            ttnn.deallocate(case.call(cfg, pack, memory_config=ttnn.L1_MEMORY_CONFIG))
-        ttnn.synchronize_device(device)
-        times[pack].append((time.perf_counter() - t0) / n * 1e6)
-    logger.info(
-        f"spec SDPA, 8 groups x Tg 4 x 3 heads near position {first}: unpacked "
-        f"{[round(t, 1) for t in times[False]]} us, packed {[round(t, 1) for t in times[True]]} us per call"
-    )
     case.free()

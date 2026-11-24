@@ -196,8 +196,16 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t s) {
     }
 #ifdef GDN_RING_PAGE_IDX
     const uint32_t state_page0 = blk;
+#ifdef GDN_RING_POOL2
+    ASSERT(page_run_in_one_pool(state_page0, KV, GDN_RING_POOL2, GDN_RING_PAGES));
+#else
+    ASSERT(page_run_in_one_pool(state_page0, KV, 0, GDN_RING_PAGES));
+#endif
 #else
     const uint32_t state_page0 = blk * KV;
+#endif
+#if GDN_HIST_PAGED
+    ASSERT(page_run_in_one_pool(hist_page0, 4, 0, GDN_HIST_PAGES));
 #endif
     // this block's KVs tiles of the start state at page `first` (VB = 1: the whole state in one run)
     auto read_state_from = [&](const auto& acc, uint32_t first) {

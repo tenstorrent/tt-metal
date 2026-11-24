@@ -54,6 +54,61 @@ def runtime(value):
     return _RuntimeMarker(value)
 
 
+def flat_axes(names: Tuple[str, ...], combinations: List[tuple]) -> dict:
+    """Split a list of combination tuples into flat, dependent ``parametrize`` axes.
+
+    ``names[i]`` names column ``i`` of every tuple. The returned dict is meant to be
+    splatted into ``parametrize(**flat_axes(...))``: every axis is a callable that
+    depends on all earlier axes and returns the values the combinations allow for
+    them, so the cross product equals ``combinations`` as a set of cases (the order
+    can differ: cases are grouped by first-seen value) while each parameter keeps its harness name. Columns wrapped in
+    ``runtime()`` stay runtime-only axes.
+    """
+    runtime_columns = {
+        i
+        for i in range(len(names))
+        if any(isinstance(combo[i], _RuntimeMarker) for combo in combinations)
+    }
+
+    def plain(value):
+        return value.value if isinstance(value, _RuntimeMarker) else value
+
+    def _same_value(a, b):
+        # Same type too, so 0/False and 1/1.0 stay separate cases.
+        return type(a) is type(b) and a == b
+
+    # Prefix tree: node = [(value, child_node), ...] in first-seen order.
+    root: list = []
+    for combo in combinations:
+        node = root
+        for value in (plain(item) for item in combo):
+            for seen, child in node:
+                if _same_value(seen, value):
+                    node = child
+                    break
+            else:
+                child = []
+                node.append((value, child))
+                node = child
+
+    def make_axis(index: int):
+        def axis(*prefix):
+            node = root
+            for value in prefix:
+                node = next(child for seen, child in node if _same_value(seen, value))
+            return [value for value, _ in node]
+
+        axis.__signature__ = inspect.Signature(
+            [
+                inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+                for name in names[:index]
+            ]
+        )
+        return runtime(axis) if index in runtime_columns else axis
+
+    return {name: make_axis(i) for i, name in enumerate(names)}
+
+
 checked_formats_and_dest_acc = {}
 
 DEST_SYNC_TILE_LIMITS = {

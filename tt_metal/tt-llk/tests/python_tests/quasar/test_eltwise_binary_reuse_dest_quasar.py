@@ -5,7 +5,11 @@
 # Test for eltwise binary operations with reuse_dest on Quasar.
 import pytest
 import torch
-from helpers.constraints import get_perf_math_operations, get_valid_math_fidelities
+from helpers.constraints import (
+    REUSE_DEST_MATH_OPS,
+    get_perf_math_operations,
+    get_valid_math_fidelities,
+)
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     EltwiseBinaryGolden,
@@ -70,11 +74,7 @@ TILE_DIMENSIONS = [32, 32]
 
 
 def reuse_dest_mathops(formats, *, is_perf=False):
-    supported_mathops = [
-        MathOperation.Elwadd,
-        MathOperation.Elwsub,
-        MathOperation.Elwmul,
-    ]
+    supported_mathops = REUSE_DEST_MATH_OPS
     if is_perf:
         return [
             mathop
@@ -89,7 +89,7 @@ def _reuse_dest_tile_count(dimensions) -> int:
     return (dimensions[0] // tile_rows) * (dimensions[1] // tile_cols)
 
 
-def valid_output_dimensions(formats, dest_sync_mode, input_dimensions) -> list:
+def valid_output_dimensions(formats, dest_sync, input_dimensions) -> list:
     """Output dims compatible with reuse_dest for a given input size, format and dest_sync.
 
     Three constraints, all decidable at collection time so incompatible combinations are
@@ -109,7 +109,7 @@ def valid_output_dimensions(formats, dest_sync_mode, input_dimensions) -> list:
             continue
         try:
             num_blocks, _ = get_num_blocks_and_num_tiles_in_block(
-                dest_sync_mode,
+                dest_sync,
                 DestAccumulation.No,
                 formats,
                 out_dims,
@@ -133,7 +133,7 @@ def valid_output_dimensions(formats, dest_sync_mode, input_dimensions) -> list:
         EltwiseBinaryReuseDestType.DEST_TO_SRCA,
         EltwiseBinaryReuseDestType.DEST_TO_SRCB,
     ],
-    dest_sync_mode=lambda: quasar_dest_sync_modes(is_perf=False),
+    dest_sync=lambda: quasar_dest_sync_modes(is_perf=False),
     input_dimensions=runtime(INPUT_DIMENSIONS),
     output_dimensions=runtime(valid_output_dimensions),
     run_types=[[PerfRunType.L1_TO_L1]],
@@ -144,7 +144,7 @@ def test_eltwise_binary_reuse_dest_quasar(
     mathop,
     reuse_dest_type,
     math_fidelity,
-    dest_sync_mode,
+    dest_sync,
     input_dimensions,
     output_dimensions,
     run_types,
@@ -174,7 +174,7 @@ def test_eltwise_binary_reuse_dest_quasar(
 
     tile_dimensions_tuple = (tile_rows, tile_cols)
     output_num_blocks, output_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        dest_sync_mode,
+        dest_sync,
         DestAccumulation.No,
         formats,
         output_dimensions,
@@ -334,7 +334,7 @@ def test_eltwise_binary_reuse_dest_quasar(
             MATH_FIDELITY(math_fidelity),
             MATH_OP(mathop=mathop),
             REUSE_DEST_TYPE(reuse_dest_type),
-            DEST_SYNC(dest_sync_mode),
+            DEST_SYNC(dest_sync),
         ],
         "runtimes": [
             generate_input_dim(input_dimensions, input_dimensions),
@@ -413,7 +413,7 @@ REUSE_DEST_FLOAT32_FORMATS = [
         EltwiseBinaryReuseDestType.DEST_TO_SRCA,
         EltwiseBinaryReuseDestType.DEST_TO_SRCB,
     ],
-    dest_sync_mode=lambda: quasar_dest_sync_modes(is_perf=False),
+    dest_sync=lambda: quasar_dest_sync_modes(is_perf=False),
     input_dimensions=runtime(INPUT_DIMENSIONS),
     output_dimensions=runtime(valid_output_dimensions),
 )
@@ -422,7 +422,7 @@ def test_eltwise_binary_reuse_dest_float32_quasar(
     mathop,
     reuse_dest_type,
     math_fidelity,
-    dest_sync_mode,
+    dest_sync,
     input_dimensions,
     output_dimensions,
 ):
@@ -431,7 +431,7 @@ def test_eltwise_binary_reuse_dest_float32_quasar(
         mathop,
         reuse_dest_type,
         math_fidelity,
-        dest_sync_mode,
+        dest_sync,
         input_dimensions,
         output_dimensions,
         [PerfRunType.L1_TO_L1],

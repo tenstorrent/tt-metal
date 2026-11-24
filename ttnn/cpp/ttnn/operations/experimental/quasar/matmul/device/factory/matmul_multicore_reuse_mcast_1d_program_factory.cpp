@@ -2122,7 +2122,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     /* in2 */
     uint32_t in2_single_tile_size = in0_single_tile_size;
     uint32_t in2_CB_tiles = (ring_size - 1) * in0_CB_tiles;  // All shards except local
-    uint32_t in2_CB_size = in2_CB_tiles * in2_single_tile_size;
+    // A one-core ring has no remote shards, but a circular buffer cannot be zero-sized.
+    uint32_t in2_CB_size = std::max(in2_CB_tiles, 1u) * in2_single_tile_size;
 
     /* out */
     uint32_t out_block_tiles = per_core_M * per_core_N;
@@ -5826,6 +5827,18 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
         .math_approx_mode = math_approx_mode,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = false});
+    // With a 32-bit DST every consumed 32-bit DFB needs an explicit unpack mode, and cb_intermed0 holds 32-bit
+    // partials under fp32 accumulation. UnpackToSrc, unlike matmul_unified's UnpackToDest: the fused bias add
+    // here reads the partials as an FPU SrcA operand, and on Quasar UnpackToDest is kernel-wide (UnpackToDestEn
+    // sends every copy_tile through Dest, see #62102). The cost is that the reload between K blocks rounds
+    // through SrcA (TF32) and loses fp32 precision at every block boundary. The non-Quasar mcast factories
+    // avoid that loss by marking interm0 UnpackToDest (or, with a fused bias, an alias of it) (#50250).
+    const bool interm0_is_32bit = interm0_data_format == tt::DataFormat::Float32 ||
+                                  interm0_data_format == tt::DataFormat::Int32 ||
+                                  interm0_data_format == tt::DataFormat::UInt32;
+    if (fp32_dest_acc_en && interm0_is_32bit) {
+        compute_hw_config.unpack_modes.emplace(RO_INTERM0_DFB, m2::UnpackMode::UnpackToSrc);
+    }
 
     // ---- in0 sender kernel CTAs (named) ----
     auto make_in0_sender_cta = [&](uint32_t core_has_output_block_work,
@@ -6859,6 +6872,18 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
         .math_approx_mode = math_approx_mode,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = false});
+    // With a 32-bit DST every consumed 32-bit DFB needs an explicit unpack mode, and cb_intermed0 holds 32-bit
+    // partials under fp32 accumulation. UnpackToSrc, unlike matmul_unified's UnpackToDest: the fused bias add
+    // here reads the partials as an FPU SrcA operand, and on Quasar UnpackToDest is kernel-wide (UnpackToDestEn
+    // sends every copy_tile through Dest, see #62102). The cost is that the reload between K blocks rounds
+    // through SrcA (TF32) and loses fp32 precision at every block boundary. The non-Quasar mcast factories
+    // avoid that loss by marking interm0 UnpackToDest (or, with a fused bias, an alias of it) (#50250).
+    const bool interm0_is_32bit = interm0_data_format == tt::DataFormat::Float32 ||
+                                  interm0_data_format == tt::DataFormat::Int32 ||
+                                  interm0_data_format == tt::DataFormat::UInt32;
+    if (fp32_dest_acc_en && interm0_is_32bit) {
+        compute_hw_config.unpack_modes.emplace(RO_INTERM0_DFB, m2::UnpackMode::UnpackToSrc);
+    }
 
     // The in1 sender multicasts weights/bias over a dest rectangle whose start/end are swapped based
     // on in1_noc (below). The in1 sender/receiver writer kernels MUST issue NoC ops on that same NOC,
@@ -7245,11 +7270,14 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
                 in0_noc,
                 /*disable_dfb_implicit_sync_for_all=*/true),
         });
+        // The noop compute does not bind the partials DFB, and unpack_modes may only name bound DFBs.
+        m2::ComputeHardwareConfig noop_compute_hw_config = compute_hw_config;
+        noop_compute_hw_config.unpack_modes.erase(RO_INTERM0_DFB);
         kernels.push_back(m2::KernelSpec{
             .unique_id = RO_NOOP_COMPUTE_KERNEL,
             .source = std::filesystem::path(NOOP_COMPUTE_KERNEL_PATH),
             .dfb_bindings = std::move(noop_compute_dfb),
-            .hw_config = compute_hw_config,
+            .hw_config = std::move(noop_compute_hw_config),
         });
         work_units.push_back(m2::WorkUnitSpec{
             .name = "wu_noop",
