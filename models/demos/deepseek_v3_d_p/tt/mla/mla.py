@@ -2612,7 +2612,7 @@ class ttMLA:
             stripe_chunk=plan.stripe_chunk,
             max_rows=plan.max_rows,
             part=SparseKvPushPart.PREFIX,
-            num_links=self.ccl_num_links,
+            num_links=self._push.prefetch_links,
             sp_axis=self.sp_axis,
             **slot,
             ready_semaphore=self._push.ready_semaphore,

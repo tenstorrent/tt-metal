@@ -93,6 +93,9 @@ class SparseKvPushPlanner:
     def __init__(self, mesh_device, links: int):
         self.mesh_device = mesh_device
         self.links = links
+        # Links of the prefix push beside attention. It has slack there (it ends long before attention), while every
+        # core it takes slows attention, so it runs on one link's cores and leaves the rest to attention.
+        self.prefetch_links = min(links, 1)
         grid = mesh_device.compute_with_storage_grid_size()
         cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
         l1_small = ttnn.get_memory_view(mesh_device, ttnn.BufferType.L1_SMALL).total_bytes_per_bank > 0
@@ -122,21 +125,16 @@ class SparseKvPushPlanner:
     def grids(self, query_rows: int):
         """(attention, push) core grids for sparse_sdpa beside the next layer's prefix push.
 
-        Cores past the fewest that keep attention's busiest core at its token count only add DRAM contention with the
-        push, so attention takes that many whole columns. The push sits in the remaining columns' rows furthest from
-        the Ethernet row, where it contends least with attention."""
+        The push takes the fewest whole columns that hold its cores (prefetch_links links), in their rows furthest from
+        the Ethernet row; attention takes every other column. More attention cores make sparse_sdpa faster even when
+        its busiest core keeps the same token count (GLM, 160 rows: 100 cores beat 80), and the push still finishes
+        well before attention on its one link."""
         grid = self.mesh_device.compute_with_storage_grid_size()
-        push_cores = self.links * PUSH_CORES_PER_LINK
-        # Attention's busiest core if it took every core the push leaves free...
-        tokens_per_core = divup(query_rows, grid.x * grid.y - push_cores)
-        # ...and the fewest whole columns that keep that load (GLM: 160 rows, 2 per core, 80 cores = 8 columns), but no
-        # more than leave the push its cores (e.g. 96 rows would take 10 columns, the push needs 3 of 12).
-        push_cols_needed = divup(push_cores, grid.y)
-        attention_cols = min(divup(divup(query_rows, tokens_per_core), grid.y), grid.x - push_cols_needed)
-        if attention_cols <= 0:
+        push_cores = self.prefetch_links * PUSH_CORES_PER_LINK
+        push_cols = divup(push_cores, grid.y)
+        attention_cols = grid.x - push_cols
+        if attention_cols <= 0 or query_rows <= 0:
             raise ValueError(f"no room for {push_cores} push cores beside attention on a {grid.x}x{grid.y} grid")
-        # The push takes the bottom rows of the remaining columns.
-        push_cols = grid.x - attention_cols
         push_rows = divup(push_cores, push_cols)
         attention = ttnn.CoreRangeSet(
             [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(attention_cols - 1, grid.y - 1))]
