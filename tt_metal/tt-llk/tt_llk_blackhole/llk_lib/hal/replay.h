@@ -52,7 +52,7 @@ constexpr lltt::ExecBool exec_while_recording(const RecordBehavior behavior)
 
 constexpr std::uint32_t get_operation(const BufferRange range)
 {
-    return TT_OP_REPLAY(range.start, range.count, false, false);
+    return TT_OP_REPLAY(range.start, range.count, false /*execute_while_loading*/, false /*load_mode*/);
 }
 
 template <BufferRange Range, RecordBehavior Behavior>
@@ -93,8 +93,10 @@ inline __attribute__((always_inline, flatten)) void record(BeginRecording &&begi
  * @tparam Args: Arguments forwarded to callable.
  * @param callable: Instruction-emitting callable invoked immediately after recording begins.
  * @param args: Arguments forwarded to callable.
- * @note Ensure callable produces exactly Range.count instructions after MOP expansion. Recording has no
- *       explicit terminator; a mismatch records instructions before or after the intended sequence.
+ * @note Ensure callable produces exactly Range.count instructions after MOP expansion. Recording starts right
+ *       after the REPLAY and has no terminator: with fewer, the caller's next Tensix instructions are recorded
+ *       too (in RecordOnly they are not executed, and with ENABLE_GATHERING gathering is re-enabled mid-load);
+ *       with more, the surplus is not recorded and executes immediately, even in RecordOnly.
  * @note Ensure the recorded body never contains a REPLAY; a REPLAY cannot be one of the
  *       instructions it loads. In RecordOnly also ensure it contains no MOP or MOP_CFG;
  *       a load-only REPLAY may record only individual single-store pushes.
@@ -117,8 +119,10 @@ inline __attribute__((always_inline, flatten)) void record(Callable &&callable, 
  * @param range: Buffer range receiving the sequence.
  * @param callable: Instruction-emitting callable invoked immediately after recording begins.
  * @param args: Arguments forwarded to callable.
- * @note Ensure callable produces exactly range.count instructions after MOP expansion. Recording has no
- *       explicit terminator; a mismatch records instructions before or after the intended sequence.
+ * @note Ensure callable produces exactly range.count instructions after MOP expansion. Recording starts right
+ *       after the REPLAY and has no terminator: with fewer, the caller's next Tensix instructions are recorded
+ *       too (in RecordOnly they are not executed, and with ENABLE_GATHERING gathering is re-enabled mid-load);
+ *       with more, the surplus is not recorded and executes immediately, even in RecordOnly.
  * @note Ensure the recorded body never contains a REPLAY; a REPLAY cannot be one of the
  *       instructions it loads. In RecordOnly also ensure it contains no MOP or MOP_CFG;
  *       a load-only REPLAY may record only individual single-store pushes.
