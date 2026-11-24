@@ -87,15 +87,18 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
     // reader harts, each filling whole blocks (BLOCKED pattern, one block per thread in flight), and the writer
     // flushes once per block instead of per tile. Each thread's block is reserved in the input ring, so threads are
     // added only while the input ring plus the one-block output ring fit half of the L1 the allocator leaves free:
-    // a wide row gets fewer threads rather than more L1. Thread counts stay at 1, 2 or 4, the ones the block
-    // dealing is validated for. WH/BH keep one hart each and the one-block ring.
+    // a wide row gets fewer threads rather than more L1. A thread beyond the blocks a core holds has nothing to
+    // read and still costs its start-up, so the count is also capped by the blocks per core. Thread counts stay
+    // at 1, 2 or 4, the ones the block dealing is validated for. WH/BH keep one hart each and the one-block ring.
     const bool quasar_dm = device->arch() == tt::ARCH::QUASAR;
     const uint32_t block_bytes = ntiles_per_block * input_single_tile_size;
     uint32_t reader_threads = 1;
     if (quasar_dm) {
         const uint32_t ring_budget = ttnn::operations::data_movement::get_static_l1_space(a) / 2;
         const uint32_t blocks_in_budget = ring_budget / block_bytes;
-        reader_threads = blocks_in_budget >= 5 ? 4 : (blocks_in_budget >= 3 ? 2 : 1);
+        const uint32_t threads_in_budget = blocks_in_budget >= 5 ? 4 : (blocks_in_budget >= 3 ? 2 : 1);
+        const uint32_t threads_with_work = nblocks_per_core >= 4 ? 4 : (nblocks_per_core >= 2 ? 2 : 1);
+        reader_threads = std::min(threads_in_budget, threads_with_work);
     }
     DataflowBufferSpec input_dfb{
         .unique_id = INPUT_DFB,
