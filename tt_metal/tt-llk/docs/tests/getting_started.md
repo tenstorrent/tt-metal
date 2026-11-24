@@ -594,14 +594,20 @@ In-tree tests are unchanged: `conftest.py` still re-exports the arch skip marker
 
 An external suite does not need a tt-llk checkout on `sys.path`: the harness is also built as a wheel, `tt_llk_harness-<version>-py3-none-any.whl`. The nightly **LLK e2e Tests** workflow (`.github/workflows/llk-e2e.yaml`) builds it in its own job on every run, whether or not the tests passed, and keeps it for 30 days as the `llk-harness-wheel` artifact: the wheel and `requirements.txt`.
 
-From any directory, with no tt-metal checkout (needs the GitHub CLI, logged in):
+The steps below are the whole setup on a machine that has no tt-metal checkout. They need the GitHub CLI, logged in to an account that can read tenstorrent/tt-metal (`gh auth status` says whether it is).
 
-1. Download the newest wheel built from `main` into the current directory:
+1. Once per machine, define the `gh llk-wheel` command:
    ```bash
-   gh run download -R tenstorrent/tt-metal -n llk-harness-wheel "$(gh api 'repos/tenstorrent/tt-metal/actions/artifacts?name=llk-harness-wheel&per_page=30' \
-       -q '[.artifacts[] | select(.workflow_run.head_branch=="main" and (.expired|not))][0].workflow_run.id')"
+   gh alias set llk-wheel --clobber --shell 'gh run download -R tenstorrent/tt-metal -n llk-harness-wheel $(gh run list -R tenstorrent/tt-metal -w llk-e2e.yaml -b "${1:-main}" -s completed -L1 --json databaseId -q ".[].databaseId")'
    ```
-   For a wheel built from another branch (by a manual run of the workflow on it), put that branch's name in place of `main`.
+   It finds the newest completed run of the workflow on a branch and downloads that run's `llk-harness-wheel` artifact. `gh alias list` shows whether the machine already has it; setting it again is harmless.
+
+   Then, in the directory the wheel should land in:
+   ```bash
+   gh llk-wheel               # the newest wheel built from main
+   gh llk-wheel <branch>      # the newest wheel built from a branch, by a manual run of the workflow on it
+   ```
+   This leaves `tt_llk_harness-<version>-py3-none-any.whl` and `requirements.txt` in the current directory. "no artifact matches" means there is no wheel to get: the newest run of that branch built none (it was cancelled, or it predates the wheel job), or the branch never ran the workflow.
 
 2. Install it into the suite's environment:
    ```bash
