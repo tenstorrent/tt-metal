@@ -2645,6 +2645,17 @@ class TestJobOwnership:
         assert rc == 0 and time.time() - t0 < 20, text
         assert "a leak" not in text and "outcome=clean exit=0" in text, text
 
+    def test_no_pidfd_is_opened_when_nothing_is_left(self, tmp_path, monkeypatch):
+        from ttnn.distributed import ttrun as m
+
+        # pidfds are only for leftovers: a job that leaves nothing behind never opens one.
+        opened = []
+        real = m.os.pidfd_open
+        monkeypatch.setattr(m.os, "pidfd_open", lambda pid, flags=0: opened.append(pid) or real(pid, flags))
+        text, rc = self._logged_rc(lambda: m.run_launcher(["bash", "-c", "exit 0"], cwd=tmp_path))
+        assert rc == 0 and "outcome=clean exit=0" in text, text
+        assert opened == [], f"pidfds opened with nothing left: {opened}"
+
     def test_a_leftover_that_cannot_be_watched_is_left_alone_not_a_crash(self, tmp_path, monkeypatch):
         import errno
 

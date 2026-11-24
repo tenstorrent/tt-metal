@@ -984,6 +984,8 @@ class LaunchedJob:
         failed = self.proc is not None and self.proc.returncode not in (None, 0)
         stopping = self.forwarded or self.forced_why or self.stop_sent or self._abort_seen or failed
         settle_s = 0.0 if stopping else self.grace
+        if not self._survivors():
+            return  # nothing of the job is left: no pidfd is opened at all
         try:
             self._end_watched(stopping, settle_s)
         finally:
