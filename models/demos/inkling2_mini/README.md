@@ -32,6 +32,7 @@ Build tt-metal and activate its python env as usual. The scripts take their data
 |---|---|
 | `INKLING_CKPT` | the Hugging Face checkpoint directory (safetensors, config.json, tokenizer) |
 | `INKLING_MODE` | `default` or `fast`: which expert weights load (see "Run modes"; `--fast` in the demo) |
+| `INKLING_SPEC` | `1`: the demo also runs each prompt through speculative decode (`--spec`; see "Speculative decode") |
 | `INKLING_CACHE` | the converted weight cache the model loads (overrides the mode's) |
 | `INKLING_TILE_CACHE` | a cache with the experts as tiles, for the chunked prefill and its test (overrides the mode's) |
 | `INKLING_PF_GATE_BF16` | `0`: prefill keeps the loop gate messages and outputs fp32 (default `1`: bf16, faster) |
@@ -55,11 +56,16 @@ defaults in both modes, with the loop gate messages stored bf16 (`INKLING_PF_GAT
 
 ## Speculative decode (off by default)
 
-`tt/spec_generator.py` (`SpecGenerator.generate_rows`, `generate_rows_from`): a small drafter proposes 2 tokens, one
-verify pass checks them with the full model, and the accepted ones are kept. The tokens are the same as plain greedy
-decode. Nothing turns it on: the demo and the perf harness run the plain step. It needs the drafter
-weights: `python -m models.demos.inkling2_mini.convert.mtp` writes them once to `<cache dir>/mtp`, where both run
-modes find them (`$INKLING_MTP_CACHE` points elsewhere).
+A small drafter proposes 2 tokens, one verify pass checks them with the full model, and the accepted ones are kept.
+The tokens are the same as plain greedy decode; text the drafter predicts well comes out faster.
+
+| where | how |
+|---|---|
+| demo | `--spec` or `INKLING_SPEC=1`: each prompt also runs through spec decode; prints `spec_equals_plain`, tok/s |
+| code | `tt/spec_generator.py`: `SpecGenerator.generate_rows`, `generate_rows_from` |
+
+It needs the drafter weights: `python -m models.demos.inkling2_mini.convert.mtp` writes them once to
+`<cache dir>/mtp`, where both run modes find them (`$INKLING_MTP_CACHE` points elsewhere).
 
 Measured on one card, ms/token, 128 to 192 greedy tokens, plain = the default plain step in the same harness:
 

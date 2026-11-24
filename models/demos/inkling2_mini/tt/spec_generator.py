@@ -361,6 +361,28 @@ class SpecGenerator(Generator):
         return [int(x) for x in ttnn.to_torch(d.draft(d.anchor)).reshape(-1)[:7].tolist()]
 
 
+# DRAM free (GiB) after the model and the drafter that the verify steps need with their traces: 2-row passes;
+# 2- and 3-row passes. The far KV and the drafter context grow with max_ctx (19,584 + 12,288 B per token).
+VERIFY_NEED_GIB = (0.46, 0.74)
+
+
+def dram_free_gib(device):
+    v = ttnn.get_memory_view(device, ttnn.BufferType.DRAM)
+    return v.num_banks * v.total_bytes_free_per_bank / 2**30
+
+
+def verify_rows(device, max_ctx):
+    """Row counts of the verify steps that fit beside a built model + drafter: [2, 3], or [2] when DRAM is short
+    for the 3-row step. ValueError when not even the 2-row step fits."""
+    free = dram_free_gib(device)
+    if free < VERIFY_NEED_GIB[0]:
+        raise ValueError(
+            f"speculative decode does not fit at max_ctx {max_ctx}: {free:.2f} GiB DRAM free after the model and "
+            f"the drafter, the verify step needs {VERIFY_NEED_GIB[0]}"
+        )
+    return [2, 3] if free >= VERIFY_NEED_GIB[1] else [2]
+
+
 def build(device, max_ctx, log=print, mtp_root=None, k=7, **kw):
     """TappedModel + its drafter (Inkling2Model.__init__ never steps, so the drafter can be attached after)."""
     model = TappedModel(device, max_ctx=max_ctx, log=log, **kw)

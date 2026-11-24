@@ -87,29 +87,53 @@ def main():
         action="store_true",
         help="fast mode (also INKLING_MODE=fast): own3-l8 experts, ~1.5 ms/token faster decode, KL .0096 vs .0067",
     )
+    ap.add_argument(
+        "--spec",
+        action="store_true",
+        default=os.environ.get("INKLING_SPEC") == "1",
+        help="speculative decode (also INKLING_SPEC=1): a drafter proposes 2 tokens, one verify pass checks them; "
+        "the same tokens as plain greedy (checked here), more tokens per second. Needs the drafter weights "
+        "(convert.mtp) and a --max-ctx that leaves DRAM for it (default mode: up to ~150K)",
+    )
     args = ap.parse_args()
     if args.prompt is None and args.golden is None:
         ap.error("give --prompt, or --golden / INKLING_GOLDEN for the golden prompts")
     if args.prompt is not None and args.tokenizer is None:
         ap.error("--prompt needs --tokenizer or INKLING_CKPT")
+    if args.spec:  # the draft, verify and commit traces
+        args.trace_mib = max(args.trace_mib, 1024)
     res = {"max_ctx": args.max_ctx, "trace_mib": args.trace_mib}
     t0 = time.time()
     dev = open_device(trace_region_size=args.trace_mib << 20)
     try:
         res["dram_free_open_gib"] = dram_free(dev)[0]
         res["cache"] = str(modes.roots(args.fast)[0])
-        model = Inkling2Model(dev, root=res["cache"], max_ctx=args.max_ctx, log=lambda s: None)
+        if args.spec:
+            from models.demos.inkling2_mini.tt import spec_generator as SG
+            from models.demos.inkling2_mini.tt.verify import VerifyStep
+
+            model, drafter = SG.build(dev, args.max_ctx, log=lambda s: None, k=2, root=res["cache"])
+            drafter.head = drafter.make_head(ttnn.bfloat4_b)
+            drafter.top_probs = True
+            res["spec_rows"] = SG.verify_rows(dev, args.max_ctx)
+        else:
+            model = Inkling2Model(dev, root=res["cache"], max_ctx=args.max_ctx, log=lambda s: None)
         res["load_s"] = round(time.time() - t0, 1)
         res["dram_free_after_load_gib"], res["dram_largest_after_load_gib"] = dram_free(dev)
         print(json.dumps(res), flush=True)
 
-        if not args.skip_app_trace:
+        if not args.skip_app_trace and not args.spec:  # (the tapped model's apps run inside a step only)
             res.update(trace_one_app(model))
             print(json.dumps(res), flush=True)
 
-        gen = Generator(model)
-        t1 = time.time()
-        gen.capture()
+        if args.spec:
+            gen = SG.SpecGenerator(model, drafter, verify=[VerifyStep(model, r) for r in res["spec_rows"]])
+            t1 = time.time()
+            gen.capture_rows(1536)
+        else:
+            gen = Generator(model)
+            t1 = time.time()
+            gen.capture()
         res["capture_s"] = round(time.time() - t1, 1)
         tv = ttnn.get_memory_view(dev, ttnn.BufferType.TRACE)
         res["trace_used_mib"] = tv.num_banks * tv.total_bytes_allocated_per_bank / 2**20
@@ -156,6 +180,14 @@ def main():
                 n = min(len(ref), len(new))
                 g["match_golden_first16"] = sum(int(a == b) for a, b in zip(new[:n], ref[:n]))
                 g["first_mismatch"] = next((i for i in range(n) if new[i] != ref[i]), None)
+            if args.spec:  # the same prompt through draft + verify passes: same tokens, fewer steps
+                t1 = time.time()
+                spec, st = gen.generate_rows(ids, args.gen, early_stop=0.45)
+                n = max(1, len(spec) - 1)
+                g["spec_equals_plain"] = spec == new
+                g["spec_tok_s"] = n / (st["draft_s"] + st["verify_s"])
+                g["spec_tokens_per_pass"] = round(n / max(1, st["passes"]), 3)
+                g["spec_seconds"] = round(time.time() - t1, 1)
             if tok is not None:
                 g["text"] = tok.decode(new, skip_special_tokens=False)
             if args.prompt is not None:
