@@ -147,6 +147,28 @@ inline void llk_unpack_A(
         address, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
 }
 
+// A block whose CB page is not exactly one tile: one back-to-back unpack per page, out of line so the one-tile-page path
+// stays as it was. The caller passes the operand's constants, so no descriptor table is indexed at run time here.
+template <
+    BroadcastType BType,
+    bool acc_to_dest,
+    EltwiseBinaryReuseDestType binary_reuse_dest,
+    bool unpack_to_dest>
+[[gnu::noinline, gnu::cold]] void llk_unpack_A_block_per_page(
+    const std::uint32_t address,
+    const std::uint32_t ntiles,
+    const std::uint32_t page_16B,
+    const std::uint32_t tile_16B,
+    const std::uint32_t src_format,
+    const std::uint32_t dst_format,
+    const std::uint32_t num_faces,
+    const std::uint32_t face_r_dim) {
+    for (std::uint32_t tile = 0; tile < ntiles; ++tile) {
+        _llk_unpack_A_block_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest, DST_ACCUM_MODE, true>(
+            address + tile * page_16B, 1, tile_16B, src_format, dst_format, num_faces, face_r_dim);
+    }
+}
+
 // start_dst_tile_index is unused here: math places the tiles. Kept for the same reason as llk_unpack_A's
 // dst_tile_index.
 template <
@@ -223,16 +245,32 @@ inline void llk_unpack_A_block(
         }
         if (ntiles > 2) {
             WAYPOINT("UPAW");
-            // A CB page holds one tile, so the tiles of an uncompressed block lie back to back
             if (!IS_BFP_FORMAT(unpack_src_format[operand_id])) {
-                _llk_unpack_A_block_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest, DST_ACCUM_MODE, true>(
-                    address,
-                    ntiles,
-                    offset_address,
-                    unpack_src_format[operand_id],
-                    unpack_dst_format[operand_id],
-                    get_operand_num_faces(operand_id),
-                    get_operand_face_r_dim(operand_id));
+                // Uncompressed tiles lie back to back where a CB page holds exactly one tile
+                if (__builtin_expect(
+                        offset_address == get_operand_num_faces(operand_id) * get_operand_face_r_dim(operand_id) *
+                                              datum_size_in_bytes(unpack_src_format[operand_id]),
+                        1)) {
+                    _llk_unpack_A_block_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest, DST_ACCUM_MODE, true>(
+                        address,
+                        ntiles,
+                        offset_address,
+                        unpack_src_format[operand_id],
+                        unpack_dst_format[operand_id],
+                        get_operand_num_faces(operand_id),
+                        get_operand_face_r_dim(operand_id));
+                } else {
+                    llk_unpack_A_block_per_page<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
+                        address,
+                        ntiles,
+                        offset_address,
+                        get_operand_num_faces(operand_id) * get_operand_face_r_dim(operand_id) *
+                            datum_size_in_bytes(unpack_src_format[operand_id]),
+                        unpack_src_format[operand_id],
+                        unpack_dst_format[operand_id],
+                        get_operand_num_faces(operand_id),
+                        get_operand_face_r_dim(operand_id));
+                }
             } else {
                 _llk_unpack_A_block_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest, DST_ACCUM_MODE>(
                     address,
