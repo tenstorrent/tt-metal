@@ -291,8 +291,10 @@ class Hy4Xrow:
                 for k, n in chunk_plan(npages, cp):
                     self._prog(t, stage, self.ctl_in, n * u, (src_page0 + k) * u, 0, pb)
                     full = ttnn.all_gather(stage, dim=0, cluster_axis=0, num_links=1, topology=self.topo)
-                    keep.append(full)
                     self._prog(full, t, ctl_out, n * u, 0, (dst_page0 + k) * u, pb)
+                    ttnn.deallocate(
+                        full
+                    )  # hy4fix: free behind the stage-out (in-order queue); keeping all of them needed rows x stage x ops of DRAM = the port1/port2 TT_FATAL out-of-memory
             ttnn.synchronize_device(self.md)
         except Exception:
             self.stats["failed"] += 1
@@ -322,7 +324,9 @@ class Hy4Xrow:
                 ctl_out = self._ctl(src * cp * u, dst)
                 keep.append(ctl_out)
                 for p0, n in chunk_plan(npool, cp):
-                    keep.append(self._one(name, t, ctl_out, p0, n))
+                    ttnn.deallocate(
+                        self._one(name, t, ctl_out, p0, n)
+                    )  # hy4fix: free the gathered buffer behind its stage-out
             ttnn.synchronize_device(self.md)
         except Exception:
             self.stats["failed"] += 1

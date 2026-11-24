@@ -76,11 +76,17 @@ def main():
         def snap():
             return {nm: ttnn.to_torch(t, mesh_composer=mc) for nm, t, _ in tensors}
 
-        print("HEADROOM", be.can_copy(2, 1, 10), getattr(be, "last_headroom", None), flush=True)
+        print("HEADROOM", be.can_copy(2, 1, 140), getattr(be, "last_headroom", None), flush=True)
         before = snap()
         t0 = time.perf_counter()
-        payload = be.to_host(src, p0s, n)
+        G = be.tensor_groups(n, float(os.environ.get("HT_SLICE_MB", "64")))
+        payload, sl_ms = [], []
+        for g in range(max(G, 1)):
+            t1 = time.perf_counter()
+            payload += be.to_host(src, p0s, n, (g, G)) if G else be.to_host(src, p0s, n)
+            sl_ms.append(round((time.perf_counter() - t1) * 1e3))
         d2h = time.perf_counter() - t0
+        print("SLICES", G, "ms per slice max", max(sl_ms), "median", sorted(sl_ms)[len(sl_ms) // 2], flush=True)
         t0 = time.perf_counter()
         be.from_host(payload, dst, p0d, n)
         h2d = time.perf_counter() - t0
@@ -126,6 +132,30 @@ def main():
             tensors=len(tensors),
             n_pages=n,
         )
+        if os.environ.get("HT_OOM"):
+            keep = []
+            mv = lambda: ttnn.get_memory_view(md, ttnn.BufferType.DRAM)
+            for mb in (256, 64, 16, 4, 1):
+                while mv().largest_contiguous_bytes_free_per_bank > 13_000_000 + mb * 0.52e6:
+                    keep.append(
+                        ttnn.zeros([1, 1, mb * 1000, 1024], dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=md)
+                    )
+            v = mv()
+            print(
+                "OOM_STATE free",
+                v.total_bytes_free_per_bank,
+                "largest",
+                v.largest_contiguous_bytes_free_per_bank,
+                "alloc",
+                v.total_bytes_allocated_per_bank,
+                flush=True,
+            )
+            print("OOM_CAN_COPY", be.can_copy(2, 1, 140), getattr(be, "last_headroom", None), flush=True)
+            try:
+                be.copy_pages(2, 3, 1, 7, 140)
+                print("OOM_COPY_RESULT ok (101 tensors x 2 chunks with ~12 MB/bank free)", flush=True)
+            except Exception as e_:
+                print("OOM_COPY_RESULT FAILED", repr(e_)[:120], flush=True)
         print("HT_RT_OK" if not bad else "HT_RT_FAIL", flush=True)
     finally:
         ttnn.close_mesh_device(md)

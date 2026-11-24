@@ -76,7 +76,14 @@ class DeviceBackend(Backend):
             self._dcache[id(tensor)] = d
         return d[row * self.cols : (row + 1) * self.cols]
 
-    def to_host(self, row, page0, npages):
+    def tensor_groups(self, npages, slice_mb):
+        """number of tensor groups (= slices) a spill of npages is cut into: per-chip bytes of the chain / slice_mb (0 = one slice, no grouping)"""
+        if slice_mb <= 0 or self.xrow is None:
+            return 0
+        per_chip = npages * 3_750_912
+        return int(max(1, min(len(self.xrow.tensors), -(-per_chip // int(slice_mb * 1e6)))))
+
+    def to_host(self, row, page0, npages, group=None):
         """read ONLY the donor row's devices (hy4fix E1: ttnn.to_torch over the whole 4x8 mesh moved 4x the bytes at 0.06 GB/s useful; per-device reads reach ~0.75-0.9 GB/s per row); no per-op device sync (the read is ordered behind the stage-in on CQ0), the cols reads are enqueued non-blocking and drained once."""
         import ttnn
 
@@ -85,7 +92,11 @@ class DeviceBackend(Backend):
         import torch
 
         x, out = self.xrow, []
-        for name, t in x.tensors:
+        tl = x.tensors
+        if group is not None:
+            g, G = group
+            tl = tl[g * len(tl) // G : (g + 1) * len(tl) // G]
+        for name, t in tl:
             stage, kind, pb, u, cp = self._stage_of(name)
             for ci, (k, n) in enumerate(X.chunk_plan(npages, cp)):
                 x._prog(t, stage, x.ctl_in, n * u, (page0 + k) * u, 0, pb)

@@ -268,13 +268,21 @@ class ChainStore:
     def _spill(self, row, page0, npages, kind="spill"):
         """read npages of ``row`` to host in slices; payload = [(page offset, npages, backend payload)]. Raises on error."""
         parts, ms = [], []
-        sl = self._slices(npages)
+        G = self.be.tensor_groups(npages, self.slice_mb) if hasattr(self.be, "tensor_groups") else 0
+        if (
+            G
+        ):  # hy4fix: slice by TENSOR GROUP (every slice moves all pages in big chunks: ~5x less per-op overhead than page slices; a slice stalls ~slice_mb x 8 chips / bandwidth)
+            sl = [(0, npages)] * G
+        else:
+            sl = self._slices(npages)
         for i, (k, n) in enumerate(sl):
             t0 = time.perf_counter()
-            parts.append((k, n, self.be.to_host(row, page0 + k, n)))
+            parts.append(
+                (k, n, self.be.to_host(row, page0 + k, n, (i, G)) if G else self.be.to_host(row, page0 + k, n))
+            )
             ms.append(time.perf_counter() - t0)
             if i + 1 < len(sl):
-                self._yield("spill", i, len(sl), n * PAGE * BYTES_PER_TOKEN)
+                self._yield("spill", i, len(sl), n * PAGE * BYTES_PER_TOKEN // (G or 1))
         self._event(kind, row, npages * PAGE, ms, len(sl))
         return parts
 
