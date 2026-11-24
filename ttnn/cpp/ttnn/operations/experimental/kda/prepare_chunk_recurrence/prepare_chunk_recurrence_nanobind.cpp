@@ -57,6 +57,8 @@ void bind_prepare_chunk_recurrence(nb::module_& mod) {
                 host product is itself exact in BF16. Defaults to 1.0.
             beta_logits_column_offset (int): Tile-aligned first column of the beta logits in ``beta``.
                 Defaults to 0.
+            sequence_parallel_axis (int): Mesh axis along which the sequence is partitioned.
+                Defaults to 0.
 
         Returns:
             list[ttnn.Tensor]: Seven new TILE-layout tensors, where ``N = T / 32``, in order:

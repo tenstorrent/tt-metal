@@ -64,7 +64,7 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
                 and update its contents before replay of a captured trace.
             sequence_parallel_axis (int, optional): Mesh axis partitioning the
                 sequence. Native mesh coordinates supply each device's rank.
-            tail_entry_states (ttnn.Tensor): FLOAT32 carry ``[B*H,K,V]``
+            tail_entry_states (ttnn.Tensor): FLOAT32 carry ``[B*H/groups_per_head,K,V]`` (group-folded when groups_per_head > 1)
                 to reload at the locally derived split. Ignored when unsplit.
                 No input tensor is modified.
             groups_per_head (int, optional): Groups folded into the leading
