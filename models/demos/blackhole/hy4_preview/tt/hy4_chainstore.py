@@ -392,6 +392,11 @@ class ChainStore:
     def _evict_one(self, incoming_tokens, tier):
         """evict the least valuable entry of ``tier`` if it is worth less than the incoming chain; a tail victim moves to host when that is on. True when something was freed."""
         vs = [e for e in self.entries.values() if e.tier == tier]
+        prot = int(
+            os.environ.get("HY4_CAP_PROTECT_TOKENS", "0")
+        )  # hy4fix: entries of at least this many tokens are never evicted (their recompute is 1500+ s)
+        if prot:
+            vs = [e for e in vs if len(e.tokens) < prot]
         if not vs:
             return False
         # HY4_CAP_EVICT: smallest (default) | largest (hy4fix: HARMFUL on the real arm B trace, 84.4 % vs 98.1 % [S]: it kept a 512 k duplicate and lost a 444 k chain) | dupfirst (entries whose chain is also retained on a row go first, then the smallest)
