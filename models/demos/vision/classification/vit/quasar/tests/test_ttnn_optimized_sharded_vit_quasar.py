@@ -110,7 +110,7 @@ def test_vit_embeddings(device, model_name, batch_size, image_size, image_channe
         torch_position_embeddings = torch.nn.Parameter(torch_position_embeddings)
     cls_token = ttnn.from_torch(torch_cls_token, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     position_embeddings = ttnn.from_torch(
-        torch_position_embeddings, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
+        torch_position_embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
     )
 
     parameters = preprocess_model_parameters(
@@ -162,20 +162,13 @@ def test_vit_attention(device, model_name, batch_size, sequence_size, model_loca
         custom_preprocessor=ttnn_optimized_sharded_vit.custom_preprocessor,
     )
 
-    hidden_states = ttnn.from_torch(
+    encoder_input = ttnn.from_torch(
         torch_hidden_states,
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
+        memory_config=ttnn_optimized_sharded_vit.activation_memory_config(config, list(torch_hidden_states.shape)),
     )
-
-    encoder_input = ttnn.to_memory_config(
-        hidden_states,
-        memory_config=ttnn_optimized_sharded_vit.activation_memory_config(config, hidden_states.shape),
-        dtype=ttnn.bfloat8_b,
-    )
-    ttnn.deallocate(hidden_states)
 
     output = ttnn_optimized_sharded_vit.vit_attention(
         config,
@@ -208,7 +201,7 @@ def test_vit_mlp(device, model_name, batch_size, sequence_size, model_location_g
 
     hidden_states = ttnn.from_torch(
         torch_hidden_states,
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn_optimized_sharded_vit.activation_memory_config(
@@ -245,20 +238,13 @@ def test_vit_layer(device, model_name, batch_size, sequence_size, model_location
         device=device,
     )
 
-    hidden_states = ttnn.from_torch(
+    encoder_input = ttnn.from_torch(
         torch_hidden_states,
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
+        memory_config=ttnn_optimized_sharded_vit.activation_memory_config(config, list(torch_hidden_states.shape)),
     )
-
-    encoder_input = ttnn.to_memory_config(
-        hidden_states,
-        memory_config=ttnn_optimized_sharded_vit.activation_memory_config(config, hidden_states.shape),
-        dtype=ttnn.bfloat8_b,
-    )
-    ttnn.deallocate(hidden_states)
 
     output = ttnn_optimized_sharded_vit.vit_layer(
         config,
@@ -292,10 +278,10 @@ def test_vit_encoder(device, model_name, batch_size, sequence_size, model_locati
 
     hidden_states = ttnn.from_torch(
         torch_hidden_states,
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
     output = ttnn_optimized_sharded_vit.vit_encoder(
@@ -340,7 +326,7 @@ def test_vit(device, model_name, batch_size, image_size, image_channels, sequenc
         torch_position_embeddings = torch.nn.Parameter(torch_position_embeddings)
     cls_token = ttnn.from_torch(torch_cls_token, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     position_embeddings = ttnn.from_torch(
-        torch_position_embeddings, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
+        torch_position_embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
     )
 
     parameters = preprocess_model_parameters(
