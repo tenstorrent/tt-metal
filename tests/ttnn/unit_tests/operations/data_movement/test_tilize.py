@@ -1562,8 +1562,11 @@ def test_tilize_wide_rows_multicore(device, dtype, shape):
 @pytest.mark.parametrize("input_dtype, output_dtype", docstring_dtype_conversion_params(ttnn.tilize, "input", "output"))
 def test_tilize_docstring_dtype_conversions(input_dtype, output_dtype, device):
     """Runs each output dtype the ttnn.tilize docstring lists for an input of another dtype, with values that both
-    dtypes hold exactly and no NaN. Zeros are compared by value."""
+    dtypes hold exactly and no NaN. Zeros are compared by value. An output that the docstring's Quasar rule leaves out
+    is an xfail on Quasar, without running."""
     check_readable(input_dtype, output_dtype)
+    if is_quasar() and output_dtype not in (ttnn.bfloat16, ttnn.float32, ttnn.int32):
+        pytest.xfail("the docstring lists only BFLOAT16, FLOAT32 and INT32 outputs on Quasar")
     shape = (2, 3, 64, 96)
     input_tensor = ttnn.from_torch(
         convertible_input(shape, input_dtype, output_dtype),
