@@ -12,6 +12,7 @@
 from dataclasses import dataclass
 
 import torch
+from conftest import wormhole_only
 from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat
 from helpers.golden_generators import MaxPoolWithIndicesGolden, get_golden_generator
@@ -28,6 +29,9 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
+
+# _TIE_ROWS pins the Wormhole walk; Blackhole reduces with a different network.
+pytestmark = wormhole_only
 
 _CPP_SOURCE = "sources/sfpu_max_pool_with_indices_test.cpp"
 _TILE_DIMS = [32, 32]
