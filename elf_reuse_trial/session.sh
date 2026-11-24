@@ -31,4 +31,4 @@ print(json.dumps(out))
 EOF
 if [[ "${KEEP_TREE:-0}" == 1 ]]; then rm -rf "$RUNNER_TEMP/tree_$LABEL"; mv "$BUILD" "$RUNNER_TEMP/tree_$LABEL"; fi
 # Keep the per-ELF stats small for the artifact.
-zstd -q --rm -T0 "$DIR"/stats/tu.*.jsonl 2>/dev/null || true
+gzip -f "$DIR"/stats/tu.*.jsonl 2>/dev/null || true
