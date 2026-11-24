@@ -4003,6 +4003,17 @@ void detail::ProgramImpl::check_kernel_config_fits(
         extract_context_id(device), device, kernels_getter, kernel_groups_getter, *this, kernel_config_buffer);
 }
 
+bool detail::ProgramImpl::fits_kernel_config_window(ContextId context_id, IDevice* device, const ProgramImpl& program) {
+    const auto& hal = MetalContext::instance(context_id).hal();
+    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
+        if (program.program_config_sizes_[index] >
+            get_ringbuffer_size(device, hal.get_programmable_core_type(index), program.runs_on_dispatch_cores_)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 void detail::ProgramImpl::check_kernel_config_fits(
     ContextId context_id,
     IDevice* device,

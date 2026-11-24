@@ -191,6 +191,13 @@ void ConfigureDeviceWithProgram(
     is_emulated = metal_ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Emule;
 #endif
 
+    // The block goes in each core type's KERNEL_CONFIG window, except the Tensix kernel binaries when they run from a
+    // kernel config buffer. Checked before the allocations below, so a program that does not fit fails without
+    // changing allocator or program state.
+    TT_FATAL(
+        kernel_config_buffer == nullptr || !is_emulated, "A kernel config buffer is not supported on emulated devices");
+    program.impl().check_kernel_config_fits(&device, kernel_config_buffer);
+
     try {
         program.impl().prepare_ephemeral_allocation(validation_device);
         program.impl().allocate_circular_buffers(validation_device);
@@ -219,12 +226,6 @@ void ConfigureDeviceWithProgram(
         }
         throw;
     }
-
-    // Where the kernel binaries land is known only now: each core type's KERNEL_CONFIG window, except Tensix when it
-    // runs them from a kernel config buffer.
-    TT_FATAL(
-        kernel_config_buffer == nullptr || !is_emulated, "A kernel config buffer is not supported on emulated devices");
-    program.impl().check_kernel_config_fits(&device, kernel_config_buffer);
 
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
     const auto& hal = metal_ctx.hal();
