@@ -13,8 +13,8 @@
 #include "attn_io.hpp"
 
 void kernel_main() {
-    constexpr uint32_t ntiles = get_named_compile_time_arg_val("ntiles");  // window tiles of this core
-    constexpr uint32_t R = get_named_compile_time_arg_val("R");            // tokens, R * G <= 32
+    constexpr uint32_t ntiles = get_named_compile_time_arg_val("ntiles");    // window tiles of this core
+    constexpr uint32_t R = get_named_compile_time_arg_val("R");              // tokens, R * G <= 32
     constexpr uint32_t ngroups = get_named_compile_time_arg_val("ngroups");  // lag groups: 1 (single), 2 (triple)
     constexpr uint32_t nin = ngroups == 1 ? 1 : 3;                           // input rows per token
     constexpr uint32_t G = ngroups == 1 ? 4 : 9;                             // window rows per token

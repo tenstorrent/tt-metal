@@ -44,7 +44,7 @@ void kernel_main() {
     const uint32_t p = get_arg_val<uint32_t>(3);
 
     int32_t m[3] = {INT32_MIN, INT32_MIN, INT32_MIN};  // below every float
-    if constexpr (has_sink) {   // the max is exact, so the scan order does not matter: sink first, then each S_j
+    if constexpr (has_sink) {       // the max is exact, so the scan order does not matter: sink first, then each S_j
         cb_wait_front(cb_sink, 1);  // as soon as compute packs it (the scan hides behind the next q.k)
         row_max(get_read_ptr(cb_sink), m);
     }

@@ -7,9 +7,9 @@
 #include "api/debug/kernel_profiler.hpp"
 
 void kernel_main() {
-    constexpr uint32_t kz = get_named_compile_time_arg_val("kz");    // z width in tiles (64 * gates / 32)
-    constexpr uint32_t nt = get_named_compile_time_arg_val("nt");    // column tiles per core
-    constexpr uint32_t nct = get_named_compile_time_arg_val("nct");  // C / 32
+    constexpr uint32_t kz = get_named_compile_time_arg_val("kz");          // z width in tiles (64 * gates / 32)
+    constexpr uint32_t nt = get_named_compile_time_arg_val("nt");          // column tiles per core
+    constexpr uint32_t nct = get_named_compile_time_arg_val("nct");        // C / 32
     constexpr uint32_t h_tile = get_named_compile_time_arg_val("h_tile");  // page bytes of h and m
     constexpr uint32_t fg = get_named_compile_time_arg_val("fg_page");     // page bytes of F and G (bf16 / fp32)
     constexpr uint32_t cb_z = 0, cb_mask = 1, cb_f = 2, cb_g = 3, cb_h = 4, cb_m = 5;

@@ -59,8 +59,8 @@ void kernel_main() {
         cb_reserve_back(cb_mass, 1);
     }
     if constexpr (slim) {
-        zero(get_write_ptr(cb_scaler), 4096);             // built after the wave 1 barrier
-        if constexpr (has_tau) {                          // tau at [0, 0]: the compute uses f[0, 0] only
+        zero(get_write_ptr(cb_scaler), 4096);  // built after the wave 1 barrier
+        if constexpr (has_tau) {               // tau at [0, 0]: the compute uses f[0, 0] only
             zero(get_write_ptr(cb_tau) + 64, 4096 - 64);
             const InterleavedAddrGen<true> tau_a = {.bank_base_address = tau, .page_size = 4096};
             noc_async_read(use ? get_noc_addr(scratch + 2048) : tau_a.get_noc_addr(0, 0), get_write_ptr(cb_tau), 64);

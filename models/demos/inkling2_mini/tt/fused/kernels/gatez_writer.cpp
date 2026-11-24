@@ -12,7 +12,7 @@ void kernel_main() {
     constexpr uint32_t kz = get_named_compile_time_arg_val("kz");
     constexpr uint32_t n_split = get_named_compile_time_arg_val("n_split");
     constexpr uint32_t rows = get_named_compile_time_arg_val("rows");
-    constexpr uint32_t nb = get_named_compile_time_arg_val("nb");  // packed partial-row tiles per z tile
+    constexpr uint32_t nb = get_named_compile_time_arg_val("nb");        // packed partial-row tiles per z tile
     constexpr uint32_t group = get_named_compile_time_arg_val("group");  // rows per token
     constexpr uint32_t nbt = nb / (rows / group);                        // packed tiles per token
     static_assert(rows % group == 0 && nbt * (rows / group) == nb);
