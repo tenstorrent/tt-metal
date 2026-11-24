@@ -860,19 +860,24 @@ inline void _llk_unpack_configure_addresses_(
     LLK_ASSERT(is_valid_L1_address(address_b), "L1 address_b must be in valid L1 memory region");
 
     // Whole-word MMIO stores into the state-CFG bank `cfg` (the bank get_cfg_pointer() selected), as production.
-    // The context-1 base word follows the context-0 word, so the context id indexes the store instead of branching.
     constexpr auto BaseA = hcfg::Unpacker[0].Cntx[0].Base;
     constexpr auto BaseB = hcfg::Unpacker[1].Cntx[0].Base;
     static_assert(BaseA.shamt(hcfg::Sec::S0) == 0 && BaseA.width == 32 && BaseB.shamt(hcfg::Sec::S0) == 0 && BaseB.width == 32, "base is a whole word");
     static_assert(hcfg::Unpacker[0].Cntx[1].Base.addr32(hcfg::Sec::S0) == BaseA.addr32(hcfg::Sec::S0) + 1, "context-1 base A follows context 0");
     static_assert(hcfg::Unpacker[1].Cntx[1].Base.addr32(hcfg::Sec::S0) == BaseB.addr32(hcfg::Sec::S0) + 1, "context-1 base B follows context 0");
     LLK_ASSERT(context <= 1, "unpack config context must be 0 or 1");
-    // Offset the bank as an integer: GCC can then still prove the stores miss ckernel::cfg_state_id and keep the bank
-    // select out of the caller's tile loop, which an indexed pointer store (cfg[base + context]) prevents.
-    volatile std::uint32_t tt_reg_ptr *cfg_context =
-        reinterpret_cast<volatile std::uint32_t tt_reg_ptr *>(reinterpret_cast<std::uintptr_t>(cfg) + context * sizeof(std::uint32_t));
-    cfg_context[BaseA.addr32(hcfg::Sec::S0)] = address_a;
-    cfg_context[BaseB.addr32(hcfg::Sec::S0)] = address_b;
+    // Branch on the context as production: the context-0 path (the common one in loops that reset the context per
+    // tile) then stores at fixed offsets with no per-tile address arithmetic between the semaphore poll and the stores.
+    if (0 == context)
+    {
+        cfg[BaseA.addr32(hcfg::Sec::S0)] = address_a;
+        cfg[BaseB.addr32(hcfg::Sec::S0)] = address_b;
+    }
+    else
+    {
+        cfg[BaseA.addr32(hcfg::Sec::S0) + 1] = address_a;
+        cfg[BaseB.addr32(hcfg::Sec::S0) + 1] = address_b;
+    }
 }
 
 /**
