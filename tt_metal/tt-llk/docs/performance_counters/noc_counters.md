@@ -134,6 +134,5 @@ option off the hooks compile to nothing.
 
 ## 8. Open questions
 
-- The data word size on Wormhole and Quasar.
 - How multicast and broadcast writes are counted on the issuing side.
 - Capturing Ethernet tiles.
