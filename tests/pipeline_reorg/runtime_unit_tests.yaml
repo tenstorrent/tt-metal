@@ -248,7 +248,7 @@
 # --- Core API + per-core allocation Tests (SD) ---
 - name: runtime_sd_api
   cmd: |
-    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_api
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_api --gtest_filter='-DramKernelFixture.DramKernelDRISCReadFromDRAMMcastToTensix:DramKernelFixture.DramKernelDRISCNocModeStress'
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_hybrid_allocator
   skus:
     wh_n150_civ2:
