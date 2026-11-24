@@ -1644,17 +1644,10 @@ constexpr bool matmul_fe_runtime_tile_form_on() {
            !(DST_SYNC_MODE == DstSync::SyncHalf && DST_ACCUM_MODE) && MATH_FIDELITY != MathFidelity::LoFi;
 }
 
-template <std::uint32_t in1_cb, std::uint32_t ct>
-ALWI void matmul_fe_runtime_tile_form(
-    const std::uint32_t in0_cb_id,
-    const std::uint32_t in1_cb_id,
-    const std::uint32_t transpose,
-    const std::uint32_t ct_dim,
-    const std::uint32_t rt_dim) {
+ALWI bool matmul_fe_runtime_tile_block(
+    const std::uint32_t in1_cb_id, const std::uint32_t transpose, const std::uint32_t ct_dim, const std::uint32_t rt_dim) {
     constexpr std::uint64_t bfp_cbs = matmul_fe_bfp_cbs();
-    if (transpose != 0 && rt_dim == 1 && ct_dim >= 8 && ((bfp_cbs >> in1_cb_id) & 1)) {
-        llk_math_matmul_init<MATH_FIDELITY, 0, false, true>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim);
-    }
+    return transpose != 0 && rt_dim == 1 && ct_dim >= 8 && ((bfp_cbs >> in1_cb_id) & 1);
 }
 
 // The phase count of a math init in a kernel that may drop fidelity phases (llk_math_matmul_phases.h), from its cbs' formats
@@ -1702,6 +1695,19 @@ ALWI void matmul_block_init_fe(
     // a kernel bound by the kernel config buffer runs main's direction and math
     constexpr DataFormat f = LLK_SIZE_MODE ? DataFormat::Invalid : matmul_fe_phase_format<in0_cb, in1_cb>();
     constexpr std::uint32_t AUTO = LLK_SIZE_MODE ? 0 : MATMUL_REUSE_DIR_AUTO;
+#if defined(UCK_CHLKC_MATH)
+    if constexpr (matmul_fe_runtime_tile_form_on<in1_cb, ct>()) {
+        // the tile MOP's init alone, not after the row form's
+        if (matmul_fe_runtime_tile_block(in1_cb_id, transpose, ct_dim, rt_dim)) {
+            LLK_SAN_FUNCTION();
+            state_configure(in1_cb_id, in0_cb_id, call_line);
+            llk_math_matmul_init<MATH_FIDELITY, 0, false, true>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim);
+            throttled_mop_status = 0;
+            matmul_fe_phase_init<in0_cb, in1_cb>(in0_cb_id, in1_cb_id, ct_dim, rt_dim);
+            return;
+        }
+    }
+#endif
     matmul_block_init<
         false,
         matmul_fe_unpack_ttsync<mark>(),
@@ -1718,9 +1724,6 @@ ALWI void matmul_block_init_fe(
         0,
         matmul_fe_out_key<fkey>()>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim, call_line);
 #if defined(UCK_CHLKC_MATH)
-    if constexpr (matmul_fe_runtime_tile_form_on<in1_cb, ct>()) {
-        matmul_fe_runtime_tile_form<in1_cb, ct>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim);
-    }
     matmul_fe_phase_init<in0_cb, in1_cb>(in0_cb_id, in1_cb_id, ct_dim, rt_dim);
 #endif
 }
