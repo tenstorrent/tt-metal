@@ -79,6 +79,16 @@ void RelayChunkScanOperation::validate_on_program_cache_miss(
         TT_FATAL(state.rank() == 3 && state[1] == state[2], "{}: initial_state must be [B*H, K, K]", operation_name);
     }
     const auto [heads, key_dim] = relay_state_geometry(in);
+    if (in.slab_index && attrs.sequence_parallel_axis < in.packed.device()->shape().dims()) {
+        const uint32_t sp_size = in.packed.device()->shape()[attrs.sequence_parallel_axis];
+        TT_FATAL(
+            heads % sp_size == 0 && state[1] * sp_size == heads,
+            "{}: a slab entry holds this SP rank's {} of the {} heads (SP-sharded), got {}",
+            operation_name,
+            heads / sp_size,
+            heads,
+            state[1]);
+    }
     TT_FATAL(
         heads > 0 && key_dim > 0 && key_dim % tt::constants::TILE_WIDTH == 0,
         "{}: B*H must be positive and K positive and tile aligned",
