@@ -840,12 +840,13 @@ Changes from the run order:
 
 ### Root causes of the 2026-11-03 failures
 
-From the logs, the source and git history; nothing below was rerun. Cache and snoop behaviour is as observed on the emulator. Paths are in tt-metal unless they name chippy, grendelemulation or the ZeBu Python package (`/proj_soc/zebu/Modules/collateral/venv/26ww33/lib/python3.12/site-packages/zebu`, readable from soc-l-12).
+From the logs, the source and git history; nothing below was rerun, except the host DRAM write entry, which was reproduced on the emulator on 2026-11-23, and the `CachedRangeFlush` entry, reproduced on 2026-11-24. Cache and snoop behaviour is as observed on the emulator. Paths are in tt-metal unless they name chippy, grendelemulation or the ZeBu Python package (`/proj_soc/zebu/Modules/collateral/venv/26ww33/lib/python3.12/site-packages/zebu`, readable from soc-l-12).
 
 **Stale lines in the shared L2 from an earlier process** (`NonSnoopingProducer` Cce0 and Cce1, `HartToHartCoherent`, `L2InvalidateFreshRead`, `SkipLoadNeverDone`), a runtime gap. Since 3ecb73d1637 (2026-10-21), device open resets only the CCE harts (`ALL_NEO_DMS`, `risc_firmware_initializer.cpp:610`, `:1393`); before it, open asserted `RiscType::ALL`, which also reset the uncore. The commit moved uncore and remap ownership to bring-up and does not mention caches. By the RTL (soc/cce `ce574b3`; tensix/soc/chipyard `d82dfe27`, generated `TTCCEConfigOneClk`), a hart reset clears that hart's L1 I$ (`ICache.sv:210-218`) and its L1 D$, dropping dirty lines (`DCache.sv:1330-1332`). Only the uncore reset or the L2's full-invalidate register clears the shared L2 (`Directory.sv:144-154`, `:218-231`). TL1 below 4 MiB, firmware included, is cacheable (`PMAChecker.sv:132`), and host writes to TL1 are not snooped, so L2 lines from one process survive into the next and a hart refills from them instead of from what the host wrote. Every row runs as its own process, so this is how one case's data reaches a later case's warm read.
 - `NonSnoopingProducer` (row 102), symptom of the L2 gap, not a test bug. Every foreign word in the consumer's warm read is data an earlier case left at TL1 `0x8b4c0`: `0xD2000000 | cce<<16` plus the word index is row 96's wipe value, `0x6a049000` and `0x6a04a000` are row 96's guard (`make_guard(0x49 + cce)`), and `0xaa000a10` is a row 93 `RingWrap` slot. Row 96 ran before row 102 in this session, although row 96 says to run it last. Rows 93 and 96 ran as earlier processes, so their values crossed a process boundary in the L2. The consumer's warm read is at `cce_scoped_lock_consumer.cpp:125`.
 - `HartToHartCoherent` and `L2InvalidateFreshRead` (row 75), likely a symptom of the L2 gap. The warm-read values are not logged, so a shared-L2 defect is not excluded. The warm read (`cce_cache_ops.cpp:1185`) fails before the feature check (`test_mimir_dm_cache.cpp:239`). On 2026-11-13 `HartToHartCoherent`'s coherence check itself passed (stale before 0, 64 matches). In both 2x runs the warm read found 16 of 64 words not old, exactly one 64 B line. The case before `L2InvalidateFreshRead`, `L1InvalidateFull`, ends with a whole-L1 discard and an uncached check, not a cached read, so its stale line would have come from an earlier case. Not explained: on 2026-11-13 `L2InvalidateFreshRead` passed 37 s after `HartToHartCoherent` failed, with no restart. Under the rule for the four contract cases in Running the data-movement ports this is not a coherence finding, but the failure is still correct: the test must fail when the state it depends on is wrong.
 - `SkipLoadNeverDone` (row 2c), stale cached firmware, medium-high confidence. Go signal 0 is `RUN_MSG_DONE` (`dev_msgs.h:108`), which only firmware writes (`tt-2xx/drisc.cc:146`). The zeroed window `[0x8080, 0xE080)` does not overlap the mailbox `[0x80, 0x8080)`, and the runtime writes `RUN_MSG_INIT` after the zeroing. Firmware text sits in the cacheable window and nothing invalidates it before the harts are released, so the harts ran firmware that was no longer in TL1. This also fits the earlier session, where CCE1 cached some zeroed lines and then failed firmware init in every later process until the emulator restarted. No earlier pass of row 2c is recorded. This is a runtime defect, not a test bug: Metal's firmware load does not guarantee the harts run what it wrote, because they refill from L2 lines holding the previous process's firmware. The 2026-11-04 pass on `mimir_2x_package` ran in its own session right after bring-up; bring-up never releases the harts, so the L2 was cold. Its 1 min 51 s against 17 s on `mimir_1x1` also fits a timeout against an early "done". The test cannot yet rule out a zeroing that never reached TL1 or a lost `RUN_MSG_INIT` write; it reads back neither.
+- `CachedRangeFlush` (row 76, failed on 2026-11-19 and 11-23), symptom of the L2 gap, reproduced on the emulator on 2026-11-24. `L2InvalidateFreshRead` ends with a cached read of its 64 words (`cce_cache_ops.cpp:1205`), so four lines holding `0xCA0B0000` to `0xCA0B003F` (`0xCA000000 | 11 << 16`, case 11) stay cached at TL1 `0x8b4c0`. Row 76's host prefill of the data and guard goes to TL1 and leaves those lines as they were. The cached 8 B store then hits the stale line and changes 8 bytes of it, and `flush_l2_cache_range` writes the whole 64 B line back, so 14 guard words take the stale words `0x02` to `0x0F`. The 200 B write does the same on its fourth line (`0x32` to `0x3F`). The 64 B, 2048 B and 32 KiB writes cover whole lines and pass. `Uncached1B` and `Uncached8B` do not use the cache, and `CachedFastFlush` passes because `CachedRangeFlush` has flushed every line by then. It passed on 2026-11-03 because `L1InvalidateFull` ran last in row 75, between `L2InvalidateFreshRead` and row 76 (by the results table and the row 75 rule; no log of that run was found), and on 2026-11-13 because the emulator restarted before row 76. On 2026-11-19 `L1InvalidateFull` ran alone after row 80. The 2026-11-24 run, one process per case in one `mimir_1x1` session after bring-up (soc-c-24, same binary and kernel copy as 2026-11-19): `CachedRangeFlush` alone passed; after `L2InvalidateFreshRead` it failed with the same guard words; after `L2InvalidateFreshRead` then `L1InvalidateFull` it passed; after `L2InvalidateFreshRead` again it failed again. `L2InvalidateFreshRead` passed all three times. Logs are in `/localdev/sagarwal/mimir_reruns_2026-11-19/cached_range_flush_ab/`. Not checked: which of `L1InvalidateFull`'s operations drops the stale lines (the L2 RTL for FLUSH64 on a clean line was not read), and whether the stale copy was in the L2 or the hart's L1 D$. The failure is correct for the same reason as rows 75 and 102, and the runtime fix below covers it.
 - Rows 75 and 102 passed on 2026-10-22, 10-23 and 10-26 in the same case order, so the caches were clean between processes then. The test changes since 10-23 do not touch these paths. The likely change is 3ecb73d1637, which the 11-03 tree (`6ea8f29c6e4`) contains. Whether the 10-26 tree had it cannot be checked: `3a3d04f9bd2` no longer exists after the rebase.
 - To confirm: in row 2c, read the zeroed window back after the open (all zeros with a successful open confirms stale firmware), and run 2c right after bring-up and again after 2b. Fix in the runtime, not the tests. At open, after the firmware and the other host writes to TL1 and before the harts are released, invalidate the L2: the full-invalidate register, or the uncore reset with the AXI-clock steps in Mimir spec v1.14 §7.4. On `mimir_1x1` row 96's FULLINVALIDATE wipe works; INVALIDATEFLUSHDIRTY (row 94) is a no-op on the emulator. Do not add a record-and-drop before the warm reads: the carried-over count is only recorded, never asserted, so the drop would hide the gap. Until the runtime fix lands, these four cases fail correctly. Add a test that catches the gap directly: one process leaves dirty lines at known offsets, the next writes a seed from the host and forces an eviction, and the host checks the seed survived. In row 2c, add a read-back of the zeroed window and check that `fw_shared_globals_ready` and `subordinate_sync` stay clear.
 
@@ -853,13 +854,19 @@ From the logs, the source and git history; nothing below was rerun. Cache and sn
 
 **Too little overlap** (`MimirTridIdma.DuplicateId`: Cce0 on `mimir_1x1`, Cce0-2 on `mimir_2x_package`), a test bug in the stimulus, not the assert. 6ee2a27c9d0 (2026-10-30) asserts `EXPECT_GT(..., 1u)` on the pending high water (`test_mimir_trid.cpp:905`, `:914`). With 512 B commands, issuing a command can take longer than the previous one takes to ack, so the commands may never overlap and the high water reads 1 on correct hardware. The assert is still right: it is the only check that the counter counts past 1. A counter stuck at 0 or 1 also reads 1, and every other check passes without overlap. Relaxing the assert, or one shared destination slot, would let a broken counter pass; with a shared slot an early ack passes once the first command lands. Fix: commands large enough to always overlap (Saturate reached 10-13 pending with 8 KiB), a separate destination per command, and only the source shared. GDDR fits 15 separate 8 KiB slots and the sibling TL1 slot fits one, so the sibling leg needs smaller or fewer commands. Also record the largest gap between issues in batch mode's free `probe_second`; a high water of 1 with a gap well under the ack latency then points at the hardware. Do not move the case to `kModeTridTable`: the at-ack data check is batch-only. The ~190k data cycles in the log are one `data_landed` pass over 2048 words, not landing latency. Row 118's "cleared on accept" explanation may rest on the same reading; not checked.
 
-**Snoop-config intermittents** (`DirtyLineRace` Cce0 and Cce1 `Cfg3` and `Cfg7`, `PreloadChurn` Cce0 and Cce1), known. Every `DirtyLineRace` failure has bit 0 (`disable_inline_writes`, `tensix_neo_reg.h:8155-8162`) set, as on 10-23 and 10-26. `Cce0_Cfg3`, `Cce0_Cfg7` and `Cce1_Cfg7` are the known "acked, never visible" mode. `Cce1_Cfg3` is new: the hart's uncached poll saw the external words, but the host found 0 of 8 after the hart's final `flush_l2_cache_line` (`cce_cache_ops.cpp:871`); the hart writing back its stale copy of the line is the likely cause, inferred from the kernel. `PreloadChurn`'s snoop leg is recorded as expected, though the row 99-101 results note says the RTL does not explain it. The `kIdmaSnoopNote` text appended to both tests' failure messages (`test_mimir_dm_cache.cpp:514-516`) blames an iDMA into the CCE's own TL1, but in both tests the writer is the sibling CCE.
+**Snoop-config intermittents** (`DirtyLineRace` Cce0 and Cce1 `Cfg3` and `Cfg7`, `PreloadChurn` Cce0 and Cce1), known. Every `DirtyLineRace` failure has bit 0 (`disable_inline_writes`, `tensix_neo_reg.h:8155-8162`) set, as on 10-23 and 10-26. `Cce0_Cfg3`, `Cce0_Cfg7` and `Cce1_Cfg7` are the known "acked, never visible" mode. `Cce1_Cfg3` is new: the hart's uncached poll saw the external words, but the host found 0 of 8 after the hart's final `flush_l2_cache_line` (`cce_cache_ops.cpp:871`); the hart writing back its stale copy of the line is the likely cause, inferred from the kernel. Root cause found on 2026-11-24, see Root cause of the `DirtyLineRace` snoop-config failures: the stale write-back is confirmed, and the "acked, never visible" mode has the same cause. `PreloadChurn`'s snoop leg is recorded as expected, though the row 99-101 results note says the RTL does not explain it. The `kIdmaSnoopNote` text appended to both tests' failure messages (`test_mimir_dm_cache.cpp:514-516`) blames an iDMA into the CCE's own TL1, but in both tests the writer is the sibling CCE.
 
-**Not known** (`HostDram/MimirHostDramView.BoundaryAndAlias/View0`, offset `0x2000000` read 0).
-- Host side ruled out. The write and the read take the same path to chiplet-local `0x802000000` (`tt_cluster.cpp:907-939`; UMD `simulation_chip.cpp:75-94`, `grendel_tt_device.cpp:74-86`, `mimir_chippy_memory.cpp`; chippy `Memory::bulk_write_bytes` and `bulk_read_bytes`), and the transactor carries 56 address bits (grendelemulation `models/mimir/emu_hdl/axi_sim_to_smc.sv:24-27`). `0x2000000` is the CCE0 config base in chippy's local map (`lib/arch/grendel/mimir.h:27`), but nothing on the host drops the GDDR base.
-- The address is valid. Every bring-up programmed tile interleave with the 8 GB realign (`GDDR NoC config: interleave_mode=1, realign_mode=2`), which maps the address to tile 0, slice 0, byte `0x800000` (page 256 of 4096), per the shim model in grendelemulation `models/mimir/tests/mim-573/test_tile_intlv_realign.py:63-75`. No other walk offset maps there. MIM-573 affects only non-power-of-two sizes.
-- Not page exhaustion, which is a fatal emulator error (grendelemulation `models/mimir/tests/test_gddr.py:189-206`), and not an AXI error response: the transactor raises on a non-OKAY response (zebu `axi4m.py:343-367`), the SiVal server then drops the connection (grendelemulation `py/syseng_common/server.py:334-338`) and the test would have aborted. The server logs of these sessions show no AXI failure. So the write and the read both completed OKAY, and the read returned 0.
-- Next: rerun row 1 with DPI on (see Manual D2D AXI monitor step). The SMC AXI monitor logs both beats with their responses, and the slice-0 ddrmon log shows whether the write reached `ddr_model`.
+**Host DRAM write taken as a CCE reset-vector write** (`HostDram/MimirHostDramView.BoundaryAndAlias/View0`; View0 and View2 on `mimir_2x_package`), a UMD and Metal addressing collision, not a test bug and not an emulator or RTL fault. Root-caused on 2026-11-23.
+- UMD's `GrendelTTDevice::write_to_device` calls `TTDevice::apply_cce_reset_vector_write` before it resolves the address (UMD `grendel_tt_device.cpp:81`, `tt_device.cpp:93`). Any write to a DRAM core that starts in `[0x02000000, 0x02000040)` (`CCE_RESET_VECTOR_BASE`, 8 harts of 8 B) is written to that CCE's reset-vector registers and never reaches GDDR. A write at exactly `0x02000000` goes to all 8 harts. Metal's CCE HAL names this address as the firmware launch address (`qa_hal_dram.cpp:107`); UMD commit `0be658e8` (2026-09-17) added the interception.
+- `Cluster::write_dram_vec` passes view offset plus the view's `address_offset` as that address (`tt_cluster.cpp:907-925`). On a view with `address_offset: 0` (view 0 on `mimir_1x1`, views 0 and 2 on `mimir_2x_package`) view offset `0x2000000` is the reset-vector base, so the walk's write is diverted. Views 1 and 3 add 4 GiB and miss the window. `read_from_device` has no such check, so the read does reach GDDR and returns what was there: 0 on a fresh session.
+- Confirmed on the emulator (`mimir_1x1`, fresh session after bring-up, DPI on). Through chippy alone, a write and read of chiplet-local `0x802000000` works in 32 and 64 bits, and the whole alias walk passes with `0x2000000` intact after every later write. With `0xdead0001` planted at that word, the test failed with `actual 0xdead0001`, the word still held the sentinel afterwards, and all 8 CCE0 reset-vector registers (`0x02000000` + 8 B per hart) had changed from 0 to the guard `0x6aa18000`. CCE1's stayed 0. View2 on `mimir_2x_package` follows from the descriptor and the code; it was not rerun.
+- The earlier note here ruled the host side out because the write and the read "take the same path". They do not: the write is diverted before the resolver. The SMC, SMN and ITN address decode, the interleave realign, the address shim and `ddr_model` were read against mimir_soc `dft_0p4p35` and treat views 0 and 1 the same at this offset.
+- Side effect: the test overwrites the reset vectors of CCE0 (and of Mimir 1's CCE0 on 2x) with the guard. Whether a later row releases harts without Metal rewriting the vectors was not checked.
+- Not checked: whether the DRAM allocator can place a host-written buffer on that 64 B window (a write that starts there would be lost whole), and whether any other test writes there.
+- The fix belongs in UMD, not in the test. chippy, grendelemulation and the RTL carried the write correctly in the emulator check. Metal cannot fix it alone, because the check sits below it in UMD. Moving the walk offset would only hide the fault. Until a fix lands this case fails correctly. Two options, from reading the source; neither was built or run:
+  - Option 1, UMD only: honour the reset-vector address on the register write path only. Metal already writes the CCE launch address with `Cluster::write_reg`, which calls UMD `write_to_device_reg` (`risc_firmware_initializer.cpp:1488`, `tt_cluster.cpp:1087`), and writes host DRAM data with `write_core`, which calls `write_to_device`. In `GrendelTTDevice` the register write loops over `write_to_device` per word (`grendel_tt_device.cpp:97-105`), so the check moves into `write_to_device_reg` ahead of the loop and comes out of `write_to_device`. In the base `TTDevice` the call at `tt_device.cpp:602` goes and the one at `:618` stays.
+  - Option 2, UMD and Metal: expose a UMD call for the CCE reset vector (UMD already has `write_cce_reset_vector_register` internally), have Metal's DRAM launch call it, and drop the magic address from both. No address then means two things, but it changes the HAL's `fw_launch_addr` convention for DRAM cores.
+  - Not checked for option 1: `SimulationTTDevice` and `SWEmuleChip` also send register writes through their data write, so if CCE cores are reached through them they need the same change. No other writer of the reset vector through the data path was found in Metal, the UMD sources or chippy `validation/metal_bringup`; the UMD Python bindings and code outside these repos were not searched.
 
 ## Results on `mimir_2x_package`, 2026-11-04
 
@@ -1770,3 +1777,502 @@ Final: 122 cases ran, 120 pass, 2 fail. Results that differ from 2026-11-04: `Dm
 | 113 | `DmSuitePort/MimirDmIdma.Copy/Strided1DLocalGddr` | pass | 37 s |
 | 113 | `DmSuitePort/MimirDmIdma.Copy/Strided1DSubLine` | pass | 37 s |
 | 113 | `DmSuitePort/MimirDmIdma.Copy/Strided1DSubLineLocalGddr` | pass | 35 s |
+
+## Results on `mimir_1x1`, 2026-11-19
+
+Final: 347 of 347 case runs: 298 pass, 30 skip, 16 fail, 3 timeout.
+
+Run against `e033336c941` with UMD `27877648` (detached), in the Debug build (`build_Debug`). Emulator `models/mimir`, each session after `bringup_mimir_1x1.py`: rv-zebu-07, rv-zebu-08, soc-zebu-01, rv-zebu-08, soc-c-24, soc-c-28, soc-zebu-02, soc-c-28, soc-zebu-03, soc-c-31, soc-c-27. `TT_METAL_OPERATION_TIMEOUT_SECONDS=600`. Results, logs, the plan and the runner are in `/localdev/sagarwal/mimir_reruns_2026-11-19/mimir_1x1/` (`results.tsv`, `logs/`, `plan.json`, `run.py`).
+
+Changes from the run order:
+- Rows run together in one gtest process wherever gtest's own run order matches the run order: 77 processes for 347 case runs. Rows 1, 2c, 2d and 125 and the rows marked own row ran alone; rows 3b, 99, 100 and 106 ran one case per process.
+- A failure that prints a kernel timeout code, a host deadline or MIM-601 ends its process at once; the emulator restarts with bring-up and the cases left in that process run in the new session. A case past 4 times its 2026-11-03 time plus 5 min (at least 15 min) is killed as a timeout, followed by the same restart. Restarts so far: 10, 7 of them after a failure.
+- Fresh sessions before row 17 and before row 81. Row 2c ran last in the first session, as on 2026-11-03. `MimirDmCache.Op/L1InvalidateFull` ran alone at the end of the second session.
+- Rows 2a and 2b first ran in one process, so `MimirFwLoad.LoadAndReachInitDone` was not the first device open of its process and that open did not reload firmware. That result is not valid; the case ran again alone right after.
+- Rows 75, 76 and 80 were not rerun before row 90: the binary did not change.
+- The rows marked 2x only did not run. The 2x-only cases inside rows that run on all descriptors ran and skip.
+- Kernels were built from a frozen copy of `test_kernels/cce`, `dataflow` and `misc`.
+
+Results that differ from 2026-11-03: `MimirFwLoad.LoadAndReachInitDone` (fail, 2026-11-03: pass); `LocalDram/MimirLocalDram.LoopbackChecksIntermediate/Cce0` (timeout, 2026-11-03: pass); `LocalDram/MimirLocalDram.SizeAlignmentMatrix/Cce0` (timeout, 2026-11-03: pass); `LocalDram/MimirLocalDram.SizeAlignmentMatrix/Cce1` (timeout, 2026-11-03: pass); `MimirPrefetcher.PrefetchOnePagePerSessionLocal0To1` (fail, 2026-11-03: pass); `DmSuitePort/MimirDmCachePerf.WritePath/CachedRangeFlush` (fail, 2026-11-03: pass); `CceCache/MimirCacheScopedLock.NonSnoopingProducer/Cce0` (pass, 2026-11-03: fail); `CceCache/MimirCacheScopedLock.NonSnoopingProducer/Cce1` (pass, 2026-11-03: fail); `CceCache/MimirCacheCoherenceRace.DirtyLineRace/Cce0_Cfg1` (fail, 2026-11-03: pass); `CceCache/MimirCacheCoherenceRace.DirtyLineRace/Cce1_Cfg1` (fail, 2026-11-03: pass); `CceCache/MimirCacheCoherenceRace.DirtyLineRace/Cce1_Cfg3` (pass, 2026-11-03: fail); `IdmaTransactionId/MimirTridIdma.DuplicateId/Cce0` (pass, 2026-11-03: fail).
+
+| Row | Test | Result | Time |
+|---|---|---|---|
+| 1 | `MimirHostDram.ReconnectPersists` | pass | 4.6 s |
+| 1 | `MimirHostDram.HostSideRejections` | fail: as on 2026-11-03: a 6-byte write clears the 2 unwritten bytes of its last word (read `0x00001615`, expected `0xFFFF1615`); chippy zero-fills a partial trailing word, see Root causes of the 2026-11-03 failures | 0.1 s |
+| 1 | `MimirHostTl1.Tl1MapLayout` | pass | 0.2 s |
+| 1 | `MimirHostTl1.BoundaryAndIsolation` | pass | 0.8 s |
+| 1 | `MimirHostTl1.HostSideRejections` | pass | 0.1 s |
+| 1 | `HostDram/MimirHostDramView.PatternReadback/View0` | pass | 25 min 46 s |
+| 1 | `HostDram/MimirHostDramView.PatternReadback/View1` | pass | 26 min 45 s |
+| 1 | `HostDram/MimirHostDramView.BoundaryAndAlias/View0` | fail: as on 2026-11-03: alias walk at view offset `0x2000000` read `0x00000000`, expected the guard `0x6aa18000`; View1 passes. UMD takes the write as a CCE reset-vector write (see Root causes of the 2026-11-03 failures) | 0.7 s |
+| 1 | `HostDram/MimirHostDramView.BoundaryAndAlias/View1` | pass | 0.7 s |
+| 1 | `HostTl1/MimirHostTl1Cce.PerCceVisibility/Cce0` | pass | 10 min 20 s |
+| 1 | `HostTl1/MimirHostTl1Cce.PerCceVisibility/Cce1` | pass | 10 min 45 s |
+| 2a | `MimirFwPreflight.FirmwareLoadPreflight` | fail: as on 2026-11-03: the 1-byte `fw_shared_globals_ready` write clears the other 3 bytes of its TL1 word on both CCEs (CCE0 read `0x000000b8`, expected `0x5a5a5ab8`); same chippy partial-word write | 28 s |
+| 2b | `MimirFwLoad.LoadAndReachInitDone` | fail: not valid, a runner merge error: row 2a opened a device first in the same process, so this open did not reload firmware and the reset vectors still held the test's poison (`0xdead000N`) and `fw_shared_globals_ready` read `0xB8`. Rerun alone in the next row | 26 s |
+| 2b | `MimirFwLoad.ImageManifest` | pass | 6.8 s |
+| 2b | `MimirFwLoad.AllCcesIndependent` | pass | 1 min 12 s |
+| 2b | `FirmwareLoad/MimirFwLaunch.NoOpLaunchCompletes/Cce0` | pass | 8.7 s |
+| 2b | `FirmwareLoad/MimirFwLaunch.NoOpLaunchCompletes/Cce1` | pass | 8.0 s |
+| 2b | `MimirFwLoad.LoadAndReachInitDone` | pass | 31 s |
+| 2d | `MimirFwReinit.ReloadsOnEveryOpen` | pass | 27 s |
+| 3 | `MimirKernelLoad.SameBinaryAllCcesUnicast` | pass | 16 s |
+| 3 | `KernelLoad/MimirKernelLoad.MinimalKernelExecutes/Cce0` | pass | 8.2 s |
+| 3 | `KernelLoad/MimirKernelLoad.MinimalKernelExecutes/Cce1` | pass | 9.0 s |
+| 3 | `KernelLoad/MimirKernelLoad.EachHartAlone/Cce0` | pass | 22 s |
+| 3 | `KernelLoad/MimirKernelLoad.EachHartAlone/Cce1` | pass | 21 s |
+| 3 | `KernelLoad/MimirKernelLoad.ArgsReplaceStale/Cce0` | pass | 14 s |
+| 3 | `KernelLoad/MimirKernelLoad.ArgsReplaceStale/Cce1` | pass | 15 s |
+| 3 | `KernelLoad/MimirKernelLoad.FirmwareKeepsRunningAcrossReopen/Cce0` | pass | 20 s |
+| 3 | `KernelLoad/MimirKernelLoad.FirmwareKeepsRunningAcrossReopen/Cce1` | pass | 19 s |
+| 3 | `LocalTl1/MimirLocalTl1.SameMimirCopy/Cce0To1` | pass | 22 s |
+| 3 | `LocalTl1/MimirLocalTl1.SameMimirCopy/Cce1To0` | pass | 22 s |
+| 3a | `DmSuitePort/MimirDmIdma.Copy/OwnTl1` | pass | 15 s |
+| 3a | `DmSuitePort/MimirDmIdma.Copy/LocalGddr` | pass | 22 s |
+| 3a | `DmSuitePort/MimirDmIdma.Copy/LocalGddr1` | pass | 21 s |
+| 3b | `LocalDram/MimirLocalDram.CceWritesTl1ToDram/Cce0` | pass | 4 min 13 s |
+| 3b | `LocalDram/MimirLocalDram.CceWritesTl1ToDram/Cce1` | pass | 4 min 15 s |
+| 3b | `LocalDram/MimirLocalDram.CceReadsDramToTl1/Cce0` | pass | 4 min 12 s |
+| 3b | `LocalDram/MimirLocalDram.CceReadsDramToTl1/Cce1` | pass | 4 min 32 s |
+| 3b | `LocalDram/MimirLocalDram.LoopbackChecksIntermediate/Cce0` | timeout: killed at its 27 min limit (2026-11-03: 5 min 31 s; the four row 3b cases before it ran 1.6 to 1.7 times their 2026-11-03 times). The log has nothing after the seed line and no host deadline fired, so whether it hung or was still running is not known. The emulator was restarted and the case ran again first in the new session (next row) and passed in 8 min 49 s, 1.6 times its 2026-11-03 time, so this attempt was a one-off stall | 27 min 6 s |
+| 3b | `LocalDram/MimirLocalDram.LoopbackChecksIntermediate/Cce0` | pass | 8 min 49 s |
+| 3b | `LocalDram/MimirLocalDram.LoopbackChecksIntermediate/Cce1` | pass | 8 min 55 s |
+| 3b | `LocalDram/MimirLocalDram.SizeAlignmentMatrix/Cce0` | timeout: killed at the 9 h 13 min allowance (2 h 17 min on 2026-11-03). Progress lines came every few minutes until 04:24 UTC, then at 05:01 and 06:34, then none for 4 h 38 min. The host was still exchanging traffic with the emulator when it was killed. Cause not known. | 9 h 13 min |
+| 3b | `LocalDram/MimirLocalDram.SizeAlignmentMatrix/Cce1` | timeout: killed at the 9 h 29 min allowance (2 h 21 min on 2026-11-03). It got 5 combinations further than Cce0 (to size 512 in view 1). The emulator replies slowed from about 2 ms to about 15 ms each on the larger sizes, and no progress line came in the last 2 h 35 min. Cause not known. | 9 h 29 min |
+| 3b | `LocalDram/MimirLocalDram.RepeatedAndOverlappingPerHart/Cce0` | pass | 34 min 32 s |
+| 3b | `LocalDram/MimirLocalDram.RepeatedAndOverlappingPerHart/Cce1` | pass | 33 min 10 s |
+| contract | `MimirEmu.CceSramChannelsDoNotAliasThroughMetalCluster` | pass | 0.0 s |
+| contract | `MimirEmu.RuntimeFirmwareInitializesThroughPublicDeviceApi` | pass | 6.7 s |
+| contract | `MimirEmu.AllCcesCopyLocalMimirBlock` | pass | 29 s |
+| contract | `MimirEmu/AllocatedDramBufferHostLoopback.RoundTrip/Partition0` | pass | 7.2 s |
+| contract | `MimirEmu/AllocatedDramBufferHostLoopback.RoundTrip/Partition1` | pass | 6.8 s |
+| contract | `MimirEmu/DramChannelsDoNotAliasThroughPublicDeviceApi.RoundTrip/Partition0` | pass | 6.9 s |
+| contract | `MimirEmu/DramChannelsDoNotAliasThroughPublicDeviceApi.RoundTrip/Partition1` | pass | 6.7 s |
+| contract | `MimirEmu/CceSramRoundTripThroughUnitMesh.RoundTrip/Cce0` | pass | 6.9 s |
+| contract | `MimirEmu/CceSramRoundTripThroughUnitMesh.RoundTrip/Cce1` | pass | 6.6 s |
+| contract | `MimirEmu/CceSramRoundTripThroughMetalCluster.RoundTrip/Cce0` | pass | 0.0 s |
+| contract | `MimirEmu/CceSramRoundTripThroughMetalCluster.RoundTrip/Cce1` | pass | 0.0 s |
+| contract | `MimirEmu/HartZeroRunsDramKernel.WritesMagic/Cce0` | pass | 7.6 s |
+| contract | `MimirEmu/HartZeroRunsDramKernel.WritesMagic/Cce1` | pass | 7.8 s |
+| contract | `MimirEmu/AllHartsRunDramKernel.WritesMagic/Cce0` | pass | 10 s |
+| contract | `MimirEmu/AllHartsRunDramKernel.WritesMagic/Cce1` | pass | 12 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithCompileTimeArgs.RoundTrip/Cce0Partition0` | pass | 7.8 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithCompileTimeArgs.RoundTrip/Cce0Partition1` | pass | 7.8 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithCompileTimeArgs.RoundTrip/Cce1Partition0` | pass | 8.0 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithCompileTimeArgs.RoundTrip/Cce1Partition1` | pass | 7.9 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithRuntimeArgs.RoundTrip/Cce0Partition0` | pass | 24 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithRuntimeArgs.RoundTrip/Cce0Partition1` | pass | 18 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithRuntimeArgs.RoundTrip/Cce1Partition0` | pass | 18 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithRuntimeArgs.RoundTrip/Cce1Partition1` | pass | 20 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrLargerThanAlignment.RoundTrip/Cce0Partition0` | pass | 19 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrLargerThanAlignment.RoundTrip/Cce0Partition1` | pass | 18 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrLargerThanAlignment.RoundTrip/Cce1Partition0` | pass | 18 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrLargerThanAlignment.RoundTrip/Cce1Partition1` | pass | 19 s |
+| contract | `MimirEmuSameMimirDirect/AllHartsIdmaWriteGddr.WritesMagic/Cce0Partition0` | pass | 12 s |
+| contract | `MimirEmuSameMimirDirect/AllHartsIdmaWriteGddr.WritesMagic/Cce0Partition1` | pass | 11 s |
+| contract | `MimirEmuSameMimirDirect/AllHartsIdmaWriteGddr.WritesMagic/Cce1Partition0` | pass | 11 s |
+| contract | `MimirEmuSameMimirDirect/AllHartsIdmaWriteGddr.WritesMagic/Cce1Partition1` | pass | 11 s |
+| contract | `MimirEmu/WritesCrossMimirCceSram.WritesMagic/Cce0` | skip: Configured descriptor does not expose a remote Mimir CCE. | 6.9 s |
+| contract | `MimirEmu/WritesCrossMimirCceSram.WritesMagic/Cce1` | skip: Configured descriptor does not expose a remote Mimir CCE. | 6.5 s |
+| contract | `MimirEmu/PrefetchesLocalGddrToRemoteCceSram.RoundTrip/Cce0` | skip: Configured descriptor does not expose a remote Mimir CCE. | 6.8 s |
+| contract | `MimirEmu/PrefetchesLocalGddrToRemoteCceSram.RoundTrip/Cce1` | skip: Configured descriptor does not expose a remote Mimir CCE. | 7.3 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithCompileTimeArgs.RoundTrip/Cce0Partition0` | skip: Configured descriptor does not expose CCE 0 partition 0 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithCompileTimeArgs.RoundTrip/Cce0Partition1` | skip: Configured descriptor does not expose CCE 0 partition 1 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithCompileTimeArgs.RoundTrip/Cce1Partition0` | skip: Configured descriptor does not expose CCE 1 partition 0 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithCompileTimeArgs.RoundTrip/Cce1Partition1` | skip: Configured descriptor does not expose CCE 1 partition 1 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithRuntimeArgs.RoundTrip/Cce0Partition0` | skip: Configured descriptor does not expose CCE 0 partition 0 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithRuntimeArgs.RoundTrip/Cce0Partition1` | skip: Configured descriptor does not expose CCE 0 partition 1 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithRuntimeArgs.RoundTrip/Cce1Partition0` | skip: Configured descriptor does not expose CCE 1 partition 0 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithRuntimeArgs.RoundTrip/Cce1Partition1` | skip: Configured descriptor does not expose CCE 1 partition 1 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrLargerThanAlignment.RoundTrip/Cce0Partition0` | skip: Configured descriptor does not expose CCE 0 partition 0 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrLargerThanAlignment.RoundTrip/Cce0Partition1` | skip: Configured descriptor does not expose CCE 0 partition 1 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrLargerThanAlignment.RoundTrip/Cce1Partition0` | skip: Configured descriptor does not expose CCE 1 partition 0 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrLargerThanAlignment.RoundTrip/Cce1Partition1` | skip: Configured descriptor does not expose CCE 1 partition 1 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/AllHartsWriteGddr.WritesMagic/Cce0Partition0` | skip: Configured descriptor does not expose CCE 0 partition 0 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/AllHartsWriteGddr.WritesMagic/Cce0Partition1` | skip: Configured descriptor does not expose CCE 0 partition 1 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/AllHartsWriteGddr.WritesMagic/Cce1Partition0` | skip: Configured descriptor does not expose CCE 1 partition 0 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/AllHartsWriteGddr.WritesMagic/Cce1Partition1` | skip: Configured descriptor does not expose CCE 1 partition 1 as a remote partition. | 0.0 s |
+| contract | `MimirEmu/CopiesEveryMimirBlock.RoundTrip/Cce0` | pass | 8.5 s |
+| contract | `MimirEmu/CopiesEveryMimirBlock.RoundTrip/Cce1` | pass | 8.0 s |
+| 2c | `MimirFwLoadNegative.SkipLoadNeverDone` | fail: same as 2026-11-03: with both firmware windows zeroed, the device open succeeds and both CCEs report done (GO signal `0x00`, expected `RUN_MSG_INIT`). Stale cached firmware in the shared L2, a runtime gap (see the root causes above). | 31 s |
+| 17 | `MimirPrefetcher.SupportPreconditionsHold` | pass | 7.1 s |
+| 18 | `MimirPrefetcher.SupportPreconditionsFailOnUninitializedSender` | pass | 7.2 s |
+| 19 | `MimirPrefetcher.SupportStartStopSucceeds` | pass | 10 s |
+| 20 | `MimirPrefetcher.SupportPreconditionsHoldWhileReceiverRuns` | pass | 10 s |
+| 21 | `MimirPrefetcher.GcbLayoutLocalReceiver` | pass | 7.8 s |
+| 24 | `MimirPrefetcher.GcbLayoutRejectsConflictingReceivers` | pass | 6.9 s |
+| 25 | `MimirPrefetcher.GcbSmokeDiscardDrain` | pass | 11 s |
+| 26 | `MimirPrefetcher.GcbSmokeValidatorLocal` | pass | 11 s |
+| 27 | `MimirPrefetcher.GcbSmokeValidatorWrongSeed` | pass | 10 s |
+| 28 | `MimirPrefetcher.GcbSmokeResize` | pass | 10 s |
+| 30 | `MimirPrefetcher.GcbSmokeDrainUntilStopped` | pass | 11 s |
+| 31 | `MimirPrefetcher.GcbSmokeStallUntilReleased` | pass | 15 s |
+| 32 | `MimirPrefetcher.GcbSmokeDrainTimeout` | pass | 15 s |
+| 33 | `MimirPrefetcher.GcbSmokeReceiverWaitTimeout` | pass | 13 s |
+| 34 | `MimirPrefetcher.GcbSmokeRelaunchResumes` | pass | 13 s |
+| 35 | `MimirPrefetcher.LifecycleStartStop` | pass | 9.1 s |
+| 36 | `MimirPrefetcher.LifecycleStartStopTwice` | pass | 13 s |
+| 37 | `MimirPrefetcher.LifecycleBusySenderFailsStart` | pass | 9.2 s |
+| 38 | `MimirPrefetcher.LifecycleQueueRejectsReceiverOnSender` | pass | 12 s |
+| 39 | `MimirPrefetcher.LifecycleWaitCq` | pass | 14 s |
+| 40 | `MimirPrefetcher.LifecycleDrainAtStop` | pass | 14 s |
+| 41 | `MimirPrefetcher.PrefetchOnePagePerSessionLocal0To1` | fail: new (passed on 2026-11-03). The receiver on CCE 1 reported a data mismatch (code 4) on the second request: one word wrong, request 0 page 0 word 256 (byte 1024), read as `0x00000000` twice, expected `0x71de8c2c`. The rest of the page matched. It ran once. Located on 2026-11-24: the sender lost one store into its stage slot (see Lost stage-slot store in `PrefetchOnePagePerSessionLocal0To1`, 2026-11-24). | 20 s |
+| 49 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/SubChunkLocal0To1` | pass | 21 s |
+| 51 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/BelowStageThirdLocal0To1` | pass | 21 s |
+| 53 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/PartialStageChunkLocal0To1` | pass | 19 s |
+| 54 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/AboveStageThirdLocal0To1` | pass | 17 s |
+| 56 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/PageSplitLocal0To1` | pass | 20 s |
+| 57 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/AbaLocal0To1` | pass | 22 s |
+| 59 | `TensorPrefetcher/MimirPrefetcherSingleGcb.Delivers/WrapAndResizeLocal0To1` | pass | 28 s |
+| 61 | `TensorPrefetcher/MimirPrefetcherGcbSwitch.Delivers/GcbSwitchLocal0To1` | pass | 21 s |
+| 63 | `MimirPrefetcher.PrefetchFenceHoldsDeliveryLocal0To1` | pass | 19 s |
+| 65 | `MimirPrefetcher.QueueRejectsKRowMajorTensor` | pass | 13 s |
+| 66 | `MimirPrefetcher.QueueRejectsStreamingTensor` | pass | 14 s |
+| 67 | `MimirPrefetcher.QueueRejectsRangePastTensor` | pass | 14 s |
+| 68 | `MimirPrefetcher.QueueRejectsRangePastView` | pass | 13 s |
+| 72 | `DmSuitePort/MimirDmRuntimeArgs.IllegalTooManyRuntimeArgs/Cce0` | pass | 9.1 s |
+| 72 | `DmSuitePort/MimirDmRuntimeArgs.IllegallyModifyRuntimeArgs/Cce0` | pass | 8.0 s |
+| 73 | `DmSuitePort/MimirDmMeshBufferDram.InterleavedPlacement/mimir_1x1` | pass | 20 s |
+| 73 | `DmSuitePort/MimirDmMeshBufferDram.WriteRead/mimir_1x1` | pass | 11 s |
+| 73 | `DmSuitePort/MimirDmMeshBufferDram.MultipleWriteReadRounds/mimir_1x1` | pass | 47 s |
+| 74 | `DmSuitePort/MimirDmIdma.Copy/OwnTl1` | pass | 14 s |
+| 74 | `DmSuitePort/MimirDmIdma.Copy/MaxPacket` | pass | 25 s |
+| 74 | `DmSuitePort/MimirDmIdma.Copy/SiblingTl1` | pass | 19 s |
+| 74 | `DmSuitePort/MimirDmIdma.Copy/LocalGddr` | pass | 21 s |
+| 74 | `DmSuitePort/MimirDmIdma.Copy/LocalGddr1` | pass | 19 s |
+| 74 | `DmSuitePort/MimirDmIdma.Copy/RemoteTl1` | skip: Remote iDMA cases need a 2x descriptor (two Mimirs). | 0.0 s |
+| 74 | `DmSuitePort/MimirDmIdma.Copy/RemoteGddr` | skip: Remote iDMA cases need a 2x descriptor (two Mimirs). | 0.0 s |
+| 74 | `DmSuitePort/MimirDmIdma.Copy/Strided1D` | pass | 13 s |
+| 74 | `DmSuitePort/MimirDmIdma.Copy/Strided1DLocalGddr` | pass | 13 s |
+| 74 | `DmSuitePort/MimirDmIdma.Copy/Strided1DSubLine` | pass | 12 s |
+| 74 | `DmSuitePort/MimirDmIdma.Copy/Strided1DSubLineLocalGddr` | pass | 13 s |
+| 74 | `DmSuitePort/MimirDmIdma.Copy/RemoteTl1KernelVerified` | skip: Remote iDMA cases need a 2x descriptor (two Mimirs). | 0.0 s |
+| 75 | `DmSuitePort/MimirDmCache.Op/NoFlushNotVisible` | pass | 15 s |
+| 75 | `DmSuitePort/MimirDmCache.Op/L1FlushLine` | pass | 13 s |
+| 75 | `DmSuitePort/MimirDmCache.Op/L1FlushFull` | pass | 14 s |
+| 75 | `DmSuitePort/MimirDmCache.Op/L1InvalidateLine` | pass | 13 s |
+| 75 | `DmSuitePort/MimirDmCache.Op/L2FlushLine` | pass | 13 s |
+| 75 | `DmSuitePort/MimirDmCache.Op/L2FlushRange` | pass | 14 s |
+| 75 | `DmSuitePort/MimirDmCache.Op/L2FlushFull` | pass | 16 s |
+| 75 | `DmSuitePort/MimirDmCache.Op/L2InvalidateLine` | pass | 13 s |
+| 75 | `DmSuitePort/MimirDmCache.Op/InvalidateFreshRead` | pass | 14 s |
+| 75 | `DmSuitePort/MimirDmCache.Op/HartToHartCoherent` | fail: same as 2026-11-03: hart 1 warm read before hart 0 stores returned the old value in 0 of 64 words, expected 64 (`test_mimir_dm_cache.cpp:238`). Stale lines in the shared L2 from an earlier process, a runtime gap (see the root causes above). | 20 s |
+| 75 | `DmSuitePort/MimirDmCache.Op/L2InvalidateFreshRead` | fail: same as 2026-11-03: the cached re-read before the L2 invalidate saw 0 of 64 stale words, expected 64 (`test_mimir_dm_cache.cpp:282`). Stale lines in the shared L2 from an earlier process, a runtime gap (see the root causes above). | 13 s |
+| 76 | `DmSuitePort/MimirDmCachePerf.WritePath/Uncached1B` | pass | 1 min 16 s |
+| 76 | `DmSuitePort/MimirDmCachePerf.WritePath/Uncached8B` | pass | 1 min 18 s |
+| 76 | `DmSuitePort/MimirDmCachePerf.WritePath/CachedRangeFlush` | fail: new (passed on 2026-11-03). For the 8 B and 200 B writes, the guard after the data was overwritten up to the end of its 64 B line: 14 of 16 guard words hold the data pattern continued (`0xca0b0002` to `0xca0b000f` after 8 B, `0xca0b0032` to `0xca0b003f` after 200 B), and the last 2 guard words, in the next line, are intact. The 64 B, 2048 B and 32 KiB writes, which end on a line boundary, passed. The values are not this case's pattern (`0x9E11xxxx`, `0x9E13xxxx`): `0xCA0Bxxxx` is the data of `MimirDmCache.Op/L2InvalidateFreshRead`, which ran just before row 76 and left its four lines cached. Stale lines in the shared L2, a runtime gap, exposed by `L1InvalidateFull` running after row 80 instead of before row 76 (see the root causes above). | 1 min 15 s |
+| 76 | `DmSuitePort/MimirDmCachePerf.WritePath/CachedFastFlush` | pass | 1 min 12 s |
+| 77 | `DmSuitePort/MimirDmAddrgen.Pattern/Strided1D_SrcOnly` | pass | 8.3 s |
+| 77 | `DmSuitePort/MimirDmAddrgen.Pattern/Strided1D_DstOnly` | pass | 8.1 s |
+| 77 | `DmSuitePort/MimirDmAddrgen.Pattern/Strided1D_Both` | pass | 8.3 s |
+| 77 | `DmSuitePort/MimirDmAddrgen.Pattern/Strided2D_SrcOnly` | pass | 8.2 s |
+| 77 | `DmSuitePort/MimirDmAddrgen.Pattern/Strided2D_DstOnly` | pass | 8.3 s |
+| 77 | `DmSuitePort/MimirDmAddrgen.Pattern/Strided2D_Both` | pass | 8.6 s |
+| 77 | `DmSuitePort/MimirDmAddrgen.Pattern/Face_SrcOnly` | pass | 8.3 s |
+| 77 | `DmSuitePort/MimirDmAddrgen.Pattern/Face_DstOnly` | pass | 8.4 s |
+| 77 | `DmSuitePort/MimirDmAddrgen.Pattern/Face_Both` | pass | 8.6 s |
+| 78 | `DmSuitePort/MimirDmAddrgen.Pattern/Im2Col_FullImage` | pass | 9.6 s |
+| 78 | `DmSuitePort/MimirDmAddrgen.Pattern/Im2Col_Dilation1` | pass | 11 s |
+| 79 | `DmSuitePort/MimirDmDramUnary.ReaderWriterHandshake/Cce0` | pass | 20 s |
+| 79 | `DmSuitePort/MimirDmDramUnary.ReaderWriterHandshake/Cce1` | pass | 17 s |
+| 80 | `DmSuitePort/MimirDmScopedLockClm.CacheOps/InvalidateOnAcquire` | pass | 11 s |
+| 80 | `DmSuitePort/MimirDmScopedLockClm.CacheOps/FlushOnRelease` | pass | 11 s |
+| 80 | `DmSuitePort/MimirDmScopedLockClm.CacheOps/LockedRangeOnly` | pass | 11 s |
+| 75 | `DmSuitePort/MimirDmCache.Op/L1InvalidateFull` | pass | 14 s |
+| 81 | `CceKernelCompile/MimirCceTestKernelCompile.Kernel/cce_cache_ops` | pass | 8.3 s |
+| 81 | `CceKernelCompile/MimirCceTestKernelCompile.Kernel/cce_idma_copy` | pass | 6.5 s |
+| 81 | `CceKernelCompile/MimirCceTestKernelCompile.Kernel/cce_amo_ops` | pass | 7.7 s |
+| 81 | `CceKernelCompile/MimirCceTestKernelCompile.Kernel/cce_scoped_lock_producer` | pass | 7.5 s |
+| 81 | `CceKernelCompile/MimirCceTestKernelCompile.Kernel/cce_scoped_lock_consumer` | pass | 6.9 s |
+| 82 | `CceCache/MimirCacheProbe.EightHartLaunch/Cce0` | pass | 51 s |
+| 82 | `CceCache/MimirCacheProbe.EightHartLaunch/Cce1` | pass | 51 s |
+| 83 | `CceCache/MimirCacheProbe.SnoopConfig/Cce0` | pass | 12 s |
+| 83 | `CceCache/MimirCacheProbe.SnoopConfig/Cce1` | pass | 12 s |
+| 84 | `CceAtomics/MimirAtomicProbe.TwoHartAmo/Cce0` | pass | 16 s |
+| 84 | `CceAtomics/MimirAtomicProbe.TwoHartAmo/Cce1` | pass | 16 s |
+| 90 | `CceCache/MimirCacheOps.L1DcacheFlushLine/Cce0` | pass | 14 s |
+| 90 | `CceCache/MimirCacheOps.L1DcacheFlushLine/Cce1` | pass | 14 s |
+| 90 | `CceCache/MimirCacheOps.L1DcacheFlushFull/Cce0` | pass | 14 s |
+| 90 | `CceCache/MimirCacheOps.L1DcacheFlushFull/Cce1` | pass | 13 s |
+| 91 | `CceCache/MimirCacheOps.DirtyEvictionPartialLine/Cce0` | pass | 20 s |
+| 91 | `CceCache/MimirCacheOps.DirtyEvictionPartialLine/Cce1` | pass | 20 s |
+| 92 | `CceCache/MimirCacheSharedL2.SameLineSameOffset/Cce0_WriterReader` | pass | 20 s |
+| 92 | `CceCache/MimirCacheSharedL2.SameLineSameOffset/Cce0_EightWriters` | pass | 55 s |
+| 92 | `CceCache/MimirCacheSharedL2.SameLineSameOffset/Cce1_WriterReader` | pass | 20 s |
+| 92 | `CceCache/MimirCacheSharedL2.SameLineSameOffset/Cce1_EightWriters` | pass | 58 s |
+| 92 | `CceCache/MimirCacheSharedL2.SameLineDiffOffset/Cce0_WriterReader` | pass | 20 s |
+| 92 | `CceCache/MimirCacheSharedL2.SameLineDiffOffset/Cce0_EightWriters` | pass | 53 s |
+| 92 | `CceCache/MimirCacheSharedL2.SameLineDiffOffset/Cce1_WriterReader` | pass | 18 s |
+| 92 | `CceCache/MimirCacheSharedL2.SameLineDiffOffset/Cce1_EightWriters` | pass | 52 s |
+| 92 | `CceCache/MimirCacheSharedL2.AdjacentLine/Cce0_WriterReader` | pass | 19 s |
+| 92 | `CceCache/MimirCacheSharedL2.AdjacentLine/Cce0_EightWriters` | pass | 57 s |
+| 92 | `CceCache/MimirCacheSharedL2.AdjacentLine/Cce1_WriterReader` | pass | 20 s |
+| 92 | `CceCache/MimirCacheSharedL2.AdjacentLine/Cce1_EightWriters` | pass | 52 s |
+| 93 | `CceCache/MimirCacheScopedLock.MultiConsumer/Cce0` | pass | 18 s |
+| 93 | `CceCache/MimirCacheScopedLock.MultiConsumer/Cce1` | pass | 20 s |
+| 93 | `CceCache/MimirCacheScopedLock.RingWrap/Cce0` | pass | 11 s |
+| 93 | `CceCache/MimirCacheScopedLock.RingWrap/Cce1` | pass | 13 s |
+| 95 | `CceCache/MimirCacheOps.FlushFenceOrdering/Cce0` | pass | 57 s |
+| 95 | `CceCache/MimirCacheOps.FlushFenceOrdering/Cce1` | pass | 59 s |
+| 97 | `CceCache/MimirCacheWriterProbe.ExternalWriters/Cce0_Host_SnoopOffInvalidate` | pass | 13 s |
+| 97 | `CceCache/MimirCacheWriterProbe.ExternalWriters/Cce0_Host_InvalidateOnly` | pass | 12 s |
+| 97 | `CceCache/MimirCacheWriterProbe.ExternalWriters/Cce0_SiblingSpa_SnoopOffInvalidate` | pass | 17 s |
+| 97 | `CceCache/MimirCacheWriterProbe.ExternalWriters/Cce0_SiblingSpa_InvalidateOnly` | pass | 18 s |
+| 97 | `CceCache/MimirCacheWriterProbe.ExternalWriters/Cce0_RemoteCce_SnoopOffInvalidate` | skip: Descriptor exposes 1 Mimir; the case needs two. | 0.0 s |
+| 97 | `CceCache/MimirCacheWriterProbe.ExternalWriters/Cce0_RemoteCce_InvalidateOnly` | skip: Descriptor exposes 1 Mimir; the case needs two. | 0.0 s |
+| 97 | `CceCache/MimirCacheWriterProbe.ExternalWriters/Cce1_Host_SnoopOffInvalidate` | pass | 13 s |
+| 97 | `CceCache/MimirCacheWriterProbe.ExternalWriters/Cce1_Host_InvalidateOnly` | pass | 15 s |
+| 97 | `CceCache/MimirCacheWriterProbe.ExternalWriters/Cce1_SiblingSpa_SnoopOffInvalidate` | pass | 18 s |
+| 97 | `CceCache/MimirCacheWriterProbe.ExternalWriters/Cce1_SiblingSpa_InvalidateOnly` | pass | 18 s |
+| 97 | `CceCache/MimirCacheWriterProbe.ExternalWriters/Cce1_RemoteCce_SnoopOffInvalidate` | skip: Descriptor exposes 1 Mimir; the case needs two. | 0.0 s |
+| 97 | `CceCache/MimirCacheWriterProbe.ExternalWriters/Cce1_RemoteCce_InvalidateOnly` | skip: Descriptor exposes 1 Mimir; the case needs two. | 0.0 s |
+| 98 | `CceCache/MimirCacheWriterProbe.ExternalWriters/Cce0_SiblingSpa_SnoopOn` | pass | 18 s |
+| 98 | `CceCache/MimirCacheWriterProbe.ExternalWriters/Cce1_SiblingSpa_SnoopOn` | pass | 18 s |
+| 99 | `CceCache/MimirCacheWriterProbe.ExternalWriters/Cce0_LocalIdma_SnoopOffInvalidate` | pass | 23 s |
+| 99 | `CceCache/MimirCacheWriterProbe.ExternalWriters/Cce0_LocalIdma_InvalidateOnly` | pass | 22 s |
+| 99 | `CceCache/MimirCacheWriterProbe.ExternalWriters/Cce1_LocalIdma_SnoopOffInvalidate` | pass | 23 s |
+| 99 | `CceCache/MimirCacheWriterProbe.ExternalWriters/Cce1_LocalIdma_InvalidateOnly` | pass | 24 s |
+| 100 | `CceCache/MimirCacheWriterProbe.ExternalWriters/Cce0_LocalGddrIdma_SnoopOffInvalidate` | pass | 23 s |
+| 100 | `CceCache/MimirCacheWriterProbe.ExternalWriters/Cce0_LocalGddrIdma_InvalidateOnly` | pass | 23 s |
+| 100 | `CceCache/MimirCacheWriterProbe.ExternalWriters/Cce1_LocalGddrIdma_SnoopOffInvalidate` | pass | 22 s |
+| 100 | `CceCache/MimirCacheWriterProbe.ExternalWriters/Cce1_LocalGddrIdma_InvalidateOnly` | pass | 26 s |
+| 102 | `CceCache/MimirCacheScopedLock.NonSnoopingProducer/Cce0` | pass | 10 s |
+| 102 | `CceCache/MimirCacheScopedLock.NonSnoopingProducer/Cce1` | pass | 10 s |
+| 103 | `CceCache/MimirCacheCoherence.CrossCce/Cce0` | pass | 30 s |
+| 103 | `CceCache/MimirCacheCoherence.CrossCce/Cce1` | pass | 30 s |
+| 104 | `CceCache/MimirCacheCoherence.CrossCceSnoopOn/Cce0` | pass | 18 s |
+| 104 | `CceCache/MimirCacheCoherence.CrossCceSnoopOn/Cce1` | pass | 18 s |
+| 106 | `CceCache/MimirCacheCoherenceRace.DirtyLineRace/Cce0_Cfg6` | pass | 1 min 15 s |
+| 106 | `CceCache/MimirCacheCoherenceRace.DirtyLineRace/Cce0_Cfg0` | pass | 1 min 14 s |
+| 106 | `CceCache/MimirCacheCoherenceRace.DirtyLineRace/Cce0_Cfg1` | fail: passed on 2026-11-03, failed on 2026-11-13 the same way: `Neighbour_Evict` leg, the writer's iDMA command was acked but its 8 words never landed in TL1 (external words kept 0/8) and the hart's budget ran out (`test_mimir_dm_cache.cpp:2010`); the known intermittent failure of the snoop configs with bit 0 (`disable_inline_writes`) set, see Root causes of the 2026-11-03 failures. The emulator restarted after it. | 37 s |
+| 106 | `CceCache/MimirCacheCoherenceRace.DirtyLineRace/Cce0_Cfg2` | pass | 1 min 16 s |
+| 106 | `CceCache/MimirCacheCoherenceRace.DirtyLineRace/Cce0_Cfg3` | fail: same as 2026-11-03: acked but never visible in TL1 on the `Neighbour_Evict` leg, budget ran out; the known intermittent failure of the snoop configs with bit 0 (`disable_inline_writes`) set, see Root causes of the 2026-11-03 failures. The emulator restarted after it. | 36 s |
+| 106 | `CceCache/MimirCacheCoherenceRace.DirtyLineRace/Cce0_Cfg4` | pass | 1 min 16 s |
+| 106 | `CceCache/MimirCacheCoherenceRace.DirtyLineRace/Cce0_Cfg5` | pass | 1 min 12 s |
+| 106 | `CceCache/MimirCacheCoherenceRace.DirtyLineRace/Cce0_Cfg7` | fail: same as 2026-11-03: acked but never visible in TL1 on the `Neighbour_Flush64` leg, budget ran out; the known intermittent failure of the snoop configs with bit 0 (`disable_inline_writes`) set, see Root causes of the 2026-11-03 failures. The emulator restarted after it. | 45 s |
+| 106 | `CceCache/MimirCacheCoherenceRace.DirtyLineRace/Cce1_Cfg6` | pass | 1 min 18 s |
+| 106 | `CceCache/MimirCacheCoherenceRace.DirtyLineRace/Cce1_Cfg0` | pass | 1 min 20 s |
+| 106 | `CceCache/MimirCacheCoherenceRace.DirtyLineRace/Cce1_Cfg1` | fail: passed on 2026-11-03, failed in the 2026-10-26 run: `Neighbour_Flush64` leg, acked but never visible in TL1 (external words kept 0/8), budget ran out; the known intermittent failure of the snoop configs with bit 0 (`disable_inline_writes`) set, see Root causes of the 2026-11-03 failures. The emulator restarted after it. | 47 s |
+| 106 | `CceCache/MimirCacheCoherenceRace.DirtyLineRace/Cce1_Cfg2` | pass | 1 min 17 s |
+| 106 | `CceCache/MimirCacheCoherenceRace.DirtyLineRace/Cce1_Cfg3` | pass | 1 min 18 s |
+| 106 | `CceCache/MimirCacheCoherenceRace.DirtyLineRace/Cce1_Cfg4` | pass | 1 min 17 s |
+| 106 | `CceCache/MimirCacheCoherenceRace.DirtyLineRace/Cce1_Cfg5` | pass | 1 min 17 s |
+| 106 | `CceCache/MimirCacheCoherenceRace.DirtyLineRace/Cce1_Cfg7` | fail: same as 2026-11-03: `Neighbour_Evict` leg, the kernel finished but external words kept 0/8 (the sibling write was lost); the known intermittent failure of the snoop configs with bit 0 (`disable_inline_writes`) set, see Root causes of the 2026-11-03 failures. | 1 min 17 s |
+| 107 | `CceCache/MimirCacheStress.ReuseThrash/Cce0` | pass | 5 min 12 s |
+| 107 | `CceCache/MimirCacheStress.ReuseThrash/Cce1` | pass | 5 min 38 s |
+| 108 | `CceCache/MimirCacheStress.PerfSweep/Cce0` | pass | 5 min 56 s |
+| 108 | `CceCache/MimirCacheStress.PerfSweep/Cce1` | pass | 10 min 2 s |
+| 109 | `CceCache/MimirCacheStress.PreloadChurn/Cce0` | fail: same as 2026-11-03: snoop leg (CCE1 iDMA from GDDR view 0 into hot set TL1 `0x8b4c0`), 1008 stale words consumed at the first read, expected 0. The iDMA snoop tag applies only to a sibling CCE's iDMA writes into this CCE's TL1 (`test_mimir_dm_cache.cpp:2211`) | 2 min 30 s |
+| 109 | `CceCache/MimirCacheStress.PreloadChurn/Cce1` | fail: same as 2026-11-03: snoop leg (CCE0 iDMA from GDDR view 1 into hot set TL1 `0x8b4c0`), 1024 stale words consumed at the first read, expected 0. The iDMA snoop tag applies only to a sibling CCE's iDMA writes into this CCE's TL1 (`test_mimir_dm_cache.cpp:2211`) | 1 min 46 s |
+| 110 | `CceAtomics/MimirAtomicLocal.OpMatrix/Cce0` | pass | 14 s |
+| 110 | `CceAtomics/MimirAtomicLocal.OpMatrix/Cce1` | pass | 13 s |
+| 110 | `CceAtomics/MimirAtomicLocal.Hotspot/Cce0` | pass | 1 min 21 s |
+| 110 | `CceAtomics/MimirAtomicLocal.Hotspot/Cce1` | pass | 1 min 19 s |
+| 110 | `CceAtomics/MimirAtomicLocal.Distributed/Cce0` | pass | 1 min 48 s |
+| 110 | `CceAtomics/MimirAtomicLocal.Distributed/Cce1` | pass | 1 min 55 s |
+| 110 | `CceAtomics/MimirAtomicLocal.LrScCas/Cce0` | pass | 2 min 54 s |
+| 110 | `CceAtomics/MimirAtomicLocal.LrScCas/Cce1` | pass | 2 min 52 s |
+| 110 | `CceAtomics/MimirAtomicLocal.Wrap/Cce0` | pass | 2 min 50 s |
+| 110 | `CceAtomics/MimirAtomicLocal.Wrap/Cce1` | pass | 2 min 56 s |
+| 110 | `CceAtomics/MimirAtomicLocal.Ordering/Cce0` | pass | 30 s |
+| 110 | `CceAtomics/MimirAtomicLocal.Ordering/Cce1` | pass | 27 s |
+| 110 | `CceAtomics/MimirAtomicLocal.CleanDirtyLine/Cce0` | pass | 39 s |
+| 110 | `CceAtomics/MimirAtomicLocal.CleanDirtyLine/Cce1` | pass | 36 s |
+| 110 | `CceAtomics/MimirAtomicLocal.Storm/Cce0` | pass | 1 min 24 s |
+| 110 | `CceAtomics/MimirAtomicLocal.Storm/Cce1` | pass | 1 min 23 s |
+| 110 | `CceAtomics/MimirAtomicLocal.NeighbourWriteRace/Cce0` | pass | 40 s |
+| 110 | `CceAtomics/MimirAtomicLocal.NeighbourWriteRace/Cce1` | pass | 40 s |
+| 110 | `CceAtomics/MimirAtomicLocal.Soak/Cce0` | pass | 17 s |
+| 110 | `CceAtomics/MimirAtomicLocal.Soak/Cce1` | pass | 22 s |
+| 111 | `CceAtomics/MimirAtomicItnControl.SiblingWriteThenAmo/Cce0` | pass | 16 s |
+| 111 | `CceAtomics/MimirAtomicItnControl.SiblingWriteThenAmo/Cce1` | pass | 16 s |
+| 112 | `CceAtomics/MimirAtomicLocal.CleanDirtyLineSnoopedWrite/Cce0` | pass | 19 s |
+| 112 | `CceAtomics/MimirAtomicLocal.CleanDirtyLineSnoopedWrite/Cce1` | pass | 19 s |
+| 113 | `DmSuitePort/MimirDmIdma.Copy/OwnTl1` | pass | 14 s |
+| 113 | `DmSuitePort/MimirDmIdma.Copy/MaxPacket` | pass | 24 s |
+| 113 | `DmSuitePort/MimirDmIdma.Copy/SiblingTl1` | pass | 19 s |
+| 113 | `DmSuitePort/MimirDmIdma.Copy/LocalGddr` | pass | 18 s |
+| 113 | `DmSuitePort/MimirDmIdma.Copy/LocalGddr1` | pass | 20 s |
+| 113 | `DmSuitePort/MimirDmIdma.Copy/RemoteTl1` | skip: Remote iDMA cases need a 2x descriptor (two Mimirs). | 0.0 s |
+| 113 | `DmSuitePort/MimirDmIdma.Copy/RemoteGddr` | skip: Remote iDMA cases need a 2x descriptor (two Mimirs). | 0.0 s |
+| 113 | `DmSuitePort/MimirDmIdma.Copy/Strided1D` | pass | 12 s |
+| 113 | `DmSuitePort/MimirDmIdma.Copy/Strided1DLocalGddr` | pass | 13 s |
+| 113 | `DmSuitePort/MimirDmIdma.Copy/Strided1DSubLine` | pass | 12 s |
+| 113 | `DmSuitePort/MimirDmIdma.Copy/Strided1DSubLineLocalGddr` | pass | 12 s |
+| 113 | `DmSuitePort/MimirDmIdma.Copy/RemoteTl1KernelVerified` | skip: Remote iDMA cases need a 2x descriptor (two Mimirs). | 0.0 s |
+| 114 | `IdmaTransactionId/MimirTridIdma.UniqueIdsOwnTl1/Cce0` | pass | 22 s |
+| 114 | `IdmaTransactionId/MimirTridIdma.UniqueIdsOwnTl1/Cce1` | pass | 23 s |
+| 114 | `IdmaTransactionId/MimirTridIdma.UniqueIdsSiblingTl1/Cce0` | pass | 40 s |
+| 114 | `IdmaTransactionId/MimirTridIdma.UniqueIdsSiblingTl1/Cce1` | pass | 39 s |
+| 114 | `IdmaTransactionId/MimirTridIdma.ReuseWrap/Cce0` | pass | 1 min 4 s |
+| 114 | `IdmaTransactionId/MimirTridIdma.ReuseWrap/Cce1` | pass | 1 min 8 s |
+| 114 | `IdmaTransactionId/MimirTridIdma.DuplicateId/Cce0` | pass | 40 s |
+| 114 | `IdmaTransactionId/MimirTridIdma.DuplicateId/Cce1` | pass | 40 s |
+| 114 | `IdmaTransactionId/MimirTridIdma.BarrierThenDependentReadAfterWrite/Cce0` | pass | 35 s |
+| 114 | `IdmaTransactionId/MimirTridIdma.BarrierThenDependentReadAfterWrite/Cce1` | pass | 34 s |
+| 114 | `IdmaTransactionId/MimirTridIdma.BarrierThenDependentWriteAfterRead/Cce0` | pass | 35 s |
+| 114 | `IdmaTransactionId/MimirTridIdma.BarrierThenDependentWriteAfterRead/Cce1` | pass | 35 s |
+| 115 | `IdmaTransactionId/MimirTridIdma.UniqueIdsLocalGddr/Cce0` | pass | 1 min 20 s |
+| 115 | `IdmaTransactionId/MimirTridIdma.UniqueIdsLocalGddr/Cce1` | pass | 1 min 11 s |
+| 116 | `IdmaTransactionId/MimirTridIdma.NominalDepth/Cce0` | pass | 38 s |
+| 116 | `IdmaTransactionId/MimirTridIdma.NominalDepth/Cce1` | pass | 40 s |
+| 117 | `IdmaTransactionId/MimirTridIdma.MixedTargets/Cce0` | pass | 18 s |
+| 117 | `IdmaTransactionId/MimirTridIdma.MixedTargets/Cce1` | pass | 17 s |
+| 118 | `IdmaTransactionId/MimirTridIdma.Saturate/Cce0` | pass | 3 min 36 s |
+| 118 | `IdmaTransactionId/MimirTridIdma.Saturate/Cce1` | pass | 3 min 40 s |
+| 119 | `IdmaTransactionId/MimirTridIdma.MultiHart/Cce0` | pass | 2 min 14 s |
+| 119 | `IdmaTransactionId/MimirTridIdma.MultiHart/Cce1` | pass | 2 min 16 s |
+| 120 | `IdmaTransactionId/MimirTridIdma.Fairness/Cce0` | pass | 1 min 39 s |
+| 120 | `IdmaTransactionId/MimirTridIdma.Fairness/Cce1` | pass | 1 min 25 s |
+| 121 | `IdmaTransactionId/MimirTridIdma.Soak/Cce0` | pass | 2 min 39 s |
+| 121 | `IdmaTransactionId/MimirTridIdma.Soak/Cce1` | pass | 2 min 35 s |
+| 125 | `IdmaTransactionId/MimirTridReset.NoStaleIdAfterReinit/Cce0` | pass | 1 min 57 s |
+| 125 | `IdmaTransactionId/MimirTridReset.NoStaleIdAfterReinit/Cce1` | pass | 1 min 58 s |
+| 126 | `CceAtomics/MimirAccumProbe.FmtOpMatrix/Cce0` | pass | 3 min 5 s |
+| 126 | `CceAtomics/MimirAccumProbe.FmtOpMatrix/Cce1` | pass | 3 min 7 s |
+| 128 | `CceAtomics/MimirAtomicIdmaAccum.SingleHart/Cce0` | pass | 12 s |
+| 128 | `CceAtomics/MimirAtomicIdmaAccum.SingleHart/Cce1` | pass | 12 s |
+| 128 | `CceAtomics/MimirAtomicIdmaAccum.AllHartsShared/Cce0` | pass | 46 s |
+| 128 | `CceAtomics/MimirAtomicIdmaAccum.AllHartsShared/Cce1` | pass | 45 s |
+| 128 | `CceAtomics/MimirAtomicIdmaAccum.AllHartsDisjoint/Cce0` | pass | 49 s |
+| 128 | `CceAtomics/MimirAtomicIdmaAccum.AllHartsDisjoint/Cce1` | pass | 1 min 0 s |
+| 128 | `CceAtomics/MimirAtomicIdmaAccum.BackToBack/Cce0` | pass | 40 s |
+| 128 | `CceAtomics/MimirAtomicIdmaAccum.BackToBack/Cce1` | pass | 40 s |
+| 128 | `CceAtomics/MimirAtomicIdmaAccum.SequentialAmoAccumulateAmo/Cce0` | pass | 20 s |
+| 128 | `CceAtomics/MimirAtomicIdmaAccum.SequentialAmoAccumulateAmo/Cce1` | pass | 20 s |
+| 129 | `CceAtomics/MimirAtomicIdmaAccum.MaxOutstanding/Cce0` | pass | 17 s |
+| 129 | `CceAtomics/MimirAtomicIdmaAccum.MaxOutstanding/Cce1` | pass | 16 s |
+| 96 | `CceCache/MimirCacheOps.FullInvalidate/Cce0` | pass | 22 s |
+| 96 | `CceCache/MimirCacheOps.FullInvalidate/Cce1` | pass | 22 s |
+
+## Rerun of the 2026-11-19 failures on `mimir_1x1`, 2026-11-23
+
+Final: 16 of 16 cases: 9 fail, 7 pass.
+
+The cases that failed or timed out in the 2026-11-19 run above, run again with the same binary, the same frozen kernel copy and the same runner. Each case kept its process grouping and order from that run, without the cases that passed there, so the stale-L2 cases (rows 2c and 75) ran after fewer earlier processes. The fresh sessions before rows 41 and 106 were kept; a failure that asks for a fresh session restarts the emulator with bring-up, as before. Restarts after a failure: 2. Emulator sessions: soc-c-23, soc-c-28, soc-c-27, soc-zebu-01. Not rerun: the two `SizeAlignmentMatrix` timeouts (row 3b, over 9 h each) and row 2b `MimirFwLoad.LoadAndReachInitDone` (not a valid failure). Results and logs are in `/localdev/sagarwal/mimir_reruns_2026-11-19/mimir_1x1_failures/`.
+
+| Row | Test | Result | 2026-11-19 | 2026-11-03 | Time |
+|---|---|---|---|---|---|
+| 1 | `MimirHostDram.HostSideRejections` | fail: same as 2026-11-19 and 2026-11-03: the 6-byte write cleared the 2 unwritten bytes of its last word (read `0x00001615`, expected `0xFFFF1615`); chippy zero-fills a partial trailing word | fail | fail | 0.6 s |
+| 1 | `HostDram/MimirHostDramView.BoundaryAndAlias/View0` | fail: same as 2026-11-19 and 2026-11-03: the alias walk at view offset `0x2000000` read `0x00000000`, expected the guard `0x6aa18000`. UMD takes the write as a CCE reset-vector write (see Root causes of the 2026-11-03 failures) | fail | fail | 0.8 s |
+| 2a | `MimirFwPreflight.FirmwareLoadPreflight` | fail: same as 2026-11-19 and 2026-11-03: the 1-byte `fw_shared_globals_ready` write cleared the other 3 bytes of its TL1 word; same chippy partial-word write | fail | fail | 26 s |
+| 3b | `LocalDram/MimirLocalDram.LoopbackChecksIntermediate/Cce0` | pass | timeout | pass | 8 min 44 s |
+| 2c | `MimirFwLoadNegative.SkipLoadNeverDone` | fail: same as 2026-11-19 and 2026-11-03: with both firmware windows zeroed, both CCEs still reported done (GO signal `0x00`, expected `RUN_MSG_INIT`); stale cached firmware in the shared L2 | fail | fail | 42 s |
+| 41 | `MimirPrefetcher.PrefetchOnePagePerSessionLocal0To1` | pass | fail | pass | 20 s |
+| 75 | `DmSuitePort/MimirDmCache.Op/HartToHartCoherent` | pass | fail | fail | 20 s |
+| 75 | `DmSuitePort/MimirDmCache.Op/L2InvalidateFreshRead` | fail: same as 2026-11-19 and 2026-11-03: the cached re-read before the L2 invalidate saw 0 of 64 stale words, expected 64; stale lines in the shared L2 from an earlier process | fail | fail | 14 s |
+| 76 | `DmSuitePort/MimirDmCachePerf.WritePath/CachedRangeFlush` | fail: same as 2026-11-19 (passed on 2026-11-03): the guard after an 8 B write was overwritten to the end of its 64 B line with `0xca0b0002` to `0xca0b000f`, the data `L2InvalidateFreshRead` left cached just before. Stale lines in the shared L2, a runtime gap; reproduced on 2026-11-24 (see Root causes of the 2026-11-03 failures) | fail | pass | 1 min 16 s |
+| 106 | `CceCache/MimirCacheCoherenceRace.DirtyLineRace/Cce0_Cfg1` | pass | fail | pass | 1 min 16 s |
+| 106 | `CceCache/MimirCacheCoherenceRace.DirtyLineRace/Cce0_Cfg3` | pass | fail | fail | 1 min 16 s |
+| 106 | `CceCache/MimirCacheCoherenceRace.DirtyLineRace/Cce0_Cfg7` | fail: same as 2026-11-19 and 2026-11-03: `Neighbour_Flush64` leg, the sibling iDMA write was acked but never landed in TL1 and the hart's budget ran out; the known intermittent failure of the snoop configs with bit 0 set. The emulator restarted after it | fail | fail | 45 s |
+| 106 | `CceCache/MimirCacheCoherenceRace.DirtyLineRace/Cce1_Cfg1` | pass | fail | pass | 1 min 10 s |
+| 106 | `CceCache/MimirCacheCoherenceRace.DirtyLineRace/Cce1_Cfg7` | pass | fail | fail | 1 min 12 s |
+| 109 | `CceCache/MimirCacheStress.PreloadChurn/Cce0` | fail: same as 2026-11-19 and 2026-11-03: snoop leg, 1024 stale words consumed at the first read, expected 0. The iDMA snoop tag applies only to a sibling CCE's iDMA writes into this CCE's TL1 | fail | fail | 1 min 39 s |
+| 109 | `CceCache/MimirCacheStress.PreloadChurn/Cce1` | fail: same as 2026-11-19 and 2026-11-03: snoop leg, 1024 stale words consumed at the first read, expected 0. The iDMA snoop tag applies only to a sibling CCE's iDMA writes into this CCE's TL1 | fail | fail | 1 min 38 s |
+
+## Root cause of the `DirtyLineRace` snoop-config failures, 2026-11-24
+
+Covers row 106, `CceCache/MimirCacheCoherenceRace.DirtyLineRace`, under every `NOC_SNOOP_TL_MASTER_CFG` value with bit 0 (`disable_inline_writes`) set: `Cfg1`, `Cfg3`, `Cfg5` and `Cfg7` on every CCE. It replaces the "acked, never visible" reading in the results above: the sibling's write is not stuck or in flight. It lands in TL1 and the hart's own stale copy of the line is then written back over it. Whether that happens depends on where in the hart's loop the write lands, which differs from run to run.
+
+From the CCE RTL at the revision the emulator builds (soc/cce `efb9194f`, pinned by mimir_soc `dft_0p4p35` `Bender.lock`; `rtl/cce_axi_snoop_master.sv`):
+
+1. A snooped NoC write is forwarded to the SRAM first. The cache is told only when the SRAM write response returns.
+2. With bit 0 clear, the cache is told by writing the data again through the L2 front port, so the cache holds the external words and a later write-back by the hart carries them. `Cfg0`, `Cfg2`, `Cfg4` and `Cfg6` have never failed.
+3. With bit 0 set, the cache is told only to invalidate: a write of the line address to the cache controller's `INVALIDATE64` (0x04010280, bit 1 clear) or `INVALIDATEFLUSHDIRTY` (0x04010340, bit 1 set) register.
+4. On Mimir that request does not reach the cache controller. The last block of the snoop master keeps only the low 22 address bits (`DMRISC_SPM_ADDR_WIDTH`), so the request becomes a write to TL1 offset 0x10280 or 0x10340. The same line is in soc/cce HEAD as of 2026-11-24.
+5. The hart keeps its stale dirty copy. On the `Neighbour` legs the kernel re-stores its words every pass (`kRaceRedirty`), so its next whole-line write-back (FLUSH64, an eviction, or the final `flush_l2_cache_line` in `run_dirty_race`) puts the old values back over the external words.
+
+Both failure signatures follow. "Acked, never visible in TL1, budget ran out, 0 of 8 kept": the write-back came before the hart's next uncached poll. "Kernel done, 0 of 8 kept": the poll saw the words, then the final flush overwrote them. The `Same` legs do not re-store and INVALIDATE64 drops the dirty line without writing it back, so those legs have no stale line to write back; every recorded failure is on `Neighbour_Evict` or `Neighbour_Flush64`.
+
+Emulator runs on 2026-11-24, `mimir_1x1`, CCE 0, one session (soc-c-28), with a temporary probe that is not in the tree. The probe read TL1 0x10280 and 0x10340 from the host around each leg, had the kernel FLUSH64 those two lines on exit, and could add about 2000 loop iterations of delay before or after the kernel's action:
+
+| Run | Result |
+|---|---|
+| `Cfg6`, unchanged timing | TL1 0x10280 and 0x10340 stay 0 |
+| `Cfg1`, unchanged timing | TL1 0x10280 becomes 0x8bcc0, the TL1 address of the test line |
+| `Cfg3`, unchanged timing, failed on `Neighbour_Evict` | TL1 0x10340 becomes 0x8bcc0 during the failing leg; writer acked; 0 of 8 external words kept |
+| `Cfg5` and `Cfg7`, unchanged timing | neither word changes |
+| `Cfg7`, delay before the action (dirty line held longer), 4 runs | 4 of 4 fail on `Neighbour_Evict`: writer acked, 0 of 8 kept |
+| `Cfg7`, same delay after the action instead, 4 runs | 4 of 4 pass, `Neighbour_Evict` and `Neighbour_Flush64` both 8 of 8 kept |
+
+The delay runs alternated, so each pass followed a failure with no emulator restart. The `Cfg3` run shows the write reached TL1: the invalidate request is issued only after the SRAM write response, and its stray copy appeared.
+
+Not established:
+
+- `Cfg5` and `Cfg7` showed no stray word, though the RTL cuts the address the same way. Bit 2 (`clean_putdata_en`) goes to the Rocket side (`cce_dmrisc_reg_msi_partition.sv`), which was not read; it may keep the stray write out of TL1. For these two configs the missing invalidate is from the RTL, not observed.
+- The delay runs covered one case (`Cce0_Cfg7`) on `mimir_1x1`, and the runs with the longer hold never reached the `Neighbour_Flush64` leg. The explanation of that leg assumes FLUSH64 removes the line from the cache, which fits the logs but was not read from RTL. `mimir_2x_package` was not run.
+- What varies the timing between runs was not measured. The pass count at which the write lands differs every run (637 to 765 on `Neighbour_Evict`, 2170 to 2527 on `Neighbour_Flush64` in the saved 1x1 logs), and the host launches the writer after it sees the kernel's flag.
+- The L2 side of the bit-0-clear path was not read; that those configs are safe rests on the snoop-master RTL and the pass counts.
+- Correcting the address may not be enough. The SRAM is written before the cache is told, which leaves a window either way, and with bit 1 set the intended operation may itself write the stale line back.
+- Whether bit 0 set is a supported mode on Mimir is a question for the CCE designers and has not been raised with them. Chippy never sets it: `cce_xcce_snoop_dma_cache_invalidate` programs 0x2.
+
+Side effects and rules:
+
+- Under `Cfg1` and `Cfg3` every snooped write also leaves an 8-byte stray write at TL1 0x10280 or 0x10340, which stays across processes. By `dev_mem_map.h` both offsets are in the kernel data slot of hart 1 (0x10080 to 0x11080); the linker script was not checked.
+- The MIM-601 fresh-session message after a `DirtyLineRace` budget failure is probably not needed for this failure, since no iDMA is left in flight: four cases passed directly after such failures in the same session. That is too few runs to drop the rule.
+- The `kIdmaSnoopNote` text in these failure messages and the "acked but never visible" wording in the result rows above describe the symptom, not this cause.
+
+### Where the fix belongs
+
+The fix belongs in the CCE RTL (soc/cce). No software layer causes the failure and none can work around it:
+
+- tt-metal runtime: never sets bit 0. The register resets to 0x6 and only `DirtyLineRace` writes other values.
+- UMD: carries the register write and the TL1 reads; it has no part in the snoop path.
+- chippy: bring-up leaves the config at 0x6. The address is cut after the snoop remap table, so no bring-up register setting can steer the invalidate back to the cache controller.
+- grendelemulation: builds the RTL as pinned. It is the place to try an RTL fix (`models/mimir/mimir_patch/cce/cce.patch` already patches soc/cce), but a patch kept only there would hide the bug on the emulator.
+
+Two separate problems in `cce_axi_snoop_master.sv` need a ruling from the CCE designers:
+
+1. The address cut. The final block keeps 22 address bits on every request, including the invalidate. It would have to keep the full address for an invalidate. Whether the L2 front port can reach the cache controller at 0x0401xxxx with the full address was not checked.
+2. The ordering. TL1 is written before the cache is told, so a hart write-back in that gap still overwrites the external words even with a working invalidate. With bit 1 set, the intended flush-dirty operation may itself write the stale line back.
+
+Because of the second problem, the designers may answer that bit 0 set is not meant to be safe against a hart that holds the line dirty. That would change what the test should expect for `Cfg1`, `Cfg3`, `Cfg5` and `Cfg7`.
+
+Proposed steps, none done yet:
+
+1. File a ticket against soc/cce with the RTL lines and the emulator runs above, and ask whether bit 0 set is a supported mode on Mimir. GRENSV-2011 (snoop scope) is open and is the nearest existing ticket.
+2. Add a chippy validation test for bit 0 set against a hart that holds the line dirty. Chippy has none.
+3. Make the test's outcome on the bit-0 legs deterministic. Open choice: hold the dirty line across the write so the legs fail every run (4 of 4 on `Neighbour_Evict` in the runs above; not tried on `Neighbour_Flush64`), or skip those configs with the ticket number until the RTL changes.
+4. Correct the failure text in `test_mimir_dm_cache.cpp`: the "iDMA may still be in flight" and fresh-session wording and `kIdmaSnoopNote` name the wrong cause.
+5. When an RTL fix exists, try it through the grendelemulation patch directory before the pin moves.
+
+## Lost stage-slot store in `PrefetchOnePagePerSessionLocal0To1`, 2026-11-24
+
+Covers row 41, `MimirPrefetcher.PrefetchOnePagePerSessionLocal0To1`, which failed once on 2026-11-19 and passed on 2026-11-03 and 2026-11-23. The failing step is located; the mechanism is not.
+
+The test fails when the sender kernel on CCE 0 loses one 32-bit store into its own stage slot. The sender copies each page in two loops (`deliver_chunk` in `tt_metal/impl/buffers/kernels/tensor_prefetcher_cce.cpp`): GDDR into a stage slot in its own TL1 through the uncached alias (`cce_gddr_read`), then the stage slot into the receiver's FIFO. In the failing runs one word of stage slot 0 kept what it held before the session, and the second loop forwarded it. The receiver and the test report the bad word correctly. The loop is in the runtime kernel, so every prefetch route shares it.
+
+Emulator runs on 2026-11-24, `mimir_1x1`, sessions soc-zebu-04 and soc-zebu-03, the case alone in its process, with a temporary probe that is not in the tree. The probe read the tensor's GDDR page, stage slot 0 on CCE 0 (TL1 0x190600) and the FIFO on CCE 1 (TL1 0x8c580) from the host after each prefetcher session, could fill the stage slot and FIFO with a poison pattern before a session, could insert host operations between Queue and Stop, and could run 8 sessions per process instead of 2. Four failures in about 916 sessions, about 1 in 230 sessions or 4e-6 per word:
+
+| Log | Host traffic | Session, word | GDDR page | Stage slot word |
+|---|---|---|---|---|
+| `b_059_m1` | unchanged | 1, 244 | correct | the previous tensor's word 244 |
+| `c_001_m2` | unchanged, stage slot and FIFO poisoned first | 1, 244 | correct | poison |
+| `h_018_m9` | 30 host reads of CCE 1 TL1 inserted before Stop, no host read of the stage slot or FIFO | 5, 268 | not read | the previous tensor's word 268, decoded from the receiver status |
+| `i_003_m10` | 150 host reads of CCE 1 TL1 with 10 ms pauses inserted before Stop, poisoned first | 2, 944 | correct | poison |
+
+What the runs rule out:
+
+- A wrong GDDR load. The two poisoned failures left the poison in the stage word, which no load can produce.
+- The host's tensor write. GDDR read back correct in the three failures where it was read. By source that write is 1024 single-word writes, each acknowledged before the next (UMD `mimir_chippy_memory.cpp`, chippy `transport_interface.h`, grendelemulation `server.py`).
+- The FIFO store and the credit order. In the same three failures the FIFO matched the stage slot word for word.
+
+The 2026-11-19 failure (request 0, word 256, read as 0 twice) fits by inference only: the same stage base, and a fresh emulator session whose stage slot nothing had written, so the stale word was 0. That run had no probe.
+
+Not established:
+
+- Why the store is lost, and whether the cause is CCE RTL or the emulator. Not separated: the store dropped below the hart, the store faulting and being skipped, or the store never issued. No CCE RTL for the hart's uncached store path was read, and the emulator's AXI transactor and memory model are not mounted on the host the tests run from. The CCE firmware trap handler's action on a store access fault was not read.
+- What sets the timing. With unchanged host traffic the three failures fell at words 244 to 256 of 1024, across seeds, sessions and emulator hosts. With host operations inserted before Stop the word moved (268 and 944), so the position follows timing and not an address. By source the host's Stop sequence overlaps the copy: 66 single-word writes into the sender's request ring and `bytes_sent`, then GO_MSG polls with no sleep. The failures may coincide with a point in that sequence, but an elapsed-time event fits as well, and the two shifted failures do not give one scale (0.8 and 4.7 words per inserted operation).
+- Whether host accesses to the sender's TL1 matter. Host reads and writes of an unused stage slot, write-then-read pairs, GO_MSG polls and zero writes during the copy gave no loss in about 108 sessions. At the base rate that predicts about 0.5 failures, and those runs also moved Stop past the copy, so they show nothing either way.
+- Whether the `cce_gddr_read` loop alone can lose a word or the prefetcher's host traffic is needed. The other passing cases that use the loop move too few words to tell.
+- `mimir_2x_package` and the D2D routes were not run.
+
+This is not the read-after-write race in grendelemulation `docs/dx/cce-readback-of-own-write-races-write-commit.md`: there a re-read returns the right value within microseconds and nothing is lost, and here the host read the stale word seconds later.
+
+Proposed steps, none done yet:
+
+1. Have the sender kernel read the stage slot back after the first loop and record the index and cycle count of each stale word, so every loss is caught and timed.
+2. Compare about 1000 sessions each with Stop issued as now and with Stop held until the sender reports the copy done.
+3. Read the firmware trap handler and the CCE RTL path of a hart's uncached store, or raise it with the CCE designers with the logs.
+
+Logs, the probe diff (`temp_probe.diff`) and the loop scripts are in `/localdev/sagarwal/mimir_prefetch_flake_2026-11-24/`.
