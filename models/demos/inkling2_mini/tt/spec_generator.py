@@ -20,7 +20,7 @@ import torch
 import ttnn
 from models.demos.inkling2_mini.tt.generator import Generator
 from models.demos.inkling2_mini.tt.model import APPS, Inkling2Model
-from models.demos.inkling2_mini.tt.mtp import TAP_APPS, DSparkDrafter
+from models.demos.inkling2_mini.tt.mtp import STASH, TAP_APPS, DSparkDrafter
 
 TAP_LP = tuple(APPS[a] for a in TAP_APPS)  # (layer, pass) of the tapped applications
 # the apps whose output is a tapped app's input: their row form must be written (decode writes it only on collect)
@@ -32,12 +32,18 @@ class TappedModel(Inkling2Model):
 
     drafter: DSparkDrafter | None = None
     tapping = True  # False: plain Inkling2Model.step (A/B checks in one process)
+    # True: the step only stashes its taps (slot = its conv phase) and the step of the last slot commits the group
+    # in one pass (DSparkDrafter.stash_commit): a third of the per-step commit's small programs. For runs of plain
+    # steps (a prompt feed, text the drafter does not predict): a draft needs every position before it committed,
+    # so a group cut short is committed by stash_commit(n) first (SpecGenerator.ftrace).
+    stash = False
 
     def _app(self, L, p, h, stack, n_sealed, msgs, row_out=True):
         if not self.tapping:
             return super()._app(L, p, h, stack, n_sealed, msgs, row_out=row_out)
-        if (L, p) in TAP_LP:
-            self._taps[(L, p)] = ttnn.clone(h)  # h is a module buffer that later loop passes overwrite
+        if (L, p) in TAP_LP:  # h is a module buffer that later loop passes overwrite
+            j = TAP_LP.index((L, p))
+            self._taps[(L, p)] = self.drafter.stash_put(self.phase, j, h) if self.stash else ttnn.clone(h)
         return super()._app(L, p, h, stack, n_sealed, msgs, row_out=row_out or (L, p) in PRE_TAP_LP)
 
     def _rms(self, row, w):
@@ -51,6 +57,14 @@ class TappedModel(Inkling2Model):
             return super().step(force=force, collect=collect)
         self._taps = {}
         res = super().step(force=force, collect=collect)
+        if self.stash:
+            d = self.drafter
+            d.stash_put(self.phase, len(TAP_LP), self._taps["final"])
+            if self.phase == STASH - 1:
+                d.stash_commit(STASH)
+            ttnn.copy(ttnn.reshape(res["token"], [1, 1]), d.anchor)
+            self._taps = {}
+            return res
         rows = [self._taps[k] for k in TAP_LP] + [self._taps["final"]]
         feats = ttnn.pad(ttnn.concat(rows, dim=2), [(0, 0), (0, 0), (0, 28), (0, 0)], 0.0)
         if collect:
@@ -67,17 +81,13 @@ class TappedModel(Inkling2Model):
             self.drafter.set_commit_pos(pos)
 
 
-# tuning, off by default: the expert prefetch in the spec process (see capture_rows)
-SPEC_PREFETCH = os.environ.get("INKLING_SPEC_PREFETCH") == "1"
-SPEC_RING_KB = int(os.environ.get("INKLING_SPEC_RING_KB", "165"))
-SPEC_STAGE_KB = int(os.environ.get("INKLING_SPEC_STAGE_KB", "436"))
-
-
 class SpecGenerator(Generator):
-    def __init__(self, model: TappedModel, drafter: DSparkDrafter, overlap=True, verify=None):
+    def __init__(self, model: TappedModel, drafter: DSparkDrafter, overlap=True, verify=None, stash=False):
         """verify: a tt/verify.VerifyStep (R <= drafter.k + 1) for generate_rows, or a list of them (early stop:
-        one per row count); None: generate_spec only."""
+        one per row count); None: generate_spec only. stash: capture_rows also captures the stash steps (strace,
+        sout: as trace, out) and the commit of a group's first n positions (ftrace[n]); see TappedModel.stash."""
         super().__init__(model, overlap=overlap)
+        self.stash, self.strace, self.sout, self.ftrace = stash, None, None, {}
         self.drafter = drafter
         vs = verify if isinstance(verify, (list, tuple)) else [verify] if verify is not None else []
         self.verifies = {V.R: V for V in vs}
@@ -99,9 +109,11 @@ class SpecGenerator(Generator):
 
     def release(self):
         self.drafter.release()
-        for tid in [t for t, _ in self.vtrace.values()] + list(self.ctrace.values()):
+        for tid in [t for t, _ in self.vtrace.values()] + list(self.ctrace.values()) + (self.strace or []):
             ttnn.release_trace(self.device, tid)
-        self.vtrace, self.ctrace = {}, {}
+        for tid in self.ftrace.values():
+            ttnn.release_trace(self.device, tid)
+        self.vtrace, self.ctrace, self.strace, self.ftrace = {}, {}, None, {}
         super().release()
 
     # ------------------------------------------------------------ multi-row verify (tt/verify.py)
@@ -147,17 +159,7 @@ class SpecGenerator(Generator):
             from models.demos.inkling2_mini.tt.mk import router_stage
             from models.demos.inkling2_mini.tt.mk.overlap import install
 
-            if SPEC_PREFETCH and self.use_experts:
-                # guessed-expert prefetch beside the drafter (as Generator.capture; the verify pass keeps its
-                # protocol): the R-row expert step and the drafter's widest linear need ~165 KB more L1 than the
-                # plain step leaves, so w_all is staged SPEC_STAGE_KB per core (the tail comes from DRAM in the
-                # w_all program) and the ring is SPEC_RING_KB (2 guesses for BFP4 and mixed layers, 1 for BFP8)
-                from models.demos.inkling2_mini.tt.mk.expert_overlap import ExpertOverlap
-
-                self.overlap = m.overlap = install(m, weights=(f"w_all@{SPEC_STAGE_KB}",))
-                self.experts = ExpertOverlap(m, ring_kb=SPEC_RING_KB)
-            else:
-                self.overlap = m.overlap = install(m)
+            self.overlap = m.overlap = install(m)
             self.router_stage = router_stage.install(m)
             m.step()
             m.step()
@@ -181,6 +183,20 @@ class SpecGenerator(Generator):
                 self._set_anchor(R, n)
                 ttnn.synchronize_device(self.device)
                 say("S6 eager commit", R, n, flush=True)
+        if self.stash:  # the stash steps (from the same staging state as their captures) and the short commits
+            m.stash = True
+            d.set_stash_pos(0)
+            for ph in range(STASH):
+                m.set_inputs(0, ph)
+                self._stage_restore(snap)
+                m.step()
+                self._stage_topup(snap)
+                self._stage_restore(snap)
+            for n in range(1, STASH):
+                d.stash_commit(n)
+            m.stash = False
+            ttnn.synchronize_device(self.device)
+            say("S6 eager stash", flush=True)
         if before_capture is not None:
             before_capture()
         if self.overlap is not None:  # settle the staging attach pattern again after the verify passes
@@ -193,6 +209,25 @@ class SpecGenerator(Generator):
         d.capture(compile=False)
         self._stage_restore(snap)
         say("S6 draft captured", flush=True)
+        if self.stash:
+            # as the verify passes: every stash step starts from the plain step's staging state and ends in it
+            m.stash = True
+            self.strace, self.sout = [], []
+            for ph in range(STASH):
+                m.set_inputs(0, ph)
+                self._stage_restore(snap)
+                self.strace.append(ttnn.begin_trace_capture(self.device, cq_id=0))
+                self.sout.append(m.step())
+                self._stage_topup(snap)
+                ttnn.end_trace_capture(self.device, self.strace[-1], cq_id=0)
+                self._stage_snap(snap)
+                self._stage_restore(snap)
+            m.stash = False
+            for n in range(1, STASH):
+                self.ftrace[n] = ttnn.begin_trace_capture(self.device, cq_id=0)
+                d.stash_commit(n)
+                ttnn.end_trace_capture(self.device, self.ftrace[n], cq_id=0)
+            say("S6 stash captured", flush=True)
         for V in Vs:
             R = V.R
             for ph in range(4):

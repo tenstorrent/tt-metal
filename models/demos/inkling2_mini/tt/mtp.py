@@ -41,6 +41,7 @@ HIDDEN, NH, NKV, D, RANK = 2304, 24, 8, 128, 256
 GROUPS = NH // NKV
 BLOCK, WINDOW, THETA, EPS, NEG, SOFTCAP = 8, 1024, 1.0e6, 1e-6, -1.0e9, 30.0
 N_LAYERS, LOCAL = 3, (0, 2)
+STASH = 4  # positions per stash group (the decode step's conv phases: one traced step per slot)
 TAP_APPS = (5, 23, 41)  # + final norm output (visit 48)
 
 
@@ -165,6 +166,17 @@ class DSparkDrafter:
         self.commit_ids = ttnn.from_torch(torch.zeros(1, 1, dtype=torch.int32), dtype=ttnn.uint32,
                                           layout=ttnn.ROW_MAJOR_LAYOUT, device=dev)  # fmt: skip
         self.blk_pos = ttnn.from_torch(torch.zeros(1, dtype=torch.int32), dtype=ttnn.int32, device=dev)  # p
+        # stash (TappedModel.stash): the taps of up to STASH positions p0 .. wait here for one commit_rows.
+        # stash[r] = the 4 feats rows of position p0 + r (allocated by the first eager stash step)
+        self.stash = [[None] * (len(TAP_APPS) + 1) for _ in range(STASH)]
+        self.stash_pos = ttnn.from_torch(torch.zeros(1, dtype=torch.int32), dtype=ttnn.int32, device=dev)  # p0
+        self.stash_ids = {
+            n: ttnn.from_torch(
+                torch.zeros(1, n, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev
+            )
+            for n in range(1, STASH + 1)
+        }  # fmt: skip  positions p0 .. p0 + n - 1 (commit_rows RoPE rows)
+        self._f_rnn_rows = {}  # rows -> commit_rows f_rnn buffer
         # p + 7, once per kv group (the flash-decode batch)
         self.cur_pos = ttnn.from_torch(torch.zeros(NKV, dtype=torch.int32), dtype=ttnn.int32, device=dev)
         self.f_rnn = put(torch.zeros(1, 1, 1, HIDDEN), ttnn.bfloat16)
@@ -351,10 +363,33 @@ class DSparkDrafter:
             v = ttnn.typecast(heads(NKV * D), ttnn.bfloat16)
             self._write_block(i, k, v, pos=pos0, n=R)
         fr = self._rms(rows_of(N_LAYERS), "rnn_norm")  # [1, 1, R, C] bf16
-        if getattr(self, "f_rnn_rows", None) is None or self.f_rnn_rows.shape[-2] != R:
-            self.f_rnn_rows = ttnn.clone(fr)
-        else:
-            ttnn.copy(fr, self.f_rnn_rows)
+        if R not in self._f_rnn_rows:  # one buffer per row count, made by the first (eager) call: none is freed
+            self._f_rnn_rows[R] = ttnn.clone(fr)  # while a trace captured earlier still reads it
+        ttnn.copy(fr, self._f_rnn_rows[R])  # (also on the first call: it compiles the copy a capture will run)
+        self.f_rnn_rows = self._f_rnn_rows[R]
+
+    # ------------------------------------------------------------ stash: commit a run of plain steps at once
+    def set_stash_pos(self, p0):
+        """The first position of the stash group (host writes; the stash steps and stash_commit read them)."""
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(torch.tensor([p0], dtype=torch.int32), dtype=ttnn.int32), self.stash_pos
+        )
+        for n, t in self.stash_ids.items():
+            ids = torch.arange(p0, p0 + n, dtype=torch.int32).view(1, n)
+            ttnn.copy_host_to_device_tensor(ttnn.from_torch(ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT), t)
+
+    def stash_put(self, r, j, row):
+        """feats row j ([1, 1, 1, C]) of the group's position r. Returns the stash buffer."""
+        if self.stash[r][j] is None:  # first use must be eager (and compiles the copy a capture will run)
+            self.stash[r][j] = ttnn.clone(row)
+        ttnn.copy(row, self.stash[r][j])
+        return self.stash[r][j]
+
+    def stash_commit(self, n):
+        """commit() of the group's first n positions in one pass (commit_rows), f_rnn = the last one's."""
+        feats = ttnn.concat([x for r in range(n) for x in self.stash[r]], dim=2)
+        self.commit_rows(feats, self.stash_pos, self.stash_ids[n])
+        ttnn.copy(ttnn.slice(self.f_rnn_rows, [0, 0, n - 1, 0], [1, 1, n, HIDDEN]), self.f_rnn)
 
     def commit_chunk(self, taps, s, n=None):
         """Chunked prefill (Inkling2Prefill.drafter): the drafter context of positions s .. s + t - 1 in one pass.
