@@ -3452,6 +3452,17 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             "TT_RING_SDPA_LLK2: the output must be bfloat16 (U is staged in the output's format), got {}",
             out_df);
         compute_kernel.kernel_source = "tt_metal/tt-llk/llk2/kernels/ring_joint_sdpa.cpp";
+        // CI-ONLY (not for merge): the job log shows that this program uses the LLK 2.0 kernel.
+        log_warning(
+            tt::LogOp,
+            "ring_joint_sdpa compute kernel: LLK 2.0 ({}), q_rows_per_group {}, Sq_chunk_t {}, Sk_chunk_t {}, {} K "
+            "chunks of a {}-tile share",
+            compute_kernel.kernel_source,
+            llk2_group_rows,
+            Sq_chunk_t,
+            Sk_chunk_t,
+            num_local_k_chunks,
+            kv_local_padded_Nt);
         auto llk2_defines = defines;
         llk2_defines["LLK2_DEST_FP32"] = "0";
         llk2_defines["LLK2_MATH_FIDELITY"] = std::to_string(static_cast<uint32_t>(math_fidelity));
