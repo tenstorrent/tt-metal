@@ -6,6 +6,10 @@ user_invocable: true
 
 # Quasar Perf Test
 
+Start with `test-development`. If the functional module or sweep is new or
+changes, apply `functional-test` and `quasar-test-coverage` before the perf
+workflow.
+
 The perf-test contract is the same on every architecture, so it lives in one
 skill. For Quasar work:
 

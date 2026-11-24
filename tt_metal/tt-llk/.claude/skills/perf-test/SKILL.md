@@ -28,6 +28,10 @@ target architecture before editing:
 
 Related skills, in the order work usually needs them:
 
+- `test-development`: classify the change and its required validation before
+  editing anything under `tests/`.
+- `functional-test`: create or extend the functional program and record
+  whether each new function is paired or intentionally functional-only.
 - `quasar-test-coverage`: choose the Quasar functional sweep. Perf inherits
   it, so its size sets the perf build count.
 - `perf-coverage`: prove the perf sweep matches functional, or line up

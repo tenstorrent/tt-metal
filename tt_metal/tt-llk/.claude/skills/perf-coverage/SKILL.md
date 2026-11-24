@@ -19,8 +19,10 @@ Make sweeps comparable, in this priority order:
 Never edit one architecture's sweep only to make another's comparison look
 identical. Never invent an axis or op the other ISA cannot run.
 
-Related: `perf-test` (the one-kernel, one-runner contract this skill checks),
-`quasar-test-coverage` (choose the Quasar functional sweep),
+Read `test-development` first for the overall test-change workflow. Related:
+`functional-test` (author the functional side and classify unmatched
+functions), `perf-test` (the one-kernel, one-runner contract this skill
+checks), `quasar-test-coverage` (choose the Quasar functional sweep), and
 `perf-report` (run a sweep). Cross-architecture specifics are in
 [references/bh-vs-qsr.md](references/bh-vs-qsr.md), with a worked example in
 [references/bh-vs-qsr-binary-sfpu.md](references/bh-vs-qsr-binary-sfpu.md).

@@ -39,6 +39,8 @@ Execution model: RISC-V cores push instructions to corresponding coprocessor thr
 | Trigger | Skill | What it does |
 |---------|-------|--------------|
 | Architecture, instruction, or LLK questions | `arch-lookup` (`.claude/skills/arch-lookup/SKILL.md`) | Orchestrates sage agents in parallel, aggregates results |
+| Planning, adding, changing, or reviewing anything under `tests/` | `test-development` (`.claude/skills/test-development/SKILL.md`) | Classifies the test type and architecture, inventories functional/perf coverage, and routes to the owning authoring and validation skills |
+| Creating, extending, repairing, or reviewing a functional test | `functional-test` (`.claude/skills/functional-test/SKILL.md`) | Covers new `test_*.py` + `*_test.cpp` pairs, new functions in existing modules, goldens/configs, and the required perf-coverage outcome |
 | Running tests | `run-test` (`.claude/skills/run-test/SKILL.md`) | Dispatches llk-test-runner with correct scenario flags |
 | Debugging kernel errors | `debug-kernel` (`.claude/skills/debug-kernel/SKILL.md`) | Dispatches llk-debugger with inferred arch/kernel type |
 | Inspecting VCS/FSDB waves for a Quasar runtime failure | `llk-wave-debug` (`.claude/skills/llk-wave-debug/SKILL.md`) | Runs deterministic private waveform diagnosis and reports evidence (Quasar only) |
@@ -76,9 +78,19 @@ We use lightweight Doxygen docstrings — high-signal, low-noise (`@brief`, `@pa
 
 ## Test Infrastructure
 
+For any change under `tests/`, start with `test-development`; it routes
+functional, perf, Quasar, fuser, accuracy, hardware-free, and out-of-tree
+work to the correct contract.
+
 ### Two-Phase Test Flow
-1. **Compile-producer**: `pytest --compile-producer -n N -x ./test_name.py` — compiles all variants in parallel
-2. **Compile-consumer**: `pytest --compile-consumer -x ./test_name.py` — runs compiled variants on hardware
+`run-test` owns both phases and the simulator/silicon lock:
+1. **Compile-producer** compiles selected variants in parallel.
+2. **Compile-consumer** runs the matching artifacts on the target.
+
+Use `/run-test <test_file> --arch <arch>` for both phases,
+`--compile-only` for the producer, `--rerun` for the consumer, and `--count`
+for collection without compiling or opening a device. Do not invoke the
+underlying `pytest` phases directly.
 
 ### Key Concepts
 - `CHIP_ARCH` env var selects the target architecture (`blackhole`, `wormhole`, `quasar`)
