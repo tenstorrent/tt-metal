@@ -339,7 +339,7 @@ class ThreadContext:
         return parent, ThreadEnd(child)
 
 
-def fake_serve(conns, pipeline_kwargs, warmup, group_shape):
+def fake_serve(conns, pipeline_kwargs, warmup, group_shape, depth=1):
     if pipeline_kwargs.get("fail_start"):
         for conn in conns:
             conn.send(("error", "RuntimeError: no mesh"))
@@ -478,6 +478,18 @@ def test_a_request_that_does_not_pickle_keeps_its_group(groups, expect_error):
     assert groups.alive_groups == 3
     results = groups.generate([f"r{i}" for i in range(9)])
     assert len({group for _, group in results}) == 3
+
+
+def test_dp4_groups_default_to_the_throughput_serve(thread_groups):
+    def serve_args(**kwargs):
+        with dp.Flux3KleinProcessGroups(dp.HALF_PCIE_IDS, warmup=(1024,), **kwargs) as groups:
+            return {(p.args[4], p.args[1].get("text_batch")) for p in groups._processes}
+
+    assert serve_args() == {(8, 4)}
+    assert serve_args(depth=1) == {(1, None)}
+    assert serve_args(text_batch=2) == {(8, 2)}
+    assert serve_args(upsample=True) == {(1, 1)}
+    assert serve_args(group_shape=(4, 4)) == {(1, 1)}
 
 
 def test_requests_fail_instead_of_hanging_once_every_group_is_dead(groups, expect_error):

@@ -6,9 +6,12 @@ from __future__ import annotations
 
 import hashlib
 import math
+import queue
+import threading
 import time
-from collections import OrderedDict
-from concurrent.futures import ThreadPoolExecutor
+from collections import OrderedDict, deque
+from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -102,6 +105,21 @@ class Flux3KleinResult:
     seed: int
     timings: dict[str, float]
     cached_steps: int = 0
+
+
+@dataclass(eq=False)
+class _Prepared:
+    request: Flux3KleinRequest
+    canvases: list[Image.Image]
+    ref_bucket: int
+    prompt: str
+    seed: int
+    latent_job: Future
+    text_rows: int
+    tokens: tuple[torch.Tensor, torch.Tensor, int]
+    timings: dict[str, float]
+    rope: tuple[torch.Tensor, torch.Tensor] | None = None
+    text: tuple[ttnn.Tensor, torch.Tensor, int] | None = None
 
 
 def make_noise(seed: int, h: int, w: int) -> torch.Tensor:
@@ -212,8 +230,10 @@ class Flux3KleinPipeline:
         num_links: int = 2,
         upsample: bool = False,
         free_other_sizes: bool = False,
+        text_batch: int = 1,
     ) -> None:
-        """With ``upsample``, the prompt upsampler shares the first chip of ``mesh_device``, which must be opened
+        """``text_batch`` > 1 lets `serve` encode up to that many queued prompts at once, one per sequence-parallel row.
+        With ``upsample``, the prompt upsampler shares the first chip of ``mesh_device``, which must be opened
         with upsampler_flux3_klein.SHARED_MESH_PARAMS, and every prompt is rewritten before it is encoded. With
         ``free_other_sizes``, a request of another size than the last one frees the CCL pairs and plans only other sizes
         used (rebuilt on their next request), so a DP4 group holds one size's working set, not every size's."""
@@ -292,6 +312,9 @@ class Flux3KleinPipeline:
         self._free_other_sizes = free_other_sizes
         self._mask_cache: dict[tuple[int, int], ttnn.Tensor] = {}
         self._upsampler = Flux3KleinSharedUpsampler(mesh_device) if upsample else None
+        if not 0 < text_batch <= mesh_shape[sp_axis]:
+            raise ValueError(f"text_batch {text_batch} must be 1 to the {mesh_shape[sp_axis]} sequence-parallel rows")
+        self._text_batch = text_batch
 
     @classmethod
     def create(
@@ -334,6 +357,14 @@ class Flux3KleinPipeline:
                     )
                     for text_rows in TEXT_BUCKETS_BY_LAYOUT.get((size, bucket or 0), TEXT_BUCKETS):
                         self._generate(request, text_rows)
+        if self._text_batch > 1:
+            tokens = self._prompt_encoder.tokenize(WARMUP_PROMPT, TEXT_BUCKETS[0])
+            rope = self._prompt_encoder.rope_rows(tokens[1])
+            batch = self._text_batch
+            for text in self._prompt_encoder.encode_rows(
+                [tokens] * batch, [rope] * batch, self._sp_axis, self._ccl_managers[0]
+            ):
+                ttnn.deallocate(text[0])
 
     def validate_request(self, request: Flux3KleinRequest) -> None:
         if request.model not in self._transformers:
@@ -353,11 +384,87 @@ class Flux3KleinPipeline:
         return self._generate(request, None)
 
     def _generate(self, request: Flux3KleinRequest, text_rows: int | None) -> Flux3KleinResult:
+        return self._result(*self._run(self._prepare(request, text_rows)))
+
+    def serve(self, receive: Callable[[], Flux3KleinRequest | None], emit: Callable[[object], None]) -> None:
+        """Answers requests in order until `receive` returns None; `emit` gets each result or exception. Requests are
+        received and prepared (references, tokens, noise) on a helper thread while one runs, and each image is built and
+        emitted on another, so the device does not wait for the host between queued requests. With `text_batch` > 1 the
+        prepared requests of the shortest text bucket are encoded up to that many at once, one per sequence-parallel row."""
+        if self._upsampler is not None:
+            raise ValueError("serve needs the upsampler off: it runs on this pipeline's device")
+        prepared: queue.SimpleQueue = queue.SimpleQueue()
+        failed = []
+
+        def receive_all() -> None:
+            try:
+                while (request := receive()) is not None:
+                    try:
+                        prepared.put(self._prepare(request, None))
+                    except Exception as e:  # noqa: BLE001
+                        prepared.put(e)
+            except BaseException as e:  # noqa: BLE001
+                failed.append(e)  # a request that does not arrive ends the loop, as in generate's loop
+            prepared.put(None)
+
+        def answer(run: tuple) -> None:
+            try:
+                result = self._result(*run)
+            except Exception as e:  # noqa: BLE001
+                result = e
+            emit(result)
+
+        ready, done = deque(), False
+        # a daemon: if this loop raises, the caller closes the connection while the receiver may still wait on it
+        threading.Thread(target=receive_all, name="flux3_klein_ahead", daemon=True).start()
+        with ThreadPoolExecutor(1, thread_name_prefix="flux3_klein_emit") as out:
+            while ready or not done:
+                if not ready:
+                    while not done and (not ready or len(ready) < self._text_batch):
+                        try:
+                            item = prepared.get(block=not ready)
+                        except queue.Empty:
+                            break
+                        done = item is None
+                        if not done:
+                            ready.append(item)
+                    ready = self._encode_rows(ready)
+                    continue
+                item = ready.popleft()
+                if isinstance(item, Exception):
+                    out.submit(emit, item)
+                    continue
+                try:
+                    out.submit(answer, self._run(item))
+                except Exception as e:  # noqa: BLE001
+                    out.submit(emit, e)
+        if failed:
+            raise failed[0]
+
+    def _encode_rows(self, items: deque) -> deque:
+        """Encodes the batchable prompts among `items` together (`Flux3KleinPromptEncoder.encode_rows`); a failed batch
+        becomes each of its requests' answer."""
+        batch = [p for p in items if isinstance(p, _Prepared) and p.rope is not None]
+        if len(batch) < 2:
+            return items
+        t0 = time.time()
+        try:
+            texts = self._prompt_encoder.encode_rows(
+                [p.tokens for p in batch], [p.rope for p in batch], self._sp_axis, self._ccl_managers[0]
+            )
+        except Exception as e:  # noqa: BLE001
+            return deque(e if any(p is b for b in batch) else p for p in items)
+        share = (time.time() - t0) / len(batch)
+        for p, text in zip(batch, texts):
+            p.text = text
+            p.timings["encode"] += share
+        return items
+
+    def _prepare(self, request: Flux3KleinRequest, text_rows: int | None) -> _Prepared:
+        """The host-only part of a request: its references, prompt tokens and noise (the noise on the pre-step
+        thread)."""
         self.validate_request(request)
         size = request.width
-        steps = request.steps or STEPS[request.model]
-        guidance = GUIDANCE[request.model] if request.guidance is None else request.guidance
-        guidance = None if request.model == "distilled" else guidance
         references = [r if isinstance(r, Image.Image) else Image.open(r) for r in request.images]
         reference = references[0] if references else None
         if len(references) > 1:
@@ -373,53 +480,75 @@ class Flux3KleinPipeline:
         prompt = request.prompt if self._upsampler is None else self._upsampler(request.prompt, reference)
         timings["upsample"] = time.time() - t0
         seed = caption_seed(prompt) if request.seed is None else request.seed
-        h, w = latent_shape(size, size)
         # The noise and the latent's host tensor are built on a helper thread while this thread dispatches the text
         # encoder; the device copy stays on this thread
         sp = self._transformers[request.model].sp_factor
-        latent_job = self._prestep_pool().submit(self._prepare_latent_host, seed, h, w, sp)
+        latent_job = self._prestep_pool().submit(self._prepare_latent_host, seed, *latent_shape(size, size), sp)
 
         t0 = time.time()
         text_rows = text_rows or self._text_rows(prompt, size, ref_bucket)
+        tokens = self._prompt_encoder.tokenize(prompt, text_rows)
+        batched = self._text_batch > 1 and text_rows == TEXT_BUCKETS[0] and size != max(SIZES)
+        rope = self._prompt_encoder.rope_rows(tokens[1]) if batched else None
+        timings["encode"] = time.time() - t0
+        return _Prepared(request, canvases, ref_bucket, prompt, seed, latent_job, text_rows, tokens, timings, rope)
+
+    def _run(self, prepared: _Prepared) -> tuple[_Prepared, torch.Tensor, int]:
+        """The device part of a prepared request: its image as `[size, size * 3]` uint8 rows on the host."""
+        request, canvases, ref_bucket, timings = (
+            prepared.request,
+            prepared.canvases,
+            prepared.ref_bucket,
+            prepared.timings,
+        )
+        size = request.width
+        steps = request.steps or STEPS[request.model]
+        guidance = GUIDANCE[request.model] if request.guidance is None else request.guidance
+        guidance = None if request.model == "distilled" else guidance
+        h, w = latent_shape(size, size)
+
+        t0 = time.time()
         switched = self._free_other_sizes and self._last_layout is not None and self._last_layout[1] != size
         if self._pair_freeing_size or self._free_other_sizes:
             self._claim_pairs(
-                (request.model, size, ref_bucket, text_rows),
+                (request.model, size, ref_bucket, prepared.text_rows),
                 free_others=size >= (self._pair_freeing_size or math.inf),
                 free_other_sizes=switched,
             )
         if switched:
             self._free_other_plans(math.prod(latent_shape(size, size)))
-        text = self._prompt_encoder.encode(prompt, text_rows)
-        timings["encode"] = time.time() - t0
+        text = prepared.text or self._prompt_encoder.encode(prepared.prompt, prepared.text_rows, tokens=prepared.tokens)
+        timings["encode"] += time.time() - t0
 
-        t0 = time.time()
-        image_cond = None
-        if size == max(SIZES):
-            self._free_other_plans(math.prod(latent_shape(size, size)), ref_bucket)
-        if canvases:
-            tokens, ids = [], []
-            for index, canvas in enumerate(canvases):
-                tokens.append(self._vae.encode(canvas))
-                ids.append(reference_ids(*latent_shape(canvas.height, canvas.width), index))
-            image_cond = (torch.cat(tokens), torch.cat(ids))
-        timings["encode_reference"] = time.time() - t0
+        try:
+            t0 = time.time()
+            image_cond = None
+            if size == max(SIZES):
+                self._free_other_plans(math.prod(latent_shape(size, size)), ref_bucket)
+            if canvases:
+                tokens, ids = [], []
+                for index, canvas in enumerate(canvases):
+                    tokens.append(self._vae.encode(canvas))
+                    ids.append(reference_ids(*latent_shape(canvas.height, canvas.width), index))
+                image_cond = (torch.cat(tokens), torch.cat(ids))
+            timings["encode_reference"] = time.time() - t0
 
-        t0 = time.time()
-        noise, x_host = latent_job.result()
-        state, cached_steps = self._denoise(
-            request.model,
-            noise,
-            image_ids(h, w),
-            text,
-            image_cond,
-            ref_bucket,
-            steps,
-            guidance,
-            request.cache,
-            x_host=x_host,
-        )
-        ttnn.deallocate(text[0])
+            t0 = time.time()
+            noise, x_host = prepared.latent_job.result()
+            state, cached_steps = self._denoise(
+                request.model,
+                noise,
+                image_ids(h, w),
+                text,
+                image_cond,
+                ref_bucket,
+                steps,
+                guidance,
+                request.cache,
+                x_host=x_host,
+            )
+        finally:
+            ttnn.deallocate(text[0])
         timings["denoise"] = time.time() - t0
 
         t0 = time.time()
@@ -430,13 +559,21 @@ class Flux3KleinPipeline:
         t0 = time.time()
         u8 = image_to_uint8(decoded)
         rows = tensor.to_torch(u8, mesh_axes=[None, self._vae.h_axis, self._vae.w_axis])[0]
-        image = Image.fromarray(rows.reshape(size, size, 3).numpy())
         ttnn.deallocate(u8)
         ttnn.deallocate(decoded)
         ttnn.deallocate(state)
         timings["to_host"] = time.time() - t0
+        return prepared, rows, cached_steps
+
+    def _result(self, prepared: _Prepared, rows: torch.Tensor, cached_steps: int) -> Flux3KleinResult:
+        request, timings, size = prepared.request, prepared.timings, prepared.request.width
+        t0 = time.time()
+        image = Image.fromarray(rows.reshape(size, size, 3).numpy())
+        timings["to_host"] += time.time() - t0
         logger.info(f"FLUX 3 Klein {request.model} {size}x{size} refs {len(request.images)}: {timings}")
-        return Flux3KleinResult(image=image, prompt=prompt, seed=seed, timings=timings, cached_steps=cached_steps)
+        return Flux3KleinResult(
+            image=image, prompt=prepared.prompt, seed=prepared.seed, timings=timings, cached_steps=cached_steps
+        )
 
     def _claim_pairs(self, layout: tuple, free_others: bool, free_other_sizes: bool = False) -> None:
         """Credits the CCL ping-pong pairs (keyed by shape, never evicted) the previous request used to its layout and,
