@@ -61,7 +61,7 @@ STAGE_DIR = {
     STAGE["sweep"]: "sweep",
     STAGE["C5"]: "c5",
 }
-POWER_NEXT = "1. Replace the bus bar -> 2. if the tray still drops, replace tray {u}"
+POWER_NEXT = "1. Replace the bus bar set -> 2. if the tray still drops, replace tray {u}"
 PCIE_NEXT = "swap this tray's host PCIe cable with a neighbour tray's; if the errors follow the tray, replace the board"
 # HSC FAIL lines naming bits newly set during the run; HSC_ADD: the OFF/IOUT_OC bits added to an under-voltage leg line
 HSC_NEW = re.compile(
@@ -328,7 +328,7 @@ def rule(l, kind, u, findings, stage, lines):
             a, t = hf.group(2).lower(), hf.group(1)
             f = HSC_FEED.get(a, f"at HSC {a}")
             uv = "an under-voltage latch" if any(b.startswith("VIN_UV") for b in pw) else "a power latch"
-            return f"POWER: tray {t} 12 V feed {f} / bus bar: HSC {a} {'+'.join(pw)} newly set during this run (clear at its start; {uv} from this run, not a pre-existing one) -> next: 1. Check the bus bar and 12 V feed {f} of tray {t} (HSC {a}) -> 2. replace the bus bar if the latch sets again -> 3. replace tray {t} only if it persists"
+            return f"POWER: tray {t} 12 V feed {f} / bus bar: HSC {a} {'+'.join(pw)} newly set during this run (clear at its start; {uv} from this run, not a pre-existing one) -> next: 1. Check the tray {t} 12 V feed {f} (HSC {a}) and the bus bar set -> 2. replace the bus bar set if the latch sets again -> 3. replace tray {t} only if it persists"
     if (
         kind == "tray"
         and l.startswith("HSC FAIL")
@@ -484,7 +484,7 @@ def rule(l, kind, u, findings, stage, lines):
     ):
         return f"chip lost after its warm reset and not recovered by its tray re-power or glx_reset: it is on PCIe and opens, but tt-umd discovery fails on it: chip/board (hardware), not a load or CCL fault -> next: power-cycle the box; if tt-umd discovery still fails on it, replace the board of tray {u}"
     if re.search(r"no such device|missing after|not answering|unknownx|lost from pcie", s) or l.startswith("CHIP DROP"):
-        return f"chip fell off PCIe: chip/board or its PCIe path (slot, retimer) -> next: read the AER/lspci capture; same chip again: replace the board of tray {u}; all of tray {u} at once: bus bar first"
+        return f"chip fell off PCIe: chip/board or its PCIe path (slot, retimer) -> next: read the AER/lspci capture; same chip again: replace the board of tray {u}; all of tray {u} at once: power feed first"
     if "failed on it" in s and l.startswith("RESET"):
         return f"chip did not take the warm reset: chip/board -> next: tt-smi reset it again; if it repeats, replace the board of tray {u}"
     w = re.search(r"corrected AER peak (\d+)/min \(over ([0-9.]+)/min", l) if warn and "weak PCIe link" in l else None
@@ -1493,7 +1493,7 @@ def item(u, part, cause, nxt, commit, kind=None):
                 if m
                 else (f"feed of tray {u}")
             )
-            return f"bus bar / tray 12 V {src}, then tray {u} board if it persists"
+            return f"bus bar set / tray 12 V {src}, then tray {u} board if it persists"
         if tpl.startswith("NUMERIC:"):
             m = re.search(rf"likely source ({BDF})", cause) if tpl == "NUMERIC:{s}" else None
             b = m.group(1) if m else b
@@ -1630,7 +1630,7 @@ def recommend(
         f
         for t in sorted(set(power) | set(feed))
         for f in feed.get(t)
-        or [f"bus bar / tray 12 V feed of tray {t}{hsc(t)}, then the tray {t} board if it still drops"]
+        or [f"bus bar set / tray 12 V feed of tray {t}{hsc(t)}, then the tray {t} board if it still drops"]
     ]
     fam.update(dict.fromkeys(pw, "power/feed"))
     items = pw + [r for r in items if loss_of.get(r) not in fold_]

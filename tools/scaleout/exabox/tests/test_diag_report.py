@@ -54,12 +54,12 @@ def test_whole_tray_power_loss(tmp_path):
     ]  # BMC after: not tray 1's
     why = [l for l in out if l.startswith("    whole tray 4 |")][0]
     assert why.endswith(
-        "cause: whole-tray power loss -> next: 1. Replace the bus bar -> 2. if the tray still drops, replace tray 4"
+        "cause: whole-tray power loss -> next: 1. Replace the bus bar set -> 2. if the tray still drops, replace tray 4"
     )
     assert any(l.startswith("  Family power/feed: ") and "tray 4" in l for l in out)  # the PCIe loss is the drop's
     assert not any(l.startswith("  Family PCIe") for l in out)
     assert out[-1] == (
-        "Repair recommendation: replace the bus bar set (fixed 3 of 11 in fleet records); bus bar / tray 12 V feed A of "
+        "Repair recommendation: replace the bus bar set (fixed 3 of 11 in fleet records); bus bar set / tray 12 V feed A of "
         "tray 4 (HSC 0x40 VIN_UV_WARN+OFF newly set during this run), then tray 4 board if it persists"
     )
 
@@ -220,7 +220,7 @@ CASES = [  # (finding lines, rc, verdict, texts the report holds)
             "POWER-DOWNSTREAM of the power drop of tray 3: 1 chip of tray 2 stay on PCIe but do not open after the end (C9)"
             " reset",
             "cause: POWER-DOWNSTREAM: of the power drop of tray 3",
-            "Repair recommendation: replace the bus bar set (no fleet records); bus bar / tray 12 V feed of tray 3, then the"
+            "Repair recommendation: replace the bus bar set (no fleet records); bus bar set / tray 12 V feed of tray 3, then the"
             " tray 3 board if it still drops",
         ],
     ),
@@ -260,7 +260,7 @@ CASES.append(  # the captures' over-current bit name
         "FAIL (exit 8)",
         [
             "cause: POWER: tray 2 12 V feed B / bus bar: HSC 0x42 OFF+IOUT_OC_FAULT newly set during this run",
-            "Repair recommendation: replace the bus bar set (no fleet records); bus bar / tray 12 V feed B of tray 2 (HSC "
+            "Repair recommendation: replace the bus bar set (no fleet records); bus bar set / tray 12 V feed B of tray 2 (HSC "
             "0x42 OFF+IOUT_OC_FAULT newly set during this run), then tray 2 board if it persists",
         ],
     )
