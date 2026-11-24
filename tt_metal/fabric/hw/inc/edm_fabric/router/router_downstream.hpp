@@ -187,7 +187,7 @@ FORCE_INLINE void forward_stateless(
 // The downstream connections of one VC as the runtime args describe them: which entries have a downstream (one bit
 // each), and for those, by dense index, first slot address, location-info and registration addresses on the
 // downstream, this router's teardown semaphore for it, and the NoC coordinates (packed, one byte per dense index);
-// without stream registers also the downstream sender channel's producer-cursor block (null with them).
+// without stream registers also the downstream sender channel's producer-cursor block (absent with them).
 struct DownstreamArgs {
     uint32_t entries;
     const uint32_t* first_slot_addrs;
@@ -196,7 +196,7 @@ struct DownstreamArgs {
     const size_t* teardown_sems;
     uint32_t noc_x_packed;
     uint32_t noc_y_packed;
-    const uint32_t* producer_cursor_addrs;
+    [[no_unique_address]] Present<!stream_registers_available, const uint32_t*, 0> producer_cursor_addrs;
 };
 
 FORCE_INLINE uint32_t dense_noc_x(const DownstreamArgs& args, uint32_t dense) {
@@ -541,9 +541,11 @@ struct DownstreamConnections {
 // ---------------------------------------------------------------------------------------------------------------------
 
 // Before the Ethernet handshake: zero the teardown semaphores, set the local credit copies to the ring size (without
-// stream registers: zero the write counts and the downstreams' read counts), fill the links and the progress.
-template <size_t VC>
-__attribute__((noinline)) void init_downstreams(Downstreams<VC>& downstreams, const DownstreamArgs& args) {
+// stream registers: zero the write counts and the downstreams' read counts), fill the links and the progress. Args
+// (DownstreamArgs) is a template parameter so that the absent producer_cursor_addrs is named only in template-dependent
+// code.
+template <size_t VC, typename Args>
+__attribute__((noinline)) void init_downstreams(Downstreams<VC>& downstreams, const Args& args) {
     using Traits = DownstreamTraits<VC>;
     auto& links = downstreams.links;
     uint32_t dense = 0;
@@ -552,12 +554,14 @@ __attribute__((noinline)) void init_downstreams(Downstreams<VC>& downstreams, co
         links[entry] = {0, 0, 0};
         if ((args.entries >> entry) & 1u) {
             *reinterpret_cast<volatile uint32_t*>(args.teardown_sems[dense]) = 0;
+            if constexpr (stream_registers_available) {
+                init_ptr_val<Traits::template local_credit_stream<entry>>(Traits::num_slots);
+            }
             const uint32_t x = dense_noc_x(args, dense);
             const uint32_t y = dense_noc_y(args, dense);
             links[entry].first_slot_addr = args.first_slot_addrs[dense];
             links[entry].noc_coord = static_cast<uint32_t>(get_noc_addr(x, y, 0) >> NOC_ADDR_COORD_SHIFT);
             if constexpr (stream_registers_available) {
-                init_ptr_val<Traits::template local_credit_stream<entry>>(Traits::num_slots);
                 links[entry].credit_noc_addr = get_noc_addr(
                     x, y, get_stream_reg_write_addr(Traits::template remote_credit_stream<entry>), Traits::noc);
             } else {

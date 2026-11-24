@@ -279,11 +279,9 @@ struct SenderChannelInterfaces {
 
     // Builds every position's interface, serviced or not (once, at init, on an ERISC that serves sender channels): its
     // connection info and semaphore, its starting credits (0 for a worker channel, whose credits are counts; the slot
-    // count for a forwarding channel) and a worker channel's credit source word (its read counter). Without stream
-    // registers also its producers' write count (in its producer-cursor block), which read_free_slots reads.
+    // count for a forwarding channel) and a worker channel's credit source word (its read counter).
     __attribute__((noinline)) static void start(
-        const std::array<size_t, MAX_NUM_SENDER_CHANNELS>& connection_semaphores,
-        const std::array<size_t, MAX_NUM_SENDER_CHANNELS>& producer_cursors) {
+        const std::array<size_t, MAX_NUM_SENDER_CHANNELS>& connection_semaphores) {
         new (storage) All{};
         for_each_index<NUM_SENDER_CHANNELS>([&](auto i) {
             constexpr size_t CH = decltype(i)::value;
@@ -297,11 +295,7 @@ struct SenderChannelInterfaces {
                 tt::tt_fabric::worker_handshake_noc,
                 SENDER_NUM_BUFFERS_ARRAY[CH]>(
                 info,
-                // remote_producer_write_counter: read with software credits only
-                stream_registers_available
-                    ? nullptr
-                    : reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                          producer_cursors[CH] + offsetof(tt::tt_fabric::SenderChannelProducerCursor, write_counter)),
+                /*remote_producer_write_counter (unused)=*/0,
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_semaphores[CH]),
                 CommandBuffers::worker_credits[CH],
                 worker ? 0 : SENDER_NUM_BUFFERS_ARRAY[CH],
@@ -314,6 +308,10 @@ struct SenderChannelInterfaces {
     static FORCE_INLINE auto& of() {
         return std::launder(reinterpret_cast<All*>(storage))->template get<CH>();
     }
+
+    // Without stream registers: each channel's producers' write count, in its producer-cursor block
+    // (set_producer_write_counters).
+    static inline std::array<volatile tt_l1_ptr uint32_t*, NUM_SENDER_CHANNELS> producer_write_counters;
 
 private:
     alignas(All) static inline unsigned char storage[sizeof(All)];
@@ -509,7 +507,8 @@ FORCE_INLINE uint32_t read_free_slots() {
     if constexpr (stream_registers_available) {
         return read_stream_raw<SenderChannel<CH>::free_slots_stream>();
     } else {
-        return SenderChannel<CH>::num_slots - SenderChannelInterfaces::of<CH>().get_num_untaken_packets();
+        return SenderChannel<CH>::num_slots - (*SenderChannelInterfaces::producer_write_counters[CH] -
+                                               SenderChannelInterfaces::of<CH>().local_write_counter.counter);
     }
 }
 
@@ -1103,13 +1102,20 @@ FORCE_INLINE void reset_connections(
 }
 
 // At init, before the Ethernet handshake: the channels' slot buffers, then their interfaces.
-FORCE_INLINE void set_up_channels(
-    const std::array<size_t, MAX_NUM_SENDER_CHANNELS>& connection_semaphores,
-    const std::array<size_t, MAX_NUM_SENDER_CHANNELS>& producer_cursors) {
+FORCE_INLINE void set_up_channels(const std::array<size_t, MAX_NUM_SENDER_CHANNELS>& connection_semaphores) {
     auto sender_channels =
         SenderChannelBuffersFromAllocs<PACKET_HEADER_TYPE, channel_allocs, SENDER_TO_ENTRY_IDX>::make();
     sender_channels.init<channel_allocs>(channel_buffer_size, sizeof(PACKET_HEADER_TYPE));
-    SenderChannelInterfaces::start(connection_semaphores, producer_cursors);
+    SenderChannelInterfaces::start(connection_semaphores);
+}
+
+// Without stream registers, at init with set_up_channels: where read_free_slots finds each channel's producers' write
+// count.
+FORCE_INLINE void set_producer_write_counters(const std::array<size_t, MAX_NUM_SENDER_CHANNELS>& producer_cursors) {
+    for (size_t ch = 0; ch < NUM_SENDER_CHANNELS; ++ch) {
+        SenderChannelInterfaces::producer_write_counters[ch] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            producer_cursors[ch] + offsetof(tt::tt_fabric::SenderChannelProducerCursor, write_counter));
+    }
 }
 
 // While init waits for an upstream router, the base firmware's routing runs once per this many polls.

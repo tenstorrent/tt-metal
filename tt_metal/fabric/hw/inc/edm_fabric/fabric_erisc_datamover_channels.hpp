@@ -591,8 +591,7 @@ struct StaticSizedSenderChannelWorkerInterface
             connection_live_semaphore,
             sender_sync_noc_cmd_buf,
             edm_read_counter_initial_value),
-        read_counter_update_src_address(read_counter_update_src_address),
-        remote_producer_write_counter(remote_producer_write_counter) {}
+        read_counter_update_src_address(read_counter_update_src_address) {}
 
     // CRTP implementation methods
     FORCE_INLINE void reset_counters() {
@@ -637,17 +636,7 @@ struct StaticSizedSenderChannelWorkerInterface
 
     [[nodiscard]] FORCE_INLINE BufferIndex get_write_buffer_index() const { return local_write_counter.index; }
 
-    // Software credits (connection_interface::credit_mode_software_counters): packets the producers
-    // have written into this channel, as their write count in the channel's
-    // SenderChannelProducerCursor, less those this receiver has sent on
-    // (update_write_counter_for_send()). Not for stream-register credits, where
-    // remote_producer_write_counter may be null.
-    [[nodiscard]] FORCE_INLINE uint32_t get_num_untaken_packets() const {
-        return *remote_producer_write_counter - local_write_counter.counter;
-    }
-
     uint32_t read_counter_update_src_address;
-    volatile tt_l1_ptr uint32_t* remote_producer_write_counter;
     ChannelCounter<NUM_BUFFERS> local_write_counter;
     ChannelCounter<NUM_BUFFERS> local_read_counter;
 };

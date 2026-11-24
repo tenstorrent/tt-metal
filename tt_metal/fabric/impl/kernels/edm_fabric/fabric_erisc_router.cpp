@@ -222,7 +222,10 @@ void kernel_main() {
     *edm_status() = tt::tt_fabric::EDMStatus::STARTED;
     auto downstreams = receiver::set_up_channels(args);  // the receiver's downstream connections, for its loop
     if constexpr (is_sender_role) {
-        sender::set_up_channels(args.connection_semaphores, args.producer_cursors);
+        sender::set_up_channels(args.connection_semaphores);
+        if constexpr (!stream_registers_available) {
+            sender::set_producer_write_counters(args.producer_cursors);
+        }
     }
     finish_phase<Phase::SETUP_DONE>();
 
