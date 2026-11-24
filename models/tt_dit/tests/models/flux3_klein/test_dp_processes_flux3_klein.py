@@ -445,6 +445,17 @@ def test_requests_are_answered_in_order_across_groups(groups):
     assert len({group for _, group in results}) > 1
 
 
+def test_a_burst_goes_to_the_groups_holding_the_fewest(groups):
+    held = [groups._acquire() for _ in range(6)]
+    assert sorted(held.count(conn) for conn in groups._conns) == [2, 2, 2]
+    for conn in sorted(held, key=lambda conn: conn is held[0]):  # one group's requests finish last
+        groups._release(conn)
+    burst = [groups._acquire() for _ in range(6)]
+    assert sorted(burst.count(conn) for conn in groups._conns) == [2, 2, 2]
+    for conn in burst:
+        groups._release(conn)
+
+
 def test_a_failed_request_raises_and_the_group_keeps_serving(groups, expect_error):
     with expect_error(RuntimeError, "bad size"):
         groups.submit("bad").result()

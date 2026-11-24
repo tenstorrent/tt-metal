@@ -13,7 +13,6 @@ from __future__ import annotations
 import math
 import multiprocessing
 import os
-import queue
 import threading
 from collections import deque
 from collections.abc import Iterable, Mapping, Sequence
@@ -202,9 +201,9 @@ class Flux3KleinProcessGroups:
     is left, every request fails. A hung device hangs its request, as in one process.
 
     `depth` > 1: each group holds up to that many requests and answers them in order, preparing the next while one runs
-    (throughput; a queued request waits for the one ahead of it). Unset, `depth` and the pipelines' `text_batch` and
-    `decode_batch` (unless given) take the group shape's SERVE_DEFAULTS; with the upsampler, which `serve` does not run,
-    depth 1."""
+    (throughput; a queued request waits for the one ahead of it). A request goes to the group holding the fewest.
+    Unset, `depth` and the pipelines' `text_batch` and `decode_batch` (unless given) take the group shape's
+    SERVE_DEFAULTS; with the upsampler, which `serve` does not run, depth 1."""
 
     def __init__(
         self,
@@ -265,10 +264,9 @@ class Flux3KleinProcessGroups:
         self._dead, self._closing = set(), False
         self._waiting = {conn: deque() for conn in self._conns}
         self._send_locks = {conn: threading.Lock() for conn in self._conns}
-        self._free = queue.SimpleQueue()
-        for _ in range(depth):
-            for conn in self._conns:
-                self._free.put(conn)
+        self._depth, self._held = depth, {conn: 0 for conn in self._conns}
+        self._turns = {conn: i for i, conn in enumerate(self._conns)}  # ties go to the group served longest ago
+        self._slot = threading.Condition(self._lock)
         self._readers = [threading.Thread(target=self._read, args=(conn,), daemon=True) for conn in self._conns]
         for reader in self._readers:
             reader.start()
@@ -308,34 +306,47 @@ class Flux3KleinProcessGroups:
             else:
                 future.set_result(payload)
 
+    def _acquire(self):
+        """The alive group holding the fewest requests (of those, the one given a request longest ago), once it holds
+        fewer than `depth`: a burst spreads evenly whatever order earlier requests finished in."""
+        with self._slot:
+            while True:
+                alive = [conn for conn in self._conns if conn not in self._dead]
+                if not alive:
+                    raise RuntimeError("no group process is alive")
+                conn = min(alive, key=lambda conn: (self._held[conn], self._turns[conn]))
+                if self._held[conn] < self._depth:
+                    self._held[conn] += 1
+                    self._turns[conn] = max(self._turns.values()) + 1
+                    return conn
+                self._slot.wait()
+
+    def _release(self, conn) -> None:
+        with self._slot:
+            self._held[conn] -= 1
+            self._slot.notify()
+
     def _run(self, request):
-        conn = self._free.get()
-        if conn is None:
-            self._free.put(None)
-            raise RuntimeError("no group process is alive")
-        if conn in self._dead:
-            return self._run(request)  # a dropped group's slot
-        future = Future()
-        with self._send_locks[conn]:
-            self._waiting[conn].append(future)
-            try:
-                conn.send(request)
-                delivered = True
-            except OSError:
-                self._waiting[conn].pop()
-                delivered = False
-            except BaseException:
-                self._waiting[conn].pop()
-                self._free.put(conn)  # the request did not pickle; nothing was written, the group is intact
-                raise
-        if not delivered:
-            self._drop(conn, RuntimeError(f"group process {self._names[conn]} died"))
-            return self._run(request)  # nothing was delivered: another group takes the request
+        conn = self._acquire()
         try:
-            return future.result()
+            future = Future()
+            with self._send_locks[conn]:
+                self._waiting[conn].append(future)
+                try:
+                    conn.send(request)
+                    delivered = True
+                except OSError:
+                    self._waiting[conn].pop()
+                    delivered = False
+                except BaseException:
+                    self._waiting[conn].pop()  # the request did not pickle; nothing was written, the group is intact
+                    raise
+            if delivered:
+                return future.result()
+            self._drop(conn, RuntimeError(f"group process {self._names[conn]} died"))
         finally:
-            if conn not in self._dead:
-                self._free.put(conn)
+            self._release(conn)
+        return self._run(request)  # nothing was delivered: another group takes the request
 
     def _drop(self, conn, error: Exception) -> None:
         with self._lock:
@@ -344,12 +355,11 @@ class Flux3KleinProcessGroups:
             self._dead.add(conn)
             self._alive -= 1
             alive = self._alive
+            self._slot.notify_all()  # a waiting request picks among the groups left, or fails if none is
         logger.error(f"FLUX 3 Klein group process {self._names[conn]} died; {alive} group(s) left")
         with self._send_locks[conn]:
             while self._waiting[conn]:
                 self._waiting[conn].popleft().set_exception(error)
-        if not alive:
-            self._free.put(None)
 
     def close(self) -> None:
         """Stop every group. Waits for each process: a group still building its pipeline reaches recv and exits on
