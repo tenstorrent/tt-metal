@@ -29,6 +29,7 @@
 #include "metadata_scalar_read.hpp"
 #include "fused_op_receiver.hpp"
 #include "ring_utils.hpp"
+#include "ring_ksplit_handoff.hpp"
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
@@ -376,6 +377,19 @@ void kernel_main() {
     // Pass-outer, ring-inner (ring_joint_sdpa.cpp): compute keeps each Q chunk's state in L1 over the ring and
     // normalizes it once, on its last active ring iteration (balanced causal, early half: the last step on K from this
     // or an earlier device). Write each Q chunk's output then, in the order compute packs them.
+    // K split (sliding windows; ring_ksplit_handoff.hpp): the band index follows the fused-op receiver block (no
+    // rotated Q split), then the peers. A sender band hands its state over and writes no output.
+    constexpr uint32_t ksplit_count = get_named_compile_time_arg_val("ksplit_count");
+    if constexpr (ksplit_count > 1) {
+        // CB 9's rows: the BF16-state recipes' two planes unless the chunk PV has its own scratch CB.
+        constexpr uint32_t o_planes = get_named_compile_time_arg_val("recipe_pv_scratch_cb") != 0 ? 1 : 2;
+        if (global_q_end - global_q_start == 1 &&
+            ring_ksplit_writer_handoff<Sq_chunk_t, vDHt, ksplit_count, o_planes>(
+                noc, get_named_compile_time_arg_val("ksplit_sem_id"), get_arg_val<uint32_t>(argidx), argidx + 1)) {
+            noc.async_write_barrier();
+            return;
+        }
+    }
     const uint32_t sdpa_ring_iterations = ring_joint::ring_pass_count(ring_size, has_sliding_window);
     for (uint32_t q_flat = global_q_start; q_flat < global_q_end; ++q_flat) {
         const uint32_t q_chunk = decompose_global_q_index(q_flat, num_q_chunks, NH, use_zigzag_balancing).q_chunk;

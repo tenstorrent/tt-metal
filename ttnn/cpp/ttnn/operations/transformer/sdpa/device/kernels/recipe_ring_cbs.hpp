@@ -21,4 +21,11 @@ constexpr uint32_t pv_scratch = 7;
 constexpr uint32_t sink = 19, derived = 20;
 // Exp ring: second handles on the K and V CBs for the fabric MUX writer, which pops them independently of compute.
 constexpr uint32_t k_writer = 22, v_writer = 23;
+// Sliding ring K split (recipe_split_merge.hpp): a band's state handoff page (compute -> writer: where the state sits),
+// and on the reducer the received state (O rows, maxima, l) and the merge's c_b scratch.
+constexpr uint32_t ksplit_signal = 24, ksplit_recv_out = 25, ksplit_recv_max = 26, ksplit_recv_sum = 27,
+                   ksplit_corr = 28;
+// The handoff page's words: the CB holding the band's maxima (CB 9 holds O and CB 13 l, at their bases) and whether
+// the band ran any K chunk.
+constexpr uint32_t ksplit_word_max_cb = 0, ksplit_word_has_state = 1;
 }  // namespace recipe_ring_cb

@@ -39,6 +39,7 @@
 #include "recipe/recipe_sfpu.hpp"
 #include "recipe/recipe_streaming.hpp"
 #include "recipe/recipe_ring.hpp"
+#include "recipe/recipe_ring_ksplit.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/fused_op_indexer.hpp"
 #include "cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_rank_mapping.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/ring_joint_derived_slots.hpp"
@@ -231,6 +232,14 @@ __attribute__((optimize("Os"))) void kernel_main() {
     uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
     // The reader's multicast loop count; slots past this core's own Q chunks are padding (their K/V are drained).
     const uint32_t padded_q_slots = get_arg_val<uint32_t>(argidx++) - q_per_core;
+    // K split (sliding windows; recipe_ring_ksplit.hpp): a core with one unit runs its band of the work plan; the last
+    // band merges the others' states and normalizes. The band follows the multicast loop count (no rotated Q split).
+    constexpr uint32_t ksplit_count = get_named_compile_time_arg_val("ksplit_count");
+    constexpr bool ksplit_enabled = ksplit_count > 1;
+    static_assert(
+        !ksplit_enabled || (has_sliding_window && !recipe::fp32 && ksplit_count <= ring_joint::kKSplitMaxCount));
+    [[maybe_unused]] const uint32_t ksplit_band = ksplit_enabled ? get_arg_val<uint32_t>(argidx) : 0;
+    const bool ksplit_active = ksplit_enabled && q_per_core == 1;
 
     RingSDPAOpIndexer fused_op_indexer(
         ring_size_runtime, ring_index_runtime, forward_writes_expected, backward_writes_expected);
@@ -480,6 +489,14 @@ __attribute__((optimize("Os"))) void kernel_main() {
                         kv_pad_rotation_enabled ? &q_mapping : nullptr,
                         sliding_local_first);
                     ASSERT(plan.is_valid && plan.total_k_chunk_count > 0);
+                    // This core's band of the plan (K split), else all of it.
+                    ring_joint::KSplitRange band{0, plan.total_k_chunk_count};
+                    if constexpr (ksplit_enabled) {
+                        if (ksplit_active) {
+                            band =
+                                ring_joint::sliding_ksplit_range(plan.total_k_chunk_count, ksplit_band, ksplit_count);
+                        }
+                    }
                     const uint32_t q_tile0 = kv_pad_rotation_enabled
                                                  ? q_chunk * Sq_chunk_t
                                                  : logical_nt - ring_size * q_local_padded_Nt +
@@ -496,8 +513,10 @@ __attribute__((optimize("Os"))) void kernel_main() {
                         true,
                         q_flat,
                         false,
-                        plan.total_k_chunk_count,
-                        [&](RecipeAccumulatorState& state, uint32_t chunk, bool last_k) __attribute__((always_inline)) {
+                        band.empty() ? 0 : band.end - band.begin,
+                        [&](RecipeAccumulatorState& state, uint32_t band_chunk, bool last_k) __attribute__((
+                            always_inline)) {
+                            const uint32_t chunk = band.begin + band_chunk;
                             const auto ref = plan.k_chunk_at(chunk);
                             recipe_ring_mask.valid_rows = k_chunk_rows;
                             recipe_ring_mask.masked = true;
@@ -536,8 +555,22 @@ __attribute__((optimize("Os"))) void kernel_main() {
                                     }
                                 }
                             }
-                            run_chunk(state, last_k, last_k);
+                            // A K-split band's state stays unnormalized (the reducer merges it).
+                            run_chunk(state, last_k && !ksplit_active, last_k);
                         });
+                    if constexpr (ksplit_enabled) {
+                        if (ksplit_active) {
+                            if (ksplit_band + 1 < ksplit_count) {
+                                recipe_ring_ksplit_publish(resident, !band.empty());
+                            } else {
+                                recipe_ring_ksplit_merge_and_normalize<
+                                    Sq_chunk_t,
+                                    vDHt,
+                                    get_compile_time_arg_val(26),
+                                    ksplit_count>(resident, plan.total_k_chunk_count);
+                            }
+                        }
+                    }
                 } else {
                     // The K chunks this Q chunk processes: those the reader sends, less (on the diagonal shard) the
                     // chunks starting past the Q chunk's last row, which are masked whole and popped unread.

@@ -533,6 +533,11 @@ def compute_pcc_rmse(expected, actual):
     return pcc, rmse
 
 
+# A K split against the same call unsplit (the bands' online-softmax states merged in another summation order): the
+# BF16-state recipes' outputs differ in the last bits of some elements only.
+K_SPLIT_FEATURE_PCC = 0.9999
+
+
 def assert_pcc_rmse(expected, actual, pcc_threshold, rmse_threshold, label):
     pcc, rmse = compute_pcc_rmse(expected, actual)
     logger.info(f"{label} - PCC: {pcc}, RMSE: {rmse:.6f}")
@@ -1974,8 +1979,9 @@ def run_ring_joint_sdpa_chunked(
             for q_chunk, k_chunk in qk_configs
         }
 
-        # The precision recipes own the numerics and ignore these knobs (k_splits, segmented_accumulation,
-        # matmul_math_fidelity): dropping one must leave every chunk bit-identical.
+        # The precision recipes own the numerics and ignore these knobs (segmented_accumulation, matmul_math_fidelity):
+        # dropping one must leave every chunk bit-identical. A K split (k_splits) is a schedule choice: its bands' states
+        # merge in another summation order, so it must only stay close to the unsplit output.
         def feature_baseline(**overrides):
             base = dict(
                 k_splits=k_splits,
@@ -2522,7 +2528,11 @@ def run_ring_joint_sdpa_chunked(
                             if use_ring_mla:
                                 baseline_i = baseline_i[:, :, :, :d_v]
                             key = (config_id, feature)
-                            feature_differs[key] = feature_differs.get(key, False) or not torch.equal(out_i, baseline_i)
+                            if feature == "K split":
+                                differs = not comp_pcc(baseline_i, out_i, K_SPLIT_FEATURE_PCC)[0]
+                            else:
+                                differs = not torch.equal(out_i, baseline_i)
+                            feature_differs[key] = feature_differs.get(key, False) or differs
 
         if num_iterations > 1 and use_device_determinism_compare and determinism_mismatch_marker is not None:
             assert not device_mismatch_marker_is_set(
@@ -2530,7 +2540,11 @@ def run_ring_joint_sdpa_chunked(
             ), "Chunked prefill produced output that differs from iteration 0"
 
         for (config_id, feature), differs in feature_differs.items():
-            assert not differs, f"{config_id}: {feature} changed the output, but the precision recipes ignore it"
+            assert not differs, (
+                f"{config_id}: {feature} changed the output, but the precision recipes ignore it"
+                if feature != "K split"
+                else f"{config_id}: the K split moved the output beyond PCC {K_SPLIT_FEATURE_PCC} of the unsplit run"
+            )
 
         for config_id, per_chunk_results in per_chunk_results_by_config.items():
             failures = [

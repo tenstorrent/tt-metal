@@ -1823,20 +1823,41 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // The writer drains the output in the rows compute packs (one per row); pairs of rows when the Q chunk is a whole
     // number of them, so a pair never straddles the output CB's wrap.
     const uint32_t writer_out_row_group_h = Sq_chunk_t % 2 == 0 ? 2 : 1;
-    // K split and segmented accumulation are not applied: the recipes keep the denominator in FP32 (no BF16 running sum
-    // spans a long prefix, which segmented accumulation guarded against), and a K split's partial states would need a
-    // recipe-state merge.
-    if (args.program_config.has_value() &&
-        (args.program_config->k_splits > 1 || args.program_config->segmented_accumulation)) {
+    // Segmented accumulation is not applied: the recipes keep the denominator in FP32 (no BF16 running sum spans a long
+    // prefix, which segmented accumulation guarded against). K split (ring_joint_ksplit.hpp, sliding windows only):
+    // when the (head, Q chunk) units leave the grid idle, the rows are divided into bands that each hold every unit
+    // once and attend to a band of its sliding work plan; the last band (it holds the diagonal) merges the others'
+    // states and normalizes (recipe_ring_ksplit.hpp). A schedule choice: only the online softmax's summation order
+    // changes. Applied when every unit gets its own core in every band, for the BF16-state recipes (their O and l stay
+    // in CBs 9 / 13 for the writers to move), batch 1 without joint tokens, a fixed local length and Blackhole (as
+    // Gemma4SlidingRingSDPA); other calls run unsplit.
+    if (args.program_config.has_value() && args.program_config->segmented_accumulation) {
         static std::once_flag ignored_once;
         std::call_once(ignored_once, [] {
             log_warning(
                 tt::LogOp,
-                "RingJointSDPA ignores SDPAProgramConfig k_splits and segmented_accumulation: the precision recipes run "
-                "every Q chunk's K chunks on its own core and keep an FP32 denominator.");
+                "RingJointSDPA ignores SDPAProgramConfig segmented_accumulation: the precision recipes keep an FP32 "
+                "denominator.");
         });
     }
-    const uint32_t ksplit_count = 1;
+    uint32_t ksplit_count = 1;
+    uint32_t ksplit_rows_per_split = 0;
+    const uint32_t ksplit_requested = args.program_config.has_value() ? args.program_config->k_splits : 1;
+    if (ksplit_requested > 1 && has_sliding_window && B == 1 && L == 0 && !dynamic_local_n &&
+        !policy.fp32_destination && all_heads_num_q_chunks <= num_cores && device->arch() != tt::ARCH::WORMHOLE_B0) {
+        ksplit_rows_per_split = tt::div_up(all_heads_num_q_chunks, grid_size.x);
+        // Every sliding band needs two K chunks of the halo (the oldest can mask a Q chunk's later rows entirely).
+        const uint32_t sliding_cap = std::max(
+            1u,
+            ring_joint::chunked_sliding_halo_tile_rows(sliding_window_size, tt::constants::TILE_HEIGHT, Sk_chunk_t) /
+                Sk_chunk_t / 2);
+        const uint32_t max_ksplit = std::min(
+            {static_cast<uint32_t>(grid_size.y) / ksplit_rows_per_split, ring_joint::kKSplitMaxCount, sliding_cap});
+        if (ksplit_requested <= max_ksplit) {
+            ksplit_count = ksplit_requested;
+        }
+    }
+    log_debug(tt::LogOp, "RingJointSDPA K split: {} (requested {})", ksplit_count, ksplit_requested);
     const bool seg_accum = false;
 
 
@@ -2205,7 +2226,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         has_sliding_window
             ? ring_joint::sliding_q_work_plan_source_ranges(sliding_halo_hops, chunked_sliding_halo_layout.halo_slot_count)
             : 1;
-    const uint32_t sliding_local_first = sliding_halo_hops > 1 ? 1 : 0;
+    // A K split keeps the plan in sequence order: its last band then holds the diagonal chunk.
+    const uint32_t sliding_local_first = sliding_halo_hops > 1 && ksplit_count == 1 ? 1 : 0;
 
     // NOTE: CreateKernel calls are deferred until after chain construction so that
     // the mcast_enabled compile-time arg can be determined first.
@@ -2283,6 +2305,31 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     }
     // Reader-to-compute mailbox for the device-derived lengths.
     add_cb(recipe_ring_cb::derived, 1, 64, tt::DataFormat::UInt32);
+    // K split: the band's state handoff page, and the reducer's receive CBs for one sender's state (O rows of vd tiles,
+    // the maxima, l, in the recipe state's formats) and the merge's c_b scratch (the maxima's format).
+    if (ksplit_count > 1) {
+        add_cb(recipe_ring_cb::ksplit_signal, 1, 64, tt::DataFormat::UInt32);
+        add_cb(
+            recipe_ring_cb::ksplit_recv_out,
+            Sq_chunk_t * vDHt,
+            tt::tile_size(tt::DataFormat::Float32),
+            tt::DataFormat::Float32);
+        add_cb(
+            recipe_ring_cb::ksplit_recv_max,
+            Sq_chunk_t,
+            tt::tile_size(tt::DataFormat::Float16_b),
+            tt::DataFormat::Float16_b);
+        add_cb(
+            recipe_ring_cb::ksplit_recv_sum,
+            Sq_chunk_t,
+            tt::tile_size(tt::DataFormat::Float32),
+            tt::DataFormat::Float32);
+        add_cb(
+            recipe_ring_cb::ksplit_corr,
+            Sq_chunk_t,
+            tt::tile_size(tt::DataFormat::Float16_b),
+            tt::DataFormat::Float16_b);
+    }
     // Fit L1: first give up Q prefetch (the reader reserves one Q chunk at a time and compute pops it when done), then
     // latent V's second entry (the reader copies V out of the K chunk already in L1, so it only loses that copy's
     // overlap; latent V is never chained), then output staging beyond one row group, then the fused
@@ -2388,6 +2435,22 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             head_mcast_policy);
     }
     auto& core_work = q_work_plan.core_work;
+    // K split: core (x, y) is in band y / rows_per_split and owns unit (y % rows_per_split) * grid.x + x. Idle cores
+    // of rows past the last band report band 0; they own no unit. (Sliding builds no K/V chains.)
+    auto ksplit_band = [&](uint32_t core_idx) {
+        const uint32_t band = core_idx / grid_size.x / ksplit_rows_per_split;
+        return band < ksplit_count ? band : 0;
+    };
+    auto ksplit_core = [&](uint32_t band, uint32_t core_idx) {
+        const uint32_t local_row = core_idx / grid_size.x % ksplit_rows_per_split;
+        return (band * ksplit_rows_per_split + local_row) * grid_size.x + core_idx % grid_size.x;
+    };
+    for (uint32_t i = 0; ksplit_count > 1 && i < num_cores; ++i) {
+        const uint32_t unit = (i / grid_size.x % ksplit_rows_per_split) * grid_size.x + i % grid_size.x;
+        const bool owns_unit = i / grid_size.x / ksplit_rows_per_split < ksplit_count && unit < all_heads_num_q_chunks;
+        core_work[i].global_q_start = owns_unit ? unit : all_heads_num_q_chunks;
+        core_work[i].global_q_count = owns_unit ? 1 : 0;
+    }
     auto& head_chain_configs = q_work_plan.head_chain_configs;  // MHA K/V or separate-V V
     const uint32_t base_chunks_per_core = q_work_plan.split.base_chunks_per_core;
     const uint32_t cores_doing_extra_work = q_work_plan.split.cores_doing_extra_work;
@@ -3022,9 +3085,21 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     compute_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_kernel.core_ranges = core_grid_set;
     compute_kernel.compile_time_args = compute_compile_time_args;
+    // K split: the reducer's ready semaphore, one bit per sender band (ring_ksplit_handoff.hpp).
+    uint32_t ksplit_sem_id = 0;
+    if (ksplit_count > 1) {
+        ksplit_sem_id = static_cast<uint32_t>(desc.semaphores.size());
+        TT_FATAL(ksplit_sem_id < 16, "The K split needs a semaphore, but {} are already allocated", ksplit_sem_id);
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = ksplit_sem_id,
+            .core_type = tt::CoreType::WORKER,
+            .core_ranges = core_grid_set,
+            .initial_value = 0,
+        });
+    }
     const KernelDescriptor::NamedCompileTimeArgs ksplit_named_args = {
         {"ksplit_count", ksplit_count},
-        {"ksplit_sem_id", 0},
+        {"ksplit_sem_id", ksplit_sem_id},
         {"dense_causal_skip", dense_causal_skip ? 1u : 0u},
         {"seg_accum", seg_accum ? 1u : 0u},
         {"kv_stripe_split", args.kv_stripe_split},
@@ -3168,6 +3243,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 reader_args.push_back(sched.group_has_remainder);
             }
         }
+        if (ksplit_count > 1) {
+            reader_args.push_back(ksplit_band(i));
+        }
 
         reader_kernel.emplace_runtime_args(core, reader_args.args);
 
@@ -3205,6 +3283,21 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                     float_dest = rotated_pack_dest(dest_phys.x, dest_phys.y);
                 }
                 writer_args.push_back(float_dest);
+            }
+        }
+        if (ksplit_count > 1) {
+            // [band], then a sender's reducer core or a reducer's sender cores (physical x, y).
+            const uint32_t band = ksplit_band(i);
+            writer_args.push_back(band);
+            if (work.global_q_count > 0) {
+                for (uint32_t peer = 0; peer < ksplit_count; ++peer) {
+                    const bool is_peer = band + 1 < ksplit_count ? peer == ksplit_count - 1 : peer != band;
+                    if (is_peer) {
+                        const auto& phys = core_work.at(ksplit_core(peer, i)).physical_core;
+                        writer_args.push_back(phys.x);
+                        writer_args.push_back(phys.y);
+                    }
+                }
             }
         }
         writer_kernel.emplace_runtime_args(core, writer_args.args);
@@ -3254,6 +3347,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 compute_args.push_back(sched.remainder_start);
                 compute_args.push_back(sched.group_has_remainder);
             }
+        }
+        if (ksplit_count > 1) {
+            compute_args.push_back(ksplit_band(i));
         }
         compute_kernel.emplace_runtime_args(core, compute_args.args);
     }
