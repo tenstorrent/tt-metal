@@ -276,10 +276,11 @@ def _mocked_layer(monkeypatch, tensor_parallel_size: int):
     layer.tensor_parallel_size = tensor_parallel_size
     layer.tensor_parallel_axis = 1
     layer.config = SimpleNamespace(hidden_size=256, q_dim=1, k_dim=1, v_dim=1, num_heads=2, norm_eps=1e-6)
-    layer.weights = SimpleNamespace(convolution_taps=(), norm=object())
+    layer.weights = SimpleNamespace(convolution_taps=(), norm=object(), output_gate_projection=object())
     layer.gated_rms_output_dtype = layer.norm_output_memory_config = None
     layer.convolution_page_channels = KDA_CONVOLUTION_PAGE_CHANNELS
     layer.kda_compute_config = object()
+    layer.input_projection_compute_config = SimpleNamespace(math_fidelity=ttnn.MathFidelity.HiFi2)
     for name in ("qkv_convolution_program_config", "qkv_memory_config", "sequence_parallel_axis"):
         setattr(layer, name, None)
     layer._history_exchange = SimpleNamespace(buffer=None, semaphores=None)
@@ -316,10 +317,13 @@ def test_kda_layer_functional_path_skips_the_gather_on_a_full_width_input(monkey
 def test_kda_layer_with_sequence_parallelism_leaves_the_norm_to_the_relay(monkeypatch):
     layer, calls = _mocked_layer(monkeypatch, tensor_parallel_size=4)
     calls.recurrence.applies_output_norm = True
-    output, _ = layer.forward(SimpleNamespace(shape=(1, 64, 256)), Mock(), object())
+    full = SimpleNamespace(shape=(1, 64, 256))
+    output, _ = layer.forward(full, Mock(), object())
     calls.norm.assert_not_called()
     output_norm = calls.recurrence.call_args.kwargs["output_norm"]
-    assert output_norm.gate is calls.project_inputs.return_value.projected and output_norm.num_heads == 2
+    # The relay forms the output gate from the layer's input and the separate gate projection.
+    assert output_norm.gate_input is full and output_norm.gate_local is None
+    assert output_norm.gate_weight is layer.weights.output_gate_projection and output_norm.num_heads == 2
     calls.project_output.assert_called_once_with(calls.recurrence.return_value.output)
     assert output == "output"
 
