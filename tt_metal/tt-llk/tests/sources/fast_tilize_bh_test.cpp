@@ -389,7 +389,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         _llk_pack_fast_tilize_row_chunk_(0 /* tile_index */, udim, 4 /* num_faces */);
                         if constexpr (!pack_free_runs)
                         {
-                            _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                            // As fast_tilize_block: main's release order (words bit 2)
+                            _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en, true, 4>();
                         }
                     }
 
