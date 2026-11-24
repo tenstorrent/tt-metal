@@ -457,6 +457,13 @@ class TestRunStep(unittest.TestCase):
         with mock.patch.object(events, "hook", "/nonexistent/hook"), mock.patch.object(events, "args", dry):
             self.assertEqual(events.emit("before", "qb", "-", Path("/nonexistent")), 0)
 
+    def test_a_tray_drop_shape_goes_to_the_mix_with_its_trays(self):
+        mix = next(s for s in busbar.plan("plain", shape="h3-replay", trays="1,2,3,4", shape_tray=3) if s.name == "mix")
+        self.assertIn(("--trays", "1,2,3,4", "--shape", "h3-replay", "--shape-tray", "3"), [mix.argv[i : i + 6] for i in range(len(mix.argv))])
+        for bad in ({"shape": "h3-replay"}, {"shape": "h3-replay", "trays": "2", "shape_tray": 5}):
+            with self.assertRaises(ValueError):
+                busbar.plan("plain", **bad)
+
     def test_emit_runs_the_captures_and_after_a_lost_part_the_recovery(self):
         with tempfile.TemporaryDirectory() as d:
             sd = Path(d) / "busbar" / "mix"

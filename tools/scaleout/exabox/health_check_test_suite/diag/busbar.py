@@ -62,6 +62,8 @@ OVERRIDES = {
     "chunks": ("--chunks", str, "mix: chunk minutes, comma-separated (full: the last one is --long-min)"),
     "long_min": ("--long-min", int, "mix: minutes of full's last chunk (25)"),
     "qb_n": ("--qb-n", int, "qb: clock-checked quiet + burst cycles (2)"),
+    "shape": ("--shape", str, "mix: a tray-drop load shape (galaxy/drop_shapes.py list); needs --trays"),
+    "shape_tray": ("--shape-tray", int, "mix: the tray --shape aims at (2)"),
 }
 SMOKE_S = 2
 SETUP_S = 300  # mesh open, upload and close on top of a part's planned length; past both it counts as hung
@@ -136,6 +138,10 @@ def _overrides(over: dict) -> dict:
     for k in ("ops", "x_ops", "trays", "order", "chunks"):
         if k in ov:
             ov[k] = _csv(OVERRIDES[k][0], ov[k], empty_ok=k == "x_ops")
+    if ov.get("shape_tray", 2) not in range(1, 5):
+        raise ValueError(f"--shape-tray: 1-4 (got {ov['shape_tray']})")
+    if "shape" in ov and "trays" not in ov:
+        raise ValueError("--shape runs parts on some trays only: it needs --trays")
     if "trays" in ov and not all(t in ("1", "2", "3", "4") for t in ov["trays"].split(",")):
         raise ValueError(f"--trays: tray numbers 1-4, comma-separated (got {ov['trays']!r})")
     for k in ("ops", "x_ops"):
@@ -190,6 +196,7 @@ def plan(mode: str = "plain", **over: int | str | None) -> list[Step]:
     burst = _burst(gap_ms)
     env = (("TT_MM_THROTTLE_PERF", str(ov["mm_throttle"])),) if "mm_throttle" in ov else ()
     on_trays = ("--trays", trays) if trays else ()
+    shape = ("--shape", ov["shape"], "--shape-tray", str(ov.get("shape_tray", 2))) if "shape" in ov else ()
     rows = ("--gap-s", str(gap), "--rows", "{out}/rows.jsonl", "--beat", "{out}/beat")
 
     def ub0(q: int, b: int, *extra: str) -> tuple[str, ...]:
@@ -230,6 +237,7 @@ def plan(mode: str = "plain", **over: int | str | None) -> list[Step]:
                 mins,
                 *_load("heavy,h3,mm,sfpu,dram,pcie", n, gap_ms),
                 *on_trays,
+                *shape,
                 "--heavy-check-each",
                 "1",
                 "--heavy-cols-rotate",
