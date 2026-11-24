@@ -1,9 +1,9 @@
 ---
 # torrentci#3023 C0: tt-smi -s on one p150b through the VM path, plus the
 # guest's view of the card's PCI BARs. Same tt-smi fetch as
-# 40-card-smi-n150.yaml (see its header). The BAR evidence is `lspci -vv`
-# and each Tenstorrent function's sysfs `resource` file; the step fails if
-# lspci lists nothing or any resource file is empty or unreadable. The CPU
+# 40-card-smi-n150.yaml (see its header). The BAR evidence is each
+# Tenstorrent function's sysfs `resource` file (ci-build has no lspci); the
+# step fails if sysfs lists none or any resource file is empty or unreadable. The CPU
 # address sizes and vendor are recorded beside them. Run it by hand.
 jobs:
   - id: card-smi-p150b
@@ -34,9 +34,6 @@ jobs:
         kind: shell
         shell:
           run:
-            - "lspci -d 1e52: -vv > /tmp/lspci.txt"
-            - cat /tmp/lspci.txt
-            - test -s /tmp/lspci.txt || { echo "lspci lists no 1e52 function" >&2; exit 1; }
             - found=0
             - >-
               for dev in /sys/bus/pci/devices/*; do
