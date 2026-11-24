@@ -81,7 +81,7 @@ flatbuffers::Offset<flatbuffer::CircularBufferConfig> to_flatbuffer(
             : 0;
 
     TT_FATAL(
-        !cb_buffer_unbound(config),
+        !cb_buffer_is_unbound(config),
         "Cannot serialize a circular buffer whose backing buffer is not bound: bind it first");
     auto globally_allocated_address =
         config.globally_allocated_address()

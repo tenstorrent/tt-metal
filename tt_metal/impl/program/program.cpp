@@ -1448,7 +1448,7 @@ CBHandle detail::ProgramImpl::add_circular_buffer_(const std::shared_ptr<Circula
     if (not circular_buffer->globally_allocated()) {
         this->invalidate_circular_buffer_allocation();
     } else {
-        if (!cb_buffer_unbound(circular_buffer->config())) {
+        if (!cb_buffer_is_unbound(circular_buffer->config())) {
             circular_buffer->assign_global_address();
         }
         // invalidate_circular_buffer_allocation() would have done this; adding a buffer still means
@@ -2501,7 +2501,7 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
             for (const IDevice* dev : devices_to_track) {
                 tt::tt_metal::GraphTracker::instance().track_allocate_cb(
                     circular_buffer->core_ranges(),
-                    cb_buffer_unbound(circular_buffer->config()) ? 0 : circular_buffer->address(),
+                    cb_buffer_is_unbound(circular_buffer->config()) ? 0 : circular_buffer->address(),
                     circular_buffer->size(),
                     circular_buffer->globally_allocated(),
                     dev);

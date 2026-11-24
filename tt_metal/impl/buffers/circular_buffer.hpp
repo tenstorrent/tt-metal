@@ -93,7 +93,7 @@ private:
 };
 
 // A CB bound later (globally_allocated_bound_later) whose buffer is not bound yet.
-bool cb_buffer_unbound(const CircularBufferConfig& config);
+bool cb_buffer_is_unbound(const CircularBufferConfig& config);
 
 bool cb_descriptor_is_backed(const CBDescriptor& descriptor);
 

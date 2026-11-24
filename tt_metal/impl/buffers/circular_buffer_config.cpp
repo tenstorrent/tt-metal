@@ -58,7 +58,7 @@ CircularBufferConfig::CircularBufferConfig(uint32_t total_size, const std::map<u
     this->set_config(data_format_spec);
 }
 
-bool cb_buffer_unbound(const CircularBufferConfig& config) {
+bool cb_buffer_is_unbound(const CircularBufferConfig& config) {
     return config.dynamic_cb() && !config.globally_allocated_address().has_value();
 }
 
@@ -194,7 +194,7 @@ CircularBufferConfig& CircularBufferConfig::set_page_size(uint8_t buffer_index, 
 }
 
 CircularBufferConfig& CircularBufferConfig::set_total_size(uint32_t total_size) {
-    if (dynamic_cb_ && !cb_buffer_unbound(*this)) {
+    if (dynamic_cb_ && !cb_buffer_is_unbound(*this)) {
         TT_FATAL(
             total_size <= this->max_size_,
             "Cannot set circular buffer size to {}. This is larger than the associated dynamically allocated "

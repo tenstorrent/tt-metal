@@ -32,7 +32,7 @@ CircularBufferImpl::CircularBufferImpl(const CoreRangeSet& core_range_set, const
     TT_FATAL(
         this->config_.remote_buffer_indices().empty(),
         "Remote buffer indices are not supported without a GlobalCircularBuffer");
-    if (globally_allocated() && !cb_buffer_unbound(config_)) {
+    if (globally_allocated() && !cb_buffer_is_unbound(config_)) {
         // The config holds Buffer::address(), which is wrong for a per-core buffer; resolve on this CB's cores.
         // Without a backing buffer (e.g. a config rebuilt from a trace), keep the stored address.
         if (config_.shadow_global_buffer != nullptr) {
@@ -78,7 +78,7 @@ CircularBufferImpl::CircularBufferImpl(const CBDescriptor& descriptor) :
             "Remote buffer indices should be specified when using a GlobalCircularBuffer");
         this->set_global_circular_buffer(*descriptor.global_circular_buffer);
     } else {
-        if (globally_allocated() && !cb_buffer_unbound(config_)) {
+        if (globally_allocated() && !cb_buffer_is_unbound(config_)) {
             // See the constructor above.
             if (config_.shadow_global_buffer != nullptr) {
                 this->assign_global_address();
@@ -190,7 +190,7 @@ uint32_t CircularBufferImpl::address() const {
 
 void CircularBufferImpl::check_bound() const {
     TT_FATAL(
-        !cb_buffer_unbound(config_),
+        !cb_buffer_is_unbound(config_),
         "Circular buffer {} on {} is backed by a buffer that is not bound: bind it "
         "(UpdateDynamicCircularBufferAddress, or apply a program descriptor that names it) before launching the "
         "program",
