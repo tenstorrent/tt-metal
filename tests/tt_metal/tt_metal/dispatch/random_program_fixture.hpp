@@ -5,7 +5,7 @@
 #pragma once
 
 #include "command_queue_fixture.hpp"
-#include "env_lib.hpp"
+#include "common/env_lib.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>

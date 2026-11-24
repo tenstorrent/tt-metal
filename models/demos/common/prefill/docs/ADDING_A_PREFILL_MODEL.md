@@ -261,6 +261,31 @@ runner sends one index tensor per forward exactly as it does per chunk at F = 1.
 `prefill_forward` takes the upstream rank's packed activation (every chunk's rows back to back on each chip) and a
 non-last rank returns its own.
 
+MTP is refused at F > 1 too, unless `supports_packed_forward_mtp = True` (GLM-5.3), eager or traced. A packed
+forward then carries every chunk's MTP lookahead, chunk by chunk:
+
+- **H2D row, per SP chip**: every chunk's ids back to back (as above), then one `num_mtp_tokens(K)`-id lookahead
+  block per chunk, in chunk order: `F * (chunk_size / sp + num_mtp_tokens(K))` ids
+  (`make_h2d_spec(..., forward_chunks=F)`). Block k is exactly what a one-chunk forward of chunk k sends after its
+  ids; an empty chunk's block is all `MTP_PAD_TOKEN_ID`. The H2D metadata is unchanged.
+- **D2D record**: the forward's chunk metadata, then one provided-levels word per chunk (empty chunks 0), which
+  the first rank's runner counts from each chunk's block (`chunk_provided_levels`). At F = 1 this is today's single
+  word, so the record is unchanged.
+- **D2D id segments**: as at F = 1, the ids ride as two segments of the activation's service, split per chip as
+  the first rank cuts its H2D row: every chunk's ids (`F * chunk_size / sp`), then every chunk's lookahead block
+  (`F * num_mtp_tokens(K)`; `mtp_id_segment_specs(..., forward_chunks=F)`). The activation itself is the forward's
+  hidden rows only.
+- **`prefill_forward(..., mtp_tokens=, mtp_id_segments=, provided_levels=)`**: the first rank's lookahead blocks
+  (`[sp, 1, F * num_mtp_tokens]`), a downstream rank's two id segments, and one provided-levels count per chunk. A
+  non-last rank returns `[activation, chunk ids, lookahead ids]`. The last rank builds each chunk's MTP input from
+  that chunk's ids and block alone, then runs the MTP layer packed like a trunk layer; each chunk's acks include
+  its MTP layers (`layer_ack_layers`).
+- **Traced** (`PREFILL_USE_TRACE=1`): the first rank keeps the lookahead blocks in a persistent buffer
+  (`claim_persistent_overhang`), a downstream rank its id segments (`claim_persistent_extras`), and the last rank
+  refreshes one level geometry per chunk position before each replay
+  (an empty chunk provides every level). The MTP region is captured twice: "generate", replayed when any chunk
+  generates a level, and "provided", when none does.
+
 ---
 
 ## 3. Register it

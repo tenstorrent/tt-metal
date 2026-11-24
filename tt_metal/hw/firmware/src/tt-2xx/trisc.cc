@@ -110,6 +110,10 @@ thread_local std::uint32_t op_info_offset __attribute__((used)) = 0;
 namespace trisc {
 // Flip between 0 and 1 to keep dest pointer between kernel calls
 thread_local std::uint32_t dest_register_offset __attribute__((used)) = 0;
+// Tile-shape index (log2 Dest rows per tile) of the last math init; read on the per-tile Dest addressing path
+// instead of the TILE_SHAPE_IDX GPR. thread_local per TRISC (tt-llk#1678). Declared extern thread_local in
+// ckernel_trisc_common.h.
+thread_local std::uint32_t dest_tile_shape_idx __attribute__((used)) = 0;
 }  // namespace trisc
 namespace pack {
 // Dest bank cleared by the dvalid pack section-done; thread_local per pack TRISC (tt-llk#1678).
@@ -130,7 +134,7 @@ thread_local bool unpack_math_seeded __attribute__((used)) = false;
 #endif
 
 // Called from trisc_irq_entry, which saves no vector registers, so built without the vector extension.
-extern "C" __attribute__((noinline, used, hot, target("arch=rv32im_zmmul_zaamo_zba_zbc_xtttensixqsr_xttzbkb"))) void
+extern "C" __attribute__((noinline, used, hot, target("cpu=tt-qsr32-tensix"))) void
 handle_interrupt() {
     uint32_t trisc_id = internal_::get_trisc_id();
     uint32_t error_code = RISC_PIC_BRISC_EX_REG_BASE(trisc_id)[HW_ERROR_INTERRUPT_INDEX] >> 8 & 0x3f;
@@ -280,6 +284,33 @@ extern "C" std::uint32_t _start1() {
     }
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
+#if defined(UCK_CHLKC_UNPACK)
+    // Reset every tile counter on this Neo, in case they are in some invalid sticky state left from previous
+    // program runs. An unrouted reset of Tensix-only counter 16+c also hits overlay counter c, so link them in
+    // remapper pairs during the reset. Writes are posted, so each step reads back the last register written
+    // before moving on.
+    constexpr uint32_t num_pairs = dfb::NUM_TENSIX_ONLY_TILE_COUNTERS / 2;
+    static_assert(dfb::REMAPPER_ONE_TO_ONE_PAIR_START + dfb::NUM_TENSIX * num_pairs <= dfb::NUM_REMAPPER_PAIRINGS);
+    const uint32_t first_pair = dfb::REMAPPER_ONE_TO_ONE_PAIR_START + neo_id * num_pairs;
+    const uint32_t client_id = static_cast<uint32_t>(overlay::NEO_0) + neo_id;
+#pragma GCC unroll 0
+    for (uint32_t i = 0; i < num_pairs; i++) {
+        const uint32_t tc = dfb::TC_TENSIX_POOL_START + 2 * i;
+        WRITE_REG32(REMAP_CLIENT_R_CONFIG_REG_ADDR32(first_pair + i), client_id | ((tc + 1) << 3));
+        WRITE_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(first_pair + i), client_id | (tc << 3) | (1u << 8));
+    }
+    (void)READ_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(first_pair + num_pairs - 1));  // pairs live before the resets
+    for (uint32_t tc = 0; tc < dfb::NUM_TILE_COUNTERS_PER_TENSIX; tc++) {
+        ckernel::trisc::tile_counters[tc].f.reset = 1;
+    }
+    (void)ckernel::trisc::tile_counters[dfb::NUM_TILE_COUNTERS_PER_TENSIX - 1].f.posted;  // resets applied before clear
+#pragma GCC unroll 0
+    for (uint32_t i = 0; i < num_pairs; i++) {
+        WRITE_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(first_pair + i), 0u);
+    }
+    (void)READ_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(first_pair + num_pairs - 1));  // pairs cleared before signaling
+    asm volatile("fence" ::: "memory");
+#endif
     *trisc_run = RUN_SYNC_MSG_DONE;
     setup_isr_csrs();
     enable_cc_stack();

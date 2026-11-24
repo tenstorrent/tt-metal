@@ -39,7 +39,7 @@ SCALAR_CASES = [
 def test_multiply(ttnn_mesh_device, reset_seeds, a_shape, b_shape, a_dt, b_dt, a_mem, b_mem, out_mem):
     U.run_binary(
         ttnn_mesh_device,
-        ttnn.multiply,
+        U.op("multiply"),
         lambda x, y: x * y,
         a_shape,
         b_shape,
@@ -58,7 +58,7 @@ def test_multiply_scalar(ttnn_mesh_device, reset_seeds, shape, dt, mem, scalar):
     mesh = ttnn_mesh_device
     x_torch = U.torch_rand(shape)
     x = U.to_tt_mem(x_torch, mesh, mem, dtype=U.DTYPES[dt])
-    out = ttnn.multiply(x, scalar, memory_config=U.resolve_memcfg(mem, mesh))
+    out = U.op("multiply")(x, scalar, memory_config=U.resolve_memcfg(mem, mesh))
     U.assert_pcc(x_torch.float() * scalar, out, pcc=0.999, mesh_device=mesh)
 
 
@@ -69,5 +69,5 @@ def test_multiply_scalar_fp32_row_major(ttnn_mesh_device, reset_seeds, shape):
     mesh = ttnn_mesh_device
     x_torch = U.torch_rand(shape, dtype=torch.float32)
     x = U.to_tt(x_torch, mesh, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT)
-    out = ttnn.multiply(x, 2.0)
+    out = U.op("multiply")(x, 2.0)
     U.assert_pcc(x_torch * 2.0, out, pcc=0.9999, mesh_device=mesh)

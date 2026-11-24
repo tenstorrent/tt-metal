@@ -410,11 +410,13 @@ tt::tt_metal::distributed::MeshWorkload make_tensor_prefetcher_pipe_validator_wo
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     bool streaming,
     const std::vector<uint32_t>& rotation,
-    const std::vector<uint32_t>& groups) {
+    const std::vector<uint32_t>& groups,
+    uint32_t compare_word_stride) {
     using namespace tt::tt_metal;
 
     TT_FATAL(!prefetcher_pipes.empty(), "prefetcher_pipes must hold at least one pipe");
     TT_FATAL(num_layers > 0, "num_layers must be > 0");
+    TT_FATAL(compare_word_stride > 0, "compare_word_stride must be > 0");
     Buffer* tensor_buffer = source_tensor.buffer();
     TT_FATAL(tensor_buffer != nullptr, "source_tensor must be on device");
     TT_FATAL(tensor_buffer->is_dram(), "source_tensor must be a DRAM buffer");
@@ -470,7 +472,8 @@ tt::tt_metal::distributed::MeshWorkload make_tensor_prefetcher_pipe_validator_wo
         {"print_stride", print_stride},
         {"streaming", streaming ? 1u : 0u},
         {"num_groups", selection.num_groups},
-        {"group_mask", selection.mask}};
+        {"group_mask", selection.mask},
+        {"compare_word_stride", compare_word_stride}};
     receiver.runtime_arg_schema.runtime_arg_names = {
         "bank_id",
         "recv_idx_in_bank",
@@ -525,7 +528,8 @@ void test_tensor_prefetcher_pipe_validator(
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     bool streaming,
     const std::vector<uint32_t>& rotation,
-    const std::vector<uint32_t>& groups) {
+    const std::vector<uint32_t>& groups,
+    uint32_t compare_word_stride) {
     tt::tt_metal::distributed::MeshWorkload workload = make_tensor_prefetcher_pipe_validator_workload(
         mesh_device,
         source_tensor,
@@ -535,7 +539,8 @@ void test_tensor_prefetcher_pipe_validator(
         bank_to_receivers,
         streaming,
         rotation,
-        groups);
+        groups,
+        compare_word_stride);
     tt::tt_metal::distributed::EnqueueMeshWorkload(
         ttnn::core::current_mesh_command_queue(*mesh_device), workload, /*blocking=*/false);
     tt::tt_metal::distributed::Finish(ttnn::core::current_mesh_command_queue(*mesh_device));

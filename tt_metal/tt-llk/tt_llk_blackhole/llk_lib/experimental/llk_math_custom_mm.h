@@ -25,7 +25,7 @@ using namespace ckernel::math;
 // rt_dim: 1
 // ct_dim: any integer from 1 to 34, as long as the ct_dim output tiles fit in the DEST sync region
 //         (custom_mm_tile_rows of the CustomMmDestLayout each)
-// kt_dim: any integer from 1 to 256 (inclusive)
+// kt_dim: any integer of 1 or more
 // fidelity: LoFi only
 // throttle: not supported
 
@@ -284,7 +284,7 @@ inline void _llk_math_custom_mm_init_(
  *                  same tiles.
  * @param operandB_face_r_dim: Face row count of in0 (SrcB), one of {1, 2, 4, 8}.
  * @param dst_index: First DEST output tile, counted in custom_mm_tile_rows of the layout.
- * @param kt_dim: Number of k-tiles to accumulate, 1 to 256.
+ * @param kt_dim: Number of k-tiles to accumulate, 1 or more.
  * @param ct_dim: Number of output column tiles; must match the init, whose MOP bakes it in.
  * @param in1_num_faces: Faces in an in1 tile, 4 or 2; must match the init.
  * @note Call @ref _llk_math_custom_mm_init_ first, and again after any other math op (a copy init leaves the Src
@@ -304,7 +304,7 @@ inline void _llk_math_custom_mm_(
         math::src_zero_flag_hw == (requires_disabled_src_zero_flag(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt) ? 1u : 0u),
         "custom_mm: Src zero-substitution flag does not hold the operand-driven value; an op between the init and "
         "this call left it at keep, so denormal Src operands would not be flushed");
-    LLK_ASSERT(kt_dim >= 1 && kt_dim <= CUSTOM_MM_MAX_KT_DIM, "custom_mm: kt_dim must be 1 to 256");
+    LLK_ASSERT(kt_dim >= 1, "custom_mm: kt_dim must be at least 1");
     LLK_ASSERT(custom_mm_legal_in1_num_faces(in1_num_faces), "custom_mm: in1 must have 4 faces, or 2 for a [32, 16] tile");
 
     const std::uint32_t replay_buf_len = custom_mm_replay_buf_len(operandB_face_r_dim, in1_num_faces);
