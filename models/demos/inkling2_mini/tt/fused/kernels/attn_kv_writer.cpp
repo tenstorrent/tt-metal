@@ -8,10 +8,14 @@
 //   bfp8:  the packed tile holds the chunk's shared exponent (byte = face row) and 16 mantissa bytes; the cache
 //          tile's exponent block (64 B) is read, patched and written back, the mantissas written in place.
 // mass: also write the far-cache mass chunk [1, 0 x 15] (packed in the same way, cb_mass) at tile t0_mass.
-// chain (multi-token verify prep, tokens in one program): the bfp8 exponent blocks are read, patched and written
-// back, so tokens that write rows of the same tile must not overlap. Runtime args after the destinations: wait,
-// next_x, next_y, has_next. With wait, the core waits on semaphore 0 (the previous token's writer) before it
-// reads the exponent blocks; after its writes land it increments the next token's semaphore.
+// chain (multi-token verify prep, tokens in one program, token t + 1's row = token t's row + 1 in every
+// destination): the bfp8 exponent blocks are read, patched and written back, so tokens that write rows of the same
+// tile must not overlap. Runtime args after the destinations: wait, next_x, next_y, has_next. Every token
+// prefetches its blocks and writes its mantissas at once; the exponent blocks pass down the chain in L1: a token
+// whose row is not a tile's last hands its patched blocks to the next token's core (same stage address, same CB
+// set) and increments that core's semaphore 0 instead of writing them; a token with wait waits on its semaphore
+// and patches the blocks it was handed (row != 0) or its own prefetch (row 0: the previous token wrote its tile).
+// The last token of a tile writes the blocks.
 // far4: the far cache (last destination) is bfp4 (source bfp8): same exponent byte, each mantissa rounded to 3 bits
 //       (nearest, ties to even, as the host packer), two per byte (element 0 in the low nibble); the 16 B block
 //       holding the face row and its neighbour is prefetched, patched and written back.
@@ -62,7 +66,8 @@ FORCE_INLINE void write_row(
     uint32_t src,
     uint32_t nchunks,
     uint32_t exps,
-    uint32_t bfp8) {
+    uint32_t bfp8,
+    bool put_exps = true) {
     const InterleavedAddrGen<true> dst = {.bank_base_address = base, .page_size = tile_bytes};
     const uint32_t f0 = (r >> 4) * 2, fr = r & 15;
     for (uint32_t c = 0; c < nchunks; c += 2) {
@@ -75,7 +80,9 @@ FORCE_INLINE void write_row(
                 e[(f0 + h) * 16 + fr] = s[c + h];
                 noc_async_write(src + 64 + (c + h) * 16, dst.get_noc_addr(page, 64 + (f0 + h) * 256 + fr * 16), 16);
             }
-            noc_async_write(e_l1, dst.get_noc_addr(page, 0), 64);
+            if (put_exps) {
+                noc_async_write(e_l1, dst.get_noc_addr(page, 0), 64);
+            }
         } else {
             for (uint32_t h = 0; h < 2; ++h) {
                 noc_async_write(src + (c + h) * 32, dst.get_noc_addr(page, ((f0 + h) * 256 + fr * 16) * 2), 32);
@@ -112,13 +119,9 @@ void kernel_main() {
         noc_async_read(pa.get_noc_addr(0, 0), stage + 64 * d, 64);
     }
     noc_async_read_barrier();
-    if constexpr (chain) {
-        if (get_arg_val<uint32_t>(1 + ndst * 5)) {
-            volatile tt_l1_ptr uint32_t* sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(0));
-            noc_semaphore_wait(sem, 1);
-            noc_semaphore_set(sem, 0);
-        }
-    }
+    static_assert(!(chain && far4), "chain: the handed blocks use the bfp4 staging area");
+    // chain: the blocks the previous token hands over land here (the next token's at the same address)
+    const uint32_t fwd = stage + 64 * ndst + ndst * 5 * 64;
     for (uint32_t d = 0; d < ndst; ++d) {
         const uint32_t a = 1 + d * 5;
         base[d] = get_arg_val<uint32_t>(a);
@@ -152,6 +155,27 @@ void kernel_main() {
     }
     cb_wait_front(cb_out, 1);
     const uint32_t src = get_read_ptr(cb_out);
+    bool has_next = false;
+    if constexpr (chain) {
+        const uint32_t c = 1 + ndst * 5;
+        has_next = get_arg_val<uint32_t>(c + 3) != 0;
+        if (bfp8 && get_arg_val<uint32_t>(c)) {
+            volatile tt_l1_ptr uint32_t* sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(0));
+            noc_semaphore_wait(sem, 1);
+            noc_semaphore_set(sem, 0);
+            for (uint32_t d = 0; d < ndst; ++d) {
+                if (r[d] != 0) {  // same tiles as the previous token: go on from its blocks
+                    volatile tt_l1_ptr uint32_t* to =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage + 64 * ndst + d * 5 * 64);
+                    volatile tt_l1_ptr uint32_t* from =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd + d * 5 * 64);
+                    for (uint32_t i = 0; i < 5 * 16; ++i) {
+                        to[i] = from[i];
+                    }
+                }
+            }
+        }
+    }
     for (uint32_t d = 0; d < ndst; ++d) {
         const uint32_t exps = stage + 64 * ndst + d * 5 * 64;
         if (far4 && d == ndst - 1) {
@@ -162,15 +186,25 @@ void kernel_main() {
             }
             continue;
         }
-        write_row(base[d], tile_bytes, page0[d], r[d], src, 8, exps, bfp8);
+        const bool hand = chain && bfp8 && has_next && r[d] != 31;  // the next token goes on in these tiles
+        write_row(base[d], tile_bytes, page0[d], r[d], src, 8, exps, bfp8, !hand);
         if (mass && d == ndst - 1) {  // the far cache is the last destination; mass chunk at tile 4
-            write_row(base[d], tile_bytes, row0[d] + 4, r[d], get_read_ptr(cb_mass), 2, exps + 4 * 64, bfp8);
+            write_row(base[d], tile_bytes, row0[d] + 4, r[d], get_read_ptr(cb_mass), 2, exps + 4 * 64, bfp8, !hand);
+        }
+        if constexpr (chain) {
+            if (hand) {
+                const uint32_t c = 1 + ndst * 5;
+                noc_async_write(
+                    exps,
+                    get_noc_addr(get_arg_val<uint32_t>(c + 1), get_arg_val<uint32_t>(c + 2), fwd + d * 5 * 64),
+                    5 * 64);
+            }
         }
     }
     noc_async_write_barrier();
     if constexpr (chain) {
         const uint32_t c = 1 + ndst * 5;
-        if (get_arg_val<uint32_t>(c + 3)) {
+        if (bfp8 && has_next) {
             noc_semaphore_inc(
                 get_noc_addr(get_arg_val<uint32_t>(c + 1), get_arg_val<uint32_t>(c + 2), get_semaphore(0)), 1);
             noc_async_atomic_barrier();

@@ -57,7 +57,7 @@ def _one(attn, x, state, pos):
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
-@pytest.mark.parametrize("p", [9000, 1023 + 9 * 1024])
+@pytest.mark.parametrize("p", [9000, 9022, 1023 + 9 * 1024])  # 9022: tokens 1 | 2 cross a far-cache tile
 @pytest.mark.parametrize("R", [2, 3, 4])
 @pytest.mark.parametrize("is_global", [False, True], ids=["local", "global"])
 @pytest.mark.parametrize("n_acc", ["all", 1], ids=["accept_all", "accept_1"])
