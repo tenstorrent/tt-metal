@@ -72,18 +72,6 @@ ttnn::Tensor sum_over_leading_dims(const ttnn::Tensor& t) {
         /* compute_kernel_config */ core::ComputeKernelConfig::precise());
 }
 
-// Stable log-softmax implementation
-ttnn::Tensor log_softmax(const ttnn::Tensor& t, int dim) {
-    auto t_max = ttnn::max(t, dim, /* keepdim */ true);
-    auto t_sub_max = ttnn::subtract(t, t_max);
-
-    auto t_sub_max_exp = ttnn::exp(t_sub_max);
-    auto t_sum_over_dim = sum_over_dim(t_sub_max_exp, dim);
-
-    auto log_t_sum_over_dim = ttnn::log(t_sum_over_dim, /*fast_and_approximate_mode=*/true);
-    return ttnn::subtract(t_sub_max, log_t_sum_over_dim);
-}
-
 // Stable softmax implementation
 // ttnn::softmax also exists, but it is not stable (even after max subtraction optimization)
 ttnn::Tensor softmax(const ttnn::Tensor& t, int dim) {
