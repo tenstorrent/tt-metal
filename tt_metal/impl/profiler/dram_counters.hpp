@@ -22,9 +22,8 @@ class Program;
 class MetalContext;
 }  // namespace tt::tt_metal
 
-// Measured DRAM traffic per program: a host snapshot of the free running counters of every DRAM channel tile before
-// the program is launched and after it is done, written as deltas to dram_traffic.csv in the profiler log directory.
-// Reference: tt_metal/tt-llk/docs/performance_counters/dram_counters.md.
+// Measured DRAM traffic per program: host snapshots of the free running counters of every DRAM channel tile around
+// each program, written as deltas to dram_traffic.csv. Reference: tt-llk docs/performance_counters/dram_counters.md.
 namespace tt::tt_metal::dram_counters {
 
 inline constexpr std::string_view TRAFFIC_LOG = "dram_traffic.csv";
@@ -108,10 +107,8 @@ IdleFit fit_idle(double tight_words, double tight_seconds, double spaced_words, 
 
 std::string counter_name(llk::perf::dram::DramCounter counter);
 
-// Slow dispatch hooks, no-ops unless TT_METAL_PROFILE_DRAM_COUNTERS is set. begin_program snapshots right before the
-// go signal; end_pending closes the program in flight on the chip once its cores are idle. With
-// TT_METAL_PROFILE_DRAM_CONTROLLER each program also gets one controller interval, and the firmware's interval and
-// clock gating are put back after it.
+// Slow dispatch hooks, no-ops unless TT_METAL_PROFILE_DRAM_COUNTERS is set: begin_program snapshots right before the
+// go signal, end_pending closes the program in flight on the chip once its cores are idle.
 void begin_program(MetalContext& ctx, IDevice& device, const Program& program);
 void end_pending(MetalContext& ctx, ChipId chip);
 // Drops the state of every chip of the context, which closes its devices.

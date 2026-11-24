@@ -9,9 +9,8 @@
 
 #include "perf_counters/dram_counters_types.h"
 
-// Wormhole DRAM channel tile counters. Include through perf_counters/dram_counters_inventory.h.
-// The NIU registers of a tile sit in NoC address space, three instances selected by noc0 y modulo 3, NoC 1 0x8000
-// above NoC 0, with the worker status offsets. One NIU data word is 32 bytes.
+// Wormhole DRAM channel tile counters; include through perf_counters/dram_counters_inventory.h. The NIU registers sit
+// in NoC address space, instance noc0 y modulo 3, NoC 1 0x8000 above NoC 0, worker status offsets, 32 B data words.
 
 namespace llk::perf::dram::wormhole
 {

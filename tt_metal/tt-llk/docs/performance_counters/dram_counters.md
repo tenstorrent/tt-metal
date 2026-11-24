@@ -60,7 +60,7 @@ With nothing running on the card, the read counters still advanced at several th
 
 ## 4. Output
 
-Both files are written to the profiler log directory (`TT_METAL_PROFILER_DIR` or `generated/profiler/.logs`), recreated by the first program of a process.
+`dram_traffic.csv`, `dram_idle.csv` and, with the controller option, `dram_controller.csv` are written to the profiler log directory (`TT_METAL_PROFILER_DIR` or `generated/profiler/.logs`), recreated by the first program of a process.
 
 `dram_traffic.csv`, one row per program launch, DRAM tile, NoC and counter with a nonzero corrected delta (`NONE` row when nothing moved):
 
