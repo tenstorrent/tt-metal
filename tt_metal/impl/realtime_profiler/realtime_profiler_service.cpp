@@ -33,6 +33,7 @@ RealtimeProfilerService& realtime_profiler_service() {
 RealtimeProfilerService::RealtimeProfilerService() : tracy_(std::make_unique<RealtimeProfilerTracyConsumer>()) {
 #if defined(TRACY_ENABLE)
     // The Tracy consumer unregisters itself once Tracy will take no more records.
+    tracy_handle_ = next_consumer_handle_;
     register_consumer([this](const experimental::ProgramRealtimeRecordBatch& batch) {
         if (!tracy_->on_records(batch)) {
             unregister_consumer(current_registration_->handle);
@@ -139,6 +140,9 @@ void RealtimeProfilerService::run_consumer(std::stop_token stop_token, ConsumerR
         }
         if (deliver(registration)) {
             continue;
+        }
+        if (registration.handle == tracy_handle_) {
+            tracy_->on_idle();
         }
         TTZoneScopedDN(RT_PROFILER, "Wait");
         wake_generation_.wait(wake_token, std::memory_order_acquire);

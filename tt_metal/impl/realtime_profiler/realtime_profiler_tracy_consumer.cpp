@@ -8,9 +8,12 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <iterator>
 #include <mutex>
 #include <ranges>
+#include <span>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -96,20 +99,8 @@ void RealtimeProfilerTracyConsumer::enqueue(const Event& event) {
         return;
     }
     std::lock_guard lock(events_mutex_);
-    // Only a device's newest mapping matters, so a mapping still waiting to be applied is overwritten.
-    if (event.kind == Event::Kind::Calibrate) {
-        for (Event& pending : events_ | std::views::reverse) {
-            if (pending.chip_id != event.chip_id) {
-                continue;
-            }
-            if (pending.kind == Event::Kind::Calibrate) {
-                pending = event;
-                return;
-            }
-            break;
-        }
-    }
     events_.push_back(event);
+    events_queued_++;
     events_pending_.store(true, std::memory_order_release);
 }
 
@@ -124,16 +115,39 @@ bool RealtimeProfilerTracyConsumer::on_records(const experimental::ProgramRealti
         return true;
     }
     for (const auto& record : batch.records) {
-        handle_record(record);
+        Chip& chip = chips_[record.chip_id];
+        if (chip.ctx != nullptr) {
+            chip.pending_programs.push_back(record);
+        }
+    }
+    for (Chip& chip : chips_) {
+        emit_pending(chip, false);
     }
     return true;
 }
 
+void RealtimeProfilerTracyConsumer::on_idle() {
+    if (tracy::GetProfiler().IsEmitSuppressed()) {
+        return;
+    }
+    if (events_pending_.load(std::memory_order_acquire)) {
+        apply_events();
+    }
+    if (!tracy::GetProfiler().IsConnected()) {
+        return;
+    }
+    for (Chip& chip : chips_) {
+        emit_pending(chip, false);
+    }
+}
+
 void RealtimeProfilerTracyConsumer::apply_events() {
     std::vector<Event> events;
+    uint64_t queued = 0;
     {
         std::lock_guard lock(events_mutex_);
         events.swap(events_);
+        queued = events_queued_;
         events_pending_.store(false, std::memory_order_release);
     }
     for (const Event& event : events) {
@@ -142,13 +156,32 @@ void RealtimeProfilerTracyConsumer::apply_events() {
             case Event::Kind::Remove: apply_remove(event); break;
             case Event::Kind::Calibrate: {
                 Chip& chip = chips_[event.chip_id];
-                chip.anchor_host = event.host_time;
-                chip.anchor_device = event.device_timestamp;
-                chip.frequency = event.frequency;
+                if (chip.ctx != nullptr) {
+                    add_anchor(chip, event.host_time, event.device_timestamp);
+                }
                 break;
             }
-            case Event::Kind::Stall: apply_stall(chips_[event.chip_id], event); break;
+            case Event::Kind::Stall: {
+                Chip& chip = chips_[event.chip_id];
+                if (chip.ctx != nullptr) {
+                    chip.pending_stalls.push_back({event.device_timestamp, event.stall_cycles});
+                }
+                break;
+            }
         }
+    }
+    events_applied_.store(queued, std::memory_order_release);
+}
+
+void RealtimeProfilerTracyConsumer::wait_for_events(std::chrono::milliseconds timeout) {
+    uint64_t queued = 0;
+    {
+        std::lock_guard lock(events_mutex_);
+        queued = events_queued_;
+    }
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (events_applied_.load(std::memory_order_acquire) < queued && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 }
 
@@ -157,10 +190,14 @@ void RealtimeProfilerTracyConsumer::apply_add(const Event& event) {
         chips_.resize(event.chip_id + 1);
     }
     Chip& chip = chips_[event.chip_id];
-    chip.anchor_host = event.host_time;
-    chip.anchor_device = event.device_timestamp;
-    chip.frequency = event.frequency;
     ns_per_host_tick_ = TracyGetTimerMul();
+    chip = Chip{};
+    chip.frequency = event.frequency;
+    chip.base_host = event.host_time;
+    chip.base_wall = event.device_timestamp;
+    chip.raw.push_back({});
+    // Host ticks per device cycle, from the nominal frequency until anchors measure it.
+    chip.host_per_wall = 1.0 / (event.frequency * ns_per_host_tick_);
     chip.context_host = event.host_time;
     chip.ctx = TracyTTContext();
     // Time 0 on the context is host time context_host, and the context counts in ns.
@@ -177,23 +214,31 @@ void RealtimeProfilerTracyConsumer::apply_add(const Event& event) {
 
 void RealtimeProfilerTracyConsumer::apply_remove(const Event& event) {
     Chip& chip = chips_[event.chip_id];
+    if (chip.ctx == nullptr) {
+        return;
+    }
+    // No later anchor is coming, so finalize the last one and place what is left past it.
+    if (!chip.raw.empty()) {
+        finalize_anchor(chip, chip.raw.size() - 1);
+    }
+    emit_pending(chip, true);
     flush_stall_message(event.chip_id, chip);
     TracyTTDestroy(chip.ctx);
     chip = Chip{};
 }
 
-void RealtimeProfilerTracyConsumer::apply_stall(Chip& chip, const Event& event) {
-    const uint64_t stall_end = context_ns(chip, event.device_timestamp);
-    const uint64_t stall_ns = std::llround(static_cast<double>(event.stall_cycles) / chip.frequency);
+void RealtimeProfilerTracyConsumer::emit_stall(Chip& chip, const PendingStall& stall) {
+    const uint64_t stall_end = context_ns(chip, stall.device_timestamp);
+    const uint64_t stall_ns = std::llround(static_cast<double>(stall.stall_cycles) / chip.frequency);
     const uint64_t start = std::max(stall_end - std::min(stall_ns, stall_end), chip.stall_end);
     chip.stall_end = std::max(stall_end, start);
     TracyTTPushZone(chip.ctx, &kStallSrcloc, chip.stall_lane, start, chip.stall_end);
 
     chip.suppressed_stalls++;
-    chip.suppressed_stall_cycles += event.stall_cycles;
+    chip.suppressed_stall_cycles += stall.stall_cycles;
     const auto now = std::chrono::steady_clock::now();
     if (now - chip.last_stall_message >= kStallMessageInterval) {
-        flush_stall_message(event.chip_id, chip);
+        flush_stall_message(static_cast<uint32_t>(&chip - chips_.data()), chip);
         chip.last_stall_message = now;
     }
 }
@@ -213,14 +258,79 @@ void RealtimeProfilerTracyConsumer::flush_stall_message(uint32_t chip_id, Chip& 
     chip.suppressed_stall_cycles = 0;
 }
 
-void RealtimeProfilerTracyConsumer::handle_record(const experimental::ProgramRealtimeRecord& record) {
-    Chip& chip = chips_[record.chip_id];
+void RealtimeProfilerTracyConsumer::emit_program(Chip& chip, const experimental::ProgramRealtimeRecord& record) {
     const uint64_t start = std::max(context_ns(chip, record.start_timestamp), chip.programs_end);
     chip.programs_end = std::max(context_ns(chip, record.end_timestamp), start);
     TracyTTPushZone(chip.ctx, program_srcloc(record), chip.programs_lane, start, chip.programs_end);
     char runtime_id[32];
     const auto text = fmt::format_to_n(runtime_id, sizeof(runtime_id), "Runtime ID: {}", record.runtime_id);
     TracyTTPushZoneText(chip.ctx, chip.programs_lane, runtime_id, text.size);
+}
+
+void RealtimeProfilerTracyConsumer::emit_pending(Chip& chip, bool all) {
+    if (chip.ctx == nullptr) {
+        return;
+    }
+    // A zone is placeable once a final anchor sits at or after its end, and an earlier one starts the segment.
+    const auto placeable = [&](uint64_t end_timestamp) {
+        return all ||
+               (chip.smooth.size() >= 2 &&
+                static_cast<double>(static_cast<int64_t>(end_timestamp - chip.base_wall)) <= chip.smooth.back().wall);
+    };
+    while (!chip.pending_programs.empty() && placeable(chip.pending_programs.front().end_timestamp)) {
+        emit_program(chip, chip.pending_programs.front());
+        chip.pending_programs.pop_front();
+    }
+    while (!chip.pending_stalls.empty() && placeable(chip.pending_stalls.front().device_timestamp)) {
+        emit_stall(chip, chip.pending_stalls.front());
+        chip.pending_stalls.pop_front();
+    }
+}
+
+void RealtimeProfilerTracyConsumer::add_anchor(Chip& chip, int64_t host_time, uint64_t device_timestamp) {
+    const Anchor anchor{
+        static_cast<double>(static_cast<int64_t>(device_timestamp - chip.base_wall)),
+        static_cast<double>(host_time - chip.base_host)};
+    // Both clocks only move forward, so a reading that does not is a bad one.
+    if (anchor.wall <= chip.raw.back().wall || anchor.host <= chip.raw.back().host) {
+        return;
+    }
+    chip.raw.push_back(anchor);
+    // The anchor before this one now has a neighbour on each side.
+    finalize_anchor(chip, chip.raw.size() - 2);
+    constexpr size_t kRawAnchorsKept = 8;
+    if (chip.raw.size() > kRawAnchorsKept) {
+        chip.raw.erase(chip.raw.begin());
+    }
+}
+
+void RealtimeProfilerTracyConsumer::finalize_anchor(Chip& chip, size_t index) {
+    // The slope at an anchor is the monotone cubic's (Fritsch and Carlson): the weighted harmonic mean of the slopes
+    // of the two segments that meet there, or the one segment's slope at an end. It keeps every segment increasing.
+    const auto segment_slope = [&](size_t from) {
+        return (chip.raw[from + 1].host - chip.raw[from].host) / (chip.raw[from + 1].wall - chip.raw[from].wall);
+    };
+    Anchor result = chip.raw[index];
+    const bool has_prev = index > 0;
+    const bool has_next = index + 1 < chip.raw.size();
+    if (has_prev && has_next) {
+        const double prev_span = chip.raw[index].wall - chip.raw[index - 1].wall;
+        const double next_span = chip.raw[index + 1].wall - chip.raw[index].wall;
+        const double w1 = 2.0 * next_span + prev_span;
+        const double w2 = next_span + 2.0 * prev_span;
+        result.slope = (w1 + w2) / (w1 / segment_slope(index - 1) + w2 / segment_slope(index));
+    } else if (has_next) {
+        result.slope = segment_slope(index);
+    } else if (has_prev) {
+        result.slope = segment_slope(index - 1);
+    } else {
+        result.slope = chip.host_per_wall;
+    }
+    chip.smooth.push_back(result);
+    constexpr size_t kFinalAnchorsKept = 4;
+    if (chip.smooth.size() > kFinalAnchorsKept) {
+        chip.smooth.erase(chip.smooth.begin());
+    }
 }
 
 const tracy::SourceLocationData* RealtimeProfilerTracyConsumer::program_srcloc(
@@ -254,10 +364,28 @@ const tracy::SourceLocationData* RealtimeProfilerTracyConsumer::program_srcloc(
 }
 
 uint64_t RealtimeProfilerTracyConsumer::context_ns(const Chip& chip, uint64_t device_timestamp) const {
-    const double since_anchor_ns =
-        static_cast<double>(static_cast<int64_t>(device_timestamp - chip.anchor_device)) / chip.frequency;
+    const double wall = static_cast<double>(static_cast<int64_t>(device_timestamp - chip.base_wall));
+    double host = 0.0;
+    if (chip.smooth.empty()) {
+        host = wall * chip.host_per_wall;
+    } else if (wall <= chip.smooth.front().wall) {
+        host = chip.smooth.front().host + (wall - chip.smooth.front().wall) * chip.smooth.front().slope;
+    } else if (wall >= chip.smooth.back().wall) {
+        host = chip.smooth.back().host + (wall - chip.smooth.back().wall) * chip.smooth.back().slope;
+    } else {
+        // Between two final anchors: the cubic Hermite curve through them with their slopes.
+        const auto upper = std::ranges::upper_bound(chip.smooth, wall, {}, &Anchor::wall);
+        const Anchor& hi = *upper;
+        const Anchor& lo = *std::prev(upper);
+        const double span = hi.wall - lo.wall;
+        const double t = (wall - lo.wall) / span;
+        const double t2 = t * t;
+        const double t3 = t2 * t;
+        host = (2.0 * t3 - 3.0 * t2 + 1.0) * lo.host + (t3 - 2.0 * t2 + t) * span * lo.slope +
+               (-2.0 * t3 + 3.0 * t2) * hi.host + (t3 - t2) * span * hi.slope;
+    }
     const int64_t ns =
-        std::llround(static_cast<double>(chip.anchor_host - chip.context_host) * ns_per_host_tick_ + since_anchor_ns);
+        std::llround((static_cast<double>(chip.base_host - chip.context_host) + host) * ns_per_host_tick_);
     return static_cast<uint64_t>(std::max<int64_t>(ns, 0));
 }
 
@@ -265,6 +393,8 @@ uint64_t RealtimeProfilerTracyConsumer::context_ns(const Chip& chip, uint64_t de
 
 void RealtimeProfilerTracyConsumer::enqueue(const Event&) {}
 bool RealtimeProfilerTracyConsumer::on_records(const experimental::ProgramRealtimeRecordBatch&) { return false; }
+void RealtimeProfilerTracyConsumer::on_idle() {}
+void RealtimeProfilerTracyConsumer::wait_for_events(std::chrono::milliseconds) {}
 
 #endif
 

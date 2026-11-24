@@ -7,6 +7,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <deque>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -23,8 +24,14 @@ namespace tt::tt_metal {
 
 // Sends real-time profiler records to Tracy while a Tracy client is connected. The process-wide service registers one
 // of these as a consumer, and unregisters it once Tracy's connect window has passed with no client. Every Tracy call is
-// made on that consumer's thread, so each device's context and its zones go through one lock-free queue. Zones are
-// placed in host time with the device's current clock mapping, so a context is never calibrated after it is created.
+// made on that consumer's thread, so each device's context and its zones go through one lock-free queue.
+//
+// Zones are placed in host time, and they run one to two anchor periods behind the device. A device's clock rate
+// changes with load, so a zone is not placed with a rate guessed from the past. It is held until anchors exist on
+// both sides of it, then placed on a monotone cubic through the anchors, which follows the changing rate smoothly.
+// A segment's curve is fixed once the anchor after its far end has arrived, so a zone that has been drawn is never
+// moved. The curve is continuous and increasing, so consecutive zones can neither overlap nor leave a gap that the
+// anchors alone caused. Other consumers get the raw timestamps.
 class RealtimeProfilerTracyConsumer {
 public:
     RealtimeProfilerTracyConsumer() = default;
@@ -36,10 +43,18 @@ public:
     // has passed with no client.
     bool on_records(const experimental::ProgramRealtimeRecordBatch& batch);
 
+    // Consumer thread, when it has no records: applies queued device events and emits the zones that new anchors
+    // have made placeable.
+    void on_idle();
+
+    // Blocks until the consumer thread has applied every event queued so far, or the timeout passes. The service must
+    // wake its consumers first.
+    void wait_for_events(std::chrono::milliseconds timeout);
+
     // Device events. Callable from any thread; each one is applied on the consumer thread before its next batch.
     void add_device(uint32_t chip_id, int64_t anchor_host, uint64_t anchor_device, double frequency);
     void remove_device(uint32_t chip_id);
-    // Replaces the device's clock mapping; later zones are placed with it.
+    // Adds an anchor to the device's clock mapping. Zones are placed once anchors bracket them.
     void calibrate_device(uint32_t chip_id, int64_t host_time, uint64_t device_timestamp, double frequency);
     // A zone on the device's "Dispatch stall" lane, plus a rate-limited error message.
     void push_dispatch_stall_marker(uint32_t chip_id, uint64_t stall_end_timestamp, uint32_t stall_cycles);
@@ -54,31 +69,57 @@ private:
         uint32_t stall_cycles = 0;
         double frequency = 0.0;
     };
+    // A point on a device's clock mapping: device wall clock cycles and Tracy host ticks, each relative to the
+    // chip's first anchor. `slope` is the curve's slope there in host ticks per cycle, set once the anchor is final.
+    struct Anchor {
+        double wall = 0.0;
+        double host = 0.0;
+        double slope = 0.0;
+    };
+    struct PendingStall {
+        uint64_t device_timestamp = 0;
+        uint32_t stall_cycles = 0;
+    };
     struct Chip {
         TracyTTCtx ctx = nullptr;
         uint32_t programs_lane = 0;
         uint32_t stall_lane = 0;
-        // The context counts ns from context_host. Device time anchor_device is host time anchor_host, and the device
-        // clock runs at `frequency` cycles per ns.
+        // The context counts ns from context_host.
         int64_t context_host = 0;
-        int64_t anchor_host = 0;
-        uint64_t anchor_device = 0;
-        double frequency = 0.0;
-        // Where the last zone on each lane ended, in ns on the context. A new mapping never moves a zone before it.
+        // The first anchor, which the others are relative to.
+        int64_t base_host = 0;
+        uint64_t base_wall = 0;
+        // The newest anchors as measured, oldest first. One becomes final when the anchor after it arrives.
+        std::vector<Anchor> raw;
+        // The final anchors, oldest first, newest last. Zones are placed on the curve through them.
+        std::vector<Anchor> smooth;
+        // Host ticks per device cycle from the nominal frequency, for zones before any anchor is final.
+        double host_per_wall = 0.0;
+        // Records and stalls waiting for a final anchor at or after their end.
+        std::deque<experimental::ProgramRealtimeRecord> pending_programs;
+        std::deque<PendingStall> pending_stalls;
+        // Where the last zone on each lane ended, in ns on the context. A zone never starts before it.
         uint64_t programs_end = 0;
         uint64_t stall_end = 0;
         // Dispatch-stall messages are limited to one per kStallMessageInterval; the rest are counted here.
         std::chrono::steady_clock::time_point last_stall_message;
         uint64_t suppressed_stalls = 0;
         uint64_t suppressed_stall_cycles = 0;
+        // The device clock's frequency in cycles per ns, for stall durations.
+        double frequency = 0.0;
     };
     void enqueue(const Event& event);
     void apply_events();
     void apply_add(const Event& event);
     void apply_remove(const Event& event);
-    void apply_stall(Chip& chip, const Event& event);
+    void add_anchor(Chip& chip, int64_t host_time, uint64_t device_timestamp);
+    // Makes raw anchor `index` final: fixes the curve's slope at it from its neighbours.
+    void finalize_anchor(Chip& chip, size_t index);
+    // Emits the chip's pending zones that smoothed anchors bracket, or all of them when `all` is set.
+    void emit_pending(Chip& chip, bool all);
+    void emit_program(Chip& chip, const experimental::ProgramRealtimeRecord& record);
+    void emit_stall(Chip& chip, const PendingStall& stall);
     void flush_stall_message(uint32_t chip_id, Chip& chip);
-    void handle_record(const experimental::ProgramRealtimeRecord& record);
 #if defined(TRACY_ENABLE)
     // The source location that names a program's zones: its kernel names, with the kernel paths as the file.
     const tracy::SourceLocationData* program_srcloc(const experimental::ProgramRealtimeRecord& record);
@@ -91,6 +132,9 @@ private:
     std::mutex events_mutex_;
     std::vector<Event> events_;
     std::atomic<bool> events_pending_{false};
+    // How many events have been queued, and how many of those the consumer thread has applied.
+    uint64_t events_queued_ = 0;
+    std::atomic<uint64_t> events_applied_{0};
 
     // Everything below is touched only by the consumer thread.
     std::vector<Chip> chips_;  // indexed by chip id
