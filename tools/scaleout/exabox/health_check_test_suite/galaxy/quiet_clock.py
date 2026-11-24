@@ -243,6 +243,48 @@ def bdf_label(bdf, did, extra=""):
     return f"{bdf[5:]} (tray {tray_of(bdf)}, ASIC {int(bdf.split(':')[-2], 16) & 0x0F}, device id {did}{extra})"
 
 
+def pcie_lines(rs, floor, frac, host, sysfs="/sys"):
+    """pcie_bw.py's 'pcie' rows -> a 'PCIE FAIL|WARN <BDF> (tray T) ASIC A, host H: PCIe bandwidth ...' line per chip
+    below the bar (FAIL: either direction under *floor* GB/s, a wrong read back or a failed transfer; WARN: under *frac*
+    of the box median, 4 chips or more), then the 'PCIe per chip ...' summary line."""
+    import re
+    from contextlib import suppress
+
+    med, out, nf, nw = {}, [], 0, 0
+    for k in ("h2d_gbs", "d2h_gbs"):
+        v = sorted(r[k] for r in rs if r[k] is not None)
+        med[k] = v[len(v) // 2] if v else None
+    txt = lambda v: "none" if v is None else f"{v:.2f} GB/s"  # noqa: E731
+    for r in rs:
+        m = re.match(r"(\S+) \(tray (\d), ASIC (\d+)", r["chip"])
+        who, lk = (f"{m[1]} (tray {m[2]}) ASIC {m[3]}" if m else r["chip"]), "unread"
+        with suppress(OSError, IndexError, TypeError):
+            d = f"{sysfs}/bus/pci/devices/0000:{m[1]}/current_link_"
+            lk = f"{open(d + 'speed').read().split()[0]}GT/s x{open(d + 'width').read().strip()}"
+        why = [r["bad"]] if r["bad"] else []
+        lvl = "FAIL" if why else ""
+        for k, nm in (("h2d_gbs", "host to chip"), ("d2h_gbs", "chip to host")):
+            if r[k] is not None and r[k] < floor:
+                why.append(f"{nm} under the {floor:g} GB/s floor")
+                lvl = "FAIL"
+            elif r[k] is not None and len(rs) >= 4 and r[k] < frac * med[k]:
+                why.append(f"{nm} under {frac:.0%} of the box median {med[k]:.2f} GB/s")
+                lvl = lvl or "WARN"
+        if lvl:
+            nf, nw = nf + (lvl == "FAIL"), nw + (lvl == "WARN")
+            out.append(
+                f"PCIE {lvl} {who}, host {host}: PCIe bandwidth host to chip {txt(r['h2d_gbs'])}, chip to host "
+                f"{txt(r['d2h_gbs'])} ({r['mb']} MB each way, link {lk}): {'; '.join(why)}; "
+                "at the PCIe step after the C9 fabric open"
+            )
+    rng = {k: f"min {min(r[k] for r in rs if r[k] is not None):.2f}, median {med[k]:.2f} GB/s" for k in med if med[k]}
+    return out + [
+        f"PCIe per chip ({len(rs)} chips, {rs[0]['mb'] if rs else 0} MB each way): host to chip "
+        f"{rng.get('h2d_gbs', 'none read')}, chip to host {rng.get('d2h_gbs', 'none read')}; {nf} FAIL, {nw} WARN "
+        f"(floor {floor:g} GB/s, WARN under {frac:.0%} of the box median)"
+    ]
+
+
 if __name__ == "__main__":
     # quiet_clock.py settle <label>: the clock check on every chip of this host (run.sh's idle_clocks, before each try)
     import sys

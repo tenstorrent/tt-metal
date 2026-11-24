@@ -206,6 +206,44 @@ class TestResets(unittest.TestCase):
         want = (("--noc-wall-s", "10"), 60 + resets.END_DBI_S + 15)
         self.assertEqual((steps[0].argv[-2:], steps[0].seconds), want)
 
+    def test_the_end_pcie_step_runs_after_the_open_and_its_warn_lines_warn(self):
+        args = argparse.Namespace(noc_wall_s=0, pcie_mb=32, pcie_s=240, pcie_floor_gbs=0.25, pcie_warn_frac=0.5)
+        warn, fail = (
+            "PCIE WARN 01:00.0 (tray 1) ASIC 0, host h: PCIe bandwidth x",
+            "PCIE FAIL 41:00.0 (tray 2) ASIC 1: y",
+        )
+
+        def run(fabric, pcie):  # the steps run and the end_pcie check, with these two steps' checks
+            phase, steps = resets.Phase(name="post_test_reset"), []
+            with tempfile.TemporaryDirectory() as d:
+
+                def ran(step, out, *a, **k):
+                    steps.append(step)
+                    if step.name == "pcie":
+                        (out / "pcie").mkdir()
+                        (out / "pcie" / "pcie.txt").write_text(f"{warn}\nPCIe per chip\n")
+                    return {"fabric": fabric, "pcie": pcie}[step.name]
+
+                with mock.patch.object(resets.events, "args", args), mock.patch.object(
+                    resets, "run_step", ran
+                ), mock.patch.object(resets, "read_aer", dict), mock.patch.object(resets, "glx_reset"):
+                    resets.run_end(None, phase, Path(d), False, 0, None)
+            c = next((c for c in phase.checks if c.name == "end_pcie"), None)
+            return steps, c and (c.status, c.data["fails"])
+
+        steps, pcie = run(resets.Check(name="end_fabric", status=PASS), resets.Check(name="end_pcie", status=PASS))
+        self.assertEqual([s.name for s in steps], ["fabric", "pcie"])
+        self.assertEqual(
+            (steps[1].argv[5:], steps[1].seconds), (("--mb", "32", "--floor-gbs", "0.25", "--warn-frac", "0.5"), 240)
+        )
+        self.assertEqual(pcie, (WARN, [warn]))
+        data_fail = resets.Check(name="end_fabric", status=FAIL, data={"rc": 0, "fails": ["NUMERIC FAIL x"]})
+        pcie_fail = resets.Check(name="end_pcie", status=FAIL, data={"rc": 0, "fails": [fail]})
+        self.assertEqual(run(data_fail, pcie_fail)[1], (FAIL, [fail, warn]))  # a data FAIL still runs it; WARNs kept
+        hung = resets.Check(name="end_fabric", status=FAIL, data={"rc": None, "hung": True})
+        steps, pcie = run(hung, pcie_fail)
+        self.assertEqual(([s.name for s in steps], pcie), (["fabric"], None))  # no PCIe step after a hung open
+
 
 class TestStageOrder(unittest.TestCase):
     def test_stages_in_run_order(self):

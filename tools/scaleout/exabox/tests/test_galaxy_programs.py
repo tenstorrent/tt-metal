@@ -76,6 +76,30 @@ class GalaxyPrograms(unittest.TestCase):
             [1, 2, 3, 4, None],
         )
 
+    def test_pcie_lines_fail_under_the_floor_warn_under_the_median_share(self):
+        from quiet_clock import pcie_lines
+
+        row = lambda b, h, d, bad="": dict(
+            chip=f"{b} (tray 1, ASIC 2, device id 0)", mb=32, h2d_gbs=h, d2h_gbs=d, bad=bad
+        )  # noqa: E731
+        rs = [
+            row("01:00.0", 0.1, 20),
+            row("02:00.0", 20, 5),
+            row("03:00.0", 20, 20),
+            row("04:00.0", None, None, "RuntimeError: x"),
+        ]
+        out = pcie_lines(rs, 0.25, 0.5, "h", sysfs="/nonexistent")
+        self.assertTrue(
+            out[0].startswith("PCIE FAIL 01:00.0 (tray 1) ASIC 2, host h: PCIe bandwidth host to chip 0.10 GB/s")
+        )
+        self.assertIn("host to chip under the 0.25 GB/s floor", out[0])
+        self.assertTrue(
+            out[1].startswith("PCIE WARN 02:00.0 (tray 1) ASIC 2") and "chip to host under 50% of" in out[1]
+        )
+        self.assertTrue(out[2].startswith("PCIE FAIL 04:00.0") and "RuntimeError: x" in out[2])
+        self.assertEqual(out[3][:44], "PCIe per chip (4 chips, 32 MB each way): hos")
+        self.assertIn("2 FAIL, 1 WARN", out[3])
+
     def test_classify_compares_the_wrong_values_not_only_their_places(self):
         import numeric_capture as nc
 

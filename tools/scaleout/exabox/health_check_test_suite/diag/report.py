@@ -498,6 +498,13 @@ def rule(l, kind, u, findings, stage, lines):
         return f"correctable AER rate outlier {w.group(1)}{w.group(2) or ''} in the kernel journal{'' if w.group(1).startswith('during the run') else ', not only this run'}: PCIe path (chip, slot, retimer or link) -> next: read the AER/lspci capture; reseat tray {u}; if it repeats, replace the board of tray {u}"
     if "SETUP/SOFTWARE: fabric setup failed" in l:
         return f"test infrastructure: fabric setup failed (setup or software: fabric descriptors or the tt-metal tree), not this tray's hardware -> next: fix the setup error the run's log names, then run {RERUN} again"
+    # galaxy/pcie_bw.py: a chip's timed host transfers in the PCIe step after the C9 open
+    if re.match(r"PCIE (FAIL|WARN) .*: PCIe bandwidth ", l):
+        return (
+            "PCIe path (PCIE/LINK): the chip's host to chip or chip to host PCIe transfers ran under the bar or read back "
+            "wrong: slot, retimer, cable or board",
+            PCIE_NEXT,
+        )
     if re.match(r"(PCIE|AER) FAIL|PREFLIGHT FAIL .*PCIe", l):
         return f"PCIe path (link speed/width or uncorrectable errors): slot, retimer or board -> next: reseat tray {u}; if it repeats, replace the board of tray {u}"
     if l.startswith("NUMERIC FAIL") and "CCL group fault" in l:
@@ -1142,6 +1149,10 @@ def pcie(v, m):
     if "off pcie" in t.lower():
         what = "chip off PCIe (config space reads ffff)" + (f", link at {sp.group(1)}" if sp else "")
         do = f"glx_reset and recount; if still missing, power cycle the box; then {board(b)} or its PCIe slot"
+    elif t.startswith("PCIe bandwidth "):  # galaxy/pcie_bw.py, the PCIe step after the C9 open
+        bw = re.match(r"PCIe bandwidth (host to chip [\w. /]+, chip to host [\w. /]+) \(.*?\): ([^;]*)", t)
+        what = "low PCIe bandwidth or wrong read back" + (f" ({bw.group(1)}: {bw.group(2)})" if bw else f": {t[:80]}")
+        do = f"the PCIe path of {b} (slot, retimer, cable), then {board(b)}"
     else:
         what = "weak PCIe link" + (f" ({sp.group(1)})" if sp else f": {t[:80]}")
         do = f"the PCIe path of {b} (slot, retimer), then {board(b)}"

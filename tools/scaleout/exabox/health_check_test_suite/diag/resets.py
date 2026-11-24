@@ -42,6 +42,12 @@ def add_args(ap) -> None:
     )
     ap.add_argument("--known-dropped-tray", type=int, choices=range(1, 5), help="a tray known to be down: not counted")
     ap.add_argument("--noc-wall-s", type=float, default=0, help="the end open's NOC data check, wall cap s; 0 off")
+    ap.add_argument("--pcie-mb", type=int, default=0, help="the end PCIe step's MB per chip each way; 0 off")
+    ap.add_argument("--pcie-s", type=int, default=240, help="the end PCIe step's cap, s")
+    ap.add_argument("--pcie-floor-gbs", type=float, default=0.25, help="the end PCIe step: FAIL under this GB/s")
+    ap.add_argument(
+        "--pcie-warn-frac", type=float, default=0.5, help="the end PCIe step: WARN under this of the median"
+    )
 
 
 def pcie_bdfs() -> list[str] | None:
@@ -361,7 +367,8 @@ def run_post_test_reset(
 
 def run_end(tt_smi_path: str | None, phase: Phase, out: Path, dry_run: bool, delay_s: int, gate: str | None) -> None:
     """After a post-test reset that left every chip back: *delay_s* of quiet, one fabric open and close with the DRAM
-    byte/DBI readback, judged with the AER errors over it; a FAIL gets one more glx_reset so no chip is left hung."""
+    byte/DBI readback, then (--pcie-mb) each chip's PCIe bandwidth (galaxy/pcie_bw.py; its PCIE WARN lines a WARN),
+    judged with the AER errors over them; a FAIL gets one more glx_reset so no chip is left hung."""
     reset = next((c for c in reversed(phase.checks) if c.name == "post_test_reset_ok"), None)
     if reset is not None and reset.status != PASS:
         phase.add(Check(name="end_fabric", status=SKIP, details=f"not run: {reset.details}", ip="eth"))
@@ -378,9 +385,22 @@ def run_end(tt_smi_path: str | None, phase: Phase, out: Path, dry_run: bool, del
     step = Step("fabric", "fabric open and close after the reset", argv, budget)
     opened = run_step(step, out, dry_run, test="end")
     phase.add(opened)
+    a, pcie = events.args, None
+    if (
+        getattr(a, "pcie_mb", 0) and opened.data.get("rc", 0) == 0
+    ):  # after a clean close (a data FAIL too): a 1x1 mesh per chip
+        argv = ("pcie_bw.py", "--rows", "{out}/rows.jsonl", "--beat", "{out}/beat", "--mb", str(a.pcie_mb))
+        argv += ("--floor-gbs", f"{a.pcie_floor_gbs:g}", "--warn-frac", f"{a.pcie_warn_frac:g}")
+        pcie = run_step(
+            Step("pcie", "each chip's PCIe bandwidth after the close", argv, a.pcie_s), out, dry_run, test="end"
+        )
+        txt = out / "pcie" / "pcie.txt"  # the judge's lines; its FAIL lines already failed the step
+        warns = [ln for ln in txt.read_text().splitlines() if ln.startswith("PCIE WARN ")] if txt.is_file() else []
+        st = WARN if warns and pcie.status == PASS else pcie.status
+        phase.add(replace(pcie, status=st, data={**pcie.data, "fails": [*pcie.data.get("fails", []), *warns]}))
     if dry_run:
         return
     aer = replace(aer_check(aer_new(before, read_aer()), (time.time() - t0) / 3600), name="end_aer")
     phase.add(aer)
-    if FAIL in (opened.status, aer.status):
+    if FAIL in (opened.status, aer.status, pcie and pcie.status):
         glx_reset(resolve_tt_smi(tt_smi_path), phase, "reset_end", "recount_end", dry_run, out, gate)
