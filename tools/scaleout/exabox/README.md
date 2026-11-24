@@ -39,7 +39,7 @@ If links are flaky, fabric tests will fail with routing errors - you'll waste ti
   - 8x16: `/data/local-syseng-manual/5x8x16_fsd.textproto`
   - 4x32: `/data/local-syseng-manual/4x4x32_fsd.textproto`
 
-**SSH Setup**
+#### SSH Setup
 
 On your local host, start an ssh-agent and add your key:
 ```bash
@@ -57,7 +57,7 @@ From the jump host, verify you can connect to all peer hosts without a password:
 ssh <peer-host> hostname
 ```
 
-**MPI Check**
+#### MPI Check
 
 On the jump host, verify MPI can reach all hosts (`<hosts>` = comma-separated list, e.g. `host1,host2,host3,host4`):
 ```bash
@@ -65,7 +65,7 @@ mpirun --host <hosts> hostname
 ```
 This should print the hostname of each machine. If it hangs or prompts for a password, fix SSH first.
 
-**Docker Check**
+#### Docker Check
 
 Verify Docker is installed and running on all hosts:
 ```bash
@@ -73,7 +73,7 @@ mpirun --host <hosts> docker --version
 ```
 This should print the Docker version on each machine. If any host fails, install Docker on that host.
 
-**Docker Image**
+#### Docker Image
 
 For Galaxy clusters, use:
 ```
@@ -86,7 +86,7 @@ For `:latest` the scripts run docker with `--pull=always`, so a moved tag is pic
 
 **`exabox-tools` image**
 
-The [exabox-tools-image workflow](https://github.com/tenstorrent/tt-metal/actions/workflows/exabox-tools-image.yaml) publishes `ghcr.io/tenstorrent/tt-metal/exabox-tools` from [`dockerfile/exabox_tools/Dockerfile`](../../../dockerfile/exabox_tools/Dockerfile): a runtime image on plain Ubuntu 22.04 with the prebuilt binaries (`build/tools`, `build/test`, `build/lib`), the SFPI toolchain and source tree the JIT kernel build reads, the ttnn wheel, and the Python packages the health check and its deploy-tier pytest import. It has no compilers, no `.git` and no CI Python stack, so it cannot rebuild tt-metal. It is meant to be the one image `recover.sh`, the health check and the k8s jobs share.
+The [exabox-tools-image workflow](https://github.com/tenstorrent/tt-metal/actions/workflows/exabox-tools-image.yaml) publishes `ghcr.io/tenstorrent/tt-metal/exabox-tools` from [`dockerfile/exabox_tools/Dockerfile`](../../../dockerfile/exabox_tools/Dockerfile): a runtime image on plain Ubuntu 22.04 with the prebuilt binaries (`build/tools`, `build/test`, `build/lib`), the SFPI toolchain and source tree the JIT kernel build reads, the ttnn wheel, and the Python packages the health check, its weekly-tier pytest and its flash-tier tt-triage read import. It has no compilers, no `.git` and no CI Python stack, so it cannot rebuild tt-metal. It is meant to be the one image `recover.sh`, the health check and the k8s jobs share.
 
 Tags:
 - `exabox-tools:<git describe>` (e.g. `v0.80.0-dev20260925-49-g78b5458946e`) - one per commit. Rebuilding the same commit re-pushes it with a new digest; pin the digest if that matters.

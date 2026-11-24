@@ -19,7 +19,7 @@ template <bool APPROXIMATION_MODE, int ITERATIONS, InstrModLoadStore INSTRUCTION
 inline void _add_int_(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static_assert(
-        is_valid_instruction_mode(INSTRUCTION_MODE), "INSTRUCTION_MODE must be one of: INT32_2S_COMP, INT32, LO16.");
+        is_valid_instruction_mode(INSTRUCTION_MODE), "INSTRUCTION_MODE must be one of: INT32_2S_COMP, INT32, UINT16.");
 
     // integer add/sub requires 2's complement format in LREGs.
     constexpr InstrModLoadStore sfpload_instr_mod =
@@ -28,7 +28,7 @@ inline void _add_int_(
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
     constexpr std::uint32_t dst_tile_size_sfpi = 32;
 
-    constexpr sfpi::DataLayout layout = (sfpload_instr_mod == InstrModLoadStore::LO16) ? sfpi::DataLayout::U16
+    constexpr sfpi::DataLayout layout = (sfpload_instr_mod == InstrModLoadStore::UINT16) ? sfpi::DataLayout::U16
                                         : (sfpload_instr_mod == InstrModLoadStore::INT32_2S_COMP)
                                             ? sfpi::DataLayout::SM32
                                             : sfpi::DataLayout::I32;

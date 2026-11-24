@@ -7,11 +7,10 @@
 #include <allocator.hpp>
 #include <tt_stl/assert.hpp>
 #include <buffer_types.hpp>
-#include <core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <iterator>
 #include <numeric>
 #include <memory>
@@ -22,14 +21,14 @@
 #include <vector>
 
 #include "bank_manager.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/allocator/allocator_types.hpp"
-#include <tt-umd/types/xy_pair.hpp>
 #include <tt-metalium/math.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include <llrt/tt_cluster.hpp>
+#include "llrt/core_descriptor.hpp"
 #include "llrt/hal/tt-2xx/quasar/qa_att_windows.hpp"
 
 namespace tt::tt_metal {

@@ -8,15 +8,14 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::operations::moreh::moreh_fold {
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 static constexpr const char* READER_KERNEL_PATH =
     "ttnn/cpp/ttnn/operations/moreh/moreh_fold/device/kernels/reader_fold_rm.cpp";
@@ -83,7 +82,7 @@ ttnn::device_operation::ProgramArtifacts MorehFoldOperation::MultiCore::create_p
     uint32_t aligned_output_cb_page_size = tt::round_up(output_cb_page_size, 32u);
 
     // For DRAM reads, we need DRAM-aligned size
-    bool src_is_dram = input.buffer()->buffer_type() == BufferType::DRAM;
+    bool src_is_dram = input.memory_config().buffer_type() == BufferType::DRAM;
     bool is_blackhole = (device->arch() == tt::ARCH::BLACKHOLE);
     uint32_t dram_alignment = hal::get_dram_alignment();
     uint32_t dram_aligned_input_cb_page_size = tt::align(input_cb_page_size, dram_alignment);

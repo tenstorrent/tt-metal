@@ -3,7 +3,7 @@
     "PREFILL_MODEL": "gemma4_d_p",
     "PREFILL_SP": "8",
     "PREFILL_TP": "4",
-    "PREFILL_CHUNK_SIZE": "8192",
+    "PREFILL_CHUNK_SIZE": "4096",
     "PREFILL_MAX_SEQ_LEN": "262144",
     "PREFILL_NUM_USERS": "6",
     "PREFILL_USE_TRACE": "1",

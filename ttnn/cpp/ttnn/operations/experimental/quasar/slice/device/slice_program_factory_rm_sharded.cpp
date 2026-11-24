@@ -12,13 +12,13 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
+using tt::tt_metal::experimental::AdvancedKernelRunArgs;
 
 namespace ttnn::operations::experimental::quasar {
 
@@ -221,8 +221,8 @@ ttnn::device_operation::ProgramArtifacts SliceRmShardedProgramFactory::create_pr
     auto stick_size_unpadded = W_unpadded * output.element_size();
 
     // Real per-row L1 stride is aligned_page_size(), not the compact payload (differs when W·E % 16 != 0).
-    const uint32_t src_stride_bytes = input.buffer()->aligned_page_size();
-    const uint32_t dst_stride_bytes = output.buffer()->aligned_page_size();
+    const uint32_t src_stride_bytes = input.mesh_buffer().aligned_page_size();
+    const uint32_t dst_stride_bytes = output.mesh_buffer().aligned_page_size();
     const uint32_t begins_bytes = args.slice_start[-1] * input.element_size();
     TT_FATAL(
         begins_bytes % ::hal::get_l1_alignment() == 0,

@@ -3,15 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Experimental Start / Queue / Stop lifecycle API for the queueable Tensor
-// prefetcher (DRISC). A long-running DRISC kernel on every DRAM sender core
-// reads requests off a per-core H2D socket; each request names a set of
+// prefetcher. Long-running device kernels serve requests that each name a set of
 // DRAM-sender PrefetcherPipes and a per-tensor work list. The host can keep
 // queueing new requests after Start returns; each pipe's ring state (write
-// cursors, credit counters) is preserved in its config page in DRISC L1, so
+// cursors, credit counters) is preserved on the device between requests, so
 // successive requests can target different pipe sets and switch back and forth.
 //
-// State (Program(s), sockets, host worker thread, held tensor refs) lives on
-// MeshDeviceImpl. Only one prefetcher may be active per mesh device at a time.
+// State (device kernels, request transport, host worker thread, held tensor refs)
+// lives on MeshDeviceImpl. Only one prefetcher may be active per mesh device at a time.
 
 #pragma once
 
@@ -66,7 +65,8 @@ struct TensorPrefetcherConfig {
 };
 
 // Returns true if the Tensor prefetcher is supported on `mesh_device`. Both must hold:
-//   - programmable DRAM cores are available (Blackhole with firmware >= 19.12.0.0), and
+//   - the device can run DRAM-sender endpoints: Blackhole with firmware >= 19.12.0.0, or
+//     Quasar running fast dispatch with one command queue, and
 //   - the streaming profiler is off. TT_METAL_STREAMING_PROFILER=1 parks a resident relay
 //     on the same free DRAM subchannel a bank's first prefetch sender uses, with both of
 //     that DRISC's NIUs in stream mode, so the two cannot coexist.
@@ -83,12 +83,13 @@ bool IsTensorPrefetcherSupported(const distributed::MeshDevice& mesh_device);
 //
 // `mask` must be a ROW_MAJOR, BFLOAT16 or UINT16 tensor of exactly G elements in one page (every dim
 // but the last is 1), G <= 256, on the same mesh as the weight, in DRAM (interleaved) or in L1 on a
-// single core. It must be written before the request is queued (fence the writing queue with
-// WaitForCqOnTensorPrefetcher) and must not change until the consumer that reads it has run;
-// otherwise the prefetcher and the consumer disagree on which groups arrive and the delivery
-// target deadlocks. That fence cannot be captured into a trace while the request can, so a mask
-// written by an op inside the same trace is not fenced on replay: today the mask must be written,
-// and fenced, before execute_trace.
+// single core. It must be written before the prefetcher reaches the request and must not change until
+// the consumer that reads it has run; otherwise the prefetcher and the consumer disagree on which
+// groups arrive and the delivery target deadlocks. Order the prefetcher after the write with
+// WaitForCqOnTensorPrefetcher when the host enqueues it, or with QueueTensorPrefetcherWaitForSignal
+// and a signaling op after the write when the write is device work captured into a trace. Neither
+// wait can be recorded into a CommandList, so a mask written by an op inside the same list is not
+// ordered on replay: write it, and fence it, before EnqueueCommandList.
 struct TensorPrefetcherGroupSelector {
     std::reference_wrapper<const MeshTensor> mask;
 };
@@ -135,10 +136,10 @@ struct TensorPrefetcherInput {
     std::optional<TensorPrefetcherGroupSelector> group_selector = std::nullopt;
 };
 
-// Build per-device Programs (two DRISC kernels per DRAM bank), allocate
-// the per-(device, sender) H2D sockets, and spawn the host worker thread that
-// drains the request queue. Returns immediately. No prefetch work is scheduled
-// yet — kernels park on socket_wait_for_pages.
+// Start the prefetcher's device kernels where they are not already running (on
+// Blackhole, two per DRAM bank), open the per-device request transport, and spawn
+// the host worker thread that drains the request queue. Returns immediately. No
+// prefetch work is scheduled yet; the kernels wait for requests.
 //
 // Each queued pipe set selects which of the provisioned senders receive its PREFETCH
 // requests. Single-sender pipe sets leave the second sender for each bank idle;
@@ -150,8 +151,7 @@ struct TensorPrefetcherInput {
 //
 // Preconditions (TT_FATAL):
 //   - No other prefetcher is currently active on this mesh device.
-//   - DRAM programmable cores are available on this mesh (Blackhole with firmware
-//     >= 19.12.0.0).
+//   - IsTensorPrefetcherSupported(mesh_device).
 void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPrefetcherConfig& config);
 
 // Queue one prefetch request. Non-blocking.
@@ -179,7 +179,8 @@ void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPre
 //     every replay of that trace (ReplayTrace / ttnn.execute_trace). Otherwise — a
 //     non-capturing queue, or null (the default) — the request is sent immediately,
 //     whatever any command queue is doing. Pass `&mesh_device.mesh_command_queue()`
-//     to opt into capture on the calling thread's current queue.
+//     to opt into capture on the calling thread's current queue. To record a request
+//     into a CommandList, use CommandListBuilder::add_tensor_prefetcher_request.
 //
 // Further preconditions, all TT_FATAL with the offending values:
 //   - every pipe has a DRAM sender, comes from the same factory call, and shares one ring size;
@@ -221,6 +222,39 @@ void QueueTensorPrefetcherRequest(
 void WaitForCqOnTensorPrefetcher(
     distributed::MeshCommandQueue& cq,
     ttsl::optional_reference<const distributed::MeshCoordinateRangeSet> device_subset);
+
+// Number of op signals a running Tensor prefetcher offers. Signal ids are [0, kTensorPrefetcherNumSignals).
+inline constexpr uint32_t kTensorPrefetcherNumSignals = 8;
+
+// Returns the L1 address of op signal `signal_id`. A device kernel raises the signal by passing it to
+// experimental::tensor_prefetcher_signal (api/dataflow/tensor_prefetcher_signal.h);
+// ttnn.experimental.signal_tensor_prefetcher is an op that does only that. The address is the same on
+// every device of the mesh, so one program signals them all. It stays valid until StopTensorPrefetcher.
+//
+// Preconditions (TT_FATAL): a prefetcher is active on `mesh_device`, and signal_id is in range.
+uint32_t GetTensorPrefetcherSignalAddress(distributed::MeshDevice& mesh_device, uint32_t signal_id);
+
+// Queue a wait on op signal `signal_id`. On each device of the mesh, the prefetcher processes no request
+// queued after this one until that device has received the signal that pairs with this wait. Use it to
+// order the prefetcher after device work that has no host-side fence, such as a mask an op inside a
+// trace writes: run that op, then an op that signals, and queue the wait ahead of the request that
+// reads the mask.
+//
+// Waits and signals on one id pair up in order, counted per device from StartTensorPrefetcher: the n-th
+// wait proceeds once the n-th signal has arrived. A signal that arrives before its wait is kept, so the
+// signaling op may run before or after this call. Every device waits, so every device must signal, and
+// a signal with no matching wait releases a later wait early.
+//
+// `trace_capture_cq` works as it does for QueueTensorPrefetcherRequest. A captured wait is re-sent on
+// every replay, and each replay waits for one further signal rather than the count seen at capture, so
+// a trace that also captures the signaling op releases its own wait on every run.
+//
+// Preconditions (TT_FATAL): a prefetcher is active on `mesh_device`, signal_id is in range, and
+// `trace_capture_cq`, if given, belongs to `mesh_device`.
+void QueueTensorPrefetcherWaitForSignal(
+    distributed::MeshDevice& mesh_device,
+    uint32_t signal_id,
+    distributed::MeshCommandQueue* trace_capture_cq = nullptr);
 
 // Block until all previously queued requests have been delivered and the
 // kernels have exited, then release the prefetcher's resources. No-op if no

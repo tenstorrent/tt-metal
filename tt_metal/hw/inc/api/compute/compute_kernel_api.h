@@ -109,7 +109,6 @@
 #include "llk_unpack_AB_api.h"
 #include "llk_unpack_reduce_api.h"
 #include "llk_unpack_tilize_api.h"
-#include "llk_unpack_untilize_api.h"
 #endif
 #include "llk_io_unpack.h"
 #define UNPACK(...) __VA_ARGS__
@@ -487,7 +486,18 @@ ALWI void signbit_tile_int32(uint32_t idst) {
  */
 // clang-format on
 ALWI void abs_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_abs, (APPROX), idst, VectorMode::RC));
+    MATH(if constexpr (ckernel::sfpu::abs_bf16_whole_tile && !DST_ACCUM_MODE) {
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_abs,
+            (APPROX, 32 /*ITERATIONS*/, DST_ACCUM_MODE),
+            idst,
+            VectorMode::None);
+        return;
+    });
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_abs, (APPROX, 8, DST_ACCUM_MODE), idst, VectorMode::RC));
 }
 
 /**
@@ -652,6 +662,16 @@ ALWI void power_iterative_tile_init() { MATH(SFPU_UNARY_INIT(power)); }
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void exp2_tile(uint32_t idst) {
+    MATH(if constexpr (ckernel::sfpu::exp2_bf16_whole_tile && !is_fp32_dest_acc_en) {
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            calculate_exp2,
+            (true /* APPROXIMATE */, is_fp32_dest_acc_en, 32 /*ITERATIONS*/),
+            idst,
+            VectorMode::None);
+        return;
+    });
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,

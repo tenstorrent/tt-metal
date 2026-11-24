@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import pytest
 from helpers.test_config import TestConfig
+from helpers.test_variant_parameters import COMPRESSED_META, LOOP_FACTOR, TILE_COUNT
 
 SEARCH_DIR_STATE = (
     "EXTRA_INCLUDE_PREPEND",
@@ -78,6 +79,41 @@ def variant_id() -> str:
     return configuration.variant_id
 
 
+def test_compressed_metadata_words_change_the_variant_id():
+    def compressed_variant_id(packed_meta):
+        configuration = TestConfig(
+            DRIVER,
+            templates=[COMPRESSED_META("mixed", packed_meta)],
+            skip_build_header=True,
+        )
+        configuration.generate_variant_hash()
+        return configuration.variant_id
+
+    assert compressed_variant_id(bytes.fromhex("0100000002000000")) != (
+        compressed_variant_id(bytes.fromhex("0300000004000000"))
+    )
+
+
+def test_runtime_parameter_order_changes_the_variant_id():
+    """build.h compiles the RuntimeParams layout in, and the host packs values in that order.
+
+    Same runtimes in another order is another ELF: sharing one makes the kernel read each
+    field from its neighbour's slot (test_hadamard read TILE_CNT=8 as LOOP_FACTOR).
+    """
+
+    def runtime_variant_id(runtimes):
+        configuration = TestConfig(DRIVER, runtimes=runtimes, skip_build_header=True)
+        configuration.generate_variant_hash()
+        return configuration.variant_id
+
+    assert runtime_variant_id([LOOP_FACTOR(1), TILE_COUNT(8)]) != runtime_variant_id(
+        [TILE_COUNT(8), LOOP_FACTOR(1)]
+    )
+    assert runtime_variant_id([TILE_COUNT(8), LOOP_FACTOR(1)]) == runtime_variant_id(
+        [TILE_COUNT(1), LOOP_FACTOR(4)]
+    ), "runtime values alone must keep sharing one ELF"
+
+
 # Stand-ins for the in-tree ``-I`` flags ``setup_compilation_options`` installs.
 IN_TREE_INCLUDES = ["-I/in/tree/first", "-I/in/tree/second"]
 
@@ -99,6 +135,23 @@ def clear_search_dirs(in_tree: bool = False) -> None:
 # --------------------------------------------------------------------------- #
 # The variant hash must cover every compilation input, roles included.
 # --------------------------------------------------------------------------- #
+
+
+def test_llk_assert_setting_changes_the_variant_id(isolated_search_dirs, monkeypatch):
+    """Asserts-on and asserts-off ELFs must never share a CONSUME directory."""
+    clear_search_dirs()
+
+    monkeypatch.delenv("TT_LLK_DISABLE_ASSERTS", raising=False)
+    asserts_on_default = variant_id()
+
+    monkeypatch.setenv("TT_LLK_DISABLE_ASSERTS", "1")
+    asserts_off = variant_id()
+
+    monkeypatch.setenv("TT_LLK_DISABLE_ASSERTS", "0")
+    asserts_on_explicit = variant_id()
+
+    assert asserts_off != asserts_on_default
+    assert asserts_on_explicit == asserts_on_default
 
 
 @_IN_TREE_REGIMES
@@ -235,3 +288,74 @@ def test_variants_do_not_share_list_objects():
 
     assert second.templates == ["TEMPLATE_A"]
     assert shared == ["TEMPLATE_A"]
+
+
+# --------------------------------------------------------------------------- #
+# Which Tensix an xdist worker is bound to.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def worker_location(monkeypatch):
+    """Record the core index resolve asks for, and restore the class state it writes."""
+    asked = []
+
+    def fake_location(worker_index, device_id=0):
+        asked.append(worker_index)
+        return f"core-{worker_index}"
+
+    monkeypatch.setattr(
+        "helpers.test_config.device_module.tensix_location_for_worker",
+        fake_location,
+    )
+    saved = (
+        TestConfig._PENDING_WORKER_INDEX,
+        TestConfig.TENSIX_LOCATION,
+        TestConfig.TEST_TARGET.run_simulator,
+    )
+    try:
+        yield asked
+    finally:
+        (
+            TestConfig._PENDING_WORKER_INDEX,
+            TestConfig.TENSIX_LOCATION,
+            TestConfig.TEST_TARGET.run_simulator,
+        ) = saved
+
+
+def test_ttsim_workers_share_the_first_core(monkeypatch, worker_location):
+    """A ttsim worker past the chip's core count still gets the first core.
+
+    Each xdist process dlopens its own simulator, so gw39 and a restarted
+    gw32 both run on core 0. The descriptor size is not a pytest-worker cap.
+    """
+    monkeypatch.setenv("TT_METAL_SIMULATOR", "/sim/libttsim_qsr.so")
+    TestConfig.TEST_TARGET.run_simulator = True
+    TestConfig._PENDING_WORKER_INDEX = 39
+
+    TestConfig.resolve_worker_tensix_location()
+
+    assert worker_location == [0]
+    assert TestConfig.TENSIX_LOCATION == "core-0"
+    assert TestConfig._PENDING_WORKER_INDEX is None
+
+
+def test_a_shared_device_keeps_one_core_per_worker(monkeypatch, worker_location):
+    """Silicon and the RTL server still map the xdist index onto a distinct core."""
+    monkeypatch.setenv("TT_METAL_SIMULATOR", "/sim/rtl_build")
+    TestConfig.TEST_TARGET.run_simulator = True
+    TestConfig._PENDING_WORKER_INDEX = 7
+
+    TestConfig.resolve_worker_tensix_location()
+
+    assert worker_location == [7]
+    assert TestConfig.TENSIX_LOCATION == "core-7"
+
+    monkeypatch.delenv("TT_METAL_SIMULATOR", raising=False)
+    TestConfig._PENDING_WORKER_INDEX = 7
+    TestConfig.TEST_TARGET.run_simulator = False
+
+    TestConfig.resolve_worker_tensix_location()
+
+    assert worker_location == [7, 7]
+    assert TestConfig.TENSIX_LOCATION == "core-7"

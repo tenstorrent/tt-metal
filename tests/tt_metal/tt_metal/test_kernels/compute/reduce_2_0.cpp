@@ -41,7 +41,8 @@ void kernel_main() {
 
     compute_kernel_hw_startup(
         DataOp(data_cb.read_address()), ScalerOp(scaler_cb.read_address()), OutOp(out_cb.write_address()));
-    experimental::reduce_init<kPool, kDim>(DataOp(data_cb.read_address()), OutOp(out_cb.write_address()));
+    experimental::reduce_init<kPool, kDim>(
+        DataOp(data_cb.read_address()), ScalerOp(scaler_cb.read_address()), OutOp(out_cb.write_address()));
 
     cb0.wait_front(num_tiles);
     cb1.wait_front(num_tiles);

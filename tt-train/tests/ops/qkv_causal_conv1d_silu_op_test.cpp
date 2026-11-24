@@ -339,8 +339,8 @@ TEST_F(QkvCausalConv1dSiluTest, ProgramCacheHitReadsNewBuffers) {
     const auto out_a = run_metal_bw(s, a, 64, 2);
     const auto entries_after_first = device->num_program_cache_entries();
     const auto b = make_inputs(s, p_b);
-    ASSERT_NE(a.input.buffer()->address(), b.input.buffer()->address());
-    ASSERT_NE(a.grad_q.buffer()->address(), b.grad_q.buffer()->address());
+    ASSERT_NE(a.input.mesh_buffer().address(), b.input.mesh_buffer().address());
+    ASSERT_NE(a.grad_q.mesh_buffer().address(), b.grad_q.mesh_buffer().address());
     const auto [grad_input, g0, g1, g2, g3] = run_metal_bw(s, b, 64, 2);
     EXPECT_EQ(device->num_program_cache_entries(), entries_after_first) << "the second run must hit the cache";
     const auto ref = reference(s, p_b);
@@ -482,7 +482,7 @@ TEST_F(QkvCausalConv1dSiluTest, PreallocatedGradInput) {
     const auto d = make_inputs(s, p);
     auto preallocated = ttnn::to_layout(core::zeros_like(d.input), ttnn::Layout::TILE);
     const auto [grad_input, g0, g1, g2, g3] = run_metal_bw(s, d, 0, 0, true, preallocated);
-    EXPECT_EQ(grad_input.buffer()->address(), preallocated.buffer()->address());
+    EXPECT_EQ(grad_input.mesh_buffer().address(), preallocated.mesh_buffer().address());
     expect_close(ref.grad_input, core::to_xtensor(preallocated), "grad_input");
     // input is read after neighbouring rows of grad_input are written, so it cannot be the output.
     EXPECT_THAT(

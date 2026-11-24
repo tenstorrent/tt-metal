@@ -6,7 +6,6 @@
 
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/host_buffer.hpp>
-#include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include "impl/context/metal_env_impl.hpp"

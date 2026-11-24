@@ -32,6 +32,21 @@ inline kda_factory_detail::KdaPrepWorkDist qkv_causal_conv1d_silu_distribution(
         exchange ? std::optional(qkv_causal_conv1d_silu_exchange_core(grid)) : std::nullopt);
 }
 
+// The convolution tail's layout (`history`, `predecessor_carry` and the replacement carry), as the caller declares it
+// in `page_channels`: token-paged `[1, history_rows, W]`, one token per page, or channel-paged `[1, W / page_channels,
+// history_rows * page_channels]`, `page_channels` channels of every row per page (qkv_conv_dataflow.hpp).
+// `page_channels` is the channels one page holds, W when token-paged. validate_on_program_cache_miss checks the shape.
+struct QkvCausalConv1dSiluTailLayout {
+    bool token_paged;
+    uint32_t page_channels;
+};
+
+inline QkvCausalConv1dSiluTailLayout qkv_causal_conv1d_silu_tail_layout(const QkvCausalConv1dSiluParams& attrs) {
+    return {
+        .token_paged = !attrs.page_channels.has_value(),
+        .page_channels = attrs.page_channels.value_or(attrs.q_width + attrs.k_width + attrs.v_width)};
+}
+
 // Every convolution core stages an equal share of the channel tiles of the rows the exchange core sends.
 inline uint32_t qkv_causal_conv1d_silu_staged_ct(uint32_t channel_tiles, uint32_t convolution_cores) {
     return (channel_tiles + convolution_cores - 1) / convolution_cores;
@@ -66,6 +81,10 @@ inline uint64_t qkv_causal_conv1d_silu_l1_bytes(
 }
 
 struct QkvCausalConv1dSiluProgramFactory {
+    // One program per tensor range; each device's sp_rank is a per-device run arg, set once at the cache miss.
+    static constexpr bool uses_per_device_run_args = true;
+    static constexpr bool fixed_per_device_run_args = true;  // rank, successor, routes: device only
+
     static ttnn::device_operation::MeshWorkloadArtifacts create_mesh_workload_artifacts(
         const QkvCausalConv1dSiluParams&,
         const QkvCausalConv1dSiluInputs&,

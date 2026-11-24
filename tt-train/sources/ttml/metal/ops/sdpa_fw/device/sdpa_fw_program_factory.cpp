@@ -723,12 +723,12 @@ void SDPAForwardProgramFactory::override_runtime_arguments(
     const uint32_t num_cores = shared_vars.num_cores;
     const uint32_t num_cores_y = shared_vars.num_cores_y;
 
-    const auto* query_buffer = tensor_args.query.buffer();
-    const auto* key_buffer = tensor_args.key.buffer();
-    const auto* value_buffer = tensor_args.value.buffer();
+    const auto* query_buffer = &tensor_args.query.mesh_buffer();
+    const auto* key_buffer = &tensor_args.key.mesh_buffer();
+    const auto* value_buffer = &tensor_args.value.mesh_buffer();
     const auto* mask_buffer = tensor_args.mask.has_value() ? tensor_args.mask.value().buffer() : nullptr;
     const auto* gate_buffer = tensor_args.gate.has_value() ? tensor_args.gate.value().buffer() : nullptr;
-    auto* output_buffer = tensor_return_value.front().buffer();
+    const auto* output_buffer = &tensor_return_value.front().mesh_buffer();
     auto* intermediates_buffer =
         operation_attributes.return_intermediates ? tensor_return_value.back().buffer() : nullptr;
 

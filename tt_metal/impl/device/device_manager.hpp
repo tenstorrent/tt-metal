@@ -8,11 +8,9 @@
 #include <cstdint>
 #include <map>
 #include <memory>
-#include <tt_stl/span.hpp>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-#include <hostdevcommon/common_values.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 #include "device_impl.hpp"
 #include "impl/context/metal_env_impl.hpp"

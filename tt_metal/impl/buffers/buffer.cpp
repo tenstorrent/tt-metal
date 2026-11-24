@@ -6,20 +6,16 @@
 #include <tt_stl/assert.hpp>
 #include <buffer.hpp>
 #include <buffer_types.hpp>
-#include <core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <device.hpp>
 #include <graph_tracking.hpp>
 #include <enchantum/enchantum.hpp>
 #include <math.hpp>
-#include <nlohmann/json.hpp>
 #include <tt_stl/reflection.hpp>
-#include <tt_stl/overloaded.hpp>
 #include <algorithm>
 #include <atomic>
-#include <map>
 #include <mutex>
 #include <string>
-#include <string_view>
 #include <unordered_set>
 #include <utility>
 #include "context/context_types.hpp"
@@ -46,7 +42,7 @@ namespace tt::tt_metal {
 namespace {
 
 BufferShardingArgsImpl make_sharding_args_impl(std::optional<BufferDistributionSpec> spec) {
-    const auto layout = spec.has_value() ? TensorMemoryLayout::BLOCK_SHARDED : TensorMemoryLayout::INTERLEAVED;
+    const auto layout = spec.has_value() ? TensorMemoryLayout::ND_SHARDED : TensorMemoryLayout::INTERLEAVED;
     return BufferShardingArgsImpl{std::move(spec), std::nullopt, layout};
 }
 
@@ -61,7 +57,7 @@ BufferShardingArgs::BufferShardingArgs(std::nullopt_t) : BufferShardingArgs(Buff
 
 BufferShardingArgs::BufferShardingArgs(BufferDistributionSpec buffer_distribution_spec) :
     BufferShardingArgs(
-        BufferShardingArgsImpl{std::move(buffer_distribution_spec), std::nullopt, TensorMemoryLayout::BLOCK_SHARDED}) {}
+        BufferShardingArgsImpl{std::move(buffer_distribution_spec), std::nullopt, TensorMemoryLayout::ND_SHARDED}) {}
 
 BufferShardingArgs::BufferShardingArgs(std::optional<BufferDistributionSpec> buffer_distribution_spec) :
     BufferShardingArgs(make_sharding_args_impl(std::move(buffer_distribution_spec))) {}
@@ -205,6 +201,19 @@ void validate_buffer_parameters(
             shard_spec.has_value() || buffer_distribution_spec.has_value(),
             "Buffer was specified as sharded but does not have shard_spec or buffer_distribution_spec specified");
 
+        // Kernels compute a CONTIGUOUS_1D shard's bank as shard_id / (num_shards / num_cores), which is only valid for
+        // a whole number of shards per node. The spec itself may describe an uneven count, as ops compare candidates.
+        if (buffer_distribution_spec.has_value() &&
+            buffer_distribution_spec->shard_distribution_strategy() == ShardDistributionStrategy::CONTIGUOUS_1D &&
+            buffer_distribution_spec->num_shards() != 0) {
+            TT_FATAL(
+                buffer_distribution_spec->num_shards() % buffer_distribution_spec->num_cores() == 0,
+                "CONTIGUOUS_1D distribution requires the number of shards ({}) to be a multiple of the number of "
+                "nodes ({})",
+                buffer_distribution_spec->num_shards(),
+                buffer_distribution_spec->num_cores());
+        }
+
         // Every shard core must own a bank of this buffer type. Nothing else on the allocation path
         // checks this: the allocator is handed a shard *count*, not the coordinates, so an invalid
         // core survives construction and is only caught later by whichever op happens to resolve a
@@ -281,6 +290,7 @@ void validate_buffer_parameters(
         return;
     }
 
+    TT_FATAL(page_size != 0, "Page size must not be 0 for a buffer of size {}", size);
     TT_FATAL(
         size % page_size == 0,
         "For valid non-interleaved buffers page size {} must equal buffer size {}. For interleaved-buffers, "
@@ -297,9 +307,10 @@ std::tuple<std::vector<std::vector<uint32_t>>, std::vector<std::array<uint32_t, 
     const std::array<uint32_t, 2>& page_shape,
     const std::array<uint32_t, 2>& shard_shape,
     const std::array<uint32_t, 2>& tensor2d_size) {
+    // A partial page takes a whole page, as in BufferDistributionSpec.
     std::array<uint32_t, 2> shard_in_pages = {
-        page_shape[0] == 0 ? 0 : shard_shape[0] / page_shape[0],
-        page_shape[1] == 0 ? 0 : shard_shape[1] / page_shape[1]};
+        page_shape[0] == 0 ? 0 : div_up(shard_shape[0], page_shape[0]),
+        page_shape[1] == 0 ? 0 : div_up(shard_shape[1], page_shape[1])};
     std::vector<std::vector<uint32_t>> ret_vec(num_shards);
     std::vector<std::array<uint32_t, 2>> ret_shard_shape(num_shards, shard_in_pages);
 
@@ -488,7 +499,8 @@ BufferImpl::BufferImpl(
     const BufferShardingArgs& sharding_args,
     const std::optional<bool> bottom_up,
     const std::optional<SubDeviceId> sub_device_id,
-    const bool owns_data) :
+    const bool owns_data,
+    const std::optional<size_t> unique_id) :
     device_(device),
     size_(size),
     buffer_type_(buffer_type),
@@ -523,7 +535,7 @@ BufferImpl::BufferImpl(
         buffer_distribution_spec_,
         *this->allocator_,
         this->device_);
-    unique_id_ = next_unique_id.fetch_add(1);
+    unique_id_ = unique_id.has_value() ? *unique_id : allocate_unique_id();
 }
 
 Buffer::Buffer(BufferImpl impl) : impl_(std::make_unique<BufferImpl>(std::move(impl))) {}
@@ -546,10 +558,50 @@ std::shared_ptr<Buffer> BufferImpl::create(
     const BufferShardingArgs& sharding_args,
     const std::optional<bool> bottom_up,
     const std::optional<SubDeviceId> sub_device_id) {
+    return create_owning(
+        device,
+        size,
+        page_size,
+        buffer_type,
+        sharding_args,
+        bottom_up,
+        sub_device_id,
+        /*unique_id=*/std::nullopt);
+}
+
+std::shared_ptr<Buffer> BufferImpl::create_for_mesh_buffer(
+    IDevice* device,
+    DeviceAddr size,
+    DeviceAddr page_size,
+    const BufferType buffer_type,
+    const BufferShardingArgs& sharding_args,
+    const std::optional<bool> bottom_up,
+    const std::optional<SubDeviceId> sub_device_id,
+    const size_t unique_id) {
+    return create_owning(device, size, page_size, buffer_type, sharding_args, bottom_up, sub_device_id, unique_id);
+}
+
+std::shared_ptr<Buffer> BufferImpl::create_owning(
+    IDevice* device,
+    DeviceAddr size,
+    DeviceAddr page_size,
+    const BufferType buffer_type,
+    const BufferShardingArgs& sharding_args,
+    const std::optional<bool> bottom_up,
+    const std::optional<SubDeviceId> sub_device_id,
+    const std::optional<size_t> unique_id) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
 
     auto buffer = std::make_shared<Buffer>(BufferImpl(
-        device, size, page_size, buffer_type, sharding_args, bottom_up, sub_device_id, true /* owns data */));
+        device,
+        size,
+        page_size,
+        buffer_type,
+        sharding_args,
+        bottom_up,
+        sub_device_id,
+        true /* owns data */,
+        unique_id));
 
     if (buffer->impl().size_ == 0) {
         buffer->impl().allocation_status_ = BufferImpl::AllocationStatus::ALLOCATED;
@@ -796,10 +848,12 @@ uint32_t Buffer::num_dev_pages() const {
     if (!is_sharded(impl_->buffer_layout_)) {
         return this->num_pages();
     }
-    if (impl_->shard_spec_.has_value()) {
-        return impl_->shard_spec_->num_pages() * this->num_cores().value();
+    // Prefer the distribution spec: ShardSpecBuffer assumes one shard per node, which undercounts a node holding
+    // several.
+    if (impl_->buffer_distribution_spec_.has_value()) {
+        return impl_->buffer_distribution_spec_->max_num_dev_pages_per_core() * num_cores().value();
     }
-    return impl_->buffer_distribution_spec_.value().max_num_dev_pages_per_core() * num_cores().value();
+    return impl_->shard_spec_->num_pages() * this->num_cores().value();
 }
 
 HalMemType BufferImpl::memory_type() const {
@@ -894,8 +948,9 @@ bool ShardSpec::operator==(const ShardSpec&) const = default;
 bool ShardSpec::operator!=(const ShardSpec&) const = default;
 
 std::array<uint32_t, 2> ShardSpecBuffer::shape_in_pages() const {
-    auto height_in_pages = page_shape[0] == 0 ? 0 : tensor_shard_spec.shape[0] / page_shape[0];
-    auto width_in_pages = page_shape[1] == 0 ? 0 : tensor_shard_spec.shape[1] / page_shape[1];
+    // A partial page takes a whole page, as in BufferDistributionSpec.
+    auto height_in_pages = page_shape[0] == 0 ? 0 : div_up(tensor_shard_spec.shape[0], page_shape[0]);
+    auto width_in_pages = page_shape[1] == 0 ? 0 : div_up(tensor_shard_spec.shape[1], page_shape[1]);
     return {height_in_pages, width_in_pages};
 }
 

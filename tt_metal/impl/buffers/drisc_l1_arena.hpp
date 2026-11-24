@@ -66,6 +66,11 @@ private:
 //
 // A range is reserved on a single named DRAM sender core (`allocate_on`), so two
 // ranges collide only when they are on the same core.
+//
+// Where DRAM-sender endpoints run on the dispatch engine instead (for_dispatch_engine),
+// the zone is a fixed slice of that engine's L1 and every endpoint shares it: ranges
+// collide whichever endpoint they were reserved for, and there is no working region
+// (the dispatch memory map lays out the rest of that L1).
 // Lives as a std::shared_ptr on MeshDeviceImpl so that DriscL1Allocation handles
 // can hold a weak_ptr back and survive close_impl() without UAF.
 class DriscL1Arena : public std::enable_shared_from_this<DriscL1Arena> {
@@ -82,6 +87,10 @@ public:
     explicit DriscL1Arena(ContextId context_id);
     ~DriscL1Arena() = default;
 
+    // Sender-state zone [zone_base, zone_base + zone_size) of the dispatch engine that hosts every
+    // DRAM-sender endpoint (DramSenderPlacement::DispatchEngine).
+    static std::shared_ptr<DriscL1Arena> for_dispatch_engine(DeviceAddr zone_base, uint32_t zone_size);
+
     DriscL1Arena(const DriscL1Arena&) = delete;
     DriscL1Arena& operator=(const DriscL1Arena&) = delete;
 
@@ -94,17 +103,24 @@ public:
     std::shared_ptr<DriscL1Allocation> allocate_on(const CoreCoord& core, uint32_t size, uint32_t alignment);
 
     // Fixed base for the prefetcher kernel's working region. Unchanged for
-    // the device's lifetime, regardless of current arena allocations.
-    DeviceAddr kernel_working_region_base() const { return unreserved_base_ + kSenderStateZoneSize; }
+    // the device's lifetime, regardless of current arena allocations. DRAM cores only.
+    DeviceAddr kernel_working_region_base() const { return unreserved_base_ + zone_size_; }
 
     // Total DRISC L1 bytes available to the prefetcher kernel above the fixed
     // sender-state zone. The manager uses this to size its ping-pong stage budget so
-    // changing `kSenderStateZoneSize` automatically reduces the budget.
-    uint32_t kernel_working_region_size() const { return drisc_unreserved_size_ - kSenderStateZoneSize; }
+    // changing `kSenderStateZoneSize` automatically reduces the budget. DRAM cores only.
+    uint32_t kernel_working_region_size() const { return drisc_unreserved_size_ - zone_size_; }
 
 private:
+    // Whether every endpoint's ranges live in one shared L1.
+    enum class EndpointL1 : uint8_t { PerEndpoint, Shared };
+
+    // A zone every endpoint shares (for_dispatch_engine).
+    DriscL1Arena(DeviceAddr zone_base, uint32_t zone_size);
+
     friend class DriscL1Allocation;
     void release(DeviceAddr base, uint32_t size, const CoreCoord& core);
+    bool same_l1(const CoreCoord& a, const CoreCoord& b) const { return endpoint_l1_ == EndpointL1::Shared || a == b; }
 
     struct LiveRange {
         DeviceAddr base;
@@ -115,7 +131,9 @@ private:
 
     DeviceAddr unreserved_base_;
     uint32_t drisc_unreserved_size_;
-    // Live ranges within [unreserved_base_, unreserved_base_ + kSenderStateZoneSize), sorted
+    uint32_t zone_size_ = kSenderStateZoneSize;
+    EndpointL1 endpoint_l1_ = EndpointL1::PerEndpoint;
+    // Live ranges within [unreserved_base_, unreserved_base_ + zone_size_), sorted
     // ascending by base. First-fit allocate over the ranges on the requested core; release
     // coalesces with neighbors implicitly via removal.
     std::vector<LiveRange> live_;
