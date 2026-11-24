@@ -864,24 +864,10 @@ static bool validate_compute_output(IDevice* device, const MaxUtilConfig& cfg) {
 }
 
 // ---------------------------------------------------------------------------
-// log_output_crcs – reads the last output tile of every worker core and logs
-// one CRC-32 per core. Inputs are fixed-seed and every core runs the same
-// math, so a host can vote these CRCs across chips to find a core that
-// computed wrong values. Logical core coordinates are reported.
+// log_output_crcs – logs an FNV-1a hash ("crc" for log parsers) of the last
+// output tile of each worker core (logical coords). Inputs are fixed-seed and
+// all cores run the same math, so hashes can be voted across chips.
 // ---------------------------------------------------------------------------
-
-static uint32_t crc32_words(const std::vector<uint32_t>& words) {
-    uint32_t crc = 0xFFFFFFFFu;
-    for (uint32_t word : words) {
-        for (int b = 0; b < 4; ++b) {
-            crc ^= (word >> (8 * b)) & 0xFFu;
-            for (int k = 0; k < 8; ++k) {
-                crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
-            }
-        }
-    }
-    return ~crc;
-}
 
 static void log_output_crcs(IDevice* device, const MaxUtilConfig& cfg) {
     const uint32_t tile_bytes = tile_size_bytes(DataFormat::Float16_b);
@@ -890,7 +876,11 @@ static void log_output_crcs(IDevice* device, const MaxUtilConfig& cfg) {
         for (uint32_t x = cfg.grid_start.x; x <= cfg.grid_end.x; ++x) {
             std::vector<uint32_t> tile;
             detail::ReadFromDeviceL1(device, CoreCoord{x, y}, last_tile_addr, tile_bytes, tile, CoreType::WORKER);
-            log_info(LogTest, "Device {}: output crc core {},{} 0x{:08x}", device->id(), x, y, crc32_words(tile));
+            uint32_t h = 0x811c9dc5u;
+            for (uint32_t w : tile) {
+                h = (h ^ w) * 0x01000193u;
+            }
+            log_info(LogTest, "Device {}: output crc core {},{} 0x{:08x}", device->id(), x, y, h);
         }
     }
 }
