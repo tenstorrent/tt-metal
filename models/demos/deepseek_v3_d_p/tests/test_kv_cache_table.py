@@ -427,12 +427,15 @@ def test_kimi_k3_kv_cache_table(mesh_device, device_params, sp_axis, chunk, mode
     from models.demos.common.prefill.runners.migration import setup_kv_chunk_table
     from models.demos.common.prefill.runners.prefill_producer import _decode_kv_chunk
     from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import assert_bit_identical
-    from models.demos.deepseek_v3_d_p.tests.kda.utils import kda_state_patterns, native_state_from_global
+    from models.demos.deepseek_v3_d_p.tests.kda.utils import (
+        kda_state_patterns,
+        native_state_from_global,
+        write_slab_layer,
+    )
     from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
         assemble_convolution,
         assemble_recurrent,
         convolution_segment_to_torch,
-        device_scalar,
         recurrent_segment_to_torch,
     )
     from models.demos.deepseek_v3_d_p.tt.kimi_k3.runtime import TtKimiK3Runtime
@@ -514,12 +517,9 @@ def test_kimi_k3_kv_cache_table(mesh_device, device_params, sp_axis, chunk, mode
         key: native_state_from_global(mesh_device, geometry, recurrent, convolution, tp_axis)
         for key, (recurrent, convolution) in patterns.items()
     }
-    # The slabs store each head once on the mesh: the layer's export keeps each chip's heads of the (SP-replicated)
-    # native carry.
+    # The slabs store each head once on the mesh: each chip keeps its heads of the (SP-replicated) native carry.
     for (slot, layer), state in natives.items():
-        slot_tt = device_scalar(mesh_device, slot)
-        kda.export_layer(state, slot_tt, layer)
-        ttnn.deallocate(slot_tt)
+        write_slab_layer(mesh_device, kda, state, slot, layer)
     for state in natives.values():
         ttnn.deallocate(state.recurrent)
         ttnn.deallocate(state.convolution)

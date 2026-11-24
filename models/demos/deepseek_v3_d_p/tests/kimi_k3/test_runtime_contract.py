@@ -238,7 +238,7 @@ def test_kda_forward_runs_the_whole_layer_on_its_slot_in_the_slabs(monkeypatch):
     kdas = [create_autospec(ttKDA, instance=True) for _ in range(2)]
     for kda in kdas:
         kda.convolution_page_channels = KDA_CONVOLUTION_PAGE_CHANNELS
-        kda.forward_slot.return_value = object()
+        kda.forward.return_value = (object(), None)
     slot, start, end = object(), object(), object()
     from_torch, deallocate, gather = Mock(), Mock(), Mock()
     monkeypatch.setattr(ttnn, "from_torch", from_torch)
@@ -257,12 +257,12 @@ def test_kda_forward_runs_the_whole_layer_on_its_slot_in_the_slabs(monkeypatch):
     )
     hidden = object()
     for layer_idx, kda in enumerate(kdas):
-        output = kda.forward_slot.return_value
+        output = kda.forward.return_value[0]
         assert TtK3KdaAttention(kda, layer_idx, 1, 1, ttnn.Topology.Linear).forward(hidden, ctx) is output
-        # The whole per-chunk layer is ttKDA.forward_slot on the slabs at the device slot (load, KDA, store), so a
+        # The whole per-chunk layer is ttKDA.forward on the slot's slab entry, selected by the device slot, so a
         # capture never pins the slot it was recorded on.
-        kda.forward_slot.assert_called_once_with(hidden, slabs, slot, layer_idx, actual_start=start, actual_end=end)
-        kda.forward.assert_not_called()
+        kda.forward.assert_called_once_with(hidden, slabs.entry.return_value, start, end)
+        slabs.entry.assert_called_with(slot, layer_idx)
     # The wrapper itself moves nothing: no gather, no slab copy, no free of the block's input.
     gather.assert_not_called()
     deallocate.assert_not_called()

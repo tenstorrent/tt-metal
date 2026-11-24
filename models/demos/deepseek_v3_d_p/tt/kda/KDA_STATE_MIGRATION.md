@@ -103,41 +103,33 @@ agrees with prefill only on positions and the byte order inside a piece, so deco
 (**to be confirmed with the KV Manager / tt-blaze owner**). Singleton groups are already published by
 the TP-deduped MLA cache and the dflash caches. Migration reads then spread over every chip.
 
-The stored convolution layer keeps the native branch-major order over its own heads, so the layer's
-import gathers the SP rows' `[1, 3, H_store * halves, 192]` views on dim 2 into the native
-`[1, 3, H_local * halves, 192]` view (a metadata view of the `[1, SEG, 192]` tail) with no permute
-(`test_gather_over_sp_rebuilds_the_native_carry`). The export copies each chip's rows of every branch straight from
-the `[1, SEG, 192]` tail: `indexed_entry_copy` with `source_part` (the chip's SP coordinate, read on device) and
-`source_part_groups=3`, no view and no partition.
+The stored convolution layer keeps the native branch-major order over its own heads: per branch, SP row `r`
+stores the branch's channel slice `[r * W_b / SP, (r + 1) * W_b / SP)`.
 
-Per layer and chunk the K3 layer imports its slot's carry (`KdaStates.import_layer`: one `indexed_entry_copy` per
-state kind of this chip's shard into a fixed staging buffer, then a native
-`ttnn.all_gather` over SP into the slabs' one 24-head scratch carry, `KdaStates.scratch`), runs its forward on the
-scratch (`ttKDA.forward_slot`: the convolution and the SP relay, which also forms the final carry, read the scratch
-and replace it in place, addressing it as a one-entry slab), and exports (one `indexed_entry_copy` per
-kind, which reads the chip's heads of the SP-replicated new carry in the scratch, selected on device from the chip's SP
-coordinate `KdaStates.sp_rank`, and writes them into the slab). Outputs and carries are
-bit-identical to the replicated slabs (compared byte for byte on Galaxy SP8xTP4 and on a 4x4 stage, SP on mesh
-axis 1). Every chip's export precedes the layer's ack on all
-three ack transports (each device's ack record follows its own export on its CQ, and the trace and eager paths
-synchronize the whole mesh). For the D2H ack (metadata-only `D2HStreamService` + `LayerAckService`), eager and
-traced, `tests/kda/test_kda_export_ack_order.py` tests this on device with one chip held back by a spin kernel ahead of
-its export: while the other 31 chips' records are in, the slow chip still holds the previous chunk (both kinds) and no
-ack has arrived; on the ack, all 32 chips hold the new chunk in both kinds (8x4 only). The trace-controller and eager host-callback
-transports are covered by code reading only.
+Every K3 KDA layer (`ttKDA.forward` on `KdaStates.entry`) runs on the sharded slabs directly, as on the replicated
+ones: the convolution and the SP relay (which also forms the final carry) address batch `slot * L + layer_position`
+(slot read on device) inside the captured region. Only the chunk's chronologically first SP rank reads the old carry,
+so inside the same programs the other ranks send it their heads of the entry over the fabric: the relay's senders
+write each head's tile columns into the first rank's landing buffer, and the convolution's exchange core writes each
+rank's channel slices of the old tail into the first rank's exchange buffer. The first rank's relay sends each head's
+final carry to the rank storing it only, then a carry arrival to every rank on the same routes; every rank writes its
+own channel slices of the new tail. Outputs and carries are bit-identical to the replicated slabs
+(`tests/kda/components/test_relay_chunk_scan.py`, `test_qkv_convolution_exchange.py`, sharded-slab cases, on Galaxy
+SP8xTP4 and on a 4x4 stage, SP on mesh axis 1).
 
-`models/demos/deepseek_v3_d_p/tt/kda/state_adapter.py` owns the geometry, the maps, the per-layer
-export (one `indexed_entry_copy` each of the chip's recurrent tiles and convolution pages, which are the slab's
-segments, selected from the native carry by the chip's SP coordinate), the import (the copies back into staging, then the SP all-gather) and the
-host decoders (`recurrent_segment_to_torch`, `convolution_segment_to_torch`, `assemble_*`). Both take
-the slot as a device tensor and resolve batch `slot * L + layer_position` on device, so a captured
-load or store follows the slot in the traced metadata. The slabs are the KDA carries' only store:
-every K3 KDA layer loads its slot's carry from them and stores the replacement back inside the
-captured region (the layer's ops never address the slabs themselves), so the state a reader sees is the one after the last committed chunk, and it lands
-before any later MLA layer acks that chunk, and before the KDA layer's own ack. Nothing clears a
-slot: on a request's head chunk (`actual_start == 0`, evaluated on device) the layer's ops start from zeros
-instead of the slot's carry, so from the head until a layer's first store its regions still hold the previous
-request's state, and the slabs start uninitialized.
+Every chip's slab writes precede the layer's ack: a chip's relay program ends only after the carry arrivals of every
+link, each sent after that link's writes to the chip on the same route, and its convolution program writes its own
+tail pages; each device's ack record follows its own programs on its CQ, and the trace and eager paths synchronize
+the whole mesh. This ordering is argued from the programs, not tested on device for the sharded slabs: an earlier
+copy-based store had a D2H ack test with one chip held back by a spin kernel, which does not carry over, since a held
+back chip now holds back its whole SP ring.
+
+`models/demos/deepseek_v3_d_p/tt/kda/state_adapter.py` owns the geometry, the maps, the slabs and the host decoders
+(`recurrent_segment_to_torch`, `convolution_segment_to_torch`, `assemble_*`). The state a reader sees is the one after
+the last committed chunk, and it lands before any later MLA layer acks that chunk, and before the KDA layer's own
+ack. Nothing clears a slot: on a request's head chunk (`actual_start == 0`, evaluated on device) the layer's ops start
+from zeros instead of the slot's carry, so from the head until a layer's first store its regions still hold the
+previous request's state, and the slabs start uninitialized.
 
 ## Reading it back
 

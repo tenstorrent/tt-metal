@@ -7,8 +7,8 @@ cache with its SP-sharded KDA slabs, the traced runtime prefills 11 chunks x 512
 code_debug prompt, and ``runtime.build_kv_chunk_table`` publishes the table to protobuf. The table is imported
 back and ``kda_state_readback.score_layers`` (the read-back tool's own walk) reads every segment of every KDA
 layer from the one chip its entry names and scores the reassembled state against the head/tail golden at 56320
-tokens (row 54). Each layer's read-back must also equal, bit for bit, the carry the layer itself imports from the
-slabs (``import_layer``: copy + SP all-gather), which pins the table to the exact bytes on the right chip.
+tokens (row 54). Each layer's read-back must also equal, bit for bit, the carry assembled from every chip's stored
+heads of the slabs (``read_slab_layer``), which pins the table to the exact bytes on the right chip.
 
 Reads go through the table (``read_device_chunk``), not the tool's device-less UMD path, because this process
 holds the devices and a second, bare UMD cluster pins 1 GiB of host memory per chip (~32 GiB on a Galaxy).
@@ -336,7 +336,7 @@ def test_published_kda_state_reads_back_4x4(mesh_device, device_params, model, n
     _prefill_publish_and_read_back(
         mesh_device, adapter, hf_config, params, token_ids, golden_dir, sp_axis=sp_axis, tmp_path=tmp_path
     )
-    # The KDA SP gathers' CCL semaphores live in L1_SMALL (KimiK3Config.L1_SMALL_SIZE): report the pool's use.
+    # The KDA ops' persistent semaphores live in L1_SMALL (KimiK3Config.L1_SMALL_SIZE): report the pool's use.
     l1_small = ttnn.get_memory_view(mesh_device, ttnn.BufferType.L1_SMALL)
     logger.info(
         f"{model} 4x4 L1_SMALL per bank at test end: {l1_small.total_bytes_allocated_per_bank} B allocated of "

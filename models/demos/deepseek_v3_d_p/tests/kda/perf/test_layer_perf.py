@@ -101,7 +101,7 @@ _SLAB_LAYER_IDX = 1
 
 @dataclass
 class _Slots:
-    """A one-slot, one-layer KDA state slab: what ttKDA.forward_slot loads and stores, as in the model."""
+    """A one-slot, one-layer KDA state slab: what ttKDA.forward reads and writes in place, as in the model."""
 
     states: KdaStates
     slot: ttnn.Tensor
@@ -134,11 +134,11 @@ def _layer_call(
     actual_end: ttnn.Tensor | None,
     slots: _Slots | None,
 ) -> tuple[ttnn.Tensor, KdaState | None]:
-    """One layer call: forward on ``state``, or with ``slots`` the whole slab-backed layer as the model runs it
-    (``forward_slot``: load the slot's carry, forward, store it back; no carry returned)."""
+    """One layer call: forward on ``state``, or with ``slots`` on the slab entry, as the model runs it (no carry
+    returned: it was replaced in the slab)."""
     if slots is None:
         return layer.forward(hidden, state, actual_start, actual_end)
-    output = layer.forward_slot(hidden, slots.states, slots.slot, _SLAB_LAYER_IDX, actual_start, actual_end)
+    output, _ = layer.forward(hidden, slots.states.entry(slots.slot, _SLAB_LAYER_IDX), actual_start, actual_end)
     return output, None
 
 

@@ -12,7 +12,7 @@ native (SP-replicated) carry, so the records do not depend on how the slabs stor
 ``_layer_call`` touch the storage, and a copy of this file run at the old commit replaces just those two.
 
 The schedule moves the chronologically first SP rank (``(actual_start // rows) % SP``) and the final-state owner (the
-rank holding ``actual_end - 1``) across ranks, with request heads (``actual_start == 0``: the import loads zeros), a
+rank holding ``actual_end - 1``) across ranks, with request heads (``actual_start == 0``: the layer's ops start from zeros), a
 split tail (a start inside a rank's rows), short intervals (``actual_end`` inside the first or the next rank), and a
 non-zero slot. Every slot starts as noise, so a head that matched without the zero fill would be visible.
 """
@@ -36,6 +36,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     mla_row_permutation,
     native_state_from_global,
     read_slab_layer,
+    write_slab_layer,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaStates, deallocate_state, device_scalar
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.kda_geometry import kimi_k3_kda_geometry
@@ -110,14 +111,13 @@ def _valid_output_rows(
 
 def _write_native(mesh_device, slabs: KdaStates, slot: int, layer: int, state) -> None:
     """Store a native (SP-replicated) carry as the slot's carry."""
-    slot_tt = device_scalar(mesh_device, slot)
-    slabs.export_layer(state, slot_tt, layer)
-    ttnn.deallocate(slot_tt)
+    write_slab_layer(mesh_device, slabs, state, slot, layer)
 
 
 def _layer_call(layer, hidden, slabs: KdaStates, slot_tt, start_tt, end_tt) -> ttnn.Tensor:
     """The production per-chunk layer on the slot's carry in the slabs."""
-    return layer.forward_slot(hidden, slabs, slot_tt, _LAYER, actual_start=start_tt, actual_end=end_tt)
+    output, _ = layer.forward(hidden, slabs.entry(slot_tt, _LAYER), start_tt, end_tt)
+    return output
 
 
 @pytest.mark.parametrize(

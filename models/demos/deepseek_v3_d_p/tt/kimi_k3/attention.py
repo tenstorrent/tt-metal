@@ -87,7 +87,7 @@ class K3AttnContext:
     MLA consumes the KV and rotary inputs, the host ints when eager and `metadata` when traced.
     KDA reads only `kda_scalars` and `kda_states`: the slot selects its carry in the slabs on
     device, the bounds order its sequence-parallel segments and stop it at the last real token,
-    and at a start of 0 the layer's ops start from zeros instead (see `KdaChunkScalars`).
+    and a start of 0 loads zeros instead (see `KdaChunkScalars`).
     """
 
     rope_tensors: Optional[dict] = None
@@ -198,13 +198,11 @@ class TtK3KdaAttention(LightweightModule):
     `ttKDA` is purely functional and retains nothing, so the carry has to live somewhere with one
     address for the life of the run, or a captured trace could not advance the recurrence with no
     host in the loop. That somewhere is the migration slab itself, the way MLA's KV cache is its own
-    migration format. The slabs store each head once on the mesh, so per chunk the layer loads its
-    slot's carry into the slabs' one scratch carry (a copy and an SP all-gather), the convolution
-    and the SP relay (which also forms the final carry) read the scratch and replace it in place, and
-    the layer stores this chip's heads of it back; the copies read the slot on device.
-    `ttKDA.forward_slot` is that whole per-chunk layer (TP all-gather and input projection, load, KDA,
-    reduce-scatter, store), so it is what the layer's perf test measures; `ttKDA.forward` stays the
-    functional core.
+    migration format: per chunk the convolution, the SP relay and the final carry read the slot's
+    carry from the slabs and write the replacement back in place, each op reading the slot on
+    device. The slabs store each head once on the mesh; the ops move the other SP ranks' heads to the
+    chunk's first rank and each rank writes back its own. `ttKDA.forward` on `KdaStates.entry` is that whole per-chunk layer (TP all-gather, KDA,
+    reduce-scatter), so it is what the layer's perf test measures.
     """
 
     writes_kv = False
@@ -241,11 +239,10 @@ class TtK3KdaAttention(LightweightModule):
         # `[1, 1, T, d/tp]` -> `[1, T, d/tp]`: ttKDA takes three dimensions, and the leading one is batch.
         # The squeeze is a view over `normed`, which the block frees after this returns.
         hidden = ttnn.squeeze(normed, dim=0)
-        # The whole per-chunk layer: TP all-gather and input projection, load this slot's carry into the slabs'
-        # scratch with an SP all-gather (the ops start from zeros at a request head), KDA, output projection +
-        # reduce-scatter, store this chip's heads of the replacement carry.
-        output = self.kda.forward_slot(
-            hidden, ctx.kda_states, scalars.slot, self.layer_idx, actual_start=scalars.start, actual_end=scalars.end
+        # The whole per-chunk layer: TP all-gather, KDA on this slot's carry in the slabs (zeros at a request head),
+        # output projection + reduce-scatter.
+        output, _ = self.kda.forward(
+            hidden, ctx.kda_states.entry(scalars.slot, self.layer_idx), scalars.start, scalars.end
         )
 
         # `_project_output` reduce-scatters on the TP axis and returns `[B, T, d/tp]`, so the only
