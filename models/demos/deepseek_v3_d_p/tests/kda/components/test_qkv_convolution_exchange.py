@@ -22,6 +22,8 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.chronology_oracle import chronological_topology
 from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import (
     assert_accurate,
@@ -434,6 +436,15 @@ _SHARDED_MESHES = [
         kda_device_params((8, 4)),
         "mesh-8x4",
         "galaxy8x4-SP8xTP4-torus-xy",
+        _kimi_k3(640, 4, ttnn.DRAM_MEMORY_CONFIG),
+    ),
+    # An SP line (the fabric does not wrap): the gather to the first rank and the exchange route along a line.
+    _mesh(
+        (8, 4),
+        0,
+        fabric2d_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
+        "mesh-8x4",
+        "galaxy8x4-SP8xTP4-fabric-2d",
         _kimi_k3(640, 4, ttnn.DRAM_MEMORY_CONFIG),
     ),
 ]

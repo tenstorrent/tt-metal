@@ -664,6 +664,14 @@ _SHARDED_MESH = pytest.mark.parametrize(
     [
         kda_mesh_param((8, 4), "mesh-8x4", "SP8xTP4"),
         kda_mesh_param((4, 4), "mesh-4x4", "galaxy4x4-SP4xTP4"),
+        # An SP line (the fabric does not wrap): the line's end ranks have no ranks behind them, so their second carry
+        # senders hold no connection, and the last rank's relay heads backward.
+        kda_mesh_param(
+            (8, 4),
+            "mesh-8x4",
+            "SP8xTP4-fabric-2d",
+            fabric2d_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
+        ),
     ],
     indirect=True,
 )
