@@ -162,3 +162,27 @@ copies, with local copies at 149-154 of 198 GB/s and d2h copies at 45-46 of 54 G
 `TT_METAL_STREAMING_PROFILER_DRAIN_HOLD_TURNS=16` favours local copies, `=1` the profiler. M stays 1: more sweeps per
 hold only cost copies.
 
+
+### Models, 2026-11-24
+
+ResNet-50 (batch 16, trace, 2 CQs) and Llama-3.1-8B decode (batch 1, 40 tokens), main against the drain jobs at N = 4,
+M = 1. Copies are `DriscService.SteadyLoad` d2h running alongside the model, about 52 GB/s inside the model's window;
+the copy rows are 3 alternating runs each.
+
+| | ResNet-50 FPS | Llama-3.1-8B tok/s/user |
+|---|---|---|
+| main, profiler off | 10,492 | 36.18 |
+| main, profiler on | 9,961 (-5.1%) | 35.60 (-1.6%) |
+| drain jobs, profiler off | 10,483 | 36.13 |
+| drain jobs, profiler on | 9,935 (-5.2%) | 35.60 (-1.5%) |
+| drain jobs, profiler on, with copies | 2,501-2,570 | 28.0-28.2 |
+| copies only, profiler off | 176-177 | 14.24-14.28 |
+
+The profiler costs the same with the drain jobs as with main's relays. Every profiled run had 0 stalls and 0 missing
+zones; ResNet captured 1,589,504 zone rows in each, and Llama 18,889,336 with or without copies (main's Llama run has
+441 more kernel launches on every RISC, a difference in the workload, with every zone start matched by an end).
+
+The copies are what slow the models, and they slow them more with the profiler off, although the copy rate barely
+changes between the two (52.5-54.7 GB/s alone, 50.6-52.3 GB/s with the profiler). The likely cause, not yet tested, is
+that the copies saturate the PCIe path that fast dispatch also uses, and the drain jobs' holds open gaps in it. Sharing
+that path is a question for the service, not the profiler.
