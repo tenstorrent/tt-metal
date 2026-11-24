@@ -110,6 +110,10 @@ thread_local std::uint32_t op_info_offset __attribute__((used)) = 0;
 namespace trisc {
 // Flip between 0 and 1 to keep dest pointer between kernel calls
 thread_local std::uint32_t dest_register_offset __attribute__((used)) = 0;
+// Tile-shape index (log2 Dest rows per tile) of the last math init; read on the per-tile Dest addressing path
+// instead of the TILE_SHAPE_IDX GPR. thread_local per TRISC (tt-llk#1678). Declared extern thread_local in
+// ckernel_trisc_common.h.
+thread_local std::uint32_t dest_tile_shape_idx __attribute__((used)) = 0;
 }  // namespace trisc
 namespace pack {
 // Dest bank cleared by the dvalid pack section-done; thread_local per pack TRISC (tt-llk#1678).
