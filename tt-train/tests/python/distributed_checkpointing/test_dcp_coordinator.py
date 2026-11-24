@@ -238,15 +238,17 @@ def test_many_replicated_keys_spread_over_every_device_and_are_written_where_ele
 
 def test_a_plan_part_stores_each_label_once():
     """Keys of one layout share a label: a plan part stores each label once, in a table its tensors point into, and
-    decodes back to the tensors it was made of, every field as sent (a TP split, which the index records and load
-    compares, among them), with the cyclic garbage collector back on afterwards."""
+    decodes back to the part it was made of: its rank record (the coordinates the rank holds among them), its
+    hashes and every field of its tensors as sent (a TP split, which the index records and load compares, among
+    them), with the cyclic garbage collector back on afterwards."""
     infos = [_info(f"model/w{i}", [R, S(3)], (1, 4), (1, 1, 32, 16)) for i in range(50)]
     infos.append(_info("model/b", [R, R], (1, 4), (1, 1, 1, 64)))
     split = _info("model/qkv_linear/w", [R, S(2)], (1, 4), (1, 1, 32, 64))
     infos.append(dataclasses.replace(split, tp_split=(1, 1, 4, 1)))
-    data = PlanPart(_record(0, [(0, 0), (0, 1)]), infos).to_bytes()
+    part = PlanPart(_record(0, [(0, 0), (0, 1)]), infos, scheduler_hash=11, dataloader_hash=13)
+    data = part.to_bytes()
     assert len(json.loads(data)["labels"]) == 3
-    assert PlanPart.from_bytes(data).infos == infos and gc.isenabled()
+    assert PlanPart.from_bytes(data) == part and gc.isenabled()
 
 
 def test_multi_mesh_ranks_with_their_own_keys_and_one_shared_key():
