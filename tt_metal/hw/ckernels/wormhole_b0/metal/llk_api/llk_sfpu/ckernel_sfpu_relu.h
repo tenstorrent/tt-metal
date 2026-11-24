@@ -62,9 +62,10 @@ sfpi_inline sfpi::vFloat _relu_max_body_(sfpi::vFloat val, sfpi::vFloat threshol
 // in a general LReg costs an SFPMOV copy per row, while a write to a constant register is dropped.
 // One SFPCONFIG (+2 SFPLOADI) per call buys one instruction per row: 5 instead of 6, 11 before.
 //
-// Prgm1 is call-scoped here. relu_max_init programs nothing, and every production caller runs its
-// init next to its call (ttnn unary chains emit `<op>_init(); <op>(idst);` per op per tile), so no
-// kernel relies on Prgm1 surviving across a relu_max call. A fused kernel that programs Prgm1 in
+// Prgm1 is call-scoped here. relu_max_init programs no constant register (only ADDR_MOD_6, for the
+// integer clamps), and every production caller runs its init next to its call (ttnn unary chains
+// emit `<op>_init(); <op>(idst);` per op per tile), so no kernel relies on Prgm1 surviving across
+// a relu_max call. A fused kernel that programs Prgm1 in
 // its own init and calls relu_max_tile before its own compute would have to re-init.
 //
 // sfpi 7.83.0 compiles exactly this shape -- max(min(v, Prgm), literal) -- to SFPSWAP against
@@ -285,7 +286,7 @@ sfpi_inline void _clamp_rows_against_lreg12_() {
 // order, run min/max, then invert the result back.
 // When threshold MSB = 1, raw bits already sort correctly under sign-magnitude with min/max roles swapped.
 // The threshold (inverted or not) sits in LREG12 for the call; see _clamp_row_against_lreg12_.
-// Rows are 5 (MSB = 0) / 3 (MSB = 1) instructions instead of 7 / 5.
+// Rows are 5 (MSB = 0) / 3 (MSB = 1) instructions.
 template <bool APPROXIMATION_MODE, bool IS_LOWER_BOUND, DataFormat FORMAT, int ITERATIONS = 8>
 inline void relu_clamp_uint(uint threshold) {
     static_assert(
@@ -335,11 +336,8 @@ inline void relu_clamp_uint(uint threshold) {
 // orders numerically, and the mod-12 store maps the result back. The one non-bijective point is
 // INT_MIN, which the load turns into 0 (31-bit magnitude, sign dropped): harmless here, since
 // max(0, t) = t = max(INT_MIN, t) and max(0, min(0, t)) = 0 = max(0, min(INT_MIN, t)) for every
-// t >= 0, and a threshold >= 0 is its own sign-magnitude image. Verified bit-identical with the
-// predicated compare it replaces on Wormhole silicon over INT_MIN, INT_MIN + 1, -1, 0, 1, INT_MAX,
-// the powers of two of both signs with their neighbours and random words, at thresholds 0, 1, 5,
-// 6, 1000, 2^30, INT_MAX - 1 and INT_MAX. Rows are 3 (relu_min) / 4 (relu_max) instructions
-// instead of 10.
+// t >= 0, and a threshold >= 0 is its own sign-magnitude image. Rows are 3 (relu_min) / 4
+// (relu_max) instructions; test_relu_clamp_int.py checks every path exactly.
 //
 // A negative relu_min threshold keeps the plain int32 compare: there max(x, t) must return t for
 // x = INT_MIN, which the sign-magnitude image (0) would rank above t.
