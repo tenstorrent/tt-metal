@@ -249,8 +249,10 @@ tt::tt_metal::ProgramDescriptor SparseKvPushProgramFactory::create_descriptor(
     const uint32_t my_rank = ttnn::operations::ccl::common::get_linearized_index(coord, mesh_view);
     // The plan owns block b on owner b % num_devices; the cache stripes blocks along sp_axis first.
     const uint32_t my_owner = params.sp_axis == 0 ? my_rank : coord[1] * mesh_view.shape()[0] + coord[0];
-    const auto layout =
-        core_layout(params.core_grid, params.num_links, fabric_directions(mesh_device, coord, params.num_links));
+    // validate_config checked these routes; this chip's entry is its directions.
+    const auto& routes = fabric_routes(mesh_device, params.num_links);
+    TT_FATAL(routes.ok(), "the sparse KV push cannot route on this mesh: {}", routes.problem);
+    const auto layout = core_layout(params.core_grid, params.num_links, routes.chips.at(my_rank));
     const auto mux = mux_config(mesh_device, desc, layout);
     const auto defines = kernel_defines(mesh_device);
     const uint32_t page_bytes = tensor_args.input_tensor.buffer()->aligned_page_size();

@@ -143,7 +143,7 @@ void validate_config(const SparseKvPushParams& params, const SparseKvPushInputs&
         "the sparse KV push supports 1 or 2 links, got {}",
         params.num_links);
     // The same check is_sparse_kv_push_supported makes, so a caller it sent here does not land on this.
-    const auto routes = fabric_routes(mesh_device, params.num_links);
+    const auto& routes = fabric_routes(mesh_device, params.num_links);
     TT_FATAL(routes.ok(), "the sparse KV push cannot route on this mesh: {}", routes.problem);
     // Chips with fewer fabric neighbours use a prefix of the grid.
     const uint32_t cores = cores_needed(params.num_links, routes.max_directions());

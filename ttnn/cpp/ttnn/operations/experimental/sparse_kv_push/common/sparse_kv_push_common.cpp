@@ -6,12 +6,16 @@
 
 #include <algorithm>
 #include <array>
+#include <map>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <utility>
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/utils/math.hpp>
+#include <tt_stl/indestructible.hpp>
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
@@ -45,7 +49,7 @@ PacketShape packet_shape(tt::tt_metal::distributed::MeshDevice* mesh_device, uin
 
 bool fabric_supported(tt::tt_metal::distributed::MeshDevice* mesh_device) {
     const auto& mesh_shape = mesh_device->shape();
-    return tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()) && mesh_shape.dims() == 2 &&
+    return tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig(*mesh_device)) && mesh_shape.dims() == 2 &&
            mesh_shape.mesh_size() >= 2;
 }
 
@@ -58,7 +62,7 @@ using AxisTopologies = std::array<std::optional<tt::tt_fabric::Topology>, 2>;
 // (never for 2 chips), else Linear; none for an axis of one chip.
 AxisTopologies axis_topologies(tt::tt_metal::distributed::MeshDevice* mesh_device) {
     AxisTopologies topologies;
-    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig(*mesh_device);
     for (uint32_t axis = 0; axis < topologies.size(); ++axis) {
         if (mesh_device->shape()[axis] >= 2) {
             topologies[axis] = ttnn::ccl::get_axis_topology(*mesh_device, fabric_config, axis);
@@ -92,15 +96,16 @@ std::string chip_directions(
                 continue;
             }
             const auto neighbor_node = mesh_device->get_fabric_node_id(*neighbor);
-            // Resolved in the mesh device's fabric context, like the link indices; the kernels pick a channel by the
-            // fabric's next hop, and towards a neighbour that is the direction they are wired in.
-            const auto eth_directions =
-                tt::tt_fabric::get_neighbor_eth_directions(*mesh_device, my_node, neighbor_node);
-            if (eth_directions.empty()) {
+            // The fabric's forwarding direction to the neighbour, the one get_forwarding_link_indices takes the links
+            // from, so a channel's label and its links name the same direction even where two chips are wired in
+            // more than one.
+            const auto eth_direction =
+                tt::tt_fabric::get_eth_forwarding_direction(*mesh_device, my_node, neighbor_node);
+            if (!eth_direction.has_value()) {
                 return fmt::format("chip {} has no fabric link to its neighbour {}", coord, *neighbor);
             }
             FabricDirection found{
-                .eth_direction = static_cast<uint32_t>(eth_directions.front()),
+                .eth_direction = static_cast<uint32_t>(*eth_direction),
                 .neighbor = *neighbor,
                 .links = tt::tt_fabric::get_forwarding_link_indices(*mesh_device, my_node, neighbor_node)};
             if (found.links.size() < num_links) {
@@ -129,9 +134,8 @@ std::string chip_directions(
         if (other == coord) {
             continue;
         }
-        // No mesh-context lookup of a multi-hop route exists yet, so this reads the default control plane.
         const auto first_hop =
-            tt::tt_fabric::get_eth_forwarding_direction(my_node, mesh_device->get_fabric_node_id(other));
+            tt::tt_fabric::get_eth_forwarding_direction(*mesh_device, my_node, mesh_device->get_fabric_node_id(other));
         const bool covered =
             first_hop.has_value() && std::any_of(directions.begin(), directions.end(), [&](const FabricDirection& d) {
                 return d.eth_direction == static_cast<uint32_t>(*first_hop);
@@ -143,22 +147,12 @@ std::string chip_directions(
     return {};
 }
 
-}  // namespace
-
-uint32_t FabricRoutes::max_directions() const {
-    uint32_t most = 0;
-    for (const auto& directions : chips) {
-        most = std::max(most, static_cast<uint32_t>(directions.size()));
-    }
-    return most;
-}
-
-FabricRoutes fabric_routes(tt::tt_metal::distributed::MeshDevice* mesh_device, uint32_t num_links) {
+FabricRoutes compute_fabric_routes(tt::tt_metal::distributed::MeshDevice* mesh_device, uint32_t num_links) {
     FabricRoutes routes;
     if (!fabric_supported(mesh_device)) {
         routes.problem = fmt::format(
             "needs a 2D fabric (FABRIC_2D or a 2D torus) on a 2D mesh of at least 2 chips, got {} on {}",
-            tt::tt_fabric::GetFabricConfig(),
+            tt::tt_fabric::GetFabricConfig(*mesh_device),
             mesh_device->shape());
         return routes;
     }
@@ -174,12 +168,28 @@ FabricRoutes fabric_routes(tt::tt_metal::distributed::MeshDevice* mesh_device, u
     return routes;
 }
 
-std::vector<FabricDirection> fabric_directions(
-    tt::tt_metal::distributed::MeshDevice* mesh_device, const MeshCoordinate& coord, uint32_t num_links) {
-    std::vector<FabricDirection> directions;
-    const auto problem = chip_directions(mesh_device, axis_topologies(mesh_device), coord, num_links, directions);
-    TT_FATAL(problem.empty(), "the sparse KV push cannot route: {}", problem);
-    return directions;
+}  // namespace
+
+uint32_t FabricRoutes::max_directions() const {
+    uint32_t most = 0;
+    for (const auto& directions : chips) {
+        most = std::max(most, static_cast<uint32_t>(directions.size()));
+    }
+    return most;
+}
+
+const FabricRoutes& fabric_routes(tt::tt_metal::distributed::MeshDevice* mesh_device, uint32_t num_links) {
+    using Key = std::tuple<int, tt::tt_fabric::FabricConfig, uint32_t>;
+    static ttsl::Indestructible<std::map<Key, FabricRoutes>> cache;
+    static ttsl::Indestructible<std::mutex> mutex;
+    const Key key{mesh_device->id(), tt::tt_fabric::GetFabricConfig(*mesh_device), num_links};
+    std::lock_guard lock(mutex.get());
+    auto it = cache.get().find(key);
+    if (it == cache.get().end()) {
+        // std::map never moves its entries, so the reference stays valid as other meshes are added.
+        it = cache.get().emplace(key, compute_fabric_routes(mesh_device, num_links)).first;
+    }
+    return it->second;
 }
 
 uint32_t plan_cores(tt::tt_metal::distributed::MeshDevice* mesh_device) {

@@ -11,7 +11,6 @@
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/distributed_tensor_configs.hpp>
 #include "ttnn/distributed/types.hpp"
-#include "ttnn/tensor/tensor.hpp"
 #include "kernels/sparse_push_constants.hpp"
 
 namespace ttnn::operations::experimental::sparse_kv_push {
@@ -43,6 +42,10 @@ bool fabric_supported(tt::tt_metal::distributed::MeshDevice* mesh_device);
 // of one chip. The push can route when the fabric is supported, every direction forwards on num_links links, a chip's
 // directions differ (else the topology was misread, e.g. a line taken for a ring), and the fabric's first hop from
 // every chip to every other is one of them (the kernels send each requester's rows on that hop's channel).
+//
+// Computed once per (mesh device, fabric config, num_links) and cached for the process, so the support check, the
+// op's validation and every chip's program read the same routes. Mesh device ids are never reused, so a closed mesh's
+// entry is never served to another.
 struct FabricRoutes {
     std::vector<std::vector<FabricDirection>> chips;  // empty when problem is set
     std::string problem;
@@ -50,14 +53,7 @@ struct FabricRoutes {
     bool ok() const { return problem.empty(); }
     uint32_t max_directions() const;  // the push's core grid is sized for the chip with the most
 };
-FabricRoutes fabric_routes(tt::tt_metal::distributed::MeshDevice* mesh_device, uint32_t num_links);
-
-// One chip's directions, for building its program once fabric_routes has passed; raises with fabric_routes' reason
-// otherwise.
-std::vector<FabricDirection> fabric_directions(
-    tt::tt_metal::distributed::MeshDevice* mesh_device,
-    const tt::tt_metal::distributed::MeshCoordinate& coord,
-    uint32_t num_links);
+const FabricRoutes& fabric_routes(tt::tt_metal::distributed::MeshDevice* mesh_device, uint32_t num_links);
 
 // Rows travel in packets of pages_per_packet rows, dealt round robin over the DRAM banks. The plan lays out the
 // compact slots and the push writes them, so both take the shape from here.

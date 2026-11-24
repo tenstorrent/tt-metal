@@ -586,8 +586,7 @@ def test_sparse_kv_push_configs(mesh_device, page_bytes, sc, links, slot_tensor)
     _run_config(mesh_device, page_bytes, sc, links, slot_tensor)
 
 
-@galaxy
-def test_sparse_kv_push_worst_case_union(mesh_device):
+def _run_worst_case_union(mesh_device):
     """Every query names TOPK rows no other query names, the most a chip can need: the buffer the op sizes for
     queries x top-k distinct rows (that many plus one unit per owner) must hold it. 32 queries keep it cheap; the bound
     is the same for the model's 160."""
@@ -607,7 +606,11 @@ def test_sparse_kv_push_worst_case_union(mesh_device):
 
 
 @galaxy
-def test_sparse_kv_push_traced(mesh_device):
+def test_sparse_kv_push_worst_case_union(mesh_device):
+    _run_worst_case_union(mesh_device)
+
+
+def _run_traced(mesh_device):
     """Plan + table gather + push captured once, replayed with new indices, chunk start and user slot in place."""
     sc, page_bytes, max_rows = 160, 704, 92160
     n = mesh_device.get_num_devices()
@@ -669,6 +672,11 @@ def test_sparse_kv_push_traced(mesh_device):
             _check(push, out, slot=u * 2 + 1, part=Part.ALL, chunk_start=start, tag=f"replay user {u} start {start}")
     finally:
         ttnn.release_trace(mesh_device, tid)
+
+
+@galaxy
+def test_sparse_kv_push_traced(mesh_device):
+    _run_traced(mesh_device)
 
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -745,7 +753,8 @@ def test_sparse_kv_push_determinism(mesh_device):
 
 
 # ----------------------------------------------------------------------------------------------------------------------
-# Other 2D fabrics: a few patterns (incl. the axis-opposite chips), one non-production config, and determinism
+# Other 2D fabrics: a few patterns (incl. the axis-opposite chips), one non-production config, the worst-case buffer
+# bound, the traced replay, and determinism
 # ----------------------------------------------------------------------------------------------------------------------
 FABRIC_PATTERNS = [p for p in PATTERNS if p[0] in ("random", "routing_ties", "run_lengths")]
 FABRIC_CONFIGS = [(1152, 64, 1, True)]
@@ -763,6 +772,16 @@ def test_sparse_kv_push_fabric_patterns(mesh_device, submesh, pattern, max_rows,
 )
 def test_sparse_kv_push_fabric_configs(mesh_device, submesh, page_bytes, sc, links, slot_tensor):
     _run_config(_mesh(mesh_device, submesh), page_bytes, sc, links, slot_tensor)
+
+
+@other_fabrics
+def test_sparse_kv_push_fabric_worst_case_union(mesh_device, submesh):
+    _run_worst_case_union(_mesh(mesh_device, submesh))
+
+
+@other_fabrics
+def test_sparse_kv_push_fabric_traced(mesh_device, submesh):
+    _run_traced(_mesh(mesh_device, submesh))
 
 
 @other_fabrics
