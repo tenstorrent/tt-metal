@@ -34,7 +34,7 @@ import torch
 from loguru import logger
 
 from qwen36_resident import weights as Q
-from qwen36_resident.model import TOP_K
+from qwen36_resident.model import SPEC_SAMPLE, TOP_K
 from qwen36_resident.adaptive import taps_usable, window_parts
 from qwen36_resident.vllm_rows import CHUNK_UNIT, ResidentRowsAdapter, RowsEngine, expand_blocks, resident_capabilities
 
@@ -133,8 +133,13 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         # needing host-only sampling (logprobs, structured output, logit_bias, ...) out of every verify and serves it
         # instead of refusing it; plugin ed900d6+. Older plugins have no such field.)
         extra = {}
-        if "narrow_decode_resolves_commits" in getattr(SpecPlan, "__dataclass_fields__", {}):
+        fields = getattr(SpecPlan, "__dataclass_fields__", {})
+        if "narrow_decode_resolves_commits" in fields:
             extra["narrow_decode_resolves_commits"] = True
+        # (sampled speculation, RESIDENT_SPEC_SAMPLE: the verify rows draw with each request's parameters, so
+        # temperature > 0 requests the device samples speculate; plugin 2d22bae+)
+        if SPEC_SAMPLE and "verify_rows_sample" in fields:
+            extra["verify_rows_sample"] = True
         return SpecPlan(
             effective_k=min(SPEC_K, int(requested_k)),
             lanes_per_request=SPEC_K + 1,
@@ -177,6 +182,7 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         # the history, so it waits for a propose with no step in flight (a step the runner does not overlap: after a
         # prefill / layout change, any speculative step)
         self._calls = [0, 0]
+        self._spec_seed, self._spec_params = {}, None  # (sampled speculation: a request's seed, the uploaded params)
         # (the acceptance-aware policy's measurements: EMAs of tokens per spec user-step and of step times per kind)
         self._pay = self._new_pay()
         self.prompt_len = {}  # slot -> its prompt's length (generated tokens = history - prompt)
@@ -432,7 +438,7 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
             else getattr(sp, name)[i]
         )  # noqa: E731
         return (
-            float(val("temperature", 0.0) or 0.0) != 0.0
+            (float(val("temperature", 0.0) or 0.0) != 0.0 and not SPEC_SAMPLE)
             or float(val("presence_penalty", 0.0) or 0.0) != 0.0
             or float(val("frequency_penalty", 0.0) or 0.0) != 0.0
             or float(val("repetition_penalty", 1.0) or 1.0) != 1.0
@@ -566,7 +572,7 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
                     self._plain_stale = False
                 self._lap("decode_plain", t1)
                 return out
-            out = self._spec_row0(rows, tokens.reshape(B, -1)[:, 0], pos[:, 0], B)
+            out = self._spec_row0(rows, tokens.reshape(B, -1)[:, 0], pos[:, 0], B, sp)
             self._commit_remap(slot_remap, res_of)
             return out
         return self._verify(
@@ -579,7 +585,29 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
             self._expect_moves = {j: i for i, j in enumerate(remap) if i != j}
             self.slots.res_of = res_of
 
-    def _spec_row0(self, rows, tok0, pos0, B):
+    def _spec_sampling(self, rows, sp):
+        """(sampled speculation, RESIDENT_SPEC_SAMPLE) the spec build's draw parameters: each spec user's request's
+        (temperature, top_k, top_p, seed) on its R rows (an unseeded request keeps one seed while it lives, so its rows
+        and steps draw from one stream), greedy for idle users; uploaded when they change"""
+        if not SPEC_SAMPLE or sp is None:
+            return
+        import numpy as np
+
+        U, R = SPEC_USERS, 4
+        per = [(0.0, 1, 1.0, 0)] * U
+        for i, r in rows.items():
+            u = self.spec_of.get(r)
+            if u is None:
+                continue
+            seed = sp.seed[i] if getattr(sp, "seed", None) is not None else None
+            if seed is None:
+                seed = self._spec_seed.setdefault(r, int(np.random.randint(0, 2**31)))
+            per[u] = (float(sp.temperature[i]), int(sp.top_k[i]), float(sp.top_p[i]), int(seed))
+        if per != getattr(self, "_spec_params", None):
+            self.ae.spec.m.set_sampling(rows=[p for p in per for _ in range(R)])
+            self._spec_params = per
+
+    def _spec_row0(self, rows, tok0, pos0, B, sp=None):
         """a narrow call while users are in the spec build (right after their start, before any drafts): a vrows step
         of row 0 (the drafts' rows run a dummy) for them, a plain launch for the plain ones; host token ids [B, 1]"""
         U, R = SPEC_USERS, 4
@@ -594,6 +622,7 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         res = torch.zeros(B, 1, dtype=torch.int32)
         self._plain_stale = True
         if of_u:
+            self._spec_sampling(rows, sp)
             g = self.sess.verify(toks, upos, act)
             for i, u in of_u.items():
                 res[i, 0] = g[u][0]
@@ -634,6 +663,7 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
                 assert nvd.get(i, 0) == 0, "a plain-geometry row with drafts"
                 feed[r] = (row[0], int(pos[i, 0]))
         if of_u:
+            self._spec_sampling(rows, sp)
             g = self.sess.verify(toks, upos, act)
             for i, u in of_u.items():
                 out[i] = torch.tensor(g[u][:W], dtype=torch.int32)
@@ -742,4 +772,5 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
                 self._note_output(len(h) - plen)
             self.last_acc.pop(r, None)
             self.sampled.discard(r)
+            self._spec_seed.pop(r, None)
             self.greedy_ok.discard(r)

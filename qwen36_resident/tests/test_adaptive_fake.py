@@ -55,7 +55,12 @@ class FakeSpec:
                 continue
             assert int(positions[u]) == len(self.seq[u]), (u, positions[u], len(self.seq[u]))
             row = [int(t) for t in tokens[u]]
-            g[u] = [ref_next(self.seq[u] + row[: k + 1]) for k in range(4)]
+            # (sampled speculation: a row with temperature > 0 draws at its own position with its user's seed)
+            prm = getattr(self, "params", None)
+            key = lambda k: (  # noqa: E731
+                (prm[u * 4 + k][3], int(positions[u]) + k) if prm is not None and prm[u * 4 + k][0] > 0 else None
+            )
+            g[u] = [ref_next(self.seq[u] + row[: k + 1], key(k)) for k in range(4)]
             self.pending[u], self.started[u] = row, False
         return g
 
@@ -79,10 +84,22 @@ class FakeSpec:
         return out
 
 
+class FakeSpecModel:
+    """the spec build's set_sampling (sampled speculation): per verify row (temperature, top_k, top_p, seed)"""
+
+    def __init__(self, spec):
+        self.spec = spec
+
+    def set_sampling(self, rows):
+        assert len(rows) == A.SPEC_USERS * 4
+        self.spec.params = list(rows)
+
+
 class FakeAE:
     def __init__(self, pf, plain, pp):
         self._pf, self.plain, self.pp = pf, plain, pp
         self.sess, self.spec_tables, self.plain_tables, self.moves = FakeSpec(), {}, None, []
+        self.spec = SimpleNamespace(m=FakeSpecModel(self.sess), window=2048)
 
     def _set_spec_table(self, u, table):
         self.spec_tables[u] = list(table)
@@ -127,6 +144,7 @@ def make(monkeypatch, gate=False):
     m.spec_of, m.history, m.last_acc, m.mode, m.low_calls = {}, {}, {}, "SPEC", 0
     m.sampled, m._t, m._plain_stale, m.greedy_ok, m._calls = set(), {}, False, set(), [0, 0]
     m._pay, m.prompt_len, m.taps_of = m._new_pay(), {}, {}
+    m._spec_seed, m._spec_params = {}, None
     m.engine = A._PlainRowsEngine(plain, pp, torch.eye(V), V, V, B, CHUNK_UNIT, None)
     return m, pf
 
@@ -335,6 +353,35 @@ def test_host_sampled_steps_right_after_a_multi_token_commit(monkeypatch):
 def test_the_spec_plan_declares_commit_resolving_narrow_decodes():
     plan = A.Qwen36ResidentAdaptiveForCausalLM.spec_plan(None, 32, 3)
     assert plan.supports_narrow_decode and plan.narrow_decode_resolves_commits
+
+
+def test_sampled_requests_speculate_with_sampled_verify_rows(monkeypatch):
+    """(RESIDENT_SPEC_SAMPLE) a temperature > 0 request is promoted like a greedy one; its verify rows draw at their
+    own positions with its seed, a draft accepted while the draw equals it, so its tokens stay its seeded reference
+    (the plain build's draws) through the moves; greedy users alongside keep theirs"""
+    monkeypatch.setattr(A, "SPEC_SAMPLE", True)
+    m, pf = make(monkeypatch)
+    run = Runner(m)
+    prompts = {r: [(r * 23 + i * 7) % V for i in range(28 + 3 * r)] for r in range(3)}
+    run.arrive(range(3), [prompts[r] for r in range(3)])
+    run.req[1]["seed"], run.req[2]["seed"] = 77, 99
+    for _ in range(12):
+        run.step()
+    run.check()
+    assert set(m.spec_of) == {0, 1, 2} and m.mode == "SPEC", (m.spec_of, m.mode)
+    prm = m.ae.sess.params
+    assert prm[m.spec_of[1] * 4][3] == 77 and prm[m.spec_of[1] * 4][0] > 0 and prm[m.spec_of[0] * 4][0] == 0
+    plan = A.Qwen36ResidentAdaptiveForCausalLM.spec_plan(None, 32, 3)
+    assert getattr(plan, "verify_rows_sample", False)
+
+
+def test_penalized_requests_stay_plain_with_sampled_speculation(monkeypatch):
+    """penalties reshape the target per accepted token: non-speculable even with sampled verify rows"""
+    monkeypatch.setattr(A, "SPEC_SAMPLE", True)
+    sp = SimpleNamespace(temperature=[0.8], presence_penalty=[0.5], frequency_penalty=[0.0], repetition_penalty=[1.0])
+    assert A.Qwen36ResidentAdaptiveForCausalLM._non_speculable(sp, 0)
+    sp.presence_penalty = [0.0]
+    assert not A.Qwen36ResidentAdaptiveForCausalLM._non_speculable(sp, 0)
 
 
 def test_sampled_request_joins_spec(monkeypatch):
