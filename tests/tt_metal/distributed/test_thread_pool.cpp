@@ -15,6 +15,7 @@
 #include <thread>
 #include <type_traits>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include <tt-metalium/mesh_device.hpp>
@@ -192,6 +193,16 @@ TEST(ThreadPoolTest, PickCpuNextToLivePools) {
     placement.place({0, 0});
     placement.release(second);
     EXPECT_EQ(distinct(placement.place({0, 0, 0, 0})), 4);
+}
+
+// CPUs ordered core by core: each pool's workers fill whole cores (hardware threads n and n + 4 share a core).
+TEST(ThreadPoolTest, PickCpuFillsWholeCores) {
+    std::vector<uint32_t> cpus = {0, 1, 2, 3, 4, 5, 6, 7};
+    thread_binding::order_by_core(cpus, [](uint32_t cpu) { return std::pair<long, long>{0, cpu % 4}; });
+    EXPECT_EQ(cpus, (std::vector<uint32_t>{0, 4, 1, 5, 2, 6, 3, 7}));
+    ExplicitTopology placement{.node_cpus = {cpus}};
+    EXPECT_EQ(placement.place({0, 0, 0, 0}), (std::vector<uint32_t>{0, 4, 1, 5}));
+    EXPECT_EQ(placement.place({0, 0}), (std::vector<uint32_t>{2, 6}));
 }
 
 TEST(ThreadPoolTest, ParallelForOneWorkerRunsOnCaller) {
