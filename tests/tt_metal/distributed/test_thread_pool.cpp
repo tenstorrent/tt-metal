@@ -137,7 +137,7 @@ TEST(ThreadPoolTest, ParallelForUsesWorkers) {
 }
 
 // Worker placement over explicit per-node CPU lists, as thread_binding::pick_cpu sees them.
-struct CpuPlacement {
+struct ExplicitTopology {
     std::vector<std::vector<uint32_t>> node_cpus;
     std::unordered_map<uint32_t, uint32_t> workers_per_cpu;
     std::vector<size_t> next = std::vector<size_t>(node_cpus.size());
@@ -166,14 +166,14 @@ size_t distinct(std::vector<uint32_t> cpus) {
 // A node with no allowed CPU gets the allowed list, which the other node holds too: workers of both still spread.
 TEST(ThreadPoolTest, PickCpuNodesSharingCpus) {
     const std::vector<uint32_t> allowed = {0, 1, 2, 3, 4, 5, 6, 7};
-    CpuPlacement placement{.node_cpus = {allowed, allowed}};
+    ExplicitTopology placement{.node_cpus = {allowed, allowed}};
     EXPECT_EQ(distinct(placement.place({0, 0, 0, 0, 1, 1, 1, 1})), 8);
 }
 
 // A pool created after others are destroyed gets distinct CPUs again.
 TEST(ThreadPoolTest, PickCpuRecreatedPool) {
     const std::vector<uint32_t> allowed = {0, 1, 2};
-    CpuPlacement placement{.node_cpus = {allowed, allowed}};
+    ExplicitTopology placement{.node_cpus = {allowed, allowed}};
     for (int pool = 0; pool < 6; pool++) {
         const auto cpus = placement.place({0, 1});
         EXPECT_EQ(distinct(cpus), 2) << "pool " << pool;
@@ -183,7 +183,7 @@ TEST(ThreadPoolTest, PickCpuRecreatedPool) {
 
 // Live pools spread over the least-used CPUs, and a pool created next to them keeps its own workers apart.
 TEST(ThreadPoolTest, PickCpuNextToLivePools) {
-    CpuPlacement placement{.node_cpus = {{0, 1, 2, 3}}};
+    ExplicitTopology placement{.node_cpus = {{0, 1, 2, 3}}};
     const auto first = placement.place({0, 0});
     const auto second = placement.place({0, 0});
     EXPECT_EQ(distinct(first), 2);

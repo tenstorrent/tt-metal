@@ -70,7 +70,7 @@ std::vector<uint32_t> get_allowed_cpus() {
 // CPUs per NUMA node that worker threads may be pinned to, limited to the process's allowed CPUs so a process kept off
 // some CPUs (e.g. ones another process busy-polls) keeps its workers off them too. A node with no allowed CPU gets all
 // allowed CPUs; only if none can be determined does a node keep all of its own. A narrow binding (e.g. an MPI rank on
-// one core) therefore puts all of that process's workers on those few CPUs; get_cpu_core_for_physical_device warns.
+// one core) therefore puts all of that process's workers on those few CPUs; reserve_cpu_for_physical_device warns.
 std::unordered_map<int, std::vector<uint32_t>> get_cpu_cores_per_numa_node(const std::vector<uint32_t>& allowed) {
     std::unordered_map<int, std::vector<uint32_t>> cpu_cores_per_numa_node = {};
     if (numa_available() == -1) {
@@ -117,7 +117,7 @@ bool balanced_physical_device_numa(ContextId context_id) {
 struct CpuPlacement {
     std::mutex mutex;
     std::unordered_map<int, size_t> next_cpu_per_numa_node;
-    // Live workers per CPU: nodes with no allowed CPU share the allowed list, so picks skip CPUs already taken.
+    // Live workers per CPU: nodes with no allowed CPU share the allowed list, so picks prefer the least-used.
     std::unordered_map<uint32_t, uint32_t> workers_per_cpu;
 };
 
@@ -150,8 +150,8 @@ uint32_t pick_cpu(
     }
 }
 
-// pool_cpus: the CPUs already picked for the caller's pool, which the pick avoids first.
-uint32_t get_cpu_core_for_physical_device(
+// Picks a CPU for the pool's next worker and counts it as taken; pool_cpus: the CPUs the pool holds so far.
+uint32_t reserve_cpu_for_physical_device(
     ContextId context_id, uint32_t physical_device_id, const std::vector<uint32_t>& pool_cpus) {
     auto& placement = cpu_placement();
     const std::lock_guard<std::mutex> lock(placement.mutex);
@@ -212,7 +212,7 @@ uint32_t get_cpu_core_for_physical_device(
     return cpu;
 }
 
-// RAII reservation of a pool's CPUs.
+// A pool's worker CPUs, counted as taken in cpu_placement() until the pool is destroyed.
 struct CpuReservation {
     std::vector<uint32_t> cpus;
 
@@ -814,16 +814,22 @@ public:
         std::chrono::nanoseconds spin_window = std::chrono::nanoseconds(0)) :
         num_workers_(physical_devices.size()) {
         allocate_jobs();
-        cpu_cores_.cpus.reserve(num_workers_);
+        cpu_reservation_.cpus.reserve(num_workers_);
         for (uint32_t i = 0; i < num_workers_; i++) {
-            cpu_cores_.cpus.push_back(thread_binding::get_cpu_core_for_physical_device(
-                context_id, physical_devices[i]->id(), cpu_cores_.cpus));
+            cpu_reservation_.cpus.push_back(thread_binding::reserve_cpu_for_physical_device(
+                context_id, physical_devices[i]->id(), cpu_reservation_.cpus));
         }
-        spin_window = spin_window_for(cpu_cores_.cpus, spin_window);
+        spin_window = spin_window_for(cpu_reservation_.cpus, spin_window);
         workers_.reserve(num_workers_);
         for (uint32_t i = 0; i < num_workers_; i++) {
             workers_.emplace_back(std::make_unique<NumaAwareExecutor>(
-                cpu_cores_.cpus[i], completion_, i, published_, spin_window_closed_at_, jobs_.data(), spin_window));
+                cpu_reservation_.cpus[i],
+                completion_,
+                i,
+                published_,
+                spin_window_closed_at_,
+                jobs_.data(),
+                spin_window));
             phys_device_to_thread_id_[physical_devices[i]->id()] = i;
             map_worker_to_device(i, physical_devices[i]->id());
         }
@@ -832,13 +838,14 @@ public:
     // core but they are not guaranteed to be "close" to any physical device.
     DeviceBoundThreadPool(ContextId context_id, uint32_t thread_count) : num_workers_(thread_count) {
         allocate_jobs();
-        cpu_cores_.cpus.reserve(thread_count);
+        cpu_reservation_.cpus.reserve(thread_count);
         workers_.reserve(thread_count);
 
         for (uint32_t i = 0; i < thread_count; i++) {
-            cpu_cores_.cpus.push_back(thread_binding::get_cpu_core_for_physical_device(context_id, i, cpu_cores_.cpus));
+            cpu_reservation_.cpus.push_back(
+                thread_binding::reserve_cpu_for_physical_device(context_id, i, cpu_reservation_.cpus));
             workers_.emplace_back(std::make_unique<NumaAwareExecutor>(
-                cpu_cores_.cpus.back(),
+                cpu_reservation_.cpus.back(),
                 completion_,
                 i,
                 published_,
@@ -1007,7 +1014,7 @@ private:
     static constexpr uint32_t NO_WORKER = UINT32_MAX;
     std::vector<uint32_t> worker_of_device_;
     // The CPU each executor is pinned to; declared before the executors, so released after they stop.
-    thread_binding::CpuReservation cpu_cores_;
+    thread_binding::CpuReservation cpu_reservation_;
     // Executors backing this pool.
     std::vector<std::unique_ptr<NumaAwareExecutor>> workers_;
     // Used to pick threads when device_idx is not specified in the enqueue API
