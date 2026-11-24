@@ -26,7 +26,7 @@ import signal
 import socket
 import sys
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Sequence
@@ -42,7 +42,8 @@ from diag.common import default_tt_metal_path, log, print_phase_line, print_phas
 from diag.aer import AerWindow  # noqa: E402
 from diag import captures  # noqa: E402
 from diag.device_tests import run_tests  # noqa: E402
-from diag.busbar import LOAD_TESTS, OVERRIDES, STEPS, link_fault, plan as busbar_plan, run_busbar  # noqa: E402
+from diag import events  # noqa: E402
+from diag.busbar import LOAD_TESTS, MODES, OVERRIDES, STEPS, link_fault, plan as busbar_plan, run_busbar  # noqa: E402
 from diag.eth_status import run_eth_status  # noqa: E402
 from diag.links import name_chips, run_links  # noqa: E402
 from diag.eth_summary import SUMMARY_FILE, render_eth_summary  # noqa: E402
@@ -192,12 +193,16 @@ def build_diag_arg_parser() -> argparse.ArgumentParser:
         default=default_tt_metal_path(),
         help="tt-metal repo root (contains build/test/tt_metal/unit_tests_deployment).",
     )
+    ap.add_argument(
+        "--load-mode", choices=MODES, help="Galaxy load: its length, in place of the tier's (with --tests pinned)."
+    )
     for key, (flag, typ, what) in OVERRIDES.items():
         ap.add_argument(
             flag, dest=key, type=typ, default=None, help=f"Galaxy load: {what}. Not given: the tier's plan."
         )
     captures.add_args(ap)
     add_reset_args(ap)
+    events.add_args(ap)
     ap.add_argument("--output", type=Path, default=Path("diag_report.json"))
     ap.add_argument("--snapshot-out", type=Path, default=Path("/tmp/diag_snapshot.json"))
     report.add_args(ap)
@@ -356,6 +361,7 @@ def run_diag(
     stage_order: str | None = None,
     reset_gate: str | None = None,
     end_delay_s: int = END_DELAY_S,
+    load_mode: str | None = None,
 ) -> tuple[int, dict]:
     """Run the full pipeline (snapshot → resets → tests → triage → ETH status → QSFP tests → sys-triage → AER).
 
@@ -376,6 +382,8 @@ def run_diag(
     if stage_order is not None:
         plan, steps = select_stages(plan, stage_order)
         log(f"--stage-order: running {stage_order}")
+    if load_mode is not None:
+        plan = replace(plan, load_mode=load_mode)
     if tt_metal_path is None:
         tt_metal_path = default_tt_metal_path()
 
@@ -715,6 +723,8 @@ def main() -> int:
         tier = select_stages(tier, args.stage_order)[0] if args.stage_order is not None else tier
     except ValueError as e:
         ap.error(str(e))
+    if args.load_mode and not tier.galaxy_load:
+        ap.error(f"--load-mode: tier {args.tier} with these --tests runs no galaxy load")
     if any(v is not None for v in overrides.values()) and "busbar" not in tier.tests:
         loaded = ", ".join(n for n, t in TIERS.items() if t.galaxy_load)
         ap.error(
@@ -723,9 +733,10 @@ def main() -> int:
         )
     if tier.galaxy_load:
         try:
-            busbar_plan(tier.load_mode, **overrides)
+            busbar_plan(args.load_mode or tier.load_mode, **overrides)
         except ValueError as e:
             ap.error(str(e))
+    events.setup(args.hook, args.dry_run)
     rc, _report = run_diag(
         tier=args.tier,
         dry_run=args.dry_run,
@@ -754,6 +765,7 @@ def main() -> int:
         stage_order=args.stage_order,
         reset_gate=args.reset_gate,
         end_delay_s=args.end_delay_s,
+        load_mode=args.load_mode,
     )
     try:  # the run's report, last; a fault here costs the report, never the run's exit code
         print("\n".join(report.lines(args.output.resolve().parent, args)), flush=True)

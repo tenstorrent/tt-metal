@@ -28,7 +28,7 @@ SUITE_DIR = TESTS_DIR.parent / "health_check_test_suite"
 sys.path.insert(0, str(SUITE_DIR))
 
 import tiers  # noqa: E402
-from diag import busbar, links  # noqa: E402
+from diag import busbar, events, links  # noqa: E402
 from diag.aer import aer_check, aer_new  # noqa: E402
 from diag.model import FAIL, PASS, SKIP, Check, Phase  # noqa: E402
 from diag.naming import chip, link_end  # noqa: E402
@@ -255,6 +255,14 @@ class TestRunStep(unittest.TestCase):
         self.assertEqual(c.status, FAIL)
         self.assertIn("NUMERIC FAIL", c.details)
 
+    def test_the_readback_report_names_the_chips_its_log_does_not(self):
+        line = "NUMERIC FAIL 41:00.0 (tray 2) chip 9 [heavy]: 3/8 outputs"
+        prog = "import pathlib, sys; pathlib.Path(sys.argv[2], 'rows.jsonl').write_text('{}\\n'); sys.exit(4)"
+        with mock.patch.object(busbar.chunk_sched, "report", return_value=["CHUNK 1/1: fine", line]):
+            c = self._run(prog)
+            self.assertEqual((c.status, c.data["fails"]), (FAIL, [line]))
+            self.assertNotIn(line, self._run("print('ok')").data.get("fails", []))  # no rows: no report
+
     def test_hang(self):
         c = self._run("import time; time.sleep(30)", seconds=1)
         self.assertEqual(c.status, FAIL)
@@ -318,15 +326,21 @@ class TestRunStep(unittest.TestCase):
 
         def fake(step, out, dry_run):
             calls.append(step.name)
-            return busbar.Check(name=step.name, status=FAIL if step.name == "qb" else PASS, data=data)
+            (out / step.name).mkdir(parents=True, exist_ok=True)
+            return busbar.Check(name=step.name, status=FAIL if step.name == "qb" else PASS, data=dict(data))
 
         for data, want in (({}, False), ({"hung": True}, True)):  # a plain failure is no link fault, a hang is
             calls.clear()
             phase = Phase(name="busbar")
-            with mock.patch.object(busbar, "run_step", fake):
-                busbar.run_busbar(phase, Path("/tmp"), "smoke")
+            with tempfile.TemporaryDirectory() as d, mock.patch.object(busbar, "run_step", fake), mock.patch.object(
+                busbar, "quiet", lambda *a: None
+            ):
+                busbar.run_busbar(phase, Path(d), "smoke")
+                written = json.loads((Path(d) / "busbar" / "qb" / "check.json").read_text())
             self.assertEqual(calls, ["qb", "mix", "step", "heavy", "code"])
             self.assertEqual(any(map(busbar.link_fault, phase.checks)), want)
+            self.assertEqual(phase.checks[0].data.get("link_fault", False), want)  # the report says so for a caller
+            self.assertEqual((written["status"], written.get("link_fault", False)), (FAIL, want))  # and the hook's after
 
     def test_run_busbar_runs_only_the_steps_named(self):
         calls = []
@@ -335,9 +349,149 @@ class TestRunStep(unittest.TestCase):
             calls.append(step.name)
             return busbar.Check(name=step.name, status=PASS)
 
-        with mock.patch.object(busbar, "run_step", fake):
+        with mock.patch.object(busbar, "run_step", fake), mock.patch.object(busbar, "quiet", lambda *a: None):
             busbar.run_busbar(Phase(name="busbar"), Path("/tmp"), "smoke", steps=("heavy",))
         self.assertEqual(calls, ["heavy"])
+
+    def test_order_chunks_long_min_qb_n(self):
+        p = busbar.plan("full", order="heavy,qb,mix", chunks="1,2", long_min=10, qb_n=3)
+        self.assertEqual([s.name for s in p], ["heavy", "qb", "mix"])
+        self.assertIn("--cycles", p[1].argv)
+        self.assertEqual(p[1].argv[p[1].argv.index("--cycles") + 1], "3")
+        self.assertEqual(p[2].argv[p[2].argv.index("--chunk-min") + 1], "1,10")
+        smoke = busbar.plan("smoke", chunks="1,2,3")
+        self.assertEqual(smoke[1].argv[smoke[1].argv.index("--chunk-min") + 1], "0.0333333,0.0333333,0.0333333")
+        self.assertEqual(busbar.plan("plain", chunks="1,2,3,4"), busbar.plan("plain"))
+        self.assertEqual(busbar.plan("plain", order="qb,maxutil")[1].argv, ())  # a caller's part: run by the hook
+
+    def test_bad_order_and_chunks_refused(self):
+        for over in (
+            {"order": "qb,qb"},
+            {"order": "qb;rm"},
+            {"chunks": "1,x"},
+            {"chunks": "0"},
+            {"qb_n": 0},
+            {"long_min": 0},
+        ):
+            with self.assertRaises(ValueError, msg=over):
+                busbar.plan("plain", **over)
+
+    def _hooked(self, d, body, order, fails=("qb",), **kw):
+        """run_busbar with a hook script running *body* (after logging its args); the checks and the hook's calls."""
+        calls, hook = Path(d) / "calls", Path(d) / "hook.sh"
+        hook.write_text(f'#!/bin/bash\necho "$1 $2 $3 ${{4#{d}/}}" >> {calls}\n{body}\nexit 0\n')
+        hook.chmod(0o755)
+
+        def fake(step, out, dry_run):
+            return busbar.Check(name=f"busbar_{step.name}", status=FAIL if step.name in fails else PASS)
+
+        ph = Phase(name="busbar")
+        with mock.patch.object(busbar, "run_step", fake), mock.patch.object(
+            busbar, "quiet", lambda *a: None
+        ), mock.patch.object(events, "hook", str(hook)):
+            busbar.run_busbar(ph, Path(d), "smoke", order=order, **kw)
+        return [(c.name, c.status) for c in ph.checks], calls.read_text().splitlines()
+
+    def test_hook_events_and_caller_parts(self):
+        with tempfile.TemporaryDirectory() as d:
+            body = '[ "$1 $2" = "before mix" ] && exit 1\n[ "$1 $2" = "run pv" ] && exit 3\n[ "$1 $2" = "run h3" ] && exit 2'
+            checks, calls = self._hooked(d, body, "qb,mix,maxutil,pv,h3")
+        self.assertEqual(
+            calls,
+            [
+                "stage-start busbar - busbar",
+                "before qb - busbar/qb",
+                "after qb FAIL busbar/qb",
+                "before mix - busbar/mix",  # held back: no after
+                "before maxutil - busbar/maxutil",
+                "run maxutil - busbar/maxutil",
+                "after maxutil PASS busbar/maxutil",
+                "before pv - busbar/pv",
+                "run pv - busbar/pv",
+                "after pv SKIP busbar/pv",
+                "before h3 - busbar/h3",
+                "run h3 - busbar/h3",
+                "after h3 FAIL busbar/h3",
+                "stage-end busbar FAIL busbar",
+            ],
+        )
+        self.assertEqual(
+            checks,
+            [
+                ("busbar_qb", FAIL),
+                ("busbar_mix", SKIP),
+                ("busbar_maxutil", PASS),
+                ("busbar_pv", SKIP),
+                ("busbar_h3", FAIL),
+            ],
+        )
+
+    def test_stage_end_passes_when_nothing_failed(self):
+        with tempfile.TemporaryDirectory() as d:
+            _, calls = self._hooked(d, "", "qb,step", fails=())
+        self.assertEqual(calls[-1], "stage-end busbar PASS busbar")
+
+    def test_the_hook_runs_synchronously_outside_the_timer(self):
+        with tempfile.TemporaryDirectory() as d:  # the part after the hook's run starts only once the hook is done
+            checks, _ = self._hooked(d, '[ "$1" = run ] && sleep 1 && touch ' + d + "/done", "maxutil", fails=())
+            self.assertTrue(Path(d, "done").exists())
+        self.assertEqual(checks, [("busbar_maxutil", PASS)])
+
+    def test_a_caller_part_with_no_hook_is_skipped(self):
+        ph = Phase(name="busbar")
+        with mock.patch.object(
+            busbar, "run_step", lambda st, o, dr: busbar.Check(name=st.name, status=PASS)
+        ), mock.patch.object(busbar, "quiet", lambda *a: None):
+            busbar.run_busbar(ph, Path("/tmp"), "smoke", order="qb,pv")
+        self.assertEqual(
+            (ph.checks[1].name, ph.checks[1].status, ph.checks[1].details), ("busbar_pv", SKIP, "no --hook to run it")
+        )
+
+    def test_emit_with_no_hook_or_in_a_dry_run(self):
+        with mock.patch.object(events, "hook", None):
+            self.assertEqual(events.emit("before", "qb", "-", Path("/nonexistent")), 0)
+        with mock.patch.object(events, "hook", "/nonexistent/hook"), mock.patch.object(events, "dry_run", True):
+            self.assertEqual(events.emit("before", "qb", "-", Path("/nonexistent")), 0)
+
+    def test_quiet_names_the_stuck_chips(self):
+        with tempfile.TemporaryDirectory() as d:
+            prog = Path(d) / "quiet_clock.py"
+            step = busbar.plan("smoke")[0]
+            for body, want in (
+                ("print('QUIET CLOCK before busbar qb: 32/32 chips at <= 800 MHz after 1.0 s')", None),
+                ("print('QUIET FAIL before busbar qb: 0000:02:00.0 (tray 1) chip 0 at 1350 MHz')", FAIL),
+                ("raise SystemExit(2)", FAIL),
+            ):
+                prog.write_text(body)
+                with mock.patch.object(busbar, "GALAXY_DIR", Path(d)):
+                    c = busbar.quiet(step, Path(d))
+                self.assertEqual(c and c.status, want)
+                if c and "QUIET FAIL" in body:
+                    self.assertIn("0000:02:00.0 (tray 1)", c.details)
+                    self.assertEqual(c.name, "busbar_qb_quiet")
+
+    def test_quiet_runs_before_each_part_but_code(self):
+        seen = []
+        with mock.patch.object(
+            busbar, "run_step", lambda st, o, dr: busbar.Check(name=st.name, status=PASS)
+        ), mock.patch.object(busbar, "quiet", lambda st, o, dr: seen.append(st.name)):
+            busbar.run_busbar(Phase(name="busbar"), Path("/nonexistent"), "smoke", dry_run=True)
+        self.assertEqual(seen, ["qb", "mix", "step", "heavy"])
+
+    def test_one_part_alone_keeps_its_callers_quiet(self):
+        seen = []
+        with mock.patch.object(
+            busbar, "run_step", lambda st, o, dr: busbar.Check(name=st.name, status=PASS)
+        ), mock.patch.object(busbar, "quiet", lambda st, o, dr: seen.append(st.name)):
+            busbar.run_busbar(Phase(name="busbar"), Path("/nonexistent"), "smoke", dry_run=True, steps=("heavy",))
+        self.assertEqual(seen, [])
+
+    def test_quiet_stuck_read_times_out(self):
+        with tempfile.TemporaryDirectory() as d:
+            step = next(st for st in busbar.plan("smoke") if st.name == "qb")
+            with mock.patch.object(busbar.subprocess, "run", side_effect=busbar.subprocess.TimeoutExpired("q", 1)):
+                c = busbar.quiet(step, Path(d))
+            self.assertEqual((c.status, c.data["rc"]), (FAIL, 124))
 
 
 class TestLinks(unittest.TestCase):
@@ -459,6 +613,7 @@ class TestLinks(unittest.TestCase):
         tests=None,
         busbar_stub=None,
         stage_order=None,
+        load_mode=None,
     ):
         """run_diag on *tier* with its device tests, bus-bar and links tests stubbed: ``order`` is what ran, in
         order, ``device`` the names run_tests got, ``mode`` the length the bus-bar test was given, ``fault`` whether
@@ -552,6 +707,7 @@ class TestLinks(unittest.TestCase):
                 skip_reset=skip_reset,
                 tests=tests,
                 stage_order=stage_order,
+                load_mode=load_mode,
             )
         return got
 
@@ -570,6 +726,37 @@ class TestLinks(unittest.TestCase):
         for tier, mode in (("daily", "smoke"), ("light", "smoke"), ("weekly", "plain"), ("full", "full")):
             with self.subTest(tier=tier):
                 self.assertEqual(self._run_load(tier)["mode"], mode)
+
+    def test_load_mode_overrides_the_tiers_length(self):
+        for tier in ("daily", "weekly", "full"):
+            with self.subTest(tier=tier):
+                got = self._run_load(tier, tests="busbar,links", load_mode="full")
+                self.assertEqual((got["order"], got["mode"]), (["busbar", "links"], "full"))
+
+    def test_load_mode_needs_the_load(self):
+        import diag_runner
+
+        for argv in (
+            ["--tier", "flash", "--load-mode", "smoke"],
+            ["--tier", "daily", "--tests", "gddr_fast", "--load-mode", "full"],
+        ):
+            with self.subTest(argv=argv), mock.patch.object(sys, "argv", ["diag_runner.py", *argv]), mock.patch.object(
+                diag_runner, "run_diag"
+            ) as run, contextlib.redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit):
+                diag_runner.main()
+            run.assert_not_called()
+            self.assertIn("--load-mode", err.getvalue())
+
+    def test_main_passes_the_hook_and_load_mode_on(self):
+        import diag_runner
+
+        argv = ["--tier", "daily", "--tests", "busbar", "--load-mode", "full", "--hook", "/x/hook", "--dry-run"]
+        with mock.patch.object(sys, "argv", ["diag_runner.py", *argv]), mock.patch.object(
+            diag_runner, "run_diag", return_value=(0, {})
+        ) as run, mock.patch.object(events, "setup") as setup:
+            self.assertEqual(diag_runner.main(), 0)
+        setup.assert_called_once_with("/x/hook", True)
+        self.assertEqual(run.call_args.kwargs["load_mode"], "full")
 
     def test_a_tier_without_the_load_runs_none_of_it(self):
         for tier in ("flash", "pre_bmc_reboot", "post_bmc_reboot"):

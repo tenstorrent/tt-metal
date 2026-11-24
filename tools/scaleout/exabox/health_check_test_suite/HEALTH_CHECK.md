@@ -748,6 +748,8 @@ whose baked-in suite predates the phase has the `--skip-sys-triage` and
 | `--tier {flash,daily,weekly,full,pre_bmc_reboot,post_bmc_reboot}` | required | Selects reset cadence + gtest matrix |
 | `--heavy-s N`, `--heavy-ops OPS`, `--heavy-x-s N`, `--heavy-x-ops OPS` | the tier's plan | [Galaxy load](#the-galaxy-load) (`daily`, `weekly`, `full`): the heavy step's seconds, DIDT ops, seconds of extra ops at its end, and extra ops (op names: letters, digits and `_`). |
 | `--heavy-n N`, `--burst-gap-ms N`, `--trays LIST`, `--mm-throttle 1-5` | the tier's plan | Galaxy load: heavy ops per launch (mix, heavy), pause after each burst, load only these trays (mix, heavy), matmul di/dt throttle (`TT_MM_THROTTLE_PERF`). |
+| `--load-mode MODE`, `--order LIST`, `--chunks MINUTES`, `--long-min N`, `--qb-n N` | the tier's plan | Galaxy load: its length (`smoke`, `plain`, `full`) in place of the tier's; the bus-bar parts in order (a name that is not a bus-bar part runs through `--hook`); the mix's chunk minutes; full's last chunk; quiet-to-burst cycles. |
+| `--hook SCRIPT` | none | Galaxy load: called as `SCRIPT <event> <step> <status> <outdir>` at each event (`diag/events.py`: stage-start, before, after, stage-end, run), synchronously, outside each part's timer. A non-zero rc from `before` skips that part. |
 | `--dry-run` | off | Print intended subprocess calls; skip destructive steps |
 | `--skip-reset` | off | Skip every reset: the reset loop phase, the post-test reset and the `glx_reset` before the links sweep. The sweep itself still runs on a link fault. |
 | `--tests LIST` | the tier's tests | Run only these tests of the tier, comma-separated: a test name (`links`, `busbar`, a gtest) or one bus-bar step (`busbar_qb`, `busbar_mix`, `busbar_step`, `busbar_heavy`, `busbar_code`). A name the tier does not run is an error. E.g. `daily --tests busbar_heavy --heavy-s 60`, `daily --tests links --skip-reset`. `run_health_check.py --tests` passes it on. |
@@ -1022,6 +1024,7 @@ tools/scaleout/exabox/health_check_test_suite/
 │   ├── hsc.py              # phase 3: tray HSC input-voltage flags, read before and after the tests
 │   ├── busbar.py           # phase 3: the galaxy load's bus-bar test (LOAD_TESTS), its plan and steps
 │   ├── links.py            # phase 3: the galaxy load's links test: pair test, sweep, fabric open/close
+│   ├── events.py           # phase 3: the galaxy load's event points and the caller's --hook
 │   ├── aer.py              # phase 9: PCIe AER errors over the run (pcie_aer_delta)
 │   ├── external.py         # ingesting checks written by external tools
 │   ├── triage.py           # phase 5: kmd_triage tools (TRIAGE_TOOLS)

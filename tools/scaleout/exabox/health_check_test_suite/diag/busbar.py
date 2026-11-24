@@ -15,6 +15,12 @@ code   code readback: each core's firmware and kernel code in L1, voted across c
 Each tier that runs the load names its length, one of MODES (tiers.py load_mode). smoke keeps every part and cuts
 each length to min(SMOKE_S, plain's). A part that fails does not end the test: the next parts still run and are
 judged on the chips that are left. OVERRIDES set one value of the parts that have it, whatever the mode says.
+
+--order runs the parts in its order; a name outside STEPS is a part the caller runs itself, through the --hook's run
+event (diag/events.py: rc 0 PASS, 3 SKIP, else FAIL). The stage emits stage-start and stage-end (step "busbar") and
+before and after each part; a non-zero rc from before skips that part. Before each part but code the chips get the
+clock check of every quiet (galaxy/quiet_clock.py): the quiet counts only with every chip at <= 800 MHz, at most
+5 min, then a QUIET FAIL finding names the chips by BDF and tray.
 """
 from __future__ import annotations
 
@@ -27,11 +33,14 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import events
 from .common import emit_result, emit_running, log, start_group, stop_group
 from .model import FAIL, PASS, SKIP, Check, Phase
 
 GALAXY_DIR = Path(__file__).resolve().parent.parent / "galaxy"
 sys.path.append(str(GALAXY_DIR))
+import chunk_sched  # noqa: E402
+import numeric_report  # noqa: E402
 from chunk_sched import CCL_PARTS  # noqa: E402  the parts whose output mixes every chip's data
 
 # What a tier lists under tests for the galaxy load, after its other tests: this bus-bar test, then the links test
@@ -49,6 +58,10 @@ OVERRIDES = {
     "gap_ms": ("--burst-gap-ms", int, "qb, mix, step, heavy: pause after each burst of heavy ops, ms"),
     "trays": ("--trays", str, "mix, heavy: load only these trays, 1-4 comma-separated"),
     "mm_throttle": ("--mm-throttle", int, "qb, mix, step, heavy: matmul di/dt throttle, TT_MM_THROTTLE_PERF 1-5"),
+    "order": ("--order", str, "the parts in order, comma-separated, each once; names outside STEPS run through --hook"),
+    "chunks": ("--chunks", str, "mix: chunk minutes, comma-separated (full: the last one is --long-min)"),
+    "long_min": ("--long-min", int, "mix: minutes of full's last chunk (25)"),
+    "qb_n": ("--qb-n", int, "qb: clock-checked quiet + burst cycles (2)"),
 }
 SMOKE_S = 2
 SETUP_S = 300  # mesh open, upload and close on top of a part's planned length; past both it counts as hung
@@ -114,12 +127,12 @@ def _overrides(over: dict) -> dict:
     if unknown := set(over) - set(OVERRIDES):
         raise ValueError(f"unknown override {', '.join(sorted(unknown))}; expected: {', '.join(OVERRIDES)}")
     ov = {k: v for k, v in over.items() if v is not None}
-    for k, lo in (("heavy_s", 1), ("heavy_n", 1), ("x_s", 0), ("gap_ms", 0)):
+    for k, lo in (("heavy_s", 1), ("heavy_n", 1), ("x_s", 0), ("gap_ms", 0), ("long_min", 1), ("qb_n", 1)):
         if k in ov and ov[k] < lo:
             raise ValueError(f"{OVERRIDES[k][0]}: at least {lo} (got {ov[k]})")
     if "mm_throttle" in ov and ov["mm_throttle"] not in range(1, 6):
         raise ValueError(f"--mm-throttle: 1-5 (got {ov['mm_throttle']})")
-    for k in ("ops", "x_ops", "trays"):
+    for k in ("ops", "x_ops", "trays", "order", "chunks"):
         if k in ov:
             ov[k] = _csv(OVERRIDES[k][0], ov[k], empty_ok=k == "x_ops")
     if "trays" in ov and not all(t in ("1", "2", "3", "4") for t in ov["trays"].split(",")):
@@ -127,6 +140,19 @@ def _overrides(over: dict) -> dict:
     for k in ("ops", "x_ops"):
         if k in ov and not all(OP_NAME.fullmatch(o) for o in ov[k].split(",") if o):
             raise ValueError(f"{OVERRIDES[k][0]}: op names (letters, digits, _), comma-separated (got {ov[k]!r})")
+    if "order" in ov:
+        names = ov["order"].split(",")
+        if not all(OP_NAME.fullmatch(n) for n in names) or len(set(names)) != len(names):
+            raise ValueError(
+                f"--order: part names (letters, digits, _), each once, comma-separated (got {ov['order']!r})"
+            )
+    if "chunks" in ov:
+        try:
+            ok = all(float(m) > 0 for m in ov["chunks"].split(","))
+        except ValueError:
+            ok = False
+        if not ok:
+            raise ValueError(f"--chunks: minutes above 0, comma-separated (got {ov['chunks']!r})")
     return ov
 
 
@@ -152,8 +178,9 @@ def plan(mode: str = "plain", **over: int | str | None) -> list[Step]:
     def s(plain: int, full_s: int | None = None) -> int:
         return min(SMOKE_S, plain) if mode == "smoke" else full_s if full and full_s is not None else plain
 
-    qq, qb, gap = s(60), s(30), s(10)
-    chunks = (s(60), s(120), s(180), s(240, 1500))
+    qq, qb, gap, qn = s(60), s(30), s(10), ov.get("qb_n", 2)
+    cm = [round(float(m) * 60) for m in ov["chunks"].split(",")] if "chunks" in ov else [60, 120, 180, 240]
+    chunks = (*(s(c) for c in cm[:-1]), s(cm[-1], 60 * ov.get("long_min", 25)))
     dbi, l1, noc, rf, rw = s(10, 120), s(12, 60), s(5, 100), s(3, 15), s(35)
     sq, sb, hv = s(10), s(90), ov.get("heavy_s", s(90, 750))
     xs, code = min(ov.get("x_s", s(10, 750)), hv), {"smoke": 1, "plain": 5, "full": 60}[mode]
@@ -187,9 +214,9 @@ def plan(mode: str = "plain", **over: int | str | None) -> list[Step]:
     parts = [
         Step(
             "qb",
-            f"2 x ({qq} s clock-checked quiet + {qb} s lofi_all burst)",
-            ub0(qq, qb, "--numeric-every", "-1", "--cycles", "2"),
-            2 * (qq + qb),
+            f"{qn} x ({qq} s clock-checked quiet + {qb} s lofi_all burst)",
+            ub0(qq, qb, "--numeric-every", "-1", "--cycles", str(qn)),
+            qn * (qq + qb),
             env,
         ),
         Step(
@@ -277,7 +304,20 @@ def plan(mode: str = "plain", **over: int | str | None) -> list[Step]:
             code + 25,
         ),
     ]
-    return parts
+    by = {p.name: p for p in parts}
+    order = ov["order"].split(",") if "order" in ov else STEPS
+    return [by.get(n) or Step(n, "run by the hook", (), 0) for n in order]
+
+
+def readback_lines(step: Step, d: Path) -> list[str]:
+    """The per-chip lines of a part's readbacks, which its log does not print: chunk_sched's report of its rows (NUMERIC,
+    QUIET, CHUNK, L1 FAIL by BDF and tray) and, for a ub0_repro.py part, numeric_report's of its result."""
+    rows, res = d / "rows.jsonl", d / "result.json"
+    try:
+        out = chunk_sched.report(chunk_sched.load(str(rows))) if rows.is_file() else []
+        return out + (numeric_report.lines([str(res)]) if step.argv[0] == "ub0_repro.py" and res.is_file() else [])
+    except Exception as e:  # an unreadable row file is no finding; the part's rc still judges it
+        return [f"readback report not read: {e!r}"]
 
 
 def run_step(step: Step, out: Path, dry_run: bool = False, test: str = "busbar") -> Check:
@@ -309,7 +349,7 @@ def run_step(step: Step, out: Path, dry_run: bool = False, test: str = "busbar")
             stop_group(p)
     dt = time.time() - t0
     text = log_path.read_text(errors="replace").splitlines()
-    bad = [ln.strip() for ln in text if FAIL_LINE.search(ln)]
+    bad = [ln.strip() for ln in text + (readback_lines(step, d) if test == "busbar" else []) if FAIL_LINE.search(ln)]
     why = (f"hung: no exit in {limit} s" if rc is None else f"rc {rc}" if rc else "") or (bad[0] if bad else "")
     emit_result(name, FAIL if why else PASS, suffix=f"({dt:.1f}s)")
     if not why:
@@ -364,13 +404,76 @@ def link_fault(c: Check) -> bool:
     return any((CCL_ERR.search(ln) or HANG_ERR.search(ln)) and not LOG_LEVEL.search(ln) for ln in tail)
 
 
+QUIET_T = 420  # s: quiet_clock.py settle's 5 min cap, its reads and a margin
+
+
+def quiet(step: Step, out: Path, dry_run: bool = False, test: str = "busbar") -> Check | None:
+    """The clock check of the quiet before *step* (quiet_clock.py settle): None when every chip reached <= 800 MHz,
+    else the check ``<test>_<step>_quiet`` naming the chips (its QUIET FAIL line) or the reason it could not read."""
+    d = out / step.name
+    argv = [sys.executable, str(GALAXY_DIR / "quiet_clock.py"), "settle", f"before {test} {step.name}"]
+    if dry_run:
+        log(f"[dry-run] {' '.join(argv)}")
+        return None
+    d.mkdir(parents=True, exist_ok=True)
+    log_path = d / "quiet.log"
+    with open(log_path, "w") as f:
+        try:  # the settle caps itself at 5 min; a read stuck on a hung chip must not stall the stage
+            rc = subprocess.run(
+                argv, cwd=GALAXY_DIR, stdout=f, stderr=subprocess.STDOUT, check=False, timeout=QUIET_T
+            ).returncode
+        except subprocess.TimeoutExpired:
+            rc = 124
+    text = log_path.read_text(errors="replace").splitlines()
+    for ln in text:
+        if ln.startswith("QUIET CLOCK") and "after" in ln:
+            log(ln)
+    bad = [ln.strip() for ln in text if FAIL_LINE.search(ln)]
+    if not bad and not rc:
+        return None
+    last = next((ln.strip() for ln in reversed(text) if ln.strip()), "")
+    return Check(
+        name=f"{test}_{step.name}_quiet",
+        status=FAIL,
+        details=(bad[0] if bad else f"clock check rc {rc}: {last}")[:300],
+        data={"rc": rc, "fails": bad[:20], "log": str(log_path)},
+    )
+
+
 def run_busbar(
     phase: Phase, out: Path, mode: str, dry_run: bool = False, steps: tuple[str, ...] = STEPS, **over
 ) -> None:
-    """The bus-bar steps (see plan) named in *steps*, in order, into *phase*."""
+    """The bus-bar steps (see plan) named in *steps*, in --order, into *phase*, with the quiet's clock check before each
+    and the hook events (diag/events.py) around them. A check that is a link fault (link_fault) says so in its data."""
+    d, held = out / "busbar", len(phase.checks)
+    # the quiet's clock check runs for the stage; one part run alone (busbar_heavy as a caller's own step) keeps its caller's quiet
+    clocks = events.hook is not None or len(steps) > 1
+    events.emit("stage-start", "busbar", "-", d)
     for step in plan(mode, **over):
-        if step.name not in steps:
+        if step.argv and step.name not in steps:
             continue
         log(f"busbar {step.line()}")
-        c = run_step(step, out / "busbar", dry_run)
+        name, sd = f"busbar_{step.name}", d / step.name
+        if rc := events.emit("before", step.name, "-", sd):
+            phase.add(Check(name=name, status=SKIP, details=f"held back by the hook (rc {rc})"))
+            continue
+        if clocks and step.name != "code" and (q := quiet(step, d, dry_run)):
+            phase.add(q)
+        if step.argv:
+            c = run_step(step, d, dry_run)
+        elif events.hook is None:
+            c = Check(name=name, status=SKIP, details="no --hook to run it")
+        else:
+            t0 = time.time()
+            rc = events.emit("run", step.name, "-", sd)
+            st = SKIP if dry_run or rc == events.HOOK_SKIP else PASS if rc == 0 else FAIL
+            c = Check(
+                name=name, status=st, details=f"run by the hook (rc {rc})", data={"seconds": round(time.time() - t0)}
+            )
+        if link_fault(c):
+            c.data["link_fault"] = True
         phase.add(c)
+        if sd.is_dir():  # the hook's after event reads the part's check here
+            (sd / "check.json").write_text(json.dumps({"status": c.status, "details": c.details, **c.data}))
+        events.emit("after", step.name, c.status, sd)
+    events.emit("stage-end", "busbar", FAIL if any(c.status == FAIL for c in phase.checks[held:]) else PASS, d)
