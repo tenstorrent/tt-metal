@@ -33,13 +33,14 @@ public:
         std::shared_ptr<Buffer> buffer;
     };
 
-    // `shards` on disjoint cores of each device. `mesh_device` is the MeshDevice the devices belong to, for addressing
-    // by MeshCoordinate.
-    KernelConfigBufferImpl(std::vector<Shards> shards, const distributed::MeshDevice* mesh_device);
+    // `shards` on disjoint cores of each device of `mesh_device`. Records the MeshDevice's ID and its local devices'
+    // IDs, for addressing by MeshCoordinate, but keeps no reference to it.
+    KernelConfigBufferImpl(std::vector<Shards> shards, const distributed::MeshDevice& mesh_device);
 
     // The largest shard on any device.
     uint32_t max_size() const { return max_size_; }
-    const distributed::MeshDevice* mesh_device() const { return mesh_device_; }
+    // ID of the MeshDevice it is allocated on.
+    int mesh_device_id() const { return mesh_device_id_; }
 
     // The shard on `core` of a device. Throws if there is none.
     uint32_t size(ChipId device_id, const CoreCoord& core) const;
@@ -59,7 +60,9 @@ private:
     std::vector<Shards> shards_;
     // Device, then core, to its index in shards_.
     std::unordered_map<ChipId, std::unordered_map<CoreCoord, size_t>> shard_map_;
-    const distributed::MeshDevice* mesh_device_ = nullptr;
+    int mesh_device_id_ = 0;
+    // Each local device's MeshCoordinate to its ID.
+    std::unordered_map<distributed::MeshCoordinate, ChipId> device_ids_;
     uint32_t max_size_ = 0;
 };
 
