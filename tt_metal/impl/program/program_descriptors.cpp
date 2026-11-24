@@ -177,7 +177,8 @@ static inline ttsl::hash::hash_t hash_cb_descriptor(const CBDescriptor& cb) {
         ttsl::hash::hash_combine(hash, hash_cb_format_descriptor(format_descriptor));
     }
     // Whether a buffer backs the CB, not which: it is bound at launch.
-    ttsl::hash::hash_combine(hash, cb.buffer != nullptr || cb.tensor != nullptr || cb.globally_allocated_bound_later);
+    ttsl::hash::hash_combine(
+        hash, cb.buffer != nullptr || cb.tensor != nullptr || cb.experimental_options.globally_allocated_bound_later);
     ttsl::hash::hash_combine(hash, cb.global_circular_buffer != nullptr);
     return hash;
 }
@@ -247,7 +248,9 @@ void apply_descriptor_runtime_args(Program& program, const ProgramDescriptor& de
             UpdateDynamicCircularBufferAddress(program, program_cbs[ci]->id(), *cb_desc.buffer, cb_desc.address_offset);
         } else {
             TT_FATAL(
-                !cb_desc.globally_allocated_bound_later, "CB {} is bound later but the descriptor names no buffer", ci);
+                !cb_desc.experimental_options.globally_allocated_bound_later,
+                "CB {} is bound later but the descriptor names no buffer",
+                ci);
         }
     }
 }

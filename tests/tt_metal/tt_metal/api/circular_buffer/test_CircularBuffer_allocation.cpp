@@ -397,7 +397,7 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferBoundLater) {
             .core_ranges = cr_set,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = 0, .data_format = cb_config.data_format, .page_size = cb_config.page_size}}},
-            .globally_allocated_bound_later = true,
+            .experimental_options = {.globally_allocated_bound_later = true},
         };
         EXPECT_NE(
             CircularBufferConfig(descriptor),

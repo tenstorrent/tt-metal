@@ -15,6 +15,7 @@
 #include <fmt/base.h>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/experimental/blaze/named_kernel_args.hpp>
+#include <tt-metalium/experimental/cb_descriptor_options.hpp>
 #include <internal/reload_table.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <tt-metalium/base_types.hpp>
@@ -84,8 +85,8 @@ struct CBDescriptor {
     const MeshTensor* tensor = nullptr;
     uint32_t address_offset = 0;
     const experimental::GlobalCircularBuffer* global_circular_buffer = nullptr;
-    // Globally allocated, with `buffer`/`tensor` named by a later descriptor; the program can't launch until then.
-    bool globally_allocated_bound_later = false;
+    // EXPERIMENTAL: see tt-metalium/experimental/cb_descriptor_options.hpp
+    experimental::CBDescriptorOptions experimental_options;
 };
 
 struct SemaphoreDescriptor {

@@ -99,7 +99,8 @@ ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDe
         }
         // Whether a buffer backs the CB, not which: it is bound at launch.
         ttsl::hash::hash_combine(
-            hash, cb.buffer != nullptr || cb.tensor != nullptr || cb.globally_allocated_bound_later);
+            hash,
+            cb.buffer != nullptr || cb.tensor != nullptr || cb.experimental_options.globally_allocated_bound_later);
         // A global CB's buffer and config addresses and its sender/receiver layout are baked into the
         // program, and a cache hit does not re-point them (only tensor-backed CBs are), so key which
         // global CB this is, not just whether there is one.

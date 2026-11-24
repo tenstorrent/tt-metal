@@ -48,7 +48,7 @@ ResolvedBindings resolve_bindings(
 
     // A CB bound later has no buffer to bind to a tensor; bail to the slow path, which binds it from the descriptor.
     if (std::any_of(desc.cbs.begin(), desc.cbs.end(), [](const CBDescriptor& cb) {
-            return cb.globally_allocated_bound_later && !cb.buffer && !cb.tensor;
+            return cb.experimental_options.globally_allocated_bound_later && !cb.buffer && !cb.tensor;
         })) {
         return ResolvedBindings{};
     }

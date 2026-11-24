@@ -15,6 +15,13 @@
   },
   {
     "source": "tt-metalium/workload/legacy/program_descriptors.hpp",
+    "include": "tt-metalium/experimental/cb_descriptor_options.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "CBDescriptor carries its experimental options as a single member, following the Blaze named kernel arguments on KernelDescriptor.",
+    "remove_when": "The experimental CB descriptor options graduate into CBDescriptor or are removed."
+  },
+  {
+    "source": "tt-metalium/workload/legacy/program_descriptors.hpp",
     "include": "internal/reload_table.hpp",
     "owner": "@tenstorrent/metalium-api-owners",
     "reason": "ProgramDescriptor carries internal runtime-reload metadata used by Blaze.",

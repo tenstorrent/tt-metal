@@ -58,9 +58,14 @@ CircularBufferConfig::CircularBufferConfig(uint32_t total_size, const std::map<u
     this->set_config(data_format_spec);
 }
 
+bool cb_buffer_unbound(const CircularBufferConfig& config) {
+    return config.dynamic_cb() && !config.globally_allocated_address().has_value();
+}
+
 bool cb_descriptor_is_backed(const CBDescriptor& descriptor) {
     return descriptor.buffer != nullptr || descriptor.tensor != nullptr ||
-           descriptor.global_circular_buffer != nullptr || descriptor.globally_allocated_bound_later;
+           descriptor.global_circular_buffer != nullptr ||
+           descriptor.experimental_options.globally_allocated_bound_later;
 }
 
 void validate_cb_descriptor_backing(const CBDescriptor& descriptor) {
@@ -68,7 +73,7 @@ void validate_cb_descriptor_backing(const CBDescriptor& descriptor) {
         !(descriptor.buffer && descriptor.tensor),
         "CBDescriptor cannot specify both buffer and tensor as the globally-allocated backing storage");
     TT_FATAL(
-        !(descriptor.globally_allocated_bound_later && descriptor.global_circular_buffer),
+        !(descriptor.experimental_options.globally_allocated_bound_later && descriptor.global_circular_buffer),
         "CBDescriptor cannot set globally_allocated_bound_later with a global_circular_buffer");
 }
 
@@ -94,7 +99,7 @@ CircularBufferConfig::CircularBufferConfig(const CBDescriptor& descriptor) : tot
     if (backing_buffer) {
         this->set_globally_allocated_address_and_total_size(
             *backing_buffer, descriptor.total_size, descriptor.address_offset);
-    } else if (descriptor.globally_allocated_bound_later) {
+    } else if (descriptor.experimental_options.globally_allocated_bound_later) {
         this->dynamic_cb_ = true;
         this->address_offset_ = descriptor.address_offset;
     }
@@ -189,7 +194,7 @@ CircularBufferConfig& CircularBufferConfig::set_page_size(uint8_t buffer_index, 
 }
 
 CircularBufferConfig& CircularBufferConfig::set_total_size(uint32_t total_size) {
-    if (dynamic_cb_ && !buffer_unbound()) {
+    if (dynamic_cb_ && !cb_buffer_unbound(*this)) {
         TT_FATAL(
             total_size <= this->max_size_,
             "Cannot set circular buffer size to {}. This is larger than the associated dynamically allocated "
@@ -302,10 +307,6 @@ const std::array<std::optional<tt::DataFormat>, NUM_CIRCULAR_BUFFERS>& CircularB
 
 const std::array<std::optional<uint32_t>, NUM_CIRCULAR_BUFFERS>& CircularBufferConfig::page_sizes() const {
     return this->page_sizes_;
-}
-
-bool CircularBufferConfig::buffer_unbound() const {
-    return this->dynamic_cb_ && !this->globally_allocated_address_.has_value();
 }
 
 bool CircularBufferConfig::dynamic_cb() const { return this->dynamic_cb_; }
