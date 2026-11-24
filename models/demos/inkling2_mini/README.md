@@ -230,6 +230,55 @@ pytest models/demos/inkling2_mini/demo/demo.py -k "prompt or fast or spec"
 
 Each one skips when its weight cache, the golden prompts, the checkpoint or the drafter weights are not there.
 
+## Serve with vLLM
+
+`tt/generator_vllm.py` is the model class for the vLLM TT plugin
+([tenstorrent/vllm-tt-plugin](https://github.com/tenstorrent/vllm-tt-plugin), upstream vLLM 0.32): an OpenAI
+server (`/v1/chat/completions`, `/v1/completions`, streamed or not) for one request at a time. Install vLLM and
+the plugin into the tt-metal python env as the plugin's README says (`source docs/install-vllm-tt.sh`), then,
+from the tt-metal root:
+
+```
+export TT_MODEL_CLASS_OVERRIDES=Inkling2ForCausalLM=models.demos.inkling2_mini.tt.generator_vllm:Inkling2ForCausalLM
+vllm serve models/demos/inkling2_mini/vllm --tokenizer $INKLING_CKPT --served-model-name Inkling-2-Mini \
+    --max-model-len 196608 --max-num-seqs 1 --shutdown-timeout 60 \
+    --reasoning-parser inkling --enable-auto-tool-choice --tool-call-parser inkling \
+    --additional-config '{"tt": {"worker_l1_size": 1394752, "trace_region_size": 134217728, "sample_on_device_mode": "all"}}'
+```
+
+Any OpenAI client then works with base URL `http://127.0.0.1:8000/v1` (any API key) and model `Inkling-2-Mini`.
+
+| argument | what it is for |
+|---|---|
+| `models/demos/inkling2_mini/vllm` | a small config.json in place of the checkpoint's: the transformers release vLLM 0.32 pins does not know its model type. The tokenizer and the chat template are the checkpoint's (`--tokenizer`) |
+| `TT_MODEL_CLASS_OVERRIDES` | registers the class with the plugin (the plugin itself is not changed) |
+| `--max-model-len` | the context: the far KV cache is allocated for it (19,584 B per token), as `--max-ctx` in the demo |
+| `--max-num-seqs 1` | the model is batch 1 and keeps one sequence of state on the card |
+| `--shutdown-timeout` | lets the engine close the card on Ctrl-C (vLLM kills it at once otherwise) |
+| `--reasoning-parser`, `--tool-call-parser` | vLLM's parsers for the model's reply format: the reasoning comes apart from the answer, also when streamed (that needs both) |
+| `worker_l1_size`, `trace_region_size` | the device options `tt/device.py` opens the card with for the demo; the plugin opens the card here |
+| `sample_on_device_mode` | the adapter returns the token: the on-device argmax for a greedy request, its own draw from the logits (temperature, top-k, top-p, seed) for a sampled one. Without it vLLM's host sampler does all sampling, and sorts the 200K vocabulary for every token of a request with top-k or top-p (about 13 ms a token) |
+
+`"optimizations": "performance"` in the same tt config picks fast mode; `$INKLING_MODE`, `$INKLING_CACHE` and
+`$INKLING_CACHE_DIR` work as in the demo.
+
+- The prompt is fed by the traced decode step token by token (the chunked prefill needs the other cache): time
+  to the first token is about the prompt length divided by the decode speed. A request that continues the
+  conversation on the card feeds only its new tokens; vLLM's own prefix cache and chunked prefill are off.
+- Requests with penalties, logprobs, `min_p`, `logit_bias` or structured output are sampled by vLLM's host
+  sampler (the plugin routes them there).
+- Greedy output equals the demo's tokens (golden prompt 0, 64 tokens).
+
+Measured on one p100a, default mode, `--max-model-len 196608`, at 4K positions:
+
+| | vLLM | demo |
+|---|---:|---:|
+| greedy, tok/s (300 tokens, streamed) | 64.7 | 66.2 with a token read per step, 68.8 without |
+| sampled, tok/s (temperature 0.8, top-k 40, top-p 0.95) | 60 | |
+| time to first token, 25-token prompt | 0.37 s | |
+| time to first token, 8,424-token prompt | 126.5 s (66.6 tok/s) | |
+| start to `/health` 200 | 39 s (weights in the page cache) | |
+
 ## Run the tests
 
 ```
