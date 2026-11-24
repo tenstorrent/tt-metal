@@ -5,7 +5,8 @@
 """FLUX 3 Klein data parallel across processes: one Flux3KleinPipeline per group of a Blackhole Galaxy, (4, 2) by
 default (DP4), a 16-chip (2, 8) / (4, 4) group (DP2) or a (2, 2) group (DP8). Each process sees only its chips (TT_VISIBLE_DEVICES), opens
 them as one mesh (TT_MESH_GRAPH_DESC_PATH) and serves one group (GROUP_PCIE_IDS, the default) or two (4, 2) groups in
-two threads (HALF_PCIE_IDS), so the groups' host dispatch does not share one Python GIL."""
+two threads (HALF_PCIE_IDS), so the groups' host dispatch does not share one Python GIL. With `depth` > 1 a group holds that
+many requests and prepares the next while one runs (Flux3KleinPipeline.serve)."""
 
 from __future__ import annotations
 
@@ -14,6 +15,7 @@ import multiprocessing
 import os
 import queue
 import threading
+from collections import deque
 from collections.abc import Iterable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
@@ -88,14 +90,21 @@ def _send_error(conns, e: Exception) -> None:
             pass
 
 
-def _answer(conn, pipeline) -> None:
+def _answer(conn, pipeline, depth: int = 1) -> None:
+    def emit(answer) -> None:
+        conn.send(("error", f"{type(answer).__name__}: {answer}") if isinstance(answer, Exception) else ("ok", answer))
+
     try:
         conn.send(("ready", None))
+        if depth > 1:
+            pipeline.serve(conn.recv, emit)
+            return
         while (request := conn.recv()) is not None:
             try:
-                conn.send(("ok", pipeline.generate(request)))
+                answer = pipeline.generate(request)
             except Exception as e:  # noqa: BLE001
-                conn.send(("error", f"{type(e).__name__}: {e}"))
+                answer = e
+            emit(answer)
     finally:
         conn.close()  # a loop that dies (a request that does not unpickle) fails the parent's request instead of hanging it
 
@@ -144,6 +153,7 @@ def serve(
     pipeline_kwargs: Mapping,
     warmup: bool | Sequence[int],
     group_shape: tuple[int, int] = GROUP_SHAPE,
+    depth: int = 1,
 ) -> None:
     """A process: one pipeline per group (`conns`, one per group), each warmed (every served shape, or `warmup` sizes);
     then each group answers its requests in its own thread until it gets None."""
@@ -161,7 +171,7 @@ def serve(
                 pipeline.warmup()
             elif warmup:
                 pipeline.warmup(tuple(warmup))
-        threads = [threading.Thread(target=_answer, args=pair) for pair in zip(conns, pipelines)]
+        threads = [threading.Thread(target=_answer, args=(*pair, depth)) for pair in zip(conns, pipelines)]
         for thread in threads:
             thread.start()
         for thread in threads:
@@ -182,8 +192,11 @@ class Flux3KleinProcessGroups:
 
     DP2, one 16-chip group per process: Flux3KleinProcessGroups(sets, group_shape=(2, 8)), or (4, 4) on HALF_PCIE_IDS.
 
-    A group whose process dies fails the request it holds and is dropped (logged, `alive_groups` shrinks); once none
-    is left, every request fails. A hung device hangs its request, as in one process."""
+    A group whose process dies fails the requests it holds and is dropped (logged, `alive_groups` shrinks); once none
+    is left, every request fails. A hung device hangs its request, as in one process.
+
+    `depth` > 1: each group holds up to that many requests and answers them in order, preparing the next while one runs
+    (throughput; a queued request waits for the one ahead of it)."""
 
     def __init__(
         self,
@@ -191,6 +204,7 @@ class Flux3KleinProcessGroups:
         *,
         group_shape: tuple[int, int] = GROUP_SHAPE,
         warmup: bool | Sequence[int] = True,
+        depth: int = 1,
         **pipeline_kwargs,
     ) -> None:
         processes = [tuple(p) for p in processes]
@@ -210,7 +224,7 @@ class Flux3KleinProcessGroups:
                 pipes = [context.Pipe() for _ in range(process_groups(pcie_ids, group_shape))]
                 children = [child for _, child in pipes]
                 process = context.Process(
-                    target=serve, args=(children, pipeline_kwargs, warmup, tuple(group_shape)), daemon=True
+                    target=serve, args=(children, pipeline_kwargs, warmup, tuple(group_shape), depth), daemon=True
                 )
                 saved = {key: os.environ.get(key) for key in env}
                 os.environ.update(env)  # a spawned child starts with the parent's environment
@@ -233,10 +247,17 @@ class Flux3KleinProcessGroups:
             self.close()
             raise
         self._alive = len(self._conns)
+        self._dead, self._closing = set(), False
+        self._waiting = {conn: deque() for conn in self._conns}
+        self._send_locks = {conn: threading.Lock() for conn in self._conns}
         self._free = queue.SimpleQueue()
-        for conn in self._conns:
-            self._free.put(conn)
-        self._pool = ThreadPoolExecutor(max_workers=len(self._conns), thread_name_prefix="flux3_klein_group")
+        for _ in range(depth):
+            for conn in self._conns:
+                self._free.put(conn)
+        self._readers = [threading.Thread(target=self._read, args=(conn,), daemon=True) for conn in self._conns]
+        for reader in self._readers:
+            reader.start()
+        self._pool = ThreadPoolExecutor(max_workers=len(self._conns) * depth, thread_name_prefix="flux3_klein_group")
 
     @property
     def alive_groups(self) -> int:
@@ -257,35 +278,61 @@ class Flux3KleinProcessGroups:
             raise RuntimeError(f"group process {self._names[conn]}: {payload}")
         return payload
 
+    def _read(self, conn) -> None:
+        """Answers this group's requests in the order they were sent."""
+        while True:
+            try:
+                status, payload = conn.recv()
+            except (EOFError, OSError) as e:
+                if not self._closing:
+                    self._drop(conn, RuntimeError(f"group process {self._names[conn]} died ({type(e).__name__})"))
+                return
+            future = self._waiting[conn].popleft()
+            if status == "error":
+                future.set_exception(RuntimeError(f"group process {self._names[conn]}: {payload}"))
+            else:
+                future.set_result(payload)
+
     def _run(self, request):
         conn = self._free.get()
         if conn is None:
             self._free.put(None)
             raise RuntimeError("no group process is alive")
+        if conn in self._dead:
+            return self._run(request)  # a dropped group's slot
+        future = Future()
+        with self._send_locks[conn]:
+            self._waiting[conn].append(future)
+            try:
+                conn.send(request)
+                delivered = True
+            except OSError:
+                self._waiting[conn].pop()
+                delivered = False
+            except BaseException:
+                self._waiting[conn].pop()
+                self._free.put(conn)  # the request did not pickle; nothing was written, the group is intact
+                raise
+        if not delivered:
+            self._drop(conn, RuntimeError(f"group process {self._names[conn]} died"))
+            return self._run(request)  # nothing was delivered: another group takes the request
         try:
-            conn.send(request)
-        except OSError:
-            self._drop(conn)  # nothing was delivered: another group takes the request
-            return self._run(request)
-        except BaseException:
-            self._free.put(conn)  # the request did not pickle; nothing was written, the group is intact
-            raise
-        try:
-            result = self._receive(conn)
-        except RuntimeError as e:
-            if isinstance(e.__cause__, (EOFError, OSError)):
-                self._drop(conn)
-            else:
+            return future.result()
+        finally:
+            if conn not in self._dead:
                 self._free.put(conn)
-            raise
-        self._free.put(conn)
-        return result
 
-    def _drop(self, conn) -> None:
+    def _drop(self, conn, error: Exception) -> None:
         with self._lock:
+            if conn in self._dead:
+                return
+            self._dead.add(conn)
             self._alive -= 1
             alive = self._alive
         logger.error(f"FLUX 3 Klein group process {self._names[conn]} died; {alive} group(s) left")
+        with self._send_locks[conn]:
+            while self._waiting[conn]:
+                self._waiting[conn].popleft().set_exception(error)
         if not alive:
             self._free.put(None)
 
@@ -294,6 +341,7 @@ class Flux3KleinProcessGroups:
         None, so its mesh is closed."""
         if hasattr(self, "_pool"):
             self._pool.shutdown()
+        self._closing = True
         for conn in self._conns:
             try:
                 conn.send(None)
