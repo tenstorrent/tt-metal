@@ -214,7 +214,6 @@ def pair_test(
                 "rounds": len(rounds),
                 "failed": failed,
                 "not_reached": missed,
-                "cap_s": cap_s,
                 "link_ends": [e for f in failed for e in f["ends"]],
                 "dir": str(d),
             },

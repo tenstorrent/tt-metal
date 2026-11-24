@@ -810,7 +810,6 @@ class TestLinks(unittest.TestCase):
         failed, c, _ = self._pair_test(lambda t: 0, cap_s=0)
         self.assertFalse(failed)
         self.assertEqual((c.status, len(c.data["not_reached"])), (SKIP, sum(len(r) for r in rounds)))
-        self.assertEqual(c.data["cap_s"], 0)
         self.assertIn("not reached in the 0 s cap", c.details)
         failed, c, _ = self._pair_test(lambda t: 0)  # no cap: every round runs
         self.assertEqual((failed, c.status, c.data["not_reached"]), (False, PASS, []))
