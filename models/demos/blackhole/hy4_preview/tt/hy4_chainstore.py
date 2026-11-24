@@ -259,6 +259,13 @@ class ChainStore:
             f"chainstore xfer: {kind} host row {row} {nb / 1e9:.2f} GB in {ev['ms']:.0f} ms = {ev['gbps']:.2f} GB/s row-aggregate, {nsl} slice(s), max single stall {ev['max_stall_ms']:.0f} ms (all rows' decode frozen for each slice; the yield between slices runs decode rounds)"
         )
         self.stats["host_xfer_bytes"] += nb
+        try:
+            rss = int([ln for ln in open("/proc/self/status") if ln.startswith("VmRSS:")][0].split()[1]) / 1e6
+            self.log(
+                f"chainstore xfer: process RSS {rss:.1f} GB, host MemAvailable {(self.mem_available() or 0) / 1e9:.0f} GB, host payload {self.host_tokens() * BYTES_PER_TOKEN / 1e9:.1f} GB (tokens {self.host_tokens()})"
+            )
+        except (OSError, IndexError, ValueError):
+            pass
         return ev
 
     def _yield(self, kind, i, n, nbytes):
@@ -395,7 +402,8 @@ class ChainStore:
         self.log(f"chainstore: evict {v} for a {incoming_tokens}-token chain")
         if tier == "tail" and self.host_on() and len(v.tokens) <= self.host_cap:
             try:  # the victim's pages are still intact: read them to host (best effort)
-                self._room_host(len(v.tokens))
+                if not self._room_host(len(v.tokens)):
+                    raise RuntimeError("no host memory")
                 payload = self._spill(v.row, v.page0, v.npages, "evict-cascade")
                 ne = Entry(self._next(), v.tokens, "host", payload=payload, t=v.t)
                 self.entries[ne.eid] = ne
@@ -405,11 +413,34 @@ class ChainStore:
                 self.log(f"chainstore: cascade to host FAILED ({type(ex).__name__}: {str(ex)[:100]}): dropped")
         return True
 
+    @staticmethod
+    def mem_available():
+        """MemAvailable of the host in bytes (None if unreadable)"""
+        try:
+            for ln in open("/proc/meminfo"):
+                if ln.startswith("MemAvailable:"):
+                    return int(ln.split()[1]) * 1024
+        except (OSError, ValueError):
+            pass
+        return None
+
+    def host_mem_need(self, tokens):
+        """host RAM a spill of ``tokens`` must find free: payload x HY4_HOSTTIER_MEM_FACTOR (transient copies while reading) + HY4_HOSTTIER_RESERVE_GB. hy4fix: port2 EngineCore was OOM-killed by the kernel (anon-rss 549 GB of 566 GB) at 03:03:59Z."""
+        f = float(os.environ.get("HY4_HOSTTIER_MEM_FACTOR", "2"))
+        rs = float(os.environ.get("HY4_HOSTTIER_RESERVE_GB", "96")) * 1e9
+        return tokens * BYTES_PER_TOKEN * f + rs
+
     def _room_host(self, tokens):
-        while self.host_tokens() + tokens > self.host_cap:
+        """make room for ``tokens`` in the host tier (cap, then real free host memory); False = no room even after evicting every host entry (caller skips the host candidate cleanly)"""
+        while True:
             vs = [e for e in self.entries.values() if e.tier == "host"]
+            over_cap = self.host_tokens() + tokens > self.host_cap
+            ma = self.mem_available()
+            short = ma is not None and ma < self.host_mem_need(tokens)
+            if not (over_cap or short):
+                return True
             if not vs:
-                break
+                return not over_cap and not short
             v = min(vs, key=lambda e: (len(e.tokens), e.t))
             self.entries.pop(v.eid)
             self.stats["evicted_host"] += 1
@@ -456,7 +487,12 @@ class ChainStore:
                     self.be.copy_pages(src_row, 0, r, p0, n)
                     e = Entry(self._next(), chain, "tail", row=r, page0=p0, t=self.clock())
                 else:
-                    self._room_host(len(chain))
+                    if not self._room_host(len(chain)):
+                        self.stats["skipped_headroom"] += 1
+                        self.log(
+                            f"chainstore: host candidate skipped, host memory ({(self.mem_available() or 0) / 1e9:.0f} GB available, need {self.host_mem_need(len(chain)) / 1e9:.0f} GB): next candidate"
+                        )
+                        continue
                     payload = self._spill(src_row, 0, n, "spill")
                     e = Entry(self._next(), chain, "host", payload=payload, t=self.clock())
             except Exception as ex_:  # noqa: BLE001

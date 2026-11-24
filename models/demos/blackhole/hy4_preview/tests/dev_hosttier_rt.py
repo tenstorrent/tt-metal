@@ -13,6 +13,10 @@ from models.demos.blackhole.hy4_preview.tt import hy4_xrow as X
 from models.demos.blackhole.hy4_preview.tt.hy4_chain_backend import DeviceBackend
 
 
+def rss():
+    return int([ln for ln in open("/proc/self/status") if ln.startswith("VmRSS:")][0].split()[1]) / 1e6
+
+
 def res(**kw):
     print("RES " + json.dumps(kw), flush=True)
 
@@ -79,6 +83,8 @@ def main():
         print("HEADROOM", be.can_copy(2, 1, 140), getattr(be, "last_headroom", None), flush=True)
         before = snap()
         t0 = time.perf_counter()
+        r0 = rss()
+        host_bytes = 0
         G = be.tensor_groups(n, float(os.environ.get("HT_SLICE_MB", "64")))
         payload, sl_ms = [], []
         for g in range(max(G, 1)):
@@ -86,10 +92,28 @@ def main():
             payload += be.to_host(src, p0s, n, (g, G)) if G else be.to_host(src, p0s, n)
             sl_ms.append(round((time.perf_counter() - t1) * 1e3))
         d2h = time.perf_counter() - t0
+        host_bytes = sum(b.numel() * 4 for *_, b in payload)
+        print(
+            "RSS_GB before",
+            round(r0, 2),
+            "after spill",
+            round(rss(), 2),
+            "payload dtype",
+            payload[0][3].dtype,
+            "payload GB (numel*itemsize)",
+            round(sum(b.numel() * b.element_size() for *_, b in payload) / 1e9, 2),
+            flush=True,
+        )
         print("SLICES", G, "ms per slice max", max(sl_ms), "median", sorted(sl_ms)[len(sl_ms) // 2], flush=True)
         t0 = time.perf_counter()
         be.from_host(payload, dst, p0d, n)
         h2d = time.perf_counter() - t0
+        print("RSS_GB after restore", round(rss(), 2), flush=True)
+        payload = None
+        import gc
+
+        gc.collect()
+        print("RSS_GB after payload freed", round(rss(), 2), flush=True)
         after = snap()
         nbytes = n * 3_750_912 * NL / 79  # rough: only NL kv layers here
         bad = []
@@ -120,7 +144,6 @@ def main():
                         for c_ in range(cols):
                             if torch.equal(reg[:, c_], b[r_, :, c_, p0s * 64 : (p0s + 1) * 64]):
                                 print("DST col", c_, "page0 == src row", r_, "col", c_, flush=True)
-        host_bytes = sum(blk.numel() * 4 for _, _, _, blk in payload)
         res(
             ok=not bad,
             bad=bad,
