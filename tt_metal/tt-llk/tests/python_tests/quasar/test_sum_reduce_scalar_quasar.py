@@ -30,12 +30,16 @@ from helpers.utils import tolerances
 FORMATS = [
     InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
     InputOutputFormat(DataFormat.Float16_b, DataFormat.Float32),
+    # Float16 keeps its 10 bit mantissa in SrcA, so its HiFi pools run more than one phase
+    InputOutputFormat(DataFormat.Float16, DataFormat.Float16),
+    InputOutputFormat(DataFormat.Float16, DataFormat.Float32),
 ]
 
 # Each shape puts its faces in DEST differently. Tiles of 1, 2 and 4 rows need a one row MOVD2A
 # that ttsim does not support yet, so the Metal SumReduceScalarBlazeShape test covers them.
 ALL_TILE_DIMENSIONS = [[32, 32], [16, 32], [16, 16], [8, 32]]
 FP32_DEST_TILE_DIMENSIONS = [[32, 32], [16, 32], [8, 32]]
+FLOAT16_TILE_DIMENSIONS = [[32, 32], [8, 32]]
 
 # Poison tiles after the input catch a read past the last tile
 POISON_TILES = 2
@@ -43,21 +47,11 @@ POISON_VALUE = 100.0
 
 
 def _tile_dimensions_for_format(formats):
+    if formats.input_format == DataFormat.Float16:
+        return FLOAT16_TILE_DIMENSIONS
     if dest_acc_for(formats.output_format) == DestAccumulation.Yes:
         return FP32_DEST_TILE_DIMENSIONS
     return ALL_TILE_DIMENSIONS
-
-
-def _math_fidelities(formats):
-    # With 32-bit DEST the pools read Tf32, so the HiFi phases do real work
-    if dest_acc_for(formats.output_format) == DestAccumulation.Yes:
-        return [
-            MathFidelity.LoFi,
-            MathFidelity.HiFi2,
-            MathFidelity.HiFi3,
-            MathFidelity.HiFi4,
-        ]
-    return get_valid_math_fidelities(formats)
 
 
 def _num_tiles_for_format(formats):
@@ -72,7 +66,7 @@ def _num_tiles_for_format(formats):
 @pytest.mark.quasar
 @parametrize(
     formats=FORMATS,
-    math_fidelity=_math_fidelities,
+    math_fidelity=lambda formats: get_valid_math_fidelities(formats),
     num_tiles=_num_tiles_for_format,
     tile_dimensions=_tile_dimensions_for_format,
     run_types=[[PerfRunType.L1_TO_L1]],

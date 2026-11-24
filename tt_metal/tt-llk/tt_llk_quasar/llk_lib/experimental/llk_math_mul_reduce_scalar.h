@@ -50,24 +50,23 @@ inline void mul_reduce_scalar_pool_(const std::uint32_t num_phases, const std::u
 /**
  * @brief Initialize the reduce tail of mul_reduce_scalar.
  *
- * The pools read operands moved out of DEST, so the fidelity follows the DEST format.
+ * SrcA and SrcB keep the unpacker's format, because MOVD2A moves only the top 16 bits of a 32-bit
+ * DEST datum. The fidelity follows that format.
  *
- * @tparam EN_32BIT_DEST: Set when DEST holds 32-bit datums.
  * @tparam MATH_FIDELITY_TYPE: Requested fidelity for both pool stages.
  * @param src_format: Unpacked source format of the reduced operand.
  * @param tensor_shape: Shape of the reduced tiles.
  * @note On the unpack thread, pair with @ref _llk_unpack_mul_reduce_scalar_switch_to_reduce_ (T0).
  * @note Call after the multiply or copy init, whose DEST tile stride the tail reuses.
  */
-template <bool EN_32BIT_DEST, ckernel::MathFidelity MATH_FIDELITY_TYPE>
+template <ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_mul_reduce_scalar_init_(const DataFormat src_format, const ckernel::TensorShape& tensor_shape)
 {
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     // Keep the DEST tile stride from the multiply or copy init. They differ for small tiles.
     mul_reduce_scalar_shape = tensor_shape;
 
-    const DataFormat dest_src = dest_src_format<EN_32BIT_DEST>(src_format);
-    const auto fidelity       = math_fidelity_schedule<MATH_FIDELITY_TYPE>(dest_src, dest_src);
+    const auto fidelity = math_fidelity_schedule<MATH_FIDELITY_TYPE>(src_format, src_format);
 
     mul_reduce_scalar_phases.column = fidelity.phase_count;
     mul_reduce_scalar_phases.final  = fidelity.phase_count;

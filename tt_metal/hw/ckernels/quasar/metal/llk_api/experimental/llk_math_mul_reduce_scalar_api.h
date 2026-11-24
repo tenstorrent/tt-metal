@@ -44,7 +44,7 @@ template <bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool enforce_fp3
 inline void llk_math_mul_reduce_scalar_reduce_init(const std::uint32_t operand) {
     static_assert(!enforce_fp32_accumulation || is_fp32_dest_acc_en, "FP32 Dest must be enabled for FP32 accumulation");
     const std::uint32_t operand_id = get_operand_id(operand);
-    _llk_math_mul_reduce_scalar_init_<is_fp32_dest_acc_en, math_fidelity>(
+    _llk_math_mul_reduce_scalar_init_<math_fidelity>(
         static_cast<DataFormat>(get_operand_dst_format(operand_id)), get_operand_tensor_shape(operand_id));
 }
 

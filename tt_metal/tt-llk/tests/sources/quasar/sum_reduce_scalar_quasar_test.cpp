@@ -116,7 +116,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 _llk_math_eltwise_unary_datacopy_(tile);
             }
 
-            _llk_math_mul_reduce_scalar_init_<is_fp32_dest_acc_en, MATH_FIDELITY>(math_format, tensor_shape);
+            _llk_math_mul_reduce_scalar_init_<MATH_FIDELITY>(static_cast<DataFormat>(formats.unpack_A_dst), tensor_shape);
             _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(0);
             // Load the scaler into SrcB through DEST tile 0, then zero that tile for the sums.
             _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_fill_<2 /*ITERATIONS*/>, 0 /*dst_index*/, VectorMode::RC_custom, scaler);
