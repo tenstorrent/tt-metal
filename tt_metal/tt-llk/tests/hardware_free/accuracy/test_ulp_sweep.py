@@ -4,6 +4,7 @@
 """Host-side guards for ``helpers/ulp_sweep.py``: which lanes the sweep ranks, the
 lists it draws, and the emitter that folds a sweep back into a typed table."""
 
+import json
 import math
 from dataclasses import replace
 from itertools import product
@@ -277,6 +278,15 @@ def test_xdist_workers_measurements_merge_worst_lane_first():
     merge_measured(worker_b)  # the same reading again, as two workers can send it
     merge_measured(None)  # a worker that recorded nothing
     assert MEASURED == {GELU: {_CELL: 9, other: 2, floored: Floored(_WORST, *_FLOOR)}}
+
+
+def test_the_xdist_handoff_is_json_text():
+    """What a worker hands over is data: JSON text in the table's plain form, which the
+    controller parses and cannot be made to execute."""
+    record(GELU, _CELL, 5)
+    blob = export_measured()
+    assert isinstance(blob, str)
+    assert [entry[:1] + entry[3:] for entry in json.loads(blob)] == [["Gelu", 5, []]]
 
 
 @pytest.mark.parametrize(
