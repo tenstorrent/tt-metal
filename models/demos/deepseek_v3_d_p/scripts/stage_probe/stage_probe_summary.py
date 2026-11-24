@@ -99,7 +99,6 @@ def read_run(run_dir: Path) -> dict:
         "passes": passes,
         "first_layer": int(cmd_text.split()[2]),
         "chunks": chunks,
-        "extra_acks": len(chunks[0]["acks"]) - len(passes),
         "sha": re.search(r"sha=(\w+)", cmd_text).group(1),
         "start": re.search(r"start=(\S+)", cmd_text).group(1),
         "power": power.group(1) if power else "not recorded (run predates the launcher's tt-smi read)",
