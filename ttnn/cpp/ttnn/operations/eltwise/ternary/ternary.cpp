@@ -7,6 +7,7 @@
 #include <utility>
 #include <variant>
 #include <cstdint>
+#include <mutex>
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
@@ -430,21 +431,28 @@ Tensor addcdiv(
 }
 
 namespace {
-// The composite fallback has no fast_interpolate kernel; it ignores the flag with a warning.
+// The composite fallback has no fast_interpolate kernel; it ignores the flag with a one-time warning.
 void warn_lerp_fast_interpolate_fallback(const bool fast_interpolate) {
     if (fast_interpolate) {
-        log_warning(
-            tt::LogOp,
-            "lerp: fast_interpolate is not supported by the composite fallback (INT32, invalid broadcast, or block "
-            "float with a sub-tile broadcast); ignored, using the default computation");
+        static std::once_flag flag;
+        std::call_once(flag, [] {
+            log_warning(
+                tt::LogOp,
+                "lerp: fast_interpolate is not supported by the composite fallback (INT32, invalid broadcast, or "
+                "block float with a sub-tile broadcast); ignored, using the default computation");
+        });
     }
 }
 
-// fast_interpolate has a kernel on Blackhole only; elsewhere it is ignored with a warning.
+// fast_interpolate has a kernel on Blackhole only; elsewhere it is ignored with a one-time warning.
 bool resolve_lerp_fast_interpolate(const Tensor& input, const bool fast_interpolate) {
     if (fast_interpolate && input.device()->arch() != tt::ARCH::BLACKHOLE) {
-        log_warning(
-            tt::LogOp, "lerp: fast_interpolate is implemented on Blackhole only; ignored, using the default kernel");
+        static std::once_flag flag;
+        std::call_once(flag, [] {
+            log_warning(
+                tt::LogOp,
+                "lerp: fast_interpolate is implemented on Blackhole only; ignored, using the default kernel");
+        });
         return false;
     }
     return fast_interpolate;
