@@ -41,12 +41,22 @@ KERNEL_DIR = Path(__file__).parent / "kernels"
 BLOCK_HEADS = 1  # heads per compute block: a head shares no operand with another head (op_design.md, Axes)
 WEIGHT_BLOCK_BYTES = 256 * 1024  # bytes of one weight block (Kt x block_n tiles) -> block_n
 WEIGHT_DEPTH = 2  # weight blocks in cb_weight
+# Weight blocks of a slot read before its landing wait (capped at the cb_weight depth); the rest are read after it.
+# 1 = only the first n-block before the landing (Refinements 0-4).
+WEIGHT_PREFETCH_BLOCKS = 1
+# Paced weight reads (Refinement 5): a core's first weight read starts WEIGHT_PACE_CYCLES x its head's estimated landing
+# share (0 for local heads) after the program starts, so the cores' weight bursts are spread over the exchange instead
+# of all hitting DRAM / NoC1 in its first ~25 us. 0 = off (every core starts at once).
+WEIGHT_PACE_CYCLES = 0
 # Weight bytes in flight per compute core (one read barrier per chunk). OVERLAP (Refinement 3): the whole 128 KiB block
 # in flight on 96 cores stretched the fabric exchange from 49 to 69 us on Kimi; harness, Kimi model case, fastest chip:
 # whole block 80.8, 64 KiB 76.4, 32 KiB 64.1, 16 KiB 64.2, 8 KiB 64.3, 2 KiB 63.6 us. 16 KiB sits mid-plateau whether
 # the limit is bytes or reads in flight (bf16: 8 tiles, bfp8: 15 tiles). >= the block size disables the throttle.
 WEIGHT_READ_CHUNK_BYTES = 16 * 1024
 OUT_DEPTH = 2  # output row groups in cb_out
+# Output bytes in flight per compute core (writer twin of WEIGHT_READ_CHUNK_BYTES, Refinement 5): one write barrier per
+# chunk instead of one flush per row group. 0 = off (flush per row group).
+OUT_WRITE_CHUNK_BYTES = 0
 # Packets per DRAM-read barrier / per sender flush on the port cores = PORT_BATCH_BYTES // packet bytes (cb_port_chunks
 # holds two batches). Phase 0: 8 beat 4 packets at 7232 B. Refinement 4 (grouped send order, Kimi model case,
 # exchange-alone / whole op fastest chip): 8 packets 47.3 / 56.2, 12 packets 46.2 / 55.0-55.6 us. In bytes so the
@@ -86,6 +96,9 @@ TAIL_SPLIT_MAX_HEADS = 8
 # Landing-order estimate for the tail split: "share" = (index + 1) / entries of the source port (ports carry different
 # entry counts, 12 or 24 at Kimi, and all finish together), "index" = raw index in the port's send list (Refinement 3).
 TAIL_SPLIT_ESTIMATE = "share"
+# Helper choice for a split head: "pool" = idle cores first, then local-only cores (Refinement 3); "nearest" = the free
+# helper closest to the primary core (shortest forward path).
+TAIL_SPLIT_HELPER_PICK = "pool"
 A_SLOT_BUDGET_BYTES = 384 * 1024  # predicate A_RESIDENT (regime R1; else R3, deferred)
 MAX_HEADS_PER_CORE = 8  # global arrival semaphores per compute core
 MAX_PACKET_HEADERS = 12  # packet header pool per data-movement RISC
@@ -446,6 +459,13 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
     batch_chunks = int(_xp.get("batch", max(1, PORT_BATCH_BYTES // packet_bytes)))
     tail_max = int(_xp["tail"]) if "tail" in _xp else TAIL_SPLIT_MAX_HEADS
     tail_est = _xp.get("est", TAIL_SPLIT_ESTIMATE)
+    tail_pick = _xp.get("pick", TAIL_SPLIT_HELPER_PICK)
+    rd_noc, wr_noc = COMPUTE_READER_NOC, (
+        COMPUTE_WRITER_NOC_L1_OUT if memory_config.buffer_type == ttnn.BufferType.L1 else COMPUTE_WRITER_NOC
+    )
+    if _xp.get("cnoc") == "swap":  # measurement hook: the two compute data-movement RISCs exchange NoCs
+        rd_noc, wr_noc = wr_noc, rd_noc
+    assert rd_noc != wr_noc, "compute reader and writer share the NoC's transaction counters on one NoC"
 
     def _dest_key(p, t, G_):
         hops = min((t - p) % G_, (p - t) % G_)
@@ -485,12 +505,22 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
             for s, h in enumerate(slot_order(q, hs)):
                 slot_of[(q, h)] = s
 
+    # ---- estimated landing of every remote head: the share of its source port's entries sent up to and including
+    #      it (ports finish together), in (0, 1]; local heads land at 0 ----
+    def landing_share(coord, h):
+        ch = chips[coord]
+        q, grp = ch["p"], ch["grp"]
+        if h // Hl == q:
+            return 0.0
+        j, src = h % Hl, grp[h // Hl]
+        port_sends = sends[(src, chips[src]["route"][q], j % L)]
+        return (port_sends.index((j, q)) + 1) / len(port_sends)
+
     # ---- tail split plan (per chip): late-landing remote head -> helper core ----
     def tail_plan(coord):
         ch = chips[coord]
         q, grp = ch["p"], ch["grp"]
-        # (estimated landing: the share of its source port's entries sent up to and including this one, or the raw
-        #  index ("index"), slots of its core, h)
+        # (estimated landing: the share, or the raw index in its source port's list ("index"), slots of its core, h)
         est = []
         for xy, hs in assign:
             for h in hs:
@@ -500,7 +530,7 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
                 j, src = h % Hl, grp[h // Hl]
                 port_sends = sends[(src, chips[src]["route"][q], j % L)]
                 idx = port_sends.index((j, q))
-                est.append(((idx if tail_est == "index" else (idx + 1) / len(port_sends)), len(hs), h))
+                est.append(((idx if tail_est == "index" else landing_share(coord, h)), len(hs), h))
         est.sort(reverse=True)
         idle = [xy for xy in compute_cells_list if xy not in heads_of]
         # a local-head helper gets one slot more than its heads: only where that still fits A_RESIDENT and the counters
@@ -510,7 +540,16 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
         )
         helpers = idle + local_only
         n = len(helpers) if tail_max is None else min(len(helpers), tail_max)
-        return {h: helpers[i] for i, (_, _, h) in enumerate(est[:n])}
+        if tail_pick == "pool":
+            return {h: helpers[i] for i, (_, _, h) in enumerate(est[:n])}
+        # "nearest": latest-landing head first, each to the free helper with the shortest forward path
+        free, plan = list(helpers), {}
+        for _, _, h in est[:n]:
+            px, py = core_of[h]
+            hx = min(free, key=lambda c: (abs(c[0] - px) + abs(c[1] - py), helpers.index(c)))
+            free.remove(hx)
+            plan[h] = hx
+        return plan
 
     split_of = {coord: tail_plan(coord) for coord in chips}  # {coord: {h: helper xy}}
     tail_split = any(split_of.values())
@@ -523,6 +562,9 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
             sbh, sbw = _subblock(block_m, block_n, bool(compute_kernel_config.fp32_dest_acc_en))
     if not tail_split:
         split_of = {coord: {} for coord in chips}
+    if "sb" in _xp:  # measurement hook: out_subblock_h x out_subblock_w ("hxw"), must tile the block
+        sbh, sbw = (int(v) for v in _xp["sb"].split("x"))
+        assert block_m % sbh == 0 and block_n % sbw == 0
     nb_split = num_n_blocks // 2  # the primary keeps n-blocks [0, nb_split), the helper [nb_split, num_n_blocks)
 
     # slots per (coord, core): [(h, wait, nb0, nb1, helper xy or None)]
@@ -548,7 +590,11 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
     # cb_weight depth: WEIGHT_DEPTH is the knob, but a core never holds more weight blocks than it processes per call
     # (Kimi: 1 head x 1 n-block -> one 128 KiB block; a second buffer would never be live).
     weight_depth = min(WEIGHT_DEPTH, max(sum(e[3] - e[2] for e in v) for v in slots.values()))
-    weight_chunk_tiles = max(1, WEIGHT_READ_CHUNK_BYTES // w_tile)
+    weight_chunk_tiles = max(1, int(_xp.get("wchunk", WEIGHT_READ_CHUNK_BYTES)) // w_tile)
+    w_prefetch = max(1, min(weight_depth, int(_xp.get("wpre", WEIGHT_PREFETCH_BLOCKS))))
+    w_pace = int(_xp.get("wpace", WEIGHT_PACE_CYCLES))
+    out_chunk_bytes = int(_xp.get("ochunk", OUT_WRITE_CHUNK_BYTES))
+    out_chunk_tiles = out_chunk_bytes // in_tile if out_chunk_bytes else 0
     cap_tiles = slots_per_core_max * slot_tiles
     if cap_tiles * in_tile > A_SLOT_BUDGET_BYTES:
         raise RuntimeError(
@@ -612,6 +658,11 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
             batch_chunks,
             tail_max,
             tail_est,
+            weight_chunk_tiles,
+            out_chunk_tiles,
+            w_prefetch,
+            w_pace,
+            tuple(sorted(_xp.items())),
             block_n,
             sbh,
             sbw,
@@ -676,7 +727,9 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
                 if hx is not None:
                     hv, hs_ = virt(hx), helper_slot[(coord, h)]
                     fwd = [1, hv.x, hv.y, landing_addr + hs_ * slot_bytes, arrival_addrs[hs_]]
-                rd += [h | (int(wait) << 16), nbw] + fwd
+                # paced weight start of a core's first slot (later slots follow the previous one's work)
+                pace = int(w_pace * landing_share(coord, h)) if (not rd and nb0 == 0) else 0
+                rd += [h | (int(wait) << 16), nbw] + fwd + [pace]
                 cp += [nbw]
                 wr += [h, nbw]
             n = len(cp)
@@ -684,10 +737,10 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
             compute_rt[xy[0]][xy[1]] = [n] + cp
             writer_rt[xy[0]][xy[1]] = [n] + wr
         reader_ct = [CB_A_LANDED, CB_WEIGHT, Kt, Nt, block_n, num_n_blocks, B, Mq_t, St, Hl, in_tile, w_tile]
-        reader_ct += [Mq, CB_RETILE_STAGE, weight_chunk_tiles]
+        reader_ct += [Mq, CB_RETILE_STAGE, weight_chunk_tiles, w_prefetch]
         reader_ct += in_ct + w_ct
         compute_ct = [CB_A_LANDED, CB_WEIGHT, CB_OUT, block_m, Kt, block_n, num_n_blocks, sbh, sbw]
-        writer_ct = [CB_OUT, in_tile, block_m, Mq_t, Nt, block_n, num_n_blocks, sbh, H] + out_ct
+        writer_ct = [CB_OUT, in_tile, block_m, Mq_t, Nt, block_n, num_n_blocks, sbh, H, out_chunk_tiles] + out_ct
         kernels = [
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "all_to_all_matmul_reader.cpp"),
@@ -696,9 +749,7 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
                 compile_time_args=reader_ct,
                 runtime_args=reader_rt,
                 common_runtime_args=[in_addr, w_addr, q] + arrival_addrs,
-                config=ttnn.DataMovementConfigDescriptor(
-                    processor=ttnn.DataMovementProcessor.RISCV_1, noc=COMPUTE_READER_NOC
-                ),
+                config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_1, noc=rd_noc),
             ),
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "all_to_all_matmul_compute.cpp"),
@@ -717,11 +768,7 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
                 common_runtime_args=[out_addr],
                 config=ttnn.DataMovementConfigDescriptor(
                     processor=ttnn.DataMovementProcessor.RISCV_0,
-                    noc=(
-                        COMPUTE_WRITER_NOC_L1_OUT
-                        if memory_config.buffer_type == ttnn.BufferType.L1
-                        else COMPUTE_WRITER_NOC
-                    ),
+                    noc=wr_noc,
                 ),
             ),
         ]

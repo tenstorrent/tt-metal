@@ -29,13 +29,17 @@ void kernel_main() {
     [[maybe_unused]] constexpr uint32_t num_n_blocks = get_compile_time_arg_val(6);
     constexpr uint32_t out_subblock_h = get_compile_time_arg_val(7);
     constexpr uint32_t H = get_compile_time_arg_val(8);
-    constexpr auto out_args = TensorAccessorArgs<9>();
+    // Output tiles in flight per core (writer twin of the reader's weight_chunk_tiles): one write barrier per chunk.
+    // 0 = off: one flush per row group only.
+    constexpr uint32_t out_chunk_tiles = get_compile_time_arg_val(9);
+    constexpr auto out_args = TensorAccessorArgs<10>();
     constexpr uint32_t row_group_tiles = out_subblock_h * block_n;
     constexpr uint32_t num_row_groups = block_m / out_subblock_h;
 
     const uint32_t out_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t n_slots = get_arg_val<uint32_t>(0);
     const auto out = TensorAccessor(out_args, out_addr, tile_bytes);
+    [[maybe_unused]] uint32_t in_flight = 0;
 
     for (uint32_t s = 0; s < n_slots; ++s) {
         const uint32_t h = get_arg_val<uint32_t>(1 + 2 * s);
@@ -56,6 +60,12 @@ void kernel_main() {
 #ifndef ABLATE_NOWRITE
                         noc_async_write(rp + n * tile_bytes, out.get_noc_addr(page + n), tile_bytes);
 #endif
+                        if constexpr (out_chunk_tiles > 0) {
+                            if (++in_flight == out_chunk_tiles) {
+                                in_flight = 0;
+                                noc_async_write_barrier();
+                            }
+                        }
                         n = (n + 1 == block_n) ? 0 : n + 1;
                     }
                     rp += block_n * tile_bytes;

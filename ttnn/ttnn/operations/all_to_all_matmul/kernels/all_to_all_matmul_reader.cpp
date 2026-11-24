@@ -5,8 +5,9 @@
 //
 // Per head slot of this core, in slot order (local-source heads first, then remote heads by source-local index j, then
 // helper slots of the tail split):
-//   load_weight_block(slot, nb0) Kt x block_n weight tiles -> cb_weight (issued before the slot lands: the dominant
-//                                DRAM read fills the fabric wait), weight_chunk_tiles reads in flight at a time
+//   load_weight_block(slot, nb)  Kt x block_n weight tiles -> cb_weight for the first w_prefetch_blocks n-blocks
+//                                (issued before the slot lands: the dominant DRAM read fills the fabric wait),
+//                                weight_chunk_tiles reads in flight at a time
 //   land_block(slot)             cb_a_landed is backed on the persistent landing scratch (zero-copy): slot s sits at
 //                                base + s * slot_bytes, where the remote port writes it.
 //                                local head:  read the own quarter of the head's rows (all batches, all K) from DRAM
@@ -15,7 +16,7 @@
 //                                then push the slot (compute retains it across the head's n-blocks)
 //   forward (tail split)         a late-landing head's rows are copied to a helper core's slot (+ arrival inc), which
 //                                multiplies the head's other n-blocks: this core keeps [nb0, nb1) of the head
-//   load_weight_block(slot, nb)  the head's remaining n-blocks of [nb0, nb1)
+//   load_weight_block(slot, nb)  the head's remaining n-blocks of [nb0, nb1) (beyond the prefetch)
 //
 // Regime R1' (Mq % 32 != 0): the local quarter is re-tiled per image through cb_retile_stage
 // (all_to_all_matmul_retile.hpp), exactly as the port reader does for the remote quarters.
@@ -54,8 +55,11 @@ void kernel_main() {
     // flight per core keep DRAM busy without starving the landing / port traffic.
     constexpr uint32_t weight_chunk_tiles = get_compile_time_arg_val(14);
     static_assert(weight_chunk_tiles >= 1, "weight_chunk_tiles >= 1");
+    // Weight blocks of a slot read before its landing wait (<= cb_weight depth): the rest follow the landing.
+    constexpr uint32_t w_prefetch_blocks = get_compile_time_arg_val(15);
+    static_assert(w_prefetch_blocks >= 1, "w_prefetch_blocks >= 1");
     constexpr bool retile = (Mq % 32) != 0;
-    constexpr auto in_args = TensorAccessorArgs<15>();
+    constexpr auto in_args = TensorAccessorArgs<16>();
     constexpr auto w_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
     constexpr uint32_t quarter_tiles = Mq_t * Kt;       // one batch's rows of one head quarter
     constexpr uint32_t slot_tiles = B * quarter_tiles;  // = block_m * Kt
@@ -65,8 +69,9 @@ void kernel_main() {
     const uint32_t w_addr = get_common_arg_val<uint32_t>(1);
     const uint32_t my_q = get_common_arg_val<uint32_t>(2);  // this chip's position in its group
     constexpr uint32_t arrival_base = 3;                    // arrival counter address of slot s
-    // Per slot: (h | wait << 16), (nb0 | nb1 << 16), forward, helper x, helper y, helper slot addr, helper arrival addr
-    constexpr uint32_t SLOT_WORDS = 7;
+    // Per slot: (h | wait << 16), (nb0 | nb1 << 16), forward, helper x, helper y, helper slot addr, helper arrival
+    // addr, weight pace (cycles to wait before the slot's first weight read; 0 = none)
+    constexpr uint32_t SLOT_WORDS = 8;
 
     const uint32_t n_slots = get_arg_val<uint32_t>(0);
 
@@ -110,9 +115,16 @@ void kernel_main() {
         const uint32_t nb0 = nbw & 0xFFFF, nb1 = nbw >> 16;  // this core's n-blocks of the head
         const bool forward = get_arg_val<uint32_t>(rec + 2) != 0;
 
+        const uint32_t pace = get_arg_val<uint32_t>(rec + 7);
+        if (pace != 0) {
+            riscv_wait(pace);  // paced weight start (spreads the cores' weight bursts over the exchange)
+        }
+        const uint32_t nb_pre = (nb1 - nb0 < w_prefetch_blocks) ? nb1 : nb0 + w_prefetch_blocks;
         {
             A2AMM_ZONE("rd_w0");
-            load_weight_block(h, nb0);
+            for (uint32_t nb = nb0; nb < nb_pre; ++nb) {
+                load_weight_block(h, nb);
+            }
         }
 
         cb_reserve_back(cb_a_landed, slot_tiles);
@@ -160,7 +172,7 @@ void kernel_main() {
             noc_semaphore_inc(get_noc_addr(fx, fy, get_arg_val<uint32_t>(rec + 6)), 1);
         }
 
-        for (uint32_t nb = nb0 + 1; nb < nb1; ++nb) {
+        for (uint32_t nb = nb_pre; nb < nb1; ++nb) {
             load_weight_block(h, nb);
         }
     }

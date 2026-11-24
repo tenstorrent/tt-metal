@@ -9,3 +9,4 @@
 {"event":"hypothesis","refinement":4,"text":"far routes balanced already (B,F,B,F); exchange bound by per-packet router cost + fence; levers: dest runs + per-dest fence + packing across entries (fused scatter+inc)","ts":"2026-11-24T18:31:24+00:00"}
 {"event":"test_run","status":"pass","tests":"unit dir 36/36; golden slice 29/29 (18 shapes L1/16bitDEST + 4 loose + regression)","ts":"2026-11-24T18:31:24+00:00"}
 {"event":"test_run","status":"perf","case":"LOOSE_CASES[0]","whole_op_fastest_us":[60.36,55.84],"slowest_us":[64.82,61.36],"exchange_alone_us":[50.45,45.77],"guards":"DeepSeek win, GLM win, Kimi Phase0 null (gated)","ts":"2026-11-24T18:31:24+00:00"}
+{"event":"test_run","refinement":5,"summary":"Kimi model harness base 55.7/61.4; ablations: exch 45.8, nocompute 53.0, nowrite 54.4, noweight 54.2; levers null: ochunk, wchunk 8K, wpre=2 worse, wpace null, pick nearest null, sb 1x4 equal; tail>8 fastest-1.6 slowest+1.6 avg flat","ts":"2026-11-24T19:05:45+00:00"}
