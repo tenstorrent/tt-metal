@@ -855,11 +855,10 @@ def test_group_of_one_runs_phases_directly(expect_error):
         group.phase("reading", raising(KeyboardInterrupt()))
 
 
-def test_a_load_over_four_ranks_has_one_reader_check_each_chunk_they_all_read_in_part(tmp_path, monkeypatch):
-    """Four ranks each load a row quarter of a weight saved as two column halves, so every rank reads both chunks in
-    part, which the chunks' CRC32s cannot cover: the load elects one reader of each chunk to read it whole and check it.
-    The device is faked (each rank's shards land in a dict). The shards come back exact, and a flipped byte in a chunk
-    stops the load on every rank, naming the rank that checked it."""
+def _four_rank_load(tmp_path, monkeypatch):
+    """A device-free world of four in-process ranks loading one weight, saved as two column halves, as four row
+    quarters, one per rank of a mesh they share: every rank reads both chunks in part. Returns the checkpoint, its
+    directory, the saved array, the loading label, each rank's placed shards and the body that loads on a rank."""
     shape = (1, 1, 8, 16)
     saved, loaded = world([R, S(3)], (1, 2)), world([S(2), R], (4, 1))
     src = arange(shape)
@@ -885,6 +884,15 @@ def test_a_load_over_four_ranks_has_one_reader_check_each_chunk_they_all_read_in
         this.group = group
         return _load.load(path, model=object())
 
+    return ckpt, path, src, loaded, shards, body
+
+
+def test_a_load_over_four_ranks_has_one_reader_check_each_chunk_they_all_read_in_part(tmp_path, monkeypatch):
+    """Four ranks each load a row quarter of a weight saved as two column halves, so every rank reads both chunks in
+    part, which the chunks' CRC32s cannot cover: the load elects one reader of each chunk to read it whole and check it.
+    The device is faked (each rank's shards land in a dict). The shards come back exact, and a flipped byte in a chunk
+    stops the load on every rank, naming the rank that checked it."""
+    ckpt, path, src, loaded, shards, body = _four_rank_load(tmp_path, monkeypatch)
     _, errors = _run_ranks(4, body)
     assert errors == {}, errors
     expected = expected_shards(src, loaded)
@@ -907,3 +915,19 @@ def test_a_load_over_four_ranks_has_one_reader_check_each_chunk_they_all_read_in
             r"fails its CRC32 check",
             str(err),
         ), (rank, str(err))
+
+
+def test_a_failure_while_placing_the_first_tensor_on_a_shared_mesh_says_to_restart(tmp_path, monkeypatch):
+    """Ranks sharing a mesh that each fail while placing their first tensor have placed nothing, but a rank cannot see
+    where the others stopped, and one that failed after its device allocated part of the tensor may hold buffers the
+    others do not: every rank's error says to end the job and restart it."""
+    _, _, _, _, _, body = _four_rank_load(tmp_path, monkeypatch)
+
+    def fail(live, arrays, device, local):
+        raise RuntimeError("simulated device out of memory")
+
+    monkeypatch.setattr(_load, "_place", fail)
+    _, errors = _run_ranks(4, body)
+    assert set(errors) == {0, 1, 2, 3}, errors
+    for rank, err in errors.items():
+        assert "end the job and restart it instead of loading again" in str(err), (rank, str(err))

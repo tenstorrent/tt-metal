@@ -317,15 +317,21 @@ def _shares_mesh(local: set[tuple[int, ...]]) -> bool:
     return len(local) < prod(list(mesh_device().shape))
 
 
-def _raise_partly_restored(err: Exception, at: str, placed: list[str], total: int, shared_mesh: bool = False) -> None:
+def _raise_partly_restored(
+    err: Exception, at: str, placed: list[str], total: int, shared_mesh: bool = False, placing: bool = False
+) -> None:
     """Re-raise ``err``, as a ``CheckpointError`` that says the live state is partly restored once a tensor was
-    placed, and what to do about it (``_partly_restored_advice``). The advice comes before the error's own text, which
-    can be long (a device error carries its backtrace), so the cap on the message a rank sends the others
-    (``MESSAGE_LIMIT``) cuts only that text."""
-    if not placed:
+    placed, and what to do about it (``_partly_restored_advice``). On a mesh other ranks share, a failure while
+    placing a tensor (``placing``) counts too, the first one included: the device may already hold buffers of that
+    tensor, and a rank cannot see whether the other ranks' devices do. The advice comes before the error's own text,
+    which can be long (a device error carries its backtrace), so the cap on the message a rank sends the others
+    (``MESSAGE_LIMIT``) cuts only that text.
+    """
+    if not placed and not (placing and shared_mesh):
         raise err
+    first = f" (the first: {placed[0]})" if placed else ""
     raise CheckpointError(
-        f"the load failed at {at} after {len(placed)} of {total} tensors were placed (the first: {placed[0]}); "
+        f"the load failed at {at} after {len(placed)} of {total} tensors were placed{first}; "
         f"{_partly_restored_advice(shared_mesh)}. The error: {type(err).__name__}: {err}"
     ) from err
 
@@ -382,6 +388,7 @@ def _read_and_place(
         keys = list(plan.keys.items())
         pending = submit(keys[0][1]) if keys else None
         for position, (key, kplan) in enumerate(keys):
+            placing = False
             try:
                 arrays, futures = pending
                 t_key = time.perf_counter()
@@ -389,9 +396,10 @@ def _read_and_place(
                     bytes_read += future.result()
                 t_read_done = time.perf_counter()
                 pending = submit(keys[position + 1][1]) if position + 1 < len(keys) else None
+                placing = True
                 _place(by_key[key], arrays, device, local)
             except Exception as err:
-                _raise_partly_restored(err, key, placed, len(keys), _shares_mesh(local))
+                _raise_partly_restored(err, key, placed, len(keys), _shares_mesh(local), placing)
             placed.append(key)
             read_s += t_read_done - t_key
             place_s += time.perf_counter() - t_read_done

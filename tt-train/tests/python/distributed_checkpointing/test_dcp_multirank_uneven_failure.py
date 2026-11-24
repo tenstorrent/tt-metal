@@ -41,7 +41,8 @@ def test_a_load_one_rank_stops_before_the_other_says_to_restart(two_ranks, monke
     """Rank 1 fails placing its first tensor while rank 0 places all of its own, as a read error on one rank does.
     The ranks then hold different device allocations on the mesh they share, so every rank's error, rank 1's too,
     says that rank 0 placed its tensors and that the job has to restart rather than load again: a handler on rank 1
-    that loaded again would wait for rank 0 in a collective rank 0 never reaches."""
+    that loaded again would wait for rank 0 in a collective rank 0 never reaches. Rank 1's own message says to restart
+    too, since it failed while placing a tensor."""
     rank, root = two_ranks
     model, params, opt = fresh_tp(DIM)
     train_step(model, opt, DIM)
@@ -56,8 +57,8 @@ def test_a_load_one_rank_stops_before_the_other_says_to_restart(two_ranks, monke
 
         monkeypatch.setattr(_load, "_place", fail)
     pattern = (
-        r"^reading and placing the shards failed on rank\(s\) \[1\] of 2: rank 1: RuntimeError: simulated device out of "
-        r"memory"
+        r"^reading and placing the shards failed on rank\(s\) \[1\] of 2: rank 1: CheckpointError: the load failed at "
+        rf".* after 0 of {n} tensors were placed; .* The error: RuntimeError: simulated device out of memory"
     )
     try:
         with expect_error(dcp.CheckpointError, pattern) as raised:
