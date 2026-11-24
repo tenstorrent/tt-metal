@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <exception>
 
 namespace tt::tt_metal::experimental::dry_run {
@@ -13,8 +14,10 @@ namespace tt::tt_metal::experimental::dry_run {
  * launched, and buffer writes and reads, events, finishes and trace replays return without touching it. A read
  * leaves its destination unfilled. Opening and closing devices works as usual.
  *
- * A program that would have been launched has its kernel builds queued instead. They run in the background, outlive
- * the device, and fill the kernel cache. Up-front precompile uses this to run test bodies only for the programs
+ * A program that would have been launched has its kernel builds queued instead. They run in the background in the
+ * order they were queued, outlive the device, and fill the kernel cache. Work that follows the dry run does not have
+ * to wait for them: a program that needs a kernel whose build is still queued builds it itself, and one that needs a
+ * kernel being built waits for that build. Up-front precompile uses this to run test bodies only for the programs
  * they build. Dry runs nest.
  */
 void begin();
@@ -24,9 +27,29 @@ void end();
 
 bool active();
 
-/** Block until every kernel build queued so far has finished. A failed build is dropped: the program that needs the
- * kernel builds it again when it compiles, and reports the failure then. */
-void wait_for_queued_builds();
+/** A dry run for the lifetime of the object. */
+struct Scope {
+    Scope() { begin(); }
+    ~Scope() { end(); }
+    Scope(const Scope&) = delete;
+    Scope& operator=(const Scope&) = delete;
+};
+
+/**
+ * End the queued kernel builds: the ones that have not started are dropped, the running ones are waited for. Call it
+ * when nothing that follows needs the kernels. Returns how many kernels queued builds have built in this process.
+ * A failed build is dropped as well: the program that needs the kernel builds it again when it compiles, and reports
+ * the failure then.
+ */
+size_t finish_queued_builds();
+
+/**
+ * Mark the stretch of a process in which dry runs happen, device opens and closes between them included. A fabric
+ * mesh opened in a dry pass without a router launch (FabricManagerMode::ENABLED) queues the routers' kernel builds,
+ * so the first open that launches the routers finds them built.
+ */
+void set_pass(bool in_dry_pass);
+bool in_pass();
 
 /**
  * Thrown in a dry run in place of constructing a Program or MeshWorkload from a ProgramSpec. Such an object is

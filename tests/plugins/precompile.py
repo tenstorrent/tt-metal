@@ -4,8 +4,9 @@
 """Up-front precompile for a ttnn pytest run.
 
 Before the tests run for real, every test body runs once in a dry run (ttnn.device.BeginDryRun): nothing is sent to
-the device, and each program the body would have launched has its kernel builds queued in the background. When the
-real pass starts, the kernels are in Metal's kernel cache and the tests do not wait for them.
+the device, and each program the body would have launched has its kernel builds queued in the background. The real
+pass then finds the kernels in Metal's kernel cache and its tests do not wait for them. Builds still queued when the
+real pass starts go on behind it, in the order the tests need them.
 
     pytest -p tests.plugins.precompile <tests>          PRECOMPILE=on|off|auto (default auto)
 
@@ -205,7 +206,7 @@ def pytest_runtestloop(session):
     import ttnn
 
     items = session.items
-    present = _kernels_in_cache()
+    present = _STATE["present"] = _kernels_in_cache()
     # The dry pass draws from the random generators and may record properties on the items both passes share; the
     # real pass must start from what plain pytest would see.
     rng = (random.getstate(), numpy.random.get_state(), torch.get_rng_state())
@@ -215,35 +216,36 @@ def pytest_runtestloop(session):
     start = time.monotonic()
     _STATE["dry"] = True
     try:
+        ttnn._ttnn.device.SetDryPass(True)
         for i, item in enumerate(items):
             # log=False: no report of a dry body reaches the terminal, JUnit or -x. nextitem=None on the last item
             # tears every fixture down, so the real pass sets everything up again.
             runtestprotocol(item, nextitem=items[i + 1] if i + 1 < len(items) else None, log=False)
     finally:
         _STATE["dry"] = False
+        ttnn._ttnn.device.SetDryPass(False)
         ttnn.set_fabric_config = real_set_fabric_config
         _restore(replaced)
-    dry_seconds = time.monotonic() - start
-    ttnn._ttnn.device.WaitForQueuedBuilds()
-    wait_seconds = time.monotonic() - start - dry_seconds
     random.setstate(rng[0])
     numpy.random.set_state(rng[1])
     torch.set_rng_state(rng[2])
     for item, saved in zip(items, properties):
         item.user_properties[:] = saved
-    _STATE["present"], _STATE["ahead"] = present, _kernels_in_cache() - present
     print(
-        f"\nPRECOMPILE: on ({why}). Dry pass over {len(items)} tests took {dry_seconds:.1f} s "
+        f"\nPRECOMPILE: on ({why}). Dry pass over {len(items)} tests took {time.monotonic() - start:.1f} s "
         f"({_STATE['bodies']} bodies, {_STATE['ended_early']} ended early, {_STATE['timed_out']} timed out; "
-        f"{_STATE['body_seconds']:.1f} s in bodies), "
-        f"then {wait_seconds:.1f} s waiting for builds. Kernels: {present} already present, "
-        f"{_STATE['ahead']} built ahead.",
+        f"{_STATE['body_seconds']:.1f} s in bodies). Kernels: {present} already present, "
+        f"{_kernels_in_cache() - present} built so far; queued builds go on behind the real pass.",
         flush=True,
     )
     return None  # pytest's own loop now runs the real pass
 
 
 def pytest_sessionfinish(session):
-    if "ahead" in _STATE:
-        late = _kernels_in_cache() - _STATE["present"] - _STATE["ahead"]
-        print(f"\nPRECOMPILE: {late} kernels built late, during the real pass.", flush=True)
+    if "present" in _STATE:
+        import ttnn
+
+        # Nothing needs a kernel any more: builds still in the queue are dropped.
+        ahead = ttnn._ttnn.device.FinishQueuedBuilds()
+        late = _kernels_in_cache() - _STATE["present"] - ahead
+        print(f"\nPRECOMPILE: {ahead} kernels built ahead, {late} built late by the test that needed them.", flush=True)

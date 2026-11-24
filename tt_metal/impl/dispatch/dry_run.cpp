@@ -13,6 +13,7 @@ namespace tt::tt_metal::experimental::dry_run {
 namespace {
 // Process-wide, so work started from any thread sees it.
 std::atomic<int> depth{0};
+std::atomic<bool> pass{false};
 }  // namespace
 
 void begin() { depth.fetch_add(1, std::memory_order_acq_rel); }
@@ -25,6 +26,10 @@ void end() {
 
 bool active() { return depth.load(std::memory_order_acquire) > 0; }
 
-void wait_for_queued_builds() { wait_for_ahead_builds(); }
+size_t finish_queued_builds() { return wait_for_ahead_builds(/*drop_queued=*/true); }
+
+void set_pass(bool in_dry_pass) { pass.store(in_dry_pass, std::memory_order_release); }
+
+bool in_pass() { return pass.load(std::memory_order_acquire); }
 
 }  // namespace tt::tt_metal::experimental::dry_run

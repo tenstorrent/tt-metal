@@ -682,6 +682,7 @@ public:
 
     uint32_t get_kernel_processor_type(int index) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
+    std::function<void()> build_task(IDevice* device) const override;
     void read_binaries(IDevice* device, const std::string& binary_root) override;
 
     bool configure(

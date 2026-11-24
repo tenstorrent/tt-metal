@@ -454,12 +454,17 @@ void device_module(nb::module_& m_device) {
         )doc");
     m_device.def("EndDryRun", &tt::tt_metal::experimental::dry_run::end, "End the dry run started by BeginDryRun.");
     m_device.def(
-        "WaitForQueuedBuilds",
+        "SetDryPass",
+        &tt::tt_metal::experimental::dry_run::set_pass,
+        "Mark the start (True) and end (False) of a pass of dry runs, device opens between them included.");
+    m_device.def(
+        "FinishQueuedBuilds",
         [] {
             nb::gil_scoped_release release;
-            tt::tt_metal::experimental::dry_run::wait_for_queued_builds();
+            return tt::tt_metal::experimental::dry_run::finish_queued_builds();
         },
-        "Block until every kernel build queued by a dry run has finished.");
+        "Drop the kernel builds a dry run queued that have not started and wait for the running ones. Returns how "
+        "many kernels the queued builds built.");
 
     m_device.def("ClearKernelCache", &tt::tt_metal::experimental::ClearKernelCache, R"doc(
         Clear the in-memory kernel compilation hash lookup cache.

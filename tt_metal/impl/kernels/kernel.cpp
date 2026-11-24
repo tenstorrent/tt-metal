@@ -1268,16 +1268,22 @@ std::function<void()> DataMovementKernel::build_task(IDevice* device) const {
 }
 
 void EthernetKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_options*/) const {
-    jit_build_genfiles_kernel_include(device_build_env_for(*device).build_env, *this, this->kernel_src_);
+    this->build_task(device)();
+}
+
+std::function<void()> EthernetKernel::build_task(IDevice* device) const {
+    const JitBuildEnv& env = device_build_env_for(*device).build_env;
     uint32_t erisc_core_type = MetalContext::instance(this->get_context_id())
                                    .hal()
                                    .get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
     int erisc_id = enchantum::to_underlying(this->config_.processor);
-    jit_build(
-        build_env_manager_for(*device).get_kernel_build_state(
-            device->build_id(), erisc_core_type, dm_class_idx, erisc_id),
-        this);
+    const JitBuildState& build_state = build_env_manager_for(*device).get_kernel_build_state(
+        device->build_id(), erisc_core_type, dm_class_idx, erisc_id);
+    return [this, &env, &build_state] {
+        jit_build_genfiles_kernel_include(env, *this, this->kernel_src_);
+        jit_build(build_state, this);
+    };
 }
 
 void DramKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_options*/) const {

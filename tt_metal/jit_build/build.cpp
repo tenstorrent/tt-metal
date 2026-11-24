@@ -1329,32 +1329,50 @@ bool jit_build_once_no_wait(size_t hash, const std::function<void()>& build_fn) 
 namespace {
 std::mutex ahead_builds_mutex;
 std::vector<std::shared_future<void>> ahead_builds;
+std::atomic<size_t> ahead_built{0};
+std::atomic<bool> drop_ahead_builds{false};
 }  // namespace
 
-void queue_ahead_build(std::function<void()> build_fn) {
-    const std::lock_guard<std::mutex> lock(ahead_builds_mutex);
-    ahead_builds.emplace_back(detail::async([build_fn = std::move(build_fn)] {
+void queue_ahead_build(std::function<size_t()> build_fn) {
+    auto task = std::make_shared<std::packaged_task<void()>>([build_fn = std::move(build_fn)] {
+        if (drop_ahead_builds) {
+            return;
+        }
         try {
-            build_fn();
+            ahead_built += build_fn();
         } catch (const std::exception& e) {
             log_debug(tt::LogBuildKernels, "A kernel build queued by a dry run failed: {}", e.what());
         }
-    }));
+    });
+    {
+        const std::lock_guard<std::mutex> lock(ahead_builds_mutex);
+        ahead_builds.emplace_back(task->get_future());
+    }
+    // Onto the executor's own queue. detail::async() would run the build on this thread whenever every worker is
+    // busy, and a dry run would then spend its time building instead of finding the next program.
+    const std::lock_guard<std::mutex> lock(detail::GetExecutorMutex());
+    detail::GetExecutor().silent_async([task] { (*task)(); });
 }
 
-void wait_for_ahead_builds() {
+size_t wait_for_ahead_builds(bool drop_queued) {
     std::vector<std::shared_future<void>> builds;
     {
         const std::lock_guard<std::mutex> lock(ahead_builds_mutex);
         builds.swap(ahead_builds);
     }
+    drop_ahead_builds = drop_queued;
     for (auto& build : builds) {
         build.get();
     }
+    drop_ahead_builds = false;
+    return ahead_built;
 }
 
 bool ahead_builds_pending() {
     const std::lock_guard<std::mutex> lock(ahead_builds_mutex);
+    std::erase_if(ahead_builds, [](const auto& build) {
+        return build.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+    });
     return !ahead_builds.empty();
 }
 

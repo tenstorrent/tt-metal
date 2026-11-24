@@ -14,6 +14,7 @@
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/experimental/dry_run.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <tt_metal.hpp>
 #include "device/device_impl.hpp"
@@ -367,7 +368,17 @@ void FabricFirmwareInitializer::init(
         build_fabric_programs(/*parallel=*/false);
     } else {
         // The fabric manager launched the routers; build them again, uncompiled, for their channel layouts.
-        build_fabric_programs(/*parallel=*/false, {}, /*compile=*/false);
+        if (experimental::dry_run::in_pass()) {
+            // A dry pass opens its meshes this way to skip the router launch (tests/plugins/precompile.py). Queue the
+            // routers' kernel builds, so the first open that launches them finds them built.
+            const experimental::dry_run::Scope dry_run;
+            build_fabric_programs(/*parallel=*/false);
+            for (auto& program : fabric_programs_) {
+                program.reset();
+            }
+        } else {
+            build_fabric_programs(/*parallel=*/false, {}, /*compile=*/false);
+        }
         log_info(tt::LogMetal, "Fabric initialized through Fabric Manager");
     }
 }
@@ -562,7 +573,9 @@ std::unique_ptr<Program> FabricFirmwareInitializer::compile_fabric(
         return nullptr;
     }
     auto fabric_program = tt::tt_fabric::compile_fabric_program(descriptor_->env_impl(), dev, std::move(*build));
-    fabric_program->impl().finalize_offsets(dev);
+    if (!experimental::dry_run::active()) {
+        fabric_program->impl().finalize_offsets(dev);
+    }
     return fabric_program;
 }
 

@@ -3476,6 +3476,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
             }
             auto coordinator = std::make_shared<RemoteCompileCoordinator>(
                 std::move(endpoints), device_context_id, device->build_id(), build_env.build_key());
+            size_t submitted = 0;
             for (auto& kernels : kernels_) {
                 for (auto& [id, kernel] : kernels) {
                     auto [build_options, kernel_hash] = prep_kernel(kernel);
@@ -3484,10 +3485,14 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                             generate_kernel_source_files(device, build_options, kernel);
                             return build_kernel_descriptor(device, kernel, build_options, kernel_hash);
                         });
+                        submitted++;
                     }
                 }
             }
-            queue_ahead_build([coordinator] { coordinator->finish(); });
+            queue_ahead_build([coordinator, submitted] {
+                coordinator->finish();
+                return submitted;
+            });
             return;
         }
         for (auto& kernels : kernels_) {
@@ -3504,10 +3509,13 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                                    build_options = std::move(build_options),
                                    &env = build_env.build_env,
                                    task = std::move(task)] {
+                    size_t built = 0;
                     jit_build_once(kernel_hash, [&] {
                         jit_build_genfiles_descriptors(env, build_options);
                         task();
+                        built = 1;
                     });
+                    return built;
                 });
             }
         }
