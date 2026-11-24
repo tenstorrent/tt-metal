@@ -40,6 +40,10 @@ struct mutex
     // mutex around each of its SETADC* sites. Acquire/release via ckernel::T6MutexLockGuard.
     constexpr static std::uint32_t THREAD2_ADC = 3;
     constexpr static std::uint32_t SFPU        = 4; // used for atomic access to SFPU since it's instructions can be issued from both TRISC1 and TRISC2
+    // One per half of Dst (tt-metal#64475). A holder stalls on its own unit before releasing. Indices 1, 5 and 6
+    // hang the thread that takes them.
+    constexpr static std::uint32_t DST_LOWER_HALF = SFPU;
+    constexpr static std::uint32_t DST_UPPER_HALF = 2;
 };
 
 constexpr std::uint8_t PC_BUF_SEMAPHORE_BASE = 8;  // base address for semaphores in PC buffer

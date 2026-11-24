@@ -56,6 +56,25 @@ inline bool decode_step(const std::uint32_t c1, const std::uint32_t r, const std
 template <std::uint32_t K>
 constexpr bool supported_split = K == 512 || K == 1024 || K == 2048;
 
+// On Blackhole some Dst writes from two threads to one half of Dst are not serialised: the FPU-side write is
+// silently lost (tt-metal#64475). Each MATH step and PACK part therefore holds the mutex of every half it writes.
+// A K 512 row of two chunks shares the lower half and takes none: K 512 sorts without SFPLOADMACRO and writes
+// nothing above tile 3, and plain SFPSTOREs there are serialised by the hardware.
+template <std::uint32_t K>
+constexpr bool split_macros = K >= 1024;
+
+template <std::uint32_t K>
+constexpr bool guards_dst_halves(const std::uint32_t num_chunks)
+{
+    return !(K == 512 && num_chunks == 2);
+}
+
+// fp32 Dst: four tiles per half.
+constexpr std::uint32_t dst_half_mutex(const std::uint32_t tile)
+{
+    return tile >= 4 ? ckernel::mutex::DST_UPPER_HALF : ckernel::mutex::DST_LOWER_HALF;
+}
+
 // Chunks alternate DEST banks (bank 1 starts at tile 4): the chunk MATH transposes and the chunk PACK sorts sit in
 // different tiles, and the next row's first chunk can be copied into bank 1 while this row finishes.
 template <std::uint32_t K>
@@ -233,6 +252,12 @@ inline void math_row(const std::uint32_t num_chunks, CopyChunk&& copy_chunk, con
                 prev_step_busy = true;
                 continue;
             }
+            const std::uint32_t step_tile =
+                (stage != 0 && stage >= STAGES_FIRST_CHUNK) ? survivor_tile<K>(chunk, num_chunks) : chunk_tile<K>(chunk, num_chunks);
+            if (guards_dst_halves<K>(num_chunks))
+            {
+                TT_ATGETM(dst_half_mutex(step_tile));
+            }
             if (stage == 0)
             {
                 if (cfg_open)
@@ -274,15 +299,20 @@ inline void math_row(const std::uint32_t num_chunks, CopyChunk&& copy_chunk, con
                 ckernel::sfpu::_topk_xl_split_transpose_<K>(tile << 6);
             }
 
-            // PACK may take the SFPU over only after MATH's SFPU init, so the row's first token waits for it.
+            // Released once this step's writes have landed. The row's first token also waits for MATH's SFPU init.
             if (posted == 0)
             {
-                ckernel::t6_semaphore_post<ckernel::p_stall::MATH | ckernel::p_stall::WAIT_SFPU>(F2S);
+                TTI_STALLWAIT(ckernel::p_stall::STALL_SYNC, ckernel::p_stall::MATH | ckernel::p_stall::WAIT_SFPU);
             }
             else
             {
-                ckernel::t6_semaphore_post<ckernel::p_stall::MATH>(F2S);
+                TTI_STALLWAIT(ckernel::p_stall::STALL_SYNC, ckernel::p_stall::MATH);
             }
+            if (guards_dst_halves<K>(num_chunks))
+            {
+                TT_ATRELM(dst_half_mutex(step_tile));
+            }
+            ckernel::t6_semaphore_post(F2S);
             posted++;
             prev_step_busy = true;
         }
@@ -300,8 +330,17 @@ inline void math_row(const std::uint32_t num_chunks, CopyChunk&& copy_chunk, con
         {
             take_pack_token();
         }
+        if (guards_dst_halves<K>(num_chunks))
+        {
+            TT_ATGETM(dst_half_mutex(chunk_tile<K>(0, num_chunks)));
+        }
         copy_chunk(0, chunk_tile<K>(0, num_chunks));
-        ckernel::t6_semaphore_post<ckernel::p_stall::MATH>(F2S);
+        TTI_STALLWAIT(ckernel::p_stall::STALL_SYNC, ckernel::p_stall::MATH);
+        if (guards_dst_halves<K>(num_chunks))
+        {
+            TT_ATRELM(dst_half_mutex(chunk_tile<K>(0, num_chunks)));
+        }
+        ckernel::t6_semaphore_post(F2S);
     }
     for (; taken < posted; taken++)
     {
@@ -386,53 +425,77 @@ inline __attribute__((always_inline)) void sfpu_stage_body(
             }
             else
             {
-                sfpu::_topk_xl_split_sort_head_512_<true /*macros*/>(tile_offset, ascending);
+                sfpu::_topk_xl_split_sort_head_512_<false /*macros*/>(tile_offset, ascending);
             }
             break;
         case 1:
-            sfpu::_topk_xl_split_stride2_<K, 4 /*sort_len*/, true /*macros*/>(tile_offset, ascending);
+            sfpu::_topk_xl_split_stride2_<K, 4 /*sort_len*/, split_macros<K> /*macros*/>(tile_offset, ascending);
             break;
         case 2:
             sfpu::_topk_xl_split_columns_<K, 0x5050 /*lane_mask*/>(tile_offset, ascending);
             break;
         case 3:
-            sfpu::_topk_xl_split_stride2_<K, 8 /*sort_len*/, true /*macros*/>(tile_offset, ascending);
+            sfpu::_topk_xl_split_stride2_<K, 8 /*sort_len*/, split_macros<K> /*macros*/>(tile_offset, ascending);
             break;
         case 4:
             sfpu::_topk_xl_split_columns_<K, 0x5500 /*lane_mask*/>(tile_offset, ascending);
             break;
         case 5:
-            sfpu::_topk_xl_split_stride2_<K, 16 /*sort_len*/, true /*macros*/>(tile_offset, ascending);
+            sfpu::_topk_xl_split_stride2_<K, 16 /*sort_len*/, split_macros<K> /*macros*/>(tile_offset, ascending);
             break;
         case 6:
             sfpu::_topk_xl_split_columns_<K, 0 /*lane_mask*/>(tile_offset, ascending);
             if (chunk > 0)
             {
                 // The merge also stores into the previous survivor, whose Dst bank MATH's next step works in, so that step
-                // must be done first: its token is taken here rather than by the next SFPU part.
+                // must be done first: its token is taken here rather than by the next SFPU part. The chunk's half is
+                // released across that wait (holding it measured 8 to 11% slower on K 512), then both are taken.
+                const bool guarded                 = guards_dst_halves<K>(num_chunks);
+                const std::uint32_t chunk_mutex    = dst_half_mutex(chunk_tile<K>(chunk, num_chunks));
+                const std::uint32_t survivor_mutex = dst_half_mutex(chunk_tile<K>(chunk, num_chunks) ^ 4);
+                if (guarded)
+                {
+                    TTI_STALLWAIT(ckernel::p_stall::STALL_SYNC, ckernel::p_stall::WAIT_SFPU);
+                    TT_ATRELM(chunk_mutex);
+                }
                 if (take_next)
                 {
                     take_math_token();
                 }
+                if (guarded)
+                {
+                    TT_ATGETM(chunk_mutex);
+                    TT_ATGETM(survivor_mutex);
+                }
+                bool merged = false;
                 if constexpr (K == 512)
                 {
                     if (num_chunks == 2)
                     {
-                        sfpu::_topk_xl_split_merge_<K, 64 /*distance*/, true /*macros*/>(0);
-                        break;
+                        sfpu::_topk_xl_split_merge_<K, 64 /*distance*/, split_macros<K> /*macros*/>(0);
+                        merged = true;
                     }
                 }
-                switch ((num_chunks - 1 - chunk) & 3)
+                if (!merged)
                 {
-                    case 1:
-                        sfpu::_topk_xl_split_merge_<K, survivor_distance<K>(1), true /*macros*/>(tile_offset);
-                        break;
-                    case 3:
-                        sfpu::_topk_xl_split_merge_<K, survivor_distance<K>(3), true /*macros*/>(tile_offset);
-                        break;
-                    default:
-                        sfpu::_topk_xl_split_merge_<K, survivor_distance<K>(0), true /*macros*/>(tile_offset);
-                        break;
+                    switch ((num_chunks - 1 - chunk) & 3)
+                    {
+                        case 1:
+                            sfpu::_topk_xl_split_merge_<K, survivor_distance<K>(1), split_macros<K> /*macros*/>(tile_offset);
+                            break;
+                        case 3:
+                            sfpu::_topk_xl_split_merge_<K, survivor_distance<K>(3), split_macros<K> /*macros*/>(tile_offset);
+                            break;
+                        default:
+                            sfpu::_topk_xl_split_merge_<K, survivor_distance<K>(0), split_macros<K> /*macros*/>(tile_offset);
+                            break;
+                    }
+                }
+                // The chunk's half stays held; sfpu_step_inline releases it.
+                if (guarded)
+                {
+                    TTI_STALLWAIT(ckernel::p_stall::STALL_SYNC, ckernel::p_stall::WAIT_SFPU);
+                    TT_ATRELM(survivor_mutex);
                 }
             }
             break;
@@ -457,8 +520,21 @@ inline __attribute__((always_inline)) void sfpu_step_inline(
     {
         take_math_token();
     }
+    // Stages 7 and 8 work in the survivor's tiles, the others in the chunk's. The release sits behind the stall
+    // so that PACK's stores, macro-scheduled ones included, have landed.
+    const bool guarded             = guards_dst_halves<K>(num_chunks);
+    const std::uint32_t part_mutex = dst_half_mutex(stage >= 7 ? survivor_tile<K>(chunk, num_chunks) : chunk_tile<K>(chunk, num_chunks));
+    if (guarded)
+    {
+        TT_ATGETM(part_mutex);
+    }
     sfpu_stage_body<K>(chunk, stage, num_chunks, mirror_last && chunk + 1 == num_chunks, take_next);
-    ckernel::t6_semaphore_post<ckernel::p_stall::WAIT_SFPU>(S2F);
+    TTI_STALLWAIT(ckernel::p_stall::STALL_SYNC, ckernel::p_stall::WAIT_SFPU);
+    if (guarded)
+    {
+        TT_ATRELM(part_mutex);
+    }
+    ckernel::t6_semaphore_post(S2F);
 }
 
 template <std::uint32_t K, std::uint32_t stage>
@@ -576,7 +652,7 @@ inline void pack_row(const std::uint32_t num_chunks, const bool mirror_last, Epi
     // end descending whatever mirror_last says.
     LLK_ASSERT(num_chunks >= 2 || !mirror_last, "a single-chunk row cannot honour mirror_last");
     take_math_token();
-    ckernel::sfpu::_topk_xl_split_sfpu_init_<K, true /*macros*/>();
+    ckernel::sfpu::_topk_xl_split_sfpu_init_<K, split_macros<K> /*macros*/>();
     TTI_STALLWAIT(ckernel::p_stall::STALL_SFPU, ckernel::p_stall::MATH);
     std::uint32_t c1 = 0;
     if (paired_head<K>(num_chunks))
@@ -588,8 +664,29 @@ inline void pack_row(const std::uint32_t num_chunks, const bool mirror_last, Epi
     {
         pack_slot<K>(c1, num_chunks, mirror_last);
     }
+    // MATH's only Dst write under the epilogue is the next row's prefetch into the upper half, and a row that can
+    // prefetch has an epilogue that stays below tile 4 (see can_prefetch). Every other row holds both halves.
+    const bool guarded    = guards_dst_halves<K>(num_chunks);
+    const bool hold_upper = guarded && !can_prefetch<K>(num_chunks);
+    if (guarded)
+    {
+        TTI_ATGETM(ckernel::mutex::DST_LOWER_HALF);
+    }
+    if (hold_upper)
+    {
+        TTI_ATGETM(ckernel::mutex::DST_UPPER_HALF);
+    }
     epilogue();
-    ckernel::t6_semaphore_post<ckernel::p_stall::WAIT_SFPU>(S2F);
+    TTI_STALLWAIT(ckernel::p_stall::STALL_SYNC, ckernel::p_stall::WAIT_SFPU);
+    if (hold_upper)
+    {
+        TTI_ATRELM(ckernel::mutex::DST_UPPER_HALF);
+    }
+    if (guarded)
+    {
+        TTI_ATRELM(ckernel::mutex::DST_LOWER_HALF);
+    }
+    ckernel::t6_semaphore_post(S2F);
 }
 
 // A segmented row's later segment: after MATH's token (its unfused merge and rebuild done, or the previous segment's
