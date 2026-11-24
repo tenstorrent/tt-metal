@@ -9,6 +9,8 @@
 // functional role in a kernel. It is provided only so the shared compute-API dummy_unpack() resolves on
 // every architecture; use it directly only for debug, when an explicit SrcA flush is wanted.
 
+// HAL port of tt_llk_blackhole/llk_lib/debug/llk_unpack_dummy.h. Same Tensix instruction sequence as production.
+
 #pragma once
 
 #include <cstdint>
@@ -16,6 +18,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_ops.h"
+#include "hal/sync.h"
 
 /**
  * @brief Flush the SrcA bank: STALLWAIT on SrcA-clear then a clear-SrcA UNPACR_NOP (no CB read, no DEST
@@ -31,6 +34,8 @@
  */
 inline void llk_unpack_dummy([[maybe_unused]] const std::uint32_t dfb_id)
 {
-    TTI_STALLWAIT(ckernel::p_stall::STALL_UNPACK, ckernel::p_stall::SRCA_CLR);
+    hal::sync::wait::stall<hal::sync::StallTarget::Unpack, hal::sync::StallCondition::SrcACleared>();
+    // HAL-GAP: the clear-source UNPACR_NOP flavor (CLR_SRC_0 / CLR_SRC) has no HAL descriptor (hal::nop encodes only
+    // the pure-delay flavor).
     TTI_UNPACR_NOP(ckernel::SrcA, 0, 0, 0, 0, 0, 0, ckernel::p_unpacr_nop::CLR_SRC_0, ckernel::p_unpacr_nop::CLR_SRC);
 }
