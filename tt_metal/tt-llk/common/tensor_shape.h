@@ -204,14 +204,16 @@ inline TensorShape make_tensor_shape_from_legacy(const std::uint8_t face_r_dim, 
 /**
  * @brief Validates shapes for ops that depend on face positioning within a tile.
  *
- * Keep this conservative until larger TensorShape variants have coverage.
+ * Keep this conservative until larger TensorShape variants have coverage. A tile with more than one
+ * face row (32x32, 32x16) must have full 16-row faces; short faces only exist in 1-face-row tiles.
  **/
 __attribute__((noinline)) inline bool validate_tensor_shape_tile_dependent_ops_(const TensorShape& tensor_shape)
 {
     const std::uint8_t num_faces  = tensor_shape.total_num_faces();
     const std::uint8_t face_r_dim = tensor_shape.face_r_dim;
     const std::uint8_t face_c_dim = tensor_shape.face_c_dim;
-    return (num_faces == 1 || num_faces == 2 || num_faces == 4) && is_valid_face_r_dim(face_r_dim) && (face_c_dim == 16);
+    return (num_faces == 1 || num_faces == 2 || num_faces == 4) && is_valid_face_r_dim(face_r_dim) && (face_c_dim == 16) &&
+           (tensor_shape.num_faces_r_dim == 1 || face_r_dim == MAX_FACE_R_DIM);
 }
 
 /**

@@ -60,11 +60,12 @@ class UnaryBroadcastUnpacker(Unpacker):
     ) -> str:
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
         en_32bit_dest = config.dest_acc.cpp_enum_value
+        tensor_shape = compute_unit.src_a.tile_shape.cpp_value
         return (
             "{\n"
             + compute_unit.src_a.program_bfd(BfdId.UNP1, result_name="bfd_id")
             + f"_llk_unpack_unary_broadcast_operands_init_<p_unpacr::UNP_B, {broadcast_type}, {en_32bit_dest}, false>"
-            "(bfd_id, 1);\n}\n"
+            f"(bfd_id, {tensor_shape}, 1);\n}}\n"
         )
 
     def unpack(
