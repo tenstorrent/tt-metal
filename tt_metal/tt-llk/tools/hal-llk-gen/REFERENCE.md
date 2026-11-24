@@ -48,7 +48,7 @@ test selection, expected passed count, model, Claude Code version and agent limi
 |---|---|---|---|---|
 | `run8` (default) | `c0e38f1ff70b`, 1660 passed | `b9e522d39ae5` | `d8c6fa7c22fb`, 4 pages marked not valid | `run8.md` (md5 `3dbea124`) |
 | `run7` | same | same | same | `run7.md` (md5 `411819d2`) |
-| `hal-test-gen` | same | `485e3823fc18` (branch `sbratic/HAL-test-gen`) | same as run8 | `run8.md` |
+| `hal-test-gen` | same | `8da291f3f7c1` (`njokovic/HAL-move-tests` on 2026-11-24, base of `sbratic/HAL-test-gen`) | same as run8 | `run8.md` |
 
 The prompts are byte-identical to the prompts of runs 7a-7e (`run7.md`) and 8a-8e (`run8.md`). `run8.md`
 adds a section on the instruction cost of per-tile code. If a commit is missing in the checkout, `check`
@@ -253,4 +253,5 @@ It needs no card, agent or network.
   other tests and several tests per run, but a new test needs its own prompt and perf test settings.
 - The perf test checks no results. Only 4 of its 16 Elwadd variants use formats that the functional test checks.
 - TT is a static estimate (see `tt_tti_counts.md`, column `unresolved`).
-- The `hal-test-gen` profile gives the agent the HAL docs of run 8, because that branch has no `docs/hal/`.
+- The `hal-test-gen` profile gives the agent the HAL docs of run 8 (`d8c6fa7`), which may not match its newer HAL.
+  Its HAL has not been run yet together with the frozen test tree of `c0e38f1f`.
