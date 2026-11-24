@@ -42,8 +42,6 @@ template <
     std::uint32_t cs_stride,
     bool has_scale = false>
 ALWI void rope_sfpu_inplace_rows(const std::uint32_t scale_fp32) {
-    static_assert(Wt == 1 || Wt == 2, "rope_sfpu: Wt must be 1 or 2 (decode rotary head_dim <= 64)");
-    static_assert((x_base % 4) == 0 && (x_stride % 4) == 0, "x rows must be 4-row aligned");
     MATH(SAN_HOOK(unsupported()));
     MATH((sfpu::sfpu_rope_dest_setup()));
     MATH((sfpu::sfpu_rope_all_rows<Ht, Wt, x_base, x_stride, cos_base, sin_base, cs_stride, has_scale, DST_ACCUM_MODE>(
@@ -56,9 +54,6 @@ ALWI void rope_sfpu_inplace_rows(const std::uint32_t scale_fp32) {
  */
 template <std::uint32_t Ht, std::uint32_t Wt>
 ALWI void rope_sfpu_inplace() {
-    constexpr std::uint32_t dest_tiles =
-        get_dest_max_tiles<DstSync::SyncHalf, DST_ACCUM_MODE, DstTileShape::Tile32x32>();
-    static_assert(Ht * Wt + 2 * Wt <= dest_tiles, "rope_sfpu: x + cos + sin must fit in half DEST");
     constexpr std::uint32_t T = ROPE_SFPU_TILE_ROWS;
     rope_sfpu_inplace_rows<Ht, Wt, 0, T, (Ht * Wt) * T, (Ht * Wt + Wt) * T, T>(/*scale_fp32=*/0);
 }
@@ -89,8 +84,6 @@ template <
     std::uint32_t tile_h = 1,
     bool cos_sin_per_row = false>
 ALWI void rope_sfpu_inplace_fused_rows(const std::uint32_t scale_fp32) {
-    static_assert(Wt == 1 || Wt == 2, "rope_sfpu: Wt must be 1 or 2 (decode rotary head_dim <= 64)");
-    static_assert((x_base % 4) == 0 && (x_stride % 4) == 0, "x rows must be 4-row aligned");
     MATH(SAN_HOOK(unsupported()));
     MATH((sfpu::sfpu_rope_dest_setup()));
     MATH((sfpu::sfpu_rope_fused_all_rows<
@@ -112,9 +105,6 @@ ALWI void rope_sfpu_inplace_fused_rows(const std::uint32_t scale_fp32) {
  */
 template <std::uint32_t Ht, std::uint32_t Wt, std::uint32_t tile_h = 1, bool cos_sin_per_row = false>
 ALWI void rope_sfpu_inplace_fused() {
-    constexpr std::uint32_t dest_tiles =
-        get_dest_max_tiles<DstSync::SyncHalf, DST_ACCUM_MODE, DstTileShape::Tile32x32>();
-    static_assert(Ht * Wt + Wt <= dest_tiles, "rope_sfpu: x + fused cos/sin must fit in half DEST");
     constexpr std::uint32_t T = ROPE_SFPU_TILE_ROWS;
     rope_sfpu_inplace_fused_rows<Ht, Wt, 0, T, (Ht * Wt) * T, T, false, tile_h, cos_sin_per_row>(0);
 }

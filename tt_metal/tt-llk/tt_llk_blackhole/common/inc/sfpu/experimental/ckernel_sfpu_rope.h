@@ -40,6 +40,26 @@ constexpr std::uint32_t FACE_ROWS = 16;
 constexpr std::uint32_t NEGATE_VA = 1;
 
 constexpr std::uint8_t ZERO_ADDR_MOD = ADDR_MOD_7;
+
+// DEST rows addressable by one half-DEST section in the given Dest mode (SFPLOAD/SFPSTORE
+// row addresses are relative to the section base).  FP32 Dest has half the rows.
+template <bool is_fp32_dest_acc_en>
+constexpr std::uint32_t half_dest_rows()
+{
+    return is_fp32_dest_acc_en ? (DEST_REGISTER_HALF_SIZE >> 1) : DEST_REGISTER_HALF_SIZE;
+}
+
+// Returns one past the last DEST row an operand touches, for bounds checking.
+// The operand is ``num_tiles`` tiles; tile i starts at row ``base + i * stride``.
+// ``rows_spanned_per_tile`` is the span from a tile's first row to the last row the kernel reads
+// or writes. It includes untouched rows in between, but not the unused tail of the slot, so it
+// can be less than ``stride``.
+// Example: base 0, num_tiles 3, stride 64, rows_spanned_per_tile 20 -> the last tile spans rows 128..147,
+// so the result is 148.
+constexpr std::uint32_t operand_end_row_index(std::uint32_t base, std::uint32_t num_tiles, std::uint32_t stride, std::uint32_t rows_spanned_per_tile)
+{
+    return base + (num_tiles - 1) * stride + rows_spanned_per_tile;
+}
 } // namespace rope
 
 inline void sfpu_rope_dest_setup()
@@ -144,8 +164,16 @@ inline void sfpu_rope_all_rows(const std::uint32_t scale_fp32)
     constexpr std::uint32_t F = rope::FACE_ROWS;
 
     static_assert((F & 3) == 0, "face stride must keep rows 4-row aligned");
+    static_assert(Wt == 1 || Wt == 2, "rope_sfpu: Wt must be 1 or 2 (decode rotary head_dim <= 64)");
     static_assert((x_base & 3) == 0 && (x_stride & 3) == 0, "x rows must be 4-row aligned");
     static_assert((cos_base & 3) == 0 && (sin_base & 3) == 0 && (cs_stride & 3) == 0, "cos/sin rows must be 4-row aligned");
+
+    // Rows touched per tile: both faces, 4 rows each (only row 0 is live, but a vector is 4 rows).
+    constexpr std::uint32_t rows_spanned_per_tile = F + 4;
+    constexpr std::uint32_t half_rows             = rope::half_dest_rows<is_fp32_dest_acc_en>();
+    static_assert(rope::operand_end_row_index(x_base, Ht * Wt, x_stride, rows_spanned_per_tile) <= half_rows, "rope_sfpu: x rows exceed half DEST");
+    static_assert(rope::operand_end_row_index(cos_base, Wt, cs_stride, rows_spanned_per_tile) <= half_rows, "rope_sfpu: cos rows exceed half DEST");
+    static_assert(rope::operand_end_row_index(sin_base, Wt, cs_stride, rows_spanned_per_tile) <= half_rows, "rope_sfpu: sin rows exceed half DEST");
 
     constexpr std::uint32_t head_stride = Wt * x_stride;
 
@@ -208,6 +236,7 @@ inline void sfpu_rope_fused_all_rows(const std::uint32_t scale_fp32)
 
     static_assert(tile_h == 1 || tile_h == 2 || tile_h == 4 || tile_h == 8 || tile_h == 16 || tile_h == 32, "rope_sfpu: tile_h must be 1, 2, 4, 8, 16, or 32");
     static_assert((F & 3) == 0, "face stride must keep rows 4-row aligned");
+    static_assert(Wt == 1 || Wt == 2, "rope_sfpu: Wt must be 1 or 2 (decode rotary head_dim <= 64)");
     static_assert((x_base & 3) == 0 && (x_stride & 3) == 0, "x rows must be 4-row aligned");
     static_assert((cs_base & 3) == 0 && (cs_stride & 3) == 0, "cos/sin rows must be 4-row aligned");
 
@@ -215,6 +244,14 @@ inline void sfpu_rope_fused_all_rows(const std::uint32_t scale_fp32)
     constexpr std::uint32_t num_row_halves     = (tile_h > 16) ? 2 : 1;
     constexpr std::uint32_t live_rows_per_half = (tile_h > 16) ? 16 : tile_h;
     constexpr std::uint32_t num_row_groups     = (live_rows_per_half + 3) / 4;
+
+    // Rows touched per x tile: up to the last row group of the last face.  Shared cos/sin
+    // (cos_sin_per_row false) only reads the first row group of each column-face.
+    constexpr std::uint32_t x_rows_spanned  = (num_row_halves - 1) * 32 + F + num_row_groups * 4;
+    constexpr std::uint32_t cs_rows_spanned = cos_sin_per_row ? x_rows_spanned : F + 4;
+    constexpr std::uint32_t half_rows       = rope::half_dest_rows<is_fp32_dest_acc_en>();
+    static_assert(rope::operand_end_row_index(x_base, Ht * Wt, x_stride, x_rows_spanned) <= half_rows, "rope_sfpu: x rows exceed half DEST");
+    static_assert(rope::operand_end_row_index(cs_base, Wt, cs_stride, cs_rows_spanned) <= half_rows, "rope_sfpu: fused cos/sin rows exceed half DEST");
 
     for (std::uint32_t w = 0; w < Wt; w++)
     {
