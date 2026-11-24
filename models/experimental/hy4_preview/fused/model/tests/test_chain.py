@@ -60,13 +60,17 @@ FIRST_WAIT = 100_000_000
 PROMPT = int(os.environ.get("HY4_CHAIN_PROMPT", "31"))
 BLOCK = 1 if PROMPT < 512 else 4
 MOE_FIDELITY = os.environ.get("HY4_MOE_FIDELITY", "p02")
+# the MoE layers' expert layout (Stack(mlp_split=)): tp32, or tp8g4 = 8 chips per group (fused/layer_mlp/PLAN.md 15;
+# its streams must be converted: convert.py --split tp8g4)
+MLP_SPLIT = os.environ.get("HY4_MLP_SPLIT", "tp32")
 LATENT_SCALE = float(os.environ["HY4_LATENT_SCALE"]) if os.environ.get("HY4_LATENT_SCALE") else None
 JOB = os.environ.get("HY4_CHAIN_TRACE_JOB", "A")  # A: capture and one replay, then stop; B: the replays and the latency
 # (the dumps of the two RoPE pairings, reference/attention.py rope_pairing, are different models' numbers)
 PAIRING = rope_pairing()
-DUMP = (
+DUMP = os.environ.get("HY4_CHAIN_DUMP") or (
     f"generated/hy4_preview/logs/mk11_chain{'' if LAYERS == 6 else f'_L{LAYERS}'}_P{PROMPT}_{MOE_FIDELITY}"
-    f"{'' if LATENT_SCALE is None else '_scaled'}{'' if PAIRING == 'half_split' else '_' + PAIRING}.pt"
+    f"{'' if LATENT_SCALE is None else '_scaled'}{'' if PAIRING == 'half_split' else '_' + PAIRING}"
+    f"{'' if MLP_SPLIT == 'tp32' else '_' + MLP_SPLIT}.pt"
 )
 GOLDEN_STEPS = {31: 32, 33: 32, 1000: 6, 1022: 6, 3000: 6, 5118: 6}
 # A MIXED step: the 8 rows from different goldens, "prompt:step" per row (Chain(mix=...)), e.g.
@@ -185,7 +189,11 @@ class Chain:
             wait_limit=wait_limit,
             canary=canary,
             attn_kwargs=attn_kwargs,
+            mlp_split=MLP_SPLIT,
         )
+        if MLP_SPLIT != "tp32":
+            self.label += f" [{MLP_SPLIT}]"
+            logger.info(f"HY4_MK11 chain: the MoE layers' experts are laid out as {MLP_SPLIT}")
         # head_site: the site table gets one more entry behind the layers' 2 N: the model's hc_head with the final
         # norm's weight as its gamma (ends_fused.head_site; index 2 N), for the fused ends' HEAD program
         self.head_site = head_site

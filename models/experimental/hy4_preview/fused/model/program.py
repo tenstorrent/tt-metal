@@ -28,6 +28,13 @@ What this module adds is the state the programs share and the per-layer state th
 The pieces are not edited. While an MlpLayer is constructed three names it uses are replaced (Stack._building):
 layer_mlp.program.tp (so that every MlpLayer gets the one arena transport), layer_mlp.program.IhcSite (the shared
 site) and moe.program.hub_tensor (the pool of hub buffers).
+
+The full-indexer layers (Stack.set_indexer; PLAN.md section 53): a second AttnLayer, the full program set, on the
+first one's arena (AttnLayer(host=)), and one Scan / TopkMergeHub / Cut of fused/indexer_scan and fused/merges. A
+full layer's step is then P1 | scan | merge | cut | P2 | MLP (3 N + 3 F + 1 programs for F full layers): its P1
+appends the step's latent row and index key and writes the scan's query, the cut writes THE selection table, and a
+shared layer reads the table the full layer before it left. Without set_indexer every layer runs in the
+shared-indexer form on a selection table the host wrote.
 """
 
 from __future__ import annotations
@@ -120,6 +127,9 @@ class LayerState:
     mlp: object  # the MlpLayer of the layer's kind
     mlp_state: dict  # MlpLayer.layer_state()
     sel: object = None  # the layer's own selection table (DRAM; None: the one set_cache gave)
+    a: object = None  # the AttnLayer (program set) its P1 and P2 are built with (None: the Stack's first)
+    full: bool = False  # a full-indexer layer: P1 | scan | merge | cut | P2 | MLP (Stack.set_indexer)
+    rank: int = 0  # a full layer's rank among the key store's layer slots of a user
 
 
 class Stack:
@@ -139,11 +149,15 @@ class Stack:
         alias_hub=True,
         canary=True,
         parse_only=False,
+        mlp_split="tp32",
     ):
         """canary: the heads but the root carry kernels/canary.cpp in P2 and in the MLP program (read_canary).
         parse_only: every sender of the three programs is built parse-only (it writes its argument table as it read
         it to a page and sends nothing; the other kernels run into their bounded waits): ``attn_kwargs`` must then
-        hold parse_only=True for the attention half; check_parsed compares the pages."""
+        hold parse_only=True for the attention half; check_parsed compares the pages.
+        mlp_split: the MoE layers' expert layout (MlpLayer(split=): "tp32" or "tp8g4", fused/layer_mlp/PLAN.md section
+        15); the dense FFN of layer 0 keeps tp32."""
+        self.mlp_split = mlp_split
         assert M.SITE == A.SITE, "the two halves place the root's site differently"
         assert M.PAYLOAD == A.PAYLOAD
         self.mesh = mesh_device
@@ -159,15 +173,23 @@ class Stack:
             import os
 
             defaults = dict(sink_args=True, fixed_order=os.environ.get("HY4_FIXED_ORDER", "1") != "0")
-            attn = A.AttnLayer(
-                mesh_device,
+            self._attn_kwargs = dict(
                 chips=chips,
                 fidelity=fidelity,
                 timing=timing,
                 wait_limit=wait_limit,
                 **dict(defaults, **(attn_kwargs or {})),
             )
+            attn = A.AttnLayer(mesh_device, **self._attn_kwargs)
+        else:
+            self._attn_kwargs = None
         self.a = attn
+        # the full-indexer layers' program set and the selection chain (set_indexer). None: every layer runs in the
+        # shared-indexer form on a selection the host wrote.
+        self.af = self.scan = self.cut = self.merge = self.keys = None
+        self.full_layers = 0
+        self._sel = None
+        self._sel_descs = {}
         # the arena is scratch (fused/layer_attn PLAN.md: every data range is written by a step before the step reads
         # it; this model's PLAN.md section 26, run A2, is the evidence) but the three groups' status words, which must be
         # zero at rest
@@ -270,6 +292,7 @@ class Stack:
                 site_tensors=dict(streams=a.streams, f=a.f, y=a.y, xn=a.xn),
                 transport=self._transport,
                 hub_tensors=hub,
+                split="tp32" if dense else self.mlp_split,
             )
         return self.mlps[dense]
 
@@ -302,19 +325,27 @@ class Stack:
         whose addresses go into the launches' runtime arguments, its bias and sink peer are runtime arguments, its
         norms' weights are in the site table."""
         assert self.table is not None, "set_sites first"
-        a = self.a
+        # a full-indexer layer (its weights carry the indexer's: projections/layout.py layer_weights(.., indexer)) is
+        # built with the full program set; its rank in the key store is its place among the full layers
+        full = lw is not None and bool(lw.full)
+        assert not full or self.af is not None, "a full-indexer layer: set_indexer first"
+        a = self.af if full else self.a
+        rank = sum(1 for state in self.layers if state.full)
         if lw is not None:
             a.set_weights(lw, free=False)  # (the layer before's groups and kv norm weight belong to its set)
-            for name in ("pre", "query", "post"):  # one set of go words per group for all layers
+            for name in ("pre", "query", "post"):  # one set of go words per group for all layers of a program set
                 prog = getattr(a, name)
-                if name in self._go:
+                if (full, name) in self._go:
                     ttnn.deallocate(prog.go)
-                    prog.go = self._go[name]
+                    prog.go = self._go[(full, name)]
                 else:
-                    self._go[name] = prog.go
+                    self._go[(full, name)] = prog.go
+        if full:
+            assert rank < self.full_layers, f"the key store has {self.full_layers} layer slots a user"
+            a.set_key_rank(rank)
         if sink is not None:
             # (the argument form keeps only the peer's values; the tensor form gets a tensor per layer)
-            a.set_sink(sink, new=not a.sink_args and len(self.layers) > 0)
+            a.set_sink(sink, new=not a.sink_args and any(state.a is a for state in self.layers))
         m = self._mlp(dense)
         m.set_layer(
             key if moe_layer is None else moe_layer,
@@ -332,20 +363,97 @@ class Stack:
             site_attn,
             int(cache_layer),
         )  # (gamma: site table)
-        state = LayerState(key, a.layer_set(), site_attn, site_mlp, int(cache_layer), m, m.layer_state())
+        state = LayerState(
+            key, a.layer_set(), site_attn, site_mlp, int(cache_layer), m, m.layer_state(), a=a, full=full, rank=rank
+        )
         self.layers.append(state)
         ttnn.synchronize_device(self.mesh)
         return state
 
-    def set_cache(self, cfg, kv, sel, keep_out=False):
+    def set_cache(self, cfg, kv, sel=None, keep_out=False):
         """The KV storage and the selection table of every layer. A layer whose selection is its own (a context above
-        the top-k: the picks differ between full-indexer layers) carries it as LayerState.sel."""
-        self.a.set_cache(cfg, kv, sel, 0, keep_out=keep_out)
+        the top-k: the picks differ between full-indexer layers) carries it as LayerState.sel. With set_indexer the
+        selection of EVERY layer is the cut's table (a shared layer reads what the full layer before it left) and
+        ``sel`` is not given."""
+        a, af = self.a, self.af
+        if af is not None:
+            assert sel is None or sel is self.cut.table, "with set_indexer the selection is the cut's table"
+            sel = self.cut.table
+        a.set_cache(cfg, kv, sel, 0, keep_out=keep_out)
+        if af is not None:
+            # (ONE sparse attention for both program sets: one set of global semaphores, one q / out tensor)
+            af.sm, af.q, af.out = a.sm, a.q, a.out
+            af.set_cache(cfg, kv, sel, 0, keep_out=keep_out)
+            assert af.sm is a.sm
         self._sel = sel
 
-    # ------------------------------------------------------------------------------------------ programs
-    def _use(self, state):
+    def set_indexer(self, keys, full_layers, bits=(6, 5, 5)):
+        """The full-indexer layers in the step (PLAN.md sections 52, 53). Before the first add_layer.
+
+        keys: the index-key store, per chip [8 users x full_layers, 1, stripe rows, 128] BFP8 tiles (indexer_scan
+        key_memory_config; slot = user * full_layers + rank), striped as the model stripes a conversation (128
+        positions a chip and turn). What this makes:
+          af      a SECOND program set, AttnLayer(full=True, index_query=True, host=the first), with the first one's
+                  arguments: it uses the first's arena, words, site and streams, and (aliased here) its RoPE tiles,
+                  cos / sin tensor, positions and latent frame tables, so that a pass's inputs are written ONCE
+                  (set_positions, set_rope). Its own: its transport's words, its groups' go words, the key store's
+                  frame tables, the Hadamard matrix.
+          scan, merge, cut    ONE of each for all full layers (fused/indexer_scan Scan and Cut, fused/merges
+                  TopkMergeHub): a full layer's P1 writes the scan's query and multipliers and appends the step's
+                  key, the scan reads the layer's slots (a descriptor per rank: runtime arguments), the cut writes
+                  THE selection table, which P2 of that layer and of the shared layers behind it read.
+        The append is on in both sets (every layer writes the step's latent row; a full layer also its key)."""
+        from models.experimental.hy4_preview.fused.indexer_scan import indexer_scan as isc
+        from models.experimental.hy4_preview.fused.merges import topk_merge as tm
+
         a = self.a
+        assert self._attn_kwargs is not None, "set_indexer: the Stack makes both program sets"
+        assert a.append is not None, "the full-indexer form: Stack(attn_kwargs=dict(append=...)): every layer appends"
+        assert not self.layers and self.af is None and self.topo.whole_mesh
+        slots, _, stripe_rows, dim = tuple(keys.shape)
+        assert slots == ROWS * full_layers and dim == isc.KEY_DIM, (tuple(keys.shape), full_layers)
+        self.af = af = A.AttnLayer(self.mesh, full=True, index_query=True, host=a, **self._attn_kwargs)
+        for name in ("rope", "cs", "positions"):
+            ttnn.deallocate(getattr(af, name))
+            setattr(af, name, getattr(a, name))
+        ttnn.deallocate(af.frames.tensor)
+        af.frames = a.frames
+        self.keys, self.full_layers = keys, int(full_layers)
+        cfg = isc.ScanConfig(
+            users=ROWS,
+            stripe_rows=stripe_rows,
+            num_chips=len(self.topo.chips),
+            chip_block=128,
+            mode="tree",
+            query_rows=True,
+        )
+        self.scan = isc.Scan(self.mesh, cfg, keys, [u * self.full_layers for u in range(ROWS)])
+        self.cut = isc.Cut(self.scan)
+        self.merge = tm.TopkMergeHub(
+            self.mesh, users=ROWS, bits=tuple(bits), survivors=self.scan.out, cuts=self.cut.cuts
+        )
+        af.set_keys(keys, 0, self.full_layers)
+        af.set_scan(self.scan)
+        ttnn.synchronize_device(self.mesh)
+        return af
+
+    def set_positions(self, positions):
+        """The 8 rows' positions of the pass (0xFFFFFFFF: an idle row), for the appends of both program sets (one
+        tensor)."""
+        self.a.set_positions(positions)
+
+    def set_contexts(self, contexts):
+        """The 8 rows' visible lengths for the scan (position + 1: a query sees the key of its own position; 0: an
+        idle row). It rewrites the scan's step pages whole: before a step, never between a P1 and its scan."""
+        self.scan.set_contexts(contexts)
+
+    # ------------------------------------------------------------------------------------------ programs
+    def _set_of(self, state):
+        """The AttnLayer (program set) a layer's P1 and P2 are built with."""
+        return state.a if state.a is not None else self.a
+
+    def _use(self, state):
+        a = self._set_of(state)
         for k in A.LayerSet.FIELDS:  # the layer's set as the AttnLayer's current one (AttnLayer.layer_set())
             setattr(a, k, getattr(state.attn, k))
         if getattr(self, "_sel", None) is not None:  # (the table's address is the descriptor's: no new program)
@@ -358,7 +466,7 @@ class Stack:
     def layer_programs(self, state, post: bool, audit: bool = False):
         """[(name, io tensors, MeshProgramDescriptor)] of the layer's P1, P2 and MLP program. post: P1's leading
         pass also does the post-mix of the F on the site cores (a layer before left it)."""
-        a = self.a
+        a = self._set_of(state)
         self._use(state)
         a._p2_chip = self._p2_chip
         try:
@@ -379,7 +487,36 @@ class Stack:
         finally:
             del m._chip_program
         io = [t for t in io if not isinstance(t, Alias)]
-        return [("p1", *p1), ("p2", *p2), ("mlp", io, desc)]
+        return [("p1", *p1)] + (self.selection_programs(state) if state.full else []) + [("p2", *p2), ("mlp", io, desc)]
+
+    def selection_programs(self, state):
+        """[(name, io, MeshProgramDescriptor)] of a full layer's scan, merge and cut, between its P1 and its P2. The
+        scan's descriptor is the layer's (its slots in the key store are runtime arguments of the key reader); the
+        merge's and the cut's are one each for all layers."""
+        assert state.full and self.scan is not None
+        scan, cut, merge = self.scan, self.cut, self.merge
+        if "merge" not in self._sel_descs:
+            self._sel_descs["merge"], self._sel_descs["cut"] = merge.descriptor(), cut.descriptor()
+        slots = [u * self.full_layers + state.rank for u in range(ROWS)]
+        return [
+            ("scan", scan.io_tensors(), scan.descriptor(slots=slots)),
+            ("merge", merge.io_tensors(), self._sel_descs["merge"]),
+            ("cut", cut._io(), self._sel_descs["cut"]),
+        ]
+
+    def _selection_chip(self, state, coord):
+        """[(name, ProgramDescriptor)] of the scan's and the merge's program on one chip (cb_audit, l1_report). The
+        cut's is built inside Cut.descriptor: 2 x 4,096 + 8,192 + 64 B of buffers on the users' root scan cores."""
+        from models.experimental.hy4_preview.fused.collective import collective as cl
+
+        new = lambda: ttnn.ProgramDescriptor(kernels=[], semaphores=[], cbs=[])
+        slots = [u * self.full_layers + state.rank for u in range(ROWS)]
+        scan = self.scan.append_to(new(), coord, slots=slots)
+        merge, hub = new(), self.merge
+        frag = cl.Fragment(self.mesh, coord, merge, hub.sender_core, [hub.hub_core], hub.wait_limit, timing=hub.timing)
+        hub.append_to(merge, frag, coord)
+        frag.finish()
+        return [("scan", scan), ("merge", merge)]
 
     # the two per-chip programs that carry a canary on the heads but the root
     def _canary_kernel(self, kind):
@@ -420,7 +557,8 @@ class Stack:
         return self.canary is not None and self.mt is not None and self.topo.is_head(coord) and coord != self.topo.root
 
     def _p2_chip(self, coord, stage="all"):
-        desc, io = type(self.a)._p2_chip(self.a, coord, stage)
+        a = self._set_of(self._current)  # (the layer's program set: _use)
+        desc, io = type(a)._p2_chip(a, coord, stage)
         if stage == "all" and self._has_canary(coord):
             desc.kernels = list(desc.kernels) + [self._canary_kernel("p2")]
             io = io + [self.canary]
@@ -484,13 +622,16 @@ class Stack:
     def reset(self):
         """After a run that left a status (a parse-only run does): every hand-over word of both halves to zero."""
         a = self.a
-        for state in self.layers[:1]:  # (the go words are one set for all layers)
-            a.pre, a.query, a.post = state.attn.pre, state.attn.query, state.attn.post
-            a.reset()
+        for s in (self.a, self.af):  # (the go words are one set for all layers of a program set)
+            for state in [st for st in self.layers if self._set_of(st) is s][:1]:
+                s.pre, s.query, s.post = state.attn.pre, state.attn.query, state.attn.post
+                s.reset()
         for m in self.mlps.values():
             m.reset()
         if a.sm is not None:
             a.sm.reset_semaphores()
+        if self.merge is not None:
+            self.merge.reset()
         ttnn.synchronize_device(self.mesh)
 
     def make_restore(self, chips=None, hooks=()):
@@ -531,15 +672,17 @@ class Stack:
     def cb_audit(self, state, post: bool):
         """layer_attn's cb_audit (one producer and one consumer processor per circular buffer) on the per-chip
         programs of the layer as this module assembles them: root, a head, another chip. Returns the table rows."""
-        a = self.a
+        a = self._set_of(state)
         self._use(state)
         rows = []
         for coord in self._audit_coords():
-            for name, desc in (
+            # (the scan's and the merge's kernels are their pieces' own, unmodified, each a program of its own: the
+            # table has no rows for them (layer_attn _cb_roles); the "declared twice" check below covers them)
+            for name, desc in [
                 ("p1", a._p1_chip(coord, post)[0]),
                 ("p2", self._p2_chip(coord, "all")[0]),
                 ("mlp", self._mlp_chip(state.mlp, coord, True)[0]),
-            ):
+            ] + (self._selection_chip(state, coord) if state.full else []):
                 rows += [(state.key, name, coord) + row for row in A.cb_audit(desc)]
                 # no buffer id is declared twice on a core inside one program
                 seen = {}
@@ -613,6 +756,9 @@ class Stack:
     def status(self) -> dict:
         """Everything that is not at rest in either half after a step. Empty when the step completed."""
         out = {("attn",) + tuple(k if isinstance(k, tuple) else (k,)): v for k, v in self.a.status().items()}
+        if self.af is not None:  # (the full set's own: its transport's words; this piece's words are the first set's)
+            for k, v in self.af.t.status().items():
+                out[("attn_full",) + tuple(k if isinstance(k, tuple) else (k,))] = v
         for dense, m in self.mlps.items():
             for k, v in m.status().items():
                 out[("mlp", "dense" if dense else "moe") + tuple(k if isinstance(k, tuple) else (k,))] = v
@@ -632,14 +778,14 @@ class Stack:
         }
         if programs_of is None:
             return out
-        a = self.a
+        a = self._set_of(programs_of)
         self._use(programs_of)
         for coord in self._audit_coords():
-            for name, desc in (
+            for name, desc in [
                 ("p1", a._p1_chip(coord, True)[0]),
                 ("p2", self._p2_chip(coord, "all")[0]),
                 ("mlp", self._mlp_chip(programs_of.mlp, coord, True)[0]),
-            ):
+            ] + (self._selection_chip(programs_of, coord) if programs_of.full else []):
                 per_core = {}
                 for cb in desc.cbs:
                     backed = cb.has_buffer() if callable(cb.has_buffer) else cb.has_buffer

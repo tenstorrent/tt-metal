@@ -99,14 +99,26 @@ class Weights:
             self._rounded[e] = (value(self.gate_up[e : e + 1].float())[0], value(self.down[e : e + 1].float())[0])
         return self._rounded[e]
 
-    def moe(self, x, ids, w, rounded=False, per_chip=False):
+    def moe(self, x, ids, w, rounded=False, per_chip=False, split="tp32", shared_group=prepare.GROUP_SHARED):
         """The MoE output [T, 6144] for per-row picks ids [T, 8] with weights w [T, 8], plus the shared expert
         (reference/moe.py Hy4MoE: routed with the clamp, shared without), in fp32 matmuls summed in fp64.
-        per_chip: also every chip's partial [32, T, 6144] (its 1/32 of the intermediate channels)."""
+        per_chip: also every chip's partial [32, T, 6144]: its 1/32 of the intermediate channels of every expert
+        (split "tp32"), or its slice of its own group's experts and nothing of the others (a grouped split of
+        fused/moe/prepare.py: chip c is slice c // G of group c % G; the shared expert on ``shared_group``)."""
         out = torch.zeros(x.shape[0], HIDDEN, dtype=torch.float64)
         parts = torch.zeros(32, x.shape[0], HIDDEN, dtype=torch.float64) if per_chip else None
         xf = x.float()
         step = I // 32
+        groups = prepare.split_groups(split)
+
+        def channels(c, e):
+            """Chip c's intermediate channels of entry e (None: the chip holds nothing of it)."""
+            if not groups:
+                return slice(c * step, (c + 1) * step)
+            group, part = prepare.chip_group(split, c)
+            owner = shared_group if e >= E else e // (E // groups[1])
+            return slice(part * I // groups[0], (part + 1) * I // groups[0]) if group == owner else None
+
         for e in sorted(set(ids.flatten().tolist())) + [E]:
             gu, dn = self.rounded(e) if rounded else self.exact(e)
             if e < E:
@@ -120,7 +132,9 @@ class Weights:
             out[rows] += (act @ dn.T).double()
             if per_chip:
                 for c in range(32):
-                    parts[c, rows] += (act[:, c * step : (c + 1) * step] @ dn[:, c * step : (c + 1) * step].T).double()
+                    sl = channels(c, e)
+                    if sl is not None:
+                        parts[c, rows] += (act[:, sl] @ dn[:, sl].T).double()
         return (out.float(), parts.float()) if per_chip else out.float()
 
 
@@ -217,10 +231,22 @@ def check_step(mlp, w, hf, rows, label, post=True, per_chip=True, full=True):
         failed.append(f"F differs from the two-stage sum of the partials in {wrong} elements")
     ref_bfp4 = None
     if per_chip:
-        ref_bfp4, parts = w.moe(x, ids, weights, rounded=True, per_chip=True)
+        ref_bfp4, parts = w.moe(
+            x, ids, weights, rounded=True, per_chip=True, split=mlp.split, shared_group=mlp.shared_group
+        )
+        # (a grouped split: a chip whose group has no pick has nothing to do; its partial must be zero, bit for bit)
+        idle = [c for c in mlp.topo.chips if not parts[mlp.topo.chip(c)].any()]
+        dirty = [c for c in idle if partials[c].abs().max() != 0]
+        if idle:
+            logger.info(
+                f"HY4_MK8 {label} chips with an empty union: {len(idle)}, of them with a partial that is not zero: {dirty}"
+            )
+        if dirty:
+            failed.append(f"chips with nothing to do delivered a partial that is not zero: {dirty}")
         scores = {
             c: (pcc(parts[mlp.topo.chip(c)], partials[c]), gain(parts[mlp.topo.chip(c)], partials[c]))
             for c in mlp.topo.chips
+            if c not in idle
         }
         worst = min(scores, key=lambda c: scores[c][0])
         pccs = sorted(s[0] for s in scores.values())

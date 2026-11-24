@@ -30,6 +30,13 @@ reference PCC 0.9917 to 0.9991 (the BFP4 format's own). Layer 0's dense FFN (den
 (F against the reference PCC 0.99997, gain 0.988); its latency is not measured. Not built: the post-mix of this
 program's F inside the same program (it is the next program's leading pass, post_program here).
 
+A second expert layout, off by default (MlpLayer(split="tp8g4"), PLAN.md section 15): "8 chips per group". The 4
+mesh columns are 4 groups; group g owns the routed experts [64 g, 64 g + 64) and each of its 8 chips holds a 1/8
+slice (P 8) of each of them; the shared expert lives on one group (fused/moe/prepare.py GROUP_SHARED). Every chip
+runs the same router over all 256 experts and builds the union of ITS group's picks only (hub_router.cpp's
+expert_base / expert_count, compile-time arguments set per chip here); a chip whose group nobody picked delivers a
+zero partial. No kernel differs from the default layout's in text; the sum over the 32 partials is the same F.
+
 Precision: the iHC pass and the norm are fp32 (SFPU); x travels as BF16; the MoE piece's matmuls are custom_mm at LoFi
 on BFP4 weights (two BFP4 terms for the shared expert); the partial outputs are BF16, summed in Float32 and rounded
 to BF16 once per reduce stage; F is BF16.
@@ -39,6 +46,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import torch
 
 import ttnn
@@ -63,6 +71,22 @@ ROOT_REDUCE = [(4, 6), (4, 7), (4, 8), (4, 9)]
 ROOT_FINISHERS = [(4, y) for y in range(6)]
 ROOT_ROUTER = [(11, y) for y in range(8)]
 SITE = dict(num_cores=16, origin=(5, 0), per_row=2, cb_base=32)
+# MlpLayer(arena=True): ONE L1 tensor over the whole worker grid whose ranges each core uses for its own role, the
+# ranges fused/model gives this half on the attention's arena (model/PLAN.md section 2): the sender core's staging,
+# the reduce cores' two landings, the hub core's x and output buffer. Five different cores.
+ARENA = {"staging": 0, "landing1": 0, "landing2": PAYLOAD}
+ARENA_HUB_X, ARENA_HUB_OUT = 0, PAYLOAD
+ARENA_BYTES = 3 * PAYLOAD
+
+
+class Range:
+    """A buffer that is a range of the arena on one core (what the MoE piece asks of a hub buffer is its address)."""
+
+    def __init__(self, address: int, nbytes: int):
+        self.address, self.nbytes = int(address), int(nbytes)
+
+    def buffer_address(self) -> int:
+        return self.address
 
 
 def is_mock() -> bool:
@@ -73,8 +97,13 @@ def replicated(mesh_device, data, dtype, layout=ttnn.ROW_MAJOR_LAYOUT):
     return ttnn.from_torch(data, dtype=dtype, layout=layout, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device))
 
 
-def load_streams(mesh_device, layer, split="tp32", root=prepare.DEFAULT_OUT):
-    """The layer's two weight streams as mesh tensors with one shard per chip (fused/moe/prepare.py's files)."""
+def load_streams(
+    mesh_device, layer, split="tp32", root=prepare.DEFAULT_OUT, dense=False, shared_group=prepare.GROUP_SHARED
+):
+    """The layer's two weight streams as mesh tensors with one shard per chip (fused/moe/prepare.py's files).
+    The files' stamp is compared first with what this half is about to run (prepare.check_stamp: the split, the
+    entries, the shared expert's group, the format): files of another container are refused, not read."""
+    prepare.check_stamp(root, layer, split, dense=dense, shared_group=shared_group)
     chips = mesh_device.get_num_devices()
     out = []
     for which in (0, 1):
@@ -105,6 +134,9 @@ class MlpLayer:
         site_tensors=None,
         transport=None,
         hub_tensors=None,
+        split="tp32",
+        shared_group=prepare.GROUP_SHARED,
+        arena=None,
     ):
         """For a caller that chains layers (fused/model); every default is the half as it was:
         layer_args: ONE MlpLayer serves many layers: the expert and router streams' addresses and the router's bias
@@ -115,14 +147,52 @@ class MlpLayer:
             (the root's site state is one for the whole layer), instead of making them.
         transport: a function (mesh_device, topology, hub, x) -> Transport, in place of a transport of this half's
             own (for one on another half's arena).
-        hub_tensors: RoutedExperts(hub_tensors=...) for the chips' instance (the root's takes the same ones)."""
+        hub_tensors: RoutedExperts(hub_tensors=...) for the chips' instance (the root's takes the same ones).
+        split: the expert layout, a split of fused/moe/prepare.py: "tp32" (1/32 of every expert on every chip) or
+            "tp8g4" (a mesh column is a group that owns 64 experts, 1/8 of each on each of its 8 chips; the shared
+            expert on group ``shared_group``; PLAN.md section 15). The dense FFN has the tp32 form only.
+        arena: this half's transport buffers and the hub's x / output buffer as ranges of one L1 tensor of its own
+            (ARENA; 294,912 B of address space instead of 589,888 B), the form fused/model runs this half in on
+            the attention's arena. Default: on for a grouped split without a caller's transport (its activation
+            buffer is 202,752 B larger on every core, which the root's site cores do not have beside 702,720 B of
+            tensors: PLAN.md 15.5), off otherwise (the half as it was)."""
         self.mesh = mesh_device
         self.topo = tp.Topology(tuple(mesh_device.shape), root, chips)
         self.timing = timing
         # dense: layer 0's FFN as DENSE_SLICES always-on plain slots of two BFP4 terms each (fused/moe/prepare.py
         # dense_experts), no router: the slots are the same on every step and are written to the hubs' meta buffers
         self.dense = dense
-        share = L.tp_share(32)
+        self.split = split
+        self.groups = prepare.split_groups(split)  # None, or (chips per group, groups)
+        self.shared_group = shared_group
+        if self.groups:
+            assert not dense, "the dense FFN is stored as tp32 (PLAN.md 15.3)"
+            assert (
+                tuple(mesh_device.shape) == self.groups
+            ), f"split {split} is for a mesh of {self.groups} (rows, columns)"
+            assert 0 <= shared_group < self.groups[1]
+        share = prepare.split_share(split)
+        if arena is None:
+            arena = self.groups is not None and transport is None
+        self.arena = None
+        if arena:
+            assert transport is None and hub_tensors is None, "arena: this half's own transport and hub buffers"
+            self.arena = tp.core_buffer(mesh_device, tp.grid_set(mesh_device), ARENA_BYTES, ttnn.uint32, width=256)
+            base = tp.address(self.arena)
+            hub_tensors = {"x": Range(base + ARENA_HUB_X, PAYLOAD), "out": Range(base + ARENA_HUB_OUT, PAYLOAD)}
+            transport = lambda mesh, topo, hub, x: tp.Transport(
+                mesh,
+                topo,
+                hub,
+                SENDER,
+                REDUCE,
+                PAYLOAD,
+                root_reduce_cores=ROOT_REDUCE,
+                wait_limit=wait_limit,
+                timing=timing,
+                arena=(self.arena, ARENA),
+                x_address=x.buffer_address(),
+            )
         defines = list(moe_defines) + ([("HY4_TIMING", "1")] if timing else [])
         # the MoE piece's measured best: rectangular placement, 4 down cores per bank, the router cores cutting
         # their 32 experts to each row's 8 best so that the hub merges 8 short lists (25 us of software against 82)
@@ -138,6 +208,12 @@ class MlpLayer:
         )
         if dense:
             kwargs = dict(router=False, plain_terms=2, mode="rect", down_per_bank=4)
+        if self.groups:
+            # a chip's stream entries: its group's E / groups experts (local ids), then the shared expert's two
+            # terms; the group's first expert and whether the chip has the plain slot are set chip by chip
+            # (_group_args). The buffers are sized for the worst chip: 64 picks in one group and the plain slot.
+            count = E // self.groups[1]
+            kwargs.update(expert_count=count, plain_id0=count)
         kwargs.update(moe_kwargs or {})
         self.layer_args = layer_args
         if layer_args:
@@ -207,6 +283,18 @@ class MlpLayer:
             assert not (used & hub) and not (used & extra) and not (hub & extra), f"{name}: core roles overlap"
             assert len(xy(op.fin)) == op.NF and len(xy(op.r_cores)) == (op.router_cols if op.router else 0)
 
+    def group(self, coord):
+        """Grouped split: (group, slice) of the chip at ``coord``: its mesh column and its mesh row."""
+        return int(coord[1]), int(coord[0])
+
+    def _group_args(self, op, coord):
+        """Grouped split: the hub's compile-time arguments that differ between chips (hub_router.cpp arguments 12
+        and 14): the chip's group's first expert, and the plain slot on the shared expert's group only."""
+        if self.groups:
+            group, _ = self.group(coord)
+            op.expert_base = group * op.expert_count
+            op.n_plain = 1 if group == self.shared_group else 0
+
     def n_down(self, coord):
         return len((self.op_root if tuple(coord) == self.topo.root else self.op).all_d)
 
@@ -230,7 +318,11 @@ class MlpLayer:
             ttnn.copy_host_to_device_tensor(replicated(self.mesh, meta, ttnn.uint16), op.meta)
         else:
             self._set_router(router_weight, router_bias)
-        self.w_gate_up, self.w_down = streams if streams is not None else load_streams(self.mesh, layer)
+        self.w_gate_up, self.w_down = (
+            streams
+            if streams is not None
+            else load_streams(self.mesh, layer, split=self.split, dense=self.dense, shared_group=self.shared_group)
+        )
         router_address = 0 if self.dense else op.w_router.buffer_address()
         for one in (self.op, self.op_root):  # the cores' constants: hand-over words zero, roles, stream addresses
             words = one._core_words(self.w_gate_up, self.w_down).to(torch.int32)
@@ -278,6 +370,7 @@ class MlpLayer:
         topo, t = self.topo, self.t
         root = coord == topo.root
         op = self.op_root if root else self.op
+        self._group_args(op, coord)
         desc, io = op.descriptor(self.w_gate_up, self.w_down)
         hub = desc.kernels[0]
         assert str(hub.kernel_source).endswith("hub.cpp" if self.dense else "hub_router.cpp"), hub.kernel_source
@@ -408,9 +501,27 @@ class MlpLayer:
         words, the router's scores [8, 256] (sigmoid, FP32), picks [8, 8] and weights [8, 8]."""
         chip = self.topo.chip(coord)
         dev = lambda t: ttnn.to_torch(ttnn.get_device_tensors(t)[chip])
+        if self.arena is not None:  # x and the output are ranges of the arena on the hub core
+            gx, gy = self.t.grid
+            image = (
+                dev(self.arena)
+                .to(torch.int32)
+                .numpy()
+                .astype(np.uint32)
+                .reshape(gx * gy, ARENA_BYTES // 4)
+                .view(np.uint8)
+            )
+            hub = image[self.op.hub.y * gx + self.op.hub.x]
+            bf16 = lambda raw: torch.from_numpy(np.frombuffer(raw.tobytes(), dtype=np.int16).copy()).view(
+                torch.bfloat16
+            )
+            rows = lambda off: bf16(hub[off : off + PAYLOAD]).float().reshape(L.K_TILES, -1)
+            x_rows, out_rows = rows(ARENA_HUB_X), rows(ARENA_HUB_OUT)
+        else:
+            x_rows, out_rows = dev(self.op.x).float(), dev(self.op.out).float()
         out = {
-            "x": L.from_row_tiles(dev(self.op.x).float()),
-            "out": L.from_row_tiles(dev(self.op.out).float()),
+            "x": L.from_row_tiles(x_rows),
+            "out": L.from_row_tiles(out_rows),
             "status": [int(v) & 0xFFFFFFFF for v in dev(self.op.status).flatten().tolist()],
         }
         if self.dense:
