@@ -51,6 +51,11 @@ def _input_on_first_core_row(case, mesh_device):
 CASES = [c for c in T.CASES if c["id"] == "03_32x2880_bf16_ws-l1"]
 
 
+# The case passed to this test was recorded on Blackhole, with the input sharded over 45 cores, so the hook in
+# conftest.py that marks tests for the 2-core emulator does not mark this test. The test reshards the input over
+# the first core row of the device (the 2 cores of the emulator) before it calls the op, so the call fits the
+# emulator. The test is therefore marked for the emulator explicitly.
+@pytest.mark.emulator
 @G.with_default_mesh()
 @pytest.mark.parametrize("case", CASES, ids=[c["id"] + "-first_core_row" for c in CASES])
 def test_add_small_grid(ttnn_mesh_device, reset_seeds, case):
