@@ -429,7 +429,7 @@ class LogProbsCalculator:
         num_devices = self.mesh_device.get_num_devices()
         if num_devices == 1:
             return self.num_devices_for_sharding == 1
-        return num_devices in (8, 32) and self.num_devices_for_sharding >= 2
+        return num_devices in (4, 8, 32) and self.num_devices_for_sharding >= 2
 
     # -----------------------------------------------------------------------
     # Old path (backward compat for non-gpt-oss models)
@@ -554,7 +554,7 @@ class LogProbsCalculator:
         Calculate log-probs for a given logits tensor and indices tensor.
         Returns None if log-probs are not requested or the mesh topology is
         unsupported. The old path supports a complete vocabulary on one device
-        and tensor-parallel vocabularies on the established 8/32-device meshes.
+        and tensor-parallel vocabularies on 4/8/32-device meshes.
         """
         if not self.enable_log_probs:
             return None
