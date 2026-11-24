@@ -57,7 +57,9 @@ def _bf16_quotient(tt_a, tt_b, input_a, input_b):
     bf16_quotient = raw_quotient.to(torch.bfloat16).float()
 
     plain = ttnn.to_torch(ttnn.divide(tt_a, tt_b, fast_and_approximate_mode=False)).float()
-    recip_underflow = (plain == 0) & (bf16_quotient != 0) & (input_b.abs() >= 2.0**126) & torch.isfinite(bf16_quotient)
+    recip_underflow = (
+        (plain == 0) & (bf16_quotient != 0) & (input_b.abs() >= 2.0**126) & torch.isfinite(bf16_quotient)
+    )
     # Sanity check on the correction itself, not just the final result: if the
     # device ever stopped underflowing here (or started underflowing
     # elsewhere), this golden would silently follow it and the test would
