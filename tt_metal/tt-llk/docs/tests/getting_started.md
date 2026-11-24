@@ -596,18 +596,21 @@ An external suite does not need a tt-llk checkout on `sys.path`: the harness is 
 
 The steps below are the whole setup on a machine that has no tt-metal checkout. They need the GitHub CLI, logged in to an account that can read tenstorrent/tt-metal (`gh auth status` says whether it is).
 
-1. Once per machine, define the `gh llk-wheel` command:
+1. Once per machine, define two `gh` commands:
    ```bash
    gh alias set llk-wheel --clobber --shell 'gh run download -R tenstorrent/tt-metal -n llk-harness-wheel $(gh run list -R tenstorrent/tt-metal -w llk-e2e.yaml -b "${1:-main}" -s completed -L1 --json databaseId -q ".[].databaseId")'
+   gh alias set llk-wheel-build --clobber --shell 'R=tenstorrent/tt-metal; B="${1:-main}"; gh workflow run llk-e2e.yaml -R $R --ref "$B" -f wheel_only=true && sleep 10 && I=$(gh run list -R $R -w llk-e2e.yaml -b "$B" -e workflow_dispatch -L1 --json databaseId -q ".[].databaseId") && gh run watch $I -R $R --exit-status > /dev/null && gh run download $I -R $R -n llk-harness-wheel'
    ```
-   It finds the newest completed run of the workflow on a branch and downloads that run's `llk-harness-wheel` artifact. `gh alias list` shows whether the machine already has it; setting it again is harmless.
+   `gh llk-wheel` finds the newest completed run of the workflow on a branch and downloads that run's `llk-harness-wheel` artifact. `gh llk-wheel-build` does not wait for the nightly: it starts a manual run of the workflow with its `wheel_only` input, which skips the tests and builds the wheel from the branch's current head, waits for it (about half a minute) and downloads the result. It needs write access to the repository, as starting any workflow does. `gh alias list` shows whether the machine already has them; setting them again is harmless.
 
    Then, in the directory the wheel should land in:
    ```bash
    gh llk-wheel               # the newest wheel built from main
    gh llk-wheel <branch>      # the newest wheel built from a branch, by a manual run of the workflow on it
+   gh llk-wheel-build         # build a wheel from main now, and download it
+   gh llk-wheel-build <branch>
    ```
-   This leaves `tt_llk_harness-<version>-py3-none-any.whl` and `requirements.txt` in the current directory. "no artifact matches" means there is no wheel to get: the newest run of that branch built none (it was cancelled, or it predates the wheel job), or the branch never ran the workflow.
+   Each leaves `tt_llk_harness-<version>-py3-none-any.whl` and `requirements.txt` in the current directory. "no artifact matches" means there is no wheel to get: the newest run of that branch built none (it was cancelled, or it predates the wheel job), or the branch never ran the workflow.
 
 2. Install it into the suite's environment:
    ```bash
