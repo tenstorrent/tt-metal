@@ -211,3 +211,17 @@ def test_pcc_window_rejects_golden_len_cap_on_windowed_golden(tmp_path, pcc_wind
     pcc_window_env.setenv("PREFILL_PCC_GOLDEN_LEN", "56320")
     with expect_error(ValueError, "PREFILL_PCC_GOLDEN_LEN caps the compare"):
         producer._resolve_pcc_window(trace, 256000, 32)
+
+
+def test_adapter_read_back_takes_precedence(monkeypatch):
+    calls = []
+
+    def read_back(*args):
+        calls.append(args)
+        return {"kvpe": 0.99}
+
+    monkeypatch.setattr(producer, "ADAPTER", SimpleNamespace(name="any_model", read_slot_kv_and_check_pcc=read_back))
+    monkeypatch.setenv("PREFILL_PCC_GOLDEN_LEN", "64")
+
+    assert producer._read_slot_kv_and_check_pcc("table", {}, 3, 100, "trace") == {"kvpe": 0.99}
+    assert calls == [("table", {}, 3, 64, "trace")]
