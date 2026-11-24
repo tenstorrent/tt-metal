@@ -387,8 +387,8 @@ ALWI void pack_untilize_uninit(uint32_t ocb) {
     }
 
 #else
-    // PACR_UNTILIZE leaves the packer's tile counters advanced, and the other packs read Dest from them (#66474).
-    PACK((llk_pack_untilize_uninit()));
+    // No-op: Quasar uses dedicated instructions (PACR_UNTILIZE, PACR_STRIDE) that
+    // don't conflict with standard PACR paths, so no reconfiguration is needed.
 #endif
 }
 

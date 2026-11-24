@@ -107,11 +107,3 @@ inline void llk_pack_untilize(
         _llk_pack_untilize_(dest_idx, l1_tile_idx, tensor_shape);
     }
 }
-
-/**
- * @brief Leaves the packer's address counters at zero after pack untilize, so a later pack reads Dest from the
- * tile it means to.
- *
- * @note Call after the last @ref llk_pack_untilize and before any other pack.
- */
-inline void llk_pack_untilize_uninit() { _llk_pack_untilize_uninit_(); }

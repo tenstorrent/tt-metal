@@ -122,6 +122,12 @@ inline void llk_pack_dummy(const std::uint32_t pack_output) {
     cfg_rmw(THCON_PACKER0_REG3_PACK_STRIDE_NO_WRITE_RMW, 1);
     cfg_rmw(THCON_PACKER0_REG3_PACK_STRIDE_ROW_MASK_RMW, 0xF);
 
+    // PACR_STRIDE reads Dest at the source tile counter, which an earlier pack can leave anywhere (PACR_UNTILIZE
+    // advances it and resets only the face counter, #66474). Zero the counters so the read stays in Dest; every
+    // pack sets its own counters before packing, so this does not disturb the next one.
+    TTI_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_FACE_ROW_SEL, p_pacr::PACK0, 0);
+    TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_FACE_ROW_SEL, p_pacr::PACK0, 0);
+
     // Absolute src/dst index 0, no increment, Packer0, ClrDatValid=0 (must not clear DEST valids). Arg 6 is
     // a 5-bit index into the 32-entry bd_table. NO_WRITE suppresses the store but NOT the descriptor
     // fetch: the entry is still read and its tile size validated, so it must be programmed. Use this
