@@ -31,6 +31,12 @@ struct AllGatherMinimalMatmulOuterDimAsyncParams {
     uint32_t num_links = 1;
     std::vector<ttnn::GlobalSemaphore> semaphores;
     bool transpose_b = true;
+    int32_t dim = -1;
+
+    // dim=-2: the gathered tensor is the matmul's first operand (in0), dim=-1: it's in1.
+    bool gather_in0() const {
+        return dim == -2;
+    }
 };
 
 struct AllGatherMinimalMatmulOuterDimAsyncInputs {

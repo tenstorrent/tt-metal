@@ -89,20 +89,23 @@ void kernel_main() {
     constexpr uint32_t M_block_tiles = get_compile_time_arg_val(1);
     constexpr uint32_t K_block_tiles = get_compile_time_arg_val(2);
     constexpr uint32_t N_block_tiles = get_compile_time_arg_val(3);
-    constexpr uint32_t M_blocks_per_core = get_compile_time_arg_val(4);
-    constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(5);
+    constexpr uint32_t outer_blocks = get_compile_time_arg_val(4);  // blocks per core, gathered operand's outer dim
+    constexpr uint32_t inner_blocks = get_compile_time_arg_val(5);  // blocks per core, local operand's outer dim
     constexpr uint32_t subblock_h = get_compile_time_arg_val(6);
     constexpr uint32_t subblock_w = get_compile_time_arg_val(7);
     constexpr uint32_t piece_tiles = get_compile_time_arg_val(8);
     constexpr uint32_t ring_size = get_compile_time_arg_val(9);
     constexpr bool transpose_b = get_compile_time_arg_val(10) == 1;
     constexpr uint32_t hops_before = get_compile_time_arg_val(11);
-    // N blocks are cut per hop region and differ in width, so compute needs the stripe layout too.
-    using Blocks = StripeBlocks<N_block_tiles, piece_tiles, ring_size, hops_before>;
+    constexpr bool gather_in0 = get_compile_time_arg_val(12) == 1;  // in0 is the gathered operand; otherwise in1 is
+    // The gathered operand's blocks are cut per hop region and differ in size, so compute needs the stripe layout too.
+    using Blocks = StripeBlocks<gather_in0 ? M_block_tiles : N_block_tiles, piece_tiles, ring_size, hops_before>;
+    constexpr uint32_t local_block_tiles = gather_in0 ? N_block_tiles : M_block_tiles;
 
+    // This core's range of the local operand's outer dimension: M tiles, or N tiles when in0 is gathered.
     uint32_t argidx = 0;
-    const uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
-    const uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
+    const uint32_t local_start_tile = get_arg_val<uint32_t>(argidx++);
+    const uint32_t local_end_tile = get_arg_val<uint32_t>(argidx++);
 
     constexpr uint32_t in0_cb = tt::CBIndex::c_0;
     constexpr uint32_t in1_cb = tt::CBIndex::c_1;
@@ -121,16 +124,18 @@ void kernel_main() {
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
     constexpr uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
 
-    // N-outer: every M block of an N block runs before the next one, so remote stripes are needed as late as possible.
-    for (uint32_t n_block_iter = 0; n_block_iter < N_blocks_per_core; n_block_iter++) {
-        uint32_t current_N_block_tiles = Blocks::span(n_block_iter).width;
-        uint32_t current_subblock_w = std::min(current_N_block_tiles, subblock_w);
+    // The gathered operand's blocks are the outer loop: every block of the local operand runs against one of them
+    // before the next one starts, so remote stripes are needed as late as possible.
+    for (uint32_t outer = 0; outer < outer_blocks; outer++) {
+        const uint32_t gathered_tiles = Blocks::span(outer).width;
 
-        for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
-            uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
-            uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
-            uint32_t current_M_block_tiles = m_tile_end - m_tile;
-            uint32_t current_subblock_h = std::min(current_M_block_tiles, subblock_h);
+        for (uint32_t inner = 0; inner < inner_blocks; inner++) {
+            const uint32_t local_tile = local_start_tile + (inner * local_block_tiles);
+            const uint32_t local_tiles = std::min(local_tile + local_block_tiles, local_end_tile) - local_tile;
+            const uint32_t current_M_block_tiles = gather_in0 ? gathered_tiles : local_tiles;
+            const uint32_t current_N_block_tiles = gather_in0 ? local_tiles : gathered_tiles;
+            const uint32_t current_subblock_h = std::min(current_M_block_tiles, subblock_h);
+            const uint32_t current_subblock_w = std::min(current_N_block_tiles, subblock_w);
 
             reconfig_data_format(in1_cb, in0_cb);  // the copy-out left the unpackers set up for itself
             pack_reconfig_data_format(intermediate_cb);

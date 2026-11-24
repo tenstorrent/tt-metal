@@ -85,10 +85,16 @@ ttnn::CoreCoord clamped_next(const std::vector<ttnn::CoreCoord>& order, uint32_t
     return order[index >= last ? last : index + 1];
 }
 
-// Output tiles per core once M is padded over the M cores and every stripe over the chains.
+// Output tiles per core once the local operand's outer dimension is padded over its chains and every stripe of the
+// gathered one over the gathered operand's chains.
 uint64_t padded_work_per_core(
-    uint32_t M_tiles, uint32_t N_tiles, uint32_t ring_size, uint32_t m_cores, uint32_t n_chains) {
-    return static_cast<uint64_t>(tt::div_up(M_tiles, m_cores)) * ring_size * tt::div_up(N_tiles / ring_size, n_chains);
+    uint32_t local_tiles,
+    uint32_t gathered_tiles,
+    uint32_t ring_size,
+    uint32_t local_chains,
+    uint32_t gathered_chains) {
+    return static_cast<uint64_t>(tt::div_up(local_tiles, local_chains)) * ring_size *
+           tt::div_up(gathered_tiles / ring_size, gathered_chains);
 }
 
 // On the sink row one data-mover kernel takes both operands, which frees a RISC for the fabric sender.
@@ -124,7 +130,13 @@ AllGatherMinimalMatmulOuterDimAsyncProgramFactory::create_at(
     tt::tt_metal::Program program{};
     const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
     const ttnn::Tensor& gathered_tensor = tensor_args.gathered_tensor;
+    const ttnn::Tensor& pgb = tensor_args.persistent_gather_buffer;
     const ttnn::Tensor& output_tensor = tensor_return_value;
+    // The matmul's first operand is in0 and its second in1: the gathered tensor is in1 (dim=-1) or in0 (dim=-2), and
+    // the input is the other one.
+    const bool gather_in0 = operation_attributes.gather_in0();
+    const ttnn::Tensor& in0_tensor = gather_in0 ? gathered_tensor : input_tensor;
+    const ttnn::Tensor& in1_tensor = gather_in0 ? input_tensor : gathered_tensor;
     const auto& config = operation_attributes.config;
     auto* device = input_tensor.device();
 
@@ -142,10 +154,11 @@ AllGatherMinimalMatmulOuterDimAsyncProgramFactory::create_at(
     auto core_grid = ttnn::CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     auto num_cores = core_grid.size();
 
-    auto in0_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    auto in0_data_format = tt::tt_metal::datatype_to_dataformat_converter(in0_tensor.dtype());
     auto in0_tile_size = tt::tile_size(in0_data_format);
-    auto in1_data_format = tt::tt_metal::datatype_to_dataformat_converter(gathered_tensor.dtype());
+    auto in1_data_format = tt::tt_metal::datatype_to_dataformat_converter(in1_tensor.dtype());
     auto in1_tile_size = tt::tile_size(in1_data_format);
+    const auto gathered_tile_size = gather_in0 ? in0_tile_size : in1_tile_size;
     auto output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     auto out_tile_size = tt::tile_size(output_data_format);
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -154,9 +167,11 @@ AllGatherMinimalMatmulOuterDimAsyncProgramFactory::create_at(
     auto intermediate_tile_size = tt::tile_size(intermediate_data_format);
 
     const bool transpose_b = operation_attributes.transpose_b;
-    const uint32_t K = input_tensor.padded_shape()[-1];
-    const uint32_t M = input_tensor.physical_volume() / K;  // all leading dims of the input fold into M
-    const uint32_t N = tensor_args.persistent_gather_buffer.padded_shape()[transpose_b ? -2 : -1];
+    // in0 is stored [M, K] and in1 [N, K] (transpose_b) or [K, N]; the buffer has the whole gathered operand's shape.
+    const uint32_t K = in0_tensor.padded_shape()[-1];
+    // dim=-1: all leading dims of the input fold into M.
+    const uint32_t M = gather_in0 ? pgb.padded_shape()[-2] : input_tensor.physical_volume() / K;
+    const uint32_t N = (gather_in0 ? input_tensor : pgb).padded_shape()[transpose_b ? -2 : -1];
     const uint32_t M_tiles = M / tt::constants::TILE_HEIGHT;
     const uint32_t K_tiles = K / tt::constants::TILE_WIDTH;
     const uint32_t N_tiles = N / tt::constants::TILE_WIDTH;
@@ -179,10 +194,14 @@ AllGatherMinimalMatmulOuterDimAsyncProgramFactory::create_at(
     auto small_input_risc = tt::tt_metal::DataMovementProcessor::RISCV_1;
     auto large_input_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
     auto large_input_risc = tt::tt_metal::DataMovementProcessor::RISCV_0;
-    const uint64_t work_rows_on_y =
-        padded_work_per_core(M_tiles, N_tiles, operation_attributes.ring_size, grid_size.y, grid_size.x);
-    const uint64_t work_rows_on_x =
-        padded_work_per_core(M_tiles, N_tiles, operation_attributes.ring_size, grid_size.x, grid_size.y);
+    // The work per core with one in0 chain per core of the first axis and one in1 chain per core of the second.
+    auto work_per_core = [&](uint32_t in0_chains, uint32_t in1_chains) {
+        return gather_in0
+                   ? padded_work_per_core(N_tiles, M_tiles, operation_attributes.ring_size, in1_chains, in0_chains)
+                   : padded_work_per_core(M_tiles, N_tiles, operation_attributes.ring_size, in0_chains, in1_chains);
+    };
+    const uint64_t work_rows_on_y = work_per_core(grid_size.y, grid_size.x);
+    const uint64_t work_rows_on_x = work_per_core(grid_size.x, grid_size.y);
     // Put M on whichever grid axis leaves less padded work per core.
     const bool transpose_core_grid = work_rows_on_x != work_rows_on_y ? work_rows_on_x < work_rows_on_y : M > N;
     auto in0_noc = transpose_core_grid ? large_input_noc : small_input_noc;
@@ -196,16 +215,24 @@ AllGatherMinimalMatmulOuterDimAsyncProgramFactory::create_at(
     const uint32_t sink_row =
         build_core_order_for_axis({0, 0}, false, grid_size.y, large_input_noc, false, {0, 0}).first.back().y;
 
-    const uint32_t padded_M_tiles = tt::round_up(M_tiles, in0_parallel_axis_cores);
+    // The gathered operand's outer dimension (N of in1, or M of in0) is cut into stripes and spread over its chains;
+    // the local operand's is padded over its own chains.
+    const uint32_t gathered_chains = gather_in0 ? in0_parallel_axis_cores : in1_parallel_axis_cores;
+    const uint32_t local_chains = gather_in0 ? in1_parallel_axis_cores : in0_parallel_axis_cores;
+    const uint32_t gathered_tiles = gather_in0 ? M_tiles : N_tiles;
+    const uint32_t local_tiles = gather_in0 ? N_tiles : M_tiles;
+    const uint32_t gathered_block_tiles = gather_in0 ? M_block_tiles : N_block_tiles;
+    const uint32_t local_block_tiles = gather_in0 ? N_block_tiles : M_block_tiles;
+
     const uint32_t padded_K_tiles = tt::round_up(K_tiles, K_block_tiles);
-    const uint32_t M_tiles_per_core = padded_M_tiles / in0_parallel_axis_cores;
     const uint32_t K_blocks = padded_K_tiles / K_block_tiles;
-    const uint32_t M_blocks_per_core = tt::div_up(M_tiles_per_core, M_block_tiles);
+    const uint32_t local_tiles_per_core = tt::div_up(local_tiles, local_chains);
+    const uint32_t local_blocks_per_core = tt::div_up(local_tiles_per_core, local_block_tiles);
 
     const bool ring = topology == ttnn::ccl::Topology::Ring;
     const StripeLayout layout = make_stripe_layout(
-        N_tiles, operation_attributes.ring_size, ring_index, in1_parallel_axis_cores, N_block_tiles, ring);
-    const uint32_t N_blocks_per_core = layout.n_blocks_per_core();
+        gathered_tiles, operation_attributes.ring_size, ring_index, gathered_chains, gathered_block_tiles, ring);
+    const uint32_t gathered_blocks_per_core = layout.blocks_per_core();
 
     const uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
     const uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
@@ -238,15 +265,15 @@ AllGatherMinimalMatmulOuterDimAsyncProgramFactory::create_at(
 
     const uint32_t tiles_per_packet = kTilesPerPacket;
     TT_FATAL(
-        tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() >= tiles_per_packet * in1_tile_size,
+        tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() >= tiles_per_packet * gathered_tile_size,
         "all_gather_minimal_matmul_outer_dim_async: the fabric packet payload ({} B) must hold {} gathered tiles of "
         "{} B",
         tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(),
         tiles_per_packet,
-        in1_tile_size);
+        gathered_tile_size);
     const uint32_t slot_header_bytes = tt::round_up(
         static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes()), kSendSlotAlignBytes);
-    const uint64_t slot_bytes = slot_header_bytes + (static_cast<uint64_t>(tiles_per_packet) * in1_tile_size);
+    const uint64_t slot_bytes = slot_header_bytes + (static_cast<uint64_t>(tiles_per_packet) * gathered_tile_size);
     TT_FATAL(
         slot_bytes % kSendSlotAlignBytes == 0,
         "all_gather_minimal_matmul_outer_dim_async: a send slot ({} B) must be a multiple of {} B to keep its payload "
@@ -294,18 +321,18 @@ AllGatherMinimalMatmulOuterDimAsyncProgramFactory::create_at(
                                uint32_t other_sender_sem,
                                uint32_t other_receiver_sem,
                                const ttnn::Tensor& own_input,
-                               const ttnn::Tensor* extra_input = nullptr) {
+                               bool gathered) {
         std::vector<uint32_t> args = {
             M_tiles,
-            padded_M_tiles,
+            static_cast<uint32_t>(gather_in0),
             K_tiles,
             padded_K_tiles,
             N_tiles,
             M_block_tiles,
             K_block_tiles,
             N_block_tiles,
-            M_blocks_per_core,
-            N_blocks_per_core,
+            gathered_blocks_per_core,
+            local_blocks_per_core,
             input_tile_size,
             out_tile_size,
             sender_sem,
@@ -324,15 +351,14 @@ AllGatherMinimalMatmulOuterDimAsyncProgramFactory::create_at(
         };
         tt::tt_metal::TensorAccessorArgs(*own_input.buffer()).append_to(args);
         tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(args);
-        if (extra_input != nullptr) {
-            tt::tt_metal::TensorAccessorArgs(*extra_input->buffer()).append_to(args);
+        if (gathered) {
+            tt::tt_metal::TensorAccessorArgs(*pgb.buffer()).append_to(args);
         }
         return args;
     };
 
     const std::string in0_source = std::string(kKernelDir) + "dataflow/dm_in0.cpp";
     const std::string in1_source = std::string(kKernelDir) + "dataflow/dm_in1.cpp";
-    const ttnn::Tensor& pgb = tensor_args.persistent_gather_buffer;
 
     // Cores with the same (injector, sink row) role share one kernel.
     std::map<std::pair<bool, bool>, std::vector<ttnn::CoreCoord>> in0_groups;
@@ -370,7 +396,8 @@ AllGatherMinimalMatmulOuterDimAsyncProgramFactory::create_at(
                     sinks_in1,
                     in1_sender_semaphore_id,
                     in1_receiver_semaphore_id,
-                    input_tensor)});
+                    in0_tensor,
+                    gather_in0)});
     }
     std::map<std::pair<bool, bool>, tt::tt_metal::KernelHandle> in1_kernels;
     for (const auto& [key, group_cores] : in1_groups) {
@@ -392,8 +419,8 @@ AllGatherMinimalMatmulOuterDimAsyncProgramFactory::create_at(
                     sinks_in0,
                     in0_sender_semaphore_id,
                     in0_receiver_semaphore_id,
-                    gathered_tensor,
-                    &pgb)});
+                    in1_tensor,
+                    !gather_in0)});
     }
 
     std::map<std::string, std::string> compute_defines;
@@ -416,14 +443,15 @@ AllGatherMinimalMatmulOuterDimAsyncProgramFactory::create_at(
                  M_block_tiles,
                  K_block_tiles,
                  N_block_tiles,
-                 M_blocks_per_core,
-                 N_blocks_per_core,
+                 gathered_blocks_per_core,
+                 local_blocks_per_core,
                  subblock_h,
                  subblock_w,
                  layout.piece_tiles,
                  layout.ring_size,
                  static_cast<uint32_t>(transpose_b),
-                 layout.hops_before},
+                 layout.hops_before,
+                 static_cast<uint32_t>(gather_in0)},
             .defines = compute_defines});
 
     const uint32_t k_blocks_per_core =
@@ -463,15 +491,18 @@ AllGatherMinimalMatmulOuterDimAsyncProgramFactory::create_at(
         auto in1_prev = device->worker_core_from_logical_core(clamped_prev(in1_core_order, in1_core_order_index));
         auto in1_next = device->worker_core_from_logical_core(clamped_next(in1_core_order, in1_core_order_index));
 
-        const uint32_t M_start_tile = M_tiles_per_core * in0_idx;
-        const uint32_t M_end_tile = M_tiles_per_core * (in0_idx + 1);
+        // This core's chain of the gathered operand and its range of the local operand's outer dimension.
+        const uint32_t gathered_idx = gather_in0 ? in0_idx : in1_idx;
+        const uint32_t local_idx = gather_in0 ? in1_idx : in0_idx;
+        const uint32_t local_start_tile = local_tiles_per_core * local_idx;
+        const uint32_t local_end_tile = local_tiles_per_core * (local_idx + 1);
         // Rows write their output at different K blocks so the writes don't all hit the NOC at once.
         const uint32_t defer_write_k_block = std::min(static_cast<uint32_t>(core.y) * k_blocks_per_core, K_blocks - 1);
         const bool is_in0_sink = core == in0_core_order.back();
         const bool is_in1_sink = core == in1_core_order.back();
 
-        const uint32_t chain_offset = layout.chain_offset(in1_idx);
-        const uint32_t chain_width = layout.chain_width(in1_idx);
+        const uint32_t chain_offset = layout.chain_offset(gathered_idx);
+        const uint32_t chain_width = layout.chain_width(gathered_idx);
 
         auto dm_runtime_args = [&](uint32_t input_addr,
                                    bool is_sink,
@@ -485,8 +516,8 @@ AllGatherMinimalMatmulOuterDimAsyncProgramFactory::create_at(
                 static_cast<uint32_t>(next.y),
                 static_cast<uint32_t>(prev.x),
                 static_cast<uint32_t>(prev.y),
-                M_start_tile,
-                M_end_tile,
+                local_start_tile,
+                local_end_tile,
                 chain_offset,
                 chain_width,
                 defer_write_k_block,
@@ -504,13 +535,14 @@ AllGatherMinimalMatmulOuterDimAsyncProgramFactory::create_at(
             return args;
         };
 
-        std::vector<uint32_t> in1_args =
-            dm_runtime_args(gathered_tensor.buffer()->address(), is_in1_sink, in1_next, in1_prev);
-        // in1 also gets the persistent buffer and one semaphore per stripe.
-        in1_args.push_back(pgb.buffer()->address());
-        in1_args.insert(in1_args.end(), stripe_sem_addrs.begin(), stripe_sem_addrs.end());
         std::vector<uint32_t> in0_args =
-            dm_runtime_args(input_tensor.buffer()->address(), is_in0_sink, in0_next, in0_prev);
+            dm_runtime_args(in0_tensor.buffer()->address(), is_in0_sink, in0_next, in0_prev);
+        std::vector<uint32_t> in1_args =
+            dm_runtime_args(in1_tensor.buffer()->address(), is_in1_sink, in1_next, in1_prev);
+        // The gathered operand's mover also gets the persistent buffer and one semaphore per stripe.
+        std::vector<uint32_t>& gathered_args = gather_in0 ? in0_args : in1_args;
+        gathered_args.push_back(pgb.buffer()->address());
+        gathered_args.insert(gathered_args.end(), stripe_sem_addrs.begin(), stripe_sem_addrs.end());
 
         const CoreRole role = core_role(core, transpose_core_grid, sink_row);
         shared_variables_t::CoreKernels core_kernels{.core = core};
@@ -529,7 +561,7 @@ AllGatherMinimalMatmulOuterDimAsyncProgramFactory::create_at(
             core_kernels.in1 = in1_kernels.at({role.in1_injector, role.in1_sinks_in0});
             tt::tt_metal::SetRuntimeArgs(program, *core_kernels.in1, core, in1_args);
         }
-        tt::tt_metal::SetRuntimeArgs(program, compute_kernels_id, core, {M_start_tile, M_end_tile});
+        tt::tt_metal::SetRuntimeArgs(program, compute_kernels_id, core, {local_start_tile, local_end_tile});
         core_kernel_list.push_back(core_kernels);
     }
 
@@ -606,8 +638,9 @@ AllGatherMinimalMatmulOuterDimAsyncProgramFactory::create_at(
                     if (p.chain % num_links != link) {
                         continue;
                     }
+                    // in1's chains are the grid's columns and in0's its rows, unless the grid is transposed.
                     const ttnn::CoreCoord injector = device->worker_core_from_logical_core(
-                        transpose_core_grid ? ttnn::CoreCoord{0, p.chain} : ttnn::CoreCoord{p.chain, 0});
+                        gather_in0 == transpose_core_grid ? ttnn::CoreCoord{p.chain, 0} : ttnn::CoreCoord{0, p.chain});
                     piece_args.insert(
                         piece_args.end(),
                         {layout.chain_offset(p.chain),
@@ -649,13 +682,13 @@ AllGatherMinimalMatmulOuterDimAsyncProgramFactory::create_at(
                 1,
                 tt::DataFormat::UInt32);
             std::vector<uint32_t> send_ct = {
-                in1_tile_size,
+                gathered_tile_size,
                 tiles_per_packet,
                 K_tiles,
                 chunk_tiles,
                 layout.stripe_tiles,
                 layout.ring_size,
-                static_cast<uint32_t>(transpose_b),
+                static_cast<uint32_t>(gather_in0 || transpose_b),  // the gathered tensor is stored [outer, K]
                 grid_send_slots,
                 slot_header_bytes,
                 K_block_tiles};
@@ -707,12 +740,15 @@ void AllGatherMinimalMatmulOuterDimAsyncProgramFactory::override_runtime_argumen
     const AllGatherMinimalMatmulOuterDimAsyncInputs& tensor_args,
     ttnn::Tensor& tensor_return_value) {
     // Only buffer and semaphore addresses change between cache hits.
-    const uint32_t in0_addr = tensor_args.input_tensor.buffer()->address();
-    const uint32_t in1_addr = tensor_args.gathered_tensor.buffer()->address();
+    const bool gather_in0 = operation_attributes.gather_in0();
+    const uint32_t input_addr = tensor_args.input_tensor.buffer()->address();
+    const uint32_t gathered_addr = tensor_args.gathered_tensor.buffer()->address();
+    const uint32_t in0_addr = gather_in0 ? gathered_addr : input_addr;
+    const uint32_t in1_addr = gather_in0 ? input_addr : gathered_addr;
     const uint32_t out_addr = tensor_return_value.buffer()->address();
     const uint32_t pgb_addr = tensor_args.persistent_gather_buffer.buffer()->address();
     const uint32_t ring_size = operation_attributes.ring_size;
-    const uint32_t in1_pwb_idx = kRtDmFixedArgs + ring_size;
+    const uint32_t pgb_idx = kRtDmFixedArgs + ring_size;  // in the gathered operand's mover
 
     auto patch_semaphores = [&](auto& args, uint32_t first) {
         for (uint32_t s = 0; s < ring_size; ++s) {
@@ -735,23 +771,28 @@ void AllGatherMinimalMatmulOuterDimAsyncProgramFactory::override_runtime_argumen
             }
             return (*it->second)[core.x][core.y];
         };
+        // Every data mover reads its operand and the output; the gathered operand's also the buffer and semaphores.
+        auto patch_mover =
+            [&](tt::tt_metal::KernelHandle kernel, const ttnn::CoreCoord& core, uint32_t operand_addr, bool gathered) {
+                auto& args = core_args(kernel, core);
+                args[kRtInputAddrIdx] = operand_addr;
+                args[kRtOutputAddrIdx] = out_addr;
+                if (gathered) {
+                    args[pgb_idx] = pgb_addr;
+                    patch_semaphores(args, pgb_idx + 1);
+                }
+            };
         for (const auto& [core, in0_kernel, in1_kernel] : vars.cores) {
             if (in0_kernel.has_value()) {
-                auto& in0_args = core_args(*in0_kernel, core);
-                in0_args[kRtInputAddrIdx] = in0_addr;
-                in0_args[kRtOutputAddrIdx] = out_addr;
+                patch_mover(*in0_kernel, core, in0_addr, gather_in0);
             }
             if (in1_kernel.has_value()) {
-                auto& in1_args = core_args(*in1_kernel, core);
-                in1_args[kRtInputAddrIdx] = in1_addr;
-                in1_args[kRtOutputAddrIdx] = out_addr;
-                in1_args[in1_pwb_idx] = pgb_addr;
-                patch_semaphores(in1_args, in1_pwb_idx + 1);
+                patch_mover(*in1_kernel, core, in1_addr, !gather_in0);
             }
         }
         for (const auto& sender : vars.senders) {
             auto& sender_args = core_args(sender.kernel, sender.core);
-            sender_args[kRtSenderShardAddrIdx] = in1_addr;
+            sender_args[kRtSenderShardAddrIdx] = gathered_addr;
             sender_args[kRtSenderPwbAddrIdx] = pgb_addr;
             patch_semaphores(sender_args, kRtSenderSemaphoresIdx);
         }

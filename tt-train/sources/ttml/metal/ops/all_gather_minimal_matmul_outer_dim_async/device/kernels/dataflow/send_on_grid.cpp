@@ -105,15 +105,15 @@ void kernel_main() {
     constexpr uint32_t chunk_tiles = get_compile_time_arg_val(3);
     constexpr uint32_t stripe_tiles = get_compile_time_arg_val(4);
     constexpr uint32_t ring_size = get_compile_time_arg_val(5);
-    constexpr bool transpose_b = get_compile_time_arg_val(6) == 1;
+    constexpr bool outer_first = get_compile_time_arg_val(6) == 1;  // the gathered tensor is stored [outer, K]
     constexpr uint32_t slot_packets = get_compile_time_arg_val(7);
     constexpr uint32_t slot_header_bytes = get_compile_time_arg_val(8);
     constexpr uint32_t K_block_tiles = get_compile_time_arg_val(9);
     static_assert(chunk_tiles % K_block_tiles == 0, "a K chunk is a whole number of K blocks");
     static_assert(slot_packets >= 2 && slot_packets % 2 == 0, "the slots are split into a filling and a sending half");
     static_assert(slot_packets <= 32, "slots are flagged in 32-bit masks");
-    constexpr uint32_t packets_per_batch = slot_packets / 2;  // one half fills while the other half is sent
-    constexpr uint32_t N_tiles = stripe_tiles * ring_size;
+    constexpr uint32_t packets_per_batch = slot_packets / 2;    // one half fills while the other half is sent
+    constexpr uint32_t outer_tiles = stripe_tiles * ring_size;  // the gathered dimension: N of in1 or M of in0
     constexpr ccl_routing_utils::line_unicast_route_info_t route =
         ccl_routing_utils::get_line_unicast_route_info_from_args<kSendFixedCtArgs>();
     constexpr auto shard_args = TensorAccessorArgs<kSendFixedCtArgs + ccl_routing_utils::num_line_unicast_args>();
@@ -225,13 +225,14 @@ void kernel_main() {
     uint32_t source_k_step = 0;
     bool own_stripe = false;
     [[maybe_unused]] const BankedPages<tile_size>* source_pages = &shard_pages;
-    // Page steps along K and from the end of a K chunk to the next row, for a tensor `n_cols` wide.
-    auto k_step = [](uint32_t n_cols) { return gathered_page<transpose_b>(0, 1, K_tiles, n_cols); };
-    auto row_step = [](uint32_t n_cols, uint32_t k_count) {
-        return gathered_page<transpose_b>(1, 0, K_tiles, n_cols) -
-               gathered_page<transpose_b>(0, k_count - 1, K_tiles, n_cols);
+    // Page steps along K and from the end of a K chunk to the next row, for a tensor of `tiles` along the gathered
+    // dimension.
+    auto k_step = [](uint32_t tiles) { return operand_page<outer_first>(0, 1, K_tiles, tiles); };
+    auto row_step = [](uint32_t tiles, uint32_t k_count) {
+        return operand_page<outer_first>(1, 0, K_tiles, tiles) -
+               operand_page<outer_first>(0, k_count - 1, K_tiles, tiles);
     };
-    const uint32_t page_k_step = k_step(N_tiles);
+    const uint32_t page_k_step = k_step(outer_tiles);
 
     // The previous device's sender bumps the high half of our semaphore for a stripe each time a K chunk of the pieces
     // we relay has landed here.
@@ -270,12 +271,12 @@ void kernel_main() {
                 chunk = cursor.chunk();
                 tiles_left = piece.width * chunk;
                 row_left = chunk;
-                page = gathered_page<transpose_b>(
-                    (seg.stripe * stripe_tiles) + piece.row_offset, cursor.k_start(), K_tiles, N_tiles);
-                page_row_step = row_step(N_tiles, chunk);
+                page = operand_page<outer_first>(
+                    (seg.stripe * stripe_tiles) + piece.row_offset, cursor.k_start(), K_tiles, outer_tiles);
+                page_row_step = row_step(outer_tiles, chunk);
                 own_stripe = seg.distance == 0;
                 if (own_stripe) {
-                    source_page = gathered_page<transpose_b>(piece.row_offset, cursor.k_start(), K_tiles, stripe_tiles);
+                    source_page = operand_page<outer_first>(piece.row_offset, cursor.k_start(), K_tiles, stripe_tiles);
                     source_k_step = k_step(stripe_tiles);
                     source_row_step = row_step(stripe_tiles, chunk);
                     source_pages = &shard_pages;

@@ -43,5 +43,6 @@ ttnn::Tensor ttml_all_gather_minimal_matmul_outer_dim_async(
     std::optional<const DataType> dtype,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     uint32_t num_links,
-    bool transpose_b);
+    bool transpose_b,
+    int32_t dim);
 }
