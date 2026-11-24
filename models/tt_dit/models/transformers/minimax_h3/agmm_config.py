@@ -151,6 +151,38 @@ AGMM_PINS: dict[tuple[int, int], dict[AgmmMode, dict[tuple[int, int], AgmmLayerP
 }
 
 
+class AgmmLayout(NamedTuple):
+    """Worker-grid orientation, size and ring workers of an all-gather matmul pin."""
+
+    transposed: bool
+    grid: tuple[int, int]
+    workers_per_link: int
+
+
+# MiniMax-H3-Image overrides of the (video-tuned) pins above, per (K, N) and length class: (blocking, layout).
+# Swept on a 4x8 BH Galaxy with test_matmul_sweep_image_minimax_h3.py over traffic-weighted image row counts per
+# device (short: 544, 1056, 2112, 2560, 2976, 4608 -- 2K/4K text to image and edits; long: 7168, 9216, 14336 --
+# many-reference edits) and adopted only where no row count got more than 3% slower than the video pin (one
+# program serves every length in a class). Swept vs the video pin, weighted: ff1 short -20.5% (faster at every
+# row count), to_out long -12.3%. to_qkv and the short to_out keep the video pin: their best weighted candidates
+# were slower at some served row count. The ff1 long candidate ((6, 6, 14), transposed 12x9, -9.3%) is not adopted:
+# with main's minimal_matmul circular buffers (Nov 18) its static CBs overrun an L1 buffer by 1.4 KB on the
+# many-reference warm-up; ff1 long uses the smaller-K (8, 3, 14) from the DP4 re-sweep instead.
+IMAGE_AGMM_PINS: dict[tuple[int, int], dict[str, tuple[tuple[int, int, int], AgmmLayout]]] = {
+    (5376, 7168): {
+        "short": ((4, 7, 10), AgmmLayout(transposed=False, grid=(12, 9), workers_per_link=6)),
+        # Re-swept Nov 19 at a DP4 4x2 replica's rows (8448:0.6, 9472:0.25, 14336:0.15): -6.0% weighted, -9% at 8448.
+        # Half the K block of the dropped (6, 6, 14) candidate, so its circular buffers fit beside the model's L1.
+        "long": ((8, 3, 14), AgmmLayout(transposed=True, grid=(12, 9), workers_per_link=6)),
+    },
+    (7168, 1344): {
+        "long": ((2, 28, 4), AgmmLayout(transposed=False, grid=(12, 9), workers_per_link=5)),
+    },
+}
+IMAGE_AGMM_PINS_NUM_LINKS = 2  # the link count the image layouts were swept (and are valid) for
+MATMUL_PROFILES = (None, "image")
+
+
 class AgmmPin(NamedTuple):
     """Frozen all-gather-matmul program of one layer at one length class, as the linear's kwargs."""
 
@@ -204,10 +236,14 @@ def agmm_pins(
     num_links: int,
     compute_kernel_config: ttnn.WormholeComputeKernelConfig,
     mode: AgmmMode | str | None = None,
+    profile: str | None = None,
 ) -> dict[str, AgmmPin]:
     """The AGMM program of a `(K, N)` layer per length class in `mode` (`resolve_agmm_mode`): the mode's pin for
     the layer, else its ACCURATE pin. `compute_kernel_config` is the caller's, with the pin's Dst accumulation.
-    Classes with the same blocking share one pin."""
+    With `profile="image"` on Blackhole, a class's `IMAGE_AGMM_PINS` entry replaces its blocking and worker layout.
+    Classes with the same program share one pin."""
+    if profile not in MATMUL_PROFILES:
+        raise ValueError(f"unknown matmul profile {profile!r}; expected one of {MATMUL_PROFILES}")
     device_grid = compute_grid_key(full_grid)
     if device_grid not in AGMM_PINS:
         raise ValueError(f"dynamic_length has no pinned AGMM blockings for the {device_grid} compute grid")
@@ -219,12 +255,21 @@ def agmm_pins(
     grid = agmm_worker_grid(full_grid, layer.transpose_core_grid, num_links)
     # in0 senders group along the M-parallel axis (grid.x transposed, grid.y not) into `num_links` groups.
     in0_axis = grid.x if layer.transpose_core_grid else grid.y
-    workers = math.ceil(in0_axis / num_links)
+    default_layout = AgmmLayout(layer.transpose_core_grid, (grid.x, grid.y), math.ceil(in0_axis / num_links))
+    # The image pins were swept on Blackhole's grid at 2 links (their workers_per_link split the sender axis into
+    # exactly two groups, which the op asserts against num_links); elsewhere every profile is the mode's pin.
+    image = profile == "image" and device_grid == BLACKHOLE_COMPUTE_GRID and num_links == IMAGE_AGMM_PINS_NUM_LINKS
+    overrides = IMAGE_AGMM_PINS.get((k, n), {}) if image else {}
     compute_kernel_config = _with_fp32_dest_acc(compute_kernel_config, layer.fp32_dest_acc_en)
     subblock_h, subblock_w = layer.subblock
-    pins: dict[tuple[int, int, int], AgmmPin] = {}
-    for blocking in layer.blockings.values():
-        if blocking not in pins:
+    pins: dict[tuple, AgmmPin] = {}
+    chosen: dict[str, tuple] = {}
+    for cls_name, mode_blocking in layer.blockings.items():
+        blocking, layout = overrides.get(cls_name, (mode_blocking, default_layout))
+        if layout.grid[0] > full_grid.x or layout.grid[1] > full_grid.y:
+            raise ValueError(f"AGMM grid {layout.grid} exceeds the device grid {(full_grid.x, full_grid.y)}")
+        key = (blocking, layout)
+        if key not in pins:
             m_block, k_block, n_block = blocking
             if m_block % subblock_h or n_block % subblock_w:
                 raise ValueError(
@@ -236,10 +281,11 @@ def agmm_pins(
                 N_block_size=n_block,
                 subblock_h=subblock_h,
                 subblock_w=subblock_w,
-                compute_with_storage_grid_size=grid,
+                compute_with_storage_grid_size=ttnn.CoreCoord(*layout.grid),
             )
-            pins[blocking] = AgmmPin(config, workers, layer.transpose_core_grid, compute_kernel_config)
-    return {name: pins[blocking] for name, blocking in layer.blockings.items()}
+            pins[key] = AgmmPin(config, layout.workers_per_link, layout.transposed, compute_kernel_config)
+        chosen[cls_name] = key
+    return {name: pins[key] for name, key in chosen.items()}
 
 
 def agmm_kwargs(

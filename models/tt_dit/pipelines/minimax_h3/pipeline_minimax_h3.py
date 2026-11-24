@@ -1437,7 +1437,10 @@ class MiniMaxH3Pipeline:
 
         true_seq_len = seq_len
         sp_alignment = self.sp_factor * ttnn.TILE_SIZE
-        if self.task == "ref2va" and self.sp_factor > 1:
+        # ref2va and image pad the presentation to a warmed ladder rung (the text encoder keys programs on its
+        # length); the other tasks pad only to SP * TILE.
+        # Image pads at any SP (a DP replica can be SP=1); its rungs are TILE multiples.
+        if self.task == "image" or (self.task == "ref2va" and self.sp_factor > 1):
             target = self._force_prompt_pad
             if target is None:
                 target = select_bucket(seq_len, self.presentation_ladder)
