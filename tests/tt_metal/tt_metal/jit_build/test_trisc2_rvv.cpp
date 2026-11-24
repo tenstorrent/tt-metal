@@ -14,7 +14,7 @@
 //    on, and its TRISC2 ELF contains vector instructions (checked in-process by scanning the
 //    ELF's executable sections for RVV instruction encodings — no subprocess, no shell); the
 //    knob-off compile of the same source contains none. Gated on the bundled sfpi toolchain
-//    accepting the Zve32f march string (older sfpi releases skip rather than fail).
+//    accepting -mcpu=tt-bh-vector-tensix (older sfpi releases skip rather than fail).
 //
 // On Quasar only the knob-off recipe check runs; see jit_build_device_fixture.hpp.
 
@@ -185,7 +185,7 @@ TEST_F(Trisc2RvvFixture, KnobOffRecipesCarryNoVectorFlags) {
         is_quasar() ? compile_rvv_kernel_metal2_knob_off() : compile_rvv_kernel(/*enable_trisc2_rvv=*/false);
     for (uint32_t processor_id : binary_processor_types(*kernel)) {
         const std::string cflags = recipe_cflags(kernel, processor_id);
-        EXPECT_EQ(cflags.find(kBhVectorTensixMcpu), std::string::npos) << "trisc" << processor_id;
+        EXPECT_EQ(cflags.find("vector-tensix"), std::string::npos) << "trisc" << processor_id;
         EXPECT_EQ(cflags.find("-fno-lto"), std::string::npos) << "trisc" << processor_id;
     }
 }
