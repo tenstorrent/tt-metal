@@ -659,6 +659,7 @@ class TtPrefillBlock(LightweightModule):
         ack_alias_layer_ids: tuple = (),
         force_kv_only: bool = False,
         loop_pass2: bool = False,
+        next_step=SAME_CHUNK_NEXT_LAYER,
     ):
         """
         Args:
@@ -741,6 +742,7 @@ class TtPrefillBlock(LightweightModule):
             ack_alias_layer_ids=ack_alias_layer_ids,
             kv_only=kv_only,
             loop_pass2=loop_pass2,
+            next_step=next_step,
         )
 
         if kv_only:

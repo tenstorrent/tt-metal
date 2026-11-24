@@ -12,8 +12,9 @@ Nothing here changes what the runner computes or when; every check only observes
   gather buffer (``_pass2_push_reuses_dense``), every ``_pass2_push_output`` call records whether it returned that
   buffer and whether it ran inside trace capture, and an own ``loop_pass2`` push buffer being created is recorded.
   Before the trace is released one ``TRUNK_ASSERT push_reuse PASS|FAIL`` line states the verdict: PASS needs every
-  pass-2 layer to choose reuse, the trace to be captured with every pass-2 push writing the dense buffer, and no
-  own pass-2 buffer. A FAIL is logged, not raised, so the run's timing survives; the probe's checker reads it.
+  pass-2 layer to choose reuse, the trace to be captured with every pass-2 layer pushing and every push into the
+  first buffer writing the dense buffer (a pre-sent layer reads the pre-send's second buffer, q171.3.18), and no
+  own pass-2 buffer. The line also counts the planner's pushes by part (ALL / PREFIX / REST). A FAIL is logged, not raised, so the run's timing survives; the probe's checker reads it.
 * KV digest (finite, deterministic). After the request, before the trace is released, user 0's KVPE rows of every
   trunk cache slot of the stage (78 on the whole trunk; a loop layer's pass-1 rows) are read for each chunk in
   ``TRUNK_DIGEST_CHUNKS`` (default the probe chunks 0,9,19,50,101,203), plus, on a stage that runs pass 2, the loop
@@ -23,6 +24,8 @@ Nothing here changes what the runner computes or when; every check only observes
   MTP wrote its KV there. The cache starts zero-filled and two runs feed identical tokens, so equal digests across
   runs mean bit-identical KV; the last chunk's layer-77 rows depend on every pass of every chunk.
   ``TRUNK_DIGEST_SLOT_RANGES`` (e.g. ``0-53,54-76,77-77``) adds a digest per stage-slot range (``chunk=<c>s<lo>_<hi>``).
+  ``TRUNK_PUSH_PRESEND=0`` turns the sparse-KV pre-sends off (a KV control, not a timing run).
+  ``TRUNK_KV_DUMP_DIR`` also saves those rows per cache slot as logical bf16 (``_kv_dump``), to compare runs by PCC.
 * MTP wiring (q171.2.10), with MTP on. Every forward records the blocks it runs, the trunk norm's input and output, and
   the tensor MTP is seeded with. ``TRUNK_ASSERT mtp_input PASS|FAIL`` (logged with the checks above) needs, in every
   forward that ran MTP: MTP ran once, after every pass-schedule step of the stage (``model.steps``, in order: 106 on
@@ -56,6 +59,7 @@ def _patch_mla() -> None:
 
     def build_two_bank_index(self):
         out = build(self)
+        _STATE["planner"] = self._push
         dense = self._sparse_kv_gather_buffer
         spec_rows = self._push.buffer_spec(dense, **self._pass2_push_geometry).shape[2]
         _PASS2[self.layer_idx] = (bool(self._pass2_push_reuses_dense), int(spec_rows), int(dense.shape[2]))
@@ -65,10 +69,11 @@ def _patch_mla() -> None:
         )
         return out
 
-    def pass2_push_output(self):
-        out = push_output(self)
+    def pass2_push_output(self, parity=None):
+        out = push_output(self, parity)
+        # The first buffer (parity None) must be the dense one; the pre-send's second buffer is a push buffer.
         _CALLS["capture" if _STATE["in_capture"] else "other"].append(
-            (self.layer_idx, out is self._sparse_kv_gather_buffer)
+            (self.layer_idx, parity, out is self._sparse_kv_gather_buffer)
         )
         return out
 
@@ -83,6 +88,24 @@ def _patch_mla() -> None:
     SparseKvPushPlanner.push_buffer = push_buffer_recording
 
 
+def _patch_presend_switch() -> None:
+    """``TRUNK_PUSH_PRESEND=0``: every sparse-KV push planner starts with pre-sends off (``SparseKvPushPlanner.presend``,
+    the switch the device tests use), so every pushed layer pushes all its rows in line. A control for comparing KV
+    with and without pre-sends; it changes what runs, so not for timing runs."""
+    if os.environ.get("TRUNK_PUSH_PRESEND", "1") != "0":
+        return
+    from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SparseKvPushPlanner
+
+    init = SparseKvPushPlanner.__init__
+
+    def init_presend_off(self, *args, **kwargs):
+        init(self, *args, **kwargs)
+        self.presend = False
+
+    SparseKvPushPlanner.__init__ = init_presend_off
+    logger.warning("TRUNK_PUSH_PRESEND=0: sparse-KV pre-sends off (control run)")
+
+
 def _push_reuse_verdict() -> None:
     model = getattr(_STATE["runtime"], "model", None)
     if model is not None and not getattr(model, "_pass2_layers", None) and not _PASS2:
@@ -91,9 +114,10 @@ def _push_reuse_verdict() -> None:
     reuse = sorted(l for l, (r, _, _) in _PASS2.items() if r)
     no_reuse = sorted(l for l, (r, _, _) in _PASS2.items() if not r)
     cap = _CALLS["capture"]
-    cap_layers = sorted({l for l, _ in cap})
-    cap_not_dense = sorted({l for l, dense in cap if not dense})
-    other_not_dense = sorted({l for l, dense in _CALLS["other"] if not dense})
+    cap_layers = sorted({l for l, _, _ in cap})
+    cap_not_dense = sorted({l for l, parity, dense in cap if parity is None and not dense})
+    other_not_dense = sorted({l for l, parity, dense in _CALLS["other"] if parity is None and not dense})
+    cap_presend = sum(1 for _, parity, _ in cap if parity is not None)
     ok = (
         len(_PASS2) > 0
         and not no_reuse
@@ -108,8 +132,10 @@ def _push_reuse_verdict() -> None:
         f"TRUNK_ASSERT push_reuse {'PASS' if ok else 'FAIL'}: pass2_layers={len(_PASS2)} "
         f"({min(_PASS2, default=None)}-{max(_PASS2, default=None)}) reuse={len(reuse)} no_reuse={no_reuse} "
         f"use_trace={_STATE['use_trace']} captured={_STATE['captured']} "
-        f"capture_calls={len(cap)} capture_layers={len(cap_layers)} capture_not_dense={cap_not_dense} "
-        f"eager_calls={len(_CALLS['other'])} eager_not_dense={other_not_dense} own_pass2_buffers={len(_OWN_BUFFERS)}"
+        f"capture_calls={len(cap)} capture_presend_buffer_calls={cap_presend} capture_layers={len(cap_layers)} "
+        f"capture_not_dense={cap_not_dense} "
+        f"eager_calls={len(_CALLS['other'])} eager_not_dense={other_not_dense} own_pass2_buffers={len(_OWN_BUFFERS)} "
+        f"pushes={dict(getattr(_STATE.get('planner'), 'pushes', {}))}"
     )
 
 
@@ -146,7 +172,7 @@ def _digest_rows(runtime, kv, start: int, first: int, count: int) -> tuple:
         finite = all(bool(torch.isfinite(t).all()) for t in (latent, scales, rope))
     else:
         finite = bool(torch.isfinite(flat.view(torch.bfloat16).float()).all())
-    return digest, finite, int(flat.any(dim=-1).sum()), int(flat.shape[0])
+    return digest, finite, int(flat.any(dim=-1).sum()), int(flat.shape[0]), flat
 
 
 def _mtp_slots() -> int:
@@ -190,10 +216,41 @@ def _kv_digest(runtime) -> None:
         reads += [(f"chunk=ring{j}", max_seq + j * chunk, ring_slots[0], len(ring_slots)) for j in range(RING_CHUNKS)]
     for label, start, first, count in reads:
         try:
-            digest, finite, nonzero, n = _digest_rows(runtime, kv, start, first, count)
+            digest, finite, nonzero, n, _ = _digest_rows(runtime, kv, start, first, count)
             logger.info(f"TRUNK_KV_DIGEST {label} sha256={digest} finite={finite} nonzero_rows={nonzero} rows={n}")
         except Exception as exc:  # report, never fail the timing run
             logger.error(f"TRUNK_KV_DIGEST {label} failed: {type(exc).__name__}: {exc}")
+    dump_dir = os.environ.get("TRUNK_KV_DUMP_DIR")
+    if dump_dir:
+        _kv_dump(runtime, kv, dump_dir, chunks, trunk_slots, ring_slots)
+
+
+def _kv_dump(runtime, kv, dump_dir: str, chunks: list, trunk_slots: int, ring_slots: list) -> None:
+    """``TRUNK_KV_DUMP_DIR``: user 0's logical (bf16) KVPE rows per cache slot, for each digest chunk of every trunk
+    slot and each ring chunk of every ring slot, saved as ``<dir>/chunk<c>.pt`` / ``ring<j>.pt`` = {slot: rows}, so two
+    runs can be compared layer by layer (``TRUNK_KV_DUMP`` lines)."""
+    import torch
+
+    from models.demos.deepseek_v3_d_p.tt.mla.two_bank import RING_CHUNKS
+    from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
+
+    os.makedirs(dump_dir, exist_ok=True)
+    chunk, max_seq = runtime.config.chunk_size, runtime.config.max_seq_len
+    reads = [(f"chunk{c}", c * chunk, range(trunk_slots)) for c in chunks]
+    reads += [(f"ring{j}", max_seq + j * chunk, ring_slots) for j in range(RING_CHUNKS if ring_slots else 0)]
+    for label, start, slots in reads:
+        try:
+            out = {}
+            for slot in slots:
+                flat = _digest_rows(runtime, kv, start, slot, 1)[4]
+                if kv.format == MlaKvCacheFormat.SCALED_FP8:
+                    flat = flat.view(torch.float8_e4m3fn)
+                out[slot] = kv.unpack_host(flat).to(torch.bfloat16)
+            path = os.path.join(dump_dir, f"{label}.pt")
+            torch.save(out, path)
+            logger.info(f"TRUNK_KV_DUMP {label} slots={len(out)} -> {path}")
+        except Exception as exc:  # report, never fail the timing run
+            logger.error(f"TRUNK_KV_DUMP {label} failed: {type(exc).__name__}: {exc}")
 
 
 def _first(out):
@@ -438,6 +495,7 @@ def main() -> None:
     manifest = os.environ.get("PREFILL_MANIFEST", "")
     assert manifest.endswith("glm54.json"), f"the trunk probe runs GLM-5.4 (STAGE_PROBE_MODEL=glm54), got {manifest!r}"
     _patch_mla()
+    _patch_presend_switch()
     _patch_runtime()
     _patch_mtp_wiring()
     _patch_profile()

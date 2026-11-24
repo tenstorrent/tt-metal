@@ -47,6 +47,7 @@ from models.demos.deepseek_v3_d_p.tests.glm_synthetic_weights import glm_random_
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import num_full_indexer_layers
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
+from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import PushStep
 from models.demos.deepseek_v3_d_p.tt.mla.two_bank import (
     WINDOW_FORMATS,
     TwoBankIndex,
@@ -66,6 +67,9 @@ RING_BASE = MAX_POSITIONS
 LOOP_LAYERS = (1, 2)
 NUM_SLOTS = 2
 OUTPUT_PCC = 0.99
+# A pre-sending layer's sparse_sdpa on the narrower attention sub-device vs the full grid: another split-K plan, so
+# another reduction order (observed >= 0.99988, max|diff| 7.6e-3 on bf16 outputs; q171.3.18).
+PRESEND_GRID_PCC = 0.9995
 # The first W rows of a chunk read the carried window: device >= 0.9989; a zeroed or misplaced carry <= 0.989
 # (test_window_check_catches_a_wrong_carry). The acceptance bar OUTPUT_PCC stays for the whole chunk.
 CARRY_WINDOW_PCC = 0.995
@@ -667,3 +671,64 @@ def test_two_bank_push_reuses_dense_buffer(mesh_device):
         f"saving {saving} B ({saving / 2**20:.1f} MiB), own buffer {expected} B"
     )
     assert saving >= expected, f"reusing the dense buffer saved {saving} B, less than the {expected} B buffer"
+
+
+@pytest.mark.parametrize("reuse_dense", [False, True], ids=["own_buffer", "dense_buffer"])
+@pytest.mark.parametrize("mesh_device, device_params", _mesh_params(), indirect=True)
+@pytest.mark.skipif(not is_blackhole(), reason="DSA ops (sparse SDPA, push) are Blackhole-only")
+@pytest.mark.timeout(0)
+def test_two_bank_presend_matches_inline_push(mesh_device, reuse_dense):
+    """Pass-2 pre-send (q171.3.18): a layer whose successor reuses its top-k set pushes the successor's bank-A rows
+    beside its own attention into the second buffer, and the successor pushes only its ring rows. Both layers' outputs
+    are bit-identical to pushing every row in line, with the first buffer the dense gather buffer (as at 1M) or a buffer
+    of its own (small caches); the pushes split as PREFIX + REST exactly where expected."""
+    stage = _Stage(mesh_device, "scaled_fp8")
+    first, second = (stage.pass2[L] for L in LOOP_LAYERS)
+    assert first._pass2_push_reuses_dense, "the dense gather buffer holds pass 2's push output at this cache"
+    for m in (first, second):
+        m._pass2_push_reuses_dense = reuse_dense
+    planner = first._push
+    schedule = SCHEDULES["two_slots"]
+
+    def run(presend: bool):
+        planner.presend = presend
+        before = dict(planner.pushes)
+        outs = []
+        for slot, start, end in schedule:
+            sets = stage.pass1_chunk(slot, start, end)
+            for L, next_step in zip(LOOP_LAYERS, (PushStep(layer_offset=1), None)):
+                out = stage.pass2[L].forward(
+                    stage.to_device(_chunk_rows(slot, L, 2, start, end), start),
+                    stage.rope,
+                    stage.cache,
+                    cache_layer_idx=LOOP_LAYERS.index(L),
+                    cache_user_id=slot,
+                    actual_start=start,
+                    actual_end=end,
+                    indexer_indices=sets[0],  # both layers on the first layer's set: the second is its follower
+                    loop_pass2=True,
+                    next_step=next_step,
+                )
+                outs.append(stage.output_to_torch(out, start))
+            for t in sets:
+                ttnn.deallocate(t)
+        ttnn.synchronize_device(mesh_device)
+        return outs, {k: planner.pushes[k] - before.get(k, 0) for k in ("ALL", "PREFIX", "REST")}
+
+    present, presend_pushes = run(True)
+    inline, inline_pushes = run(False)
+    planner.presend = True
+    n = len(schedule)
+    assert presend_pushes == {"ALL": n, "PREFIX": n, "REST": n}, presend_pushes
+    assert inline_pushes == {"ALL": 2 * n, "PREFIX": 0, "REST": 0}, inline_pushes
+    # The successor reads the pre-sent + rest rows on the full grid: exactly what an in-line push gives it.
+    # The pre-sending layer's sparse_sdpa runs on the attention sub-device beside the push, whose core count changes
+    # its split-K plan (sparse_sdpa_program_factory), so its output is close but not bit-equal (as pass 1's pre-send).
+    for k, (a, b) in enumerate(zip(present, inline)):
+        layer = LOOP_LAYERS[k % 2]
+        pcc, diff = _pearson(a, b), (a.float() - b.float()).abs().max().item()
+        logger.info(f"[presend] output {k} (L{layer}): PCC {pcc:.6f} max|diff| {diff:.3e} equal {torch.equal(a, b)}")
+        if layer == LOOP_LAYERS[1]:
+            assert torch.equal(a, b), f"pass-2 output {k} of the pre-sent layer L{layer} differs from the in-line push"
+        else:
+            assert pcc >= PRESEND_GRID_PCC, f"pass-2 output {k} of L{layer}: PCC {pcc:.6f} < {PRESEND_GRID_PCC}"

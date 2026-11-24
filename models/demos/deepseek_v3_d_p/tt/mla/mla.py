@@ -973,6 +973,10 @@ class ttMLA:
         self._pass2_push_reuses_dense = (
             self._push.buffer_spec(dense, **self._pass2_push_geometry).shape[2] <= dense.shape[2]
         )
+        # Pass 2's push plan splits its rows at the ring: bank A (the slot's pass-1 rows, all written before pass 2
+        # runs: by pass 1 on one rank, by the handoff on G2) is the prefix a pre-send may push one layer early; the
+        # window ring rows, which this chunk's pass-2 layers write themselves, are the rest.
+        self._pass2_prefix_rows = ring_base
         return self.tt_ccl.get_two_bank_index(
             ring_base=ring_base,
             window=window,
@@ -2573,10 +2577,15 @@ class ttMLA:
         actual_end=None,
         metadata=None,
         injected=False,
+        next_step=None,
         **_,
     ):
         """Loop pass-2 attention (A2-A6, two_bank.py): this chunk's KV goes to the slot's window ring (two writes), then
         one sparse KV push of [window ring ids | injected pass-1 top-k] and one sparse_sdpa over the pushed rows.
+        next_step == PushStep(layer_offset=1) (the caller's word that the next layer runs pass 2 on this chunk with the
+        same top-k set): beside this attention, pre-send that layer's bank-A rows into the other push buffer
+        (_pass2_presend); a layer whose rows were pre-sent pushes only its ring rows. Any other next_step, the default
+        SAME_CHUNK_NEXT_LAYER included, pre-sends nothing: ttMLA cannot tell whether the next layer shares its set.
         The slot's pass-1 rows are read, never written. One path, trace-safe: the ring writes, the index list, the push
         slot and the plan's chunk start read the chunk's metadata on device (an eager call uploads it)."""
         if not injected:
@@ -2623,17 +2632,24 @@ class ttMLA:
         joint, built = index.joint_for(indices)
         if built:
             self._push.invalidate()
-        plan = self._sparse_push_plan(joint, None, metadata)
+        # The split is a constant row, so one plan serves every chunk's replay; the joint list's contents change per
+        # chunk but start_chunk rebuilds it, and a rebuild invalidates the plan.
+        plan = self._sparse_push_plan(joint, self._pass2_prefix_rows, None)
+        # The previous layer pre-sent this layer's bank-A rows into a buffer iff it recorded this very plan (same set).
+        entry = self._push.prefetched.pop(self.layer_idx, None)
+        prefetched = entry is not None and entry[0] is plan
+        parity = entry[1] if prefetched else None
+        part = SparseKvPushPart.REST if prefetched else SparseKvPushPart.ALL
         cache_batch_idx = self._cache_batch_idx(cache_user_id, cache_layer_idx)
         storage = kvpe_cache.storage
-        self._push.pushes[SparseKvPushPart.ALL.name] += 1
+        self._push.pushes[part.name] += 1
         compact = ttnn.experimental.sparse_kv_push(
             storage,
-            output_tensor=self._pass2_push_output(),
+            output_tensor=self._pass2_push_output(parity),
             table=plan.table,
             stripe_chunk=plan.stripe_chunk,
             max_rows=plan.max_rows,
-            part=SparseKvPushPart.ALL,
+            part=part,
             num_links=self.ccl_num_links,
             sp_axis=self.sp_axis,
             **self._sparse_push_slot_kwargs(storage, cache_batch_idx, metadata),
@@ -2647,18 +2663,48 @@ class ttMLA:
             kvpe_cache=kvpe_cache,
             seq_len_local=seq_len_local,
             compact=True,
+            prefetch=self._pass2_presend(
+                next_step,
+                plan,
+                parity,
+                kvpe_cache=kvpe_cache,
+                cache_user_id=cache_user_id,
+                cache_layer_idx=cache_layer_idx,
+                metadata=metadata,
+            ),
         )
         if host_metadata:
             for t in metadata:
                 ttnn.deallocate(t)
         return out
 
-    def _pass2_push_output(self):
-        """Where pass 2's push writes its rows: the idle dense gather buffer when it fits (see _build_two_bank_index)."""
+    def _pass2_push_output(self, parity=None):
+        """Where pass 2's push writes its rows. Parity None: the idle dense gather buffer when it fits (see
+        _build_two_bank_index), else a buffer of its own. Parity "presend": the second buffer, which a layer's pre-send
+        fills while that layer reads the first (consecutive layers of a top-k set alternate the two)."""
         dense = self._sparse_kv_gather_buffer
-        if self._pass2_push_reuses_dense:
+        if parity is None and self._pass2_push_reuses_dense:
             return dense
-        return self._push.push_buffer("loop_pass2", dense, **self._pass2_push_geometry)
+        key = "loop_pass2" if parity is None else "loop_pass2_presend"
+        return self._push.push_buffer(key, dense, **self._pass2_push_geometry)
+
+    def _pass2_presend(self, next_step, plan, parity, *, kvpe_cache, cache_user_id, cache_layer_idx, metadata):
+        """The pre-send for the next pass-2 layer when the caller says it runs on this chunk with this layer's top-k set
+        (next_step == PushStep(layer_offset=1), indices None): a push of its bank-A rows (``plan``'s prefix, so the same
+        plan it builds) from its own cache slot into the buffer this layer does not read, on the push sub-device beside
+        this attention, recorded in the planner's ``prefetched``. None when there is nothing to pre-send for."""
+        explicit = isinstance(next_step, PushStep) and next_step.layer_offset == 1 and next_step.indices is None
+        if not explicit or self._push_prefetch_grids is None or not self._push.presend:
+            return None
+        target_layer_idx = cache_layer_idx + 1
+        if self.layer_num is None or target_layer_idx >= self.layer_num:
+            return None
+        other = "presend" if parity is None else None
+        self._push.prefetched[self.layer_idx + 1] = (plan, other)
+        storage = kvpe_cache.storage
+        output = self._pass2_push_output(other)
+        slot = self._sparse_push_slot_kwargs(storage, self._cache_batch_idx(cache_user_id, target_layer_idx), metadata)
+        return self._prefix_push(storage, output, plan, slot)
 
     def _sparse_push_slot_kwargs(self, storage, cache_batch_idx, metadata):
         """Cache slot of a push. On the metadata path it is recomposed on device from the user id tensor, so a captured
@@ -2759,12 +2805,17 @@ class ttMLA:
         indices = own_indices if next_step.indices is None else next_step.indices
         plan = self._sparse_push_plan(indices, next_step.kv_actual_isl, next_step.metadata)
         self._push.prefetched[self.layer_idx + next_step.layer_offset] = (plan, parity)
-        self._push.pushes[SparseKvPushPart.PREFIX.name] += 1
         storage = kvpe_cache.storage
         output = self._push_buffer(parity)
         slot = self._sparse_push_slot_kwargs(
             storage, self._cache_batch_idx(next_step.cache_user_id, target_layer_idx), next_step.metadata
         )
+        return self._prefix_push(storage, output, plan, slot)
+
+    def _prefix_push(self, storage, output, plan, slot):
+        """A pre-send (pass 1's _presend, pass 2's _pass2_presend): the PREFIX push of ``plan`` from ``storage``'s slot
+        ``slot`` into ``output`` on the push sub-device, as a callable for _beside_prefetch; counted when enqueued."""
+        self._push.pushes[SparseKvPushPart.PREFIX.name] += 1
         _, push_grid = self._push_prefetch_grids
         return lambda: ttnn.experimental.sparse_kv_push(
             storage,
