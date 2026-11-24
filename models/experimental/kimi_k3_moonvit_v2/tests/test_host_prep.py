@@ -7,10 +7,9 @@ inputs built fast for the device inputs) against `tt.host_prep`, bit for bit."""
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 import torch
-
-import numpy as np
 
 from models.experimental.kimi_k3_moonvit_v2.tt import host_fill, host_prep, image_prep
 from models.experimental.kimi_k3_moonvit_v2.reference.kimi_k3_vision import load_vision_config
@@ -152,7 +151,7 @@ def test_pos_embed_table_falls_back_for_other_weights(config):
     """A weight the batched interpolation cannot take (non-contiguous here) goes through pos_embeds itself."""
     weight = torch.randn(config.hidden_size, 64, 64).permute(1, 2, 0)
     table = host_fill.PosEmbedTable(weight, config)
-    assert not table.batched
+    assert table.batch is None
     expected = host_prep.to_window_order(
         host_prep.pos_embeds(weight, 6, 20, config.pos_emb_interpolation_mode), 6, 20, config.merge_kernel_size
     )

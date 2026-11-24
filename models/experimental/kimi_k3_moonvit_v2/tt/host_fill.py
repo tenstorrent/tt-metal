@@ -38,27 +38,22 @@ from .model_config import MoonViTConfig
 # Channels per interpolation chunk: a multiple of every CPU vector width, so a chunk's channels-last kernel computes
 # each value as the whole table's does.
 POS_EMB_CHUNK = 64
-
-
 # Smallest share of a fill worth a pool thread, in elements: a smaller fill runs inline.
 MIN_TASK_ELEMENTS = 1 << 20
 POOL_THREADS = min(16, os.cpu_count() or 1)
-
-
-@functools.cache
-def _pool() -> ThreadPoolExecutor:
-    return ThreadPoolExecutor(max_workers=POOL_THREADS, thread_name_prefix="moonvit-host")
+# Starts no thread until its first task.
+_POOL = ThreadPoolExecutor(max_workers=POOL_THREADS, thread_name_prefix="moonvit-host")
 
 
 def _run_split(count: int, elements_each: int, work) -> None:
     """Run `work(start, stop)` over range(count) in pieces of at least MIN_TASK_ELEMENTS elements: inline when there
     is one piece, else on the pool."""
     tasks = max(1, min(count, POOL_THREADS, count * elements_each // MIN_TASK_ELEMENTS))
-    bounds = [count * i // tasks for i in range(tasks + 1)]
     if tasks == 1:
         work(0, count)
         return
-    for future in [_pool().submit(work, a, b) for a, b in zip(bounds, bounds[1:])]:
+    bounds = [count * i // tasks for i in range(tasks + 1)]
+    for future in [_POOL.submit(work, a, b) for a, b in zip(bounds, bounds[1:])]:
         future.result()
 
 
@@ -130,12 +125,12 @@ class PosEmbedTable:
         # takes its channels-last kernel, which runs on one thread. Here the channels are cut into chunks that form
         # a batch, (C / chunk, chunk, H, W), channels-last: the same kernel and the same per-element arithmetic, but
         # torch spreads the batch over its threads.
-        self.batched = weight.is_contiguous() and weight.dtype == torch.float32 and hidden % POS_EMB_CHUNK == 0
+        batched = weight.is_contiguous() and weight.dtype == torch.float32 and hidden % POS_EMB_CHUNK == 0
         self.batch = (
             weight.view(height, width, hidden // POS_EMB_CHUNK, POS_EMB_CHUNK)
             .permute(2, 3, 0, 1)
             .contiguous(memory_format=torch.channels_last)
-            if self.batched
+            if batched
             else None
         )
 
@@ -147,7 +142,7 @@ class PosEmbedTable:
         out = torch.empty(h * w, hidden, dtype=torch.float32)
         windows = out.view(h // kh, w // kw, kh, kw, hidden)
         mode = config.pos_emb_interpolation_mode
-        if not self.batched or (h, w) == tuple(self.weight.shape[:-1]):
+        if self.batch is None or (h, w) == tuple(self.weight.shape[:-1]):
             windows.copy_(_window_view(pos_embeds(self.weight, h, w, mode), h, w, config.merge_kernel_size))
             return out
         chunks = F.interpolate(self.batch, size=(h, w), mode=mode)  # (C / chunk, chunk, h, w), channels-last
@@ -174,8 +169,7 @@ def _rope_axis_tables(config: MoonViTConfig) -> tuple[torch.Tensor, torch.Tensor
             t = fn(angles)[:, freq_of_lane]
             t[:, axis_of_lane != axis] = 0.0
             tables.append(t)
-    cos_x, sin_x, cos_y, sin_y = tables
-    return cos_x, sin_x, cos_y, sin_y
+    return tuple(tables)
 
 
 def rope_window_rows(config: MoonViTConfig, h: int, w: int) -> tuple[torch.Tensor, torch.Tensor]:
@@ -186,10 +180,9 @@ def rope_window_rows(config: MoonViTConfig, h: int, w: int) -> tuple[torch.Tenso
     every lane is zero."""
     kh, kw = config.merge_kernel_size
     d = config.head_dim
-
-    def table(x_part: torch.Tensor, y_part: torch.Tensor) -> torch.Tensor:
-        out = y_part[:h].view(h // kh, 1, kh, 1, d) + x_part[:w].view(1, w // kw, 1, kw, d)
-        return out.view(h * w, d)
-
     cos_x, sin_x, cos_y, sin_y = _rope_axis_tables(config)
-    return table(cos_x, cos_y), table(sin_x, sin_y)
+    cos, sin = (
+        (y[:h].view(h // kh, 1, kh, 1, d) + x[:w].view(1, w // kw, 1, kw, d)).view(h * w, d)
+        for x, y in ((cos_x, cos_y), (sin_x, sin_y))
+    )
+    return cos, sin

@@ -19,7 +19,6 @@ cost of the rows that changed.
 
 from __future__ import annotations
 
-import math
 from collections.abc import Callable, Sequence
 
 import torch
@@ -87,24 +86,16 @@ class DeviceInput:
         self.tiled = layout == ttnn.TILE_LAYOUT
         if self.tiled and (self.rows % TILE or self.width % TILE):
             raise ValueError(f"a TILE input needs whole tiles, got {self.shape}")
+        self.storage_dtype = _STORAGE_DTYPES[dtype]
         self.tensor: ttnn.Tensor | None = None
-        self._staging: torch.Tensor | None = None  # flat, in the device's byte layout
+        self._staging = torch.zeros(self.rows * self.width, dtype=self.storage_dtype)  # flat, in the device's layout
         self._host: ttnn.Tensor | None = None  # borrows _staging
         # Rows of the staging buffer, from the top, that may hold non-zero values (whole tile rows for TILE).
         self._dirty = 0
 
-    @property
-    def storage_dtype(self) -> torch.dtype:
-        return _STORAGE_DTYPES[self.dtype]
-
-    def _staging_buffer(self) -> torch.Tensor:
-        if self._staging is None:
-            self._staging = torch.zeros(self.rows * self.width, dtype=self.storage_dtype)
-        return self._staging
-
     def host_value(self) -> torch.Tensor:
         """The staging buffer as the logical [1, 1, rows, width] tensor: what the last write sent to the chips."""
-        flat = self._staging_buffer()
+        flat = self._staging
         rows = untilize(flat, self.width) if self.tiled else flat.view(self.rows, self.width)
         return rows.reshape(self.shape)
 
@@ -120,13 +111,13 @@ class DeviceInput:
         n = rows.shape[0]
         if rows.ndim != 2 or rows.shape[1] != self.width or n > self.rows:
             raise ValueError(f"expected at most {self.rows} rows of width {self.width}, got {tuple(rows.shape)}")
-        flat = self._staging_buffer()
-        self._mark_dirty(n)
+        # Marked before writing: if the write stops part way, the next one still clears these rows.
+        self._dirty = max(self._dirty, self._whole_rows(n))
         if not self.tiled:
-            flat.view(self.rows, self.width)[:n].copy_(rows)
+            self._staging.view(self.rows, self.width)[:n].copy_(rows)
             return self._finish(n)
         whole = n - n % TILE
-        tiles = tiles_view(flat, self.width)
+        tiles = tiles_view(self._staging, self.width)
         if whole:
             tilize_into(tiles[: whole // TILE], rows[:whole])
         if whole < n:
@@ -142,18 +133,13 @@ class DeviceInput:
             raise ValueError("fill_rows writes row-major inputs; use write_rows for TILE")
         if not 0 <= n <= self.rows:
             raise ValueError(f"{n} rows for an input of {self.rows}")
-        staging = self._staging_buffer()
-        self._mark_dirty(n)
-        fill(staging.view(self.rows, self.width)[:n])
+        self._dirty = max(self._dirty, n)  # before writing, as in write_rows
+        fill(self._staging.view(self.rows, self.width)[:n])
         return self._finish(n)
 
     def _whole_rows(self, n: int) -> int:
         """Staging rows that n logical rows occupy: whole tile rows for TILE."""
         return -(-n // TILE) * TILE if self.tiled else n
-
-    def _mark_dirty(self, n: int) -> None:
-        """Before writing n rows: if the write stops part way, the next one still clears them."""
-        self._dirty = max(self._dirty, self._whole_rows(n))
 
     def _finish(self, n: int) -> ttnn.Tensor:
         """Zero the stale rows after the first n, then upload."""
@@ -182,13 +168,17 @@ class DeviceInput:
 
     def _borrowing_host_tensor(self) -> ttnn.Tensor:
         """A host tensor over the staging buffer, with no copy: one shard per chip under the device tensor's topology,
-        or, replicated, one tensor that the copy writes to every chip."""
+        or, replicated, one tensor that the copy writes to every chip. The uint8 view is the same bytes, not a cast.
+
+        The spec only describes the staging bytes: shape, dtype and layout must match the device tensor (the copy
+        checks them), and its memory config just means packed rows. Where the bytes land is set by the device tensor's
+        own memory config, so any device config works, DRAM or L1, interleaved or sharded, except row-major width or
+        block sharding with uneven shards, which ttnn rejects."""
         raw = self._staging.view(torch.uint8).numpy()
         if self.sp_axis is None:
             spec = ttnn.TensorSpec(ttnn.Shape(self.shape), self.dtype, self.layout, ttnn.DRAM_MEMORY_CONFIG)
             return ttnn.host_tensor_from_bytes(raw, spec)
-        mesh_shape = tuple(self.mesh_device.shape)
-        sp = mesh_shape[self.sp_axis]
+        sp = tuple(self.mesh_device.shape)[self.sp_axis]
         shard_rows = self.rows // sp
         spec = ttnn.TensorSpec(
             ttnn.Shape((1, 1, shard_rows, self.width)), self.dtype, self.layout, ttnn.DRAM_MEMORY_CONFIG
@@ -196,14 +186,7 @@ class DeviceInput:
         # Rows are contiguous in both layouts (TILE: whole tile rows), so chip k's shard is the k-th slice.
         shard_bytes = raw.size // sp
         shards = {}
-        for coord in (tuple(c) for c in _mesh_coords(mesh_shape)):
+        for coord in self.tensor.device_coords():
             k = coord[self.sp_axis]
-            shards[ttnn.MeshCoordinate(*coord)] = ttnn.host_tensor_from_bytes(
-                raw[k * shard_bytes : (k + 1) * shard_bytes], spec
-            )
+            shards[coord] = ttnn.host_tensor_from_bytes(raw[k * shard_bytes : (k + 1) * shard_bytes], spec)
         return ttnn.from_local_host_shards(shards, self.mesh_device, self.tensor.tensor_topology())
-
-
-def _mesh_coords(mesh_shape: Sequence[int]):
-    """Every coordinate of a mesh, row major."""
-    return [divmod(i, mesh_shape[1]) for i in range(math.prod(mesh_shape))]

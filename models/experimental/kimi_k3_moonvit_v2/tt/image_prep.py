@@ -65,10 +65,7 @@ def resize_image(image: Image.Image, config: MoonViTConfig) -> np.ndarray:
     """
     if image.mode != "RGB":
         raise ValueError(f"image mode {image.mode!r} is not supported, only 'RGB'")
-    plan = _checked_plan(image.width, image.height, config)
-    if (plan.new_w, plan.new_h) != image.size:
-        image = image.resize((plan.new_w, plan.new_h), resample=Image.Resampling.BICUBIC)
-    return _pad(np.asarray(image), plan)
+    return _resize_and_pad(image, image.width, image.height, config)
 
 
 def resize_array(media: np.ndarray, config: MoonViTConfig) -> np.ndarray:
@@ -76,25 +73,26 @@ def resize_array(media: np.ndarray, config: MoonViTConfig) -> np.ndarray:
     (at scale 1 Pillow's resize returns a copy, so this is the same), and is copied once, into the padded array."""
     if media.dtype != np.uint8 or media.ndim != 3 or media.shape[2] != 3 or 0 in media.shape:
         raise ValueError(f"expected a non-empty uint8 RGB [height, width, 3] array, got {media.dtype} {media.shape}")
-    height, width = media.shape[:2]
-    plan = _checked_plan(width, height, config)
-    if (plan.new_w, plan.new_h) != (width, height):
-        return resize_image(Image.fromarray(media), config)
-    return _pad(media, plan)
+    return _resize_and_pad(media, media.shape[1], media.shape[0], config)
 
 
-def _checked_plan(width: int, height: int, config: MoonViTConfig) -> ResizePlan:
+def _resize_and_pad(image: Image.Image | np.ndarray, width: int, height: int, config: MoonViTConfig) -> np.ndarray:
+    """The steps `resize_image` and `resize_array` share, for an RGB image of width x height: check the grid, resize
+    with Pillow only if the size changes, and pad."""
     plan = resize_plan(width, height, config)
     try:
         check_grid(torch.tensor([[1, plan.grid_h, plan.grid_w]]), config)
     except ValueError as e:
         raise ValueError(f"image {width}x{height}: {e}") from e
-    return plan
+    if (plan.new_w, plan.new_h) != (width, height):
+        if isinstance(image, np.ndarray):
+            image = Image.fromarray(image)
+        image = image.resize((plan.new_w, plan.new_h), resample=Image.Resampling.BICUBIC)
+    return _pad(np.asarray(image), plan)
 
 
 def _pad(pixels: np.ndarray, plan: ResizePlan) -> np.ndarray:
-    """Black on the bottom and right, as np.pad with zeros, into one new array. Only the pad is zeroed: zeroing the
-    whole array first would write every page twice."""
+    """`np.pad` with black on the bottom and right, zeroing only the pad."""
     height, width = pixels.shape[:2]
     out = np.empty((height + plan.pad_h, width + plan.pad_w, 3), np.uint8)
     out[:height, :width] = pixels
@@ -122,9 +120,8 @@ def pixels_to_patches(pixels: np.ndarray, config: MoonViTConfig) -> tuple[torch.
     grid_thws = torch.tensor([[1, h, w]], dtype=torch.int64)
     p = config.patch_size
 
-    # (pixels / 255.0 in float64, to float32) - mean) / std, the processor's arithmetic: in float32, after one
-    # permuted copy of the uint8 patches. Dividing by 255 in float32 rounds every one of the 256 values as the
-    # float64 division and the cast do (test_image_prep checks), so the result is the same, bit for bit.
+    # HF divides by 255 in float64, then casts to float32. Dividing in float32 gives the same value for all 256
+    # inputs (test_image_prep checks), and lets the normalization run in place on one permuted copy.
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)  # a read-only array: it is only read
         image = torch.from_numpy(pixels)

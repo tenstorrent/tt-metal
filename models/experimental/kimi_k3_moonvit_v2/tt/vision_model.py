@@ -26,10 +26,10 @@ import torch
 import ttnn
 
 from .ccl import ParallelFactor, TT_CCL, ccl_slot_for_layer
-from . import host_fill
+from . import host_fill, host_prep
 from .device_input import DeviceInput
 from .image_prep import check_pixels
-from .model_config import MoonViTConfig, VisionParallel, check_grid, compute_kernel_config, resolve_parallel
+from .model_config import MoonViTConfig, VisionParallel, compute_kernel_config, resolve_parallel
 from .module import Module, ModuleList
 from .patch_embed import TT_Patch_Embed
 from .patch_merger import TT_Patch_Merger
@@ -155,11 +155,12 @@ class TT_MoonViT_Vision_Model(Module):
         self.logical_n = DeviceInput(
             (1, 1, 1, 1), mesh_device=mesh_device, sp_axis=None, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
         )
-        # The grid whose position embeddings, RoPE tables and logical_n the chips hold: they depend on nothing else,
-        # so an image of the same grid writes only its patches.
+        # The grid whose position embeddings, RoPE tables and logical_n the chips hold, and the weight they came from:
+        # an image of the same grid writes only its patches.
         self._grid: tuple[int, int] | None = None
-        self._pos_table: host_fill.PosEmbedTable | None = None
+        self._grid_weight: torch.Tensor | None = None
         # read_output's host buffer for one chip's shard: (output shape, uint16 rows, host tensor that borrows them).
+        # About 60 MB, held from the first one-chip read for the model's life.
         self._readback: tuple | None = None
 
     def prepare_inputs(self, pixel_values: torch.Tensor, grid_thws: torch.Tensor) -> dict:
@@ -170,22 +171,19 @@ class TT_MoonViT_Vision_Model(Module):
         Returns `patches` [1, 1, S/sp, padded_patch_dim], `pos_emb` [1, 1, S/sp, hidden], `rope` and
         `logical_n` (the unpadded length, [1, 1, 1, 1] uint32), rows in window order.
         """
-        self._pos_emb_weight()
-        h, w = check_grid(grid_thws, self.config)
-        expected = (h * w, self.config.in_channels, self.config.patch_size, self.config.patch_size)
-        if tuple(pixel_values.shape) != expected:
-            raise ValueError(f"pixel_values {tuple(pixel_values.shape)} != {expected} for grid {h}x{w}")
+        weight = self._pos_emb_weight()
+        h, w = host_prep.check_pixel_values(pixel_values, grid_thws, self.config)
         self.patches.fill_rows(h * w, lambda rows: host_fill.patch_values_into(rows, pixel_values, h, w, self.config))
-        return self._write_grid(h, w)
+        return self._write_grid(h, w, weight)
 
     def prepare_image(self, pixels: np.ndarray) -> dict:
         """`prepare_inputs(*image_prep.pixels_to_patches(pixels, config))` from `image_prep.resize_image`'s uint8
         [H, W, 3] pixels, with the same device inputs, bit for bit: the patches are normalized straight into their
         bf16 rows, with no float32 `pixel_values`."""
-        self._pos_emb_weight()
+        weight = self._pos_emb_weight()
         h, w = check_pixels(pixels, self.config)
         self.patches.fill_rows(h * w, lambda rows: host_fill.normalized_patches_into(rows, pixels, self.config))
-        return self._write_grid(h, w)
+        return self._write_grid(h, w, weight)
 
     def _pos_emb_weight(self) -> torch.Tensor:
         weight = self.vision_tower.patch_embed.pos_emb_weight
@@ -193,19 +191,15 @@ class TT_MoonViT_Vision_Model(Module):
             raise RuntimeError("weights not loaded; call load_torch_state_dict or load_cached first")
         return weight
 
-    def _write_grid(self, h: int, w: int) -> dict:
+    def _write_grid(self, h: int, w: int, weight: torch.Tensor) -> dict:
         """Write the inputs that depend only on the grid, unless the chips hold this grid's already, from these
         weights."""
-        weight = self._pos_emb_weight()
-        if self._pos_table is None or self._pos_table.weight is not weight:  # first call, or weights reloaded
-            self._pos_table = host_fill.PosEmbedTable(weight, self.config)
-            self._grid = None
-        if self._grid != (h, w):
+        if self._grid != (h, w) or self._grid_weight is not weight:
             self._grid = None  # until every write below has completed
-            self.pos_emb.write_rows(self._pos_table.window_rows(h, w))
-            self.rope.write_rows(*host_fill.rope_window_rows(self.config, h, w))
+            self.pos_emb.write_rows(host_fill.PosEmbedTable(weight, self.config).window_rows(h, w))
+            self.rope.write(*host_fill.rope_window_rows(self.config, h, w))
             self.logical_n.write(torch.tensor(h * w, dtype=torch.int64))
-            self._grid = (h, w)
+            self._grid, self._grid_weight = (h, w), weight
         return {
             "patches": self.patches.tensor,
             "pos_emb": self.pos_emb.tensor,
@@ -258,7 +252,7 @@ class TT_MoonViT_Vision_Model(Module):
         rows = rows.view(np.uint16)  # the same bits, whichever of BF16_HOLDERS rows is
         coords = self._data_coords(rows_per_chip, logical_n)
         if len(coords) == 1:
-            # The first chip holds every real row: read it into the host buffer kept for this.
+            # The first chip holds every real row: read it into `_readback`, reused instead of allocated per read.
             shards = [self._read_first_chip(out)]
         else:
             # Row major with no tile padding, so the padded shape is the logical one; unlike `to_torch`, it hands back
@@ -272,12 +266,12 @@ class TT_MoonViT_Vision_Model(Module):
             np.copyto(rows[start : start + n], shard[:n])
 
     def _read_first_chip(self, out: ttnn.Tensor) -> np.ndarray:
-        """Read the shard of `out` on the first chip, mesh coordinate (0, 0), into a host buffer allocated once ->
-        uint16 [rows per chip, C], valid until the next call. Saves allocating, zeroing and freeing a buffer of the
-        whole shard on every read, as `cpu_shards` does.
+        """Read the shard of `out` on the first chip, mesh coordinate (0, 0), into `_readback` -> uint16
+        [rows per chip, C], overwritten by the next call. Saves allocating, zeroing and freeing a buffer of the whole
+        shard on every read, as `cpu_shards` does.
 
-        The buffer is borrowed by a host tensor of `out`'s topology (`ttnn.from_local_host_shards`) whose shards all
-        alias it: a copy from the first chip's own device tensor writes only that chip's shard."""
+        `from_local_host_shards` takes a host shard for every chip of `out`'s mesh, so all of them wrap this one buffer;
+        only chip (0, 0) is read, so only its shard is written. The caller's `rows` are never wrapped."""
         shape = tuple(out.shape)
         if self._readback is None or self._readback[0] != shape:
             self._readback = None  # drop the old buffer first
@@ -309,7 +303,6 @@ class TT_MoonViT_Vision_Model(Module):
 
     def run(self, pixel_values: torch.Tensor, grid_thws: torch.Tensor) -> torch.Tensor:
         """Host in, host out: (h*w, 3, 14, 14), [[1, h, w]] -> (h*w/4, text_hidden_size)."""
-        h, w = check_grid(grid_thws, self.config)
         inputs = self.prepare_inputs(pixel_values, grid_thws)
-        merged_n = h * w // self.config.merge_area
+        merged_n = pixel_values.shape[0] // self.config.merge_area
         return self.gather_output(self.forward(**inputs), logical_n=merged_n)
