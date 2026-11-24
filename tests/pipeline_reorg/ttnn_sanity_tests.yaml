@@ -333,8 +333,9 @@
   # once when MetalContext is first constructed, so it must be set before this process opens a
   # device. Exporting it here rather than relying on the directory conftest's fixture also makes
   # the requirement visible, and satisfies the requires_hybrid_allocator marker on those tests.
-  # test_compiled_program.py runs again with slow dispatch as well, for its kernel config buffer test, which needs both.
-  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/base_functionality tests/ttnn/unit_tests/benchmarks tests/ttnn/unit_tests/tensor tests/ttnn/unit_tests/test_comparison_funcs.py -xv -m "not disable_fast_runtime_mode" && TT_METAL_ALLOCATOR_MODE_HYBRID=1 pytest --timeout 300 tests/ttnn/unit_tests/per_core_allocation -xv && TT_METAL_ALLOCATOR_MODE_HYBRID=1 pytest --timeout 300 tests/ttnn/unit_tests/range_lockstep_allocation -xv && TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_ALLOCATOR_MODE_HYBRID=1 pytest --timeout 300 tests/ttnn/unit_tests/operations/debug/test_compiled_program.py -xv'
+  # test_run_from_kernel_config_buffer needs slow dispatch as well as HYBRID, so it runs in its own process too. The
+  # rest of test_compiled_program.py runs in fast dispatch with "ttnn misc ops group".
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/base_functionality tests/ttnn/unit_tests/benchmarks tests/ttnn/unit_tests/tensor tests/ttnn/unit_tests/test_comparison_funcs.py -xv -m "not disable_fast_runtime_mode" && TT_METAL_ALLOCATOR_MODE_HYBRID=1 pytest --timeout 300 tests/ttnn/unit_tests/per_core_allocation -xv && TT_METAL_ALLOCATOR_MODE_HYBRID=1 pytest --timeout 300 tests/ttnn/unit_tests/range_lockstep_allocation -xv && TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_ALLOCATOR_MODE_HYBRID=1 pytest --timeout 300 tests/ttnn/unit_tests/operations/debug/test_compiled_program.py -k test_run_from_kernel_config_buffer -xv'
   ai_summary:
     authoritative_job_status: true
   skus:
