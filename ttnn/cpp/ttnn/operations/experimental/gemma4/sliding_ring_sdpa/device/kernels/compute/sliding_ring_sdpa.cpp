@@ -34,6 +34,7 @@
 #include "ttnn/operations/transformer/sdpa/device/kernels/compute/recipe/recipe_sfpu.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/compute/recipe/recipe_streaming.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/compute/recipe/recipe_ring.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/compute/recipe/recipe_ring_ksplit.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/fused_op_indexer.hpp"
 #include "cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_rank_mapping.hpp"
 #include "cpp/ttnn/operations/experimental/gemma4/sliding_ring_sdpa/device/kernels/sliding_ring_sdpa_derived_slots.hpp"
@@ -129,6 +130,11 @@ __attribute__((optimize("Os"))) void kernel_main() {
     static_assert(recipe::ring_mask == 2, "the sequence-frame positional masks");
     static_assert(recipe::ring_window == sliding_window_size && recipe::ring_rotation == kv_pad_rotation_enabled);
     static_assert(recipe::ring_circular == (circular_kv_slab_count > 1));
+    // K split: cores with one (head, Q chunk) unit each run a band of its work plan; the last band merges the others'
+    // states and normalizes (the BF16-state recipes: O and l stay in CB 9 / CB 13 for the writers to move).
+    constexpr uint32_t ksplit_count = get_named_compile_time_arg_val("ksplit_count");
+    constexpr bool ksplit_enabled = ksplit_count > 1;
+    static_assert(!ksplit_enabled || (!recipe::fp32 && num_lanes == 1 && ksplit_count <= ring_joint::kKSplitMaxCount));
 
     uint32_t argidx = 0;
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
@@ -146,6 +152,9 @@ __attribute__((optimize("Os"))) void kernel_main() {
     rotation.q_post_wrap_start_tile = get_arg_val<uint32_t>(argidx++);
     rotation.q_valid_tile_count = get_arg_val<uint32_t>(argidx++);
 
+    // After the rotation words: the active ring iteration mask, the multicast loop count, then the K split band.
+    [[maybe_unused]] const uint32_t ksplit_band = ksplit_enabled ? get_arg_val<uint32_t>(argidx + 2) : 0;
+    const bool ksplit_active = ksplit_enabled && q_per_core == 1;
     RingSDPAOpIndexer fused_op_indexer(
         ring_size_runtime, ring_index_runtime, forward_writes_expected, backward_writes_expected);
 
@@ -236,6 +245,13 @@ __attribute__((optimize("Os"))) void kernel_main() {
             kv_pad_rotation_enabled ? &q_mapping : nullptr,
             sliding_local_first);
         ASSERT(plan.is_valid && plan.total_k_chunk_count > 0);
+        // This core's band of the plan (K split), else all of it.
+        ring_joint::KSplitRange band{0, plan.total_k_chunk_count};
+        if constexpr (ksplit_enabled) {
+            if (ksplit_active) {
+                band = ring_joint::sliding_ksplit_range(plan.total_k_chunk_count, ksplit_band, ksplit_count);
+            }
+        }
         const uint32_t q_tile0 =
             kv_pad_rotation_enabled
                 ? q_chunk * Sq_chunk_t
@@ -252,8 +268,9 @@ __attribute__((optimize("Os"))) void kernel_main() {
             true,
             q_flat,
             false,
-            plan.total_k_chunk_count,
-            [&](RecipeAccumulatorState& state, uint32_t chunk, bool last_k) __attribute__((always_inline)) {
+            band.empty() ? 0 : band.end - band.begin,
+            [&](RecipeAccumulatorState& state, uint32_t band_chunk, bool last_k) __attribute__((always_inline)) {
+                const uint32_t chunk = band.begin + band_chunk;
                 const auto ref = plan.k_chunk_at(chunk);
                 recipe_ring_mask.valid_rows = Sk_chunk_t * tt::constants::TILE_HEIGHT;
                 recipe_ring_mask.masked = true;
@@ -288,7 +305,21 @@ __attribute__((optimize("Os"))) void kernel_main() {
                         }
                     }
                 }
-                run_chunk(state, last_k, last_k);
+                // A K-split band's state stays unnormalized (the reducer merges it).
+                run_chunk(state, last_k && !ksplit_active, last_k);
             });
+        if constexpr (ksplit_enabled) {
+            if (ksplit_active) {
+                if (ksplit_band + 1 < ksplit_count) {
+                    recipe_ring_ksplit_publish(resident, !band.empty());
+                } else {
+                    recipe_ring_ksplit_merge_and_normalize<
+                        Sq_chunk_t,
+                        vDHt,
+                        get_compile_time_arg_val(26),
+                        ksplit_count>(resident, plan.total_k_chunk_count);
+                }
+            }
+        }
     }
 }

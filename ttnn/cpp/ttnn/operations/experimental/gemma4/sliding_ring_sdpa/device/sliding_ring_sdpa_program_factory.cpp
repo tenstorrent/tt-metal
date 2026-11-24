@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/experimental/gemma4/sliding_ring_sdpa/device/sliding_ring_sdpa_program_factory.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/chunked_q_mapping.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_ksplit.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/chunked_prefill_utils.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sliding_window_geometry.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp"
@@ -1042,17 +1043,30 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // The writer drains the output in the rows compute packs (one per row); pairs of rows when the Q chunk is a whole
     // number of them, so a pair never straddles the output CB's wrap.
     const uint32_t writer_out_row_group_h = Sq_chunk_t % 2 == 0 ? 2 : 1;
-    // K split is not applied (as RingJointSDPA's sliding path): the recipes run every Q chunk's K chunks on its own core.
-    // Lanes still reject it (validate_on_program_cache_miss). Segmented accumulation is dense-only.
-    if (args.program_config.has_value() && args.program_config->k_splits > 1) {
-        static std::once_flag ignored_once;
-        std::call_once(ignored_once, [] {
-            log_warning(
-                tt::LogOp,
-                "Gemma4SlidingRingSDPA ignores SDPAProgramConfig k_splits: the precision recipes run every Q chunk's "
-                "K chunks on its own core.");
-        });
+    // K split: when the (head, Q chunk) units leave the grid idle, the rows are divided into bands that each hold
+    // every unit once and attend to a band of its sliding work plan; the last band (it holds the diagonal) merges the
+    // others' states and normalizes (ring_joint_ksplit.hpp, recipe_split_merge.hpp). A schedule choice: only the
+    // summation order of the online softmax changes. Applied when every unit gets its own core in every band, for the
+    // BF16-state recipes (their O and l stay in CBs 9 / 13 for the writers to move), one request per call and
+    // Blackhole (Wormhole runs its ring chunks unfused and has no K-split coverage); other calls run unsplit.
+    uint32_t ksplit_count = 1;
+    uint32_t ksplit_rows_per_split = 0;
+    const uint32_t ksplit_requested = args.program_config.has_value() ? args.program_config->k_splits : 1;
+    if (ksplit_requested > 1 && B == 1 && num_lanes == 1 && !policy.fp32_destination &&
+        all_heads_num_q_chunks <= num_cores && device->arch() != tt::ARCH::WORMHOLE_B0) {
+        ksplit_rows_per_split = tt::div_up(all_heads_num_q_chunks, grid_size.x);
+        // Every sliding band needs two K chunks of the halo (the oldest can mask a Q chunk's later rows entirely).
+        const uint32_t sliding_cap = std::max(
+            1u,
+            ring_joint::chunked_sliding_halo_tile_rows(sliding_window_size, tt::constants::TILE_HEIGHT, Sk_chunk_t) /
+                Sk_chunk_t / 2);
+        const uint32_t max_ksplit = std::min(
+            {static_cast<uint32_t>(grid_size.y) / ksplit_rows_per_split, ring_joint::kKSplitMaxCount, sliding_cap});
+        if (ksplit_requested <= max_ksplit) {
+            ksplit_count = ksplit_requested;
+        }
     }
+    log_debug(tt::LogOp, "Gemma4SlidingRingSDPA K split: {} (requested {})", ksplit_count, ksplit_requested);
     TT_FATAL(
         !(args.program_config.has_value() && args.program_config->segmented_accumulation),
         "segmented_accumulation is not supported with a sliding window. Turn segmented_accumulation off.");
@@ -1321,7 +1335,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         ring_joint::chunked_sliding_halo_hop_count(chunked_sliding_halo_layout.halo_tile_rows, q_local_padded_Nt);
     const uint32_t sliding_max_source_ranges =
         ring_joint::sliding_q_work_plan_source_ranges(sliding_halo_hops, chunked_sliding_halo_layout.halo_slot_count);
-    const uint32_t sliding_local_first = sliding_halo_hops > 1 ? 1 : 0;
+    // A K split keeps the plan in sequence order: its last band then holds the diagonal chunk.
+    const uint32_t sliding_local_first = sliding_halo_hops > 1 && ksplit_count == 1 ? 1 : 0;
 
     // Circular buffers: the recipe compute layout (recipe_compute_program, CBs 0-16 and 29-31; recipe_ring_cbs.hpp),
     // then the reader's derived lengths (RingJointSDPA's sliding layout less its checkpoint and sink CBs: a sliding Q
@@ -1373,6 +1388,25 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             .data_format = tt::DataFormat::UInt32,
             .page_size = derived_page_bytes}}},
     });
+    // K split: the band's state handoff page, and the reducer's receive CBs for one sender's state (O rows of vd
+    // tiles, the maxima, l, in the recipe state's formats) and the merge's c_b scratch (the maxima's format).
+    if (ksplit_count > 1) {
+        const auto add_ksplit_cb = [&](uint32_t id, uint32_t pages, uint32_t page_size, tt::DataFormat df) {
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = pages * page_size,
+                .core_ranges = core_grid_set,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(id), .data_format = df, .page_size = page_size}}},
+            });
+        };
+        const uint32_t bf16_tile = tt::tile_size(tt::DataFormat::Float16_b);
+        const uint32_t fp32_tile = tt::tile_size(tt::DataFormat::Float32);
+        add_ksplit_cb(recipe_ring_cb::ksplit_signal, 1, 64, tt::DataFormat::UInt32);
+        add_ksplit_cb(recipe_ring_cb::ksplit_recv_out, Sq_chunk_t * vDHt, fp32_tile, tt::DataFormat::Float32);
+        add_ksplit_cb(recipe_ring_cb::ksplit_recv_max, Sq_chunk_t, bf16_tile, tt::DataFormat::Float16_b);
+        add_ksplit_cb(recipe_ring_cb::ksplit_recv_sum, Sq_chunk_t, fp32_tile, tt::DataFormat::Float32);
+        add_ksplit_cb(recipe_ring_cb::ksplit_corr, Sq_chunk_t, bf16_tile, tt::DataFormat::Float16_b);
+    }
     // Fit L1 as RingJointSDPA does: first give up Q prefetch, then output staging beyond one row group, then the fused
     // chunks' CBs (every K chunk then runs on the reduce path, slower than either).
     const uint64_t l1_available = recipes::recipe_free_l1(*device);
@@ -1463,7 +1497,27 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
     uint32_t next_global_chunk = 0;
 
-    for (uint32_t i = 0; i < num_cores; ++i) {
+    // K split: core (x, y) is in band y / rows_per_split and owns unit (y % rows_per_split) * grid.x + x. Idle cores
+    // of rows past the last band report band 0; they own no unit.
+    auto ksplit_band = [&](uint32_t core_idx) {
+        const uint32_t band = core_idx / grid_size.x / ksplit_rows_per_split;
+        return band < ksplit_count ? band : 0;
+    };
+    auto ksplit_core = [&](uint32_t band, uint32_t core_idx) {
+        const uint32_t local_row = core_idx / grid_size.x % ksplit_rows_per_split;
+        return (band * ksplit_rows_per_split + local_row) * grid_size.x + core_idx % grid_size.x;
+    };
+    for (uint32_t i = 0; ksplit_count > 1 && i < num_cores; ++i) {
+        const uint32_t x = i % grid_size.x;
+        const uint32_t y = i / grid_size.x;
+        const uint32_t unit = (y % ksplit_rows_per_split) * grid_size.x + x;
+        const bool owns_unit = y / ksplit_rows_per_split < ksplit_count && unit < total_q_chunks;
+        auto& work = core_work.at(i);
+        work.physical_core = device->worker_core_from_logical_core(CoreCoord{x, y});
+        work.global_q_start = owns_unit ? unit : total_q_chunks;
+        work.global_q_count = owns_unit ? 1 : 0;
+    }
+    for (uint32_t i = 0; ksplit_count == 1 && i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
         uint32_t chunk_count = base_chunks_per_core + ((i < cores_doing_extra_work) ? extra_chunks_per_core : 0);
         if (next_global_chunk >= total_q_chunks) {
@@ -1487,6 +1541,18 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     constexpr uint32_t rotated_max_slots_ct = 0;
     for (auto* args : {&reader_compile_time_args, &writer_compile_time_args, &compute_compile_time_args}) {
         args->push_back(rotated_max_slots_ct);
+    }
+    // K split: the reducer's ready semaphore, one bit per sender band (writer: KSplitHandoff).
+    uint32_t ksplit_sem_id = 0;
+    if (ksplit_count > 1) {
+        ksplit_sem_id = static_cast<uint32_t>(desc.semaphores.size());
+        TT_FATAL(ksplit_sem_id < 16, "The K split needs a semaphore, but {} are already allocated", ksplit_sem_id);
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = ksplit_sem_id,
+            .core_type = tt::CoreType::WORKER,
+            .core_ranges = core_grid_set,
+            .initial_value = 0,
+        });
     }
     const std::array<size_t, 3> ct_arg_sizes_with_rotated_last = {
         reader_compile_time_args.size(), writer_compile_time_args.size(), compute_compile_time_args.size()};
@@ -1600,6 +1666,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             {"sliding_halo_slot_count", sliding_halo_slot_count},
             {"sliding_max_source_ranges", sliding_max_source_ranges},
             {"sliding_local_first", sliding_local_first},
+            {"ksplit_count", ksplit_count},
+            {"ksplit_sem_id", ksplit_sem_id},
         };
         kernel->named_compile_time_args.insert(
             kernel->named_compile_time_args.end(), recipe_args.begin(), recipe_args.end());
@@ -1664,6 +1732,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         std::vector<uint32_t> reader_signaler_args;
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(reader_signaler_args);
         reader_args.append(reader_signaler_args);
+        if (ksplit_count > 1) {
+            reader_args.push_back(ksplit_band(i));
+        }
         reader_kernel.emplace_runtime_args(core, reader_args.args);
 
         // Writer args
@@ -1683,6 +1754,21 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         std::vector<uint32_t> writer_signaler_args;
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(writer_signaler_args);
         writer_args.append(writer_signaler_args);
+        if (ksplit_count > 1) {
+            // [band], then a sender's reducer core or a reducer's sender cores (physical x, y).
+            const uint32_t band = ksplit_band(i);
+            writer_args.push_back(band);
+            if (work.global_q_count > 0) {
+                for (uint32_t peer = 0; peer < ksplit_count; ++peer) {
+                    const bool is_peer = band + 1 < ksplit_count ? peer == ksplit_count - 1 : peer != band;
+                    if (is_peer) {
+                        const auto& phys = core_work.at(ksplit_core(peer, i)).physical_core;
+                        writer_args.push_back(phys.x);
+                        writer_args.push_back(phys.y);
+                    }
+                }
+            }
+        }
         writer_kernel.emplace_runtime_args(core, writer_args.args);
 
         // Compute args
@@ -1714,6 +1800,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             runtime_arg_layout.compute_active_ring_iter_mask, active_ring_iter_mask, "compute.active_ring_iter_mask");
         // The shared op's static multicast loop count. Without multicast padding it is this core's own Q count.
         compute_args.push_back(global_q_end - global_q_start);
+        if (ksplit_count > 1) {
+            compute_args.push_back(ksplit_band(i));
+        }
         compute_kernel.emplace_runtime_args(core, compute_args.args);
     }
 

@@ -23,6 +23,7 @@
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/fused_op_receiver.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_utils.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_ksplit.hpp"
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
@@ -295,6 +296,11 @@ void kernel_main() {
     RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
         true, /* wait_for_op_signal */
         argidx);
+    // K split (ring_joint_ksplit.hpp): the band index follows the fused-op signaler block; a band reads its slice of
+    // every unit's sliding work plan.
+    constexpr uint32_t ksplit_count = get_named_compile_time_arg_val("ksplit_count");
+    constexpr bool ksplit_enabled = ksplit_count > 1;
+    [[maybe_unused]] const uint32_t ksplit_idx = ksplit_enabled ? get_arg_val<uint32_t>(argidx) : 0;
 
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
@@ -591,9 +597,17 @@ void kernel_main() {
                     /*local_first=*/sliding_local_first);
             ASSERT(sliding_q_plan.is_valid);
             ASSERT(sliding_q_plan.total_k_chunk_count > 0);
-            // Q is pushed after the Q chunk's first K chunk, once per q_iter.
+            // This core's band of the plan (K split: one unit per core), else all of it.
+            ring_joint::KSplitRange band{0, sliding_q_plan.total_k_chunk_count};
+            if constexpr (ksplit_enabled) {
+                if (q_per_core == 1) {
+                    band =
+                        ring_joint::sliding_ksplit_range(sliding_q_plan.total_k_chunk_count, ksplit_idx, ksplit_count);
+                }
+            }
+            // Q is pushed after the Q chunk's first K chunk (the band's), once per q_iter.
             bool first_k_for_q = true;
-            for (uint32_t k_chunk = 0; k_chunk < sliding_q_plan.total_k_chunk_count; ++k_chunk) {
+            for (uint32_t k_chunk = band.begin; k_chunk < band.end; ++k_chunk) {
                 const auto sliding_k_chunk = sliding_q_plan.k_chunk_at(k_chunk);
                 const uint32_t source_ring_id = sliding_k_chunk.source_ring_id;
                 const uint32_t source_k_chunk = sliding_k_chunk.source_k_chunk;

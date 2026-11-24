@@ -4,7 +4,9 @@
 
 // Gemma4 sliding ring SDPA writer (compute: sliding_ring_sdpa.cpp, the precision recipes). It generates the recipe's
 // reduce scaler and column identity, then writes each Q chunk's normalized output, in the row groups compute packs it:
-// every Q chunk normalizes in its one sliding pass, so there is no state to save or restore.
+// every Q chunk normalizes in its one sliding pass, so there is no state to save or restore. K split
+// (ring_joint_ksplit.hpp): a sender band signals its reducer once compute's state is in L1; the reducer's writer pulls
+// each sender's state into its receive CBs for compute's merge (recipe_split_merge.hpp), then writes the output.
 
 // Size-optimized: the dataflow kernels leave the kernel config buffer to the recipe compute.
 #pragma GCC optimize("Os")
@@ -22,6 +24,10 @@
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/fused_op_receiver.hpp"
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_rank_mapping.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_utils.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_ksplit.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_ksplit_handoff.hpp"
+
+namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
@@ -57,6 +63,14 @@ void kernel_main() {
     RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
         false, /* wait_for_op_signal */
         argidx);
+    // K split runtime args follow the fused-op receiver block: [band], then for a core with a unit the physical (x, y)
+    // of its reducer (a sender) or of its senders in band order (the reducer).
+    constexpr uint32_t ksplit_count = get_named_compile_time_arg_val("ksplit_count");
+    constexpr bool ksplit_enabled = ksplit_count > 1;
+    static_assert(ksplit_count <= ring_joint::kKSplitMaxCount);
+    const bool ksplit_active = ksplit_enabled && global_q_end - global_q_start == 1;
+    [[maybe_unused]] const uint32_t ksplit_band = ksplit_enabled ? get_arg_val<uint32_t>(argidx) : 0;
+    [[maybe_unused]] const uint32_t ksplit_peer_args = argidx + 1;
 
     constexpr uint32_t cb_out = recipe_ring_cb::out;
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
@@ -82,6 +96,15 @@ void kernel_main() {
     const uint32_t ring_index =
         ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
             fused_op_receiver.seq.ring_index, mesh_rows, mesh_cols, snake_orientation);
+    if constexpr (ksplit_enabled) {
+        // CB 9's rows: the BF16-state recipes' two planes (O, a changed group's chunk PV) unless the PV has its own
+        // scratch CB.
+        constexpr uint32_t o_planes = get_named_compile_time_arg_val("recipe_pv_scratch_cb") != 0 ? 1 : 2;
+        if (ksplit_active && ring_ksplit_writer_handoff<Sq_chunk_t, vDHt, ksplit_count, o_planes>(
+                                 noc, get_named_compile_time_arg_val("ksplit_sem_id"), ksplit_band, ksplit_peer_args)) {
+            return;  // a sender band writes no output
+        }
+    }
     for (uint32_t q_flat = global_q_start; q_flat < global_q_end; ++q_flat) {
         const auto decoded = decompose_global_q_index(q_flat, num_q_chunks, NH, use_zigzag_balancing);
         const uint32_t row0 = decoded.q_chunk * Sq_chunk_t;
