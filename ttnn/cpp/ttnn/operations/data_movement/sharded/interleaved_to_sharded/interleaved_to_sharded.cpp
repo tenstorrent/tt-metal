@@ -5,10 +5,14 @@
 #include "ttnn/operation.hpp"
 #include "device/interleaved_to_sharded_op.hpp"
 #include "interleaved_to_sharded.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/math.hpp>
 
 using namespace tt::tt_metal;
+
+using ttnn::operations::data_movement::uint16_output_dtype_needs_typecast;
 
 namespace ttnn {
 
@@ -30,6 +34,13 @@ ttnn::Tensor interleaved_to_sharded(
     const std::optional<Tensor>& preallocated_output) {
     if (sharded_memory_config.shard_spec().has_value()) {
         validate_shard_shape(sharded_memory_config.shard_spec()->shape);
+    }
+    // Convert the values while the tensor is still interleaved (typecast's native input), then let the
+    // move itself run with matching unpack/pack CB formats so it is a plain copy.
+    if (uint16_output_dtype_needs_typecast(input_tensor.dtype(), data_type_arg.value_or(input_tensor.dtype()))) {
+        ttnn::Tensor converted = ttnn::typecast(input_tensor, data_type_arg.value(), input_tensor.memory_config());
+        return ttnn::prim::interleaved_to_sharded(
+            converted, sharded_memory_config, converted.dtype(), keep_l1_aligned.value_or(false), preallocated_output);
     }
     return ttnn::prim::interleaved_to_sharded(
         input_tensor,
@@ -83,6 +94,13 @@ ttnn::Tensor interleaved_to_sharded(
         grid);
     ShardSpec shard_spec(grid_set, shard_shape, shard_orientation);
     MemoryConfig sharded_mem_config = MemoryConfig{shard_scheme, BufferType::L1, shard_spec};
+
+    // As in the memory-config overload: convert by value first, then move at the converted dtype.
+    if (uint16_output_dtype_needs_typecast(input_tensor.dtype(), data_type_arg.value_or(input_tensor.dtype()))) {
+        ttnn::Tensor converted = ttnn::typecast(input_tensor, data_type_arg.value(), input_tensor.memory_config());
+        return ttnn::prim::interleaved_to_sharded(
+            converted, sharded_mem_config, converted.dtype(), keep_l1_aligned.value_or(false));
+    }
 
     return ttnn::prim::interleaved_to_sharded(
         input_tensor,
