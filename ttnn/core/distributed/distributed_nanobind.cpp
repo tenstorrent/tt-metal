@@ -1535,6 +1535,26 @@ void py_module(nb::module_& mod) {
                 RuntimeError: If the distributed context has not been initialized.
         )doc");
 
+    // Split the world into sub-contexts by colour (MPI_Comm_split, a blocking collective); returns the size of the
+    // sub-context this rank landed in. The sub-context itself is released: this is the wait that mesh open and the
+    // control plane sit in, exposed so the teardown rows can leave it.
+    mod.def(
+        "split",
+        [](int color, int key) -> int {
+            if (!DistributedContext::is_initialized()) {
+                throw std::runtime_error("Distributed context not initialized. Call init_distributed_context() first.");
+            }
+            const auto& ctx = DistributedContext::get_current_world();
+            nb::gil_scoped_release release;
+            return *ctx->split(Color(color), Key(key))->size();
+        },
+        nb::arg("color"),
+        nb::arg("key"),
+        R"doc(
+            Split the world into sub-contexts by ``color`` (a blocking collective: every rank must call it) and
+            return the size of the sub-context this rank joined. The sub-context is discarded.
+        )doc");
+
     // Blocking point-to-point: receive ``size`` bytes from source rank; returns bytes.
     mod.def(
         "recv_bytes",

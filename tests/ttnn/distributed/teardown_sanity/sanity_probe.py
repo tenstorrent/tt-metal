@@ -23,7 +23,7 @@ Env (all optional):
   PROBE_PHASE      before_init | after_init | in_open | after_open   (where the scenario lands; default after_open)
   PROBE_VICTIM     the rank that misbehaves (default 1)
   PROBE_DELAY_MS   delay before the fault (default 300; in_open: after open_enter)
-  PROBE_COLL       barrier | barrier_skip | barrier_slow | allgather_skip | send_no_recv | recv_no_send | recv_dead_peer | barrier_dead_peer | recv_bad_rank
+  PROBE_COLL       barrier | barrier_skip | barrier_slow | allgather_skip | send_no_recv | recv_no_send | recv_dead_peer | barrier_dead_peer | recv_bad_rank | recv_bad_rank_peer_barrier | split_peer_raises
   PROBE_SLOW_S     seconds a slow-but-arriving peer waits before joining (barrier_slow); must be < the operation timeout
   PROBE_ON_ERROR   exit (default: a failed collective propagates and the rank exits non-zero, as an
                    application would) | continue (record and go on)
@@ -279,6 +279,21 @@ try:
     elif COLL == "recv_bad_rank":
         if RANK == 0:
             timed("coll_recv_8B_from_rank5_nonexistent", lambda: ttnn.distributed_context_recv_bytes(8, 5, 7))
+    elif COLL == "recv_bad_rank_peer_barrier":
+        # rank 0's receive from a rank that does not exist raises at once; with PROBE_ON_ERROR=exit nothing catches
+        # it, so the exception unwinds into the finally's close while every other rank waits in a barrier
+        if RANK == 0:
+            timed("coll_recv_8B_from_rank5_nonexistent", lambda: ttnn.distributed_context_recv_bytes(8, 5, 7))
+        else:
+            timed("coll_barrier", ttnn.distributed_context_barrier)
+    elif COLL == "split_peer_raises":
+        # the victim raises while every other rank is inside a communicator split (MPI_Comm_split, a blocking
+        # collective with no non-blocking form): the split must still be left on the stop
+        if is_victim():
+            time.sleep(1)
+            mark("victim acting: raise while the peers are in split")
+            raise RuntimeError("injected failure while the peers are in split")
+        timed("coll_split", lambda: ttnn.distributed_context_split(0, RANK))
     elif COLL == "allgather_skip":
         if is_victim():
             mark("coll_skip: victim skips the all_gather, sleeps 30 s")

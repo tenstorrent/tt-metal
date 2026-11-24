@@ -195,6 +195,30 @@ def test_invalid_rank():
     clean(r)
 
 
+def test_invalid_rank_uncaught_stops_the_job():
+    """The same receive from a rank that does not exist, but nothing catches it: the RuntimeError unwinds into the
+    mesh close, the close stops the job, rank 1 leaves the barrier it was in on the SIGTERM and closes, and tt-run
+    returns 1 naming rank 0 and the MPI error."""
+    r = run_case("recv_bad_rank_uncaught", {"PROBE_COLL": "recv_bad_rank_peer_barrier"}, DEADLINE_END)
+    ended(r)
+    stopped_by(r, 0, "Python exception RuntimeError: MPI_Irecv", 1)
+    assert "MPI_ERR_RANK" in r.log, r.log[-3000:]
+    closed(r)
+    clean(r)
+
+
+def test_raise_while_peer_in_split():
+    """Rank 1 raises while rank 0 is inside a communicator split (the one context call with no non-blocking form,
+    used by every mesh open and by the control plane): rank 0 must still leave it on the SIGTERM, close its mesh and
+    exit, so the job ends with 1 naming rank 1 instead of rank 0 sitting in MPI_Comm_split until the force."""
+    r = run_case("raise_while_peer_in_split", {"PROBE_COLL": "split_peer_raises"}, DEADLINE_END)
+    ended(r)
+    stopped_by(r, 1, "Python exception RuntimeError: injected failure while the peers are in split", 1)
+    reached(r, 0, "coll_split_enter")
+    closed(r)
+    clean(r)
+
+
 def test_use_before_init():
     """A collective before init_distributed_context raises 'not initialized' instead of crashing or hanging."""
     r = run_case("use_before_init", {"PROBE_SCENARIO": "use_before_init", "PROBE_ON_ERROR": "continue"}, DEADLINE_END)

@@ -14,6 +14,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
+#include <functional>
+#include <memory>
 #include <cerrno>
 #include <csignal>
 #include <filesystem>
@@ -1107,14 +1109,70 @@ ContextPtr MPIContext::duplicate() const {
     return std::make_shared<MPIContext>(dup);
 }
 
+// MPI_Comm_split and MPI_Comm_create_group have no non-blocking form, so a blocking call to either is a wait no
+// signal can end: a rank whose peer failed mid-open would sit in it until the force. The call runs on a helper
+// thread instead and this thread polls it the way wait_or_abort polls a request: the stop flag ends the wait at
+// once and the operation timeout ends it with a job stop. The helper thread is then abandoned with its own copy
+// of the state; a stopping rank leaves through _exit without finalizing MPI, so it never has to return.
+namespace {
+struct BlockingCallState {
+    std::atomic<bool> done{false};
+    int rc = MPI_SUCCESS;
+    MPI_Comm out = MPI_COMM_NULL;
+};
+}  // namespace
+
+static int run_leaveable(MPI_Comm comm, const char* what, const std::function<int(MPI_Comm&)>& call, MPI_Comm& out) {
+    int thread_level = MPI_THREAD_SINGLE;
+    MPI_Query_thread(&thread_level);
+    if (thread_level < MPI_THREAD_MULTIPLE) {
+        return call(out);  // no second thread may call MPI: the plain blocking call, as before
+    }
+    auto state = std::make_shared<BlockingCallState>();
+    std::thread([state, call] {
+        state->rc = call(state->out);
+        state->done.store(true, std::memory_order_release);
+    }).detach();
+    const double timeout = operation_timeout_seconds();
+    const auto start = std::chrono::steady_clock::now();
+    int pause_us = 20;
+    for (;;) {
+        if (state->done.load(std::memory_order_acquire)) {
+            out = state->out;
+            return state->rc;
+        }
+        if (DistributedContext::is_terminating()) {
+            int rank = 0;
+            MPI_Comm_rank(comm, &rank);
+            throw std::runtime_error(
+                "[MPIContext] rank " + std::to_string(rank) + ": " + what + " abandoned, the job is stopping");
+        }
+        const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+        if (timeout > 0.0 && elapsed >= timeout) {
+            const std::string reason = std::string(what) +
+                                       " did not complete within TT_METAL_OPERATION_TIMEOUT_SECONDS=" +
+                                       std::to_string(static_cast<int>(timeout)) + " s (a peer is wedged or gone)";
+            if (!DistributedContext::request_job_stop(1, reason)) {
+                MPI_Abort(comm, 1);
+            }
+            TT_THROW("MPIContext: {} timed out after {} s (a peer did not arrive)", what, timeout);
+        }
+        poll_pause(start, pause_us);
+    }
+}
+
 ContextPtr MPIContext::split(Color color, Key key) const {
-    MPI_Comm split_comm;
+    MPI_Comm split_comm = MPI_COMM_NULL;
     if (*color == SPLIT_COLOR_UNDEFINED) {
         color = Color(MPI_UNDEFINED);
     }
-    // MPI has no non-blocking split, so this is the one wait in the context a SIGTERM cannot end; it runs only while
-    // contexts are being set up, when every rank is between the same two calls.
-    MPI_CHECK(MPI_Comm_split(comm_, *color, *key, &split_comm));
+    const MPI_Comm comm = comm_;
+    const int c = *color;
+    const int k = *key;
+    mpi_check(
+        run_leaveable(
+            comm_, "split", [comm, c, k](MPI_Comm& out) { return MPI_Comm_split(comm, c, k, &out); }, split_comm),
+        "MPI_Comm_split");
     return std::make_shared<MPIContext>(split_comm);
 }
 
@@ -1123,7 +1181,13 @@ ContextPtr MPIContext::create_sub_context(ttsl::Span<int> ranks) const {
     MPI_Comm sub_comm = MPI_COMM_NULL;
 
     MPI_CHECK(MPI_Group_incl(group_, static_cast<int>(ranks.size()), ranks.data(), &sub_grp));
-    if (MPI_Comm_create_group(comm_, sub_grp, 0 /*tag*/, &sub_comm) != MPI_SUCCESS) {
+    const MPI_Comm comm = comm_;
+    const MPI_Group grp = sub_grp;
+    if (run_leaveable(
+            comm_,
+            "create_sub_context",
+            [comm, grp](MPI_Comm& out) { return MPI_Comm_create_group(comm, grp, 0 /*tag*/, &out); },
+            sub_comm) != MPI_SUCCESS) {
         // sub_comm is not valid, we are not in the group
         MPI_Group_free(&sub_grp);
         throw MPIDistributedException(rank(), MPI_ERR_GROUP, "MPI_Comm_create_group failed: not in the group");
