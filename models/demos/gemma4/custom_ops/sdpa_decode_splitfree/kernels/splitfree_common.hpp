@@ -9,7 +9,7 @@
 
 namespace sf {
 
-constexpr uint32_t CT_ACCESSORS = 29;  // first TensorAccessorArgs index
+constexpr uint32_t CT_ACCESSORS = 31;  // first TensorAccessorArgs index
 
 constexpr uint32_t B = get_compile_time_arg_val(0);         // padded batch rows (<= 32)
 constexpr uint32_t G = get_compile_time_arg_val(1);         // local KV groups this call attends
@@ -40,6 +40,8 @@ constexpr uint32_t SPLIT = get_compile_time_arg_val(25);       // K: a row's mos
 constexpr uint32_t NSUB_MIN = get_compile_time_arg_val(26);    // the fewest chunks of a position-derived unit
 constexpr uint32_t NCB = get_compile_time_arg_val(27);         // combine jobs (O blocks) per (row, group)
 constexpr uint32_t CT = get_compile_time_arg_val(28);          // O tiles of one combine job (NCB * CT == DHT)
+constexpr uint32_t STATS = get_compile_time_arg_val(29);       // 1: the stats-first combine, 0: the pairwise merge
+constexpr uint32_t UB = get_compile_time_arg_val(30);          // stats combine: units per O read batch
 
 constexpr uint32_t CHUNK = SK * 32;
 // the divisors of the two unit rules, never a constant zero: the other rule's branch is still compiled (-Werror)
@@ -47,6 +49,8 @@ constexpr uint32_t NSUB_DIV = NSUB > 0 ? NSUB : 1;
 constexpr uint32_t SPLIT_DIV = SPLIT > 0 ? SPLIT : 1;
 constexpr uint32_t BG = B * G;
 constexpr uint32_t JOBS = BG * NCB;
+// stats combine: the O tiles of one dest window, the largest of 4 / 2 / 1 dividing CT (planner.combine_granularity)
+constexpr uint32_t NB = (CT % 4 == 0) ? 4 : ((CT % 2 == 0) ? 2 : 1);
 constexpr uint32_t TILES_PER_SLOT = 2 + DHT;
 constexpr uint32_t NONE_POS = 0xFFFFFFFFu;  // cur_pos -1: a padding row
 
@@ -58,6 +62,7 @@ static_assert(SPLIT == 0 || (NSLOTS <= SPLIT && MAXU <= SPLIT), "a row's units f
 static_assert(PAIRS == M * B * G, "the pair space is unit-major over (row, group)");
 static_assert(CAP_T == 0 || CAP_T % BLOCK_T == 0, "a bounded cache wraps on block boundaries");
 static_assert(CT >= 1 && NCB * CT == DHT, "the combine jobs of a (row, group) tile its O");
+static_assert(STATS <= 1 && UB >= 1, "combine mode");
 
 // Phase-1 (partials) circular buffers
 constexpr uint32_t CB_Q = 0;
@@ -91,7 +96,11 @@ constexpr uint32_t CB_ACC = 20;        // the running O (fp32)
 constexpr uint32_t CB_ACC_2 = 21;      // the unit's O being merged (fp32)
 constexpr uint32_t CB_PREV_SUM_2 = 22;
 constexpr uint32_t CB_EMD_2 = 23;
-// CB_CUR_MAX .. CB_EMD as in phase 1
+// CB_CUR_MAX .. CB_EMD as in phase 1 (pairwise merge)
+constexpr uint32_t CB_IN_S = 0;  // stats merge: the row's m_u at pages [0, NSLOTS), l_u at [NSLOTS, 2 NSLOTS)
+constexpr uint32_t CB_W = 24;    // stats merge: w_u = exp((m_u - M) scale), page u - lo
+constexpr uint32_t CB_M = 25;    // stats merge: M = max_u m_u (the running max while it is formed)
+constexpr uint32_t CB_L = 26;    // stats merge: L = sum_u w_u l_u
 
 struct Row {
     uint32_t first_chunk;   // the first chunk the row attends (the window start's chunk, else 0)

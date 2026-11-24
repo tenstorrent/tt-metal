@@ -391,9 +391,21 @@ def test_splitfree_chunk_follows_the_l1_budget_not_the_batch():
         p.qk_tile_bytes == 4096 and p.partial_cb_bytes == sp.partial_cb_bytes(16, 8, 1088, 0, 128, 0, 4096) == 870_528
     )
     assert sp.partial_cb_bytes(16, 8, 1088, 0, 128, 0) == 852_096
-    # the combine: 32 rows x 16 O tiles over 130 cores -> jobs of 4 tiles; one job per row (CT = DHt) is 340 KB
-    assert p.combine_tiles == 4 and p.combine_cb_bytes == sp.combine_cb_bytes(4, 128) == 118_912
-    assert sp.combine_cb_bytes(16, 128) == 340_096
+    # the combine: 32 rows x 16 O tiles over 130 cores -> jobs of 4 tiles; the stats merge holds a row's 32 (m, l)
+    # and w pages and two O batches of 8 units x 4 tiles; the pairwise merge one unit double-buffered (one job per
+    # row, CT = DHt, is the earlier 340 KB)
+    assert p.combine_tiles == 4 and p.stats_combine
+    assert p.combine_cb_bytes == sp.combine_cb_bytes(4, 128, 32) == 688_256
+    assert sp.combine_cb_bytes(4, 128) == 118_912 and sp.combine_cb_bytes(16, 128) == 340_096
+    assert [sp.combine_granularity(ct) for ct in (1, 2, 3, 4, 6, 8, 16)] == [1, 2, 1, 4, 2, 4, 4]
+    pairwise = _plan((13, 10), 32, env={sp.COMBINE_ENV: "pairwise"})
+    assert (
+        not pairwise.stats_combine
+        and pairwise.combine_cb_bytes == 118_912
+        and "pairwise combine" in pairwise.describe()
+    )
+    with pytest.raises(ValueError, match="COMBINE must be one of"):  # allow-pytest.raises (pure)
+        _plan((13, 10), 32, env={sp.COMBINE_ENV: "tree"})
     assert [sp.choose_combine_tiles(b, 16, 130) for b in (1, 8, 16, 32)] == [1, 1, 2, 4]
     assert [sp.choose_combine_tiles(b, 16, 64) for b in (1, 4, 8, 16, 32)] == [1, 1, 2, 4, 8]
     assert sp.choose_combine_tiles(2 * 32, 8, 130) == 4 and sp.choose_combine_tiles(3, 12, 8) == 6

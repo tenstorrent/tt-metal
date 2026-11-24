@@ -1,11 +1,12 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
-// Phase 2 compute of sdpa_decode_splitfree: per combine job (bg, blk) of this core, the live units' partials
-// merged in ascending unit order with the stock tree-reduction step (sdpa_flash_decode.cpp's child merge on
-// compute_common.hpp: correction_block gives m' = max(m, m_u), a = exp((m - m') scale), a_u = exp((m_u - m')
-// scale), l' = l a + l_u a_u; then O' = O a + O_u a_u on the job's CT O tiles), every value fp32; then O / l
-// once, packed to bf16. The statistics chain is the same on every job of a row and every O op is tile-local, so
-// a tile's bits do not depend on CT, the batch, the cores or the grid; CT = DHt is the one-job-per-row merge.
+// Phase 2 compute of sdpa_decode_splitfree, the pairwise merge (GEMMA4_SDPA_SPLITFREE_COMBINE=pairwise): per
+// combine job (bg, blk) of this core, the live units' partials merged in ascending unit order with the stock
+// tree-reduction step (sdpa_flash_decode.cpp's child merge on compute_common.hpp: correction_block gives
+// m' = max(m, m_u), a = exp((m - m') scale), a_u = exp((m_u - m') scale), l' = l a + l_u a_u; then
+// O' = O a + O_u a_u on the job's CT O tiles), every value fp32; then O / l once, packed to bf16. The statistics chain
+// is the same on every job of a row and every O op is tile-local, so a tile's bits do not depend on CT, the batch, the
+// cores or the grid; CT = DHt is the one-job-per-row merge.
 //
 // compile-time args: the sf:: prefix (CT_ACCESSORS args); defines EXP_APPROX_MODE, DHT_GRANULARITY (a divisor of
 // CT), STATS_GRANULARITY, SUB_EXP_GRANULARITY. runtime args: [core]
@@ -30,6 +31,7 @@
 
 void kernel_main() {
     using namespace sf;
+    static_assert(STATS == 0, "the stats merge is compute_combine_stats.cpp");
     const uint32_t core = get_arg_val<uint32_t>(0);
     constexpr uint32_t out_tiles = CT;
     constexpr VectorMode vector_mode = VectorMode::RC;

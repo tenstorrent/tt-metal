@@ -16,11 +16,15 @@ allocates once (``allocate_scratch``) and passes in:
    sub-chunks in ascending order, fp32 statistics and accumulator, masking the chunk that holds ``cur_pos`` (and
    the window start on a sliding layer) exactly as the stock kernels mask it, and writes the unit's (m, l, O) as
    fp32 tiles to its scratch slot.
-2. combine (``kernels/*_combine.cpp``): jobs (row, group, block of ``CT`` O tiles) on distinct cores (16 jobs per
-   row up to 8 rows on 13x10: ``planner.choose_combine_tiles``) merge the live units' partials in ascending unit
-   order with the stock correction step, normalise once and write the group's head rows of the job's tiles in
-   bf16. Every job of a row replays the row's statistics sequence and every O op is tile-local, so ``CT`` and
-   the job -> core split never change a tile's bits.
+2. combine (``kernels/*_combine*.cpp``): jobs (row, group, block of ``CT`` O tiles) on distinct cores (16 jobs
+   per row up to 8 rows on 13x10: ``planner.choose_combine_tiles``) merge the live units' partials in ascending
+   unit order, normalise once and write the group's head rows of the job's tiles in bf16. The merge
+   (``GEMMA4_SDPA_SPLITFREE_COMBINE``): ``stats`` (default, ``compute_combine_stats.cpp``) takes ``M = max_u m_u``
+   first, then accumulates ``w_u l_u`` and ``w_u O_u`` (``w_u = e^((m_u - M) scale)``) in the fp32 dest with
+   the FPU column-broadcast multiply-accumulate, one op per unit and tile; ``pairwise``
+   (``compute_combine.cpp``) is the stock correction step, the earlier op's bits with its unit. Every job of a
+   row replays the row's statistics sequence and every O op is tile-local, so ``CT`` and the job -> core split
+   never change a tile's bits.
 
 Because every unit partial is computed by identical code on identical data in one fixed order, the unit
 boundaries follow the row's own position and the build constants (chunk, K, NSUB_MIN) alone, and the merge order
@@ -72,6 +76,7 @@ CB_OUT_O, CB_OUT_M, CB_OUT_L = 16, 17, 18
 CB_QK, CB_OUT_IM, CB_OUT_ACC, CB_CUR_MAX, CB_PREV_MAX, CB_CUR_SUM, CB_PREV_SUM, CB_EMD = 24, 25, 26, 27, 28, 29, 30, 31
 CB_IN_M, CB_IN_L, CB_IN_O = 0, 1, 2
 CB_OUT_FINAL, CB_ACC, CB_ACC_2, CB_PREV_SUM_2, CB_EMD_2 = 16, 20, 21, 22, 23
+CB_IN_S, CB_W, CB_M, CB_L = 0, 24, 25, 26  # the stats merge
 
 
 def _f32_bits(x):
@@ -80,12 +85,6 @@ def _f32_bits(x):
 
 def _pow2(n):
     return n > 0 and (n & (n - 1)) == 0
-
-
-def _combine_granularity(ct):
-    """The dest tiles one combine block op takes at a time: the largest of 4 / 2 / 1 (fp32 half-sync dest) that
-    divides ``ct``."""
-    return next(g for g in (DST_TILES, 2, 1) if g <= ct and ct % g == 0)
 
 
 class SdpaDecodeSplitfree:
@@ -351,8 +350,10 @@ class SdpaDecodeSplitfree:
             plan.nsub_min,
             plan.ncb,
             plan.combine_tiles,
+            int(plan.stats_combine),
+            P.COMBINE_UNIT_BATCH,
         ]
-        assert len(prefix) == 29
+        assert len(prefix) == 31
         CT = plan.combine_tiles
         defines = [
             ("EXP_APPROX_MODE", "0"),
@@ -361,7 +362,7 @@ class SdpaDecodeSplitfree:
             ("DHT_GRANULARITY", str(dht_gran)),
         ]
         # the combine's O blocks are CT tiles: its dest granularity divides CT (never changes a tile's arithmetic)
-        defines2 = defines[:3] + [("DHT_GRANULARITY", str(_combine_granularity(CT)))]
+        defines2 = defines[:3] + [("DHT_GRANULARITY", str(P.combine_granularity(CT)))]
         cores = row_major_cores(plan.grid, plan.n_cores)
         core_set = core_range_set(cores)
         kv_fmt = k_cache.dtype
@@ -459,18 +460,32 @@ class SdpaDecodeSplitfree:
             ttnn.Shape([1, B, Hq, D]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, out_mem
         )
         cbs2 = [
-            cb(CB_IN_M, 2, F32_TILE, ttnn.float32),
-            cb(CB_IN_L, 2, F32_TILE, ttnn.float32),
-            cb(CB_IN_O, 2 * CT, F32_TILE, ttnn.float32),
             cb(CB_POS_C, 1, pos_stick, ttnn.int32),
             cb(CB_POS_D, 1, pos_stick, ttnn.int32),
             cb(CB_OUT_FINAL, CT, BF16_TILE, ttnn.bfloat16),
             cb(CB_ACC, CT, F32_TILE, ttnn.float32),
-            cb(CB_ACC_2, CT, F32_TILE, ttnn.float32),
-        ] + [
-            cb(i, 1, F32_TILE, ttnn.float32)
-            for i in (CB_PREV_SUM_2, CB_EMD_2, CB_CUR_MAX, CB_PREV_MAX, CB_CUR_SUM, CB_PREV_SUM, CB_EMD)
         ]
+        if plan.stats_combine:
+            # the row's (m, l) in one batch of 2 * n_slots pages, its w, the O tiles in double-buffered batches of
+            # COMBINE_UNIT_BATCH units x one dest window (planner.combine_cb_bytes)
+            nb = P.combine_granularity(CT)
+            cbs2 += [
+                cb(CB_IN_S, 2 * plan.n_slots, F32_TILE, ttnn.float32),
+                cb(CB_W, plan.n_slots, F32_TILE, ttnn.float32),
+                cb(CB_IN_O, 2 * P.COMBINE_UNIT_BATCH * nb, F32_TILE, ttnn.float32),
+                cb(CB_M, 1, F32_TILE, ttnn.float32),
+                cb(CB_L, 1, F32_TILE, ttnn.float32),
+            ]
+        else:
+            cbs2 += [
+                cb(CB_IN_M, 2, F32_TILE, ttnn.float32),
+                cb(CB_IN_L, 2, F32_TILE, ttnn.float32),
+                cb(CB_IN_O, 2 * CT, F32_TILE, ttnn.float32),
+                cb(CB_ACC_2, CT, F32_TILE, ttnn.float32),
+            ] + [
+                cb(i, 1, F32_TILE, ttnn.float32)
+                for i in (CB_PREV_SUM_2, CB_EMD_2, CB_CUR_MAX, CB_PREV_MAX, CB_CUR_SUM, CB_PREV_SUM, CB_EMD)
+            ]
         reader2_ct = list(prefix)
         for t in (cur_pos, scratch):
             reader2_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
@@ -490,7 +505,13 @@ class SdpaDecodeSplitfree:
                 rt_args([cur_pos.buffer_address(), out.buffer_address()]),
                 ttnn.WriterConfigDescriptor(),
             ),
-            kernel("compute_combine.cpp", list(prefix), rt_args([]), compute_cfg, defines2),
+            kernel(
+                "compute_combine_stats.cpp" if plan.stats_combine else "compute_combine.cpp",
+                list(prefix),
+                rt_args([]),
+                compute_cfg,
+                defines2,
+            ),
         ]
         return ttnn.generic_op(
             [scratch, cur_pos, out], ttnn.ProgramDescriptor(kernels=kernels2, semaphores=[], cbs=cbs2)

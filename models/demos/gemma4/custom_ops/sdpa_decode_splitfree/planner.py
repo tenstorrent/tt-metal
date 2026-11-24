@@ -41,11 +41,14 @@ Vocabulary (tokens are KV positions of one row's paged cache):
 * combine: jobs ``(bg, blk)`` -- the row-group ``bg = b*G + g`` and the block ``blk < NCB = DHt / CT`` of ``CT``
   O tiles -- on core ``(bg*NCB + blk) mod n_cores``, ``CT`` the smallest divisor of DHt whose ``B*G*NCB`` jobs
   fit the grid (``choose_combine_tiles``: one O tile per job, 16 jobs per row, up to 8 rows on 13x10). A job
-  replays its row's statistics sequence (identical ops on identical data: identical bits on every job) and merges
-  its CT O tiles over the live units in ascending ``u`` with the stock correction step (``m' = max(m, m_u)``,
-  ``l' = l*e^(m-m') + l_u*e^(m_u-m')``, ``O'`` likewise), then normalises and writes the group's head rows of its
-  tiles in bf16. Every op of the merge is on a statistics tile or tile-local, so neither ``CT`` nor the job ->
-  core split changes a tile's arithmetic: a lone row's combine runs on 16 cores at once.
+  replays its row's statistics sequence (identical ops on identical data: identical bits on every job), merges its
+  CT O tiles over the live units in ascending ``u``, then normalises and writes the group's head rows of its tiles
+  in bf16. The merge (``GEMMA4_SDPA_SPLITFREE_COMBINE``): ``stats`` (default) takes ``M = max_u m_u`` first (exact,
+  order-free), then ``w_u = e^((m_u - M) scale)``, ``L = sum w_u l_u`` and ``O = sum w_u O_u`` accumulated in the
+  fp32 dest (one column-broadcast multiply-accumulate per unit and tile); ``pairwise`` is the stock correction
+  step (``m' = max(m, m_u)``, ``l' = l*e^(m-m') + l_u*e^(m_u-m')``, ``O'`` likewise), the earlier op's bits with
+  its unit. Every op of either merge is on a statistics tile or tile-local, so neither ``CT`` nor the job -> core
+  split changes a tile's arithmetic: a lone row's combine runs on 16 cores at once.
 """
 
 import dataclasses
@@ -61,6 +64,10 @@ CHUNK_ENV = "GEMMA4_SDPA_SPLITFREE_CHUNK"
 READS_ENV = "GEMMA4_SDPA_SPLITFREE_READS"  # K/V tile reads a core keeps in flight (default 16)
 QK_FP32_ENV = "GEMMA4_SDPA_SPLITFREE_QK_FP32"  # "0": the scores CB in bf16 (the stock's im_df); default fp32
 COMBINE_TILES_ENV = "GEMMA4_SDPA_SPLITFREE_COMBINE_TILES"  # test knob: CT, the O tiles of a combine job
+COMBINE_ENV = "GEMMA4_SDPA_SPLITFREE_COMBINE"  # "stats" (default): M first, dest accumulation; "pairwise"
+COMBINE_MODES = ("stats", "pairwise")
+COMBINE_UNIT_BATCH = 8  # stats combine: the units whose O tiles one read batch brings (double-buffered)
+DST_TILES = 4  # fp32 dest accumulation, half sync: four tiles per dest window
 DEFAULT_SPLIT = 32
 DEFAULT_MIN_CHUNKS = 1
 LEGACY_UNIT = 4096  # the fixed unit of SPLIT=0 (the op before the position-derived unit)
@@ -121,6 +128,12 @@ def choose_combine_tiles(bg_n, dht, n_cores):
     return dht
 
 
+def combine_granularity(ct):
+    """The O tiles one dest window of the combine takes (the combine program's ``DHT_GRANULARITY`` and the stats
+    merge's dest block): the largest of 4 / 2 / 1 that divides ``ct``."""
+    return next(g for g in (DST_TILES, 2, 1) if g <= ct and ct % g == 0)
+
+
 def partial_cb_bytes(dht, sk, kv_tile_bytes, window, pos_stick, pt_stick, qk_tile_bytes=BF16_TILE_BYTES):
     """Phase-1 (partials) circular buffers of one core: q; K and V double-buffered over one chunk in the cache
     format; the causal mask (and the window mask); the zero tile; the scores (one chunk, ``qk_tile_bytes`` per
@@ -143,12 +156,27 @@ def partial_cb_bytes(dht, sk, kv_tile_bytes, window, pos_stick, pt_stick, qk_til
     )
 
 
-def combine_cb_bytes(ct, pos_stick):
-    """Phase-2 (combine) circular buffers of one core for jobs of ``ct`` O tiles: the unit partial
-    double-buffered (m, l, the job's O tiles), seven fp32 statistics, two fp32 accumulators, the bf16 output,
-    the cur_pos stick."""
+def combine_cb_bytes(ct, pos_stick, stats_slots=None):
+    """Phase-2 (combine) circular buffers of one core for jobs of ``ct`` O tiles. Pairwise (``stats_slots``
+    None): the unit partial double-buffered (m, l, the job's O tiles), seven fp32 statistics, two fp32
+    accumulators, the bf16 output, the cur_pos stick. Stats-first (``stats_slots`` the most live units of a row):
+    the row's m and l in one batch, its w, the O tiles double-buffered in batches of ``COMBINE_UNIT_BATCH`` units
+    of one dest window, M and L, the fp32 accumulator, the bf16 output, the cur_pos stick."""
+    if stats_slots is None:
+        return (
+            2 * (2 + ct) * F32_TILE_BYTES
+            + 7 * F32_TILE_BYTES
+            + 2 * ct * F32_TILE_BYTES
+            + ct * BF16_TILE_BYTES
+            + pos_stick
+        )
     return (
-        2 * (2 + ct) * F32_TILE_BYTES + 7 * F32_TILE_BYTES + 2 * ct * F32_TILE_BYTES + ct * BF16_TILE_BYTES + pos_stick
+        3 * int(stats_slots) * F32_TILE_BYTES
+        + 2 * COMBINE_UNIT_BATCH * combine_granularity(ct) * F32_TILE_BYTES
+        + 2 * F32_TILE_BYTES
+        + ct * F32_TILE_BYTES
+        + ct * BF16_TILE_BYTES
+        + pos_stick
     )
 
 
@@ -175,6 +203,7 @@ class SplitfreePlan:
     qk_tile_bytes: int  # the scores CB: 4096 (fp32) or 2048 (bf16)
     reads_in_flight: int
     combine_tiles: int  # CT: the O tiles of one combine job (a divisor of DHt)
+    stats_combine: bool  # the stats-first merge (M first, dest accumulation); False: the pairwise correction step
     partial_cb_bytes: int
     combine_cb_bytes: int
     budget_bytes: int
@@ -334,8 +363,8 @@ class SplitfreePlan:
             f"B {self.batch} x G {self.groups} (x {self.heads_per_group} heads), head_dim {self.head_dim}, context "
             f"{self.max_context}, window {self.window or 'none'}: {unit}, "
             f"{self.max_units} units, {self.n_slots} slots, modulus {self.modulus}, {self.pair_space} pairs on "
-            f"{self.n_cores} cores ({self.grid[0]}x{self.grid[1]}); combine {self.combine_jobs} jobs of "
-            f"{self.combine_tiles} O tiles; scratch {self.scratch_tiles} tiles = "
+            f"{self.n_cores} cores ({self.grid[0]}x{self.grid[1]}); {'stats' if self.stats_combine else 'pairwise'} "
+            f"combine, {self.combine_jobs} jobs of {self.combine_tiles} O tiles; scratch {self.scratch_tiles} tiles = "
             f"{self.scratch_bytes:,} B; CBs partial {self.partial_cb_bytes:,} / combine {self.combine_cb_bytes:,} of "
             f"{self.budget_bytes:,} B" + ("" if self.fits else " (over the L1 budget)")
         )
@@ -423,6 +452,10 @@ def plan_splitfree(
     if ct and dht % ct:
         raise ValueError(f"{COMBINE_TILES_ENV}={ct} must divide the head dim in tiles {dht}")
     ct = ct or choose_combine_tiles(batch * groups, dht, n_cores)
+    combine = str(env.get(COMBINE_ENV, "") or "").strip().lower() or COMBINE_MODES[0]
+    if combine not in COMBINE_MODES:
+        raise ValueError(f"{COMBINE_ENV} must be one of {COMBINE_MODES}, got {combine}")
+    stats_combine = combine == "stats"
     return SplitfreePlan(
         split=split,
         nsub_min=nsub_min,
@@ -445,8 +478,9 @@ def plan_splitfree(
         qk_tile_bytes=qk_tile,
         reads_in_flight=reads,
         combine_tiles=ct,
+        stats_combine=stats_combine,
         partial_cb_bytes=pcb,
-        combine_cb_bytes=combine_cb_bytes(ct, pos_stick),
+        combine_cb_bytes=combine_cb_bytes(ct, pos_stick, n_slots if stats_combine else None),
         budget_bytes=budget,
     )
 
