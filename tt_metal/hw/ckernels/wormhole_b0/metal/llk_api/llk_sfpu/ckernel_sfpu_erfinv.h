@@ -25,14 +25,13 @@ namespace sfpu {
 // rounding in the loop (round the top coefficient, refit the rest, repeat). Exact-arithmetic
 // relative error: 5.7e-6 on the central and 1.3e-5 on the tail polynomial. The ln(1 - x^2)
 // argument uses the log's fp32-accurate polynomial; with the bf16 one its 8.9e-4 absolute error
-// dominated at 2.3e-4 relative. Winitzki's closed form, which this replaces, was ~2e-3 relative
-// and returned 4.5e-4 for erfinv(0).
+// dominated at 2.3e-4 relative.
 //
 // Evaluated in u rather than -u: the negation is free (odd coefficients change sign) and the
-// log's result feeds the polynomial directly. x = +/-1 gives u = -inf and a +inf tail
-// polynomial; |x| > 1 gives a NaN log and a NaN result. The caller multiplies by x and copies
-// its sign: SFPMUL returns +0 for a -0.0 input, and the sign of a NaN product follows the
-// operands' signs through the chain, where the previous kernel matched x on both.
+// log's result feeds the polynomial directly. x = +/-1 gives u = -inf and a -inf tail
+// polynomial, so r = t * x has the opposite sign of x; |x| > 1 gives a NaN log and a NaN result.
+// The caller multiplies by x and copies its sign, which restores the sign at x = +/-1, makes
+// erfinv(-0) = -0 (SFPMUL returns +0) and gives a NaN result the sign of x.
 //
 // Sets p and t to the central and tail p(u) = erfinv(x) / x, not erfinv(x); the caller selects t
 // where u_plus_7 < 0, after multiplying by x.
