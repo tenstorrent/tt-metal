@@ -1146,6 +1146,44 @@ def test_eltwise_binary_sfpu_remainder_signed_zero(formats, dest_acc):
     )
 
 
+# Mixed and same signs, exact multiples (zero result) and non-multiples, all exact in fp32.
+_REMAINDER_SIGN_EDGE_PAIRS = [
+    (a, b)
+    for a in (-7.0, -6.0, -5.5, -4.0, -1.0, 1.0, 4.0, 5.5, 6.0, 7.0)
+    for b in (2.0, -2.0, 3.0, -3.0, 0.5, -0.5)
+]
+
+
+def test_eltwise_binary_sfpu_remainder_sign_edges():
+    """Float32 remainder on sign and exact-multiple edges: nonzero lanes bit-exact.
+
+    Zero lanes compare by value: WH SFPMAD flushes -0 to +0, where torch keeps -0 for
+    a negative divisor.
+    """
+    res, golden = sfpu_binary(
+        input_output_formats([DataFormat.Float32])[0],
+        DestAccumulation.Yes,
+        MathOperation.SfpuBinaryRemainder,
+        src_A_override=_build_paired_tile_override(
+            _REMAINDER_SIGN_EDGE_PAIRS, torch.float32
+        ),
+        input_dimensions=_EXACT_DIMS,
+        check_contract=False,
+    )
+    zero = golden == 0
+    if not bool(zero.any()) or bool(zero.all()):
+        raise AssertionError("stimulus needs both zero and nonzero remainders")
+    if not torch.equal(res[zero], torch.zeros_like(res[zero])):
+        raise AssertionError(
+            f"{int((res[zero] != 0).sum())} zero-remainder lanes are nonzero"
+        )
+    differ = fp32_bits_as_int32(res[~zero]) != fp32_bits_as_int32(golden[~zero])
+    if bool(differ.any()):
+        raise AssertionError(
+            f"{int(differ.sum())} of {int((~zero).sum())} nonzero lanes differ in bits"
+        )
+
+
 @parametrize(**MASK_SWEEP)
 def test_eltwise_binary_sfpu_mask(formats, dest_acc, mathop, **run_kwargs):
     # float mask: data at tile0, mask at tile1. Output is data where mask != 0, else 0

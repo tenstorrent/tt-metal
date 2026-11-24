@@ -294,13 +294,13 @@ sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat a, sfpi::vFloat b)
     sfpi::vFloat div_result = a * sfpu_reciprocal_iter<2>(b);
     sfpi::vFloat floor_div = _floor_body_(div_result);
 
-    // The result is computed and corrected as q = (a - floor_div * b) * sign(b),
-    // i.e. relative to the sign of b: a sign mismatch is then q < 0 and the magnitude
-    // overshoot is q >= |b|, which folds the three sign-dependent correction
-    // blocks into two unsigned ones. q is formed as a * sign(b) - floor_div * |b|:
-    // the products by +-1.0 and the MADs on |b| round symmetrically, so every lane
-    // equals the signed chain lane for lane, signed zeros included (SFPMUL and
-    // SFPMAD flush -0 to +0). a * sign(b) does not depend on floor_div.
+    // Corrections run on q = (a - floor_div * b) * sign(b): wrong sign is q < 0,
+    // overshoot is q >= |b|. q is formed as a * sign(b) - floor_div * |b|: the
+    // products by +-1.0 and the MADs on |b| round symmetrically, so every lane
+    // equals a - floor_div * b times sign(b). SFPMAD/SFPMUL flush a -0 result to
+    // +0 (tt-isa-documentation WormholeB0 SFPMAD.md, IEEE754 divergence), so q is
+    // never -0 and the q < 0 compare cannot fire on a zero remainder.
+    // a * sign(b) does not depend on floor_div.
     sfpi::vFloat sign_b = sfpi::copysgn(sfpi::vFloat(1.0f), b);
     sfpi::vFloat b_abs = sfpi::abs(b);
     sfpi::vFloat a_rel = a * sign_b;
