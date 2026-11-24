@@ -1,6 +1,6 @@
-# Mesh Graph Descriptor for the 2->2 GRPO BoolQ example: two [1, 2] meshes
-# (one per MPI rank), each covering two P150 cards; the FABRIC graph wires them
-# together for the cross-rank transport.
+# Mesh Graph Descriptor for a 2->2 GRPO split: two [1, 2] meshes
+# (one per MPI rank), each covering two P150 cards. The connections block only
+# declares the eth links; cross-rank transport goes via MPI, not fabric.
 #
 # !!! HARDWARE-SPECIFIC TEMPLATE !!!
 # The full physical eth topology must be declared here or

@@ -221,8 +221,11 @@ tt::tt_metal::ProgramDescriptor build_program(
     // Streamed, two chunks' rows.
     auto terms_cb = kda_factory_detail::cb_descriptor(
         cb_terms, (streamed ? 2 : core_chunks) * 2 * kt, state_tile, tt::DataFormat::Float32, correction_set);
+    auto diff_cb = kda_factory_detail::cb_descriptor(
+        cb_diff, (streamed ? 1 : core_chunks) * kt, state_tile, tt::DataFormat::Float32, correction_set);
     if (!streamed) {
         terms_cb.buffer = in.terms.buffer();
+        diff_cb.buffer = outputs[2].buffer();
     }
     const auto tile_cb = [&](uint32_t index, uint32_t tiles, tt::tt_metal::DataType dtype) {
         const auto format = tt::tt_metal::datatype_to_dataformat_converter(dtype);
@@ -233,8 +236,7 @@ tt::tt_metal::ProgramDescriptor build_program(
         kda_factory_detail::cb_descriptor(cb_seed, state_tiles, state_tile, tt::DataFormat::Float32, correction_set),
         kda_factory_detail::cb_descriptor(cb_tail, state_tiles, state_tile, tt::DataFormat::Float32, correction_set),
         std::move(terms_cb),
-        kda_factory_detail::cb_descriptor(
-            cb_diff, (streamed ? 1 : core_chunks) * kt, state_tile, tt::DataFormat::Float32, correction_set),
+        std::move(diff_cb),
         // One FP32 chunk row, which compute normalizes itself.
         kda_factory_detail::cb_descriptor(cb_out, kt, state_tile, tt::DataFormat::Float32, correction_set),
         // The squares feed only the row means: in the output's precision.

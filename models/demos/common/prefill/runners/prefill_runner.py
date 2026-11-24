@@ -31,6 +31,7 @@ from models.demos.common.prefill.prefill_chunk import (
     sentinel_words,
     validate_chunks,
 )
+from models.demos.common.prefill.runners import model_descriptor
 from models.demos.common.prefill.runners.hang_detector import arm_hang_detector
 from models.demos.common.prefill.runners.layer_completion_layout import layer_completion_layout
 from models.demos.common.prefill.runners.layer_completion_ring_reader import scheduler_shm_name
@@ -1332,7 +1333,7 @@ def run_request_loop(
 def _print_config() -> None:
     rows = [
         ("PREFILL_MODEL", ADAPTER.name),
-        ("PREFILL_HF_MODEL", os.environ.get("PREFILL_HF_MODEL", ADAPTER.hf_model_default)),
+        ("resolved checkpoint", ADAPTER.hf_model_path),
         ("PREFILL_TTNN_CACHE", os.environ.get("PREFILL_TTNN_CACHE", ADAPTER.ttnn_cache_default)),
         ("resolved weight_cache_path", str(ADAPTER.weight_cache_path(GLOBAL_MESH_SHAPE, sp_axis=SP_AXIS))),
         ("PREFILL_SP", str(_sp)),
@@ -1408,6 +1409,8 @@ def _assert_ranks_agree_on_config(rank: int, num_ranks: int) -> None:
         "PREFILL_MIGRATION_EXPORT_TO_FILE": migration_file_export_enabled(),
         "PREFILL_HYBRID_PAGE_POOL_V2": HYBRID_PAGE_POOL_V2,
         "PREFILL_MASTER_RANK": int(os.environ.get("PREFILL_MASTER_RANK", "0")),
+        # Only the master rank writes it, and a rank started without it would skip the write unnoticed.
+        model_descriptor.PATH_ENV: os.environ.get(model_descriptor.PATH_ENV, ""),
     }
     fingerprint = "|".join(f"{k}={v}" for k, v in fields.items())
     digest = zlib.crc32(fingerprint.encode()) & 0x7FFFFFFF
@@ -1442,6 +1445,8 @@ def main() -> None:
     stage = layout.stage_of(rank)
     num_stages = layout.num_stages
     _assert_ranks_agree_on_config(rank, num_ranks)
+    if os.environ.get(model_descriptor.PATH_ENV) and rank == int(os.environ.get("PREFILL_MASTER_RANK", "0")):
+        model_descriptor.remove(os.environ[model_descriptor.PATH_ENV])
     check_packed_forward_support(
         FORWARD_CHUNKS,
         indexer_indices=num_stages > 1 and ADAPTER.passes_indexer_indices,
@@ -1535,6 +1540,25 @@ def main() -> None:
     ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
     ttnn.close_mesh_device(mesh_device)
     logger.info(f"[pp rank {rank}] shutdown complete")
+
+
+def _write_model_descriptor(service_id: str, ack_shm_name: str) -> None:
+    path = os.environ[model_descriptor.PATH_ENV]
+    doc = model_descriptor.prefill_descriptor(
+        model_id=ADAPTER.hf_model_path,
+        max_slots=NUM_USERS,
+        kv_depth=MAX_SEQ_LEN,
+        num_layers=NUM_LAYERS,
+        page_tokens=ttnn.TILE_SIZE,
+        chunk_size=CHUNK_SIZE,
+        sp_factor=_sp,
+        max_chunks_per_batch=FORWARD_CHUNKS,
+        num_mtp_tokens=MTP_LEVELS,
+        service_id=service_id,
+        ack_shm_name=ack_shm_name,
+    )
+    model_descriptor.write(path, doc)
+    logger.info(f"[prefill] model descriptor -> {path}")
 
 
 def _serve_request(
@@ -1833,6 +1857,9 @@ def _serve_request(
             if n_warm:
                 logger.info(f"[migration] drained {n_warm} D2H warm-up ack records from the trace capture")
             layer_ack_service.start()
+
+    if rank == master_rank and os.environ.get(model_descriptor.PATH_ENV):
+        _write_model_descriptor(service_id, ack_shm_name)
 
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
 
