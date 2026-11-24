@@ -1012,8 +1012,7 @@ public:
     const std::optional<std::string>& get_cluster_id() const { return cluster_id; }
 
     // Mock cluster accessors
-    // True on the Mock target only. Simulator and Emule runs may also carry a mock cluster descriptor path.
-    bool get_mock_enabled() const { return runtime_target_device_ == TargetDevice::Mock; }
+    bool get_mock_enabled() const { return !mock_cluster_desc_path.empty(); }
     // TT_METAL_QUASAR_MOCK_JIT: a Quasar Mock device builds its firmware and JIT-compiles program kernels; otherwise
     // Mock skips both for Quasar.
     bool get_quasar_mock_jit() const { return quasar_mock_jit; }
