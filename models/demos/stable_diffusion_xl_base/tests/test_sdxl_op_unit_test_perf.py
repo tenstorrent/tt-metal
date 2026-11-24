@@ -137,7 +137,8 @@ def test_dram_group_norm_vae_two_pass_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 1236000  # Wormhole two-pass VAE: ~1.236 ms, confirmed locally and in CI.
+    # mean of 3 wh_n300_civ2 runs 2026-11-24 on 3 runners (1136361-1138926 ns)
+    expected_duration_ns = 1137305
 
     # Log the performance result
     print(
@@ -174,11 +175,8 @@ def test_block_sharded_group_norm_sdxl_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    # #55698 (2026-09-25) migrated the GroupNorm kernels to eltwise_chain and set 68875 from its own measurement;
-    # #56292, three hours later, removed the legacy rsqrt from the sharded kernel (modern routine, fewer SFPU
-    # instructions per pass). Thirteen single-kernel readings since then span 67332-68004 ns, mean 67712.
-    # #57652 added a write barrier before each VALID multicast (8 per op): five N150 readings 69887-70075 ns, mean 69986.
-    expected_duration_ns = 70000
+    # mean of 3 wh_n300_civ2 runs 2026-11-24 on 3 runners (68605-69215 ns)
+    expected_duration_ns = 68943
 
     # Log the performance result
     print(
@@ -289,7 +287,8 @@ def test_conv2d_block_sharded_sdxl_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 994294  # Measured: ~0.9943ms for Conv2D SDXL block sharded
+    # mean of 3 wh_n300_civ2 runs 2026-11-24 on 3 runners (978394-979208 ns)
+    expected_duration_ns = 978728
 
     # Log the performance result
     print(

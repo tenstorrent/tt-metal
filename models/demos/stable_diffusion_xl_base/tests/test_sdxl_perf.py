@@ -129,26 +129,25 @@ DEVICE_PERF_EXPECTATIONS = {
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "vae_decode_1024x1024": {
-        # mean of 4 wh_n150 runs 2026-11-23 on 4 VMs (648.91M..649.68M)
-        "wormhole": 649_253_000,
-        # mean of bh_p150 runs 2026-10-17..19 (254.07M..254.62M) after #60876 (padded_slice RM reader no longer
-        # over-reads the input row); previous target 260.30M (2026-09-25, #55698)
-        "blackhole": 254_384_000,
+        # mean of 2 wh_n150 runs 2026-11-24 on 2 VMs (643.65M..643.69M)
+        "wormhole": 643_671_000,
+        # mean of 3 bh_p150 runs 2026-11-24 on 3 VMs (250.49M..250.66M)
+        "blackhole": 250_562_000,
     },
     "vae_decode_512x512": {
-        # mean of 4 wh_n150 runs 2026-11-23 on 4 VMs (161.26M..161.74M)
-        "wormhole": 161_530_000,
+        # mean of 2 wh_n150 runs 2026-11-24 on 2 VMs (158.89M..158.91M)
+        "wormhole": 158_898_000,
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "vae_encode_1024x1024": {
-        # mean of 4 wh_n150 runs 2026-11-23 on 4 VMs (319.40M..319.72M)
-        "wormhole": 319_579_000,
+        # mean of 2 wh_n150 runs 2026-11-24 on 2 VMs (316.50M..316.53M)
+        "wormhole": 316_516_000,
         # mean of 8 scheduled bh_p150 runs 2026-11-06..11-23 on 4 VMs (135.57M..135.95M)
         "blackhole": 135_768_000,
     },
     "vae_encode_512x512": {
-        # mean of 2 wh_n150 runs 2026-11-23 on 2 VMs (78.62M..78.84M)
-        "wormhole": 78_730_000,
+        # mean of 2 wh_n150 runs 2026-11-24 on 2 VMs (77.01M..77.08M)
+        "wormhole": 77_043_000,
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "clip_encoder_1": {
