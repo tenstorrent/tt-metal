@@ -14,7 +14,7 @@ from ....layers.module import Module
 from ....layers.normalization import DistributedLayerNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
-from ....utils.matmul import get_agmm_config
+from ....utils.matmul import agmm_shape_configs, get_agmm_config
 from ....utils.tensor import prepare_weight_for_concatenated_input
 
 HIDDEN = 3072
@@ -227,6 +227,19 @@ class Flux3KleinTransformerBlock(Module):
             subblock_w=min(cfg.subblock_w, 4),
             compute_with_storage_grid_size=cfg.compute_with_storage_grid_size,
         )
+        entry = agmm_shape_configs.get((int(x_norm.padded_shape[-2]), HIDDEN, n_qkv + n_mlp, tp.factor))
+        buffers = attn.to_qkv._ag_num_buffers_per_channel
+        if entry is not None:  # swept at this exact shape: grid, blocking (same K block) and buffers per channel
+            (grid_x, grid_y), (m_blk, k_blk, n_blk, (sub_h, sub_w)), buffers = entry
+            cfg = ttnn.MinimalMatmulConfig(
+                M_block_size=m_blk,
+                K_block_size=k_blk,
+                N_block_size=n_blk,
+                subblock_h=sub_h,
+                subblock_w=sub_w,
+                compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
+            )
+            workers = -(-grid_x // self._ccl_manager.num_links)
         third = n_qkv // 3
         return list(
             ttnn.experimental.all_gather_minimal_matmul_async(
@@ -245,7 +258,7 @@ class Flux3KleinTransformerBlock(Module):
                 barrier_semaphore=None,
                 force_transpose=True,
                 num_workers_per_link=workers,
-                num_buffers_per_channel=attn.to_qkv._ag_num_buffers_per_channel,
+                num_buffers_per_channel=buffers,
                 chunks=4,
                 chunk_sizes=[third, third, third, n_mlp],
                 swiglu_last_chunk=True,
