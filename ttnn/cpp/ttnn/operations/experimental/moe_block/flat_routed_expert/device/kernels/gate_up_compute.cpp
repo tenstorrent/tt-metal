@@ -115,16 +115,22 @@ FORCE_INLINE void free_weight_block() {
 // w_index. A full sub-block (or pass) takes the compile-time row count FULL, which lets the LLK unroll its per-tile
 // loops; only a short last sub-block runs with the runtime one. (A runtime rt_dim costs 16%: GLM-5.3's 2 x 2 blocks
 // 17.89 -> 20.82 cycles a tile product on one core, operands resident.)
+// (the short-sub-block form out of line: the TRISCs fetch the K loop's code, and a second inlined copy of it slows the
+// common one - flat-expert-perf-dw-split's finding, ~18% of GLM-5.3's K loop for a generic or twice-inlined loop)
+__attribute__((noinline)) void matmul_x_block_short(uint32_t x_index, uint32_t w_index, uint32_t rows) {
+    for (uint32_t k = 0; k < x_block_k_tiles; ++k) {
+        matmul_block(x_cb, weight_cb, x_index + k, w_index + k * row_width, 0, false, row_width, rows, x_block_k_tiles);
+    }
+}
+
 template <uint32_t FULL>
 FORCE_INLINE void matmul_x_block(uint32_t x_index, uint32_t w_index, uint32_t rows) {
-    if (rows == FULL) {
+    if (rows == FULL) [[likely]] {
         for (uint32_t k = 0; k < x_block_k_tiles; ++k) {
             matmul_block(x_cb, weight_cb, x_index + k, w_index + k * row_width, 0, false, row_width, FULL, x_block_k_tiles);
         }
     } else {
-        for (uint32_t k = 0; k < x_block_k_tiles; ++k) {
-            matmul_block(x_cb, weight_cb, x_index + k, w_index + k * row_width, 0, false, row_width, rows, x_block_k_tiles);
-        }
+        matmul_x_block_short(x_index, w_index, rows);
     }
 }
 
