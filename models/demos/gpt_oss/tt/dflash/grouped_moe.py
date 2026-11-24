@@ -107,7 +107,7 @@ class GroupedMoE:
         self.ku = self.nt // E  # local column tiles per expert (23: gmoe_common.hpp NU_EXPERT)
         assert self.ku == 23, f"{self.ku} column tiles per expert; the gmoe kernels are built for 23"
         self.nu_down = hidden // TILE
-        # the weight tiles are stored transposed (K-GPTQ): the gate|up and down matmuls transpose them back
+        # the weight tiles are stored transposed (GPTQ experts): the gate|up and down matmuls transpose them back
         self.w_transposed = share.w_transposed if share is not None else bool(moe[0].get("tile_transposed", False))
         self.w_defines = [("GMOE_W_TRANSPOSED", "1")] if self.w_transposed else []
         rep = ttnn.ReplicateTensorToMesh(mesh)

@@ -23,7 +23,7 @@
 #endif
 
 // GMOE_W_TRANSPOSED: the weight tiles are stored transposed within themselves (the batched dense decode experts in
-// K-GPTQ, experts/weights.py DenseDecodeExpertWeights.tile_transposed); the matmuls transpose them back on unpack.
+// GPTQ, experts/weights.py DenseDecodeExpertWeights.tile_transposed); the matmuls transpose them back on unpack.
 #ifdef GMOE_W_TRANSPOSED
 constexpr bool W_T = true;
 #else

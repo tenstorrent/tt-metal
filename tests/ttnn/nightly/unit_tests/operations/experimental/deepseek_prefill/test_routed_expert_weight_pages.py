@@ -16,7 +16,7 @@ and reading tile (e, column, k) through a built table returns that tile's bytes.
 Device tests (one Blackhole chip): random weights on the BFP grid, run the op once with per-expert weight tensors and
 once with the same tiles scattered over the 8 DRAM banks of two width-sharded uint8 streams (random bank per column,
 random gaps and garbage between them, gaps between a column's tiles). The two outputs must be bit-identical, and close
-to an fp32 torch reference. Covers bfloat4_b tile-transposed tiles (gpt-oss K-GPTQ), bfloat8_b, and 32 local experts
+to an fp32 torch reference. Covers bfloat4_b tile-transposed tiles (gpt-oss GPTQ), bfloat8_b, and 32 local experts
 with a 768-wide intermediate (gpt-oss-20b TP=4: every device holds a quarter of every expert).
 """
 

@@ -183,7 +183,7 @@ class FusedVerify:
             assert e.decode_weight_dtype == ttnn.bfloat4_b, "the DFlash union MoE streams BFP4 expert weights"
             dw = e.decode_weights
             if any(d not in (None, ttnn.bfloat4_b) for d in (dw.gate_up_dtype, dw.down_dtype)):
-                # The split streams (the release setting GPT_OSS_DECODE_EXPERTS_SPLIT: exact top-1 experts, K-GPTQ
+                # The split streams (the release setting GPT_OSS_DECODE_EXPERTS_SPLIT: exact top-1 experts, GPTQ
                 # rounding; dtype "split" / "split_r<k>") and bf8 streams are laid out for the one-user decode streams
                 # only; the union MoE and the balanced down copy read the plain BFP4 layout.
                 raise NotImplementedError(

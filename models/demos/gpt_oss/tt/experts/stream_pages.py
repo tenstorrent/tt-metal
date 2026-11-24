@@ -212,7 +212,7 @@ def dense_page_table(num_experts, inter_pad, hidden, gu_shard_tiles, down_shard_
     """[E, 2 * (2 * n_gu + n_dn)] int64 page table of the batch-32 dense decode expert weights (experts/weights.py
     load_dense_decode_expert_weights, experts/dense_layout.py: gate / up [H, E * inter_pad] with expert e's column tile
     t at dense_layout.expert_tile(e, t) = t * E + e, down [E * inter_pad, H] with expert e's row tile t there, all DRAM
-    width-sharded; K-GPTQ tiles stored transposed within themselves sit at the same places, so the table is the same).
+    width-sharded; GPTQ tiles stored transposed within themselves sit at the same places, so the table is the same).
     Gate and up are two tensors: the up
     entries carry up_delta = up buffer address - gate buffer address (mod 2^32) so both read from the gate source.
     n_gu = inter_pad / 32, n_dn = ceil(hidden / 32); k strides: gu_shard_tiles * tile_bytes (gate / up, K = hidden)

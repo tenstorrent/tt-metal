@@ -7,7 +7,7 @@
 (same tile grid) and the op's matmuls transpose it back as they unpack it.
 
 Why: a bfloat4_b tile shares one exponent per 16 values along a tile row. In the normal (in, out) weight layout those
-16 values are 16 output columns of one input row. gpt-oss's K-GPTQ expert weights are rounded on the grid whose groups
+16 values are 16 output columns of one input row. gpt-oss's GPTQ expert weights are rounded on the grid whose groups
 are 16 consecutive input rows of one output column (inside one MXFP4 block), so the normal layout re-rounds them.
 Transposing each tile puts the input dimension along the tile rows, where those values are stored exactly.
 
@@ -52,7 +52,7 @@ def _bf4_round_trip(t):
 
 
 def k_grouped_bf4(w_hf):
-    """w_hf (out, in) moved onto the bfloat4_b grid whose 16-value groups run along `in` (as K-GPTQ weights are)."""
+    """w_hf (out, in) moved onto the bfloat4_b grid whose 16-value groups run along `in` (as the GPTQ experts are)."""
     stored = _bf4_round_trip(tile_transpose(w_hf.T.contiguous()))  # (in, out), each tile transposed
     return tile_transpose(stored).T.contiguous()
 
@@ -84,7 +84,7 @@ def test_tile_transpose_round_trip():
 def test_k_grouped_weights_pack_exactly_tile_transposed():
     """Host only: K-grouped bfloat4_b values survive the tile-transposed pack bit-exactly; the normal pack re-rounds."""
     w = _k_grouped_weights()["gate_proj"]  # (out, in) on the K-grouped grid
-    stored_t = tile_transpose(w.T.contiguous())  # what the routed loader packs with GPT_OSS_PREFILL_KGPTQ
+    stored_t = tile_transpose(w.T.contiguous())  # what the routed loader packs with GPT_OSS_PREFILL_GPTQ
     assert torch.equal(_bf4_round_trip(stored_t), stored_t), "tile-transposed pack changed K-grouped values"
     stored_n = w.T.contiguous()  # the normal layout
     changed = (_bf4_round_trip(stored_n) != stored_n).float().mean().item()

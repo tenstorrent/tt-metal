@@ -366,7 +366,7 @@ class ModelArgs:
     FUSED_DECODE_WEIGHTS_VERSION = 4  # 4: QKV stream in K/V-first slot order (wqkv_kvfirst)
     # Layout version of the batched dense decode MoE weights (experts dense_decode_*). 2: each expert padded to whole
     # tiles (dense_decode_p736_*, experts/dense_layout.py); the routed prefill reads them (no routed copy). 3: with
-    # GPT_OSS_DECODE_SPLIT_ROUND_DIR the K-GPTQ experts in transposed tiles (experts/weights.py dense_kgptq_dir); the
+    # GPT_OSS_DECODE_SPLIT_ROUND_DIR the GPTQ experts in transposed tiles (experts/weights.py dense_gptq_dir); the
     # marker records that directory (_dense_moe_decode_version). 4: the experts' tiles interleaved
     # (dense_decode_i736_*, dense_layout.py expert_tile) so the routed prefill reads every expert from all the banks.
     DENSE_MOE_DECODE_WEIGHTS_VERSION = 4
@@ -386,7 +386,7 @@ class ModelArgs:
         "GPT_OSS_QKV_FUSED_ROPE_KV",
         "GPT_OSS_ROUTED_DECODE_BF8_LAYERS",
     )
-    ROUTED_PREFILL_SETTING_VARS = ("GPT_OSS_PREFILL_KGPTQ", "GPT_OSS_DECODE_SPLIT_ROUND_DIR")
+    ROUTED_PREFILL_SETTING_VARS = ("GPT_OSS_PREFILL_GPTQ", "GPT_OSS_DECODE_SPLIT_ROUND_DIR")
 
     @staticmethod
     def _settings(names):
@@ -394,7 +394,7 @@ class ModelArgs:
         return {k: os.environ[k] for k in names if os.environ.get(k, "").strip()}
 
     def _dense_moe_decode_version(self):
-        """The marker's batched dense MoE weights entry: the layout version and the K-GPTQ source they were built from
+        """The marker's batched dense MoE weights entry: the layout version and the GPTQ source they were built from
         (the raw GPT_OSS_DECODE_SPLIT_ROUND_DIR value, "" for the checkpoint values)."""
         return f"{self.DENSE_MOE_DECODE_WEIGHTS_VERSION}:{os.environ.get('GPT_OSS_DECODE_SPLIT_ROUND_DIR', '').strip()}"
 
@@ -467,7 +467,7 @@ class ModelArgs:
         from models.demos.gpt_oss.tt.experts.prefill_routed import (
             ROUTED_PREFILL_NUM_EXPERTS,
             ROUTED_PREFILL_WEIGHTS_VERSION,
-            prefill_kgptq_enabled,
+            prefill_gptq_enabled,
             routed_prefill_bf8_layers,
             routed_prefill_enabled,
             routed_prefill_mesh_supported,
@@ -480,9 +480,9 @@ class ModelArgs:
             and routed_prefill_mesh_supported(self.mesh_device, num_experts)
         ):
             bf8 = routed_prefill_bf8_layers()
-            # The bf8 layer set and the K-GPTQ switch change which routed caches must exist, so both are in the marker.
+            # The bf8 layer set and the GPTQ switch change which routed caches must exist, so both are in the marker.
             version = f"{ROUTED_PREFILL_WEIGHTS_VERSION}:bf8={bf8}" if bf8 else ROUTED_PREFILL_WEIGHTS_VERSION
-            return f"{version}:kgptq" if prefill_kgptq_enabled() else version
+            return f"{version}:gptq" if prefill_gptq_enabled() else version
         return None
 
     def mark_weight_cache_complete(self, dtype, fused_decode=False, dense_moe=False):

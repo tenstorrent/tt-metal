@@ -174,7 +174,7 @@ DECODE_SPLIT_RANKS = [int(v) for v in _SPLIT_RANKS_SPEC.split(",")] if _SPLIT_RA
 
 # GPT_OSS_DECODE_SPLIT_ROUND_ONLY=1: a split stream with no exact rank (split_r0) stores only its rounded BFP4 parts,
 # columns contiguous like the BFP4 streams. Its [BFP4][BFP2][rounded BFP4] segments made every read skip the two exact
-# parts it never reads (2.3x the bytes per column apart): the K-GPTQ base (k0) ran 0.7% slower than the package.
+# parts it never reads (2.3x the bytes per column apart): the GPTQ base (k0) ran 0.7% slower than the package.
 DECODE_SPLIT_ROUND_ONLY = os.environ.get("GPT_OSS_DECODE_SPLIT_ROUND_ONLY", "0") == "1"
 
 

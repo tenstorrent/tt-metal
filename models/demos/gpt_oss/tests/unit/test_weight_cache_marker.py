@@ -14,7 +14,7 @@ from models.demos.gpt_oss.tt.model_config import ModelArgs
 
 ROUND_DIR = "GPT_OSS_DECODE_SPLIT_ROUND_DIR"
 DENSE = "GPT_OSS_DENSE_ROUNDED_DECODE"
-KGPTQ = "GPT_OSS_PREFILL_KGPTQ"
+PREFILL_GPTQ = "GPT_OSS_PREFILL_GPTQ"
 
 
 def _args(tmp_path, routed=False):
@@ -53,11 +53,11 @@ def _clean_env(monkeypatch):
 
 
 def test_fused_settings_change_invalidates(tmp_path, monkeypatch):
-    monkeypatch.setenv(ROUND_DIR, "hf://o/r@rev1/kgptq")
+    monkeypatch.setenv(ROUND_DIR, "hf://o/r@rev1/experts")
     a = _args(tmp_path)
     a.mark_weight_cache_complete("bf8", fused_decode=True)
     assert a.weight_cache_is_complete("bf8", fused_decode=True)
-    monkeypatch.setenv(ROUND_DIR, "hf://o/r@rev2/kgptq")
+    monkeypatch.setenv(ROUND_DIR, "hf://o/r@rev2/experts")
     assert not a.weight_cache_is_complete("bf8", fused_decode=True)
     # A build without the fused decode (or the routed prefill experts) reads none of these weights: still complete.
     assert a.weight_cache_is_complete("bf8", fused_decode=False)
@@ -76,7 +76,7 @@ def test_dense_settings_checked_for_every_build(tmp_path, monkeypatch):
 
 
 def test_non_fused_build_keeps_fused_settings(tmp_path, monkeypatch):
-    monkeypatch.setenv(ROUND_DIR, "hf://o/r@rev1/kgptq")
+    monkeypatch.setenv(ROUND_DIR, "hf://o/r@rev1/experts")
     a = _args(tmp_path)
     a.mark_weight_cache_complete("bf8", fused_decode=True)
     a.mark_weight_cache_complete("bf8", fused_decode=False, dense_moe=True)  # e.g. a batch-32 build afterwards
@@ -85,12 +85,12 @@ def test_non_fused_build_keeps_fused_settings(tmp_path, monkeypatch):
 
 
 def test_routed_settings_checked_only_where_routed(tmp_path, monkeypatch):
-    monkeypatch.setenv(KGPTQ, "1")
-    monkeypatch.setenv(ROUND_DIR, "hf://o/r@rev1/kgptq")
+    monkeypatch.setenv(PREFILL_GPTQ, "1")
+    monkeypatch.setenv(ROUND_DIR, "hf://o/r@rev1/experts")
     routed = _args(tmp_path, routed=True)
     routed.mark_weight_cache_complete("bf8")
     assert routed.weight_cache_is_complete("bf8")
-    monkeypatch.setenv(ROUND_DIR, "hf://o/r@rev2/kgptq")
+    monkeypatch.setenv(ROUND_DIR, "hf://o/r@rev2/experts")
     assert not routed.weight_cache_is_complete("bf8")
     assert _args(tmp_path, routed=False).weight_cache_is_complete("bf8")
 

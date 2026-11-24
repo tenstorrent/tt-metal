@@ -17,7 +17,7 @@ from .experts import ExpertConfig, Experts
 from .experts.prefill_routed import (
     ROUTED_PREFILL_SEQ_MULTIPLE,
     RoutedPrefillExperts,
-    prefill_kgptq_enabled,
+    prefill_gptq_enabled,
     routed_prefill_supported,
     routed_tp_dense_supported,
     routed_tp_stream_supported,
@@ -183,12 +183,12 @@ class MLP:
                 mesh_device, mesh_config, hf_config, use_throughput_experts, tokens_per_device
             )
 
-            # Every prefill runs on the routed experts when they are built with the K-GPTQ weights (prefills the routed
+            # Every prefill runs on the routed experts when they are built with the GPTQ weights (prefills the routed
             # path does not take on its own are padded into it, __call__), so the per-expert prefill weights would be
             # an unused copy of the experts.
             routed_only_prefill = (
                 mesh_config is not None
-                and prefill_kgptq_enabled()
+                and prefill_gptq_enabled()
                 and routed_prefill_supported(mesh_device, mesh_config, hf_config, use_throughput_experts)
             )
 
@@ -246,13 +246,13 @@ class MLP:
             self.routed_router = self.router.with_expert_order(self.routed_prefill.expert_order)
 
     def _routed_padded_rows(self, shape, batch_size):
-        """Rows per user to pad a prefill to so it takes the routed path (GPT_OSS_PREFILL_KGPTQ), else None.
+        """Rows per user to pad a prefill to so it takes the routed path (GPT_OSS_PREFILL_GPTQ), else None.
 
         Any prefill qualifies: its leading dims and rows are flattened into one [1, 1, R, H] sequence (the experts are
         per token), stacked by user when batch_size > 1 (the routed path reduces per user, so each user's S = R / B
         rows are padded alike). Each user is padded to whole 32-row tiles (64 rows for an odd B, so the total is a
         multiple of 64), and further in those steps until the B users hold at least the routed minimum."""
-        if self.routed_prefill is None or not prefill_kgptq_enabled():
+        if self.routed_prefill is None or not prefill_gptq_enabled():
             return None
         dims = [shape[i] for i in range(len(shape))]
         if len(dims) < 2:
@@ -332,8 +332,8 @@ class MLP:
             return expert_output
         padded_rows = None if is_decode else self._routed_padded_rows(hidden_states.shape, batch_size)
         if padded_rows is not None:
-            # GPT_OSS_PREFILL_KGPTQ: a prefill the routed path does not take on its own runs on it padded with zero
-            # rows (they route like any token and their outputs are dropped), so every prefill reads the same K-GPTQ
+            # GPT_OSS_PREFILL_GPTQ: a prefill the routed path does not take on its own runs on it padded with zero
+            # rows (they route like any token and their outputs are dropped), so every prefill reads the same GPTQ
             # experts and no other prefill copy of them is held.
             shape = [hidden_states.shape[i] for i in range(len(hidden_states.shape))]
             H = shape[-1]

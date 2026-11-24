@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""K-GPTQ: GPTQ rounding of gpt-oss-20b's MXFP4 routed experts onto the K-grouped bfloat4_b grid.
+"""GPTQ rounding of gpt-oss-20b's MXFP4 routed experts onto the K-grouped bfloat4_b grid.
 
 This builds GPT_OSS_DECODE_SPLIT_ROUND_DIR (kgptq_experts/layer_<L>.pt), the expert weights the gpt-oss-20b release
 settings read (models/demos/gpt_oss/__init__.py) in the fused decode streams and the routed prefill experts.
@@ -28,9 +28,9 @@ and documentation text; see that repo's README). Different calibration text give
   # 1. calibration (tools/gptq_experts.py; ~70 s per 4096 tokens on CPU)
   python models/demos/gpt_oss/tools/gptq_experts.py collect calib.pt texts/*.txt
   # 2. rounding: one layer_<L>.pt per layer, the format GPT_OSS_DECODE_SPLIT_ROUND_DIR reads
-  python models/demos/gpt_oss/tools/gptq_k.py round kgptq_experts/ calib.pt [calib2.pt ...]
+  python models/demos/gpt_oss/tools/expert_gptq.py round kgptq_experts/ calib.pt [calib2.pt ...]
   # 3. check a directory (yours or the published one): on the K-grouped grid, and expert output error vs MXFP4
-  python models/demos/gpt_oss/tools/gptq_k.py check kgptq_experts/ --calib held_out.pt
+  python models/demos/gpt_oss/tools/expert_gptq.py check kgptq_experts/ --calib held_out.pt
   # then
   export GPT_OSS_DECODE_SPLIT_ROUND_DIR=$PWD/kgptq_experts
 
@@ -78,7 +78,7 @@ def k_grouped_rne(w):
     return torch.where(m > 0, q, b).reshape(w.shape)
 
 
-def gptq_k(W, H, damp=0.01, block=128):
+def gptq_input_groups(W, H, damp=0.01, block=128):
     """W [E, K, N] (K: input rows), H [E, K, K] = X^T X of the calibration inputs -> W rounded onto the K-grouped
     bfloat4_b grid. Natural row order; each block's steps fixed at its first row; each row's error pushed onto the rows
     after it (lazy batch updates every `block` rows)."""
@@ -127,8 +127,8 @@ def round_layer(weights, x, routed, damp=0.01):
     and up columns never share a block here (a block is one column), so gate_up rounds as one matrix."""
     Hg, Hd, counts = expert_hessians(weights, x, routed)
     out = dict(weights)
-    out["gate_up_proj"] = gptq_k(weights["gate_up_proj"], Hg, damp)
-    out["down_proj"] = gptq_k(weights["down_proj"], Hd, damp)
+    out["gate_up_proj"] = gptq_input_groups(weights["gate_up_proj"], Hg, damp)
+    out["down_proj"] = gptq_input_groups(weights["down_proj"], Hd, damp)
     for name in ("gate_up_proj", "down_proj"):
         w = out[name]
         if not torch.equal(k_grouped_rne(w), w):  # a transposed-tile pack would round it again

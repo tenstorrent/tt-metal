@@ -3,9 +3,9 @@
 
 """GPTQ rounding of gpt-oss-20b's MXFP4 routed-expert weights onto the bfloat4_b grid of the fused decode streams.
 
-Not used by the release: the gpt-oss-20b release settings (models/demos/gpt_oss/__init__.py) use the K-GPTQ rounding
+Not used by the release: the gpt-oss-20b release settings (models/demos/gpt_oss/__init__.py) use the GPTQ rounding
 instead (16-value groups along the input dimension, read from GPT_OSS_DECODE_SPLIT_ROUND_DIR by the decode streams and,
-with GPT_OSS_PREFILL_KGPTQ, by the routed prefill experts). The model no longer has a switch that loads this tool's
+with GPT_OSS_PREFILL_GPTQ, by the routed prefill experts). The model no longer has a switch that loads this tool's
 output-grouped rounding; the tool is kept for reference and re-calibration studies.
 
 The decode streams hold the experts in bfloat4_b: blocks of 16 consecutive output columns at one input row share an

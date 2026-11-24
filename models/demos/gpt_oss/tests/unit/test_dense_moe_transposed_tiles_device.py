@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The batch-32 dense MoE experts in K-GPTQ (experts/weights.py dense_kgptq_dir): bfloat4_b weights whose 16-value
+"""The batch-32 dense MoE experts in GPTQ (experts/weights.py dense_gptq_dir): bfloat4_b weights whose 16-value
 exponent groups run along K are held exactly only when every tile is stored transposed within itself
 (ttnn.Tile transpose_tile), and the batched decode's two DRAM-sharded matmuls (experts/decode.py DenseDecodePlan, the
 program configs decode_forward_dense runs) read such tiles correctly.
@@ -11,7 +11,7 @@ program configs decode_forward_dense runs) read such tiles correctly.
   against torch on the stored values: PCC >= 0.999.
 
 Run on Blackhole (one chip is enough):
-    pytest models/demos/gpt_oss/tests/unit/test_dense_kgptq_device.py
+    pytest models/demos/gpt_oss/tests/unit/test_dense_moe_transposed_tiles_device.py
 """
 
 import os
@@ -33,7 +33,7 @@ pytestmark = pytest.mark.skipif(os.environ.get("CI") == "true", reason="Blackhol
 
 
 def k_grouped(w):
-    """w [K, N] rounded on the bfloat4_b grid whose exponent groups run along K (the K-GPTQ grid): one transposed-tile
+    """w [K, N] rounded on the bfloat4_b grid whose exponent groups run along K (the GPTQ grid): one transposed-tile
     pack and unpack on host."""
     t = ttnn.from_torch(w, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, tile=TRANSPOSED)
     return ttnn.to_torch(t).float()

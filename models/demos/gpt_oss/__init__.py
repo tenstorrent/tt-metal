@@ -23,20 +23,20 @@ on QuietBox 2 (the tt-inference-server P300X2 entry), for gpt-oss-20b on a Quiet
 - The decode switches act only on the fused decode path (1x4 Blackhole mesh); elsewhere they are read and unused.
 - The rounded weights are Hugging Face Hub locations at pinned revisions (tt/weight_source.py), downloaded once into
   the Hub cache. Prefill and decode read the same GPTQ-rounded values: the dense weights' GPTQ rounding
-  (GPT_OSS_DENSE_ROUNDED_DECODE; the name predates prefill reading it) and the experts' K-GPTQ rounding on layers 2-23
-  (GPT_OSS_PREFILL_KGPTQ). Prefill keeps more exact experts where decode has them: bf8 checkpoint values on layers 0
+  (GPT_OSS_DENSE_ROUNDED_DECODE; the name predates prefill reading it) and the experts' GPTQ rounding on layers 2-23
+  (GPT_OSS_PREFILL_GPTQ). Prefill keeps more exact experts where decode has them: bf8 checkpoint values on layers 0
   and 1 (experts/prefill_routed.py), while decode's exact top-1 experts (GPT_OSS_DECODE_SPLIT_RANKS) are decode-only.
 """
 
 import os
 
-_KGPTQ = "hf://jerrywangTT/gpt-oss-20b-qb2-kgptq@110a7d8d43e2a0ec9ac12bea3f6b681e2c2d0961"
+_ROUNDED_WEIGHTS = "hf://jerrywangTT/gpt-oss-20b-qb2-kgptq@110a7d8d43e2a0ec9ac12bea3f6b681e2c2d0961"
 
 # gpt-oss-20b's release settings (tt-inference-server workflows/model_specs/dev/llm.yaml, gpt-oss-20b on P300X2),
-# with the K-GPTQ prefill experts in place of that entry's output-grouped GPTQ expert package.
+# with the GPTQ prefill experts in place of that entry's output-grouped GPTQ expert package.
 RELEASE_DEFAULTS_20B = {
     # dense weights (attention, router, LM head) GPTQ-rounded, for prefill and decode
-    "GPT_OSS_DENSE_ROUNDED_DECODE": f"{_KGPTQ}/dense/dense_gptq_device.pt",
+    "GPT_OSS_DENSE_ROUNDED_DECODE": f"{_ROUNDED_WEIGHTS}/dense/dense_gptq_device.pt",
     # decode boundary RMSNorm multiplies at HiFi3
     "GPT_OSS_BOUNDARY_FIDELITY": "HiFi3",
     # prefill RMSNorm with FP32 accumulation; prefill residual stream in bf16
@@ -45,11 +45,11 @@ RELEASE_DEFAULTS_20B = {
     # fused QKV + RoPE loads y / cos / sin exactly (the cheaper variant)
     "GPT_OSS_QKV_ROPE_EXACT": "2",
     # decode experts: the exact MXFP4 split, exact top-1 expert on the listed layers (0, 1, 15, 17, 19, 20, 22, 23),
-    # K-GPTQ rounding elsewhere. Prefill reads the K-GPTQ rounding of every layer from these streams
+    # GPTQ rounding elsewhere. Prefill reads the GPTQ rounding of every layer from these streams
     # (experts/prefill_routed.py, TP mode), so no layer keeps a prefill copy of its experts.
     "GPT_OSS_DECODE_EXPERTS_SPLIT": "1",
     "GPT_OSS_DECODE_SPLIT_RANKS": "1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,1,0,1,1,0,1,1",
-    "GPT_OSS_DECODE_SPLIT_ROUND_DIR": f"{_KGPTQ}/kgptq_experts",
+    "GPT_OSS_DECODE_SPLIT_ROUND_DIR": f"{_ROUNDED_WEIGHTS}/kgptq_experts",
     "GPT_OSS_DECODE_SPLIT_ROUND_ONLY": "1",
     "GPT_OSS_DECODE_SPLIT_NATIVE": "1",
     # the native split's two accumulators folded in FP32 on the SFPU (the kernel fix)
@@ -57,8 +57,8 @@ RELEASE_DEFAULTS_20B = {
     # decode speedups
     "GPT_OSS_DECODE_BOUNDARY_EARLY_SUM": "1",
     "GPT_OSS_DECODE_ROUTER_FAST_TOPK": "1",
-    # prefill experts read the same K-GPTQ weights as decode (tile-transposed); short prompts padded into that path
-    "GPT_OSS_PREFILL_KGPTQ": "1",
+    # prefill experts read the same GPTQ weights as decode (tile-transposed); short prompts padded into that path
+    "GPT_OSS_PREFILL_GPTQ": "1",
 }
 
 # model_config.py: HF_MODEL, else the first of these internal CI checkpoints that exists, else the 120b one

@@ -177,7 +177,7 @@ class DenseDecodeExpertWeights:
     down_bias: [E, H] (real on the first TP device only: row-parallel), applied as routing_weights @ down_bias;
     expand: [E, E * I_pad] with expand[e, e * I_pad + i] = 1 (routing weight of expert e on its columns).
     intermediate_local: the real columns per expert (I / tp); intermediate_padded: I_pad.
-    tile_transposed: gate / up / down hold the K-GPTQ experts (dense_kgptq_dir) with every tile stored transposed
+    tile_transposed: gate / up / down hold the GPTQ experts (dense_gptq_dir) with every tile stored transposed
     within itself (ttnn.Tile transpose_tile: the tensors' own tile spec, so ttnn.matmul transposes them back), so each
     bfloat4_b exponent group runs along K and holds those values exactly; the custom kernels reading them
     (dense_gu_*, the grouped MoE gmoe_*) and the routed prefill (weights_tile_transposed) transpose them back too.
@@ -195,10 +195,10 @@ class DenseDecodeExpertWeights:
     tile_transposed: bool = False
 
 
-def dense_kgptq_dir(layer, weight_dtype):
-    """The K-GPTQ expert source as given (GPT_OSS_DECODE_SPLIT_ROUND_DIR: a directory or a pinned hf:// location of
+def dense_gptq_dir(layer, weight_dtype):
+    """The GPTQ expert source as given (GPT_OSS_DECODE_SPLIT_ROUND_DIR: a directory or a pinned hf:// location of
     layer_<L>.pt) the batched dense decode experts load, or "": a bfloat4_b layer with a known index, when the decode
-    experts read K-GPTQ (gpt-oss-20b release settings). Batch-32 decode and prefill then hold the same K-GPTQ values as
+    experts read GPTQ (gpt-oss-20b release settings). Batch-32 decode and prefill then hold the same GPTQ values as
     batch-1 decode and prefill. Resolved (downloaded) only when the weights are loaded."""
     if weight_dtype != ttnn.bfloat4_b or layer is None:
         return ""
@@ -243,14 +243,14 @@ def load_dense_decode_expert_weights(
 
     layer_match = re.search(r"layers\.(\d+)", str(tensor_cache_path))
     layer = layer_match.group(1) if layer_match else None
-    kgptq_dir = dense_kgptq_dir(layer, weight_dtype)
+    gptq_dir = dense_gptq_dir(layer, weight_dtype)
     gate = up = down = gate_bias = up_bias = down_bias = None
     if state_dict:
         gate_up = state_dict["gate_up_proj"]  # [E, H, 2 * I], gate / up interleaved
         down_w = state_dict["down_proj"]  # [E, I, H]
-        if kgptq_dir:
-            # the K-GPTQ experts (checkpoint channel order, the biases are the checkpoint's)
-            rw = torch.load(f"{resolve(kgptq_dir)}/layer_{int(layer)}.pt")
+        if gptq_dir:
+            # the GPTQ experts (checkpoint channel order, the biases are the checkpoint's)
+            rw = torch.load(f"{resolve(gptq_dir)}/layer_{int(layer)}.pt")
             gate_up, down_w = rw["gate_up_proj"], rw["down_proj"]
         gate_up_bias = state_dict["gate_up_proj_bias"]  # [E, 2 * I]
         gate = dl.gate_up_columns(gate_up[..., ::2], tp, il_pad)
@@ -259,17 +259,17 @@ def load_dense_decode_expert_weights(
         up_bias = dl.bias_rows(gate_up_bias[..., 1::2], tp, il_pad, tokens)
         down = dl.down_rows(down_w, tp, il_pad)
         down_bias = dl.down_bias_rows(state_dict["down_proj_bias"].reshape(E, H), tp)
-    # Cache names carry the padded width (the unpadded 720-column layout had the same names without it). The K-GPTQ
+    # Cache names carry the padded width (the unpadded 720-column layout had the same names without it). The GPTQ
     # weights (transposed tiles) are named per source: a hash of the source as given, which names the pinned Hub
-    # revision (as the routed prefill's K-GPTQ caches, prefill_routed.py).
+    # revision (as the routed prefill's GPTQ caches, prefill_routed.py).
     # "_i": the experts' tiles interleaved (dense_layout.py expert_tile); the expert-contiguous layout was "_p".
     tag = f"dense_decode_i{il_pad}"
     wtag = tag
-    if kgptq_dir:
+    if gptq_dir:
         import hashlib
 
-        wtag += "_kgptq_tt_" + hashlib.sha1(kgptq_dir.rstrip("/").encode()).hexdigest()[:10]
-    tile = ttnn.Tile((ttnn.TILE_SIZE, ttnn.TILE_SIZE), transpose_tile=True) if kgptq_dir else None
+        wtag += "_gptq_tt_" + hashlib.sha1(gptq_dir.rstrip("/").encode()).hexdigest()[:10]
+    tile = ttnn.Tile((ttnn.TILE_SIZE, ttnn.TILE_SIZE), transpose_tile=True) if gptq_dir else None
 
     def weight(t, name, mapper, k, n):
         shard = dl.dram_shard_tiles(n // ttnn.TILE_SIZE, banks, DENSE_MOE_WORKERS_PER_BANK)
@@ -312,7 +312,7 @@ def load_dense_decode_expert_weights(
         ),
         intermediate_local=il,
         intermediate_padded=il_pad,
-        tile_transposed=bool(kgptq_dir),
+        tile_transposed=bool(gptq_dir),
     )
 
 
@@ -537,7 +537,7 @@ def _load_split_decode_expert_weights(
     if with_round:
         tag += "_rnd"
     # GPT_OSS_DECODE_SPLIT_ROUND_DIR: the rounded part from a dir of layer_<L>.pt on the K-grouped bfloat4_b grid (the
-    # K-GPTQ experts, checkpoint channel order) instead of round_k of the checkpoint
+    # GPTQ experts, checkpoint channel order) instead of round_k of the checkpoint
     # The source as given names the cache files: a pinned hf:// location includes its revision, so another revision
     # gets its own files (the directory's base name alone is the same for every revision). It is resolved, i.e.
     # downloaded, only when the streams are packed, so a complete cache needs no Hub access.
