@@ -50,9 +50,13 @@ SP4_TP2_QFAST_RING_SDPA_CHUNKS_BY_LOCAL_ROWS: dict[int, tuple[int, int]] = (
     {
         1280: (160, 512),
         2048: (256, 512),
+        2304: (256, 512),
         3328: (192, 512),
         4096: (224, 512),
         4352: (256, 512),
+        5376: (192, 512),
+        6400: (224, 512),
+        8448: (224, 512),
     }
     if os.environ.get("FLUX3_SDPA_QFAST") == "1"
     else {}
