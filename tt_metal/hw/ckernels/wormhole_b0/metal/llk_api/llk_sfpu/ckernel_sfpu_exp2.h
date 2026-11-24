@@ -138,11 +138,10 @@ inline void calculate_exp2() {
             sfpi::dst_reg++;
         }
     } else {
-        // bf16: the raw-TTI replay body of exp, whose range reduction is x * LREG12 + 127 with
-        // LREG12 = vConstFloatPrgm0. exp2_init sets it to 1.0f, so fl(x * 1 + 127) == fl(x + 127):
-        // the same algorithm and coefficients as _sfpu_exp2_bf16_ (FP32_C0 loads c0 as the fp32
-        // EXP_21F_BF16_C0), so the output bits match it. The TTI body hoists its constants, so a
-        // row issues 20 slots instead of sfpi's 24.
+        // bf16 outside the generated kernel: the raw-TTI replay body of exp, whose range reduction
+        // is x * LREG12 + 127 with LREG12 = vConstFloatPrgm0. exp2_init sets it to 1.0f, so
+        // fl(x * 1 + 127) == fl(x + 127): the same algorithm and coefficients as _sfpu_exp2_bf16_
+        // (FP32_C0 loads c0 as the fp32 EXP_21F_BF16_C0), so the output bits match it.
         _sfpu_exp_21f_bf16_tti_<
             false /*SCALE_EN*/,
             false /*is_fp32_dest_acc_en*/,

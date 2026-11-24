@@ -364,6 +364,7 @@ sfpi_inline void _sfpu_exp_21f_bf16_tti_tail_() {
  */
 template <bool SCALE_EN, bool is_fp32_dest_acc_en, bool CLAMP_NEGATIVE, int ITERATIONS, bool FP32_C0 = false>
 inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
+    static_assert(!is_fp32_dest_acc_en, "bf16-Dest body only");
     // Iteration-invariant constants:
     //   LREG3 = 127.0f                      (bias term in z = x/ln2 + 127)
     //   LREG5 = 7.839635491371155e-08f      (poly coeff c1)
