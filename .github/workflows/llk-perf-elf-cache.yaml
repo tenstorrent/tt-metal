@@ -1,0 +1,46 @@
+name: "LLK perf ELF cache"
+# Builds the LLK perf merge gate's legs on CPU runners and saves their ELFs as the cross-commit
+# ELF cache, one cache per leg. Only trusted callers (push to main, the nightly) write it;
+# merge-queue entries run PR code and only read it.
+
+on:
+  workflow_call:
+
+permissions:
+  actions: write
+  checks: write
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    name: Build
+    uses: ./.github/workflows/llk-perf-impl.yaml
+    with:
+      architecture: all
+      tests-yaml: ./tests/pipeline_reorg/llk_perf_merge_gate_tests.yaml
+      compile-quasar: false
+      speed-of-light: false
+      perf-run-types: L1_TO_L1
+      pipeline: merge_baseline
+      leg-compile-runner: tt-ubuntu-2204-large-stable
+      leg-compile-workers: 16
+      elf-cache: write
+      measure: false
+    secrets: inherit
+
+  # Keep the newest cache of each leg, so the cache holds one snapshot (~430 MB) of the 10 GB repo quota.
+  prune:
+    name: Prune
+    needs: [build]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh cache list --ref "$GITHUB_REF" --key llk-elf-cache-merge_baseline- --sort created_at --order desc \
+            --limit 1000 --json id,key --jq '.[] | [.id, (.key | sub("-[0-9]+-[0-9]+$"; ""))] | @tsv' \
+            | awk -F'\t' 'seen[$2]++ { print $1 }' | xargs -r -n1 gh cache delete

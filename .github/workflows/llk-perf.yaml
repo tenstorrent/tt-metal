@@ -79,6 +79,18 @@ jobs:
       offload-compile: ${{ github.event_name == 'schedule' || inputs.offload-compile }}
     secrets: inherit
 
+  # Refreshes the merge gate's ELF cache, so a week without LLK merges does not let it expire.
+  elf-cache:
+    name: "Merge gate ELF cache"
+    if: ${{ github.event_name == 'schedule' }}
+    permissions:
+      actions: write
+      checks: write
+      contents: read
+      packages: write
+    uses: ./.github/workflows/llk-perf-elf-cache.yaml
+    secrets: inherit
+
   gate:
     name: "Gate ${{ matrix.arch }} (speed of light)"
     needs: llk-perf-tests

@@ -51,6 +51,11 @@ on:
         required: false
         default: ""
         type: string
+      elf-cache:
+        description: "read: restore main's ELF cache and only read it; write: fill it from empty and save it (blank = off)"
+        required: false
+        default: ""
+        type: string
 
 env:
   LLK_PATH: tt_metal/tt-llk
@@ -105,6 +110,30 @@ jobs:
           if [[ -f "split-durations/$CHIP_ARCH.json" ]]; then
             echo "LLK_SPLIT_DURATIONS=$PWD/split-durations/$CHIP_ARCH.json" >> "$GITHUB_ENV"
           fi
+      - name: "ELF cache: set up"
+        if: inputs.elf-cache != ''
+        shell: bash
+        env:
+          MODE: ${{ inputs.elf-cache }}
+        run: |
+          {
+            echo "ELF_CACHE_KEY=llk-elf-cache-${{ inputs.pipeline }}-${CHIP_ARCH}-${{ fromJSON(inputs.test-group).split_group }}-"
+            echo "LLK_ELF_CACHE=$RUNNER_TEMP/llk-elf-cache"
+            echo "LLK_ELF_CACHE_STATS=$RUNNER_TEMP/llk-elf-cache-stats"
+            # Queue entries and PRs run the PR's code, so they never write.
+            if [[ "$MODE" != write || "$GITHUB_EVENT_NAME" == merge_group || "$GITHUB_EVENT_NAME" == pull_request* ]]; then
+              echo "LLK_ELF_CACHE_READONLY=1"
+            fi
+          } >> "$GITHUB_ENV"
+      - name: "ELF cache: restore"
+        if: inputs.elf-cache == 'read'
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/llk-elf-cache
+          key: ${{ env.ELF_CACHE_KEY }}
+          restore-keys: ${{ env.ELF_CACHE_KEY }}
       - name: Compile
         shell: bash
         working-directory: ${{ env.LLK_PATH }}
@@ -123,6 +152,17 @@ jobs:
             --label "compile ${{ fromJSON(inputs.test-group).name }} on ${{ inputs.runner }} (-n ${{ inputs.workers }})" \
             --output "$GITHUB_STEP_SUMMARY" \
             -- bash -c "$MATRIX_CMD"
+      - name: "ELF cache: hit rate"
+        if: inputs.elf-cache != ''
+        continue-on-error: true
+        shell: bash
+        run: python3 -I "$LLK_PATH/tests/python_tests/helpers/elf_cache.py" "$LLK_ELF_CACHE_STATS" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: "ELF cache: save"
+        if: inputs.elf-cache == 'write' && env.LLK_ELF_CACHE_READONLY != '1'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/llk-elf-cache
+          key: ${{ env.ELF_CACHE_KEY }}${{ github.run_id }}-${{ github.run_attempt }}
       - name: Pack the ELFs
         shell: bash
         working-directory: ${{ env.LLK_PATH }}

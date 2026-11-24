@@ -94,6 +94,16 @@ on:
         required: false
         default: 16
         type: number
+      elf-cache:
+        description: "With leg-compile-runner: read or write the cross-commit ELF cache (llk-perf-compile.yaml; blank = off)"
+        required: false
+        default: ""
+        type: string
+      measure:
+        description: "Measure on the boards (false: only the leg compile runs, e.g. to fill the ELF cache)"
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   actions: read
@@ -256,6 +266,7 @@ jobs:
       runner: ${{ inputs.leg-compile-runner }}
       workers: ${{ inputs.leg-compile-workers }}
       timeout: 10
+      elf-cache: ${{ inputs.elf-cache }}
       image: ${{ needs.build-images.outputs.llk-ci-tag }}
       ref: ${{ inputs.ref }}
       architecture: ${{ inputs.architecture }}
@@ -313,7 +324,7 @@ jobs:
   llk-perf-exec:
     needs: [load-test-matrix, build-images, llk-perf-shadow-compile, stage2-baseline]
     if: >-
-      ${{ !cancelled() && inputs.architecture != 'quasar' && needs.build-images.result == 'success'
+      ${{ !cancelled() && inputs.measure && inputs.architecture != 'quasar' && needs.build-images.result == 'success'
           && needs.load-test-matrix.result == 'success' && needs.load-test-matrix.outputs.matrix != '[]' }}
     strategy:
       fail-fast: false

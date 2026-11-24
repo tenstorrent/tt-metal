@@ -630,7 +630,7 @@ jobs:
     name: LLK perf merge gate (changes)
     if: ${{
         github.event.action != 'destroyed' &&
-        (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch')
+        (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || github.event_name == 'push')
       }}
     runs-on: ubuntu-slim
     outputs:
@@ -650,7 +650,7 @@ jobs:
         id: classify
         env:
           # In the queue, base..head holds only this entry; the entries in front are in the base.
-          BASE: ${{ github.event.merge_group.base_sha }}
+          BASE: ${{ github.event.merge_group.base_sha || github.event.before }}
         run: |
           BASE=${BASE:-$(git merge-base origin/main HEAD)}
           CHANGED=$(git diff --name-only --diff-filter=ACMRT "$BASE" HEAD | .github/scripts/llk-perf-inputs-changed.sh)
@@ -660,7 +660,7 @@ jobs:
   llk-perf-merge-gate-measure:
     name: LLK perf merge gate (measure)
     needs: [llk-perf-merge-gate-changes]
-    if: needs.llk-perf-merge-gate-changes.outputs.changed == 'true'
+    if: needs.llk-perf-merge-gate-changes.outputs.changed == 'true' && github.event_name != 'push'
     uses: ./.github/workflows/llk-perf-impl.yaml
     with:
       architecture: all
@@ -674,6 +674,8 @@ jobs:
       # Only medium and large have merge-queue pools.
       leg-compile-runner: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
       leg-compile-workers: 16
+      # Only reads; llk-perf-merge-gate-elf-cache writes it after the merge.
+      elf-cache: read
       stage2-baseline-ref: ${{ github.event.merge_group.base_sha || github.sha }}
       # Stage 2 runs on Blackhole only: same-code Wormhole runs are not repeatable yet (#62044).
       stage2-thresholds: >-
@@ -683,7 +685,7 @@ jobs:
   llk-perf-merge-gate:
     name: LLK perf merge gate (${{ matrix.arch }})
     needs: [llk-perf-merge-gate-changes, llk-perf-merge-gate-measure]
-    if: always() && !cancelled() && needs.llk-perf-merge-gate-changes.outputs.changed == 'true'
+    if: always() && !cancelled() && needs.llk-perf-merge-gate-changes.outputs.changed == 'true' && github.event_name != 'push'
     strategy:
       fail-fast: false
       matrix:
@@ -712,6 +714,19 @@ jobs:
       # llk-perf-merge-gate-notify posts one message for both arches, so each arch does not post.
       slack: false
       slack_on_pass: false
+    secrets: inherit
+
+  # After a merge that changed LLK perf inputs, build the gate's legs into the ELF cache the queue reads.
+  llk-perf-merge-gate-elf-cache:
+    name: LLK perf merge gate (ELF cache)
+    needs: [llk-perf-merge-gate-changes]
+    if: github.event_name == 'push' && needs.llk-perf-merge-gate-changes.outputs.changed == 'true'
+    permissions:
+      actions: write
+      checks: write
+      contents: read
+      packages: write
+    uses: ./.github/workflows/llk-perf-elf-cache.yaml
     secrets: inherit
 
   # The only LLK perf gate that posts to the regressions channel, and only a regression or a skip.
