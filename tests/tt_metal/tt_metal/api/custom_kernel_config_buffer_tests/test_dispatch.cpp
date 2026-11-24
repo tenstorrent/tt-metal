@@ -169,7 +169,7 @@ TEST_F(CustomKernelConfigBufferTest, RunsFromBufferAtPerCoreAddresses) {
 
     auto workload = make_workload(device, kBothCores, *result, *cb_backing);
     auto buffer = experimental::CreateKernelConfigBuffer(device, workload);
-    ASSERT_NE(buffer.address(kDevice, kBlockedCore), buffer.address(kDevice, kFreeCore));
+    ASSERT_NE(buffer.region(kDevice, kBlockedCore).address, buffer.region(kDevice, kFreeCore).address);
 
     experimental::EnqueueMeshWorkload(device.mesh_command_queue(), workload, buffer, /*blocking=*/true);
 
@@ -196,8 +196,8 @@ TEST_F(CustomKernelConfigBufferTest, RunsFromBufferAtPerCoreAddresses) {
         EXPECT_EQ(page[kComputeSlot + 3], kCommonValue) << "UNPACK common runtime arg on " << core.str();
 
         std::vector<uint32_t> shard;
-        detail::ReadFromDeviceL1(
-            chip, core, static_cast<uint32_t>(buffer.address(kDevice, core)), buffer.size(kDevice, core), shard);
+        const auto region = buffer.region(kDevice, core);
+        detail::ReadFromDeviceL1(chip, core, static_cast<uint32_t>(region.address), region.size, shard);
         for (const Kernel kernel : {kBrisc, kNcrisc, kCompute}) {
             EXPECT_EQ(std::find(shard.begin(), shard.end(), arg_value(kernel, core_index)), shard.end())
                 << "kernel " << kernel << "'s runtime arg is in the shard on " << core.str();

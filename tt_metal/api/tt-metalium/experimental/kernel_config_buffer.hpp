@@ -26,6 +26,12 @@ namespace experimental {
 
 class KernelConfigBufferImpl;
 
+// A region of one core's L1: `size` bytes from `address`.
+struct CoreL1Region {
+    DeviceAddr address = 0;
+    uint32_t size = 0;
+};
+
 // L1 that a workload's Tensix kernel binaries live in, instead of the HAL KERNEL_CONFIG window. The rest
 // of the kernel config (runtime args, semaphores, CB and DFB configs) stays in the window. Each core has
 // its own shard at its own address (per-core allocation), so its binaries fit wherever it has room. Slow
@@ -47,11 +53,9 @@ public:
 
     // Bytes of the largest shard on any device.
     uint32_t max_size() const;
-    // Bytes of the shard on `core` of the device at `device_coord`: sized for the binaries of the core's kernel group
-    // in that device's program.
-    uint32_t size(const distributed::MeshCoordinate& device_coord, const CoreCoord& core) const;
-    // Shard address on `core` of the device at `device_coord`. Differs per core and per device.
-    DeviceAddr address(const distributed::MeshCoordinate& device_coord, const CoreCoord& core) const;
+    // The shard on `core` of the device at `device_coord`: sized for the binaries of the core's kernel group in that
+    // device's program. Its address differs per core and per device.
+    CoreL1Region region(const distributed::MeshCoordinate& device_coord, const CoreCoord& core) const;
     // Frees the L1 now. Launching with a deallocated buffer is an error.
     void deallocate();
 
