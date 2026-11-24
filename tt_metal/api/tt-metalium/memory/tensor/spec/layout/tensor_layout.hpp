@@ -1,0 +1,91 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <cstddef>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/tensor/spec/layout/layout.hpp>
+#include <tt-metalium/tile.hpp>
+
+#include <tt-metalium/tensor/spec/layout/alignment.hpp>
+#include <tt-metalium/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
+
+#include <memory>
+#include <tuple>
+#include <vector>
+
+namespace tt::tt_metal {
+
+// Validates that the physical shard shape is aligned to tile dimensions for sharded TILE layouts.
+// Returns true if the configuration is valid, false otherwise.
+bool can_shard_align(const MemoryConfig& memory_config, const Layout& layout, const Tile& tile = Tile{});
+
+class TensorLayoutImpl;
+
+using Strides = std::vector<size_t>;
+
+// TensorLayout describes how a tensor is laid out in memory
+// It takes datatype, layout (eg. TILE vs. RM), memory (eg. DRAM vs. L1), sharding (ie. how you want to cut your logical
+// shape) And provides information required to physically lay out the tensor in memory
+class TensorLayout {
+public:
+    // Constructs a layout with alignment derived from the page config, data type, and memory config.
+    TensorLayout(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config);
+
+    // Constructs a layout with caller-supplied alignment.
+    [[deprecated(
+        "Use experimental::tensor_layout_with_custom_alignment instead. "
+        "This API will be removed after 2026-12-01.")]]
+    TensorLayout(
+        DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment);
+
+    // Wraps an already-built TensorLayoutImpl. Used by experimental custom-alignment factories
+    // that construct TensorLayoutImpl with a caller-supplied Alignment.
+    explicit TensorLayout(std::unique_ptr<TensorLayoutImpl> impl);
+
+    ~TensorLayout();
+    TensorLayout(const TensorLayout& other);
+    TensorLayout& operator=(const TensorLayout& other);
+    TensorLayout(TensorLayout&& other) noexcept;
+    TensorLayout& operator=(TensorLayout&& other) noexcept;
+
+    Layout get_layout() const;
+    Tile get_tile() const;
+    PageConfig get_page_config() const;
+    DataType get_data_type() const;
+    const MemoryConfig& get_memory_config() const;
+    const Alignment& get_alignment() const;
+
+    // Computes the padded shape on the fly from the shape and the alignment.
+    [[deprecated(
+        "Use padded_shape() of TensorSpec(shape, layout) instead, or its physical_shape() or compute_strides().")]] tt::
+        tt_metal::Shape
+        compute_padded_shape(const tt::tt_metal::Shape& shape) const;
+
+    [[deprecated(
+        "Construct a new TensorLayout with the memory config instead. This API will be removed after 2027-02-17.")]]
+    TensorLayout with_memory_config(MemoryConfig memory_config) const;
+
+    bool operator==(const TensorLayout& other) const;
+    bool operator!=(const TensorLayout& other) const;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("dtype", "page_config", "memory_config", "alignment");
+    std::tuple<const DataType&, const PageConfig&, const MemoryConfig&, const Alignment&> attribute_values() const;
+
+    // Access to the implementation, which carries the internal layout-computation API.
+    //
+    // pre-condition: the TensorLayout must not be in a moved-from state.
+    TensorLayoutImpl& impl();
+    const TensorLayoutImpl& impl() const;
+
+private:
+    // impl_ may be nullptr if the TensorLayout is in a moved-from state.
+    // Avoid using impl_ directly; use the impl() accessor instead.
+    std::unique_ptr<TensorLayoutImpl> impl_;
+};
+
+}  // namespace tt::tt_metal
