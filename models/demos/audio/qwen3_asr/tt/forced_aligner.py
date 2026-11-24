@@ -142,7 +142,11 @@ class Qwen3ForcedAligner:
         return cls(model, args, mesh_device, encoder_params, classifier, config)
 
     def timestamp_logits(self, input_ids, mel):
-        """Time-bin logits (n_timestamps, classify_num), float, at each <timestamp> token.
+        """Time-bin logits (n_timestamps, classify_num), float, at each <timestamp> token."""
+        return self.token_logits(input_ids, mel)[input_ids == self.timestamp_token_id]
+
+    def token_logits(self, input_ids, mel):
+        """Time-bin logits (S, classify_num), float, at every prompt position.
 
         input_ids: (S,) aligner prompt with the audio placeholders expanded. mel: (128, T)
         features of the audio. The prompt is padded to a prefill length tt_transformers
@@ -174,7 +178,7 @@ class Qwen3ForcedAligner:
         ttnn.deallocate(hidden)
         out = ttnn.to_torch(logits).reshape(S_pad, -1)[:S, : self.classify_num].float()
         ttnn.deallocate(logits)
-        return out[input_ids == self.timestamp_token_id]
+        return out
 
     def timestamps_ms(self, input_ids, mel):
         """Raw boundary times in ms, two per word (start, end), before the monotonic fix-up
