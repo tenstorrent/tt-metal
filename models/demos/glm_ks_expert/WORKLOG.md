@@ -177,3 +177,23 @@ once a pass, each weight block waited for once. Flat checks 67 passed; LoudBox p
 
 The kernel alone gains 3-6% but the expert only 0.4-1.7%: at GLM's loads the expert is paced by x delivery along the
 chain, not by the gate/up kernel.
+
+## The combine's traffic floor: a bare fabric all-to-all (a2a.py, kernels/a2a_*.cpp, tests/test_a2a.py)
+
+GLM-5.3 16 experts a chip, M 384 (the combine's case): every chip sends 768 rows of 12320 B (6144 bf16 + the 32 B
+trailer) to each of the other 7 chips, 66.2 MB out a chip, as fabric unicasts: one sender core a (direction, link)
+with its own connection (the rows leave by their first hop, Y then X), rows landing round-robin on 20 cores a chip,
+the last row of each flow bumping the destination's counter. LoudBox 2 x 4, FABRIC_2D, 200G, device time after a
+mesh barrier:
+
+| case | us | GB/s out a chip |
+|---|---|---|
+| 12320 B rows, router payload 12320 | 1863.7 | 35.5 |
+| 12320 B rows, router payload 15232 | 1869.6 | 35.4 |
+| 6560 B rows (bfp8-size), payload 6560 | 994.6 | 35.5 |
+| 12320 B rows, 1 link a direction | 3683.5 | 18.0 |
+
+- Link-bound: time follows the bytes and halves with the links. The 2 x 4's middle X links carry ~75.7 MB a direction
+  (8 flows x 768 rows): 1.86 ms is ~20 GB/s a link, 86% of 200G. The fabric has 2 channels between neighbours here
+  (link_idx 2: out of bounds), so 2 links is the ceiling.
+- The combine at this load: 2252 us decoupled (+21% over the bare traffic), 2556 us with the experts (+37%).
