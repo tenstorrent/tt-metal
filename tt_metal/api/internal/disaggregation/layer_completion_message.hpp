@@ -50,8 +50,8 @@ static_assert(offsetof(LayerCompletionMessage, host_timestamp_ns) == 24);
 inline constexpr uint32_t kLayerCompletionSentinel = 0xFFFFFFFFu;
 
 // The request whose chunk [pos_start, pos_end) of slot_id this is failed; the layer range is ignored and the chunk's
-// layers are still reported. Send on a rank that reports layers of the chunk, before that rank's own first layer
-// completion of it. Requires no ordering between layers or ranks.
+// layers are still reported. Send on a rank that reports layers of the chunk, no later than that rank's own last
+// layer completion of it. Requires no ordering between layers or ranks.
 inline constexpr uint32_t kLayerCompletionChunkFailed = 1u;
 
 inline uint64_t layer_completion_host_timestamp_ns() noexcept {

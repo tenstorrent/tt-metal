@@ -42,8 +42,8 @@ class LayerCompletionSink(ABC):
     @abstractmethod
     def chunk_failed(self, slot_id: int, pos_start: int, pos_end: int) -> None:
         """Fail the request whose chunk this is; its layers are still reported. pos_start and pos_end are the values
-        layers_completed gets for that chunk. Call it on a rank that reports layers of the chunk, before that rank's
-        own first layer completion of it. Requires no ordering between layers or ranks."""
+        layers_completed gets for that chunk. Call it on a rank that reports layers of the chunk, no later than that
+        rank's own last layer completion of it. Requires no ordering between layers or ranks."""
 
 
 class LayerCompletionRingWriter(LayerCompletionSink):
