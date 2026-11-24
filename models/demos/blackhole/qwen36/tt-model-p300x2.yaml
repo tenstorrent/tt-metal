@@ -4,8 +4,8 @@
 #   single-user          one user, lossless DFlash2 speculative decoding (greedy only), up to 256K context
 #   batch                DEFAULT: 1-32 users on the resident engine with DFlash2 speculative decoding where it pays
 #                        (user decision 2026-11-24: the former batch-dflash2 replaces the plain rows-mode batch): a
-#                        32-row plain build and an 8 users x 4 verify rows build sharing weights and one KV pool (V in
-#                        bfp4), prefill gangs + one pipelined PP pass, device sampling; host-RAM prefix cache and
+#                        32-row plain build and an 8 users x 4 verify rows build sharing weights and one KV pool (K
+#                        Hadamard-rotated and V in bfp4), prefill gangs + one pipelined PP pass, device sampling; host-RAM prefix cache and
 #                        preemption swap; requests needing logits (logprobs, structured output, ...) are served
 #                        without speculation
 # Retired 2026-11-22: multi-user (1-16 users, two 8-row launches) and the ttnn-path batch (17-32 users).
@@ -129,7 +129,7 @@ serve_profiles:
       tt:
         sample_on_device_mode: decode_only   # the prefill's first token; blocks come from the model's own sampler
   - name: batch
-    description: 1-32 concurrent requests on the resident engine, all in one decode launch, with DFlash2 speculative decoding for up to 8 greedy requests when it pays (8 users x 4 verify rows, 3 drafts per verify) and the 32-row decode otherwise (more users, sampled / penalized requests, low acceptance, requests that need logits such as logprobs or structured output, which are served without speculation). Up to 256K context each, one shared KV pool (V in bfp4), prefix caching and preemption swap in host RAM. Greedy output can differ from a non-speculating decode at bf16 near-ties.
+    description: 1-32 concurrent requests on the resident engine, all in one decode launch, with DFlash2 speculative decoding for up to 8 greedy requests when it pays (8 users x 4 verify rows, 3 drafts per verify) and the 32-row decode otherwise (more users, sampled / penalized requests, low acceptance, requests that need logits such as logprobs or structured output, which are served without speculation). Up to 256K context each, one shared KV pool of 2.56M tokens (K and V in 4-bit block floats), prefix caching and preemption swap in host RAM. Greedy output can differ from a non-speculating decode at bf16 near-ties.
     max_num_seqs: 32
     env:
       TT_MODEL_CLASS_OVERRIDES: "TTQwen3_5ForConditionalGeneration=qwen36_resident.vllm_adaptive:Qwen36ResidentAdaptiveForCausalLM"
@@ -138,11 +138,14 @@ serve_profiles:
       # groups need
       RESIDENT_ATTN_WORKERS: "28"
       RESIDENT_HEAD_GROUPS: "4"
-      # KV pool: K in bf8, V in bfp4 (Strata S0; prefill V rounded to nearest, RESIDENT_KV_V_RTN default on): 13,312
-      # bytes a token-row pair vs 17,408 in bf8, so the bf8 pool's DRAM (1,376,000 tokens next to the second build,
-      # 2026-11-23) holds ~1.80M tokens; 1,792,000 keeps a margin
+      # KV pool in bfp4 (Strata S0): V since 2026-11-24 (prefill V rounded to nearest, RESIDENT_KV_V_RTN default on),
+      # K since 2026-11-25 (S0-8: q and k rotated by one 256-point Hadamard after RoPE, which spreads outliers over the
+      # head dim; prefill and decode-written K rows rounded to nearest, decode rows re-encoded at the tail write-back
+      # off the critical path): 9,216 bytes a token-row pair vs 17,408 in bf8, so the bf8 pool's DRAM (1,376,000
+      # tokens next to the second build, 2026-11-23) holds ~2.6M tokens; 2,560,000 keeps a margin
       RESIDENT_KV_V_BFP4: "1"
-      RESIDENT_MAX_TOKENS_ALL_USERS: "1792000"
+      RESIDENT_KV_K_BFP4: "1"
+      RESIDENT_MAX_TOKENS_ALL_USERS: "2560000"
       RESIDENT_PREFILL_CHUNKS: "256,512,1024"
       # prefix caching in host memory (GB; 0 = off): a prompt's state at its last 1,024-token boundary (GDN states,
       # conv history, KV; for the speculating build also the drafter's context taps) is kept in host RAM, and a later
@@ -188,11 +191,14 @@ card:
       decoding at bf16 near-ties.
     - DFlash2 helps most on short and medium prompts. On long, hard-to-predict text the gain shrinks to about 1.3x over
       plain decoding; it stayed faster at every length measured (32K to 250K).
-    - New in this release (2026-11-24, third): `batch` speculates for sampled requests too (temperature > 0 with the
+    - New in this release (2026-11-25): `batch`'s KV pool stores K in 4-bit block floats too (Hadamard-rotated, rounded
+      to nearest): 2,560,000 tokens (+43%; 9 users at the full 256K, 32 users at 80K each) at ~1% decode speed (32
+      users 531 vs 536 t/s aggregate) and +0.26% next-token NLL at 8K tokens vs 8-bit K and V.
+    - 2026-11-24 (third): `batch` speculates for sampled requests too (temperature > 0 with the
       device's top-k: one user on natural chat at T 0.7 gets ~89 t/s/u vs 61, two ~78 vs 59, four ~63 vs 56); a
       request with its own seed decodes without speculation, so the same seed gives the same text. Greedy decoding
       gives up ~5% for it (one user 91 vs 96 t/s/u: the verify rows now draw tokens instead of taking the argmax).
-    - Earlier today: `batch` became the speculating engine (the `batch-dflash2` profile replaced the plain `batch`), its
+    - 2026-11-24: `batch` became the speculating engine (the `batch-dflash2` profile replaced the plain `batch`), its
       KV pool stores V in 4-bit block floats (1,792,000 tokens, +27%), a request preempted when the pool runs out
       resumes from host RAM instead of re-prefilling, and requests with logprobs, structured output, logit_bias,
       min_p, bad_words, allowed_token_ids or min_tokens are served (decoded without speculation).
@@ -227,23 +233,22 @@ card:
     ```
 
     ### Users x context (`batch`)
-    The users share one KV pool of 1,792,000 tokens (28,000 blocks of 64 tokens; K in 8-bit and V in 4-bit block
-    floats, 6.7 KB per token per chip). A request can use up to `max_model_len` (262,144), and any mix of requests fits
+    The users share one KV pool of 2,560,000 tokens (40,000 blocks of 64 tokens; K and V in 4-bit block floats,
+    4.6 KB per token per chip). A request can use up to `max_model_len` (262,144), and any mix of requests fits
     while their contexts add up to the pool; when it runs out, vLLM preempts a request, whose state (GDN states, conv
     history, KV) is kept in host RAM (`RESIDENT_SWAP_GB`, 64 GB) and restored when it resumes, instead of re-prefilling
     its history. All active users decode together in one launch of 32 rows.
 
     | users | context per user when all are equally long |
     |---|---|
-    | 1-6 | 262,144 |
-    | 8 | 224,000 |
-    | 16 | 112,000 |
-    | 32 | 56,000 |
+    | 1-9 | 262,144 |
+    | 16 | 160,000 |
+    | 32 | 80,000 |
 
     ### Plain decode speed, users x context (`batch`)
     The step every user takes when the server is not speculating (sampled requests, more than ~5 users), from the
-    device step time with every user at the given context (no host or HTTP overhead; measured with V in 8-bit, which
-    4-bit V matches or beats: 8K c32 TPOT 55.1 vs 56.3 ms); each cell is t/s/u / aggregate t/s:
+    device step time with every user at the given context (no host or HTTP overhead; measured with K and V in 8-bit;
+    4-bit V matches or beats it, 8K c32 TPOT 55.1 vs 56.3 ms, and 4-bit K costs ~1% at 32 users); each cell is t/s/u / aggregate t/s:
 
     | users | context 128 | context 8K | context 32K |
     |---|---|---|---|
@@ -350,7 +355,8 @@ card:
     logged: `single-user` 2026-11-20 (median 1350 MHz), `batch` 2026-11-24 (median 1350 MHz, at most 68 °C; prefix
     cache on, a different random prompt per row). `single-user` and the greedy `batch` rows follow how predictable the
     text is (DFlash2 acceptance), so they vary by prompt. Accuracy: teacher-forced on natural text, `batch`'s
-    next-token NLL with V in 4-bit matched 8-bit V within noise (+0.02% at 8K tokens, -0.14% at 32K), and the 8-bit
+    next-token NLL with V in 4-bit matched 8-bit V within noise (+0.02% at 8K tokens, -0.14% at 32K), K and V in 4-bit
+    gave +0.26% at 8K (1.4144 vs 1.4107; top-1 0.658 vs 0.663), and the 8-bit
     engine matched the previous release's (1.5269 / 0.6548 vs 1.5278 / 0.6562 NLL / top-1 at 128-384 tokens).
 
     Prefix caching (`batch`, on by default: `RESIDENT_PREFIX_CACHE_GB`, 32 GB of host RAM; 0 turns it off): a prompt's
@@ -377,7 +383,7 @@ card:
       prefill of several prompts in one pass, or a long stretch of plain steps, it re-runs the drafter's 2,048-token
       window (~0.35 s a user, every live user waits). Keeping those taps adds ~10-40 ms to TTFT (128-token c1 0.25 vs
       0.21 s, 2K-prompt c32 8.2 vs 8.0 s on the morning's plain `batch`).
-    - `batch` fits the users' contexts in a 1,792,000-token KV pool; past it vLLM preempts a request, which resumes from
+    - `batch` fits the users' contexts in a 2,560,000-token KV pool; past it vLLM preempts a request, which resumes from
       host RAM (64 GB budget; LRU — past the budget it re-prefills).
     - Prefix caching is at 1,024-token boundaries, and the first prompt that stores a prefix pays for it (about +0.5 s
       at 12K tokens, +0.9 s at 32K); `single-user` prefills a repeated long prompt again (131,072 tokens: about 21 s).
@@ -392,5 +398,7 @@ verify:
   - "from qwen36_resident.vllm_adaptive import Qwen36ResidentAdaptiveForCausalLM as C; p = C.spec_plan(None, 32, 3); assert p.effective_k == 3 and p.supports_narrow_decode and p.narrow_decode_resolves_commits and p.accept_modes == ('argmax_ids',); assert type(C.spec_plan(None, 33, 3)).__name__ == 'SpecReject'"
   # batch: V in bfp4 reaches the model (RESIDENT_KV_V_BFP4)
   - "import os; os.environ['RESIDENT_KV_V_BFP4'] = '1'; import qwen36_resident.model as M; assert M.V_BFP4"
+  # batch: K in bfp4 (Hadamard-rotated, S0-8) reaches the model (RESIDENT_KV_K_BFP4)
+  - "import os; os.environ['RESIDENT_KV_K_BFP4'] = '1'; import ttnn, qwen36_resident.model as M; assert M.K_BFP4 and M.K_DT == ttnn.bfloat4_b and M.K_RTN"
   # batch's chunk list reaches the adapter (ae776ee280c); without it the build keeps the 128 chunk and OOMs
   - "import os; os.environ['RESIDENT_PREFILL_CHUNKS'] = '256,512,1024'; from qwen36_resident.generator_vllm import PREFILL_CHUNKS; assert PREFILL_CHUNKS == (256, 512, 1024), PREFILL_CHUNKS"
