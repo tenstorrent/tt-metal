@@ -2094,6 +2094,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         // buffer's id as the named arg <name> and its format as <name>_format.
         TT_FATAL(use_streaming_compute, "TT_SDPA_LLK2: the LLK 2.0 kernel follows the streaming CB protocol only");
         compute_desc.kernel_source = "tt_metal/tt-llk/llk2/kernels/sdpa.cpp";
+        // CI-ONLY (not for merge): the job log shows that this program uses the LLK 2.0 kernel.
+        log_warning(tt::LogOp, "sdpa compute kernel: LLK 2.0 (tt_metal/tt-llk/llk2/kernels/sdpa.cpp)");
         auto llk2_defines = defines_map;  // reader and writer keep `defines`
         llk2_defines["LLK2_DEST_FP32"] = fp32_dest_acc_en ? "1" : "0";
         llk2_defines["LLK2_MATH_FIDELITY"] = std::to_string(static_cast<uint32_t>(math_fidelity));

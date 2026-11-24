@@ -958,6 +958,15 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
         // every TRISC). DFBs the program does not have get a placeholder format; the kernel does not touch them.
         auto& llk2_kernel = spec.kernels.back();
         llk2_kernel.source = std::filesystem::path("tt_metal/tt-llk/llk2/kernels/minimal_matmul.cpp");
+        // CI-ONLY (not for merge): the job log shows that this program uses the LLK 2.0 kernel.
+        log_warning(
+            tt::LogOp,
+            "minimal_matmul compute kernel: LLK 2.0 (tt_metal/tt-llk/llk2/kernels/minimal_matmul.cpp), K blocks {}, "
+            "blocks {}x{}x{}",
+            K_blocks,
+            M_block_tiles,
+            K_block_tiles,
+            N_block_tiles);
         auto& cta = llk2_kernel.compile_time_args;
         const auto format_arg = [&](const std::string& dfb, tt::DataFormat format) {
             cta.insert({dfb + "_format", static_cast<uint32_t>(format)});

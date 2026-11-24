@@ -1646,6 +1646,7 @@
   cmd: |
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1 TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE VBENCH_CACHE_DIR=/mnt/MLPerf/vbench TORCH_HOME=/mnt/MLPerf/vbench/torch_hub
+    export TT_SDPA_LLK2=1 TT_RING_SDPA_LLK2=1 TT_MINIMAL_MATMUL_LLK2=1
     pytest --timeout 9000 models/tt_dit/tests/models/wan2_2/test_performance_wan.py \
       -k "resolution_480p and t2v" || exit $?
   model: wan-2.2-t2v
