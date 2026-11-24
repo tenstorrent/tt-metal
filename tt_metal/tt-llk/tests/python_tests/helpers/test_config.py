@@ -36,6 +36,7 @@ from ttexalens.tt_exalens_lib import (
 
 from . import device as device_module
 from . import golden_generators as golden_generators_module
+from . import toolchain
 from .chip_architecture import (
     ChipArchitecture,
     get_chip_architecture,
@@ -163,6 +164,8 @@ class TestConfig:
     # Sources directories
     LLK_ROOT: ClassVar[Path]
     TESTS_WORKING_DIR: ClassVar[Path]
+    # Root of the SFPI toolchain (compiler/, include/); see helpers/toolchain.py for where it is looked for.
+    SFPI_ROOT: ClassVar[Path]
     TOOL_PATH: ClassVar[Path]
 
     HELPERS: ClassVar[Path]
@@ -469,7 +472,11 @@ class TestConfig:
 
         TestConfig.LLK_ROOT = sources_path
         TestConfig.TESTS_WORKING_DIR = TestConfig.LLK_ROOT / "tests"
-        TestConfig.TOOL_PATH = TestConfig.LLK_ROOT / "tests/sfpi/compiler/bin"
+        # None found is not an error here: a session that never compiles needs no toolchain (require_toolchain()).
+        TestConfig.SFPI_ROOT = toolchain.find_sfpi_root(
+            TestConfig.LLK_ROOT
+        ) or toolchain.in_tree_sfpi_root(TestConfig.LLK_ROOT)
+        TestConfig.TOOL_PATH = TestConfig.SFPI_ROOT / "compiler/bin"
 
         # The harness's own helper tree, not LLK_HOME's: its Python and these sources are one commit.
         TestConfig.HELPERS = harness_files_root() / "tests/helpers"
@@ -670,7 +677,7 @@ class TestConfig:
         TestConfig.INCLUDES = (
             [f"-I{harness}/tests/helpers/include"] * installed
             + [
-                "-Isfpi/include",
+                TestConfig.sfpi_include_flag(),
                 # Relative to tests/ (compile cwd), not pytest's cwd.
                 *[
                     f"-I{p}"
@@ -952,6 +959,44 @@ class TestConfig:
             if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR
             else (MailboxesCoverage if with_coverage else Mailboxes)
         )
+
+    @staticmethod
+    def sfpi_include_flag() -> str:
+        """``-I`` of the SFPI headers, relative to the compile directory for the in-tree toolchain.
+
+        The in-tree spelling stays as it is because the flag is hashed into
+        every variant id.
+        """
+        if TestConfig.SFPI_ROOT == toolchain.in_tree_sfpi_root(TestConfig.LLK_ROOT):
+            return "-Isfpi/include"
+        return f"-I{TestConfig.SFPI_ROOT}/include"
+
+    @staticmethod
+    def require_toolchain() -> None:
+        """Fail with the places looked in when there is no SFPI compiler; called where compiling starts."""
+        if not Path(TestConfig.GXX).is_file():
+            raise RuntimeError(toolchain.missing_sfpi_message(TestConfig.LLK_ROOT))
+
+    @staticmethod
+    def check_toolchain() -> None:
+        """Once per session, on the controller: the SFPI release is one the harness builds with.
+
+        Also says so when it is not the release ``LLK_HOME`` pins or, when
+        consuming, not the release the ELFs were built with: consuming never
+        rebuilds, so ELFs of an earlier toolchain would otherwise run unnoticed.
+        """
+        if not Path(TestConfig.GXX).is_file():
+            return
+        version = toolchain.check_sfpi(TestConfig.SFPI_ROOT, TestConfig.LLK_ROOT)
+        logger.info("SFPI {} at {}", version, TestConfig.SFPI_ROOT)
+        built_with = TestConfig.ARTEFACTS_DIR / "sfpi.version"
+        if TestConfig.BUILD_MODE != BuildMode.CONSUME:
+            built_with.write_text(f"{version}\n")
+        elif built_with.is_file() and built_with.read_text().strip() != str(version):
+            toolchain.report_sfpi_drift(
+                f"The ELFs in {TestConfig.ARTEFACTS_DIR} were built with SFPI {built_with.read_text().strip()}, "
+                f"not with the installed {version}; run the compile producer again to rebuild them."
+            )
 
     @staticmethod
     def setup_mode(
@@ -1920,6 +1965,7 @@ class TestConfig:
         if TestConfig.INFRA_TESTING:
             return
 
+        TestConfig.require_toolchain()
         self.build_shared_artefacts()
 
         # Fast path: if build is already complete, skip entirely

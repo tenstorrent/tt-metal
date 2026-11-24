@@ -29,6 +29,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
+from helpers import toolchain
 
 FIXTURE_DIR = Path(__file__).resolve().parents[2] / "out_of_tree"
 WHEEL_BUILDER = Path(__file__).resolve().parents[2] / "harness_wheel" / "make_wheel.py"
@@ -117,8 +118,9 @@ def test_out_of_tree_contract_fixture_passes_on_the_installed_wheel():
     asserts that ``helpers`` resolved from there, so a pass means the installed
     copy was the one exercised.
 
-    ``LLK_HOME`` is a tree of links without the harness's parts, as a suite
-    that has no harness checkout would have it.
+    ``LLK_HOME`` is a tree of links without the harness's parts and without
+    the toolchain, as a suite that has no harness checkout and installs SFPI
+    on its own would have it; the toolchain is named with ``LLK_SFPI_ROOT``.
 
     What this catches that the checkout run cannot: a module that reads a file
     by a path relative to the tt-llk tree, or a package or data file the wheel
@@ -142,12 +144,17 @@ def test_out_of_tree_contract_fixture_passes_on_the_installed_wheel():
         )
         assert installed.returncode == 0, f"pip install failed:\n{installed.stderr}"
 
+        checkout = FIXTURE_DIR.parents[1]
+        sfpi_root = toolchain.find_sfpi_root(checkout)
+        assert sfpi_root is not None, toolchain.missing_sfpi_message(checkout)
+
         report = Path(child_temp) / "fixture-report.xml"
         result = _run_fixture(
             child_temp,
             report,
             harness_site=site,
             llk_home=_llk_home_without_the_harness(Path(child_temp) / "llk"),
+            sfpi_root=sfpi_root,
         )
 
         assert result.returncode == 0, (
@@ -164,19 +171,20 @@ def test_out_of_tree_contract_fixture_passes_on_the_installed_wheel():
 
 
 def _llk_home_without_the_harness(root: Path) -> Path:
-    """An ``LLK_HOME`` of links to this checkout, minus everything an installed harness brings itself.
+    """An ``LLK_HOME`` of links to this checkout, minus what an installed harness brings itself and the toolchain.
 
-    No ``tests/python_tests``, ``tests/helpers`` or ``tools``: a build that still
-    reaches for one of them under ``LLK_HOME`` fails. It sits as deep under
-    ``root`` as tt-llk does in tt-metal, beside links to its neighbours there,
-    because the compile reaches tt-metal headers by relative path.
+    No ``tests/python_tests``, ``tests/helpers``, ``tests/sfpi`` or ``tools``: a
+    build that still reaches for one of them under ``LLK_HOME`` fails. It sits
+    as deep under ``root`` as tt-llk does in tt-metal, beside links to its
+    neighbours there, because the compile reaches tt-metal headers by relative
+    path.
     """
     checkout = FIXTURE_DIR.parents[1]
     llk_home = root / "tt_metal" / "tt-llk"
     (llk_home / "tests").mkdir(parents=True)
     links = {
         llk_home: (checkout, ("tests", "tools")),
-        llk_home / "tests": (checkout / "tests", ("python_tests", "helpers")),
+        llk_home / "tests": (checkout / "tests", ("python_tests", "helpers", "sfpi")),
         llk_home.parent: (checkout.parent, (checkout.name,)),
         root: (checkout.parents[1], (checkout.parent.name,)),
     }
@@ -192,10 +200,13 @@ def _run_fixture(
     report: Path,
     harness_site: Path | None = None,
     llk_home: Path | None = None,
+    sfpi_root: Path | None = None,
 ) -> subprocess.CompletedProcess:
     env = dict(os.environ)
     if llk_home is not None:
         env["LLK_HOME"] = str(llk_home)
+    if sfpi_root is not None:
+        env[toolchain.SFPI_ROOT_ENV] = str(sfpi_root)
     # Where the fixture takes the harness from: the checkout unless a test names an installed copy.
     env.pop("LLK_HARNESS_SITE", None)
     if harness_site is not None:

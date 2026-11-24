@@ -521,6 +521,13 @@ def pytest_configure(config):
     # Create directories from all processes - lock in create_directories handles race
     TestConfig.create_build_directories()
 
+    # The controller alone: one compiler run and one report per session, before xdist starts its workers.
+    if worker_id == "master" and not config.option.collectonly:
+        try:
+            TestConfig.check_toolchain()
+        except RuntimeError as error:
+            raise pytest.UsageError(str(error)) from error
+
     TestConfig.TEST_TARGET.update_from_pytest_config(config)
 
     global _RECORD_TEST_ORDER, _UNIFIED_ORDER_FILE

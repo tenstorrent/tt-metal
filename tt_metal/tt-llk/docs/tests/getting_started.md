@@ -448,7 +448,17 @@ void run_kernel(RUNTIME_PARAMETERS params){
 1. `cd` yourself to `./tt-llk/tests`
 2. run `./setup_external_testing_env.sh`
 
-This will install all the necessary headers for your platform alongside latest [`SFPI`](https://github.com/tenstorrent/sfpi), version.
+This will install all the necessary headers for your platform alongside the [`SFPI`](https://github.com/tenstorrent/sfpi) release this tree pins.
+
+### The SFPI toolchain
+
+SFPI is the compiler and the SFPU headers every test variant is built with. It is installed apart from the harness, because it is released far more often than the harness changes: the harness neither carries nor pins it.
+
+- `tests/install_sfpi.sh [--dest DIR]` installs the release this tree pins (`tests/sfpi-version`, which is tt-metal's `sfpi-version`). `setup_testing_env.sh` sets up pre-commit and then runs it. The default destination is `tests/sfpi`.
+- The harness takes the toolchain from `$LLK_SFPI_ROOT` when that is set, and from nowhere else then. Otherwise it looks in `$LLK_HOME/tests/sfpi` and then in `/opt/tenstorrent/sfpi`, where the SFPI deb and rpm packages install. The root is the directory that holds `compiler/` and `include/`.
+- It reads the release from the compiler (`riscv-tt-elf-g++ --version`), logs it when a session starts, and refuses one older than `MIN_SFPI_VERSION` in `helpers/toolchain.py`. There is no upper limit.
+- A release other than the one `$LLK_HOME/tests/sfpi-version` pins is a warning, and an error with `LLK_SFPI_STRICT=1`. A `--compile-consumer` run reports the same way when the ELFs it is about to run were built with another release.
+- SFPI is built for Linux only: x86_64 (Debian and Fedora families) and aarch64 (Debian family).
 
 ## Invoking pytest
 `cd` yourself to one of the paths:
@@ -586,7 +596,7 @@ An external pytest suite should:
 
 3. Point `TestConfig` at an out-of-tree C++ driver with an **absolute** `test_name`. Relative names still mean `tests/<name>` inside tt-llk. Absolute paths are quote-included; artefacts are stored under `/tmp/tt-llk-build/sources/<basename>/` so the harness never `mkdir`s through the `.cpp` file.
 
-The C++ driver must follow the usual `LLK_TRISC_UNPACK` / `MATH` / `PACK` + `run_kernel()` contract and call the underscored LLK APIs. Reuse the existing venv/SFPI under `tests/.venv` — do not invent a second toolchain.
+The C++ driver must follow the usual `LLK_TRISC_UNPACK` / `MATH` / `PACK` + `run_kernel()` contract and call the underscored LLK APIs. Reuse the existing venv (`tests/.venv`) and build with the SFPI release the LLK tree pins (see [The SFPI toolchain](#the-sfpi-toolchain)); do not introduce a second compiler.
 
 In-tree tests are unchanged: `conftest.py` still re-exports the arch skip markers (`from conftest import skip_for_wormhole`).
 
@@ -627,10 +637,10 @@ The steps below are the whole setup on a machine that has no tt-metal checkout. 
    tt_llk_harness.require_version(1, 1)
    ```
 
-4. Run the suite with `LLK_HOME` set, as described [below](#what-the-wheel-holds):
+4. Run the suite with `LLK_HOME` set, as described [below](#what-the-wheel-holds), and the separately installed toolchain named by `LLK_SFPI_ROOT` (see [The SFPI toolchain](#the-sfpi-toolchain); it can be left out when the toolchain is at `$LLK_HOME/tests/sfpi` or `/opt/tenstorrent/sfpi`):
    ```bash
-   LLK_HOME=<tree with the LLKs and tests/sfpi> CHIP_ARCH=wormhole pytest --compile-producer -n 8 .
-   LLK_HOME=<tree with the LLKs and tests/sfpi> pytest --compile-consumer .
+   LLK_HOME=<tree with the LLKs> LLK_SFPI_ROOT=<SFPI root> CHIP_ARCH=wormhole pytest --compile-producer -n 8 .
+   LLK_HOME=<tree with the LLKs> LLK_SFPI_ROOT=<SFPI root> pytest --compile-consumer .
    ```
 
 To build the wheel from a checkout instead, run `tests/harness_wheel/make_wheel.py --out-dir dist` in tt-llk (it needs only git and the Python standard library); `tests/requirements.txt` is the file to install before it.
@@ -650,9 +660,10 @@ The version is `<API major>.<API minor>.<commit time>+g<commit>`: the first two 
 
 It holds no LLK, kernel, test driver or toolchain. With an installed harness, step 1 above loses its `sys.path` line and the suite supplies those:
 
-- `LLK_HOME` must be set: there is no checkout to infer it from. The harness expects `$LLK_HOME/tests/sfpi` (the toolchain) and the LLK trees; a suite that keeps these elsewhere puts a directory of links together and points `LLK_HOME` at it.
+- `LLK_HOME` must be set: there is no checkout to infer it from. The harness expects the LLK trees there; a suite that keeps these elsewhere puts a directory of links together and points `LLK_HOME` at it.
+- The toolchain is installed separately, and the wheel does not say which release: that is the pin of the LLK tree (`sfpi-version` in tt-metal). Install that release and set `LLK_SFPI_ROOT` to it, unless it is at `$LLK_HOME/tests/sfpi` or `/opt/tenstorrent/sfpi` already; see [The SFPI toolchain](#the-sfpi-toolchain).
 - The harness builds every variant with its own helper tree (`trisc.cpp`, the linker scripts, `counters.h`, ...), not `$LLK_HOME/tests/helpers`, so the firmware and the Python that parses and generates against it are always one commit. A suite replaces single files with `TestConfig.add_helpers_tree`, as in step 2: a header under `include/`, a source under `src/`, a linker script under `ld/` (its own memory map, for instance). The perf counter headers come from `$LLK_HOME/tools/include` when it has them, for the firmware and for `tt_llk_perf` alike, and from the wheel otherwise.
 - `helpers` is a top-level package of the wheel. In site-packages it sits behind the suite's rootdir on `sys.path`, so the suite must not have a `helpers` package or `helpers.py` of its own there: `import tt_llk_harness` fails with a message naming the shadowing one (a `helpers/` directory without `__init__.py`, like a helpers tree, is fine).
 - Register the suite's LLK headers, helpers tree and drivers as in steps 2 and 3.
 
-`tests/hardware_free/harness/test_out_of_tree_contract.py` builds the wheel, installs it with pip and runs the `tests/out_of_tree/` fixture on the installed copy in the PR pipeline, with an `LLK_HOME` of links that has no `tests/python_tests`, `tests/helpers` or `tools`. A harness module that only works from a checkout (a path derived from `__file__`, a data file the wheel does not list) fails there. A module that reads a tt-llk file outside `helpers` goes through `helpers.harness_files.harness_files_root()` and lists the file in `LLK_HOME_FILES` of `make_wheel.py`.
+`tests/hardware_free/harness/test_out_of_tree_contract.py` builds the wheel, installs it with pip and runs the `tests/out_of_tree/` fixture on the installed copy in the PR pipeline, with an `LLK_HOME` of links that has no `tests/python_tests`, `tests/helpers`, `tests/sfpi` or `tools`, and the toolchain named by `LLK_SFPI_ROOT`. A harness module that only works from a checkout (a path derived from `__file__`, a data file the wheel does not list) fails there. A module that reads a tt-llk file outside `helpers` goes through `helpers.harness_files.harness_files_root()` and lists the file in `LLK_HOME_FILES` of `make_wheel.py`.

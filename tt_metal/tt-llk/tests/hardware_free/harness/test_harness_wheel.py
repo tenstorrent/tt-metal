@@ -68,6 +68,22 @@ def test_wheel_installs_no_package_another_wheel_owns(names):
     }
 
 
+def test_wheel_holds_no_toolchain_and_nothing_that_pins_one(names):
+    """SFPI is released far more often than the harness changes and is installed on its own.
+
+    A wheel carrying the toolchain, its pin or its installer would be out of
+    date with every SFPI release; the pin belongs to the LLK tree (``LLK_HOME``).
+    """
+    carried = sorted(
+        name
+        for name in names
+        if "sfpi" in PurePosixPath(name).parts
+        or PurePosixPath(name).name
+        in ("sfpi-version", "sfpi-info.sh", "sfpi.version", "install_sfpi.sh")
+    )
+    assert not carried, carried
+
+
 def test_wheel_holds_the_tt_llk_files_the_harness_reads(names):
     prefix = build_wheel.LLK_HOME_PREFIX
     for expected in (

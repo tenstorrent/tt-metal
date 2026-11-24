@@ -24,7 +24,8 @@ packaged so that suite installs it instead of putting a tt-llk checkout on
 
 It holds no LLK, kernel, test driver or toolchain: the suite that installs it
 supplies those through ``LLK_HOME`` and ``TestConfig.add_include_dirs`` /
-``add_helpers_tree``.
+``add_helpers_tree``. SFPI in particular is installed on its own and named with
+``LLK_SFPI_ROOT`` (``helpers/toolchain.py``); the wheel carries no pin of it.
 
 The version is ``<API major>.<API minor>.<commit time>+g<commit>``, the API
 being ``tt_llk_harness.HARNESS_API_VERSION`` and the time ``YYYYMMDDHHMM`` in
@@ -95,6 +96,7 @@ RUNTIME_REQUIREMENTS = (
     "pandas",
     "pyarrow",
     "pytest",
+    "pytest-xdist",  # the plugin's fixtures take worker_id
     "pyyaml",
     "torch",
     "tt-exalens",
