@@ -30,18 +30,7 @@ inline void calculate_binary_max_min(const uint dst_index_in0, const uint dst_in
         TT_SFPSTORE(IS_MAX_OP ? p_sfpu::LREG1 : p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_2, offset2);
     }
 #else
-    // This uses SFPLOADMACRO to achieve a throughput of 3 cycles per input row.
-    //
     // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
-    //
-    // t | Load | Simple              | MAD | Round     | Store   |
-    // - | ---- | ------------------- | --- | --------- | ------- |
-    // 0 | [a]  |                     |     |           |         |
-    // 1 |  b   |                     |     |           |         |
-    // 2 | [c]  | swap_minmax([a], b) |     |           |         |
-    // 0 | ...  |                     |     |           |         |
-    // 1 | ...  |                     |     | L16 = [a] |         |
-    // 2 | ...  |                     |     |           | [c] L16 |
 
     constexpr int b = p_sfpu::LREG2;
     constexpr int c = p_sfpu::LREG3;
@@ -69,6 +58,17 @@ inline void calculate_binary_max_min(const uint dst_index_in0, const uint dst_in
             TT_SFPLOAD(b + k, InstrModLoadStore::DEFAULT, ADDR_MOD_2, offset1);
         }
     } else {
+        // Out of place: 3 cycles per input row.
+        //
+        // t | Load | Simple              | MAD | Round     | Store   |
+        // - | ---- | ------------------- | --- | --------- | ------- |
+        // 0 | [a]  |                     |     |           |         |
+        // 1 |  b   |                     |     |           |         |
+        // 2 | [c]  | swap_minmax([a], b) |     |           |         |
+        // 0 | ...  |                     |     |           |         |
+        // 1 | ...  |                     |     | L16 = [a] |         |
+        // 2 | ...  |                     |     |           | [c] L16 |
+        //
         // Fully unrolled: a partial unroll rebuilds the per-row instruction words on the RISC.
 #pragma GCC unroll 32
         for (int i = 0; i < ITERATIONS; ++i) {
@@ -168,6 +168,8 @@ inline void calculate_binary_max_min_int32(
 #endif
 }
 
+// Configures InstructionTemplate[0..2], LoadMacro sequences 0-3 and the Misc word; the in-place
+// path also uses LREG0-4. Re-run after any other op that reconfigures these.
 template <bool IS_MAX_OP = true>
 inline void binary_max_min_init() {
 #ifndef DISABLE_SFPLOADMACRO

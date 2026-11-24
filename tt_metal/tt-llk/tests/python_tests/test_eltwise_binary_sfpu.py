@@ -3048,12 +3048,12 @@ def _max_min_vector_mode_formats(mathop):
     formats=_max_min_vector_mode_formats,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     vector_mode=[VectorMode.C, VectorMode.R, VectorMode.RC],
-    out_tile=[0, 2],
+    out_tile=[0, 1, 2],
 )
 def test_eltwise_binary_sfpu_max_min_vector_mode(
     mathop, formats, dest_acc, vector_mode, out_tile
 ):
-    """Binary max/min on the faces of *vector_mode*, in place (out_tile 0) or into a third tile.
+    """Binary max/min on the faces of *vector_mode*, in place (out_tile 0 or 1) or into a third tile.
 
     Dest holds in0, in1 and a third tile; bit-exact on all three, so a write outside the
     selected faces or tile is caught.
