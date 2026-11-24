@@ -13,6 +13,13 @@ in position order) and, for the last chunk, ``logits`` (fp32, its last LOGITS_RO
 DIR/kv_cache/layer_<i>.safetensors (``kv_latent_cache_layer_<i>``, ``k_rope_cache_layer_<i>``,
 ``index_key_cache_layer_<i>``: each layer's state over the whole sequence, ``--state-dtype``; [seq, 0] where it owns none). Holds
 the dense weights in bf16 (about 44 GB for every layer) and streams the routed experts from the checkpoint.
+
+``--experts-dtype bfloat4_b`` (or bfloat8_b) replaces each routed expert matrix by its round trip through that device
+format in the orientation TtExperts tiles it ([in, out], tt/mistral_large_4/experts.py), rounded per expert as a chunk
+uses it; ``--dense-dtype device`` rounds every dense weight (and the LM head) to the dtype and orientation its device
+module stores it in under the current MISTRAL_LARGE_4_* settings. Both default to the unrounded bf16 weights.
+``--round-impl torch`` uses the vectorized emulation, checked bit-exact against ttnn's host round trip on the first
+tensor of each layer (reference/mistral_large_4/device_rounding.py).
 """
 
 from __future__ import annotations
@@ -67,6 +74,19 @@ def main(argv=None):
     p.add_argument("--hf-dir", default=CHECKPOINT_DIR)
     p.add_argument("--state", action="store_true", help="also write the serving golden (kv_cache/, metadata.json)")
     p.add_argument("--state-dtype", default="float32", choices=sorted(STATE_DTYPES))
+    p.add_argument(
+        "--experts-dtype",
+        default="bfloat16",
+        choices=("bfloat16", "bfloat8_b", "bfloat4_b"),
+        help="routed expert weights as the device stores them (bfloat16: unrounded)",
+    )
+    p.add_argument(
+        "--dense-dtype",
+        default="bfloat16",
+        choices=("bfloat16", "device"),
+        help="device: every dense weight rounded to its device module's dtype (settings.py); bfloat16: unrounded",
+    )
+    p.add_argument("--round-impl", default="ttnn", choices=("ttnn", "torch"), help="BFP round trip implementation")
     a = p.parse_args(argv)
     assert a.seq % a.chunk == 0, (a.seq, a.chunk)
     layers = parse_layers(a.layers)
@@ -80,6 +100,22 @@ def main(argv=None):
 
     t0 = time.time()
     ref = Reference(Spec(a.hf_dir, a.seq), layers=layers, dtype=torch.float32)
+    rounding, rounder = {}, None
+    if a.experts_dtype != "bfloat16" or a.dense_dtype != "bfloat16":
+        from models.demos.deepseek_v3_d_p.reference.mistral_large_4.device_rounding import (
+            RoundedExperts,
+            Rounder,
+            round_dense,
+        )
+
+        rounder = Rounder(a.round_impl)
+        if a.dense_dtype == "device":
+            from models.demos.deepseek_v3_d_p.tt.mistral_large_4.settings import settings
+
+            rounding["dense"] = round_dense(ref, rounder, settings.get)
+            print(f"dense weights rounded: {rounding['dense']} {rounder.stats()}", flush=True)
+        if a.experts_dtype != "bfloat16":
+            ref.experts = RoundedExperts(ref.experts, a.experts_dtype, rounder)
     load_s = time.time() - t0
     state = ref.new_state(a.seq)
     chunks = a.seq // a.chunk
@@ -104,7 +140,7 @@ def main(argv=None):
             got["logits"] = logits.float().contiguous()
         save_file(got, str(out / f"chunk_{c:02d}.safetensors"))
         times.append(round(time.time() - t1, 1))
-        print(f"chunk {c}: {times[-1]} s", flush=True)
+        print(f"chunk {c}: {times[-1]} s" + (f" rounding {rounder.stats()}" if rounder else ""), flush=True)
     if a.state:
         (out / "kv_cache").mkdir(exist_ok=True)
         for i in layers:
@@ -124,6 +160,9 @@ def main(argv=None):
         "dump": dump,
         "logits_rows": LOGITS_ROWS,
         "reference": "fp32 compute, bf16 weights (reference/mistral_large_4/model.py)",
+        "experts_dtype": a.experts_dtype,
+        "dense_dtype": a.dense_dtype,
+        "rounding": {**rounding, **rounder.stats()} if rounder else None,
         "load_seconds": round(load_s, 1),
         "chunk_seconds": times,
     }
