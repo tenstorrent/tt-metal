@@ -155,9 +155,10 @@ def hf_validation_loss(config) -> float:
 
 def test_the_untrained_adapters_validate_as_the_base_model(recipe):
     """lora_B starts at zero, so the model the step-0 validation runs is the base model, and its val/loss is the base
-    model's loss as HF computes it. An end-to-end check of the loss: the labels, the shift, the mask and the
-    cross-entropy, and of the model's forward, within bf16."""
+    model's loss as HF computes it: a check of the shift, the mask, the cross-entropy and the model's forward. Both
+    sides read their labels from the provider, so test_sft_batching.py checks the labels."""
     val_loss = logged_values(recipe.logged, "val/loss")[0]
+    # The device runs bf16 and HF fp32; the two losses differ by about 0.04%.
     assert val_loss == pytest.approx(hf_validation_loss(recipe.config), rel=0.01)
 
 
