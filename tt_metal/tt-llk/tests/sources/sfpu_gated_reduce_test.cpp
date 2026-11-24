@@ -28,8 +28,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT    = params.TILE_CNT;
+    const Operand& buffer_A         = params.buffer_A;
 #endif
-    const std::uint32_t src_handshake_iters = LOOP_FACTOR * _perf_src_handshake_iters_(false /* tilize_en */, params.TILE_CNT, TILE_NUM_FACES);
+    const std::uint32_t src_handshake_iters = LOOP_FACTOR * _perf_src_handshake_iters_(false /* tilize_en */, TILE_CNT, TILE_NUM_FACES);
     {
         START_PERF_MEASURE("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -46,7 +48,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE && unpack_to_dest)
         {
             // Stand in for direct unpack: service math's mailbox/semaphore handshake without moving data.
-            for (std::uint32_t tile = 0; tile < LOOP_FACTOR * params.TILE_CNT; ++tile)
+            for (std::uint32_t tile = 0; tile < LOOP_FACTOR * TILE_CNT; ++tile)
             {
                 (void)mailbox_read(ThreadId::MathThreadId);
                 wait_for_dest_available();
@@ -61,10 +63,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
+                for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
                 {
                     _llk_unpack_A_<BroadcastType::NONE, false /*acc_to_dest*/, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-                        L1_ADDRESS(params.buffer_A[tile]), formats.unpack_A_src, formats.unpack_A_dst);
+                        L1_ADDRESS(buffer_A[tile]), formats.unpack_A_src, formats.unpack_A_dst);
                 }
             }
         }
@@ -91,9 +93,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t LOOP_FACTOR          = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT             = params.TILE_CNT;
+    const std::uint32_t GATED_SCALE_BITS     = params.GATED_SCALE_BITS;
+    const std::uint32_t GATED_OUT_SCALE_BITS = params.GATED_OUT_SCALE_BITS;
+    const std::uint32_t GATED_LIMIT_BITS     = params.GATED_LIMIT_BITS;
+    const std::uint32_t GATED_ALPHA_BITS     = params.GATED_ALPHA_BITS;
 #endif
-    const std::uint32_t src_handshake_iters = LOOP_FACTOR * _perf_src_handshake_iters_(false /* tilize_en */, params.TILE_CNT, TILE_NUM_FACES);
+    const std::uint32_t src_handshake_iters = LOOP_FACTOR * _perf_src_handshake_iters_(false /* tilize_en */, TILE_CNT, TILE_NUM_FACES);
     {
         START_PERF_MEASURE("INIT")
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
@@ -124,7 +131,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
                 {
-                    for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
+                    for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
                     {
                         _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
                             tile % block_tiles, formats.math, formats.math);
@@ -140,7 +147,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                for (std::uint32_t base = 0; base < params.TILE_CNT; base += block_tiles)
+                for (std::uint32_t base = 0; base < TILE_CNT; base += block_tiles)
                 {
                     if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                     {
@@ -161,13 +168,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     sfpu::sigmoid_init<false /*APPROXIMATION_MODE*/>();
                     // Swap the scales in the last block to exercise their independent runtime arguments.
                     const auto block     = base / block_tiles;
-                    const auto scale     = block == 2 ? params.GATED_OUT_SCALE_BITS : params.GATED_SCALE_BITS;
-                    const auto out_scale = block == 2 ? params.GATED_SCALE_BITS : params.GATED_OUT_SCALE_BITS;
+                    const auto scale     = block == 2 ? GATED_OUT_SCALE_BITS : GATED_SCALE_BITS;
+                    const auto out_scale = block == 2 ? GATED_SCALE_BITS : GATED_OUT_SCALE_BITS;
                     // First block has two experts; next has guards on both sides; last is a partial batch.
                     for (std::uint32_t gate = block; gate + 1 < block_tiles; gate += 2)
                     {
-                        _llk_math_eltwise_unary_sfpu_params_(
-                            gated_reduce, gate, vector_mode, scale, out_scale, params.GATED_LIMIT_BITS, params.GATED_ALPHA_BITS);
+                        _llk_math_eltwise_unary_sfpu_params_(gated_reduce, gate, vector_mode, scale, out_scale, GATED_LIMIT_BITS, GATED_ALPHA_BITS);
                     }
                     if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                     {
@@ -192,6 +198,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT    = params.TILE_CNT;
+    const Operand& buffer_Res       = params.buffer_Res;
 #endif
     {
         START_PERF_MEASURE("INIT")
@@ -210,7 +218,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             constexpr bool sync_with_math = PERF_RUN_TYPE == PerfRunType::L1_TO_L1;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                for (std::uint32_t base = 0; base < params.TILE_CNT; base += block_tiles)
+                for (std::uint32_t base = 0; base < TILE_CNT; base += block_tiles)
                 {
                     if constexpr (sync_with_math)
                     {
@@ -218,7 +226,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
                     for (std::uint32_t tile = 0; tile < block_tiles; ++tile)
                     {
-                        _llk_pack_<dest_sync, is_fp32_dest_acc_en, PackMode::Default>(tile, L1_ADDRESS(params.buffer_Res[base + tile]));
+                        _llk_pack_<dest_sync, is_fp32_dest_acc_en, PackMode::Default>(tile, L1_ADDRESS(buffer_Res[base + tile]));
                     }
                     if constexpr (sync_with_math)
                     {
