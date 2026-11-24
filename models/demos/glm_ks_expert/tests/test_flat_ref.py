@@ -36,11 +36,15 @@ def _inputs(device, md, gids, M):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
-@pytest.mark.parametrize("M", [320, 384, 512])
-def test_flat_ref(device, M):
+@pytest.mark.parametrize(
+    "model, epc, M",
+    [("glm53", 16, 320), ("glm53", 16, 384), ("glm53", 16, 512), ("k3", 28, 91), ("k3", 28, 160), ("k3", 28, 320),
+     ("k3", 56, 91), ("k3", 56, 160)],
+    ids=lambda v: str(v),
+)  # fmt: skip
+def test_flat_ref(device, model, epc, M):
     chk._skip_unless_supported(device)
-    md = chk.cases.MODELS["glm53"]
-    epc = 16
+    md = chk.cases.MODELS[model]
     gids = [(md["E"] // epc) * e + 1 for e in range(epc)]
     op = W.FlatRoutedExpert(
         device, "uninitialized", m=max(CAP, epc * M), H=md["H"], I=md["I"], gids=[gids], n_global=md["E"],
@@ -51,7 +55,7 @@ def test_flat_ref(device, M):
     t = op_device_times(device, lambda: [ttnn.deallocate(op(*args)) for _ in range(PERF_RUNS)], chk.FLAT_OPS)
     us = statistics.median(t["flat_routed_expert"][-PERF_RUNS:]) / 1e3
     sb = epc * -(-M // 128)
-    logger.info(f"FLATREF glm53 e{epc} M{M}: {us:.1f} us, {sb} sub-blocks a core ({us / sb:.2f} us a sub-block)")
+    logger.info(f"FLATREF {model} e{epc} M{M}: {us:.1f} us, {sb} sub-blocks a core ({us / sb:.2f} us a sub-block)")
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)

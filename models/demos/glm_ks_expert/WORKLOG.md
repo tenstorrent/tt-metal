@@ -152,3 +152,28 @@ Budget of the 1358 us (874 us = the matmuls at LoFi peak): matmul efficiency at 
 - Other one-core matmul facts (test_kb_mm): the activation on the PACK thread costs ~2.3 points (FPU busy 88.3 ->
   90.1% without it); matmul_block_k (all K steps one call) changes nothing; the row MOP with 1-row passes 17.51 cycles
   (91.4%); unpacker A busy 98.5% at 2 x 2 (it delivers 2 weight + 2 x tiles every 4 tile products).
+
+## Gate/up kernel structure (the unpack thread's own work a block)
+
+Kernel alone (test_flat_compute_alone.py, slope over 8 / 16 experts, us a sub-block; bench 20.29): after the rt_dim
+fix 22.13 (22.90 average). Counters a sub-block vs the bench: identical FPU / MATH / unpacker-busy cycles; the extra
+~2.1 K cycles are all on the unpack thread - fewer cycles with an unpacker instruction queued (7.59 vs 8.90 K) and
+waits for the unpacker to go idle (0.81 vs 0 K: the per-block x pops).
+
+| change (cumulative) | alone us / sub-block |
+|---|---|
+| x waited for only in the first pass, ring slot stepped (no modulo), a weight block waited for once | 22.13 |
+| + x waits / pops in groups of 4 / 8 / 2 / 12 / 24 | 21.81 / 21.69 / 21.97 / 21.85 / 22.17 |
+| + the load's weight offsets once a pass (a load is region-aligned and freed whole) | 21.62 (4) / 21.51 (8) |
+| + matmul_block_k for a block's 8 K steps | 21.51 (no change) |
+
+In the expert (GLM e16, us at M 320 / 384 / 512; before 1141 / 1288 / 1661): groups of 4 1141 / 1287 / 1633, of 8
+1223 / 1418 / 1812; waits grouped 4 / 8 with per-block frees 1164 / 1307 / 1673 and 1205 / 1370 / 1759; waits 4 +
+frees 2 1146 / 1291 / 1643; **block by block 1133 / 1275 / 1632**. Grouping costs the x chain its slack (the ring holds
+exactly one sub-block). Kept: block-by-block x waits (first pass only) and frees, stepped slot offsets, weight offsets
+once a pass, each weight block waited for once. Flat checks 67 passed; LoudBox perf vs the rt_dim fix: GLM-5.3 8x4
+10240 uniform -1.7%, 4x4 7680 -0.8%, 5120 hot / zipf -0.6%, the rest within +-0.4%; GLM e16 1136 / 1276 / 1634 us
+(-0.4 / -0.9 / -1.6%); K3 e28 / e56 unchanged.
+
+The kernel alone gains 3-6% but the expert only 0.4-1.7%: at GLM's loads the expert is paced by x delivery along the
+chain, not by the gate/up kernel.

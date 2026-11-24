@@ -30,10 +30,11 @@ NAMED = dict(
 )  # fmt: skip
 
 
-def test_flat_compute_alone(device):
+@pytest.mark.parametrize("ne", [16, 8])
+def test_flat_compute_alone(device, ne):
     core = (0, 0)
     g = crs([core])
-    ne, sbe, nb, mt = 16, 3, 24, 4
+    sbe, nb, mt = 3, 24, 4
     named = list(NAMED.items())
     rt_f, rt_d = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
     rt_f[0][0] = [ne, sbe, nb, mt * 8, 24, 16, mt]
@@ -45,6 +46,7 @@ def test_flat_compute_alone(device):
         ttnn.KernelDescriptor(kernel_source=kpath("kf_drain.cpp"), core_ranges=g, runtime_args=rt_d,
                               config=dm(ttnn.DataMovementProcessor.RISCV_1, ttnn.NOC.NOC_0)),
         ttnn.KernelDescriptor(kernel_source=FLAT_K, core_ranges=g, named_compile_time_args=named,
+                              defines=[(k[3:], v) for k, v in __import__("os").environ.items() if k.startswith("ZZD")],
                               config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.LoFi,
                                                                   fp32_dest_acc_en=True, dst_full_sync_en=False)),
     ]  # fmt: skip
