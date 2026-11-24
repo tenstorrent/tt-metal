@@ -9,17 +9,23 @@ takes the media kind from the header.
 
 import struct
 from dataclasses import dataclass
+from enum import Enum
 
 import numpy as np
 
-KINDS = ("image",)
+
+class MediaKind(str, Enum):
+    IMAGE = "image"
+
+
+KINDS = tuple(MediaKind)  # the header stores the kind's index here
 _HEADER = struct.Struct("<B15x")  # kind, padded so the rows stay 16-byte aligned
 _BF16_BYTES = 2
 
 
 @dataclass(frozen=True)
 class Header:
-    kind: str
+    kind: MediaKind
 
     def write(self, buf: memoryview) -> None:
         _HEADER.pack_into(buf, 0, KINDS.index(self.kind))

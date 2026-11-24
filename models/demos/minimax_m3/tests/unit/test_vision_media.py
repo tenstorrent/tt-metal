@@ -91,7 +91,7 @@ def test_stub_encode_writes_a_value_prefill_reads(expect_error):
     media.encode([item], bufs[:1])
     media.encode([item], bufs[1:])
 
-    assert media_format.Header.read(bufs[0]) == media_format.Header("image")
+    assert media_format.Header.read(bufs[0]) == media_format.Header(media_format.MediaKind.IMAGE)
     rows = media_format.embeddings(bufs[0], 64)
     assert rows.shape == (item.n_tokens, 64) and rows.any()
     assert bytes(bufs[0]) == bytes(bufs[1])

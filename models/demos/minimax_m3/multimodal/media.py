@@ -105,7 +105,7 @@ class MiniMaxM3Media:
         # TODO: replace the stub embeddings with the vision encoder.
         for item, buf in zip(items, out):
             buf = buf.cast("B")  # the header and the rows are at byte offsets, whatever the slot's format
-            media_format.Header("image").write(buf)
+            media_format.Header(media_format.MediaKind.IMAGE).write(buf)
             digest = hashlib.sha256(np.asarray(item.pixels.shape).tobytes() + item.pixels.tobytes()).digest()
             seed = int.from_bytes(digest[:8], "little")
             rows = torch.randn(item.n_tokens, self.hidden, generator=torch.Generator().manual_seed(seed)) * 0.02
