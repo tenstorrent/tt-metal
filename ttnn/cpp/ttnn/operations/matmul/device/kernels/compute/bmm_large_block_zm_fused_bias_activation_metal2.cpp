@@ -16,10 +16,13 @@
 #ifdef FUSE_BIAS
 #include "api/compute/bcast.h"
 #endif
+#ifdef FUSE_BIAS_SFPU
+#include "api/compute/experimental/sfpu_binary_bcast_pack.h"
+#endif
 
 #include "api/compute/eltwise_binary.h"
 #include "experimental/kernel_args.h"
-#ifdef SFPU_ACTIVATION
+#if defined(SFPU_ACTIVATION) || defined(FUSE_BIAS_SFPU)
 #include "bmm_fused_activation.hpp"
 #endif
 
@@ -109,12 +112,12 @@ FORCE_INLINE void reload_from_dfb_to_dst(
     const uint32_t mm_partials_dfb_id = mm_partials_dfb.get_id();
     const uint32_t mm_partials_reload_dfb_id = mm_partials_reload_dfb.get_id();
     // mm_partials_reload_dfb_id is the buffer view the reload copies through. It equals
-    // mm_partials_dfb_id unless the partials buffer is also read as an FPU operand elsewhere (the
-    // fused bias add reads it via SrcA), in which case UnpackToDestFp32 cannot be set on it
-    // directly; instead a second buffer aliases the same SRAM with UnpackToDestFp32 set, and the
-    // reload copies through that alias while the FPU consumer keeps the original view. The alias
-    // has its own read pointer, so align it with the partials buffer's current read position
-    // before copying.
+    // mm_partials_dfb_id unless the reload is marked UnpackToDestFp32 and the partials buffer is also
+    // read as an FPU operand elsewhere (the fused bias add reads it via SrcA). In that case
+    // UnpackToDestFp32 cannot be set on the partials buffer directly; instead a second buffer aliases
+    // the same SRAM with UnpackToDestFp32 set, and the reload copies through that alias while the FPU
+    // consumer keeps the original view. The alias has its own read pointer, so align it with the
+    // partials buffer's current read position before copying.
     // Reconfigure input
     reconfig_data_format_srca(in1_dfb_id, mm_partials_reload_dfb_id);
     copy_init(mm_partials_reload_dfb_id);
@@ -227,8 +230,8 @@ void kernel_main() {
     constexpr uint32_t out_dfb_id = dfb::out;
     constexpr uint32_t mm_partials_dfb_id = dfb::intermed0;
     // Buffer view the cross-block reload copies through: the UnpackToDestFp32-marked alias of the
-    // partials buffer when it is also read as an FPU operand (fused bias), otherwise the partials
-    // buffer itself.
+    // partials buffer when the factory defines MM_PARTIALS_RELOAD_ALIAS, otherwise the partials buffer
+    // itself.
 #ifdef MM_PARTIALS_RELOAD_ALIAS
     // The partials buffer is also read as an FPU operand (fused bias) and so cannot carry
     // UnpackToDestFp32; the reload instead copies through this alias view of the same SRAM, which
@@ -262,6 +265,15 @@ void kernel_main() {
 #endif
     DataflowBuffer out_dfb(out_dfb_id);
     auto& untilize_mode_out_dfb = untilize_out ? mm_partials_dfb : out_dfb;
+
+    // Quasar only: with get_batch_from_reader, the in0 kernel on this node sends one entry per batch
+    // through dfb::batch_valid, nonzero when the batch is valid; WH/BH use the BRISC mailbox. The buffer
+    // is bound only in that mode, so a define gates the token, for the same reason as IN0_TRANSPOSE_TILE
+    // above.
+#ifdef BATCH_VALID_DFB
+    static_assert(get_batch_from_reader, "BATCH_VALID_DFB requires get_batch_from_reader");
+    DataflowBuffer batch_valid_dfb(dfb::batch_valid);
+#endif
 
 #ifdef FUSE_BIAS
     constexpr uint32_t bias_dfb_id = dfb::bias;
@@ -324,16 +336,23 @@ void kernel_main() {
             // Check whether this batch is valid
 #ifdef ARCH_QUASAR
             // Quasar has no BRISC->compute mailbox (ckernel::ThreadId::BriscThreadId does not exist), so the
-            // reader-driven batch-skip (is_batch_valid) handoff is not wired here. Batch sparsity is therefore
-            // unsupported on Quasar until that DM->TRISC handoff exists: reject it at compile time so a Quasar
-            // build with get_batch_from_reader=true fails loudly instead of deadlocking compute on input tiles
-            // the reader never pushes (its own !ARCH_QUASAR guard skips them) or consuming stale DFB contents.
-            // Mirrors the experimental Quasar bmm kernel.
+            // reader-driven batch-skip (is_batch_valid) handoff goes through dfb::batch_valid instead.
+#ifdef BATCH_VALID_DFB
+            batch_valid_dfb.wait_front(1);
+            const bool is_batch_valid = batch_valid_dfb.read_tile_value<uint16_t>(0, 0) != 0;
+            // TEN-4746 (#48552): read_tile_value is a plain SRAM load, not an UNPACR, so this
+            // wait_front->pop_front pair is bare. dummy_unpack issues an UNPACR_NOP that reads nothing and
+            // orders the POP after the WAIT.
+            dummy_unpack(batch_valid_dfb.get_id());
+            batch_valid_dfb.pop_front(1);
+#else
+            // Without dfb::batch_valid, compute cannot learn which batches the in0 kernels skip.
             static_assert(
                 !get_batch_from_reader,
-                "get_batch_from_reader (batch sparsity) is unsupported on Quasar until the DM->TRISC "
-                "is_batch_valid mailbox handoff is implemented; do not enable it on Quasar.");
+                "get_batch_from_reader (batch sparsity) on Quasar requires the batch_valid dataflow buffer "
+                "(BATCH_VALID_DFB), which this factory does not bind.");
             const bool is_batch_valid = true;  // unreachable when the static_assert holds (flag is false)
+#endif
 #else
             bool is_batch_valid = false;
             UNPACK(is_batch_valid = static_cast<bool>(mailbox_read(ckernel::ThreadId::BriscThreadId));)
@@ -363,7 +382,7 @@ void kernel_main() {
                     // block-group's tail (last-block pack to mm_out, or the bias / untilize pack to out) left
                     // the pack BFD on a non-partials DFB; re-init pack for the partials DFB so this group's
                     // accumulation packs reference the correct BFD. Unconditional (covers non-bias, bias, and
-                    // untilize tails); a redundant re-init is tolerated by the BFD bump-and-wrap contract.
+                    // untilize tails); a redundant re-init is harmless (it re-programs the fixed Pack0 BFD).
                     // (reconfig_data_format.h ARCH_QUASAR note: call pack_init on pack-output switch.)
                     pack_init(mm_partials_dfb_id);
 #endif
@@ -601,17 +620,86 @@ void kernel_main() {
 #ifdef PACKER_L1_ACC
                 PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
-                reconfig_data_format(in1_dfb_id, mm_partials_dfb_id, in0_dfb_id, bias_dfb_id);
-                if constexpr (row_broadcast_bias) {
-                    add_bcast_rows_init(mm_partials_dfb_id, bias_dfb_id);
-                } else {
-                    add_init(mm_partials_dfb_id, bias_dfb_id);
-                }
                 // Reader only pushes bias once when num_blocks_w_dim == 1;
                 // the tiles stay in the buffer for reuse across bh/batch iterations.
                 // With BIAS_PER_GROUP (sparse matmul, per-group bias) every batch gets its own tiles.
                 if (bias_per_group || (b == 0 && bh == 0) || num_blocks_w_dim > 1) {
                     bias_dfb.wait_front(bias_ntiles);
+                }
+#ifdef FUSE_BIAS_SFPU
+                // FP32 bias on FP32 partials: an FPU add reads both through SrcA/SrcB as TF32, which drops the
+                // bias's low 13 mantissa bits, a per-column error that does not average out. Both buffers
+                // unpack to DEST unchanged instead, and the SFPU adds the bias's row 0 to every row in FP32.
+                // Each output tile takes two DEST tiles (its partials and its bias tile), so an acquire uses four:
+                // all of FP32 DEST in half sync, half of it in full sync.
+                static_assert(row_broadcast_bias, "FUSE_BIAS_SFPU takes a row-broadcast bias");
+                constexpr uint32_t sfpu_bias_tiles_per_acquire = 2;
+                reconfig_data_format_srca(in1_dfb_id, mm_partials_dfb_id);
+                // One copy init serves both buffers: the factory gives the bias the partials' format (FP32) and
+                // tile shape (32x32), and nothing below changes the unpack or math state.
+                copy_init(mm_partials_dfb_id);
+                for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
+                    uint32_t in1_index_subblock_offset = 0;
+                    for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
+                        const bool is_last_in1_subblock_padded =
+                            last_subblock_padded && (in1_subblock == in1_num_subblocks - 1);
+                        // Unlike the FPU path, the output is reserved before the partials are popped: the chunks
+                        // below unpack and pack one at a time. The two buffers keep separate counters, so neither
+                        // wait depends on the other; when they share L1, chunk i packs over partials that chunk i
+                        // has already unpacked to DEST.
+                        mm_partials_dfb.wait_front(out_subblock_num_tiles);
+                        untilize_mode_out_dfb.reserve_back(out_subblock_num_tiles);
+                        for (uint32_t first = 0; first < out_subblock_num_tiles; first += sfpu_bias_tiles_per_acquire) {
+                            const uint32_t count =
+                                std::min<uint32_t>(sfpu_bias_tiles_per_acquire, out_subblock_num_tiles - first);
+                            tile_regs_acquire();
+                            for (uint32_t t = 0; t < count; t++) {
+                                copy_tile(mm_partials_dfb_id, first + t, t);
+                            }
+                            for (uint32_t t = 0; t < count; t++) {
+                                const uint32_t k = (first + t) % out_subblock_w;
+                                // Padded output columns of the last in1 subblock read bias tile 0; the
+                                // writer drops them.
+                                const uint32_t bias_tile_idx =
+                                    (is_last_in1_subblock_padded && k >= last_subblock_w_valid)
+                                        ? 0u
+                                        : in1_index_subblock_offset + k;
+                                copy_tile(bias_dfb_id, bias_tile_idx, sfpu_bias_tiles_per_acquire + t);
+                            }
+                            tile_regs_commit();
+                            pack_sfpu_begin();
+                            sfpu_add_bcast_row_init_pack();
+                            for (uint32_t t = 0; t < count; t++) {
+                                sfpu_add_bcast_row_pack(t, sfpu_bias_tiles_per_acquire + t);
+                            }
+#ifdef SFPU_ACTIVATION
+                            ActivationInitHelper<activation_type, activation_param0, activation_param1>::init();
+                            for (uint32_t t = 0; t < count; t++) {
+                                ActivationApplyHelper<
+                                    activation_type,
+                                    activation_param0,
+                                    activation_param1,
+                                    activation_param2>::apply(t);
+                            }
+#endif
+                            pack_sfpu_end();
+                            for (uint32_t t = 0; t < count; t++) {
+                                pack_tile<true>(t, untilize_mode_out_dfb_id, first + t);
+                            }
+                            tile_regs_release();
+                        }
+                        mm_partials_dfb.pop_front(out_subblock_num_tiles);
+                        untilize_mode_out_dfb.push_back(out_subblock_num_tiles);
+
+                        in1_index_subblock_offset += out_subblock_w;
+                    }
+                }
+#else
+                reconfig_data_format(in1_dfb_id, mm_partials_dfb_id, in0_dfb_id, bias_dfb_id);
+                if constexpr (row_broadcast_bias) {
+                    add_bcast_rows_init(mm_partials_dfb_id, bias_dfb_id);
+                } else {
+                    add_init(mm_partials_dfb_id, bias_dfb_id);
                 }
 #ifdef ARCH_QUASAR
                 // Quasar (§7): the accumulation above left the pack BFD on mm_partials_dfb_id; the bias pack
@@ -667,24 +755,11 @@ void kernel_main() {
                         untilize_mode_out_dfb.reserve_back(out_subblock_num_tiles);
 
 #ifdef SFPU_ACTIVATION
-                        PACK(TTI_SEMWAIT(
-                            p_stall::STALL_TDMA | p_stall::STALL_CFG,
-                            semaphore::t6_sem(semaphore::MATH_PACK),
-                            p_stall::STALL_ON_ZERO));
-
-                        // Flip destination register offset for PACKER access
-                        PACK(TT_SETC16(
-                            DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
-
-                        for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                            ActivationApplyHelper<
-                                activation_type,
-                                activation_param0,
-                                activation_param1,
-                                activation_param2>::apply(i);
-                        }
-
-                        PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+                        apply_activation_from_pack<
+                            activation_type,
+                            activation_param0,
+                            activation_param1,
+                            activation_param2>(out_subblock_num_tiles);
 #else
                         tile_regs_wait();
 #endif
@@ -697,6 +772,7 @@ void kernel_main() {
                         in1_index_subblock_offset += out_subblock_w;
                     }
                 }
+#endif  // FUSE_BIAS_SFPU
                 if constexpr (bias_per_group || num_blocks_w_dim > 1) {
                     bias_dfb.pop_front(bias_ntiles);
                 }

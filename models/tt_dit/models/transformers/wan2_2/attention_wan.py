@@ -122,6 +122,7 @@ class WanAttention(Module):
             q_chunk_size=256,
             k_chunk_size=256,
             exp_approx_mode=False,  # NOTE: False is more correct
+            min_blocked_pack_tiles=2,
         )
 
         self.sdpa_worker_grid = (full_grid.x - 1, full_grid.y)  # Reserve last column for CCL
@@ -140,6 +141,7 @@ class WanAttention(Module):
             q_chunk_size=ring_sdpa_chunk_size[0],
             k_chunk_size=ring_sdpa_chunk_size[1],
             exp_approx_mode=False,  # NOTE: False is more correct
+            min_blocked_pack_tiles=2,
         )
 
         self.use_exp_ring_sdpa = (
@@ -152,6 +154,7 @@ class WanAttention(Module):
                 q_chunk_size=ring_sdpa_chunk_size[0],
                 k_chunk_size=ring_sdpa_chunk_size[1],
                 exp_approx_mode=False,
+                min_blocked_pack_tiles=2,
             )
 
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(

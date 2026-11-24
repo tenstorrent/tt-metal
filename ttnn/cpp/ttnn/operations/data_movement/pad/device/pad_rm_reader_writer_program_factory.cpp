@@ -5,19 +5,17 @@
 #include "pad_rm_reader_writer_program_factory.hpp"
 
 #include <algorithm>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 using namespace tt::constants;
 
 namespace ttnn::prim {
-using ttnn::operations::data_movement::float_to_uint16;
-using ttnn::operations::data_movement::pack_two_uint16_into_uint32;
+using ttnn::operations::data_movement::pack_scalar_into_uint32;
 
 namespace {
 
@@ -34,15 +32,15 @@ const TensorParamName RM_SC_PAD_VALUE{"pad_value_const"};
 // create_program_artifacts() can build it once on cache miss and hand its
 // MeshTensor to the framework as an op-owned tensor, deferring the device
 // deallocation until the cached Program is evicted (see #44565).
-Tensor build_pad_value_const_tensor_sc(const PadInputs& tensor_args, float pad_value) {
+Tensor build_pad_value_const_tensor_sc(const PadInputs& tensor_args, uint32_t packed_pad_value) {
     MeshDevice* device = tensor_args.input.device();
-    uint32_t pad_value_const_buffer_size = 32;  // noc transfers in chunks of 32
+    uint32_t pad_value_const_buffer_size = 16;  // noc transfers in chunks of 64 bytes
     auto pad_value_const_buffer =
-        tt::tt_metal::HostBuffer(std::vector<bfloat16>(pad_value_const_buffer_size, bfloat16(pad_value)));
+        tt::tt_metal::HostBuffer(std::vector<uint32_t>(pad_value_const_buffer_size, packed_pad_value));
     return Tensor(
                std::move(pad_value_const_buffer),
                ttnn::Shape({1, 1, 1, pad_value_const_buffer_size}),
-               DataType::BFLOAT16,
+               DataType::UINT32,
                Layout::ROW_MAJOR)
         .to_device(device, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
 }
@@ -72,7 +70,8 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterProgramFactory::create
     // every dispatch that hits this cached Program.
     std::vector<tt::tt_metal::MeshTensor> op_owned;
     op_owned.reserve(1);
-    Tensor pad_value_const_tensor = build_pad_value_const_tensor_sc(tensor_args, pad_value);
+    const uint32_t packed_pad_value = pack_scalar_into_uint32(a.dtype(), pad_value);
+    Tensor pad_value_const_tensor = build_pad_value_const_tensor_sc(tensor_args, packed_pad_value);
     op_owned.push_back(pad_value_const_tensor.device_storage().release_mesh_tensor());
     const auto& pad_value_mesh_tensor = op_owned.back();
 
@@ -96,15 +95,6 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterProgramFactory::create
         .num_entries = dfb_npages,
         .data_format_metadata = in_df,
     };
-
-    uint32_t packed_pad_value;
-    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
-        packed_pad_value = pad_value;
-    } else if (a.dtype() == DataType::UINT16) {
-        packed_pad_value = pack_two_uint16_into_uint32({0, float_to_uint16(pad_value)});
-    } else {
-        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat16(0.0f), bfloat16(pad_value)});
-    }
 
     KernelSpec reader{
         .unique_id = RM_SC_READER,
@@ -130,6 +120,7 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterProgramFactory::create
                     .accessor_name = "pad_value",
                 },
             },
+        .compile_time_args = {{"element_size", a.element_size()}},
         .runtime_arg_schema =
             {
                 .runtime_arg_names =

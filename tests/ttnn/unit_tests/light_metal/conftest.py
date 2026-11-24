@@ -8,7 +8,7 @@ from loguru import logger
 import pytest
 import ttnn
 
-from tests.scripts.common import get_updated_device_params
+from tt_py_test_utils_common.device_params import get_updated_device_params
 
 
 # A fixture for device reset. Borrows same logic to close and open device from device fixture.

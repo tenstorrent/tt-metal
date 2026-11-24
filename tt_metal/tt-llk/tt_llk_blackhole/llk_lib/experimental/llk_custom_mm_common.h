@@ -95,7 +95,5 @@ constexpr std::uint32_t custom_mm_replay_buf_len(const std::uint32_t operandB_fa
 // Widest ct_dim the unpack MOP covers: the full unpack and 8 reuses, two more runs of 8 reuses, then 9 reuses ending
 // in the final one. DEST capacity usually bounds it first.
 constexpr std::uint32_t CUSTOM_MM_MAX_CT_DIM = 34;
-// Widest kt_dim the SrcB address counters cover: 512 face increments split over the 8-bit Y and Z counters.
-constexpr std::uint32_t CUSTOM_MM_MAX_KT_DIM = 256;
 
 } // namespace ckernel

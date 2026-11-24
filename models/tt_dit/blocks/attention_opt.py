@@ -143,6 +143,7 @@ class Attention(Module):
             q_chunk_size=resolved_q_chunk,
             k_chunk_size=resolved_k_chunk,
             exp_approx_mode=False,  # NOTE: False is more correct
+            min_blocked_pack_tiles=2,
         )
 
         self.ring_sdpa_program_config = {}
@@ -278,6 +279,7 @@ class Attention(Module):
                 q_chunk_size=ring_chunk_size[0],
                 k_chunk_size=ring_chunk_size[1],
                 exp_approx_mode=False,  # NOTE: False is more correct
+                min_blocked_pack_tiles=2,
             )
         return self.ring_sdpa_program_config[per_device_seq_len]
 

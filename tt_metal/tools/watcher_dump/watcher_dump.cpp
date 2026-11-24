@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "device.hpp"
-#include "dispatch_core_common.hpp"
+#include <tt-metalium/dispatch_core_common.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_accessor.hpp"
 #include "impl/context/metal_env_impl.hpp"
