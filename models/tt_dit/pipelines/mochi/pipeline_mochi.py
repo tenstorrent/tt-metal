@@ -281,6 +281,8 @@ class MochiPipeline(PipelineAPIMixin):
                 "mesh_shape": tuple(device.shape),
                 "mesh_device": device,
             },
+            # Untraced calls keep their last inputs on device; drop them with the weights.
+            on_evict=(self.release_traces, self._tracer.release_inputs),
         )
 
         with self._reshape_vae():
