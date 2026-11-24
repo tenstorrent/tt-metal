@@ -817,7 +817,9 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
         iface.split_tc = eh.split_tc;
         iface.jump = eh.entries_to_jump;
         ASSERT(iface.stride_size_tiles != 0 && iface.block_size != 0);
+#if DFB_TRISC_CAN_PRODUCE
         iface.wr_entry_ptr = 0;
+#endif
         iface.tensix_trisc_mask = static_cast<uint8_t>(eh.flags & DFB_HART_FLAG_TRISC_MASK);
         iface.num_entries = eh.num_entries;
 #else  // DM
@@ -864,8 +866,12 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
             iface.tc_slots[t].ring_size = limit - base;
             iface.tc_slots[t].base_entry_idx =
                 static_cast<uint16_t>((base - iface.tc_slots[0].base_addr) / iface.entry_size);
+#if DFB_TRISC_CAN_PRODUCE
             iface.tc_slots[t].wr_entry_idx = iface.tc_slots[t].base_entry_idx;
+#endif
+#if DFB_TRISC_CAN_CONSUME
             iface.tc_slots[t].rd_entry_idx = iface.tc_slots[t].base_entry_idx;
+#endif
 #else  // DM
             iface.tc_slots[t].base_addr = base;
             iface.tc_slots[t].limit = limit;
@@ -980,9 +986,9 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
     const uint8_t timing_slot = hart_u8;
     const uint8_t timing_role = dfb::DFB_INIT_TIMING_ROLE_DM_LOCAL;
 #endif
-    if (timing_slot == 0xFFu) {  // trisc3 has no timing slot
-        return packer_rmp;
-    }
+#if defined(UCK_CHLKC_ISOLATE_SFPU)
+    return packer_rmp;  // trisc3 has no timing slot
+#endif
     dfb_init_timing_write_slot(
         timing_slot,
         timing_role,

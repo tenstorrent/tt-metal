@@ -163,7 +163,15 @@ inline uint32_t dfb_config_header_size() { return sizeof(dfb_global_header_t); }
 
 // Number of init/wait entries in a hart blob (= popcount of participation_mask[h]).
 inline uint8_t dfb_hart_participation_count(uint32_t participation_mask) {
+#if defined(COMPILE_FOR_TRISC)
+    uint8_t n = 0;
+    for (; participation_mask != 0; participation_mask &= participation_mask - 1) {
+        n++;
+    }
+    return n;
+#else
     return static_cast<uint8_t>(__builtin_popcount(participation_mask));
+#endif
 }
 
 // Flag bits for dfb_hart_init_entry_t::flags
