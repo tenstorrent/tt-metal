@@ -247,18 +247,11 @@ inline void matmul_pack_out(
     [[maybe_unused]] bool fast = false)
 {
 #if MATMUL_PACK_FORM != 0
-    // At half sync the pack hides behind math or unpack, where denser DEST reads only add contention: closed stays off,
-    // and the plain form needs a 16-bit DEST.
+    // At half sync the fast form needs a 16-bit DEST. The closed block is production's, which needs no recorded tile in INIT.
     constexpr bool fast_plain = !(is_fp32_dest_acc_en && dest_sync == DstSync::SyncHalf);
-    constexpr bool fast_closed = dest_sync == DstSync::SyncFull;
     if (fast && MATMUL_PACK_FORM == 1 && fast_plain)
     {
         _llk_pack_block_fast_<dest_sync, is_fp32_dest_acc_en>(tile_index, address, num_tiles);
-        return;
-    }
-    if (fast && MATMUL_PACK_FORM == 2 && fast_closed)
-    {
-        _llk_pack_block_closed_fast_<dest_sync, is_fp32_dest_acc_en>(tile_index, address, num_tiles, tile_stride);
         return;
     }
 #endif
@@ -306,12 +299,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(
             formats.pack_dst, in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM, TILE_C_DIM, num_faces);
         _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
-#if defined(ARCH_BLACKHOLE) && MATMUL_PACK_FORM != 0
-        if (num_faces == 4 && !PARTIAL_FACE_PACK)
-        {
-            _llk_pack_block_fast_init_();
-        }
-#endif
         PROFILER_SYNC();
     }
     {
