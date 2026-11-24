@@ -2,6 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// HAL port of tt_llk_blackhole/llk_lib/experimental/llk_math_matmul_custom_no_mop.h. Same instruction sequence and
+// access kinds as production, expressed through the HAL. The tiny-tile addrmods still come from llk_math_matmul.h as
+// it is in this tree.
+
 #pragma once
 
 #include <cstdint>
@@ -10,11 +14,94 @@
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
 #include "cmath_common.h"
+#include "hal/cfg.h"
+#include "hal/counters/rwc.h"
+#include "hal/fpu.h"
+#include "hal/nop.h"
+#include "hal/replay.h"
 #include "llk_assert.h"
 #include "llk_math_common.h"
 #include "llk_math_matmul.h" // tile-shape-aware matmul_configure_addrmod reused for 16x32 tiny-tile support
 
 using namespace ckernel;
+
+namespace hal_port
+{
+
+// One ADDR_MOD slot in the units of ckernel::addr_mod_t. Bias is always zero here.
+struct NoMopAddrMod
+{
+    std::uint32_t srca_incr = 0;
+    std::uint32_t srca_clr  = 0;
+    std::uint32_t srca_cr   = 0;
+    std::uint32_t srcb_incr = 0;
+    std::uint32_t srcb_clr  = 0;
+    std::uint32_t srcb_cr   = 0;
+    std::uint32_t dest_incr = 0;
+    std::uint32_t dest_clr  = 0;
+    std::uint32_t dest_cr   = 0;
+    std::uint32_t fid_incr  = 0;
+    std::uint32_t fid_clr   = 0;
+};
+
+// The addr_mod_t set() of slot AddrModIndex: three immediate SETC16 words (SrcA|SrcB, Dest|Fidelity, Bias), each fully
+// specified.
+template <std::uint8_t AddrModIndex, NoMopAddrMod M>
+inline void no_mop_set_addr_mod()
+{
+    namespace cfg        = hal::cfg;
+    constexpr cfg::Sec S = static_cast<cfg::Sec>(AddrModIndex);
+    cfg::write<cfg::Access::TensixCfgUnit>(
+        cfg::set<cfg::AddrMod[cfg::SrcA].Incr, S, M.srca_incr>(),
+        cfg::set<cfg::AddrMod[cfg::SrcA].CR, S, M.srca_cr>(),
+        cfg::set<cfg::AddrMod[cfg::SrcA].Clear, S, M.srca_clr>(),
+        cfg::set<cfg::AddrMod[cfg::SrcB].Incr, S, M.srcb_incr>(),
+        cfg::set<cfg::AddrMod[cfg::SrcB].CR, S, M.srcb_cr>(),
+        cfg::set<cfg::AddrMod[cfg::SrcB].Clear, S, M.srcb_clr>());
+    cfg::write<cfg::Access::TensixCfgUnit>(
+        cfg::set<cfg::AddrMod[cfg::Dest].Incr, S, M.dest_incr>(),
+        cfg::set<cfg::AddrMod[cfg::Dest].CR, S, M.dest_cr>(),
+        cfg::set<cfg::AddrMod[cfg::Dest].Clear, S, M.dest_clr>(),
+        cfg::set<cfg::AddrMod[cfg::Dest].CToCR, S, 0>(),
+        cfg::set<cfg::AddrMod[cfg::Fidelity].Incr, S, M.fid_incr>(),
+        cfg::set<cfg::AddrMod[cfg::Fidelity].Clear, S, M.fid_clr>());
+    cfg::write<cfg::Access::TensixCfgUnit>(cfg::set<cfg::AddrMod[cfg::Bias].Incr, S, 0>(), cfg::set<cfg::AddrMod[cfg::Bias].Clear, S, 0>());
+}
+
+// The MVMUL with clear_dvalid = Release, instr_mod19 0, Dest offset 0
+template <std::uint8_t AddrMode, hal::fpu::SourceRelease Release = hal::fpu::SourceRelease::None>
+inline __attribute__((always_inline)) void no_mop_mvmul()
+{
+    constexpr hal::fpu::MatrixMultiply op {.address_modifier = AddrMode, .release = Release};
+    static_assert(hal::fpu::get_operation<op>() == TT_OP_MVMUL(static_cast<std::uint32_t>(Release), 0, AddrMode, 0), "MVMUL encoding");
+    hal::fpu::run<op>();
+}
+
+// The MVMUL releasing SrcA when reuse_a, else SrcB (production picks CLR_A or CLR_B at runtime)
+template <std::uint8_t AddrMode>
+inline __attribute__((always_inline)) void no_mop_mvmul_release(const bool reuse_a)
+{
+    if (reuse_a)
+    {
+        no_mop_mvmul<AddrMode, hal::fpu::SourceRelease::SrcA>();
+    }
+    else
+    {
+        no_mop_mvmul<AddrMode, hal::fpu::SourceRelease::SrcB>();
+    }
+}
+
+// SETRWC(CLR_A or CLR_B, 0, 0, 0, 0, SET_ABD_F): reset SrcA/SrcB/Dest and the fidelity phase, releasing one source.
+template <hal::counters::rwc::Src Flip>
+inline __attribute__((always_inline)) void no_mop_reset_abd_f_release()
+{
+    namespace rwc = hal::counters::rwc;
+    constexpr rwc::MathCounter c {.src_a = rwc::Set(0), .src_b = rwc::Set(0), .dest = rwc::Set(0), .flip = Flip, .clear_fidelity = true};
+    static_assert(c.operation() == TT_OP_SETRWC(Flip == rwc::Src::A ? p_setrwc::CLR_A : p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD_F), "SETRWC encoding");
+    rwc::set<c>();
+}
+
+} // namespace hal_port
 
 // Helper functions for math fidelity
 constexpr int get_math_num_fidelity_phases(const MathFidelity math_fidelity)
@@ -71,81 +158,39 @@ inline void matmul_configure_addrmod_no_mop(
     // SRCB -- 8 rows are needed
     // SRCA -- full 16x16 gets used -- hardware will pair cols of A with rows of B
     // D[8,16] = B[8,16] * A[16,16]
-    addr_mod_t {
-        .srca = {.incr = 0, .clr = 0, .cr = 0},
-        .srcb = {.incr = 8, .clr = 0, .cr = 0},
-        .dest = {.incr = 8, .clr = 0, .cr = 0},
-    }
-        .set(ADDR_MOD_0);
+    hal_port::no_mop_set_addr_mod<ADDR_MOD_0, hal_port::NoMopAddrMod {.srcb_incr = 8, .dest_incr = 8}>();
 
     // reset all, increment fidelity if we have more fidelity phases
-    addr_mod_t {
-        .srca     = {.incr = 0, .clr = 1, .cr = 1},
-        .srcb     = {.incr = 0, .clr = 1, .cr = 1},
-        .dest     = {.incr = 0, .clr = 1, .cr = 1},
-        .fidelity = {.incr = fidelity_increment, .clr = 0},
-    }
-        .set(ADDR_MOD_5);
+    hal_port::no_mop_set_addr_mod<
+        ADDR_MOD_5,
+        hal_port::NoMopAddrMod {.srca_clr = 1, .srca_cr = 1, .srcb_clr = 1, .srcb_cr = 1, .dest_clr = 1, .dest_cr = 1, .fid_incr = fidelity_increment}>();
 
     if constexpr (THROTTLE_LEVEL)
     {
         // reset all, including fidelity
-        addr_mod_t {
-            .srca     = {.incr = 0, .clr = 1, .cr = 1},
-            .srcb     = {.incr = 0, .clr = 1, .cr = 1},
-            .dest     = {.incr = 0, .clr = 1, .cr = 1},
-            .fidelity = {.incr = 0, .clr = 1},
-        }
-            .set(ADDR_MOD_6);
+        hal_port::no_mop_set_addr_mod<
+            ADDR_MOD_6,
+            hal_port::NoMopAddrMod {.srca_clr = 1, .srca_cr = 1, .srcb_clr = 1, .srcb_cr = 1, .dest_clr = 1, .dest_cr = 1, .fid_clr = 1}>();
     }
 
     if (transpose)
     {
-        addr_mod_t {
-            .srca = {.incr = 32, .clr = 0, .cr = 0},
-            .srcb = {.incr = 0, .clr = 0, .cr = 1},
-            .dest = {.incr = 8, .clr = 0, .cr = 0},
-        }
-            .set(ADDR_MOD_1);
+        hal_port::no_mop_set_addr_mod<ADDR_MOD_1, hal_port::NoMopAddrMod {.srca_incr = 32, .srcb_cr = 1, .dest_incr = 8}>();
     }
     else
     {
-        addr_mod_t {
-            //.srca = {.incr = srca_increment, .clr = 0, .cr = 0},
-            .srca = {.incr = 16, .clr = 0, .cr = 0},
-            .srcb = {.incr = 0, .clr = 0, .cr = 1},
-            .dest = {.incr = 8, .clr = 0, .cr = 0},
-        }
-            .set(ADDR_MOD_1);
+        hal_port::no_mop_set_addr_mod<ADDR_MOD_1, hal_port::NoMopAddrMod {.srca_incr = 16, .srcb_cr = 1, .dest_incr = 8}>();
     }
 
-    addr_mod_t {
-        .srca = {.incr = 0, .clr = 0, .cr = 1},
-        .srcb = {.incr = 32, .clr = 0, .cr = 1},
-        .dest = {.incr = 8, .clr = 0, .cr = 0},
-    }
-        .set(ADDR_MOD_2);
+    hal_port::no_mop_set_addr_mod<ADDR_MOD_2, hal_port::NoMopAddrMod {.srca_cr = 1, .srcb_incr = 32, .srcb_cr = 1, .dest_incr = 8}>();
 
     if (transpose)
     {
-        addr_mod_t {
-            .srca = {.incr = 16, .clr = 0, .cr = 1},
-            .srcb = {.incr = 48, .clr = 0, .cr = 1}, // cr=32 before, cr+48=16 after wrapping
-            .dest = {.incr = 0, .clr = 0, .cr = 1},
-            // .bias = {.incr = 1},
-        }
-            .set(ADDR_MOD_4);
+        hal_port::no_mop_set_addr_mod<ADDR_MOD_4, hal_port::NoMopAddrMod {.srca_incr = 16, .srca_cr = 1, .srcb_incr = 48, .srcb_cr = 1, .dest_cr = 1}>();
     }
     else
     {
-        addr_mod_t {
-            .srca = {.incr = 32, .clr = 0, .cr = 1},
-            //.srca = {.incr = srca_set, .clr = 0, .cr = 1},
-            .srcb = {.incr = 48, .clr = 0, .cr = 1}, // cr=32 before, cr+48=16 after wrapping
-            .dest = {.incr = 0, .clr = 0, .cr = 1},
-            // .bias = {.incr = 1},
-        }
-            .set(ADDR_MOD_4);
+        hal_port::no_mop_set_addr_mod<ADDR_MOD_4, hal_port::NoMopAddrMod {.srca_incr = 32, .srca_cr = 1, .srcb_incr = 48, .srcb_cr = 1, .dest_cr = 1}>();
     }
 }
 
@@ -214,9 +259,8 @@ inline void matmul_configure_mop_custom(
 
     const std::uint32_t replay_buf_len = matmul_no_mop_replay_len(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
 
-    load_replay_buf(
-        ckernel::math::replay_buf_offset,
-        replay_buf_len,
+    hal::replay::record(
+        hal::replay::BufferRange {ckernel::math::replay_buf_offset, replay_buf_len},
         // Lambda function to load reply buffer
         [high_fidelity, reuse_a, partial_face, is_in1_32x16, is_in0_16x32, is_in0_32x16, is_in1_16x32]
         {
@@ -224,79 +268,79 @@ inline void matmul_configure_mop_custom(
             {
                 if (is_in0_16x32)
                 {
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A0 // srca=srca, srcb+=8,  dest+=8
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B0A0 // srca+=16,  srcb+=8,  dest=0
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B1A1 // srca=srca, srcb+=8,  dest=+8, bias=1
+                    hal_port::no_mop_mvmul<ADDR_MOD_0>(); // B0A0 // srca=srca, srcb+=8,  dest+=8
+                    hal_port::no_mop_mvmul<ADDR_MOD_1>(); // B0A0 // srca+=16,  srcb+=8,  dest=0
+                    hal_port::no_mop_mvmul<ADDR_MOD_0>(); // B1A1 // srca=srca, srcb+=8,  dest=+8, bias=1
                 }
                 else
                 {
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A0 // srca=srca, srcb+=8,  dest+=8
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B0A0 // srca+=16,  srcb+=8,  dest=0
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B1A1 // srca=srca, srcb+=8,  dest=+8
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, 0); // B1A1 // srca=0,    srcb+=8,  dest=16 (addr_mod_4), bias=0
+                    hal_port::no_mop_mvmul<ADDR_MOD_0>(); // B0A0 // srca=srca, srcb+=8,  dest+=8
+                    hal_port::no_mop_mvmul<ADDR_MOD_1>(); // B0A0 // srca+=16,  srcb+=8,  dest=0
+                    hal_port::no_mop_mvmul<ADDR_MOD_0>(); // B1A1 // srca=srca, srcb+=8,  dest=+8
+                    hal_port::no_mop_mvmul<ADDR_MOD_4>(); // B1A1 // srca=0,    srcb+=8,  dest=16 (addr_mod_4), bias=0
 
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B2A0 // srca=srca, srcb+=8,  dest+=8
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // B2A0 // srca+=16,  srcb+=8,  dest=16
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B3A1 // srca=srca, srcb+=8,  dest+=8
+                    hal_port::no_mop_mvmul<ADDR_MOD_0>(); // B2A0 // srca=srca, srcb+=8,  dest+=8
+                    hal_port::no_mop_mvmul<ADDR_MOD_2>(); // B2A0 // srca+=16,  srcb+=8,  dest=16
+                    hal_port::no_mop_mvmul<ADDR_MOD_0>(); // B3A1 // srca=srca, srcb+=8,  dest+=8
                 }
             }
             else if (is_in0_16x32 || is_in0_32x16)
             {
                 if (partial_face)
                 {
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // B0A0 // srca+=16,  srcb=0,   dest=+16
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, 0); // B0A1 // srca+=16,  srcb+=16, dest=0 (addr_mod_4), bias=0
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // B1A2 // srca+=16,  srcb=0,   dest=+16
+                    hal_port::no_mop_mvmul<ADDR_MOD_2>(); // B0A0 // srca+=16,  srcb=0,   dest=+16
+                    hal_port::no_mop_mvmul<ADDR_MOD_4>(); // B0A1 // srca+=16,  srcb+=16, dest=0 (addr_mod_4), bias=0
+                    hal_port::no_mop_mvmul<ADDR_MOD_2>(); // B1A2 // srca+=16,  srcb=0,   dest=+16
                 }
                 else
                 {
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A0 // srca=srca, srcb+=8,  dest+=8
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // B0A0 // srca+=16,  srcb=0,   dest+=8
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A1 // srca=srca, srcb+=8,  dest+=8
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, 0); // B0A1 // srca+=16/=0, srcb=16, dest=0/+=8 (addr_mod_4) // srca=0 dest+=8 if in0_32x16
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B1A2 // srca=srca, srcb+=8,  dest+=8
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B1A2 // srca+=16,  srcb=16,  dest+=8/24 // dest+=24 if transposed
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B1A3 // srca=srca, srcb+=8,  dest+=8
+                    hal_port::no_mop_mvmul<ADDR_MOD_0>(); // B0A0 // srca=srca, srcb+=8,  dest+=8
+                    hal_port::no_mop_mvmul<ADDR_MOD_2>(); // B0A0 // srca+=16,  srcb=0,   dest+=8
+                    hal_port::no_mop_mvmul<ADDR_MOD_0>(); // B0A1 // srca=srca, srcb+=8,  dest+=8
+                    hal_port::no_mop_mvmul<ADDR_MOD_4>(); // B0A1 // srca+=16/=0, srcb=16, dest=0/+=8 (addr_mod_4) // srca=0 dest+=8 if in0_32x16
+                    hal_port::no_mop_mvmul<ADDR_MOD_0>(); // B1A2 // srca=srca, srcb+=8,  dest+=8
+                    hal_port::no_mop_mvmul<ADDR_MOD_1>(); // B1A2 // srca+=16,  srcb=16,  dest+=8/24 // dest+=24 if transposed
+                    hal_port::no_mop_mvmul<ADDR_MOD_0>(); // B1A3 // srca=srca, srcb+=8,  dest+=8
                 }
             }
             else
             {
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A0 // srca=srca, srcb+=8,  dest+=8
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B0A0 // srca+=16/32, srcb=0, dest+=8  // srca+=32 if transposed
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A1 // srca=srca, srcb+=8,  dest+=8  // A1 -> A2 if transposed
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // B0A1 // srca=0,    srcb=32,  dest+=8  // A1 -> A2 if transposed
+                hal_port::no_mop_mvmul<ADDR_MOD_0>(); // B0A0 // srca=srca, srcb+=8,  dest+=8
+                hal_port::no_mop_mvmul<ADDR_MOD_1>(); // B0A0 // srca+=16/32, srcb=0, dest+=8  // srca+=32 if transposed
+                hal_port::no_mop_mvmul<ADDR_MOD_0>(); // B0A1 // srca=srca, srcb+=8,  dest+=8  // A1 -> A2 if transposed
+                hal_port::no_mop_mvmul<ADDR_MOD_2>(); // B0A1 // srca=0,    srcb=32,  dest+=8  // A1 -> A2 if transposed
 
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B2A0 // srca=srca, srcb+=8,  dest+=8
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B2A0 // srca+=16/32, srcb=0, dest+=8 // srca+=32 if transposed
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B2A1 // srca=srca, srcb+=8,  dest+=8 // A1 -> A2 if transposed
+                hal_port::no_mop_mvmul<ADDR_MOD_0>(); // B2A0 // srca=srca, srcb+=8,  dest+=8
+                hal_port::no_mop_mvmul<ADDR_MOD_1>(); // B2A0 // srca+=16/32, srcb=0, dest+=8 // srca+=32 if transposed
+                hal_port::no_mop_mvmul<ADDR_MOD_0>(); // B2A1 // srca=srca, srcb+=8,  dest+=8 // A1 -> A2 if transposed
                 if (!is_in1_16x32)
                 {
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, 0); // B2A1 // srca=32/16,srcb=16,  dest=0 (addr_mod_4) // A1 -> A2 && srca=16 if transposed
+                    hal_port::no_mop_mvmul<ADDR_MOD_4>(); // B2A1 // srca=32/16,srcb=16,  dest=0 (addr_mod_4) // A1 -> A2 && srca=16 if transposed
 
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B1A2 // srca=srca, srcb+=8,  dest+=8 // A2 -> A1 if transposed
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B1A2 // srca+=16,  srcb=16,  dest+=8 // A2 -> A1 if transposed
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B1A3 // srca=srca, srcb+=8,  dest+=8
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // B1A3 // srca=32,   srcb=48,  dest+=8
+                    hal_port::no_mop_mvmul<ADDR_MOD_0>(); // B1A2 // srca=srca, srcb+=8,  dest+=8 // A2 -> A1 if transposed
+                    hal_port::no_mop_mvmul<ADDR_MOD_1>(); // B1A2 // srca+=16,  srcb=16,  dest+=8 // A2 -> A1 if transposed
+                    hal_port::no_mop_mvmul<ADDR_MOD_0>(); // B1A3 // srca=srca, srcb+=8,  dest+=8
+                    hal_port::no_mop_mvmul<ADDR_MOD_2>(); // B1A3 // srca=32,   srcb=48,  dest+=8
 
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B3A2 // srca=srca, srcb+=8,  dest+=8 // A2 -> A1 if transposed
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B3A2 // srca+=16,  srcb=0,   dest+=8 // A2 -> A1 if transposed
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B3A3 // srca=srca, srcb+=8,  dest+=8
+                    hal_port::no_mop_mvmul<ADDR_MOD_0>(); // B3A2 // srca=srca, srcb+=8,  dest+=8 // A2 -> A1 if transposed
+                    hal_port::no_mop_mvmul<ADDR_MOD_1>(); // B3A2 // srca+=16,  srcb=0,   dest+=8 // A2 -> A1 if transposed
+                    hal_port::no_mop_mvmul<ADDR_MOD_0>(); // B3A3 // srca=srca, srcb+=8,  dest+=8
                 }
             }
 
             if constexpr (high_fidelity)
             {
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0); // reset srca/srcb/dest, increment phase (addr_mod_5)
+                hal_port::no_mop_mvmul<ADDR_MOD_5>(); // reset srca/srcb/dest, increment phase (addr_mod_5)
             }
             else
             {
                 if (reuse_a)
                 {
-                    TTI_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_5, 0); // reset + increment phase (addr_mod_5), clear src A
+                    hal_port::no_mop_mvmul<ADDR_MOD_5, hal::fpu::SourceRelease::SrcA>(); // reset + increment phase (addr_mod_5), clear src A
                 }
                 else
                 {
-                    TTI_MVMUL(p_setrwc::CLR_B, 0, ADDR_MOD_5, 0); // reset + increment phase (addr_mod_5), clear src B
+                    hal_port::no_mop_mvmul<ADDR_MOD_5, hal::fpu::SourceRelease::SrcB>(); // reset + increment phase (addr_mod_5), clear src B
                 }
             }
         });
@@ -310,82 +354,82 @@ void run_throttled_sequence_no_mop();
 template <>
 void run_throttled_sequence_no_mop<1>()
 {
-    TTI_NOP;
-    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
-    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
-    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
-    TTI_NOP;
-    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0);
-    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
-    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
-    TTI_NOP;
-    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+    hal::nop::thread();
+    hal_port::no_mop_mvmul<ADDR_MOD_0>();
+    hal_port::no_mop_mvmul<ADDR_MOD_1>();
+    hal_port::no_mop_mvmul<ADDR_MOD_0>();
+    hal::nop::thread();
+    hal_port::no_mop_mvmul<ADDR_MOD_2>();
+    hal_port::no_mop_mvmul<ADDR_MOD_0>();
+    hal_port::no_mop_mvmul<ADDR_MOD_1>();
+    hal::nop::thread();
+    hal_port::no_mop_mvmul<ADDR_MOD_0>();
 }
 
 template <>
 void run_throttled_sequence_no_mop<2>()
 {
-    TTI_NOP;
-    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
-    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
-    TTI_NOP;
-    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
-    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0);
-    TTI_NOP;
-    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
-    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
-    TTI_NOP;
-    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+    hal::nop::thread();
+    hal_port::no_mop_mvmul<ADDR_MOD_0>();
+    hal_port::no_mop_mvmul<ADDR_MOD_1>();
+    hal::nop::thread();
+    hal_port::no_mop_mvmul<ADDR_MOD_0>();
+    hal_port::no_mop_mvmul<ADDR_MOD_2>();
+    hal::nop::thread();
+    hal_port::no_mop_mvmul<ADDR_MOD_0>();
+    hal_port::no_mop_mvmul<ADDR_MOD_1>();
+    hal::nop::thread();
+    hal_port::no_mop_mvmul<ADDR_MOD_0>();
 }
 
 template <>
 void run_throttled_sequence_no_mop<3>()
 {
-    TTI_NOP;
-    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
-    TTI_NOP;
-    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
-    TTI_NOP;
-    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
-    TTI_NOP;
-    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0);
-    TTI_NOP;
-    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
-    TTI_NOP;
-    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
-    TTI_NOP;
-    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
-    TTI_NOP;
+    hal::nop::thread();
+    hal_port::no_mop_mvmul<ADDR_MOD_0>();
+    hal::nop::thread();
+    hal_port::no_mop_mvmul<ADDR_MOD_1>();
+    hal::nop::thread();
+    hal_port::no_mop_mvmul<ADDR_MOD_0>();
+    hal::nop::thread();
+    hal_port::no_mop_mvmul<ADDR_MOD_2>();
+    hal::nop::thread();
+    hal_port::no_mop_mvmul<ADDR_MOD_0>();
+    hal::nop::thread();
+    hal_port::no_mop_mvmul<ADDR_MOD_1>();
+    hal::nop::thread();
+    hal_port::no_mop_mvmul<ADDR_MOD_0>();
+    hal::nop::thread();
 }
 
 template <>
 void run_throttled_sequence_no_mop<4>()
 {
-    TTI_NOP;
-    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
-    TTI_NOP;
-    TTI_NOP;
-    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
-    TTI_NOP;
-    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
-    TTI_NOP;
-    TTI_NOP;
+    hal::nop::thread();
+    hal_port::no_mop_mvmul<ADDR_MOD_0>();
+    hal::nop::thread();
+    hal::nop::thread();
+    hal_port::no_mop_mvmul<ADDR_MOD_1>();
+    hal::nop::thread();
+    hal_port::no_mop_mvmul<ADDR_MOD_0>();
+    hal::nop::thread();
+    hal::nop::thread();
 }
 
 template <>
 void run_throttled_sequence_no_mop<5>()
 {
-    TTI_NOP;
-    TTI_NOP;
-    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
-    TTI_NOP;
-    TTI_NOP;
-    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
-    TTI_NOP;
-    TTI_NOP;
-    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
-    TTI_NOP;
-    TTI_NOP;
+    hal::nop::thread();
+    hal::nop::thread();
+    hal_port::no_mop_mvmul<ADDR_MOD_0>();
+    hal::nop::thread();
+    hal::nop::thread();
+    hal_port::no_mop_mvmul<ADDR_MOD_1>();
+    hal::nop::thread();
+    hal::nop::thread();
+    hal_port::no_mop_mvmul<ADDR_MOD_0>();
+    hal::nop::thread();
+    hal::nop::thread();
 }
 
 /*
@@ -415,9 +459,7 @@ inline void matmul_configure_mop_throttled_no_mop()
 
     constexpr std::uint32_t replay_buf_len = (THROTTLE_LEVEL > 3) ? (1 + THROTTLE_LEVEL * 2) : ((THROTTLE_LEVEL > 1) ? (3 + THROTTLE_LEVEL * 4) : 10);
 
-    load_replay_buf(
-        ckernel::math::replay_buf_offset,
-        replay_buf_len,
+    hal::replay::record<hal::replay::BufferRange {ckernel::math::replay_buf_offset, replay_buf_len}>(
         // Lambda function to load reply buffer
         [] { run_throttled_sequence_no_mop<THROTTLE_LEVEL>(); });
 
@@ -444,7 +486,7 @@ inline void _llk_math_matmul_init_no_mop_(
     {
         matmul_configure_mop_custom<math_fidelity>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     }
-    math::reset_counters(p_setrwc::SET_ABD_F);
+    hal_port::reset_counters_abd_f(); // math::reset_counters(p_setrwc::SET_ABD_F)
 }
 
 inline void _llk_math_matmul_uninit_no_mop_()
@@ -485,7 +527,7 @@ inline void _llk_math_matmul_no_mop_(
     {
         for (std::uint32_t rut = 0; rut < rut_dim; rut++)
         {
-            math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + (reuse_a ? ct_dim * t + rut : t + rut * ct_dim));
+            hal_port::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + (reuse_a ? ct_dim * t + rut : t + rut * ct_dim));
 
             if constexpr (THROTTLE_LEVEL > 0)
             {
@@ -501,29 +543,29 @@ inline void _llk_math_matmul_no_mop_(
                             // inner loop (2 iterations for standard tiles)
                             for (std::uint32_t inner = 0; inner < 2; inner++)
                             {
-                                lltt::replay(ckernel::math::replay_buf_offset, replay_buf_len);
+                                hal::replay::run(hal::replay::BufferRange {ckernel::math::replay_buf_offset, replay_buf_len});
                                 if (inner < 1)
                                 {
-                                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // inner loop continuation
+                                    hal_port::no_mop_mvmul<ADDR_MOD_2>(); // inner loop continuation
                                 }
                                 else if (phase < num_fidelity_phases - 1)
                                 {
-                                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, 0); // last inner, not last outer
+                                    hal_port::no_mop_mvmul<ADDR_MOD_4>(); // last inner, not last outer
                                 }
                                 else
                                 {
-                                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0); // last inner, last outer
+                                    hal_port::no_mop_mvmul<ADDR_MOD_5>(); // last inner, last outer
                                 }
                             }
                         }
                         // Final clear
                         if (reuse_a)
                         {
-                            TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
+                            hal_port::no_mop_reset_abd_f_release<hal::counters::rwc::Src::A>();
                         }
                         else
                         {
-                            TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
+                            hal_port::no_mop_reset_abd_f_release<hal::counters::rwc::Src::B>();
                         }
                     }
                     else
@@ -531,26 +573,26 @@ inline void _llk_math_matmul_no_mop_(
                         // Not high fidelity, outer_loops = 2
                         for (std::uint32_t inner = 0; inner < 2; inner++)
                         {
-                            lltt::replay(ckernel::math::replay_buf_offset, replay_buf_len);
+                            hal::replay::run(hal::replay::BufferRange {ckernel::math::replay_buf_offset, replay_buf_len});
                             if (inner < 1)
                             {
-                                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0);
+                                hal_port::no_mop_mvmul<ADDR_MOD_2>();
                             }
                             else
                             {
-                                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, 0);
+                                hal_port::no_mop_mvmul<ADDR_MOD_4>();
                             }
                         }
                         for (std::uint32_t inner = 0; inner < 2; inner++)
                         {
-                            lltt::replay(ckernel::math::replay_buf_offset, replay_buf_len);
+                            hal::replay::run(hal::replay::BufferRange {ckernel::math::replay_buf_offset, replay_buf_len});
                             if (inner < 1)
                             {
-                                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0);
+                                hal_port::no_mop_mvmul<ADDR_MOD_2>();
                             }
                             else
                             {
-                                TTI_MVMUL(reuse_a ? p_setrwc::CLR_A : p_setrwc::CLR_B, 0, ADDR_MOD_5, 0);
+                                hal_port::no_mop_mvmul_release<ADDR_MOD_5>(reuse_a);
                             }
                         }
                     }
@@ -565,18 +607,18 @@ inline void _llk_math_matmul_no_mop_(
                         {
                             for (std::uint32_t inner = 0; inner < 2; inner++)
                             {
-                                lltt::replay(ckernel::math::replay_buf_offset, replay_buf_len);
+                                hal::replay::run(hal::replay::BufferRange {ckernel::math::replay_buf_offset, replay_buf_len});
                                 if (inner < 1)
                                 {
-                                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, 0); // inner loop continuation
+                                    hal_port::no_mop_mvmul<ADDR_MOD_4>(); // inner loop continuation
                                 }
                                 else if (phase < num_fidelity_phases - 1)
                                 {
-                                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0); // last inner, not last outer
+                                    hal_port::no_mop_mvmul<ADDR_MOD_5>(); // last inner, not last outer
                                 }
                                 else
                                 {
-                                    TTI_MVMUL(reuse_a ? p_setrwc::CLR_A : p_setrwc::CLR_B, 0, ADDR_MOD_6, 0); // last inner, last outer
+                                    hal_port::no_mop_mvmul_release<ADDR_MOD_6>(reuse_a); // last inner, last outer
                                 }
                             }
                         }
@@ -586,14 +628,14 @@ inline void _llk_math_matmul_no_mop_(
                         // Not high fidelity, outer_loops = 1
                         for (std::uint32_t inner = 0; inner < 2; inner++)
                         {
-                            lltt::replay(ckernel::math::replay_buf_offset, replay_buf_len);
+                            hal::replay::run(hal::replay::BufferRange {ckernel::math::replay_buf_offset, replay_buf_len});
                             if (inner < 1)
                             {
-                                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, 0);
+                                hal_port::no_mop_mvmul<ADDR_MOD_4>();
                             }
                             else
                             {
-                                TTI_MVMUL(reuse_a ? p_setrwc::CLR_A : p_setrwc::CLR_B, 0, ADDR_MOD_5, 0);
+                                hal_port::no_mop_mvmul_release<ADDR_MOD_5>(reuse_a);
                             }
                         }
                     }
@@ -607,22 +649,22 @@ inline void _llk_math_matmul_no_mop_(
                     // Replay num_fidelity_phases times
                     for (std::uint32_t phase = 0; phase < num_fidelity_phases; phase++)
                     {
-                        lltt::replay(ckernel::math::replay_buf_offset, replay_buf_len);
+                        hal::replay::run(hal::replay::BufferRange {ckernel::math::replay_buf_offset, replay_buf_len});
                     }
                     // Final clear after all fidelity phases
                     if (reuse_a)
                     {
-                        TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
+                        hal_port::no_mop_reset_abd_f_release<hal::counters::rwc::Src::A>();
                     }
                     else
                     {
-                        TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
+                        hal_port::no_mop_reset_abd_f_release<hal::counters::rwc::Src::B>();
                     }
                 }
                 else
                 {
                     // Just replay once
-                    lltt::replay(ckernel::math::replay_buf_offset, replay_buf_len);
+                    hal::replay::run(hal::replay::BufferRange {ckernel::math::replay_buf_offset, replay_buf_len});
                 }
             }
 
@@ -631,11 +673,11 @@ inline void _llk_math_matmul_no_mop_(
             {
                 if (reuse_a)
                 {
-                    TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
+                    hal_port::no_mop_reset_abd_f_release<hal::counters::rwc::Src::B>();
                 }
                 else
                 {
-                    TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
+                    hal_port::no_mop_reset_abd_f_release<hal::counters::rwc::Src::A>();
                 }
             }
         }

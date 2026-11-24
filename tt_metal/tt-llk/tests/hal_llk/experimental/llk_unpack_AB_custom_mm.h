@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// HAL port of tt_llk_blackhole/llk_lib/experimental/llk_unpack_AB_custom_mm.h. Same instruction sequence and access
+// kinds as production, expressed through the HAL, except the HAL-GAPs marked below.
+
 #pragma once
 
 #include <cstdint>
@@ -13,9 +16,78 @@
 #include "ckernel_template.h"
 #include "cunpack_common.h"
 #include "experimental/llk_custom_mm_common.h"
+#include "hal/cfg.h"
+#include "hal/mop.h"
+#include "hal/nop.h"
+#include "hal/replay.h"
+#include "hal/sync.h"
+#include "hal/tensix_counters.h"
+#include "hal/unpack.h"
+#include "llk_assert.h"
+#include "llk_unpack_common.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
+
+// The custom_mm UNPACR encodings and the counter reset, shared with llk_unpack_AB_compressed_custom_mm.h; the guard
+// keeps a translation unit that includes both to one definition.
+#ifndef HAL_PORT_CUSTOM_MM_UNPACK_OPS_DEFINED_
+#define HAL_PORT_CUSTOM_MM_UNPACK_OPS_DEFINED_
+
+namespace hal_port
+{
+
+// TT_OP_UNPACR_COMMON(SrcA, 0b00000000, 1): a full weight tile into SrcA, no counter increments, set dvalid.
+inline constexpr std::uint32_t custom_mm_unpack_a = hal::unpack::get_operation(hal::unpack::DataTransfer {
+    .engine  = hal::unpack::Engine::Unpacker0,
+    .context = hal::unpack::ContextSelection::explicit_context(0, 0),
+    .handoff = hal::unpack::SourceHandoff::FlipAndSetDataValid,
+});
+static_assert(custom_mm_unpack_a == TT_OP_UNPACR_COMMON(SrcA, 0b00000000, 1), "UNPACR SrcA encoding");
+
+// TT_OP_UNPACR_COMMON(SrcB, 0b00010001, 0): first SrcB face, CH0 Z += 1 and CH1 Z += 1, keep the bank.
+inline constexpr std::uint32_t custom_mm_unpack_b_face0 = hal::unpack::get_operation(hal::unpack::DataTransfer {
+    .engine     = hal::unpack::Engine::Unpacker1,
+    .increments = {.channel0 = {.z = 1}, .channel1 = {.z = 1}},
+    .context    = hal::unpack::ContextSelection::explicit_context(0, 0),
+    .handoff    = hal::unpack::SourceHandoff::Keep,
+});
+static_assert(custom_mm_unpack_b_face0 == TT_OP_UNPACR_COMMON(SrcB, 0b00010001, 0), "UNPACR SrcB face 0 encoding");
+
+// TT_OP_UNPACR_COMMON(SrcB, 0b00110100, 1): second SrcB face, CH0 Y += 1 and CH1 Z += 3 (wraps back to row 0), set
+// dvalid.
+inline constexpr std::uint32_t custom_mm_unpack_b_face1 = hal::unpack::get_operation(hal::unpack::DataTransfer {
+    .engine     = hal::unpack::Engine::Unpacker1,
+    .increments = {.channel0 = {.y = 1}, .channel1 = {.z = 3}},
+    .context    = hal::unpack::ContextSelection::explicit_context(0, 0),
+    .handoff    = hal::unpack::SourceHandoff::FlipAndSetDataValid,
+});
+static_assert(custom_mm_unpack_b_face1 == TT_OP_UNPACR_COMMON(SrcB, 0b00110100, 1), "UNPACR SrcB face 1 encoding");
+
+// TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111) then TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010): Z and W of both channels, then
+// Y of both channels, for both unpackers.
+inline __attribute__((always_inline)) void custom_mm_reset_unpack_counters()
+{
+    namespace adc = hal::counters::adc;
+    adc::set<adc::AddrCounter {.channel0 = {.z = 0, .w = 0}, .channel1 = {.z = 0, .w = 0}}.for_clients<adc::Client::Unpacker0, adc::Client::Unpacker1>()>();
+    adc::set<adc::AddrCounter {.channel0 = {.y = 0}, .channel1 = {.y = 0}}.for_clients<adc::Client::Unpacker0, adc::Client::Unpacker1>()>();
+}
+
+// TTI_STALLWAIT(STALL_UNPACK, UNPACK), TTI_UNPACR_NOP(SrcB, ..., CLR_SRC), TTI_STALLWAIT(STALL_UNPACK, UNPACK1): zero
+// both SrcB banks once both are free. It must run alone: a both-bank SrcB clear drops SrcA writes that unpacker 0
+// makes while it runs.
+inline __attribute__((always_inline)) void custom_mm_clear_srcb_both_banks()
+{
+    namespace sync = hal::sync;
+    sync::wait::stall<sync::StallTarget::Unpack, sync::StallCondition::Unpacker0Idle | sync::StallCondition::Unpacker1Idle>();
+    // HAL-GAP: hal::nop encodes only the pure-delay UNPACR_NOP; the clear-source flavor (CLR_SRC) has no HAL
+    // descriptor, so the production encoding is kept.
+    TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 1, 0, p_unpacr_nop::CLR_SRC);
+    sync::wait::stall<sync::StallTarget::Unpack, sync::StallCondition::Unpacker1Idle>();
+}
+
+} // namespace hal_port
+#endif // HAL_PORT_CUSTOM_MM_UNPACK_OPS_DEFINED_
 
 // CUSTOM_MM
 // Custom version of matmul that performs a full matrix multiplication more optimally but has the following limitations:
@@ -33,11 +105,11 @@ inline void _llk_unpack_AB_custom_mm_iter_insns(const bool post1)
     {
         // This nop is not actually used, it just ensures both tunings are of the same length when recording
         // When playing back the replay it is omitted
-        TTI_NOP;
+        hal::nop::thread();
     }
 
     // Unpack SrcA (in1, full tile, uses CFGSHIFTMASK to manipulate L1 addr and keeps SrcA addr fixed at 0)
-    TTI_UNPACR_COMMON(SrcA, 0b00000000, 1); // Also set dvalid
+    TTI_INSN(hal_port::custom_mm_unpack_a); // Also set dvalid
 
     // Unpack SrcB (in0, one instruction per face, uses counters to manipulate addresses for both L1 and SrcB)
     // Counters of interest are CH0 Y and Z (both with a stride of a single face in L1
@@ -50,25 +122,26 @@ inline void _llk_unpack_AB_custom_mm_iter_insns(const bool post1)
     // thus an increment of 48 rows or 3 CH1 Y increments wraps us back to 0
     // (which is conveniently the max we can increment in a single instruction)
 
-    TTI_UNPACR_COMMON(SrcB, 0b00010001, 0);
+    TTI_INSN(hal_port::custom_mm_unpack_b_face0);
     if (!post1)
     {
         // Unpack second face of SrcB before CFGSHIFTMASK in post0 tuning
-        TTI_UNPACR_COMMON(SrcB, 0b00110100, 1); // Also set dvalid
+        TTI_INSN(hal_port::custom_mm_unpack_b_face1); // Also set dvalid
     }
 
     // Increment UnpA L1 address
+    // HAL-GAP: CFGSHIFTMASK (Base_address += SCRATCH_SEC0_val) has no HAL API; production encoding kept.
     TTI_CFGSHIFTMASK(1, 3, 32 - 1, 0, 0, THCON_SEC0_REG3_Base_address_ADDR32);
     if (post1)
     {
         // Unpack second face of SrcB after CFGSHIFTMASK in post1 tuning
-        TTI_UNPACR_COMMON(SrcB, 0b00110100, 1); // Also set dvalid;
+        TTI_INSN(hal_port::custom_mm_unpack_b_face1); // Also set dvalid;
     }
     else
     {
         // This nop is required in post0 as CFGSHIFTMASK is a 2 cycle instruction
         // And first instruction in next iteration is unpack into SrcA which uses this value
-        TTI_NOP;
+        hal::nop::thread();
     }
 }
 
@@ -79,9 +152,7 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, con
 {
     LLK_ASSERT(ct_dim >= 1 && ct_dim <= CUSTOM_MM_MAX_CT_DIM, "custom_mm: ct_dim must be 1 to 34");
 
-    load_replay_buf(
-        0,
-        32,
+    hal::replay::record<hal::replay::BufferRange {0 /*start*/, 32 /*count*/}>(
         [post1]
         {
             // Full unpack (both SrcA and SrcB)
@@ -91,16 +162,18 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, con
             for (std::uint32_t i = 0; i < 8; i++)
             {
                 // Reuse unpack (unpacks only SrcA, SrcB is reused across width dim)
-                TTI_UNPACR_COMMON(SrcA, 0b00000000, 1); // Also set dvalid
+                TTI_INSN(hal_port::custom_mm_unpack_a); // Also set dvalid
+                // HAL-GAP: CFGSHIFTMASK has no HAL API; production encoding kept.
                 TTI_CFGSHIFTMASK(1, 3, 32 - 1, 0, 0, THCON_SEC0_REG3_Base_address_ADDR32);
-                TTI_NOP;
+                hal::nop::thread();
             }
 
             // Reuse unpack (unpacks only SrcA, SrcB is reused across width dim)
-            TTI_UNPACR_COMMON(SrcA, 0b00000000, 1); // Also set dvalid
+            TTI_INSN(hal_port::custom_mm_unpack_a); // Also set dvalid
             // This last iteration uses inner_increment instead of block_increment
+            // HAL-GAP: CFGSHIFTMASK has no HAL API; production encoding kept.
             TTI_CFGSHIFTMASK(1, 3, 32 - 1, 0, 1, THCON_SEC0_REG3_Base_address_ADDR32);
-            TTI_NOP;
+            hal::nop::thread();
         });
 
     // Each mop iteration covers one kt_dim loop: the ct_dim output tiles of one k-tile, all sharing its SrcB tile.
@@ -130,8 +203,10 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, con
     // The reuses split evenly; the remainder goes to A3, A2 and A1 before A0, which already holds the full unpack,
     // so A1..A3 get a reuse each from ct_dim 4 on.
     const std::uint32_t reuses          = ct_dim - 1;
-    const auto full_and                 = [post1](const std::uint32_t n) { return lltt::replay_insn(post1 ? 1 : 0, (post1 ? 1 : 2) + (1 + n) * 3); };
-    const auto final_reuses             = [](const std::uint32_t n) { return lltt::replay_insn(32 - n * 3, n * 3); };
+    const auto replay_insn              = [](const std::uint32_t start, const std::uint32_t count)
+    { return hal::replay::get_operation(hal::replay::BufferRange {start, count}); };
+    const auto full_and                 = [post1, replay_insn](const std::uint32_t n) { return replay_insn(post1 ? 1 : 0, (post1 ? 1 : 2) + (1 + n) * 3); };
+    const auto final_reuses             = [replay_insn](const std::uint32_t n) { return replay_insn(32 - n * 3, n * 3); };
     constexpr std::uint32_t reuse_start = 5;
 
     std::uint32_t a0 = 0, a1 = 0, a2 = 0, a3 = 0, b = 0;
@@ -152,25 +227,29 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, con
         const std::uint32_t base = reuses >> 2;
         const std::uint32_t rem  = reuses & 3;
         a0                       = full_and(base);
-        a1                       = lltt::replay_insn(reuse_start, (base + (rem > 2 ? 1 : 0)) * 3);
-        a2                       = lltt::replay_insn(reuse_start, (base + (rem > 1 ? 1 : 0)) * 3);
+        a1                       = replay_insn(reuse_start, (base + (rem > 2 ? 1 : 0)) * 3);
+        a2                       = replay_insn(reuse_start, (base + (rem > 1 ? 1 : 0)) * 3);
         a3                       = final_reuses(base + (rem > 0 ? 1 : 0));
     }
 
-    ckernel_unpack_template tmp = ckernel_unpack_template(
-        use_b,    // Use UNPACR_B and SKIP_B instructions?
-        use_halo, // Use UNPACR_A1/2/3 instructions?
-        a0,       // A0
-        a1,       // A1
-        a2,       // A2
-        a3,       // A3
-        0,        // Skip A
-        b,        // B
-        0         // Skip B
-    );
-
-    tmp.program();
-    TTI_MOP_CFG(0);
+    // ckernel_unpack_template(use_b, use_halo, a0, a1, a2, a3, 0 /*skip A*/, b, 0 /*skip B*/).program(). The HAL picks
+    // the flags from the shape and leaves the words the expander does not read for that shape (A1-3 without halo, B and
+    // skip B without B) unwritten. The skip words keep production's 0: zmask is always 0, so they are never issued.
+    using namespace hal::mop;
+    if (use_halo)
+    {
+        program(foreach_mask_bit(if_clear(a0, a1, a2, a3), otherwise(0 /*skip A*/)));
+    }
+    else if (use_b)
+    {
+        program(foreach_mask_bit(if_clear(a0, b), otherwise(0 /*skip A*/, 0 /*skip B*/)));
+    }
+    else
+    {
+        program(foreach_mask_bit(if_clear(a0), otherwise(0 /*skip A*/)));
+    }
+    // TTI_MOP_CFG(0)
+    Runner<MopTemplate::Template0>::configure_mask_high<0>();
 }
 
 /**
@@ -198,15 +277,19 @@ inline void _llk_unpack_AB_custom_mm_init_(
     const std::uint32_t unpA_num_faces = TILE_NUM_FACES)
 {
     LLK_ASSERT(custom_mm_legal_in1_num_faces(unpA_num_faces), "custom_mm: in1 must have 4 faces, or 2 for a [32, 16] tile");
-    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(transpose ? 1 : 0);
+    namespace cfg = hal::cfg;
+    namespace adc = hal::counters::adc;
+    // cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(transpose ? 1 : 0): one RMWCIB, compile-time value
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::Thcon[cfg::Reg2].Haloize_mode, cfg::Sec::S0, (transpose ? 1u : 0u)>();
 
     // UnpA unpacks full tiles, of 4 faces or 2 for a [32, 16] tile
     const std::uint32_t unpA_x_end = unpA_num_faces * FACE_R_DIM * FACE_C_DIM - 1;
     // UnpB unpacks [{1, 2, 4, 8}, 32] tiles which only have top two faces and only a single face per instruction
     // so a single instruction only unpacks unpB_face_r_dim rows
     const std::uint32_t unpB_x_end = unpB_face_r_dim * FACE_C_DIM - 1;
-    TT_SETADCXX(p_setadc::UNP_A, unpA_x_end, 0x0);
-    TT_SETADCXX(p_setadc::UNP_B, unpB_x_end, 0x0);
+    // TT_SETADCXX(p_setadc::UNP_A, unpA_x_end, 0x0), then the same for UNP_B
+    adc::set(adc::AddrCounter {.channel0 = {.x = 0}, .channel1 = {.x = unpA_x_end}}.for_clients<adc::Client::Unpacker0>());
+    adc::set(adc::AddrCounter {.channel0 = {.x = 0}, .channel1 = {.x = unpB_x_end}}.for_clients<adc::Client::Unpacker1>());
 
     // This is a profiling guided heuristic that slightly tunes the instruction sequence
     // More details under tt-metal#38518
@@ -219,14 +302,11 @@ inline void _llk_unpack_AB_custom_mm_init_(
         // Clear SrcB as we only unpack into 1/8 FPU rows so zeroing them gives power savings
         // This particular instruction clears both banks after waiting for both of them to be free
         // It must run alone: a both-bank SrcB clear drops SrcA writes that unpacker 0 makes while it runs
-        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK);
-        TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 1, 0, p_unpacr_nop::CLR_SRC);
-        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK1);
+        hal_port::custom_mm_clear_srcb_both_banks();
     }
 
     // Reset counters here since reset in the execute API is at the end
-    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
-    TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
+    hal_port::custom_mm_reset_unpack_counters();
 }
 
 // Most k-tiles one SrcB base address covers: k-tile k reads faces k and k + 1 of an 8-bit Y + 8-bit Z face index,
@@ -260,16 +340,26 @@ inline void _llk_unpack_AB_custom_mm_run_(
     const std::uint32_t kt_dim)
 {
     LLK_ASSERT(kt_dim >= 1, "custom_mm: kt_dim must be at least 1");
+    namespace hcfg = hal::cfg;
+    namespace sync = hal::sync;
+
+    // Whole-word MMIO stores into the state-CFG bank, as production.
+    constexpr std::uint32_t base_a_addr   = hcfg::Unpacker[0].Cntx[0].Base.addr32(hcfg::Sec::S0);
+    constexpr std::uint32_t base_b_addr   = hcfg::Unpacker[1].Cntx[0].Base.addr32(hcfg::Sec::S0);
+    constexpr std::uint32_t scratch0_addr = hcfg::Scratch::val.addr32(hcfg::Sec::S0);
+    constexpr std::uint32_t scratch1_addr = hcfg::Scratch::val.addr32(hcfg::Sec::S1);
+    static_assert(base_a_addr == THCON_SEC0_REG3_Base_address_ADDR32 && base_b_addr == THCON_SEC1_REG3_Base_address_ADDR32, "unpacker base words");
+    static_assert(scratch0_addr == SCRATCH_SEC0_val_ADDR32 && scratch1_addr == SCRATCH_SEC1_val_ADDR32, "scratch words");
+
     // Program the SrcA base once; CFGSHIFTMASK advances it across all walks
-    cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_a;
+    cfg[base_a_addr] = address_a;
     // Setup CFGSHIFTMASK increments
     // block_increment moves to next tile in tile_row
-    cfg[SCRATCH_SEC0_val_ADDR32] = block_increment;
+    cfg[scratch0_addr] = block_increment;
     // inner_increment moves to next tile_row (next inner_dim)
-    cfg[SCRATCH_SEC1_val_ADDR32] = inner_increment;
+    cfg[scratch1_addr] = inner_increment;
 
-    constexpr std::uint32_t mop_template_0 = 0;
-    constexpr std::uint32_t no_skip_zmask  = 0;
+    using Mop = hal::mop::Runner<hal::mop::MopTemplate::Template0>;
 
     // Split kt_dim into near-equal walks; the first kt_dim % num_walks take one extra k-tile
     const std::uint32_t num_walks  = (kt_dim + CUSTOM_MM_MAX_KT_PER_WALK - 1) / CUSTOM_MM_MAX_KT_PER_WALK;
@@ -282,30 +372,32 @@ inline void _llk_unpack_AB_custom_mm_run_(
         walk_kt = base_kt + (walk < long_walks ? 1 : 0);
 
         // Program the SrcB base for this walk; the counters advance it within the walk
-        cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_b + walk_start * tile_size_b;
+        cfg[base_b_addr] = address_b + walk_start * tile_size_b;
 
-        semaphore_post(semaphore::UNPACK_SYNC);
+        // semaphore_post(semaphore::UNPACK_SYNC): MMIO
+        sync::semaphore::post<sync::Access::MMIO, hal_port::UNPACK_SYNC_SEM>();
 
-        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+        // TTI_STALLWAIT(STALL_UNPACK, TRISC_CFG)
+        sync::wait::stall<sync::StallTarget::Unpack, sync::StallCondition::RiscvAccessProcessed>();
 
         // One mop iteration per kt_dim loop, at most CUSTOM_MM_MAX_MOP_ITERATIONS per TT_MOP
         for (std::uint32_t kt_done = 0; kt_done < walk_kt; kt_done += CUSTOM_MM_MAX_MOP_ITERATIONS)
         {
             const std::uint32_t kt_left    = walk_kt - kt_done;
             const std::uint32_t iterations = kt_left < CUSTOM_MM_MAX_MOP_ITERATIONS ? kt_left : CUSTOM_MM_MAX_MOP_ITERATIONS;
-            TT_MOP(mop_template_0, iterations - 1, no_skip_zmask);
+            // TT_MOP(0, iterations - 1, 0): zmask 0, whose high half init wrote with MOP_CFG
+            Mop::run<0 /*mask*/, hal::mop::MaskHigh::Preset>(iterations);
         }
 
         // Wait until every UNPACR of this walk has issued
-        t6_semaphore_get(semaphore::UNPACK_SYNC);
+        sync::semaphore::get<hal_port::UNPACK_SYNC_SEM>();
 
         // Wait for all contexts to be free
-        wait_for_next_context(1);
-        reset_config_context();
+        hal_port::wait_for_next_context(1);
+        hal_port::reset_config_context();
 
         // Reset counters at the end of each walk
-        TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
-        TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
+        hal_port::custom_mm_reset_unpack_counters();
     }
 }
 
@@ -337,7 +429,7 @@ inline void _llk_unpack_AB_custom_mm_(
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim)
 {
-    volatile std::uint32_t* cfg = get_cfg_pointer();
+    volatile std::uint32_t* cfg = hal::cfg::detail::state_cfg_bank(); // get_cfg_pointer()
 
     const std::uint32_t block_increment = read_transposed ? kt_dim * tile_size_a : tile_size_a;
     const std::uint32_t inner_increment = read_transposed ? -(((ct_dim - 1) * kt_dim) - 1) * tile_size_a : tile_size_a;
@@ -346,8 +438,8 @@ inline void _llk_unpack_AB_custom_mm_(
     const std::uint32_t address_b = base_address_b + tile_size_b * tile_index_b;
 
     // Wait for all contexts to be free
-    wait_for_next_context(1);
-    reset_config_context();
+    hal_port::wait_for_next_context(1);
+    hal_port::reset_config_context();
 
     _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, tile_size_b, block_increment, inner_increment, kt_dim);
 }

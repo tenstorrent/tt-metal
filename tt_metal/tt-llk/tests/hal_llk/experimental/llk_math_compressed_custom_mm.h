@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// HAL port of tt_llk_blackhole/llk_lib/experimental/llk_math_compressed_custom_mm.h. Same instruction sequence and
+// access kinds as production, expressed through the HAL. TTI_ADDRMOD_ONLY is an SFPLOAD and stays as production.
+
 #pragma once
 
 #include <cstdint>
@@ -14,6 +17,10 @@
 #include "cmath_common.h"
 #include "experimental/llk_custom_mm_common.h"
 #include "experimental/llk_math_custom_mm.h"
+#include "hal/counters/rwc.h"
+#include "hal/replay.h"
+#include "hal/sync.h"
+#include "llk_math_common.h"
 
 using namespace ckernel;
 using namespace ckernel::math;
@@ -34,14 +41,13 @@ constexpr std::uint32_t COMPRESSED_CUSTOM_MM_REPLAY_LEN = 3;
 
 inline void _llk_math_compressed_custom_mm_mop_config_()
 {
-    load_replay_buf(
-        ckernel::math::replay_buf_offset,
-        COMPRESSED_CUSTOM_MM_REPLAY_LEN,
+    using hal_port::custom_mm_mvmul;
+    hal::replay::record<hal::replay::BufferRange {ckernel::math::replay_buf_offset, COMPRESSED_CUSTOM_MM_REPLAY_LEN}>(
         []
         {
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // F0 @ F0 => 0
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // F0 @ F1 (F2 if transpose) => 16
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // F1 @ F2 (F1 if transpose) => 0
+            custom_mm_mvmul<ADDR_MOD_0>(); // F0 @ F0 => 0
+            custom_mm_mvmul<ADDR_MOD_1>(); // F0 @ F1 (F2 if transpose) => 16
+            custom_mm_mvmul<ADDR_MOD_0>(); // F1 @ F2 (F1 if transpose) => 0
         });
 }
 
@@ -63,7 +69,7 @@ inline void _llk_math_compressed_custom_mm_init_()
     custom_mm_configure_addrmod<transpose, layout>();
     _llk_math_compressed_custom_mm_mop_config_();
 
-    math::reset_counters(p_setrwc::SET_ABD_F);
+    hal_port::reset_counters_abd_f(); // math::reset_counters(p_setrwc::SET_ABD_F)
 }
 
 /**
@@ -86,7 +92,16 @@ inline void _llk_math_compressed_custom_mm_(
     static_assert(!custom_mm_split_acc(layout), "compressed_custom_mm: the SplitAcc layouts are not supported, see the init");
     constexpr std::uint32_t tile_rows     = custom_mm_tile_rows(layout);
     constexpr DstTileShape dst_tile_shape = tile_rows == 16 ? DstTileShape::Tile16x16 : (tile_rows == 32 ? DstTileShape::Tile32x16 : DstTileShape::Tile32x32);
-    math::set_dst_write_addr<dst_tile_shape, UnpackDestination::SrcRegs>(dst_index);
+    hal_port::set_dst_write_addr<dst_tile_shape, UnpackDestination::SrcRegs>(dst_index);
+
+    namespace sync = hal::sync;
+    namespace rwc  = hal::counters::rwc;
+    using hal::fpu::SourceRelease;
+    using hal_port::custom_mm_mvmul;
+    constexpr hal::replay::BufferRange replay_range {ckernel::math::replay_buf_offset, COMPRESSED_CUSTOM_MM_REPLAY_LEN};
+    // TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD)
+    constexpr rwc::MathCounter reset_abd_release_b {.src_a = rwc::Set(0), .src_b = rwc::Set(0), .dest = rwc::Set(0), .flip = rwc::Src::B};
+    static_assert(reset_abd_release_b.operation() == TT_OP_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD), "SETRWC encoding");
 
     const std::uint32_t* meta_ptr = reinterpret_cast<const std::uint32_t*>(base_address_meta);
     std::uint32_t index           = 0;
@@ -100,8 +115,8 @@ inline void _llk_math_compressed_custom_mm_(
             std::uint32_t fmt = meta & 0x3;
             if (fmt != 0)
             {
-                lltt::replay(ckernel::math::replay_buf_offset, COMPRESSED_CUSTOM_MM_REPLAY_LEN);
-                TTI_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_2, 0);
+                hal::replay::run<replay_range>();
+                custom_mm_mvmul<ADDR_MOD_2, SourceRelease::SrcA>();
             }
             else
             {
@@ -122,14 +137,14 @@ inline void _llk_math_compressed_custom_mm_(
         std::uint32_t fmt = meta & 0x3;
         if (fmt != 0)
         {
-            lltt::replay(ckernel::math::replay_buf_offset, COMPRESSED_CUSTOM_MM_REPLAY_LEN);
-            TTI_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_3, 0);
+            hal::replay::run<replay_range>();
+            custom_mm_mvmul<ADDR_MOD_3, SourceRelease::Both>();
         }
         else
         {
             // Wait for math to drain first, so SRCB_VLD is tested on the bank the previous MVMUL's CLR_AB flipped to
-            TTI_STALLWAIT(ckernel::p_stall::STALL_MATH, ckernel::p_stall::MATH | ckernel::p_stall::SRCB_VLD);
-            TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);
+            sync::wait::stall<sync::StallTarget::Math, sync::StallCondition::MathIdle | sync::StallCondition::SrcBValid>();
+            rwc::set<reset_abd_release_b>();
         }
         index++;
         if (index == 10)

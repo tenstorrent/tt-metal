@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
+// HAL port of tt_llk_blackhole/llk_lib/experimental/llk_pack_custom_mm.h. Same instruction sequence and access kinds
+// as production, expressed through the HAL.
+
 #pragma once
 
 #include <cstdint>
@@ -8,6 +11,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "experimental/llk_custom_mm_common.h"
+#include "hal/cfg.h"
 
 namespace ckernel
 {
@@ -33,15 +37,20 @@ inline std::uint32_t custom_mm_pack_row_bytes(const std::uint32_t pack_src_forma
 template <CustomMmDestLayout layout = CustomMmDestLayout::Default>
 inline void _llk_pack_custom_mm_init_(const std::uint32_t pack_src_format)
 {
+    namespace cfg      = hal::cfg;
+    constexpr auto Ch0 = cfg::Packer[0].AddrCtrl[cfg::PackerReg::Reg0];
+
     const std::uint32_t row_bytes = custom_mm_pack_row_bytes(pack_src_format);
     if constexpr (custom_mm_tile_rows(layout) == 32)
     {
-        cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(2 * FACE_R_DIM * row_bytes);
+        // cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>
+        cfg::write<cfg::Access::TensixCfgUnit, Ch0.Wstride, cfg::Sec::S0>(2 * FACE_R_DIM * row_bytes);
     }
     if constexpr (layout == CustomMmDestLayout::Compact)
     {
-        cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>((FACE_R_DIM / 2) * row_bytes);
-        cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(FACE_R_DIM * row_bytes);
+        // cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>, then <..._Wstride_RMW>
+        cfg::write<cfg::Access::TensixCfgUnit, Ch0.Zstride, cfg::Sec::S0>((FACE_R_DIM / 2) * row_bytes);
+        cfg::write<cfg::Access::TensixCfgUnit, Ch0.Wstride, cfg::Sec::S0>(FACE_R_DIM * row_bytes);
     }
 }
 
@@ -57,14 +66,19 @@ inline void _llk_pack_custom_mm_init_(const std::uint32_t pack_src_format)
 template <CustomMmDestLayout layout = CustomMmDestLayout::Default>
 inline void _llk_pack_custom_mm_uninit_(const std::uint32_t pack_src_format)
 {
+    namespace cfg      = hal::cfg;
+    constexpr auto Ch0 = cfg::Packer[0].AddrCtrl[cfg::PackerReg::Reg0];
+
     const std::uint32_t row_bytes = custom_mm_pack_row_bytes(pack_src_format);
     if constexpr (layout == CustomMmDestLayout::Compact)
     {
-        cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(FACE_R_DIM * row_bytes);
+        // cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>
+        cfg::write<cfg::Access::TensixCfgUnit, Ch0.Zstride, cfg::Sec::S0>(FACE_R_DIM * row_bytes);
     }
     if constexpr (custom_mm_tile_rows(layout) != 64)
     {
-        cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(TILE_NUM_FACES * FACE_R_DIM * row_bytes);
+        // cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>
+        cfg::write<cfg::Access::TensixCfgUnit, Ch0.Wstride, cfg::Sec::S0>(TILE_NUM_FACES * FACE_R_DIM * row_bytes);
     }
 }
 
