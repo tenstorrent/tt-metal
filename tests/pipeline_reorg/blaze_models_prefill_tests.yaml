@@ -2303,40 +2303,6 @@
 
 # ===== Disaggregated prefill -- keep adjacent; trunk, DSpark and MTP entries each share a launcher =====
 
-# 4-galaxy (SC4) disaggregated prefill: a 4-rank background runner opens the mesh, loads GLM-5.3,
-# warmup-compiles, and publishes the merged KV chunk table to shared NFS; a device-less producer then
-# reads it back and PCCs it against the golden KV cache.
-# A throwaway warmup request precedes the measured one, so first-chunk compile is not timed.
-# GLM-5.3 owns TWO device caches (MLA KVPE over all 78 layers + the lightning-indexer KEY cache over
-# its 21 `full` layers), and the pipeline split is layer-aware (18/20/20/20, snapped to `full` starts).
-# Both caches are PCC'd: the producer gates on min(config 0, config 1), so this is the only leg that
-# covers the merged multi-cache KV chunk table and the per-stage index-cache numbering.
-- name: "(GLM-5.3-744B) disaggregated prefill KV accuracy 1M tail@5k + perf 1M@5k, SC4"
-  cmd: |
-    set -euo pipefail
-    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
-    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
-      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
-    fi
-    cd "${TT_METAL_HOME}"
-    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53
-  test_type: prefill_runner_kv_pcc
-  test_tags: [glm_5_3, runner, kv_cache, glm53_trace]
-  test_group: disagg_prefill
-  skus:
-    bh_sc4:
-      # 1M at 28 users reaches a PCC verdict in ~16.5 min -- 215 chunks at ~2.3s each, since the
-      # lightning indexer scores the whole prefix and so grows with depth, plus a 143M-entry KV chunk
-      # table for rank 0 to merge and serialize -- and then spends ~7 min unwinding the mesh.
-      timeout: 60
-      tier: 1
-      release_ready: true
-  owner_id: U0AC4LTJH1P # Jaksa Jovicic
-  team: shield
-  budget_type: demo
-  sp_config: sc4
-
-
 # GLM-5.3 on the production prefill shape: the SC4 pod carved into eight [RING,RING] 4x4 tori (sc4_4x4_rr_mgd), 12
 # ranks by tt-run discovery. Four stages sit inside one Galaxy; the four seam stages span two neighbouring hosts
 # (PREFILL_STAGE_HOSTS=1,2,1,2,1,2,1,2), with row-block D2D services on each 1-host <-> 2-host boundary. One

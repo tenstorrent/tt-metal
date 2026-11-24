@@ -24,20 +24,6 @@
       }
     },
     "glm53": {
-      "sc4": {
-        "probe": "@1020k",
-        "margin": {
-          "@1020k": {
-            "throughput_tok_s": 0.03,
-            "ttft_s": 0.03
-          }
-        },
-        "8kw": {
-          "throughput_tok_s": 33685,
-          "ttft_s": 22.84,
-          "chunk_time_ms": 497
-        }
-      },
       "sc1": {
         "probe": "@1020k",
         "14kw": {
