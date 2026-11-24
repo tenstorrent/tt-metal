@@ -170,12 +170,9 @@ class SparseMoEEP(MoE):
             shared_out = self._memory_snapshot(shared_out, "AFTER_SHARED")
             pre_add_output = output
             output = ttml.ops.binary.add(pre_add_output, shared_out)
-            # binary.add's backward is just d_a = d_b = d_out (no read of inputs);
-            # the all_reduce above has noop_backward (identity), so its forward
-            # output is never read in bwd either; shared_out's parent linear (w2)
-            # also doesn't read shared_out itself for its weight grad (it reads w2's
-            # input, which is saved separately). All three sources confirm these
-            # two tensor values are not needed downstream — release them now.
+            # Backward reads neither value, so free both now: binary.add's backward doesn't read its inputs,
+            # and both come from all_reduces with noop_backward=True, the one above and, when the shared MLP
+            # is sharded, DeepSeekMLP's own. A local shared MLP ends in w2, whose backward reads its input.
             pre_add_output.get_value().deallocate(force=True)
             shared_out.get_value().deallocate(force=True)
 

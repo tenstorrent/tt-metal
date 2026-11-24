@@ -173,19 +173,21 @@ class DeepSeek(AbstractModuleBase):
             if self.config.use_tp:
                 # Sharded logits can't be sliced: push the padded columns to -1e4 so the
                 # vocab-parallel loss gives them zero probability and zero gradient.
-                logits = ttml.ops.binary.add(logits, self._vocab_pad_bias())
+                logits = ttml.ops.binary.add(
+                    logits, self._vocab_pad_bias(logits.get_value(ttml.autograd.PreferredPrecision.NATIVE).dtype)
+                )
             else:
                 logits = SliceLastDim.apply(logits, self.config.vocab_size)
         return logits
 
-    def _vocab_pad_bias(self) -> ttml.autograd.Tensor:
-        """Additive [1, 1, 1, padded_vocab_size] bias, vocab-sharded on "tp": -1e4 on padded columns."""
-        if self._tp_vocab_pad_bias is None:
+    def _vocab_pad_bias(self, dtype: ttnn.DataType) -> ttml.autograd.Tensor:
+        """Additive [1, 1, 1, padded_vocab_size] bias in ``dtype``, vocab-sharded on "tp": -1e4 on padded columns."""
+        if self._tp_vocab_pad_bias is None or self._tp_vocab_pad_bias.dtype != dtype:
             bias = np.zeros((1, 1, 1, self.padded_vocab_size), dtype=np.float32)
             bias[..., self.config.vocab_size :] = -1e4
             mapper = ttml.mesh().axis_mapper("tp", tdim=3)
             self._tp_vocab_pad_bias = ttml.autograd.Tensor.from_numpy(
-                bias, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper
+                bias, ttnn.Layout.TILE, dtype, mapper
             ).get_value(ttml.autograd.PreferredPrecision.NATIVE)
         return ttml.autograd.create_tensor(self._tp_vocab_pad_bias, requires_grad=False)
 

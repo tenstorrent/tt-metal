@@ -53,8 +53,6 @@ SEED = 2026
 DP_AXIS_SIZE = 8
 EP_AXIS_SIZE = 4
 MESH_SHAPE = (DP_AXIS_SIZE, EP_AXIS_SIZE)
-# DeepSeek-16B has 2 shared experts per MoE layer. Their 2 * moe_inter_dim = 128
-# hidden columns split into tile-aligned 32-column shards at EP=4.
 N_SHARED_EXPERTS = 2
 
 
