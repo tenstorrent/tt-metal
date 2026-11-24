@@ -82,14 +82,16 @@ inline void copy_init(LLKOperand<Format, Shape> src) {
  *
  * | Param Type | Name           | Description                                     | Type        | Valid Range            | Required |
  * |------------|----------------|-------------------------------------------------|-------------|------------------------|----------|
+ * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                  | bool        | DST_ACCUM_MODE         | False    |
  * | Template   | Format / Shape | Source L1 format + geometry (deduced)           | DataFormat/TensorShape | N/A   | True     |
  * | Function   | src            | Source operand (its base = the copy_init's)     | LLKOperand  | N/A                    | True     |
  * | Function   | itile          | Source tile index within src                    | uint32_t    | N/A                    | True     |
  * | Function   | idst           | Dest tile index                                 | uint32_t    | < Dest tiles / section | True     |
  */
 // clang-format on
-template <DataFormat Format, TensorShape Shape>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
 inline void copy_tile(LLKOperand<Format, Shape> src, std::uint32_t itile, std::uint32_t idst) {
+    static_assert(is_fp32_dest_acc_en == DST_ACCUM_MODE, "copy_tile: Dest mode is kernel-wide (DST_ACCUM_MODE)");
     if constexpr (detail::copy_to_dest<Format, Shape>) {
         tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
     }
