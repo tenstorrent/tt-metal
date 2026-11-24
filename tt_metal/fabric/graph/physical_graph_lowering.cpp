@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <map>
+#include <optional>
 #include <unordered_map>
 #include <utility>
 
@@ -114,7 +115,7 @@ std::vector<LinkPairing> legacy_link_pairings(
         return {};
     }
     // per chip, each direction's routers by plane
-    std::map<FabricNodeId, std::map<RoutingDirection, std::vector<RouterIndex>>> chips;
+    std::map<FabricNodeId, std::map<RoutingDirection, std::vector<std::optional<RouterIndex>>>> chips;
     for (RouterIndex r = 0; r < g.routers.size(); ++r) {
         const auto& p = g.routers[r].port;
         auto& planes = chips[p.node][*p.direction];
@@ -132,13 +133,17 @@ std::vector<LinkPairing> legacy_link_pairings(
             const auto& b = dirs.at(d2);
             const auto num_links = static_cast<uint32_t>(std::min(a.size(), b.size()));
             for (uint32_t link = 0; link < num_links; ++link) {
+                if (!a[link] || !b[link]) {
+                    continue;
+                }
                 links.push_back(LinkPairing{
-                    .a = a[link],
-                    .b = b[link],
+                    .a = *a[link],
+                    .b = *b[link],
                     .link = link,
                     .num_links = num_links,
                     .noc_vc = static_cast<uint32_t>(
-                        FabricEriscDatamoverConfig::DEFAULT_NOC_VC + (link % FabricEriscDatamoverConfig::NUM_EDM_NOC_VCS))});
+                        FabricEriscDatamoverConfig::DEFAULT_NOC_VC +
+                        (link % FabricEriscDatamoverConfig::NUM_EDM_NOC_VCS))});
             }
         };
         // same pairs, in the same order, as FabricBuilder::get_router_connection_pairs

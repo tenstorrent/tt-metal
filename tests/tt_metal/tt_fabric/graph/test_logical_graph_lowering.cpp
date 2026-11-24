@@ -952,6 +952,21 @@ TEST(FabricGraphInterDomain, DeadLinkNoRouter) {
     EXPECT_FALSE(g.find_router("m0.c0.N.p1").has_value());
 }
 
+TEST(FabricGraphInterDomain, DeadFirstPlaneLeavesPairingsAlone) {
+    const auto [ports, g, rules] =
+        lower_with_perimeter({unused(0, 8, 7, /*in_domain=*/false, /*trained=*/false), unused(0, 9, 7)});
+    const auto n1 = *g.find_router("m0.c0.N.p1");
+    bool n1_paired = false;
+    for (const auto& l : legacy_link_pairings(g, Topology::Mesh, {})) {
+        EXPECT_NE(l.a, l.b);
+        EXPECT_EQ(g.routers[l.a].port.node, g.routers[l.b].port.node);
+        EXPECT_EQ(g.routers[l.a].port.plane, l.link);
+        EXPECT_EQ(g.routers[l.b].port.plane, l.link);
+        n1_paired |= l.a == n1 || l.b == n1;
+    }
+    EXPECT_TRUE(n1_paired);
+}
+
 TEST(FabricGraphInterDomain, ValidationRejectsDynamicEdgeOffThePerimeter) {
     auto [ports, g, rules] = lower_with_perimeter(kQuietBoxSplit);
     EXPECT_TRUE(find_problems(g, *rules, ValidationLimits{}).empty());
