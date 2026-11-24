@@ -199,6 +199,8 @@ namespace experimental {
  *
  * Sub-32-row (partial-height) block-float tiles are not supported (compile-time rejected).
  *
+ * | Param Type | Name | Description | Type | Valid Range | Required |
+ * |------------|------|-------------|------|-------------|----------|
  * | Template | is_fp32_dest_acc_en         | fp32 dest-accumulate mode                                    | bool        |                                                                     | False |
  * | Template | Format                      | Buffer L1 data format (deduced from the LLKOperand argument) | DataFormat  |                                                                     | True  |
  * | Template | Shape                       | Tile geometry (deduced from the LLKOperand argument)         | TensorShape |                                                                     | True  |
@@ -244,6 +246,8 @@ ALWI void copy_init(
  * Requires copy_init to have run, and the DST register to be acquired (tile_regs_acquire) before this call.
  * Sub-32-row (partial-height) block-float tiles are not supported (compile-time rejected).
  *
+ * | Param Type | Name | Description | Type | Valid Range | Required |
+ * |------------|------|-------------|------|-------------|----------|
  * | Template | is_fp32_dest_acc_en | fp32 dest-accumulate mode                          | bool        |         | False |
  * | Template | Format         | Buffer L1 data format (deduced from LLKOperand)   | DataFormat  |         | True |
  * | Template | Shape          | Tile geometry (deduced from LLKOperand)           | TensorShape |         | True |
@@ -285,6 +289,8 @@ ALWI void copy_tile(LLKOperand<Format, Shape> src, std::uint32_t itile, std::uin
  * Requires the same init as copy_tile (copy_init). Sub-32-row (partial-height) block-float tiles are not
  * supported (compile-time rejected).
  *
+ * | Param Type | Name | Description | Type | Valid Range | Required |
+ * |------------|------|-------------|------|-------------|----------|
  * | Template | is_fp32_dest_acc_en  | fp32 dest-accumulate mode                                    | bool        |         | False |
  * | Template | Format               | Buffer L1 data format (deduced from LLKOperand)             | DataFormat  |         | True |
  * | Template | Shape                | Tile geometry (deduced from LLKOperand)                    | TensorShape |         | True |
@@ -310,6 +316,31 @@ ALWI void copy_block(
     for (std::uint32_t i = 0; i < ntiles; ++i) {
         copy_tile<is_fp32_dest_acc_en>(src, start_in_tile_index + i, start_dst_tile_index + i);
     }
+}
+
+// clang-format off
+/**
+ * Id-free block datacopy of a ct_dim x rt_dim block: copy_block with ntiles = ct_dim * rt_dim (same block form
+ * as Quasar).
+ *
+ * | Param Type | Name                 | Description                                 | Type       | Valid Range | Required |
+ * |------------|----------------------|---------------------------------------------|------------|-------------|----------|
+ * | Template   | ct_dim / rt_dim      | Block columns / rows (tiles)                | uint32_t   | ct_dim * rt_dim <= acquired DST size | True |
+ * | Template   | is_fp32_dest_acc_en  | fp32 dest-accumulate mode                   | bool       |             | False    |
+ * | Function   | src                  | Source operand                              | LLKOperand | N/A         | True     |
+ * | Function   | start_in_tile_index  | First source tile within src                | uint32_t   | N/A         | True     |
+ * | Function   | start_dst_tile_index | First DST tile                              | uint32_t   | N/A         | False    |
+ */
+// clang-format on
+template <
+    std::uint32_t ct_dim,
+    std::uint32_t rt_dim,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    DataFormat Format,
+    TensorShape Shape>
+ALWI void copy_block(
+    LLKOperand<Format, Shape> src, std::uint32_t start_in_tile_index, std::uint32_t start_dst_tile_index = 0) {
+    copy_block<is_fp32_dest_acc_en>(src, start_in_tile_index, start_dst_tile_index, ct_dim * rt_dim);
 }
 
 }  // namespace experimental
