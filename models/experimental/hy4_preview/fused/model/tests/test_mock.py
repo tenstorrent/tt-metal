@@ -9,6 +9,8 @@ compiled (nothing runs), audited, and its L1 need and the number of program-cach
 Lines start with HY4_MK11.
 """
 
+import os
+
 import pytest
 import torch
 from loguru import logger
@@ -24,6 +26,8 @@ from models.experimental.hy4_preview.fused.sparse_mla.tests import harness as hs
 from models.experimental.hy4_preview.tt import prefill_bridge as pb
 
 MESH = (8, 4)
+# HY4_MOCK_LAYERS=78: one more depth for test_mock (random weights and placeholder streams: no file is read)
+DEPTHS = [1, 2, 6] + ([int(os.environ["HY4_MOCK_LAYERS"])] if os.environ.get("HY4_MOCK_LAYERS") else [])
 TRACE_REGION = 64 << 20
 galaxy = pytest.mark.parametrize(
     "device_params, mesh_device",
@@ -84,11 +88,18 @@ def build_random(
 
 
 @galaxy
-@pytest.mark.parametrize("layers", [1, 2, 6], ids=["one", "two", "six"])
-def test_mock(mesh_device, layers):
+@pytest.mark.parametrize("split", ["tp32", "tp8g4"])
+@pytest.mark.parametrize("layers", DEPTHS, ids=lambda n: {1: "one", 2: "two", 6: "six"}.get(n, f"L{n}"))
+def test_mock(mesh_device, layers, split):
+    """split: the MoE layers' expert layout (Stack(mlp_split=); fused/layer_mlp/PLAN.md section 15); tp32 is the
+    default and its lines are the ones this test always logged."""
     if not is_mock():
         pytest.skip("the mock's compile and size check")
-    st = build_random(mesh_device, layers, dense_first=layers > 1)
+    st = build_random(mesh_device, layers, dense_first=layers > 1, mlp_split=split)
+    if split != "tp32":
+        logger.info(
+            f"HY4_MK11 mock {layers} layer(s): the lines that follow are with the MoE layers' experts as {split}"
+        )
     programs = st.step_programs(audit=True)
     entries = []
     for name, io, desc in programs:

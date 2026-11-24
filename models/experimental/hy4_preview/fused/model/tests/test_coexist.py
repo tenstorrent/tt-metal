@@ -123,6 +123,10 @@ def build_both(b, mesh, monkeypatch, mark, during_reserve=None):
     exists). during_reserve(b): called while the reserved range is the only free DRAM, after the weights and the
     step's tensors (whatever else of ours must persist is allocated there)."""
     g = b.g = TC.hf_harness.find_decode_golden(TC.LAYERS, TC.PROMPT)
+    if g is None:
+        pytest.skip(
+            f"no {TC.LAYERS}-layer decode golden of a {TC.PROMPT}-token prompt under {TC.hf_harness.GOLDEN_ROOT}"
+        )
     N, n, steps = g["meta"]["prompt_len"], TC.LAYERS, g["meta"]["steps"]
     b.N, b.n, b.steps = N, n, steps
     layout = b.layout = BlockCyclicLayout()

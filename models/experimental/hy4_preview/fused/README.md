@@ -7,10 +7,13 @@ The decode step of tencent/Hy4-preview on one Blackhole Galaxy (32 chips, 8x4 me
 from kernel sources and launched with `ttnn.generic_op` (kernels are JIT-compiled; nothing here needs a host C++
 change), replayed as one device trace. The ttnn-op decode in `../tt/` is the functional path and the comparison.
 
-State on 2026-11-20: one decode step of all 78 layers runs on the device as one trace, token ids in and token ids
+State on 2026-11-23: one decode step of all 78 layers runs on the device as one trace, token ids in and token ids
 out, with nothing from the host in between; it is bit-equal from replay to replay; its tokens are the reference's on
-the contexts checked (see "Accuracy"). Not done: the 21 full-indexer layers chained into the 78-layer step (the
-layer exists as a traced unit of its own), the MLP half and the full-indexer layer at 16 rows, serving.
+the contexts checked (see "Accuracy"). The 21 full-indexer layers are chained into the step (the selection is made
+on the chips in every pass), and `model/decode_model.py` generates from an empty context: it appends its own rows
+and keys, so a conversation needs no prefill stack (a prompt is fed one token per pass). Not done: the prefill stack
+in front of that form at 78 layers, one set of expert weights for both, the MLP half and the full-indexer layer at
+16 rows.
 
 ## Design
 1. Programs are non-persistent and run under fast dispatch inside one device trace, so they share the open device
@@ -35,10 +38,10 @@ layer exists as a traced unit of its own), the MLP half and the full-indexer lay
 | `sparse_mla/` | selected rows read by id from the packed storage, latent attention with the sink | 32 chips |
 | `indexer_scan/`, `merges/` | index-key scan with a chip-local top-2048; the cross-chip cut | 32 chips, exact ids |
 | `layer_attn/` | the attention half of a layer: two programs (P1, P2); latent and index-key append; the full-indexer layer as one traced unit; a shared-indexer layer at 16 rows per pass; a fixed merge order | 32 chips |
-| `moe/`, `layer_mlp/` | router, union of picks, DRAM-streamed experts, shared expert, dense FFN; the MLP half | 32 chips at 8 rows |
+| `moe/`, `layer_mlp/` | router, union of picks, DRAM-streamed experts, shared expert, dense FFN; the MLP half; two expert layouts: 1/32 of every expert per chip (tp32, the default) and 8-chip groups (tp8g4: a mesh column owns 64 experts, each chip a 1/8 slice of each) | 32 chips at 8 rows |
 | `fidelity/` | a multi-phase matmul for BFP weights (`hifi_mm.h`) and what each fidelity costs | measured |
 | `kv_store/` | a paged KV store (8192-token frames, frame tables in L1, bank-local copies, LRU by tokens) | 32 chips, with the prefill stack |
-| `model/` | the whole step: N layers as one trace; the embedding gather and the LM head with a greedy merge as programs of this piece; a restore program and a start-up rule for sharing the device with the prefill stack | 78 layers |
+| `model/` | the whole step: N layers as one trace, shared-indexer and full-indexer layers (`Stack.set_indexer`); the embedding gather and the LM head with a greedy merge as programs of this piece; `DecodeModel` (`reset_row`, `step`, `open` / `close`): generation from an empty context; a restore program and a start-up rule for sharing the device with the prefill stack | 78 layers |
 
 ## Measured (32 chips, traced replay, 8 rows unless said)
 | | |
@@ -54,8 +57,11 @@ layer exists as a traced unit of its own), the MLP half and the full-indexer lay
 
 The step's time follows the expert union (about 2.2 us per expert per layer). With the 8 rows taken from different
 contexts (mean union 48.5) the 78-layer step is 46.2 ms, measured, tokens 8 of 8; eight unrelated conversations
-have a union near 53 by the reference router's picks (about 47 ms, estimated), and the full-indexer layers'
-selection adds about 2.3 ms once chained in. A row's result does not depend on the other rows of its pass.
+have a union near 53 by the reference router's picks (about 47 ms, estimated). These figures are of the step with
+every layer in shared-indexer form; the step with the full-indexer layers chained in (`DecodeModel`) has not been
+timed as a step of record (the selection was about 2.3 ms by the unit's own measurement). With the tp8g4 expert
+layout the same shared-form step is 42.2 to 43.9 ms. A row's result does not depend on the other rows of its pass
+(`DecodeModel`, 78 layers: each row alone equals the same row among the others in every bit).
 
 ## Accuracy
 Against the HF reference with the RoPE pairing of `reference/attention.py` set to `interleaved` (see below),
@@ -68,6 +74,10 @@ compensates.
 That scalar is a stopgap: it removes the mean bias only, and it cannot stay once prefill and decode read the same
 weights. Rows packed with rounding to nearest need none (the append here has that form, `append="nearest"`); the
 scalar goes when the prefill pack rounds.
+
+From an empty context (`DecodeModel`: its own rows, rounded to nearest, no scalar; the selection of every full-indexer
+layer made on the chips): 29 of 32 on the same chat prompt, the three lost tokens the ones its host control loses
+with the same expert format, and 48 of 48 row tokens behind a 1,022-token context it wrote itself.
 
 ### RoPE pairing of the reference
 `modeling_hy_v4.py` rotates half-split pairs `(i, i+32)` of the checkpoint's 64 rope rows; vLLM's Hy4 implementation
@@ -84,7 +94,8 @@ change as the prefill stack's conversion, so that the two never disagree on one 
 - Comments cite sections of `PLAN.md`: the pieces' development notes, which are not part of this tree.
 - Paths under `generated/hy4_preview/` are where tests read converted weights and goldens and write measurements;
   `model/convert.py` writes the decode weights.
-- The serving loop and the MLP half's latency work (router and expert hand-over changes) are not in this tree.
+- The serving loop (an OpenAI server over `DecodeModel`) and the MLP half's latency work (router and expert
+  hand-over changes) are not in this tree.
 
 ## Running
 Each piece has `tests/`. Compile-only on a simulated 32-chip Galaxy (no board; kernels are JIT-compiled and the

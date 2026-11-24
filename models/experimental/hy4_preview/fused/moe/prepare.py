@@ -7,8 +7,14 @@
 
 writes, per layer and chip, ``<out>/layer<L>/<split>/chip<cc>.{gate_up,down}.tensorbin`` (host BFP4 tensors,
 [1, 1, rows, 256]: one [rows, 32] shard per DRAM bank) and ``manifest.json`` with the time and the bytes.
-Splits: tp<N> (chip c holds intermediate channels [c, c + 1) * 2048 / N of every expert) and ep (chip c holds the
-8 whole experts [8 c, 8 c + 8)).
+Splits: tp<N> (chip c holds intermediate channels [c, c + 1) * 2048 / N of every expert), ep (chip c holds the
+8 whole experts [8 c, 8 c + 8)) and tp<N>g<G> ("N chips per group": the N * G chips are G groups of N; group g owns
+the routed experts [256 g / G, 256 (g + 1) / G) and nobody else holds them; a chip holds 1 / N of each expert of
+its group: chip c is slice c // G of group c % G, i.e. on a mesh of N rows x G columns, chips row-major, a group is
+a mesh column and the slice is the mesh row. tp8g4 is the 8x4 Galaxy's. The shared expert, 64 pairs like any
+expert, lives on ONE group at the same 1 / N (GROUP_SHARED), as the two entries behind that group's experts; the
+other groups' files carry two zero entries there, never read, so that all chips' streams have one shape (a mesh
+tensor has one shape for all its shards)).
 
 Host only. Run it with TT_METAL_MOCK_CLUSTER_DESC_PATH set (ttnn's host tensor conversion creates the device
 context, which opens the board otherwise).
@@ -77,21 +83,82 @@ def dense_experts(layer=0, terms=2):
     return _terms(gate_up, down, terms)
 
 
+GROUP_SHARED = 3  # tp<N>g<G>: the group whose chips hold the shared expert (not the root chip's column 0)
+
+
+def split_groups(split):
+    """tp<N>g<G> -> (N, G); None for the other splits."""
+    if split.startswith("tp") and "g" in split:
+        n, g = split[2:].split("g")
+        return int(n), int(g)
+    return None
+
+
+def chip_group(split, chip):
+    """tp<N>g<G>: (group, slice) of chip ``chip`` (row-major on a mesh of N rows x G columns: column, row)."""
+    _, groups = split_groups(split)
+    return chip % groups, chip // groups
+
+
+def group_experts(split, group, routed=256):
+    """tp<N>g<G>: (expert_base, expert_count) of a group among ``routed`` routed experts."""
+    _, groups = split_groups(split)
+    assert routed % groups == 0
+    return group * (routed // groups), routed // groups
+
+
+def chip_union(split, chip, indices, weights, routed=256, shared_group=GROUP_SHARED):
+    """tp<N>g<G>: what chip ``chip`` runs for the rows' picks (indices, weights [T, K]): (local ids of its stream
+    entries, weights [T, U], n_plain): its group's part of the union (layout.union_of, the hub's mirror), and on
+    the shared expert's group one plain slot more (entry ``expert_count``, weight 1). An empty list is a chip with
+    nothing to do: its partial is zero."""
+    group, _ = chip_group(split, chip)
+    base, count = group_experts(split, group, routed)
+    ids, w = L.union_of(indices, weights, expert_base=base, expert_count=count)
+    if group != shared_group:
+        return ids, w, 0
+    return ids + [count], torch.cat((w, torch.ones(w.shape[0], 1)), dim=1), 1
+
+
 def split_share(split):
-    return L.ep_share() if split == "ep" else L.tp_share(int(split[2:]))
+    if split == "ep":
+        return L.ep_share()
+    groups = split_groups(split)
+    return L.tp_share(groups[0] if groups else int(split[2:]))
 
 
 def split_chips(split):
-    return 32 if split == "ep" else int(split[2:])
+    if split == "ep":
+        return 32
+    groups = split_groups(split)
+    return groups[0] * groups[1] if groups else int(split[2:])
 
 
-def chip_weights(gate_up, down, split, chip, experts=None):
+def chip_weights(gate_up, down, split, chip, experts=None, routed=256, shared_group=GROUP_SHARED):
     """The chip's share (gate, up [E, I_c, 6144], down [E, 6144, I_c]) as fp32. experts: only these (global ids,
-    for a tensor-parallel split)."""
+    for a tensor-parallel split).
+    tp<N>g<G>: the chip's slice of its group's ``routed`` / G experts (local ids 0 ..), then the entries behind the
+    routed ones (the shared expert's terms): the chip's slice of them on group ``shared_group``, zeros elsewhere."""
     I = L.INTERMEDIATE
     if split == "ep":
         sel = slice(8 * chip, 8 * chip + 8)
         return gate_up[sel, :I].float(), gate_up[sel, I:].float(), down[sel].float()
+    if split_groups(split):
+        assert experts is None
+        n, _ = split_groups(split)
+        I = gate_up.shape[1] // 2
+        group, part = chip_group(split, chip)
+        base, count = group_experts(split, group, routed)
+        c0, c1 = part * I // n, (part + 1) * I // n
+        # (the slice first: the copies are of the chip's share only)
+        own = lambda w, cut: torch.cat((cut(w[base : base + count]), cut(w[routed:])), dim=0).float()
+        gate = own(gate_up, lambda w: w[:, c0:c1])
+        up = own(gate_up, lambda w: w[:, I + c0 : I + c1])
+        dn = own(down, lambda w: w[:, :, c0:c1])
+        if group != shared_group:
+            for w in (gate, up, dn):
+                w[count:] = 0.0
+        return gate, up, dn
     # (a tensor-parallel chip's channels: the same slice of every entry, the shared expert and the dense FFN's
     # entries included)
     n = int(split[2:])
@@ -122,6 +189,7 @@ def prepare_layer(out, layer, split, dense=False):
     """dense: the layer is a dense FFN (layer 0), stored as 9 entries. MoE layers of a tensor-parallel split get
     the shared expert as entry 256."""
     share = split_share(split)
+    assert not (dense and split_groups(split)), "the dense FFN of layer 0 is stored as tp32 (layer_mlp/PLAN.md 15.3)"
     t0 = time.time()
     gate_up, down = dense_experts(layer) if dense else layer_experts(layer, shared=split != "ep")
     t_load = time.time() - t0
@@ -143,6 +211,9 @@ def prepare_layer(out, layer, split, dense=False):
         "bytes": nbytes,
         "bytes_per_chip": nbytes // split_chips(split),
     }
+    if split_groups(split):
+        info["shared_group"] = GROUP_SHARED
+        info["entries"] = int(gate.shape[0])  # per chip: the group's experts and the shared expert's two terms
     (Path(out) / f"layer{layer}" / split / "manifest.json").write_text(json.dumps(info, indent=1))
     return info
 
