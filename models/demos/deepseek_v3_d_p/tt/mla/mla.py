@@ -966,7 +966,8 @@ class ttMLA:
         # Pass 2 runs no full layer, so the dense gather buffer is idle while it runs: its push output goes there when
         # it fits (as GLM-5.3's shared layers do, _push_reuses_dense), else to a buffer of its own. Safe because the
         # layers use the buffer serially (pass 1 is done before pass 2 writes it) and _two_bank_attn calls
-        # self._push.invalidate() first, which drops any pre-send record a pass-1 layer left for a buffer pass 2 is
+        # self._push.invalidate() whenever it builds an index list, which the loop's first pass-2 layer always does
+        # (start_chunk drops the held one): that drops any pre-send record a pass-1 layer left for a buffer pass 2 is
         # about to overwrite.
         dense = self._sparse_kv_gather_buffer
         self._pass2_push_reuses_dense = (
@@ -2613,9 +2614,15 @@ class ttMLA:
         for value in tt_kvpe if isinstance(tt_kvpe, tuple) else (tt_kvpe,):
             ttnn.deallocate(value)
 
-        joint = index.index_list(indices, metadata[1], metadata[2])
-        # The joint list is a new tensor every call, so a cached plan keyed by its address could be another layer's.
-        self._push.invalidate()
+        # The window part of the index list depends only on the chunk, the joint list and its push plan only on the
+        # chunk and the pass-1 top-k set. The loop's first layer starts the chunk (dropping the held joint list); a
+        # layer whose top-k set has no held joint list builds it (and drops the planner's cached plan and any pass-1
+        # pre-send record); the set's other layers reuse both (the plan through the planner's address-keyed cache).
+        if self.layer_idx == self.config.loop_first_layer:
+            index.start_chunk(metadata[1], metadata[2])
+        joint, built = index.joint_for(indices)
+        if built:
+            self._push.invalidate()
         plan = self._sparse_push_plan(joint, None, metadata)
         cache_batch_idx = self._cache_batch_idx(cache_user_id, cache_layer_idx)
         storage = kvpe_cache.storage
@@ -2641,7 +2648,6 @@ class ttMLA:
             seq_len_local=seq_len_local,
             compact=True,
         )
-        ttnn.deallocate(joint)
         if host_metadata:
             for t in metadata:
                 ttnn.deallocate(t)
