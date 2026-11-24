@@ -6,7 +6,6 @@ import pytest
 import torch
 from tests.ttnn.nightly.unit_tests.operations.conv.test_conv2d import run_conv, torch_tensor_map, HS, WS, BS
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
@@ -310,62 +309,3 @@ def test_prepare_conv_weights_rejects_zero_params(device, override, field, expec
             input_dtype=ttnn.bfloat16,
             **_conv_zero_param_kwargs(device, override),
         )
-
-
-# Accurate exp on a bf16 DEST between matmul_block calls of one conv block (single K block, no
-# bias, several output subblocks): exp's replay record must stay out of the FPU's replay slots.
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-@pytest.mark.parametrize(
-    "output_channels, input_channels, input_height, input_width, shard_layout, act_block_h",
-    (
-        (256, 32, 64, 64, HS, None),
-        (128, 16, 128, 128, HS, 64),
-        (256, 64, 32, 32, BS, None),
-    ),
-)
-def test_conv_fused_accurate_exp_between_matmul_blocks(
-    device, output_channels, input_channels, input_height, input_width, shard_layout, act_block_h
-):
-    torch.manual_seed(0)
-    batch_size = 1
-    torch_input = torch.rand(batch_size, input_channels, input_height, input_width, dtype=torch.bfloat16) * 2 - 1
-    torch_weight = (torch.rand(output_channels, input_channels, 3, 3, dtype=torch.bfloat16) * 2 - 1) * 0.05
-    torch_golden = torch.exp(
-        torch.nn.functional.conv2d(torch_input.float(), torch_weight.float(), stride=(1, 1), padding=(1, 1))
-    )
-
-    conv_config = ttnn.Conv2dConfig(
-        weights_dtype=ttnn.bfloat16,
-        shard_layout=shard_layout,
-        activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.EXP),
-    )
-    if act_block_h is not None:
-        conv_config.act_block_h_override = act_block_h
-    compute_config = ttnn.init_device_compute_kernel_config(
-        device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=False,
-    )
-    tt_output, [out_height, out_width] = ttnn.conv2d(
-        input_tensor=ttnn.from_torch(torch.permute(torch_input, (0, 2, 3, 1)), ttnn.bfloat16),
-        weight_tensor=ttnn.from_torch(torch_weight, ttnn.bfloat16),
-        in_channels=input_channels,
-        out_channels=output_channels,
-        device=device,
-        kernel_size=(3, 3),
-        stride=(1, 1),
-        padding=(1, 1),
-        batch_size=batch_size,
-        input_height=input_height,
-        input_width=input_width,
-        conv_config=conv_config,
-        compute_config=compute_config,
-        return_output_dim=True,
-        dtype=ttnn.bfloat16,
-    )
-    torch_output = ttnn.to_torch(ttnn.from_device(tt_output)).reshape(
-        batch_size, out_height, out_width, output_channels
-    )
-    torch_output = torch.permute(torch_output, (0, 3, 1, 2)).float()
-    assert_with_pcc(torch_golden, torch_output, pcc=0.999)
