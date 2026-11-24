@@ -364,11 +364,18 @@ jobs:
       - name: Record the job start
         if: ${{ inputs.shadow-compile-runner != '' || inputs.stage2-baseline-ref != '' }}
         run: echo "JOB_START_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
+      # Only what the legs build and run from; stage 2 archives the same paths from the base.
       - name: Checkout code
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@7586e1e528b173057dbaa828c9ae1fa945fd2a9f # cachew checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
         with:
           ref: ${{ inputs.ref }}
+          sparse-checkout: |
+            .github
+            tt_metal/tt-llk
+            tt_metal/hw
+            tt_metal/hostdevcommon
+            ttnn/cpp/ttnn/operations/experimental
       - name: Install SFPI
         shell: bash
         working-directory: ${{ env.LLK_PATH }}
