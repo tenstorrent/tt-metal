@@ -30,10 +30,10 @@ Every number in this file was measured on a p100a. The expert layouts are made f
 On the card the experts are BFP4 or BFP8 (per tensor, `convert/default_dtype_map.json`), attention and the
 unembed BFP8, router and residual queries fp32.
 
-Code map: `convert/` checkpoint -> weight cache, `tt/` device modules (`model.py` wires them,
-`generator.py` traces the decode step, `prefill_model.py` chunked prefill, `spec_generator.py` speculative
-decode), `tests/` per-module checks against the Hugging Face reference and the full-model test, `demo/` the
-demo, golden check and perf harness.
+Code map: `convert/` checkpoint -> weight cache (and the GPTQ rounding of the experts), `tt/` device modules
+(`model.py` wires them, `generator.py` traces the decode step, `prefill_model.py` chunked prefill,
+`spec_generator.py` speculative decode), `tests/` per-module checks against the Hugging Face reference and the
+full-model test, `demo/` the demo, golden check and perf harness.
 
 ## Setup
 
@@ -80,9 +80,9 @@ The bank and PF layouts are laid out for the card's DRAM bank count, 7 on a p100
 banks).
 
 The converter rounds each expert weight to the nearest BFP value. The caches the two run modes name
-(`own3-def8-*`, `own3-l8-*`) hold the same tensors, dtypes and bytes with the expert weights rounded by GPTQ
-instead; that rounding step is not in this folder. Without those caches, set `INKLING_CACHE` and
-`INKLING_TILE_CACHE` to the converter's output as above: every script and test takes them.
+(`own3-def8-*`, `own3-l8-*`) hold the same tensors with the expert weights rounded by GPTQ instead; the next
+section makes them. Without them, set `INKLING_CACHE` and `INKLING_TILE_CACHE` to the converter's output as
+above: every script and test takes them.
 
 ttnn opens the card even for host-side tensor conversions. To convert or run the host-only tests without
 the card, point it at a mock cluster:
@@ -90,6 +90,103 @@ the card, point it at a mock cluster:
 ```
 export TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/blackhole/p100_cluster_desc/p100_cluster_desc.yaml
 ```
+
+## GPTQ-rounded experts: the run modes' caches
+
+GPTQ rounds the weights of an expert one input column at a time and moves each column's rounding error onto the
+columns not yet rounded, so that the expert's output on calibration inputs changes least. The values stay on the
+card's BFP grid (one exponent per 16 outputs at one input), so nothing changes in the kernels:
+
+| cache | expert dtypes | expert tensors rounded by GPTQ |
+|---|---|---|
+| `own3-def8` | as `convert/default_dtype_map.json`: the plain cache's dtypes, bytes and speed | all 48 (22 BFP4, 26 BFP8) |
+| `own3-l8` | layers 0-19 all BFP4; layers 20-23 BFP8 | the 40 of layers 0-19; layers 20-23 are the plain cache's |
+
+Four steps make both from the tile cache `$D/tile` above. Only the capture runs on the card.
+
+| step | runs on | time | needs |
+|---|---|---|---|
+| 1. `gptq_calib corpus`, `weights` | host | seconds | the tokenizer, the texts below |
+| 2. `gptq_calib capture` | card | the model load (~35 s) and 1.4 to 2.2 s per 2048-token sequence | the tile cache; 0.43 GB of disk per 2048-token sequence (24 GB for the set below) |
+| 3. `gptq_calib solve` | host, CPU only | about 10 minutes per layer for the set below on a shared 80-core host; 37 layer solves for the two caches | the checkpoint and the capture; about 10 GB of RAM at 43K tokens |
+| 4. `variant`, then the layout steps | host | `variant`: 45 s per layer; per cache 2.3 min for the bank layout and 2.6 min for the PF layout | disk for the rewritten expert tensors only (the rest is hard-linked): 19 GiB per bank or PF cache |
+
+```
+G="python -m models.demos.inkling2_mini.convert.gptq_calib"
+V="python -m models.demos.inkling2_mini.convert.variant"
+C=<a work directory>; T=<a tt-metal checkout>
+
+# 1. the calibration set: 45 sequences of 2048 tokens and 2 of 8192 (the table below), then the weights
+$G corpus --out $C/ids.pt \
+    --chat chat:12:ultrachat.jsonl --ask "code:6:$T/ttnn:.py,.cpp,.hpp:Explain what this code does." \
+    --ask "instruct:3:$T/tech_reports:.md:Summarize this document." \
+    --text book:pg84.txt@0.2 --text book:pg84.txt@0.6 --text book:pg98.txt@0.2 --text book:pg98.txt@0.6 \
+    --text book:pg1400.txt@0.2 --text book:pg1400.txt@0.6 --text book:pg345.txt@0.2 --text book:pg345.txt@0.6 \
+    --chat chat:4:oasst.jsonl --chat instruct:6:dolly.jsonl \
+    --text code:argparse.py --text code:json/decoder.py,json/encoder.py,csv.py,heapq.py \
+    --text code:<clap_builder src/*.rs> --text code:<hashbrown src/*.rs> \
+    --text code:$T/tt_metal/impl/program/program.cpp --text code:<$T/tt_metal/impl/allocator/*.cpp>
+    # <...>: the files, comma-separated; pgN.txt: the plain text of Project Gutenberg book N
+$G corpus --out $C/ids_long.pt --seq 8192 --first 45 --text long:pg1400.txt@0.4 --text long:pg345.txt@0.8
+$G weights --ids $C/ids.pt $C/ids_long.pt --out $C/weights.json \
+    --share chat=.348,instruct=.126,code=.263,book=.175,long=.088
+
+# 2. the MoE inputs of every layer application, on the card
+$G capture --ids $C/ids.pt --out $C/cap --cache $D/tile
+$G capture --ids $C/ids_long.pt --out $C/cap --cache $D/tile
+
+# 3. the solves: every expert tensor of layers 0-19 on the BFP4 grid; then layers 6-17 and 19-23 with their
+#    BFP8 tensors on the BFP8 grid (--gu8 / --dn8: the layers whose gate_up / down the dtype map keeps BFP8)
+$G solve --capture $C/cap --weights $C/weights.json --layers 0-19 --out $C/codes-l8
+$G solve --capture $C/cap --weights $C/weights.json --layers 6-17,19-23 --gu8 12-15,17,20-23 --dn8 6-17,19-23 \
+    --out $C/codes-def8
+
+# 4. the tile caches, then the decode layouts as in "Weights and cache conversion"
+$V --base $D/tile --out $D/own3-l8-tile --experts-from codes:$C/codes-l8 --layers 0-19
+$V --base $D/tile --out $D/own3-def8-tile --experts-from codes:$C/codes-def8 --layers 6-17,19-23 \
+    --take "$D/own3-l8-tile:L0[0-5]/experts.*" --take "$D/own3-l8-tile:L18/experts.*"
+for m in own3-l8 own3-def8; do
+    python -m models.demos.inkling2_mini.convert.relayout_sticks --src $D/$m-tile --dst $D/$m-bank \
+        --layout bank --dtypes BFP4,BFP8
+    python -m models.demos.inkling2_mini.convert.pf_layout --src $D/$m-bank --tiles $D/$m-tile --dst $D/$m-pf
+done
+```
+
+With `INKLING_CACHE_DIR=$D` the two run modes then find `own3-def8-pf`, `own3-def8-tile`, `own3-l8-pf` and
+`own3-l8-tile`. `variant` reads every file it writes back and refuses a tensor that differs from its codes
+(`gptq_exact` in the manifest), and records where each tensor came from.
+
+The calibration set of the measured caches: 47 sequences, 108,544 tokens, none of them a golden or an evaluation
+prompt. Chat data goes through the chat template; `--chat` reads one JSON list of messages per line.
+
+| kind | sequences | text | weight |
+|---|---:|---|---:|
+| chat | 12 | `HuggingFaceH4/ultrachat_200k`, test_sft conversations | 1.1540 |
+| chat | 4 | `OpenAssistant/oasst_top1_2023-08-25`, English test threads | 1.1540 |
+| instruct | 6 | `databricks/databricks-dolly-15k`: instruction and context as the user turn, response as the answer | 0.7417 |
+| instruct | 3 | tt-metal `tech_reports/*.md`, each as "Summarize this document." | 0.7417 |
+| code | 6 | tt-metal ttnn sources, each as "Explain what this code does." | 1.1605 |
+| code | 6 | raw source: CPython 3.13 `argparse.py`; `json/decoder.py`, `json/encoder.py`, `csv.py`, `heapq.py`; `clap_builder` 4.6.2 and `hashbrown` 0.17.1 `src/*.rs`; tt-metal `impl/program/program.cpp` and `impl/allocator/*.cpp` | 1.1605 |
+| book | 8 | raw text of Project Gutenberg 84, 98, 1400 and 345, from 0.2 and 0.6 of each | 1.1611 |
+| long | 2 (8192 tokens) | Project Gutenberg 1400 from 0.4 and 345 from 0.8 | 0.5808 |
+
+The weights give each kind a fixed share of the Hessian rows (chat .348, instruct .126, code .263, book .175,
+long .088), whatever its token count.
+
+What was measured, and what was not:
+
+- The numbers in "Measured numbers" are those of the caches made this way with an earlier revision of these
+  tools: the same solver, with the sequences packed by scripts that `corpus` replaces. Their token-id files were
+  not kept. A rebuild gives caches of the same kind; the experts are bit-equal only for the same token sequences.
+- Solve, measured: about 10 minutes per layer over the 108,544 tokens, and about 1 hour for 24 layers with
+  about 10 GB of RAM over 43K tokens, both with 40 threads on an 80-core host that ran other jobs; 154 s and
+  5.8 GB for layer 0 over 4096 tokens with 10 threads on a 12-core host. The RAM of the 108,544-token solve was
+  not recorded.
+- Against plain rounding, on the calibration inputs, the output error of the BFP8 tensors was 0.23 to 0.46 times
+  (gate_up) and 0.45 to 0.68 times (down) with GPTQ. KL to the bf16 model, same bytes: 0.0086 with plain rounding,
+  0.0067 for `own3-def8`.
+- `gptq_codes.py` also reads the GPTQ package of Lottolabs' Inkling-2-Mini P150 release (`--experts-from
+  lotto:DIR`); the caches above do not use it.
 
 ## Run the demo
 
@@ -126,7 +223,7 @@ pytest models/demos/inkling2_mini/tests models/demos/inkling2_mini/convert
 | `tests/test_prefill.py` | chunked prefill against the golden | card, tile cache, `INKLING_GOLDEN`; over 5 minutes on a cold kernel cache |
 | `tests/test_attention*.py`, `test_moe*.py`, `test_residual.py`, `test_router*.py`, `test_head*.py`, `test_fused*.py`, `test_pf_*.py` and the other module tests | one device module or kernel each against the Hugging Face modules or a torch reference | card; some need `INKLING_REF_PYTHON` or the weight cache |
 | `tests/test_mtp*.py`, `test_verify_rows.py`, `test_moe_rows.py` | the drafter and the verify pass of speculative decode | card, weight cache, drafter weights, `INKLING_CKPT` |
-| `tests/test_convert_pack.py`, `tests/test_perf_gate.py`, `tests/test_startup.py`, `convert/test_cache.py` | host only (with the mock cluster above) | nothing |
+| `tests/test_convert_pack.py`, `tests/test_perf_gate.py`, `tests/test_startup.py`, `convert/test_cache.py`, `convert/test_gptq.py` | host only (with the mock cluster above) | nothing (`test_gptq.py::test_corpus`: the tokenizer in `INKLING_CKPT`) |
 | `convert/test_dequant.py` | NVFP4 / MXFP8 unpacking against transformers | `INKLING_REF_PYTHON` |
 
 - A test skips when what it needs is missing: without `INKLING_REF_PYTHON` (and transformers < 5.24 in the
