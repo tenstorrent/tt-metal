@@ -55,6 +55,12 @@ class ChainCfg:
     sbe: int = 3  # sub-blocks an expert (GLM M 320 -> 3 with a short last one; here all full)
     wpieces: int = 0  # reads a weight block (0: 1 today, 2 K split - the same bytes a read)
     wdepth: int = 2  # weight reads in flight
+    geometry: object = None  # (device, ks) -> geometry dict; None: the rectangle above (columns paired)
+    down_load: bool = False  # the down side as the flat expert's: h to the down chains, down compute, y to DRAM
+    hbuf: int = 3  # h buffers a down core
+    hp: int = 16  # pieces an h buffer on the down chains
+    hdepth: int = 4
+    down_chains: int = 7
 
 
 def l1_tiles(device, cores, n_tiles, dtype):
@@ -89,30 +95,105 @@ def chain_order(cols, y0, H, start_row):
     return seq
 
 
+def rect_geometry(cfg, ks):
+    """One rectangle; K split pairs columns (x0 + 2j, x0 + 2j + 1): chain A the even columns, B the odd ones."""
+    cols = list(range(cfg.x0, cfg.x0 + cfg.W))
+    if ks:
+        assert cfg.W % 2 == 0
+        chains = [chain_order(cols[0::2], cfg.y0, cfg.H, cfg.relay_y), chain_order(cols[1::2], cfg.y0, cfg.H, cfg.relay_y + 1)]
+        relays = [(cfg.relay_x, cfg.relay_y), (cfg.relay_x, cfg.relay_y + 1)]
+        chain_half = [0, 1]
+        partner = {c: ((c[0] + 1, c[1]) if (c[0] - cfg.x0) % 2 == 0 else (c[0] - 1, c[1])) for ch in chains for c in ch}
+        half = {c: (c[0] - cfg.x0) % 2 for ch in chains for c in ch}
+    else:
+        chains = [chain_order(cols, cfg.y0, cfg.H, cfg.relay_y)]
+        relays = [(cfg.relay_x, cfg.relay_y)]
+        chain_half, partner, half = [0], {}, {}
+    gu = [c for ch in chains for c in ch]
+    pair_of = {c: (c[0] - cfg.x0) * cfg.H + (c[1] - cfg.y0) for c in gu}
+    bank = {c: i % 8 for i, c in enumerate(gu)}
+    slot = {c: i // 8 for i, c in enumerate(gu)}
+    return dict(chains=chains, relays=relays, chain_half=chain_half, partner=partner, half=half, pair_of=pair_of, bank=bank, slot=slot)
+
+
+def plan_geometry(pairing="snake", relay_rows=None):
+    """The flat plan's GLM e16 cores (its gate/up rectangles, relays, banks: gate/up index ci in bank ci // 8; down
+    cores and their banks). Today: one snake a rectangle (column-major from the primary relay's row, as the flat
+    expert). K split, pairing "snake": consecutive snake positions pair up, chain A the even positions (K half 0, fed
+    by the primary), B the odd ones (half 1, fed by the helper); "cols": columns paired (even-width rectangles)."""
+
+    def build(device, ks):
+        mbu = ttnn._ttnn.operations.experimental.moe_block
+        d = mbu.flat_routed_expert_plan(
+            device, GLM["H"], GLM["I"], 16, 256, 5120, weights_bf8=False, pin=1, layout=mbu.FlatLayoutOptions()
+        ).as_dict()
+        gcores = [tuple(c) for c in d["gate_up_cores"]]
+        relays4 = [tuple(c) for c in d["relay_cores"]]  # primaries (rect 0, 1), helpers (rect 0, 1)
+        bank = {c: i // 8 for i, c in enumerate(gcores)}
+        slot = {c: i % 8 for i, c in enumerate(gcores)}
+        rects = []
+        for side in (0, 1):  # (west: left of the plan's relay column split, east)
+            cs = [c for c in gcores if (c[0] < 7) == (side == 0)]
+            xs_, ys_ = sorted({c[0] for c in cs}), sorted({c[1] for c in cs})
+            rects.append((xs_[0], xs_[-1], ys_[0], ys_[-1]))
+        chains, relays, chain_half, partner, half = [], [], [], {}, {}
+        for k, (x0, x1, y0, y1) in enumerate(rects):
+            H = y1 - y0 + 1
+            yr = min(max(relays4[k][1], y0), y1)
+            snake = chain_order(list(range(x0, x1 + 1)), y0, H, yr)
+            if not ks:
+                chains.append(snake)
+                relays.append(relays4[k])
+                chain_half.append(0)
+                continue
+            if pairing == "cols":
+                cols = list(range(x0, x1 + 1))
+                assert len(cols) % 2 == 0
+                a = chain_order(cols[0::2], y0, H, yr)
+                b = chain_order(cols[1::2], y0, H, yr)
+                for c in a:
+                    partner[c], partner[(c[0] + 1, c[1])] = (c[0] + 1, c[1]), c
+            else:
+                a, b = snake[0::2], snake[1::2]
+                for ca, cb_ in zip(a, b):
+                    partner[ca], partner[cb_] = cb_, ca
+            for c in a:
+                half[c] = 0
+            for c in b:
+                half[c] = 1
+            chains += [a, b]
+            relays += [relays4[k], relays4[2 + k]]
+            chain_half += [0, 1]
+        gu = [c for ch in chains for c in ch]
+        if ks:  # a pair's two h pairs: the half-0 core owns 2j, its partner 2j + 1
+            pair_of, j = {}, 0
+            for c in gu:
+                if half[c] == 0:
+                    pair_of[c], pair_of[partner[c]] = 2 * j, 2 * j + 1
+                    j += 1
+        else:
+            pair_of = {c: i for i, c in enumerate(gu)}
+        down = [(tuple(c), pat[0]) for c, pat in zip(d["down_cores"], d["down_bank_patterns"])]
+        return dict(chains=chains, relays=relays, chain_half=chain_half, partner=partner, half=half, pair_of=pair_of,
+                    bank=bank, slot=slot, down=down)
+
+    return build
+
+
 def run_chain(device, cfg: ChainCfg, check=True):
     H_t, I_t = GLM["H"] // 32, GLM["I"] // 32
     ks = cfg.mode == 1
     nb = (H_t // 2 if ks else H_t) // cfg.kb
     kt = nb * cfg.kb
     wc = 4 if ks else 2
-    cols = list(range(cfg.x0, cfg.x0 + cfg.W))
-    if ks:
-        assert cfg.W % 2 == 0
-        chains = [chain_order(cols[0::2], cfg.y0, cfg.H, cfg.relay_y), chain_order(cols[1::2], cfg.y0, cfg.H, cfg.relay_y + 1)]
-        relays = [(cfg.relay_x, cfg.relay_y), (cfg.relay_x, cfg.relay_y + 1)]
-    else:
-        chains = [chain_order(cols, cfg.y0, cfg.H, cfg.relay_y)]
-        relays = [(cfg.relay_x, cfg.relay_y)]
+    g = cfg.geometry(device, ks) if cfg.geometry else rect_geometry(cfg, ks)
+    chains, relays, chain_half = g["chains"], g["relays"], g["chain_half"]
+    partner, half, w_bank, w_slot = g["partner"], g["half"], g["bank"], g["slot"]
+    down = g.get("down", [])
     gu = [c for ch in chains for c in ch]
     idx = {c: i for i, c in enumerate(gu)}
-    # pairs: core (x, y) of an even column with (x + 1, y); pair index p owns h columns of pair p
-    if ks:
-        partner = {c: ((c[0] + 1, c[1]) if (c[0] - cfg.x0) % 2 == 0 else (c[0] - 1, c[1])) for c in gu}
-        half = {c: (c[0] - cfg.x0) % 2 for c in gu}
     n = len(gu)
-    pair_of = {}
-    for c in gu:  # one h pair a core: numbered by (column, row)
-        pair_of[c] = (c[0] - cfg.x0) * cfg.H + (c[1] - cfg.y0)
+    pair_of = g["pair_of"]
     vxy = lambda c: device.worker_core_from_logical_core(ttnn.CoreCoord(*c))
     pk = lambda c: (vxy(c).x << 16) | vxy(c).y
 
@@ -151,12 +232,9 @@ def run_chain(device, cfg: ChainCfg, check=True):
     # cores' x ring share one tensor over both)
     wpieces = cfg.wpieces or (2 if ks else 1)
     ws = 2 * nb  # weight ring: two experts
-    w_bank, w_slot = {}, {}
     per_bank = {}
-    for c in gu:  # (banks round robin over the cores)
-        b = idx[c] % 8
-        w_bank[c], w_slot[c] = b, per_bank.get(b, 0)
-        per_bank[b] = w_slot[c] + 1
+    for c in gu:
+        per_bank[w_bank[c]] = max(per_bank.get(w_bank[c], 0), w_slot[c] + 1)
     wdram = None
     if cfg.w_stream:
         R = kt * wc  # tiles a core's region (one expert)
@@ -174,7 +252,47 @@ def run_chain(device, cfg: ChainCfg, check=True):
         wdram = ttnn.from_torch(
             shards.reshape(-1, 32), dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem
         )
-    xring = l1_tiles(device, gu + relays, max(cfg.xs, nb) * cfg.mt * cfg.kb, ttnn.bfloat8_b)
+    down_cores = [c for c, _ in down] if cfg.down_load else []
+    D_BYTES = I_t * (H_t // 32) * TILE_BYTES[ttnn.bfloat4_b]  # a down core's weights an expert (6 columns, K = I)
+    heads = []
+    # (one L1 tensor over the relays' x buffers, the gate/up x rings and the down cores' weight rings)
+    xring = l1_tiles(device, gu + relays + down_cores, max(cfg.xs, nb) * cfg.mt * cfg.kb, ttnn.bfloat8_b)
+    assert not down_cores or 2 * D_BYTES <= max(cfg.xs, nb) * cfg.mt * cfg.kb * TILE_BYTES[ttnn.bfloat8_b]
+    ddram = None
+    DC, DKB = H_t // 32, 8  # y tile columns a down core (6), K tiles a down weight block
+    if down_cores:
+        nd = len(down_cores)
+        assert nd * DC == H_t
+        wd = torch.randn(I_t * 32, H_t * 32) / (I_t * 32) ** 0.5
+        dper, dslot = {}, {}
+        for c, b in down:
+            dslot[c] = dper.get(b, 0)
+            dper[b] = dslot[c] + 1
+        DR = I_t * DC  # tiles a down core's region (one expert)
+        DS = max(dper.values()) * DR
+        dsh = torch.zeros(8, DS, 32, 32)
+        for d, (c, b) in enumerate(down):
+            reg = wd[:, d * DC * 32 : (d + 1) * DC * 32].reshape(I_t, 32, DC, 32).permute(0, 2, 1, 3).reshape(-1, 32, 32)
+            dsh[b, dslot[c] * DR : (dslot[c] + 1) * DR] = reg
+        dmem = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.DRAM,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))]),
+                [DS * 32, 32],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+        ddram = ttnn.from_torch(dsh.reshape(-1, 32), dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dmem)
+        y_dev = to_dev(torch.zeros(nd * cfg.mt * DC * 32, 32), ttnn.bfloat8_b, device)
+        # down chains: column-major, split into down_chains runs; the coordinator is the first head
+        order = sorted(down_cores)
+        sizes = [len(order) // cfg.down_chains + (1 if i < len(order) % cfg.down_chains else 0) for i in range(cfg.down_chains)]
+        dchains, at = [], 0
+        for sz in sizes:
+            dchains.append(order[at : at + sz])
+            at += sz
+        heads = [ch[0] for ch in dchains]
     xbuf = xring
     pring = l1_tiles(device, gu, cfg.ps * cfg.mt * 2, ttnn.bfloat16)
 
@@ -197,12 +315,14 @@ def run_chain(device, cfg: ChainCfg, check=True):
         ("wpieces", wpieces),
         ("wdepth", cfg.wdepth),
         ("w_tile_bytes", TILE_BYTES[ttnn.bfloat4_b]),
+        ("hbuf", cfg.hbuf),
+        ("ngu", n),
     ]
     ta = lambda t: list(ttnn.TensorAccessorArgs(t).get_compile_time_args())
     g_crs, r_crs = crs(gu), crs(relays)
     inj_rt, fwd_rt, rcv_rt, cmp_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
     for k, (ch, rl) in enumerate(zip(chains, relays)):
-        inj_rt[rl[0]][rl[1]] = [x_dev.buffer_address(), k * nb * cfg.mt * cfg.kb, xbuf.buffer_address(), pk(ch[0]), xring.buffer_address()]
+        inj_rt[rl[0]][rl[1]] = [x_dev.buffer_address(), chain_half[k] * nb * cfg.mt * cfg.kb, xbuf.buffer_address(), pk(ch[0]), xring.buffer_address()]
         for j, c in enumerate(ch):
             pred = pk(ch[j - 1]) if j else 0
             succ = pk(ch[j + 1]) if j + 1 < len(ch) else 0
@@ -217,7 +337,7 @@ def run_chain(device, cfg: ChainCfg, check=True):
                 idx[c] * cfg.mt,
                 i_dev.buffer_address(),
                 pring.buffer_address(),
-            ]
+            ] + ([len(heads), xring.buffer_address(), pair_of[c]] + [pk(hd) for hd in heads] if down_cores else [0, 0, 0])
             cmp_rt[c[0]][c[1]] = [st.buffer_address()]
     dm = lambda proc, noc: ttnn.DataMovementConfigDescriptor(processor=proc, noc=noc)
     kernels = [
@@ -254,6 +374,41 @@ def run_chain(device, cfg: ChainCfg, check=True):
             ),
         ),
     ]
+    if down_cores:
+        dnamed = [
+            ("nsb", cfg.nsb), ("sbe", cfg.sbe), ("mt", cfg.mt), ("ngu", n), ("hbuf", cfg.hbuf), ("hp", cfg.hp),
+            ("hdepth", cfg.hdepth), ("dc", DC), ("dkb", DKB), ("dpieces", 4), ("ddepth", 2), ("nd", nd),
+            ("h_tile_bytes", TILE_BYTES[ttnn.bfloat8_b]), ("w_tile_bytes", TILE_BYTES[ttnn.bfloat4_b]),
+            ("y_tile_bytes", TILE_BYTES[ttnn.bfloat8_b]),
+        ]  # fmt: skip
+        d_crs = crs(down_cores)
+        dl_rt, dr_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+        coord = heads[0]
+        dindex = {c: d for d, (c, _) in enumerate(down)}
+        for c, b in down:
+            dl_rt[c[0]][c[1]] = [ddram.buffer_address() + dslot[c] * DR * TILE_BYTES[ttnn.bfloat4_b], b]
+        for ch in dchains:
+            for j, c in enumerate(ch):
+                succ = pk(ch[j + 1]) if j + 1 < len(ch) else 0
+                dr_rt[c[0]][c[1]] = [
+                    succ, xring.buffer_address(), int(j == 0), pk(coord), int(c == coord), y_dev.buffer_address(),
+                    dindex[c] * cfg.mt * DC,
+                ] + ([n] + [pk(g_) for g_ in gu] if c == coord else [0])  # fmt: skip
+        kernels += [
+            ttnn.KernelDescriptor(
+                kernel_source=kpath("kd_load.cpp"), core_ranges=d_crs, named_compile_time_args=dnamed,
+                runtime_args=dl_rt, config=dm(ttnn.DataMovementProcessor.RISCV_1, ttnn.NOC.NOC_0),
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=kpath("kd_recv.cpp"), core_ranges=d_crs, compile_time_args=ta(y_dev),
+                named_compile_time_args=dnamed, runtime_args=dr_rt,
+                config=dm(ttnn.DataMovementProcessor.RISCV_0, ttnn.NOC.NOC_1),
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=kpath("kd_compute.cpp"), core_ranges=d_crs, named_compile_time_args=dnamed,
+                config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=False, dst_full_sync_en=False),
+            ),
+        ]  # fmt: skip
     cbs = [
         cb_on(0, xring, g_crs, cfg.xs * cfg.mt * cfg.kb, ttnn.bfloat8_b),
         cb(1, ttnn.bfloat4_b, (ws * cfg.kb * wc) if cfg.w_stream else kt * wc, g_crs),
@@ -262,8 +417,14 @@ def run_chain(device, cfg: ChainCfg, check=True):
         cb(16, ttnn.bfloat8_b, 2 * cfg.mt, g_crs),
         cb(17, ttnn.bfloat16, 2 * cfg.mt * 2, g_crs),
     ]
-    sems = [ttnn.SemaphoreDescriptor(id=s, core_ranges=crs(gu + relays), initial_value=0) for s in range(7)]
-    io = [x_dev, w_dev, i_dev, h_dev, st, xring, pring] + ([wdram] if wdram is not None else [])
+    if down_cores:
+        cbs += [
+            cb(4, ttnn.bfloat4_b, 2 * (I_t // DKB) * DKB * DC, d_crs),
+            cb_on(5, xring, d_crs, cfg.hbuf * n * cfg.mt, ttnn.bfloat8_b),
+            cb(18, ttnn.bfloat8_b, 2 * cfg.mt * DC, d_crs),
+        ]
+    sems = [ttnn.SemaphoreDescriptor(id=s, core_ranges=crs(gu + relays + down_cores), initial_value=0) for s in range(13)]
+    io = [x_dev, w_dev, i_dev, h_dev, st, xring, pring] + [t for t in (wdram, ddram) if t is not None] + ([y_dev] if down_cores else [])
     ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs))
     ttnn.synchronize_device(device)
 
@@ -275,7 +436,7 @@ def run_chain(device, cfg: ChainCfg, check=True):
     steady = float(((t2 - t1) & 0xFFFFFFFF).median()) / max(1, cfg.nsb - 1) / 1350
     out = dict(cores=n, total_us=total, first_sb_us=first, steady_sb_us=steady, nb=nb)
     if cfg.w_stream:
-        out["dram_gbs"] = cfg.nsb / cfg.sbe * n * kt * wc * TILE_BYTES[ttnn.bfloat4_b] / (total * 1e3)
+        out["dram_gbs"] = cfg.nsb / cfg.sbe * (n * kt * wc * TILE_BYTES[ttnn.bfloat4_b] + len(down_cores) * D_BYTES) / (total * 1e3)
     if check:
         h = ttnn.to_torch(h_dev).float().reshape(n, cfg.mt * 32, 32)
         if cfg.w_stream:  # the weights as the device holds them (the sharded upload rounds bfp4 its own way)
@@ -309,4 +470,19 @@ def run_chain(device, cfg: ChainCfg, check=True):
             pccs.append(pcc(h[idx[c]], ref))
         out["max_err"] = max(errs)
         out["min_pcc"] = min(pccs)
+        if down_cores:  # y of the last sub-block from h as the device holds it (bfp8) and the device's down weights
+            hcols = torch.zeros(cfg.mt * 32, n * 32)
+            for c in gu:
+                g_, u_ = own(c)
+                hcols[:, 32 * pair_of[c] : 32 * pair_of[c] + 32] = torch.nn.functional.silu(xq @ g_) * (xq @ u_)
+            hq = quantize(hcols, ttnn.bfloat8_b)
+            dback = ttnn.to_torch(ddram).float().reshape(8, -1, 32, 32)
+            yd = ttnn.to_torch(y_dev).float().reshape(nd, cfg.mt, DC, 32, 32)
+            ypcc = []
+            for d, (c, b) in enumerate(down):
+                wreg = dback[b, dslot[c] * DR : (dslot[c] + 1) * DR].reshape(I_t, DC, 32, 32).permute(0, 2, 1, 3).reshape(I_t * 32, DC * 32)
+                yref = hq @ wreg
+                ygot = yd[d].permute(0, 2, 1, 3).reshape(cfg.mt * 32, DC * 32)
+                ypcc.append(pcc(ygot, yref))
+            out["y_min_pcc"] = min(ypcc)
     return out

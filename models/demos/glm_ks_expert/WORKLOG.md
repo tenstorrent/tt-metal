@@ -68,3 +68,35 @@ producer), freed after the expert's last sub-block.
   one. With a 16-block ring the gain is gone - the slack, not the halved x bytes, is what matters.
 - (Accuracy: a DRAM-sharded bfp4 upload rounds differently from the host conversion (3% of the values' ulp-level
   differences); the check uses the weights read back from the device. PCC 0.99993 every case.)
+
+## Stage 4: the chip (plan_geometry: the flat plan's GLM e16 cores, banks, relays) and the down side
+
+Reference, the real flat expert (tests/test_flat_ref.py, GLM e16, one chip): M 320 1186.1 us, **M 384 (48 full
+sub-blocks, the model's case) 1359.1 us**, M 512 1763.2 us.
+
+Geometry from the plan: 64 gate/up cores (west 4 x 10, east 3 x 8), gate/up index ci in bank ci // 8 (the plan's
+min-max order), relays (1, 4) (8, 3) primaries, (1, 5) (8, 4) helpers; today one snake a rectangle from the primary's
+row; K split pairs consecutive snake positions (chain A the even positions, fed by the primary; B the odd, the helper).
+Down side (down_load, kernels kd_*.cpp): every gate/up core writes its h slice into the 7 down chain heads' h_all
+(NOC1, 3 buffers) once GO allows (a coordinator down core bumps GO on all gate/up cores when all 32 down cores are done
+with v); chains forward h in 16 pieces (4 in flight); down compute 1 x 6 blocks over K 64 (bf16 DEST), weights
+streamed (2-expert ring, 27.6 KB blocks in 4 reads, 2 in flight) from each down core's plan bank; y written to DRAM.
+
+| case (48 sub-blocks, weights streamed) | total | steady us / sub-block |
+|---|---|---|
+| today, gate/up only | 1208.9 us | 22.50 |
+| K split, gate/up only, x ring 24 | 1194.9 | 22.77 |
+| K split, x ring 16 | 1532.6 | 28.35 |
+| K split, x ring 12 | 1724.9 | 32.99 |
+| today + down side | 1508.5 | 29.51 |
+| K split + down side | 1494.3 | 29.30 |
+
+All bit-checked (h pcc >= 0.99992, y pcc >= 0.99972).
+
+- With the plan's banks (nearest, min-max) today's gate/up runs at 22.5 us a sub-block: stage 3's 27.9 was the round
+  robin bank assignment (far banks), not the x path. The K split is even with today (+0.3 us) and still needs the
+  two-sub-block x ring (no L1 freed).
+- So the real flat expert's ~25.5 us a steady sub-block (1359 us at M 384) is not gate/up's x feed. This model's
+  down side is slower than the real one (29.5 us a sub-block, 1508 us): it paces both forms equally.
+- Conclusion for GLM: the K split is not a lever; the gap to the floor sits in the coupling with the down side / h path
+  (or in what the real kernels do beyond this model). Next: find the real flat's extra ~3 us a sub-block.

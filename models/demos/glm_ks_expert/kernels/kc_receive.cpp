@@ -13,7 +13,10 @@
 //     credited back to the partner (its PFREE),
 //   * h: drained (CB 16); the last sub-block's h tiles are written to DRAM (pages h_first ..).
 // RT: 0 W DRAM address, 1 first W tile, 2 partner xy (MODE 1), 3 h DRAM address, 4 first h page, 5 identity address,
-//     6 the partial ring's address (CB 2, the same on every core)
+//     6 the partial ring's address (CB 2, the same on every core), 7 down chain heads (0: h only drained), 8 their
+//     h_all address, 9 this core's h K tile (its pair), 10.. the heads' xy. With heads, h(v) ([MT] tiles) goes into
+//     every head's h_all buffer v % hbuf at K tile `pair` once GO (sem 12, bumped by the down coordinator) allows,
+//     then the heads' GATH (sem 8) is bumped.
 // CT: TensorAccessorArgs(W), TensorAccessorArgs(h), TensorAccessorArgs(identity)
 #include "api/dataflow/dataflow_api.h"
 #include "kc_common.hpp"
@@ -57,6 +60,12 @@ void kernel_main() {
     const uint64_t p_ring = MODE ? kc_xy(partner, get_arg_val<uint32_t>(6)) : 0;
     const uint64_t p_parr = MODE ? kc_xy(partner, get_semaphore(PARR)) : 0;
     const uint64_t p_pfree = MODE ? kc_xy(partner, get_semaphore(PFREE)) : 0;
+    const uint32_t nheads = get_arg_val<uint32_t>(7), h_all = get_arg_val<uint32_t>(8), h_pair = get_arg_val<uint32_t>(9);
+    constexpr uint32_t HBUF = get_named_compile_time_arg_val("hbuf");
+    constexpr uint32_t H_TILE_B = get_named_compile_time_arg_val("x_tile_bytes");  // (h bfp8, as x)
+    constexpr uint32_t NGU = get_named_compile_time_arg_val("ngu");
+    const uint32_t h_buf_bytes = NGU * MT * H_TILE_B;
+    volatile tt_l1_ptr uint32_t* go = kc_sem(12);
     uint32_t x_pub = 0, x_cons = 0;
     uint32_t p_sent = 0, p_pending = 0, p_pub = 0, p_cons = 0, h_done = 0;
     const uint32_t p_need = MODE ? NSB : 0;
@@ -96,14 +105,24 @@ void kernel_main() {
             }
         }
         // h
-        if (h_done < NSB && cb_pages_available_at_front(H_CB, MT)) {
+        if (h_done < NSB && cb_pages_available_at_front(H_CB, MT) && (nheads == 0 || *go + HBUF >= h_done + 1)) {
+            const uint32_t src = get_read_ptr(H_CB);
             if (h_done + 1 == NSB) {
-                uint32_t l1 = get_read_ptr(H_CB);
+                uint32_t l1 = src;
                 for (uint32_t t = 0; t < MT; ++t) {
                     noc_async_write_page(h_first + t, hs, l1);
                     l1 += get_tile_size(H_CB);
                 }
-                noc_async_write_barrier();
+            }
+            for (uint32_t hd = 0; hd < nheads; ++hd) {
+                noc_async_write(
+                    src,
+                    kc_xy(get_arg_val<uint32_t>(10 + hd), h_all + (h_done % HBUF) * h_buf_bytes + h_pair * MT * H_TILE_B),
+                    MT * H_TILE_B);
+            }
+            noc_async_write_barrier();
+            for (uint32_t hd = 0; hd < nheads; ++hd) {
+                noc_semaphore_inc(kc_xy(get_arg_val<uint32_t>(10 + hd), get_semaphore(8)), 1);
             }
             cb_pop_front(H_CB, MT);
             ++h_done;
