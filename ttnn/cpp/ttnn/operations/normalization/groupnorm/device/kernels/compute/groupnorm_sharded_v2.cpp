@@ -664,13 +664,15 @@ void kernel_main() {
                     }
                 }
             } else {
-                // zero out values in cb_tilized_in input by multiplying with negative mask for the current group
+                // in = in * negative_mask + x in one chain: the masked tile stays in DEST, so dfb_in is never
+                // unpacked while a pack to it may still be in flight. x is valid only for the current group.
                 dfb_in_negative_mask.wait_front(block_w);
                 const ckl::StridedTileRange output_range{
                     .base = index_b_offset + index_g_offset, .row_stride = per_core_N};
-                reconfig_data_format_srcb(dfb_x_id, dfb_in_negative_mask_id);
+                // srcB alternates between the mask and x, so both inputs reconfigure it and the op inits
+                // re-run per block; blocking the group's row runs them once per row instead of per tile.
                 ckl::eltwise_chain(
-                    ckl::IterationShape::grid(block_h, block_w_curr),
+                    ckl::IterationShape::grid(block_h, block_w_curr).block_size(block_w_curr),
                     ckl::BinaryFpu<
                         ckl::BinaryFpuOp::Mul,
                         in_strided_block_input,
@@ -680,17 +682,18 @@ void kernel_main() {
                             ckl::WaitPolicy::None,
                             ckl::PopPolicy::None,
                             ckl::InputTileMapping::Row,
-                            ckl::DataFormatReconfig::Disabled)>{dfb_in, dfb_in_negative_mask, output_range},
-                    ckl::PackTile<in_strided_output>{dfb_in, output_range});
-
-                // data in cb_x_id has valid data only for current group
-                // cb_in_id has cleared data for that group
-                // just add them together
-                reconfig_data_format_srcb(dfb_in_negative_mask_id, dfb_x_id);
-                ckl::eltwise_chain(
-                    ckl::IterationShape::grid(block_h, block_w_curr),
-                    ckl::BinaryFpu<ckl::BinaryFpuOp::Add, in_strided_block_input, x_strided_block_input>{
-                        dfb_in, dfb_x, output_range, ckl::StridedTileRange{.base = 0u, .row_stride = block_w}},
+                            ckl::DataFormatReconfig::Enabled)>{dfb_in, dfb_in_negative_mask, output_range},
+                    ckl::DestReuseBinary<
+                        ckl::BinaryFpuOp::Add,
+                        ckl::input(
+                            dfb_x_id,
+                            ckl::WaitPolicy::None,
+                            ckl::PopPolicy::None,
+                            ckl::InputTileMapping::Block,
+                            ckl::DataFormatReconfig::Enabled,
+                            ckl::TileAddressing::Strided),
+                        ckl::DestReuseType::DEST_TO_SRCA>{
+                        dfb_x, ckl::StridedTileRange{.base = 0u, .row_stride = block_w}},
                     ckl::PackTile<in_strided_output>{dfb_in, output_range});
                 dfb_in_negative_mask.pop_front(block_w);
             }
