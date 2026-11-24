@@ -1034,6 +1034,20 @@ class PerfConfig(TestConfig):
                     self.runtimes = runtimes
                 self.generate_variant_hash()
                 self.build_elfs()
+                if os.environ.get("LLK_CODEPATH_DIR"):
+                    import json as _json
+
+                    _sweep = PerfConfig._build_sweep_frame(
+                        {}, self.formats_config, self.unpack_to_dest, self.dest_acc,
+                        self.passed_templates, self.passed_runtimes,
+                    ).iloc[0]
+                    with open(Path(os.environ["LLK_CODEPATH_DIR"]) / f"map.{os.getpid()}.jsonl", "a") as _f:
+                        _f.write(_json.dumps({
+                            "nodeid": os.environ.get("PYTEST_CURRENT_TEST", "").rsplit(" ", 1)[0],
+                            "test_name": self.test_name, "run_type": run_type.name,
+                            "variant_id": self.variant_id,
+                            "sweep": {k: str(v) for k, v in _sweep.items()},
+                        }) + "\n")
 
         if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
             if last:
