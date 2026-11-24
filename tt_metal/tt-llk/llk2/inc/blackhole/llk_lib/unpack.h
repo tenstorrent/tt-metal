@@ -799,7 +799,7 @@ template <unpack_params P>
 inline __attribute__((always_inline)) void unpack_rewind_stream_counters()
 {
     using namespace hal::counters::adc;
-    constexpr AddrCounter rewind {.channel0 = {.y = 0, .z = 0}};
+    constexpr auto rewind = AddrCounter {.channel0 = {.y = 0, .z = 0}};
     if constexpr (unpack_counter_moves(P, unpacker0) && unpack_counter_moves(P, unpacker1))
     {
         hal::counters::set<rewind.for_clients<unpacker0.counters, unpacker1.counters>()>();
