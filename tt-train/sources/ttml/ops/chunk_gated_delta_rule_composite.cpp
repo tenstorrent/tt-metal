@@ -64,28 +64,34 @@ Tensor concat_or_single(std::vector<Tensor>& parts, int dim) {
     return parts.size() == 1U ? parts.front() : ttnn::concat(parts, dim);
 }
 
-// [C, C] constants, built once per call on the host: identity, strictly lower ones, and the additive mask that is 0 on
-// and below the diagonal and -1e30 above it (exp of the masked difference of cumulative gates is then exactly 0).
+// [C, C] constants: identity, strictly lower ones, and the additive mask that is 0 on and below the diagonal and -1e30
+// above it (exp of the masked difference of cumulative gates is then exactly 0).  Uploaded once per device and chunk
+// size, so a forward does no host writes (which trace capture forbids).
 struct Constants {
     Tensor eye;
     Tensor strict_lower;
     Tensor upper_mask;
 };
 
-Constants make_constants(uint32_t C, ttnn::distributed::MeshDevice* device) {
-    std::vector<float> eye(C * C, 0.0F), strict(C * C, 0.0F), mask(C * C, 0.0F);
-    for (uint32_t i = 0; i < C; ++i) {
-        for (uint32_t j = 0; j < C; ++j) {
-            eye[i * C + j] = i == j ? 1.0F : 0.0F;
-            strict[i * C + j] = i > j ? 1.0F : 0.0F;
-            mask[i * C + j] = i >= j ? 0.0F : -1e30F;
+Tensor device_constant_cc(const char* name, uint32_t C, float (*value)(uint32_t, uint32_t)) {
+    return autograd::ctx().get_device_constant(fmt::format("chunk_gated_delta_rule/{}/{}", name, C), [&] {
+        std::vector<float> data(static_cast<size_t>(C) * C);
+        for (uint32_t i = 0; i < C; ++i) {
+            for (uint32_t j = 0; j < C; ++j) {
+                data[i * C + j] = value(i, j);
+            }
         }
-    }
-    const ttnn::Shape shape{1U, 1U, C, C};
-    auto make = [&](const std::vector<float>& data) {
-        return core::from_vector<float, ttnn::DataType::FLOAT32>(data, shape, device);
+        return core::from_vector<float, ttnn::DataType::FLOAT32>(
+            data, ttnn::Shape{1U, 1U, C, C}, &autograd::ctx().get_device());
+    });
+}
+
+Constants make_constants(uint32_t C) {
+    return {
+        device_constant_cc("eye", C, [](uint32_t i, uint32_t j) { return i == j ? 1.0F : 0.0F; }),
+        device_constant_cc("strict_lower", C, [](uint32_t i, uint32_t j) { return i > j ? 1.0F : 0.0F; }),
+        device_constant_cc("upper_mask", C, [](uint32_t i, uint32_t j) { return i >= j ? 0.0F : -1e30F; }),
     };
-    return {make(eye), make(strict), make(mask)};
 }
 
 // (I + N)^-1 for strictly lower triangular N [BH, NC, C, C].  Row i of X = I - N X depends only on rows < i, so
@@ -201,7 +207,7 @@ ChunkGatedDeltaRuleCompositeResult chunk_gated_delta_rule_fw_composite(
     const float q_scale = scale.value_or(1.0F / std::sqrt(static_cast<float>(K)));
 
     auto* device = &autograd::ctx().get_device();
-    const auto c = make_constants(C, device);
+    const auto c = make_constants(C);
 
     // Per-head chunked layouts, [BH, NC, C, D] (GVA repeated), and the gates as rows [BH, NC, 1, C].
     const auto qh = ttnn::multiply(heads_chunked(q, B, T, HK, K, G, C), q_scale);
