@@ -97,12 +97,28 @@ def chip(b, idx=None):
     return (f"tray {t} ASIC {a} / {b}" if t else b) + (f" (tt-smi chip {idx})" if idx is not None else "")
 
 
+def trays(bs):  # a BDF outside the tray map names no tray
+    return {str(t) for t in (tray_asic(b)[0] for b in bs) if t is not None}
+
+
+def board(b):
+    t = tray_asic(b)[0]
+    return f"the tray {t} board" if t else "the board"
+
+
+def holder(b):
+    t = tray_asic(b)[0]
+    return f"tray {t}" if t else f"the tray holding {b}"
+
+
 def chans(s):
     return [int(x) for x in re.findall(r"\d+", str(s))]
 
 
 def ports(b, chs):
-    a = tray_asic(b)[1]
+    t, a = tray_asic(b)
+    if t is None:  # a BDF outside the tray map: no ASIC, so no port
+        return []
     return sorted({p[1] for c in chs for p in [UBB_ETH_PORT_OF.get((a, c))] if p and p[0] == "QSFP_DD"})
 
 
@@ -792,7 +808,7 @@ FAMILIES = {
     ),
     "PCIe": (
         "a chip's PCIe connection to the host erred or dropped: the PCIe path from the MB module through the PDB retimers, or the chip's tray board",
-        ("PCIE", "H3 PCIE", "AER", "CHIP", "POST-BOOT", "DROP", "C3", "RESET", "RESET UNATTRIBUTED"),
+        ("PCIE", "H3 PCIE", "AER", "CHAIN", "CHIP", "POST-BOOT", "DROP", "C3", "RESET", "RESET UNATTRIBUTED"),
     ),
     "thermal": (
         "a part ran over its temperature limit: fans and airflow first, then the part named",
@@ -816,8 +832,10 @@ def family(l):
 
 def end(b, chs, lone=False):
     t, a = tray_asic(b)
-    ps = ports(b, chs)
     ch = f" [ETH ch {ids(chs)}]" if chs else ""
+    if t is None:  # a BDF outside the tray map names no tray or ASIC
+        return f"{b}{ch}"
+    ps = ports(b, chs)
     if ps:
         return f"tray {t} QSFP-DD port {' and '.join(map(str, ps))} / ASIC {a} / {b}{ch}"
     return f"tray {t} ASIC {a} / {b}{ch}" + (" (no QSFP-DD port)" if lone else "")
@@ -828,9 +846,9 @@ def link_where(a, ca, b, cb):
     w = f"{end(a, ca)} <-> {end(b, cb)}"
     if ports(a, ca) and ports(b, cb):
         return "QSFP-DD cable " + w, "cable"
-    if ta == tb:
+    if ta == tb and ta is not None:
         return f"on-board link inside tray {ta} (no QSFP-DD port): " + w, "onboard"
-    return f"in-box link between tray {ta} and tray {tb} (no QSFP-DD port): " + w, "inbox"
+    return f"in-box link between {holder(a)} and {holder(b)} (no QSFP-DD port): " + w, "inbox"
 
 
 def link_do(kind, a, b, ca=(), cb=()):
@@ -838,8 +856,8 @@ def link_do(kind, a, b, ca=(), cb=()):
     if kind == "cable":
         return f"reseat, then replace, the QSFP-DD cable from tray {ta} port {'/'.join(map(str, ports(a, ca)))} to tray {tb} port {'/'.join(map(str, ports(b, cb)))}; if it stays down with a good cable, the port on one of the two trays"
     if kind == "onboard":
-        return f"no cable to swap: the tray {ta} board (link between ASIC {tray_asic(a)[1]} and ASIC {tray_asic(b)[1]})"
-    return f"no cable to swap: reseat trays {ta} and {tb}; if it stays down, the tray-to-tray connection or one of the two tray boards (swap a tray to see which end follows)"
+        return f"no cable to swap: {board(a)} (link between ASIC {tray_asic(a)[1]} and ASIC {tray_asic(b)[1]})"
+    return f"no cable to swap: reseat {f'trays {ta} and {tb}' if ta and tb else f'{holder(a)} and {holder(b)}'}; if it stays down, the tray-to-tray connection or one of the two tray boards (swap a tray to see which end follows)"
 
 
 def reset_words(labels):
@@ -976,15 +994,16 @@ def ethboth(v, m):  # tt-smi ETH port numbers: ports 0-7 = ch 0-7, ports 10-13 =
     v.fault(
         k,
         f"Ethernet ports down before the run, still down after the {reset_words(rs)}",
-        f"tray {t} "
-        + ", ".join(f"ASIC {tray_asic(x)[1]} / {x}" for x in bs)
+        (f"tray {t} " + ", ".join(f"ASIC {tray_asic(x)[1]} / {x}" for x in bs) if t else ", ".join(bs))
         + f" [{lab}]"
-        + ("" if any(ports(x, cs) for x in bs) else " (no QSFP-DD port)"),
-        f"glx_reset and retest; if they stay down, the tray {t} board",
+        + ("" if any(ports(x, cs) for x in bs) or t is None else " (no QSFP-DD port)"),
+        f"glx_reset and retest; if they stay down, {board(b)}",
     )
 
 
-QSFP_DO = "reseat, then replace, that QSFP-DD cable; if it stays down with a good cable, the port on tray {} or on the far host"
+QSFP_DO = (
+    "reseat, then replace, that QSFP-DD cable; if it stays down with a good cable, the port on {} or on the far host"
+)
 
 
 @reads(
@@ -997,7 +1016,7 @@ def interhost(v, m):
             ("qsfp", b, tuple(cs)),
             f"QSFP-DD link to another host down before the run, still down after the {reset_words([m[4].lower()])}",
             "QSFP-DD cable " + end(b, cs, True) + " <-> another host",
-            QSFP_DO.format(tray_asic(b)[0]),
+            QSFP_DO.format(board(b)),
         )
 
 
@@ -1013,7 +1032,7 @@ def qsfp(v, m):
             "QSFP-DD link to another host down"
             + (" while the far end is up and idle" if "up and idle" in m[7] else ""),
             "QSFP-DD cable " + end(b, cs, True) + far,
-            QSFP_DO.format(tray_asic(b)[0]),
+            QSFP_DO.format(board(b)),
         )
 
 
@@ -1027,7 +1046,7 @@ def ethcore(v, m):
             ("ethcore", b, c),
             f"Ethernet core {m[3]} not active again when the mesh opened",
             end(b, [c], True),
-            f"glx_reset and retest; if it repeats, the tray {tray_asic(b)[0]} board carrying {b}",
+            f"glx_reset and retest; if it repeats, {board(b)} carrying {b}",
         )
 
 
@@ -1055,7 +1074,7 @@ def numeric(v, m):
             chip(b, idx)
             + (f", DRAM bank {','.join(banks)}" if banks else "")
             + (f" ({stage.group(1)})" if stage else ""),
-            f"hardware only if the same check on the same commit stays clean on clean hosts; then the tray {tray_asic(b)[0]} board carrying {b}"
+            f"hardware only if the same check on the same commit stays clean on clean hosts; then {board(b)} carrying {b}"
             + (f"; matches known issue {known.group(1)}" if known else ""),
         )
 
@@ -1110,7 +1129,7 @@ def aer(v, m):
             ("aer", b),
             f"PCIe errors during the run (AER{': ' + n.group(0) if n else ''})",
             chip(b),
-            f"the PCIe path of {b} (slot, retimer, cable), then the tray {tray_asic(b)[0]} board",
+            f"the PCIe path of {b} (slot, retimer, cable), then {board(b)}",
         )
 
 
@@ -1122,10 +1141,10 @@ def pcie(v, m):
         return
     if "off pcie" in t.lower():
         what = "chip off PCIe (config space reads ffff)" + (f", link at {sp.group(1)}" if sp else "")
-        do = f"glx_reset and recount; if still missing, power cycle the box; then the tray {tray_asic(b)[0]} board or its PCIe slot"
+        do = f"glx_reset and recount; if still missing, power cycle the box; then {board(b)} or its PCIe slot"
     else:
         what = "weak PCIe link" + (f" ({sp.group(1)})" if sp else f": {t[:80]}")
-        do = f"the PCIe path of {b} (slot, retimer), then the tray {tray_asic(b)[0]} board"
+        do = f"the PCIe path of {b} (slot, retimer), then {board(b)}"
     v.fault(("pcie", b), what, chip(b) + (f" (root port {m[4]})" if m[4] else ""), do)
 
 
@@ -1168,7 +1187,7 @@ def onechip(v, m):
         ("chip", m[1]),
         "every link test through this one chip failed",
         chip(m[1], m[2]),
-        f"the tray {tray_asic(m[1])[0]} board carrying {m[1]}",
+        f"{board(m[1])} carrying {m[1]}",
     )
 
 
@@ -1201,11 +1220,11 @@ def downstream(v, m):  # a chip of another tray left unopenable after the C9 res
         return False
     v.pdn_chips.append(m[1])
     t, n = " and ".join(f"tray {x}" for x in ts), len(v.pdn_chips)
-    trs = ", ".join(sorted({str(tray_asic(b)[0]) for b in v.pdn_chips}))
+    trs = ", ".join(sorted(trays(v.pdn_chips)))
     v.lfam = "power/feed"
     v.fault(
         ("pdn",),
-        f"POWER-DOWNSTREAM of the power drop of {t}: {n} chip{'s' * (n > 1)} of tray {trs} stay on PCIe but do not open after the end (C9) reset (in-band IPMI not answering); not their boards",
+        f"POWER-DOWNSTREAM of the power drop of {t}: {n} chip{'s' * (n > 1)}{f' of tray {trs}' if trs else ''} stay on PCIe but do not open after the end (C9) reset (in-band IPMI not answering); not their boards",
         "; ".join(chip(b) for b in v.pdn_chips[:4]) + (f" and {n - 4} more" if n > 4 else ""),
         f"fix {t} first (see the Repair recommendation line), then reset and recheck these chips",
     )
@@ -1234,9 +1253,6 @@ def plain_reason(res):
 def families(v):
     def chips(w):
         return re.findall(BDF, re.sub(r"root port \S+", "", w))
-
-    def trays(bs):
-        return {str(t) for t in (tray_asic(b)[0] for b in bs) if t is not None}
 
     def fam(k, where):  # a PCIe loss only on trays whose power dropped is that drop's
         ts = trays(chips(where))
@@ -1406,7 +1422,6 @@ FIRST = {
     "link": "reseat the cable or tray-to-tray connection",
     "PCIe": "PCIe Gen4 cap",
     "PCIe loss": "flash the retimer firmware",
-    "thermal": "check fans and airflow, then the part named",
 }
 HUNG = re.compile(r"^these chips stopped|^hang on|^chip stopped answering|^chip hung")
 THERMAL = re.compile(
@@ -1607,7 +1622,7 @@ def recommend(
         r = t and f"cooling: {t[2]} ({t[5]}) tripped {t[1]} times{f', peak {t[3]} C' if t[3] else ''}: {t[6]}"
         if r and r not in items:
             items.append(r)
-            fam[r] = "thermal"
+            fam[r] = None  # no fleet records for thermal trips: the item names its own step, no prefix
     unknown += [t for t, (k, _) in sorted(heads.items()) if k == "FAIL" and t not in named]
     fold_ |= {t for t in off if len(lost.get(t, ())) >= 8}  # a whole-tray loss folds its PCIe/board-loss lines
     hsc = lambda t: f" (HSC {', '.join(sorted(power[t]))})" if power.get(t) else ""  # noqa: E731

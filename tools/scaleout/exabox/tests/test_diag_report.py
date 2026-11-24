@@ -275,3 +275,58 @@ def test_cases(tmp_path):
         out = "\n".join(report.lines(d, argparse.Namespace(rc=rc, verdict=vt, repair_history=None)))
         for w in want:
             assert w in out, (i, w, out)
+
+
+def faults(tmp_path, name, findings):  # (Fault lines, all lines) of one run in its own dir
+    d = tmp_path / name
+    d.mkdir()
+    out = run(d, findings, rc=1, verdict="FAIL")
+    return [x for x in out if x.startswith("  Fault ")], out
+
+
+def test_do_texts_unknown_bdf_name_the_board_not_tray_none(tmp_path):  # a BDF outside the tray map
+    t = [
+        "AER FAIL f1:00.0 (tray 1) root port 0000:f0:01.1, host X: uncorrectable nonfatal +1 fatal +0 during the run",
+        "PCIE FAIL f2:00.0 (tray 1): off pcie",
+        "PCIE FAIL f3:00.0 (tray 1): root port link 2.5GT/s x4 weak",
+        "LINK FAIL one chip f4:00.0 (tray 1) tt-smi 3: all failed",
+    ]
+    o, out = faults(tmp_path, "a", t)
+    assert len(o) == 4 and not any("tray None" in x for x in out), out
+    assert o[0].endswith("then the board") and o[1].endswith("then the board or its PCIe slot"), o
+    o, _ = faults(tmp_path, "b", [x.replace("f2:", "c2:") for x in t])
+    assert o[1].endswith("then the tray 3 board or its PCIe slot"), o
+    o, out = faults(
+        tmp_path,
+        "c",
+        [
+            "LINK FAIL f1:00.0 (tray 1) e0 <-> 41:00.0 (tray 2) e1: down",
+            "LINK FAIL f1:00.0 (tray 1) e8 <-> f5:00.0 (tray 1) e9: down",
+        ],
+    )
+    assert not any("None" in x or "tray ?" in x for x in out), out
+    assert "reseat tray 2 and the tray holding f1:00.0;" in o[0] and "<-> f1:00.0 [ETH ch 0] |" in o[0], o
+    assert (
+        "between the tray holding f1:00.0 and the tray holding f5:00.0 (no QSFP-DD port): f1:00.0 [ETH ch 8] <->"
+        in o[1]
+    ), o
+    eth = "ETH FAIL f1:00.0 (tray 1) c9: enabled ETH ports [0, 1] down before the run and still down after the c9 reset"
+    o, _ = faults(tmp_path, "d", [eth])
+    assert o[0].endswith("| where: f1:00.0 [ETH ch 0,1] | do: glx_reset and retest; if they stay down, the board"), o
+
+
+def test_family_chain_is_pcie(tmp_path):  # ARC timeout -> AER on the root port -> MCE is one chip's PCIe path
+    _, out = faults(
+        tmp_path,
+        "a",
+        ["CHAIN FAIL 41:00.0 (tray 2): ARC timeout x2 -> AER on its root port x1 -> MCE x1 during the run"],
+    )
+    assert [x.split(":")[0] for x in out if x.startswith("  Family ")] == ["  Family PCIe"], out
+
+
+def test_first_action_thermal_and_psu_get_no_prefix(tmp_path):  # no fleet records for these: the item names its step
+    _, out = faults(tmp_path, "a", CASES[3][0][:1])
+    assert out[-1].startswith("Repair recommendation: cooling: TEMP_PWRBRK1") and "fleet records" not in out[-1], out
+    i = "the PSU named in the PSU FINDING line; the tray 3 board carrying 85:00.0"
+    fam = {"the PSU named in the PSU FINDING line": None, "the tray 3 board carrying 85:00.0": "math"}
+    assert report.lead(i, fam, report.history(None)) == i
