@@ -464,6 +464,28 @@ def test_a_skipped_first_sample_keeps_the_default(monkeypatch):
     assert isinstance(ok, bool), line
 
 
+def test_long_context_steps_do_not_close_the_gate(monkeypatch):
+    """a 250K request's verify steps (~44 ms) and plain steps (~23 ms) are its context's cost, not the live count's:
+    afterwards a short chat at the same live count still promotes (rc-20261124i: they closed the gate, natural c1 ran
+    plain at 61 vs 97 tok/s), and speculation at 250K itself pays at 2.4 tokens a verify"""
+    import time as _time
+
+    m = _gate_case(monkeypatch, 1, 250000, 1)
+    clock = [100.0]
+    monkeypatch.setattr(_time, "perf_counter", lambda: clock[0])
+    m._pay["last_t"] = clock[0]
+    for kind, ms in (("plain", 23.3), ("verify", 44.4)):
+        for _ in range(A.PAY_MIN + 48):
+            clock[0] += ms / 1000
+            m._pay["kind"], m._pay["n"], m._pay["ctx"] = kind, 1, 250000
+            pays = m._measure([2.4])
+    assert pays is True, m._pay_line()
+    assert abs(m._pay["spec_ms"][1] - 28.15) < 0.5 and abs(m._pay["plain_ms"][1] - 16.55) < 0.5, m._pay
+    m.history[0], m.prompt_len[0] = [1] * 300, 299
+    ok, line = m._promotion_pays([0])
+    assert ok, line
+
+
 def test_promotion_gate_blocks_moves(monkeypatch):
     """a gate that says no: nobody moves, the mode stays SPEC (steps run plain); a measured spec step that saves
     nothing keeps it closed for a single short prompt too"""

@@ -61,6 +61,13 @@ PROMOTE_ACC = float(os.environ.get("RESIDENT_ADAPTIVE_PROMOTE_ACC", "2.7"))
 PROMOTE_OUT = float(os.environ.get("RESIDENT_ADAPTIVE_PROMOTE_OUT", "256"))
 REFILL_MS_FIXED, REFILL_MS_PER_TOKEN = 20.0, 0.13  # (defaults: tests/refill_batch.py, 2026-11-23)
 SPEC_MS_DEFAULT = lambda n: 28.0 + 3.5 * (n - 1)  # noqa: E731  (served verify steps, 2026-11-23: 1 / 4 / 8 users)
+# step times grow with the live users' total context (attention reads every row's KV): the estimates above are kept
+# per live count at no context (a measured step's time minus its context's share, these ms per context token) and the
+# decisions add the current context's share — a 250K request's ~44 ms verify steps kept as the 1-user estimate closed
+# the promotion gate for the short chats after it (rc-20261124i natural c1: 61 vs 97 tok/s). (served, 2026-11-24:
+# plain 16.5 / 17.3 / 23.3 ms at 128 / 32K / 250K context, verify ~28 / ~31 / ~44 ms)
+PLAIN_CTX_MS = float(os.environ.get("RESIDENT_ADAPTIVE_PLAIN_CTX_MS", "2.7e-5"))
+SPEC_CTX_MS = float(os.environ.get("RESIDENT_ADAPTIVE_SPEC_CTX_MS", "6.5e-5"))
 # P2d: promotions fill the drafter from the prefill's taps when kept (RESIDENT_ADAPTIVE_P2D, default on); a fill's cost
 P2D = os.environ.get("RESIDENT_ADAPTIVE_P2D", "1") == "1"
 P2D_FILL_MS = 20.0
@@ -287,6 +294,7 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
             n=0,
             hold=0,
             excl=0.0,
+            ctx=0,
             out=None,
             refill_tpt=None,
             gate=True,
@@ -297,11 +305,19 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         old = self._pay["out"] or PROMOTE_OUT
         self._pay["out"] = old + OUT_ALPHA * (n_out - old)
 
+    def _step_ms(self, kind, n, ctx):
+        """a step's estimated ms: the live count's estimate at no context + the context's share (PLAIN_CTX_MS /
+        SPEC_CTX_MS)"""
+        pay = self._pay
+        if kind == "verify":
+            return pay["spec_ms"].get(n, SPEC_MS_DEFAULT(n)) + SPEC_CTX_MS * ctx
+        return pay["plain_ms"].get(n, PLAIN_MS_DEFAULT(n)) + PLAIN_CTX_MS * ctx
+
     def _promotion_pays(self, cands):
         """the promotion gate (PROMOTE_GATE): (verdict, its log line)"""
         pay, n = self._pay, max(1, len(self.live))
-        plain = pay["plain_ms"].get(n, PLAIN_MS_DEFAULT(n))
-        spec = pay["spec_ms"].get(n, SPEC_MS_DEFAULT(n))
+        ctx = sum(len(self.history.get(r) or ()) for r in self.live)
+        plain, spec = self._step_ms("plain", n, ctx), self._step_ms("verify", n, ctx)
         save = plain - spec / PROMOTE_ACC  # (ms a token, per user)
         out = pay["out"] or PROMOTE_OUT
         left = [
@@ -330,24 +346,25 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         # (a promotion's refill and a prefill between the steps are no step's cost: excluded)
         dt_ms = None if pay["last_t"] is None else (now - pay["last_t"] - pay.get("excl", 0.0)) * 1000
         pay["last_t"], pay["excl"] = now, 0.0
-        n = max(1, pay["n"])
+        n, ctx = max(1, pay["n"]), pay.get("ctx", 0)
         if dt_ms is not None and dt_ms < 5000:  # (an idle gap is no step)
             if pay["kind"] == "verify" and spec_accepts:
-                _store(pay["spec_ms"], n, robust_ema(pay["spec_ms"].get(n), dt_ms, SPEC_MS_DEFAULT(n)))
+                x = max(1.0, dt_ms - SPEC_CTX_MS * ctx)  # (the time at no context: the estimates' unit)
+                _store(pay["spec_ms"], n, robust_ema(pay["spec_ms"].get(n), x, SPEC_MS_DEFAULT(n)))
                 pay["acc"] = ema(pay["acc"], sum(spec_accepts) / len(spec_accepts))
                 pay["verifies"] += 1
             elif pay["kind"] == "plain":
-                _store(pay["plain_ms"], n, robust_ema(pay["plain_ms"].get(n), dt_ms, PLAIN_MS_DEFAULT(n)))
+                x = max(1.0, dt_ms - PLAIN_CTX_MS * ctx)
+                _store(pay["plain_ms"], n, robust_ema(pay["plain_ms"].get(n), x, PLAIN_MS_DEFAULT(n)))
         if pay["verifies"] < PAY_MIN or pay["acc"] is None or n not in pay["spec_ms"]:
             return True
-        plain = pay["plain_ms"].get(n, PLAIN_MS_DEFAULT(n))
-        return pay["acc"] / pay["spec_ms"][n] >= PAY_MARGIN / plain
+        return pay["acc"] / self._step_ms("verify", n, ctx) >= PAY_MARGIN / self._step_ms("plain", n, ctx)
 
     def _pay_line(self):
-        pay, n = self._pay, max(1, self._pay["n"])
+        pay, n, ctx = self._pay, max(1, self._pay["n"]), self._pay.get("ctx", 0)
         return (
-            f"{n} users: {pay['acc']:.2f} tokens per {pay['spec_ms'].get(n, 0):.1f} ms speculating vs 1 per "
-            f"{pay['plain_ms'].get(n, PLAIN_MS_DEFAULT(n)):.1f} ms plain"
+            f"{n} users, {ctx} context tokens: {pay['acc']:.2f} tokens per {self._step_ms('verify', n, ctx):.1f} ms "
+            f"speculating vs 1 per {self._step_ms('plain', n, ctx):.1f} ms plain"
         )
 
     def _promote(self):
@@ -504,6 +521,7 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
                 self._write_tables()
         self._pay["kind"] = "verify" if spec_mode is not None and self.spec_of else "plain"
         self._pay["n"] = len(rows)
+        self._pay["ctx"] = sum(len(self.history.get(r) or ()) for r in rows.values())
         if spec_mode is None:
             # (PLAIN, or a host-sampled step — it wants logits, which the rows adapter returns: everyone to plain)
             if self.spec_of and (self.mode == "PLAIN" or sp is None):
