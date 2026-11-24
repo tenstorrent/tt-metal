@@ -2,9 +2,12 @@
 # RESIDENT decode engine (qwen36_resident/: one persistent program per chip per decode step).
 # ONE image; the lineup (user decision 2026-11-21: one engine for 1-32 users) and the default:
 #   single-user          one user, lossless DFlash2 speculative decoding (greedy only), up to 256K context
-#   batch                DEFAULT: 1-32 users on the rows-mode resident engine in ONE decode launch (row groups of 8
-#                        rows, RESIDENT_ROW_GROUPS=4; shared 22,000-block KV pool, prefill gangs + one pipelined PP pass
-#                        per prefill step, device sampling); TTFT-first scheduling is an option (prefill_gang_tokens 0)
+#   batch                DEFAULT: 1-32 users on the resident engine with DFlash2 speculative decoding where it pays
+#                        (user decision 2026-11-24: the former batch-dflash2 replaces the plain rows-mode batch): a
+#                        32-row plain build and an 8 users x 4 verify rows build sharing weights and one KV pool (V in
+#                        bfp4), prefill gangs + one pipelined PP pass, device sampling; host-RAM prefix cache and
+#                        preemption swap; requests needing logits (logprobs, structured output, ...) are served
+#                        without speculation
 # Retired 2026-11-22: multi-user (1-16 users, two 8-row launches) and the ttnn-path batch (17-32 users).
 # Dropped from the earlier draft: plain single-user, single-user-mtp, multi-user-long (now multi-user's sizing).
 # Replaces the ttnn-path manifest of the same repo (branch qwen36-p300x2-pkg, tt-metal b220c901dec, plugin 96d4416,
@@ -67,7 +70,11 @@ runtime:
   # Then branch changh95/qwen38-host-path-fast on top of d5e699c: host sampling draws unseeded top-k rows from the
   # top-k candidates (8128097) and applies penalties to the seen tokens only (c221edb): a 16-user step with one
   # penalized request 187.7 -> 60.7 ms with the adapter fix (device sampling 40.5 ms).
-  plugin: {repo: https://github.com/changh95/vllm-tt-plugin, ref: c221edb65b5597329480f9696fe3061514475ce9}
+  # Then 0c319a7 + c0ec046 (an optional preempt_request(slot, token_ids) hook: Strata S3 swap) and ed900d6 (on a
+  # model whose SpecPlan sets narrow_decode_resolves_commits, requests needing host-only sampling -- logprobs,
+  # structured output, logit_bias, bad_words, allowed_token_ids, min_tokens -- are decoded without speculation
+  # instead of refused; every step stays an ordinary host-sampled decode while one is live).
+  plugin: {repo: https://github.com/changh95/vllm-tt-plugin, ref: ed900d628601b63f20ee5d3e726483a0acc5c154}
   extra_models_dir: qwen36_resident/vllm_models    # main_class qwen36_resident.generator_vllm:Qwen36ResidentForCausalLM
 
 serve:                         # common to every profile; a profile's env MERGES over this (it cannot unset a key)
@@ -119,53 +126,42 @@ serve_profiles:
       tt:
         sample_on_device_mode: decode_only   # the prefill's first token; blocks come from the model's own sampler
   - name: batch
-    description: 1-32 concurrent requests on the rows-mode resident engine, all of them in one decode launch (one KV pool shared by the users, device sampling, full sampling controls); waiting prompts prefill together before their decodes start, so each user decodes at the decode-step speed. TTFT-first scheduling is an option (prefill_gang_tokens 0).
-    max_num_seqs: 32                     # one launch of 4 row groups (32 rows)
-    env:
-      RESIDENT_ROW_GROUPS: "4"
-      # KV pool = 22,000 blocks x 64: the 4-group build's buffers leave less DRAM than the former 16-user profile's
-      # (29,440 blocks); validated at boot and in the card matrix (2026-11-22)
-      RESIDENT_MAX_TOKENS_ALL_USERS: "1408000"
-      RESIDENT_PREFILL_CHUNKS: "256,512,1024"
-      # the rows build's core split: 28 attention workers, 4 GDN head groups
-      RESIDENT_ATTN_WORKERS: "28"
-      RESIDENT_HEAD_GROUPS: "4"
-      # prefix caching in host memory (GB; 0 = off): a prompt's state at its last 1,024-token boundary (GDN states,
-      # conv history, KV) is kept in host RAM, and a later prompt that starts with it (the next turn of a conversation,
-      # a re-sent document) restores it instead of prefilling it; LRU within the budget
-      RESIDENT_PREFIX_CACHE_GB: "32"
-    additional_config:
-      tt:                                # deep-merged over serve.additional_config.tt
-        prefill_chunk_tokens: 1024       # the TT chunk core: a prompt over the gang cap splits into 1024-token spans
-        prefill_gang_tokens: 2048        # prefill gangs; 0 = the interleaved (TTFT-first) policy
-        sample_on_device_mode: decode_only   # the rows-mode hub feed
-  - name: batch-dflash2
-    description: 1-32 concurrent requests on the resident engine with DFlash2 speculative decoding for up to 8 greedy requests when it pays (8 users x 4 verify rows, 3 drafts per verify; greedy output as batch's except at bf16 near-ties), and the 32-row batch decode otherwise (more users, any sampled / penalized request, low acceptance), up to 256K context each, one shared KV pool, prefix caching as batch. Logprobs and structured output are not available on this profile (use batch).
+    description: 1-32 concurrent requests on the resident engine, all in one decode launch, with DFlash2 speculative decoding for up to 8 greedy requests when it pays (8 users x 4 verify rows, 3 drafts per verify) and the 32-row decode otherwise (more users, sampled / penalized requests, low acceptance, requests that need logits such as logprobs or structured output, which are served without speculation). Up to 256K context each, one shared KV pool (V in bfp4), prefix caching and preemption swap in host RAM. Greedy output can differ from a non-speculating decode at bf16 near-ties.
     max_num_seqs: 32
     env:
       TT_MODEL_CLASS_OVERRIDES: "TTQwen3_5ForConditionalGeneration=qwen36_resident.vllm_adaptive:Qwen36ResidentAdaptiveForCausalLM"
       DFLASH_WEIGHTS: incoai/Qwen3.8-27B-DFlash2@dedf8df68adfb1afeaf7b7480c0a0243108177b4
       # both geometries in one process (ResidentModel share=): 28 attention workers leave the cores their 4 GDN head
-      # groups need; the KV pool leaves ~1 GB a chip next to the second build (21,500 blocks x 64; 2026-11-23)
+      # groups need
       RESIDENT_ATTN_WORKERS: "28"
       RESIDENT_HEAD_GROUPS: "4"
-      RESIDENT_MAX_TOKENS_ALL_USERS: "1376000"
+      # KV pool: K in bf8, V in bfp4 (Strata S0; prefill V rounded to nearest, RESIDENT_KV_V_RTN default on): 13,312
+      # bytes a token-row pair vs 17,408 in bf8, so the bf8 pool's DRAM (1,376,000 tokens next to the second build,
+      # 2026-11-23) holds ~1.80M tokens; 1,792,000 keeps a margin
+      RESIDENT_KV_V_BFP4: "1"
+      RESIDENT_MAX_TOKENS_ALL_USERS: "1792000"
       RESIDENT_PREFILL_CHUNKS: "256,512,1024"
-      # prefix caching in host memory, as batch (a prompt's state at its last 1,024-token boundary; for the speculating
-      # geometry also the drafter's context taps of the window before it, ~108 MB an entry)
+      # prefix caching in host memory (GB; 0 = off): a prompt's state at its last 1,024-token boundary (GDN states,
+      # conv history, KV; for the speculating build also the drafter's context taps) is kept in host RAM, and a later
+      # prompt that starts with it (the next turn of a conversation, a re-sent document) restores it instead of
+      # prefilling it; LRU within the budget
       RESIDENT_PREFIX_CACHE_GB: "32"
+      # preemption swap in host memory (GB; 0 = off, Strata S3): a request vLLM preempts when the KV pool runs out has
+      # its state (GDN states, conv history, KV) kept in host RAM and restored when it resumes, instead of re-prefilling
+      # its whole history (~1 s at 9K, ~64 s at 250K); LRU within the budget
+      RESIDENT_SWAP_GB: "64"
     additional_config:
       tt:
         sample_on_device_mode: decode_only   # the plain geometry's hub sampling (and a verify's sampled column 0)
-        prefill_chunk_tokens: 1024           # the TT chunk core, as batch: every prompt prefills as batch prefills it
-        prefill_gang_tokens: 2048
-    # replaces serve.args. Async scheduling: plain-geometry steps overlap as batch's, speculative steps are drained one
-    # by one (c32 TPOT 45.9 ms as batch, 2026-11-23). The drafter is the model's own (vllm-tt-plugin runner-model spec
-    # contract: custom_class + the model_owned_drafter sentinel); K = 3, narrow decode in the plain geometry
+        prefill_chunk_tokens: 1024           # the TT chunk core: a prompt over the gang cap splits into 1024-token spans
+        prefill_gang_tokens: 2048            # prefill gangs; 0 = the interleaved (TTFT-first) policy
+    # replaces serve.args. Async scheduling: plain-geometry steps overlap, speculative steps are drained one by one.
+    # The drafter is the model's own (vllm-tt-plugin runner-model spec contract: custom_class + the model_owned_drafter
+    # sentinel); K = 3, narrow decode in the plain geometry
     args:
       - --async-scheduling
       - ["--speculative-config", '{"method": "custom_class", "model": "vllm_tt_plugin.model_owned_drafter", "num_speculative_tokens": 3}']
-default_profile: batch                   # user decision 2026-11-21: one engine for 1-32 users
+default_profile: batch                   # user decisions 2026-11-21 (one engine for 1-32 users) and 2026-11-24 (with DFlash2)
 
 card:
   description: >-
