@@ -250,7 +250,7 @@ now: the stage-3 tail (stage-1 cores' heads ~40–50 µs past stage 1, and stage
 multicast). Next: L2 (interleave landed rows into the stage-1 loop) combined with `X_INJECTORS=2`. Not done here
 because L2 restructures all three compute-core kernels.
 
-### [ ] Refinement 7 — K-split stage 1 (regime R6) on the PERF FOCUS
+### [x] Refinement 7 — K-split stage 1 (regime R6) on the PERF FOCUS
 
 **Type**: perf
 
@@ -268,3 +268,10 @@ Build it and keep it only on a measured device-ns win.
 higher, precision gate holds, golden suite green, no regression on the guard set. Or, if the measured variant does
 not win, the attempt is recorded with its numbers in `changelog.md` and the change is reverted (a measured null
 result closes the phase).
+
+**Outcome**: built as `S1_KSPLIT` (1/2/3) and parked at 1 (correct, pinned by `test_q_stem_ksplit.py`, not reverted).
+PERF FOCUS fastest chip 147.75 → 147.69 µs (default; `ccl_perf compare` null); ks=2 156.1, ks=3 160.8 (calculator rank 1,
+−27% on stage 1 alone). Stage 1 itself got faster (partners end ~60–75 µs vs ~105), but the stage-1 + exchange window
+stays ~119 µs (exchange-bound) and K-split takes the stage-3-only cores, so the stage-3 tail grows. Side fix: a
+pre-existing port block-ready race (aggregate count) replaced by an 8-semaphore ring. Next: the TRANSPORT tail (antipodal
+quarter link balance) and L2 (stage 3 inside stage 1), then re-measure K-split; not done here (outside this heading).

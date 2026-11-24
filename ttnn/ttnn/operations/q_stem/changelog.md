@@ -292,3 +292,59 @@ init + fp32 pack overheads).
   (receivers wait for rounds).
 - Tests added: none (tools only: `perf_ablate.py` / `zone_probe.py` take `QSTEM_KNOBS="K=V;K=V"` overrides,
   `zone_summary.py` prints the S1 start).
+
+## Refinement 7 — K-split stage 1 (regime R6) on the PERF FOCUS
+- Date: 2026-11-24
+- **Precondition check** (`perf_ablate.py`, ccl_perf protocol, fastest chip): full 147.75 µs (`perf_measure.py`, 5 exp,
+  slowest 160.68); S1_COMPUTE stubbed 149.0 (stage-1 compute hidden); S3+OUT_WRITE+WKV_READ stubbed 119.1 (stage 1 +
+  exchange). Stage 1 does not dominate the full op — the refinement was built and measured anyway, as its Done-when
+  allows.
+- **Calculator (ranked before building; `op_model.matmul(20, 48, 144)`, HiFi2, bfp8_b in1, resident linked x multicast,
+  c in L1, the layouts this grid can hold: stage-1 groups stacked in the 9 compute rows)**: current 9x8 = 72 cores, one
+  K group 110.6 µs; ks=2 on 2 x (11x4) = 88 cores 90.3 µs (−18%); ks=2 on 2 x (9x4) 92.9 µs; ks=3 on 3 x (11x3) = 99
+  cores **80.4 µs (−27%, rank 1)**. All beyond the ~15% band, so built. (The prediction was computed before the first
+  build; written here after measuring.) **Measured**: stage 1 itself got faster as ranked — ks=3 partner groups finish
+  stage 1 at 58–75 µs vs 104–109 µs at ks=1 (zones) — but the op did not: ks=2 156.1 µs, ks=3 160.8 µs, ks=3 +
+  X_ROUND_DEPTH 2 161.3, ks=2 on 2 x (9x4) (`S1_COLS_PER_CORE=4`, 27 free cores kept) 150.2 / slowest 172.5; injector
+  NoCs (1,0) / (1,1) at ks=3: 158.3 / 158.9. The model ranks stage 1 alone; the device is bound elsewhere:
+  stage 1 + exchange (stage 3 stubbed) is 118.8 (ks=2) / 119.4 (ks=3) vs 119.1 (ks=1) — the exchange binds that
+  window — and with all 99 cores in stage 1 no core starts stage-3 heads early, so the stage-3 tail grows.
+- What was done (Reused: the matmul_block stage-1 call, the Mcast injector/receiver pipes and slot credits, the
+  hand-off and port paths, for_each_block; Added: one combine block op, a partner send block, an owner receive service,
+  3 CBs, 3 semaphores):
+  1. `S1_KSPLIT` (1|2|3, clamped to a divisor of Q_t and the compute rows) — regime R6. K group g = a `W1 x R1` rect at
+     rows `1 + g*R1` (stacked, so the union is one rect); injector g multicasts only K slice g (`k_off` CT arg of the
+     injector reader; family `mcast<g>` via the `Q_STEM_X_FAMILY` define, shared by injector and reader), the group's
+     reader reads q_b rows `k_off ..` (`Q_ks` CT). Partners' matmul packs into `cb_q_kpart` (DEST width); their writer
+     (`kpart_send_block`) waits a slot credit (`SEM_KPART_CREDIT`), NoC-writes the block into the owner's
+     `cb_q_recv<g>` slot (same CB address on every group), barrier, increments the owner's `SEM_KPART_READY + g-1`. The
+     owner's reader (`kpart_recv_service`, polled after each x round and while it waits for an x slot — never in the
+     writer, whose hand-off write barriers held the combine back) credits free slots and pushes landed blocks; the
+     owner's compute runs `kpart_combine_block` (`add` helper for ks=2; one `eltwise_chain` FPU add + CopyTile + SFPU
+     `AddBinary` for ks=3) into `cb_q_slice`, and everything downstream is unchanged. `S1_KPART_DEPTH` (blocks, >= 2)
+     sizes the partial CBs in whole blocks of both column counts. **Parked at 1** (byte-identical schedule: k_off = 0,
+     family 0, no K-split CBs/semaphores used).
+  2. **Race fix (shared hand-off path, all ks)**: the ports waited for one aggregate block-ready count (`mine * C1`),
+     so a fast owner's report for block idx+1 could stand in for a slow owner's missing report for idx, and the port
+     pulled q rows not packed yet. Latent at ks=1 (owners move in lockstep through the x multicast); exposed by K-split
+     (4-column owners lag the 3-column ones) as whole wrong q rows on the first call of a process (identical stale L1
+     hid it afterwards). Found by ttnn-static-analyzer after two fix attempts (cache invalidate on the ready poll, deeper
+     recv CBs) did not help. Now each owner's idx-th report per direction goes to port semaphore
+     `SEM_BLOCK_READY_RING + idx % BLOCK_READY_RING` (8, port cores only) and the port waits `C1` reports on that one;
+     exact while owners stay < 8 blocks apart, which the x-round credits bound (host check `ceil(depth/nkb) + 4`).
+- Result (`perf_measure.py`, 5 exp, default ks=1 with the ring): fastest 147.75 → **147.69 µs**, slowest 160.68 →
+  161.71; `ccl_perf compare` verdict **null (within noise)**. Not dispatch-bound.
+- Finding (what binds): the stage-1 + exchange window (~119 µs with stage 3 stubbed) is exchange-bound for every ks,
+  and the stage-3 tail after it (~29 µs) needs the stage-3-only cores. K-split is worth re-measuring only after the
+  exchange tail shrinks (TRANSPORT: link balance of the antipodal quarter) *and* stage 3 can run on the stage-1 cores
+  during stage 1 (L2), so that the cores K-split takes from stage 3 do not lengthen the tail. Owner overhead to fix
+  then: ~1 µs per block of combine (owners end stage 1 ~20 µs after their partners at ks=3).
+- Accuracy achieved: ks=1 unchanged. K-split: every `test_q_stem_ksplit.py` case passes `check_output` at the bf16 /
+  fp32-DEST tolerance (PCC ≥ 0.995, rel RMS ≤ 0.04): Kimi S=640 ks 2 / 3, deep Q=4096 ks 2, B=2 ks 3, S=160
+  m_non_aligned ks 2, Q=64 (ks clamped to 2); the PERF FOCUS (bfp8_b, 16-bit DEST, RM out) passes its golden check at
+  ks 2 / 3.
+- Golden test progress: targeted slice 10/10 (4 loose cases incl. the PERF FOCUS, Q=4096 bfp8 L1 RM, S=160 RoPE fp32
+  DRAM, B=2 NoPE fp32 TILE); test_regression.py 11/11, test_q_stem.py 9/9.
+- Issues encountered: the port block-ready race above (pre-existing, fixed).
+- Tests added: `tests/ttnn/unit_tests/operations/q_stem/test_q_stem_ksplit.py` (6 cases pinning the parked knob);
+  `test_q_stem_ksplit_debug.py` (per-head error map across repeated calls — the first-call-only symptom).

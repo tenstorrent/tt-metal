@@ -13,3 +13,4 @@
 {"event":"hypothesis","refinement":7,"text":"static analyzer: port waits aggregate block_ready >= mine*C1; a fast owner report substitutes a slow owner (4-col K-split owners lag) -> port pulls unpacked q. Latent at ks=1 (owners lockstep). Fix: per-owner readiness check.","ts":"2026-11-24T22:52:23+00:00"}
 {"event":"fix_applied","refinement":7,"text":"block-ready ring (8 port semaphores, per-direction report index) replaces the aggregate counter; ks=2 Kimi fp32 clean over 2 fresh processes x 6 calls","ts":"2026-11-24T22:55:15+00:00"}
 {"event":"test_run","status":"pass","tests":"test_q_stem_ksplit.py + test_q_stem.py + golden test_regression.py","result":"26 passed","ts":"2026-11-24T22:55:15+00:00"}
+{"event":"test_run","refinement":7,"what":"final","fastest_us":147.69,"slowest_us":161.71,"verdict":"null","ks2_us":156.05,"ks3_us":160.8,"golden_slice":"10/10","unit":"26/26","ts":"2026-11-24T22:59:25+00:00"}
