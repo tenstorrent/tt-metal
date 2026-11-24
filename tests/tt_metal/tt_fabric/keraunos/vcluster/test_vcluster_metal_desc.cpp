@@ -210,11 +210,16 @@ TEST_F(VclusterMetalDescDeathTest, GeneratedFilesOpen) {
     }
 }
 
-// Without chip_soc_descs Mock opens every chip on its own Quasar descriptor, which has no Ethernet core, and does not
-// read TT_METAL_EMU_SOC_DESC.
+// Without chip_soc_descs Mock opens every chip on its own Quasar descriptor, which has no Ethernet core (so the case
+// drops the links), and does not read TT_METAL_EMU_SOC_DESC, whose package has eight.
 TEST_F(VclusterMetalDescDeathTest, NoKeyOpensOnTheMockDescriptor) {
     EXPECT_OPENS(
-        [](Files& files) { edit(files.cluster, [](YAML::Node& cluster) { cluster.remove("chip_soc_descs"); }); },
+        [](Files& files) {
+            edit(files.cluster, [](YAML::Node& cluster) {
+                cluster.remove("chip_soc_descs");
+                cluster["ethernet_connections"] = YAML::Node(YAML::NodeType::Sequence);
+            });
+        },
         [](const tt::Cluster& cluster) {
             return cluster.get_soc_desc(0).get_num_eth_channels() == 0 &&
                    cluster.get_soc_desc(1).get_num_eth_channels() == 0;
