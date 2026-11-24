@@ -139,7 +139,9 @@ ALWI void pack_block(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t n
 #endif
 }
 
-// The count as a template argument: on Blackhole the block forms.
+/// @cond
+// The count as a template argument: on Blackhole the block forms. Out of the docs: the documented pack_block is the
+// run-time count above.
 template <std::uint32_t ntiles, bool is_fp32_dest_acc_en = DST_ACCUM_MODE, std::uint32_t matmul_kt = 0>
 ALWI void pack_block(std::uint32_t ifrom_dst, std::uint32_t icb) {
     LLK_SAN_FUNCTION();
@@ -151,6 +153,7 @@ ALWI void pack_block(std::uint32_t ifrom_dst, std::uint32_t icb) {
     PACK((llk_matmul_pack<is_fp32_dest_acc_en, false, PackMode::Default>(ifrom_dst, icb, ntiles)));
 #endif
 }
+/// @endcond
 
 #if defined(ARCH_BLACKHOLE) && defined(TRISC_PACK)
 // The count as the front end sees it: N for a constant, 0 for one known only at run time (main's loop, no block path).

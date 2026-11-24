@@ -2642,6 +2642,9 @@ class MATMUL_PACK_BLOCK(TemplateParameter):
     def __init__(self, pack_block: int = 0):
         self.matmul_pack_block = int(pack_block)
         self.pack_keys = getattr(pack_block, "keys", None)
+        # The Wormhole kernels read neither: one ELF per block shape would only defeat the build cache.
+        if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
+            self.matmul_pack_block, self.pack_keys = 0, None
 
     # The pack keys go into the variant hash: rows that differ only in them build different ELFs.
     def __repr__(self) -> str:

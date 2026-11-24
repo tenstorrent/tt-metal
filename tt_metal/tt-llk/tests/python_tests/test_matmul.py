@@ -6,6 +6,7 @@ from typing import List
 import pytest
 import torch
 from conftest import skip_for_wormhole
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.device import BootMode
 from helpers.format_config import DataFormat, FormatConfig, is_dest_acc_needed
 from helpers.golden_generators import MatmulGolden, get_golden_generator
@@ -95,9 +96,34 @@ ALL_MATMUL_COMBINATIONS = generate_format_aware_matmul_combinations(
 )
 
 
+# Blackhole builds one ELF per block shape (its compile-time block keys), where the run-time dims of main shared one per
+# format: the smoke run keeps 1 in 16 combinations there, test_matmul_rest runs the others nightly.
+MATMUL_SMOKE_STRIDE = 16
+
+
+def _matmul_smoke_combinations(math_fidelity):
+    if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
+        return ALL_MATMUL_COMBINATIONS
+    offset = ALL_MATH_FIDELITIES.index(math_fidelity)
+    return [
+        c
+        for i, c in enumerate(ALL_MATMUL_COMBINATIONS)
+        if (i + offset) % MATMUL_SMOKE_STRIDE == 0
+    ]
+
+
+def _matmul_nightly_combinations(math_fidelity):
+    offset = ALL_MATH_FIDELITIES.index(math_fidelity)
+    return [
+        c
+        for i, c in enumerate(ALL_MATMUL_COMBINATIONS)
+        if (i + offset) % MATMUL_SMOKE_STRIDE != 0
+    ]
+
+
 @parametrize(
     math_fidelity=ALL_MATH_FIDELITIES,
-    format_dest_acc_and_dims=ALL_MATMUL_COMBINATIONS,
+    format_dest_acc_and_dims=_matmul_smoke_combinations,
 )
 # Note: this test is used to test boot modes, that is why it has them piped as default arguments to the test itself
 def test_matmul(
@@ -309,6 +335,16 @@ def test_matmul(
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
     ), "Assert against golden failed"
+
+
+@pytest.mark.nightly
+@skip_for_wormhole
+@parametrize(
+    math_fidelity=ALL_MATH_FIDELITIES,
+    format_dest_acc_and_dims=_matmul_nightly_combinations,
+)
+def test_matmul_rest(math_fidelity, format_dest_acc_and_dims):
+    test_matmul(math_fidelity, format_dest_acc_and_dims)
 
 
 # The math thread's row MOP (one MOP per reuse row, Blackhole only) on every block shape, fidelity and DEST mode.
@@ -574,11 +610,14 @@ DYN_SWITCH_BLOCKS = [
 ]
 
 
+DYN_SWITCH_SMOKE_BLOCKS = [DYN_SWITCH_BLOCKS[1], DYN_SWITCH_BLOCKS[5]]
+
+
 @skip_for_wormhole
 @parametrize(
     math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi2],
     formats=DYN_SWITCH_FORMATS,
-    dims=DYN_SWITCH_BLOCKS,
+    dims=DYN_SWITCH_SMOKE_BLOCKS,
     dest_sync=[DestSync.Half, DestSync.Full],
     row_mop=[False, True],
     dyn_switch=[False, True],
@@ -586,6 +625,26 @@ DYN_SWITCH_BLOCKS = [
 def test_matmul_dyn_switch(
     math_fidelity, formats, dims, dest_sync, row_mop, dyn_switch
 ):
+    _dyn_switch(math_fidelity, formats, dims, dest_sync, row_mop, dyn_switch)
+
+
+@pytest.mark.nightly
+@skip_for_wormhole
+@parametrize(
+    math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi2],
+    formats=DYN_SWITCH_FORMATS,
+    dims=[d for d in DYN_SWITCH_BLOCKS if d not in DYN_SWITCH_SMOKE_BLOCKS],
+    dest_sync=[DestSync.Half, DestSync.Full],
+    row_mop=[False, True],
+    dyn_switch=[False, True],
+)
+def test_matmul_dyn_switch_rest(
+    math_fidelity, formats, dims, dest_sync, row_mop, dyn_switch
+):
+    _dyn_switch(math_fidelity, formats, dims, dest_sync, row_mop, dyn_switch)
+
+
+def _dyn_switch(math_fidelity, formats, dims, dest_sync, row_mop, dyn_switch):
     test_matmul(
         math_fidelity,
         (formats, DestAccumulation.No, dims),
