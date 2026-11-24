@@ -53,6 +53,13 @@ def rope_tables(pos0, rows):
 
 
 KV_PAD = 128  # cache rows past max_ctx: the block rows of a draft at p <= max_ctx - 1 (and the flash-decode chunk)
+# The local layers read keys p-1024 .. p+7 only, so above 2 * RING positions their caches are rings of RING slots
+# held twice: position x sits at rows x % RING and x % RING + RING, and the window of a draft whose last row is
+# q = p + 7 is the contiguous rows idx-1031 .. idx with idx = q below RING (the first lap: no rows of an older
+# sequence below it), else q % RING + RING. 4,096 B per context token instead of 12,288. RING is a multiple of the
+# flash-decode chunk (the same keys per chunk as the full-length cache) and > 1032 + 8 + STASH (the rows a draft,
+# a verify pass or a stash group writes ahead take the slots of positions the window has left).
+RING = 1152
 
 
 def bank(device, w, cfg, out_dtype, cores_per_bank=6):
@@ -77,8 +84,10 @@ def mtp_root():
 
 
 class DSparkDrafter:
-    def __init__(self, model, root=None, max_ctx=None, k=BLOCK - 1, fast=True, unembed_dtype=None,ckpt="/work/models/Inkling-2-Mini"):  # fmt: skip
+    def __init__(self, model, root=None, max_ctx=None, k=BLOCK - 1, fast=True, unembed_dtype=None,ckpt="/work/models/Inkling-2-Mini", ring=None):  # fmt: skip
         """model: built Inkling2Model (shares embed, embed_norm, unembed, DecodePositions.pos).
+        max_ctx: the positions the drafter covers (default: the model's): drafts at p < max_ctx, commits below
+        max_ctx + KV_PAD. ring: the local layers' caches as rings (RING above); None = when that saves memory.
         k: draft tokens per pass (markov steps). fast=False: E9's ttnn.linear matmuls (A/B only).
         unembed_dtype: None = the decode head's unembed; ttnn.bfloat4_b = a drafter-only 4-bit copy (+0.25 GB).
         ckpt: source checkpoint for markov_head.hidden_out (the per-step head input, see draft())."""
@@ -185,10 +194,13 @@ class DSparkDrafter:
             e[..., i] = 1.0
             self.onehot.append(put(e))
         self.S = self.max_ctx + KV_PAD
-        zeros = torch.zeros(1, NKV, self.S, D)
-        self.k_cache = [put(zeros, ttnn.bfloat16) for _ in range(N_LAYERS)]
-        self.v_cache = [put(zeros, ttnn.bfloat16) for _ in range(N_LAYERS)]
-        del zeros
+        ring = self.S > 2 * RING + KV_PAD if ring is None else ring
+        self.ring = [RING if ring and i in LOCAL else 0 for i in range(N_LAYERS)]
+        self.rows = [2 * RING + KV_PAD if r else self.S for r in self.ring]  # cache rows per layer
+        self.k_cache = [put(torch.zeros(1, NKV, n, D), ttnn.bfloat16) for n in self.rows]
+        self.v_cache = [put(torch.zeros(1, NKV, n, D), ttnn.bfloat16) for n in self.rows]
+        # q = p + 7 as the ring layers' row (set_draft_pos), once per kv group
+        self.cur_ring = ttnn.from_torch(torch.zeros(NKV, dtype=torch.int32), dtype=ttnn.int32, device=dev)
         self.kv_shard = model.layers[0].attn.kv_shard
         grid = dev.compute_with_storage_grid_size()
         self.sdpa_cfg = ttnn.SDPAProgramConfig(compute_with_storage_grid_size=grid, q_chunk_size=0, k_chunk_size=128,
@@ -259,9 +271,15 @@ class DSparkDrafter:
         r = ttnn.matmul(x32, self.rot, dtype=ttnn.float32, compute_kernel_config=self.ckc)
         return ttnn.typecast(ttnn.add(ttnn.multiply(x32, cos), ttnn.multiply(r, sin)), ttnn.bfloat16)
 
-    def _write_block(self, i, k, v, pos=None, n=BLOCK):
+    def cache_rows(self, i, pos):
+        """The rows of layer i's caches that hold position pos."""
+        r = self.ring[i]
+        return [pos % r, pos % r + r] if r else [pos]
+
+    def _write_block(self, i, k, v, pos=None, n=BLOCK, flat=False):
         """Rows 0..n-1 of k / v [1, 8, 32, 128] (bf16 TILE, DRAM) -> rows pos..pos+n-1 of layer i's caches (pos: int32
-        [1] device tensor, default the draft block's p)."""
+        [1] device tensor, default the draft block's p); a ring layer: each row to its two rows (cache_rows).
+        flat: k / v are [1, 1, 8, 128], one position with its heads as rows (commit())."""
         pos = self.blk_pos if pos is None else pos
         dram = ttnn.DRAM_MEMORY_CONFIG
         k, v = ttnn.to_memory_config(k, dram), ttnn.to_memory_config(v, dram)
@@ -269,7 +287,8 @@ class DSparkDrafter:
         rt = []
         for j, _ in enumerate(self.kv_cores):
             src, dst = (k, kc) if j < NKV else (v, vc)
-            rt.append([src.buffer_address(), dst.buffer_address(), self.S // 32, pos.buffer_address(), j % NKV, n])
+            rt.append([src.buffer_address(), dst.buffer_address(), self.rows[i] // 32, pos.buffer_address(),
+                       j % NKV, n, self.ring[i], int(flat)])  # fmt: skip
         crs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in self.kv_cores])
         kern = ttnn.KernelDescriptor(
             kernel_source=f"{F.KDIR}/mtp_kv_rows.cpp",
@@ -296,7 +315,9 @@ class DSparkDrafter:
         ttnn.copy_host_to_device_tensor(
             ttnn.from_torch(ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT), self.blk_ids
         )
-        for t, v in ((self.blk_pos, [p]), (self.cur_pos, [p + BLOCK - 1] * NKV)):
+        q = p + BLOCK - 1
+        for t, v in ((self.blk_pos, [p]), (self.cur_pos, [q] * NKV),
+                     (self.cur_ring, [q if q < RING else q % RING + RING] * NKV)):  # fmt: skip
             ttnn.copy_host_to_device_tensor(ttnn.from_torch(torch.tensor(v, dtype=torch.int32), dtype=ttnn.int32), t)
 
     # ------------------------------------------------------------ device
@@ -312,6 +333,9 @@ class DSparkDrafter:
             k = ttnn.reshape(ttnn.slice(kv, [0, 0, 0, 0], [1, 1, 1, NKV * D]), [1, 1, NKV, D])
             v = ttnn.reshape(ttnn.slice(kv, [0, 0, 0, NKV * D], [1, 1, 1, 2 * NKV * D]), [1, 1, NKV, D])
             k = self._rope(self._rms(k, f"l{i}.k_norm_ctx", ttnn.float32), cos_pos, sin_pos)
+            if self.ring[i]:  # both rows of the position in one program
+                self._write_block(i, k, v, pos=pos_idx, n=1, flat=True)
+                continue
             for cache, t in ((self.k_cache[i], k), (self.v_cache[i], v)):
                 ttnn.experimental.paged_update_cache(
                     cache, ttnn.to_memory_config(t, self.kv_shard), update_idxs_tensor=pos_idx
@@ -429,9 +453,20 @@ class DSparkDrafter:
 
             k = self._rope(norm(heads(0), f"l{i}.k_norm_ctx"), cos, sin)
             v = heads(NKV * D)
+            # (source row, cache row, rows): a ring layer takes the chunk's last RING positions, in runs that
+            # do not wrap, each to its two rows
+            runs, r = [(0, s, t)], self.ring[i]
+            if r:
+                runs, a = [], max(s, s + t - r)
+                while a < s + t:
+                    b = min(s + t, (a // r + 1) * r)
+                    runs += [(a - s, a % r + o, b - a) for o in (0, r)]
+                    a = b
             for cache, x in ((self.k_cache[i], k), (self.v_cache[i], v)):
                 x = x if x.dtype == ttnn.bfloat16 else ttnn.typecast(x, ttnn.bfloat16)
-                ttnn.experimental.slice_write(x, cache, [0, 0, s, 0], [1, NKV, s + t, D], [1, 1, 1, 1])
+                for a, c0, n_ in runs:
+                    part = x if n_ == t else ttnn.slice(x, [0, 0, a, 0], [1, NKV, a + n_, D])
+                    ttnn.experimental.slice_write(part, cache, [0, 0, c0, 0], [1, NKV, c0 + n_, D], [1, 1, 1, 1])
         if n is not None:
             fr = ttnn.slice(norm(mix(N_LAYERS), "rnn_norm"), [0, 0, n - 1, 0], [1, 1, n, HIDDEN])
             ttnn.copy(ttnn.typecast(fr, ttnn.bfloat16), self.f_rnn)
@@ -449,13 +484,13 @@ class DSparkDrafter:
         # kv groups as the flash-decode batch: user kv holds q rows g*8 + r (head h = kv*3 + g, block row r), one
         # 24-row Q tile per user, cache viewed as [8 users, 1 head, S, 128]
         qg = ttnn.reshape(ttnn.slice(q, [0, 0, 0, 0], [1, NH, BLOCK, D]), [1, NKV, GROUPS * BLOCK, D])
-        kc, vc = (ttnn.reshape(c, [NKV, 1, self.S, D]) for c in (self.k_cache[i], self.v_cache[i]))
+        kc, vc = (ttnn.reshape(c, [NKV, 1, self.rows[i], D]) for c in (self.k_cache[i], self.v_cache[i]))
         o = ttnn.transformer.scaled_dot_product_attention_decode(
             qg,
             kc,
             vc,
             is_causal=True,
-            cur_pos_tensor=self.cur_pos,
+            cur_pos_tensor=self.cur_ring if self.ring[i] else self.cur_pos,
             scale=D**-0.5,
             sliding_window_size=(WINDOW + BLOCK) if i in LOCAL else None,
             program_config=self.sdpa_cfg,
