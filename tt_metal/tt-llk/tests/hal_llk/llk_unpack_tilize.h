@@ -277,7 +277,9 @@ inline void _llk_unpack_tilize_(
     // TTI_SETADCZW(0b001, 0, 0, 0, 0, 0b1111): Z/W counters on UNP_A for both channels
     constexpr adc::AddrCounter clear_zw = adc::AddrCounter {.channel0 = {.z = 0, .w = 0}, .channel1 = {.z = 0, .w = 0}}.for_clients<adc::Client::Unpacker0>();
 
-    volatile std::uint32_t tt_reg_ptr* cfg = hcfg::detail::state_cfg_bank(); // get pointer to registers for current state ID
+    // Production's get_cfg_pointer (RISC pointer select only): its branch layout keeps the per-tile path as production's;
+    // hcfg::detail::state_cfg_bank() flips the branch and cost up to 4% on short tilize blocks.
+    volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer(); // get pointer to registers for current state ID
 
     // In case of 32-bit numbers, we have to unpack into dest register
     // For integers, always unpack to dest. For Float32, only if unpack_dst_format is Float32 (lossless tilize mode)
@@ -401,7 +403,7 @@ inline void _llk_unpack_tilize_(
         // Trisc::SEMPOST for context acquire
         sync::semaphore::post<sync::Access::MMIO, hal_port::UNPACK_SYNC_SEM>();
 
-        if (unpack_to_dest)
+        if (unpack_to_dest) [[unlikely]]
         {
             // Unpack to dest
             hal_port::set_dst_write_addr(unp_cfg_context, unpack_src_format);
@@ -414,7 +416,7 @@ inline void _llk_unpack_tilize_(
         // Run MOP
         hal::mop::Runner<hal::mop::MopTemplate::Template1>::run();
 
-        if (unpack_to_dest)
+        if (unpack_to_dest) [[unlikely]]
         {
             // Pair with set_dst_write_addr above (both keyed on unpack_src_format), so the
             // canonical Z-stride restore matches the value programmed on entry.
