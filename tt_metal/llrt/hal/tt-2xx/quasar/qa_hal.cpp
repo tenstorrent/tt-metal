@@ -328,8 +328,6 @@ public:
         } else if (variant == IpVariant::SATURN) {
             includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.3/meta");
         }
-        // Saturn has no register headers yet, so it gets no include path here. Once they are added, add a
-        // Saturn branch for their version.
         includes.push_back("tt_metal/tt-llk/tt_llk_quasar/common/inc");
         includes.push_back("tt_metal/tt-llk/tt_llk_quasar/");
         includes.push_back("tt_metal/tt-llk/tt_llk_quasar/llk_lib");
@@ -515,9 +513,7 @@ std::uint32_t get_l1_size(IpVariant variant) {
         case IpVariant::GRENDEL: return get_grendel_l1_size();
         case IpVariant::HORIZON: return get_horizon_l1_size();
         case IpVariant::TRINITY: return get_trinity_l1_size();
-        // Saturn has no register headers yet. Once they are added, read its L1 size from them the way the
-        // other variants do: add a qa_hal_saturn_l1.cpp and list it in QA_HAL_VARIANT_L1_SOURCES (sources.cmake).
-        case IpVariant::SATURN: TT_THROW("Saturn has no register headers to read the L1 size from");
+        case IpVariant::SATURN: return get_saturn_l1_size();
     }
     TT_THROW("Unknown Quasar IP variant {}", enchantum::to_string(variant));
 }
