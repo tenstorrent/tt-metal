@@ -41,7 +41,7 @@ void ValidateResourceSpecs(
 
 void ValidateResourceUsage(const ValidationContext& ctx, tt::ARCH arch) {
     // Pipe credit lanes rely on the relay DFBs' PRODUCER kernels being uniform (ValidateDFBEndpoints).
-    ValidateComputeSemaphores(ctx);
+    ValidateComputeSemaphores(ctx, arch);
     ValidateDFBEndpoints(ctx, arch);
     const PrefetcherPipeRoles pipe_roles = ValidatePrefetcherPipeRoles(ctx);
     ValidatePrefetcherPipeLanesAndRelays(ctx, pipe_roles, arch);

@@ -82,9 +82,15 @@ namespace semaphore_detail {
 // function keeps the name sem_l1_offset so the shared Semaphore class template (semaphore.h) needs no
 // change; the returned value is the hardware index, threaded through up/down/wait/... below.
 template <ProgrammableCoreType core_type>
-__attribute__((always_inline)) inline std::uintptr_t sem_l1_offset(std::uint32_t /*id*/, SemScope scope) {
+__attribute__((always_inline)) inline std::uintptr_t sem_l1_offset(std::uint32_t id, SemScope scope) {
     static_assert(core_type == ProgrammableCoreType::TENSIX, "compute semaphores require a Tensix core");
-    ASSERT(scope == SemScope::COMPUTE_ATOMIC);  // compute supports COMPUTE_ATOMIC only
+#if defined(ARCH_QUASAR)
+    if (scope == SemScope::LOCAL_NONATOMIC) {  // shared with a DM kernel: its L1 word, read uncached
+        return reinterpret_cast<std::uintptr_t>(sem_l1_base[static_cast<int>(core_type)]) + id * L1_ALIGNMENT +
+               MEM_L1_UNCACHED_BASE;
+    }
+#endif
+    ASSERT(scope == SemScope::COMPUTE_ATOMIC);
 #if defined(ARCH_BLACKHOLE)
     return ckernel::semaphore::UNPACK_OPERAND_SYNC;
 #elif defined(ARCH_QUASAR)
@@ -95,6 +101,39 @@ __attribute__((always_inline)) inline std::uintptr_t sem_l1_offset(std::uint32_t
     return 0;
 #endif
 }
+
+#if defined(ARCH_QUASAR)
+// SemScope::LOCAL_NONATOMIC (Quasar): the L1 word of a semaphore shared with a DM kernel, its only writer.
+// Compute only reads it, from the RISC, on any thread; the engine work issued after a wait reads L1 after it.
+__attribute__((always_inline)) inline std::uint32_t l1_word(std::uintptr_t addr) {
+    return *reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(addr);
+}
+// The three reads compute may do on it. Each returns true when `scope` is LOCAL_NONATOMIC (and has done the op).
+__attribute__((always_inline)) inline bool l1_wait(std::uintptr_t addr, SemScope scope, std::uint32_t value) {
+    if (scope != SemScope::LOCAL_NONATOMIC) {
+        return false;
+    }
+    WAYPOINT("NSW");
+    while (l1_word(addr) != value) {
+    }
+    WAYPOINT("NSD");
+    return true;
+}
+__attribute__((always_inline)) inline bool l1_wait_min(std::uintptr_t addr, SemScope scope, std::uint32_t value) {
+    if (scope != SemScope::LOCAL_NONATOMIC) {
+        return false;
+    }
+    WAYPOINT("NSMW");
+    while (l1_word(addr) < value) {
+    }
+    WAYPOINT("NSMD");
+    return true;
+}
+#else
+__attribute__((always_inline)) inline std::uint32_t l1_word(std::uintptr_t) { return 0; }
+__attribute__((always_inline)) inline bool l1_wait(std::uintptr_t, SemScope, std::uint32_t) { return false; }
+__attribute__((always_inline)) inline bool l1_wait_min(std::uintptr_t, SemScope, std::uint32_t) { return false; }
+#endif
 
 #if (defined(ARCH_BLACKHOLE) || defined(ARCH_QUASAR)) && (defined(TRISC_UNPACK) || defined(TRISC_PACK))
 
@@ -177,6 +216,9 @@ __attribute__((always_inline)) inline std::uint32_t load(std::uintptr_t index, S
 // wait on) before reading.
 template <ProgrammableCoreType core_type>
 __attribute__((always_inline)) inline std::uint32_t current(std::uintptr_t index, SemScope scope) {
+    if (scope == SemScope::LOCAL_NONATOMIC) {
+        return l1_word(index);
+    }
     hw::semaphore_settle();
     return load(index, scope);
 }
@@ -201,6 +243,9 @@ __attribute__((always_inline)) inline void down(std::uintptr_t index, SemScope s
 
 template <ProgrammableCoreType core_type>
 __attribute__((always_inline)) inline void wait(std::uintptr_t index, SemScope scope, std::uint32_t value) {
+    if (l1_wait(index, scope, value)) {
+        return;
+    }
     ASSERT(scope == SemScope::COMPUTE_ATOMIC);
     // No SEMWAIT condition for "== v": RISC poll, after retiring this thread's own posted ops.
     WAYPOINT("NSW");
@@ -212,6 +257,9 @@ __attribute__((always_inline)) inline void wait(std::uintptr_t index, SemScope s
 
 template <ProgrammableCoreType core_type>
 __attribute__((always_inline)) inline void wait_min(std::uintptr_t index, SemScope scope, std::uint32_t value) {
+    if (l1_wait_min(index, scope, value)) {
+        return;
+    }
     ASSERT(scope == SemScope::COMPUTE_ATOMIC);
     if (value == 1) {
         // Tensix-side: hold this thread's engine instructions while Value == 0. In order with this
@@ -270,6 +318,24 @@ template <ProgrammableCoreType core_type>
 inline void down(std::uintptr_t, SemScope, std::uint32_t) {
     COMPUTE_SEMAPHORE_UNSUPPORTED(core_type);
 }
+#if defined(ARCH_QUASAR)
+// Quasar MATH / SFPU thread: only the L1 word of a DM-shared semaphore is reachable.
+template <ProgrammableCoreType core_type>
+inline void wait(std::uintptr_t addr, SemScope scope, std::uint32_t value) {
+    [[maybe_unused]] const bool done = l1_wait(addr, scope, value);
+    ASSERT(done);  // a compute-only (Tensix Sync Unit) semaphore is UNPACK/PACK only
+}
+template <ProgrammableCoreType core_type>
+inline void wait_min(std::uintptr_t addr, SemScope scope, std::uint32_t value) {
+    [[maybe_unused]] const bool done = l1_wait_min(addr, scope, value);
+    ASSERT(done);  // a compute-only (Tensix Sync Unit) semaphore is UNPACK/PACK only
+}
+template <ProgrammableCoreType core_type>
+inline std::uint32_t current(std::uintptr_t addr, SemScope scope) {
+    ASSERT(scope == SemScope::LOCAL_NONATOMIC);  // a compute-only semaphore is UNPACK/PACK only
+    return l1_word(addr);
+}
+#else
 template <ProgrammableCoreType core_type>
 inline void wait(std::uintptr_t, SemScope, std::uint32_t) {
     COMPUTE_SEMAPHORE_UNSUPPORTED(core_type);
@@ -279,17 +345,18 @@ inline void wait_min(std::uintptr_t, SemScope, std::uint32_t) {
     COMPUTE_SEMAPHORE_UNSUPPORTED(core_type);
 }
 template <ProgrammableCoreType core_type>
+inline std::uint32_t current(std::uintptr_t, SemScope) {
+    COMPUTE_SEMAPHORE_UNSUPPORTED(core_type);
+    return 0;
+}
+#endif
+template <ProgrammableCoreType core_type>
 inline void wait_not_full(std::uintptr_t, SemScope, std::uint32_t) {
     COMPUTE_SEMAPHORE_UNSUPPORTED(core_type);
 }
 template <ProgrammableCoreType core_type>
 inline void set(std::uintptr_t, SemScope, std::uint32_t) {
     COMPUTE_SEMAPHORE_UNSUPPORTED(core_type);
-}
-template <ProgrammableCoreType core_type>
-inline std::uint32_t current(std::uintptr_t, SemScope) {
-    COMPUTE_SEMAPHORE_UNSUPPORTED(core_type);
-    return 0;
 }
 #undef COMPUTE_SEMAPHORE_UNSUPPORTED
 
