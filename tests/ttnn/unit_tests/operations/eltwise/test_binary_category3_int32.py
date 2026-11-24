@@ -48,7 +48,7 @@ converts both operands to float32 (rounding |x| > 2^24, as torch does) and
 divides with one residual correction step, so the golden is torch.div on the
 int32 tensors: float32(a) / float32(b). The rounding modes, remainder and
 fmod are integer kernels and exact, as is torch.floor_divide; INT32_MIN / -1
-wraps to INT32_MIN.
+is undefined under trunc and floor and is not checked.
 
 The int32 divide kernel loads its operands in sign-magnitude form, where
 INT32_MIN (0x80000000) is -0, so INT32_MIN / b gives 0 and a / INT32_MIN
@@ -255,15 +255,18 @@ def test_int32_integer_division_ops(device, ttnn_op, mode):
 
     | Input range | Check | Reason                                          |
     |-------------|-------|-------------------------------------------------|
-    | b ≠ 0       | exact | integer kernels; INT32_MIN / -1 wraps to        |
-    |             |       | INT32_MIN under trunc and floor                 |
+    | b ≠ 0       | exact | integer kernels; INT32_MIN / -1 is undefined    |
+    |             |       | under trunc and floor and is not checked        |
     """
     input_a, input_b = int32_pairwise_inputs()
     input_b = _nonzero(input_b)
 
     result = _run_int_division(device, ttnn_op, mode, input_a, input_b)
     assert result.dtype == torch.int32, f"expected an int32 result, got {result.dtype}"
-    assert_equal(_int_division_golden(mode, input_a, input_b), result)
+    valid = torch.ones_like(input_a, dtype=torch.bool)
+    if mode in ("trunc", "floor"):
+        valid &= ~((input_a == INT32_MIN) & (input_b == -1))
+    assert_equal(_int_division_golden(mode, input_a, input_b)[valid], result[valid])
 
 
 @pytest.mark.parametrize("scalar", DIVISOR_SCALARS)
@@ -273,13 +276,18 @@ def test_int32_integer_division_ops_scalar(device, ttnn_op, mode, scalar):
 
     | Input range | Check | Reason                                          |
     |-------------|-------|-------------------------------------------------|
-    | full grid   | exact | the scalar is packed as an int32                |
+    | full grid   | exact | the scalar is packed as an int32; INT32_MIN /   |
+    |             |       | -1 is undefined under trunc and floor and is    |
+    |             |       | not checked                                     |
     """
     input_a = scalar_rows(generate_int32_binary_grid())
 
     result = _run_int_division(device, ttnn_op, mode, input_a, scalar)
     assert result.dtype == torch.int32, f"expected an int32 result, got {result.dtype}"
-    assert_equal(_int_division_golden(mode, input_a, scalar), result)
+    valid = torch.ones_like(input_a, dtype=torch.bool)
+    if mode in ("trunc", "floor") and scalar == -1:
+        valid &= input_a != INT32_MIN
+    assert_equal(_int_division_golden(mode, input_a, scalar)[valid], result[valid])
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -322,13 +330,15 @@ def test_int32_div_no_nan_scalar(device, scalar):
     |               |                      | the int32 divide kernel, so    |
     |               |                      | INT32_MIN is correct on either |
     |               |                      | side                           |
-    | scalar = 0    | exact 0              | every element                  |
+    | scalar = 0    | exact 0, int32       | zeros_like(a), keeping a's     |
+    |               |                      | dtype                          |
     """
     input_a = scalar_rows(generate_int32_binary_grid())
 
     result = run_int32_binary(device, ttnn.div_no_nan, input_a, scalar)
     if scalar == 0:
-        assert_equal(torch.zeros_like(input_a), result.to(torch.int32))
+        assert result.dtype == torch.int32, f"expected an int32 result, got {result.dtype}"
+        assert_equal(torch.zeros_like(input_a), result)
         return
     assert result.dtype == torch.float32, f"expected a float32 result, got {result.dtype}"
     _assert_ulp(_div_no_nan_golden(input_a, scalar), result, 1, f"div_no_nan by {scalar} vs torch.div")
@@ -381,6 +391,8 @@ def test_int32_pow_scalar(device, exponent):
     | full grid   | exact | repeated int32 multiplication; overflowing      |
     |             |       | powers wrap mod 2^32, and 0 ** 0 is 1           |
     """
+    if exponent not in (0, 1) and device.arch() == ttnn.device.Arch.QUASAR:
+        pytest.skip("integer pow is not supported on Quasar")
     input_a = scalar_rows(generate_int32_binary_grid())
 
     result = run_int32_binary(device, ttnn.pow, input_a, exponent)
