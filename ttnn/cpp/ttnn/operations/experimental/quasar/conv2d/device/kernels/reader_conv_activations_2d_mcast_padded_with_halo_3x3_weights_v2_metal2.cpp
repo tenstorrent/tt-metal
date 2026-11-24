@@ -25,6 +25,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/tensor_accessor.h"
 #include "experimental/kernel_args.h"
+#include "api/scratchpad.h"
 #include "conv_reader_common.hpp"
 #include "noc/noc_parameters.h"
 #define ENABLE_DEBUG 0
@@ -206,19 +207,25 @@ void kernel_main() {
 
     // Reader-indices base. On the resident (L1) path the config slice already lives in L1, reached by
     // base address from a local TensorAccessor (tensor::reader_indices) — no borrowed CB. On the
-    // DRAM-config path it is DMA'd into a fresh L1 DFB (dfb::reader_indices) first.
+    // DRAM-config path it is DMA'd into a private L1 scratchpad (scratch::reader_indices_scratch) first.
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr;
 #ifdef CONFIG_TENSOR_IN_DRAM
-    DataflowBuffer cb_reader_indices_obj(dfb::reader_indices);
-    packed_reader_indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_reader_indices_obj.get_write_ptr());
+    Scratchpad<uint32_t> reader_idx_scratch(scratch::reader_indices_scratch);
     {
         const auto config_accessor = TensorAccessor(tensor::reader_indices);
         constexpr uint32_t config_page_size = get_arg(args::config_page_size);
         noc.async_read(
-            config_accessor, cb_reader_indices_obj, config_page_size, {.page_id = dram_config_reader_index}, {});
+            config_accessor,
+            reader_idx_scratch,
+            config_page_size,
+            {.page_id = dram_config_reader_index},
+            {.offset_bytes = 0});
         noc.async_read_barrier();
-        cb_reader_indices_obj.push_back(1);
     }
+    // The indices were written by the NoC, so the CPU must not read them from its caches. The lock drops the
+    // cached lines when taken and lasts until kernel_main returns; the indices are read-only.
+    const auto reader_idx_lock = reader_idx_scratch.scoped_lock(0, reader_idx_scratch.size());
+    packed_reader_indices_ptr = &reader_idx_scratch[0];
 #else
     packed_reader_indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
         noc_address_backend::extract_local_address(TensorAccessor(tensor::reader_indices).get_noc_addr(0)));

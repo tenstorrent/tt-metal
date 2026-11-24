@@ -30,6 +30,7 @@ driver that lives outside ``tests/sources/``.
 
 import atexit
 import collections
+import contextlib
 import datetime
 import gc
 import json
@@ -87,7 +88,12 @@ from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.device import LLKAssertException
 from helpers.format_config import InputOutputFormat
 from helpers.logger import configure_logger, logger
-from helpers.perf.core import PerfConfig, PerfReport, combine_perf_reports
+from helpers.perf.core import (
+    CODE_SHIFTS,
+    PerfConfig,
+    PerfReport,
+    combine_perf_reports,
+)
 from helpers.simulation_server import SimulationServer, pid_alive
 from helpers.test_config import BuildMode, TestConfig, process_coverage_run_artefacts
 from ttexalens import check_context, tt_exalens_init
@@ -105,8 +111,8 @@ _SIM_HOST_PID_KEY = "llk_sim_host_pid"
 
 
 # This is a workaround for this issue: https://github.com/tenstorrent/tt-exalens/issues/958
-# In a nutshell, everything except Tensix GPRs is accessible over NoC, thus ignoring that allows us to dump
-# most of the Tensix state, without causing any runtime issues.
+# In a nutshell, everything except Tensix GPRs is accessible over NoC; TensixState.fetch reads GPRs
+# from a BRISC-made L1 copy instead (silicon only).
 # Quasar is a no-op: ttexalens has no Tensix register description yet
 # (hardware/quasar/device.py raises NotImplementedError).
 def override_gprs_used_by_tensix_dump():
@@ -249,6 +255,13 @@ def pytest_addoption(parser):
         "truncated at session start; one that cannot be is a usage error). Reporting "
         "only, except that the sweep's records are required: a sweep cell whose record "
         "is not written fails.",
+    )
+    parser.addoption(
+        "--ulp-variants",
+        default=None,
+        metavar="PATH",
+        help="Write one JSON record per SFPU ULP sweep cell built (its node, op, key and "
+        "build directory) to PATH, truncated at session start; for helpers.ulp_affected.",
     )
     parser.addoption(
         "--ulp-emit",
@@ -546,6 +559,11 @@ def pytest_configure(config):
     if config.getoption("--ulp-measure"):
         # Set in the workers too; only the file preparation below is master-only.
         utils_module._ULP_MEASURE_PATH = config.getoption("--ulp-measure")
+    if config.getoption("--ulp-variants"):
+        from . import ulp_affected
+
+        # Set in the workers too; only the truncation below is master-only.
+        ulp_affected.VARIANTS_PATH = Path(config.getoption("--ulp-variants")).absolute()
 
     log_file = "pytest_errors.log"
     if not hasattr(config, "workerinput"):  # executed only by master pytest runner
@@ -561,6 +579,9 @@ def pytest_configure(config):
             raise pytest.UsageError(
                 f"--ulp-measure: cannot prepare the file: {exc}"
             ) from exc
+        if config.getoption("--ulp-variants"):
+            ulp_affected.VARIANTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+            ulp_affected.VARIANTS_PATH.write_text("")
         # Refresh order folder with setup_files function
         order_processing.setup_files(TestConfig.ARTEFACTS_DIR / "order_records", True)
         if os.path.exists(log_file):
@@ -771,7 +792,15 @@ def _select_node_list(config, items):
     wanted = {
         line.strip() for line in Path(path).read_text().splitlines() if line.strip()
     }
-    selected = [item for item in items if item.nodeid in wanted]
+    order, module_order = {}, {}
+    for line in Path(path).read_text().splitlines():
+        if line.strip():
+            order.setdefault(line.strip(), len(order))
+            module_order.setdefault(line.strip().split("::")[0], len(module_order))
+    selected = sorted(
+        (item for item in items if item.nodeid in wanted),
+        key=lambda item: (module_order[item.nodeid.split("::")[0]], order[item.nodeid]),
+    )
     config.hook.pytest_deselected(
         items=[item for item in items if item.nodeid not in wanted]
     )
@@ -1227,6 +1256,10 @@ def pytest_runtest_setup(item):
     if _worker_fatal is not None:
         _fail_xdist_worker(item, _worker_fatal)
 
+    stop_at = os.environ.get("LLK_STOP_AT")
+    if stop_at and datetime.datetime.now().timestamp() > float(stop_at):
+        pytest.skip("past the LLK_STOP_AT deadline")
+
     if _sim_host_pid is not None and not pid_alive(_sim_host_pid):
         _fail_xdist_worker(
             item, f"Simulation host (PID {_sim_host_pid}) is no longer running."
@@ -1340,6 +1373,7 @@ def perf_report(request, worker_id):
     test_module = request.path.stem
 
     temp_report = PerfReport()
+    PerfConfig.SHIFT_REPORTS = {shift: PerfReport() for shift in CODE_SHIFTS[1:]}
 
     try:
         yield temp_report
@@ -1353,6 +1387,24 @@ def perf_report(request, worker_id):
         return
 
     _dump_perf_report(test_module, worker_id, temp_report)
+    for shift, report in PerfConfig.SHIFT_REPORTS.items():
+        with _shift_output(shift):
+            _dump_perf_report(test_module, worker_id, report)
+
+
+@contextlib.contextmanager
+def _shift_output(shift):
+    saved_dir, saved_tag = TestConfig.PERF_DATA_DIR, os.environ.get("PERF_RUN_TAG")
+    TestConfig.PERF_DATA_DIR = TestConfig.ARTEFACTS_DIR / f"temp_perf_data_p{shift}"
+    os.environ["PERF_RUN_TAG"] = f"p{shift}"
+    try:
+        yield
+    finally:
+        TestConfig.PERF_DATA_DIR = saved_dir
+        if saved_tag is None:
+            os.environ.pop("PERF_RUN_TAG", None)
+        else:
+            os.environ["PERF_RUN_TAG"] = saved_tag
 
 
 @pytest.hookimpl(optionalhook=True)
@@ -1422,6 +1474,9 @@ def pytest_sessionfinish(session):
 
     if not _HARDWARE_FREE and TestConfig.BUILD_MODE != BuildMode.PRODUCE:
         combine_perf_reports()
+        for shift in CODE_SHIFTS[1:]:
+            with _shift_output(shift):
+                combine_perf_reports()
 
         # This was set by pytest CLI argument in pytest_configure call
         if _RECORD_TEST_ORDER:

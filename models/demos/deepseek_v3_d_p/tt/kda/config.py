@@ -114,8 +114,8 @@ class KDARecurrenceProgramConfig:
     # With sequence parallelism and one group per head, the SP prefix is a relay along the SP axis (RelayChunkScan):
     # each rank applies its own summary to the entry state it receives and forwards the result. The summary also emits
     # each chunk's output terms, from which the relay's program forms the chunk outputs once the entry state lands, all
-    # chunks in parallel (the entry correction). Cores the relay may use (its heads' cores, so the cores per head): its
-    # products count toward the Blackhole di/dt bound.
+    # chunks in parallel (the entry correction). Matmul cores the relay may use (its correction and relay cores, so the
+    # cores per head): their products count toward the Blackhole di/dt bound.
     relay_max_cores: int = 110
 
     def __post_init__(self) -> None:

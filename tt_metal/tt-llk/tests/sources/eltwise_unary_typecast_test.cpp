@@ -57,7 +57,7 @@ constexpr bool typecast_int_format(const DataFormat f)
 }
 constexpr bool u2d_main_handshake = !is_fp32_dest_acc_en || typecast_int_format(TYPECAST_IN_FORMAT) || typecast_int_format(TYPECAST_OUT_FORMAT);
 #define TYPECAST_U2D_UNPACK_ARGS , false /*early_context_poll*/, false /*z_stride_per_tile*/, u2d_main_handshake
-#define TYPECAST_U2D_MATH_ARGS   , false /*unroll_zero_flag_clears*/, u2d_main_handshake
+#define TYPECAST_U2D_MATH_ARGS   , false /*acc_to_dest*/, false /*unroll_zero_flag_clears*/, u2d_main_handshake
 #else
 #define TYPECAST_U2D_UNPACK_ARGS
 #define TYPECAST_U2D_MATH_ARGS

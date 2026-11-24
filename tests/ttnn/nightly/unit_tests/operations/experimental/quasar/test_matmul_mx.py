@@ -297,11 +297,60 @@ def test_legacy_packer_l1_acc(device, family):
 
 @pytest.mark.parametrize("family", LEGACY_FAMILIES)
 def test_legacy_fp32_dest_acc(device, family):
-    pytest.skip(
-        "fp32_dest_acc_en fails host validation on every legacy Quasar factory for bf16 too: the compute KernelSpec "
-        "gives no unpack_modes entry for the Float32 partials DFB (hardware_config.cpp dfbs_with_entry)"
-    )
+    # Two K blocks: the Float32 partials spill to L1 and reload through SrcA between them.
+    if family == "reuse":
+        pytest.skip(
+            "fp32_dest_acc_en fails host validation on the reuse factory for bf16 too: the compute KernelSpec gives "
+            "no unpack_modes entry for the Float32 partials DFB (hardware_config.cpp dfbs_with_entry)"
+        )
     _run_legacy(device, family, ttnn.mxint8, ttnn.mxint8, ttnn.mxint8, fp32_dest_acc_en=True)
+
+
+@pytest.mark.parametrize("family", [f for f in LEGACY_FAMILIES if f != "reuse"])  # reuse (bmm) has no bias
+def test_legacy_fused_bias_fp32_dest_acc(device, family):
+    # The bias add reads the Float32 partials as an FPU SrcA operand, which is why they are UnpackToSrc.
+    _run_legacy(device, family, ttnn.mxint8, ttnn.mxint8, ttnn.bfloat16, bias=True, fp32_dest_acc_en=True)
+
+
+@pytest.mark.parametrize("family", [f for f in LEGACY_FAMILIES if f != "reuse"])
+@pytest.mark.parametrize(
+    "small_block",
+    [
+        3,
+        pytest.param(
+            1,
+            marks=pytest.mark.xfail(
+                strict=True,
+                reason="the mcast factories reload Float32 partials through SrcA (TF32); a lossless reload needs "
+                "UnpackToDest, which deadlocks on Quasar (#62102)",
+            ),
+        ),
+    ],
+    ids=["small_in_last_block", "small_in_middle_block"],
+)
+def test_legacy_fp32_dest_acc_partials_precision(device, family, small_block):
+    # Four K blocks (in0_block_w=1). in0 is all ones; in1 makes block 0 sum to 1.0 and adds 2^-12 in one later
+    # block, so the exact result is 1 + 2^-12, which Float32 holds and TF32 (10 mantissa bits) rounds to 1.0.
+    # small_in_last_block: no partials reload follows the small term, so this checks Dest itself keeps it.
+    # small_in_middle_block: the 1 + 2^-12 partial is reloaded between K blocks; through SrcA (TF32) it is lost.
+    grid = device.compute_with_storage_grid_size()
+    if grid.x < 4 or grid.y < 2:
+        pytest.skip(f"needs a 4x2 grid, device has {grid.x}x{grid.y}")
+    M, K, N, batch, config = _legacy(family, in0_block_w=1)
+    a = torch.ones(1, batch, M, K)
+    b = torch.zeros(1, batch, K, N)
+    b[..., :TILE, :] = 1.0 / TILE
+    b[..., small_block * TILE, :] = 2.0**-12
+    out = qsr.matmul(
+        to_device(device, a, ttnn.bfloat16),
+        to_device(device, b, ttnn.bfloat16),
+        program_config=config,
+        dtype=ttnn.float32,
+        compute_kernel_config=_compute_config(device, fp32_dest_acc_en=True),
+    )
+    actual = ttnn.to_torch(out).to(torch.float32)
+    expected = torch.full_like(actual, 1.0 + 2.0**-12)
+    assert torch.equal(actual, expected), f"got {actual.unique().tolist()}, expected {1.0 + 2.0**-12}"
 
 
 @pytest.mark.parametrize("mode", ["packer_l1_acc", "fp32_dest_acc"])

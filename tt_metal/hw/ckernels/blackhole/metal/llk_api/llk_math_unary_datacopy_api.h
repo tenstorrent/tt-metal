@@ -21,6 +21,7 @@ template <
     bool is_fp32_dest_acc_en,
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
     bool unpack_to_dest = false,
+    bool acc_to_dest = false,
     bool unroll_zero_flag_clears = false>
 inline void llk_math_eltwise_unary_datacopy_impl(
     std::uint32_t dst_index, std::uint32_t src_format, std::uint32_t dst_format) {
@@ -31,6 +32,7 @@ inline void llk_math_eltwise_unary_datacopy_impl(
         is_fp32_dest_acc_en,
         src_b_bcast_type,
         unpack_to_dest,
+        acc_to_dest,
         unroll_zero_flag_clears,
         LLK_U2D_MAIN_HANDSHAKE>(dst_index, src_format, dst_format);
 }
@@ -40,7 +42,8 @@ template <
     bool is_fp32_dest_acc_en,
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
     bool is_int_fpu_en = false,
-    PackMode pack_mode = PackMode::Default>
+    PackMode pack_mode = PackMode::Default,
+    bool acc_to_dest = false>
 inline void llk_math_eltwise_unary_datacopy_init_impl(
     const ckernel::TensorShape tensor_shape, std::uint32_t dst_format) {
     static_assert(
@@ -51,10 +54,16 @@ inline void llk_math_eltwise_unary_datacopy_init_impl(
         StateVal<OperationFpuEltwiseUnaryDatacopy::DataCopyType>(to_underlying(type)),
         StateVal<OperationFpuEltwiseUnaryDatacopy::BroadcastType>(to_underlying(src_b_bcast_type)),
         StateVal<OperationFpuEltwiseUnaryDatacopy::NumFaces>(tensor_shape.total_num_faces()),
+        StateVal<OperationFpuEltwiseUnaryDatacopy::AccumulateToDest>(acc_to_dest),
         StateVal<Operand<Exu::Fpu>::Format>(dst_format)));
 
-    _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, is_int_fpu_en, pack_mode>(
-        tensor_shape, dst_format);
+    _llk_math_eltwise_unary_datacopy_init_<
+        type,
+        is_fp32_dest_acc_en,
+        src_b_bcast_type,
+        is_int_fpu_en,
+        pack_mode,
+        acc_to_dest>(tensor_shape, dst_format);
 }
 
 // Kept for the experimental/2_0 callers; remove when they move to TensorShape.
@@ -65,10 +74,16 @@ template <
     bool is_fp32_dest_acc_en,
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
     bool is_int_fpu_en = false,
-    PackMode pack_mode = PackMode::Default>
+    PackMode pack_mode = PackMode::Default,
+    bool acc_to_dest = false>
 inline void llk_math_eltwise_unary_datacopy_init_impl(std::uint32_t num_faces, std::uint32_t dst_format) {
-    llk_math_eltwise_unary_datacopy_init_impl<type, is_fp32_dest_acc_en, src_b_bcast_type, is_int_fpu_en, pack_mode>(
-        ckernel::tensor_shape_from_num_faces(FACE_R_DIM, num_faces), dst_format);
+    llk_math_eltwise_unary_datacopy_init_impl<
+        type,
+        is_fp32_dest_acc_en,
+        src_b_bcast_type,
+        is_int_fpu_en,
+        pack_mode,
+        acc_to_dest>(ckernel::tensor_shape_from_num_faces(FACE_R_DIM, num_faces), dst_format);
 }
 
 template <
@@ -76,6 +91,7 @@ template <
     bool is_fp32_dest_acc_en,
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
     bool unpack_to_dest = false,
+    bool acc_to_dest = false,
     bool unroll_zero_flag_clears = false>
 inline void llk_math_eltwise_unary_datacopy(std::uint32_t dst_index, std::uint32_t operand) {
     const std::uint32_t operand_id = get_operand_id(operand);
@@ -83,6 +99,7 @@ inline void llk_math_eltwise_unary_datacopy(std::uint32_t dst_index, std::uint32
         StateVal<OperationFpuEltwiseUnaryDatacopy::DataCopyType>(to_underlying(type)),
         StateVal<OperationFpuEltwiseUnaryDatacopy::BroadcastType>(to_underlying(src_b_bcast_type)),
         StateVal<OperationFpuEltwiseUnaryDatacopy::NumFaces>(get_operand_num_faces(operand_id)),
+        StateVal<OperationFpuEltwiseUnaryDatacopy::AccumulateToDest>(acc_to_dest),
         StateVal<Operand<Exu::Fpu>::Format>(unpack_dst_format[operand_id]),
         StateDiscard<std::uint32_t>(dst_index)));
 
@@ -93,6 +110,7 @@ inline void llk_math_eltwise_unary_datacopy(std::uint32_t dst_index, std::uint32
         is_fp32_dest_acc_en,
         src_b_bcast_type,
         unpack_to_dest,
+        acc_to_dest,
         unroll_zero_flag_clears>(dst_index, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
 }
 
@@ -100,7 +118,8 @@ template <
     DataCopyType type,
     bool is_fp32_dest_acc_en,
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
-    bool unpack_to_dest = false>
+    bool unpack_to_dest = false,
+    bool acc_to_dest = false>
 inline void llk_math_eltwise_unary_datacopy_block(
     std::uint32_t start_dst_index, std::uint32_t ntiles, std::uint32_t operand) {
     const std::uint32_t operand_id = get_operand_id(operand);
@@ -109,6 +128,7 @@ inline void llk_math_eltwise_unary_datacopy_block(
         StateVal<OperationFpuEltwiseUnaryDatacopy::DataCopyType>(to_underlying(type)),
         StateVal<OperationFpuEltwiseUnaryDatacopy::BroadcastType>(to_underlying(src_b_bcast_type)),
         StateVal<OperationFpuEltwiseUnaryDatacopy::NumFaces>(get_operand_num_faces(operand_id)),
+        StateVal<OperationFpuEltwiseUnaryDatacopy::AccumulateToDest>(acc_to_dest),
         StateVal<Operand<Exu::Fpu>::Format>(unpack_dst_format[operand_id]),
         StateDiscard<std::uint32_t>(start_dst_index),
         StateDiscard<std::uint32_t>(ntiles)));
@@ -129,8 +149,15 @@ inline void llk_math_eltwise_unary_datacopy_block(
 
         // No shape passed: execute clears Dest zero flags for all 4 faces on 32-bit unpack to dest,
         // regardless of operand shape.
-        _llk_math_eltwise_unary_datacopy_<type, DST_SYNC_MODE, is_fp32_dest_acc_en, src_b_bcast_type, unpack_to_dest, false, LLK_U2D_MAIN_HANDSHAKE>(
-            dst_index, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
+        _llk_math_eltwise_unary_datacopy_<
+            type,
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            src_b_bcast_type,
+            unpack_to_dest,
+            acc_to_dest,
+            false,
+            LLK_U2D_MAIN_HANDSHAKE>(dst_index, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
     }
 }
 
@@ -139,11 +166,17 @@ template <
     bool is_fp32_dest_acc_en,
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
     bool is_int_fpu_en = false,
-    PackMode pack_mode = PackMode::Default>
+    PackMode pack_mode = PackMode::Default,
+    bool acc_to_dest = false>
 inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
     const std::uint32_t operand_id = get_operand_id(operand);
-    llk_math_eltwise_unary_datacopy_init_impl<type, is_fp32_dest_acc_en, src_b_bcast_type, is_int_fpu_en, pack_mode>(
-        get_operand_tensor_shape(operand_id), get_operand_dst_format(operand_id));
+    llk_math_eltwise_unary_datacopy_init_impl<
+        type,
+        is_fp32_dest_acc_en,
+        src_b_bcast_type,
+        is_int_fpu_en,
+        pack_mode,
+        acc_to_dest>(get_operand_tensor_shape(operand_id), get_operand_dst_format(operand_id));
 }
 
 template <BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>
