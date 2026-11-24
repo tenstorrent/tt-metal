@@ -14,6 +14,8 @@ TEST=$1; THREAD=$2; shift 2
 PERF=""; MATCH=""; HALDIR="hal_llk"
 while [[ $# -gt 0 ]]; do case "$1" in --perf) PERF="--perf"; shift ;; --match) MATCH="$2"; shift 2 ;; --impl) HALDIR="$2"; shift 2 ;; *) echo "unknown arg $1"; exit 2 ;; esac; done
 LLK=$(pwd)
+[[ $HALDIR == hal || $HALDIR == hal_llk ]] && HALDIR=hal_llk
+[[ -d $HALDIR || -d $LLK/tests/$HALDIR ]] || { echo "--impl $HALDIR is not a directory (use hal_llk or a thread_view.sh dir)"; exit 2; }
 [[ -x "$LLK/.claude/scripts/run_test.sh" || -f "$LLK/.claude/scripts/run_test.sh" ]] || { echo "run from a tt-llk directory"; exit 2; }
 OUT=$(mktemp -d /tmp/bh-port-cg.XXXXXX)
 OD=$LLK/tests/sfpi/compiler/bin/riscv-tt-elf-objdump
