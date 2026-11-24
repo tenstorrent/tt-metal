@@ -4,8 +4,9 @@
 
 """JIT build telemetry, read in-process.
 
-Values map token names (e.g. ``program_config_size.total.TENSIX``) to
-``{"unit", "count", "total", "min", "max"}``. Token names may change; treat a missing one as unknown.
+A token is a metric recorded by tt-metal's JIT build telemetry. Values map token names (e.g.
+``program_config_size.total.TENSIX``) to ``{"unit", "count", "total", "min", "max"}``. Token names may
+change; treat a missing one as unknown.
 
     with ttnn.experimental.jit_telemetry.capture() as cap:
         run_some_programs()

@@ -10,8 +10,9 @@
 
 namespace tt::tt_metal::experimental::jit_telemetry {
 
-// Aggregates of one JIT telemetry token, e.g. "program_config_size.total.TENSIX" (bytes). Token
-// names may change; treat a missing token as unknown.
+// A token is a metric recorded by tt-metal's JIT build telemetry, e.g. "program_config_size.total.TENSIX"
+// (bytes). It keeps a running count, total, min and max of the values recorded for it. TokenStats holds
+// one token's values. Token names may change; treat a missing token as unknown.
 struct TokenStats {
     std::string name;
     std::string unit;
