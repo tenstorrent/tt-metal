@@ -103,7 +103,8 @@ inline void _init_log_() {
 // Blackhole metal-layer natural log (calculate_log_body / calculate_log / log_init), carried over for
 // the ported kernels that call it (erfinv). Only reset_counters is spelled the Quasar way.
 template <bool FAST_APPROX, bool HAS_BASE_SCALING, bool is_fp32_dest_acc_en, bool IS_BASE_TWO = false>
-sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const std::uint32_t log_base_scale_factor) {
+sfpi_inline sfpi::vFloat calculate_log_body(
+    sfpi::vFloat a, [[maybe_unused]] const std::uint32_t log_base_scale_factor) {
     if constexpr (!FAST_APPROX) {
         // normalise a (-0.0 and subnormals become +0.0). This must run before
         // the exponent read below so that -0.0 follows the same path as +0.0

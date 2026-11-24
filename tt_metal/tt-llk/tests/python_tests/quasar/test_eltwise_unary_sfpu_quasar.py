@@ -410,9 +410,9 @@ def prepare_inputs_for_operation(
             src_A_float32,
         )
         src_A = src_A_float32.to(torch_format)
-    elif mathop == MathOperation.Rsqrt:
+    elif mathop in (MathOperation.Rsqrt, MathOperation.Log):
         # Full representable range via log-uniform distribution
-        # (rsqrt accepts only positive inputs).
+        # (rsqrt and log accept only positive inputs).
         finfo = torch.finfo(torch_format)
         min_val = max(1e-6, finfo.tiny * 100)
         max_val = finfo.max
@@ -1291,6 +1291,7 @@ OP_CONFIGS = [
     ],
     OpConfig(MathOperation.Reciprocal, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Sqrt, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    OpConfig(MathOperation.Log, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Tanh, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Sigmoid, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Silu, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
