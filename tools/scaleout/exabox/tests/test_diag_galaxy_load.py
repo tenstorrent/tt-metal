@@ -529,13 +529,44 @@ class TestLinks(unittest.TestCase):
             self.assertEqual(links.umd_index(["c1:00.0", "0000:81:00.0"], d), [2, 1])
             self.assertIsNone(links.umd_index(["0000:41:00.0"], d))
 
-    def _run_links(self, fault, reset):
+    def _run_links(self, fault, reset, hook=None, **kw):
         phase = Phase(name="links")
+
+        def fake_pair_test(phase, out, name, *a, **k):
+            phase.add(Check(name=f"links_{name}", status=PASS))
+            return False
+
         with mock.patch.object(links, "discover", return_value={"bdfs": {}, "links": {}}), mock.patch.object(
-            links, "pair_test", return_value=False
-        ) as pt, mock.patch.object(links, "fabric_open"):
-            links.run_links(phase, Path("/tmp"), fault, reset)
+            links, "pair_test", side_effect=fake_pair_test
+        ) as pt, mock.patch.object(links, "fabric_open"), mock.patch.object(events, "hook", hook):
+            links.run_links(phase, Path("/tmp"), fault, reset, **kw)
         return phase, pt
+
+    def test_the_hook_runs_around_the_sweep_and_can_hold_it_back(self):
+        with tempfile.TemporaryDirectory() as d:
+            calls, hook = Path(d) / "calls", Path(d) / "hook.sh"
+            hook.write_text(f'#!/bin/bash\necho "$1 $2 $3 $4" >> {calls}\n[ -e {d}/hold ] && exit 1\nexit 0\n')
+            hook.chmod(0o755)
+            phase, pt = self._run_links(True, lambda: "", hook=str(hook))
+            self.assertEqual(pt.call_count, 2)
+            self.assertEqual(
+                calls.read_text().splitlines(), ["before sweep - /tmp/links/sweep", "after sweep PASS /tmp/links/sweep"]
+            )
+            Path(d, "hold").touch()
+            resets = []
+            phase, pt = self._run_links(True, lambda: resets.append(1) or "", hook=str(hook))
+        self.assertEqual((pt.call_count, resets), (1, []))
+        self.assertEqual(
+            [(c.status, c.details) for c in phase.checks if c.name == "links_sweep"],
+            [(SKIP, "held back by the hook (rc 1)")],
+        )
+
+    def test_pair_and_sweep_lengths_reach_the_pair_test(self):
+        _, pt = self._run_links(True, lambda: "", pair_s=4, sweep_s=60)
+        self.assertEqual(
+            [(c.args[2], c.args[3], c.kwargs.get("cap_s")) for c in pt.call_args_list],
+            [("pair", 4, None), ("sweep", 4, 60)],
+        )
 
     def test_sweep_only_after_a_fault(self):
         for fault, want in ((False, 0), (True, 1)):
@@ -557,6 +588,7 @@ class TestLinks(unittest.TestCase):
 
         def fake_pair_test(phase, out, name, seconds, disc, dry_run, cap_s=None):
             tested.append((name, seconds, cap_s, disc))
+            phase.add(Check(name=f"links_{name}", status=PASS))
             return False
 
         with mock.patch.object(links, "discover", side_effect=[before, after]), mock.patch.object(
@@ -614,6 +646,7 @@ class TestLinks(unittest.TestCase):
         busbar_stub=None,
         stage_order=None,
         load_mode=None,
+        link_fault_before=False,
     ):
         """run_diag on *tier* with its device tests, bus-bar and links tests stubbed: ``order`` is what ran, in
         order, ``device`` the names run_tests got, ``mode`` the length the bus-bar test was given, ``fault`` whether
@@ -658,7 +691,7 @@ class TestLinks(unittest.TestCase):
         def fake_end(tt_smi_path, phase, out, dry_run, delay_s, gate):
             got["order"].append("end")
 
-        def fake_links(phase, out, fault, reset, dry_run):
+        def fake_links(phase, out, fault, reset, dry_run, **kw):
             got["order"].append("links")
             phase.add(Check(name="links_pair", status=FAIL, details="pair 00-01 failed", ip="eth"))
             got["fault"], got["why"] = fault, reset()
@@ -708,6 +741,7 @@ class TestLinks(unittest.TestCase):
                 tests=tests,
                 stage_order=stage_order,
                 load_mode=load_mode,
+                link_fault_before=link_fault_before,
             )
         return got
 
@@ -750,13 +784,17 @@ class TestLinks(unittest.TestCase):
     def test_main_passes_the_hook_and_load_mode_on(self):
         import diag_runner
 
-        argv = ["--tier", "daily", "--tests", "busbar", "--load-mode", "full", "--hook", "/x/hook", "--dry-run"]
+        argv = ["--tier", "daily", "--tests", "busbar,links", "--load-mode", "full", "--hook", "/x/hook", "--dry-run"]
+        argv += ["--link-fault", "--pair-s", "5", "--sweep-s", "120"]
         with mock.patch.object(sys, "argv", ["diag_runner.py", *argv]), mock.patch.object(
             diag_runner, "run_diag", return_value=(0, {})
         ) as run, mock.patch.object(events, "setup") as setup:
             self.assertEqual(diag_runner.main(), 0)
         setup.assert_called_once_with("/x/hook", True)
-        self.assertEqual(run.call_args.kwargs["load_mode"], "full")
+        kw = run.call_args.kwargs
+        self.assertEqual(
+            (kw["load_mode"], kw["link_fault_before"], kw["pair_s"], kw["sweep_s"]), ("full", True, 5, 120)
+        )
 
     def test_a_tier_without_the_load_runs_none_of_it(self):
         for tier in ("flash", "pre_bmc_reboot", "post_bmc_reboot"):
@@ -790,6 +828,8 @@ class TestLinks(unittest.TestCase):
     def test_a_bus_bar_fault_makes_the_links_test_sweep(self):
         self.assertTrue(self._run_load(busbar_fails=True)["fault"])
         self.assertFalse(self._run_load(busbar_fails=False)["fault"])
+        # the caller's own earlier call had one (--link-fault): links alone sweeps too
+        self.assertTrue(self._run_load(busbar_fails=False, tests="links", link_fault_before=True)["fault"])
 
     def test_the_end_sequence_follows_the_post_test_reset(self):
         got = self._run_load(skip_triage=False)

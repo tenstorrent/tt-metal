@@ -45,6 +45,7 @@ from diag.device_tests import run_tests  # noqa: E402
 from diag import events  # noqa: E402
 from diag.busbar import LOAD_TESTS, MODES, OVERRIDES, STEPS, link_fault, plan as busbar_plan, run_busbar  # noqa: E402
 from diag.eth_status import run_eth_status  # noqa: E402
+from diag import links  # noqa: E402
 from diag.links import name_chips, run_links  # noqa: E402
 from diag.eth_summary import SUMMARY_FILE, render_eth_summary  # noqa: E402
 from diag.firmware import firmware_check  # noqa: E402
@@ -203,6 +204,7 @@ def build_diag_arg_parser() -> argparse.ArgumentParser:
     captures.add_args(ap)
     add_reset_args(ap)
     events.add_args(ap)
+    links.add_args(ap)
     ap.add_argument("--output", type=Path, default=Path("diag_report.json"))
     ap.add_argument("--snapshot-out", type=Path, default=Path("/tmp/diag_snapshot.json"))
     report.add_args(ap)
@@ -254,6 +256,8 @@ def _run_galaxy_load(
     dry_run: bool,
     sweep_reset: Callable[[], str],
     steps: Sequence[str] = STEPS,
+    link_fault_before: bool = False,
+    **links_kw,
 ) -> None:
     """The LOAD_TESTS among *tests* into *phase* at *mode*'s length: the bus-bar *steps*, then the links test, which
     sweeps after a hang or CCL failure in either (busbar.link_fault; never a numeric fault alone). One that raises is
@@ -261,9 +265,9 @@ def _run_galaxy_load(
     held = len(phase.checks)
     if "busbar" in tests:
         _guarded(phase, "busbar", FAIL, lambda: run_busbar(phase, out, mode, dry_run, tuple(steps), **overrides))
-    fault = any(link_fault(c) for c in phase.checks[held:] if c.name != "busbar")
+    fault = link_fault_before or any(link_fault(c) for c in phase.checks[held:] if c.name != "busbar")
     if "links" in tests:
-        _guarded(phase, "links", FAIL, lambda: run_links(phase, out, fault, sweep_reset, dry_run))
+        _guarded(phase, "links", FAIL, lambda: run_links(phase, out, fault, sweep_reset, dry_run, **links_kw))
 
 
 def _finish(report: dict, phase: Phase, t0: float, *, summary: bool, all_skip_stays_skip: bool = False) -> None:
@@ -362,6 +366,9 @@ def run_diag(
     reset_gate: str | None = None,
     end_delay_s: int = END_DELAY_S,
     load_mode: str | None = None,
+    link_fault_before: bool = False,
+    pair_s: int = links.PAIR_S,
+    sweep_s: int = links.SWEEP_S,
 ) -> tuple[int, dict]:
     """Run the full pipeline (snapshot → resets → tests → triage → ETH status → QSFP tests → sys-triage → AER).
 
@@ -530,6 +537,9 @@ def run_diag(
                 dry_run,
                 sweep_reset,
                 steps,
+                link_fault_before,
+                pair_s=pair_s,
+                sweep_s=sweep_s,
             )
         if live:
             _guarded(test_phase, "hsc_input_status", WARN, lambda: judge_hsc(hsc_before, read_hsc_status(), test_phase))
@@ -723,6 +733,8 @@ def main() -> int:
         tier = select_stages(tier, args.stage_order)[0] if args.stage_order is not None else tier
     except ValueError as e:
         ap.error(str(e))
+    if args.pair_s < 1 or args.sweep_s < 0:
+        ap.error("--pair-s: at least 1; --sweep-s: at least 0")
     if args.load_mode and not tier.galaxy_load:
         ap.error(f"--load-mode: tier {args.tier} with these --tests runs no galaxy load")
     if any(v is not None for v in overrides.values()) and "busbar" not in tier.tests:
@@ -766,6 +778,9 @@ def main() -> int:
         reset_gate=args.reset_gate,
         end_delay_s=args.end_delay_s,
         load_mode=args.load_mode,
+        link_fault_before=args.link_fault,
+        pair_s=args.pair_s,
+        sweep_s=args.sweep_s,
     )
     try:  # the run's report, last; a fault here costs the report, never the run's exit code
         print("\n".join(report.lines(args.output.resolve().parent, args)), flush=True)

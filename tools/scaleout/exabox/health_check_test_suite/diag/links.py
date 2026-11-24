@@ -7,12 +7,14 @@ open/close.
 
 pair    every chip-to-chip Ethernet link UMD discovers, tested as a 2-chip all-gather of each linked pair (data
         checked bit for bit); pairs run in rounds, no chip in two pairs of a round
-sweep   after a link/CCL failure or a hang (in the pair test or a bus-bar step; not a numeric fault):
-        glx_reset, then the pair test again, PAIR_S per pair, no new round past SWEEP_S in total
+sweep   after a link/CCL failure or a hang (in the pair test, a bus-bar step or, with --link-fault, the caller's own
+        earlier call; not a numeric fault): the hook's before event (a non-zero rc skips it), glx_reset, then the pair
+        test again, --pair-s per pair, no new round past --sweep-s in total, then the hook's after event
 fabric  one whole-box fabric open and close
 """
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import subprocess
@@ -20,6 +22,7 @@ import sys
 import time
 from pathlib import Path
 
+from . import events
 from .busbar import GALAXY_DIR, SETUP_S, Step, run_step
 from .common import emit_result, emit_running, log, start_group, stop_group
 from .model import FAIL, PASS, SKIP, Check, Phase
@@ -33,6 +36,17 @@ cd = u.TopologyDiscovery.create_cluster_descriptor()
 print(json.dumps({"bdfs": {int(k): v for k, v in cd.get_chip_pci_bdfs().items()},
                   "links": {int(c): {int(ch): [int(rc), int(rch)] for ch, (rc, rch) in v.items()}
                             for c, v in cd.get_ethernet_connections().items()}}))"""
+
+
+def add_args(ap: argparse.ArgumentParser) -> None:
+    ap.add_argument("--pair-s", type=int, default=PAIR_S, help="Galaxy load: seconds of all-gathers per linked pair.")
+    ap.add_argument("--sweep-s", type=int, default=SWEEP_S, help="Galaxy load: no new sweep round past this, s.")
+    ap.add_argument(
+        "--link-fault",
+        action="store_true",
+        help="Galaxy load: the caller's earlier load, in a call of its own, had a link or CCL failure or a hang: "
+        "the links test sweeps after its pair test.",
+    )
 
 
 def discover() -> dict:
@@ -249,18 +263,25 @@ def _discover(phase: Phase, check: str, dry_run: bool) -> dict | None:
         return None
 
 
-def run_links(phase: Phase, out: Path, fault: bool, reset, dry_run: bool = False) -> None:
-    """Pair test; on a failed or hung pair here, or *fault* (a bus-bar hang or CCL failure: busbar.link_fault), *reset* (the
-    glx_reset; "" when it ran clean or was skipped on purpose, else why not) and the sweep (PAIR_S per pair, SWEEP_S in
-    total), which is skipped with that reason; then the fabric open/close. The sweep tests the links discovered after
-    the reset, which can bring back a tray that dropped under the load."""
+def run_links(
+    phase: Phase, out: Path, fault: bool, reset, dry_run: bool = False, pair_s: int = PAIR_S, sweep_s: int = SWEEP_S
+) -> None:
+    """Pair test; on a failed or hung pair here, or *fault* (a bus-bar hang or CCL failure: busbar.link_fault), the hook's
+    before event, *reset* (the glx_reset; "" when it ran clean or was skipped on purpose, else why not) and the sweep
+    (*pair_s* per pair, *sweep_s* in total), which is skipped with the hook's rc or that reason; then the fabric
+    open/close. The sweep tests the links discovered after the reset, which can bring back a tray that dropped under
+    the load."""
     disc = _discover(phase, "links_pair", dry_run)
     if disc is not None:
-        fault |= pair_test(phase, out / "links", "pair", PAIR_S, disc, dry_run)
+        fault |= pair_test(phase, out / "links", "pair", pair_s, disc, dry_run)
     if fault and disc is not None:
-        why = reset()
-        if why:
-            phase.add(Check(name="links_sweep", status=SKIP, details=why, ip="eth"))
-        elif (disc := _discover(phase, "links_sweep", dry_run)) is not None:
-            pair_test(phase, out / "links", "sweep", PAIR_S, disc, dry_run, cap_s=SWEEP_S)
+        sd = out / "links" / "sweep"
+        if rc := events.emit("before", "sweep", "-", sd):
+            phase.add(Check(name="links_sweep", status=SKIP, details=f"held back by the hook (rc {rc})", ip="eth"))
+        else:
+            if why := reset():
+                phase.add(Check(name="links_sweep", status=SKIP, details=why, ip="eth"))
+            elif (disc := _discover(phase, "links_sweep", dry_run)) is not None:
+                pair_test(phase, out / "links", "sweep", pair_s, disc, dry_run, cap_s=sweep_s)
+            events.emit("after", "sweep", phase.checks[-1].status, sd)
     fabric_open(phase, out / "links", dry_run)
