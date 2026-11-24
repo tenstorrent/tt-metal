@@ -14,6 +14,7 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/matmul.h"
 #include "api/compute/cb_api.h"
+#include "tools/profiler/kernel_profiler.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 
@@ -66,9 +67,19 @@ void kernel_main() {
 
     // ---- stage 1 ----------------------------------------------------------------------------------------------------
     if (cols > 0) {
+        DeviceZoneScopedN("S1");
         cb_wait_front(cb_qb_slice, Q_t * cols);  // resident in1 (NoWaitNoPop below: the lifecycle is mine)
         const auto shape = MatmulBlockShape::of(m, cols / sbw1, 1, sbw1, s1_kb, nkb);
         for (uint32_t j = 0; j < num_blocks; ++j) {
+#ifdef ABLATE_S1_COMPUTE
+            for (uint32_t kb = 0; kb < nkb; ++kb) {
+                cb_wait_front(cb_x_round, m * s1_kb);
+                cb_pop_front(cb_x_round, m * s1_kb);
+            }
+            cb_reserve_back(cb_q_slice, m * cols);
+            cb_push_back(cb_q_slice, m * cols);
+            continue;
+#endif
             matmul_block<
                 false,
                 false,
@@ -103,11 +114,27 @@ void kernel_main() {
 
     // ---- stage 3 ----------------------------------------------------------------------------------------------------
     const auto shape3 = MatmulBlockShape::of(1, s3n / sbw3, 1, sbw3, Dn_t, 1);
+    DeviceZoneScopedN("S3");
     for (uint32_t u = 0; u < hpc; ++u) {
         if constexpr (wkv_resident) {
             cb_wait_front(cb_wkv, Dn_t * N_t);  // the head's weights, held across its rows (NoWaitNoPop)
         }
         for (uint32_t t = 0; t < rows_per_head; ++t) {
+#ifdef ABLATE_S3
+            cb_wait_front(cb_landing, Dn_t + Dr_t);
+            cb_pop_front(cb_landing, Dn_t + Dr_t);
+            for (uint32_t nb = 0; nb < n_nb; ++nb) {
+                if constexpr (!wkv_resident) {
+                    cb_wait_front(cb_wkv, Dn_t * s3n);
+                    cb_pop_front(cb_wkv, Dn_t * s3n);
+                }
+                cb_reserve_back(cb_prefix_out, s3n);
+                cb_push_back(cb_prefix_out, s3n);
+            }
+            cb_reserve_back(cb_rope_out, Dr_t);
+            cb_push_back(cb_rope_out, Dr_t);
+            continue;
+#endif
             for (uint32_t nb = 0; nb < n_nb; ++nb) {
                 if constexpr (wkv_resident) {
                     matmul_block<

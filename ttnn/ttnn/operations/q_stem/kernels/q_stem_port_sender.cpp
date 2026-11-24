@@ -163,6 +163,15 @@ void kernel_main() {
                         const uint32_t n = (hw - off) < pkt_tiles ? hw - off : pkt_tiles;
                         const uint64_t dst = get_noc_addr(dx, dy, landing_addr + (slot + off) * tile_bytes, 0);
                         volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = next_header(k);
+#ifdef ABLATE_SEND_PAYLOAD
+                        if (off + n == hw && inc > 0) {
+                            hdr->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{arrive_noc, inc, true});
+                            conn.wait_for_empty_write_slot();
+                            conn.send_payload_flush_non_blocking_from_address(
+                                reinterpret_cast<uint32_t>(hdr), sizeof(PACKET_HEADER_TYPE));
+                        }
+                        continue;
+#endif
                         if (off + n == hw && inc > 0) {
                             hdr->to_noc_fused_unicast_write_atomic_inc(
                                 NocUnicastAtomicIncFusedCommandHeader{dst, arrive_noc, inc, true}, n * tile_bytes);

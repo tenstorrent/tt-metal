@@ -58,12 +58,16 @@ void kernel_main() {
             for (uint32_t i = 0; i < m; ++i) {
                 const uint32_t page0 = (row0 + i) * Q_t + kb * s1_kb;
                 for (uint32_t k = 0; k < s1_kb; ++k) {
+#ifndef ABLATE_X_READ
                     noc_async_read(x.get_noc_addr(page0 + k), off, x_tile_bytes);
+#endif
                     off += x_tile_bytes;
                 }
             }
             noc_async_read_barrier();
+#ifndef ABLATE_X_MCAST
             pipe.send(dst, dst, round_bytes);  // wait every receiver's slot-free ack, multicast, signal
+#endif
             cb_push_back(cb_x_round, round_tiles);
             cb_wait_front(cb_x_round, round_tiles);
             cb_pop_front(cb_x_round, round_tiles);

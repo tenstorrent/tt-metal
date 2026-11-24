@@ -28,8 +28,8 @@ using namespace dataflow_kernel_lib;
 namespace {
 // x rounds of stage 1 (receiver side of `x_round_multicast_block`). A template so the receiver pipe is only
 // instantiated for the stage-1 kernel (the other compute cores carry an absent multicast tag).
-template <typename MC>
-void receive_x_rounds(const MC& mc, uint32_t cb_x_round, uint32_t round_tiles, uint32_t num_rounds) {
+template <typename MC, typename F>
+void receive_x_rounds(const MC& mc, uint32_t cb_x_round, uint32_t round_tiles, uint32_t num_rounds, F&& after_round) {
     if constexpr (MC::active) {
         Noc noc;
         auto pipe = mc.receiver(noc);
@@ -37,6 +37,7 @@ void receive_x_rounds(const MC& mc, uint32_t cb_x_round, uint32_t round_tiles, u
             cb_reserve_back(cb_x_round, round_tiles);  // slot free -> the write ptr is the multicast destination
             pipe.receive();                            // ack (slot free), wait for the round
             cb_push_back(cb_x_round, round_tiles);
+            after_round();
         }
     }
 }
@@ -99,8 +100,8 @@ void kernel_main() {
 
     const auto wkv = TensorAccessor(wkv_args, wkv_addr, wkv_tile_bytes);
     const uint32_t total_units = wkv_resident ? hpc : hpc * rows_per_head * n_nb;
-    // Issue the reads of unit `idx` to `l1` (no barrier).
-    auto read_unit = [&](uint32_t idx, uint32_t l1) {
+    // Tile w of unit idx -> wkv page. A unit is Dn_t x s3n tiles, row-major (in1 of the stage-3 matmul).
+    auto unit_page = [&](uint32_t idx, uint32_t w) {
         uint32_t u, nb;
         if constexpr (wkv_resident) {
             u = idx;
@@ -109,12 +110,16 @@ void kernel_main() {
             u = idx / (rows_per_head * n_nb);
             nb = idx % n_nb;
         }
-        const uint32_t base = head_of(u) * Dn_t * N_t + nb * s3n;
-        for (uint32_t kt = 0; kt < Dn_t; ++kt) {
-            for (uint32_t n = 0; n < s3n; ++n) {
-                noc_async_read(wkv.get_noc_addr(base + kt * N_t + n), l1, wkv_tile_bytes);
-                l1 += wkv_tile_bytes;
-            }
+        const uint32_t kt = w / s3n;
+        return head_of(u) * Dn_t * N_t + nb * s3n + kt * N_t + (w - kt * s3n);
+    };
+    // Issue the reads of tiles [w0, w1) of the unit sequence starting at `first_unit`, into l1 (no barrier).
+    auto issue_tiles = [&](uint32_t first_unit, uint32_t w0, uint32_t w1, uint32_t l1) {
+        for (uint32_t w = w0; w < w1; ++w) {
+            const uint32_t idx = first_unit + w / unit_tiles;
+#ifndef ABLATE_WKV_READ
+            noc_async_read(wkv.get_noc_addr(unit_page(idx, w % unit_tiles)), l1 + w * wkv_tile_bytes, wkv_tile_bytes);
+#endif
         }
     };
 
@@ -128,7 +133,9 @@ void kernel_main() {
         uint32_t n = 0;
         for (uint32_t k = 0; k < Q_t; ++k) {
             for (uint32_t c = 0; c < cols; ++c) {
+#ifndef ABLATE_QB_READ
                 noc_async_read(qb.get_noc_addr(k * Cq_t + c0 + c), l1, qb_tile_bytes);
+#endif
                 l1 += qb_tile_bytes;
                 if (++n == qb_batch) {
                     noc_async_read_barrier();
@@ -140,20 +147,29 @@ void kernel_main() {
         cb_push_back(cb_qb_slice, Q_t * cols);
     }
 
-    // wkv prefetch: the first units need no remote data; their reads overlap stage 1 (barrier after the x rounds)
-    prefetched = total_units < wkv_depth ? total_units : wkv_depth;
+    // wkv prefetch (`wkv_load_block` for the first units): they need no remote data. On a stage-1 core the reads are
+    // spread over the x rounds (stage 1 leaves the DRAM idle, and a burst here would slow every core's q_b read,
+    // which the lockstep x multicast waits for); the barrier + push come after the last round.
+    // Cores outside the stage-1 rect prefetch nothing: at t=0 the DRAM is busy with the q_b slices every stage-1
+    // core waits for; they load each head's weights once its first row has landed (below).
+    prefetched = mc.active ? (total_units < wkv_depth ? total_units : wkv_depth) : 0;
+    const uint32_t prefetch_tiles = prefetched * unit_tiles;
+    uint32_t prefetch_l1 = 0, issued = 0;
     if (prefetched > 0) {
-        cb_reserve_back(cb_wkv, prefetched * unit_tiles);
-        const uint32_t l1 = get_write_ptr(cb_wkv);
-        for (uint32_t i = 0; i < prefetched; ++i) {
-            read_unit(i, l1 + i * unit_tiles * wkv_tile_bytes);
-        }
+        cb_reserve_back(cb_wkv, prefetch_tiles);
+        prefetch_l1 = get_write_ptr(cb_wkv);
     }
-
-    receive_x_rounds(mc, cb_x_round, round_tiles, num_blocks * nkb);
+    constexpr uint32_t num_rounds = num_blocks * nkb;
+    const uint32_t per_round = mc.active ? (prefetch_tiles + num_rounds - 1) / num_rounds : prefetch_tiles;
+    receive_x_rounds(mc, cb_x_round, round_tiles, num_rounds, [&]() {
+        const uint32_t to = issued + per_round < prefetch_tiles ? issued + per_round : prefetch_tiles;
+        issue_tiles(0, issued, to, prefetch_l1);
+        issued = to;
+    });
     if (prefetched > 0) {
+        issue_tiles(0, issued, prefetch_tiles, prefetch_l1);
         noc_async_read_barrier();
-        cb_push_back(cb_wkv, prefetched * unit_tiles);
+        cb_push_back(cb_wkv, prefetch_tiles);
     }
 
     // ---- stage 3: land rows, stream the remaining wkv units ---------------------------------------------------------
@@ -161,7 +177,7 @@ void kernel_main() {
     auto load_next_unit = [&]() {
         if (next_unit < total_units) {
             cb_reserve_back(cb_wkv, unit_tiles);
-            read_unit(next_unit, get_write_ptr(cb_wkv));
+            issue_tiles(next_unit, 0, unit_tiles, get_write_ptr(cb_wkv));
             noc_async_read_barrier();
             cb_push_back(cb_wkv, unit_tiles);
             ++next_unit;
@@ -170,11 +186,6 @@ void kernel_main() {
     bool local_waited = false;
     for (uint32_t u = 0; u < hpc; ++u) {
         const uint32_t src = src_of(u);
-        if constexpr (wkv_resident) {
-            if (u >= prefetched) {
-                load_next_unit();
-            }
-        }
         volatile tt_l1_ptr uint32_t* arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrive_addr[src]);
         if (src == my_pos && !local_waited) {
             noc_semaphore_wait_min(arrived, nh[src] * rows_per_head * hw);
@@ -183,6 +194,11 @@ void kernel_main() {
         for (uint32_t t = 0; t < rows_per_head; ++t) {
             if (src != my_pos) {
                 noc_semaphore_wait_min(arrived, (t + 1) * nh[src] * hw);
+            }
+            if constexpr (wkv_resident) {
+                if (t == 0 && u >= prefetched) {
+                    load_next_unit();  // the head's weights, once its first row is here
+                }
             }
             cb_reserve_back(cb_landing, hw);
             cb_push_back(cb_landing, hw);  // credits only: the row is already in my landing shard

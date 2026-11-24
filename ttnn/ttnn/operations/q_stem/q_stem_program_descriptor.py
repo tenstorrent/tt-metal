@@ -12,6 +12,7 @@ Per-chip core roles (op_design.md, Blocking Model):
 
 Knobs (single source each; every dependent quantity derives from them):
   S1_BLOCK_M_TILES   stage-1 row block (the exchange's send unit), clamped to a divisor of quarter_row_tiles
+  S1_COLS_PER_CORE   stage-1 columns per core -> the stage-1 rect (smallest W1 x R1 holding ceil(Cq_t / it) cores)
   X_ROUND_TILES_CAP  x round size cap -> s1_kb (largest divisor of Q_t <= cap / s1_block_m)
   X_ROUND_DEPTH      cb_x_round depth (rounds)
   S3_BLOCK_M_TILES   stage-3 row block (1: the landing row layout interleaves nope / rope per row)
@@ -25,6 +26,7 @@ Knobs (single source each; every dependent quantity derives from them):
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 
 import ttnn
@@ -33,6 +35,12 @@ KERNEL_DIR = Path(__file__).parent / "kernels"
 
 # ---- knobs ------------------------------------------------------------------------------------------------------------
 S1_BLOCK_M_TILES = 1
+S1_COLS_PER_CORE = 2  # stage-1 columns per core: sizes the stage-1 rect; the rest of the grid starts stage 3 at t=0
+# Head placement cost model (tile-MACs). Measured on the Kimi K3.1 Phase-0 call (HiFi4, fp32 DEST): a stage-3 row
+# (1 x Dn_t @ Dn_t x N_t, per-row init + pack) costs ~2.5x a stage-1 tile-MAC, and cores outside the stage-1 rect
+# get their first rows only after the q_b prologue + the first blocks (~0.35 of a full stage-1 core's run).
+S3_COST_FACTOR = 2.5
+FREE_CORE_START = 0.35
 X_ROUND_TILES_CAP = 64
 X_ROUND_DEPTH = 2
 S3_BLOCK_M_TILES = 1
@@ -92,6 +100,23 @@ def _largest_divisor_leq(n, cap):
     return 1
 
 
+def _s1_rect(Cq_t, gx, gy_compute):
+    """Smallest W1 x R1 rect (W1 <= gx, R1 <= gy_compute, every core >= 1 column) holding ceil(Cq_t / S1_COLS_PER_CORE)
+    cores; ties -> fewer rows. Capped by the compute rect when Cq_t needs more."""
+    want = min(max(1, -(-Cq_t // S1_COLS_PER_CORE)), gx * gy_compute)
+    best = None
+    for r in range(1, gy_compute + 1):
+        w = min(gx, -(-want // r))
+        if w * r < want or w * r > Cq_t:
+            continue
+        key = (w * r, r)
+        if best is None or key < best[0]:
+            best = (key, (w, r))
+    if best is None:  # Cq_t smaller than any rect holding `want`: one row of Cq_t cores
+        return min(gx, Cq_t), 1
+    return best[1]
+
+
 def _dest_limit(fp32_dest_acc_en):
     # half-sync DEST: 8 tiles bf16, 4 tiles fp32 (DEST_AUTO_LIMIT in dest_helpers.hpp)
     return 4 if fp32_dest_acc_en else 8
@@ -132,8 +157,7 @@ class Geometry:
         # grid: row 0 = ports + injector; compute rect rows 1 .. gy-1
         self.gx, self.gy = int(grid.x), int(grid.y)
         self.C = self.gx * (self.gy - 1)
-        self.W1 = min(self.gx, self.Cq_t)
-        self.R1 = min(self.gy - 1, max(1, self.Cq_t // self.W1))
+        self.W1, self.R1 = _s1_rect(self.Cq_t, self.gx, self.gy - 1)
         self.C1 = self.W1 * self.R1
         self.cols_base, self.cols_extra = divmod(self.Cq_t, self.C1)
         assert self.cols_base >= 1
@@ -142,8 +166,9 @@ class Geometry:
         # stage 3
         assert S3_BLOCK_M_TILES == 1, "the landing row layout [nope | rope] per row needs s3_block_m_tiles = 1"
         self.s3m = S3_BLOCK_M_TILES
-        self.hpc_max = -(-H // self.C)
         self.rows_per_head = B * self.qrt
+        self.compute_core_list, self.heads_of = head_placement(self)
+        self.hpc_max = max(len(hs) for hs in self.heads_of)
         wkv_head_bytes = self.Dn_t * self.N_t * self.wkv_tile_bytes
         self.wkv_resident = min(2, self.hpc_max) * wkv_head_bytes <= WKV_RESIDENT_BYTES
         self.s3n = self.N_t if self.wkv_resident else _largest_divisor_leq(self.N_t, S3_BLOCK_N_CAP)
@@ -247,35 +272,41 @@ def exchange_plan(mesh, cluster_axis, num_links):
 
 
 def head_placement(geo):
-    """k3(h) = compute-core index (identical on every chip), filled from the cores with the least stage-1 work first.
+    """k3(h) = compute-core index (identical on every chip). Greedy on projected compute load (tile-matmuls): a
+    stage-1 column costs num_blocks * m * Q_t, a head rows_per_head * Dn_t * N_t; each head goes to the least
+    loaded core (ties -> the core with no stage-1 work, then grid order), so heads fill the cores outside the
+    stage-1 rect first: there they run (and write their output) while stage 1 runs elsewhere.
     Returns (core_list, heads_of_core[k] = [h ...])."""
+    import heapq
+
     s1 = {(c.x, c.y): i for i, c in enumerate(geo.s1_cores())}
     cores = geo.compute_cores()
-
-    def load(c):
+    col_cost = geo.num_blocks * geo.m * geo.Q_t
+    head_cost = S3_COST_FACTOR * geo.rows_per_head * geo.Dn_t * geo.N_t
+    free_start = FREE_CORE_START * geo.cols_max * col_cost
+    heap = []
+    for k, c in enumerate(cores):
         i = s1.get((c.x, c.y))
-        return 0 if i is None else geo.s1_cols(i)[1]
-
-    order = sorted(range(len(cores)), key=lambda k: (load(cores[k]), cores[k].y, cores[k].x))
-    q, rmd = divmod(geo.H, geo.C)
+        cols = 0 if i is None else geo.s1_cols(i)[1]
+        heapq.heappush(heap, (cols * col_cost if cols else free_start, cols, k))
     heads_of = [[] for _ in cores]
-    h = 0
-    for rank, k in enumerate(order):
-        n = q + (1 if rank < rmd else 0)
-        heads_of[k] = list(range(h, h + n))
-        h += n
-    assert h == geo.H
+    for h in range(geo.H):
+        load, cols, k = heapq.heappop(heap)
+        heads_of[k].append(h)
+        heapq.heappush(heap, (load + head_cost, cols, k))
     return cores, heads_of
 
 
 def consumption_order(heads, dest, geo):
-    """Landing slot order of a core's heads on destination chip `dest`: local first, then ring neighbours, then far."""
+    """Landing slot order of a core's heads on destination chip `dest`, by expected completion: ring neighbours'
+    heads first (their rows land during stage 1), then farther sources, the local heads last (the own quarter is
+    computed last in the send order)."""
     G = geo.G
 
     def key(h):
         src = h // geo.Hl
         dist = min((src - dest) % G, (dest - src) % G)
-        return (dist, h)
+        return (dist if dist > 0 else G, h)
 
     return sorted(heads, key=key)
 
@@ -355,7 +386,7 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
     virt = lambda c: mesh.worker_core_from_logical_core(c)
 
     s1_cores = geo.s1_cores()
-    compute_cores, heads_of = head_placement(geo)
+    compute_cores, heads_of = geo.compute_core_list, geo.heads_of
     core_of_head = {}
     for k, hs in enumerate(heads_of):
         for h in hs:
@@ -413,6 +444,7 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
                 WKV_DEPTH,
                 OUT_DEPTH,
                 PORT_BATCH_SEGMENTS,
+                os.environ.get("QSTEM_ABLATE", ""),
                 tuple(sorted(route.items())),
                 geo.gx,
                 geo.gy,
@@ -679,6 +711,10 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
         )
         mc.attach(program, "mcast", [injector_k, reader_s1])
         program.kernels = [injector_k, reader_s1, *kernels_tail, compute_k, writer_k, port_reader_k, port_sender_k]
+        ablate = [a for a in os.environ.get("QSTEM_ABLATE", "").split(",") if a]  # perf ablation only (TEMP)
+        if ablate:
+            for kd in program.kernels:
+                kd.defines = [(f"ABLATE_{a}", "1") for a in ablate]
         r, c = coord
         mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = program
     return mesh_desc, scratch
