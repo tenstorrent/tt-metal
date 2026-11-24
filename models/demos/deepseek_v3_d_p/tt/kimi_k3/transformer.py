@@ -120,6 +120,8 @@ class TtKimiK3Transformer(LightweightModule):
         # Chunks per packed forward (TtPrefillRuntime forward_tokens_budget); see forward_packed. Named so the
         # runtime's value reaches every block explicitly rather than through **block_kwargs.
         forward_chunks: int = 1,
+        # The MoE every MoE layer builds (tt/moe_impl.py: "block" - the MoE block's C++ ops, K3's default - or "ttmoe").
+        moe_impl: Optional[str] = None,
         **block_kwargs,
     ):
         super().__init__()
@@ -293,6 +295,7 @@ class TtKimiK3Transformer(LightweightModule):
                     weight_cache_path=weight_cache_path,
                     kv_only=kv_only_last_layer and is_last,
                     forward_chunks=forward_chunks,
+                    moe_impl=moe_impl,
                     **block_kwargs,
                 )
             )
@@ -313,6 +316,9 @@ class TtKimiK3Transformer(LightweightModule):
             if layer_state and not (kv_only_last_layer and is_last):
                 mark_layer_cached(weight_cache_path, layer_idx)
 
+        # The MoE layers' implementation (tt/moe_impl.py; one for the whole model): the MoE block takes a packed forward's
+        # padding as a MoEBlockPacking, TtMoe as a PackedPadding (forward_packed; TtPrefillRuntime's traced path).
+        self.moe_is_block = any(getattr(layer, "moe_block", False) for layer in self.layers)
         self.norm = None
         if is_last_rank and build_tail and not kv_only_last_layer:
             self.norm = TtDistributedRmsNorm(
@@ -638,8 +644,14 @@ class TtKimiK3Transformer(LightweightModule):
         sp_factor = tuple(self.mesh_device.shape)[self.sp_axis]
         empty = [False] * n if traced else [c.is_empty for c in chunks]
         if not traced:
-            # One MoE padding (PackedPadding) for every layer of the forward (None when every row is real).
-            padding_config = packed_padding(self.mesh_device, chunks, sp_factor, rows, sp_axis=self.sp_axis)
+            # One MoE padding for every layer of the forward: the MoE block's planner reads the chunks themselves
+            # (MoEBlockPacking); TtMoe's PackedPadding is None when every row is real.
+            if self.moe_is_block:
+                from models.demos.deepseek_v3_d_p.tt.moe_block.moe_block_ffn import MoEBlockPacking
+
+                padding_config = MoEBlockPacking(chunks=list(chunks))
+            else:
+                padding_config = packed_padding(self.mesh_device, chunks, sp_factor, rows, sp_axis=self.sp_axis)
 
         # Each chunk's KDA scalars, built once per forward like the single-chunk path builds them once per
         # chunk: borrowed from its metadata when traced, uploaded from its host ints when eager.
