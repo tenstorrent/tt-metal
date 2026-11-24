@@ -80,7 +80,7 @@ def unpack_to_dest_sync_init(config: "GlobalConfig", operation: "L1Operation") -
     )
     if config.uses_unpack_to_dest_pack_sync:
         code += f"_llk_sync_init_(semaphore::UNPACK_PACK, {num_banks} /*max*/, 0 /*init*/);\n"
-    return code + "_llk_sync_barrier_raise_(semaphore::UNPACK_INIT);\n"
+    return code
 
 
 def unpack_to_dest_wait_for_dest_available(config: "GlobalConfig") -> str:

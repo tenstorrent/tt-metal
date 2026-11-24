@@ -339,11 +339,10 @@ inline void invalidate_cache_all(uint32_t hartid) {
 
 #endif  // ARCH_QUASAR && COMPILE_FOR_DM
 
-// Fallback for Quasar non-DM cores (TRISC) - no cache management needed
+// A fence request invalidates a TRISC's read cache of L1. Call this before reading an L1 word that another core
+// writes.
 #if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_DM)
-inline __attribute__((always_inline)) void invalidate_l1_cache() {
-    // No-op for non-DM cores on Quasar
-}
+inline __attribute__((always_inline)) void invalidate_l1_cache() { asm volatile("fence" ::: "memory"); }
 #endif  // ARCH_QUASAR && !COMPILE_FOR_DM
 
 #include "api/debug/assert.h"
@@ -368,6 +367,23 @@ inline __attribute__((always_inline)) void set_l1_data_cache() {
             )ASM" ::
                 : "t1");
 #endif
+    } else {
+        asm(R"ASM(
+            fence
+            li t1, 0x8
+            csrrs zero, 0x7c0, t1
+             )ASM" ::
+                : "t1");
+    }
+#elif defined(ARCH_QUASAR) && defined(COMPILE_FOR_TRISC)
+    // Each Quasar TRISC has the same non-snooped L1 read cache as Blackhole, on at reset, controlled by CSR 0x7C0
+    // bit 3 (set = disabled). MEM_L1_UNCACHED_BASE does not bypass it for TRISCs.
+    if constexpr (enable) {
+        asm(R"ASM(
+            li t1, 0x8
+            csrrc zero, 0x7c0, t1
+             )ASM" ::
+                : "t1");
     } else {
         asm(R"ASM(
             fence
@@ -471,29 +487,12 @@ inline __attribute__((always_inline)) void disable_dfb_tile_isr() {
     // Keep machine interrupts enabled so an FDS machine-external go interrupt can reach DM0.
 }
 #else
-inline __attribute__((interrupt, hot)) void handle_interrupt() {
-    uint32_t trisc_id = internal_::get_trisc_id();
-    uint32_t error_code = RISC_PIC_BRISC_EX_REG_BASE(trisc_id)[HW_ERROR_INTERRUPT_INDEX] >> 8 & 0x3f;
-    if (error_code == trisc_id || (35 - error_code) == trisc_id ||
-        (error_code > 3 && error_code < 32 && trisc_id == 0)) {
-        ASSERT(0 == 1, debug_assert_type_t::DebugAssertHwFault);
-        uint32_t hirv = *(RISC_PIC_BRISC_HW_INT_REG(trisc_id));  // clears the interrupt after handling the error
-        (void)hirv;
-    } else {
-        uint32_t hirv = *(RISC_PIC_BRISC_HW_INT_REG(trisc_id));  // clears the interrupt
-        (void)hirv;
-        return;
-    }
-#if !defined(WATCHER_ENABLED)  // hang anyway
-    while (1) {
-        ;
-    }
-#endif
-}
+// HW error interrupt entry, in trisc.cc.
+extern "C" void trisc_irq_entry();
 
 inline __attribute__((always_inline)) void setup_isr_csrs() {
     uint32_t trisc_id = ckernel::csr_read<ckernel::CSR::TRISC_ID>();
-    RISC_PIC_BRISC_HW_IVT_BASE(trisc_id)[HW_ERROR_INTERRUPT_INDEX] = reinterpret_cast<uint32_t>(handle_interrupt);
+    RISC_PIC_BRISC_HW_IVT_BASE(trisc_id)[HW_ERROR_INTERRUPT_INDEX] = reinterpret_cast<uint32_t>(trisc_irq_entry);
     *(RISC_PIC_BRISC_HW_INT_EN(trisc_id)) = 1 << HW_ERROR_INTERRUPT_INDEX;
     RISCV_DEBUG_REGS->ERR_MASK = 0xFFFF;  // enable all errors
 }

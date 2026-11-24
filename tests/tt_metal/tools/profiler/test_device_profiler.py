@@ -337,9 +337,9 @@ def test_full_buffer():
             120 * OP_COUNT * RISC_COUNT * ZONE_COUNT,
             110 * OP_COUNT * RISC_COUNT * ZONE_COUNT,
         ],
-        # Note: using emu-quasar-2x3_DISPATCH for both dispatch modes
         "quasar": [
-            2 * QUASAR_OP_COUNT * QUASAR_RISC_COUNT * QUASAR_ZONE_COUNT,
+            2 * QUASAR_OP_COUNT * QUASAR_RISC_COUNT * QUASAR_ZONE_COUNT,  # emu-quasar-2x3_DISPATCH
+            4 * QUASAR_OP_COUNT * QUASAR_RISC_COUNT * QUASAR_ZONE_COUNT,  # emu-trinity
         ],
     }
     TEST_BIN_DICT = {
@@ -1214,6 +1214,27 @@ def test_noc_event_profiler_linked_multicast_hang():
 
     with open(expected_trace_file, "r") as nocTraceJson:
         noc_trace_data = json.load(nocTraceJson)
+
+
+@pytest.mark.parametrize("brisc_ring_index, tail_zone", [(510, ""), (512, ""), (510, "zone"), (12, "midzone")])
+def test_noc_event_ring_overrun(brisc_ring_index, tail_zone):
+    # Regression test for profiler markers written past the end of the L1 ring. One worker core: BRISC fills its
+    # 512-word profiler ring to exactly `brisc_ring_index` with 2-word event records (accepted by the plain room
+    # check, which reserves no headroom for the quick push), optionally opens and closes an empty zone, then issues
+    # one NoC read with NoC-event tracing on. The quick-push START/END pair (510, 512) or the zone's END (510 zone)
+    # must not overrun into the NCRISC ring that follows in L1: that overwrites the NCRISC chunk header, which aborts
+    # the host at mesh close or drops the whole NCRISC lane. The binary fails on a missing NCRISC lane or a zone
+    # marker with timer id 0.
+    ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
+    if ENV_VAR_ARCH_NAME not in ["wormhole_b0", "blackhole"]:
+        pytest.skip(
+            f"The test fills the BRISC ring and checks the NCRISC lane, which {ENV_VAR_ARCH_NAME} does not have"
+        )
+    run_device_profiler_test(
+        testName=f"build/test/tt_metal/tools/profiler/test_noc_event_ring_overrun {brisc_ring_index} {tail_zone}",
+        enable_noc_tracing=True,
+        noPostProcess=True,
+    )
 
 
 def test_noc_event_profiler():

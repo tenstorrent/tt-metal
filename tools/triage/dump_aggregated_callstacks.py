@@ -138,7 +138,7 @@ class AggregationBucket:
         cs = first.kernel_callstack_with_message
         if not cs.callstack and first.pc is not None:
             # No frames to show the PC, so prefix it to the failure message
-            cs = KernelCallstackWithMessage(callstack=[], message=f"0x{first.pc:08X} {cs.message}")
+            cs = KernelCallstackWithMessage(callstack=[], message=f"0x{first.pc:08X} {cs.message}", pc=first.pc)
         self.callstack = cs
         self.risc_name = risc_name
 
@@ -248,11 +248,11 @@ def _collect_aggregated(
             continue
 
         # Skip cores not in kernel
+        cs = cs_data.kernel_callstack_with_message
         kernel_elf = callstack_provider.elfs_cache[d.kernel_path].with_load_address(d.kernel_offset)
-        if kernel_elf.get_frame_description(pc, NO_MEMORY_ACCESS) is None:
+        if cs.callstack and kernel_elf.get_frame_description(pc, NO_MEMORY_ACCESS) is None:
             continue
 
-        cs = cs_data.kernel_callstack_with_message
         key = (
             _frame_signature(cs.callstack, cs.message),
             check_result.risc_name,

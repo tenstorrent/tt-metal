@@ -20,25 +20,28 @@ scalar alone.
 
 Coverage: bf16 (num_tiles up to 8, the DEST half-sync capacity) plus native
 fp32 DEST (up to 4 tiles), for HiFi2/HiFi4, across the full 32x32 tile
-(num_faces=4) and the 16x32 (num_faces=2) / 16x16 (num_faces=1) "tiny tiles".
+(num_faces=4), the 16x32 (num_faces=2) / 16x16 (num_faces=1) "tiny tiles", and
+1x32 to 8x32 tiles with short faces.
 """
 
 import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from conftest import blackhole_only
 from helpers.data_format_inference import dest_acc_for
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import DestAccumulation, MathFidelity
 from helpers.param_config import parametrize
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     MATH_FIDELITY,
     NUM_FACES_C_DIM,
     NUM_FACES_R_DIM,
+    TEST_FACE_DIMS,
     TILE_COUNT,
 )
+from helpers.tile_constants import MAX_TILE_ELEMENTS
 from helpers.tile_shape import construct_tile_shape
 from helpers.utils import tolerances
 
@@ -49,9 +52,13 @@ FORMATS = [
 ]
 
 # Full 32x32 tile (4 faces) plus the tiny tiles: 16x32 (2 faces, num_faces=2)
-# and 16x16 (1 face, num_faces=1). The reduce collapses every element to [0]
-# regardless of tile geometry.
-TILE_DIMENSIONS = [[32, 32], [16, 32], [16, 16]]
+# and 16x16 (1 face, num_faces=1), and 1x32 to 8x32 tiles with short faces.
+# The reduce collapses every element to [0] regardless of tile geometry.
+TILE_DIMENSIONS = [[32, 32], [16, 32], [16, 16], [1, 32], [2, 32], [4, 32], [8, 32]]
+
+# Stale-row poison for SrcA (see sum_reduce_scalar_test.cpp).
+POISON_TILES = 2
+POISON_VALUE = 100.0
 
 
 def _num_tiles_for_format(formats):
@@ -65,16 +72,25 @@ def _num_tiles_for_format(formats):
     )
 
 
+# sum_reduce_scalar is a Blackhole-only experimental LLK
+@blackhole_only
 @parametrize(
     formats=FORMATS,
     math_fidelity=[MathFidelity.HiFi2, MathFidelity.HiFi4],
     num_tiles=_num_tiles_for_format,
     tile_dimensions=TILE_DIMENSIONS,
 )
-def test_sum_reduce_scalar(formats, math_fidelity, num_tiles, tile_dimensions):
-    if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
-        pytest.skip("sum_reduce_scalar is a Blackhole-only experimental LLK")
-
+def test_sum_reduce_scalar(
+    formats,
+    math_fidelity,
+    num_tiles,
+    tile_dimensions,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
     if tile_dimensions == [16, 16] and num_tiles > 1:
         # 16x16 is a single-face tile; with more than one such tile the device reduces only
         # the first tile (device ~= golden / num_tiles), i.e. the 1-face multi-tile
@@ -106,40 +122,55 @@ def test_sum_reduce_scalar(formats, math_fidelity, num_tiles, tile_dimensions):
     # single-input reduce tests.
     src_B = torch.zeros_like(src_A)
 
-    # Golden: sum over every element of every tile, in fp32 (scaler == 1.0, so
-    # scaler^2 == 1.0 drops out).
-    golden_scalar = float(src_A.to(torch.float32).sum().item())
+    golden_scalar = None
+    if not is_perf:
+        # Golden: sum over every element of every tile, in fp32 (scaler == 1.0, so
+        # scaler^2 == 1.0 drops out).
+        golden_scalar = float(src_A.to(torch.float32).sum().item())
 
-    configuration = TestConfig(
-        "sources/sum_reduce_scalar_test.cpp",
-        formats,
-        templates=[
-            MATH_FIDELITY(math_fidelity),
-        ],
-        runtimes=[
-            TILE_COUNT(num_tiles),
-            NUM_FACES_R_DIM(tile_shape.num_faces_r_dim, tile_shape.num_faces_r_dim),
-            NUM_FACES_C_DIM(tile_shape.num_faces_c_dim, tile_shape.num_faces_c_dim),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_A,
-            tile_count_res=1,
-            num_faces=tile_shape.total_num_faces(),
-            face_r_dim=tile_shape.face_r_dim,
-            tile_dimensions=tile_dimensions,
-            use_dense_tile_dimensions=True,
-            sfpu=False,
-        ),
-        dest_acc=dest_acc,
+    # The poison follows the input tiles in buffer_A as full tiles.
+    poison = torch.full(
+        (POISON_TILES * MAX_TILE_ELEMENTS,), POISON_VALUE, dtype=src_A.dtype
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name="sources/sum_reduce_scalar_test.cpp",
+            formats=formats,
+            templates=[
+                MATH_FIDELITY(math_fidelity),
+            ],
+            runtimes=[
+                TILE_COUNT(num_tiles),
+                NUM_FACES_R_DIM(tile_shape.num_faces_r_dim, tile_shape.num_faces_r_dim),
+                NUM_FACES_C_DIM(tile_shape.num_faces_c_dim, tile_shape.num_faces_c_dim),
+                TEST_FACE_DIMS(face_r_dim=tile_shape.face_r_dim),
+            ],
+            variant_stimuli=StimuliConfig(
+                torch.cat([src_A, poison]),
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=tile_cnt_A + len(poison) // elements_per_tile,
+                tile_count_B=tile_cnt_A,
+                tile_count_res=1,
+                num_faces=tile_shape.total_num_faces(),
+                face_r_dim=tile_shape.face_r_dim,
+                tile_dimensions=tile_dimensions,
+                use_dense_tile_dimensions=True,
+                sfpu=False,
+            ),
+            dest_acc=dest_acc,
+        ),
+    )
+    if is_perf:
+        return
+    res_from_L1 = outcome.result
 
     assert (
         len(res_from_L1) == elements_per_tile

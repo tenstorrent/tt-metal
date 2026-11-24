@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <boost/move/utility_core.hpp>
 #include <fmt/base.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -24,14 +23,16 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
-#include "env_lib.hpp"
+#include "common/env_lib.hpp"
 #include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include "llrt.hpp"
@@ -89,6 +90,12 @@ protected:
     MeshTraceTestSuite() : MeshDeviceFixtureBase(Config{.num_cqs = 1, .trace_region_size = (64 << 20)}) {}
 };
 
+// Two hardware CQs plus a trace region, so one CQ can capture while the other keeps dispatching.
+class MeshTraceMultiCQTestSuite : public MeshDeviceFixtureBase {
+protected:
+    MeshTraceMultiCQTestSuite() : MeshDeviceFixtureBase(Config{.num_cqs = 2, .trace_region_size = (16 << 20)}) {}
+};
+
 class MeshTraceTest2x4 : public MeshDeviceFixtureBase {
 protected:
     MeshTraceTest2x4() :
@@ -118,7 +125,7 @@ TEST_F(MeshTraceTestSuite, Sanity) {
         for (int i = 0; i < num_workloads_per_trace * num_traces; i++) {
             auto workload = std::make_shared<MeshWorkload>();
             auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
-                1, mesh_device_->compute_with_storage_grid_size(), seed);
+                *this->mesh_device_, 1, mesh_device_->compute_with_storage_grid_size(), seed);
             workload->add_program(all_devices, std::move(*programs[0]));
             EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
             mesh_workloads.push_back(workload);
@@ -381,7 +388,7 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
     auto global_sem = GlobalSemaphore(*mesh_device_, all_cores, 0);
 
     // Program syncs with host and notifies downstream datacopy or addition program
-    Program sync_and_incr_program = CreateProgram();
+    Program sync_and_incr_program = CreateProgram(*this->mesh_device_);
     auto sync_kernel = CreateKernel(
         sync_and_incr_program,
         "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/sync_and_increment.cpp",
@@ -390,7 +397,7 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
     std::array<uint32_t, 3> sync_rt_args = {global_sem.address(), datacopy_core_phys.x, datacopy_core_phys.y};
     SetRuntimeArgs(sync_and_incr_program, sync_kernel, syncer_core, sync_rt_args);
     // Program copies data from dram once notified
-    Program datacopy_program = CreateProgram();
+    Program datacopy_program = CreateProgram(*this->mesh_device_);
     auto datacopy_kernel = CreateKernel(
         datacopy_program,
         "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/sync_and_datacopy.cpp",
@@ -405,7 +412,7 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
             .set_page_size(src0_cb_index, single_tile_size);
     CreateCircularBuffer(datacopy_program, datacopy_core, cb_src0_config);
     // Program copies data from DRAM, does addition in RISC once notified
-    Program add_program = CreateProgram();
+    Program add_program = CreateProgram(*this->mesh_device_);
     auto add_kernel = CreateKernel(
         add_program,
         "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/sync_and_add.cpp",
@@ -425,7 +432,7 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
     CreateCircularBuffer(add_program, datacopy_core, cb_src0_config);
     // Same program as above, but runs on different SubDevice. Reads from DRAM, once
     // notified by previous program
-    Program add_program_2 = CreateProgram();
+    Program add_program_2 = CreateProgram(*this->mesh_device_);
     auto add_kernel_2 = CreateKernel(
         add_program_2,
         "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/sync_and_add.cpp",
@@ -514,7 +521,7 @@ TEST_F(MeshTraceTestSuite, MeshTraceAsserts) {
     MeshCoordinateRange all_devices(mesh_device_->shape());
     auto workload = std::make_shared<MeshWorkload>();
     auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
-        1, mesh_device_->compute_with_storage_grid_size(), seed);
+        *this->mesh_device_, 1, mesh_device_->compute_with_storage_grid_size(), seed);
     workload->add_program(all_devices, std::move(*programs[0]));
     auto trace_id = mesh_device_->begin_mesh_trace(mesh_device_->mesh_command_queue(0));
     try {
@@ -535,7 +542,7 @@ TEST_F(MeshTraceTest2x4, NonConvexGridTrace) {
     MeshCoordinateRange bottom_right_corner({1, 2}, {1, 3});  // Devices (1,2) to (1,3)
 
     auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
-        2, mesh_device_->compute_with_storage_grid_size(), 0);
+        *this->mesh_device_, 2, mesh_device_->compute_with_storage_grid_size(), 0);
 
     auto mesh_workload = std::make_shared<MeshWorkload>();
     mesh_workload->add_program(top_left_corner, std::move(*programs[0]));
@@ -563,7 +570,7 @@ TEST_F(MeshTraceTest2x4, NonConvexGridTrace) {
 TEST_F(MeshTraceTest2x4, SingleDeviceTraceReplay) {
     // Leaves out all other devices, including remote chips (#60338)
     auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
-        1, mesh_device_->compute_with_storage_grid_size(), 0);
+        *this->mesh_device_, 1, mesh_device_->compute_with_storage_grid_size(), 0);
 
     auto mesh_workload = std::make_shared<MeshWorkload>();
     mesh_workload->add_program(MeshCoordinateRange({0, 0}, {0, 0}), std::move(*programs[0]));
@@ -602,7 +609,7 @@ void run_heterogenous_trace_sweep(
             auto workload = std::make_shared<MeshWorkload>();
             for (const auto& program_grid : workload_grid) {
                 auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
-                    1, mesh_device->compute_with_storage_grid_size(), seed);
+                    *mesh_device, 1, mesh_device->compute_with_storage_grid_size(), seed);
                 workload->add_program(program_grid, std::move(*programs[0]));
             }
             EnqueueMeshWorkload(mesh_device->mesh_command_queue(), *workload, false);
@@ -811,7 +818,7 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, BasicTraceWithZeroTraceRegion) {
     for (uint32_t i = 0; i < num_workloads; i++) {
         auto workload = std::make_shared<MeshWorkload>();
         auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
-            1, mesh_device_->compute_with_storage_grid_size(), 42);
+            *this->mesh_device_, 1, mesh_device_->compute_with_storage_grid_size(), 42);
         workload->add_program(all_devices, std::move(*programs[0]));
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
         mesh_workloads.push_back(workload);
@@ -840,7 +847,7 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, TraceWithSmallAllocationsDuringCaptu
     // Create a workload
     auto workload = std::make_shared<MeshWorkload>();
     auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
-        1, mesh_device_->compute_with_storage_grid_size(), 123);
+        *this->mesh_device_, 1, mesh_device_->compute_with_storage_grid_size(), 123);
     workload->add_program(all_devices, std::move(*programs[0]));
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
 
@@ -876,7 +883,7 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, MultipleLiveTracesValidateAgainstMax
 
     MeshWorkload workload;
     auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
-        1, mesh_device_->compute_with_storage_grid_size(), 321);
+        *this->mesh_device_, 1, mesh_device_->compute_with_storage_grid_size(), 321);
     workload.add_program(all_devices, std::move(*programs[0]));
 
     const auto worker_grid_size = mesh_device_->compute_with_storage_grid_size();
@@ -897,10 +904,8 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, MultipleLiveTracesValidateAgainstMax
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, false);
     mesh_device_->end_mesh_trace(mesh_device_->mesh_command_queue(0), calibration_trace_id);
     auto calibration_trace = mesh_device_->get_mesh_trace(calibration_trace_id);
-    auto* calibration_backing_buffer = calibration_trace->mesh_buffer->get_backing_buffer();
-
     const DeviceAddr trace_buffer_address = calibration_trace->mesh_buffer->address();
-    const DeviceAddr dram_alignment = calibration_backing_buffer->alignment();
+    const DeviceAddr dram_alignment = calibration_trace->mesh_buffer->alignment();
     mesh_device_->release_mesh_trace(calibration_trace_id);
     calibration_trace.reset();
 
@@ -946,7 +951,7 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, TraceOverlapDetection) {
     // Create a workload
     auto workload = std::make_shared<MeshWorkload>();
     auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
-        1, mesh_device_->compute_with_storage_grid_size(), 456);
+        *this->mesh_device_, 1, mesh_device_->compute_with_storage_grid_size(), 456);
     workload->add_program(all_devices, std::move(*programs[0]));
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
 
@@ -1026,7 +1031,7 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, TraceWithTopDownAllocationsDetectsOv
     // Create a workload
     auto workload = std::make_shared<MeshWorkload>();
     auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
-        1, mesh_device_->compute_with_storage_grid_size(), 789);
+        *this->mesh_device_, 1, mesh_device_->compute_with_storage_grid_size(), 789);
     workload->add_program(all_devices, std::move(*programs[0]));
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
 
@@ -1089,7 +1094,7 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, TraceOverlapDetectionWithAllocations
     // Create a workload
     auto workload = std::make_shared<MeshWorkload>();
     auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
-        1, mesh_device_->compute_with_storage_grid_size(), 999);
+        *this->mesh_device_, 1, mesh_device_->compute_with_storage_grid_size(), 999);
     workload->add_program(all_devices, std::move(*programs[0]));
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
 
@@ -1158,6 +1163,109 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, TraceOverlapDetectionWithAllocations
         }
     }
     ASSERT_TRUE(overlap_detected) << "Overlap detected - trace buffer conflicted with allocations made during trace";
+}
+
+// A workload that bumps a per-core L1 counter once per launch, and the zeroed counters it bumps.
+struct CounterWorkload {
+    std::shared_ptr<MeshBuffer> counters;
+    MeshWorkload workload;
+};
+
+CounterWorkload make_counter_workload(MeshDevice& mesh_device, const CoreRange& cores) {
+    // One counter page per core: a height-sharded L1 buffer gives every core its counter at the same address.
+    const uint32_t num_cores = cores.size();
+    const uint32_t page_size = hal::get_l1_alignment();
+    const uint32_t page_words = page_size / sizeof(uint32_t);
+    ShardSpecBuffer shard_spec(
+        CoreRangeSet(cores),
+        /*shard_shape=*/{1, page_words},
+        ShardOrientation::ROW_MAJOR,
+        /*page_shape=*/{1, page_words},
+        /*tensor2d_shape_in_pages=*/{num_cores, 1});
+    auto counters = MeshBuffer::create(
+        ReplicatedBufferConfig{.size = num_cores * page_size},
+        DeviceLocalBufferConfig{
+            .page_size = page_size,
+            .buffer_type = BufferType::L1,
+            .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED)},
+        &mesh_device);
+    EnqueueWriteMeshBuffer(
+        mesh_device.mesh_command_queue(),
+        counters,
+        std::vector<uint32_t>(num_cores * page_words, 0),
+        /*blocking=*/true);
+
+    Program program = CreateProgram(mesh_device);
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/local_counter_increment.cpp",
+        cores,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = {static_cast<uint32_t>(counters->address())}});
+    MeshWorkload workload;
+    workload.add_program(MeshCoordinateRange(mesh_device.shape()), std::move(program));
+    return {std::move(counters), std::move(workload)};
+}
+
+void expect_counts(
+    MeshDevice& mesh_device, const std::shared_ptr<MeshBuffer>& counters, uint32_t num_cores, uint32_t expected) {
+    const uint32_t page_words = hal::get_l1_alignment() / sizeof(uint32_t);
+    for (const auto& coord : MeshCoordinateRange(mesh_device.shape())) {
+        std::vector<uint32_t> pages;
+        ReadShard(mesh_device.mesh_command_queue(), pages, counters, coord);
+        ASSERT_EQ(pages.size(), num_cores * page_words);
+        for (uint32_t i = 0; i < num_cores; ++i) {
+            EXPECT_EQ(pages[i * page_words], expected) << "chip " << coord << " core " << i;
+        }
+    }
+}
+
+// While CQ 1 captures a trace, CQ 0 keeps dispatching live, and both keep working after the trace is replayed. The
+// first workload moves the workers off launch slot 0, so a CQ handed the trace's launch state would hang or rerun a
+// stale launch message, which the counters would show.
+TEST_F(MeshTraceMultiCQTestSuite, OtherCQDispatchesDuringCapture) {
+    const CoreRange cores({0, 0}, {1, 1});
+    auto [counters, workload] = make_counter_workload(*mesh_device_, cores);
+    auto& live_cq = mesh_device_->mesh_command_queue(0);
+    auto& trace_cq = mesh_device_->mesh_command_queue(1);
+    uint32_t expected = 0;
+
+    EnqueueMeshWorkload(live_cq, workload, /*blocking=*/true);
+    expected++;
+
+    auto trace_id = mesh_device_->begin_mesh_trace(trace_cq);
+    EnqueueMeshWorkload(trace_cq, workload, /*blocking=*/false);
+    EnqueueMeshWorkload(live_cq, workload, /*blocking=*/true);
+    expected++;
+    mesh_device_->end_mesh_trace(trace_cq, trace_id);
+
+    for (int i = 0; i < 2; i++) {
+        EnqueueMeshWorkload(live_cq, workload, /*blocking=*/true);
+        mesh_device_->replay_mesh_trace(trace_cq, trace_id, /*blocking=*/true);
+        expected += 2;
+    }
+    mesh_device_->release_mesh_trace(trace_id);
+    expect_counts(*mesh_device_, counters, cores.size(), expected);
+}
+
+// Closing the device while a CQ is capturing drops the trace, and the device opens and runs again afterwards.
+TEST_F(MeshTraceMultiCQTestSuite, CloseDuringCapture) {
+    const CoreRange cores({0, 0}, {1, 1});
+    {
+        auto [counters, workload] = make_counter_workload(*mesh_device_, cores);
+        auto& trace_cq = mesh_device_->mesh_command_queue(1);
+        EnqueueMeshWorkload(trace_cq, workload, /*blocking=*/false);
+        mesh_device_->begin_mesh_trace(trace_cq);
+        EnqueueMeshWorkload(trace_cq, workload, /*blocking=*/false);
+    }
+    TearDown();
+    SetUp();
+
+    auto [counters, workload] = make_counter_workload(*mesh_device_, cores);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(1), workload, /*blocking=*/true);
+    expect_counts(*mesh_device_, counters, cores.size(), 1);
 }
 
 }  // namespace

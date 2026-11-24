@@ -138,16 +138,16 @@ inline void mul_and_accumulate_block_sfpu(
         in0_dfb.wait_front(1);
 
         tile_regs_acquire();
-        copy_tile_to_dst_init_short(in0_cb_id);
+        copy_init(in0_cb_id);
         copy_tile(in0_cb_id, 0, DST_ACC);
-        copy_tile_to_dst_init_short(in1_cb_id);
+        copy_init(in1_cb_id);
         copy_tile(in1_cb_id, 0, DST_OPERAND);
         mul_binary_tile_init();
         mul_binary_tile(DST_ACC, DST_OPERAND, DST_ACC);
 
         if (idx != 0) {
             scratch_dfb.wait_front(1);
-            copy_tile_to_dst_init_short(scratch_cb_id);
+            copy_init(scratch_cb_id);
             copy_tile(scratch_cb_id, 0, DST_OPERAND);
             add_binary_tile_init();
             add_binary_tile(DST_ACC, DST_OPERAND, DST_ACC);
@@ -204,9 +204,9 @@ inline void mul_and_accumulate_coalesced_block_sfpu(DFB_IN0 in0_dfb, DFB_IN1 in1
                 const uint32_t weight_tile_idx =
                     tap * act_block_h_ntiles * in_channels_ntiles + h * in_channels_ntiles + c;
 
-                copy_tile_to_dst_init_short(in0_cb_id);
+                copy_init(in0_cb_id);
                 copy_tile(in0_cb_id, act_tile_idx, DST_ACT);
-                copy_tile_to_dst_init_short(in1_cb_id);
+                copy_init(in1_cb_id);
                 copy_tile(in1_cb_id, weight_tile_idx, DST_WEIGHT);
 
                 // The first tap seeds the accumulator directly; later taps multiply into the

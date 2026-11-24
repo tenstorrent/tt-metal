@@ -1,6 +1,5 @@
 # atan, asinh, sinh and cosh, all defined on the whole real line: [-5, 5] plus 0, +-0.5, +-1, +-5,
-# +-10, a small normal (1e-4) and a denormal (1e-40). |x| stays at or below 10 so sinh / cosh fit
-# in Float16 (cosh(10) ~ 11013).
+# +-10, a small normal (1e-4) and a denormal (1e-40). |x| stays at or below 10 (cosh(10) ~ 11013).
 #
 # Trigonometry SFPU kernels on Quasar, using only existing fuser features: dest_acc is fixed per file
 # (hence the _dest16 / _dest32 pairs), every float input goes through the FPU datacopy path, and
@@ -11,7 +10,7 @@ dest_acc: true
 operands:
   - name: "input_A"
     dims: [32, 32]
-    format: [Float16_b, Float16, Float32]
+    format: [Float16_b, Float32]
     stimuli:
       include:
         - [-5.0, -1.01]

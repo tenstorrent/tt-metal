@@ -5,7 +5,6 @@
 #include "dispatch.hpp"
 
 #include <algorithm>
-#include <tt-logger/tt-logger.hpp>
 #include <tt_metal.hpp>
 #include "impl/buffers/semaphore.hpp"
 #include <map>
@@ -22,7 +21,7 @@
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch/dispatch_core_common.hpp"
 #include "dispatch_s.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "prefetch.hpp"
 #include "context/context_descriptor.hpp"
 #include "debug/inspector/inspector.hpp"
@@ -34,7 +33,6 @@
 #include <dispatch/dispatch_query_manager.hpp>
 #include <dispatch/dispatch_mem_map.hpp>
 #include "hostdevcommon/dispatch_telemetry_types.hpp"
-#include "impl/dispatch/dispatch_engine_cores.hpp"
 
 using namespace tt::tt_metal;
 

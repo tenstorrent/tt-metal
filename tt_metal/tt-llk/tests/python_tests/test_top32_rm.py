@@ -31,7 +31,7 @@ chunk fills only two faces, and the other two arrive as -inf from
 would lose to padding and the ``row_elements=160`` case would quietly return the wrong set.
 
 ``dest_acc`` is a real axis, not a formality: it selects the index word width inside the
-sort (``InstrModLoadStore::INT32`` vs ``LO16``) *and* the Dest-move opcode in
+sort (``InstrModLoadStore::INT32`` vs ``UINT16``) *and* the Dest-move opcode in
 ``llk_math_top32_rm_configure_mop`` (ELWADD against a zeroed SrcB at fp32 Dest, MOVA2D
 otherwise). The consumer only ever builds fp32 Dest, so the ``dest_acc=No`` cells are the
 first exercise the 16-bit half of this family has had.
@@ -62,9 +62,10 @@ Not covered here, deliberately
   separately; their composition is not.
 * The 8-datum ``bitonic_top32_load8``/``store8`` helpers, which the header itself records
   as referenced by no kernel today.
-* The 7 ``llk_math_deepseek_top32_rm_*`` Metal wrappers on main, which still have no caller
-  anywhere: they wrap the same primitives this file drives, but through the Metal API layer,
-  so covering them needs a metal-side test (same shape as B1).
+* ``llk_math_top32_rm_init`` / ``llk_math_top32_rm``, the Metal math-side wrappers: the
+  ``via_wrappers`` tests route the SFPU calls, and in the plain mode the unpack, through the
+  Metal layer (see "the Metal wrapper layer" below), but the Dest-move half still drives the
+  primitives.
 """
 
 import pytest
@@ -74,9 +75,15 @@ from helpers.constraints import skip_if_32bit_input_without_dest_acc
 from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation, format_dict
 from helpers.param_config import input_output_formats, parametrize
+from helpers.perf.blaze import execute_llk, with_functional_defaults
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import TOP32_RM
+from helpers.test_variant_parameters import (
+    LOOP_FACTOR,
+    TILE_COUNT,
+    TOP32_GEOMETRY,
+    TOP32_RM,
+)
 from helpers.utils import passed_test
 
 pytestmark = [skip_for_wormhole, skip_for_quasar]
@@ -88,8 +95,8 @@ ELEMENTS_PER_CHUNK = 64
 
 TOP_K = 32
 
-# Both widths. They are not the same test: the format decides which branch of the family's
-# unpack/copy pair runs, exactly as it does in llk_unpack_A_top32_rm_api.h.
+# Both widths. They are not the same test: driving the primitives (test_top32_rm), the format
+# decides which branch of the family's unpack/copy pair runs.
 #
 #   Float16_b  the unpacker does the within-face transpose and clears SrcA to -infinity
 #              first. This is the branch the consumer uses for its VALUE tile.
@@ -97,18 +104,30 @@ TOP_K = 32
 #              transpose moves to the math thread. This is the branch the consumer uses for
 #              its uint32 INDEX tile.
 #
+# Through the Metal wrappers (test_top32_rm_via_metal_wrappers) the wrapper picks the branch:
+# unpack-to-dest for Int32 only, so Float32 takes SrcA and is narrowed on the way in.
+#
 # bf16's 8 mantissa bits are what bound the row at 256, since indices ride in the same format
-# as the values; Float32 would not bind, but keeping one sweep makes the two branches
-# comparable cell by cell.
+# as the values. Driving the primitives, Float32 would not bind (through the wrappers at
+# dest_acc=No it is bf16 in SrcA and binds the same way); keeping one sweep makes the two
+# branches comparable cell by cell.
 FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True)
 
 # 64   one chunk, no merge across tiles at all -- phases_steps + merge + rebuild only
 # 128  two full chunks, so the across-tiles merge runs once
 # 160  the Metal dev test's tail case: two full chunks plus a 32-element num_faces=2 chunk.
-#      **16-bit only** -- see test_top32_rm_32bit_partial_chunk below for why the 32-bit
-#      branch cannot do this and what it returns instead.
+#      On the primitives' 32-bit branch this is skipped -- see test_top32_rm_32bit_partial_chunk
+#      below for why that branch cannot do it and what it returns instead; through the Metal
+#      wrappers Float32 takes the SrcA branch and runs it.
 # 256  four full chunks, and the largest row whose indices stay exact in bf16
 ROW_ELEMENTS = [64, 128, 160, 256]
+
+# The Metal unpack wrapper reads Metal's operand tables and CB interface, whose roots the
+# harness does not add by default (relative to tests/, the compile cwd).
+METAL_WRAPPER_INCLUDE_DIRS = [
+    "-I../../hw/ckernels/blackhole/metal/llk_io",
+    "-I../../api",
+]
 
 
 def _stimuli(row_elements):
@@ -140,10 +159,26 @@ def _pad_to_tile(flat):
     row_elements=ROW_ELEMENTS,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
-def test_top32_rm(formats, row_elements, dest_acc, via_wrappers=False):
+def test_top32_rm(
+    formats,
+    row_elements,
+    dest_acc,
+    via_wrappers=False,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+    retain_repeat_outputs=False,
+):
     is_32bit = formats.input_format.is_32_bit()
-    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
-    if is_32bit and row_elements % ELEMENTS_PER_CHUNK != 0:
+    # Through the Metal wrappers Float32 goes through SrcA, narrowed to Float16_b (dest_acc=No) or
+    # Tf32 (dest_acc=Yes) as the consumer configures its scores; driving the primitives, Float32 is
+    # too wide for SrcA and takes unpack-to-dest, which needs fp32 Dest and whole chunks.
+    unpacks_to_dest = is_32bit and not via_wrappers
+    if unpacks_to_dest:
+        skip_if_32bit_input_without_dest_acc(formats, dest_acc)
+    if unpacks_to_dest and row_elements % ELEMENTS_PER_CHUNK != 0:
         pytest.skip(
             "a partially-filled chunk is broken on the 32-bit branch -- pinned by "
             "test_top32_rm_32bit_partial_chunk"
@@ -152,31 +187,29 @@ def test_top32_rm(formats, row_elements, dest_acc, via_wrappers=False):
     values, indices = _stimuli(row_elements)
 
     torch_format = format_dict[formats.output_format]
-    # Round the stimuli to the input format before generating the golden, so the golden is
-    # a statement about what the device was actually given. Exact here by construction --
-    # every value and index is a small integer -- and asserted below rather than assumed.
-    values_in = values.to(torch_format).to(torch.float32)
-    indices_in = indices.to(torch_format).to(torch.float32)
-    assert torch.equal(values_in, values) and torch.equal(indices_in, indices), (
-        f"row_elements={row_elements} is outside the exactly-representable range of "
-        f"{formats.input_format.name}; the index encoding this test relies on has broken"
-    )
 
     tiles_per_operand = max(1, -(-row_elements // ELEMENTS_PER_TILE))
 
-    configuration = TestConfig(
-        "sources/top32_rm_test.cpp",
-        formats,
+    test_config_kwargs = dict(
+        test_name="sources/top32_rm_test.cpp",
+        formats=formats,
         templates=[
             TOP32_RM(
-                row_elements=row_elements,
-                datum_bytes=4 if is_32bit else 2,
                 top_min=False,
                 top32_mode=0,
                 via_wrappers=via_wrappers,
-            )
+            ),
         ],
-        runtimes=[],
+        runtimes=[
+            TOP32_GEOMETRY(
+                row_elements=row_elements,
+                datum_bytes=4 if is_32bit else 2,
+                top32_result_stride=2 if retain_repeat_outputs else 0,
+            ),
+            LOOP_FACTOR(loop_factor),
+            # Each row-major chunk stages values and indices separately.
+            TILE_COUNT(tile_cnt=2 * -(-row_elements // ELEMENTS_PER_CHUNK)),
+        ],
         variant_stimuli=StimuliConfig(
             _pad_to_tile(values),
             formats.input_format,
@@ -185,43 +218,82 @@ def test_top32_rm(formats, row_elements, dest_acc, via_wrappers=False):
             formats.output_format,
             tile_count_A=tiles_per_operand,
             tile_count_B=tiles_per_operand,
-            # Two result tiles: the top-32 values, then their indices.
-            tile_count_res=2,
+            # Two result tiles per retained iteration: values, then indices.
+            tile_count_res=2 * loop_factor if retain_repeat_outputs else 2,
         ),
-        unpack_to_dest=is_32bit,
+        unpack_to_dest=unpacks_to_dest,
         dest_acc=dest_acc,
+        include_dirs=METAL_WRAPPER_INCLUDE_DIRS if via_wrappers else None,
+    )
+    if is_perf:
+        execute_llk(
+            is_perf=True,
+            perf_report=perf_report,
+            run_types=run_types,
+            loop_factor=loop_factor,
+            test_config_kwargs=test_config_kwargs,
+        )
+        return
+
+    configuration = TestConfig(**with_functional_defaults(test_config_kwargs))
+
+    # Round the stimuli to the format the unpacker hands on (the input format on the primitives
+    # path; Float16_b or Tf32 through the wrappers) so the golden is about what the device sorts.
+    # Exact here by construction (small integers), and asserted.
+    unpack_out_format = configuration.formats_config[0].unpack_A_dst
+    values_in = values.to(format_dict[unpack_out_format]).to(torch.float32)
+    indices_in = indices.to(format_dict[unpack_out_format]).to(torch.float32)
+    assert torch.equal(values_in, values) and torch.equal(indices_in, indices), (
+        f"row_elements={row_elements} is outside the exactly-representable range of "
+        f"{unpack_out_format.name}; the index encoding this test relies on has broken"
     )
 
+    golden_values, golden_indices = _golden(values_in, indices_in)
+
+    # A winner must come from the last chunk, which is reached through the computed L1 offset:
+    # otherwise an offset that re-reads earlier elements could pass.
+    last_chunk_first = ((row_elements - 1) // ELEMENTS_PER_CHUNK) * ELEMENTS_PER_CHUNK
+    assert bool((golden_indices >= last_chunk_first).any()), (
+        f"row_elements={row_elements}: no element of the top-32 lies in the last chunk "
+        f"(index >= {last_chunk_first}), so this case does not exercise the chunk offset"
+    )
     result = configuration.run().result
 
     # Each result tile carries its 32 datums at the front: the sort leaves the survivors in
     # the first column of Dest rows 0..31, and the driver narrows the packer to one datum
     # per row before packing, exactly as the consumer does.
-    device_values = torch.tensor(result[:TOP_K], dtype=torch_format).to(torch.float32)
-    device_indices = torch.tensor(
-        result[ELEMENTS_PER_TILE : ELEMENTS_PER_TILE + TOP_K], dtype=torch_format
-    ).to(torch.float32)
+    iterations = range(loop_factor) if retain_repeat_outputs else range(1)
+    for iteration in iterations:
+        result_base = 2 * iteration * ELEMENTS_PER_TILE
+        device_values = torch.tensor(
+            result[result_base : result_base + TOP_K], dtype=torch_format
+        ).to(torch.float32)
+        device_indices = torch.tensor(
+            result[
+                result_base
+                + ELEMENTS_PER_TILE : result_base
+                + ELEMENTS_PER_TILE
+                + TOP_K
+            ],
+            dtype=torch_format,
+        ).to(torch.float32)
 
-    golden_values, golden_indices = _golden(values_in, indices_in)
+        assert passed_test(
+            golden_values, device_values, formats.output_format, print_errors=False
+        ), (
+            f"top32 values wrong for row_elements={row_elements}, "
+            f"dest_acc={dest_acc.name}, iteration={iteration}\n"
+            f"  device: {device_values.tolist()}\n"
+            f"  golden: {golden_values.tolist()}"
+        )
 
-    assert passed_test(
-        golden_values, device_values, formats.output_format, print_errors=False
-    ), (
-        f"top32 values wrong for row_elements={row_elements}, dest_acc={dest_acc.name}\n"
-        f"  device: {device_values.tolist()}\n"
-        f"  golden: {golden_values.tolist()}"
-    )
-
-    # Indices are asserted exactly, which the distinct-values stimuli make well defined:
-    # this is what separates a top-32 from a max-32 and is the only check that the sort
-    # permutes the index region in step with the value region.
-    assert torch.equal(device_indices, golden_indices), (
-        f"top32 indices wrong for row_elements={row_elements}, "
-        f"dest_acc={dest_acc.name} -- the values may still be right, in which case the "
-        f"index region is not being permuted with them\n"
-        f"  device: {device_indices.tolist()}\n"
-        f"  golden: {golden_indices.tolist()}"
-    )
+        # Exact indices prove each sort permutes the index region with its values.
+        assert torch.equal(device_indices, golden_indices), (
+            f"top32 indices wrong for row_elements={row_elements}, "
+            f"dest_acc={dest_acc.name}, iteration={iteration}\n"
+            f"  device: {device_indices.tolist()}\n"
+            f"  golden: {golden_indices.tolist()}"
+        )
 
 
 # --- pre-sorted mode (>= 1024 elements) ------------------------------------------------
@@ -282,8 +354,29 @@ def _pre_sorted_stimuli(row_elements):
     formats=PRE_SORTED_FORMATS,
     row_elements=PRE_SORTED_ROW_ELEMENTS,
 )
-def test_top32_rm_pre_sorted(formats, row_elements, via_wrappers=False):
+def test_top32_rm_pre_sorted(
+    formats,
+    row_elements,
+    via_wrappers=False,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+    retain_repeat_outputs=False,
+):
     """The >= 1024-element path: transpose whole tiles, then prep / combine / final."""
+    if row_elements < ELEMENTS_PER_TILE:
+        raise ValueError(
+            f"pre-sorted mode needs at least {ELEMENTS_PER_TILE} row elements, "
+            f"got {row_elements}"
+        )
+    if is_perf and via_wrappers and not TestConfig.SPEED_OF_LIGHT:
+        pytest.skip(
+            "runtime wrapper builds require Os to fit TRISC1; measure this series "
+            "only under speed-of-light O2"
+        )
+
     values, indices = _pre_sorted_stimuli(row_elements)
 
     # Float32 holds every value and index here exactly, so the golden needs no rounding --
@@ -303,19 +396,33 @@ def test_top32_rm_pre_sorted(formats, row_elements, via_wrappers=False):
     # is read 64 elements at a time out of the same row-major buffer, so it needs L1 behind it.
     tiles_per_operand = -(-row_elements // ELEMENTS_PER_TILE)
 
-    configuration = TestConfig(
-        "sources/top32_rm_test.cpp",
-        formats,
+    test_config_kwargs = dict(
+        test_name="sources/top32_rm_test.cpp",
+        formats=formats,
         templates=[
             TOP32_RM(
-                row_elements=row_elements,
-                datum_bytes=4,  # Float32
                 top_min=False,
                 top32_mode=1,
                 via_wrappers=via_wrappers,
-            )
+            ),
         ],
-        runtimes=[],
+        runtimes=[
+            TOP32_GEOMETRY(
+                row_elements=row_elements,
+                datum_bytes=4,
+                top32_result_stride=2 if retain_repeat_outputs else 0,
+            ),
+            LOOP_FACTOR(loop_factor),
+            # Each whole tile or tail chunk stages values and indices separately.
+            TILE_COUNT(
+                tile_cnt=2
+                * (
+                    row_elements // ELEMENTS_PER_TILE
+                    + ((row_elements % ELEMENTS_PER_TILE) + ELEMENTS_PER_CHUNK - 1)
+                    // ELEMENTS_PER_CHUNK
+                )
+            ),
+        ],
         variant_stimuli=StimuliConfig(
             values,
             formats.input_format,
@@ -324,20 +431,27 @@ def test_top32_rm_pre_sorted(formats, row_elements, via_wrappers=False):
             formats.output_format,
             tile_count_A=tiles_per_operand,
             tile_count_B=tiles_per_operand,
-            tile_count_res=2,
+            tile_count_res=2 * loop_factor if retain_repeat_outputs else 2,
         ),
         # 32-bit operands take the unpack-to-dest transpose branch, and fp32 Dest is the
         # only configuration this mode has ever run in.
         unpack_to_dest=True,
         dest_acc=DestAccumulation.Yes,
+        # The wrapper build defines the Metal operand tables in every mode, though mode 1's
+        # tail keeps the primitives (see the driver); the roots are needed to compile them.
+        include_dirs=METAL_WRAPPER_INCLUDE_DIRS if via_wrappers else None,
     )
-
+    if is_perf:
+        execute_llk(
+            is_perf=True,
+            perf_report=perf_report,
+            run_types=run_types,
+            loop_factor=loop_factor,
+            test_config_kwargs=test_config_kwargs,
+        )
+        return
+    configuration = TestConfig(**with_functional_defaults(test_config_kwargs))
     result = configuration.run().result
-
-    device_values = torch.tensor(result[:TOP_K], dtype=torch_format).to(torch.float32)
-    device_indices = torch.tensor(
-        result[ELEMENTS_PER_TILE : ELEMENTS_PER_TILE + TOP_K], dtype=torch_format
-    ).to(torch.float32)
 
     golden_values, golden_indices = _golden(values, indices)
 
@@ -350,21 +464,37 @@ def test_top32_rm_pre_sorted(formats, row_elements, via_wrappers=False):
             f"region (index >= {tail_first}), so this case does not exercise the tail path"
         )
 
-    assert passed_test(
-        golden_values, device_values, formats.output_format, print_errors=False
-    ), (
-        f"pre-sorted top32 values wrong for row_elements={row_elements}\n"
-        f"  device: {device_values.tolist()}\n"
-        f"  golden: {golden_values.tolist()}"
-    )
+    iterations = range(loop_factor) if retain_repeat_outputs else range(1)
+    for iteration in iterations:
+        result_base = 2 * iteration * ELEMENTS_PER_TILE
+        device_values = torch.tensor(
+            result[result_base : result_base + TOP_K], dtype=torch_format
+        ).to(torch.float32)
+        device_indices = torch.tensor(
+            result[
+                result_base
+                + ELEMENTS_PER_TILE : result_base
+                + ELEMENTS_PER_TILE
+                + TOP_K
+            ],
+            dtype=torch_format,
+        ).to(torch.float32)
 
-    assert torch.equal(device_indices, golden_indices), (
-        f"pre-sorted top32 indices wrong for row_elements={row_elements} -- the values "
-        f"may still be right, in which case the index region is not being permuted with "
-        f"them\n"
-        f"  device: {device_indices.tolist()}\n"
-        f"  golden: {golden_indices.tolist()}"
-    )
+        assert passed_test(
+            golden_values, device_values, formats.output_format, print_errors=False
+        ), (
+            f"pre-sorted top32 values wrong for row_elements={row_elements}, "
+            f"iteration={iteration}\n"
+            f"  device: {device_values.tolist()}\n"
+            f"  golden: {golden_values.tolist()}"
+        )
+
+        assert torch.equal(device_indices, golden_indices), (
+            f"pre-sorted top32 indices wrong for row_elements={row_elements}, "
+            f"iteration={iteration}\n"
+            f"  device: {device_indices.tolist()}\n"
+            f"  golden: {golden_indices.tolist()}"
+        )
 
 
 # --- the 32-bit branch cannot take a partially-filled chunk -------------------------------
@@ -405,26 +535,35 @@ def test_top32_rm_32bit_partial_chunk(formats, row_elements, request):
     torch_format = format_dict[formats.output_format]
 
     configuration = TestConfig(
-        "sources/top32_rm_test.cpp",
-        formats,
-        templates=[
-            TOP32_RM(
-                row_elements=row_elements, datum_bytes=4, top_min=False, top32_mode=0
+        **with_functional_defaults(
+            dict(
+                test_name="sources/top32_rm_test.cpp",
+                formats=formats,
+                templates=[
+                    TOP32_RM(
+                        top_min=False,
+                        top32_mode=0,
+                    ),
+                ],
+                runtimes=[
+                    TOP32_GEOMETRY(row_elements=row_elements, datum_bytes=4),
+                    LOOP_FACTOR(1),
+                    TILE_COUNT(tile_cnt=2 * -(-row_elements // ELEMENTS_PER_CHUNK)),
+                ],
+                variant_stimuli=StimuliConfig(
+                    _pad_to_tile(values),
+                    formats.input_format,
+                    _pad_to_tile(indices),
+                    formats.input_format,
+                    formats.output_format,
+                    tile_count_A=1,
+                    tile_count_B=1,
+                    tile_count_res=2,
+                ),
+                unpack_to_dest=True,
+                dest_acc=DestAccumulation.Yes,
             )
-        ],
-        runtimes=[],
-        variant_stimuli=StimuliConfig(
-            _pad_to_tile(values),
-            formats.input_format,
-            _pad_to_tile(indices),
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=1,
-            tile_count_B=1,
-            tile_count_res=2,
-        ),
-        unpack_to_dest=True,
-        dest_acc=DestAccumulation.Yes,
+        )
     )
 
     result = configuration.run().result
@@ -449,6 +588,12 @@ def test_top32_rm_32bit_partial_chunk(formats, row_elements, request):
 # makes itself), so the point is not new arithmetic: it is that the wrapper layer compiles, is
 # code-generated, and computes what the primitives compute. A signature drift or a wrong
 # template argument inside a wrapper is invisible without this.
+#
+# In the plain mode the unpack thread goes through the Metal wrapper too
+# (`experimental/llk_unpack_A_top32_rm_api.h`), which picks the branch from the src format and
+# sizes the chunk offset from the operand's formats. Float32 therefore takes SrcA here, narrowed
+# to Float16_b (dest_acc=No) or Tf32 (dest_acc=Yes); the dest_acc=No, 160-element cell is the
+# one where an offset sized by the Dest format instead of the L1 format shows.
 
 
 @parametrize(
@@ -456,25 +601,89 @@ def test_top32_rm_32bit_partial_chunk(formats, row_elements, request):
     row_elements=[64, 160],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
-def test_top32_rm_via_metal_wrappers(formats, row_elements, dest_acc):
+def test_top32_rm_via_metal_wrappers(
+    formats,
+    row_elements,
+    dest_acc,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
     """The plain mode, driven entirely through the Metal wrapper layer.
 
     Same assertions as ``test_top32_rm`` -- values and indices, exactly -- so a wrapper that
     forwards the wrong argument or instantiates the wrong template shows up as a wrong answer
     rather than as nothing at all. Covers `llk_math_deepseek_top32_rm_init`, `_local_sort`,
-    `_merge` and `_rebuild`; the pre-sorted test below covers the other three.
+    `_merge` and `_rebuild`, plus `llk_unpack_A_top32_rm_init` / `llk_unpack_A_top32_rm` on
+    the unpack thread; the pre-sorted test below covers the other three SFPU entry points.
+
+    160 rather than 128 for the multi-chunk row: it has a chunk at tile_index 1 *and* a
+    32-element tail, so the wrapper's chunk offset is exercised twice and the tail path once.
     """
-    test_top32_rm(formats, row_elements, dest_acc, via_wrappers=True)
+    test_top32_rm(
+        formats,
+        row_elements,
+        dest_acc,
+        via_wrappers=True,
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+    )
 
 
 @parametrize(
     formats=PRE_SORTED_FORMATS,
     row_elements=[1024, 1088],
 )
-def test_top32_rm_pre_sorted_via_metal_wrappers(formats, row_elements):
+def test_top32_rm_pre_sorted_via_metal_wrappers(
+    formats,
+    row_elements,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
     """The pre-sorted mode through the wrappers: `_prep`, `_combine`, `_final`.
 
     1088 rather than only 1024 so the tail path runs too, which is what puts `_rebuild` and
     `_merge` through the wrapper layer in this mode as well.
     """
-    test_top32_rm_pre_sorted(formats, row_elements, via_wrappers=True)
+    test_top32_rm_pre_sorted(
+        formats,
+        row_elements,
+        via_wrappers=True,
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+    )
+
+
+def test_top32_rm_pre_sorted_rejects_undersized_rows():
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK tests
+        ValueError, match="pre-sorted mode needs at least 1024 row elements"
+    ):
+        test_top32_rm_pre_sorted(PRE_SORTED_FORMATS[0], ELEMENTS_PER_CHUNK)
+
+
+def test_top32_rm_pack_state_repeats():
+    test_top32_rm(
+        FORMATS[0],
+        ELEMENTS_PER_CHUNK,
+        DestAccumulation.No,
+        loop_factor=2,
+        retain_repeat_outputs=True,
+    )
+
+
+def test_top32_rm_pre_sorted_tail_state_repeats():
+    test_top32_rm_pre_sorted(
+        PRE_SORTED_FORMATS[0],
+        ELEMENTS_PER_TILE + ELEMENTS_PER_CHUNK,
+        loop_factor=2,
+        retain_repeat_outputs=True,
+    )

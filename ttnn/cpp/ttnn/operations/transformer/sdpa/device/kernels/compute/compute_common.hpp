@@ -222,7 +222,7 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
         /**
          * For `dst_tiles` number of rows, compute the max into the even indices of the DST register.
          */
-        reduce_block_max_row_init<cols>(out_cb);
+        reduce_block_max_row_init<cols>(in0_cb, scale_cb, out_cb);
         for (uint32_t i = 0; i < dst_tiles; i++) {
             const uint32_t reduce_dst_idx = i;
             reduce_block_max_row<cols>(in0_cb, scale_cb, (row_start_idx + i) * cols, reduce_dst_idx);
@@ -297,6 +297,57 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(reduce_dst_idx, out_cb);
+        tile_regs_release();
+    }
+
+    cb_out.push_back(rows);
+}
+
+/**
+ * out_cb = max(in0_cb, dim=-1), and eltwise_max(prev_cb, ...) if do_eltwise_max.
+ *
+ * The FPU max reduce keeps only 8 significant bits, so for an fp32 in0_cb its row max can miss the
+ * row's peak by far more than exp's range once scaled. This folds and reduces on the SFPU instead, so
+ * the max equals the peak as the FPU later reads it from in0_cb and (in0 - max) peaks at exactly 0.
+ * out_cb gets the max in column 0 of each tile, as reduce_c does.
+ */
+template <uint32_t in0_cb, uint32_t rows>
+void reduce_max_row_fp32(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_max = false) {
+    CircularBuffer cb_in0(in0_cb);
+    CircularBuffer cb_out(out_cb);
+    // Precondition: in0_cb has rows*cols produced, in row-major order
+    // Precondition: out_cb has rows free
+    // Precondition: if do_eltwise_max, prev_cb has rows produced
+    // Postcondition: in0_cb has rows*cols produced
+    // Postcondition: out_cb has rows produced
+    cb_in0.wait_front(rows * cols);
+    cb_out.reserve_back(rows);
+    pack_reconfig_data_format(out_cb);
+
+    constexpr uint32_t max_dst_idx = 0;
+    constexpr uint32_t in_dst_idx = 1;
+    for (uint32_t i = 0; i < rows; i++) {
+        tile_regs_acquire();
+        reconfig_data_format_srca(in0_cb);
+        copy_init(in0_cb);
+        binary_max_tile_init();
+        copy_tile(in0_cb, i * cols, max_dst_idx);
+        for (uint32_t j = 1; j < cols; j++) {
+            copy_tile(in0_cb, i * cols + j, in_dst_idx);
+            binary_max_tile(max_dst_idx, in_dst_idx, max_dst_idx);
+        }
+        sfpu_reduce_init<PoolType::MAX, DataFormat::Float32>();
+        sfpu_reduce<PoolType::MAX, DataFormat::Float32, ReduceDim::REDUCE_ROW>(max_dst_idx);
+        if (do_eltwise_max) {
+            reconfig_data_format_srca(prev_cb);
+            copy_init(prev_cb);
+            copy_tile(prev_cb, i, in_dst_idx);
+            binary_max_tile_init();
+            binary_max_tile(max_dst_idx, in_dst_idx, max_dst_idx, VectorMode::C);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(max_dst_idx, out_cb);
         tile_regs_release();
     }
 
@@ -951,11 +1002,18 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
     // whose polynomial implementation loads the constants it consumes into LREGs in the tile body; it
     // does not depend on vConstFloatPrgm* state from exp_tile_init. Conversely, that exp body also
     // does not clobber the reciprocal constants, so one reciprocal init before the tile loop is enough.
+    // That holds for exp_tile_first_column only. The regular exp_tile (the commented-out call in the
+    // loop) takes its constants from the programmable registers exp_tile_init sets (vConstFloatPrgm0..1
+    // on a bf16 DEST, 0..2 on a Blackhole fp32 DEST; see the note on exp_tile), and exp_tile_init
+    // overwrites the reciprocal constant set here. Restoring that call needs exp_tile_init and
+    // sfpu_reciprocal_init re-run inside the loop, each directly before its tile call.
     MATH((ckernel::sfpu::sfpu_reciprocal_init<false>()));
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         tile_regs_acquire();
         sub_tiles(in0_cb, in1_cb, i, i, 0);
+        // Restoring this exp_tile call needs exp_tile_init and sfpu_reciprocal_init re-run per iteration;
+        // see the sfpu_reciprocal_init comment above the loop.
         // exp_tile<false, true /*SCALE_EN*/>(0, (int)VectorMode::C, (uint16_t)0xBF80 /*bf16(-1.0) scale*/);
         MATH((exp_tile_first_column<false /*APPROX_MODE*/, (uint16_t)0xBF80 /*bf16(-1.0) scale*/>(0)));
         // add_unary_tile(0 /*dst_index*/, 0x3F800000); // Call the macro directly to get access to VectorMode argument
@@ -1933,9 +1991,15 @@ void sdpa_inner_loop(
              * reduce_tile + binary_max_tile. The overload with cols as a template arg
              * is bf16-only but cb_qk_im could be fp32.
              */
+#ifdef SDPA_EXACT_FP32_ROW_MAX
+            // cb_qk_im and the max CBs are fp32 with fp32 dest accumulation.
+            reduce_max_row_fp32<cb_qk_im, Sq_chunk_t>(
+                alias_cur_max, alias_prev_max, Sk_chunk_t, processed_k_chunks > 0);
+#else
             reconfig_data_format(cb_qk_im, cb_identity_scale_in);
             reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t>(
                 alias_cur_max, alias_prev_max, Sk_chunk_t, processed_k_chunks > 0);
+#endif
 
             /**
              * sub_exp fuses a few operations.
@@ -2036,6 +2100,9 @@ void sdpa_inner_loop(
                 alias_cur_max, alias_prev_max, true);
 
             // 2. Compute exp((prev_max - cur_max) * scale) to rescale previous statistics
+            //    The max CBs can be fp32 while exp_max_diff stays at the stats format.
+            reconfig_data_format(alias_prev_max, alias_cur_max);
+            pack_reconfig_data_format(cb_exp_max_diff);
             sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
             CircularBuffer(alias_prev_max).pop_front(Sq_chunk_t);
 

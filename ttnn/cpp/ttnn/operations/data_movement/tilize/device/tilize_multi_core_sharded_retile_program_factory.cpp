@@ -10,15 +10,14 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim {
 
@@ -83,8 +82,8 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreShardedRetileProgramFact
     const bool fp32_llk_acc = a.dtype() == DataType::FLOAT32 || a.dtype() == DataType::FP8_E4M3 ||
                               output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B;
 
-    TT_FATAL(a.buffer() != nullptr, "Input buffer should be allocated on device!");
-    TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(a.is_allocated(), "Input buffer should be allocated on device!");
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
 
     const bool output_is_interleaved = output.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED;
 
@@ -353,7 +352,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreShardedRetileProgramFact
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
-tt::tt_metal::experimental::ProgramRunArgs TilizeMultiCoreShardedRetileProgramFactory::override_runtime_arguments(
+ProgramRunArgs TilizeMultiCoreShardedRetileProgramFactory::override_runtime_arguments(
     const TilizeParams& /*operation_attributes*/,
     const TilizeInputs& tensor_args,
     Tensor& tensor_return_value,

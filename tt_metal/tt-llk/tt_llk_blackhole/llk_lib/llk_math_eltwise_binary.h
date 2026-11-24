@@ -146,9 +146,13 @@ inline void eltwise_binary_configure_mop_standard(const std::uint32_t acc_to_des
         ckernel_template tmp(outerloop, innerloop, eltwise_binary_func<eltwise_binary_type>(0 /*clr_src*/, acc_to_dest, broadcast_type, addr_mod));
         if (tensor_shape.face_r_dim <= MAX_FPU_ROWS)
         {
-            // For partial faces (face_r_dim < 16), we still need to increment counters by MAX_FPU_ROWS
-            // to maintain proper 16-row spacing between faces
-            tmp.set_loop_op1(TT_OP_INCRWC(0, MAX_FPU_ROWS, MAX_FPU_ROWS, MAX_FPU_ROWS));
+            // Partial faces: INCRWC moves the counters 8 more rows, keeping 16-row face spacing. The one-arg constructor
+            // made the ELW op the last-iteration instruction, and with one inner iteration every iteration is the last,
+            // so INCRWC must also go in both last-iteration slots or a second ELW op runs on the stale rows 8-15.
+            constexpr std::uint32_t incrwc = TT_OP_INCRWC(0 /*rwc_cr*/, MAX_FPU_ROWS, MAX_FPU_ROWS, MAX_FPU_ROWS);
+            tmp.set_loop_op1(incrwc);
+            tmp.set_last_inner_loop_instr(incrwc);
+            tmp.set_last_outer_loop_instr(incrwc);
         }
         tmp.set_end_op(TT_OP_SETRWC(CLR_SRC, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_AB));
         tmp.program();
@@ -417,8 +421,13 @@ inline void eltwise_binary_configure_mop_with_dest_reuse(const std::uint32_t acc
         ckernel_template tmp(outerloop, innerloop, eltwise_binary_func<eltwise_binary_type>(0 /*clr_src*/, acc_to_dest, broadcast_type, addr_mod));
         if (tensor_shape.face_r_dim <= MAX_FPU_ROWS)
         {
-            // For partial faces, still increment by MAX_FPU_ROWS to maintain 16-row face spacing
-            tmp.set_loop_op1(TT_OP_INCRWC(0, MAX_FPU_ROWS, MAX_FPU_ROWS, MAX_FPU_ROWS));
+            // Partial faces: INCRWC moves the counters 8 more rows, keeping 16-row face spacing. The one-arg constructor
+            // made the ELW op the last-iteration instruction, and with one inner iteration every iteration is the last,
+            // so INCRWC must also go in both last-iteration slots or a second ELW op runs on the stale rows 8-15.
+            constexpr std::uint32_t incrwc = TT_OP_INCRWC(0 /*rwc_cr*/, MAX_FPU_ROWS, MAX_FPU_ROWS, MAX_FPU_ROWS);
+            tmp.set_loop_op1(incrwc);
+            tmp.set_last_inner_loop_instr(incrwc);
+            tmp.set_last_outer_loop_instr(incrwc);
         }
         tmp.set_end_op(TT_OP_SETRWC(CLR_SRC, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_AB));
         tmp.program();

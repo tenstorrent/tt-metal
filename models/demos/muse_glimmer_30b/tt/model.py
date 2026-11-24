@@ -11,12 +11,13 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.muse_glimmer_30b.tt.attention import allocate_kv_cache
+from models.demos.muse_glimmer_30b.tt.attention import MuseLinear, allocate_kv_cache, heads_memcfg, kv_page_table
 from models.demos.muse_glimmer_30b.tt.ccl import MuseCCL
 from models.demos.muse_glimmer_30b.tt.common import (
     RopeTables,
     as_tt,
-    matmul_compute_config,
+    decode_memcfg,
+    norm_compute_config,
     replicate_mapper,
     shard_mapper,
 )
@@ -28,11 +29,14 @@ DECODE_B_PAD = 32  # decode batch is always padded to one tile of rows
 
 
 class MuseGlimmerModel:
-    def __init__(self, args, mesh_device, ccl=None, use_weight_cache=True, kv_num_blocks=None):
+    def __init__(self, args, mesh_device, ccl=None, use_weight_cache=True):
         self.args = args
         self.mesh_device = mesh_device
         self.ccl = ccl if ccl is not None else MuseCCL(mesh_device)
-        self.matmul_cfg = matmul_compute_config(mesh_device)
+        if self.ccl.ring:
+            # Allocate before any prefill: prefill program plans depend on free L1, so creating this buffer at the
+            # first decode step made the next request compile new prefill programs after the decode trace capture.
+            self.ccl.decode_buffer((1, 1, DECODE_B_PAD, args.hidden_size), ttnn.bfloat16)
         self.tp = args.tp
 
         def cache(name, dtype, tag="v1"):
@@ -63,17 +67,34 @@ class MuseGlimmerModel:
 
         self.norm = RMSNorm(mesh_device, args.load_final_norm_weight(), args.rms_norm_eps, add_unit_offset=False)
         lm = pack_lm_head(args.load_lm_head_weight(), args.padded_vocab_size)
-        self.lm_head = as_tt(
+        self.lm_head = MuseLinear(
             lm,
             mesh_device,
+            shard_dim=-1,
+            k=args.hidden_size,
+            n=args.vocab_local,
             dtype=args.lm_head_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=shard_mapper(mesh_device, -1),
-            cache_file_name=cache("lm_head", args.lm_head_dtype),
+            cache_file_name=cache("lm_head", args.lm_head_dtype, "v2ws"),
+            sharded=True,
+            group="attn",
+            readers=3,
+            block=1,
         )
         del lm
         gc.collect()
-        self.kv_caches = [allocate_kv_cache(args, mesh_device, kv_num_blocks) for _ in self.layers]
+        self.kv_caches = [allocate_kv_cache(args, mesh_device, args.is_sliding(i)) for i in range(len(self.layers))]
+        # Sliding layers address their ring caches through this fixed table. Rows past max_batch_size stay zero,
+        # like the padded rows of the decode page table. Allocated here so it exists before any trace capture.
+        pt = torch.zeros(DECODE_B_PAD, args.max_num_blocks_per_user, dtype=torch.int32)
+        pt[: args.max_batch_size] = kv_page_table(args, args.max_batch_size, sliding=True)
+        self.sliding_page_table = ttnn.from_torch(
+            pt,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=replicate_mapper(mesh_device),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
         self.sampling = None
         self._init_device_sampling()
 
@@ -101,7 +122,8 @@ class MuseGlimmerModel:
         a.salt_duplicate_seeds = False
         a.model_config = {
             "SAMPLING_AG_CONFIG": {
-                "allow_force_argmax": True,
+                # Greedy runs the top-k path: a local top-k per device and a small gather, not a gather of the full logits.
+                "allow_force_argmax": False,
                 "num_links": self.ccl.num_links,
                 "topology": ttnn.Topology.Linear,  # ring wraparound (D0->D28) is not routable on a 1x8 submesh under FABRIC_1D
             }
@@ -119,16 +141,19 @@ class MuseGlimmerModel:
     def supports_device_sampling(self) -> bool:
         return self.sampling is not None
 
-    def sample_on_device(self, logits_tt, sampling_params=None):
+    def sample_on_device(self, logits_tt, sampling_params=None, refresh_seeds=True, count_tokens=True):
         """Eager (untraced) on-device sampling of sharded logits -> token tensor (per-device replicated).
 
         sampling_params: SamplingParams; if given, parameters are (re)loaded on the device first
         (do this once per generate(), not every step -- pass None on later steps).
+        refresh_seeds=False is used inside a trace capture.
+        count_tokens=False keeps a discarded sample out of the penalty counts.
         """
         if sampling_params is not None:
             self.sampling.reset_sampling_params(sampling_params)
-        self.sampling.seed_manager.get_new_values()
-        out = self.sampling.sample(logits=logits_tt, enable_trace=False)
+        if refresh_seeds:
+            self.sampling.seed_manager.get_new_values()
+        out = self.sampling.sample(logits=logits_tt, enable_trace=False, count_tokens=count_tokens)
         return out[0] if isinstance(out, tuple) else out
 
     def tokens_to_torch(self, tok_tt, num_rows: int) -> torch.Tensor:
@@ -145,24 +170,37 @@ class MuseGlimmerModel:
             g = self.ccl.all_gather(e, dim=3)
             ttnn.deallocate(e)
             e = g
-        out = self.embed_norm(e)
+        out = self.embed_norm(
+            e, memory_config=decode_memcfg(self.args.hidden_size, self.mesh_device) if m == 32 else None
+        )
         ttnn.deallocate(e)
         return out
 
     def head(self, h):
-        """h [1,1,M,H] -> softcapped logits [1,1,M,vocab_local] (sharded per rank). Does not free h."""
+        """h [1,1,M,H] -> softcapped logits [1,1,M,vocab_local] (DRAM, sharded per rank). Does not free h."""
         a = self.args
-        n = self.norm(h)
-        logits = ttnn.linear(
-            n, self.lm_head, compute_kernel_config=self.matmul_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
-        ttnn.deallocate(n)
-        x = ttnn.mul(logits, a.output_multiplier / a.final_logit_softcapping)
-        ttnn.deallocate(logits)
-        t = ttnn.tanh(x, fast_and_approximate_mode=False)
-        ttnn.deallocate(x)
-        out = ttnn.mul(t, a.final_logit_softcapping)
-        ttnn.deallocate(t)
+        rows = int(h.shape[2])
+        outs = []
+        for r in range(0, rows, 32):
+            hs = h if rows <= 32 else ttnn.slice(h, [0, 0, r, 0], [1, 1, min(r + 32, rows), int(h.shape[3])])
+            n = self.norm(hs, memory_config=decode_memcfg(a.hidden_size, self.mesh_device))
+            if hs is not h:
+                ttnn.deallocate(hs)
+            lg = self.lm_head.decode(n)
+            ttnn.deallocate(n)
+            lg_d = ttnn.sharded_to_interleaved(lg, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(lg)
+            x = ttnn.mul(lg_d, a.output_multiplier / a.final_logit_softcapping)
+            ttnn.deallocate(lg_d)
+            t = ttnn.tanh(x, fast_and_approximate_mode=False)
+            ttnn.deallocate(x)
+            outs.append(ttnn.mul(t, a.final_logit_softcapping))
+            ttnn.deallocate(t)
+        if len(outs) == 1:
+            return outs[0]
+        out = ttnn.concat(outs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for o in outs:
+            ttnn.deallocate(o)
         return out
 
     def logits_to_torch(self, logits_tt, num_rows: int) -> torch.Tensor:
@@ -194,19 +232,45 @@ class MuseGlimmerModel:
         ttnn.deallocate(tokens_tt)
         rope = self.rope.prefill(0, s)
         for i, layer in enumerate(self.layers):
-            nx = layer.forward_prefill(x, rope if a.uses_rope(i) else None, self.kv_caches[i], page_table_tt, user_id)
+            pt = self.sliding_page_table if a.is_sliding(i) and page_table_tt is not None else page_table_tt
+            nx = layer.forward_prefill(x, rope if a.uses_rope(i) else None, self.kv_caches[i], pt, user_id)
             ttnn.deallocate(x)
             x = nx
         return x, s_real, s
 
+    def _last_row(self, x, s_real):
+        """Row s_real-1 of x [1,1,S,H] as row 0 of [1,1,32,H] (other rows 0). The slice start depends only on S and a
+        one-hot matmul picks the row, so a new prompt length in a known bucket compiles no new program."""
+        s = x.shape[-2]
+        b = min(s, 256)  # s is 128 or a multiple of 256, so row s_real-1 is in the last b rows
+        blk = x if b == s else ttnn.slice(x, (0, 0, s - b, 0), (1, 1, s, x.shape[-1]))
+        sel = torch.zeros(1, 1, 32, b, dtype=torch.bfloat16)
+        sel[0, 0, 0, s_real - 1 - (s - b)] = 1
+        sel_tt = ttnn.from_torch(
+            sel,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            mesh_mapper=replicate_mapper(self.mesh_device),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        # HiFi4 + fp32 accumulation: 1.0 * x is exact.
+        out = ttnn.matmul(
+            sel_tt,
+            blk,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=norm_compute_config(self.mesh_device),
+        )
+        ttnn.deallocate(sel_tt)
+        if blk is not x:
+            ttnn.deallocate(blk)
+        return out
+
     def prefill_forward_logits_tt(self, tokens: torch.Tensor, user_id: int, page_table_tt):
         """Prefill one prompt -> softcapped logits [1,1,32,vocab_local] on device; the last real token is row 0."""
-        a = self.args
         x, s_real, _ = self._prefill_hidden(tokens, user_id, page_table_tt)
-        last = ttnn.slice(x, (0, 0, s_real - 1, 0), (1, 1, s_real, a.hidden_size))
+        hs = self._last_row(x, s_real)
         ttnn.deallocate(x)
-        hs = ttnn.pad(last, [(0, 0), (0, 0), (0, 31), (0, 0)], 0.0)
-        ttnn.deallocate(last)
         logits = self.head(hs)
         ttnn.deallocate(hs)
         return logits
@@ -216,12 +280,11 @@ class MuseGlimmerModel:
         x, s_real, s = self._prefill_hidden(tokens, user_id, page_table_tt)
 
         if not return_all_logits:
-            t0 = ((s_real - 1) // 32) * 32  # 32-row tile containing the last real row
-            hs = ttnn.slice(x, (0, 0, t0, 0), (1, 1, t0 + 32, a.hidden_size))
+            hs = self._last_row(x, s_real)
             ttnn.deallocate(x)
             logits = self.head(hs)
             ttnn.deallocate(hs)
-            out = self.logits_to_torch(logits, 32)[(s_real - 1) - t0]
+            out = self.logits_to_torch(logits, 32)[0]
             ttnn.deallocate(logits)
             return out
 
@@ -287,13 +350,34 @@ class MuseGlimmerModel:
         """One decode step for the padded batch; returns sharded logits [1,1,32,vocab_local] (no host reads)."""
         a = self.args
         x = self.embed(tokens_tt)
-        rope = self.rope.decode(rope_idx_tt)
+        rope = self.rope.decode(rope_idx_tt, memory_config=heads_memcfg(DECODE_B_PAD, self.args.head_dim))
+        sb = min(a.max_batch_size, DECODE_B_PAD)
+        tables = {False: page_table_tt, True: self.sliding_page_table}  # keyed by is_sliding
+        sdpa_inputs = {}
+        if sb < DECODE_B_PAD:  # SDPA decode splits its cores over all user slots
+            pos = ttnn.slice(current_pos_tt, [0], [sb])
+            sdpa_inputs = {s: (pos, ttnn.slice(t, [0, 0], [sb, t.shape[1]])) for s, t in tables.items()}
         for i, layer in enumerate(self.layers):
+            s = a.is_sliding(i)
             nx = layer.forward_decode(
-                x, current_pos_tt, rope if a.uses_rope(i) else None, self.kv_caches[i], page_table_tt
+                x, current_pos_tt, rope if a.uses_rope(i) else None, self.kv_caches[i], tables[s], sdpa_inputs.get(s)
             )
             ttnn.deallocate(x)
             x = nx
+        if sdpa_inputs:
+            ttnn.deallocate(pos)
+            for _, t in sdpa_inputs.values():
+                ttnn.deallocate(t)
         logits = self.head(x)
         ttnn.deallocate(x)
         return logits
+
+    def decode_and_sample(self, tokens_tt, current_pos_tt, rope_idx_tt, page_table_tt, count_tokens=True):
+        """One step on device: decode, sample, write the token into tokens_tt, advance positions. Traceable (no host I/O)."""
+        logits = self.decode_forward(tokens_tt, current_pos_tt, rope_idx_tt, page_table_tt)
+        tok = self.sample_on_device(logits, refresh_seeds=False, count_tokens=count_tokens)
+        ttnn.deallocate(logits)
+        ttnn.copy(ttnn.reshape(tok, tokens_tt.shape), tokens_tt)
+        ttnn.plus_one(current_pos_tt, skip_negative_entries=True)
+        ttnn.plus_one(rope_idx_tt)
+        return tok

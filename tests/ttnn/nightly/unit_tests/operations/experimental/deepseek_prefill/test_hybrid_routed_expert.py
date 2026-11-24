@@ -48,9 +48,16 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test
     _SITU_BETA_UP,
     _TORCH_ACTIVATION,
     _isl_params,
+    expert_golden,
+    expert_weights,
 )
 
-pytestmark = pytest.mark.uncollect_if(pred=ci_pruning.no_production_counterpart)
+pytestmark = [
+    pytest.mark.uncollect_if(pred=ci_pruning.no_production_counterpart),
+    # Every test here takes the function-scoped `device` fixture without parametrizing
+    # device_params, so the device is opened once per module rather than once per test.
+    pytest.mark.use_module_device,
+]
 
 # Which half serves an expert. Fixed rather than read from each model's own
 # ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD, because the models that carry one all carry 320 and the
@@ -116,27 +123,13 @@ def run_hybrid_routed_expert(
     if torch_activation is None:
         raise ValueError(f"no torch reference for {activation}; supported: {list(_TORCH_ACTIVATION)}")
 
-    torch.manual_seed(42)
-    weights = {
-        "gate_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * weight_scale,
-        "up_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * weight_scale,
-        "down_proj": torch.randn(emb_dim, hidden_dim, dtype=torch.float32) * weight_scale,
-    }
+    weights = expert_weights(hidden_dim, emb_dim, weight_scale)
+    torch_active, torch_output_active = expert_golden(hidden_dim, emb_dim, weight_scale, active_tokens, activation)
 
-    torch_active = torch.randn(active_tokens, emb_dim, dtype=torch.float32)
     torch_input = torch.zeros(allocated_tokens, emb_dim, dtype=torch.float32)
     torch_input[:active_tokens] = torch_active
 
-    torch_expert = TorchExpert(
-        emb_dim,
-        hidden_dim,
-        weights,
-        activation=torch_activation,
-        situ_beta=_SITU_BETA_GATE,
-        situ_linear_beta=_SITU_BETA_UP,
-    )
     with torch.no_grad():
-        torch_output_active = torch_expert(torch_active)
         if min_cap_frac is not None:
             # Same guard as the reference: without it a change to weight_scale, the dims or the
             # seed would quietly drop a saturation case back into the near-linear middle of both
@@ -197,6 +190,7 @@ def run_hybrid_routed_expert(
         hybrid_token_threshold=threshold,
         compute_kernel_config=tt_expert.compute_kernel_config,
         activation=activation,
+        weight_address_table=tt_expert.weight_address_table,
     )
     tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))
     tt_output_active = tt_output_torch[:active_tokens]
@@ -211,8 +205,8 @@ def run_hybrid_routed_expert(
 
 
 @pytest.mark.uncollect_if(pred=ci_pruning.tiled_x_input)
-@pytest.mark.parametrize("allocated_tokens, active_tokens, emb_dim, hidden_dim", _isl_params(_ISL_FUNCTIONAL_SWEEP))
 @pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
+@pytest.mark.parametrize("allocated_tokens, active_tokens, emb_dim, hidden_dim", _isl_params(_ISL_FUNCTIONAL_SWEEP))
 @pytest.mark.skipif(not is_blackhole(), reason="the routed expert is Blackhole-only")
 def test_hybrid_routed_expert_functional(
     device,
@@ -233,12 +227,12 @@ def test_hybrid_routed_expert_functional(
 
 
 @pytest.mark.uncollect_if(pred=ci_pruning.tiled_x_input)
+@pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
+@pytest.mark.parametrize("weights_dram_sharded", [False, True], ids=["w_interleaved", "w_ndshard"])
 @pytest.mark.parametrize(
     "allocated_tokens, active_tokens, emb_dim, hidden_dim",
     _isl_params(_ISL_EXHAUSTIVE_SWEEP, only_models=_ISL_EXHAUSTIVE_MODELS),
 )
-@pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
-@pytest.mark.parametrize("weights_dram_sharded", [False, True], ids=["w_interleaved", "w_ndshard"])
 @pytest.mark.skipif(not is_blackhole(), reason="device-side count-aware sparsity is Blackhole-only")
 def test_hybrid_routed_expert_isl_sweep(
     device,
@@ -261,8 +255,8 @@ def test_hybrid_routed_expert_isl_sweep(
 
 
 @pytest.mark.uncollect_if(pred=ci_pruning.tiled_x_input)
-@pytest.mark.parametrize("num_tokens", _K3_TOKEN_SWEEP, ids=[f"t{t}" for t in _K3_TOKEN_SWEEP])
 @pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
+@pytest.mark.parametrize("num_tokens", _K3_TOKEN_SWEEP, ids=[f"t{t}" for t in _K3_TOKEN_SWEEP])
 @pytest.mark.skipif(not is_blackhole(), reason="SiTU-GLU routed expert is Blackhole-only")
 def test_hybrid_routed_expert_k3_sweep(device, num_tokens: int, x_row_major: bool):
     """Fully-packed buffer at each token count, as in the reference's K3 sweep."""
@@ -394,6 +388,7 @@ def test_hybrid_routed_expert_multi_expert(device, x_row_major: bool):
             hybrid_token_threshold=_THRESHOLD,
             compute_kernel_config=tt_expert.compute_kernel_config,
             activation=ttnn.RoutedExpertActivation.Silu,
+            weight_address_table=tt_expert.weight_address_table,
         )
         got = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))
 
@@ -420,12 +415,12 @@ _MODEL_EXPERTS_PER_CHIP = 32
 def test_hybrid_routed_expert_config_fits_default_ring(device):
     """The union program's kernel config has to fit the ring a device gets by default.
 
-    Sized at a model's expert count, not the one expert every case above uses, because the two are
-    not the same program: the reader carries three per-expert weight addresses in its runtime args
-    and the writer a fourth, so the config grows about 2 KB between one expert and a real
-    32-expert layer, against a ring that does not move. It clears by a few hundred bytes, so any
-    growth in either half's kernel text breaks it -- and without this that break lands in a
-    32-device model test rather than here.
+    Sized at a model's expert count, not the one expert every case above uses, and driven as the
+    module drives it -- weight bases from its weight_address_table -- because the two are not the
+    same program: without the table every expert adds nine runtime-arg words per core, about 1.1 KB
+    at a real 32-expert layer, against a ring that does not move. With it the program clears by a
+    few hundred bytes, so any growth in either half's kernel text breaks it -- and without this that
+    break lands in a 32-device model test rather than here.
 
     One weight tensor is shared by all 32 experts on purpose: this grades the program's size, not
     its output, and 32 distinct copies of the real shape cost gigabytes of host memory.
@@ -477,6 +472,7 @@ def test_hybrid_routed_expert_config_fits_default_ring(device):
             hybrid_token_threshold=_THRESHOLD,
             compute_kernel_config=tt_expert.compute_kernel_config,
             activation=ttnn.RoutedExpertActivation.Silu,
+            weight_address_table=tt_expert.weight_address_table,
         )
     except RuntimeError as exc:
         if "kernel config buffer" not in str(exc):

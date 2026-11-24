@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt_stl/span.hpp>
-#include <tt_stl/indestructible.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -112,8 +110,15 @@ DistributedHostBuffer DistributedHostBuffer::transform(
     const TransformFn& fn, ProcessShardExecutionPolicy policy) const {
     const std::vector<size_t> indices_to_process = get_populated_shard_indices();
     const auto& shards = shards_.values();
-    std::vector<distributed::MaybeRemote<Shard>> transformed_shards(
-        shards.size(), distributed::MaybeRemote<Shard>::remote());
+    // Every entry keeps its locality: a local coordinate that holds no shard stays local and unpopulated, a remote
+    // one stays remote. The populated shards are overwritten with their transformed buffers below.
+    std::vector<distributed::MaybeRemote<Shard>> transformed_shards;
+    transformed_shards.reserve(shards.size());
+    for (const auto& shard : shards) {
+        transformed_shards.push_back(
+            shard.is_local() ? distributed::MaybeRemote<Shard>::local(Shard{.is_populated = false})
+                             : distributed::MaybeRemote<Shard>::remote());
+    }
 
     // Group replicated shard indices together
     std::unordered_map<const std::byte*, std::vector<size_t>> shard_group_indices;

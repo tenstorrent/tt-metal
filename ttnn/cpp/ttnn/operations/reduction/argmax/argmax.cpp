@@ -45,6 +45,20 @@ bool should_row_major_h_via_tile(
     return true;
 }
 
+// Returns true if a ROW_MAJOR reduction over dim == rank-2 can be turned into a non-HW reduction by
+// splitting the last dim W into (W/32, 32). The reduced dim then sits before the two innermost dims, so the
+// multi-core NC path applies instead of the single-core TILE path. The split is a pure view of contiguous
+// ROW_MAJOR data, and per-element argmax indices along the reduced dim are unchanged.
+bool should_split_w_for_nc(
+    const Tensor& input, const std::optional<int>& dim, const MemoryConfig& output_memory_config) {
+    if (!should_row_major_h_via_tile(input, dim, output_memory_config)) {
+        return false;
+    }
+    const auto& shape = input.logical_shape();
+    const uint32_t width = shape[-1];
+    return width != 0 && width % 32 == 0;
+}
+
 // Returns true if we should dispatch the reduction to the register-based NC
 // path (compute-kernel + DST accumulation). The NC path supports reducing
 // along any non-HW dim (i.e., dim < rank - 2) and assumes BFLOAT16 / FLOAT32
@@ -249,6 +263,32 @@ Tensor argmax(
         Tensor nc_result = run_argmax_nc(input_tensor, dim.value(), keepdim, output_memory_config, sub_core_grids);
         if (optional_output_tensor.has_value()) {
             // nc_result is already on device; copy_to_device is host → device only.
+            ttnn::copy(nc_result, optional_output_tensor.value());
+            return optional_output_tensor.value();
+        }
+        return nc_result;
+    }
+
+    // ROW_MAJOR reduction over dim == rank-2 with W % 32 == 0: view (..., H, W) as (..., H, W/32, 32) so the
+    // reduced dim is a non-HW dim and the multi-core NC path can be used (the TILE path below is single-core).
+    if (should_split_w_for_nc(input_tensor, dim, output_memory_config)) {
+        const int32_t r = static_cast<int32_t>(rank);
+        const int32_t reduce_dim = dim.value() < 0 ? dim.value() + r : dim.value();
+
+        ttsl::SmallVector<uint32_t> split_shape;
+        split_shape.reserve(rank + 1);
+        for (size_t i = 0; i < rank; ++i) {
+            split_shape.push_back(input_shape[i]);
+        }
+        split_shape.back() /= 32;
+        split_shape.push_back(32);
+
+        const Tensor split_input = ttnn::reshape(input_tensor, ttnn::Shape(split_shape));
+        // keepdim=true here; the final reshape below applies the user-visible keepdim/shape.
+        Tensor nc_result =
+            run_argmax_nc(split_input, reduce_dim, /*keepdim=*/true, output_memory_config, sub_core_grids);
+        nc_result = ttnn::reshape(nc_result, ttnn::Shape(ttnn::prim::get_output_shape(input_tensor, dim, keepdim)));
+        if (optional_output_tensor.has_value()) {
             ttnn::copy(nc_result, optional_output_tensor.value());
             return optional_output_tensor.value();
         }

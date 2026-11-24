@@ -14,10 +14,10 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/work_split.hpp>
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim {
 
@@ -52,11 +52,25 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreNDShardInputProgramFac
     tt::DataFormat output_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_data_format);
 
-    TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
 
     uint32_t tensor_width = a.padded_shape()[-1];
     uint32_t output_tensor_width = output.padded_shape()[-1];
-    uint32_t output_tensor_height = output.physical_volume() / output_tensor_width;
+    // Rows per 2D plane (all dims but the last two folded into the plane index). The output can have fewer rows
+    // per plane than the padded input (e.g. a 2D-sharded output is not padded to the tile height).
+    uint32_t input_rows_per_plane = a.padded_shape()[-2];
+    uint32_t output_rows_per_plane = output.padded_shape()[-2];
+    // The writer maps padded input rows to output rows plane by plane, which needs the same plane count and an
+    // output plane no taller than the input plane (otherwise the extra output rows would never be written).
+    TT_FATAL(
+        output.physical_volume() / output_tensor_width / output_rows_per_plane ==
+            a.physical_volume() / tensor_width / input_rows_per_plane,
+        "Untilize ND-sharded input requires the output to have the same number of 2D planes as the input");
+    TT_FATAL(
+        output_rows_per_plane <= input_rows_per_plane,
+        "Untilize ND-sharded input requires output rows per plane ({}) <= padded input rows per plane ({})",
+        output_rows_per_plane,
+        input_rows_per_plane);
     const auto& tile_shape = a.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
@@ -67,7 +81,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreNDShardInputProgramFac
     uint32_t input_shard_height = nd_shard_spec.shard_shape[-2];
     uint32_t input_shard_width = nd_shard_spec.shard_shape[-1];
 
-    const auto distribution_spec = a.buffer()->buffer_distribution_spec().value();
+    const auto distribution_spec =
+        a.mesh_buffer().device_local_config().sharding_args.buffer_distribution_spec().value();
 
     uint32_t num_shards = distribution_spec.num_shards();
     const auto page_mapping = distribution_spec.compute_page_mapping();
@@ -160,13 +175,14 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreNDShardInputProgramFac
              {"num_tiles_per_row", num_tiles_per_input_row},
              {"tile_width", tile_width},
              {"output_tensor_width", output_tensor_width},
-             {"output_tensor_height", output_tensor_height}},
+             {"input_rows_per_plane", input_rows_per_plane},
+             {"output_rows_per_plane", output_rows_per_plane}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_shard_id"}},
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
-    if (fp32_dest_acc_en) {
+    if (operations::data_movement::needs_fp32_unpack_to_dest(fp32_dest_acc_en, a.dtype())) {
         compute_cfg.unpack_modes.insert({SRC0, UnpackMode::UnpackToDest});
     }
     KernelSpec::CompilerOptions::Defines compute_defines;
@@ -199,26 +215,45 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreNDShardInputProgramFac
     KernelRunArgs writer_run{.kernel = WRITER};
     KernelRunArgs compute_run{.kernel = COMPUTE};
 
+    // Core i of ordered_cores_with_data (a shard core for L1, the optimal worker of the bank for DRAM) runs the
+    // reader/writer over shards i, i + num_cores, ... (see the kernels), so the compute kernel must untilize
+    // exactly the non-padding blocks of those shards. Count them per shard from the page mapping instead of
+    // looking up the launch core among page_mapping.all_cores: for DRAM those are bank coordinates, not workers.
     const auto& mapped_cores = page_mapping.all_cores;
+    const uint32_t num_mapped_cores = mapped_cores.size();
+    const uint32_t pages_per_shard = num_tiles_per_input_block * num_blocks_per_shard;
+    const bool contiguous_placement =
+        distribution_spec.shard_distribution_strategy() == ShardDistributionStrategy::CONTIGUOUS_1D;
+    // NOTE: the shard -> (core, slot) placement below mirrors iterate_over_shards() in
+    // tt_metal/impl/buffers/buffer_distribution_spec.cpp. Keep the two in sync: if they diverge, the compute kernel
+    // is given the wrong block count and the writer hangs waiting for blocks that are never produced.
+    auto count_blocks_in_shard = [&](uint32_t shard_id) {
+        uint32_t core_idx = 0;
+        uint32_t slot = 0;
+        if (contiguous_placement) {
+            const uint32_t shards_per_core = tt::div_up(num_shards, num_mapped_cores);
+            core_idx = shard_id / shards_per_core;
+            slot = shard_id % shards_per_core;
+        } else {
+            core_idx = shard_id % num_mapped_cores;
+            slot = shard_id / num_mapped_cores;
+        }
+        const auto& host_page_indices = page_mapping.core_host_page_indices[core_idx];
+        uint32_t count = 0;
+        for (uint32_t page = slot * pages_per_shard; page < (slot + 1) * pages_per_shard;
+             page += num_tiles_per_input_block) {
+            if (host_page_indices[page] != UncompressedBufferPageMapping::PADDING) {
+                count++;
+            }
+        }
+        return count;
+    };
+
     uint32_t start_shard_id = 0;
     for (const auto& core : ordered_cores_with_data) {
-        auto core_it = std::find(mapped_cores.begin(), mapped_cores.end(), core);
         uint32_t num_input_blocks_to_process = 0;
-
-        if (core_it != mapped_cores.end()) {
-            const size_t core_idx = std::distance(mapped_cores.begin(), core_it);
-            const auto& host_page_indices = page_mapping.core_host_page_indices[core_idx];
-
-            uint32_t page_offset = 0;
-            const uint32_t total_pages = host_page_indices.size();
-            while (page_offset < total_pages) {
-                if (host_page_indices[page_offset] != UncompressedBufferPageMapping::PADDING) {
-                    num_input_blocks_to_process++;
-                } else if (page_offset == 0) {
-                    break;
-                }
-                page_offset += num_tiles_per_input_block;
-            }
+        for (uint32_t shard_id = start_shard_id; shard_id < num_shards; shard_id += num_compute_cores) {
+            num_input_blocks_to_process += count_blocks_in_shard(shard_id);
         }
 
         AddRuntimeArgsForNode(reader_run.runtime_arg_values, core, {{"start_shard_id", start_shard_id}});

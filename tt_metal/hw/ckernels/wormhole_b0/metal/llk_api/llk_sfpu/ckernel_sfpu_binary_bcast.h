@@ -27,19 +27,19 @@ namespace sfpu {
 //       Face 2 (tile rows 16-31 | tile cols  0-15)
 //       Face 3 (tile rows 16-31 | tile cols 16-31)
 //
-//   One SFPLOAD/SFPSTORE moves 4 dest rows x 8 cols (32 lanes). Dest addresses
-//   are in units of "4-row x 8-col" slots:
-//       addr +0 -> rows 0-3,  cols  0-7 of the face
-//       addr +2 -> rows 0-3,  cols  8-15
-//       addr +4 -> rows 4-7,  cols  0-7
+//   One SFPLOAD/SFPSTORE moves 4 dest rows x the 8 columns of one parity
+//   (32 lanes). Dest addresses step through those slots:
+//       addr +0 -> rows 0-3,  even cols (0, 2, ..., 14) of the face
+//       addr +2 -> rows 0-3,  odd cols  (1, 3, ..., 15)
+//       addr +4 -> rows 4-7,  even cols
 //       ...
-//       addr +14 -> rows 12-15, cols 8-15
+//       addr +14 -> rows 12-15, odd cols
 //       addr +16 -> start of next face
 //
 // SFPU lane numbering in a register (32 lanes = 4 sub-rows x 8 columns):
 //       lane[i * 8 + c]  i in {0..3}, c in {0..7}
-//   After SFPLOAD of rows r..r+3 cols c0..c0+7:
-//       LReg[i * 8 + c] = data[r + i][c0 + c]
+//   After SFPLOAD of rows r..r+3, column parity g (addr +2 g):
+//       LReg[i * 8 + c] = data[r + i][2 * c + g]
 //
 // Broadcast model:
 //   - BCAST_COL: column 0 of the bcast tile is replicated across all 32 tile
@@ -49,12 +49,15 @@ namespace sfpu {
 //
 // Implementation strategy (BCAST_COL):
 //   For each 4-row band of the source/dest tiles:
-//     (1) Load col 0 (8 values, one per SFPU column) into LREG_DATA.
-//         After load, only "SFPU column 0" in each 8-lane sub-vector carries
-//         the useful value (the data broadcast target); the other 7 SFPU
-//         columns hold d[row][cols 1..7] which we must discard.
-//     (2) Zero out SFPU cols 1..7 in each 8-lane group by multiplying with a
-//         precomputed lane mask LREG_MASK (1.0 in col 0, 0.0 in cols 1..7).
+//     (1) Load the band's even-column slot of the bcast tile into LREG_BCAST.
+//         Only "SFPU column 0" in each 8-lane sub-vector carries the useful
+//         value, tile column 0 (the data broadcast target); the other 7 SFPU
+//         columns hold d[row][cols 2, 4, ..., 14] which we must discard.
+//     (2) Zero out SFPU cols 1..7 in each 8-lane group with one SFPAND against
+//         the precomputed lane mask LREG_MASK (all ones in col 0, zero in cols
+//         1..7). A bitwise AND keeps col 0 exactly and cannot turn an Inf or NaN
+//         sitting in a discarded column into NaN, which a multiply by a 0/1 mask
+//         would, and step (3) would then spread it across the whole row.
 //     (3) Broadcast col-0 value to all 8 SFPU columns via 3 stages of
 //         "rotate-by-k + add" using SFPSHFT2_MOD1_SUBVEC_SHFLROR1:
 //             stage 1: ROR by 1, ADD  -> col {0,1} filled
@@ -105,14 +108,14 @@ constexpr std::uint32_t FACE3_BASE = 48;
 // Within a face, each "row band" (4 dest rows) starts every 4 addr units.
 constexpr std::uint32_t ROW_BAND_STRIDE = 4;
 constexpr std::uint32_t NUM_ROW_BANDS_PER_FACE_HALF = 4;  // 16 rows / 4 rows-per-band
-constexpr std::uint32_t ODD_COLS_OFFSET = 2;              // addr +2 selects cols 8..15 of a face
+constexpr std::uint32_t ODD_COLS_OFFSET = 2;              // addr +2 selects the odd cols (1, 3, ..., 15)
 
 // ============================================================================
 // LReg assignments used across the kernel
 // ============================================================================
 //
 // BCAST_COL path:
-//   LREG_MASK  (LREG6)  - one-time lane mask: 1.0 in SFPU col 0, 0.0 elsewhere.
+//   LREG_MASK  (LREG6)  - one-time lane mask: all ones in SFPU col 0, zero elsewhere.
 //                         Built once in _sfpu_binary_bcast_init_().
 //   LREG_BCAST (LREG0)  - broadcast value (after load+mask+rotate-add).
 //   LREG_TMP   (LREG2)  - scratch for rotate-and-add inside the broadcast
@@ -154,32 +157,37 @@ constexpr std::uint32_t SFPSHFT_MOD1_ARG_IMM = 1;
 
 // Replay-buffer slots.
 constexpr std::uint32_t REPLAY_SLOT_BROADCAST = 0;  // col-0 -> all-cols broadcast
-constexpr std::uint32_t REPLAY_LEN_BROADCAST = 12;  // see _record_broadcast_replay_
+constexpr std::uint32_t REPLAY_LEN_BROADCAST = 11;  // see _record_broadcast_replay_
 
 // BCAST_ROW col-group offsets within a face pair (face N + face N+1), in
-// dest addr units. A "col group" is one 4-row x 8-col SFPLOAD/SFPSTORE slot.
-// For the upper tile half, faces are 0 (left, cols 0-15) and 1 (right, cols
-// 16-31). For each face, +0 selects cols 0-7 and +2 selects cols 8-15.
+// dest addr units. A "col group" is one SFPLOAD/SFPSTORE slot: 4 rows x the
+// 8 columns of one parity. For the upper tile half, faces are 0 (left, cols
+// 0-15) and 1 (right, cols 16-31). For each face, +0 selects the even cols
+// and +2 the odd cols.
 constexpr std::uint32_t COL_GROUP_OFFSETS[4] = {
-    0,                             // face N   cols 0-7
-    ODD_COLS_OFFSET,               // face N   cols 8-15
-    FACE1_BASE,                    // face N+1 cols 0-7
-    FACE1_BASE + ODD_COLS_OFFSET,  // face N+1 cols 8-15
+    0,                             // face N   even cols
+    ODD_COLS_OFFSET,               // face N   odd cols
+    FACE1_BASE,                    // face N+1 even cols
+    FACE1_BASE + ODD_COLS_OFFSET,  // face N+1 odd cols
 };
 
 // ============================================================================
 // Helpers
 // ============================================================================
 
-// Build LREG_MASK = {1.0, 0, 0, 0, 0, 0, 0, 0} repeated across all 4 sub-rows
+// Build LREG_MASK = {~0, 0, 0, 0, 0, 0, 0, 0} repeated across all 4 sub-rows
 // of the register. LReg[15] contains 2*lane_id, so left-shifting it by 28
-// leaves zero only for SFPU col 0 in each 8-lane sub-vector.
+// leaves zero only for SFPU col 0 in each 8-lane sub-vector; those lanes get
+// all ones by predicated SFPLOADI. One SFPAND against it then zeroes cols 1..7
+// of a register bitwise, so an Inf or NaN in a discarded column stays out of
+// col 0 (a multiply by a 0/1 mask would make it NaN).
 inline void _build_lane_mask_col0_() {
     TTI_SFPMOV(0, p_sfpu::LTILEID, LREG_TMP, 0);
     TTI_SFPSHFT(28, 0, LREG_TMP, SFPSHFT_MOD1_ARG_IMM);
     TTI_SFPMOV(0, p_sfpu::LCONST_0, LREG_MASK, 0);
     TTI_SFPSETCC(0, LREG_TMP, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
-    TTI_SFPLOADI(LREG_MASK, sfpi::SFPLOADI_MOD0_UPPER, 0x3F80);
+    TTI_SFPLOADI(LREG_MASK, sfpi::SFPLOADI_MOD0_LOWER, 0xFFFF);
+    TTI_SFPLOADI(LREG_MASK, sfpi::SFPLOADI_MOD0_UPPER, 0xFFFF);
     TTI_SFPENCC(0, 0, 0, 0);
 }
 
@@ -190,25 +198,26 @@ inline void _build_lane_mask_col0_() {
 // combined, and because stage 3 interleaves per-slot SFPLOADs into its
 // SFPSHFT2 latency slots (data addresses are per-call so can't be recorded).
 //
-// Sequence recorded (12 SFPU ops):
-//    1  SFPMUL    LREG_BCAST *= LREG_MASK   (zero SFPU cols 1..7 in-place)
-//    2  SFPNOP
-//    3  SFPSHFT2  LREG_TMP = ROR1(LREG_BCAST)
-//    4  SFPNOP
-//    5  SFPADD    LREG_BCAST += LREG_TMP
-//    6  SFPNOP
-//    7  SFPSHFT2  LREG_TMP = ROR1(LREG_BCAST)
-//    8  SFPNOP
-//    9  SFPSHFT2  LREG_TMP = ROR1(LREG_TMP)
-//   10  SFPNOP
-//   11  SFPADD    LREG_BCAST += LREG_TMP
-//   12  SFPNOP
+// Sequence recorded (11 SFPU ops):
+//    1  SFPAND    LREG_BCAST &= LREG_MASK   (zero SFPU cols 1..7 bitwise)
+//    2  SFPSHFT2  LREG_TMP = ROR1(LREG_BCAST)
+//    3  SFPNOP
+//    4  SFPADD    LREG_BCAST += LREG_TMP
+//    5  SFPNOP
+//    6  SFPSHFT2  LREG_TMP = ROR1(LREG_BCAST)
+//    7  SFPNOP
+//    8  SFPSHFT2  LREG_TMP = ROR1(LREG_TMP)
+//    9  SFPNOP
+//   10  SFPADD    LREG_BCAST += LREG_TMP
+//   11  SFPNOP
+// No SFPNOP after step 1: SFPAND is a single-cycle op whose result the next
+// instruction reads directly (only the SFPMAD-class ops need the slot).
 inline void _record_broadcast_replay_() {
     lltt::record(REPLAY_SLOT_BROADCAST, REPLAY_LEN_BROADCAST);
 
-    // (1) Mask: zero out SFPU cols 1..7.
-    TTI_SFPMUL(LREG_BCAST, LREG_MASK, p_sfpu::LCONST_0, LREG_BCAST, 0);
-    TTI_SFPNOP;
+    // (1) Mask: zero out SFPU cols 1..7 bitwise, so an Inf or NaN in a
+    //     discarded column cannot reach col 0.
+    TTI_SFPAND(0, LREG_MASK, LREG_BCAST, 0);
 
     // Stage 1: ROR by 1, add.
     TTI_SFPSHFT2(0, LREG_BCAST, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
@@ -278,7 +287,7 @@ inline void _broadcast_stage3_preserve_data_() {
 // For one 4-row band of the tile (identified by the source/dest addresses
 // pointing at col 0 of that band):
 //   1. Load col-0 values (SFPU col 0 of each 8-lane group carries the useful
-//      data; cols 1..7 are noise from adjacent tile cols).
+//      data; SFPU cols 1..7 are noise from tile cols 2, 4, ..., 14).
 //   2. Mask + broadcast stages 1+2 from the replay buffer, then stage 3
 //      (ROR4 + ADD) inline with the 4 per-slot data SFPLOADs interleaved
 //      into stage 3's RAW-latency slots (saves 4 inner NOPs per row band).
@@ -297,14 +306,14 @@ inline void _process_col_bcast_row_band_(
 
     // Slot addresses within this row band (tile-local: face-base + in-face
     // row-band offset + even/odd col-group).
-    const std::uint32_t slot0 = left_face_addr;                     // left face, cols 0-7
-    const std::uint32_t slot1 = left_face_addr + ODD_COLS_OFFSET;   // left face, cols 8-15
-    const std::uint32_t slot2 = right_face_addr;                    // right face, cols 0-7
-    const std::uint32_t slot3 = right_face_addr + ODD_COLS_OFFSET;  // right face, cols 8-15
+    const std::uint32_t slot0 = left_face_addr;                     // left face, even cols
+    const std::uint32_t slot1 = left_face_addr + ODD_COLS_OFFSET;   // left face, odd cols
+    const std::uint32_t slot2 = right_face_addr;                    // right face, even cols
+    const std::uint32_t slot3 = right_face_addr + ODD_COLS_OFFSET;  // right face, odd cols
 
-    // (1) Load col 0 values: 4 dest rows x 8 SFPU cols. Only SFPU col 0 in
-    //     each 8-lane group holds the column-0 values we want; cols 1..7
-    //     hold data at tile-cols 1..7 (we'll zero them out with the mask).
+    // (1) Load col 0 values: 4 dest rows x 8 SFPU cols (the even tile cols).
+    //     Only SFPU col 0 in each 8-lane group holds the column-0 values we
+    //     want; SFPU cols 1..7 hold tile cols 2, 4, ..., 14 (zeroed by the mask).
     TT_SFPLOAD(LREG_BCAST, IM, ADDR_MOD_3, bcast_col0_addr);
 
     // (2) Broadcast: replay records mask+ROR1+ROR2 (stage 1+2). Stage 3
@@ -354,6 +363,27 @@ inline void _process_col_bcast_row_band_(
     TT_SFPSTORE(LREG_DATA3, IM, ADDR_MOD_3, out_tile_offset + slot3);
 }
 
+// One half of a tile (the face pair {left, right}): its four row bands, each combined with column 0 of the
+// bcast tile's band at the same rows (the bcast column of row band b sits at the left face base + b * stride).
+template <BinaryOp BINOP>
+inline void _calculate_sfpu_binary_bcast_col_half_tile_(
+    std::uint32_t left_face_base,
+    std::uint32_t right_face_base,
+    std::uint32_t data_base,
+    std::uint32_t bcast_base,
+    std::uint32_t out_base) {
+    for (std::uint32_t band = 0; band < NUM_ROW_BANDS_PER_FACE_HALF; band++) {
+        const std::uint32_t band_off = band * ROW_BAND_STRIDE;
+
+        _process_col_bcast_row_band_<BINOP>(
+            /* bcast_col0_addr  */ bcast_base + left_face_base + band_off,
+            /* left_face_addr   */ left_face_base + band_off,
+            /* right_face_addr  */ right_face_base + band_off,
+            /* data_tile_offset */ data_base,
+            /* out_tile_offset  */ out_base);
+    }
+}
+
 // Top-level BCAST_COL driver for a single 32x32 tile.
 template <BinaryOp BINOP>
 inline void _calculate_sfpu_binary_bcast_col_full_tile_(
@@ -363,28 +393,45 @@ inline void _calculate_sfpu_binary_bcast_col_full_tile_(
     const std::uint32_t out_base = dst_index_out * DEST_TILE_SIZE_RAW;
 
     // Upper tile half (tile rows 0-15): face 0 = left, face 1 = right.
-    for (std::uint32_t band = 0; band < NUM_ROW_BANDS_PER_FACE_HALF; band++) {
-        const std::uint32_t band_off = band * ROW_BAND_STRIDE;
-
-        _process_col_bcast_row_band_<BINOP>(
-            /* bcast_col0_addr  */ bcast_base + FACE0_BASE + band_off,
-            /* left_face_addr   */ FACE0_BASE + band_off,
-            /* right_face_addr  */ FACE1_BASE + band_off,
-            /* data_tile_offset */ data_base,
-            /* out_tile_offset  */ out_base);
-    }
+    _calculate_sfpu_binary_bcast_col_half_tile_<BINOP>(FACE0_BASE, FACE1_BASE, data_base, bcast_base, out_base);
 
     // Lower tile half (tile rows 16-31): face 2 = left, face 3 = right.
-    for (std::uint32_t band = 0; band < NUM_ROW_BANDS_PER_FACE_HALF; band++) {
-        const std::uint32_t band_off = band * ROW_BAND_STRIDE;
+    _calculate_sfpu_binary_bcast_col_half_tile_<BINOP>(FACE2_BASE, FACE3_BASE, data_base, bcast_base, out_base);
+}
 
-        _process_col_bcast_row_band_<BINOP>(
-            /* bcast_col0_addr  */ bcast_base + FACE2_BASE + band_off,
-            /* left_face_addr   */ FACE2_BASE + band_off,
-            /* right_face_addr  */ FACE3_BASE + band_off,
-            /* data_tile_offset */ data_base,
-            /* out_tile_offset  */ out_base);
-    }
+// BCAST_COL over tile rows 0-15 only (the compute API's VectorMode::R): the upper half. Rows 16-31 of the data,
+// bcast and output tiles are neither read nor written.
+template <BinaryOp BINOP>
+inline void _calculate_sfpu_binary_bcast_col_rows_0_15_(
+    std::uint32_t dst_index_data, std::uint32_t dst_index_bcast, std::uint32_t dst_index_out) {
+    const std::uint32_t data_base = dst_index_data * DEST_TILE_SIZE_RAW;
+    const std::uint32_t bcast_base = dst_index_bcast * DEST_TILE_SIZE_RAW;
+    const std::uint32_t out_base = dst_index_out * DEST_TILE_SIZE_RAW;
+
+    _calculate_sfpu_binary_bcast_col_half_tile_<BINOP>(FACE0_BASE, FACE1_BASE, data_base, bcast_base, out_base);
+}
+
+// BCAST_COL over one 4-row band of the upper half: data rows 4 * data_band .. +3 (all 32 columns, faces 0 and 1)
+// combined with column 0 rows 4 * bcast_band .. +3 of the bcast tile (face 0). Nothing else is read or written,
+// so one column tile can carry several 4-row scalars for one data band (bands 0..3; the caller checks the range).
+template <BinaryOp BINOP>
+inline void _calculate_sfpu_binary_bcast_col_band_(
+    std::uint32_t dst_index_data,
+    std::uint32_t dst_index_bcast,
+    std::uint32_t dst_index_out,
+    std::uint32_t data_band,
+    std::uint32_t bcast_band) {
+    const std::uint32_t data_base = dst_index_data * DEST_TILE_SIZE_RAW;
+    const std::uint32_t bcast_base = dst_index_bcast * DEST_TILE_SIZE_RAW;
+    const std::uint32_t out_base = dst_index_out * DEST_TILE_SIZE_RAW;
+    const std::uint32_t data_off = data_band * ROW_BAND_STRIDE;
+
+    _process_col_bcast_row_band_<BINOP>(
+        /* bcast_col0_addr  */ bcast_base + FACE0_BASE + bcast_band * ROW_BAND_STRIDE,
+        /* left_face_addr   */ FACE0_BASE + data_off,
+        /* right_face_addr  */ FACE1_BASE + data_off,
+        /* data_tile_offset */ data_base,
+        /* out_tile_offset  */ out_base);
 }
 
 // LREG_DATA0..3 contain centred values; LREG_BCAST contains the broadcast inverse standard deviation.

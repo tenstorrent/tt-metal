@@ -42,7 +42,7 @@ inline void _calculate_max_pool_with_indices_(
     // each face is 16 rows
     constexpr std::uint32_t face_offset = 16;
     constexpr InstrModLoadStore instr_mod_index =
-        is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
+        is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::UINT16;
 
     if constexpr (layout == ckernel::DataLayout::ROW_MAJOR) {
         // ROW MAJOR DATA VERSION OF MPWI
@@ -196,7 +196,7 @@ inline void _calculate_max_pool_with_indices_generic_(
     constexpr std::uint32_t eight_row_offset = 16;
     constexpr std::uint32_t sixteen_row_offset = 32;
     constexpr InstrModLoadStore instr_mod_index =
-        is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
+        is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::UINT16;
 
     // ROW MAJOR DATA VERSION OF MPWI
     // DATA IS EXPECTED TO BE IN THE FOLLOWING ORDER IN DEST:

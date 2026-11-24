@@ -19,19 +19,24 @@
 
 #include "combine_fabric2d_stream.hpp"
 
+namespace cmbf2d {
+// The program-semaphore id an optional handshake gets when the owning op has nothing to signal it: the
+// kernel compiles the wait out instead of spinning on a count nobody bumps.
+constexpr uint32_t NO_SEMAPHORE = 0xFFFFFFFFu;
+}  // namespace cmbf2d
+
 #ifndef KERNEL_BUILD
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 
 #include "../../combine_fabric2d_placement.hpp"
 #include "../../combine_fabric2d_types.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d {
 
-// Derived geometry. One-liners off the two structs the framework passes everywhere, named because
-// `aligned_page_size()` as "the token size" is not self-evident.
 inline uint32_t ring_extent(const CombineFabric2dParams& args) {
     return args.device->shape()[static_cast<int32_t>(args.axis)];
 }
@@ -70,7 +75,7 @@ inline uint32_t tiles_per_token_row(const CombineFabric2dInputs& tensor_args) {
 // shared exponents on top of the mantissas and so is not tile_hw times any element size.
 inline uint32_t tile_size_bytes(const CombineFabric2dInputs& tensor_args) {
     if (dispatched_is_tiled(tensor_args)) {
-        return static_cast<uint32_t>(tensor_args.dispatched_buffer.buffer()->aligned_page_size());
+        return static_cast<uint32_t>(tensor_args.dispatched_buffer.mesh_buffer().aligned_page_size());
     }
     return static_cast<uint32_t>(tensor_args.dispatched_buffer.tensor_spec().tile().get_tile_hw()) *
            tensor_args.dispatched_buffer.element_size();
@@ -94,8 +99,8 @@ inline uint32_t untilize_block_tiles(const CombineFabric2dInputs& tensor_args) {
     return 1;
 }
 
-// Token slots in the dispatched buffer, which dispatch_fabric2d sizes as max_dispatch_buffer_token_size and drops
-// tokens past. Validation pins every dim before these two to 1, so the slot index is the whole of the page index.
+// Token slots in the dispatched buffer. Validation pins every dim before these two to 1, so the slot index
+// is the whole of the page index.
 inline uint32_t dispatch_capacity(const CombineFabric2dInputs& tensor_args) {
     return static_cast<uint32_t>(tensor_args.dispatched_buffer.logical_shape()[-2]);
 }
@@ -140,7 +145,8 @@ struct DramBuffers {
     tt::tt_metal::Buffer* counts = nullptr;
     tt::tt_metal::Buffer* region = nullptr;
     tt::tt_metal::Buffer* expert_offsets = nullptr;
-    // Null unless combine runs overlapped: only then is there an id table to read the walk order from.
+    // The table naming each ring chip's experts. Null when the caller gave none, and the experts are then
+    // laid out contiguously in dispatch-group order.
     tt::tt_metal::Buffer* expert_table = nullptr;
 };
 
@@ -152,20 +158,19 @@ struct KernelPlan {
     uint32_t ring_filled_slot = 0;
     uint32_t ring_freed_slot = 0;
     uint32_t final_arrived_addr = 0;
-    // Overlapped only: this ring's first row of global_expert_idx_table.
+    // This ring's first row of the expert id table, when there is one.
     uint32_t expert_table_page_base = 0;
-    // Standalone only: the launch credit's address, and the downstream chip's stream core that sends back to
-    // this chip, which this chip's sender grants it to. Per LAUNCH, and so orthogonal to the per-page channel
-    // credits below: this one says the downstream chip has finished the previous launch and its region may be
-    // written again at all, those say which pages of this launch's region are free.
+    // The launch credit's address, and the downstream chip's stream core that sends back to this chip, which
+    // this chip's sender grants it to. Per LAUNCH, and so orthogonal to the per-page channel credits below:
+    // this one says the downstream chip has finished the previous launch and its region may be written again
+    // at all, those say which pages of this launch's region are free. Zero when the op allocated no credit,
+    // and then the sender neither grants nor takes one.
     uint32_t launch_credit_addr = 0;
     tt::tt_metal::CoreCoord launch_credit_core;
     uint32_t credit_done_addr = 0;
     uint32_t vc_pages = 0;  // the free parameter: pages per channel
     // One entry per channel, in channel order. Addresses are uniform across the mesh, so these are the
     // same numbers on every core -- what differs is which core a given counter is read or bumped on.
-    // These replace the single fwd_arrived_addr: arrival is per channel now, because each channel is its
-    // own dense FIFO with one producer and one consumer.
     std::vector<uint32_t> vc_arrived_addr;
     std::vector<uint32_t> vc_freed_addr;
     std::vector<uint32_t> vc_outbox_addr;
@@ -184,17 +189,19 @@ struct ReaderUntilizers {
     std::vector<HandshakePeer> peers;
 };
 
-// The per-core values an untilizer needs that are not read off the arguments.
+// The values an untilizer group needs that are not read off the arguments. A core's position in the group and
+// its produced count are runtime arguments, since one kernel serves the whole group.
 struct UntilizerPlan {
     uint32_t my_expert_base = 0;
-    // Overlapped only: where the routed expert's id table starts, and the readiness count it publishes.
+    // This ring's first row of the expert id table, when there is one.
     uint32_t expert_table_page_base = 0;
-    uint32_t ready_sem = 0;
-    uint32_t my_index = 0;   // position in the group
+    // The count a producer still writing the dispatched buffer publishes as its experts complete, and its
+    // per-chunk release of one. NO_SEMAPHORE when every tile-row is written before the launch.
+    uint32_t ready_sem = cmbf2d::NO_SEMAPHORE;
+    uint32_t progress_sem = cmbf2d::NO_SEMAPHORE;
     uint32_t num_peers = 0;  // cores in the group
     uint32_t walks_down = 0;
     uint32_t control_addr = 0;
-    uint32_t produced_slot = 0;  // the counter this core owns on each of its consumers
     std::vector<HandshakePeer> consumers;
 };
 
@@ -225,8 +232,8 @@ constexpr uint32_t BATCH = NUM_L1_SLOTS / 2;
 constexpr uint32_t META_PREFETCH = 64;
 constexpr uint32_t META_PAD_STRIDE = 64;
 
-// Overlapped only: control-table rows are 64-byte aligned because a DRAM read needs an aligned L1
-// destination, and the id table follows the offsets a whole row at a time.
+// Control-table rows are 64-byte aligned because a DRAM read needs an aligned L1 destination, and the id
+// table follows the offsets a whole row at a time.
 constexpr uint32_t align_control(uint32_t bytes) { return (bytes + 63u) & ~63u; }
 constexpr uint32_t expert_table_row_stride(uint32_t experts_per_chip) {
     return align_control(experts_per_chip * static_cast<uint32_t>(sizeof(uint32_t)));
@@ -292,9 +299,12 @@ constexpr uint32_t MAX_VCS = 16;
 // "Not queued anywhere" -- a page delivered to the next chip's output rather than forwarded again.
 constexpr uint32_t VC_NONE = 0xFFFFFFFFu;
 
-// Ring slot = token + forwarding metadata. 64 rather than the 32 in use keeps the slot stride DRAM-aligned
-// (14336 + 64 = 64 * 225), which lets a fabric write target a (token_size + 64)-byte forwarding page
-// directly.
+// Floor of four pages a channel: the credit threshold is a quarter of the channel and must stay >= 1,
+// and a channel shallower than a read batch spends all its time announcing.
+constexpr uint32_t MIN_VC_PAGES = 4;
+
+// Ring slot = token + forwarding metadata. 64 rather than the 32 the metadata needs keeps the slot stride
+// DRAM-aligned (14336 + 64 = 64 * 225), so a fabric write can target a forwarding page directly.
 constexpr uint32_t FORWARDING_METADATA_SIZE = 64;
 
 // The forwarding metadata a ring slot carries after its token, at (slot_base + token_size_bytes). The reader
@@ -338,9 +348,5 @@ inline uint32_t packets_per_token(uint32_t token_size_bytes) {
 constexpr uint64_t CMD_END = 0;  // end of stream; the slot carries no token
 constexpr uint64_t CMD_FINAL_WRITE = 1;
 constexpr uint64_t CMD_FORWARD = 2;
-// There is no chunk-ending forward. Splitting the region by movement class left a channel with no chunk
-// boundaries to close -- every page of it shares one destination -- so a forward is just a forward, and the
-// residual a chunk end used to flush is handled by announcing before going idle instead. See the wait in
-// sender_combine_fabric2d.cpp. The dispatch op still has its own dspf2d::CMD_FORWARD_END; this is not it.
 
 }  // namespace cmbf2d

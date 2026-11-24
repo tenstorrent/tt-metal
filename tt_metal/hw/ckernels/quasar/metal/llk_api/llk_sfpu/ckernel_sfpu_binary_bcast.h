@@ -267,5 +267,86 @@ inline void calculate_binary_bcast(
     }
 }
 
+// Compute API entry points (sfpu_{add,sub,mul}_bcast_{col,row}, as named on Blackhole / Wormhole).
+// There one init per broadcast dim serves ADD, SUB and MUL; here the binop is recorded into the
+// replay body, so each call records it (init_binary_bcast) before running the tile.
+
+template <BroadcastType BCAST_DIM>
+inline void _sfpu_binary_bcast_init_() {
+    static_assert(
+        BCAST_DIM == BroadcastType::COL || BCAST_DIM == BroadcastType::ROW, "binary_bcast only supports COL and ROW");
+}
+
+template <BinaryOp BINOP, BroadcastType BCAST_DIM>
+inline void _calculate_sfpu_binary_bcast_full_tile_(
+    const std::uint32_t dst_index_data, const std::uint32_t dst_index_bcast, const std::uint32_t dst_index_out) {
+    init_binary_bcast<BINOP, BCAST_DIM>();
+    calculate_binary_bcast<BINOP, BCAST_DIM>(dst_index_data, dst_index_bcast, dst_index_out);
+}
+
+// The fused normalisation kernels (sfpu_*normalize_bcast_*) are not ported to Quasar. The Compute API
+// keeps their entry points on every arch; a kernel that calls one fails to build.
+[[gnu::error("sfpu_*normalize_bcast_* is not supported on Quasar")]] void
+sfpu_normalize_bcast_is_not_supported_on_quasar();
+
+inline void _calculate_sfpu_normalize_bcast_col_full_tile_(
+    [[maybe_unused]] const std::uint32_t dst_index_data,
+    [[maybe_unused]] const std::uint32_t dst_index_mean,
+    [[maybe_unused]] const std::uint32_t dst_index_out,
+    [[maybe_unused]] const std::uint32_t dst_index_inv_std) {
+    sfpu_normalize_bcast_is_not_supported_on_quasar();
+}
+
+inline void _calculate_sfpu_normalize_bcast_col_two_tiles_(
+    [[maybe_unused]] const std::uint32_t dst_index_data,
+    [[maybe_unused]] const std::uint32_t dst_index_second_data,
+    [[maybe_unused]] const std::uint32_t dst_index_out,
+    [[maybe_unused]] const std::uint32_t dst_index_mean,
+    [[maybe_unused]] const std::uint32_t dst_index_inv_std) {
+    sfpu_normalize_bcast_is_not_supported_on_quasar();
+}
+
+inline void _calculate_sfpu_residual_normalize_bcast_col_full_tile_(
+    [[maybe_unused]] const std::uint32_t dst_index_data,
+    [[maybe_unused]] const std::uint32_t dst_index_residual,
+    [[maybe_unused]] const std::uint32_t dst_index_out,
+    [[maybe_unused]] const std::uint32_t dst_index_mean,
+    [[maybe_unused]] const std::uint32_t dst_index_inv_std) {
+    sfpu_normalize_bcast_is_not_supported_on_quasar();
+}
+
+inline void _calculate_sfpu_normalize_bcast_scalar_full_tile_(
+    [[maybe_unused]] const std::uint32_t dst_index_data,
+    [[maybe_unused]] const std::uint32_t dst_index_mean,
+    [[maybe_unused]] const std::uint32_t dst_index_out,
+    [[maybe_unused]] const std::uint32_t dst_index_inv_std) {
+    sfpu_normalize_bcast_is_not_supported_on_quasar();
+}
+
+// The partial-tile column-broadcast entries (VectorMode::R and the 4-row band of sfpu_*_bcast_col_band) are not
+// ported to Quasar either; the Compute API keeps their entry points, a kernel that calls one fails to build.
+// sfpu_*_bcast_col reaches the VectorMode::R entry through a run-time comparison, so the error fires unless the
+// compiler folds it: on Quasar, vector_mode must be a compile-time constant.
+[[gnu::error("sfpu_*_bcast_col with VectorMode::R and sfpu_*_bcast_col_band are not supported on Quasar")]] void
+sfpu_bcast_col_partial_is_not_supported_on_quasar();
+
+template <BinaryOp BINOP>
+inline void _calculate_sfpu_binary_bcast_col_rows_0_15_(
+    [[maybe_unused]] const std::uint32_t dst_index_data,
+    [[maybe_unused]] const std::uint32_t dst_index_bcast,
+    [[maybe_unused]] const std::uint32_t dst_index_out) {
+    sfpu_bcast_col_partial_is_not_supported_on_quasar();
+}
+
+template <BinaryOp BINOP>
+inline void _calculate_sfpu_binary_bcast_col_band_(
+    [[maybe_unused]] const std::uint32_t dst_index_data,
+    [[maybe_unused]] const std::uint32_t dst_index_bcast,
+    [[maybe_unused]] const std::uint32_t dst_index_out,
+    [[maybe_unused]] const std::uint32_t data_band,
+    [[maybe_unused]] const std::uint32_t bcast_band) {
+    sfpu_bcast_col_partial_is_not_supported_on_quasar();
+}
+
 }  // namespace sfpu
 }  // namespace ckernel

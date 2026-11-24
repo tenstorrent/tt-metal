@@ -1029,6 +1029,26 @@ static std::vector<Tensor> pool2d(
     }
     // For rank-4, input_tensor_4d is already the input_tensor, no copy needed
 
+    // The global pool gate and the DRAM slicing path divide by batch and stride before pool2d_L1 validates.
+    {
+        std::array<uint32_t, 4> padding_4d = sliding_window::get_pair_n4_padding(padding);
+        validate_input_params(
+            input_tensor_4d,
+            batch_size,
+            input_h,
+            input_w,
+            channels,
+            kernel_size,
+            stride,
+            padding_4d[0],
+            padding_4d[1],
+            padding_4d[2],
+            padding_4d[3],
+            dilation.has_value() ? dilation.value()[0] : 1,
+            dilation.has_value() ? dilation.value()[1] : 1,
+            input_tensor_4d.layout() == ttnn::TILE_LAYOUT);
+    }
+
     // Global average pool fast path: kernel exactly covers spatial input with no padding/dilation.
     // pool_sum reduction is much cheaper than the sliding-window pool kernels for this case
     // (no halo, no scatter, single reduction per output element). We require strict equality

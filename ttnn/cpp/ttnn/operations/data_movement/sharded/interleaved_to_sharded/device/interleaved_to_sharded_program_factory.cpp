@@ -14,13 +14,11 @@
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
-#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim {
 
@@ -64,10 +62,10 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
 
     const bool is_tile = input.layout() == Layout::TILE;
     bool convert_df = input_data_format != output_data_format;
-    auto* src_buffer = input.buffer();
-    auto* dst_buffer = output.buffer();
-    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    const auto* src_buffer = &input.mesh_buffer();
+    const auto* dst_buffer = &output.mesh_buffer();
+    bool src_is_dram = src_buffer->device_local_config().buffer_type == tt::tt_metal::BufferType::DRAM;
+    bool dst_is_dram = dst_buffer->device_local_config().buffer_type == tt::tt_metal::BufferType::DRAM;
     bool is_blackhole = (input.device()->arch() == tt::ARCH::BLACKHOLE);
     bool is_quasar = (input.device()->arch() == tt::ARCH::QUASAR);
 
@@ -112,7 +110,7 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
         if (keep_l1_aligned) {
             padded_offset_bytes = tt::align(input_unit_size, hal::get_l1_alignment());
         } else {
-            padded_offset_bytes = tt::align(input_unit_size, input.buffer()->alignment());
+            padded_offset_bytes = tt::align(input_unit_size, input.mesh_buffer().alignment());
         }
     }
 

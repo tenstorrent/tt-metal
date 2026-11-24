@@ -77,14 +77,16 @@ ALWI void copy_init(
 }
 // clang-format off
 /**
- * Issues a single clear-SrcA unpacker NOP: it toggles the unpacker engine only -- no CB read, no DST
- * write, and it does NOT pop/drain the CB (the surrounding cb_pop_front does that). Call it between
- * cb_wait_front and cb_pop_front when a CB is being drained but its tile data is not needed.
+ * Issues a single unpacker NOP -- no CB read, no DST write, and it does NOT pop/drain the CB (the
+ * surrounding cb_pop_front does that). Call it between cb_wait_front and cb_pop_front when a CB is
+ * being drained but its tile data is not needed.
  *
- * On Quasar this is required: the hardware needs a real unpacker op between a WAIT_TILES and its
- * POP_TILES on the same CB, or the POP can retire before the tiles are available (TEN-4746 / #48552).
- * This NOP steps the unpacker to satisfy that ordering while reading nothing, so it does not disturb
- * PACKER_L1_ACC. On WH/BH there is no such ordering requirement and this compiles to a bare SrcA flush.
+ * What the NOP does differs per architecture:
+ * - Quasar: required. The hardware needs a real unpacker op between a WAIT_TILES and its POP_TILES on the same CB, or
+ *   the POP can retire before the tiles are available. The NOP only steps the unpacker to satisfy that ordering; it
+ *   leaves SrcA untouched.
+ * - WH/BH: there is no such ordering requirement and this compiles to a bare SrcA flush.
+ * On every architecture it reads nothing from L1, so PACKER_L1_ACC is undisturbed.
  * Each architecture supplies its own llk_unpack_dummy(); this helper dispatches to it through
  * UNPACK(...). This call is only available on the compute engine.
  *
@@ -175,82 +177,5 @@ ALWI void copy_block(
           BroadcastType::NONE,
           UnpackToDestEn>(start_dst_tile_index, ntiles, in_cb_id)));
 }
-
-// =====================================================================================================================
-// Deprecated API
-//
-// The functions below implement the old copy / eltwise-unary programming model. The new model is:
-//   compute_kernel_hw_startup(icb, ocb);  // once at the start of MAIN
-//   copy_init(icb);                       // before copy_tile
-// Generic data-format reconfiguration is done via reconfig_data_format_srca (from reconfig_data_format.h).
-// =====================================================================================================================
-
-// clang-format off
-/**
- * Perform a init for the copy tile operation.
- *
- * Return value: None
- *
- * | Argument | Description                                      | Type     | Valid Range | Required |
- * |----------|--------------------------------------------------|----------|-------------|----------|
- * | cbid     | The identifier of the input circular buffer (CB) | uint32_t | 0 to 31     | True     |
- */
-// clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-[[deprecated("Renamed to copy_init(). This will be removed after 20-09-2026.")]] ALWI void copy_tile_init(
-    std::uint32_t cbid, std::uint32_t call_line = __builtin_LINE()) {
-    LLK_SAN_FUNCTION();
-    copy_init<is_fp32_dest_acc_en>(cbid, 0, false, call_line);
-}
-
-// clang-format off
-/**
- * Perform the init short for copy tile. This does not reconfigure the unpacker data types.
- *
- * Return value: None
- *
- * | Argument                    | Description                                       | Type     | Valid Range                                                         | Required |
- * |-----------------------------|---------------------------------------------------|----------|--------------------------------------------------------------------|----------|
- * | cbid                        | The identifier of the input circular buffer (CB)  | uint32_t | 0 to 31                                                            | True     |
- * | transpose                   | Flag to perform transpose on SrcA                 | uint32_t | Any positive value will indicate transpose is set                  | False    |
- * | transpose_within_16x16_face | Flag to perform transpose within 16x16 face       | uint32_t | Any positive value will indicate transpose within 16x16 face is set | False    |
- */
-// clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-[[deprecated("Renamed to copy_init(). This will be removed after 20-09-2026.")]] ALWI void copy_tile_to_dst_init_short(
-    std::uint32_t cbid,
-    std::uint32_t transpose = 0,
-    std::uint32_t transpose_within_16x16_face = false,
-    std::uint32_t call_line = __builtin_LINE()) {
-    LLK_SAN_FUNCTION();
-    copy_init<is_fp32_dest_acc_en>(cbid, transpose, transpose_within_16x16_face, call_line);
-}
-
-// clang-format off
-/**
- * Reconfigures SrcA to the new operand's data format and re-inits the copy op.
- *
- * Return value: None
- *
- * | Argument       | Description                                                       | Type     | Valid Range                                       | Required |
- * |----------------|-------------------------------------------------------------------|----------|---------------------------------------------------|----------|
- * | old_cbid       | The identifier of the previous input circular buffer (CB) to SrcA | uint32_t | 0 to 31                                           | True     |
- * | new_cbid       | The identifier of the new input circular buffer (CB) to SrcA      | uint32_t | 0 to 31                                           | True     |
- * | transpose      | Flag to perform transpose on SrcA                                 | uint32_t | Any positive value will indicate transpose is set | False    |
- */
-// clang-format on
-#ifndef ARCH_QUASAR
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-[[deprecated(
-    "Call reconfig_data_format_srca(old, new) then copy_init(new, transpose). This will be removed after "
-    "20-09-2026.")]] ALWI void
-copy_tile_to_dst_init_short_with_dt(std::uint32_t old_cbid, std::uint32_t new_cbid, std::uint32_t transpose = 0) {
-    LLK_SAN_FUNCTION();
-    // This reconfig call checks if old operand has different data format to
-    // new operand idx, otherwise no reconfig call occurs
-    reconfig_data_format_srca(old_cbid, new_cbid);
-    copy_init<is_fp32_dest_acc_en>(new_cbid, transpose);
-}
-#endif
 
 }  // namespace ckernel

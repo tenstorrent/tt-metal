@@ -7,7 +7,6 @@
 #include <tt_stl/reflection.hpp>
 #include <cstdint>
 #include <vector>
-#include <algorithm>
 #include <numeric>
 #include <unordered_map>
 #include <string_view>
@@ -23,6 +22,7 @@
 #include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "impl/context/metal_context.hpp"
+#include "impl/dispatch/slow_dispatch.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 
@@ -281,7 +281,7 @@ void create_mux_kernel(
 
     std::vector<uint32_t> mux_ct_args = mux_kernel_config.get_fabric_mux_compile_time_args();
     std::vector<uint32_t> mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
-        src_node_id, dst_node_id, available_links[0], program_handle, {mux_logical_core});
+        *device, src_node_id, dst_node_id, available_links[0], program_handle, {mux_logical_core});
 
     std::vector<std::pair<size_t, size_t>> addresses_to_clear = {};
     create_kernel(
@@ -499,7 +499,8 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
     const size_t mux_base_l1_address = l1_unreserved_base_address;
     auto worker_memory_map = create_worker_memory_map(l1_unreserved_base_address);
 
-    std::vector<tt::tt_metal::Program> program_handles(devices.size());
+    std::vector<tt::tt_metal::Program> program_handles;
+    program_handles.reserve(devices.size());
     std::vector<size_t> mux_termination_signal_addresses;
 
     const auto packet_header_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
@@ -522,7 +523,7 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
     };
 
     for (auto i = 0; i < devices.size(); i++) {
-        program_handles[i] = tt_metal::CreateProgram();
+        program_handles.push_back(tt_metal::CreateProgram(*devices[i]));
 
         // use logical core (0,0) for the mux kernel
         tt::tt_metal::CoreCoord mux_logical_core = worker_logical_cores[0];
@@ -532,6 +533,7 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
         auto num_header_only_channels = device_receivers_map[devices[i]].size();
 
         auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
+            *devices[i],
             num_full_size_channels,
             num_header_only_channels,
             test_config.num_buffers_full_size_channel,

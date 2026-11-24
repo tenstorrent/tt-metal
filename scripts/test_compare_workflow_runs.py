@@ -47,6 +47,24 @@ def test_failed_branch_only_job_is_reported_not_dropped():
     assert c["new_failures"] == [] and c["same_failures"] == []
 
 
+@pytest.mark.parametrize("main_conclusion", ["skipped", "cancelled"])
+def test_branch_failure_is_unmatched_when_main_job_has_no_verdict(main_conclusion):
+    branch = run([job(QB2, "failure")], branch="feature")
+    c = cwr.compare_runs(branch, run([job(QB2, main_conclusion)], run_id=10))
+    assert c["unmatched_failures"] == [QB2]
+    assert c["same_success"] == [] and c["same_failures"] == [] and c["new_failures"] == []
+    # An older main run that ran the job decides it.
+    cwr.resolve_unmatched_failures(c, [run([job(QB2, "success")], run_id=9)])
+    assert c["new_failures"] == [QB2]
+
+
+def test_skipped_job_without_a_branch_failure_stays_neutral():
+    c = cwr.compare_runs(run([job(QB2)], branch="feature"), run([job(QB2, "skipped")], run_id=10))
+    assert c["same_success"] == [QB2]
+    c = cwr.compare_runs(run([job(QB2, "skipped")], branch="feature"), run([job(QB2, "failure")], run_id=10))
+    assert c["same_success"] == [QB2]
+
+
 def test_branch_only_in_progress_job_counts_as_in_progress():
     branch = run([job(QB2, None, status="in_progress")], branch="feature")
     assert cwr.compare_runs(branch, None)["in_progress"] == [QB2]
@@ -102,6 +120,16 @@ def test_history_skips_runs_where_job_was_skipped_or_cancelled_and_stops_when_re
     assert fetched == [9, 8, 7], "stops fetching once every unmatched job is resolved"
 
 
+def test_history_with_only_skipped_or_cancelled_jobs_stays_unmatched():
+    branch = run([job(QB2, "failure")], branch="feature")
+    c = cwr.compare_runs(branch, run([job(QB2, "skipped")], run_id=10))
+    history = [run([job(QB2, "skipped")], run_id=9), run([job(QB2, "cancelled")], run_id=8)]
+    cwr.resolve_unmatched_failures(c, history)
+    assert c["unmatched_failures"] == [QB2]
+    assert c["history_baseline"] == {}
+    assert c["main_history_scanned"] == 2
+
+
 def test_history_leaves_unknown_jobs_unmatched():
     branch = run([job(QB2, "failure")], branch="feature")
     c = cwr.compare_runs(branch, run([], run_id=10))
@@ -136,13 +164,14 @@ def _run_cli(monkeypatch, capsys, branch_run, main_run, *flags):
 @pytest.mark.parametrize(
     "branch_jobs, main_jobs, expected",
     [
-        ([job(ELTWISE), job(QB2, "failure")], [job(ELTWISE)], 1),  # failed job not found on main
+        ([job(ELTWISE), job(QB2, "failure")], [job(ELTWISE)], 1),  # failed job has no main verdict
         ([job(ELTWISE, "failure")], [job(ELTWISE)], 1),  # new failure
         ([job(ELTWISE, "failure")], [job(ELTWISE, "failure")], 0),  # pre-existing failure
         ([job(ELTWISE)], [job(ELTWISE)], 0),  # all passing
         ([job(ELTWISE, None, "in_progress")], [job(ELTWISE)], 0),  # still running
+        ([job(ELTWISE, "failure")], [job(ELTWISE, "skipped")], 1),  # failed, main skipped it: no baseline
     ],
-    ids=["unmatched", "new", "same", "passing", "running"],
+    ids=["unmatched", "new", "same", "passing", "running", "main-skipped"],
 )
 def test_cli_exit_code_is_the_same_in_text_and_json_mode(monkeypatch, capsys, flags, branch_jobs, main_jobs, expected):
     branch_run = run(branch_jobs, branch="feature", event="workflow_dispatch", conclusion="failure")
@@ -176,10 +205,10 @@ def test_cli_text_output_reports_unmatched_failure_and_fails_verdict(monkeypatch
     )
     code, out = _run_cli(monkeypatch, capsys, branch_run, run([job(ELTWISE)], run_id=10))
     assert code == 1
-    assert "FAILED ON BRANCH, NOT FOUND ON MAIN" in out
+    assert "FAILED ON BRANCH, NO MAIN VERDICT" in out
     assert QB2 in out
-    assert "1 failures not found on main" in out
-    assert "VERDICT: Failed jobs on branch not found in recent main runs" in out
+    assert "1 failures without a main verdict" in out
+    assert "VERDICT: Failed jobs on branch have no verdict in recent main runs" in out
     assert "Safe to merge" not in out
 
 

@@ -1,0 +1,55 @@
+name: "Trial blaze tests"
+
+# Standalone version of the blaze merge gate that "Package and release" runs:
+# builds the tt-metal profiler (tracy) artifact for the dispatched ref, then
+# starts the tt-blaze relay, which runs tt-blaze's ci.yaml on main against it,
+# and waits for it to finish. Nothing is tagged, packaged, or published.
+# The relay runs only tt-blaze's full merge gate from tt-blaze main: other
+# tt-blaze refs and selected BH Loudbox buckets are run in tt-blaze itself.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 4,8,16,20 * * *"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
+  build-artifact-profiler:
+    needs: [check-harbor]
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      platform: "Ubuntu 22.04"
+      tracy: true
+      publish-package: false
+      # Needed to ensure the profiler build produces a wheel for blaze to consume.
+      build-wheel: true
+      fetch-depth: 0
+      skip-tt-train: false
+      enable-lto: false
+      wheel-ref: ${{ github.sha }}
+      use-system-sfpi: false
+
+  blaze-merge-gate:
+    needs: [build-artifact-profiler]
+    # Runs on main only. The tokens and the relay serve only runs on main; a
+    # manual run from another branch builds the artifact and skips the gate.
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.build-artifact-profiler.result == 'success' }}
+    permissions:
+      contents: read
+      # The gate signs in for short-lived tokens on tenstorrent/tt-blaze-relay
+      # (the default GITHUB_TOKEN cannot dispatch another repo).
+      id-token: write
+    # The gate starts the tt-blaze relay with this run's id. The relay takes
+    # the commit and the profiler build of this run from GitHub.
+    uses: ./.github/workflows/blaze-merge-gate.yaml

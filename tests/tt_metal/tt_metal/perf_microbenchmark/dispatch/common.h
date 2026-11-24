@@ -19,8 +19,8 @@
 #include "tt_metal/impl/dispatch/command_queue_common.hpp"
 
 #include "llrt.hpp"
-#include "env_lib.hpp"
-#include <tt-metalium/tt_align.hpp>
+#include "common/env_lib.hpp"
+#include <tt-metalium/math.hpp>
 
 #include "llrt/hal.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
@@ -584,7 +584,7 @@ inline void DeviceData::overflow_check(distributed::MeshDevice::IDevice* device)
 class FDMeshCQTestAccessor {
 public:
     static tt_metal::SystemMemoryManager& sysmem(tt_metal::distributed::FDMeshCommandQueue& cq) {
-        return cq.reference_sysmem_manager();
+        return cq.mesh_device_->impl().get_devices().at(0)->sysmem_manager();
     }
 };
 
