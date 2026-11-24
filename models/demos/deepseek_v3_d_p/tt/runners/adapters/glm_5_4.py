@@ -3,7 +3,7 @@
 
 """GLM-5.4 prefill adapter: GLM-5.3 with layers 27-54 (0-indexed 26-53) run twice (``reference/glm_5_4_config.py``).
 
-* Weights: GLM-5.4's are not published, so every shared tensor is GLM-5.3's (tier 2, ``tests/glm54_weights.py``):
+* Weights: GLM-5.4's are not published, so every shared tensor is GLM-5.3's (tier 2; tier 1 is the tests' random set):
   the checkpoint and TTNN cache paths are GLM-5.3's, and the cache directory is named ``glm_5_3`` so no GLM-5.4
   directory is ever created (user decision: no GLM-5.4 cache on Weka before the weights are released). An incomplete
   cache is an error here, never a rebuild into GLM-5.3's cache. The damp gates are synthetic host bf16 weights

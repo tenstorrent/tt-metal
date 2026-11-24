@@ -3,8 +3,8 @@
 
 """Synthetic damp-gate weights for GLM-5.4 until the official weights are published.
 
-Used by both weight tiers (tests/glm54_weights.py): tier 1 (all weights random, reduced config) and tier 2 (GLM-5.3
-FP8 weights for every shared tensor). The gate formula is A1 (``ops.damp_gate_reference``):
+Used by both weight tiers: tier 1 (tests/glm54_weights.py: all weights random, reduced config) and tier 2 (the
+glm_5_4 runner adapter: GLM-5.3 FP8 weights for every shared tensor). The gate formula is A1 (``ops.damp_gate_reference``):
 
     beta_k = sigmoid(RMSNorm(x_{k-1}; norm_weight) @ proj_weight^T + proj_bias)
 
