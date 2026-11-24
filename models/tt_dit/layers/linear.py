@@ -10,6 +10,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 
 from ..utils.matmul import (
+    agmm_shape_buffers,
     get_1d_matmul_config,
     get_agmm_config,
     get_fabric_agmm_config,
@@ -495,7 +496,8 @@ class ColParallelLinear(Module):
                 force_transpose=force_transpose,
                 transpose_core_grid=transpose_core_grid,
                 num_workers_per_link=num_workers_per_link,
-                num_buffers_per_channel=self._ag_num_buffers_per_channel,
+                num_buffers_per_channel=agmm_shape_buffers(M, K, N, parallel_config.tensor_parallel.factor)
+                or self._ag_num_buffers_per_channel,
                 chunks=self.chunks if self.chunks is not None else 1,
                 # Op's N is per-device, so pass per-device widths (each global width is % TP == 0).
                 chunk_sizes=(
