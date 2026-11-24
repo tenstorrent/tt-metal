@@ -12,7 +12,6 @@
 #include "ckernel_instr_params.h"
 #include "ckernel_ops.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
-#include "lltt.h"
 #include "sfpi.h"
 
 // Replay windows for the phase >= 4 step loop's load16/store16

@@ -7,7 +7,6 @@
 #include <cstdint>
 
 #include "ckernel.h"
-#include "lltt.h"
 #include "sfpi.h"
 
 /*

@@ -41,7 +41,6 @@ namespace ckernel {
 #ifdef TRISC_MATH
 #include "ckernel.h"
 #include "ckernel_addrmod.h"
-#include "lltt.h"
 #include "sfpi.h"
 
 namespace sfpu {

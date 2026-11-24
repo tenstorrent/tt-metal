@@ -10,7 +10,6 @@
 #include "ckernel_addrmod.h"
 #include "ckernel_defs.h"
 #include "cmath_common.h"
-#include "lltt.h"
 
 using namespace sfpi;
 

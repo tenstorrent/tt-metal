@@ -106,7 +106,6 @@
 #include "ckernel.h"
 #include "ckernel_template.h"
 #include "cmath_common.h"
-#include "lltt.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
 #include "sfpu/experimental/ckernel_sfpu_set_dst_write_addr_offset.h"

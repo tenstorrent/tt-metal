@@ -13,7 +13,6 @@
 #include "llk_assert.h"
 #include "llk_defs.h"
 #include "llk_pack_common.h"
-#include "lltt.h"
 #include "sfpi.h"
 
 using namespace ckernel;

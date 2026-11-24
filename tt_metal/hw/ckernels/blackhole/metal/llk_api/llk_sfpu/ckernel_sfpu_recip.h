@@ -11,7 +11,6 @@
 #include "ckernel_defs.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
-#include "lltt.h"
 using namespace sfpi;
 
 namespace ckernel {

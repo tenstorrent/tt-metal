@@ -8,7 +8,6 @@
 #include "ckernel_addrmod.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
-#include "lltt.h"
 #include "sfpi.h"
 
 namespace ckernel {

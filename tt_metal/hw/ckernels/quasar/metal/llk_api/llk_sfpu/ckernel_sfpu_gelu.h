@@ -15,7 +15,6 @@
 #include "ckernel_sfpu_recip.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
-#include "lltt.h"
 #include "sfpi.h"
 
 namespace ckernel::sfpu {

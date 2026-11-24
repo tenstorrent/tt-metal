@@ -7,7 +7,6 @@
 #include "ckernel_sfpu_polyval.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
-#include "lltt.h"
 #include "sfpi.h"
 
 namespace ckernel {
