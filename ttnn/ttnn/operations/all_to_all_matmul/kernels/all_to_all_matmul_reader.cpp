@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// all_to_all_matmul compute-core reader (RISCV_1 / NoC0).
+// all_to_all_matmul compute-core reader (RISCV_1 / NoC1: keeps NoC0 free for the port readers).
 //
 // Per head slot of this core, in slot order (local-source heads first, then remote heads by source-local index j):
 //   load_weight_block(slot, 0)   Kt x block_n weight tiles -> cb_weight (issued before the slot lands: the dominant
@@ -19,6 +19,13 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+
+#if defined(ABLATE_ZONES)
+#include "tools/profiler/kernel_profiler.hpp"
+#define A2AMM_ZONE(n) DeviceZoneScopedN(n)
+#else
+#define A2AMM_ZONE(n)
+#endif
 
 void kernel_main() {
     constexpr uint32_t cb_a_landed = get_compile_time_arg_val(0);
@@ -51,14 +58,22 @@ void kernel_main() {
 
     auto load_weight_block = [&](uint32_t h, uint32_t nb) {
         cb_reserve_back(cb_weight, weight_block_tiles);
-        uint32_t wp = get_write_ptr(cb_weight);
-        uint32_t page = h * Kt * Nt + nb * block_n;
-        for (uint32_t k = 0; k < Kt; ++k) {
-            for (uint32_t n = 0; n < block_n; ++n) {
-                noc_async_read(w.get_noc_addr(page + n), wp, w_tile_bytes);
-                wp += w_tile_bytes;
+        const uint32_t wbase = get_write_ptr(cb_weight);
+        const uint32_t page0 = h * Kt * Nt + nb * block_n;
+        // Issue order rotated per head: every head's block starts on the same DRAM bank otherwise (Kt * Nt is a
+        // multiple of the bank count), and all cores would queue on one bank at a time.
+        uint32_t t = h % weight_block_tiles;
+        uint32_t k = t / block_n, n = t - k * block_n;
+        for (uint32_t i = 0; i < weight_block_tiles; ++i) {
+#ifndef ABLATE_NOWEIGHT
+            noc_async_read(w.get_noc_addr(page0 + k * Nt + n), wbase + (k * block_n + n) * w_tile_bytes, w_tile_bytes);
+#endif
+            if (++n == block_n) {
+                n = 0;
+                if (++k == Kt) {
+                    k = 0;
+                }
             }
-            page += Nt;
         }
         noc_async_read_barrier();
         cb_push_back(cb_weight, weight_block_tiles);
@@ -69,16 +84,21 @@ void kernel_main() {
         const uint32_t h = word & 0xFFFF;
         const bool remote = (word >> 16) != 0;
 
-        load_weight_block(h, 0);
+        {
+            A2AMM_ZONE("rd_w0");
+            load_weight_block(h, 0);
+        }
 
         cb_reserve_back(cb_a_landed, slot_tiles);
         if (remote) {
+            A2AMM_ZONE("rd_wait_remote");
             volatile tt_l1_ptr uint32_t* arrived =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_common_arg_val<uint32_t>(arrival_base + s));
             noc_semaphore_wait_min(arrived, 1);
             noc_semaphore_inc(get_noc_addr(reinterpret_cast<uint32_t>(arrived)), 0u - 1u);
             noc_async_atomic_barrier();
         } else {
+            A2AMM_ZONE("rd_local_a");
             const uint32_t j = h - my_q * Hl;
             uint32_t ap = get_write_ptr(cb_a_landed);
             for (uint32_t b = 0; b < B; ++b) {

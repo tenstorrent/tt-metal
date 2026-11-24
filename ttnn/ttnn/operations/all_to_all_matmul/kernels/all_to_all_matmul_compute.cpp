@@ -14,6 +14,13 @@
 #include "api/compute/cb_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 
+#if defined(ABLATE_ZONES)
+#include "tools/profiler/kernel_profiler.hpp"
+#define A2AMM_ZONE(n) DeviceZoneScopedN(n)
+#else
+#define A2AMM_ZONE(n)
+#endif
+
 using namespace compute_kernel_lib;
 
 void kernel_main() {
@@ -37,7 +44,18 @@ void kernel_main() {
         MatmulBlockShape::of(block_m / out_subblock_h, block_n / out_subblock_w, out_subblock_h, out_subblock_w, Kt, 1);
 
     for (uint32_t s = 0; s < n_slots; ++s) {
+        A2AMM_ZONE("cmp_head");
         for (uint32_t nb = 0; nb < num_n_blocks; ++nb) {
+#ifdef ABLATE_NOCOMPUTE
+            cb_wait_front(cb_a_landed, slot_tiles);
+            cb_wait_front(cb_weight, Kt * block_n);
+            cb_pop_front(cb_weight, Kt * block_n);
+            for (uint32_t rg = 0; rg < block_m / out_subblock_h; ++rg) {
+                cb_reserve_back(cb_out, out_subblock_h * block_n);
+                cb_push_back(cb_out, out_subblock_h * block_n);
+            }
+            continue;
+#endif
             matmul_block<
                 false,
                 false,

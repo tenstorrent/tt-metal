@@ -17,7 +17,7 @@ Per chip p of a group (ring of G chips along cluster_axis):
                              weight block 0 from DRAM, then the slot (local: DRAM read of the own quarter; remote:
                              wait for the arrival counter, re-arm it), then the remaining weight blocks.
     compute (TRISC)          matmul_block per (slot, n-block): A slot retained across n-blocks, popped after.
-    writer  (RISCV_0, NoC1)  output row groups to the output pages.
+    writer  (RISCV_0, NoC0)  output row groups to the output pages.
 
 Blocking knobs (op_design.md "Blocking Model"), each defined once here: BLOCK_HEADS, WEIGHT_BLOCK_BYTES (-> block_n),
 WEIGHT_DEPTH, OUT_DEPTH, PORT_BATCH_CHUNKS, A_SLOT_BUDGET_BYTES; block_m = B * Mq_t and block_k = Kt (R1).
@@ -39,7 +39,7 @@ BLOCK_HEADS = 1  # heads per compute block: a head shares no operand with anothe
 WEIGHT_BLOCK_BYTES = 256 * 1024  # bytes of one weight block (Kt x block_n tiles) -> block_n
 WEIGHT_DEPTH = 2  # weight blocks in cb_weight
 OUT_DEPTH = 2  # output row groups in cb_out
-PORT_BATCH_CHUNKS = 4  # packets per DRAM-read barrier / per sender flush on the port cores
+PORT_BATCH_CHUNKS = 8  # packets per DRAM-read barrier / per sender flush on the port cores (8 beat 4 at 7232 B)
 A_SLOT_BUDGET_BYTES = 384 * 1024  # predicate A_RESIDENT (regime R1; else R3, deferred)
 MAX_HEADS_PER_CORE = 8  # global arrival semaphores per compute core
 MAX_PACKET_HEADERS = 12  # packet header pool per data-movement RISC
@@ -53,6 +53,13 @@ CB_PORT_CHUNKS = 3
 FWD, BWD = 0, 1
 NOC0 = ttnn.NOC.RISCV_1_default
 NOC1 = ttnn.NOC.RISCV_0_default
+# Compute cores: weight / local-row reads on NoC1, output writes on NoC0, which keeps NoC0's read-response path free
+# for the port readers (NoC0) feeding the fabric. Measured on the Kimi Phase 0 case (QuietBox 2, 7232 B):
+# 134.0 -> 99.4 us fastest chip (reader NoC0 / writer NoC1 before); with PORT_BATCH_CHUNKS 8: 94.5 us.
+COMPUTE_READER_NOC = NOC1
+COMPUTE_WRITER_NOC = NOC0
+PORT_READER_NOC = NOC0  # NoC1 (shared with the sender) hung
+PORT_SENDER_NOC = NOC1  # blackhole-fabric.md rule 7
 
 
 def _node(mesh, coord):
@@ -128,23 +135,29 @@ def _soc(mesh):
 _HARVEST_CACHE = {}
 
 
-def _harvest_t2p(mesh):
-    """{asic unique id: {translated worker x: physical x}} from the cluster descriptor."""
-    if id(mesh) in _HARVEST_CACHE:
-        return _HARVEST_CACHE[id(mesh)][1]
-    import yaml
+def _chip_maps(mesh, coord):
+    """(non-harvested Ethernet physical (x, y) list, {translated worker x: physical x}) of a chip, from the cluster
+    descriptor + the arch SoC descriptor. Ethernet channel c is entry c of the non-harvested list (translated x =
+    20 + c on Blackhole)."""
+    if id(mesh) not in _HARVEST_CACHE:
+        import yaml
 
-    desc = yaml.safe_load(open(ttnn.cluster.serialize_cluster_descriptor()))
-    _, tensix_cols, _ = _soc(mesh)
-    maps = {}
-    for chip, uid in desc.get("chip_unique_ids", {}).items():
-        h = desc.get("harvesting", {}).get(chip, {})
-        translated = bool(h.get("noc_translation", False))
-        tmask = int(h.get("harvest_mask", 0))
-        live = [x for i, x in enumerate(tensix_cols) if not (tmask >> i) & 1]
-        maps[int(uid)] = {tensix_cols[k]: px for k, px in enumerate(live)} if translated else {}
-    _HARVEST_CACHE[id(mesh)] = (mesh, maps)
-    return maps
+        desc = yaml.safe_load(open(ttnn.cluster.serialize_cluster_descriptor()))
+        arch_eth, tensix_cols, _ = _soc(mesh)
+        maps = {}
+        for chip, uid in desc.get("chip_unique_ids", {}).items():
+            h = desc.get("harvesting", {}).get(chip, {})
+            emask = int(h.get("eth_harvesting_mask", 0))
+            translated = bool(h.get("noc_translation", False))
+            tmask = int(h.get("harvest_mask", 0))
+            live = [x for i, x in enumerate(tensix_cols) if not (tmask >> i) & 1]
+            t2p = {tensix_cols[k]: px for k, px in enumerate(live)} if translated else {}
+            eth = [e for i, e in enumerate(arch_eth) if not (emask >> i) & 1]
+            maps[int(uid)] = (eth, t2p)
+        _HARVEST_CACHE[id(mesh)] = (mesh, maps)
+    node = _node(mesh, coord)
+    uid = int(ttnn.cluster.get_chip_unique_id_from_fabric_node_id(int(node.mesh_id), int(node.chip_id)))
+    return _HARVEST_CACHE[id(mesh)][1][uid]
 
 
 def _eth_channel(mesh, src, dst, link):
@@ -155,9 +168,7 @@ def _eth_channel(mesh, src, dst, link):
 
 
 def _nearest_worker_noc1(mesh, coord, eth_xy, taken, allowed):
-    node = _node(mesh, coord)
-    uid = int(ttnn.cluster.get_chip_unique_id_from_fabric_node_id(int(node.mesh_id), int(node.chip_id)))
-    t2p = _harvest_t2p(mesh).get(uid, {})
+    t2p = _chip_maps(mesh, coord)[1]
     _, _, (gx, gy) = _soc(mesh)
     ex, ey = eth_xy
     best = None
@@ -190,11 +201,6 @@ def _topology_plan(mesh, cluster_axis, num_links):
     chips = _routes(mesh, cluster_axis)
     grid = mesh.compute_with_storage_grid_size()
     allowed = {(x, y) for x in range(grid.x) for y in range(grid.y)}
-    eth_list = None
-    try:
-        eth_list = _soc(mesh)[0]
-    except Exception:  # noqa: BLE001 - placement is a perf choice; fall back to the simple layout
-        eth_list = None
     for coord, ch in chips.items():
         links = {}
         for d, peer in ((FWD, ch["next"]), (BWD, ch["prev"])):
@@ -202,8 +208,9 @@ def _topology_plan(mesh, cluster_axis, num_links):
             links[d] = li[:num_links]
         ch["links"] = links
         ports = None
-        if eth_list is not None and not os.environ.get("TT_METAL_EMULE_MODE"):
+        if not os.environ.get("TT_METAL_EMULE_MODE"):
             try:
+                eth_list = _chip_maps(mesh, coord)[0]
                 taken, ports = set(), {}
                 for l in range(num_links):
                     for d, peer in ((FWD, ch["next"]), (BWD, ch["prev"])):
@@ -211,7 +218,7 @@ def _topology_plan(mesh, cluster_axis, num_links):
                         core = _nearest_worker_noc1(mesh, coord, eth_list[chan], taken, allowed)
                         ports[(d, l)] = core
                         taken.add(core)
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001 - placement is a perf choice; fall back to the simple layout
                 ports = None
         ch["ports"] = ports or _fallback_ports(grid, num_links)
     _PLAN_CACHE[key] = (mesh, chips)
@@ -463,6 +470,11 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
         )
     )
 
+    # Measurement hook (off by default): A2AMM_ABLATE=nowrite,noweight,nocompute,noportread,zones compiles the named
+    # payload stubs / device zones into the kernels (ablation profiling; never set in production).
+    _abl = [a for a in os.environ.get("A2AMM_ABLATE", "").split(",") if a]
+    _defs = [("ABLATE_" + a.upper(), "1") for a in _abl]
+    cfg_key += "|" + ",".join(_abl)
     mesh_desc = ttnn.MeshProgramDescriptor()
     for coord, ch in chips.items():
         q = ch["p"]
@@ -507,14 +519,18 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "all_to_all_matmul_reader.cpp"),
                 core_ranges=active_crs,
+                defines=_defs,
                 compile_time_args=reader_ct,
                 runtime_args=reader_rt,
                 common_runtime_args=[in_addr, w_addr, q] + arrival_addrs,
-                config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_1, noc=NOC0),
+                config=ttnn.DataMovementConfigDescriptor(
+                    processor=ttnn.DataMovementProcessor.RISCV_1, noc=COMPUTE_READER_NOC
+                ),
             ),
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "all_to_all_matmul_compute.cpp"),
                 core_ranges=active_crs,
+                defines=_defs,
                 compile_time_args=compute_ct,
                 runtime_args=compute_rt,
                 config=compute_cfg,
@@ -522,10 +538,13 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "all_to_all_matmul_writer.cpp"),
                 core_ranges=active_crs,
+                defines=_defs,
                 compile_time_args=writer_ct,
                 runtime_args=writer_rt,
                 common_runtime_args=[out_addr],
-                config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=NOC1),
+                config=ttnn.DataMovementConfigDescriptor(
+                    processor=ttnn.DataMovementProcessor.RISCV_0, noc=COMPUTE_WRITER_NOC
+                ),
             ),
         ]
 
@@ -569,16 +588,22 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "all_to_all_matmul_port_reader.cpp"),
                 core_ranges=port_crs,
+                defines=_defs,
                 compile_time_args=port_reader_ct,
                 runtime_args=port_reader_rt,
-                config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_1, noc=NOC0),
+                config=ttnn.DataMovementConfigDescriptor(
+                    processor=ttnn.DataMovementProcessor.RISCV_1, noc=PORT_READER_NOC
+                ),
             ),
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "all_to_all_matmul_port_sender.cpp"),
                 core_ranges=port_crs,
+                defines=_defs,
                 compile_time_args=port_sender_ct,
                 runtime_args=port_sender_rt,
-                config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=NOC1),
+                config=ttnn.DataMovementConfigDescriptor(
+                    processor=ttnn.DataMovementProcessor.RISCV_0, noc=PORT_SENDER_NOC
+                ),
             ),
         ]
         program.kernels = kernels

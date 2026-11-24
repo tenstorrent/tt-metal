@@ -19,6 +19,13 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+
+#if defined(ABLATE_ZONES)
+#include "tools/profiler/kernel_profiler.hpp"
+#define A2AMM_ZONE(n) DeviceZoneScopedN(n)
+#else
+#define A2AMM_ZONE(n)
+#endif
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
@@ -81,22 +88,25 @@ void kernel_main() {
     conn.open();
 
     // ---- ready fence ----
-    for (uint32_t k = 0; k < n_ready_out; ++k) {
-        const uint32_t t = ready_idx + k * READY_WORDS;
-        volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[get_arg_val<uint32_t>(t) * hdrs_per_dest];
-        hdr->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{
-            get_noc_addr(get_arg_val<uint32_t>(t + 1), get_arg_val<uint32_t>(t + 2), ready_addr), 1, true});
-        conn.wait_for_empty_write_slot();
-        conn.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(hdr), sizeof(PACKET_HEADER_TYPE));
+    {
+        A2AMM_ZONE("psd_fence");
+        for (uint32_t k = 0; k < n_ready_out; ++k) {
+            const uint32_t t = ready_idx + k * READY_WORDS;
+            volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[get_arg_val<uint32_t>(t) * hdrs_per_dest];
+            hdr->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{
+                get_noc_addr(get_arg_val<uint32_t>(t + 1), get_arg_val<uint32_t>(t + 2), ready_addr), 1, true});
+            conn.wait_for_empty_write_slot();
+            conn.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(hdr), sizeof(PACKET_HEADER_TYPE));
+        }
+        if (n_ready_wait > 0) {
+            volatile tt_l1_ptr uint32_t* ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready_addr);
+            noc_semaphore_wait_min(ready, n_ready_wait);
+            noc_semaphore_inc(get_noc_addr(ready_addr), 0u - n_ready_wait);
+            noc_async_atomic_barrier();
+        }
     }
-    if (n_ready_wait > 0) {
-        volatile tt_l1_ptr uint32_t* ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready_addr);
-        noc_semaphore_wait_min(ready, n_ready_wait);
-        noc_semaphore_inc(get_noc_addr(ready_addr), 0u - n_ready_wait);
-        noc_async_atomic_barrier();
-    }
-
     // ---- entries ----
+    A2AMM_ZONE("psd_send");
     uint32_t used[max_headers];  // headers of each destination used since the last flush
     for (uint32_t d = 0; d < n_dest; ++d) {
         used[d] = 0;

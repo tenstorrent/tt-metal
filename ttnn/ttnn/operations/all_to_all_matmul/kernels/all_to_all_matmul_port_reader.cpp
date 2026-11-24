@@ -13,6 +13,13 @@
 
 #include "api/dataflow/dataflow_api.h"
 
+#if defined(ABLATE_ZONES)
+#include "tools/profiler/kernel_profiler.hpp"
+#define A2AMM_ZONE(n) DeviceZoneScopedN(n)
+#else
+#define A2AMM_ZONE(n)
+#endif
+
 void kernel_main() {
     constexpr uint32_t cb_port_chunks = get_compile_time_arg_val(0);
     constexpr uint32_t tile_bytes = get_compile_time_arg_val(1);
@@ -33,6 +40,7 @@ void kernel_main() {
     const uint32_t n_entries = get_arg_val<uint32_t>(1);
     const auto in = TensorAccessor(in_args, in_addr, tile_bytes);
 
+    A2AMM_ZONE("prd_all");
     uint32_t pos = 0;  // packets pushed so far
     for (uint32_t e = 0; e < n_entries; ++e) {
         const uint32_t word = get_arg_val<uint32_t>(2 + e);
@@ -51,7 +59,9 @@ void kernel_main() {
                 const uint32_t n = left < packet_tiles ? left : packet_tiles;
                 uint32_t dst = wp + i * packet_bytes;
                 for (uint32_t tt = 0; tt < n; ++tt) {
+#ifndef ABLATE_NOPORTREAD
                     noc_async_read(in.get_noc_addr(base + r), dst, tile_bytes);
+#endif
                     dst += tile_bytes;
                     if (++r == quarter_tiles) {
                         r = 0;

@@ -5,7 +5,11 @@ Schema: `.claude/references/l1-footprint-discipline.md`. Block axes (from `op_de
 `k` (`block_k_tiles = Kt`), and the exchange axis `entry` (one (destination, head) block, carried in packets of
 `packet_tiles`).
 
-## Compute cores (C = grid − 2·num_links; those owning ≥ 1 head)
+## Compute cores (C = grid − the union over the group's chips of their port cores; those owning ≥ 1 head)
+
+Implementer note: ports are placed per chip next to their link's Ethernet core (host-only map), so their logical
+cores differ between chips; the compute core set (one landing-scratch shard spec, one head→core map) is the grid
+minus the union of every chip's port cores — 101 compute cores on the QuietBox 2 ring (9 port cells), not 106.
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
@@ -17,7 +21,7 @@ Schema: `.claude/references/l1-footprint-discipline.md`. Block axes (from `op_de
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
-| `cb_port_chunks` | `2 * PORT_BATCH_CHUNKS` pages of `packet_tiles * tile_bytes` B (`PORT_BATCH_CHUNKS` = 4) | `2 * PORT_BATCH_CHUNKS` (one batch read + one batch in flight on the fabric) | `{head: streams, rows: streams, k: streams, n: — (not present on ports), entry: streams → PORT_BATCH_CHUNKS packets per batch}` | raw input bytes (input dtype), never through DEST | reader (port) | writer = port sender | whole call | The only CB on the port core; nothing to share with. Packet headers come from the fabric header pool, not a CB |
+| `cb_port_chunks` | `2 * PORT_BATCH_CHUNKS` pages of `packet_tiles * tile_bytes` B (`PORT_BATCH_CHUNKS` = 8; implementer: 8 measured 94.5 vs 99.4 us at 4 on the Kimi Phase 0 case, 7232 B) | `2 * PORT_BATCH_CHUNKS` (one batch read + one batch in flight on the fabric) | `{head: streams, rows: streams, k: streams, n: — (not present on ports), entry: streams → PORT_BATCH_CHUNKS packets per batch}` | raw input bytes (input dtype), never through DEST | reader (port) | writer = port sender | whole call | The only CB on the port core; nothing to share with. Packet headers come from the fabric header pool, not a CB |
 
 Inventory check (Rules 1 and 3): no intermediate CB — the exchange packs into the destination (`cb_a_landed` is the landing buffer itself), the K accumulation folds into DEST (one K-block), and the output packs straight into the writer's CB. The local quarter is read straight into its slot. Removing any listed CB would remove an operand or the output path.
 
@@ -31,7 +35,7 @@ Inventory check (Rules 1 and 3): no intermediate CB — the exchange packs into 
 | `heads_per_core_max = ceil(H / C)` | ≤ 8 | validate (semaphore count cap) |
 | `out_subblock_h` | divides `block_m_tiles`; `out_subblock_h * out_subblock_w ≤ DEST_AUTO_LIMIT` (4 fp32 / 8 bf16) | host subblock rule |
 | `packet_tiles = floor(max_payload / tile_bytes)` | 1 ≤ packet_tiles ≤ 7 (14400 B, bf16) | validate (`≥ 1`); Blackhole max payload |
-| `WEIGHT_DEPTH`, `OUT_DEPTH`, `PORT_BATCH_CHUNKS` | 2, 2, 4 | host constants |
+| `WEIGHT_DEPTH`, `OUT_DEPTH`, `PORT_BATCH_CHUNKS` | 2, 2, 8 | host constants |
 
 ## Total per-core footprint
 
@@ -47,7 +51,7 @@ Compute core:
 | deep K (Kt 128, block_n 1) | 256 KiB | 512 KiB | 4 KiB | 772 KiB |
 | wide N 8192 (block_n 32) | 8 KiB | 512 KiB | 128 KiB | 648 KiB |
 
-Port core: `L1_port = 2*PORT_BATCH_CHUNKS*packet_tiles*tile_bytes` = 48 KiB at 7232 B, 112 KiB at 14400 B.
+Port core: `L1_port = 2*PORT_BATCH_CHUNKS*packet_tiles*tile_bytes` = 96 KiB at 7232 B, 224 KiB at 14400 B.
 
 An L1 output (refinement) adds its interleaved per-bank share (Kimi: 15.7 MB over the L1 banks ≈ 143 KiB) to every core.
 
