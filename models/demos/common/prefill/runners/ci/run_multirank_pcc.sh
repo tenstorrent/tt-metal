@@ -233,8 +233,10 @@ case "${MODEL}" in
     export PREFILL_NUM_USERS
     # No glm54 baseline yet: demand a measurement, so a leg that measured nothing cannot pass green.
     REQUIRE_TPS="${PREFILL_REQUIRE_TPS:-1}"
-    # Four galaxies bring up 106 traced layer passes; stays below the leg's 90 min job timeout.
-    TABLE_WAIT_DEFAULT=2700
+    # Four galaxies bring up 106 traced layer passes: all 4 ranks entered the request loop 235 s after launch in run
+    # 45418316719 (d20054ac6ca), and 900 s is 3.8x that. The leg's 50 min timeout leaves room after it for the request
+    # and the stall watchdog (blaze_models_prefill_tests.yaml).
+    TABLE_WAIT_DEFAULT=900
     ;;
   kimi_k3)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/kimi_k3_prefill_runner_kv}"

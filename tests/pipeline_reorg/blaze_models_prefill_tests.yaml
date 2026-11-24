@@ -2396,7 +2396,9 @@
 # four 8x4 stages over the 106 layer passes (G0 L1-26, G1 loop pass 1 + gate 1, G2 loop pass 2 + gate 2 fed by G1's
 # loop handoff over D2D, G3 L55-78 + MTP). Perf only: GLM-5.4's weights are not published, so it runs GLM-5.3's
 # weights and TTNN cache read-only with seeded synthetic loop gates, has no golden and no KV PCC. The summary reports
-# per-stage chunk times and each boundary's D2D transfer (PREFILL_D2D_TIMING) next to tok/s and TTFT.
+# per-stage chunk times and each boundary's D2D transfer (PREFILL_D2D_TIMING) next to tok/s and TTFT. The timing stays
+# on, so every reported period, tok/s and TTFT includes its cost: each rank dispatches a chunk's forward only once the
+# host sees the D2D lease fence pass, one trace replay's dispatch latency per chunk (prefill_runner._D2DStageClock).
 - name: "(GLM-5.4-744B) disaggregated prefill perf 1M@5k, SC4"
   cmd: |
     set -euo pipefail
@@ -2411,9 +2413,14 @@
   test_group: disagg_prefill
   skus:
     bh_sc4:
-      # Not yet measured: the GLM-5.3 SC4 leg's 60 min, scaled for 106 layer passes against 78 and a first
-      # multi-rank bring-up of the looped model; the launcher's readiness wait is 45 min of it.
-      timeout: 90
+      # Measured in run 45418316719 (d20054ac6ca): the test step took 5.1 min -- all ranks ready 235 s after launch,
+      # the producer done 59 s later (34 s of it the 204-chunk request), the step over 11 s after that; the job took
+      # 12 min 22 s with setup. The bound covers the slowest failing run, a stall right after the longest bring-up,
+      # through its last diagnostic: the launcher's 15 min readiness wait (3.8x the measured 235 s), <=1 min of
+      # request, 10.5 min for the stall watchdog to see the silence (600 s plus its 30 s poll), 10.25 min of stacks
+      # and tt-triage, then the exit trap's Inspector collection (<=2 min) and summary and Gantt (<=5 min with the
+      # matplotlib install): ~44 min. 50 min leaves 6 min (14%) over it.
+      timeout: 50
       tier: 1
       release_ready: false
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
