@@ -210,10 +210,10 @@ case "${MODEL}" in
     # GLM-5.4 (GLM-5.3 with layers 27-54 run twice) on its production placement: four 8x4 stages, one per galaxy, over
     # the adapter's 106 layer passes. The runner's default split is that placement: G0 = passes 0-25 (L1-26), G1 =
     # 26-53 (loop pass 1 + gate 1), G2 = 54-81 (loop pass 2 + gate 2, sent G1's loop handoff), G3 = 82-105 (L55-78),
-    # with MTP on G3 at GLM-5.3's production MTP settings (glm53_mtp_kv_share.json, as run_glm54_trunk.sh reads them).
+    # with MTP on G3 at GLM-5.3's production MTP settings (glm53_mtp_kv_share.json).
     # Tier-2 weights: the adapter reads GLM-5.3's checkpoint and TTNN cache and never builds or writes a cache
     # (builds_missing_weight_cache=False), with seeded synthetic loop gates. Perf only: GLM-5.4 has no golden, and a
-    # looped model builds no KV chunk table. The prompt is the GLM-5.3 CI golden's 1M tokens, as the trunk probes use.
+    # looped model builds no KV chunk table. The prompt is the GLM-5.3 CI golden's 1M tokens.
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/glm54_prefill_runner_kv}"
     MANIFEST="${MANIFEST_DIR}/glm54.json"
     PERF_ONLY=1
