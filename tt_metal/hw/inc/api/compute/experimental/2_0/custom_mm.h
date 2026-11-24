@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "api/compute/experimental/2_0/internal/no_call_site_macros.h"
+
 #include <cstdint>
 #include "api/compute/experimental/custom_mm.h"
 #include "api/compute/experimental/2_0/llk_operand.h"
