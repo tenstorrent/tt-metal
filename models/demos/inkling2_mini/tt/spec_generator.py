@@ -67,6 +67,12 @@ class TappedModel(Inkling2Model):
             self.drafter.set_commit_pos(pos)
 
 
+# tuning, off by default: the expert prefetch in the spec process (see capture_rows)
+SPEC_PREFETCH = os.environ.get("INKLING_SPEC_PREFETCH") == "1"
+SPEC_RING_KB = int(os.environ.get("INKLING_SPEC_RING_KB", "165"))
+SPEC_STAGE_KB = int(os.environ.get("INKLING_SPEC_STAGE_KB", "436"))
+
+
 class SpecGenerator(Generator):
     def __init__(self, model: TappedModel, drafter: DSparkDrafter, overlap=True, verify=None):
         """verify: a tt/verify.VerifyStep (R <= drafter.k + 1) for generate_rows, or a list of them (early stop:
@@ -118,12 +124,12 @@ class SpecGenerator(Generator):
         tok = ttnn.slice(self.vtok[R], [0, 0, 0, n - 1], [1, 1, 1, n])
         ttnn.copy(ttnn.reshape(tok, [1, 1]), self.drafter.anchor)
 
-    def capture_rows(self, p_shared, p_split=None):
+    def capture_rows(self, p_shared, p_split=None, before_capture=None):
         """Plain traces (Generator.capture), the draft trace, and per verify step (row count R) and conv phase the
         verify pass (far call shared or per token) and the commit of n = 1 .. R accepted rows. p_shared: a position
         >= 1024 whose pass shares the far chunk; the chunk-crossing position of each R is found from it (p_split:
         unused, kept for callers). Every program is compiled eagerly first (a program first compiled after a capture
-        corrupts that trace's scratch)."""
+        corrupts that trace's scratch); before_capture() runs after that, for the caller's own programs."""
         m, d = self.model, self.drafter
         say = print if os.environ.get("S6_STAGES") else (lambda *a, **k: None)
         Vs = list(self.verifies.values())
@@ -141,7 +147,17 @@ class SpecGenerator(Generator):
             from models.demos.inkling2_mini.tt.mk import router_stage
             from models.demos.inkling2_mini.tt.mk.overlap import install
 
-            self.overlap = m.overlap = install(m)
+            if SPEC_PREFETCH and self.use_experts:
+                # guessed-expert prefetch beside the drafter (as Generator.capture; the verify pass keeps its
+                # protocol): the R-row expert step and the drafter's widest linear need ~165 KB more L1 than the
+                # plain step leaves, so w_all is staged SPEC_STAGE_KB per core (the tail comes from DRAM in the
+                # w_all program) and the ring is SPEC_RING_KB (2 guesses for BFP4 and mixed layers, 1 for BFP8)
+                from models.demos.inkling2_mini.tt.mk.expert_overlap import ExpertOverlap
+
+                self.overlap = m.overlap = install(m, weights=(f"w_all@{SPEC_STAGE_KB}",))
+                self.experts = ExpertOverlap(m, ring_kb=SPEC_RING_KB)
+            else:
+                self.overlap = m.overlap = install(m)
             self.router_stage = router_stage.install(m)
             m.step()
             m.step()
@@ -165,6 +181,8 @@ class SpecGenerator(Generator):
                 self._set_anchor(R, n)
                 ttnn.synchronize_device(self.device)
                 say("S6 eager commit", R, n, flush=True)
+        if before_capture is not None:
+            before_capture()
         if self.overlap is not None:  # settle the staging attach pattern again after the verify passes
             m.set_inputs(0, 0)
             m.step()
