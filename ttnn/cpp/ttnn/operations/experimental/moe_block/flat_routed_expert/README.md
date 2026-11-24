@@ -39,14 +39,15 @@ bank took to the last bank. The swaps only change which core reads which slot, n
 
 ## Down weight reads
 
-The down cores are chosen together with their banks: (hops, bank, core) pairs nearest first, every bank serving the same
-down bytes. A down core's blocks go over its bank pattern (`down_bank_pattern`: 8 positions, block k at position
-k % 8; most cores have all 8 positions in one bank, the rest split over two) in its slot (`down_weight_slot`), which
-`down_weight_reader.cpp` decodes and `flat_weight_regions` packs. The weights' layout therefore follows the plan - the
-chip's DRAM endpoints (firmware) and harvesting place the banks' anchors - so a cache of laid-out weights is keyed on
-the plan's packing fields (`down_bank_patterns`, `down_weight_slots`, `down_weight_slot_count`), not on the layout
+The down cores are the free cores in raster order, the bank anchors and their east neighbours last (those stay free for
+the combine's ports); each down core then takes its banks: (hops, bank, core) pairs nearest first, every bank serving
+the same down bytes. A down core's blocks go over its bank pattern (`down_bank_pattern`: 8 positions, block k at
+position k % 8; most cores have all 8 positions in one bank, the rest split over two) in its slot (`down_weight_slot`),
+which `down_weight_reader.cpp` decodes and `flat_weight_regions` packs. The weights' layout therefore follows the plan -
+the chip's DRAM endpoints (firmware) and harvesting place the banks' anchors - so a cache of laid-out weights is keyed
+on the plan's packing fields (`down_bank_patterns`, `down_weight_slots`, `down_weight_slot_count`), not on the layout
 options. Rotating every core over all banks (the earlier layout) averaged 12 NOC0 hops a down byte; the nearest banks
-1.4 (flat -2..-10%, experts + combine K3 / M3 -3..-12%).
+1.4 (flat -2..-10%).
 
 ## x forwarding
 

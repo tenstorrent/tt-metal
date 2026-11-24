@@ -484,42 +484,10 @@ FlatRoutedExpertPlan make_plan(
         }
         return c;
     };
-    // The down cores are chosen together with their DRAM banks: (hops, bank, candidate) pairs nearest first, each bank
-    // taking positions (dram_banks a core: a core's blocks over its positions) up to an even share, a candidate chosen
-    // with its first position; the chosen cores go first (the down-core count below keeps them), in candidate order.
-    // Every down core then reads from the bank(s) nearest it - 1.4 NOC0 hops a down byte on average instead of 12 with
-    // every core's blocks rotating over all banks (flat -2..-10%, experts + combine K3 / M3 -3..-12%; bit-identical).
-    if (!p.down_cores.empty()) {
-        const uint32_t n = std::min<uint32_t>(32u, p.down_cores.size());
-        const uint32_t per = (p.hidden_tiles + n - 1) / n;
-        const uint32_t want = std::min<uint32_t>(
-            std::min<uint32_t>(p.down_cores.size(), (p.hidden_tiles + per - 1) / per), p.hidden_tiles);
-        const auto capb = even_caps(want * nbanks);
-        std::vector<uint32_t> load(nbanks, 0), got(p.down_cores.size(), 0);
-        std::vector<std::tuple<uint32_t, uint32_t, uint32_t>> pairs;
-        for (uint32_t b = 0; b < nbanks; ++b) {
-            for (uint32_t c = 0; c < p.down_cores.size(); ++c) {
-                pairs.emplace_back(bank_hops(b, p.down_cores[c]), b, c);
-            }
-        }
-        std::sort(pairs.begin(), pairs.end());
-        uint32_t chosen = 0;
-        for (const auto& [h, b, c] : pairs) {
-            if (load[b] == capb[b] || (got[c] == 0 && chosen == want)) {
-                continue;
-            }
-            chosen += got[c] == 0;
-            const uint32_t take = std::min(nbanks - got[c], capb[b] - load[b]);
-            got[c] += take;
-            load[b] += take;
-        }
-        std::vector<Core> first, rest;
-        for (uint32_t c = 0; c < p.down_cores.size(); ++c) {
-            (got[c] > 0 ? first : rest).push_back(p.down_cores[c]);
-        }
-        first.insert(first.end(), rest.begin(), rest.end());
-        p.down_cores = std::move(first);
-    }
+    // The down cores stay the free cores in raster order, the bank anchors and their east neighbours last (above); each
+    // then reads from the bank(s) nearest it (the bank patterns below). Picking the down cores by their distance to the
+    // banks instead takes exactly those anchor-side cores, and the combine's ports - the cores the flat expert leaves
+    // free - end up sharing one or two columns (GLM-5.3 4x4 torus, experts + combine 1630 -> 1693 us).
     uint32_t ND = p.down_cores.size();
     const uint32_t n_slots = p.dram_banks;  // (weight slot r: bank r)
     p.gate_up_weight_slots = n_slots;
