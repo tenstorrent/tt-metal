@@ -53,7 +53,7 @@ public:
      * @brief Resolve an instruction fragment to a replay handle over this sequence.
      *
      * @param needle: The fragment to replay, as characters of the sequence.
-     * @note Returns 0 when unrepresentable; lltt::replay_insn always sets an opcode bit, so 0 is never a
+     * @note Returns 0 when unrepresentable; TT_OP_REPLAY always sets an opcode bit, so 0 is never a
      *       real handle. @ref make_table rejects those, a standalone handle needs its own static_assert.
      */
     constexpr std::uint32_t fragment(const char* needle) const

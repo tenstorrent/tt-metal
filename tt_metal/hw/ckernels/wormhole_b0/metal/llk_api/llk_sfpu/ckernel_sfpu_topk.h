@@ -47,7 +47,7 @@ constexpr std::uint32_t TOPK_SFPSTORE_MODE_PACK_UINT16 = 9;
 // fused [bf16|u16] key, and the fused tie-complement operand.
 constexpr std::uint32_t TOPK_LO16_MASK = 0x0000FFFF;
 
-// All lanes enabled, CC result true. A macro, not a function: some sites sit inside lltt::record windows.
+// All lanes enabled, CC result true. A macro, not a function: some sites sit inside TT_REPLAY capture windows.
 #define TOPK_SFPENCC_ALL_LANES_ON() TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0, 0, sfpi::SFPENCC_MOD1_EI_RI)
 
 // Rank-stamped keys carry a TAG_BITS-wide rank tag in the value word's low bits: 16 for bf16 values

@@ -65,8 +65,9 @@ inline void calculate_tiled_prod() {
     // The first multiply reads 1.0 from vConstFloatPrgm0, not a literal: sfpi folds `1.0f * v` to `v`,
     // which would store a -0.0 first element as -0.0 where SFPMUL gives +0.0.
     //
-    // The empty asm statements stop sfpi's own replay recording from spanning lltt::record when calls
-    // are back to back; a nested recording hangs the core.
+    // The empty asm statements stop sfpi's own replay recording from spanning TT_REPLAY when calls
+    // are back to back; a nested recording hangs the core. FIXME:
+    // This is a bug #67125
     asm volatile("" ::: "memory");
     vFloat v = dst_reg[0];
     vFloat result = vConstFloatPrgm0 * v;

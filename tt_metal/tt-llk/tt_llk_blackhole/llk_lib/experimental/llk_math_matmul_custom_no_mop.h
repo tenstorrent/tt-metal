@@ -203,7 +203,7 @@ inline void matmul_configure_mop_custom(
     //
     // 16x32 / 32x16 tiny tiles record a shorter, face-row-confined MVMUL sequence (identical to the proven
     // regular matmul_configure_mop) so the replay never marches SrcB into non-existent faces; full 32x32
-    // tiles keep the original 16-MVMUL 4-face walk. The no-mop path drives this via direct lltt::replay.
+    // tiles keep the original 16-MVMUL 4-face walk. The no-mop path drives this via direct TT_REPLAY.
 
     constexpr bool high_fidelity = math_fidelity != MathFidelity::LoFi;
 
