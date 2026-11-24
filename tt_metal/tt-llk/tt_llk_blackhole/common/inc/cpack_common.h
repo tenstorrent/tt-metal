@@ -917,6 +917,11 @@ struct llk_pack_out_tag
     friend auto llk_pack_out_used(llk_pack_out_tag);
 };
 #pragma GCC diagnostic pop
+// A probe that ran before a later mark keeps its earlier result, as on GCC 15; GCC 16 reports that as an error.
+#pragma GCC diagnostic push
+#if __GNUC__ >= 16
+#pragma GCC diagnostic ignored "-Wsfinae-incomplete"
+#endif
 template <int N>
 struct llk_pack_out_set
 {
@@ -925,6 +930,7 @@ struct llk_pack_out_set
         return true;
     }
 };
+#pragma GCC diagnostic pop
 template <int N, std::uint32_t dep, typename = decltype(llk_pack_out_used(llk_pack_out_tag<N + 0 * dep>{}))>
 constexpr bool llk_pack_out_marked(int)
 {
