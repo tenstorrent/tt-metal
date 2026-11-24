@@ -763,10 +763,6 @@ protected:
             if (config.num_tiles > 1) {
                 GTEST_SKIP() << "Multi-tile dest print is not yet validated on Quasar.";
             }
-            if (config.data_format == tt::DataFormat::Float32 || config.data_format == tt::DataFormat::Int32) {
-                GTEST_SKIP() << "Quasar: after a 32-bit dest print one TRISC returns from its kernel but never signals "
-                                "completion (hang).";
-            }
         }
 
         this->RunTestOnDevice(
