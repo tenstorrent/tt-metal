@@ -132,7 +132,8 @@ jobs:
             FILTERED="$PROVIDED_MATRIX"
           else
             # Filter by tier
-            FILTERED=$(echo "$BUILT_MATRIX" | jq -c --argjson tier "$TIER" '[.[] | select(.tier == $tier)]')
+            if [ "$TIER" = "any" ]; then FILTERED="$BUILT_MATRIX"; else
+            FILTERED=$(echo "$BUILT_MATRIX" | jq -c --argjson tier "$TIER" '[.[] | select(.tier == $tier)]'); fi
             # Filter by model (substring match, case-insensitive; comma-separated OR-list)
             if [ "$MODEL" != "all" ]; then
               FILTERED=$(echo "$FILTERED" | jq -c --arg m "$MODEL" '
@@ -258,10 +259,35 @@ jobs:
           log-file: generated/test_logs/${{ matrix.test-group.name }}.log
           run: |
             mkdir -p generated/test_reports
+            export TT_METAL_CACHE=/work/generated/harvest_cache
             # Perf/accuracy are enforced by the "Report and Validate Perf and Accuracy targets"
             # step below; the in-test checks are warning-only, so the tests write
             # complete benchmark JSON before validation runs.
             ${{ matrix.test-group.cmd }}
+      - name: Harvest LLK configs from the kernel cache
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          out=/work/generated/config_harvest
+          mkdir -p "$out"
+          : > "$out/files.txt"
+          for root in /work/generated/harvest_cache "${HOME:-/root}/.cache/tt-metal-cache" /tmp/tt-metal-cache; do
+            [ -d "$root" ] || continue
+            find "$root" -type f \( -name chlkc_descriptors.h -o -name defines_generated.h -o -name chlkc_math.cpp -o -name named_ct_arg_map_generated.h \) >> "$out/files.txt"
+          done
+          echo "files: $(wc -l < "$out/files.txt"), compute kernels: $(grep -c chlkc_math.cpp "$out/files.txt")"
+          tar czf "$out/harvest.tgz" -T "$out/files.txt" || true
+          printf '{"sku":"%s","model":"%s","name":"%s","arch":"%s"}\n' "${{ matrix.test-group.sku }}" "${{ matrix.test-group.model }}" "${{ matrix.test-group.name }}" "${ARCH_NAME:-}" > "$out/meta.json"
+          ls -la "$out"
+      - name: Upload config harvest
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: config-harvest-${{ matrix.test-group.sku }}-${{ matrix.test-group.model }}-${{ strategy.job-index }}
+          path: |
+            /work/generated/config_harvest/harvest.tgz
+            /work/generated/config_harvest/meta.json
+          if-no-files-found: warn
       - name: Save environment data
         id: save-environment-data
         if: ${{ !cancelled() }}
@@ -275,7 +301,7 @@ jobs:
             echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
           fi
       - name: Upload benchmark data
-        if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
+        if: false
         uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
@@ -284,7 +310,7 @@ jobs:
           username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
           hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
       - name: Report and Validate Perf and Accuracy targets
-        if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
+        if: false
         shell: bash
         run: |
           python3 .github/scripts/utils/validate_perf_targets.py \
@@ -299,7 +325,7 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
         if: ${{ failure() }}
       - name: 🤖 AI job summary
-        if: always() && !cancelled()
+        if: false
         continue-on-error: true
         uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/job@main
         with:

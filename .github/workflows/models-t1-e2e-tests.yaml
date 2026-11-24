@@ -10,58 +10,12 @@ on:
         description: "Select model to test"
         required: true
         default: all
-        type: choice
-        options:
-          - all
-          - llama3.1-8b
-          - llama3.1-8b-dp-galaxy
-          - llama3.3-70b-galaxy
-          - qwen3-32b-galaxy
-          - qwen3.6-27b
-          - qwen3.6-35b-a3b
-          - gpt-oss-120b
-          - whisper
-          - gemma-4-12b
-          - gemma-4-26b-a4b
-          - gemma-4-31b
-          - flux.1-schnell
-          - flux.1-dev
-          - flux.2-dev
-          - wan-2.2-t2v
-          - wan-2.2-i2v
-          - ltx-2.3-pro-t2v
-          - ltx-2.3-fast-t2v
-          - ltx-2.3-pro-i2v
-          - ltx-2.3-fast-i2v
-          - deepseek-v3-tg
-          - deepseek-v3-b1
-          - z-image-turbo
-          - ideogram-4
-          - resnet50
+        type: string
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
         required: false
         default: "all"
-        type: choice
-        options:
-          - all
-          - "wh_n150 (N150)"
-          - "wh_n300 (N300)"
-          - "wh_llmbox (T3000)"
-          - "wh_llmbox_perf (T3000 perf)"
-          - "wh_galaxy (WH Galaxy)"
-          - "wh_galaxy_perf (WH Galaxy perf)"
-          - "bh_p150 (P150)"
-          - "bh_p300 (P300)"
-          - "bh_quietbox_2 (BH QB2)"
-          - "bh_galaxy (BH Galaxy)"
-          - "bh_sc1 (BH Single Galaxy)"
-          - "bh_sc1_high_power (BH SC1 High Power)"
-          - "bh_sc4 (BH Supercluster 4)"
-          - "bh_sc4_high_power (BH SC4 High Power)"
-          # Dispatch-only: excluded from scheduled ALL_SKUS so cron runs don't allocate
-          # scarce SC16 hardware. Enabled in package-and-release via release-build-test-publish.
-          - "bh_sc16 (BH Supercluster 16)"
+        type: string
       platform:
         required: false
         type: choice
@@ -86,6 +40,11 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      tier:
+        required: false
+        type: string
+        default: "1"
+        description: "Tier filter, or any"
       mlperf-write-access:
         required: false
         type: boolean
@@ -96,7 +55,7 @@ permissions:
   packages: write
   contents: write
 
-run-name: "(Tier 1) Models E2E${{ github.event_name == 'schedule' && ' [scheduled]' || '' }}"
+run-name: "[config-harvest] (Tier 1) Models E2E${{ github.event_name == 'schedule' && ' [scheduled]' || '' }}"
 
 jobs:
   check-harbor:
@@ -187,4 +146,4 @@ jobs:
       enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}
       model: ${{ needs.resolve-skus.outputs.model }}
       mlperf-read-only: ${{ inputs.mlperf-write-access != true }}
-      tier: "1"
+      tier: ${{ inputs.tier || '1' }}
