@@ -288,6 +288,11 @@ FORCE_INLINE void rtn_bfp4_face_row(volatile tt_l1_ptr uint32_t* w) {
     }
 }
 
+// S0-8 (off the critical path): a decode-written K row re-encoded in the packed bfp4 tile before the write-back
+#include "bfp4_rtn.hpp"
+// (A/B: kv_k_patch 0 skips the re-encoding — the stored row stays truncated)
+constexpr uint32_t kKPatch = get_named_compile_time_arg_val("kv_k_patch");  // (2: re-encode truncating, a debug A/B)
+
 // row `row` of a bf16 32 x 32 tile at `tile` (L1): its two face rows (faces 0 / 1 for rows < 16, 2 / 3 above)
 FORCE_INLINE void rtn_bfp4_tile_row(uint32_t tile, uint32_t row) {
     volatile tt_l1_ptr uint32_t* t = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile);

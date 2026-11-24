@@ -76,7 +76,7 @@ void kernel_main() {
             p[i] = 0xff80;
         }
     }
-    uint32_t tail_bank[kRows], tail_row[kRows];
+    uint32_t tail_bank[kRows], tail_row[kRows], tail_pos[kRows];  // (tail_pos: the new row in its tail tile, S0-8)
     uint64_t owner_sem = 0;  // verify: the tail-semaphore of the chunk worker reading row 0's tile for later rows
     uint32_t last = batch;   // verify: the last row on row 0's tile, if a later row starts the next one
     if (role >= 2) {
@@ -90,10 +90,12 @@ void kernel_main() {
         }
         noc_async_read_barrier();
         for (uint32_t u = 0; u < kRows; u++) {
-            const uint32_t tp =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_flush))[(groups == 1 ? 1 : 0) + u] / 32;
+            const uint32_t pw =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_flush))[(groups == 1 ? 1 : 0) + u];
+            const uint32_t tp = pw / 32;
             tail_bank[u] = tp % banks;
             tail_row[u] = tp / banks;
+            tail_pos[u] = pw % 32;
         }
         if constexpr (verify && !packed) {
             const uint32_t tp0 = tail_row[0] * banks + tail_bank[0];
@@ -131,21 +133,21 @@ void kernel_main() {
                 const uint32_t from = get_read_ptr(cb_knr), to = get_write_ptr(cb_knew);
                 noc_async_read(get_noc_addr(my_x[noc_index], my_y[noc_index], from), to, Dt * kTile);
                 noc_async_read_barrier();
-                for (uint32_t d = 0; d < Dt; d++) {
-                    if constexpr (packed) {
+                if constexpr (packed || verify) {
+                    // (packed / verify rows: the tail is packed in storage format for the step's own attention, so the
+                    // rows are rounded here, before compute places them)
+                    for (uint32_t d = 0; d < Dt; d++) {
                         for (uint32_t r = 0; r < kVR; r++) {
                             rtn_bfp4_tile_row(to + d * kTile, r);
                         }
-                    } else if constexpr (kTailBatched) {
-                        for (uint32_t a = 0; a < n_act; a++) {
-                            rtn_bfp4_tile_row(to + d * kTile, act.row[a]);
-                        }
-                    } else {
-                        rtn_bfp4_tile_row(to + d * kTile, 0);
                     }
                 }
                 cb_push_back(cb_knew, Dt);
-                cb_pop_front(cb_knr, Dt);
+                if constexpr (packed || verify) {
+                    cb_pop_front(cb_knr, Dt);
+                }
+                // (otherwise compute goes on with the unrounded rows at once; cb_knr is kept until the write-back,
+                // which re-encodes the stored row to nearest: patch_bfp4_row)
             }
         }
         // the row max: face 0's rows, then (more than 16 rows) face 2's at 512 in the slot
@@ -220,6 +222,17 @@ void kernel_main() {
             const uint32_t copy_stride = get_arg_val<uint32_t>(tail_args + 2);
             cb_wait_front(cb_flush, Dt);
             cb_wait_front(cb_flushv, Dt);
+            if constexpr (kKRtn && kKPatch && !verify) {
+                // (S0-8: the new k row re-encoded to nearest in the packed tail tile, from the unrounded copy — off
+                // the critical path, the step's attention used the unrounded row; the packer / compute wrote both, so
+                // Blackhole's write-through RISC-V L1 cache is invalidated before reading them, tt-1xx/cache.h)
+                invalidate_l1_cache();
+                const uint32_t knr = get_read_ptr(cb_knr), flush = get_read_ptr(cb_flush);
+                for (uint32_t d = 0; d < Dt; d++) {
+                    patch_bfp4_row(
+                        flush + d * kKvTile, tail_pos[u], knr + d * kTile, kTailBatched ? u : 0, kKPatch == 1);
+                }
+            }
             for (uint32_t kv = 0; kv < 2; kv++) {
                 // (k from cb_flush in bf8 rows, v from cb_flushv in V's rows: kVRow)
                 const uint32_t row = kv == 0 ? kKvRow : kVRow;
@@ -240,6 +253,12 @@ void kernel_main() {
             *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_tail)) = i + 1;
             if (owner_sem && u == last) {
                 noc_semaphore_inc(owner_sem, 1);
+            }
+        }
+        if constexpr (kKRtn && !packed && !verify) {
+            // (the unrounded copy is done with: single — this pass's row; batched — the layer's rows)
+            if (role >= 2 && (kTailBatched ? i % n_act == n_act - 1 : true)) {
+                cb_pop_front(cb_knr, Dt);
             }
         }
     }
