@@ -165,3 +165,31 @@ def test_concurrent_derivations_do_not_share_a_file(tmp_path):
         assert proc.wait() == 0, proc.stderr.read()
 
     assert len(list(tmp_path.iterdir())) == 4
+
+
+def test_every_prefill_variable_is_forwarded_to_all_ranks(tmp_path):
+    """Any PREFILL_* knob set on the launching host must reach every rank (GH #54885)."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("PREFILL_")}
+    env.update({"PREFILL_L1_SMALL_SIZE": "131072", "PREFILL_MODEL": "m"})
+    proc = subprocess.run(
+        [str(LAUNCHER), str(INTRAGALAXY), "h0,h1"],
+        capture_output=True,
+        text=True,
+        env={**env, "PP_DRY_RUN": "1", "PP_BINDING_OUT_DIR": str(tmp_path)},
+    )
+    assert proc.returncode == 0, proc.stderr
+    forwarded = next(line for line in proc.stderr.splitlines() if line.startswith("forward-env:"))
+    assert "-x PREFILL_L1_SMALL_SIZE" in forwarded
+    assert "-x PREFILL_MODEL" in forwarded
+
+
+def test_no_prefill_variables_forwards_nothing(tmp_path):
+    env = {k: v for k, v in os.environ.items() if not k.startswith("PREFILL_")}
+    proc = subprocess.run(
+        [str(LAUNCHER), str(INTRAGALAXY), "h0,h1"],
+        capture_output=True,
+        text=True,
+        env={**env, "PP_DRY_RUN": "1", "PP_BINDING_OUT_DIR": str(tmp_path)},
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "forward-env:" in proc.stderr.splitlines()
