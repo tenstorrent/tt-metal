@@ -179,7 +179,7 @@ categories clean, acceptance + regression green.
 
 **Outcome**: built with the realignment at the x injector instead of a destination-side shift matmul (same row-permutation algebra, one stage earlier): every stage runs on quarter-aligned row tiles (`ceil(Sq/32)` per quarter), so the exchange / landing / stage 3 are unchanged and Refinement 5's cos/sin rows need no shift. All 96 golden m_non_aligned NoPE cells pass; fabric bytes per quarter are `ceil(Sq/32)` tile rows (≤ the planned ceil-covering 2), see op_design.md R9.
 
-### [ ] Refinement 5 — Rotary embedding (rope_mode = rope)
+### [x] Refinement 5 — Rotary embedding (rope_mode = rope)
 
 **Goal**: add `"rope"` to `SUPPORTED["rope_mode"]`. `cos` / `sin` (per device `(1,1,S/G,Dr)`, bf16 TILE DRAM) are
 read once per core that owns heads (the quarter's rows × `Dr_t`). `rope_block` becomes
@@ -201,6 +201,11 @@ Broadcast Verification). New CBs `cb_cos`, `cb_sin`, `cb_trans`, `cb_rope_tmp` g
 
 **Done when**: every golden cell with `rope_mode=rope` whose other axis values are SUPPORTED passes (including
 `LOOSE_CASES[2]` and `[3]`), the RoPE regression tests pass, verifier categories clean.
+
+**Outcome**: built as designed (reader-generated trans tile + resident cos/sin rows; `rope_block` = `matmul_block`
+rotation then one fused chain `rope*cos + rot*sin`). All 546 RoPE golden cells pass incl. LOOSE_CASES[2]/[3] and the
+three RoPE regression tests; rope part PCC 0.999997 at fp32 DEST. Guard-set baselines: DSV3.2 227.8 µs, GLM-5.3
+154.0 µs fastest chip.
 
 ### [ ] Refinement 6 — Local stage-1 throughput on the PERF FOCUS (block / buffer / injector co-tune)
 

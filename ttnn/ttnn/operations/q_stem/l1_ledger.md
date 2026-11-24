@@ -19,6 +19,10 @@ Phase 0: bf16 everywhere, `fp32_dest_acc_en = True`. "tb" = bytes per page of th
 | `cb_prefix_rm` (ROW_MAJOR out only; Refinement 2) | `out_depth * s3_block_m_tiles * out_blk_tiles` (segment path: 2·1·16 = 32 tile-sized pages = 2 × 32 sticks of `s3_block_n_tiles`·64 B; full stick (Refinement 3, `RM_FULL_STICK`, one N-block per row): 2·1·18 = 36 = 2 × 32 whole output sticks) | 2 row blocks (untilize of block k+1 overlaps the writer's 32 stick writes of block k) | {S3·N: spans → `s3_block_n_tiles`, S3·rows: streams, S3·heads: streams, S1·*: none, X·seg: none} | Float16_b row-major — output ABI | compute (untilize_row_block) | writer (stick segments) | stage 3 | Cannot be `cb_prefix_out` in place (the untilize helper requires in ≠ out); under ROW_MAJOR `cb_prefix_out` shrinks to **one** block (its consumer is the same compute thread), so the RM pair costs +1 block vs TILE, not +2 |
 | `cb_rope_rm` (ROW_MAJOR out only, segment path; not allocated under the full stick, Refinement 3) | `out_depth * s3_block_m_tiles * Dr_t` | 2 row blocks | {S3·rows: streams, S3·N: none (`Dr_t`), S3·heads: streams, S1·*: none, X·seg: none} | Float16_b row-major — output ABI | compute (untilize_row_block) | writer | stage 3 | Separate from `cb_prefix_rm`: different push quantum (`Dr_t` vs `s3_block_n_tiles`), and kept apart so a rotated rope (RoPE) feeds the same untilize; `cb_rope_out` shrinks to one block under ROW_MAJOR |
 | `cb_x_stage` (injector only; Refinement 4) | `2 * s1_kb` when `(S/G) % 32 != 0`, else 1 (unused) | `2 * s1_kb` (the two latent tiles Ta / Tb of every K tile of one realigned x row tile) | {S1·rows: streams → 1 row tile, S1·K: spans → `s1_kb`, others: none} | Float16_b (latent dtype; raw copy source) | injector DRAM half (RISCV_0) | same RISC (local NoC face-row copies into `cb_x_round`) | stage 1 | Private scratch of one RISC (reserved once, never pushed). Cannot be `cb_x_round`: the realigned tile is assembled from two source tiles, so source and destination must not overlap; injector core holds nothing else to alias |
+| `cb_cos` (compute rect; RoPE only, Refinement 5) | `quarter_row_tiles * Dr_t` (DSV3.2 S=640: 5·2 = 10) | = capacity (resident table) | {S3·rows: spans → `quarter_row_tiles` (rows of b > 0 reuse row `t mod quarter_row_tiles`), S3·N: none (`Dr_t` rope cols), S3·heads: reused by every head, S1·*: none, X·seg: none} | Float16_b (caller's bf16 table, unpacked as a srcB operand) | reader (`rope_tables_block`, once, at the first landed row) | compute (`rope_block`, caller-managed wait/pop around the stage-3 loop, Offset-indexed in the chain) | stage 3 | Cannot share with `cb_sin`: both are read by the same chain tile step. Could alias the stage-1-only CBs (`cb_x_round`, `cb_qb_slice`) on a stage-1 core — not done (not needed for fit; the reader loads it during stage 1 on free cores) |
+| `cb_sin` (RoPE only) | `quarter_row_tiles * Dr_t` | = capacity | as `cb_cos` | Float16_b | reader | compute | stage 3 | as `cb_cos` |
+| `cb_trans` (RoPE only) | 1 | 1 (resident in1 of the rotation matmul, `NoWaitNoPop`) | {all axes: none — one 32x32 rotate_half_meta matrix, reused for every rope tile} | Float16_b (0 / ±1 exact) | reader (generated in L1: NoC zero-fill + 32 non-zeros; no host tensor) | compute | stage 3 | One tile; nothing smaller to share |
+| `cb_rope_tmp` (RoPE only) | `Dr_t` | one row's rotated rope (`rope @ trans`) | {S3·rows: streams → 1 row, S3·N: none (`Dr_t`), others: none} | Float16_b — the rotation is exact (one ±1 term per element), so bf16 loses nothing | compute (rotation matmul) | compute (rope chain, streamed per tile) | per row block | Cannot fold into DEST: the chain needs `rot` as an FPU srcA operand (`rot * sin`), which must come from a CB; cannot pack into `cb_rope_out` in place (the chain reads `rot` while packing the final value) |
 | `cb_port_stage` (ports only) | `2 * port_batch_segments * head_w_tiles` (2·4·6 = 48) | 2 batches | {X·seg: spans → `port_batch_segments * head_w_tiles`, all others: none} | Float16_b (raw payload) | reader (port) | writer (port sender) | port lifetime | Port cores hold no compute CBs except the unused `cb_q_slice` copy; nothing to share with |
 
 ## Symbol table (every non-block parameter in a capacity expression)
@@ -50,6 +54,7 @@ L1(core) = tb·tensor_row_tiles·core_cols_max          // cb_q_slice      — s
          + tb·(out_tile_depth + [RM]·out_depth)·s3_block_m_tiles·(s3_block_n_tiles + Dr_t)
                                  // cb_prefix_out + cb_rope_out (+ cb_prefix_rm + cb_rope_rm under ROW_MAJOR out;
                                  //  out_tile_depth = 1 under ROW_MAJOR, out_depth under TILE)
+         + [RoPE]·tb·(2·quarter_row_tiles·Dr_t + 1 + Dr_t)   // cb_cos + cb_sin + cb_trans + cb_rope_tmp
 fits_l1 := L1(core) ≤ cb_l1_budget(mesh)  (lowest allocated L1 address; checked on host before building — check_fits_l1)
 ```
 
@@ -86,7 +91,7 @@ headroom). TILE output is unchanged.
 | q (5.90 MB bf16) | **0** | resident in `cb_q_slice`, pulled by ports / delivered locally from L1 | port pulls 4.42 MB (NoC0); local quarter 1.47 MB (NoC1); fabric 4.42 MB sent |
 | wkv_b1 (12.58 MB bf16) | 1 (R1); `B*quarter_row_tiles/s3_block_m_tiles` in R2 (=1 for the INPUTS shape) | resident per head across its rows | none |
 | output (17.69 MB bf16) | 1 (write) | each row block written once (ROW_MAJOR: same bytes, as 32 stick segments of `s3_block_n_tiles`·64 B + 32 of `Dr_t`·64 B per row block, one flush per block) | none |
-| cos/sin (RoPE) | 1 | read once per core that owns heads (rows of the quarter) | — |
+| cos/sin (RoPE, 2 × (S/G)·Dr·2 B per chip: DSV3.2 2 × 20 KiB) | **one per core holding heads** (99 on DSV3.2; ~4 MB of DRAM reads per chip, the tables are tiny but replicated) | read once per core that owns heads (rows of the quarter), at its first landed row — Refinement 5 as designed. A multicast of the table from one reader would cut this to 1 crossing (perf lamp, not built) | — |
 
 Totals: DRAM **46.4 MB** (Phase 0, bf16, latent in DRAM) → 90.6 µs at 512 GB/s = the Phase-0 roofline's DRAM term;
 **37.8 MB** in the model config → 73.8 µs. Cross-core NoC: ~196 MB of multicast deliveries (1.97 MB × 99; one
@@ -141,3 +146,8 @@ device. Schemes the schedule tool refuses (L1→L1 port pulls, fabric sends, `al
   `cb_prefix_out` (18 pages) and untilized once into `cb_prefix_rm` (2 × 18 pages): same bytes as the segment path
   (`l1_terms` unchanged), `cb_rope_out` / `cb_rope_rm` not allocated. `cb_wkv` grows to every head only when the
   parked `S3_LATE_REMOTE_ROWS` knob is turned (default 0: unchanged).
+
+- Refinement 5 (RoPE): `cb_cos`, `cb_sin` (`quarter_row_tiles·Dr_t` each), `cb_trans` (1), `cb_rope_tmp` (`Dr_t`) on
+  the compute rect, only when `cos` / `sin` are passed; `l1_terms` adds them to every compute core's stage-3 staging.
+  DSV3.2 S=640: +(10 + 10 + 1 + 2)·2 KiB = 46 KiB per core; wide rope (Dr_t = 4, qrt = 2): +26 KiB. No INPUTS shape
+  approaches the budget (all 546 RoPE golden cells build).

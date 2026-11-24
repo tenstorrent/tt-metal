@@ -88,6 +88,11 @@ CB_PORT_STAGE = 8
 CB_PREFIX_RM = 9
 CB_ROPE_RM = 10
 CB_X_STAGE = 11  # injector only, m_non_aligned: the two latent tiles a realigned x tile straddles
+# RoPE (rope_mode == rope), compute rect: resident tables + the rotation's per-row intermediate
+CB_COS = 12
+CB_SIN = 13
+CB_TRANS = 14
+CB_ROPE_TMP = 15
 
 # ---- program semaphore ids (port cores; declared on every core the program uses) -------------------------------------
 SEM_BLOCK_READY = 0
@@ -159,7 +164,7 @@ def _dest_limit(fp32_dest_acc_en):
 
 
 class Geometry:
-    def __init__(self, input_tensor, q_b, wkv, G, grid, fp32_dest_acc_en, output_layout=ttnn.TILE_LAYOUT):
+    def __init__(self, input_tensor, q_b, wkv, G, grid, fp32_dest_acc_en, output_layout=ttnn.TILE_LAYOUT, rope=False):
         B, _, S, Q = (int(v) for v in input_tensor.shape)
         _, H, Dn, N = (int(v) for v in wkv.shape)
         Cq = int(q_b.shape[3])
@@ -250,6 +255,10 @@ class Geometry:
         # full-stick row block (RM_FULL_STICK): the rope tiles join the prefix in cb_prefix_out -> cb_prefix_rm
         self.full_stick = self.out_rm and self.n_nb == 1 and RM_FULL_STICK
         self.out_blk_tiles = self.s3n + self.Dr_t if self.full_stick else self.s3n  # cb_prefix_out/_rm block
+        # RoPE: cos / sin rows of the quarter (qrt x Dr_t tiles each, resident) + trans tile + one row's rotation
+        self.rope = rope
+        self.cs_tiles = self.qrt * self.Dr_t
+        self.sbh_rot = _largest_divisor_leq(self.Dr_t, self.dest_limit)  # rotation matmul subblock (Dr_t x 1)
 
     # stage-1 cores, row-major over the W1 x R1 rect anchored at (0, 1)
     def s1_cores(self):
@@ -459,6 +468,7 @@ def l1_terms(geo, wkv_depth):
     """{core set: {term: bytes}} of the statically allocated CBs (cb_landing lives in the scratch buffer)."""
     tb = geo.tile_bytes
     s3_out = (geo.out_tile_depth + (OUT_DEPTH if geo.out_rm else 0)) * geo.s3m * (geo.s3n + geo.Dr_t) * tb
+    s3_out += (2 * geo.cs_tiles + 1 + geo.Dr_t) * tb if geo.rope else 0  # cb_cos/_sin/_trans/_rope_tmp
     wkv_unit = geo.wkv_unit_tiles * geo.wkv_tile_bytes
     wkv_s1 = (geo.wkv_units_s1 if geo.wkv_resident else wkv_depth) * wkv_unit
     wkv_free = (geo.wkv_units_free if geo.wkv_resident else wkv_depth) * wkv_unit
@@ -508,12 +518,13 @@ def _cb(index, dtype, page, pages, cores):
     )
 
 
-def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axis, num_links):
+def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axis, num_links, cos=None, sin=None):
     output_layout = out.layout
     mesh = x.device()
     grid = mesh.compute_with_storage_grid_size()
     chips, G = exchange_plan(mesh, cluster_axis, num_links)
-    geo = Geometry(x, q_b, wkv, G, grid, bool(compute_config.fp32_dest_acc_en), output_layout)
+    rope = cos is not None
+    geo = Geometry(x, q_b, wkv, G, grid, bool(compute_config.fp32_dest_acc_en), output_layout, rope)
     L = num_links
     ports = port_cores(geo.gx, L)
     injector = injector_core(geo.gx, ports)
@@ -542,6 +553,18 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
     qb_ct = list(ttnn.TensorAccessorArgs(q_b).get_compile_time_args())
     wkv_ct = list(ttnn.TensorAccessorArgs(wkv).get_compile_time_args())
     out_ct = list(ttnn.TensorAccessorArgs(out).get_compile_time_args())
+    cs_ct = list(ttnn.TensorAccessorArgs(cos).get_compile_time_args()) if rope else wkv_ct  # NoPE: stand-in
+    rope_named = [
+        ("rope", int(rope)),
+        ("cb_cos", CB_COS),
+        ("cb_sin", CB_SIN),
+        ("cb_trans", CB_TRANS),
+        ("cb_rope_tmp", CB_ROPE_TMP),
+        ("qrt", geo.qrt),
+        ("sbh_rot", geo.sbh_rot),
+    ]
+    cos_addr = int(cos.buffer_address()) if rope else 0
+    sin_addr = int(sin.buffer_address()) if rope else 0
 
     hdr_per_dest = max(1, min(HDRS_PER_DEST_CAP, MAX_HEADERS // max(1, G - 1)))
     wkv_units_total_max = geo.hpc_max if geo.wkv_resident else geo.hpc_max * geo.rows_per_head * geo.n_nb
@@ -582,6 +605,7 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
                 wkv.dtype,
                 x.memory_config().buffer_type,  # the injector's accessor differs for an L1 / DRAM latent
                 output_layout,  # TILE pages vs in-kernel untilize + stick writer
+                rope,  # rope_block: rotation + cos / sin tables vs pass-through copy
                 compute_config.math_fidelity,
                 compute_config.fp32_dest_acc_en,
                 compute_config.math_approx_mode,
@@ -626,6 +650,13 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
         ]
         if not geo.full_stick:  # full stick: the rope tiles live in cb_prefix_out / cb_prefix_rm
             cbs.append(_cb(CB_ROPE_OUT, bf16, geo.tile_bytes, geo.out_tile_depth * geo.s3m * geo.Dr_t, compute_rect))
+        if rope:
+            cbs += [
+                _cb(CB_COS, bf16, geo.tile_bytes, geo.cs_tiles, compute_rect),
+                _cb(CB_SIN, bf16, geo.tile_bytes, geo.cs_tiles, compute_rect),
+                _cb(CB_TRANS, bf16, geo.tile_bytes, 1, compute_rect),
+                _cb(CB_ROPE_TMP, bf16, geo.tile_bytes, geo.Dr_t, compute_rect),
+            ]
         if geo.out_rm:  # untilized stick blocks (tile-sized pages: 32 sticks of block-width * 64 B)
             cbs.append(_cb(CB_PREFIX_RM, bf16, geo.tile_bytes, OUT_DEPTH * geo.s3m * geo.out_blk_tiles, compute_rect))
             if not geo.full_stick:
@@ -652,7 +683,7 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
             hpc = len(heads)
             n_r = sum(1 for h in heads if h // geo.Hl != p)
             # reader
-            rargs = [int(q_b.buffer_address()), c0, cols, int(wkv.buffer_address()), p]
+            rargs = [int(q_b.buffer_address()), c0, cols, int(wkv.buffer_address()), p, cos_addr, sin_addr]
             rargs += arrive_addrs
             rargs += [hpc] + [v for h in heads for v in (h, h // geo.Hl)]
             (reader_rt_s1 if i is not None else reader_rt_other)[core.x][core.y] = rargs
@@ -757,7 +788,7 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
 
         def reader_ct_for(wkv_units):
             # wkv capacity of the core set in units (R1: remote heads + local depth; R2: wkv_depth)
-            return reader_ct + [wkv_units, QB_READ_BATCH, *geo_ct, geo.ts, *qb_ct, *wkv_ct]
+            return reader_ct + [wkv_units, QB_READ_BATCH, *geo_ct, geo.ts, *qb_ct, *wkv_ct, *cs_ct]
 
         reader_ct_s1 = reader_ct_for(geo.wkv_units_s1 if geo.wkv_resident else wkv_depth)
         reader_ct_other = reader_ct_for(geo.wkv_units_free if geo.wkv_resident else wkv_depth)
@@ -765,6 +796,7 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
             kernel_source=str(KERNEL_DIR / "q_stem_reader.cpp"),
             core_ranges=s1_rect,
             compile_time_args=reader_ct_s1,
+            named_compile_time_args=rope_named,
             runtime_args=reader_rt_s1,
             config=_dm("RISCV_1", ttnn.NOC.NOC_1 if S1_WRITER_NOC == 0 else ttnn.NOC.NOC_0),
         )
@@ -812,6 +844,7 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
                 kernel_source=str(KERNEL_DIR / "q_stem_reader.cpp"),
                 core_ranges=_crs(cores),
                 compile_time_args=reader_ct_other,
+                named_compile_time_args=rope_named,
                 runtime_args=_rt_subset(reader_rt_other, cores),
                 config=_dm("RISCV_1", ttnn.NOC.NOC_1 if wnoc == 0 else ttnn.NOC.NOC_0),
             )
@@ -850,6 +883,7 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
                 geo.ts,
             ],
             runtime_args=compute_rt,
+            named_compile_time_args=rope_named,
             config=compute_config,
         )
         writer_ct = [
@@ -952,7 +986,9 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
     return mesh_desc, scratch
 
 
-def run_q_stem(x, q_b, wkv, *, cluster_axis, num_links, compute_config, output_layout=ttnn.TILE_LAYOUT):
+def run_q_stem(
+    x, q_b, wkv, *, cluster_axis, num_links, compute_config, output_layout=ttnn.TILE_LAYOUT, cos=None, sin=None
+):
     mesh = x.device()
     B, _, S, _ = (int(v) for v in x.shape)
     _, H, Dn, N = (int(v) for v in wkv.shape)
@@ -961,5 +997,6 @@ def run_q_stem(x, q_b, wkv, *, cluster_axis, num_links, compute_config, output_l
     out = ttnn.allocate_tensor_on_device(
         ttnn.Shape([B, H, S // G, N + Dr]), ttnn.bfloat16, output_layout, mesh, ttnn.DRAM_MEMORY_CONFIG
     )
-    desc, scratch = create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axis, num_links)
-    return ttnn.generic_op([x, q_b, wkv, scratch, out], desc)
+    desc, scratch = create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axis, num_links, cos, sin)
+    tables = [cos, sin] if cos is not None else []
+    return ttnn.generic_op([x, q_b, wkv, *tables, scratch, out], desc)

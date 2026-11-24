@@ -196,3 +196,42 @@ init + fp32 pack overheads).
   (R3: 147.7, noise).
 - Issues encountered: None.
 - Tests added: none (the 96 golden m_non_aligned cells pin the path).
+
+## Refinement 5 — Rotary embedding (rope_mode = rope)
+- Date: 2026-11-24
+- What was done: `"rope"` added to `SUPPORTED["rope_mode"]`; `cos` / `sin` now reach the device program (they were
+  validated but dropped before). Scheme addition inside the existing stage-3 nest, as designed:
+  - Reader (`rope_tables_block`): on every core holding heads, generates the 32x32 rotate_half_meta trans tile in L1
+    (NoC zero-fill via `dataflow_kernel_lib::zero_tile` + its 32 ±1 entries — no host tensor), and reads the
+    quarter's cos / sin rows (`qrt × Dr_t` tiles each, one barrier) at the first landed row, so free cores do not
+    compete with the stage-1 q_b prologue. Resident for the whole stage 3.
+  - Compute (`rope_block`): `matmul_block` rope (`Dr_t × 1`) @ trans (`NoWaitNoPop` in1, rope retained in
+    `cb_landing`) → `cb_rope_tmp`, then ONE fused `eltwise_chain` per row: `BinaryFpu Mul(landing, cos)`→D0,
+    `BinaryFpu Mul(rope_tmp, sin)`→D1, `AddBinary` D0+=D1, pack → `cb_rope_out` (or behind the prefix in
+    `cb_prefix_out` under the ROW_MAJOR full stick, so Refinement 2/3's untilize runs unchanged). cos/sin tile =
+    `(t mod qrt)·Dr_t + i` via `TileAddressing::Offset` (caller-managed wait/pop around the loop), so batches reuse
+    the device's rows and m_non_aligned rows need no shift (Refinement 4 made every stage quarter-aligned).
+  - Host: `CB_COS/SIN/TRANS/ROPE_TMP` (12–15) on the compute rect only under RoPE; rope flags via named CT args
+    (`rope`, `cb_*`, `qrt`, `sbh_rot`); cos/sin accessor args appended to the reader's CT args (wkv's as a stand-in
+    under NoPE); cos/sin addresses as reader RT args; `l1_terms` counts the new CBs; rope in `custom_program_hash`;
+    cos/sin passed to `generic_op`. `_check_caller` requires bf16 TILE interleaved tables.
+  - Deviation from op_design: `* sin` / `+ rope*cos` as one chain (two FPU muls into D0/D1 + SFPU add) instead of
+    separate `mul` / `add` convenience passes — same helpers, one DEST window, no product CB.
+  - Reused: stage-3 loop nest, landing layout, `cb_rope_out` / full-stick path, untilize, writer (unchanged), ports,
+    injector. Added: one reader block op, one compute block op branch, 4 CBs.
+- Accuracy achieved (test_q_stem_precision_baseline.py::test_q_stem_rope_precision, HiFi4, base_position 4096, per
+  part): fp32 DEST — rope PCC 0.999997, rel RMS 0.0024 on all 4 shapes [(1,128,256,Hl4,64,64,128),
+  (1,160,512,4,128,64,512) m_non_aligned, (1,640,1536,32,128,64,512) DSV3.2, (1,128,512,4,128,128,512) wide rope];
+  same as the nope part (the floor is q's bf16 rounding). 16-bit DEST — rope PCC 0.99973–0.99996, rel RMS
+  0.009–0.032 (tracks the nope part; dominated by stage-1 16-bit accumulation). `test_rope_pairing` is exact.
+- Golden test progress: all 546 `rope_mode=rope` golden cells pass (TILE/RM out × fp32/16-bit DEST × weight dtypes ×
+  latent DRAM/L1 × aligned/non-aligned, incl. LOOSE_CASES[2] DSV3.2 and [3] GLM-5.3); 0 failed, 0 XPASS drift.
+  Regression: `test_rope_pairing`, `test_rope_positions[pos0, pos65632]` (previously xfail) pass; all 11 regression
+  tests and the 9 acceptance tests pass.
+- Perf (not a perf refinement; recorded as the guard-set baseline, eval `ccl_perf`, 5 experiments): DSV3.2
+  (LOOSE_CASES[2]) fastest chip 227.8 µs / slowest 232.7 (roofline 98.5, target 131.3); GLM-5.3 (LOOSE_CASES[3])
+  fastest 154.0 / slowest 171.3 (roofline 65.1, target 86.8). Not dispatch-bound. Known lamp: cos/sin are read
+  once per head-owning core (~4 MB DRAM per chip on DSV3.2, as designed); a one-reader multicast would make it 1×.
+- Issues encountered: None (first device run correct).
+- Tests added: `test_q_stem_precision_baseline.py::test_q_stem_rope_precision` (4 shapes × 2 DEST widths, nope /
+  rope reported separately).

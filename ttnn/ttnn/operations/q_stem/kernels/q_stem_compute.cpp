@@ -7,6 +7,9 @@
 //                       local-delivery writer read it in place)
 //   prefix_matmul_block per landed row: nope (1 x Dn_t) @ wkv_b1[h] (Dn_t x s3n) -> cb_prefix_out, per N-block
 //   rope_block (NoPE)   copy of the row's Dr_t rope tiles -> cb_rope_out
+//   rope_block (RoPE)   rot = rope (Dr_t x 1 tiles) @ trans (1 tile, rotate_half_meta) -> cb_rope_tmp (matmul_block,
+//                       rope retained in cb_landing), then ONE fused chain per tile: D0 = rope * cos, D1 = rot * sin,
+//                       D0 += D1 (SFPU add) -> cb_rope_out. cos / sin rows (t mod qrt) indexed in the resident tables.
 //   untilize_row_block  (ROW_MAJOR output only) cb_prefix_out N-block -> cb_prefix_rm, cb_rope_out -> cb_rope_rm:
 //                       32 sticks per block for the writer. A separate block op after the producers, so a rotated
 //                       rope (RoPE) slots in front of it unchanged. full_stick (one N-block per row): the rope
@@ -22,6 +25,7 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/ttnn/operations/q_stem/kernels/q_stem_common.hpp"
 
@@ -71,6 +75,14 @@ void kernel_main() {
     constexpr uint32_t cb_rope_dst = full_stick ? cb_prefix_out : cb_rope_out;
     constexpr uint32_t ts = get_compile_time_arg_val(25);  // stage-3 consumption order (q_stem::RowOrder)
     constexpr bool k_blocked = nkb > 1;
+    // RoPE (rope_mode == rope): resident trans tile + cos / sin rows of the quarter (qrt x Dr_t each)
+    constexpr bool rope = get_named_compile_time_arg_val("rope") != 0;
+    constexpr uint32_t cb_cos = get_named_compile_time_arg_val("cb_cos");
+    constexpr uint32_t cb_sin = get_named_compile_time_arg_val("cb_sin");
+    constexpr uint32_t cb_trans = get_named_compile_time_arg_val("cb_trans");
+    constexpr uint32_t cb_rope_tmp = get_named_compile_time_arg_val("cb_rope_tmp");
+    constexpr uint32_t qrt = get_named_compile_time_arg_val("qrt");
+    constexpr uint32_t sbh_rot = get_named_compile_time_arg_val("sbh_rot");  // rotation matmul subblock height
 
     const uint32_t cols = get_arg_val<uint32_t>(0);
     const uint32_t sbw1 = get_arg_val<uint32_t>(1);
@@ -141,7 +153,59 @@ void kernel_main() {
     const auto shape3 = MatmulBlockShape::of(1, s3n / sbw3, 1, sbw3, Dn_t, 1);
     constexpr uint32_t head_tiles = Dn_t * N_t;
     DeviceZoneScopedN("S3");
-    auto row_block = [&](uint32_t wkv_offset) {
+    CircularBuffer trans_buf(cb_trans), rope_tmp_buf(cb_rope_tmp);
+    const auto shape_rot = MatmulBlockShape::of(Dr_t / sbh_rot, 1, sbh_rot, 1, 1, 1);
+    constexpr uint32_t cs_tiles = qrt * Dr_t;
+    if constexpr (rope) {
+        if (hpc > 0) {  // resident for every rope_block (NoWaitNoPop / caller-managed below)
+            cb_wait_front(cb_trans, 1);
+            cb_wait_front(cb_cos, cs_tiles);
+            cb_wait_front(cb_sin, cs_tiles);
+        }
+    }
+    // rope_block: the row's Dr_t rope tiles at the front of cb_landing -> cb_rope_dst
+    auto rope_block = [&](uint32_t t) {
+        if constexpr (rope) {
+            matmul_block<
+                false,
+                false,
+                LastBlockTarget::Out,
+                OutputCBLayout::SubblockMajor,
+                matmul_config::InitMode::Short,
+                InputPolicy::WaitAndRetainOnLastBlock,
+                InputPolicy::NoWaitNoPop>(landing_buf, trans_buf, rope_tmp_buf, rope_tmp_buf, shape_rot);
+            const uint32_t cs = (t % qrt) * Dr_t;  // the row's cos / sin tiles (cos rows follow the output rows)
+            eltwise_chain(
+                IterationShape::tiles(Dr_t),
+                BinaryFpu<
+                    BinaryFpuOp::Mul,
+                    input(cb_landing),
+                    input(
+                        cb_cos,
+                        WaitPolicy::None,
+                        PopPolicy::None,
+                        InputTileMapping::Block,
+                        DataFormatReconfig::Enabled,
+                        TileAddressing::Offset),
+                    Dst::D0>{0, cs},
+                BinaryFpu<
+                    BinaryFpuOp::Mul,
+                    input(cb_rope_tmp),
+                    input(
+                        cb_sin,
+                        WaitPolicy::None,
+                        PopPolicy::None,
+                        InputTileMapping::Block,
+                        DataFormatReconfig::Enabled,
+                        TileAddressing::Offset),
+                    Dst::D1>{0, cs},
+                AddBinary<Dst::D0, Dst::D1, Dst::D0>{},
+                PackTile<output(cb_rope_dst)>{});
+        } else {
+            copy<input(cb_landing), output(cb_rope_dst)>(IterationShape::tiles(Dr_t));
+        }
+    };
+    auto row_block = [&](uint32_t wkv_offset, uint32_t t) {
         for (uint32_t nb = 0; nb < n_nb; ++nb) {
 #ifdef ABLATE_S3
             if constexpr (!wkv_resident) {
@@ -206,7 +270,7 @@ void kernel_main() {
         cb_reserve_back(cb_rope_dst, Dr_t);
         cb_push_back(cb_rope_dst, Dr_t);
 #else
-        copy<input(cb_landing), output(cb_rope_dst)>(IterationShape::tiles(Dr_t));
+        rope_block(t);
 #endif
         if constexpr (full_stick) {
             untilize<s3n + Dr_t, cb_prefix_out, cb_prefix_rm>(1);  // untilize_row_block ([prefix | rope])
@@ -226,7 +290,7 @@ void kernel_main() {
                     cb_wait_front(cb_wkv, n_r * head_tiles);
                 }
             }
-            row_block(u * head_tiles);
+            row_block(u * head_tiles, t);
             if constexpr (wkv_resident) {
                 if (!stack_local && c + 1 == order.first_local()) {
                     cb_pop_front(cb_wkv, n_r * head_tiles);  // last remote row
@@ -239,7 +303,7 @@ void kernel_main() {
                     cb_wait_front(cb_wkv, (below + 1) * head_tiles);
                 }
             }
-            row_block(below * head_tiles);
+            row_block(below * head_tiles, t);
             if constexpr (wkv_resident) {
                 if (!stack_local && t + 1 == rows_per_head) {
                     cb_pop_front(cb_wkv, head_tiles);
@@ -250,6 +314,13 @@ void kernel_main() {
     if constexpr (wkv_resident) {
         if (stack_local) {
             cb_pop_front(cb_wkv, hpc * head_tiles);
+        }
+    }
+    if constexpr (rope) {
+        if (hpc > 0) {
+            cb_pop_front(cb_trans, 1);
+            cb_pop_front(cb_cos, cs_tiles);
+            cb_pop_front(cb_sin, cs_tiles);
         }
     }
 }

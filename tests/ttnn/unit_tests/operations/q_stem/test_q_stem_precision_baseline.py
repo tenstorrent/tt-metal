@@ -153,3 +153,56 @@ def test_q_stem_model_config_precision(mesh_device, dims, fp32_dest_acc_en, qb_d
             # broad spread that must still straddle 1.0.
             assert m["ratio_p5"] < 1.0 < m["ratio_p95"], f"dev{idx}: ratio band {m['ratio_p5']}..{m['ratio_p95']}"
             assert abs(m["ratio_med"] - 1.0) < 0.06, f"dev{idx}: got/true median ratio {m['ratio_med']}"
+
+
+# Refinement 5: RoPE. The rope part is no longer a bit-exact copy: rot = rope @ trans (exact, one +-1 term per
+# element) then rope * cos + rot * sin (two bf16 products + one add in DEST, packed to bf16). Reported per part.
+ROPE_SHAPES = [
+    pytest.param((1, 128, 256, 4, 64, 64, 128), id="small"),
+    pytest.param((1, 160, 512, 4, 128, 64, 512), id="m_non_aligned_40_rows"),
+    pytest.param((1, 640, 1536, 32, 128, 64, 512), id="dsv32_640"),
+    pytest.param((1, 128, 512, 4, 128, 128, 512), id="wide_rope_4_tiles"),
+]
+
+
+@pytest.mark.parametrize("device_params", _DEVICE_PARAMS, indirect=True)
+@pytest.mark.parametrize("mesh_device", _MESH_PARAM, indirect=True)
+@pytest.mark.parametrize("dims", ROPE_SHAPES)
+@pytest.mark.parametrize("fp32_dest_acc_en", [True, False], ids=["dest32", "dest16"])
+def test_q_stem_rope_precision(mesh_device, dims, fp32_dest_acc_en):
+    from eval.golden_tests.q_stem.helpers import pytorch_q_stem, rope_tables
+
+    B, S, Q, Hl, Dn, Dr, N = dims
+    G = tuple(mesh_device.shape)[CLUSTER_AXIS]
+    rows, cols = tuple(mesh_device.shape)
+    x, q_b, wkv, tx, tq, tw = _make_inputs(mesh_device, B, S, Q, Hl, Dn, Dr, N)
+    cos, sin = rope_tables((rows, cols), CLUSTER_AXIS, S, G, Dr, base_position=4096)
+    expected = pytorch_q_stem(x, q_b, wkv, CLUSTER_AXIS, cos, sin)
+    cfg = ttnn.ComputeConfigDescriptor(
+        math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=fp32_dest_acc_en, math_approx_mode=False
+    )
+    out = q_stem(
+        tx,
+        tq,
+        tw,
+        cluster_axis=CLUSTER_AXIS,
+        cos=_to_mesh(cos, mesh_device),
+        sin=_to_mesh(sin, mesh_device),
+        compute_kernel_config=cfg,
+    )
+    pcc_min, rms_max = default_tolerance(ttnn.bfloat16, fp32_dest_acc_en)
+    for idx, dev in enumerate(_read_back(out, mesh_device)):
+        r, c = divmod(idx, cols)
+        got = ttnn.to_torch(dev).float()
+        exp = expected[r, c]
+        assert got.shape == exp.shape
+        for part, (g, e) in (("nope", (got[..., :N], exp[..., :N])), ("rope", (got[..., N:], exp[..., N:]))):
+            m = _metrics(g, e)
+            print(
+                f"PRECISION-ROPE {dims} dest32={fp32_dest_acc_en} dev{idx} {part} pcc={m['pcc']:.6f} "
+                f"max_abs={m['max_abs']:.4g} rel_rms={m['rel_rms']:.4g} ulp_med={m['ulp_med']:.3g} "
+                f"ulp_p99={m['ulp_p99']:.3g} ratio[p5,med,p95]=[{m['ratio_p5']:.4f},{m['ratio_med']:.4f},"
+                f"{m['ratio_p95']:.4f}]"
+            )
+            assert m["pcc"] >= pcc_min, f"dev{idx} {part}: PCC {m['pcc']} < {pcc_min}"
+            assert m["rel_rms"] <= rms_max, f"dev{idx} {part}: relative RMS {m['rel_rms']} > {rms_max}"

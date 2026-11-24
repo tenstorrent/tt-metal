@@ -8,11 +8,13 @@ Per group of G devices along cluster_axis (group position p holds the column sli
     q[p]     = x @ q_b[p]                                    (B, 1, S, Hl * (Dn + Dr))
     heads[p] = q[p].view(B, S, Hl, Dn + Dr).permute(0, 2, 1, 3)
     device q' receives row quarter q' of every p (output head h = p * Hl + j)
-    out[q']  = cat([nope[q'] @ wkv_b1, rope[q']], dim=-1)    (B, H, S/G, N + Dr)
+    out[q']  = cat([nope[q'] @ wkv_b1, rot(rope[q'])], dim=-1)    (B, H, S/G, N + Dr)
+    rot      = identity (NoPE) or rope * cos + rotate_half_meta(rope) * sin (RoPE: cos / sin given, per device
+               (1, 1, S/G, Dr), the positions of its output rows)
 
 Stage 1 (column-split matmul fed by an x multicast) keeps q in L1; port cores pull the remote quarters and send
 them over the fabric straight into the destination cores' landing scratch; stage 3 (per-head matmul with wkv_b1 +
-rope pass-through) runs as rows land. See op_design.md.
+rope pass-through or rotation) runs as rows land. See op_design.md.
 """
 
 from __future__ import annotations
@@ -50,7 +52,7 @@ SUPPORTED = {
     "layout": [ttnn.TILE_LAYOUT],
     "output_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     "fp32_dest_acc_en": [True, False],
-    "rope_mode": ["nope"],
+    "rope_mode": ["nope", "rope"],
     "alignment": ["tile_aligned", "m_non_aligned"],
     "input_buffer": [ttnn.BufferType.DRAM, ttnn.BufferType.L1],
     "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED],
@@ -130,6 +132,10 @@ def _check_caller(input_tensor, q_b_proj_weight, wkv_b1_weight, cluster_axis, co
         for nm, t in (("cos", cos), ("sin", sin)):
             if _shape(t) != (1, 1, S // G, Dr):
                 raise ValueError(f"q_stem: {nm} must be (1, 1, {S // G}, {Dr}), got {list(t.shape)}")
+            if t.dtype != ttnn.bfloat16 or t.layout != ttnn.TILE_LAYOUT:
+                raise ValueError(f"q_stem: {nm} must be bfloat16 TILE, got {t.dtype} {t.layout}")
+            if t.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+                raise ValueError(f"q_stem: {nm} must be interleaved, got {t.memory_config()}")
     if output_layout not in (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT):
         raise ValueError(f"q_stem: output_layout must be TILE or ROW_MAJOR, got {output_layout}")
     if not isinstance(num_links, int) or num_links <= 0:
@@ -220,4 +226,6 @@ def q_stem(
         num_links=num_links,
         compute_config=cfg,
         output_layout=output_layout,
+        cos=cos,
+        sin=sin,
     )

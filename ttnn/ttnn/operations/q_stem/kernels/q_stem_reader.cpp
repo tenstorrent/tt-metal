@@ -8,6 +8,9 @@
 //                        the first `wkv_depth` units are prefetched before stage 1 (they need no remote data)
 //   land_row_block       wait the row's arrival count on the landing scratch, then push credits into cb_landing
 //                        (zero-copy: cb_landing IS this core's landing shard); re-arm the counters at the end.
+//   rope_tables_block    (RoPE, cores holding heads) the trans tile (rotate_half_meta as a 32x32 0/+-1 matrix,
+//                        generated in L1: NoC zero-fill + its 32 non-zeros) and the quarter's cos / sin rows
+//                        (qrt x Dr_t tiles each, one DRAM read batch), once, resident for every rope_block.
 // Arrival counters arrive[src] count landed tiles. A remote source has exactly one in-order stream into this core
 // (one port, link = core index mod L), so a per-row threshold is exact; the own quarter arrives from many stage-1
 // writers in any order, so a local head waits for the total of all local tiles before its first row.
@@ -22,6 +25,7 @@
 #include "api/tensor/noc_traits.h"
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 #include "ttnn/ttnn/operations/q_stem/kernels/q_stem_common.hpp"
 
 using namespace dataflow_kernel_lib;
@@ -70,6 +74,12 @@ void kernel_main() {
     constexpr uint32_t ts = get_compile_time_arg_val(23);  // stage-3 consumption order (q_stem::RowOrder)
     constexpr auto qb_args = TensorAccessorArgs<24>();
     constexpr auto wkv_args = TensorAccessorArgs<qb_args.next_compile_time_args_offset()>();
+    // RoPE tables (cos and sin share one layout; a stand-in accessor when NoPE)
+    [[maybe_unused]] constexpr auto cs_args = TensorAccessorArgs<wkv_args.next_compile_time_args_offset()>();
+    constexpr bool rope = get_named_compile_time_arg_val("rope") != 0;
+    constexpr uint32_t cb_cos = get_named_compile_time_arg_val("cb_cos");
+    constexpr uint32_t cb_sin = get_named_compile_time_arg_val("cb_sin");
+    constexpr uint32_t cb_trans = get_named_compile_time_arg_val("cb_trans");
     constexpr auto mc = McastArgs<
         get_named_compile_time_arg_val("mcast_ct_offset"),
         get_named_compile_time_arg_val("mcast_rt_offset")>();
@@ -83,6 +93,8 @@ void kernel_main() {
     const uint32_t cols = get_arg_val<uint32_t>(a++);
     const uint32_t wkv_addr = get_arg_val<uint32_t>(a++);
     const uint32_t my_pos = get_arg_val<uint32_t>(a++);
+    [[maybe_unused]] const uint32_t cos_addr = get_arg_val<uint32_t>(a++);
+    [[maybe_unused]] const uint32_t sin_addr = get_arg_val<uint32_t>(a++);
     uint32_t arrive_addr[G];
     for (uint32_t i = 0; i < G; ++i) {
         arrive_addr[i] = get_arg_val<uint32_t>(a++);
@@ -181,6 +193,48 @@ void kernel_main() {
     }
 
     // ---- stage 3: land rows, stream the remaining wkv units ---------------------------------------------------------
+    // rope_tables_block: trans tile now (local L1 only); cos / sin with the first landed row (below), so a core
+    // outside the stage-1 rect does not read them while the DRAM serves the q_b prologue.
+    constexpr uint32_t Dr_t = hw - Dn_t;
+    constexpr uint32_t cs_tiles = qrt * Dr_t;
+    if constexpr (rope) {
+        if (hpc > 0) {
+            ::DataflowBuffer trans(cb_trans);
+            trans.reserve_back(1);
+            dataflow_kernel_lib::zero_tile(trans);
+            // rot = x @ T, rot[2i] = -x[2i+1], rot[2i+1] = x[2i]: T[2i][2i+1] = +1, T[2i+1][2i] = -1 (bf16). Block
+            // diagonal within 16x16 faces: rows/cols 0..15 in face 0, 16..31 in face 3. Element (r, c) of a face at
+            // r * 16 + c.
+            volatile tt_l1_ptr uint16_t* t = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_trans));
+            for (uint32_t f = 0; f < 2; ++f) {
+                volatile tt_l1_ptr uint16_t* face = t + f * 3 * 256;
+                for (uint32_t i = 0; i < 8; ++i) {
+                    face[(2 * i) * 16 + 2 * i + 1] = 0x3F80;  // +1.0
+                    face[(2 * i + 1) * 16 + 2 * i] = 0xBF80;  // -1.0
+                }
+            }
+            trans.push_back(1);
+        }
+    }
+    auto load_rope_tables = [&]() {
+        if constexpr (rope) {
+            constexpr uint32_t cs_bytes = get_tile_size(cb_cos);
+            const auto cos_t = TensorAccessor(cs_args, cos_addr, cs_bytes);
+            const auto sin_t = TensorAccessor(cs_args, sin_addr, cs_bytes);
+            cb_reserve_back(cb_cos, cs_tiles);
+            cb_reserve_back(cb_sin, cs_tiles);
+            uint32_t lc = get_write_ptr(cb_cos), ls = get_write_ptr(cb_sin);
+            for (uint32_t i = 0; i < cs_tiles; ++i) {  // pages r * Dr_t + c of (1, 1, Sq, Dr), row tiles r < qrt
+                noc_async_read(cos_t.get_noc_addr(i), lc, cs_bytes);
+                noc_async_read(sin_t.get_noc_addr(i), ls, cs_bytes);
+                lc += cs_bytes;
+                ls += cs_bytes;
+            }
+            noc_async_read_barrier();
+            cb_push_back(cb_cos, cs_tiles);
+            cb_push_back(cb_sin, cs_tiles);
+        }
+    };
     uint32_t next_unit = prefetched;
     auto load_next_unit = [&]() {
         if (next_unit < total_units) {
@@ -224,6 +278,9 @@ void kernel_main() {
                     ensure_units(u + 1);
                 }
             }
+        }
+        if (c == 0) {
+            load_rope_tables();
         }
         cb_reserve_back(cb_landing, hw);
         cb_push_back(cb_landing, hw);  // credits only: the row is already in my landing shard

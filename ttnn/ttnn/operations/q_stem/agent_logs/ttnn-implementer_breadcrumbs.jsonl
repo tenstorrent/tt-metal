@@ -3,3 +3,4 @@
 {"event":"test_run","refinement":2,"status":"pass","tests":"25 golden ROW_MAJOR cells + test_q_stem.py 9/9","perf_focus_fastest_us":167.4,"perf_focus_slowest_us":177.2,"ts":"2026-11-24T18:39:52+00:00"}
 {"event":"tool_use","tool":"Skill","skill":"perf-calculator","args":"","ts":"2026-11-24T19:12:56+00:00"}
 {"event":"test_run","what":"R3 final","perf_fastest_us":147.66,"base_us":167.43,"golden_slice":"30/30","unit":"9/9","regression":"8 pass 3 xfail","ts":"2026-11-24T19:35:41+00:00"}
+{"event":"test_run","refinement":5,"result":"pass","detail":"546/546 rope golden cells, 3 rope regression, 9 acceptance, 8 rope precision","ts":"2026-11-24T20:47:54+00:00"}
