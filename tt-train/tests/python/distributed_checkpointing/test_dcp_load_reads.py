@@ -303,7 +303,8 @@ def test_data_files_take_their_data_offset_from_the_header_length(tmp_path, expe
 def test_a_partly_restored_load_says_what_to_do(expect_error):
     """Once a tensor was placed, a failed load says that the model is partly restored. On a mesh of one rank's own the
     model can be loaded again; on a mesh several ranks share, ranks that stopped at different tensors no longer make
-    the same device allocations, so the job has to restart. A failure before any tensor passes as raised."""
+    the same device allocations, so the job has to restart; a failure while placing the first tensor there replaced
+    nothing, so it says only that. A failure before any tensor passes as raised."""
     err = RuntimeError("simulated read error")
     with expect_error(
         CheckpointError,
@@ -317,6 +318,13 @@ def test_a_partly_restored_load_says_what_to_do(expect_error):
         r"restart it instead of loading again\. The error: RuntimeError: simulated read error$",
     ):
         _load._raise_partly_restored(err, "b", ["a"], 2, shared_mesh=True)
+    with expect_error(
+        CheckpointError,
+        r"^the load failed at a after 0 of 2 tensors were placed; the ranks sharing this mesh may now hold different "
+        r"device allocations: end the job and restart it instead of loading again\. The error: RuntimeError: "
+        r"simulated read error$",
+    ):
+        _load._raise_partly_restored(err, "a", [], 2, shared_mesh=True, placing=True)
     with expect_error(RuntimeError, r"^simulated read error$"):
         _load._raise_partly_restored(err, "a", [], 2, shared_mesh=True)
 

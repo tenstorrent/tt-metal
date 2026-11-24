@@ -243,7 +243,7 @@ def _describe_spec(t) -> str:
 
 def _place(live: LiveTensor, arrays: dict[tuple, np.ndarray], device, local: set[tuple[int, ...]]) -> None:
     """Assemble the destination shards this process holds under the live label, move them to the device and install
-    them in place."""
+    them in place. The caller counts the tensor as placed once this returns, then checks its label."""
     value = live.tensor.get_value(NATIVE)
     shards = {}
     hosts = {group: _host_shard(arr, live.info.dtype) for group, arr in arrays.items()}
@@ -263,7 +263,6 @@ def _place(live: LiveTensor, arrays: dict[tuple, np.ndarray], device, local: set
             f"({_describe_spec(value)})"
         )
     live.tensor.set_value(on_device)
-    check_label_unchanged(live, "after set_value")
 
 
 class _DataFiles:
@@ -302,15 +301,17 @@ class _DataFiles:
         self.fds.clear()
 
 
-def _partly_restored_advice(shared_mesh: bool) -> str:
+def _partly_restored_advice(shared_mesh: bool, restored: bool = True) -> str:
     """What a load that stopped after placing tensors tells its caller to do. Ranks that share a mesh must make the
     same device allocations in the same order, and ranks that stopped at different tensors no longer have, so on such
-    a mesh the job has to restart; elsewhere the model can be loaded again."""
+    a mesh the job has to restart; elsewhere the model can be loaded again. A rank of a shared mesh that failed while
+    placing its first tensor has replaced nothing (``restored`` false), so it gives the restart advice alone."""
+    allocations = (
+        "the ranks sharing this mesh may now hold different device allocations: end the job and restart it instead "
+        "of loading again"
+    )
     if shared_mesh:
-        return (
-            "the model and optimizer are partly restored, and the ranks sharing this mesh may now hold different "
-            "device allocations: end the job and restart it instead of loading again"
-        )
+        return f"the model and optimizer are partly restored, and {allocations}" if restored else allocations
     return "the model and optimizer are partly restored: load again or discard them"
 
 
@@ -325,8 +326,9 @@ def _raise_partly_restored(
     """Re-raise ``err``, as a ``CheckpointError`` that says the live state is partly restored once a tensor was
     placed, and what to do about it (``_partly_restored_advice``). On a mesh other ranks share, a failure while
     placing a tensor (``placing``) counts too, the first one included: the device may already hold buffers of that
-    tensor, and a rank cannot see whether the other ranks' devices do. The advice comes before the error's own text,
-    which can be long (a device error carries its backtrace), so the cap on the message a rank sends the others
+    tensor, and a rank cannot see whether the other ranks' devices do; with no tensor placed, the error gives the
+    restart advice without calling the model partly restored. The advice comes before the error's own text, which
+    can be long (a device error carries its backtrace), so the cap on the message a rank sends the others
     (``MESSAGE_LIMIT``) cuts only that text.
     """
     if not placed and not (placing and shared_mesh):
@@ -334,7 +336,7 @@ def _raise_partly_restored(
     first = f" (the first: {placed[0]})" if placed else ""
     raise CheckpointError(
         f"the load failed at {at} after {len(placed)} of {total} tensors were placed{first}; "
-        f"{_partly_restored_advice(shared_mesh)}. The error: {type(err).__name__}: {err}"
+        f"{_partly_restored_advice(shared_mesh, restored=bool(placed))}. The error: {type(err).__name__}: {err}"
     ) from err
 
 
@@ -400,9 +402,11 @@ def _read_and_place(
                 pending = submit(keys[position + 1][1]) if position + 1 < len(keys) else None
                 placing = True
                 _place(by_key[key], arrays, device, local)
+                # Installed: it counts as placed before its label is checked, so a failure of that check reports it.
+                placed.append(key)
+                check_label_unchanged(by_key[key], "after set_value")
             except Exception as err:
                 _raise_partly_restored(err, key, placed, len(keys), _shares_mesh(local), placing)
-            placed.append(key)
             read_s += t_read_done - t_key
             place_s += time.perf_counter() - t_read_done
             reads += len(futures)

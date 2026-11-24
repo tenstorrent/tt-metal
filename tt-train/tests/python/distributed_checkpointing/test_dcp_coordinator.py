@@ -880,6 +880,7 @@ def _four_rank_load(tmp_path, monkeypatch):
     monkeypatch.setattr(
         _load, "_place", lambda live, arrays, device, local: shards.__setitem__(this.group.rank, arrays)
     )
+    monkeypatch.setattr(_load, "check_label_unchanged", lambda live, when: None)
 
     def body(group, fake, **kwargs):
         this.group = group
@@ -932,6 +933,23 @@ def test_a_failure_while_placing_the_first_tensor_on_a_shared_mesh_says_to_resta
     assert set(errors) == {0, 1, 2, 3}, errors
     for rank, err in errors.items():
         assert "end the job and restart it instead of loading again" in str(err), (rank, str(err))
+        assert "partly restored" not in str(err), "no rank replaced a tensor"
+
+
+def test_a_tensor_counts_as_placed_once_installed(tmp_path, monkeypatch):
+    """A tensor whose label check fails after it was installed is counted: every rank's error says one tensor was
+    placed and the model is partly restored."""
+    _, _, _, _, _, body = _four_rank_load(tmp_path, monkeypatch)
+
+    def fail(live, when):
+        raise RuntimeError("simulated label change")
+
+    monkeypatch.setattr(_load, "check_label_unchanged", fail)
+    _, errors = _run_ranks(4, body)
+    assert set(errors) == {0, 1, 2, 3}, errors
+    counted = "after 1 of 1 tensors were placed (the first: w); the model and optimizer are partly restored"
+    for rank, err in errors.items():
+        assert counted in str(err), (rank, str(err))
 
 
 def test_a_check_that_fails_on_one_rank_stops_every_rank_before_any_device_work(tmp_path, monkeypatch):
