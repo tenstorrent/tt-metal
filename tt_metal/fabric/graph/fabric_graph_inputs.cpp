@@ -242,6 +242,7 @@ std::vector<PerimeterPort> perimeter_ports(
 std::vector<Port> ports_from_perimeter(const std::vector<PerimeterPort>& perimeter) {
     std::vector<Port> ports;
     for (const auto& p : perimeter) {
+        // no router on a dead link yet, so its plane is a gap (#65596)
         if (!p.link_trained || *p.direction == RoutingDirection::Z) {
             continue;
         }

@@ -134,7 +134,7 @@ std::vector<LinkPairing> legacy_link_pairings(
             const auto num_links = static_cast<uint32_t>(std::min(a.size(), b.size()));
             for (uint32_t link = 0; link < num_links; ++link) {
                 if (!a[link] || !b[link]) {
-                    continue;
+                    continue;  // dead perimeter plane (#65596)
                 }
                 links.push_back(LinkPairing{
                     .a = *a[link],
