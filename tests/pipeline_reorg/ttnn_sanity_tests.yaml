@@ -241,6 +241,17 @@
   budget_type: sanity
   owner_id: U084B1CES7M # Borys Bradel
 
+# A compiled program run from a kernel config buffer needs slow dispatch and the HYBRID allocator, which must both be
+# set before the process opens a device; "ttnn misc ops group" runs the rest of test_compiled_program.py.
+- name: "ttnn compiled program slow dispatch"
+  cmd: 'TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_ALLOCATOR_MODE_HYBRID=1 pytest --timeout 300 tests/ttnn/unit_tests/operations/debug/test_compiled_program.py -xv'
+  skus:
+    bh_p100:
+      timeout: 5
+  team: ttnn
+  budget_type: sanity
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+
 - name: "ttnn misc ops group"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/debug tests/ttnn/unit_tests/operations/point_to_point tests/ttnn/unit_tests/operations/transformers -xv -m "not disable_fast_runtime_mode"'
   skus:
