@@ -53,9 +53,10 @@ ALWI void dropout_kernel_init(uint32_t seed = 0) {
  * bits of its draw, as an integer, are below probability. rand_keyed_tile with the same seed and
  * tile_index rounds that integer to FP32 before scaling it, so its value is below probability / 2^31
  * for the same elements except those whose draw rounds across probability. Call
- * dropout_keyed_tile_init() once before the first call. On Quasar this
- * reseeds the SFPU PRNG per tile and calls dropout_tile, so masks are deterministic per tile but
- * differ from Wormhole and Blackhole. On Wormhole, this operation records replay slots 0-15,
+ * dropout_keyed_tile_init() once before the first call. Every 32-bit tile_index gives a distinct
+ * mask. On Quasar this waits for the thread's earlier Tensix work, reseeds the SFPU PRNG per tile and
+ * calls dropout_tile, so masks are deterministic per tile but differ from Wormhole and Blackhole;
+ * each tile there pays that drain and the reseed's settle time. On Wormhole, this operation records replay slots 0-15,
  * programs LREG12-LREG14 and overwrites ADDR_MOD_6 (dest incr 2). Callers sharing that state with
  * other SFPU operations must re-run their inits after it.
  *
@@ -68,7 +69,7 @@ ALWI void dropout_kernel_init(uint32_t seed = 0) {
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | seed            | Seed of the stream                                                         | uint32_t | Any value                                             | True     |
- * | tile_index      | Index of the tile within the stream                                        | uint32_t | 0 to 2^22 - 1 for distinct masks                      | True     |
+ * | tile_index      | Index of the tile within the stream                                        | uint32_t | Any value                                             | True     |
  * | probability     | A non-negative integer value representing dropout probability              | uint32_t | 0 to INT_MAX (float_probability * (double) INT_MAX)   | True     |
  * | scale_factor    | uint bitwise representation of 32 bit floating point scale factor          | uint32_t |                                                       | True     |
  */
@@ -77,6 +78,8 @@ ALWI void dropout_keyed_tile(
     uint32_t idst, uint32_t seed, uint32_t tile_index, uint32_t probability, uint32_t scale_factor) {
 #ifdef ARCH_QUASAR
     constexpr uint32_t stream_seed_multiplier = 0x9E3779B9U;
+    // The seed is a RISC write to config: wait for the previous tile's SFPU work so it can't draw from it.
+    MATH(tensix_sync());
     dropout_kernel_init(seed + tile_index * stream_seed_multiplier);
     dropout_tile(idst, probability, scale_factor);
 #else
@@ -90,7 +93,7 @@ ALWI void dropout_keyed_tile(
         VectorMode::RC,
         probability,
         scale_factor,
-        sfpu::keyed_rand_key(seed),
+        sfpu::keyed_rand_tile_key(seed, tile_index),
         face_index));
 #endif
 }
