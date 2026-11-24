@@ -381,6 +381,11 @@ def test_media_refs_reject_bad_metadata(expect_error):
             validate_media_refs([ref], chunks)
     with expect_error(ValueError, "overlaps"):
         validate_media_refs([MediaRef(0, C, C + 20, KEY), MediaRef(0, C + 10, C + 30, KEY)], chunks)
+    with expect_error(ValueError, "overlaps or precedes"):
+        validate_media_refs([MediaRef(0, C + 50, C + 60, KEY), MediaRef(0, C, C + 20, KEY)], chunks)
+    packed = [PrefillChunk(0, C, 2 * C), PrefillChunk(1, 0, 500), EMPTY]
+    with expect_error(ValueError, "comes after a ref of chunk 1"):
+        validate_media_refs([MediaRef(1, 10, 60, KEY), MediaRef(0, 900 + C, 1200 + C, KEY)], packed)
 
 
 def test_glm_adapter_packs_on_a_pipeline():

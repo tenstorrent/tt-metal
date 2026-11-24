@@ -194,16 +194,19 @@ def decode_media_refs(raw: bytes, forward_chunks: int, max_refs: int) -> list:
 
 
 def validate_media_refs(refs, chunks) -> None:
-    """Each ref names a non-empty chunk of the forward and overlaps its tokens; refs of one chunk do not overlap."""
+    """Each ref names a non-empty chunk of the forward and overlaps its tokens. Refs come in chunk order, then position
+    order, and refs of one chunk do not overlap, so runtimes may rely on that order."""
     prev = None
-    for r in sorted(refs, key=lambda r: (r.chunk_index, r.start_pos)):
+    for r in refs:
         if not 0 <= r.chunk_index < len(chunks) or chunks[r.chunk_index].is_empty:
             raise ValueError(f"{r}: no non-empty chunk {r.chunk_index} in the forward")
         c = chunks[r.chunk_index]
         if r.end_pos <= r.start_pos or not (r.start_pos < c.actual_end and r.end_pos > c.actual_start):
             raise ValueError(f"{r}: does not overlap {c}")
+        if prev is not None and prev.chunk_index > r.chunk_index:
+            raise ValueError(f"{r}: comes after a ref of chunk {prev.chunk_index}")
         if prev is not None and prev.chunk_index == r.chunk_index and prev.end_pos > r.start_pos:
-            raise ValueError(f"{r}: overlaps {prev}")
+            raise ValueError(f"{r}: overlaps or precedes {prev}")
         prev = r
 
 

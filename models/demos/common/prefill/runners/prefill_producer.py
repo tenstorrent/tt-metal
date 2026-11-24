@@ -112,6 +112,24 @@ def _apply_manifest_env(manifest_path: str) -> dict:
     return manifest
 
 
+def _parse_media(spec: str) -> list:
+    """PREFILL_PRODUCER_MEDIA "start:num_tokens,...": images sorted by position, not overlapping, within
+    PREFILL_MAX_SEQ_LEN."""
+    media = []
+    for item in filter(None, spec.split(",")):
+        start, sep, n = item.partition(":")
+        assert (
+            sep and start.isdigit() and n.isdigit() and int(n) > 0
+        ), f"PREFILL_PRODUCER_MEDIA item {item!r}: want start:num_tokens with num_tokens > 0"
+        media.append((int(start), int(n)))
+    for (s0, n0), (s1, _) in zip(media, media[1:]):
+        assert s1 >= s0 + n0, f"PREFILL_PRODUCER_MEDIA={spec!r}: images must be sorted and not overlap"
+    assert (
+        not media or sum(media[-1]) <= MAX_SEQ_LEN
+    ), f"PREFILL_PRODUCER_MEDIA={spec!r}: the last image ends past PREFILL_MAX_SEQ_LEN={MAX_SEQ_LEN}"
+    return media
+
+
 def _load_env_config(check_budget: bool = True) -> None:
     global SP_FACTOR, CHUNK_SIZE, MAX_SEQ_LEN, NUM_LAYERS, ADAPTER, NUM_ACK_LAYERS, MTP_LEVELS
     global MTP_DECODE_LEVELS, FORWARD_CHUNKS, H2D_METADATA_SIZE_BYTES, MEDIA_MAX_REFS, MEDIA
@@ -125,18 +143,25 @@ def _load_env_config(check_budget: bool = True) -> None:
         forward_tokens_budget >= CHUNK_SIZE and forward_tokens_budget % CHUNK_SIZE == 0
     ), f"PREFILL_FORWARD_TOKENS_BUDGET={forward_tokens_budget} must be a multiple of PREFILL_CHUNK_SIZE={CHUNK_SIZE}"
     FORWARD_CHUNKS = max(forward_tokens_budget // CHUNK_SIZE, 1)
+    MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * 16))
     # Must match the runner's. PREFILL_PRODUCER_MEDIA="start:num_tokens,..." places synthetic images at those prompt
     # positions of every request; the runner reads them from the metadata as the engine would send them.
     MEDIA_MAX_REFS = int(os.environ.get("PREFILL_MEDIA_MAX_REFS", 0))
     assert MEDIA_MAX_REFS >= 0, f"PREFILL_MEDIA_MAX_REFS={MEDIA_MAX_REFS} must be >= 0"
     H2D_METADATA_SIZE_BYTES = metadata_size_bytes(FORWARD_CHUNKS, MEDIA_MAX_REFS)
-    MEDIA = [tuple(int(x) for x in m.split(":")) for m in os.environ.get("PREFILL_PRODUCER_MEDIA", "").split(",") if m]
+    MEDIA = _parse_media(os.environ.get("PREFILL_PRODUCER_MEDIA", ""))
     assert not MEDIA or MEDIA_MAX_REFS, "PREFILL_PRODUCER_MEDIA needs PREFILL_MEDIA_MAX_REFS > 0"
-    assert all(n > 0 for _, n in MEDIA), f"PREFILL_PRODUCER_MEDIA={MEDIA}: an image needs at least one token"
+    # Every chunk of a forward may sit at the same positions (one per slot), so size K for the busiest window.
+    most = max(
+        (sum(s < e - 1 + CHUNK_SIZE and s + n > e - 1 for s, n in MEDIA) for e in (s + n for s, n in MEDIA)), default=0
+    )
+    assert FORWARD_CHUNKS * most <= MEDIA_MAX_REFS, (
+        f"PREFILL_PRODUCER_MEDIA: a chunk can overlap {most} images, so a forward of {FORWARD_CHUNKS} chunks needs "
+        f"PREFILL_MEDIA_MAX_REFS >= {FORWARD_CHUNKS * most}, not {MEDIA_MAX_REFS}"
+    )
     MTP_LEVELS = int(os.environ.get("PREFILL_MTP_LEVELS", 0))
     # Decode's level count: the levels past MTP_LEVELS are table aliases of level 0's rows, acked with it.
     MTP_DECODE_LEVELS = int(os.environ.get("PREFILL_MTP_DECODE_LEVELS", MTP_LEVELS))
-    MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * 16))
     ADAPTER = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL))
     # Default from the adapter's own depth (see prefill_runner.py's MODEL_CFG.NUM_LAYERS
     # pattern) rather than a literal -- a hardcoded default silently under-covers any model
@@ -149,18 +174,18 @@ def _load_env_config(check_budget: bool = True) -> None:
 _load_env_config(check_budget=False)
 
 
-def _media_refs(chunks) -> list:
+def _media_refs(chunks, prompt_lens) -> list:
+    """A ref for each image (MEDIA) a chunk overlaps, if its request holds the image: like the engine's admit, an
+    image must end before the prompt's last position. ``prompt_lens`` lists the non-empty chunks' prompt lengths."""
     return [
         MediaRef(k, start, start + n, stub_media_key(n, i))
-        for k, c in enumerate(chunks)
-        if not c.is_empty
+        for k, (c, prompt_len) in enumerate(zip(chunks, prompt_lens))
         for i, (start, n) in enumerate(MEDIA)
-        if start < c.actual_end and start + n > c.actual_start
+        if start + n < prompt_len and start < c.actual_end and start + n > c.actual_start
     ]
 
 
-def _pack_metadata(chunks) -> bytes:
-    refs = _media_refs(chunks)
+def _pack_metadata(chunks, refs=()) -> bytes:
     validate_media_refs(refs, chunks)
     return pack_forward_metadata(chunks, FORWARD_CHUNKS, refs, MEDIA_MAX_REFS)
 
@@ -221,17 +246,19 @@ def _forward_payload(pushes: list, pool_of) -> tuple:
     if FORWARD_CHUNKS == 1:
         (p,) = pushes
         pool = pool_of(p.slot_id)
+        chunks = [PrefillChunk(p.slot_id, p.actual_start, p.actual_end)]
         return (
             _h2d_rows(_chunk_slice(pool, p.actual_start, p.actual_isl), p.actual_start),
             _mtp_rows(pool, p.actual_start, p.actual_isl, actual_end=p.actual_end),
-            _pack_metadata([PrefillChunk(p.slot_id, p.actual_start, p.actual_end)]),
+            _pack_metadata(chunks, _media_refs(chunks, [p.actual_isl])),
         )
     pushes = _partial_runs_last(pushes)
     chunks = pad_chunks([PrefillChunk(p.slot_id, p.actual_start, p.actual_end) for p in pushes], FORWARD_CHUNKS)
     tokens = [_chunk_slice(pool_of(p.slot_id), p.actual_start, p.actual_isl) for p in pushes]
     tokens += [[1] * CHUNK_SIZE] * (FORWARD_CHUNKS - len(pushes))
     rows = _h2d_forward_rows(tokens, [c.actual_start for c in chunks])
-    return rows, _forward_mtp_rows(pushes, pool_of), _pack_metadata(chunks)
+    refs = _media_refs(chunks, [p.actual_isl for p in pushes])
+    return rows, _forward_mtp_rows(pushes, pool_of), _pack_metadata(chunks, refs)
 
 
 def _partial_runs_last(pushes: list) -> list:

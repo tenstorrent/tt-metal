@@ -218,8 +218,10 @@ assert (
     not MEDIA_MAX_REFS or ADAPTER.supports_media
 ), f"PREFILL_MEDIA_MAX_REFS={MEDIA_MAX_REFS}: model {ADAPTER.name!r} does not take media refs"
 assert not (MEDIA_MAX_REFS and USE_TRACE), "PREFILL_MEDIA_MAX_REFS>0 does not support PREFILL_USE_TRACE=1 yet"
+assert not (MEDIA_MAX_REFS and MTP_LEVELS), "PREFILL_MEDIA_MAX_REFS>0 does not support PREFILL_MTP_LEVELS>0"
 _H2D_PAGE_BYTES = (
-    int(make_h2d_spec(GLOBAL_MESH_SHAPE, FORWARD_TOKENS_BUDGET, MTP_LEVELS, SP_AXIS).shape[-1]) * TOKEN_ID_BYTES
+    int(make_h2d_spec(GLOBAL_MESH_SHAPE, FORWARD_TOKENS_BUDGET, MTP_LEVELS, SP_AXIS, FORWARD_CHUNKS).shape[-1])
+    * TOKEN_ID_BYTES
 )
 assert MEDIA_MAX_REFS <= media_refs_capacity(FORWARD_CHUNKS, _H2D_PAGE_BYTES), (
     f"PREFILL_MEDIA_MAX_REFS={MEDIA_MAX_REFS}: the H2D metadata must fit one {_H2D_PAGE_BYTES} B socket page, "
@@ -282,7 +284,8 @@ def _no_provided_levels():
 def _decode_metadata(metadata_msg: ttnn.Tensor, with_provided_levels: bool = False, with_media: bool = False) -> dict:
     """The forward's metadata from one D2H read: the words after the chunk metadata are MTP provided_levels (one per
     chunk) on D2D, the media refs on H2D. A malformed ref is a protocol error and stops the runner. A missing or
-    wrong-size embedding also stops it: failing only that request needs a per-request error path to the engine."""
+    wrong-size embedding stops it too, until the runner fails only that request with a failed-chunk layer
+    completion (#66192)."""
     m = ttnn.to_torch(ttnn.get_device_tensors(metadata_msg)[0]).view(torch.int32).flatten()
     n = CHUNK_METADATA_SIZE_BYTES // 4
     meta = _meta_from_words(m[:n].tolist())
@@ -933,7 +936,6 @@ def _compute_and_send(
         f"provided={meta.get('provided_levels')}{_chunks_str(meta)}"
     )
 
-    ack_md = _ack_metadata(runtime, sockets, meta, d2h_service)
     media_kwargs = {"media_refs": meta["media_refs"]} if meta.get("media_refs") else {}
     with _with_hang_timeout(runtime.mesh_device):
         if PER_CHUNK_FORWARDS:
@@ -966,7 +968,7 @@ def _compute_and_send(
                 meta["chunks"],
                 request_id=c,
                 d2h_service=d2h_service,
-                metadata_msg=ack_md,
+                metadata_msg=_ack_metadata(runtime, sockets, meta, d2h_service),
                 **mtp_kwargs,
                 **media_kwargs,
                 **({"indexer_indices": indices} if indices is not None else {}),
@@ -989,7 +991,7 @@ def _compute_and_send(
                 actual_end=meta["actual_end"],
                 request_id=c,
                 d2h_service=d2h_service,
-                metadata_msg=ack_md,
+                metadata_msg=_ack_metadata(runtime, sockets, meta, d2h_service),
                 **mtp_kwargs,
                 **media_kwargs,
                 **({"indexer_indices": indices} if indices is not None else {}),
