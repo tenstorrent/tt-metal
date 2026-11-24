@@ -99,6 +99,14 @@ int main(void)
     ckernel::reset_cfg_state_id();
     ckernel::reset_dest_offset_id();
 #endif
+#if defined(ARCH_BLACKHOLE) && !defined(ARCH_QUASAR)
+    // Auto TTSync settings live in this thread's ThreadConfig, which no soft reset clears, so a kernel that turned them
+    // on leaves them on for the next one. Start every kernel with them off. The CFG_STATE_ID write matches the hardware
+    // bank to reset_cfg_state_id() and is the SETC16 that Auto TTSync needs once after reset (SETC16.md); nothing after
+    // it in a fused bundle depends on its value.
+    TTI_SETC16(CFG_STATE_ID_StateID_ADDR32, 0);
+    TTI_SETC16(TENSIX_TRISC_SYNC_TrackGlobalCfg_ADDR32, 0);
+#endif
 
 #if defined(LLK_PROFILER)
     // Counters on only, empty otherwise (counters.h): copy the launch word here, before the kernel, and read the
