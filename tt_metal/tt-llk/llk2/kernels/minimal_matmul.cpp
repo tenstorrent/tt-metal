@@ -237,12 +237,14 @@ void kernel_main()
                 {
                     // b * bias, once per block: row 0 of each tile is what the Row broadcasts below read.
                     const auto bb_slot = reserve_back<scaled_bias_spec>(scaled_bias);
-                    for (std::uint32_t c0 = 0; c0 < N_block_tiles; c0 += row_block)
-                    {
-                        const auto y = mul(cols<row_block>(b, c0), cols<row_block>(bias, c0), reserve_back<RowRing>());
-                        pack(y, cols<row_block>(bb_slot, c0));
-                        release(y);
-                    }
+                    for_row_blocks(
+                        n_cols,
+                        [&](std::uint32_t c0, auto n) __attribute__((always_inline))
+                        {
+                            const auto y = mul(cols_of(b, c0, n), cols_of(bias, c0, n), reserve_back<RowRing>());
+                            pack(y, cols_of(bb_slot, c0, n));
+                            release(y);
+                        });
                     release(bb_slot);
                 }
                 const auto bb = wait_front<scaled_bias_spec>(scaled_bias);
@@ -250,12 +252,17 @@ void kernel_main()
                 {
                     const auto a     = wait_front<a_row_spec>(ternary_a);
                     const auto o_row = reserve_back<out_row_spec>(out);
-                    for (std::uint32_t c0 = 0; c0 < N_block_tiles; c0 += row_block)
+                    if (m < m_rows)
                     {
-                        const auto ab = add<plus_row>(cols<row_block>(a, c0), cols<row_block>(bb, c0), reserve_back<RowRing>());
-                        const auto y  = mul<plus_times_row>(cols<row_block>(row(partials, m), c0), cols<row_block>(b, c0), ab);
-                        pack(y, cols<row_block>(o_row, c0));
-                        release(y);
+                        for_row_blocks(
+                            n_cols,
+                            [&](std::uint32_t c0, auto n) __attribute__((always_inline))
+                            {
+                                const auto ab = add<plus_row>(cols_of(a, c0, n), cols_of(bb, c0, n), reserve_back<RowRing>());
+                                const auto y  = mul<plus_times_row>(cols_of(row(partials, m), c0, n), cols_of(b, c0, n), ab);
+                                pack(y, cols_of(o_row, c0, n));
+                                release(y);
+                            });
                     }
                     release(o_row);
                     release(a);
@@ -269,12 +276,17 @@ void kernel_main()
                 for (std::uint32_t m = 0; m < M_block_tiles; ++m)
                 {
                     const auto o_row = reserve_back<out_row_spec>(out);
-                    for (std::uint32_t c0 = 0; c0 < N_block_tiles; c0 += row_block)
+                    if (m < m_rows)
                     {
-                        const auto y = add<plus_row>(cols<row_block>(row(partials, m), c0), cols<row_block>(bias, c0), reserve_back<RowRing>());
-                        const auto z = activation(y);
-                        pack(z, cols<row_block>(o_row, c0));
-                        release(z);
+                        for_row_blocks(
+                            n_cols,
+                            [&](std::uint32_t c0, auto n) __attribute__((always_inline))
+                            {
+                                const auto y = add<plus_row>(cols_of(row(partials, m), c0, n), cols_of(bias, c0, n), reserve_back<RowRing>());
+                                const auto z = activation(y);
+                                pack(z, cols_of(o_row, c0, n));
+                                release(z);
+                            });
                     }
                     release(o_row);
                 }
