@@ -287,8 +287,8 @@ TEST(InterDomain, Sanity) {
                     chips.second,
                     1,
                     route,
-                    [&mesh, from, exit](Program& program, std::vector<uint32_t>& args) {
-                        append_fabric_connection_rt_args(*mesh, from, exit, 0, program, kBehindCore, args);
+                    [&mesh, from, exit, plane = port.plane](Program& program, std::vector<uint32_t>& args) {
+                        append_fabric_connection_rt_args(*mesh, from, exit, plane, program, kBehindCore, args);
                     }});
             }
         }
