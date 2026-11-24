@@ -14,12 +14,12 @@
 #include <unordered_map>
 #include <vector>
 
-#include "allocator.hpp"
+#include <tt-metalium/allocator.hpp>
 #include "impl/allocator/persistent_l1_arena.hpp"
 #include <tt-metalium/hal_types.hpp>
 #include "llrt/hal_types.hpp"
-#include "sub_device.hpp"
-#include "sub_device_types.hpp"
+#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/sub_device_types.hpp>
 #include <impl/context/context_types.hpp>
 #include <tt-metalium/mesh_trace_id.hpp>
 

@@ -5,7 +5,7 @@
 
 #include <algorithm>
 #include <span>
-#include <tt_metal.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "impl/buffers/semaphore.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -17,7 +17,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "dispatch/command_queue_common.hpp"
-#include "device.hpp"
+#include <tt-metalium/device.hpp>
 #include "dispatch.hpp"
 #include "fd_kernel.hpp"
 #include "dispatch/dispatch_settings.hpp"

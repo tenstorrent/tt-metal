@@ -13,11 +13,11 @@
 #include <unordered_map>
 #include <vector>
 
-#include "api/tt-metalium/kernel_types.hpp"
-#include "api/tt-metalium/runtime_args_data.hpp"
-#include "api/tt-metalium/device.hpp"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/device.hpp>
 #include "impl/host_api/temp_quasar_api.hpp"
-#include "api/tt-metalium/experimental/offline_kernel_compile.hpp"
+#include <tt-metalium/experimental/offline_kernel_compile.hpp>
 #include <tt-metalium/workload/specification/scratchpad_spec.hpp>
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/core_coord.hpp>

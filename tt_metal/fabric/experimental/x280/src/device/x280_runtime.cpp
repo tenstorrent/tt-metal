@@ -14,7 +14,7 @@
 #include "impl/context/metal_context.hpp"
 
 #include <llrt/tt_cluster.hpp>
-#include <mesh_device.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 

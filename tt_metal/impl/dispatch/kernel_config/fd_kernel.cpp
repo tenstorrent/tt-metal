@@ -10,11 +10,11 @@
 #include <variant>
 #include "impl/buffers/semaphore.hpp"
 
-#include "device.hpp"
+#include <tt-metalium/device.hpp>
 #include "dispatch.hpp"
 #include "dispatch/kernel_config/relay_mux.hpp"
 #include "dispatch_s.hpp"
-#include "kernel_types.hpp"
+#include <tt-metalium/kernel_types.hpp>
 #include "prefetch.hpp"
 #include "tensor_prefetcher.hpp"
 #include "impl/context/context_descriptor.hpp"

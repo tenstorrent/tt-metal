@@ -16,8 +16,8 @@
 #include "tt_metal/impl/program/slow_dispatch.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "mesh_workload_impl.hpp"
-#include <mesh_device.hpp>
-#include <mesh_event.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_event.hpp>
 #include <tt-metalium/experimental/core_subset_write/buffer_write.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
 #include <tt-metalium/graph_tracking.hpp>

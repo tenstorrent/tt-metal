@@ -3,15 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/assert.hpp>
-#include <buffer.hpp>
-#include <buffer_types.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <device.hpp>
-#include <global_semaphore.hpp>
-#include <host_api.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/math.hpp>
-#include <tt_metal.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <cstdint>
 #include <memory>
 #include <utility>
@@ -20,7 +20,7 @@
 #include "global_semaphore_impl.hpp"
 #include "impl/allocator/allocator.hpp"
 #include "impl/dispatch/host_device_transfer.hpp"
-#include "mesh_device.hpp"
+#include <tt-metalium/mesh_device.hpp>
 #include "distributed/mesh_device_impl.hpp"
 #include <tt_stl/reflection.hpp>
 #include "impl/context/metal_env_impl.hpp"

@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "device.hpp"
+#include <tt-metalium/device.hpp>
 #include "dispatch/topology.hpp"
 #include <tt-metalium/hal_types.hpp>
 

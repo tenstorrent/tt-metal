@@ -34,11 +34,11 @@
 #include "hostdevcommon/fabric_common.h"
 #include "fabric_host_utils.hpp"
 #include "tt_metal/llrt/hal/generated/fabric_telemetry.hpp"
-#include "distributed_context.hpp"
+#include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include "mesh_coord.hpp"
+#include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "llrt/hal.hpp"
 #include "llrt/metal_soc_descriptor.hpp"

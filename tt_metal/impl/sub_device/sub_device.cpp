@@ -5,7 +5,7 @@
 #include <tt_stl/fmt.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <sub_device.hpp>
+#include <tt-metalium/sub_device.hpp>
 #include <tt_stl/span.hpp>
 #include <algorithm>
 #include <array>

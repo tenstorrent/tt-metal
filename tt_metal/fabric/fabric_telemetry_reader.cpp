@@ -10,7 +10,7 @@
 #include "hostdevcommon/fabric_common.h"
 #include "tt_metal/fabric/fabric_telemetry_converter.hpp"
 
-#include "tt_metal/api/tt-metalium/experimental/fabric/control_plane.hpp"
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include "tt_metal/distributed/mesh_device_impl.hpp"
 #include "tt_metal/impl/context/metal_env_impl.hpp"

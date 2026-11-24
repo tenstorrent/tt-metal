@@ -19,7 +19,7 @@
 #include <algorithm>
 
 #include "internal/disaggregation/kv_chunk_address_table.hpp"
-#include "experimental/fabric/fabric_types.hpp"
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 
 namespace {
 

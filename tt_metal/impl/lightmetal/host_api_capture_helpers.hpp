@@ -9,7 +9,7 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/buffer.hpp>
 #include "impl/lightmetal/host_data_type.hpp"
-#include <kernel_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 
 namespace tt::tt_metal {
 

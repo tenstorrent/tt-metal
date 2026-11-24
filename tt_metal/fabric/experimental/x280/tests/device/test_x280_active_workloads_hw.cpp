@@ -16,7 +16,7 @@
 #include "x280_test_images.hpp"
 
 #include <gtest/gtest.h>
-#include <mesh_device.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
 #include <algorithm>
 #include <array>

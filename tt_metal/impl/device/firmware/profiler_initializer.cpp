@@ -7,7 +7,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <llrt/tt_cluster.hpp>
-#include <device.hpp>
+#include <tt-metalium/device.hpp>
 #include "device/device_impl.hpp"
 #include "impl/context/context_descriptor.hpp"
 

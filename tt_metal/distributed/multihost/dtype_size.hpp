@@ -6,7 +6,7 @@
 
 #include <cstddef>
 #include <tt_stl/assert.hpp>
-#include "api/tt-metalium/distributed_context.hpp"
+#include <tt-metalium/distributed_context.hpp>
 
 namespace tt::tt_metal::distributed::multihost {
 

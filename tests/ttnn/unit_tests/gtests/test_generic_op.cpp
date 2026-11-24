@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gmock/gmock.h>
-#include <tt_metal/api/tt-metalium/core_coord.hpp>
-#include <tt_metal/api/tt-metalium/work_split.hpp>
-#include <tt_metal/api/tt-metalium/host_api.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt_metal/impl/buffers/semaphore.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -18,7 +18,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include "hostdevcommon/fabric_common.h"
 #include "ttnn_test_fixtures.hpp"
-#include "tt_metal/api/tt-metalium/cluster.hpp"
+#include <tt-metalium/cluster.hpp>
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"

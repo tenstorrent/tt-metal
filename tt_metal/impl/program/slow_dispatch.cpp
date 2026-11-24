@@ -14,9 +14,9 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 
-#include "circular_buffer_constants.h"
+#include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/core_coord.hpp>
-#include "device.hpp"
+#include <tt-metalium/device.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include "hostdev/remote_dfb_constants.h"
 #include "impl/buffers/circular_buffer.hpp"
@@ -32,7 +32,7 @@
 #include "llrt.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "program_impl.hpp"
-#include "tt_metal.hpp"
+#include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tracy/Tracy.hpp"

@@ -11,7 +11,7 @@
 #include <bmm_op.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include "tt-metalium/core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 
 using namespace tt::constants;
 using namespace std;

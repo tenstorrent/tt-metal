@@ -26,7 +26,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <benchmark/benchmark.h>
 #include "context/metal_context.hpp"
-#include "mesh_coord.hpp"
+#include <tt-metalium/mesh_coord.hpp>
 #include <llrt/tt_cluster.hpp>
 
 using namespace tt;

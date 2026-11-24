@@ -40,14 +40,14 @@
 #include "dispatch/topology.hpp"
 #include "dispatch/dispatch_core_common.hpp"
 #include "profiler/profiler_state_manager.hpp"
-#include <experimental/fabric/control_plane.hpp>
-#include <experimental/mock_device/mock_device.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/mock_device/mock_device.hpp>
 #include "device/device_manager.hpp"
-#include <distributed_context.hpp>
-#include <experimental/fabric/fabric.hpp>
-#include <system_mesh.hpp>
+#include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/system_mesh.hpp>
 
-#include <tt_metal.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-umd/types/arch.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 #include "dispatch/data_collector.hpp"

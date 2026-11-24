@@ -1,14 +1,14 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-#include <host_api.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <filesystem>
 #include <iostream>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "device.hpp"
+#include <tt-metalium/device.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_accessor.hpp"

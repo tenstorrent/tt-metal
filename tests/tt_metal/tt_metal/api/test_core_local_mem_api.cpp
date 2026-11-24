@@ -18,7 +18,7 @@
 #include "context/metal_context.hpp"
 #include <tt-metalium/distributed.hpp>
 #include "gtest/gtest.h"
-#include "mesh_device.hpp"
+#include <tt-metalium/mesh_device.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>

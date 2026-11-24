@@ -4,9 +4,9 @@
 
 #include "l1_banking_allocator.hpp"
 
-#include <allocator.hpp>
+#include <tt-metalium/allocator.hpp>
 #include <tt_stl/assert.hpp>
-#include <buffer_types.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <algorithm>
 #include <cstddef>

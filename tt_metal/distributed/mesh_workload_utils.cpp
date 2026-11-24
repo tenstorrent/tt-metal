@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/fmt.hpp>
-#include "device.hpp"
-#include "mesh_device.hpp"
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"

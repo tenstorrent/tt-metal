@@ -13,8 +13,8 @@
 #include <tt-metalium/experimental/inspector_config.hpp>
 #include "context/metal_context.hpp"
 #include "distributed/mesh_device_impl.hpp"
-#include <program_cache.hpp>
-#include <system_mesh.hpp>
+#include <tt-metalium/program_cache.hpp>
+#include <tt-metalium/system_mesh.hpp>
 #include "jit_build/build_env_manager.hpp"
 #include "device/device_manager.hpp"
 #include "impl/kernels/kernel.hpp"

@@ -24,15 +24,15 @@
 #include "impl/streaming_profiler/sync/link_sync.hpp"
 #include "impl/streaming_profiler/sync/tile_sync.hpp"
 
-#include <experimental/fabric/control_plane.hpp>
-#include <experimental/fabric/fabric_types.hpp>
-#include <experimental/fabric/fabric.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch/topology.hpp"
 #include "dispatch/system_memory_manager.hpp"
 
-#include <device.hpp>
+#include <tt-metalium/device.hpp>
 #include "device_impl.hpp"
 
 using namespace tt::tt_metal;

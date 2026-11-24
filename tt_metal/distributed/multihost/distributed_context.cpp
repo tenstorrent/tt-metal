@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "api/tt-metalium/distributed_context.hpp"
+#include <tt-metalium/distributed_context.hpp>
 
 #include <array>
 
