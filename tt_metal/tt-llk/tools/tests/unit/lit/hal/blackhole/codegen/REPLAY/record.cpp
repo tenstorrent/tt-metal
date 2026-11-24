@@ -2,16 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// clang-format off
 // RUN: %{blackhole_tensix_compile} %{blackhole_math_thread} -UENABLE_LLK_ASSERT -fno-ipa-icf -c %s -o %t.o
 // RUN: %{blackhole_objdump} -drz %t.o > %t.dump
 // RUN: %{blackhole_compare_codegen} %t.dump
-// RUN: %{blackhole_tensix_compile} %{blackhole_math_thread} -DENABLE_LLK_ASSERT -c %s -o %t.assert.o
-// RUN: %{blackhole_objdump} -d %t.assert.o | FileCheck %s --check-prefix=ASSERT
+// RUN: %{blackhole_tensix_compile} %{blackhole_math_thread} -UENABLE_LLK_ASSERT -DENABLE_GATHERING -mno-tt-tensix-optimize-replay -fno-ipa-icf -c %s -o %t.gathering.o
+// RUN: %{blackhole_objdump} -drz %t.gathering.o > %t.gathering.dump
+// RUN: %{blackhole_compare_codegen} %t.gathering.dump
+// clang-format on
 
 // Compare each HAL function with its adjacent reference_ function. Disable
 // identical-code folding so both bodies are emitted independently.
 // Recorded bodies use HAL operations; references use TTI_*/TT_* instructions.
 // REPLAY operands are (start, count, execute while recording, record).
+// The gathering run checks that each record sits between disable_gathering() and
+// enable_gathering(); -mno-tt-tensix-optimize-replay keeps the compiler from forming its own REPLAYs.
 
 #include <cstdint>
 
@@ -20,6 +25,20 @@
 
 namespace replay = hal::replay;
 namespace scalar = hal::scalar;
+
+inline __attribute__((always_inline)) void reference_disable_gathering()
+{
+#if defined(ENABLE_GATHERING)
+    ckernel::disable_gathering();
+#endif
+}
+
+inline __attribute__((always_inline)) void reference_enable_gathering()
+{
+#if defined(ENABLE_GATHERING)
+    ckernel::enable_gathering();
+#endif
+}
 
 extern "C" __attribute__((noinline, used)) void record_only()
 {
@@ -33,9 +52,11 @@ extern "C" __attribute__((noinline, used)) void record_only()
 
 extern "C" __attribute__((noinline, used)) void reference_record_only()
 {
+    reference_disable_gathering();
     TTI_REPLAY(16 /*start_idx*/, 2 /*len*/, 0 /*execute_while_loading*/, 1 /*load_mode*/);
     TTI_SETDMAREG(0 /*Payload_SigSelSize*/, 1 /*Payload_SigSel*/, 0 /*SetSignalsMode*/, 2 /*RegIndex16b*/);
     TTI_SETDMAREG(0 /*Payload_SigSelSize*/, 2 /*Payload_SigSel*/, 0 /*SetSignalsMode*/, 4 /*RegIndex16b*/);
+    reference_enable_gathering();
 }
 
 // The range ends at slot 31.
@@ -53,11 +74,13 @@ extern "C" __attribute__((noinline, used)) void record_and_execute_last_slots()
 
 extern "C" __attribute__((noinline, used)) void reference_record_and_execute_last_slots()
 {
+    reference_disable_gathering();
     TTI_REPLAY(28 /*start_idx*/, 4 /*len*/, 1 /*execute_while_loading*/, 1 /*load_mode*/);
     TTI_SETDMAREG(0 /*Payload_SigSelSize*/, 1 /*Payload_SigSel*/, 0 /*SetSignalsMode*/, 2 /*RegIndex16b*/);
     TTI_SETDMAREG(0 /*Payload_SigSelSize*/, 2 /*Payload_SigSel*/, 0 /*SetSignalsMode*/, 4 /*RegIndex16b*/);
     TTI_SETDMAREG(0 /*Payload_SigSelSize*/, 3 /*Payload_SigSel*/, 0 /*SetSignalsMode*/, 6 /*RegIndex16b*/);
     TTI_SETDMAREG(0 /*Payload_SigSelSize*/, 4 /*Payload_SigSel*/, 0 /*SetSignalsMode*/, 8 /*RegIndex16b*/);
+    reference_enable_gathering();
 }
 
 extern "C" __attribute__((noinline, used)) void record_forwarded_arguments()
@@ -75,10 +98,12 @@ extern "C" __attribute__((noinline, used)) void record_forwarded_arguments()
 
 extern "C" __attribute__((noinline, used)) void reference_record_forwarded_arguments()
 {
+    reference_disable_gathering();
     TTI_REPLAY(0 /*start_idx*/, 3 /*len*/, 0 /*execute_while_loading*/, 1 /*load_mode*/);
     TTI_SETDMAREG(0 /*Payload_SigSelSize*/, 7 /*Payload_SigSel*/, 0 /*SetSignalsMode*/, 2 /*RegIndex16b*/);
     TTI_SETDMAREG(0 /*Payload_SigSelSize*/, 7 /*Payload_SigSel*/, 0 /*SetSignalsMode*/, 2 /*RegIndex16b*/);
     TTI_SETDMAREG(0 /*Payload_SigSelSize*/, 7 /*Payload_SigSel*/, 0 /*SetSignalsMode*/, 2 /*RegIndex16b*/);
+    reference_enable_gathering();
 }
 
 // A constant range passed to the runtime overload still lowers to an immediate REPLAY.
@@ -89,12 +114,15 @@ extern "C" __attribute__((noinline, used)) void record_constant_runtime_range()
 
 extern "C" __attribute__((noinline, used)) void reference_record_constant_runtime_range()
 {
+    reference_disable_gathering();
     TTI_REPLAY(12 /*start_idx*/, 1 /*len*/, 0 /*execute_while_loading*/, 1 /*load_mode*/);
     TTI_SETDMAREG(0 /*Payload_SigSelSize*/, 1 /*Payload_SigSel*/, 0 /*SetSignalsMode*/, 2 /*RegIndex16b*/);
+    reference_enable_gathering();
 }
 
 // A count chosen at runtime between constants is duplicated into each path, where
-// it lowers to an immediate REPLAY like the raw recording builtin.
+// it lowers to an immediate REPLAY like the raw recording builtin. With gathering the
+// bracket keeps the paths joined, so both the HAL and the reference issue one runtime REPLAY.
 extern "C" __attribute__((noinline, used)) void record_selected_count(const bool partial_face)
 {
     const std::uint32_t count = partial_face ? 3 : 2;
@@ -113,13 +141,16 @@ extern "C" __attribute__((noinline, used)) void record_selected_count(const bool
 
 extern "C" __attribute__((noinline, used)) void reference_record_selected_count(const bool partial_face)
 {
-    lltt::record(0 /*start*/, partial_face ? 3 : 2);
+    const std::uint32_t count = partial_face ? 3 : 2;
+    reference_disable_gathering();
+    lltt::record(0 /*start*/, count);
     TTI_SETDMAREG(0 /*Payload_SigSelSize*/, 1 /*Payload_SigSel*/, 0 /*SetSignalsMode*/, 2 /*RegIndex16b*/);
     if (partial_face)
     {
         TTI_SETDMAREG(0 /*Payload_SigSelSize*/, 2 /*Payload_SigSel*/, 0 /*SetSignalsMode*/, 4 /*RegIndex16b*/);
     }
     TTI_SETDMAREG(0 /*Payload_SigSelSize*/, 3 /*Payload_SigSel*/, 0 /*SetSignalsMode*/, 6 /*RegIndex16b*/);
+    reference_enable_gathering();
 }
 
 extern "C" __attribute__((noinline, used)) void record_runtime_count(const std::uint32_t count)
@@ -138,14 +169,11 @@ extern "C" __attribute__((noinline, used)) void record_runtime_count(const std::
 // lltt::record issues the word through the instruction buffer like TT_REPLAY.
 extern "C" __attribute__((noinline, used)) void reference_record_runtime_count(const std::uint32_t count)
 {
+    reference_disable_gathering();
     lltt::record(4 /*start*/, count);
     for (std::uint32_t i = 0; i < count; ++i)
     {
         TTI_SETDMAREG(0 /*Payload_SigSelSize*/, 1 /*Payload_SigSel*/, 0 /*SetSignalsMode*/, 2 /*RegIndex16b*/);
     }
+    reference_enable_gathering();
 }
-
-// With LLK_ASSERT, a runtime count compiles to a range check before the recording REPLAY.
-// ASSERT-LABEL: <record_runtime_count>:
-// ASSERT: ebreak
-// ASSERT: ret

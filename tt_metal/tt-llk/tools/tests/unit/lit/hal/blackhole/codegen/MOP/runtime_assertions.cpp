@@ -5,6 +5,8 @@
 // RUN: %{blackhole_tensix_compile} %{blackhole_math_thread} -DENABLE_LLK_ASSERT -fno-ipa-icf -fno-reorder-blocks -c %s -o %t.o
 // RUN: %{blackhole_objdump} -drz %t.o > %t.dump
 // RUN: %{blackhole_compare_codegen} %t.dump
+// RUN: %{blackhole_tensix_compile} %{blackhole_math_thread} -DENABLE_LLK_ASSERT -DOPERATION_BOUNDARIES -c %s -o %t.boundaries.o
+// RUN: %{blackhole_objdump} -d %t.boundaries.o | FileCheck %s --check-prefix=BOUNDARY
 
 // Compare each HAL function with its adjacent reference_ function with
 // LLK_ASSERT enabled; references state each check as the HAL does, with
@@ -20,6 +22,22 @@ namespace mop = hal::mop;
 
 using Template0Runner = mop::Runner<mop::MopTemplate::Template0>;
 
+// MopCfg words written by the references:
+//
+//   word | Template 0                          | Template 1
+//   -----+-------------------------------------+------------
+//   0    | (unused)                            | outer count
+//   1    | flags (bit 0 InsnB, bit 1 InsnA1-3) | inner count
+//   2    | InsnB                               | StartOp
+//   3    | InsnA0                              | EndOp0
+//   4    | InsnA1                              | EndOp1
+//   5    | InsnA2                              | LoopOp
+//   6    | InsnA3                              | LoopOp1
+//   7    | SkipA0                              | Loop0Last
+//   8    | SkipB                               | Loop1Last
+//
+// Template 0 skips the words of a disabled group. Template 1 writes EndOp1 only with
+// end ops, and words 5-8 only with a nonzero inner count.
 inline volatile std::uint32_t *reference_mop_cfg()
 {
     return reinterpret_cast<volatile std::uint32_t *>(TENSIX_MOP_CFG_BASE);
@@ -262,6 +280,20 @@ extern "C" __attribute__((noinline, used)) void reference_run_template0_runtime_
     TT_MOP(0 /*mop_type*/, 3 /*loop_count*/, mask & 0xffff);
 }
 
+// A runtime count and mask check the 7-bit count, as the asserts-off comparison in runner.cpp cannot.
+extern "C" __attribute__((noinline, used)) void run_template0_runtime(const std::uint32_t count, const std::uint32_t mask)
+{
+    Template0Runner::run(count, mask);
+}
+
+extern "C" __attribute__((noinline, used)) void reference_run_template0_runtime(const std::uint32_t count, const std::uint32_t mask)
+{
+    const std::uint32_t loop_count = count - 1;
+    LLK_ASSERT(loop_count < 128, "MOP encoded count must fit in 7 bits");
+    TT_MOP_CFG(mask >> 16);
+    TT_MOP(0 /*mop_type*/, loop_count, mask & 0xffff);
+}
+
 extern "C" __attribute__((noinline, used)) std::uint32_t template0_runtime_preset_operation(const std::uint32_t count, const std::uint32_t mask)
 {
     return Template0Runner {.count = count, .mask = mask, .mask_high = mop::MaskHigh::Preset}.operation();
@@ -273,3 +305,45 @@ extern "C" __attribute__((noinline, used)) std::uint32_t reference_template0_run
     hal::detail::require(loop_count < 128, "MOP encoded count must fit in 7 bits");
     return TT_OP_MOP(0 /*mop_type*/, loop_count, mask & 0xffff);
 }
+
+#ifdef OPERATION_BOUNDARIES
+// The Auto operation() check folds differently from any independent reference, so it is
+// checked here on its own. Each runtime check is called with the last valid and the first
+// invalid value, which the compiler folds. The test checks only whether the LLK_ASSERT ebreak
+// is emitted, so it does not depend on how the comparison is compiled.
+extern "C" __attribute__((noinline, used)) std::uint32_t operation_count_valid()
+{
+    return Template0Runner {.count = 16, .mask = 0xffff}.operation();
+}
+
+// BOUNDARY-LABEL: <operation_count_valid>:
+// BOUNDARY-NOT: ebreak
+// BOUNDARY: ret
+// BOUNDARY-NOT: ebreak
+
+extern "C" __attribute__((noinline, used)) std::uint32_t operation_count_invalid()
+{
+    return Template0Runner {.count = 17, .mask = 0x1}.operation();
+}
+
+// BOUNDARY-LABEL: <operation_count_invalid>:
+// BOUNDARY: ebreak
+
+extern "C" __attribute__((noinline, used)) std::uint32_t operation_mask_valid()
+{
+    return Template0Runner {.count = 1, .mask = 0xffff}.operation();
+}
+
+// BOUNDARY-LABEL: <operation_mask_valid>:
+// BOUNDARY-NOT: ebreak
+// BOUNDARY: ret
+// BOUNDARY-NOT: ebreak
+
+extern "C" __attribute__((noinline, used)) std::uint32_t operation_mask_invalid()
+{
+    return Template0Runner {.count = 1, .mask = 0x10000}.operation();
+}
+
+// BOUNDARY-LABEL: <operation_mask_invalid>:
+// BOUNDARY: ebreak
+#endif
