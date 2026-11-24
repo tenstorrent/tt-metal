@@ -66,6 +66,8 @@ inline void llk_wait_tiles(const std::int32_t dfb_id, const std::uint32_t num_ti
     // when it returns, a RISC-side L1 read of the waited entries is safe. Poll this thread's SYNC busy bit in the
     // tensix_busy_status CSR.
     ckernel::wait_sync_idle();
+#else
+    ckernel::invalidate_data_cache();
 #endif
 }
 

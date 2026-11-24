@@ -175,6 +175,17 @@ inline void disable_implicit_sync_for(KernelSpec& kernel, DFBSpecName dfb_name) 
     config_2xx.disable_dfb_implicit_sync_for.push_back(std::move(dfb_name));
 }
 
+// Hand one side of a DFB to a compute kernel's SFPU pipeline (Quasar).
+inline void use_sfpu_pipeline_for(KernelSpec& kernel, DFBSpecName dfb_name, DFBEndpointType side) {
+    auto& compute_cfg = std::get<ComputeHardwareConfig>(kernel.hw_config);
+    if (!compute_cfg.config_2xx) {
+        compute_cfg.config_2xx = ComputeHardwareConfig::Compute2XXConfig{};
+    }
+    auto& listed = side == DFBEndpointType::CONSUMER ? compute_cfg.config_2xx->sfpu_pipeline_consumed_dfbs
+                                                     : compute_cfg.config_2xx->sfpu_pipeline_produced_dfbs;
+    listed.push_back(std::move(dfb_name));
+}
+
 inline void maybe_disable_implicit_sync(KernelSpec& kernel, bool implicit_sync, DFBSpecName dfb_name) {
     if (!implicit_sync) {
         disable_implicit_sync_for(kernel, std::move(dfb_name));
@@ -449,8 +460,10 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
          .accessor_name = "out",
          .endpoint_type = DFBEndpointType::PRODUCER,
          .access_pattern = p.pap,
-         .block_size = producer_blocked ? p.block_size : 0u,
-         .use_trisc3 = p.producer_on_trisc3}};
+         .block_size = producer_blocked ? p.block_size : 0u}};
+    if (p.producer_on_trisc3) {
+        use_sfpu_pipeline_for(producer, DFB, DFBEndpointType::PRODUCER);
+    }
     // The BLOCKED kernels also take block_size.
     if (producer_blocked) {
         producer.compile_time_args = {
@@ -508,8 +521,10 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
          .accessor_name = "in",
          .endpoint_type = DFBEndpointType::CONSUMER,
          .access_pattern = p.cap,
-         .block_size = consumer_blocked ? p.block_size : 0u,
-         .use_trisc3 = p.consumer_on_trisc3}};
+         .block_size = consumer_blocked ? p.block_size : 0u}};
+    if (p.consumer_on_trisc3) {
+        use_sfpu_pipeline_for(consumer, DFB, DFBEndpointType::CONSUMER);
+    }
 
     // Config is arch-specific (the _2_0 kernels are the same either way). On WH/BH a DFB lowers to
     // a circular buffer and ValidateProgramSpec requires config_1xx on DM kernels, so mirror the

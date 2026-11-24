@@ -160,13 +160,15 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_MultiPipeRelayProducerBindsSubsetFails)
         spec, "Kernel covers 6 node(s) besides 0 extra node(s): 3 of the 3 receiver node(s), 3 outside the receivers");
 }
 
-TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayConsumerOnTrisc3Fails) {
-    // Relays run on trisc0 / trisc2 only.
+TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayConsumerOnSfpuPipelineFails) {
+    // A relay DFB stays on the Unpack / Pack stages.
     ProgramSpec spec = MakeFullPipeSpec();
-    auto consumer = ConsumerOf(relay_dfb_name, "relay");
-    consumer.use_trisc3 = true;
-    KernelNamed(spec, "compute").dfb_bindings = {consumer};
-    EXPECT_SPEC_REJECTED(spec, "use_trisc3 is not supported on a PrefetcherPipe relay DFB");
+    auto& compute = KernelNamed(spec, "compute");
+    compute.dfb_bindings = {ConsumerOf(relay_dfb_name, "relay")};
+    std::get<ComputeHardwareConfig>(compute.hw_config).config_2xx =
+        ComputeHardwareConfig::Compute2XXConfig{.sfpu_pipeline_consumed_dfbs = {relay_dfb_name}};
+    EXPECT_SPEC_REJECTED(
+        spec, "is a PrefetcherPipe relay DFB, so kernel 'compute' cannot list it in sfpu_pipeline_consumed_dfbs");
 }
 
 }  // namespace

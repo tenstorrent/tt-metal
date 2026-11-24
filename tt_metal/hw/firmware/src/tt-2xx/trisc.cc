@@ -41,9 +41,10 @@
 // both 6140 B against the 5120 B limit. Enabling both produces a link-time region overflow at device
 // open ("segment[0] ... overflows region:0 limit of 0x1400 bytes"), which is far harder to read than
 // this message. Turn off one of the two: unset TT_METAL_WATCHER, or unset TT_METAL_DPRINT_CORES.
-#if defined(UCK_CHLKC_PACK) && defined(WATCHER_ENABLED) && defined(DEBUG_PRINT_ENABLED)
+#if (defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_ISOLATE_SFPU)) && defined(WATCHER_ENABLED) && \
+    defined(DEBUG_PRINT_ENABLED)
 #error \
-    "Quasar pack TRISC (trisc2) firmware does not fit with both the watcher and DPRINT enabled: the two together exceed MEM_TRISC_FIRMWARE_SIZE (5120 B). Disable one -- unset TT_METAL_WATCHER, or unset TT_METAL_DPRINT_CORES."
+    "Quasar pack (trisc2) and isolate-SFPU (trisc3) TRISC firmware does not fit with both the watcher and DPRINT enabled: the two together exceed MEM_TRISC_FIRMWARE_SIZE (5120 B). Disable one -- unset TT_METAL_WATCHER, or unset TT_METAL_DPRINT_CORES."
 #endif
 
 #if defined(PROFILE_KERNEL)

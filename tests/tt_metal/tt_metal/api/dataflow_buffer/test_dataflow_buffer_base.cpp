@@ -583,14 +583,14 @@ TEST_F(UnitMeshFixture, DMTrisc3DMTest2xDFB1Sx1S) {
         {.dfb_spec_name = DFB_IN,
          .accessor_name = "in",
          .endpoint_type = DFBEndpointType::CONSUMER,
-         .access_pattern = DFBAccessPattern::STRIDED,
-         .use_trisc3 = true},
+         .access_pattern = DFBAccessPattern::STRIDED},
         {.dfb_spec_name = DFB_OUT,
          .accessor_name = "out",
          .endpoint_type = DFBEndpointType::PRODUCER,
-         .access_pattern = DFBAccessPattern::STRIDED,
-         .use_trisc3 = true},
+         .access_pattern = DFBAccessPattern::STRIDED},
     };
+    use_sfpu_pipeline_for(compute, DFB_IN, DFBEndpointType::CONSUMER);
+    use_sfpu_pipeline_for(compute, DFB_OUT, DFBEndpointType::PRODUCER);
     compute.compile_time_args = {{"num_entries", num_entries}};
     auto consumer = make_dm_dfb_consumer(
         CONSUMER, DFB_OUT, OUT_TENSOR, num_entries, /*blocked_consumer=*/false, /*implicit_sync=*/false);

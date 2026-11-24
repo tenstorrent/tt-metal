@@ -162,13 +162,13 @@ static_assert(reflect::size<DMConfig::DataMovement2XXConfig>() == 2);
 static_assert(reflect::size<DMConfig>() == 2);
 static_assert(reflect::size<ComputeConfig::Compute1XXConfig>() == 1);
 static_assert(reflect::size<ComputeConfig::Compute12XConfig>() == 1);
-static_assert(reflect::size<ComputeConfig::Compute2XXConfig>() == 1);
+static_assert(reflect::size<ComputeConfig::Compute2XXConfig>() == 3);
 static_assert(reflect::size<ComputeConfig>() == 8);
 static_assert(reflect::size<m2::KernelSpec::SourceCode>() == 1);
 static_assert(reflect::size<m2::KernelSpec::CompilerOptions>() == 3);
 static_assert(reflect::size<m2::KernelSpec::RuntimeArgSchema>() == 4);
 static_assert(reflect::size<m2::ArrayArgDecl>() == 2);
-static_assert(reflect::size<m2::DFBBinding>() == 6);
+static_assert(reflect::size<m2::DFBBinding>() == 5);
 static_assert(reflect::size<m2::SemaphoreBinding>() == 2);
 static_assert(reflect::size<m2::ScratchpadBinding>() == 2);
 static_assert(reflect::size<m2::TensorBinding>() == 2);
@@ -579,12 +579,22 @@ void bind_hardware_configs(nb::module_& mod) {
     nb::class_<ComputeConfig::Compute2XXConfig>(compute_config, "Compute2XXConfig")
         .def(
             "__init__",
-            [](ComputeConfig::Compute2XXConfig* self, bool enable_unpack_rvv) {
-                new (self) ComputeConfig::Compute2XXConfig{.enable_unpack_rvv = enable_unpack_rvv};
+            [](ComputeConfig::Compute2XXConfig* self,
+               bool enable_unpack_rvv,
+               std::vector<m2::DFBSpecName> sfpu_pipeline_consumed_dfbs,
+               std::vector<m2::DFBSpecName> sfpu_pipeline_produced_dfbs) {
+                new (self) ComputeConfig::Compute2XXConfig{
+                    .enable_unpack_rvv = enable_unpack_rvv,
+                    .sfpu_pipeline_consumed_dfbs = std::move(sfpu_pipeline_consumed_dfbs),
+                    .sfpu_pipeline_produced_dfbs = std::move(sfpu_pipeline_produced_dfbs)};
             },
             nb::kw_only(),
-            nb::arg("enable_unpack_rvv") = compute_2xx_defaults.enable_unpack_rvv)
-        .def_rw("enable_unpack_rvv", &ComputeConfig::Compute2XXConfig::enable_unpack_rvv);
+            nb::arg("enable_unpack_rvv") = compute_2xx_defaults.enable_unpack_rvv,
+            nb::arg("sfpu_pipeline_consumed_dfbs") = compute_2xx_defaults.sfpu_pipeline_consumed_dfbs,
+            nb::arg("sfpu_pipeline_produced_dfbs") = compute_2xx_defaults.sfpu_pipeline_produced_dfbs)
+        .def_rw("enable_unpack_rvv", &ComputeConfig::Compute2XXConfig::enable_unpack_rvv)
+        .def_rw("sfpu_pipeline_consumed_dfbs", &ComputeConfig::Compute2XXConfig::sfpu_pipeline_consumed_dfbs, COPY)
+        .def_rw("sfpu_pipeline_produced_dfbs", &ComputeConfig::Compute2XXConfig::sfpu_pipeline_produced_dfbs, COPY);
 
     const ComputeConfig compute_defaults{};
     compute_config
@@ -732,29 +742,25 @@ void bind_kernel_spec(nb::module_& mod) {
                std::string accessor_name,
                m2::DFBEndpointType endpoint_type,
                m2::DFBAccessPattern access_pattern,
-               uint32_t block_size,
-               bool use_trisc3) {
+               uint32_t block_size) {
                 new (self) m2::DFBBinding{
                     .dfb_spec_name = std::move(dfb_spec_name),
                     .accessor_name = std::move(accessor_name),
                     .endpoint_type = endpoint_type,
                     .access_pattern = access_pattern,
-                    .block_size = block_size,
-                    .use_trisc3 = use_trisc3};
+                    .block_size = block_size};
             },
             nb::kw_only(),
             nb::arg("dfb_spec_name"),
             nb::arg("accessor_name"),
             nb::arg("endpoint_type"),
             nb::arg("access_pattern") = dfb_binding_defaults.access_pattern,
-            nb::arg("block_size") = dfb_binding_defaults.block_size,
-            nb::arg("use_trisc3") = dfb_binding_defaults.use_trisc3)
+            nb::arg("block_size") = dfb_binding_defaults.block_size)
         .def_rw("dfb_spec_name", &m2::DFBBinding::dfb_spec_name)
         .def_rw("accessor_name", &m2::DFBBinding::accessor_name)
         .def_rw("endpoint_type", &m2::DFBBinding::endpoint_type)
         .def_rw("access_pattern", &m2::DFBBinding::access_pattern)
-        .def_rw("block_size", &m2::DFBBinding::block_size)
-        .def_rw("use_trisc3", &m2::DFBBinding::use_trisc3);
+        .def_rw("block_size", &m2::DFBBinding::block_size);
 
     nb::class_<m2::SemaphoreBinding>(
         kernel_spec,

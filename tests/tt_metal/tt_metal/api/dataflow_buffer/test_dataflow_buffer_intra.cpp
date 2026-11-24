@@ -81,14 +81,12 @@ static void run_intra_tensix_dfb_program(
                     .accessor_name = "out",
                     .endpoint_type = DFBEndpointType::PRODUCER,
                     .access_pattern = DFBAccessPattern::STRIDED,
-                    .use_trisc3 = pack_on_trisc3,
                 },
                 {
                     .dfb_spec_name = INTRA_DFB,
                     .accessor_name = "in",
                     .endpoint_type = DFBEndpointType::CONSUMER,
                     .access_pattern = DFBAccessPattern::STRIDED,
-                    .use_trisc3 = unpack_on_trisc3,
                 },
             },
         .compile_time_args =
@@ -101,6 +99,12 @@ static void run_intra_tensix_dfb_program(
             },
         .hw_config = ComputeHardwareConfig{},
     };
+    if (pack_on_trisc3) {
+        use_sfpu_pipeline_for(compute_spec, INTRA_DFB, DFBEndpointType::PRODUCER);
+    }
+    if (unpack_on_trisc3) {
+        use_sfpu_pipeline_for(compute_spec, INTRA_DFB, DFBEndpointType::CONSUMER);
+    }
 
     WorkUnitSpec wu{
         .name = "main",
@@ -368,13 +372,11 @@ TEST_F(UnitMeshFixture, C3_2_0_DMTriscTrisc3TriscDM_DoubleRelu) {
         {.dfb_spec_name = DFB_MID,
          .accessor_name = "mid",
          .endpoint_type = DFBEndpointType::CONSUMER,
-         .access_pattern = DFBAccessPattern::STRIDED,
-         .use_trisc3 = true},
+         .access_pattern = DFBAccessPattern::STRIDED},
         {.dfb_spec_name = DFB_BACK,
          .accessor_name = "back",
          .endpoint_type = DFBEndpointType::PRODUCER,
-         .access_pattern = DFBAccessPattern::STRIDED,
-         .use_trisc3 = true},
+         .access_pattern = DFBAccessPattern::STRIDED},
         {.dfb_spec_name = DFB_BACK,
          .accessor_name = "back",
          .endpoint_type = DFBEndpointType::CONSUMER,
@@ -384,6 +386,8 @@ TEST_F(UnitMeshFixture, C3_2_0_DMTriscTrisc3TriscDM_DoubleRelu) {
          .endpoint_type = DFBEndpointType::PRODUCER,
          .access_pattern = DFBAccessPattern::STRIDED},
     };
+    use_sfpu_pipeline_for(compute, DFB_MID, DFBEndpointType::CONSUMER);
+    use_sfpu_pipeline_for(compute, DFB_BACK, DFBEndpointType::PRODUCER);
     compute.compile_time_args = {{"per_core_tile_cnt", num_entries}};
 
     auto consumer = make_dm_dfb_consumer(
@@ -526,24 +530,24 @@ TEST_F(UnitMeshFixture, C4_2_0_DestAndTrisc3SelfLoop) {
         {.dfb_spec_name = DFB_SEED,
          .accessor_name = "seed",
          .endpoint_type = DFBEndpointType::CONSUMER,
-         .access_pattern = DFBAccessPattern::STRIDED,
-         .use_trisc3 = true},
+         .access_pattern = DFBAccessPattern::STRIDED},
         {.dfb_spec_name = DFB_ACC,
          .accessor_name = "acc",
          .endpoint_type = DFBEndpointType::PRODUCER,
-         .access_pattern = DFBAccessPattern::STRIDED,
-         .use_trisc3 = true},
+         .access_pattern = DFBAccessPattern::STRIDED},
         {.dfb_spec_name = DFB_ACC,
          .accessor_name = "acc",
          .endpoint_type = DFBEndpointType::CONSUMER,
-         .access_pattern = DFBAccessPattern::STRIDED,
-         .use_trisc3 = true},
+         .access_pattern = DFBAccessPattern::STRIDED},
         {.dfb_spec_name = DFB_RES,
          .accessor_name = "res",
          .endpoint_type = DFBEndpointType::PRODUCER,
-         .access_pattern = DFBAccessPattern::STRIDED,
-         .use_trisc3 = true},
+         .access_pattern = DFBAccessPattern::STRIDED},
     };
+    use_sfpu_pipeline_for(compute, DFB_SEED, DFBEndpointType::CONSUMER);
+    use_sfpu_pipeline_for(compute, DFB_ACC, DFBEndpointType::PRODUCER);
+    use_sfpu_pipeline_for(compute, DFB_ACC, DFBEndpointType::CONSUMER);
+    use_sfpu_pipeline_for(compute, DFB_RES, DFBEndpointType::PRODUCER);
     compute.compile_time_args = {{"per_core_tile_cnt", num_entries}, {"num_passes", num_passes}};
 
     disable_implicit_sync_for(in_producer, DFB_IN);
@@ -905,14 +909,18 @@ static void run_intra_overlay_isolation(
         {.dfb_spec_name = DFB,
          .accessor_name = "out",
          .endpoint_type = DFBEndpointType::PRODUCER,
-         .access_pattern = DFBAccessPattern::STRIDED,
-         .use_trisc3 = pack_on_trisc3},
+         .access_pattern = DFBAccessPattern::STRIDED},
         {.dfb_spec_name = DFB,
          .accessor_name = "in",
          .endpoint_type = DFBEndpointType::CONSUMER,
-         .access_pattern = DFBAccessPattern::STRIDED,
-         .use_trisc3 = unpack_on_trisc3},
+         .access_pattern = DFBAccessPattern::STRIDED},
     };
+    if (pack_on_trisc3) {
+        use_sfpu_pipeline_for(compute, DFB, DFBEndpointType::PRODUCER);
+    }
+    if (unpack_on_trisc3) {
+        use_sfpu_pipeline_for(compute, DFB, DFBEndpointType::CONSUMER);
+    }
     compute.compile_time_args = {
         {"pack_on_trisc3", pack_on_trisc3 ? 1u : 0u},
         {"unpack_on_trisc3", unpack_on_trisc3 ? 1u : 0u},

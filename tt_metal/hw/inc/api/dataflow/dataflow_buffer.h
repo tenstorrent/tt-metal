@@ -86,7 +86,7 @@ template <bool IsWrite, typename ReleaseFunc>
     return DfbScopedLock<IsWrite, ReleaseFunc>(pointer, release);
 }
 
-// UNPACK, PACK and (on Quasar) the isolate-SFPU thread trisc3 have a DFB interface. On MATH a
+// UNPACK, PACK and, on Quasar, the isolate-SFPU thread have a DFB interface. On MATH a
 // DataflowBuffer is just an id and the sync calls do nothing.
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_MATH)
 #define DFB_IS_COMPUTE_MATH 1

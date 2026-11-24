@@ -6,7 +6,8 @@
 // dfb::out, copying each entry with RISC loads and stores.
 // trisc0, trisc1 and trisc2 own neither DFB, so their DFB calls below return at once.
 //
-// Bindings (set by host KernelSpec): dfb::in CONSUMER and dfb::out PRODUCER, both with use_trisc3.
+// Bindings (set by host KernelSpec): dfb::in CONSUMER and dfb::out PRODUCER, both handed to the SFPU
+// pipeline.
 
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
