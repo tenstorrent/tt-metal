@@ -59,7 +59,8 @@ jobs:
       perf-run-types: L1_TO_L1
       pipeline: merge_baseline
       upload-to-warehouse: false  # trial: never write the warehouse
-      shadow-compile-runner: tt-ubuntu-2204-xlarge-stable
+      shadow-compile-runner: tt-ubuntu-2204-large-stable
+      shadow-compile-workers: 16
       offload-compile: ${{ inputs.offload }}
       stage2-baseline-ref: ${{ github.event.merge_group.base_sha || '246f8e677e56bcb94163c8fdaffe42f2273cbdb6' }}
       # Stage 2 runs on Blackhole only: same-code Wormhole runs are not repeatable yet (#62044).
