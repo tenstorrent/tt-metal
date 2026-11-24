@@ -73,21 +73,23 @@ else
   mpicxx -O1 -o "$probe" "$probe_src" || { echo "::error::the probe did not compile ($probe_src)"; exit 1; }
 fi
 probe_loads="ldd '$probe' 2>&1 | grep -q 'not found' && exit 1 || exit 0"
+# Copy a file to the same path on a host, executable. Written under a temporary name and renamed: on the launch host
+# (or a shared TMPDIR) the destination IS the source, which a direct write would truncate. usage: stage_file host src dest
+stage_file() {
+  local host="$1" src="$2" dest="$3"
+  if [ "${TEARDOWN_REMOTE:-ssh}" = srun ]; then
+    srun --overlap -N1 -n1 -w "$host" bash -c "cat > '$dest.staging.$$' && chmod +x '$dest.staging.$$' && mv -f '$dest.staging.$$' '$dest'" <"$src"
+  else
+    scp -q "${SSH_OPTS[@]}" "$src" "$(rtarget "$host"):$dest.staging.$$" \
+      && remote_sh "$host" "chmod +x '$dest.staging.$$' && mv -f '$dest.staging.$$' '$dest'"
+  fi
+}
 for host in $(host_names); do
   remote_sh "$host" "mkdir -p '$(dirname "$probe")'" \
     || { echo "::error::could not create the probe directory on $host"; exit 1; }
   for f in "$probe" "$probe_src"; do
-    dest="$(dirname "$probe")/$(basename "$f")"
-    # Written under a temporary name and renamed: on the launch host (or a shared TMPDIR) the destination IS the
-    # source, which a direct write would truncate.
-    if [ "${TEARDOWN_REMOTE:-ssh}" = srun ]; then
-      srun --overlap -N1 -n1 -w "$host" bash -c "cat > '$dest.staging.$$' && chmod +x '$dest.staging.$$' && mv -f '$dest.staging.$$' '$dest'" <"$f" \
-        || { echo "::error::could not stage $(basename "$f") on $host"; exit 1; }
-    else
-      scp -q "${SSH_OPTS[@]}" "$f" "$(rtarget "$host"):$dest.staging.$$" \
-        && remote_sh "$host" "chmod +x '$dest.staging.$$' && mv -f '$dest.staging.$$' '$dest'" \
-        || { echo "::error::could not stage $(basename "$f") on $host"; exit 1; }
-    fi
+    stage_file "$host" "$f" "$(dirname "$probe")/$(basename "$f")" \
+      || { echo "::error::could not stage $(basename "$f") on $host"; exit 1; }
   done
   if ! remote_sh "$host" "$probe_loads"; then
     remote_sh "$host" "mpicxx -O1 -o '$probe' '$(dirname "$probe")/$(basename "$probe_src")'" >/dev/null 2>&1 || true
@@ -314,6 +316,51 @@ else
   failures=$((failures + 1)); kill_stragglers
 fi
 rm -f "$sig_log"
+
+echo "--- 6. the same interrupt while Phase 1 (new mode, --mesh-graph-descriptor --hosts) runs across the hosts: Phase 1"
+echo "       goes through the same launcher as Phase 2, its ranks in tt-run-rank, its TCP interface chosen the same way."
+echo "       Here generate_rank_bindings is the probe (a stand-in tree on every host); every Phase 1 rank must catch the"
+echo "       SIGTERM, tt-run returns 130 and Phase 2 never starts."
+tree="$(dirname "$probe")/tree"  # under the probe's directory: removed with it on every host
+repo="${TT_METAL_HOME:-$(pwd)}"
+tt_run_rank="$repo/build/tools/scaleout/tt-run-rank"
+p1_log="$(mktemp)"
+if [ ! -x "$tt_run_rank" ]; then
+  echo "::error::  FAIL  multihost_phase1_interrupt  (tt-run-rank is not built: $tt_run_rank)"; failures=$((failures + 1))
+else
+  grb="$(mktemp)"; printf '#!/bin/sh\nexec %s\n' "$probe" >"$grb"
+  for host in $(host_names); do
+    remote_sh "$host" "mkdir -p '$tree/build/tools/scaleout' && ln -sfn '$repo/tt_metal' '$tree/tt_metal' && ln -sfn '$repo/tests' '$tree/tests'" \
+      && stage_file "$host" "$grb" "$tree/build/tools/scaleout/generate_rank_bindings" \
+      && stage_file "$host" "$tt_run_rank" "$tree/build/tools/scaleout/tt-run-rank" \
+      || { echo "::error::could not stage the Phase 1 tree on $host"; exit 1; }
+  done
+  rm -f "$grb"
+  ( cd "$tree" && export TT_METAL_HOME="$tree" PROBE_SCENARIO=all_hang PROBE_VICTIM="$victim_rank" PROBE_NP="$num_hosts"
+    exec "${ttrun_cmd[@]}" --mesh-graph-descriptor "$repo/tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto" \
+      --hosts "$hosts" --force-rediscovery \
+      --mpi-args "--oversubscribe --bind-to none --tag-output -x PROBE_SCENARIO -x PROBE_VICTIM -x PROBE_NP" /bin/true ) >"$p1_log" 2>&1 &
+  p1_pid=$!
+  for _ in $(seq 1 90); do
+    [ "$(grep "all_hang heartbeat" "$p1_log" 2>/dev/null | grep -o "probe r=[0-9]*" | sort -u | wc -l)" -ge "$num_hosts" ] && break
+    kill -0 "$p1_pid" 2>/dev/null || break
+    sleep 1
+  done
+  kill -INT "$p1_pid" 2>/dev/null
+  for _ in $(seq 1 60); do kill -0 "$p1_pid" 2>/dev/null || break; sleep 1; done
+  kill -9 "$p1_pid" 2>/dev/null || true
+  wait "$p1_pid" 2>/dev/null; p1_rc=$?
+  p1_caught=$(grep -c "caught signal 15" "$p1_log" 2>/dev/null); p1_caught=${p1_caught:-0}
+  p1_alive=$(settled_census)
+  if [ "$p1_caught" -eq "$num_hosts" ] && [ "$p1_alive" = 0 ] && [ "$p1_rc" -eq 130 ] && grep -q "Phase 1: Running generate_rank_bindings" "$p1_log"; then
+    echo "  PASS  multihost_phase1_interrupt  ($p1_caught/$num_hosts Phase 1 ranks caught SIGTERM, nothing left; exit $p1_rc)"
+  else
+    echo "::error::  FAIL  multihost_phase1_interrupt  (caught SIGTERM=$p1_caught/$num_hosts, alive=$p1_alive, exit $p1_rc, expected 130)"
+    echo "---- tt-run output ----"; tail -40 "$p1_log"
+    failures=$((failures + 1)); kill_stragglers
+  fi
+fi
+rm -f "$p1_log"
 
 # --------------------------------------------------------------------------------------------------------------
 kill_stragglers

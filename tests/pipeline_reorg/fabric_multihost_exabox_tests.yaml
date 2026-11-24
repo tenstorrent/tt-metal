@@ -511,7 +511,7 @@
       | tee "${PIPELINE_DIR}/teardown_multihost.log"
   skus:
     bh_sc4:
-      timeout: 15  # 4 cross-host cases; ~1-2 min of work plus SC4 setup/network overhead
+      timeout: 15  # 6 cross-host cases (one in Phase 1); ~2 min of work plus SC4 setup/network overhead
   owner_id: U08RRAU5E15 # Ridvan Song
   team: scaleout
   budget_type: e2e
