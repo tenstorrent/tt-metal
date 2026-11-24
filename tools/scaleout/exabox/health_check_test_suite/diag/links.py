@@ -30,6 +30,7 @@ from pathlib import Path
 from . import events
 from .busbar import GALAXY_DIR, SETUP_S
 from .common import emit_result, emit_running, log, start_group, stop_group
+from .eth_status import _listing
 from .model import FAIL, PASS, SKIP, WARN, Check, Phase
 from .naming import chip, link_end
 
@@ -165,7 +166,7 @@ def _round(d: Path, r: list, disc: dict, seconds: int, sys_root: str) -> list[di
     try:
         for a, b, ch in r:
             ba, bb, ends = disc["bdfs"][a], disc["bdfs"][b], link_ends(disc, a, b, ch)
-            lab, idx = f"{_short(ba)}-{_short(bb)}", umd_index([ba, bb], sys_root)
+            lab, idx = _label(disc, a, b), umd_index([ba, bb], sys_root)
             if idx is None:
                 failed.append(
                     {"pair": lab, "channels": ch, "why": "a chip has no tt-kmd node: not opened", "ends": ends}
@@ -236,24 +237,23 @@ def _rerun_cold(d: Path, rounds: list, disc: dict, seconds: int, sys_root: str, 
 def eth_bandwidth(phase: Phase, d: Path, rounds: list, disc: dict, failed: list) -> None:
     """Adds the links_bandwidth check for the pairs of *rounds* not in *failed*: FAIL names each pair below BW_GBPS
     per link each way, WARN the pairs with under BW_WARM warm launches (not judged)."""
-    lab = lambda a, b: _label(disc, a, b)  # noqa: E731
-    judge = lambda a, b, ch: warm_gbps(d / f"{lab(a, b)}.rows", len(ch))  # noqa: E731
     bad = {f["pair"] for f in failed}
     got, low, unjudged = [], [], []
-    for a, b, ch in (p for r in rounds for p in r if lab(*p[:2]) not in bad):
-        g, n = judge(a, b, ch)
+    for a, b, ch in (p for r in rounds for p in r if _label(disc, *p[:2]) not in bad):
+        lab = _label(disc, a, b)
+        g, n = warm_gbps(d / f"{lab}.rows", len(ch))
         if g is None or n < BW_WARM:
-            unjudged.append(f"{lab(a, b)} ({n} warm)")
+            unjudged.append(f"{lab} ({n} warm)")
             continue
         got.append(g)
         if g < BW_GBPS:
-            low.append({"pair": lab(a, b), "channels": ch, "gbps": g, "warm": n, "ends": link_ends(disc, a, b, ch)})
+            low.append({"pair": lab, "channels": ch, "gbps": g, "warm": n, "ends": link_ends(disc, a, b, ch)})
     what = f"{len(got)} pairs judged" + (f", {min(got):.0f}-{max(got):.0f} Gbps per link each way" if got else "")
     what += f", {len(low)} below {BW_GBPS:g} Gbps (Deployment Test bidirectional criterion)"
     what += "".join(f"; {l['pair']} (channels {','.join(map(str, l['channels']))}): {l['gbps']:g} Gbps" for l in low)
     if unjudged:
         what += f"; {len(unjudged)} not judged (under {BW_WARM} warm launches): {_listing(unjudged)}"
-    status = FAIL if low else WARN if unjudged else PASS
+    status = FAIL if low else WARN if unjudged else PASS if got else SKIP
     emit_result("links_bandwidth", status, suffix=f"({len(got)} pairs)")
     phase.add(
         Check(
@@ -271,10 +271,6 @@ def eth_bandwidth(phase: Phase, d: Path, rounds: list, disc: dict, failed: list)
             },
         )
     )
-
-
-def _listing(items: list[str], limit: int = 4) -> str:
-    return ", ".join(items[:limit]) + (" ..." if len(items) > limit else "")
 
 
 def pair_test(
@@ -308,7 +304,7 @@ def pair_test(
         if cap_s is not None and time.monotonic() - start >= cap_s:
             missed += [
                 {
-                    "pair": f"{_short(disc['bdfs'][a])}-{_short(disc['bdfs'][b])}",
+                    "pair": _label(disc, a, b),
                     "channels": ch,
                     "ends": link_ends(disc, a, b, ch),
                 }

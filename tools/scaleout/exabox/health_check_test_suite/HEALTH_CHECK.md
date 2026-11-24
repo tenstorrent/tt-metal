@@ -156,9 +156,12 @@ from the counters as the reset left them.
   its output, or no exit within its planned length plus 300 s. A failed step
   does not stop the next ones.
 - `links` (`diag/links.py`): a 2-chip all-gather on every linked chip pair UMD
-  finds (10 s per pair, in rounds: `links_pair`). The probes of a round run
-  side by side, a round within its 10 s plus a 30 s op timeout and 60 s of
-  compile. After a pair failure or hang here, or a hang or CCL failure in
+  finds (20 s per pair, the longer of `--pair-s` and `--bw-s`, in rounds:
+  `links_pair`). The probes of a round run side by side, a round within its
+  20 s plus a 30 s op timeout and 60 s of compile. Each passed pair is then
+  judged on its Ethernet bandwidth (`links_bandwidth`): the median of its warm
+  launches per link each way; a pair with under 2 warm launches runs once more
+  with its round's other such pairs. After a pair failure or hang here, or a hang or CCL failure in
   `busbar` (not a numeric fault or a tray trip alone), it runs
   `tt-smi -glx_reset`, asks UMD for the links again (the reset can bring back a
   tray that dropped under the load) and runs the pair test on them again at
@@ -742,6 +745,7 @@ FAIL or WARN check of a phase that gates, go to `findings.txt` and `finding_stag
 | `--shape NAME`, `--shape-tray N` | none, 2 | Galaxy load: the bus-bar mix as a tray-drop load shape (`galaxy/drop_shapes.py list`) aimed at tray N; needs `--trays` |
 | `--load-mode MODE`, `--order LIST`, `--chunks MINUTES`, `--long-min N`, `--qb-n N` | the tier's plan | Galaxy load: its length (`smoke`, `plain`, `full`) in place of the tier's; the bus-bar parts in order (a name that is not a bus-bar part runs through `--hook`); the mix's chunk minutes; full's last chunk; quiet-to-burst cycles. |
 | `--hook SCRIPT` | none | Galaxy load: called as `SCRIPT <event> <step> <status> <outdir>` at each event (`diag/events.py`: stage-start, before, after, stage-end, run), synchronously, outside each part's timer. A non-zero rc from `before` skips that part. |
+| `--bw-s N` | 20 | Links test: the pair test's pairs run at least N s and are judged on their Ethernet bandwidth (`links_bandwidth`); 0 turns the bandwidth check off. |
 | `--pair-s N`, `--sweep-s N`, `--link-fault` | 10, 300, off | Galaxy load: seconds of all-gathers per linked pair (pair test and sweep); no new sweep round after N s; the caller's own earlier call had a link or CCL failure or a hang, so the links test sweeps after its pair test. |
 | `--dry-run` | off | Print intended subprocess calls; skip destructive steps |
 | `--skip-reset` | off | Skip every reset: the reset loop phase, the post-test reset and the `glx_reset` before the links sweep. The sweep itself still runs on a link fault. |
@@ -810,6 +814,7 @@ The detected rev is also recorded at the top of the JSON report as `detected_boa
 |---|---|---|
 | `busbar_<step>` (`qb`, `mix`, `step`, `heavy`, `code`) | The step's program exits 0, prints no `<NAME> FAIL` line, and exits within its planned length plus 300 s | **FAIL** with the first FAIL line, or the exit code or hang and the last line of the log. **SKIP** on a dry run. |
 | `links_pair` | Every linked chip pair passes a 2-chip all-gather, data checked bit for bit | **FAIL** naming the pairs and channels; each link end, by tray, ASIC, port and BDF, in `link_ends` |
+| `links_bandwidth` | Every pair `links_pair` passed reaches 140 Gbps per link each way (median of its warm launches; the Deployment Test's bidirectional criterion) | **FAIL** naming each slower pair, its channels and link ends. **WARN** for a pair with under 2 warm launches after its one rerun (listed in `not_judged`). **SKIP** when no pair was measured. Off under `--bw-s 0`. |
 | `links_sweep` | After a pair failure or hang, or a bus-bar hang or CCL failure (or `--link-fault`): the hook's `before sweep` event (a non-zero rc skips it), a `tt-smi -glx_reset` (none under `--skip-reset`), then the pair test again at 10 s per pair, no new round started after 300 s in total, on the links UMD finds after the reset | **FAIL** as `links_pair`, or when UMD discovery after the reset fails. **SKIP** when the reset failed, or when the cap left pairs not reached (listed in `not_reached`). |
 
 ### GDDR

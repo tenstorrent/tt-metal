@@ -1391,6 +1391,12 @@ class TestLinks(unittest.TestCase):
         c = checks["links_bandwidth"]
         self.assertEqual((c.status, c.data["judged"], c.data["not_judged"]), (PASS, len(labs) - 1, []))
 
+    def test_bandwidth_with_no_pair_measured_is_skip_not_pass(self):
+        ph = Phase(name="links")
+        with contextlib.redirect_stdout(io.StringIO()):
+            links.eth_bandwidth(ph, Path("/nonexistent"), [], {"bdfs": []}, [])
+        self.assertEqual((ph.checks[0].name, ph.checks[0].status), ("links_bandwidth", SKIP))
+
     def test_the_sweep_is_not_judged_on_bandwidth(self):
         failed, checks, _, started = self._bw_test(lambda lab: [0], name="sweep", bw=False)
         self.assertNotIn("links_bandwidth", checks)
