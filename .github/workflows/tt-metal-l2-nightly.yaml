@@ -55,6 +55,11 @@ on:
         required: false
         type: boolean
         default: false
+      run_tt_train_descriptor_parity_tests:
+        description: "Run TT-Train Descriptor Parity Tests (adds a second build)"
+        required: false
+        type: boolean
+        default: false
       run_tt_cnn_unit_tests:
         description: "Run tt-cnn-unit-tests"
         required: false
@@ -436,6 +441,47 @@ jobs:
       hf-oidc: true
       subcategories: finetuning
       summary-scope: finetuning
+  # The parity check has its own build because it slows every program cache hit, which the shared build above must
+  # not do (perf jobs use it). It reuses that build's Docker images instead of resolving them again.
+  build-artifact-descriptor-parity:
+    needs: [check-harbor, build-artifact]
+    if: |
+      !cancelled() && needs.build-artifact.result == 'success' &&
+      (github.event_name == 'schedule' || inputs.run_tt_train_descriptor_parity_tests)
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      build-type: Release
+      skip-tt-train: false
+      descriptor-parity-check: true
+      publish-package: false
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      ci-build-docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      ci-test-docker-image: ${{ needs.build-artifact.outputs.ci-test-docker-image }}
+      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      basic-dev-docker-image: ${{ needs.build-artifact.outputs.basic-dev-docker-image }}
+      basic-ttnn-runtime-docker-image: ${{ needs.build-artifact.outputs.basic-ttnn-runtime-docker-image }}
+      manylinux-docker-image: ${{ needs.build-artifact.outputs.manylinux-docker-image }}
+  tt-train-descriptor-parity-tests:
+    needs: [build-artifact, build-artifact-descriptor-parity, generate-arch-matrix]
+    if: |
+      (github.event_name == 'schedule' || inputs.run_tt_train_descriptor_parity_tests) &&
+      needs.generate-arch-matrix.outputs.l2-nightly-skus != ''
+    secrets: inherit
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/tt-train-tests.yaml
+    with:
+      test-category: descriptor_parity
+      enabled-skus: ${{ needs.generate-arch-matrix.outputs.l2-nightly-skus }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact-descriptor-parity.outputs.build-artifact-name }}
+      summary-scope: descriptor-parity
 
   # =============================================================================
   # Triage team
@@ -508,7 +554,8 @@ jobs:
   # are in `needs:` because every test job is gated on them: when the build fails the
   # impls are *skipped*, not failed, and without them the combined result would be
   # `skipped` — which suppresses infra synthesis entirely and reports a broken run as
-  # if nothing was due.
+  # if nothing was due. build-artifact-descriptor-parity is there for the same reason:
+  # the descriptor parity tests are gated on it.
   ai-run-summary:
     name: "AI Run Summary"
     needs:
@@ -527,6 +574,8 @@ jobs:
       - tt-train-unit-tests
       - tt-train-perf-pretraining-tests
       - tt-train-perf-finetuning-tests
+      - build-artifact-descriptor-parity
+      - tt-train-descriptor-parity-tests
       - triage-tests
       - llk-unit-tests
     # Reports on a run that failed — the case the summary exists for — but not

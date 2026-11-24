@@ -84,6 +84,13 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      descriptor-parity-check:
+        required: false
+        type: boolean
+        default: false
+        description: >-
+          Check every program cache hit against a full descriptor rebuild
+          (ENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK). Slows every cache hit, so only for test builds.
       platform:
         required: false
         type: string
@@ -556,6 +563,7 @@ jobs:
           SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
           TRACY_SUFFIX="${{ (inputs.tracy && '-profiler') || '' }}"
           DIST_SUFFIX="${{ (inputs.distributed == false && '-no-distributed') || '' }}"
+          PARITY_SUFFIX="${{ (inputs.descriptor-parity-check && '-descriptor-parity') || '' }}"
           DISTRO="${{ env.DISTRO }}"
           VERSION="${{ env.VERSION }}"
           ARCH="${{ inputs.architecture }}"
@@ -567,7 +575,7 @@ jobs:
             "${VERSION}"
             "${ARCH}"
             "${BUILD_TYPE}"
-            "${TOOLCHAIN_CLEANED}${TRACY_SUFFIX}${DIST_SUFFIX}"
+            "${TOOLCHAIN_CLEANED}${TRACY_SUFFIX}${DIST_SUFFIX}${PARITY_SUFFIX}"
             "${SANITIZED_REF}"
             "${RUN_ID}"
           )
@@ -682,6 +690,9 @@ jobs:
           fi
           if [ "${{ inputs.enable-lto }}" = "true" ]; then
             build_args+=("--enable-lto")
+          fi
+          if [ "${{ inputs.descriptor-parity-check }}" = "true" ]; then
+            build_args+=("--enable-descriptor-parity-check")
           fi
           echo "build-artifact.yaml running: ${build_args[*]}"
           "${build_args[@]}"
@@ -846,8 +857,9 @@ jobs:
           RAW_REF="${{ inputs.ref || github.sha }}"
           SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
           TRACY_SUFFIX="${{ (inputs.tracy && '-profiler') || '' }}"
+          PARITY_SUFFIX="${{ (inputs.descriptor-parity-check && '-descriptor-parity') || '' }}"
           PYTHON_VERSION_NODOT=$(echo "${{ needs.parse-platform.outputs.python-version }}" | tr -d '.')
-          ARTIFACT_NAME="ttnn-dist-inplace-cp${PYTHON_VERSION_NODOT}-${{ inputs.build-type }}${TRACY_SUFFIX}-${SANITIZED_REF}-${{ github.run_id }}"
+          ARTIFACT_NAME="ttnn-dist-inplace-cp${PYTHON_VERSION_NODOT}-${{ inputs.build-type }}${TRACY_SUFFIX}${PARITY_SUFFIX}-${SANITIZED_REF}-${{ github.run_id }}"
           echo "artifact_name=${ARTIFACT_NAME}" >> "$GITHUB_OUTPUT"
 
       - name: 🔍 Import the wheel in a clean venv
@@ -891,6 +903,7 @@ jobs:
           SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
           TRACY_SUFFIX="${{ (inputs.tracy && '_profiler') || '' }}"
           DIST_SUFFIX="${{ (inputs.distributed == false && '_no_distributed') || '' }}"
+          PARITY_SUFFIX="${{ (inputs.descriptor-parity-check && '_descriptor_parity') || '' }}"
           BUILD_TYPE="${{ inputs.build-type || 'Release' }}"
           VERSION="${{ env.VERSION }}"
           ARCH="${{ inputs.architecture }}"
@@ -899,7 +912,7 @@ jobs:
             "TTMetal_build_any"
             "${VERSION}"
             "${ARCH}"
-            "${TOOLCHAIN_CLEANED}${TRACY_SUFFIX}${DIST_SUFFIX}_${BUILD_TYPE}"
+            "${TOOLCHAIN_CLEANED}${TRACY_SUFFIX}${DIST_SUFFIX}${PARITY_SUFFIX}_${BUILD_TYPE}"
             "${SANITIZED_REF}"
             "${RUN_ID}"
           )

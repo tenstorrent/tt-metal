@@ -59,7 +59,8 @@ show_help() {
     echo "  --without-python-bindings        Disable Python bindings (ttnncpp will be available as standalone library, otherwise ttnn will include the cpp backend and the python bindings), Enabled by default"
     echo "  --enable-fake-kernels-target     Enable fake kernels target, to enable generation of compile_commands.json for the kernels to enable IDE support."
     echo "  --enable-lto                     Enable Link Time Optimization (LTO) for Release/RelWithDebInfo builds."
-    echo "  --disable-warnings-as-errors     Disable treating warnings as errors (CMAKE_COMPILE_WARNING_AS_ERROR=OFF)."
+    echo "  --enable-descriptor-parity-check On every program cache hit, check the patched runtime args against a full descriptor rebuild. Slows every cache hit: for test builds only."
+    echo "  --disable-warnings-as-errors    Disable treating warnings as errors (CMAKE_COMPILE_WARNING_AS_ERROR=OFF)."
 }
 
 clean() {
@@ -105,6 +106,7 @@ enable_distributed="ON"
 with_python_bindings="ON"
 enable_fake_kernels_target="OFF"
 enable_lto="OFF"
+enable_descriptor_parity_check="OFF"
 warnings_as_errors="ON"
 
 declare -a cmake_args
@@ -149,6 +151,7 @@ without-distributed
 without-python-bindings
 enable-fake-kernels-target
 enable-lto
+enable-descriptor-parity-check
 disable-warnings-as-errors
 "
 
@@ -217,6 +220,8 @@ while true; do
             enable_fake_kernels_target="ON";;
         --enable-lto)
             enable_lto="ON";;
+        --enable-descriptor-parity-check)
+            enable_descriptor_parity_check="ON";;
         --disable-warnings-as-errors)
             warnings_as_errors="OFF";;
         --disable-pch)
@@ -336,6 +341,7 @@ else
 fi
 echo "INFO: Tracy debug-verbosity categories: $perf_debug_categories_effective"
 echo "INFO: Enable LTO: $enable_lto"
+echo "INFO: Descriptor parity check: $enable_descriptor_parity_check"
 echo "INFO: Host march: $host_march"
 echo "INFO: Warnings as errors: $warnings_as_errors"
 
@@ -472,6 +478,10 @@ fi
 
 if [ "$enable_lto" = "ON" ]; then
     cmake_args+=("-DTT_ENABLE_LTO=ON")
+fi
+
+if [ "$enable_descriptor_parity_check" = "ON" ]; then
+    cmake_args+=("-DENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK=ON")
 fi
 
 if [ "$warnings_as_errors" = "OFF" ]; then
