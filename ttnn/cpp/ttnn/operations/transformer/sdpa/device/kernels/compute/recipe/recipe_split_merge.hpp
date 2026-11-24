@@ -205,7 +205,7 @@ __attribute__((noinline, optimize("Os"))) void merge_state_tiles(
 // the own ones (another received state merges next); otherwise they are left stale (the normalization follows).
 // O tiles merge up to max_w per dest pass (3: 3 + 3 + 2 of the 16-bit dest's 8 tiles).
 template <uint32_t q_tiles, uint32_t vd_tiles, uint32_t scale_fp32, uint32_t exp_max_diff, typename R, uint32_t max_w = 3>
-void merge_bf16(const RecipeAccumulatorState& state, bool keep_max) {
+__attribute__((noinline, optimize("Os"))) void merge_bf16(const RecipeAccumulatorState& state, bool keep_max) {
     static_assert(max_w >= 1 && max_w <= 3);
     constexpr uint32_t o_stride = sdpa_out_stride;  // numerator CB tiles per Q row, over vd
     const uint32_t n_out = state.cur.out, n_sum = state.cur.sum, a_max = state.prev.max;
@@ -373,7 +373,7 @@ template <
     uint32_t exp_max_diff,
     uint32_t out,
     typename R>
-void merge_normalize_fp32(const RecipeAccumulatorState& state) {
+__attribute__((noinline, optimize("Os"))) void merge_normalize_fp32(const RecipeAccumulatorState& state) {
     const uint32_t a_out = state.prev.out, a_sum = state.prev.sum, a_max = state.prev.max;
     PACK(sdpa_pack.format_cb = INVALID_CB; sdpa_pack.width = 0;)
     CircularBuffer(R::out).wait_front(q_tiles * vd_tiles);
