@@ -264,6 +264,90 @@ void merge_bf16(const RecipeAccumulatorState& state, bool keep_max) {
     }
 }
 
+// BF16 recipes, the FPU form of merge_bf16 (the ring K split's reducer, which merges up to three states per call):
+// the same corrections, then two column-broadcast multiplies per tile, the normalization's own (recipe_output_scale):
+// the own state scaled by c_a in place, then the received state scaled by c_b and added by the packer's FP32 L1
+// accumulation. The same online-softmax rescale; each term is rounded to the 16-bit dest before the FP32 add (the SFPU
+// form rounds the sum once). One unpack init per pass instead of per tile group.
+template <uint32_t q_tiles, uint32_t vd_tiles, uint32_t scale_fp32, uint32_t exp_max_diff, typename R>
+__attribute__((noinline, optimize("Os"))) void merge_bf16_fpu(const RecipeAccumulatorState& state, bool keep_max) {
+    constexpr uint32_t o_stride = sdpa_out_stride;  // numerator CB tiles per Q row, over vd
+    constexpr uint32_t batch = compute_kernel_lib::DEST_AUTO_LIMIT;
+    const uint32_t n_out = state.cur.out, n_sum = state.cur.sum, a_max = state.prev.max;
+    CircularBuffer(R::out).wait_front(q_tiles * vd_tiles);
+    CircularBuffer(R::max).wait_front(q_tiles);
+    CircularBuffer(R::sum).wait_front(q_tiles);
+    // Corrections per Q row: c_a into CB exp_max_diff, c_b into R::corr (and m back into the own maxima).
+    CircularBuffer(exp_max_diff).reserve_back(q_tiles);
+    CircularBuffer(R::corr).reserve_back(q_tiles);
+    PACK((llk_pack_reconfig_l1_acc(0)));
+    pack_reconfig_data_format(exp_max_diff);
+    configure_single_tile_pack(exp_max_diff);
+    for (uint32_t r = 0; r < q_tiles; ++r) {
+        tile_regs_acquire();
+        merge_copy_tiles(a_max, r, 1, 0);
+        copy_tile(R::max, r, 1);  // the state format, as the maxima
+        tile_regs_commit();
+        tile_regs_wait();
+        PACK((SFPU_UNARY_CALL(
+            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_recipe_merge_corrections, (scale_fp32), 0, VectorMode::None)));
+        PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+        pack_tile<true>(0, exp_max_diff, r);
+        pack_tile<true>(1, R::corr, r);  // the state format, as exp_max_diff
+        if (keep_max) {
+            // The maxima stay pushed (one CB of q_tiles pages): row r at its write pointer, which is the CB's base.
+            pack_tile<true>(2, a_max, r);
+        }
+        tile_regs_release();
+    }
+    CircularBuffer(exp_max_diff).push_back(q_tiles);
+    CircularBuffer(R::corr).push_back(q_tiles);
+    CircularBuffer(exp_max_diff).wait_front(q_tiles);
+    CircularBuffer(R::corr).wait_front(q_tiles);
+    // Scale `tiles` tiles of row r (CB in_cb from in_tile) by its correction (CB corr_cb, tile r) into CB out_cb at
+    // out_tile, in dest batches.
+    auto scale_row = [](uint32_t in_cb, uint32_t in_tile, uint32_t corr_cb, uint32_t r, uint32_t out_cb, uint32_t out_tile,
+                        uint32_t tiles) {
+        for (uint32_t t0 = 0; t0 < tiles; t0 += batch) {
+            const uint32_t n = tiles - t0 < batch ? tiles - t0 : batch;
+            tile_regs_acquire();
+            for (uint32_t t = 0; t < n; ++t) {
+                recipe_output_scale_tile(in_cb, corr_cb, in_tile + t0 + t, r, t);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t t = 0; t < n; ++t) {
+                pack_tile<true>(t, out_cb, out_tile + t0 + t);
+            }
+            tile_regs_release();
+        }
+    };
+    // The own state: O and l times c_a, in place.
+    sdpa_stream_reconfig(n_out, exp_max_diff);
+    recipe_output_scale_init(n_out, exp_max_diff);
+    pack_reconfig_data_format(n_out);
+    configure_single_tile_pack(n_out);
+    for (uint32_t r = 0; r < q_tiles; ++r) {
+        scale_row(n_out, r * vd_tiles * o_stride, exp_max_diff, r, n_out, r * vd_tiles * o_stride, vd_tiles);
+        scale_row(n_sum, r, exp_max_diff, r, n_sum, r, 1);  // CB 13 has O's format and tile size
+    }
+    // The received state times c_b, accumulated onto it (FP32, the packer's L1 adder).
+    recipe_output_scale_init(R::out, R::corr);
+    PACK((llk_pack_reconfig_l1_acc(1)));
+    for (uint32_t r = 0; r < q_tiles; ++r) {
+        scale_row(R::out, r * vd_tiles, R::corr, r, n_out, r * vd_tiles * o_stride, vd_tiles);
+        scale_row(R::sum, r, R::corr, r, n_sum, r, 1);
+    }
+    PACK((llk_pack_reconfig_l1_acc(0)));
+    CircularBuffer(exp_max_diff).pop_front(q_tiles);
+    CircularBuffer(R::corr).pop_front(q_tiles);
+    CircularBuffer(R::out).pop_front(q_tiles * vd_tiles);
+    CircularBuffer(R::max).pop_front(q_tiles);
+    CircularBuffer(R::sum).pop_front(q_tiles);
+    // The next merge reads the merged state (and maxima) PACK just wrote.
+    recipe_pack_to_unpack_barrier();
+}
+
 // BF16 recipes: the (merged) state, O and l at CB 9's and CB 13's bases, through the recipe's normalization into
 // `out`; the maxima popped. `normalize` is the caller's copy of normalize_row_streaming.
 template <uint32_t q_tiles, uint32_t vd_tiles, typename Normalize>

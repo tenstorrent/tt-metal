@@ -42,9 +42,8 @@ __attribute__((noinline, optimize("Os"))) void recipe_ring_ksplit_finish(
         if (ring_joint::sliding_ksplit_range(plan_k_chunks, band, ksplit_count).empty()) {
             recipe_merge::discard<Sq_chunk_t, vDHt>(RecipeRingKSplitReceived{});
         } else {
-            // Two O tiles per dest pass: one SFPU merge width fewer than sparse SDPA's three (kernel config buffer;
-            // the merge runs once per call).
-            recipe_merge::merge_bf16<Sq_chunk_t, vDHt, scale_fp32, exp_max_diff, RecipeRingKSplitReceived, 2>(
+            // The FPU form: the reducer merges every sender's state, so the merge sits on the call's critical path.
+            recipe_merge::merge_bf16_fpu<Sq_chunk_t, vDHt, scale_fp32, exp_max_diff, RecipeRingKSplitReceived>(
                 state, band != last_live);
         }
     }
