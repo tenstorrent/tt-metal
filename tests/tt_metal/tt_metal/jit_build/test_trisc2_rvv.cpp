@@ -52,8 +52,6 @@ namespace {
 constexpr const char* kRvvKernelPath = "tests/tt_metal/tt_metal/test_kernels/compute/trisc2_rvv_vadd.cpp";
 // Matches the flags HalJitBuildQueryBlackHole::rvv_compile_flags emits.
 constexpr const char* kBhVectorTensixMcpu = "-mcpu=tt-bh-vector-tensix";
-// The -mcpu Blackhole TRISC compiles pass ahead of kBhRvvMarch; sfpi g++ rejects any command without one.
-constexpr const char* kBhTensixMcpu = "-mcpu=tt-bh-tensix";
 
 // Resolve the sfpi g++ the JIT build uses (local runtime/sfpi, then system sfpi).
 std::string sfpi_gxx_path() {
