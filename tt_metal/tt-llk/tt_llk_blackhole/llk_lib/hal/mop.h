@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,6 +27,22 @@ namespace detail
 {
 inline constexpr std::uint32_t COUNT_WIDTH = 10;
 
+// Template 1 MopCfg words that update() rewrites and patch() selects.
+inline constexpr std::uint32_t OUTER_COUNT_WORD = 0;
+inline constexpr std::uint32_t INNER_COUNT_WORD = 1;
+inline constexpr std::uint32_t LOOP0_LAST_WORD  = 7;
+inline constexpr std::uint32_t LOOP1_LAST_WORD  = 8;
+
+constexpr bool is_count_word(const std::uint32_t word)
+{
+    return word == OUTER_COUNT_WORD || word == INNER_COUNT_WORD;
+}
+
+constexpr bool is_updatable_word(const std::uint32_t word)
+{
+    return is_count_word(word) || word == LOOP0_LAST_WORD || word == LOOP1_LAST_WORD;
+}
+
 constexpr bool is_nop(const std::uint32_t instruction)
 {
     return (instruction >> 24) == (TT_OP_NOP >> 24);
@@ -37,16 +53,19 @@ constexpr bool is_valid_count(const std::uint32_t count)
     return ckernel::is_valid(count, COUNT_WIDTH);
 }
 
-// The Blackhole expander adds to OuterCount when the outer loop has no start op, the inner loop is
-// empty, and an end op exists: +1024 if EndOp1 is set and OuterCount is 1, +1 for any OuterCount otherwise.
-constexpr bool triggers_count_anomaly(
-    const std::uint32_t outer_count,
-    const std::uint32_t inner_count,
-    const std::uint32_t start_op,
-    const std::uint32_t end_op,
-    const std::uint32_t second_end_op)
+/**
+ * @brief Check whether a Template 1 configuration hits the UnsupportedFunctionality outer count anomaly.
+ *
+ * @param start_op: StartOp.
+ * @param inner_count: InnerCount.
+ * @param end_op: EndOp0.
+ * @note Covers ISA MOPExpander, ExpandTemplate1: `if IsNop(StartOp) and InnerCount == 0 and not IsNop(EndOp0)`.
+ *       The model adds 1 to OuterCount when EndOp1 is a NOP, adds 1024 when EndOp1 is set and OuterCount
+ *       is 1, and leaves it unchanged otherwise, but marks the whole case unsupported, so every case is rejected.
+ */
+constexpr bool triggers_count_anomaly(const std::uint32_t start_op, const std::uint32_t inner_count, const std::uint32_t end_op)
 {
-    return is_nop(start_op) && inner_count == 0 && !is_nop(end_op) && (is_nop(second_end_op) || outer_count == 1);
+    return is_nop(start_op) && inner_count == 0 && !is_nop(end_op);
 }
 
 /**
@@ -56,6 +75,8 @@ constexpr bool triggers_count_anomaly(
  * @param inner_count: InnerCount.
  * @param end_op: EndOp0.
  * @note Covers ISA MOPExpander, ExpandTemplate1: `elif IsNop(StartOp) and InnerCount == 0 and not IsNop(EndOp1)` (Blackhole).
+ *       The `elif` is reached only when EndOp0 is a NOP, and @ref program writes word 4 only for
+ *       configurations with end ops, so EndOp1 may be stale: every such case is rejected, whatever EndOp1 holds.
  *       A subcase of @ref issues_nothing.
  */
 constexpr bool triggers_unsupported_end_op1_read(const std::uint32_t start_op, const std::uint32_t inner_count, const std::uint32_t end_op)
@@ -216,8 +237,8 @@ constexpr cfg<detail::Template0Plan<HasA123, HasB>> foreach_mask_bit(const IfCle
 struct InnerLoop
 {
     std::uint32_t count;
-    std::uint32_t op;           // LoopOp
-    std::uint32_t alternate_op; // LoopOp1
+    std::uint32_t op;                       // LoopOp
+    std::uint32_t alternate_op = TT_OP_NOP; // LoopOp1; a NOP disables it
 };
 
 /**
@@ -245,10 +266,10 @@ struct Field
     }
 };
 
-inline constexpr Field<0> outer_count {};
-inline constexpr Field<1> inner_count {};
-inline constexpr Field<7> last_outer {}; // Loop0Last: last inner iteration of the last outer iteration
-inline constexpr Field<8> last_inner {}; // Loop1Last: last inner iteration of every other outer iteration
+inline constexpr Field<detail::OUTER_COUNT_WORD> outer_count {};
+inline constexpr Field<detail::INNER_COUNT_WORD> inner_count {};
+inline constexpr Field<detail::LOOP0_LAST_WORD> last_outer {}; // Loop0Last: last inner iteration of the last outer iteration
+inline constexpr Field<detail::LOOP1_LAST_WORD> last_inner {}; // Loop1Last: last inner iteration of every other outer iteration
 
 template <bool HasEndOp>
 struct cfg<detail::Template1Plan<HasEndOp>>
@@ -274,15 +295,15 @@ struct cfg<detail::Template1Plan<HasEndOp>>
     template <std::uint32_t Word>
     [[nodiscard]] constexpr cfg patch(const Field<Word> last, const std::uint32_t instruction) const
     {
-        static_assert(Word == 7 || Word == 8, "Template 1 MOP patch replaces last_outer or last_inner");
+        static_assert(Word == detail::LOOP0_LAST_WORD || Word == detail::LOOP1_LAST_WORD, "Template 1 MOP patch replaces last_outer or last_inner");
         hal::detail::require(inner_count != 0, "Template 1 MOP last-iteration ops are never issued with an empty inner loop");
-        if constexpr (Word == 8)
+        if constexpr (Word == detail::LOOP1_LAST_WORD)
         {
             hal::detail::require(outer_count != 1, "Template 1 MOP last_inner op is never issued with an outer count of 1");
         }
 
         cfg patched = *this;
-        if constexpr (Word == 7)
+        if constexpr (Word == detail::LOOP0_LAST_WORD)
         {
             patched.last_outer_op = last(instruction).value;
         }
@@ -326,12 +347,12 @@ constexpr cfg<Template1Plan<HasEndOp>> make_loop(
     hal::detail::require(is_valid_count(outer_count), "Template 1 MOP loop count must fit in 10 bits");
     hal::detail::require(is_valid_count(inner.count), "Template 1 MOP loop count must fit in 10 bits");
     hal::detail::require(
-        !triggers_count_anomaly(outer_count, inner.count, start_op, end_op, second_end_op),
-        "Template 1 MOP configuration triggers the no-start/zero-inner/end-op outer count anomaly");
+        !triggers_count_anomaly(start_op, inner.count, end_op), "Template 1 MOP configuration triggers the no-start/zero-inner/end-op outer count anomaly");
     hal::detail::require(
         !triggers_unsupported_end_op1_read(start_op, inner.count, end_op),
         "Template 1 MOP configuration with no start op, an empty inner loop and no end op is unsupported");
     hal::detail::require(!issues_nothing(outer_count, start_op, inner.count, end_op), "Template 1 MOP configuration issues nothing");
+    hal::detail::require(!is_nop(end_op) || is_nop(second_end_op), "Template 1 MOP second end op is never issued without an end op");
 
     // The expander replaces the last op of the body, so repeating it keeps the issued sequence unchanged.
     const std::uint32_t last_op = is_nop(inner.alternate_op) ? inner.op : inner.alternate_op;
@@ -343,7 +364,7 @@ constexpr cfg<Template1Plan<HasEndOp>> make_loop(
 /**
  * @brief Build a Template 1 configuration around an inner loop.
  *
- * @param count: Outer iteration count, valid values = <0-1023>.
+ * @param count: Outer iteration count, valid values = <1-1023>.
  * @param inner: Inner loop built by the two- or three-argument @ref loop.
  * @note Overloads add a start op before the inner loop and up to two end ops after it.
  */
@@ -502,13 +523,12 @@ inline __attribute__((always_inline)) void update(const Update<Words>... updates
 {
     static_assert(sizeof...(Words) >= 1, "Template 1 MOP update takes at least one word");
     static_assert(((detail::occurrences<Words, Words...> == 1) && ...), "Template 1 MOP update takes each word at most once");
-    static_assert(
-        ((Words == 0 || Words == 1 || Words == 7 || Words == 8) && ...), "Template 1 MOP update takes outer_count/inner_count/last_outer/last_inner words");
+    static_assert((detail::is_updatable_word(Words) && ...), "Template 1 MOP update takes outer_count/inner_count/last_outer/last_inner words");
 
     volatile std::uint32_t *mop_cfg = reinterpret_cast<volatile std::uint32_t *>(TENSIX_MOP_CFG_BASE);
 
-    (hal::detail::require(Words > 1 || detail::is_valid_count(updates.value), "Template 1 MOP loop count must fit in 10 bits"), ...);
-    (hal::detail::require(Words != 0 || updates.value != 0, "Template 1 MOP configuration issues nothing"), ...);
+    (hal::detail::require(!detail::is_count_word(Words) || detail::is_valid_count(updates.value), "Template 1 MOP loop count must fit in 10 bits"), ...);
+    (hal::detail::require(Words != detail::OUTER_COUNT_WORD || updates.value != 0, "Template 1 MOP configuration issues nothing"), ...);
 
     ckernel::mop_sync();
 
@@ -519,7 +539,7 @@ inline __attribute__((always_inline)) void update(const Update<Words>... updates
  * @brief Replace one Template 1 MopCfg word in this thread's MopCfg.
  *
  * @param field: Word to replace, values = <outer_count/inner_count/last_outer/last_inner>.
- * @param value: New count (valid values = <0-1023>) or encoded instruction.
+ * @param value: New outer count (valid values = <1-1023>), inner count (valid values = <0-1023>) or encoded instruction.
  * @note See the variadic overload for the caller's obligations.
  */
 template <std::uint32_t Word>
@@ -632,7 +652,7 @@ public:
         {
             configure_mask_high<Mask>();
         }
-        TTI_MOP(0, Count - 1, Mask & MASK_LO);
+        TTI_MOP(0 /*mop_type*/, Count - 1, Mask & MASK_LO);
     }
 
     /**
@@ -644,7 +664,7 @@ public:
      * @note Call @ref program with a Template 0 configuration before this function.
      */
     template <std::uint32_t Mask, MaskHigh High = MaskHigh::Auto>
-    inline __attribute__((always_inline)) static void run(const std::uint32_t count)
+    inline __attribute__((always_inline)) static void run_with_runtime_count(const std::uint32_t count)
     {
         LLK_ASSERT(is_valid_count(count), "MOP encoded count must fit in 7 bits");
 
@@ -652,7 +672,7 @@ public:
         {
             configure_mask_high<Mask>();
         }
-        TT_MOP(0, count - 1, Mask & MASK_LO);
+        TT_MOP(0 /*mop_type*/, count - 1, Mask & MASK_LO);
     }
 
     /**
@@ -668,11 +688,12 @@ public:
     {
         static_assert(is_valid_count(Count), "MOP encoded count must fit in 7 bits");
 
-        if constexpr (High == MaskHigh::Auto)
+        // Only runs of more than 16 iterations read the high mask bits.
+        if constexpr (High == MaskHigh::Auto && Count > MASK_LO_WIDTH)
         {
             configure_mask_high(mask);
         }
-        TT_MOP(0, Count - 1, mask & MASK_LO);
+        TT_MOP(0 /*mop_type*/, Count - 1, mask & MASK_LO);
     }
 
     /**
@@ -692,7 +713,7 @@ public:
         {
             configure_mask_high(mask);
         }
-        TT_MOP(0, count - 1, mask & MASK_LO);
+        TT_MOP(0 /*mop_type*/, count - 1, mask & MASK_LO);
     }
 };
 
@@ -709,11 +730,11 @@ struct Runner<MopTemplate::Template1>
      */
     inline __attribute__((always_inline)) static void run()
     {
-        TTI_MOP(1, 0, 0);
+        TTI_MOP(1 /*mop_type*/, 0 /*loop_count*/, 0 /*zmask_lo16_or_loop_count*/);
     }
 
     /** @brief Encode @ref run as a MOP instruction. */
-    [[nodiscard]] constexpr std::uint32_t operation() const
+    [[nodiscard]] static constexpr std::uint32_t operation()
     {
         return TT_OP_MOP(1 /*mop_type*/, 0 /*loop_count*/, 0 /*zmask_lo16_or_loop_count*/);
     }
