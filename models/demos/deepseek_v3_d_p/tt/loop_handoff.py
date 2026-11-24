@@ -112,9 +112,9 @@ def _check_mesh(mesh_device, handoff: LoopHandoff) -> None:
 
 
 class LoopHandoffSender:
-    """G1 side: the KVPE rows buffer the handoff is collected into and the packed buffer it is sent from, with the
-    top-k sets ``index_sets`` (the model's persistent sets, which pass 1 fills as it makes them, or a caller's copies),
-    at fixed addresses for trace. G2 receives into the same layout: a sender's segments with G2's model sets."""
+    """G1 side: the packed KVPE buffer the handoff is collected into and sent from, with the top-k sets ``index_sets``
+    (the model's persistent sets, which pass 1 fills as it makes them, or a caller's copies), at fixed addresses for
+    trace. G2 receives into the same layout: a sender's segments with G2's model sets."""
 
     def __init__(
         self,
@@ -132,22 +132,23 @@ class LoopHandoffSender:
         self.handoff = handoff
         self.first_kv_layer = first_kv_layer
         self.num_kv_layers = num_kv_layers
-        spec = lambda shape: ttnn.TensorSpec(
-            shape=ttnn.Shape(shape),
-            dtype=handoff.kv_wire_dtype,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            buffer_type=ttnn.BufferType.DRAM,
+        self.kvpe_packed = ttnn.allocate_tensor_on_device(
+            ttnn.TensorSpec(
+                shape=ttnn.Shape(handoff.kvpe_packed_shape()),
+                dtype=handoff.kv_wire_dtype,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                buffer_type=ttnn.BufferType.DRAM,
+            ),
+            mesh_device,
         )
-        self.kvpe = ttnn.allocate_tensor_on_device(spec(handoff.kvpe_rows_shape()), mesh_device)
-        self.kvpe_packed = ttnn.allocate_tensor_on_device(spec(handoff.kvpe_packed_shape()), mesh_device)
         self.index_sets = list(index_sets)
 
     def collect(self, kvpe_cache: ttnn.Tensor, metadata: Sequence[ttnn.Tensor]):
         """Gather this chunk's KVPE rows after every loop layer has written its KV: the rows each chip stored at the
         chunk's (slot, start) in ``metadata`` (the same tensors the writes read), packed for the wire. The top-k sets
-        are filled by pass 1 as it makes them. Device-only, so it may be captured."""
-        self.kvpe.update_tensor_topology(kvpe_cache.tensor_topology())
-        ttnn.experimental.deepseek_prefill.read_padded_kv_cache(
+        are filled by pass 1 as it makes them. Device-only, so it may be captured (the rows are a transient inside it;
+        only the packed buffer is persistent)."""
+        rows = ttnn.experimental.deepseek_prefill.read_padded_kv_cache(
             kvpe_cache,
             metadata[0],
             metadata[1],
@@ -158,11 +159,11 @@ class LoopHandoffSender:
             # The stage cache is written SP on mesh axis 0, TP-deduped on axis 1 (the mesh contract above).
             cluster_axis=0,
             tp_axis=1,
-            output=self.kvpe,
         )
-        packed = ttnn.reshape(self.kvpe, self.handoff.kvpe_packed_shape())
+        packed = ttnn.reshape(rows, self.handoff.kvpe_packed_shape())
         ttnn.copy(packed, self.kvpe_packed)
-        _free_reshaped(packed, self.kvpe)
+        _free_reshaped(packed, rows)
+        ttnn.deallocate(rows)
 
     def segments(self) -> list:
         """The tensors to send after the activation, in :meth:`LoopHandoff.segments` order."""
