@@ -779,7 +779,8 @@ def _select_node_list(config, items):
 
 
 def _thin_sweep(config, items):
-    """The perf CI runner (--perf-splits) leaves out the tests marked llk_sweep, the local study modules.
+    """The perf CI runner (--perf-splits) leaves out the tests marked llk_sweep, the local study modules, and the ids a module's
+    perf_gate_keep(params) turns down (the Blackhole matmul perf sweeps, helpers/matmul_prod_census.py).
 
     LLK_SWEEP_ALL=1 keeps every id; LLK_SWEEP_STRIDE=n keeps one id in n (chosen by a hash of the node id) and the module's
     LLK_SWEEP_KEEP ids.
@@ -792,7 +793,14 @@ def _thin_sweep(config, items):
     stride = int(os.environ.get("LLK_SWEEP_STRIDE", "0"))
     kept, dropped = [], []
     for item in items:
-        if item.get_closest_marker("llk_sweep") is None or (
+        gate = getattr(item.module, "perf_gate_keep", None)
+        if (
+            gate is not None
+            and hasattr(item, "callspec")
+            and not gate(item.callspec.params)
+        ):
+            dropped.append(item)
+        elif item.get_closest_marker("llk_sweep") is None or (
             stride
             and (
                 zlib.crc32(item.nodeid.encode()) % stride == 0

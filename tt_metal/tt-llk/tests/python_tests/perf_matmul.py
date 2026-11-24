@@ -12,6 +12,11 @@ from helpers.llk_params import (
     DestSync,
     Transpose,
 )
+from helpers.matmul_prod_census import (
+    is_production_key,
+    perf_gate_applies,
+    perf_gate_selection,
+)
 from helpers.matmul_sweep import (
     DEST_RT_CT_BLOCKS,
     PERF_RING_TILES,
@@ -109,22 +114,61 @@ def matmul_combos(
     ]
 
 
+PERF_MATMUL_COMBOS = matmul_combos(
+    formats=input_output_formats(
+        [
+            DataFormat.Float16_b,
+            DataFormat.Float32,
+            DataFormat.Bfp8_b,
+        ]
+    ),
+    dest_acc=lambda formats: (
+        [DestAccumulation.Yes]
+        if is_dest_acc_needed(formats)
+        else [DestAccumulation.No, DestAccumulation.Yes]
+    ),
+)
+
+
+def _gate_key(p):
+    (formats, dest_acc, dest_sync, (matrix_a, matrix_b)), fid = p
+    return is_production_key(
+        fid,
+        dest_sync == DestSync.Half,
+        dest_acc == DestAccumulation.Yes,
+        formats.input_format,
+        formats.input_format,
+        formats.output_format,
+        matrix_a[0] // TILE_DIM,
+        matrix_b[1] // TILE_DIM,
+        matrix_a[1] // TILE_DIM,
+    )
+
+
+def _gate_family(p):
+    (formats, dest_acc, dest_sync, _dims), fid = p
+    return (fid, dest_sync, dest_acc, formats.input_format, formats.output_format)
+
+
+_PERF_GATE = perf_gate_selection(
+    [(c, f) for c in PERF_MATMUL_COMBOS for f in ALL_MATH_FIDELITIES],
+    _gate_key,
+    _gate_family,
+    lambda p: (id(p[0]), p[1]),
+)
+
+
+def perf_gate_keep(params) -> bool:
+    """The perf CI runner's ids on Blackhole (helpers/matmul_prod_census.py)."""
+    return (
+        not perf_gate_applies()
+        or (id(params["combos"]), params["math_fidelity"]) in _PERF_GATE
+    )
+
+
 @pytest.mark.perf
 @parametrize(
-    combos=matmul_combos(
-        formats=input_output_formats(
-            [
-                DataFormat.Float16_b,
-                DataFormat.Float32,
-                DataFormat.Bfp8_b,
-            ]
-        ),
-        dest_acc=lambda formats: (
-            [DestAccumulation.Yes]
-            if is_dest_acc_needed(formats)
-            else [DestAccumulation.No, DestAccumulation.Yes]
-        ),
-    ),
+    combos=PERF_MATMUL_COMBOS,
     math_fidelity=ALL_MATH_FIDELITIES,
 )
 def test_perf_matmul(

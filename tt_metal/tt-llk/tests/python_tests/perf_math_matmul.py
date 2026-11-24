@@ -15,6 +15,11 @@ from helpers.llk_params import (
     MathFidelity,
     StochasticRounding,
 )
+from helpers.matmul_prod_census import (
+    is_production_key,
+    perf_gate_applies,
+    perf_gate_selection,
+)
 from helpers.matmul_sweep import (
     DEST_RT_CT_BLOCKS,
     MatmulConfig,
@@ -199,6 +204,60 @@ ALL_TEST_PARAMS = list(
         ),
     )
 )
+
+
+def _gate_values(p):
+    return p.values if hasattr(p, "values") else p
+
+
+def _gate_key(p):
+    fid, cfg, _throttle, _nb, _row_mop = _gate_values(p)
+    td = cfg.tile_dimensions
+    return td.in0_tile_r_dim == TILE_DIM and is_production_key(
+        fid,
+        cfg.dest_sync == DestSync.Half,
+        cfg.dest_acc == DestAccumulation.Yes,
+        cfg.formats.input_format,
+        cfg.formats.input_format,
+        cfg.formats.output_format,
+        td.rt_dim,
+        td.ct_dim,
+        td.kt_dim,
+    )
+
+
+def _gate_family(p):
+    fid, cfg, _throttle, _nb, _row_mop = _gate_values(p)
+    return (
+        fid,
+        cfg.dest_sync,
+        cfg.dest_acc,
+        cfg.formats.input_format,
+        cfg.formats.output_format,
+    )
+
+
+def _gate_ident(fid, cfg, throttle, nb, row_mop):
+    return (fid, id(cfg), throttle, nb, row_mop)
+
+
+_PERF_GATE = perf_gate_selection(
+    ALL_TEST_PARAMS, _gate_key, _gate_family, lambda p: _gate_ident(*_gate_values(p))
+)
+
+
+def perf_gate_keep(params) -> bool:
+    """The perf CI runner's ids on Blackhole (helpers/matmul_prod_census.py)."""
+    return not perf_gate_applies() or (
+        _gate_ident(
+            params["math_fidelity"],
+            params["matmul_config"],
+            params["throttle"],
+            params["num_blocks"],
+            params["row_mop"],
+        )
+        in _PERF_GATE
+    )
 
 
 @pytest.mark.perf
