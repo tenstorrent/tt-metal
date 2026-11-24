@@ -263,7 +263,7 @@ def test_glm54_stages_on_device(mesh_device, device_params, num_links):
                 mesh_device, r._loop_handoff, index_sets=r.model.loop_index_sets, **r._loop_kv_layers
             )
             probe.collect(rig.caches["G2"].kvpe.storage, md)
-            g2_bank_a["before"] = _raw(probe.kvpe)
+            g2_bank_a["before"] = _raw(probe.kvpe_packed)
         return g2_forward(*args, **kwargs)
 
     rt["G2"].model.forward = g2_forward_snapshot

@@ -14,7 +14,9 @@ Payload of one chunk of ``tokens`` rows (5120 = one GLM-5.3 chunk), dim 2 over S
 
 * activation: bf16 TILE ``[1, 1, tokens, 6144]``, embedding over TP (the runner's D2D mapper);
 * KVPE rows: ``[1, 28, tokens, 176]`` uint32 ROW_MAJOR = 704 B pages for the 28 loop layers, layers over TP
-  (GLM TP-dedups its KVPE cache, so each row crosses once);
+  (GLM TP-dedups its KVPE cache, so each row crosses once). The ``kvpe_pack`` cases (q171.3.20) send the handoff's
+  own 656 B FP8 row (164 words) with ``m`` consecutive rows of a layer per page, ``[1, 28, tokens / m, 164 m]``: the
+  same bytes in 656 m B pages;
 * top-k: 7 segments, one per set, ``[1, 1, tokens // tp, tp * 2048]`` uint32 ROW_MAJOR: the runner's index
   layout (runner_utils.indexer_indices_global_spec), each chip holding its own rows with the full k = 2048 (8 KB
   pages).
@@ -56,6 +58,8 @@ _WARMUP = 2
 _ITERS = 10
 _TRACE_REGION_BYTES = 32 * 1024 * 1024
 _PAYLOADS = ("activation", "kvpe", "topk", "full")
+_HANDOFF_ROW_WORDS = 656 // 4  # the handoff's KVPE row: one stage-cache row (scaled FP8, 656 B wide)
+_KVPE_ROWS_PER_PAGE = (1, 16, 32, 160)
 
 
 def _mapper(mesh, tp_dim):
@@ -64,11 +68,15 @@ def _mapper(mesh, tp_dim):
     )
 
 
-def _segments(payload, tokens, tp):
-    """(kind, name, global shape, dtype, layout, TP-sharded dim) per segment."""
+def _segments(payload, tokens, tp, kvpe_pack=(_KVPE_PAGE_WORDS, 1)):
+    """(kind, name, global shape, dtype, layout, TP-sharded dim) per segment. ``kvpe_pack`` = (row words, rows per
+    page) of the KVPE segment."""
+    row_words, rows_per_page = kvpe_pack
+    assert tokens % rows_per_page == 0, f"{tokens} rows do not split into pages of {rows_per_page}"
+    kvpe_shape = [1, _LOOP_LAYERS, tokens // rows_per_page, row_words * rows_per_page]
     segs = [
         ("activation", "activation", [1, 1, tokens, _HIDDEN], ttnn.bfloat16, ttnn.TILE_LAYOUT, 3),
-        ("kvpe", "kvpe", [1, _LOOP_LAYERS, tokens, _KVPE_PAGE_WORDS], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, 1),
+        ("kvpe", "kvpe", kvpe_shape, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, 1),
     ]
     segs += [
         ("topk", f"topk{i}", [1, 1, tokens // tp, tp * _TOPK], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, 3)
@@ -129,7 +137,7 @@ def _stats(samples):
     }
 
 
-def _case(fabric, split, relay, payload, tokens=5120):
+def _case(fabric, split, relay, payload, tokens=5120, kvpe_pack=None):
     profile = torus_xy_device_params if fabric == "torus-xy" else fabric2d_device_params
     return pytest.param(
         (8, 4),
@@ -138,8 +146,10 @@ def _case(fabric, split, relay, payload, tokens=5120):
         relay,
         payload,
         tokens,
+        kvpe_pack or (_KVPE_PAGE_WORDS, 1),
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-        id=f"{fabric}-{split}-{'relay' if relay else 'direct'}-{payload}-t{tokens}",
+        id=f"{fabric}-{split}-{'relay' if relay else 'direct'}-{payload}-t{tokens}"
+        + (f"-row{kvpe_pack[0] * 4}B-x{kvpe_pack[1]}" if kvpe_pack else ""),
     )
 
 
@@ -150,13 +160,21 @@ _CASES = [
     *[_case("torus-xy", "rows", True, payload, 2560) for payload in ("activation", "full")],
     *[_case("torus-xy", split, False, "full") for split in ("rows", "cols")],
     _case("fabric2d", "rows", True, "full"),
+    # q171.3.20: the handoff's 656 B KVPE row, 1 (as sent today) or m rows per page, on the deployed 4-cable relay.
+    *[
+        _case("torus-xy", "rows", True, payload, kvpe_pack=(_HANDOFF_ROW_WORDS, m))
+        for m in _KVPE_ROWS_PER_PAGE
+        for payload in ("kvpe", "full")
+    ],
 ]
 
 
 @pytest.mark.parametrize(
-    "mesh_device, device_params, split, relay, payload, tokens", _CASES, indirect=["mesh_device", "device_params"]
+    "mesh_device, device_params, split, relay, payload, tokens, kvpe_pack",
+    _CASES,
+    indirect=["mesh_device", "device_params"],
 )
-def test_glm54_d2d_payload_cost(mesh_device, device_params, split, relay, payload, tokens):
+def test_glm54_d2d_payload_cost(mesh_device, device_params, split, relay, payload, tokens, kvpe_pack):
     if not is_blackhole():
         pytest.skip("D2DStreamService needs Blackhole service cores")
     rows, cols = mesh_device.shape[0], mesh_device.shape[1]
@@ -169,7 +187,7 @@ def test_glm54_d2d_payload_cost(mesh_device, device_params, split, relay, payloa
     sender_mesh.enable_program_cache()
     receiver_mesh.enable_program_cache()
 
-    segs = _segments(payload, tokens, tp=shape[1])
+    segs = _segments(payload, tokens, tp=shape[1], kvpe_pack=kvpe_pack)
     spec = lambda shape, dtype, layout: ttnn.TensorSpec(
         shape=ttnn.Shape(shape), dtype=dtype, layout=layout, buffer_type=ttnn.BufferType.DRAM
     )
@@ -276,6 +294,7 @@ def test_glm54_d2d_payload_cost(mesh_device, device_params, split, relay, payloa
             "relay": relay,
             "payload": payload,
             "tokens": tokens,
+            "kvpe_pack": {"row_bytes": kvpe_pack[0] * 4, "rows_per_page": kvpe_pack[1]},
             "split": split,
             "half_shape": list(shape),
             "segment_shapes": {name: shape for _, name, shape, *_ in segs},
