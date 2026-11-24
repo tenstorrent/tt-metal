@@ -546,15 +546,13 @@ def test_the_registry_resolves_unambiguously_for_every_variant():
 
 # Enrolled ops with no step budget anywhere: the LUT pair and two binaries hold a
 # declared tolerance; the rest are past their output's usable ceiling on every cell,
-# tracked by Digamma #51128, Softplus #51866 (under #52178), Lgamma #55356, Expm1Cw
-# #54770 and Polygamma #52278.
+# tracked by Digamma #51128, Lgamma #55356, Expm1Cw #54770 and Polygamma #52278.
 ONLY_EVER_TOLERANCE = frozenset(
     {
         MathOperation.SigmoidAppx,
         MathOperation.GeluAppx,
         MathOperation.SfpuElwpow,
         MathOperation.SfpuXlogy,
-        MathOperation.Softplus,
         MathOperation.Lgamma,
         MathOperation.Digamma,
         MathOperation.Expm1Cw,
@@ -1242,7 +1240,7 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS_ON = {
             None,
         ): 1,
         (MathOperation.Expm1Cw, None, None, None, None): 13,
-        (MathOperation.I1, None, None, None, None): 20,
+        (MathOperation.I1, None, None, None, None): 16,
         (MathOperation.Polygamma, None, None, None, None): 12,
     },
 }

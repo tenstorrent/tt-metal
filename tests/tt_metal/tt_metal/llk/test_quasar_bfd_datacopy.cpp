@@ -2,18 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Quasar BFD re-architecture POC: buffer descriptors are no longer programmed in
-// hw_configure (coupled 1:1 with DFB ids); instead each op's llk_*_init allocates an
-// id from its TRISC's partition (T0: [0,16), T2: [16,24), T3: [24,32)) via a
-// bump-and-wrap counter and programs the table entry itself. This test copies three
-// input DFBs to one output DFB the realistic way -- init once per operand, then a block
-// loop of tiles -- and wraps the whole three-operand sequence in an outer loop of
-// NUM_LOOPS. Each operand switch bump-allocates a fresh unpack BFD, so NUM_INPUTS*NUM_LOOPS
-// (= 30) inits per run wrap the 16-entry unpack partition and reuse ids mid-run. The readers
-// re-stream the same TILES_PER_INPUT tiles NUM_LOOPS times (the Quasar tile-counter model
-// consumes a tile per unpack, so re-copying requires re-streaming). Every copy, including the
-// post-wrap ones, is bit-exact-checked, so a wrapped id that programs the wrong input's
-// descriptor is caught.
+// Copies three input DFBs to one output DFB (init once per operand, then a block of tiles), looped
+// NUM_LOOPS times, so the fixed Unp0 BFD is re-programmed back to back; every copy is checked bit-exact.
 
 #include "llk_device_fixture.hpp"
 #include "single_node_dfb_program.hpp"
@@ -26,7 +16,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
 #include "impl/program/program_impl.hpp"
 
@@ -37,10 +27,8 @@ namespace {
 constexpr std::uint32_t NUM_INPUTS = 3;
 constexpr std::uint32_t TILES_PER_INPUT = 16;  // unique tiles per input, copied as one block
 constexpr std::uint32_t NUM_LOOPS = 10;        // stream + copy the same tiles this many times
-// NUM_CYCLES = one pass over all inputs (in0..in2, TILES_PER_INPUT each = 48). The compute wraps this in an
-// outer loop of NUM_LOOPS, re-initing the unpack BFD once per operand (NUM_INPUTS*NUM_LOOPS = 30 inits > the
-// 16-entry unpack partition, so it wraps). The readers re-stream the same TILES_PER_INPUT tiles NUM_LOOPS
-// times: the same 16 tiles/input are copied 10x -> TILES_STREAMED_PER_INPUT (160) per input, TOTAL_TILES (480).
+// One pass over all inputs = 48 tiles; the compute loops NUM_LOOPS times (30 operand re-inits) and the
+// readers re-stream the same tiles each loop (the tile-counter model consumes a tile per unpack).
 constexpr std::uint32_t NUM_CYCLES = NUM_INPUTS * TILES_PER_INPUT;
 constexpr std::uint32_t TILES_STREAMED_PER_INPUT = TILES_PER_INPUT * NUM_LOOPS;
 constexpr std::uint32_t TOTAL_TILES = NUM_CYCLES * NUM_LOOPS;

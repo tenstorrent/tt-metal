@@ -19,8 +19,8 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/math.hpp>
 
 #include <optional>
@@ -35,7 +35,7 @@ namespace ttnn::prim {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 
 struct LayerNormCbFootprint {
     std::uint64_t input = 0;
@@ -234,7 +234,7 @@ LayerNormInterleavedPlan LayerNormMultiCoreProgramFactory::select_plan(
     const std::uint32_t block_size = fp32_dest_acc_en ? 4 : 8;
 
     const auto input_format = datatype_to_dataformat_converter(input.dtype());
-    const auto output_format = input_format;
+    const auto output_format = datatype_to_dataformat_converter(operation_attributes.dtype.value_or(input.dtype()));
     const bool row_major_affine = (gamma.has_value() && gamma->layout() == Layout::ROW_MAJOR) ||
                                   (beta.has_value() && beta->layout() == Layout::ROW_MAJOR);
     const bool fp32_finalizer_arch = device->arch() == tt::ARCH::BLACKHOLE || device->arch() == tt::ARCH::WORMHOLE_B0;
@@ -576,7 +576,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     if (uses_reciprocal_lut) {
         TT_FATAL(tensor_args.recip_tensor.has_value(), "Reciprocal tensor not provided for Welford layernorm");
         recip_tensor = tensor_args.recip_tensor;
-        reciprocal_buffer_size_bytes = recip_tensor->buffer()->aligned_size_per_bank();
+        reciprocal_buffer_size_bytes = recip_tensor->mesh_buffer().aligned_size_per_bank();
     }
 
     const bool compact_fp32_finalizer = selected_plan.compact_fp32_finalizer;

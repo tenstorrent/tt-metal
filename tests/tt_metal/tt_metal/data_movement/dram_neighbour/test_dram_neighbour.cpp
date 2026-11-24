@@ -234,8 +234,12 @@ bool run_dm_neighbour(distributed::MeshDevice& mesh_device, const DramNeighbourC
 
 std::map<uint32_t, uint32_t> core_dram_mapping_ideal(distributed::MeshDevice& mesh_device, uint32_t num_dram_banks) {
     map<uint32_t, uint32_t> mapping;
-    const vector<CoreCoord> dram_bank2core_coords =
-        mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default);
+    const auto bank_to_core = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(
+        tt::tt_metal::NOC::RISCV_0_default, distributed::MeshCoordinate::zero_coordinate(mesh_device.shape().dims()));
+    vector<CoreCoord> dram_bank2core_coords(bank_to_core.size());
+    for (const auto& [bank, core] : bank_to_core) {
+        dram_bank2core_coords.at(bank) = core;
+    }
 
     for (uint32_t i = 0; i < dram_bank2core_coords.size(); i++) {
         if (i == num_dram_banks) {

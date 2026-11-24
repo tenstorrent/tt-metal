@@ -119,6 +119,7 @@ def build_minimax_h3_text_encoder(
     load_weights: bool = True,
     kv_gather_capacity: int | None = None,
     use_persistent_ccl_buffers: bool = True,
+    dynamic_length: bool = False,
 ) -> tuple[Qwen3VlTextEncoder, dict]:
     """Build the conditioner at truncated depth, tapped at its last layer, and load its weights.
 
@@ -162,6 +163,7 @@ def build_minimax_h3_text_encoder(
         high_fidelity_linears=True,
         kv_gather_capacity=kv_gather_capacity,
         use_persistent_ccl_buffers=use_persistent_ccl_buffers,
+        dynamic_length=dynamic_length,
     )
 
     if load_weights:

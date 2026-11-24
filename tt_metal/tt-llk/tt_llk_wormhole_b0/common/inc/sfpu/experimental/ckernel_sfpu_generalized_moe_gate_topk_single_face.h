@@ -169,7 +169,7 @@ template <bool dir, bool end_transpose>
 inline void bitonic_top8_ph3_st4_to_1()
 {
     // TODO: Use replay buffer for these instructions
-    if constexpr (dir == (bool)SortDir::ArgMax)
+    if constexpr (dir == static_cast<bool>(SortDir::ArgMax))
     {
         // Step 4
         TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
@@ -543,7 +543,9 @@ inline void _gmg_copy_topk_run()
 template <std::uint32_t field, std::uint32_t src_lo, std::uint32_t src_hi, std::uint32_t dst_lo, std::uint32_t dst_hi>
 inline void _gmg_place_field_from_interm()
 {
-    constexpr std::uint32_t mode = (field == 0) ? 0 : (field == 1) ? (std::uint32_t)InstrModLoadStore::LO16_ONLY : (std::uint32_t)InstrModLoadStore::HI16_ONLY;
+    constexpr std::uint32_t mode   = (field == 0)   ? 0
+                                     : (field == 1) ? static_cast<std::uint32_t>(InstrModLoadStore::LO16_ONLY)
+                                                    : static_cast<std::uint32_t>(InstrModLoadStore::HI16_ONLY);
     constexpr std::uint32_t region = (field == 0) ? bias_offset : (field == 1) ? indices_offset : scores_offset;
     // Reset Dst RWC: the copy_tile (FPU) that filled intermediate leaves it advanced; without this the
     // SFPLOAD/SFPSTORE offsets below are biased and hit the wrong rows.

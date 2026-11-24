@@ -229,6 +229,26 @@ TEST_F(IntermeshBigMesh1x16FabricFixture, DeviceSetupAndTeardown) {
     log_info(tt::LogTest, "BigMesh 1x16: opened {} local devices successfully", this->devices_.size());
 }
 
+// ========= Setup Validation for a Pipeline of One-Chip Meshes  =========
+// One rank per one-chip mesh on a BH galaxy, run with
+// tests/tt_metal/distributed/config/bh_galaxy_1x1_chain_rank_bindings.yaml.
+
+TEST(MultiHostFabric, OneChipMeshChainDeviceSetupAndTeardown) {
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    if (*distributed_context.size() != 3 || tt::tt_metal::GetNumAvailableDevices() != 1) {
+        GTEST_SKIP() << "Requires 3 ranks with one visible chip each";
+    }
+    tt::tt_fabric::SetFabricConfig(
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    auto devices = tt::tt_metal::distributed::MeshDevice::create_unit_meshes({0});
+    ASSERT_EQ(devices.size(), 1u);
+    distributed_context.barrier();
+    for (auto& [id, device] : devices) {
+        device->close();
+    }
+    tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
+}
+
 // ========= Data-Movement Tests for NanoExabox Machines  =========
 
 TEST_F(IntermeshNanoExabox2x4FabricFixture, RandomizedIntermeshUnicastBwd) {

@@ -1,13 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-namespace tt {
+// DEPRECATED-FORWARDING-HEADER: <tt-metalium/device_types.hpp> moved to <tt-metalium/vocabulary/device_types.hpp>.
+// This header only forwards to the new location; it is deprecated, with a warning and a removal date, in a follow-up change.
 
-// ChipId identifies a physical Tenstorrent device in a cluster (e.g., chip 0, chip 1).
-// Defined locally to avoid leaking UMD headers into the tt-metalium public API.
-using ChipId = int;
-
-}  // namespace tt
+#include <tt-metalium/vocabulary/device_types.hpp>  // IWYU pragma: export

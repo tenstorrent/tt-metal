@@ -153,3 +153,68 @@ def test_dropout_cache_hit_rederives_buffer_address(device):
     ), "kept outputs must be 3.0*scale -- proves the hit re-derived the new input buffer address"
 
     device.disable_and_clear_program_cache()
+
+
+@pytest.mark.parametrize("use_per_device_seed", [False, True])
+def test_dropout_mask_differs_across_cores(device, use_per_device_seed):
+    """Each tile lands on its own core; every core must draw its own mask, and a fixed seed must reproduce the
+    same masks whether the program is freshly built or served from the cache."""
+    num_tiles = 8
+    t = torch.ones((1, 1, num_tiles * 32, 32))
+    tensor = ttnn.from_torch(t, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    def run(seed):
+        out = ttnn.experimental.dropout(
+            tensor, probability=0.5, scale=2.0, seed=seed, use_per_device_seed=use_per_device_seed
+        )
+        masks = (ttnn.to_torch(out).float().reshape(num_tiles, 32, 32) == 0).reshape(num_tiles, -1)
+        for i in range(num_tiles):
+            for j in range(i + 1, num_tiles):
+                assert not torch.equal(masks[i], masks[j]), f"tiles {i} and {j} share an identical dropout mask"
+        return masks
+
+    device.enable_program_cache()
+    device.clear_program_cache()
+
+    miss = run(1234)
+    hit_same_seed = run(1234)
+    hit_new_seed = run(4321)
+    assert device.num_program_cache_entries() == 1
+    assert torch.equal(miss, hit_same_seed), "a fixed seed must give the same masks on a cache miss and hit"
+    assert not torch.equal(miss, hit_new_seed)
+
+    device.clear_program_cache()
+    assert torch.equal(hit_new_seed, run(4321)), "a cache hit with a new seed must match a fresh build"
+    device.disable_and_clear_program_cache()
+
+
+# 1 tile: one core. grid + 3 tiles: every core, in two compute groups with separate compute kernels.
+@pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4"), pytest.param((8, 4), id="8x4")], indirect=True)
+@pytest.mark.parametrize("tiles", ["one", "two_groups"])
+def test_dropout_per_device_seed_on_mesh(mesh_device, tiles):
+    """use_per_device_seed on a mesh: each device draws the mask of use_per_device_seed=False with seed + its device
+    id, on a cache miss and on a cache hit with a new seed."""
+    grid = mesh_device.compute_with_storage_grid_size()
+    num_tiles = 1 if tiles == "one" else grid.x * grid.y + 3
+    x = ttnn.from_torch(
+        torch.ones((1, 1, num_tiles * 32, 32)),
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    def shards(seed, use_per_device_seed):
+        out = ttnn.experimental.dropout(
+            x, probability=0.5, scale=2.0, seed=seed, use_per_device_seed=use_per_device_seed
+        )
+        return [ttnn.to_torch(t) for t in ttnn.get_device_tensors(out)]
+
+    mesh_device.clear_program_cache()
+    per_device = {seed: shards(seed, True) for seed in (1234, 4321)}  # miss, then a hit with a new seed
+    assert mesh_device.num_program_cache_entries() == 1, "a new seed must reuse the cached program"
+    # get_device_ids() and get_device_tensors() are both in row-major mesh order (single host).
+    for d, device_id in enumerate(int(i) for i in mesh_device.get_device_ids()):
+        for seed, outputs in per_device.items():
+            reference = shards(seed + device_id, False)[d]
+            assert torch.equal(outputs[d], reference), f"device {d} (id {device_id}), seed {seed}"
