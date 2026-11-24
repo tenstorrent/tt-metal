@@ -32,7 +32,8 @@ extern "C" __attribute__((noinline, used)) void reference_run_template0_short()
     TTI_MOP(0 /*mop_type*/, 3 /*loop_count*/, 0x5 /*zmask_lo16_or_loop_count*/);
 }
 
-// The high mask bits are read from the 17th iteration or a mask wider than 16 bits.
+// HW reads the high mask bits only from the 17th iteration; MaskHigh::Auto also writes
+// MOP_CFG for a mask wider than 16 bits.
 extern "C" __attribute__((noinline, used)) void run_template0_boundary()
 {
     Template0Runner::run<16, 0xffff>();
