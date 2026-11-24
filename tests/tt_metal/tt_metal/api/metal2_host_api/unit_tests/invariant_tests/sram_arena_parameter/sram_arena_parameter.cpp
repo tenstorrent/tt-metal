@@ -9,7 +9,7 @@
 #include <gtest/gtest.h>
 
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
@@ -39,7 +39,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaParameterValidLockstep) {
     spec.advanced_options.sram_arena_parameters = {
         {.unique_id = SRAMArenaParamName{"arena"},
          .properties = LockstepSRAMArenaProperties{.per_bank_size = alignment}}};
-    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device, spec));
+    EXPECT_NO_THROW(Program(fixture_device, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaParameterValidRangeLockstep) {
@@ -51,7 +51,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaParameterValidRangeLockstep) {
         .allocation_node_set = NodeRangeSet{NodeRange({0, 0}, {0, 0})}, .per_bank_size = alignment};
     spec.advanced_options.sram_arena_parameters = {
         {.unique_id = SRAMArenaParamName{"arena"}, .properties = properties}};
-    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device, spec));
+    EXPECT_NO_THROW(Program(fixture_device, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaParameterZeroLockstepSize) {
@@ -63,7 +63,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaParameterZeroLockstepSize) {
     }};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
             "SRAMArenaParameter 'arena' has per_bank_size = 0; per_bank_size must be greater than zero.")));
 }
@@ -81,7 +81,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaParameterZeroRangeLockstepSize) {
     }};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
             "SRAMArenaParameter 'arena' has per_bank_size = 0; per_bank_size must be greater than zero.")));
 }
@@ -100,7 +100,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaParameterEmptyRangeLockstepNodes) {
     }};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
             "SRAMArenaParameter 'arena' has empty allocation_node_set; at least one node is required.")));
 }
@@ -112,7 +112,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaParameterZeroSizeUsedByScratchpad) {
     spec.advanced_options.sram_arena_parameters = {
         {.unique_id = SRAMArenaParamName{"arena"}, .properties = LockstepSRAMArenaProperties{.per_bank_size = 0}}};
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        [&] { Program(fixture_device, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
             "SRAMArenaParameter 'arena' has per_bank_size = 0; per_bank_size must be greater than zero.")));
 }

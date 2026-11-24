@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include "llrt/hal.hpp"
 
 namespace tt::tt_metal {

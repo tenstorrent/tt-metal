@@ -19,7 +19,6 @@ from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     MATH_OP,
-    REDUCE_POOL_TYPE,
     TILE_COUNT,
     generate_input_dim,
 )
@@ -61,7 +60,7 @@ def _run_sfpu_reduce_sdpa(
     formats,
     dest_acc,
     mathop,
-    reduce_pool,
+    pool_type,
     input_dimensions,
     *,
     stimuli=None,
@@ -84,10 +83,9 @@ def _run_sfpu_reduce_sdpa(
         tile_count = (input_dimensions[0] // TILE_DIMENSIONS[0]) * (
             input_dimensions[1] // TILE_DIMENSIONS[1]
         )
-        # Keep this name literal so schema v4 can derive the perf compile parameters.
+        # Keep this name literal so the schema gate can derive the perf compile parameters.
         templates = [
-            MATH_OP(mathop=mathop),
-            REDUCE_POOL_TYPE(reduce_pool),
+            MATH_OP(mathop=mathop, pool_type=pool_type),
             generate_input_dim(
                 input_dimensions,
                 input_dimensions,
@@ -155,7 +153,7 @@ def _run_sfpu_reduce_sdpa(
             block_ct_dim=BLOCK_CT_DIM,
             block_rt_dim=BLOCK_RT_DIM,
         ),
-        MATH_OP(mathop=mathop, pool_type=reduce_pool),
+        MATH_OP(mathop=mathop, pool_type=pool_type),
     ]
     functional_runtime_params = [
         TILE_COUNT(tile_cnt_A),

@@ -12,6 +12,7 @@
 
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 
@@ -574,6 +575,20 @@ TEST(BufferDistributionSpecContiguous, CPU_ShardContiguousRequiresUniformShardsP
     EXPECT_ANY_THROW((void)shard_contiguous.compute_page_mapping());
 }
 
+// The node-list constructor rejects an empty node list only for a tensor with pages.
+TEST(BufferDistributionSpecConstruction, CPU_EmptyNodeListOnlyForEmptyTensor) {
+    EXPECT_NO_THROW(BufferDistributionSpec(Shape{0, 4}, Shape{1, 1}, {}));
+    EXPECT_ANY_THROW(BufferDistributionSpec(Shape{2, 4}, Shape{1, 1}, {}));
+}
+
+// A shard that ends in a partial page still takes that page, as in BufferDistributionSpec.
+TEST(ShardSpecBufferPages, CPU_PartialPageRoundsUp) {
+    const ShardSpecBuffer shard_spec(
+        NodeRangeSet(NodeRange({0, 0}, {0, 0})), {33, 32}, ShardOrientation::ROW_MAJOR, {32, 32}, {2, 1});
+    EXPECT_EQ(shard_spec.shape_in_pages(), (std::array<uint32_t, 2>{2, 1}));
+    EXPECT_EQ(shard_spec.num_pages(), 2u);
+}
+
 // Shape-only; the grid is arbitrary.
 TEST(BufferDistributionSpecContiguousPages, CPU_NumContiguousPages) {
     const CoreRangeSet grid(CoreRange({0, 0}, {1, 0}));
@@ -596,4 +611,53 @@ TEST(BufferDistributionSpecContiguousPages, CPU_NumContiguousPages) {
 
     const auto single_page_shard = make_spec({8, 1}, {1, 1});
     EXPECT_EQ(single_page_shard.contiguous_page_stride(), 1u);
+}
+
+// A buffer described only by a distribution spec is ND-sharded, not block-sharded.
+TEST_F(BufferDistributionSpecFixture, DistributionSpecOnlyBufferIsNdSharded) {
+    const BufferDistributionSpec spec(
+        Shape{4, 1}, Shape{1, 1}, NodeRangeSet(NodeRange({0, 0}, {1, 0})), ShardOrientation::ROW_MAJOR);
+    const auto mesh_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = 4 * 64},
+        distributed::DeviceLocalBufferConfig{.page_size = 64, .buffer_type = BufferType::L1, .sharding_args = spec},
+        mesh_device_.get());
+    EXPECT_EQ(mesh_buffer->device_local_config().sharding_args.buffer_layout(), TensorMemoryLayout::ND_SHARDED);
+}
+
+// With both specs, the buffer is sized from the distribution spec, which can place several shards on a node.
+TEST_F(BufferDistributionSpecFixture, NumDevPagesFollowsDistributionSpec) {
+    const NodeRangeSet grid(NodeRange({0, 0}, {1, 0}));  // 2 nodes, 4 single-page shards
+    const BufferDistributionSpec spec(Shape{4, 1}, Shape{1, 1}, grid, ShardOrientation::ROW_MAJOR);
+    const ShardSpecBuffer shard_spec(grid, {1, 16}, ShardOrientation::ROW_MAJOR, {1, 16}, {4, 1});
+    const auto mesh_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = 4 * 64},
+        distributed::DeviceLocalBufferConfig{
+            .page_size = 64,
+            .buffer_type = BufferType::L1,
+            .sharding_args = BufferShardingArgs(spec, shard_spec, TensorMemoryLayout::HEIGHT_SHARDED)},
+        mesh_device_.get());
+    EXPECT_EQ(mesh_buffer->num_dev_pages(), 4u);
+}
+
+// A buffer with pages must not have a page size of 0.
+TEST_F(BufferDistributionSpecFixture, ZeroPageSizeIsRejected) {
+    EXPECT_ANY_THROW(distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = 1024},
+        distributed::DeviceLocalBufferConfig{.page_size = 0, .buffer_type = BufferType::DRAM},
+        mesh_device_.get()));
+}
+
+// CONTIGUOUS_1D needs a whole number of shards per node; creating a buffer with an uneven count must fatal, before
+// kernels or host transfers use it.
+TEST_F(BufferDistributionSpecFixture, ContiguousBufferRequiresUniformShardsPerNode) {
+    const BufferDistributionSpec spec(
+        Shape{7, 1},  // 7 shards over 2 nodes
+        Shape{1, 1},
+        NodeRangeSet(NodeRange({0, 0}, {1, 0})),
+        ShardOrientation::ROW_MAJOR,
+        ShardDistributionStrategy::CONTIGUOUS_1D);
+    EXPECT_ANY_THROW(distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = 7 * 64},
+        distributed::DeviceLocalBufferConfig{.page_size = 64, .buffer_type = BufferType::L1, .sharding_args = spec},
+        mesh_device_.get()));
 }

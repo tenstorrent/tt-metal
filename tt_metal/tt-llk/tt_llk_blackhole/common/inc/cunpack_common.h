@@ -225,7 +225,7 @@ inline constexpr std::uint32_t canonical_unpA_x_stride(const std::uint32_t unpac
 // This is the value programmed by configure_unpack_AB and the srca data-format reconfig,
 // and the one per-op inits and uninits that touch the Y stride (e.g. tilizeA_B) set and
 // re-assert. It does not depend on the operand's face_r_dim;
-// FACE_R_DIM is the constant face row count (matches set_packer_strides and unpack_untilize).
+// FACE_R_DIM is the constant face row count (matches set_packer_strides).
 inline constexpr std::uint32_t canonical_unpA_y_stride(const std::uint32_t unpack_dst_format)
 {
     return FACE_R_DIM * canonical_unpA_x_stride(unpack_dst_format);
@@ -919,7 +919,6 @@ inline void configure_unpack_AB(
     cfg[THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32] = face_dim | (face_dim << 16);
 
     constexpr std::uint32_t face_dim_16x16 = FACE_R_DIM * FACE_C_DIM;
-    regfile[p_gpr_unpack::FACE_DIM_16x16]  = (face_dim_16x16 / 1) | ((face_dim_16x16 / 1) << 16);
     regfile[p_gpr_unpack::FACE_DIM_8x16]   = (face_dim_16x16 / 2) | ((face_dim_16x16 / 2) << 16);
     regfile[p_gpr_unpack::FACE_DIM_4x16]   = (face_dim_16x16 / 4) | ((face_dim_16x16 / 4) << 16);
     regfile[p_gpr_unpack::FACE_DIM_2x16]   = (face_dim_16x16 / 8) | ((face_dim_16x16 / 8) << 16);
@@ -973,6 +972,7 @@ inline void wait_for_dest_available()
 // This pairs with set_dst_write_addr to bracket the unpack-to-dest section: rather than
 // snapshotting the prior register value into a GPR, we recompute the canonical baseline so the
 // restore is deterministic and order-independent.
+// Callers release UNPACK_SYNC after this returns, so configure_unpack_AB doesn't race these config writes.
 inline void unpack_to_dest_tile_done(std::uint32_t &context_id, const std::uint32_t unpack_dst_format)
 {
     t6_semaphore_post<p_stall::UNPACK0>(semaphore::UNPACK_TO_DEST);
@@ -990,6 +990,9 @@ inline void unpack_to_dest_tile_done(std::uint32_t &context_id, const std::uint3
         cfg_reg_rmw_tensix<THCON_SEC0_REG5_Dest_cntx1_address_RMW>(4 * 16);
     }
     TTI_SETC16(SRCA_SET_Base_ADDR32, 0x4); // re-enable address bit swizzle
+    // No TEN-3868 dummy unpack to SrcA here, unlike Wormhole: Blackhole's LLK sets SrcA's dvalid without an unpack
+    // only in an UNPACR_NOP that also zeroes SrcA (UNP_ZEROSRC with SET_DVALID), and that clear moves both of SrcA's
+    // bank pointers
 }
 
 inline void set_dst_write_addr(const std::uint32_t &context_id, const std::uint32_t &unpack_dst_format)

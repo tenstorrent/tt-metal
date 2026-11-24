@@ -16,6 +16,21 @@ namespace ttnn::prim {
 
 constexpr uint32_t GATHER_WT_THRESHOLD = 60;
 
+void validate_gather_tile_shape(const Tensor& tensor, std::string_view name) {
+    if (tensor.layout() != Layout::TILE) {
+        return;
+    }
+    const auto tile_shape = tensor.tensor_spec().tile().get_tile_shape();
+    TT_FATAL(
+        tile_shape[0] == tt::constants::TILE_HEIGHT && tile_shape[1] == tt::constants::TILE_WIDTH,
+        "Gather supports only {}x{} tiles, but {} has a {}x{} tile",
+        tt::constants::TILE_HEIGHT,
+        tt::constants::TILE_WIDTH,
+        name,
+        tile_shape[0],
+        tile_shape[1]);
+}
+
 GatherDeviceOperation::program_factory_t GatherDeviceOperation::select_program_factory(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto input_tensor_shape = tensor_args.input_tensor.padded_shape();
@@ -107,6 +122,12 @@ void GatherDeviceOperation::validate_on_program_cache_miss(
         "Gather only supports TILE or ROW_MAJOR layout. Current layout: {}",
         tensor_args.input_tensor.layout());
 
+    validate_gather_tile_shape(tensor_args.input_tensor, "the input tensor");
+    validate_gather_tile_shape(tensor_args.input_index_tensor, "the index tensor");
+    if (tensor_args.output_tensor.has_value()) {
+        validate_gather_tile_shape(*tensor_args.output_tensor, "the output tensor");
+    }
+
     // TILE-only: any user-provided output shard_spec must be tile-aligned. RM operates at
     // stick granularity, so sub-tile shards are valid there.
     if (tensor_args.input_tensor.layout() == Layout::TILE && attributes.output_mem_config.is_sharded() &&
@@ -134,18 +155,19 @@ void GatherDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(attributes.sparse_grad == false, "Sparse gradient is not supported yet.");
 
     if (tensor_args.input_tensor.layout() == Layout::ROW_MAJOR) {
-        auto check_shard_row = [](const MemoryConfig& mc, uint32_t element_size, const char* role) {
+        auto check_shard_row = [](const TensorSpec& spec, uint32_t element_size, const char* role) {
             TT_FATAL(
-                !ttnn::operations::data_movement::has_subaligned_shard_row(mc, element_size),
+                !ttnn::operations::data_movement::has_subaligned_shard_row(spec.memory_config(), element_size) &&
+                    !ttnn::operations::data_movement::has_subaligned_split_row(spec),
                 "gather: ROW_MAJOR {} shard row of {} B is not a multiple of the buffer alignment. Reach this op "
                 "through ttnn::gather, which moves such tensors to interleaved memory, rather than calling the "
                 "device operation directly.",
                 role,
-                mc.shard_spec()->shape[1] * element_size);
+                spec.compute_page_size_bytes());
         };
-        check_shard_row(tensor_args.input_tensor.memory_config(), tensor_args.input_tensor.element_size(), "input");
+        check_shard_row(tensor_args.input_tensor.tensor_spec(), tensor_args.input_tensor.element_size(), "input");
         check_shard_row(
-            tensor_args.input_index_tensor.memory_config(), tensor_args.input_index_tensor.element_size(), "index");
+            tensor_args.input_index_tensor.tensor_spec(), tensor_args.input_index_tensor.element_size(), "index");
         const bool output_is_sharded = tensor_args.output_tensor.has_value()
                                            ? tensor_args.output_tensor->is_sharded()
                                            : attributes.output_mem_config.is_sharded();
@@ -153,7 +175,7 @@ void GatherDeviceOperation::validate_on_program_cache_miss(
             const uint32_t output_elem_size = tensor_args.output_tensor.has_value()
                                                   ? tensor_args.output_tensor->element_size()
                                                   : tensor_args.input_tensor.element_size();
-            check_shard_row(compute_output_specs(attributes, tensor_args).memory_config(), output_elem_size, "output");
+            check_shard_row(compute_output_specs(attributes, tensor_args), output_elem_size, "output");
         }
     }
 }

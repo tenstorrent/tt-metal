@@ -261,7 +261,7 @@ TEST_F(MeshDispatchFixture, TensixTestCircularBufferFromDescriptorMergesCoreRang
 
     ProgramDescriptor descriptor;
     descriptor.cbs.push_back(make_cb_descriptor(cr_set, 0, cb_config.num_pages));
-    Program program_from_descriptor(descriptor);
+    Program program_from_descriptor(*this->devices_[0], descriptor);
 
     Program program = CreateProgram(*this->devices_[0]);
     CreateCircularBuffer(
@@ -298,7 +298,7 @@ TEST_F(MeshDispatchFixture, TensixTestCircularBufferFromDescriptorWithOverlappin
     for (auto& device : this->devices_) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
-        workload.add_program(distributed::MeshCoordinateRange(zero_coord, zero_coord), Program(descriptor));
+        workload.add_program(distributed::MeshCoordinateRange(zero_coord, zero_coord), Program(*device, descriptor));
         this->RunProgram(device, workload);
 
         for (const CoreRange& core_range : all_cores.ranges()) {

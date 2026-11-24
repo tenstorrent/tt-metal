@@ -93,14 +93,14 @@ def _num_tiles_for_format(formats):
     math_fidelity=[MathFidelity.HiFi2, MathFidelity.HiFi4],
     num_tiles=_num_tiles_for_format,
     tile_dimensions=TILE_DIMENSIONS,
-    math_op=list(GOLDEN_OPS),
+    mathop=list(GOLDEN_OPS),
 )
 def test_mul_reduce_scalar(
     formats,
     math_fidelity,
     num_tiles,
     tile_dimensions,
-    math_op,
+    mathop,
     *,
     is_perf=False,
     perf_report=None,
@@ -127,7 +127,7 @@ def test_mul_reduce_scalar(
     # ELWMUL: B == 1.0 everywhere (matching the gtest and fpu_reduce_scalar.yaml):
     # A * B == A, so the fused op reduces to sum(A) over all tiles/elements.
     # ELWADD and ELWSUB keep B ~ U[0, 0.25] (see the module docstring).
-    if math_op == MathOperation.Elwmul:
+    if mathop == MathOperation.Elwmul:
         src_B = torch.ones(
             tile_cnt_B * elements_per_tile, dtype=format_dict[formats.input_format]
         )
@@ -137,7 +137,7 @@ def test_mul_reduce_scalar(
         # Golden mirrors the on-silicon reference (test_mul_reduce_scalar.cpp): the
         # element-wise result summed over every element of every tile, in fp32.
         golden_scalar = float(
-            GOLDEN_OPS[math_op](src_A.to(torch.float32), src_B.to(torch.float32))
+            GOLDEN_OPS[mathop](src_A.to(torch.float32), src_B.to(torch.float32))
             .sum()
             .item()
         )
@@ -160,7 +160,7 @@ def test_mul_reduce_scalar(
             formats=formats,
             templates=[
                 MATH_FIDELITY(math_fidelity),
-                MATH_OP(mathop=math_op),
+                MATH_OP(mathop=mathop),
             ],
             runtimes=[
                 TILE_COUNT(num_tiles),
@@ -201,5 +201,5 @@ def test_mul_reduce_scalar(
         golden_scalar
     ), (
         f"mul_reduce_scalar mismatch: device={device_scalar} golden={golden_scalar} "
-        f"(op={math_op.name}, num_tiles={num_tiles}, tile={tile_dimensions}, fidelity={math_fidelity.name})"
+        f"(op={mathop.name}, num_tiles={num_tiles}, tile={tile_dimensions}, fidelity={math_fidelity.name})"
     )

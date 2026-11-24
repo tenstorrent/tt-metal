@@ -30,7 +30,7 @@ KDA_PREP_OUTPUT_BF16_MASK = (1 << 1) | (1 << 2) | (1 << 5)
 KDA_PREPARATION_L1_BYTES_PER_CORE = 320 * 1024
 # With the entry correction, the summary's emitted output terms also live in L1 next to the chunk terms, which then
 # fit Kimi-K3's per-chip workload on 11x10 and 12x10 grids.
-KDA_PREPARATION_WITH_ENTRY_CORRECTION_L1_BYTES_PER_CORE = 280 * 1024
+KDA_RELAY_PREPARATION_L1_BYTES_PER_CORE = 280 * 1024
 # The decay gate stays in interleaved L1 from its projection until chunk preparation has read it when its share of
 # each worker core fits this budget (32 KiB for Kimi-K3 on Galaxy SP8xTP4); larger geometries keep it in DRAM.
 KDA_DECAY_L1_BYTES_PER_CORE = 48 * 1024
@@ -49,9 +49,6 @@ KDA_NORM_OUTPUT_L1_BYTES_PER_CORE = 48 * 1024
 # The output projection's partial sums stay in interleaved L1 until the TP reduce-scatter reads them when each core's
 # share fits this budget (75 KiB for Kimi-K3 on Galaxy SP8xTP4); larger geometries keep them in DRAM.
 KDA_PARTIAL_OUTPUT_L1_BYTES_PER_CORE = 96 * 1024
-# The bounded gate's FP32 logits stay in interleaved L1 between the decay projection and the offset add when each core's
-# share fits this budget (64 KiB for Kimi-K3 on Galaxy SP8xTP4); larger geometries keep them in DRAM.
-KDA_DECAY_LOGITS_L1_BYTES_PER_CORE = 64 * 1024
 KDA_LOCAL_PREFIX_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
 KDA_OUTPUT_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 
@@ -110,14 +107,16 @@ class KDARecurrenceProgramConfig:
     # Exact number of chunks per group. Construction validates divisibility and
     # worker capacity; execution never silently changes an explicit configuration.
     summary_group_chunks: int = 20
-    affine_prefix_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2
+    # None keeps each path's own: HiFi3 for the SP relay (its gated norm needs it; it rejects less), HiFi2 for the
+    # single-rank affine scan.
+    affine_prefix_math_fidelity: ttnn.MathFidelity | None = None
     scan_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2
-    # With sequence parallelism and one group per head, the SP prefix is a relay along the SP axis (RelayAffinePrefix):
+    # With sequence parallelism and one group per head, the SP prefix is a relay along the SP axis (RelayChunkScan):
     # each rank applies its own summary to the entry state it receives and forwards the result. The summary also emits
-    # each chunk's output terms, and an EntryCorrection program forms the chunk outputs and the final state from the
-    # entry states, all chunks in parallel. Cores the entry correction may use: its products count toward the Blackhole
-    # di/dt bound.
-    entry_correction_max_cores: int = 110
+    # each chunk's output terms, from which the relay's program forms the chunk outputs once the entry state lands, all
+    # chunks in parallel (the entry correction). Cores the relay may use (its heads' cores, so the cores per head): its
+    # products count toward the Blackhole di/dt bound.
+    relay_max_cores: int = 110
 
     def __post_init__(self) -> None:
         if self.local_scan_strategy not in ("direct", "grouped"):
@@ -246,8 +245,7 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
             local_scan_strategy="grouped",
             summary_group_chunks=group_chunks[active_seq_len_local],
             # HiFi3, not HiFi2: HiFi2 keeps only SrcB's 6 explicit mantissa bits, which biases the FP32 state products
-            # low over long sequences. With SP these are the relay's hop (affine prefix) and the entry correction
-            # (scan).
+            # low over long sequences. With SP these are the relay's hop and entry correction (affine prefix).
             scan_math_fidelity=ttnn.MathFidelity.HiFi3,
             affine_prefix_math_fidelity=ttnn.MathFidelity.HiFi3,
         ),
@@ -271,7 +269,7 @@ _DECAY_OUT_BLOCK_TILES = 32
 
 
 def decay_projection_program_config(
-    grid: ttnn.CoreCoord, rows: int, key_dim: int, width: int
+    grid: ttnn.CoreCoord, rows: int, key_dim: int, width: int, fused_activation: ttnn.UnaryWithParam | None = None
 ) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
     """Spread the decay projection's [rows, key_dim] x [key_dim, width] output over the whole worker grid.
 
@@ -297,6 +295,6 @@ def decay_projection_program_config(
         per_core_M=per_core_M,
         per_core_N=per_core_N,
         transpose_mcast=False,
-        fused_activation=None,
+        fused_activation=fused_activation,
         fuse_batch=True,
     )
