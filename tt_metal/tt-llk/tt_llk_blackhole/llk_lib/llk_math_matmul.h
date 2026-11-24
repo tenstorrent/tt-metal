@@ -12,6 +12,8 @@
 #include "cmath_common.h"
 #include "llk_assert.h"
 #include "llk_math_common.h"
+#include "tensor_shape.h"
+#include "tensor_shape_coverage_math.h"
 
 #ifndef HF
 #define HF 0
@@ -824,14 +826,13 @@ inline void matmul_configure_mop_throttled(
  *         MOP. Pairing them with a tile the throttled MOP does not support wedges the math thread.
  * @tparam ROW_MOP: Build the row MOP of @ref matmul_runs_row_mop (ignored when THROTTLE_LEVEL > 0); also programs
  *         ADDR_MOD_3 and ADDR_MOD_6.
- * @param in0_tile_r_dim: Row dimension of an in0 tile.
- * @param in0_tile_c_dim: Column dimension of an in0 tile.
- * @param in1_tile_r_dim: Row dimension of an in1 tile.
- * @param in1_tile_c_dim: Column dimension of an in1 tile.
- * @param partial_face: True when the tile has fewer than the full set of faces.
+ * @param in0_tensor_shape: Tile shape of in0 (loaded to SrcB). in0 faces shorter than 16 rows (1/2/4/8x32 tiles)
+ *        use the partial-face MVMUL sequence.
+ * @param in1_tensor_shape: Tile shape of in1 (loaded to SrcA).
  * @param transpose: Non-zero to transpose in1 faces during the multiply.
  * @param ct_dim: Number of column tiles in the output block.
  * @param rt_dim: Number of row tiles in the output block.
+ * @note Asserts the in0 x in1 pair with @ref matmul_supports_tensor_shapes (when LLK asserts are on).
  * @note On the unpack thread, pair with @ref _llk_unpack_AB_matmul_init_ which feeds SrcA/SrcB.
  * @note @ref _llk_math_matmul_ runs the configured matmul with matching template args (with the row MOP, also this
  *       init's ct_dim and rt_dim).
@@ -841,17 +842,26 @@ inline void matmul_configure_mop_throttled(
  */
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0, bool ROW_MOP = false>
 inline void _llk_math_matmul_init_(
-    const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
-    const std::uint32_t in0_tile_c_dim = TILE_C_DIM,
-    const std::uint32_t in1_tile_r_dim = TILE_R_DIM,
-    const std::uint32_t in1_tile_c_dim = TILE_C_DIM,
-    const bool partial_face            = false,
-    const std::uint32_t transpose      = 0,
-    const std::uint32_t ct_dim         = 1,
-    const std::uint32_t rt_dim         = 1)
+    const ckernel::TensorShape in0_tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE,
+    const ckernel::TensorShape in1_tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE,
+    const std::uint32_t transpose               = 0,
+    const std::uint32_t ct_dim                  = 1,
+    const std::uint32_t rt_dim                  = 1)
 {
+    LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_matmul_init_", in0_tensor_shape);
+    LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_matmul_init_", in1_tensor_shape);
+    LLK_ASSERT(matmul_supports_tensor_shapes(in0_tensor_shape, in1_tensor_shape), "matmul does not support this in0 x in1 tile-shape pair");
+    const std::uint32_t in0_tile_r_dim = in0_tensor_shape.total_row_dim();
+    const std::uint32_t in0_tile_c_dim = in0_tensor_shape.total_col_dim();
+    const std::uint32_t in1_tile_r_dim = in1_tensor_shape.total_row_dim();
+    const std::uint32_t in1_tile_c_dim = in1_tensor_shape.total_col_dim();
+    const bool partial_face            = in0_tensor_shape.face_r_dim < FACE_R_DIM;
+
     // in1=32x16 NOT supported with transpose (no addr_mod handling)
     LLK_ASSERT(!(transpose && (in1_tile_r_dim == TILE_R_DIM) && (in1_tile_c_dim == FACE_C_DIM)), "Transpose with input 1 dimensions 32x16 not supported");
+    // in1=16x32 with transpose: K is in1 columns, so the pair passes matmul_supports_tensor_shapes, but the addr mods
+    // step SrcA by 32 rows past the 16 the tile fills (stale SrcA, silently wrong)
+    LLK_ASSERT(!(transpose && (in1_tile_r_dim == FACE_R_DIM) && (in1_tile_c_dim == TILE_C_DIM)), "Transpose with input 1 dimensions 16x32 not supported");
 
     constexpr bool row_mop = matmul_runs_row_mop<THROTTLE_LEVEL, ROW_MOP>();
     if constexpr (row_mop)

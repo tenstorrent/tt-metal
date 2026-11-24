@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "llk_math_common_api.h"
 #include "llk_math_matmul.h"
 #include "sanitizer/api.h"
@@ -22,13 +23,6 @@ inline void llk_math_matmul_init(
     const std::uint32_t in0_id = get_operand_id(operandA);
     const std::uint32_t in1_id = get_operand_id(operandB);
 
-    const std::uint32_t in0_tile_r_dim = get_operand_tile_r_dim(in0_id);
-    const std::uint32_t in0_tile_c_dim = get_operand_tile_c_dim(in0_id);
-    const std::uint32_t in1_tile_r_dim = get_operand_tile_r_dim(in1_id);
-    const std::uint32_t in1_tile_c_dim = get_operand_tile_c_dim(in1_id);
-
-    const bool partial_face = (in0_tile_r_dim < FACE_R_DIM);
-
     // In0/operandA -> srcB, In1/operandB -> srcA
     SAN_HOOK(init<OperationFpuMatmul>(
         StateVal<OperationFpuMatmul::MathFidelity>(to_underlying(math_fidelity)),
@@ -37,14 +31,14 @@ inline void llk_math_matmul_init(
         StateVal<OperationFpuMatmul::RtDim>(rt_dim),
         StateVal<Operand<Exu::Fpu>::Format>(unpack_dst_format[in1_id]),
         StateDiscard<std::uint32_t>(transpose),
-        StateDiscard<std::uint32_t>(in0_tile_r_dim),
-        StateDiscard<std::uint32_t>(in0_tile_c_dim),
-        StateDiscard<std::uint32_t>(in1_tile_r_dim),
-        StateDiscard<std::uint32_t>(in1_tile_c_dim),
-        StateDiscard<bool>(partial_face)));
+        StateDiscard<std::uint32_t>(get_operand_tile_r_dim(in0_id)),
+        StateDiscard<std::uint32_t>(get_operand_tile_c_dim(in0_id)),
+        StateDiscard<std::uint32_t>(get_operand_tile_r_dim(in1_id)),
+        StateDiscard<std::uint32_t>(get_operand_tile_c_dim(in1_id)),
+        StateDiscard<bool>(get_operand_tile_r_dim(in0_id) < FACE_R_DIM)));
 
     _llk_math_matmul_init_<math_fidelity, THROTTLE_LEVEL, ROW_MOP>(
-        in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face, transpose, ct_dim, rt_dim);
+        get_operand_tensor_shape(in0_id), get_operand_tensor_shape(in1_id), transpose, ct_dim, rt_dim);
 }
 
 template <
@@ -52,7 +46,8 @@ template <
     int THROTTLE_LEVEL = 0,
     bool ROW_MOP = false,
     std::uint32_t num_faces = 4 /*not used*/>
-inline void llk_math_matmul(const uint dst_index, const std::uint32_t ct_dim = 1, const std::uint32_t rt_dim = 1) {
+inline void llk_math_matmul(
+    const std::uint32_t dst_index, const std::uint32_t ct_dim = 1, const std::uint32_t rt_dim = 1) {
     static_assert(num_faces == 4, "num_faces other than 4 is not supported in llk_math_matmul");
     LLK_ASSERT(
         (ckernel::math::get_dest_max_matmul_tiles(dst_index, ct_dim, rt_dim) <
@@ -74,7 +69,7 @@ inline void llk_math_matmul(const uint dst_index, const std::uint32_t ct_dim = 1
         StateVal<OperationFpuMatmul::ThrottleLevel>(THROTTLE_LEVEL),
         StateVal<OperationFpuMatmul::CtDim>(ct_dim),
         StateVal<OperationFpuMatmul::RtDim>(rt_dim),
-        StateDiscard<uint>(dst_index)));
+        StateDiscard<std::uint32_t>(dst_index)));
 
     _llk_math_matmul_<math_fidelity, THROTTLE_LEVEL, ROW_MOP>(dst_index, ct_dim, rt_dim);
 }

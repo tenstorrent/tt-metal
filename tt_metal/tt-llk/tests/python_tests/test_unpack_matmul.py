@@ -4,6 +4,7 @@
 import pytest
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
+    FACE_DIM,
     MatmulGolden,
     TransposeGolden,
     get_golden_generator,
@@ -15,7 +16,13 @@ from helpers.llk_params import (
     StochasticRounding,
     Transpose,
 )
-from helpers.matmul_sweep import sweep_matmul, sweep_tiny_tiles_matmul
+from helpers.matmul_sweep import (
+    MATMUL_TILE_SHAPE_PAIRS,
+    MATMUL_TINY_IN0_PAIRS,
+    sweep_matmul,
+    sweep_matmul_tile_shape_pairs,
+    sweep_tiny_tiles_matmul,
+)
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import convert_to_l1_view, generate_face_matmul_data
@@ -69,6 +76,14 @@ TINY_TILES_MATMUL_COMBINATIONS = sweep_tiny_tiles_matmul(
     DEST_SYNC_MODES,
 )
 
+# Explicit in0 x in1 tile-shape pairs on top of the tiny-tile sweep (see MATMUL_TILE_SHAPE_PAIRS),
+# and tiny in0 with more than one K tile.
+TINY_TILES_MATMUL_COMBINATIONS += sweep_matmul_tile_shape_pairs(
+    MATMUL_FORMATS, DEST_ACC_MODES, MATMUL_TILE_SHAPE_PAIRS
+) + sweep_matmul_tile_shape_pairs(
+    MATMUL_FORMATS, DEST_ACC_MODES, MATMUL_TINY_IN0_PAIRS, kt_dims=(2,)
+)
+
 
 @pytest.mark.nightly
 @parametrize(
@@ -101,15 +116,15 @@ def test_unpack_matmul(
         num_faces=num_faces_in0,
         stimuli_format=formats.input_format,
         input_dimensions=in0_dimensions,  # This will generate the right number of tiles
-        is_matrix_A=True,  # input 0 (SrcB) uses f0,f1 for 2-face mode
-        face_r_dim=(in0_tile_r_dim if in0_tile_r_dim < 16 else 16),
+        wide_tile=in0_tile_c_dim > FACE_DIM,
+        face_r_dim=(in0_tile_r_dim if in0_tile_r_dim < 16 else FACE_DIM),
     )
 
     in1 = generate_face_matmul_data(
         num_faces=num_faces_in1,
         stimuli_format=formats.input_format,
         input_dimensions=in1_dimensions,  # This will generate the right number of tiles
-        is_matrix_A=False,  # input 1 (SrcA) uses f0,f2 for 2-face mode
+        wide_tile=in1_tile_c_dim > FACE_DIM,
     )
 
     in1_golden = in1
