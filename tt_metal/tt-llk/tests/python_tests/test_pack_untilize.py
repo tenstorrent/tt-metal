@@ -70,6 +70,7 @@ def test_pack_untilize(
     block_ct_dim=None,
     compile_time_formats=False,
     benchmark=PackUntilizeBenchmark.Functional,
+    production_pack_src=None,
 ):
     if run_types is None:
         run_types = [PerfRunType.L1_TO_L1]
@@ -172,7 +173,13 @@ def test_pack_untilize(
             ),
             DEST_SYNC(dest_sync),
             TILE_DST_CT_OFFSET(tile_dst_ct_offset),
-            PACK_SRC_FROM_OUTPUT(),
+            # Production's packer input (data_format.cpp) for the functional runs and perf_pack_untilize_prod; perf_pack_untilize
+            # keeps main's, so the perf gate compares the same configuration.
+            *(
+                [PACK_SRC_FROM_OUTPUT()]
+                if (not is_perf if production_pack_src is None else production_pack_src)
+                else []
+            ),
             PACK_UNTILIZE_BENCHMARK(benchmark),
             NUM_FACES(4),
             LOOP_FACTOR(loop_factor),
