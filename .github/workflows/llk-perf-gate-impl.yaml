@@ -86,6 +86,20 @@ on:
         required: false
         default: true
         type: boolean
+      require_full_coverage:
+        description: >-
+          Fail the job when a generated point has no baseline, or a baseline point
+          was not measured.
+        required: false
+        default: false
+        type: boolean
+      fail_without_baseline:
+        description: >-
+          Fail the job when no baseline is found, because the gate then compares nothing.
+          False skips the gate with a warning.
+        required: false
+        default: false
+        type: boolean
       slack:
         description: "Post the verdict to the LLK regressions channel"
         required: false
@@ -97,19 +111,16 @@ on:
         default: true
         type: boolean
       threshold:
-        description: "Relative slowdown counting as a regression (BH 0.02, WH 0.13)"
-        required: false
-        default: "0.02"
+        description: "Relative slowdown counting as a regression, from tt_metal/tt-llk/perf/gate_policy.json"
+        required: true
         type: string
       module_thresholds:
         description: "Per-module thresholds, comma-separated, e.g. perf_matmul=0.25"
-        required: false
-        default: ""
+        required: true
         type: string
       min_cycles:
         description: "A point must also move more than this many cycles"
-        required: false
-        default: "30"
+        required: true
         type: string
       gate_name:
         description: "Name of the gate in the Slack message"
@@ -249,8 +260,6 @@ jobs:
           LLK_PERF_WAREHOUSE_TABLE: >-
             ${{ inputs.warehouse_table || vars.LLK_PERF_WAREHOUSE_TABLE }}
         run: |
-          # Gate verdict says why there is no verdict.
-          [ -n "$SNOWFLAKE_PRIVATE_KEY" ] || exit 0
           COMMITS_ARG=()
           if [ -n "$MATCH_REF" ]; then
             # Commits and trees only: enough for the merge base and the 200 commits before it.
@@ -441,6 +450,7 @@ jobs:
           THRESHOLD: ${{ inputs.threshold }}
           MIN_CYCLES: ${{ inputs.min_cycles }}
           MODULE_THRESHOLDS: ${{ inputs.module_thresholds }}
+          REQUIRE_FULL_COVERAGE: ${{ inputs.require_full_coverage }}
           BASELINE_LABEL: >-
             ${{ inputs.baseline_artifact_pattern && 'branch point on main'
                 || inputs.baseline_pipeline == 'merge_baseline' && 'merge baseline'
@@ -452,7 +462,10 @@ jobs:
             BASELINE_LABEL="${BASELINE_LABEL}, stale"
           fi
 
+          COVERAGE_ARG=()
+          [ "$REQUIRE_FULL_COVERAGE" = "true" ] && COVERAGE_ARG=(--require-full-coverage)
           python3 ${{ env.LLK_PATH }}/perf/regression_compare.py \
+            "${COVERAGE_ARG[@]}" \
             --current 'current_perf/**/*.csv' \
             --baseline 'baseline_perf/**/*.csv' \
             --run-types "$RUN_TYPES" \
@@ -695,7 +708,7 @@ jobs:
           ARCH: ${{ inputs.arch }}
           MEASURE_REASON: ${{ steps.measured.outputs.reason }}
           COMPARISON_FINISHED: ${{ steps.compare.outputs.comparison_finished }}
-          HAVE_WAREHOUSE_KEY: ${{ secrets.SWEEPS_SNOWFLAKE_KEY != '' }}
+          FAIL_WITHOUT_BASELINE: ${{ inputs.fail_without_baseline }}
         run: |
           # The exit code and what kind of verdict it is: pass, regression, incomplete or no-compare.
           KIND=no-compare
@@ -716,16 +729,18 @@ jobs:
           fi
 
           if [ ! -f have_baseline.txt ]; then
-            if [ "$HAVE_WAREHOUSE_KEY" != "true" ]; then
-              echo "::warning::SWEEPS_SNOWFLAKE_KEY is empty, so the gate cannot read the baseline. No verdict; the job does not fail."
-              exit 0
-            fi
             echo "::error::The baseline read did not finish, so the gate has no verdict."
             echo "This is an infrastructure fault, not a performance result."
             exit 1
           fi
           if [ "$HAVE_BASELINE" != "true" ]; then
-            echo "::warning::No baseline found, so the gate compared nothing. No verdict; the job does not fail."
+            if [ "$FAIL_WITHOUT_BASELINE" = "true" ]; then
+              echo "::error::No baseline found, so the gate compared nothing."
+              echo "This is a missing baseline in the warehouse, not a performance result."
+              exit 1
+            fi
+            KIND=pass
+            echo "⚠️  No baseline found; gate skipped (first run or data missing)"
             exit 0
           fi
 
@@ -733,6 +748,13 @@ jobs:
           if [ "$COMPARISON_FINISHED" != "true" ]; then
             echo "::error::The comparison did not finish, so the gate has no verdict."
             echo "This is an infrastructure fault, not a performance result."
+            exit 1
+          fi
+
+          if [ "$EXIT_CODE" = "2" ]; then
+            KIND=incomplete
+            echo "::error::The gate did not compare every point, so its verdict covers only part of the run."
+            cat perf_gate_report.md
             exit 1
           fi
 

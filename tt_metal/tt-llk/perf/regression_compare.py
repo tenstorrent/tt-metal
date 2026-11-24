@@ -227,7 +227,7 @@ def compare_runs(
 ):
     """Median-vs-median comparison.
 
-    Returns ``{records, regressions, improvements, new_points, noise_filtered}``.
+    Returns ``{records, regressions, improvements, new_points, missing_points, noise_filtered}``.
     ``delta`` is the fractional change vs baseline (0.12 = 12% slower, -0.12 = 12%
     faster) and ``abs_delta`` is the same change in cycles. A regression needs
     ``delta > threshold`` AND ``abs_delta > min_cycles``; an improvement is the
@@ -284,13 +284,46 @@ def compare_runs(
             regressions.append(record)
         elif record["improvement"]:
             improvements.append(record)
+    missing_points = []
+    for key, mean_col in base:
+        if (key, mean_col) in cur:
+            continue
+        marker, config = key
+        missing_points.append(
+            {
+                "marker": marker,
+                "run_type": _run_type_of(mean_col),
+                "config": config,
+                MODULE_COL: dict(config).get(MODULE_COL, ""),
+            }
+        )
     return {
         "records": records,
         "regressions": regressions,
         "improvements": improvements,
         "new_points": new_points,
+        "missing_points": missing_points,
         "noise_filtered": noise_filtered,
     }
+
+
+def coverage_gap(result):
+    """``(unmatched current, unmatched baseline, added modules, removed modules)``.
+
+    A module on one side only is the suite changing: a test added or removed.
+    A module on both sides with points that did not match is a gap the gate
+    cannot vouch for, whether a leg was lost or a sweep changed shape.
+    """
+    compared = {r[MODULE_COL] for r in result["records"]}
+    current = compared | {p[MODULE_COL] for p in result["new_points"]}
+    baseline = compared | {p[MODULE_COL] for p in result["missing_points"]}
+    shared = current & baseline
+    return (
+        [p for p in result["new_points"] if p[MODULE_COL] in shared],
+        [p for p in result["missing_points"] if p[MODULE_COL] in shared],
+        sorted(current - baseline),
+        sorted(baseline - current),
+    )
 
 
 _TOP_N = 25
@@ -425,7 +458,8 @@ def render_report(
         f"- {len(result['records'])} points compared, "
         f"**{len(regs)} regressed point(s) in {len(reg_groups)} finding(s)**, "
         f"{len(imps)} improved point(s) in {len(imp_groups)} finding(s), "
-        f"{len(result['new_points'])} new point(s)",
+        f"{len(result['new_points'])} new point(s), "
+        f"{len(result['missing_points'])} point(s) the baseline has and this run does not",
     ]
     filtered = result.get("noise_filtered", 0)
     if filtered:
@@ -541,6 +575,11 @@ def main(argv=None):
         default="",
         help="per-module thresholds, e.g. perf_matmul=0.25,perf_math_matmul=0.25",
     )
+    ap.add_argument(
+        "--require-full-coverage",
+        action="store_true",
+        help="fail when a point on either side was not compared",
+    )
     ap.add_argument("--report", default="regression_report.md")
     ap.add_argument("--test", default="?")
     ap.add_argument("--arch", help="named in the title and the verdict")
@@ -615,9 +654,24 @@ def main(argv=None):
                 "status": "regressed" if result["regressions"] else "clean",
                 "regressions": len(result["regressions"]),
                 "points": len(result["records"]),
+                "new_points": len(result["new_points"]),
+                "missing_points": len(result["missing_points"]),
             },
             fh,
         )
+    gap_new, gap_missing, added, removed = coverage_gap(result)
+    if added or removed:
+        print(
+            f"Suite changed: {len(added)} module(s) added {added}, "
+            f"{len(removed)} removed {removed}. Their points are reported, not compared."
+        )
+    if a.require_full_coverage and (gap_new or gap_missing):
+        print(
+            f"\u274c {len(gap_new)} point(s) have no baseline and "
+            f"{len(gap_missing)} baseline point(s) were not measured, in modules both "
+            f"sides ran. {len(result['records'])} point(s) compared."
+        )
+        raise SystemExit(2)
     # exit non-zero if regressions, so the skill/CI can gate on it
     raise SystemExit(1 if result["regressions"] else 0)
 
