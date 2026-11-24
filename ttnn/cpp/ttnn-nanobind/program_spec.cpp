@@ -617,7 +617,7 @@ void bind_hardware_configs(nb::module_& mod) {
                     .unpack_modes = std::move(unpack_modes),
                     .config_1xx = config_1xx,
                     .config_12x = config_12x,
-                    .config_2xx = config_2xx};
+                    .config_2xx = std::move(config_2xx)};
             },
             nb::kw_only(),
             nb::arg("fpu_math_fidelity") = compute_defaults.fpu_math_fidelity,
