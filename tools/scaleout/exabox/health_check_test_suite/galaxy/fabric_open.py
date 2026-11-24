@@ -16,7 +16,7 @@ runs it after its delay and reads the PCIe tree after it.
 (dram_dbi.dbi_check, G3b's check: every chip's DRAM banks written, copied on the device and read back) for S s, so DRAM
 is checked right after the C9 reset too, as the Deployment Test does after each reset; its row has event "dbi", its
 finding lines (chunk_sched.dbi_lines: NUMERIC FAIL per chip by BDF, tray and worst DRAM bank, NUMERIC WARN when it
-raised, one summary line) go to --dbi-out.
+raised, one summary line) go to dbi.txt beside --rows.
 Exit 0 opened, gathered and closed, 1 anything failed: the row's error reads 'MESH 4x8 <stage>: <first error line>'."""
 import argparse
 import json
@@ -43,7 +43,6 @@ ap.add_argument(
 ap.add_argument(
     "--dbi-wall-s", type=float, default=0, help="DRAM byte/DBI pattern check after the CCL, wall cap s; 0 off"
 )
-ap.add_argument("--dbi-out", default="", help="--dbi-wall-s's finding lines, one per line (default: beside --rows)")
 a = ap.parse_args()
 rows = open(a.rows, "a")
 
@@ -118,7 +117,7 @@ def dbi_check():
     row(event="dbi", **r)
     try:
         lines, _ = dbi_lines(r, 0, at="after the end reset's glx_reset", name="C9")
-        out = a.dbi_out or os.path.join(os.path.dirname(os.path.abspath(a.rows)), "dbi.txt")
+        out = os.path.join(os.path.dirname(os.path.abspath(a.rows)), "dbi.txt")
         with open(out, "w") as f:
             f.write("".join(ln + "\n" for ln in lines))
         for ln in lines:
