@@ -1325,14 +1325,23 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                             tile_regs_acquire();
                             reconfig_data_format_srca(out_cb);
                             copy_init(out_cb);
-                            const uint32_t rbase = (read_row + r) * 2 * vDHt + j;
+                            const uint32_t rbase = (read_row + r) * sdpa_out_stride * vDHt + j;
                             copy_tile(out_cb, rbase, 0);
                             if (pair) {
                                 copy_tile(out_cb, rbase + 1, 1);
                             }
-                            copy_tile(out_cb, rbase + vDHt, pair ? 2 : 1);
-                            if (pair) {
-                                copy_tile(out_cb, rbase + vDHt + 1, 3);
+                            if constexpr (!recipe::pv_scratch) {
+                                copy_tile(out_cb, rbase + vDHt, pair ? 2 : 1);
+                                if (pair) {
+                                    copy_tile(out_cb, rbase + vDHt + 1, 3);
+                                }
+                            } else {
+                                // The chunk PV in the scratch CB's row of the step (O's format).
+                                const uint32_t pbase = (g * qkt_subblock_h + r) * vDHt + j;
+                                copy_tile(recipe::pv_scratch_cb, pbase, pair ? 2 : 1);
+                                if (pair) {
+                                    copy_tile(recipe::pv_scratch_cb, pbase + 1, 3);
+                                }
                             }
                             reconfig_data_format_srca(cb_exp_max_diff);
                             unary_bcast_init<BroadcastType::COL>(cb_exp_max_diff);
@@ -1361,7 +1370,7 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                             pack_reconfig_data_format(out_cb);
                             configure_single_tile_pack(out_cb);
                             PACK((llk_pack_reconfig_l1_acc(0)));
-                            const uint32_t wbase = r * 2 * vDHt + j;
+                            const uint32_t wbase = r * sdpa_out_stride * vDHt + j;
                             pack_tile<true>(0, out_cb, wbase);
                             if (pair) {
                                 pack_tile<true>(1, out_cb, wbase + 1);
@@ -1458,6 +1467,21 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                                     KT_stride,
                                     /*skip_pack_configure=*/true,
                                     /*pv_l1_acc=*/kt_sub > 0 || inplace_numerator);
+                            } else if constexpr (recipe::pv_scratch) {
+                                // A changed group's chunk PV goes to the scratch CB, at its rows in the step.
+                                blocked_matmul_and_pack<false, v_in1_stride, vDHt>(
+                                    cb_qkt_im,
+                                    cb_v_in,
+                                    pv_plane_offset(0) != 0 ? recipe::pv_scratch_cb : out_cb,
+                                    qktv_in0_index_offset + pv_inner_offset,
+                                    qktv_in1_index,
+                                    0,
+                                    v_subblock * qktv_subblock_w,
+                                    qktv_subblock_w,
+                                    first_h,
+                                    matmul_inner,
+                                    KT_stride,
+                                    /*skip_pack_configure=*/true);
                             } else {
                                 blocked_matmul_and_pack<false, v_in1_stride, vDHt>(
                                     cb_qkt_im,
@@ -1701,6 +1725,24 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                             KT_stride,
                             /*skip_pack_configure=*/true,
                             /*pv_l1_acc=*/inplace_numerator);
+                    } else if constexpr (recipe::pv_scratch) {
+                        // A changed group's chunk PV goes to the scratch CB at its rows in the step (the CB is never
+                        // pushed); O's rows count from O's write pointer (the pushed groups).
+                        const bool to_scratch = pv_plane_offset(q_subblock) != 0;
+                        const uint32_t row = to_scratch ? q_subblock : w_q;
+                        blocked_matmul_and_pack<false, v_in1_stride, vDHt>(
+                            cb_qkt_im,
+                            cb_v_in,
+                            to_scratch ? recipe::pv_scratch_cb : out_cb,
+                            qktv_in0_index_offset,
+                            qktv_in1_index,
+                            cur_h == qktv_h ? row : row * qktv_h,
+                            v_subblock * qktv_subblock_w,
+                            qktv_subblock_w,
+                            cur_h,
+                            active_Sk,
+                            KT_stride,
+                            /*skip_pack_configure=*/true);
                     } else {
                         blocked_matmul_and_pack<false, v_in1_stride, vDHt>(
                             cb_qkt_im,

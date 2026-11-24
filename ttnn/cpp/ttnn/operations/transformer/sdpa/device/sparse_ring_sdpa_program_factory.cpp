@@ -840,7 +840,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
                 case recipe_ring_cb::q: cb.total_size = Sq_chunk_t * DHt * slots * page; break;
                 case recipe_ring_cb::k: cb.total_size = k_piece_tiles * kv_pages * page; break;
                 case recipe_ring_cb::v: cb.total_size = v_piece_tiles * kv_pages * page; break;
-                case recipe_ring_cb::out_b: cb.total_size = Sq_chunk_t * vDHt * 2 * slots * page; break;
+                case recipe_ring_cb::out_b: cb.total_size = Sq_chunk_t * vDHt * slots * page; break;
                 case recipe_ring_cb::sum_b: cb.total_size = Sq_chunk_t * slots * page; break;
                 case recipe_ring_cb::max_a: cb.total_size = Sq_chunk_t * slots * page; break;
                 case recipe_ring_cb::out:
@@ -860,6 +860,13 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
                     .buffer_index = static_cast<uint8_t>(id), .data_format = df, .page_size = page_size}}},
             });
         };
+        // The changed groups' chunk PV (recipe_pv_scratch_cb), at their rows in the step: a fused redo's group (the
+        // BF16 recipes' two-row groups) or a pooled step's block (its reduce path), in O's Float32.
+        add_cb(
+            recipe_ring_cb::pv_scratch,
+            4096,
+            std::max(2u, pooled_route ? Sq_chunk_t : 1u) * vDHt,
+            tt::DataFormat::Float32);
         if (pooled_route) {
             add_cb(kPooledBiasCb, 2048, Sq_chunk_t * Sk_chunk_t, tt::DataFormat::Float16_b);
         }
@@ -1204,6 +1211,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     recipes::set_named_arg(recipe_args, "recipe_ring_mask", 3);
     recipes::set_named_arg(recipe_args, "recipe_ring_block_tiles", block_tiles);
     recipes::set_named_arg(recipe_args, "recipe_kv_hold", 1);
+    recipes::set_named_arg(recipe_args, "recipe_pv_scratch_cb", recipe_ring_cb::pv_scratch);
     recipes::set_named_arg(recipe_args, "recipe_mask", pooled_route ? 1u : 0u);
     recipes::set_named_arg(recipe_args, "recipe_mask_flagged", pooled_route ? 1u : 0u);
     compute_kernel.named_compile_time_args.insert(

@@ -14,6 +14,9 @@ namespace recipe_ring_cb {
 constexpr uint32_t q = 0, k = 1, v = 2, identity_scale = 3, col_identity = 4, recip_scratch = 5, qk = 6;
 constexpr uint32_t out_a = 8, out_b = 9, max_a = 10, max_b = 11, sum_a = 12, sum_b = 13, exp_max_diff = 14, out = 16;
 constexpr uint32_t checkpoint_request = 17, checkpoint_ack = 18;
+// The sparse ring's PV scratch (recipe::pv_scratch_cb; CB 7 is only the FP32 recipes' score alias, and the sparse ring
+// runs the BF16-state recipes).
+constexpr uint32_t pv_scratch = 7;
 // The attention sink's tile (reader -> compute) and the reader's derived lengths (reader -> compute).
 constexpr uint32_t sink = 19, derived = 20;
 // Exp ring: second handles on the K and V CBs for the fabric MUX writer, which pops them independently of compute.

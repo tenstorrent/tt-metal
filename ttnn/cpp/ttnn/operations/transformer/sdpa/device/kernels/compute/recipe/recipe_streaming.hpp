@@ -19,8 +19,10 @@
 #include "api/debug/kernel_profiler.hpp"
 
 // FP32 recipes: one numerator plane per query-tile row. BF16 recipes: each query-tile row holds the Float32
-// numerator (plane 0), then a changed group's chunk PV (plane 1).
-constexpr uint32_t sdpa_out_stride = recipe::fp32 ? 1 : 2;
+// numerator (plane 0), then a changed group's chunk PV (plane 1), unless that PV goes to the scratch CB
+// (recipe::pv_scratch_cb: row r of the step at tile r * vDHt; never pushed, so PACK and UNPACK address it from its
+// base).
+constexpr uint32_t sdpa_out_stride = recipe::fp32 || recipe::pv_scratch ? 1 : 2;
 // BALANCED's QK fidelity (its PV fidelity is the compute config's). On BF16 Q and K, HiFi3 measures the same
 // error as HiFi4; HiFi2 drops Q's eighth significant bit.
 constexpr auto kBalancedQkFidelity = MathFidelity::HiFi3;
@@ -263,7 +265,7 @@ ALWI void pack_contiguous_rows_nocfg(
     uint32_t row_stride,
     uint32_t col_base,
     uint32_t pack_width) {
-    if constexpr (!recipe::fp32) {
+    if constexpr (sdpa_out_stride == 2) {
         if (out_cb == 8 || out_cb == 9) {
             row_stride *= 2;
         }

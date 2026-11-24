@@ -307,6 +307,7 @@ ProgramDescriptor recipe_compute_program(
              {"recipe_ring_stream_state", 0},
              {"recipe_mask_flagged", 0},
              {"recipe_kv_hold", 0},
+             {"recipe_pv_scratch_cb", 0},
              {"recipe_k_primary_rows", 0},
              {"recipe_k_joint_rows", 0},
              {"recipe_qk_w", recipe_qk_subblock_width(k_tiles, policy)},
