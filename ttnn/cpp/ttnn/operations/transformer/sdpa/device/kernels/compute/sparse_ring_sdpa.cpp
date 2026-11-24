@@ -14,13 +14,14 @@
 // The pass's last active iteration normalizes every slot into the output CB.
 //
 // Slot states: the recipe state banks (recipe_ring_cbs.hpp) hold one region per slot: O (CB 9), l (CB 13) and the
-// maxima (CB 10). A step sees its window of them as whole CBs (window_cb): the recipe step wraps the banks' pointers at
-// a CB's end. Every slot starts a pass with O = l = 0 and the masked maximum, and every step is a continuation (no
-// first chunk): a slot's first kept block takes the fused chunk's redo (recipe_ring_rows_fresh), whose rescale by
-// exp(scale (masked - m)) = 0 drops the initial state exactly. CB 11 is the steps' maxima scratch (a pooled step's
-// reduce path leaves its new maxima there; they are copied back to CB 10). The BF16-state recipes only (STANDARD,
-// FAST): the FP32 ones keep O and l pushed between chunks. K and V stay in their CBs over a piece's steps
-// (recipe_kv_hold); the kernel pops them after the piece.
+// maxima (CB 10). A changed group's chunk PV (the redo, a pooled step's reduce path) goes to the step-sized scratch CB
+// (recipe::pv_scratch_cb), so a slot's O region is one plane. A step sees its window of them as whole CBs (window_cb):
+// the recipe step wraps the banks' pointers at a CB's end. Every slot starts a pass with O = l = 0 and the masked
+// maximum, and every step is a continuation (no first chunk): a slot's first kept block takes the fused chunk's redo
+// (recipe_ring_rows_fresh), whose rescale by exp(scale (masked - m)) = 0 drops the initial state exactly. CB 11 is the
+// steps' maxima scratch (a pooled step's reduce path leaves its new maxima there; they are copied back to CB 10). The
+// BF16-state recipes only (STANDARD, FAST): the FP32 ones keep O and l pushed between chunks. K and V stay in their CBs
+// over a piece's steps (recipe_kv_hold); the kernel pops them after the piece.
 
 #include <cstdint>
 
@@ -85,7 +86,8 @@ constexpr uint32_t kMaskNb = get_named_compile_time_arg_val("mask_nb");
 constexpr uint32_t kMaskNbPad = get_named_compile_time_arg_val("mask_nb_pad");
 constexpr uint32_t kLogicalN = get_named_compile_time_arg_val("sparse_logical_n");
 // One region of the state banks per slot.
-constexpr uint32_t kOutRegionTiles = Sq_chunk_t * vDHt * 2;  // CB 9: per Q row, O then a group's chunk PV
+// CB 9: per Q row, O (a changed group's chunk PV goes to the step-sized scratch, recipe::pv_scratch_cb).
+constexpr uint32_t kOutRegionTiles = Sq_chunk_t * vDHt * sdpa_out_stride;
 constexpr uint32_t kSumRegionTiles = Sq_chunk_t;             // CB 13, and the maxima in CB 10
 constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
 constexpr uint32_t kt_entry_tiles = DHt * Sk_chunk_t;
@@ -101,6 +103,7 @@ static_assert(kBlocksPerPiece < 32, "per-row kept blocks of a piece in one word"
 static_assert(recipe::ring && recipe::ring_mask == 3 && recipe::kv_hold && !recipe::ring_stream_state);
 static_assert(recipe::ring_block_tiles == kBlockTiles, "the recipe's block mask rows are Q blocks");
 static_assert(!recipe::fp32, "the BF16-state recipes (STANDARD, FAST): one state per slot in the state banks");
+static_assert(recipe::pv_scratch_cb == pv_scratch, "the slots' O regions hold one plane per row");
 static_assert(resident_slots >= 1 && resident_slots <= 32, "per-slot bit masks");
 static_assert(stack_slots >= 1 && stack_slots <= resident_slots && kStepRows <= 32, "a step's rows fit the row masks");
 static_assert(stack_slots == 1 || kBlockTiles % 2 == 0, "stacked blocks align with the two-row groups");

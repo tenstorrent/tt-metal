@@ -56,6 +56,10 @@ constexpr bool kv_hold = get_named_compile_time_arg_val("recipe_kv_hold") != 0;
 // Joint dense recipes with unaligned key lengths: valid primary and joint key rows (0: no key tail masking).
 constexpr uint32_t k_primary_rows = get_named_compile_time_arg_val("recipe_k_primary_rows");
 constexpr uint32_t k_joint_rows = get_named_compile_time_arg_val("recipe_k_joint_rows");
+// BF16-state recipes: the CB that takes a changed group's chunk PV before it is folded into O (0: plane 1 of O's row in
+// CB 9, which then holds two planes per Q tile row). A wrapper with many resident states (the sparse ring's slots) sets
+// a separate step-sized CB, so CB 9 holds one plane per row.
+constexpr uint32_t pv_scratch_cb = get_named_compile_time_arg_val("recipe_pv_scratch_cb");
 // QK and PV matmul subblock widths: the largest of 4, 2 and 1 dividing the K chunk and the head dim.
 constexpr uint32_t qk_w = get_named_compile_time_arg_val("recipe_qk_w");
 constexpr uint32_t pv_w = get_named_compile_time_arg_val("recipe_pv_w");
@@ -65,6 +69,8 @@ constexpr uint32_t pv_fold = get_named_compile_time_arg_val("recipe_pv_fold");
 
 constexpr bool k_tail = k_primary_rows > 0;
 constexpr bool sink = sink_cb != 0;
+constexpr bool pv_scratch = pv_scratch_cb != 0;
+static_assert(!pv_scratch || !fp32, "the PV scratch replaces the BF16-state recipes' second O plane");
 // Fused chunks run without an attn_mask (a masked build keeps every chunk on the reduce path); key-range calls mask
 // only their edge K chunks, so their full chunks stay fused.
 constexpr bool fused_active = fused && (!mask || krange || mask_flagged);
