@@ -11,7 +11,7 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
 #include "impl/program/program_impl.hpp"
@@ -64,7 +64,7 @@ ProgramSpec MakeSpec(KernelSpec dm_kernel) {
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_GlobalSemaphoreBindingJITSmoke) {
-    Program program = MakeProgramFromSpec(*mesh_device_, MakeSpec(MakeMinimalGen1DMKernel("dm_kernel")));
+    Program program(*mesh_device_, MakeSpec(MakeMinimalGen1DMKernel("dm_kernel")));
     EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 

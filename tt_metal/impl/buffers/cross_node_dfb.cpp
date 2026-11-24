@@ -5,7 +5,7 @@
 #include <tt_stl/assert.hpp>
 #include <buffer.hpp>
 #include <buffer_types.hpp>
-#include <core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <device.hpp>
 #include "impl/dataflow_buffer/cross_node_dfb.hpp"
 #include "impl/context/metal_context.hpp"

@@ -84,6 +84,16 @@ void forward(int signal_number) {
     errno = saved_errno;
 }
 
+// This rank's number: MPI's, else tt-run's own (TT_RUN_RANK, set for a rank tt-run starts without mpirun).
+const char* rank_name() {
+    for (const char* var : {"OMPI_COMM_WORLD_RANK", "TT_RUN_RANK"}) {
+        if (const char* v = std::getenv(var); v != nullptr && *v != '\0') {
+            return v;
+        }
+    }
+    return "?";
+}
+
 // A signal's name without "SIG" (sigabbrev_np needs glibc 2.32).
 const char* signal_name(int signal_number) {
     switch (signal_number) {
@@ -488,7 +498,7 @@ int main(int argc, char** argv) {
             std::fprintf(
                 stderr,
                 "[tt-run-rank] rank %s: the daemon that started it (pid %d) is gone; stopping the rank (SIGTERM)\n",
-                std::getenv("OMPI_COMM_WORLD_RANK") != nullptr ? std::getenv("OMPI_COMM_WORLD_RANK") : "?",
+                rank_name(),
                 static_cast<int>(daemon));
             forward(SIGTERM);
         } else if (orphaned_ticks >= 0) {
@@ -505,7 +515,7 @@ int main(int argc, char** argv) {
                 std::fprintf(
                     stderr,
                     "[tt-run-rank] rank %s was still writing a core dump %s; ending it (core cut short)\n",
-                    std::getenv("OMPI_COMM_WORLD_RANK") != nullptr ? std::getenv("OMPI_COMM_WORLD_RANK") : "?",
+                    rank_name(),
                     g_stop_signal != 0 ? "when the job stopped" : "10 s after it crashed");
                 ::kill(child, SIGKILL);
                 dump_ended = true;
@@ -544,7 +554,7 @@ int main(int argc, char** argv) {
 
     // The program died, or failed without stopping the job: stop it in its place.
     ::signal(SIGTERM, SIG_IGN);  // our own broadcast comes back to this rank
-    const char* rank = std::getenv("OMPI_COMM_WORLD_RANK");
+    const char* rank = rank_name();
     char host[256] = "?";
     ::gethostname(host, sizeof host - 1);
     std::string how;

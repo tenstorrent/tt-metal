@@ -78,8 +78,8 @@ concept ProgramDescriptorFactoryConcept = (requires { &T::create_descriptor; } |
 // Metal 2.0 factory concept: factories that return
 // ProgramArtifacts (a ProgramSpec + ProgramRunArgs + any op-owned tensors) from
 // create_program_artifacts. The framework adapter maps that same ProgramSpec onto
-// tensor_coords via tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs on cache miss, and
-// patches every TensorArg (io and op-owned alike) via tt::tt_metal::experimental::UpdateTensorArgs
+// tensor_coords via the MeshWorkload constructor on cache miss, and
+// patches every TensorArg (io and op-owned alike) via Program::update_tensor_args
 // on cache hit.
 //
 // NOTE: Each TensorArgument in ProgramRunArgs MUST reference a MeshTensor reachable from
@@ -124,6 +124,10 @@ concept HasRangeRunArgsOverride = requires {
         typename static_fn_return<decltype(&T::override_runtime_arguments)>::type,
         ttnn::device_operation::RangeRunArgs>;
 };
+
+// True iff T maps its TTNN command-list parameters, which a recording binds through the cache miss's tensor bindings.
+template <typename T>
+concept MapsCmdListParameters = requires { &T::map_cmd_list_parameters; };
 }  // namespace detail
 
 // A factory whose programs vary across the mesh: one call returns the workload-scoped resources
@@ -159,9 +163,9 @@ concept ProgramSpecFactoryConcept =
     !ProgramDescriptorFactoryConcept<T> && !MeshWorkloadSpecFactoryConcept<T> && !detail::HasSpecRuntimeArgsOverride<T>;
 
 // Spec factory that additionally re-applies per-dispatch runtime args on every cache hit: its
-// override_runtime_arguments returns a ProgramRunArgs applied via UpdateProgramRunArgs (the
+// override_runtime_arguments returns a ProgramRunArgs applied via Program::update_program_run_args (the
 // spec-path analog of the ProgramDescriptor path's get_dynamic_runtime_args). Args it omits are
-// retained from the cache-miss SetProgramRunArgs, so they must be enqueue-loop invariant. Full
+// retained from the cache-miss Program::set_program_run_args, so they must be enqueue-loop invariant. Full
 // signature (only the return type is concept-enforced):
 //   static ProgramRunArgs override_runtime_arguments(
 //       const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&,

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dram_prefetcher_validator.hpp"
+#include "ttnn/core.hpp"
 
 #include "ttnn/prefetcher_pipe.hpp"
 #include "ttnn/operations/experimental/tensor_prefetcher/tensor_prefetcher.hpp"
@@ -23,7 +24,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 
@@ -409,11 +410,13 @@ tt::tt_metal::distributed::MeshWorkload make_tensor_prefetcher_pipe_validator_wo
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     bool streaming,
     const std::vector<uint32_t>& rotation,
-    const std::vector<uint32_t>& groups) {
+    const std::vector<uint32_t>& groups,
+    uint32_t compare_word_stride) {
     using namespace tt::tt_metal;
 
     TT_FATAL(!prefetcher_pipes.empty(), "prefetcher_pipes must hold at least one pipe");
     TT_FATAL(num_layers > 0, "num_layers must be > 0");
+    TT_FATAL(compare_word_stride > 0, "compare_word_stride must be > 0");
     Buffer* tensor_buffer = source_tensor.buffer();
     TT_FATAL(tensor_buffer != nullptr, "source_tensor must be on device");
     TT_FATAL(tensor_buffer->is_dram(), "source_tensor must be a DRAM buffer");
@@ -469,7 +472,8 @@ tt::tt_metal::distributed::MeshWorkload make_tensor_prefetcher_pipe_validator_wo
         {"print_stride", print_stride},
         {"streaming", streaming ? 1u : 0u},
         {"num_groups", selection.num_groups},
-        {"group_mask", selection.mask}};
+        {"group_mask", selection.mask},
+        {"compare_word_stride", compare_word_stride}};
     receiver.runtime_arg_schema.runtime_arg_names = {
         "bank_id",
         "recv_idx_in_bank",
@@ -491,7 +495,7 @@ tt::tt_metal::distributed::MeshWorkload make_tensor_prefetcher_pipe_validator_wo
         .work_units =
             {{.name = "receiver_wu", .kernels = {KernelSpecName{"receiver"}}, .target_nodes = receiver_cores}},
         .advanced_options = {.prefetcher_pipe_parameters = std::move(parameters)}};
-    Program program = metal_exp::MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
     ProgramRunArgs::KernelRunArgs kernel_args{.kernel = KernelSpecName{"receiver"}};
     for (const auto& plan : geom.receivers) {
@@ -508,7 +512,7 @@ tt::tt_metal::distributed::MeshWorkload make_tensor_prefetcher_pipe_validator_wo
     }
     run_args.kernel_run_args.push_back(std::move(kernel_args));
     run_args.tensor_args.emplace(source_name, TensorArgument{source_tensor.mesh_tensor()});
-    metal_exp::SetProgramRunArgs(program, run_args);
+    program.set_program_run_args(run_args);
 
     tt::tt_metal::distributed::MeshWorkload workload;
     workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
@@ -524,7 +528,8 @@ void test_tensor_prefetcher_pipe_validator(
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     bool streaming,
     const std::vector<uint32_t>& rotation,
-    const std::vector<uint32_t>& groups) {
+    const std::vector<uint32_t>& groups,
+    uint32_t compare_word_stride) {
     tt::tt_metal::distributed::MeshWorkload workload = make_tensor_prefetcher_pipe_validator_workload(
         mesh_device,
         source_tensor,
@@ -534,9 +539,11 @@ void test_tensor_prefetcher_pipe_validator(
         bank_to_receivers,
         streaming,
         rotation,
-        groups);
-    tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/false);
-    tt::tt_metal::distributed::Finish(mesh_device->mesh_command_queue());
+        groups,
+        compare_word_stride);
+    tt::tt_metal::distributed::EnqueueMeshWorkload(
+        ttnn::core::current_mesh_command_queue(*mesh_device), workload, /*blocking=*/false);
+    tt::tt_metal::distributed::Finish(ttnn::core::current_mesh_command_queue(*mesh_device));
 }
 
 }  // namespace ttnn::operations::experimental::test

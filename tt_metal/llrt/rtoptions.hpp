@@ -1027,7 +1027,7 @@ public:
         mock_cluster_desc_path =
             !resolved.empty()
                 ? resolved.string()
-                : (root / "tt_metal/third_party/umd/tests/cluster_descriptor_examples" / filename).string();
+                : (root / "tt_metal/third_party/umd/descriptors/cluster_descriptor_examples" / filename).string();
         // Mock mode always overrides the simulator: configure_mock_mode() is an explicit
         // request for a fully mocked environment, so libttsim must not be used even if
         // TT_METAL_SIMULATOR is set in the environment.

@@ -10,7 +10,7 @@
 #include <stdexcept>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
@@ -36,7 +36,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_KernelSemaphoreBindingsSucceed) {
     binding.accessor_name = "my_sem";
     spec.kernels[0].semaphore_bindings = {binding};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_KernelSemaphoreBindingInvalidAccessorFails) {
@@ -53,7 +53,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_KernelSemaphoreBindingInvalidAccessorFails) {
     spec.kernels[0].semaphore_bindings = {binding};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("semaphore accessor_name 'has-dash' must be a valid C++ identifier")));
 }
@@ -76,7 +76,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_KernelSemaphoreBindingDuplicateAccessorFails) 
         SemaphoreBinding{.semaphore_spec_name = SemaphoreSpecName{"sem_1"}, .accessor_name = "same"}};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("duplicate semaphore accessor_name 'same'")));
 }
 
@@ -94,7 +94,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SemaphoreBoundToComputeKernelSucceedsOnQuasar)
     spec.kernels[1].semaphore_bindings = {
         SemaphoreBinding{.semaphore_spec_name = SemaphoreSpecName{"sem_0"}, .accessor_name = "done_flag"}};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_SemaphoreBoundToComputeKernelFailsOnWormhole) {
@@ -112,7 +112,7 @@ TEST_F(ProgramSpecTestGen1, CPU_SemaphoreBoundToComputeKernelFailsOnWormhole) {
         SemaphoreBinding{.semaphore_spec_name = SemaphoreSpecName{"sem_0"}, .accessor_name = "done_flag"}};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("supported only on Blackhole and Quasar")));
 }
 
@@ -130,7 +130,7 @@ TEST_F(ProgramSpecTestGen1, CPU_SemaphoreBoundToDMKernelSucceedsOnGen1) {
     spec.kernels[0].semaphore_bindings = {
         SemaphoreBinding{.semaphore_spec_name = SemaphoreSpecName{"sem_0"}, .accessor_name = "done_flag"}};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 }  // namespace

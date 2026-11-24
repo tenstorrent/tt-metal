@@ -12,7 +12,7 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
@@ -42,7 +42,7 @@ ProgramSpec MakeSpecWithBinding() {
 
 TEST_F(ProgramSpecTestGen1, CPU_GlobalSemaphoreBindingIsAccepted) {
     ProgramSpec spec = MakeSpecWithBinding();
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_GlobalSemaphoreBoundByTwoKernelsIsAccepted) {
@@ -54,14 +54,14 @@ TEST_F(ProgramSpecTestGen1, CPU_GlobalSemaphoreBoundByTwoKernelsIsAccepted) {
     spec.global_semaphore_parameters = {GlobalSemaphoreParameter{.unique_id = GlobalSemaphoreParamName{"sem"}}};
     spec.kernels[kDmKernel].global_semaphore_bindings = {Bind("sem", "a")};
     spec.kernels.back().global_semaphore_bindings = {Bind("sem", "b")};
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_GlobalSemaphoreBindingToUnknownParameterFails) {
     ProgramSpec spec = MakeSpecWithBinding();
     spec.kernels[kDmKernel].global_semaphore_bindings = {Bind("sem", "sem"), Bind("missing", "other")};
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("references unknown GlobalSemaphoreParameter 'missing'")));
 }
@@ -71,7 +71,7 @@ TEST_F(ProgramSpecTestGen1, CPU_UnboundGlobalSemaphoreParameterFails) {
     spec.global_semaphore_parameters.push_back(
         GlobalSemaphoreParameter{.unique_id = GlobalSemaphoreParamName{"unused"}});
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("GlobalSemaphoreParameter 'unused' is defined but not bound by any kernel")));
 }
@@ -80,7 +80,7 @@ TEST_F(ProgramSpecTestGen1, CPU_DuplicateGlobalSemaphoreParameterFails) {
     ProgramSpec spec = MakeSpecWithBinding();
     spec.global_semaphore_parameters.push_back(GlobalSemaphoreParameter{.unique_id = GlobalSemaphoreParamName{"sem"}});
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Duplicate GlobalSemaphoreParameter")));
 }
 
@@ -89,7 +89,7 @@ TEST_F(ProgramSpecTestGen1, CPU_GlobalSemaphoreBindingOnComputeKernelFails) {
     spec.kernels[kDmKernel].global_semaphore_bindings = {};
     spec.kernels[kComputeKernel].global_semaphore_bindings = {Bind("sem", "sem")};
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("only data-movement kernels can bind a GlobalSemaphore")));
 }
@@ -103,7 +103,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_GlobalSemaphoreBindingOnQuasarIsAccepted) {
             break;
         }
     }
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_DuplicateGlobalSemaphoreAccessorNameFails) {
@@ -112,7 +112,7 @@ TEST_F(ProgramSpecTestGen1, CPU_DuplicateGlobalSemaphoreAccessorNameFails) {
         GlobalSemaphoreParameter{.unique_id = GlobalSemaphoreParamName{"sem_1"}});
     spec.kernels[kDmKernel].global_semaphore_bindings = {Bind("sem", "dup"), Bind("sem_1", "dup")};
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("duplicate GlobalSemaphore accessor_name 'dup'")));
 }
@@ -122,7 +122,7 @@ TEST_F(ProgramSpecTestGen1, CPU_InvalidGlobalSemaphoreAccessorNameFails) {
         ProgramSpec spec = MakeSpecWithBinding();
         spec.kernels[kDmKernel].global_semaphore_bindings = {Bind("sem", bad_name)};
         EXPECT_THAT(
-            [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+            [&] { Program(*mesh_device_, spec); },
             ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("must be a valid C++ identifier")))
             << "accessor_name: '" << bad_name << "'";
     }
@@ -130,7 +130,7 @@ TEST_F(ProgramSpecTestGen1, CPU_InvalidGlobalSemaphoreAccessorNameFails) {
     ProgramSpec spec = MakeSpecWithBinding();
     spec.kernels[kDmKernel].global_semaphore_bindings = {Bind("sem", std::string(MAX_ACCESSOR_NAME_LENGTH + 1, 'a'))};
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("must be at most")));
 }
 

@@ -852,7 +852,7 @@ TEST_F(BlackholeSingleCardFixture, EthFwStageKernelWhileKernelRuns) {
             }
 
             const CoreRangeSet core_ranges{ttsl::Span<const CoreCoord>(logical_cores)};
-            Program program = CreateProgram();
+            Program program = CreateProgram(*mesh_device);
             for (uint32_t processor = 0; processor < num_processors; processor++) {
                 EthernetConfig config;
                 config.eth_mode = core_type == HalProgrammableCoreType::IDLE_ETH ? Eth::IDLE : Eth::SENDER;

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/matmul/device/sparse/sparse_matmul_device_operation.hpp"
+#include "ttnn/core.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
@@ -183,7 +184,7 @@ void queue_in1_tensor_prefetcher_request(const SparseMatmulParams& attributes, c
     // The calling thread's current queue is the one launch dispatches on, so a trace recording there
     // captures the request with the program and re-sends it on every replay.
     metal_exp::QueueTensorPrefetcherRequest(
-        *mesh_device, pipes, std::nullopt, request, &mesh_device->mesh_command_queue());
+        *mesh_device, pipes, std::nullopt, request, &ttnn::core::current_mesh_command_queue(*mesh_device));
 }
 
 }  // namespace
