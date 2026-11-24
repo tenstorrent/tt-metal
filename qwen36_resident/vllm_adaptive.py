@@ -58,6 +58,14 @@ PLAIN_MS_DEFAULT = lambda n: 16.5 + 0.5 * (n - 1)  # noqa: E731  (the batch card
 # model until then); acceptance for a request not yet speculating: PROMOTE_ACC tokens per verify
 PROMOTE_GATE = os.environ.get("RESIDENT_ADAPTIVE_PROMOTE_GATE", "1") == "1"
 PROMOTE_ACC = float(os.environ.get("RESIDENT_ADAPTIVE_PROMOTE_ACC", "2.7"))
+# acceptance priors per kind of request (greedy, sampled: sampled drafts are accepted less, ~2.0-2.2 tokens a verify on
+# natural chat at T 0.7 vs ~3 greedy), learned from finished requests: one that ran >= PRIOR_MIN verifies moves its
+# kind's prior PRIOR_ALPHA of the way to its own acceptance, one that never speculated moves it PRIOR_RECOVER back to
+# the default (so a run of hard-to-predict requests stops the probes, and the defaults return when it ends). The gate
+# and the pay check's probe use them: sampled c4 (~2.0 < the 4-user break-even ~2.4) stays plain while c1 / c2 gain,
+# and random-token sampled traffic does not re-probe every request (served 2026-11-24: c1 55 vs 60.5, c4 45 vs 55)
+PROMOTE_ACC_SAMPLED = float(os.environ.get("RESIDENT_ADAPTIVE_PROMOTE_ACC_SAMPLED", "2.2"))
+PRIOR_ALPHA, PRIOR_RECOVER, PRIOR_MIN = 0.3, 0.1, 8
 PROMOTE_OUT = float(os.environ.get("RESIDENT_ADAPTIVE_PROMOTE_OUT", "256"))
 REFILL_MS_FIXED, REFILL_MS_PER_TOKEN = 20.0, 0.13  # (defaults: tests/refill_batch.py, 2026-11-23)
 SPEC_MS_DEFAULT = lambda n: 28.0 + 4.6 * (n - 1)  # noqa: E731  (served verify steps, rc-20261124j: 1 / 2 / 4 / 8
@@ -183,6 +191,8 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         # prefill / layout change, any speculative step)
         self._calls = [0, 0]
         self._spec_seed, self._spec_params = {}, None  # (sampled speculation: a request's seed, the uploaded params)
+        # (acceptance priors per kind — "g" greedy, "s" sampled — and each request's [accepted, verifies] so far)
+        self._prior, self._req_stat, self.temp_reqs = {"g": PROMOTE_ACC, "s": PROMOTE_ACC_SAMPLED}, {}, set()
         # (the acceptance-aware policy's measurements: EMAs of tokens per spec user-step and of step times per kind)
         self._pay = self._new_pay()
         self.prompt_len = {}  # slot -> its prompt's length (generated tokens = history - prompt)
@@ -328,12 +338,30 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
             return pay["spec_ms"].get(n, SPEC_MS_DEFAULT(n)) + SPEC_CTX_MS * ctx
         return pay["plain_ms"].get(n, PLAIN_MS_DEFAULT(n)) + PLAIN_CTX_MS * ctx
 
+    def _prior_of(self, rs):
+        """the acceptance expected of these requests (their kinds' priors, mean; PROMOTE_ACC for none)"""
+        rs = list(rs)
+        if not rs:
+            return PROMOTE_ACC
+        return sum(self._prior["s" if r in self.temp_reqs else "g"] for r in rs) / len(rs)
+
+    def _note_finished(self, r):
+        """a finished request's acceptance into its kind's prior (PRIOR_ALPHA), or back toward the default if it never
+        speculated (PRIOR_RECOVER)"""
+        kind = "s" if r in self.temp_reqs else "g"
+        acc, n = self._req_stat.pop(r, (0, 0))
+        default = PROMOTE_ACC_SAMPLED if kind == "s" else PROMOTE_ACC
+        old = self._prior[kind]
+        self._prior[kind] = old + (PRIOR_ALPHA * (acc / n - old) if n >= PRIOR_MIN else PRIOR_RECOVER * (default - old))
+        self.temp_reqs.discard(r)
+
     def _promotion_pays(self, cands):
         """the promotion gate (PROMOTE_GATE): (verdict, its log line)"""
         pay, n = self._pay, max(1, len(self.live))
         ctx = sum(len(self.history.get(r) or ()) for r in self.live)
         plain, spec = self._step_ms("plain", n, ctx), self._step_ms("verify", n, ctx)
-        save = plain - spec / PROMOTE_ACC  # (ms a token, per user)
+        acc = self._prior_of(cands)
+        save = plain - spec / acc  # (ms a token, per user)
         out = pay["out"] or PROMOTE_OUT
         left = [
             max(out - (len(self.history[r]) - self.prompt_len.get(r, len(self.history[r]))), out / 4) for r in cands
@@ -345,7 +373,8 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         refill = REFILL_MS_FIXED + (pay["refill_tpt"] or REFILL_MS_PER_TOKEN) * toks + P2D_FILL_MS * len(quick)
         gain, cost = sum(left) * save, refill * n
         line = (
-            f"{len(cands)} of {n} users: ~{sum(left) / len(cands):.0f} tokens left each x {save:.1f} ms saved a token "
+            f"{len(cands)} of {n} users at ~{acc:.2f} tokens a verify: ~{sum(left) / len(cands):.0f} tokens left each x "
+            f"{save:.1f} ms saved a token "
             f"= {gain:.0f} user-ms vs a {refill:.0f} ms refill ({toks} tokens) x {n} users = {cost:.0f}"
         )
         return gain > cost, line
@@ -382,7 +411,9 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         # 8-user probe ran its PAY_MIN verify steps at ~60 ms before PLAIN: natural c8 41.7 vs 50.7 tok/s per user plain,
         # rc-20261124j; now the live count that does not pay goes PLAIN at once)
         probing = pay["verifies"] < PAY_MIN or pay["acc"] is None
-        pay["acc_used"] = max(pay["acc"] or 0.0, PROMOTE_ACC) if probing else pay["acc"]
+        # (the probe's acceptance: the priors of the speculating users, else of the live promotable ones)
+        cand = list(self.spec_of) or [r for r in self.live if r in self.greedy_ok]
+        pay["acc_used"] = self._prior_of(cand) if probing else pay["acc"]
         return pay["acc_used"] / self._step_ms("verify", n, ctx) >= PAY_MARGIN / self._step_ms("plain", n, ctx)
 
     def _pay_line(self):
@@ -428,6 +459,12 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         if toks:  # (the PP-pass refills' ms per token; the P2d fills' share taken out)
             tpt = max(0.0, dt * 1000 - REFILL_MS_FIXED - P2D_FILL_MS * len(quick)) / toks
             self._pay["refill_tpt"] = robust_ema(self._pay["refill_tpt"], tpt, REFILL_MS_PER_TOKEN, a=0.3)
+
+    @staticmethod
+    def _temperature(sp, i):
+        t = getattr(sp, "temperature", 0.0)
+        t = t[i] if isinstance(t, (list, tuple)) else t
+        return float(t or 0.0)
 
     @staticmethod
     def _non_speculable(sp, i):
@@ -526,6 +563,8 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         if sp is not None:
             for i, r in rows.items():
                 (self.sampled if self._non_speculable(sp, i) else self.greedy_ok).add(r)
+                if SPEC_SAMPLE and self._temperature(sp, i) > 0:
+                    self.temp_reqs.add(r)  # (a sampled request: its kind's acceptance prior)
         if (self.sampled & self.live or (sp is None and rows)) and self.mode == "SPEC":
             # (sampling_params absent: the runner fell back to host sampling for this step, which a live row needs —
             # penalties, a top_k past max_device_top_k: treat it as non-speculable traffic)
@@ -705,6 +744,11 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
             rows[i] = (r, a, int(committed_tokens[i, a - 1]), p)
             self.last_acc[r] = a
         live = len(self.live)
+        if self._pay["kind"] == "verify":  # (each spec user's acceptance, for its kind's prior when it finishes)
+            for r, a, _, _ in rows.values():
+                if r in self.spec_of:
+                    st = self._req_stat.setdefault(r, [0, 0])
+                    st[0], st[1] = st[0] + a, st[1] + 1
         pays = self._measure([a for r, a, _, _ in rows.values() if r in self.spec_of])
         # ---- the mode for the next step
         if self.sampled & self.live or getattr(self, "_host_steps", False):  # (non-speculable traffic: no drafts)
@@ -770,7 +814,11 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
             h, plen = self.history.pop(r, None), self.prompt_len.pop(r, None)
             if h is not None and plen is not None and len(h) > plen:
                 self._note_output(len(h) - plen)
+                if r in self.greedy_ok:
+                    self._note_finished(r)
             self.last_acc.pop(r, None)
             self.sampled.discard(r)
             self._spec_seed.pop(r, None)
+            self._req_stat.pop(r, None)
+            self.temp_reqs.discard(r)
             self.greedy_ok.discard(r)

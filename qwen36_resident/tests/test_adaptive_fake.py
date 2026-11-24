@@ -145,6 +145,7 @@ def make(monkeypatch, gate=False):
     m.sampled, m._t, m._plain_stale, m.greedy_ok, m._calls = set(), {}, False, set(), [0, 0]
     m._pay, m.prompt_len, m.taps_of = m._new_pay(), {}, {}
     m._spec_seed, m._spec_params = {}, None
+    m._prior, m._req_stat, m.temp_reqs = {"g": A.PROMOTE_ACC, "s": A.PROMOTE_ACC_SAMPLED}, {}, set()
     m.engine = A._PlainRowsEngine(plain, pp, torch.eye(V), V, V, B, CHUNK_UNIT, None)
     return m, pf
 
@@ -373,6 +374,31 @@ def test_sampled_requests_speculate_with_sampled_verify_rows(monkeypatch):
     assert prm[m.spec_of[1] * 4][3] == 77 and prm[m.spec_of[1] * 4][0] > 0 and prm[m.spec_of[0] * 4][0] == 0
     plan = A.Qwen36ResidentAdaptiveForCausalLM.spec_plan(None, 32, 3)
     assert getattr(plan, "verify_rows_sample", False)
+
+
+def test_acceptance_priors_per_kind(monkeypatch):
+    """a sampled request is expected at the sampled prior (2.2 tokens a verify): promoted at 1 user, not at 4 (the
+    4-user break-even ~2.4); a finished request moves its kind's prior toward its own acceptance (>= PRIOR_MIN verifies)
+    or, if it never speculated, back toward the default"""
+    monkeypatch.setattr(A, "SPEC_SAMPLE", True)
+    m = _gate_case(monkeypatch, 4, 200, 1)
+    m.temp_reqs.update(range(4))
+    assert not m._promotion_pays(sorted(m.live))[0], m._promotion_pays(sorted(m.live))[1]
+    m = _gate_case(monkeypatch, 1, 200, 1)
+    m.temp_reqs.add(0)
+    assert m._promotion_pays([0])[0], m._promotion_pays([0])[1]
+    m._req_stat[0] = [15, 10]  # (1.5 tokens a verify over 10 verifies)
+    m._note_finished(0)
+    assert abs(m._prior["s"] - (2.2 + 0.3 * (1.5 - 2.2))) < 1e-9 and m._prior["g"] == A.PROMOTE_ACC
+    m.temp_reqs.add(1)
+    m._note_finished(1)  # (never speculated: back toward 2.2)
+    assert abs(m._prior["s"] - (1.99 + 0.1 * (2.2 - 1.99))) < 1e-9, m._prior
+    for _ in range(6):  # (a run of hard requests: the prior falls under the 1-user break-even, no more probes)
+        m.temp_reqs.add(2)
+        m._req_stat[2] = [13, 10]
+        m._note_finished(2)
+    m.temp_reqs.add(0)
+    assert not m._promotion_pays([0])[0], m._prior
 
 
 def test_penalized_requests_stay_plain_with_sampled_speculation(monkeypatch):
