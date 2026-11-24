@@ -317,6 +317,86 @@ inline void set_unpacker_x_end()
     }
 }
 
+inline constexpr hal::sync::Semaphore UNPACK_TO_DEST_SEM = static_cast<hal::sync::Semaphore>(ckernel::semaphore::UNPACK_TO_DEST);
+
+// Wait (on the unpacker) until math has freed dest for an unpack-to-dest tile.
+inline void wait_for_dest_available()
+{
+    // t6_semaphore_wait_on_max<p_stall::STALL_UNPACK>(semaphore::UNPACK_TO_DEST)
+    hal::sync::wait::semaphore<hal::sync::StallTarget::Unpack, hal::sync::SemaphoreCondition::WhileMaximum, UNPACK_TO_DEST_SEM>();
+}
+
+// Restore srcA channel-1 Z-stride to the canonical baseline derived from unpack_dst_format.
+// This pairs with set_dst_write_addr to bracket the unpack-to-dest section: rather than
+// snapshotting the prior register value into a GPR, we recompute the canonical baseline so the
+// restore is deterministic and order-independent.
+// Callers release UNPACK_SYNC after this returns, so configure_unpack_AB doesn't race these config writes.
+inline void unpack_to_dest_tile_done(std::uint32_t &context_id, const std::uint32_t unpack_dst_format)
+{
+    namespace cfg          = hal::cfg;
+    namespace sync         = hal::sync;
+    constexpr auto Unp0Ch1 = cfg::Unpacker[0].AddrCtrl[cfg::UnpackerReg::Reg1];
+    constexpr auto R2      = cfg::Thcon[cfg::Reg2];
+    constexpr auto R5      = cfg::Thcon[cfg::Reg5];
+    static_assert(Unp0Ch1.Zstride.addr32(cfg::Sec::S0) == UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32, "Unp0 ch1 Z-stride word");
+    static_assert(R2.Unpack_if_sel_cntx0.addr32(cfg::Sec::S0) == THCON_SEC0_REG2_Unpack_if_sel_cntx0_ADDR32, "Unpack_if_sel_cntx0 word");
+    static_assert(R2.Unpack_if_sel_cntx1.addr32(cfg::Sec::S0) == THCON_SEC0_REG2_Unpack_if_sel_cntx1_ADDR32, "Unpack_if_sel_cntx1 word");
+    static_assert(R5.Dest_cntx0_address.addr32(cfg::Sec::S0) == THCON_SEC0_REG5_Dest_cntx0_address_ADDR32, "Dest_cntx0_address word");
+    static_assert(R5.Dest_cntx1_address.addr32(cfg::Sec::S0) == THCON_SEC0_REG5_Dest_cntx1_address_ADDR32, "Dest_cntx1_address word");
+
+    // t6_semaphore_post<p_stall::UNPACK0>(semaphore::UNPACK_TO_DEST)
+    sync::wait::stall<sync::StallTarget::Sync, sync::StallCondition::Unpacker0Idle>();
+    sync::semaphore::post<UNPACK_TO_DEST_SEM>();
+    hal::scalar::set_low(hal::gpr<p_gpr_unpack::TMP_LO>(), LOWER_HALFWORD(canonical_unpA_z_stride(unpack_dst_format) << UNP0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT));
+    // Restore canonical Z-stride
+    cfg::write<cfg::Access::TensixCfgUnit, Unp0Ch1.Zstride, cfg::Sec::S0, cfg::GprTransferSize::Bits32, cfg::WrcfgCompletion::Deferred>(
+        hal::gpr<p_gpr_unpack::TMP_LO>());
+    // Restore config context
+    if (context_id == 0)
+    {
+        cfg::write<cfg::Access::TensixCfgUnit, R2.Unpack_if_sel_cntx0, cfg::Sec::S0, 0>();
+        cfg::write<cfg::Access::TensixCfgUnit, R5.Dest_cntx0_address, cfg::Sec::S0, 4 * 16>();
+    }
+    else
+    {
+        cfg::write<cfg::Access::TensixCfgUnit, R2.Unpack_if_sel_cntx1, cfg::Sec::S0, 0>();
+        cfg::write<cfg::Access::TensixCfgUnit, R5.Dest_cntx1_address, cfg::Sec::S0, 4 * 16>();
+    }
+    // TTI_SETC16(SRCA_SET_Base_ADDR32, 0x4): re-enable address bit swizzle
+    cfg::write<cfg::Access::TensixCfgUnit>(cfg::set<cfg::SrcASet::Base, cfg::Sec::S0, 0>(), cfg::set<cfg::SrcASet::SetOvrdWithAddr, cfg::Sec::S0, 1>());
+    // No TEN-3868 dummy unpack to SrcA here, unlike Wormhole: Blackhole's LLK sets SrcA's dvalid without an unpack
+    // only in an UNPACR_NOP that also zeroes SrcA (UNP_ZEROSRC with SET_DVALID), and that clear moves both of SrcA's
+    // bank pointers
+}
+
+inline void set_dst_write_addr(const std::uint32_t &context_id, const std::uint32_t &unpack_dst_format)
+{
+    namespace cfg          = hal::cfg;
+    constexpr auto Unp0Ch1 = cfg::Unpacker[0].AddrCtrl[cfg::UnpackerReg::Reg1];
+    constexpr auto R2      = cfg::Thcon[cfg::Reg2];
+    constexpr auto R5      = cfg::Thcon[cfg::Reg5];
+
+    // HAL-GAP: no HAL API for the RISC mailbox read of math's dest offset; production's mailbox_read is kept.
+    std::uint32_t dst_byte_addr = 16 * (4 + mailbox_read(ThreadId::MathThreadId)); // Apply fixed offset of 4*16 to dest address
+    // TTI_SETC16(SRCA_SET_Base_ADDR32, 0x0): disable address bit swizzle
+    cfg::write<cfg::Access::TensixCfgUnit>(cfg::set<cfg::SrcASet::Base, cfg::Sec::S0, 0>(), cfg::set<cfg::SrcASet::SetOvrdWithAddr, cfg::Sec::S0, 0>());
+    // Set unpacker Z-stride to the canonical baseline for unpack_dst_format. Paired with
+    // unpack_to_dest_tile_done's canonical restore; no GPR snapshot of the prior value.
+    hal::scalar::set_low(hal::gpr<p_gpr_unpack::TMP_LO>(), LOWER_HALFWORD(canonical_unpA_z_stride(unpack_dst_format) << UNP0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT));
+    cfg::write<cfg::Access::TensixCfgUnit, Unp0Ch1.Zstride, cfg::Sec::S0, cfg::GprTransferSize::Bits32, cfg::WrcfgCompletion::Deferred>(
+        hal::gpr<p_gpr_unpack::TMP_LO>());
+    if (context_id == 0)
+    {
+        cfg::write<cfg::Access::TensixCfgUnit, R2.Unpack_if_sel_cntx0, cfg::Sec::S0, 1>();
+        cfg::write<cfg::Access::TensixCfgUnit, R5.Dest_cntx0_address, cfg::Sec::S0>(dst_byte_addr);
+    }
+    else
+    {
+        cfg::write<cfg::Access::TensixCfgUnit, R2.Unpack_if_sel_cntx1, cfg::Sec::S0, 1>();
+        cfg::write<cfg::Access::TensixCfgUnit, R5.Dest_cntx1_address, cfg::Sec::S0>(dst_byte_addr);
+    }
+}
+
 template <std::uint32_t UNP_SEL = p_setadc::UNP_AB>
 inline void config_unpacker_x_end(const std::uint32_t face_r_dim)
 {
