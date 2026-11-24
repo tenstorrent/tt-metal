@@ -2,15 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Where the harness finds the tt-llk files its own Python reads.
 
-A few modules read a file that lives outside ``helpers``: ``counters.py`` parses
-``tests/helpers/include/counters.h``, and the perf split reads the cost tables
-beside ``tests/``. In a checkout those sit at fixed places relative to this
-package. In an installed harness (the wheel ``tests/harness_wheel/make_wheel.py``
-builds) there is no tt-llk tree around the package, so the wheel carries them,
-in the same tt-llk layout, under ``tt_llk_harness/llk_home``.
-
-``harness_files_root()`` returns whichever of the two applies, so a caller
-writes one path for both.
+In a checkout they sit at fixed places relative to this package. An installed
+harness (the wheel of ``tests/harness_wheel/make_wheel.py``) has no tt-llk tree
+around it and carries them, in tt-llk layout, under ``tt_llk_harness/llk_home``.
 """
 
 from __future__ import annotations
@@ -28,11 +22,7 @@ _INSTALLED_ROOT = _PYTHON_ROOT / "tt_llk_harness" / "llk_home"
 
 
 def harness_files_root() -> Path:
-    """Root, in tt-llk layout, of the tt-llk files the harness's Python reads.
-
-    The tt-llk checkout when the harness runs from one, the copy the wheel
-    carries when it is installed.
-    """
+    """The tt-llk checkout the harness runs from, or the copy its wheel carries."""
     for root in (_CHECKOUT_ROOT, _INSTALLED_ROOT):
         if (root / _MARKER).is_file():
             return root
@@ -49,12 +39,7 @@ def harness_is_installed() -> bool:
 
 
 def build_helpers_tree(llk_home: Path) -> Path:
-    """The ``tests/helpers`` tree variants are built with.
-
-    ``LLK_HOME``'s when the harness runs from a checkout, so a checkout harness
-    pointed at another tree builds that tree's device code (the SFPU report
-    tool compares two trees that way). An installed harness has no such tree
-    to rely on and builds with the copy its wheel carries.
-    """
+    """The ``tests/helpers`` tree variants are built with: ``LLK_HOME``'s from a checkout (the SFPU report
+    tool runs one harness on two trees), the wheel's own copy when installed."""
     root = harness_files_root() if harness_is_installed() else Path(llk_home)
     return root / "tests" / "helpers"

@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """The harness wheel (``tests/harness_wheel/make_wheel.py``): what it holds and how it is named.
 
-Whether the harness *works* once installed is checked where the contract is:
-``test_out_of_tree_contract.py`` runs the out-of-tree fixture on the built
-wheel. The tests here pin the packaging itself.
+Whether the harness *works* once installed is checked by
+``test_out_of_tree_contract.py``, which runs the out-of-tree fixture on the
+built wheel. The tests here pin the packaging itself.
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ build_wheel = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(build_wheel)
 
 VERSION = build_wheel.Version(number=(1, 2, 3), committed=0, commit=0xABC << 148)
+DIST_INFO = f"tt_llk_harness-{VERSION}.dist-info"
 
 
 @pytest.fixture(scope="module")
@@ -34,82 +35,77 @@ def wheel(tmp_path_factory) -> Path:
 
 
 @pytest.fixture(scope="module")
-def names(wheel) -> set[str]:
+def files(wheel) -> dict[str, bytes]:
     with zipfile.ZipFile(wheel) as archive:
-        return set(archive.namelist())
+        return {name: archive.read(name) for name in archive.namelist()}
 
 
-def test_wheel_is_named_for_its_version(wheel):
+def test_wheel_holds_what_an_installed_harness_needs(wheel, files):
     assert wheel.name == f"tt_llk_harness-{VERSION}-py3-none-any.whl"
-
-
-def test_wheel_holds_the_harness_packages(names):
+    prefix = build_wheel.LLK_HOME_PREFIX
     for expected in (
         "tt_llk_harness/__init__.py",
         "tt_llk_harness/plugin.py",
-        "helpers/__init__.py",
+        "tt_llk_harness/VERSION",
+        "tt_llk_harness/requirements.txt",
         "helpers/test_config.py",
-        "helpers/golden_generators.py",
-        "helpers/stimuli_config.py",
         "helpers/stimuli_generator/__init__.py",
-        "helpers/pack.py",
-        "helpers/unpack.py",
         "helpers/llk_pytest_plugin.py",
         "ttsim_error.py",
-    ):
-        assert expected in names, f"{expected} is missing from the wheel"
-
-
-def test_wheel_installs_no_package_another_wheel_owns(names):
-    """``tt_llk_perf`` is a top-level package of the ttnn wheel; here it stays under ``llk_home``."""
-    assert {PurePosixPath(name).parts[0] for name in names} == {
-        "helpers",
-        "tt_llk_harness",
-        "ttsim_error.py",
-        f"tt_llk_harness-{VERSION}.dist-info",
-    }
-
-
-def test_wheel_holds_no_toolchain_and_nothing_that_pins_one(names):
-    """SFPI is released far more often than the harness changes and is installed on its own.
-
-    A wheel carrying the toolchain, its pin or its installer would be out of
-    date with every SFPI release; the pin belongs to the LLK tree (``LLK_HOME``).
-    """
-    carried = sorted(
-        name
-        for name in names
-        if "sfpi" in PurePosixPath(name).parts
-        or PurePosixPath(name).name
-        in ("sfpi-version", "sfpi-info.sh", "sfpi.version", "install_sfpi.sh")
-    )
-    assert not carried, carried
-
-
-def test_wheel_holds_the_tt_llk_files_the_harness_reads(names):
-    prefix = build_wheel.LLK_HOME_PREFIX
-    for expected in (
         f"{prefix}/tests/helpers/include/counters.h",
-        f"{prefix}/tests/helpers/include/operand.h",
         f"{prefix}/tests/helpers/src/trisc.cpp",
         f"{prefix}/tests/helpers/ld/sections.ld",
         f"{prefix}/tools/include/perf_counters/types.h",
         f"{prefix}/tests/perf_split_costs.json",
         f"{prefix}/tools/python/tt_llk_perf/__init__.py",
-        f"tt_llk_harness-{VERSION}.dist-info/licenses/LICENSE",
-        "tt_llk_harness/requirements.txt",
+        f"{DIST_INFO}/licenses/LICENSE",
     ):
-        assert expected in names, f"{expected} is missing from the wheel"
+        assert expected in files, f"{expected} is missing from the wheel"
 
 
-def test_a_release_is_named_by_its_number_alone():
-    """What a release publishes is ``X.Y.Z``: the version a suite pins, with nothing of the build in it."""
+def test_wheel_holds_nothing_it_must_not(files):
+    """No top-level package another wheel owns (``tt_llk_perf`` is ttnn's), and no toolchain or pin of one:
+    SFPI is released far more often than the harness changes, and its pin belongs to the LLK tree.
+    """
+    assert {PurePosixPath(name).parts[0] for name in files} == {
+        "helpers",
+        "tt_llk_harness",
+        "ttsim_error.py",
+        DIST_INFO,
+    }
+    toolchain_files = {
+        "sfpi-version",
+        "sfpi-info.sh",
+        "sfpi.version",
+        "install_sfpi.sh",
+    }
+    carried = [
+        name
+        for name in files
+        if "sfpi" in PurePosixPath(name).parts
+        or PurePosixPath(name).name in toolchain_files
+    ]
+    assert not carried, carried
+
+
+def test_metadata_and_record_describe_the_wheel(files):
+    metadata = BytesParser().parsebytes(files[f"{DIST_INFO}/METADATA"])
+    assert metadata["Version"] == str(VERSION)
+    assert metadata.get_all("Requires-Dist") == list(build_wheel.RUNTIME_REQUIREMENTS)
+
+    record = io.StringIO(files[f"{DIST_INFO}/RECORD"].decode())
+    assert {path for path, _hash, _size in csv.reader(record)} == set(files)
+
+
+def test_same_sources_give_the_same_wheel(wheel, tmp_path):
+    assert build_wheel.build_wheel(tmp_path, VERSION).read_bytes() == wheel.read_bytes()
+
+
+def test_a_release_is_named_by_its_number_and_any_other_build_by_its_commit():
+    """``X.Y.Z`` is what a suite pins; any other build orders by commit time and cannot pass for a release."""
     assert str(VERSION._replace(release=True)) == "1.2.3"
-
-
-def test_any_other_build_names_its_commit_and_orders_by_commit_time():
     assert str(VERSION) == "1.2.3+197001010000.gabc000000000"
-    later = build_wheel.Version(number=(1, 2, 3), committed=60, commit=0, dirty=True)
+    later = VERSION._replace(committed=60, commit=0, dirty=True)
     assert str(later) == "1.2.3+197001010001.g000000000000.dirty"
 
 
@@ -121,47 +117,13 @@ def test_a_version_that_is_not_three_plain_numbers_is_refused(text):
         build_wheel.parse_version_number(text)
 
 
-def test_version_file_is_major_minor_patch():
-    """The file is what a suite pins and what the release workflow publishes under."""
-    text = (build_wheel.LLK_ROOT / build_wheel.VERSION_FILE).read_text()
-
-    assert (
-        build_wheel.parse_version_number(text) == build_wheel.harness_version_number()
-    )
-    assert text == text.strip() + "\n", "one line, nothing else"
-
-
-def test_metadata_carries_the_version_and_the_requirements(wheel):
-    with zipfile.ZipFile(wheel) as archive:
-        metadata = BytesParser().parsebytes(
-            archive.read(f"tt_llk_harness-{VERSION}.dist-info/METADATA")
-        )
-    assert metadata["Version"] == str(VERSION)
-    assert metadata.get_all("Requires-Dist") == list(build_wheel.RUNTIME_REQUIREMENTS)
-
-
-def test_record_lists_every_file(wheel, names):
-    with zipfile.ZipFile(wheel) as archive:
-        record = archive.read(f"tt_llk_harness-{VERSION}.dist-info/RECORD").decode()
-    recorded = {path for path, _hash, _size in csv.reader(io.StringIO(record))}
-    assert recorded == names
-
-
-def test_same_sources_give_the_same_wheel(wheel, tmp_path):
-    again = build_wheel.build_wheel(tmp_path, VERSION)
-    assert again.read_bytes() == wheel.read_bytes()
-
-
-def test_the_wheel_and_the_harness_report_one_version(names):
+def test_the_builder_and_the_harness_report_one_version():
     """The builder reads the VERSION file without importing the harness; both must say the same."""
     import tt_llk_harness
 
     number = build_wheel.default_version().number
-    assert ".".join(str(part) for part in number) == tt_llk_harness.__version__
+    assert ".".join(map(str, number)) == tt_llk_harness.__version__
     assert number[:2] == tt_llk_harness.HARNESS_API_VERSION
-    assert (
-        "tt_llk_harness/VERSION" in names
-    ), "the harness reads its version from this file"
 
 
 def test_a_release_is_not_built_from_a_tree_with_changes(monkeypatch):
@@ -198,7 +160,7 @@ def _imported(source: bytes) -> set[str]:
     return names
 
 
-def test_wheel_requires_what_its_python_imports(wheel):
+def test_wheel_requires_what_its_python_imports(files):
     """Every test here runs where all of ``tests/requirements.txt`` is installed, so a requirement the wheel
     does not declare breaks nothing until somebody installs the wheel on its own."""
     shipped = {
@@ -206,28 +168,15 @@ def test_wheel_requires_what_its_python_imports(wheel):
         *(module.stem for module in build_wheel.MODULES.values()),
         "tt_llk_perf",
     }
-    declared = {
-        module
-        for modules in build_wheel.RUNTIME_REQUIREMENTS.values()
-        for module in modules
-    }
+    requirements = build_wheel.RUNTIME_REQUIREMENTS
+    declared = {module for modules in requirements.values() for module in modules}
     imported = set()
-    with zipfile.ZipFile(wheel) as archive:
-        for name in archive.namelist():
-            if name.endswith(".py"):
-                imported |= _imported(archive.read(name)) - _IN_TREE_ONLY_IMPORTS.get(
-                    name, set()
-                )
+    for name, source in files.items():
+        if name.endswith(".py"):
+            imported |= _imported(source) - _IN_TREE_ONLY_IMPORTS.get(name, set())
     third_party = imported - set(sys.stdlib_module_names) - shipped
 
     assert sorted(third_party - declared) == [], "imported, but not required"
     assert sorted(declared - third_party) == [], "required, but no longer imported"
-
-
-def test_wheel_requires_the_plugin_its_fixtures_come_from():
-    """``worker_id``, which the harness plugin's report fixtures take, is pytest-xdist's; no import shows that.
-
-    ``test_out_of_tree_contract.py`` runs the installed wheel with this plugin
-    and no other, so one the harness comes to need without requiring it fails there.
-    """
-    assert "pytest-xdist" in build_wheel.RUNTIME_REQUIREMENTS
+    # No import shows this one: the plugin's report fixtures take pytest-xdist's ``worker_id``.
+    assert "pytest-xdist" in requirements

@@ -3,14 +3,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-# Check that a harness wheel works for a suite that installs it: on its own, in a new environment.
-#
-#   verify_wheel.sh WHEEL
-#
-# Installs WHEEL into a new virtual environment with nothing but what it requires, at the versions of
-# tests/requirements.txt, and runs the tests/out_of_tree fixture on the installed copy for Wormhole and Blackhole.
-# The fixture compiles, so the SFPI toolchain must be installed (tests/install_sfpi.sh, or LLK_SFPI_ROOT) and this
-# must be a tt-metal checkout. The release workflow runs this before it publishes.
+# verify_wheel.sh WHEEL: install WHEEL into a new virtual environment with only what it requires (at the versions of
+# tests/requirements.txt) and run the tests/out_of_tree fixture on the installed copy for Wormhole and Blackhole.
+# Needs a tt-metal checkout and the SFPI toolchain (tests/install_sfpi.sh, or LLK_SFPI_ROOT).
 
 set -euo pipefail
 

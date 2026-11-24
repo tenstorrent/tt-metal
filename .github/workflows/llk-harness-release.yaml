@@ -1,22 +1,15 @@
 name: "LLK harness release"
 
-# Publishes the tt-llk Python test harness as a wheel when the harness's VERSION file changes on main: a release is
-# made by a pull request that raises that number (tt_metal/tt-llk/docs/tests/getting_started.md, "Releasing the
-# harness").
-#
-# The wheel goes to ghcr.io as a package of this repository, an OCI artifact: GitHub Packages has no Python registry,
-# and an Actions artifact expires. The package is to be private; there is no public package of the harness. Its
-# visibility and who may read it are package settings an organisation admin sets once, after the first release. The
-# publish job fails when it finds the package public.
-#
-# A manual run builds and verifies the wheel of the branch it runs on and publishes nothing.
+# Publishes the tt-llk Python test harness as a wheel when its VERSION file changes on main
+# (tt_metal/tt-llk/docs/tests/getting_started.md, "Releasing the harness"). The wheel goes to ghcr.io as a private
+# package of this repository; its visibility and readers are package settings an organisation admin sets once.
+# A pull request or a manual run builds and verifies the wheel and publishes nothing.
 on:
   push:
     branches:
       - main
     paths:
       - tt_metal/tt-llk/tests/python_tests/tt_llk_harness/VERSION
-  # Builds and verifies only: the release steps are tried before the merge that makes them publish.
   pull_request:
     paths:
       - .github/workflows/llk-harness-release.yaml
@@ -27,9 +20,8 @@ on:
 permissions:
   contents: read
 
-# One release at a time, and never a cancelled one: a push may have been half published.
+# One release at a time, never cancelled, and in a group no pull request or branch run can displace it from.
 concurrency:
-  # Releases in a group of their own: a run of a pull request or a branch must not displace a queued one.
   group: llk-harness-release-${{ github.event_name == 'push' && 'main' || github.ref }}
   cancel-in-progress: false
 
@@ -167,20 +159,10 @@ jobs:
             -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
             "${GITHUB_API_URL}/orgs/${GITHUB_REPOSITORY_OWNER}/packages/container/${name}")
           case "$status" in
-            200)
-              visibility=$(jq -r .visibility package.json)
-              echo "Package visibility: $visibility"
-              if [ "$visibility" = "public" ]; then
-                echo "::error::The tt-llk-harness package is public. Set it to private or internal in its settings."
-                exit 1
-              fi
-              ;;
             404) echo "No tt-llk-harness package yet: this release creates it." ;;
-            *)
-              echo "::error::Could not read the package (HTTP $status)."
-              cat package.json
-              exit 1
-              ;;
+            200) [ "$(jq -r .visibility package.json)" != public ] ||
+              { echo "::error::The tt-llk-harness package is public. Set it to private in its settings."; exit 1; } ;;
+            *) echo "::error::Could not read the package (HTTP $status): $(cat package.json)"; exit 1 ;;
           esac
           # A release is never replaced: suites pin a version and must keep getting the same bytes for it.
           status=$(curl -sS -o manifest.json -w '%{http_code}' \
@@ -189,15 +171,8 @@ jobs:
             "https://ghcr.io/v2/${GITHUB_REPOSITORY}/tt-llk-harness/manifests/${VERSION}")
           case "$status" in
             404) echo "$PACKAGE:$VERSION is not published yet." ;;
-            200)
-              echo "::error::$PACKAGE:$VERSION is already published. Raise the VERSION file instead."
-              exit 1
-              ;;
-            *)
-              echo "::error::Could not tell whether $PACKAGE:$VERSION is published (HTTP $status)."
-              cat manifest.json
-              exit 1
-              ;;
+            200) echo "::error::$PACKAGE:$VERSION is already published. Raise the VERSION file."; exit 1 ;;
+            *) echo "::error::Could not look up $PACKAGE:$VERSION (HTTP $status): $(cat manifest.json)"; exit 1 ;;
           esac
       - name: Publish the wheel
         shell: bash
@@ -211,18 +186,9 @@ jobs:
             --artifact-type application/vnd.tenstorrent.tt-llk-harness.v1 \
             --annotation "org.opencontainers.image.source=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
             --annotation "org.opencontainers.image.revision=${GITHUB_SHA}" \
-            --annotation "org.opencontainers.image.version=${VERSION}" \
-            --annotation "org.opencontainers.image.description=tt-llk Python test harness ${VERSION}" \
             "$WHEEL:application/zip" \
             requirements.txt:text/plain
-          {
-            echo "Published \`$WHEEL\` as \`$PACKAGE:$VERSION\`."
-            echo
-            echo '```bash'
-            echo "oras pull $PACKAGE:$VERSION"
-            echo "pip install -c requirements.txt $WHEEL"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Published \`$WHEEL\` as \`$PACKAGE:$VERSION\`." >> "$GITHUB_STEP_SUMMARY"
       - name: Check that the package is not public
         shell: bash
         env:

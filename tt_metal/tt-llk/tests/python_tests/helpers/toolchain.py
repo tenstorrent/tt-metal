@@ -2,15 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """The SFPI toolchain a session compiles with: where it is and which release it is.
 
-SFPI is installed on its own and is released far more often than the harness
-changes, so the harness does not carry or pin it. It takes the toolchain from a
-root it is told (``LLK_SFPI_ROOT``) or finds, reads the release from the
-compiler, and requires only a minimum (``MIN_SFPI_VERSION``).
-
-The exact release an LLK tree needs is that tree's pin, ``tests/sfpi-version``
-under ``LLK_HOME``. A toolchain that differs from it is reported, and is an
-error only when ``LLK_SFPI_STRICT=1``: running a newer toolchain than the pin is
-a reason to install it separately in the first place.
+SFPI is released far more often than the harness changes, so the harness does
+not carry or pin it. It takes the toolchain from ``LLK_SFPI_ROOT`` or finds it,
+reads the release from the compiler and requires only ``MIN_SFPI_VERSION``. A
+release other than the one ``LLK_HOME`` pins (``tests/sfpi-version``) is
+reported, and is an error only with ``LLK_SFPI_STRICT=1``.
 """
 
 from __future__ import annotations
@@ -76,11 +72,7 @@ def find_sfpi_root(llk_home: Path) -> Optional[Path]:
 
 
 def session_sfpi_root(llk_home: Path) -> Path:
-    """The root a session takes its toolchain from: the one found, else the first place looked in.
-
-    Not the in-tree root when none is found: a named root that is missing must
-    fail where compiling starts, not be replaced by an in-tree toolchain.
-    """
+    """The root found, else the first place looked in: a named root that is missing is not replaced."""
     return find_sfpi_root(llk_home) or candidate_sfpi_roots(llk_home)[0]
 
 

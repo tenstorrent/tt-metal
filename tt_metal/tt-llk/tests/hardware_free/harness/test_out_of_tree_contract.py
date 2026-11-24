@@ -108,23 +108,12 @@ def test_out_of_tree_contract_fixture_passes():
 
 
 def test_out_of_tree_contract_fixture_passes_on_the_installed_wheel():
-    """The same contract, with the harness taken from its wheel.
+    """The same contract, with the harness built as a wheel and installed by pip.
 
-    ``tests/harness_wheel/make_wheel.py`` packages the harness so an external
-    suite can install it instead of putting a checkout on ``sys.path``. This
-    builds that wheel, has pip install it into a directory, and points the
-    fixture at the result (``LLK_HARNESS_SITE``), which the fixture puts behind
-    its own directories on ``sys.path``, where site-packages is. The fixture
-    asserts that ``helpers`` resolved from there, so a pass means the installed
-    copy was the one exercised.
-
-    ``LLK_HOME`` is a tree of links without the harness's parts and without
-    the toolchain, as a suite that has no harness checkout and installs SFPI
-    on its own would have it; the toolchain is named with ``LLK_SFPI_ROOT``.
-
-    What this catches that the checkout run cannot: a module that reads a file
-    by a path relative to the tt-llk tree, or a package or data file the wheel
-    does not carry. Either works from a checkout and fails once installed.
+    ``LLK_HOME`` is a tree of links without the harness's parts and without the
+    toolchain, which is named with ``LLK_SFPI_ROOT``. This catches what the
+    checkout run cannot: a path derived from ``__file__`` that assumes the
+    tt-llk tree, or a file the wheel does not carry.
     """
     with tempfile.TemporaryDirectory(prefix="oot-wheel-") as child_temp:
         built = subprocess.run(
@@ -158,11 +147,7 @@ def test_out_of_tree_contract_fixture_passes_on_the_installed_wheel():
         )
 
         assert result.returncode == 0, (
-            "The out-of-tree contract fails on the installed harness wheel, "
-            "though it may pass from the checkout. Look for a path derived "
-            "from __file__ that assumes the tt-llk tree (use "
-            "helpers.harness_files.harness_files_root) or a file missing from "
-            "tests/harness_wheel/make_wheel.py.\n\n"
+            "The out-of-tree contract fails on the installed harness wheel.\n"
             f"--- fixture stdout ---\n{result.stdout}\n"
             f"--- fixture stderr ---\n{result.stderr}"
         )
@@ -171,13 +156,8 @@ def test_out_of_tree_contract_fixture_passes_on_the_installed_wheel():
 
 
 def _llk_home_without_the_harness(root: Path) -> Path:
-    """An ``LLK_HOME`` of links to this checkout, minus what an installed harness brings itself and the toolchain.
-
-    No ``tests/python_tests``, ``tests/helpers``, ``tests/sfpi`` or ``tools``: a
-    build that still reaches for one of them under ``LLK_HOME`` fails. It sits
-    as deep under ``root`` as tt-llk does in tt-metal, beside links to its
-    neighbours there, because the compile reaches tt-metal headers by relative
-    path.
+    """An ``LLK_HOME`` of links to this checkout without ``tests/python_tests``, ``tests/helpers``, ``tests/sfpi``
+    and ``tools``, as deep under ``root`` as tt-llk is in tt-metal: the compile reaches tt-metal by relative path.
     """
     checkout = FIXTURE_DIR.parents[1]
     llk_home = root / "tt_metal" / "tt-llk"
@@ -245,10 +225,8 @@ def _run_fixture(
         ".",
     ]
     if harness_site is not None:
-        # An installed harness gets the pytest plugins its wheel requires (pytest-xdist) and no other: one that is
-        # merely installed in this environment must not be what the fixture passes with.
+        # Only the pytest plugin the wheel requires, and no PYTHONPATH that could bring the checkout's harness back.
         env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
-        # A caller's PYTHONPATH that holds tests/python_tests would put the checkout's harness before the installed one.
         env.pop("PYTHONPATH", None)
         argv += ["-p", "xdist.plugin"]
 

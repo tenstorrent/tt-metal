@@ -190,14 +190,15 @@ def test_registered_search_dirs_change_the_variant_id(isolated_search_dirs, in_t
 
 
 def test_a_helpers_tree_replaces_the_linker_scripts_it_has(
-    isolated_search_dirs, tmp_path
+    isolated_search_dirs, tmp_path, monkeypatch
 ):
-    """A suite with its own memory map supplies it this way; the rest stay the harness's."""
-    (tmp_path / "ld").mkdir()
-    (tmp_path / "ld" / "brisc.ld").touch()
-    TestConfig.add_helpers_tree(tmp_path)
+    """A suite's own memory map; the rest stay the harness's. Absolute: the link runs in ``$LLK_HOME/tests``."""
+    (tmp_path / "helpers/ld").mkdir(parents=True)
+    (tmp_path / "helpers/ld/brisc.ld").touch()
+    monkeypatch.chdir(tmp_path)
+    TestConfig.add_helpers_tree("helpers")
 
-    assert TestConfig.linker_script("brisc.ld") == tmp_path / "ld" / "brisc.ld"
+    assert TestConfig.linker_script("brisc.ld") == tmp_path / "helpers/ld/brisc.ld"
     assert (
         TestConfig.linker_script("sections.ld")
         == TestConfig.LINKER_SCRIPTS / "sections.ld"
@@ -208,18 +209,6 @@ def test_a_checkout_harness_builds_with_the_helpers_of_llk_home(tmp_path):
     """The SFPU report tool runs one harness checkout on two trees; each side's device code must be its own."""
     assert not harness_files.harness_is_installed()
     assert harness_files.build_helpers_tree(tmp_path) == tmp_path / "tests/helpers"
-
-
-def test_a_relative_helpers_tree_gives_absolute_linker_scripts(
-    isolated_search_dirs, tmp_path, monkeypatch
-):
-    """The link runs in ``$LLK_HOME/tests``, where a path relative to the suite points somewhere else."""
-    (tmp_path / "helpers" / "ld").mkdir(parents=True)
-    (tmp_path / "helpers" / "ld" / "brisc.ld").touch()
-    monkeypatch.chdir(tmp_path)
-    TestConfig.add_helpers_tree("helpers")
-
-    assert TestConfig.linker_script("brisc.ld") == tmp_path / "helpers/ld/brisc.ld"
 
 
 def test_linker_script_dirs_change_the_variant_id(isolated_search_dirs, tmp_path):
