@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "api/compute/experimental/2_0/internal/no_call_site_macros.h"
+
 #include <cstdint>
 #include "api/compute/common_globals.h"
 #include "api/compute/experimental/2_0/llk_operand.h"
@@ -53,8 +55,6 @@ ALWI void pack_init(LLKOperand<Format, Shape> /*out*/) {
  * | Function | ifrom_dst | Tile index in the DST register                         | uint32_t   | Must be less than the acquired size of DST REG | True |
  */
 // clang-format on
-#pragma push_macro("pack_tile")
-#undef pack_tile
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
 ALWI void pack_tile(LLKOperand<Format, Shape> out, std::uint32_t itile, std::uint32_t ifrom_dst) {
     static_assert(is_legal_tile_shape(Shape), "pack_tile: illegal output tile shape.");
@@ -69,7 +69,6 @@ ALWI void pack_tile(LLKOperand<Format, Shape> out, std::uint32_t itile, std::uin
           /*out_of_order_output=*/true,
           PackMode::Default>(ifrom_dst, detail::tile_address(out, itile))));
 }
-#pragma pop_macro("pack_tile")
 
 // clang-format off
 /**

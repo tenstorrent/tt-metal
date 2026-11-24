@@ -241,7 +241,8 @@ ALWI void pack_relu_config(const ReluConfig& config) { PACK((llk_pack_relu_confi
 
 }  // namespace ckernel
 
-#if defined(ARCH_BLACKHOLE) && defined(TRISC_PACK)
+// Not in a kernel that includes the id-free (2.0) compute API (experimental/2_0/internal/no_call_site_macros.h).
+#if defined(ARCH_BLACKHOLE) && defined(TRISC_PACK) && !defined(CKERNEL_NO_CALL_SITE_MACROS)
 // Lets today's pack_block(dst, cb, n) calls with a constant count reach the block forms; other arities pass through.
 #define PACK_BLOCK_NARGS_(a1, a2, a3, a4, a5, a6, a7, a8, n, ...) n
 #define PACK_BLOCK_NARGS(...) PACK_BLOCK_NARGS_(__VA_ARGS__, 8, 7, 6, 5, 4, 3, 2, 1, 0)
