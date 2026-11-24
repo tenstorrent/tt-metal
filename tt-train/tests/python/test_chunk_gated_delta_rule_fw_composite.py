@@ -38,8 +38,9 @@ OUT_NAMES = ("o", "final_state", "h", "v_new", "A")
 TORCH_DTYPE = {ttnn.float32: torch.float32, ttnn.bfloat16: torch.bfloat16}
 
 # Relative RMS (Frobenius) bound per output, 2-3x the error measured on Blackhole (o ~2.7e-3, A ~4e-4 at the Qwen3.8
-# TP4 shape).
-RMS_MAX = {"o": 8e-3, "final_state": 8e-3, "h": 8e-3, "v_new": 5e-3, "A": 2e-3}
+# TP4 shape). Rounding a saved tensor to bf16 stays inside these bounds (h and v_new carry ~2e-3 of their own error, A
+# is mostly exact 0 and 1), so the fp32 dtype check in test_vs_reference is what pins their precision.
+RMS_MAX = {"o": 8e-3, "final_state": 8e-3, "h": 8e-3, "v_new": 5e-3, "A": 1.2e-3}
 PCC_MIN = 0.9999
 # Last chunk's error over the first chunk's, with no decay along a 128-chunk scan (measured 1.3).
 GROWTH_MAX = 2.0
@@ -83,7 +84,7 @@ CASES = [
     # o measured 7.3e-3.
     pytest.param(_case((1, 128, 2, 2, 64, 64), 64, gate_scale=STRONG_GATE, rms_max={"o": 2e-2}), id="strong_gate"),
     # k_i . k_j ~ 1 for every pair, so N is dense rather than near zero (A measured 1.5e-3).
-    pytest.param(_case((1, 256, 1, 2, 64, 64), 64, aligned_keys=True, rms_max={"A": 5e-3}), id="aligned_keys"),
+    pytest.param(_case((1, 256, 1, 2, 64, 64), 64, aligned_keys=True, rms_max={"A": 3e-3}), id="aligned_keys"),
     # o is linear in q, so a wrong or ignored scale keeps the PCC at 1; the relative RMS sees it.
     pytest.param(_case((1, 128, 2, 2, 64, 64), 64, scale=0.3), id="scale_0.3"),
 ]
