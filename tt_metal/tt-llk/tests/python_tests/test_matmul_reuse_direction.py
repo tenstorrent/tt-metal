@@ -145,8 +145,12 @@ def test_matmul_narrowed_block_row_mop(formats, blocks, fidelity):
 
 @skip_for_wormhole
 @skip_for_quasar
+# The trapped TRISC leaves its core wedged for every later test on that worker (the recovery's soft reset does not clear it), so
+# only a run that asks for it trips the assert.
 @pytest.mark.skipif(
-    os.environ.get("TT_LLK_DISABLE_ASSERTS") == "1", reason="needs LLK asserts"
+    os.environ.get("TT_LLK_DISABLE_ASSERTS") == "1"
+    or os.environ.get("LLK_ASSERT_TRAP_TESTS") != "1",
+    reason="trips an LLK assert, which leaves the core wedged; LLK_ASSERT_TRAP_TESTS=1 runs it",
 )
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b]),
