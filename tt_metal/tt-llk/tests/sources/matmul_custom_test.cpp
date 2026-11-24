@@ -24,6 +24,14 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #include "llk_unpack_common.h"
 #include "params.h"
 
+#ifdef ARCH_BLACKHOLE
+// production's rule (llk_unpack_AB_matmul_custom) on the CB formats the JIT would give this kernel
+constexpr bool matmul_custom_unhoist_k =
+    ckernel::matmul_custom_unhoist_kernel(MATH_FIDELITY, dest_sync == ckernel::DstSync::SyncHalf, matmul_custom_cb_formats);
+#else
+constexpr bool matmul_custom_unhoist_k = false;
+#endif
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -84,6 +92,25 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t j = 0; j < KT_DIM; j++)
                 {
+                    if constexpr (matmul_custom_unhoist_k)
+                    {
+                        if (ckernel::matmul_custom_unhoist_block(RT_DIM, CT_DIM, KT_DIM))
+                        {
+                            _llk_unpack_AB_matmul_<0, 0, false, 16, false>(
+                                L1_ADDRESS(buffer_A[0]),
+                                L1_ADDRESS(buffer_B[0]),
+                                j,
+                                j * CT_DIM,
+                                TILE_SIZE_UNPACK_A,
+                                TILE_SIZE_UNPACK_B,
+                                false /* unpA_partial_face */,
+                                false /* unpB_partial_face */,
+                                CT_DIM,
+                                RT_DIM,
+                                KT_DIM);
+                            continue;
+                        }
+                    }
                     _llk_unpack_AB_matmul_<>(
                         L1_ADDRESS(buffer_A[0]),
                         L1_ADDRESS(buffer_B[0]),

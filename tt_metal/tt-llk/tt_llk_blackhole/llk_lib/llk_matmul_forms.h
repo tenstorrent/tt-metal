@@ -2621,8 +2621,8 @@ inline constexpr matmul_section_end_cell matmul_main_section_end_cells[] = {
     {DataFormat::Float32, DataFormat::Float32, DataFormat::Tf32, 1, 2, 2},
 };
 
-// Blocks the tt-llk perf harness unpacks per row (no hoisted row invariants): there the shorter unpack call only moved the
-// hand-off and lost against main (LoFi half sync, abl9/abl10). The compute API decides the hoist without the block.
+// Blocks that unpack per row (no hoisted row invariants) where a kernel names the block (matmul_block's block keys): there the
+// shorter unpack call only moved the hand-off and lost against main (LoFi half sync, abl9/abl10).
 inline constexpr matmul_grid_main_cell matmul_unhoist_cells[] = {
     {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp8_b, 2, 1, 4, 0, false, 1},
     {MathFidelity::LoFi, true, true, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Float32, 4, 1, 4, 0, false, 1},
@@ -2649,6 +2649,46 @@ constexpr bool matmul_unhoist_cell(
         }
     }
     return false;
+}
+
+// A LoFi half sync custom matmul kernel (compute/experimental/matmul_custom.h) of Float16_b operands in CBs 0 and 1 whose other
+// CBs are Bfp8_b (formats: every CB format of the kernel): its matmul_custom_unhoist_block calls unpack per row.
+template <std::size_t N>
+constexpr bool matmul_custom_unhoist_kernel(const MathFidelity fidelity, const bool half_sync, const std::uint8_t (&formats)[N])
+{
+    if (fidelity != MathFidelity::LoFi || !half_sync || N < 3 || static_cast<DataFormat>(formats[0]) != DataFormat::Float16_b ||
+        static_cast<DataFormat>(formats[1]) != DataFormat::Float16_b)
+    {
+        return false;
+    }
+    bool out = false;
+    for (std::size_t i = 2; i < N; i++)
+    {
+        const DataFormat f = static_cast<DataFormat>(formats[i]);
+        if (f != DataFormat::Invalid && f != DataFormat::Bfp8_b)
+        {
+            return false;
+        }
+        out = out || f == DataFormat::Bfp8_b;
+    }
+    return out;
+}
+
+// The run-time blocks of such a kernel where the hoisted rows measured slower than the per-row unpack (+35..+104 cy)
+inline bool matmul_custom_unhoist_block(const std::uint32_t rt, const std::uint32_t ct, const std::uint32_t kt)
+{
+    const std::uint32_t b = (rt << 4) | ct; // a half sync block fits DEST: rt, ct <= 8
+    switch (kt)
+    {
+        case 2:
+            return b == 0x32 || b == 0x15 || b == 0x61;
+        case 3:
+            return b == 0x32 || b == 0x31;
+        case 4:
+            return b == 0x13 || b == 0x32 || b == 0x31;
+        default:
+            return false;
+    }
 }
 
 // HiFi2 half sync blocks with a Float32 operand and a Bfp8_b output keep main's section end at any block: there the RISC-pushed
