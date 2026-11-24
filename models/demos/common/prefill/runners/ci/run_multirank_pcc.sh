@@ -201,8 +201,8 @@ case "${MODEL}" in
           PP_RANKS=1
           SC1_NUM_LAYERS=38
           RUNNER_ENV+=" export PREFILL_FABRIC_MODE=2d_torus_xy;"
-          # The same unfused norm and MoE implementation as the SC4 [RING,RING] stages.
-          RUNNER_ENV+=" export PREFILL_FUSED_RMSNORM=0; export MOE_IMPL=ttmoe;"
+          # The same unfused norm as the SC4 [RING,RING] stages.
+          RUNNER_ENV+=" export PREFILL_FUSED_RMSNORM=0;"
         elif [ "${CONFIG}" = sc4_rr ]; then
           # [RING,RING]: 8 stages, the odd (seam) ones on two hosts each, so 12 ranks; the 4x4 tray-half cache
           # serves it (same mesh coordinates, only the fabric differs).
@@ -221,11 +221,8 @@ case "${MODEL}" in
             RUNNER_ENV+=" export PREFILL_LAYER_ACK_D2H=0;"
           fi
           # dit_fused_distributed_rmsnorm resolves every chip of the mesh, which a seam host cannot; use the unfused norm.
+          # The adapter's L1_SMALL, sized for the MoE block's words slab, also covers its extra all-gather semaphores.
           RUNNER_ENV+=" export PREFILL_FUSED_RMSNORM=0;"
-          # TtMoe: the MoE block's port placement asks every chip of the mesh for its device, which a seam host cannot
-          # (the prefill CCL ops exchange placements across hosts instead). The adapter's L1_SMALL, sized for the MoE
-          # block's words slab, also covers the unfused norm's extra all-gather semaphores.
-          RUNNER_ENV+=" export MOE_IMPL=ttmoe;"
           PRODUCER_ENV+=" export PREFILL_STAGE_HOSTS=1,2,1,2,1,2,1,2;"
         fi
         # The cache the runner resolves for a [4,4] SP-axis-1 stage on 16 visible chips. Checked
