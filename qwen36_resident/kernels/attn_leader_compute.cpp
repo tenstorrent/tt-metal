@@ -86,6 +86,9 @@ void kernel_main() {
     const uint32_t children = get_arg_val<uint32_t>(0);
     compute_kernel_hw_startup(cb_qraw, cb_qraw, cb_sq);
     cb_wait_front(cb_mean, 1);
+    if constexpr (kKRot) {
+        cb_wait_front(cb_had, Dt * Dt);
+    }
     cb_wait_front(cb_rope, kRopeLead);
     uint32_t mask = ~0u;
     if constexpr (rows_mode) {

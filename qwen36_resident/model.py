@@ -1032,6 +1032,12 @@ class ResidentModel:
         u_tails = max(self.attn_tails, int(self._l1_union.get("attn_tails", 0)))
         mean_grid = lead_grid.merge(C(workers[len(workers) - u_tails :])) if u_tails > self.attn_tails else prep_grid
         mean_t = l1(torch.full(((1 + u_tails) * TILE, TILE), 1.0 / HD), mean_grid, [TILE, TILE], tile=full, key="mean")
+        # (S0-8: HAD on the leader and the tail core(s) — norm_rope rotates q and k after RoPE; +-1/16 is exact in bfp4)
+        had_t = (
+            l1(HAD.repeat(1 + u_tails, 1), mean_grid, [HD, HD], dtype=ttnn.bfloat4_b, tile=full, key="had")
+            if K_BFP4
+            else None
+        )
         rows32 = lambda v: v[None].expand(TILE, -1)
         qw = torch.cat([rows32(wa["wq"] / math.sqrt(HD)) for wa in w["attn"]] or [torch.zeros(TILE, HD)], dim=1)
         kw = torch.cat([rows32(wa["wk"]) for wa in w["attn"]] or [torch.zeros(TILE, HD)], dim=1)
@@ -1516,6 +1522,7 @@ class ResidentModel:
                 # leader and tail core
                 cb(13, prep_grid, Dt),
                 cb(14, prep_grid, 2),
+                *([T(43, had_t), cb(44, prep_grid, Dt)] if K_BFP4 else []),  # (S0-8: HAD, norm_rope's pre-rotation)
                 # (row groups: + the tail core's per-row rope tiles, attn_common.hpp kTailBatched)
                 cb(
                     17,
@@ -1610,6 +1617,7 @@ class ResidentModel:
                 ("attn_tails", self.attn_tails),  # (attn_common.hpp kTails)
                 ("kv_v_tile", TILE_BYTES[V_DT]),  # (attn_common.hpp kVTile: the V cache's tile, S0)
                 ("kv_k_tile", TILE_BYTES[K_DT]),  # (attn_common.hpp kKvTile: the K cache's tile, S0-8)
+                ("kv_k_rot", int(K_BFP4)),  # (attn_common.hpp kKRot: q / k rotated by HAD after RoPE, S0-8)
             ]
 
             def kernel(src, core_ranges, ct, rt, config, named=()):
@@ -1976,6 +1984,7 @@ class ResidentModel:
                 + ([self.o_in_t] if self.o_in_t is not None else [])
                 + ([rows_t] if rows_t is not None else [])
                 + [q_t, M_t, m_slots_t, one_t, mean_t]
+                + ([had_t] if had_t is not None else [])
             )
             io += [taps_t, sub["hist"], sub["state"], norm_t, qw_t, kw_t, sub["K"], sub["V"], sub["tok"]]
             io += self._keep

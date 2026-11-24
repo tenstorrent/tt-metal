@@ -49,6 +49,9 @@ from qwen36_resident.model import (
     ROT,
     State,
     V_DT,
+    K_BFP4,
+    K_DT,
+    HAD,
     TraceL1Guard,
     is_attn,
     l1_layout,
@@ -57,7 +60,7 @@ from qwen36_resident.model import (
 
 KDIR = f"{PKG_DIR}/prefill/kernels/"
 # the decode pools' tile bytes, K (bf8) and V (bf8, or bfp4 with S0's RESIDENT_KV_V_BFP4): the handoff copies raw pages
-KV_TILE_BYTES = (TILE_BYTES[ttnn.bfloat8_b], TILE_BYTES[V_DT])
+KV_TILE_BYTES = (TILE_BYTES[K_DT], TILE_BYTES[V_DT])  # (S0-8: K bfp4 with RESIDENT_KV_K_BFP4)
 
 
 # (S0 bfp4 V) the device's bfp4 packer truncates toward zero (relative error ~0.20 vs ~0.11 rounded, biased toward zero:
@@ -216,6 +219,20 @@ class PPPrefill:
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
+        # (S0-8: q and k rotated by HAD after RoPE, as the decode's norm_rope; HiFi4 keeps bf16 x +-1/16 exact)
+        self.had = None
+        if K_BFP4:
+            self.had = ttnn.from_torch(
+                HAD,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self.rot_cfg = ttnn.init_device_compute_kernel_config(
+                mesh.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=False
+            )
 
         # chunks up to SMM_MAX_C stream the big projections through SmallMatmul, from their own
         # bank-major copies of those weights (the layout does not depend on the chunk)
@@ -290,7 +307,7 @@ class PPPrefill:
             if attn:
                 # zero-filled on device: at max_len 256K a host image would be 4.3 GB of fp32 per cache
                 kv = lambda dt: device_zeros(mesh, [kv_blocks, NKV, block, HD], dt, DRAM)
-                self.K[j], self.V[j] = kv(ttnn.bfloat8_b), kv(V_DT)  # (S0: V in the decode pool's format)
+                self.K[j], self.V[j] = kv(K_DT), kv(V_DT)  # (S0 / S0-8: the decode pool's formats)
             else:
                 self.S[j] = dev(torch.zeros(n, NV, DK, DV), ttnn.float32)
                 self.carry[j] = dev(torch.zeros(n, 1, TILE, CONV_CH), ttnn.bfloat16)
@@ -970,7 +987,13 @@ class PPPrefill:
         )
         q = self._qkrope(q, w["wq"])
         k = self._qkrope(k, w["wk"])
-        ttnn.experimental.paged_fill_cache(self.K[j], ttnn.typecast(k, ttnn.bfloat8_b), self.fill_pt, batch_idx=0)
+        if K_BFP4:  # (S0-8: rotated by HAD after RoPE, K rounded to nearest on the bfp4 grid, the packer truncates)
+            dram = ttnn.DRAM_MEMORY_CONFIG
+            q = ttnn.matmul(q, self.had, memory_config=dram, compute_kernel_config=self.rot_cfg)
+            k = ttnn.matmul(k, self.had, memory_config=dram, compute_kernel_config=self.rot_cfg)
+            if V_RTN:
+                self._v_rtn(k)
+        ttnn.experimental.paged_fill_cache(self.K[j], ttnn.typecast(k, K_DT), self.fill_pt, batch_idx=0)
         if V_DT == ttnn.bfloat4_b and V_RTN:  # (S0: rounded to nearest first, the packer truncates)
             self._v_rtn(v)
         ttnn.experimental.paged_fill_cache(self.V[j], ttnn.typecast(v, V_DT), self.fill_pt, batch_idx=0)

@@ -141,6 +141,9 @@ constexpr uint32_t kMRows0 = (qrows < 16 ? qrows : 16) * 32, kMRows2 = top_faces
 constexpr uint32_t kTile = 2048;           // bf16 32x32 tile
 // the K cache's tile: bf8 (1088 B), or bfp4 (576 B) with S0-8's RESIDENT_KV_K_BFP4 (named arg kv_k_tile)
 constexpr uint32_t kKvTile = get_named_compile_time_arg_val("kv_k_tile");
+// S0-8 (RESIDENT_KV_K_BFP4): q and k rotated by HAD after RoPE (norm_rope), HAD's 8 x 8 tiles resident on the leader
+// and the tail core(s)
+constexpr bool kKRot = get_named_compile_time_arg_val("kv_k_rot") != 0;
 // the V cache's tile: bf8 (1088 B), or bfp4 (576 B) with S0's RESIDENT_KV_V_BFP4 (named arg kv_v_tile)
 constexpr uint32_t kVTile = get_named_compile_time_arg_val("kv_v_tile");
 constexpr uint32_t kFaceRow = 32;          // bytes of one 16-element face row (bf16)
@@ -241,6 +244,8 @@ constexpr uint32_t cb_out = 27;    // gated output (Dt)
 constexpr uint32_t cb_flush = 28;  // updated tail k as bf8 (Dt per tail tile), written back to DRAM
 constexpr uint32_t cb_flushv = 33;  // updated tail v in V's format (Dt per tail tile), written back to DRAM
 constexpr uint32_t cb_mean = 29;   // reduce scaler 1 / (32 Dt)
+constexpr uint32_t cb_had = 43;    // S0-8: HAD (Dt x Dt tiles, bfp4; resident) — leader and tail cores
+constexpr uint32_t cb_rotx = 44;   // S0-8: norm_rope's output before the rotation (Dt, bf16)
 constexpr uint32_t cb_stage = 2;   // leader: gated output rows as batch x 32 tiles (heads x Dt)
 
 // byte offset of row r inside a 32x32 bf16 tile, face 0 (columns 0..15); face 1 is + kFace

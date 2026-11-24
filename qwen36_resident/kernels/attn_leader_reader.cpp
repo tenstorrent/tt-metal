@@ -87,6 +87,9 @@ void kernel_main() {
     zero_tiles(cb_qraw, 2 * Dt);
     zero_tiles(cb_gate, 2 * Dt);
     push_resident(cb_mean, 1);
+    if constexpr (kKRot) {
+        push_resident(cb_had, Dt * Dt);  // (S0-8: HAD's tiles, resident)
+    }
     {
         const InterleavedAddrGen<true> tok{
             .bank_base_address = tok_addr, .page_size = rope_off + 3 * batch * groups * kTile};

@@ -256,6 +256,9 @@ void kernel_main() {
             cb_push_back(cb_rope, kRopeTail);
         }
         push_resident(cb_mean, 1);
+        if constexpr (kKRot) {
+            push_resident(cb_had, Dt * Dt);  // (S0-8: HAD's tiles, resident)
+        }
     }
 
     // two_nocs: a chunk worker's KV reads alternate between the NOCs (the other one's counters start here)

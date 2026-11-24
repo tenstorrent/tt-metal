@@ -233,17 +233,19 @@ FORCE_INLINE void norm_rope(
     cb_pop_front(in_cb, Dt);
 
     // rotate_half on the first 64 dims: t0' = t0 cos - t1 sin, t1' = t1 cos + t0 sin
+    // (S0-8 kKRot: into cb_rotx, then rotated by HAD into out_a / out_b below)
+    const uint32_t rope_a = kKRot ? cb_rotx : out_a, rope_b = kKRot ? cb_rotx : out_b;
     cb_wait_front(cb_sq, Dt);
-    cb_reserve_back(out_a, Dt);
-    if (out_b != out_a) {
-        cb_reserve_back(out_b, Dt);
+    cb_reserve_back(rope_a, Dt);
+    if (rope_b != rope_a) {
+        cb_reserve_back(rope_b, Dt);
     }
     reconfig_data_format(cb_sq, cb_sq);
-    pack_reconfig_data_format(out_a);
+    pack_reconfig_data_format(rope_a);
     auto pack_both = [&](uint32_t dst) {
-        pack_tile(dst, out_a);
-        if (out_b != out_a) {
-            pack_tile(dst, out_b);
+        pack_tile(dst, rope_a);
+        if (rope_b != rope_a) {
+            pack_tile(dst, rope_b);
         }
     };
     tile_regs_acquire();
@@ -277,11 +279,41 @@ FORCE_INLINE void norm_rope(
         pack_both(0);
         tile_regs_release();
     }
-    cb_push_back(out_a, Dt);
-    if (out_b != out_a) {
-        cb_push_back(out_b, Dt);
+    cb_push_back(rope_a, Dt);
+    if (rope_b != rope_a) {
+        cb_push_back(rope_b, Dt);
     }
     cb_pop_front(cb_sq, Dt);
+    if constexpr (kKRot) {
+        // out tile j = sum_i x_i @ HAD[i, j] (HAD's 32 x 32 blocks, row-major Dt x Dt in cb_had; fp32 dest)
+        cb_wait_front(cb_rotx, Dt);
+        cb_reserve_back(out_a, Dt);
+        if (out_b != out_a) {
+            cb_reserve_back(out_b, Dt);
+        }
+        reconfig_data_format(cb_had, cb_rotx);
+        pack_reconfig_data_format(out_a);
+        matmul_init(cb_rotx, cb_had, 0);
+        for (uint32_t j = 0; j < Dt; j++) {
+            tile_regs_acquire();
+            for (uint32_t i = 0; i < Dt; i++) {
+                matmul_tiles(cb_rotx, cb_had, i, i * Dt + j, 0);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, out_a);
+            if (out_b != out_a) {
+                pack_tile(0, out_b);
+            }
+            tile_regs_release();
+        }
+        cb_push_back(out_a, Dt);
+        if (out_b != out_a) {
+            cb_push_back(out_b, Dt);
+        }
+        cb_pop_front(cb_rotx, Dt);
+        reconfig_data_format(cb_sq, cb_sq);  // (the unpack formats norm_rope leaves without the rotation)
+    }
 }
 
 // row r of the tail tiles <- the new k / v row (row 0 of cb_knew / cb_vraw), kBatch tiles per DST pass;
