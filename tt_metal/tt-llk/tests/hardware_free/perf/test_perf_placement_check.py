@@ -26,6 +26,7 @@ from placement_check import (  # noqa: E402
     read_candidates,
     read_window_map,
     render,
+    write_blocking,
 )
 
 _BASE = 2000.0
@@ -449,3 +450,17 @@ def test_gate_blocks_when_a_leg_left_no_baseline_record(tmp_path):
     _, notes = gate([rows, []], 2, _candidates(tmp_path), "abc", ["abc"])
 
     assert notes == ["1 leg(s) left no record of their baseline."]
+
+
+def test_slack_lists_only_the_rows_the_gate_blocks_on(tmp_path):
+    rows = _cleared(tmp_path)
+    stage1 = _candidates(tmp_path, init=True)
+    out = tmp_path / "blocking.csv"
+
+    results, notes = gate([rows], 1, stage1, "abc", ["abc"])
+    write_blocking(tmp_path / "s1.regressions.csv", results, notes, out)
+    assert pd.read_csv(out)["marker"].tolist() == ["INIT"]
+
+    results, notes = gate([rows], 2, stage1, "abc", ["abc"])
+    write_blocking(tmp_path / "s1.regressions.csv", results, notes, out)
+    assert pd.read_csv(out)["marker"].tolist() == ["TILE_LOOP", "INIT"]

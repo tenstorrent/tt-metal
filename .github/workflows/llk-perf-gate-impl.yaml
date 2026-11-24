@@ -528,11 +528,13 @@ jobs:
           python3 ${{ env.LLK_PATH }}/perf/placement_check.py gate \
             --results 'stage2/**/stage2.json' --bases 'stage2/**/stage2.base' --legs "$LEGS" \
             --stage1 perf_gate_report.regressions.csv --gate-base "$GATE_BASE" \
-            --arch "$ARCH" --report stage2.md || STAGE2_EXIT=$?
+            --arch "$ARCH" --report stage2.md --blocking-csv stage2.regressions.csv || STAGE2_EXIT=$?
           EXIT_CODE=${{ steps.compare.outputs.gate_exit_code }}
           if [ "$EXIT_CODE" = "1" ]; then
             echo "Stage 2 re-measured the candidates, so it decides the verdict (stage 2 exit ${STAGE2_EXIT})."
             EXIT_CODE=$STAGE2_EXIT
+            # Slack lists what blocks, not every stage-1 regression.
+            [ -f stage2.regressions.csv ] && echo "regressions=stage2.regressions.csv" >> "$GITHUB_OUTPUT"
           fi
           echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
           printf '\n' >> perf_gate_report.md
@@ -595,6 +597,7 @@ jobs:
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           GATE_EXIT_CODE: ${{ steps.compare.outputs.gate_exit_code }}
           STAGE2_EXIT_CODE: ${{ steps.stage2.outputs.exit_code }}
+          STAGE2_REGRESSIONS: ${{ steps.stage2.outputs.regressions }}
           COMPARISON_FINISHED: ${{ steps.compare.outputs.comparison_finished }}
           MEASURE_RESULT: ${{ steps.measured.outputs.result }}
           MEASURE_REASON: ${{ steps.measured.outputs.reason }}
@@ -656,7 +659,7 @@ jobs:
           )
 
           python3 "${LLK_PATH}/perf/gate_slack_notify.py" \
-            --regressions perf_gate_report.regressions.csv \
+            --regressions "${STAGE2_REGRESSIONS:-perf_gate_report.regressions.csv}" \
             --report perf_gate_report.md \
             --have-baseline have_baseline.txt \
             --exit-code "${GATE_EXIT_CODE:-0}" \
