@@ -241,6 +241,7 @@ _UNREGISTERED_BINARY_OPS = frozenset(
         MathOperation.SfpuRemainderUint32,
         MathOperation.SfpuRsubInt32,
         MathOperation.SfpuCopyDest,
+        MathOperation.SfpuSiluGlu,
     }
 )
 
@@ -1212,6 +1213,31 @@ def test_eltwise_binary_sfpu_isclose_nan(formats, dest_acc, mathop):
 
     spec_A, spec_B = _isclose_nan_stimuli_specs()
     sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
+
+
+SILU_GLU_SWEEP = dict(
+    formats=input_output_formats([DataFormat.Float16_b]),
+    mathop=[MathOperation.SfpuSiluGlu],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+
+
+@skip_for_quasar
+@skip_for_wormhole
+@parametrize(**SILU_GLU_SWEEP)
+def test_eltwise_binary_sfpu_silu_glu(formats, dest_acc, mathop, **run_kwargs):
+    # silu_glu(gate, up) with gate = tile0 and up = tile1; Blackhole has the only kernel.
+    # Both signs, past each clamp and below where the logistic factor underflows.
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-110.0, high=16.0
+        ),
+        spec_B=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-16.0, high=16.0),
+        **run_kwargs,
+    )
 
 
 # dest_acc stays an axis: a single-axis `parametrize` hands pytest 1-tuples, which `--op` cannot

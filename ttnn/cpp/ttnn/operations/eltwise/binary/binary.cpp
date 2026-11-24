@@ -1619,6 +1619,11 @@ constexpr std::array fused_activation_routes{
         1.0f,
         operations::binary::BinaryOpType::GEGLU_TANH,
         tt::ARCH::BLACKHOLE},
+    FusedActivationRoute{
+        operations::unary::UnaryOpType::SILU,
+        std::nullopt,
+        operations::binary::BinaryOpType::SILU_GLU,
+        tt::ARCH::BLACKHOLE},
 };
 
 struct FusedActivationOperands {

@@ -92,14 +92,14 @@ FORCE_INLINE void dfb_dm_kernel_exit(uint32_t hartid, volatile uint8_t* run_stat
         // bit). The host allocates each side's txn ids as one ascending block (TxnIdAllocator::allocate),
         // so txn_ids[0] is the lowest.
         const uint32_t slot = intf.txn_ids[0] - DFB_TXN_ID_BASE;
-        records[slot] = static_cast<uint32_t>(progress.loop) | (static_cast<uint32_t>(progress.pos) << 16) |
-                        (static_cast<uint32_t>(progress.share) << 24);
+        records[slot] = static_cast<uint32_t>(progress.loop) | (static_cast<uint32_t>(progress.pos) << 16);
         record_mask |= 1u << slot;
         progress = {};
     }
 
     // 2. Hand the records to DM0, then move to DFB_DRAINING. DM0 flushes a side once all its issuers have
     // reached it. This is separate from DONE because the drain below can wait on DM0's flush of a side.
+    // The op size DM0 splits a partial batch by is in the txn descriptor, written by the host before launch.
     volatile uint32_t* record_out = dfb_l1_uncached_u32_ptr(
         reinterpret_cast<uintptr_t>(&g_dfb_exit_record[hartid - ReservedDMProcessorsPerCoreType][0]));
     for (uint32_t m = record_mask; m != 0; m &= m - 1) {
@@ -173,6 +173,8 @@ inline void dfb_dm0_flush_side(uint32_t side_trids, bool is_producer) {
     const uint32_t num_tcs = desc.num_counters / static_cast<uint32_t>(__builtin_popcount(issuer_mask));
     const uint32_t per_tc = desc.tiles_to_post;
     const uint8_t flags = desc.finish.flags;
+    // Same for every issuer. An implicit-sync op is this many entries; the host stored it.
+    const uint32_t share = desc.finish.op_entries;
     const uint32_t record_slot = first_trid - DFB_TXN_ID_BASE;
     uint8_t counter = 0;
     for (uint32_t h = issuer_mask; h != 0; h &= h - 1) {
@@ -182,8 +184,7 @@ inline void dfb_dm0_flush_side(uint32_t side_trids, bool is_producer) {
         const uint32_t rec = *rec_slot;
         *rec_slot = DFB_EXIT_RECORD_NONE;
         const uint32_t loop = rec & 0xFFFFu;
-        const uint32_t pos = (rec >> 16) & 0xFFu;
-        const uint32_t share = rec >> 24;
+        const uint32_t pos = rec >> 16;
         // What each of the issuer's counters is owed: `loop` full txn-id batches plus `pos` entries into the
         // next, mod 2^16 like the counters. Ops are spread the way commit_implicit_* spreads them: broadcast
         // puts every op on all counters, split gives each counter 1/num_tcs of every op, otherwise ops go
@@ -197,7 +198,7 @@ inline void dfb_dm0_flush_side(uint32_t side_trids, bool is_producer) {
             owed += pos / num_tcs;
         } else if (pos != 0) {
             const uint32_t round = num_tcs * share;
-            ASSERT(round != 0);  // a record with pos != 0 has a non-zero share
+            ASSERT(round != 0);  // op_entries is non-zero on every implicit-sync side
             owed += (pos / round) * share;
             rr_rem = pos % round;
         }

@@ -1156,6 +1156,9 @@ BINARY_SPECIALS_READY_OPS: frozenset[MathOperation] = frozenset(
 _BINARY_SPECIALS_NOT_READY: frozenset[MathOperation] = frozenset(
     {
         MathOperation.SfpuElwdiv,
+        # At these special pairs (gate, up) the kernel and its golden differ: (-100, +inf) gives nan where
+        # the golden gives -inf; (-100, -inf) gives nan where the golden gives +inf.
+        MathOperation.SfpuSiluGlu,
         MathOperation.SfpuXlogy,
         MathOperation.SfpuElwpow,
         MathOperation.SfpuBinaryFmod,

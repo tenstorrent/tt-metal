@@ -177,7 +177,7 @@ static constexpr bool is_supported_format(const CommonDataFormat& format) {
 }
 
 #if !defined(ENV_LLK_INFRA)
-inline tile_info_t get_tile_info(
+__attribute__((always_inline)) inline tile_info_t get_tile_info(
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
     uint8_t cb, dprint_tslice_cb_t cb_type, dprint_tslice_ptr_t ptr_type
 #else
@@ -221,6 +221,85 @@ inline tile_info_t get_tile_info(
 #endif  // !defined(ENV_LLK_INFRA)
 #endif  // defined(DEBUG_PRINT_ENABLED)
 
+#if defined(DEBUG_PRINT_ENABLED) && !defined(ENV_LLK_INFRA)
+// One copy of each sampler per kernel: not copied into the prints, nor cloned per constant argument (clang doesn't
+// know noclone).
+#if defined(__clang__)
+#define DPRINT_TILE_SAMPLER static __attribute__((noinline))
+#else
+#define DPRINT_TILE_SAMPLER static __attribute__((noinline, noclone))
+#endif
+struct dprint_tile_slice_words_t {};
+template <int MAX_BYTES>
+struct TileSlice;
+template <int MAX_BYTES>
+static void dprint_tile_slice_sample_words(
+    TileSliceHostDev<MAX_BYTES>* ts,
+    uint32_t cb,
+    uint32_t tile_offset,
+    const SliceRange& slice_range,
+    uint32_t flags,
+    uint32_t format_and_dims,
+    uint32_t num_faces);
+
+// The sampler's flags word and descriptors word (with num_faces, the descriptors in two words, which are constants for
+// a CB known at compile time).
+__attribute__((always_inline)) inline uint32_t dprint_tile_slice_flags(
+    bool endl_rows, bool print_untilized, bool ptr_type) {
+    return static_cast<uint32_t>(endl_rows) | static_cast<uint32_t>(print_untilized) << 1 |
+           static_cast<uint32_t>(ptr_type) << 2;
+}
+__attribute__((always_inline)) inline uint32_t dprint_tile_slice_descriptors(const tile_info_t& info) {
+    return info.data_format | info.tile_dim_r << 8 | info.tile_dim_c << 16 | info.face_dim_r << 24;
+}
+
+// Samples a tile into a TileSlice (see TileSlice's constructor), from the tile descriptors of its CB.
+template <int MAX_BYTES>
+__attribute__((always_inline)) inline void dprint_tile_slice_sample(
+    TileSliceHostDev<MAX_BYTES>* ts,
+    uint8_t cb,
+    const tile_info_t& info,
+    int tile_idx,
+    const SliceRange& slice_range,
+    bool endl_rows,
+    bool print_untilized,
+    bool ptr_type = false) {
+    dprint_tile_slice_sample_words<MAX_BYTES>(
+        ts,
+        cb,
+        tile_idx * info.tile_size,
+        slice_range,
+        dprint_tile_slice_flags(endl_rows, print_untilized, ptr_type),
+        dprint_tile_slice_descriptors(info),
+        info.num_faces);
+}
+
+// The same for a CB known only at run time: the descriptors' lookup is out of line too.
+template <int MAX_BYTES>
+DPRINT_TILE_SAMPLER void dprint_tile_slice_sample_cb(
+    TileSliceHostDev<MAX_BYTES>* ts,
+    uint8_t cb,
+#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
+    dprint_tslice_cb_t cb_type,
+    dprint_tslice_ptr_t ptr_type,
+#endif
+    int tile_idx,
+    const SliceRange& slice_range,
+    bool endl_rows,
+    bool print_untilized) {
+#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
+    const tile_info_t info = get_tile_info(cb, cb_type, ptr_type);
+#else
+    const tile_info_t info = get_tile_info(cb);
+#endif
+#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
+    dprint_tile_slice_sample<MAX_BYTES>(ts, cb, info, tile_idx, slice_range, endl_rows, print_untilized, ptr_type);
+#else
+    dprint_tile_slice_sample<MAX_BYTES>(ts, cb, info, tile_idx, slice_range, endl_rows, print_untilized);
+#endif
+}
+#endif
+
 // Specialization of TileSliceHostDev, with device-side implementation
 template <int MAX_BYTES = 32 * 2>
 struct TileSlice : TileSliceHostDev<MAX_BYTES> {
@@ -254,7 +333,7 @@ struct TileSlice : TileSliceHostDev<MAX_BYTES> {
     }
 
 #if !defined(ENV_LLK_INFRA)
-    __attribute__((__noinline__)) TileSlice(
+    __attribute__((always_inline)) TileSlice(
         uint8_t cb,
         int tile_idx,
         const SliceRange& slice_range,
@@ -282,86 +361,149 @@ struct TileSlice : TileSliceHostDev<MAX_BYTES> {
         this->return_code = DPrintErrorEthernet;
         return;
 #endif
-
-        // Fill out slice info
-        this->slice_range = slice_range;
-        this->cb_id = cb;
-        this->endl_rows = endl_rows;
-        this->data_count = 0;  // Computed as we parse the data
-                               // CB pointer and DataFormat depend on RISC
-        this->return_code = DPrintOK;
-
-        // DataFormat, rd/wr pointer, and Tile size all depend on RISC + in/out
+        // A CB known at compile time has its descriptors looked up here, where they fold into constants (no tables);
+        // one out-of-line sampler serves every CB. Any other CB is looked up out of line.
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
-        tile_info_t tile_info = get_tile_info(cb, cb_type, ptr_type);
+        if (__builtin_constant_p(cb) && __builtin_constant_p(cb_type)) {
+            dprint_tile_slice_sample<MAX_BYTES>(
+                this,
+                cb,
+                get_tile_info(cb, cb_type, ptr_type),
+                tile_idx,
+                slice_range,
+                endl_rows,
+                print_untilized,
+                ptr_type);
+        } else {
+            dprint_tile_slice_sample_cb<MAX_BYTES>(
+                this, cb, cb_type, ptr_type, tile_idx, slice_range, endl_rows, print_untilized);
+        }
 #else
-        tile_info_t tile_info = get_tile_info(cb);
+        if (__builtin_constant_p(cb)) {
+            dprint_tile_slice_sample<MAX_BYTES>(
+                this, cb, get_tile_info(cb), tile_idx, slice_range, endl_rows, print_untilized);
+        } else {
+            dprint_tile_slice_sample_cb<MAX_BYTES>(this, cb, tile_idx, slice_range, endl_rows, print_untilized);
+        }
 #endif
-        this->cb_ptr = tile_info.cb_ptr;
-        this->data_format = tile_info.data_format;
+#endif  // DEBUG_PRINT_ENABLED
+    }
+#endif  // !defined(ENV_LLK_INFRA)
+#if defined(DEBUG_PRINT_ENABLED) && !defined(ENV_LLK_INFRA)
+    // A TileSlice from descriptors its caller looked up (the sampler's arguments, see dprint_tile_slice_sample()), for
+    // DPRINT's helpers that sample one CB many times (api/debug/dump.h).
+    __attribute__((always_inline)) TileSlice(
+        dprint_tile_slice_words_t,
+        uint8_t cb,
+        uint32_t tile_offset,
+        const SliceRange& slice_range,
+        uint32_t flags,
+        uint32_t descriptors,
+        uint32_t num_faces) {
+        dprint_tile_slice_sample_words<MAX_BYTES>(this, cb, tile_offset, slice_range, flags, descriptors, num_faces);
+    }
+#endif
+} ATTR_PACK;
 
-        // If the data format is unsupported or corrupted, don't continue
-        if (!is_supported_format(static_cast<DataFormat>(this->data_format))) {
-            this->return_code = DPrintErrorUnsupportedFormat;
-            return;  // Unsupported type, return
-        }
+#if defined(DEBUG_PRINT_ENABLED) && !defined(ENV_LLK_INFRA)
+template <int MAX_BYTES>
+DPRINT_TILE_SAMPLER void dprint_tile_slice_sample_words(
+    TileSliceHostDev<MAX_BYTES>* ts,
+    uint32_t cb,
+    uint32_t tile_offset,
+    const SliceRange& slice_range,
+    uint32_t flags,
+    uint32_t format_and_dims,
+    uint32_t num_faces) {
+    tile_info_t tile_info;
+    tile_info.data_format = format_and_dims & 0xff;
+    tile_info.tile_dim_r = (format_and_dims >> 8) & 0xff;
+    tile_info.tile_dim_c = (format_and_dims >> 16) & 0xff;
+    tile_info.face_dim_r = format_and_dims >> 24;
+    tile_info.num_faces = num_faces;
+    const bool print_untilized = (flags & 2) != 0;
 
-        // Move the pointer to the tile at index requested by user
-        uint32_t bytes_per_datum = dprint_datum_size(static_cast<DataFormat>(this->data_format));
-        bool is_bfp_format = is_bfp(static_cast<DataFormat>(this->data_format));
-        this->cb_ptr += tile_idx * tile_info.tile_size;
+    // Fill out slice info
+    ts->slice_range = slice_range;
+    ts->cb_id = cb;
+    ts->endl_rows = flags & 1;
+    ts->data_count = 0;  // Computed as we parse the data
+    ts->return_code = DPrintOK;
+#if defined(UCK_CHLKC_PACK)
+    ts->cb_ptr = CB_WR_PTR(cb);  // PACK only has write pointer
+#elif defined(UCK_CHLKC_UNPACK)
+    ts->cb_ptr = CB_RD_PTR(cb);  // UNPACK only has read pointer
+#elif defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
+    ts->cb_ptr = (flags & 4) == (TSLICE_WR_PTR << 2) ? CB_WR_PTR(cb) : CB_RD_PTR(cb);
+#else
+    ts->cb_ptr = 0;
+#endif
+    ts->data_format = tile_info.data_format;
 
-        // Check for unprintable data, and return error as necessary
-        if (this->cb_ptr < *GET_MAILBOX_ADDRESS_DEV(core_info.l1_unreserved_start) || this->cb_ptr >= MEM_L1_SIZE) {
-            this->return_code = DPrintErrorBadPointer;
-            return;  // bad tile pointer, return
-        }
+    // If the data format is unsupported or corrupted, don't continue
+    if (!is_supported_format(static_cast<DataFormat>(ts->data_format))) {
+        ts->return_code = DPrintErrorUnsupportedFormat;
+        return;  // Unsupported type, return
+    }
 
-        // Stride through the data in the CB and place in print data buffer
-        volatile tt_l1_ptr uint8_t* cb_data = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(this->cb_ptr);
-        bool max_count_exceeded = false;
-        uint32_t byte_idx = 0;
-        for (uint32_t h = slice_range.h0; h < slice_range.h1; h += slice_range.hs) {
-            for (uint32_t w = slice_range.w0; w < slice_range.w1; w += slice_range.ws) {
-                // Convert w_idx, h_idx to 1D index using num_rows
-                if (is_bfp_format) {
-                    // For Bfp formats, mantissa data follows after exponents (one exponent per row per tile)
-                    uint32_t mantissa_offset = tile_info.face_dim_r * tile_info.num_faces;
-                    // Write 1 byte exponent before each datum. Need to do this since requested stride could put us on
-                    // any of the faces.
-                    this->data[byte_idx++] = cb_data[TileSlice::get_exponent_index(tile_info, h, w, print_untilized)];
-                    this->data[byte_idx++] = get_datum(
-                        static_cast<DataFormat>(this->data_format),
-                        cb_data + mantissa_offset,
-                        TileSlice::get_data_index(tile_info, h, w, print_untilized));
-                    if (byte_idx - 2 >= MAX_BYTES) {
+    tile_info.face_dim_c = tile_info.tile_dim_r * tile_info.tile_dim_c / tile_info.num_faces / tile_info.face_dim_r;
+
+    // Move the pointer to the tile at index requested by user
+    uint32_t bytes_per_datum = dprint_datum_size(static_cast<DataFormat>(ts->data_format));
+    bool is_bfp_format = is_bfp(static_cast<DataFormat>(ts->data_format));
+    ts->cb_ptr += tile_offset;  // tile_idx * tile_size
+
+    // Check for unprintable data, and return error as necessary
+    if (ts->cb_ptr < *GET_MAILBOX_ADDRESS_DEV(core_info.l1_unreserved_start) || ts->cb_ptr >= MEM_L1_SIZE) {
+        ts->return_code = DPrintErrorBadPointer;
+        return;  // bad tile pointer, return
+    }
+
+    // Stride through the data in the CB and place in print data buffer
+    volatile tt_l1_ptr uint8_t* cb_data = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(ts->cb_ptr);
+    bool max_count_exceeded = false;
+    uint32_t byte_idx = 0;
+    for (uint32_t h = slice_range.h0; h < slice_range.h1; h += slice_range.hs) {
+        for (uint32_t w = slice_range.w0; w < slice_range.w1; w += slice_range.ws) {
+            // Convert w_idx, h_idx to 1D index using num_rows
+            if (is_bfp_format) {
+                // For Bfp formats, mantissa data follows after exponents (one exponent per row per tile)
+                uint32_t mantissa_offset = tile_info.face_dim_r * tile_info.num_faces;
+                // Write 1 byte exponent before each datum. Need to do this since requested stride could put us on
+                // any of the faces.
+                ts->data[byte_idx++] =
+                    cb_data[TileSlice<MAX_BYTES>::get_exponent_index(tile_info, h, w, print_untilized)];
+                ts->data[byte_idx++] = get_datum(
+                    static_cast<DataFormat>(ts->data_format),
+                    cb_data + mantissa_offset,
+                    TileSlice<MAX_BYTES>::get_data_index(tile_info, h, w, print_untilized));
+                if (byte_idx - 2 >= MAX_BYTES) {
+                    max_count_exceeded = true;
+                    break;
+                }
+            } else {
+                uint32_t i = TileSlice<MAX_BYTES>::get_data_index(tile_info, h, w, print_untilized);
+                for (uint32_t offset = 0; offset < bytes_per_datum; offset++) {
+                    ts->data[byte_idx++] = cb_data[i * bytes_per_datum + offset];
+                    // If we've gone over the maximum data points to print, break
+                    if (byte_idx - 1 >= MAX_BYTES) {
                         max_count_exceeded = true;
                         break;
                     }
-                } else {
-                    uint32_t i = TileSlice::get_data_index(tile_info, h, w, print_untilized);
-                    for (uint32_t offset = 0; offset < bytes_per_datum; offset++) {
-                        this->data[byte_idx++] = cb_data[i * bytes_per_datum + offset];
-                        // If we've gone over the maximum data points to print, break
-                        if (byte_idx - 1 >= MAX_BYTES) {
-                            max_count_exceeded = true;
-                            break;
-                        }
-                    }
                 }
-                if (max_count_exceeded) {
-                    break;
-                }
-                this->data_count++;
             }
             if (max_count_exceeded) {
                 break;
             }
+            ts->data_count++;
         }
-#endif  // DEBUG_PRINT_ENABLED
+        if (max_count_exceeded) {
+            break;
+        }
     }
-#endif  // !defined(ENV_LLK_INFRA)
-} ATTR_PACK;
+}
+#undef DPRINT_TILE_SAMPLER
+#endif
 
 using TSLICE = TileSlice<64>;
 

@@ -98,6 +98,9 @@
 #include "llk_sfpu/ckernel_sfpu_sign.h"
 #include "llk_sfpu/ckernel_sfpu_signbit.h"
 #include "llk_sfpu/ckernel_sfpu_silu.h"
+#ifdef ARCH_BLACKHOLE
+#include "llk_sfpu/ckernel_sfpu_silu_glu.h"
+#endif
 #include "llk_sfpu/ckernel_sfpu_snake_beta.h"
 #include "llk_sfpu/ckernel_sfpu_softplus.h"
 #ifndef SOFTPLUS_TEST_BETA
@@ -1945,6 +1948,12 @@ void call_binary_sfpu_operation_init([[maybe_unused]] std::uint32_t zero_point =
         // copy_dest_value_init is empty. The baseline addrmod setup is enough.
         SFPU_BINARY_INIT(add1);
     }
+#ifdef ARCH_BLACKHOLE
+    else if constexpr (BINOP == BinaryOp::SILU_GLU)
+    {
+        SFPU_BINARY_INIT_FN_NO_ARGS(unused, sfpu::silu_glu_init);
+    }
+#endif
     else
     {
         // BinaryOps without a dedicated SfpuType use the baseline binary addrmod setup.
@@ -2419,6 +2428,14 @@ void call_binary_sfpu_operation(
             ISCLOSE_RTOL_BITS,
             ISCLOSE_ATOL_BITS);
     }
+#ifdef ARCH_BLACKHOLE
+    else if constexpr (BINOP == BinaryOp::SILU_GLU)
+    {
+        // silu_glu(gate, up) with gate = in0 and up = in1; DST_ACCUM_MODE selects the in-kernel BF16 round.
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_silu_glu, (DST_ACCUM_MODE, PER_FACE_ITERATIONS), dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
+    }
+#endif
     // Integer relational eq/ne: XOR-based exact compare over Int32 dest bits.
     else if constexpr (BINOP == BinaryOp::EQ_INT || BINOP == BinaryOp::NE_INT)
     {

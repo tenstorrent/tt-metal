@@ -301,6 +301,7 @@ class MathOperation(Enum):
     # Fused GLU activations over (gate, up): silu(min(gate, limit)) * clamp(up, -limit, limit) and
     # SiTU-GLU (softcapped gate * sigmoid(gate) * softcapped up).
     SfpuClampedSiluGlu = OpSpec("CLAMPED_SILU_GLU", MathOpType.SFPU_BINARY)
+    SfpuSiluGlu = OpSpec("SILU_GLU", MathOpType.SFPU_BINARY)
     SfpuSituGlu = OpSpec("SITU_GLU", MathOpType.SFPU_BINARY)
     SfpuGcd = OpSpec("GCD", MathOpType.SFPU_BINARY)
     SfpuLcm = OpSpec("LCM", MathOpType.SFPU_BINARY)
