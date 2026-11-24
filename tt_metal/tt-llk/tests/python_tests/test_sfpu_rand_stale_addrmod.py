@@ -47,7 +47,7 @@ PRNG_SEED = 7919
 DRAW_LOW = struct.unpack("<f", struct.pack("<I", RAND_FROM_BITS))[0]
 DRAW_HIGH = DRAW_LOW + struct.unpack("<f", struct.pack("<I", RAND_SCALE_BITS))[0]
 SENTINEL = 2.0  # exact in every format; outside the draw interval
-SQUARED_SENTINEL = 4.0  # what the square polluter leaves; also outside the draw interval
+SQUARED_SENTINEL = 4.0  # what the square polluter leaves; outside the draw interval
 assert not (
     DRAW_LOW <= SENTINEL <= DRAW_HIGH
 ), "the sentinel must lie outside the draw interval"
@@ -124,9 +124,7 @@ def test_sfpu_rand_stale_addrmod(formats, dest_acc):
 
     missed = (draws == SENTINEL) | (draws == SQUARED_SENTINEL)
     missed_count = int(missed.sum().item())
-    survivors = draw_elements[
-        missed.nonzero().flatten()[:SURVIVORS_SHOWN]
-    ].tolist()
+    survivors = draw_elements[missed.nonzero().flatten()[:SURVIVORS_SHOWN]].tolist()
     assert missed_count == 0, (
         f"{missed_count} of {draws.numel()} draw elements still hold the (squared) sentinel after rand: "
         f"rand stored under the address mode the square execute left (first survivors at elements {survivors})"

@@ -53,6 +53,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "llk_sfpu/ckernel_sfpu_rand.h"
+#include "llk_sfpu/ckernel_sfpu_square.h"
 
 using namespace ckernel;
 
@@ -85,8 +86,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // An execute that owns slot 6 between the seed and the draw: square's execute sets it to
     // +4 per face call and restores the dest += 2 invariant at exit (its init leaves the slot
     // at the hw_configure invariant). Covers the restore-on-exit contract: the draw below
-    // lands on every row only if the restore held.
+    // lands on every row only if the restore held. square_init loads the constants the bf16
+    // rounding reads, so a missed row keeps the exact squared sentinel (4.0).
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::square>();
+    ckernel::sfpu::square_init();
     _llk_math_eltwise_unary_sfpu_params_(
         ckernel::sfpu::calculate_square<APPROX_MODE, is_fp32_dest_acc_en, 32 /* ITERATIONS */>, dst_index, VECTOR_MODE);
 
