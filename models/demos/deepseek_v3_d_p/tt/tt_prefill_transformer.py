@@ -35,6 +35,7 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_4.schedule import (
 from models.demos.deepseek_v3_d_p.tt.glm54.damp_gate import TtDampGate
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
+from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import PushStep
 from models.demos.deepseek_v3_d_p.tt.mla.two_bank import loop_pass2_layers, pass1_index_set, pass2_kv_cache_seq_len
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     create_balanced_chunk_order,
@@ -649,6 +650,19 @@ class TtPrefillTransformer(LightweightModule):
             and not self.receives_loop_handoff
         )
 
+    def _pass2_presends_next(self, k: int) -> bool:
+        """Whether loop pass-2 step ``k`` pre-sends for the next step: that step is this instance's pass-2 run of the
+        next layer and reuses the same pass-1 top-k set (A5), so it pushes the same rows (ttMLA._two_bank_attn)."""
+        step = self.steps[k]
+        nxt = self.steps[k + 1] if k + 1 < len(self.steps) else None
+        return (
+            nxt is not None
+            and nxt.kind == "layer"
+            and nxt.loop_pass == step.loop_pass
+            and nxt.layer == step.layer + 1
+            and pass1_index_set(self._model_config, nxt.layer) == pass1_index_set(self._model_config, step.layer)
+        )
+
     @property
     def forwards_indexer_indices(self) -> bool:
         next_idx = self.first_layer_idx + self.num_layers
@@ -861,7 +875,7 @@ class TtPrefillTransformer(LightweightModule):
         self.last_indexer_indices = None
         # GLM-5.4 loop: the input of the loop pass in flight (x_{k-1}), held for that pass's gate.
         pass_input = None
-        for step in self.steps:
+        for k, step in enumerate(self.steps):
             if step.kind == "gate":
                 name = f"gate{step.loop_pass}"
                 signpost(f"forward_{name}_start")
@@ -901,6 +915,7 @@ class TtPrefillTransformer(LightweightModule):
                     on_layer_complete=on_layer_complete,
                     # A later loop pass acks under its own id, never under the pass-1 layer's (pass_schedule).
                     ack_layer_idx=loop_ack_id(step.layer, step.loop_pass, self._num_model_layers),
+                    next_step=PushStep(layer_offset=1) if self._pass2_presends_next(k) else None,
                 )
                 signpost(f"forward_{name}_end")
                 if return_intermediates:

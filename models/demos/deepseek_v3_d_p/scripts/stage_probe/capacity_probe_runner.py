@@ -229,8 +229,8 @@ def _patch_pass2_presend_buffer() -> None:
 
     push_output = ttMLA._pass2_push_output
 
-    def pass2_push_output(self):
-        out = push_output(self)
+    def pass2_push_output(self, *args, **kwargs):
+        out = push_output(self, *args, **kwargs)
         if not _EXTRA:
             dense = self._sparse_kv_gather_buffer
             spec = self._push.buffer_spec(dense, **self._pass2_push_geometry)

@@ -12,8 +12,9 @@ Nothing here changes what the runner computes or when; every check only observes
   gather buffer (``_pass2_push_reuses_dense``), every ``_pass2_push_output`` call records whether it returned that
   buffer and whether it ran inside trace capture, and an own ``loop_pass2`` push buffer being created is recorded.
   Before the trace is released one ``TRUNK_ASSERT push_reuse PASS|FAIL`` line states the verdict: PASS needs every
-  pass-2 layer to choose reuse, the trace to be captured with every pass-2 push writing the dense buffer, and no
-  own pass-2 buffer. A FAIL is logged, not raised, so the run's timing survives; the probe's checker reads it.
+  pass-2 layer to choose reuse, the trace to be captured with every pass-2 layer pushing and every push into the
+  first buffer writing the dense buffer (a pre-sent layer reads the pre-send's second buffer, q171.3.18), and no
+  own pass-2 buffer. The line also counts the planner's pushes by part (ALL / PREFIX / REST). A FAIL is logged, not raised, so the run's timing survives; the probe's checker reads it.
 * KV digest (finite, deterministic). After the request, before the trace is released, user 0's KVPE rows of every
   trunk cache slot of the stage (78 on the whole trunk; a loop layer's pass-1 rows) are read for each chunk in
   ``TRUNK_DIGEST_CHUNKS`` (default the probe chunks 0,9,19,50,101,203), plus, on a stage that runs pass 2, the loop
@@ -58,6 +59,7 @@ def _patch_mla() -> None:
 
     def build_two_bank_index(self):
         out = build(self)
+        _STATE["planner"] = self._push
         dense = self._sparse_kv_gather_buffer
         spec_rows = self._push.buffer_spec(dense, **self._pass2_push_geometry).shape[2]
         _PASS2[self.layer_idx] = (bool(self._pass2_push_reuses_dense), int(spec_rows), int(dense.shape[2]))
@@ -67,10 +69,11 @@ def _patch_mla() -> None:
         )
         return out
 
-    def pass2_push_output(self):
-        out = push_output(self)
+    def pass2_push_output(self, parity=None):
+        out = push_output(self, parity)
+        # The first buffer (parity None) must be the dense one; the pre-send's second buffer is a push buffer.
         _CALLS["capture" if _STATE["in_capture"] else "other"].append(
-            (self.layer_idx, out is self._sparse_kv_gather_buffer)
+            (self.layer_idx, parity, out is self._sparse_kv_gather_buffer)
         )
         return out
 
@@ -111,9 +114,10 @@ def _push_reuse_verdict() -> None:
     reuse = sorted(l for l, (r, _, _) in _PASS2.items() if r)
     no_reuse = sorted(l for l, (r, _, _) in _PASS2.items() if not r)
     cap = _CALLS["capture"]
-    cap_layers = sorted({l for l, _ in cap})
-    cap_not_dense = sorted({l for l, dense in cap if not dense})
-    other_not_dense = sorted({l for l, dense in _CALLS["other"] if not dense})
+    cap_layers = sorted({l for l, _, _ in cap})
+    cap_not_dense = sorted({l for l, parity, dense in cap if parity is None and not dense})
+    other_not_dense = sorted({l for l, parity, dense in _CALLS["other"] if parity is None and not dense})
+    cap_presend = sum(1 for _, parity, _ in cap if parity is not None)
     ok = (
         len(_PASS2) > 0
         and not no_reuse
@@ -128,8 +132,10 @@ def _push_reuse_verdict() -> None:
         f"TRUNK_ASSERT push_reuse {'PASS' if ok else 'FAIL'}: pass2_layers={len(_PASS2)} "
         f"({min(_PASS2, default=None)}-{max(_PASS2, default=None)}) reuse={len(reuse)} no_reuse={no_reuse} "
         f"use_trace={_STATE['use_trace']} captured={_STATE['captured']} "
-        f"capture_calls={len(cap)} capture_layers={len(cap_layers)} capture_not_dense={cap_not_dense} "
-        f"eager_calls={len(_CALLS['other'])} eager_not_dense={other_not_dense} own_pass2_buffers={len(_OWN_BUFFERS)}"
+        f"capture_calls={len(cap)} capture_presend_buffer_calls={cap_presend} capture_layers={len(cap_layers)} "
+        f"capture_not_dense={cap_not_dense} "
+        f"eager_calls={len(_CALLS['other'])} eager_not_dense={other_not_dense} own_pass2_buffers={len(_OWN_BUFFERS)} "
+        f"pushes={dict(getattr(_STATE.get('planner'), 'pushes', {}))}"
     )
 
 
