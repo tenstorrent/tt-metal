@@ -84,7 +84,7 @@ def test_ring_joint_sdpa_llk2_local(ring1, monkeypatch):
     )
     compute_config = ttnn.init_device_compute_kernel_config(
         mesh.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_fidelity=getattr(ttnn.MathFidelity, os.environ.get("RING_LOCAL_FIDELITY", "HiFi2")),
         math_approx_mode=False,
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
@@ -125,7 +125,10 @@ def test_ring_joint_sdpa_llk2_local(ring1, monkeypatch):
     medians = {}
     for k in kernels:
         _, per_program = profile_realtime_program_merged(mesh, lambda: [run(k) for _ in range(RUNS)])
-        durations = [e["duration_ns"] for _, e in sorted(per_program.items())]
+        # The op's programs only (a stray program can land in the window): those with the ring reader.
+        durations = [
+            e["duration_ns"] for _, e in sorted(per_program.items()) if "ring_joint_reader" in str(e["kernel_sources"])
+        ]
         assert len(durations) == RUNS, f"expected {RUNS} programs, got {len(durations)}"
         medians[k] = statistics.median(durations)
         _out(
