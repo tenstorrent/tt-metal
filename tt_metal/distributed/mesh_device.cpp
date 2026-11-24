@@ -58,6 +58,8 @@
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "impl/buffers/dram_sender_topology.hpp"
 #include "impl/dispatch/dispatch_mem_map.hpp"
+#include "impl/internal/service/service_core_manager_impl.hpp"
+#include <internal/service/service_core_manager.hpp>
 #include "impl/dispatch/kernel_config/tensor_prefetcher.hpp"
 #include "distributed/sd_mesh_command_queue.hpp"
 #include "tools/profiler/tt_metal_tracy.hpp"
@@ -1029,8 +1031,19 @@ CoreCoord MeshDeviceImpl::compute_with_storage_grid_size() const {
     if (mesh_properties_.has_value()) {
         return mesh_properties_->compute_with_storage_grid_size;
     }
-    return validate_and_get_reference_value(
-        local_devices_, [](const auto* device) { return device->compute_with_storage_grid_size(); });
+    const auto& service_cores = metal_context().get_service_core_manager().impl();
+    if (!service_cores.has_any_claims() || local_devices_.empty()) {
+        return validate_and_get_reference_value(
+            local_devices_, [](const auto* device) { return device->compute_with_storage_grid_size(); });
+    }
+    // Service core claims shrink each chip's grid on their own, so chips can disagree. The mesh takes the smallest
+    // grid, which keeps a program sent to the whole mesh off every chip's service cores.
+    CoreCoord grid = local_devices_.front()->compute_with_storage_grid_size();
+    for (const auto* device : local_devices_) {
+        const CoreCoord device_grid = device->compute_with_storage_grid_size();
+        grid = CoreCoord(std::min(grid.x, device_grid.x), std::min(grid.y, device_grid.y));
+    }
+    return grid;
 }
 
 // Resolves every MeshProperties member. See MeshProperties for why these are worth establishing.
@@ -1054,6 +1067,24 @@ void MeshDeviceImpl::establish_device_property_caches() {
     properties.dram_size_per_channel = dram_size_per_channel();
     properties.ethernet_cores = ethernet_cores();
     mesh_properties_ = std::move(properties);
+}
+
+std::vector<SubDevice> MeshDeviceImpl::full_grid_sub_devices() const {
+    // For MeshDevice, we support uniform sub-devices across all devices and we do not support ethernet subdevices.
+    const auto& compute_grid_size = this->compute_with_storage_grid_size();
+    return {SubDevice(std::array{CoreRangeSet(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}))})};
+}
+
+void MeshDeviceImpl::refresh_compute_grid() {
+    // Held for the same reason as in reshape: enqueue reads the property caches and the active sub-device.
+    auto lock = lock_api();
+    establish_device_property_caches();
+    validate_sub_device_manager_tracker();
+    TT_FATAL(
+        sub_device_manager_tracker_->get_active_sub_device_manager_id() ==
+            sub_device_manager_tracker_->get_default_sub_device_manager_id(),
+        "The compute grid can only change while the default sub-device manager is active");
+    sub_device_manager_tracker_->get_default_sub_device_manager()->reset_full_grid_sub_devices(full_grid_sub_devices());
 }
 
 tt::ARCH MeshDeviceImpl::arch() const { return metal_env().get_cluster().arch(); }
@@ -1863,10 +1894,7 @@ bool MeshDeviceImpl::initialize_impl(
 
     establish_device_property_caches();
 
-    // For MeshDevice, we support uniform sub-devices across all devices and we do not support ethernet subdevices.
-    const auto& compute_grid_size = this->compute_with_storage_grid_size();
-    auto sub_devices = {
-        SubDevice(std::array{CoreRangeSet(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}))})};
+    const auto sub_devices = full_grid_sub_devices();
 
     // Resource shared across mesh command queues.
     auto cq_shared_state = std::make_shared<CQSharedState>();

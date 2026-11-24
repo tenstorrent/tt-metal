@@ -38,6 +38,9 @@
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/allocator/allocator.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/dispatch/dispatch_core_manager.hpp"
+#include "impl/internal/service/service_core_manager_impl.hpp"
+#include <internal/service/service_core_manager.hpp>
 #include "llrt/tt_cluster.hpp"
 #include "tests/tt_metal/distributed/utils.hpp"
 #include <tt-umd/types/arch.hpp>
@@ -1518,6 +1521,330 @@ TEST_F(DispatchContextFixture, AsyncSdStatePreservedAcrossFdTransition) {
 
     // Verify async SD state survived the round-trip
     EXPECT_TRUE(experimental::DispatchContext::get().is_asynchronous_slow_dispatch_enabled(mesh_device_.get()));
+}
+
+// Regression test for https://github.com/tenstorrent/tt-metal/issues/44768: after an SD->FD transition,
+// a program workload launched in FD must complete, and SD must still run workloads after the session.
+TEST_F(DispatchContextFixture, SDFDTransitionLaunchWorkload) {
+    const auto& rt_options = MetalContext::instance().rtoptions();
+    if (rt_options.get_fast_dispatch()) {
+        GTEST_SKIP() << "This test can only be run with Slow Dispatch mode.";
+    }
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
+    auto mesh_device_ = MeshDevice::create(MeshDeviceConfig(system_shape));
+
+    const auto& cluster = MetalContext::instance().get_cluster();
+    if (cluster.is_mock_or_emulated()) {
+        GTEST_SKIP() << "This test requires real hardware.";
+    }
+    if (!cluster.is_ubb_galaxy() && cluster.arch() != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP()
+            << "Manually setting up and tearing down Fast Dispatch is only supported on Galaxy and Blackhole clusters.";
+    }
+
+    uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
+    const uint32_t num_tiles = 64;
+
+    CoreRangeSet shard_grid(CoreRange({0, 0}, {1, 1}));
+    const uint32_t num_cores = 4;
+    const uint32_t tiles_per_shard = num_tiles / num_cores;
+    std::array<uint32_t, 2> shard_shape = {tiles_per_shard * single_tile_size, 1};
+    std::array<uint32_t, 2> page_shape = {single_tile_size, 1};
+    std::array<uint32_t, 2> tensor2d_shape = {num_tiles, 1};
+    ShardSpecBuffer shard_spec(shard_grid, shard_shape, ShardOrientation::ROW_MAJOR, page_shape, tensor2d_shape);
+
+    DeviceLocalBufferConfig fd_l1_config{
+        .page_size = single_tile_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED),
+        .bottom_up = false};
+    ReplicatedBufferConfig fd_l1_global{.size = num_tiles * single_tile_size};
+
+    // Launches a blank kernel on one Tensix BRISC of every device in the mesh.
+    auto run_blank_workload = [&]() {
+        Program program = CreateProgram();
+        CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
+            CoreCoord{0, 0},
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        MeshWorkload workload;
+        workload.add_program(
+            MeshCoordinateRange(
+                MeshCoordinate{0, 0}, MeshCoordinate{mesh_device_->num_rows() - 1, mesh_device_->num_cols() - 1}),
+            std::move(program));
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, true);
+        Finish(mesh_device_->mesh_command_queue());
+    };
+    // The default sub-device must span exactly the grid the current dispatch mode exposes.
+    auto expect_sub_device_matches_grid = [&](const char* mode) {
+        const CoreCoord grid = mesh_device_->get_devices()[0]->compute_with_storage_grid_size();
+        EXPECT_EQ(mesh_device_->compute_with_storage_grid_size(), grid) << mode;
+        EXPECT_EQ(mesh_device_->num_worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}), grid.x * grid.y)
+            << mode;
+    };
+
+    // A workload in SD first, so the FD session starts from worker launch messages that SD has written.
+    run_blank_workload();
+
+    experimental::DispatchContext::get().initialize_fast_dispatch(mesh_device_.get());
+    expect_sub_device_matches_grid("FD");
+
+    auto fd_buf = MeshBuffer::create(fd_l1_global, fd_l1_config, mesh_device_.get());
+    std::vector<uint32_t> fd_src_vec(num_tiles * single_tile_size / sizeof(uint32_t));
+    std::iota(fd_src_vec.begin(), fd_src_vec.end(), 100);
+    EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), fd_buf, fd_src_vec);
+    Finish(mesh_device_->mesh_command_queue());
+
+    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+        std::vector<uint32_t> dst;
+        ReadShard(mesh_device_->mesh_command_queue(), dst, fd_buf, coord);
+        EXPECT_EQ(dst, fd_src_vec) << ": sharded L1 readback failed in FD mode at " << coord;
+    }
+
+    run_blank_workload();
+
+    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+        std::vector<uint32_t> dst;
+        ReadShard(mesh_device_->mesh_command_queue(), dst, fd_buf, coord);
+        EXPECT_EQ(dst, fd_src_vec) << ": FD buffer corrupted after running workloads at " << coord;
+    }
+
+    experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device_.get());
+    expect_sub_device_matches_grid("SD after FD");
+    run_blank_workload();
+}
+
+// initialize_fast_dispatch must wait for an SD workload that is still running before it rewrites the worker
+// mailboxes. Otherwise the workload finishes against an FD launch message and the drain sees its cleared go as done.
+TEST_F(DispatchContextFixture, SDFDTransitionDrainsInFlightWorkload) {
+    const auto& rt_options = MetalContext::instance().rtoptions();
+    if (rt_options.get_fast_dispatch()) {
+        GTEST_SKIP() << "This test can only be run with Slow Dispatch mode.";
+    }
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
+    auto mesh_device_ = MeshDevice::create(MeshDeviceConfig(system_shape));
+
+    auto& cluster = MetalContext::instance().get_cluster();
+    if (cluster.is_mock_or_emulated()) {
+        GTEST_SKIP() << "This test requires real hardware.";
+    }
+    if (!cluster.is_ubb_galaxy() && cluster.arch() != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP()
+            << "Manually setting up and tearing down Fast Dispatch is only supported on Galaxy and Blackhole clusters.";
+    }
+
+    const CoreCoord core{0, 0};
+    // A single-core shard keeps the marker off the dispatch column, which fast dispatch refuses to claim while
+    // it holds L1.
+    const uint32_t page_size = ::tt::tile_size(DataFormat::UInt32);
+    ShardSpecBuffer shard_spec(
+        CoreRangeSet(CoreRange(core, core)), {page_size, 1}, ShardOrientation::ROW_MAJOR, {page_size, 1}, {1, 1});
+    auto marker_buf = MeshBuffer::create(
+        ReplicatedBufferConfig{.size = page_size},
+        DeviceLocalBufferConfig{
+            .page_size = page_size,
+            .buffer_type = BufferType::L1,
+            .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED),
+            .bottom_up = false},
+        mesh_device_.get());
+    const uint32_t marker_addr = marker_buf->address();
+    EnqueueWriteMeshBuffer(
+        mesh_device_->mesh_command_queue(), marker_buf, std::vector<uint32_t>(page_size / sizeof(uint32_t), 0));
+    Finish(mesh_device_->mesh_command_queue());
+
+    constexpr uint32_t kDoneValue = 0xd0e0d0e0;
+    // About a second on BH, longer than bringing up the dispatch firmware.
+    constexpr uint32_t kDelayCycles = 1'500'000'000;
+
+    Program program = CreateProgram();
+    auto kernel = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/delayed_l1_write_rt_args.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    SetRuntimeArgs(program, kernel, core, {marker_addr, kDoneValue, kDelayCycles});
+    MeshWorkload workload;
+    workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(program));
+
+    experimental::DispatchContext::get().enable_asynchronous_slow_dispatch(mesh_device_.get());
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, false);
+    experimental::DispatchContext::get().initialize_fast_dispatch(mesh_device_.get());
+
+    // Read straight from L1 so the check does not depend on the FD queues working.
+    for (IDevice* device : mesh_device_->get_devices()) {
+        const CoreCoord virtual_core = device->worker_core_from_logical_core(core);
+        uint32_t marker = 0;
+        cluster.read_core(&marker, sizeof(marker), tt_cxy_pair(device->id(), virtual_core), marker_addr);
+        EXPECT_EQ(marker, kDoneValue) << "SD workload was still running when FD came up on device " << device->id();
+    }
+
+    // The drained workload must leave no stale state behind: FD and then SD must still run workloads.
+    auto run_blank_workload = [&]() {
+        Program blank = CreateProgram();
+        CreateKernel(
+            blank,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
+            core,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        MeshWorkload blank_workload;
+        blank_workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(blank));
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), blank_workload, true);
+        Finish(mesh_device_->mesh_command_queue());
+    };
+    run_blank_workload();
+    experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device_.get());
+    run_blank_workload();
+}
+
+// WHAT: two 1x1 submeshes on different chips. Submesh B launches a long SD workload without waiting, then fast
+//       dispatch is started from submesh A.
+// WHY:  the firmware bring-up rewrites the mailboxes of every active chip, but A's session can only drain A's
+//       queues. This is blaze's multi-stage layout, where each stage holds its own submesh.
+// EXPECT: B's workload finishes before FD comes up, and B can still run SD work after the session.
+TEST_F(DispatchContextFixture, SDFDTransitionWaitsForSiblingSubmeshWorkload) {
+    if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
+        GTEST_SKIP() << *reason;
+    }
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
+    auto mesh = MeshDevice::create(MeshDeviceConfig(system_shape));
+    if (mesh->num_devices() < 2) {
+        GTEST_SKIP() << "This test needs at least two chips.";
+    }
+    auto submeshes = mesh->create_submeshes(MeshShape(1, 1));
+    auto session_mesh = submeshes[0];
+    auto busy_mesh = submeshes[1];
+    auto& cluster = MetalContext::instance().get_cluster();
+
+    const CoreCoord core{0, 0};
+    const uint32_t page_size = ::tt::tile_size(DataFormat::UInt32);
+    ShardSpecBuffer shard_spec(
+        CoreRangeSet(CoreRange(core, core)), {page_size, 1}, ShardOrientation::ROW_MAJOR, {page_size, 1}, {1, 1});
+    auto marker_buf = MeshBuffer::create(
+        ReplicatedBufferConfig{.size = page_size},
+        DeviceLocalBufferConfig{
+            .page_size = page_size,
+            .buffer_type = BufferType::L1,
+            .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED),
+            .bottom_up = false},
+        busy_mesh.get());
+    const uint32_t marker_addr = marker_buf->address();
+    EnqueueWriteMeshBuffer(
+        busy_mesh->mesh_command_queue(), marker_buf, std::vector<uint32_t>(page_size / sizeof(uint32_t), 0));
+    Finish(busy_mesh->mesh_command_queue());
+
+    constexpr uint32_t kDoneValue = 0xd0e0d0e0;
+    // About a second on BH, longer than bringing up the dispatch firmware.
+    constexpr uint32_t kDelayCycles = 1'500'000'000;
+    auto make_workload = [&](const std::string& kernel_path, const std::vector<uint32_t>& rt_args) {
+        Program program = CreateProgram();
+        auto kernel = CreateKernel(
+            program,
+            kernel_path,
+            core,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        SetRuntimeArgs(program, kernel, core, rt_args);
+        MeshWorkload workload;
+        workload.add_program(MeshCoordinateRange(busy_mesh->shape()), std::move(program));
+        return workload;
+    };
+    auto delayed = make_workload(
+        "tests/tt_metal/tt_metal/test_kernels/misc/delayed_l1_write_rt_args.cpp",
+        {marker_addr, kDoneValue, kDelayCycles});
+
+    experimental::DispatchContext::get().enable_asynchronous_slow_dispatch(busy_mesh.get());
+    EnqueueMeshWorkload(busy_mesh->mesh_command_queue(), delayed, false);
+    experimental::DispatchContext::get().initialize_fast_dispatch(session_mesh.get());
+
+    // Read straight from L1, since B's queues are not the ones that were drained.
+    IDevice* busy_device = busy_mesh->get_devices()[0];
+    uint32_t marker = 0;
+    cluster.read_core(
+        &marker, sizeof(marker), tt_cxy_pair(busy_device->id(), busy_device->worker_core_from_logical_core(core)), marker_addr);
+    EXPECT_EQ(marker, kDoneValue) << "submesh B's SD workload was still running when FD came up from submesh A";
+
+    experimental::DispatchContext::get().terminate_fast_dispatch(session_mesh.get());
+    Finish(busy_mesh->mesh_command_queue());
+    auto blank = make_workload("tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp", {});
+    EnqueueMeshWorkload(busy_mesh->mesh_command_queue(), blank, true);
+    Finish(busy_mesh->mesh_command_queue());
+}
+
+// A service core claimed on one chip of a multi-chip mesh shrinks only that chip's grid. Leaving fast dispatch must
+// still work, the mesh must take the smallest grid, and releasing the claim must give the mesh the full grid back.
+TEST_F(DispatchContextFixture, SDFDTransitionServiceClaimOnOneChip) {
+    const auto& rt_options = MetalContext::instance().rtoptions();
+    if (rt_options.get_fast_dispatch()) {
+        GTEST_SKIP() << "This test can only be run with Slow Dispatch mode.";
+    }
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
+    auto mesh_device_ = MeshDevice::create(MeshDeviceConfig(system_shape));
+
+    const auto& cluster = MetalContext::instance().get_cluster();
+    if (cluster.is_mock_or_emulated()) {
+        GTEST_SKIP() << "This test requires real hardware.";
+    }
+    if (!cluster.is_ubb_galaxy() && cluster.arch() != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP()
+            << "Manually setting up and tearing down Fast Dispatch is only supported on Galaxy and Blackhole clusters.";
+    }
+    if (mesh_device_->num_devices() < 2) {
+        GTEST_SKIP() << "This test needs a mesh with more than one chip.";
+    }
+
+    auto expect_mesh_grid = [&](const CoreCoord& grid, const char* phase) {
+        EXPECT_EQ(mesh_device_->compute_with_storage_grid_size(), grid) << phase;
+        EXPECT_EQ(mesh_device_->num_worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}), grid.x * grid.y)
+            << phase;
+    };
+    IDevice* claimed_device = mesh_device_->get_devices()[0];
+    const CoreCoord sd_grid = claimed_device->compute_with_storage_grid_size();
+
+    experimental::DispatchContext::get().initialize_fast_dispatch(mesh_device_.get());
+    const CoreCoord fd_grid = claimed_device->compute_with_storage_grid_size();
+    auto& service_cores = MetalContext::instance().get_service_core_manager();
+    if (MetalContext::instance().get_dispatch_core_manager().get_available_dispatch_cores(claimed_device->id()).empty()) {
+        experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device_.get());
+        GTEST_SKIP() << "Fast dispatch leaves no dispatch-column core free to claim on this grid.";
+    }
+    const std::vector<CoreCoord> claimed = {service_cores.get_claimable_cores(claimed_device).front()};
+    service_cores.claim(claimed_device, claimed);
+
+    experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device_.get());
+    expect_mesh_grid(fd_grid, "SD with a service core claimed on one chip");
+
+    service_cores.release(claimed_device, claimed);
+    expect_mesh_grid(sd_grid, "SD after the service core is released");
+}
+
+// WHAT: FD session on a 1x1 submesh ends with a service core still claimed, then the submesh is closed
+//       while the test still holds it, then the claim is released.
+// WHY:  terminate tracks the submesh so release can refresh its grid. A closed submesh has no sub-device
+//       state left, so refreshing it would throw.
+// EXPECT: release skips the closed submesh and does not throw.
+TEST_F(DispatchContextFixture, SDFDTransitionServiceReleaseAfterSubmeshClosed) {
+    if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
+        GTEST_SKIP() << *reason;
+    }
+
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
+    auto mesh = MeshDevice::create(MeshDeviceConfig(system_shape));
+    auto submesh = mesh->create_submesh(MeshShape(1, 1));
+    IDevice* claimed_device = submesh->get_devices()[0];
+
+    experimental::DispatchContext::get().initialize_fast_dispatch(submesh.get());
+    auto& service_cores = MetalContext::instance().get_service_core_manager();
+    if (MetalContext::instance().get_dispatch_core_manager().get_available_dispatch_cores(claimed_device->id()).empty()) {
+        experimental::DispatchContext::get().terminate_fast_dispatch(submesh.get());
+        GTEST_SKIP() << "Fast dispatch leaves no dispatch-column core free to claim on this grid.";
+    }
+    const std::vector<CoreCoord> claimed = {service_cores.get_claimable_cores(claimed_device).front()};
+    service_cores.claim(claimed_device, claimed);
+    experimental::DispatchContext::get().terminate_fast_dispatch(submesh.get());
+
+    submesh->close();
+    ASSERT_FALSE(submesh->is_initialized());
+    EXPECT_NO_THROW(service_cores.release(claimed_device, claimed));
 }
 
 }  // namespace tt::tt_metal::distributed::test
