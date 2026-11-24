@@ -22,7 +22,7 @@ minus the union of every chip's port cores — 101 compute cores on the QuietBox
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
-| `cb_port_chunks` | `2 * PORT_BATCH_CHUNKS` pages of `packet_tiles * tile_bytes` B (`PORT_BATCH_CHUNKS` = 8; implementer: 8 measured 94.5 vs 99.4 us at 4 on the Kimi Phase 0 case, 7232 B) | `2 * PORT_BATCH_CHUNKS` (one batch read + one batch in flight on the fabric) | `{head: streams, rows: streams, k: streams, n: — (not present on ports), entry: streams → PORT_BATCH_CHUNKS packets per batch}` | raw input bytes (input dtype), never through DEST | reader (port) | writer = port sender | whole call | The only CB on the port core on aligned calls (R1' adds `cb_retile_stage`). Packet headers come from the fabric header pool, not a CB |
+| `cb_port_chunks` | `2 * batch_chunks` pages of `packet_tiles * tile_bytes` B, `batch_chunks = PORT_BATCH_BYTES // packet_bytes` (Refinement 4: 87 KiB → 12 packets at 7232 B, 6 at 14 KiB; was a fixed 8: 8 beat 4 on Kimi Phase 0, and 12 beat 8 by ~1 us on the Kimi model case with the run send order) | `2 * batch_chunks` (one batch read + one batch in flight on the fabric) | `{head: streams, rows: streams, k: streams, n: — (not present on ports), entry: streams → batch_chunks packets per batch; a packed packet may hold the end of one entry and the start of the next (same destination run)}` | raw input bytes (input dtype), never through DEST | reader (port) | writer = port sender | whole call | The only CB on the port core on aligned calls (R1' adds `cb_retile_stage`). Packet headers come from the fabric header pool, not a CB |
 | `cb_retile_stage` (R1' only) | `(Mq_t + 1) * Kt` tiles | one image of one entry's source tile rows x Kt | `{head: streams, rows: spans → nsrc ≤ Mq_t + 1, k: spans → Kt, n: —, entry: streams}` | raw input bytes | port reader (DRAM read, one barrier per image) | port reader (core-local NoC copies into the packet pages) | per image of an entry (scratch) | Cannot share with `cb_port_chunks`: a re-tiled packet's page is written while earlier pages are still in flight on the fabric; an in-place shift would need the next tile row of the same entry, which crosses packet / batch boundaries |
 
 Inventory check (Rules 1 and 3): no intermediate CB — the exchange packs into the destination (`cb_a_landed` is the landing buffer itself), the K accumulation folds into DEST (one K-block), and the output packs straight into the writer's CB. The local quarter is read straight into its slot. Removing any listed CB would remove an operand or the output path.
@@ -37,7 +37,7 @@ Inventory check (Rules 1 and 3): no intermediate CB — the exchange packs into 
 | `heads_per_core_max = ceil(H / C)` | ≤ 8 | validate (semaphore count cap) |
 | `out_subblock_h` | divides `block_m_tiles`; `out_subblock_h * out_subblock_w ≤ DEST_AUTO_LIMIT` (4 fp32 / 8 bf16) | host subblock rule |
 | `packet_tiles = floor(max_payload / tile_bytes)` | 1 ≤ packet_tiles ≤ 7 (14400 B, bf16) | validate (`≥ 1`); Blackhole max payload |
-| `WEIGHT_DEPTH`, `OUT_DEPTH`, `PORT_BATCH_CHUNKS` | 2, 2, 8 | host constants |
+| `WEIGHT_DEPTH`, `OUT_DEPTH`, `PORT_BATCH_BYTES` | 2, 2, 87 KiB (→ `batch_chunks` 12 at 7232 B, 6 at 14 KiB) | host constants |
 | `weight_depth` | `min(WEIGHT_DEPTH, max n-blocks per core)` ≤ 2 | host derivation |
 | `slots_per_core_max` | own heads + tail-split helper slots (≤ `TAIL_SPLIT_MAX_HEADS` = 8 per chip, ≤ 1 per helper) ≤ 8 | validate (semaphore count cap) |
 
@@ -59,7 +59,7 @@ Compute core:
 | deep K (Kt 128, block_n 1) | 256 KiB | 512 KiB | 4 KiB | 772 KiB |
 | wide N 8192 (block_n 32) | 8 KiB | 512 KiB | 128 KiB | 648 KiB |
 
-Port core: `L1_port = 2*PORT_BATCH_CHUNKS*packet_tiles*tile_bytes` = 96 KiB at 7232 B, 224 KiB at 14400 B.
+Port core: `L1_port = 2*batch_chunks*packet_tiles*tile_bytes` = 170 KiB at 7232 B (12 x 7 KiB pages x 2; was 113 KiB at 8), 168 KiB at 14 KiB (6 x 14 KiB x 2; was 224 KiB at 8). Global semaphores on the port cores: one ready counter per destination chip of a port (≤ G - 1 = 3; Refinement 4, was 1).
 
 An L1 output (Refinement 1, landed) adds its interleaved per-bank share (Kimi: 15.7 MB over the L1 banks ≈ 143 KiB) to every
 core, port cores included; the allocator places it above the CB region and beside the persistent `landing_scratch`. Tightest
@@ -78,6 +78,6 @@ becomes 8 tiles (host rule). No CB added, resized by formula only.
 | weight (12.58 MB) | 1 (read) | each head's weight is read by the one core that owns the head, once per head (batch and rows folded into the block) | 0 |
 | output (15.73 MB) | 1 (write) Phase 0 / 0 (L1 out) | written once by the core that computed it | 0 (L1 out: the write goes to the L1 banks over the NoC) |
 
-Totals per tier — DRAM: 32.2 MB (Phase 0) / 16.5 MB (L1 out); links: 1.97 MB on the busiest directed link (2 links per direction → 0.98 MB per link); cross-core NoC: 2.95 MB landing writes + (Refinement 3) ≤ 8 x 40 KB = 0.33 MB of tail-split forwards (primary → helper, core-local). DRAM crossings unchanged: the split partitions each split head's weight columns between the two cores.
+Totals per tier — DRAM: 32.2 MB (Phase 0) / 16.5 MB (L1 out); links: 1.97 MB on the busiest directed link (2 links per direction → 0.98 MB per link); cross-core NoC: 2.95 MB landing writes + (Refinement 3) ≤ 8 x 40 KB = 0.33 MB of tail-split forwards (primary → helper, core-local). DRAM crossings unchanged: the split partitions each split head's weight columns between the two cores. Refinement 4 (TRANSPORT): same link bytes in fewer packets — destination runs of 3 entries packed into full packets (Kimi, 7232 B: 168 → 160 packets per link).
 
 > Cheapest-traffic split considered: per tier there are two. On DRAM, R6 (compute at the source, exchange outputs): −9.4 MB of weight reads (16.5 → 7.0 MB at L1 out), at the price of 4x the link bytes (busiest link 7.9 MB vs 1.97 MB). On links and the NoC, the implemented split R1 is the cheapest. Implemented: R1, the cheapest split on the tier that binds at every perf case (the links: 194 GB/s egress per chip against DRAM's 512 GB/s). R6 is deferred: it pays only when `N < K`, and the one INPUTS shape with `N < K` is a correctness cell that R1 serves correctly. R1's structure keeps it reachable: same ports, fence, counters and landing; only the entry payload and the computing chip change.

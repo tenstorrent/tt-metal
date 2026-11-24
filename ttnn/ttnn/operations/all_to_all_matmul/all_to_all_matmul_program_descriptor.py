@@ -8,10 +8,11 @@ Per chip p of a group (ring of G chips along cluster_axis):
   port cores (2 * num_links, one per (direction d, link l)):
     reader  (RISCV_1, NoC0)  reads each entry (source-local head j, destination chip t: the quarter t of head j's rows,
                              all batches, all K) from the input, one CB page = one fabric packet, batched.
-    sender  (RISCV_0, NoC1)  sends readies to every port that writes into this chip, waits for one ready per
-                             destination chip, then sends every entry's packets straight into the destination compute
-                             core's landing slot (same L1 address on every chip), the last packet of an entry fused
-                             with an increment of that slot's arrival counter.
+    sender  (RISCV_0, NoC1)  sends readies to every port that writes into this chip; sends the entries in runs per
+                             destination chip (nearest first; Refinement 4), waiting for a destination's ready just
+                             before its first run, straight into the destination compute core's landing slot (same L1
+                             address on every chip); full packets across the entries of a run, the packet that ends an
+                             entry fused with an increment of that slot's arrival counter.
   compute cores (grid minus every chip's port cores; heads split across them, the same map on every chip):
     reader  (RISCV_1, NoC1)  per head slot (local-source heads first, then remote heads by source-local index j):
                              weight block 0 from DRAM, then the slot (local: DRAM read of the own quarter; remote:
@@ -22,7 +23,7 @@ Per chip p of a group (ring of G chips along cluster_axis):
                              primary's reader forwards the landed rows to a helper core's extra slot (+ arrival inc).
 
 Blocking knobs (op_design.md "Blocking Model"), each defined once here: BLOCK_HEADS, WEIGHT_BLOCK_BYTES (-> block_n),
-WEIGHT_DEPTH, WEIGHT_READ_CHUNK_BYTES, OUT_DEPTH, PORT_BATCH_CHUNKS, A_SLOT_BUDGET_BYTES; block_m = B * Mq_t and block_k = Kt (R1).
+WEIGHT_DEPTH, WEIGHT_READ_CHUNK_BYTES, OUT_DEPTH, PORT_BATCH_BYTES, A_SLOT_BUDGET_BYTES; block_m = B * Mq_t and block_k = Kt (R1).
 """
 
 from __future__ import annotations
@@ -46,7 +47,33 @@ WEIGHT_DEPTH = 2  # weight blocks in cb_weight
 # the limit is bytes or reads in flight (bf16: 8 tiles, bfp8: 15 tiles). >= the block size disables the throttle.
 WEIGHT_READ_CHUNK_BYTES = 16 * 1024
 OUT_DEPTH = 2  # output row groups in cb_out
-PORT_BATCH_CHUNKS = 8  # packets per DRAM-read barrier / per sender flush on the port cores (8 beat 4 at 7232 B)
+# Packets per DRAM-read barrier / per sender flush on the port cores = PORT_BATCH_BYTES // packet bytes (cb_port_chunks
+# holds two batches). Phase 0: 8 beat 4 packets at 7232 B. Refinement 4 (grouped send order, Kimi model case,
+# exchange-alone / whole op fastest chip): 8 packets 47.3 / 56.2, 12 packets 46.2 / 55.0-55.6 us. In bytes so the
+# 14 KiB-payload cells get 6 packets (a smaller CB than the 8 x 14 KiB before).
+PORT_BATCH_BYTES = 87 * 1024
+# TRANSPORT (Refinement 4), port send schedule:
+# - SEND_GROUPED_BY_DEST / SEND_RUN_ENTRIES: a port sends runs of SEND_RUN_ENTRIES consecutive entries per destination
+#   chip, the destinations' runs alternating, nearest destination first (SEND_DEST_ORDER); else one entry per run (heads
+#   outer, destinations interleaved, the Phase 0 order). Runs are what let packing act. Kimi model case, harness fastest
+#   chip, whole op / exchange alone: run 1 60.4 / 50.5 (before), 2 56.9 / -, 3 55.7 / 45.8, 6 53.9 (slowest 65.6) /
+#   46.5, all 56.2 / 47.3 us. 3 entries = 60 tiles = 20 full packets at 7232 B.
+#   Path gate SEND_RUN_MAX_LOCAL_RATIO: runs change which heads land last; where the chip's own DRAM traffic (weight +
+#   input + DRAM output) is large next to the exchanged input, the interleaved landing hides more of it and runs cost
+#   1.3-1.5 us (Kimi Phase 0, DRAM output, ratio 8.2: run 1 87.6, run 2 / 3 / 6 / all 89.0 / 89.0 / 90.7 / 91.2 us), so
+#   runs apply only up to this ratio (the model configs: 4.2).
+# - FENCE_PER_DEST: a port waits only for the ready of the destination it is about to send to (one ready counter per
+#   destination), so the 1-hop group starts after a 1-hop round trip and the 2-hop ready is awaited behind it (else
+#   every ready before the first packet).
+# - PACK_ACROSS_ENTRIES: a destination group is one stream of full packets; a packet straddling two entries is a fused
+#   scatter write + increment (all_to_all_matmul_stream.hpp). Kimi 7232 B: 20 tiles per entry, 7 -> 6.67 packets per
+#   entry. Needs packet_tiles <= slot_tiles (else off).
+SEND_GROUPED_BY_DEST = True
+SEND_RUN_ENTRIES = 3  # grouped: entries per destination run (runs of the destinations alternate); None = all
+SEND_RUN_MAX_LOCAL_RATIO = 6.0
+SEND_DEST_ORDER = "near"  # destination group order on a port: "near" (fewest hops first), "far", "legacy"
+FENCE_PER_DEST = True
+PACK_ACROSS_ENTRIES = True
 # Tail split (OVERLAP, Refinement 3): the last-landing remote heads are multiplied half by their own core and half by a
 # helper (an idle compute core, or a core whose heads are all local on that chip and so finish before the exchange
 # does; idle cores are used first). The primary forwards the landed rows to the helper over the NoC. None = one split
@@ -56,6 +83,9 @@ PORT_BATCH_CHUNKS = 8  # packets per DRAM-read barrier / per sender flush on the
 # Only the last few landings are on the tail; past ~8 the extra helpers are local-head cores that finish their own
 # head late (HiFi4) and become the new tail.
 TAIL_SPLIT_MAX_HEADS = 8
+# Landing-order estimate for the tail split: "share" = (index + 1) / entries of the source port (ports carry different
+# entry counts, 12 or 24 at Kimi, and all finish together), "index" = raw index in the port's send list (Refinement 3).
+TAIL_SPLIT_ESTIMATE = "share"
 A_SLOT_BUDGET_BYTES = 384 * 1024  # predicate A_RESIDENT (regime R1; else R3, deferred)
 MAX_HEADS_PER_CORE = 8  # global arrival semaphores per compute core
 MAX_PACKET_HEADERS = 12  # packet header pool per data-movement RISC
@@ -72,7 +102,7 @@ NOC0 = ttnn.NOC.RISCV_1_default
 NOC1 = ttnn.NOC.RISCV_0_default
 # Compute cores: weight / local-row reads on NoC1, output writes on NoC0, which keeps NoC0's read-response path free
 # for the port readers (NoC0) feeding the fabric. Measured on the Kimi Phase 0 case (QuietBox 2, 7232 B):
-# 134.0 -> 99.4 us fastest chip (reader NoC0 / writer NoC1 before); with PORT_BATCH_CHUNKS 8: 94.5 us.
+# 134.0 -> 99.4 us fastest chip (reader NoC0 / writer NoC1 before); with 8-packet port batches: 94.5 us.
 COMPUTE_READER_NOC = NOC1
 COMPUTE_WRITER_NOC = NOC0
 # Output in L1 interleaved (Refinement 1 re-check, Kimi model case, harness): NoC1 fastest 81.01 -> 78.53 us but slowest
@@ -282,20 +312,20 @@ class _Resources:
         self.scratch = None
         self.cap_tiles = 0
         self.arrival = []
-        self.ready = None
+        self.ready = []
 
 
 _RES_CACHE = {}
 
 
-def _resources(mesh, compute_cells, port_cells, cap_tiles, n_arrival, dtype):
+def _resources(mesh, compute_cells, port_cells, cap_tiles, n_arrival, n_ready, dtype):
     key = (id(mesh), tuple(sorted(compute_cells)), tuple(sorted(port_cells)), dtype)
     entry = _RES_CACHE.get(key)
     res = entry[1] if entry is not None else _Resources()
     changed = False
     compute_crs = _rects(compute_cells)
-    if res.ready is None:
-        res.ready = ttnn.create_global_semaphore(mesh, _rects(port_cells), 0)
+    while len(res.ready) < n_ready:  # one ready counter per destination chip of a port
+        res.ready.append(ttnn.create_global_semaphore(mesh, _rects(port_cells), 0))
         changed = True
     while len(res.arrival) < n_arrival:
         res.arrival.append(ttnn.create_global_semaphore(mesh, compute_crs, 0))
@@ -401,13 +431,38 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
 
     # ---- per chip: who sends what (entries), readies ----
     L = num_links
+    # Measurement hook (off by default): A2AMM_XP=group=0,fence=0,pack=0 overrides the TRANSPORT send-schedule knobs.
+    _xp = dict(kv.split("=") for kv in os.environ.get("A2AMM_XP", "").split(",") if "=" in kv)
+    in_bytes = B * Hl * St * Kt * in_tile  # per chip: the input is read once and (G-1)/G of it exchanged
+    dram_bytes = in_bytes + H * Kt * Nt * w_tile
+    if memory_config.buffer_type == ttnn.BufferType.DRAM:
+        dram_bytes += B * H * Mq_t * Nt * in_tile
+    local_ratio = dram_bytes / in_bytes
+    grouped = bool(int(_xp.get("group", SEND_GROUPED_BY_DEST and local_ratio <= SEND_RUN_MAX_LOCAL_RATIO)))
+    send_run = (None if _xp["run"] == "all" else int(_xp["run"])) if "run" in _xp else SEND_RUN_ENTRIES
+    fence_per_dest = bool(int(_xp.get("fence", FENCE_PER_DEST)))
+    pack = bool(int(_xp.get("pack", PACK_ACROSS_ENTRIES))) and packet_tiles <= slot_tiles
+    dest_order = _xp.get("order", SEND_DEST_ORDER)
+    batch_chunks = int(_xp.get("batch", max(1, PORT_BATCH_BYTES // packet_bytes)))
+    tail_max = int(_xp["tail"]) if "tail" in _xp else TAIL_SPLIT_MAX_HEADS
+    tail_est = _xp.get("est", TAIL_SPLIT_ESTIMATE)
+
+    def _dest_key(p, t, G_):
+        hops = min((t - p) % G_, (p - t) % G_)
+        return {"near": (hops, t), "far": (-hops, t), "legacy": ((t - p) % G_, t)}[dest_order]
+
     sends = {}  # (coord, d, l) -> [(j, t_pos)]
     for coord, ch in chips.items():
         p, G_, grp = ch["p"], ch["G"], ch["grp"]
         for d in (FWD, BWD):
-            dests = sorted((t for t, dd in ch["route"].items() if dd == d), key=lambda t: ((t - p) % G_, t))
+            dests = sorted((t for t, dd in ch["route"].items() if dd == d), key=lambda t: _dest_key(p, t, G_))
             for l in range(L):
-                sends[(coord, d, l)] = [(j, t) for j in range(l, Hl, L) for t in dests]
+                heads = list(range(l, Hl, L))
+                run = len(heads) if grouped and send_run is None else (send_run if grouped else 1)
+                run = max(1, run)
+                sends[(coord, d, l)] = [
+                    (j, t) for r0 in range(0, len(heads), run) for t in dests for j in heads[r0 : r0 + run]
+                ]
 
     # ---- cores ----
     grid = mesh.compute_with_storage_grid_size()
@@ -434,15 +489,18 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
     def tail_plan(coord):
         ch = chips[coord]
         q, grp = ch["p"], ch["grp"]
-        est = []  # (entries sent before this head's entry on its source port, slots of its core, h)
+        # (estimated landing: the share of its source port's entries sent up to and including this one, or the raw
+        #  index ("index"), slots of its core, h)
+        est = []
         for xy, hs in assign:
             for h in hs:
                 p = h // Hl
                 if p == q:
                     continue
                 j, src = h % Hl, grp[h // Hl]
-                idx = sends[(src, chips[src]["route"][q], j % L)].index((j, q))
-                est.append((idx, len(hs), h))
+                port_sends = sends[(src, chips[src]["route"][q], j % L)]
+                idx = port_sends.index((j, q))
+                est.append(((idx if tail_est == "index" else (idx + 1) / len(port_sends)), len(hs), h))
         est.sort(reverse=True)
         idle = [xy for xy in compute_cells_list if xy not in heads_of]
         # a local-head helper gets one slot more than its heads: only where that still fits A_RESIDENT and the counters
@@ -451,7 +509,7 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
             (xy for xy, hs in assign if all(h // Hl == q for h in hs) and fits(hs)), key=lambda xy: len(heads_of[xy])
         )
         helpers = idle + local_only
-        n = len(helpers) if TAIL_SPLIT_MAX_HEADS is None else min(len(helpers), TAIL_SPLIT_MAX_HEADS)
+        n = len(helpers) if tail_max is None else min(len(helpers), tail_max)
         return {h: helpers[i] for i, (_, _, h) in enumerate(est[:n])}
 
     split_of = {coord: tail_plan(coord) for coord in chips}  # {coord: {h: helper xy}}
@@ -497,11 +555,15 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
             f"all_to_all_matmul: A_RESIDENT fails ({cap_tiles * in_tile} B of landed rows per core > "
             f"{A_SLOT_BUDGET_BYTES}): regime R3 (DRAM landing) is not built"
         )
-    res = _resources(mesh, set(compute_cells_list), port_cells, cap_tiles, slots_per_core_max, input_tensor.dtype)
+    data_dests = {k: sorted({t for _, t in e}) for k, e in sends.items()}  # ready counter k <-> k-th data destination
+    n_ready = max(1, max(len(v) for v in data_dests.values()))
+    res = _resources(
+        mesh, set(compute_cells_list), port_cells, cap_tiles, slots_per_core_max, n_ready, input_tensor.dtype
+    )
     landing_addr = int(res.scratch.buffer_address())
     slot_bytes = slot_tiles * in_tile
     arrival_addrs = [int(ttnn.get_global_semaphore_address(s)) for s in res.arrival[:slots_per_core_max]]
-    ready_addr = int(ttnn.get_global_semaphore_address(res.ready))
+    ready_addrs = [int(ttnn.get_global_semaphore_address(s)) for s in res.ready[:n_ready]]
     # kernels + compute CBs: the cores holding heads, plus every compute core when the tail split may use idle ones
     active_cells = list(compute_cells_list) if tail_split else [xy for xy, _ in assign]
     active_crs = _rects(active_cells)
@@ -520,16 +582,13 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
     compute_cfg.fp32_dest_acc_en = bool(compute_kernel_config.fp32_dest_acc_en)
     compute_cfg.math_approx_mode = bool(compute_kernel_config.math_approx_mode)
 
-    ready_out = {k: [] for k in sends}  # (coord, d, l) -> [(target coord, target port (d, l))]
-    ready_wait = {}
-    for (coord, d, l), ents in sends.items():
+    ready_out = {k: [] for k in sends}  # (coord, d, l) -> [(target coord, target port (d, l), ready counter index)]
+    for (coord, d, l), dests_ in data_dests.items():
         ch = chips[coord]
-        dest_pos = sorted({t for _, t in ents})
-        ready_wait[(coord, d, l)] = len(dest_pos)
-        for t in dest_pos:
+        for g, t in enumerate(dests_):
             tc = ch["grp"][t]
             back = chips[tc]["route"][ch["p"]]
-            ready_out[(tc, back, l)].append((coord, (d, l)))
+            ready_out[(tc, back, l)].append((coord, (d, l), g))
 
     cfg_key = "|".join(
         str(v)
@@ -545,6 +604,14 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
             compute_cfg.fp32_dest_acc_en,
             compute_cfg.math_approx_mode,
             packet_tiles,
+            pack,
+            fence_per_dest,
+            grouped,
+            send_run,
+            dest_order,
+            batch_chunks,
+            tail_max,
+            tail_est,
             block_n,
             sbh,
             sbw,
@@ -581,7 +648,7 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
                 format_descriptors=[ttnn.CBFormatDescriptor(CB_OUT, input_tensor.dtype, in_tile)],
             ),
             ttnn.CBDescriptor(
-                total_size=2 * PORT_BATCH_CHUNKS * packet_bytes,
+                total_size=2 * batch_chunks * packet_bytes,
                 core_ranges=port_crs,
                 format_descriptors=[ttnn.CBFormatDescriptor(CB_PORT_CHUNKS, input_tensor.dtype, packet_bytes)],
             ),
@@ -665,20 +732,22 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
             ents = sends[(coord, d, l)]
             readies = ready_out[(coord, d, l)]
             port_reader_rt[px][py] = [in_addr, len(ents)] + [j | (t << 16) for j, t in ents]
-            dest_coords = sorted({ch["grp"][t] for _, t in ents} | {tc for tc, _ in readies})
+            dest_coords = sorted({ch["grp"][t] for _, t in ents} | {tc for tc, _, _ in readies})
             n_dest = len(dest_coords)
             has_conn = 1 if (ents or readies) else 0
-            hdrs_per_dest = max(1, min(PORT_BATCH_CHUNKS, MAX_PACKET_HEADERS // max(1, n_dest)))
+            hdrs_per_dest = max(1, min(batch_chunks, MAX_PACKET_HEADERS // max(1, n_dest)))
             if n_dest > MAX_PACKET_HEADERS:
                 raise RuntimeError(f"all_to_all_matmul: a port with {n_dest} destinations exceeds the header pool")
-            args = [ready_addr, ready_wait[(coord, d, l)], has_conn, n_dest, hdrs_per_dest]
-            for dc in dest_coords:
+            data_coords = [ch["grp"][t] for t in data_dests[(coord, d, l)]]
+            args = [has_conn, n_dest, hdrs_per_dest]
+            for dc in dest_coords:  # route + ready counter (0: no data for that chip) per destination
                 dn = _node(mesh, dc)
-                args += [int(dn.chip_id), int(dn.mesh_id)]
+                ra = ready_addrs[data_coords.index(dc)] if dc in data_coords else 0
+                args += [int(dn.chip_id), int(dn.mesh_id), ra]
             args += [len(readies)]
-            for tc, (td, tl) in readies:
+            for tc, (td, tl), g in readies:
                 rc = virt(chips[tc]["ports"][(td, tl)])
-                args += [dest_coords.index(tc), rc.x, rc.y]
+                args += [dest_coords.index(tc), rc.x, rc.y, ready_addrs[g]]
             args += [len(ents)]
             for j, t in ents:
                 h = q * Hl + j
@@ -697,7 +766,7 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
             CB_PORT_CHUNKS,
             in_tile,
             packet_tiles,
-            PORT_BATCH_CHUNKS,
+            batch_chunks,
             B,
             Mq_t,
             Kt,
@@ -705,9 +774,11 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
             Hl,
             Mq,
             CB_RETILE_STAGE,
+            int(pack),
         ]
         port_reader_ct += in_ct
-        port_sender_ct = [CB_PORT_CHUNKS, in_tile, packet_tiles, PORT_BATCH_CHUNKS, slot_tiles, MAX_PACKET_HEADERS]
+        port_sender_ct = [CB_PORT_CHUNKS, in_tile, packet_tiles, batch_chunks, slot_tiles, MAX_PACKET_HEADERS]
+        port_sender_ct += [int(pack), int(fence_per_dest)]
         kernels += [
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "all_to_all_matmul_port_reader.cpp"),

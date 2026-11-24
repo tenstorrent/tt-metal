@@ -6,3 +6,6 @@
 {"event":"test_run","result":"pass","detail":"non_aligned unit 6/6, golden m_non_aligned 24/24 + 8 aligned reps, acceptance 10/10","ts":"2026-11-24T16:59:18+00:00"}
 {"event":"test_run","status":"pass","what":"R3 weight-read throttle WEIGHT_READ_CHUNK_BYTES=16K: harness all 4 perf cases win; Kimi model 81.2->64.1 fastest; unit 16/16","ts":"2026-11-24T17:21:37+00:00"}
 {"event":"test_run","status":"pass","what":"R3 final: throttle + tail split (8). Harness all 4 perf cases win vs base; Kimi model 81.2->60.5 fastest. Unit 36/36, golden slice 68/68","ts":"2026-11-24T17:44:12+00:00"}
+{"event":"hypothesis","refinement":4,"text":"far routes balanced already (B,F,B,F); exchange bound by per-packet router cost + fence; levers: dest runs + per-dest fence + packing across entries (fused scatter+inc)","ts":"2026-11-24T18:31:24+00:00"}
+{"event":"test_run","status":"pass","tests":"unit dir 36/36; golden slice 29/29 (18 shapes L1/16bitDEST + 4 loose + regression)","ts":"2026-11-24T18:31:24+00:00"}
+{"event":"test_run","status":"perf","case":"LOOSE_CASES[0]","whole_op_fastest_us":[60.36,55.84],"slowest_us":[64.82,61.36],"exchange_alone_us":[50.45,45.77],"guards":"DeepSeek win, GLM win, Kimi Phase0 null (gated)","ts":"2026-11-24T18:31:24+00:00"}
