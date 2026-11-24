@@ -156,7 +156,11 @@ def sdpa_program_config(device, seq_len, rows):
     if seq_len not in _SDPA_MEASURED_SEQ_LENS:
         return None
     chunk = 256 if rows >= _SDPA_ROWS_FOR_LARGE_CHUNK else 128
-    q_chunk = k_chunk = min(chunk, seq_len)
+    q_chunk = min(chunk, seq_len)
+    # k_chunk stays at 128. With fp32 dest accumulation SDPA keeps qk_im, the row sum and (since #65746)
+    # the row max in fp32, and the dense bf16 mask CB is Sq x Sk double-buffered. At q256/k256 that is
+    # 970752 B of static CBs per core, which clashes with the L1-resident attention chain at b8s256.
+    k_chunk = min(128, seq_len)
     return ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
         q_chunk_size=q_chunk,
