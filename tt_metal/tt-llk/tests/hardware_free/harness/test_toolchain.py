@@ -121,6 +121,18 @@ def test_named_toolchain_is_absolute(monkeypatch, tmp_path):
     assert toolchain.find_sfpi_root(tmp_path / "llk") == tmp_path / "named"
 
 
+def test_a_session_keeps_a_named_root_that_is_missing(monkeypatch, tmp_path):
+    """With an in-tree toolchain present, the session must still not build with it."""
+    llk_home = _llk_home(tmp_path / "llk")
+    in_tree = _sfpi(llk_home / "tests" / "sfpi")
+    monkeypatch.setenv(toolchain.SFPI_ROOT_ENV, str(tmp_path / "typo"))
+
+    assert toolchain.session_sfpi_root(llk_home) == tmp_path / "typo"
+
+    monkeypatch.delenv(toolchain.SFPI_ROOT_ENV)
+    assert toolchain.session_sfpi_root(llk_home) == in_tree
+
+
 def test_missing_toolchain_names_every_place_looked_in(tmp_path):
     llk_home = _llk_home(tmp_path / "llk")
 
@@ -155,6 +167,19 @@ def test_a_trial_build_has_no_release_to_order():
 def test_a_compiler_that_is_not_sfpi_is_rejected():
     with pytest.raises(ValueError):  # allow-pytest.raises: no expect_error in LLK suite
         toolchain.parse_sfpi_banner("riscv64-unknown-elf-g++ (GCC) 15.1.0\n")
+
+
+def test_a_compiler_that_is_not_sfpi_is_named(tmp_path):
+    """A RuntimeError, which the plugin turns into a usage error, not a traceback."""
+    root = _sfpi(tmp_path / "other")
+    (root / "compiler/bin/riscv-tt-elf-g++").write_text(
+        "#!/bin/sh\necho 'riscv64-unknown-elf-g++ (GCC) 15.1.0'\n"
+    )
+
+    with pytest.raises(  # allow-pytest.raises: no expect_error in LLK suite
+        RuntimeError, match="is not an SFPI compiler"
+    ):
+        toolchain.installed_sfpi_version(root)
 
 
 def test_installed_release_is_asked_of_the_compiler(tmp_path):

@@ -41,3 +41,20 @@ def harness_files_root() -> Path:
         f"{_CHECKOUT_ROOT} (a tt-llk checkout) and {_INSTALLED_ROOT} (an installed "
         "harness). The installation is incomplete."
     )
+
+
+def harness_is_installed() -> bool:
+    """Whether the harness runs from its wheel, not from a tt-llk checkout."""
+    return harness_files_root() == _INSTALLED_ROOT
+
+
+def build_helpers_tree(llk_home: Path) -> Path:
+    """The ``tests/helpers`` tree variants are built with.
+
+    ``LLK_HOME``'s when the harness runs from a checkout, so a checkout harness
+    pointed at another tree builds that tree's device code (the SFPU report
+    tool compares two trees that way). An installed harness has no such tree
+    to rely on and builds with the copy its wheel carries.
+    """
+    root = harness_files_root() if harness_is_installed() else Path(llk_home)
+    return root / "tests" / "helpers"

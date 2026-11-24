@@ -31,6 +31,7 @@ from __future__ import annotations
 import re
 
 import pytest
+from helpers import harness_files
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import COMPRESSED_META, LOOP_FACTOR, TILE_COUNT
 from helpers.utils import run_shell_command
@@ -201,6 +202,12 @@ def test_a_helpers_tree_replaces_the_linker_scripts_it_has(
         TestConfig.linker_script("sections.ld")
         == TestConfig.LINKER_SCRIPTS / "sections.ld"
     )
+
+
+def test_a_checkout_harness_builds_with_the_helpers_of_llk_home(tmp_path):
+    """The SFPU report tool runs one harness checkout on two trees; each side's device code must be its own."""
+    assert not harness_files.harness_is_installed()
+    assert harness_files.build_helpers_tree(tmp_path) == tmp_path / "tests/helpers"
 
 
 def test_a_relative_helpers_tree_gives_absolute_linker_scripts(

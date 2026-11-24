@@ -75,6 +75,15 @@ def find_sfpi_root(llk_home: Path) -> Optional[Path]:
     return None
 
 
+def session_sfpi_root(llk_home: Path) -> Path:
+    """The root a session takes its toolchain from: the one found, else the first place looked in.
+
+    Not the in-tree root when none is found: a named root that is missing must
+    fail where compiling starts, not be replaced by an in-tree toolchain.
+    """
+    return find_sfpi_root(llk_home) or candidate_sfpi_roots(llk_home)[0]
+
+
 def missing_sfpi_message(llk_home: Path) -> str:
     tried = "\n".join(
         f"  {root / _COMPILER}" for root in candidate_sfpi_roots(llk_home)
@@ -118,7 +127,10 @@ def installed_sfpi_version(root: Path) -> SfpiVersion:
         raise RuntimeError(
             f"Cannot run the SFPI compiler {compiler}: {error}"
         ) from error
-    return parse_sfpi_banner(banner)
+    try:
+        return parse_sfpi_banner(banner)
+    except ValueError as error:
+        raise RuntimeError(f"{compiler} is not an SFPI compiler: {error}") from error
 
 
 def pinned_sfpi_release(llk_home: Path) -> Optional[tuple[int, ...]]:

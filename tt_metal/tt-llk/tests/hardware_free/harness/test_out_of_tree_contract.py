@@ -248,6 +248,8 @@ def _run_fixture(
         # An installed harness gets the pytest plugins its wheel requires (pytest-xdist) and no other: one that is
         # merely installed in this environment must not be what the fixture passes with.
         env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
+        # A caller's PYTHONPATH that holds tests/python_tests would put the checkout's harness before the installed one.
+        env.pop("PYTHONPATH", None)
         argv += ["-p", "xdist.plugin"]
 
     # start_new_session so the whole process group can be killed on timeout:

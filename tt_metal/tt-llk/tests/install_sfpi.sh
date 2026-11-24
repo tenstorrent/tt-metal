@@ -99,7 +99,11 @@ main() {
         exit 1
     fi
     echo "$sfpi_version" > "$STAGING_DIR/sfpi/sfpi.version"
-    rm -rf "$dest"
+    # A destination that survives would take the new release as $dest/sfpi and leave the old compiler in use.
+    if ! rm -rf "$dest" || [[ -e "$dest" ]]; then
+        echo "ERROR: Failed to remove the old SFPI install at '$dest'" >&2
+        exit 1
+    fi
     if ! mv "$STAGING_DIR/sfpi" "$dest" ; then
         echo "ERROR: Failed to move the SFPI release to '$dest'" >&2
         exit 1

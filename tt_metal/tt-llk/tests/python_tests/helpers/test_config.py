@@ -74,7 +74,11 @@ from .golden_generators import (
     dummy_golden_generator,
     get_golden_proxied,
 )
-from .harness_files import harness_files_root
+from .harness_files import (
+    build_helpers_tree,
+    harness_files_root,
+    harness_is_installed,
+)
 from .llk_params import (
     DestAccumulation,
     L1Accumulation,
@@ -473,15 +477,11 @@ class TestConfig:
         TestConfig.LLK_ROOT = sources_path
         TestConfig.TESTS_WORKING_DIR = TestConfig.LLK_ROOT / "tests"
         # None found is not an error here: a session that never compiles needs no toolchain (require_toolchain()).
-        # Then the first place looked in stands in, so a named root that is missing is not replaced by the in-tree one.
-        TestConfig.SFPI_ROOT = (
-            toolchain.find_sfpi_root(TestConfig.LLK_ROOT)
-            or toolchain.candidate_sfpi_roots(TestConfig.LLK_ROOT)[0]
-        )
+        TestConfig.SFPI_ROOT = toolchain.session_sfpi_root(TestConfig.LLK_ROOT)
         TestConfig.TOOL_PATH = TestConfig.SFPI_ROOT / "compiler/bin"
 
-        # The harness's own helper tree, not LLK_HOME's: its Python and these sources are one commit.
-        TestConfig.HELPERS = harness_files_root() / "tests/helpers"
+        # LLK_HOME's from a checkout, the wheel's own when installed (build_helpers_tree).
+        TestConfig.HELPERS = build_helpers_tree(TestConfig.LLK_ROOT)
         TestConfig.RISCV_SOURCES = TestConfig.HELPERS / "src"
         TestConfig.LINKER_SCRIPTS = TestConfig.HELPERS / "ld"
 
@@ -672,10 +672,10 @@ class TestConfig:
             f"-DTENSIX_FIRMWARE -DENV_LLK_INFRA -DKERNEL_BUILD {llk_assert_define}{TestConfig.ARCH_DEFINE} "
             f"{'-DSPEED_OF_LIGHT' if TestConfig.SPEED_OF_LIGHT else ''}"
         )
-        # A harness that is not LLK_HOME's (an installed one) compiles its own helper headers, not LLK_HOME's copy,
-        # and falls back to its perf counter headers when LLK_HOME has none.
+        # An installed harness compiles its own helper headers, not LLK_HOME's copy, and falls back to its perf
+        # counter headers when LLK_HOME has none.
         harness = harness_files_root()
-        installed = harness != TestConfig.LLK_ROOT.resolve()
+        installed = harness_is_installed()
         TestConfig.INCLUDES = (
             [f"-I{harness}/tests/helpers/include"] * installed
             + [
