@@ -1837,7 +1837,13 @@ class TestConfig:
     def _compile_kernel_part(self, name, compile_command, source):
         cache = os.environ.get("LLK_OBJ_CACHE")
         if not cache:
-            run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR, source)
+            if (
+                TestConfig.BUILD_MODE == BuildMode.PRODUCE
+                and self.coverage_build == CoverageBuild.No
+            ):
+                self._compile_kernel_part_once(compile_command, source)
+            else:
+                run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR, source)
             return
         head = compile_command[: compile_command.index("-x")]
         root = str(TestConfig.ARTEFACTS_DIR)
@@ -1863,6 +1869,82 @@ class TestConfig:
             head + [str(obj), "-lc", "-lgcc", "-o", compile_command[-1]],
             TestConfig.TESTS_WORKING_DIR,
         )
+
+    def _compile_kernel_part_once(self, compile_command, source):
+        # build.h holds every parameter of the variant, but a TRISC names only some of them, so variants
+        # often compile a TRISC to the same code. Key on the flags, the source, and the build.h lines the
+        # unit names (directly or through another kept line), and build it once. The names a unit uses
+        # do not depend on the build.h constants, so one preprocessing per flags and source finds them.
+        variant_dir = str(TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id)
+        command = [
+            compile_command[0],
+            f"-ffile-prefix-map={variant_dir}=build",
+            *compile_command[1:],
+        ]
+        cwd = TestConfig.TESTS_WORKING_DIR
+        build_h = Path(variant_dir) / "build.h"
+        if not build_h.exists():
+            run_shell_command(command, cwd, source)
+            return
+        constants, statement, depth = [], "", 0
+        for line in build_h.read_text().splitlines():
+            if line.startswith("#"):
+                constants.append((None, line + "\n"))
+                continue
+            statement += line + "\n"
+            depth += line.count("{") - line.count("}")
+            if depth == 0 and line.rstrip().endswith(";"):
+                name = re.match(
+                    r"\s*(?:(?:static|inline)\s+)*constexpr\b[^=;{]*?\b(\w+)\s*[={]",
+                    statement,
+                )
+                constants.append((name.group(1) if name else None, statement))
+                statement = ""
+        constants.append((None, statement))
+        fixed = json.dumps([token.replace(variant_dir, "") for token in command[:-1]])
+        fixed += source + "".join(text for name, text in constants if name is None)
+        trisc_dir = TestConfig.ARTEFACTS_DIR / "trisc"
+        trisc_dir.mkdir(exist_ok=True)
+        names_file = trisc_dir / f"{sha256(fixed.encode()).hexdigest()}.names"
+        with FileLock(f"{names_file}.lock"):
+            if not names_file.exists():
+                unit = subprocess.run(
+                    command[: command.index("-x")] + ["-E", "-x", "c++", "-"],
+                    cwd=cwd,
+                    input=source,
+                    capture_output=True,
+                    text=True,
+                )
+                if unit.returncode:
+                    run_shell_command(command, cwd, source)
+                    return
+                rest, in_build_h = [], False
+                for line in unit.stdout.splitlines():
+                    if line.startswith("# "):
+                        in_build_h = f'"{build_h}"' in line
+                    elif not in_build_h:
+                        rest.append(line)
+                names_file.write_text(
+                    json.dumps(sorted(set(re.findall(r"\w+", "\n".join(rest)))))
+                )
+        names = set(json.loads(names_file.read_text()))
+        names.update(re.findall(r"\w+", "".join(t for n, t in constants if n is None)))
+        kept, grew = set(), True
+        while grew:
+            grew = False
+            for i, (name, text) in enumerate(constants):
+                if name is not None and i not in kept and name in names:
+                    kept.add(i)
+                    names.update(re.findall(r"\w+", text))
+                    grew = True
+        fixed += "".join(text for i, (_, text) in enumerate(constants) if i in kept)
+        built = trisc_dir / f"{sha256(fixed.encode()).hexdigest()}.elf"
+        with FileLock(f"{built}.lock"):
+            if built.exists():
+                shutil.copyfile(built, command[-1])
+                return
+            run_shell_command(command, cwd, source)
+            shutil.copyfile(command[-1], built)
 
     def build_elfs(self):
 
