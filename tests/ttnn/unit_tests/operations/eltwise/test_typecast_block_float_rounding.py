@@ -19,8 +19,8 @@ def _source_values(kind, shape):
         # bfloat4_b's is 2, so the odd multiples of 1/16 (and of 1) are exact ties.
         return (torch.randint(-255, 256, shape).float() / 16.0).clamp(-15.9375, 15.9375)
     if kind == "round_up_to_max":
-        # Every value is just below the block's largest value, so rounding up has to clamp to the largest mantissa.
-        return torch.full(shape, 1.999) * torch.where(torch.rand(shape) < 0.5, -1.0, 1.0)
+        # Every value rounds up to 2, past the largest mantissa, so it has to clamp. 1 + 127/128 is exact in bfloat16.
+        return torch.full(shape, 1.9921875) * torch.where(torch.rand(shape) < 0.5, -1.0, 1.0)
     if kind == "zeros_and_tiny":
         x = torch.randn(shape)
         x[torch.rand(shape) < 0.3] = 0.0
