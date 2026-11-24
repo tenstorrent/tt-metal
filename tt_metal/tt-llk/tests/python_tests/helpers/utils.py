@@ -227,10 +227,8 @@ def run_shell_command(
 ):
     """Run an argv sequence with ``shell=False``, so no argument is re-split.
 
-    A string is rejected rather than run under a shell: the build tree is rooted
-    at ``$RUNNER_TEMP``/``$TMPDIR``, so an interpolated command string lets a
-    space or a shell metacharacter in that path split or reinterpret the
-    command. Build an argv with ``TestConfig._argv``.
+    A string is rejected: the build root comes from ``$RUNNER_TEMP``/``$TMPDIR``,
+    and a shell would split it on whitespace.
     """
     if isinstance(command, str):
         raise TypeError(
