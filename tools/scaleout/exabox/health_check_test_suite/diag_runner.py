@@ -40,6 +40,7 @@ if _SUITE_DIR not in sys.path:
 
 from diag.common import default_tt_metal_path, log, print_phase_line, print_phase_summary  # noqa: E402
 from diag.aer import AerWindow  # noqa: E402
+from diag import captures  # noqa: E402
 from diag.device_tests import run_tests  # noqa: E402
 from diag.busbar import LOAD_TESTS, OVERRIDES, STEPS, link_fault, plan as busbar_plan, run_busbar  # noqa: E402
 from diag.eth_status import run_eth_status  # noqa: E402
@@ -176,6 +177,7 @@ def build_diag_arg_parser() -> argparse.ArgumentParser:
         ap.add_argument(
             flag, dest=key, type=typ, default=None, help=f"Galaxy load: {what}. Not given: the tier's plan."
         )
+    captures.add_args(ap)
     ap.add_argument("--output", type=Path, default=Path("diag_report.json"))
     ap.add_argument("--snapshot-out", type=Path, default=Path("/tmp/diag_snapshot.json"))
     return ap

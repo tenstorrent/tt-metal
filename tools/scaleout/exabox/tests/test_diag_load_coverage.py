@@ -10,6 +10,7 @@ after them."""
 from __future__ import annotations
 
 import ast
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -110,7 +111,7 @@ class TestHscRead(unittest.TestCase):
             return mock.Mock(returncode=0, stdout=" ".join(["00"] * nbytes))
 
         with mock.patch.object(hsc.subprocess, "run", fake_run):
-            status = hsc.read_hsc_status()
+            status = hsc.read_hsc_status(hsc.Bmc("true", lock=os.devnull))
         self.assertEqual(len(status), 8)
         self.assertTrue(all(v == (0, 0) for v in status.values()))
         self.assertEqual(len(calls), 16)
@@ -121,7 +122,7 @@ class TestHscRead(unittest.TestCase):
 
     def test_failed_read_is_none(self):
         with mock.patch.object(hsc.subprocess, "run", return_value=mock.Mock(returncode=1, stdout="")):
-            self.assertTrue(all(v is None for v in hsc.read_hsc_status().values()))
+            self.assertTrue(all(v is None for v in hsc.read_hsc_status(hsc.Bmc("true", lock=os.devnull)).values()))
 
 
 class TestPcieRecount(unittest.TestCase):

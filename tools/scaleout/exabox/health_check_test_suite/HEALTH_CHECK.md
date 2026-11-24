@@ -705,6 +705,30 @@ whose baked-in suite predates the phase has the `--skip-sys-triage` and
   `dpkg-query` sees the image's package database, not the host's. The
   `module=` version from `modinfo` is correct.
 
+## Hardware captures
+
+`diag/captures.py` reads tray power, drops, hangs and PCIe errors around each stage and step:
+`captures.run(event, step, status, outdir, args)` for the events `stage-start`, `before`, `after`, `stage-end` and
+`reset` (before a reset or tray re-power) returns the FAIL and WARN lines; the rest goes to the log and to
+`<outdir>/captures/`. The same calls run as separate processes, for a sequencer outside this suite:
+`PYTHONPATH=<suite dir> python3 -m diag.captures <event> <step> <status> <outdir> [flags]`, and
+`python3 -m diag.captures sample` prints one HSC sweep for a telemetry stream.
+
+- **HSC**: the run-start latches, limits and peaks (one pre-existing WARN); per stage a new under-voltage, OFF or
+  over-current latch is a FAIL naming the tray and HSC (and the step that set it), a loaded VIN under 11 V, a 12 V sag
+  over 13 mOhm and a peak at the HSC's own warn limit WARN. Under 80% of the planned load (`--load-pct`) a clean HSC
+  is not counted as a good feed.
+- **Poll** (one process per stage, ends with the caller): each HSC's VIN and IOUT, the BMC power sensors, each tray's VR
+  power-good byte (a fall on two polls in a row is a `12V FAIL`), each chip's power and current (peaks per chip), and
+  each root port's corrected AER a minute from sysfs and the kernel log (over 500 a minute: a weak-link WARN).
+- **Evidence** when a tray loses chips or a step hangs or fails: both HSCs and the CPLD power bytes of the tray, the
+  vendor CPLD dump when installed (`--cpld-dump`, else `cpld-dump.sh` on PATH; "not installed" otherwise), the SEL
+  and the kernel log. A read that needs root and is not listed by `sudo -n -l` exactly is skipped with the reason.
+- **Writes are opt-in**: `--hsc-clear` (CLEAR_FAULTS once per HSC per run, none when any HSC reads OFF), `--brick-mux`
+  (select a power-brick mux channel, read, restore; only on a host a `brick_mux <host|*>` row of `--site-data`
+  names), `--hang-guard` (take a chip whose config space reads all ones off PCIe, as root). Every BMC I2C transaction
+  takes `--i2c-lock`.
+
 ## Flags
 
 | Flag | Default | Purpose |

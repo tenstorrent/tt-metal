@@ -19,26 +19,79 @@ KINDS = {"corr": "aer_dev_correctable", "nonfatal": "aer_dev_nonfatal", "fatal":
 # Correctable errors are normal background; they WARN only at this many new ones and this many per hour.
 CORR_MIN = 2
 CORR_PER_HOUR = 6.0
+# Corrected errors a minute on one root port that WARN as a weak link (one chip logged 5,230 in a run whose counters read
+# nothing, then dropped off the bus hours later).
+RATE_PER_MIN = 500
+BDF = re.compile(r"\b([0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7])\b")
+
+
+def tt_devices(devices: Path = PCI_DEVICES) -> list[Path]:
+    """The sysfs node of every Tenstorrent device on PCIe."""
+    out = []
+    for dev in sorted(devices.glob("*")):
+        try:
+            if (dev / "vendor").read_text().strip() == TENSTORRENT_VENDOR:
+                out.append(dev)
+        except OSError:
+            pass
+    return out
 
 
 def read_aer(devices: Path = PCI_DEVICES) -> dict[str, dict[str, int]]:
     """``{bdf: {corr, nonfatal, fatal}}`` totals for every Tenstorrent device; a counter that can't be read is left out."""
     out: dict[str, dict[str, int]] = {}
-    for dev in sorted(devices.glob("*")):
-        try:
-            if (dev / "vendor").read_text().strip() != TENSTORRENT_VENDOR:
-                continue
-        except OSError:
-            continue
+    for dev in tt_devices(devices):
         counts = out[dev.name] = {}
         for kind, fname in KINDS.items():
-            try:
-                m = re.search(r"^TOTAL_ERR_\w+\s+(\d+)", (dev / fname).read_text(), re.M)
-            except OSError:
-                continue
-            if m:
-                counts[kind] = int(m.group(1))
+            if (n := _total(dev / fname)) is not None:
+                counts[kind] = n
     return out
+
+
+def _total(path: Path) -> int | None:
+    try:
+        m = re.search(r"^TOTAL_ERR_\w+\s+(\d+)", path.read_text(), re.M)
+    except OSError:
+        return None
+    return int(m.group(1)) if m else None
+
+
+def root_ports(devices: Path = PCI_DEVICES) -> dict[Path, list[Path]]:
+    """Each Tenstorrent chip's upstream PCIe port: ``{port: [chips]}``."""
+    out: dict[Path, list[Path]] = {}
+    for dev in tt_devices(devices):
+        out.setdefault(dev.resolve().parent, []).append(dev)
+    return out
+
+
+def port_corrected(port: Path, chips: list[Path]) -> int | None:
+    """A root port's corrected errors: aer_rootport_total_err_cor (every one the port took) or its own and its chips'
+    aer_dev_correctable, the larger, so a port whose one counter stays put while the other moves still counts."""
+    own = [n for p in (port, *chips) if (n := _total(p / "aer_dev_correctable")) is not None]
+    try:
+        root = int((port / "aer_rootport_total_err_cor").read_text().split()[0])
+    except (OSError, ValueError, IndexError):
+        root = None
+    vals = [x for x in (root, sum(own) if own else None) if x is not None]
+    return max(vals) if vals else None
+
+
+def kernel_events(lines) -> dict[str, list[int]]:
+    """``{bdf: [corrected, uncorrected]}`` from kernel log lines: one per native 'PCIe Bus Error' line, or per
+    firmware-first record's 'device_id: <bdf>' line with that record's 'event severity:' (firmware-first hosts report
+    through these records and leave the sysfs counters at 0)."""
+    ev: dict[str, list[int]] = {}
+    sev: dict[str, str] = {}
+    for ln in lines:
+        if "[Hardware Error]" in ln:
+            tag = m.group(1) if (m := re.search(r"\{(\d+)\}\[Hardware Error\]", ln)) else ""
+            if m := re.search(r"event severity: (\w+)", ln):
+                sev[tag] = m.group(1).lower()
+            elif m := re.search(r"device_id: " + BDF.pattern, ln):
+                ev.setdefault(m.group(1), [0, 0])[sev.get(tag, "corrected") not in ("corrected", "info")] += 1
+        elif "PCIe Bus Error" in ln and (m := BDF.search(ln)):
+            ev.setdefault(m.group(1), [0, 0])["Uncorrect" in ln] += 1
+    return ev
 
 
 def aer_new(before: dict, after: dict) -> dict[str, dict[str, int]]:
@@ -92,16 +145,35 @@ class AerWindow:
         return aer_check(self.new, (time.time() - self.t0) / 3600, len(self.last), unread(self.first, self.last))
 
 
-def aer_check(new: dict, hours: float, chips: int = 0, missing: dict | None = None) -> Check:
-    """Uncorrectable new errors FAIL, correctable ones at CORR_MIN and CORR_PER_HOUR WARN, and so do counters
-    *missing* at the start or the end of the window: errors on them were not counted."""
-    missing = missing or {}
+def judge(new: dict, hours: float) -> tuple[dict, dict]:
+    """The chips with uncorrectable new errors, and those with correctable ones at CORR_MIN and CORR_PER_HOUR."""
     bad = {b: d for b, d in new.items() if d.get("nonfatal") or d.get("fatal")}
     noisy = {
         b: d
         for b, d in new.items()
         if d.get("corr", 0) >= CORR_MIN and d["corr"] >= CORR_PER_HOUR * hours and b not in bad
     }
+    return bad, noisy
+
+
+def aer_lines(before: dict, after: dict, hours: float, when: str) -> list[str]:
+    """One finding line per chip whose new errors between two reads judge FAIL or WARN, e.g.
+    'AER FAIL 81:00.0 (tray 4): nonfatal +1 during <stage>'."""
+    new = aer_new(before, after)
+    bad, noisy = judge(new, hours)
+    return [
+        f"AER {'FAIL' if b in bad else 'WARN'} {b.split(':', 1)[-1]} (tray {chip(b)['tray']}): "
+        + ", ".join(f"{k} +{n}" for k, n in new[b].items())
+        + f" {when}"
+        for b in [*bad, *noisy]
+    ]
+
+
+def aer_check(new: dict, hours: float, chips: int = 0, missing: dict | None = None) -> Check:
+    """Uncorrectable new errors FAIL, correctable ones at CORR_MIN and CORR_PER_HOUR WARN, and so do counters
+    *missing* at the start or the end of the window: errors on them were not counted."""
+    missing = missing or {}
+    bad, noisy = judge(new, hours)
     status = FAIL if bad else WARN if noisy or missing else PASS
     named = {b: new[b] for b in [*bad, *noisy]}
     not_read = [f"{b}: {', '.join(ks)} not read" for b, ks in missing.items()]
