@@ -92,6 +92,7 @@ def test_matmul_fold_cells(math_fidelity, format_dest_acc_and_dims):
     _matmul_body(math_fidelity, format_dest_acc_and_dims)
 
 
+@pytest.mark.nightly  # test_matmul_mix, its body, is nightly too
 @pytest.mark.skipif(
     _mix_body is None, reason="no mixed format matmul test in this tree"
 )

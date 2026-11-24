@@ -2467,10 +2467,11 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_matmul_custom": "perf_matmul_custom"},
     },
     "perf_matmul_in1_column_stride": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "c_dimm",
             "dest_acc",
+            "dest_sync",
             "formats.input_A",
             "formats.input_B",
             "formats.output",
@@ -2625,7 +2626,7 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_unpack_A_custom": "perf_unpack_A_custom"},
     },
     "perf_pack_cov2": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "block_ct_dim",
             "block_rt_dim",
@@ -2654,6 +2655,7 @@ PERF_TEST_SCHEMAS = {
             "output_num_tiles_in_block",
             "pack_block",
             "relu_config",
+            "relu_type",
             "tile_cnt",
             "tilize",
             "unpack_to_dest",
@@ -2662,7 +2664,7 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_pack_cov2": "perf_pack_cov2"},
     },
     "perf_pack_cov3": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "block_ct_dim",
             "block_rt_dim",
@@ -2691,6 +2693,7 @@ PERF_TEST_SCHEMAS = {
             "output_num_tiles_in_block",
             "pack_block",
             "relu_config",
+            "relu_type",
             "tile_cnt",
             "tilize",
             "unpack_to_dest",
@@ -2699,7 +2702,7 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_pack_cov3": "perf_pack_cov3"},
     },
     "perf_pack_grid": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "block_ct_dim",
             "block_rt_dim",
@@ -2728,6 +2731,7 @@ PERF_TEST_SCHEMAS = {
             "output_num_tiles_in_block",
             "pack_block",
             "relu_config",
+            "relu_type",
             "tile_cnt",
             "tilize",
             "unpack_to_dest",
@@ -2773,10 +2777,9 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_pack_block_alt": "perf_pack_block_alt"},
     },
     "perf_pack_grid_tiny": {
-        "version": 2,
+        "version": 3,
         "columns": [
             "dest_acc",
-            "dest_sync",
             "dst_index",
             "face_c_dim",
             "face_r_dim",
@@ -2804,7 +2807,6 @@ PERF_TEST_SCHEMAS = {
             "output_num_blocks",
             "output_num_tiles_in_block",
             "tile_cnt",
-            "tiny_pack_mode",
             "unpack_to_dest",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
@@ -2848,7 +2850,7 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_pack_grid_rows": "perf_pack_grid_rows"},
     },
     "perf_pack_llkx": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "block_ct_dim",
             "block_rt_dim",
@@ -2877,6 +2879,7 @@ PERF_TEST_SCHEMAS = {
             "output_num_tiles_in_block",
             "pack_block",
             "relu_config",
+            "relu_type",
             "tile_cnt",
             "tilize",
             "unpack_to_dest",

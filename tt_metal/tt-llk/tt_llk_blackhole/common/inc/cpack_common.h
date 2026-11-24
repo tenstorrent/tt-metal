@@ -492,7 +492,8 @@ constexpr bool llk_pack_late_start(const bool is_fp32_dest_acc_en)
              !(llk_pack_lofi_api<dep * 0 + 1>::value && llk_pack_shape_marked<9, dep>(0) && !llk_pack_shape_marked<11, dep>(0)));
 }
 
-// Specialized by the headers of the pack-thread SFPU inits (compute_kernel_api.h and seven eltwise_unary headers).
+// Specialized by the headers of the pack-thread SFPU inits (compute_kernel_api.h, seven eltwise_unary headers and
+// experimental/sfpu_binary_bcast_pack.h).
 template <int api>
 struct llk_pack_sfpu_api
 {
@@ -511,7 +512,7 @@ constexpr bool llk_pack_sfpu_kernel()
 {
     return llk_pack_sfpu_api<dep * 0 + 1>::value || llk_pack_sfpu_api<dep * 0 + 2>::value || llk_pack_sfpu_api<dep * 0 + 3>::value ||
            llk_pack_sfpu_api<dep * 0 + 4>::value || llk_pack_sfpu_api<dep * 0 + 5>::value || llk_pack_sfpu_api<dep * 0 + 6>::value ||
-           llk_pack_sfpu_api<dep * 0 + 7>::value || llk_pack_sfpu_api<dep * 0 + 8>::value;
+           llk_pack_sfpu_api<dep * 0 + 7>::value || llk_pack_sfpu_api<dep * 0 + 8>::value || llk_pack_sfpu_api<dep * 0 + 9>::value;
 }
 
 // 0 other, 1 matmul, 2 matmul with a pack-thread SFPU: without a matmul API 0 at compile time, without a pack-thread
