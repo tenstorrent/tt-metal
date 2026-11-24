@@ -186,16 +186,23 @@ inline void wait_unpack_sync_mode()
  * earlier instruction have passed the Wait Gate, so the next RISC config store may rewrite any unpacker base.
  */
 template <UnpackSyncMode M>
-inline void unpack_sync_mode()
+[[gnu::noinline]] void switch_unpack_sync_mode()
 {
-    if (unpack_sync_mode_state == M)
-    {
-        return;
-    }
     wait_for_idle();
     push_unpack_sync_mode<M>();
     wait_unpack_sync_mode();
     unpack_sync_mode_state = M;
+}
+
+// The switch is out of line: kernels that chain several inits would otherwise inline it at each one and can overflow
+// the TRISC0 code region. Only the state check is inlined, and the switch runs only when the mode changes.
+template <UnpackSyncMode M>
+inline void unpack_sync_mode()
+{
+    if (unpack_sync_mode_state != M)
+    {
+        switch_unpack_sync_mode<M>();
+    }
 }
 
 /**
