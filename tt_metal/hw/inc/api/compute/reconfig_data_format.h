@@ -569,7 +569,8 @@ ALWI void pack_reconfig_data_format_cb2(const A& old_cb, const B& new_cb) {
 
 }  // namespace ckernel
 
-#if defined(ARCH_BLACKHOLE) && defined(TRISC_PACK)
+// Not in a kernel that includes the id-free (2.0) compute API (experimental/2_0/internal/no_call_site_macros.h).
+#if defined(ARCH_BLACKHOLE) && defined(TRISC_PACK) && !defined(CKERNEL_NO_CALL_SITE_MACROS)
 // Lets today's pack_reconfig_data_format(cb) and (old_cb, new_cb) calls with a constant output reach the immediate
 // reconfigure; other arities pass through.
 #define PACK_RECONFIG_NARGS_(a1, a2, a3, a4, n, ...) n

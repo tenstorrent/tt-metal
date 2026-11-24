@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "api/compute/experimental/2_0/internal/no_call_site_macros.h"
+
 #include "api/compute/experimental/compressed_custom_mm.h"
 #include "api/compute/experimental/2_0/llk_operand.h"
 #include "sanitizer/api.h"

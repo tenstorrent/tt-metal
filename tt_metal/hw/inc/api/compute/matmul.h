@@ -1800,7 +1800,8 @@ ALWI void matmul_block_fe(
 
 }  // namespace ckernel
 
-#ifdef ARCH_BLACKHOLE
+// Not in a kernel that includes the id-free (2.0) compute API (experimental/2_0/internal/no_call_site_macros.h).
+#if defined(ARCH_BLACKHOLE) && !defined(CKERNEL_NO_CALL_SITE_MACROS)
 
 // the cb ids, ct and rt of a plain call where they are constant expressions (pk-state's front-end dispatch); a call
 // with template arguments is not a macro call
