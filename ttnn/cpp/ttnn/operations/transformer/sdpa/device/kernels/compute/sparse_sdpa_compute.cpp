@@ -41,6 +41,7 @@
 #include "recipe/recipe_sfpu.hpp"
 #include "recipe/recipe_streaming.hpp"
 #include "recipe/recipe_ring.hpp"
+#include "recipe/recipe_split_merge.hpp"
 #include "sparse_recipe.hpp"
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/sparse_sdpa_common.hpp"
 #include "sparse_sdpa_fused_dequant.hpp"
@@ -255,83 +256,9 @@ SPARSE_STAGE void produce_k_chunk(uint32_t rows) {
 }
 }  // namespace
 
-// Split-K merge (sparse_sdpa_common.hpp seg_kind::TAIL). SFPI code exists in the MATH and PACK builds only.
+// The fused dequant's output scale. SFPI code exists in the MATH and PACK builds only.
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
 namespace ckernel::sfpu {
-// BF16 recipes. dest tile 0: the TAIL's maxima m_a, tile 1: the neighbour's m_b (column 0 is read). Tile 0 <- c_a =
-// exp(scale * (m_a - m)), tile 1 <- c_b = exp(scale * (m_b - m)), m = max(m_a, m_b): both states rescaled to the common
-// maximum.
-template <uint32_t scale_bits>
-inline void calculate_sparse_merge_corrections() {
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
-    constexpr float scale = __builtin_bit_cast(float, scale_bits);
-    for (int i = 0; i < 32; ++i) {
-        sfpi::vFloat a = sfpi::dst_reg[0];
-        sfpi::vFloat b = sfpi::dst_reg[32];
-        sfpi::vFloat m = a;
-        v_if(b > a) { m = b; }
-        v_endif;
-        sfpi::dst_reg[0] = _sfpu_exp_fp32_accurate_((a - m) * scale);
-        sfpi::dst_reg[32] = _sfpu_exp_fp32_accurate_((b - m) * scale);
-        sfpi::dst_reg++;
-    }
-}
-// BF16 recipes. dest tiles [0, w): the TAIL's state, [w, 2w): the neighbour's, tiles 2w and 2w + 1: column-broadcast
-// c_a and c_b. state = state * c_a + neighbour * c_b.
-template <int w>
-inline void calculate_sparse_merge() {
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
-    for (int i = 0; i < 32; ++i) {
-        sfpi::vFloat ca = sfpi::dst_reg[32 * 2 * w];
-        sfpi::vFloat cb = sfpi::dst_reg[32 * (2 * w + 1)];
-#pragma GCC unroll 3
-        for (int t = 0; t < w; ++t) {
-            sfpi::vFloat x = sfpi::dst_reg[32 * t];
-            sfpi::vFloat y = sfpi::dst_reg[32 * (w + t)];
-            sfpi::dst_reg[32 * t] = x * ca + y * cb;
-        }
-        sfpi::dst_reg++;
-    }
-}
-// FP32 recipes, the first column (VectorMode::C). dest tiles 0-3: the maxima m_a, m_b and the denominators l_a, l_b
-// of the TAIL's and the neighbour's states. Tile 0 <- s_a = c_a / l, tile 1 <- s_b = c_b / l: c_x = exp(scale * (m_x -
-// m)), m = max(m_a, m_b), l = l_a c_a + l_b c_b (the merged denominator and its reciprocal as the recipe's
-// normalization takes them), each times output_scale (a power of two: the fused dequant's 2^-OFFSET). The merged
-// numerator O_a c_a + O_b c_b is never stored: the normalized output is O_a s_a + O_b s_b.
-template <uint32_t scale_bits, uint32_t output_scale_bits>
-inline void calculate_sparse_merge_scales() {
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
-    constexpr float scale = __builtin_bit_cast(float, scale_bits);
-    constexpr float output_scale = __builtin_bit_cast(float, output_scale_bits);
-    sfpi::vConstFloatPrgm0 = 2.0f;  // sfpu_reciprocal_iter's constant (fp32_state_sfpu.hpp sdpa_state_reciprocal)
-    for (int d = 0; d < 4; ++d) {
-        sfpi::vFloat a = sfpi::dst_reg[0];
-        sfpi::vFloat b = sfpi::dst_reg[32];
-        sfpi::vFloat m = a;
-        v_if(b > a) { m = b; }
-        v_endif;
-        sfpi::vFloat ca = _sfpu_exp_fp32_accurate_((a - m) * scale);
-        sfpi::vFloat cb = _sfpu_exp_fp32_accurate_((b - m) * scale);
-        sfpi::vFloat l = sfpi::dst_reg[64] * ca + sfpi::dst_reg[96] * cb;
-        sfpi::vFloat r = sfpu_reciprocal_iter<2>(l);
-        if constexpr (output_scale_bits != 0x3f800000u) {
-            r = r * output_scale;
-        }
-        sfpi::dst_reg[0] = ca * r;
-        sfpi::dst_reg[32] = cb * r;
-        sfpi::dst_reg += 2;
-    }
-}
-// FP32 recipes. dest tiles 0, 1: O_a and O_b, tiles 2, 3: column-broadcast s_a and s_b. Tile 0 <- O_a s_a + O_b s_b.
-inline void calculate_sparse_merge_normalize() {
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
-    for (int i = 0; i < 32; ++i) {
-        sfpi::vFloat x = sfpi::dst_reg[0];
-        sfpi::vFloat y = sfpi::dst_reg[32];
-        sfpi::dst_reg[0] = x * sfpi::dst_reg[64] + y * sfpi::dst_reg[96];
-        sfpi::dst_reg++;
-    }
-}
 // In-place power-of-two scale of a whole tile (the fused dequant's 2^-OFFSET on the output).
 template <uint32_t factor_bits>
 inline void calculate_sparse_output_scale() {
@@ -347,231 +274,48 @@ inline void calculate_sparse_output_scale() {
 #endif
 
 namespace {
-// Copy tile `index` of `cb` into dest tile `dest` (the recipe's state formats; FP32 state CBs unpack to dest).
-ALWI void copy_state_tile(uint32_t cb, uint32_t index, uint32_t dest) {
-    sdpa_stream_reconfig_srca(cb);
-    copy_init(cb);
-    copy_tile(cb, index, dest);
-}
-// Column 0 of tile `index` of `cb` broadcast across dest tile `dest`.
-ALWI void bcast_state_tile(uint32_t cb, uint32_t index, uint32_t dest) {
-    sdpa_stream_reconfig_srca(cb);
-    unary_bcast_init<BroadcastType::COL>(cb);
-    unary_bcast<BroadcastType::COL>(cb, index, dest);
-    unary_bcast_uninit<BroadcastType::COL>(cb);
-}
-
 // The fused dequant's output scale (V carried 2^OFFSET), as FP32 bits.
 constexpr uint32_t output_scale_bits =
     fused_dequant ? static_cast<uint32_t>(127 - sparse_sdpa::FUSED_DEQUANT_EXP_OFFSET) << 23 : 0x3f800000u;
+// The neighbour's HEAD state (recipe_split_merge.hpp): O rows of vd tiles, maxima, l, and the c_b scratch.
+using HeadState = recipe_merge::Received<cb::recv_out, cb::recv_max, cb::recv_sum, cb::merge_corr>;
 
-// FP32 recipes: the TAIL's state after its last chunk (not normalized; the pushed prev banks, recipe_checkpoint's
-// layout) merged with the neighbour's HEAD state (cb::recv_*: O rows of vd tiles, maxima, l) straight into the
-// normalized output CB: per Q row one first-column pass for the two rescales s_a, s_b (normalization and output scale
-// folded in), then one pass per O tile, O_a s_a + O_b s_b. The output carries the fused dequant's scale already.
+// FP32 recipes: the TAIL's state merged with the neighbour's HEAD state straight into the normalized output CB (the
+// output carries the fused dequant's scale already).
 SPARSE_COLD void merge_normalize_fp32(RecipeAccumulatorState& state) {
-    const uint32_t a_out = state.prev.out, a_sum = state.prev.sum, a_max = state.prev.max;
-    PACK(sdpa_pack.format_cb = INVALID_CB; sdpa_pack.width = 0;)
-    CircularBuffer(cb::recv_out).wait_front(q_tiles * vd_tiles);
-    CircularBuffer(cb::recv_max).wait_front(q_tiles);
-    CircularBuffer(cb::recv_sum).wait_front(q_tiles);
-    // s_a into CB exp_max_diff, s_b into cb::merge_corr (FP32, first column).
-    CircularBuffer(exp_max_diff).reserve_back(q_tiles);
-    CircularBuffer(cb::merge_corr).reserve_back(q_tiles);
-    PACK((llk_pack_reconfig_l1_acc(0)));
-    pack_reconfig_data_format(exp_max_diff);
-    configure_single_tile_pack(exp_max_diff);
-    for (uint32_t r = 0; r < q_tiles; ++r) {
-        tile_regs_acquire();
-        copy_state_tile(a_max, r, 0);
-        copy_state_tile(cb::recv_max, r, 1);
-        copy_state_tile(a_sum, r, 2);
-        copy_tile(cb::recv_sum, r, 3);  // FP32 to dest as l_a: the same unpack configuration
-        tile_regs_commit();
-        tile_regs_wait();
-        PACK((SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            calculate_sparse_merge_scales,
-            (scale_fp32, output_scale_bits),
-            0,
-            VectorMode::C)));
-        PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
-        pack_tile<true>(0, exp_max_diff, r);
-        pack_tile<true>(1, cb::merge_corr, r);
-        tile_regs_release();
-    }
-    CircularBuffer(exp_max_diff).push_back(q_tiles);
-    CircularBuffer(cb::merge_corr).push_back(q_tiles);
-    CircularBuffer(exp_max_diff).wait_front(q_tiles);
-    CircularBuffer(cb::merge_corr).wait_front(q_tiles);
-    CircularBuffer(out).reserve_back(q_tiles * vd_tiles);
-    pack_reconfig_data_format(out);
-    configure_single_tile_pack(out);
-    sdpa_stream_reconfig_srca(a_out);  // every state CB here is FP32 unpacked to dest
-    for (uint32_t r = 0; r < q_tiles; ++r) {
-        for (uint32_t j = 0; j < vd_tiles; ++j) {
-            tile_regs_acquire();
-            copy_init(a_out);
-            copy_tile(a_out, r * vd_tiles + j, 0);
-            copy_tile(cb::recv_out, r * vd_tiles + j, 1);
-            unary_bcast_init<BroadcastType::COL>(exp_max_diff);
-            unary_bcast<BroadcastType::COL>(exp_max_diff, r, 2);
-            unary_bcast<BroadcastType::COL>(cb::merge_corr, r, 3);
-            unary_bcast_uninit<BroadcastType::COL>(exp_max_diff);
-            tile_regs_commit();
-            tile_regs_wait();
-            PACK((SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
-                DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sparse_merge_normalize, 0, VectorMode::None)));
-            PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
-            pack_tile<true>(0, out, r * vd_tiles + j);
-            tile_regs_release();
-        }
-    }
-    CircularBuffer(out).push_back(q_tiles * vd_tiles);
-    CircularBuffer(exp_max_diff).pop_front(q_tiles);
-    CircularBuffer(cb::merge_corr).pop_front(q_tiles);
-    CircularBuffer(cb::recv_out).pop_front(q_tiles * vd_tiles);
-    CircularBuffer(cb::recv_max).pop_front(q_tiles);
-    CircularBuffer(cb::recv_sum).pop_front(q_tiles);
-    sdpa_cb_pop_front_out_of_line(a_out, q_tiles * vd_tiles);
-    sdpa_cb_pop_front_out_of_line(a_sum, q_tiles);
-    sdpa_cb_pop_front_out_of_line(a_max, q_tiles);
-    PACK(sdpa_pack.format_cb = INVALID_CB; sdpa_pack.width = 0;)
+    recipe_merge::merge_normalize_fp32<q_tiles, vd_tiles, scale_fp32, output_scale_bits, exp_max_diff, out, HeadState>(
+        state);
     pack_reconfig_data_format(recip_scratch);
     restore_state();
 }
 
-// O tiles [j, j + w) of row r: the TAIL's (CB 9 plane 0, in place) and the neighbour's, rescaled by c_a / c_b and
-// summed.
-template <uint32_t w>
-ALWI void merge_o_tiles_bf16(uint32_t a_out, uint32_t r, uint32_t j) {
-    constexpr uint32_t o_stride = sdpa_out_stride;
-    tile_regs_acquire();
-    sdpa_stream_reconfig_srca(a_out);
-    copy_init(a_out);
-    for (uint32_t t = 0; t < w; ++t) {
-        copy_tile(a_out, r * vd_tiles * o_stride + j + t, t);
-    }
-    for (uint32_t t = 0; t < w; ++t) {
-        copy_tile(cb::recv_out, r * vd_tiles + j + t, w + t);  // FP32, as CB 9
-    }
-    sdpa_stream_reconfig_srca(exp_max_diff);
-    unary_bcast_init<BroadcastType::COL>(exp_max_diff);
-    unary_bcast<BroadcastType::COL>(exp_max_diff, r, 2 * w);
-    unary_bcast<BroadcastType::COL>(cb::merge_corr, r, 2 * w + 1);  // the state format, as exp_max_diff
-    unary_bcast_uninit<BroadcastType::COL>(exp_max_diff);
-    tile_regs_commit();
-    tile_regs_wait();
-    PACK((SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sparse_merge, (w), 0, VectorMode::None)));
-    PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
-    for (uint32_t t = 0; t < w; ++t) {
-        pack_tile<true>(t, a_out, r * vd_tiles * o_stride + j + t);
-    }
-    tile_regs_release();
-}
-
-// BF16 recipes: the TAIL's state after its last chunk (O in CB 9's rows, plane 0 of 2, and l in CB 13 at their bases,
-// popped), merged in place with the neighbour's HEAD state (cb::recv_*) when `merge` (the HEAD had keys), then the
-// recipe's normalization into the output CB.
+// BF16 recipes: the TAIL's state after its last chunk merged in place with the neighbour's HEAD state when `merge`
+// (the HEAD had keys), then the recipe's normalization into the output CB.
 SPARSE_COLD void merge_and_normalize_bf16(RecipeAccumulatorState& state, bool merge) {
-    constexpr uint32_t o_stride = sdpa_out_stride;  // numerator CB tiles per Q row, over vd
-    const uint32_t n_out = state.cur.out, n_sum = state.cur.sum, a_max = state.prev.max;
-    CircularBuffer(n_out).reserve_back(q_tiles * vd_tiles * o_stride);
-    CircularBuffer(n_sum).reserve_back(q_tiles);
     if (merge) {
-        CircularBuffer(cb::recv_out).wait_front(q_tiles * vd_tiles);
-        CircularBuffer(cb::recv_max).wait_front(q_tiles);
-        CircularBuffer(cb::recv_sum).wait_front(q_tiles);
-        // Corrections per Q row: c_a into CB exp_max_diff, c_b into cb::merge_corr.
-        CircularBuffer(exp_max_diff).reserve_back(q_tiles);
-        CircularBuffer(cb::merge_corr).reserve_back(q_tiles);
-        PACK((llk_pack_reconfig_l1_acc(0)));
-        pack_reconfig_data_format(exp_max_diff);
-        configure_single_tile_pack(exp_max_diff);
-        for (uint32_t r = 0; r < q_tiles; ++r) {
-            tile_regs_acquire();
-            copy_state_tile(a_max, r, 0);
-            copy_tile(cb::recv_max, r, 1);  // the state format, as the maxima
-            tile_regs_commit();
-            tile_regs_wait();
-            PACK((SFPU_UNARY_CALL(
-                DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sparse_merge_corrections, (scale_fp32), 0, VectorMode::None)));
-            PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
-            pack_tile<true>(0, exp_max_diff, r);
-            pack_tile<true>(1, cb::merge_corr, r);  // the state format, as exp_max_diff
-            tile_regs_release();
-        }
-        CircularBuffer(exp_max_diff).push_back(q_tiles);
-        CircularBuffer(cb::merge_corr).push_back(q_tiles);
-        CircularBuffer(exp_max_diff).wait_front(q_tiles);
-        CircularBuffer(cb::merge_corr).wait_front(q_tiles);
-        // l = l_a * c_a + l_b * c_b, O = O_a * c_a + O_b * c_b: up to three O tiles per dest pass (3 + 3 + 2 of the
-        // 16-bit dest's 8 tiles).
-        pack_reconfig_data_format(n_sum);
-        configure_single_tile_pack(n_sum);
-        for (uint32_t r = 0; r < q_tiles; ++r) {
-            tile_regs_acquire();
-            sdpa_stream_reconfig_srca(n_sum);
-            copy_init(n_sum);
-            copy_tile(n_sum, r, 0);
-            copy_tile(cb::recv_sum, r, 1);  // FP32, as CB 13
-            sdpa_stream_reconfig_srca(exp_max_diff);
-            unary_bcast_init<BroadcastType::COL>(exp_max_diff);
-            unary_bcast<BroadcastType::COL>(exp_max_diff, r, 2);
-            unary_bcast<BroadcastType::COL>(cb::merge_corr, r, 3);
-            unary_bcast_uninit<BroadcastType::COL>(exp_max_diff);
-            tile_regs_commit();
-            tile_regs_wait();
-            PACK((SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sparse_merge, (1), 0, VectorMode::None)));
-            PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
-            pack_tile<true>(0, n_sum, r);
-            tile_regs_release();
-        }
-        pack_reconfig_data_format(n_out);
-        configure_single_tile_pack(n_out);
-        for (uint32_t r = 0; r < q_tiles; ++r) {
-            uint32_t j = 0;
-            if constexpr (vd_tiles >= 3) {
-                for (; j + 3 <= vd_tiles; j += 3) {
-                    merge_o_tiles_bf16<3>(n_out, r, j);
-                }
-            }
-            if constexpr (vd_tiles % 3 == 2) {
-                merge_o_tiles_bf16<2>(n_out, r, j);
-            } else if constexpr (vd_tiles % 3 == 1) {
-                merge_o_tiles_bf16<1>(n_out, r, j);
-            }
-        }
-        CircularBuffer(exp_max_diff).pop_front(q_tiles);
-        CircularBuffer(cb::merge_corr).pop_front(q_tiles);
-        CircularBuffer(cb::recv_out).pop_front(q_tiles * vd_tiles);
-        CircularBuffer(cb::recv_max).pop_front(q_tiles);
-        CircularBuffer(cb::recv_sum).pop_front(q_tiles);
+        recipe_merge::merge_bf16<q_tiles, vd_tiles, scale_fp32, exp_max_diff, HeadState>(state, false);
     }
-    // CB 9 / 13 hold the (merged) state at their bases: publish it to the normalization.
-    CircularBuffer(n_out).push_back(q_tiles * vd_tiles * o_stride);
-    CircularBuffer(n_sum).push_back(q_tiles);
-    sdpa_cb_pop_front_out_of_line(a_max, q_tiles);
-    pack_reconfig_data_format(recip_scratch);
-    // The step's own copy of the normalization (the cold one with fused chunks).
-    if constexpr (recipe::fused_active) {
-        recipe_cold_step::normalize_row_streaming<
-            vd_tiles,
-            compute_kernel_lib::DEST_AUTO_LIMIT,
-            col_identity,
-            recip_scratch,
-            out,
-            scale_fp32>(n_sum, n_out, q_tiles);
-    } else {
-        recipe_hot_step::normalize_row_streaming<
-            vd_tiles,
-            compute_kernel_lib::DEST_AUTO_LIMIT,
-            col_identity,
-            recip_scratch,
-            out,
-            scale_fp32>(n_sum, n_out, q_tiles);
-    }
+    recipe_merge::normalize_bf16<q_tiles, vd_tiles>(state, [](uint32_t n_sum, uint32_t n_out) {
+        pack_reconfig_data_format(recip_scratch);
+        // The step's own copy of the normalization (the cold one with fused chunks).
+        if constexpr (recipe::fused_active) {
+            recipe_cold_step::normalize_row_streaming<
+                vd_tiles,
+                compute_kernel_lib::DEST_AUTO_LIMIT,
+                col_identity,
+                recip_scratch,
+                out,
+                scale_fp32>(n_sum, n_out, q_tiles);
+        } else {
+            recipe_hot_step::normalize_row_streaming<
+                vd_tiles,
+                compute_kernel_lib::DEST_AUTO_LIMIT,
+                col_identity,
+                recip_scratch,
+                out,
+                scale_fp32>(n_sum, n_out, q_tiles);
+        }
+    });
     restore_state();
 }
 
