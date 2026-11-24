@@ -111,9 +111,17 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const std::uint32_t 
         a = a * 1.0f + 0.0f;
     }
 
-    sfpi::vFloat three_quarters = 0.75f;
-    sfpi::vInt e = sfpi::as<sfpi::vInt>(a) - sfpi::as<sfpi::vInt>(three_quarters);
+    // 0.75 sits in Prgm3 (log_init) unless Prgm3 holds the base scale (calculate_log).
+    sfpi::vInt three_quarters;
+    if constexpr (HAS_BASE_SCALING) {
+        three_quarters = sfpi::as<sfpi::vInt>(sfpi::vFloat(0.75f));
+    } else {
+        three_quarters = sfpi::vConstIntPrgm3;
+    }
+    sfpi::vInt e = sfpi::as<sfpi::vInt>(a) - three_quarters;
     e = sfpi::as<sfpi::vInt>(sfpi::setman(sfpi::as<sfpi::vFloat>(e), 0));
+    // e is k << 23 in two's complement: one cast to sign-magnitude, one to float (exact).
+    sfpi::vFloat e_float = sfpi::convert<sfpi::vFloat>(sfpi::convert<sfpi::vSMag>(e), sfpi::RoundMode::Nearest);
     sfpi::vFloat m = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(a) - e);
     sfpi::vFloat result = std::numeric_limits<float>::quiet_NaN();
 
@@ -123,7 +131,6 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const std::uint32_t 
     v_if(a >= 0.0f) {
         sfpi::vFloat r;
         sfpi::vFloat s = m * m;
-        sfpi::vFloat e_float;
         if constexpr (is_fp32_dest_acc_en) {
             r = -0x1.92cp-5f;
             r = r * m + 0x1.b84p-4f;
@@ -131,17 +138,13 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const std::uint32_t 
             r = r * m + 0x1.274p-3f;
             r = r * m + -0x1.55p-3f;
             r = r * m + 0x1.998p-3f;
-            sfpi::vMag abs_e = sfpi::abs(e);
             r = r * m + sfpi::vConstFloatPrgm1;
-            e_float = sfpi::convert<sfpi::vFloat>(abs_e, sfpi::RoundMode::Nearest);
             r = r * m + sfpi::vConstFloatPrgm2;
             sfpi::vFloat neg_half = -0.5f;
             r = __builtin_rvtt_sfpmad(r.get(), m.get(), neg_half.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
         } else {
-            sfpi::vMag abs_e = sfpi::abs(e);
             sfpi::vFloat neg_quarter = -0.25f;
             r = neg_quarter * m + sfpi::vConstFloatPrgm1;
-            e_float = sfpi::convert<sfpi::vFloat>(abs_e, sfpi::RoundMode::Nearest);
             r = r * m + sfpi::vConstFloatPrgm2;
         }
 
@@ -152,14 +155,12 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const std::uint32_t 
         //   input NaN  -> NaN
         //
         // In the non-fast path, earlier normalisation maps -0.0 and subnormals
-        // to +0.0. On Blackhole addexp(a, -1) wraps exponent 0 to 255, so zero
-        // becomes +inf; Quasar's SFPDIVP2 clamps the underflowing exponent, so
-        // zero stays +0 and gets an explicit branch below. Exponent 255 values
-        // (Inf/NaN) are left unchanged on both.
-        a = sfpi::addexp(a, -1);
+        // to +0.0. Blackhole folds zero into the Inf/NaN branch with addexp(a, -1), which wraps
+        // exponent 0 to 255. Quasar's SFPDIVP2 clamps it instead, so zero gets the explicit branch
+        // below, and the addexp is left out: it also sent the smallest normal binade [2^-126, 2^-125)
+        // to zero, so those inputs returned -inf.
 
         r = r * s + m;
-        e_float = sfpi::copysgn(e_float, sfpi::as<sfpi::vFloat>(e));
         if constexpr (IS_BASE_TWO) {
             // log2 takes an exact path.  Scaling the finished natural-log sum, as
             // result *= 1/ln(2), also scales the exponent contribution by
@@ -177,12 +178,12 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const std::uint32_t 
             // constant is log10(2) * 2^-23, which is not exactly representable, and
             // folding it in measured worse than the existing path.
             constexpr float TWO_TO_M23 = 1.19209290e-7f;  // 0x1.0p-23
-            result = e_float * TWO_TO_M23 + r * sfpi::as<sfpi::vFloat>(sfpi::vUInt(log_base_scale_factor));
+            result = e_float * TWO_TO_M23 + r * sfpi::vConstFloatPrgm3;
         } else {
             result = e_float * sfpi::vConstFloatPrgm0 + r;
 
             if constexpr (HAS_BASE_SCALING) {
-                result *= sfpi::as<sfpi::vFloat>(sfpi::vUInt(log_base_scale_factor));
+                result *= sfpi::vConstFloatPrgm3;
             }
         }
 
@@ -192,9 +193,13 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const std::uint32_t 
         // read-only LREG8, which leaves the lane mask unchanged on Quasar.
         v_if(sfpi::exexp(a, sfpi::ExponentMode::Biased) >= 255) { result *= a; }
         v_endif;
-        // Quasar: zero cannot ride that multiply, because SFPDIVP2 clamped it to +0 (finite)
-        // where Blackhole wrapped it to +inf; log(0) = -inf is set explicitly (emulator:
-        // erfinv(+-1) returned +-9.29, i.e. erfinv through log(0) ~ -88, instead of +-inf).
+        // Quasar: zero cannot ride that multiply (no addexp wrap, see above); log(0) = -inf is set
+        // explicitly (emulator: erfinv(+-1) returned +-9.29, i.e. erfinv through log(0) ~ -88,
+        // instead of +-inf).
+        if constexpr (FAST_APPROX) {
+            // FAST skips the normalisation above, so -0.0 still has its sign bit here.
+            a = sfpi::abs(a);
+        }
         v_if(a == 0.0f) { result = -std::numeric_limits<float>::infinity(); }
         v_endif;
     }
@@ -211,6 +216,10 @@ template <
     int ITERATIONS = 8,
     bool IS_BASE_TWO = false>
 inline void calculate_log(std::uint32_t log_base_scale_factor) {
+    if constexpr (HAS_BASE_SCALING) {
+        // Once per face rather than two SFPLOADIs per pass; calculate_log_body reads it from Prgm3.
+        sfpi::vConstFloatPrgm3 = sfpi::as<sfpi::vFloat>(sfpi::vUInt(log_base_scale_factor));
+    }
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat result = calculate_log_body<FAST_APPROX, HAS_BASE_SCALING, is_fp32_dest_acc_en, IS_BASE_TWO>(
@@ -231,6 +240,8 @@ inline void log_init() {
     // e represents k << 23 rather than k, so pre-fold the 2^(-23) factor into
     // the constant used for the final exponent contribution.
     sfpi::vConstFloatPrgm0 = LOG_TWO * TWO_TO_M23;
+    // calculate_log_body's exponent split; calculate_log replaces it with the base scale for log2/log10.
+    sfpi::vConstFloatPrgm3 = 0.75f;
 
     if constexpr (is_fp32_dest_acc_en) {
         // Stored separately because the tuned fp32 m^3 and m^4 coefficients are
