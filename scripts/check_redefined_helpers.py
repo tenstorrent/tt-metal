@@ -35,7 +35,6 @@ from precommit_common import (
 ALLOWLIST = {
     "tt_metal/api/tt-metalium/utils/math.hpp",
     "tt_metal/api/tt-metalium/data_formats/tile_constants.hpp",
-    "tt_metal/api/tt-metalium/tt_align.hpp",
     "tt_metal/api/tt-metalium/data_formats/tilize_utils.hpp",
     "tt_metal/impl/data_format/tilize_utils.cpp",
     "tt_metal/hw/inc/api/tile_constants.h",
