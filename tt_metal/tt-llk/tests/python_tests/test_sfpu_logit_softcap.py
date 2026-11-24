@@ -97,20 +97,34 @@ def test_sfpu_logit_softcap(
     perf_report=None,
     run_types=None,
     loop_factor=1,
+    polynomial=False,
+    tile_count=1,
 ):
     low, high = input_range
-    spec_A = (
-        StimuliSpec.constant(value=low, seed=0)
-        if low == high
-        else StimuliSpec.uniform(low=low, high=high, seed=0)
-    )
-    src_A, _, src_B, _ = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=[TILE_DIM, TILE_DIM],
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=[TILE_DIM, TILE_DIM],
-        spec_A=spec_A,
-    )
+    if tile_count == 1:
+        spec_A = (
+            StimuliSpec.constant(value=low, seed=0)
+            if low == high
+            else StimuliSpec.uniform(low=low, high=high, seed=0)
+        )
+        src_A, _, src_B, _ = generate_stimuli(
+            stimuli_format_A=formats.input_format,
+            input_dimensions_A=[TILE_DIM, TILE_DIM],
+            stimuli_format_B=formats.input_format,
+            input_dimensions_B=[TILE_DIM, TILE_DIM],
+            spec_A=spec_A,
+        )
+    else:
+        # The polynomial epilogue re-enters the pack-side SFPU across tiles.
+        torch_dtype = (
+            torch.float32
+            if formats.input_format == DataFormat.Float32
+            else torch.bfloat16
+        )
+        src_A = torch.linspace(low, high, tile_count * TILE_DIM * TILE_DIM).to(
+            torch_dtype
+        )
+        src_B = torch.zeros(TILE_DIM * TILE_DIM, dtype=torch_dtype)
 
     golden_tensor = _logit_softcap_golden(src_A, cap, dest_acc)
 
@@ -125,10 +139,11 @@ def test_sfpu_logit_softcap(
             templates=[
                 ITERATIONS(32),
                 SFPU_UNARY_SCALAR(value_bits=fp32_bits(cap)),
+                LOGIT_SOFTCAP_POLYNOMIAL(logit_softcap_polynomial=polynomial),
             ],
             runtimes=[
                 LOOP_FACTOR(1),
-                TILE_COUNT(1),
+                TILE_COUNT(tile_count),
             ],
             variant_stimuli=StimuliConfig(
                 src_A,
@@ -136,9 +151,9 @@ def test_sfpu_logit_softcap(
                 src_B,
                 formats.input_format,
                 formats.output_format,
-                tile_count_A=1,
+                tile_count_A=tile_count,
                 tile_count_B=1,
-                tile_count_res=1,
+                tile_count_res=tile_count,
             ),
             dest_acc=dest_acc,
             unpack_to_dest=formats.input_format.is_32_bit(),
@@ -183,7 +198,17 @@ def test_sfpu_logit_softcap(
 
 @dataclass
 class LOGIT_SOFTCAP_POLYNOMIAL(TemplateParameter):
+    """Select the polynomial overload, and record that choice on perf rows.
+
+    ``False`` emits nothing, so the driver keeps its default accurate overload.
+    The field is always present so both sweeps share one report schema.
+    """
+
+    logit_softcap_polynomial: bool = True
+
     def convert_to_cpp(self):
+        if not self.logit_softcap_polynomial:
+            return ""
         return "#define LOGIT_SOFTCAP_POLYNOMIAL true"
 
 

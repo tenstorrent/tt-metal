@@ -41,8 +41,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT    = params.TILE_CNT;
+    const Operand& buffer_A         = params.buffer_A;
 #endif
-    const std::uint32_t src_handshake_iters = LOOP_FACTOR * _perf_src_handshake_iters_(false /* tilize_en */, params.TILE_CNT, TILE_NUM_FACES);
+    const std::uint32_t src_handshake_iters = LOOP_FACTOR * _perf_src_handshake_iters_(false /* tilize_en */, TILE_CNT, TILE_NUM_FACES);
     {
         START_PERF_MEASURE("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -68,10 +70,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
+                for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
                 {
                     _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-                        L1_ADDRESS(params.buffer_A[tile]), formats.unpack_A_src, formats.unpack_A_dst);
+                        L1_ADDRESS(buffer_A[tile]), formats.unpack_A_src, formats.unpack_A_dst);
                 }
             }
         }
@@ -97,8 +99,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT    = params.TILE_CNT;
 #endif
-    const std::uint32_t src_handshake_iters = LOOP_FACTOR * _perf_src_handshake_iters_(false /* tilize_en */, params.TILE_CNT, TILE_NUM_FACES);
+    const std::uint32_t src_handshake_iters = LOOP_FACTOR * _perf_src_handshake_iters_(false /* tilize_en */, TILE_CNT, TILE_NUM_FACES);
     {
         START_PERF_MEASURE("INIT")
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
@@ -123,7 +126,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
                 {
-                    for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
+                    for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
                     {
                         _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
                             0 /* dst_index */, formats.math, formats.math);
@@ -141,7 +144,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
                 {
-                    for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
+                    for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
                     {
                         _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
                             0 /* dst_index */, formats.math, formats.math);
@@ -153,7 +156,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
+                for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
                 {
                     _llk_math_wait_for_dest_available_<DST_SYNC>();
 
@@ -190,6 +193,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT    = params.TILE_CNT;
+    const Operand& buffer_Res       = params.buffer_Res;
 #endif
     {
         START_PERF_MEASURE("INIT")
@@ -211,7 +216,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             constexpr bool sync_with_math = PERF_RUN_TYPE == PerfRunType::L1_TO_L1;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
+                for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
                 {
                     if constexpr (sync_with_math)
                     {
@@ -229,7 +234,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
                     _llk_math_eltwise_sfpu_done_();
 
-                    _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0 /* tile_index */, L1_ADDRESS(params.buffer_Res[tile]));
+                    _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0 /* tile_index */, L1_ADDRESS(buffer_Res[tile]));
                     if constexpr (sync_with_math)
                     {
                         _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();

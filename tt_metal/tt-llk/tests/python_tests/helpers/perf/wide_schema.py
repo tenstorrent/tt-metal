@@ -268,6 +268,7 @@ DB_SCHEMA = [
     Column("out_shift", "int64", True, "configuration"),
     Column("sparse_k_iterations", "int64", True, "configuration"),
     Column("within_bank_mask", "int64", True, "configuration"),
+    Column("logit_softcap_polynomial", "bool", True, "configuration"),
     # timing (complete {mean, std} x base grid — see _TIMING_COLUMNS above)
     *_TIMING_COLUMNS,
     # ── provenance: stamped by the publish layer, never emitted by a test ──

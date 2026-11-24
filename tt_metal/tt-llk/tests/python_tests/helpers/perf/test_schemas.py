@@ -1628,7 +1628,7 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_sfpu_ema": "perf_sfpu_ema"},
     },
     "perf_sfpu_logit_softcap": {
-        "version": 2,
+        "version": 3,
         "columns": [
             "dest_acc",
             "formats.input_A",
@@ -1639,6 +1639,7 @@ PERF_TEST_SCHEMAS = {
             "formats.sfpu_dst",
             "formats.sfpu_src",
             "iterations",
+            "logit_softcap_polynomial",
             "loop_factor",
             "marker",
             "tile_cnt",
