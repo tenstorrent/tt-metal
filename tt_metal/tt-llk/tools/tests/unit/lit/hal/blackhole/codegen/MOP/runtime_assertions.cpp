@@ -98,24 +98,28 @@ extern "C" __attribute__((noinline, used)) void reference_template1_runtime_inne
     }
 }
 
-// With EndOp1 set the count anomaly needs an outer count of 1.
+// The count anomaly does not depend on the outer count, so with both end ops and an inner
+// loop only the outer count's width and an outer count of 0 are checked.
 extern "C" __attribute__((noinline, used)) void template1_runtime_second_end(const std::uint32_t outer)
 {
-    mop::program(mop::loop(outer, mop::loop(0, OP), OP, OP));
+    mop::program(mop::loop(outer, mop::loop(1, OP), OP, OP));
 }
 
 extern "C" __attribute__((noinline, used)) void reference_template1_runtime_second_end(const std::uint32_t outer)
 {
     hal::detail::require(outer < 1024, "Template 1 MOP loop count must fit in 10 bits");
-    hal::detail::require(outer != 1, "Template 1 MOP configuration triggers the no-start/zero-inner/end-op outer count anomaly");
     hal::detail::require(outer != 0, "Template 1 MOP configuration issues nothing");
     volatile std::uint32_t *mop_cfg = reference_mop_cfg();
     ckernel::mop_sync();
     mop_cfg[0] = outer;
-    mop_cfg[1] = 0;
+    mop_cfg[1] = 1;
     mop_cfg[2] = TT_OP_NOP;
     mop_cfg[3] = OP;
     mop_cfg[4] = OP;
+    mop_cfg[5] = OP;
+    mop_cfg[6] = TT_OP_NOP;
+    mop_cfg[7] = OP;
+    mop_cfg[8] = OP;
 }
 
 // A patch with a runtime inner count checks that the patched op can be issued.
@@ -236,7 +240,7 @@ extern "C" __attribute__((noinline, used)) void reference_update_count_and_opera
 
 extern "C" __attribute__((noinline, used)) void run_template0_runtime_count(const std::uint32_t count)
 {
-    Template0Runner::run<0x5>(count);
+    Template0Runner::run_with_runtime_count<0x5>(count);
 }
 
 extern "C" __attribute__((noinline, used)) void reference_run_template0_runtime_count(const std::uint32_t count)
@@ -255,7 +259,6 @@ extern "C" __attribute__((noinline, used)) void run_template0_runtime_mask(const
 
 extern "C" __attribute__((noinline, used)) void reference_run_template0_runtime_mask(const std::uint32_t mask)
 {
-    TT_MOP_CFG(mask >> 16);
     TT_MOP(0 /*mop_type*/, 3 /*loop_count*/, mask & 0xffff);
 }
 

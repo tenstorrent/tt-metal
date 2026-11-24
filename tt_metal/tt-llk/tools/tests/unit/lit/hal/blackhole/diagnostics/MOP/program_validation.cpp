@@ -10,6 +10,8 @@
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/skip-b-without-b.cpp 2>&1 | FileCheck %s --check-prefix=B_PAIR
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/template1-count-anomaly.cpp 2>&1 | FileCheck %s --check-prefix=ANOMALY
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/template1-count-anomaly-second-end.cpp 2>&1 | FileCheck %s --check-prefix=ANOMALY
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/template1-count-anomaly-second-end-long.cpp 2>&1 | FileCheck %s --check-prefix=ANOMALY
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/template1-second-end-without-end.cpp 2>&1 | FileCheck %s --check-prefix=SECOND_END
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/template1-outer-count-too-wide.cpp 2>&1 | FileCheck %s --check-prefix=COUNT_WIDTH
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/template1-inner-count-too-wide.cpp 2>&1 | FileCheck %s --check-prefix=COUNT_WIDTH
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/template1-unsupported-end-op1.cpp 2>&1 | FileCheck %s --check-prefix=UNSUPPORTED_END_OP1
@@ -39,6 +41,9 @@
 // ANOMALY: in 'constexpr' expansion of 'hal::mop::loop(
 // ANOMALY: in 'constexpr' expansion of 'hal::detail::require({{.*}}"Template 1 MOP configuration triggers the no-start/zero-inner/end-op outer count anomaly
 // ANOMALY: error: '__builtin_trap()' is not a constant expression
+// SECOND_END: in 'constexpr' expansion of 'hal::mop::loop(
+// SECOND_END: in 'constexpr' expansion of 'hal::detail::require({{.*}}"Template 1 MOP second end op is never issued without an end op"))'
+// SECOND_END: error: '__builtin_trap()' is not a constant expression
 // UNSUPPORTED_END_OP1: in 'constexpr' expansion of 'hal::mop::loop(
 // UNSUPPORTED_END_OP1: in 'constexpr' expansion of 'hal::detail::require({{.*}}"Template 1 MOP configuration with no start op, an empty inner loop and no end op is unsupported
 // UNSUPPORTED_END_OP1: error: '__builtin_trap()' is not a constant expression
@@ -101,8 +106,20 @@ constexpr auto bad = mop::loop(4, mop::loop(0, OP), OP);
 //--- template1-count-anomaly-second-end.cpp
 #include "configs.h"
 
-// With EndOp1 set the anomaly still triggers when the outer count is 1.
+// With EndOp1 set, an outer count of 1 gains 1024 iterations.
 constexpr auto bad = mop::loop(1, mop::loop(0, OP), OP, OP);
+
+//--- template1-count-anomaly-second-end-long.cpp
+#include "configs.h"
+
+// The ISA leaves an outer count of 2 or more unchanged here, but marks the whole case unsupported.
+constexpr auto bad = mop::loop(2, mop::loop(0, OP), OP, OP);
+
+//--- template1-second-end-without-end.cpp
+#include "configs.h"
+
+// The expander issues EndOp1 only after a non-NOP EndOp0.
+constexpr auto bad = mop::loop(2, mop::loop(3, OP), TT_OP_NOP, OP);
 
 //--- template1-unsupported-end-op1.cpp
 #include "configs.h"
