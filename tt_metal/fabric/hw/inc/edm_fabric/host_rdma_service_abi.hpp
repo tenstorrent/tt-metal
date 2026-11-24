@@ -41,7 +41,11 @@ struct Header {
     uint32_t heartbeat;
     uint32_t staging_addr;  // WINDOW slots of staging_stride bytes
     uint32_t staging_stride;
-    uint32_t pad[12];
+    // DRAM core only: where the service keeps its copy of the chip's routing table, and a Tensix core to copy it from.
+    uint32_t routing_table_addr;
+    uint32_t routing_table_src_x;
+    uint32_t routing_table_src_y;
+    uint32_t pad[9];
 };
 static_assert(sizeof(Header) == 64);
 

@@ -19,6 +19,7 @@
 #include <tt-metalium/mesh_device.hpp>
 
 #include "fabric_fixture.hpp"
+#include "impl/buffers/dram_sender_topology.hpp"
 #include "impl/context/metal_context.hpp"
 #include "llrt/hal.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
@@ -37,6 +38,7 @@ using tt::tt_fabric::host_rdma::WriteRequest;
 constexpr uint32_t kCounterOffset = 0;
 constexpr uint32_t kDataOffset = 64;
 constexpr uint32_t kSrcOffset = 768 * 1024;
+constexpr uint32_t kServiceDramBank = 0;
 
 template <tt_fabric::FabricConfig CONFIG>
 class HostRdmaFixture : public BaseFabricFixture {
@@ -59,6 +61,9 @@ public:
             GTEST_SKIP() << "Host-initiated RDMA is Blackhole only";
         }
         auto& context = tt::tt_metal::MetalContext::instance();
+        if (!context.hal().has_programmable_core_type(tt::tt_metal::HalProgrammableCoreType::DRAM)) {
+            GTEST_SKIP() << "The host_rdma service runs on a DRAM programmable core";
+        }
         const auto& control_plane = context.get_control_plane();
         l1_base_ = static_cast<uint32_t>(context.hal().get_dev_addr(
             tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED));
@@ -87,11 +92,16 @@ protected:
     tt::tt_fabric::host_rdma::HostRdmaService& service(const Chip& chip) {
         auto it = services_.find(chip.chip);
         if (it == services_.end()) {
+            // A DRAM core that serves no DRAM view: both of its NIUs are in stream mode, so it suits either NoC the
+            // fabric routers credit the service on.
+            const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(chip.chip);
+            const tt::tt_metal::CoreCoord service_core =
+                tt::tt_metal::pick_unused_dram_logical_core(soc_desc, kServiceDramBank, chip.chip);
             it = services_
                      .emplace(
                          chip.chip,
                          tt::tt_fabric::host_rdma::HostRdmaService::create(
-                             devices_map_.at(chip.chip), tt::tt_metal::CoreCoord{1, 1}))
+                             devices_map_.at(chip.chip), service_core, tt::tt_fabric::host_rdma::ServiceCore::Dram))
                      .first;
         }
         return *it->second;
@@ -120,7 +130,12 @@ protected:
             }
             std::this_thread::sleep_for(std::chrono::microseconds(50));
         }
-        FAIL() << "Completion counter on chip " << chip.chip << " is " << value << ", expected " << expected;
+        std::string service_states;
+        for (const auto& [service_chip, svc] : services_) {
+            service_states += "\n  " + svc->describe();
+        }
+        FAIL() << "Completion counter on chip " << chip.chip << " is " << value << ", expected " << expected
+               << service_states;
     }
 
     void reset_destination(const Chip& chip, size_t data_words) {

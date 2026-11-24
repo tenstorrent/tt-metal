@@ -23,6 +23,12 @@ namespace {
 constexpr uint32_t HEADER_BYTES = sizeof(PACKET_HEADER_TYPE);
 static_assert(HEADER_BYTES % abi::NOC_ALIGNMENT == 0);
 
+#ifdef COMPILE_FOR_DRISC
+constexpr ProgrammableCoreType SERVICE_CORE_TYPE = ProgrammableCoreType::DRAM;
+#else
+constexpr ProgrammableCoreType SERVICE_CORE_TYPE = ProgrammableCoreType::TENSIX;
+#endif
+
 struct ChannelState {
     tt::tt_fabric::WorkerToFabricEdmSender conn;
     uint32_t loaded;
@@ -41,6 +47,9 @@ struct Packet {
 
 volatile tt_l1_ptr abi::Header* header;
 volatile tt_l1_ptr abi::Channel* channels;
+#ifdef COMPILE_FOR_DRISC
+const tt_l1_ptr tt::tt_fabric::routing_l1_info_t* routing_table;
+#endif
 // Kernels run no static constructors: each state is constructed in open_channel().
 alignas(ChannelState) uint8_t state_storage[sizeof(ChannelState) * abi::MAX_CHANNELS];
 bool initialized[abi::MAX_CHANNELS];
@@ -93,7 +102,11 @@ FORCE_INLINE abi::Request load_request(const volatile abi::Request& r) {
 
 FORCE_INLINE void form_header(uint32_t addr, const ChannelState& s, uint32_t payload, bool last) {
     auto* hdr = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(addr);
+#ifdef COMPILE_FOR_DRISC
+    fabric_set_unicast_route(hdr, s.req.dst_dev_id, s.req.dst_mesh_id, routing_table);
+#else
     fabric_set_unicast_route(hdr, s.req.dst_dev_id, s.req.dst_mesh_id);
+#endif
     const uint64_t dst = get_noc_addr(s.req.dst.x, s.req.dst.y, s.req.dst.addr + s.bytes_packetized);
     if (last && s.req.completion_inc != 0) {
         hdr->to_noc_fused_unicast_write_atomic_inc(
@@ -204,7 +217,7 @@ void open_channel(uint32_t c) {
     ChannelState& s = *new (&state(c)) ChannelState{};
     s.loaded = ch.consumed;
     s.consumed = ch.consumed;
-    s.conn.init<ProgrammableCoreType::TENSIX>(
+    s.conn.init<SERVICE_CORE_TYPE>(
         /*connected_to_persistent_fabric=*/true,
         static_cast<uint8_t>(ch.router_x),
         static_cast<uint8_t>(ch.router_y),
@@ -250,6 +263,16 @@ void kernel_main() {
     for (uint32_t c = 0; c < abi::MAX_CHANNELS; c++) {
         initialized[c] = false;
     }
+#ifdef COMPILE_FOR_DRISC
+    // The control plane gives every Tensix core this chip's routing table, and a DRAM core none.
+    noc_async_read(
+        get_noc_addr(header->routing_table_src_x, header->routing_table_src_y, MEM_TENSIX_ROUTING_TABLE_BASE),
+        header->routing_table_addr,
+        sizeof(tt::tt_fabric::routing_l1_info_t));
+    noc_async_read_barrier();
+    invalidate_l1_cache();
+    routing_table = reinterpret_cast<const tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(header->routing_table_addr);
+#endif
 
     uint32_t pass = 0;
     while (true) {
