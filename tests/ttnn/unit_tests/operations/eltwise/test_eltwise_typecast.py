@@ -1046,3 +1046,29 @@ def test_typecast_bfloat8_b_ignores_reciprocal_tile_padding(device, width):
 
     # Every real lane is a power of two, so its reciprocal and both encodings are exact.
     _assert_ignores_tile_padding(result, expected, atol=1e-6)
+
+
+@pytest.mark.parametrize("width", [1, 33, 40, 100, 2 * TILE_WIDTH], ids=lambda width: f"W={width}")
+def test_typecast_bfloat2_b_ignores_inf_tile_padding(device, width):
+    """A bfloat2_b pack shares one exponent per 16-lane block too, so it must also ignore the padding.
+
+    Real lanes are +-1, which bfloat2_b represents exactly, so a lane crushed to zero by an inf in
+    the shared block exponent cannot hide inside the quantization error.
+    """
+    torch.manual_seed(0)
+    signs = torch.randint(0, 2, (1, 1, TILE_HEIGHT, width)) * 2 - 1
+    torch_input = signs.to(torch.bfloat16)
+
+    source = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    poisoned = ttnn.fill_implicit_tile_padding(source, float("inf"))
+    result = ttnn.to_torch(ttnn.typecast(poisoned, ttnn.bfloat2_b)).float()
+
+    assert torch.equal(torch_input, ttnn.to_torch(poisoned))
+    assert torch.isfinite(result).all(), "a bfloat2_b cast produced non-finite logical lanes"
+    assert torch.equal(result, torch_input.float())

@@ -390,7 +390,8 @@ void validate_datatype(DataType dtype) {
     using BaseType = std::remove_cvref_t<T>;
     if constexpr (std::is_same_v<BaseType, uint32_t>) {
         TT_FATAL(
-            dtype == DataType::UINT32 or dtype == DataType::BFLOAT8_B or dtype == DataType::BFLOAT4_B or is_mx(dtype),
+            dtype == DataType::UINT32 or dtype == DataType::BFLOAT8_B or dtype == DataType::BFLOAT4_B or
+                dtype == DataType::BFLOAT2_B or is_mx(dtype),
             "Incorrect data type {}",
             dtype);
     } else if constexpr (std::is_same_v<BaseType, int32_t>) {

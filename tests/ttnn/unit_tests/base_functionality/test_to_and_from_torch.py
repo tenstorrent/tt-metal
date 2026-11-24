@@ -57,16 +57,21 @@ def test_to_and_from_using_tile_layout(shape):
 
 @pytest.mark.parametrize("height", [7])
 @pytest.mark.parametrize("width", [3])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.int32, ttnn.uint8])
+@pytest.mark.parametrize(
+    "dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.bfloat2_b, ttnn.int32, ttnn.uint8]
+)
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 def test_to_and_from_2D(height, width, dtype, layout):
-    if (dtype == ttnn.bfloat8_b or dtype == ttnn.bfloat4_b) and layout == ttnn.ROW_MAJOR_LAYOUT:
-        pytest.skip("ROW_MAJOR_LAYOUT not supported for bfloat8_b and bfloat4_b")
+    if dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.bfloat2_b) and layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip(f"ROW_MAJOR_LAYOUT not supported for {dtype}")
 
     if dtype == ttnn.uint8:
         torch_input_tensor = torch.randint(0, 255, (height, width)).to(torch.uint8)
     elif dtype == ttnn.int32:
         torch_input_tensor = torch.randint(-100, 100, (height, width)).to(torch.int32)
+    elif dtype == ttnn.bfloat2_b:
+        # BFLOAT2_B holds {-1, 0, +1} times a power of two exactly.
+        torch_input_tensor = torch.randint(-1, 2, (height, width)).to(torch.bfloat16)
     else:
         torch_input_tensor = torch.rand((height, width), dtype=torch.bfloat16)
 

@@ -66,6 +66,7 @@ tt::tt_metal::HostBuffer create_host_buffer_from_bytes(
         case tt::tt_metal::DataType::UINT32:
         case tt::tt_metal::DataType::BFLOAT8_B:
         case tt::tt_metal::DataType::BFLOAT4_B:
+        case tt::tt_metal::DataType::BFLOAT2_B:
         case tt::tt_metal::DataType::MXFP8_E4M3:
         case tt::tt_metal::DataType::MXFP8_E5M2:
         case tt::tt_metal::DataType::MXFP6_E2M3:

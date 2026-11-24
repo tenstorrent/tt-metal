@@ -396,10 +396,15 @@ def test_multi_device_as_tensor_api(mesh_device, layout, memory_config, dtype, t
 )
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.bfloat2_b])
 def test_multi_device_as_tensor_api_sharded_tensor(mesh_device, layout, memory_config, dtype, tmp_path):
     """Multidevice API: Data Parallel on matmul using cached tensor"""
-    input_tensor = torch.rand((mesh_device.get_num_devices(), 1, 32, 32), dtype=torch.bfloat16)
+    shape = (mesh_device.get_num_devices(), 1, 32, 32)
+    if dtype == ttnn.bfloat2_b:
+        # BFLOAT2_B holds {-1, 0, +1} times a power of two exactly.
+        input_tensor = torch.randint(-1, 2, shape).to(torch.bfloat16)
+    else:
+        input_tensor = torch.rand(shape, dtype=torch.bfloat16)
 
     cache_file_name = tmp_path / "weight"
     save_tensor = ttnn.as_tensor(
