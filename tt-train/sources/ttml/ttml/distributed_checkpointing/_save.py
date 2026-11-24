@@ -329,9 +329,9 @@ def save(
     group = current_group()
     rank, world_rank = group.rank, group.world_rank
 
-    def collect():
-        # The arguments are checked here, inside the first phase: a rank called with a bad one (a None directory from
-        # a find_latest that saw no checkpoint) then stops every rank instead of leaving them in the first collective.
+    def check():
+        # The arguments are checked inside the first phase: a rank called with a bad one (a None directory from a
+        # find_latest that saw no checkpoint) then stops every rank instead of leaving them in the first collective.
         if model is None and optimizer is None:
             raise TypeError("save needs a model and/or an optimizer")
         if optimizer is not None and model is None:
@@ -342,9 +342,17 @@ def save(
         if int(max_inflight_bytes) <= 0:
             raise ValueError(f"max_inflight_bytes must be positive, got {max_inflight_bytes}")
         target = os.path.abspath(ckpt_dir)
-        # The JSON state is checked before any device read (the FSDP modules may be resharded) or file write.
         user_header = check_json("header", header or {})
         train_state = capture_train_state(scheduler=scheduler, dataloader=dataloader, rng=rng, world_rank=world_rank)
+        return target, user_header, train_state
+
+    # In a phase of its own, before any device work: resharding the FSDP modules frees a gathered module's full
+    # weights, so a check that fails on one rank alone (a header or dataloader state that is not JSON there) must stop
+    # every rank before any rank reshards, or the ranks would go on with different modules gathered and, on a mesh
+    # they share, different device allocations.
+    ckpt_dir, user_header, train_state = group.phase("checking the arguments", check)
+
+    def collect():
         reshard_fsdp_modules(model)
         live: list[LiveTensor] = collect_model(model)
         scalars: dict = {}
@@ -358,13 +366,11 @@ def save(
         part = PlanPart(record, [lt.info for lt in live], *hashes)
         progress = {k: v for k, v in scalars.items() if not is_structural_scalar(k)}
         payload = group.outgoing(part, "this rank's plan part")
-        return target, live, scalars, progress, user_header, train_state, record, payload
+        return live, scalars, progress, record, payload
 
     # Even the local work runs inside a phase: on a multi-rank world a rank that fails here stops every rank instead
-    # of leaving the others waiting in the first collective. On a single process the phase just runs it.
-    ckpt_dir, live, scalars, progress, user_header, train_state, record, part = group.phase(
-        "collecting the live tensors", collect
-    )
+    # of leaving the others waiting in the next collective. On a single process the phase just runs it.
+    live, scalars, progress, record, part = group.phase("collecting the live tensors", collect)
     name = os.path.basename(ckpt_dir)
     by_key = {lt.key: lt for lt in live}
     stats["collect_s"] = time.perf_counter() - t0

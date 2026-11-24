@@ -170,7 +170,7 @@ def test_a_rank_called_with_a_bad_argument_stops_every_rank(two_ranks, expect_er
     rank, local, root = two_ranks
     model, params, opt = fresh_tp(DIM)
     path = os.path.join(root, "bad_argument") if rank == 0 else None
-    with expect_error(dcp.CheckpointError, r"collecting the live tensors failed on rank\(s\) \[1\] of 2"):
+    with expect_error(dcp.CheckpointError, r"checking the arguments failed on rank\(s\) \[1\] of 2"):
         dcp.save(path, model=model)
     with expect_error(dcp.CheckpointError, r"checking the arguments failed on rank\(s\) \[1\] of 2"):
         dcp.load(path, model=model)
@@ -330,7 +330,7 @@ def test_differing_dataloaders_are_stored_per_rank(two_ranks, expect_error):
     assert dcp.read_train_state(path)["dataloader_ranks"] == {"0": {"position": 3}}
     with expect_error(
         dcp.MissingKeyError,
-        r"reading the index and collecting the live tensors failed on rank\(s\) \[1\] of 2: .*train_state/dataloader",
+        r"reading the index and the train state failed on rank\(s\) \[1\] of 2: .*train_state/dataloader",
     ):
         dcp.load(path, model=model, dataloader=Loader(), rng=False)
 
@@ -370,7 +370,7 @@ def test_a_failure_on_one_rank_stops_every_rank_and_names_it(two_ranks, monkeypa
     model, params, opt = fresh_tp(DIM)
     path = os.path.join(root, "one_rank")
     with expect_error(
-        dcp.CheckpointError, r"collecting the live tensors failed on rank\(s\) \[1\] of 2: rank 1: .*header at /step"
+        dcp.CheckpointError, r"checking the arguments failed on rank\(s\) \[1\] of 2: rank 1: .*header at /step"
     ):
         dcp.save(path, model=model, header={"step": np.int64(1) if rank == 1 else 1})
 

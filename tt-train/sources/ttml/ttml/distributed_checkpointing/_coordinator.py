@@ -33,13 +33,16 @@ so a box held by several ranks (a replica across hosts, or the same key on sever
 them, chosen to even out the bytes each rank and device writes; rank 0 broadcasts the election; every rank writes the
 boxes it owns into its own files; the result parts (files, chunk records, checksums, this rank's generators) are
 gathered; rank 0 merges them into ``index.json`` and ``header.json``, checking that the ranks report one chunk per
-elected box, and finalizes the directory. Its phases: collecting the live tensors, checking the target directory,
-creating the staging directory, merging the plan parts, writing the shards, merging the index and finalizing.
+elected box, and finalizes the directory. Its phases: checking the arguments, collecting the live tensors, checking
+the target directory, creating the staging directory, merging the plan parts, writing the shards, merging the index
+and finalizing. No device work comes before collecting the live tensors, so a check that fails on one rank alone
+stops every rank before any rank reshards its FSDP modules.
 
 Load. Every rank reads the index and restores the shards of the coordinates it holds. ``strict`` is judged over the
 union of the ranks' live tensors, since on a multi-mesh world no single rank holds every key. Its phases: checking the
-arguments, reading the index and collecting the live tensors, planning the load, judging the unexpected entries, reading
-and placing the shards, restoring the scalars and the train state.
+arguments, reading the index and the train state, collecting the live tensors, planning the load, judging the
+unexpected entries, reading and placing the shards, restoring the scalars and the train state; as on save, no device
+work comes before collecting the live tensors.
 """
 
 from __future__ import annotations

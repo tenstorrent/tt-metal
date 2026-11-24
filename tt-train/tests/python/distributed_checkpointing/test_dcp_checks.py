@@ -279,17 +279,18 @@ def test_argument_errors_come_first(tmp_path, expect_error):
     """Argument errors are raised before anything is touched, as CheckpointErrors naming the step that failed, with
     the TypeError or ValueError as their cause, as they are on every rank of a multi-rank world."""
     path = str(tmp_path / "step_0000001")
-    save, load = "collecting the live tensors", "checking the arguments"
     cases = [
-        (lambda: dcp.save(path), save, TypeError, "save needs a model and/or an optimizer"),
-        (lambda: dcp.load(path, optimizer=object()), load, TypeError, r"optimizer state .*; pass model= as well"),
-        (lambda: dcp.save(path, model=object(), header=[1]), save, TypeError, "header must be a dict, not list"),
-        (lambda: dcp.save(path, model=object(), threads=0), save, ValueError, "threads must be at least 1, got 0"),
-        (lambda: dcp.save(path, model=object(), max_inflight_bytes=0), save, ValueError, "max_inflight_bytes must"),
-        (lambda: dcp.load(path, model=object(), threads=-1), load, ValueError, "threads must be at least 1, got -1"),
+        (lambda: dcp.save(path), TypeError, "save needs a model and/or an optimizer"),
+        (lambda: dcp.load(path, optimizer=object()), TypeError, r"optimizer state .*; pass model= as well"),
+        (lambda: dcp.save(path, model=object(), header=[1]), TypeError, "header must be a dict, not list"),
+        (lambda: dcp.save(path, model=object(), threads=0), ValueError, "threads must be at least 1, got 0"),
+        (lambda: dcp.save(path, model=object(), max_inflight_bytes=0), ValueError, "max_inflight_bytes must"),
+        (lambda: dcp.load(path, model=object(), threads=-1), ValueError, "threads must be at least 1, got -1"),
     ]
-    for call, step, cause, message in cases:
-        with expect_error(dcp.CheckpointError, rf"^{step} failed: {cause.__name__}: {message}") as raised:
+    for call, cause, message in cases:
+        with expect_error(
+            dcp.CheckpointError, rf"^checking the arguments failed: {cause.__name__}: {message}"
+        ) as raised:
             call()
         assert type(raised.value) is dcp.CheckpointError and type(raised.value.__cause__) is cause, message
     assert os.listdir(tmp_path) == []

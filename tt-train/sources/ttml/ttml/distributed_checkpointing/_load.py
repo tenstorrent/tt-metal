@@ -485,7 +485,7 @@ def load(
     if rng_by_default:
         rng = any(passed)
 
-    def open_and_collect():
+    def open_and_check():
         if not is_complete(ckpt_dir):
             raise IncompleteCheckpointError(
                 f"{ckpt_dir} is not a complete checkpoint (staging directory or missing index.json)"
@@ -502,6 +502,24 @@ def load(
         warn_unread_train_state(
             train_state, passed, scheduler=scheduler, dataloader=dataloader, rank=group.rank, world_rank=world_rank
         )
+        return index, header, train_state, missing_state
+
+    # Even the local work runs inside a phase, so a rank that fails here cannot leave the others waiting in the next
+    # collective; on a single process the phase just runs it. It does no device work, and neither does anything
+    # before the live tensors are collected: a check that fails on one rank alone (the train state it asks for, an
+    # index a stale NFS view hides) must stop every rank before any rank reshards its FSDP modules.
+    index, header, train_state, missing_state = group.phase("reading the index and the train state", open_and_check)
+    # Hosts holding their own copies at one path (a relative path into per-host clones, say) agree on the directory
+    # string but read different checkpoints: the ranks also agree on the index's id and creation time.
+    group.agree(
+        "the checkpoint (its id and creation time)",
+        crc31(f"{index.checkpoint_id}\n{index.created}"),
+        shown=f"{index.checkpoint_id}, created {index.created}",
+    )
+
+    def collect():
+        # Device work: resharding frees a gathered module's full weights, which on a mesh the ranks share must happen
+        # on every rank or on none.
         fsdp_states = reshard_fsdp_modules(model)
         # A sharded FSDP module's cached shards are its current values: drop them now, so every value the load
         # replaces is freed as it is replaced instead of at the end (the next forward rebuilds the cache).
@@ -511,20 +529,9 @@ def load(
         if optimizer is not None:
             state_live, _ = collect_optimizer(optimizer, live)
             live.extend(state_live)
-        return index, header, train_state, missing_state, live, set(local_coords())
+        return live, set(local_coords())
 
-    # Even the local work runs inside a phase, so a rank that fails here cannot leave the others waiting in the next
-    # collective; on a single process the phase just runs it.
-    index, header, train_state, missing_state, live, local = group.phase(
-        "reading the index and collecting the live tensors", open_and_collect
-    )
-    # Hosts holding their own copies at one path (a relative path into per-host clones, say) agree on the directory
-    # string but read different checkpoints: the ranks also agree on the index's id and creation time.
-    group.agree(
-        "the checkpoint (its id and creation time)",
-        crc31(f"{index.checkpoint_id}\n{index.created}"),
-        shown=f"{index.checkpoint_id}, created {index.created}",
-    )
+    live, local = group.phase("collecting the live tensors", collect)
     by_key = {lt.key: lt for lt in live}
     roles = {"param", "buffer"} | ({"optimizer_state"} if optimizer is not None else set())
 

@@ -17,11 +17,11 @@ from types import SimpleNamespace
 
 import pytest
 import ttnn
-from dcp_oracle import FakeCheckpoint, arange, assert_shards_equal, expected_shards, info, tp_split_of, world
+from dcp_oracle import FakeCheckpoint, Loader, arange, assert_shards_equal, expected_shards, info, tp_split_of, world
 
 import ttml.distributed_checkpointing as dcp
 from ttml.distributed_checkpointing._boxes import Box
-from ttml.distributed_checkpointing import _coordinator, _load, _state_dict
+from ttml.distributed_checkpointing import _coordinator, _load, _save, _state_dict
 from ttml.distributed_checkpointing._coordinator import (
     Election,
     Group,
@@ -858,7 +858,8 @@ def test_group_of_one_runs_phases_directly(expect_error):
 def _four_rank_load(tmp_path, monkeypatch):
     """A device-free world of four in-process ranks loading one weight, saved as two column halves, as four row
     quarters, one per rank of a mesh they share: every rank reads both chunks in part. Returns the checkpoint, its
-    directory, the saved array, the loading label, each rank's placed shards and the body that loads on a rank."""
+    directory, the saved array, the loading label, each rank's placed shards and the body that loads on a rank (with
+    any further arguments of ``load``)."""
     shape = (1, 1, 8, 16)
     saved, loaded = world([R, S(3)], (1, 2)), world([S(2), R], (4, 1))
     src = arange(shape)
@@ -880,9 +881,9 @@ def _four_rank_load(tmp_path, monkeypatch):
         _load, "_place", lambda live, arrays, device, local: shards.__setitem__(this.group.rank, arrays)
     )
 
-    def body(group, fake):
+    def body(group, fake, **kwargs):
         this.group = group
-        return _load.load(path, model=object())
+        return _load.load(path, model=object(), **kwargs)
 
     return ckpt, path, src, loaded, shards, body
 
@@ -931,3 +932,37 @@ def test_a_failure_while_placing_the_first_tensor_on_a_shared_mesh_says_to_resta
     assert set(errors) == {0, 1, 2, 3}, errors
     for rank, err in errors.items():
         assert "end the job and restart it instead of loading again" in str(err), (rank, str(err))
+
+
+def test_a_check_that_fails_on_one_rank_stops_every_rank_before_any_device_work(tmp_path, monkeypatch):
+    """Save and load reshard the FSDP modules, which is device work (a module left gathered frees its full weights),
+    only once every rank has passed the checks a rank can fail alone: a header that has no JSON form on one rank, or
+    a dataloader one rank asks for that the checkpoint holds no state for, stops every rank before any rank reshards,
+    so the ranks never go on with different modules gathered and different device allocations."""
+    _, path, _, _, _, load_body = _four_rank_load(tmp_path, monkeypatch)
+    resharded = []
+    monkeypatch.setattr(_load, "reshard_fsdp_modules", lambda model: resharded.append("load") or [])
+    _, errors = _run_ranks(
+        4, lambda group, fake: load_body(group, fake, dataloader=Loader() if group.rank == 1 else None, rng=False)
+    )
+    assert set(errors) == {0, 1, 2, 3}, errors
+    for rank, err in errors.items():
+        assert re.search(r"failed on rank\(s\) \[1\] of 4: rank 1: .*train_state/dataloader", str(err)), (rank, err)
+    assert resharded == [], "a rank resharded its FSDP modules in a load although another rank's check had failed"
+
+    this = threading.local()
+    monkeypatch.setattr(_save, "current_group", lambda: this.group)
+    monkeypatch.setattr(_save, "reshard_fsdp_modules", lambda model: resharded.append("save") or [])
+    monkeypatch.setattr(_save, "collect_model", lambda model: [])
+    target = str(tmp_path / "step_0000002")
+
+    def save_body(group, fake):
+        this.group = group
+        return _save.save(target, model=object(), header={"step": float("nan") if group.rank == 1 else 1}, rng=False)
+
+    _, errors = _run_ranks(4, save_body)
+    assert set(errors) == {0, 1, 2, 3}, errors
+    for rank, err in errors.items():
+        assert re.search(r"failed on rank\(s\) \[1\] of 4: rank 1: .*header at /step", str(err)), (rank, err)
+    assert resharded == [], "a rank resharded its FSDP modules in a save although another rank's check had failed"
+    assert not os.path.exists(target)
