@@ -196,6 +196,16 @@ class TestResets(unittest.TestCase):
         c = phase.checks[-1]
         self.assertEqual((c.name, c.details), ("end_fabric", "not run: reset cannot run: not root"))
 
+    def test_the_end_fabric_open_runs_the_noc_check_with_its_budget(self):
+        phase, steps = resets.Phase(name="post_test_reset"), []
+        phase.add(resets.Check(name="post_test_reset_ok", status=PASS))
+        ran = lambda step, *a, **k: steps.append(step) or resets.Check(name="end_fabric", status=PASS)  # noqa: E731
+        args = argparse.Namespace(noc_wall_s=10.0)
+        with mock.patch.object(resets.events, "args", args), mock.patch.object(resets, "run_step", ran):
+            resets.run_end(None, phase, Path("/nonexistent"), True, 0, None)
+        want = (("--noc-wall-s", "10"), 60 + resets.END_DBI_S + 15)
+        self.assertEqual((steps[0].argv[-2:], steps[0].seconds), want)
+
 
 class TestStageOrder(unittest.TestCase):
     def test_stages_in_run_order(self):
