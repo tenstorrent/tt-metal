@@ -30,7 +30,7 @@ from ..registry import COMPONENT, FusedKernel, register
 NAME = "gdn_step"
 READER = fp.kernel_source(NAME, "reader.cpp")
 WRITER = fp.kernel_source(NAME, "writer.cpp")
-COMPUTE = fp.kernel_source(NAME, "compute_v2.cpp" if os.environ.get("QWEN38_GDN_STEP_V2") == "1" else "compute.cpp")
+COMPUTE = fp.kernel_source(NAME, "compute.cpp")
 
 VALUE_HEADS, QK_HEADS_TOTAL = 48, 16
 HEADS = VALUE_HEADS // TP_SIZE
