@@ -7,6 +7,11 @@ With --chips the server is data parallel: every worker pins one chip and takes b
 so an idle chip takes the next batch. The first worker starts alone and fills the weight and kernel caches; the
 others start when it is ready.
 
+With --frontends K the HTTP side runs in K processes that share the port (SO_REUSEPORT): one front end's event loop
+saturates one core at several hundred requests per second, well below what 32 chips answer. Front end 0 owns the
+workers and starts the other front ends; all of them put tasks on the one task queue and get their results on their
+own result queue.
+
 Run from the repo root: python -m models.demos.strands_agent.serve.server [flags]"""
 
 import argparse
@@ -15,6 +20,7 @@ import gc
 import logging
 import multiprocessing as mp
 import os
+import socket
 import threading
 import time
 from collections import deque
@@ -44,6 +50,8 @@ DEFAULT_CONFIG = {
     "verbose": False,
     "chips": None,  # None: one worker on the devices the process sees; else one worker per chip
     "tokenizer_threads": None,  # None: 4 for one worker, 16 for several
+    "worker_threads": None,  # torch threads per device worker; None: torch's default for one worker, 1 for several
+    "frontends": 1,  # HTTP front-end processes sharing the port; front end 0 owns the workers
 }
 SAMPLES = 100_000
 TOKENIZER_THREADS = 4
@@ -128,20 +136,30 @@ class Encoder:
 
 
 class Runtime:
-    """Worker process, request futures and metrics; all state changes happen on the event loop."""
+    """Worker processes, request futures and metrics of one front end; all state changes happen on the event loop.
 
-    def __init__(self, cfg):
+    Front end 0 owns the task queue, one result queue per front end, the workers and the other front ends; front end
+    k > 0 gets its two queues (queues=(task_q, result_q)) and learns worker state from the messages on its result
+    queue."""
+
+    def __init__(self, cfg, frontend=0, queues=None):
         self.cfg = cfg
         self.chips = cfg["chips"] or [None]
+        self.frontend = frontend
+        self.owner = frontend == 0
         self.state = "starting"  # workers: starting (none ready) | ok (at least one ready) | failed
         self.tok_state = "starting"  # tokenizer and config: starting | ok | failed
-        threads = cfg["tokenizer_threads"] or (TOKENIZER_THREADS if len(self.chips) == 1 else 16)
+        several = len(self.chips) > 1 and cfg["frontends"] == 1
+        threads = cfg["tokenizer_threads"] or (16 if several else TOKENIZER_THREADS)
         self.encoder = Encoder(threads)
         self.info = {}
         self.error = None
         self.procs = [None] * len(self.chips)
         self.ready = [False] * len(self.chips)
-        self.task_q = self.result_q = self.loop = self.collector = None
+        self.frontend_procs = []
+        self.result_qs = []
+        self.task_q, self.result_q = queues or (None, None)
+        self.loop = self.collector = None
         self.pending = {}
         self.next_id = 0
         self.reset_metrics()
@@ -174,19 +192,32 @@ class Runtime:
 
     def start(self, loop):
         self.loop = loop
-        self.ctx = mp.get_context("spawn")
-        self.task_q, self.result_q = self.ctx.Queue(), self.ctx.Queue()
-        self._spawn(0)  # the others start when worker 0 is ready (it fills the weight and kernel caches)
+        if self.owner:
+            self.ctx = mp.get_context("spawn")
+            self.task_q = self.ctx.Queue()
+            self.result_qs = [self.ctx.Queue() for _ in range(self.cfg["frontends"])]
+            self.result_q = self.result_qs[0]
+            self._spawn(0)  # the others start when worker 0 is ready (it fills the weight and kernel caches)
+            for fe in range(1, self.cfg["frontends"]):
+                proc = self.ctx.Process(
+                    target=frontend_main,
+                    args=(self.cfg, fe, self.task_q, self.result_qs[fe]),
+                    name=f"decider-frontend-{fe}",
+                    daemon=True,
+                )
+                proc.start()
+                self.frontend_procs.append(proc)
         self.collector = threading.Thread(
             target=self._collect, args=(self.result_q,), name="result-collector", daemon=True
         )
         self.collector.start()
-        self.watchdog = loop.create_task(self._watch())
+        if self.owner:
+            self.watchdog = loop.create_task(self._watch())
 
     def _spawn(self, worker):
         proc = self.ctx.Process(
             target=worker_main,
-            args=(self.cfg, self.task_q, self.result_q, worker, self.chips[worker]),
+            args=(self.cfg, self.task_q, self.result_qs, worker, self.chips[worker]),
             name=f"decider-worker-{worker}",
             daemon=True,
         )
@@ -213,13 +244,18 @@ class Runtime:
             if self.state != "failed":
                 self.state = "ok"
             logger.info(f"worker {worker} ready after {msg['warmup_s']} s ({sum(self.ready)}/{len(self.ready)})")
-            if worker == 0 and self.state != "failed":
+            if self.owner and worker == 0 and self.state != "failed":
                 for w in range(1, len(self.chips)):
                     self._spawn(w)
         elif kind == "failed":
             self._fail(f"model failed on worker {msg['worker']}: {msg['error']}")
+        elif kind == "error":  # front end 0 found a dead worker or front end
+            self._fail(msg["error"])
 
     def _fail(self, error):
+        if self.owner:  # workers tell every front end about their own failures; process deaths only front end 0 sees
+            for result_q in self.result_qs[1:]:
+                result_q.put({"type": "error", "error": error})
         self.state, self.error = "failed", error
         logger.error(error)
         for fut in self.pending.values():
@@ -233,9 +269,24 @@ class Runtime:
             for worker, proc in enumerate(self.procs):
                 if proc is not None and not proc.is_alive() and self.state != "failed":
                     self._fail(f"model failed: worker {worker} process exited with code {proc.exitcode}")
+            for fe, proc in enumerate(self.frontend_procs, start=1):
+                if not proc.is_alive() and self.state != "failed":
+                    self._fail(f"front end {fe} process exited with code {proc.exitcode}")
 
     def stop(self):
         self.encoder.shutdown()
+        if not self.owner:
+            self.result_q.put(None)
+            self.collector.join(5)
+            self.task_q.cancel_join_thread()  # front end 0 closes the shared queues
+            return
+        for proc in self.frontend_procs:
+            proc.terminate()  # SIGTERM: uvicorn shuts the front end down
+        for proc in self.frontend_procs:
+            proc.join(15)
+            if proc.is_alive():
+                proc.kill()
+                proc.join()
         procs = [proc for proc in self.procs if proc is not None]
         if not procs:
             return
@@ -254,12 +305,12 @@ class Runtime:
                 proc.join()
         self.result_q.put(None)
         self.collector.join(5)  # let it read the sentinel before the queue is closed
-        self.task_q.cancel_join_thread()
-        self.result_q.cancel_join_thread()
-        self.task_q.close()
-        self.result_q.close()
+        for q in [self.task_q, *self.result_qs]:
+            q.cancel_join_thread()
+            q.close()
         # drop the queues so the SemLock finalizers run before the interpreter exits (no resource_tracker warning)
         self.task_q = self.result_q = None
+        self.result_qs = []
         gc.collect()
 
     async def submit(self, qs):
@@ -267,12 +318,13 @@ class Runtime:
         self.next_id += 1
         self.pending[self.next_id] = fut
         t_submit = time.time()
-        self.task_q.put({"id": self.next_id, "qs": qs, "t_submit": t_submit})
+        self.task_q.put({"id": self.next_id, "qs": qs, "t_submit": t_submit, "fe": self.frontend})
         msg = await fut
         return {**msg, "t_submit": t_submit}
 
     def stats(self):
         return {
+            "frontend": self.frontend,
             "requests": dict(self.counts),
             "latency_ms": percentiles(self.e2e),
             "encode_ms": percentiles(self.encode),
@@ -290,9 +342,9 @@ def _histogram(values):
     return out
 
 
-def create_app(config=None, start_worker=True) -> FastAPI:
+def create_app(config=None, start_worker=True, frontend=0, queues=None) -> FastAPI:
     cfg = {**DEFAULT_CONFIG, **(config or {})}
-    rt = Runtime(cfg)
+    rt = Runtime(cfg, frontend, queues)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -367,6 +419,7 @@ def create_app(config=None, start_worker=True) -> FastAPI:
             "device": f"blackhole 1x1 x {len(rt.chips)}",
             "workers": len(rt.chips),
             "workers_ready": sum(rt.ready),
+            "frontends": cfg["frontends"],
             "chips": rt.chips if rt.cfg["chips"] else None,
             "trace": cfg["trace"],
             "traced_buckets_only": cfg["traced_buckets_only"],
@@ -408,15 +461,31 @@ def parse_args(argv=None):
     p.add_argument(
         "--tokenizer-threads", type=int, default=None, help="tokenizer pool size (default 4, 16 with --chips)"
     )
+    p.add_argument(
+        "--worker-threads",
+        type=int,
+        default=None,
+        help="torch threads per device worker (default: torch's default for one worker, 1 with --chips: the workers "
+        "share the host's cores, and torch's default of one thread per core in every worker oversubscribes them)",
+    )
+    p.add_argument(
+        "--frontends",
+        type=int,
+        default=1,
+        help="HTTP front-end processes sharing the port (SO_REUSEPORT), for request rates one event loop cannot "
+        "keep up with; they share all the workers (needs --chips)",
+    )
     args = p.parse_args(argv)
     if args.warmup_eager and not args.eager_buckets:
         p.error("--warmup-eager needs --eager-buckets")
+    if args.frontends < 1:
+        p.error("--frontends must be >= 1")
+    if args.frontends > 1 and not args.chips:
+        p.error("--frontends needs --chips")
     return args
 
 
 def main(argv=None):
-    import uvicorn
-
     args = parse_args(argv)
     cfg = {
         "host": args.host,
@@ -432,16 +501,38 @@ def main(argv=None):
         "verbose": args.verbose,
         "chips": resolve_chips(args.chips),
         "tokenizer_threads": args.tokenizer_threads,
+        "worker_threads": args.worker_threads,
+        "frontends": args.frontends,
     }
-    uvicorn.run(
-        create_app(cfg),
-        host=args.host,
-        port=args.port,
-        workers=1,
+    serve(cfg)
+
+
+def serve(cfg, frontend=0, queues=None):
+    """Run one front end; with several, every front end binds the port with SO_REUSEPORT."""
+    import uvicorn
+
+    config = uvicorn.Config(
+        create_app(cfg, frontend=frontend, queues=queues),
+        host=cfg["host"],
+        port=cfg["port"],
         log_level="info",
         access_log=False,
-        timeout_keep_alive=args.keep_alive_s,
+        timeout_keep_alive=cfg["keep_alive_s"],
     )
+    server = uvicorn.Server(config)
+    if cfg["frontends"] == 1:
+        server.run()
+        return
+    sock = socket.socket(socket.AF_INET6 if ":" in cfg["host"] else socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+    sock.bind((cfg["host"], cfg["port"]))
+    server.run(sockets=[sock])
+
+
+def frontend_main(cfg, frontend, task_q, result_q):
+    """Entry of front-end process k > 0 (spawned by front end 0)."""
+    serve(cfg, frontend, (task_q, result_q))
 
 
 if __name__ == "__main__":

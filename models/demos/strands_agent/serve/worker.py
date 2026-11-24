@@ -17,20 +17,29 @@ P150_MESH_GRAPH_DESC = "tt_metal/fabric/mesh_graph_descriptors/p150_mesh_graph_d
 
 def pin_chip(chip):
     """Restrict this process to one chip (PCI address or device index) before ttnn is imported, and open it as a
-    single P150: on a Galaxy or a QB2 the default mesh descriptor describes the whole system."""
+    single P150: on a Galaxy or a QB2 the default mesh descriptor describes the whole system. Each worker also gets
+    its own TT_METAL_LOGS_PATH: opening a device clears <logs path>/generated/inspector, and workers that start
+    together on one logs path race in that clear and crash."""
     os.environ["TT_VISIBLE_DEVICES"] = str(chip)
-    if "TT_MESH_GRAPH_DESC_PATH" not in os.environ and os.environ.get("TT_METAL_HOME"):
-        os.environ["TT_MESH_GRAPH_DESC_PATH"] = os.path.join(os.environ["TT_METAL_HOME"], P150_MESH_GRAPH_DESC)
+    tt_metal_home = os.environ.get("TT_METAL_HOME")
+    if "TT_MESH_GRAPH_DESC_PATH" not in os.environ and tt_metal_home:
+        os.environ["TT_MESH_GRAPH_DESC_PATH"] = os.path.join(tt_metal_home, P150_MESH_GRAPH_DESC)
+    logs_root = os.environ.get("TT_METAL_LOGS_PATH") or tt_metal_home
+    if logs_root:
+        logs = os.path.join(logs_root, "generated", "decider_workers", str(chip).replace(":", "_"))
+        os.makedirs(logs, exist_ok=True)
+        os.environ["TT_METAL_LOGS_PATH"] = logs
     os.environ.setdefault("TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES", "0")
 
 
 def _open_mesh(device_params):
-    """Open a 1x1 mesh like the pytest mesh_device fixture does (no fabric)."""
+    """Open a 1x1 mesh like the pytest mesh_device fixture does for these params (no fabric, default dispatch
+    cores). Images ship models/ but not the top-level tests/, so the server must not import from it."""
     import ttnn
-    from tests.scripts.common import get_updated_device_params
 
-    params = get_updated_device_params(dict(device_params))
-    return ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(1, 1), **params)
+    return ttnn.open_mesh_device(
+        mesh_shape=ttnn.MeshShape(1, 1), dispatch_core_config=ttnn.DispatchCoreConfig(), **device_params
+    )
 
 
 def _close_mesh(mesh):
@@ -81,14 +90,20 @@ def warmup(decider, cfg, log):
         log(f"warmup traced pass {n_pass + 1}: {len(shapes)} shapes, {time.perf_counter() - t:.1f} s")
 
 
-def worker_main(cfg, task_q, result_q, worker=0, chip=None):
+def worker_main(cfg, task_q, result_qs, worker=0, chip=None):
     """Entry of a spawned device process; cfg keys: max_seq_len, trace, traced_buckets_only, warmup_eager,
-    batch_wait_ms, max_batch_questions, verbose. chip: PCI address or device index to pin (None: the devices this
-    process sees). Messages carry "worker"."""
+    batch_wait_ms, max_batch_questions, verbose, worker_threads. chip: PCI address or device index to pin (None: the
+    devices this process sees). result_qs: one result queue per front end; a result goes to the front end of its task
+    (task["fe"]), "ready" and "failed" go to every front end. Messages carry "worker"."""
     # The server owns shutdown (Ctrl-C reaches the whole process group).
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     if chip is not None:
         pin_chip(chip)
+    threads = cfg.get("worker_threads") or (1 if chip is not None else None)
+    if threads:
+        import torch
+
+        torch.set_num_threads(threads)
     tag = f"worker {worker}" if chip is None else f"worker {worker} {chip}"
 
     def log(msg):
@@ -109,16 +124,16 @@ def worker_main(cfg, task_q, result_q, worker=0, chip=None):
         warmup(decider, cfg, log)
         warmup_s = time.perf_counter() - t_start
         max_length = min(decider.config.max_length, decider.max_seq_len)
-        result_q.put(
-            {
-                "type": "ready",
-                "worker": worker,
-                "warmup_s": round(warmup_s, 1),
-                "trace_region_use": {f"{k}": v for k, v in getattr(decider, "trace_region_use", {}).items()},
-                "max_length": max_length,
-                "max_seq_len": decider.max_seq_len,
-            }
-        )
+        ready = {
+            "type": "ready",
+            "worker": worker,
+            "warmup_s": round(warmup_s, 1),
+            "trace_region_use": {f"{k}": v for k, v in getattr(decider, "trace_region_use", {}).items()},
+            "max_length": max_length,
+            "max_seq_len": decider.max_seq_len,
+        }
+        for result_q in result_qs:
+            result_q.put(ready)
         log(f"ready after {warmup_s:.1f} s")
 
         def get(timeout):
@@ -134,8 +149,8 @@ def worker_main(cfg, task_q, result_q, worker=0, chip=None):
             if items:
                 batch_id += 1
                 results = run_batch(decider, items, f"{worker}:{batch_id}")
-                for r in results:
-                    result_q.put({"type": "result", "worker": worker, **r})
+                for item, r in zip(items, results):
+                    result_qs[item["fe"]].put({"type": "result", "worker": worker, **r})
                 if cfg["verbose"]:
                     ok = [r for r in results if r["ok"]]
                     timing = ok[0]["timing"] if ok else {}
@@ -143,7 +158,9 @@ def worker_main(cfg, task_q, result_q, worker=0, chip=None):
             if stop:
                 break
     except BaseException:
-        result_q.put({"type": "failed", "worker": worker, "error": traceback.format_exc()})
+        failed = {"type": "failed", "worker": worker, "error": traceback.format_exc()}
+        for result_q in result_qs:
+            result_q.put(failed)
     finally:
         try:
             if decider is not None:
@@ -151,5 +168,6 @@ def worker_main(cfg, task_q, result_q, worker=0, chip=None):
         finally:
             if mesh is not None:
                 _close_mesh(mesh)
-            result_q.close()
-            result_q.join_thread()
+            for result_q in result_qs:
+                result_q.close()
+                result_q.join_thread()

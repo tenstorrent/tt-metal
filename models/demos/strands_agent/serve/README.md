@@ -1,6 +1,7 @@
 # strands-decider System One server
 
-FastAPI server for the strands decider on one Blackhole chip. It serves the upstream `POST /v1/systemone` API on 127.0.0.1 only.
+FastAPI server for the strands decider on one Blackhole chip, or on many with one worker per chip (see
+[Data parallel](#data-parallel-one-worker-per-chip)). It serves the upstream `POST /v1/systemone` API on 127.0.0.1 only.
 One device worker process batches the questions of concurrent requests into shared forwards; tokenization runs in the server process.
 
 ## Start the server
@@ -47,11 +48,30 @@ One device worker process batches the questions of concurrent requests into shar
 `TT_VISIBLE_DEVICES`, opens it as a single P150, and takes batches from one shared queue, so an idle chip takes the
 next batch. The first worker starts alone and fills `TT_CACHE_PATH` and the kernel cache; the others start when it is
 ready. `/health` reports `workers` and `workers_ready`; requests are served once one worker is ready.
+
+One HTTP front end tops out at about 800 requests per second (its event loop fills one core), well below what 32
+chips answer. `--frontends K` runs K front-end processes on the same port (`SO_REUSEPORT`); they all share all the
+workers. `/metrics` reports the front end that answers (`frontend` in the response).
 ```bash
-python -m models.demos.strands_agent.serve.server --host 0.0.0.0 --port 8000 --chips all
+python -m models.demos.strands_agent.serve.server --host 0.0.0.0 --port 8000 --chips all --frontends 8
 ```
 Do not set `TT_VISIBLE_DEVICES` or `TT_MESH_GRAPH_DESC_PATH` for the server process with `--chips`; each worker sets
-its own.
+its own. Each worker also writes its tt-metal logs (inspector, watcher) to its own folder,
+`$TT_METAL_HOME/generated/decider_workers/<chip>/` (under `TT_METAL_LOGS_PATH` when that is set), and runs torch on
+one thread (`--worker-threads`): with torch's default of one thread per host core in every worker, 32 workers
+oversubscribe the host and each forward slows from 13 ms to about 400 ms.
+
+Measured on a Blackhole Galaxy (32 chips, 64 host threads) with `--chips all --frontends 8`: one question over a
+128-token state, closed loop, `client.py` with 16 client processes on the same host.
+
+| Requests in flight | Requests per second | p50 latency | p90 latency |
+|---|---|---|---|
+| 1 | 57 | 17.5 ms | 18.0 ms |
+| 32 | 1,928 | 15.5 ms | 17.0 ms |
+| 128 | 3,000 | 21.2 ms | 94.1 ms |
+| 256 | 3,143 | 42.6 ms | 168.3 ms |
+
+The single-request row used one client process.
 
 ## Benchmark
 `client.py` checks the answers and measures latency and throughput. The server does not need it; any HTTP client works.
