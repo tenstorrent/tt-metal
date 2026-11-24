@@ -286,6 +286,11 @@ void init_unary_sfpu_operation_quasar()
     {
         init_signbit();
     }
+    else if constexpr (is_isinf_isnan_op(OPERATION))
+    {
+        // What SFPU_UNARY_INIT(<op>) expands to in the Compute API's *_tile_init, so the bare init's dispatch to isinf_isnan_init is what runs.
+        ::ckernel::llk_math_eltwise_unary_sfpu_init<OPERATION>();
+    }
     else if constexpr (OPERATION == SfpuType::typecast)
     {
         init_typecast();
@@ -495,15 +500,16 @@ void init_unary_sfpu_operation_quasar()
     }
     else if constexpr (OPERATION == SfpuType::bitwise_and)
     {
-        bitwise_and_init();
+        // The Compute API's bitwise_*_tile_init expression, so the bare init's dispatch is what runs.
+        SFPU_UNARY_INIT(bitwise_and);
     }
     else if constexpr (OPERATION == SfpuType::bitwise_or)
     {
-        bitwise_or_init();
+        SFPU_UNARY_INIT(bitwise_or);
     }
     else if constexpr (OPERATION == SfpuType::bitwise_xor)
     {
-        bitwise_xor_init();
+        SFPU_UNARY_INIT(bitwise_xor);
     }
     // fmod / remainder read the divisor and its reciprocal from the programmable constants, set
     // here to 2.0 / 0.5 as in the Blackhole harness.
@@ -1670,6 +1676,11 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
     else if constexpr (OP == BinaryOp::GCD)
     {
         calculate_gcd_init();
+    }
+    else if constexpr (OP == BinaryOp::BITWISE_AND || OP == BinaryOp::BITWISE_OR || OP == BinaryOp::BITWISE_XOR)
+    {
+        // The Compute API's binary_bitwise_tile_init expression (it programs the kernel's ADDR_MOD_6).
+        SFPU_BINARY_INIT_FN_NO_ARGS(bitwise_and, sfpu::binary_bitwise_init);
     }
     // RSHFT / LSHFT / LOGICAL_RSHFT need no init beyond the shared SFPU one.
     else if constexpr (OP == BinaryOp::LOGSIGMOID)
