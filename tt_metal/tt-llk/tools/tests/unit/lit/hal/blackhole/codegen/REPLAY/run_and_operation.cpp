@@ -100,6 +100,21 @@ extern "C" __attribute__((noinline, used)) void program_mop_with_replay()
     mop::program(mop::loop(1, mop::loop(4, replay::get_operation<row_epilogue>())));
 }
 
+// Template 1 MopCfg words written by the reference:
+//
+//   word | field
+//   -----+------------
+//   0    | outer count
+//   1    | inner count
+//   2    | StartOp
+//   3    | EndOp0
+//   4    | EndOp1
+//   5    | LoopOp
+//   6    | LoopOp1
+//   7    | Loop0Last
+//   8    | Loop1Last
+//
+// EndOp1 is written only with end ops, and words 5-8 only with a nonzero inner count.
 extern "C" __attribute__((noinline, used)) void reference_program_mop_with_replay()
 {
     constexpr std::uint32_t replay_op = TT_OP_REPLAY(16 /*start_idx*/, 2 /*len*/, 0 /*execute_while_loading*/, 0 /*load_mode*/);

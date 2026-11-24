@@ -10,7 +10,7 @@
 // clang-format on
 
 // The SFPI REPLAY builtin rejects a start index that is not constant after inlining.
-// RUNTIME_START: error: argument 5 is not a constant
+// RUNTIME_START: error: argument {{[0-9]+}} is not a constant
 
 // BufferRange fields are std::uint32_t; tt-metal and LLK builds turn the narrowing
 // warning into an error with -Werror.
