@@ -147,7 +147,7 @@ def load_adapter_into(
         bank_idx, fused_rank = _register_fused_qkv(attn, block_idx, qkvs, alphas, scale, name)
         if bank_idx is None:
             continue
-        key = f"blocks.{block_idx}.{attn_name}.{'to_qkv' if attn.is_self else 'to_kv'}"
+        key = f"blocks.{block_idx}.{attn_name}.{'to_qkv' if attn.is_self_attn else 'to_kv'}"
         target_indices[key] = bank_idx
         fused_ranks.append(fused_rank)
 
@@ -264,7 +264,7 @@ def _resolve_singleton(transformer, diff_path: str):
     if m:
         block_idx, attn_name = int(m.group(1)), m.group(2)
         attn = getattr(transformer.blocks[block_idx], attn_name)
-        if not attn.is_self:
+        if not attn.is_self_attn:
             return attn.to_q, f"blocks.{block_idx}.{attn_name}.to_q"
         return None, None  # self-attn to_q shouldn't arrive here
     m = re.match(r"blocks\.(\d+)\.(attn1|attn2)\.to_out\.0$", diff_path)
@@ -292,7 +292,7 @@ def _register_fused_qkv(
 ) -> tuple[int | None, int]:
     """Stack Q/K/V (or K/V for cross-attn) LoRA pairs onto attn.to_qkv (or
     attn.to_kv). Returns (bank_idx, fused_rank) or (None, 0) on skip."""
-    if attn.is_self:
+    if attn.is_self_attn:
         required = ["q", "k", "v"]
         target = attn.to_qkv
     else:
@@ -355,8 +355,8 @@ def _lightx2v_qkv_key(attn, block_idx: int, qkv: str) -> str:
     """Build the lightx2v alpha key for a Q/K/V projection inside a
     given WanAttention. Alphas in `_collect_pairs` are keyed by the full
     normalized base path (``blocks.<i>.<side>.<qkv>``), so the block
-    index must be threaded in alongside ``attn.is_self``."""
-    side = "self_attn" if attn.is_self else "cross_attn"
+    index must be threaded in alongside ``attn.is_self_attn``."""
+    side = "self_attn" if attn.is_self_attn else "cross_attn"
     return f"blocks.{block_idx}.{side}.{qkv}"
 
 

@@ -100,7 +100,7 @@ class WanTransformerBlock(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             is_fsdp=is_fsdp,
-            is_self=True,
+            is_self_attn=True,
             sdpa_chunk_size_overrides=sdpa_chunk_size_overrides,
             lora_enabled=lora_enabled,
         )
@@ -113,7 +113,7 @@ class WanTransformerBlock(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             is_fsdp=is_fsdp,
-            is_self=False,
+            is_self_attn=False,
             sdpa_chunk_size_overrides=sdpa_chunk_size_overrides,
             lora_enabled=lora_enabled,
         )

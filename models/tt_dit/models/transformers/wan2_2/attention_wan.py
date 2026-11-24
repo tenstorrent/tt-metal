@@ -60,7 +60,7 @@ class WanAttention(Module):
         ccl_manager: CCLManager | None = None,
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
-        is_self: bool = True,
+        is_self_attn: bool = True,
         sdpa_chunk_size_overrides: dict | None = None,
         lora_enabled: bool = False,
     ) -> None:
@@ -76,7 +76,7 @@ class WanAttention(Module):
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
-        self.is_self = is_self
+        self.is_self_attn = is_self_attn
         # Cross-attention K/V depend only on the prompt, which stays the same tensor over the denoising steps.
         # While enabled, they are kept per prompt tensor (see set_cross_kv_cache_enabled).
         self._cross_kv_cache_enabled = False
@@ -108,7 +108,7 @@ class WanAttention(Module):
         }
         ColCls = LoRAColParallelLinear if lora_enabled else ColParallelLinear
 
-        if is_self:
+        if is_self_attn:
             # Fused QKV for self-attention: single matmul split into 3 outputs
             self.to_qkv = ColCls(
                 dim,
@@ -305,7 +305,7 @@ class WanAttention(Module):
             # Transpose back to [out, in] PyTorch convention
             return merged.T
 
-        if self.is_self:
+        if self.is_self_attn:
             # Merge separate to_q, to_k, to_v weights into fused to_qkv
             q_state = pop_substate(state, "to_q")
             k_state = pop_substate(state, "to_k")
@@ -504,10 +504,10 @@ class WanAttention(Module):
             assert prompt_1BLP is None
 
         assert cfg_batch in (1, 2)
-        assert negative_prompt_1BLP is None or (cfg_batch == 2 and not self.is_self)
+        assert negative_prompt_1BLP is None or (cfg_batch == 2 and not self.is_self_attn)
         if cfg_batch == 2:
             assert not self.use_exp_ring_sdpa, "CFG batching is not supported with the experimental ring SDPA"
-            if not self.is_self:
+            if not self.is_self_attn:
                 assert negative_prompt_1BLP is not None, "CFG-batched cross-attention needs the uncond prompt"
                 assert cross_attn_mask is None, "CFG batching does not support a cross-attention mask"
 
@@ -517,7 +517,7 @@ class WanAttention(Module):
 
         ring_sdpa_per_pass = (
             cfg_batch == 2
-            and self.is_self
+            and self.is_self_attn
             and self.parallel_config.sequence_parallel.factor > 1
             and not self._folds_ring_sdpa(spatial_1BND.shape[2] // 2)
         )
@@ -538,7 +538,7 @@ class WanAttention(Module):
         use_ring_sdpa = self.parallel_config.sequence_parallel.factor > 1
         norm_output_dtype = sdpa_input_dtype if (use_ring_sdpa and prompt_1BLP is None) else None
 
-        if self.is_self:
+        if self.is_self_attn:
             # Fused QKV matmul with split output for self-attention
             q_1BNF, k_1BNF, v_1BNF = self.to_qkv(
                 spatial_1BND,
@@ -565,7 +565,7 @@ class WanAttention(Module):
                 dtype=norm_output_dtype,
             )
         )
-        if self.is_self:
+        if self.is_self_attn:
             k_BHNE = fold_passes(
                 self.norm_k(
                     split_passes(k_1BNF),
