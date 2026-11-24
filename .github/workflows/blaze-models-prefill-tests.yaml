@@ -47,10 +47,10 @@ on:
         type: boolean
         default: false
         description: "GLM > glm_chunked_perf_suite"
-      glm_components_suite:
+      glm_packed_only:
         type: boolean
         default: false
-        description: "GLM > glm_components_suite"
+        description: "HACK: GLM-5.3 SC1 packed runner leg only"
       dsv4_flash:
         type: boolean
         default: false
