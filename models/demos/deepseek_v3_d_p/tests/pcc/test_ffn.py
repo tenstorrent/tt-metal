@@ -39,7 +39,7 @@ from models.demos.deepseek_v3_d_p.tt.tt_ffn import EMB_DIM, HIDDEN_DIM, TtFfn
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import require_high_power
 from models.tt_transformers.tt.ccl import get_num_links
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged, require_realtime_profiler
+from tt_py_test_utils_common.realtime_profiler_utils import profile_realtime_program_merged, require_realtime_profiler
 from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
@@ -457,4 +457,6 @@ def test_ffn_ring_ring_4x4_perf(mesh_device, device_params):
     )
     ceiling_us = float(os.environ.get("TT_METAL_FFN_RING_RING_4X4_MAX_US", FFN_RING_RING_4X4_CEILING_US or 0))
     assert ceiling_us > 0, f"no ceiling yet; measured median {median_us:.1f} us"
-    assert_perf_gate(median_us <= ceiling_us, f"dense FFN forward median {median_us:.1f} us over its ceiling {ceiling_us} us")
+    assert_perf_gate(
+        median_us <= ceiling_us, f"dense FFN forward median {median_us:.1f} us over its ceiling {ceiling_us} us"
+    )

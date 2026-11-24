@@ -19,7 +19,7 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import clear_tt_ccl_cache
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import require_high_power
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged, require_realtime_profiler
+from tt_py_test_utils_common.realtime_profiler_utils import profile_realtime_program_merged, require_realtime_profiler
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi fused prefill targets Blackhole")
