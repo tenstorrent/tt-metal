@@ -22,8 +22,10 @@ CORES = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1
 SHAPE = [1, NUM_TILES, 32, 32]
 
 needs_kernel_config_buffer = pytest.mark.skipif(
-    os.environ.get("TT_METAL_SLOW_DISPATCH_MODE") != "1" or os.environ.get("TT_METAL_ALLOCATOR_MODE_HYBRID") != "1",
-    reason="a kernel config buffer needs TT_METAL_SLOW_DISPATCH_MODE=1 and TT_METAL_ALLOCATOR_MODE_HYBRID=1",
+    os.environ.get("TT_METAL_SLOW_DISPATCH_MODE") != "1"
+    or os.environ.get("TT_METAL_ALLOCATOR_MODE_HYBRID") != "1"
+    or bool(os.environ.get("TT_METAL_SIMULATOR")),
+    reason="a kernel config buffer needs TT_METAL_SLOW_DISPATCH_MODE=1 and TT_METAL_ALLOCATOR_MODE_HYBRID=1 on hardware",
 )
 
 
