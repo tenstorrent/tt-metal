@@ -42,7 +42,8 @@ WatcherNodeRanges MakeWatcherNodeRanges(
     if (!rtoptions.get_watcher_enabled() || rtoptions.watcher_noc_sanitize_disabled()) {
         return ranges;
     }
-    for (const auto& [dfb_name, nodes] : collected.dfb_node_set) {
+    for (const auto& [dfb_name, placement] : collected.dfb_placements) {
+        const NodeRangeSet& nodes = placement.allocation;
         const std::optional<TensorParamName>& borrowed_from = collected.dfb_by_name.at(dfb_name)->borrowed_from;
         if (!borrowed_from.has_value()) {
             ranges.dfbs.emplace(dfb_name, ToVirtualNodeRanges(mesh_device, nodes));
@@ -80,10 +81,13 @@ ProgramResources RegisterResources(
         program_impl.register_sram_arena_parameter(parameter.unique_id.get(), parameter.properties, mesh_device);
     }
     resources.tensor_parameters = RegisterTensorParameters(spec, mesh_device, program_impl);
+    for (const auto& parameter : spec.global_semaphore_parameters) {
+        program_impl.register_global_semaphore_parameter(parameter.unique_id.get(), mesh_device);
+    }
     resources.dfbs = RegisterDataflowBuffers(spec, collected, risc_masks, program_impl);
 
     // Reserve PrefetcherPipe slots (one per kernel accessor group) from the spec geometry, register
-    // relay DFBs against them, and record each parameter's placement for SetProgramRunArgs. Must
+    // relay DFBs against them, and record each parameter's placement for Program::set_program_run_args. Must
     // precede kernel creation: the slot id is baked into the kernel's `pipe::<accessor>` token and
     // a relay DFB's `dfb::` token.
     resources.prefetcher_pipes =

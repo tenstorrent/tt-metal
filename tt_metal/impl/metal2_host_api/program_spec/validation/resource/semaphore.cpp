@@ -107,4 +107,46 @@ void ValidateComputeSemaphores(const ValidationContext& ctx) {
     }
 }
 
+void ValidateGlobalSemaphoreBindings(const KernelSpec& kernel) {
+    if (kernel.global_semaphore_bindings.empty()) {
+        return;
+    }
+    TT_FATAL(
+        kernel.is_data_movement_kernel(),
+        "Kernel '{}' binds a GlobalSemaphore, but only data-movement kernels can bind a GlobalSemaphore",
+        kernel.unique_id);
+
+    std::unordered_set<std::string> accessor_names;
+    for (const auto& binding : kernel.global_semaphore_bindings) {
+        auto [it, inserted] = accessor_names.insert(binding.accessor_name);
+        TT_FATAL(
+            inserted,
+            "Kernel '{}' has duplicate GlobalSemaphore accessor_name '{}'",
+            kernel.unique_id,
+            binding.accessor_name);
+        TT_FATAL(
+            IsValidCppIdentifier(binding.accessor_name),
+            "Kernel '{}' GlobalSemaphore accessor_name '{}' must be a valid C++ identifier",
+            kernel.unique_id,
+            binding.accessor_name);
+        ValidateAccessorNameLength(kernel.unique_id, "GlobalSemaphore", binding.accessor_name);
+    }
+}
+
+void ValidateGlobalSemaphoreParametersUsed(const ValidationContext& ctx) {
+    const ProgramSpec& spec = ctx.spec;
+    std::unordered_set<GlobalSemaphoreParamName> used;
+    for (const auto& kernel : spec.kernels) {
+        for (const auto& binding : kernel.global_semaphore_bindings) {
+            used.insert(binding.global_semaphore_parameter_name);
+        }
+    }
+    for (const auto& parameter : spec.global_semaphore_parameters) {
+        TT_FATAL(
+            used.contains(parameter.unique_id),
+            "GlobalSemaphoreParameter '{}' is defined but not bound by any kernel",
+            parameter.unique_id);
+    }
+}
+
 }  // namespace tt::tt_metal

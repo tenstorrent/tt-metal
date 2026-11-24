@@ -104,8 +104,9 @@ class Parameter:
 
         This is the generic decoupling layer between lazy init and any feature
         that needs to attach metadata to the materialized tensor — e.g. FSDP's
-        ``_fsdp_managed`` markers (looked up by ``sync_gradients`` and the
-        Muon guard via ``ttml.fsdp.is_fsdp_managed``). Without it, every such
+        ``_fsdp_managed`` markers (looked up by the Muon guard via
+        ``ttml.fsdp.is_fsdp_managed``; ``sync_gradients`` reads the value's
+        Shard label instead). Without it, every such
         feature would need a hand-coded propagation step inside
         ``materialize_module``.
         """

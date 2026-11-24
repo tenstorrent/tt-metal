@@ -5,6 +5,7 @@
 #include "optimizers/sgd.hpp"
 
 #include <fmt/format.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <array>
@@ -533,6 +534,26 @@ TEST_F(SGDValidationTest, RejectsLogicalShapeMismatchWithEqualPadding) {
         /* weight_decay */ 0.0f,
         /* nesterov */ false,
         /* momentum_buffer */ std::nullopt));
+}
+
+TEST_F(SGDValidationTest, RejectsTilesOtherThan32x32) {
+    // In 16x32 tiles a 32x32 param is 2 tiles, where the compute kernels' count, in 32x32 tiles, is 1.
+    const auto in_16x32_tiles = [] {
+        return ttml::test_utils::filled_on_device_in_tiles({1, 1, 32, 32}, 0.5F, {16, 32});
+    };
+    EXPECT_THAT(
+        [&] {
+            ttml::metal::sgd(
+                in_16x32_tiles(),
+                in_16x32_tiles(),
+                /* lr */ 1e-2f,
+                /* momentum */ 0.0f,
+                /* dampening */ 0.0f,
+                /* weight_decay */ 0.0f,
+                /* nesterov */ false,
+                /* momentum_buffer */ std::nullopt);
+        },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("tiles must be 32x32, got 16x32")));
 }
 
 // ====================================================================

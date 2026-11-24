@@ -29,8 +29,10 @@ inline bool agmm_single_m_block(uint32_t M_tiles, uint32_t M_block_tiles, uint32
 std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> default_block_sizes(
     uint32_t M, uint32_t K, uint32_t N, bool fp32_dest_acc_en);
 
-// The mesh workload: one program per coordinate. A cache hit computes the call's addresses, semaphores and row count
-// once and writes them into each program's common args (it owns every slot that can change between calls).
+// The mesh workload: one program per coordinate range, with per-device runtime args (a device's rank and routes), or
+// one per coordinate where the devices' programs differ in more. A cache hit computes the call's addresses, semaphores
+// and row count once and writes them into each program's common args (it owns every slot that can change between
+// calls).
 struct AllGatherMinimalMatmulAsyncProgramFactory {
     struct shared_variables_t {
         // The argument objects, not their data(): dispatch may relocate the payload.

@@ -174,6 +174,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/experimental/sdpa_custom_mm.h
     inc/api/compute/experimental/sdpa_custom_mm_reuse_dest_srcb.h
     inc/api/compute/experimental/sdpa_sub_custom.h
+    inc/api/compute/experimental/sfpu_binary_bcast_pack.h
     inc/api/compute/experimental/sdpa_weighted_reduce.h
     inc/api/compute/experimental/semaphore_compute_impl.h
     inc/api/compute/experimental/sinkhorn.h
@@ -217,7 +218,6 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/transpose.h
     inc/api/compute/triangle_solve.h
     inc/api/compute/transpose_dest.h
-    inc/api/compute/untilize.h
     inc/api/compute/welford.h
     inc/api/compute/xlogy.h
     inc/api/lock.h
@@ -237,6 +237,8 @@ set(HW_JIT_API_HEADERS
     inc/api/dataflow/noc_semaphore.h
     inc/api/dataflow/semaphore_dm_impl.h
     inc/api/dataflow/semaphore_binding_token.h
+    inc/api/dataflow/global_semaphore.h
+    inc/api/dataflow/global_semaphore_binding_token.h
     inc/api/core_local_mem.h
     inc/api/tensor/noc_traits.h
     inc/hostdev/buf_rw_common.h
@@ -254,7 +256,6 @@ set(HW_JIT_API_HEADERS
     inc/hostdev/rta_constants.h
     inc/hostdev/socket.h
     inc/hostdev/fabric_edm_packet_header.hpp
-    inc/hostdev/fabric_direction_table_interface.h
     inc/hostdev/fabric_routing_path_interface.h
     inc/internal/hw_thread.h
     inc/internal/profiler/event_metadata.hpp

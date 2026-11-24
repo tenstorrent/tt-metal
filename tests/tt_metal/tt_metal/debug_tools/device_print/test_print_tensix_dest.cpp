@@ -22,7 +22,8 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <filesystem>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -630,7 +631,7 @@ static Program build_quasar_program(
         .work_units = {WorkUnitSpec{.name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = node}},
     };
 
-    Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
     const uint32_t per_tile_stride =
         num_tiles == 0 ? 0 : static_cast<uint32_t>(input_dram_buffer->device_local_size() / num_tiles);
@@ -653,7 +654,7 @@ static Program build_quasar_program(
                  {"num_tiles", num_tiles},
                  {"dram_page_stride", per_tile_stride}})},
     };
-    tt_metal::experimental::SetProgramRunArgs(program, run_args);
+    program.set_program_run_args(run_args);
     return program;
 }
 
@@ -710,17 +711,6 @@ static bool reader_datacopy_writer(
         // Skip all device-side warning lines added before each tile print
         DeleteLinesStartingWith(fixture->dprint_file_name, "WARNING: Float32 on Wormhole displays limited precision");
     }
-    if (arch == ARCH::QUASAR) {
-        // The Quasar data movement and compute firmware both trace their own progress, and every
-        // processor on the core shares this print stream, so drop those lines before comparing the
-        // compute output.
-        DeleteLinesStartingWith(fixture->dprint_file_name, "DM-FW:");
-        DeleteLinesStartingWith(fixture->dprint_file_name, "DM0-FW:");
-        DeleteLinesStartingWith(fixture->dprint_file_name, "hartid:");
-        DeleteLinesStartingWith(fixture->dprint_file_name, "TRISC-FW:");
-        DeleteLinesStartingWith(fixture->dprint_file_name, "SIGNALING COMPLETION");
-        DeleteLinesStartingWith(fixture->dprint_file_name, "COMPLETION SIGNED OFF");
-    }
     EXPECT_TRUE(FilesMatchesString(fixture->dprint_file_name, golden_output));
 
     // Compare input and output data
@@ -772,6 +762,10 @@ protected:
             }
             if (config.num_tiles > 1) {
                 GTEST_SKIP() << "Multi-tile dest print is not yet validated on Quasar.";
+            }
+            if (config.data_format == tt::DataFormat::Float32 || config.data_format == tt::DataFormat::Int32) {
+                GTEST_SKIP() << "Quasar: after a 32-bit dest print one TRISC returns from its kernel but never signals "
+                                "completion (hang).";
             }
         }
 

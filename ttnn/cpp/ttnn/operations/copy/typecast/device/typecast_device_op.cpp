@@ -112,6 +112,36 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             args.sub_core_grids.has_value() == false,
             "Typecast operation does not support sub_core_grids when input tensor is in Row-Major layout.");
+
+        // RM chunked factory: only inner-H may be padded on input; outer-dim or output inner-W
+        // padding would alias padding into the output. h_logical>0 guards a kernel divide by zero.
+        if (!input_tensor.is_sharded() && !args.sub_core_grids.has_value()) {
+            const auto& logical = input_tensor.logical_shape();
+            const auto& in_padded = input_tensor.padded_shape();
+            const auto out_padded =
+                preallocated_output_tensor.has_value() ? preallocated_output_tensor->padded_shape() : logical;
+            const uint32_t rank = logical.rank();
+            // Zero-volume tensors fall through to skip_launch; only guard non-empty RM inputs.
+            TT_FATAL(
+                rank < 2 || logical[rank - 2] > 0 || logical.volume() == 0,
+                "Typecast RM requires logical rank-2 dim > 0 (got {})",
+                logical);
+            for (int i = 0; i + 2 < static_cast<int>(rank); ++i) {
+                TT_FATAL(
+                    in_padded[i] == logical[i] && out_padded[i] == logical[i],
+                    "Typecast RM does not support outer-dim padding (dim {}): logical={} input_padded={} "
+                    "output_padded={}",
+                    i,
+                    logical[i],
+                    in_padded[i],
+                    out_padded[i]);
+            }
+            TT_FATAL(
+                rank < 1 || out_padded[-1] == logical[-1],
+                "Typecast RM does not support inner-W padding on output: logical W={} output_padded W={}",
+                logical[-1],
+                out_padded[-1]);
+        }
     }
 
     const TensorMemoryLayout& input_tensor_memory_layout = input_tensor.memory_config().memory_layout();

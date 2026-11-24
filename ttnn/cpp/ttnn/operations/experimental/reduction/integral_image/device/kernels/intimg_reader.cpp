@@ -59,30 +59,34 @@ void kernel_main() {
 
     const auto core_x = get_absolute_logical_x();
     const auto core_y = get_absolute_logical_y();
-    const uint32_t my_channel = (core_y * ctas.cores_x) + core_x;
+    const uint32_t my_core = (core_y * ctas.cores_x) + core_x;
 
     const Noc noc;
     const DataflowBuffer start_cb(dfb::start);
 
-    for (uint32_t batch_i = 0; batch_i < ctas.num_batches;
-         ++batch_i) {  // only one batch expected, unit tests don't cover more, also not everything is implemented in
-                       // terms of num_batches > 1
-        for (uint32_t row_chunk_i = 0; row_chunk_i < num_blocks_in_column; ++row_chunk_i) {
-            for (uint32_t column_block_i = 0; column_block_i < num_blocks_in_row; ++column_block_i) {
-                prepare_start_tile_for_cumsum_axis_2<input_number_type>(
-                    noc, start_cb, ctas.tile_height * ctas.tile_width);
-                const uint32_t block_depth =
-                    std::min(ctas.input_depth - (column_block_i * ctas.block_depth), ctas.block_depth);
-                send_block(
-                    input_addr_gtor,
-                    dfb::input,
-                    my_channel,
-                    column_block_i,
-                    row_chunk_i,
-                    num_blocks_in_column,
-                    num_slices_along_channels,
-                    block_depth,
-                    ctas.block_depth);
+    const uint32_t num_cores = ctas.cores_x * ctas.cores_y;
+    // Slices are independent; with fewer cores than slices each core walks slices my_channel, +num_cores, ...
+    for (uint32_t my_channel = my_core; my_channel < num_slices_along_channels; my_channel += num_cores) {
+        for (uint32_t batch_i = 0; batch_i < ctas.num_batches;
+             ++batch_i) {  // only one batch expected, unit tests don't cover more, also not everything is implemented
+                           // in terms of num_batches > 1
+            for (uint32_t row_chunk_i = 0; row_chunk_i < num_blocks_in_column; ++row_chunk_i) {
+                for (uint32_t column_block_i = 0; column_block_i < num_blocks_in_row; ++column_block_i) {
+                    prepare_start_tile_for_cumsum_axis_2<input_number_type>(
+                        noc, start_cb, ctas.tile_height * ctas.tile_width);
+                    const uint32_t block_depth =
+                        std::min(ctas.input_depth - (column_block_i * ctas.block_depth), ctas.block_depth);
+                    send_block(
+                        input_addr_gtor,
+                        dfb::input,
+                        my_channel,
+                        column_block_i,
+                        row_chunk_i,
+                        num_blocks_in_column,
+                        num_slices_along_channels,
+                        block_depth,
+                        ctas.block_depth);
+                }
             }
         }
     }

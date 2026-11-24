@@ -1,13 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""The KDA state migration contract: segment geometry, contract layouts, per-layer export/import.
+"""The KDA state migration contract: segment geometry, contract layouts, the engine-owned slabs.
 
 ``ttKDA`` reads and writes its state in the *native* form: ``recurrent`` ``[1, H_local, D, D]`` FP32
 TILE and ``convolution`` ``[1, SEG, (K-1)*64]`` BF16 ROW_MAJOR, channel-paged with 64-channel pages (the layer's
 ``KDAProgramConfig.convolution_page_channels`` set to ``KDA_CONVOLUTION_PAGE_CHANNELS``), both interleaved DRAM, heads
-sharded across TP and the complete state replicated across SP. The kernels accept nothing else, so a layer runs on one native scratch
-carry, loaded from and stored back to the *contract* form, which is the carries' only store and what
-migration reads.
+sharded across TP and the complete state replicated across SP. A model layer instead runs on the *contract* form,
+the carries' only store and what migration reads.
 
 The contract fixes what one migration segment is and requires every segment to be one contiguous
 DRAM span, round-robin over the DRAM banks exactly like the kvpe cache:
@@ -23,18 +22,14 @@ them apart:
 * a single-layer ND-sharded tensor whose shard IS the segment (``[1, 1, D, 32]`` / ``[1, 1, (K-1)*64]``),
   the form PR #56443 measured and the one ``to_memory_config`` produces from a native tensor;
 * the consolidated per-rank slabs the engine owns (``KdaStates``): the recurrent slab keeps the ND
-  form over ``[slots * layers, H_local, D, D]`` and is written per layer with ``indexed_entry_copy``;
+  form over ``[slots * layers, H_local, D, D]``;
   the convolution slab is an INTERLEAVED row-major ``[slots * layers, SEG, (K-1)*64]`` tensor whose
   384-byte pages are the segments. Interleaved page ``p`` lives at bank ``p % N``, offset
   ``(p // N) * 384``, which is where ND shard ``s = p`` would live, so the bytes and the table math
-  are the same while the write becomes a plain whole-row copy. The native convolution tail has the
-  same pages, so a slab batch is a byte copy of the native tensor: the per-layer convolution export
-  and import are one ``indexed_entry_copy``.
+  are the same. The native convolution tail has the same pages.
 
-Exports take the slot as a replicated one-element UINT32 device tensor (``device_scalar``, or the traced
-metadata's slot word) and write slab batch ``slot * L + layer_position`` with ``indexed_entry_copy``, which
-resolves the batch on device. A captured export therefore follows the slot written before each replay,
-and an import reads the same batch back into a native carry the same way, so a captured load follows it too.
+The KDA ops take the slot as a replicated one-element UINT32 device tensor (``device_scalar``, or the traced
+metadata's slot word) and address slab batch ``slot * L + layer_position`` on device (``SlabEntry``).
 
 Segment numbering (``g`` is the GLOBAL head ``tp_col * H_local + h_local``, ``branch`` is q/k/v =
 0/1/2, the golden's ``[all q | all k | all v]`` order):
@@ -62,6 +57,7 @@ import ttnn
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.tt.kda.config import convolution_tail_shape
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
+from models.demos.deepseek_v3_d_p.tt.kda.relay_chunk_scan import SlabEntry
 from models.demos.deepseek_v3_d_p.tt.kda.state_contract import KDA_CONVOLUTION_PAGE_CHANNELS, KDA_RECURRENT_BAND_WIDTH
 
 KDA_RECURRENT_DTYPE = ttnn.float32
@@ -214,12 +210,6 @@ class KdaContractGeometry:
             raise ValueError(f"{name}={value} out of range [0, {limit})")
 
 
-@dataclass(frozen=True)
-class KdaContractMemoryConfigs:
-    recurrent: ttnn.MemoryConfig
-    convolution: ttnn.MemoryConfig
-
-
 def dram_bank_grid(device: ttnn.Device | ttnn.MeshDevice) -> ttnn.CoreRangeSet:
     num_banks = device.dram_grid_size().x
     if num_banks <= 0:
@@ -238,107 +228,6 @@ def nd_dram_memory_config(device: ttnn.Device | ttnn.MeshDevice, shard_shape: li
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
         ),
-    )
-
-
-def contract_memory_configs(
-    device: ttnn.Device | ttnn.MeshDevice, geometry: KdaContractGeometry
-) -> KdaContractMemoryConfigs:
-    """ND-DRAM layouts whose shards are exactly the migration segments (single-layer tensors)."""
-    return KdaContractMemoryConfigs(
-        recurrent=nd_dram_memory_config(device, [1, 1, geometry.head_dim, KDA_RECURRENT_BAND_WIDTH]),
-        convolution=nd_dram_memory_config(device, [1, 1, geometry.convolution_slab_row_width]),
-    )
-
-
-def validate_native_state(state: KdaState, geometry: KdaContractGeometry) -> None:
-    if tuple(state.recurrent.shape) != geometry.recurrent_shape:
-        raise ValueError(f"recurrent shape {tuple(state.recurrent.shape)} != {geometry.recurrent_shape}")
-    if tuple(state.convolution.shape) != geometry.convolution_shape:
-        raise ValueError(f"convolution shape {tuple(state.convolution.shape)} != {geometry.convolution_shape}")
-    if state.recurrent.dtype != KDA_RECURRENT_DTYPE or state.recurrent.layout != ttnn.TILE_LAYOUT:
-        raise ValueError("native recurrent state must be FP32 tile layout")
-    if state.convolution.dtype != KDA_CONVOLUTION_DTYPE or state.convolution.layout != ttnn.ROW_MAJOR_LAYOUT:
-        raise ValueError("native convolution state must be BF16 row-major layout")
-    if state.recurrent.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
-        raise ValueError("native recurrent state must use interleaved DRAM")
-    if state.convolution.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
-        raise ValueError("native convolution state must use interleaved DRAM")
-
-
-def validate_contract_state(state: KdaState, geometry: KdaContractGeometry, configs: KdaContractMemoryConfigs) -> None:
-    if tuple(state.recurrent.shape) != geometry.recurrent_shape:
-        raise ValueError(f"contract recurrent shape {tuple(state.recurrent.shape)} != {geometry.recurrent_shape}")
-    if tuple(state.convolution.shape) != geometry.convolution_shape:
-        raise ValueError(f"contract convolution shape {tuple(state.convolution.shape)} != {geometry.convolution_shape}")
-    if state.recurrent.dtype != KDA_RECURRENT_DTYPE or state.recurrent.layout != ttnn.TILE_LAYOUT:
-        raise ValueError("contract recurrent state must be FP32 tile layout")
-    if state.convolution.dtype != KDA_CONVOLUTION_DTYPE or state.convolution.layout != ttnn.ROW_MAJOR_LAYOUT:
-        raise ValueError("contract convolution state must be BF16 row-major layout")
-    if state.recurrent.memory_config() != configs.recurrent:
-        raise ValueError("contract recurrent state has the wrong ND-DRAM layout")
-    if state.convolution.memory_config() != configs.convolution:
-        raise ValueError("contract convolution state has the wrong ND-DRAM layout")
-
-
-def allocate_contract_state(device: ttnn.Device | ttnn.MeshDevice, geometry: KdaContractGeometry) -> KdaState:
-    configs = contract_memory_configs(device, geometry)
-    return KdaState(
-        recurrent=ttnn.allocate_tensor_on_device(
-            ttnn.Shape(geometry.recurrent_shape), KDA_RECURRENT_DTYPE, ttnn.TILE_LAYOUT, device, configs.recurrent
-        ),
-        convolution=ttnn.allocate_tensor_on_device(
-            ttnn.Shape(geometry.convolution_shape),
-            KDA_CONVOLUTION_DTYPE,
-            ttnn.ROW_MAJOR_LAYOUT,
-            device,
-            configs.convolution,
-        ),
-    )
-
-
-def allocate_native_state(device: ttnn.Device | ttnn.MeshDevice, geometry: KdaContractGeometry) -> KdaState:
-    return KdaState(
-        recurrent=ttnn.allocate_tensor_on_device(
-            ttnn.Shape(geometry.recurrent_shape),
-            KDA_RECURRENT_DTYPE,
-            ttnn.TILE_LAYOUT,
-            device,
-            ttnn.DRAM_MEMORY_CONFIG,
-        ),
-        convolution=ttnn.allocate_tensor_on_device(
-            ttnn.Shape(geometry.convolution_shape),
-            KDA_CONVOLUTION_DTYPE,
-            ttnn.ROW_MAJOR_LAYOUT,
-            device,
-            ttnn.DRAM_MEMORY_CONFIG,
-        ),
-    )
-
-
-def relayout(source: ttnn.Tensor, destination: ttnn.Tensor) -> ttnn.Tensor:
-    """Whole-tensor conversion between the native and the single-layer contract form, in place."""
-    ttnn.to_memory_config(source, destination.memory_config(), output_tensor=destination)
-    return destination
-
-
-def export_state(source: KdaState, destination: KdaState, geometry: KdaContractGeometry) -> KdaState:
-    """Native -> single-layer contract tensors."""
-    validate_native_state(source, geometry)
-    validate_contract_state(destination, geometry, contract_memory_configs(source.recurrent.device(), geometry))
-    return KdaState(
-        recurrent=relayout(source.recurrent, destination.recurrent),
-        convolution=relayout(source.convolution, destination.convolution),
-    )
-
-
-def import_state(source: KdaState, destination: KdaState, geometry: KdaContractGeometry) -> KdaState:
-    """Single-layer contract tensors -> native."""
-    validate_contract_state(source, geometry, contract_memory_configs(source.recurrent.device(), geometry))
-    validate_native_state(destination, geometry)
-    return KdaState(
-        recurrent=relayout(source.recurrent, destination.recurrent),
-        convolution=relayout(source.convolution, destination.convolution),
     )
 
 
@@ -362,33 +251,6 @@ def device_scalar(device: ttnn.Device | ttnn.MeshDevice, value: int) -> ttnn.Ten
     )
 
 
-def _copy_entry(
-    source: KdaState | KdaStates,
-    destination: KdaState | KdaStates,
-    slot: ttnn.Tensor,
-    num_layers: int,
-    position: int,
-    zero_fill_at_zero: ttnn.Tensor | None = None,
-) -> None:
-    """Copy one layer's state, both carries, between a native state and slab batch ``slot * num_layers + position``
-    (captured), in one dispatch.
-
-    Native recurrent tiles land in the ND slab's segments through logical page ids, as ``fill_cache_for_user_`` put
-    them; a native convolution page is one slab segment. When ``zero_fill_at_zero`` reads 0 on device the
-    destination is zero-filled and the source is not read; only loads pass it.
-    """
-    ttnn.experimental.kda.indexed_entry_copy(
-        source.recurrent,
-        destination.recurrent,
-        slot,
-        index_scale=num_layers,
-        index_offset=position,
-        zero_fill_at_zero=zero_fill_at_zero,
-        paired_source=source.convolution,
-        paired_destination=destination.convolution,
-    )
-
-
 @dataclass
 class KdaStates:
     """The engine-owned store of every KDA layer's state on this rank, in the contract form.
@@ -397,7 +259,8 @@ class KdaStates:
     single allocations so a ``KvCacheStage`` can name each by one base address. ``layer_ids`` are
     this rank's GLOBAL KDA layer indices in ascending order and fix the layer axis of both slabs.
 
-    The slabs are never cleared; ``import_layer``'s ``zero_fill_at_zero`` loads zeros instead of a slot.
+    The slabs are never cleared; at a request's head (``actual_start == 0``) the layer's ops start from zeros
+    instead of the slot's carry.
     """
 
     recurrent: ttnn.Tensor
@@ -491,25 +354,10 @@ class KdaStates:
                 "the interleaved row form only matches the contract when one row is one aligned page"
             )
 
-    def export_layer(self, state: KdaState, slot: ttnn.Tensor, layer_idx: int) -> None:
-        """Write one layer's native state into its slot's batch; ``slot`` is read on device (see ``device_scalar``)."""
-        position = self.layer_position(layer_idx)
-        _copy_entry(state, self, slot, self.num_layers, position)
-
-    def import_layer(
-        self,
-        destination: KdaState,
-        slot: ttnn.Tensor,
-        layer_idx: int,
-        *,
-        zero_fill_at_zero: ttnn.Tensor | None = None,
-    ) -> None:
-        """Read one layer's state at ``slot`` into a native carry; ``slot`` is read on device (see ``device_scalar``).
-
-        ``zero_fill_at_zero``: device scalar; 0 loads zeros instead of the slot (K3 passes the chunk start).
-        """
-        position = self.layer_position(layer_idx)
-        _copy_entry(self, destination, slot, self.num_layers, position, zero_fill_at_zero)
+    def entry(self, slot: ttnn.Tensor, layer_idx: int) -> KdaState:
+        """Layer ``layer_idx``'s carry at the device ``slot`` scalar, as ``ttKDA.forward`` state (SP > 1 only)."""
+        entry = {"index": slot, "scale": self.num_layers, "offset": self.layer_position(layer_idx)}
+        return KdaState(recurrent=SlabEntry(self.recurrent, **entry), convolution=SlabEntry(self.convolution, **entry))
 
     def deallocate(self) -> None:
         ttnn.deallocate(self.recurrent)

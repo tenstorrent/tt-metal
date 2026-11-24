@@ -97,7 +97,8 @@ static std::tuple<MemoryConfig, uint32_t, sliding_window::ParallelConfig> get_po
             return_indices,
             output_layout,
             output_dtype,
-            config_tensor_in_dram);
+            config_tensor_in_dram,
+            QUASAR_POOL_PRE_TILIZE_TILE_ROWS);
         TT_FATAL(
             sw_parallel_config.has_value(),
             "autosharding could not determine valid shard scheme, please check tensor dimensions");
@@ -498,7 +499,8 @@ public:
                 return_indices,
                 output_layout,
                 dtype,
-                config_tensor_in_dram);
+                config_tensor_in_dram,
+                QUASAR_POOL_PRE_TILIZE_TILE_ROWS);
 
             if (parallel_config.has_value()) {
                 shard_layout = parallel_config->shard_scheme;
@@ -633,7 +635,8 @@ public:
             output_layout,
             sliced_input_memory_config,
             sliding_window_config,
-            config_tensor_in_dram);
+            config_tensor_in_dram,
+            QUASAR_POOL_PRE_TILIZE_TILE_ROWS);
 
         log_trace(
             tt::LogOp,

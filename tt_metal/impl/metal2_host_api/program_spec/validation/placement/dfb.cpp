@@ -12,7 +12,7 @@
 
 namespace tt::tt_metal {
 
-// Device slots are allocated per core (two DFBs may share a slot iff their node sets are
+// Device slots are allocated per core (two DFBs may share a slot iff their configuration node sets are
 // disjoint), so the arch limit is on how many DFBs land on any single node — not on
 // ProgramSpec::dataflow_buffers.size(). Gen1 lowers each slot to a circular buffer; Gen2
 // indexes the packed config by device slot up to dfb::NUM_DFBS. Tile-counter exhaustion on
@@ -25,7 +25,8 @@ void ValidateDFBSlotsPerNode(
     const NodeRangeSet nodes = to_node_range_set(work_unit.target_nodes);
     std::unordered_map<NodeCoord, uint32_t> dfbs_per_node;
     for (const auto& dfb : spec.dataflow_buffers) {
-        for (const NodeCoord& node : corerange_to_cores(collected.dfb_node_set.at(dfb.unique_id).intersection(nodes))) {
+        for (const NodeCoord& node :
+             corerange_to_cores(collected.dfb_placements.at(dfb.unique_id).configuration.intersection(nodes))) {
             dfbs_per_node[node]++;
         }
     }

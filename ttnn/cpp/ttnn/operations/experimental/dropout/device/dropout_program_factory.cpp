@@ -309,6 +309,36 @@ inline void assign_per_core_runtime_args(DropoutKernelRunArgs& run_args, const D
     });
 }
 
+// The compute kernels' per-core seeds for `seed`: the run args in which the devices of a mesh differ.
+tt::tt_metal::ProgramRunArgs per_core_seed_run_args(const DropoutCoreSplit& split, uint32_t seed) {
+    using namespace tt::tt_metal;
+
+    KernelRunArgs compute_group_1{.kernel = kComputeGroup1};
+    KernelRunArgs compute_group_2{.kernel = kComputeGroup2};
+    for_each_dropout_core(split, [&](const DropoutCoreWork& work) {
+        auto& compute = work.in_group_1 ? compute_group_1 : compute_group_2;
+        AddRuntimeArgsForNode(compute.runtime_arg_values, work.core, {{"seed", per_core_seed(seed, work.tile_offset)}});
+    });
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args.push_back(std::move(compute_group_1));
+    if (!split.core_group_2.ranges().empty()) {
+        run_args.kernel_run_args.push_back(std::move(compute_group_2));
+    }
+    return run_args;
+}
+
+// Every device of `range` with its per-core seeds.
+std::vector<ttnn::device_operation::DeviceRunArgs> per_device_seed_run_args(
+    const DropoutParams& args, const Tensor& input, const ttnn::MeshCoordinateRange& range) {
+    const DropoutCoreSplit split = dropout_core_split(input);
+    std::vector<ttnn::device_operation::DeviceRunArgs> per_device;
+    for (const auto& coord : range) {
+        per_device.push_back(
+            {.device = coord, .values = per_core_seed_run_args(split, per_device_seed(args, coord, input))});
+    }
+    return per_device;
+}
+
 ttnn::device_operation::ProgramArtifacts DropoutProgramFactory::create_program_artifacts(
     const DropoutParams& args, const DropoutInputs& tensor_args, Tensor& output) {
     using namespace tt;
@@ -452,16 +482,16 @@ ttnn::device_operation::MeshWorkloadArtifacts DropoutMeshWorkloadFactory::create
     Tensor& output,
     const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     TT_ASSERT(args.use_per_device_seed, "DropoutMeshWorkloadFactory should only be used if per-device seed is used.");
-    // One program per coordinate: each device's program has its own seed.
     ttnn::device_operation::MeshWorkloadArtifacts artifacts;
-    for (const auto& coord : tensor_coords.coords()) {
+    for (const auto& range : tensor_coords.ranges()) {
         DropoutParams effective_args = args;
-        effective_args.seed = per_device_seed(args, coord, tensor_args.input);
-        auto per_coord = DropoutProgramFactory::create_program_artifacts(effective_args, tensor_args, output);
+        effective_args.seed = per_device_seed(args, range.start_coord(), tensor_args.input);
+        auto program = DropoutProgramFactory::create_program_artifacts(effective_args, tensor_args, output);
         artifacts.programs.push_back({
-            .range = ttnn::MeshCoordinateRange(coord),
-            .spec = std::move(per_coord.spec),
-            .run_params = std::move(per_coord.run_params),
+            .range = range,
+            .spec = std::move(program.spec),
+            .run_params = std::move(program.run_params),
+            .per_device_run_params = per_device_seed_run_args(args, tensor_args.input, range),
         });
     }
     return artifacts;
@@ -534,13 +564,16 @@ tt::tt_metal::ProgramRunArgs DropoutProgramFactory::override_runtime_arguments(
     return run_args;
 }
 
-tt::tt_metal::ProgramRunArgs DropoutMeshWorkloadFactory::override_runtime_arguments(
+ttnn::device_operation::RangeRunArgs DropoutMeshWorkloadFactory::override_runtime_arguments(
     const DropoutParams& operation_attributes,
     const DropoutInputs& tensor_args,
     Tensor& tensor_return_value,
     const ttnn::MeshCoordinateRange& range) {
-    return DropoutProgramFactory::override_runtime_arguments(
-        operation_attributes, tensor_args, tensor_return_value, range.start_coord());
+    return {
+        .base = DropoutProgramFactory::override_runtime_arguments(
+            operation_attributes, tensor_args, tensor_return_value, range.start_coord()),
+        .per_device = per_device_seed_run_args(operation_attributes, tensor_args.input, range),
+    };
 }
 
 }  // namespace ttnn::experimental::prim

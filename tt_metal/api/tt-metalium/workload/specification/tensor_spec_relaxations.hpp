@@ -37,6 +37,11 @@ struct TensorSpecRelaxations {
     // Permit tensor arguments whose logical_shape differs from the declared shape.
     // The MeshTensor argument's padded_shape must still match exactly.
     //
+    // Notes:
+    //  - By default, match_padded_shape_only requires that the TensorLayout alignment
+    //    remain constant. To relax the alignment as well, you must additionally set the
+    //    relax_tensor_layout_alignment flag.
+    //
     // Effects:
     //  - Validation checks are relaxed.
     //  - TensorAccessor configuration is completely unchanged.
@@ -91,14 +96,17 @@ struct TensorSpecRelaxations {
     bool relax_logical_rank = false;
 
     // Permit tensor arguments with a different TensorLayout alignment than the declared one.
-    // This is intended to be used in conjunction with dynamic_tensor_shape.
-    // (The flag is inert if dynamic_tensor_shape is not set.)
+    // This is intended to be used in conjunction with match_padded_shape_only or
+    // dynamic_tensor_shape. (The flag is inert if neither is set.)
     //
     // NOTE: This is the alignment returned by TensorLayout::get_alignment(), which determines how the
     // logical shape is padded. It is NOT the allocator alignment that aligned_page_size refers to.
     //
     // A non-default alignment can add padding beyond the default, so this flag admits tensor
-    // arguments that are padded differently from the declared one.
+    // arguments that are padded differently from the declared one:
+    //  - With match_padded_shape_only, the padded shape is still pinned. The tensor argument may
+    //    arrive at it from a different logical shape, padded by a different alignment.
+    //  - With dynamic_tensor_shape, the padded shape is free as well.
     //
     // CAUTION: With this flag set, the padded shape is no longer a function of the logical shape.
     // Your kernel and host logic must take the page count from the tensor argument's padded shape or
@@ -108,7 +116,7 @@ struct TensorSpecRelaxations {
     //  - Validation checks are relaxed.
     //  - TensorAccessor configuration is completely unchanged.
     //    (Alignment reaches the TensorAccessor only through the padded shape and the ROW-MAJOR page
-    //     size, both of which dynamic_tensor_shape already handles.)
+    //     size. match_padded_shape_only pins both, and dynamic_tensor_shape already handles both.)
     bool relax_tensor_layout_alignment = false;
 
     // Require that the tensor argument's page size matches that of the TensorParameter.
@@ -132,8 +140,9 @@ struct TensorSpecRelaxations {
 // as pertinent. A given relaxation implies an equivalence relationship as defined in the
 // TensorSpecRelaxations documentation above.
 //
-// NOTE: This check is used by SetProgramRunArgs, UpdateProgramRunArgs, and UpdateTensorArgs when
-// validating a supplied MeshTensor argument against its TensorParameter's declared TensorSpec.
+// NOTE: This check is used by Program::set_program_run_args, Program::update_program_run_args, and
+// Program::update_tensor_args when validating a supplied MeshTensor argument against its TensorParameter's declared
+// TensorSpec.
 //
 bool tensorspecs_match_with_relaxation(
     const tt::tt_metal::TensorSpec& a, const tt::tt_metal::TensorSpec& b, const TensorSpecRelaxations& relaxation);

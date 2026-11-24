@@ -40,7 +40,7 @@
  * can drain to zero, and cfg_state_id matches hardware.
  *
  * Rendezvouses T0/T1/T2 through hardware mailboxes, serializes configuration
- * in T0→T1→T2 order, and programs both cfg banks identically to:
+ * in T0→T1→T2 order, and programs cfg bank 0 (the bank kernels run on; nothing selects bank 1) to:
  *   - source and pack formats: Float16_b;
  *   - tile geometry: one 32x32 tile;
  *   - faces: four 16x16 faces;
