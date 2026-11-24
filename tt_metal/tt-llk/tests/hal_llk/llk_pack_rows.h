@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// HAL port of tt_llk_blackhole/llk_lib/llk_pack_rows.h: same Tensix instruction sequence and access kinds as production.
+// HAL port of tt_llk_blackhole/llk_lib/llk_pack_rows.h. Differs from production: four rows per PACR (all four Dest read
+// interfaces, Y += 4) with a partial interface mask on the closing PACR, instead of one single-interface PACR per row.
 
 #pragma once
 
@@ -24,22 +25,23 @@
  * @brief Configures address modification modes for row packing.
  *
  * Address mods are applied automatically after each PACR instruction to update counters.
- * - ADDR_MOD_0: Increment Y by 1 (advance to next row in dest)
+ * - ADDR_MOD_0: Increment Y by 4 (each PACR reads four rows, one per Dest read interface)
  * - ADDR_MOD_1: Clear Y to 0 (reset for next tile)
  */
 inline void _llk_pack_rows_configure_addrmod_()
 {
     using hal::cfg::Sec;
-    hal_port::set_addr_mod_pack<Sec::S0, 1 /*y_src_incr*/, 0 /*y_src_clr*/, 0 /*y_src_cr*/, 0 /*z_src_incr*/, 0 /*z_src_clr*/>();
+    hal_port::set_addr_mod_pack<Sec::S0, 4 /*y_src_incr*/, 0 /*y_src_clr*/, 0 /*y_src_cr*/, 0 /*z_src_incr*/, 0 /*z_src_clr*/>();
     hal_port::set_addr_mod_pack<Sec::S1, 0 /*y_src_incr*/, 1 /*y_src_clr*/, 0 /*y_src_cr*/, 0 /*z_src_incr*/, 0 /*z_src_clr*/>();
 }
 
 /**
  * @brief Configures the MOP template for packing rows.
  *
- * The MOP uses a single outer loop with num_rows inner iterations:
- * - Each inner iteration packs one row (16 datums) using ADDR_MOD_0 (Y += 1)
- * - The last outer loop iteration uses ADDR_MOD_1 with Last=1 to reset Y to 0 after num_rows rows
+ * The MOP uses a single outer loop with ceil(num_rows / 4) inner iterations:
+ * - Each inner iteration packs four rows (one per Dest read interface, 16 datums each) using ADDR_MOD_0 (Y += 4)
+ * - The last iteration uses ADDR_MOD_1 with Last=1 to reset Y to 0, and enables only the first
+ *   num_rows % 4 interfaces when num_rows is not a multiple of four (rows StartRow + k for mask bit k)
  *
  * @param num_rows: Number of rows to pack from the destination register.
  */
@@ -50,18 +52,20 @@ inline void _llk_pack_rows_mop_config_(const std::uint32_t num_rows)
     using hal::pack::TileBoundary;
 
     constexpr std::uint32_t MOP_OUTER_LOOP = 1;
-    const std::uint32_t MOP_INNER_LOOP     = num_rows;
+    const std::uint32_t MOP_INNER_LOOP     = (num_rows + 3) / 4;
+    const std::uint32_t remainder          = num_rows % 4;
 
-    // Normal dest access, single interface, ADDR_MOD_0 (Y += 1), zero output disabled.
-    constexpr std::uint32_t row = DataTransfer {.address_modifier = ADDR_MOD_0, .interfaces = p_pacr::SINGLE_INTF_ACTIVE}.get_operation();
-    // Last outer loop instruction must have Last=1 to close the block
-    // and use ADDR_MOD_1 to reset Y counter
-    constexpr std::uint32_t last_row =
-        DataTransfer {.address_modifier = ADDR_MOD_1, .interfaces = p_pacr::SINGLE_INTF_ACTIVE, .boundary = TileBoundary::Last}.get_operation();
+    // Normal dest access, all four interfaces (four rows), ADDR_MOD_0 (Y += 4), zero output disabled.
+    constexpr std::uint32_t rows = DataTransfer {.address_modifier = ADDR_MOD_0, .interfaces = p_pacr::ALL_INTF_ACTIVE}.get_operation();
+    // Last outer loop instruction must have Last=1 to close the block and use ADDR_MOD_1 to reset Y counter.
+    // It reads the remaining 1-3 rows through interfaces 0..remainder-1, or all four when num_rows % 4 == 0.
+    const std::uint8_t last_interfaces = remainder == 0 ? p_pacr::ALL_INTF_ACTIVE : static_cast<std::uint8_t>((1u << remainder) - 1u);
+    const std::uint32_t last_rows =
+        DataTransfer {.address_modifier = ADDR_MOD_1, .interfaces = last_interfaces, .boundary = TileBoundary::Last}.get_operation();
 
     // Explicit NOP end ops keep production's MOP_CFG stores (end_op0/end_op1 = NOP) unchanged. Outer count is 1, so
     // the last-inner op is never issued (production leaves it equal to the loop op).
-    program(loop(MOP_OUTER_LOOP, loop(MOP_INNER_LOOP, row), TT_OP_NOP, TT_OP_NOP).patch(last_outer, last_row));
+    program(loop(MOP_OUTER_LOOP, loop(MOP_INNER_LOOP, rows), TT_OP_NOP, TT_OP_NOP).patch(last_outer, last_rows));
 }
 
 /**
@@ -135,10 +139,13 @@ inline void _llk_pack_rows_(const std::uint32_t tile_index, const std::uint32_t 
 /**
  * @brief Restore packer addrmods and counters to a safe default state.
  *
- * Resets the packer X counter to its default full-face value, undoing @ref _llk_pack_rows_init_.
+ * Restores ADDR_MOD_0 to Y += 1, the value the single-row production sequence leaves, undoing the Y += 4
+ * stride of @ref _llk_pack_rows_init_.
  *
  * @note Pairs with @ref _llk_pack_rows_init_.
  */
 inline void _llk_pack_rows_uninit_()
 {
+    using hal::cfg::Sec;
+    hal_port::set_addr_mod_pack<Sec::S0, 1 /*y_src_incr*/, 0 /*y_src_clr*/, 0 /*y_src_cr*/, 0 /*z_src_incr*/, 0 /*z_src_clr*/>();
 }
