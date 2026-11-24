@@ -197,6 +197,14 @@ inline void _llk_pack_dest_section_done_()
     ckernel::packer::pack_push_drained = true;
 }
 
+// The same release for the forms beyond main's signature, under a name no kernel renames: a kernel may wrap
+// _llk_pack_dest_section_done_ with main's two template arguments (hybrid_llk_shims.hpp).
+template <DstSync Dst, bool is_fp32_dest_acc_en, bool clear_dest, std::uint32_t words>
+inline void _llk_pack_dest_section_done_ext_()
+{
+    _llk_pack_dest_section_done_<Dst, is_fp32_dest_acc_en, clear_dest, words>();
+}
+
 /**
  * @brief Initialize the packer destination-offset GPRs and select the dest registers.
  *
