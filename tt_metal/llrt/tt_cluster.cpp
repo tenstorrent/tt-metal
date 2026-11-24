@@ -83,37 +83,6 @@ inline std::string get_soc_description_file(
     return path;
 }
 
-// Whether TT_METAL_EMU_SOC_DESC lists a descriptor a logical chip, and not the package's one descriptor.
-bool lists_chip_soc_descs(const tt::llrt::RunTimeOptions& rtoptions) {
-    return rtoptions.get_emu_soc_desc_paths().size() > 1;
-}
-
-// The SoC descriptor UMD opens every chip on, for a non-empty TT_METAL_EMU_SOC_DESC: its one entry, or
-// TT_METAL_EMU_PACKAGE_SOC_DESC when it lists a descriptor a chip. Fatal when a list has no package descriptor or a
-// package that is not Quasar, and when one entry comes with a package descriptor.
-const std::string& emu_package_soc_desc(const tt::llrt::RunTimeOptions& rtoptions) {
-    const auto& paths = rtoptions.get_emu_soc_desc_paths();
-    const std::string& package = rtoptions.get_emu_package_soc_desc_path();
-    TT_FATAL(!paths.empty(), "TT_METAL_EMU_SOC_DESC is not set");
-    if (!lists_chip_soc_descs(rtoptions)) {
-        TT_FATAL(package.empty(), "TT_METAL_EMU_PACKAGE_SOC_DESC is set and TT_METAL_EMU_SOC_DESC has one entry");
-        return paths.front();
-    }
-    TT_FATAL(
-        !package.empty(),
-        "TT_METAL_EMU_SOC_DESC lists {} descriptors: TT_METAL_EMU_PACKAGE_SOC_DESC must name the package descriptor",
-        paths.size());
-    // An Ethernet core's translated coordinate is its NOC0 coordinate on Quasar only; elsewhere UMD, on the package
-    // descriptor, could resolve a chip descriptor's core to another tile.
-    const tt::ARCH arch = tt::umd::SocDescriptor::get_arch_from_soc_descriptor_path(package);
-    TT_FATAL(
-        arch == tt::ARCH::QUASAR,
-        "TT_METAL_EMU_SOC_DESC lists {} descriptors on architecture {}; a descriptor a chip is read on Quasar only",
-        paths.size(),
-        arch);
-    return package;
-}
-
 // `node`, which is defined, on one line in YAML flow style for a message, whatever style its file wrote it in.
 std::string yaml_flow(const YAML::Node& node) {
     std::vector<std::string> parts;
@@ -160,18 +129,16 @@ std::optional<size_t> yaml_index(const YAML::Node& sequence, const YAML::Node& n
     return it == sequence.end() ? std::nullopt : std::optional<size_t>(std::distance(sequence.begin(), it));
 }
 
-// Fatal unless every chip's descriptor (paths[id] for each of `chips`) is the package's with only `eth`,
+// Fatal unless every chip's descriptor (`paths`, by chip id) is the package's with only `eth`,
 // `keraunos.cores` and `dram_views` narrowed to entries the package has, each listed once, and no Ethernet core or
 // programmable DRAM view is in two chips' descriptors. With that, no chip resets or loads a core of another, and
 // everything UMD builds from the package descriptor holds for each chip.
-void check_chip_soc_descs(
-    const std::vector<std::string>& paths, const std::string& package_path, const std::set<tt::ChipId>& chips) {
+void check_chip_soc_descs(const std::map<tt::ChipId, std::string>& paths, const std::string& package_path) {
     // An entry is known by its kind and its index in the package's list, so key order in a file does not matter.
     using Entry = std::pair<std::string_view, size_t>;
     const YAML::Node package = YAML::LoadFile(package_path);
     std::map<Entry, tt::ChipId> owner;
-    for (const tt::ChipId id : chips) {
-        const std::string& path = paths[id];
+    for (const auto& [id, path] : paths) {
         const YAML::Node chip = YAML::LoadFile(path);
         TT_FATAL(
             chip.IsMap(),
@@ -261,6 +228,71 @@ void check_chip_soc_descs(
     }
 }
 
+// TT_METAL_EMU_CLUSTER_DESC on EmuAxi, the mock cluster descriptor path otherwise; empty when unset.
+const std::string& test_cluster_desc_path(const tt::llrt::RunTimeOptions& rtoptions) {
+    return rtoptions.get_target_device() == tt::TargetDevice::EmuAxi ? rtoptions.get_emu_cluster_desc_path()
+                                                                     : rtoptions.get_mock_cluster_desc_path();
+}
+
+// Metal's SoC descriptor of each chip on Mock and EmuAxi, by chip id: the cluster descriptor's `chip_soc_descs`, a
+// relative path resolved against that file's directory; each narrows the package descriptor TT_METAL_EMU_SOC_DESC.
+// Empty on other targets or without the key. Fatal when the map is malformed or names a missing file, or the package
+// is unset or not Quasar.
+std::map<tt::ChipId, std::string> chip_soc_descs(const tt::llrt::RunTimeOptions& rtoptions) {
+    const std::string& file = test_cluster_desc_path(rtoptions);
+    if (file.empty() || (rtoptions.get_target_device() != tt::TargetDevice::Mock &&
+                         rtoptions.get_target_device() != tt::TargetDevice::EmuAxi)) {
+        return {};
+    }
+    const YAML::Node node = YAML::LoadFile(file)["chip_soc_descs"];
+    if (!node) {
+        return {};
+    }
+    const std::string& package = rtoptions.get_emu_soc_desc_path();
+    TT_FATAL(
+        !package.empty(),
+        "Cluster descriptor {} names chip SoC descriptors (chip_soc_descs): TT_METAL_EMU_SOC_DESC must name the "
+        "package descriptor they narrow",
+        file);
+    // An Ethernet core's translated coordinate is its NOC0 coordinate on Quasar only; elsewhere UMD, on the package
+    // descriptor, could resolve a chip descriptor's core to another tile.
+    const tt::ARCH arch = tt::umd::SocDescriptor::get_arch_from_soc_descriptor_path(package);
+    TT_FATAL(
+        arch == tt::ARCH::QUASAR,
+        "Cluster descriptor {} names chip SoC descriptors on architecture {}; they are read on Quasar only",
+        file,
+        arch);
+    TT_FATAL(
+        node.IsMap(),
+        "Cluster descriptor {}: chip_soc_descs is {}, not a map of chip id to SoC descriptor path",
+        file,
+        yaml_flow(node));
+    std::map<tt::ChipId, std::string> paths;
+    for (const auto& entry : node) {
+        tt::ChipId id = -1;
+        TT_FATAL(
+            YAML::convert<tt::ChipId>::decode(entry.first, id) && id >= 0 && entry.second.IsScalar() &&
+                !entry.second.Scalar().empty(),
+            "Cluster descriptor {}: chip_soc_descs entry {}: {} is not a chip id and a path",
+            file,
+            yaml_flow(entry.first),
+            yaml_flow(entry.second));
+        TT_FATAL(!paths.contains(id), "Cluster descriptor {}: chip_soc_descs lists chip {} twice", file, id);
+        std::filesystem::path path = entry.second.Scalar();
+        if (path.is_relative()) {
+            path = std::filesystem::path(file).parent_path() / path;
+        }
+        TT_FATAL(
+            std::filesystem::exists(path),
+            "Cluster descriptor {}: chip {} SoC descriptor {} does not exist",
+            file,
+            id,
+            path.string());
+        paths.emplace(id, path.string());
+    }
+    return paths;
+}
+
 // Loads a cluster descriptor YAML (a mock or test cluster descriptor). Throws when the path is empty or does not load.
 std::unique_ptr<tt::umd::ClusterDescriptor> load_cluster_desc(const std::string& path) {
     TT_FATAL(!path.empty(), "No cluster descriptor path set");
@@ -335,9 +367,7 @@ tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
             }
             return tt::tt_metal::ClusterType::INVALID;
         }
-        const std::string& cluster_desc_path = rtoptions.get_target_device() == tt::TargetDevice::EmuAxi
-                                                   ? rtoptions.get_emu_cluster_desc_path()
-                                                   : rtoptions.get_mock_cluster_desc_path();
+        const std::string& cluster_desc_path = test_cluster_desc_path(rtoptions);
         temp_cluster_desc = !cluster_desc_path.empty() ? load_cluster_desc(cluster_desc_path)
                                                        : tt::umd::Cluster::create_cluster_descriptor();
         cluster_desc = temp_cluster_desc.get();
@@ -673,23 +703,24 @@ void Cluster::get_metal_desc_from_tt_desc() {
                 dram_uncapped ? " (TT_METAL_SIMULATOR_DRAM_UNCAPPED: no clamp to lift on this model)" : "");
         }
     }
-    // With a descriptor a chip in TT_METAL_EMU_SOC_DESC, UMD holds the package descriptor for every chip and Metal's
+    // With chip_soc_descs in the cluster descriptor, UMD holds the package descriptor for every chip and Metal's
     // copy of chip i is built from entry i.
-    const bool chip_soc_descs =
-        (this->target_type_ == TargetDevice::Mock || this->target_type_ == TargetDevice::EmuAxi) &&
-        lists_chip_soc_descs(rtoptions_);
-    const auto& chip_soc_desc_paths = rtoptions_.get_emu_soc_desc_paths();
+    const auto chip_soc_desc_paths = chip_soc_descs(rtoptions_);
     const auto chip_ids = this->driver_->get_target_device_ids();
-    if (chip_soc_descs) {
-        TT_FATAL(
-            chip_soc_desc_paths.size() == chip_ids.size(),
-            "TT_METAL_EMU_SOC_DESC lists {} chip descriptors and {} chips are open",
-            chip_soc_desc_paths.size(),
-            chip_ids.size());
+    if (!chip_soc_desc_paths.empty()) {
+        const std::string& file = test_cluster_desc_path(rtoptions_);
+        for (const auto& [id, path] : chip_soc_desc_paths) {
+            TT_FATAL(
+                this->get_cluster_desc()->get_all_chips().contains(id),
+                "Cluster descriptor {}: chip_soc_descs names chip {}, which the descriptor does not have",
+                file,
+                id);
+        }
         for (const auto& id : chip_ids) {
             TT_FATAL(
-                static_cast<size_t>(id) < chip_soc_desc_paths.size(),
-                "TT_METAL_EMU_SOC_DESC has no descriptor for chip {}",
+                chip_soc_desc_paths.contains(id),
+                "Cluster descriptor {}: chip_soc_descs has no descriptor for chip {}",
+                file,
                 id);
             const size_t eth_harvesting_mask = this->get_cluster_desc()->get_harvesting_masks(id).eth_harvesting_mask;
             TT_FATAL(
@@ -698,21 +729,21 @@ void Cluster::get_metal_desc_from_tt_desc() {
                 id,
                 eth_harvesting_mask);
         }
-        check_chip_soc_descs(chip_soc_desc_paths, emu_package_soc_desc(rtoptions_), chip_ids);
+        check_chip_soc_descs(chip_soc_desc_paths, rtoptions_.get_emu_soc_desc_path());
     }
     for (const auto& id : chip_ids) {
         const tt::umd::SocDescriptor& driver_soc = this->driver_->get_soc_descriptor(id);
         // chip_info as UMD fills it when it opens the chip.
         tt::umd::SocDescriptor umd_soc =
-            chip_soc_descs ? tt::umd::SocDescriptor(
-                                 std::make_shared<tt::umd::SocArchDescriptor>(chip_soc_desc_paths[id]),
-                                 tt::ChipInfo{
-                                     .noc_translation_enabled = driver_soc.noc_translation_enabled,
-                                     .harvesting_masks = driver_soc.harvesting_masks,
-                                     .board_type = this->get_cluster_desc()->get_board_type(id),
-                                     .asic_location = this->get_cluster_desc()->get_asic_location(id),
-                                 })
-                           : driver_soc;
+            !chip_soc_desc_paths.empty() ? tt::umd::SocDescriptor(
+                                               std::make_shared<tt::umd::SocArchDescriptor>(chip_soc_desc_paths.at(id)),
+                                               tt::ChipInfo{
+                                                   .noc_translation_enabled = driver_soc.noc_translation_enabled,
+                                                   .harvesting_masks = driver_soc.harvesting_masks,
+                                                   .board_type = this->get_cluster_desc()->get_board_type(id),
+                                                   .asic_location = this->get_cluster_desc()->get_asic_location(id),
+                                               })
+                                         : driver_soc;
         if (this->target_type_ == TargetDevice::Silicon ||
             (this->target_type_ == TargetDevice::Simulator && umd_soc.device_descriptor_file_path.empty())) {
             umd_soc.device_descriptor_file_path = default_dram_metadata_yaml;
@@ -790,14 +821,11 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
             });
         }
     } else if (this->target_type_ == TargetDevice::Mock) {
-        // TT_METAL_EMU_SOC_DESC, when set, gives the mock chips the emulator's descriptors: UMD the package's, and
-        // Metal its own of each chip (get_metal_desc_from_tt_desc).
-        TT_FATAL(
-            !rtoptions_.get_emu_soc_desc_paths().empty() || rtoptions_.get_emu_package_soc_desc_path().empty(),
-            "TT_METAL_EMU_PACKAGE_SOC_DESC is set and TT_METAL_EMU_SOC_DESC is not");
-        const std::string sdesc_path = rtoptions_.get_emu_soc_desc_paths().empty()
+        // chip_soc_descs in the mock cluster descriptor gives the mock chips the emulator's descriptors: UMD the
+        // package's (TT_METAL_EMU_SOC_DESC), and Metal its own of each chip (get_metal_desc_from_tt_desc).
+        const std::string sdesc_path = chip_soc_descs(rtoptions_).empty()
                                            ? get_soc_description_file(this->arch_, this->target_type_, rtoptions_)
-                                           : emu_package_soc_desc(rtoptions_);
+                                           : rtoptions_.get_emu_soc_desc_path();
         // If a cluster descriptor was not provided via constructor, and mock is enabled via rtoptions,
         // load it from the YAML path and pass it into UMD for mock initialization.
         auto mock_cluster_desc = load_cluster_desc(rtoptions_.get_mock_cluster_desc_path());
@@ -823,13 +851,15 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
     } else if (this->target_type_ == TargetDevice::EmuAxi) {
         const auto [host, port] = parse_host_port(rtoptions_.get_emu_server(), "TT_METAL_EMU_SERVER");
         // A test cluster descriptor (TT_METAL_EMU_CLUSTER_DESC) presents the package as several chips.
-        const std::string& test_cluster_desc_path = rtoptions_.get_emu_cluster_desc_path();
-        auto test_cluster_desc = !test_cluster_desc_path.empty() ? load_cluster_desc(test_cluster_desc_path)
-                                                                 : std::unique_ptr<umd::ClusterDescriptor>{};
+        const std::string& cluster_desc_path = rtoptions_.get_emu_cluster_desc_path();
+        auto test_cluster_desc = !cluster_desc_path.empty() ? load_cluster_desc(cluster_desc_path)
+                                                            : std::unique_ptr<umd::ClusterDescriptor>{};
+        // Its chip_soc_descs is checked before UMD connects to the emulator.
+        chip_soc_descs(rtoptions_);
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
             .chip_type = tt::umd::ChipType::EMU_AXI,
             .num_host_mem_ch_per_mmio_device = 0,
-            .sdesc_path = emu_package_soc_desc(rtoptions_),
+            .sdesc_path = rtoptions_.get_emu_soc_desc_path(),
             .target_devices = test_cluster_desc ? std::unordered_set<tt::ChipId>{} : std::unordered_set<tt::ChipId>{0},
             .cluster_descriptor = test_cluster_desc.get(),
             .emu_host = host,

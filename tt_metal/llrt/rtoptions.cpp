@@ -56,8 +56,7 @@ enum class EnvVarID {
     TT_METAL_LOGS_PATH,                       // Path for generated logs and debug output
     TT_METAL_SIMULATOR,                       // Path to simulator executable
     TT_METAL_EMU_SERVER,                      // Chippy emu_axi endpoint (host:port)
-    TT_METAL_EMU_SOC_DESC,                    // SoC descriptor for the emulated package, or one a logical chip
-    TT_METAL_EMU_PACKAGE_SOC_DESC,            // Package SoC descriptor, when TT_METAL_EMU_SOC_DESC lists one a chip
+    TT_METAL_EMU_SOC_DESC,                    // SoC descriptor for the emulated package
     TT_METAL_EMU_CLUSTER_DESC,                // Test cluster descriptor for the emulated package
     TT_METAL_GRENDEL_JTAG_SERVER,             // OpenOCD TCL endpoint (host:port)
     TT_METAL_GRENDEL_JTAG_SOC_DESC,           // SoC descriptor for the attached package
@@ -553,23 +552,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->runtime_target_device_ = tt::TargetDevice::EmuAxi;
             break;
 
-        case EnvVarID::TT_METAL_EMU_SOC_DESC: {
-            this->emu_soc_desc_paths.clear();
-            std::string_view list(value);
-            while (true) {
-                const size_t comma = list.find(',');
-                const std::string_view path = list.substr(0, comma);
-                TT_FATAL(!path.empty(), "TT_METAL_EMU_SOC_DESC has an empty entry: '{}'", value);
-                this->emu_soc_desc_paths.emplace_back(path);
-                if (comma == std::string_view::npos) {
-                    break;
-                }
-                list.remove_prefix(comma + 1);
-            }
-            break;
-        }
-
-        case EnvVarID::TT_METAL_EMU_PACKAGE_SOC_DESC: this->emu_package_soc_desc_path = value; break;
+        case EnvVarID::TT_METAL_EMU_SOC_DESC: this->emu_soc_desc_path = std::string(value); break;
 
         case EnvVarID::TT_METAL_EMU_CLUSTER_DESC: this->emu_cluster_desc_path = value; break;
 
@@ -2170,7 +2153,7 @@ void RunTimeOptions::InitializeFromEnvVars() {
     if (this->runtime_target_device_ == tt::TargetDevice::Emule && this->mock_cluster_desc_path.empty()) {
         TT_THROW("TT_METAL_EMULE_MODE=1 requires TT_METAL_MOCK_CLUSTER_DESC_PATH to be set");
     }
-    if (this->runtime_target_device_ == tt::TargetDevice::EmuAxi && this->emu_soc_desc_paths.empty()) {
+    if (this->runtime_target_device_ == tt::TargetDevice::EmuAxi && this->emu_soc_desc_path.empty()) {
         TT_THROW("TT_METAL_EMU_SERVER requires TT_METAL_EMU_SOC_DESC to be set");
     }
     if (!this->emu_server.empty() && !this->mock_cluster_desc_path.empty()) {
