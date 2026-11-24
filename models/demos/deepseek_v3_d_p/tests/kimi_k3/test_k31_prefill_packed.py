@@ -52,7 +52,7 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import (
     token_ids,
     window,
 )
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_k3_prefill_multiuser import _PlainK3Transformer, _read_d2h_records
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_k3_prefill_multiuser import _PlainK3Runtime, _read_d2h_records
 from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import deallocate_state
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import PlainResidualStream
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.runtime import TtKimiK3Runtime
@@ -332,16 +332,6 @@ def test_k31_packed_forward_matches_one_chunk_forwards(mesh_device, device_param
     assert not failures, f"[packed] {len(failures)} mismatch(es):\n" + "\n".join(failures)
 
 
-class _PlainK31Runtime(TtKimiK3Runtime):
-    """K3.1's runtime on the plain residual stream: the handoff is the live sum alone."""
-
-    MODEL_CLS = _PlainK3Transformer
-
-    @property
-    def activation_planes(self) -> int:
-        return 1
-
-
 def _rt_config(mesh_device, device_params, first, n, total, num_users, use_trace):
     layout = stage_layout(mesh_device)
     return TtPrefillRuntimeConfig(
@@ -480,7 +470,7 @@ def test_k31_packed_pipeline_matches_one_rank(mesh_device, device_params, traced
     mesh_device.enable_program_cache()
     state_dict = synthetic_state_dict(0, PIPELINE_LAYERS)
     streams = _streams(num_users, max(lengths))
-    runtime_cls = _PlainK31Runtime if residual == "plain" else TtKimiK3Runtime
+    runtime_cls = _PlainK3Runtime if residual == "plain" else TtKimiK3Runtime
     user_of = lambda s: s % num_users
 
     adapter = KimiK31Adapter()

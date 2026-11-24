@@ -584,7 +584,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
             self.assertEqual(producer["PREFILL_PRODUCER_CHUNKS"], "410")
         self.assertIn("PCC GATE PASS", result.stdout)
 
-    def test_kimi_k3_1_sc1_packed_runs_two_chunks_per_forward(self):
+    def test_kimi_k3_1_sc1_packed_runs_four_chunks_per_forward(self):
         """--variant packed: kimi_k3_1_packed.json's 2560-token chunks, four per forward (budget 10240), at one slot
         fewer than kimi_k3_1.json, on the same two 4x4 stages, golden and PCC gate."""
         result, records = self.run_harness(
