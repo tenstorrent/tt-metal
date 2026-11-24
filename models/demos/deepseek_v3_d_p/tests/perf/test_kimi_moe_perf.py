@@ -58,8 +58,8 @@ CASES = [MoEPerfCase("kimi_k3", "8x4", 5120), MoEPerfCase("kimi_k3_1", "4x4-sp1"
 # Host ms of one MoE layer forward (untraced, traced) by case id, on a 14 kW CI Galaxy (bh_sc1_high_power): untraced the
 # fastest run, traced the mean of the runs. A case without targets only reports.
 TARGETS_MS = {
-    "kimi_k3-8x4-5120": (2.38, 2.27),
-    "kimi_k3_1-4x4-sp1-2560": (3.63, 3.54),
+    "kimi_k3-8x4-5120": (2.32, 2.20),
+    "kimi_k3_1-4x4-sp1-2560": (3.40, 3.31),
 }
 
 
