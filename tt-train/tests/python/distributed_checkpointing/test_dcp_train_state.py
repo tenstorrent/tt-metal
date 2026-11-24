@@ -12,6 +12,7 @@ import json
 import os
 import random
 import sys
+import warnings
 
 import numpy as np
 import pytest
@@ -31,10 +32,12 @@ from ttml.distributed_checkpointing._train_state import (
     capture_train_state,
     check_train_state,
     missing_train_state,
+    passed_components,
     read_train_state,
     restore_rng,
     restore_train_state,
     this_world_rank,
+    warn_unread_train_state,
 )
 
 
@@ -243,6 +246,28 @@ def test_a_dataloader_stored_per_rank_restores_each_ranks_own(expect_error):
     with expect_error(TypeError, r"the dataloader passed \(list_iterator\) has no set_state_dict"):
         check_train_state(stored, dataloader=iter([]), world_rank=1)
     check_train_state(stored, dataloader=iter([]), world_rank=2)  # nothing stored for it: nothing to restore it with
+
+
+def test_a_rank_that_leaves_state_another_rank_restores_unread_warns():
+    """A rank that passes no scheduler or dataloader while another rank passes one warns when the checkpoint holds
+    state for it, which goes unread. It stays quiet when no rank passes one (an evaluation load), when it passes one
+    itself, and when the checkpoint holds nothing for it."""
+    stored = {"scheduler": {"m_last_step": 3}, "dataloader_ranks": {"0": {"position": 4}, "1": {"position": 5}}}
+    both = passed_components(scheduler=object(), dataloader=Loader())
+    assert (both, passed_components(dataloader=Loader()), passed_components()) == (3, 2, 0)
+    with pytest.warns(UserWarning) as record:
+        warn_unread_train_state(stored, [both, 0], rank=1, world_rank=1)
+    assert [str(w.message) for w in record] == [
+        f"rank(s) [0] of 2 restore a {name}, but rank 1 passes none: the {name} state the checkpoint holds for it is "
+        "not restored"
+        for name in ("scheduler", "dataloader")
+    ]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        warn_unread_train_state(stored, [0, 0], rank=1, world_rank=1)
+        warn_unread_train_state(stored, [both, both], scheduler=object(), dataloader=Loader(), rank=1, world_rank=1)
+        warn_unread_train_state(stored, [2, 0], rank=1, world_rank=2)  # no dataloader state stored for world rank 2
+        warn_unread_train_state({}, [both, 0], rank=1, world_rank=1)
 
 
 def test_component_without_state_setter_is_refused(expect_error):

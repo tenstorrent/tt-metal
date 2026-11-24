@@ -20,7 +20,9 @@ The dataloader state is stored once (``"dataloader"``) when every rank's is the 
 (``"dataloader_ranks"``) when the ranks' differ, as data-parallel loaders that keep a seed or a shard of their own do.
 A rank then restores its own; one the checkpoint holds none for (a world with more ranks than the save, or a rank
 that saved without a dataloader) is missing it, which a strict load refuses: a loader that starts over while the
-others resume would repeat data without a word.
+others resume would repeat data without a word. The reverse, a rank that passes no dataloader (or scheduler) while
+another rank passes one and the checkpoint holds state for it, is allowed, since ``load`` restores what it is passed,
+but warns: the state goes unread.
 
 ``load`` checks what it can before it touches anything (the RNG block's format, and that this rank's entry decodes)
 and restores in an order that keeps a refusal cheap: the scheduler first (its ``set_state_dict`` leaves it unchanged
@@ -317,6 +319,33 @@ def missing_train_state_error(missing: list[str], *, rng_by_default: bool) -> Mi
             "pass rng=False to keep the current ones (a checkpoint saved with rng=False has none)"
         )
     return MissingKeyError(message)
+
+
+_PASSED_BITS = (("scheduler", 1), ("dataloader", 2))
+
+
+def passed_components(*, scheduler=None, dataloader=None) -> int:
+    """What a rank passes ``load``, as the bits ``load`` gathers from every rank: 1 a scheduler, 2 a dataloader."""
+    components = {"scheduler": scheduler, "dataloader": dataloader}
+    return sum(bit for name, bit in _PASSED_BITS if components[name] is not None)
+
+
+def warn_unread_train_state(
+    state: dict, passed: list[int], *, scheduler=None, dataloader=None, rank: int = 0, world_rank: int = 0
+) -> None:
+    """Warn when another rank restores a scheduler or dataloader that this rank passes none of, while the checkpoint
+    holds state for this rank: that state goes unread, more likely forgotten on this rank than left out on purpose.
+    ``passed`` holds every rank's ``passed_components``. A load where no rank passes one (an evaluation) stays quiet."""
+    components = {"scheduler": scheduler, "dataloader": dataloader}
+    held = {"scheduler": "scheduler" in state, "dataloader": dataloader_state(state, world_rank)[0]}
+    for name, bit in _PASSED_BITS:
+        others = [r for r, bits in enumerate(passed) if bits & bit]
+        if components[name] is None and others and held[name]:
+            warnings.warn(
+                f"rank(s) {others} of {len(passed)} restore a {name}, but rank {rank} passes none: the {name} state "
+                "the checkpoint holds for it is not restored",
+                stacklevel=2,
+            )
 
 
 def check_train_state(state: dict, *, scheduler=None, dataloader=None, rng: bool = False, world_rank: int = 0) -> None:

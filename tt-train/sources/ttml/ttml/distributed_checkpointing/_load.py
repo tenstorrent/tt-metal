@@ -53,8 +53,10 @@ from ._train_state import (
     check_train_state,
     missing_train_state,
     missing_train_state_error,
+    passed_components,
     restore_train_state,
     train_state_of,
+    warn_unread_train_state,
 )
 
 
@@ -425,8 +427,9 @@ def load(
     ``optimizer`` is passed) without a live tensor, is an error; otherwise they are listed in the result. Optimizer
     scalars (steps, learning rates) are restored through ``set_state_dict``. ``scheduler`` and ``dataloader`` are
     restored through their ``set_state_dict`` from the state ``save`` stored (a dataloader from this world rank's own
-    when the saving ranks' states differed). With ``rng`` so is every random generator
-    ``save`` captured for this world rank (ttml, ttml.init, python, numpy, torch when imported). By default (``None``)
+    when the saving ranks' states differed); a rank that passes none while another rank passes one leaves the state
+    stored for it unread, with a warning. With ``rng`` so is every random generator ``save`` captured for this world
+    rank (ttml, ttml.init, python, numpy, torch when imported). By default (``None``)
     the generators are restored whenever a scheduler or a dataloader is, on any rank, since a resume that restores
     those but keeps the current generators takes a different step (a rank that passes neither, while another rank
     resumes its dataloader, restores its generators too); ``rng=False`` keeps them (a deliberate reseed), ``rng=True``
@@ -478,9 +481,9 @@ def load(
     )
     # A resume: the generators come back with the scheduler or the dataloader, which some ranks may not pass (a
     # dataloader on rank 0 alone): the default is agreed, so the ranks of one training restore theirs together.
-    resuming = group.allgather(int(scheduler is not None or dataloader is not None))
+    passed = group.allgather(passed_components(scheduler=scheduler, dataloader=dataloader))
     if rng_by_default:
-        rng = any(resuming)
+        rng = any(passed)
 
     def open_and_collect():
         if not is_complete(ckpt_dir):
@@ -496,6 +499,9 @@ def load(
         if strict and missing_state:
             raise missing_train_state_error(missing_state, rng_by_default=rng_by_default)
         check_train_state(train_state, scheduler=scheduler, dataloader=dataloader, rng=rng, world_rank=world_rank)
+        warn_unread_train_state(
+            train_state, passed, scheduler=scheduler, dataloader=dataloader, rank=group.rank, world_rank=world_rank
+        )
         fsdp_states = reshard_fsdp_modules(model)
         # A sharded FSDP module's cached shards are its current values: drop them now, so every value the load
         # replaces is freed as it is replaced instead of at the end (the next forward rebuilds the cache).

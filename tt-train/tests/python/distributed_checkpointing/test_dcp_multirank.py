@@ -22,6 +22,7 @@ import gc
 import os
 import random
 import shutil
+import warnings
 
 import numpy as np
 import pytest
@@ -308,24 +309,21 @@ def test_a_rank_that_placed_its_tensors_says_so_when_another_rank_fails(two_rank
 
 def test_differing_dataloaders_are_stored_per_rank(two_ranks, expect_error):
     """Data-parallel loaders keep a position (a seed, a shard) of their own: the ranks' differing states are stored
-    per world rank, and each rank restores its own. A rank that passes no dataloader leaves its stored state unread,
-    which a strict load allows; a rank that saved without a dataloader has no state to restore, which a strict load
-    with one refuses on every rank."""
+    per world rank, and each rank restores its own. A rank that saved without a dataloader has no state to restore,
+    which a strict load with one refuses on every rank. A rank that passes no dataloader or scheduler while the other
+    passes one leaves the state stored for it unread, which a strict load allows with a warning."""
     rank, local, root = two_ranks
     model, params, opt = fresh_tp(DIM)
     loader = Loader()
     for _ in range(3 + rank):
         loader.advance()
-    path = os.path.join(root, "per_rank_loaders")
-    dcp.save(path, model=model, dataloader=loader)
-    stored = dcp.read_train_state(path)
+    per_rank = os.path.join(root, "per_rank_loaders")
+    dcp.save(per_rank, model=model, scheduler=CosineAnnealingScheduler(opt, T_max=8), dataloader=loader)
+    stored = dcp.read_train_state(per_rank)
     assert stored["dataloader_ranks"] == {"0": {"position": 3}, "1": {"position": 4}} and "dataloader" not in stored
     resumed = Loader()
-    assert "dataloader" in dcp.load(path, model=model, dataloader=resumed, rng=False).restored
+    assert "dataloader" in dcp.load(per_rank, model=model, dataloader=resumed, rng=False).restored
     assert resumed.position == 3 + rank, "each rank restores its own"
-
-    restored = dcp.load(path, model=model, dataloader=Loader() if rank == 0 else None, rng=False).restored
-    assert ("dataloader" in restored) == (rank == 0), "rank 1's stored state goes unread, and strict allows that"
 
     path = os.path.join(root, "one_loader")
     dcp.save(path, model=model, dataloader=loader if rank == 0 else None)
@@ -335,6 +333,18 @@ def test_differing_dataloaders_are_stored_per_rank(two_ranks, expect_error):
         r"reading the index and collecting the live tensors failed on rank\(s\) \[1\] of 2: .*train_state/dataloader",
     ):
         dcp.load(path, model=model, dataloader=Loader(), rng=False)
+
+    # Last, after the test's other collectives: the ranks expect different outcomes here, and a rank that failed
+    # before a collective would leave the other rank waiting in it.
+    sched, resumed = (CosineAnnealingScheduler(opt, T_max=8), Loader()) if rank == 0 else (None, None)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        restored = dcp.load(per_rank, model=model, scheduler=sched, dataloader=resumed, rng=False).restored
+    assert {"scheduler", "dataloader"} & set(restored) == ({"scheduler", "dataloader"} if rank == 0 else set())
+    unread = [str(w.message).split(",")[0] for w in caught if "passes none" in str(w.message)]
+    assert unread == (
+        [] if rank == 0 else [f"rank(s) [0] of 2 restore a {name}" for name in ("scheduler", "dataloader")]
+    )
 
 
 def test_the_ranks_restore_their_generators_together_when_one_alone_resumes_a_dataloader(two_ranks):
