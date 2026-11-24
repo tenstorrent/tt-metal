@@ -804,8 +804,19 @@ __attribute__((noinline)) void run(DownstreamConnections& downstreams) {
         if constexpr (telemetry::any_option) {
             telemetry::round_start</*SENDER=*/false>();
         }
-        for (size_t n = 0; n < iterations_between_ctx_switch_and_teardown_checks; n++) {
-            pass(loop_copy, credit_frame_due, states, credits, downstreams, my_chip);
+        if constexpr (follows_within_round && iterations_between_ctx_switch_and_teardown_checks > FOLLOW_POLL_PASSES) {
+            for (size_t c = 0; c < iterations_between_ctx_switch_and_teardown_checks / FOLLOW_POLL_PASSES; c++) {
+                for (size_t n = 0; n < FOLLOW_POLL_PASSES; n++) {
+                    pass(loop_copy, credit_frame_due, states, credits, downstreams, my_chip);
+                }
+                if (context_switch_requested()) [[unlikely]] {
+                    break;  // end the round: end_round acks the switch
+                }
+            }
+        } else {
+            for (size_t n = 0; n < iterations_between_ctx_switch_and_teardown_checks; n++) {
+                pass(loop_copy, credit_frame_due, states, credits, downstreams, my_chip);
+            }
         }
         end_round(round, true);
         if constexpr (telemetry::any_option) {
