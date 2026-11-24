@@ -90,25 +90,8 @@ inline void wait_for_next_context(const std::uint32_t num_contexts)
 inline void switch_config_context(std::uint32_t &unp_cfg_context)
 {
     namespace cfg = hal::cfg;
-    // Switch config context. Both offsets take the new context id (0 or 1), so one runtime SETC16 of
-    // ctx * (bit of offset 0 | bit of offset 1) replaces the per-tile branch between two immediate encodings.
-    constexpr std::uint32_t both_offsets_one = field_bits<cfg::UnpackMiscCfg::CfgContextOffset_0>(1) | field_bits<cfg::UnpackMiscCfg::CfgContextOffset_1>(1);
-    const std::uint32_t next_context         = 1 - unp_cfg_context;
-    LLK_ASSERT(next_context <= 1, "unpack config context must be 0 or 1");
-    unp_cfg_context = next_context;
-    cfg::write_thread_word<cfg::Access::TensixCfgUnit, cfg::UnpackMiscCfg::CfgContextOffset_0, cfg::Sec::S0>(next_context * both_offsets_one);
-}
-
-/**
- * @brief @ref switch_config_context as production writes it: a branch between the two immediate SETC16 encodings.
- *
- * For tile loops where the context is known per path (hadamard always switches 0 -> 1) or that are bound by the RISC
- * between the semaphore poll and the SETC16 (tilize 8-bit path): the runtime-encoded SETC16 of the branch-free form
- * is an instruction-buffer store computed on the RISC, and cost those loops up to 13%. Other loops are faster branch-free.
- */
-inline void switch_config_context_branched(std::uint32_t &unp_cfg_context)
-{
-    namespace cfg   = hal::cfg;
+    // Switch config context. Branch between the two immediate SETC16 encodings, as production: a runtime-encoded
+    // SETC16 is an instruction-buffer store computed on the RISC, which costs cycles on RISC-bound unpack loops.
     unp_cfg_context = 1 - unp_cfg_context;
     if (unp_cfg_context == 0)
     {
