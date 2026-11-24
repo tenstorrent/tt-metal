@@ -18,7 +18,7 @@ pcie_aer, whose phases are left out of the report when there is nothing to run.
 
 Where the steps a tier can name are defined:
 
-    resets, post_test_resets  tt-smi flags: "-glx_reset" (never "-r" on a Galaxy)
+    resets, post_test_resets  tt-smi flags: "-glx_reset" only
     tests                     TESTS (gtest) and PYTESTS (pytest) in diag/device_tests.py, then
                               LOAD_TESTS (the galaxy load) in diag/busbar.py
     triage                    TRIAGE_TOOLS in diag/triage.py

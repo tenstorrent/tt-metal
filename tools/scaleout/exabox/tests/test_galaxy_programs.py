@@ -25,7 +25,7 @@ TESTS_DIR = Path(__file__).resolve().parent
 GALAXY_DIR = TESTS_DIR.parent / "health_check_test_suite" / "galaxy"
 sys.path.insert(0, str(GALAXY_DIR))
 
-DEVICE_PACKAGES = {"numpy", "torch", "ttexalens", "ttnn", "tt_umd", "yaml"}
+DEVICE_PACKAGES = {"numpy", "pyluwen", "torch", "ttexalens", "ttnn", "tt_umd", "yaml"}
 FILES = sorted(GALAXY_DIR.glob("*.py"))
 LOCAL = {f.stem for f in FILES}
 

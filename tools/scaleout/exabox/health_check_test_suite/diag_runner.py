@@ -46,6 +46,7 @@ from diag.busbar import LOAD_TESTS, OVERRIDES, STEPS, link_fault, plan as busbar
 from diag.eth_status import run_eth_status  # noqa: E402
 from diag.links import name_chips, run_links  # noqa: E402
 from diag.eth_summary import SUMMARY_FILE, render_eth_summary  # noqa: E402
+from diag.firmware import firmware_check  # noqa: E402
 from diag.hsc import judge_hsc, read_hsc_status  # noqa: E402
 from diag.model import FAIL, PASS, SKIP, WARN, Check, Phase  # noqa: E402
 from diag.qsfp import QSFP_TOOL_BIN, run_qsfp_tests  # noqa: E402
@@ -409,14 +410,20 @@ def run_diag(
     # store-only forensics alongside the chip-level snapshot checks; runs even
     # when the tt-smi snapshot itself failed.
     collect_fru_info(snap_phase, dry_run)
-    # The post-test reset (phase 4), and after it, with the galaxy load or --stage-order, the end sequence. Its SEL
-    # read is judged against the one taken here.
+    # The post-test reset (phase 4), and after it, with the galaxy load or --stage-order, the end sequence. Before
+    # it, the firmware reads and the SEL; its SEL read is judged against the one taken here.
     post_test_plan = () if skip_reset or (skip_triage and stage_order is None) else plan.post_test_resets
     end_seq = bool(post_test_plan) and (plan.galaxy_load or stage_order is not None)
     live = not (input_snapshot or dry_run)
     sel_before, sel_why = read_sel() if end_seq and live else (None, "")
     if end_seq and live:
         snap_phase.add(history_check(sel_before, sel_why, time.time()))
+        _guarded(
+            snap_phase,
+            "firmware_reads",
+            WARN,
+            lambda: snap_phase.add(firmware_check(output.resolve().parent / "logs" / "firmware")),
+        )
     _finish(report, snap_phase, t0, summary=True)
 
     # Where every phase drops its raw tool output. Derived once: the reset

@@ -23,7 +23,7 @@ SUITE_DIR = TESTS_DIR.parent / "health_check_test_suite"
 sys.path.insert(0, str(SUITE_DIR))
 
 import tiers  # noqa: E402
-from diag import resets, sel  # noqa: E402
+from diag import firmware, resets, sel  # noqa: E402
 from diag.aer import AerWindow, aer_check, aer_new, read_aer  # noqa: E402
 from diag.galaxy import TRAY_TO_UBB_NIBBLE, expected_bdf  # noqa: E402
 from diag.model import FAIL, PASS, SKIP, WARN, Phase  # noqa: E402
@@ -201,6 +201,25 @@ class TestStageOrder(unittest.TestCase):
         for order in ("links,busbar", "end,reset", "busbar_mix,busbar_qb"):
             with self.subTest(order=order), self.assertRaisesRegex(ValueError, "the stages run in the order"):
                 tiers.select_stages(tiers.TIERS["weekly"], order)
+
+
+class TestFirmwareReads(unittest.TestCase):
+    def test_reads_that_could_not_be_made_are_a_skip_with_every_chip_listed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for n, bdf in enumerate(("0000:01:00.0", "0000:41:00.0")):
+                dev = root / "devices" / bdf
+                dev.mkdir(parents=True)
+                node = root / "class/tenstorrent" / f"tenstorrent!{n}"
+                node.mkdir(parents=True)
+                (node / "device").symlink_to(dev)
+            no_device = lambda argv, out: out.write_text('{"err": "no device in tests"}\n')  # noqa: E731
+            with mock.patch.object(firmware, "SYS", root), mock.patch.object(firmware, "_step", no_device):
+                c = firmware.firmware_check(root / "out")
+            self.assertIn("C1 INFO SPI images not checked: no device in tests", c.data["not_checked"])
+            self.assertEqual((root / "out/chips.txt").read_text(), "0000:01:00.0 0\n0000:41:00.0 1\n")
+            self.assertEqual((root / "out/trays.txt").read_text(), "01:00.0 tray 1\n41:00.0 tray 2\n")
+        self.assertEqual((c.name, c.status, c.data["findings"]), ("firmware_reads", SKIP, []))
 
 
 def _sel(when, sensor, event, state="Asserted"):

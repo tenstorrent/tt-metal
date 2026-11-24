@@ -525,6 +525,8 @@ class TestLinks(unittest.TestCase):
         ), mock.patch.object(
             diag_runner, "read_sel", return_value=(None, "not read in tests")
         ), mock.patch.object(
+            diag_runner, "firmware_check", return_value=Check(name="firmware_reads", status=SKIP)
+        ), mock.patch.object(
             diag_runner, "collect_fru_info"
         ), mock.patch.object(
             diag_runner, "run_triage"

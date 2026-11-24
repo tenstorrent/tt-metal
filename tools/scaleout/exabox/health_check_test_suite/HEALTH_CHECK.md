@@ -263,7 +263,9 @@ tray is short. A reset that cannot run here (not root and no `sudo -n -l` entry 
 post-test reset is followed by the end sequence: `--end-delay-s` (60 s) of quiet, one fabric open and close with a
 10 s DRAM byte/DBI readback (`end_fabric`), the AER errors over it (`end_aer`), and one more `glx_reset` when either
 fails. The BMC SEL is read before the tests (`sel_history`: the last 7 days) and after the end sequence (`sel_new`: a
-thermal trip FAILs its tray, any other new FRB, power, voltage or temperature event is a WARN).
+thermal trip FAILs its tray, any other new FRB, power, voltage or temperature event is a WARN). Before the tests the
+firmware reads (`firmware_reads`, galaxy/fw_reads.py) check each chip's SPI boot-fs checksums (FAIL), its ETH mailbox
+firmware version and heartbeat and its TLB readback against the other chips (WARN).
 
 The reset cadence and test set per tier are in `tiers.py`; the gtest filters and
 pytest invocations themselves are `TESTS` / `PYTESTS` in `diag/device_tests.py`.
