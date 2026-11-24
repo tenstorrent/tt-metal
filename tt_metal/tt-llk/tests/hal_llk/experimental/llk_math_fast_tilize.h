@@ -2,10 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// HAL port of tt_llk_blackhole/llk_lib/experimental/llk_math_fast_tilize.h. Same Tensix instruction sequence and
+// access kinds as production, expressed through the HAL.
+
 #pragma once
 
 #include <cstdint>
 
+#include "hal/cfg.h"
+#include "hal/counters/rwc.h"
+#include "hal/mop.h"
+#include "hal/move.h"
+#include "hal/sync.h"
+#include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
 
 // ============================================================================
@@ -41,28 +50,35 @@ inline void _llk_math_fast_tilize_init_([[maybe_unused]] const std::uint32_t unp
     // used for accumulation precision, not for the data path through fast-tilize.
     if constexpr (is_fp32_dest_acc_en)
     {
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
+        hal_port::set_fp32_enabled<0>();
     }
 
     // Enable SrcA bank return in SETRWC(CLR_A). Without this, SETRWC flips the
     // bank pointer but does NOT return the bank to Unpackers, causing a livelock
     // when the Unpacker runs out of free banks.
-    TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
+    // TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0): both fields of the word
+    hal::cfg::write<hal::cfg::Access::TensixCfgUnit>(
+        hal::cfg::set<hal::cfg::ClrDvalid::SrcA_Disable, hal::cfg::Sec::S0, 0>(), hal::cfg::set<hal::cfg::ClrDvalid::SrcB_Disable, hal::cfg::Sec::S0, 0>());
 
     // srca incr=8 (contiguous SrcA), dest incr=16 (8 data + 8 gap in DEST for pack stride-16)
-    addr_mod_t {
-        .srca = {.incr = 8},
-        .srcb = {.incr = 0},
-        .dest = {.incr = 16},
-    }
-        .set(ADDR_MOD_2);
+    hal_port::set_math_addr_mod<hal::cfg::Sec::S2, hal_port::MathAddrMod {.srca_incr = 8, .dest_incr = 16}>();
 
     // outerloop=4 (4 dvalids per unit), innerloop=8 (8 MOVA2D per dvalid).
     // SETRWC in end_op clears/flips SrcA between dvalids; DEST RWC keeps
     // advancing across outer loops. Single run() per unit.
-    ckernel_template tmp(4, 8, TT_OP_MOVA2D(0, 0, ADDR_MOD_2, p_mova2d::MOV_8_ROWS, 0));
-    tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_A));
-    tmp.program();
+    namespace mop  = hal::mop;
+    namespace move = hal::move;
+    namespace rwc  = hal::counters::rwc;
+    // TT_OP_MOVA2D(0, 0, ADDR_MOD_2, MOV_8_ROWS, 0)
+    constexpr std::uint32_t mova2d_8_rows =
+        move::Transfer<move::SrcA, move::Dst> {.source_row = 0, .destination_row = 0, .address_mode = ADDR_MOD_2, .number_of_rows = move::rows::Eight}
+            .get_operation();
+    // TT_OP_SETRWC(CLR_A, 0, 0, 0, 0, SET_A)
+    constexpr std::uint32_t setrwc_clr_a = rwc::MathCounter {.src_a = rwc::Set(0), .flip = rwc::Src::A}.operation();
+    static_assert(mova2d_8_rows == TT_OP_MOVA2D(0, 0, ADDR_MOD_2, p_mova2d::MOV_8_ROWS, 0), "MOVA2D encoding");
+    static_assert(setrwc_clr_a == TT_OP_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_A), "SETRWC encoding");
+    // end_op0 = SETRWC, end_op1 = NOP (as set_end_op), so every MopCfg word production writes is written.
+    mop::program(mop::loop(4, mop::loop(8, mova2d_8_rows), setrwc_clr_a, TT_OP_NOP));
 }
 
 // One call = one row-chunk (one MOP run). num_units loop removed; block
@@ -78,12 +94,12 @@ inline void _llk_math_fast_tilize_block_(
     // thread, but fast-tilize unpack uses counter-based addressing and never reads
     // the mailbox. After ~4 unread writes the mailbox FIFO fills and math RISC-V
     // deadlocks. SrcRegs uses TT_SETC16 to set DEST offset directly.
-    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
+    hal_port::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 
     // 1 MOP = 4 dvalids x 8 MOVA2D + 4 SETRWC(CLR_A)
-    ckernel_template::run();
+    hal::mop::Runner<hal::mop::MopTemplate::Template1>::run();
 
-    math::clear_dst_reg_addr();
+    hal_port::clear_dst_reg_addr();
 }
 
 template <bool is_fp32_dest_acc_en>
@@ -92,7 +108,7 @@ inline void _llk_math_fast_tilize_uninit_([[maybe_unused]] const std::uint32_t u
     // Restore fp32 dest mode if it was cleared in init
     if constexpr (is_fp32_dest_acc_en)
     {
-        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
+        hal::sync::wait::stall<hal::sync::StallTarget::Config, hal::sync::StallCondition::MathIdle | hal::sync::StallCondition::SfpuIdle>();
+        hal_port::set_fp32_enabled<1>();
     }
 }
