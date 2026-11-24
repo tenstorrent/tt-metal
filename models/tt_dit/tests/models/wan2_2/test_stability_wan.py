@@ -15,7 +15,7 @@ from ....utils.test import line_params, ring_params
 
 
 @pytest.mark.parametrize(
-    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
+    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, offload_weights, device_params, topology, is_fsdp",
     [
         [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
         # WH (ring) on 4x8
@@ -42,7 +42,7 @@ from ....utils.test import line_params, ring_params
     ],
 )
 def test_stability(
-    mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, topology, is_fsdp, width, height
+    mesh_device, mesh_shape, sp_axis, tp_axis, num_links, offload_weights, topology, is_fsdp, width, height
 ):
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
@@ -76,7 +76,8 @@ def test_stability(
         num_frames=num_frames,
         config_overrides={
             "num_links": num_links,
-            "dynamic_load": dynamic_load,
+            "offload_weights": offload_weights,
+            "trace": False,
             "topology": topology,
             "is_fsdp": is_fsdp,
         },

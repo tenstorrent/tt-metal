@@ -137,33 +137,40 @@ class MiniMaxH3TurboPipeline(MiniMaxH3Pipeline):
             **kwargs,
         )
 
-    def __call__(self, prompt: str, *, num_inference_steps: int | None = None, **kwargs):
+    def _run(self, prompt: str, *, num_inference_steps: int | None = None, **kwargs):
         """`num_inference_steps=None` takes a HyperFlow adapter's own grid; a plain Turbo adapter
         publishes none, so it keeps the base pipeline's default."""
         if num_inference_steps is None and self.hyperflow is not None:
             num_inference_steps = self.hyperflow.num_grid_points
         if num_inference_steps is not None:
             kwargs["num_inference_steps"] = num_inference_steps
-        return super().__call__(prompt, **kwargs)
+        return super()._run(prompt, **kwargs)
 
     def _dit_weight_mode(self) -> str:
-        return f"{super()._dit_weight_mode()}_{self.lora_path.stem}_{self._lora_digest[:12]}_x{self.lora_strength!r}"
+        mode = f"{super()._dit_weight_mode()}_{self.lora_path.stem}_{self._lora_digest[:12]}_x{self.lora_strength!r}"
+        # A HyperFlow transformer is cached with its adapted float32 time embedder; the suffix names that content.
+        return f"{mode}_f32temb" if self.hyperflow is not None else mode
 
     def _read_safetensors(self, subfolder: str) -> dict[str, torch.Tensor]:
         state = super()._read_safetensors(subfolder)
         if subfolder != self.transformer_subfolder:
             return state
-        host_prefixes = HYPERFLOW_HOST_PREFIXES if self.hyperflow is not None else ()
+        base_embedder, endpoint_embedder = HYPERFLOW_HOST_PREFIXES if self.hyperflow is not None else ((), ())
         generator = torch.Generator().manual_seed(0)
         merged = 0
         for key, delta in iter_h3_host_deltas(str(self.lora_path), ("",), scale=self.lora_strength):
-            if key.startswith(host_prefixes):
+            if key.startswith(endpoint_embedder):
+                # Not a weight of the transformer: `_prepare_transformer` builds the endpoint embedder.
                 continue
             weight = state.get(key)
             if weight is None:
                 raise KeyError(f"turbo adapter target {key} is not in the {self.transformer_subfolder} checkpoint")
             if weight.shape != delta.shape:
                 raise ValueError(f"turbo adapter target {key}: delta {tuple(delta.shape)} != {tuple(weight.shape)}")
+            if key.startswith(base_embedder):
+                # Float32 on device, so the delta is added unrounded. Not one of the rounded targets counted here.
+                state[key] = weight.float() + delta
+                continue
             if weight.dtype == torch.bfloat16:
                 state[key] = _round_bf16_stochastic(weight.float() + delta, generator)
             else:
@@ -192,13 +199,10 @@ class MiniMaxH3TurboPipeline(MiniMaxH3Pipeline):
             )
             endpoint.load_torch_state_dict(self._time_embedder_states["endpoint_time_embedder"])
             transformer.two_time = MiniMaxH3TwoTime(embedder=endpoint, gate=contract.gate)
-            transformer.time_embedder.load_torch_state_dict(self._time_embedder_states["time_embedder"])
             logger.info(
                 f"hyperflow: {contract.num_forwards} forwards, gate {contract.gate:g}, "
                 "both time embedders fused in float32"
             )
-        elif not self.coresident:
-            transformer.time_embedder.load_torch_state_dict(self._time_embedder_states["time_embedder"])
         return transformer
 
     def _fused_time_embedder_states(self) -> dict[str, dict[str, torch.Tensor]]:

@@ -63,6 +63,10 @@ The adapter paths are constructor arguments, so build the config with
 `default_config` (which pins the I2V model type and checkpoint) and construct the
 pipeline directly.
 
+`default_config` leaves `trace` at its default: on for meshes that keep their weights resident. Pass
+`config_overrides={"trace": False}` to run eager. If weights are re-seeded after the first call, call
+`pipe.release_traces()` before the next call.
+
 ```python
 from models.tt_dit.experimental.pipelines.pipeline_wan_lora import LoRASpec, WanPipelineI2VLora
 

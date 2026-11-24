@@ -89,6 +89,7 @@ def test_motif_pipeline(
     pipeline = MotifPipeline(
         device=mesh_device,
         config=MotifPipelineConfig.default(
+            trace=traced,
             dit_parallel_config=DiTParallelConfig.from_tuples(cfg=cfg, sp=sp, tp=tp),
             encoder_parallel_config=EncoderParallelConfig.from_tuple(encoder_tp),
             vae_parallel_config=VAEParallelConfig.from_tuple(vae_tp),
@@ -134,7 +135,6 @@ def test_motif_pipeline(
                 prompts=[prompt],
                 num_inference_steps=num_inference_steps,
                 seed=seed,
-                traced=traced,
                 vae_traced=False,
                 encoder_traced=False,
                 on_event=profiler_event_callback(benchmark_profiler, 0),

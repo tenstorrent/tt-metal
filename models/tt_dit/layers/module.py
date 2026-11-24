@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import time
+import weakref
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple, overload
@@ -93,6 +94,8 @@ class Module(ABC):
         self._is_loaded = False
         self.coresident_exclusions = None  # modules that cannot be resident in memory at the same time as this module. They should be deallocated before this module is loaded.
         self._coresident_peers: list[Module] = []
+        # Set by the pipeline that registered the exclusions: how it wants them evicted.
+        self._exclusion_evictor: Callable[[], Callable[[Module], None] | None] | None = None
         self._eviction_hooks: list[Callable[[], None]] = []
 
     def named_children(self) -> Iterator[tuple[str, Module]]:
@@ -208,6 +211,8 @@ class Module(ABC):
     def load_torch_state_dict(self, state_dict: Mapping[str, torch.Tensor], *, strict: bool = True) -> IncompatibleKeys:
         """Load PyTorch state dict into module parameters.
 
+        A module that is already loaded evicts its coresident exclusions and is not loaded again.
+
         Args:
             state_dict: Mapping of parameter names to PyTorch tensors.
             strict: If `True`, raises ValueError on missing or unexpected keys.
@@ -215,9 +220,17 @@ class Module(ABC):
         Returns:
             `IncompatibleKeys` containing lists of missing and unexpected keys.
         """
+        self.evict_coresident_exclusions()
+        if self._is_loaded:
+            # Loads through `cache.load_model` return before this for a resident module, so a caller
+            # that gets here expected its state to replace the loaded weights.
+            logger.warning(
+                f"{type(self).__name__}: load_torch_state_dict skipped, the module is already loaded. "
+                "Call deallocate_weights() first to load other weights."
+            )
+            return IncompatibleKeys([], [])
         missing_keys = []
         unexpected_keys = []
-        self.evict_coresident_exclusions()
         with _Watchdog(f"convert {type(self).__name__}"):
             self._load_torch_state_dict_inner(
                 state_dict,
@@ -255,6 +268,12 @@ class Module(ABC):
     def load(self, directory: str | Path, /, *, prefix: str = "") -> None:
         directory = Path(directory)
 
+        self.evict_coresident_exclusions()
+        if self._is_loaded:
+            if prefix == "":
+                logger.debug(f"{type(self).__name__}: cache load skipped, the module is already loaded")
+            return
+
         # Top-level only: announce the cache load and arm a timer watchdog so a slow/stalled
         # module load is never silent. Signature is left untouched — subclasses (Mochi/Wan)
         # override this method.
@@ -263,8 +282,6 @@ class Module(ABC):
             logger.info(f"loading {self._num_parameters()} cached weight tensors from '{directory}'...")
             watchdog = _Watchdog(f"load-cache {type(self).__name__}").__enter__()
         try:
-            self.evict_coresident_exclusions()
-
             for name, child in self.named_children():
                 child.load(directory, prefix=f"{prefix}{name}.")
 
@@ -372,10 +389,13 @@ class Module(ABC):
     def is_loaded(self) -> bool:
         return self._is_loaded
 
-    def register_coresident_exclusions(self, *args: Module) -> None:
+    def _register_coresident_exclusions(self, *args: Module) -> None:
         """
         Register modules that cannot be resident in memory at the same time as this module.
         They should be deallocated before this module is loaded. See `evict_coresident_exclusions` .
+
+        Called through `Pipeline.register_coresident_exclusions`, which also gives this module the
+        pipeline's way to evict them: a pipeline that traces releases its traces first.
         Args:
             *args: Modules that cannot be co-resident in memory with this module.
         """
@@ -385,8 +405,13 @@ class Module(ABC):
 
     def evict_coresident_exclusions(self) -> None:
         """Evict the modules that cannot be resident in memory at the same time as this module."""
-        if self.coresident_exclusions is not None:
-            for module in self.coresident_exclusions:
+        if self.coresident_exclusions is None:
+            return
+        evict = self._exclusion_evictor() if self._exclusion_evictor is not None else None
+        for module in self.coresident_exclusions:
+            if evict is not None:
+                evict(module)
+            else:
                 module.deallocate_weights()
 
     @abstractmethod
@@ -486,6 +511,12 @@ class UnregisteredModule:
         return self.module(*args, **kwargs)
 
 
+# The tracer capturing right now, if any. A trace bakes in the addresses of the weights it reads, so
+# each parameter read during a capture remembers the tracer, and tells it when those weights go away.
+# One slot: a capture that starts during another one, nested or concurrent, is not supported.
+_capturing_tracer: Any | None = None
+
+
 class Parameter:
     def __init__(
         self,
@@ -547,6 +578,7 @@ class Parameter:
         self.mesh_axes = mesh_axes
         self.on_host = on_host
         self._data = None
+        self._tracers: weakref.WeakSet[Any] = weakref.WeakSet()
 
     @property
     def local_shape(self) -> tuple[int, ...]:
@@ -597,11 +629,15 @@ class Parameter:
             axes = [self.mesh_axes[d] for d in self.transient_dims()]
             msg = f"parameter is transiently sharded over mesh axes {axes}; gather it first"
             raise RuntimeError(msg)
+        if _capturing_tracer is not None:
+            _capturing_tracer.watch(self)
         return self._data
 
     @data.setter
     def data(self, value: ttnn.Tensor) -> None:
         self._check_data(value)
+        if self._data is not None:
+            self._invalidate_traces("replaced")
         self._data = value
 
     def deallocate(self) -> None:
@@ -609,7 +645,13 @@ class Parameter:
         if self._data is not None:
             ttnn.deallocate(self._data)
             self._data = None
+            self._invalidate_traces("deallocated")
         self.mesh_axes = self.durable_mesh_axes
+
+    def _invalidate_traces(self, change: str) -> None:
+        """Mark the traces that read this parameter at capture as stale: its data was freed or moved."""
+        for tracer in tuple(self._tracers):
+            tracer.invalidate(f"a weight of shape {self.total_shape} that the trace read at capture was {change}")
 
     def is_transiently_sharded(self) -> bool:
         """Whether the parameter has a transient split e.g. via `shard`."""

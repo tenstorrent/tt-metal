@@ -68,7 +68,7 @@ class LTXOneStagePipeline(LTXPipeline):
         logger.info(f"warmup (AV) done in {time.time() - t0:.1f}s")
 
     @cap_torch_threads_to_half_the_cpus()
-    def generate(
+    def _run(
         self,
         prompt: str,
         *,

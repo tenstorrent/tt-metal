@@ -19,7 +19,7 @@ from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConf
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.pipelines.cfg import CFGCombiner, create_submeshes, distribute_cfg
 from models.tt_dit.pipelines.events import PipelineEventCallback, SectionEnd, SectionStart, null_callback
-from models.tt_dit.pipelines.pipeline_api import PipelineAPIMixin
+from models.tt_dit.pipelines.pipeline_api import Pipeline
 from models.tt_dit.solvers import EulerSolver
 from models.tt_dit.utils.mesh import reshape_device
 from models.tt_dit.utils.tensor import from_torch_to_devices
@@ -75,6 +75,11 @@ class MotifPipelineConfig:
     width: int
     cfg_enabled: bool
 
+    # Capture traces and replay them.
+    trace: bool
+    # Whether `trace` came from the default rather than from the caller.
+    trace_by_default: bool = False
+
     checkpoint_name: str
 
     @classmethod
@@ -94,6 +99,7 @@ class MotifPipelineConfig:
         height: int = 1024,
         width: int = 1024,
         cfg_enabled: bool = True,
+        trace: bool | None = None,
         checkpoint_name: str = _DEFAULT_CHECKPOINT,
     ) -> MotifPipelineConfig:
         """Build a fully populated config, picking parallelism defaults from ``mesh_shape``."""
@@ -113,11 +119,13 @@ class MotifPipelineConfig:
             height=height,
             width=width,
             cfg_enabled=cfg_enabled,
+            trace=True if trace is None else trace,
+            trace_by_default=trace is None,
             checkpoint_name=checkpoint_name,
         )
 
 
-class MotifPipeline(PipelineAPIMixin):
+class MotifPipeline(Pipeline):
     @classmethod
     def create_pipeline(
         cls,
@@ -126,10 +134,12 @@ class MotifPipeline(PipelineAPIMixin):
         width: int = 1024,
         height: int = 1024,
         cfg_enabled: bool = True,
+        trace: bool | None = None,
         checkpoint_name: str = _DEFAULT_CHECKPOINT,
     ) -> MotifPipeline:
         config = MotifPipelineConfig.default(
             mesh_shape=mesh_device.shape,
+            trace=trace,
             checkpoint_name=checkpoint_name,
             width=width,
             height=height,
@@ -138,6 +148,8 @@ class MotifPipeline(PipelineAPIMixin):
         return cls(device=mesh_device, config=config)
 
     def __init__(self, *, device: ttnn.MeshDevice, config: MotifPipelineConfig) -> None:
+        super().__init__(offload_weights=False, trace=config.trace)
+        self.warn_if_no_trace_region(device, by_default=config.trace_by_default)
         self._cfg_parallel = config.dit_parallel_config.cfg_parallel.factor != 1
         self._sp_axis = config.dit_parallel_config.sequence_parallel.mesh_axis
         self._encoder_tp = config.encoder_parallel_config.tensor_parallel
@@ -194,7 +206,7 @@ class MotifPipeline(PipelineAPIMixin):
         self.synchronize_devices()
 
         logger.info("pipeline allocation run...")
-        self(prompts=[""], num_inference_steps=2, traced=False, cfg_scale=2 if config.cfg_enabled else 1)
+        self.run_untraced(prompts=[""], num_inference_steps=2, cfg_scale=2 if config.cfg_enabled else 1)
 
     def _reshape_encoder(self) -> AbstractContextManager[None]:
         device = self._devices[0]
@@ -206,7 +218,7 @@ class MotifPipeline(PipelineAPIMixin):
 
         return reshape_device(self._devices[0], ttnn.MeshShape(*shape))
 
-    def __call__(
+    def _run(
         self,
         *,
         prompts: Sequence[str],
@@ -221,7 +233,7 @@ class MotifPipeline(PipelineAPIMixin):
         cfg_scale: float = 5.0,
         linear_quadratic_emulating_steps: int = 100,
         negative_strategy_switch_time: float = 0.85,
-        traced: bool = False,
+        traced: bool | None = None,
         # currently defaults to off due to ttnn.synchronize_device inside vae_all_gather
         vae_traced: bool | None = False,
         encoder_traced: bool | None = None,
@@ -233,6 +245,7 @@ class MotifPipeline(PipelineAPIMixin):
             msg = "cfg_scale > 1 requires CFG to be enabled"
             raise ValueError(msg)
 
+        traced = self.trace if traced is None else traced
         vae_traced = vae_traced if vae_traced is not None else traced
         encoder_traced = encoder_traced if encoder_traced is not None else traced
         on_event = on_event if on_event is not None else null_callback

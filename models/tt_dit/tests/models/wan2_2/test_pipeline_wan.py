@@ -109,7 +109,7 @@ VBENCH_THRESHOLDS = {
     [{"1": True, "0": False}.get(os.environ.get("NO_PROMPT"), False)],
 )
 @pytest.mark.parametrize(
-    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp, quant_config_name",
+    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, offload_weights, device_params, topology, is_fsdp, quant_config_name",
     [
         [(2, 2), (2, 2), 0, 1, 2, False, line_params_req_exact_devices, ttnn.Topology.Linear, True, None],
         [(2, 4), (2, 4), 0, 1, 1, True, line_params_req_exact_devices, ttnn.Topology.Linear, True, None],
@@ -123,7 +123,7 @@ VBENCH_THRESHOLDS = {
     ids=[
         "2x2sp0tp1nl2_linear_is_fsdp1",
         "2x4sp0tp1nl1_linear_is_fsdp1",
-        "2x4sp1tp0nl2_linear_is_fsdp0",  # BH on 2x4 with dynamic_load to avoid init-time DRAM OOM
+        "2x4sp1tp0nl2_linear_is_fsdp0",  # BH on 2x4 with offload_weights to avoid init-time DRAM OOM
         "4x8sp1tp0nl4_ring_is_fsdp1",  # WH (ring) on 4x8
         "4x8sp1tp0nl2_linear_is_fsdp0",  # BH (linear) on 4x8
         "4x8sp1tp0nl2_ring_is_fsdp0",  # BH (ring) on 4x8
@@ -150,7 +150,7 @@ def test_pipeline_inference(
     sp_axis,
     tp_axis,
     num_links,
-    dynamic_load,
+    offload_weights,
     topology,
     width,
     height,
@@ -211,7 +211,8 @@ def test_pipeline_inference(
             vae_parallel_config=vae_parallel_config,
             encoder_parallel_config=encoder_parallel_config,
             num_links=num_links,
-            dynamic_load=dynamic_load,
+            offload_weights=offload_weights,
+            trace=False,
             topology=topology,
             is_fsdp=is_fsdp,
             model_type=model_type,

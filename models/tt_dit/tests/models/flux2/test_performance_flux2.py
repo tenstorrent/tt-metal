@@ -62,9 +62,9 @@ _STEP_TO_METRIC = {
     ],
 )
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis, encoder_tp_axis, vae_tp_axis, topology, num_links, is_fsdp, dynamic_load, device_params",
+    "mesh_device, sp_axis, tp_axis, encoder_tp_axis, vae_tp_axis, topology, num_links, is_fsdp, offload_weights, device_params",
     [
-        # Without dynamic_load the encoder OOMs during weight conversion on 4 chips.
+        # Without offload_weights the encoder OOMs during weight conversion on 4 chips.
         [(2, 2), 0, 1, 1, 1, ttnn.Topology.Linear, 2, True, True, line_params_flux2_perf],
         [(2, 4), 0, 1, 1, 1, ttnn.Topology.Linear, 2, False, False, line_params_flux2_perf],
         [(4, 8), 0, 1, 1, 0, ttnn.Topology.Linear, 2, False, False, line_params_8k_flux2_perf],
@@ -92,7 +92,7 @@ def test_flux2_performance(
     topology: ttnn.Topology,
     num_links: int,
     is_fsdp: bool,
-    dynamic_load: bool,
+    offload_weights: bool,
     width: int,
     height: int,
     model_location_generator,
@@ -125,8 +125,9 @@ def test_flux2_performance(
         width=width,
         height=height,
         resolutions=[(width, height)],
-        dynamic_load=dynamic_load,
+        offload_weights=offload_weights,
         is_fsdp=is_fsdp,
+        # The pipeline traces exactly when it keeps its weights resident; bh_qb offloads them and runs eager.
         trace_warmup=True,
         shard_prompt=True,
     )
@@ -153,7 +154,6 @@ def test_flux2_performance(
                     prompts=[prompts[i % len(prompts)]],
                     num_inference_steps=NUM_INFERENCE_STEPS,
                     seed=42,
-                    traced=True,
                     on_event=profiler_event_callback(benchmark_profiler, i),
                 )
                 results.append(images)

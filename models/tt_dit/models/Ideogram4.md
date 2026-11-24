@@ -32,7 +32,7 @@ On a BH Galaxy (4x8), `Ideogram4Pipeline.create_pipeline(mesh_device=...)` warms
 For each of the four 2K serving sizes (`SERVING_SIZES`: 2048x2048, 2048x1152, 1152x2048, 1360x2048, as (width, height)),
 it compiles every program a request runs and captures and keeps one denoising-step trace. After that:
 
-- a request at a warmed size (`traced=True`, the default) replays its kept trace, and compiles, captures and allocates
+- a request at a warmed size (the pipeline's `trace`, on by default) replays its kept trace, and compiles, captures and allocates
   nothing;
 - a request at any other size raises `ValueError` ("size WxH was not warmed up").
 
@@ -44,7 +44,7 @@ no default resolutions and do not warm.
 
 To serve other sizes, pass them as `resolutions=[(width, height), ...]`; the VAE supports the 14 Ideogram API sizes plus
 512x512 on a BH Galaxy. `run_warmup=False` skips the warmup; a traced request then needs `pipe.warmup(sizes=[...])`
-first, while untraced requests (`traced=False`) run at any supported size until the first warmup.
+first, while untraced requests (`pipe.run_untraced(...)`) run at any supported size until the first warmup.
 
 ## Performance
 

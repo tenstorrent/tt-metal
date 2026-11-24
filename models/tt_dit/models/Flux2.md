@@ -56,8 +56,9 @@ argument left as `None`:
 | BH 4x8 (Galaxy)     | SP 4, TP 8  | TP 4, H 8 |
 
 The prompt is sharded across the SP devices (`shard_prompt=True`). FLUX.2-dev on a 2x2 mesh needs
-`is_fsdp` and `dynamic_load`; with `dynamic_load`, reloading a component releases the traces that
-depend on it, so they are captured again on the next traced call.
+`is_fsdp` and `offload_weights`. By default `create_pipeline` traces exactly when the weights stay
+resident. A pipeline asked to trace and offload releases its traces at every eviction, with a
+warning, and captures them again.
 
 ## Trace region
 

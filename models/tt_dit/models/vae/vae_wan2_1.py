@@ -2000,7 +2000,7 @@ class WanVAEDecoderAdapter:
     Applies per-channel mean/std denormalize, runs the TT-NN decoder, and transfers the result to
     host with output_type-aware pre-fn / permute. Weights are loaded via ``cache.load_model``;
     ``reload_weights``/``deallocate_weights`` are idempotent and intended to be driven by the
-    caller (e.g. via ``register_coresident_exclusions``).
+    caller (e.g. via the pipeline's ``register_coresident_exclusions``).
     """
 
     def __init__(
