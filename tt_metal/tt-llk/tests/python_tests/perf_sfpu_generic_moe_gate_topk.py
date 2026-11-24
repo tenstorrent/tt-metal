@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from conftest import blackhole_only, skip_for_wormhole
+from conftest import blackhole_only
 from helpers.param_config import parametrize
 from helpers.perf.blaze import PERF_MEASUREMENT_AXES
 from test_sfpu_generic_moe_gate_topk import (
@@ -20,7 +20,7 @@ def _perf_kwargs(perf_report, run_types, loop_factor, is_perf):
 
 
 @pytest.mark.perf
-@skip_for_wormhole
+@blackhole_only
 @parametrize(
     num_selected_experts=[4, 8, *range(9, 17)],
     full_sort=[True, False],
