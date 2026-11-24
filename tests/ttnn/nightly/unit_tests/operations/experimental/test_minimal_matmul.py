@@ -573,7 +573,10 @@ def test_linear_throttled_fused_activation(device, activation, fp32_acc):
         throttle_level=ttnn.ThrottleLevel(1),
     )
     assert check_result["pcc"] > 0.999_500
-    assert check_result["relative_rmse"] < 0.02
+    # bf16 Dest rounds the matmul output enough to flip about 0.3% of outputs across hardshrink's jump at
+    # |x| = lambda, which costs ~0.03 relative RMSE with the activation computed exactly.
+    max_relative_rmse = 0.04 if activation == "hardshrink" and not fp32_acc else 0.02
+    assert check_result["relative_rmse"] < max_relative_rmse
 
 
 @pytest.mark.parametrize(
