@@ -1093,8 +1093,7 @@ inline void perform_reduce_row_max_min_int32(std::uint32_t block_ct_dim, std::ui
 
         if (block_ct_dim > 1) {
             // The partials stay mapped; the combine compares them with plain SFPSWAPs and maps the results back.
-            // Each tile is addressed through the Dest RWC counter instead of a runtime offset, so the per-tile
-            // loads and stores stay single TTI instructions rather than RISC-built ones.
+            // Tiles advance through the Dest RWC counter, so the per-tile address does not depend on j.
             for (std::uint32_t j = 0; j < block_ct_dim; j++) {
                 perform_reduce_row_max_tile<
                     INSTRUCTION_MODE,
@@ -1102,7 +1101,8 @@ inline void perform_reduce_row_max_min_int32(std::uint32_t block_ct_dim, std::ui
                     true /*int32_order*/,
                     false /*map_back*/,
                     is_uint32>(tile_row_offset, tile_store_mode);
-                // ROWS_PER_TILE = 64 Dest rows; the INCRWC Dest field is 4 bits.
+                // The INCRWC Dest field is 4 bits, so one tile step takes 4 x 15 + 4 rows.
+                static_assert(4 * 15 + 4 == ROWS_PER_TILE, "INCRWC sequence must advance Dest by one tile");
                 TTI_INCRWC(0, 15, 0, 0);
                 TTI_INCRWC(0, 15, 0, 0);
                 TTI_INCRWC(0, 15, 0, 0);
