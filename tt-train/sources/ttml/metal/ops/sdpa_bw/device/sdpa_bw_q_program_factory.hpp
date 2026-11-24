@@ -4,34 +4,28 @@
 
 #pragma once
 
+#include <optional>
+#include <tt-metalium/program_descriptors.hpp>
+
 #include "metal/ttnn_all_includes.hpp"
 #include "sdpa_bw_q_device_operation_types.hpp"
 
 namespace ttml::metal::ops::sdpa_bw::device {
 
 struct SDPABackwardQProgramFactory {
-    struct shared_variables_t {
-        tt::tt_metal::KernelHandle sdpa_bw_q_reader_kernel{};
-        tt::tt_metal::KernelHandle sdpa_bw_q_writer_kernel{};
-        tt::tt_metal::KernelHandle sdpa_bw_q_kernel_group_1{};
-        tt::tt_metal::KernelHandle sdpa_bw_q_kernel_group_2{};
-        tt::tt_metal::CoreRangeSet core_group_1;
-        tt::tt_metal::CoreRangeSet core_group_2;
-        uint32_t num_cores{};
-        uint32_t num_cores_y{};
-    };
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
         const q::operation_attributes_t& operation_attributes,
         const q::tensor_args_t& tensor_args,
         q::tensor_return_value_t& tensor_return_value);
 
+    // Runs on every cache hit instead of buffer-binding patching. Every shape is in the program hash, so only the
+    // buffer addresses change: it rewrites them on the reader and writer of every core with work.
     static void override_runtime_arguments(
-        cached_program_t& cached_program,
+        tt::tt_metal::Program& program,
         const q::operation_attributes_t& operation_attributes,
         const q::tensor_args_t& tensor_args,
-        q::tensor_return_value_t& tensor_return_value);
+        q::tensor_return_value_t& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_coordinate);
 };
 
 }  // namespace ttml::metal::ops::sdpa_bw::device
