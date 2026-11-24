@@ -11,6 +11,7 @@ export TT_METAL_RUNTIME_ROOT="$TT_METAL_HOME"
 TESTS_FILE="$SCRIPT_DIR/quasar_regression_tests.yaml"
 BUILD=false
 FILTER_CONFIG=""
+IGNORE_CONFIG=false
 FILTER_GROUP=""
 BUILD_DIR="$TT_METAL_HOME/build"
 LOG_DIR="$SCRIPT_DIR/logs"
@@ -55,18 +56,23 @@ filter is the pytest node id after ::). Omit filter (or use "") to run all tests
 gtest binary / pytest path. pytest_mark is passed as pytest -m (pytest only).
 
 Required environment variables:
-  TT_METAL_SIMULATOR_BASE   Base path containing simulator build directories
+  TT_METAL_SIMULATOR_BASE  Base path containing simulator build directories
                            (e.g. the parent of emu-quasar-1x3/, emu-quasar-2x3/,
                            emu-quasar-2x3_DISPATCH/)
                            The script sets TT_METAL_SIMULATOR per test automatically.
-                           If TT_METAL_SIMULATOR is already set, the base is
-                           derived automatically (one directory up).
+                           Required unless TT_METAL_SIMULATOR is set.
+  TT_METAL_SIMULATOR       Path to a single simulator build directory.
+                           Always required with --ignore-config.
+                           Required unless TT_METAL_SIMULATOR_BASE is set.
+                           If TT_METAL_SIMULATOR_BASE is not set, it is derived
+                           from this path (one directory up).
   NNG_SOCKET_ADDR          NNG socket address
   NNG_SOCKET_LOCAL_PORT    NNG local port
 
 Options:
   --build                          Run build_metal.sh --build-tests before testing
   --config <1x3|2x3|2x3_DISPATCH>  Only run tests for the specified configuration
+  --ignore-config                  Ignore config field in YAML (default: false)
   --group <name>                   Only run tests from the specified test group
   --tests <path>                   Path to YAML test file (default: quasar_regression_tests.yaml)
   --build-dir <path>               Path to build directory (default: $BUILD_DIR)
@@ -88,6 +94,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --build)       BUILD=true; shift ;;
         --config)      need_arg "$1" "${2:-}"; FILTER_CONFIG="$2"; shift 2 ;;
+        --ignore-config) IGNORE_CONFIG=true; shift ;;
         --group)       need_arg "$1" "${2:-}"; FILTER_GROUP="$2"; shift 2 ;;
         --tests)       need_arg "$1" "${2:-}"; TESTS_FILE="$2"; shift 2 ;;
         --build-dir)   need_arg "$1" "${2:-}"; BUILD_DIR="$2"; shift 2 ;;
@@ -104,6 +111,11 @@ if [[ -n "$FILTER_CONFIG" && "$FILTER_CONFIG" != "1x3" && "$FILTER_CONFIG" != "2
     exit 1
 fi
 
+if [[ -n "$FILTER_CONFIG" && "$IGNORE_CONFIG" == true ]]; then
+    echo "ERROR: --config and --ignore-config cannot be used together"
+    exit 1
+fi
+
 # Derive SIMULATOR_BASE from TT_METAL_SIMULATOR if available
 if [[ -z "${TT_METAL_SIMULATOR_BASE:-}" && -n "${TT_METAL_SIMULATOR:-}" ]]; then
     TT_METAL_SIMULATOR_BASE="$(cd "$(dirname "${TT_METAL_SIMULATOR%/}")" && pwd)"
@@ -113,6 +125,7 @@ fi
 # Validate required environment variables
 missing_vars=()
 [[ -z "${TT_METAL_SIMULATOR_BASE:-}" ]] && missing_vars+=("TT_METAL_SIMULATOR_BASE (or TT_METAL_SIMULATOR)")
+[[ "$IGNORE_CONFIG" == true && -z "${TT_METAL_SIMULATOR:-}" ]] && missing_vars+=("TT_METAL_SIMULATOR (required with --ignore-config)")
 [[ -z "${NNG_SOCKET_ADDR:-}" ]]       && missing_vars+=("NNG_SOCKET_ADDR")
 [[ -z "${NNG_SOCKET_LOCAL_PORT:-}" ]] && missing_vars+=("NNG_SOCKET_LOCAL_PORT")
 
@@ -149,6 +162,10 @@ fi
 
 simulator_path_for_config() {
     local config="$1"
+    if [[ "$IGNORE_CONFIG" == true ]]; then
+        echo "${TT_METAL_SIMULATOR%/}"
+        return
+    fi
     echo "$SIMULATOR_BASE/emu-quasar-${config}"
 }
 
