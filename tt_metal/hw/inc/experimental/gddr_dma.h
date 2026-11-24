@@ -33,6 +33,8 @@ namespace experimental {
 constexpr uint32_t kMaxOutstandingReads = 255;
 constexpr uint32_t kMaxOutstandingWrites = 15;
 
+constexpr uint8_t kNumStreams = 2;
+
 #ifdef COMPILE_FOR_DRISC
 
 //////////////////////////////////////////////////////////////////
@@ -40,7 +42,7 @@ constexpr uint32_t kMaxOutstandingWrites = 15;
 //////////////////////////////////////////////////////////////////
 
 static inline __attribute__((always_inline)) void check_stream_(uint8_t stream) {
-    ASSERT(stream == 0 || stream == 1, DebugAssertTripped);
+    ASSERT(stream < kNumStreams, DebugAssertTripped);
 }
 
 static inline __attribute__((always_inline)) void check_transfer_size_(uint32_t size_bytes) {

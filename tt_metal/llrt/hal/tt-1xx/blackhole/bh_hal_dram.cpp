@@ -93,8 +93,6 @@ HalCoreInfoType create_dram_mem_map() {
     // No FW mailbox on DRAM cores
     std::vector<uint32_t> fw_mailbox_addr(static_cast<std::size_t>(FWMailboxMsg::COUNT), 0);
 
-    constexpr DeviceAddr DRAM_L1_NOC_OFFSET = 0x2000000000ULL;
-
     std::vector<std::vector<HalJitBuildConfig>> processor_classes = {
         // DM
         {
@@ -104,7 +102,7 @@ HalCoreInfoType create_dram_mem_map() {
              .fw_launch_addr = DRISC_RESET_PC,
              .fw_launch_addr_value = MEM_DRISC_FIRMWARE_BASE,
              .memory_load = ll_api::memory::Loading::CONTIGUOUS,
-             .l1_noc_offset = DRAM_L1_NOC_OFFSET},
+             .l1_noc_offset = MEM_DRISC_L1_NOC_OFFSET},
         },
     };
     std::vector<std::vector<std::pair<std::string, std::string>>> processor_classes_names = {

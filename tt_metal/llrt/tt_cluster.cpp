@@ -52,31 +52,6 @@ static constexpr uint32_t HOST_MEM_CHANNELS_MASK = HOST_MEM_CHANNELS - 1;
 
 namespace {
 
-inline std::string get_soc_description_file(
-    const tt::ARCH& arch, tt::TargetDevice target_device, const tt::llrt::RunTimeOptions& rtoptions) {
-    if (target_device == tt::TargetDevice::Simulator) {
-        // A wh/bh ttsim image may ship no SoC descriptor; it then models the full silicon grid below.
-        std::string sim_soc_desc = tt::tt_metal::find_simulator_soc_descriptor_path(rtoptions.get_simulator_path());
-        if (!sim_soc_desc.empty()) {
-            return sim_soc_desc;
-        }
-    }
-    std::string path = rtoptions.get_root_dir();
-    if (path.back() != '/') {
-        path.push_back('/');
-    }
-    path += "tt_metal/soc_descriptors/";
-    const char* file = nullptr;
-    switch (arch) {
-        case tt::ARCH::WORMHOLE_B0: file = "wormhole_b0_80_arch.yaml"; break;
-        case tt::ARCH::BLACKHOLE: file = "blackhole_140_arch.yaml"; break;
-        case tt::ARCH::QUASAR: file = "quasar_32_arch.yaml"; break;
-        default: throw std::runtime_error("Unsupported device arch");
-    }
-    path += file;
-    return path;
-}
-
 std::unique_ptr<tt::umd::ClusterDescriptor> get_mock_cluster_desc(const tt::llrt::RunTimeOptions& rtoptions) {
     TT_FATAL(rtoptions.get_mock_enabled(), "Mock cluster descriptor not enabled");
     std::unique_ptr<tt::umd::ClusterDescriptor> mock_cluster_desc =

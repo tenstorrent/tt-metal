@@ -6,11 +6,16 @@
 
 #include <algorithm>
 #include <optional>
+#include <stdexcept>
+#include <string>
 #include <tt_stl/assert.hpp>
 #include <yaml-cpp/yaml.h>
 
 #include <tt-umd/types/arch.hpp>
 #include <tt-umd/tt_device/tt_device.hpp>
+
+#include "llrt/get_platform_architecture.hpp"
+#include "llrt/rtoptions.hpp"
 
 namespace {
 // NOCs a DRAM view names a preferred endpoint for. Matches the `noc < 2` contract both
@@ -281,6 +286,31 @@ tt::tt_metal::CoreCoord metal_SocDescriptor::get_dram_grid_size() const { return
 
 tt::tt_metal::CoreCoord metal_SocDescriptor::get_dram_compute_grid_size() const {
     return tt::tt_metal::CoreCoord(this->get_num_dram_views(), get_grid_size(tt::CoreType::DRAM).y);
+}
+
+std::string get_soc_description_file(
+    const tt::ARCH& arch, tt::TargetDevice target_device, const tt::llrt::RunTimeOptions& rtoptions) {
+    if (target_device == tt::TargetDevice::Simulator) {
+        // A wh/bh ttsim image may ship no SoC descriptor; it then models the full silicon grid below.
+        std::string sim_soc_desc = tt::tt_metal::find_simulator_soc_descriptor_path(rtoptions.get_simulator_path());
+        if (!sim_soc_desc.empty()) {
+            return sim_soc_desc;
+        }
+    }
+    std::string path = rtoptions.get_root_dir();
+    if (path.back() != '/') {
+        path.push_back('/');
+    }
+    path += "tt_metal/soc_descriptors/";
+    const char* file = nullptr;
+    switch (arch) {
+        case tt::ARCH::WORMHOLE_B0: file = "wormhole_b0_80_arch.yaml"; break;
+        case tt::ARCH::BLACKHOLE: file = "blackhole_140_arch.yaml"; break;
+        case tt::ARCH::QUASAR: file = "quasar_32_arch.yaml"; break;
+        default: throw std::runtime_error("Unsupported device arch");
+    }
+    path += file;
+    return path;
 }
 
 std::optional<uint32_t> read_mrisc_noc2axi_ports(tt::umd::TTDevice* tt_device) {

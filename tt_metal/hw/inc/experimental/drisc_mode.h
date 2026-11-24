@@ -31,7 +31,9 @@ namespace experimental {
           DRAM traffic must go through the DRISC L1 + DMA path.
 
   Who sets the mode:
-    DRISC firmware, once per boot, and nobody else. Kernels never switch
+    DRISC firmware, once per boot, and nobody else; on the DRISCs it runs
+    on, the DRISC service kernel replaces that firmware and does the same
+    at its boot (DRISC_SERVICE_BUILD). Kernels never switch
     modes -- a kernel that did would have to restore the mode before
     returning, and the restore races the receivers still writing credits
     back into DRISC L1 (a receiver that has not drained loses its tail
@@ -92,7 +94,7 @@ inline __attribute__((always_inline)) bool drisc_is_noc2axi_mode(uint8_t noc = n
 // FW_BUILD (not the usual KERNEL_BUILD || FW_BUILD "device build" pair) on purpose:
 // the mode is boot state, not per-kernel state, so this must not compile into a
 // kernel. See "Who sets the mode" above.
-#ifdef FW_BUILD
+#if defined(FW_BUILD) || defined(DRISC_SERVICE_BUILD)
 
 // Put each NIU in its permanent mode: NOC2AXI for the NIUs named in
 // noc2axi_niu_mask (bit N = NIU N), stream mode for the rest. Called once per
@@ -107,7 +109,7 @@ inline __attribute__((always_inline)) void drisc_init_niu_modes(uint8_t noc2axi_
     }
 }
 
-#endif  // FW_BUILD
+#endif  // FW_BUILD || DRISC_SERVICE_BUILD
 
 #endif  // COMPILE_FOR_DRISC
 

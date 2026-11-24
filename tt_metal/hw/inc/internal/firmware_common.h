@@ -11,6 +11,7 @@
 #endif
 #include "internal/tensix_functions.h"
 #include "internal/risc_attribs.h"
+#include "internal/crt1.h"
 #include "dev_mem_map.h"
 #include "hostdevcommon/kernel_structs.h"
 #include "hostdev/rta_constants.h"
@@ -58,34 +59,6 @@ extern uint32_t tensor_prefetcher_signal_noc_xy[NUM_DRAM_BANKS];
 // Round up to nearest multiple of 4 to ensure uint32_t alignment for L1 to local copies
 extern uint8_t worker_logical_col_to_virtual_col[round_up_to_mult_of_4(noc_size_x)];
 extern uint8_t worker_logical_row_to_virtual_row[round_up_to_mult_of_4(noc_size_y)];
-
-void l1_to_local_mem_copy(uint32_t* dst, uint32_t tt_l1_ptr* src, L1WordCount len);
-
-inline void do_crt1(uint32_t tt_l1_ptr* data_image) {
-    // Clear bss.
-    extern uint32_t __ldm_bss_start[];
-    extern uint32_t __ldm_bss_end[];
-    wzerorange(__ldm_bss_start, __ldm_bss_end);
-
-    // Copy initialized data.
-    extern uint32_t __ldm_data_start[];
-    extern uint32_t __ldm_data_end[];
-    if (__ldm_data_start != data_image) {
-        l1_to_local_mem_copy(__ldm_data_start, data_image, l1_word_count_from_range(__ldm_data_start, __ldm_data_end));
-    }
-}
-
-inline void do_thread_crt1(uint32_t tt_l1_ptr* data_image) {
-    // Clear thread bss.
-    extern thread_local uint32_t __ldm_tbss_start[];
-    extern thread_local uint32_t __ldm_tbss_end[];
-    wzerorange(__ldm_tbss_start, __ldm_tbss_end);
-
-    // Copy thread initialized data.
-    extern thread_local uint32_t __ldm_tdata_start[];
-    extern thread_local uint32_t __ldm_tdata_end[];
-    l1_to_local_mem_copy(__ldm_tdata_start, data_image, l1_word_count_from_range(__ldm_tdata_start, __ldm_tdata_end));
-}
 
 inline void noc_bank_table_init(uint64_t mem_bank_to_noc_addr) {
     constexpr int32_t dram_to_noc_size_bytes = sizeof(dram_bank_to_noc_xy);

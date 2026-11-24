@@ -345,6 +345,16 @@
   team: runtime
   budget_type: unit
 
+# --- DRISC data mover service (Blackhole only; its clients pin host memory, so an IOMMU runner) ---
+- name: runtime_drisc_service
+  cmd: ./build/test/tt_metal/unit_tests_drisc_service
+  skus:
+    bh_p100a_civ2_viommu:
+      timeout: 5
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+  budget_type: unit
+
 # =============================================================================
 # Multi-Card Unit Tests (BH + Galaxy) — see #46302 for topology matrix
 # =============================================================================

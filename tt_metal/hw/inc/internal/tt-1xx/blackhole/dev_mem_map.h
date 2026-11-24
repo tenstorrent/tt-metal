@@ -327,8 +327,12 @@
 
 /////////////
 // DRAM (DRISC) memory map
-// DRISC has 128KB L1 at private address 0x0 (NOC address 0x2000000000)
+// DRISC has 128KB L1 at private address 0x0
 // Private data memory is 8KB at 0xFFB00000
+
+// DRISC L1 through a NOC2AXI-mode NIU, whose low 8 GB is GDDR. A stream-mode NIU maps every address to L1 at
+// addr mod 128 KB, so the same offset reaches L1 there too.
+#define MEM_DRISC_L1_NOC_OFFSET 0x2000000000ULL
 
 #define MEM_DRISC_LOCAL_SIZE MEM_BRISC_LOCAL_SIZE  // 8KB private data at MEM_LOCAL_BASE (0xFFB00000)
 #define MEM_DRISC_RESERVED_SIZE 64                 // Reserved at address 0 for corruption detection

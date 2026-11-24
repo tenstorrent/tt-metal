@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <map>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include <tt-metalium/vocabulary/core_coord.hpp>
@@ -15,9 +16,19 @@
 #include <tt-umd/soc_descriptor.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 
+#include "llrt/tt_target_device.hpp"
+
 namespace tt::umd {
 class TTDevice;
 }
+
+namespace tt::llrt {
+class RunTimeOptions;
+}
+
+// The SoC descriptor YAML for `arch`: the simulator's own when it ships one, else the one under the runtime root.
+std::string get_soc_description_file(
+    const tt::ARCH& arch, tt::TargetDevice target_device, const tt::llrt::RunTimeOptions& rtoptions);
 
 // CMFW's GDDR_MRISC_NOC2AXI_PORT telemetry word for `tt_device`, or nullopt when the entry is absent
 // (CMFW older than 19.12) or there is no device to ask.
