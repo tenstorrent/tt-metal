@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // HAL port of tt_llk_blackhole/llk_lib/llk_math_common.h (every function) and the common/inc/cmath_common.h
-// helpers it and llk_math_eltwise_binary.h reach. Same Tensix instruction sequence as production.
+// helpers it, llk_math_eltwise_binary.h, llk_math_eltwise_unary_datacopy.h and llk_math_transpose_dest.h reach.
+// Same Tensix instruction sequence as production.
 
 #pragma once
 
@@ -65,7 +66,7 @@ inline void _configure_src_zero_flag_(const bool disable)
     _apply_src_zero_flag_(value);
 }
 
-// Data-movement ops keep the flag set so values pass through faithfully.
+// Data-movement ops keep the flag set so values pass through faithfully (bf16 -0.0, 16b/32b ints).
 inline void _configure_preserve_zero_flag_state_()
 {
     _configure_src_zero_flag_(true);
@@ -74,6 +75,59 @@ inline void _configure_preserve_zero_flag_state_()
 // ---------------------------------------------------------------------------------------------
 // cmath_common.h helpers
 // ---------------------------------------------------------------------------------------------
+
+// cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(F): one RMWCIB.
+template <DataFormat F>
+inline void set_srca_format()
+{
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::AluFormatSpecReg0::SrcA, cfg::Sec::S0, static_cast<std::uint32_t>(F)>();
+}
+
+// cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(V): one RMWCIB.
+template <std::uint32_t V>
+inline void set_fp32_enabled()
+{
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::AluAccCtrl::Fp32_enabled, cfg::Sec::S0, V>();
+}
+
+// TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, V): the field is the whole thread word.
+template <std::uint32_t V>
+inline void set_disable_implied_srca_fmt()
+{
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::DisableImpliedFmt[cfg::SrcA], cfg::Sec::S0, V>();
+}
+
+// ckernel::semaphore::UNPACK_TO_DEST / MATH_DONE
+inline constexpr sync::Semaphore UNPACK_TO_DEST_SEM = sync::Semaphore::S2;
+inline constexpr sync::Semaphore MATH_DONE_SEM      = sync::Semaphore::S7;
+
+// TTI_STALLWAIT(STALL_MATH, MATH | SRCB_VLD): MOVD2B writes SrcB, so it is outside the Src auto-wait.
+inline void srcb_bank_wait()
+{
+    sync::wait::stall<sync::StallTarget::Math, sync::StallCondition::MathIdle | sync::StallCondition::SrcBValid>();
+}
+
+inline void math_unpack_to_dest_math_ready()
+{
+    // t6_semaphore_wait_on_max<STALL_SYNC>(MATH_DONE)
+    sync::wait::semaphore<sync::StallTarget::Sync, sync::SemaphoreCondition::WhileMaximum, MATH_DONE_SEM>();
+    // t6_semaphore_post<MATH | WAIT_SFPU>(MATH_DONE)
+    sync::wait::stall<sync::StallTarget::Sync, sync::StallCondition::MathIdle | sync::StallCondition::SfpuIdle>();
+    sync::semaphore::post<MATH_DONE_SEM>();
+    while (sync::semaphore::read<MATH_DONE_SEM>() == 0)
+    {
+    }
+    sync::semaphore::get<sync::Access::MMIO, MATH_DONE_SEM>();
+}
+
+inline void math_unpack_to_dest_tile_ready()
+{
+    // t6_semaphore_wait_on_zero<STALL_SYNC>(UNPACK_TO_DEST)
+    sync::wait::semaphore<sync::StallTarget::Sync, sync::SemaphoreCondition::WhileZero, UNPACK_TO_DEST_SEM>();
+    // t6_semaphore_get<MATH | WAIT_SFPU>(UNPACK_TO_DEST)
+    sync::wait::stall<sync::StallTarget::Sync, sync::StallCondition::MathIdle | sync::StallCondition::SfpuIdle>();
+    sync::semaphore::get<UNPACK_TO_DEST_SEM>();
+}
 
 // TTI_SETRWC(CLR_NONE, 0, 0, 0, 0, setrwc) with a compile-time mask: SET_ABD_F = A, B, D and fidelity.
 inline void reset_counters_abd_f()

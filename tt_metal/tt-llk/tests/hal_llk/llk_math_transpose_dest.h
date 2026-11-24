@@ -3,6 +3,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// HAL port of tt_llk_blackhole/llk_lib/llk_math_transpose_dest.h. Same Tensix instruction sequence as production.
+
 #pragma once
 
 #include <cstdint>
@@ -10,11 +12,76 @@
 #include "ckernel_globals.h"
 #include "ckernel_include.h"
 #include "ckernel_ops.h"
-#include "ckernel_template.h"
 #include "cmath_common.h"
+#include "hal/cfg.h"
+#include "hal/counters/rwc.h"
+#include "hal/mop.h"
+#include "hal/move.h"
+#include "hal/replay.h"
+#include "hal/src.h"
+#include "hal/sync.h"
 #include "llk_math_common.h"
+#include "llk_math_eltwise_binary.h" // hal_port::set_math_addr_mod / MathAddrMod
 
 using namespace ckernel;
+
+namespace hal_port
+{
+namespace transpose_dest
+{
+namespace move = hal::move;
+using move::RowAddressing;
+
+// Replay buffer ranges (production: lltt::replay / lltt::replay_insn with these start/length pairs).
+inline constexpr hal::replay::BufferRange REPLAY_32B {ckernel::math::replay_buf_offset, 16};           // 32-bit sequence
+inline constexpr hal::replay::BufferRange REPLAY_32B_LO {ckernel::math::replay_buf_offset, 8};         // MOVD2B lo x4, TRNSPSRCB, MOVB2A x3
+inline constexpr hal::replay::BufferRange REPLAY_32B_HI {ckernel::math::replay_buf_offset + 8, 8};     // MOVD2B hi x4, TRNSPSRCB, MOVB2D x3
+inline constexpr hal::replay::BufferRange REPLAY_32B_HI_D2B {ckernel::math::replay_buf_offset + 8, 5}; // MOVD2B hi x4, TRNSPSRCB
+inline constexpr hal::replay::BufferRange REPLAY_32B_B2A {ckernel::math::replay_buf_offset + 5, 3};    // MOVB2A x3
+
+// TTI_MOVD2B(Lo32 ? DEST_32B_LOW : DEST_NORM, SrcBRow, AddrMod, MOV_4_ROWS, DestRow)
+template <bool Lo32, std::uint32_t SrcBRow, std::uint8_t AddrMod, std::uint32_t DestRow>
+inline constexpr move::Transfer<move::Dst, move::SrcB> MOVD2B {
+    .source_row = DestRow, .destination_row = SrcBRow, .address_mode = AddrMod, .number_of_rows = move::rows::Four, .source_32bit_low = Lo32};
+
+template <bool Lo32, std::uint32_t SrcBRow, std::uint8_t AddrMod, std::uint32_t DestRow>
+inline __attribute__((always_inline)) void movd2b()
+{
+    move::run<MOVD2B<Lo32, SrcBRow, AddrMod, DestRow>>();
+}
+
+// TTI_MOVB2D(DEST_NORM, SrcBRow, AddrMod, MOV_4_ROWS, DestRow)
+template <std::uint32_t SrcBRow, std::uint8_t AddrMod, std::uint32_t DestRow, RowAddressing Addressing = RowAddressing::Absolute>
+inline constexpr move::Transfer<move::SrcB, move::Dst> MOVB2D {
+    .source_row = SrcBRow, .destination_row = DestRow, .destination_addressing = Addressing, .address_mode = AddrMod, .number_of_rows = move::rows::Four};
+
+template <std::uint32_t SrcBRow, std::uint8_t AddrMod, std::uint32_t DestRow, RowAddressing Addressing = RowAddressing::Absolute>
+inline __attribute__((always_inline)) void movb2d()
+{
+    move::run<MOVB2D<SrcBRow, AddrMod, DestRow, Addressing>>();
+}
+
+// TTI_MOVA2D(Lo32 ? DEST_32B_LOW : DEST_NORM, SrcARow, AddrMod, MOV_8_ROWS, DestRow)
+template <bool Lo32, std::uint32_t SrcARow, std::uint8_t AddrMod, std::uint32_t DestRow, RowAddressing Addressing = RowAddressing::Absolute>
+inline __attribute__((always_inline)) void mova2d()
+{
+    move::run<move::Transfer<move::SrcA, move::Dst> {
+        .source_row             = SrcARow,
+        .destination_row        = DestRow,
+        .destination_addressing = Addressing,
+        .address_mode           = AddrMod,
+        .number_of_rows         = move::rows::Eight,
+        .destination_32bit_low  = Lo32}>();
+}
+
+// TTI_TRNSPSRCB
+inline __attribute__((always_inline)) void transpose_srcb()
+{
+    hal::src<hal::SrcB>.transpose();
+}
+
+} // namespace transpose_dest
+} // namespace hal_port
 
 // local function declarations
 template <bool is_32bit>
@@ -35,110 +102,116 @@ inline void transpose_dest_configure_mop();
 template <bool transpose_of_faces>
 inline void transpose_dest_32b()
 {
+    using namespace hal_port::transpose_dest;
+    using hal_port::set_disable_implied_srca_fmt;
+    using hal_port::set_fp32_enabled;
+    using hal_port::set_srca_format;
+    using Mop = hal::mop::Runner<hal::mop::MopTemplate::Template1>;
+
     // Disable implied SrcA format inference so manual SrcA format switches take effect.
     // On Blackhole the ALU format is normally inferred; we must disable this for
     // the SrcA format switching approach to control MOVD2B/MOVB2D behavior.
-    TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 1);
+    set_disable_implied_srca_fmt<1>();
 
     // Zero-flag PRESERVE for the hi16/lo16 MOV sequence is established by the caller
     // (_llk_math_transpose_dest_), covering both the 32-bit and 16-bit paths.
 
     // Transpose all the low 16 bit elements of all faces and put them in SrcA.
     // Eventually Dest=0, SrcA=0.
-    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Float16_b));
-    ckernel_template::run();
+    set_srca_format<DataFormat::Float16_b>();
+    Mop::run();
 
     if constexpr (!transpose_of_faces)
     {
         // Transpose Face 0 hi bits and put back in Dest register.
-        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Tf32));
-        lltt::replay(ckernel::math::replay_buf_offset + 8, 8);
-        TTI_MOVB2D(p_mov::DEST_NORM, 28, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12); // Dest=16, SrcA=0
+        set_srca_format<DataFormat::Tf32>();
+        hal::replay::run<REPLAY_32B_HI>();
+        movb2d<28, ADDR_MOD_0, 12>(); // Dest=16, SrcA=0
 
         // Transpose Face 1 hi bits and put back in Dest register.
-        lltt::replay(ckernel::math::replay_buf_offset + 8, 8);
-        TTI_MOVB2D(p_mov::DEST_NORM, 28, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12); // Dest=32, SrcA=0
+        hal::replay::run<REPLAY_32B_HI>();
+        movb2d<28, ADDR_MOD_0, 12>(); // Dest=32, SrcA=0
 
         // Transpose Face 2 hi bits and put back in Dest register.
-        lltt::replay(ckernel::math::replay_buf_offset + 8, 8);
-        TTI_MOVB2D(p_mov::DEST_NORM, 28, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12); // Dest=48, SrcA=0
+        hal::replay::run<REPLAY_32B_HI>();
+        movb2d<28, ADDR_MOD_0, 12>(); // Dest=48, SrcA=0
 
         // Transpose Face 3 hi bits and put back in Dest register.
-        lltt::replay(ckernel::math::replay_buf_offset + 8, 8);
-        TTI_MOVB2D(p_mov::DEST_NORM, 28, ADDR_MOD_3, p_movb2d::MOV_4_ROWS, 12); // Dest=0, SrcA=0
+        hal::replay::run<REPLAY_32B_HI>();
+        movb2d<28, ADDR_MOD_3, 12>(); // Dest=0, SrcA=0
 
         // Since all high bits have been written. We can set the appropriate formats and
         // write all the transposed low bits to Dest register.
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
-        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Float32));
+        set_fp32_enabled<0>();
+        set_srca_format<DataFormat::Float32>();
 
-        TTI_MOVA2D(p_mov::DEST_32B_LOW, 0, ADDR_MOD_1, p_mova2d::MOV_8_ROWS, 0);
-        TTI_MOVA2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_1, p_mova2d::MOV_8_ROWS, 8);
-        TTI_MOVA2D(p_mov::DEST_32B_LOW, 16, ADDR_MOD_1, p_mova2d::MOV_8_ROWS, 16);
-        TTI_MOVA2D(p_mov::DEST_32B_LOW, 24, ADDR_MOD_1, p_mova2d::MOV_8_ROWS, 24);
-        TTI_MOVA2D(p_mov::DEST_32B_LOW, 32, ADDR_MOD_1, p_mova2d::MOV_8_ROWS, 32);
-        TTI_MOVA2D(p_mov::DEST_32B_LOW, 40, ADDR_MOD_1, p_mova2d::MOV_8_ROWS, 40);
-        TTI_MOVA2D(p_mov::DEST_32B_LOW, 48, ADDR_MOD_1, p_mova2d::MOV_8_ROWS, 48);
-        TTI_MOVA2D(p_mov::DEST_32B_LOW, 56, ADDR_MOD_1, p_mova2d::MOV_8_ROWS, 56);
+        mova2d<true, 0, ADDR_MOD_1, 0>();
+        mova2d<true, 8, ADDR_MOD_1, 8>();
+        mova2d<true, 16, ADDR_MOD_1, 16>();
+        mova2d<true, 24, ADDR_MOD_1, 24>();
+        mova2d<true, 32, ADDR_MOD_1, 32>();
+        mova2d<true, 40, ADDR_MOD_1, 40>();
+        mova2d<true, 48, ADDR_MOD_1, 48>();
+        mova2d<true, 56, ADDR_MOD_1, 56>();
     }
     else
     {
         // Transpose Face 0 hi bits and put back in Dest register.
-        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Tf32));
-        lltt::replay(ckernel::math::replay_buf_offset + 8, 8);
-        TTI_MOVB2D(p_mov::DEST_NORM, 28, ADDR_MOD_1, p_movb2d::MOV_4_ROWS, 12); // Dest=0, SrcA=0
+        set_srca_format<DataFormat::Tf32>();
+        hal::replay::run<REPLAY_32B_HI>();
+        movb2d<28, ADDR_MOD_1, 12>(); // Dest=0, SrcA=0
 
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
-        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Float32));
+        set_fp32_enabled<0>();
+        set_srca_format<DataFormat::Float32>();
 
         // Write transposed Face 0 low bits to Dest, to make room for Face 1 high bits
-        TTI_MOVA2D(p_mov::DEST_32B_LOW, 0, ADDR_MOD_1, p_mova2d::MOV_8_ROWS, 0);
-        TTI_MOVA2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_0, p_mova2d::MOV_8_ROWS, 8); // Dest=16, SrcA=0
+        mova2d<true, 0, ADDR_MOD_1, 0>();
+        mova2d<true, 8, ADDR_MOD_0, 8>(); // Dest=16, SrcA=0
 
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
+        set_fp32_enabled<1>();
 
         // Transpose Face 1 hi bits and move to SrcA
-        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Tf32));
-        lltt::replay(ckernel::math::replay_buf_offset + 8, 5);
-        lltt::replay(ckernel::math::replay_buf_offset + 5, 3);
-        TTI_MOVB2A(12, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, 28); // Dest=32, SrcA=0
+        set_srca_format<DataFormat::Tf32>();
+        hal::replay::run<REPLAY_32B_HI_D2B>();
+        hal::replay::run<REPLAY_32B_B2A>();
+        TTI_MOVB2A(12, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, 28); // Dest=32, SrcA=0  HAL-GAP: no HAL API for MOVB2A
 
         // Transpose Face 2 hi bits and move to Face 1's area in Dest
-        lltt::replay(ckernel::math::replay_buf_offset + 8, 5);
-        TTI_MOVB2D(p_mov::DEST_NORM, 16, ADDR_MOD_1, p_movb2d::MOV_4_ROWS, (0x3ff & (-16 + 0)));
-        TTI_MOVB2D(p_mov::DEST_NORM, 20, ADDR_MOD_1, p_movb2d::MOV_4_ROWS, (0x3ff & (-16 + 4)));
-        TTI_MOVB2D(p_mov::DEST_NORM, 24, ADDR_MOD_1, p_movb2d::MOV_4_ROWS, (0x3ff & (-16 + 8)));
-        TTI_MOVB2D(p_mov::DEST_NORM, 28, ADDR_MOD_1, p_movb2d::MOV_4_ROWS, (0x3ff & (-16 + 12))); // Dest=32, SrcA=0
+        hal::replay::run<REPLAY_32B_HI_D2B>();
+        movb2d<16, ADDR_MOD_1, move::relative_row<-16>(), RowAddressing::CounterRelative>();
+        movb2d<20, ADDR_MOD_1, move::relative_row<-12>(), RowAddressing::CounterRelative>();
+        movb2d<24, ADDR_MOD_1, move::relative_row<-8>(), RowAddressing::CounterRelative>();
+        movb2d<28, ADDR_MOD_1, move::relative_row<-4>(), RowAddressing::CounterRelative>(); // Dest=32, SrcA=0
 
         // Write transposed Face 1 hi bits and move to Face 2's area in Dest
-        TTI_MOVA2D(p_mov::DEST_NORM, 0, ADDR_MOD_1, p_mova2d::MOV_8_ROWS, 0);
-        TTI_MOVA2D(p_mov::DEST_NORM, 8, ADDR_MOD_0, p_mova2d::MOV_8_ROWS, 8); // Dest=48, SrcA=0
+        mova2d<false, 0, ADDR_MOD_1, 0>();
+        mova2d<false, 8, ADDR_MOD_0, 8>(); // Dest=48, SrcA=0
 
         // Transpose Face 3 hi bits and put back in Dest register
-        lltt::replay(ckernel::math::replay_buf_offset + 8, 8);
-        TTI_MOVB2D(p_mov::DEST_NORM, 28, ADDR_MOD_3, p_movb2d::MOV_4_ROWS, 12);
+        hal::replay::run<REPLAY_32B_HI>();
+        movb2d<28, ADDR_MOD_3, 12>();
 
         // Since all high bits have been written. We can set the appropriate formats and
         // write all the low bits to Dest register.
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
-        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Float32));
+        set_fp32_enabled<0>();
+        set_srca_format<DataFormat::Float32>();
 
         // Write transposed Face 1 low bits to Face 2's area in Dest
-        TTI_MOVA2D(p_mov::DEST_32B_LOW, 16, ADDR_MOD_1, p_mova2d::MOV_8_ROWS, 32);
-        TTI_MOVA2D(p_mov::DEST_32B_LOW, 24, ADDR_MOD_1, p_mova2d::MOV_8_ROWS, 40);
+        mova2d<true, 16, ADDR_MOD_1, 32>();
+        mova2d<true, 24, ADDR_MOD_1, 40>();
 
         // Write transposed Face 2 low bits to Face 1's area in Dest
-        TTI_MOVA2D(p_mov::DEST_32B_LOW, 32, ADDR_MOD_1, p_mova2d::MOV_8_ROWS, 16);
-        TTI_MOVA2D(p_mov::DEST_32B_LOW, 40, ADDR_MOD_1, p_mova2d::MOV_8_ROWS, 24);
+        mova2d<true, 32, ADDR_MOD_1, 16>();
+        mova2d<true, 40, ADDR_MOD_1, 24>();
 
         // Write transposed Face 3 low bits to Face 3's area in Dest
-        TTI_MOVA2D(p_mov::DEST_32B_LOW, 48, ADDR_MOD_1, p_mova2d::MOV_8_ROWS, 48);
-        TTI_MOVA2D(p_mov::DEST_32B_LOW, 56, ADDR_MOD_1, p_mova2d::MOV_8_ROWS, 56);
+        mova2d<true, 48, ADDR_MOD_1, 48>();
+        mova2d<true, 56, ADDR_MOD_1, 56>();
     }
 
     // Restore config state
-    TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 0);
-    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
+    set_disable_implied_srca_fmt<0>();
+    set_fp32_enabled<1>();
 }
 
 // Notes on these template parameters:
@@ -169,21 +242,27 @@ inline void transpose_dest_32b()
 template <bool transpose_of_faces = true, bool is_32bit = false>
 inline void _llk_math_transpose_dest_(const std::uint32_t dst_index)
 {
-    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
-    math::reset_counters(p_setrwc::SET_ABD_F);
+    namespace sync = hal::sync;
+    namespace rwc  = hal::counters::rwc;
+    using Mop0     = hal::mop::Runner<hal::mop::MopTemplate::Template0>;
+
+    hal_port::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
+    hal_port::reset_counters_abd_f();
 
     // Wait condition SRCA_VLD is required as MOVB2A doesn't automatically wait
     // for SrcA[MatrixUnit.SrcABank].AllowedClient == SrcClient::MatrixUnit.
     // Wait condition SRCB_VLD is required as MOVD2B doesn't automatically wait
     // for SrcB[MatrixUnit.SrcBBank].AllowedClient == SrcClient::MatrixUnit.
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::MATH | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
+    sync::wait::stall<
+        sync::StallTarget::Math,
+        sync::StallCondition::SfpuIdle | sync::StallCondition::MathIdle | sync::StallCondition::SrcAValid | sync::StallCondition::SrcBValid>();
 
     // Both paths run a MOVD2B/MOVB2D/MOVA2D transpose sequence that flushes any datum with a zero low
     // byte (e.g. bf16 0x4400 = 768.0) when the Src zero-substitution flag is at the operand DEFAULT,
     // corrupting ordinary finite values (same hazard as reduce_row_perform_transpose). transpose_dest
     // owns the PRESERVE policy here — asserted in execute (not init) so it survives any
     // llk_math_hw_configure that ran after the init; skip-if-set keeps it cheap.
-    math::_configure_preserve_zero_flag_state_();
+    hal_port::_configure_preserve_zero_flag_state_();
 
     if constexpr (is_32bit)
     {
@@ -191,10 +270,13 @@ inline void _llk_math_transpose_dest_(const std::uint32_t dst_index)
     }
     else
     {
-        ckernel_unpack_template::run(2, 2);
+        // ckernel_unpack_template::run(2, 2): MOP_CFG(zmask >> 16) then MOP(0, count - 1, zmask & 0xFFFF)
+        Mop0::configure_mask_high<2>();
+        Mop0::run<2, 2, hal::mop::MaskHigh::Preset>();
     }
 
-    TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);
+    // TTI_SETRWC(CLR_AB, 0, 0, 0, 0, SET_ABD)
+    rwc::set<rwc::MathCounter {.src_a = rwc::Set(0), .src_b = rwc::Set(0), .dest = rwc::Set(0), .flip = rwc::Src::A | rwc::Src::B}>();
 }
 
 /**
@@ -205,64 +287,23 @@ inline void _llk_math_transpose_dest_(const std::uint32_t dst_index)
 template <bool is_32bit>
 inline void transpose_dest_configure_addrmod()
 {
+    using hal_port::MathAddrMod;
+    using hal_port::set_math_addr_mod;
+    using Sec = hal::cfg::Sec;
+
     if constexpr (is_32bit)
     {
-        addr_mod_t {
-            .srca = {.incr = 0},
-            .srcb = {.incr = 0},
-            .dest = {.incr = 16},
-        }
-            .set(ADDR_MOD_0);
-
-        addr_mod_t {
-            .srca = {.incr = 0},
-            .srcb = {.incr = 0},
-            .dest = {.incr = 0},
-        }
-            .set(ADDR_MOD_1);
-
-        addr_mod_t {
-            .srca = {.incr = 16},
-            .srcb = {.incr = 0},
-            .dest = {.incr = 16},
-        }
-            .set(ADDR_MOD_2);
-
-        addr_mod_t {
-            .srca = {.clr = 1},
-            .dest = {.clr = 1},
-        }
-            .set(ADDR_MOD_3);
+        set_math_addr_mod<Sec::S0, MathAddrMod {.dest_incr = 16}>();
+        set_math_addr_mod<Sec::S1, MathAddrMod {}>();
+        set_math_addr_mod<Sec::S2, MathAddrMod {.srca_incr = 16, .dest_incr = 16}>();
+        set_math_addr_mod<Sec::S3, MathAddrMod {.srca_clr = 1, .dest_clr = 1}>();
     }
     else
     {
-        addr_mod_t {
-            .srca = {.incr = 0},
-            .srcb = {.incr = 0},
-            .dest = {.incr = 16},
-        }
-            .set(ADDR_MOD_0);
-
-        addr_mod_t {
-            .srca = {.incr = 0},
-            .srcb = {.incr = 0},
-            .dest = {.incr = 0},
-        }
-            .set(ADDR_MOD_1);
-
-        addr_mod_t {
-            .srca = {.incr = 0},
-            .srcb = {.incr = 0},
-            .dest = {.incr = 0x3ff & -16},
-        }
-            .set(ADDR_MOD_2);
-
-        addr_mod_t {
-            .srca = {.incr = 0},
-            .srcb = {.incr = 0},
-            .dest = {.incr = 32},
-        }
-            .set(ADDR_MOD_3);
+        set_math_addr_mod<Sec::S0, MathAddrMod {.dest_incr = 16}>();
+        set_math_addr_mod<Sec::S1, MathAddrMod {}>();
+        set_math_addr_mod<Sec::S2, MathAddrMod {.dest_incr = 0x3ff & -16}>();
+        set_math_addr_mod<Sec::S3, MathAddrMod {.dest_incr = 32}>();
     }
 }
 
@@ -278,72 +319,71 @@ inline void transpose_dest_configure_addrmod()
 template <bool transpose_of_faces, bool is_32bit>
 inline void transpose_dest_configure_mop()
 {
+    using namespace hal_port::transpose_dest;
+    namespace mop    = hal::mop;
+    namespace replay = hal::replay;
+
     if constexpr (is_32bit)
     {
-        load_replay_buf(
-            ckernel::math::replay_buf_offset,
-            16,
+        replay::record<REPLAY_32B>(
             []
             {
-                TTI_MOVD2B(p_mov::DEST_32B_LOW, 16, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 0);
-                TTI_MOVD2B(p_mov::DEST_32B_LOW, 20, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 4);
-                TTI_MOVD2B(p_mov::DEST_32B_LOW, 24, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 8);
-                TTI_MOVD2B(p_mov::DEST_32B_LOW, 28, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 12);
+                movd2b<true, 16, ADDR_MOD_1, 0>();
+                movd2b<true, 20, ADDR_MOD_1, 4>();
+                movd2b<true, 24, ADDR_MOD_1, 8>();
+                movd2b<true, 28, ADDR_MOD_1, 12>();
 
-                TTI_TRNSPSRCB;
+                transpose_srcb();
 
+                // HAL-GAP: no HAL API for MOVB2A (the three below and the MOP ops)
                 TTI_MOVB2A(0, ADDR_MOD_1, p_movb2a::MOV_4_ROWS, 16);
                 TTI_MOVB2A(4, ADDR_MOD_1, p_movb2a::MOV_4_ROWS, 20);
                 TTI_MOVB2A(8, ADDR_MOD_1, p_movb2a::MOV_4_ROWS, 24);
 
-                TTI_MOVD2B(p_mov::DEST_NORM, 16, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 0);
-                TTI_MOVD2B(p_mov::DEST_NORM, 20, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 4);
-                TTI_MOVD2B(p_mov::DEST_NORM, 24, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 8);
-                TTI_MOVD2B(p_mov::DEST_NORM, 28, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 12);
+                movd2b<false, 16, ADDR_MOD_1, 0>();
+                movd2b<false, 20, ADDR_MOD_1, 4>();
+                movd2b<false, 24, ADDR_MOD_1, 8>();
+                movd2b<false, 28, ADDR_MOD_1, 12>();
 
-                TTI_TRNSPSRCB;
+                transpose_srcb();
 
-                TTI_MOVB2D(p_mov::DEST_NORM, 16, ADDR_MOD_1, p_movb2d::MOV_4_ROWS, 0);
-                TTI_MOVB2D(p_mov::DEST_NORM, 20, ADDR_MOD_1, p_movb2d::MOV_4_ROWS, 4);
-                TTI_MOVB2D(p_mov::DEST_NORM, 24, ADDR_MOD_1, p_movb2d::MOV_4_ROWS, 8);
+                movb2d<16, ADDR_MOD_1, 0>();
+                movb2d<20, ADDR_MOD_1, 4>();
+                movb2d<24, ADDR_MOD_1, 8>();
             });
 
-        std::uint32_t loop_op_0          = lltt::replay_insn(ckernel::math::replay_buf_offset, 8);
-        std::uint32_t loop_op_1          = TT_OP_MOVB2A(12, ADDR_MOD_2, p_movb2a::MOV_4_ROWS, 28);
-        std::uint32_t loop_op_last_outer = TT_OP_MOVB2A(12, ADDR_MOD_3, p_movb2a::MOV_4_ROWS, 28);
+        constexpr std::uint32_t loop_op_0          = replay::get_operation<REPLAY_32B_LO>();
+        constexpr std::uint32_t loop_op_1          = TT_OP_MOVB2A(12, ADDR_MOD_2, p_movb2a::MOV_4_ROWS, 28); // HAL-GAP: MOVB2A
+        constexpr std::uint32_t loop_op_last_outer = TT_OP_MOVB2A(12, ADDR_MOD_3, p_movb2a::MOV_4_ROWS, 28); // HAL-GAP: MOVB2A
 
-        ckernel_template tmp(4, 1, loop_op_0, loop_op_1);
-        tmp.set_last_outer_loop_instr(loop_op_last_outer);
-        tmp.program();
+        // ckernel_template(4, 1, loop_op_0, loop_op_1) + set_last_outer_loop_instr(loop_op_last_outer)
+        mop::program(mop::loop(4, mop::loop(1, loop_op_0, loop_op_1)).patch(mop::last_outer, loop_op_last_outer));
     }
     else
     {
-        load_replay_buf(
-            16,
-            15,
+        replay::record<replay::BufferRange {16, 15}>(
             []
             {
-                // ABCD
+                // ABCD  HAL-GAP: no HAL API for MOVB2A
                 TTI_MOVB2A(0, ADDR_MOD_1, p_movb2a::MOV_4_ROWS, 16);
                 TTI_MOVB2A(4, ADDR_MOD_1, p_movb2a::MOV_4_ROWS, 20);
                 TTI_MOVB2A(8, ADDR_MOD_1, p_movb2a::MOV_4_ROWS, 24);
                 TTI_MOVB2A(12, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, 28); // dst += 16
 
                 // EFGHIJKLM
-                TTI_MOVD2B(p_mov::DEST_NORM, 16, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 0);
-                TTI_MOVD2B(p_mov::DEST_NORM, 20, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 4);
-                TTI_MOVD2B(p_mov::DEST_NORM, 24, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 8);
-                TTI_MOVD2B(p_mov::DEST_NORM, 28, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 12);
-                TTI_TRNSPSRCB;
-                TTI_MOVB2D(p_mov::DEST_NORM, 16, ADDR_MOD_1, p_movb2d::MOV_4_ROWS, 0);
-                TTI_MOVB2D(p_mov::DEST_NORM, 20, ADDR_MOD_1, p_movb2d::MOV_4_ROWS, 4);
-                TTI_MOVB2D(p_mov::DEST_NORM, 24, ADDR_MOD_1, p_movb2d::MOV_4_ROWS, 8);
-                TTI_MOVB2D(p_mov::DEST_NORM, 28, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12); // dst += 16
+                movd2b<false, 16, ADDR_MOD_1, 0>();
+                movd2b<false, 20, ADDR_MOD_1, 4>();
+                movd2b<false, 24, ADDR_MOD_1, 8>();
+                movd2b<false, 28, ADDR_MOD_1, 12>();
+                transpose_srcb();
+                movb2d<16, ADDR_MOD_1, 0>();
+                movb2d<20, ADDR_MOD_1, 4>();
+                movb2d<24, ADDR_MOD_1, 8>();
+                movb2d<28, ADDR_MOD_0, 12>(); // dst += 16
 
-                // NO
-                // Note: the 0x3ff mask ensures the negative offsets are 10 bits.
-                TTI_MOVA2D(p_mov::DEST_NORM, 0, ADDR_MOD_2, p_mova2d::MOV_8_ROWS, 0x3ff & (0 - 32)); // dst -= 16
-                TTI_MOVA2D(p_mov::DEST_NORM, 8, ADDR_MOD_2, p_mova2d::MOV_8_ROWS, 0x3ff & (8 - 16)); // dst -= 16
+                // NO: counter-relative negative offsets (10 bits)
+                mova2d<false, 0, ADDR_MOD_2, move::relative_row<0 - 32>(), RowAddressing::CounterRelative>(); // dst -= 16
+                mova2d<false, 8, ADDR_MOD_2, move::relative_row<8 - 16>(), RowAddressing::CounterRelative>(); // dst -= 16
             });
 
         // The next 7 instructions expand as follows:
@@ -353,17 +393,17 @@ inline void transpose_dest_configure_mop()
         // Face 3: 4x MOVD2B, TRNSPSRCB, 4x MOVB2D, dst += 16 (EFGHIJKLM..)
         // Face 1: 2x MOVA2D (2x dst -= 16) (..NO)
 
-        std::uint32_t EFGHIJKLM   = lltt::replay_insn(20, 9);
-        std::uint32_t EFGHI       = lltt::replay_insn(20, 5);
-        std::uint32_t ABCDEFG     = lltt::replay_insn(16, 7);
-        std::uint32_t P           = TT_OP_MOVD2B(p_mov::DEST_NORM, 28, ADDR_MOD_2, p_movd2b::MOV_4_ROWS, 12); // dst -= 16
-        std::uint32_t IJKL        = lltt::replay_insn(24, 4);
-        std::uint32_t Q           = TT_OP_MOVB2D(p_mov::DEST_NORM, 28, ADDR_MOD_3, p_movb2d::MOV_4_ROWS, 12); // dst += 32
-        std::uint32_t EFGHIJKLMNO = lltt::replay_insn(20, 11);
+        constexpr std::uint32_t EFGHIJKLM   = replay::get_operation<replay::BufferRange {20, 9}>();
+        constexpr std::uint32_t EFGHI       = replay::get_operation<replay::BufferRange {20, 5}>();
+        constexpr std::uint32_t ABCDEFG     = replay::get_operation<replay::BufferRange {16, 7}>();
+        constexpr std::uint32_t P           = MOVD2B<false, 28, ADDR_MOD_2, 12>.get_operation(); // dst -= 16
+        constexpr std::uint32_t IJKL        = replay::get_operation<replay::BufferRange {24, 4}>();
+        constexpr std::uint32_t Q           = MOVB2D<28, ADDR_MOD_3, 12>.get_operation(); // dst += 32
+        constexpr std::uint32_t EFGHIJKLMNO = replay::get_operation<replay::BufferRange {20, 11}>();
 
         // The following MOP config simply runs the above 7 instructions in order (when executed with zmask 0b10):
-        ckernel_unpack_template tmp(true, true, EFGHIJKLM, EFGHI, ABCDEFG, P, /* skip A */ Q, /* B */ IJKL, /* skip B */ EFGHIJKLMNO);
-        tmp.program();
+        // ckernel_unpack_template(true, true, EFGHIJKLM, EFGHI, ABCDEFG, P, /* skip A */ Q, /* B */ IJKL, /* skip B */ EFGHIJKLMNO)
+        mop::program(mop::foreach_mask_bit(mop::if_clear(EFGHIJKLM, EFGHI, ABCDEFG, P, IJKL), mop::otherwise(Q, EFGHIJKLMNO)));
     }
 }
 
@@ -380,7 +420,10 @@ inline void _llk_math_transpose_dest_init_()
     transpose_dest_configure_addrmod<is_32bit>();
     transpose_dest_configure_mop<transpose_of_faces, is_32bit>();
 
-    TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
+    namespace cfg = hal::cfg;
+    // TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0): both fields of the word
+    cfg::write<cfg::Access::TensixCfgUnit>(
+        cfg::set<cfg::ClrDvalid::SrcA_Disable, cfg::Sec::S0, 0>(), cfg::set<cfg::ClrDvalid::SrcB_Disable, cfg::Sec::S0, 0>());
 }
 
 /**
