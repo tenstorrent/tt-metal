@@ -13,7 +13,6 @@
 #include <tt_stl/assert.hpp>
 
 #include "erisc_datamover_builder.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
 #include "fabric_builder_context.hpp"
 #include "fabric_context.hpp"
 #include "impl/context/metal_context.hpp"
@@ -214,20 +213,10 @@ void append_inter_domain_connection_rt_args(
     tt::tt_metal::Program& program,
     const tt::tt_metal::CoreCoord& worker_core,
     std::vector<uint32_t>& rt_args) {
-    const auto& config = router_config(port);
-    const auto& channel = layout_of(port).senders[0].at(0);
+    const auto& control_plane = fabric_context(port).get_control_plane();
+    auto info = control_plane.get_router_connection_info(port.node, port.eth_chan, 0);
+    info.edm_direction = control_plane.routing_direction_to_eth_direction(port.direction);
     const auto router = router_core(port);
-    fabric_connection_info_t info{};
-    info.edm_buffer_base_addr = channel.base_address;
-    info.edm_connection_handshake_addr = config.sender_channels_connection_semaphore_address[0];
-    info.edm_worker_location_info_addr = config.sender_channels_worker_conn_info_base_address[0];
-    info.buffer_index_semaphore_id = config.sender_channels_buffer_index_semaphore_address[0];
-    info.buffer_size_bytes = config.channel_buffer_size_bytes;
-    info.edm_direction = fabric_context(port).get_control_plane().routing_direction_to_eth_direction(port.direction);
-    info.edm_noc_x = router.x;
-    info.edm_noc_y = router.y;
-    info.num_buffers_per_channel = channel.num_slots;
-    info.worker_free_slots_stream_id = connection_interface::sender_channel_0_free_slots_stream_id;
 
     const auto& cluster = fabric_context(port).get_cluster();
     const auto worker =
