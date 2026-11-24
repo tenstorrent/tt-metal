@@ -195,13 +195,16 @@ def test_a_consumer_reports_elfs_of_another_release(session, monkeypatch, warnin
 
 def test_installer_does_not_replace_a_directory_that_is_not_sfpi(tmp_path):
     """``--dest`` is replaced as a whole; a mistyped one must not cost somebody a directory."""
-    (tmp_path / "notes.txt").write_text("keep me")
+    (tmp_path / "install_sfpi.sh").symlink_to(LLK_ROOT / "tests/install_sfpi.sh")
+    (tmp_path / "work").mkdir()
+    (tmp_path / "work/notes.txt").write_text("keep me")
 
     result = subprocess.run(
-        ["bash", LLK_ROOT / "tests/install_sfpi.sh", "--dest", tmp_path],
+        ["bash", "install_sfpi.sh", "--dest", "work"],
+        cwd=tmp_path,
         capture_output=True,
         text=True,
     )
 
     assert result.returncode != 0 and "not an SFPI install" in result.stderr
-    assert (tmp_path / "notes.txt").read_text() == "keep me"
+    assert (tmp_path / "work/notes.txt").read_text() == "keep me"
