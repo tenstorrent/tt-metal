@@ -3,8 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // combine_port_writer: a combine port's fabric sender - rows out to home accumulators, credits / layouts back
-// Runs on: combine port cores (alone with accumulators_on_ports; else as the port role of
-//          combine_port_or_accumulator_writer.cpp),
+// Runs on: combine port cores, as the port role of combine_port_or_accumulator_writer.cpp,
 //          RISCV_0 (BRISC), NoC 1 (combine dm_kernel: RISCV_0 is pinned to NoC 1)
 // Responsibilities:
 //  - reads the device plan, the header cache and (per_chip_accumulator_table) the accumulator table from DRAM; the rows
