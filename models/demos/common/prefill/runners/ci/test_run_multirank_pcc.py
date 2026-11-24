@@ -315,9 +315,9 @@ class MultirankPccHarnessTests(unittest.TestCase):
             "TEST_VERDICT": verdict,
             "TEST_RUNNER_RC": str(runner_rc),
         }
-        # K3.1 demands a throughput measurement (PREFILL_REQUIRE_TPS defaults to 1 for it), so its runs
-        # report one unless a test says otherwise.
-        if model == "kimi_k3_1":
+        # K3.1 and every packed run demand a throughput measurement (PREFILL_REQUIRE_TPS defaults to 1 for them), so
+        # their runs report one unless a test says otherwise.
+        if model == "kimi_k3_1" or "packed" in args:
             env["TEST_TPS"] = "1000"
         env.update(extra_env or {})
         command = ["bash", str(harness), model]
@@ -613,6 +613,22 @@ class MultirankPccHarnessTests(unittest.TestCase):
         self.assertTrue(producer["PREFILL_PRODUCER_MANIFEST"].endswith("manifests/kimi_k3_1_packed.json"))
         self.assertEqual(producer["PREFILL_CHUNK_SIZE"], "2560")
         self.assertIn("PCC GATE PASS", result.stdout)
+
+    def test_packed_runs_are_perf_gated_and_must_measure(self):
+        """--variant packed keeps the perf gate, keyed <model>/<config>_packed in perf_baselines.json, and demands a
+        measurement before a baseline exists; the other variants stay ungated."""
+        packed = dict(config="sc1", hosts=self.SC4_HOSTS[:1], args=["--variant", "packed"])
+        result, _ = self.run_harness("kimi_k3_1", extra_env={"TEST_TPS": ""}, **packed)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("TPS GATE FAIL", result.stdout + result.stderr)
+        result, _ = self.run_harness("kimi_k3_1", **packed)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("PCC GATE PASS", result.stdout)
+        # The stub's verdicts carry no MTP caches, so the PCC gate fails there; only the perf gate is under test.
+        result, _ = self.run_harness(
+            "glm53", config="sc1", args=["--variant", "mtp_kv_share"], extra_env={"TEST_TPS": ""}
+        )
+        self.assertNotIn("TPS GATE", result.stdout + result.stderr)
 
     def test_kimi_k3_1_packed_refuses_the_8x4_configs(self):
         """On the 8x4 layout's 5120-token chunks kimi_k3_1_packed.json's budget (10240) packs two, not the four

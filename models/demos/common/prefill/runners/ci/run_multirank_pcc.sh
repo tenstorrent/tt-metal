@@ -92,6 +92,8 @@ PERF_GATE="${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/perf_gate.py"
 # Demand a measurement even before a baseline exists, so a leg being calibrated cannot pass green
 # on nothing.
 REQUIRE_TPS="${PREFILL_REQUIRE_TPS:-0}"
+# The perf_baselines.json key under the model when a gated variant sets its own (below); else CONFIG.
+PERF_CONFIG=""
 RUNNER_ENV=""
 PRODUCER_ENV=""
 PRODUCER_USERS="${PREFILL_PRODUCER_NUM_USERS:-1}"
@@ -295,9 +297,16 @@ if [ -n "${VARIANT}" ]; then
   # takes none.
   [ "${TAIL_GOLDEN}" = 1 ] || PRODUCER_ENV+=" export PREFILL_PCC_GOLDEN_LEN=${GOLDEN_LEN};"
   PRODUCER_ENV+=" export PREFILL_PRODUCER_MAX_REQUESTS=1; export PREFILL_PRODUCER_MULTI_TURN_PROB=0;"
-  PERF_BASELINES=""
-  REQUIRE_TPS=0
   EXPECTED_TPS=""
+  if [ "${VARIANT}" = _packed ]; then
+    # Packed is gated on its own baseline (perf_baselines.json <model>/<config>_packed), and must measure
+    # something even before it has one.
+    PERF_CONFIG="${CONFIG}${VARIANT}"
+    REQUIRE_TPS=1
+  else
+    PERF_BASELINES=""
+    REQUIRE_TPS=0
+  fi
 fi
 PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; ${PRODUCER_ENV}"
 
@@ -789,7 +798,7 @@ if [ "${REQUIRE_TPS}" = 1 ] || [ -n "${EXPECTED_TPS}" ] || [ -f "${PERF_BASELINE
   fi
   env ${GATE_ENV[@]+"${GATE_ENV[@]}"} python3 "${PERF_GATE}" \
     "${PREFILL_SUMMARIES}/perf_json/${RUN_NAME}_${CONFIG}.json" \
-    --table "${PERF_BASELINES}" --model "${MODEL}" --config "${CONFIG}" --power "${PERF_POWER}" \
+    --table "${PERF_BASELINES}" --model "${MODEL}" --config "${PERF_CONFIG:-${CONFIG}}" --power "${PERF_POWER}" \
     --expected-tps "${EXPECTED_TPS}" --margin "${PREFILL_PERF_MARGIN:-}" \
     --require "${REQUIRE_TPS}" 2>&1 | tee -a "${GATE_LOG}" || PERF_GATE_RC=$?
 fi

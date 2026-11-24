@@ -2429,7 +2429,8 @@
 # chunks). It tracks the 4x4 layout against the 8x4 SC1 leg above until 4x4 runs in production; there is
 # no SC4 4x4 leg. run_multirank_pcc.sh checks the 4x4 weight cache (glm_5_3_bh_16dev/4x4_sp1) first.
 # [2/2] runs the same request packed: two 2,560-token chunks per forward (glm53_4x4_packed.json), traced with D2H
-# acks, against the same golden tail; no perf gate (a --variant run has none). It measured 8-10 min on exabox
+# acks, against the same golden tail; perf is gated on glm53/sc1_4x4_packed in perf_baselines.json once it has an
+# entry, and until then must still measure. It measured 8-10 min on exabox
 # (2026-11-20), so the bound grew 40 -> 50, taken from the 8x4 SC1 job above.
 - name: "(GLM-5.3-744B) disaggregated prefill 2x[4,4] KV accuracy 1M tail@2.5k + perf 1M@2.5k, SC1"
   cmd: |
@@ -2587,9 +2588,9 @@
 # ran stages 4-6 (more AttnRes history) out of DRAM by ~16 MB on the first chunk (run 45061518673).
 # K3's 1M request at 2.5k chunks; its golden is an 8192-token vLLM prompt, so the golden's 8k is PCC'd and the
 # rest of the 1M timed, as K3 does at 55k of 1M. Perf is gated against its own kimi_k3_1 sc1 baseline (24 layers are no baseline for 93).
-# [2/2] runs the same request packed: two 2,560-token chunks per forward (kimi_k3_1_packed.json, one slot fewer for
-# the traced packed forward's scratch slot), traced with D2H acks, against the same golden; no perf gate (a --variant
-# run has none). The bound grew 60 -> 70, taken from the 8x4 GLM-5.3 SC1 job.
+# [2/2] runs the same request packed: four 2,560-token chunks per forward, the production shape (kimi_k3_1_packed.json,
+# one slot fewer for the traced packed forward's scratch slot), traced with D2H acks, against the same golden, perf
+# gated on kimi_k3_1/sc1_packed in perf_baselines.json. The bound grew 60 -> 70, taken from the 8x4 GLM-5.3 SC1 job.
 - name: "(Kimi-K3.1) disaggregated prefill L24 2x[4,4] KV accuracy 8k@2.5k + perf 1M@2.5k, SC1"
   cmd: |
     set -euo pipefail
@@ -2603,7 +2604,7 @@
     export PREFILL_JOB_DEADLINE=$(( $(date +%s) + 70 * 60 ))  # the bh_sc1_high_power timeout below
     echo "===== [1/2] (Kimi-K3.1) L24 prefill KV accuracy 8k@2.5k + perf 1M@2.5k, one chunk per forward ====="
     bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3_1 sc1 || exit $?
-    echo "===== [2/2] (Kimi-K3.1) L24 packed prefill KV accuracy 8k@2.5k, two chunks per forward ====="
+    echo "===== [2/2] (Kimi-K3.1) L24 packed prefill KV accuracy 8k@2.5k + perf 1M@2.5k, four chunks per forward ====="
     bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3_1 sc1 --variant packed || exit $?
     echo "===== both runs passed ====="
   test_type: k31_prefill_runner_24l
