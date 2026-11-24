@@ -1870,9 +1870,47 @@ class TestConfig:
             TestConfig.TESTS_WORKING_DIR,
         )
 
+    @staticmethod
+    def _trisc_unit_key(unit: str, build_h: str) -> str:
+        """The preprocessed unit without the build.h constants it does not name, directly or through
+        another kept line. Everything else in build.h stays in, so what is dropped cannot change the code.
+        """
+        rest, constants, statement, depth, in_build_h = [], [], "", 0, False
+        for line in unit.splitlines():
+            if line.startswith("# "):
+                in_build_h = f'"{build_h}"' in line
+                if not in_build_h:
+                    rest.append(line.replace(build_h, "build.h"))
+                continue
+            if not in_build_h:
+                rest.append(line)
+                continue
+            statement += line + "\n"
+            depth += line.count("{") - line.count("}")
+            if depth == 0 and line.rstrip().endswith(";"):
+                name = re.match(
+                    r"\s*(?:(?:static|inline)\s+)*constexpr\b[^=;{]*?\b(\w+)\s*[={]",
+                    statement,
+                )
+                constants.append((name.group(1) if name else None, statement))
+                statement = ""
+        rest.append(statement)
+        names = set(re.findall(r"\w+", "\n".join(rest)))
+        kept, grew = set(), True
+        while grew:
+            grew = False
+            for i, (name, text) in enumerate(constants):
+                if i not in kept and (name is None or name in names):
+                    kept.add(i)
+                    names.update(re.findall(r"\w+", text))
+                    grew = True
+        return "\n".join(rest) + "".join(
+            t for i, (_, t) in enumerate(constants) if i in kept
+        )
+
     def _compile_kernel_part_once(self, compile_command, source):
         # build.h holds every parameter of the variant, but a TRISC reads only some of them, so
-        # variants often compile a TRISC the same way. Key on the preprocessed unit and build it once.
+        # variants often compile a TRISC the same way. Key on what the unit uses and build it once.
         variant_dir = str(TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id)
         command = [
             compile_command[0],
@@ -1893,7 +1931,9 @@ class TestConfig:
             return
         key = json.dumps([token.replace(variant_dir, "") for token in command[:-1]])
         digest = sha256(
-            (key + unit.stdout.replace(variant_dir, "")).encode()
+            (
+                key + TestConfig._trisc_unit_key(unit.stdout, f"{variant_dir}/build.h")
+            ).encode()
         ).hexdigest()
         built = TestConfig.ARTEFACTS_DIR / "trisc" / f"{digest}.elf"
         with FileLock(TestConfig.SYNC_DIR / f"trisc-{digest}.lock"):

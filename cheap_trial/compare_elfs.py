@@ -32,6 +32,8 @@ pairs = [
     ("build-pr", "build-nodedup", False),
     ("build-main", "build-pr", False),
     ("build-main", "build-pr", True),
+    ("build-pr", "build-nodedup", True),
+    ("build-main", "build-nodedup", True),
 ]
 for a, b, strip in pairs:
     diff = [e for e in common if digest(os.path.join(temp, a, e), strip) != digest(os.path.join(temp, b, e), strip)]
@@ -40,6 +42,19 @@ for a, b, strip in pairs:
         "different": len(diff),
         "examples": diff[:5],
     }
+readelf = objcopy.replace("objcopy", "readelf")
+for a, b in [("build-pr", "build-nodedup")]:
+    ex = res[f"{a} vs {b}"]["examples"]
+    if ex:
+        dumps = [
+            subprocess.run(
+                [readelf, "-wi", "-S", os.path.join(temp, x, ex[0])], capture_output=True, text=True
+            ).stdout.splitlines()
+            for x in (a, b)
+        ]
+        import difflib
+
+        res["debug_diff_example"] = list(difflib.unified_diff(*dumps, lineterm="", n=0))[:80]
 store = os.path.join(temp, "build-pr", "trisc")
 res["pr_unique_trisc_elfs"] = len(os.listdir(store)) if os.path.isdir(store) else 0
 res["unique_by_content"] = {b: len({digest(os.path.join(temp, b, e)) for e in sets[b]}) for b in builds}

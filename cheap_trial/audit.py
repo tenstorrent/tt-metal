@@ -13,6 +13,8 @@ keep = [
     "tt_metal/hw",
     "tt_metal/hostdevcommon",
     "ttnn/cpp/ttnn/operations/experimental",
+    "tt_metal/sfpi-info.sh",
+    "tt_metal/sfpi-version",
 ]
 cwds = [f"{root}/tt_metal/tt-llk/tests", f"{root}/tt_metal/tt-llk/tests/python_tests"]
 outside, inside = {}, 0
@@ -25,10 +27,7 @@ for p in paths:
         rel = os.path.relpath(a, root)
         if rel.startswith(".git/") or rel == ".git":
             continue
-        # Cone mode also keeps the files directly in each parent of a kept dir.
-        parent_file = os.path.isfile(a) and any(
-            k.startswith(os.path.dirname(rel) + "/") or os.path.dirname(rel) == "" for k in keep
-        )
+        parent_file = False
         if any(rel == k or rel.startswith(k + "/") for k in keep) or parent_file:
             inside += 1
         elif not any(k.startswith(rel + "/") for k in keep):

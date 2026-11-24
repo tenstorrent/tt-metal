@@ -21,7 +21,7 @@ use_pr() { cp "$RUNNER_TEMP/test_config.pr.py" "$PT/helpers/test_config.py"; }
 cd "$PT"
 use_main
 for mode in producer consumer; do
-  COMMON=(-q --override-ini=log_cli=false -m "$MARK" --timeout=60 --perf-splits "$NGROUPS" --perf-group "$GROUP" --compile-$mode --collect-only -p no:xdist -p no:cacheprovider)
+  COMMON=(-q --override-ini=log_cli=false -m "$MARK" --timeout=60 --perf-splits "$NGROUPS" --perf-group "$GROUP" --compile-$mode --collect-only -n 0 -p no:cacheprovider)
   tm collect_${mode}_before python3 -m pytest "${COMMON[@]}" .
   tm collect_${mode}_after python3 -m pytest "${COMMON[@]}" -o "python_files=perf_*.py" .
   for x in before after; do grep '::' "$OUT/collect_${mode}_$x.log" > "$OUT/nodes_${mode}_$x.txt"; done
@@ -42,12 +42,13 @@ sleep 5
 mv "$BUILD" "$RUNNER_TEMP/build-main"
 # Python side of a measuring session: collect in consumer mode under strace too.
 cd "$PT"
-strace -f -qq -e trace=%file,execve -e signal=none -o "|python3 $TRIAL/audit.py $ROOT - $OUT/audit-consumer.json" python3 -m pytest -q --override-ini=log_cli=false -m "$MARK" --perf-splits "$NGROUPS" --perf-group "$GROUP" --compile-consumer --collect-only -p no:xdist . > /dev/null 2>&1
+strace -f -qq -e trace=%file,execve -e signal=none -o "|python3 $TRIAL/audit.py $ROOT - $OUT/audit-consumer.json" python3 -m pytest -q --override-ini=log_cli=false -m "$MARK" --perf-splits "$NGROUPS" --perf-group "$GROUP" --compile-consumer --collect-only -n 0 . > /dev/null 2>&1
 sleep 5
 cd "$T"
 
 # 3. Sparse tree in place (same path), PR code: dedup on, then dedup off with the same flags.
-git -C "$ROOT" sparse-checkout set --cone .github tt_metal/tt-llk tt_metal/hw tt_metal/hostdevcommon ttnn/cpp/ttnn/operations/experimental cheap_trial
+git -C "$ROOT" sparse-checkout set --no-cone /.github/ /tt_metal/tt-llk/ /tt_metal/hw/ /tt_metal/hostdevcommon/ /tt_metal/sfpi-info.sh /tt_metal/sfpi-version /ttnn/cpp/ttnn/operations/experimental/ /cheap_trial/ || { git -C "$ROOT" config core.sparseCheckout true; printf "%s\n" /.github/ /tt_metal/tt-llk/ /tt_metal/hw/ /tt_metal/hostdevcommon/ /tt_metal/sfpi-info.sh /tt_metal/sfpi-version /ttnn/cpp/ttnn/operations/experimental/ /cheap_trial/ > "$ROOT/.git/info/sparse-checkout"; git -C "$ROOT" read-tree -mu HEAD; }
+ls -a "$ROOT" "$ROOT/tt_metal" | tee -a "$OUT/sparse-tree.txt"
 ls "$ROOT" "$ROOT/ttnn/cpp/ttnn/operations" | tee "$OUT/sparse-tree.txt"
 use_pr
 tm build_pr ./run_llk_perf_$ARCH.sh "$GROUP" "$NGROUPS"
