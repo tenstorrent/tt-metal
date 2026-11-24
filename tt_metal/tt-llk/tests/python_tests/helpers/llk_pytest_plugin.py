@@ -38,6 +38,7 @@ import os
 import re
 import signal
 import sys
+import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import NoReturn, Optional
@@ -872,12 +873,24 @@ def _store_split_durations(session):
     reporter = config.pluginmanager.get_plugin("terminalreporter")
     if reporter is None:
         return
-    for reports in reporter.stats.values():
-        for report in reports:
-            if isinstance(report, pytest.TestReport):
-                durations[report.nodeid] = (
-                    durations.get(report.nodeid, 0.0) + report.duration / workers
-                )
+    reports = [
+        report
+        for reports in reporter.stats.values()
+        for report in reports
+        if isinstance(report, pytest.TestReport)
+    ]
+    # Scale to the session's wall time: duration / workers assumes every worker is busy
+    # until the end, but a leg of long compiles leaves most of them idle.
+    total = sum(report.duration for report in reports)
+    start = getattr(config, "_llk_split_start", None)
+    if start is not None and total:
+        scale = (time.perf_counter() - start) / total
+    else:
+        scale = 1 / workers
+    for report in reports:
+        durations[report.nodeid] = (
+            durations.get(report.nodeid, 0.0) + report.duration * scale
+        )
     path.write_text(json.dumps(durations))
 
 
@@ -1187,6 +1200,7 @@ def pytest_runtest_setup(item):
 def pytest_sessionstart(session):
     if hasattr(session.config, "workerinput"):
         return
+    session.config._llk_split_start = time.perf_counter()
     # Under xdist no test runs on the controller; start the host before xdist's (trylast)
     # pytest_sessionstart spawns the workers.
     if (
