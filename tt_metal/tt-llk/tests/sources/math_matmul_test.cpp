@@ -232,10 +232,24 @@ constexpr bool matmul_row_end_fold_k = true;
 constexpr bool matmul_row_end_fold_k = false;
 #endif
 // Wormhole and Quasar take main's template arguments: the row MOP, in1 order, reuse direction and fold parameters are Blackhole's
-#ifdef ARCH_BLACKHOLE
-#define MATMUL_DEST_DONE_ARGS dest_sync, is_fp32_dest_acc_en, fused_post_flip, next_op_sets_base
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
+// production's section end class (matmul.h matmul_fe_main_section_end), for the keyed and the row MOP cells alike
+#ifdef MATMUL_L1_FUNC
+constexpr bool matmul_dd_l1_acc = true;
 #else
-#define MATMUL_DEST_DONE_ARGS dest_sync, is_fp32_dest_acc_en
+constexpr bool matmul_dd_l1_acc = false;
+#endif
+constexpr bool matmul_dd_main_end = ckernel::matmul_main_section_end_class(
+    MATH_FIDELITY, dest_sync == ckernel::DstSync::SyncHalf, MATMUL_KEY_IN1, MATMUL_KEY_IN0, MATMUL_OUT_FORMAT, THROTTLE_LEVEL, matmul_dd_l1_acc);
+#else
+constexpr bool matmul_dd_main_end = false;
+#endif
+#ifdef ARCH_BLACKHOLE
+#define MATMUL_DEST_DONE_ARGS    dest_sync, is_fp32_dest_acc_en, fused_post_flip, next_op_sets_base, matmul_dd_main_end
+#define MATMUL_RM_DEST_DONE_ARGS dest_sync, is_fp32_dest_acc_en, false, false, matmul_dd_main_end
+#else
+#define MATMUL_DEST_DONE_ARGS    dest_sync, is_fp32_dest_acc_en
+#define MATMUL_RM_DEST_DONE_ARGS dest_sync, is_fp32_dest_acc_en
 #endif
 #ifdef ARCH_BLACKHOLE
 #define MATMUL_MATH_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, matmul_row_mop, matmul_tile_mop, matmul_reuse_dir_k, matmul_row_end_fold_k
@@ -410,7 +424,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     [[maybe_unused]] constexpr bool next_op_sets_base = !is_fp32_dest_acc_en && !matmul_main_math_form;
 #endif
 #if MATMUL_MAIN_ROW_MOP
-                    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    _llk_math_dest_section_done_<MATMUL_RM_DEST_DONE_ARGS>();
 #else
                     _llk_math_dest_section_done_<MATMUL_DEST_DONE_ARGS>();
 #endif

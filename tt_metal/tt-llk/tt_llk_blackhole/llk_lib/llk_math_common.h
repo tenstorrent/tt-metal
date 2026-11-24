@@ -105,9 +105,9 @@ inline void _llk_math_wait_for_dest_available_()
  * @tparam is_fp32_dest_acc_en: Whether FP32 accumulation in the destination register is enabled.
  * @tparam fused_post_flip: Kept for callers; every half-sync flip now posts and flips under one stall.
  * @tparam next_op_sets_base: Every math op that can follow writes DEST_TARGET_REG_CFG_MATH_Offset itself, so the flip skips that write.
- * @tparam main_section_end: main's post then flip, for kernels bound by the kernel config buffer (the shorter end changes their unrolling).
+ * @tparam main_section_end: main's post then flip. The default: the compute API gives the fused end only to matmul_block kernels.
  */
-template <DstSync Dst, bool is_fp32_dest_acc_en, bool fused_post_flip = false, bool next_op_sets_base = false, bool main_section_end = false>
+template <DstSync Dst, bool is_fp32_dest_acc_en, bool fused_post_flip = false, bool next_op_sets_base = false, bool main_section_end = true>
 inline void _llk_math_dest_section_done_()
 {
     if constexpr (Dst == DstSync::SyncHalf && main_section_end)
