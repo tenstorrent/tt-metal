@@ -128,7 +128,9 @@ jobs:
         test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
     runs-on: ${{ matrix.test-group.runs_on }}
-    timeout-minutes: 180
+    # Whole-job guard (per-step timeouts still apply below). Sourced from the SKU's
+    # `timeout` in tests/pipeline_reorg/vllm_model_tests.yaml, budget-checked per tier.
+    timeout-minutes: ${{ matrix.test-group.timeout }}
     # Per-phase log paths kept job-level so they resolve in both the ${{ env }}
     # expression context (run-with-log log-file inputs) and the container step
     # shells ($FILE_*). container.env is shell-only, not visible to expressions.

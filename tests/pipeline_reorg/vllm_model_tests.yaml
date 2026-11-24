@@ -4,7 +4,7 @@
 #   name: The display name for the job in GitHub Actions.
 #   model: HF hub id of the model to serve (also used for workflow_dispatch model filtering).
 #   skus: A mapping of SKU names to their configuration:
-#     timeout: Budget in minutes, summed for budget checks; the per-step timeouts below bound the run.
+#     timeout: Job timeout in minutes (whole-job guard; also summed for budget checks).
 #     tier: Model tier (1, 2, or 3). Classification only — every entry runs at the
 #           same cadence in this single pipeline. The value mirrors the tier of the
 #           equivalent model in the e2e/unit pipelines (models_e2e_tests.yaml /
