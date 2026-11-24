@@ -5,15 +5,17 @@
 #include "chunk_gated_delta_rule_composite.hpp"
 
 #include <cmath>
+#include <string>
 #include <utility>
 #include <vector>
 
 #include "autograd/auto_context.hpp"
+#include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/common/tensor_validation.hpp"
 #include "ttnn/operations/data_movement/repeat_interleave/repeat_interleave.hpp"
 #include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads/nlp_create_qkv_heads.hpp"
-#include "ttnn/operations/reduction/accumulation/cumsum/cumsum.hpp"
+#include "ttnn/operations/transformer/chunk_gated_delta_rule/device/chunk_gdn_phased.hpp"
 #include "ttnn_fixed/matmuls.hpp"
 
 namespace ttml::ops {
@@ -24,15 +26,11 @@ constexpr auto kF32 = tt::tt_metal::DataType::FLOAT32;
 constexpr auto kBF16 = tt::tt_metal::DataType::BFLOAT16;
 
 // fp32 matmul with fp32 accumulation, batched over the two leading dims.
-Tensor mm(const Tensor& a, const Tensor& b, bool transpose_b = false) {
-    return ttnn_fixed::matmul(a, b, /*transpose_a=*/false, transpose_b);
+Tensor mm(const Tensor& a, const Tensor& b) {
+    return ttnn_fixed::matmul(a, b, /*transpose_a=*/false, /*transpose_b=*/false);
 }
 
-Tensor to_rm_f32(const Tensor& x) {
-    return ttnn::to_layout(ttnn::typecast(x, kF32), ttnn::Layout::ROW_MAJOR);
-}
-
-// [B, 1, T, Hs*D] bf16 -> [B*Hs*G, T/C, C, D] fp32 TILE; every one of the Hs heads is repeated G times (GVA).
+// [B, 1, T, Hs*D] -> [B*Hs*G, T/C, C, D] bf16 TILE; every one of the Hs heads is repeated G times (GVA).
 Tensor heads_chunked(const Tensor& flat, uint32_t B, uint32_t T, uint32_t Hs, uint32_t D, uint32_t G, uint32_t C) {
     auto x = std::get<0>(ttnn::experimental::nlp_create_qkv_heads(
         flat,
@@ -46,15 +44,7 @@ Tensor heads_chunked(const Tensor& flat, uint32_t B, uint32_t T, uint32_t Hs, ui
     if (G > 1U) {
         x = ttnn::repeat_interleave(x, G, /*dim=*/1);  // [B, Hs*G, T, D]
     }
-    return ttnn::reshape(ttnn::typecast(x, kF32), ttnn::Shape{B * Hs * G, T / C, C, D});
-}
-
-// [B, 1, T, HV] -> [B*HV, T/C, 1, C] fp32 TILE: one row of C gate values per chunk.
-Tensor gate_rows(const Tensor& flat, uint32_t B, uint32_t T, uint32_t HV, uint32_t C) {
-    auto x = ttnn::reshape(to_rm_f32(flat), ttnn::Shape{B, T, HV});
-    x = ttnn::permute(x, ttsl::SmallVector<int64_t>{0, 2, 1});  // [B, HV, T]
-    x = ttnn::reshape(x, ttnn::Shape{B * HV, T / C, 1U, C});
-    return ttnn::to_layout(x, ttnn::Layout::TILE);
+    return ttnn::reshape(x, ttnn::Shape{B * Hs * G, T / C, C, D});
 }
 
 // [BH, NC, R, W] -> [BH, 1, R, W]: chunk i.
@@ -71,44 +61,53 @@ Tensor concat_or_single(std::vector<Tensor>& parts, int dim) {
     return parts.size() == 1U ? parts.front() : ttnn::concat(parts, dim);
 }
 
-// [C, C] constants: identity, strictly lower ones, and the additive mask that is 0 on and below the diagonal and -1e30
-// above it (exp of the masked difference of cumulative gates is then exactly 0).  Uploaded once per device and chunk
-// size, so a forward does no host writes (which trace capture forbids).
-struct Constants {
+// The constant fp32 inputs of chunk_gdn_prep: the [1, 1, C, C] identity, inclusive lower ones and ones, and the three
+// 16x16 quadrant masks of a 32x32 tile packed into [1, 1, 32, 96] (top-left, bottom-right, bottom-left).  Uploaded
+// once per device, so a forward does no host writes (which trace capture forbids).
+struct PrepConstants {
     Tensor eye;
-    Tensor strict_lower;
-    Tensor upper_mask;
+    Tensor tril;
+    Tensor ones;
+    Tensor masks;
 };
 
-Tensor device_constant_cc(const char* name, uint32_t C, float (*value)(uint32_t, uint32_t)) {
-    return autograd::ctx().get_device_constant(fmt::format("chunk_gated_delta_rule/{}/{}", name, C), [&] {
-        std::vector<float> data(static_cast<size_t>(C) * C);
-        for (uint32_t i = 0; i < C; ++i) {
-            for (uint32_t j = 0; j < C; ++j) {
-                data[i * C + j] = value(i, j);
+Tensor device_constant(const std::string& key, uint32_t rows, uint32_t cols, float (*value)(uint32_t, uint32_t)) {
+    return autograd::ctx().get_device_constant(key, [&] {
+        std::vector<float> data(static_cast<size_t>(rows) * cols);
+        for (uint32_t i = 0; i < rows; ++i) {
+            for (uint32_t j = 0; j < cols; ++j) {
+                data[i * cols + j] = value(i, j);
             }
         }
-        return core::from_vector<float, ttnn::DataType::FLOAT32>(
-            data, ttnn::Shape{1U, 1U, C, C}, &autograd::ctx().get_device());
+        return core::from_vector<float, kF32>(data, ttnn::Shape{1U, 1U, rows, cols}, &autograd::ctx().get_device());
     });
 }
 
-Constants make_constants(uint32_t C) {
+PrepConstants prep_constants(uint32_t C) {
+    const auto key = [C](const char* name) { return fmt::format("chunk_gated_delta_rule/{}/{}", name, C); };
     return {
-        device_constant_cc("eye", C, [](uint32_t i, uint32_t j) { return i == j ? 1.0F : 0.0F; }),
-        device_constant_cc("strict_lower", C, [](uint32_t i, uint32_t j) { return i > j ? 1.0F : 0.0F; }),
-        device_constant_cc("upper_mask", C, [](uint32_t i, uint32_t j) { return i >= j ? 0.0F : -1e30F; }),
+        device_constant(key("eye"), C, C, [](uint32_t i, uint32_t j) { return i == j ? 1.0F : 0.0F; }),
+        device_constant(key("tril"), C, C, [](uint32_t i, uint32_t j) { return j <= i ? 1.0F : 0.0F; }),
+        device_constant(key("ones"), C, C, [](uint32_t, uint32_t) { return 1.0F; }),
+        device_constant(
+            "chunk_gated_delta_rule/masks",
+            32U,
+            96U,
+            [](uint32_t i, uint32_t j) {
+                const bool lo_i = i < 16U;
+                const bool lo_j = j % 32U < 16U;
+                const uint32_t quadrant = j / 32U;
+                const bool on = quadrant == 0U ? (lo_i && lo_j) : quadrant == 1U ? (!lo_i && !lo_j) : (!lo_i && lo_j);
+                return on ? 1.0F : 0.0F;
+            }),
     };
 }
 
-// (I + N)^-1 for strictly lower triangular N [BH, NC, C, C].  Row i of X = I - N X depends only on rows < i, so
-// X <- I - N X is exact after C - 1 rounds (the same arithmetic as forward substitution, batched over all chunks).
-Tensor unit_lower_inverse(const Tensor& n, const Tensor& eye, uint32_t C) {
-    auto x = ttnn::subtract(eye, n);  // exact for rows 0 and 1
-    for (uint32_t round = 2U; round < C; ++round) {
-        x = ttnn::subtract(eye, mm(n, x));
-    }
-    return x;
+// What chunk_gdn_prep runs with in ttnn's own chunked forward.
+ttnn::DeviceComputeKernelConfig prep_kernel_config() {
+    auto config = core::ComputeKernelConfig::precise();
+    config.packer_l1_acc = false;
+    return config;
 }
 
 void validate(
@@ -214,43 +213,45 @@ ChunkGatedDeltaRuleCompositeResult chunk_gated_delta_rule_fw_composite(
     const float q_scale = scale.value_or(1.0F / std::sqrt(static_cast<float>(K)));
 
     auto* device = &autograd::ctx().get_device();
-    const auto c = make_constants(C);
 
-    // Per-head chunked layouts, [BH, NC, C, D] (GVA repeated), and the gates as rows [BH, NC, 1, C].
-    const auto qh = ttnn::multiply(heads_chunked(q, B, T, HK, K, G, C), q_scale);
-    const auto kh = heads_chunked(k, B, T, HK, K, G, C);
-    const auto vh = heads_chunked(v, B, T, HV, V, 1U, C);
-    const auto g_row = gate_rows(g, B, T, HV, C);
-    const auto beta_row = gate_rows(beta, B, T, HV, C);
-
-    // Chunk-local inclusive cumulative gate, as a row and as a column.
-    const auto gc_row = ttnn::cumsum(g_row, /*dim=*/-1);
-    const auto gc_col = ttnn::transpose(gc_row, -2, -1);  // [BH, NC, C, 1]
-    const auto beta_col = ttnn::transpose(beta_row, -2, -1);
-
-    // L[i, j] = exp(gc_i - gc_j) for i >= j, else exactly 0.
-    const auto decay = ttnn::exp(ttnn::add(ttnn::subtract(gc_col, gc_row), c.upper_mask));  // [BH, NC, C, C]
-
-    const auto k_beta = ttnn::multiply(kh, beta_col);
-    const auto v_beta = ttnn::multiply(vh, beta_col);
-
-    // N = strict_lower((k*beta) k^T * L);  T_inv = (I + N)^-1.
-    const auto n = ttnn::multiply(ttnn::multiply(mm(k_beta, kh, /*transpose_b=*/true), decay), c.strict_lower);
-    const auto t_inv = unit_lower_inverse(n, c.eye, C);  // [BH, NC, C, C]
-
-    const auto exp_gc = ttnn::exp(gc_col);                                       // [BH, NC, C, 1]
-    const auto w = mm(t_inv, ttnn::multiply(k_beta, exp_gc));                    // [BH, NC, C, K]
-    const auto u = mm(t_inv, v_beta);                                            // [BH, NC, C, V]
-    const auto intra = ttnn::multiply(mm(qh, kh, /*transpose_b=*/true), decay);  // [BH, NC, C, C]
-    const auto q_decay = ttnn::multiply(qh, exp_gc);                             // [BH, NC, C, K]
-    const auto gc_last = ttnn::slice(
-        gc_col,
-        ttsl::SmallVector<uint32_t>{0U, 0U, C - 1U, 0U},
-        ttsl::SmallVector<uint32_t>{BH, NC, C, 1U},
-        ttsl::SmallVector<uint32_t>{1U, 1U, 1U, 1U});  // [BH, NC, 1, 1]
-    const auto decay_last = ttnn::exp(gc_last);
-    // (k * exp(gc_last - gc))^T, [BH, NC, K, C]
-    const auto k_dec_t = ttnn::transpose(ttnn::multiply(kh, ttnn::exp(ttnn::subtract(gc_last, gc_col))), -2, -1);
+    // The state-independent per-chunk terms come from ttnn's chunk_gdn_prep, the first phase of ttnn's chunked
+    // forward.  It reads q and k head-major [BH, NC, C, K] bf16 (GVA repeated), v flat [B, T, HV*V] and the gates
+    // token-major [B, T, HV], and returns, all fp32 with gc the chunk-local inclusive cumsum of g:
+    //   v_beta [BH, NC, C, V]    v * beta
+    //   nkd [BH, NC, C, K]       -(k * beta * exp(gc))
+    //   q_decay [BH, NC, C, K]   q * exp(gc)
+    //   intra [BH, NC, C, C]     (q k^T) * L, L[i, j] = exp(gc_i - gc_j) for i >= j, else 0
+    //   k_dec_t [BH, NC, K, C]   (k * exp(gc_last - gc))^T
+    //   dl [BH, NC, 32, 32]      exp(gc_last) on the diagonal
+    //   t_inv [BH, NC, C, C]     (I + N)^-1, N = strict_lower((k * beta) k^T * L)
+    // q goes in unscaled, so the output is scaled instead.
+    const auto consts = prep_constants(C);
+    const auto prep = ttnn::prim::chunk_gdn_prep(
+        heads_chunked(q, B, T, HK, K, G, C),
+        heads_chunked(k, B, T, HK, K, G, C),
+        ttnn::reshape(v, ttnn::Shape{B, T, HV * V}),
+        ttnn::reshape(g, ttnn::Shape{B, T, HV}),
+        ttnn::reshape(beta, ttnn::Shape{B, T, HV}),
+        consts.eye,
+        consts.tril,
+        consts.ones,
+        consts.masks,
+        C,
+        ttnn::DRAM_MEMORY_CONFIG,
+        prep_kernel_config(),
+        /*v_flat=*/true,
+        HV);
+    const auto& q_decay = prep[2];
+    const auto& intra = prep[3];
+    const auto& k_dec_t = prep[4];
+    const auto& t_inv = prep[6];
+    const auto u = mm(t_inv, prep[0]);      // T_inv v_beta, [BH, NC, C, V]
+    const auto neg_w = mm(t_inv, prep[1]);  // -T_inv (k * beta * exp(gc)), [BH, NC, C, K]
+    const auto decay_last = ttnn::slice(
+        prep[5],
+        ttsl::SmallVector<uint32_t>{0U, 0U, 0U, 0U},
+        ttsl::SmallVector<uint32_t>{BH, NC, 1U, 1U},
+        ttsl::SmallVector<uint32_t>{1U, 1U, 1U, 1U});  // exp(gc_last), [BH, NC, 1, 1]
 
     // The only sequential part: the state S [BH, 1, K, V] across the chunks.
     Tensor state = initial_state.has_value() ? ttnn::reshape(*initial_state, ttnn::Shape{BH, 1U, K, V})
@@ -260,7 +261,7 @@ ChunkGatedDeltaRuleCompositeResult chunk_gated_delta_rule_fw_composite(
         if (save_for_backward) {
             h_parts.push_back(state);
         }
-        const auto v_new = ttnn::subtract(chunk_at(u, i), mm(chunk_at(w, i), state));  // [BH, 1, C, V]
+        const auto v_new = ttnn::add(chunk_at(u, i), mm(chunk_at(neg_w, i), state));  // [BH, 1, C, V]
         out_parts.push_back(ttnn::add(mm(chunk_at(q_decay, i), state), mm(chunk_at(intra, i), v_new)));
         state = ttnn::add(ttnn::multiply(state, chunk_at(decay_last, i)), mm(chunk_at(k_dec_t, i), v_new));
         if (save_for_backward) {
@@ -268,7 +269,7 @@ ChunkGatedDeltaRuleCompositeResult chunk_gated_delta_rule_fw_composite(
         }
     }
 
-    auto out = concat_or_single(out_parts, /*dim=*/2);  // [BH, 1, T, V]
+    auto out = ttnn::multiply(concat_or_single(out_parts, /*dim=*/2), q_scale);  // [BH, 1, T, V]
     if (!output_head_major) {
         // [BH, 1, T, V] -> [B, 1, T, HV*V]
         auto o = ttnn::reshape(ttnn::to_layout(out, ttnn::Layout::ROW_MAJOR), ttnn::Shape{B, HV, T, V});

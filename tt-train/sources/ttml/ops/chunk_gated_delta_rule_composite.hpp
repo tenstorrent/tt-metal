@@ -38,9 +38,8 @@ struct ChunkGatedDeltaRuleCompositeResult {
 // All intermediates and the state are fp32.  output_dtype is the dtype of `output` (FLOAT32 or BFLOAT16).
 // save_for_backward = false (inference, or no input requires a gradient) returns h, v_new and a empty.
 //
-// (I + N)^-1, N strictly lower, is computed by exact forward substitution (chunk_size - 1 rounds of
-// X <- I - N X over all chunks and heads at once).  A Neumann product (I - N)(I + N^2)(I + N^4)... is not used: it
-// overflows for strongly correlated keys.
+// The state-independent per-chunk terms, (I + N)^-1 included, come from ttnn's chunk_gdn_prep, the first phase of
+// ttnn's chunked forward; the loop over the chunks carries the state with ttnn matmuls.
 ChunkGatedDeltaRuleCompositeResult chunk_gated_delta_rule_fw_composite(
     const ttnn::Tensor& q,
     const ttnn::Tensor& k,
