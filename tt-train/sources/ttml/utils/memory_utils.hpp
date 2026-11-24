@@ -21,7 +21,8 @@ inline constexpr const char* kDefaultTraceName = "END_TRACE";
 
 /**
  * @brief Begin capturing memory usage
- * @return A scope guard that will end the capture when it goes out of scope.
+ * @return A scope guard that ends the capture and clears all stored traces when it goes out of scope.
+ * @note To keep the traces, call end_capture() explicitly instead of letting the guard run.
  * @warning Make sure to not ignore the return value of this function, otherwise trace will be empty!
  * @note This functions throws an exception if capture is already active.
  * @note Not thread safe.
