@@ -71,6 +71,7 @@ KernelIds build_kernels_and_cbs(
     const tt::tt_metal::CoreRangeSet& all_cores,
     uint32_t scale_scratch_bytes,
     bool round_scale_to_power_of_two,
+    bool round_to_nearest,
     const std::map<std::string, std::string>& defines) {
     using namespace tt;
     using namespace tt::tt_metal;
@@ -212,7 +213,8 @@ KernelIds build_kernels_and_cbs(
         clamp_max_bits,
         inv_448_bits,
         tile_w,
-        static_cast<uint32_t>(round_scale_to_power_of_two)};
+        static_cast<uint32_t>(round_scale_to_power_of_two),
+        static_cast<uint32_t>(round_to_nearest)};
     // fp32_dest_acc_en=True is required whenever an 8-bit-float CB (output_e4m3) is on the core (DEST in
     // 32-bit family-agnostic mode); it also gives fp32 precision for the reduce/divide stages.
     ids.compute = CreateKernel(
@@ -286,6 +288,7 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
         all_cores,
         scale_scratch_bytes,
         attrs.round_scale_to_power_of_two,
+        attrs.round_to_nearest,
         defines);
 
     const uint32_t src_addr = input.mesh_buffer().address();

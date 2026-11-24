@@ -242,6 +242,73 @@ def test_cast_to_fp8_power_of_two_scale_e4m3fn_boundary(device):
     ), f"Unexpected E4M3FN boundary outputs: got {actual_output.tolist()}, expected {expected_output.tolist()}"
 
 
+def _rounding_input(shape, torch_dtype):
+    """Random rows with distinct block ranges, plus rows built to hit the rounding edge cases: exact ties between two
+    e4m3 values (positive and negative), the 448 ceiling, subnormal ties, a zero row and -0."""
+    torch.manual_seed(7)
+    x = torch.randn(*shape) * torch.tensor([0.01, 0.3, 4.0, 300.0]).repeat_interleave(BLOCK_W).repeat(
+        shape[-1] // (4 * BLOCK_W)
+    )
+    rows = x.reshape(-1, shape[-1])
+    # Row 0: every block's amax is 440 * 2**-3 (scale 2**-3); values are ties of the binades 1 .. 256, and subnormal
+    # ties (3 * 2**-10, 5 * 2**-10), times the scale, alternating sign.
+    ties = torch.tensor([1.0625, 2.125, 4.25, 8.5, 17.0, 34.0, 68.0, 136.0, 272.0, 1.1875, 440.0, 3 * 2.0**-10])
+    ties = torch.cat([ties, torch.tensor([5 * 2.0**-10, 2.0**-10, 2.0**-11, 15.5])])
+    row0 = torch.zeros(shape[-1])
+    row0[:] = ties.repeat(shape[-1] // ties.numel() + 1)[: shape[-1]]
+    row0[1::2] *= -1
+    row0[::BLOCK_W] = 440.0  # amax 440 * 2**-3: scale 2**-3 (448 would round the scale up via float32(1 / 448))
+    rows[0] = row0 * 2.0**-3
+    rows[1] = 0.0  # zero row
+    rows[2, : BLOCK_W // 2] = -0.0
+    rows[2, BLOCK_W // 2 : BLOCK_W] = 0.0
+    return rows.reshape(shape).to(torch_dtype)
+
+
+@pytest.mark.parametrize("round_to_nearest", [False, True], ids=["truncate", "nearest"])
+@pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
+@pytest.mark.parametrize("shape", [(30, 512), (2, 32, 1024)])
+def test_cast_to_fp8_rounding_bit_exact(device, dtype, shape, input_layout, round_to_nearest):
+    """Both rounding modes, bit for bit against the host model of the kernel (``quantize_scaled_fp8_host``: power-of-
+    two scale; truncate = the packer's cut toward zero; nearest = half a step of the value's binade added to its
+    magnitude before the cut, i.e. round half away from zero, the Hy4 decode append's ``nearest``)."""
+    from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvFp8Rounding, quantize_scaled_fp8_host
+
+    torch_dtype = getattr(torch, dtype)
+    x = _rounding_input(shape, torch_dtype)
+    x_tt = ttnn.from_torch(
+        x, dtype=getattr(ttnn, dtype), layout=input_layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    e4m3_tt, scale_tt = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
+        x_tt, round_scale_to_power_of_two=True, round_to_nearest=round_to_nearest
+    )
+    scale = ttnn.to_torch(scale_tt).float()
+    # Single-device to_torch cannot read FP8_E4M3: decode through per_token_cast_back (exact: power-of-two scales).
+    y_tt = ttnn.experimental.deepseek_prefill.per_token_cast_back(e4m3_tt, scale_tt, output_dtype=ttnn.float32)
+    y = ttnn.to_torch(y_tt).float()
+    blocks_shape = (*shape[:-1], shape[-1] // BLOCK_W, BLOCK_W)
+    codes = (y.reshape(blocks_shape) / scale[..., None]).reshape(shape)
+
+    rounding = MlaKvFp8Rounding.NEAREST if round_to_nearest else MlaKvFp8Rounding.TRUNCATE
+    ref_codes, ref_scale = quantize_scaled_fp8_host(x.float(), rounding)
+    # Codes under 2**-6 are the packer's exponent-field-0 bytes (see e4m3_round_host); per_token_cast_back reads them
+    # as 0, so through it the model's IEEE decode of those bytes shows as 0.
+    ref_codes = torch.where(ref_codes.abs() < 2.0**-6, torch.zeros_like(ref_codes), ref_codes)
+    assert torch.equal(scale, ref_scale), f"scales differ at {(scale != ref_scale).nonzero()[:8].tolist()}"
+    wrong = codes != ref_codes
+    assert not bool(wrong.any()), (
+        f"{int(wrong.sum())} e4m3 values differ from the {rounding.value} host model, first at "
+        f"{wrong.nonzero()[:4].tolist()}: device {codes[wrong][:4].tolist()} host {ref_codes[wrong][:4].tolist()}"
+    )
+    blocks = x.float().reshape(blocks_shape)
+    err = (codes.reshape(blocks.shape) * scale[..., None] - blocks) * torch.sign(blocks)
+    logger.info(
+        f"{rounding.value} {dtype} {shape}: bit-exact; mean signed magnitude error / mean |x| "
+        f"{float(err.sum() / blocks.abs().sum()):+.5f}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # per_token_cast_back: dequantization value tests.
 # ---------------------------------------------------------------------------

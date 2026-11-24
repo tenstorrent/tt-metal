@@ -171,10 +171,13 @@ namespace ttnn::prim {
 std::tuple<ttnn::Tensor, ttnn::Tensor> per_token_cast_to_fp8(
     const Tensor& input_tensor,
     const tt::tt_metal::MemoryConfig& output_memory_config,
-    bool round_scale_to_power_of_two) {
+    bool round_scale_to_power_of_two,
+    bool round_to_nearest) {
     using OperationType = ttnn::experimental::prim::per_token_cast_to_fp8::PerTokenCastToFp8DeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{
-        .output_memory_config = output_memory_config, .round_scale_to_power_of_two = round_scale_to_power_of_two};
+        .output_memory_config = output_memory_config,
+        .round_scale_to_power_of_two = round_scale_to_power_of_two,
+        .round_to_nearest = round_to_nearest};
     auto tensor_args = OperationType::tensor_args_t{.input_tensor = input_tensor};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

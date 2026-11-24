@@ -23,8 +23,14 @@ void bind_experimental_per_token_cast_to_fp8_operation(nb::module_& mod) {
               * a FLOAT32 scale tensor of shape [..., M, H/128].
 
             Per 128-element block of each token: scale = clamp(max(|x|), 1e-4) / 448 and the
-            e4m3 output is round(x / scale). The e4m3 packer rounds toward zero (truncates the
-            mantissa), so results are within one e4m3 ULP of a round-to-nearest reference.
+            e4m3 output is round(x / scale). By default the e4m3 packer rounds toward zero (truncates
+            the mantissa), so results are within one e4m3 ULP of a round-to-nearest reference.
+
+            With ``round_to_nearest=True``, half an e4m3 step of each value's own binade (2^(e-4), or
+            2^-10 in the subnormal range below 2^-6) is added to its magnitude before the truncating
+            pack, so the output rounds to nearest with ties away from zero. This is bit-identical to
+            the Hy4 decode KV append's ``nearest`` mode. Magnitudes stay within 448 (no saturation
+            change): the scale bounds |x / scale| by 448, and 448 + 16 still truncates to 448.
 
             With ``round_scale_to_power_of_two=True``, the scale is rounded upward to a power of two
             after division by the E4M3FN maximum finite magnitude, 448. Sparse MLA KV caching uses
@@ -36,6 +42,8 @@ void bind_experimental_per_token_cast_to_fp8_operation(nb::module_& mod) {
                 * :attr:`memory_config`: optional DRAM interleaved output memory config
                   (default: same as input).
                 * :attr:`round_scale_to_power_of_two`: round each scale upward to a power of two.
+                * :attr:`round_to_nearest`: round the e4m3 values to nearest (ties away from zero)
+                  instead of truncating. Default False (truncate).
 
             Returns:
                 Tuple (e4m3, scale_fp32). Both are ROW_MAJOR. FP8_E4M3 can only be in ROW_MAJOR layout.
@@ -44,7 +52,8 @@ void bind_experimental_per_token_cast_to_fp8_operation(nb::module_& mod) {
         nb::arg("input_tensor").noconvert(),
         nb::arg("memory_config") = std::nullopt,
         nb::kw_only(),
-        nb::arg("round_scale_to_power_of_two") = false);
+        nb::arg("round_scale_to_power_of_two") = false,
+        nb::arg("round_to_nearest") = false);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::per_token_cast_to_fp8::detail
