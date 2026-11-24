@@ -2204,7 +2204,8 @@
   test_tags: [mistral4, runner, kv_cache]
   test_group: module
   skus:
-    bh_sc1:
+    # High-power pool, like the other SC1 perf legs: its throughput gate is meant for 14 kW hosts.
+    bh_sc1_high_power:
       # 12 min on CI run 34660979358; 30 is 2.5x, looser than the siblings because this leg also
       # pays per-galaxy column probing and a 36-layer weight load.
       timeout: 30
@@ -2538,7 +2539,8 @@
   test_tags: [glm_5_3, runner, kv_cache, mtp, glm_mtp_kv_share, glm53_trace]
   test_group: disagg_prefill
   skus:
-    bh_sc1:
+    # High-power pool, like the other SC1 perf legs: its perf numbers are meant for 14 kW hosts.
+    bh_sc1_high_power:
       timeout: 120
       tier: 1
       release_ready: false
