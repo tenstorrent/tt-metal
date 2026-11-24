@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <future>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -19,6 +20,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 
 #include "common/executor.hpp"
 #include "impl/context/metal_context.hpp"
@@ -32,13 +34,13 @@
 #include "jit_build/jit_build_cache.hpp"
 #include "jit_build/jit_build_options.hpp"
 #include "jit_build/jit_build_utils.hpp"
+#include "jit_build_device_fixture.hpp"
 #include "llrt/rtoptions.hpp"
-#include "mock_blackhole_fixture.hpp"
 
 namespace tt::tt_metal {
 
 // This fixture has external linkage because gtest's generated TEST_F classes derive from it.
-class NamedCtArgChannelsMockBlackholeFixture : public MockBlackholeMeshDispatchFixture {
+class NamedCtArgChannelsFixture : public JitBuildDeviceFixture {
 protected:
     struct NamedCtArtifacts {
         bool legacy_header;
@@ -83,9 +85,54 @@ protected:
             .legacy_force_include = legacy_force_include,
         };
     }
+
+    // A second logical worker core besides {0, 0}, from the queried compute grid; nullopt on a 1-core grid.
+    std::optional<CoreCoord> second_worker_core() const {
+        const CoreCoord grid = devices_.at(0)->compute_with_storage_grid_size();
+        if (grid.x > 1) {
+            return CoreCoord{1, 0};
+        }
+        if (grid.y > 1) {
+            return CoreCoord{0, 1};
+        }
+        return std::nullopt;
+    }
+
+    // Quasar stand-in for a ProgramDescriptor holding one data-movement kernel duplicated on {0, 0} and
+    // second_core: two Metal 2.0 KernelSpecs with the same inline source and named CT args, one work unit each.
+    // They still share one build: unique_ids feed neither Kernel::compute_hash nor the generated headers, and
+    // the DM processor solver gives each lone single-threaded kernel the same processor.
+    static ProgramSpec duplicate_dm_kernels_spec(
+        const std::string& source, const KernelSpec::CompileTimeArgs& compile_time_args, const CoreCoord& second_core) {
+        ProgramSpec spec{.name = "named_ct_arg_channels_duplicates"};
+        const CoreCoord cores[] = {CoreCoord{0, 0}, second_core};
+        for (std::size_t i = 0; i < 2; ++i) {
+            const KernelSpecName name{"dm_" + std::to_string(i)};
+            spec.kernels.push_back(KernelSpec{
+                .unique_id = name,
+                .source = KernelSpec::SourceCode{source},
+                .compile_time_args = compile_time_args,
+                .hw_config = DataMovementHardwareConfig{},
+            });
+            spec.work_units.push_back(WorkUnitSpec{.name = name.get(), .kernels = {name}, .target_nodes = cores[i]});
+        }
+        return spec;
+    }
 };
 
-TEST_F(NamedCtArgChannelsMockBlackholeFixture, BlazeOnlyOmitsLegacyMap) {
+namespace {
+
+constexpr const char* kLegacyDescriptorSkip =
+    "legacy named-CT map / Blaze ProgramDescriptor path: ProgramDescriptor lowers to legacy kernels, which "
+    "Quasar rejects, and Metal 2.0 has no Blaze channel";
+constexpr const char* kLegacyThrowSkip =
+    "ProgramDescriptor lowers to legacy kernels, which Quasar rejects, so the expected throw would come from "
+    "the legacy-kernel fatal, not the named-arg check";
+
+}  // namespace
+
+TEST_F(NamedCtArgChannelsFixture, BlazeOnlyOmitsLegacyMap) {
+    JIT_BUILD_SKIP_ON_QUASAR(kLegacyDescriptorSkip);
     const auto artifacts = compile_and_inspect({}, {{"typed.value", 1}}, R"(
 #include "api/dataflow/dataflow_api.h"
 #ifdef KERNEL_COMPILE_TIME_ARG_MAP
@@ -100,7 +147,8 @@ void kernel_main() {}
     EXPECT_FALSE(artifacts.legacy_force_include);
 }
 
-TEST_F(NamedCtArgChannelsMockBlackholeFixture, LegacyFieldPreservesBothApis) {
+TEST_F(NamedCtArgChannelsFixture, LegacyFieldPreservesBothApis) {
+    JIT_BUILD_SKIP_ON_QUASAR(kLegacyDescriptorSkip);
     const auto artifacts = compile_and_inspect({{"legacy_value", 2}, {"legacy_value", 2}, {"legacy.scoped", 3}}, {}, R"(
 #include "api/dataflow/dataflow_api.h"
 static_assert(get_named_compile_time_arg_val("legacy_value") == 2);
@@ -115,7 +163,8 @@ void kernel_main() {}
     EXPECT_TRUE(artifacts.legacy_force_include);
 }
 
-TEST_F(NamedCtArgChannelsMockBlackholeFixture, MixedEmitsBothRepresentations) {
+TEST_F(NamedCtArgChannelsFixture, MixedEmitsBothRepresentations) {
+    JIT_BUILD_SKIP_ON_QUASAR(kLegacyDescriptorSkip);
     const auto artifacts = compile_and_inspect(
         {{"legacy.value", 3}, {"legacy.value", 3}, {"legacy.only", 6}},
         {{"typed.only", 5}},
@@ -135,7 +184,8 @@ void kernel_main() {}
     EXPECT_TRUE(artifacts.legacy_force_include);
 }
 
-TEST_F(NamedCtArgChannelsMockBlackholeFixture, MixedDataMovementKernelCompiles) {
+TEST_F(NamedCtArgChannelsFixture, MixedDataMovementKernelCompiles) {
+    JIT_BUILD_SKIP_ON_QUASAR(kLegacyDescriptorSkip);
     const CoreCoord core{0, 0};
     KernelDescriptor kernel = {
         .kernel_source = "tests/tt_metal/tt_metal/test_kernels/misc/blaze_named_runtime_args_kernel.cpp",
@@ -154,7 +204,8 @@ TEST_F(NamedCtArgChannelsMockBlackholeFixture, MixedDataMovementKernelCompiles) 
     program.impl().compile(devices_.at(0).get());
 }
 
-TEST_F(NamedCtArgChannelsMockBlackholeFixture, LegacyBlazeKernelsCompile) {
+TEST_F(NamedCtArgChannelsFixture, LegacyBlazeKernelsCompile) {
+    JIT_BUILD_SKIP_ON_QUASAR(kLegacyDescriptorSkip);
     const CoreCoord core{0, 0};
     KernelDescriptor data_movement = {
         .kernel_source = "tests/tt_metal/tt_metal/test_kernels/misc/blaze_named_runtime_args_kernel.cpp",
@@ -181,7 +232,8 @@ TEST_F(NamedCtArgChannelsMockBlackholeFixture, LegacyBlazeKernelsCompile) {
 }
 
 // No API includes: the kernel wrapper must supply the accessors to all three TRISCs.
-TEST_F(NamedCtArgChannelsMockBlackholeFixture, LegacyComputeArgsWithoutApiIncludes) {
+TEST_F(NamedCtArgChannelsFixture, LegacyComputeArgsWithoutApiIncludes) {
+    JIT_BUILD_SKIP_ON_QUASAR("legacy CreateKernelFromString/ComputeConfig: legacy kernels are rejected on Quasar");
     Program program = CreateProgram(*devices_.at(0));
     CreateKernelFromString(
         program,
@@ -196,14 +248,27 @@ void kernel_main() {}
     program.impl().compile(devices_.at(0).get());
 }
 
-TEST_F(NamedCtArgChannelsMockBlackholeFixture, Metal2ComputeArgsWithoutApiIncludes) {
-    KernelDescriptor kernel = {
-        .kernel_source = R"(
+TEST_F(NamedCtArgChannelsFixture, Metal2ComputeArgsWithoutApiIncludes) {
+    const std::string source = R"(
 static_assert(get_compile_time_arg_val(0) == 17);
 static_assert(get_compile_time_arg_val(1) == 23);
 static_assert(get_named_compile_time_arg_val("value") == 42);
 void kernel_main() {}
-)",
+)";
+    if (is_quasar()) {
+        // compile_time_varargs are the positional CT args, compile_time_args the named ones.
+        KernelSpec kernel{
+            .unique_id = KernelSpecName{"compute"},
+            .source = KernelSpec::SourceCode{source},
+            .compile_time_args = {{"value", 42u}},
+            .hw_config = ComputeHardwareConfig{},
+        };
+        kernel.advanced_options.compile_time_varargs = {17, 23};
+        compile_single_kernel_spec(std::move(kernel));
+        return;
+    }
+    KernelDescriptor kernel = {
+        .kernel_source = source,
         .source_type = KernelDescriptor::SourceType::SOURCE_CODE,
         .core_ranges = CoreRange(CoreCoord{0, 0}),
         .compile_time_args = {17, 23},
@@ -214,7 +279,8 @@ void kernel_main() {}
     program.impl().compile(devices_.at(0).get());
 }
 
-TEST_F(NamedCtArgChannelsMockBlackholeFixture, LegacyConflictingValuesFail) {
+TEST_F(NamedCtArgChannelsFixture, LegacyConflictingValuesFail) {
+    JIT_BUILD_SKIP_ON_QUASAR(kLegacyThrowSkip);
     KernelDescriptor kernel = {
         .kernel_source = "void kernel_main() {}",
         .source_type = KernelDescriptor::SourceType::SOURCE_CODE,
@@ -225,7 +291,8 @@ TEST_F(NamedCtArgChannelsMockBlackholeFixture, LegacyConflictingValuesFail) {
     EXPECT_THROW(Program program(*devices_.at(0), ProgramDescriptor{.kernels = {kernel}}), std::runtime_error);
 }
 
-TEST_F(NamedCtArgChannelsMockBlackholeFixture, BlazeDuplicateNamesFail) {
+TEST_F(NamedCtArgChannelsFixture, BlazeDuplicateNamesFail) {
+    JIT_BUILD_SKIP_ON_QUASAR(kLegacyThrowSkip);
     KernelDescriptor kernel = {
         .kernel_source = "void kernel_main() {}",
         .source_type = KernelDescriptor::SourceType::SOURCE_CODE,
@@ -238,7 +305,8 @@ TEST_F(NamedCtArgChannelsMockBlackholeFixture, BlazeDuplicateNamesFail) {
     EXPECT_THROW(Program program(*devices_.at(0), ProgramDescriptor{.kernels = {kernel}}), std::runtime_error);
 }
 
-TEST_F(NamedCtArgChannelsMockBlackholeFixture, CrossFieldDuplicateFails) {
+TEST_F(NamedCtArgChannelsFixture, CrossFieldDuplicateFails) {
+    JIT_BUILD_SKIP_ON_QUASAR(kLegacyThrowSkip);
     KernelDescriptor kernel = {
         .kernel_source = "void kernel_main() {}",
         .source_type = KernelDescriptor::SourceType::SOURCE_CODE,
@@ -250,7 +318,11 @@ TEST_F(NamedCtArgChannelsMockBlackholeFixture, CrossFieldDuplicateFails) {
     EXPECT_THROW(Program program(*devices_.at(0), ProgramDescriptor{.kernels = {kernel}}), std::runtime_error);
 }
 
-TEST_F(NamedCtArgChannelsMockBlackholeFixture, GeneratedDescriptorsCompileWithDuplicateBuilds) {
+TEST_F(NamedCtArgChannelsFixture, GeneratedDescriptorsCompileWithDuplicateBuilds) {
+    const std::optional<CoreCoord> second_core = second_worker_core();
+    if (!second_core) {
+        GTEST_SKIP() << "needs two worker cores";
+    }
     KernelDescriptor kernel = {
         .kernel_source = "void kernel_main() {}",
         .source_type = KernelDescriptor::SourceType::SOURCE_CODE,
@@ -259,17 +331,22 @@ TEST_F(NamedCtArgChannelsMockBlackholeFixture, GeneratedDescriptorsCompileWithDu
         .config = DataMovementConfigDescriptor{},
     };
     ProgramDescriptor descriptor{.kernels = {kernel}};
-    kernel.core_ranges = CoreRange(CoreCoord{1, 0});
+    kernel.core_ranges = CoreRange(*second_core);
     descriptor.kernels.push_back(kernel);
+    // Metal 2.0 has no Blaze channel, so Quasar uses a named CT arg; names must be C++ identifiers, hence no '.'.
+    const ProgramSpec spec = duplicate_dm_kernels_spec("void kernel_main() {}", {{"typed_value", 7u}}, *second_core);
+    const auto make_program = [&] {
+        return is_quasar() ? build_program_from_spec(spec) : Program(*devices_.at(0), descriptor);
+    };
     auto* device = devices_.at(0).get();
 
     // Build once to put the binary on disk. Same source and args on different cores share one build.
-    Program warm(*devices_.at(0), descriptor);
+    Program warm = make_program();
     warm.impl().compile(device, false);
     EXPECT_EQ(warm.impl().get_kernel(0)->get_full_kernel_name(), warm.impl().get_kernel(1)->get_full_kernel_name());
 
-    // The kernel uses no CBs, so its build options need nothing beyond the kernel's own.
-    Program program(*devices_.at(0), descriptor);
+    // The kernel uses no CBs or DFBs, so its build options need nothing beyond the kernel's own.
+    Program program = make_program();
     const auto& build_env = device->impl().metal_context().build_env_manager().get_device_build_env(device->build_id());
     JitBuildOptions build_options(build_env.build_env);
     program.impl().get_kernel(0)->set_build_options(build_options);
@@ -303,21 +380,27 @@ TEST_F(NamedCtArgChannelsMockBlackholeFixture, GeneratedDescriptorsCompileWithDu
     EXPECT_NO_THROW(program.impl().get_kernel(1)->binaries(build_env.build_key()));
 }
 
-TEST_F(NamedCtArgChannelsMockBlackholeFixture, SameProgramDuplicateDoesNotRetryFailedBuild) {
+TEST_F(NamedCtArgChannelsFixture, SameProgramDuplicateDoesNotRetryFailedBuild) {
+    const std::optional<CoreCoord> second_core = second_worker_core();
+    if (!second_core) {
+        GTEST_SKIP() << "needs two worker cores";
+    }
     // Each compile of this source blocks reading the FIFO until the test opens it for writing, then fails.
     const auto fifo = std::filesystem::temp_directory_path() / ("jit_failed_build_" + std::to_string(::getpid()));
     std::filesystem::remove(fifo);
     ASSERT_EQ(::mkfifo(fifo.c_str(), 0600), 0);
+    const std::string source = "#include \"" + fifo.string() + "\"\n#error expected build failure\n";
     KernelDescriptor kernel = {
-        .kernel_source = "#include \"" + fifo.string() + "\"\n#error expected build failure\n",
+        .kernel_source = source,
         .source_type = KernelDescriptor::SourceType::SOURCE_CODE,
         .core_ranges = CoreRange(CoreCoord{0, 0}),
         .config = DataMovementConfigDescriptor{},
     };
     ProgramDescriptor descriptor{.kernels = {kernel}};
-    kernel.core_ranges = CoreRange(CoreCoord{1, 0});
+    kernel.core_ranges = CoreRange(*second_core);
     descriptor.kernels.push_back(kernel);
-    Program program(*devices_.at(0), descriptor);
+    Program program = is_quasar() ? build_program_from_spec(duplicate_dm_kernels_spec(source, {}, *second_core))
+                                  : Program(*devices_.at(0), descriptor);
     JitBuildCache::inst().clear();
     auto compiled = std::async(std::launch::async, [&] { program.impl().compile(devices_.at(0).get(), false); });
 
@@ -351,7 +434,12 @@ TEST_F(NamedCtArgChannelsMockBlackholeFixture, SameProgramDuplicateDoesNotRetryF
     std::filesystem::remove(fifo);
 }
 
-TEST_F(NamedCtArgChannelsMockBlackholeFixture, PlacementFailureDoesNotStartBuilds) {
+TEST_F(NamedCtArgChannelsFixture, PlacementFailureDoesNotStartBuilds) {
+    // Ahead of the dispatch check: Tensix-dispatch Quasar has WORKER dispatch cores, so that check alone would
+    // let the test reach the legacy-kernel fatal.
+    JIT_BUILD_SKIP_ON_QUASAR(
+        "builds through ProgramDescriptor, whose legacy kernels Quasar rejects; a Metal 2.0 port would fail at "
+        "spec validation, not compile");
     auto* device = devices_.at(0).get();
     auto& env = device->impl().metal_env();
     auto& context = device->impl().metal_context();
