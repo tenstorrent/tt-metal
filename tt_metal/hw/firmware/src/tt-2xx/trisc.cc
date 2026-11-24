@@ -315,6 +315,8 @@ extern "C" std::uint32_t _start1() {
     }
     (void)READ_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(first_pair + num_pairs - 1));  // pairs cleared before signaling
     _llk_dest_borrow_init_();
+    // MATH_PACK seeded at boot: pack's first tile_regs_wait SEMWAIT can land before math's per-program SEMINIT.
+    _llk_sync_init_(ckernel::trisc::semaphore::MATH_PACK, 2 /*max*/, 0 /*init*/);
     tensix_sync();
     asm volatile("fence" ::: "memory");
 #endif
