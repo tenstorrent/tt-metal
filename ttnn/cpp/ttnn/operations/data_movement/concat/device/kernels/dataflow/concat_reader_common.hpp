@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Helpers shared by the interleaved concat readers.
+// Helpers shared by the concat dataflow kernels: with_input is used by the interleaved readers and
+// the block-sharded reader/writer; RoundRobinCursor by the interleaved readers only.
 
 #pragma once
 

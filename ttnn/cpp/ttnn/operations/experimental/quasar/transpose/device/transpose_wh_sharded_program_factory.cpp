@@ -7,8 +7,8 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include <algorithm>
 #include <vector>
@@ -17,7 +17,6 @@
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim::qsr {
 
@@ -37,7 +36,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::creat
     const auto& input_tensor = tensor_args.input;
 
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_wh needs to be on device!");
-    TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_wh needs to be allocated in a buffer on device!");
+    TT_ASSERT(input_tensor.is_allocated(), "Operand to transpose_wh needs to be allocated in a buffer on device!");
 
     const tt::DataFormat src0_cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
     const uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);

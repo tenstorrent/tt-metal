@@ -42,11 +42,16 @@ void bind_inbound_socket_service_sync(nb::module_& mod) {
                 ``overhang_size_bytes > 0``. Default: None.
             metadata_out (ttnn.Tensor): The same, for the metadata record. Requires
                 ``metadata_size_bytes > 0``. Default: None.
+            extras_out (List[ttnn.Tensor]): D2DStreamServiceReceiver only. Caller-owned
+                destinations for the extra segments, one per ``extra_tensors`` entry, each
+                matching that segment's backing spec. Empty allocates them. Default: [].
 
         Returns:
             List[ttnn.Tensor]: ``[tokens]``, plus ``overhang`` when
-            ``overhang_size_bytes > 0``, plus ``metadata`` when ``metadata_size_bytes > 0``,
-            in that order. Caller-owned destinations are returned as-is.
+            ``overhang_size_bytes > 0``, plus one tensor per ``extra_tensors`` entry of a
+            D2DStreamServiceReceiver, plus ``metadata`` when ``metadata_size_bytes > 0``, in
+            that order. The overhang split is unavailable with extra tensors. Caller-owned
+            destinations are returned as-is.
         )doc";
 
     // Two overloads under one Python name; nanobind dispatches on the `service`
@@ -65,7 +70,8 @@ void bind_inbound_socket_service_sync(nb::module_& mod) {
         uint32_t,
         const std::optional<ttnn::Tensor>&,
         const std::optional<ttnn::Tensor>&,
-        const std::optional<ttnn::Tensor>&);
+        const std::optional<ttnn::Tensor>&,
+        const std::vector<ttnn::Tensor>&);
 
     ttnn::bind_function<"inbound_socket_service_sync", "ttnn.experimental.deepseek_prefill.">(
         mod,
@@ -87,7 +93,8 @@ void bind_inbound_socket_service_sync(nb::module_& mod) {
             nb::arg("overhang_size_bytes") = static_cast<uint32_t>(0),
             nb::arg("tokens_out") = std::nullopt,
             nb::arg("overhang_out") = std::nullopt,
-            nb::arg("metadata_out") = std::nullopt));
+            nb::arg("metadata_out") = std::nullopt,
+            nb::arg("extras_out") = std::vector<ttnn::Tensor>{}));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::inbound_socket_service_sync::detail

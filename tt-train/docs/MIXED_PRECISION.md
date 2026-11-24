@@ -55,7 +55,6 @@ These optimizers write in place, and all of them take views:
 |---|---|
 | `AdamW` (fused) | the parameter and its moments |
 | `SGD` (fused) | the parameter and its momentum buffer |
-| `AdamWFullPrecision` | its fp32 master weights and moments |
 | `MorehAdamW` | the parameter and its moments, as `ttnn::moreh_adamw` output tensors |
 | `RemoteOptimizer` | the parameter, received from the aggregator |
 
@@ -71,10 +70,101 @@ a new path in an existing one (for example a config option that changes which te
 - Fused `AdamW` accepts bf16 and fp32 parameters. Its moments take the parameter's native dtype, which its kernel
   requires.
 - Every other optimizer that updates parameters has a bf16 update only. It rejects an fp32 parameter at
-  construction, with an error that names the parameter. `AdamWFullPrecision` keeps its own fp32 master weights for
-  bf16 parameters.
+  construction, with an error that names the parameter.
 - Stochastic rounding (`AdamWConfig::stochastic_rounding`) applies to bf16 parameters only. An fp32 parameter keeps
   the low bits that rounding would lose, so it is updated without it.
+
+## fp32 master weights
+
+`training_config.precision.master_dtype: float32` stores every trainable parameter, the master weight, in fp32, while
+forward and backward keep running in bf16. This is not PyTorch FSDP2's `MixedPrecisionPolicy(param_dtype=...)`, which
+names the compute dtype. It is applied by `core::apply_precision_config()`
+(`sources/ttml/core/parameter_dtype.{hpp,cpp}`) after the model is built and before the optimizer is created, so the
+optimizer state follows: in Python by `ttml.common.utils.create_optimizer()` when it is given the whole config (as in
+`train.py`), and in C++ by the `nano_gpt` runner and the 3-tier optimizer worker. Runners that pass only the optimizer
+section, such as the SFT and GRPO trainers, don't apply it. The load order is: build the model, convert, load
+weights, create the optimizer, then load a training checkpoint, which restores the optimizer state too. Every loader
+writes the dtype a tensor is stored in, so values loaded after the conversion keep their fp32 bits; loaded before it,
+they are rounded to bf16 first. `train.py` and the `nano_gpt` runner keep this order; `nano_gpt`'s save-and-exit path
+skips the conversion, so it exports the weights in the dtype the model builds.
+3-tier workers keep bf16 parameters for `RemoteOptimizer`; the optimizer worker holds the fp32 master weights.
+The fp32 parameter is the master weight: fused `AdamW` updates it in place with fp32 moments, and forward and backward
+read its bf16 view, which is refreshed into its existing buffer the first time it is read after the step. Parameters
+managed by `ttml.fsdp.fully_shard` are the exception: FSDP swaps the gathered weight and the cached fp32 shard in with
+`set_value()` (`ttml/fsdp.py`), so each managed shard is cast into a new bf16 buffer every step. Frozen parameters and
+non-float tensors keep their dtype. `bfloat16` stores the trainable parameters in bf16; unset, they keep the dtype the
+model builds them in, so existing configs don't change.
+
+## Gradient reduction in fp32
+
+Data-parallel training averages each gradient across the devices after backward. By default the sum runs in the
+gradient's dtype, bf16, so every hop of the reduction rounds its running total to bf16.
+`training_config.precision.reduce_dtype: float32` sums in fp32 instead: each gradient is cast to fp32, summed and
+averaged in fp32, and the mean is written back in the gradient's dtype, so the optimizers still get bf16 gradients, as
+the fused kernels require. Unset keeps the bf16 sum.
+
+- **DDP.** `core::apply_precision_config()` stores the value in `AutoContext` (`set_gradient_reduce_dtype()`) every
+  time it runs: a config without the key stores none, so nothing carries over from a config applied earlier in the
+  process, and `close_device()` clears it too. A script that sets the value itself does so after `create_optimizer()`.
+  C++ `synchronize_gradients()` and Python `ttml.sync_gradients()` sum in the `reduce_dtype` they are given, else in
+  the stored one. `core::distributed::synchronize_tensor()`, the average they call, takes `reduce_dtype` only as an
+  argument.
+- **FSDP.** `backward_post` reduce-scatters in the `reduce_dtype` given to `ttml.fsdp.fully_shard()`, else in the
+  stored one, which it reads when it runs, as the DDP sync does. It first runs in the first backward, after the
+  optimizer is created, so a script that shards before `create_optimizer()`, as `train.py` does, needs nothing else. A
+  `reduce_dtype` given to `fully_shard()` wins over the stored one. The fp32 sum holds more while a gradient is
+  reduced: an fp32 copy of the gathered gradient (the bf16 one is freed once it is cast), and the reduce-scatter's
+  working buffer, which ttnn allocates in its input's dtype at the input's size, twice that on a line
+  (`ReduceScatterMinimalAsyncDeviceOperation::compute_output_specs`). On a line that is about 12 bytes per gathered
+  element against 6 for the bf16 sum.
+- **Routes.** Both use the existing ttnn collectives. A gradient of at least 2^19 elements per device (1 MiB of bf16),
+  synced over one mesh axis, with a dim that splits into whole-tile slices that no other mesh axis already splits, is
+  reduce-scattered in fp32, its mean is written in the gradient's dtype, and that slice is all-gathered: a quarter fewer
+  bytes than an fp32 all-reduce. Every other gradient, and every fp32 gradient, takes one fp32 all-reduce: below the
+  threshold a call costs host dispatch rather than link time, and the reduce-scatter route issues more ops. Where both
+  routes split the same dim they give the same bits.
+- **Not exact.** The FPU adds two values after aligning the smaller one to the larger with 10 fraction bits, even into
+  a 32-bit `Dst` (see the `fp32_dest_acc_en` note in
+  `docs/source/tt-metalium/tt_metal/advanced_topics/compute_engines_and_dataflow_within_tensix.rst`), so the fp32 sum
+  is not the exact fp32 sum. On real gradients over 8 devices its error is within 1-3% of the error of rounding the exact mean
+  once to bf16, against 2.2-2.7 times that for the bf16 sum, which also inflates gradient magnitudes by about 0.27%.
+- **Cost.** Measured on an 8-chip Blackhole machine with `train.py`, median step of steps 6-30 for DDP and of steps
+  3-12 for FSDP:
+
+  | Model, mesh | bf16 sum | fp32 sum |
+  |---|---|---|
+  | nano DeepSeek, DDP 1x8 line | 127.0 ms | 133.7 ms (+5.3%) |
+  | TinyLlama, DDP 1x8 line | 1675.6 ms | 1721.4 ms (+2.7%) |
+  | TinyLlama, DDP 1x8 ring | 1651.7 ms | 1679.8 ms (+1.7%) |
+  | TinyLlama, FSDP 1x8 line, batch 16 x 2048 | 755.4 ms | 817.6 ms (+8.2%) |
+  | Llama 8B, FSDP 1x8 line, memory-efficient runner, batch 16 x 2048 | 5025.4 ms | 5382.6 ms (+7.1%) |
+
+  FSDP pays more than DDP: its gradients go through the reduce-scatter alone, so fp32 doubles their bytes, while
+  DDP's reduce-scatter route pays 1.5 times. Peak device memory under FSDP (`train.py --track-memory`): Llama 8B goes
+  from 12.6 to 15.7 GB per device, the peak being the backward pass's reduce-scatter of the 525M-element embedding
+  and LM-head gradient; TinyLlama's peak is set by its forward activations and doesn't change. Models with many small
+  gradients pay per call rather than per byte, so fewer, larger collectives would cut most of the cost.
+- **Scope.** `reduce_dtype` covers the sum across devices. Two sums next to it still run in the gradient's dtype, until
+  a later PR of #56513 keeps the gradient in fp32 from its second add to the optimizer step:
+  - With gradient accumulation, the sum across micro-batches: `Tensor::add_grad` adds each micro-batch's gradient with
+    `ttnn::add`. Under FSDP, `backward_post` writes the mean back in bf16 after every micro-batch, and the next one
+    adds into it.
+  - Under HSDP (`dp` x `fsdp`), the second reduction of a sharded parameter's gradient: FSDP writes its fp32 mean in
+    bf16, and the `dp` sum in `ttml.sync_gradients()` rounds it again. No shipped config enables HSDP, and none of the
+    measurements below is an HSDP run.
+- **Not covered yet.** GRPO, and `SFTTrainer` when it builds its own optimizer (from an optimizer dict, or its default
+  `AdamW`), don't apply the precision block. They store no value, so their syncs keep the bf16 sum unless an earlier
+  config in the same process stored one. The aggregators of 2- and 3-tier training add the workers' gradients and
+  all-reduce them in bf16: the C++ 3-tier one, and `aggregator()` and `aggregator_optimizer()` in the Python
+  hierarchical example (`sources/examples/python/multihost/hierarchical_parallel/trainer.py`).
+
+The mean is cast back to bf16 rather than kept in fp32: a gradient is used once per step, so this costs one rounding,
+while the optimizer state and the master weights, which accumulate, stay in fp32 with `master_dtype: float32` (with
+bf16 parameters, fused `AdamW` keeps bf16 moments). A sum that is exact in fp32 would need new kernels; over 17
+TinyLlama runs per variant it made no difference to the loss against this one.
+
+How this design was chosen, with the precision, training-impact and collective measurements behind it, is in
+[a comment on #56513](https://github.com/tenstorrent/tt-metal/issues/56513#issuecomment-6869872779).
 
 ## Loading values into a tensor
 
@@ -89,6 +179,9 @@ file.
   fp32 tensor gets the exact values, a bf16 tensor the values rounded with `ml_dtypes`. `ttml.checkpointing` (which
   loads parameters and optimizer state into the live tensors), the safetensors loaders, the SFT trainer's default
   checkpoint loader and `LinearLayer.__setstate__` use it.
+- The C++ GPT-2 and Llama safetensors loaders read the file's values as floats and install each one with
+  `serialization::assign_from_floats()`, which builds the host tensor in the parameter's stored dtype: an fp32
+  parameter gets the file's values exactly, a bf16 one the values rounded on the host.
 - C++ checkpoints are written as stored (`get_value(NATIVE)`), and `read_autograd_tensor` loads parameters and
   optimizer state through `assign()`. A checkpoint from an fp32 run resumes into a bf16 model as bf16, and the other
   way round, and the AdamW moments follow the parameters, as the fused kernel requires.
@@ -111,6 +204,11 @@ file.
 - **No cached copy at all** can never be stale, but a weight is read by several ops per step, so it would be cast
   and allocated several times per step, and `get_value()` could no longer return a reference.
 - **Letting both copies be written** would round the fp32 tensor to bf16 on write and erase its sub-ulp progress.
+- **Keeping the fp32 master weights in the optimizer**, next to bf16 parameters, means casting each master into a new
+  bf16 tensor and installing it after every step: an allocation per parameter per step and a buffer address that
+  moves. With the master in the parameter, the bf16 view is refreshed in place and the step runs the same `AdamW`
+  kernel, so one optimizer covers both precisions. Parameters managed by FSDP still get a new bf16 buffer each step,
+  from FSDP's own swap of the gathered weight and the shard.
 
 PyTorch uses the same idea: one source of truth with a version counter (`c10::VariableVersion`), bumped by in-place
 operations in its autograd layer while the kernels take plain tensors. Here the bump happens when the view is

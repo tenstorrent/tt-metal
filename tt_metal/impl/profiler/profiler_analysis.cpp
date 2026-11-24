@@ -12,12 +12,12 @@
 #include <nlohmann/json.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/profiler.hpp>
-#include <tt_metal.hpp>
-#include "tt_metal_profiler.hpp"
+#include "llrt/core_descriptor.hpp"
+#include "impl/profiler/tt_metal_profiler.hpp"
 #include <fstream>
 
 #include "context/metal_env_accessor.hpp"
-#include "core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include "common/filesystem_utils.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/device/device_manager.hpp"

@@ -4,10 +4,11 @@
 
 #pragma once
 
-#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>  // ChipId
 #include "erisc_datamover_builder.hpp"
+#include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
+#include "tt_metal/fabric/builder/router_channel_layouts.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
 #include "tt_metal/fabric/channel_trimming_import.hpp"
 #include <vector>
@@ -16,6 +17,7 @@
 #include <limits>
 #include <optional>
 #include <unordered_map>
+#include <utility>
 
 namespace tt::tt_fabric {
 
@@ -52,6 +54,9 @@ struct IntermeshVCConfig {
     bool requires_vc1_full_mesh = false;            // True if VC1 needed throughout mesh (not just edges)
     bool requires_vc1_mesh_pass_through = false;    // True if VC1 must support inter-mesh pass-through
     bool requires_vc2 = false;                      // True if VC2 needed (Blackhole + 2D + no UDM/mux)
+    // TT_METAL_FABRIC_DISABLE_INTERMESH_VC=1: inter-mesh traffic lands on VC0 and goes only N or S from the
+    // landing chip. Deadlock-free only for traffic that cannot form a buffer cycle across meshes.
+    bool intermesh_vc_disabled = false;
 
     IntermeshVCConfig() = default;
 
@@ -166,6 +171,28 @@ public:
     std::optional<std::pair<uint32_t, EDMStatus>> get_fabric_router_ready_address_and_signal() const;
     std::pair<uint32_t, uint32_t> get_fabric_router_termination_address_and_signal() const;
 
+    // ============ Router Channel Layouts ============
+    // See RouterChannelLayouts.
+    void clear_router_channel_layouts() { router_channel_layouts_.begin_launch(); }
+    void publish_router_channel_layout(FabricNodeId node, chan_id_t eth_chan, const RouterChannelLayout& layout) {
+        router_channel_layouts_.publish(node, eth_chan, layout);
+    }
+    void exchange_router_channel_layouts(
+        const tt::tt_metal::distributed::multihost::DistributedContext& context,
+        RouterChannelLayouts::LaunchHeader header,
+        const RouterChannelLayouts::HeaderCheck& check) {
+        router_channel_layouts_.exchange(context, header, check);
+    }
+    const RouterChannelLayout& get_router_channel_layout(FabricNodeId node, chan_id_t eth_chan) const {
+        return router_channel_layouts_.get(node, eth_chan);
+    }
+    const RouterChannelLayout* find_router_channel_layout(FabricNodeId node, chan_id_t eth_chan) const {
+        return router_channel_layouts_.find(node, eth_chan);
+    }
+    PeerLayout get_peer_router_channel_layout(FabricNodeId node, chan_id_t eth_chan) const {
+        return router_channel_layouts_.peer(node, eth_chan);
+    }
+
     // ============ Diagnostic Buffer Map ============
     /** Returns the diagnostic buffer locations for all routers.
      *  The layout is identical across all router cores in the fabric. */
@@ -230,6 +257,8 @@ private:
     static constexpr uint32_t UNINITIALIZED_ROUTERS = std::numeric_limits<uint32_t>::max();
     std::vector<chan_id_t> master_router_chans_;
     std::vector<uint32_t> num_initialized_routers_;
+
+    RouterChannelLayouts router_channel_layouts_;
 
     // Helper to create EDM config with given options
     std::unique_ptr<FabricEriscDatamoverConfig> create_edm_config(

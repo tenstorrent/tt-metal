@@ -7,6 +7,7 @@
 #include "ttnn/device_operation.hpp"
 
 #include <cmath>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace ttnn::prim {
 
@@ -23,7 +24,7 @@ void EmaDeviceOperation::validate_on_program_cache_miss(
         input_tensor.storage_type() == StorageType::DEVICE,
         "Input tensor must be on device, got: {}",
         input_tensor.storage_type());
-    TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor must be allocated in a device buffer");
+    TT_FATAL(input_tensor.is_allocated(), "Input tensor must be allocated in a device buffer");
     TT_FATAL(
         input_tensor.layout() == Layout::TILE, "Input tensor must have TILE layout, got: {}", input_tensor.layout());
 
@@ -44,7 +45,7 @@ void EmaDeviceOperation::validate_on_program_cache_miss(
             output_tensor.storage_type() == StorageType::DEVICE,
             "Output tensor must be on device, got: {}",
             output_tensor.storage_type());
-        TT_FATAL(output_tensor.buffer() != nullptr, "Output tensor must be allocated in a device buffer");
+        TT_FATAL(output_tensor.is_allocated(), "Output tensor must be allocated in a device buffer");
         TT_FATAL(
             output_tensor.layout() == Layout::TILE,
             "Output tensor must have TILE layout, got: {}",
@@ -81,7 +82,7 @@ tt::tt_metal::TensorSpec EmaDeviceOperation::compute_output_specs(
     const auto& old_spec = tensor_args.input.tensor_spec();
     return tt::tt_metal::TensorSpec(
         old_spec.logical_shape(),
-        TensorLayout(
+        tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
             old_spec.tensor_layout().get_data_type(),
             old_spec.tensor_layout().get_page_config(),
             operation_attributes.output_mem_config,

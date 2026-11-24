@@ -32,8 +32,7 @@ global_env:
   PREFILL_ENABLE_MIGRATION: "0"
   PREFILL_MIGRATION_TABLE_PATH: "/tmp/m3_kv_chunk_table.pb"
   PREFILL_MIGRATION_DEVICE_MAP_PATH: "/tmp/m3_kv_device_map.json"
-  # Selects the host-callback ack transport, the only one this runtime implements — it enables no
-  # tracing, since the runtime has no capture_trace.
-  PREFILL_USE_TRACE: "1"
+  # TtPrefillRuntime has no capture_trace, so the runner refuses PREFILL_USE_TRACE=1.
+  PREFILL_USE_TRACE: "0"
 
   LOGURU_LEVEL: "INFO"

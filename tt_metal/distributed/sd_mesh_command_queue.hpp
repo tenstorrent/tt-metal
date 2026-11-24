@@ -10,6 +10,8 @@
 
 namespace tt::tt_metal::distributed {
 
+struct PerDeviceRuntimeArgs;
+
 class SDMeshCommandQueue final : public MeshCommandQueueBase {
 private:
     // Distributed context used to synchronize operations done by all active ranks on the given mesh device.
@@ -45,6 +47,7 @@ public:
     SDMeshCommandQueue(
         MeshDevice* mesh_device,
         uint32_t id,
+        std::shared_ptr<ThreadPool> dispatch_thread_pool,
         std::function<std::lock_guard<std::mutex>()> lock_api_function,
         std::shared_ptr<distributed::multihost::DistributedContext> distributed_context);
     ~SDMeshCommandQueue() override;
@@ -97,7 +100,11 @@ private:
     std::atomic<uint32_t> num_workloads_enqueued_{0};
 
     std::shared_ptr<ThreadPool> launch_thread_pool_;
-    void dispatch_program(const MeshCoordinateRange& coord_range, Program& program, bool blocking);
+    void dispatch_program(
+        const MeshCoordinateRange& coord_range,
+        Program& program,
+        bool blocking,
+        const PerDeviceRuntimeArgs* per_device_runtime_args = nullptr);
     std::mutex logical_cores_mutex_;
 };
 

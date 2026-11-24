@@ -4,14 +4,13 @@
 
 #include "pad_tile_program_factory.hpp"
 
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim {
 using ttnn::operations::data_movement::float_to_uint16;
@@ -44,7 +43,7 @@ ttnn::device_operation::ProgramArtifacts PadTileCoreProgramFactory::create_progr
 
     const auto& output_shape = output_padded_shape;
 
-    TT_ASSERT(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
 
     tt::DataFormat dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t single_tile_size = tt::tile_size(dfb_data_format);

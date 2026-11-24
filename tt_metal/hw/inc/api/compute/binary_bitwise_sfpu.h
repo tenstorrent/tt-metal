@@ -41,7 +41,7 @@ constexpr InstrModLoadStore bitwise_instr_mode() {
     static_assert(
         data_format == DataFormat::Int32 || is_uint32_format(data_format) || data_format == DataFormat::UInt16,
         "Unsupported data format for bitwise operation. Supported data formats are: Int32, UInt32, UInt16");
-    return data_format == DataFormat::UInt16 ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
+    return data_format == DataFormat::UInt16 ? InstrModLoadStore::UINT16 : InstrModLoadStore::INT32;
 }
 }  // namespace detail
 
@@ -90,6 +90,12 @@ ALWI void bitwise_xor_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst)
 /**
  * Please refer to documentation for any_init.
  */
+#ifdef ARCH_QUASAR
+// One init serves and / or / xor: the Quasar kernel's store walks Dest through the ADDR_MOD_6 that
+// binary_bitwise_init programs.
+ALWI void binary_bitwise_tile_init() { MATH((SFPU_BINARY_INIT_FN_NO_ARGS(bitwise_and, sfpu::binary_bitwise_init))); }
+#else
 ALWI void binary_bitwise_tile_init() { MATH((SFPU_BINARY_INIT(unused))); }
+#endif
 
 }  // namespace ckernel

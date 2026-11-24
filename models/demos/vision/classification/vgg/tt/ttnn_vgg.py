@@ -96,6 +96,7 @@ def ttnn_vgg16(
                 ),
                 reshard_if_not_optimal=True,
                 enable_weights_double_buffer=True,
+                enable_act_double_buffer=True,
             )
             if h_override[iter_conv_id] is not None:
                 conv_config.act_block_h_override = h_override[iter_conv_id]
@@ -249,6 +250,7 @@ def ttnn_vgg11(
                     ttnn.TensorMemoryLayout.HEIGHT_SHARDED if h_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
                 ),
                 enable_weights_double_buffer=True,
+                enable_act_double_buffer=True,
             )
             if height_override_11[iter_conv_id] is not None:
                 conv_config.act_block_h_override = height_override_11[iter_conv_id]

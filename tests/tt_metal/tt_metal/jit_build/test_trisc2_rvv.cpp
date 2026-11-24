@@ -148,7 +148,7 @@ protected:
     // Create + JIT-compile the RVV vadd kernel; returns the kernel (full name is set by compile).
     std::shared_ptr<Kernel> compile_rvv_kernel(bool enable_trisc2_rvv) {
         distributed::MeshDevice* device = devices_.at(0).get();
-        Program program = CreateProgram();
+        Program program = CreateProgram(*device);
         KernelHandle handle = CreateKernel(
             program,
             kRvvKernelPath,
@@ -165,8 +165,9 @@ protected:
     // Path of the kernel's compiled ELF for one compute processor (0=unpack, 1=math, 2=pack).
     std::string kernel_elf_path(const std::shared_ptr<Kernel>& kernel, int processor_id) {
         distributed::MeshDevice* device = devices_.at(0).get();
-        auto& build_env_manager = BuildEnvManager::get_instance();
-        const auto& hal = MetalContext::instance().hal();
+        auto& context = MetalContext::instance(kernel->get_context_id());
+        auto& build_env_manager = context.build_env_manager();
+        const auto& hal = context.hal();
         const uint32_t core_idx = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
         const uint32_t class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
         const std::string elf_path = build_env_manager.get_kernel_binary_path(

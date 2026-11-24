@@ -14,13 +14,16 @@
 
 #include <array>
 #include <core/xtensor_utils.hpp>
+#include <optional>
 #include <tt-metalium/distributed_context.hpp>
-#include <umd/device/cluster.hpp>
+#include <tt-umd-workload/cluster.hpp>
+#include <vector>
 
 #include "autograd/auto_context.hpp"
 #include "core/distributed/socket_manager.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/distributed/comm_ops.hpp"
+#include "test_utils/mesh_utils.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/distributed/create_socket.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
@@ -29,33 +32,29 @@
 
 using ttml::ttnn_fixed::distributed::RingShiftDirection;
 
-auto check_32_chips() {
-    auto cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
-    auto all_chips = cluster_desc->get_all_chips();
-    return all_chips.size() == 32;
-}
-
 class GalaxyRingShiftTest : public ::testing::Test {
 public:
+    static inline const tt::tt_metal::distributed::MeshShape kMeshShape{8, 4};
+
     static void SetUpTestSuite() {
-        if (check_32_chips()) {
-            ttml::autograd::ctx().initialize_distributed_context(0, nullptr);
-            ttml::ttnn_fixed::distributed::enable_fabric(32);
-            ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(8, 4));
+        if (ttml::test_utils::system_supports_mesh(kMeshShape)) {
+            if (!ttml::autograd::ctx().is_distributed_context_initialized()) {
+                ttml::autograd::ctx().initialize_distributed_context(0, nullptr);
+            }
+            ttml::ttnn_fixed::distributed::enable_fabric(static_cast<uint32_t>(kMeshShape.mesh_size()));
+            ttml::autograd::ctx().open_device(kMeshShape);
             ttml::autograd::ctx().set_seed(42);
             ttml::autograd::ctx().initialize_socket_manager(ttnn::distributed::SocketType::FABRIC);
         }
     }
     static void TearDownTestSuite() {
-        if (check_32_chips()) {
+        if (ttml::test_utils::system_supports_mesh(kMeshShape)) {
             ttml::autograd::ctx().close_device();
         }
     }
 
     void SetUp() override {
-        if (!check_32_chips()) {
-            GTEST_SKIP() << "Skipping Galaxy specific tests";
-        }
+        SKIP_UNLESS_MESH_SUPPORTED(kMeshShape);
     }
 };
 
@@ -87,7 +86,7 @@ static void TestRingShift(
     const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, shard_dim, cluster_axis);
     const auto tt_tensor =
         core::from_xtensor<float, ttnn::DataType::BFLOAT16>(xtensor, device, ttnn::Layout::TILE, mapper.get());
-    auto tensor = autograd::create_tensor(tt_tensor);
+    auto tensor = autograd::create_tensor(tt_tensor, /*requires_grad=*/test_backward_grad);
 
     // Get original sharded tensors for comparison
     const auto original_xtensors = core::to_xtensor<float>(tensor->get_value(), core::IdentityComposer{});
@@ -206,4 +205,101 @@ TEST_F(GalaxyRingShiftTest, BackwardWithGradient) {
 TEST_F(GalaxyRingShiftTest, BackwardBig) {
     TestRingShift(
         16, 1024, 8192, /*cluster_axis=*/1, /*shard_dim=*/3, RingShiftDirection::Forward, /*test_backward_grad=*/true);
+}
+
+// Back-to-back shifts with no host synchronization in between: the socket FIFO state has to carry over from one
+// shift to the next on device. With both_directions a second tensor is shifted the other way, alternating with the
+// first, so both directions (separate sockets) are in flight at once. Only the final values are read back.
+static void TestChainedRingShifts(
+    const size_t batch,
+    const size_t seq,
+    const size_t hidden,
+    const uint32_t cluster_axis,
+    const uint32_t shard_dim,
+    const uint32_t num_shifts,
+    const bool both_directions = true) {
+    using namespace ttml;
+
+    auto* device = &autograd::ctx().get_device();
+    const auto mesh_shape = device->shape();
+    const uint32_t mesh_rows = mesh_shape[0];
+    const uint32_t mesh_cols = mesh_shape[1];
+    const uint32_t ring_size = mesh_shape[cluster_axis];
+
+    auto& rng = autograd::ctx().get_generator();
+    const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, shard_dim, cluster_axis);
+    const auto make_input = [&]() {
+        const xt::xarray<float> data = ttml::test_utils::make_uniform_xarray<float>(
+            std::array<std::size_t, 4>{batch, 1UL, seq, hidden}, -1.0F, 1.0F, rng());
+        return core::from_xtensor<float, ttnn::DataType::BFLOAT16>(data, device, ttnn::Layout::TILE, mapper.get());
+    };
+    const ttnn::Tensor a_in = make_input();
+    const auto a_orig = core::to_xtensor<float>(a_in, core::IdentityComposer{});
+    std::optional<ttnn::Tensor> b_in;
+    std::vector<xt::xarray<float>> b_orig;
+    if (both_directions) {
+        b_in = make_input();
+        b_orig = core::to_xtensor<float>(*b_in, core::IdentityComposer{});
+    }
+
+    ttnn::Tensor a = a_in;
+    std::optional<ttnn::Tensor> b = b_in;
+    for (uint32_t i = 0; i < num_shifts; ++i) {
+        a = ttnn_fixed::distributed::ring_shift(a, cluster_axis, RingShiftDirection::Backward);
+        if (b) {
+            b = ttnn_fixed::distributed::ring_shift(*b, cluster_axis, RingShiftDirection::Forward);
+        }
+    }
+
+    const auto a_out = core::to_xtensor<float>(a, core::IdentityComposer{});
+    std::vector<xt::xarray<float>> b_out;
+    if (b) {
+        b_out = core::to_xtensor<float>(*b, core::IdentityComposer{});
+    }
+    const uint32_t k = num_shifts % ring_size;
+    for (uint32_t row = 0; row < mesh_rows; ++row) {
+        for (uint32_t col = 0; col < mesh_cols; ++col) {
+            const size_t device_idx = row * mesh_cols + col;
+            // Backward: device i ends with the data of device (i + k); Forward: of device (i - k).
+            const auto source = [&](const bool backward) {
+                const uint32_t pos = cluster_axis == 0 ? row : col;
+                const uint32_t src = backward ? (pos + k) % ring_size : (pos + ring_size - k) % ring_size;
+                return cluster_axis == 0 ? src * mesh_cols + col : row * mesh_cols + src;
+            };
+            // A shift only moves data, so the values must match exactly.
+            EXPECT_TRUE(xt::allclose(a_orig[source(true)], a_out[device_idx], 0.0F, 0.0F))
+                << "Backward chain mismatch on device " << device_idx;
+            if (both_directions) {
+                EXPECT_TRUE(xt::allclose(b_orig[source(false)], b_out[device_idx], 0.0F, 0.0F))
+                    << "Forward chain mismatch on device " << device_idx;
+            }
+        }
+    }
+}
+
+TEST_F(GalaxyRingShiftTest, ChainedShiftsAlongRowsNoHostSync) {
+    // Ring of 8 on axis 0; 2 * 8 + 3 shifts so every device's data goes round the ring twice and ends 3 hops away.
+    // Sequence sharded 8 ways: 2048 x 1024 bf16 = 4 MiB per device per tensor.
+    TestChainedRingShifts(1, 16384, 1024, /*cluster_axis=*/0, /*shard_dim=*/2, /*num_shifts=*/19);
+}
+
+TEST_F(GalaxyRingShiftTest, ChainedShiftsAlongColumnsNoHostSync) {
+    // Ring of 4 on axis 1, again 4 MiB per device per tensor.
+    TestChainedRingShifts(1, 8192, 1024, /*cluster_axis=*/1, /*shard_dim=*/2, /*num_shifts=*/11);
+}
+
+// The intra-mesh sockets ring_shift uses have an 80 MiB FIFO per receiver (fifo_size in
+// core/distributed/socket_manager.cpp). A 45056 x 1024 bf16 shard is 88 MiB per device, so each shift is a single
+// transfer larger than the FIFO (22528 blocks of 4096 B against 20480): within one send/recv op the FIFO wraps and
+// the sender is flow-controlled by its receiver's credits (bytes_acked), with the next shift queued behind it and
+// no host sync in between. These cases depend on that constant: raising fifo_size above 88 MiB would make them
+// stop exceeding the FIFO. 3 shifts, so the data ends 3 hops away.
+TEST_F(GalaxyRingShiftTest, ChainedShiftsLargerThanSocketFifoAlongRows) {
+    TestChainedRingShifts(
+        1, 8 * 45056, 1024, /*cluster_axis=*/0, /*shard_dim=*/2, /*num_shifts=*/3, /*both_directions=*/false);
+}
+
+TEST_F(GalaxyRingShiftTest, ChainedShiftsLargerThanSocketFifoAlongColumns) {
+    TestChainedRingShifts(
+        1, 4 * 45056, 1024, /*cluster_axis=*/1, /*shard_dim=*/2, /*num_shifts=*/3, /*both_directions=*/false);
 }

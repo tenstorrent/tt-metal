@@ -50,6 +50,8 @@ set(RUN_REGEN_DESCRIPTORS_SRCS src/run_regen_descriptors.cpp)
 
 set(GENERATE_CLUSTER_DESCRIPTOR_SRCS src/generate_cluster_descriptor.cpp)
 
+set(DETECT_BH_GALAXY_REVISION_SRCS src/detect_bh_galaxy_revision.cpp)
+
 set(GENERATE_MGD_LIB_SRCS generate_mgd/generate_mgd.cpp)
 
 set(GENERATE_MGD_SRCS generate_mgd/generate_mgd_main.cpp)

@@ -44,6 +44,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank, num_f
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions, rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_7 import KimiK27Adapter
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
@@ -57,7 +58,7 @@ from models.demos.deepseek_v3_d_p.utils.test_utils import (
     read_sharded_rows,
     unrotate_cache_layer,
 )
-from tests.ttnn.utils_for_testing import comp_pcc
+from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
 CHUNK = PREFILL_CHUNK_TOKENS  # 5120 tokens per chunk
 SEQ_CACHE = 55 * 1024  # 56320 KV cache length (1 user)
@@ -335,7 +336,7 @@ def run_chunked_block(
         block_kwargs["gate_fallback_mode"] = gate_fallback_mode
 
     profiler.start("tt_block_creation")
-    block = TtPrefillBlock(**block_kwargs)
+    block = TtPrefillBlock(**block_kwargs, moe_impl="ttmoe")  # (TtMoe: tt/moe_impl.py)
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_block_creation")
 
@@ -638,7 +639,7 @@ def run_chunked_block_multiuser(
     )
     if gate_fallback_mode is not None:
         block_kwargs["gate_fallback_mode"] = gate_fallback_mode
-    block = TtPrefillBlock(**block_kwargs)
+    block = TtPrefillBlock(**block_kwargs, moe_impl="ttmoe")  # (TtMoe: tt/moe_impl.py)
     ttnn.synchronize_device(mesh_device)
 
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
@@ -868,7 +869,7 @@ def run_chunked_block_padded(
         block_kwargs["gate_fallback_mode"] = gate_fallback_mode
 
     profiler.start("tt_block_creation")
-    block = TtPrefillBlock(**block_kwargs)
+    block = TtPrefillBlock(**block_kwargs, moe_impl="ttmoe")  # (TtMoe: tt/moe_impl.py)
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_block_creation")
 
@@ -1068,7 +1069,10 @@ def test_ds_prefill_block_chunked_padded(
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(fabric_payload_size=moe_fabric_payload(KimiK27Config)),
+            # Open L1_SMALL like the Kimi K2.7 runner, so op-owned CCL semaphores stay out of main L1.
+            torus_xy_device_params(
+                fabric_payload_size=moe_fabric_payload(KimiK27Config), l1_small_size=KimiK27Adapter.l1_small_size
+            ),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
@@ -1120,7 +1124,10 @@ def test_kimi_prefill_block_chunked(
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(fabric_payload_size=moe_fabric_payload(KimiK27Config)),
+            # Open L1_SMALL like the Kimi K2.7 runner, so op-owned CCL semaphores stay out of main L1.
+            torus_xy_device_params(
+                fabric_payload_size=moe_fabric_payload(KimiK27Config), l1_small_size=KimiK27Adapter.l1_small_size
+            ),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
@@ -1273,6 +1280,7 @@ def run_chunked_block_glm_indexer(
     ), f"TTNN cache incomplete for layer {layer_idx} at {effective_cache_path}"
 
     block = TtPrefillBlock(
+        moe_impl="ttmoe",  # (TtMoe: tt/moe_impl.py)
         mesh_device=mesh_device,
         config=config,
         model_cfg=variant.model_config,

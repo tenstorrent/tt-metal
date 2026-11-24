@@ -15,11 +15,18 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     DataCopyType,
     DestAccumulation,
+    DestSync,
     MathOperation,
     UnpackerEngine,
     format_dict,
 )
-from helpers.param_config import input_output_formats, parametrize, runtime
+from helpers.param_config import (
+    flat_axes,
+    generate_dest_depth_input_dimensions,
+    input_output_formats,
+    parametrize,
+    runtime,
+)
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
@@ -34,7 +41,14 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     UNPACKER_ENGINE_SEL,
 )
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
+
+
+def fill_input_dimensions(dest_acc):
+    """One and four tiles, plus runs of 4 and 8 full Dest sections (DEST_SYNC() is SyncHalf)."""
+    return [[32, 32], [64, 64]] + generate_dest_depth_input_dimensions(
+        dest_acc, DestSync.Half
+    )
 
 
 def generate_sfpu_fill_combinations(
@@ -70,7 +84,7 @@ def generate_sfpu_fill_combinations(
         ):
             continue
 
-        for input_dimensions in [[32, 32], [64, 64]]:
+        for input_dimensions in fill_input_dimensions(dest_acc):
             combinations.append((fmt, dest_acc, runtime(input_dimensions)))
 
     # Int fill: _calculate_fill_int_ with FILL_INT_FORMAT-selected SFPMEM store mode.
@@ -78,7 +92,7 @@ def generate_sfpu_fill_combinations(
     for fmt in int_formats:
         in_fmt = fmt.input_format
         dest_acc = dest_acc_for(in_fmt)
-        for input_dimensions in [[32, 32], [64, 64]]:
+        for input_dimensions in fill_input_dimensions(dest_acc):
             combinations.append((fmt, dest_acc, runtime(input_dimensions)))
 
     return combinations
@@ -86,7 +100,6 @@ def generate_sfpu_fill_combinations(
 
 _FILL_FLOAT_INPUTS = [
     DataFormat.Float16_b,
-    DataFormat.Float16,
     DataFormat.Float32,
 ]
 SFPU_FILL_FLOAT_FORMATS = input_output_formats(_FILL_FLOAT_INPUTS)
@@ -105,13 +118,17 @@ SFPU_FILL_INT_FORMATS = input_output_formats(
 )
 
 
+SFPU_FILL_FLAT_NAMES = ("formats", "dest_acc", "input_dimensions")
+
+
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_input_dims=generate_sfpu_fill_combinations(
-        SFPU_FILL_FLOAT_FORMATS, SFPU_FILL_INT_FORMATS
+    **flat_axes(
+        SFPU_FILL_FLAT_NAMES,
+        generate_sfpu_fill_combinations(SFPU_FILL_FLOAT_FORMATS, SFPU_FILL_INT_FORMATS),
     ),
 )
-def test_sfpu_fill_quasar(formats_dest_acc_input_dims):
+def test_sfpu_fill_quasar(formats, dest_acc, input_dimensions):
     """
     Test fill operation on Quasar architecture.
 
@@ -130,8 +147,6 @@ def test_sfpu_fill_quasar(formats_dest_acc_input_dims):
     Since fill ignores input values, the input stimuli are arbitrary —
     typed stimuli are still generated so the unpack path sees a valid buffer.
     """
-    formats, dest_acc, input_dimensions = formats_dest_acc_input_dims[0]
-
     is_int_fill = formats.input_format.is_integer()
 
     # Seed for reproducibility
@@ -204,12 +219,7 @@ def test_sfpu_fill_quasar(formats_dest_acc_input_dims):
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format

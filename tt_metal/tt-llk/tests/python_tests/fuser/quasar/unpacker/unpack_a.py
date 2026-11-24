@@ -11,7 +11,7 @@ from fuser.fuser_config import GlobalConfig
 from fuser.golden.unpack.unpack_a import unpack_a_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
-from fuser.operand import BfdResource
+from fuser.operand import BfdId
 from helpers.llk_params import (
     DestAccumulation,
     EltwiseBinaryReuseDestType,
@@ -89,14 +89,13 @@ class UnpackerA(Unpacker):
         block: BlockData,
     ) -> str:
         engine = (
-            BfdResource.UNP1
+            BfdId.UNP1
             if compute_unit.reuse_dest == EltwiseBinaryReuseDestType.DEST_TO_SRCA
-            else BfdResource.UNP0
+            else BfdId.UNP0
         )
         tensor_shape = compute_unit.src_a.tile_shape.cpp_value
         reuse_dest = compute_unit.reuse_dest.cpp_enum_value
         en_32bit_dest = config.dest_acc.cpp_enum_value
-        unpack_to_dest = compute_unit.unpack_to_dest.cpp_enum_value
         transpose_en = compute_unit.transpose_faces.cpp_enum_value
         unp_sel = _unp_sel(compute_unit)
         per_tile = compute_unit.reuse_dest != EltwiseBinaryReuseDestType.NONE
@@ -106,13 +105,13 @@ class UnpackerA(Unpacker):
             init_call = "_llk_unpack_unary_operand_to_dest_init_(bfd_id);\n"
         else:
             init_call = (
-                f"_llk_unpack_unary_operand_init_<{unp_sel}, {transpose_en}, {en_32bit_dest}, {reuse_dest}, {unpack_to_dest}>"
+                f"_llk_unpack_unary_operand_init_<{unp_sel}, {transpose_en}, {en_32bit_dest}, {reuse_dest}>"
                 f"(bfd_id, {tensor_shape}, {num_tiles});\n"
             )
 
         return (
             "{\n"
-            + compute_unit.src_a.bfd_alloc_and_program(engine, result_name="bfd_id")
+            + compute_unit.src_a.program_bfd(engine, result_name="bfd_id")
             + init_call
             + "}\n"
         )
@@ -132,11 +131,9 @@ class UnpackerA(Unpacker):
         unp_sel = _unp_sel(compute_unit)
         tensor_shape = compute_unit.src_a.tile_shape.cpp_value
         reuse_dest = compute_unit.reuse_dest.cpp_enum_value
-        unpack_to_dest = compute_unit.unpack_to_dest.cpp_enum_value
-        dest_sync = operation.dest_sync.cpp_enum_value
 
         return (
-            f"_llk_unpack_unary_operand_<{unp_sel}, {reuse_dest}, {unpack_to_dest}, {dest_sync}>"
+            f"_llk_unpack_unary_operand_<{unp_sel}, {reuse_dest}>"
             f"({block.tile_id_src_a}, {tensor_shape});\n"
         )
 

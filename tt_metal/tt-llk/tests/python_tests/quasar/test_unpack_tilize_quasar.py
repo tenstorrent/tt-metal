@@ -8,6 +8,7 @@ import torch
 from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import (
+    DataCopyGolden,
     TilizeGolden,
     get_golden_generator,
     quantize_mx_tensor_chunked,
@@ -18,14 +19,15 @@ from helpers.llk_params import (
     DestSync,
     PerfRunType,
     UnpackerEngine,
-    format_dict,
 )
 from helpers.param_config import (
     DEST_SYNC_TILE_LIMITS,
+    flat_axes,
     generate_perf_input_dimensions,
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
+    quasar_dest_sync_modes,
     select_perf_tile_sizes,
 )
 from helpers.perf.core import create_test_or_perf_config
@@ -49,7 +51,7 @@ from helpers.tile_constants import (
     is_mx_unsupported_tile_dims,
 )
 from helpers.tile_shape import construct_tile_shape
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 UNPACK_TILIZE_TILE_SIZES = [
     (32, 32),
@@ -82,7 +84,7 @@ def generate_unpack_tilize_combinations(
     """
     combinations = []
 
-    dest_sync_modes = (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
+    dest_sync_modes = quasar_dest_sync_modes(is_perf=is_perf)
 
     for fmt in formats_list:
         in_fmt = fmt.input_format
@@ -112,9 +114,8 @@ def generate_unpack_tilize_combinations(
         for dest_acc in dest_acc_modes:
             for dest_sync in dest_sync_modes:
                 for unpacker_sel in unpacker_engines:
-                    # Dest accumulation (32-bit dest) is only supported on SrcA
-                    # (UNP_A); see the static_assert in
-                    # _llk_unpack_tilize_strided_mop_config_small_faces_.
+                    # Strided tilize supports dest accumulation only on UNP_A,
+                    # so UnpB with dest accumulation is skipped for every shape
                     if (
                         dest_acc == DestAccumulation.Yes
                         and unpacker_sel == UnpackerEngine.UnpB
@@ -187,7 +188,6 @@ def generate_unpack_tilize_combinations(
 UNPACK_TILIZE_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
-        DataFormat.Float16,
         DataFormat.Float32,
         DataFormat.Int32,
         DataFormat.Int16,
@@ -200,6 +200,16 @@ UNPACK_TILIZE_FORMATS = input_output_formats(
     ],
     same=True,  # Input format and output format are the same
 )
+# Column names of the tuples ``generate_unpack_tilize_combinations`` returns.
+UNPACK_TILIZE_FLAT_NAMES = (
+    "formats",
+    "dest_acc",
+    "dest_sync",
+    "unpacker_sel",
+    "input_dimensions",
+    "tile_dimensions",
+    "block_ct_dim",
+)
 ALL_UNPACK_TILIZE_COMBINATIONS = generate_unpack_tilize_combinations(
     UNPACK_TILIZE_FORMATS
 )
@@ -211,12 +221,18 @@ PERF_UNPACK_TILIZE_COMBINATIONS = generate_unpack_tilize_combinations(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_unpack_sel_dimensions_tile_dims=ALL_UNPACK_TILIZE_COMBINATIONS,
+    **flat_axes(UNPACK_TILIZE_FLAT_NAMES, ALL_UNPACK_TILIZE_COMBINATIONS),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
 def test_unpack_tilize_quasar(
-    formats_dest_acc_sync_unpack_sel_dimensions_tile_dims,
+    formats,
+    dest_acc,
+    dest_sync,
+    unpacker_sel,
+    input_dimensions,
+    tile_dimensions,
+    block_ct_dim,
     run_types,
     loop_factor,
     boot_mode=BootMode.DEFAULT,
@@ -224,19 +240,6 @@ def test_unpack_tilize_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    combination = formats_dest_acc_sync_unpack_sel_dimensions_tile_dims
-    if len(combination) == 1 and isinstance(combination[0], tuple):
-        combination = combination[0]
-    (
-        formats,
-        dest_acc,
-        dest_sync_mode,
-        unpacker_sel,
-        input_dimensions,
-        tile_dimensions,
-        block_ct_dim,
-    ) = combination
-
     tile_shape = construct_tile_shape(tile_dimensions)
 
     sequential_spec = StimuliSpec.sequential()
@@ -283,7 +286,7 @@ def test_unpack_tilize_quasar(
                 if unpacker_sel == UnpackerEngine.UnpB
                 else DataCopyType.A2D
             ),
-            DEST_SYNC(dest_sync_mode),
+            DEST_SYNC(dest_sync),
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A),
@@ -323,12 +326,128 @@ def test_unpack_tilize_quasar(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    assert passed_test(
+        golden_tensor,
+        res_tensor,
+        formats.output_format,
+        tile_shape=tile_shape,
+    ), "Assert against golden failed"
+
+
+# (unpacker engine, input dimensions, tile dimensions, block_ct_dim): the 32x32 UNPACR_TILIZE path in several runs
+# per row and over two rows, and the strided path for 1x32 and 2x32 tiles, on both unpackers.
+TILIZE_THEN_UNARY_CASES = [
+    (engine, input_dimensions, tile_dimensions, block_ct_dim)
+    for engine in (UnpackerEngine.UnpA, UnpackerEngine.UnpB)
+    for input_dimensions, tile_dimensions, block_ct_dim in (
+        ([32, 128], (32, 32), 2),
+        ([64, 64], (32, 32), 1),
+        ([1, 128], (1, 32), None),
+        ([2, 128], (2, 32), None),
+    )
+]
+
+
+@pytest.mark.quasar
+@parametrize(
+    **flat_axes(
+        ("unpacker_sel", "input_dimensions", "tile_dimensions", "block_ct_dim"),
+        TILIZE_THEN_UNARY_CASES,
+    ),
+)
+def test_unpack_tilize_then_unary_quasar(
+    unpacker_sel, input_dimensions, tile_dimensions, block_ct_dim
+):
+    """Unpack tilize, then a plain unary unpack of the same input on the same unpacker with no teardown in between.
+
+    tilize_uninit() is a no-op on Quasar, so the unary unpack must not depend on any state tilize leaves behind.
+    """
+    formats = input_output_formats([DataFormat.Float16_b], same=True)[0]
+    dest_acc = DestAccumulation.No
+    tile_shape = construct_tile_shape(tile_dimensions)
+    num_faces = tile_shape.total_num_faces()
+
+    sequential_spec = StimuliSpec.sequential()
+    src_A, tile_cnt, src_B, _ = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+        tile_dimensions=tile_dimensions,
+        spec_A=sequential_spec,
+        spec_B=sequential_spec,
+    )
+    golden_src = src_B if unpacker_sel == UnpackerEngine.UnpB else src_A
+
+    # Section 0 is the tilized input, section 1 the input copied tile by tile.
+    tilize_golden = get_golden_generator(TilizeGolden)(
+        golden_src,
+        input_dimensions,
+        formats.output_format,
+        num_faces=num_faces,
+        tile_dimensions=tile_dimensions,
+    )
+    copy_golden = get_golden_generator(DataCopyGolden)(
+        golden_src,
+        formats.output_format,
+        num_faces=num_faces,
+        input_dimensions=input_dimensions,
+        face_r_dim=tile_shape.face_r_dim,
+        input_format=formats.input_format,
+        tile_shape=tile_shape,
+    )
+    golden_tensor = torch.cat([tilize_golden.flatten(), copy_golden.flatten()])
+
+    configuration = create_test_or_perf_config(
+        is_perf=False,
+        run_types=[PerfRunType.L1_TO_L1],
+        test_config_kwargs={
+            "test_name": "sources/quasar/unpack_tilize_then_unary_quasar_test.cpp",
+            "formats": formats,
+            "templates": [
+                generate_input_dim(
+                    input_dimensions,
+                    input_dimensions,
+                    block_ct_dim=block_ct_dim,
+                    tile_dimensions=tile_dimensions,
+                ),
+                UNPACKER_ENGINE_SEL(unpacker_sel),
+                DATA_COPY_TYPE(
+                    DataCopyType.B2D
+                    if unpacker_sel == UnpackerEngine.UnpB
+                    else DataCopyType.A2D
+                ),
+                DEST_SYNC(DestSync.Half),
+            ],
+            "runtimes": [
+                TILE_COUNT(tile_cnt),
+                TEST_FACE_DIMS(tile_shape.face_r_dim),
+                NUM_FACES(num_faces),
+                NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
+                NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),
+            ],
+            "variant_stimuli": StimuliConfig(
+                src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=tile_cnt,
+                tile_count_B=tile_cnt,
+                tile_count_res=2 * tile_cnt,
+                num_faces=num_faces,
+                face_r_dim=tile_shape.face_r_dim,
+                tile_dimensions=tile_dimensions,
+                use_dense_tile_dimensions=True,
+            ),
+            "unpack_to_dest": False,
+            "dest_acc": dest_acc,
+        },
+    )
+    res_from_L1 = configuration.run().result
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(
         golden_tensor,

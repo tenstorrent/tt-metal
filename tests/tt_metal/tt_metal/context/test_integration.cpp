@@ -15,8 +15,7 @@
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/mesh_config.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -25,11 +24,12 @@
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 // Internal access
 #include "llrt/hal_types.hpp"
@@ -257,14 +257,7 @@ void RunNoOpProgram(distributed::MeshDevice& target, const std::string& label) {
 }
 
 // Minimal Gen1 Metal 2.0 ProgramSpec: one no-op DM kernel on node (0, 0).
-experimental::ProgramSpec MakeMinimalNoOpProgramSpec() {
-    using experimental::DataMovementHardwareConfig;
-    using experimental::KernelSpec;
-    using experimental::KernelSpecName;
-    using experimental::NodeCoord;
-    using experimental::ProgramSpec;
-    using experimental::WorkUnitSpec;
-
+ProgramSpec MakeMinimalNoOpProgramSpec() {
     const KernelSpecName kernel_id{"dm_kernel"};
     KernelSpec dm_kernel{
         .unique_id = kernel_id,
@@ -400,14 +393,9 @@ void RunCoexistingMockAndSiliconDevice(bool expect_profiler) {
 // Shared body: open two mock meshes first, then the real silicon mesh last. When `expect_profiler`
 // is set, also check the profiler stays on for silicon but is skipped for mock.
 void RunCoexistingSiliconAndMockDevice(bool expect_profiler) {
-    // BuildEnvManager is a process-global singleton whose kernel/firmware build-state index tables
-    // are sized once from the HAL of whichever context first triggers add_build_env(). When the
-    // mock arch differs from the silicon arch (e.g. mock-BH on a WH runner), the second context
-    // ends up indexing a wrong-sized table and JIT'd kernels reference incorrect dispatch
-    // addresses, causing silicon dispatch to hang. Forge's real flow is same-arch coexistence
-    // (mock used as a compile-time stand-in for the live silicon), so probe the silicon arch and
-    // create the mock to match. Cross-arch coexistence is a separate `BuildEnvManager`-singleton
-    // limitation tracked outside #38445.
+    // Forge's real flow is same-arch coexistence (mock used as a compile-time stand-in for the live
+    // silicon), so probe the silicon arch and create the mock to match. Cross-arch coexistence
+    // (e.g. mock-BH on a WH runner) is not covered by this test.
     tt::ARCH silicon_arch;
     {
         MetalEnv probe;
@@ -526,8 +514,6 @@ TEST(MetalContextIntegrationTest, MockDeviceOnly) {
         auto buffer = distributed::MeshBuffer::create(buffer_config, local_config, mock_device.get());
         ASSERT_GT(buffer->address(), 0);
         ASSERT_TRUE(buffer->is_allocated());
-        buffer->deallocate();
-        ASSERT_FALSE(buffer->is_allocated());
 
         // Test command queue operations. Source vector is sized to fill the entire buffer so
         // EnqueueWriteMeshBuffer's precondition (src bytes >= mesh buffer bytes, added in #43429)
@@ -541,6 +527,10 @@ TEST(MetalContextIntegrationTest, MockDeviceOnly) {
 
         std::vector<uint32_t> read_data;
         distributed::EnqueueReadMeshBuffer(cq, read_data, buffer, true);
+
+        // Deallocate only after the transfers, since per-device buffer lookups on a deallocated MeshBuffer are fatal.
+        buffer->deallocate();
+        ASSERT_FALSE(buffer->is_allocated());
 
         auto program = CreateProgram(*mock_device);
         EXPECT_EQ(program.impl().get_context_id(), context_id);
@@ -644,8 +634,8 @@ TEST(MetalContextIntegrationTest, MockMetal2ProgramEnqueueOnOwningMesh) {
         MetalContext::instance(context_id).get_dispatch_core_config().get_dispatch_core_axis(), DispatchCoreAxis::COL);
     EXPECT_FALSE(MetalContext::instance_exists(DEFAULT_CONTEXT_ID));
 
-    experimental::ProgramSpec spec = MakeMinimalNoOpProgramSpec();
-    distributed::MeshWorkload workload = experimental::MakeMeshWorkloadFromSpec(*mesh_device, spec);
+    ProgramSpec spec = MakeMinimalNoOpProgramSpec();
+    distributed::MeshWorkload workload(*mesh_device, spec);
     EXPECT_NO_THROW(distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/true));
 }
 
@@ -660,7 +650,7 @@ TEST(MetalContextIntegrationTest, MockMetal2ProgramCompileOnForeignMeshFails) {
     auto mesh_b =
         distributed::MeshDevice::open_mesh_device(env_b, distributed::MeshDeviceConfig(distributed::MeshShape(1)));
 
-    Program program = experimental::MakeProgramFromSpec(*mesh_a, MakeMinimalNoOpProgramSpec());
+    Program program(*mesh_a, MakeMinimalNoOpProgramSpec());
     EXPECT_THROW(program.impl().compile(mesh_b.get()), std::runtime_error);
 }
 
@@ -719,6 +709,65 @@ TEST(MetalContextIntegrationTest, MockCreateProgramCompileOnForeignMeshFails) {
 
     Program program = CreateProgram(*mesh_a);
     CreateKernelFromString(program, "void kernel_main() {}", CoreRange({0, 0}, {0, 0}), DataMovementConfig{});
+    EXPECT_THROW(program.impl().compile(mesh_b.get()), std::runtime_error);
+}
+
+namespace {
+
+// One-kernel descriptor. Uses an explicit DataMovementConfigDescriptor: a ReaderConfigDescriptor or
+// WriterConfigDescriptor goes through ReaderDataMovementConfig / WriterDataMovementConfig, which still
+// query the default context.
+ProgramDescriptor MakeNoOpProgramDescriptor() {
+    KernelDescriptor kd;
+    kd.kernel_source = "void kernel_main() {}";
+    kd.source_type = KernelDescriptor::SourceType::SOURCE_CODE;
+    kd.core_ranges = CoreRangeSet{CoreRange{CoreCoord{0, 0}}};
+    kd.config = DataMovementConfigDescriptor{};
+
+    ProgramDescriptor desc;
+    desc.kernels.push_back(std::move(kd));
+    return desc;
+}
+
+}  // namespace
+
+// Program(MeshDevice&, ProgramDescriptor) binds the program and its kernels to the mesh device's context,
+// never touching the default (silicon) context, and the program can be enqueued on that mesh.
+TEST(MetalContextIntegrationTest, MockProgramFromDescriptorBindsToMeshDeviceContext) {
+    MetalEnv mock_env({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1)});
+    auto mesh_device =
+        distributed::MeshDevice::open_mesh_device(mock_env, distributed::MeshDeviceConfig(distributed::MeshShape(1)));
+    const auto context_id = mesh_device->impl().get_context_id();
+    ASSERT_NE(context_id, DEFAULT_CONTEXT_ID);
+
+    {
+        Program program(*mesh_device, MakeNoOpProgramDescriptor());
+        EXPECT_EQ(program.impl().get_context_id(), context_id);
+        EXPECT_FALSE(MetalContext::instance_exists(DEFAULT_CONTEXT_ID));
+
+        ASSERT_EQ(program.impl().num_kernels(), 1u);
+        EXPECT_EQ(program.impl().get_kernel(0)->get_context_id(), context_id);
+
+        distributed::MeshWorkload workload;
+        workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
+        EXPECT_NO_THROW(
+            distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/true));
+    }
+
+    EXPECT_FALSE(MetalContext::instance_exists(DEFAULT_CONTEXT_ID));
+}
+
+// A descriptor program bound to one env's mesh must not compile on a mesh from a different MetalEnv.
+TEST(MetalContextIntegrationTest, MockProgramFromDescriptorCompileOnForeignMeshFails) {
+    MetalEnv env_a({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1)});
+    MetalEnv env_b({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1)});
+    auto mesh_a =
+        distributed::MeshDevice::open_mesh_device(env_a, distributed::MeshDeviceConfig(distributed::MeshShape(1)));
+    auto mesh_b =
+        distributed::MeshDevice::open_mesh_device(env_b, distributed::MeshDeviceConfig(distributed::MeshShape(1)));
+
+    Program program(*mesh_a, MakeNoOpProgramDescriptor());
+    EXPECT_EQ(program.impl().get_context_id(), mesh_a->impl().get_context_id());
     EXPECT_THROW(program.impl().compile(mesh_b.get()), std::runtime_error);
 }
 
@@ -926,7 +975,7 @@ TEST(MetalContextIntegrationTest, MeshDevicePropagatesContextId) {
     EXPECT_EQ(submesh_1->impl().get_context_id(), context_id);
 
     SystemMemoryManager& sysmem_manager = mesh_device->impl().get_devices()[0]->sysmem_manager();
-    EXPECT_EQ(sysmem_manager.get_context_id(), context_id);
+    EXPECT_EQ(&sysmem_manager.metal_context(), &mesh_device->impl().metal_context());
 }
 
 TEST(MetalEnvMockCCL, FabricConfiguredBeforeCreate_CreatesMeshAndQuerySucceeds) {

@@ -2,8 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""A small tensor-parallel block, its optimizer and one training step, shared by the optimizer-state and checkpoint
-tests. ``dim`` is the block's width; a caller picks one that stays tile-aligned per device on its mesh."""
+"""A small tensor-parallel block, its optimizer, one training step and per-device readers, shared by the TP tests.
+``dim`` is the block's width; a caller picks one that stays tile-aligned per device on its mesh."""
 
 from __future__ import annotations
 
@@ -26,6 +26,20 @@ class TPBlock(AbstractModuleBase):
 
     def forward(self, x):
         return self.down(self.up(self.inp(x)))
+
+
+def device_slices(value: ttnn.Tensor) -> list:
+    """Each device's slice of ``value`` as a float32 numpy array, in mesh order. No composer is involved, so nothing
+    here trusts the tensor's topology label."""
+    return [ttnn.to_torch(shard).float().numpy() for shard in ttnn.get_device_tensors(value)]
+
+
+def assert_identical_across_devices(value: ttnn.Tensor, what: str) -> np.ndarray:
+    """Every device holds the same bytes of ``value``; returns device 0's slice."""
+    slices = device_slices(value)
+    for dev, other in enumerate(slices[1:], start=1):
+        assert np.array_equal(slices[0], other), f"{what}: device {dev} differs from device 0"
+    return slices[0]
 
 
 def make_adamw(params):

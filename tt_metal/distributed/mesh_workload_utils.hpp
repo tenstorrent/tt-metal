@@ -4,16 +4,15 @@
 
 #pragma once
 
-#include <host_api.hpp>
-#include <stdint.h>
+#include <cstdint>
 #include <optional>
 
-#include "core_coord.hpp"
 #include "sub_device_types.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 
 namespace tt::tt_metal {
+class CommandSink;
 class SystemMemoryManager;
 }  // namespace tt::tt_metal
 
@@ -27,7 +26,6 @@ class MeshDevice;
 // Used by offline command serialization; normal dispatch writes the same
 // canonical sequence directly into CQ-owned hugepage memory below.
 HostMemDeviceCommand build_go_signal_sequence(
-    uint8_t cq_id,
     MeshDevice* mesh_device,
     SubDeviceId sub_device_id,
     uint32_t expected_num_workers_completed,
@@ -37,10 +35,9 @@ HostMemDeviceCommand build_go_signal_sequence(
     std::optional<uint32_t> config_ring_sync_count);
 
 void write_go_signal_sequence(
-    uint8_t cq_id,
+    CommandSink& sink,
     MeshDevice* mesh_device,
     SubDeviceId sub_device_id,
-    SystemMemoryManager& sysmem_manager,
     uint32_t expected_num_workers_completed,
     bool send_mcast,
     uint32_t go_ring_slot,

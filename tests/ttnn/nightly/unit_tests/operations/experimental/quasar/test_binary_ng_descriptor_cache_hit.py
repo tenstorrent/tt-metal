@@ -3,27 +3,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Program-cache-hit coverage for the DESCRIPTOR path of quasar binary_ng.
+Program-cache-hit coverage for an interleaved quasar binary_ng ADD.
 
 `test_binary_ng_resnet_add.py::test_resnet_add_program_cache_hit` only exercises the fully-sharded
-in-place ADD config, which `BinaryNgDeviceOperation::select_program_factory` routes to the METAL_V2
-factory (`matches_metal_v2_slice` -> `ProgramFactoryMetalV2`, variant index 1). It therefore does NOT
-cover the descriptor `ProgramFactory::create_descriptor` path (variant index 0), whose reader/writer
-runtime args bind the a/b/c buffers as `Buffer*` (via `KernelDescriptor::emplace_runtime_args`) instead
-of baking raw `buffer->address()` values. Those bindings are what the descriptor adapter re-resolves on
-a program-cache hit so a reallocated input/output is read at its new address.
+in-place ADD config, whose operands are borrowed. Here an interleaved (DRAM or L1) tensor-tensor ADD
+runs several times with the program cache enabled. That config runs the Quasar-native factory on Quasar
+and the Metal 2.0 factory on Wormhole and Blackhole. Both bind each operand's buffer to the kernels, so
+a cache hit must read every operand at its current address. Each dispatch allocates fresh inputs and
+holds every tensor alive, so it lands on DISTINCT buffer addresses. The 2nd+ dispatches are genuine
+cache hits (asserted via the entry count), and PCC must still pass on every dispatch: a program that
+kept the first dispatch's addresses would read stale data and give a wrong result.
 
-`matches_metal_v2_slice` requires HEIGHT/BLOCK-sharded L1 tensors, so ANY interleaved config falls
-through to the descriptor path — this is provable from the selector source and needs no arch-specific
-config. Here we run an interleaved (DRAM or L1) tensor-tensor ADD several times with the program cache
-enabled, allocating fresh inputs AND holding every tensor alive so each dispatch lands on DISTINCT
-buffer addresses. The 2nd+ dispatches are genuine cache hits (asserted via the entry count), and PCC
-must still pass on every dispatch: if the buffer addresses were baked at create-time (the pre-patch
-behaviour) instead of re-resolved from the `Buffer*` bindings, the hit dispatches would read the stale
-first-dispatch addresses and the result would be wrong.
-
-Run on Wormhole / Blackhole:
-    pytest tests/ttnn/unit_tests/operations/experimental/quasar/test_binary_ng_descriptor_cache_hit.py
+Run:
+    pytest tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_binary_ng_descriptor_cache_hit.py
 """
 
 import pytest
@@ -32,7 +24,7 @@ import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-# The descriptor path reaches the same bf16 accuracy as any other; never weaken below this.
+# bf16 accuracy; never weaken below this.
 _PCC = 0.9997
 
 # Multi-tile, multi-core interleaved shape (2x4 tiles) so the per-core runtime-arg loop that emits the
@@ -71,8 +63,7 @@ def test_descriptor_interleaved_add_program_cache_hit(device, mem_config):
             b_pt, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=mem_config
         )
 
-        # Interleaved tensor-tensor ADD -> not sharded -> select_program_factory returns the descriptor
-        # ProgramFactory (variant index 0), NOT ProgramFactoryMetalV2.
+        # Interleaved tensor-tensor ADD: the native factory on Quasar, the Metal 2.0 factory on WH/BH.
         out_tt = ttnn.experimental.quasar.add(a_tt, b_tt, memory_config=mem_config)
 
         input_addrs.add(a_tt.buffer_address())
@@ -124,12 +115,12 @@ def test_descriptor_cross_shape_distinct_cache_entries(device, mem_config):
 
     num_before = device.num_program_cache_entries()
 
-    # Prime the cache with shape S1 (descriptor path, interleaved -> ProgramFactory).
+    # Prime the cache with shape S1.
     dispatch(_SHAPE_S1)
     num_after_s1 = device.num_program_cache_entries()
     assert num_after_s1 - num_before == 1, f"S1 should add exactly 1 cache entry, got {num_after_s1 - num_before}"
 
-    # Same op, DIFFERENT logical shape S2. With the shape folded into the descriptor-path hash this must
+    # Same op, DIFFERENT logical shape S2. With the shape folded into the program hash this must
     # allocate a SECOND, distinct cache entry (and produce a correct S2 result). Without the fix the
     # equal-volume S2 collides onto S1's entry: no new entry and/or a wrong output.
     dispatch(_SHAPE_S2)

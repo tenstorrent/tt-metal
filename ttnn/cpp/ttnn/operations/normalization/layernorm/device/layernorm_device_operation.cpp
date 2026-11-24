@@ -11,6 +11,7 @@
 #include "ttnn/operations/normalization/shard_spec_validation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 using uint32_t = std::uint32_t;
 using namespace tt::tt_metal;
 
@@ -82,12 +83,37 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
             a.logical_shape()[-1],
             tile_width);
     }
+    // MX (Quasar): the unpacker expands MX tiles to Float16_b and every intermediate ring is Float16_b / Float32,
+    // so the kernels see MX only at the input and (for an MX output dtype) at the pack.
     TT_FATAL(
-        a.dtype() == DataType::FLOAT32 or a.dtype() == DataType::BFLOAT16 or a.dtype() == DataType::BFLOAT8_B,
-        "Input tensor must be FLOAT32, BFLOAT16, or BFLOAT8_B, got: {}",
+        a.dtype() == DataType::FLOAT32 or a.dtype() == DataType::BFLOAT16 or a.dtype() == DataType::BFLOAT8_B or
+            is_mx(a.dtype()),
+        "Input tensor must be FLOAT32, BFLOAT16, BFLOAT8_B or an MX format, got: {}",
         a.dtype());
+    if (operation_attributes.dtype.has_value() && *operation_attributes.dtype != a.dtype()) {
+        const auto out_dtype = *operation_attributes.dtype;
+        TT_FATAL(
+            out_dtype == DataType::FLOAT32 or out_dtype == DataType::BFLOAT16 or out_dtype == DataType::BFLOAT8_B or
+                is_mx(out_dtype),
+            "Output dtype must be FLOAT32, BFLOAT16, BFLOAT8_B or an MX format, got: {}",
+            out_dtype);
+        TT_FATAL(
+            a.layout() == Layout::TILE,
+            "An output dtype other than the input's ({}) needs a TILE input, got {} with dtype {}",
+            a.dtype(),
+            a.layout(),
+            out_dtype);
+        const auto* sharded = std::get_if<LayerNormShardedMultiCoreProgramConfig>(&operation_attributes.program_config);
+        // Distributed stages keep their existing (sharded) dtype handling.
+        TT_FATAL(
+            operation_attributes.distributed_norm_stage != DistributedLayerNormStage::NOT_DISTRIBUTED ||
+                sharded == nullptr || !sharded->inplace,
+            "An inplace layernorm keeps the input dtype ({}); got output dtype {}",
+            a.dtype(),
+            out_dtype);
+    }
     TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
-    TT_FATAL(a.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
+    TT_FATAL(a.is_allocated(), "Operands to layernorm need to be allocated in buffers on device!");
 
     if (b.has_value()) {
         TT_FATAL(
@@ -108,7 +134,7 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
             a.padded_shape(),
             b.value().logical_shape(),
             b.value().padded_shape());
-        TT_FATAL(b.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
+        TT_FATAL(b.value().is_allocated(), "Operands to layernorm need to be allocated in buffers on device!");
         TT_FATAL(a.device() == b.value().device(), "Input and residual tensors must be on same device");
     }
 
@@ -132,8 +158,7 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
                 a.padded_shape()[-1],
                 gamma.value().logical_shape()[-1],
                 gamma.value().padded_shape()[-1]);
-            TT_FATAL(
-                gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
+            TT_FATAL(gamma.value().is_allocated(), "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == gamma.value().device(), "Input and gamma tensors must be on same device");
             TT_FATAL(
                 gamma.value().padded_shape()[-2] == tile_height,
@@ -156,8 +181,7 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
                 tile_width,
                 gamma.value().physical_volume(),
                 a.padded_shape());
-            TT_FATAL(
-                gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
+            TT_FATAL(gamma.value().is_allocated(), "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == gamma.value().device(), "Input and gamma tensors must be on same device");
             TT_FATAL(
                 gamma.value().dtype() == DataType::FLOAT32 or gamma.value().dtype() == DataType::BFLOAT16,
@@ -189,8 +213,7 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
                 a.padded_shape()[-1],
                 beta.value().logical_shape()[-1],
                 beta.value().padded_shape()[-1]);
-            TT_FATAL(
-                beta.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
+            TT_FATAL(beta.value().is_allocated(), "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == beta.value().device(), "Input and beta tensors must be on same device");
             TT_FATAL(
                 beta.value().padded_shape()[-2] == tile_height,
@@ -211,8 +234,7 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
                 beta.value().physical_volume(),
                 a.padded_shape()[-1],
                 tile_width);
-            TT_FATAL(
-                beta.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
+            TT_FATAL(beta.value().is_allocated(), "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == beta.value().device(), "Input and beta tensors must be on same device");
             TT_FATAL(
                 beta.value().dtype() == DataType::FLOAT32 or beta.value().dtype() == DataType::BFLOAT16,
@@ -297,7 +319,7 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(stats.value().layout() == Layout::TILE, "Only tile layout is supported for stats");
         TT_FATAL(stats.value().dtype() == DataType::BFLOAT16, "Only bfloat16 is supported for stats");
         TT_FATAL(stats.value().storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
-        TT_FATAL(stats.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
+        TT_FATAL(stats.value().is_allocated(), "Operands to layernorm need to be allocated in buffers on device!");
         if (operation_attributes.norm_type == LayerNormType::LAYERNORM) {
             TT_FATAL(
                 stats.value().padded_shape()[-1] % (2 * tile_width) == 0,
@@ -530,7 +552,7 @@ tt::tt_metal::TensorSpec LayerNormDeviceOperation::compute_output_specs(
 
                 return tt::tt_metal::TensorSpec(
                     output_shape,
-                    TensorLayout::fromPaddedShape(
+                    tt::tt_metal::experimental::tensor_layout_from_padded_shape(
                         operation_attributes.dtype.value_or(input_tensor.dtype()),
                         PageConfig(Layout::TILE),
                         mem_config,
@@ -541,7 +563,9 @@ tt::tt_metal::TensorSpec LayerNormDeviceOperation::compute_output_specs(
                 return tt::tt_metal::TensorSpec(
                     output_shape,
                     TensorLayout(
-                        input_tensor.dtype(), PageConfig(output_layout), operation_attributes.output_mem_config));
+                        operation_attributes.dtype.value_or(input_tensor.dtype()),
+                        PageConfig(output_layout),
+                        operation_attributes.output_mem_config));
             }
         },
         operation_attributes.program_config);

@@ -361,8 +361,6 @@ def test_getitem_RAW_MAJOR_callback(shape_index_dim, dtype, index_size, device):
 )
 def test_getitem_tilized_one_index(shape_index_dim, dtype, index_size, row_major_index, device):
     shape, index_dim = shape_index_dim
-    if is_blackhole() and index_dim == len(shape) - 1:
-        pytest.skip("A last-dim (W) index uses the W reader, which still mismatches on Blackhole, see #58406 item 2")
     torch.manual_seed(2)
 
     if dtype == torch.int32:

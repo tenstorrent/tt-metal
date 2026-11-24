@@ -56,9 +56,12 @@ The tool performs the following steps:
 
 ## Supported Node Types
 
-- N300_LB_DEFAULT, N300_QB_DEFAULT (Wormhole)
-- WH_GALAXY, WH_GALAXY_X_TORUS, WH_GALAXY_Y_TORUS, WH_GALAXY_XY_TORUS (Wormhole Galaxy)
-- P150_LB, P150_QB_AE_DEFAULT, P300_QB_GE (Blackhole)
-- BH_GALAXY, BH_GALAXY_X_TORUS, BH_GALAXY_Y_TORUS, BH_GALAXY_XY_TORUS (Blackhole Galaxy)
+- N300_LB, N300_QB (Wormhole)
+- WH_GALAXY (Wormhole Galaxy)
+- P150_LB, P150_QB_AE, P300_QB_GE (Blackhole)
+- BH_GALAXY, BH_GALAXY_REV_AB, BH_GALAXY_REV_C (Blackhole Galaxy)
+
+Node types only identify the hardware (device type and revision). Intra-node QSFP cabling, such as torus
+wrap-around cables, is described with `internal_connections` in the cabling descriptor's graph templates.
 
 To add support for new node types, update the `create_node_type_lookup()` function in `generate_mgd.cpp`.

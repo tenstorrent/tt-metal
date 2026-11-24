@@ -10,6 +10,7 @@
 #include <optional>
 #include <span>
 #include <string_view>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -20,10 +21,10 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
+#include <tt-metalium/workload/specification/kernel_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/specification/semaphore_spec.hpp>
 
 namespace ttnn::kernel_lib::host {
 
@@ -62,7 +63,15 @@ class McastImpl;
 // descriptor.kernels.push_back(std::move(kernel));
 //
 // These examples use ProgramDescriptor. Mcast also supports ProgramSpec attachment and direct Program
-// construction through append_semaphores(), append_compile_time_args_to(), and append_runtime_args_to().
+// construction. For a direct Program, build each kernel's per-core operation runtime arguments first, then
+// attach before CreateKernel; attach appends the multicast arguments to the configuration and to every core:
+//
+// std::vector<std::pair<CoreCoord, std::vector<uint32_t>>> sender_args = {{core, {/* operation arguments */}}};
+// mcast.attach(program, sender_cores, sender_config, "input_mcast", sender_args);
+// const auto sender = CreateKernel(program, source, sender_cores, sender_config);
+// for (const auto& [core, args] : sender_args) {
+//     SetRuntimeArgs(program, sender, core, args);
+// }
 // =============================================================================
 
 // ProgramDescriptor mode: attach an absent channel to one KernelDescriptor.
@@ -70,11 +79,12 @@ void attach_absent_mcast(tt::tt_metal::KernelDescriptor& kernel, std::string_vie
 
 // ProgramSpec mode: attach an absent channel to the named target kernels.
 void attach_absent_mcast(
-    tt::tt_metal::experimental::ProgramSpec& spec,
-    std::string_view prefix,
-    std::span<const tt::tt_metal::experimental::KernelSpecName> targets);
+    tt::tt_metal::ProgramSpec& spec, std::string_view prefix, std::span<const tt::tt_metal::KernelSpecName> targets);
 
-// Legacy direct-Program mode: append the absent channel's compile-time tag.
+// Direct-Program mode: attach an absent channel to one kernel configuration.
+void attach_absent_mcast(tt::tt_metal::DataMovementConfig& config, std::string_view prefix);
+
+// Low-level direct-Program mode: append the absent channel's compile-time tag. Prefer attach_absent_mcast().
 template <typename Args>
 void append_absent_mcast_compile_time_args_to(Args& destination) {
     destination.push_back(dataflow_kernel_lib::mcast_wire::ABSENT);
@@ -147,45 +157,30 @@ public:
     // Metal 2.0 adapter: adds named semaphore bindings and named compile-time/runtime
     // arguments to ProgramSpec and ProgramRunArgs.
     void attach(
-        tt::tt_metal::experimental::ProgramSpec& spec,
-        tt::tt_metal::experimental::ProgramRunArgs& args,
+        tt::tt_metal::ProgramSpec& spec,
+        tt::tt_metal::ProgramRunArgs& args,
         std::string_view prefix,
-        std::span<const tt::tt_metal::experimental::KernelSpecName> kernels) const;
+        std::span<const tt::tt_metal::KernelSpecName> kernels) const;
 
-    // Legacy direct-Program adapter: allocate semaphores first, then append positional
-    // arguments while constructing the target kernel.
-    void append_semaphores(tt::tt_metal::Program& program);
-
-    // Append multicast arguments after the operation-specific prefix. Every core using
-    // the same kernel must have the same runtime prefix length.
-    template <typename Args>
-    void append_compile_time_args_to(Args& destination) const {
-        append_args_to_(destination, compile_time_args_());
-    }
-
-    template <typename Args>
-    void append_runtime_args_to(Args& destination, const tt::tt_metal::CoreCoord& core) const {
-        append_args_to_(destination, runtime_args_(core));
-    }
+    // Direct-Program adapter for one kernel placed on `cores`: binds this Mcast to `program` on first use,
+    // creating its semaphores; every later attachment must use the same Program. Every core's operation runtime
+    // arguments must already be in `runtime_args`, with the same count on every core. Appends compile-time
+    // arguments to `config`, adds the `<prefix>_ct_offset` and `<prefix>_rt_offset` named arguments, and appends
+    // the multicast runtime arguments to every placed core, adding entries for cores without operation arguments.
+    // Attaching several channels to one kernel in turn places each channel after the previous one.
+    void attach(
+        tt::tt_metal::Program& program,
+        const tt::tt_metal::CoreRangeSet& cores,
+        tt::tt_metal::DataMovementConfig& config,
+        std::string_view prefix,
+        std::vector<std::pair<tt::tt_metal::CoreCoord, std::vector<uint32_t>>>& runtime_args);
 
     // Topology queries used to place kernels and other program resources.
     const tt::tt_metal::CoreRangeSet& participating_cores() const;
     tt::tt_metal::CoreRangeSet sender_only_cores() const;
 
 private:
-    template <typename Args>
-    static void append_args_to_(Args& destination, const std::vector<uint32_t>& args) {
-        if constexpr (requires { destination.append(args); }) {
-            destination.append(args);
-        } else {
-            destination.insert(destination.end(), args.begin(), args.end());
-        }
-    }
-
     std::unique_ptr<McastImpl> impl_;
-
-    std::vector<uint32_t> compile_time_args_() const;
-    std::vector<uint32_t> runtime_args_(const tt::tt_metal::CoreCoord& core) const;
 };
 
 }  // namespace ttnn::kernel_lib::host

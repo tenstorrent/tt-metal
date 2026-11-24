@@ -52,9 +52,9 @@ void kernel_main() {
     }
 
     Noc noc;
-    Semaphore reduce_receiver_sem(sem::reduce_receiver);
-    Semaphore reduce_sender_sem(sem::reduce_sender);
-    Semaphore reduce_second_stage_sem(sem::reduce_second_stage);
+    Semaphore<> reduce_receiver_sem(sem::reduce_receiver);
+    Semaphore<> reduce_sender_sem(sem::reduce_sender);
+    Semaphore<> reduce_second_stage_sem(sem::reduce_second_stage);
     UnicastEndpoint remote_ep;
 
     const DataflowBuffer dfb_ex_partial2_obj(dfb::ex_partial2);
@@ -63,8 +63,8 @@ void kernel_main() {
     RemoteCoord remote_coords[num_blocks];
     uint32_t x = start_x;
     uint32_t y = start_y;
-    for (uint32_t i = 0; i < num_blocks; ++i) {
-        remote_coords[i] = {.x = in0_remote_noc_x[x], .y = in0_remote_noc_y[y]};
+    for (auto& coord : remote_coords) {
+        coord = {.x = in0_remote_noc_x[x], .y = in0_remote_noc_y[y]};
         if constexpr (row_major) {
             ++x;
             if (x == num_x) {

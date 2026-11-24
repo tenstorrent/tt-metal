@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "impl/dispatch/vector_aligned.hpp"
 #include <tt_stl/span.hpp>
 #include <array>
 #include <atomic>
@@ -13,12 +12,11 @@
 #include <memory>
 #include <optional>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 #include "allocator.hpp"
 #include "impl/allocator/persistent_l1_arena.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "llrt/hal_types.hpp"
 #include "sub_device.hpp"
 #include "sub_device_types.hpp"

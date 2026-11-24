@@ -117,6 +117,15 @@ bool find_device_with_neighbor_in_direction(
     return false;
 }
 
+tt_metal::FabricSettings make_control_plane_config(FabricConfig fabric_config, FabricReliabilityMode reliability_mode) {
+    const auto& env_config = tt::tt_metal::MetalContext::instance().get_env().get_fabric_settings();
+    return tt_metal::FabricSettings{
+        .fabric_config = fabric_config,
+        .reliability_mode = reliability_mode,
+        .mesh_id = env_config.mesh_id,
+        .host_rank = env_config.host_rank};
+}
+
 std::map<FabricNodeId, ChipId> get_physical_chip_mapping_from_eth_coords_mapping(
     const std::vector<std::vector<EthCoord>>& mesh_graph_eth_coords) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();

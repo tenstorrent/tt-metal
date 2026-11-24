@@ -90,36 +90,46 @@ ProgramDescriptor BinaryBackwardProgramFactory::create_descriptor(
             }}},
         });
     };
+    const bool reads_operands = spec.num_input_tensors == 3;
     push_cb(cb_grad_out, grad_out_df, grad_out_tile_size);
-    push_cb(cb_input, input_df, input_tile_size);
-    push_cb(cb_other, other_df, other_tile_size);
+    if (reads_operands) {
+        push_cb(cb_input, input_df, input_tile_size);
+        push_cb(cb_other, other_df, other_tile_size);
+    }
     push_cb(cb_input_grad, input_grad_df, input_grad_tile_size);
     push_cb(cb_other_grad, other_grad_df, other_grad_tile_size);
 
-    // Reader compile-time args: 3 CB IDs + 3 TensorAccessorArgs (order matches
-    // ternary_reader_nobcast_ttt.cpp's TensorAccessorArgs<3,0>() indices).
-    std::vector<uint32_t> reader_compile_time_args = {cb_grad_out, cb_input, cb_other};
+    // Reader CT args: CB IDs then matching TensorAccessorArgs, in the order the reader indexes them.
+    std::vector<uint32_t> reader_compile_time_args =
+        reads_operands ? std::vector<uint32_t>{cb_grad_out, cb_input, cb_other} : std::vector<uint32_t>{cb_grad_out};
     TensorAccessorArgs(*grad_out_buf).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*input_buf).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*other_buf).append_to(reader_compile_time_args);
+    if (reads_operands) {
+        TensorAccessorArgs(*input_buf).append_to(reader_compile_time_args);
+        TensorAccessorArgs(*other_buf).append_to(reader_compile_time_args);
+    }
 
     std::vector<uint32_t> writer_compile_time_args = {cb_input_grad, cb_other_grad};
     TensorAccessorArgs(*input_grad_buf).append_to(writer_compile_time_args);
     TensorAccessorArgs(*other_grad_buf).append_to(writer_compile_time_args);
 
-    // UnpackToDestFp32 is only meaningful when DEST is actually accumulating in
-    // float32 -- otherwise the request is a no-op that risks tripping asserts
-    // (the other pre-existing tanh_bw bug called out in PR #56061).
+    // UnpackToDestFp32 is a no-op (and may assert) when DEST isn't accumulating in fp32; see PR #56061.
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (fp32_dest_acc_en) {
         unpack_to_dest_mode[cb_grad_out] = UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode[cb_input] = UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode[cb_other] = UnpackToDestMode::UnpackToDestFp32;
+        if (reads_operands) {
+            unpack_to_dest_mode[cb_input] = UnpackToDestMode::UnpackToDestFp32;
+            unpack_to_dest_mode[cb_other] = UnpackToDestMode::UnpackToDestFp32;
+        }
     }
 
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
+    // Reader paths grouped by operand count; grad-only avoids CB back-pressure deadlock on add/sub/rsub.
+    constexpr std::string_view kTernaryReader =
         "ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels/dataflow/ternary_reader_nobcast_ttt.cpp";
+    constexpr std::string_view kGradOnlyReader =
+        "ttnn/cpp/ttnn/operations/eltwise/binary_backward/device/kernels/dataflow/reader_binary_backward_grad_only.cpp";
+
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source = std::string(reads_operands ? kTernaryReader : kGradOnlyReader);
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = reader_compile_time_args;
@@ -155,7 +165,11 @@ ProgramDescriptor BinaryBackwardProgramFactory::create_descriptor(
             TT_THROW("binary_backward factory: core {},{} outside computed groups", core.x, core.y);
         }
 
-        reader_desc.emplace_runtime_args(core, {grad_out_buf, input_buf, other_buf, tiles_here, tiles_done});
+        if (reads_operands) {
+            reader_desc.emplace_runtime_args(core, {grad_out_buf, input_buf, other_buf, tiles_here, tiles_done});
+        } else {
+            reader_desc.emplace_runtime_args(core, {grad_out_buf, tiles_here, tiles_done});
+        }
         compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{tiles_here});
         writer_desc.emplace_runtime_args(core, {input_grad_buf, other_grad_buf, tiles_here, tiles_done});
 

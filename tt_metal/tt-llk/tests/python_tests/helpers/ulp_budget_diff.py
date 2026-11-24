@@ -7,9 +7,12 @@ tell apart by the registry's own rules: a figure that goes up, a cell that stops
 gated, or a tolerance cell whose recorded measurement or declared bound loosens is a
 regression. ``headroom`` judges the ``--ulp-measure`` records against the table: the
 tolerance cells the sweep cannot fail, and the cells that now measure better than their
-row. Run from ``python_tests`` as ``python -m helpers.ulp_budget_diff <command>``."""
+row. ``acknowledgements`` tells whether two revisions of test_sfpu_accuracy_budget.py
+differ only in the lists a budget raise may edit. Run from ``python_tests`` as
+``python -m helpers.ulp_budget_diff <command>``."""
 
 import argparse
+import ast
 import itertools
 import sys
 from dataclasses import dataclass, field, fields
@@ -17,19 +20,23 @@ from enum import Enum
 from pathlib import Path
 from typing import Iterable
 
+from .chip_architecture import ChipArchitecture
 from .llk_params import MathOperation
 from .ulp_domains import Domain, largest_figure, usable_budget_ceiling
 from .ulp_table import (
-    MEASURED_ARCH,
+    TABLE_PATHS,
     BudgetKey,
     Measurement,
     Metric,
     Row,
     Table,
+    arch_of_table,
     load_table,
+    measured_arch,
     most_specific,
     read_measurements,
     steps_bind,
+    table_arch,
 )
 
 # The op and the key of the row that decides a cell.
@@ -42,7 +49,7 @@ _MAX_ROWS = 40
 _INF = float("inf")
 
 
-def _resolve(
+def resolve(
     table: Table, op: MathOperation, query: BudgetKey, only=lambda row: True
 ) -> Row | None:
     """The row of *op* the registry would resolve *query* to, among those *only*
@@ -180,29 +187,35 @@ def _recorded(row: Row) -> int | None:
     return row.measured if row.input is not None and row.output is not None else None
 
 
-def _held(table: Table, op: MathOperation, query: BudgetKey, full: bool) -> Held:
-    row = _resolve(table, op, query)
+def _held(
+    table: Table,
+    op: MathOperation,
+    query: BudgetKey,
+    full: bool,
+    arch: ChipArchitecture,
+) -> Held:
+    row = resolve(table, op, query)
     gated = (
         row is not None
         and row.contract.metric is Metric.ULP
-        and steps_bind(row.key, query)
+        and steps_bind(row.key, query, arch)
     )
     declared = (
         None
         if gated
-        else _resolve(table, op, query, only=lambda r: r.contract.declares_tolerance)
+        else resolve(table, op, query, only=lambda r: r.contract.declares_tolerance)
     )
     return Held(row, gated, declared, full)
 
 
 def _variants(
-    base: Table, head: Table, op: MathOperation
+    base: Table, head: Table, op: MathOperation, arch: ChipArchitecture
 ) -> Iterable[tuple[BudgetKey, bool]]:
     """Every query the registry could be asked about *op*, as far as either table can
     tell them apart (each dimension takes every value some row pins, or is left unset; a
-    pinned two-valued flag takes both values; the arch always includes
-    :data:`MEASURED_ARCH`), and whether it is a full measured cell: every dimension some
-    row pins is set."""
+    pinned two-valued flag takes both values; the arch always includes the tables'
+    *arch*), and whether it is a full measured cell: every dimension some row pins is
+    set."""
     names = [f.name for f in fields(BudgetKey)]
     keys = [row.key for row in (*base.get(op, ()), *head.get(op, ()))]
     values = {name: {getattr(key, name) for key in keys} - {None} for name in names}
@@ -210,7 +223,7 @@ def _variants(
     for flag in ("approx_mode", "dest_acc"):
         if values[flag]:
             values[flag] |= set(type(next(iter(values[flag]))))
-    values["arch"].add(MEASURED_ARCH)
+    values["arch"].add(arch)
     axes = [
         sorted(values[name], key=lambda v: v.name) + ([] if name == "arch" else [None])
         for name in names
@@ -233,12 +246,28 @@ def _widened(was: Row | None, now: Row | None) -> bool:
     )
 
 
+def _bound_replaces_default(was: Held, now: Held) -> bool:
+    """Whether the declared bounds a variant off a whole-cell gate is compared on may
+    have loosened. A variant no row held before counts too, its op new to the table or
+    not: its functional driver held it to the per-format default, which a declared bound
+    replaces and this tool cannot see."""
+    if was.gated or now.gated:
+        return False
+    return _widened(was.declared, now.declared)
+
+
 def _classify(was: Held, now: Held) -> Kind | None:
     """How the gate a plain-row variant resolves to has changed, or ``None``."""
     if was.gated and not now.gated:
         return Kind.REMOVED if now.row is None else Kind.UNGATED
     if not was.gated and now.gated:
         return Kind.GATED
+    if _bound_replaces_default(was, now):
+        return Kind.TOLERANCE_WIDENED
+    if was.row is None:
+        # Nothing held the variant before, so a new row holds it to more, never less:
+        # its baseline and non-finite count are what it starts from.
+        return None if now.row is None else Kind.ADDED
     if was.gated and now.gated:
         before, after = was.row.contract.max_ulp, now.row.contract.max_ulp
         if after > before:
@@ -246,8 +275,6 @@ def _classify(was: Held, now: Held) -> Kind | None:
         if (now.row.near_zero_atol or 0) > (was.row.near_zero_atol or 0):
             return Kind.FLOOR_WIDENED
         return Kind.TIGHTENED if after < before else None
-    if _widened(was.declared, now.declared):
-        return Kind.TOLERANCE_WIDENED
     if (was.baseline is not None and now.baseline is None) or (
         was.nonfinite and now.row is None
     ):
@@ -258,10 +285,10 @@ def _classify(was: Held, now: Held) -> Kind | None:
         or now.nonfinite > was.nonfinite
     ):
         return Kind.BASELINE_RAISED
-    return Kind.ADDED if was.row is None and now.row is not None else None
+    return None
 
 
-def _spans(held: Held, query: BudgetKey) -> list[Span]:
+def _spans(held: Held, query: BudgetKey, arch: ChipArchitecture) -> list[Span]:
     """*held*'s row over ``(-inf, inf)``: its list's entries, or one span for a plain
     row. An entry with no ``ulp`` is held to the row's largest figure (by the sweep
     where that figure fits the ceiling, by the headroom report past it), so it is
@@ -271,7 +298,8 @@ def _spans(held: Held, query: BudgetKey) -> list[Span]:
     if row is None:
         return [Span(-_INF, _INF, State.NONE)]
     if row.domains:
-        binds, ceiling = steps_bind(row.key, query), usable_budget_ceiling(row.output)
+        binds = steps_bind(row.key, query, arch)
+        ceiling = usable_budget_ceiling(row.output)
         largest = largest_figure(row.domains)
         spans = []
         for d in row.domains:
@@ -343,7 +371,7 @@ class Change:
 
 
 def _segment_changes(
-    was: Held, now: Held, query: BudgetKey
+    was: Held, now: Held, query: BudgetKey, arch: ChipArchitecture
 ) -> list[tuple[Kind, tuple[float, float], str, str]]:
     """``(kind, segment, held_before, held_after)`` per run of the input over which the
     two rows' gates differ, over the union of both lists' edges, then the cell-wide
@@ -352,7 +380,7 @@ def _segment_changes(
     figure on both sides (gated or past the ceiling, either way round) a widened floor
     ranks after a raise or a lost gate and before a tightening or a new gate: both
     figures are measured outside the floor, so a wider one forgives lanes."""
-    before, after = _spans(was, query), _spans(now, query)
+    before, after = _spans(was, query, arch), _spans(now, query, arch)
     edges = sorted(
         {e for spans in (before, after) for s in spans for e in (s.low, s.high)}
     )
@@ -384,7 +412,7 @@ def _segment_changes(
         else:
             found.append([held, low, high])
     changes = [(kind, (low, high), t0, t1) for (kind, t0, t1), low, high in found]
-    if not was.gated and not now.gated and _widened(was.declared, now.declared):
+    if _bound_replaces_default(was, now):
         # Off a whole-cell gate the functional drivers compare on the declared bounds.
         changes.append((Kind.TOLERANCE_WIDENED, None, was.describe(), now.describe()))
     if now.nonfinite > was.nonfinite:
@@ -393,20 +421,25 @@ def _segment_changes(
     return changes
 
 
-def compare(base: Table, head: Table) -> list[Change]:
+def compare(
+    base: Table, head: Table, arch: ChipArchitecture | None = None
+) -> list[Change]:
     """Every cell whose *resolved* gate differs, strongest change first; where either
-    side's row carries a list, segment by segment."""
+    side's row carries a list, segment by segment. An unkeyed step budget binds on
+    *arch*, the tables' architecture (default: this session's)."""
+    arch = arch or measured_arch()
     grouped: dict[tuple, Change] = {}
     for op in sorted(set(base) | set(head), key=lambda o: o.name):
-        for query, full in _variants(base, head, op):
-            was, now = _held(base, op, query, full), _held(head, op, query, full)
+        for query, full in _variants(base, head, op, arch):
+            was = _held(base, op, query, full, arch)
+            now = _held(head, op, query, full, arch)
             deciding = now.row if now.row is not None else was.row
             if deciding is None:
                 continue
             if (was.row is not None and was.row.domains) or (
                 now.row is not None and now.row.domains
             ):
-                found = _segment_changes(was, now, query)
+                found = _segment_changes(was, now, query, arch)
             else:
                 kind = _classify(was, now)
                 found = (
@@ -495,6 +528,34 @@ def render_budget_diff(changes: list[Change]) -> str:
     return "\n".join(out) + "\n"
 
 
+# ── What a budget raise may edit beside the tables ────────────────────────────
+
+
+def _acknowledges(node: ast.stmt) -> bool:
+    """Whether *node* assigns one of test_sfpu_accuracy_budget.py's acknowledgement
+    lists: ``ONLY_EVER_TOLERANCE`` or an ``_UNMEASURABLE_CELLS_ACKNOWLEDGED*``."""
+    if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+        return False
+    target = node.targets[0]
+    return isinstance(target, ast.Name) and (
+        target.id == "ONLY_EVER_TOLERANCE"
+        or target.id.startswith("_UNMEASURABLE_CELLS_ACKNOWLEDGED")
+    )
+
+
+def only_acknowledgements_differ(base: str, head: str) -> bool:
+    """Whether two revisions of test_sfpu_accuracy_budget.py's source hold the same
+    statements, in order, once the acknowledgement lists are left out: an import, a
+    test or any other definition that changed is not an acknowledgement."""
+
+    def rest(source: str) -> list[str]:
+        return [
+            ast.dump(node) for node in ast.parse(source).body if not _acknowledges(node)
+        ]
+
+    return rest(base) == rest(head)
+
+
 # ── What the hardware measured against what the table declares ────────────────
 
 
@@ -569,20 +630,26 @@ class Headroom:
         return sum(f.verdict.fails for f in self.findings) if self.measured else 1
 
 
-def judge(table: Table, measurements: Iterable[Measurement]) -> Headroom:
+def judge(
+    table: Table,
+    measurements: Iterable[Measurement],
+    arch: ChipArchitecture | None = None,
+) -> Headroom:
     """Every recorded cell against the row it resolves to: a gated cell over its figure
     or a tolerance cell over its recorded one has regressed, and a better reading is a
     re-emit's to tighten. A list is judged entry by entry, a null entry's ranked strays
     held to the row's largest figure; a sweep record with no reading over an entry was
     measured against another list and fails. A cell that ranked no lane against a
-    figure has regressed too."""
+    figure has regressed too. An unkeyed step budget binds on *arch*, the table's
+    architecture (default: this session's)."""
+    arch = arch or measured_arch()
     cells = read_cells(measurements)
     out = Headroom(measured=len(cells))
     for cell, reading in sorted(
         cells.items(), key=lambda item: (item[0][0].name, item[0][1].sort_key)
     ):
         op, key = cell
-        row = _resolve(table, op, key)
+        row = resolve(table, op, key)
         if row is None:
             out.uncovered += 1
             continue
@@ -615,7 +682,7 @@ def judge(table: Table, measurements: Iterable[Measurement]) -> Headroom:
                 elif entry.ulp is not None and seen < entry.ulp:
                     found(Finding(cell, Verdict.TIGHTENS, seen, entry.ulp, entry))
             continue
-        if row.contract.metric is Metric.ULP and steps_bind(row.key, key):
+        if row.contract.metric is Metric.ULP and steps_bind(row.key, key, arch):
             budget = row.contract.max_ulp
             if reading.worst != budget:
                 verdict = (
@@ -681,6 +748,46 @@ def render_headroom(headroom: Headroom) -> str:
 # ── Command line ──────────────────────────────────────────────────────────────
 
 
+def _tables_arch(given: str | None, *paths: Path) -> ChipArchitecture:
+    """The architecture the tables at *paths* were measured on: *given* (``--arch``),
+    else the first path whose file name says, never the shell's ``CHIP_ARCH``: judging a
+    table under another architecture's rules stops its plain rows binding."""
+    if given is not None:
+        return ChipArchitecture.from_string(given)
+    for path in paths:
+        arch = arch_of_table(path)
+        if arch is not None:
+            return arch
+    raise ValueError(
+        f"cannot tell which architecture {', '.join(map(str, paths))} was measured "
+        "on from the file name; pass --arch"
+    )
+
+
+def _check_records_arch(
+    records: list[Measurement], arch: ChipArchitecture, path: Path
+) -> None:
+    """Refuse records run on a chip that does not read the *arch* table: judged against
+    another architecture's table, plain rows stop binding and lists are held to the
+    other chip's figures, and the report can still pass."""
+    ran_on = {table_arch(m.key.arch) for m in records if m.key.arch is not None}
+    if ran_on - {arch}:
+        raise ValueError(
+            f"{path} holds records run on "
+            f"{', '.join(sorted(a.value for a in ran_on))}, judged against the "
+            f"{arch.value} table; judge each chip's records against its own table"
+        )
+
+
+def _load(side: str, path: Path) -> Table:
+    """*path*'s table, a refusal naming the *side* that failed: a change to the schema
+    can leave the base revision unreadable by the head's code."""
+    try:
+        return load_table(path)
+    except (ValueError, OSError) as refused:
+        raise ValueError(f"the {side} table {path}: {refused}") from refused
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -691,14 +798,38 @@ def main(argv: list[str] | None = None) -> int:
     headroom = sub.add_parser(
         "headroom", help="--ulp-measure records against the table"
     )
-    headroom.add_argument("--table", type=Path, required=True)
+    headroom.add_argument("--table", type=Path, help="default: CHIP_ARCH's table")
     headroom.add_argument("--measured", type=Path, required=True)
+    acknowledgements = sub.add_parser(
+        "acknowledgements",
+        help="exit 1 if test_sfpu_accuracy_budget.py changed outside the lists a "
+        "budget raise may edit",
+    )
+    acknowledgements.add_argument("--base", type=Path, required=True)
+    acknowledgements.add_argument("--head", type=Path, required=True)
     for command in (diff, headroom):
         command.add_argument("--out", type=Path, help="also write the report here")
+        command.add_argument(
+            "--arch",
+            choices=[arch.value for arch in TABLE_PATHS],
+            help="the architecture the table(s) were measured on (default: from the "
+            "file name, e.g. sfpu_accuracy_budget_bh.yaml)",
+        )
     args = parser.parse_args(argv)
+    if args.command == "acknowledgements":
+        try:
+            same = only_acknowledgements_differ(
+                args.base.read_text(encoding="utf-8"),
+                args.head.read_text(encoding="utf-8"),
+            )
+        except (ValueError, OSError, SyntaxError) as refused:
+            print(f"cannot load: {refused}")
+            return 2
+        return 0 if same else 1
     try:
         if args.command == "diff":
-            changes = compare(load_table(args.base), load_table(args.head))
+            arch = _tables_arch(args.arch, args.head, args.base)
+            changes = compare(_load("base", args.base), _load("head", args.head), arch)
             report = render_budget_diff(changes)
             loosened = any(c.kind.loosens for c in changes)
             status = 1 if loosened and not args.allow_raises else 0
@@ -706,7 +837,11 @@ def main(argv: list[str] | None = None) -> int:
             # The reader takes a missing file as no records (a sweep that died before its
             # first cell); here it is an input that is not there, so it cannot load.
             args.measured.stat()
-            headroom = judge(load_table(args.table), read_measurements(args.measured))
+            table = args.table or TABLE_PATHS[measured_arch()]
+            arch = _tables_arch(args.arch, table)
+            records = read_measurements(args.measured)
+            _check_records_arch(records, arch, args.measured)
+            headroom = judge(load_table(table), records, arch)
             report = render_headroom(headroom)
             status = 1 if headroom.regressions else 0
     except (ValueError, OSError) as refused:

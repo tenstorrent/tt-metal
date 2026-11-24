@@ -9,7 +9,6 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <map>
 #include <optional>
 #include <string>
 #include <variant>
@@ -24,7 +23,7 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "llrt/get_platform_architecture.hpp"
 #include "llrt/rtoptions.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include "common/tt_backend_api_types.hpp"
@@ -48,7 +47,7 @@ namespace unit_tests_common::basic::test_device_init {
 /// @return
 bool load_all_blank_kernels(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     bool pass = true;
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
     auto mesh_workload = distributed::MeshWorkload();
 
     CoreCoord compute_grid_size = mesh_device->compute_with_storage_grid_size();
@@ -158,9 +157,6 @@ TEST(DeviceInitFabric, RejectsSingleHost1ChipMesh) {
     }
     if (*MetalContext::instance().global_distributed_context().size() > 1) {
         GTEST_SKIP() << "Multi-host 1-local-chip meshes are allowed to launch fabric";
-    }
-    if (cluster.is_galaxy_cluster()) {
-        GTEST_SKIP() << "Galaxy opens the full cluster when fabric is enabled, so a 1x1 mesh never hits this guard";
     }
     if (cluster.mmio_chip_ids().size() != cluster.all_chip_ids().size()) {
         GTEST_SKIP() << "Clusters with remote chips fatal earlier when fabric is launched on a subset of devices";
