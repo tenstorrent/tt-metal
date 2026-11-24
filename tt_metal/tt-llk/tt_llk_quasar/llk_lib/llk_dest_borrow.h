@@ -125,9 +125,9 @@ inline void _llk_tile_regs_return_()
 /**
  * @brief Set the four Dest borrow semaphores (MATH_UNPACK, MATH_SFPU, PACK_UNPACK and PACK_SFPU) to 0, with a maximum of 1.
  *
- * @note Call this once per kernel, before any thread calls @ref _llk_tile_regs_borrow_. A borrower that waits
- * on a semaphore that has not been set up yet can pass too early or hang. Metal calls it from
- * compute_kernel_hw_startup, and the LLK test boot calls it from device_setup.
+ * @note Call this once, before any thread calls @ref _llk_tile_regs_borrow_. A borrower that waits
+ * on a semaphore that has not been set up yet can pass too early or hang. Metal calls it once per firmware
+ * boot from trisc.cc, before any kernel starts, and the LLK test boot calls it from device_setup.
  */
 inline void _llk_dest_borrow_init_()
 {
