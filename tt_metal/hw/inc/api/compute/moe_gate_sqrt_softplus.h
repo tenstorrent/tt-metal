@@ -12,6 +12,7 @@
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_moe_gate_sqrt_softplus.h"
 #include "llk_math_eltwise_binary_sfpu_macros.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -57,6 +58,50 @@ ALWI void moe_gate_sqrt_softplus_add_bias_tile(uint32_t idst_x, uint32_t idst_bi
  */
 ALWI void moe_gate_sqrt_softplus_add_bias_tile_init() {
     MATH((SFPU_BINARY_INIT_FN_NO_ARGS(unused, sfpu::moe_gate_sqrt_softplus_init)));
+}
+
+// clang-format off
+/**
+ * Performs sqrt(softplus(x)) in place on the tile at idst, with torch.nn.functional.softplus
+ * beta/threshold semantics:
+ *
+ *   t = beta * x;  idst = sqrt(t > threshold ? x : softplus(t) / beta)
+ *
+ * Same fp32-accurate softplus and 23-bit sqrt as moe_gate_sqrt_softplus_add_bias_tile. With a 16-bit
+ * DEST the result is rounded to bf16 with round-to-nearest-even before the store.
+ *
+ * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking
+ * and is only available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                      | Type     | Valid Range                                           | Required |
+ * |-----------------|------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST to operate on                       | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | beta            | Softplus beta, as fp32 bits                                      | uint32_t | Greater than 0                                        | True     |
+ * | beta_reciprocal | 1 / beta, as fp32 bits                                           | uint32_t | Greater than 0                                        | True     |
+ * | threshold       | Softplus threshold on beta * x, as fp32 bits                     | uint32_t | Greater than 0                                        | True     |
+ */
+// clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void sqrt_softplus_tile(uint32_t idst, uint32_t beta, uint32_t beta_reciprocal, uint32_t threshold) {
+    MATH((SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_sqrt_softplus,
+        (8 /* ITERATIONS */, is_fp32_dest_acc_en),
+        idst,
+        VectorMode::RC,
+        beta,
+        beta_reciprocal,
+        threshold)));
+}
+
+/**
+ * Please refer to documentation for any_init.
+ */
+ALWI void sqrt_softplus_tile_init() {
+    MATH((::ckernel::llk_math_eltwise_unary_sfpu_init<::SfpuType::unused>(sfpu::sqrt_softplus_init)));
 }
 
 }  // namespace ckernel

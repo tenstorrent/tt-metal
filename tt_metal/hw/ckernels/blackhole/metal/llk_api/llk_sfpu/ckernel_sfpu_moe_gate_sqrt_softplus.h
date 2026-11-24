@@ -96,4 +96,35 @@ inline void calculate_moe_gate_sqrt_softplus_add_bias(
     }
 }
 
+// ======================================================================
+// Unary sqrt(softplus(x)) in place, with torch.nn.functional.softplus beta/threshold semantics:
+//   t = beta * x;  softplus = (t > threshold ? t : softplus(t)) / beta;  out = sqrt(softplus)
+// Same softplus and sqrt bodies as above, so the init is the same: sqrt_init owns every
+// programmable constant the op reads. With a 16-bit DEST the result is rounded to bf16 with
+// round-to-nearest-even before the store (an untyped store truncates).
+// beta, beta_reciprocal and threshold are fp32 bit patterns.
+// ======================================================================
+inline void sqrt_softplus_init() { moe_gate_sqrt_softplus_init(); }
+
+template <int ITERATIONS, bool is_fp32_dest_acc_en>
+inline void calculate_sqrt_softplus(
+    const std::uint32_t beta_bits, const std::uint32_t beta_reciprocal_bits, const std::uint32_t threshold_bits) {
+    const float beta = __builtin_bit_cast(float, beta_bits);
+    const float beta_reciprocal = __builtin_bit_cast(float, beta_reciprocal_bits);
+    const float threshold = __builtin_bit_cast(float, threshold_bits);
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat t = sfpi::dst_reg[0] * beta;
+        sfpi::vFloat sp = t;
+        v_if(t <= threshold) { sp = _moe_gate_softplus_(t); }
+        v_endif;
+        sfpi::vFloat y = _calculate_sqrt_body_<false /*APPROXIMATE*/, false /*RECIPROCAL*/, false /*FAST_APPROX*/>(
+            sp * beta_reciprocal);
+        if constexpr (!is_fp32_dest_acc_en) {
+            y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
+        }
+        sfpi::dst_reg[0] = y;
+        sfpi::dst_reg++;
+    }
+}
+
 }  // namespace ckernel::sfpu

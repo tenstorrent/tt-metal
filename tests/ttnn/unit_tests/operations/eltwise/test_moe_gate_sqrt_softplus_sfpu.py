@@ -179,3 +179,96 @@ def test_moe_gate_sqrt_softplus_sfpu(device, in_name, pack_key, dst_x, dst_bias)
         f"{ulp_message}"
     )
     assert_with_pcc(golden.float(), a, pcc=PCC)
+
+
+def _f32_bits(v):
+    return int(torch.tensor(v, dtype=torch.float32).view(torch.int32).item()) & 0xFFFFFFFF
+
+
+def _run_unary(device, x_t, fp32_dest, beta, threshold):
+    """Runs the unary sqrt_softplus_tile over bf16 x. A bf16 DEST packs bf16, an fp32 DEST packs fp32."""
+    num_tiles = x_t.numel() // TILE_ELEMS
+    shape = [1, num_tiles, 32, 32]
+    out_dtype, out_page = (ttnn.float32, TILE_ELEMS * 4) if fp32_dest else (ttnn.bfloat16, TILE_ELEMS * 2)
+
+    x = ttnn.from_torch(
+        x_t.reshape(shape),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output = ttnn.allocate_tensor_on_device(
+        ttnn.Shape(shape), out_dtype, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+    cb_x, cb_out = 0, 16
+
+    def cb(idx, fmt, page):
+        return ttnn.CBDescriptor(
+            total_size=2 * page,
+            core_ranges=core,
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=idx, data_format=fmt, page_size=page)],
+        )
+
+    reader_rt = ttnn.RuntimeArgs()
+    reader_rt[0][0] = [x.buffer_address(), num_tiles, 0]
+    writer_rt = ttnn.RuntimeArgs()
+    writer_rt[0][0] = [output.buffer_address(), num_tiles, 0]
+
+    kernels = [
+        ttnn.KernelDescriptor(
+            kernel_source="ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
+            core_ranges=core,
+            compile_time_args=ttnn.TensorAccessorArgs(x).get_compile_time_args(),
+            runtime_args=reader_rt,
+            config=ttnn.ReaderConfigDescriptor(),
+        ),
+        ttnn.KernelDescriptor(
+            kernel_source="ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+            core_ranges=core,
+            compile_time_args=[cb_out] + ttnn.TensorAccessorArgs(output).get_compile_time_args(),
+            runtime_args=writer_rt,
+            config=ttnn.WriterConfigDescriptor(),
+        ),
+        ttnn.KernelDescriptor(
+            kernel_source="tests/tt_metal/tt_metal/test_kernels/compute/sqrt_softplus.cpp",
+            core_ranges=core,
+            compile_time_args=[num_tiles, _f32_bits(beta), _f32_bits(1.0 / beta), _f32_bits(threshold)],
+            runtime_args=[],
+            config=ttnn.ComputeConfigDescriptor(fp32_dest_acc_en=fp32_dest),
+        ),
+    ]
+
+    cbs = [cb(cb_x, ttnn.bfloat16, TILE_ELEMS * 2), cb(cb_out, out_dtype, out_page)]
+    out = ttnn.generic_op([x, output], ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs))
+    return ttnn.to_torch(out).reshape(x_t.shape)
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="sqrt_softplus SFPU op is implemented for Blackhole only")
+@pytest.mark.parametrize("fp32_dest", [False, True], ids=["bf16_dest", "fp32_dest"])
+# (1, 20) is torch's default and the DeepSeek-V4 router's; (0.5, 2) moves both the beta scaling and the
+# threshold switch (x > 4) into the swept range.
+@pytest.mark.parametrize("beta, threshold", [(1.0, 20.0), (0.5, 2.0)], ids=["default", "beta0.5_thr2"])
+def test_sqrt_softplus_sfpu(device, fp32_dest, beta, threshold):
+    num_tiles = 8
+    x_t, _ = _coverage_inputs(num_tiles)
+    x_t = x_t.to(torch.bfloat16).float()  # the golden must see exactly what the device sees
+
+    golden = torch.sqrt(torch.nn.functional.softplus(x_t.double(), beta=beta, threshold=threshold))
+    actual = _run_unary(device, x_t, fp32_dest, beta, threshold)
+    assert (actual >= 0).all()
+
+    if fp32_dest:
+        assert_with_ulp(expected_result=golden, actual_result=actual.float(), ulp_threshold=FP32_ULP)
+    else:
+        # Round-to-nearest-even of the fp32 result: at most 1 bf16 ULP from the rounded golden, and equal
+        # to it except where the exact value sits within the fp32 error of a rounding tie. A truncating
+        # store differs on about half the elements.
+        golden_bf16 = golden.to(torch.bfloat16)
+        assert_with_ulp(expected_result=golden_bf16, actual_result=actual.to(torch.bfloat16), ulp_threshold=1)
+        mismatch = (actual.to(torch.bfloat16) != golden_bf16).float().mean().item()
+        logger.debug(f"bf16 beta={beta} threshold={threshold}: {mismatch:.4%} differ from the RNE golden")
+        assert mismatch < 0.01, f"{mismatch:.2%} of bf16 results differ from the round-to-nearest golden"
+    assert_with_pcc(golden.float(), actual.float(), pcc=PCC)
