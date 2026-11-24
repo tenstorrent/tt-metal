@@ -355,7 +355,12 @@ def run_post_test_reset(
 def run_end(tt_smi_path: str | None, phase: Phase, out: Path, dry_run: bool, delay_s: int, gate: str | None) -> None:
     """The end sequence, after the post-test reset: *delay_s* of quiet, then one whole-box fabric open and close
     with the DRAM byte/DBI readback on the open mesh, judged with the AER errors over it. A failed or hung open, or an
-    uncorrectable AER error, gets one more glx_reset, rescan and recount, so no chip is left hung."""
+    uncorrectable AER error, gets one more glx_reset, rescan and recount, so no chip is left hung. Not run when the
+    post-test reset did not leave every chip back: the open would test nothing the recount has not already named."""
+    reset = next((c for c in reversed(phase.checks) if c.name == "post_test_reset_ok"), None)
+    if reset is not None and reset.status != PASS:
+        phase.add(Check(name="end_fabric", status=SKIP, details=f"not run: {reset.details}", ip="eth"))
+        return
     log(f"end sequence: {delay_s} s, then the fabric open and close")
     if not dry_run:
         time.sleep(delay_s)

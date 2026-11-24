@@ -184,6 +184,15 @@ class TestResets(unittest.TestCase):
             self.assertTrue(resets.run_post_test_reset(None, ("-glx_reset",), phase, False))
         self.assertEqual((phase.checks[-1].status, phase.checks[-1].details), (SKIP, "reset cannot run: not root"))
 
+    def test_no_end_sequence_after_a_post_test_reset_that_did_not_run_clean(self):
+        phase = resets.Phase(name="post_test_reset")
+        phase.add(resets.Check(name="post_test_reset_ok", status=SKIP, details="reset cannot run: not root"))
+        with mock.patch.object(resets, "run_step", side_effect=AssertionError("opened")):
+            resets.run_end(None, phase, Path("/nonexistent"), False, 60, None)
+        self.assertEqual(
+            (phase.checks[-1].name, phase.checks[-1].details), ("end_fabric", "not run: reset cannot run: not root")
+        )
+
 
 class TestStageOrder(unittest.TestCase):
     def test_stages_in_run_order(self):
