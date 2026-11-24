@@ -179,6 +179,19 @@ void order_by_core(std::vector<uint32_t>& cpus, const std::function<std::pair<lo
     std::stable_sort(cpus.begin(), cpus.end(), [&](uint32_t a, uint32_t b) { return core.at(a) < core.at(b); });
 }
 
+void release_cpus(
+    const std::vector<uint32_t>& cpus,
+    std::unordered_map<uint32_t, uint32_t>& workers_per_cpu,
+    std::unordered_map<int, size_t>& next_per_node) {
+    for (const uint32_t cpu : cpus) {
+        workers_per_cpu[cpu]--;
+    }
+    if (std::all_of(
+            workers_per_cpu.begin(), workers_per_cpu.end(), [](const auto& entry) { return entry.second == 0; })) {
+        next_per_node.clear();
+    }
+}
+
 // Picks a CPU for the pool's next worker and counts it as taken; pool_cpus: the CPUs the pool holds so far.
 uint32_t reserve_cpu_for_physical_device(
     ContextId context_id, uint32_t physical_device_id, const std::vector<uint32_t>& pool_cpus) {
@@ -251,9 +264,7 @@ struct CpuReservation {
     ~CpuReservation() {
         auto& placement = cpu_placement();
         const std::lock_guard<std::mutex> lock(placement.mutex);
-        for (const uint32_t cpu : cpus) {
-            placement.workers_per_cpu[cpu]--;
-        }
+        release_cpus(cpus, placement.workers_per_cpu, placement.next_cpu_per_numa_node);
     }
 };
 

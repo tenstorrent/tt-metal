@@ -141,7 +141,7 @@ TEST(ThreadPoolTest, ParallelForUsesWorkers) {
 struct ExplicitTopology {
     std::vector<std::vector<uint32_t>> node_cpus;
     std::unordered_map<uint32_t, uint32_t> workers_per_cpu;
-    std::vector<size_t> next = std::vector<size_t>(node_cpus.size());
+    std::unordered_map<int, size_t> next;
 
     // CPUs of a pool with one worker per entry of worker_nodes.
     std::vector<uint32_t> place(const std::vector<int>& worker_nodes) {
@@ -152,11 +152,7 @@ struct ExplicitTopology {
         }
         return pool;
     }
-    void release(const std::vector<uint32_t>& pool) {
-        for (const uint32_t cpu : pool) {
-            workers_per_cpu[cpu]--;
-        }
-    }
+    void release(const std::vector<uint32_t>& pool) { thread_binding::release_cpus(pool, workers_per_cpu, next); }
 };
 
 size_t distinct(std::vector<uint32_t> cpus) {
@@ -201,8 +197,15 @@ TEST(ThreadPoolTest, PickCpuFillsWholeCores) {
     thread_binding::order_by_core(cpus, [](uint32_t cpu) { return std::pair<long, long>{0, cpu % 4}; });
     EXPECT_EQ(cpus, (std::vector<uint32_t>{0, 4, 1, 5, 2, 6, 3, 7}));
     ExplicitTopology placement{.node_cpus = {cpus}};
+    const auto first = placement.place({0, 0, 0, 0});
+    const auto second = placement.place({0, 0});
+    EXPECT_EQ(first, (std::vector<uint32_t>{0, 4, 1, 5}));
+    EXPECT_EQ(second, (std::vector<uint32_t>{2, 6}));
+    // With every pool destroyed, the next ones start on whole cores again.
+    placement.release(first);
+    placement.release(second);
+    placement.release(placement.place({0}));
     EXPECT_EQ(placement.place({0, 0, 0, 0}), (std::vector<uint32_t>{0, 4, 1, 5}));
-    EXPECT_EQ(placement.place({0, 0}), (std::vector<uint32_t>{2, 6}));
     std::vector<uint32_t> unknown = {0, 1, 2, 3};
     thread_binding::order_by_core(
         unknown, [](uint32_t cpu) { return std::pair<long, long>{0, cpu == 2 ? -1 : 3 - static_cast<long>(cpu)}; });
