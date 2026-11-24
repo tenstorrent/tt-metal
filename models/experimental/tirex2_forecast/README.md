@@ -78,14 +78,14 @@ Measured on chip 1 of a 4-chip host, which drifts by up to 5 % under load, at ma
 
 | shape | input | round 0 | now | speedup | steady wall | pcc_normalized | pcc_final |
 |---|---|---|---|---|---|---|---|
-| paper | 1024 series x 2048 -> 64 | 3871.2 ms | 881.2 ms | 4.4x | 1299.0 ms | 0.999975 | 0.999992 |
-| long_context | 32 series x 8192 -> 928 | 371 ms | 66.0 ms | 5.6x | 72.2 ms | 0.999981 | 0.999995 |
-| multivariate | 128 groups x 8 rows x 2048 -> 64 | 10990 ms | 2300.1 ms | 4.8x | 2629.4 ms | 0.999939 | 0.999992 |
+| paper | 1024 series x 2048 -> 64 | 3871.2 ms | 881.3 ms | 4.4x | 1284.6 ms | 0.999975 | 0.999992 |
+| long_context | 32 series x 8192 -> 928 | 371 ms | 66.3 ms | 5.6x | 74.9 ms | 0.999980 | 0.999994 |
+| multivariate | 128 groups x 8 rows x 2048 -> 64 | 10990 ms | 2295.2 ms | 4.8x | 2674.9 ms | 0.999942 | 0.999990 |
 
 - Round 0 is the first full port: stock ops, the op-level sLSTM loop, default program configs.
 - The sign-flip forecast of 16 series (one 32-row batch) takes 81.5 ms on device.
 - The upstream CPU reference takes 413 s for the paper shape on 8 threads.
-- `performance` precision: 859.4 / 64.0 / 2147.1 ms (timing only).
+- `performance` precision: 859.2 / 64.2 / 2147.1 ms (timing only).
 - `optimizations.md` lists every change behind these numbers.
 
 ## Implementation notes
@@ -106,6 +106,8 @@ Measured on chip 1 of a 4-chip host, which drifts by up to 5 % under load, at ma
   - Runs with a pad cut start from a cached nonzero state, so they use the op-level loop in `tt/layers.py`. That
     includes the paper shape.
   - `TIREX2_SLSTM_KERNEL=0` forces the loop everywhere.
+  - The gate exp is a degree-5 polynomial (`SLSTM_FASTEXP=1`). The degree-4 variant (`=2`) saves one FMA per exp,
+    but over 285 steps it costs about 1e-4 of `pcc_final_spread` on the ragged-groups case, enough to miss the floor.
 - **Precision** (`tt/common.py: Precision`): `accuracy` is the shipping policy, with bf16 weights and activations and
   every dense matmul at HiFi4 with fp32 accumulation. In both policies the recurrent states and exponential gating
   are fp32. `performance` (bfp8 weights, LoFi / HiFi2 per role) is timing only: it is under 3 % faster.
@@ -115,12 +117,6 @@ Measured on chip 1 of a 4-chip host, which drifts by up to 5 % under load, at ma
 - **The paper shape does not use the fused sLSTM kernel yet.** That needs an initial-state input on
   `ops/slstm_step`, so the pad-skip path can start the kernel from the cached state. The estimated gain is about 25 %
   at the paper shape. This is the main open follow-up.
-- `tests/pcc/test_model.py::test_ragged_groups` misses one floor on this base: `pcc_final_spread` 0.998954 against
-  0.999.
-  - That case is 48 rows in groups of 5 and 1, packed into 64 device rows with dummy rows.
-  - It passes with `TIREX2_SLSTM_KERNEL=0` (0.999104) and passed with the kernel on the earlier main base
-    (0.999116), so the fused kernel's numerics on this layout moved with the base update.
-  - Every bench shape and the kernel's own test still pass.
 - Horizons past 928 steps (upstream rollout) and known-future covariates are not supported.
 - A group (target plus past covariates) may have at most 32 rows: variate attention runs on 32 x 32 row blocks.
 - Chip-to-chip and duty-cycle drift: device times move by up to 5 % on a loaded chip. The bench idles 0.3 s before
