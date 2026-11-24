@@ -94,7 +94,9 @@ ProgramDescriptor UpsampleBilinearProgramFactory::create_descriptor(
     ProgramDescriptor desc;
 
     uint32_t next_cb_index = tt::CBIndex::c_0;
-    constexpr uint32_t buffering_factor = 2;
+    // Pixels each dataflow RISC can stage ahead of the compute kernel. Small sticks are cheap to buffer deeper, and the
+    // compute kernel takes two pixels per DEST trip, so give them 4 (EVO50 96x416x32 / 48x208x64 upsamples).
+    const uint32_t buffering_factor = input_stick_nbytes <= 512 ? 4 : 2;
 
     // input data is in a sharded CB
     const uint32_t in_cb_pagesize = input_stick_nbytes;

@@ -97,7 +97,50 @@ void kernel_main() {
     tilizeA_B_reduce_init<use_neginf_srcA, zero_srcA_reduce>(
         tilize_reduce_cb_0, in_scalar_cb_id1, max_tiles_per_iter, out_cb_id);
     pack_untilize_dest_init<max_tiles_per_iter>(out_cb_id); /* face geometry comes from out_cb metadata */
-    for (uint32_t i = 0; i < nsticks_per_core_by_nblocks; i++) {
+    uint32_t i = 0;
+
+    // Two output pixels per DEST round trip when they fit: a single channel block (the whole stick in one reduction)
+    // and room for both pixels' tiles in DEST (bf16 DEST, 8 tiles). Pixel i comes from the reader's CB and weights,
+    // pixel i + 1 from the writer's (the two dataflow RISCs alternate pixels). The second pixel's reduce writes DEST
+    // tiles [max_tiles_per_iter, 2 * max_tiles_per_iter) and is packed from there (tile_dst_rt_offset is a DEST tile
+    // index). CB ids stay compile-time constants: a generic k-loop with runtime CB selection measured slower (78.7 vs
+    // 63.5 us on EVO50 96x416x32), and so did larger groups (4 / 8 pixels: the input CBs' buffering stalls the
+    // readers).
+    constexpr bool pair_pixels = (blocks == 1) && (2 * max_tiles_per_iter <= 8);
+    if constexpr (pair_pixels) {
+        constexpr bool reload_srcB = true;
+        constexpr bool zero_srcA = false;
+        constexpr uint32_t num_faces = 2;
+        for (; i + 1 < nsticks_per_core_by_nblocks; i += 2) {
+            tile_regs_acquire();
+            tilize_reduce_dfb0.wait_front(4);
+            unpack_tilizeA_B_block<use_neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(
+                tilize_reduce_cb_0, in_scalar_cb_id1, max_tiles_per_iter, 0);
+            for (uint32_t c_i = 0; c_i < max_tiles_per_iter; ++c_i) {
+                reduce_tile_math<REDUCE_OP, REDUCE_DIM>(c_i, num_faces);
+            }
+            tilize_reduce_dfb0.pop_front(4);
+            scalar_dfb_1.pop_front(1);
+            tilize_reduce_dfb1.wait_front(4);
+            unpack_tilizeA_B_block<use_neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(
+                tilize_reduce_cb_1, in_scalar_cb_id2, max_tiles_per_iter, 0);
+            for (uint32_t c_i = 0; c_i < max_tiles_per_iter; ++c_i) {
+                reduce_tile_math<REDUCE_OP, REDUCE_DIM>(max_tiles_per_iter + c_i, num_faces);
+            }
+            tilize_reduce_dfb1.pop_front(4);
+            scalar_dfb_2.pop_front(1);
+            tile_regs_wait();
+            tile_regs_commit();
+            pack_untilize_dest<max_tiles_per_iter>(out_cb_id, 1, 0, 0);
+            PACK(llk_push_pages_bilinear(out_cb_id, max_tiles_per_iter));
+            pack_untilize_dest<max_tiles_per_iter>(
+                out_cb_id, 1, 0, max_tiles_per_iter);  // DEST tile offset of pixel i+1
+            PACK(llk_push_pages_bilinear(out_cb_id, max_tiles_per_iter));
+            tile_regs_release();
+        }
+    }
+
+    for (; i < nsticks_per_core_by_nblocks; i++) {
         DataflowBuffer cur_in_dfb = (i % 2 == 0) ? tilize_reduce_dfb0 : tilize_reduce_dfb1;
         DataflowBuffer cur_scalar_dfb = (i % 2 == 0) ? scalar_dfb_1 : scalar_dfb_2;
 

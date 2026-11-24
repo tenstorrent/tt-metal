@@ -364,6 +364,35 @@ void kernel_main() {
 
             uint32_t write_offset = 0;
 
+            // Single channel block: a neighbor segment is a whole stick and lands in one CB page, and the two
+            // horizontal neighbors of a row are usually adjacent sticks of the halo buffer (x2 == x1 + 1). Then each
+            // row is one 2-stick read into two consecutive pages: half the NOC transactions per output pixel.
+            if (blocks == 1 && y1x2_addr == y1x1_addr + stick_nbytes && y2x2_addr == y2x1_addr + stick_nbytes &&
+                input_block_size_bytes == stick_nbytes) {
+                noc.async_read(
+                    self_ep,
+                    tilize_reduce_dfb,
+                    2 * stick_nbytes,
+                    experimental::local_addr(y1x1_addr),
+                    {.offset_bytes = 0});
+                noc.async_read(
+                    self_ep,
+                    tilize_reduce_dfb,
+                    2 * stick_nbytes,
+                    experimental::local_addr(y2x1_addr),
+                    {.offset_bytes = 2 * stick_nbytes});
+                fill_four_val(
+                    scalar_dfb.get_write_ptr(),
+                    weight_top_left_bf16,
+                    weight_top_right_bf16,
+                    weight_bottom_left_bf16,
+                    weight_bottom_right_bf16);
+                scalar_dfb.push_back(1);
+                tilize_reduce_dfb.push_back(4);
+                block_offset += current_block_size_bytes;
+                continue;
+            }
+
             // Read 4 neighbor stick segments
             noc.async_read(
                 self_ep,
