@@ -616,13 +616,21 @@ void set_pending_program_factory(std::size_t program_factory_index, bool program
         std::string(factory_type), program_factory_index, program_cache_hit);
 }
 
-// Main function to launch operations on mesh devices with special handling for MeshDeviceOperationAdapter
+// A program `run` launches in place of the program cache's, and the kernel config buffer it runs from, if any.
+struct CompiledLaunch {
+    CompiledProgram& program;
+    const tt::tt_metal::experimental::KernelConfigBuffer* kernel_config_buffer = nullptr;
+};
+
+// Main function to launch operations on mesh devices with special handling for MeshDeviceOperationAdapter. Launches
+// `compiled`'s program when given (`run`), else the program cache's (`launch`).
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
 void launch_operation_with_adapter(
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
     const typename mesh_device_operation_t::tensor_args_t& tensor_args,
     typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
-    ttnn::MeshDevice* mesh_device) {
+    ttnn::MeshDevice* mesh_device,
+    const CompiledLaunch* compiled = nullptr) {
     // Skip if operation should be skipped
     if constexpr (HasSkipLaunch<mesh_device_operation_t>) {
         if (mesh_device_operation_t::skip_launch(operation_attributes, tensor_args, tensor_return_value)) {
@@ -631,37 +639,61 @@ void launch_operation_with_adapter(
         }
     }
 
-    const auto lookup = look_up_program_cache<mesh_device_operation_t>(operation_attributes, tensor_args, mesh_device);
+    ProgramCacheLookup lookup;
+    if (compiled != nullptr) {
+        // The compiled program serves these arguments only if the program cache would have served them from it.
+        lookup.key = compute_program_cache_key<mesh_device_operation_t>(operation_attributes, tensor_args, mesh_device);
+        TT_FATAL(
+            lookup.key == compiled->program.key(),
+            "Device operation \"{}\" cannot run the program compiled from \"{}\": its arguments have a different "
+            "program cache key, so they need a different program",
+            get_operation_name<mesh_device_operation_t>(operation_attributes),
+            compiled->program.operation_name());
+        lookup.hit = true;
+    } else {
+        lookup = look_up_program_cache<mesh_device_operation_t>(operation_attributes, tensor_args, mesh_device);
+    }
 
     log_operation<mesh_device_operation_t>(
         mesh_device->id(), operation_attributes, tensor_args, lookup.key.hash, lookup.hit);
 
-    use_mesh_workload<mesh_device_operation_t>(
-        operation_attributes,
-        tensor_args,
-        tensor_return_value,
-        mesh_device,
-        lookup,
-        [&](tt::tt_metal::distributed::MeshWorkload& workload,
-            const typename mesh_device_operation_t::SpecSharedVariablesMap* spec_shared_variables) {
-            enqueue_mesh_workload<mesh_device_operation_t>(
-                operation_attributes,
-                tensor_args,
-                tensor_return_value,
-                mesh_device,
-                workload,
-                spec_shared_variables,
-                lookup.hit);
-        });
+    const auto enqueue = [&](tt::tt_metal::distributed::MeshWorkload& workload,
+                             const typename mesh_device_operation_t::SpecSharedVariablesMap* spec_shared_variables) {
+        enqueue_mesh_workload<mesh_device_operation_t>(
+            operation_attributes,
+            tensor_args,
+            tensor_return_value,
+            mesh_device,
+            workload,
+            spec_shared_variables,
+            lookup.hit,
+            compiled != nullptr ? compiled->kernel_config_buffer : nullptr);
+    };
+    if (compiled != nullptr) {
+        use_cached_mesh_workload<mesh_device_operation_t>(
+            operation_attributes,
+            tensor_args,
+            tensor_return_value,
+            compiled->program.cached_program_factory(),
+            enqueue);
+    } else {
+        use_mesh_workload<mesh_device_operation_t>(
+            operation_attributes, tensor_args, tensor_return_value, mesh_device, lookup, enqueue);
+    }
 
     // Stash factory identity after adapter work so nested function_end events cannot consume it.
     if (ttnn::graph::GraphProcessor::has_active_instance()) {
-        auto& program_cache = mesh_device->get_program_cache();
-        // Prefer the cached index; select only when the miss was not inserted (NO_DISPATCH).
-        const std::size_t program_factory_index =
-            (program_cache.is_enabled() && program_cache.contains(lookup.key))
-                ? program_cache.get(lookup.key).program_factory_index
-                : mesh_device_operation_t::select_program_factory(operation_attributes, tensor_args).index();
+        std::size_t program_factory_index = 0;
+        if (compiled != nullptr) {
+            program_factory_index = compiled->program.program_factory_index();
+        } else {
+            auto& program_cache = mesh_device->get_program_cache();
+            // Prefer the cached index; select only when the miss was not inserted (NO_DISPATCH).
+            program_factory_index =
+                (program_cache.is_enabled() && program_cache.contains(lookup.key))
+                    ? program_cache.get(lookup.key).program_factory_index
+                    : mesh_device_operation_t::select_program_factory(operation_attributes, tensor_args).index();
+        }
         set_pending_program_factory<mesh_device_operation_t>(program_factory_index, lookup.hit);
     }
 }
@@ -740,17 +772,12 @@ void place_output_tensors(
     }
 }
 
-/**
- * Launch an operation on a mesh device.
- *
- * @param operation_attributes The operation attributes.
- * @param tensor_args The tensor arguments.
- * @return Outputs are allocated but values are not immediately available till the operation is complete.
- */
+// The body of `launch` (compiled == nullptr) and `run`: launches the program cache's program or `compiled`'s.
 template <DeviceOperationConcept device_operation_t>
-typename device_operation_t::tensor_return_value_t launch(
+typename device_operation_t::tensor_return_value_t launch_operation(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
-    const typename device_operation_t::tensor_args_t& tensor_args) {
+    const typename device_operation_t::tensor_args_t& tensor_args,
+    const CompiledLaunch* compiled) {
     std::vector<std::reference_wrapper<const Tensor>> input_tensors;
     ttsl::reflection::visit_object_of_type<Tensor>(
         [&input_tensors](const Tensor& t) { input_tensors.push_back(std::cref(t)); }, tensor_args);
@@ -767,6 +794,14 @@ typename device_operation_t::tensor_return_value_t launch(
     auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
 
     ttnn::MeshDevice* mesh_device = mesh_device_operation_utils::get_mesh_device(operation_attributes, tensor_args);
+    if (compiled != nullptr) {
+        TT_FATAL(
+            mesh_device->id() == compiled->program.mesh_device_id(),
+            "Device operation \"{}\" was compiled for MeshDevice {}, but its tensors are on MeshDevice {}",
+            operation_name,
+            compiled->program.mesh_device_id(),
+            mesh_device->id());
+    }
 
     // TODO: #37267 - Remove this short-circuit once we have a better way to handle inactive MeshDevices.
     // Short-circuit for inactive MeshDevices (no-op). It is important this happens before any validation an op may
@@ -780,10 +815,24 @@ typename device_operation_t::tensor_return_value_t launch(
         operation_attributes, tensor_args, input_tensors, mesh_device, tensor_return_value);
 
     detail::launch_operation_with_adapter<MeshDeviceOperationAdapter<device_operation_t>>(
-        operation_attributes, tensor_args, tensor_return_value, mesh_device);
+        operation_attributes, tensor_args, tensor_return_value, mesh_device, compiled);
 
     tracked_function.end(tensor_return_value);
     return tensor_return_value;
+}
+
+/**
+ * Launch an operation on a mesh device.
+ *
+ * @param operation_attributes The operation attributes.
+ * @param tensor_args The tensor arguments.
+ * @return Outputs are allocated but values are not immediately available till the operation is complete.
+ */
+template <DeviceOperationConcept device_operation_t>
+typename device_operation_t::tensor_return_value_t launch(
+    const typename device_operation_t::operation_attributes_t& operation_attributes,
+    const typename device_operation_t::tensor_args_t& tensor_args) {
+    return launch_operation<device_operation_t>(operation_attributes, tensor_args, /*compiled=*/nullptr);
 }
 
 /**
@@ -876,78 +925,11 @@ typename device_operation_t::tensor_return_value_t run(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args,
     const tt::tt_metal::experimental::KernelConfigBuffer* kernel_config_buffer = nullptr) {
-    using mesh_device_operation_t = MeshDeviceOperationAdapter<device_operation_t>;
     if (kernel_config_buffer != nullptr) {
         detail::throw_if_recording_command_list("Running a compiled program from a kernel config buffer");
     }
-    std::vector<std::reference_wrapper<const Tensor>> input_tensors;
-    ttsl::reflection::visit_object_of_type<Tensor>(
-        [&input_tensors](const Tensor& t) { input_tensors.push_back(std::cref(t)); }, tensor_args);
-
-    const auto operation_name = detail::get_operation_name<device_operation_t>(operation_attributes);
-    // As in launch: closes the tracked scope, marked aborted, if anything below throws.
-    tt::tt_metal::internal::ScopedTrackedFunction tracked_function(operation_name, operation_attributes, input_tensors);
-
-    detail::validate_input_tensors<device_operation_t>(operation_attributes, input_tensors);
-
-    auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
-
-    ttnn::MeshDevice* mesh_device = mesh_device_operation_utils::get_mesh_device(operation_attributes, tensor_args);
-    TT_FATAL(
-        mesh_device->id() == compiled_program.mesh_device_id(),
-        "Device operation \"{}\" was compiled for MeshDevice {}, but its tensors are on MeshDevice {}",
-        operation_name,
-        compiled_program.mesh_device_id(),
-        mesh_device->id());
-
-    if constexpr (HasSkipLaunch<mesh_device_operation_t>) {
-        if (mesh_device_operation_t::skip_launch(operation_attributes, tensor_args, tensor_return_value)) {
-            tracked_function.end(tensor_return_value);
-            return tensor_return_value;
-        }
-    }
-
-    detail::place_output_tensors<device_operation_t>(
-        operation_attributes, tensor_args, input_tensors, mesh_device, tensor_return_value);
-
-    // The compiled program serves these arguments only if the program cache would have served them from it.
-    const auto key =
-        detail::compute_program_cache_key<mesh_device_operation_t>(operation_attributes, tensor_args, mesh_device);
-    TT_FATAL(
-        key == compiled_program.key(),
-        "Device operation \"{}\" cannot run the program compiled from \"{}\": its arguments have a different program "
-        "cache key, so they need a different program",
-        operation_name,
-        compiled_program.operation_name());
-
-    detail::log_operation<mesh_device_operation_t>(
-        mesh_device->id(), operation_attributes, tensor_args, key.hash, /*program_cache_hit=*/true);
-
-    detail::use_cached_mesh_workload<mesh_device_operation_t>(
-        operation_attributes,
-        tensor_args,
-        tensor_return_value,
-        compiled_program.cached_program_factory(),
-        [&](tt::tt_metal::distributed::MeshWorkload& workload,
-            const typename mesh_device_operation_t::SpecSharedVariablesMap* spec_shared_variables) {
-            detail::enqueue_mesh_workload<mesh_device_operation_t>(
-                operation_attributes,
-                tensor_args,
-                tensor_return_value,
-                mesh_device,
-                workload,
-                spec_shared_variables,
-                /*program_cache_hit=*/true,
-                kernel_config_buffer);
-        });
-
-    if (ttnn::graph::GraphProcessor::has_active_instance()) {
-        detail::set_pending_program_factory<mesh_device_operation_t>(
-            compiled_program.program_factory_index(), /*program_cache_hit=*/true);
-    }
-
-    tracked_function.end(tensor_return_value);
-    return tensor_return_value;
+    const CompiledLaunch compiled{compiled_program, kernel_config_buffer};
+    return launch_operation<device_operation_t>(operation_attributes, tensor_args, &compiled);
 }
 
 // invoke is now deprecated - use launch_on_device directly
