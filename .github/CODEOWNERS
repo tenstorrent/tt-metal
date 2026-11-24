@@ -25,7 +25,7 @@ setup.py @tenstorrent/metalium-developers-infra @FConstantinos @aliaksei-sala
 .github/instructions/nanobind.instructions.md @tenstorrent/metalium-developers-ttnn-core @nsextonTT
 .github/instructions/python.instructions.md @tenstorrent/metalium-developers-infra
 .github/instructions/tt-stl.instructions.md @ayerofieiev-tt @akerteszTT @riverwuTT
-.github/instructions/tt-train.instructions.md @tenstorrent/tt-train @kevinwuTT @abustamanteTT
+.github/instructions/tt-train.instructions.md @tenstorrent/tt-train @kevinwuTT
 .github/instructions/ttnn-core.instructions.md @tenstorrent/metalium-developers-ttnn-core @aliaksei-sala
 .github/instructions/ttnn-ops.instructions.md @tenstorrent/metalium-developers-ops-leads
 .github/instructions/ttnn.instructions.md @tenstorrent/metalium-developers-ttnn-core
@@ -259,7 +259,7 @@ tt_metal/impl/streaming_profiler/ @mo-tenstorrent @yusufbashiTT
 # metal misc
 tt_metal/sfpi-info.sh @nathan-TT @kstevensTT @shengxiangjiTT @tenstorrent/metalium-developers-infra @tenstorrent-github-bot
 tt_metal/sfpi-version @nathan-TT @kstevensTT @shengxiangjiTT @tenstorrent/metalium-developers-infra @tenstorrent-github-bot
-tt_metal/ttsim-version @mcraigheadTT @tenstorrent-github-bot
+tt_metal/ttsim-version @mcraigheadTT @fvranicTT @tenstorrent-github-bot
 tt_metal/**/profiler/**/CMakeLists.txt @mo-tenstorrent @akerteszTT @yusufbashiTT @tenstorrent/metalium-developers-infra
 tt_metal/**/requirements*.txt @tenstorrent/metalium-developers-infra
 
@@ -717,6 +717,15 @@ tests/ttnn/unit_tests/gtests/tensor/test_stream_pipeline.cpp @razorback3 @dongji
 tests/ttnn/unit_tests/base_functionality/*stream_service* @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/base_functionality/test_d2d_pipeline_descriptor.py @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/base_functionality/test_layer_* @razorback3 @dongjin-na @bbradelTT
+# The device-to-device stream and host service code itself: owned by the teams that build it.
+ttnn/core/tensor/*d2d_* @SeanNijjar @sjameelTT
+ttnn/core/tensor/flatbuffer/*d2d_* @SeanNijjar @sjameelTT
+ttnn/core/tensor/kernels/ @SeanNijjar @sjameelTT
+ttnn/core/tensor/stream_service_common.hpp @SeanNijjar @sjameelTT
+ttnn/api/ttnn/tensor/*d2d_* @SeanNijjar @sjameelTT
+ttnn/core/services/ @bzhangTT @yeongyunTT
+ttnn/api/ttnn/services/ @bzhangTT @yeongyunTT
+ttnn/ttnn/_experimental/layer_completion.py @bzhangTT @yeongyunTT
 # Bindings and tests for the prefetcher and global circular buffers.
 ttnn/cpp/ttnn-nanobind/global_circular_buffer.* @nsextonTT
 ttnn/cpp/ttnn-nanobind/prefetcher_pipe.* @nsextonTT
@@ -734,6 +743,10 @@ ttnn/cpp/ttnn-nanobind/mesh_socket.* @nsextonTT
 tests/ttnn/unit_tests/base_functionality/*fabric* @razorback3 @dongjin-na @bbradelTT
 ttnn/cpp/ttnn-nanobind/disaggregation.* @nsextonTT
 tests/ttnn/unit_tests/base_functionality/test_kv_chunk_table_strided_bindings.py @razorback3 @dongjin-na @bbradelTT
+# The socket code itself and its perf test: owned by the metal-distributed team.
+ttnn/core/distributed/*socket* @tenstorrent/metalium-developers-metal-distributed
+ttnn/api/ttnn/distributed/*socket* @tenstorrent/metalium-developers-metal-distributed
+tests/ttnn/distributed/test_socket_perf.py @tenstorrent/metalium-developers-metal-distributed
 # Bindings and tests for code other teams own.
 tests/ttnn/unit_tests/base_functionality/test_reload_host_support.py @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/base_functionality/test_graph_report_device_tensors_unit.py @razorback3 @dongjin-na @bbradelTT
@@ -860,10 +873,10 @@ tt-train/** @tenstorrent/tt-train
 # Kernels, ops and tests: the team plus the people developing there day to day.
 tt-train/sources/ttml/metal/** @tenstorrent/tt-train @lgalasTT
 tt-train/sources/ttml/ops/** @tenstorrent/tt-train @lgalasTT
-tt-train/tests/** @tenstorrent/tt-train @lgalasTT @abustamanteTT
+tt-train/tests/** @tenstorrent/tt-train @lgalasTT
 # Last on purpose: CODEOWNERS is last-match-wins, so this must follow the directory rules
 # above for infra to keep co-ownership of every CMakeLists.txt.
-tt-train/**/CMakeLists.txt @tenstorrent/tt-train @lgalasTT @abustamanteTT @tenstorrent/metalium-developers-infra
+tt-train/**/CMakeLists.txt @tenstorrent/tt-train @lgalasTT @tenstorrent/metalium-developers-infra
 
 # .clang-tidy files - Metalium infra team owns all clang-tidy configuration files
 **/.clang-tidy @tenstorrent/metalium-developers-infra
