@@ -30,6 +30,7 @@ import re
 import subprocess
 import sys
 import time
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -170,6 +171,7 @@ class Step:
     argv: tuple[str, ...]  # a galaxy/ program and its args; {out} is the step's own output directory
     seconds: int  # planned length
     env: tuple[tuple[str, str], ...] = ()  # set in the program's environment
+    load_s: int = 0  # planned seconds of load in it (load_pct)
 
     def line(self) -> str:
         return f"{self.name:<7} {self.seconds:>5} s  {self.what}"
@@ -226,6 +228,7 @@ def plan(mode: str = "plain", **over: int | str | None) -> list[Step]:
             ub0(qq, qb, "--numeric-every", "-1", "--cycles", str(qn)),
             qn * (qq + qb),
             env,
+            qn * qb,
         ),
         Step(
             "mix",
@@ -261,6 +264,7 @@ def plan(mode: str = "plain", **over: int | str | None) -> list[Step]:
             ),
             sum(chunks) + gap * len(chunks) + rw + dbi + l1 + noc + rf,
             env,
+            sum(chunks),
         ),
         Step(
             "step",
@@ -268,6 +272,7 @@ def plan(mode: str = "plain", **over: int | str | None) -> list[Step]:
             ub0(sq, sb, "--numeric-every", "500"),
             sq + sb,
             env,
+            sb,
         ),
         Step(
             "heavy",
@@ -294,6 +299,7 @@ def plan(mode: str = "plain", **over: int | str | None) -> list[Step]:
             ),
             hv + gap,
             env,
+            hv,
         ),
         Step(
             "code",
@@ -454,12 +460,38 @@ def quiet(step: Step, out: Path, dry_run: bool = False, test: str = "busbar") ->
     )
 
 
+def load_pct(d: Path, steps: list[Step]) -> float:
+    """The stage's load reached against its plan, %: the merged windows of its parts'
+    load (each chunk row of a rows.jsonl, one a loss or hang ended from its start to the file's last write; each burst of
+    a result.json) over their planned load seconds; 100 with none planned."""
+    w: list[tuple[float, float]] = []
+    for s in steps:
+        rows, res, open_k = d / s.name / "rows.jsonl", d / s.name / "result.json", {}
+        for ln in rows.read_text(errors="replace").splitlines() if rows.is_file() else []:
+            with suppress(ValueError, KeyError, TypeError, AttributeError):
+                r = json.loads(ln)
+                if r.get("event") == "start":
+                    open_k[r.get("k")] = float(r["start"])
+                elif r.get("event") == "chunk":
+                    open_k.pop(r.get("k"), None)
+                    w.append((float(r["start"]), float(r["end"])))
+        w += [(t, max(t, rows.stat().st_mtime)) for t in open_k.values()]
+        with suppress(OSError, ValueError, KeyError, TypeError, AttributeError):
+            j = json.loads(res.read_text())
+            w += [(float(b["t0"]), float(b["t0"]) + float(b["seconds"])) for b in j.get("cycles") or [j["burst"]]]
+    got, end = 0.0, 0.0
+    for a, b in sorted(w):
+        got, end = got + max(0.0, b - max(a, end)), max(end, b)
+    plan = sum(s.load_s for s in steps)
+    return 100.0 * got / plan if plan else 100.0
+
+
 def run_busbar(
     phase: Phase, out: Path, mode: str, dry_run: bool = False, steps: tuple[str, ...] = STEPS, **over
 ) -> None:
     """The bus-bar steps (see plan) named in *steps*, in --order, into *phase*, with the quiet's clock check before each
     and the hook events (diag/events.py) around them. A check that is a link fault (link_fault) says so in its data."""
-    d, held, pg = out / "busbar", len(phase.checks), ""
+    d, held, pg, ran = out / "busbar", len(phase.checks), "", []
     # the quiet's clock check runs for the stage; one part run alone (busbar_heavy as a caller's own step) keeps its caller's quiet
     clocks = events.hook is not None or len(steps) > 1
     events.emit("stage-start", "busbar", "-", d)
@@ -474,6 +506,7 @@ def run_busbar(
         if rc := events.emit("before", step.name, "-", sd):
             phase.add(Check(name=name, status=SKIP, details=f"held back by the hook (rc {rc})"))
             continue
+        ran.append(step)
         if clocks and step.name != "code" and (q := quiet(step, d, dry_run)):
             phase.add(q)
         if step.argv:
@@ -496,4 +529,6 @@ def run_busbar(
         events.emit("after", step.name, c.status, sd)
         if not pg and (g := events.gone()):  # its recovery left chips off PCIe: the full mesh cannot open
             pg = f"chips still off PCIe after the recovery: {', '.join(g)}"
-    events.emit("stage-end", "busbar", FAIL if any(c.status == FAIL for c in phase.checks[held:]) else PASS, d)
+    # the HSC judge counts a clean feed only under at least LOAD_JUDGED_PCT of the planned load (captures --load-pct)
+    st = FAIL if any(c.status == FAIL for c in phase.checks[held:]) else PASS
+    events.emit("stage-end", "busbar", st, d, load_pct=load_pct(d, ran))

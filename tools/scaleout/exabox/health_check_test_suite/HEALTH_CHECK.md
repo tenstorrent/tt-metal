@@ -723,7 +723,8 @@ In the galaxy load each event of `diag/events.py` runs them (one state per run, 
 links test as its own stage, every `glx_reset` first takes the `reset` read and the end sequence is followed by the
 final HSC and brick read. After a bus-bar part that hung, failed a CCL or left a chip off PCIe the recovery
 `glx_reset`, root-port rescan and recount runs before the next part. A tray's VR power-good fall stops the running
-part and holds the later ones; each part and stage logs a `LOAD` line from the poll. The finding lines, and every
+part and holds the later ones; each part and stage logs a `LOAD` line from the poll. The bus-bar stage's HSC judge
+takes the load it reached (its parts' load windows against their planned load seconds) as its `--load-pct`. The finding lines, and every
 FAIL or WARN check of a phase that gates, go to `findings.txt` and `finding_stage.tsv` for the run report.
 
 ## Flags

@@ -14,6 +14,7 @@ import argparse
 import contextlib
 import io
 import json
+import os
 import signal
 import subprocess
 import sys
@@ -456,6 +457,33 @@ class TestRunStep(unittest.TestCase):
         dry = argparse.Namespace(dry_run=True, output=Path("/nonexistent/r.json"))
         with mock.patch.object(events, "hook", "/nonexistent/hook"), mock.patch.object(events, "args", dry):
             self.assertEqual(events.emit("before", "qb", "-", Path("/nonexistent")), 0)
+
+    def test_the_stage_end_captures_judge_the_hsc_at_the_load_reached(self):
+        # mix: one 60 s chunk, then one a loss ended 30 s in (the file's last write); step: its 90 s burst. Planned
+        # 200 + 90 s: 180 s reached, 62%, under captures' LOAD_JUDGED_PCT
+        mix, step = busbar.Step("mix", "", ("p",), 0, (), 200), busbar.Step("step", "", ("p",), 0, (), 90)
+        with tempfile.TemporaryDirectory() as d:
+            for n in ("mix", "step"):
+                (Path(d) / n).mkdir()
+            rows = Path(d) / "mix" / "rows.jsonl"
+            rows.write_text(
+                "\n".join(
+                    json.dumps(r)
+                    for r in (
+                        {"event": "start", "k": 0, "start": 1000},
+                        {"event": "chunk", "k": 0, "start": 1000, "end": 1060},
+                        {"event": "start", "k": 1, "start": 1070},
+                    )
+                )
+            )
+            os.utime(rows, (1100, 1100))
+            (Path(d) / "step" / "result.json").write_text(json.dumps({"burst": {"t0": 2000, "seconds": 90}}))
+            self.assertAlmostEqual(busbar.load_pct(Path(d), [mix, step]), 100 * 180 / 290)
+            a = argparse.Namespace(dry_run=False, output=Path(d) / "r.json", load_pct=100.0)
+            with mock.patch.object(events, "args", a), mock.patch("diag.captures.run", return_value=[]) as cap:
+                events.emit("stage-end", "busbar", PASS, Path(d), load_pct=62.0)
+                events.emit("stage-end", "links", PASS, Path(d))
+        self.assertEqual([c.args[4].load_pct for c in cap.call_args_list], [62.0, 100.0])
 
     def test_a_tray_drop_shape_goes_to_the_mix_with_its_trays(self):
         mix = next(s for s in busbar.plan("plain", shape="h3-replay", trays="1,2,3,4", shape_tray=3) if s.name == "mix")

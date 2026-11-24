@@ -96,12 +96,14 @@ def check_findings(report: dict) -> None:
                 finding(_check_lines(c), "C5" if links else PHASE_STAGE.get(name, "end"))
 
 
-def capture(event: str, step: str, status: str = "-", stage: str | None = None) -> None:
-    """The captures for *event* (none in a dry run or without the run's flags), their finding lines kept."""
+def capture(event: str, step: str, status: str = "-", stage: str | None = None, load_pct: float | None = None) -> None:
+    """The captures for *event* (none in a dry run or without the run's flags), their finding lines kept; *load_pct*:
+    the stage's load reached, % of its plan, for the HSC judge (the run's --load-pct otherwise)."""
     if args is not None and not args.dry_run:
         from . import captures
 
-        finding(captures.run(event, step, status, run_dir(), args), stage or STAGE.get(step, "busbar"))
+        a = args if load_pct is None else argparse.Namespace(**{**vars(args), "load_pct": load_pct})
+        finding(captures.run(event, step, status, run_dir(), a), stage or STAGE.get(step, "busbar"))
 
 
 def vr_pg(t0: float) -> str:
@@ -133,11 +135,11 @@ def _lost(outdir: Path) -> bool:
     return bool(c.get("hung") or c.get("link_fault") or gone())
 
 
-def emit(event: str, step: str, status: str, outdir: Path) -> int:
+def emit(event: str, step: str, status: str, outdir: Path, load_pct: float | None = None) -> int:
     """The captures for *event*, the hook, then after a lost part the recovery; the hook's rc (0 with no hook or in a
     dry run)."""
     dry, rc = args is not None and args.dry_run, 0
-    capture(event, step, status)
+    capture(event, step, status, load_pct=load_pct)
     if hook and dry:
         log(f"[dry-run] {hook} {event} {step} {status} {outdir}")
     elif hook:
