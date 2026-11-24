@@ -32,18 +32,24 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 static_assert(TOPK_XL_PARTS == 2 || TOPK_XL_PARTS == 4, "the row splits into two halves or four quarters");
 static_assert(TOPK_XL_PARTS_CORE_ID < 32, "the core id fills index bits [15:11]");
+static_assert(is_fp32_dest_acc_en, "the value|index words are 32-bit Dest words");
 static_assert(
     PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE,
     "the SFPU work runs on MATH: measure it end to end or with MATH isolated");
 
-constexpr std::uint32_t ELEMENTS_PER_TILE = ckernel::TILE_R_DIM * ckernel::TILE_C_DIM;
-constexpr bool QUARTERS                   = TOPK_XL_PARTS == 4;
-constexpr std::uint32_t PART_ELEMENTS     = 2048 / TOPK_XL_PARTS;
-constexpr bool COMBINE                    = TOPK_XL_PARTS_COMBINE;
-constexpr std::uint32_t FIRST_PART_TILE   = QUARTERS ? 4 : 2;
-constexpr std::uint32_t OUT_TILE          = 0;
+constexpr std::uint32_t ROW_ELEMENTS  = 2048;
+constexpr std::uint32_t CORE_ID_SHIFT = 11;
+constexpr bool QUARTERS               = TOPK_XL_PARTS == 4;
+constexpr std::uint32_t PART_ELEMENTS = ROW_ELEMENTS / TOPK_XL_PARTS;
+constexpr bool COMBINE                = TOPK_XL_PARTS_COMBINE;
+constexpr std::uint32_t OUT_TILE      = 0;
+// _topk_xl_combine_halves_ reads its two halves at OUT_TILE + 2 and + 3; quarter pair h combines into half tile h.
+constexpr std::uint32_t HALF_TILE         = OUT_TILE + 2;
+constexpr std::uint32_t FIRST_PART_TILE   = QUARTERS ? HALF_TILE + 2 : HALF_TILE;
 constexpr std::uint32_t RESULT_TILES      = COMBINE ? 2 : TOPK_XL_PARTS;
 constexpr std::uint32_t FIRST_RESULT_TILE = COMBINE ? OUT_TILE : FIRST_PART_TILE;
+// Quarters use Dest tiles up to FIRST_PART_TILE + 3 = 7, which fit in Dest only with full sync.
+static_assert(!QUARTERS || dest_sync == ckernel::DstSync::SyncFull, "the quarter tiles need the full Dest");
 // Every local sort, half prep and combine ends by releasing SrcA and SrcB (CLR_AB) after face moves that wait for
 // both to be valid; UNPACK supplies one dummy valid per release.
 constexpr std::uint32_t SRC_RELEASES = TOPK_XL_PARTS + (COMBINE ? 3 : 0);
@@ -125,7 +131,7 @@ inline void stamp_part()
     constexpr std::uint32_t tile = FIRST_PART_TILE + p;
     if constexpr (QUARTERS)
     {
-        constexpr std::uint32_t base = (TOPK_XL_PARTS_CORE_ID << 11) | (p * PART_ELEMENTS);
+        constexpr std::uint32_t base = (TOPK_XL_PARTS_CORE_ID << CORE_ID_SHIFT) | (p * PART_ELEMENTS);
         _llk_math_eltwise_unary_sfpu_params_(sfpu::_topk_xl_add_lsb_indices_base_rt_<PART_ELEMENTS>, tile, VectorMode::RC_custom, base);
     }
     else
@@ -153,7 +159,7 @@ __attribute__((noinline)) void copy_stamp_sort(std::uint32_t math_format)
     }
 
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
-    sfpu::_topk_xl_init_<1024, true>();
+    sfpu::_topk_xl_init_<PART_ELEMENTS, true>();
     for (std::uint32_t p = 0; p < TOPK_XL_PARTS; p++)
     {
         const std::uint32_t tile = FIRST_PART_TILE + p;
@@ -165,15 +171,20 @@ __attribute__((noinline)) void combine()
 {
     if constexpr (QUARTERS)
     {
-        _llk_math_eltwise_unary_sfpu_params_(sfpu::_topk_xl_combine_quarters_<4, 2>, 4, VectorMode::RC_custom, TOPK_XL_HALF0_ASCENDING);
-        _llk_math_eltwise_unary_sfpu_params_(sfpu::_topk_xl_combine_quarters_<6, 3>, 6, VectorMode::RC_custom, !TOPK_XL_HALF0_ASCENDING);
+        // Quarter pair h (parts 2h and 2h + 1) -> half tile h.
+        constexpr std::uint32_t pair0 = FIRST_PART_TILE;
+        constexpr std::uint32_t pair1 = FIRST_PART_TILE + 2;
+        _llk_math_eltwise_unary_sfpu_params_(
+            sfpu::_topk_xl_combine_quarters_<pair0, HALF_TILE>, pair0 /*dst_index*/, VectorMode::RC_custom, TOPK_XL_HALF0_ASCENDING);
+        _llk_math_eltwise_unary_sfpu_params_(
+            sfpu::_topk_xl_combine_quarters_<pair1, HALF_TILE + 1>, pair1 /*dst_index*/, VectorMode::RC_custom, !TOPK_XL_HALF0_ASCENDING);
     }
     else
     {
-        _llk_math_eltwise_unary_sfpu_params_(sfpu::_topk_xl_half_prep_, 2, VectorMode::RC_custom, 2u);
-        _llk_math_eltwise_unary_sfpu_params_(sfpu::_topk_xl_half_prep_, 3, VectorMode::RC_custom, 3u);
+        _llk_math_eltwise_unary_sfpu_params_(sfpu::_topk_xl_half_prep_, HALF_TILE /*dst_index*/, VectorMode::RC_custom, HALF_TILE);
+        _llk_math_eltwise_unary_sfpu_params_(sfpu::_topk_xl_half_prep_, HALF_TILE + 1 /*dst_index*/, VectorMode::RC_custom, HALF_TILE + 1);
     }
-    _llk_math_eltwise_unary_sfpu_params_(sfpu::_topk_xl_combine_halves_, OUT_TILE, VectorMode::RC_custom, OUT_TILE, TOPK_XL_PARTS_ASCENDING);
+    _llk_math_eltwise_unary_sfpu_params_(sfpu::_topk_xl_combine_halves_, OUT_TILE /*dst_index*/, VectorMode::RC_custom, OUT_TILE, TOPK_XL_PARTS_ASCENDING);
 }
 
 void run_kernel(RUNTIME_PARAMETERS params)

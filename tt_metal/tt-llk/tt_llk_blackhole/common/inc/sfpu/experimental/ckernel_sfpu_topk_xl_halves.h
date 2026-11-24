@@ -20,43 +20,15 @@
 namespace ckernel::sfpu
 {
 
+// Dst rows of one 32x32 tile of 32-bit words: the row stride from one tile to the next.
+constexpr int topk_xl_tile_rows = 1 << DstTileSizeLog2[DstTileShape::Tile32x32];
+
 // Out-of-line copies of stock helpers, which inlined at every call site overflow the split cores' kernel config buffer,
 // and the stock local sort and rebuild built on them, which the half and quarter splits share.
 
-// transpose_dest_face_32b on the 32-bit Dst face at the Dst counter, except the last MOVA2D advances the counter to the
-// next face by ADDR_MOD_5 (+16 rows, from topk_xl_init) instead of ADDR_MOD_7.
-inline void topk_xl_transpose_face_and_advance()
-{
-    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Float16_b));
-    TTI_MOVD2B(1, 16, ADDR_MOD_7, p_movd2b::MOV_4_ROWS, 0);
-    TTI_MOVD2B(1, 20, ADDR_MOD_7, p_movd2b::MOV_4_ROWS, 4);
-    TTI_MOVD2B(1, 24, ADDR_MOD_7, p_movd2b::MOV_4_ROWS, 8);
-    TTI_MOVD2B(1, 28, ADDR_MOD_7, p_movd2b::MOV_4_ROWS, 12);
-    TTI_TRNSPSRCB;
-    TTI_MOVB2A(0, ADDR_MOD_7, p_movb2a::MOV_4_ROWS, 16);
-    TTI_MOVB2A(4, ADDR_MOD_7, p_movb2a::MOV_4_ROWS, 20);
-    TTI_MOVB2A(8, ADDR_MOD_7, p_movb2a::MOV_4_ROWS, 24);
-    TTI_MOVB2A(12, ADDR_MOD_7, p_movb2a::MOV_4_ROWS, 28);
-    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Tf32));
-    TTI_MOVD2B(0, 16, ADDR_MOD_7, p_movd2b::MOV_4_ROWS, 0);
-    TTI_MOVD2B(0, 20, ADDR_MOD_7, p_movd2b::MOV_4_ROWS, 4);
-    TTI_MOVD2B(0, 24, ADDR_MOD_7, p_movd2b::MOV_4_ROWS, 8);
-    TTI_MOVD2B(0, 28, ADDR_MOD_7, p_movd2b::MOV_4_ROWS, 12);
-    TTI_TRNSPSRCB;
-    TTI_MOVB2D(0, 16, ADDR_MOD_7, p_movb2d::MOV_4_ROWS, 0);
-    TTI_MOVB2D(0, 20, ADDR_MOD_7, p_movb2d::MOV_4_ROWS, 4);
-    TTI_MOVB2D(0, 24, ADDR_MOD_7, p_movb2d::MOV_4_ROWS, 8);
-    TTI_MOVB2D(0, 28, ADDR_MOD_7, p_movb2d::MOV_4_ROWS, 12);
-    // lo16 written back with Fp32_enabled = 0 keeps the hi16 just stored.
-    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
-    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Float32));
-    TTI_MOVA2D(1, 0, ADDR_MOD_7, p_mova2d::MOV_8_ROWS, 0);
-    TTI_MOVA2D(1, 8, ADDR_MOD_5, p_mova2d::MOV_8_ROWS, 8);
-    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
-}
-
 // transpose_N_faces<num_faces, true, 256, false> from the math base, inside an open transpose cfg block. Unlike the
-// stock helper, the moves wait for earlier SFPU stores and later SFPLOADs wait for the moves.
+// stock helper, the moves wait for earlier SFPU stores and later SFPLOADs wait for the moves. Each pass runs the stock
+// transpose_dest_face_32b_body, whose last MOVA2D steps the Dst counter to the next face (ADDR_MOD_5, +16 rows).
 [[gnu::noinline]] inline void topk_xl_transpose_faces(const std::uint32_t num_faces)
 {
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::WAIT_SFPU | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
@@ -64,7 +36,7 @@ inline void topk_xl_transpose_face_and_advance()
 #pragma GCC unroll 1
     for (std::uint32_t f = 0; f < num_faces; ++f)
     {
-        topk_xl_transpose_face_and_advance();
+        transpose_dest_face_32b_body();
     }
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
@@ -117,8 +89,9 @@ inline void topk_xl_stride2_phase(Sort sort)
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 }
 
-// _topk_xl_local_sort_generic_<K> for K = 512 or 1024 as built under TOPK_XL_BLAZE_COMPAT, on the out-of-line helpers
-// above: the same phases, so the same list.
+// _topk_xl_local_sort_generic_<K> for K = 512 or 1024 with the TOPK_XL_BLAZE_COMPAT sort directions, on the
+// out-of-line helpers above: the same phases, so the same list. With TOPK_XL_FUSED_MACRO, K = 1024 runs the length-64
+// and K/8 phases as the stock pipelined SFPLOADMACRO step groups, as stock does.
 template <std::uint32_t K>
 inline void _topk_xl_local_sort_ool_(const std::uint32_t dst_index, const bool ascending)
 {
@@ -166,12 +139,18 @@ inline void _topk_xl_local_sort_ool_(const std::uint32_t dst_index, const bool a
         if constexpr (row_scale_factor > 1)
         {
             // Length 64.
+#if TOPK_XL_FUSED_MACRO
+            topk_xl_fused_macro::prologue_loads_rt<32>(dir);
+            topk_xl_fused_macro::step_group_pipelined_rt<32, 16>(dir);
+            topk_xl_fused_macro::step_group_pipelined_rt<32, 48>(dir);
+#else
             load16_rows_x2<32>();
             bitonic_sort_len_k(dir);
             store16_rows_x2<32, 16>();
             load16_rows_x2<32>();
             bitonic_sort_len_k(dir);
             store16_rows_x2<32, 48>();
+#endif
             TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
             // Stride-16 sort_32, both iterations in one direction.
@@ -191,7 +170,23 @@ inline void _topk_xl_local_sort_ool_(const std::uint32_t dst_index, const bool a
     // Length K/8: SFPCONFIG flips the swap direction of every other lane.
     TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0100);
     TTI_SFPCONFIG(0x4444, 0xF, 8);
-    topk_xl_stride2_phase<n_iters_stride2>([dir] { bitonic_sort_len_k(dir); });
+#if TOPK_XL_FUSED_MACRO
+    if constexpr (row_scale_factor > 1)
+    {
+        // The last group prefetches one group past the end into LREGs that are dead by then.
+        topk_xl_fused_macro::prologue_loads_rt<2>(dir);
+        topk_xl_fused_macro::record_step_group_pipelined<2, 16>(dir);
+        for (int i = 1; i < n_iters_stride2; i++)
+        {
+            lltt::replay(0, topk_xl_fused_macro::pipelined_group_len);
+        }
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    }
+    else
+#endif
+    {
+        topk_xl_stride2_phase<n_iters_stride2>([dir] { bitonic_sort_len_k(dir); });
+    }
     topk_xl_canonical_columns<row_scale_factor>(tile_offset, dir);
     TTI_SFPCONFIG(0x0000, 0xF, 1);
 
@@ -263,10 +258,24 @@ template <std::uint32_t K>
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 }
 
+/**
+ * @brief ORs each element's index, offset by `base`, into the low 16 bits of the fused value|index Dst words of the
+ * K-element list at the math base (32-bit Dst): the element at position i of the list gets index base + i.
+ *
+ * Unlike _topk_xl_add_lsb_indices_rt_, the index is not masked: the caller keeps base + K - 1 within 16 bits, since a
+ * carry into bit 16 would flip the bf16 value's LSB. The split callers pass (core_id << 11) | part offset, where
+ * bits [15:11] carry the core id and bits [10:0] the element's position in the 2048 row.
+ *
+ * Clobbers LREG0-7 and replay slots [0, 16). Needs ADDR_MOD_4 and ADDR_MOD_6 from _topk_xl_add_lsb_indices_init_.
+ *
+ * @tparam K Elements in the list: 512 (faces 0 and 1) or 1024 (the whole tile).
+ * @param base Index of the list's first element; base + K - 1 must not exceed 0xFFFF.
+ */
 template <std::uint32_t K>
 inline void _topk_xl_add_lsb_indices_base_rt_(const std::uint32_t base)
 {
     static_assert(K == 512 || K == 1024, "stamp supports half/full tiles");
+    LLK_ASSERT(base <= 0x10000u - K, "base + K - 1 must fit the 16-bit index half; a carry would flip the bf16 LSB");
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     TTI_SFPMOV(0, p_sfpu::LTILEID, p_sfpu::LREG0, 0);
     if (__builtin_constant_p(base))
@@ -323,10 +332,19 @@ inline void _topk_xl_add_lsb_indices_base_rt_(const std::uint32_t base)
     }
 }
 
+/**
+ * @brief _topk_xl_add_lsb_indices_base_rt_<1024> on a half of a split 2048 row, with the stamp
+ * (core_id << 11) | base: the core id in index bits [15:11], the half's offset in the row in bits [10:0].
+ *
+ * Clobbers LREG0-7 and replay slots [0, 16).
+ *
+ * @tparam core_id Core that holds the row, below 32.
+ * @tparam base Offset of the half in the row: 0 or 1024 (1024-aligned, below 2048).
+ */
 template <std::uint32_t core_id, std::uint32_t base>
 inline void _topk_xl_add_lsb_indices_base_()
 {
-    static_assert(((core_id << 11) | base) < (1u << 16) && (base & 1023u) == 0, "stamp must fit the u16 index");
+    static_assert(core_id < 32 && base < 2048 && (base & 1023u) == 0, "the core id fills index bits [15:11] and the 1024-aligned half offset bits [10:0]");
     _topk_xl_add_lsb_indices_base_rt_<1024>((core_id << 11) | base);
 }
 
@@ -393,10 +411,10 @@ inline void topk_xl_combine_loads()
     TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, in_rows + 8);
     TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::INT32, ADDR_MOD_7, in_rows + 4);
     TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::INT32, ADDR_MOD_7, in_rows + 12);
-    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_7, in_rows + 64);
-    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_7, in_rows + 72);
-    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_7, in_rows + 68);
-    TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::INT32, ADDR_MOD_7, in_rows + 76);
+    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_7, in_rows + topk_xl_tile_rows + 0);
+    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_7, in_rows + topk_xl_tile_rows + 8);
+    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_7, in_rows + topk_xl_tile_rows + 4);
+    TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::INT32, ADDR_MOD_7, in_rows + topk_xl_tile_rows + 12);
 }
 
 // Compare-exchange of four LREG pairs (a, b); `ascending` puts the smaller word in a. ALL_ROWS_MAX puts the max in VC.
@@ -433,7 +451,7 @@ inline void _topk_xl_combine_halves_(const std::uint32_t dst_out, const bool asc
         {
             // Iteration (z = b6, face row, parity) reads face (row, z) of both halves
             // and writes output tile z, both face columns.
-            set_dst_write_addr_offset(tile_out + 64 * z + 32 * (it >> 1) + 2 * (it & 1));
+            set_dst_write_addr_offset(tile_out + topk_xl_tile_rows * z + 32 * (it >> 1) + 2 * (it & 1));
             if (it == 0)
             {
                 // Input face (row, z) sits 128 + 16 z rows past output tile 0's face (row);
