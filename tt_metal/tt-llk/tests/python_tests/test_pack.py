@@ -442,7 +442,8 @@ PACK_BLOCK_PERF_SWEEP = dict(
 )
 
 
-@pytest.mark.nightly  # exhaustive sweep, too long for the smoke run
+@pytest.mark.nightly
+@pytest.mark.llk_sweep  # study sweep: LLK_SWEEP_ALL=1 or LLK_SWEEP_STRIDE=n runs it
 @skip_for_wormhole
 @parametrize(**PACK_BLOCK_SWEEP)
 def test_pack_block(
@@ -464,7 +465,8 @@ def test_pack_block(
     )
 
 
-@pytest.mark.nightly  # exhaustive sweep, too long for the smoke run
+@pytest.mark.nightly
+@pytest.mark.llk_sweep  # study sweep: LLK_SWEEP_ALL=1 or LLK_SWEEP_STRIDE=n runs it
 @skip_for_wormhole
 @parametrize(**PACK_BLOCK_SWEEP)
 def test_pack_block_w(
@@ -487,7 +489,8 @@ def test_pack_block_w(
     )
 
 
-@pytest.mark.nightly  # exhaustive sweep, too long for the smoke run
+@pytest.mark.nightly
+@pytest.mark.llk_sweep  # study sweep: LLK_SWEEP_ALL=1 or LLK_SWEEP_STRIDE=n runs it
 @skip_for_wormhole
 @parametrize(**PACK_BLOCK_SWEEP)
 def test_pack_block_plain(
@@ -575,7 +578,8 @@ def test_pack_block_closed_w_far(
     )
 
 
-@pytest.mark.nightly  # exhaustive sweep, too long for the smoke run
+@pytest.mark.nightly
+@pytest.mark.llk_sweep  # study sweep: LLK_SWEEP_ALL=1 or LLK_SWEEP_STRIDE=n runs it
 @skip_for_wormhole
 @parametrize(
     formats=PACK_FORMATS,
@@ -680,7 +684,8 @@ PACK_BLOCK_GOLDEN_GAPS = {
 }
 
 
-@pytest.mark.nightly  # exhaustive sweep, too long for the smoke run
+@pytest.mark.nightly
+@pytest.mark.llk_sweep  # study sweep: LLK_SWEEP_ALL=1 or LLK_SWEEP_STRIDE=n runs it
 @skip_for_wormhole
 @parametrize(
     formats=PACK_BLOCK_OTHER_FORMATS,
@@ -727,7 +732,8 @@ def test_pack_block_other_formats(
 _EQUIV_PER_TILE = {}
 
 
-@pytest.mark.nightly  # exhaustive sweep, too long for the smoke run
+@pytest.mark.nightly
+@pytest.mark.llk_sweep  # study sweep: LLK_SWEEP_ALL=1 or LLK_SWEEP_STRIDE=n runs it
 @skip_for_wormhole
 @parametrize(
     formats=PACK_BLOCK_OTHER_FORMATS,
