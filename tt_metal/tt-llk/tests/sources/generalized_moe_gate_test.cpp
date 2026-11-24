@@ -755,7 +755,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             "Block tile index exceeds maximum destination tiles");
                         _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(output[section * NUM_DEST_TILES + tile]));
                     }
-                    if constexpr (sync_with_math)
+                    // Wormhole PACK_ISOLATE has no math wait, but still has to release the section.
+                    // Without that drain its packers can stay in the slow pattern for the whole loop.
+                    if constexpr (sync_with_math || PERF_PACK_SECTION_RELEASE)
                     {
                         _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
                     }

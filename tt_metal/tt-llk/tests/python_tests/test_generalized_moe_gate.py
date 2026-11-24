@@ -35,7 +35,7 @@ which is what carries a small expert id through copy4rows intact.
 """
 
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import pytest
 import torch
@@ -271,7 +271,12 @@ def _run(
     its later variants and the consumer pass then looks for an ELF nobody produced.
     """
     if perf is not None:
-        perf_configuration = configurations[perf.config_index]
+        # The sanitize pass is a functional full-buffer check. Leaving it on puts a
+        # 128-iteration store loop inside every measured TILE_LOOP.
+        perf_configuration = dict(configurations[perf.config_index])
+        templates = list(perf_configuration["templates"])
+        templates[0] = replace(templates[0], sanitize_output=False)
+        perf_configuration["templates"] = templates
         execute_llk(
             is_perf=perf.is_perf,
             perf_report=perf.perf_report,
