@@ -383,9 +383,9 @@ BLOCK_US = {
     "glm53-4x4-sp1-2560": (317.3, 182.6, 998.2, 73.1),
     "glm53-4x4-sp1-5120": (533.4, 323.1, 1158.5, 117.1),
     "glm53-4x4-xy-7680": (625.5, 343.1, 1294.5, 98.6),
-    # (the [RING, RING] carve: mean of the medians of six runs on two 8 kW Galaxies, provisional until cut on 14 kW ones)
-    "glm53-xy4-sp1-2560": (195.0, 131.0, 1032.0, 78.0),
-    "glm53-xy4-sp1-5120-packed-2560@0-2560@2560": (383.0, 235.0, 1191.0, 106.0),
+    # (the [RING, RING] carve: mean of the medians of three runs on three 14 kW Galaxies)
+    "glm53-xy4-sp1-2560": (197.0, 132.0, 1030.0, 76.0),
+    "glm53-xy4-sp1-5120-packed-2560@0-2560@2560": (383.0, 234.0, 1186.0, 97.0),
     "glm53-4x4-y-10240": (1232.1, 607.3, 2015.9, 190.0),
     "glm53-4x4-y-5120": (534.4, 320.2, 1178.1, 100.8),
     "glm53-8x4-10240": (395.9, 385.8, 1273.6, 78.2),

@@ -388,10 +388,10 @@ def test_ffn_fused_rows_position_invariant(mesh_device, device_params, num_links
 
 # GLM-5.3's dense layers on the [RING, RING] 4x4 stage, one 2,560-token chunk (640 rows a SP chip), the fused TP collectives
 # (all_gather_minimal_matmul_async for gate/up, matmul_reduce_scatter_prefill for down): the forward's device time, each
-# program's slowest chip summed. Ceiling in us: the slowest median over six runs on two 8 kW Galaxies (426-434 us) plus 10%;
-# provisional until recalibrated on the 14 kW runners. Override with TT_METAL_FFN_RING_RING_4X4_MAX_US.
+# program's slowest chip summed. Ceiling in us: the slowest median over three runs on three 14 kW Galaxies (431-441 us) plus 10%.
+# Override with TT_METAL_FFN_RING_RING_4X4_MAX_US.
 FFN_PERF_SAMPLES = 7
-FFN_RING_RING_4X4_CEILING_US = 478
+FFN_RING_RING_4X4_CEILING_US = 485
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="Blackhole only")
