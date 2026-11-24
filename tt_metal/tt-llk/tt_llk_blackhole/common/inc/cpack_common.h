@@ -432,6 +432,14 @@ struct llk_pack_in0_only32
     static constexpr bool value = false;
 };
 
+// Specialized from the kernel's CB formats (llk_pack_common_api.h): in0 or in1 is 32 bit, which the unpackers read at twice the
+// bytes of a 16-bit operand.
+template <int api>
+struct llk_pack_in32_api
+{
+    static constexpr bool value = false;
+};
+
 // Only a kernel with a matmul API reaches the matmul contexts; dep, a template parameter of the caller, delays the lookup.
 template <std::uint32_t dep>
 constexpr bool llk_pack_matmul_kernel()
@@ -732,6 +740,17 @@ inline constexpr bool pack_strides_writer = false;
 // Fast tilize writes the strides too: llk_pack_fast_tilize.h sets this.
 template <DstSync>
 inline constexpr bool pack_fast_tilize_linked = false;
+// A header whose kernels' math waits on each DEST release specializes its tag (1 custom matmul, 2 pack rows, 3 custom matmul
+// reusing DEST and SrcB): the half-sync release keeps main's order, as the next half's offset write ahead of the drain wait
+// delays the release.
+template <int tag>
+inline constexpr bool pack_main_release = false;
+template <std::uint32_t dep>
+constexpr bool llk_pack_main_release()
+{
+    return pack_main_release<static_cast<int>(dep * 0 + 1)> || pack_main_release<static_cast<int>(dep * 0 + 2)> ||
+           pack_main_release<static_cast<int>(dep * 0 + 3)>;
+}
 // Some CB of the kernel unpacks to DEST (LLK_UNPACK_TO_DEST_ANY, the JIT's pack-thread define); without it, assume one does.
 // The test shim defines it after this header, so llk_pack_block_tile.h sets it again; the use reads it through its template
 // argument, which takes that later value.

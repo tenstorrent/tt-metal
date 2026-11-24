@@ -33,6 +33,17 @@ constexpr bool llk_int32_cbs(const T (&formats)[n]) {
     return false;
 }
 
+// Whether any CB of the kernel holds integer data: Int32, UInt32, UInt16, UInt8 or Int8 (formats 8, 24, 9, 30, 14)
+template <std::size_t n, typename T>
+constexpr bool llk_int_cbs(const T (&formats)[n]) {
+    for (std::size_t i = 0; i < n; i++) {
+        if (formats[i] == 8 || formats[i] == 24 || formats[i] == 9 || formats[i] == 30 || formats[i] == 14) {
+            return true;
+        }
+    }
+    return false;
+}
+
 }  // namespace ckernel
 
 // Use after the JIT descriptors (chlkc_descriptors.h), where unpack_src_format is defined.
@@ -43,4 +54,6 @@ constexpr bool llk_int32_cbs(const T (&formats)[n]) {
 // keep the handshake where unpack takes the math post (fp32 fft, welford layernorm, cumprod +1 to +2 % without it). A 16-bit DEST
 // kernel with an integer CB keeps the early poll (sampling +0.7 % without it)
 #define LLK_U2D_INT_KERNEL (DST_ACCUM_MODE && ::ckernel::llk_int32_cbs(unpack_src_format))
-#define LLK_U2D_MAIN_HANDSHAKE (!DST_ACCUM_MODE || LLK_U2D_INT_KERNEL)
+// The handshake also for 8- and 16-bit integer CBs (typecast UInt16 <-> UInt8 at 32-bit DEST +1.6 to +2.3 % without it); their
+// early poll stays.
+#define LLK_U2D_MAIN_HANDSHAKE (!DST_ACCUM_MODE || ::ckernel::llk_int_cbs(unpack_src_format))
