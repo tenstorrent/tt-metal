@@ -106,6 +106,7 @@ class GLM53Adapter(MLAPrefillAdapter):
             num_users=params.num_users,
             tp_axis=kv_tp_axis,
             bank_aligned=True,
+            fp8_rounding=self.kvpe_fp8_rounding,
         )
         first_full = full_indexer_rank(hf_config, params.first_layer_idx)
         num_index_layers = (
@@ -131,6 +132,13 @@ class GLM53Adapter(MLAPrefillAdapter):
         from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
 
         return MlaKvCacheFormat.SCALED_FP8
+
+    @property
+    def kvpe_fp8_rounding(self):
+        """How the scaled-FP8 KVPE cache rounds the latent to e4m3: GLM-5.3 keeps the packer's truncation."""
+        from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvFp8Rounding
+
+        return MlaKvFp8Rounding.TRUNCATE
 
     # --- test metadata (HF download coordinates + PCC thresholds + golden trace) ---
     # FP8 repo (a bf16 checkout would diverge from an FP8-derived trace). The bare

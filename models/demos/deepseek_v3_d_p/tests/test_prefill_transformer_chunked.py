@@ -73,7 +73,12 @@ from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import get_block_timings, 
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import mesh_cache_key
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
+    MlaKvCacheFormat,
+    MlaKvFp8Rounding,
+    init_kvpe_cache,
+    init_mla_kv_cache,
+)
 from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import emit_summary, render_table
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
 from models.demos.deepseek_v3_d_p.utils.stage_4x4_params import is_4x4
@@ -2107,6 +2112,8 @@ def run_chunked_transformer_updated(
         # that makes build_kv_chunk_table reject the model outright (#54892).
         num_kvpe_cache_layers=getattr(variant, "num_kv_cache_layers", lambda n: n)(num_layers),
         num_users=1,
+        # the adapter's FP8 rounding (Hy4: nearest; everyone else: the packer's truncation)
+        fp8_rounding=getattr(variant, "kvpe_fp8_rounding", MlaKvFp8Rounding.TRUNCATE),
     )
 
     # Sparse (DSA) layers read a block-cyclic indexer key cache that is caller-owned and passed into
@@ -3325,6 +3332,7 @@ def run_chunked_transformer_padded_trace(
             tp_axis=tp_axis if kv_dedup else None,
             num_kvpe_cache_layers=num_layers,
             num_users=1,
+            fp8_rounding=getattr(variant, "kvpe_fp8_rounding", MlaKvFp8Rounding.TRUNCATE),
         )
         if preload_isl > 0:
             _preload_kvpe_prefix_from_trace(

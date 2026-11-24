@@ -249,6 +249,8 @@ class MlaKvCache:
         if self.format == MlaKvCacheFormat.SCALED_FP8:
             out.update(
                 fp8_rounding=self.fp8_rounding.value,
+                # the exact rule, for a reader's manifest to compare (decode's append="nearest" is the same rule)
+                fp8_rule="ties away from zero" if self.fp8_rounding == MlaKvFp8Rounding.NEAREST else "toward zero",
                 latent_dim=self.geometry.latent_dim,
                 rope_dim=self.geometry.rope_dim,
                 scale_block=self.geometry.SCALE_BLOCK_SIZE,

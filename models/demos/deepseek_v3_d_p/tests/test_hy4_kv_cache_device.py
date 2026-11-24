@@ -49,7 +49,12 @@ from models.demos.deepseek_v3_d_p.tt.hy4.kv_cache import (
     stripe_key_axis,
 )
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import normalized_hadamard_matrix
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
+    MlaKvCacheFormat,
+    MlaKvFp8Rounding,
+    init_kvpe_cache,
+    init_mla_kv_cache,
+)
 
 GOLDEN = Path(os.environ.get("PREFILL_TRACE_DIR", "/mnt/tt-data/dwadhwani/hy4-golden/hy4-bf16-longbench-4k-ropeint"))
 S = 4096
@@ -103,6 +108,13 @@ def pcc(a: torch.Tensor, b: torch.Tensor) -> float:
     a, b = a.double().flatten(), b.double().flatten()
     a, b = a - a.mean(), b - b.mean()
     return float((a @ b) / (a.norm() * b.norm()))
+
+
+def magnitude_bias(got: torch.Tensor, ref: torch.Tensor) -> float:
+    """Mean signed error toward larger magnitude, over mean |ref|: sum(sign(ref) * (got - ref)) / sum|ref|. A cast that
+    truncates toward zero reads negative (a few percent for e4m3); round-to-nearest reads about zero."""
+    got, ref = got.double().flatten(), ref.double().flatten()
+    return float((torch.sign(ref) * (got - ref)).sum() / ref.abs().sum())
 
 
 def _dram_view(mesh_device):
@@ -201,8 +213,9 @@ def _capacity(free_after_open: int, budget: KvBudget) -> dict:
     ],
     indirect=["mesh_device", "device_params"],
 )
+@pytest.mark.parametrize("fp8_rounding", [r.value for r in MlaKvFp8Rounding])
 @pytest.mark.timeout(0)
-def test_hy4_kv_stripe_golden_round_trip(mesh_device, device_params, stripe_id):
+def test_hy4_kv_stripe_golden_round_trip(mesh_device, device_params, stripe_id, fp8_rounding):
     stripe = STRIPES[stripe_id]
     assert tuple(mesh_device.shape) == stripe.mesh_shape
     dram_open = _dram_view(mesh_device)
@@ -217,9 +230,14 @@ def test_hy4_kv_stripe_golden_round_trip(mesh_device, device_params, stripe_id):
         tp_axis=stripe.tp_axis,
         bank_aligned=True,
     )
-    # The pair GLM53Adapter.allocate_kv_cache allocates for Hy4, at test size.
+    # The pair GLM53Adapter.allocate_kv_cache allocates for Hy4, at test size (Hy4Adapter: "nearest" by default).
     kvpe_cache = init_mla_kv_cache(
-        cache_format=MlaKvCacheFormat.SCALED_FP8, hf_config=hf, seq_len=seq, num_kvpe_cache_layers=num_layers, **common
+        cache_format=MlaKvCacheFormat.SCALED_FP8,
+        hf_config=hf,
+        seq_len=seq,
+        num_kvpe_cache_layers=num_layers,
+        fp8_rounding=fp8_rounding,
+        **common,
     )
     index_cache = init_kvpe_cache(
         kvpe_cache_head_dim=INDEX_DIM, seq_len=seq, num_kvpe_cache_layers=num_layers, dtype=ttnn.bfloat8_b, **common
@@ -237,6 +255,7 @@ def test_hy4_kv_stripe_golden_round_trip(mesh_device, device_params, stripe_id):
         got_ik = read_slot(index_cache, mesh_device, stripe, slot).float()
         results[name] = {
             "kvpe_nope": pcc(got[:S, :KV_LORA], kv[:, :KV_LORA]),
+            "kvpe_nope_bias": magnitude_bias(got[:S, :KV_LORA], kv[:, :KV_LORA]),
             "kvpe_pe": pcc(got[:S, KV_LORA:], kv[:, KV_LORA:]),
             "index_k_rope": pcc(got_ik[:S, : INDEX_DIM // 2], ik[:, : INDEX_DIM // 2]),
             "index_k_nope": pcc(got_ik[:S, INDEX_DIM // 2 :], ik[:, INDEX_DIM // 2 :]),
@@ -267,7 +286,7 @@ def test_hy4_kv_stripe_golden_round_trip(mesh_device, device_params, stripe_id):
     )
     measured = KvBudget(kvpe_row_bytes=round(kvpe_row), index_row_bytes=round(index_row))
     report = {
-        "stripe": stripe.descriptor(),
+        "stripe": stripe.descriptor(kvpe=kvpe_cache.descriptor()),
         "pcc": results,
         "kvpe_row_bytes_measured": kvpe_row,
         "index_row_bytes_measured": index_row,
@@ -282,7 +301,7 @@ def test_hy4_kv_stripe_golden_round_trip(mesh_device, device_params, stripe_id):
     if os.environ.get("HY4_KV_REPORT"):
         out = Path(os.environ["HY4_KV_REPORT"])
         prior = json.loads(out.read_text()) if out.is_file() else {}
-        prior[stripe_id] = report
+        prior[f"{stripe_id}-{fp8_rounding}"] = report
         out.write_text(json.dumps(prior, indent=1))
 
     assert (kvpe_row, index_row) == (KVPE_SCALED_FP8_DRAM_ROW_BYTES, INDEX_K_BFP8_ROW_BYTES), (kvpe_row, index_row)
@@ -290,6 +309,11 @@ def test_hy4_kv_stripe_golden_round_trip(mesh_device, device_params, stripe_id):
         assert r["tail_zero"], f"{name}: rows past the prompt were written"
         for key in ("kvpe_nope", "kvpe_pe", "index_k_rope", "index_k_nope"):
             assert r[key] >= PCC_FLOOR, f"{name} {key} PCC {r[key]:.6f} < {PCC_FLOOR}"
+        # truncation toward zero shows as a magnitude bias of a few percent; round-to-nearest removes it
+        if fp8_rounding == MlaKvFp8Rounding.NEAREST.value:
+            assert abs(r["kvpe_nope_bias"]) < 0.005, f"{name}: nearest KVPE nope bias {r['kvpe_nope_bias']:+.4f}"
+        else:
+            assert r["kvpe_nope_bias"] < -0.01, f"{name}: truncated KVPE nope bias {r['kvpe_nope_bias']:+.4f}"
     for name in HISTORIES:
         assert torch.equal(raw[name], raw["one_shot"]), f"{name}: KVPE bytes differ from the one-shot prefill"
 
@@ -464,15 +488,18 @@ def test_hy4_prefill_layer0_cache_destriped(
     )
     r = {
         "kvpe_nope": pcc(got[:, :KV_LORA], kv[:, :KV_LORA]),
+        "kvpe_nope_bias": magnitude_bias(got[:, :KV_LORA], kv[:, :KV_LORA]),
         "kvpe_pe": pcc(got[:, KV_LORA:], kv[:, KV_LORA:]),
         "index_k_rope": pcc(got_ik[:, : INDEX_DIM // 2], ik[:, : INDEX_DIM // 2]),
         "index_k_nope": pcc(got_ik[:, INDEX_DIM // 2 :], ik[:, INDEX_DIM // 2 :]),
     }
-    logger.info(f"Hy4 prefill layer 0, de-striped with KvStripe: {r}")
+    rounding = captured["kvpe"].fp8_rounding.value
+    logger.info(f"Hy4 prefill layer 0 (KVPE e4m3 rounding {rounding}), de-striped with KvStripe: {r}")
     if os.environ.get("HY4_KV_REPORT"):
         out = Path(os.environ["HY4_KV_REPORT"])
         prior = json.loads(out.read_text()) if out.is_file() else {}
-        prior["prefill_layer0_dev"] = r
+        prior[f"prefill_layer0_dev-{rounding}"] = r
         out.write_text(json.dumps(prior, indent=1))
     for key, v in r.items():
-        assert v >= PCC_FLOOR, f"layer 0 {key} PCC {v:.6f} < {PCC_FLOOR}"
+        if key != "kvpe_nope_bias":
+            assert v >= PCC_FLOOR, f"layer 0 {key} PCC {v:.6f} < {PCC_FLOOR}"

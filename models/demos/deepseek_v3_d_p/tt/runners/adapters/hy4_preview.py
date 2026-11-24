@@ -25,6 +25,9 @@ from its explicit ``indexer_types`` by ``full_indexer_rank``. What it changes:
     half compares directly (``kv_pe_interleave = False``).
   * KV stripe: the caches are allocated as GLM-5.3's, but on a 32-chip mesh the prefill chunk must write
     128-token blocks (chunk 4096), the layout decode reads (``tt/hy4/kv_cache.py``, #65886).
+  * KV rounding: the scaled-FP8 KVPE latent is rounded to nearest (ties away from zero), not truncated, which is
+    what decode's own append writes with ``append="nearest"``; ``HY4_KV_FP8_ROUNDING=truncate`` restores GLM-5.3's
+    truncation (``kvpe_fp8_rounding``).
 """
 
 from __future__ import annotations
@@ -51,6 +54,10 @@ from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import mesh_cache_key
 # Bring-up override: run with the deltas below MISSING (GLM-5.3 numerics for those parts). For smoke runs
 # and for checks that do not depend on them; KV PCC past the first layer will not match HF hy_v4.
 ALLOW_PENDING_DELTAS_ENV = "PREFILL_HY4_ALLOW_PENDING_DELTAS"
+
+# Rounding of the scaled-FP8 KVPE latent: "nearest" (default) or "truncate" (GLM-5.3's). The 78-layer CPU study at
+# 4K (last-token logits PCC vs BF16 KV): truncating 0.99858, round-to-nearest 0.99960, BFP8 0.99951.
+KV_FP8_ROUNDING_ENV = "HY4_KV_FP8_ROUNDING"
 
 # Hy4 deltas the prefill stack does not implement yet: config attribute -> (what, owning issue). An issue
 # that implements one deletes its entry here.
@@ -179,13 +186,28 @@ class Hy4Adapter(GLM53Adapter):
 
         return hy4_stripe(params.mesh_shape, params.sp_axis, params.chunk_size)
 
+    @property
+    def kvpe_fp8_rounding(self):
+        """Round-to-nearest for the scaled-FP8 KVPE latent (decode's ``append="nearest"`` rows, bit for bit), unless
+        ``HY4_KV_FP8_ROUNDING`` says ``truncate``."""
+        from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvFp8Rounding
+
+        value = os.environ.get(KV_FP8_ROUNDING_ENV, MlaKvFp8Rounding.NEAREST.value).strip().lower()
+        try:
+            return MlaKvFp8Rounding(value)
+        except ValueError:
+            raise ValueError(
+                f"{KV_FP8_ROUNDING_ENV}={value!r}: expected one of {[m.value for m in MlaKvFp8Rounding]}"
+            ) from None
+
     def allocate_kv_cache(self, *, mesh_device, hf_config, params):
         self._check_layout(params)
         self._check_pending_deltas(hf_config)  # before the cache takes DRAM, not after
         stripe = self.kv_stripe(params)
         logger.info(
             f"Hy4: KV cache context-parallel, {stripe.block}-token blocks over {stripe.num_chips} chips "
-            f"(SP {stripe.sp} on axis {stripe.sp_axis} x TP {stripe.tp}), period {stripe.period}"
+            f"(SP {stripe.sp} on axis {stripe.sp_axis} x TP {stripe.tp}), period {stripe.period}; "
+            f"KVPE latent e4m3 rounding {self.kvpe_fp8_rounding.value}"
         )
         return super().allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
 
