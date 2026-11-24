@@ -383,3 +383,73 @@ early 29.56; no atomic barrier before the DRAM own write: worse on Linear (43.56
 | no helper covers this (dataflow "scatter block pages to per-chunk L1 homes in a consumer's walk order" — would belong with `kernel_lib/ccl` / `local_copy_helpers_dataflow`) | capability | no helper maps a block page to its position in another core's packet walk or scatters pages to per-chunk L1 homes with a single completion counter; the path is raw `noc_async_write` + `noc_semaphore_inc` | — (no helper path) | focus 28365 (vs 29182 DRAM read-back) | `kernels/agrn_worker_args.hpp` `stage_dist_block` |
 | no helper covers this (port-side chunked L1 gather into the fabric packet CB) | capability | the port reader's chunk reads (≤ 2 L1 pieces per packet, chunk-home arithmetic) have no kernel_lib counterpart; raw `noc_async_read` under the existing transaction-id pipeline | — | as above | `kernels/all_gather_rms_norm_port_reader.cpp` staged branch of the own entry |
 No raw LLK (compute) was added this round.
+
+## Perf 2
+- Date: 2026-11-24
+- **Focus cases** (LOOSE_CASES, both perf-flagged, both measured exactly as declared, every knob in SUPPORTED): RMS
+  640×384 (960 output tiles) and LN 640×32 + γ + β (80 output tiles). QB2 1×4 ring, FABRIC_2D_TORUS_XY, 2 links,
+  bf16, fp32 DEST, γ ROW_MAJOR sticks, interleaved DRAM.
+- **Instrumentation**: unchanged; the existing `AGRN_ZONE` scopes cover every stage. One ablation fix: `NO_OWN_WAIT`
+  now also skips the staging-counter wait (and the unstaged-tail own-ready wait). After Perf 1 the own entry waits on
+  the staging counter, not own_ready, so the old switch no longer unblocked the bulk (it measured 28.36 = full).
+
+### Measured breakdown (eval harness, traced, 5 experiments, fastest chip, µs)
+| case | full (fastest / slowest) | chain alone (`NO_BULK`) | bulk unblocked (`NO_OWN_WAIT`) | both | overlap loss (full − bulk unblocked) |
+|---|---|---|---|---|---|
+| focus 640×384 RMS | 28.371 / 28.772 | 11.394 | 25.097 | 11.395 | 3.3 |
+| LN 640×32 + γ + β | 20.792 / 21.157 | 13.334 | 16.979 | 13.335 | 3.8 |
+
+Zone timeline (probe, untraced, earliest chip; `perf_experiments/coordinator_round2/zones_{focus,ln}.txt`):
+- **Focus:** stats ready 6.7 → normalized 8.3 → staged 10.0 → first own packet 10.7 → own entry 24 packets per port at
+  ~430 ns (10.4 µs) → relay starts 21.1 → relay ~5 µs → ~2 µs waiting for the last arrivals.
+- **LN:** records 4.1 → stats ready 6.7 → rstd 9.5 → normalized 10.5 → first own packet 12.1 → bulk ~7.5 µs, which
+  is latency (1–2 packets per port).
+
+| part | measured | part SOL | gap |
+|---|---|---|---|
+| focus bulk (port per-packet CPU) | ~17.7 in op, 19.7 isolated | 7.6 (links, roofline) | ~10 |
+| LN bulk after the chain | ~7.5 | ~1.5 (fabric_ring_exchange relay data path) | ~6 |
+| focus chain | 11.4 | ~4.5 | ~7 (hidden except the 3.3 overlap loss) |
+| LN chain | 13.3 | ~6 | ~7 |
+
+Ranked bottlenecks:
+1. Bulk TRANSPORT, port per-packet CPU (focus).
+2. OVERLAP: the bulk runs strictly after the chain (both cases).
+3. The chain itself.
+
+### Portfolio (cap: 2 experiments)
+1. **parallel_packet_builders** (TRANSPORT): helper cores build whole packets (header and payload) into a ring on
+   the port core, and the port only forwards them to the router. The router has exactly one worker channel in 2D
+   fabric (channel 0, VC0), so a forwarding core stays; for the same reason a fabric mux was not built.
+2. **gather_raw_first** (OVERLAP): stage and send raw x right after the fence, keep the stats round in the bulk's
+   shadow, and have each chip normalize every landed slot itself, woken once per landed slot.
+
+Not tested (cap): LN chain compression, Perf 1's deferred fabric mcast relay, interleaving relay and own-entry packets.
+
+### Verdicts
+| idea | kind | verdict | before → after (fastest / slowest, µs) | domain |
+|---|---|---|---|---|
+| parallel_packet_builders (ppbo4: 4 helpers per port build the own entry; relays unchanged) | TRANSPORT | **NULL in the op**; isolated win | isolated bulk: focus 19.69 / 20.35 → 19.02 / 20.05; LN 10.67 / 11.05 → 9.99 / 10.96; 640×1792 79.11 → 73.44 (−7 %). **In the op:** focus 28.37 / 28.77 → 28.70 / 29.24 (+1.2 %; `compare` rejects on both chips); H = 2 30.85 / 31.30; LN 20.79 / 21.15 → 20.74 / 21.03 (flat) | Correct everywhere it ran (bit-exact). 640×1792 inexpressible with idle cores: 6 idle allow H = 1, and H = 2 is already helper-bound. Why it does not reach the call: with the CPU off the packet path, ~150 of ~450 cycles per packet go to waiting for a free router slot, so the router becomes the bound. The helper hand-off delays the first own packet by ~0.9 µs. The 2.6 µs faster own entry is absorbed by the relay / arrival tail. |
+| gather_raw_first, variant (b): raw remote slots land in a DRAM scratch, then a per-slot flag, a remote normalize and a final write | OVERLAP | **REGRESSION** | focus 28.368 / 28.770 → 32.629 / 36.013 (+15 %); LN 20.785 / 21.148 → 21.259 / 22.791 (+2.3 %); 640×1792 79.26 → 106.19 (+34 %); 640×384 Linear 41.30 → 48.13; 16-bit DEST 28.11 → 32.69; bf8b 26.06 → 27.26 | Correct (640×384 interleaved golden slice 168 passed / 56 xfailed; RMS bit-identical; LN within 1 bf16 ulp because the receiver centers with its own shift K). Slower on every regime measured. Ablations of the copy (focus / LN): raw bulk with no remote work 26.84 / 18.25; remote normalize with no DRAM traffic 28.26 / 20.29. The remote DRAM read and rewrite of 3 slots costs +4.4 µs and doubles the relay phase through DRAM contention. Flags, remote compute and the far-slot tail cost +1.4 / +2.0 µs. The raw bulk itself is 1.3–1.7 µs above the unblocked bulk, because the hub ports still wait for the stats round. Variant (a), normalize in place, moves the same bytes and was not built. Variant (c), land in worker L1, is bounded at flat to −0.5 µs (focus) and −0.5…−2.5 µs (LN) by those ablations, and would need a transport rework. |
+
+### Graduated: none — op unchanged
+- Whole op (eval harness, 5 experiments, golden-checked first): focus **28.371 → 28.369 µs** fastest
+  (28.772 → 28.761 slowest); LN **20.792 → 20.787 µs** (21.157 → 21.151). Not dispatch-bound.
+- Guard set: no kernel path changed. The only kernel edit is under `#if !defined(AGRN_ABL_NO_OWN_WAIT)`, which is
+  off unless the ablation env is set. test_regression passed; both perf cases passed the golden check.
+- Summary: **all ideas measured; 0 graduated, 1 null (isolated win only), 1 regression; op unchanged, no regression.**
+- Findings for a later round (measured, not acted on):
+  - The bulk is now router-slot bound, not CPU bound, once packets are prebuilt. The next transport lever is fewer or
+    fuller packets: a bench with `SPLIT_RUNS = 1` gave 19.44 / 19.95 vs 19.69 / 20.35, which contradicts R2's in-op
+    +1.2 µs, so re-check it in the op.
+  - Filling γ pages by NoC copies only (aligned W) cuts `rd_gamma` from 2.66 to 0.61 µs. It sits in the stats-wait
+    shadow, so it does not move the call by itself.
+  - Any raw-first scheme must avoid the DRAM round trip of the remote slots.
+- Artifacts:
+  - `perf_experiments/{parallel_packet_builders, gather_raw_first, coordinator_round2}/`
+  - `tests/.../all_gather_rms_norm/perf_experiments/gather_raw_first/`
+  - The two experiment dirs have no `__init__.py`, so `ttnn.operations`' package walk does not import their
+    eval-dependent test files.
+
+### Helper bypasses — none
+Nothing graduated, so no raw LLK or helper bypass was added.

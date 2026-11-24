@@ -1,0 +1,52 @@
+=== chip slot 0, run 11264: kernel span 20.55 us
+  BRISC-FW               n=   4 start    -1.22  end    20.69  dur med   20.64 max   20.83
+  NCRISC-FW              n=   4 start    -1.11  end    20.58  dur med   20.44 max   20.63
+  BRISC-KERNEL           n=   4 start     0.00  end    19.25  dur med   18.53 max   18.99
+  NCRISC-KERNEL          n=   4 start     0.01  end    20.55  dur med   19.53 max   19.84
+  pr_wait_own            n=   4 start     0.27  end     1.29  dur med    0.03 max    0.04
+  pr_own_first           n=   4 start     0.33  end     1.34  dur med    0.01 max    0.01
+  pr_push0               n=   4 start     1.28  end     2.69  dur med    0.05 max    0.05
+  ps_fence_wait          n=   4 start     2.29  end     3.59  dur med    0.66 max    1.16
+  ps_bulk                n=   4 start     3.40  end    19.22  dur med   15.41 max   15.82
+  ps_own_pkt0            n=   4 start     3.50  end     3.76  dur med    0.01 max    0.01
+  ps_relay_start         n=   4 start    12.99  end    13.42  dur med    0.01 max    0.01
+  pr_wait_all            n=   4 start    17.20  end    20.45  dur med    2.38 max    2.67
+=== chip slot 1, run 11265: kernel span 20.37 us
+  BRISC-FW               n=   4 start    -0.46  end    20.50  dur med   20.53 max   20.96
+  NCRISC-FW              n=   4 start    -0.36  end    20.40  dur med   20.32 max   20.76
+  NCRISC-KERNEL          n=   4 start     0.00  end    20.37  dur med   19.92 max   20.37
+  BRISC-KERNEL           n=   4 start     0.12  end    19.83  dur med   18.83 max   19.56
+  pr_wait_own            n=   4 start     0.26  end     0.75  dur med    0.03 max    0.04
+  pr_own_first           n=   4 start     0.32  end     0.80  dur med    0.01 max    0.01
+  pr_push0               n=   4 start     1.28  end     1.97  dur med    0.05 max    0.05
+  ps_fence_wait          n=   4 start     2.44  end     4.33  dur med    1.17 max    1.89
+  ps_bulk                n=   4 start     3.58  end    19.80  dur med   15.23 max   16.22
+  ps_own_pkt0            n=   4 start     3.68  end     4.51  dur med    0.01 max    0.01
+  ps_relay_start         n=   4 start    13.20  end    14.13  dur med    0.01 max    0.02
+  pr_wait_all            n=   4 start    17.37  end    20.27  dur med    2.24 max    2.73
+=== chip slot 2, run 11266: kernel span 20.80 us
+  BRISC-FW               n=   4 start    -0.45  end    20.93  dur med   20.39 max   21.19
+  NCRISC-FW              n=   4 start    -0.35  end    20.83  dur med   19.96 max   20.99
+  NCRISC-KERNEL          n=   4 start     0.00  end    20.80  dur med   19.55 max   20.59
+  BRISC-KERNEL           n=   4 start     0.12  end    19.31  dur med   18.97 max   19.19
+  pr_wait_own            n=   4 start     0.26  end     0.52  dur med    0.04 max    0.04
+  pr_own_first           n=   4 start     0.32  end     0.56  dur med    0.01 max    0.01
+  pr_push0               n=   4 start     1.29  end     1.55  dur med    0.05 max    0.06
+  ps_fence_wait          n=   4 start     2.54  end     3.64  dur med    0.97 max    1.07
+  ps_bulk                n=   4 start     3.58  end    19.28  dur med   15.62 max   15.67
+  ps_own_pkt0            n=   4 start     3.68  end     3.83  dur med    0.01 max    0.02
+  ps_relay_start         n=   4 start    13.13  end    13.32  dur med    0.01 max    0.01
+  pr_wait_all            n=   4 start    17.57  end    20.70  dur med    1.82 max    2.82
+=== chip slot 3, run 11267: kernel span 20.11 us
+  BRISC-FW               n=   4 start    -0.47  end    20.25  dur med   20.33 max   20.61
+  NCRISC-FW              n=   4 start    -0.35  end    20.15  dur med   20.12 max   20.41
+  NCRISC-KERNEL          n=   4 start     0.00  end    20.11  dur med   19.72 max   20.01
+  BRISC-KERNEL           n=   4 start     0.12  end    19.37  dur med   18.39 max   19.16
+  pr_wait_own            n=   4 start     0.26  end     0.55  dur med    0.04 max    0.04
+  pr_own_first           n=   4 start     0.33  end     0.60  dur med    0.01 max    0.01
+  pr_push0               n=   4 start     1.48  end     1.80  dur med    0.05 max    0.06
+  ps_fence_wait          n=   4 start     2.45  end     3.44  dur med    0.61 max    0.99
+  ps_bulk                n=   4 start     3.06  end    19.34  dur med   15.30 max   16.27
+  ps_own_pkt0            n=   4 start     3.16  end     3.63  dur med    0.01 max    0.01
+  ps_relay_start         n=   4 start    12.89  end    13.28  dur med    0.01 max    0.01
+  pr_wait_all            n=   4 start    16.63  end    20.00  dur med    2.34 max    3.05
