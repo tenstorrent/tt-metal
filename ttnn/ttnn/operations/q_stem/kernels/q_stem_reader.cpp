@@ -1,0 +1,204 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-License-Identifier: Apache-2.0
+
+// q_stem compute-core reader (RISCV_1 / NoC0). Block ops:
+//   qb_slice_load_block  (stage-1 cores) the core's Q_t x cols slice of q_b_proj, once, resident
+//   x rounds             (stage-1 cores) receive every x round multicast by the injector (Mcast helper receiver)
+//   wkv_load_block       wkv_b1 units into cb_wkv: R1 one head (Dn_t x N_t), R2 one (row, N-block) (Dn_t x s3n);
+//                        the first `wkv_depth` units are prefetched before stage 1 (they need no remote data)
+//   land_row_block       wait the row's arrival count on the landing scratch, then push credits into cb_landing
+//                        (zero-copy: cb_landing IS this core's landing shard); re-arm the counters at the end.
+// Arrival counters arrive[src] count landed tiles. A remote source has exactly one in-order stream into this core
+// (one port, link = core index mod L), so a per-row threshold is exact; the own quarter arrives from many stage-1
+// writers in any order, so a local head waits for the total of all local tiles before its first row.
+
+#include <cstdint>
+
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/endpoints.h"
+#include "api/tensor/noc_traits.h"
+#include "hostdevcommon/common_values.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
+
+using namespace dataflow_kernel_lib;
+
+namespace {
+// x rounds of stage 1 (receiver side of `x_round_multicast_block`). A template so the receiver pipe is only
+// instantiated for the stage-1 kernel (the other compute cores carry an absent multicast tag).
+template <typename MC>
+void receive_x_rounds(const MC& mc, uint32_t cb_x_round, uint32_t round_tiles, uint32_t num_rounds) {
+    if constexpr (MC::active) {
+        Noc noc;
+        auto pipe = mc.receiver(noc);
+        for (uint32_t r = 0; r < num_rounds; ++r) {
+            cb_reserve_back(cb_x_round, round_tiles);  // slot free -> the write ptr is the multicast destination
+            pipe.receive();                            // ack (slot free), wait for the round
+            cb_push_back(cb_x_round, round_tiles);
+        }
+    }
+}
+}  // namespace
+
+void kernel_main() {
+    constexpr uint32_t cb_x_round = get_compile_time_arg_val(0);
+    constexpr uint32_t cb_qb_slice = get_compile_time_arg_val(1);
+    constexpr uint32_t cb_landing = get_compile_time_arg_val(2);
+    constexpr uint32_t cb_wkv = get_compile_time_arg_val(3);
+    constexpr uint32_t qb_tile_bytes = get_compile_time_arg_val(4);
+    constexpr uint32_t wkv_tile_bytes = get_compile_time_arg_val(5);
+    constexpr uint32_t Q_t = get_compile_time_arg_val(6);
+    constexpr uint32_t Cq_t = get_compile_time_arg_val(7);
+    constexpr uint32_t round_tiles = get_compile_time_arg_val(8);
+    constexpr uint32_t nkb = get_compile_time_arg_val(9);
+    constexpr uint32_t num_blocks = get_compile_time_arg_val(10);
+    constexpr uint32_t Dn_t = get_compile_time_arg_val(11);
+    constexpr uint32_t N_t = get_compile_time_arg_val(12);
+    constexpr uint32_t s3n = get_compile_time_arg_val(13);
+    constexpr uint32_t n_nb = get_compile_time_arg_val(14);
+    constexpr bool wkv_resident = get_compile_time_arg_val(15) != 0;
+    constexpr uint32_t wkv_depth = get_compile_time_arg_val(16);
+    constexpr uint32_t B = get_compile_time_arg_val(17);
+    constexpr uint32_t qrt = get_compile_time_arg_val(18);
+    constexpr uint32_t G = get_compile_time_arg_val(20);
+    constexpr uint32_t hw = get_compile_time_arg_val(21);
+    constexpr auto qb_args = TensorAccessorArgs<22>();
+    constexpr auto wkv_args = TensorAccessorArgs<qb_args.next_compile_time_args_offset()>();
+    constexpr auto mc = McastArgs<
+        get_named_compile_time_arg_val("mcast_ct_offset"),
+        get_named_compile_time_arg_val("mcast_rt_offset")>();
+
+    constexpr uint32_t rows_per_head = B * qrt;
+    constexpr uint32_t unit_tiles = Dn_t * s3n;  // one wkv unit (R1: s3n == N_t, one head)
+    constexpr uint32_t qb_batch = 8;             // reads per barrier (dm shortlist)
+
+    size_t a = 0;
+    const uint32_t qb_addr = get_arg_val<uint32_t>(a++);
+    const uint32_t c0 = get_arg_val<uint32_t>(a++);
+    const uint32_t cols = get_arg_val<uint32_t>(a++);
+    const uint32_t wkv_addr = get_arg_val<uint32_t>(a++);
+    const uint32_t my_pos = get_arg_val<uint32_t>(a++);
+    uint32_t arrive_addr[G];
+    for (uint32_t i = 0; i < G; ++i) {
+        arrive_addr[i] = get_arg_val<uint32_t>(a++);
+    }
+    const uint32_t hpc = get_arg_val<uint32_t>(a++);
+    const uint32_t heads_idx = a;
+    auto head_of = [&](uint32_t u) { return get_arg_val<uint32_t>(heads_idx + 2 * u); };
+    auto src_of = [&](uint32_t u) { return get_arg_val<uint32_t>(heads_idx + 2 * u + 1); };
+
+    uint32_t nh[G];  // my heads per source position
+    for (uint32_t i = 0; i < G; ++i) {
+        nh[i] = 0;
+    }
+    for (uint32_t u = 0; u < hpc; ++u) {
+        nh[src_of(u)]++;
+    }
+
+    const auto wkv = TensorAccessor(wkv_args, wkv_addr, wkv_tile_bytes);
+    const uint32_t total_units = wkv_resident ? hpc : hpc * rows_per_head * n_nb;
+    // Issue the reads of unit `idx` to `l1` (no barrier).
+    auto read_unit = [&](uint32_t idx, uint32_t l1) {
+        uint32_t u, nb;
+        if constexpr (wkv_resident) {
+            u = idx;
+            nb = 0;
+        } else {
+            u = idx / (rows_per_head * n_nb);
+            nb = idx % n_nb;
+        }
+        const uint32_t base = head_of(u) * Dn_t * N_t + nb * s3n;
+        for (uint32_t kt = 0; kt < Dn_t; ++kt) {
+            for (uint32_t n = 0; n < s3n; ++n) {
+                noc_async_read(wkv.get_noc_addr(base + kt * N_t + n), l1, wkv_tile_bytes);
+                l1 += wkv_tile_bytes;
+            }
+        }
+    };
+
+    // ---- stage 1 --------------------------------------------------------------------------------------------------
+    uint32_t prefetched = 0;
+    if constexpr (mc.active) {
+        // qb_slice_load_block: pages k * Cq_t + c0 + c, laid out [k][c] (in1 width = cols)
+        const auto qb = TensorAccessor(qb_args, qb_addr, qb_tile_bytes);
+        cb_reserve_back(cb_qb_slice, Q_t * cols);
+        uint32_t l1 = get_write_ptr(cb_qb_slice);
+        uint32_t n = 0;
+        for (uint32_t k = 0; k < Q_t; ++k) {
+            for (uint32_t c = 0; c < cols; ++c) {
+                noc_async_read(qb.get_noc_addr(k * Cq_t + c0 + c), l1, qb_tile_bytes);
+                l1 += qb_tile_bytes;
+                if (++n == qb_batch) {
+                    noc_async_read_barrier();
+                    n = 0;
+                }
+            }
+        }
+        noc_async_read_barrier();
+        cb_push_back(cb_qb_slice, Q_t * cols);
+    }
+
+    // wkv prefetch: the first units need no remote data; their reads overlap stage 1 (barrier after the x rounds)
+    prefetched = total_units < wkv_depth ? total_units : wkv_depth;
+    if (prefetched > 0) {
+        cb_reserve_back(cb_wkv, prefetched * unit_tiles);
+        const uint32_t l1 = get_write_ptr(cb_wkv);
+        for (uint32_t i = 0; i < prefetched; ++i) {
+            read_unit(i, l1 + i * unit_tiles * wkv_tile_bytes);
+        }
+    }
+
+    receive_x_rounds(mc, cb_x_round, round_tiles, num_blocks * nkb);
+    if (prefetched > 0) {
+        noc_async_read_barrier();
+        cb_push_back(cb_wkv, prefetched * unit_tiles);
+    }
+
+    // ---- stage 3: land rows, stream the remaining wkv units ---------------------------------------------------------
+    uint32_t next_unit = prefetched;
+    auto load_next_unit = [&]() {
+        if (next_unit < total_units) {
+            cb_reserve_back(cb_wkv, unit_tiles);
+            read_unit(next_unit, get_write_ptr(cb_wkv));
+            noc_async_read_barrier();
+            cb_push_back(cb_wkv, unit_tiles);
+            ++next_unit;
+        }
+    };
+    bool local_waited = false;
+    for (uint32_t u = 0; u < hpc; ++u) {
+        const uint32_t src = src_of(u);
+        if constexpr (wkv_resident) {
+            if (u >= prefetched) {
+                load_next_unit();
+            }
+        }
+        volatile tt_l1_ptr uint32_t* arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrive_addr[src]);
+        if (src == my_pos && !local_waited) {
+            noc_semaphore_wait_min(arrived, nh[src] * rows_per_head * hw);
+            local_waited = true;
+        }
+        for (uint32_t t = 0; t < rows_per_head; ++t) {
+            if (src != my_pos) {
+                noc_semaphore_wait_min(arrived, (t + 1) * nh[src] * hw);
+            }
+            cb_reserve_back(cb_landing, hw);
+            cb_push_back(cb_landing, hw);  // credits only: the row is already in my landing shard
+            if constexpr (!wkv_resident) {
+                for (uint32_t nb = 0; nb < n_nb; ++nb) {
+                    load_next_unit();
+                }
+            }
+        }
+    }
+
+    // Re-arm: consume exactly what arrived (every wait above was cumulative).
+    for (uint32_t i = 0; i < G; ++i) {
+        if (nh[i] > 0) {
+            noc_semaphore_inc(get_noc_addr(arrive_addr[i]), 0u - nh[i] * rows_per_head * hw);
+        }
+    }
+    noc_async_atomic_barrier();
+}
