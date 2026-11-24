@@ -1978,9 +1978,9 @@ inline void transpose_faces()
 // `topk_mop_config<true>()` again before the next `_topk_xl_merge_`.
 inline void topk_rebuild_build2048_mop_config()
 {
-    constexpr std::uint32_t replay_load_and_first_swaps = lltt::replay_insn(0, 16);
-    constexpr std::uint32_t replay_second_swaps         = lltt::replay_insn(16, 8);
-    constexpr std::uint32_t replay_store                = lltt::replay_insn(24, 8);
+    constexpr std::uint32_t replay_load_and_first_swaps = TT_OP_REPLAY(0, 16, 0, 0);
+    constexpr std::uint32_t replay_second_swaps         = TT_OP_REPLAY(16, 8, 0, 0);
+    constexpr std::uint32_t replay_store                = TT_OP_REPLAY(24, 8, 0, 0);
     constexpr std::uint32_t sfptransp_op                = TT_OP_SFPTRANSP(0, 0, 0, 0);
 
     // Build the 5-slot template directly (unpackB + unpack_halo both enabled),
@@ -2384,7 +2384,7 @@ inline bool local_sort_head(const std::uint32_t tile_offset, const bool ascendin
 template <int body_len>
 inline void topk_mop_program_replay()
 {
-    constexpr std::uint32_t replay_body = lltt::replay_insn(0, body_len);
+    constexpr std::uint32_t replay_body = TT_OP_REPLAY(0, body_len, 0, 0);
     ckernel_unpack_template tmpl        = ckernel_unpack_template::lA(replay_body, TT_OP_NOP);
     tmpl.program();
 }

@@ -94,13 +94,13 @@ inline void _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_mop_config_(const std:
 
     const std::uint32_t first_half_len  = first_half_iters * SDPA_CUSTOM_MM_REUSE_BLOCK_LEN;
     const std::uint32_t second_half_len = second_half_iters * SDPA_CUSTOM_MM_REUSE_BLOCK_LEN;
-    const std::uint32_t first_half      = lltt::replay_insn(0, first_half_len);
-    const std::uint32_t second_half     = lltt::replay_insn(SDPA_CUSTOM_MM_REUSE_REPLAY_BUF_LEN - second_half_len, second_half_len);
+    const std::uint32_t first_half      = TT_OP_REPLAY(0, first_half_len, 0, 0);
+    const std::uint32_t second_half     = TT_OP_REPLAY(SDPA_CUSTOM_MM_REUSE_REPLAY_BUF_LEN - second_half_len, second_half_len, 0, 0);
 
     // For nt_dim == 1: only inner_increment block is needed, use B-mode
     // block_increment == inner_increment when nt_dim == 1 so either block works,
     // but we use the inner_increment block (last 3 insns) for correctness
-    const std::uint32_t single_tile = lltt::replay_insn(SDPA_CUSTOM_MM_REUSE_REPLAY_BUF_LEN - SDPA_CUSTOM_MM_REUSE_BLOCK_LEN, SDPA_CUSTOM_MM_REUSE_BLOCK_LEN);
+    const std::uint32_t single_tile = TT_OP_REPLAY(SDPA_CUSTOM_MM_REUSE_REPLAY_BUF_LEN - SDPA_CUSTOM_MM_REUSE_BLOCK_LEN, SDPA_CUSTOM_MM_REUSE_BLOCK_LEN, 0, 0);
 
     ckernel_unpack_template tmp = ckernel_unpack_template(
         nt_dim == 1,                            // B-mode when single tile per k-row
