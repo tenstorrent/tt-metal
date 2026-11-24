@@ -121,3 +121,19 @@ inline void _llk_tile_regs_return_()
         _llk_sync_wait_<stall_res, p_stall::STALL_ON_MAX>(sem);
     }
 }
+
+/**
+ * @brief Set the four Dest borrow semaphores (MATH_UNPACK, MATH_SFPU, PACK_UNPACK and PACK_SFPU) to 0, with a maximum of 1.
+ *
+ * @note Call this once per kernel, before any thread calls @ref _llk_tile_regs_borrow_. A borrower that waits
+ * on a semaphore that has not been set up yet can pass too early or hang. Metal calls it from
+ * compute_kernel_hw_startup, and the LLK test boot calls it from device_setup.
+ */
+inline void _llk_dest_borrow_init_()
+{
+    using namespace ckernel;
+    _llk_sync_init_(trisc::semaphore::MATH_UNPACK, 1, 0);
+    _llk_sync_init_(trisc::semaphore::MATH_SFPU, 1, 0);
+    _llk_sync_init_(trisc::semaphore::PACK_UNPACK, 1, 0);
+    _llk_sync_init_(trisc::semaphore::PACK_SFPU, 1, 0);
+}
