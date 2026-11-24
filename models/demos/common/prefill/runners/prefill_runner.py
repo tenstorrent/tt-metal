@@ -30,6 +30,7 @@ from models.demos.common.prefill.prefill_chunk import (
     sentinel_words,
     validate_chunks,
 )
+from models.demos.common.prefill.runners import model_descriptor
 from models.demos.common.prefill.runners.hang_detector import arm_hang_detector
 from models.demos.common.prefill.runners.layer_completion_layout import layer_completion_layout
 from models.demos.common.prefill.runners.layer_completion_ring_reader import scheduler_shm_name
@@ -59,6 +60,7 @@ from models.demos.common.prefill.runners.runner_utils import (
     stage_mesh_shape,
 )
 from models.demos.deepseek_v3_d_p.tt.mla.utils import mtp_lookahead_positions
+from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_fabric_payload_size
 from models.demos.deepseek_v3_d_p.utils.chunk_config import prefill_chunk_tokens
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
 from models.demos.deepseek_v3_d_p.utils.sub_device_trace import CapturedCall
@@ -188,6 +190,9 @@ CHUNK_TIMEOUT_SECONDS = float(os.environ.get("TT_PREFILL_CHUNK_TIMEOUT_SECONDS",
 # Env-overridable so re-bisecting does not need a rebuild. #54834's fix removed the AttnRes floor
 # that used to make this a narrow band; what is left is MLA's chunked-attention ceiling.
 _L1_SMALL_SIZE = int(os.environ.get("PREFILL_L1_SMALL_SIZE", ADAPTER.l1_small_size))
+# A model on the MoE block (tt/moe_impl.py) needs a fabric payload of one combine row; its L1_SMALL_SIZE already holds
+# the block's persistent words.
+_FABRIC_PAYLOAD_SIZE = moe_block_fabric_payload_size(ADAPTER.model_config, ADAPTER.fabric_payload_size())
 if MTP_LEVELS:
     _L1_SMALL_SIZE += 512
 USE_TRACE = os.environ.get("PREFILL_USE_TRACE", "0") == "1"
@@ -1131,7 +1136,7 @@ def run_request_loop(
 def _print_config() -> None:
     rows = [
         ("PREFILL_MODEL", ADAPTER.name),
-        ("PREFILL_HF_MODEL", os.environ.get("PREFILL_HF_MODEL", ADAPTER.hf_model_default)),
+        ("resolved checkpoint", ADAPTER.hf_model_path),
         ("PREFILL_TTNN_CACHE", os.environ.get("PREFILL_TTNN_CACHE", ADAPTER.ttnn_cache_default)),
         ("resolved weight_cache_path", str(ADAPTER.weight_cache_path(GLOBAL_MESH_SHAPE, sp_axis=SP_AXIS))),
         ("PREFILL_SP", str(_sp)),
@@ -1207,6 +1212,8 @@ def _assert_ranks_agree_on_config(rank: int, num_ranks: int) -> None:
         "PREFILL_MIGRATION_EXPORT_TO_FILE": migration_file_export_enabled(),
         "PREFILL_HYBRID_PAGE_POOL_V2": HYBRID_PAGE_POOL_V2,
         "PREFILL_MASTER_RANK": int(os.environ.get("PREFILL_MASTER_RANK", "0")),
+        # Only the master rank writes it, and a rank started without it would skip the write unnoticed.
+        model_descriptor.PATH_ENV: os.environ.get(model_descriptor.PATH_ENV, ""),
     }
     fingerprint = "|".join(f"{k}={v}" for k, v in fields.items())
     digest = zlib.crc32(fingerprint.encode()) & 0x7FFFFFFF
@@ -1238,6 +1245,8 @@ def main() -> None:
     rank = int(ttnn.distributed_context_get_rank())
     num_ranks = int(ttnn.distributed_context_get_size())
     _assert_ranks_agree_on_config(rank, num_ranks)
+    if os.environ.get(model_descriptor.PATH_ENV) and rank == int(os.environ.get("PREFILL_MASTER_RANK", "0")):
+        model_descriptor.remove(os.environ[model_descriptor.PATH_ENV])
     check_packed_forward_support(
         FORWARD_CHUNKS,
         indexer_indices=num_ranks > 1 and ADAPTER.passes_indexer_indices,
@@ -1266,7 +1275,7 @@ def main() -> None:
 
     mesh_device = open_mesh_device(
         GLOBAL_MESH_SHAPE,
-        ADAPTER.fabric_payload_size(),
+        _FABRIC_PAYLOAD_SIZE,
         l1_small_size=_L1_SMALL_SIZE,
         trace_region_size=_TRACE_REGION_SIZE,
         sp_axis=SP_AXIS,
@@ -1330,6 +1339,25 @@ def main() -> None:
     ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
     ttnn.close_mesh_device(mesh_device)
     logger.info(f"[pp rank {rank}] shutdown complete")
+
+
+def _write_model_descriptor(service_id: str, ack_shm_name: str) -> None:
+    path = os.environ[model_descriptor.PATH_ENV]
+    doc = model_descriptor.prefill_descriptor(
+        model_id=ADAPTER.hf_model_path,
+        max_slots=NUM_USERS,
+        kv_depth=MAX_SEQ_LEN,
+        num_layers=NUM_LAYERS,
+        page_tokens=ttnn.TILE_SIZE,
+        chunk_size=CHUNK_SIZE,
+        sp_factor=_sp,
+        max_chunks_per_batch=FORWARD_CHUNKS,
+        num_mtp_tokens=MTP_LEVELS,
+        service_id=service_id,
+        ack_shm_name=ack_shm_name,
+    )
+    model_descriptor.write(path, doc)
+    logger.info(f"[prefill] model descriptor -> {path}")
 
 
 def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ranks: int, is_first_rank: bool) -> None:
@@ -1576,6 +1604,9 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             if n_warm:
                 logger.info(f"[migration] drained {n_warm} D2H warm-up ack records from the trace capture")
             layer_ack_service.start()
+
+    if rank == master_rank and os.environ.get(model_descriptor.PATH_ENV):
+        _write_model_descriptor(service_id, ack_shm_name)
 
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
 

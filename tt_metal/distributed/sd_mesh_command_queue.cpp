@@ -85,13 +85,10 @@ namespace tt::tt_metal::distributed {
 SDMeshCommandQueue::SDMeshCommandQueue(
     MeshDevice* mesh_device,
     uint32_t id,
+    std::shared_ptr<ThreadPool> dispatch_thread_pool,
     std::function<std::lock_guard<std::mutex>()> lock_api_function,
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context) :
-    MeshCommandQueueBase(
-        mesh_device,
-        id,
-        create_passthrough_thread_pool(mesh_device->impl().get_context_id()),
-        std::move(lock_api_function)),
+    MeshCommandQueueBase(mesh_device, id, std::move(dispatch_thread_pool), std::move(lock_api_function)),
     active_distributed_context_(std::move(distributed_context)) {
     // Init thread pool with all local devices for parallel dispatch.
     // One thread per device enables NUMA-aware CPU binding.
@@ -110,7 +107,6 @@ SDMeshCommandQueue::~SDMeshCommandQueue() {
         return;
     }
     try {
-        std::lock_guard<std::mutex> guard(logical_cores_mutex_);
         wait_for_cores_idle();
     } catch (const std::exception& e) {
         // Destructors must not throw; leave the cores as they are and report it.
@@ -207,6 +203,9 @@ WorkerConfigBufferMgr& SDMeshCommandQueue::get_config_buffer_mgr(uint32_t /*inde
 }
 
 void SDMeshCommandQueue::wait_for_cores_idle() {
+    // Shard writes run on one dispatch thread per device and each starts here. The first to take the
+    // lock waits on every device and clears the map; the rest find it empty.
+    std::lock_guard<std::mutex> guard(logical_cores_mutex_);
     auto& context = mesh_device_->impl().metal_context();
     if (!logical_cores_for_previous_workload_.empty()) {
         // In emulated mode this map is always empty (LaunchProgram is synchronous),
