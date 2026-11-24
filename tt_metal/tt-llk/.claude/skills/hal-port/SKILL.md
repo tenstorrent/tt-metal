@@ -48,6 +48,9 @@ Read before you start:
 5. **Measure** (only when asked to optimise, or for the final report): run each affected `perf_*.py` with
    `--perf --impl tt` and `--perf --impl hal --tag <unique>`, then compare the two reports with
    `scripts/perf_compare.py <tt-run-dir> <hal-run-dir>` (geomean %, per run type and zone, faster/slower counts).
+   Tests include the unpack, math and pack common headers in one translation unit, so a `hal_port` name added to one
+   `*_common.h` must not exist in another: grep all three before adding one. Before reporting, also run at least one
+   test with `--impl hal` (the full merged tree), not only a thread view.
 6. **Keep working files** (job lists, logs, notes) in `~/bh-port/val/<your-wp>-work/`, never in a shared scratchpad. Everything lives under `~/bh-port` (worktrees in `~/bh-port/wt/`), never `/tmp`,
    which a reboot wipes. Commit work in progress on your own work-package branch after every step that compiles
    (one-sentence message, no trailers); the plan owner squashes when merging.
