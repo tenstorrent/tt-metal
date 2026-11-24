@@ -128,6 +128,13 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
             return SpecReject(reason=f"up to {PLAIN_ROWS} users (max_num_seqs {max_num_seqs})", supported_k=())
         if int(requested_k) < 1:
             return SpecReject(reason="no drafts requested", supported_k=(SPEC_K,))
+        # (narrow_decode_resolves_commits: this class records each verify's commits at propose time — a narrow call
+        # right after a multi-token commit moves its spec users from those counts — so the plugin keeps a request
+        # needing host-only sampling (logprobs, structured output, logit_bias, ...) out of every verify and serves it
+        # instead of refusing it; plugin ed900d6+. Older plugins have no such field.)
+        extra = {}
+        if "narrow_decode_resolves_commits" in getattr(SpecPlan, "__dataclass_fields__", {}):
+            extra["narrow_decode_resolves_commits"] = True
         return SpecPlan(
             effective_k=min(SPEC_K, int(requested_k)),
             lanes_per_request=SPEC_K + 1,
@@ -136,6 +143,7 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
             accept_modes=("argmax_ids",),
             drafter_state="internal",
             supports_narrow_decode=True,
+            **extra,
         )
 
     @classmethod

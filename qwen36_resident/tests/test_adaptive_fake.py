@@ -230,6 +230,28 @@ class Runner:
             res = self.m.process_decode_output_host(res)
             committed = {r: [int(res[r, 0])] for r in rows}
             first = pos
+        self._propose(rows, committed, first)
+        return verify
+
+    def host_step(self):
+        """an ordinary decode the runner samples on the host (a live request needs logits: logprobs, structured
+        output, ...): narrow even right after a multi-token commit (plugin narrow_decode_resolves_commits), no
+        sampling_params, logits back (greedy here)"""
+        rows = sorted(self.req)
+        tok = torch.zeros(B, 1, dtype=torch.long)
+        pos = torch.full((B,), -1, dtype=torch.int32)
+        for r in rows:
+            tok[r, 0], pos[r] = self.req[r]["tokens"][-1], len(self.req[r]["tokens"]) - 1
+        res = self.m.decode_forward(
+            tok, pos, self.pt(), reload_inputs=True, reload_page_table=False, read_from_device=True
+        )
+        lg = torch.as_tensor(self.m.process_decode_output_host(res, is_tokens=False))
+        lg = lg.reshape(lg.shape[0], -1, lg.shape[-1])[:, 0, :]
+        committed = {r: [int(lg[r].argmax())] for r in rows}
+        self.last_narrow = (rows, tok.clone(), pos.clone())
+        self._propose(rows, committed, pos)
+
+    def _propose(self, rows, committed, first):
         ct = torch.full((B, 1 + K), PLACEHOLDER_TOKEN_ID, dtype=torch.int32)
         cp = torch.full((B, 1 + K), -1, dtype=torch.int32)
         ca = torch.ones(B, dtype=torch.int32)
@@ -244,7 +266,6 @@ class Runner:
         assert isinstance(d, DraftOutput)
         for r in rows:
             self.req[r]["drafts"] = d.draft_token_ids[r].tolist()[: int(d.num_valid[r])]
-        return verify
 
     def check(self):
         for r, q in self.req.items():
@@ -288,6 +309,32 @@ def test_adaptive_ramp(monkeypatch):
     kinds_moves = [mv[0] for mv in m.ae.moves]
     assert kinds_moves.count("to_plain") == 4 and kinds_moves.count("to_spec") == 4 + 3, m.ae.moves
     assert sum(len(q["tokens"]) - len(q["prompt"]) for q in run.req.values()) > 3 * 20
+
+
+def test_host_sampled_steps_right_after_a_multi_token_commit(monkeypatch):
+    """a request needing host-only sampling (logprobs, structured output, ...) makes the plugin send ordinary
+    host-sampled decodes (no sampling_params, logits back) even right after a verify that committed several tokens
+    (narrow_decode_resolves_commits): the class moves its spec users to plain from the counts propose recorded, every
+    user's tokens stay the reference's, and nobody speculates while such steps come"""
+    m, pf = make(monkeypatch)
+    run = Runner(m)
+    prompts = [[(r * 13 + i * 7) % V for i in range(30 + 2 * r)] for r in range(3)]
+    run.arrive(range(3), prompts)
+    for _ in range(12):
+        run.step()
+        if m.spec_of and any(q["acc"] > 1 for q in run.req.values()):
+            break
+    assert m.spec_of and any(q["acc"] > 1 for q in run.req.values()), "a multi-token commit to resolve"
+    for _ in range(5):
+        run.host_step()
+        assert not m.spec_of and m.mode == "PLAIN"
+        assert not any(q["drafts"] for q in run.req.values()), "no drafts while host steps come"
+    run.check()
+
+
+def test_the_spec_plan_declares_commit_resolving_narrow_decodes():
+    plan = A.Qwen36ResidentAdaptiveForCausalLM.spec_plan(None, 32, 3)
+    assert plan.supports_narrow_decode and plan.narrow_decode_resolves_commits
 
 
 def test_sampled_request_joins_spec(monkeypatch):
