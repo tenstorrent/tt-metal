@@ -5,22 +5,29 @@
 // Runs the DRISC service on chip 0, or the chip DRISC_SERVICE_TEST_CHIP names, through a bare UMD cluster, as a client
 // process would, with no metal device in this process (metal would take the seat locks itself). Copies are checked
 // through UMD's own DRAM reads and writes, never through the service, with a pattern unique to each (nonce, bank,
-// address).
+// address). The cross-process tests re-run this binary as DriscServiceChild.Run.
 
 #include <gtest/gtest.h>
+#include <spawn.h>
+#include <sys/resource.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <csignal>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <numeric>
 #include <optional>
 #include <random>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -30,13 +37,16 @@
 #include <fmt/format.h>
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 #include <tt-umd/chip_helpers/sysmem_buffer.hpp>
 #include <tt-umd/cluster_descriptor.hpp>
 #include <tt-umd-workload/cluster.hpp>
 
+#include "impl/context/metal_context.hpp"
 #include "impl/drisc_service/drisc_core.hpp"
 #include "impl/drisc_service/service.hpp"
 #include "internal/tt-1xx/blackhole/noc/noc_parameters.h"
+#include "llrt/hal.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
 #include "llrt/rtoptions.hpp"
 #include "llrt/tt_elffile.hpp"
@@ -70,6 +80,7 @@ constexpr std::chrono::milliseconds stop_timeout{2000};
 constexpr std::chrono::milliseconds reply_timeout{2000};
 // Long enough for the kernel to run many slot scans.
 constexpr std::chrono::milliseconds scan_wait{200};
+constexpr std::chrono::seconds child_timeout{180};
 
 enum class Op : uint32_t { h2d, d2h, d2d, local };
 constexpr std::array<Op, 4> all_ops = {Op::h2d, Op::d2h, Op::d2d, Op::local};
@@ -409,6 +420,242 @@ void launch(Device& device, const Seat& seat, abi::L1CommandBlock block) {
     core.start();
 }
 
+// ---- Child processes -----------------------------------------------------------------------------------------------
+
+std::string child_out_path() {
+    static uint32_t calls = 0;
+    return (std::filesystem::temp_directory_path() / fmt::format("drisc_service_child_{}_{}", ::getpid(), ++calls))
+        .string();
+}
+
+pid_t spawn_child(const std::string& role, const std::string& out, std::vector<std::string> env) {
+    env.push_back("DRISC_SERVICE_CHILD_ROLE=" + role);
+    env.push_back("DRISC_SERVICE_CHILD_OUT=" + out);
+    for (char** var = environ; *var != nullptr; var++) {
+        const std::string_view entry(*var);
+        // The parent's gtest output, filter and sharding settings would clobber its XML report or skip Run.
+        if (entry.starts_with("GTEST_") || entry.starts_with("XML_OUTPUT_FILE=")) {
+            continue;
+        }
+        env.emplace_back(entry);
+    }
+    std::vector<char*> envp;
+    envp.reserve(env.size() + 1);
+    for (auto& var : env) {
+        envp.push_back(var.data());
+    }
+    envp.push_back(nullptr);
+    std::string exe = std::filesystem::read_symlink("/proc/self/exe").string();
+    std::string filter = "--gtest_filter=DriscServiceChild.Run";
+    std::array<char*, 3> argv = {exe.data(), filter.data(), nullptr};
+    pid_t pid = 0;
+    const int rc = ::posix_spawn(&pid, exe.c_str(), nullptr, nullptr, argv.data(), envp.data());
+    TT_FATAL(rc == 0, "posix_spawn {} failed ({})", exe, std::strerror(rc));
+    return pid;
+}
+
+// Kills and reaps the child when it goes out of scope still running.
+class ChildGuard {
+public:
+    explicit ChildGuard(pid_t pid) : pid_(pid) {}
+    ~ChildGuard() {
+        if (::waitpid(pid_, nullptr, WNOHANG) == 0) {
+            ::kill(pid_, SIGKILL);
+            ::waitpid(pid_, nullptr, 0);
+        }
+    }
+    ChildGuard(const ChildGuard&) = delete;
+    ChildGuard& operator=(const ChildGuard&) = delete;
+
+private:
+    pid_t pid_;
+};
+
+int exit_code(int status) { return WIFEXITED(status) ? WEXITSTATUS(status) : -WTERMSIG(status); }
+
+// The child's exit code, or -(signal) when a signal ended it. Kills it and throws when it runs past child_timeout.
+int wait_child(pid_t pid) {
+    const auto deadline = std::chrono::steady_clock::now() + child_timeout;
+    int status = 0;
+    while (true) {
+        const pid_t done = ::waitpid(pid, &status, WNOHANG);
+        TT_FATAL(done >= 0, "waitpid {} failed ({})", pid, std::strerror(errno));
+        if (done == pid) {
+            return exit_code(status);
+        }
+        if (std::chrono::steady_clock::now() >= deadline) {
+            ::kill(pid, SIGKILL);
+            ::waitpid(pid, nullptr, 0);
+            TT_THROW("child {} ran past {} s and was killed", pid, child_timeout.count());
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+}
+
+std::optional<std::string> take_report(const std::string& path) {
+    if (!std::filesystem::exists(path)) {
+        return std::nullopt;
+    }
+    std::ifstream in(path);
+    std::string report((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    in.close();
+    std::filesystem::remove(path);
+    return report;
+}
+
+// The first report of a child that keeps running after writing it. Nullopt when the child exits first or `timeout`
+// passes.
+std::optional<std::string> wait_for_report(pid_t pid, const std::string& path, std::chrono::seconds timeout) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (std::filesystem::exists(path)) {
+            std::ifstream in(path);
+            return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        }
+        if (::waitpid(pid, nullptr, WNOHANG) == pid) {
+            return std::nullopt;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    return std::nullopt;
+}
+
+void write_report(const std::string& text) {
+    const std::string path = std::getenv("DRISC_SERVICE_CHILD_OUT");
+    {
+        std::ofstream out(path + ".tmp");
+        out << text;
+    }
+    std::filesystem::rename(path + ".tmp", path);
+}
+
+std::string child_env(const char* name) {
+    const char* value = std::getenv(name);
+    TT_FATAL(value != nullptr, "the child needs {}", name);
+    return value;
+}
+
+// One "seat <bank> <noc> <slot> <gen>" line per seat.
+std::string describe_attachments(Client& client) {
+    std::string seats;
+    for (const uint32_t bank : client.banks()) {
+        for (uint32_t noc = 0; noc < 2; noc++) {
+            const SeatClient& seat = client.seat(bank, noc);
+            seats += fmt::format("seat {} {} {} {}\n", bank, noc, seat.slot(), seat.gen());
+        }
+    }
+    return seats;
+}
+
+// client: attaches to DRISC_SERVICE_CHILD_BANKS ("0 3 5") and runs DRISC_SERVICE_CHILD_ROUNDS random rounds in DRAM
+// region DRISC_SERVICE_CHILD_REGION, then ends as DRISC_SERVICE_CHILD_END says:
+//   abort: std::abort().  exit: _exit(3), skipping every destructor.  loop: ignores the round count, runs until killed.
+// Reports "ready\n" + its attachments once attached, or "error: <what>" (exit 1) on any failure, a data mismatch
+// included.
+void run_client_child() {
+    const rlimit no_core{0, 0};
+    ::setrlimit(RLIMIT_CORE, &no_core);
+    std::vector<uint32_t> banks;
+    std::istringstream bank_list(child_env("DRISC_SERVICE_CHILD_BANKS"));
+    for (uint32_t bank = 0; bank_list >> bank;) {
+        banks.push_back(bank);
+    }
+    const auto region = static_cast<uint32_t>(std::stoul(child_env("DRISC_SERVICE_CHILD_REGION")));
+    const uint64_t rounds = std::stoull(child_env("DRISC_SERVICE_CHILD_ROUNDS"));
+    const std::string end = child_env("DRISC_SERVICE_CHILD_END");
+    try {
+        Device device;
+        Client client(device.umd, chip_id, banks);
+        write_report("ready\n" + describe_attachments(client));
+        Exerciser exerciser(device, client, region, next_nonce());
+        for (uint64_t i = 0; end == "loop" || i < rounds; i++) {
+            const std::string mismatch = exerciser.random_round();
+            if (!mismatch.empty()) {
+                write_report("error: " + mismatch);
+                std::_Exit(1);
+            }
+        }
+        if (end == "abort") {
+            std::abort();
+        }
+        std::_Exit(3);
+    } catch (const std::exception& e) {
+        write_report(fmt::format("error: {}", e.what()));
+        std::_Exit(1);
+    }
+}
+
+// metal_cycle: opens and closes a unit mesh on chip 0, then reports whether its DRAM programmable cores were on
+// ("1" or "0"), or "error: <what>" when the open throws.
+void run_metal_cycle_child() {
+    std::shared_ptr<distributed::MeshDevice> mesh;
+    try {
+        mesh = distributed::MeshDevice::create_unit_mesh(chip_id);
+    } catch (const std::exception& e) {
+        write_report(fmt::format("error: {}", e.what()));
+        return;
+    }
+    const bool dram_cores = MetalContext::instance().hal().has_programmable_core_type(HalProgrammableCoreType::DRAM);
+    mesh->close();
+    write_report(dram_cores ? "1" : "0");
+}
+
+TEST(DriscServiceChild, Run) {
+    const char* role = std::getenv("DRISC_SERVICE_CHILD_ROLE");
+    if (role == nullptr) {
+        GTEST_SKIP() << "Runs only as the child of a cross-process DRISC service test";
+    }
+    if (std::string_view(role) == "client") {
+        run_client_child();
+    } else {
+        ASSERT_EQ(std::string_view(role), "metal_cycle");
+        run_metal_cycle_child();
+    }
+}
+
+struct Attachment {
+    uint32_t bank;
+    uint32_t noc;
+    uint32_t slot;
+    uint32_t gen;
+};
+
+std::vector<Attachment> parse_attachments(const std::string& report) {
+    std::vector<Attachment> attachments;
+    std::istringstream in(report);
+    for (std::string line; std::getline(in, line);) {
+        std::istringstream words(line);
+        std::string tag;
+        Attachment a{};
+        if (words >> tag >> a.bank >> a.noc >> a.slot >> a.gen && tag == "seat") {
+            attachments.push_back(a);
+        }
+    }
+    return attachments;
+}
+
+std::string metal_cycle(std::vector<std::string> env = {}) {
+    const std::string out = child_out_path();
+    const pid_t pid = spawn_child("metal_cycle", out, std::move(env));
+    const int code = wait_child(pid);
+    const auto report = take_report(out);
+    TT_FATAL(report.has_value(), "the metal open/close child wrote no report (exit code {})", code);
+    return *report;
+}
+
+std::vector<std::string> client_child_env(
+    const std::vector<uint32_t>& banks, uint32_t region, uint64_t rounds, const std::string& end) {
+    std::string bank_list;
+    for (const uint32_t bank : banks) {
+        bank_list += fmt::format("{} ", bank);
+    }
+    return {
+        "DRISC_SERVICE_CHILD_BANKS=" + bank_list,
+        fmt::format("DRISC_SERVICE_CHILD_REGION={}", region),
+        fmt::format("DRISC_SERVICE_CHILD_ROUNDS={}", rounds),
+        "DRISC_SERVICE_CHILD_END=" + end};
+}
+
 // ---- Tests ---------------------------------------------------------------------------------------------------------
 
 class DriscService : public ::testing::Test {
@@ -639,6 +886,205 @@ TEST_F(DriscService, SecondClientJoinsAndOutlivesTheFirst) {
     expect_all_stopped({0});
 }
 
+// A small command from one client completes within latency_limit while another client's 64 MiB batch or single
+// command runs on the same seat, rather than waiting for it to finish.
+TEST_F(DriscService, SmallCommandIsNotHeldBehindAnotherClientsLargeOne) {
+    constexpr uint32_t bulk_entry = 1 << 20;
+    constexpr uint32_t bulk_size = abi::BATCH_MAX_COMMANDS * bulk_entry;
+    constexpr uint32_t small_size = 64 * 1024;
+    constexpr auto bulk_head_start = std::chrono::microseconds(300);
+    constexpr auto latency_limit = std::chrono::microseconds(50);
+    constexpr uint32_t trials = 8;
+    std::optional<Client> bulk_client;
+    std::optional<Client> small_client;
+    attach(bulk_client, {0});
+    attach(small_client, {0});
+    SeatClient& bulk = bulk_client->seat(0, 0);
+    SeatClient& small = small_client->seat(0, 0);
+    HostMemory host(device(), small_size);
+    const uint64_t bulk_src = dram_test_offset;
+    const uint64_t bulk_dst = bulk_src + bulk_size;
+    const uint64_t small_src = bulk_dst + bulk_size;
+    std::vector<abi::KernelCommand> bulk_batch;
+    bulk_batch.reserve(abi::BATCH_MAX_COMMANDS);
+    for (uint32_t i = 0; i < abi::BATCH_MAX_COMMANDS; i++) {
+        bulk_batch.push_back(abi::make_single_command(
+            device().dram_endpoint(0, bulk_src + i * bulk_entry, 0),
+            device().dram_endpoint(0, bulk_dst + i * bulk_entry, 0),
+            bulk_entry));
+    }
+    const abi::KernelCommand bulk_single = abi::make_single_command(
+        device().dram_endpoint(0, bulk_src, 0), device().dram_endpoint(0, bulk_dst, 0), bulk_size);
+
+    // Seeds the small command's source with a fresh pattern and returns its nonce.
+    const auto stage_small = [&] {
+        const uint64_t nonce = next_nonce();
+        std::vector<uint32_t> words(small_size / sizeof(uint32_t));
+        fill_pattern(words.data(), small_size, nonce, 0, small_src);
+        device().write_dram(0, small_src, words.data(), small_size);
+        std::memset(host.at(0), 0, small_size);
+        return nonce;
+    };
+    // Issue-to-done time of the staged DRAM->host copy on `small`, checked.
+    const auto small_latency = [&](uint64_t nonce) {
+        const abi::KernelCommand command = abi::make_single_command(
+            device().dram_endpoint(0, small_src, 0), small.host_endpoint(host.device_addr(0)), small_size);
+        const auto start = std::chrono::steady_clock::now();
+        EXPECT_TRUE(small.issue(command));
+        small.drain(drain_timeout);
+        const auto latency = std::chrono::steady_clock::now() - start;
+        EXPECT_EQ(pattern_mismatch(host.at(0), small_size, nonce, 0, small_src), "");
+        return std::chrono::duration_cast<std::chrono::microseconds>(latency);
+    };
+    const auto median = [](std::vector<std::chrono::microseconds> v) {
+        std::sort(v.begin(), v.end());
+        return v[v.size() / 2];
+    };
+
+    // Also keeps the small command clear of the posted writes that seed its source.
+    const auto wait_head_start = [&] {
+        const auto end = std::chrono::steady_clock::now() + bulk_head_start;
+        while (std::chrono::steady_clock::now() < end) {
+        }
+    };
+
+    std::vector<std::chrono::microseconds> alone;
+    for (uint32_t trial = 0; trial < trials; trial++) {
+        const uint64_t nonce = stage_small();
+        wait_head_start();
+        alone.push_back(small_latency(nonce));
+    }
+    for (const bool batch : {true, false}) {
+        SCOPED_TRACE(batch ? "behind a batch" : "behind a single command");
+        std::vector<std::chrono::microseconds> behind;
+        for (uint32_t trial = 0; trial < trials; trial++) {
+            const uint64_t nonce = stage_small();
+            ASSERT_TRUE(batch ? bulk.issue_batch(bulk_batch) : bulk.issue(bulk_single));
+            wait_head_start();
+            ASSERT_GT(bulk.in_flight(), 0u) << "the bulk command finished before the small one was issued";
+            behind.push_back(small_latency(nonce));
+            bulk.drain(drain_timeout);
+        }
+        fmt::print(
+            "{} MiB {}: small command alone {} us, behind it {} us (medians of {})\n",
+            bulk_size >> 20,
+            batch ? "batch" : "single",
+            median(alone).count(),
+            median(behind).count(),
+            trials);
+        EXPECT_LT(median(behind), latency_limit);
+    }
+    small_client.reset();
+    bulk_client.reset();
+    expect_all_stopped({0});
+}
+
+// Clients that keep one seat's queues full share its bytes equally, whatever their command sizes, and together keep the
+// seat's bandwidth to within 5%.
+TEST_F(DriscService, SharesSeatBandwidthEqually) {
+    constexpr auto warmup = std::chrono::milliseconds(5);
+    constexpr auto interval = std::chrono::milliseconds(50);
+    constexpr uint64_t batch_bytes = 4 << 20;
+    struct Mix {
+        std::vector<double> shares;  // of the bytes the seat copied, per client
+        double gbps;
+    };
+    // One client per entry of `command_sizes` on seat (bank 0, NoC0), each keeping its queue full of batches of DRAM
+    // copies of that size in the bank. Batches, so that the host's per-issue cost cannot leave a queue empty; of
+    // batch_bytes each, so that every client's progress is counted in the same small steps.
+    const auto measure = [&](const std::vector<uint32_t>& command_sizes) {
+        const size_t n = command_sizes.size();
+        std::vector<std::optional<Client>> clients(n);
+        std::vector<std::vector<abi::KernelCommand>> batches;
+        uint64_t src = dram_test_offset;
+        for (size_t i = 0; i < n; i++) {
+            attach(clients[i], {0});
+            TT_FATAL(batch_bytes % command_sizes[i] == 0, "a batch holds whole commands");
+            batches.emplace_back(
+                batch_bytes / command_sizes[i],
+                abi::make_single_command(
+                    device().dram_endpoint(0, src, 0),
+                    device().dram_endpoint(0, src + command_sizes[i], 0),
+                    command_sizes[i]));
+            src += 2 * command_sizes[i];
+        }
+        std::vector<uint64_t> issued(n);
+        const auto keep_full_until = [&](std::chrono::steady_clock::time_point end) {
+            while (std::chrono::steady_clock::now() < end) {
+                for (size_t i = 0; i < n; i++) {
+                    for (uint32_t k = 0;
+                         k < abi::CLIENT_QUEUE_CAPACITY && clients[i]->seat(0, 0).issue_batch(batches[i]);
+                         k++) {
+                        issued[i]++;
+                    }
+                }
+            }
+        };
+        const auto completed_bytes = [&] {
+            std::vector<uint64_t> bytes;
+            bytes.reserve(n);
+            for (size_t i = 0; i < n; i++) {
+                bytes.push_back((issued[i] - clients[i]->seat(0, 0).in_flight()) * batch_bytes);
+            }
+            return bytes;
+        };
+        keep_full_until(std::chrono::steady_clock::now() + warmup);
+        const std::vector<uint64_t> before = completed_bytes();
+        const auto start = std::chrono::steady_clock::now();
+        keep_full_until(start + interval);
+        const std::vector<uint64_t> after = completed_bytes();
+        const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+        Mix mix{};
+        uint64_t total = 0;
+        for (size_t i = 0; i < n; i++) {
+            total += after[i] - before[i];
+        }
+        for (size_t i = 0; i < n; i++) {
+            mix.shares.push_back(double(after[i] - before[i]) / total);
+        }
+        mix.gbps = double(total) / seconds / 1e9;
+        for (std::optional<Client>& client : clients) {
+            client->seat(0, 0).drain(drain_timeout);
+            client.reset();
+        }
+        return mix;
+    };
+    const auto expect_equal_shares = [](const Mix& mix, const char* what) {
+        const double fair = 1.0 / mix.shares.size();
+        for (size_t i = 0; i < mix.shares.size(); i++) {
+            EXPECT_NEAR(mix.shares[i], fair, 0.05 * fair) << what << ", client " << i;
+        }
+    };
+
+    constexpr uint32_t large = 1 << 20;
+    constexpr uint32_t small = 64 << 10;
+    const double alone = measure({large}).gbps;
+    fmt::print("1 client: {:.2f} GB/s\n", alone);
+
+    const Mix two = measure({large, large});
+    fmt::print("2 clients: {:.3f} / {:.3f} of {:.2f} GB/s\n", two.shares[0], two.shares[1], two.gbps);
+    expect_equal_shares(two, "2 clients");
+    EXPECT_GT(two.gbps, 0.95 * alone);
+
+    const Mix three = measure({large, large, large});
+    fmt::print(
+        "3 clients: {:.3f} / {:.3f} / {:.3f} of {:.2f} GB/s\n",
+        three.shares[0],
+        three.shares[1],
+        three.shares[2],
+        three.gbps);
+    expect_equal_shares(three, "3 clients");
+    EXPECT_GT(three.gbps, 0.95 * alone);
+
+    // Turns are bytes, not commands: 64 KiB commands get as many bytes as 1 MiB ones. A 64 KiB command ends in a short
+    // chunk, so its turns would run past CHUNK_SIZE unless the piece after that chunk is cut to fit.
+    const Mix sizes = measure({large, small});
+    fmt::print(
+        "1 MiB + 64 KiB commands: {:.3f} / {:.3f} of {:.2f} GB/s\n", sizes.shares[0], sizes.shares[1], sizes.gbps);
+    expect_equal_shares(sizes, "1 MiB + 64 KiB commands");
+    expect_all_stopped({0});
+}
+
 TEST_F(DriscService, NinthClientIsRefused) {
     std::vector<std::optional<Client>> clients(abi::MAX_CLIENTS);
     for (auto& client : clients) {
@@ -727,6 +1173,88 @@ TEST_F(DriscService, RefusedClientReleasesItsOtherSeats) {
     const std::string problem = check_stopped(device(), device().seats(last_bank())[0]);
     EXPECT_TRUE(problem.empty()) << problem;
 }
+
+// Another process opens and closes metal while a client holds bank 0. Metal must turn its DRAM programmable cores off
+// rather than take the seats, refuse to open when they are forced on, and leave the client's kernels running.
+TEST_F(DriscService, MetalElsewhereLeavesClientsRunning) {
+    ASSERT_EQ(metal_cycle(), "1") << "metal turned its DRAM programmable cores off with no client attached, so the "
+                                     "checks below would pass without any seat lock";
+    std::optional<Client> client;
+    attach(client, {0});
+    EXPECT_EQ(metal_cycle(), "0") << "metal enabled its DRAM programmable cores while a client held a seat";
+    const std::string forced = metal_cycle({"TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1"});
+    EXPECT_TRUE(forced.starts_with("error:") && forced.find("holds the seat of") != std::string::npos)
+        << "metal opened with its DRAM programmable cores forced on while a client held a seat: " << forced;
+    Exerciser exerciser(device(), *client, 0, 5);
+    for (uint32_t noc = 0; noc < 2; noc++) {
+        EXPECT_EQ(client->seat(0, noc).state(), abi::SERVICE_RUNNING) << "NoC" << noc;
+        EXPECT_TRUE(heartbeat_moves(client->seat(0, noc))) << "NoC" << noc;
+        const std::string mismatch = exerciser.round(0, noc, Op::h2d, 4, true);
+        EXPECT_TRUE(mismatch.empty()) << mismatch;
+    }
+    client.reset();
+    expect_all_stopped({0});
+}
+
+// A client child dies (SIGKILL mid-copy, abort, or _exit) while this process's client shares its seats: the KMD's exit
+// write must free the dead child's slots, and this client must keep working. Then a child dies as the sole client: its
+// kernels must stop.
+class DriscServiceDeadClient : public DriscService, public ::testing::WithParamInterface<std::string> {};
+
+TEST_P(DriscServiceDeadClient, IsDetached) {
+    const std::string& end = GetParam();
+    for (const bool shared : {true, false}) {
+        SCOPED_TRACE(shared ? "shared seats" : "sole client");
+        std::optional<Client> mine;
+        if (shared) {
+            attach(mine, {0});
+        }
+        const std::string out = child_out_path();
+        const pid_t pid = spawn_child("client", out, client_child_env({0}, 1, 20, end));
+        const ChildGuard guard(pid);
+        const auto ready = wait_for_report(pid, out, child_timeout);
+        ASSERT_TRUE(ready.has_value() && ready->starts_with("ready")) << "the child did not attach";
+        const std::vector<Attachment> attachments = parse_attachments(*ready);
+        ASSERT_EQ(attachments.size(), 2u) << *ready;
+        if (end == "loop") {
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            ASSERT_EQ(::kill(pid, SIGKILL), 0);
+        }
+        const int code = wait_child(pid);
+        int want = -SIGKILL;
+        if (end == "exit") {
+            want = 3;
+        } else if (end == "abort") {
+            want = -SIGABRT;
+        }
+        const std::string last = take_report(out).value_or("");
+        EXPECT_EQ(code, want) << last;
+
+        const std::array<Seat, 2> seats = device().seats(0);
+        for (const Attachment& a : attachments) {
+            const DriscCore core = device().core(seats[a.noc]);
+            const auto ack = [&] { return core.read_l1_u32(abi::L1CommandBlockLayout::ack_addr(a.slot)); };
+            const uint32_t freed = abi::slot_word(abi::SLOT_FREED, a.gen);
+            EXPECT_TRUE(wait_until(std::chrono::milliseconds(abi::DETACH_TIMEOUT_MS), [&] { return ack() == freed; }))
+                << "NoC" << a.noc << " slot " << a.slot << ": ack " << ack() << ", want " << freed;
+        }
+        if (shared) {
+            Exerciser exerciser(device(), *mine, 0, 6);
+            for (uint32_t noc = 0; noc < 2; noc++) {
+                EXPECT_EQ(mine->seat(0, noc).state(), abi::SERVICE_RUNNING) << "NoC" << noc;
+                const std::string mismatch = exerciser.round(0, noc, Op::d2d, 4, true);
+                EXPECT_TRUE(mismatch.empty()) << mismatch;
+            }
+        }
+        mine.reset();
+        expect_all_stopped({0});
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    Ends, DriscServiceDeadClient, ::testing::Values("loop", "abort", "exit"), [](const auto& info) {
+        return info.param == "loop" ? std::string("Sigkill") : info.param;
+    });
 
 // issue() and issue_batch() refuse what the kernel would run wrongly, issuing nothing, and the queue stays usable.
 // A bank past the chip's last one fails the client before any seat attaches; seat() rejects a bank the client did not
@@ -976,6 +1504,102 @@ TEST_F(DriscService, Tickets) {
     }
     EXPECT_EQ(seat.completed(), tickets.back());
     EXPECT_EQ(seat.in_flight(), 0u);
+}
+
+// A full queue refuses the next command without issuing it. Host copies of sizes off the 64 B grid write exactly
+// their bytes: the guard bands on both sides of the destination keep their sentinel.
+TEST_F(DriscService, QueueFullAndOddSizes) {
+    std::optional<Client> client;
+    attach(client, {0});
+    SeatClient& seat = client->seat(0, 0);
+    constexpr uint32_t big = 64 << 20;
+    const uint64_t big_base = device().bank_offset(0) + (3ull << 30);
+    const abi::KernelCommand slow = abi::make_local_command(big_base, big_base + big, big);
+    for (uint32_t i = 0; i < abi::CLIENT_QUEUE_CAPACITY; i++) {
+        ASSERT_TRUE(seat.issue(slow)) << "command " << i << " found the queue full";
+    }
+    EXPECT_FALSE(seat.issue(slow)) << "the queue took more than " << abi::CLIENT_QUEUE_CAPACITY << " commands";
+    EXPECT_EQ(seat.in_flight(), abi::CLIENT_QUEUE_CAPACITY);
+    seat.drain(drain_timeout);
+    EXPECT_EQ(seat.in_flight(), 0u);
+
+    constexpr uint32_t chunk = 28 * 1024;
+    constexpr uint32_t guard = 64;
+    constexpr std::array<uint32_t, 6> odd_sizes = {1, 63, 65, chunk - 16, chunk + 16, 3 * chunk + 1};
+    constexpr uint8_t sentinel = 0xA5;
+    const auto round_up = [](uint32_t size) { return (size + 63) / 64 * 64; };
+    HostMemory host(device(), 2 * guard + round_up(odd_sizes.back()));
+    auto* host_bytes = reinterpret_cast<uint8_t*>(host.at(0));
+    std::mt19937 rng(10);
+    const uint64_t dram = dram_test_offset;
+    const auto random_payload = [&](uint32_t size) {
+        std::vector<uint8_t> payload(round_up(size));
+        std::generate(payload.begin(), payload.end(), [&] { return static_cast<uint8_t>(rng()); });
+        return payload;
+    };
+    const auto expect_guarded =
+        [&](const std::vector<uint8_t>& landed, const std::vector<uint8_t>& payload, uint32_t size) {
+            std::vector<uint8_t> expected(landed.size(), sentinel);
+            std::copy_n(payload.begin(), size, expected.begin() + guard);
+            const auto diff = std::mismatch(landed.begin(), landed.end(), expected.begin());
+            EXPECT_TRUE(diff.first == landed.end())
+                << "byte " << (diff.first - landed.begin()) << " of the span (payload at " << guard << "): got "
+                << static_cast<uint32_t>(*diff.first) << ", expected " << static_cast<uint32_t>(*diff.second);
+        };
+    for (uint32_t noc = 0; noc < 2; noc++) {
+        SeatClient& on = client->seat(0, noc);
+        for (const uint32_t size : odd_sizes) {
+            for (const bool to_host : {false, true}) {
+                SCOPED_TRACE(fmt::format("NoC{} {} B {}", noc, size, to_host ? "DRAM->host" : "host->DRAM"));
+                const uint32_t span = 2 * guard + round_up(size);
+                const std::vector<uint8_t> payload = random_payload(size);
+                std::vector<uint8_t> landed(span, sentinel);
+                abi::NocEndpoint src{};
+                abi::NocEndpoint dst{};
+                if (to_host) {
+                    device().write_dram(0, dram, payload.data(), round_up(size));
+                    std::memset(host_bytes, sentinel, span);
+                    src = device().dram_endpoint(0, dram, noc);
+                    dst = on.host_endpoint(host.device_addr(guard));
+                } else {
+                    std::memcpy(host_bytes, payload.data(), payload.size());
+                    device().write_dram(0, dram, landed.data(), span);
+                    src = on.host_endpoint(host.device_addr(0));
+                    dst = device().dram_endpoint(0, dram + guard, noc);
+                }
+                ASSERT_TRUE(on.issue(abi::make_single_command(src, dst, size)));
+                on.drain(drain_timeout);
+                if (to_host) {
+                    std::memcpy(landed.data(), host_bytes, span);
+                } else {
+                    device().read_dram(0, dram, landed.data(), span);
+                }
+                expect_guarded(landed, payload, size);
+            }
+        }
+    }
+
+    // CMD_LOCAL sizes on the 16 B grid but off the 64 B one.
+    constexpr std::array<uint32_t, 6> local_sizes = {16, 48, 80, chunk - 16, chunk + 16, 3 * chunk + 16};
+    const uint64_t local_dst = dram + slot_size;
+    for (uint32_t noc = 0; noc < 2; noc++) {
+        for (const uint32_t size : local_sizes) {
+            SCOPED_TRACE(fmt::format("NoC{} {} B DRAM->DRAM local", noc, size));
+            const uint32_t span = 2 * guard + round_up(size);
+            const std::vector<uint8_t> payload = random_payload(size);
+            std::vector<uint8_t> landed(span, sentinel);
+            device().write_dram(0, dram, payload.data(), payload.size());
+            device().write_dram(0, local_dst, landed.data(), span);
+            const uint64_t offset = device().bank_offset(0);
+            ASSERT_TRUE(
+                client->seat(0, noc).issue(abi::make_local_command(offset + dram, offset + local_dst + guard, size)));
+            client->seat(0, noc).drain(drain_timeout);
+            device().read_dram(0, local_dst, landed.data(), span);
+            expect_guarded(landed, payload, size);
+        }
+    }
+    client.reset();
+    expect_all_stopped({0});
 }
 
 // A DETACH with commands in flight frees the slot only once the kernel is done with them, and after that the kernel
