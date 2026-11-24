@@ -15,6 +15,7 @@
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
+#include "test_utils/program_cache.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"

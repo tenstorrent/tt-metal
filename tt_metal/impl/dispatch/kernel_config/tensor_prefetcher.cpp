@@ -49,9 +49,18 @@ fifo::RegionLayout tensor_prefetcher_region_layout(const Cluster& cluster) {
         fifo::kMaxKernels,
         kernels.size());
     uint32_t kernel_state_bytes = 0;
+    uint32_t trids = 0;
     for (const TensorPrefetcherKernelInfo& kernel : kernels) {
         kernel_state_bytes += kernel_state_zone_bytes(kernel);
+        TT_FATAL(
+            kernel.trids >= 1, "Tensor prefetcher kernel {} names no NoC transaction id; it needs one", kernel.file);
+        trids += kernel.trids;
     }
+    TT_FATAL(
+        trids <= fifo::kMaxTrids,
+        "The Tensor prefetcher kernels name {} NoC transaction ids together, more than the {} they share",
+        trids,
+        fifo::kMaxTrids);
     return fifo::RegionLayout{.lanes = num_dram_banks, .kernel_state_bytes = kernel_state_bytes};
 }
 
@@ -133,8 +142,10 @@ void TensorPrefetcherKernel::CreateKernel() {
     const uint32_t k = index();
     TT_ASSERT(k < kernels.size());
     uint32_t state_offset = layout_.kernel_state_zone_offset();
+    uint32_t trid_offset = 0;
     for (uint32_t j = 0; j < k; ++j) {
         state_offset += kernel_state_zone_bytes(kernels[j]);
+        trid_offset += kernels[j].trids;
     }
     const std::map<std::string, std::string> defines = {
         {"TENSOR_PREFETCHER_REGION_BASE", std::to_string(region_base_)},
@@ -145,8 +156,12 @@ void TensorPrefetcherKernel::CreateKernel() {
         {"TENSOR_PREFETCHER_KERNEL_INDEX", std::to_string(k)},
         {"TENSOR_PREFETCHER_STATE_BASE", std::to_string(region_base_ + state_offset)},
         {"TENSOR_PREFETCHER_STATE_SIZE", std::to_string(kernels[k].state_bytes)},
+        {"TENSOR_PREFETCHER_TRID_OFFSET", std::to_string(trid_offset)},
+        {"TENSOR_PREFETCHER_TRIDS", std::to_string(kernels[k].trids)},
     };
-    configure_kernel_variant(kernels[k].file, {}, defines);
+    // Built for speed, as the CQ prefetch and dispatch kernels are: the reader and pusher loops run once per NoC
+    // transfer, and at -Os their bookkeeping costs as much core time as the transfers they issue.
+    configure_kernel_variant(kernels[k].file, {}, defines, KernelBuildOptLevel::O2);
 }
 
 void TensorPrefetcherKernel::ConfigureCore() {

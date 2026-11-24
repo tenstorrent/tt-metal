@@ -826,6 +826,22 @@
   team: models
   budget_type: unit
 
+# The prefill runner's media embedding store (models/common/multimedia_store), not tied to any model. Host-only:
+# a fake Mooncake client and a local Mooncake master, so the card goes unused. The install and the tests take about
+# 15 s; the per-test timeout only catches a hang.
+- name: Media embedding store unit tests
+  cmd: |
+    uv pip install -r models/common/multimedia_store/requirements.txt
+    pytest --timeout 60 models/common/multimedia_store/tests
+  model: multimedia-store
+  skus:
+    bh_p150:
+      timeout: 2
+      tier: 1
+  owner_id: U0BTJN1M5AM # Sumant Hanumante
+  team: models
+  budget_type: unit
+
 # MiniMax-M3 unit tests — random-weight module PCC only (no HF_MODEL / M3_CKPT).
 # test_msa_layer_vs_ref is real-weights and opt-in locally; excluded from CI so Tier-1
 # does not silently skip. Synthetic MSA prefill coverage: test_msa_prefill_vs_ref.
@@ -1226,6 +1242,12 @@
     wh_n150:
       timeout: 75
       tier: 1
+      # test_cache_verify feeds corrupt tensorbins to verify_saved_model, which catches the TT_FATAL. N150's 8x8
+      # grid has no tap_filter_configs row either (WH is keyed 8x9), so depthwise_tap_filter probes here too; it
+      # passes on 'direct' today, but a failed probe would now be hidden here. Not set on bh_quietbox_2, whose
+      # probe failures the summary must keep reporting.
+      ai_summary:
+        authoritative_job_status: true
     bh_quietbox_2:
       timeout: 115
       tier: 1
