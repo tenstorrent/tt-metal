@@ -1557,9 +1557,6 @@ void run_dfb_mcast_xcore_locked_test(
 TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessDFBWriteInOwnLockNoIssue) {
     for (auto& mesh_device : devices_) {
         log_info(tt::LogMetal, "Running on mesh device {}", mesh_device->id());
-        if (!this->dfb_scoped_lock_tracker_supported(mesh_device)) {
-            GTEST_SKIP() << "DFB scoped-lock tracker not yet brought up on this arch (#45918)";
-        }
         run_dfb_scoped_lock_test(
             this, mesh_device, /*target_entry_index=*/0, /*write_after_unlock=*/false, ExpectedDfbIssue::None);
     }
@@ -1570,9 +1567,6 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessDFBWriteInOwnLockNoIssue) 
 TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessDFBWriteUnlockedEntryIssue) {
     for (auto& mesh_device : devices_) {
         log_info(tt::LogMetal, "Running on mesh device {}", mesh_device->id());
-        if (!this->dfb_scoped_lock_tracker_supported(mesh_device)) {
-            GTEST_SKIP() << "DFB scoped-lock tracker not yet brought up on this arch (#45918)";
-        }
         run_dfb_scoped_lock_test(
             this, mesh_device, /*target_entry_index=*/2, /*write_after_unlock=*/false, ExpectedDfbIssue::Unlocked);
     }
@@ -1582,9 +1576,6 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessDFBWriteUnlockedEntryIssue
 TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessDFBWriteUnlockedEntryIssueNoc1) {
     for (auto& mesh_device : devices_) {
         log_info(tt::LogMetal, "Running on mesh device {}", mesh_device->id());
-        if (!this->dfb_scoped_lock_tracker_supported(mesh_device)) {
-            GTEST_SKIP() << "DFB scoped-lock tracker not yet brought up on this arch (#45918)";
-        }
         run_dfb_scoped_lock_test(
             this,
             mesh_device,
@@ -1601,9 +1592,6 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessDFBWriteUnlockedEntryIssue
 TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessDFBWriteUnlockedEntryIssueNcrisc) {
     for (auto& mesh_device : devices_) {
         log_info(tt::LogMetal, "Running on mesh device {}", mesh_device->id());
-        if (!this->dfb_scoped_lock_tracker_supported(mesh_device)) {
-            GTEST_SKIP() << "DFB scoped-lock tracker not yet brought up on this arch (#45918)";
-        }
         run_dfb_scoped_lock_test(
             this,
             mesh_device,
@@ -1620,9 +1608,6 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessDFBWriteUnlockedEntryIssue
 TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessDFBWriteInOwnLockNoIssueNcrisc) {
     for (auto& mesh_device : devices_) {
         log_info(tt::LogMetal, "Running on mesh device {}", mesh_device->id());
-        if (!this->dfb_scoped_lock_tracker_supported(mesh_device)) {
-            GTEST_SKIP() << "DFB scoped-lock tracker not yet brought up on this arch (#45918)";
-        }
         run_dfb_scoped_lock_test(
             this,
             mesh_device,
@@ -1639,9 +1624,6 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessDFBWriteInOwnLockNoIssueNc
 TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessDFBNoIssueSpatial) {
     for (auto& mesh_device : devices_) {
         log_info(tt::LogMetal, "Running on mesh device {}", mesh_device->id());
-        if (!this->dfb_scoped_lock_tracker_supported(mesh_device)) {
-            GTEST_SKIP() << "DFB scoped-lock tracker not yet brought up on this arch (#45918)";
-        }
         run_dfb_scoped_lock_test(
             this, mesh_device, /*target_entry_index=*/4, /*write_after_unlock=*/false, ExpectedDfbIssue::None);
     }
@@ -1651,9 +1633,6 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessDFBNoIssueSpatial) {
 TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessDFBWriteAfterUnlockIssue) {
     for (auto& mesh_device : devices_) {
         log_info(tt::LogMetal, "Running on mesh device {}", mesh_device->id());
-        if (!this->dfb_scoped_lock_tracker_supported(mesh_device)) {
-            GTEST_SKIP() << "DFB scoped-lock tracker not yet brought up on this arch (#45918)";
-        }
         run_dfb_scoped_lock_test(
             this, mesh_device, /*target_entry_index=*/0, /*write_after_unlock=*/true, ExpectedDfbIssue::Unlocked);
     }
@@ -1663,9 +1642,6 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessDFBWriteAfterUnlockIssue) 
 TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessDFBWriteNeverLockedIssue) {
     for (auto& mesh_device : devices_) {
         log_info(tt::LogMetal, "Running on mesh device {}", mesh_device->id());
-        if (!this->dfb_scoped_lock_tracker_supported(mesh_device)) {
-            GTEST_SKIP() << "DFB scoped-lock tracker not yet brought up on this arch (#45918)";
-        }
         run_dfb_scoped_lock_test(
             this,
             mesh_device,
@@ -1681,9 +1657,6 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessDFBWriteNeverLockedIssue) 
 TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessDFBRegionClearedBetweenLaunches) {
     for (auto& mesh_device : devices_) {
         log_info(tt::LogMetal, "Running on mesh device {}", mesh_device->id());
-        if (!this->dfb_scoped_lock_tracker_supported(mesh_device)) {
-            GTEST_SKIP() << "DFB scoped-lock tracker not yet brought up on this arch (#45918)";
-        }
         run_dfb_region_cleared_between_launches_test(this, mesh_device);
     }
 }
@@ -1696,9 +1669,6 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessDFBIssueCrossCore) {
         auto grid_size = mesh_device->compute_with_storage_grid_size();
         if (grid_size.x < 2) {
             GTEST_SKIP() << "Test requires at least 2 cores in x dimension";
-        }
-        if (!this->dfb_scoped_lock_tracker_supported(mesh_device)) {
-            GTEST_SKIP() << "DFB scoped-lock tracker not yet brought up on this arch (#45918)";
         }
         run_dfb_scoped_lock_xcore_test(this, mesh_device);
     }
@@ -1714,9 +1684,6 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessDFBLoopbackMcastUnlockedIs
         if (grid_size.x < 3) {
             GTEST_SKIP() << "Test requires at least 3 cores in x dimension";
         }
-        if (!this->dfb_scoped_lock_tracker_supported(mesh_device)) {
-            GTEST_SKIP() << "DFB scoped-lock tracker not yet brought up on this arch (#45918)";
-        }
         run_dfb_mcast_loopback_unlocked_test(this, mesh_device);
     }
 }
@@ -1730,9 +1697,6 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessDFBMcastCrossCoreInteriorI
         auto grid_size = mesh_device->compute_with_storage_grid_size();
         if (grid_size.x < 3 || grid_size.y < 2) {
             GTEST_SKIP() << "Test requires at least a 3x2 core grid";
-        }
-        if (!this->dfb_scoped_lock_tracker_supported(mesh_device)) {
-            GTEST_SKIP() << "DFB scoped-lock tracker not yet brought up on this arch (#45918)";
         }
         run_dfb_mcast_xcore_locked_test(this, mesh_device);
     }
