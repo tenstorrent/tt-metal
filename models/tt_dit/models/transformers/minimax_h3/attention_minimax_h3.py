@@ -563,6 +563,9 @@ class MiniMaxH3Attention(Module):
                 use_hyperparams=False,
             )
 
+        # The fused all-gather matmul writes V (chunk 2) already head-split, so V needs no create_heads.
+        v_head_split = self.use_fused_agmm and spatial_1BND.shape[0] == 1 and spatial_1BND.shape[1] == 1
+        v_split_kwargs = {"head_split_chunks_mask": 0b100, "head_dim": self.head_dim} if v_head_split else {}
         q_1BNF, k_1BNF, v_1BNF = self.to_qkv(
             spatial_1BND,
             parallel_config=matmul_parallel_config,
@@ -570,6 +573,7 @@ class MiniMaxH3Attention(Module):
             use_persistent_buffer=self.use_persistent_ccl_buffers,
             persistent_buffer_rows=self.ag_row_capacity,
             **self._agmm_kwargs(self._qkv_pins, self.hidden_size, 3 * self.inner_dim // tp_factor, spatial_1BND),
+            **v_split_kwargs,
         )
 
         def create_heads(inp: ttnn.Tensor) -> ttnn.Tensor:
@@ -593,7 +597,7 @@ class MiniMaxH3Attention(Module):
         )
         q_BHNE = self.norm_q(q_1BNF, **norm_kwargs)
         k_BHNE = self.norm_k(k_1BNF, **norm_kwargs)
-        v_BHNE = create_heads(v_1BNF)
+        v_BHNE = v_1BNF if v_head_split else create_heads(v_1BNF)
 
         # Sequence is fractured across SP, so attention must gather K/V around the ring.
         # The packed sequence is one attention document and logical_n masks the pad tail, so no mask.

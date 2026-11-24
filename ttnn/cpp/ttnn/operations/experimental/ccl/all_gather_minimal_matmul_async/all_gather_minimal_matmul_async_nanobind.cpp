@@ -157,6 +157,14 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
             Each input block reaches its whole row or column of the matmul grid in one NoC multicast instead of a
             core-to-core relay. Independent of the fabric config; not supported with FSDP.
 
+        head_split_chunks_mask : int, default: 0
+            Bit c set writes output chunk c head-split, [1, width / head_dim, M, head_dim], as
+            nlp_create_qkv_heads would. Needs chunks >= 2 and a [1, 1, M, K] input; not with SwiGLU, the fused
+            addcmul or FSDP.
+
+        head_dim : int, default: 0
+            Head width of the head-split chunks, a multiple of 32.
+
         num_workers_per_link : Optional[int], default: 1
             The number of worker cores per link to use for the all gather portion of the operation.  More than 1 typically
             alleviates DRAM-bound shapes, as long as there is enough tiles to justify more than 1 worker.  More than 2 workers
@@ -258,7 +266,9 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
             nb::arg("fuse_swiglu") = false,
             nb::arg("chunk_sizes") = std::vector<uint32_t>{},
             nb::arg("transpose_core_grid") = nb::none(),
-            nb::arg("use_mcast") = false});
+            nb::arg("use_mcast") = false,
+            nb::arg("head_split_chunks_mask") = 0,
+            nb::arg("head_dim") = 0});
 }
 
 }  // namespace ttnn::operations::experimental::ccl
