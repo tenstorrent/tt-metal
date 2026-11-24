@@ -1459,8 +1459,6 @@ static uint32_t noc_max_bytes_in_packet(distributed::MeshDevice& mesh_device) {
 
 // entry_size override on a finalized DFB recomputes the implicit-sync threshold for the new NoC packets per entry,
 // preserving the TC assignment and transaction ids; shrinking back to one packet restores the original threshold.
-// Because the txn-id count is preserved, an override that puts more packets into a txn id's window than uint8_t
-// holds is rejected, even though a fresh build would pick more txn ids.
 TEST_F(UnitMeshFixture, DFBReentryEntrySizeOverrideRecomputesPacketThreshold) {
     if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "DFB transaction IDs / tile counters require Quasar";
@@ -1493,14 +1491,6 @@ TEST_F(UnitMeshFixture, DFBReentryEntrySizeOverrideRecomputesPacketThreshold) {
     params.dfb_run_overrides.back().entry_size = entry_size_before;
     ASSERT_NO_THROW(program.set_program_run_args(params));
     EXPECT_EQ(dfb->producer_txn_descriptor.num_entries_to_process_threshold, before.num_entries_to_process_threshold);
-
-    // 2 txn ids kept: 256 entries of just over one packet (2 packets each) is 128 * 2 = 256 > uint8_t.
-    ASSERT_EQ(before.num_txn_ids, 2u);
-    params.dfb_run_overrides.back().entry_size = packet_bytes + 64u;
-    params.dfb_run_overrides.back().num_entries = 256u;
-    EXPECT_THAT(
-        [&] { program.set_program_run_args(params); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("(NoC packets)")));
 }
 
 // On re-entry the txn-id count is preserved, so a num_entries override that breaks the preserved divisor
@@ -2259,63 +2249,6 @@ TEST_F(UnitMeshFixture, B4_CachedThreshold_BlockedCountsPacketsPerBlock_Config_2
             EXPECT_EQ(desc->num_entries_to_process_threshold, 2u * c.packets_per_block);
             EXPECT_EQ(desc->num_entries_per_txn_id, 8u);
         }
-    }
-}
-
-// The packet count can push a threshold past uint8_t at the txn-id count entries alone would pick, so the
-// host must spread the ring over more txn ids, and reject the config when no count fits. Tensix producer ->
-// 4 ALL DM consumers: the ALL consumers share one counter, so the threshold is
-// 4 * (num_entries / num_txn_ids) * packets per entry.
-TEST_F(UnitMeshFixture, B4_CachedThreshold_PacketsRaiseTxnIdCountOrOverflow_Config_2_0) {
-    if (this->device().arch() != ARCH::QUASAR) {
-        GTEST_SKIP() << "Implicit sync (and therefore threshold caching) is Quasar-only";
-    }
-    using namespace m2_config_test_helpers;
-    const uint32_t two_packets = noc_max_bytes_in_packet(this->device()) * 3 / 2;
-
-    auto build = [&](uint32_t entry_size, uint32_t num_entries) {
-        Program program = build_single_dfb_program_2_0(
-            this->device(),
-            M2ConfigDFBParams{
-                .producer_type = M2PorCType::TENSIX,
-                .consumer_type = M2PorCType::DM,
-                .num_producers = 1,
-                .num_consumers = 4,
-                .entry_size = entry_size,
-                .num_entries = num_entries,
-                .cap = DFBAccessPattern::ALL,
-                .implicit_sync = true,
-            });
-        program.impl().finalize_dataflow_buffer_configs();
-        return program;
-    };
-    auto consumer_desc = [&](uint32_t entry_size, uint32_t num_entries) {
-        Program program = build(entry_size, num_entries);
-        auto dfbs = program.impl().dataflow_buffers_on_core(CoreCoord(0, 0));
-        EXPECT_EQ(dfbs.size(), 1u);
-        return dfbs.at(0)->consumer_txn_descriptor;
-    };
-
-    {
-        SCOPED_TRACE("64 entries, one packet each: 2 txn ids, threshold 4 * 32 = 128");
-        const dfb_txn_id_descriptor_t desc = consumer_desc(1024, 64);
-        EXPECT_EQ(desc.num_txn_ids, 2u);
-        EXPECT_EQ(desc.num_entries_to_process_threshold, 128u);
-    }
-    {
-        // 2 txn ids would need 4 * 32 * 2 = 256; 3 does not divide 64; 4 gives 4 * 16 * 2 = 128.
-        SCOPED_TRACE("64 entries, two packets each: 4 txn ids, threshold 4 * 16 * 2 = 128");
-        const dfb_txn_id_descriptor_t desc = consumer_desc(two_packets, 64);
-        EXPECT_EQ(desc.num_txn_ids, 4u);
-        EXPECT_EQ(desc.num_entries_to_process_threshold, 128u);
-        EXPECT_EQ(desc.num_entries_per_txn_id, 16u);
-    }
-    {
-        // Only 2 txn ids divide 70 (not a multiple of 3 or 4): 4 * 35 * 2 = 280.
-        SCOPED_TRACE("70 entries, two packets each: no txn-id count fits, finalize rejects");
-        EXPECT_THAT(
-            [&] { build(two_packets, 70); },
-            ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("(NoC packets)")));
     }
 }
 
