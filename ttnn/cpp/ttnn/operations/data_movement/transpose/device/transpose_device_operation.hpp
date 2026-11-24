@@ -48,6 +48,10 @@ struct TransposeDeviceOperation {
     static spec_return_value_t compute_output_specs(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
+    // The output's mesh label: a Shard on either of the two transposed dims moves to the other. Empty when none does.
+    static std::vector<tt::tt_metal::TensorTopology> compute_output_topologies(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 

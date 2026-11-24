@@ -12,6 +12,7 @@
 
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 
@@ -28,7 +29,9 @@ Tensor stack_via_leading_axis(const std::vector<Tensor>& input_tensors, const in
     std::vector<Tensor> leading;
     leading.reserve(input_tensors.size());
     for (const auto& tensor : input_tensors) {
-        leading.push_back(ttnn::unsqueeze(tensor, 0));
+        Tensor view = ttnn::unsqueeze(tensor, 0);
+        operations::data_movement::shift_shard_dims(view, 1);
+        leading.push_back(std::move(view));
     }
     const Tensor stacked = ttnn::concat(leading, 0);
     ttsl::SmallVector<int64_t> dims(rank);
