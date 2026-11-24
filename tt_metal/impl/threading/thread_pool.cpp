@@ -506,7 +506,11 @@ public:
         if ((state & LOW_HALF) != 0) {
             return false;
         }
-        const uint64_t next = pack(generation_of(state) + 1, 1);  // 1: held by the caller.
+        uint32_t generation = generation_of(state) + 1;
+        if (generation == 0) {
+            generation = 1;  // A published word is never 0, which held_job_ uses for no hold.
+        }
+        const uint64_t next = pack(generation, 1);  // 1: held by the caller.
         // seq_cst pairs with a worker's hold: either it sees this next use and lets go, or the scan below sees it.
         if (!state_.compare_exchange_strong(state, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
             return false;
