@@ -192,6 +192,34 @@ inline void unpack_sync_mode()
     unpack_sync_mode_state = M;
 }
 
+/**
+ * @brief @ref unpack_sync_mode split in two, so an init can overlap the wait with its own setup.
+ *
+ * begin pushes the mode change (nothing when the mode is already M) and returns whether it did; end waits for it.
+ * Between the two the caller may push Tensix instructions and program the MOP, but must not store to unpacker config
+ * from the RISC or call @ref unpack_sync_mode.
+ */
+template <UnpackSyncMode M>
+inline bool unpack_sync_mode_begin()
+{
+    if (unpack_sync_mode_state == M)
+    {
+        return false;
+    }
+    wait_for_idle();
+    push_unpack_sync_mode<M>();
+    unpack_sync_mode_state = M;
+    return true;
+}
+
+inline void unpack_sync_mode_end(const bool pushed)
+{
+    if (pushed)
+    {
+        wait_unpack_sync_mode();
+    }
+}
+
 template <bool is_fp32_dest_acc_en, bool row_pool = false, bool fpu_srnd_en = false, bool pack_srnd_en = false>
 inline void configure_unpack_AB(
     const std::uint32_t unpA_src_format,

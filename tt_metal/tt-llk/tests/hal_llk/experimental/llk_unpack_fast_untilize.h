@@ -105,7 +105,9 @@ inline void _llk_unpack_fast_untilize_mop_config_(const std::uint32_t unit_dim)
 template <bool is_fp32_dest_acc_en>
 inline void _llk_unpack_fast_untilize_init_(const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format, const std::uint32_t init_unit_dim)
 {
-    _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(
+    // State setup of _llk_unpack_A_init_ without its Auto TTSync request: _llk_unpack_fast_untilize_block_ keeps the
+    // two-context handshake.
+    _llk_unpack_A_init_state_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(
         0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, ckernel::DEFAULT_TENSOR_SHAPE, unpack_src_format, unpack_dst_format);
     _llk_unpack_fast_untilize_mop_config_<is_fp32_dest_acc_en>(init_unit_dim);
 }

@@ -311,40 +311,15 @@ inline void _llk_unpack_A_mop_config_(
     }
 }
 
-/**
- * @brief Initialize the unpacker for a single-operand (A) unpack.
- *
- * Configures the within-face transpose register and per-unpacker datum count, then programs
- * the MOP for the requested broadcast/dest-reuse/unpack-to-dest mode.
- *
- * @tparam BType: Broadcast type, values = <NONE/COL/ROW/SCALAR>
- * @tparam acc_to_dest: Accumulate the operand into the dest register rather than overwriting it.
- * @tparam binary_reuse_dest: Reuse dest as a source operand, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
- * @tparam unpack_to_dest: Unpack directly into the dest register (32-bit datums).
- * @param transpose_of_faces: Nonzero to reorder (transpose) faces during the unpack.
- * @param within_face_16x16_transpose: Nonzero to enable the 16x16 within-face transpose (haloize mode).
- * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim).
- * @param unpack_src_format: Source data format of the operand in L1.
- * @param unpack_dst_format: Destination data format the operand is converted to.
- * @note On the plain path, a face shorter than 16 rows zeroes the unpacker's own SrcA bank before each face
- *       (see @ref _llk_unpack_A_mop_config_).
- * @note ROW broadcast with 32-bit unpack to dest does not support a 32x16 tile (2x1 face grid).
- * @note Call @ref _llk_unpack_A_uninit_ as the matching teardown; it is currently a no-op
- *       because unpacker X counters are reprogrammed by init.
- * @ref _llk_unpack_A_ is the matching execute call.
- * @ref _llk_math_eltwise_unary_datacopy_init_ is the matching init on the math thread (datacopy/transpose consumer).
- */
-template <
-    BroadcastType BType                          = BroadcastType::NONE,
-    bool acc_to_dest                             = false,
-    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    bool unpack_to_dest                          = false>
-inline void _llk_unpack_A_init_(
-    const std::uint32_t transpose_of_faces          = 0,
-    const std::uint32_t within_face_16x16_transpose = 0,
-    const ckernel::TensorShape tensor_shape         = ckernel::DEFAULT_TENSOR_SHAPE,
-    const std::uint32_t unpack_src_format           = 0,
-    const std::uint32_t unpack_dst_format           = 0)
+// _llk_unpack_A_init_ without the sync-mode request, for inits that reuse its state setup but keep their own
+// two-context execute (_llk_unpack_fast_untilize_init_).
+template <BroadcastType BType, bool acc_to_dest, EltwiseBinaryReuseDestType binary_reuse_dest, bool unpack_to_dest>
+inline void _llk_unpack_A_init_state_(
+    const std::uint32_t transpose_of_faces,
+    const std::uint32_t within_face_16x16_transpose,
+    const ckernel::TensorShape tensor_shape,
+    const std::uint32_t unpack_src_format,
+    const std::uint32_t unpack_dst_format)
 {
     LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_A_init_", tensor_shape);
     const std::uint8_t face_r_dim = tensor_shape.face_r_dim;
@@ -402,11 +377,71 @@ inline void _llk_unpack_A_init_(
         transpose_of_faces > 0, tensor_shape, unpack_src_format, unpack_dst_format);
 }
 
+// Push the sync mode _llk_unpack_A_ needs; every init it pairs with (_llk_unpack_A_init_, _llk_unpack_A_rmsnorm_init_)
+// calls this first and hal_port::unpack_sync_mode_end on the result last, so the wait overlaps the init's setup.
+template <bool unpack_to_dest>
+inline bool _llk_unpack_A_sync_mode_begin_()
+{
+    if constexpr (!unpack_to_dest)
+    {
+        // _llk_unpack_A_ uses config context 0 only, ordered by Auto TTSync (AutoTTSync.md), as _llk_unpack_AB_init_.
+        // Free when already on, so a re-init inside a loop costs no drain; _llk_unpack_A_uninit_ turns it off again.
+        hal_port::reset_config_context();
+        return hal_port::unpack_sync_mode_begin<hal_port::UnpackSyncMode::AutoTTSync>();
+    }
+    else
+    {
+        // The unpack-to-dest instantiation keeps the two-context handshake.
+        return hal_port::unpack_sync_mode_begin<hal_port::UnpackSyncMode::Handshake>();
+    }
+}
+
 /**
- * @brief No-op teardown after single-operand (A) unpacking.
+ * @brief Initialize the unpacker for a single-operand (A) unpack.
+ *
+ * Configures the within-face transpose register and per-unpacker datum count, then programs
+ * the MOP for the requested broadcast/dest-reuse/unpack-to-dest mode.
+ *
+ * @tparam BType: Broadcast type, values = <NONE/COL/ROW/SCALAR>
+ * @tparam acc_to_dest: Accumulate the operand into the dest register rather than overwriting it.
+ * @tparam binary_reuse_dest: Reuse dest as a source operand, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
+ * @tparam unpack_to_dest: Unpack directly into the dest register (32-bit datums).
+ * @param transpose_of_faces: Nonzero to reorder (transpose) faces during the unpack.
+ * @param within_face_16x16_transpose: Nonzero to enable the 16x16 within-face transpose (haloize mode).
+ * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim).
+ * @param unpack_src_format: Source data format of the operand in L1.
+ * @param unpack_dst_format: Destination data format the operand is converted to.
+ * @note On the plain path, a face shorter than 16 rows zeroes the unpacker's own SrcA bank before each face
+ *       (see @ref _llk_unpack_A_mop_config_).
+ * @note ROW broadcast with 32-bit unpack to dest does not support a 32x16 tile (2x1 face grid).
+ * @note Without unpack_to_dest this turns Auto TTSync on (config context 0 only); call @ref _llk_unpack_A_uninit_
+ *       as the matching teardown to turn it off again.
+ * @ref _llk_unpack_A_ is the matching execute call.
+ * @ref _llk_math_eltwise_unary_datacopy_init_ is the matching init on the math thread (datacopy/transpose consumer).
+ */
+template <
+    BroadcastType BType                          = BroadcastType::NONE,
+    bool acc_to_dest                             = false,
+    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
+    bool unpack_to_dest                          = false>
+inline void _llk_unpack_A_init_(
+    const std::uint32_t transpose_of_faces          = 0,
+    const std::uint32_t within_face_16x16_transpose = 0,
+    const ckernel::TensorShape tensor_shape         = ckernel::DEFAULT_TENSOR_SHAPE,
+    const std::uint32_t unpack_src_format           = 0,
+    const std::uint32_t unpack_dst_format           = 0)
+{
+    const bool sync_mode_pushed = _llk_unpack_A_sync_mode_begin_<unpack_to_dest>();
+    _llk_unpack_A_init_state_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
+        transpose_of_faces, within_face_16x16_transpose, tensor_shape, unpack_src_format, unpack_dst_format);
+    hal_port::unpack_sync_mode_end(sync_mode_pushed);
+}
+
+/**
+ * @brief Teardown after single-operand (A) unpacking: turn the unpack thread's Auto TTSync off again.
  *
  * The unpacker x-start/x-end (datum-count) state is transient and reprogrammed by each operation's
- * init (see tt-llk#1036), so there is nothing to restore here.
+ * init (see tt-llk#1036). Auto TTSync, enabled by @ref _llk_unpack_A_init_ without unpack_to_dest, is sticky per thread.
  *
  * @tparam BType: Broadcast type, values = <NONE/COL/ROW/SCALAR>
  * @note Call @ref _llk_unpack_A_init_ with matching template args before this function.
@@ -414,13 +449,15 @@ inline void _llk_unpack_A_init_(
 template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_A_uninit_()
 {
+    hal_port::unpack_sync_mode<hal_port::UnpackSyncMode::Handshake>();
 }
 
 /**
  * @brief Unpack a single tile (operand A) from L1 into the SrcA/SrcB or dest register.
  *
- * Programs the operand base address into the active config context, synchronizes with the
- * unpacker via semaphores, and runs the configured MOP. When unpacking 32-bit datums to dest,
+ * Programs the operand base address and runs the configured MOP. Without unpack_to_dest, and with Auto TTSync on
+ * (@ref _llk_unpack_A_init_), it uses config context 0 only, ordered by Auto TTSync; otherwise (unpack_to_dest, or after
+ * @ref _llk_unpack_A_sdpa_init_, which leaves the mode alone) the two-context semaphore handshake. When unpacking 32-bit datums to dest,
  * also manages the dest write address and completion handshake.
  *
  * @tparam BType: Broadcast type, values = <NONE/COL/ROW/SCALAR>
@@ -431,7 +468,7 @@ inline void _llk_unpack_A_uninit_()
  * @param unpack_src_format: Source data format of the operand in L1.
  * @param unpack_dst_format: Destination data format the operand is converted to.
  * @note Call @ref _llk_unpack_A_init_ with matching template args before this function, and
- *       @ref _llk_unpack_A_uninit_ after it as the matching teardown (currently a no-op).
+ *       @ref _llk_unpack_A_uninit_ after it as the matching teardown.
  * @note With unpack_to_dest, a 32-bit input and BType != NONE, this also hands the math thread one SrcB bank
  *       per tile; only @ref _llk_math_eltwise_unary_datacopy_ with the same BType releases it.
  * @ref _llk_math_eltwise_unary_datacopy_ on the math thread consumes the tile unpacked here.
@@ -447,6 +484,33 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
     namespace sync = hal::sync;
     namespace adc  = hal::counters::adc;
     LLK_ASSERT(is_valid_L1_address(address), "L1 address must be in valid L1 memory region");
+
+    // _llk_unpack_A_init_ (and the rmsnorm init) turn Auto TTSync on; _llk_unpack_A_sdpa_init_ leaves the mode as it is, so
+    // its kernels keep the two-context handshake below and never pay for the mode switch.
+    if (!unpack_to_dest && hal_port::unpack_sync_mode_state == hal_port::UnpackSyncMode::AutoTTSync) [[likely]]
+    {
+        volatile std::uint32_t tt_reg_ptr *cfg = hcfg::detail::state_cfg_bank();
+        // Single config context with Auto TTSync: this base store stalls until the previous tile's MOP expansion has
+        // passed the Wait Gate, where its UNPACRs have taken their base addresses (MemoryOrdering.md), and the first
+        // UNPACR of this MOP waits until the store has landed (AutoTTSync.md). This replaces the busy-context semaphore,
+        // the STALLWAIT on RISC CFG writes and the context flip. Whole-word store, as production.
+        if constexpr (_llk_unpack_A_address_on_unpacker_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>())
+        {
+            constexpr std::uint32_t base_cntx0 = hcfg::Unpacker[0].Cntx[0].Base.addr32(hcfg::Sec::S0);
+            static_assert(base_cntx0 == THCON_SEC0_REG3_Base_address_ADDR32, "unpacker A context-0 base word");
+            cfg[base_cntx0] = address;
+        }
+        else
+        {
+            constexpr std::uint32_t base_cntx0 = hcfg::Unpacker[1].Cntx[0].Base.addr32(hcfg::Sec::S0);
+            static_assert(base_cntx0 == THCON_SEC1_REG3_Base_address_ADDR32, "unpacker B context-0 base word");
+            cfg[base_cntx0] = address;
+        }
+        // Clear z/w start counters right before the MOP: TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111)
+        adc::set<adc::AddrCounter {.channel0 = {.z = 0, .w = 0}, .channel1 = {.z = 0, .w = 0}}.for_clients<adc::Client::Unpacker0, adc::Client::Unpacker1>()>();
+        hal::mop::Runner<hal::mop::MopTemplate::Template1>::run();
+        return;
+    }
 
     // Clear z/w start counters: TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111)
     adc::set<adc::AddrCounter {.channel0 = {.z = 0, .w = 0}, .channel1 = {.z = 0, .w = 0}}.for_clients<adc::Client::Unpacker0, adc::Client::Unpacker1>()>();

@@ -63,6 +63,11 @@ inline void _llk_unpack_AB_sdpa_custom_mm_(
 
     if (mask_chunk)
     {
+        // With Auto TTSync on, the RISC store after the STALLWAIT on RISC CFG writes below waits for the SETADCXX behind
+        // the UNPACR that the STALLWAIT holds: a deadlock (test_sdpa_custom_mm_mask_extent_restore).
+        LLK_ASSERT(
+            hal_port::unpack_sync_mode_state == hal_port::UnpackSyncMode::Handshake,
+            "SDPA mask path needs Auto TTSync off: call _llk_unpack_A_uninit_ / _llk_unpack_AB_uninit_ first");
         // Unpacker 1 context-1 base address: whole-word MMIO store into the state-CFG bank, as production.
         constexpr std::uint32_t base_b_cntx1 = hcfg::Unpacker[1].Cntx[1].Base.addr32(hcfg::Sec::S0);
         static_assert(base_b_cntx1 == THCON_SEC1_REG3_Base_cntx1_address_ADDR32, "unpacker 1 context-1 base word");

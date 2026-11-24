@@ -98,6 +98,7 @@ inline void _llk_unpack_A_rmsnorm_mop_config_(
  *        num_faces == 4 only).
  * @param face_r_dim: Rows per face; sets the X span.
  * @param num_faces: Faces per tile (1, 2 or 4).
+ * @note Turns Auto TTSync on like @ref _llk_unpack_A_init_; @ref _llk_unpack_A_uninit_ turns it off again.
  * @note Pairs with @ref _llk_math_rmsnorm_bcast_scalar_dest_reuse_init_ on the math thread. The matching execute
  *       is the generic @ref _llk_unpack_A_ with the same <SCALAR, true, DEST_TO_SRCB> arguments; other arguments
  *       route the L1 address to unpacker B, which the static_assert here cannot see.
@@ -117,6 +118,9 @@ inline void _llk_unpack_A_rmsnorm_init_(
     const std::uint32_t unpack_dst_format           = 0)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+
+    // Pairs with _llk_unpack_A_, so it asks for the same sync mode as _llk_unpack_A_init_.
+    const bool sync_mode_pushed = _llk_unpack_A_sync_mode_begin_<unpack_to_dest>();
 
     // Set transpose register to prevent state pollution
     namespace cfg = hal::cfg;
@@ -140,4 +144,5 @@ inline void _llk_unpack_A_rmsnorm_init_(
 
     _llk_unpack_A_rmsnorm_mop_config_<num_tiles, BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
         transpose_of_faces > 0, num_faces, unpack_src_format, unpack_dst_format);
+    hal_port::unpack_sync_mode_end(sync_mode_pushed);
 }
