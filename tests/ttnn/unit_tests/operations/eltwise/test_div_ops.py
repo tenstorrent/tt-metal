@@ -908,10 +908,18 @@ def test_rdiv_fp32_full_range(device, round_mode, scalar_val):
         torch_golden = scalar_val / torch_input
         output_tt = ttnn.rdiv(input_tt, value=scalar_val)
     elif round_mode == "floor":
-        torch_golden = torch.floor(scalar_val / torch_input)
+        torch_golden = torch.div(
+            torch.full_like(torch_input, scalar_val),
+            torch_input,
+            rounding_mode="floor",
+        )
         output_tt = ttnn.rdiv(input_tt, value=scalar_val, round_mode="floor")
     elif round_mode == "trunc":
-        torch_golden = torch.trunc(scalar_val / torch_input)
+        torch_golden = torch.div(
+            torch.full_like(torch_input, scalar_val),
+            torch_input,
+            rounding_mode="trunc",
+        )
         output_tt = ttnn.rdiv(input_tt, value=scalar_val, round_mode="trunc")
 
     output_torch = ttnn.to_torch(output_tt)
@@ -943,10 +951,18 @@ def test_rdiv_exact_integer_multiples(device, round_mode, scalar_val):
         torch_golden = scalar_val / torch_input
         output_tt = ttnn.rdiv(input_tt, value=scalar_val)
     elif round_mode == "floor":
-        torch_golden = torch.floor(scalar_val / torch_input)
+        torch_golden = torch.div(
+            torch.full_like(torch_input, scalar_val),
+            torch_input,
+            rounding_mode="floor",
+        )
         output_tt = ttnn.rdiv(input_tt, value=scalar_val, round_mode="floor")
     else:
-        torch_golden = torch.trunc(scalar_val / torch_input)
+        torch_golden = torch.div(
+            torch.full_like(torch_input, scalar_val),
+            torch_input,
+            rounding_mode="trunc",
+        )
         output_tt = ttnn.rdiv(input_tt, value=scalar_val, round_mode="trunc")
 
     output_torch = ttnn.to_torch(output_tt)
@@ -972,7 +988,11 @@ def test_rdiv_trunc_just_below_integer(device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    torch_golden = torch.trunc(3.0 / torch_input)
+    torch_golden = torch.div(
+        torch.full_like(torch_input, 3.0),
+        torch_input,
+        rounding_mode="trunc",
+    )
     output_tt = ttnn.rdiv(input_tt, value=3.0, round_mode="trunc")
     output_torch = ttnn.to_torch(output_tt)
     assert torch.equal(output_torch, torch_golden)
