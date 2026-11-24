@@ -9,13 +9,15 @@
 namespace ttnn::operations::normalization::detail {
 
 Tensor on_default_tile_grid(const Tensor& tensor) {
-    if (tensor.layout() != Layout::TILE || tensor.storage_type() != StorageType::DEVICE || tensor.is_sharded()) {
+    if (tensor.layout() != tt::tt_metal::Layout::TILE || tensor.storage_type() != StorageType::DEVICE ||
+        tensor.is_sharded()) {
         return tensor;
     }
     const auto default_padded_shape =
         tt::tt_metal::TensorSpec(
             tensor.logical_shape(),
-            tt::tt_metal::TensorLayout(tensor.dtype(), tensor.tensor_spec().page_config(), MemoryConfig{}))
+            tt::tt_metal::TensorLayout(
+                tensor.dtype(), tensor.tensor_spec().page_config(), tt::tt_metal::MemoryConfig{}))
             .padded_shape();
     if (tensor.padded_shape() == default_padded_shape) {
         return tensor;
