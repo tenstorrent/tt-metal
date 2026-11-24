@@ -107,12 +107,20 @@ TEST_F(UnitMeshCQEventFixture, TestEventsDataMovementWrittenToCompletionQueueInO
     }
 }
 
-// Basic test, record events, check that Event struct was updated. Enough commands to trigger issue queue wrap.
+// Basic test, record events, check that Event struct was updated. Wraps an issue queue small enough to wrap within
+// max_events (e.g. a DRAM-backed CQ); a 1 GB hugepage CQ takes millions of events to wrap, so it does not wrap there.
 TEST_F(UnitMeshCQEventFixture, TestEventsEnqueueRecordEventIssueQueueWrap) {
     auto mesh_device = this->devices_[0];
     auto& cq = mesh_device->mesh_command_queue();
-    const size_t num_events = 100000;  // Enough to wrap issue queue. 768MB and cmds are 22KB each, so 35k cmds.
+    const SystemMemoryManager& sysmem = mesh_device->impl().get_devices()[0]->sysmem_manager();
+    const uint8_t cq_id = static_cast<uint8_t>(cq.id());
+    const uint32_t issue_queue_size = sysmem.get_issue_queue_size(cq_id);
+    constexpr size_t max_events = 100000;
+    size_t num_events = max_events;
+    bool capped_by_queue = false;
+    bool wrapped = false;
     uint32_t cmds_issued_per_cq = 0;
+    uint32_t write_ptr = sysmem.get_issue_queue_write_ptr(cq_id);
 
     auto start = std::chrono::system_clock::now();
 
@@ -121,11 +129,33 @@ TEST_F(UnitMeshCQEventFixture, TestEventsEnqueueRecordEventIssueQueueWrap) {
         EXPECT_EQ(event.impl().id(), cmds_issued_per_cq + 1);  // Event ids start at 1
         EXPECT_EQ(event.impl().mesh_cq_id(), cq.id());
         cmds_issued_per_cq++;
+        const uint32_t next_write_ptr = sysmem.get_issue_queue_write_ptr(cq_id);
+        if (next_write_ptr < write_ptr) {
+            wrapped = true;
+        } else if (i == 0) {
+            // From anywhere in the queue, this many events of the first one's size wrap it once.
+            const size_t events_to_wrap = (issue_queue_size / (next_write_ptr - write_ptr)) + 1;
+            if (events_to_wrap < max_events) {
+                num_events = events_to_wrap;
+                capped_by_queue = true;
+            }
+        }
+        write_ptr = next_write_ptr;
     }
     distributed::Finish(cq);
+    if (capped_by_queue) {
+        EXPECT_TRUE(wrapped) << "Issue queue (" << issue_queue_size << " B) did not wrap after " << num_events
+                             << " events";
+    }
 
     std::chrono::duration<double> elapsed_seconds = (std::chrono::system_clock::now() - start);
-    log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
+    log_info(
+        tt::LogTest,
+        "Issue queue ({} B) {} after {} events. Test Finished in {:.2f} us",
+        issue_queue_size,
+        wrapped ? "wrapped" : "did not wrap",
+        cmds_issued_per_cq,
+        elapsed_seconds.count() * 1000 * 1000);
 }
 
 // Test where Host synchronously waits for event to be completed.
