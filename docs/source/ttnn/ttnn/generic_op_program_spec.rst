@@ -16,10 +16,10 @@ Each Python class has the fields of the C++ struct with the same name, whose com
 (``tt_metal/api/tt-metalium/workload/``), apart from the advanced options, which stay experimental in
 advanced_options.hpp_. Of the advanced options, Python
 binds only ``DFBAdvancedOptions.alias_with``, which lets buffers of the same total size share memory; the others are
-C++ only. So far the GlobalSemaphore fields are C++ only too: ``ProgramSpec.global_semaphore_parameters``,
-``KernelSpec.global_semaphore_bindings`` and ``ProgramRunArgs.global_semaphore_args``. Two fields differ in type:
-``ProgramRunArgs.tensor_args`` takes a ``ttnn.Tensor`` for each name and keeps it alive, where C++ holds the tensor's
-``MeshTensor``; and the ``data_format_metadata`` of a ``DataflowBufferSpec`` or ``ScratchpadSpec`` takes a ttnn data
+C++ only. Three fields differ in type: ``ProgramRunArgs.tensor_args`` takes a ``ttnn.Tensor`` for each name and keeps
+it alive, where C++ holds the tensor's ``MeshTensor``; ``ProgramRunArgs.global_semaphore_args`` takes a global
+semaphore for each name, such as ``ttnn.create_global_semaphore`` returns, and keeps it alive too, where C++ holds a
+reference to it; and the ``data_format_metadata`` of a ``DataflowBufferSpec`` or ``ScratchpadSpec`` takes a ttnn data
 type, such as ``ttnn.bfloat16``, so a format without one, such as Float16, cannot be set, and ``ttnn.int8`` reads back
 as ``ttnn.uint8``. In Python, argument values are integers from 0 to 2**32 - 1.
 
@@ -76,6 +76,10 @@ What a kernel needs, where you set it, and how the kernel reaches it:
 - **A buffer on a sharded tensor's memory**: a ``DataflowBufferSpec`` whose ``borrowed_from`` names the
   ``TensorParameter``. In the kernel: ``DataflowBuffer(dfb::<accessor_name>)``.
 - **A semaphore**: a ``SemaphoreSpec`` and a ``SemaphoreBinding``. In the kernel: ``Semaphore(sem::<accessor_name>)``.
+- **A global semaphore**, whose value carries over from one call to the next: a ``GlobalSemaphoreParameter`` and a
+  ``GlobalSemaphoreBinding`` (data-movement kernels only), and the semaphore, such as one from
+  ``ttnn.create_global_semaphore``, in ``ProgramRunArgs.global_semaphore_args``. In the kernel:
+  ``GlobalSemaphore(global_sem::<accessor_name>)``.
 - **Private scratch memory**: a ``ScratchpadSpec`` and a ``ScratchpadBinding``. In the kernel:
   ``Scratchpad<T>(scratch::<accessor_name>)``.
 
@@ -204,8 +208,8 @@ kernel, keep the flag if its factory sets it.
 .. _test_generic_op_program_spec.py: https://github.com/tenstorrent/tt-metal/blob/main/tests/ttnn/unit_tests/operations/debug/test_generic_op_program_spec.py
 
 Some features of the ``ProgramDescriptor`` form are not available in the ``ProgramSpec`` form yet, such as global
-circular buffers, fabric connections and per-core allocated tensors. From Python, global semaphores are not available
-yet either, and a semaphore always starts at 0. Programs that need any of these stay on ``ttnn.generic_op``.
+circular buffers, fabric connections and per-core allocated tensors. From Python, a semaphore always starts at 0.
+Programs that need any of these stay on ``ttnn.generic_op``.
 
 More examples
 *************
