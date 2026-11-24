@@ -276,6 +276,14 @@ public:
     std::set<std::pair<chan_id_t, eth_chan_directions>> get_active_fabric_eth_channels(
         FabricNodeId fabric_node_id) const;
 
+    struct EthLink {
+        chan_id_t chan = 0;
+        tt::tt_metal::AsicID peer_asic{0};
+        chan_id_t peer_chan = 0;
+    };
+    // includes cables to chips outside the job
+    std::vector<EthLink> get_unused_eth_links(FabricNodeId fabric_node_id) const;
+
     // Peer fabric node (and its Ethernet channel) connected to `fabric_node_id` on `chan_id` via one physical hop
     // (intra-mesh or inter-mesh).
     std::optional<std::pair<FabricNodeId, chan_id_t>> try_get_connected_mesh_chip_chan_ids(

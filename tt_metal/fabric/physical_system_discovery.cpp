@@ -866,6 +866,7 @@ PhysicalSystemDescriptor run_physical_system_discovery(
     // Set local hostname and rank (friend access)
     auto my_rank = *(distributed_context->rank());
     psd.set_discovery_data(get_local_discovery_hostname(cluster_desc), my_rank, all_hostnames_unique);
+    auto local_exit_nodes = psd.get_exit_node_connection_table()[get_local_discovery_hostname(cluster_desc)];
 
     if (run_global_discovery) {
         exchange_metadata(psd, distributed_context, true);
@@ -878,6 +879,7 @@ PhysicalSystemDescriptor run_physical_system_discovery(
         }
         exchange_metadata(psd, distributed_context, false);
     }
+    psd.get_local_exit_nodes() = std::move(local_exit_nodes);
 
     return psd;
 }

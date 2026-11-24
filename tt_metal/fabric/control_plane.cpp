@@ -1896,6 +1896,21 @@ std::optional<ChipId> ControlPlane::try_get_physical_chip_id_from_fabric_node_id
     return it->second;
 }
 
+std::vector<ControlPlane::EthLink> ControlPlane::get_unused_eth_links(FabricNodeId fabric_node_id) const {
+    std::set<chan_id_t> used;
+    for (const auto& [chan, direction] : this->get_active_fabric_eth_channels(fabric_node_id)) {
+        used.insert(chan);
+    }
+    std::vector<EthLink> links;
+    const auto asic = this->get_asic_id_from_fabric_node_id(fabric_node_id);
+    for (const auto& [peer, c] : this->physical_system_descriptor_->get_eth_links(asic, /*outside_job=*/true)) {
+        if (!used.contains(c.src_chan)) {
+            links.push_back(EthLink{.chan = c.src_chan, .peer_asic = peer, .peer_chan = c.dst_chan});
+        }
+    }
+    return links;
+}
+
 std::optional<std::pair<FabricNodeId, chan_id_t>> ControlPlane::try_get_connected_mesh_chip_chan_ids(
     FabricNodeId fabric_node_id, chan_id_t chan_id) const {
     // TODO: simplify this and use Global Physical Desc in ControlPlane soon
