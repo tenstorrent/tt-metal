@@ -20,6 +20,8 @@ from conftest import skip_for_wormhole
 from helpers.llk_params import MathFidelity
 from helpers.test_variant_parameters import TemplateParameter
 
+pytestmark = pytest.mark.llk_sweep
+
 _g._F.update({k: v for k, v in _x._F.items() if k not in _g._F})
 _BYTES = {
     "F32": 4096,

@@ -780,27 +780,37 @@ def _select_node_list(config, items):
 
 def _thin_sweep(config, items):
     """The perf CI runner (--perf-splits) leaves out the tests marked llk_sweep, the local study modules, and the ids a module's
-    perf_gate_keep(params) turns down (the Blackhole matmul perf sweeps, helpers/matmul_prod_census.py).
+    perf_gate_keep(params) turns down (the Blackhole matmul perf sweeps, helpers/matmul_prod_census.py); every other run
+    leaves out the llk_sweep tests of the modules that are not study modules (sweeps inside a CI test file).
 
     LLK_SWEEP_ALL=1 keeps every id; LLK_SWEEP_STRIDE=n keeps one id in n (chosen by a hash of the node id) and the module's
     LLK_SWEEP_KEEP ids.
     """
-    if (
-        config.getoption("--perf-splits") is None
-        or os.environ.get("LLK_SWEEP_ALL") == "1"
-    ):
+    if os.environ.get("LLK_SWEEP_ALL") == "1":
         return
+    perf_run = config.getoption("--perf-splits") is not None
+    sweep_module = {}
+
+    def thinned(item):
+        if item.get_closest_marker("llk_sweep") is None:
+            return False
+        if perf_run:
+            return True
+        if item.path not in sweep_module:
+            sweep_module[item.path] = _is_sweep_module(item.path)
+        return not sweep_module[item.path]
+
     stride = int(os.environ.get("LLK_SWEEP_STRIDE", "0"))
     kept, dropped = [], []
     for item in items:
-        gate = getattr(item.module, "perf_gate_keep", None)
+        gate = getattr(item.module, "perf_gate_keep", None) if perf_run else None
         if (
             gate is not None
             and hasattr(item, "callspec")
             and not gate(item.callspec.params)
         ):
             dropped.append(item)
-        elif item.get_closest_marker("llk_sweep") is None or (
+        elif not thinned(item) or (
             stride
             and (
                 zlib.crc32(item.nodeid.encode()) % stride == 0

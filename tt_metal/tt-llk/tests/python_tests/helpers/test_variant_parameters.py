@@ -5,9 +5,11 @@
 import math
 import os
 import struct
+import zlib
 from abc import ABC, abstractmethod
 from ctypes import c_uint32
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 
 from .chip_architecture import ChipArchitecture, get_chip_architecture, quasar_variant
 from .format_config import DataFormat, is_dest_acc_needed
@@ -389,6 +391,46 @@ class MATMUL_TRUE_MAIN(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return "#define MATMUL_TRUE_MAIN"
+
+
+# The templates main's form keeps: none keyed by the block (helpers/perf/core.py _TRUE_MAIN_KEEP).
+_MATMUL_MAIN_FORM_KEEP = (
+    "MATH_FIDELITY",
+    "DEST_SYNC",
+    "THROTTLE_LEVEL",
+    "STOCHASTIC_ROUNDING",
+    "PERF_RUN_TYPE",
+    "MATMUL_MAIN_ROW_MOP",
+    "MATMUL_L1_ACC",
+    "PACK_SRC_FROM_OUTPUT",
+)
+
+
+def matmul_keyed_cell(formats, dest_acc, templates, stride: int) -> bool:
+    """Whether a cell of main's matmul sweeps keeps its block keys: on Blackhole one keyed build in stride, picked by a hash of
+    the build so the ids that share it stay together; every cell under LLK_SWEEP_ALL=1.
+    """
+    if (
+        get_chip_architecture() != ChipArchitecture.BLACKHOLE
+        or os.environ.get("LLK_SWEEP_ALL") == "1"
+    ):
+        return True
+    return zlib.crc32(repr((formats, dest_acc, templates)).encode()) % stride == 0
+
+
+# The output format of a plain matmul call, which names none: the compute API's default, DataFormat::Invalid.
+_MATMUL_PLAIN_OUT_FORMAT = SimpleNamespace(name="Invalid")
+
+
+def matmul_main_form(templates) -> list:
+    """The templates of a cell on main's form (MATMUL_TRUE_MAIN: the forms key 0 and no output format, as production's plain
+    calls): the block dims and formats stay run-time values, so the cells of one fidelity and mode share an ELF as on main.
+    """
+    return [t for t in templates if type(t).__name__ in _MATMUL_MAIN_FORM_KEEP] + [
+        MATMUL_FORM_KEYS(0, _MATMUL_PLAIN_OUT_FORMAT),
+        MATMUL_PACK_BLOCK(0),
+        MATMUL_TRUE_MAIN(),
+    ]
 
 
 @dataclass

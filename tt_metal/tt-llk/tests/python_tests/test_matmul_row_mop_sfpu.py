@@ -12,6 +12,8 @@ from conftest import skip_for_wormhole
 from helpers.llk_params import MathFidelity
 from helpers.test_variant_parameters import TemplateParameter
 
+pytestmark = pytest.mark.llk_sweep
+
 
 class _Raw(TemplateParameter):
     def __init__(self, text):

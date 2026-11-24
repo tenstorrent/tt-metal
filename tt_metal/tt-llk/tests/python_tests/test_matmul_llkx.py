@@ -17,6 +17,8 @@ from helpers.bfp_format_utils import bfp8a_to_float16 as _bfp8a_to_float16
 from helpers.format_config import DataFormat
 from helpers.llk_params import MathFidelity
 
+pytestmark = pytest.mark.llk_sweep
+
 _passed = _t.passed_test
 _gg = _t.get_golden_generator
 

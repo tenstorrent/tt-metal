@@ -13,6 +13,8 @@ import test_matmul_grid2_tiny as _t
 from conftest import skip_for_wormhole
 from helpers.test_variant_parameters import TemplateParameter
 
+pytestmark = pytest.mark.llk_sweep
+
 _SPEC = [""]
 
 

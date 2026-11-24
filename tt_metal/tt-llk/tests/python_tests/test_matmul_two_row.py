@@ -40,6 +40,8 @@ from helpers.test_variant_parameters import (
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
 
+pytestmark = pytest.mark.llk_sweep
+
 # Float32 operands take a 32-bit DEST: 4 tiles at half sync, 8 at full
 TWO_ROW_BLOCKS = [
     (sync, rt, ct, kt)
