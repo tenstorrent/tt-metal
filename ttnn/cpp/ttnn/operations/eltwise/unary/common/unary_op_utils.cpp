@@ -1306,7 +1306,7 @@ std::optional<std::map<std::string, std::string>> get_bf16_kernel_defines(
     std::string op_name;
     switch (op.type()) {
         case UnaryOpType::QUICK_GELU: op_name = arch == tt::ARCH::BLACKHOLE ? "quick_gelu" : ""; break;
-        case UnaryOpType::LOGIT: op_name = op.get_param_if<float>(0) == -1.0f ? "logit" : ""; break;
+        case UnaryOpType::LOGIT: op_name = op.get_param_if<float>(0).value_or(-1.0f) < 0.0f ? "logit" : ""; break;
         default: return std::nullopt;
     }
     if (op_name.empty()) {

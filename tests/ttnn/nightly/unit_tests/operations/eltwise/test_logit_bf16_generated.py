@@ -195,3 +195,12 @@ def test_logit_keeps_its_own_path_elsewhere(device, call):
         actual = ttnn.logit(_logit_on_device(x, device), **{call: 0.125})
         expected = golden(x.float(), **{call: 0.125})
     assert_with_pcc(expected, ttnn.to_torch(actual).float(), 0.999)
+
+
+@run_for_wormhole_b0_or_blackhole("the generated kernel exists for Blackhole and Wormhole only")
+def test_logit_any_negative_eps_is_unset(device):
+    """TT-NN reads every negative eps as unset, so eps=-0.5 runs the same kernel as the default."""
+    x = _logit_inputs((1, 1, 64, 64))
+    expected = ttnn.to_torch(ttnn.logit(_logit_on_device(x, device)))
+    actual = ttnn.to_torch(ttnn.logit(_logit_on_device(x, device), eps=-0.5))
+    assert torch.equal(actual, expected)
