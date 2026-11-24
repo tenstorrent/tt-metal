@@ -50,6 +50,8 @@
 
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include "ttnn/graph/graph_serialization.hpp"
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/tilize_utils.hpp>
@@ -1456,6 +1458,28 @@ void pytensor_module(nb::module_& mod) {
 
         )doc")
         .def(
+            "experimental_view_at_address",
+            [](const Tensor& self, uint32_t address) -> Tensor {
+                TT_FATAL(
+                    is_device_tensor(self) && self.is_allocated(), "view_at_address needs an allocated device tensor");
+                const auto& buffer = self.device_storage().get_mesh_buffer();
+                TT_FATAL(
+                    !experimental::per_core_allocation::is_per_core_allocation(
+                        buffer.device_local_config().sharding_args),
+                    "view_at_address supports lockstep tensors only");
+                auto view = tt::tt_metal::distributed::MeshBuffer::create(
+                    buffer.global_config(), buffer.device_local_config(), buffer.device(), address);
+                MeshTensor view_tensor = tt::tt_metal::mesh_tensor_from_buffer_with_topology(
+                    std::move(*view), self.tensor_spec(), self.tensor_topology());
+                return Tensor(DeviceStorage(std::move(view_tensor)));
+            },
+            nb::arg("address"),
+            R"doc(
+            A tensor with this tensor's spec and placement at ``address``, without allocating: the allocator does not
+            track it and freeing it releases nothing. The caller guarantees the range is valid whenever the view is
+            used (for example, program-local L1 that a static CB reserves). Experimental.
+            )doc")
+        .def(
             "buffer_address",
             [](const Tensor& self) -> uint32_t {
                 TT_FATAL(is_device_tensor(self), "{} doesn't support buffer_address method", self.storage_type());
@@ -1814,6 +1838,34 @@ void pytensor_module(nb::module_& mod) {
             [](const Tensor& self) { return self.tensor_id; },
             [](Tensor& self, std::size_t tensor_id) { self.tensor_id = tensor_id; });
 
+    mod.def(
+        "experimental_tensor_at_address",
+        [](distributed::MeshDevice& mesh, const TensorSpec& spec, uint32_t address) {
+            // A replicated, lockstep device tensor whose buffer sits at `address` on every device. The MeshBuffer is
+            // external: the allocator neither reserves nor frees the range. The caller keeps the range valid whenever
+            // the tensor is used (for example, program-local L1 that a static CB reserves while the program runs).
+            const auto sharding_args = spec.compute_buffer_sharding_args();
+            TT_FATAL(
+                !experimental::per_core_allocation::is_per_core_allocation(sharding_args),
+                "experimental_tensor_at_address supports lockstep tensors only");
+            auto buffer = tt::tt_metal::distributed::MeshBuffer::create(
+                tt::tt_metal::distributed::ReplicatedBufferConfig{.size = spec.compute_packed_buffer_size_bytes()},
+                tt::tt_metal::distributed::DeviceLocalBufferConfig{
+                    .page_size = spec.compute_page_size_bytes(),
+                    .buffer_type = spec.memory_config().buffer_type(),
+                    .sharding_args = sharding_args},
+                &mesh,
+                address);
+            auto topology = TensorTopology::create_fully_replicated_tensor_topology(mesh.shape());
+            return Tensor(
+                DeviceStorage(mesh_tensor_from_buffer_with_topology(std::move(*buffer), spec, std::move(topology))));
+        },
+        nb::arg("mesh_device").noconvert(),
+        nb::arg("tensor_spec"),
+        nb::arg("address"),
+        nb::keep_alive<0, 1>(),
+        "A replicated lockstep device tensor at `address`, built from `tensor_spec`, without allocating. "
+        "Experimental.");
     mod.def(
         "experimental_allocate_single_device_tensor",
         [](distributed::MeshDevice& mesh, const distributed::MeshCoordinate& coord, const TensorSpec& spec) {

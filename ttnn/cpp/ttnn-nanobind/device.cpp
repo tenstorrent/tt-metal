@@ -38,6 +38,7 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 // #include "ttnn/operations/experimental/auto_format/auto_format.hpp" // TODO_NANOBIND
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/experimental/allocator.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/hal.hpp>
@@ -659,6 +660,15 @@ void device_module(nb::module_& m_device) {
         nb::arg("device").noconvert(),
         nb::arg("buffer_type").noconvert(),
         get_allocator_base_address_doc.data());
+    m_device.def(
+        "experimental_program_local_l1_base",
+        [](MeshDevice* device, const CoreRangeSet& cores) {
+            return tt::tt_metal::experimental::program_local_l1_base(device, cores);
+        },
+        nb::arg("device").noconvert(),
+        nb::arg("cores"),
+        "Lowest address of program-local L1 (static CBs) on the given cores: where a program's first static CB on "
+        "exactly these cores is placed. Experimental.");
     m_device.def(
         "GetAllocatorBaseAddress",
         [buffer_type_to_hal_mem_type](MeshDevice* device, const BufferType& buffer_type) {

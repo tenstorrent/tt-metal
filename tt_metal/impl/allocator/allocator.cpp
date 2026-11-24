@@ -811,6 +811,10 @@ size_t Allocator::get_worker_l1_size() const { return impl_->get_worker_l1_size(
 
 namespace tt::tt_metal::experimental {
 
+DeviceAddr program_local_l1_base(IDevice* device, const CoreRangeSet& cores) {
+    return device->allocator_impl()->persistent_l1().high_water_mark(cores);
+}
+
 void synchronize_allocator_state(Allocator* target, const std::vector<Allocator*>& sources) {
     AllocatorState merged_state;
     for (auto* source : sources) {
