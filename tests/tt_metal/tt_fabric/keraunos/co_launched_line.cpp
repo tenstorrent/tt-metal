@@ -27,10 +27,11 @@
 #include "hostdev/eth_link.h"
 #include "internal/tt-2xx/quasar/dev_mem_map.h"
 #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_accessor.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "impl/program/program_impl.hpp"
 #include "llrt/hal.hpp"
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
-#include "tt_metal/fabric/fabric_init.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 
 namespace tt::tt_fabric::fabric_router_tests {
@@ -222,7 +223,7 @@ void KeraunosCoLaunchedWorkers::TearDown() {
     if (!devices_.empty()) {
         DoTearDownTestSuite();
     }
-    set_fabric_program_extension({});
+    tt::tt_metal::MetalEnvAccessor(MetalContext::instance().get_env()).impl().set_fabric_program_extension({});
 }
 
 void KeraunosCoLaunchedWorkers::run_line_unicast(const NocLinks& noc_links, const AfterOpen& after_open) {
@@ -239,7 +240,8 @@ void KeraunosCoLaunchedWorkers::run_line_unicast(const NocLinks& noc_links, cons
 
     std::vector<PreparedRouter> prepared;
     std::once_flag routers_prepared;
-    set_fabric_program_extension([&](tt::tt_metal::IDevice*, tt::tt_metal::Program&) {
+    auto& env = tt::tt_metal::MetalEnvAccessor(MetalContext::instance().get_env()).impl();
+    env.set_fabric_program_extension([&](tt::tt_metal::IDevice*, tt::tt_metal::Program&) {
         // Every call waits here, so the records and staging words of every chip are written before the first device
         // is configured. A throw lets a waiting call rerun the write, which can append duplicate entries to prepared.
         std::call_once(routers_prepared, [&] {
