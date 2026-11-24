@@ -26,6 +26,7 @@
 #include "ttnn/distributed/api.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/allocation_context.hpp>
+#include <tt-metalium/experimental/dry_run.hpp>
 #include <tt-metalium/experimental/inspector.hpp>
 #include <tt-metalium/experimental/program_preparation.hpp>
 #include <internal/graph_function_abort.hpp>
@@ -711,8 +712,13 @@ typename device_operation_t::tensor_return_value_t launch(
     detail::place_output_tensors<device_operation_t>(
         operation_attributes, tensor_args, input_tensors, mesh_device, tensor_return_value);
 
-    detail::launch_operation_with_adapter<MeshDeviceOperationAdapter<device_operation_t>>(
-        operation_attributes, tensor_args, tensor_return_value, mesh_device);
+    try {
+        detail::launch_operation_with_adapter<MeshDeviceOperationAdapter<device_operation_t>>(
+            operation_attributes, tensor_args, tensor_return_value, mesh_device);
+    } catch (const tt::tt_metal::experimental::dry_run::BuildsQueued&) {
+        // A dry run queued the kernel builds of a program made from a ProgramSpec and constructed no workload, so
+        // there is nothing to enqueue. The output tensors are returned as placed.
+    }
 
     tracked_function.end(tensor_return_value);
     return tensor_return_value;

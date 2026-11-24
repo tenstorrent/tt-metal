@@ -12,6 +12,7 @@
 #include <nlohmann/json.hpp>
 #include <tt_stl/assert.hpp>
 
+#include <tt-metalium/experimental/dry_run.hpp>
 #include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
@@ -189,6 +190,10 @@ bool GraphTracker::hook_deallocate(Buffer* buffer) {
 }
 
 bool GraphTracker::hook_write_to_device(const tt::tt_metal::Buffer* buffer) {
+    // A dry run blocks buffer writes and reads on every thread (experimental/dry_run.hpp).
+    if (experimental::dry_run::active()) {
+        return true;
+    }
     if (hook == nullptr) {
         return false;
     }
@@ -196,6 +201,10 @@ bool GraphTracker::hook_write_to_device(const tt::tt_metal::Buffer* buffer) {
 }
 
 bool GraphTracker::hook_write_to_device(const tt::tt_metal::distributed::MeshBuffer* mesh_buffer) {
+    // A dry run blocks buffer writes and reads on every thread (experimental/dry_run.hpp).
+    if (experimental::dry_run::active()) {
+        return true;
+    }
     if (hook == nullptr) {
         return false;
     }
@@ -203,6 +212,10 @@ bool GraphTracker::hook_write_to_device(const tt::tt_metal::distributed::MeshBuf
 }
 
 bool GraphTracker::hook_read_from_device(tt::tt_metal::Buffer* buffer) {
+    // A dry run blocks buffer writes and reads on every thread (experimental/dry_run.hpp).
+    if (experimental::dry_run::active()) {
+        return true;
+    }
     if (hook == nullptr) {
         return false;
     }
@@ -210,6 +223,10 @@ bool GraphTracker::hook_read_from_device(tt::tt_metal::Buffer* buffer) {
 }
 
 bool GraphTracker::hook_read_from_device(const tt::tt_metal::distributed::MeshBuffer* mesh_buffer) {
+    // A dry run blocks buffer writes and reads on every thread (experimental/dry_run.hpp).
+    if (experimental::dry_run::active()) {
+        return true;
+    }
     if (hook == nullptr) {
         return false;
     }

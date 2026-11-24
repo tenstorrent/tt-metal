@@ -1249,16 +1249,22 @@ void ComputeKernel::set_build_options(JitBuildOptions& build_options) const {
 }
 
 void DataMovementKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_options*/) const {
-    jit_build_genfiles_kernel_include(device_build_env_for(*device).build_env, *this, this->kernel_src_);
+    this->build_task(device)();
+}
+
+std::function<void()> DataMovementKernel::build_task(IDevice* device) const {
+    const JitBuildEnv& env = device_build_env_for(*device).build_env;
     uint32_t tensix_core_type = MetalContext::instance(this->get_context_id())
                                     .hal()
                                     .get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
     int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(this->config_.processor);
-    jit_build(
-        build_env_manager_for(*device).get_kernel_build_state(
-            device->build_id(), tensix_core_type, dm_class_idx, riscv_id),
-        this);
+    const JitBuildState& build_state = build_env_manager_for(*device).get_kernel_build_state(
+        device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
+    return [this, &env, &build_state] {
+        jit_build_genfiles_kernel_include(env, *this, this->kernel_src_);
+        jit_build(build_state, this);
+    };
 }
 
 void EthernetKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_options*/) const {
@@ -1286,7 +1292,11 @@ void DramKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_opt
 }
 
 void ComputeKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_options*/) const {
-    jit_build_genfiles_triscs_src(device_build_env_for(*device).build_env, *this, this->kernel_src_);
+    this->build_task(device)();
+}
+
+std::function<void()> ComputeKernel::build_task(IDevice* device) const {
+    const JitBuildEnv& env = device_build_env_for(*device).build_env;
     const auto& hal = MetalContext::instance(this->get_context_id()).hal();
     const auto core_type = this->get_kernel_programmable_core_type();
     uint32_t tensix_core_type = hal.get_programmable_core_type_index(core_type);
@@ -1297,7 +1307,10 @@ void ComputeKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_
         *this, std::ranges::any_of(std::views::iota(0u, static_cast<uint32_t>(build_states.size())), [&](uint32_t id) {
             return hal.get_supports_rvv(core_type, HalProcessorClassType::COMPUTE, id);
         }));
-    jit_build_subset(build_states, this);
+    return [this, &env, build_states] {
+        jit_build_genfiles_triscs_src(env, *this, this->kernel_src_);
+        jit_build_subset(build_states, this);
+    };
 }
 
 void Kernel::set_binaries(uint64_t build_key, std::vector<const ll_api::memory*>&& binaries) {

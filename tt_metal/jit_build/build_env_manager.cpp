@@ -164,9 +164,21 @@ std::vector<JitBuildState> create_build_state(JitBuildEnv& build_env, const JitD
 void BuildEnvManager::add_build_env(
     ChipId device_id, const JitDeviceConfig& dev_config, const llrt::RunTimeOptions& rtoptions) {
     const std::lock_guard<std::mutex> lock(this->lock);
-    auto& dev_build_env = device_id_to_build_env_[device_id];
     uint64_t build_key = compute_build_key(dev_config, rtoptions);
     auto device_kernel_defines = initialize_device_kernel_defines(dev_config);
+    // Kernel builds queued by a dry run (experimental/dry_run.hpp) read this device's build environment after the
+    // device has closed. While any are outstanding, an open that would rebuild the same environment keeps it, and an
+    // open that changes it waits for them first.
+    if (auto existing = device_id_to_build_env_.find(device_id);
+        existing != device_id_to_build_env_.end() && ahead_builds_pending()) {
+        JitBuildEnv probe;
+        probe.init(build_key, dev_config, rtoptions, device_kernel_defines);
+        if (probe.get_build_key() == existing->second.build_key()) {
+            return;
+        }
+        wait_for_ahead_builds();
+    }
+    auto& dev_build_env = device_id_to_build_env_[device_id];
     dev_build_env.build_env.init(build_key, dev_config, rtoptions, device_kernel_defines);
     if (rtoptions.get_disable_precompiled_fw()) {
         dev_build_env.firmware_precompiled = false;

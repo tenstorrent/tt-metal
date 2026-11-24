@@ -234,6 +234,14 @@ void jit_build_once(size_t hash, const std::function<void()>& build_fn);
 // another thread builds the same hash.
 bool jit_build_once_no_wait(size_t hash, const std::function<void()>& build_fn);
 
+// Run a kernel build in the background for a dry run (experimental/dry_run.hpp). Nothing waits for it, and a failure is
+// dropped: the program that needs the kernel builds it again and reports the failure itself.
+void queue_ahead_build(std::function<void()> build_fn);
+// Wait for every queued build.
+void wait_for_ahead_builds();
+// Whether builds were queued and not yet waited for.
+bool ahead_builds_pending();
+
 // Clear the JIT build cache so that subsequent jit_build_once() calls re-execute.
 void jit_build_cache_clear();
 

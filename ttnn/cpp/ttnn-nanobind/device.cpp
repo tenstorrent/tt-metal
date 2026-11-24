@@ -5,6 +5,7 @@
 #include "ttnn-nanobind/device.hpp"
 
 #include <tt-metalium/device_types.hpp>
+#include <tt-metalium/experimental/dry_run.hpp>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -446,6 +447,19 @@ void device_module(nb::module_& m_device) {
             >>> padded_shape = ttnn.pad_to_tile_shape(unpadded_shape=[1, 2, 2, 2])
 
         )doc");
+
+    m_device.def("BeginDryRun", &tt::tt_metal::experimental::dry_run::begin, R"doc(
+        Start a dry run: until EndDryRun, nothing is sent to a device, and a program that would have been launched has
+        its kernel builds queued in the background instead. Used by up-front precompile.
+        )doc");
+    m_device.def("EndDryRun", &tt::tt_metal::experimental::dry_run::end, "End the dry run started by BeginDryRun.");
+    m_device.def(
+        "WaitForQueuedBuilds",
+        [] {
+            nb::gil_scoped_release release;
+            tt::tt_metal::experimental::dry_run::wait_for_queued_builds();
+        },
+        "Block until every kernel build queued by a dry run has finished.");
 
     m_device.def("ClearKernelCache", &tt::tt_metal::experimental::ClearKernelCache, R"doc(
         Clear the in-memory kernel compilation hash lookup cache.

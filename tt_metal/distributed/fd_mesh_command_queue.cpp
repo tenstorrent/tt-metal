@@ -7,6 +7,7 @@
 #include "fd_mesh_command_queue.hpp"
 
 #include <tracy/Tracy.hpp>
+#include <tt-metalium/experimental/dry_run.hpp>
 
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
@@ -408,6 +409,10 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
 void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
     ZoneScopedN("EnqueueProgram");
     auto lock = lock_api_function_();
+    // A dry run sends no work to the device (experimental/dry_run.hpp).
+    if (experimental::dry_run::active()) {
+        return;
+    }
     in_use_ = true;
     // The active sub-device manager id doubles as the key for per-program cached command sequences.
     const uint64_t active_sub_device_manager_id = *mesh_device_->get_active_sub_device_manager_id();
@@ -659,6 +664,10 @@ void FDMeshCommandQueue::enqueue_write_shard_to_core(
     TTZoneScopedD(DISPATCH);
 
     auto lock = lock_api_function_();
+    // A dry run sends no work to the device (experimental/dry_run.hpp).
+    if (experimental::dry_run::active()) {
+        return;
+    }
     if (!mesh_device_->impl().is_local(address.device_coord)) {
         return;
     }
@@ -704,7 +713,7 @@ void FDMeshCommandQueue::enqueue_write_dram_core_counter(
     // the MeshDevice api lock across this write and the sequence it is part of, and that lock is
     // non-recursive, so re-locking would self-deadlock. See the declaration's contract.
 
-    if (this->get_target_device_type() == tt::TargetDevice::Mock ||
+    if (experimental::dry_run::active() || this->get_target_device_type() == tt::TargetDevice::Mock ||
         this->get_target_device_type() == tt::TargetDevice::Emule) {
         return;
     }
@@ -748,7 +757,7 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
     TTZoneScopedD(DISPATCH);
     auto lock = lock_api_function_();
 
-    if (this->get_target_device_type() == tt::TargetDevice::Mock ||
+    if (experimental::dry_run::active() || this->get_target_device_type() == tt::TargetDevice::Mock ||
         this->get_target_device_type() == tt::TargetDevice::Emule) {
         return;
     }
@@ -847,7 +856,7 @@ void FDMeshCommandQueue::throw_if_reader_failed() {
 void FDMeshCommandQueue::finish_nolock(ttsl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("FDMeshCommandQueue::finish_nolock");
 
-    if (this->get_target_device_type() == tt::TargetDevice::Mock ||
+    if (experimental::dry_run::active() || this->get_target_device_type() == tt::TargetDevice::Mock ||
         this->get_target_device_type() == tt::TargetDevice::Emule) {
         return;
     }
@@ -1073,7 +1082,7 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_helper(
     bool notify_host,
     const std::optional<MeshCoordinateRange>& device_range,
     ThreadPool::AfterFanOut after) {
-    if (this->get_target_device_type() == tt::TargetDevice::Mock ||
+    if (experimental::dry_run::active() || this->get_target_device_type() == tt::TargetDevice::Mock ||
         this->get_target_device_type() == tt::TargetDevice::Emule) {
         // Return a dummy event for mock devices
         return MeshEvent(0, *this, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
@@ -1155,6 +1164,10 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_to_host(
 
 void FDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent& sync_event) {
     auto lock = lock_api_function_();
+    // A dry run sends no work to the device (experimental/dry_run.hpp).
+    if (experimental::dry_run::active()) {
+        return;
+    }
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Event Synchronization is not supported during trace capture.");
     for_each_local(mesh_device_, sync_event.impl().device_range(), [&](const auto& coord) {
@@ -1659,6 +1672,10 @@ void FDMeshCommandQueue::write_go_signal_sequences_to_unused_sub_grids(
 
 void FDMeshCommandQueue::enqueue_trace(const MeshTraceId& trace_id, bool blocking) {
     auto lock = lock_api_function_();
+    // A dry run sends no work to the device (experimental/dry_run.hpp).
+    if (experimental::dry_run::active()) {
+        return;
+    }
     TT_FATAL(!trace_id_.has_value(), "Trace replay is not supported during trace capture.");
     in_use_ = true;
     auto trace_inst = mesh_device_->get_mesh_trace(trace_id);
@@ -1676,6 +1693,10 @@ void FDMeshCommandQueue::enqueue_command_list(
     bool blocking,
     const std::function<void()>& before_submit) {
     auto lock = lock_api_function_();
+    // A dry run sends no work to the device (experimental/dry_run.hpp).
+    if (experimental::dry_run::active()) {
+        return;
+    }
     TT_FATAL(!trace_id_.has_value(), "Command-list replay is not supported during trace capture.");
     TT_FATAL(
         mesh_device_->get_active_sub_device_manager_id() == sub_device_manager_id,
@@ -1695,7 +1716,7 @@ void FDMeshCommandQueue::enqueue_command_list_patch(
     TTZoneScopedD(DISPATCH);
     auto lock = lock_api_function_();
     TT_FATAL(!trace_id_.has_value(), "Command-list patches are not supported during trace capture.");
-    if (this->get_target_device_type() == tt::TargetDevice::Mock ||
+    if (experimental::dry_run::active() || this->get_target_device_type() == tt::TargetDevice::Mock ||
         this->get_target_device_type() == tt::TargetDevice::Emule) {
         return;
     }

@@ -85,6 +85,11 @@ while [[ $# -gt 0 ]]; do
             PROFILE_MODE=true
             shift
             ;;
+        --precompile | --no-precompile)
+            # Up-front precompile (tests/plugins/precompile.py) decides by itself; these force it on or off.
+            [[ "$1" == --precompile ]] && export PRECOMPILE=on || export PRECOMPILE=off
+            shift
+            ;;
         *)
             break
             ;;
@@ -255,6 +260,9 @@ else
 fi
 if [[ "$FAIL_FAST" == true ]]; then
     PYTEST_CMD+=(-x)
+fi
+if [[ "$SIM_MODE" == false && "$PROFILE_MODE" == false && "${PRECOMPILE:-auto}" != off ]]; then
+    PYTEST_CMD+=(-p tests.plugins.precompile)
 fi
 PYTEST_CMD+=("$@")
 

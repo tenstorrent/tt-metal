@@ -5,6 +5,7 @@
 #include <unordered_map>
 
 #include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/experimental/dry_run.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/program.hpp>
@@ -41,6 +42,10 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
 
 Program::Program(distributed::MeshDevice& mesh_device, const ProgramSpec& spec) :
     Program(BuildProgramFromSpec(mesh_device, spec)) {
+    if (experimental::dry_run::active()) {
+        impl().compile(&mesh_device);
+        throw experimental::dry_run::BuildsQueued();
+    }
     impl().compile_and_allocate(&mesh_device, false);
 }
 
@@ -59,6 +64,9 @@ distributed::MeshWorkload::MeshWorkload(
         impl().add_program(device_range, BuildProgramFromSpec(mesh_device, program_spec));
     }
     impl().compile(&mesh_device);
+    if (experimental::dry_run::active()) {
+        throw experimental::dry_run::BuildsQueued();
+    }
 }
 
 distributed::MeshWorkload::MeshWorkload(distributed::MeshDevice& mesh_device, const ProgramSpec& program_spec) :
@@ -66,6 +74,9 @@ distributed::MeshWorkload::MeshWorkload(distributed::MeshDevice& mesh_device, co
     impl().add_program(
         distributed::MeshCoordinateRange(mesh_device.shape()), BuildProgramFromSpec(mesh_device, program_spec));
     impl().compile(&mesh_device);
+    if (experimental::dry_run::active()) {
+        throw experimental::dry_run::BuildsQueued();
+    }
 }
 
 }  // namespace tt::tt_metal

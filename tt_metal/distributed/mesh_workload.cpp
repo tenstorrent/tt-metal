@@ -4,6 +4,7 @@
 
 #include <mesh_buffer.hpp>
 #include <tt-metalium/experimental/allocation_context.hpp>
+#include <tt-metalium/experimental/dry_run.hpp>
 #include <tt-metalium/experimental/mesh_workload_runtime_args.hpp>
 #include <tt-metalium/experimental/program_preparation.hpp>
 #include <tt_stl/fmt.hpp>
@@ -680,6 +681,13 @@ void MeshWorkloadImpl::compile_program(const MeshCoordinateRange& device_range, 
 }
 
 void MeshWorkloadImpl::compile(MeshDevice* mesh_device) {
+    if (experimental::dry_run::active()) {
+        // Queue each program's kernel builds; nothing is allocated or finalized (experimental/dry_run.hpp).
+        for (auto& [device_range, program] : programs_) {
+            program.impl().compile(mesh_device);
+        }
+        return;
+    }
     if (is_finalized()) {
         const int finalized_mesh_device_id = get_finalized_metadata().mesh_device_id;
         TT_FATAL(

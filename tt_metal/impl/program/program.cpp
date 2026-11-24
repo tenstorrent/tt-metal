@@ -41,6 +41,7 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
+#include <tt-metalium/experimental/dry_run.hpp>
 #include "buffer.hpp"
 #include "buffer_types.hpp"
 #include "impl/buffers/circular_buffer.hpp"
@@ -3377,7 +3378,10 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         this->sub_device_ids_[device->id()].erase(device->get_active_sub_device_manager_id());
     }
 
-    Inspector::program_compile_started(this, device, build_env.build_key());
+    const bool dry_run = experimental::dry_run::active();
+    if (!dry_run) {
+        Inspector::program_compile_started(this, device, build_env.build_key());
+    }
 
     // Currently JIT compile on Quasar mock devices is non functional
     if (cluster.get_target_device_type() == tt::TargetDevice::Mock && device->arch() == tt::ARCH::QUASAR) {
@@ -3456,6 +3460,58 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         for (const auto& [id, kernel] : kernels) {
             validate_kernel_placement(force_slow_dispatch, kernel, device->build_id());
         }
+    }
+
+    if (dry_run) {
+        // A dry run (experimental/dry_run.hpp) queues the kernel builds and stops here. Nothing waits for them, no
+        // binary is loaded and the program is not marked compiled. What a build reads from the device is taken now,
+        // because the build may run after the device has closed.
+        if (!builds_queued_.insert(build_env.build_key()).second) {
+            return;
+        }
+        if (remote_enabled) {
+            auto endpoints = jit_server::JitCompileRpcClient::endpoints_from_env();
+            if (endpoints.empty()) {
+                return;
+            }
+            auto coordinator = std::make_shared<RemoteCompileCoordinator>(
+                std::move(endpoints), device_context_id, device->build_id(), build_env.build_key());
+            for (auto& kernels : kernels_) {
+                for (auto& [id, kernel] : kernels) {
+                    auto [build_options, kernel_hash] = prep_kernel(kernel);
+                    if (!remote_kernel_cached(device, kernel)) {
+                        coordinator->submit(kernel_hash, [&]() {
+                            generate_kernel_source_files(device, build_options, kernel);
+                            return build_kernel_descriptor(device, kernel, build_options, kernel_hash);
+                        });
+                    }
+                }
+            }
+            queue_ahead_build([coordinator] { coordinator->finish(); });
+            return;
+        }
+        for (auto& kernels : kernels_) {
+            for (auto& [id, kernel] : kernels) {
+                // A kernel without a build task, or with precompiled binaries, is left to the program that uses it.
+                auto task = kernel->precompiled_config().has_value() ? std::function<void()>{}
+                                                                     : kernel->build_task(device);
+                if (!task) {
+                    continue;
+                }
+                auto [build_options, kernel_hash] = prep_kernel(kernel);
+                queue_ahead_build([kernel,
+                                   kernel_hash = kernel_hash,
+                                   build_options = std::move(build_options),
+                                   &env = build_env.build_env,
+                                   task = std::move(task)] {
+                    jit_build_once(kernel_hash, [&] {
+                        jit_build_genfiles_descriptors(env, build_options);
+                        task();
+                    });
+                });
+            }
+        }
+        return;
     }
 
     if (remote_enabled) {

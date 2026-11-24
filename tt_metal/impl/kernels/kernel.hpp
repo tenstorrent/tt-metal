@@ -469,6 +469,10 @@ public:
 
     virtual void set_build_options(JitBuildOptions& /*build_options*/) const {}
     virtual void generate_binaries(IDevice* device, JitBuildOptions& build_options) const = 0;
+    // The build of this kernel as a task that no longer reads `device`: what the build needs from the device is
+    // looked up now. Empty for a kernel type without one. A dry run (experimental/dry_run.hpp) runs these after the
+    // device has closed.
+    virtual std::function<void()> build_task(IDevice* /*device*/) const { return {}; }
     virtual void read_binaries(IDevice* device, const std::string& binary_root) = 0;
 
     void register_kernel_elf_paths_with_watcher(IDevice& device, const std::string& binary_root) const;
@@ -634,6 +638,7 @@ public:
 
     uint32_t get_kernel_processor_type(int index) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
+    std::function<void()> build_task(IDevice* device) const override;
     void read_binaries(IDevice* device, const std::string& binary_root) override;
 
     bool configure(
@@ -842,6 +847,7 @@ public:
     uint32_t get_kernel_processor_type(int index) const override;
     void set_build_options(JitBuildOptions& build_options) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
+    std::function<void()> build_task(IDevice* device) const override;
     void read_binaries(IDevice* device, const std::string& binary_root) override;
 
     bool configure(

@@ -138,6 +138,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/device_command_calculator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_query_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_core_common.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dry_run.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_engine_kernel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/internal/cluster_noc_helpers.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/internal/mesh_device.cpp

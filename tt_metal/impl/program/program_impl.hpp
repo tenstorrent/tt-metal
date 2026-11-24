@@ -951,6 +951,8 @@ private:
     std::vector<Semaphore> semaphores_;
 
     std::unordered_set<uint64_t> compiled_;
+    // Build keys a dry run has queued this program's kernel builds for (experimental/dry_run.hpp).
+    std::unordered_set<uint64_t> builds_queued_;
     bool local_circular_buffer_allocation_needed_{false};
     bool local_dataflow_buffer_allocation_needed_{false};
 

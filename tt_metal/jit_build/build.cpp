@@ -1326,6 +1326,38 @@ bool jit_build_once_no_wait(size_t hash, const std::function<void()>& build_fn) 
     return status != JitBuildCache::BuildOnceStatus::InProgress;
 }
 
+namespace {
+std::mutex ahead_builds_mutex;
+std::vector<std::shared_future<void>> ahead_builds;
+}  // namespace
+
+void queue_ahead_build(std::function<void()> build_fn) {
+    const std::lock_guard<std::mutex> lock(ahead_builds_mutex);
+    ahead_builds.emplace_back(detail::async([build_fn = std::move(build_fn)] {
+        try {
+            build_fn();
+        } catch (const std::exception& e) {
+            log_debug(tt::LogBuildKernels, "A kernel build queued by a dry run failed: {}", e.what());
+        }
+    }));
+}
+
+void wait_for_ahead_builds() {
+    std::vector<std::shared_future<void>> builds;
+    {
+        const std::lock_guard<std::mutex> lock(ahead_builds_mutex);
+        builds.swap(ahead_builds);
+    }
+    for (auto& build : builds) {
+        build.get();
+    }
+}
+
+bool ahead_builds_pending() {
+    const std::lock_guard<std::mutex> lock(ahead_builds_mutex);
+    return !ahead_builds.empty();
+}
+
 void jit_build_cache_clear() {
     JitBuildCache::inst().clear();
     jit_build::clear_file_hash_cache();

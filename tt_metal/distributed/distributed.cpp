@@ -6,6 +6,7 @@
 #include <tt_stl/fmt.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/experimental/dry_run.hpp>
 #include <utility>
 
 #include "device.hpp"
@@ -31,6 +32,11 @@ namespace tt::tt_metal::distributed {
 void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking) {
     // Short-circuit for inactive MeshDevices (no-op)
     if (mesh_cq.device()->get_device_ids().empty()) {
+        return;
+    }
+    // A dry run queues the workload's kernel builds and launches nothing (experimental/dry_run.hpp).
+    if (experimental::dry_run::active()) {
+        mesh_workload.impl().compile(mesh_cq.device());
         return;
     }
 
@@ -142,6 +148,10 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
 }
 
 void EventSynchronize(const MeshEvent& event) {
+    // A dry run records no events, so there is nothing to wait for (experimental/dry_run.hpp).
+    if (experimental::dry_run::active()) {
+        return;
+    }
     if (!event.device()->impl().metal_env().get_rtoptions().get_fast_dispatch()) {
         // Slow dispatch records no event, so wait for the recording queue's workloads to finish.
         event.device()->mesh_command_queue(event.impl().mesh_cq_id()).enqueue_wait_for_event(event);
@@ -167,6 +177,9 @@ void EventSynchronize(const MeshEvent& event) {
 }
 
 bool EventQuery(const MeshEvent& event) {
+    if (experimental::dry_run::active()) {
+        return true;
+    }
     if (!event.device()->impl().metal_env().get_rtoptions().get_fast_dispatch()) {
         return true;
     }
