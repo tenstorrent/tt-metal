@@ -2,9 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// RISC-V performance monitor capture per kernel launch. Counter and select definitions are in tt-llk
-// perf_counters/riscv_pmc_*.h; this header adds the marker format and emission. The selects come from
-// TT_METAL_PROFILE_RISCV_PMC and TT_METAL_PROFILE_RISCV_PMC_DM and are compile-time constants.
+// RISC-V performance monitor capture per kernel launch: marker format and emission over the tt-llk tables in
+// perf_counters/riscv_pmc_*.h. The selects come from TT_METAL_PROFILE_RISCV_PMC(_DM) at compile time.
 
 #pragma once
 
