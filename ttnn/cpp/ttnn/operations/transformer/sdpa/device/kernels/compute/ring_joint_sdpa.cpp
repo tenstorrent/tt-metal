@@ -562,15 +562,8 @@ __attribute__((optimize("Os"))) void kernel_main() {
                         });
                     if constexpr (ksplit_enabled) {
                         if (ksplit_active) {
-                            if (ksplit_band + 1 < ksplit_count) {
-                                recipe_ring_ksplit_publish(resident, !band.empty());
-                            } else {
-                                recipe_ring_ksplit_merge_and_normalize<
-                                    Sq_chunk_t,
-                                    vDHt,
-                                    get_compile_time_arg_val(26),
-                                    ksplit_count>(resident, plan.total_k_chunk_count);
-                            }
+                            recipe_ring_ksplit_finish<Sq_chunk_t, vDHt, get_compile_time_arg_val(26), ksplit_count>(
+                                resident, ksplit_band, !band.empty(), plan.total_k_chunk_count);
                         }
                     }
                 } else {

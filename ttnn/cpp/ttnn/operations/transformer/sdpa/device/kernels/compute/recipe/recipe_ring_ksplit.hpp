@@ -17,22 +17,20 @@ using RecipeRingKSplitReceived = recipe_merge::Received<
     recipe_ring_cb::ksplit_recv_sum,
     recipe_ring_cb::ksplit_corr>;
 
-// A sender band's state (has_state: the band ran K chunks) to the writer. (The wrappers assert the BF16-state recipes:
-// a static_assert here would fire in the discarded branches of their FP32 builds.)
-ALWI void recipe_ring_ksplit_publish(const RecipeAccumulatorState& state, bool has_state) {
-    recipe_merge::publish_state<
-        recipe_ring_cb::ksplit_signal,
-        recipe_ring_cb::ksplit_word_max_cb,
-        recipe_ring_cb::ksplit_word_has_state>(state, has_state);
-}
-
-// The reducer band: the senders' states merged into its own in band order (a sender whose band was empty is popped
-// unmerged), then the recipe's normalization into the output CB. Size-optimized: once per call.
+// After a band's last chunk (non-final): a sender band (band < ksplit_count - 1) hands its state (band_ran: it ran K
+// chunks) to the writer; the reducer band merges the senders' states into its own in band order (a sender whose band
+// was empty is popped unmerged), then the recipe's normalization into the output CB. Size-optimized: once per call.
+// (The wrappers assert the BF16-state recipes: a static_assert here would fire in their FP32 builds' discarded
+// branches.)
 template <uint32_t Sq_chunk_t, uint32_t vDHt, uint32_t scale_fp32, uint32_t ksplit_count>
-__attribute__((noinline, optimize("Os"))) void recipe_ring_ksplit_merge_and_normalize(
-    RecipeAccumulatorState& state, uint32_t plan_k_chunks) {
+__attribute__((noinline, optimize("Os"))) void recipe_ring_ksplit_finish(
+    RecipeAccumulatorState& state, uint32_t ksplit_band, bool band_ran, uint32_t plan_k_chunks) {
     namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
     using namespace recipe_ring_cb;
+    if (ksplit_band + 1 < ksplit_count) {
+        recipe_merge::publish_state<ksplit_signal, ksplit_word_max_cb, ksplit_word_has_state>(state, band_ran);
+        return;
+    }
     // The last sender band that ran K chunks: earlier merges keep the merged maxima for the next one.
     uint32_t last_live = ksplit_count;
     for (uint32_t band = 0; band + 1 < ksplit_count; ++band) {
