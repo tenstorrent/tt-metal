@@ -2466,10 +2466,11 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_matmul_custom": "perf_matmul_custom"},
     },
     "perf_matmul_in1_column_stride": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "c_dimm",
             "dest_acc",
+            "dest_sync",
             "formats.input_A",
             "formats.input_B",
             "formats.output",
