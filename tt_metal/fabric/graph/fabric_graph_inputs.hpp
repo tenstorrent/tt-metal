@@ -42,8 +42,6 @@ struct UnusedLink {
 std::vector<UnusedLink> unused_links(
     const ControlPlane& control_plane, const tt::Cluster& cluster, const std::string& fsd_path = "");
 
-std::vector<UnusedLink> with_missing_links(std::vector<UnusedLink> links, const std::vector<UnusedLink>& missing);
-
 std::vector<PerimeterPort> perimeter_ports(
     const std::vector<UnusedLink>& links,
     const std::vector<Port>& ports,

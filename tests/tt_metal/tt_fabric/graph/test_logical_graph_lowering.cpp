@@ -862,8 +862,8 @@ TEST(FabricGraphPerimeter, DeadLinkRecorded) {
 }
 
 TEST(FabricGraphPerimeter, UntrainedFsdLinkKeepsTheCount) {
-    const auto links = with_missing_links(
-        {unused(0, 9, 7), unused(0, 11, 7)}, {unused(0, 10, 7, /*in_domain=*/false, /*trained=*/false)});
+    const std::vector<UnusedLink> links = {
+        unused(0, 9, 7), unused(0, 11, 7), unused(0, 10, 7, /*in_domain=*/false, /*trained=*/false)};
     const auto p = perimeter("p150_mesh_graph_descriptor.textproto", kP150, links);
     ASSERT_EQ(p.size(), 3u);
     for (uint32_t i = 0; i < 3; ++i) {
@@ -875,8 +875,8 @@ TEST(FabricGraphPerimeter, UntrainedFsdLinkKeepsTheCount) {
 }
 
 TEST(FabricGraphPerimeter, AllDownPeerTakesItsSide) {
-    const auto links =
-        with_missing_links({unused(0, 5, 8)}, {unused(0, 2, 7, false, false), unused(0, 3, 7, false, false)});
+    const std::vector<UnusedLink> links = {
+        unused(0, 5, 8), unused(0, 2, 7, false, false), unused(0, 3, 7, false, false)};
     const auto p = perimeter("p150_mesh_graph_descriptor.textproto", kP150, links);
     ASSERT_EQ(p.size(), 3u);
     EXPECT_EQ(p[0].direction, PortDirection{RoutingDirection::N});
@@ -886,25 +886,6 @@ TEST(FabricGraphPerimeter, AllDownPeerTakesItsSide) {
     EXPECT_EQ(p[2].direction, PortDirection{RoutingDirection::E});
     EXPECT_EQ(p[2].eth_chan, 5);
     EXPECT_TRUE(p[2].link_trained);
-}
-
-TEST(FabricGraphPerimeter, MissingLinksMerge) {
-    const auto links = with_missing_links(
-        {unused(0, 4, 7)}, {unused(0, 4, 9, false, false), unused(0, 6, 31, /*in_domain=*/true, false)});
-    ASSERT_EQ(links.size(), 2u);
-    EXPECT_EQ(links[0].peer_asic, 7u);
-    EXPECT_TRUE(links[0].trained);
-    const auto p = perimeter("p150_mesh_graph_descriptor.textproto", kP150, links);
-    ASSERT_EQ(p.size(), 1u);
-    EXPECT_TRUE(p[0].link_trained);
-}
-
-TEST(FabricGraphPerimeter, NoFsdNoChange) {
-    const std::vector<UnusedLink> live = {unused(0, 9, 7), unused(0, 8, 7)};
-    const auto links = with_missing_links(live, {});
-    ASSERT_EQ(links.size(), 2u);
-    EXPECT_EQ(links[0].chan, 8);
-    EXPECT_EQ(links[1].chan, 9);
 }
 
 TEST(FabricGraphPerimeter, TwoDimensionalOnly) {
