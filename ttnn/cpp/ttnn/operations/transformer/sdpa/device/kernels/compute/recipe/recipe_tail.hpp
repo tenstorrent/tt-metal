@@ -118,6 +118,9 @@ struct RecipeRingFrame {
 static RecipeRingFrame recipe_ring_frame;
 // The first Q tile row of the subblock being packed (set by the QK pack sites).
 static uint32_t recipe_mask_row0;
+// Ring kernels: the fused chunk's K tiles before the first one masked whole by key padding (set per chunk; a file
+// static, not a fused-chunk local, so other builds' closures stay as they were).
+static uint32_t recipe_ring_kt_live;
 
 ALWI uint32_t recipe_valid_k_columns(uint32_t tile) {
     uint32_t remaining;
