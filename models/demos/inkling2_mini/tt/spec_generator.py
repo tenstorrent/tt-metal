@@ -37,14 +37,18 @@ class TappedModel(Inkling2Model):
     # steps (a prompt feed, text the drafter does not predict): a draft needs every position before it committed,
     # so a group cut short is committed by stash_commit(n) first (SpecGenerator.ftrace).
     stash = False
+    # True: the step leaves the drafter alone (no taps, no commit): the plain step for positions the drafter does
+    # not cover (its max_ctx is below the model's), beside the drafter's and the verify pass's programs.
+    quiet = False
 
     def _app(self, L, p, h, stack, n_sealed, msgs, row_out=True):
         if not self.tapping:
             return super()._app(L, p, h, stack, n_sealed, msgs, row_out=row_out)
-        if (L, p) in TAP_LP:  # h is a module buffer that later loop passes overwrite
+        tap = not self.quiet
+        if tap and (L, p) in TAP_LP:  # h is a module buffer that later loop passes overwrite
             j = TAP_LP.index((L, p))
             self._taps[(L, p)] = self.drafter.stash_put(self.slot, j, h) if self.stash else ttnn.clone(h)
-        res = super()._app(L, p, h, stack, n_sealed, msgs, row_out=row_out or (L, p) in PRE_TAP_LP)
+        res = super()._app(L, p, h, stack, n_sealed, msgs, row_out=row_out or (tap and (L, p) in PRE_TAP_LP))
         self._release()  # the app before this one: its expert output was read by this app's first program
         self._expert = getattr(self.layers[L].moe.fused, "release_last", None) if self.free_rows else None
         return res
@@ -72,6 +76,9 @@ class TappedModel(Inkling2Model):
         self._taps = {}
         res = super().step(force=force, collect=collect)
         self._release()
+        if self.quiet:
+            self._taps = {}
+            return res
         if self.stash:
             d = self.drafter
             d.stash_put(self.slot, len(TAP_LP), self._taps["final"])
@@ -94,16 +101,22 @@ class TappedModel(Inkling2Model):
     def set_inputs(self, token, pos):
         super().set_inputs(token, pos)
         self.slot = pos % STASH
-        if self.tapping:
+        if self.tapping and pos < self.drafter.max_ctx:
             self.drafter.set_commit_pos(pos)
 
 
 class SpecGenerator(Generator):
-    def __init__(self, model: TappedModel, drafter: DSparkDrafter, overlap=True, verify=None, stash=False):
+    def __init__(self, model: TappedModel, drafter: DSparkDrafter, overlap=True, verify=None, stash=False,
+                 quiet=None):  # fmt: skip
         """verify: a tt/verify.VerifyStep (R <= drafter.k + 1) for generate_rows, or a list of them (early stop:
         one per row count); None: generate_spec only. stash: capture_rows also captures the stash steps (strace,
-        sout: as trace, out) and the commit of a group's first n positions (ftrace[n]); see TappedModel.stash."""
+        sout: as trace, out) and the commit of a group's first n positions (ftrace[n]); see TappedModel.stash.
+        quiet: capture_rows also captures the steps that leave the drafter alone (qtrace, qout: as trace, out;
+        TappedModel.quiet), for positions from drafter.max_ctx on; None = when the drafter covers less than the
+        model."""
         super().__init__(model, overlap=overlap)
+        self.quiet = drafter.max_ctx < model.max_ctx if quiet is None else quiet
+        self.qtrace, self.qout = None, None
         self.stash, self.strace, self.sout, self.ftrace = stash, None, None, {}
         self.drafter = drafter
         vs = verify if isinstance(verify, (list, tuple)) else [verify] if verify is not None else []
@@ -126,8 +139,10 @@ class SpecGenerator(Generator):
 
     def release(self):
         self.drafter.release()
-        for tid in [t for t, _ in self.vtrace.values()] + list(self.ctrace.values()) + (self.strace or []):
+        for tid in ([t for t, _ in self.vtrace.values()] + list(self.ctrace.values()) + (self.strace or [])
+                    + (self.qtrace or [])):  # fmt: skip
             ttnn.release_trace(self.device, tid)
+        self.qtrace = None
         for tid in self.ftrace.values():
             ttnn.release_trace(self.device, tid)
         self.vtrace, self.ctrace, self.strace, self.ftrace = {}, {}, None, {}
@@ -234,6 +249,16 @@ class SpecGenerator(Generator):
             m.stash = False
             ttnn.synchronize_device(self.device)
             say("S6 eager stash", flush=True)
+        if self.quiet:
+            m.quiet = True
+            for ph in range(4):
+                m.set_inputs(0, ph)
+                self._stage_restore(snap)
+                m.step()
+                self._stage_topup(snap)
+                self._stage_restore(snap)
+            m.quiet = False
+            ttnn.synchronize_device(self.device)
         if before_capture is not None:
             before_capture()
         if self.overlap is not None:  # settle the staging attach pattern again after the verify passes
@@ -265,6 +290,20 @@ class SpecGenerator(Generator):
                 d.stash_commit(n)
                 ttnn.end_trace_capture(self.device, self.ftrace[n], cq_id=0)
             say("S6 stash captured", flush=True)
+        if self.quiet:  # as the stash steps
+            m.quiet = True
+            self.qtrace, self.qout = [], []
+            for ph in range(4):
+                m.set_inputs(0, ph)
+                self._stage_restore(snap)
+                self.qtrace.append(ttnn.begin_trace_capture(self.device, cq_id=0))
+                self.qout.append(m.step())
+                self._stage_topup(snap)
+                ttnn.end_trace_capture(self.device, self.qtrace[-1], cq_id=0)
+                self._stage_snap(snap)
+                self._stage_restore(snap)
+            m.quiet = False
+            say("S6 quiet captured", flush=True)
         for V in Vs:
             R = V.R
             for ph in range(4):
@@ -456,6 +495,16 @@ class SpecGenerator(Generator):
 VERIFY_NEED_GIB = (0.46, 0.74)
 
 
+# The drafter beside a built model: its weights and head copy, and per covered position the context K / V (one
+# full-length layer; the two local layers are rings) and the RoPE rows.
+DRAFTER_GIB = (0.83, 4608 / 2**30)  # measured at 143360 positions: 0.55 + 0.28 (BFP4 head copy) + 0.62 GiB
+
+
+def spec_fits(free_gib, spec_ctx):
+    """True when the drafter for spec_ctx positions and the 2-row verify step fit in free_gib of DRAM."""
+    return free_gib >= DRAFTER_GIB[0] + DRAFTER_GIB[1] * spec_ctx + VERIFY_NEED_GIB[0]
+
+
 def dram_free_gib(device):
     v = ttnn.get_memory_view(device, ttnn.BufferType.DRAM)
     return v.num_banks * v.total_bytes_free_per_bank / 2**30
@@ -473,8 +522,10 @@ def verify_rows(device, max_ctx):
     return [2, 3] if free >= VERIFY_NEED_GIB[1] else [2]
 
 
-def build(device, max_ctx, log=print, mtp_root=None, k=7, **kw):
-    """TappedModel + its drafter (Inkling2Model.__init__ never steps, so the drafter can be attached after)."""
+def build(device, max_ctx, log=print, mtp_root=None, k=7, spec_ctx=None, **kw):
+    """TappedModel + its drafter (Inkling2Model.__init__ never steps, so the drafter can be attached after).
+    spec_ctx: the positions the drafter covers when that is less than max_ctx (drafts and verify passes below it,
+    TappedModel.quiet steps from it on)."""
     model = TappedModel(device, max_ctx=max_ctx, log=log, **kw)
-    model.drafter = DSparkDrafter(model, root=mtp_root, max_ctx=max_ctx, k=k)
+    model.drafter = DSparkDrafter(model, root=mtp_root, max_ctx=min(max_ctx, spec_ctx or max_ctx), k=k)
     return model, model.drafter
