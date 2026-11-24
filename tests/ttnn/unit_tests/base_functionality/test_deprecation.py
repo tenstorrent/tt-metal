@@ -127,3 +127,20 @@ def test_warnings_as_errors_raise_future_warning_through_ttnn_frames(expect_erro
 def test_empty_what_or_instead_is_rejected(what, instead, empty, expect_error):
     with expect_error(ValueError, f"non-empty '{empty}'"):
         warn_deprecated(what, instead)
+
+
+def test_earliest_removal_date_puts_the_date_in_the_message():
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        warn_deprecated("ttnn.old_op", "ttnn.new_op", earliest_removal_date="2026-12-31")
+
+    messages = [str(w.message) for w in caught]
+    assert messages == [
+        "ttnn.old_op is deprecated and will be removed no earlier than 2026-12-31; use ttnn.new_op instead."
+    ]
+
+
+@pytest.mark.parametrize("earliest_removal_date", ["", "2026-12-1", "20261231", "2026-02-30", "2026-12-31T00:00"])
+def test_earliest_removal_date_other_than_yyyy_mm_dd_is_rejected(earliest_removal_date, expect_error):
+    with expect_error(ValueError, "'earliest_removal_date' as YYYY-MM-DD"):
+        warn_deprecated("ttnn.old_op", "ttnn.new_op", earliest_removal_date=earliest_removal_date)
