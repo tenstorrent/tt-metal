@@ -246,15 +246,25 @@ constexpr bool matmul_supports_tensor_shapes(const TensorShape& in0_tensor_shape
     return k_dims_match && in1_full_faces && !in1_is_16x16 && in0_faces_ok;
 }
 
+// Out of line because C++17 allows no asm (the assert) in a constexpr body.
+inline void assert_invalid_legacy_num_faces_()
+{
+    LLK_ASSERT(false, "num_faces must be one of the valid values: 1, 2, or 4");
+}
+
 /**
  * @brief Construct a TensorShape from the legacy (face_r_dim, num_faces) pair.
  *
  * Same argument order, mapping, and limitations as @ref tensor_shape_from_num_faces: num_faces == 2
  * becomes 1x2 (16x32-class), not 2x1 (32x16). Prefer @ref make_tensor_shape for narrow tiles.
+ * @note constexpr so a shape built from constants folds away instead of being reloaded per tile.
  */
-inline TensorShape make_tensor_shape_from_legacy(const std::uint8_t face_r_dim, const std::uint8_t num_faces)
+constexpr TensorShape make_tensor_shape_from_legacy(const std::uint8_t face_r_dim, const std::uint8_t num_faces)
 {
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be one of the valid values: 1, 2, or 4");
+    if (!(num_faces == 1 || num_faces == 2 || num_faces == 4))
+    {
+        assert_invalid_legacy_num_faces_();
+    }
     return tensor_shape_from_num_faces(face_r_dim, num_faces);
 }
 
