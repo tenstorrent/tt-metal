@@ -34,6 +34,7 @@ Build tt-metal and activate its python env as usual. The scripts take their data
 | `INKLING_MODE` | `default` or `fast`: which expert weights load (see "Run modes"; `--fast` in the demo) |
 | `INKLING_CACHE` | the converted weight cache the model loads (overrides the mode's) |
 | `INKLING_TILE_CACHE` | a cache with the experts as tiles, for the chunked prefill and its test (overrides the mode's) |
+| `INKLING_PF_GATE_BF16` | `0`: prefill keeps the loop gate messages and outputs fp32 (default `1`: bf16, faster) |
 | `INKLING_GOLDEN` | CPU golden outputs (per-prompt hidden states and logits), for the golden check and perf gate |
 | `INKLING_PERF_DIR` | where perf.py appends its results and keeps its baseline |
 | `INKLING_REF_PYTHON` | a python with transformers >= 5.24 (Inkling2), for the HF-reference tests |
@@ -50,7 +51,7 @@ They differ only in how many expert layers are 4-bit; the rest of the model is t
 | fast | own3-l8: GPTQ, layers 0-19 all BFP4 | `own3-l8-pf` | `own3-l8-tile` | 13.1 / 18.5 ms | .0096 |
 
 The caches live in `/work/inkling-bringup/cache/` (`modes.py`). Prefill uses the same LoFi K-blocked
-defaults in both modes.
+defaults in both modes, with the loop gate messages stored bf16 (`INKLING_PF_GATE_BF16=0` turns that off).
 
 ## Speculative decode (off by default)
 

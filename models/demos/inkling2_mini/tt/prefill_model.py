@@ -36,6 +36,7 @@ segments split at each MoE routing readback (see "traced chunks" below).
 from __future__ import annotations
 
 import math
+import os
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -320,7 +321,7 @@ class _Gate:
         return rms_norm_bf16_fan(_f32(h), n, epsilon=EPS, compute_kernel_config=self.ckc)
 
     def __call__(self, h, m, nh=None, bf16=False, cat=None):
-        """bf16: opt-in bf16 gate path (Inkling2Prefill.gate_bf16): m may be bf16, bf16 output. Changes output."""
+        """bf16: the bf16 gate path (Inkling2Prefill.gate_bf16, the default): m may be bf16, bf16 output."""
         h = _f32(h)
         m = m if bf16 and m.dtype == ttnn.bfloat16 else _f32(m)
         if cat is not None:  # x with rms(h) in place (norm_fan): rms(m) into its other half
@@ -601,9 +602,9 @@ class Inkling2Prefill:
         # accumulate K in blocks of 4 tiles (else 1 / 2): other fp32 summation order, ~-1.3 ms per application at
         # 8K (perf/G5d-report.md). On by default; mm_blocked=False is the earlier default.
         self.mm_blocked = mm_blocked
-        # Opt-in, changes output: the loop message gates' messages and outputs stored bf16 (fp32 inside each
-        # program; tt/fused/pf_msg.py, pf_gate.py). Off by default.
-        self.gate_bf16 = False
+        # The loop message gates' messages and outputs stored bf16 (fp32 inside each program; tt/fused/pf_msg.py,
+        # pf_gate.py). On by default in both run modes; INKLING_PF_GATE_BF16=0 keeps them fp32 (the earlier output).
+        self.gate_bf16 = os.environ.get("INKLING_PF_GATE_BF16", "1") != "0"
         self.debug = debug
         self.profile = profile
         self.trace = trace
