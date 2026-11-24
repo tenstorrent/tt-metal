@@ -2,11 +2,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tensor-parallel vocab padding, in both places that implement it.
+"""Tensor-parallel vocab padding, in every place that implements it.
 
-The rule is one invariant with two implementations -- ``tp_padded_vocab_size`` in the
-qwen3 example and ``Llama.padded_vocab_size`` in ``ttml.models.llama`` -- so both are
-covered here.
+The rule is one invariant with three implementations -- ``tp_padded_vocab_size`` in the
+qwen3 example, ``Llama.padded_vocab_size`` in ``ttml.models.llama`` and
+``DeepSeek.padded_vocab_size`` in ``ttml.models.deepseek`` -- so all three are covered
+here.
 
 The padded vocab must be divisible by ``tp_size`` (ColumnParallelLinear and
 VocabParallelEmbedding both shard dim 2 across TP) *and* each resulting shard must be
@@ -63,6 +64,7 @@ _saved_utils = {k: sys.modules.pop(k) for k in list(sys.modules) if k == "utils"
 try:
     from ttml.models.qwen3 import Qwen3Config  # noqa: E402
     from ttml.models.llama import EmbeddingPlacement, Llama, LlamaConfig  # noqa: E402
+    from ttml.models.deepseek import DeepSeek, DeepSeekConfig  # noqa: E402
     from utils.context_managers import empty_init  # noqa: E402
     from model_qwen3_distributed import (  # noqa: E402
         DistributedQwen3ForCausalLM,
@@ -134,6 +136,33 @@ def test_llama_padded_vocab_gives_tile_aligned_shards(tp_mesh, vocab):
         embedding_placement=EmbeddingPlacement.VocabParallel,
     )
     _assert_shards_tile_aligned(Llama(cfg).padded_vocab_size, vocab, tp_mesh.axis_size("tp"))
+
+
+def _deepseek_tp_config(vocab):
+    """One dense DeepSeek block with full-model TP on the mesh's "tp" axis."""
+    return DeepSeekConfig(
+        vocab_size=vocab,
+        dim=HIDDEN,
+        inter_dim=128,
+        n_layers=1,
+        n_dense_layers=1,
+        n_heads=TP_AXIS_SIZE,
+        q_lora_rank=0,
+        kv_lora_rank=32,
+        qk_nope_head_dim=32,
+        qk_rope_head_dim=32,
+        v_head_dim=32,
+        max_seq_len=32,
+        use_tp=True,
+    )
+
+
+@pytest.mark.parametrize("vocab", [64, 96, 100, 129280])
+def test_deepseek_padded_vocab_gives_tile_aligned_shards(tp_mesh, vocab):
+    """``ttml.models.deepseek`` padded with ``lcm(32, tp_size)`` too, and there it is live: its TP LM head gathers its
+    output, so the backward partitions the logits' gradient back over TP, rank by rank (see the end-to-end test below).
+    129280 is DeepSeek-V3's vocab."""
+    _assert_shards_tile_aligned(DeepSeek(_deepseek_tp_config(vocab)).padded_vocab_size, vocab, tp_mesh.axis_size("tp"))
 
 
 # ---------------------------------------------------------------------------
@@ -213,3 +242,33 @@ def test_every_rank_reads_its_own_vocab_rows(tp_mesh):
     rows_read = [int(round(got[i, 1])) * 128 + int(round(got[i, 0])) - 1 for i in range(len(probes))]
     shifted = [(p, r) for p, r in zip(probes, rows_read) if p != r]
     assert not shifted, f"(id, row_read) pairs disagree, -1 means the zero padding: {shifted}"
+
+
+# ---------------------------------------------------------------------------
+# 4. DeepSeek end to end
+# ---------------------------------------------------------------------------
+
+
+def test_deepseek_tp_trains_with_a_vocab_lcm_padding_misaligns(tp_mesh):
+    """Forward and backward of a TP DeepSeek with the 96-token vocab.
+
+    The LM head gathers its vocab-sharded logits, and its backward partitions their gradient back over TP, which needs
+    every rank's share to be whole tiles. Under ``lcm(32, tp_size)`` the vocab stayed at 96, 48 columns a rank, and the
+    backward failed.
+    """
+    model = DeepSeek(_deepseek_tp_config(MISALIGNED_VOCAB))
+    seq = 32
+    rng = np.random.default_rng(0)
+    ids = rng.integers(0, MISALIGNED_VOCAB, (1, 1, 1, seq)).astype(np.uint32)
+    targets = rng.integers(0, MISALIGNED_VOCAB, (1, seq)).astype(np.uint32)
+    logits = model(ttml.autograd.Tensor.from_numpy(ids, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32))
+    assert list(logits.get_value().shape)[-1] == MISALIGNED_VOCAB, "the padding is sliced off the logits"
+    loss = ttml.ops.loss.cross_entropy_loss(
+        logits,
+        ttml.autograd.Tensor.from_numpy(targets, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32),
+        ttml.ops.ReduceType.MEAN,
+    )
+    loss.backward(False)
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+    head = next(param for name, param in model.parameters().items() if name.split("/")[-2:] == ["head", "weight"])
+    assert head.is_grad_initialized(), "the LM head got no gradient"

@@ -51,10 +51,14 @@ void RunTest(DevicePrintFixture* fixture, const std::shared_ptr<distributed::Mes
             expected_output.push_back(fmt::format("({},{}) After wait...", x, y));
         }
     }
-    EXPECT_TRUE(FileContainsAllStrings(fixture->dprint_file_name, expected_output));
+    EXPECT_TRUE(FileMatchesLines(fixture->dprint_file_name, expected_output));
 }
 
 TEST_F(DevicePrintFixture, TensixTestPrintFinish) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP()
+            << "Quasar: print_with_wait.cpp calls ckernel::wait(), which doesn't build for data-movement RISCs";
+    }
     auto mesh_devices = this->devices_;
     // Run only on the first device, as this tests disconnects devices and this can cause
     // issues on multi-device setups.

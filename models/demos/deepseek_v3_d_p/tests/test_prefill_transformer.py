@@ -235,6 +235,7 @@ def run_model(
             num_layers,
             experts_per_chip,
             first_k_dense=variant.model_config.NUM_DENSE_LAYERS,
+            model_cfg=variant.model_config,
         )
         if effective_cache_path
         else False
@@ -417,6 +418,7 @@ def run_model(
 
     profiler.start("tt_transformer_creation")
     transformer = TtPrefillTransformer(
+        moe_impl="ttmoe",  # (TtMoe: tt/moe_impl.py)
         mesh_device=mesh_device,
         config=config,
         model_cfg=variant.model_config,
@@ -1133,6 +1135,14 @@ def test_kimi_prefill_transformer(
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
             id="torus-x-4x4-sp1",
         ),
+        pytest.param(
+            (4, 4),
+            torus_xy_device_params(fabric_payload_size=moe_fabric_payload(GLM53Config)),
+            2,
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-xy-4x4-sp1",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -1244,6 +1254,14 @@ def test_glm_prefill_transformer(
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
             id="torus-x-4x4-sp1",
         ),
+        pytest.param(
+            (4, 4),
+            torus_xy_device_params(fabric_payload_size=GLM53Config.FABRIC_PAYLOAD_SIZE),
+            2,
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-xy-4x4-sp1",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -1282,6 +1300,7 @@ def test_glm_build_ttnn_cache(
             num_layers,
             experts_per_chip,
             first_k_dense=variant.model_config.NUM_DENSE_LAYERS,
+            model_cfg=variant.model_config,
         )
 
     if _cache_complete():
