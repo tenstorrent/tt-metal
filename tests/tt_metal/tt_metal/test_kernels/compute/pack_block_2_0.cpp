@@ -35,7 +35,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
     // Id-free copy-into-DST init from the input CB (c_0); the copy_tile OP below stays the legacy CB-id call.
-    experimental::copy_init(InOp(in_cb.read_address()));
+    experimental::copy_src_to_dest_init(InOp(in_cb.read_address()));
 
     for (std::uint32_t b = 0; b < per_core_tile_cnt; b += block) {
         tile_regs_acquire();
@@ -50,7 +50,7 @@ void kernel_main() {
         tile_regs_wait();
 
         // Pack DST[0..block-1] to the block base (reserved-region tile 0); pack_block strides by tile_stride_words.
-        experimental::pack_block(OutOp(out_cb.write_address()), 0 /*ifrom_dst*/, block);
+        experimental::pack_block<block, 1>(OutOp(out_cb.write_address()), 0 /*ifrom_dst*/);
 
         cb0.pop_front(block);
         cb16.push_back(block);

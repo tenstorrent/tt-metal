@@ -33,14 +33,14 @@ void kernel_main() {
     compute_kernel_hw_startup(InOp(in_cb.read_address()), OutOp(out_cb.write_address()));
     // fp8 input: fully id-free. The 2.0 copy_init now programs the format-driven Src zero-substitution flag
     // (flush fp8, preserve otherwise), matching legacy copy_init, so no legacy CB-id init is needed.
-    experimental::copy_init(InOp(in_cb.read_address()));
+    experimental::copy_src_to_dest_init(InOp(in_cb.read_address()));
 
     for (std::uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         tile_regs_acquire();
 
         cb0.wait_front(1);
         cb16.reserve_back(1);
-        experimental::copy_tile(InOp(in_cb.read_address()), 0, 0);
+        experimental::copy_src_to_dest_tile(InOp(in_cb.read_address()), 0, 0);
 
         tile_regs_commit();
         tile_regs_wait();

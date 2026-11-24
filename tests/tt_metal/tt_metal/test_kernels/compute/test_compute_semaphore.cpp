@@ -172,14 +172,14 @@ void kernel_main() {
         const Op out(operand_addr(report_addr + kDOutOffset));
 
         compute_kernel_hw_startup(in, out);  // also seeds the compute semaphore to 0 (on PACK)
-        ckernel::experimental::copy_init(in);
+        ckernel::experimental::copy_src_to_dest_init(in);
 
         for (std::uint32_t i = 0; i < num_iters; ++i) {
             const std::uint32_t slot = i % kDepth;
 
             // Round 1: in[i] -> DST[0] -> mid[slot], then PACK publishes the slot.
             tile_regs_acquire();
-            ckernel::experimental::copy_tile(in, i, 0);
+            ckernel::experimental::copy_src_to_dest_tile(in, i, 0);
             tile_regs_commit();
             tile_regs_wait();
             if constexpr (!nosync) {
@@ -196,7 +196,7 @@ void kernel_main() {
             if constexpr (!nosync) {
                 UNPACK(sem.wait_min(1);)
             }
-            ckernel::experimental::copy_tile(mid, slot, 0);
+            ckernel::experimental::copy_src_to_dest_tile(mid, slot, 0);
             if constexpr (!nosync) {
                 UNPACK(sem.down(1);)
             }

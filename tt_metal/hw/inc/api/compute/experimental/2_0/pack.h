@@ -68,11 +68,9 @@ inline void pack_tile(LLKOperand<Format, Shape> out, std::uint32_t itile, std::u
 // clang-format off
 /**
  * Id-free block pack, Quasar: a pack of each tile of a ct_dim x rt_dim block, Dest tiles
- * ifrom_dst + i -> output tiles start_out_tile + i, i < ct_dim * rt_dim. Argument order = the runtime pack_block
- * without ntiles. The block must fit one Dest section
- * (static_assert).
- * No tails: every block op between two inits must cover the same tile count; for leftover tiles
- * re-init, then run the shorter block.
+ * ifrom_dst + i -> output tiles start_out_tile + i, i < ct_dim * rt_dim. The block must fit one Dest
+ * section (static_assert). No tails: every block op between two inits must cover the same tile count; for leftover
+ * tiles re-init, then run a second, shorter instantiation.
  *
  * | Param Type | Name                | Description                        | Type       | Valid Range                     | Required |
  * |------------|---------------------|------------------------------------|------------|---------------------------------|----------|
@@ -90,30 +88,8 @@ template <
     DataFormat Format,
     TensorShape Shape>
 inline void pack_block(LLKOperand<Format, Shape> out, std::uint32_t ifrom_dst, std::uint32_t start_out_tile = 0) {
-    static_assert(
-        ct_dim * rt_dim <= detail::dest_section_tiles<is_fp32_dest_acc_en>(), "pack_block: block exceeds Dest");
-    pack_block<is_fp32_dest_acc_en>(out, ifrom_dst, ct_dim * rt_dim, start_out_tile);
-}
-
-// clang-format off
-/**
- * Id-free block pack with a runtime tile count, Quasar: a pack of each of `ntiles` tiles,
- * Dest tiles ifrom_dst + i -> output tiles start_out_tile + i. Same argument order as Blackhole.
- * No tails: every block op between two inits must cover the same tile count; for leftover tiles
- * re-init, then run the shorter block.
- *
- * | Param Type | Name                | Description                        | Type       | Valid Range                         | Required |
- * |------------|---------------------|------------------------------------|------------|-------------------------------------|----------|
- * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode          | bool       |                                     | False    |
- * | Function   | out                 | Output operand                     | LLKOperand | N/A                                 | True     |
- * | Function   | ifrom_dst           | First Dest tile                    | uint32_t   | N/A                                 | True     |
- * | Function   | ntiles              | Number of tiles                    | uint32_t   | ifrom_dst + ntiles <= section size  | True     |
- * | Function   | start_out_tile      | First output tile within out       | uint32_t   | N/A                                 | False    |
- */
-// clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
-inline void pack_block(
-    LLKOperand<Format, Shape> out, std::uint32_t ifrom_dst, std::uint32_t ntiles, std::uint32_t start_out_tile = 0) {
+    constexpr std::uint32_t ntiles = ct_dim * rt_dim;
+    static_assert(ntiles <= detail::dest_section_tiles<is_fp32_dest_acc_en>(), "pack_block: block exceeds Dest");
     LLK_ASSERT(
         ifrom_dst + ntiles <= detail::dest_section_tiles<is_fp32_dest_acc_en>(), "pack_block: block exceeds Dest");
     for (std::uint32_t i = 0; i < ntiles; ++i) {
@@ -209,39 +185,10 @@ ALWI void pack_tile(LLKOperand<Format, Shape> out, std::uint32_t itile, std::uin
 
 // clang-format off
 /**
- * Id-free block pack. Packs `ntiles` consecutive tiles from DST to consecutive L1 tiles in the output
- * operand (block/loop form of pack_tile). Tile i is read from DST[ifrom_dst + i] and written to
- * output tile (start_out_tile + i). Blackhole only. Sub-32-row (partial-height) block-float tiles are not
- * supported (compile-time rejected).
- *
- * | Param Type | Name          | Description                                                | Type        | Valid Range                          | Required |
- * |------------|---------------|------------------------------------------------------------|-------------|--------------------------------------|----------|
- * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                             | bool        |                                      | False    |
- * | Template   | Format        | Output buffer L1 data format (deduced from LLKOperand)     | DataFormat  |                                      | True     |
- * | Template   | Shape         | Output tile geometry (deduced from LLKOperand)            | TensorShape |                                      | True     |
- * | Function   | out           | The output L1 operand (format+shape+block base address)   | LLKOperand  |                                      | True     |
- * | Function   | ifrom_dst     | Index of the first tile in the DST register               | uint32_t    | Must be less than the acquired size of DST REG | True     |
- * | Function   | ntiles        | Number of tiles to pack from DST to L1                     | uint32_t    | ifrom_dst + ntiles <= acquired size of DST REG | True     |
- * | Function   | start_out_tile| Starting output tile index (offset into the block base)   | uint32_t    | N/A                                  | False    |
- */
-// clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
-ALWI void pack_block(
-    LLKOperand<Format, Shape> out, std::uint32_t ifrom_dst, std::uint32_t ntiles, std::uint32_t start_out_tile = 0) {
-    static_assert(is_legal_tile_shape(Shape), "pack_block: illegal output tile shape.");
-    static_assert(
-        !(is_block_float_format(Format) && is_partial_height(Shape)),
-        "pack: sub-32-row (partial-height) block-float tiles are not supported on the BH compute datapath; "
-        "use a full 32-row tile.");
-    for (std::uint32_t i = 0; i < ntiles; ++i) {
-        experimental::pack_tile<is_fp32_dest_acc_en>(out, start_out_tile + i, ifrom_dst + i);
-    }
-}
-
-// clang-format off
-/**
- * Id-free block pack of a ct_dim x rt_dim block: pack_block with ntiles = ct_dim * rt_dim (same block form as
- * Quasar).
+ * Id-free block pack of a ct_dim x rt_dim block (block/loop form of pack_tile; same block form as Quasar):
+ * DST[ifrom_dst + i] -> output tile start_out_tile + i, i < ct_dim * rt_dim. Blackhole only. Sub-32-row
+ * (partial-height) block-float tiles are not supported (compile-time rejected). No tails: for leftover tiles re-init,
+ * then run a second, shorter instantiation.
  *
  * | Param Type | Name                | Description                                  | Type       | Valid Range | Required |
  * |------------|---------------------|----------------------------------------------|------------|-------------|----------|
@@ -259,7 +206,14 @@ template <
     DataFormat Format,
     TensorShape Shape>
 ALWI void pack_block(LLKOperand<Format, Shape> out, std::uint32_t ifrom_dst, std::uint32_t start_out_tile = 0) {
-    pack_block<is_fp32_dest_acc_en>(out, ifrom_dst, ct_dim * rt_dim, start_out_tile);
+    static_assert(is_legal_tile_shape(Shape), "pack_block: illegal output tile shape.");
+    static_assert(
+        !(is_block_float_format(Format) && is_partial_height(Shape)),
+        "pack: sub-32-row (partial-height) block-float tiles are not supported on the BH compute datapath; "
+        "use a full 32-row tile.");
+    for (std::uint32_t i = 0; i < ct_dim * rt_dim; ++i) {
+        experimental::pack_tile<is_fp32_dest_acc_en>(out, start_out_tile + i, ifrom_dst + i);
+    }
 }
 
 }  // namespace experimental
