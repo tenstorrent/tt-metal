@@ -898,9 +898,9 @@ class TtPrefillRuntime:
         if self.sends_loop_handoff:
             self._loop_sender = self._new_loop_sender(self.model.loop_index_sets)
         if self.receives_loop_handoff:
-            # The traced forward's inbound buffers. Zeroed once (allocation does not clear): a stage-alone probe of G2
-            # (first rank past layer 0) has no upstream and reads them as its placeholder handoff, an empty bank A and
-            # top-k sets of position 0. [1:] are the model's own sets, so this zeroes those too.
+            # The traced forward's inbound buffers, which the D2D drain fills. Zeroed once (allocation does not clear),
+            # so nothing reads uninitialized memory before the first drain. [1:] are the model's own sets, so this
+            # zeroes those too.
             self._loop_handoff_in = self._new_loop_sender(self.model.loop_index_sets).segments()
             for t in self._loop_handoff_in:
                 zeros = ttnn.zeros_like(t)
@@ -1097,11 +1097,7 @@ class TtPrefillRuntime:
                     mtp_tokens=tt_mtp_tokens,
                     indexer_indices=self.make_placeholder_indices() if self.receives_indexer_indices else None,
                     mtp_id_segments=mtp_id_segments,
-                    loop_handoff=(
-                        [ttnn.zeros_like(t) for t in self._loop_handoff_in]
-                        if self._loop_handoff_in and not self._first_rank_past_layer_0()
-                        else None
-                    ),
+                    loop_handoff=[ttnn.zeros_like(t) for t in self._loop_handoff_in] if self._loop_handoff_in else None,
                 )
                 ttnn.synchronize_device(self.mesh_device)
             finally:
@@ -2144,14 +2140,10 @@ class TtPrefillRuntime:
             f"indexer_indices must be passed exactly when this rank starts on a shared indexer layer "
             f"(receives_indexer_indices={self.receives_indexer_indices})"
         )
-        assert (loop_handoff is not None) == (self.receives_loop_handoff and not self._first_rank_past_layer_0()), (
-            f"loop_handoff must be passed exactly when this stage runs the loop only in passes >= 2 and has an "
-            f"upstream stage (receives_loop_handoff={self.receives_loop_handoff})"
+        assert (loop_handoff is not None) == self.receives_loop_handoff, (
+            f"loop_handoff must be passed exactly when this stage runs the loop only in passes >= 2 "
+            f"(receives_loop_handoff={self.receives_loop_handoff})"
         )
-        if loop_handoff is None and self.receives_loop_handoff:
-            # A stage-alone probe (the runner's PREFILL_PP_LAYER_OFFSET): no pass-1 stage sends the handoff, so the
-            # stage reads its zero placeholder (an all-zero bank A and top-k), like the DFlash partial placeholder.
-            loop_handoff = self._loop_handoff_in
         if self.config.use_trace:
             # Traced path: update the persistent input + per-element metadata IN PLACE, then replay the
             # captured segmented forward. The metadata (slot_id, actual_start, actual_end) drives every
@@ -2238,7 +2230,7 @@ class TtPrefillRuntime:
                 else:
                     ttnn.copy(indexer_indices, self._trace_indices_in)
                     ttnn.deallocate(indexer_indices)
-            if loop_handoff is not None and loop_handoff is not self._loop_handoff_in:
+            if loop_handoff is not None:
                 if self._extras_are_caller_filled:
                     assert all(
                         s is b for s, b in zip(loop_handoff, self._loop_handoff_in)
@@ -2275,17 +2267,16 @@ class TtPrefillRuntime:
             mtp_owns_input = self.config.is_first_rank
 
         loop_md, loop_sender = None, None
-        # Eager G1 builds a fresh handoff per chunk for its caller to send; a last rank (a stage-alone probe) has no
-        # downstream, so it builds none (the traced path still collects into its persistent sender: production cost).
+        # Eager G1 builds a fresh handoff per chunk for its caller to send; a last rank has no downstream, so it builds
+        # none (the traced path still collects into its persistent sender: production cost).
         eager_sends = self.sends_loop_handoff and not self.config.is_last_rank
         if loop_handoff is not None or eager_sends:
             loop_md = self._loop_metadata_dev(slot_id, actual_start, actual_end)
         if loop_handoff is not None:
             assert len(loop_handoff) == len(self._loop_handoff.segments()), "loop handoff segments missing"
             self._write_loop_kvpe(kv_caches, loop_handoff[0], loop_md)
-            if loop_handoff is not self._loop_handoff_in:  # else they already are the model's sets
-                for src, dst in zip(loop_handoff[1:], self.model.loop_index_sets):
-                    ttnn.copy(src, dst)
+            for src, dst in zip(loop_handoff[1:], self.model.loop_index_sets):
+                ttnn.copy(src, dst)
 
         out = self.model.forward(
             model_input,
@@ -2314,7 +2305,7 @@ class TtPrefillRuntime:
             # returns.
             loop_sender = self._new_loop_sender([ttnn.clone(t) for t in self.model.loop_index_sets])
             loop_sender.collect(kv_caches.kvpe.storage, loop_md)
-        if loop_handoff is not None and loop_handoff is not self._loop_handoff_in:
+        if loop_handoff is not None:
             for t in loop_handoff:
                 ttnn.deallocate(t)
         if loop_md is not None:

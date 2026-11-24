@@ -129,8 +129,8 @@ D2D_MAPPER_CONFIG = axis_mapper_config(
 INDEX_MAPPER_CONFIG = axis_mapper_config(ttnn.PlacementShard(2), ttnn.PlacementShard(3), SP_AXIS)
 
 
-# A looped model (GLM-5.4) is split over its layer PASSES, not its layers (pass_schedule.py): there NUM_LAYERS,
-# PREFILL_PP_LAYER_OFFSET and PREFILL_PP_LAYER_COUNTS count pass positions, and MODEL_POSITIONS is the pass count.
+# A looped model (GLM-5.4) is split over its layer PASSES, not its layers (pass_schedule.py): there NUM_LAYERS and
+# PREFILL_PP_LAYER_COUNTS count pass positions, and MODEL_POSITIONS is the pass count.
 PASS_SCHEDULE = ADAPTER.pipeline_schedule()
 MODEL_POSITIONS = len(PASS_SCHEDULE) if PASS_SCHEDULE is not None else MODEL_CFG.NUM_LAYERS
 NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", MODEL_POSITIONS))
@@ -139,6 +139,9 @@ NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", MODEL_POSITIONS))
 # PREFILL_PP_LAYER_COUNTS=12,9). Rank 0 still takes the H2D input, so it also holds the embedding. When set,
 # only the model's real last layer is built KV-only, not the last layer of the run.
 PP_LAYER_OFFSET = os.environ.get("PREFILL_PP_LAYER_OFFSET")
+if PP_LAYER_OFFSET is not None and PASS_SCHEDULE is not None:
+    # Its ranks would ack under the ids of the positions they do not hold.
+    raise RuntimeError(f"{ADAPTER.name}: PREFILL_PP_LAYER_OFFSET is not supported for a looped model")
 CHUNK_SIZE = prefill_chunk_tokens()
 # Tokens per forward, a multiple of the chunk size: FORWARD_CHUNKS chunks per forward, metadata in prefill_chunk.
 FORWARD_TOKENS_BUDGET = int(os.environ.get("PREFILL_FORWARD_TOKENS_BUDGET", CHUNK_SIZE))
@@ -1553,9 +1556,6 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     )
     first_layer_idx, num_my_layers = layer_split[rank]
     extra_layers = runtime.layer_ack_layers(0, 0)[0] if getattr(runtime, "layer_ack_layers", None) else 0
-    if PASS_SCHEDULE is not None and PP_LAYER_OFFSET is not None:
-        # A stage-alone probe acks under its stage's real ids (a later loop pass's distinct ones included).
-        layer_split = [(first + int(PP_LAYER_OFFSET), count) for first, count in layer_split]
     layout = layer_completion_layout(
         layer_split,
         rank,
