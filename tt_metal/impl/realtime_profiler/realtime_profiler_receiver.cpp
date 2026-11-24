@@ -67,7 +67,19 @@ constexpr size_t kRingHeadroomBatches = 4;
 constexpr size_t kMaxRingCapacity = 1u << 22;
 
 // How often each device's clock mapping is re-anchored, and how many reads of its wall clock one anchor takes.
+// The device clock's rate changes fastest just after load starts, so anchors come more often then.
 constexpr auto kAnchorPeriod = std::chrono::seconds(1);
+constexpr auto kEarlyAnchorPeriod = std::chrono::milliseconds(100);
+constexpr auto kEarlyAnchorWindow = std::chrono::seconds(5);
+constexpr auto kSettlingAnchorPeriod = std::chrono::milliseconds(250);
+constexpr auto kSettlingAnchorWindow = std::chrono::seconds(10);
+
+std::chrono::steady_clock::duration anchor_period(std::chrono::steady_clock::duration since_start) {
+    if (since_start < kEarlyAnchorWindow) {
+        return kEarlyAnchorPeriod;
+    }
+    return since_start < kSettlingAnchorWindow ? kSettlingAnchorPeriod : kAnchorPeriod;
+}
 constexpr uint32_t kAnchorReads = 4;
 
 // The host clock readings are taken on: Tracy's when Tracy is built in, so zones need no conversion.
@@ -329,6 +341,7 @@ void RealtimeProfilerReceiver::run_receiver_loop() {
     constexpr auto kFifoPlotInterval = std::chrono::milliseconds(10);
     auto last_fifo_plot = std::chrono::steady_clock::now();
     auto last_consumer_wake = last_fifo_plot;
+    const auto loop_start = last_fifo_plot;
     auto last_anchor = last_fifo_plot;
     bool consumers_owed_wake = false;
     while (!stop_.load(std::memory_order_acquire)) {
@@ -342,7 +355,7 @@ void RealtimeProfilerReceiver::run_receiver_loop() {
             std::this_thread::sleep_for(kReceiverPeriod);
             continue;
         }
-        if (now - last_anchor >= kAnchorPeriod) {
+        if (now - last_anchor >= anchor_period(now - loop_start)) {
             last_anchor = now;
             for (auto& dev_state : devices_) {
                 anchor_clock_mapping(dev_state);
@@ -350,6 +363,8 @@ void RealtimeProfilerReceiver::run_receiver_loop() {
                     dev_state.chip_id, dev_state.anchor_host, dev_state.anchor_device, dev_state.frequency);
                 publish_device_profiler_sync_anchor(dev_state);
             }
+            // The Tracy consumer places zones once an anchor brackets them, so a new anchor can unblock some.
+            service_->wake_consumers();
         }
         if (!service_->has_consumers()) {
             discard_pending_pages();
@@ -532,6 +547,9 @@ RealtimeProfilerReceiver::~RealtimeProfilerReceiver() {
     for (const auto& dev_state : devices_) {
         service_->tracy().remove_device(dev_state.chip_id);
     }
+    // The Tracy consumer holds back the last zones until it is told the device is gone; let it place them.
+    service_->wake_consumers();
+    service_->tracy().wait_for_events(std::chrono::seconds(2));
     data_collector_->RemoveProgramMetadataReader();
 }
 

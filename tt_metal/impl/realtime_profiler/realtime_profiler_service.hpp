@@ -117,6 +117,8 @@ private:
     using ConsumerMap = std::unordered_map<uint64_t, ConsumerRegistration>;
     ConsumerMap consumers_;
     uint64_t next_consumer_handle_ = 0;
+    // The Tracy consumer's handle. Its thread also gets idle time, to place zones that new anchors have unblocked.
+    uint64_t tracy_handle_ = ~uint64_t{0};
 
     std::atomic<uint32_t> wake_generation_{0};
     std::atomic<size_t> num_live_consumers_{0};
