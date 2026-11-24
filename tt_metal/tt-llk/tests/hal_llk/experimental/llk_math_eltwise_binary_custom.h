@@ -132,7 +132,7 @@ inline void _bcast_cols_op_()
     hal::fpu::run<hal_port::eltwise_binary_custom::bcast_col_op<eltwise_binary_type, addr_mod>>();
 }
 
-namespace detail
+namespace hal_port::eltwise_binary_custom::detail
 {
 // One face-row of the bcast-col walk: four ops, two per face. The last op picks ADDR_MOD_4 (rewind to the tile
 // start and step the fidelity phase) on the last face-row of a non-final phase, ADDR_MOD_6 otherwise.
@@ -161,7 +161,7 @@ inline void bcast_cols_tile(std::index_sequence<Steps...>)
 {
     (bcast_cols_face_row<eltwise_binary_type, num_phases, num_face_rows, Steps>(), ...);
 }
-} // namespace detail
+} // namespace hal_port::eltwise_binary_custom::detail
 
 /**
  * @brief Blocked bcast-col FPU scaffold shared by the SDPA SUB and indexer_score MUL paths.
@@ -254,7 +254,7 @@ inline void _llk_math_bcast_cols_reuse_custom_(
             hal_port::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + i);
             hal_port::clear_dst_reg_addr();
 
-            detail::bcast_cols_tile<eltwise_binary_type, num_phases, rows>(std::make_index_sequence<num_phases * rows> {});
+            ebc::detail::bcast_cols_tile<eltwise_binary_type, num_phases, rows>(std::make_index_sequence<num_phases * rows> {});
 
             // Rewind srcB to 0 for the next srcA tile (CLR_A clears srcA's dvalid); srcA keeps advancing.
             // SET_ABD_F also returns the fidelity phase to 0 after a HiFi walk (dest is re-based per tile).
