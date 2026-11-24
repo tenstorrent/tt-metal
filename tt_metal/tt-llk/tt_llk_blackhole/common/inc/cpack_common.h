@@ -574,7 +574,7 @@ inline constexpr bool pack_fast_untilize_linked = false;
 [[maybe_unused]] static std::uint32_t pack_fast_untilize_src = 0;
 
 // Some CB of the kernel unpacks to DEST, as pack_reconfig_u2d (llk_pack_block_tile.h sets it again): set_packer_strides
-// keeps its guard NOPs in default mode there.
+// keeps its channel-1 zero strides there.
 #if defined(LLK_UNPACK_TO_DEST_ANY)
 template <PackMode>
 inline constexpr bool pack_strides_u2d = LLK_UNPACK_TO_DEST_ANY != 0;
@@ -622,13 +622,8 @@ inline void set_packer_strides(const std::uint32_t pack_src_format, const std::u
         TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_1_Xstride_ADDR32);
         TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32);
     }
-    // A default pack writes its destination before its first PACR, which spaces the stride writes from it; with an unpack
-    // to DEST the NOPs stay, as the earlier pack start contends with the unpacker for L1.
-    if constexpr (pack_mode != PackMode::Default || pack_strides_u2d<pack_mode>)
-    {
-        TTI_NOP;
-        TTI_NOP;
-    }
+    TTI_NOP;
+    TTI_NOP;
 }
 
 // The packer accumulates in L1 (Pack_L1_Acc): under half sync llk_pack_block packs per tile, as main. Only a runtime
