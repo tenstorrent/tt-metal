@@ -13,6 +13,7 @@
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
+#include "ckernel_sfpu_unary_max_min.h"
 
 using namespace sfpi;
 
@@ -62,11 +63,11 @@ sfpi_inline sfpi::vFloat _relu_max_body_(sfpi::vFloat val, sfpi::vFloat threshol
 // in a general LReg costs an SFPMOV copy per row, while a write to a constant register is dropped.
 // One SFPCONFIG (+2 SFPLOADI) per call buys one instruction per row: 5 instead of 6, 11 before.
 //
-// Prgm1 is call-scoped here. relu_max_init programs no constant register (only ADDR_MOD_6, for the
-// integer clamps), and every production caller runs its init next to its call (ttnn unary chains
-// emit `<op>_init(); <op>(idst);` per op per tile), so no kernel relies on Prgm1 surviving across
-// a relu_max call. A fused kernel that programs Prgm1 in
-// its own init and calls relu_max_tile before its own compute would have to re-init.
+// Prgm1 is call-scoped here. relu_max_init programs no constant register (only ADDR_MOD_6 and the
+// integer clamps' SFPLOADMACRO state), and every production caller runs its init next to its call
+// (ttnn unary chains emit `<op>_init(); <op>(idst);` per op per tile), so no kernel relies on Prgm1
+// surviving across a relu_max call. A fused kernel that programs Prgm1 in its own init and calls
+// relu_max_tile before its own compute would have to re-init.
 //
 // sfpi 7.83.0 compiles exactly this shape -- max(min(v, Prgm), literal) -- to SFPSWAP against
 // LREG13 and LREG9; the bare min/max/clamp(v, vFloat(vConstFloatPrgmN)) forms hit an internal
@@ -275,6 +276,19 @@ sfpi_inline void _clamp_rows_against_lreg12_() {
     }
 }
 
+// calculate_unary_max_min_int32 (SFPLOADMACRO: 2 cycles per row, 4 with the complement) for the
+// clamps that are exactly unary_max/min_[u]int32. relu_min_init / relu_max_init program its macros
+// through unary_max_min_int32_init<true, false>; only the min/max mode of instruction template 0
+// depends on <IS_MAX, IS_UNSIGNED>, so each call writes that template itself and the shared init
+// serves int32 and uint32, relu_min and relu_max.
+template <bool APPROXIMATION_MODE, bool IS_MAX, bool IS_UNSIGNED, int ITERATIONS>
+sfpi_inline void _relu_clamp_loadmacro_(const uint threshold) {
+#ifndef DISABLE_SFPLOADMACRO
+    TTI_SFPSWAP(0, p_sfpu::LREG12, 12, IS_MAX ^ IS_UNSIGNED ? 9 : sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+#endif
+    calculate_unary_max_min_int32<IS_MAX, IS_UNSIGNED, APPROXIMATION_MODE, ITERATIONS>(threshold);
+}
+
 // Full-range unsigned clamp against a threshold, shared by relu_min and relu_max/relu6.
 // IS_LOWER_BOUND selects the path:
 //   IS_LOWER_BOUND == true -> relu_min: result = max(x, threshold)
@@ -285,15 +299,18 @@ sfpi_inline void _clamp_rows_against_lreg12_() {
 // When threshold MSB = 0, invert operands (~x, ~t) so that unsigned order maps to sign magnitude
 // order, run min/max, then invert the result back.
 // When threshold MSB = 1, raw bits already sort correctly under sign-magnitude with min/max roles swapped.
-// The threshold (inverted or not) sits in LREG12 for the call; see _clamp_row_against_lreg12_.
-// Rows are 5 (MSB = 0) / 3 (MSB = 1) instructions.
+// This is unary_max_uint32 / unary_min_uint32, so the default build runs that SFPLOADMACRO kernel;
+// see _relu_clamp_loadmacro_. A MM_THROTTLE build cannot (the macro stores through ADDR_MOD_6) and
+// runs _clamp_rows_against_lreg12_ with the threshold (inverted or not) in LREG12.
 template <bool APPROXIMATION_MODE, bool IS_LOWER_BOUND, DataFormat FORMAT, int ITERATIONS = 8>
 inline void relu_clamp_uint(uint threshold) {
     static_assert(
         FORMAT == DataFormat::UInt32 || FORMAT == DataFormat::UInt16,
         "relu_clamp_uint requires DataFormat::UInt32 or UInt16 (uint8 dispatches through UInt32)");
     constexpr sfpi::DataLayout LAYOUT = (FORMAT == DataFormat::UInt16) ? sfpi::DataLayout::U16 : sfpi::DataLayout::U32;
-    if constexpr (LAYOUT == sfpi::DataLayout::U32) {
+    if constexpr (LAYOUT == sfpi::DataLayout::U32 && RELU_CLAMP_STORE_INCR) {
+        _relu_clamp_loadmacro_<APPROXIMATION_MODE, IS_LOWER_BOUND, true /* IS_UNSIGNED */, ITERATIONS>(threshold);
+    } else if constexpr (LAYOUT == sfpi::DataLayout::U32) {
         // relu_min needs max(x, t) and relu_max/relu6 needs min(x, t)
         constexpr bool WANT_MAX = IS_LOWER_BOUND;
         sfpi::l_reg[sfpi::LRegs::LReg0].in_use();
@@ -330,6 +347,10 @@ inline void relu_clamp_uint(uint threshold) {
 //   IS_LOWER_BOUND == true  -> relu_min:       result = max(x, threshold)
 //   IS_LOWER_BOUND == false -> relu_max/relu6: result = max(0, min(x, threshold))  (relu built in)
 //
+// relu_min is unary_max_int32, so the default build runs that SFPLOADMACRO kernel for either sign of
+// threshold; see _relu_clamp_loadmacro_. The rest of this comment covers relu_max and the MM_THROTTLE
+// build's relu_min.
+//
 // The Dest word is a two's-complement int32. For threshold >= 0 (every production relu_max/relu6
 // call, and relu_min with a non-negative bound) the row goes through SFPSWAP: the INT32_2S_COMP
 // load (mod 12) maps the two's-complement word onto its sign-magnitude image, which SFPSWAP
@@ -345,7 +366,9 @@ template <bool APPROXIMATION_MODE, bool IS_LOWER_BOUND, int ITERATIONS = 8>
 inline void relu_clamp_int(uint threshold) {
     const vInt t = static_cast<int>(threshold);
     const bool is_pos_threshold = static_cast<int>(threshold) >= 0;
-    if constexpr (IS_LOWER_BOUND) {
+    if constexpr (IS_LOWER_BOUND && RELU_CLAMP_STORE_INCR) {
+        _relu_clamp_loadmacro_<APPROXIMATION_MODE, true /* IS_MAX */, false /* IS_UNSIGNED */, ITERATIONS>(threshold);
+    } else if constexpr (IS_LOWER_BOUND) {
         // relu_min: max(x, threshold)
         if (is_pos_threshold) {
             sfpi::l_reg[sfpi::LRegs::LReg0].in_use();
@@ -395,19 +418,19 @@ inline void relu_clamp_int(uint threshold) {
 }
 
 // The integer clamps above store through ADDR_MOD_2, which the unary SFPU addr-mod base maps to
-// physical slot 6: program it to advance the dest counter by one sfpi row (two counter steps).
-// The float paths load and store with ADDR_MOD_3 and dst_reg++, so this is inert for them. A kernel
+// physical slot 6: unary_max_min_int32_init programs it to advance the dest counter by one sfpi row
+// (two counter steps), plus the SFPLOADMACRO state _relu_clamp_loadmacro_ runs on. The float paths
+// load and store with ADDR_MOD_3 and dst_reg++ and use no macro, so this is inert for them. A kernel
 // built with MM_THROTTLE leaves ADDR_MOD_6 alone (see RELU_CLAMP_STORE_INCR).
-inline void _relu_clamp_addr_mod_init_() {
+inline void _relu_clamp_init_() {
     if constexpr (RELU_CLAMP_STORE_INCR) {
-        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+        unary_max_min_int32_init<true /* IS_MAX */, false /* IS_UNSIGNED */>();
+    } else {
+        math::reset_counters(p_setrwc::SET_ABD_F);
     }
 }
 
-inline void relu_min_init() {
-    _relu_clamp_addr_mod_init_();
-    math::reset_counters(p_setrwc::SET_ABD_F);
-}
+inline void relu_min_init() { _relu_clamp_init_(); }
 
 template <bool APPROXIMATION_MODE>
 inline void relu_min(uint uint_threshold) {
@@ -421,10 +444,7 @@ inline void relu_min(uint uint_threshold) {
     }
 }
 
-inline void relu_max_init() {
-    _relu_clamp_addr_mod_init_();
-    math::reset_counters(p_setrwc::SET_ABD_F);
-}
+inline void relu_max_init() { _relu_clamp_init_(); }
 
 template <bool APPROXIMATION_MODE>
 inline void relu_max(uint uint_threshold) {
