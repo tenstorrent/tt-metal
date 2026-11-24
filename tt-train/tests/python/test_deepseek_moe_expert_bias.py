@@ -24,6 +24,7 @@ import pytest
 import ttnn
 import ttml
 from tp_block import assert_identical_across_devices, device_slices
+from ttml.models.deepseek.moe import update_expert_biases
 from ttml.models.deepseek.moe_sparse_ep import SparseMoEEP
 
 pytestmark = [pytest.mark.requires_device, pytest.mark.timeout(1800)]
@@ -114,3 +115,40 @@ def test_the_update_compares_averages_bf16_cannot_hold(hsdp_mesh):
     expected -= expected.mean()
     assert np.count_nonzero(expected) == 6, "precondition: six experts off the mean"
     np.testing.assert_allclose(bias, expected, atol=1e-5)
+
+
+def test_the_layers_share_one_synchronization_of_their_counts(hsdp_mesh, monkeypatch):
+    """A model's MoE layers update their biases together: their counts are averaged over the mesh in one
+    synchronization rather than one per layer, and each layer moves as it would alone."""
+    ctx = ttml.autograd.AutoContext.get_instance()
+    ctx.set_seed(SEED)
+    layers = [SparseMoEEP(_Cfg()) for _ in range(2)]
+    tokens = np.random.default_rng(SEED).standard_normal((hsdp_mesh.num_devices(), 1, SEQ, DIM), dtype=np.float32)
+    batch_mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(ctx.get_device(), 0, None)
+    x = ttml.autograd.Tensor.from_numpy(tokens, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, batch_mapper)
+    for layer in layers:
+        layer(x)
+    ctx.reset_graph()
+    counts = [
+        [copy.reshape(-1) for copy in device_slices(layer._token_counts.tensor.get_value(NATIVE))] for layer in layers
+    ]
+    assert not np.array_equal(counts[0][0], counts[1][0]), "precondition: the layers routed differently"
+
+    syncs = []
+    synchronize = ttml.core.distributed.synchronize_tensor
+
+    def counted(*args, **kwargs):
+        syncs.append(args[0].shape)
+        return synchronize(*args, **kwargs)
+
+    monkeypatch.setattr(ttml.core.distributed, "synchronize_tensor", counted)
+    coeff = 0.001
+    update_expert_biases(layers, coeff)
+    assert len(syncs) == 1, f"one synchronization for both layers, not {syncs}"
+
+    for i, layer in enumerate(layers):
+        bias = assert_identical_across_devices(layer._expert_bias.tensor.get_value(), f"layer {i}'s expert bias")
+        whole = np.mean(counts[i], axis=0)
+        expected = coeff * np.sign(whole.mean() - whole)
+        expected -= expected.mean()
+        np.testing.assert_allclose(bias.reshape(-1), expected, atol=1e-5)

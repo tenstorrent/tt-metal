@@ -25,6 +25,7 @@ using on-device token count accumulation.
 from __future__ import annotations
 
 import math
+from typing import Iterable
 import numpy as np
 import torch
 import ttnn
@@ -465,33 +466,19 @@ class MoE(AbstractModuleBase):
             return np.zeros_like(counts_np, dtype=np.float32)
         return (counts_np * float(self.n_activated) / total).astype(np.float32)
 
-    def _global_token_counts(self) -> ttnn.Tensor:
-        """The token counts since the last update over the whole batch, averaged over every mesh axis.
-
-        The bias is replicated, so every device must make the same update, from the counts of the whole batch, while a
-        device's ``_token_counts`` cover only the tokens it routed: every data-parallel axis ("dp" and "fsdp") gives
-        each device its own slice of the batch. Devices along an axis that routed the same tokens (tensor or expert
-        parallelism, or ``SparseMoEEP``'s batch gathered over "dp") hold equal counts, which the average returns
-        unchanged. The average gives the update the same signs as the sum.
-        """
-        counts = self._token_counts.tensor.get_value(NATIVE)
-        mesh = ttml.maybe_mesh()
-        axes = [] if mesh is None else [mesh.axis_index(name) for name in mesh.axis_names if mesh.axis_size(name) > 1]
-        if not axes:
-            return counts
-        return ttml.core.distributed.synchronize_tensor(counts, axes, reduce_dtype=ttnn.DataType.FLOAT32)
-
     def update_expert_bias(self, coeff: float = 0.001) -> None:
         """Auxiliary-loss-free load balancing (DeepSeek-V3 style).
 
-        Reads the token counts accumulated on device over the whole batch (see ``_global_token_counts``), computes
-        the bias adjustment using sign(mean_count - expert_count), updates the bias on device, and resets the
-        counter.
+        Moves each expert's bias by ``coeff * sign(mean_count - expert_count)``, centred on zero, from the token counts
+        accumulated over the whole batch since the last update (see ``update_expert_biases``), and resets the counts.
 
         Call between training steps (e.g., every N steps).
         """
-        counts_val = self._global_token_counts()
+        update_expert_biases([self], coeff)
 
+    def _move_bias(self, counts_val: ttnn.Tensor, coeff: float) -> None:
+        """The bias update from ``counts_val``, this layer's ``[1, 1, 1, E]`` counts over the whole batch, and the reset
+        of the counts."""
         # Compute mean token count across experts: [1,1,1,num_experts] -> scalar
         mean_count = ttnn.mean(counts_val, dim=-1, keepdim=True)  # [1,1,1,1]
 
@@ -512,3 +499,29 @@ class MoE(AbstractModuleBase):
         # Reset token counts
         zeros = ttnn.zeros_like(self._token_counts.tensor.get_value(NATIVE))
         self._token_counts.tensor.set_value(zeros)
+
+
+def update_expert_biases(layers: Iterable[MoE], coeff: float = 0.001) -> None:
+    """``MoE.update_expert_bias`` for every layer in ``layers``, with one synchronization of their counts.
+
+    A bias is replicated, so every device must make the same update, from the counts of the whole batch, while a
+    device's ``_token_counts`` cover only the tokens it routed: every data-parallel axis ("dp" and "fsdp") gives each
+    device its own slice of the batch. The counts are therefore averaged over every mesh axis. Devices along an axis
+    that routed the same tokens (tensor or expert parallelism, or ``SparseMoEEP``'s batch gathered over "dp") hold equal
+    counts, which the average returns unchanged, and the average gives the update the same signs as the sum. The layers'
+    counts are stacked into one tensor first, so a model's MoE layers make one all-reduce per mesh axis per update
+    rather than one per layer and axis.
+    """
+    layers = list(layers)
+    if not layers:
+        return
+    stacked = [layer._token_counts.tensor.get_value(NATIVE) for layer in layers]
+    counts = stacked[0] if len(stacked) == 1 else ttnn.concat(stacked, dim=1)  # [1, L, 1, E]; dim 1 is not tiled
+    mesh = ttml.maybe_mesh()
+    axes = [] if mesh is None else [mesh.axis_index(name) for name in mesh.axis_names if mesh.axis_size(name) > 1]
+    if axes:
+        counts = ttml.core.distributed.synchronize_tensor(counts, axes, reduce_dtype=ttnn.DataType.FLOAT32)
+    num_experts = counts.shape[-1]
+    for i, layer in enumerate(layers):
+        own = counts if len(layers) == 1 else ttnn.slice(counts, [0, i, 0, 0], [1, i + 1, 1, num_experts])
+        layer._move_bias(own, coeff)
