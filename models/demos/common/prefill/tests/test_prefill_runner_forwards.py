@@ -57,7 +57,7 @@ def loop(monkeypatch):
         words.append(sentinel_words(SHUTDOWN_WORD, F))
         it = iter(words)
 
-        def socket_next(service, sockets, n_mtp=0, stage_metadata=None):
+        def socket_next(service, sockets, n_mtp=0, stage_metadata=None, before_read=None):
             return _Tensor(), None, runner._meta_from_words(next(it))
 
         monkeypatch.setattr(runner, "_socket_next", socket_next)
@@ -290,7 +290,7 @@ def test_downstream_rank_writes_chunks_into_one_buffer_and_forwards_the_metadata
     monkeypatch.setattr(
         runner,
         "_d2d_recv",
-        lambda d2d_in, sockets, stage_metadata=None: (
+        lambda d2d_in, sockets, stage_metadata=None, before_read=None: (
             _Act([1, 1, F * rows, hidden]),
             [],
             runner._meta_from_words(next(it)),
@@ -412,7 +412,7 @@ def test_packed_forward_passes_each_chunks_mtp_input(loop, monkeypatch):
     forwards = FORWARDS[:2]
     levels_by_forward = iter([(1, 1, 0, 0), (1, 0, 0, 0)])
 
-    def socket_next(service, sockets, n_mtp=0, stage_metadata=None):
+    def socket_next(service, sockets, n_mtp=0, stage_metadata=None, before_read=None):
         return _Tensor(), mtp_tokens, runner._meta_from_words(next(words))
 
     _configure(monkeypatch, supports_packed_forward=True)
