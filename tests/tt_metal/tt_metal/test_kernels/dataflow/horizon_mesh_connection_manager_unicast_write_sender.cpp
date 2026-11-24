@@ -36,6 +36,8 @@ void kernel_main() {
 
     std::size_t cm_arg_idx = 11;
     auto cm = tt::tt_fabric::RoutingPlaneConnectionManager::build_from_args(cm_arg_idx, 2);
+    PacketHeaderPool::allocate_header_n(1);  // route_id 0
+    PacketHeaderPool::allocate_header_n(1);  // route_id 1
 
     using namespace tt::tt_fabric;
     using namespace tt::tt_fabric::mesh::experimental;

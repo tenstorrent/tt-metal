@@ -9,6 +9,7 @@
 #include "tt_metal/fabric/hw/inc/mesh/api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "hostdev/fabric_edm_packet_header.hpp"
+#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 
 static constexpr uint32_t HORIZON_NOC_UNICAST_SCATTER_WRITE = 4u;
 
@@ -32,8 +33,7 @@ void kernel_main() {
     using namespace tt::tt_fabric;
     using namespace tt::tt_fabric::mesh::experimental;
 
-    alignas(16) uint8_t hdr_storage[sizeof(PACKET_HEADER_TYPE)]{};
-    volatile PACKET_HEADER_TYPE* ph = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(hdr_storage);
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* ph = PacketHeaderPool::allocate_header();
 
     if (noc_pkt_type == HORIZON_NOC_UNICAST_SCATTER_WRITE) {
         NocUnicastScatterCommandHeader scatter_hdr({noc_addr_a, noc_addr_b}, {static_cast<uint16_t>(chunk_size_a)});

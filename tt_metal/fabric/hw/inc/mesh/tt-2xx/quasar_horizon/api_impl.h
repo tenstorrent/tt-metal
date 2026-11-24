@@ -131,8 +131,10 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write_with_state(
     uint32_t src_addr,
     CommandHeaderT noc_unicast_command_header,
     uint16_t packet_size_bytes) {
-    /* TODO: To be implemented (tracked in issue #61516) */
-    ASSERT(false);
+    auto& slot = connection_manager.get(route_id);
+    volatile PACKET_HEADER_TYPE* packet_header = PacketHeaderPool::header_table[route_id].first;
+    fabric_unicast_noc_unicast_write_with_state<UpdateMask>(
+        &slot.sender, packet_header, src_addr, noc_unicast_command_header, packet_size_bytes);
 }
 
 template <UnicastWriteUpdateMask UpdateMask, typename CommandHeaderT>
@@ -161,8 +163,14 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write_set_state(
     uint8_t route_id,
     CommandHeaderT command_header,
     uint16_t packet_size_bytes) {
-    /* TODO: To be implemented (tracked in issue #61516) */
-    ASSERT(false);
+#ifdef FABRIC_2D
+    volatile PACKET_HEADER_TYPE* packet_header = PacketHeaderPool::header_table[route_id].first;
+    auto& slot = connection_manager.get(route_id);
+    fabric_unicast_noc_unicast_write_set_state<UpdateMask>(
+        packet_header, static_cast<uint8_t>(slot.dst_dev_id), slot.dst_mesh_id, command_header, packet_size_bytes);
+#else
+    static_assert(sizeof(CommandHeaderT) == 0, "Horizon ConnectionManager set_state requires FABRIC_2D");
+#endif
 }
 
 template <typename FabricSenderType>
@@ -250,8 +258,20 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write(
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastScatterCommandHeader noc_unicast_scatter_command_header) {
-    /* TODO: To be implemented (tracked in issue #61516) */
-    ASSERT(false);
+#ifdef FABRIC_2D
+    auto& slot = connection_manager.get(route_id);
+    volatile PACKET_HEADER_TYPE* packet_header = PacketHeaderPool::header_table[route_id].first;
+    fabric_unicast_noc_scatter_write<decltype(slot.sender), SetRoute>(
+        &slot.sender,
+        packet_header,
+        static_cast<uint8_t>(slot.dst_dev_id),
+        slot.dst_mesh_id,
+        src_addr,
+        size,
+        noc_unicast_scatter_command_header);
+#else
+    static_assert(!SetRoute, "Horizon ConnectionManager scatter write requires FABRIC_2D");
+#endif
 }
 
 template <typename FabricSenderType, bool SetRoute>
@@ -369,8 +389,10 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write_with_state(
     uint32_t src_addr,
     CommandHeaderT noc_unicast_scatter_command_header,
     uint16_t packet_size_bytes) {
-    /* TODO: To be implemented (tracked in issue #61516) */
-    ASSERT(false);
+    auto& slot = connection_manager.get(route_id);
+    volatile PACKET_HEADER_TYPE* packet_header = PacketHeaderPool::header_table[route_id].first;
+    fabric_unicast_noc_scatter_write_with_state<UpdateMask>(
+        &slot.sender, packet_header, src_addr, noc_unicast_scatter_command_header, packet_size_bytes);
 }
 
 template <UnicastScatterWriteUpdateMask UpdateMask, typename CommandHeaderT>
@@ -407,8 +429,14 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write_set_state(
     uint8_t route_id,
     CommandHeaderT command_header,
     uint16_t packet_size_bytes) {
-    /* TODO: To be implemented (tracked in issue #61516) */
-    ASSERT(false);
+#ifdef FABRIC_2D
+    volatile PACKET_HEADER_TYPE* packet_header = PacketHeaderPool::header_table[route_id].first;
+    auto& slot = connection_manager.get(route_id);
+    fabric_unicast_noc_scatter_write_set_state<UpdateMask>(
+        packet_header, static_cast<uint8_t>(slot.dst_dev_id), slot.dst_mesh_id, command_header, packet_size_bytes);
+#else
+    static_assert(sizeof(CommandHeaderT) == 0, "Horizon ConnectionManager set_state requires FABRIC_2D");
+#endif
 }
 
 template <typename FabricSenderType>
