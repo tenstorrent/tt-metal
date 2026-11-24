@@ -18,6 +18,7 @@
 #include <functional>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <tt-metalium/mesh/allocator.hpp>
@@ -43,6 +44,7 @@ namespace {
 constexpr const char* hang_kernel = "tests/tt_metal/tt_metal/test_kernels/misc/l1_ecc_halt_hang.cpp";
 constexpr const char* overread_kernel = "tests/tt_metal/tt_metal/test_kernels/misc/l1_ecc_overread.cpp";
 constexpr const char* mret_btb_alias_kernel = "tests/tt_metal/tt_metal/test_kernels/misc/l1_ecc_mret_btb_alias.cpp";
+constexpr const char* sbe_then_dbe_kernel = "tests/tt_metal/tt_metal/test_kernels/misc/l1_ecc_sbe_then_dbe.cpp";
 const CoreCoord test_core{0, 0};
 constexpr auto report_deadline = std::chrono::seconds(30);
 
@@ -163,7 +165,7 @@ TEST_F(L1EccHaltTest, UnpopulatedRowErrorsAreIgnored) {
     ctx.get_cluster().read_reg(&ctrl, test_target_, hal.get_tensix_debug_reg_addr(TensixDebugReg::L1_ECC_CTRL));
     ctx.get_cluster().read_reg(&int_no, test_target_, hal.get_tensix_debug_reg_addr(TensixDebugReg::BRISC_INT_NO));
     ctx.get_cluster().read_reg(&irq3, test_target_, hal.get_tensix_debug_reg_addr(TensixDebugReg::PIC_HW_INT_3));
-    // Firmware arms the L1 SBE and DBE interrupts and leaves view 2 selected.
+    // Firmware arms the L1 DBE interrupt on every error and leaves view 2 selected.
     EXPECT_EQ(ctrl, l1_ecc_ctrl_armed) << "ECC interrupts not armed, ECC_CTRL 0x" << std::hex << ctrl;
     EXPECT_EQ(int_no, 0u) << "BRISC interrupt left latched";
     // The DBEs raised IRQ 3, and only the handler's clear drops it.
@@ -255,6 +257,67 @@ TEST_F(L1EccHaltTest, MretWithAliasedBranchReturns) {
     ctx.get_cluster().read_reg(&irq3, test_target_, hal.get_tensix_debug_reg_addr(TensixDebugReg::PIC_HW_INT_3));
     EXPECT_EQ(int_no, 0u) << "BRISC still in the interrupt handler";
     EXPECT_EQ(irq3, 0u) << "IRQ 3 still raised";
+    EXPECT_NO_THROW(internal::L1EccHaltWatch(devices_[0].get()).check_now());
+    EXPECT_FALSE(ctx.l1_ecc_halt_detected());
+}
+
+// A DBE in the word of the last logged SBE must interrupt (#63755). False errors from the unpopulated rows change type
+// from read to read, so another core reads the first unpopulated word until the test core's counts show only an SBE,
+// and checks that the very next read clears them through the handler. Without that interrupt the counts stay stuck on
+// the SBE. A read can also report a DBE in one of the next two words, which interrupts either way, so the test wants
+// several of these in a row.
+TEST_F(L1EccHaltTest, DbeInWordOfLoggedSbeInterrupts) {
+    auto& ctx = MetalContext::instance();
+    if (ctx.rtoptions().get_watcher_enabled()) {
+        GTEST_SKIP() << "Watcher NoC sanitize rejects the read past the end of L1";
+    }
+    const auto& hal = ctx.hal();
+    auto& cluster = ctx.get_cluster();
+    const CoreCoord reader_core{1, 0};
+    constexpr uint32_t handler_wait = 2000;
+    constexpr uint32_t wanted = 5;
+    constexpr auto timeout = std::chrono::seconds(30);
+    const uint32_t l1_end = hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
+    const auto status_addr = static_cast<uint32_t>(hal.get_tensix_debug_reg_addr(TensixDebugReg::L1_ECC_STATUS));
+    distributed::DeviceLocalBufferConfig local_config{.page_size = 64, .buffer_type = BufferType::L1};
+    distributed::ReplicatedBufferConfig buffer_config{.size = 64};
+    auto buffer = distributed::MeshBuffer::create(buffer_config, local_config, devices_[0].get());
+    const uint32_t scratch = buffer->address(), stop_addr = scratch + 32, result_addr = scratch + 48;
+    const tt_cxy_pair reader_target(test_target_.chip, devices_[0]->worker_core_from_logical_core(reader_core));
+    std::vector<uint32_t> zeros(16, 0);
+    cluster.write_core(zeros.data(), zeros.size() * sizeof(uint32_t), reader_target, scratch);
+
+    Program program = CreateProgram();
+    KernelHandle kernel = CreateKernel(
+        program,
+        sbe_then_dbe_kernel,
+        reader_core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    SetRuntimeArgs(
+        program,
+        kernel,
+        reader_core,
+        {test_target_.x, test_target_.y, l1_end, handler_wait, status_addr, wanted, scratch, stop_addr, result_addr});
+    distributed::MeshWorkload workload;
+    auto zero = distributed::MeshCoordinate(0, 0);
+    workload.add_program(distributed::MeshCoordinateRange(zero, zero), std::move(program));
+    auto& cq = devices_[0]->mesh_command_queue();
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+
+    std::vector<uint32_t> result(2, 0);
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (result[0] < wanted && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        cluster.read_core(result.data(), result.size() * sizeof(uint32_t), reader_target, result_addr);
+    }
+    const uint32_t stop = 1;
+    cluster.write_core(&stop, sizeof(stop), reader_target, stop_addr);
+    distributed::Finish(cq);
+    cluster.read_core(result.data(), result.size() * sizeof(uint32_t), reader_target, result_addr);
+    log_info(tt::LogTest, "SBE then DBE: longest run {} of {} after {} reads", result[0], wanted, result[1]);
+    EXPECT_EQ(result[0], wanted) << "at most " << result[0] << " of " << wanted
+                                 << " DBEs in a row in the word of a logged SBE interrupted in " << result[1]
+                                 << " reads";
     EXPECT_NO_THROW(internal::L1EccHaltWatch(devices_[0].get()).check_now());
     EXPECT_FALSE(ctx.l1_ecc_halt_detected());
 }
