@@ -109,7 +109,9 @@ def gptq_input_groups(W, H, damp=0.01, block=128):
 
 def expert_hessians(weights, x, routed):
     """Per expert: H_gate_up = X^T X over the tokens routed to it, H_down = A^T A of its SwiGLU outputs A (computed
-    with the checkpoint's gate / up weights). x [T, H] MoE inputs, routed [T, top_k] expert ids."""
+    with the checkpoint's gate / up weights). x [T, H] MoE inputs, routed [T, top_k] expert ids. An expert no
+    calibration token routes to gets identity Hessians, so it rounds to nearest instead of to zero (GPTQ zeroes the
+    rows of an all-zero Hessian)."""
     gu, gub = weights["gate_up_proj"], weights["gate_up_proj_bias"]
     E, H, I2 = gu.shape
     Hg, Hd = torch.zeros(E, H, H), torch.zeros(E, I2 // 2, I2 // 2)
@@ -117,7 +119,10 @@ def expert_hessians(weights, x, routed):
     for e in range(E):
         X = x[(routed == e).any(-1)]
         A = swiglu(X @ gu[e] + gub[e])
-        Hg[e], Hd[e] = X.t() @ X, A.t() @ A
+        if X.shape[0] == 0:
+            Hg[e], Hd[e] = torch.eye(H), torch.eye(I2 // 2)
+        else:
+            Hg[e], Hd[e] = X.t() @ X, A.t() @ A
         counts.append(X.shape[0])
     return Hg, Hd, counts
 
@@ -167,7 +172,7 @@ def _expert_out(w, x, routed, e, gate_up=None, down=None):
 def check(round_dir, layers, calib_files):
     """Each layer file: keys and shapes as the checkpoint's, on the K-grouped grid, exact in bfloat16; with calibration
     inputs (ideally held out) also the expert output error against the MXFP4 checkpoint, next to plain round-to-nearest
-    onto the same grid (what loading the checkpoint without the rounded weights gives)."""
+    onto the same K-grouped grid (the baseline GPTQ improves on)."""
     ckpt = Checkpoint()
     for i in layers:
         f = Path(round_dir) / f"layer_{i}.pt"

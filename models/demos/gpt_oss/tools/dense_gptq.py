@@ -170,6 +170,13 @@ def collect(out, texts):
     torch.save({"tokens": tokens[0], "hessians": hess}, out)
 
 
+def _output_error(q, w, H):
+    """Relative output error of q against w ([out, in]) over the calibration inputs: sqrt(tr(D H D^T) / tr(W H W^T)),
+    each trace as a sum of (M @ H) * M, so no [out, out] matrix (201088^2 for the LM head) is formed."""
+    d = q - w
+    return (((d @ H) * d).sum() / ((w @ H) * w).sum()).sqrt().item()
+
+
 def round_all(out, calib_files, damp, only=None):
     parts = [torch.load(f) for f in calib_files]
     print(f"{sum(p['tokens'] for p in parts)} calibration tokens", flush=True)
@@ -186,9 +193,8 @@ def round_all(out, calib_files, damp, only=None):
         if not torch.equal(q.bfloat16().float(), q):
             raise RuntimeError(f"{name} is not exact in bfloat16")
         result[name] = q.bfloat16()
-        rel = (((q - w) @ H @ (q - w).t()).trace() / (w @ H @ w.t()).trace()).sqrt().item()
         rtn = bfp8_rne(w.t()).t()
-        rel0 = (((rtn - w) @ H @ (rtn - w).t()).trace() / (w @ H @ w.t()).trace()).sqrt().item()
+        rel, rel0 = _output_error(q, w, H), _output_error(rtn, w, H)
         print(f"{name}: output rel. error {rel:.3%} (round-to-nearest {rel0:.3%}), {time.time() - t:.0f} s", flush=True)
     torch.save(result, out)
 
