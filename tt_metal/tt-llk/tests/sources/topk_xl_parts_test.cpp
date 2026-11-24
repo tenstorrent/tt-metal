@@ -2,20 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// topk_xl split sorts (sfpu/experimental/ckernel_sfpu_topk_xl_halves.h and ckernel_sfpu_topk_xl_quarters.h): one
-// 2048-element row sorted as parts and combined into the stock topk_xl 2048 order. Blackhole only.
-//
-// The two cores of the split run here one after the other, on one Dest:
-//   halves   (TOPK_XL_PARTS = 2): input tile p -> Dest tile 2 + p, stamp, _topk_xl_local_sort_ool_<1024> in opposite
-//            directions, _topk_xl_half_prep_ each, then _topk_xl_combine_halves_ into tiles 0 and 1.
-//   quarters (TOPK_XL_PARTS = 4): input tile p (512 elements) -> Dest tile 4 + p, stamp, _topk_xl_local_sort_ool_<512>
-//            in alternating directions, _topk_xl_combine_quarters_<4, 2> and <6, 3> (opposite directions), then
-//            _topk_xl_combine_halves_ into tiles 0 and 1.
-// The stamp ORs (TOPK_XL_PARTS_CORE_ID << 11) | element index in the row into the low 16 bits of each fused word:
-// _topk_xl_add_lsb_indices_base_<core_id, 1024 p> for halves, _topk_xl_add_lsb_indices_base_rt_<512> for quarters.
-//
-// Without TOPK_XL_PARTS_COMBINE the part tiles are packed right after the local sorts; with it the whole pipeline runs
-// and the combined row (Dest tiles 0 and 1) is packed.
+// topk_xl split sorts (sfpu/experimental/ckernel_sfpu_topk_xl_halves.h, _quarters.h): one 2048-element row sorted
+// as halves or quarters and combined into the stock topk_xl 2048 order. Blackhole only.
 
 #include <cstdint>
 
