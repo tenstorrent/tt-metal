@@ -319,8 +319,7 @@ constexpr std::uint32_t EXP_21F_TTI_ROW_B_DEST_OFFSET = 2;
 // reduction and both clamps. Row A lives in LREG0-2, row B in LREG4/5/7.
 template <bool SCALE_EN, bool CLAMP_NEGATIVE, bool BASE_TWO>
 sfpi_inline void _sfpu_exp_21f_bf16_tti_pair_head_(const std::uint16_t exp_base_scale_factor) {
-    // Without the lower-clamp SFPSWAPs, the BASE_TWO upper clamp would read LREG4 one cycle
-    // after the SFPMAD that writes it.
+    // exp2, the only BASE_TWO caller, always clamps; other combinations are untested.
     static_assert(!BASE_TWO || CLAMP_NEGATIVE, "BASE_TWO needs CLAMP_NEGATIVE");
     // val = sfpi::dst_reg[0] (row A) and sfpi::dst_reg[1] (row B)
     TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
@@ -431,7 +430,7 @@ sfpi_inline void _sfpu_exp_21f_bf16_tti_pair_tail_() {
 }
 
 // One row on its own, for the last row of an odd ITERATIONS: row A's registers and the constants
-// of the two-row body, in the one-row order, with an SFPNOP after each SFPMAD / SFPMULI whose
+// of the two-row body, in dependency order, with an SFPNOP after each SFPMAD / SFPMULI whose
 // result the next instruction reads.
 template <bool SCALE_EN, bool is_fp32_dest_acc_en, bool CLAMP_NEGATIVE, bool BASE_TWO>
 sfpi_inline void _sfpu_exp_21f_bf16_tti_row_(const std::uint16_t exp_base_scale_factor) {
@@ -483,12 +482,12 @@ sfpi_inline void _sfpu_exp_21f_bf16_tti_row_(const std::uint16_t exp_base_scale_
  * Two rows are processed per loop iteration as a software pipeline: row A lives
  * in LREG0-2, row B in LREG4/5/7, and the two instruction streams are
  * interleaved so that each SFPMAD / SFPMULI is followed by the other row's
- * independent instruction instead of an SFPNOP. Each row runs exactly the
- * one-row instruction sequence, so the result is bit-identical to it. An
- * SFPSWAP still costs two cycles: on Wormhole the cycle after an SFPSWAP only
- * accepts SFPNOP, and any other instruction is stalled for one cycle. A row pair
- * takes 31 cycles (29 instructions and 2 SFPSWAP stalls) instead of 36 for two
- * one-row iterations, or 35 (31 + 4) instead of 40 with CLAMP_NEGATIVE.
+ * independent instruction instead of an SFPNOP. Each row runs the same
+ * instructions as _sfpu_exp_21f_bf16_tti_row_, so the results are bit-identical
+ * to it. An SFPSWAP still costs two cycles: on Wormhole the cycle after an SFPSWAP
+ * only accepts SFPNOP, and any other instruction is stalled for one cycle. A row
+ * pair takes 31 cycles (29 instructions and 2 SFPSWAP stalls), or 35 (31 + 4)
+ * with CLAMP_NEGATIVE.
  *
  * Requires exp_init (or exp2_init) to have been called to configure
  *   - LREG12 = 1/ln2 (sfpi::vConstFloatPrgm0)
@@ -531,7 +530,7 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     }
 
     // A row pair is _sfpu_exp_21f_bf16_tti_pair_head_ (8 instructions, + 2 for SCALE_EN, + 2 for
-    // CLAMP_NEGATIVE), _pair_body_ (16) and _pair_tail_ (3, + 2 for the bf16 rounding). Only the
+    // CLAMP_NEGATIVE, - 2 for BASE_TWO), _pair_body_ (16) and _pair_tail_ (3, + 2 for the bf16 rounding). Only the
     // body is recorded, into replay buffer slots [0, 16): cmath_common.h gives [16, 32)
     // (ckernel::math::replay_buf_offset on) to the FPU, whose matmul records its MVMUL sequence
     // there in its init and replays it per tile, so a longer record would corrupt a kernel that
