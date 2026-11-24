@@ -114,6 +114,10 @@ class Backend:
 
     supports_cross_row = True
 
+    def can_copy(self, src_row, dst_row, npages):
+        """(ok, why): False when the copy would need device memory that is not free (a clean check instead of a TT_FATAL out-of-memory inside the op). Default: always ok."""
+        return True, ""
+
     def copy_pages(self, src_row, src_page0, dst_row, dst_page0, npages):
         raise NotImplementedError
 
@@ -178,6 +182,7 @@ class ChainStore:
             skipped_cost=0,
             skipped_dup=0,
             skipped_full=0,
+            skipped_headroom=0,
             move_s=0.0,
             tokens_moved=0,
             host_xfer_bytes=0,
@@ -429,6 +434,14 @@ class ChainStore:
             ] += 1
             return None
         for cost, tier, r, p0 in cands:
+            if tier == "tail":
+                ok_, why = self.be.can_copy(src_row, r, n)
+                if not ok_:
+                    self.stats["skipped_headroom"] += 1
+                    self.log(
+                        f"chainstore: tail candidate row {r}@{p0} skipped, no DRAM headroom ({why}): next candidate"
+                    )
+                    continue
             t0 = time.perf_counter()
             try:
                 if tier == "tail":
@@ -468,6 +481,12 @@ class ChainStore:
         if e.tier == "tail" and e.row == dst_row and e.page0 < n:
             self._drop(e, "overlaps its destination")
             return False
+        if e.tier == "tail":
+            ok_, why = self.be.can_copy(e.row, dst_row, n)
+            if not ok_:  # keep the entry: a later promote may have the memory
+                self.stats["skipped_headroom"] += 1
+                self.log(f"chainstore: promote of {e} skipped, no DRAM headroom ({why}): cold")
+                return False
         t0 = time.perf_counter()
         try:
             if e.tier == "tail":

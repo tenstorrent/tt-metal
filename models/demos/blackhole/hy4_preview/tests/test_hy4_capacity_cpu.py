@@ -591,3 +591,17 @@ def test_default_engine_yield_live_file_off(monkeypatch, tmp_path):
     e.release(0)
     run(e, 0, A)
     assert e.cap_rounds == 3
+
+
+def test_no_headroom_skips_cross_row_candidate_cleanly_and_keeps_going():
+    """hy4fix: a cross-row tail park without DRAM headroom is skipped BEFORE the op (no TT_FATAL, no 'failed' count); the chain falls back to the next candidate (own row / host) or cold, and stays correct."""
+    e = FakeCapEngine()
+    A, m0 = park_long_on_row0(e)
+    busy(e)
+    e.backend.no_headroom = True
+    run(e, 0, toks(2000, 9))
+    e.release(0)
+    st = e.cap.store.stats
+    assert st["failed"] == 0
+    m, c = run(e, 0, A)
+    assert m == m0  # whichever path served it (own-row tail, host, cold), the result equals cold

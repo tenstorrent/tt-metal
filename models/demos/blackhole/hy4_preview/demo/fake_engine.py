@@ -27,10 +27,16 @@ PAGE = 512
 class FakeBackend(CS.Backend):
     def __init__(self, eng):
         self.eng = eng
+        self.no_headroom = False  # can_copy reports no DRAM headroom for every cross-row copy
         self.fail_next = 0  # number of upcoming calls that raise
         self.skip_ok = 0  # that many calls succeed first (failure in the middle of a sliced transfer)
         self.calls = []
         self.pages_moved = 0
+
+    def can_copy(self, src_row, dst_row, npages):
+        if self.no_headroom and src_row != dst_row:
+            return False, "injected: no headroom"
+        return True, ""
 
     def _maybe_fail(self, what):
         if self.skip_ok > 0:
