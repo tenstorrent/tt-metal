@@ -96,9 +96,28 @@ Tensor typecast_device(
         return typecast_on_device(
             input_tensor, output_dtype, output_memory_config, optional_output_tensor, sub_core_grids);
     }
+    // Width or block sharded row-major pages hold part of a row; move through full-row DRAM pages.
+    auto source = input_tensor;
+    if (!row_major_pages_match(input_tensor, output_dtype, ttnn::DRAM_MEMORY_CONFIG)) {
+        source = ttnn::to_memory_config(input_tensor, ttnn::DRAM_MEMORY_CONFIG);
+    }
+    if (row_major_pages_match(source, output_dtype, output_memory_config)) {
+        return typecast_on_device(source, output_dtype, output_memory_config, optional_output_tensor, sub_core_grids);
+    }
     const auto interleaved =
-        typecast_on_device(input_tensor, output_dtype, ttnn::DRAM_MEMORY_CONFIG, std::nullopt, sub_core_grids);
+        typecast_on_device(source, output_dtype, ttnn::DRAM_MEMORY_CONFIG, std::nullopt, sub_core_grids);
     return ttnn::to_memory_config(interleaved, output_memory_config, std::nullopt, optional_output_tensor);
+}
+
+// Device tilize takes no 8-bit integers; they are widened first, which keeps every value.
+DataType tilizable_dtype(DataType dtype) {
+    if (dtype == DataType::UINT8) {
+        return DataType::UINT16;
+    }
+    if (dtype == DataType::INT8) {
+        return DataType::INT32;
+    }
+    return dtype;
 }
 
 // Fused in one pass when possible. Otherwise tilize runs before the cast and untilize after it, so
@@ -115,7 +134,12 @@ Tensor typecast_layout_change(
             input_tensor, output_dtype, output_memory_config, std::nullopt, std::nullopt, output_layout);
     }
     if (output_layout == Layout::TILE) {
-        const auto tiled = ttnn::to_layout(input_tensor, Layout::TILE, std::nullopt, ttnn::DRAM_MEMORY_CONFIG);
+        const auto tilize_dtype = tilizable_dtype(input_tensor.dtype());
+        const auto tilize_input =
+            tilize_dtype == input_tensor.dtype()
+                ? input_tensor
+                : typecast_device(input_tensor, tilize_dtype, ttnn::DRAM_MEMORY_CONFIG, std::nullopt, std::nullopt);
+        const auto tiled = ttnn::to_layout(tilize_input, Layout::TILE, std::nullopt, ttnn::DRAM_MEMORY_CONFIG);
         return typecast_device(tiled, output_dtype, output_memory_config, std::nullopt, std::nullopt);
     }
     const auto cast = typecast_device(input_tensor, output_dtype, ttnn::DRAM_MEMORY_CONFIG, std::nullopt, std::nullopt);

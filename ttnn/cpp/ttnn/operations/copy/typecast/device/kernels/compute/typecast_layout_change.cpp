@@ -23,13 +23,16 @@ void kernel_main() {
     DataflowBuffer in(dfb::in);
     DataflowBuffer out(dfb::out);
 
+#ifdef TILIZE_INPUT
     using TilizeMode = ckl::tilize_config::InitUninitMode;
     using TilizeWait = ckl::tilize_config::WaitMode;
     using TilizeReconfig = ckl::tilize_config::ReconfigureRegisterDatatypeMode;
+    constexpr auto lossless = ckl::tilize_config::Fp32Mode::Lossless;
+#else
     using UntilizeMode = ckl::untilize_config::InitUninitMode;
     using UntilizeWait = ckl::untilize_config::WaitMode;
     using UntilizeReconfig = ckl::untilize_config::ReconfigureRegisterDatatypeMode;
-    constexpr auto lossless = ckl::tilize_config::Fp32Mode::Lossless;
+#endif
 
 #ifdef SAME_DTYPE
     compute_kernel_hw_startup(dfb::in, dfb::out);
