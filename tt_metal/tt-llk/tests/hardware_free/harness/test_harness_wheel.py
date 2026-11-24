@@ -73,6 +73,8 @@ def test_wheel_holds_the_tt_llk_files_the_harness_reads(names):
     for expected in (
         f"{prefix}/tests/helpers/include/counters.h",
         f"{prefix}/tests/helpers/include/operand.h",
+        f"{prefix}/tests/helpers/src/trisc.cpp",
+        f"{prefix}/tests/helpers/ld/sections.ld",
         f"{prefix}/tools/include/perf_counters/types.h",
         f"{prefix}/tests/perf_split_costs.json",
         f"{prefix}/tools/python/tt_llk_perf/__init__.py",
@@ -80,12 +82,6 @@ def test_wheel_holds_the_tt_llk_files_the_harness_reads(names):
         "tt_llk_harness/requirements.txt",
     ):
         assert expected in names, f"{expected} is missing from the wheel"
-
-
-def test_wheel_holds_no_kernel_or_firmware_source(names):
-    """The consumer supplies what gets compiled; the wheel is the harness only."""
-    compiled = sorted(n for n in names if n.endswith((".cpp", ".ld", ".S", ".elf")))
-    assert not compiled, compiled
 
 
 def test_version_is_api_then_commit_time_then_commit():

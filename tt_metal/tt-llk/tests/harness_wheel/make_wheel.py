@@ -15,15 +15,16 @@ packaged so that suite installs it instead of putting a tt-llk checkout on
 - ``tt_llk_harness``: the supported interface to it;
 - ``ttsim_error``, which ``helpers`` imports;
 - under ``tt_llk_harness/llk_home``, in tt-llk layout, the tt-llk files the
-  harness's own Python reads, the headers its generated ``build.h`` includes
-  and ``tt_llk_perf`` (``LLK_HOME_FILES`` below);
+  harness's own Python reads, the helper tree every test variant is built with
+  (``tests/helpers``: firmware sources, linker scripts, headers) and
+  ``tt_llk_perf`` (``LLK_HOME_FILES`` below);
 - ``tt_llk_harness/requirements.txt``, the Python requirements the harness is
   tested with. The wheel requires what the harness imports
   (``RUNTIME_REQUIREMENTS``), unpinned; installing that file first pins them.
 
-It holds no LLK, kernel, test driver, firmware source, linker script or
-toolchain: the suite that installs it supplies those through ``LLK_HOME`` and
-``TestConfig.add_include_dirs`` / ``add_helpers_tree``.
+It holds no LLK, kernel, test driver or toolchain: the suite that installs it
+supplies those through ``LLK_HOME`` and ``TestConfig.add_include_dirs`` /
+``add_helpers_tree``.
 
 The version is ``<API major>.<API minor>.<commit time>+g<commit>``, the API
 being ``tt_llk_harness.HARNESS_API_VERSION`` and the time ``YYYYMMDDHHMM`` in
@@ -33,7 +34,7 @@ names the commit it was built from.
 The wheel is written directly (a pure-Python wheel is a zip archive with three
 metadata files, PEP 427), uncompressed, so building it needs only git and the
 standard library, and the same commit always gives the same bytes. It holds the
-files git tracks or would add, so nothing ignored.
+files git tracks, so nothing untracked or ignored.
 """
 
 from __future__ import annotations
@@ -51,6 +52,7 @@ import time
 import zipfile
 from email.message import Message
 from email.policy import compat32
+from enum import Enum
 from pathlib import Path, PurePosixPath
 from typing import NamedTuple
 
@@ -69,10 +71,9 @@ MODULES = {
 }
 # tt-llk files and directories the harness needs beside its Python, kept at these same paths under LLK_HOME_PREFIX.
 LLK_HOME_FILES = (
-    # parsed by helpers/counters.py when it is imported
-    "tests/helpers/include/counters.h",
-    # included by the build.h the harness generates for every test variant
-    "tests/helpers/include/operand.h",
+    # the firmware sources, linker scripts and headers every test variant is built with; the harness's Python parses
+    # some (counters.h) and generates against others (operand.h), so they travel with it
+    "tests/helpers",
     # the counter name tables tt_llk_perf parses, and that counters.h includes
     "tools/include/perf_counters",
     # the perf split's cost tables (helpers/llk_pytest_plugin.py)
@@ -105,28 +106,35 @@ RUNTIME_REQUIREMENTS = (
 _ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 
 
-def _git(directory: Path, *args: str) -> str:
-    # Run from a git hook, these variables point at the hook's index and work tree.
-    env = {
-        name: value
-        for name, value in os.environ.items()
-        if name not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
-    }
-    return subprocess.run(
-        ["git", "-C", str(directory), *args],
-        check=True,
-        stdout=subprocess.PIPE,
-        text=True,
-        env=env,
-    ).stdout
+class _Git(Enum):
+    """The git commands the builder runs: fixed argument lists, each run in a directory."""
+
+    TRACKED_FILES = ("git", "ls-files", "-z")
+    COMMIT = ("git", "rev-parse", "HEAD")
+    COMMIT_TIME = ("git", "log", "-1", "--format=%ct")
+    TRACKED_CHANGES = ("git", "status", "--porcelain", "--untracked-files=no", ".")
+
+    def run(self, directory: Path) -> str:
+        # Run from a git hook, these variables point at the hook's index and work tree.
+        env = {
+            name: value
+            for name, value in os.environ.items()
+            if name not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
+        }
+        return subprocess.run(
+            self.value,
+            cwd=directory,
+            check=True,
+            stdout=subprocess.PIPE,
+            text=True,
+            env=env,
+        ).stdout
 
 
 def _files_under(source: Path) -> list[Path]:
-    """The files of a directory that git tracks or would add, sorted, as paths relative to it."""
+    """The files of a directory that git tracks, sorted, as paths relative to it."""
     # -z: one NUL-terminated name per file, exactly as stored, with no quoting to undo.
-    listed = _git(
-        source, "ls-files", "-z", "--cached", "--others", "--exclude-standard"
-    )
+    listed = _Git.TRACKED_FILES.run(source)
     return sorted(
         Path(name) for name in listed.split("\0") if (source / name).is_file()
     )
@@ -181,7 +189,7 @@ class Version(NamedTuple):
     api: tuple[int, int]
     committed: int  # commit time, seconds since the epoch
     commit: int  # the commit's SHA-1
-    dirty: bool = False  # built with uncommitted harness changes
+    dirty: bool = False  # built with uncommitted changes to tracked tt-llk files
 
     def __str__(self) -> str:
         major, minor = self.api
@@ -194,12 +202,11 @@ class Version(NamedTuple):
 
 def default_version(llk_root: Path = LLK_ROOT) -> Version:
     """The version of the commit ``llk_root`` is at."""
-    sources = [*PACKAGES, *MODULES, *LLK_HOME_FILES, REQUIREMENTS]
     return Version(
         api=api_version(llk_root),
-        committed=int(_git(llk_root, "log", "-1", "--format=%ct")),
-        commit=int(_git(llk_root, "rev-parse", "HEAD"), 16),
-        dirty=bool(_git(llk_root, "status", "--porcelain", "--", *sources)),
+        committed=int(_Git.COMMIT_TIME.run(llk_root)),
+        commit=int(_Git.COMMIT.run(llk_root), 16),
+        dirty=bool(_Git.TRACKED_CHANGES.run(llk_root)),
     )
 
 

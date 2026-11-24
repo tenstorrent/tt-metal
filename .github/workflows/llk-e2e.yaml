@@ -45,6 +45,8 @@ jobs:
     needs: llk-e2e-summary
     runs-on: ubuntu-slim
     timeout-minutes: 30
+    # The release token is a secret of this environment, which only main may deploy to; other runs name none.
+    environment: ${{ github.event_name == 'schedule' && github.ref == 'refs/heads/main' && 'llk-harness-wheel-release' || '' }}
     permissions:
       contents: read
     steps:
@@ -92,6 +94,12 @@ jobs:
             gh release create "$tag" dist/* --repo "$RELEASE_REPO" --latest \
               --title "tt-llk harness $VERSION" --notes "tt-llk Python test harness $VERSION"
           fi
+          # Keep the 30 newest harness releases (the list is newest first); other releases of the repository are not touched.
+          gh release list --repo "$RELEASE_REPO" --limit 1000 --json name,tagName \
+            --jq '[.[] | select(.name | startswith("tt-llk harness "))][30:][].tagName' |
+            while read -r old; do
+              gh release delete "$old" --repo "$RELEASE_REPO" --yes --cleanup-tag
+            done
 
   report-status:
     name: "Report status"

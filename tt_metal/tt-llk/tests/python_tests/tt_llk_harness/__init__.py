@@ -45,6 +45,16 @@ is where it should be noticed.
 from __future__ import annotations
 
 import sys
+from pathlib import Path
+
+import helpers
+
+# ``helpers`` is a top-level name, and an installed harness sits behind the suite's own directories on sys.path.
+if Path(helpers.__file__).resolve().parents[1] != Path(__file__).resolve().parents[1]:
+    raise ImportError(
+        f"`helpers` resolved to {helpers.__file__}, not to the tt-llk harness beside {__file__}: "
+        "a `helpers` package or module of the suite shadows it. Rename it."
+    )
 
 # --- Catalogues: open sets, reached through a stable alias --------------------
 from helpers import golden_generators as goldens

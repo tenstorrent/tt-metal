@@ -469,9 +469,10 @@ class TestConfig:
         TestConfig.TESTS_WORKING_DIR = TestConfig.LLK_ROOT / "tests"
         TestConfig.TOOL_PATH = TestConfig.LLK_ROOT / "tests/sfpi/compiler/bin"
 
-        TestConfig.HELPERS = TestConfig.TESTS_WORKING_DIR / "helpers"
-        TestConfig.RISCV_SOURCES = TestConfig.TESTS_WORKING_DIR / "helpers/src"
-        TestConfig.LINKER_SCRIPTS = TestConfig.TESTS_WORKING_DIR / "helpers/ld"
+        # The harness's own helper tree, not LLK_HOME's: its Python and these sources are one commit.
+        TestConfig.HELPERS = harness_files_root() / "tests/helpers"
+        TestConfig.RISCV_SOURCES = TestConfig.HELPERS / "src"
+        TestConfig.LINKER_SCRIPTS = TestConfig.HELPERS / "ld"
 
         # Toolchain paths
         TestConfig.GXX = str((TestConfig.TOOL_PATH / "riscv-tt-elf-g++").absolute())
@@ -660,9 +661,8 @@ class TestConfig:
             f"-DTENSIX_FIRMWARE -DENV_LLK_INFRA -DKERNEL_BUILD {llk_assert_define}{TestConfig.ARCH_DEFINE} "
             f"{'-DSPEED_OF_LIGHT' if TestConfig.SPEED_OF_LIGHT else ''}"
         )
-        # A harness that is not LLK_HOME's (an installed one) compiles the headers its own Python parses and generates
-        # against (counters.h, operand.h), not LLK_HOME's copy, and falls back to its perf counter headers when
-        # LLK_HOME has none.
+        # A harness that is not LLK_HOME's (an installed one) compiles its own helper headers, not LLK_HOME's copy,
+        # and falls back to its perf counter headers when LLK_HOME has none.
         harness = harness_files_root()
         installed = harness != TestConfig.LLK_ROOT.resolve()
         TestConfig.INCLUDES = (

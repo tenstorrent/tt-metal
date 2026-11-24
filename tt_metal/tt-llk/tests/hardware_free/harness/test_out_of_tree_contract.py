@@ -117,6 +117,9 @@ def test_out_of_tree_contract_fixture_passes_on_the_installed_wheel():
     asserts that ``helpers`` resolved from there, so a pass means the installed
     copy was the one exercised.
 
+    ``LLK_HOME`` is a tree of links without the harness's parts, as a suite
+    that has no harness checkout would have it.
+
     What this catches that the checkout run cannot: a module that reads a file
     by a path relative to the tt-llk tree, or a package or data file the wheel
     does not carry. Either works from a checkout and fails once installed.
@@ -139,7 +142,12 @@ def test_out_of_tree_contract_fixture_passes_on_the_installed_wheel():
         assert installed.returncode == 0, f"pip install failed:\n{installed.stderr}"
 
         report = Path(child_temp) / "fixture-report.xml"
-        result = _run_fixture(child_temp, report, harness_site=site)
+        result = _run_fixture(
+            child_temp,
+            report,
+            harness_site=site,
+            llk_home=_llk_home_without_the_harness(Path(child_temp) / "llk"),
+        )
 
         assert result.returncode == 0, (
             "The out-of-tree contract fails on the installed harness wheel, "
@@ -154,10 +162,39 @@ def test_out_of_tree_contract_fixture_passes_on_the_installed_wheel():
         _assert_the_child_ran_the_fixture(report, result)
 
 
+def _llk_home_without_the_harness(root: Path) -> Path:
+    """An ``LLK_HOME`` of links to this checkout, minus everything an installed harness brings itself.
+
+    No ``tests/python_tests``, ``tests/helpers`` or ``tools``: a build that still
+    reaches for one of them under ``LLK_HOME`` fails. It sits as deep under
+    ``root`` as tt-llk does in tt-metal, beside links to its neighbours there,
+    because the compile reaches tt-metal headers by relative path.
+    """
+    checkout = FIXTURE_DIR.parents[1]
+    llk_home = root / "tt_metal" / "tt-llk"
+    (llk_home / "tests").mkdir(parents=True)
+    links = {
+        llk_home: (checkout, ("tests", "tools")),
+        llk_home / "tests": (checkout / "tests", ("python_tests", "helpers")),
+        llk_home.parent: (checkout.parent, (checkout.name,)),
+        root: (checkout.parents[1], (checkout.parent.name,)),
+    }
+    for directory, (source, left_out) in links.items():
+        for entry in source.iterdir():
+            if entry.name not in left_out:
+                (directory / entry.name).symlink_to(entry)
+    return llk_home
+
+
 def _run_fixture(
-    child_temp: str, report: Path, harness_site: Path | None = None
+    child_temp: str,
+    report: Path,
+    harness_site: Path | None = None,
+    llk_home: Path | None = None,
 ) -> subprocess.CompletedProcess:
     env = dict(os.environ)
+    if llk_home is not None:
+        env["LLK_HOME"] = str(llk_home)
     # Where the fixture takes the harness from: the checkout unless a test names an installed copy.
     env.pop("LLK_HARNESS_SITE", None)
     if harness_site is not None:
