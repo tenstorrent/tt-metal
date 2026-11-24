@@ -10,6 +10,7 @@ from fuser.golden.pack.untilize import untilize_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
 from fuser.pack_node import PackNode
+from helpers.tile_shape import cpp_tensor_shape
 
 from .common import untilize_l1_address
 from .packer import Packer
@@ -40,12 +41,10 @@ class PackUntilize(Packer):
     ) -> str:
         block_ct_dim = block.block_cols
         full_ct_dim = pack_node.output.tile_count_x
-        face_r_dim = pack_node.output.tile_shape.face_r_dim
-        num_faces = pack_node.output.tile_shape.total_num_faces()
 
         return (
             f"_llk_pack_untilize_init_<{block_ct_dim}, {full_ct_dim}>(\n"
-            f"    {config.sentinel.pack_src_format}, {config.sentinel.pack_dst_format}, {face_r_dim}, {num_faces}\n"
+            f"    {config.sentinel.pack_src_format}, {config.sentinel.pack_dst_format}, {cpp_tensor_shape(pack_node.output.tile_shape)}\n"
             f");\n"
         )
 
@@ -58,12 +57,11 @@ class PackUntilize(Packer):
     ) -> str:
         block_ct_dim = block.block_cols
         full_ct_dim = pack_node.output.tile_count_x
-        num_faces = pack_node.output.tile_shape.total_num_faces()
 
         return (
             f"_llk_pack_untilize_<{block_ct_dim}, {full_ct_dim}>(\n"
             f"    {untilize_l1_address(pack_node.output, block)},\n"
-            f"    {num_faces}, {block.tile_id_dest}\n"
+            f"    {cpp_tensor_shape(pack_node.output.tile_shape)}, {block.tile_id_dest}\n"
             f");\n"
         )
 

@@ -10,6 +10,7 @@ from fuser.golden.pack.untilize import untilize_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
 from fuser.pack_node import PackNode
+from helpers.tile_shape import cpp_tensor_shape
 
 from .common import untilize_l1_address
 from .packer import Packer
@@ -39,15 +40,14 @@ class PackUntilize(Packer):
     ) -> str:
         block_ct_dim = block.block_cols
         full_ct_dim = pack_node.output.tile_count_x
-        face_r_dim = pack_node.output.tile_shape.face_r_dim
-        num_faces = pack_node.output.tile_shape.total_num_faces()
+        tensor_shape = cpp_tensor_shape(pack_node.output.tile_shape)
         dest_sync = operation.dest_sync.cpp_enum_value
 
         # Switch layouts without resetting the current Dest half-bank.
         return (
-            f"_llk_init_packer_dest_offset_registers_<{dest_sync}, PackMode::Untilize>({face_r_dim});\n"
+            f"_llk_init_packer_dest_offset_registers_<{dest_sync}, PackMode::Untilize>({tensor_shape});\n"
             f"_llk_pack_untilize_init_<{block_ct_dim}, {full_ct_dim}>(\n"
-            f"    {config.sentinel.pack_dst_format}, {face_r_dim}, {num_faces}\n"
+            f"    {config.sentinel.pack_dst_format}, {tensor_shape}\n"
             f");\n"
         )
 
@@ -60,12 +60,11 @@ class PackUntilize(Packer):
     ) -> str:
         block_ct_dim = block.block_cols
         full_ct_dim = pack_node.output.tile_count_x
-        face_r_dim = pack_node.output.tile_shape.face_r_dim
 
         return (
             f"_llk_pack_untilize_<{block_ct_dim}, {full_ct_dim}>(\n"
             f"    {untilize_l1_address(pack_node.output, block)},\n"
-            f"    {config.sentinel.pack_dst_format}, {face_r_dim}, {block.tile_id_dest}\n"
+            f"    {config.sentinel.pack_dst_format}, {cpp_tensor_shape(pack_node.output.tile_shape)}, {block.tile_id_dest}\n"
             f");\n"
         )
 
