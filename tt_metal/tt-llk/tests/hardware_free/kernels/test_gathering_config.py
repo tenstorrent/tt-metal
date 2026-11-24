@@ -675,7 +675,7 @@ GATHERING_BUILD_VARIANTS = [
     (
         "pack block contiguous (runtime-length record)",
         "test_pack_tiny_tile_block.py::test_pack_tiny_tile_block[formats:Float16_b->Float16_b-dest_acc:No-"
-        "tile_dims:(1, 32)-num_tiles:1-pack_mode:0]",
+        "tile_dims:(1, 32)-num_tiles:1]",
         "pack",
     ),
     (
