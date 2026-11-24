@@ -17,6 +17,10 @@ runs it after its delay and reads the PCIe tree after it.
 is checked right after the C9 reset too, as the Deployment Test does after each reset; its row has event "dbi", its
 finding lines (chunk_sched.dbi_lines: NUMERIC FAIL per chip by BDF, tray and worst DRAM bank, NUMERIC WARN when it
 raised, one summary line) go to dbi.txt beside --rows.
+--noc-wall-s S > 0: after that, on the same open mesh, the seeded per-chip NOC data check
+(noc_walk.noc_check): every chip's Tensix cores writing L1 and DRAM destinations and reading them back, for S s. Its
+row has event "nocwalk", its finding lines (noc_walk.nocwalk_lines: NUMERIC FAIL per chip by BDF, tray and ASIC, one
+common-fault WARN, one summary line) go to noc.txt beside --rows.
 Exit 0 opened, gathered and closed, 1 anything failed: the row's error reads 'MESH 4x8 <stage>: <first error line>'."""
 import argparse
 import json
@@ -27,6 +31,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.realpath(__file__)))
 import time
 
+import noc_walk
 from chunk_sched import dbi_lines, tray_of
 from numeric_check import umd_map_from_stdout
 from quiet_clock import kmd_pci
@@ -42,6 +47,9 @@ ap.add_argument(
 )
 ap.add_argument(
     "--dbi-wall-s", type=float, default=0, help="DRAM byte/DBI pattern check after the CCL, wall cap s; 0 off"
+)
+ap.add_argument(
+    "--noc-wall-s", type=float, default=0, help="seeded per-chip NOC data check after the DRAM check, wall cap s; 0 off"
 )
 a = ap.parse_args()
 rows = open(a.rows, "a")
@@ -83,47 +91,68 @@ def chip_name(m, i, r, c):
     )
 
 
+def chips_of(m, R, C):
+    """mesh index -> dict(pci, tray, dev) for every chip in the mesh."""
+    chips = {}
+    for i in range(R * C):
+        did, bdf = chip_id(m, i)
+        chips[i] = dict(pci=bdf or None, tray=tray_of(bdf) if bdf else None, dev=did)
+    return chips
+
+
 def beat(s):
     with open(a.beat + ".tmp", "w") as f:
         f.write(f"{s} {time.time():.0f}\n")
     os.replace(a.beat + ".tmp", a.beat)
 
 
-def dbi_check():
-    """--dbi-wall-s: G3b's DRAM byte/DBI pattern check on the open mesh, after the C9 reset. Its own error is a NUMERIC WARN
-    line and the "dbi" row's error, never the open's: the mesh still closes and the open's verdict stands."""
+def open_check(event, label, txt, run, lines_of):
+    """One check on the open mesh after the C9 reset (--dbi-wall-s, --noc-wall-s): run(say, torch, chips, nb) returns its
+    dict, lines_of(r, chips) its finding lines (written to txt beside --rows). Its own error is a NUMERIC WARN line and
+    the row's error, never the open's: the mesh still closes and the open's verdict stands."""
     t1 = time.time()
-    beat("dbi pass 0")
-    say = lambda s: print(f"{time.strftime('%F %T')} C9 DRAM {s}", flush=True)  # noqa: E731
+    beat(f"{event} pass 0")
+    say = lambda s: print(f"{time.strftime('%F %T')} C9 {label} {s}", flush=True)  # noqa: E731
+    chips = {}
     try:
-        import dram_dbi as dd
         import torch
 
-        chips = {}
-        for i in range(R * C):
-            did, bdf = chip_id(m, i)
-            chips[i] = dict(pci=bdf or None, tray=tray_of(bdf) if bdf else None, dev=did)
+        chips = chips_of(m, R, C)
         g = m.dram_grid_size()  # MeshDevice has no get_devices() in Python
-        nb = int(g.x * g.y)
-        say(
-            f"DRAM byte/DBI patterns on {len(chips)} chips after the C9 reset: {dd.ROWS * dd.ROW_B >> 20} MB per chip, "
-            f"{dd.HOPS} copies on the device per pass, wall cap {a.dbi_wall_s:g} s, banks {nb}"
-        )
-        gb = dd.dbi_check(ttnn, torch, m, chips, a.dbi_wall_s, nb, beat=beat, say=say)
+        r = run(say, torch, chips, int(g.x * g.y))
     except Exception as e:  # noqa: BLE001
-        gb = dict(error=f"{type(e).__name__}: {str(e)[:300]}", chips={})
-        say(f"error: {gb['error']}")
-    r = dict(gb, start=round(t1, 3), end=round(time.time(), 3))
-    row(event="dbi", **r)
+        r = dict(error=f"{type(e).__name__}: {str(e)[:300]}", chips={})
+        say(f"error: {r['error']}")
+    r = dict(r, start=round(t1, 3), end=round(time.time(), 3))
+    row(event=event, **r)
     try:
-        lines, _ = dbi_lines(r, 0, at="after the end reset's glx_reset", name="C9")
-        out = os.path.join(os.path.dirname(os.path.abspath(a.rows)), "dbi.txt")
-        with open(out, "w") as f:
+        lines = lines_of(r, chips)
+        with open(os.path.join(os.path.dirname(os.path.abspath(a.rows)), txt), "w") as f:
             f.write("".join(ln + "\n" for ln in lines))
         for ln in lines:
             print(ln, flush=True)
     except Exception as e:  # noqa: BLE001
         say(f"WARNING: findings not written: {type(e).__name__}: {str(e)[:300]}")
+
+
+def dbi_run(say, torch, chips, nb):
+    """--dbi-wall-s: G3b's DRAM byte/DBI pattern check."""
+    import dram_dbi as dd
+
+    say(
+        f"DRAM byte/DBI patterns on {len(chips)} chips {noc_walk.WHY}: {dd.ROWS * dd.ROW_B >> 20} MB per chip, "
+        f"{dd.HOPS} copies on the device per pass, wall cap {a.dbi_wall_s:g} s, banks {nb}"
+    )
+    return dd.dbi_check(ttnn, torch, m, chips, a.dbi_wall_s, nb, beat=beat, say=say)
+
+
+def noc_run(say, torch, chips, nb):
+    """--noc-wall-s: the seeded per-chip NOC data check."""
+    say(
+        f"NOC data check on {len(chips)} chips {noc_walk.WHY}: {noc_walk.SLICE} B per core per pass, "
+        f"wall cap {a.noc_wall_s:g} s, banks {nb}"
+    )
+    return noc_walk.noc_check(ttnn, torch, m, chips, a.noc_wall_s, nb=nb, beat=lambda s: beat(f"noc {s}"))
 
 
 beat("open")
@@ -226,7 +255,10 @@ try:
         ttnn.deallocate(x)
     if a.dbi_wall_s > 0:
         stage = "dbi"
-        dbi_check()
+        open_check("dbi", "DRAM", "dbi.txt", dbi_run, lambda r, _: dbi_lines(r, 0, at=noc_walk.WHY, name="C9")[0])
+    if a.noc_wall_s > 0:
+        stage = "noc"
+        open_check("nocwalk", "NOC", "noc.txt", noc_run, noc_walk.nocwalk_lines)
     stage = "close_mesh_device"
     ttnn.close_mesh_device(m)
     m = None
