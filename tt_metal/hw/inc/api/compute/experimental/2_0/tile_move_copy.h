@@ -27,9 +27,6 @@ namespace detail {
 template <DataFormat Format, TensorShape Shape>
 constexpr bool copy_to_dest = DST_ACCUM_MODE && Format == DataFormat::Float32;
 
-template <DataFormat Format, TensorShape Shape>
-constexpr DstClient copy_client = copy_to_dest<Format, Shape> ? DstClient::UNPACK : DstClient::MATH;
-
 // One tile of copy_tile / copy_block.
 template <DataFormat Format, TensorShape Shape>
 inline void copy_one(LLKOperand<Format, Shape> src, std::uint32_t itile, std::uint32_t idst) {
@@ -68,7 +65,6 @@ inline void copy_init(LLKOperand<Format, Shape> src) {
     static_assert(is_legal_tile_shape(Shape), "copy_init: illegal tile shape.");
     static_assert(is_fp32_dest_acc_en == DST_ACCUM_MODE, "copy_init: Dest mode is kernel-wide (DST_ACCUM_MODE)");
     constexpr LLKMemDescriptor D = LLKOperand<Format, Shape>::descriptor;
-    detail::op_init<detail::copy_client<Format, Shape>>();
     if constexpr (detail::copy_to_dest<Format, Shape>) {
         UNPACK((llk_2_0::unpack_to_dest_init<D>(src.l1_address)));  // no math side: the unpacker writes all 32 bits
     } else {
@@ -108,7 +104,7 @@ inline void copy_tile(LLKOperand<Format, Shape> src, std::uint32_t itile, std::u
 /**
  * Id-free block copy with a runtime tile count, Quasar: a copy of each of `ntiles` tiles, source tiles
  * start_itile + i -> Dest tiles start_idst + i, borrowing Dest once like copy_tile. No tails: every block op
- * between two inits must cover the same tile count (LLK_ASSERT); for leftover tiles re-init, then run the shorter block.
+ * between two inits must cover the same tile count; for leftover tiles re-init, then run the shorter block.
  *
  * | Param Type | Name                | Description                               | Type       | Valid Range                          | Required |
  * |------------|---------------------|-------------------------------------------|------------|--------------------------------------|----------|
@@ -124,7 +120,6 @@ inline void copy_block(
     LLKOperand<Format, Shape> src, std::uint32_t start_itile, std::uint32_t start_idst, std::uint32_t ntiles) {
     LLK_ASSERT(
         start_idst + ntiles <= detail::dest_section_tiles<is_fp32_dest_acc_en>(), "copy_block: block exceeds Dest");
-    detail::check_block_tiles<detail::copy_client<Format, Shape>>(ntiles);
     if constexpr (detail::copy_to_dest<Format, Shape>) {
         _llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();
     }

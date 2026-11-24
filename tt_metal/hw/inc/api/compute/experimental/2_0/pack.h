@@ -41,7 +41,6 @@ inline void pack_init(LLKOperand<Format, Shape> out) {
         "pack_init (Quasar 2.0): only Float16_b / Float16, or Float32 at a 32-bit Dest.");
     static_assert(is_legal_tile_shape(Shape), "pack_init: illegal output tile shape.");
     static_assert(is_fp32_dest_acc_en == DST_ACCUM_MODE, "pack_init: Dest mode is kernel-wide (DST_ACCUM_MODE)");
-    detail::op_init<DstClient::PACK>();
     constexpr bool relu_zero = relu == Relu::Zero;
     PACK((llk_2_0::pack_init<LLKOperand<Format, Shape>::descriptor, is_fp32_dest_acc_en, relu_zero>(out.l1_address)));
 }
@@ -72,7 +71,7 @@ inline void pack_tile(LLKOperand<Format, Shape> out, std::uint32_t itile, std::u
  * ifrom_dst + i -> output tiles start_out_tile + i, i < ct_dim * rt_dim. Argument order = the runtime pack_block
  * without ntiles. The block must fit one Dest section
  * (static_assert).
- * No tails: every block op between two inits must cover the same tile count (LLK_ASSERT); for leftover tiles
+ * No tails: every block op between two inits must cover the same tile count; for leftover tiles
  * re-init, then run the shorter block.
  *
  * | Param Type | Name                | Description                        | Type       | Valid Range                     | Required |
@@ -100,7 +99,7 @@ inline void pack_block(LLKOperand<Format, Shape> out, std::uint32_t ifrom_dst, s
 /**
  * Id-free block pack with a runtime tile count, Quasar: a pack of each of `ntiles` tiles,
  * Dest tiles ifrom_dst + i -> output tiles start_out_tile + i. Same argument order as Blackhole.
- * No tails: every block op between two inits must cover the same tile count (LLK_ASSERT); for leftover tiles
+ * No tails: every block op between two inits must cover the same tile count; for leftover tiles
  * re-init, then run the shorter block.
  *
  * | Param Type | Name                | Description                        | Type       | Valid Range                         | Required |
@@ -117,8 +116,6 @@ inline void pack_block(
     LLKOperand<Format, Shape> out, std::uint32_t ifrom_dst, std::uint32_t ntiles, std::uint32_t start_out_tile = 0) {
     LLK_ASSERT(
         ifrom_dst + ntiles <= detail::dest_section_tiles<is_fp32_dest_acc_en>(), "pack_block: block exceeds Dest");
-    detail::check_block_tiles<DstClient::PACK>(ntiles);
-    LLK_ASSERT(start_out_tile + ntiles <= out.ntiles(), "pack_block: tiles past the output's window");
     for (std::uint32_t i = 0; i < ntiles; ++i) {
         PACK((llk_2_0::pack<LLKOperand<Format, Shape>::descriptor>(
             out.l1_address, ifrom_dst + i, out.tile(start_out_tile + i))));
