@@ -351,8 +351,7 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
         {"schedule_max_bands", max_bands},
         {"schedule_ring_size", 1u},
         {"schedule_units", band_count},
-        {"schedule_cols", cols_used},
-        {"schedule_rotate", 0u}};
+        {"schedule_cols", cols_used}};
     const std::string kdir = "ttnn/cpp/ttnn/operations/experimental/indexer_score/device/kernels/";
     auto reader_id = tt::tt_metal::CreateKernel(
         program,
