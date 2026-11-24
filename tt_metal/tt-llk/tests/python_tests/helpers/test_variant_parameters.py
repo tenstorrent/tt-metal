@@ -369,6 +369,34 @@ class MATMUL_PRODUCTION(TemplateParameter):
         ]
 
 
+class MATMUL_CUSTOM_PACK32(TemplateParameter):
+    """matmul_custom_test: the 32-bit operand / output pack traits a ttnn kernel's CB formats give (llk_pack_in32_api,
+    llk_pack_out32_api). Picked from the formats the test already reports, so it adds no column.
+    """
+
+    def __init__(self, in32: bool = False, out32: bool = False):
+        self.pack32 = (bool(in32), bool(out32))
+
+    def __repr__(self) -> str:
+        return f"MATMUL_CUSTOM_PACK32{self.pack32}"
+
+    def __eq__(self, other) -> bool:
+        return isinstance(other, MATMUL_CUSTOM_PACK32) and other.pack32 == self.pack32
+
+    def __hash__(self) -> int:
+        return hash(self.pack32)
+
+    def convert_to_cpp(self) -> str:
+        return "\n".join(
+            d
+            for d, on in zip(
+                ("#define MATMUL_CUSTOM_IN32 1", "#define MATMUL_CUSTOM_OUT32 1"),
+                self.pack32,
+            )
+            if on
+        )
+
+
 @dataclass
 class MATMUL_FUNC_BLOCKS(TemplateParameter):
     """Blackhole matmul functional run of several output blocks (LOOP_FACTOR of them) on the real buffers, each block packed to the next result tiles."""
