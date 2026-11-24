@@ -4,6 +4,87 @@
 
 #pragma once
 
+#ifdef ARCH_QUASAR
+
+#include "api/compute/common.h"                        // ALWI, UNPACK/MATH/PACK, DST_ACCUM_MODE
+#include "llk_compute_api_claim.h"                     // LLK_COMPUTE_API_CLAIM
+#include "api/compute/experimental/2_0/llk_operand.h"  // LLKOperand
+#include "experimental/2_0/llk_2_0.h"                  // id-free Quasar LLK API
+
+namespace ckernel {
+
+// clang-format off
+/**
+ * Id-free (2.0) two-input hardware startup, Quasar. Call exactly once, at the top of the kernel, on every thread.
+ * Programs the kernel-wide state (Dest 16/32-bit mode, ALU formats, packer input format) and the SrcA/SrcB formats,
+ * then sets up the legacy Dest sync (tile_regs_acquire / commit / wait / release). Buffer descriptors are not programmed here: every op init programs its own, so each op's init must still run before the op. The operands'
+ * runtime addresses are unused.
+ *
+ * Float16_b / Float16 operands, and Float32 at a 32-bit Dest (copy via unpack-to-dest, pack): register format ==
+ * L1 format. Each op's init still checks its own operands (FPU ops take 16-bit formats only).
+ *
+ * | Param Type | Name                | Description                                    | Type                   | Valid Range        | Required |
+ * |------------|---------------------|------------------------------------------------|------------------------|--------------------|----------|
+ * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                      | bool                   |                    | False    |
+ * | Template   | FA/SA, FB/SB, FO/SO | in0 / in1 / out L1 format + geometry (deduced) | DataFormat/TensorShape | Float16_b, Float16, Float32 (32-bit Dest) | True     |
+ * | Function   | in0 / in1           | Input operands (in0 -> SrcA, in1 -> SrcB)      | LLKOperand             | N/A                | True     |
+ * | Function   | out                 | Output operand                                 | LLKOperand             | N/A                | True     |
+ */
+// clang-format on
+template <
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    DataFormat FA,
+    TensorShape SA,
+    DataFormat FB,
+    TensorShape SB,
+    DataFormat FO,
+    TensorShape SO>
+ALWI void compute_kernel_hw_startup(
+    experimental::LLKOperand<FA, SA> /*in0*/,
+    experimental::LLKOperand<FB, SB> /*in1*/,
+    experimental::LLKOperand<FO, SO> /*out*/) {
+    static_assert(
+        llk_2_0::is_supported_format(FA, is_fp32_dest_acc_en) &&
+            llk_2_0::is_supported_format(FB, is_fp32_dest_acc_en) &&
+            llk_2_0::is_supported_format(FO, is_fp32_dest_acc_en),
+        "compute_kernel_hw_startup (Quasar 2.0): only Float16_b / Float16 operands, or Float32 at a 32-bit Dest.");
+    static_assert(
+        experimental::is_legal_tile_shape(SA) && experimental::is_legal_tile_shape(SB) &&
+            experimental::is_legal_tile_shape(SO),
+        "compute_kernel_hw_startup: illegal tile shape.");
+    static_assert(is_fp32_dest_acc_en == DST_ACCUM_MODE, "compute_kernel_hw_startup: Dest mode is DST_ACCUM_MODE");
+    LLK_COMPUTE_API_CLAIM(2_0, legacy);
+    UNPACK((llk_2_0::unpack_hw_configure<
+            experimental::LLKOperand<FA, SA>::descriptor,
+            experimental::LLKOperand<FB, SB>::descriptor>()));
+    MATH((llk_2_0::math_hw_configure<
+          experimental::LLKOperand<FA, SA>::descriptor,
+          experimental::LLKOperand<FB, SB>::descriptor,
+          is_fp32_dest_acc_en>()));
+    PACK((llk_2_0::pack_hw_configure<experimental::LLKOperand<FO, SO>::descriptor, is_fp32_dest_acc_en>()));
+}
+
+// clang-format off
+/**
+ * Id-free (2.0) single-input hardware startup, Quasar: the two-input overload with in0 == in1.
+ *
+ * | Param Type | Name                | Description                             | Type                   | Valid Range        | Required |
+ * |------------|---------------------|-----------------------------------------|------------------------|--------------------|----------|
+ * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode               | bool                   |                    | False    |
+ * | Template   | F/S, FO/SO          | in / out L1 format + geometry (deduced) | DataFormat/TensorShape | Float16_b, Float16, Float32 (32-bit Dest) | True     |
+ * | Function   | in                  | The single input operand                | LLKOperand             | N/A                | True     |
+ * | Function   | out                 | Output operand                          | LLKOperand             | N/A                | True     |
+ */
+// clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat F, TensorShape S, DataFormat FO, TensorShape SO>
+ALWI void compute_kernel_hw_startup(experimental::LLKOperand<F, S> in, experimental::LLKOperand<FO, SO> out) {
+    compute_kernel_hw_startup<is_fp32_dest_acc_en>(in, in, out);
+}
+
+}  // namespace ckernel
+
+#else  // Blackhole
+
 #include "api/compute/common.h"                        // ALWI, UNPACK/MATH/PACK, DST_ACCUM_MODE, PackMode
 #include "api/compute/src_order.h"                     // SrcOrder
 #include "api/compute/experimental/2_0/llk_operand.h"  // LLKOperand
@@ -124,3 +205,5 @@ ALWI void compute_kernel_hw_startup(experimental::LLKOperand<F, S> in, experimen
 }
 
 }  // namespace ckernel
+
+#endif  // ARCH_QUASAR

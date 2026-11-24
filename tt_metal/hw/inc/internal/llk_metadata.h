@@ -40,6 +40,9 @@ struct LLKMetadata {
     uint8_t face_c_dim = 16;
     uint8_t num_faces_r_dim = 2;
     uint8_t num_faces_c_dim = 2;
+
+    // Tensor bindings only: the host's contiguous per-thread split of the node's first N pages (0 = none).
+    uint32_t thread_split_pages = 0;
 };
 
 // Deliberately non-constexpr: a missing format fails constant evaluation even when ASSERT is disabled.

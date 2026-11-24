@@ -56,7 +56,9 @@ public:
         Scratchpad(
             pointer{get_common_arg_val<uint32_t>(token.crta_offset_)},
             token.size_in_bytes_,
-            static_cast<DataFormat>(token.llk_metadata_.format)) {}
+            static_cast<DataFormat>(token.llk_metadata_.format)) {
+        split_pages_ = token.llk_metadata_.thread_split_pages;
+    }
 
     /** @brief Get the element at the given index
      *
@@ -100,14 +102,20 @@ public:
     [[nodiscard]] constexpr DataFormat get_dataformat() const noexcept { return data_format_; }
 
 #if defined(COMPILE_FOR_TRISC)
-    // Returns the LLKOperand pointing to the base address of the scratchpad
-    // Functionalities meant to be used with LLKOperand for LLK 2.0
+    // Returns the LLKOperand for this thread's part of the scratchpad, for LLK 2.0: the whole region, or this thread's
+    // window when the token carries a thread split (same rule as LocalTensorAccessor::operand).
     //
     // Parameters:
     // - Operand: The LLKOperand type to return. (hint: use LLKOperandFrom<scratchpad::token>)
     template <typename Operand>
     [[nodiscard]] Operand operand() const noexcept {
-        return Operand{(static_cast<uint32_t>(local_mem::detail::AddressAccess::address(start_addr_)) >> 4) - 1};
+#ifdef ARCH_QUASAR
+        // Buffer-descriptor base (16B units), as DataflowBuffer::front/back pass it.
+        const Operand region{static_cast<uint32_t>(local_mem::detail::AddressAccess::address(start_addr_)) >> 4};
+#else
+        const Operand region{(static_cast<uint32_t>(local_mem::detail::AddressAccess::address(start_addr_)) >> 4) - 1};
+#endif
+        return thread_window(region, split_pages_);  // ADL: api/compute/experimental/2_0/llk_operand.h
     }
 #endif
 
@@ -168,6 +176,7 @@ private:
     // sentinel_addr_ could be omitted in class layout if we inject the size information as a template parameter.
     pointer start_addr_, sentinel_addr_;
     DataFormat data_format_;
+    uint32_t split_pages_ = 0;  // token's per-thread split (operand()); 0 = none
 };
 
 // A scratchpad is a node-local SRAM (L1) allocation, so it can be either endpoint of a NoC transaction (DM kernels

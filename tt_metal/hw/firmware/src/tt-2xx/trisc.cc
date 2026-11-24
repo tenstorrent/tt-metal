@@ -92,6 +92,12 @@ namespace llk_reinit_guard {
 // llk_reinit_guard.h.
 thread_local std::uint8_t reinit_guard_slots[ckernel::trisc::BD_TABLE_NUM_ENTRIES] __attribute__((used)) = {};
 }  // namespace llk_reinit_guard
+
+namespace llk_2_0 {
+// 2.0 block-size check (no tails), one count per Dest unit. thread_local per TRISC (tt-llk#1678); declared extern
+// in api/compute/experimental/2_0/internal/op_hooks.h.
+thread_local std::uint32_t block_tiles[4] __attribute__((used)) = {};
+}  // namespace llk_2_0
 #endif
 
 namespace ckernel {

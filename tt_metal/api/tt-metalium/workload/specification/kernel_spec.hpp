@@ -184,6 +184,14 @@ struct KernelSpec {
     struct TensorBinding {
         TensorParamName tensor_parameter_name;  // identify the TensorParameter within the ProgramSpec
         std::string accessor_name;              // tensor accessor name (used in the kernel source code)
+        // Contiguous per-thread split of this node's local region (compute kernels, LLK operands).
+        // 0 = no split. N > 0: the region's first N pages are dealt to the kernel's threads in contiguous runs,
+        // thread t of T getting N / T pages, plus one if t < N % T (low threads take the remainder).
+        // LocalTensorAccessor::operand<Op>() then returns the calling thread's window; the kernel never sees
+        // which thread it runs on. N must equal the node's region in pages (checked per enqueue).
+        // Limits (fc 2-D subblocks, pool halo rows, N % T != 0 forcing block = 1): see thread_window in
+        // tt_metal/hw/inc/api/compute/experimental/2_0/llk_operand.h.
+        uint32_t thread_split_pages = 0;
     };
     Group<TensorBinding> tensor_bindings;
 

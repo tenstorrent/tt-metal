@@ -16,6 +16,8 @@ namespace tt::tt_metal {
 struct LLKMetadata {
     DataFormat format;
     Tile tile;
+    // Tensor bindings only: KernelSpec::TensorBinding::thread_split_pages (0 = no split).
+    uint32_t thread_split_pages = 0;
 };
 
 // Returns the C++ initializer for the device-side binding_details::LLKMetadata

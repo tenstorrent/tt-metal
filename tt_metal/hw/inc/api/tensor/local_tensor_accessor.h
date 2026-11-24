@@ -57,10 +57,11 @@ public:
     //
     template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
     [[nodiscard]] explicit LocalTensorAccessor(
-        tensor_accessor::TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>) noexcept :
+        tensor_accessor::TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET> token) noexcept :
         // The region's L1 base address is stored in the CRTA at the token-supplied offset.
         // Delegates to the legacy constructor, which takes a raw L1 base address.
         LocalTensorAccessor(get_common_arg_val<uint32_t>(ADDR_CRTA_OFFSET / sizeof(uint32_t))) {
+        split_pages_ = token.thread_split_pages();
         // LocalTensorAccessor is legal only for tensors stored in L1 (SRAM) node-local memory.
         // Hard error if TensorBindingToken represents a DRAM tensor.
         static_assert(
@@ -79,8 +80,9 @@ public:
     // Construct from a Metal 2.0 per-node binding token.
     template <uint32_t CTA_OFFSET, uint32_t ADDR_RTA_OFFSET>
     [[nodiscard]] explicit LocalTensorAccessor(
-        tensor_accessor::PerNodeTensorBindingToken<CTA_OFFSET, ADDR_RTA_OFFSET>) noexcept :
+        tensor_accessor::PerNodeTensorBindingToken<CTA_OFFSET, ADDR_RTA_OFFSET> token) noexcept :
         LocalTensorAccessor(get_arg_val<uint32_t>(ADDR_RTA_OFFSET / sizeof(uint32_t))) {
+        split_pages_ = token.thread_split_pages();
         static_assert(
             !tensor_accessor::PerNodeTensorBindingToken<CTA_OFFSET, ADDR_RTA_OFFSET>::args_t::is_dram,
             "LocalTensorAccessor requires an L1-resident tensor, but this binding token is for a DRAM "
@@ -117,14 +119,22 @@ public:
     [[nodiscard]] T& operator[](uint32_t index) const { return mem_[index]; }
 
 #if defined(COMPILE_FOR_TRISC)
-    // Returns the LLKOperand pointing to the base address of the local tensor accessor
-    // Functionalities meant to be used with LLKOperand for LLK 2.0
+    // Returns the LLKOperand for this thread's part of the local region, for LLK 2.0 ops.
+    // If the host declared a split on the binding (KernelSpec::TensorBinding::thread_split_pages), that part is this
+    // thread's contiguous window of the split pages, and operand().ntiles() is its tile count. Otherwise it is the
+    // whole region, with no window (ntiles() == Operand::kNoWindow).
     //
     // Parameters:
     // - Operand: The LLKOperand type to return. (hint: use LLKOperandFrom<tensor::token>)
     template <typename Operand>
     [[nodiscard]] Operand operand() const noexcept {
-        return Operand{(static_cast<uint32_t>(local_mem::detail::AddressAccess::address(mem_)) >> 4) - 1};
+#ifdef ARCH_QUASAR
+        // Buffer-descriptor base (16B units), as DataflowBuffer::front/back pass it.
+        const Operand region{static_cast<uint32_t>(local_mem::detail::AddressAccess::address(mem_)) >> 4};
+#else
+        const Operand region{(static_cast<uint32_t>(local_mem::detail::AddressAccess::address(mem_)) >> 4) - 1};
+#endif
+        return thread_window(region, split_pages_);  // ADL: api/compute/experimental/2_0/llk_operand.h
     }
 #endif
 
@@ -148,6 +158,7 @@ public:
 
 private:
     CoreLocalMem<T> mem_;
+    uint32_t split_pages_ = 0;  // host-declared per-thread split; 0 = none
 };
 
 // A LocalTensorAccessor names this node's L1 region of a tensor, so it can be either endpoint of a NoC transaction (DM

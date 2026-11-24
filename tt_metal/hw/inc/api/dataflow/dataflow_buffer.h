@@ -410,29 +410,49 @@ public:
 #ifdef COMPILE_FOR_TRISC
     // Returns the LLKOperand pointing to the front (reading address) of the DFB
     // Functionalities meant to be used with LLKOperand for LLK 2.0
+    // Take the operand after wait_front(n) and before pop_front(): it names the waited entries.
+    // Quasar: {ring base (one buffer descriptor covers the ring), current read entry, stride in tiles}, no -1.
     //
     // Parameters:
     // - Operand: The LLKOperand type to return. (hint: use LLKOperandFrom<dfb::token>)
+    // - n: the count waited for; ntiles() of the operand, so ops LLK_ASSERT they stay inside it (default: unbounded).
     template <typename Operand>
-    [[nodiscard]] Operand front() const {
-#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_ISOLATE_SFPU)
-        return Operand{0};
+    [[nodiscard]] Operand front(uint32_t n = Operand::kNoWindow) const {
+#ifdef ARCH_QUASAR
+#ifdef UCK_CHLKC_UNPACK
+        const auto& dfb = local_dfb_interface_;
+        return Operand{dfb.tc_slots[0].base_addr, dfb.tc_slots[dfb.tc_idx].cursor_entry_idx, dfb.stride_size_tiles, n};
 #else
-        return Operand{(get_read_ptr_impl() >> (4 - cb_addr_shift)) - 1};
+        return Operand{0, 0, 1, n};  // only the unpack TRISC reads the front; other TRISCs never use the address
+#endif
+#elif defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_ISOLATE_SFPU)
+        return Operand{0, n};
+#else
+        return Operand{(get_read_ptr_impl() >> (4 - cb_addr_shift)) - 1, n};
 #endif
     }
 
     // Returns the LLKOperand pointing to the back (writing address) of the DFB
     // Functionalities meant to be used with LLKOperand for LLK 2.0
+    // Take the operand after reserve_back(n) and before push_back(): it names the reserved entries.
+    // Quasar: {ring base (one buffer descriptor covers the ring), current write entry, stride in tiles}, no -1.
     //
     // Parameters:
     // - Operand: The LLKOperand type to return. (hint: use LLKOperandFrom<dfb::token>)
+    // - n: the count reserved; ntiles() of the operand, so ops LLK_ASSERT they stay inside it (default: unbounded).
     template <typename Operand>
-    [[nodiscard]] Operand back() const {
-#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_ISOLATE_SFPU)
-        return Operand{0};
+    [[nodiscard]] Operand back(uint32_t n = Operand::kNoWindow) const {
+#ifdef ARCH_QUASAR
+#ifdef UCK_CHLKC_PACK
+        const auto& dfb = local_dfb_interface_;
+        return Operand{dfb.tc_slots[0].base_addr, dfb.tc_slots[dfb.tc_idx].cursor_entry_idx, dfb.stride_size_tiles, n};
 #else
-        return Operand{(get_write_ptr_impl() >> (4 - cb_addr_shift)) - 1};
+        return Operand{0, 0, 1, n};  // only the pack TRISC writes the back; other TRISCs never use the address
+#endif
+#elif defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_ISOLATE_SFPU)
+        return Operand{0, n};
+#else
+        return Operand{(get_write_ptr_impl() >> (4 - cb_addr_shift)) - 1, n};
 #endif
     }
 #endif

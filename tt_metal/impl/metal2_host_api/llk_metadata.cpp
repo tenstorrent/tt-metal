@@ -21,14 +21,18 @@ std::string serialize_llk_metadata(const LLKMetadata& metadata, tt::ARCH arch) {
     const uint32_t num_faces_c_dim = std::min(tile.get_width() / constants::FACE_WIDTH, num_faces);
     const uint32_t num_faces_r_dim = num_faces / num_faces_c_dim;
     const hw_format_t format = host_data_format_to_hw(metadata.format, arch);
+    // thread_split_pages is emitted only when set, so every binding without a split keeps its header byte-identical.
+    const std::string split =
+        metadata.thread_split_pages != 0 ? fmt::format(", .thread_split_pages = {}u", metadata.thread_split_pages) : "";
     return fmt::format(
         "::binding_details::LLKMetadata{{.format = {}u, .face_r_dim = {}u, .face_c_dim = {}u, "
-        ".num_faces_r_dim = {}u, .num_faces_c_dim = {}u}}",
+        ".num_faces_r_dim = {}u, .num_faces_c_dim = {}u{}}}",
         format,
         face_r_dim,
         constants::FACE_WIDTH,
         num_faces_r_dim,
-        num_faces_c_dim);
+        num_faces_c_dim,
+        split);
 }
 
 }  // namespace tt::tt_metal
