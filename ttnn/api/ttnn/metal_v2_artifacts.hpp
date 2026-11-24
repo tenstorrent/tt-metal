@@ -28,18 +28,11 @@ struct ProgramArtifacts {
     tt::tt_metal::ProgramSpec spec;
     tt::tt_metal::ProgramRunArgs run_params;
 
-    // Op-owned device tensors the factory allocates for itself (scratch /
-    // workspace). The adapter parks these in the program cache so their
-    // device-memory allocation outlives the cache miss and stays at a stable
-    // address across dispatches. Any TensorArgument in `run_params` may reference
-    // one of these (by reference) in addition to the op's io tensors.
-    //
-    // CAUTION: LEGACY ONLY. NO NEW OP MAY USE THIS FIELD, and no port may reach for it to make a port easier.
-    //          It exists only to carry the few legacy ops that already allocate their own tensors across to
-    //          Metal 2.0 unchanged. Every program cache entry holds its own copy, which stays allocated until the
-    //          entry is dropped, long after the op's last use of it; the caller can neither see nor free that
-    //          memory, and it fragments the device's address space. A new op takes such a tensor as an input,
-    //          so that its caller owns the allocation.
+    // Tensors the factory allocates for itself, for TensorArguments in run_params to reference. They are allocated
+    // on every cache miss and held until the program cache is cleared (in practice, the whole model run), which
+    // wastes scarce memory and fragments the allocator's address space. Every further cache miss of the op
+    // allocates another copy, even an identical one, which lives just as long.
+    // LEGACY ONLY: No new op should use this field. Much better to take the tensor as an input instead.
     std::vector<tt::tt_metal::MeshTensor> op_owned_tensors;
 };
 
@@ -54,18 +47,14 @@ struct DeviceRunArgs {
 // factory allocates, plus the per-coordinate programs that reference them. Splits the same way
 // tt::tt_metal::WorkloadDescriptor does, for the same reasons.
 struct MeshWorkloadArtifacts {
-    // GlobalSemaphores the factory allocates for its programs (cross-device sync, say). The adapter parks them in
-    // the program cache, so they stay allocated, at the same addresses, for every call that hits the cache entry.
-    // A GlobalSemaphoreArgument in a program's run_params references one of these, or one of the caller's
-    // GlobalSemaphores in operation_attributes_t::global_semaphores (which every cache hit rebinds). Fill this
-    // vector before taking references into it: growing it moves its elements.
-    //
-    // CAUTION: Like tt::tt_metal::WorkloadDescriptor::semaphores, which it mirrors for ported ops, a parked
-    //          GlobalSemaphore stays allocated until its program cache entry is dropped, long after the op's last
-    //          use of it. A new op takes its GlobalSemaphores from its caller instead.
+    // GlobalSemaphores the factory allocates, for GlobalSemaphoreArguments in run_params to reference (fill the
+    // vector before taking references: growing it moves its elements). These have the same problem as
+    // ProgramArtifacts::op_owned_tensors: allocated on every cache miss and held until the cache is cleared.
+    // No better option exists yet: taking them from the caller (operation_attributes_t::global_semaphores) exposes
+    // the op's internal synchronization in its interface, which TTNN deliberately moved away from.
     std::vector<tt::tt_metal::GlobalSemaphore> global_semaphores;
 
-    // No op-owned tensors, deliberately: see the CAUTION on ProgramArtifacts::op_owned_tensors.
+    // No op-owned tensors in MeshWorkloadArtifacts: see ProgramArtifacts::op_owned_tensors.
 
     // Range-keyed: a program uniform over part of the mesh is one entry covering that range.
     struct PerCoordProgram {
