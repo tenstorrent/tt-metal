@@ -699,7 +699,7 @@ void calculate_exponential(const std::uint32_t exp_base_scale_factor = p_sfpu::k
             .set(ADDR_MOD_7);
 
         // Single replay of 16 instructions = 8 LM + 8 SHFT2 (2 dummy + 6 real).
-        lltt::replay(0, 16);
+        TTI_REPLAY(0, 16, 0, 0);
 
         // Drain: SHFT2[6-7].
         TTI_SFPNOP;
@@ -727,8 +727,8 @@ void calculate_exponential(const std::uint32_t exp_base_scale_factor = p_sfpu::k
             .set(ADDR_MOD_7);
 
         // 2 replays of 32 instructions = 32 LM + 32 SHFT2 (2 dummy + 30 real).
-        lltt::replay(0, 32);
-        lltt::replay(0, 32);
+        TTI_REPLAY(0, 32, 0, 0);
+        TTI_REPLAY(0, 32, 0, 0);
 
         // Drain: SHFT2[30-31].
         TTI_SFPNOP;

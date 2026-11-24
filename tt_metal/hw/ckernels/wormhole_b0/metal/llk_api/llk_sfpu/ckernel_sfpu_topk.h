@@ -215,7 +215,7 @@ inline void _topk_fuse_tile_() {
     TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
     TTI_INCRWC(0, 2, 0, 0);  // next 32-lane vector (Matrix-unit issue, free vs the SFPU port)
     for (int i = 1; i < 64; i++) {
-        lltt::replay(0, 9);
+        TTI_REPLAY(0, 9, 0, 0);
     }
 
     set_dst_write_addr(0);
@@ -251,7 +251,7 @@ inline void _topk_defuse_tile_(const int num_tiles) {
     {
         const int n = 32 * num_tiles;
         for (int i = 1; i < n; i++) {
-            lltt::replay(0, 10);
+            TTI_REPLAY(0, 10, 0, 0);
         }
     }
 
@@ -643,9 +643,9 @@ inline void bitonic_topk_ph3_st4_to_1(bool dir, bool& init_replay, int replay_st
 
             init_replay = false;
         } else {
-            lltt::replay(replay_start, replay_count);
+            TTI_REPLAY(replay_start, replay_count, 0, 0);
         }
-        lltt::replay(replay_start, replay_count);
+        TTI_REPLAY(replay_start, replay_count, 0, 0);
     }
 
     if (dir == static_cast<bool>(SortDir::ArgMin)) {
@@ -889,7 +889,7 @@ inline void _bitonic_topk_phases_steps(
                                 bitonic_topk_load16<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(4, 8);
                                 init_load = false;
                             } else {
-                                lltt::replay(0, ldst_count);
+                                TTI_REPLAY(0, ldst_count, 0, 0);
                             }
                             if constexpr (STABLE_SORT) {
                                 // Stable sequence exceeds the replay window; issue inline.
@@ -902,7 +902,7 @@ inline void _bitonic_topk_phases_steps(
                                     bitonic_topk_ph0_st1_to_1<STABLE_SORT, TIE_ORDER>();
                                     init_phase = false;
                                 } else {
-                                    lltt::replay(16, replay_count);
+                                    TTI_REPLAY(16, replay_count, 0, 0);
                                 }
                             }
                             if (init_store) {
@@ -910,14 +910,14 @@ inline void _bitonic_topk_phases_steps(
                                 bitonic_topk_store16<is_fp32_dest_acc_en, true, FUSED, RANK_STAMPED>(4, 8);
                                 init_store = false;
                             } else {
-                                lltt::replay(8, ldst_count);
+                                TTI_REPLAY(8, ldst_count, 0, 0);
                             }
                         }
                         break;
                     case 1:
                         for (int d = 0; d < 4; d++) {
                             // Groups of 16 datums being sorted at the same time
-                            lltt::replay(0, ldst_count);
+                            TTI_REPLAY(0, ldst_count, 0, 0);
                             if constexpr (STABLE_SORT) {
                                 // Stable sequence exceeds the replay window; issue inline.
                                 bitonic_topk_ph1_st2_to_1<STABLE_SORT, TIE_ORDER>();
@@ -929,15 +929,15 @@ inline void _bitonic_topk_phases_steps(
                                     bitonic_topk_ph1_st2_to_1<STABLE_SORT, TIE_ORDER>();
                                     init_phase = false;
                                 } else {
-                                    lltt::replay(16, replay_count);
+                                    TTI_REPLAY(16, replay_count, 0, 0);
                                 }
                             }
-                            lltt::replay(8, ldst_count);
+                            TTI_REPLAY(8, ldst_count, 0, 0);
                         }
                         break;
                     case 2:
                         for (int d = 0; d < 4; d++) {
-                            lltt::replay(0, ldst_count);
+                            TTI_REPLAY(0, ldst_count, 0, 0);
                             if constexpr (STABLE_SORT) {
                                 // Stable sequence exceeds the replay window; issue inline.
                                 bitonic_topk_ph2_st3_to_1<STABLE_SORT, TIE_ORDER>();
@@ -949,17 +949,17 @@ inline void _bitonic_topk_phases_steps(
                                     bitonic_topk_ph2_st3_to_1<STABLE_SORT, TIE_ORDER>();
                                     init_phase = false;
                                 } else {
-                                    lltt::replay(16, replay_count);
+                                    TTI_REPLAY(16, replay_count, 0, 0);
                                 }
                             }
-                            lltt::replay(8, ldst_count);
+                            TTI_REPLAY(8, ldst_count, 0, 0);
                         }
                         break;
                     case 3:
                         for (int d = 0; d < 4; d++) {
-                            lltt::replay(0, ldst_count);
+                            TTI_REPLAY(0, ldst_count, 0, 0);
                             bitonic_topk_ph3_st4_to_1<STABLE_SORT, FUSED, TIE_ORDER>(dir, init_phase, 16);
-                            lltt::replay(8, ldst_count);
+                            TTI_REPLAY(8, ldst_count, 0, 0);
                             dir = !dir;
                         }
                         break;
@@ -1009,9 +1009,9 @@ inline void _bitonic_topk_phases_steps(
                         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
                         datums_compared = 0;
                         while (datums_compared < total_datums_to_compare) {
-                            lltt::replay(0, ldst_count);
+                            TTI_REPLAY(0, ldst_count, 0, 0);
                             bitonic_topk_ph3_st4_to_1<STABLE_SORT, FUSED, TIE_ORDER>(dir, init_phase, 16);
-                            lltt::replay(8, ldst_count);
+                            TTI_REPLAY(8, ldst_count, 0, 0);
                             datums_compared += 16;
                             dir = (datums_compared == sorted_seq_length) ? !dir : dir;
                         }
@@ -1245,7 +1245,7 @@ inline void _bitonic_topk_rebuild(
                                     bitonic_topk_inc_x8_dest(64, false);
                                     init_rebuild = false;
                                 } else {
-                                    lltt::replay(0, rebuild_win_ld8);
+                                    TTI_REPLAY(0, rebuild_win_ld8, 0, 0);
                                 }
                             }
                             datums_compared += 16;
@@ -1277,7 +1277,7 @@ inline void _bitonic_topk_rebuild(
                                     TTI_INCRWC(0, 8, 0, 0);
                                     init_rebuild = false;
                                 } else {
-                                    lltt::replay(0, rebuild_win_ph1);
+                                    TTI_REPLAY(0, rebuild_win_ph1, 0, 0);
                                 }
                             }
                             datums_compared += 16;
@@ -1307,7 +1307,7 @@ inline void _bitonic_topk_rebuild(
                                 TTI_INCRWC(0, 8, 0, 0);
                                 init_rebuild = false;
                             } else {
-                                lltt::replay(0, rebuild_win_ph2);
+                                TTI_REPLAY(0, rebuild_win_ph2, 0, 0);
                             }
                         }
                         datums_compared += 16;
@@ -1336,9 +1336,9 @@ inline void _bitonic_topk_rebuild(
                                 TTI_INCRWC(0, 8, 0, 0);
                                 TTI_INCRWC(0, 8, 0, 0);
                             } else {
-                                lltt::replay(0, ldst_count);
+                                TTI_REPLAY(0, ldst_count, 0, 0);
                                 bitonic_topk_ph3_st4_to_1<STABLE_SORT, FUSED, TIE_ORDER>(dir, init_rebuild, 8);
-                                lltt::replay(13, rebuild_win_st12);
+                                TTI_REPLAY(13, rebuild_win_st12, 0, 0);
                             }
                         }
                         datums_compared += 16;
@@ -1398,9 +1398,9 @@ inline void _bitonic_topk_rebuild(
                             lltt::record<lltt::Exec>(17, ldst_count);
                             bitonic_topk_store16<is_fp32_dest_acc_en, true, FUSED, RANK_STAMPED>(4, 8);
                         } else {
-                            lltt::replay(0, ldst_count);
+                            TTI_REPLAY(0, ldst_count, 0, 0);
                             bitonic_topk_ph3_st4_to_1<STABLE_SORT, FUSED, TIE_ORDER>(dir, init_rebuild, 8);
-                            lltt::replay(17, ldst_count);
+                            TTI_REPLAY(17, ldst_count, 0, 0);
                         }
                         datums_compared += 16;
                         dir = (datums_compared == sorted_seq_length) ? !dir : dir;

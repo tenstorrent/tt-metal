@@ -93,7 +93,7 @@ inline void _top8_merge_load_rows_0_3_() {
     _top8_merge_set_d_rwc_<tile_index, face_offset, /*row_offset*/ 0>();
 
     if constexpr (replay) {
-        lltt::replay(0, 8);
+        TTI_REPLAY(0, 8, 0, 0);
         return;
     }
 
@@ -114,7 +114,7 @@ inline void _top8_merge_load_rows_4_7_() {
     _top8_merge_set_d_rwc_<tile_index, face_offset, /*row_offset*/ 4>();
 
     if constexpr (replay) {
-        lltt::replay(8, 8);
+        TTI_REPLAY(8, 8, 0, 0);
         return;
     }
 
@@ -135,7 +135,7 @@ inline void _top8_merge_store_rows_0_3_() {
     _top8_merge_set_d_rwc_<tile_index, face_offset, /*row_offset*/ 0>();
 
     if constexpr (replay) {
-        lltt::replay(16, 8);
+        TTI_REPLAY(16, 8, 0, 0);
         return;
     }
 
@@ -156,7 +156,7 @@ inline void _top8_merge_store_rows_4_7_() {
     _top8_merge_set_d_rwc_<tile_index, face_offset, /*row_offset*/ 4>();
 
     if constexpr (replay) {
-        lltt::replay(24, 8);
+        TTI_REPLAY(24, 8, 0, 0);
         return;
     }
 

@@ -57,19 +57,19 @@ inline void transpose_dest_32b()
     {
         // Transpose Face 0 hi bits and put back in Dest register.
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_RMW>(to_underlying(DataFormat::Tf32));
-        lltt::replay(ckernel::math::replay_buf_offset + 8, 8);
+        TTI_REPLAY(ckernel::math::replay_buf_offset + 8, 8, 0, 0);
         TTI_MOVB2D(p_mov::DEST_NORM, 28, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12); // Dest=16, SrcA=0
 
         // Transpose Face 1 hi bits and put back in Dest register.
-        lltt::replay(ckernel::math::replay_buf_offset + 8, 8);
+        TTI_REPLAY(ckernel::math::replay_buf_offset + 8, 8, 0, 0);
         TTI_MOVB2D(p_mov::DEST_NORM, 28, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12); // Dest=32, SrcA=0
 
         // Transpose Face 2 hi bits and put back in Dest register.
-        lltt::replay(ckernel::math::replay_buf_offset + 8, 8);
+        TTI_REPLAY(ckernel::math::replay_buf_offset + 8, 8, 0, 0);
         TTI_MOVB2D(p_mov::DEST_NORM, 28, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12); // Dest=48, SrcA=0
 
         // Transpose Face 3 hi bits and put back in Dest register.
-        lltt::replay(ckernel::math::replay_buf_offset + 8, 8);
+        TTI_REPLAY(ckernel::math::replay_buf_offset + 8, 8, 0, 0);
         TTI_MOVB2D(p_mov::DEST_NORM, 28, ADDR_MOD_3, p_movb2d::MOV_4_ROWS, 12); // Dest=0, SrcA=0
 
         // Since all high bits have been written. We can set the appropriate formats and
@@ -89,7 +89,7 @@ inline void transpose_dest_32b()
     {
         // Transpose Face 0 hi bits and put back in Dest register.
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_RMW>(to_underlying(DataFormat::Tf32));
-        lltt::replay(ckernel::math::replay_buf_offset + 8, 8);
+        TTI_REPLAY(ckernel::math::replay_buf_offset + 8, 8, 0, 0);
         TTI_MOVB2D(p_mov::DEST_NORM, 28, ADDR_MOD_1, p_movb2d::MOV_4_ROWS, 12); // Dest=0, SrcA=0
 
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_RMW>(to_underlying(DataFormat::Float32));
@@ -100,12 +100,12 @@ inline void transpose_dest_32b()
 
         // Transpose Face 1 hi bits and move to SrcA
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_RMW>(to_underlying(DataFormat::Tf32));
-        lltt::replay(ckernel::math::replay_buf_offset + 8, 5);
-        lltt::replay(ckernel::math::replay_buf_offset + 5, 3);
+        TTI_REPLAY(ckernel::math::replay_buf_offset + 8, 5, 0, 0);
+        TTI_REPLAY(ckernel::math::replay_buf_offset + 5, 3, 0, 0);
         TTI_MOVB2A(12, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, 28); // Dest=32, SrcA=0
 
         // Transpose Face 2 hi bits and move to Face 1's area in Dest
-        lltt::replay(ckernel::math::replay_buf_offset + 8, 5);
+        TTI_REPLAY(ckernel::math::replay_buf_offset + 8, 5, 0, 0);
         TTI_MOVB2D(p_mov::DEST_NORM, 16, ADDR_MOD_1, p_movb2d::MOV_4_ROWS, (0x3ff & (-16 + 0)));
         TTI_MOVB2D(p_mov::DEST_NORM, 20, ADDR_MOD_1, p_movb2d::MOV_4_ROWS, (0x3ff & (-16 + 4)));
         TTI_MOVB2D(p_mov::DEST_NORM, 24, ADDR_MOD_1, p_movb2d::MOV_4_ROWS, (0x3ff & (-16 + 8)));
@@ -116,7 +116,7 @@ inline void transpose_dest_32b()
         TTI_MOVA2D(p_mov::DEST_NORM, 8, ADDR_MOD_0, p_mova2d::MOV_8_ROWS, 8); // Dest=48, SrcA=0
 
         // Transpose Face 3 hi bits and put back in Dest register
-        lltt::replay(ckernel::math::replay_buf_offset + 8, 8);
+        TTI_REPLAY(ckernel::math::replay_buf_offset + 8, 8, 0, 0);
         TTI_MOVB2D(p_mov::DEST_NORM, 28, ADDR_MOD_3, p_movb2d::MOV_4_ROWS, 12);
 
         // Since all high bits have been written. We can set the appropriate formats and

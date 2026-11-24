@@ -182,10 +182,10 @@ inline void _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_(
         const std::uint32_t second_half_tiles = nt_dim == 1 ? 1 : nt_dim / 2;
         if (first_half_tiles > 0)
         {
-            lltt::replay(0, first_half_tiles * SDPA_CUSTOM_MM_REUSE_BLOCK_LEN);
+            TTI_REPLAY(0, first_half_tiles * SDPA_CUSTOM_MM_REUSE_BLOCK_LEN, 0, 0);
         }
         const std::uint32_t second_half_instruction_count = second_half_tiles * SDPA_CUSTOM_MM_REUSE_BLOCK_LEN;
-        lltt::replay(SDPA_CUSTOM_MM_REUSE_REPLAY_BUF_LEN - second_half_instruction_count, second_half_instruction_count);
+        TTI_REPLAY(SDPA_CUSTOM_MM_REUSE_REPLAY_BUF_LEN - second_half_instruction_count, second_half_instruction_count, 0, 0);
     }
 
     t6_semaphore_get(semaphore::UNPACK_SYNC);

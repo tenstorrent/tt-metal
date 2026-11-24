@@ -63,7 +63,7 @@ inline void calculate_gelu_appx() {
     }
 #pragma GCC unroll 8
     for (int d = 1; d < ITERATIONS; d++) {
-        lltt::replay(GELU_APPX_REPLAY_START, GELU_APPX_REPLAY_LEN);
+        TTI_REPLAY(GELU_APPX_REPLAY_START, GELU_APPX_REPLAY_LEN, 0, 0, 0, 0);
     }
     sfpi::dst_reg[0].mode(ADDR_MOD_6) = sfpi::vFloat(sfpi::l_reg[GELU_APPX_RESULT_LREG]);
 }

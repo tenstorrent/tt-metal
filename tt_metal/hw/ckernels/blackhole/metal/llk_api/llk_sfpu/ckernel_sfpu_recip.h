@@ -198,18 +198,18 @@ inline void _calculate_reciprocal_fast_24b_5c_(const int iterations) {
     // 2 |      |                        |                         |         |
     // 3 |      |                        |                         | [z]     |
 
-    lltt::replay(0, 4);
+    TTI_REPLAY(0, 4, 0, 0);
     TTI_SFPLOAD(7, 0, ADDR_MOD_6, 0);
 
 #pragma GCC unroll 7
     for (int d = 0; d < iterations - 1; d++) {
-        lltt::replay(0, 5);
+        TTI_REPLAY(0, 5, 0, 0);
     }
 
     TTI_SFPNOP;
-    lltt::replay(1, 1);
+    TTI_REPLAY(1, 1, 0, 0);
     TTI_SFPNOP;
-    lltt::replay(3, 2);
+    TTI_REPLAY(3, 2, 0, 0);
 
     TTI_SFPNOP;
     TTI_SFPNOP;

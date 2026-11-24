@@ -205,7 +205,7 @@ inline void calculate_quant_int32(const uint dst_index_in0, const uint dst_index
     for (int d = 0; d < ITERATIONS; d++) {
         TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_3, in0_off);  // operand A (fp32)
         TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_3, in1_off);  // operand B (fp32 scaler)
-        lltt::replay(QUANT_REPLAY_SLOT, QUANT_REPLAY_LEN);                        // RNE MAD + clamp + convert
+        TTI_REPLAY(QUANT_REPLAY_SLOT, QUANT_REPLAY_LEN, 0, 0);                        // RNE MAD + clamp + convert
         TT_SFPSTORE(p_sfpu::LREG0, out_mode, ADDR_MOD_2, out_off);                // store + dst_reg += 2
     }
 }
@@ -248,7 +248,7 @@ inline void calculate_requant_int32(const uint dst_index_in0, const uint dst_ind
         if constexpr (INT8_INPUT) {
             _int8_input_unbias_();  // byte ^ 0x80 (excess-128)
         }
-        lltt::replay(REQUANT_REPLAY_SLOT, REQUANT_REPLAY_LEN);      // CAST + RNE MAD + clamp + convert
+        TTI_REPLAY(REQUANT_REPLAY_SLOT, REQUANT_REPLAY_LEN, 0, 0);      // CAST + RNE MAD + clamp + convert
         TT_SFPSTORE(p_sfpu::LREG0, out_mode, ADDR_MOD_2, out_off);  // store + dst_reg += 2
     }
 }
@@ -268,7 +268,7 @@ inline void calculate_quant_int32_int8_pack(
     for (int d = 0; d < ITERATIONS; d++) {
         TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_3, in0_off);  // operand A (fp32)
         TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_3, in1_off);  // operand B (fp32 scaler)
-        lltt::replay(QUANT_REPLAY_SLOT, QUANT_REPLAY_LEN_INT8_OUT);               // RNE MAD + clamp + convert + XOR
+        TTI_REPLAY(QUANT_REPLAY_SLOT, QUANT_REPLAY_LEN_INT8_OUT, 0, 0);               // RNE MAD + clamp + convert + XOR
         TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_2, out_off);
     }
 }
@@ -292,7 +292,7 @@ inline void calculate_requant_int32_int8_pack(
         if constexpr (INT8_INPUT) {
             _int8_input_unbias_();  // byte ^ 0x80
         }
-        lltt::replay(REQUANT_REPLAY_SLOT, REQUANT_REPLAY_LEN_INT8_OUT);  // CAST + RNE MAD + clamp + convert + XOR
+        TTI_REPLAY(REQUANT_REPLAY_SLOT, REQUANT_REPLAY_LEN_INT8_OUT, 0, 0);  // CAST + RNE MAD + clamp + convert + XOR
         TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_2, out_off);
     }
 }
@@ -331,7 +331,7 @@ inline void calculate_dequant_int32(const uint dst_index_in0, const uint dst_ind
         if constexpr (INT8_INPUT) {
             _int8_input_unbias_();  // byte ^ 0x80
         }
-        lltt::replay(DEQUANT_REPLAY_SLOT, DEQUANT_REPLAY_LEN);                     // CAST + ADD + SFPNOP + MUL + SFPNOP
+        TTI_REPLAY(DEQUANT_REPLAY_SLOT, DEQUANT_REPLAY_LEN, 0, 0);                     // CAST + ADD + SFPNOP + MUL + SFPNOP
         TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_2, out_off);  // store fp32 + dst_reg += 2
     }
 }

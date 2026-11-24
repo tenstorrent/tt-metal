@@ -119,13 +119,13 @@ inline void _calculate_top4_() {
     TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
 
     // Pass 2: Bubble 2nd maximum to LREG1 (6 comparisons, right to left)
-    lltt::replay(0, 6);
+    TTI_REPLAY(0, 6, 0, 0);
 
     // Pass 3: Bubble 3rd maximum to LREG2 (5 comparisons, right to left)
-    lltt::replay(0, 5);
+    TTI_REPLAY(0, 5, 0, 0);
 
     // Pass 4: Bubble 4th maximum to LREG3 (4 comparisons, right to left)
-    lltt::replay(0, 4);
+    TTI_REPLAY(0, 4, 0, 0);
 
     // Result: LREG0-3 contain the top 4 values (with their indices in LO 16 bits)
     //-------------------------------------------------------------------------

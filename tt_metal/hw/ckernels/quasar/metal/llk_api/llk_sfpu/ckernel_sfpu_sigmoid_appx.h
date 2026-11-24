@@ -54,7 +54,7 @@ inline void calculate_sigmoid_appx() {
     }
 #pragma GCC unroll 8
     for (int d = 2; d < ITERATIONS; d += 2) {
-        lltt::replay(SIGMOID_APPX_REPLAY_START, SIGMOID_APPX_REPLAY_LEN);
+        TTI_REPLAY(SIGMOID_APPX_REPLAY_START, SIGMOID_APPX_REPLAY_LEN, 0, 0, 0, 0);
     }
     // Drain passes ITERATIONS-2 and ITERATIONS-1.
     {

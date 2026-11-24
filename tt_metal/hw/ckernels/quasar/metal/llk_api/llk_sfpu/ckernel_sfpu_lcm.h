@@ -89,7 +89,7 @@ inline void _calculate_lcm_gcd_sfp_rows_() {
 
 #pragma GCC unroll LCM_MAX_REPLAY_COUNT
     for (int r = 0; r < LCM_GCD_REPLAY_COUNT; r++) {
-        lltt::replay(LCM_GCD_REPLAY_SLOT, LCM_GCD_REPLAY_LEN);
+        TTI_REPLAY(LCM_GCD_REPLAY_SLOT, LCM_GCD_REPLAY_LEN, 0, 0, 0, 0);
     }
 }
 
@@ -189,7 +189,7 @@ inline void calculate_lcm(
 
         _calculate_lcm_gcd_sfp_rows_<MAX_INPUT_BITS>();
 
-        lltt::replay(LCM_TAIL_REPLAY_SLOT, LCM_TAIL_REPLAY_LEN);
+        TTI_REPLAY(LCM_TAIL_REPLAY_SLOT, LCM_TAIL_REPLAY_LEN, 0, 0, 0, 0);
 
         // Non-negative result: no SMAG32 conversion needed on store.
         TT_SFPSTORE(p_sfpu::LREG0, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0 /* done */, out_offset + (d << 1));

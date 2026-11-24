@@ -102,7 +102,7 @@ inline void calculate_mac(
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        lltt::replay(MAC_REPLAY_SLOT, mac_replay_len<is_fp32_dest_acc_en>);
+        TTI_REPLAY(MAC_REPLAY_SLOT, mac_replay_len<is_fp32_dest_acc_en>, 0, 0);
     }
 }
 

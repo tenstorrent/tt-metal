@@ -125,18 +125,18 @@ inline void calculate_binary_max_min_int32(
 
 #pragma GCC unroll 4
     for (int i = 0; i < ITERATIONS / 2; ++i) {
-        lltt::replay(0, 10);
+        TTI_REPLAY(0, 10, 0, 0);
     }
 
     if constexpr (ITERATIONS & 1) {
-        lltt::replay(0, 5);
+        TTI_REPLAY(0, 5, 0, 0);
         TTI_SFPNOP;
         TTI_SFPNOP;
-        lltt::replay(5 + 2, 2);
+        TTI_REPLAY(5 + 2, 2, 0, 0);
     } else {
         TTI_SFPNOP;
         TTI_SFPNOP;
-        lltt::replay(2, 2);
+        TTI_REPLAY(2, 2, 0, 0);
     }
 
     TTI_SFPNOP;

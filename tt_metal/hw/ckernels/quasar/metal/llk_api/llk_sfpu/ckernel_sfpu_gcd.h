@@ -114,7 +114,7 @@ inline void _calculate_gcd_sfp_rows_() {
         TTI_SFPCAST(GCD_LREG_B, GCD_LREG_B, p_sfpu::sfp_sfpcast_mod::SM32_TO_2SC);
     }
 
-    lltt::replay(GCD_PROLOGUE_START, GCD_PROLOGUE_LEN);
+    TTI_REPLAY(GCD_PROLOGUE_START, GCD_PROLOGUE_LEN, 0, 0, 0, 0);
 
     constexpr std::uint32_t STEIN_ITERATIONS = GCD_MAX_INPUT_BITS - 1;
     // The tail stops one instruction short: the final SFPIADD only updates a, which is discarded.
@@ -125,9 +125,9 @@ inline void _calculate_gcd_sfp_rows_() {
     static_assert(TAIL_LEN <= GCD_REPLAY_LEN, "tail must fit the recorded pair");
 
     for (std::uint32_t i = 0; i < FULL_PAIRS; i++) {
-        lltt::replay(GCD_REPLAY_START, GCD_REPLAY_LEN);
+        TTI_REPLAY(GCD_REPLAY_START, GCD_REPLAY_LEN, 0, 0, 0, 0);
     }
-    lltt::replay(GCD_REPLAY_START, TAIL_LEN);
+    TTI_REPLAY(GCD_REPLAY_START, TAIL_LEN, 0, 0, 0, 0);
 
     TTI_SFPENCC(0 /* imm12 */, GCD_ENCC_MOD_RESET_RESULT);  // re-enable retired lanes
 }
