@@ -34,12 +34,15 @@ void kernel_main() {
     constexpr bool MISALIGNED = ALIGNMENT > SUBTILE_LINE_BYTES;
     // The host declares the scratch DFB, and sets WIDE_ALIGNMENT_SCRATCH, only when the DRAM or L1 alignment is
     // wider than one face row of this element type. That is the same test as MISALIGNED above.
+    // The host and the kernel spell the test separately. The asserts below fail the build if they disagree.
     // Without the define the token dfb::intermed does not exist. The handle then cannot be built.
-    // In that case the scratch address is never used.
+    // A kernel that needs the scratch address but has no handle would copy through L1 address 0.
 #ifdef WIDE_ALIGNMENT_SCRATCH
+    static_assert(MISALIGNED, "host declared the scratch DFB but the kernel's own test disagrees");
     DataflowBuffer dfb_intermed(dfb::intermed);
     uint32_t intermed_l1_scratch = MISALIGNED ? dfb_intermed.get_write_ptr() : 0;
 #else
+    static_assert(!MISALIGNED, "kernel needs the scratch DFB but the host did not declare it");
     uint32_t intermed_l1_scratch = 0;
 #endif
     volatile tt_l1_ptr uint8_t* intermed_l1_scratch_ptr = (volatile uint8_t*)intermed_l1_scratch;
