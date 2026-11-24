@@ -26,6 +26,7 @@ from ....utils.matmul import (
     grid_12_9_configs,
     register_fused_mmrs_configs,
     register_matmul_configs,
+    register_shape_configs,
 )
 from ....utils.substate import rename_substate
 from .transformer_block_flux3_klein import HIDDEN, Flux3KleinTransformerBlock
@@ -157,6 +158,22 @@ register_matmul_configs(
             (10752, 3072, 4608): (6, 8, 16, (1, 4)),
         }
     }
+)
+# SP4 x TP2 (DP4 groups) at 1024 / 2048 rows per device, swept at the exact shape (job 231292; same output as today's
+# config, same K block): QKV (N 4608) and MLP-in (N 9216) at the text (256), early image (1024) and single-stage
+# (1280, 4352) rows take N block 8 and, on the narrow rows, 10 or 11 of the 12 M cores; proj_out's matmul (K 6144) at the
+# 2048 rows an M block of 6. Any TP2 split at these exact shapes takes them too (same output; speed measured on DP4 only).
+register_shape_configs(
+    agmm={
+        (256, 3072, 4608, 2): ((10, 9), (1, 8, 8, (1, 4)), 24),
+        (256, 3072, 9216, 2): ((10, 9), (1, 8, 8, (1, 4)), 8),
+        (1024, 3072, 4608, 2): ((12, 9), (3, 8, 8, (1, 4)), 24),
+        (1024, 3072, 9216, 2): ((11, 9), (3, 8, 8, (1, 2)), 16),
+        (1280, 3072, 4608, 2): ((10, 9), (4, 8, 8, (1, 2)), 8),
+        (1280, 3072, 9216, 2): ((10, 9), (4, 8, 8, (4, 1)), 24),
+        (4352, 3072, 4608, 2): ((12, 9), (6, 8, 16, (1, 4)), 24),
+    },
+    matmul={(4096, 6144, 3072, 12, 10): (6, 8, 8, (1, 4)), (4352, 6144, 3072, 12, 10): (6, 8, 8, (2, 2))},
 )
 
 
