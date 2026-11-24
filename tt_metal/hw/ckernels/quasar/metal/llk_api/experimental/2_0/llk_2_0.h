@@ -15,9 +15,10 @@
 // on Quasar every op is re-initialised before it runs anyway. Execute functions and the once-per-kernel hw_configure
 // setups (24-52 B) are plain inline.
 //
-// Register formats are the L1 format (no Quasar format-derivation table exists on device yet), so the compute layer
-// restricts 2.0 operands to 16-bit float formats, plus Float32 where it never enters SrcA/SrcB: unpack-to-dest copy and
-// pack, at a 32-bit Dest. With a 32-bit Dest the packer reads Float32.
+// Src register formats come from the L1 format via src_format (the host table's rule, on device): 16-bit floats as
+// is, MX block floats expand to Float16_b, Float32 narrows to Tf32 (32-bit Dest) or Float16_b. FPU operands (binary,
+// broadcast, matmul) take all of these; copy and pack stay at 16-bit floats plus Float32 at a 32-bit Dest, where
+// Float32 never enters SrcA/SrcB (unpack-to-dest copy, pack). With a 32-bit Dest the packer reads Float32.
 
 #include <cstdint>
 
@@ -58,8 +59,22 @@ namespace llk_2_0 {
 
 using ckernel::experimental::LLKMemDescriptor;
 
-// Register format == L1 format holds for the 16-bit float formats only (see the header comment).
+// 16-bit float formats: register format == L1 format (see the header comment).
 constexpr bool is_supported_format(DataFormat f) { return f == DataFormat::Float16_b || f == DataFormat::Float16; }
+
+// FPU operand (SrcA/SrcB) L1 formats: 16-bit floats, Float32, and the 8-bit MX formats (Quasar has no Bfp8_b).
+constexpr bool is_fpu_operand_format(DataFormat f) {
+    return is_supported_format(f) || f == DataFormat::Float32 || f == DataFormat::MxFp8R || f == DataFormat::MxFp8P ||
+           f == DataFormat::MxInt8;
+}
+
+// SrcA/SrcB register format an FPU operand's L1 format unpacks to (jit_build/data_format.cpp rule).
+constexpr DataFormat src_format(DataFormat f, bool en_32bit_dest) {
+    if (f == DataFormat::Float32) {
+        return en_32bit_dest ? DataFormat::Tf32 : DataFormat::Float16_b;
+    }
+    return is_mx_format(f) ? DataFormat::Float16_b : f;
+}
 
 // Copy (unpack-to-dest) and pack operands also take Float32 at a 32-bit Dest: it never enters SrcA/SrcB.
 constexpr bool is_supported_format(DataFormat f, bool en_32bit_dest) {
@@ -92,10 +107,12 @@ inline void tdma_guard_note_bd([[maybe_unused]] const std::uint32_t bd_base) {
 /**
  * @brief Kernel-wide unpack setup: SrcA/SrcB register formats and the unpack-to-dest bank offset reset.
  * @tparam A, B: Descriptors of the operands unpacked to SrcA / SrcB.
+ * @tparam EN_32BIT_DEST: 32-bit Dest (picks the Src format of Float32 operands).
  */
-template <LLKMemDescriptor A, LLKMemDescriptor B>
+template <LLKMemDescriptor A, LLKMemDescriptor B, bool EN_32BIT_DEST>
 inline void unpack_hw_configure() {
-    _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(A.format, B.format);
+    _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
+        src_format(A.format, EN_32BIT_DEST), src_format(B.format, EN_32BIT_DEST));
     _llk_unpack_dest_init_();
 }
 
@@ -151,16 +168,18 @@ inline void unpack_to_dest(const std::uint32_t bd_base, const std::uint32_t l1_t
 /**
  * @brief Init for unpacking two operands, A -> SrcA (Unp0) and B -> SrcB (Unp1): descriptors, formats, MOP.
  * @tparam DA, DB: Operand descriptors (same tile shape).
+ * @tparam EN_32BIT_DEST: 32-bit Dest (picks the Src format of Float32 operands).
  * @tparam BCAST: SrcB broadcast (NONE / COL / ROW / SCALAR).
  * @param bd_a, bd_b: Buffer-descriptor bases (16B units) of A and B.
  */
-template <LLKMemDescriptor DA, LLKMemDescriptor DB, BroadcastType BCAST = BroadcastType::NONE>
+template <LLKMemDescriptor DA, LLKMemDescriptor DB, bool EN_32BIT_DEST, BroadcastType BCAST = BroadcastType::NONE>
 LLK_2_0_NOINLINE void unpack_AB_init(const std::uint32_t bd_a, const std::uint32_t bd_b) {
     ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(DA.shape, bd_a, static_cast<std::uint32_t>(DA.format));
     constexpr std::uint8_t bfd_a = ckernel::trisc::BFD_ID_UNP0;
     ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP1>(DB.shape, bd_b, static_cast<std::uint32_t>(DB.format));
     constexpr std::uint8_t bfd_b = ckernel::trisc::BFD_ID_UNP1;
-    _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(DA.format, DB.format);
+    _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
+        src_format(DA.format, EN_32BIT_DEST), src_format(DB.format, EN_32BIT_DEST));
     if constexpr (BCAST == BroadcastType::NONE) {
         _llk_unpack_binary_operands_init_(bfd_a, bfd_b, DA.shape, 1);
     } else {
@@ -192,7 +211,7 @@ inline void unpack_AB(
 template <LLKMemDescriptor D, BroadcastType BCAST, bool EN_32BIT_DEST>
 LLK_2_0_NOINLINE void unpack_B_bcast_init(const std::uint32_t bd_base) {
     ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP1>(D.shape, bd_base, static_cast<std::uint32_t>(D.format));
-    _llk_unpack_configure_unary_<p_unpacr::UNP_B>(D.format);
+    _llk_unpack_configure_unary_<p_unpacr::UNP_B>(src_format(D.format, EN_32BIT_DEST));
     _llk_unpack_unary_broadcast_operands_init_<p_unpacr::UNP_B, BCAST, EN_32BIT_DEST>(ckernel::trisc::BFD_ID_UNP1, 1);
 }
 
@@ -206,11 +225,12 @@ inline void unpack_B_bcast(const std::uint32_t bd_base, const std::uint32_t l1_t
  * @brief Init for matmul unpack, in0 -> SrcB (Unp1), in1 -> SrcA (Unp0): descriptors, formats, MOP for a
  * [rt_dim, ct_dim] output block.
  * @tparam D0, D1: Descriptors of in0 and in1.
+ * @tparam EN_32BIT_DEST: 32-bit Dest (picks the Src format of Float32 operands).
  * @tparam TRANSPOSE: Transpose each in1 (SrcA) tile; needs a full four-face in1.
  * @param bd0, bd1: Buffer-descriptor bases (16B units) of in0 and in1.
  * @param ct_dim, rt_dim, kt_dim: Output block columns / rows and the inner dim.
  */
-template <LLKMemDescriptor D0, LLKMemDescriptor D1, bool TRANSPOSE>
+template <LLKMemDescriptor D0, LLKMemDescriptor D1, bool EN_32BIT_DEST, bool TRANSPOSE>
 LLK_2_0_NOINLINE void unpack_matmul_init(
     const std::uint32_t bd0,
     const std::uint32_t bd1,
@@ -221,7 +241,8 @@ LLK_2_0_NOINLINE void unpack_matmul_init(
     constexpr std::uint8_t bfd0 = ckernel::trisc::BFD_ID_UNP1;
     ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(D1.shape, bd1, static_cast<std::uint32_t>(D1.format));
     constexpr std::uint8_t bfd1 = ckernel::trisc::BFD_ID_UNP0;
-    _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(D1.format, D0.format);
+    _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
+        src_format(D1.format, EN_32BIT_DEST), src_format(D0.format, EN_32BIT_DEST));
     _llk_unpack_matmul_init_<TRANSPOSE>(bfd0, bfd1, ct_dim, rt_dim, kt_dim, D0.shape, D1.shape);
 }
 
@@ -304,7 +325,8 @@ inline void unpack_reduce(
  */
 template <LLKMemDescriptor A, LLKMemDescriptor B, bool EN_32BIT_DEST>
 inline void math_hw_configure() {  // once per kernel: inline
-    _llk_math_srcAB_hw_configure_<EN_32BIT_DEST>(A.format, B.format);
+    _llk_math_srcAB_hw_configure_<EN_32BIT_DEST>(
+        src_format(A.format, EN_32BIT_DEST), src_format(B.format, EN_32BIT_DEST));
     _llk_math_pack_sync_init_<DST_SYNC_MODE>();
 }
 
@@ -344,11 +366,12 @@ template <
 LLK_2_0_NOINLINE void math_binary_init(const bool acc_to_dest) {
     constexpr ckernel::MathFidelity fidelity =
         TYPE == EltwiseBinaryType::ELWMUL ? FIDELITY : ckernel::MathFidelity::LoFi;
-    math_alu_formats<EN_32BIT_DEST>(DA.format, DB.format);
+    constexpr DataFormat srca = src_format(DA.format, EN_32BIT_DEST), srcb = src_format(DB.format, EN_32BIT_DEST);
+    math_alu_formats<EN_32BIT_DEST>(srca, srcb);
     if constexpr (BCAST == BroadcastType::NONE) {
-        _llk_math_eltwise_binary_init_<TYPE, fidelity>(DA.format, DB.format, DA.shape, acc_to_dest);
+        _llk_math_eltwise_binary_init_<TYPE, fidelity>(srca, srcb, DA.shape, acc_to_dest);
     } else {
-        _llk_math_eltwise_binary_broadcast_init_<TYPE, BCAST, fidelity>(DA.format, DB.format, DA.shape, acc_to_dest);
+        _llk_math_eltwise_binary_broadcast_init_<TYPE, BCAST, fidelity>(srca, srcb, DA.shape, acc_to_dest);
     }
 }
 
@@ -365,7 +388,7 @@ inline void math_binary(const std::uint32_t dst_index) {
 /** @brief Init for the broadcast SrcB -> Dest copy of one 32x32 tile (ALU formats + MOP). */
 template <LLKMemDescriptor D, BroadcastType BCAST, bool EN_32BIT_DEST>
 LLK_2_0_NOINLINE void math_unary_bcast_init() {
-    math_alu_formats<EN_32BIT_DEST>(D.format, D.format);
+    math_alu_formats<EN_32BIT_DEST>(src_format(D.format, EN_32BIT_DEST), src_format(D.format, EN_32BIT_DEST));
     _llk_math_eltwise_unary_broadcast_init_<BCAST, EN_32BIT_DEST, false /*unpack_to_dest*/>(D.shape);
 }
 
@@ -379,8 +402,9 @@ inline void math_unary_bcast(const std::uint32_t dst_index) {
  */
 template <LLKMemDescriptor D0, LLKMemDescriptor D1, bool EN_32BIT_DEST, ckernel::MathFidelity FIDELITY>
 LLK_2_0_NOINLINE void math_matmul_init(const std::uint32_t ct_dim, const std::uint32_t rt_dim) {
-    math_alu_formats<EN_32BIT_DEST>(D1.format, D0.format);
-    _llk_math_matmul_init_<FIDELITY>(D1.format, D0.format, ct_dim, rt_dim, D0.shape, D1.shape);
+    constexpr DataFormat srca = src_format(D1.format, EN_32BIT_DEST), srcb = src_format(D0.format, EN_32BIT_DEST);
+    math_alu_formats<EN_32BIT_DEST>(srca, srcb);
+    _llk_math_matmul_init_<FIDELITY>(srca, srcb, ct_dim, rt_dim, D0.shape, D1.shape);
 }
 
 /** @brief One-tile matmul into Dest tile `dst_index`. */

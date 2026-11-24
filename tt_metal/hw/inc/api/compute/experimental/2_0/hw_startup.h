@@ -19,13 +19,15 @@ namespace ckernel {
  * then sets up the legacy Dest sync (tile_regs_acquire / commit / wait / release). Buffer descriptors are not programmed here: every op init programs its own, so each op's init must still run before the op. The operands'
  * runtime addresses are unused.
  *
- * Float16_b / Float16 operands, and Float32 at a 32-bit Dest (copy via unpack-to-dest, pack): register format ==
- * L1 format. Each op's init still checks its own operands (FPU ops take 16-bit formats only).
+ * Inputs: Float16_b / Float16, Float32 (Float32 at a 16-bit Dest only for FPU ops, which unpack it to Float16_b), and
+ * MxFp8R / MxFp8P (FPU ops only). Output: Float16_b / Float16, or Float32 at a 32-bit Dest. Each op's init still
+ * checks its own operands.
  *
  * | Param Type | Name                | Description                                    | Type                   | Valid Range        | Required |
  * |------------|---------------------|------------------------------------------------|------------------------|--------------------|----------|
  * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                      | bool                   |                    | False    |
- * | Template   | FA/SA, FB/SB, FO/SO | in0 / in1 / out L1 format + geometry (deduced) | DataFormat/TensorShape | Float16_b, Float16, Float32 (32-bit Dest) | True     |
+ * | Template   | FA/SA, FB/SB        | in0 / in1 L1 format + geometry (deduced)       | DataFormat/TensorShape | Float16_b, Float16, Float32, MxFp8R, MxFp8P, MxInt8 | True     |
+ * | Template   | FO/SO               | out L1 format + geometry (deduced)             | DataFormat/TensorShape | Float16_b, Float16, Float32 (32-bit Dest) | True     |
  * | Function   | in0 / in1           | Input operands (in0 -> SrcA, in1 -> SrcB)      | LLKOperand             | N/A                | True     |
  * | Function   | out                 | Output operand                                 | LLKOperand             | N/A                | True     |
  */
@@ -43,10 +45,11 @@ ALWI void compute_kernel_hw_startup(
     experimental::LLKOperand<FB, SB> /*in1*/,
     experimental::LLKOperand<FO, SO> /*out*/) {
     static_assert(
-        llk_2_0::is_supported_format(FA, is_fp32_dest_acc_en) &&
-            llk_2_0::is_supported_format(FB, is_fp32_dest_acc_en) &&
+        llk_2_0::is_fpu_operand_format(FA) && llk_2_0::is_fpu_operand_format(FB) &&
             llk_2_0::is_supported_format(FO, is_fp32_dest_acc_en),
-        "compute_kernel_hw_startup (Quasar 2.0): only Float16_b / Float16 operands, or Float32 at a 32-bit Dest.");
+        "compute_kernel_hw_startup (Quasar 2.0): inputs Float16_b / Float16 / Float32 / MxFp8R / MxFp8P / MxInt8; "
+        "output "
+        "Float16_b / Float16, or Float32 at a 32-bit Dest.");
     static_assert(
         experimental::is_legal_tile_shape(SA) && experimental::is_legal_tile_shape(SB) &&
             experimental::is_legal_tile_shape(SO),
@@ -54,7 +57,8 @@ ALWI void compute_kernel_hw_startup(
     static_assert(is_fp32_dest_acc_en == DST_ACCUM_MODE, "compute_kernel_hw_startup: Dest mode is DST_ACCUM_MODE");
     UNPACK((llk_2_0::unpack_hw_configure<
             experimental::LLKOperand<FA, SA>::descriptor,
-            experimental::LLKOperand<FB, SB>::descriptor>()));
+            experimental::LLKOperand<FB, SB>::descriptor,
+            is_fp32_dest_acc_en>()));
     MATH((llk_2_0::math_hw_configure<
           experimental::LLKOperand<FA, SA>::descriptor,
           experimental::LLKOperand<FB, SB>::descriptor,
@@ -69,7 +73,8 @@ ALWI void compute_kernel_hw_startup(
  * | Param Type | Name                | Description                             | Type                   | Valid Range        | Required |
  * |------------|---------------------|-----------------------------------------|------------------------|--------------------|----------|
  * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode               | bool                   |                    | False    |
- * | Template   | F/S, FO/SO          | in / out L1 format + geometry (deduced) | DataFormat/TensorShape | Float16_b, Float16, Float32 (32-bit Dest) | True     |
+ * | Template   | F/S                 | in L1 format + geometry (deduced)       | DataFormat/TensorShape | Float16_b, Float16, Float32, MxFp8R, MxFp8P, MxInt8 | True     |
+ * | Template   | FO/SO               | out L1 format + geometry (deduced)      | DataFormat/TensorShape | Float16_b, Float16, Float32 (32-bit Dest) | True     |
  * | Function   | in                  | The single input operand                | LLKOperand             | N/A                | True     |
  * | Function   | out                 | Output operand                          | LLKOperand             | N/A                | True     |
  */

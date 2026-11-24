@@ -4,7 +4,8 @@
 //
 // Quasar 2.0 compute API eltwise binary (add / sub / mul) over the Dest-sync cases S1-S8 (Phase 1 matrix):
 // SyncHalf/SyncFull x 16/32-bit Dest. S6 switches unpack-to-dest copy <-> add mid-kernel. Checked per element
-// against a host reference (rtol/atol 0.02); outputs start as a sentinel. Test names: <S>_<op>_<sync>_<dest>.
+// against a host reference (rtol/atol 0.02); outputs start as a sentinel. Formats (S1 add): both operands in MxFp8P /
+// MxFp8R / Float32, at 16- and 32-bit Dest. Test names: <S>_<op>_<sync>_<dest>[_<format>].
 
 #include "quasar_2_0_test_common.hpp"
 
@@ -18,6 +19,7 @@ struct BinaryCase {
     std::uint32_t op;  // 0 add, 1 sub, 2 mul
     bool full_sync;
     bool fp32;
+    tt::DataFormat fmt = tt::DataFormat::Float16_b;  // A and B L1 format
 };
 
 constexpr const char* OP_NAMES[] = {"add", "sub", "mul"};
@@ -25,7 +27,7 @@ constexpr const char* OP_NAMES[] = {"add", "sub", "mul"};
 std::string binary_case_name(const ::testing::TestParamInfo<BinaryCase>& info) {
     const BinaryCase& c = info.param;
     return "S" + std::to_string(c.s) + "_" + (c.s == 6 ? "chain" : OP_NAMES[c.op]) + (c.full_sync ? "_full" : "_half") +
-           (c.fp32 ? "_fp32" : "_fp16b");
+           (c.fp32 ? "_fp32" : "_fp16b") + fmt_suffix(c.fmt);
 }
 
 std::vector<BinaryCase> binary_cases() {
@@ -40,6 +42,11 @@ std::vector<BinaryCase> binary_cases() {
                     cases.push_back({s, op, full, fp32});
                 }
             }
+        }
+    }
+    for (bool fp32 : {false, true}) {
+        for (auto f : {tt::DataFormat::MxFp8P, tt::DataFormat::MxFp8R, tt::DataFormat::Float32}) {
+            cases.push_back({1, 0, false, fp32, f});
         }
     }
     return cases;
@@ -91,13 +98,17 @@ TEST_P(Quasar2_0EltwiseBinary, Run) {
         io.fp32_dest = c.fp32;
         io.full_sync = c.full_sync;
         io.ct_args = {{"num_tiles", n}, {"tiles_per_section", tps}, {"op", c.op}, {"mode", mode}};
-        io.inputs = {
-            random_tiles(n, 1000 + 100 * c.s + 10 * run + c.op), random_tiles(b_tiles, 2000 + 100 * c.s + run)};
+        const Operand oa = random_operand(c.fmt, n, 1000 + 100 * c.s + 10 * run + c.op);
+        const Operand ob = random_operand(c.fmt, b_tiles, 2000 + 100 * c.s + run);
+        io.inputs = {oa.l1, ob.l1};
+        if (c.fmt != tt::DataFormat::Float16_b) {
+            io.in_formats = {c.fmt, c.fmt};
+        }
         io.in_depth = {2 * tps, 2 * tps};
-        const Tiles& a = io.inputs[0];
-        const Tiles& b = io.inputs[1];
+        const std::vector<float>& a = oa.vals;
+        const std::vector<float>& b = ob.vals;
         std::vector<std::vector<float>> want;
-        auto elem = [&](const Tiles& x, std::uint32_t i) { return bf16_to_float(x[i]); };
+        auto elem = [&](const std::vector<float>& x, std::uint32_t i) { return x[i]; };
         if (mode == 6) {
             std::vector<float> w(n * TILE_ELEMS);
             const std::uint32_t lo = 3 * tps * TILE_ELEMS, hi = 8 * tps * TILE_ELEMS;
@@ -134,26 +145,37 @@ TEST_P(Quasar2_0EltwiseBinary, Run) {
 INSTANTIATE_TEST_SUITE_P(Quasar2_0, Quasar2_0EltwiseBinary, ::testing::ValuesIn(binary_cases()), binary_case_name);
 
 // Broadcast (bcast.h), SyncHalf / 16-bit Dest, one tile per section. op: 3 sub COL, 4 mul COL, 5 mul ROW (binary:
-// A op B[r][0] / B[0][c]); 6 unary ROW, 7 unary COL (A[0][c] / A[r][0]; in1 is consumed but unused).
+// A op B[r][0] / B[0][c]); 6 unary ROW, 7 unary COL (A[0][c] / A[r][0]; in1 is consumed but unused). Formats: mul COL
+// on MxFp8P, unary ROW on Float32 (both inputs in that format).
 constexpr const char* BCAST_NAMES[] = {"sub_col", "mul_col", "mul_row", "unary_row", "unary_col"};
 
-class Quasar2_0Bcast : public LLKQuasarMeshDeviceSingleCardFixture,
-                       public ::testing::WithParamInterface<std::uint32_t> {};
+struct BcastCase {
+    std::uint32_t op;
+    tt::DataFormat fmt = tt::DataFormat::Float16_b;
+};
+
+class Quasar2_0Bcast : public LLKQuasarMeshDeviceSingleCardFixture, public ::testing::WithParamInterface<BcastCase> {};
 
 TEST_P(Quasar2_0Bcast, Run) {
-    const std::uint32_t op = GetParam();
+    const std::uint32_t op = GetParam().op;
+    const tt::DataFormat fmt = GetParam().fmt;
     const std::uint32_t n = 8;
     ProgramIo io;
     io.compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_binary_2_0_quasar.cpp";
     io.ct_args = {{"num_tiles", n}, {"tiles_per_section", 1}, {"op", op}, {"mode", 0}};
-    io.inputs = {random_tiles(n, 3000 + op), random_tiles(n, 4000 + op)};
+    const Operand oa = random_operand(fmt, n, 3000 + op);
+    const Operand ob = random_operand(fmt, n, 4000 + op);
+    io.inputs = {oa.l1, ob.l1};
+    if (fmt != tt::DataFormat::Float16_b) {
+        io.in_formats = {fmt, fmt};
+    }
     io.in_depth = {2, 2};
-    const Tiles& a = io.inputs[0];
-    const Tiles& b = io.inputs[1];
+    const std::vector<float>& a = oa.vals;
+    const std::vector<float>& b = ob.vals;
     std::vector<float> w(n * TILE_ELEMS);
     for (std::uint32_t t = 0; t < n; ++t) {
-        auto at = [&](const Tiles& x, std::uint32_t r, std::uint32_t c) {
-            return bf16_to_float(x[t * TILE_ELEMS + tile_elem(r, c)]);
+        auto at = [&](const std::vector<float>& x, std::uint32_t r, std::uint32_t c) {
+            return x[t * TILE_ELEMS + tile_elem(r, c)];
         };
         for (std::uint32_t r = 0; r < 32; ++r) {
             for (std::uint32_t c = 0; c < 32; ++c) {
@@ -176,9 +198,19 @@ TEST_P(Quasar2_0Bcast, Run) {
     EXPECT_TRUE(tiles_close(outs[0], w, 0.02f, 0.02f));
 }
 
+std::vector<BcastCase> bcast_cases() {
+    std::vector<BcastCase> cases;
+    for (std::uint32_t op = 3; op < 8; ++op) {
+        cases.push_back({op});
+    }
+    cases.push_back({4, tt::DataFormat::MxFp8P});
+    cases.push_back({6, tt::DataFormat::Float32});
+    return cases;
+}
+
 INSTANTIATE_TEST_SUITE_P(
-    Quasar2_0, Quasar2_0Bcast, ::testing::Range(3u, 8u), [](const ::testing::TestParamInfo<std::uint32_t>& info) {
-        return std::string(BCAST_NAMES[info.param - 3]);
+    Quasar2_0, Quasar2_0Bcast, ::testing::ValuesIn(bcast_cases()), [](const ::testing::TestParamInfo<BcastCase>& info) {
+        return std::string(BCAST_NAMES[info.param.op - 3]) + fmt_suffix(info.param.fmt);
     });
 
 }  // namespace

@@ -4,7 +4,8 @@
 //
 // Shared host side of the Quasar 2.0 compute API op tests (datacopy, eltwise binary, matmul): one compute kernel
 // fed by one DRAM reader per input DFB and drained by one DRAM writer per output DFB, all 1 producer x 1 consumer,
-// Float16_b 32x32 tiles (Float32 with ProgramIo::fp32_l1). Outputs are pre-filled with a sentinel so a skipped section
+// Float16_b 32x32 tiles (Float32 with ProgramIo::fp32_l1; per-input FPU operand formats with ProgramIo::in_formats).
+// Outputs are pre-filled with a sentinel so a skipped section
 // shows as a wrong tile.
 // ProgramIo::lta: no DM kernels and no DFBs; every input and output is a resident L1 tensor (one shard on the node)
 // bound to the compute kernel as tensor::in<i> / tensor::out<i>, read through LocalTensorAccessor::operand<>().
@@ -34,6 +35,7 @@
 #include <tt-metalium/memory/tensor/spec/tensor_spec.hpp>
 #include "impl/program/program_impl.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "tt_metal/test_utils/mx_utils.hpp"
 
 namespace tt::tt_metal::quasar_2_0 {
 
@@ -67,6 +69,52 @@ inline Tiles random_tiles(std::uint32_t num_tiles, std::uint32_t seed) {
     return t;
 }
 
+// A random operand in L1 format fmt (Float16_b, Float32, or MX), and the values the device reads from it.
+struct Operand {
+    Tiles l1;                 // uint16 halves of the L1 tile bytes
+    std::vector<float> vals;  // TILE_ELEMS per tile, as stored in fmt
+};
+
+inline Operand random_operand(tt::DataFormat fmt, std::uint32_t num_tiles, std::uint32_t seed) {
+    Operand o;
+    if (fmt == tt::DataFormat::Float16_b) {
+        o.l1 = random_tiles(num_tiles, seed);
+        for (auto v : o.l1) {
+            o.vals.push_back(bf16_to_float(v));
+        }
+        return o;
+    }
+    std::mt19937 gen(seed);
+    std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+    o.vals.resize(num_tiles * TILE_ELEMS);
+    for (auto& v : o.vals) {
+        v = dist(gen);
+    }
+    std::vector<std::uint32_t> words(o.vals.size());
+    if (fmt == tt::DataFormat::Float32) {
+        std::memcpy(words.data(), o.vals.data(), 4 * words.size());
+    } else {  // MX: tile-major [scales | elements]
+        words = tt::test_utils::pack_as_mx_tiles(fmt, ttsl::make_const_span(o.vals), /*row_major_input=*/false);
+        o.vals = tt::test_utils::mx_to_floats(fmt, words);
+    }
+    for (auto w : words) {
+        o.l1.push_back(w & 0xFFFF);
+        o.l1.push_back(w >> 16);
+    }
+    return o;
+}
+
+// Test-name suffix of an operand format (empty for the default Float16_b).
+inline std::string fmt_suffix(tt::DataFormat f) {
+    switch (f) {
+        case tt::DataFormat::MxFp8P: return "_mxfp8p";
+        case tt::DataFormat::MxFp8R: return "_mxfp8r";
+        case tt::DataFormat::MxInt8: return "_mxint8";
+        case tt::DataFormat::Float32: return "_f32in";
+        default: return "";
+    }
+}
+
 // Element (row, col) of a 32x32 tile stored as four 16x16 row-major faces.
 inline std::uint32_t tile_elem(std::uint32_t r, std::uint32_t c) {
     return ((r / 16) * 2 + (c / 16)) * 256 + (r % 16) * 16 + (c % 16);
@@ -92,17 +140,24 @@ struct ProgramIo {
     // compute thread copies every tile, so out<i> holds each input tile `threads` times in a row.
     std::uint8_t threads = 1;
     DFBAccessPattern pattern = DFBAccessPattern::STRIDED;
+    std::vector<tt::DataFormat> in_formats;  // FPU operand L1 format of in<i> (overrides the above; Float32 -> Src)
 };
 
 // Builds and runs one program, returns one tile stream per output DFB.
 inline std::vector<Tiles> run_program(distributed::MeshDevice& mesh_device, const ProgramIo& io) {
     auto& cq = mesh_device.mesh_command_queue();
     const NodeCoord node{0, 0};
-    auto in_fp32 = [&](std::size_t i) { return io.fp32_l1 || ((io.fp32_in_mask >> i) & 1); };
-    auto tile_halves = [](bool f32) { return f32 ? 2 * TILE_ELEMS : TILE_ELEMS; };  // uint16 per tile
+    auto in_format = [&](std::size_t i) {
+        if (i < io.in_formats.size()) {
+            return io.in_formats[i];
+        }
+        return io.fp32_l1 || ((io.fp32_in_mask >> i) & 1) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    };
+    const tt::DataFormat out_format = io.fp32_l1 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    auto tile_halves = [](tt::DataFormat f) { return tt::tile_size(f) / 2; };  // uint16 per tile
 
-    auto make_buffer = [&](std::uint32_t tiles, bool f32) {
-        const std::uint32_t tile_bytes = 2 * tile_halves(f32);
+    auto make_buffer = [&](std::uint32_t tiles, tt::DataFormat f) {
+        const std::uint32_t tile_bytes = 2 * tile_halves(f);
         // The direct reader/writer address one DRAM bank: page_size = whole buffer keeps it in one bank.
         const distributed::DeviceLocalBufferConfig cfg{
             .page_size = tile_bytes * tiles, .buffer_type = BufferType::DRAM};
@@ -139,9 +194,11 @@ inline std::vector<Tiles> run_program(distributed::MeshDevice& mesh_device, cons
     std::vector<KernelSpecName> names;
     ComputeHardwareConfig hw{.enable_32_bit_dest = io.fp32_dest, .double_buffer_dest = !io.full_sync};
     for (std::size_t i = 0; i < io.inputs.size(); ++i) {
-        // A Float32 DFB at a 32-bit Dest must name its unpack mode; the 2.0 copy unpacks it to Dest (COPY<Src>).
-        if (in_fp32(i) && !io.lta) {
-            hw.unpack_modes[DFBSpecName{"in" + std::to_string(i)}] = UnpackMode::UnpackToDest;
+        // A Float32 DFB at a 32-bit Dest must name its unpack mode: the 2.0 copy unpacks it to Dest (COPY<Src>), an
+        // FPU operand (in_formats) to Src.
+        if (in_format(i) == tt::DataFormat::Float32 && !io.lta) {
+            hw.unpack_modes[DFBSpecName{"in" + std::to_string(i)}] =
+                i < io.in_formats.size() ? UnpackMode::UnpackToSrc : UnpackMode::UnpackToDest;
         }
     }
     KernelSpec compute{
@@ -170,12 +227,12 @@ inline std::vector<Tiles> run_program(distributed::MeshDevice& mesh_device, cons
         compute.semaphore_bindings.push_back(
             {.semaphore_spec_name = SemaphoreSpecName{"ready"}, .accessor_name = "ready"});
     }
-    auto dfb_spec = [&](const std::string& name, std::uint32_t depth, bool f32) {
+    auto dfb_spec = [&](const std::string& name, std::uint32_t depth, tt::DataFormat f) {
         return DataflowBufferSpec{
             .unique_id = DFBSpecName{name},
-            .entry_size = 2 * tile_halves(f32),
+            .entry_size = 2 * tile_halves(f),
             .num_entries = depth,
-            .data_format_metadata = f32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b,
+            .data_format_metadata = f,
         };
     };
 
@@ -183,10 +240,10 @@ inline std::vector<Tiles> run_program(distributed::MeshDevice& mesh_device, cons
     ProgramRunArgs params;
     for (std::size_t i = 0; i < io.inputs.size(); ++i) {
         const std::string dfb = "in" + std::to_string(i);
-        const bool f32 = in_fp32(i);
-        const std::uint32_t tiles = io.inputs[i].size() / tile_halves(f32);
+        const tt::DataFormat fmt = in_format(i);
+        const std::uint32_t tiles = io.inputs[i].size() / tile_halves(fmt);
         if (io.lta) {
-            const MeshTensor& t = make_tensor(dfb, tiles, f32);
+            const MeshTensor& t = make_tensor(dfb, tiles, fmt == tt::DataFormat::Float32);
             compute.tensor_bindings.push_back({.tensor_parameter_name = TensorParamName{dfb}, .accessor_name = dfb});
             if (!io.sem) {
                 slow_dispatch::WriteToBuffer(t.mesh_buffer(), pack32(io.inputs[i]));
@@ -203,7 +260,7 @@ inline std::vector<Tiles> run_program(distributed::MeshDevice& mesh_device, cons
                 .hw_config = DataMovementHardwareConfig{},
             });
             names.push_back(name);
-            in_bufs.push_back(make_buffer(tiles, f32));
+            in_bufs.push_back(make_buffer(tiles, fmt));
             distributed::EnqueueWriteMeshBuffer(cq, in_bufs.back(), pack32(io.inputs[i]), /*blocking=*/true);
             params.kernel_run_args.push_back(
                 {.kernel = name,
@@ -211,10 +268,10 @@ inline std::vector<Tiles> run_program(distributed::MeshDevice& mesh_device, cons
                      node,
                      {{"src_addr", in_bufs.back()->address()},
                       {"src_bank_id", 0u},
-                      {"num_bytes", tiles * 2 * tile_halves(f32)}})});
+                      {"num_bytes", tiles * 2 * tile_halves(fmt)}})});
             continue;
         }
-        dfbs.push_back(dfb_spec(dfb, io.in_depth[i], f32));
+        dfbs.push_back(dfb_spec(dfb, io.in_depth[i], fmt));
         compute.dfb_bindings.push_back(
             io.pattern == DFBAccessPattern::BLOCKED ? BlockedConsumerOf(DFBSpecName{dfb}, dfb, io.threads)
             : io.pattern == DFBAccessPattern::ALL   ? AllConsumerOf(DFBSpecName{dfb}, dfb)
@@ -230,7 +287,7 @@ inline std::vector<Tiles> run_program(distributed::MeshDevice& mesh_device, cons
             .hw_config = DataMovementHardwareConfig{},
         });
         names.push_back(name);
-        in_bufs.push_back(make_buffer(std::max(tiles, 1u), f32));  // 0 tiles: the reader reads nothing
+        in_bufs.push_back(make_buffer(std::max(tiles, 1u), fmt));  // 0 tiles: the reader reads nothing
         if (tiles != 0) {
             distributed::EnqueueWriteMeshBuffer(cq, in_bufs.back(), pack32(io.inputs[i]), /*blocking=*/true);
         }
@@ -241,18 +298,18 @@ inline std::vector<Tiles> run_program(distributed::MeshDevice& mesh_device, cons
                  {{"src_addr", in_bufs.back()->address()},
                   {"src_bank_id", 0u},
                   {"num_tiles", tiles / readers},
-                  {"dram_page_stride", 2 * tile_halves(f32)}})});
+                  {"dram_page_stride", 2 * tile_halves(fmt)}})});
     }
     for (std::size_t i = 0; i < io.out_tiles.size(); ++i) {
         const std::string dfb = "out" + std::to_string(i);
         if (io.lta) {
             const MeshTensor& t = make_tensor(dfb, io.out_tiles[i], io.fp32_l1);
             slow_dispatch::WriteToBuffer(
-                t.mesh_buffer(), pack32(Tiles(io.out_tiles[i] * tile_halves(io.fp32_l1), SENTINEL)));
+                t.mesh_buffer(), pack32(Tiles(io.out_tiles[i] * tile_halves(out_format), SENTINEL)));
             compute.tensor_bindings.push_back({.tensor_parameter_name = TensorParamName{dfb}, .accessor_name = dfb});
             continue;
         }
-        dfbs.push_back(dfb_spec(dfb, io.out_depth[i], io.fp32_l1));
+        dfbs.push_back(dfb_spec(dfb, io.out_depth[i], out_format));
         compute.dfb_bindings.push_back(
             io.pattern == DFBAccessPattern::BLOCKED ? BlockedProducerOf(DFBSpecName{dfb}, dfb, io.threads)
                                                     : ProducerOf(DFBSpecName{dfb}, dfb));
@@ -267,9 +324,9 @@ inline std::vector<Tiles> run_program(distributed::MeshDevice& mesh_device, cons
         });
         names.push_back(name);
         const std::uint32_t buf_tiles = std::max(io.out_tiles[i], 1u);  // 0 output tiles: the writer reads nothing
-        out_bufs.push_back(make_buffer(buf_tiles, io.fp32_l1));
+        out_bufs.push_back(make_buffer(buf_tiles, out_format));
         distributed::EnqueueWriteMeshBuffer(
-            cq, out_bufs.back(), pack32(Tiles(buf_tiles * tile_halves(io.fp32_l1), SENTINEL)), /*blocking=*/true);
+            cq, out_bufs.back(), pack32(Tiles(buf_tiles * tile_halves(out_format), SENTINEL)), /*blocking=*/true);
         params.kernel_run_args.push_back(
             {.kernel = name,
              .runtime_arg_values = MakeRuntimeArgsForSingleNode(
@@ -277,7 +334,7 @@ inline std::vector<Tiles> run_program(distributed::MeshDevice& mesh_device, cons
                  {{"dst_addr", out_bufs.back()->address()},
                   {"dst_bank_id", 0u},
                   {"num_tiles", io.out_tiles[i] / io.threads},
-                  {"dram_page_stride", 2 * tile_halves(io.fp32_l1)}})});
+                  {"dram_page_stride", 2 * tile_halves(out_format)}})});
     }
     kernels.push_back(compute);
     names.push_back(compute.unique_id);

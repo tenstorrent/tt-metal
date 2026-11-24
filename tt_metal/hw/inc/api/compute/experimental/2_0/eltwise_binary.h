@@ -27,12 +27,15 @@ template <
     TensorShape SB>
 inline void binary_init(LLKOperand<FA, SA> a, LLKOperand<FB, SB> b, bool acc_to_dest) {
     static_assert(
-        llk_2_0::is_supported_format(FA) && llk_2_0::is_supported_format(FB), "binary init: Float16_b / Float16 only.");
+        llk_2_0::is_fpu_operand_format(FA) && llk_2_0::is_fpu_operand_format(FB),
+        "binary init: Float16_b / Float16 / Float32 / MxFp8R / MxFp8P / MxInt8 only.");
     static_assert(is_legal_tile_shape(SA), "binary init: illegal tile shape for operand A.");
     static_assert(same_tile_shape(SA, SB), "binary init: operands A and B must have the same tile shape.");
     static_assert(is_fp32_dest_acc_en == DST_ACCUM_MODE, "binary init: Dest mode is kernel-wide (DST_ACCUM_MODE)");
-    UNPACK((llk_2_0::unpack_AB_init<LLKOperand<FA, SA>::descriptor, LLKOperand<FB, SB>::descriptor, BCAST>(
-        a.l1_address, b.l1_address)));
+    UNPACK(
+        (llk_2_0::
+             unpack_AB_init<LLKOperand<FA, SA>::descriptor, LLKOperand<FB, SB>::descriptor, is_fp32_dest_acc_en, BCAST>(
+                 a.l1_address, b.l1_address)));
     MATH((llk_2_0::math_binary_init<
           type,
           LLKOperand<FA, SA>::descriptor,
@@ -77,12 +80,12 @@ ALWI void binary_block(
  * Id-free add init, Quasar: Dest = A + B. Unpack TRISC programs Unp0 (A -> SrcA) and Unp1 (B -> SrcB) buffer
  * descriptors at the operands' bases, their formats and the binary unpack MOP; math TRISC programs the ALU formats
  * and the ELWADD MOP. Re-init when another op ran in between (Quasar rule).
- * No uninit. Only 16-bit float operands with the same tile shape.
+ * No uninit. Operands with the same tile shape.
  *
  * | Param Type | Name                | Description                                 | Type        | Valid Range | Required |
  * |------------|---------------------|---------------------------------------------|-------------|-------------|----------|
  * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                   | bool        |             | False    |
- * | Function   | a / b               | Input operands (A -> SrcA, B -> SrcB)       | LLKOperand  | N/A         | True     |
+ * | Function   | a / b               | Input operands (A -> SrcA, B -> SrcB)       | LLKOperand  | Float16_b, Float16, Float32, MxFp8R, MxFp8P, MxInt8 | True     |
  * | Function   | acc_to_dest         | Accumulate into Dest instead of overwriting | bool        | N/A         | False    |
  */
 // clang-format on
@@ -98,7 +101,7 @@ inline void add_init(LLKOperand<FA, SA> a, LLKOperand<FB, SB> b, bool acc_to_des
  * | Param Type | Name                | Description                                 | Type        | Valid Range | Required |
  * |------------|---------------------|---------------------------------------------|-------------|-------------|----------|
  * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                   | bool        |             | False    |
- * | Function   | a / b               | Input operands (A -> SrcA, B -> SrcB)       | LLKOperand  | N/A         | True     |
+ * | Function   | a / b               | Input operands (A -> SrcA, B -> SrcB)       | LLKOperand  | Float16_b, Float16, Float32, MxFp8R, MxFp8P, MxInt8 | True     |
  * | Function   | acc_to_dest         | Accumulate into Dest instead of overwriting | bool        | N/A         | False    |
  */
 // clang-format on
@@ -114,7 +117,7 @@ inline void sub_init(LLKOperand<FA, SA> a, LLKOperand<FB, SB> b, bool acc_to_des
  * | Param Type | Name                | Description                                 | Type        | Valid Range | Required |
  * |------------|---------------------|---------------------------------------------|-------------|-------------|----------|
  * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                   | bool        |             | False    |
- * | Function   | a / b               | Input operands (A -> SrcA, B -> SrcB)       | LLKOperand  | N/A         | True     |
+ * | Function   | a / b               | Input operands (A -> SrcA, B -> SrcB)       | LLKOperand  | Float16_b, Float16, Float32, MxFp8R, MxFp8P, MxInt8 | True     |
  * | Function   | acc_to_dest         | Accumulate into Dest instead of overwriting | bool        | N/A         | False    |
  */
 // clang-format on

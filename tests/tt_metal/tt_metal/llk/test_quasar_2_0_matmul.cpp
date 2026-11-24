@@ -7,9 +7,10 @@
 // S11 copies a tile, then matmul accumulates on it in the same section (copy, FPU, PACK). fp32mix (S6, S11, 32-bit
 // Dest): the copy source is a Float32 in2, so the copy unpacks to Dest (UNPACK -> PACK and FPU -> PACK uses on the same
 // regions in S6, UNPACK -> FPU -> PACK in S11) while the matmul operands stay Float16_b. S12 is S1 with each in1 tile
-// transposed (matmul_init transpose = 1, SDPA Q x K^T).
-// The readers stream each section's operand tiles in consumption order. Checked per element against a host
-// reference; outputs start as a sentinel. Test names: <S>_<sync>_<dest>.
+// transposed (matmul_init transpose = 1, SDPA Q x K^T). Formats (S1): in1 (weights) in MxFp8P / MxFp8R / MxInt8 /
+// Float32 against Float16_b in0 (activations), at 16- and 32-bit Dest. The readers stream each section's operand tiles
+// in consumption order. Checked per element against a host reference; outputs start as a sentinel. Test names:
+// <S>_<sync>_<dest>.
 
 #include "quasar_2_0_test_common.hpp"
 
@@ -22,7 +23,8 @@ struct MatmulCase {
     std::uint32_t s;  // sync case S1..S12
     bool full_sync;
     bool fp32;
-    bool mix = false;  // Float32 copy source in2 (S6, S11; fp32 Dest only)
+    bool mix = false;                                // Float32 copy source in2 (S6, S11; fp32 Dest only)
+    tt::DataFormat fmt = tt::DataFormat::Float16_b;  // in1 L1 format
 };
 
 std::string matmul_case_name(const ::testing::TestParamInfo<MatmulCase>& info) {
@@ -30,7 +32,8 @@ std::string matmul_case_name(const ::testing::TestParamInfo<MatmulCase>& info) {
     return "S" + std::to_string(c.s) + (c.full_sync ? "_full" : "_half") +
            (c.mix    ? "_fp32mix"
             : c.fp32 ? "_fp32"
-                     : "_fp16b");
+                     : "_fp16b") +
+           fmt_suffix(c.fmt);
 }
 
 std::vector<MatmulCase> matmul_cases() {
@@ -45,6 +48,12 @@ std::vector<MatmulCase> matmul_cases() {
             }
         }
     }
+    for (bool fp32 : {false, true}) {
+        for (auto f :
+             {tt::DataFormat::MxFp8P, tt::DataFormat::MxFp8R, tt::DataFormat::MxInt8, tt::DataFormat::Float32}) {
+            cases.push_back({1, false, fp32, false, f});
+        }
+    }
     return cases;
 }
 
@@ -52,17 +61,17 @@ std::vector<MatmulCase> matmul_cases() {
 void tile_matmul(
     std::vector<float>& out,
     std::size_t o,
-    const Tiles& a,
+    const std::vector<float>& a,
     std::size_t ai,
-    const Tiles& b,
+    const std::vector<float>& b,
     std::size_t bi,
     bool tb = false) {
     for (std::uint32_t r = 0; r < 32; ++r) {
         for (std::uint32_t c = 0; c < 32; ++c) {
             float acc = 0.0f;
             for (std::uint32_t k = 0; k < 32; ++k) {
-                acc += bf16_to_float(a[ai * TILE_ELEMS + tile_elem(r, k)]) *
-                       bf16_to_float(b[bi * TILE_ELEMS + (tb ? tile_elem(c, k) : tile_elem(k, c))]);
+                acc += a[ai * TILE_ELEMS + tile_elem(r, k)] *
+                       b[bi * TILE_ELEMS + (tb ? tile_elem(c, k) : tile_elem(k, c))];
             }
             out[o * TILE_ELEMS + tile_elem(r, c)] += acc;
         }
@@ -152,7 +161,12 @@ TEST_P(Quasar2_0Matmul, Run) {
             {"block", block},
             {"mode", mode},
             {"transpose", transpose}};
-        io.inputs = {random_tiles(a_tiles, 3000 + 100 * c.s + run), random_tiles(b_tiles, 4000 + 100 * c.s + run)};
+        const Operand op0 = random_operand(tt::DataFormat::Float16_b, a_tiles, 3000 + 100 * c.s + run);
+        const Operand op1 = random_operand(c.fmt, b_tiles, 4000 + 100 * c.s + run);
+        io.inputs = {op0.l1, op1.l1};
+        if (c.fmt != tt::DataFormat::Float16_b) {
+            io.in_formats = {tt::DataFormat::Float16_b, c.fmt};
+        }
         if (block) {
             io.in_depth = {2 * rt * kt, 2 * kt * ct};
         } else if (mode == 11) {
@@ -165,12 +179,12 @@ TEST_P(Quasar2_0Matmul, Run) {
             io.in_depth.push_back(2 * tps);
             io.fp32_in_mask = 1u << 2;
         }
-        const Tiles& a = io.inputs[0];
-        const Tiles& b = io.inputs[1];
+        const std::vector<float>& a = op0.vals;
+        const std::vector<float>& b = op1.vals;
         // Copy source element e of tile t: in0 (bf16), or in2 (Float32) when mixed.
         auto copy_val = [&](std::uint32_t t, std::uint32_t e) {
             if (!c.mix) {
-                return bf16_to_float(a[t * TILE_ELEMS + e]);
+                return a[t * TILE_ELEMS + e];
             }
             const std::size_t i = 2 * (static_cast<std::size_t>(t) * TILE_ELEMS + e);
             const std::uint32_t u = io.inputs[2][i] | (static_cast<std::uint32_t>(io.inputs[2][i + 1]) << 16);
