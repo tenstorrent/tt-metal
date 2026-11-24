@@ -20,6 +20,7 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import TtIndexer
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import mesh_shard_dims
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import COMPUTE_KERNEL_CONFIG_HIFI2
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.mtp_config import MTPConfig
@@ -68,9 +69,7 @@ class TtFusedMTP(LightweightModule):
         self.num_links = num_links
         self.topology = topology[tp_axis] if isinstance(topology, tuple) else topology
         self.compute_kernel_config = compute_kernel_config
-        # Blackhole keeps the norm outputs and their concat in L1 for the matmul (0.30 vs 0.34 ms per 5k chunk
-        # on Galaxy 8x4).
-        self.act_memory_config = ttnn.L1_MEMORY_CONFIG if is_blackhole() else ttnn.DRAM_MEMORY_CONFIG
+        self._is_blackhole = is_blackhole()
 
         if state_dict is None and weight_cache_path is None:
             raise ValueError(
@@ -88,7 +87,6 @@ class TtFusedMTP(LightweightModule):
             topology=self.topology,
             weight_cache_path=weight_cache_path,
             use_fused=use_fused_rmsnorm,
-            output_memcfg=self.act_memory_config,
         )
         sd = state_dict or {}
         self.enorm = TtDistributedRmsNorm(
@@ -166,7 +164,8 @@ class TtFusedMTP(LightweightModule):
             return False
         if not TtDistributedRmsNorm.check_cache_complete(cache_path, f"{cache_name_prefix}.hnorm"):
             return False
-        if not pattern_exists(f"{cache_name_prefix}.eh_proj*.tensorbin", "FusedMTP"):
+        # Pinned to the cached dtype (weights_dtype default; the matmul's bfp8 copy is cast after load).
+        if not pattern_exists(f"{cache_name_prefix}.eh_proj_dtype_BFLOAT16_layout_TILE.tensorbin", "FusedMTP"):
             logger.debug(f"TTNN cache missing: {cache_name_prefix}.eh_proj")
             return False
         return True
@@ -204,18 +203,43 @@ class TtFusedMTP(LightweightModule):
             device=None,
         )
 
+    # Live L1 bytes per chip allowed for the two norm outputs plus their concat (bf16): a packed pair of 5k chunks
+    # on Galaxy 8x4 (1280 rows x 1536) is 15 MiB.
+    L1_ACT_MAX_BYTES = 16 * 2**20
+
+    def act_memory_config(self, rows_local: int, width_local: int) -> ttnn.MemoryConfig:
+        """Where the norm outputs and concat live: L1 on Blackhole when they fit L1_ACT_MAX_BYTES (0.30 vs 0.34 ms per
+        5k chunk on Galaxy 8x4), else DRAM."""
+        live_bytes = 2 * (2 * rows_local * width_local)  # e and h, then the concat of both, all bf16
+        if self._is_blackhole and live_bytes <= self.L1_ACT_MAX_BYTES:
+            return ttnn.L1_MEMORY_CONFIG
+        return ttnn.DRAM_MEMORY_CONFIG
+
     def forward(self, embed: ttnn.Tensor, hidden: ttnn.Tensor) -> ttnn.Tensor:
         """Project the shifted embedding and the previous level's hidden into this level's input.
 
         Both inputs are ``[1, 1, seq_local, H/tp]`` and TP-sharded.
         """
+        rows = embed.shape[-2]
+        mem = self.act_memory_config(rows, embed.shape[-1])
+        self.enorm.output_memcfg = mem
+        self.hnorm.output_memcfg = mem
         e = self.enorm(embed)
         h = self.hnorm(hidden)
 
-        x = ttnn.concat([e, h], dim=-1, memory_config=self.act_memory_config)
+        x = ttnn.concat([e, h], dim=-1, memory_config=mem)
         ttnn.deallocate(e)
         ttnn.deallocate(h)
-        if self.tp > 1:
+        if self.tp > 1 and rows % ttnn.TILE_SIZE != 0:
+            # The fused op needs whole tiles of rows; keep the separate matmul and reduce-scatter for the rest.
+            out_full = ttnn.matmul(
+                x, self.eh_proj, compute_kernel_config=self.compute_kernel_config, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            out = ttnn.reduce_scatter(
+                out_full, dim=-1, cluster_axis=self.tp_axis, num_links=self.num_links, topology=self.topology
+            )
+            ttnn.deallocate(out_full)
+        elif self.tp > 1:
             out = ttnn.experimental.matmul_reduce_scatter_prefill(
                 x,
                 self.eh_proj,
@@ -309,6 +333,7 @@ class TtMTPModule(LightweightModule):
             tp_axis=tp_axis,
             weight_cache_path=weight_cache_path,
             kv_only=kv_only,
+            indexer_key_only=kv_only,  # its indexer only writes keys: no wq_b / weights_proj
             # (the MTP layer's MoE: the model's default (tt/moe_impl.py; GLM-5.3 the MoE block - its gate / shared expert
             # from the checkpoint's layer mtp_layer_idx, its routed experts from this cache's TtMoe tensorbins) unless the
             # caller passes moe_impl)
@@ -340,10 +365,22 @@ class TtMTPModule(LightweightModule):
         cache_name_prefix: str = "mtp_0",
         experts_per_chip: int = 8,
         model_cfg: type | None = None,
+        kv_only: bool = False,
+        owns_indexer: bool = True,
     ) -> bool:
-        """Whether the whole module's cache (fused MTP + block + shared_head.norm) is present."""
+        """Whether the module's cache is present: fused MTP + block + shared_head.norm, or with ``kv_only`` what a
+        KV-only build loads (fused MTP, attn_norm, the MLA KV branch and, if the layer ``owns_indexer``, the
+        indexer's key side)."""
         if not TtFusedMTP.check_cache_complete(cache_path, cache_name_prefix):
             return False
+        if kv_only:
+            if not TtPrefillBlock.check_cache_complete(
+                cache_path, layer_idx, is_dense=False, model_cfg=model_cfg, kv_only=True
+            ):
+                return False
+            return not owns_indexer or TtIndexer.check_cache_complete(
+                cache_path, f"layer_{layer_idx}.mla", key_only=True
+            )
         if not TtDistributedRmsNorm.check_cache_complete(cache_path, f"{cache_name_prefix}.shared_head_norm"):
             return False
         return TtPrefillBlock.check_cache_complete(
