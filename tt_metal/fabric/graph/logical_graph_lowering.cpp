@@ -95,7 +95,9 @@ private:
             if (!rules_.carries(port, vc)) {
                 continue;
             }
-            add_channel(LogicalChannel{.router = r, .vc = vc, .kind = ChannelKind::Receiver});
+            if (rules_.has_receiver(port, vc)) {
+                add_channel(LogicalChannel{.router = r, .vc = vc, .kind = ChannelKind::Receiver});
+            }
             if (rules_.has_worker(port, vc)) {
                 add_channel(LogicalChannel{.router = r, .vc = vc, .kind = ChannelKind::Sender, .injection = true});
             }
@@ -138,7 +140,9 @@ private:
     void add_eth_edges(uint32_t vc) {
         for (RouterIndex r = 0; r < g_.routers.size(); ++r) {
             const auto peer = g_.routers[r].peer;
-            const auto rx = g_.receiver(peer.value_or(r), vc);
+            // a perimeter router's senders reach the peer's VC2 receiver, known at connect: its own stands in
+            const bool perimeter = g_.routers[r].port.capability == EdgeCapability::INTERDOMAIN;
+            const auto rx = g_.receiver(peer.value_or(r), perimeter ? 2 : vc);
             if (!rx) {
                 continue;
             }

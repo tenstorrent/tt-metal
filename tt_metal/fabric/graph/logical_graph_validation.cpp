@@ -54,7 +54,7 @@ std::vector<std::string> find_problems(
             ++links;
             const auto& to = g.channels[e->to];
             const auto far = perimeter ? std::optional<RouterIndex>{ch.router} : router.peer;
-            if (to.kind != ChannelKind::Receiver || to.vc != ch.vc || !far || to.router != *far) {
+            if (to.kind != ChannelKind::Receiver || to.vc != (perimeter ? 2 : ch.vc) || !far || to.router != *far) {
                 problems.push_back(where(c) + ": link edge does not reach the far receiver on its VC");
             }
         }

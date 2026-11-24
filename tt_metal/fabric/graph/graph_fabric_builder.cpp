@@ -38,11 +38,9 @@ RouterVcShape GraphFabricBuilder::shape_of(RouterIndex router) const {
     const auto& counts = graph_.sender_counts[router];
     shape.num_vcs = static_cast<uint32_t>(counts.size());
     std::copy(counts.begin(), counts.end(), shape.sender_counts.begin());
-    for (ChannelIndex c : graph_.logical.routers[router].channels) {
-        const auto& ch = graph_.logical.channels[c];
-        if (ch.kind == ChannelKind::Receiver) {
-            shape.receiver_counts[ch.vc] = 1;
-        }
+    // stock-sized receivers until #65720, as the senders
+    for (size_t vc = 0; vc < shape.receiver_counts.size(); ++vc) {
+        shape.receiver_counts[vc] = graph_.layouts[router].receivers[vc].empty() ? 0 : 1;
     }
     finalize_vc_shape_bases(shape);
     return shape;

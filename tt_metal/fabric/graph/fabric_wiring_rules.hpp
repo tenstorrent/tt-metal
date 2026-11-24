@@ -26,6 +26,7 @@ public:
     virtual std::vector<Vc> vcs() const = 0;
     virtual bool carries(const Port& port, uint32_t vc) const = 0;
     virtual bool has_worker(const Port& port, uint32_t vc) const = 0;
+    virtual bool has_receiver(const Port&, uint32_t) const { return true; }
     // does the receiver on `ingress` feed the router on `egress`?
     virtual bool wires(const Port& ingress, const Port& egress, uint32_t vc) const = 0;
     // 1D on a wrap-around mesh: a chip with two non-opposite directions turns between them

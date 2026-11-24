@@ -996,8 +996,16 @@ TEST(FabricGraphInterDomain, ChannelIndexing) {
     const auto cg = lower_to_channels(lower_with_perimeter(kQuietBoxSplit).graph, Topology::Mesh);
     EXPECT_EQ(index_of(cg, "m0.c0.N.p0", 0, "worker"), 0u);
     EXPECT_NE(index_of(cg, "m0.c0.N.p0", 0, "E"), 0u);
-    EXPECT_EQ(index_of(cg, "m0.c0.E.p0", 2, "worker"), 0u);
     EXPECT_EQ(index_of(cg, "m0.c0.E.p0", 2, "N"), 2u);
+    const auto& g = cg.logical;
+    for (RouterIndex r = 0; r < g.routers.size(); ++r) {
+        const bool perimeter = g.routers[r].port.capability == EdgeCapability::INTERDOMAIN;
+        EXPECT_EQ(g.receiver(r, 0).has_value(), !perimeter) << g.routers[r].id;
+        EXPECT_TRUE(g.receiver(r, 2).has_value()) << g.routers[r].id;
+        for (ChannelIndex c : g.routers[r].channels) {
+            EXPECT_FALSE(g.channels[c].vc == 2 && g.channels[c].injection) << g.routers[r].id;
+        }
+    }
 }
 
 }  // namespace

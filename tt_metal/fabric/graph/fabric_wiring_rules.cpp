@@ -40,7 +40,14 @@ public:
     // stock skips the VC2 receiver on the inter-mesh Z router, so it gets no VC2 at all here
     bool carries(const Port& port, uint32_t vc) const override { return vc != 2 || !is_z_boundary(port); }
 
-    bool has_worker(const Port&, uint32_t vc) const override { return vc != 1; }
+    bool has_worker(const Port&, uint32_t vc) const override {
+        return vc == 0 || (vc == 2 && !options_.vc_config.vc2_forwards);
+    }
+
+    // a perimeter router's VC0 only sends, into the peer's VC2
+    bool has_receiver(const Port& port, uint32_t vc) const override {
+        return vc != 0 || port.capability != EdgeCapability::INTERDOMAIN;
+    }
 
     bool wires(const Port& in, const Port& out, uint32_t vc) const override {
         const bool vc2_forwards = vc == 2 && options_.vc_config.vc2_forwards;
