@@ -95,7 +95,11 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     auto q_shape = input_tensor_q.padded_shape();
     q_shape[2] = tt::round_up(q_shape[2], tt::constants::TILE_HEIGHT);
     const auto& q_shape_unpadded = input_tensor_q.logical_shape();
-    const auto& k_shape = input_tensor_k.padded_shape();
+    const bool unit_k_col = program_config.has_value() && program_config->unit_k_tile_col;
+    auto k_shape = input_tensor_k.padded_shape();
+    if (unit_k_col) {
+        k_shape[3] += TILE_WIDTH;  // the K tile column the reader writes (not in the tensor)
+    }
     const auto& v_shape = input_tensor_v.padded_shape();
 
     // ========== Core Dimensions ==========
@@ -996,6 +1000,10 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         // only the two-NOC flash MLA reader (read_k_chunks_pipelined) uses it
         if (two_noc_k && reuse_k) {
             reader_desc.defines.emplace_back("SDPA_DECODE_K_CONST_COL", std::to_string(col));
+        }
+        if (unit_k_col) {
+            TT_FATAL(two_noc_k && reuse_k && !use_attention_mask, "unit_k_tile_col needs the two-NOC flash MLA reader");
+            reader_desc.defines.emplace_back("SDPA_DECODE_K_UNIT_COL", "1");
         }
     }
     reader_desc.config = DataMovementConfigDescriptor{

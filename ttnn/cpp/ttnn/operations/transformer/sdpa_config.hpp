@@ -49,6 +49,9 @@ struct SDPAProgramConfig {
     // Decode with pending_kv: batch b is token pending_tok0 + b / (K batch) of the verify pass, so it sees pending rows
     // 0 .. pending_tok0 + b / (K batch). Lets a pass with more tokens than fit in one call run as several calls.
     uint32_t pending_tok0 = 0;
+    // With const_k_tile_col: that tile column is not stored. K is 32 columns narrower than Q and the reader writes
+    // the column itself, every row [1, 0 x 31]. The output is the same as with those rows stored in K.
+    bool unit_k_tile_col = false;
 };
 
 // Paired geometry for an HMA-shared paged K/V cache (chunked prefill SDPA and

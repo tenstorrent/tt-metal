@@ -412,12 +412,18 @@ void kernel_main() {
                     k_tile_bytes);
             }
         } else {
+#ifdef SDPA_DECODE_K_UNIT_COL
+            constexpr uint32_t k_mem_cols = DHt - 1;  // tile columns of the K tensor: the reader writes one itself
+#else
+            constexpr uint32_t k_mem_cols = DHt;
+#endif
             // Offset for current batch
-            const uint32_t k_batch_offset = ((cur_batch / q_heads_parallel_factor) % Bkv) * num_kv_heads * St * DHt;
-            const uint32_t k_head_offset = cur_head * St * DHt;
+            const uint32_t k_batch_offset =
+                ((cur_batch / q_heads_parallel_factor) % Bkv) * num_kv_heads * St * k_mem_cols;
+            const uint32_t k_head_offset = cur_head * St * k_mem_cols;
 
             // Then, read K, V, Mask k_chunk_tiles at a time
-            const uint32_t k_chunk_offset = k_chunk_start * Sk_chunk_t_dynamic * DHt;
+            const uint32_t k_chunk_offset = k_chunk_start * Sk_chunk_t_dynamic * k_mem_cols;
             uint32_t k_start_tile_id = k_batch_offset + k_head_offset + k_chunk_offset;
 
             // V has its own layout when it's an independent tensor (width = vDHt, not DHt)

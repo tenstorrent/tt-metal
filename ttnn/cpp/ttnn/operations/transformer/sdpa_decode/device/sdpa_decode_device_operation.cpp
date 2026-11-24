@@ -56,7 +56,13 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
 
     const auto q_shape = input_tensors.at(0).padded_shape();
     const auto q_shape_unpadded = input_tensors.at(0).logical_shape();
-    const auto k_shape = input_tensors.at(1).padded_shape();
+    auto k_shape = input_tensors.at(1).padded_shape();
+    if (operation_attributes.program_config.has_value() && operation_attributes.program_config->unit_k_tile_col) {
+        TT_FATAL(
+            use_mla && !tensor_args.v.has_value() && operation_attributes.program_config->const_k_tile_col.has_value(),
+            "unit_k_tile_col needs flash MLA decode (V read from K) and const_k_tile_col");
+        k_shape[3] += tt::constants::TILE_WIDTH;  // the column the reader writes
+    }
     const auto v_shape = input_tensors.size() > 2 ? input_tensors.at(2).padded_shape() : k_shape;
 
     // When using multi-latent attention, the V tensor is the same as K tensor, but of smaller head dimension.

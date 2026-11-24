@@ -894,6 +894,32 @@ void read_v(
 // inside a chunk. K tile column `const_col` (if < DHt) holds the same bytes for every key, so it is read only while
 // each K buffer slot is filled for the first time. Same tiles in the same L1 slots as read_kv_mask_chunks: the output
 // is unchanged.
+// SDPA_DECODE_K_UNIT_COL: the tensor does not hold column `const_col` (it is DHt - 1 tile columns wide); the reader
+// writes its tiles, every row [1, 0 x 31], where it would have read them. The L1 chunks are the same.
+#ifdef SDPA_DECODE_K_UNIT_COL
+// a tile with rows [1, 0 x 31] as the host packer writes it: bf16 (2048 bytes), bfp8 (1088) or bfp4 (576)
+FORCE_INLINE void fill_unit_col_tile(uint32_t addr, uint32_t tile_bytes) {
+    volatile tt_l1_ptr uint32_t* w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
+    for (uint32_t i = 0; i < tile_bytes / 4; ++i) {
+        w[i] = 0;
+    }
+    for (uint32_t face = 0; face < 4; face += 2) {  // the faces with tile column 0
+        if (tile_bytes == 2048) {
+            for (uint32_t r = 0; r < 16; ++r) {
+                w[face * 128 + r * 8] = 0x3f80;
+            }
+        } else {
+            const uint32_t row_words = (tile_bytes - 64) / 256;  // mantissa words per face row
+            for (uint32_t i = 0; i < 4; ++i) {
+                w[face * 4 + i] = 0x7f7f7f7f;  // exponent 127 for the 16 rows of the face
+            }
+            for (uint32_t r = 0; r < 16; ++r) {
+                w[16 + (face * 16 + r) * row_words] = row_words == 4 ? 0x40 : 0x4;
+            }
+        }
+    }
+}
+#endif
 template <uint32_t DHt, uint32_t vDHt, uint32_t cb_k_in, uint32_t cb_v_in, uint32_t const_col, typename KReaderType>
 void read_k_chunks_two_noc(
     uint32_t k_chunk_start,
@@ -982,12 +1008,27 @@ void read_k_chunks_two_noc(
         const uint32_t first[2] = {grp[0], grp[1]};
         const bool skip_const = i >= full_chunks;
         uint32_t l1 = k_base, issued = 0;
+#ifdef SDPA_DECODE_K_UNIT_COL
+        constexpr uint32_t mem_cols = DHt - 1;  // tile columns of the tensor
+#else
+        constexpr uint32_t mem_cols = DHt;
+#endif
         for (uint32_t col = 0; col < DHt; ++col) {
             if (col == const_col && skip_const) {
                 l1 += Sk_chunk_t * k_tile_bytes;
                 continue;
             }
+#ifdef SDPA_DECODE_K_UNIT_COL
+            if (col == const_col) {
+                for (uint32_t row = 0; row < Sk_chunk_t; ++row, l1 += k_tile_bytes) {
+                    fill_unit_col_tile(l1, k_tile_bytes);
+                }
+                continue;
+            }
+            uint32_t page = k_start_tile_id + (col > const_col ? col - 1 : col);
+#else
             uint32_t page = k_start_tile_id + col;
+#endif
             for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
                 const uint32_t n = row & 1;
                 if (cnt[n] == 0 && grp[n] >= WIN) {  // reuse of a trid: wait for group grp - WIN
@@ -1004,7 +1045,7 @@ void read_k_chunks_two_noc(
                     cnt[n] = 0;
                     ++grp[n];
                 }
-                page += DHt;
+                page += mem_cols;
                 l1 += k_tile_bytes;
                 if (pending && ++issued == lead) {
                     finish();
@@ -1021,7 +1062,7 @@ void read_k_chunks_two_noc(
         if (pending) {
             finish();
         }
-        k_start_tile_id += k_chunk_tiles;
+        k_start_tile_id += Sk_chunk_t * mem_cols;
         p_base = k_base;
         p_first[0] = first[0], p_first[1] = first[1];
         p_last[0] = grp[0], p_last[1] = grp[1];
