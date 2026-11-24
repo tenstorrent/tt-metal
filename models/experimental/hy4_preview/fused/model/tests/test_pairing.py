@@ -7,8 +7,9 @@
 
 For both pairings: the device's computation (a vector in the device frame, the interleaved cos / sin tables, the
 quarter-turn matrix frames.rope_swap: what tt/ and the fused kernels do) equals the reference's apply_rope carried
-into the device frame; q . k is the reference's; the default is unchanged ("half_split": the goldens recorded so
-far); under "interleaved" no row of a projection moves and the pairs are (2 i, 2 i + 1) of the checkpoint's order.
+into the device frame; q . k is the reference's; the default is "interleaved" (the checkpoint's pairing and the
+prefill stack's); under "interleaved" no row of a projection moves and the pairs are (2 i, 2 i + 1) of the
+checkpoint's order.
 """
 
 import pytest
@@ -16,6 +17,48 @@ import torch
 
 from models.experimental.hy4_preview.reference import attention as RA
 from models.experimental.hy4_preview.tt import frames
+
+
+def test_default(monkeypatch):
+    """Without HY4_ROPE_PAIRING the process runs the checkpoint's pairing; the variable still selects the other."""
+    monkeypatch.delenv(RA.ROPE_PAIRING_ENV, raising=False)
+    assert RA.rope_pairing() == "interleaved"
+    monkeypatch.setenv(RA.ROPE_PAIRING_ENV, "half_split")
+    assert RA.rope_pairing() == "half_split"
+    assert RA.rope_pairing("interleaved") == "interleaved"
+
+
+def test_golden_of_the_other_pairing_is_refused(monkeypatch, tmp_path, expect_error):
+    """Every reader of a golden file (hf_harness.load_golden) refuses one recorded under the other pairing."""
+    from models.experimental.hy4_preview.reference import hf_harness
+
+    files = {}
+    for pairing in RA.ROPE_PAIRINGS:
+        files[pairing] = tmp_path / f"{pairing}.pt"
+        torch.save({"meta": {"rope_pairing": pairing}, "input_ids": torch.arange(4)}, files[pairing])
+    old = tmp_path / "old.pt"  # a file from before the field existed: HF as it is, half-split
+    torch.save({"meta": {}, "input_ids": torch.arange(4)}, old)
+    for pairing, other in (RA.ROPE_PAIRINGS, RA.ROPE_PAIRINGS[::-1]):
+        monkeypatch.setenv(RA.ROPE_PAIRING_ENV, pairing)
+        assert hf_harness.load_golden(files[pairing])["meta"]["rope_pairing"] == pairing
+        with expect_error(AssertionError, "was recorded with RoPE pairing"):
+            hf_harness.load_golden(files[other])
+    monkeypatch.delenv(RA.ROPE_PAIRING_ENV, raising=False)
+    with expect_error(AssertionError, "was recorded with RoPE pairing"):
+        hf_harness.load_golden(old)
+
+
+def test_prefill_bridge_refuses_half_split(monkeypatch, expect_error):
+    """The prefill stack writes interleaved rows only: a half-split decode side next to it is refused before
+    anything is built (tt/prefill_bridge.py PrefillBridge.build)."""
+    from models.experimental.hy4_preview.tt import prefill_bridge as PB
+
+    class Mesh:
+        shape = PB.MESH
+
+    monkeypatch.setenv(RA.ROPE_PAIRING_ENV, "half_split")
+    with expect_error(AssertionError, "the prefill stack writes interleaved rows"):
+        PB.PrefillBridge(Mesh()).build()
 
 
 @pytest.mark.parametrize("pairing", RA.ROPE_PAIRINGS)

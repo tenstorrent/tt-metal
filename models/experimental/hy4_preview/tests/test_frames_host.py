@@ -13,7 +13,14 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from models.experimental.hy4_preview.reference.attention import AttentionConfig, Hy4Attention, rms_norm, rope_cos_sin
+from models.experimental.hy4_preview.reference.attention import (
+    ROPE_PAIRING_ENV,
+    ROPE_PAIRINGS,
+    AttentionConfig,
+    Hy4Attention,
+    rms_norm,
+    rope_cos_sin,
+)
 from models.experimental.hy4_preview.reference.indexer import Hy4Indexer, IndexerConfig
 from models.experimental.hy4_preview.tt import frames
 
@@ -40,24 +47,34 @@ def _interleaved_rope(x, cos, sin):
     return x * cos + (x @ frames.rope_swap(x.shape[-1])) * sin
 
 
-def test_perms_and_constants():
-    assert frames.interleave_perm(8).tolist() == [0, 4, 1, 5, 2, 6, 3, 7]
-    # [pass 4 | rope 4] -> [rope interleaved | pass]
-    assert frames.index_key_perm(8, 4).tolist() == [4, 6, 5, 7, 0, 1, 2, 3]
+@pytest.mark.parametrize("pairing", ROPE_PAIRINGS)
+def test_perms_and_constants(pairing, monkeypatch):
+    monkeypatch.setenv(ROPE_PAIRING_ENV, pairing)
+    v = torch.randn(3, 8)
+    if pairing == "half_split":
+        # the reference pairs (i, i + 4): the device order brings a pair's two dims together
+        assert frames.interleave_perm(8).tolist() == [0, 4, 1, 5, 2, 6, 3, 7]
+        # [pass 4 | rope 4] -> [rope interleaved | pass]
+        assert frames.index_key_perm(8, 4).tolist() == [4, 6, 5, 7, 0, 1, 2, 3]
+        rotated = torch.cat([-v[:, 4:], v[:, :4]], dim=-1)
+    else:
+        # the reference pairs (2 i, 2 i + 1) already: the device order is the reference's
+        assert frames.interleave_perm(8).tolist() == list(range(8))
+        # [pass 4 | rope 4] -> [rope | pass]
+        assert frames.index_key_perm(8, 4).tolist() == [4, 5, 6, 7, 0, 1, 2, 3]
+        rotated = torch.stack([-v[:, 1::2], v[:, 0::2]], dim=-1).flatten(-2)
     x = torch.arange(1.0, 9.0)
     assert (x @ frames.rope_swap(8)).tolist() == [-2, 1, -4, 3, -6, 5, -8, 7]
     h = frames.hadamard(128)
     assert torch.equal(h, h.to(torch.bfloat16).float()), "the entries are bf16 values"
     assert torch.allclose(h @ h.T, torch.eye(128), atol=2e-3), "orthonormal up to the bf16 rounding of 128^-0.5"
-    v = torch.randn(3, 8)
     # the *_from_device maps are the inverses
     latent, key = torch.randn(5, 40), torch.randn(5, 3, 128)
     assert torch.equal(frames.rope_from_device(frames.rope_to_device(v)), v)
     assert torch.equal(frames.tail_from_device(frames.tail_to_device(latent, 8), 8), latent)
     assert torch.allclose(frames.index_from_device(frames.index_to_device(key, 64), 64), key, atol=1e-5)
-    # the swap is the half-split rotation in the interleaved order
-    half = torch.cat([-v[:, 4:], v[:, :4]], dim=-1)
-    assert torch.equal(frames.rope_to_device(v) @ frames.rope_swap(8), frames.rope_to_device(half))
+    # the swap is the reference's quarter turn of every pair, in the device order, whatever the pairing
+    assert torch.equal(frames.rope_to_device(v) @ frames.rope_swap(8), frames.rope_to_device(rotated))
 
 
 @pytest.mark.parametrize("name", list(ATTENTION))

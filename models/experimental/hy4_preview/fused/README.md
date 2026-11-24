@@ -74,7 +74,7 @@ scalar goes when the prefill pack rounds.
 rotates interleaved pairs `(2i, 2i+1)`, and the checkpoint's row norms pair up that way. With the half-split
 pairing the reference fails simple probes beyond a few dozen tokens of context; with the interleaved one it passes
 them at 2,500 tokens. `HY4_ROPE_PAIRING=half_split|interleaved` selects it in `reference/attention.py` and
-`tt/frames.py` (default `half_split`, the behaviour before this change); `reference/hf_harness.py` applies the same
+`tt/frames.py` (default `interleaved`; `half_split` reads the goldens recorded before); `reference/hf_harness.py` applies the same
 switch to the HF model and records the pairing in a golden's metadata.
 Both on-disk weight caches carry the pairing in their path (`tt/model.py` `WeightCache`, the projections' stream
 cache), so a cache of one pairing is never loaded under the other. The default becomes `interleaved` in the same

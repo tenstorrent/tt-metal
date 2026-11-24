@@ -156,6 +156,7 @@ from dataclasses import dataclass, field
 
 import torch
 
+from models.experimental.hy4_preview.reference.attention import ROPE_PAIRING_ENV, rope_pairing
 from models.experimental.hy4_preview.tt.kv_cache import INDEX_KEY, LATENT
 from models.experimental.hy4_preview.tt.kv_layout import BlockCyclicLayout
 
@@ -375,9 +376,16 @@ class PrefillBridge:
         import ttnn
         from models.demos.common.prefill.adapter import PrefillRunParams, get_adapter
         from models.demos.deepseek_v3_d_p.tt.hy4 import layout as hy4_layout
+        from models.demos.deepseek_v3_d_p.tt.runners import hy4_checkpoint
         from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
 
         assert self.runtime is None, "already built"
+        # The stack writes its rows in one pairing and has no switch; a decode side of the other pairing would read
+        # them in another frame (wrong rope dims, another index-key order) and nothing downstream would raise.
+        assert rope_pairing() == hy4_checkpoint.HY4_ROPE_PAIRING, (
+            f"the prefill stack writes {hy4_checkpoint.HY4_ROPE_PAIRING} rows; this process runs "
+            f"{ROPE_PAIRING_ENV}={rope_pairing()!r}, which only reads goldens recorded before 2026-11-20"
+        )
         os.environ.setdefault(hy4_layout.LAYOUT_ENV, PREFILL_LAYOUT)
         os.environ.setdefault("PREFILL_TTNN_CACHE", self.weight_cache or DEFAULT_WEIGHT_CACHE)
         os.environ["PREFILL_MAX_SEQ_LEN"] = str(self.max_seq_len)

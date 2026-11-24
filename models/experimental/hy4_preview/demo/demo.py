@@ -103,7 +103,7 @@ def _against_hf(num_layers: int, ids: torch.Tensor, steps: int, generated: torch
     if not path.is_file():
         logger.warning(f"no HF generation recorded for this prompt at {num_layers} layers ({path}): not compared")
         return None
-    golden = torch.load(path, weights_only=False)
+    golden = hf_harness.load_golden(path)
     assert torch.equal(golden["input_ids"][: ids.numel()], ids), f"{path} was recorded for another prompt"
     hf_tokens = golden["input_ids"][ids.numel() : ids.numel() + steps]
     same = generated == hf_tokens

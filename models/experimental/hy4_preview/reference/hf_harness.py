@@ -62,7 +62,8 @@ import torch
 from models.experimental.hy4_preview.reference.attention import ROPE_PAIRING_ENV, rope_pairing
 from models.experimental.hy4_preview.reference.decoder import STAGES
 
-GOLDEN_ROOT = Path(os.environ.get("HY4_GOLDEN_DIR", "generated/hy4_preview/golden"))
+# (the goldens of the default RoPE pairing, "interleaved"; the half-split ones recorded before are another directory)
+GOLDEN_ROOT = Path(os.environ.get("HY4_GOLDEN_DIR", "generated/hy4_preview/golden_interleaved"))
 HY4_HF_MODEL_ENV = "HY4_HF_MODEL"
 
 # The default prompt: a little over 128 tokens through the chat template, cut to the first 128.
@@ -284,6 +285,12 @@ def _check_pairing(golden: dict, file) -> dict:
     return golden
 
 
+def load_golden(path) -> dict:
+    """A recorded golden by its path, refused when it was recorded under the other RoPE pairing. Every reader of a
+    golden file goes through here: a golden of the other pairing compared anyway reads as a model regression."""
+    return _check_pairing(torch.load(path, weights_only=False), path)
+
+
 def load_truncated_model(
     path=None, num_layers: int = DEFAULT_NUM_LAYERS, dtype=torch.bfloat16, pairing: str | None = None
 ):
@@ -358,7 +365,7 @@ def record_golden(
     input_ids = tokenize(prompt, path, seq_len)
     target = golden_path(num_layers, input_ids, dtype, root)
     if target.is_file() and not recompute:
-        return _check_pairing(torch.load(target, weights_only=False), target)
+        return load_golden(target)
 
     model = load_truncated_model(path, num_layers, dtype)
     golden = record_model(model, input_ids=input_ids)
@@ -390,7 +397,7 @@ def find_golden(num_layers: int = DEFAULT_NUM_LAYERS, seq_len: int = DEFAULT_SEQ
     found = sorted(Path(root or GOLDEN_ROOT).glob(pattern), key=lambda p: p.stat().st_mtime)
     if not found:
         return None
-    golden = _check_pairing(torch.load(found[-1], weights_only=False), found[-1])
+    golden = load_golden(found[-1])
     golden["meta"]["file"] = str(found[-1])
     return golden
 
@@ -417,7 +424,7 @@ def find_decode_golden(num_layers: int, prompt_len: int, steps: int | None = Non
     found = sorted(Path(root or GOLDEN_ROOT).glob(pattern), key=lambda p: p.stat().st_mtime)
     if not found:
         return None
-    golden = _check_pairing(torch.load(found[-1], weights_only=False), found[-1])
+    golden = load_golden(found[-1])
     golden["meta"]["file"] = str(found[-1])
     return golden
 
@@ -467,7 +474,7 @@ def record_decode_golden(
     assert steps >= 1 and N >= 2, (steps, N)
     target = decode_golden_path(num_layers, N, steps, prompt_ids, dtype, root)
     if target.is_file() and not recompute:
-        return _check_pairing(torch.load(target, weights_only=False), target)
+        return load_golden(target)
 
     t0 = time.perf_counter()
     model = load_truncated_model(path, num_layers, dtype)

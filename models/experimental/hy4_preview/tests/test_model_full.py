@@ -701,7 +701,7 @@ def _generation_golden(layers, ids, steps):
     path = hf_harness.decode_golden_path(layers, ids.numel(), steps, ids)
     if not path.is_file():
         return None
-    golden = torch.load(path, weights_only=False)
+    golden = hf_harness.load_golden(path)
     assert torch.equal(golden["input_ids"][: ids.numel()], ids), f"{path} was recorded for another prompt"
     return golden
 

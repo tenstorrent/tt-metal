@@ -156,13 +156,12 @@ def test_pool_mix(mesh_device, monkeypatch):
     from models.experimental.hy4_preview.reference.attention import rope_pairing
 
     label = f"pool mix, {n} layers, contexts {MIX}, pool of {POOL_FRAMES} frames, workbench {MAX_SEQ} tokens"
-    # the prefill stack writes rows with HF's half-split pairing: this run is the OLD reference end to end (goldens,
-    # weights' row order, RoPE tiles): a regression and a test of the mechanics, not accuracy
-    if rope_pairing() != "half_split":
-        pytest.skip("the prefill stack's rows are half-split: this test runs without HY4_ROPE_PAIRING")
+    # the rows are the prefill stack's, and it writes them with the checkpoint's interleaved pairing (since its
+    # change of 2026-11-23; before, half-split): the process's pairing has to be the stack's
+    if rope_pairing() != "interleaved":
+        pytest.skip("the prefill stack's rows are interleaved: this test runs without HY4_ROPE_PAIRING=half_split")
     logger.info(
-        f"HY4_MK11 {label}: stage {STAGE}; RoPE pairing {rope_pairing()} (the prefill stack's; goldens under {hf_harness.GOLDEN_ROOT}: "
-        f"the OLD reference, so 'against its golden' below is a regression figure)"
+        f"HY4_MK11 {label}: stage {STAGE}; RoPE pairing {rope_pairing()} (the prefill stack's; goldens under {hf_harness.GOLDEN_ROOT})"
     )
     marks = {}
     mark = CX.marker(mesh, marks)
