@@ -54,27 +54,35 @@ class _BodyStop(BaseException):
     pass
 
 
-# Shared comparison helpers. A dry body reads no real data from the device, so a check on device data says nothing; these
-# report a pass, which lets the body go on to the programs after the check and skips the cost of a failure message.
-_PASS_CHECKS = {
+# Shared comparison helpers, by name prefix. A dry body reads no real data from the device, so a check on device data
+# says nothing, and what follows the first check is mostly more reading and checking: the body ends there.
+_STOP_AT_CHECKS = {
     "tt_py_test_utils_common.comparison_funcs": "comp_",
     "tt_py_test_utils_common.utils_for_testing": "assert_ comp_ check_",
 }
+# Random test data, and what a dry body gets instead: memory that is allocated but never written. The data is not sent
+# to a device, and filling large tensors is a large part of a body's host work.
+_UNFILLED = {"rand": "empty", "randn": "empty", "rand_like": "empty_like", "randn_like": "empty_like"}
 
 
 def _stop(*args, **kwargs):
     raise _BodyStop()
 
 
-def _passed(*args, **kwargs):
-    return True, 1.0
+def _unfilled(empty):
+    def stand_in(*args, generator=None, **kwargs):
+        return empty(*args, **kwargs)
+
+    return stand_in
 
 
 def _stand_ins():
-    """{id(real function): stand-in} for the calls that end a dry body and the checks that pass in one."""
+    """{id(real function): stand-in} for the calls that end a dry body and for random test data."""
     import importlib
 
-    stand_ins = {}
+    import torch
+
+    stand_ins = {id(getattr(torch, name)): _unfilled(getattr(torch, empty)) for name, empty in _UNFILLED.items()}
     for module_name, names in _STOP_AT.items():
         try:
             module = importlib.import_module(module_name)
@@ -83,14 +91,14 @@ def _stand_ins():
         for name in names.split():
             if hasattr(module, name):
                 stand_ins[id(getattr(module, name))] = _stop
-    for module_name, prefixes in _PASS_CHECKS.items():
+    for module_name, prefixes in _STOP_AT_CHECKS.items():
         try:
             module = importlib.import_module(module_name)
         except ImportError:
             continue
         for name, value in vars(module).items():
             if name.startswith(tuple(prefixes.split())) and getattr(value, "__module__", "") == module.__name__:
-                stand_ins[id(value)] = _passed
+                stand_ins[id(value)] = _stop
     return stand_ins
 
 
