@@ -24,6 +24,7 @@ from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
 from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import (
     assert_exact,
     block_shards,
+    contiguous_1d_shards,
     full_range_input,
 )
 import ttnn
@@ -2437,3 +2438,20 @@ def test_pad_rm_from_block_shard_rows(device, shard_h, rows, shard_cols, dtype):
     output = ttnn.pad(t, padding=((0, 0), (0, 0), (0, 2), (0, 0)), value=7.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     assert_exact(torch.nn.functional.pad(x, (0, 0, 0, 2), value=7.0), ttnn.to_torch(output))
+
+
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+@pytest.mark.parametrize("sharded_input", [False, True], ids=["nd_output", "nd_input"])
+def test_pad_rm_folded_nd_shard_rows(device, dtype, sharded_input):
+    # [1, 1, 1, 16] ND shards of 64-wide rows fold the same way as a one-row BLOCK shard.
+    config = contiguous_1d_shards([1, 1, 1, 16], num_cores=4)
+    input_config = config if sharded_input else ttnn.DRAM_MEMORY_CONFIG
+    output_config = ttnn.DRAM_MEMORY_CONFIG if sharded_input else config
+    x = full_range_input([1, 1, 16 if sharded_input else 15, 64], dtype)
+    t = ttnn.from_torch(x, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=input_config)
+    rows = 2 if sharded_input else 1
+
+    output = ttnn.pad(t, padding=((0, 0), (0, 0), (0, rows), (0, 0)), value=7.0, memory_config=output_config)
+
+    assert output.memory_config() == output_config, "pad changed the requested output configuration"
+    assert_exact(torch.nn.functional.pad(x, (0, 0, 0, rows), value=7.0), ttnn.to_torch(output))

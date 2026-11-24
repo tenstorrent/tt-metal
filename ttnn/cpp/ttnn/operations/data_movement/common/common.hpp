@@ -542,7 +542,9 @@ Tensor launch_through_interleaved(
     const Tensor& input,
     const tt::tt_metal::TensorSpec& output_spec,
     const std::optional<Tensor>& preallocated_output,
-    const ShardRowLaunch& launch);
+    const ShardRowLaunch& launch,
+    bool stage_input,
+    bool stage_output);
 
 }  // namespace detail
 
@@ -582,8 +584,11 @@ Tensor launch_with_aligned_shard_rows(
         // Some operations' compute_output_specs ignore a preallocated output, which is what they write to.
         const tt::tt_metal::TensorSpec output_spec =
             preallocated_output.has_value() ? preallocated_output->tensor_spec() : compute_output_spec();
-        if (needs_interleaved_row_staging(input.tensor_spec()) || needs_interleaved_row_staging(output_spec)) {
-            return detail::launch_through_interleaved(input, output_spec, preallocated_output, launch);
+        const bool stage_input = needs_interleaved_row_staging(input.tensor_spec());
+        const bool stage_output = needs_interleaved_row_staging(output_spec);
+        if (stage_input || stage_output) {
+            return detail::launch_through_interleaved(
+                input, output_spec, preallocated_output, launch, stage_input, stage_output);
         }
     }
     // Skipping the output-spec check when neither config may split rows relies on no operation deriving a WIDTH,
