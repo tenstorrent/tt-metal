@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "api/compute/experimental/2_0/internal/no_call_site_macros.h"
+
 #include "api/compute/common.h"                        // ALWI, UNPACK/MATH/PACK, DST_ACCUM_MODE, PackMode
 #include "api/compute/src_order.h"                     // SrcOrder
 #include "api/compute/experimental/2_0/llk_operand.h"  // LLKOperand

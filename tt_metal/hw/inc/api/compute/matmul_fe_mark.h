@@ -114,7 +114,6 @@ constexpr bool is_used_dl(...) {
 #else
 #define MATMUL_FE_ONE_TILE_KT1(ct, rt, kt) 0
 #endif
-#define FAST_TILIZE_MARK() sizeof(::ckernel::matmul_fe_mark::set<3>)
 // 0, completing tag 8 for a plain call whose ct and rt are constant expressions and tag 7 otherwise; the dims pass by value, so
 // the test takes no address of them (a reference moved the register allocation of run-time-dim kernels), and through matmul_fe_cb,
 // so a run-time dim the optimizer folds still reads as run time
