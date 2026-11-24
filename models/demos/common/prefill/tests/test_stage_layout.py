@@ -11,6 +11,7 @@ from models.demos.common.prefill.runners.stage_layout import (
     StageLayout,
     chip_host_tag,
     collapse_to_stages,
+    has_multi_host_stage,
     single_peer,
 )
 
@@ -34,6 +35,19 @@ def test_env_describes_ranks_mesh_major_host_minor():
     assert [(layout.stage_of(r), layout.host_rank_of(r)) for r in range(4)] == [(0, 0), (1, 0), (1, 1), (2, 0)]
     assert layout.leader_ranks() == [0, 1, 3]
     assert list(layout.ranks_of(1)) == [1, 2]
+
+
+@pytest.mark.parametrize(
+    "value, expected", [(None, False), ("", False), ("1,1,1", False), ("1,2,1", True), (" 2 ", True)]
+)
+def test_has_multi_host_stage(value, expected):
+    environ = {} if value is None else {"PREFILL_STAGE_HOSTS": value}
+    assert has_multi_host_stage(environ) is expected
+
+
+def test_has_multi_host_stage_rejects_a_stage_without_hosts(expect_error):
+    with expect_error(ValueError, "at least one host"):
+        has_multi_host_stage({"PREFILL_STAGE_HOSTS": "1,0"})
 
 
 def test_sc4_carve_is_eight_stages_over_twelve_ranks():

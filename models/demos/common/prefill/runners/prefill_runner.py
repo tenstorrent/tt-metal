@@ -63,7 +63,7 @@ from models.demos.common.prefill.runners.runner_utils import (
     open_mesh_device,
     stage_mesh_shape,
 )
-from models.demos.common.prefill.runners.stage_layout import StageLayout, single_peer
+from models.demos.common.prefill.runners.stage_layout import StageLayout, has_multi_host_stage, single_peer
 from models.demos.deepseek_v3_d_p.tt.mla.utils import mtp_lookahead_positions
 from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_fabric_payload_size
 from models.demos.deepseek_v3_d_p.utils.chunk_config import prefill_chunk_tokens
@@ -123,7 +123,7 @@ TP_AXIS = 1 - SP_AXIS
 GLOBAL_MESH_SHAPE = stage_mesh_shape(_sp, _tp, SP_AXIS)
 # A [RING,RING] seam stage's mesh spans two hosts: this process drives only its host's row block, so host reads of a
 # replicated tensor start at the first shard of that block (shards are listed row-major).
-_MULTI_HOST_STAGE = any(int(h) > 1 for h in os.environ.get("PREFILL_STAGE_HOSTS", "").split(",") if h.strip())
+_MULTI_HOST_STAGE = has_multi_host_stage()
 _LOCAL_FIRST_SHARD = None  # resolved on first use, once the distributed context is up
 
 

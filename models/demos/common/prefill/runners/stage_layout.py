@@ -21,6 +21,18 @@ from dataclasses import dataclass
 STAGE_HOSTS_ENV = "PREFILL_STAGE_HOSTS"
 
 
+def parse_stage_hosts(raw: str) -> tuple:
+    """The host counts listed in a ``PREFILL_STAGE_HOSTS`` value ("1,2,1"), validated as a ``StageLayout`` is."""
+    return StageLayout(tuple(int(field) for field in raw.split(","))).hosts_per_stage
+
+
+def has_multi_host_stage(environ=None) -> bool:
+    """Whether ``PREFILL_STAGE_HOSTS`` makes any stage span more than one host. Needs no rank count, so it can
+    be evaluated at import time."""
+    raw = (os.environ if environ is None else environ).get(STAGE_HOSTS_ENV, "").strip()
+    return bool(raw) and not StageLayout(parse_stage_hosts(raw)).is_single_host
+
+
 @dataclass(frozen=True)
 class BoundaryPair:
     """One D2D service across a stage boundary: ``sender_rank`` and ``receiver_rank`` connect the mesh
@@ -51,7 +63,7 @@ class StageLayout:
         raw = (os.environ if environ is None else environ).get(STAGE_HOSTS_ENV, "").strip()
         if not raw:
             return cls.single_host(num_ranks)
-        layout = cls(tuple(int(field) for field in raw.split(",")))
+        layout = cls(parse_stage_hosts(raw))
         if layout.num_ranks != num_ranks:
             raise ValueError(
                 f"{STAGE_HOSTS_ENV}={raw!r} describes {layout.num_ranks} ranks but the run has {num_ranks}"

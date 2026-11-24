@@ -53,7 +53,7 @@ from models.demos.common.prefill.runners.runner_utils import (
     num_mtp_tokens,
     resolve_trace_dir,
 )
-from models.demos.common.prefill.runners.stage_layout import host_name_of_tag
+from models.demos.common.prefill.runners.stage_layout import has_multi_host_stage, host_name_of_tag
 from models.demos.deepseek_v3_d_p.tt.mla.utils import mtp_lookahead_positions
 from models.demos.deepseek_v3_d_p.utils.chunk_config import prefill_chunk_tokens
 
@@ -841,7 +841,7 @@ def _has_index_config(table) -> bool:
 # A [RING,RING] seam stage spans two hosts, so each layer's KV lies on chips of both: a validator reads the chunks
 # on its own host's chips and scores those positions (the other host's validator scores the rest). The table records
 # the host of every chip (``chip_host_tags``, see stage_layout.collapse_to_stages), which says whose chip it is.
-_MULTI_HOST_STAGES = any(int(h) > 1 for h in os.environ.get("PREFILL_STAGE_HOSTS", "").split(",") if h.strip())
+_MULTI_HOST_STAGES = has_multi_host_stage()
 
 
 def _local_host_name(multi_host_stages: bool):
