@@ -68,7 +68,7 @@ void kernel_main() {
     constexpr uint32_t ksplit_count = get_named_compile_time_arg_val("ksplit_count");
     constexpr bool ksplit_enabled = ksplit_count > 1;
     static_assert(ksplit_count <= ring_joint::kKSplitMaxCount);
-    const bool ksplit_active = ksplit_enabled && global_q_end - global_q_start == 1;
+    [[maybe_unused]] const bool ksplit_active = ksplit_enabled && global_q_end - global_q_start == 1;
     [[maybe_unused]] const uint32_t ksplit_band = ksplit_enabled ? get_arg_val<uint32_t>(argidx) : 0;
     [[maybe_unused]] const uint32_t ksplit_peer_args = argidx + 1;
 
