@@ -31,6 +31,11 @@ def _root(root) -> Path:
 
 def manifest(root: Path | str | None = DEFAULT_ROOT) -> dict:
     root = _root(root)
+    if not (root / "manifest.json").is_file():
+        raise FileNotFoundError(
+            f"{root}: no weight cache here. Set INKLING_CACHE_DIR to the directory that holds the run modes' caches "
+            f"(now {modes.CACHE_DIR}), or INKLING_CACHE / INKLING_TILE_CACHE to one cache"
+        )
     m = json.loads((root / "manifest.json").read_text())
     if m.get("schema") != 1:
         raise ValueError(f"{root}: manifest schema {m.get('schema')} != 1")
