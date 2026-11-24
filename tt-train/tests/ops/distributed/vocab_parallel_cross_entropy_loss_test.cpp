@@ -136,13 +136,13 @@ xt::xarray<float> cross_entropy_grad_reference_per_position(
 
 }  // namespace
 
-class ShardedCrossEntropyLossTest : public ttml::test_utils::Mesh1x2Fixture {
+class Mesh1x2ShardedCrossEntropyLossTest : public ttml::test_utils::Mesh1x2Fixture {
 protected:
-    ShardedCrossEntropyLossTest() : Mesh1x2Fixture(/*seed=*/42) {
+    Mesh1x2ShardedCrossEntropyLossTest() : Mesh1x2Fixture(/*seed=*/42) {
     }
 };
 
-TEST_F(ShardedCrossEntropyLossTest, ForwardSmall) {
+TEST_F(Mesh1x2ShardedCrossEntropyLossTest, ForwardSmall) {
     SKIP_FOR_WATCHER();
 
     using namespace ttml;
@@ -182,7 +182,7 @@ TEST_F(ShardedCrossEntropyLossTest, ForwardSmall) {
     EXPECT_NEAR(loss_xt[1](0, 0, 0, 0), expected_loss, 5e-2F);
 }
 
-TEST_F(ShardedCrossEntropyLossTest, BackwardSmall) {
+TEST_F(Mesh1x2ShardedCrossEntropyLossTest, BackwardSmall) {
     SKIP_FOR_WATCHER();
 
     using namespace ttml;
@@ -233,7 +233,7 @@ TEST_F(ShardedCrossEntropyLossTest, BackwardSmall) {
     EXPECT_TRUE(xt::allclose(grad_xtensors[1], expected_shard1, 3e-2F, 1e-2F));
 }
 
-TEST_F(ShardedCrossEntropyLossTest, BackwardBatch) {
+TEST_F(Mesh1x2ShardedCrossEntropyLossTest, BackwardBatch) {
     SKIP_FOR_WATCHER();
 
     using namespace ttml;
@@ -293,7 +293,7 @@ TEST_F(ShardedCrossEntropyLossTest, BackwardBatch) {
     EXPECT_TRUE(xt::allclose(grad_xtensors[1], expected_shard1, 3e-2F, 1e-2F));
 }
 
-TEST_F(ShardedCrossEntropyLossTest, BackwardTargetOnSecondShard) {
+TEST_F(Mesh1x2ShardedCrossEntropyLossTest, BackwardTargetOnSecondShard) {
     SKIP_FOR_WATCHER();
 
     using namespace ttml;
@@ -346,7 +346,7 @@ TEST_F(ShardedCrossEntropyLossTest, BackwardTargetOnSecondShard) {
     EXPECT_TRUE(xt::allclose(grad_xtensors[1], expected_shard1, 3e-2F, 1e-2F));
 }
 
-TEST_F(ShardedCrossEntropyLossTest, NonShardedBackwardMatchesReference) {
+TEST_F(Mesh1x2ShardedCrossEntropyLossTest, NonShardedBackwardMatchesReference) {
     SKIP_FOR_WATCHER();
 
     using namespace ttml;
@@ -400,7 +400,7 @@ TEST_F(ShardedCrossEntropyLossTest, NonShardedBackwardMatchesReference) {
     EXPECT_TRUE(xt::allclose(grad_xtensors[0], expected_grad, 3e-2F, 1e-2F));
 }
 
-TEST_F(ShardedCrossEntropyLossTest, MatchesNonShardedImplementation) {
+TEST_F(Mesh1x2ShardedCrossEntropyLossTest, MatchesNonShardedImplementation) {
     SKIP_FOR_WATCHER();
 
     using namespace ttml;
@@ -489,7 +489,7 @@ TEST_F(ShardedCrossEntropyLossTest, MatchesNonShardedImplementation) {
 // {select,subtract}_at_target's create_mesh_workload (the implicit-nullopt tests above
 // hit the per-coord branch on this 1x2 mesh because every coord has a distinct flat
 // tp_rank).  cluster_axis=1 also matches the production call site in nano_gpt.
-TEST_F(ShardedCrossEntropyLossTest, MatchesNonShardedImplementationExplicitClusterAxis) {
+TEST_F(Mesh1x2ShardedCrossEntropyLossTest, MatchesNonShardedImplementationExplicitClusterAxis) {
     SKIP_FOR_WATCHER();
 
     using namespace ttml;
@@ -586,7 +586,7 @@ TEST_F(ShardedCrossEntropyLossTest, MatchesNonShardedImplementationExplicitClust
 // ReduceType::NONE forward: the op should return [B,1,S,1] with the same
 // per-position log_normalizer − target_logit value the SFT trainer's masked
 // cross-entropy path consumes when it calls cross_entropy_loss(NONE).
-TEST_F(ShardedCrossEntropyLossTest, ForwardNoneReductionMatchesPerPosition) {
+TEST_F(Mesh1x2ShardedCrossEntropyLossTest, ForwardNoneReductionMatchesPerPosition) {
     SKIP_FOR_WATCHER();
 
     using namespace ttml;
@@ -638,7 +638,7 @@ TEST_F(ShardedCrossEntropyLossTest, ForwardNoneReductionMatchesPerPosition) {
 // the resulting logits gradient should match (softmax − onehot) * grad
 // elementwise — i.e. no implicit 1/N, and the per-position weighting
 // broadcasts across the local vocab shard.
-TEST_F(ShardedCrossEntropyLossTest, BackwardNoneReductionAppliesPerPositionGrad) {
+TEST_F(Mesh1x2ShardedCrossEntropyLossTest, BackwardNoneReductionAppliesPerPositionGrad) {
     SKIP_FOR_WATCHER();
 
     using namespace ttml;
@@ -709,7 +709,7 @@ TEST_F(ShardedCrossEntropyLossTest, BackwardNoneReductionAppliesPerPositionGrad)
 // NONE-mode per-position output and dividing by N must match the MEAN-mode
 // scalar to within bf16 noise.  Catches accidental rescaling drift in either
 // branch.
-TEST_F(ShardedCrossEntropyLossTest, NoneReductionSummedMatchesMean) {
+TEST_F(Mesh1x2ShardedCrossEntropyLossTest, NoneReductionSummedMatchesMean) {
     SKIP_FOR_WATCHER();
 
     using namespace ttml;

@@ -34,6 +34,7 @@ GSM8K_QUESTION = (
 )
 
 
+@pytest.mark.multi_device
 @pytest.mark.timeout(0)
 def test_16_greedy_completions_are_identical():
     import ttnn

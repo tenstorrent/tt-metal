@@ -230,9 +230,9 @@ void expect_unchanged(const DeviceOutputs& actual, const DeviceOutputs& expected
 
 }  // namespace
 
-class MoeEpMeshTest : public ttml::test_utils::Mesh1x2SuiteFixture {};
+class Mesh1x2MoeEpTest : public ttml::test_utils::Mesh1x2SuiteFixture {};
 
-TEST_F(MoeEpMeshTest, GroupUngroupCacheHitFreshTensors) {
+TEST_F(Mesh1x2MoeEpTest, GroupUngroupCacheHitFreshTensors) {
     auto& device = ttml::autograd::ctx().get_device();
     const uint32_t S = many_cores_s();
 

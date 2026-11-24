@@ -38,6 +38,7 @@ PROMPT_LEN = 8
 MAX_NEW_TOKENS = 2
 
 
+@pytest.mark.multi_device
 @pytest.mark.timeout(0)
 def test_traced_generate_does_not_fatal_on_first_call():
     import ttnn
