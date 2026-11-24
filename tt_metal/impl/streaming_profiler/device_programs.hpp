@@ -56,6 +56,7 @@ CoreCoords locate_core(tt::Cluster& cluster, uint32_t chip, const CoreCoord& log
 
 void zero_l1(tt::Cluster& cluster, uint32_t chip, const CoreCoord& virt, uint64_t addr, uint32_t bytes);
 void zero_profiler_control(tt::Cluster& cluster, uint32_t chip, const CoreCoord& virt, uint64_t addr);
+void reset_profiler_control(tt::Cluster& cluster, uint32_t chip, const CoreCoord& virt, uint64_t addr);
 
 // Compiles the program, then launches it without waiting for it. It compiles first because launching onto an idle eth
 // core that holds no valid binary wedges the core and can take the host down.

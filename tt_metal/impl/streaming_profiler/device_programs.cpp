@@ -155,6 +155,25 @@ void zero_profiler_control(tt::Cluster& cluster, uint32_t chip, const CoreCoord&
     zero_l1(cluster, chip, virt, addr, kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
 }
 
+// Clears a producer's control block for a new capture, except its ring tails, and sets each head to its tail. A
+// producer keeps its write position in firmware memory across launches and only rewinds it to the tail on an idle
+// launch, so zeroing a tail it has already published (device init runs the tile clock program on every core, and its
+// wrapper zone leaves BRISC's tail at 5) left the producer ahead of it: unless an idle launch came between this reset
+// and the workload, the workload's first publish took the tail straight past the old records and the capture
+// delivered them. With head = tail, everything published before the capture is behind the head.
+void reset_profiler_control(tt::Cluster& cluster, uint32_t chip, const CoreCoord& virt, uint64_t addr) {
+    constexpr uint32_t kWords = kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE / sizeof(uint32_t);
+    std::vector<uint32_t> block(kWords);
+    cluster.read_core(block.data(), kWords * sizeof(uint32_t), tt_cxy_pair(chip, virt), addr);
+    std::vector<uint32_t> reset(kWords, 0);
+    for (uint32_t r = 0; r < kernel_profiler::PROFILER_SPSC_MAX_RISC; r++) {
+        const uint32_t tail = block[kernel_profiler::SPSC_RING_TAIL_0 + r];
+        reset[kernel_profiler::SPSC_RING_TAIL_0 + r] = tail;
+        reset[kernel_profiler::SPSC_RING_HEAD_0 + r] = tail;
+    }
+    cluster.write_core(reset.data(), kWords * sizeof(uint32_t), tt_cxy_pair(chip, virt), addr);
+}
+
 void launch_resident(IDevice* device, Program& program) {
     compile_resident(device, program);
     slow_dispatch::LaunchProgramAsync(*device, program, /*force_slow_dispatch=*/true);
@@ -410,7 +429,7 @@ void DevicePrograms::enumerate_worker_grid(DeviceCtx& ctx) {
                 locate_core(cluster, chip, CoreCoord{lx, ly}, CoreType::WORKER),
                 CoreType::WORKER,
                 control_vector_l1_);
-            zero_profiler_control(cluster, chip, producer.virt, producer.control_vector_l1);
+            reset_profiler_control(cluster, chip, producer.virt, producer.control_vector_l1);
         }
     }
     ctx.worker_count = static_cast<uint32_t>(ctx.producers.size());
@@ -627,7 +646,7 @@ void DevicePrograms::enumerate_eth_cores(DeviceCtx& ctx) {
     const uint64_t idle_eth_control_vector_l1 =
         hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::PROFILER);
     const Producer& wall_clock = add_producer(ctx, ctx.wall_clock.core, CoreType::ETH, idle_eth_control_vector_l1);
-    zero_profiler_control(cluster, chip, wall_clock.virt, wall_clock.control_vector_l1);
+    reset_profiler_control(cluster, chip, wall_clock.virt, wall_clock.control_vector_l1);
     const auto nearest = [&](const CoreCoord& target) -> std::optional<CoreCoords> {
         auto others = idle_eth | std::views::drop(1) |
                       std::views::filter([&](const CoreCoords& other) { return other.phys != target; });
@@ -655,13 +674,13 @@ void DevicePrograms::enumerate_eth_cores(DeviceCtx& ctx) {
             ctx, locate_core(cluster, chip, logical, CoreType::ETH), CoreType::ETH, active_eth_control_vector_l1);
         // When the fabric routers run, one is already writing into this ring, so its control block is left alone.
         if (!fabric_link_sync_) {
-            zero_profiler_control(cluster, chip, producer.virt, producer.control_vector_l1);
+            reset_profiler_control(cluster, chip, producer.virt, producer.control_vector_l1);
         }
     }
     for (const CoreCoords& idle_core : idle_eth | std::views::drop(1)) {
         if (idle_core.phys != ctx.eth_relay.core.phys && (!ctx.check || idle_core.phys != ctx.check->core.phys)) {
             const Producer& producer = add_producer(ctx, idle_core, CoreType::ETH, idle_eth_control_vector_l1);
-            zero_profiler_control(cluster, chip, producer.virt, producer.control_vector_l1);
+            reset_profiler_control(cluster, chip, producer.virt, producer.control_vector_l1);
         }
     }
 }
