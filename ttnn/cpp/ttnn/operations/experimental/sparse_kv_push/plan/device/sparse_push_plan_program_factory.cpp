@@ -22,6 +22,7 @@ constexpr uint32_t kCbAlignBytes = 64;  // CB sizes are rounded up to whole 64 B
 // Kernel handles: create_descriptor pushes the kernels in this order.
 constexpr tt::tt_metal::KernelHandle kPlanKernel = 0;    // BRISC
 constexpr tt::tt_metal::KernelHandle kHelperKernel = 1;  // NCRISC, the same kernel and runtime args
+// Kernel 2: the TRISCs (sparse_push_plan_trisc.cpp), the same args; it reads no buffer address, so it is not patched.
 // Per-core runtime args of the data movement kernels.
 // The compile-time arg that tells the two data movement kernels apart.
 constexpr uint32_t kCtRole = 11;
@@ -190,8 +191,14 @@ tt::tt_metal::ProgramDescriptor SparsePushPlanProgramFactory::create_descriptor(
     helper.compile_time_args[kCtRole] = 1;
     helper.config = tt::tt_metal::DataMovementConfigDescriptor{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = tt::tt_metal::NOC::RISCV_1_default};
+    // The three TRISCs (workers kFirstTrisc..) share the L1 loops; they read the same args and do no NoC work.
+    tt::tt_metal::KernelDescriptor trisc = kernel;
+    trisc.kernel_source = std::string("ttnn/cpp/ttnn/operations/experimental/sparse_kv_push/plan/device/kernels/") +
+                          "sparse_push_plan_trisc.cpp";
+    trisc.config = tt::tt_metal::ComputeConfigDescriptor{};
     desc.kernels.push_back(std::move(kernel));
     desc.kernels.push_back(std::move(helper));
+    desc.kernels.push_back(std::move(trisc));
     return desc;
 }
 
