@@ -77,6 +77,7 @@ from models.demos.inkling2_mini.tt.fused.pf_handoff import PfHandoff
 from models.demos.inkling2_mini.tt.fused.pf_heads import PfHeads, half_proj, half_scale_rows, scale_rows
 from models.demos.inkling2_mini.tt.fused.pf_msg import PfMessages
 from models.demos.inkling2_mini.tt.fused.pf_rel import PfRel, skew_proj
+from models.demos.inkling2_mini.tt.fused.pf_ring import PfRing
 from models.demos.inkling2_mini.tt.fused.pf_route import PfRoute
 from models.demos.inkling2_mini.tt.fused.pf_sink import PfSink
 from models.demos.inkling2_mini.tt.fused.pf_swiglu import PfSwiglu
@@ -495,6 +496,7 @@ class Inkling2Prefill:
         self._pfconv = PfConv(dev) if fused_glue else None
         self._pfmsg = PfMessages(dev) if fused_glue else None
         self._pfhand = PfHandoff(dev) if fused_glue else None  # one-program decode handoff (bit-equal)
+        self._pfring = PfRing(dev) if fused_glue else None  # long-chunk ring write: rows of the cast k / v
         self._pfswiglu = PfSwiglu(dev) if fused_glue else None  # sparse experts: slices + softcapped SwiGLU in one
         self._pfheads = PfHeads(dev) if fused_heads else None
         self._pfgate = PfGateOut(dev) if fused_heads else None
@@ -851,8 +853,13 @@ class Inkling2Prefill:
             attn = self._global_blocked(lp, qs, rel, sink, st, k_c, v_c, s, t)
         self._tick("a.core")
         # ring writes (after reading the old ring; the global blocked path reads kv_full only below s)
-        self._write_ring(st.k_ring, k, s, n)
-        self._write_ring(st.v_ring, v, s, n)
+        nreal = self._cur.get("nreal")
+        if (self._pfring is not None and nreal is not None and s % WINDOW == 0 and n > WINDOW
+                and PfRing.ok(k_c, st.k_ring) and PfRing.ok(v_c, st.v_ring)):  # fmt: skip
+            self._pfring([(k_c, st.k_ring), (v_c, st.v_ring)], nreal)  # long chunk: rows of k_c / v_c, one program
+        else:
+            self._write_ring(st.k_ring, k, s, n)
+            self._write_ring(st.v_ring, v, s, n)
 
         self._tick("a.cache_write")
         if self._pfgate is not None:  # heads -> rows, * sigmoid(gate), bf16 in one program
