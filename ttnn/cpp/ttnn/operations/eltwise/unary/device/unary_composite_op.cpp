@@ -93,17 +93,17 @@ Tensor _reciprocal_from_bits(const Tensor& scale_bits, const std::optional<Memor
         output_mem_config);
 }
 
-// mean((d / scale)^2) over H x W, every d / scale in (-2, 2), or in (-4, 4) where the scale is
-// capped at 2^126. The square rides on the multiply by 1 / scale.
+// mean((d / scale)^2) over H x W, from |d|: every |d| / scale is below 2, or below 4 where the
+// scale is capped at 2^126. The square rides on the multiply by 1 / scale, which overwrites |d| in
+// place, as in _mean_squared_deviation_hw.
 Tensor _mean_of_squares(
     const Tensor& y,
-    const Tensor& deviation,
+    const Tensor& abs_deviation,
     const Tensor& reciprocal_of_scale,
     const std::optional<MemoryConfig>& output_mem_config) {
     const std::array square_of_scaled = {
         operations::unary::EltwiseUnaryWithParam{operations::unary::UnaryOpType::SQUARE}};
-    Tensor sqr_x =
-        ttnn::multiply(deviation, reciprocal_of_scale, std::nullopt, output_mem_config, std::nullopt, square_of_scaled);
+    Tensor sqr_x = ttnn::multiply_(abs_deviation, reciprocal_of_scale, square_of_scaled);
     ttsl::SmallVector<int> dims = {2, 3};
     constexpr float correction = 0.0f;
     const auto& logical_shape = y.logical_shape();
@@ -316,10 +316,13 @@ Tensor normalize_hw(const Tensor& y, const std::optional<MemoryConfig>& output_m
     // per-plane factor 1 / std = rsqrt(mean((d / scale)^2)) / scale is finite while std is above
     // 2^-128. Only 1 / scale is needed. The rsqrt rides on the multiply by 1 / scale that forms the
     // factor, and 1 / scale goes first, so for a bfloat8_b input that factor is bfloat16, like 1 / scale.
-    const Tensor scale_bits =
-        detail::_deviation_scale_bits(ttnn::abs(y_minus_mean_y, output_mem_config), output_mem_config);
+    // The output needs d with its sign, so |d| is a tensor of its own. It sets the scale, the square
+    // overwrites it, and it is freed before the output is allocated.
+    Tensor abs_deviation = ttnn::abs(y_minus_mean_y, output_mem_config);
+    const Tensor scale_bits = detail::_deviation_scale_bits(abs_deviation, output_mem_config);
     const Tensor reciprocal_of_scale = detail::_reciprocal_from_bits(scale_bits, output_mem_config);
-    Tensor scaled_var = detail::_mean_of_squares(y, y_minus_mean_y, reciprocal_of_scale, output_mem_config);
+    Tensor scaled_var = detail::_mean_of_squares(y, abs_deviation, reciprocal_of_scale, output_mem_config);
+    abs_deviation.deallocate();
     // The rsqrt writes its result in scaled_var's format before the multiply reads it, and makes inf of the zero tile
     // padding. In bfloat8_b that inf would flush the real value beside it to 0, so the rsqrt reads a bfloat16 copy.
     if (scaled_var.dtype() != DataType::FLOAT32 && scaled_var.dtype() != DataType::BFLOAT16) {
