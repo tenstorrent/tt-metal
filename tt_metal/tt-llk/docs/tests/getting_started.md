@@ -602,7 +602,14 @@ pip install dist/tt_llk_harness-<version>-py3-none-any.whl
 
 The wheel requires what the harness imports (torch, tt-exalens, pytest, ...), unpinned. `tests/requirements.txt` holds the versions the harness is tested with, so installing it first pins them; the wheel carries that file as `tt_llk_harness/requirements.txt`, and the nightly artifact has it beside the wheel.
 
-The nightly **LLK e2e Tests** workflow (`.github/workflows/llk-e2e.yaml`) builds the wheel in its own job once the tests have passed and keeps it as the `llk-harness-wheel` artifact of the run. On the scheduled run of `main`, if the repository variable `LLK_HARNESS_WHEEL_RELEASE_REPO` names a repository, it also publishes the wheel there as a release; nothing here deletes old releases. The token is the `LLK_HARNESS_WHEEL_RELEASE_TOKEN` secret of the `llk-harness-wheel-release` environment, which should allow deployments from `main` only. Who can download a release is decided by that repository's visibility.
+The nightly **LLK e2e Tests** workflow (`.github/workflows/llk-e2e.yaml`) builds the wheel in its own job on every run, whether or not the tests passed, and keeps it for 30 days as the `llk-harness-wheel` artifact: the wheel and `requirements.txt`. To get the newest one built from `main`, from anywhere, with no tt-metal checkout (needs the GitHub CLI, logged in):
+
+```bash
+gh run download -R tenstorrent/tt-metal -n llk-harness-wheel "$(gh api 'repos/tenstorrent/tt-metal/actions/artifacts?name=llk-harness-wheel&per_page=30' \
+    -q '[.artifacts[] | select(.workflow_run.head_branch=="main" and (.expired|not))][0].workflow_run.id')"
+```
+
+On the scheduled run of `main`, if the tests passed and the repository variable `LLK_HARNESS_WHEEL_RELEASE_REPO` names a repository, the job also publishes the wheel there as a release (`gh release download -R <that repository> -p '*.whl'` then gets the newest tested one); nothing here deletes old releases. The token is the `LLK_HARNESS_WHEEL_RELEASE_TOKEN` secret of the `llk-harness-wheel-release` environment, which should allow deployments from `main` only. Who can download a release is decided by that repository's visibility.
 
 The version is `<API major>.<API minor>.<commit time>+g<commit>`: the first two numbers are `HARNESS_API_VERSION` and the third is the commit time as `YYYYMMDDHHMM` in UTC, so wheels order by the contract first and by commit time within it, and an installed wheel names the commit it was built from (`pip show tt-llk-harness`).
 

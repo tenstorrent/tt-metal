@@ -38,11 +38,13 @@ jobs:
         with:
           jobs: ${{ toJSON(needs) }}
 
-  # The harness as a wheel, from a commit whose e2e run passed. A job of its own, so a failed build or upload is not
-  # reported as an e2e failure and the release token is only in a job that runs pinned actions with a read-only token.
+  # The harness as a wheel, every run, whatever the tests did: the artifact is how a suite outside this repository gets
+  # the harness. A job of its own, so a failed build or upload is not reported as an e2e failure and the release token is
+  # only in a job that runs pinned actions with a read-only token.
   llk-harness-wheel:
     name: "LLK harness wheel"
     needs: llk-e2e-summary
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-slim
     timeout-minutes: 30
     # The release token is a secret of this environment, which only main may deploy to; other runs name none.
@@ -74,10 +76,10 @@ jobs:
           if-no-files-found: error
           retention-days: 30
           overwrite: true
-      # Only the nightly run of main, and only when a release repository is configured; its visibility decides who can
-      # download the wheel.
+      # Only the nightly run of main, only when its tests passed, and only when a release repository is configured; its
+      # visibility decides who can download the wheel.
       - name: Publish the harness wheel as a release
-        if: ${{ github.event_name == 'schedule' && github.ref == 'refs/heads/main' && vars.LLK_HARNESS_WHEEL_RELEASE_REPO != '' }}
+        if: ${{ needs.llk-e2e-summary.result == 'success' && github.event_name == 'schedule' && github.ref == 'refs/heads/main' && vars.LLK_HARNESS_WHEEL_RELEASE_REPO != '' }}
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.LLK_HARNESS_WHEEL_RELEASE_TOKEN }}
