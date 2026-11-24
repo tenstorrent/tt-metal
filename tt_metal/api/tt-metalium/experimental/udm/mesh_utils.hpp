@@ -102,13 +102,13 @@ GlobalCoresInfo map_tensor_to_gcores(
  * across different mesh devices (grids). All gcores in the mesh×grid space will be
  * assigned entries, with edge/corner gcores receiving empty GlobalCoresInfo if they have no work.
  *
- * For example, with 4 workloads and 4 grids (mesh devices):
+ * For example, with 5 workloads and 4 grids (mesh devices):
  * Iteration order: grid[0], grid[1], then mesh[0], mesh[1], mesh[2], mesh[3]
  * - Grid 0, Mesh 0: work 0
  * - Grid 0, Mesh 1: work 1
  * - Grid 0, Mesh 2: work 2
  * - Grid 0, Mesh 3: work 3
- * - Grid 1, Mesh 0: work 4 (or empty if no more work)
+ * - Grid 1, Mesh 0: work 4
  * This ensures work is spread across mesh devices before filling cores on a single device.
  *
  * @param tensor_builder The MeshTensorBuilder containing tensor information
