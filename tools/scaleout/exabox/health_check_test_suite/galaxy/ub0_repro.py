@@ -2090,12 +2090,16 @@ BURST_GAP_MS = 50.0  # pause after each burst (a gap, not a quiet: no clock chec
 # A minimal_matmul fallback runs ttnn.matmul: its measured 16k rate (the 16k_hifi4 fallback on one ttnn build, the
 # slowest measured) bounds the no-event op cap, so a fallback burst stops queuing within --burst-s of device time
 FALLBACK_TFLOPS = 80.8
-# MinimalMatmulConfig (M, K, N) block sizes in tiles, tried in this order until one fits L1: the first is the one
-# HEAVY_TFLOPS was measured with. On that ttnn build the fp32-accumulate ops overflow L1 with it:
-# 16k_hifi4 needs 1684480 B and 8k_fp32_hifi4 2995200 B of dataflow buffers against 1572864 B. The double-buffered
-# in0/in1 blocks are most of that, so a smaller K block comes next (K 8 fits 16k_hifi4, K 4 fits 8k_fp32_hifi4); the
-# subblocks stay HEAVY's. Only when the last one overflows too does the op fall back to ttnn.matmul.
+# MinimalMatmulConfig (M, K, N) block sizes in tiles, tried in this order until one fits L1: most ops start at the
+# first (MM_FIRST names the others). The fp32-accumulate ops overflow L1 with it: 16k_hifi4 needs 1684480 B and
+# 8k_fp32_hifi4 2995200 B (1946624 B at K 8) of dataflow buffers against 1572864 B. The double-buffered in0/in1 blocks
+# are most of that, so a smaller K block comes next (K 8 fits 16k_hifi4, K 4 fits 8k_fp32_hifi4); the subblocks stay
+# HEAVY's. Only when the last one overflows too does the op fall back to ttnn.matmul.
 MM_BLOCKS = ((8, 16, 8), (8, 8, 8), (8, 4, 8), (4, 4, 4))
+# Where each fp32-accumulate op starts in MM_BLOCKS: the largest K that fits (its HEAVY_TFLOPS was measured there), so
+# no heavy process builds and throws on the blocks above it first. Every other op starts at MM_BLOCKS[0]; an L1
+# refusal still steps any op down.
+MM_FIRST = {"16k_hifi4": 1, "8k_fp32_hifi4": 2}
 # a minimal_matmul build refused for L1: tt-metal's dataflow_buffer.cpp TT_THROW ("Statically allocated dataflow
 # buffers ... grow to N B which is beyond max L1 size of M B") or the older circular-buffer wording
 MM_L1_FULL = re.compile(
@@ -2402,13 +2406,15 @@ def heavy_op(a, ttnn, torch, mesh, x, w, cq1=None, fabric=True, cq_why=None):
             compute_with_storage_grid_size=g,
         )
 
-    cfg = [mk(0)]  # the block size in use: MM_BLOCKS[st["blk"]]
-    st = {"mm": getattr(getattr(ttnn, "experimental", None), "minimal_matmul", None), "blk": 0}
+    st = {"mm": getattr(getattr(ttnn, "experimental", None), "minimal_matmul", None), "blk": MM_FIRST.get(a.heavy, 0)}
+    cfg = [mk(st["blk"])]  # the block size in use: MM_BLOCKS[st["blk"]]
     ran = (
         dict(op="ttnn.experimental.minimal_matmul", fallback=None)
         if st["mm"] is not None
         else dict(op="ttnn.matmul", fallback="ttnn.experimental.minimal_matmul missing")
     )
+    if st["mm"] is not None and st["blk"]:
+        ran["config"] = f"blocks {mm_blocks(st['blk'])}"
     # a.heavy_act (chunk_load.py --sfpu-par 1): an SFPU activation fused into the matmul's
     # epilogue, applied to every output tile in DST just before it is packed, while the readers fetch the next blocks;
     # FPU and SFPU are both driven by the math thread, so this is the SFPU load that rides along the matmul with no op of
