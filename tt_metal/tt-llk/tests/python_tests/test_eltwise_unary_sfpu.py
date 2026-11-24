@@ -437,12 +437,15 @@ def _assert_signed_zero_partition_valid():
             "here means the delivery gate changed -- re-derive it rather than restoring it."
         ),
         MathOperation.Sqrt: (
-            "sqrt(-0.0) returns -0.0 now, from the zero-magnitude arm in ckernel_sfpu_sqrt.h; "
-            "an entry here means that arm regressed. test_sqrt_family_negative_zero_regression "
-            "is what actually pins the sign, since this sweep cannot tell the two zeros apart."
+            "sqrt(-0.0) returns -0.0 now. In ckernel_sfpu_sqrt.h, Wormhole's exact sqrt copies "
+            "x's sign onto the result at the end of its branch; approximate sqrt, and Blackhole's "
+            "exact sqrt, return x from the zero-magnitude arm. An entry here means one of those "
+            "regressed. test_sqrt_family_negative_zero_regression is what actually pins the sign, "
+            "since this sweep cannot tell the two zeros apart."
         ),
         MathOperation.Rsqrt: (
-            "rsqrt(-0.0) returns -inf now. Same arm and the same regression test as Sqrt."
+            "rsqrt(-0.0) returns -inf now, from the v_else of the refinement guard in "
+            "ckernel_sfpu_sqrt.h. Same regression test as Sqrt."
         ),
     }
 
@@ -668,6 +671,79 @@ def test_sqrt_family_negative_zero_regression(
     assert torch.allclose(res[3:], torch.tensor(expected), rtol=1e-2, atol=0.0), (
         f"{op}(4.0) is no longer ~{expected} on the lanes around the probes "
         f"(max deviation {(res[3:] - expected).abs().max().item():.6g})."
+    )
+
+
+# Exact edge results the main sweep checks only loosely (it treats any NaN as equal and runs
+# finite ramps). Every negative other than -0 must give the canonical NaN the kernel loads,
+# whatever its payload or sign; +inf and +/-0 map to themselves.
+_SQRT_EDGE_PROBES = (
+    # (input bits, expected output bits); None means any NaN.
+    (0xFFC00001, 0x7FC00000),  # -qNaN with payload
+    (0xFF800001, 0x7FC00000),  # -sNaN
+    (0xFFFFFFFF, 0x7FC00000),  # -NaN, all payload bits
+    (0xFF800000, 0x7FC00000),  # -inf
+    (0xFF7FFFFF, 0x7FC00000),  # -FLT_MAX
+    (0x80000001, 0x7FC00000),  # -min subnormal
+    (0x807FFFFF, 0x7FC00000),  # -max subnormal
+    (0xBF800000, 0x7FC00000),  # -1.0
+    (0x7F800000, 0x7F800000),  # +inf
+    (0x7FC00001, None),  # +qNaN with payload
+    (0x80000000, 0x80000000),  # -0
+    (0x00000000, 0x00000000),  # +0
+)
+
+
+@pytest.mark.nightly
+@wormhole_only
+@pytest.mark.parametrize(
+    "approx_mode",
+    [ApproximationMode.No, ApproximationMode.Yes],
+    ids=lambda m: f"approx_{m.name}",
+)
+def test_sqrt_edge_specials_bit_exact(approx_mode):
+    formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
+    dest_acc = DestAccumulation.Yes
+    input_dimensions = [32, 32]
+    num_elements = input_dimensions[0] * input_dimensions[1]
+
+    probe_bits = torch.tensor(
+        [b - (1 << 32) if b >= 1 << 31 else b for b, _ in _SQRT_EDGE_PROBES],
+        dtype=torch.int32,
+    )
+    src_A = torch.full((num_elements,), 4.0, dtype=torch.float32)
+    src_A[: len(_SQRT_EDGE_PROBES)] = probe_bits.view(torch.float32)
+    src_B = torch.zeros(num_elements, dtype=torch.float32)
+
+    res = torch.tensor(
+        eltwise_unary_sfpu(
+            formats=formats,
+            dest_acc=dest_acc,
+            approx_mode=approx_mode,
+            mathop=MathOperation.Sqrt,
+            fast_mode=FastMode.No,
+            input_dimensions=input_dimensions,
+            src_A=src_A,
+            src_B=src_B,
+            unpack_to_dest=True,
+            check_golden=False,
+        ),
+        dtype=torch.float32,
+    )
+    bits = res.view(torch.int32)
+
+    mismatches = []
+    for lane, (in_bits, want) in enumerate(_SQRT_EDGE_PROBES):
+        got = bits[lane].item() & 0xFFFFFFFF
+        ok = torch.isnan(res[lane]).item() if want is None else got == want
+        if not ok:
+            want_str = "NaN" if want is None else f"0x{want:08X}"
+            mismatches.append(
+                f"sqrt(0x{in_bits:08X}) = 0x{got:08X}, expected {want_str}"
+            )
+    assert not mismatches, "; ".join(mismatches)
+    assert torch.allclose(
+        res[len(_SQRT_EDGE_PROBES) :], torch.tensor(2.0), rtol=1e-2, atol=0.0
     )
 
 
