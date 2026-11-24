@@ -83,12 +83,12 @@ def _log2_bw_torch_reference(grad, x, flush):
 
 
 def _log2_bw_reference(grad, x, flush):
-    """Torch, except on the declared lanes."""
+    """Torch, except: 0 where f'(x) alone is subnormal."""
     result = _log2_bw_torch_reference(grad, x, flush)
     unit = _log2_bw_torch_reference(torch.ones_like(grad), x, flush)
-    result = torch.where(unit.abs() < LOG2_BW_SMALLEST_NORMAL, torch.zeros_like(result), result)
-    x32 = x.to(torch.float32)
-    result = torch.where((torch.isinf(x32)), torch.zeros_like(result), result)
+    result = torch.where(
+        (unit.abs() < LOG2_BW_SMALLEST_NORMAL) & torch.isfinite(x.to(torch.float64)), torch.zeros_like(result), result
+    )
     return result
 
 
