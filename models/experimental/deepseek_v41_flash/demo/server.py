@@ -71,8 +71,10 @@ What V4.1 imposes on the serving side:
   if it repeats that session's start (:class:`_V41SlotPool`) or once the session has been idle
   ``--slot-idle-timeout`` seconds. One instance alone measured ~216 tok/s/user on GSM8K and ~145 on chat text
   against ~149 a step at a time (``tests/decode/test_dspark_spec.py``). What that path takes: one session per
-  instance (``--num-users 1``), greedy decoding with the sampler on device (``--temperature 0``; a request's
-  ``temperature`` and ``top_p`` are ignored) and no ``--vision``. Prompts are prefilled by each instance's own traced
+  instance (``--num-users 1``) and the sampler on device at ``--temperature`` (default 1, 0 greedy; a request cannot
+  set its own, nor ``top_p``). A sampled round keeps the drafts up to the first that differs from its row's draw. Images (``--vision``) run on each instance's own row: its vision tower
+  and image rows sit on its stage, and the shared server ranks image tokens on each layer's image twin (see the images
+  item below). Prompts are prefilled by each instance's own traced
   prefill model (:class:`_V41Prefiller`, one user per instance on that instance's row; no pipeline over rows), its MoE on
   the persistent TP12 prefill MoE (``tt/prefill/persistent_moe.py``) launched with the server over the same blocks:
   the trace holds each layer's request half, the MoE mesh serves each replayed chunk. A prefill stops the shared
@@ -93,8 +95,8 @@ What V4.1 imposes on the serving side:
   (``--dspark-drafts``, default 3 / 2 / 1 / 0 for 1 / 2 / 3 / 4+ seated decoding users): each user's draft takes the
   drafter's time whatever its length, so under load the replies decode a step at a time, sharing the pipeline as
   without ``--dspark``. Its rounds accept against the steps' logits on the host, and its
-  drafter has no image rows, so ``--dspark`` turns off ``--vision`` and
-  ``--device-sampling``; a request's ``temperature`` and ``top_p`` apply. The rounds run on the Rust host runtime
+  drafter has no image rows, so ``--dspark`` turns off ``--vision`` (except with ``--persistent-moe``, see the images
+  item) and ``--device-sampling``; a request's ``temperature`` and ``top_p`` apply. The rounds run on the Rust host runtime
   as single steps do (its threads replay the stages' traces, write the packets and Engram rows and read the
   outputs), and the web monitor watches them.
 * Shared prefixes. A prompt that continues no conversation starts from the longest cached prefix of its tokens.
@@ -134,7 +136,16 @@ What V4.1 imposes on the serving side:
   The vision tower runs on stage ``DEEPSEEK_V41_VISION_STAGE`` (5), with no step in flight, and writes each image's
   rows into ``--image-rows`` rows past the vocabulary of the embedding table, where its span's token ids point (see
   :class:`_ImageBook`); prefill and decode then read them like any token's, and the router picks the image tokens'
-  experts with ``bias_vl``. Speculative decode does not take images. The whole image path is traced: the tower (one
+  experts with ``bias_vl``. Speculative decode on the stage pipeline does not take images.
+
+  With ``--persistent-moe`` every instance has its own tower and image rows, on its own stage (mesh row), and the
+  shared MoE server holds an image twin of each layer -- its row of the layer table naming the same weights and the
+  layer's ``bias_vl`` -- which image tokens' requests name (``PersistentMoE(image_bias=True)``). Neither the stage's
+  traced prefill nor the disaggregated prefill server takes image tokens: a prompt is prefilled up to its first
+  image token (on the 128-token grid) and decode replays the rest, image spans in 4-row verify blocks of image
+  tokens (the image twins of the block traces; a block never mixes image and text tokens) and the ragged ends of
+  runs a step at a time. The DSpark drafter sees no image token: a draft starts from a generated token, and the
+  steps hand it rows. The whole image path is traced: the tower (one
   trace per ViT bucket) and the row write (one trace on stage 0) are captured at the end of startup, after every
   other allocation, and an image only replays them, its inputs streamed in and its rows read back over host sockets
   the model opens before its decode rings (:meth:`V41ChatEngine.capture_vision`, :class:`~..tt.vision.ImageSockets`).
@@ -319,6 +330,13 @@ _PERSISTENT_MAX_CONTEXT = 16384
 # every conversation parked in its device RAM (any number of them, until the pool is full). ~13.4 GB per chip of the
 # instance's TP4 row (~3.2 KB per token: 4 compressed groups of bf16 KV and index keys).
 _PERSISTENT_TOTAL_CONTEXT = 4 * 1024 * 1024
+# Default --image-rows: the stage pipeline's (stage 0 holds the table alone), and each persistent-MoE instance's (its one
+# stage holds every layer, its KV pool, the drafter and the tower too): 16384 rows, ~160 MiB a chip, ~16 full-size
+# images held at once.
+_IMAGE_ROWS = 40960
+_PERSISTENT_IMAGE_ROWS = 16384
+# Instances load in parallel: their towers build and compile one at a time.
+_VISION_BUILD_LOCK = threading.Lock()
 # Total slots per persistent-MoE instance: 1 active slot at a time plus up to 255 device-parked slots sharing the
 # instance's 4M-token KV pool. Once all 256 slots or the KV pool are full, the oldest slot is evicted to host RAM.
 _PERSISTENT_SLOTS = 256
@@ -640,6 +658,7 @@ class _Image:
     used: float = 0.0
     rows: torch.Tensor | None = None  # its vision rows read from disk, until written into the table
     decode_seconds: float = 0.0  # host time to decode it (or read its rows from disk), for the live console
+    vision_rows: torch.Tensor | None = None  # its vision rows once encoded, for a prefill server (wire_images)
 
 
 class _ImageStatus:
@@ -811,8 +830,36 @@ class _ImageBook:
         if entry.rows is None:
             self._save_rows(key, entry.types, rows)
         with self._lock:
-            entry.slots, entry.prepared, entry.rows = slots, None, None
+            entry.slots, entry.prepared, entry.rows, entry.vision_rows = slots, None, None, rows.to(torch.bfloat16)
         return span_ids(entry.types, slots, self.vocab_size).tolist()
+
+    def wire_images(self, ids: torch.Tensor, sent: set) -> list:
+        """The images whose rows ``ids`` (a prompt's, int64) use, as a prefill server takes them (``d_p_wire``
+        WireImage): each its key, its slots and its vision rows, sent unless ``sent`` has its key."""
+        from models.experimental.deepseek_v41_flash.tt.prefill.d_p_wire import WireImage
+
+        first = self.vocab_size + FIRST_IMAGE_ROW
+        used = torch.unique(ids[ids >= first]) - first
+        if not used.numel():
+            return []
+        out, found = [], torch.zeros(used.numel(), dtype=torch.bool)
+        with self._lock:
+            for key, entry in self.entries.items():
+                if entry.slots is None:
+                    continue
+                hit = torch.isin(used, entry.slots)
+                if not bool(hit.any()):
+                    continue
+                if entry.vision_rows is None:
+                    raise RuntimeError(f"image {key[:12]}: its vision rows are not kept for the prefill server")
+                found |= hit
+                rows = entry.vision_rows
+                out.append(WireImage(key, entry.slots.tolist(), lambda rows=rows: rows, key not in sent))
+        if not bool(found.all()):
+            raise RuntimeError(
+                f"image rows {(used[~found] + first).tolist()[:8]} of the prompt belong to no held image"
+            )
+        return out
 
     def _saved_rows(self, key: str) -> dict | None:
         """``{"types", "rows"}`` of image ``key`` from :attr:`rows_dir`, if saved there with these processor
@@ -1766,6 +1813,27 @@ class _MoeGate:
                 self._cv.notify_all()
 
 
+def _text_prefill(ids, start: int, n: int, vocab: int, align: int) -> int:
+    """How many of the prefill's ``n`` tokens ``ids[start : start + n]`` come before its first image-span token (an id
+    ``>= vocab``), on the ``align`` grid: all ``n`` with none, else that count rounded down to ``align``."""
+    for i in range(start, start + n):
+        if int(ids[i]) >= vocab:
+            return (i - start) // align * align
+    return n
+
+
+def _kind_run(ids, start: int, n: int, vocab: int) -> int:
+    """How many of ``ids[start : start + n]`` share the kind of ``ids[start]`` -- image-span (an id ``>= vocab``) or
+    text -- before the first that does not."""
+    if n <= 0:
+        return 0
+    image = int(ids[start]) >= vocab
+    for i in range(1, n):
+        if (int(ids[start + i]) >= vocab) != image:
+            return i
+    return n
+
+
 class _PrefillFirst(_Scheduler):
     """Finish every pending prompt before decoding, and look Engram rows up while a prompt waits.
 
@@ -1790,6 +1858,7 @@ class _PrefillFirst(_Scheduler):
                 self.server.prefiller.reap(block=True)
         super()._admit(turn)
         if turn in self._active:
+            self._prefill_text_only(turn)
             if self.server.prefiller is not None and getattr(self.server, "prefix_cache", None) is not None:
                 user = self.engine.users[turn.slot]
                 with _timed(times, "remember_prefix"):
@@ -1822,6 +1891,46 @@ class _PrefillFirst(_Scheduler):
                 f"{1e3 * (time.perf_counter() - t0):.1f} ms: "
                 + ", ".join(f"{stage} {1e3 * seconds:.1f}" for stage, seconds in times.items())
             )
+
+    def _prefill_text_only(self, turn: _Turn) -> None:
+        """Cut ``turn``'s prefill before its first image-span token when the prefill model takes none -- the
+        disaggregated prefill server's, or the persistent stage's own: the prefill model takes the text before it, on
+        its grid, and decode replays the rest, images included. A cut left too short to pay is dropped."""
+        prefiller = self.server.prefiller
+        if prefiller is None or not turn.device_prefill:
+            return
+        remote = isinstance(prefiller, _RemotePrefiller)
+        if not remote and not getattr(self.engine, "persistent_moe", False):
+            return  # the stage pipeline's prefill model takes image tokens
+        if remote and getattr(prefiller, "image_rows", 0):
+            return  # so does this prefill server (its images are sent with the prompt: _RemotePrefiller._wire_images)
+        align = getattr(prefiller, "align", None) or _PREFILL_ALIGNMENT
+        vocab = self.engine.model.config.vocab_size
+        user = self.engine.users[turn.slot]
+        if remote and user.pos and max(user.tokens[: user.pos], default=0) >= vocab:
+            # The prefill server is sent the conversation from position 0 (_RemotePrefiller._request): an image in an
+            # earlier turn is in it, and the server holds none of the KV past that image to continue from.
+            logger.info(
+                f"user {turn.user_key!r}: an earlier turn of the conversation has an image: the prefill model takes "
+                f"none of this turn, decode replays its {len(turn.ids)} tokens"
+            )
+            turn.device_prefill = turn.prefill_from = 0
+            return
+        n = _text_prefill(turn.ids, turn.prefill_from, turn.device_prefill, vocab, align)
+        if n == turn.device_prefill:
+            return
+        first = next(i for i in range(turn.prefill_from, len(turn.ids)) if int(turn.ids[i]) >= vocab)
+        if n and not remote and user.pos + turn.prefill_from:
+            n = 0  # the stage's continuation grid is its own: decode replays the turn
+        if n and prefiller.seconds(n) >= n / self.replay_rate:
+            n = 0
+        logger.info(
+            f"user {turn.user_key!r}: the prompt's first image token is its token {first}: the prefill model takes "
+            f"{n} tokens instead of {turn.device_prefill}, decode replays the other {len(turn.ids) - n}"
+        )
+        turn.device_prefill = n
+        if not n:
+            turn.prefill_from = 0
 
     def _send_ahead(self, turn: _Turn) -> None:
         """Send the prompt a remote prefill takes to the prefill server now, from a thread of its own
@@ -1923,12 +2032,6 @@ class _PrefillFirst(_Scheduler):
             if held >= seats:
                 return False
         return True
-
-    def _choose_feed(self, user: UserSession, turn: _Turn, continuing: bool) -> None:
-        prefiller = self.server.prefiller
-        if isinstance(prefiller, _RemotePrefiller) and prefiller.vocab and any(t >= prefiller.vocab for t in turn.ids):
-            return
-        super()._choose_feed(user, turn, continuing)
 
     def _prefetch_engram(self, turn: _Turn) -> None:
         """Start the host Engram lookup for the tokens the traced prefill will see, on a copy of the session."""
@@ -2182,9 +2285,21 @@ class _SpecScheduler(_SlotReuse, _PrefillFirst):
             self._spec_live = None
         super()._retire(turn, outcome)
 
+    def _prefix_batch(self, turn: _Turn, user: UserSession, n: int) -> int:
+        """Also end a replay batch where the tokens change kind (image-span or text) on a model whose verify blocks
+        take image tokens: a block takes one kind, so a step-at-a-time batch covers only a run's ragged end and the next
+        run goes back to blocks."""
+        n = super()._prefix_batch(turn, user, n)
+        model = self.engine.model
+        if n <= 1 or not getattr(model, "_image_blocks", False):
+            return n
+        return _kind_run(turn.ids, turn.fed, n, model.config.vocab_size)
+
     def _block_replay_prompt(self, turn: _Turn) -> bool:
         """Replay prompt tail tokens in ``verify_rows``-token blocks via ``decode_verify_block`` (~4x faster than
-        single-row decode replay), stopping before any prefix cut, image token, or the final prompt token."""
+        single-row decode replay), stopping before any prefix cut, the final prompt token, or a change of kind: a run
+        of image-span tokens takes the image twins of the blocks (when the model has them), a run of text the text
+        blocks."""
         model = self.engine.model
         t = getattr(model, "verify_rows", 1)
         if (
@@ -2202,11 +2317,11 @@ class _SpecScheduler(_SlotReuse, _PrefillFirst):
             return False
         n = self._prefix_batch(turn, user, left)
         vocab = getattr(getattr(model, "config", None), "vocab_size", 0) or 0
+        image = vocab > 0 and n > 0 and int(turn.ids[turn.fed]) >= vocab
         if vocab > 0:
-            for i in range(n):
-                if int(turn.ids[turn.fed + i]) >= vocab:
-                    n = i
-                    break
+            n = _kind_run(turn.ids, turn.fed, n, vocab)
+        if image and not getattr(model, "_image_blocks", False):
+            return False
         n_blocks = n // t
         if n_blocks <= 0:
             return False
@@ -2229,7 +2344,7 @@ class _SpecScheduler(_SlotReuse, _PrefillFirst):
                 if turn.cancelled.is_set():
                     break
                 chunk = [int(x) for x in turn.ids[turn.fed : turn.fed + t]]
-                kv_only = user.pos + t <= kv_end
+                kv_only = not image and user.pos + t <= kv_end
                 try:
                     model.decode_verify_block(chunk, user.pos, kv_only=kv_only)
                 except PagedCacheFull:
@@ -2365,8 +2480,10 @@ class _SpecScheduler(_SlotReuse, _PrefillFirst):
             spec.finish()
             logger.debug(f"user {turn.user_key!r}: DSpark {spec.stats.summary(spec.drafts)}")
         if self.engine.block_verify:
-            # The persistent stage verifies a round in one 4-row step and samples it greedily on device.
-            spec = DSparkSpeculator(self.engine.model, self._drafts, parallel_verify=True, temperature=0.0)
+            # The persistent stage verifies a round in one 4-row step and samples it on device at --temperature.
+            spec = DSparkSpeculator(
+                self.engine.model, self._drafts, parallel_verify=True, temperature=float(self.server.temperature or 0.0)
+            )
         else:
             temperature = turn.body.get("temperature")
             if temperature is None:
@@ -3063,7 +3180,15 @@ def _serve_instances(args) -> int:
             # LIFO), after every instance's replay threads and prefetcher sessions.
             t0 = time.perf_counter()
             server = pmoe.launch_instances_server(
-                mesh_device, config, loader, cache, num_layers, n, dspark=args.dspark, prefill=args.prefill
+                mesh_device,
+                config,
+                loader,
+                cache,
+                num_layers,
+                n,
+                dspark=args.dspark,
+                prefill=args.prefill,
+                image_bias=args.vision,
             )
             stack.callback(server.stop)
             logger.info(f"persistent MoE up in {time.perf_counter() - t0:.0f}s")
@@ -3242,13 +3367,15 @@ class V41ChatEngine(ChatEngine):
         if num_stages is None:
             num_stages = pipeline_stage_count()
         vision = getattr(args, "vision", False)
-        if vision and VISION_STAGE >= num_stages:
-            raise ValueError(f"the vision stage {VISION_STAGE} is past the {num_stages} pipeline stages")
         self.vision = self.images = self.row_writer = None
         self.image_token_id = load_vision_config(loader.snapshot_dir).image_token_id
         prefill_placement = None
         # --persistent-moe: one stage, every MoE on the persistent server; with DSpark, 4-row verify steps.
         self.persistent_moe = bool(getattr(args, "persistent_moe", False)) or moe_server is not None
+        # The tower's stage: the pipeline's VISION_STAGE, or the persistent instance's one stage (its own mesh row).
+        self.vision_stage = (0 if self.persistent_moe else VISION_STAGE) if vision else None
+        if vision and self.vision_stage >= (1 if self.persistent_moe else num_stages):
+            raise ValueError(f"the vision stage {self.vision_stage} is past the {num_stages} pipeline stages")
         self.dspark = bool(getattr(args, "dspark", False))
         self.prefill_url = getattr(args, "prefill_url", None)
         self.prefill_max_len = getattr(args, "prefill_max_len", None)
@@ -3286,7 +3413,7 @@ class V41ChatEngine(ChatEngine):
             use_prefetcher=getattr(args, "use_prefetcher", None),
             layer_submesh_ids=None if self.persistent_moe else plan_layer_placement(num_layers, num_stages, 1),
             image_rows=args.image_rows if vision else 0,
-            vision_stage=VISION_STAGE if vision else None,
+            vision_stage=self.vision_stage,
             prefill_layer_submesh_ids=prefill_placement,
             **persistent,
         )
@@ -3300,27 +3427,28 @@ class V41ChatEngine(ChatEngine):
             # Built and compiled before the KV pools, the prefill model and the decode traces take the DRAM and the
             # program cache; captured last (capture_vision), so at serving time an image only replays traces.
             t0 = time.perf_counter()
-            self.vision = DeepSeekV41Vision(
-                load_vision_config(loader.snapshot_dir),
-                loader,
-                self.model.submeshes[VISION_STAGE],
-                cache=self.weight_cache,
-            )
-            self.vision.warmup()
-            vocab = config.vocab_size
-            write_embedding_rows(
-                self.model.embed_tokens.embedding_weight,
-                torch.stack([self.vision.delimiters[kind] for kind in DELIMITER_ROWS]),
-                [vocab + row for row in DELIMITER_ROWS.values()],
-                vocab,
-            )
+            with _VISION_BUILD_LOCK:
+                self.vision = DeepSeekV41Vision(
+                    load_vision_config(loader.snapshot_dir),
+                    loader,
+                    self.model.submeshes[self.vision_stage],
+                    cache=self.weight_cache,
+                )
+                self.vision.warmup()
+                vocab = config.vocab_size
+                write_embedding_rows(
+                    self.model.embed_tokens.embedding_weight,
+                    torch.stack([self.vision.delimiters[kind] for kind in DELIMITER_ROWS]),
+                    [vocab + row for row in DELIMITER_ROWS.values()],
+                    vocab,
+                )
             self.images = _ImageBook(
                 self,
                 loader.snapshot_dir,
                 os.path.join(self.weight_cache.path, "vision_rows") if self.weight_cache else None,
             )
             logger.info(
-                f"vision tower on stage {VISION_STAGE}, built and compiled in {time.perf_counter() - t0:.1f}s; "
+                f"vision tower on stage {self.vision_stage}, built and compiled in {time.perf_counter() - t0:.1f}s; "
                 f"{len(self.images.free)} image rows on stage 0"
             )
         if self.persistent_moe:
@@ -3362,8 +3490,11 @@ class V41ChatEngine(ChatEngine):
             # own), and ``--seed`` seeds the PRNGs, which still advance from step to step. This engine
             # does not run ``ChatEngine.__init__``, so the sampler is switched here.
             self.temperature = float(getattr(args, "temperature", None) or 0.0)
-            self.seed = int(getattr(args, "seed", 0) or 0)
+            # (each instance its own seed: instances seeded alike draw the same tokens for the same prompt)
+            self.seed = int(getattr(args, "seed", 0) or 0) + 1000 * int(getattr(self, "instance", 0) or 0)
             self.model.device_sampler.set_sampling(self.temperature, self.seed)
+            if getattr(self.model, "verify_sampler", None) is not None:
+                self.model.verify_sampler.set_sampling(self.temperature, self.seed + 1)
             logger.info(
                 f"device sampling: the output stage picks the token "
                 f"(temperature {self.temperature}, seed {self.seed}); requests cannot set their own"
@@ -3439,7 +3570,7 @@ class V41ChatEngine(ChatEngine):
             )
         logger.info(
             f"vision traces captured in {time.perf_counter() - t0:.1f}s: {len(self.vision.traces)} ViT buckets on "
-            f"stage {VISION_STAGE}, the row write on stage 0"
+            f"stage {self.vision_stage}, the row write on stage 0"
         )
 
     def write_traced(self, token_id: int, pos: int) -> None:
@@ -3721,6 +3852,10 @@ class _RemotePrefiller:
         self.address = client.address
         info = client.info
         self.info = info
+        # Images: the server takes image-span tokens (their rows sent by key, d_p_wire); 0: _prefill_text_only cuts
+        # every prompt before its first image token instead.
+        self.image_rows = int(info.get("image_rows", 0) or 0)
+        self._sent_images: set = set()  # keys of the images whose rows the server has been sent
 
         decode_model = engine.model
         self.window = int(info["window"])
@@ -3842,10 +3977,14 @@ class _RemotePrefiller:
                     job.client = client
                     if job.aborted:
                         raise _PromptStopped()
+                images = self._wire_images(ids)
                 if targets is None:
-                    states = client.prefill(ids, on_progress=on_progress, have=have)
+                    states = client.prefill(ids, on_progress=on_progress, have=have, images=images)
                 else:
-                    states = client.prefill_push(ids, targets, on_progress=on_progress, have=have)
+                    states = client.prefill_push(ids, targets, on_progress=on_progress, have=have, images=images)
+                if images:
+                    with self._lock:
+                        self._sent_images |= client.sent_images
             except PrefillServerError:
                 if client is not None and client.sock.fileno() >= 0:
                     self._give_client(client)  # an error reply leaves the connection usable
@@ -3871,6 +4010,19 @@ class _RemotePrefiller:
                     f"entries of [{states['base']}, {states['seq_len']})"
                 )
             return states
+
+    def _wire_images(self, ids: list[int]) -> list:
+        """The images the prompt ``ids`` holds, for the request (``_ImageBook.wire_images``); [] for a text prompt."""
+        vocab = self.engine.model.config.vocab_size
+        t = torch.as_tensor(ids, dtype=torch.int64)
+        if not t.numel() or int(t.max()) < vocab:
+            return []
+        book = getattr(self.engine, "images", None)
+        if not self.image_rows or book is None:
+            raise ValueError(f"prefill server {self.address} takes no image-span tokens")
+        with self._lock:
+            sent = set(self._sent_images)
+        return book.wire_images(t, sent)
 
     def _whole(self, user: UserSession, ids: list[int]) -> tuple[list[int], int]:
         """The whole prompt to send for ``ids``, ``user``'s tokens from its position on, and its ``have``."""
@@ -4230,16 +4382,18 @@ def parse_args(argv: list[str] | None = None):
         action=argparse.BooleanOptionalAction,
         default=True,
         help=f"accept images in user messages: the vision tower on stage {VISION_STAGE} "
-        "(DEEPSEEK_V41_VISION_STAGE), its rows in an extended embedding table on stage 0 (default: on)",
+        "(DEEPSEEK_V41_VISION_STAGE), its rows in an extended embedding table on stage 0; with --persistent-moe, "
+        "a tower and table on each instance's own stage (default: on)",
     )
     p.add_argument(
         "--image-rows",
         type=int,
-        default=40960,
+        default=None,
         help="rows past the vocabulary in the embedding table for image spans, a multiple of 32 (10 KB each on "
-        "every chip of stage 0: 400 MiB by default, beside the vocabulary's 1.2 GiB); an image of up to 1024 "
+        f"every chip of stage 0: {_IMAGE_ROWS} rows, 400 MiB, by default, beside the vocabulary's 1.2 GiB; "
+        f"{_PERSISTENT_IMAGE_ROWS} with --persistent-moe, on each instance's stage); an image of up to 1024 "
         "tokens takes as many (~600 for a typical screenshot), and every image of a request, and of any "
-        "conversation held, keeps its rows at once (default: 40960)",
+        "conversation held, keeps its rows at once",
     )
     p.add_argument(
         "--engram-staging",
@@ -4349,18 +4503,19 @@ def parse_args(argv: list[str] | None = None):
     if not args.dspark_drafts or not all(0 <= k <= _DSPARK_MAX_DRAFTS for k in args.dspark_drafts):
         p.error(f"--dspark-drafts takes 0 to {_DSPARK_MAX_DRAFTS} drafts per entry, got {args.dspark_drafts}")
     if args.dspark:
-        # Speculative decode accepts against the steps' logits on the host and has no image rows. Its turns take
-        # verify rounds in turn, each session with its own rows of the drafter's rings.
-        args.vision = False
+        # Speculative decode accepts against the steps' logits on the host. On the stage pipeline its drafter has no
+        # image rows; the persistent stage's never sees an image token (see the images item of the docstring). Its
+        # turns take verify rounds in turn, each session with its own rows of the drafter's rings.
+        if not args.persistent_moe:
+            args.vision = False
         args.device_sampling = False
         # Each verify round's log line, read when tt/spec.py is imported; DEEPSEEK_V4_SPEC_VERBOSE=1 brings them back.
         os.environ.setdefault("DEEPSEEK_V4_SPEC_VERBOSE", "0")
     if args.persistent_moe:
         # The traced prefill runs on each instance's own stage (one user per instance, no pipeline over rows), its MoE
-        # on the persistent TP12 prefill MoE (--no-prefill replays prompts through decode instead); no image rows;
-        # the output stage samples.
+        # on the persistent TP12 prefill MoE (--no-prefill replays prompts through decode instead), up to a prompt's
+        # first image token; the output stage samples.
         args.prefill_all_stages = False
-        args.vision = False
         if args.prefill:
             # Room above the prefetch rings for decode's host sockets, so releasing the rings frees one block of L1
             # for the prefill's circular buffers (without it the sockets land mid-L1, under the 4-row step buffers).
@@ -4371,17 +4526,14 @@ def parse_args(argv: list[str] | None = None):
         if not 1 <= args.instances <= len(pmoe.INSTANCE_ROWS):
             p.error(f"--instances takes 1 to {len(pmoe.INSTANCE_ROWS)} (the mesh rows above the MoE)")
         if args.dspark:
-            # The 4-row verify: one session per instance, greedy, and each round either a 4-row verify (3 drafts)
-            # or a one-row step.
+            # The 4-row verify: one session per instance, each round either a 4-row verify (3 drafts) or a one-row
+            # step, sampled on device at --temperature (default 1; 0 is greedy).
             if args.num_users not in (None, 1):
                 logger.warning(
                     f"--persistent-moe --dspark serves one session per instance: --num-users 1, not {args.num_users}"
                 )
-            if args.temperature and args.temperature != p.get_default("temperature"):
-                logger.warning(f"--persistent-moe --dspark decodes greedily: --temperature 0, not {args.temperature}")
             args.num_users = 1
             args.max_running = 1
-            args.temperature = 0.0
             drafts = _PERSISTENT_VERIFY_ROWS - 1
             if "DEEPSEEK_V41_DSPARK_DRAFTS" not in os.environ and not any(
                 a.startswith("--dspark-drafts") for a in (argv if argv is not None else sys.argv)
@@ -4402,6 +4554,8 @@ def parse_args(argv: list[str] | None = None):
     os.environ["DEEPSEEK_V41_RUST_HOST"] = "1" if args.rust_host else "0"
     if args.rust_host:
         args.tui = False  # the web monitor (demo/monitor.py) watches it, from a process of its own
+    if args.image_rows is None:
+        args.image_rows = _PERSISTENT_IMAGE_ROWS if args.persistent_moe else _IMAGE_ROWS
     if args.vision and (args.image_rows % 32 or args.image_rows <= FIRST_IMAGE_ROW):
         p.error(f"--image-rows must be a positive multiple of 32, got {args.image_rows}")
     if args.l1_small_size is None:

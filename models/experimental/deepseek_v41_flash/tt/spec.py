@@ -247,15 +247,20 @@ class DSparkSpeculator:
                 "and drafts < block"
             )
         self.device_accept = device_accept
-        # The persistent stage's block verify returns each row's greedy token, not its logits.
+        # The persistent stage's block verify returns each row's token, not its logits: the device sampler's argmax,
+        # or at a temperature (the sampler's, set on the model: ``temperature`` must be it) an independent draw per
+        # row. A round keeps the drafts up to the first that differs from its row's token (sample-and-match: every
+        # emitted token is a draw from the target, whatever the drafter proposed), so the drafter proposes greedily,
+        # which a draw matches at least as often as a sampled proposal.
         self.block_verify = parallel_verify and getattr(model, "_block_verify", False)
-        if self.block_verify and temperature != 0:
-            raise NotImplementedError("the block verify samples greedily on device: temperature 0 only")
+        if self.block_verify and (top_p < 1.0 or top_k != -1):
+            raise NotImplementedError("the block verify samples on device without top-p / top-k")
+        self.draft_temperature = 0.0 if self.block_verify else temperature
         # A block round queues the next round's fixup behind its draft, so the next round need not.
         self._fixed = False
         self.streaming = not parallel_verify and not device_accept and not model._eager_decode
         if model.dspark is not None and propose is None:
-            model.dspark.set_sampling(temperature)
+            model.dspark.set_sampling(self.draft_temperature)
         self.stats = SpecStats()
         self._stall = _StallWatch(model)
         self._next = None
@@ -275,7 +280,7 @@ class DSparkSpeculator:
 
     def _seed(self) -> Optional[int]:
         """A nonzero seed for the drafter's next uniforms when sampling, else None (greedy draws none)."""
-        if self.temperature == 0:
+        if self.draft_temperature == 0:
             return None
         return int(torch.randint(1, 2**31 - 1, (), generator=self._rng))
 
@@ -290,15 +295,15 @@ class DSparkSpeculator:
         if self._propose is None:
             drafter = self.model.dspark
             # Several sessions' speculators share the drafter, each at its own request's temperature.
-            if drafter.temperature != self.temperature:
-                drafter.set_sampling(self.temperature)
-            self._logits_pending = self.temperature > 0 and not self.device_accept and self.streaming
+            if drafter.temperature != self.draft_temperature:
+                drafter.set_sampling(self.draft_temperature)
+            self._logits_pending = self.draft_temperature > 0 and not self.device_accept and self.streaming
             self.model.spec_draft_async(token, frontier, self._seed())
 
     def _drafted(self) -> list[int]:
         if self._propose is not None:
             return list(self._propose(*self._drafting))[: self.drafts]
-        host_accept = self.temperature > 0 and not self.device_accept
+        host_accept = self.draft_temperature > 0 and not self.device_accept
         ids, _, logits = self.model.spec_read_draft(logits=host_accept and not self._logits_pending, conf=False)
         if logits is not None:
             self._proposal_logits = logits[: self.drafts]

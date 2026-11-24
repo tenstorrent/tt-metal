@@ -172,6 +172,7 @@ class DeepSeekV41DeviceSampler(DeepSeekV4Module):
             torch.ones(rows, dtype=torch.int32), dtype=ttnn.int32, device=device, mesh_mapper=replicate
         )
         self.p = ttnn.from_torch(torch.ones(rows), dtype=ttnn.bfloat16, device=device, mesh_mapper=replicate)
+        self.temperature, self.seed = 0.0, 0  # (set_sampling's)
         self.one = ttnn.from_torch(torch.ones(rows), dtype=ttnn.bfloat16, device=device, mesh_mapper=replicate)
 
     def _lead(self, greedy: bool) -> torch.Tensor:
@@ -191,6 +192,7 @@ class DeepSeekV41DeviceSampler(DeepSeekV4Module):
         Queued on command queue 0, between the steps already posted there and the ones after."""
         if temperature < 0:
             raise ValueError(f"temperature must be >= 0, got {temperature}")
+        self.temperature, self.seed = float(temperature), int(seed)
         greedy = temperature == 0
         host_to_device(torch.full((self.rows,), 1 if greedy else SAMPLE_K, dtype=torch.int32), self.k)
         host_to_device(torch.full((1, 1, 1, 1), 1.0 if greedy else 1.0 / temperature), self.inv_temp)

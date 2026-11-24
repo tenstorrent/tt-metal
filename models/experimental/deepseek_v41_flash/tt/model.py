@@ -435,14 +435,13 @@ class DeepSeekV41Model(DeepSeekV4Model):
             unsupported = {
                 # A verify block runs every layer as (verify_rows, 32)-tiled block ops (decode_verify).
                 "verify_rows other than 1 or 4": verify_rows not in (1, 4),
-                "image_rows": bool(image_rows),
-                "vision_stage": vision_stage is not None,
+                # The one stage holds the embedding table, so an image tower goes there too (vision_stage 0).
+                "vision_stage other than 0": vision_stage not in (None, 0),
                 "prefill_layer_submesh_ids": prefill_layer_submesh_ids is not None,
             }
             if any(unsupported.values()):
                 raise NotImplementedError(
-                    f"persistent_moe decodes one text row per step; unsupported: "
-                    f"{[k for k, v in unsupported.items() if v]}"
+                    f"persistent_moe decodes on one stage; unsupported: {[k for k, v in unsupported.items() if v]}"
                 )
             if submeshes is None and moe_server is not None:
                 submeshes = [moe_server.request_meshes[moe_requester]]
@@ -1082,9 +1081,14 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 "has_r2_pool": 2 in kv_ratios or 2 in row_ratios,
                 "has_r2_select": 2 in index_ratios,
                 "has_candidates": any(li in self._candidate_layers for li in layers_here),
-                # A hash-routed MoE takes no ranking bias, so only a learned router tells image tokens apart.
-                # The persistent MoE's layer table holds the text bias only, so it routes no image tokens.
-                "routes_images": self.moe_server is None and any(not self.layers[li].mlp.is_hash for li in layers_here),
+                # A hash-routed MoE takes no ranking bias, so only a learned router tells image tokens apart. The
+                # persistent MoE ranks an image token on its layer's image twin row (PersistentMoE(image_bias=True)),
+                # where every layer's router is learned.
+                "routes_images": (
+                    self.moe_server.routes_images
+                    if self.moe_server is not None
+                    else any(not self.layers[li].mlp.is_hash for li in layers_here)
+                ),
                 "traces": {},
                 "tids": {},
                 "outputs": {},
@@ -2187,7 +2191,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
             "ring_offset": None,
             "win_offset": None,
             # Image-span tokens (ids past the vocabulary) rank their experts with ``bias_vl``.
-            "image_mask": image_mask(token, self.config.vocab_size) if image else None,
+            "image_mask": self._step_image_mask(token, image),
         }
         win_base_f = None
         if self._slotted:
@@ -2354,7 +2358,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
             "page_row": out["page_row"],
             "ring_offset": out.get("ring_offset"),
             "win_offset": out.get("win_offset"),
-            "image_mask": image_mask(out["token"], self.config.vocab_size) if image else None,
+            "image_mask": self._step_image_mask(out["token"], image),
             "sdpa_lengths": {ratio: out[("lengths", ratio)] for ratio in length_ratios},
         }
         for ratio in sm["kv_ratios"]:
@@ -3755,7 +3759,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
             raise NotImplementedError(
                 "speculative decode accepts against the steps' logits: prepare without device_sampling"
             )
-        if self.image_rows:
+        if self.image_rows and not self.persistent_moe:
+            # On the persistent stage a draft starts from a generated token, and the verify blocks and decode steps
+            # hand the drafter rows, not token ids: no image-span id reaches its token table (spec_draft_async checks).
             raise NotImplementedError("the drafter's token table has no image rows: build without image_rows")
         if self._decode_batch != 1:
             raise NotImplementedError("speculative decode steps one user: prepare with batch=1")
@@ -4365,6 +4371,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
             # A verify block's requests: the server switches between the two (_use_server_rows).
             block_rows=self.verify_rows if self.verify_rows > 1 else 0,
             **({"on_demand": [1]} if self._drafter_mesh is not None else {}),
+            # Image tokens rank with each layer's bias_vl: its image twin row (see PersistentMoE).
+            image_bias=bool(self.image_rows),
         )
         logger.info(f"persistent MoE launched over layers 0..{num_layers - 1} ({time.perf_counter() - start:.0f}s)")
         logger.debug(f"stage before its layers: {_l1_report(self.submeshes[0])}")
@@ -4523,6 +4531,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
             torch.full((1, 1, t, d), float(2**20)), tile=tile, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         sm["block_tids"], sm["block_outs"] = {}, {}
+        # The image twins of the full blocks (with image_rows): a block of image-span tokens, whose MoE requests name
+        # the server's image twin rows. KV-only blocks have none: an image block always runs the full block.
+        sm["image_block_tids"], sm["image_block_outs"] = {}, {}
         selections = {}
         cand_rows = None
         for li in sm["layers"]:
@@ -4551,6 +4562,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
         )
         if self.verify_sampler.out_words != self.device_sampler.out_words:
             raise NotImplementedError("the verify block's token page must be the decode output's page")
+        if self.device_sampler.temperature:  # (the verify block draws its rows at the decode step's temperature)
+            self.verify_sampler.set_sampling(self.device_sampler.temperature, self.device_sampler.seed + 1)
         # The KV-only block: the layers that write the shared compressed KV and index keys. Its step still sends one
         # output page (zeros), so the host reads and synchronizes on it like a verify block's.
         last_source = max(i for i in cfg.kv_source_layer_ids if i < self.num_layers)
@@ -4756,7 +4769,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
         ttnn.deallocate(collapsed)
         return rows
 
-    def _block_verify_stage(self, sm: dict, variant: tuple, kv_only: bool = False) -> ttnn.Tensor:
+    def _block_verify_stage(self, sm: dict, variant: tuple, kv_only: bool = False, image: bool = False) -> ttnn.Tensor:
         """The traced verify step of a block for ``variant`` (``(odd, dense, two_level, split)``), on the persistent
         stage: the packet off the H2D socket, every layer's :meth:`~.decode.decoder_layer.DeepSeekV41PersistentMoeDecoderLayer.
         decode_block`, the final norm, ``lm_head`` and the ``T``-row sampler (greedy: each row's argmax), whose page
@@ -4765,7 +4778,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
 
         ``kv_only`` runs only layers ``0 .. max(kv_source_layer_ids)`` (``sm["kv_block_layers"]``): every compressed
         KV entry, index key and ring row of those layers, as the full block writes them, but not the rings of the
-        layers after them, no taps and no head; its page is ``sm["kv_block_done"]``."""
+        layers after them, no taps and no head; its page is ``sm["kv_block_done"]``. ``image``: the image twin, every
+        row an image-span token, whose MoE requests name the server's image twin rows."""
         cfg, t = self.config, self.verify_rows
         hc, d = cfg.hc_mult, cfg.hidden_size
         layers = sm["kv_block_layers"] if kv_only else sm["layers"]
@@ -4812,7 +4826,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
                     for part in tapped.values():
                         part.deallocate(True)
             streams, new_pre = layer.decode_block(
-                streams, pre_mix, sm["scaches"][li], **self._block_attention_inputs(layer.self_attn, ctx)
+                streams, pre_mix, sm["scaches"][li], image=image, **self._block_attention_inputs(layer.self_attn, ctx)
             )
             if getattr(self, "_block_debug_streams", None) is not None:
                 self._block_debug_streams.append(
@@ -4976,7 +4990,38 @@ class DeepSeekV41Model(DeepSeekV4Model):
                     out = self._block_verify_stage(sm, variant, kv_only)
                 ttnn.end_trace_capture(sm["device"], tid, cq_id=0)
                 tids[variant], outs[variant] = tid, out
+        if self._image_blocks:
+            # The text blocks' programs, the MoE requests naming other rows of the server's table (a runtime
+            # argument): nothing compiles here.
+            for variant in self._reachable_block_variants():
+                logger.info(f"[block-verify] capturing the image twin of {variant}")
+                tid = ttnn.begin_trace_capture(sm["device"], cq_id=0)
+                with _trace_capture_guard():
+                    out = self._block_verify_stage(sm, variant, image=True)
+                ttnn.end_trace_capture(sm["device"], tid, cq_id=0)
+                sm["image_block_tids"][variant], sm["image_block_outs"][variant] = tid, out
         self.kv_only_blocks = bool(sm["kv_block_tids"])
+
+    @property
+    def _image_blocks(self) -> bool:
+        """Whether verify blocks of image-span tokens have traces of their own (block verify with ``image_rows`` on a
+        server with image twins)."""
+        return (
+            self._block_verify
+            and bool(self.image_rows)
+            and self.moe_server is not None
+            and self.moe_server.routes_images
+        )
+
+    def _step_image_mask(self, token, image: bool):
+        """A step context's ``image_mask``: ``None`` for a text step; for an image step the per-token mask the
+        routers gather their bias rows by, or, on the persistent MoE, ``True`` -- its layers only name the server's
+        image twin rows, so the step computes nothing for it."""
+        if not image:
+            return None
+        if self.moe_server is not None:
+            return True
+        return image_mask(token, self.config.vocab_size)
 
     def decode_verify_block(self, token_ids, pos: int, kv_only: bool = False) -> list[int]:
         """One block verify step on the persistent stage: tokens ``token_ids`` (``verify_rows`` of them) at positions
@@ -4988,13 +5033,25 @@ class DeepSeekV41Model(DeepSeekV4Model):
         ``kv_only`` replays the KV-only block instead (layers ``0 .. max(kv_source_layer_ids)``, see
         :meth:`_block_verify_stage`) and returns zeros. It leaves the later layers' rings and the drafter's rings
         without these rows, so it suits only prompt tokens that the last ``sliding_window`` positions (and the drafter
-        ring's ``dspark.ring_rows``) fed with full blocks or decode steps will overwrite."""
+        ring's ``dspark.ring_rows``) fed with full blocks or decode steps will overwrite.
+
+        A block of image-span tokens (ids past the vocabulary) replays the image twin of the full block: every row
+        must be one (one request ranks every row with the same bias), and ``kv_only`` is not offered for it."""
         t = self.verify_rows
         ids = [int(i) for i in token_ids]
         if len(ids) != t:
             raise ValueError(f"a verify step takes {t} tokens, got {len(ids)}")
+        vocab = self.config.vocab_size
+        image = any(i >= vocab for i in ids)
+        if image:
+            if not all(i >= vocab for i in ids):
+                raise ValueError(f"a verify block takes image-span tokens or text tokens, not both: {ids}")
+            if kv_only:
+                raise ValueError("an image block has no KV-only trace: replay the full block")
         sm = self.submeshes_io[0]
-        tids = sm.get("kv_block_tids" if kv_only else "block_tids")
+        tids = sm.get("image_block_tids" if image else "kv_block_tids" if kv_only else "block_tids")
+        if image and not tids:
+            raise RuntimeError("no image block traces: the model takes no images (image_rows) or has no image twins")
         if not tids:
             raise RuntimeError(
                 "capture the verify traces first (capture_spec_traces)"
@@ -5036,7 +5093,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 hashes = lookup.hash_session(slot, torch.tensor([ids], dtype=torch.long), pos)
                 for layer_idx, _ in self._engram_layers:
                     ids_of_layer = hashes[:, :, lookup.layout.layer_ids.index(layer_idx)]
-                    yield layer_idx, lookup.gather(layer_idx, ids_of_layer).flatten(-2)
+                    rows = lookup.gather(layer_idx, ids_of_layer).flatten(-2)
+                    # An image-span token's n-grams are empty (DEAD): no Engram contribution.
+                    yield layer_idx, torch.zeros_like(rows) if image else rows
 
             if not hasattr(self, "_engram_by_layer"):
                 self._engram_by_layer = dict(self._engram_layers)
@@ -5088,6 +5147,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
 
         The draft samples at the drafter's temperature (``dspark.set_sampling``), from uniforms drawn on
         device with ``seed`` first (``None`` keeps the last draw, which a greedy draft ignores)."""
+        if int(token) >= self.config.vocab_size:
+            raise ValueError(f"a draft starts from a text token, got the image-span id {token}")
         self._wait_replays_dispatched()
         d = self.dspark
         if d.server_only and d.temperature != 0:

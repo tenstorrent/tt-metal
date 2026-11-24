@@ -314,9 +314,11 @@ class DS41PrefillRuntime:
             last = False
         if model.engram_on():  # P.87 (ENGRAM_DEVICE=on): the lookup and the embedding read the device ids: no readback
             ids = None
+            model.image_chunk(None)
             model.begin_chunk(None, start, last=last, write_start=write_start, device_ids=inp, valid=run_end - start)
         else:
             ids = self._host_ids(inp, start, run_end)
+            model.image_chunk(ids)  # (image-span rows: the MoE's image pass; none without enable_images)
             st.note_tokens(ids, start, run_end)
             # (P.30 / P.31: False skips the decoder; None = not told, every layer. P.51: write_start = global_write_start)
             model.begin_chunk(ids, start, last=last, write_start=write_start)
@@ -347,6 +349,7 @@ class DS41PrefillRuntime:
                 g = self.config.first_layer_idx + k
                 sink.layers_completed(g, g + 1, slot, start, end)
         model.free(h)
+        model.image_chunk(None)
 
     def _acks_only(self, st, slot, start, end, cap, sink, d2h, metadata_msg) -> None:
         """PREFILL_END=cap (P.49), a chunk with no position below cap (the request's last chunk, its whole range in

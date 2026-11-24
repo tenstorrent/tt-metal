@@ -224,9 +224,10 @@ _IDS_KERNEL = r"""
 
 constexpr uint32_t WU = get_compile_time_arg_val(0);    // 32-id units a mesh row (W / 32)
 constexpr uint32_t SP = get_compile_time_arg_val(1);    // mesh rows
-constexpr uint32_t VMAX = get_compile_time_arg_val(2);  // vocab - 1 (the clamp and the pad id)
+constexpr uint32_t VMAX = get_compile_time_arg_val(2);  // the last id the table holds
+constexpr uint32_t PADV = get_compile_time_arg_val(3);  // the id of pad positions and of ids past VMAX (vocab - 1)
 constexpr uint32_t UB = 128;                            // bytes a unit (32 uint32)
-constexpr auto s_args = TensorAccessorArgs<3>();
+constexpr auto s_args = TensorAccessorArgs<4>();
 constexpr auto d_args = TensorAccessorArgs<s_args.next_compile_time_args_offset()>();
 
 void kernel_main() {
@@ -262,7 +263,7 @@ void kernel_main() {
     const uint32_t p0 = me * WU * 32;
     for (uint32_t i = 0; i < WU * 32; ++i) {
         const uint32_t x = v[i];
-        v[i] = (p0 + i >= valid || x > VMAX) ? VMAX : x;
+        v[i] = (p0 + i >= valid || x > VMAX) ? PADV : x;
     }
     noc_async_write(buf, D.get_noc_addr(0), WU * UB);
     noc_async_write_barrier();
@@ -274,12 +275,15 @@ class IdsReorder:
     """POS_DYNAMIC=on: the engine's device input -> each chip's natural-order embedding ids, on the device (module
     docstring). One gather output allocated at first use (load-time shaped), one prepared program for every start."""
 
-    def __init__(self, mesh, chunk: int, vocab: int):
+    def __init__(self, mesh, chunk: int, vocab: int, rows: int | None = None):
+        """``rows``: the embedding table's rows when it holds more than the vocabulary (image-span rows past it,
+        tt/model.enable_images): ids below it are kept; pad positions and ids past it still read row vocab - 1."""
         self.mesh = mesh
         self.sp, self.tp = int(mesh.shape[SP_AXIS]), int(mesh.shape[TP_AXIS])
         self.chunk, self.w = int(chunk), int(chunk) // int(mesh.shape[SP_AXIS])
         assert self.w * self.sp == self.chunk and self.w % 32 == 0, (chunk, self.sp)
-        self.vmax = int(vocab) - 1
+        self.pad = int(vocab) - 1
+        self.vmax = (int(rows) if rows else int(vocab)) - 1
         self._gat = None
         self._pp = None
 
@@ -301,7 +305,7 @@ class IdsReorder:
     def _build(self, src, dst):
         crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
         wu = self.w // 32
-        ct = [wu, self.sp, self.vmax]
+        ct = [wu, self.sp, self.vmax, self.pad]
         for t in (src, dst):
             ct += list(ttnn.TensorAccessorArgs(t).get_compile_time_args())
         size = 64 + wu * 128

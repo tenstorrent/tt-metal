@@ -55,6 +55,28 @@ def _apply_env() -> None:
             raise ValueError(f"{name}={got}: the d_p bridge needs {name}={value}")
 
 
+# An image span's ids (tt/vision.py: DELIMITER_ROWS, FIRST_IMAGE_ROW): vocab + 0 / 1 / 2 its start / newline / end
+# delimiters, vocab + 3 + r the vision rows.
+FIRST_IMAGE_ROW = 3
+_DELIMITER_NAMES = ("image_start", "image_newline", "image_end")
+
+
+def _delimiter_rows(checkpoint: str) -> torch.Tensor:
+    """The learned image-span delimiters ``[3, hidden]`` bf16 (``vocab + 0 .. 2``), from the checkpoint's own files
+    (metal_2's Checkpoint reads the text decoder's tensors only)."""
+    import json
+
+    from safetensors import safe_open
+
+    with open(os.path.join(checkpoint, "model.safetensors.index.json")) as f:
+        files = json.load(f)["weight_map"]
+    rows = []
+    for name in _DELIMITER_NAMES:
+        with safe_open(os.path.join(checkpoint, files[name]), "pt") as f:
+            rows.append(f.get_tensor(name).to(torch.bfloat16).reshape(-1))
+    return torch.stack(rows)
+
+
 def kv_only_layers(cfg) -> list[int]:
     """Layers 0 .. the last KV source (layer 20): the layers whose state decode needs from a prefill."""
     return list(range(max(cfg.kv_sources) + 1))
@@ -70,7 +92,12 @@ class DPPrefill:
     the memory serving will have.
 
     ``prefill(ids, slot, start)`` runs a prompt chunk by chunk from ``start``; ``host_states(T, slot=, base=)`` reads
-    layers 0-20 back."""
+    layers 0-20 back.
+
+    ``image_rows`` (images): prompts may hold image-span tokens laid out as this model's decode side lays them out
+    (``tt/vision.py``): ids ``vocab + 0 .. 2`` the learned span delimiters (written here, from the checkpoint), ids
+    ``vocab + 3 + r`` the vision rows ``r`` (``write_image_rows``) of a ``vocab + image_rows`` row embedding table. They
+    route with ``gate.bias_vl`` and take no part in an Engram n-gram (metal_2's ``TtDS41Model.enable_images``)."""
 
     def __init__(
         self,
@@ -82,6 +109,7 @@ class DPPrefill:
         dram_reserve: Optional[int] = None,
         checkpoint: Optional[str] = None,
         spec=None,
+        image_rows: int = 0,
     ):
         _apply_env()
         from models.demos.common.prefill.adapter import PrefillRunParams
@@ -120,6 +148,14 @@ class DPPrefill:
         )
         assert self.runtime.layer_ids == self.layers, (self.runtime.layer_ids, self.layers)
         assert self.runtime.model.skip_mode == "decode", self.runtime.model.skip_mode
+        self.vocab = int(self.cfg.vocab_size)
+        self.image_rows = 0
+        if image_rows:
+            model = self.runtime.model
+            model.enable_images(int(image_rows))
+            model.write_image_rows(_delimiter_rows(ck), [self.vocab + row for row in range(FIRST_IMAGE_ROW)])
+            self.image_rows = int(image_rows)
+            note(f"images: {self.image_rows} embedding rows past the vocabulary ({FIRST_IMAGE_ROW} span delimiters)")
         self.slots: list = []
         slot_bytes = 0
         while len(self.slots) < max(1, int(slots)):
@@ -140,6 +176,22 @@ class DPPrefill:
         t0 = time.perf_counter()
         self.runtime.compile(self.kv)
         note(f"compiled in {time.perf_counter() - t0:.0f} s")
+        if self.image_rows:
+            # One chunk with image-span tokens, so the image path's programs (the MoE's image pass, its masks) are
+            # built now rather than at the first image request (junk KV in slot 0, as compile's own chunks leave).
+            t0 = time.perf_counter()
+            ids = [i % 1000 for i in range(self.chunk)]
+            ids[64 : 64 + 260] = (
+                [self.vocab] + [self.vocab + FIRST_IMAGE_ROW + i for i in range(258)] + [self.vocab + 2]
+            )
+            self.prefill(ids, slot=0)
+            note(f"image path warmed in {time.perf_counter() - t0:.0f} s")
+
+    def write_image_rows(self, rows: torch.Tensor, ids: Sequence[int]) -> None:
+        """Vision rows ``[n, hidden]`` into the embedding table at ids ``ids`` (each ``vocab + FIRST_IMAGE_ROW ..``)."""
+        if not self.image_rows:
+            raise ValueError("this prefill takes no images (image_rows=0)")
+        self.runtime.model.write_image_rows(rows, ids)
 
     def _dram_free(self) -> int:
         """Free DRAM bytes a chip (the mesh allocates in lockstep: every chip the same)."""

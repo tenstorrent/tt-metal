@@ -35,6 +35,15 @@ A message is an 8-byte big-endian header length, a JSON header, then the raw blo
   "pages", "push_seconds"}`` and no blobs, once every write has left the server's mesh (``bytes`` / ``pages``:
   what it wrote, ``push_seconds``: how long that took).
 
+Images (servers whose ``info`` has ``"image_rows"`` > 0): a ``prefill`` / ``prefill_push`` prompt may hold image-span
+tokens as the decode server lays them out (``tt/vision.py``: ``vocab + 0 .. 2`` the span delimiters, ``vocab + 3 + s``
+the vision row in the decode server's slot ``s``) when the header names every image whose rows it uses: ``"images":
+[{"key", "slots", "rows"}, ...]``, ``key`` the image (the sha1 of its bytes), ``slots`` the decode slots of its rows
+in order, ``rows`` true when the request carries them: then one more blob per such image, in order, its bf16
+``[len(slots), hidden]`` vision rows. The server keeps an image's rows by key (``demo/prefill_server.py`` ImageBook);
+when it holds neither them nor the blob it replies ``{"need": [key, ...]}`` instead, having run nothing, and the
+client sends the request again with those rows.
+
 Any reply may instead be ``{"error": message}``; the connection stays usable after it.
 """
 
@@ -43,6 +52,7 @@ from __future__ import annotations
 import json
 import socket
 import struct
+from dataclasses import dataclass
 from typing import Callable, Optional, Sequence
 from urllib.parse import urlparse
 
@@ -153,6 +163,18 @@ def _states(header: dict, blobs: list[bytearray]) -> dict:
     }
 
 
+@dataclass
+class WireImage:
+    """One image of a prompt (module docstring): ``key`` the image, ``slots`` the decode slots of its rows in order,
+    ``rows()`` its bf16 ``[len(slots), hidden]`` vision rows (read only when sent), ``send_rows`` whether to send them
+    without being asked (the server is not known to hold them)."""
+
+    key: str
+    slots: Sequence[int]
+    rows: Callable[[], torch.Tensor]
+    send_rows: bool = True
+
+
 class PrefillClient:
     """A decode server's connection to the prefill server at ``address`` (``host:port`` or ``tcp://host:port``),
     one request at a time.
@@ -167,6 +189,7 @@ class PrefillClient:
         self.address = f"{host}:{port}"
         self.sock = socket.create_connection((host, port), timeout=timeout)
         self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        self.sent_images: set = set()  # (_prompt: the keys whose rows the last prompt sent)
         try:
             self.info = self._call({"op": "info"})[0]
             self.info.pop("blobs", None)
@@ -203,23 +226,54 @@ class PrefillClient:
         header.pop("blobs", None)
         return header
 
+    def _send_prompt(self, header: dict, ids: Sequence[int], images: Sequence["WireImage"], rows: set) -> None:
+        blobs = [torch.tensor(list(ids), dtype=torch.int32).numpy()]
+        if images:
+            entries = []
+            for image in images:
+                send = image.key in rows
+                entries.append({"key": image.key, "slots": [int(s) for s in image.slots], "rows": send})
+                if send:
+                    blobs.append(_bf16_bytes(image.rows()))
+            header = {**header, "images": entries}
+        send_msg(self.sock, header, blobs)
+
+    def _prompt(self, header: dict, ids, images, on_progress, finish):
+        """Send a prompt (``prefill`` / ``prefill_push``) and read the replies to ``finish(header, blobs)``; a
+        ``need`` reply sends it again with those images' rows. :attr:`sent_images` then holds the keys whose rows
+        went to the server (the caller need not send them again)."""
+        images = list(images or ())
+        rows = {image.key for image in images if image.send_rows}
+        while True:
+            self._send_prompt(header, ids, images, rows)
+            while True:
+                reply, blobs = self._reply()
+                if "need" in reply:
+                    missing = set(reply["need"]) - {image.key for image in images}
+                    if missing or set(reply["need"]) <= rows:
+                        raise PrefillServerError(f"prefill server {self.address} asked for the rows of {reply['need']}")
+                    rows |= set(reply["need"])
+                    break
+                if "progress" in reply:
+                    if on_progress is not None:
+                        on_progress(int(reply["progress"]))
+                    continue
+                self.sent_images = rows
+                return finish(reply, blobs)
+
     def prefill(
         self,
         ids: Sequence[int],
         on_progress: Optional[Callable[[int], None]] = None,
         have: int = 0,
         cache: bool = True,
+        images: Sequence["WireImage"] = (),
     ) -> dict:
         """KV entries of ``ids`` (the whole prompt from position 0) from position ``have`` on: the client already
-        holds those of the first ``have`` tokens. ``on_progress(end)`` as the server enqueues each chunk."""
+        holds those of the first ``have`` tokens. ``on_progress(end)`` as the server enqueues each chunk. ``images``:
+        every image whose rows ``ids`` use (module docstring)."""
         header = {"op": "prefill", "have": int(have), "cache": bool(cache)}
-        send_msg(self.sock, header, [torch.tensor(list(ids), dtype=torch.int32).numpy()])
-        while True:
-            header, blobs = self._reply()
-            if "progress" not in header:
-                return _states(header, blobs)
-            if on_progress is not None:
-                on_progress(int(header["progress"]))
+        return self._prompt(header, ids, images, on_progress, _states)
 
     def prefill_push(
         self,
@@ -228,19 +282,18 @@ class PrefillClient:
         on_progress: Optional[Callable[[int], None]] = None,
         have: int = 0,
         cache: bool = True,
+        images: Sequence["WireImage"] = (),
     ) -> dict:
         """As :meth:`prefill`, but the server writes the entries into the device memory ``targets`` describes
         (``remote_commit_targets`` of the session) and replies with what it wrote: ``{"seq_len", "base", "cached",
         "seconds", "queued", "bytes", "pages", "push_seconds"}``."""
         header = {"op": "prefill_push", "have": int(have), "cache": bool(cache), "targets": targets}
-        send_msg(self.sock, header, [torch.tensor(list(ids), dtype=torch.int32).numpy()])
-        while True:
-            header, _ = self._reply()
-            if "progress" not in header:
-                header.pop("blobs", None)
-                return header
-            if on_progress is not None:
-                on_progress(int(header["progress"]))
+
+        def finish(reply, _blobs):
+            reply.pop("blobs", None)
+            return reply
+
+        return self._prompt(header, ids, images, on_progress, finish)
 
     def close(self) -> None:
         self.sock.close()

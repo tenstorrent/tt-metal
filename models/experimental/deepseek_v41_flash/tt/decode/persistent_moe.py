@@ -357,6 +357,27 @@ DSPARK_LAYER_BASE = 40
 _PAD_BIAS = -1.0e4
 
 
+def image_bias_row(moe, moe_mesh):
+    """``moe``'s image-token ranking bias as the op reads a layer's bias -- ``[1, 1, 1, E]`` bf16 ROW_MAJOR in DRAM,
+    replicated over ``moe_mesh``, like its text bias ``ranking_bias()`` -- or ``None`` for a router without one (a
+    hash router, the drafter's, a checkpoint without ``gate.bias_vl``). The values are the router's own
+    :attr:`~.moe.DeepSeekV41TopKRouter.bias_table` row 1, ``bias_vl - max(bias_vl)`` in bf16: what the TP4 decode
+    gathers for an image token."""
+    table = getattr(getattr(moe, "gate", None), "bias_table", None)
+    if table is None:
+        return None
+    rows = ttnn.to_torch(ttnn.get_device_tensors(table)[0])
+    num_experts = rows.shape[-1]
+    return ttnn.from_torch(
+        rows.reshape(-1, num_experts)[1].reshape(1, 1, 1, num_experts),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=moe_mesh,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(moe_mesh),
+    )
+
+
 class _ServerGate:
     """The router a server layer exposes: its ``[D, 32 * chips]`` gate and its bias row ``[1, 1, 1, 32 * chips]``."""
 
@@ -470,6 +491,7 @@ def launch_instances_server(
     dspark: bool = True,
     log=None,
     prefill: bool = False,
+    image_bias: bool = False,
 ) -> "PersistentMoE":
     """Launch one persistent MoE for ``num_instances`` independent model instances: layers ``0 .. num_layers - 1``
     (plus, with ``dspark``, the drafter's stages as layers :data:`DSPARK_LAYER_BASE` + s) at TP12 on the 3x4 MoE
@@ -487,7 +509,9 @@ def launch_instances_server(
     (:class:`~..prefill.persistent_moe.PersistentPrefillMoE`), as ``server.prefill_moe`` (``None`` without): each
     instance's ``build_prefill`` runs its prefill model's MoE on it, time-shared with this server. Its sockets take L1
     on the requester rows too, so it is built here, before the models. The prefill MoE's routed op needs ~1.1 MB of a
-    MoE core's L1, so the router columns stay in DRAM (as a DSpark server's do anyway)."""
+    MoE core's L1, so the router columns stay in DRAM (as a DSpark server's do anyway).
+
+    ``image_bias`` adds the target layers' image twins (:class:`PersistentMoE`), for instances that take images."""
     if tuple(full_device.shape) != GALAXY_MESH:
         raise ValueError(f"the instances' layout needs the {GALAXY_MESH} mesh, got {tuple(full_device.shape)}")
     if not 1 <= num_instances <= len(INSTANCE_ROWS):
@@ -519,6 +543,7 @@ def launch_instances_server(
             single_senders=single_senders(rows),
             rows=1,
             block_rows=4 if dspark else 0,
+            image_bias=image_bias,
         )
     finally:
         ROUTER_L1_BUDGET = router_budget
@@ -529,7 +554,8 @@ def launch_instances_server(
         server.prefill_moe = PersistentPrefillMoE(moe_mesh, request_meshes, target_moes, decode=server)
     logger.info(
         f"persistent MoE for {num_instances} instance(s) on mesh rows {rows}: layers 0..{num_layers - 1}"
-        f"{' + the DSpark drafter stages' if dspark else ''}{', + the prefill MoE' if prefill else ''}, "
+        f"{' + the DSpark drafter stages' if dspark else ''}{', + the prefill MoE' if prefill else ''}"
+        f"{f', + {len(server.image_table_rows)} image twins' if server.image_table_rows else ''}, "
         f"request modes {server.modes} "
         f"({time.perf_counter() - start:.0f}s)"
     )
@@ -590,6 +616,11 @@ class PersistentMoE:
     requester-side request rows -- no relaunch -- so requesters may mix one-row and block requests freely, and no
     one-row sockets or partials are built. ``DEEPSEEK_V41_MOE_MIXED_ROWS=0`` keeps one launch per mode instead (a
     switch stops and relaunches the kernels).
+
+    ``image_bias`` adds an image twin of every layer whose router has an image-token bias (``gate.bias_vl``): a row of
+    the table after the layers' own, :attr:`image_table_rows`, naming the same weights but that bias, so a request
+    with ``image=True`` ranks its experts as the reference ``Gate`` ranks an image-span token. A request names one
+    row, so every row of a block takes the same bias: an image block is all image tokens.
     """
 
     def __init__(
@@ -604,6 +635,7 @@ class PersistentMoE:
         rows: int = 1,
         block_rows: int = 0,
         on_demand: Sequence[int] = (),
+        image_bias: bool = False,
     ):
         if not isinstance(moes, Mapping):
             moes = dict(enumerate(moes))
@@ -617,6 +649,15 @@ class PersistentMoE:
         self.request_meshes = list(request_meshes)
         self.layer_ids = sorted(moes)
         self.table_rows = {layer: row for row, layer in enumerate(self.layer_ids)}
+        # Image twins (image_bias): layer -> its twin's row, after every layer's own; layer -> the twin's bias.
+        self.image_table_rows: dict[int, int] = {}
+        self._image_biases: dict = {}
+        if image_bias:
+            for layer in self.layer_ids:
+                bias = image_bias_row(moes[layer], moe_mesh)
+                if bias is not None:
+                    self.image_table_rows[layer] = len(self.layer_ids) + len(self.image_table_rows)
+                    self._image_biases[layer] = bias
         self.socket_core = socket_core or default_socket_core(moe_mesh)
         self.request_core = request_core or default_socket_core(self.request_meshes[0])
         # With the HC post step fused, one partials part per stream-collapse core; without, one per fabric link.
@@ -753,16 +794,24 @@ class PersistentMoE:
             self._router_l1 = None
         return self._router_dram
 
+    @property
+    def routes_images(self) -> bool:
+        """Whether the table holds image twins (``image_bias``), so requests may pass ``image=True``."""
+        return bool(self.image_table_rows)
+
     def _build_layer_table(self, routers: list) -> ttnn.Tensor:
         rows = []
-        for row, layer in enumerate(self.layer_ids):
+        # Every layer's own row, then the image twins (image_table_rows): the same weights, the image-token bias.
+        entries = [(row, layer, self._moes[layer].gate.ranking_bias()) for row, layer in enumerate(self.layer_ids)]
+        entries += [(row, layer, self._image_biases[layer]) for layer, row in self.image_table_rows.items()]
+        for row, layer, bias in entries:
             moe = self._moes[layer]
             header = [
                 row,
                 moe.fused_shared.gate_up.buffer_address(),
                 moe.fused_shared.down.buffer_address(),
-                routers[row].buffer_address(),
-                moe.gate.ranking_bias().buffer_address(),
+                routers[self.table_rows[layer]].buffer_address(),
+                bias.buffer_address(),
                 # kFeHdrTopK: a layer picking fewer than the op's top_k per row (the drafter's).
                 getattr(moe, "server_top_k", 0),
                 0,
@@ -982,16 +1031,26 @@ class PersistentMoE:
         )
         ttnn.copy_host_to_device_tensor(host, self.inputs[requester] if tensor is None else tensor)
 
-    def row_of_layer(self, layer: int) -> int:
+    def row_of_layer(self, layer: int, image: bool = False) -> int:
+        """``layer``'s row of the table; ``image``: its image twin's (see ``image_bias``)."""
+        if image:
+            try:
+                return self.image_table_rows[layer]
+            except KeyError:
+                raise KeyError(
+                    f"layer {layer} has no image twin on this persistent MoE (twins: {sorted(self.image_table_rows)}; "
+                    "build it with image_bias=True)"
+                ) from None
         try:
             return self.table_rows[layer]
         except KeyError:
             raise KeyError(f"layer {layer} is not on this persistent MoE (it serves {self.layer_ids})") from None
 
-    def request(self, requester: int, layer: int, tensor=None, streams=None, post=None, comb=None):
+    def request(self, requester: int, layer: int, tensor=None, streams=None, post=None, comb=None, image: bool = False):
         """Dispatches ``requester``'s request for ``layer`` (a model layer id) without waiting for it; returns its
         output, the reduced row in ``tensor``'s spec, replicated over the requester's chips. ``tensor`` is a
         ``[1, 1, 1, D]`` bf16 ROW_MAJOR DRAM-interleaved row (one page), :meth:`request_input`'s by default.
+        ``image`` ranks every row of the request with the layer's image-token bias (its image twin's row).
 
         With ``streams`` ``[1, 1, hc, D]`` (in :meth:`streams_memory_config`), ``post`` ``[1, 1, hc, 1]`` and
         ``comb`` ``[1, 1, hc, hc]`` (bf16 TILE) the output is instead the hyper-connection's new streams,
@@ -1011,7 +1070,7 @@ class PersistentMoE:
             raise ValueError(
                 f"a request takes [1, 1, 1, rows * {self.hidden}] for rows in {allowed}, got {list(tensor.shape)}"
             )
-        return self._send(requester, self.row_of_layer(layer), tensor, streams=streams, post=post, comb=comb)
+        return self._send(requester, self.row_of_layer(layer, image), tensor, streams=streams, post=post, comb=comb)
 
     def _send(self, requester: int, row: int, tensor=None, streams=None, post=None, comb=None):
         return ttnn.experimental.deepseek.moe.persistent_moe_request(

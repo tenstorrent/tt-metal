@@ -300,6 +300,7 @@ class TtEngramRows:
         self.mesh, self.hasher, self.table, self.layer = mesh, hasher, table, layer
         self.width = hasher.tail_len * hasher.n_heads * table.dim  # 3 x 8 x 256 = 6144
         self.vocab = int(hasher.token_map.shape[0])
+        self.text_vocab = None  # enable_images: ids from here on are image-span tokens (zero rows)
         self.mode = mode or settings.get("ENGRAM_TABLE")
         self.threads = threads or settings.get("ENGRAM_GATHER_THREADS")
         self.format = rows_format or settings.get("ENGRAM_ROWS")
@@ -370,6 +371,32 @@ class TtEngramRows:
     def new_tail(self) -> torch.Tensor:
         return self.hasher.new_tail()
 
+    def enable_images(self, text_vocab: int, rows: int) -> None:
+        """Image-span tokens, ids ``text_vocab .. rows - 1`` (tt/model.enable_images): the hasher's compressed token
+        map grows to ``rows`` with DEAD there, so no n-gram spans one (every hash path reads the map: the reference
+        NgramHashState's ``token_mask``), and their rows are zero (_zero_images: the reference gates their Engram
+        output to 0; a zero row makes the device's value, so its output, zero). The hasher is shared: grown once."""
+        from models.demos.deepseek_v41_flash_d_p.reference.ngram import DEAD
+
+        tm = self.hasher.token_map
+        if tm.shape[0] < rows:
+            assert tm.shape[0] == text_vocab, (tm.shape, text_vocab)
+            self.hasher.token_map = torch.cat([tm, torch.full((rows - tm.shape[0],), DEAD, dtype=tm.dtype)])
+            from . import engram_host_cpp
+
+            for key in [k for k, v in engram_host_cpp._HASH_ARGS.items() if v[0] is self.hasher]:
+                del engram_host_cpp._HASH_ARGS[key]  # (its token map copy)
+        assert self.hasher.token_map.shape[0] == rows, (self.hasher.token_map.shape, rows)
+        self.vocab = int(rows)
+        self.text_vocab = int(text_vocab)
+
+    def _images(self, ids: torch.Tensor, valid: int):
+        """The image-span positions among the chunk's first ``valid`` (int64 [k]), or None."""
+        if self.text_vocab is None or not valid:
+            return None
+        at = (ids[:valid] >= self.text_vocab).nonzero().flatten()
+        return at if at.numel() else None
+
     def _hashes(self, ids: torch.Tensor, tail: torch.Tensor, fast: bool = False, threads: int | None = None):
         """The table rows of ids [valid] with the carried tail -> (rows [valid, slots] int64, new tail). ``fast``
         (HOST_HIDE=on, P.78): the numba form (tt/engram_bfp8.ngram_hashes, bit-equal; tests/test_engram_hash.py)."""
@@ -394,6 +421,9 @@ class TtEngramRows:
             return rows, tail.clone()
         h, new_tail = self.hasher.hashes(ids[:valid], self.layer, tail.long())
         rows[:valid] = self.rows(h).flatten(1).to(torch.bfloat16)  # exact (e4m3 x 2^k)
+        images = self._images(ids, valid)
+        if images is not None:
+            rows[images] = 0
         return rows, new_tail
 
     def to_device(self, rows: torch.Tensor) -> ttnn.Tensor:
@@ -439,6 +469,9 @@ class TtEngramRows:
         t2 = time.perf_counter()
         e, m = pack_rows(w, sc, threads=threads or self.threads)
         exps[:valid], mags[:valid] = e.view(valid, -1), m.view(valid, -1)
+        images = self._images(ids, valid)
+        if images is not None:
+            exps[images], mags[images] = 0, 0
         if times is not None:
             times.update(hash=(t1 - t0) * 1e3, lookup=(t2 - t1) * 1e3, pack=(time.perf_counter() - t2) * 1e3)
         return exps, mags, new_tail
@@ -495,6 +528,12 @@ class TtEngramRows:
         outs = outs or [None] * rows_ax
         th = threads or self.threads
         tiles = [tile_rows(packed, h[r * n : (r + 1) * n], n, th, outs[r]) for r in range(rows_ax)]
+        images = self._images(ids, valid)
+        if images is not None:
+            for r in range(rows_ax):
+                mine = images[(images >= r * n) & (images < (r + 1) * n)] - r * n
+                if mine.numel():
+                    zero_tile_rows(tiles[r], mine, self.width)
         if times is not None:
             times.update(
                 build_wait=(t0b - t0) * 1e3, hash=(t1 - t0b) * 1e3, lookup_pack=(time.perf_counter() - t1) * 1e3
@@ -889,6 +928,21 @@ class TtEngramRows:
             return self.to_device_bfp8(exps, mags), new_tail
         rows, new_tail = self.host_rows(tokens, tail, valid)
         return self.to_device(rows), new_tail
+
+
+def zero_tile_rows(tiles: torch.Tensor, rows: torch.Tensor, width: int) -> None:
+    """bfloat8_b TILE bytes of [n, width] (tt/engram_bfp8.tile_bytes' layout: a tile's 64 exponents, [face row 2,
+    face column 2, 16 rows], then its 1024 magnitudes, [face row, face column, 16 rows, 16 columns]) with rows
+    ``rows`` (int64 [k], < n) zero, in place: their exponents and magnitudes (each exponent is one row's 16 values)."""
+    t = tiles.view(-1, width // 32, 1088)  # [tile rows, tile columns, bytes]
+    rows = rows.long()
+    tr, rr = rows // 32, rows % 32
+    fr, r16 = rr // 16, rr % 16
+    exps = (fr * 32 + r16).unsqueeze(1) + torch.tensor([0, 16])  # [k, 2]: face columns 0 and 1
+    t[tr.unsqueeze(1).expand_as(exps), :, exps] = 0
+    span = (torch.tensor([0, 256]).unsqueeze(1) + torch.arange(16)).reshape(1, -1)  # [1, 32]
+    mags = (64 + fr * 512 + r16 * 16).unsqueeze(1) + span  # [k, 32]
+    t[tr.unsqueeze(1).expand_as(mags), :, mags] = 0
 
 
 def build_engram_rows(mesh, ck, cfg, layer: int, hasher=None) -> TtEngramRows:

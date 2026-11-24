@@ -515,8 +515,9 @@ class DeepSeekV41PersistentMoeDecoderLayer(DeepSeekV41DecoderLayer):
     The FFN step sends the normed row to the server (``persistent_moe_request``) and mixes in the reduced row it
     gets back, replicated over the TP4 chips, in place of the MoE block's all-reduced output.
 
-    Decode only, one row: ``B == 1`` and ``S == 1``. The server takes one ``[1, D]`` row per request, and its
-    layer table holds the router's text bias only, so image tokens (``image_mask``) are not supported.
+    Decode only, one row: ``B == 1`` and ``S == 1`` (or a verify block, :meth:`decode_block`). The server takes one
+    ``[1, D]`` row per request. An image-span token's request names the layer's image twin on the server, whose row
+    ranks the experts with ``bias_vl`` (``PersistentMoE(image_bias=True)``): ``image_mask`` is only a flag here.
     """
 
     def __init__(
@@ -577,9 +578,10 @@ class DeepSeekV41PersistentMoeDecoderLayer(DeepSeekV41DecoderLayer):
             self.engram.wkv.fetch_weights()
         self.self_attn.prefetch_weights(one_row=one_row, fused_qkv=fused_qkv)
 
-    def moe(self, normed: ttnn.Tensor, post=None, comb=None, streams=None) -> ttnn.Tensor:
+    def moe(self, normed: ttnn.Tensor, post=None, comb=None, streams=None, image: bool = False) -> ttnn.Tensor:
         """The server's MoE of ``normed`` ``[1, 1, 1, D]``: the reduced row as ``[1, 1, 1, D]`` bf16 ROW_MAJOR in
-        DRAM, replicated over the mesh. ``normed`` is not consumed.
+        DRAM, replicated over the mesh. ``normed`` is not consumed. ``image``: an image-span token's row, ranked with
+        the layer's ``bias_vl`` (its image twin on the server).
 
         With ``post``, ``comb`` and ``streams`` the request also runs the FFN hyper-connection's post step on the
         row (``mix_streams``, on the stream-collapse cores as the partials arrive) and returns the new streams, in
@@ -603,7 +605,9 @@ class DeepSeekV41PersistentMoeDecoderLayer(DeepSeekV41DecoderLayer):
             row = ttnn.reshape(prev, [1, 1, 1, d])
             if prev is not normed and prev.buffer_address() != row.buffer_address():
                 ttnn.deallocate(prev)
-        out = self.moe_server.request(self.requester, self.layer_idx, row, streams=streams, post=post, comb=comb)
+        out = self.moe_server.request(
+            self.requester, self.layer_idx, row, streams=streams, post=post, comb=comb, image=image
+        )
         if row is not normed and row.buffer_address() != normed.buffer_address():
             ttnn.deallocate(row)
         return out
@@ -627,7 +631,7 @@ class DeepSeekV41PersistentMoeDecoderLayer(DeepSeekV41DecoderLayer):
         hidden_streams: ttnn.Tensor,
         pre_mix: ttnn.Tensor,
         scache: _StaticLayerCache,
-        image_mask: Optional[ttnn.Tensor] = None,
+        image_mask=None,
         defer_mix: bool = False,
         **attn_inputs,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -635,11 +639,13 @@ class DeepSeekV41PersistentMoeDecoderLayer(DeepSeekV41DecoderLayer):
 
         As :meth:`DeepSeekV41DecoderLayer.decode` for one row, the MoE on the server; ``hidden_streams`` may be a
         :class:`PendingMix` and ``defer_mix`` returns one, unless the request runs the FFN mix itself. On an Engram
-        layer the step's rows go to ``self.engram.write_rows`` before this call."""
+        layer the step's rows go to ``self.engram.write_rows`` before this call. ``image_mask`` not ``None``: the
+        step's token is an image-span token (the variant was chosen for it), so the MoE request names the layer's
+        image twin; its value is not read."""
         shape = (hidden_streams.streams if isinstance(hidden_streams, PendingMix) else hidden_streams).shape
         b, s = shape[0], shape[1]
         assert b == 1 and s == 1, f"the persistent MoE decodes one row per step, got [{b}, {s}]"
-        assert image_mask is None, "the persistent MoE's layer table holds the text router bias only"
+        image = image_mask is not None
 
         one_row = self.device.arch() == ttnn.Arch.BLACKHOLE
         if self.engram is not None:
@@ -718,12 +724,12 @@ class DeepSeekV41PersistentMoeDecoderLayer(DeepSeekV41DecoderLayer):
         if self._fuses_post(post, comb, hidden_streams):
             # FFN_MIX runs inside the request, as the partials arrive.
             with _region("MOE"):
-                streams_out = self.moe(normed, post=post, comb=comb, streams=hidden_streams)
+                streams_out = self.moe(normed, post=post, comb=comb, streams=hidden_streams, image=image)
             ttnn.deallocate(normed)
             ttnn.deallocate(hidden_streams)
             return streams_out, ffn_pre
         with _region("MOE"):
-            mlp_out = self.moe(normed)
+            mlp_out = self.moe(normed, image=image)
         ttnn.deallocate(normed)
         if defer_mix and DEFER_FFN_MIX and one_row:
             return PendingMix(post, comb, mlp_out, hidden_streams, True), ffn_pre
@@ -733,7 +739,14 @@ class DeepSeekV41PersistentMoeDecoderLayer(DeepSeekV41DecoderLayer):
         ttnn.deallocate(mlp_out)
         return streams_out, ffn_pre
 
-    def decode_block(self, streams: ttnn.Tensor, pre_mix: ttnn.Tensor, scache: _StaticLayerCache, **attn_inputs):
+    def decode_block(
+        self,
+        streams: ttnn.Tensor,
+        pre_mix: ttnn.Tensor,
+        scache: _StaticLayerCache,
+        image: bool = False,
+        **attn_inputs,
+    ):
         """One verify block of ``R`` rows through the layer: ``(streams, pre_mix)`` -> the same pair for the next layer.
 
         ``streams`` are the block's ``(R, 32)``-tiled ``[1, 1, hc * R, D]`` stream-major (row ``h * R + j``) in the
@@ -742,7 +755,8 @@ class DeepSeekV41PersistentMoeDecoderLayer(DeepSeekV41DecoderLayer):
         :meth:`~.attention.DeepSeekV41Attention.decode_block`. The server must serve ``R``-row requests. Every step
         is one block op: Engram, ATTN_HC (input norm where the ratio-2 compressor needs it, and the token replica),
         attention, FFN_HC (the attention mix and the post-attention norm folded, the MoE row in DRAM) and the MoE
-        request, which runs the FFN mix."""
+        request, which runs the FFN mix. ``image``: every row is an image-span token, so the request names the
+        layer's image twin on the server (its ``bias_vl``); a block never mixes image and text tokens."""
         attn = self.self_attn
         if self.engram is not None:
             with _region("ENGRAM"):
@@ -791,7 +805,9 @@ class DeepSeekV41PersistentMoeDecoderLayer(DeepSeekV41DecoderLayer):
             dbg["row"] = host(row).reshape(d // 32, 2, r, 16).permute(2, 0, 1, 3).reshape(r, d)
             dbg["post2"], dbg["comb2"], dbg["ffn_pre"] = host(post2), host(comb2), host(ffn_pre)
         with _region("MOE"):
-            out = self.moe_server.request(self.requester, self.layer_idx, row, streams=mixed, post=post2, comb=comb2)
+            out = self.moe_server.request(
+                self.requester, self.layer_idx, row, streams=mixed, post=post2, comb=comb2, image=image
+            )
         if dbg is not None:
             dbg["out"] = host(out).reshape(-1, r, d)
         for t in (row, mixed, post2, comb2):

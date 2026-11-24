@@ -196,6 +196,24 @@ The web monitor at `http://$DECODE_IP:8090` shows prefill progress, decode token
 the Rust runtime from section 2. The page stays up even after the decode server exits, so use the curl above to
 check whether the server is running.
 
+Images work as in single-host serving (`image_url` parts with base64 `data:` URLs, or uploaded files). Each decode
+instance runs its own vision tower. The decode server sends each image's vision rows to the prefill server the first
+time a prompt uses it (keyed by the image's sha1). The prefill server keeps those rows in its own embedding table and
+prefills image tokens like text: image tokens pick experts with `gate.bias_vl` and take no part in Engram. It holds
+`--image-rows` rows (default 16384: 3 span delimiters, then the images, 184-1024 rows each; 40 MiB a chip). When
+they run out, it drops the least recently used image, and any prefix-cache slot that holds that image. `--image-rows 0`
+turns images off on the prefill server. Then the decode server falls back to sending only the text before a prompt's
+first image, and replays the rest itself (about 1 s per 270 tokens). `--no-vision` on the decode server turns images
+off. To check images end to end (it needs no device on the machine you run it from):
+
+```bash
+python models/experimental/deepseek_v41_flash/demo/image_client.py --url http://$DECODE_IP:$DECODE_PORT
+```
+
+Pass: it prints `8/8 passed`. In the prefill server's log, the first request with a new image logs `image <sha1>: N
+rows written`. If the prefill server restarts while the decode server keeps running, it logs `asking for the rows of
+N image(s)` once per image, and the decode server sends them again.
+
 To measure performance across prompt lengths:
 
 ```bash

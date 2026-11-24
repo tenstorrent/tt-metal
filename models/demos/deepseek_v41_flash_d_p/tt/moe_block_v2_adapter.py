@@ -193,6 +193,7 @@ class TtMoEBlockV2Layer:
         blk = self.block()
         self.gidx, self.w_gu, self.w_d = self._routed(blk)
         self.head_w = None  # (the head's weights: at the layer's first call)
+        self.head_w_image = None  # (their image twin, router bias gate.bias_vl: at the layer's first image chunk)
         logger.info(
             f"MOE_BLOCK_V2 layer={layer} experts={cfg.n_experts} ({self.epc} a chip) chunk={chunk} "
             f"experts_impl={settings.get('EXPERTS_IMPL')} own_rows={self.own_rows} cap={_mb().max_grid()} "
@@ -457,7 +458,7 @@ class TtMoEBlockV2Layer:
         weights shared when its flat plan lays them out as this one's, else laid out for it."""
         out = copy.copy(self)
         out.chunk = int(chunk)
-        out.head_w = None
+        out.head_w = out.head_w_image = None
         out._can_feed = None
         blk = out.block()
         if _packing(self.lay) == _packing(out._plan(blk)):
@@ -468,24 +469,29 @@ class TtMoEBlockV2Layer:
         return out
 
     def __call__(
-        self, x: ttnn.Tensor, xq_ready: bool = False, fed: bool = False, span: dict | None = None
+        self,
+        x: ttnn.Tensor,
+        xq_ready: bool = False,
+        fed: bool = False,
+        span: dict | None = None,
+        image: tuple | None = None,
     ) -> ttnn.Tensor:
         """x: ffn_norm's output (the column split [1, 1, S/SP, H/TP]; OWN_ROWS: [1, 1, S/(SP TP), H]) -> the MoE
         output, same rows. xq_ready: never (input_buffers gives no xq). fed (FFN_FEED=on, P.36): the attn_residual pass
         wrote the head's input into feed_buffer(). span (PB.4, PACKED_MOE=on: tt/packed_device.MoEPadSpan): a padded
         chunk's {actual_start, actual_end} one-word device tensors (per device: its SP row's real rows a prefix) - the
-        pad rows are not routed, dispatched, computed or combined (their routed part is zero); None: every row real."""
+        pad rows are not routed, dispatched, computed or combined (their routed part is zero); None: every row real.
+        image (tt/model.image_chunk): the chunk's (keep_text, keep_image) masks when it has image-span tokens, whose
+        experts the router picks with bias_vl (_image_pass); None: a text chunk, one pass."""
         assert x.layout == ttnn.TILE_LAYOUT
         assert not xq_ready, "MOE_BLOCK_SRC=block: the head takes no xq"
         blk = self.block()
         weights = self._head_weights(blk)
         xb = cast(x, ttnn.bfloat16)
         span = span or {}
-        if not self.own_rows:
-            assert not fed, "FFN_FEED: the feed is the OWN_ROWS path's"
-            y = blk(xb, weights, **span)
-        else:
-            y = self._own_rows(blk, xb, weights, fed=fed, span=span)
+        y = self._forward(blk, xb, weights, fed, span)
+        if image is not None:
+            y = self._image_pass(blk, xb, y, fed, span, image)
         if xb is not x:
             dealloc(xb)
         if not self.fold:
@@ -493,6 +499,52 @@ class TtMoEBlockV2Layer:
             dealloc(y)
             y = y32
         return y
+
+    def _forward(self, blk, xb, weights, fed: bool, span: dict):
+        if not self.own_rows:
+            assert not fed, "FFN_FEED: the feed is the OWN_ROWS path's"
+            return blk(xb, weights, **span)
+        return self._own_rows(blk, xb, weights, fed=fed, span=span)
+
+    def _image_pass(self, blk, xb, y, fed: bool, span: dict, image):
+        """A chunk with image-span tokens: the reference's router ranks those with ``gate.bias_vl`` instead of
+        ``gate.bias`` (inference/model.py Gate, ``image_mask``), and the head's router takes one bias for every row.
+        So the layer runs again on the same input with the head's image twin (_image_head_weights: the same weights
+        but the router bias) and each row's output is its kind's pass: y = y_text * keep_text + y_image * keep_image,
+        the masks 0 / 1 [rows, 1] in y's row layout (exact: products by 1 and 0, sums with 0). ``y``: the text pass's
+        output, which may be the load-time output buffer (_lean_out) the second pass writes again."""
+        keep_text, keep_image = image
+        text = ttnn.multiply(y, keep_text, memory_config=DRAM)
+        dealloc(y)  # (not the load-time buffer: dealloc skips it)
+        y2 = self._forward(blk, xb, self._image_head_weights(blk), fed, span)
+        img = ttnn.multiply(y2, keep_image, memory_config=DRAM)
+        ttnn.add(text, img, memory_config=DRAM, output_tensor=y2)
+        dealloc(text)
+        dealloc(img)
+        return y2
+
+    def _image_head_weights(self, blk):
+        """The head's weights with the router bias ``gate.bias_vl``: everything else (the shared expert's and the
+        router's weights, the expert index) the text head's own tensors, so only the [E, 32] fp32 bias tiles are new
+        (head_weights.cpp lays the bias out as bias[expert] in all 32 lanes of row ``expert``, every chip the same)."""
+        if getattr(self, "head_w_image", None) is None:
+            self._head_weights(blk)
+            hw = self.head_w
+            b = self.ck.weight(f"layers.{self.layer}.ffn.gate.bias_vl", torch.float32)[self.perm]
+            e = int(b.numel())
+            assert tuple(hw.router_bias.shape)[-2:] == (e, 32), (tuple(hw.router_bias.shape), e)
+            bias = ttnn.from_torch(
+                b.reshape(e, 1).expand(e, 32).contiguous(),
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh,
+                memory_config=DRAM,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+            )
+            self.head_w_image = _mb().MoEHeadWeights(hw.w, hw.w_router, bias, hw.router_index)
+        from models.demos.moe_block.tt.moe_block import MoEBlockWeights
+
+        return MoEBlockWeights(head=self.head_w_image, expert_ids=self.gidx, gate_up=self.w_gu, down=self.w_d)
 
     def _own_rows(self, blk, x_own, weights, fed: bool = False, span: dict | None = None):
         """OWN_ROWS: x [1, 1, S/(SP TP), H] -> one TP all-to-all into [1, 1, S/SP, H/TP] -> head, dispatch, experts +

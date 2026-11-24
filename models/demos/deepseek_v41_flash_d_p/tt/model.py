@@ -871,6 +871,8 @@ class TtDS41Block:
                 pk = ctx.extra.get("packed")
                 span = None if pk is None else pk.moe_span
                 kw = {} if span is None else {"span": span}
+                if self.model._image_mask is not None:  # (image_chunk: image-span rows route with gate.bias_vl)
+                    kw["image"] = self.model._image_mask
                 if ctx.extra.pop("ffn_fed", False):  # FFN_FEED=on (P.36): attn_residual's pass wrote the head's x
                     return self.moe_block(x, xq_ready=ready, fed=True, **kw)
                 return self.moe_block(x, xq_ready=ready, **kw)
@@ -1331,6 +1333,10 @@ class TtDS41Model:
                 mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=(None, 1)),
             )
             del emb
+        # images (enable_images): the table's rows past the vocabulary, and the chunk's image masks (image_chunk)
+        self.image_rows = 0
+        self.emb_rows = self.vocab
+        self._image_mask = None
         # layer 0's pending pre: one-hot on stream 0 (reference first_block_input), [S/SP, 4] fp32, cloned per chunk
         # (MHC_FUSED=on: [S/SP, 24], the width of the mixes the boundary carries; only columns 0..3 are read)
         rows = self.rows
@@ -2181,11 +2187,13 @@ class TtDS41Model:
         if getattr(self, "_ids_reorder", None) is None:
             from .page_copy import IdsReorder
 
-            self._ids_reorder = IdsReorder(self.mesh, self.chunk, self.vocab)
+            self._ids_reorder = IdsReorder(self.mesh, self.chunk, self.vocab, rows=self.emb_rows)
         return self._ids_reorder(inp, start, valid)
 
     def _host_emb_ids(self, tokens: torch.Tensor):
-        ids = tokens.reshape(-1).long().clamp(0, self.vocab - 1).to(torch.int32)
+        ids = tokens.reshape(-1).long()
+        # (ids past the table, the engine's pad among them, read row vocab - 1; enable_images' rows are kept)
+        ids = torch.where(ids < self.emb_rows, ids.clamp_min(0), self.vocab - 1).to(torch.int32)
         assert ids.numel() == self.chunk, (ids.numel(), self.chunk)
         return from_torch(
             ids.reshape(self.sp, self.chunk // self.sp).contiguous(),
@@ -2195,6 +2203,94 @@ class TtDS41Model:
             memory_config=DRAM,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh, mesh_shape=tuple(self.mesh.shape), dims=(0, None)),
         )
+
+    # ------------------------------------------------------------------ images (image-span tokens)
+    def enable_images(self, rows: int) -> None:
+        """Take image-span tokens as the DeepSeek-V4.1 decode side lays them out (models/experimental/
+        deepseek_v41_flash/tt/vision.py): ids ``vocab .. vocab + rows - 1`` read ``rows`` embedding rows appended to
+        the table (zero until write_image_rows), route with ``gate.bias_vl`` (image_chunk's masks -> the MoE's image
+        pass, tt/moe_block_v2_adapter._image_pass) and take no part in an Engram n-gram (their compressed id DEAD and
+        their rows zero: TtEngramRows.enable_images), as the reference's ``image_mask`` / ``token_mask`` do.
+        Call before the first chunk: the id reorder and the hash constants are built for the table's rows."""
+        rows = int(rows)
+        if rows <= 0 or rows % 32:
+            raise ValueError(f"image rows {rows}: a positive multiple of 32")
+        if self.image_rows:
+            raise ValueError(f"images are enabled already ({self.image_rows} rows)")
+        if self.embed_w is None:
+            raise ValueError("the decoder tail has no embedding")
+        if getattr(self, "_ids_reorder", None) is not None:
+            raise ValueError("enable_images before the first chunk")
+        need = {"ENGRAM_DEVICE": "off", "ENGRAM_DEVICE_TABLES": "off", "PACKED": "off", "MOE_IMPL": "block"}
+        need["MOE_BLOCK_SRC"] = "block"
+        wrong = {k: settings.get(k) for k, v in need.items() if settings.get(k) != v}
+        if wrong:
+            raise ValueError(f"images need {need}; this model runs {wrong}")
+        cols = int(self.embed_w.shape[-1])
+        zeros = ttnn.zeros([rows, cols], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh)
+        table = ttnn.concat([self.embed_w, zeros], dim=0, memory_config=DRAM)
+        ttnn.deallocate(zeros)
+        ttnn.deallocate(self.embed_w)
+        self.embed_w = table
+        self.image_rows, self.emb_rows = rows, self.vocab + rows
+        for r in self.engram.values():
+            r.enable_images(self.vocab, self.emb_rows)
+
+    def write_image_rows(self, rows: torch.Tensor, ids) -> None:
+        """Embedding rows [n, H] (bf16) into the table at token ids ``ids`` (each in vocab .. emb_rows - 1), blocks of
+        32 rows (one program), each chip its hidden columns. Synchronous; between chunks."""
+        ids = torch.as_tensor(list(ids), dtype=torch.int64)
+        hidden = int(self.cfg.dim)
+        if rows.dim() != 2 or tuple(rows.shape) != (ids.numel(), hidden):
+            raise ValueError(f"expected rows [{ids.numel()}, {hidden}], got {tuple(rows.shape)}")
+        if ids.numel() and (int(ids.min()) < self.vocab or int(ids.max()) >= self.emb_rows):
+            raise ValueError(f"image row ids must lie in [{self.vocab}, {self.emb_rows})")
+        view = ttnn.reshape(self.embed_w, [1, 1, self.emb_rows, int(self.embed_w.shape[-1])])
+        cols = ttnn.ShardTensor2dMesh(self.mesh, mesh_shape=tuple(self.mesh.shape), dims=(None, 3))
+        n = 32
+        for begin in range(0, ids.numel(), n):
+            block = torch.zeros(1, 1, n, hidden, dtype=torch.bfloat16)
+            at = torch.full((n,), self.emb_rows, dtype=torch.int32)  # (past the table: skipped)
+            part = ids[begin : begin + n]
+            block[0, 0, : part.numel()] = rows[begin : begin + n].to(torch.bfloat16)
+            at[: part.numel()] = part.to(torch.int32)
+            new = ttnn.from_torch(
+                block,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh,
+                memory_config=DRAM,
+                mesh_mapper=cols,
+            )
+            where = ttnn.from_torch(
+                at,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh,
+                memory_config=DRAM,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+            )
+            ttnn.transformer.deepseek_v4_prefill_write_rows(new, view, where)
+            ttnn.deallocate(new)
+            ttnn.deallocate(where)
+        ttnn.synchronize_device(self.mesh)
+
+    def image_chunk(self, ids: torch.Tensor | None) -> None:
+        """The chunk's image masks for the MoE's image pass: ``ids`` its natural-order ids [chunk] (the engine's pad
+        past its end); (keep_text, keep_image) bf16 0 / 1 [rows, 1] in the MoE output's row layout, or None for a
+        chunk with no image-span token. ``None`` (the chunk is over) frees them."""
+        old, self._image_mask = self._image_mask, None
+        for t in old or ():
+            ttnn.deallocate(t)
+        if ids is None or not self.image_rows:
+            return
+        ids = ids.reshape(-1).long()
+        image = (ids >= self.vocab) & (ids < self.emb_rows)
+        if not bool(image.any()):
+            return
+        m = image.to(torch.float32).reshape(-1, 1)
+        up = own_rows_to_device if self.own else row_split_to_device
+        self._image_mask = (up(self.mesh, 1.0 - m, ttnn.bfloat16), up(self.mesh, m, ttnn.bfloat16))
 
     def _embed_rest(self, e) -> DevH:
         rows, w = self.chunk // self.sp, self.cfg.dim // self.tp

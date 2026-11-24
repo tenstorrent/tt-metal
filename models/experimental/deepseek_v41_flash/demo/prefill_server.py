@@ -15,6 +15,12 @@ one (the next turn of a conversation, the same prompt again) resumes from where 
 position 0, and the reply says how many tokens came from the cache (``cached``). Independently, a decode server
 that already holds a prompt's first ``have`` tokens' entries gets only the later ones.
 
+Images (``--image-rows``, :class:`ImageBook`): a prompt may hold image-span tokens. The decode server names each
+image by key with its rows' slots and sends its vision rows the first time (``d_p_wire``). The server writes them
+into its embedding table past the vocabulary and rewrites the prompt's image ids into its own rows. In metal_2's
+model, image tokens rank experts with ``gate.bias_vl`` (the MoE runs again for a chunk that holds any) and take no
+part in an Engram n-gram (``TtDS41Model.enable_images``).
+
 Run (from the repo root, ttnn venv)::
 
     python models/experimental/deepseek_v41_flash/demo/prefill_server.py --port 9041
@@ -33,6 +39,7 @@ import socket
 import sys
 import threading
 import time
+from collections import OrderedDict, deque
 from pathlib import Path
 
 import torch
@@ -100,6 +107,105 @@ class PrefixCache:
         self.used[slot] = self.clock
 
 
+class NeedImages(Exception):
+    """A request names images whose rows this server does not hold and did not send them: reply ``{"need": keys}``."""
+
+    def __init__(self, keys: list[str]):
+        super().__init__(f"send the rows of images {keys}")
+        self.keys = keys
+
+
+class ImageBook:
+    """The vision rows of the images this server's prompts hold, by image (the decode server's key, the sha1 of its
+    bytes), in the prefill model's embedding table: rows ``vocab + FIRST_IMAGE_ROW + r`` for ``r`` in ``[0, rows)``.
+
+    A decode server names each image of a prompt with its own rows' slots (``{"key", "slots"}``); :meth:`resolve`
+    rewrites those ids into this table's, so the prefix cache compares a prompt by its images, not by where either
+    server keeps them. An image is written once, the first time a request sends its rows; when the rows run out the
+    least recently used images not in the request go, and with them every prefix-cache slot whose prompt holds one."""
+
+    def __init__(self, d_p, cache: PrefixCache):
+        from models.experimental.deepseek_v41_flash.tt.prefill.d_p_bridge import FIRST_IMAGE_ROW
+
+        self.d_p, self.cache = d_p, cache
+        self.vocab = int(d_p.vocab)
+        self.first = self.vocab + FIRST_IMAGE_ROW
+        self.capacity = int(d_p.image_rows) - FIRST_IMAGE_ROW
+        self.free = deque(range(self.capacity))
+        self.entries: OrderedDict[str, torch.Tensor] = OrderedDict()  # key -> its rows, least recently used first
+        self.hidden = int(d_p.cfg.dim)
+
+    def resolve(self, ids: torch.Tensor, images: list, blobs: list) -> torch.Tensor:
+        """``ids`` (a decode server's) with each image token's id this table's; the images first written if their
+        rows came with the request (``blobs``: the rows of the images whose entry says ``"rows": true``, in order).
+        Raises :class:`NeedImages` when one is neither held nor sent. Device writes: call with the prefill lock."""
+        keys = [str(image["key"]) for image in images]
+        sent = [key for key, image in zip(keys, images) if image.get("rows")]
+        if len(sent) != len(blobs):
+            raise ValueError(f"{len(sent)} images say their rows are sent, the request has {len(blobs)} row blobs")
+        rows_of = dict(zip(sent, blobs))
+        need = [key for key in keys if key not in self.entries and key not in rows_of]
+        if need:
+            raise NeedImages(need)
+        decode, local = [], []
+        for key, image in zip(keys, images):
+            slots = torch.as_tensor(image["slots"], dtype=torch.int64).reshape(-1)
+            rows = self.entries.get(key)
+            if rows is None:
+                data = torch.frombuffer(rows_of[key], dtype=torch.bfloat16)
+                if data.numel() != slots.numel() * self.hidden:
+                    raise ValueError(
+                        f"image {key[:12]}: {data.numel()} values for {slots.numel()} rows of {self.hidden}"
+                    )
+                rows = self._add(key, data.view(slots.numel(), self.hidden), set(keys))
+            self.entries.move_to_end(key)
+            if rows.numel() != slots.numel():
+                raise ValueError(f"image {key[:12]}: {slots.numel()} slots, this server holds {rows.numel()} rows")
+            decode.append(slots)
+            local.append(rows)
+        ids = ids.long()
+        image = ids >= self.first
+        if not bool(image.any()):
+            return ids.to(torch.int32)
+        decode, local = torch.cat(decode), torch.cat(local)
+        lut = torch.full((int(ids[image].max()) - self.first + 1,), -1, dtype=torch.int64)
+        inside = decode < lut.numel()
+        lut[decode[inside]] = local[inside]
+        mapped = lut[ids[image] - self.first]
+        if bool((mapped < 0).any()):
+            raise ValueError("image token ids that no image of the request names")
+        out = ids.clone()
+        out[image] = self.first + mapped
+        return out.to(torch.int32)
+
+    def _add(self, key: str, rows: torch.Tensor, keep: set) -> torch.Tensor:
+        n = rows.shape[0]
+        if n > self.capacity:
+            raise ValueError(f"image {key[:12]}: {n} rows, this server holds {self.capacity} (--image-rows)")
+        while len(self.free) < n:
+            victim = next((k for k in self.entries if k not in keep), None)
+            if victim is None:
+                raise ValueError(f"the request's images need more than this server's {self.capacity} image rows")
+            self._evict(victim)
+        slots = torch.tensor([self.free.popleft() for _ in range(n)], dtype=torch.int64)
+        try:
+            self.d_p.write_image_rows(rows, (self.first + slots).tolist())
+        except Exception:
+            self.free.extend(slots.tolist())
+            raise
+        self.entries[key] = slots
+        logger.info(f"image {key[:12]}: {n} rows written ({len(self.free)} of {self.capacity} free)")
+        return slots
+
+    def _evict(self, key: str) -> None:
+        ids = self.first + self.entries.pop(key)
+        for slot, held in enumerate(self.cache.ids):
+            if held is not None and bool(torch.isin(held.long(), ids).any()):
+                self.cache.keep(slot, None)  # (its prompt held the image: no later prompt may continue it)
+        self.free.extend((ids - self.first).tolist())
+        logger.info(f"image {key[:12]}: evicted ({len(self.free)} of {self.capacity} image rows free)")
+
+
 class StageTotals:
     """Seconds per stage of every request served so far (the ``stats`` op), and how many requests."""
 
@@ -142,6 +248,7 @@ class PrefillService:
         self.totals = StageTotals()
         self.lock = threading.Lock()
         self.cache = PrefixCache(len(d_p.slots))
+        self.images = ImageBook(d_p, self.cache) if getattr(d_p, "image_rows", 0) else None
         cfg = d_p.cfg
         self.vocab = cfg.vocab_size
         self.info = {
@@ -155,24 +262,43 @@ class PrefillService:
             "vocab": cfg.vocab_size,
             "mesh": list(d_p.mesh_device.shape),
             "cache_slots": len(d_p.slots),
+            # image-span tokens (ImageBook): how many images' rows the server holds at once; 0, or missing, none
+            "image_rows": self.images.capacity if self.images is not None else 0,
         }
 
-    def check(self, ids: torch.Tensor, have: int) -> None:
+    def check(self, ids: torch.Tensor, have: int, limit: int | None) -> None:
+        """``limit``: the ids lie below it -- the vocabulary, or past it the image rows once ImageBook.resolve has
+        rewritten a decode server's image ids (None: not checked above, those ids before that)."""
         n = ids.numel()
         if not 0 < n <= self.d_p.max_seq or n % ALIGN:
             raise ValueError(f"prompt of {n} tokens: send a positive multiple of {ALIGN} up to {self.d_p.max_seq}")
         lo, hi = int(ids.min()), int(ids.max())
-        if lo < 0 or hi >= self.vocab:
-            raise ValueError(f"token ids span [{lo}, {hi}], the vocabulary is [0, {self.vocab})")
+        if lo < 0 or (limit is not None and hi >= limit):
+            raise ValueError(
+                f"token ids span [{lo}, {hi}], the vocabulary is [0, {self.vocab})"
+                + ("" if limit == self.vocab else f", the image rows up to {limit}")
+            )
         if not 0 <= have <= n or have % ALIGN:
             raise ValueError(f"have {have}: a multiple of {ALIGN} up to the prompt's {n} tokens")
 
     def prefill(
-        self, conn: socket.socket, ids: torch.Tensor, have: int, use_cache: bool, peer: str, targets: dict | None = None
+        self,
+        conn: socket.socket,
+        ids: torch.Tensor,
+        have: int,
+        use_cache: bool,
+        peer: str,
+        targets: dict | None = None,
+        images: list | None = None,
+        rows: list | None = None,
     ) -> None:
         """Prefill ``ids`` and reply with the entries from ``have`` on; with ``targets`` (``prefill_push``) write
-        them into the client's device memory over TT-Fabric instead and reply with what was written."""
-        self.check(ids, have)
+        them into the client's device memory over TT-Fabric instead and reply with what was written. ``images``: the
+        prompt's images (``[{"key", "slots", "rows"}]``, the decode server's), ``rows`` the row blobs sent with them;
+        :class:`NeedImages` (nothing run) when one is neither held nor sent."""
+        if images and self.images is None:
+            raise ValueError("this prefill server takes no images (--image-rows 0)")
+        self.check(ids, have, None if images else self.vocab)
         if targets is not None and (int(targets["seq_len"]) != ids.numel() or int(targets["start"]) != have):
             raise ValueError(
                 f"push targets for [{targets['start']}, {targets['seq_len']}): the request is "
@@ -194,6 +320,11 @@ class PrefillService:
         with self.lock:
             t0 = time.perf_counter()
             stages["queued"] = t0 - t_wait
+            if images:
+                ids = self.images.resolve(ids, images, rows or [])
+                self.check(ids, have, self.vocab + self.d_p.image_rows)
+                stages["images"] = time.perf_counter() - t0
+                t0 = time.perf_counter()
             slot, start = self.cache.lookup(self.d_p, ids) if use_cache else (self.cache.victim(), 0)
             t1 = time.perf_counter()
             stages["lookup"] = t1 - t0
@@ -277,8 +408,9 @@ def _serve_connection(conn: socket.socket, peer: str, service: PrefillService) -
                 elif op == "stats":
                     send_msg(conn, service.totals.snapshot())
                 elif op in ("prefill", "prefill_push"):
-                    if len(blobs) != 1 or len(blobs[0]) % 4:
-                        raise ValueError(f"{op} takes one blob of int32 token ids")
+                    images = header.get("images") or []
+                    if not blobs or len(blobs[0]) % 4 or (len(blobs) > 1 and not images):
+                        raise ValueError(f"{op} takes one blob of int32 token ids (then its images' rows)")
                     if op == "prefill_push" and not isinstance(header.get("targets"), dict):
                         raise ValueError("prefill_push takes the session's targets")
                     service.prefill(
@@ -288,11 +420,19 @@ def _serve_connection(conn: socket.socket, peer: str, service: PrefillService) -
                         bool(header.get("cache", True)),
                         peer,
                         header.get("targets") if op == "prefill_push" else None,
+                        images=images,
+                        rows=blobs[1:],
                     )
                 else:
                     raise ValueError(f"unknown op {op!r}")
             except (ConnectionError, BrokenPipeError):
                 break
+            except NeedImages as e:  # (nothing ran: the client sends the request again with those images' rows)
+                logger.info(f"{peer}: {op}: asking for the rows of {len(e.keys)} image(s)")
+                try:
+                    send_msg(conn, {"need": e.keys})
+                except OSError:
+                    break
             except Exception as e:  # noqa: BLE001 - reported to the client; the server keeps serving
                 if isinstance(e, ValueError):
                     logger.warning(f"{peer}: {op} rejected: {e}")
@@ -339,6 +479,13 @@ def main(argv: list[str] | None = None) -> int:
         "(slower: the host no longer runs ahead of the device); env DEEPSEEK_V41_PREFILL_PROFILE_CHUNKS=1 (tt-run "
         "forwards it to the ranks)",
     )
+    p.add_argument(
+        "--image-rows",
+        type=int,
+        default=16384,
+        help="embedding rows for image-span tokens (3 span delimiters, then the images' vision rows; an image takes "
+        "184-1024): 0 takes no images; 16384 costs 40 MiB a chip (default 16384)",
+    )
     args = p.parse_args(argv)
     try:
         checkpoint = _checkpoint()
@@ -363,6 +510,7 @@ def main(argv: list[str] | None = None) -> int:
             dram_reserve=int(args.cache_reserve_gb * 2**30),
             checkpoint=checkpoint,
             spec=spec,
+            image_rows=args.image_rows,
         )
         service = PrefillService(d_p, sync_chunks=args.profile_chunks)
         warm = min(args.warm_len if args.warm_len is not None else d_p.max_seq, d_p.max_seq)
