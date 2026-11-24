@@ -467,6 +467,11 @@ struct llk_pack_shape_tag
     friend auto llk_pack_shape_used(llk_pack_shape_tag);
 };
 #pragma GCC diagnostic pop
+// A probe that ran before a later mark keeps its earlier result, as on GCC 15; GCC 16 reports that as an error.
+#pragma GCC diagnostic push
+#if __GNUC__ >= 16
+#pragma GCC diagnostic ignored "-Wsfinae-incomplete"
+#endif
 template <int N>
 struct llk_pack_shape_set
 {
@@ -475,6 +480,8 @@ struct llk_pack_shape_set
         return true;
     }
 };
+
+#pragma GCC diagnostic pop
 // the probe depends on dep, so it reads the marks of the whole kernel (at the end of the unit)
 template <int N, std::uint32_t dep, typename = decltype(llk_pack_shape_used(llk_pack_shape_tag<N + 0 * dep>{}))>
 constexpr bool llk_pack_shape_marked(int)
