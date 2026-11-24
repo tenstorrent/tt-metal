@@ -23,13 +23,13 @@
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/shared_with_host/activation_type.hpp"
 
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
-#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/kernel_spec.hpp>
+#include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
+#include <tt-metalium/workload/specification/semaphore_spec.hpp>
+#include <tt-metalium/workload/specification/tensor_parameter.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
 
 namespace {
 // Quasar has one NOC and no torus: a multicast rectangle always runs low corner to high (see #48552).
@@ -3124,7 +3124,7 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 // under unity builds; the StrongType string *values* are the plain accessor names the kernels expect.
 // ===========================================================================================
 
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 
 namespace CMAKE_UNIQUE_NAMESPACE {
 // Create a generation-agnostic data movement hardware config: Gen1 (WH/BH) takes the given
@@ -3831,6 +3831,18 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
         .math_approx_mode = math_approx_mode,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = false});
+    // With a 32-bit DST every consumed 32-bit DFB needs an explicit unpack mode, and cb_intermed0 holds 32-bit
+    // partials under fp32 accumulation. UnpackToSrc, unlike matmul_unified's UnpackToDest: the fused bias add
+    // here reads the partials as an FPU SrcA operand, and on Quasar UnpackToDest is kernel-wide (UnpackToDestEn
+    // sends every copy_tile through Dest, see #62102). The cost is that the reload between K blocks rounds
+    // through SrcA (TF32) and loses fp32 precision at every block boundary. The non-Quasar mcast factories
+    // avoid that loss by marking interm0 UnpackToDest (or, with a fused bias, an alias of it) (#50250).
+    const bool interm0_is_32bit = interm0_data_format == tt::DataFormat::Float32 ||
+                                  interm0_data_format == tt::DataFormat::Int32 ||
+                                  interm0_data_format == tt::DataFormat::UInt32;
+    if (fp32_dest_acc_en && interm0_is_32bit) {
+        compute_hw_config.unpack_modes.emplace(RO_INTERM0_DFB, m2::UnpackMode::UnpackToSrc);
+    }
 
     // in1 reader uses the optimized reader noc; in0 the dram-write noc. (The legacy split-half
     // _other receivers ran on the opposite NOC for perf; the Metal 2.0 host API selects the NOC via
@@ -4496,7 +4508,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
 
         // in0 sender / receiver
         if (in0_block_sharded) {
-            m2::AdvancedKernelRunArgs::Varargs v;
+            m2::experimental::AdvancedKernelRunArgs::Varargs v;
             uint32_t in0_mcast_receiver_grid_same_coord;
             m2::Table<std::string, uint32_t> leading;
             if (transpose_mcast) {

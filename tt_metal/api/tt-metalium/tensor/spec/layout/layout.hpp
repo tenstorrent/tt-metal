@@ -4,12 +4,7 @@
 
 #pragma once
 
-#include <ostream>
+// DEPRECATED-FORWARDING-HEADER: <tt-metalium/tensor/spec/layout/layout.hpp> moved to <tt-metalium/memory/tensor/spec/layout/layout.hpp>.
+// This header only forwards to the new location; it is deprecated, with a warning and a removal date, in a follow-up change.
 
-namespace tt::tt_metal {
-
-enum class Layout { ROW_MAJOR = 0, TILE = 1, INVALID = 2 };
-
-std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Layout& layout);
-
-}  // namespace tt::tt_metal
+#include <tt-metalium/memory/tensor/spec/layout/layout.hpp>  // IWYU pragma: export

@@ -44,7 +44,7 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.common.prefill.runners.runner_utils import load_trace_token_ids, resolve_trace_dir
-from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_kda_config
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_kda_config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
     torus_xy_device_params,
@@ -59,6 +59,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.dev.layer0_run_analysis import (
     tiers,
 )
 from models.demos.deepseek_v3_d_p.tests.kda.first_layer_input import FIRST_LAYER_INPUT, FirstLayerInput
+from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import make_actual_start
 from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import (
     MANIFEST,
     load_window,
@@ -78,7 +79,6 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import kimi_k3_program_config
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import get_tdp_limit_max, is_high_power
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import make_actual_start
 
 pytestmark = [run_for_blackhole(), pytest.mark.timeout(3600)]
 
@@ -111,14 +111,14 @@ def _override(config, overrides: dict[str, str]):
         pytest.param(
             (8, 4),
             1,
-            torus_xy_device_params(l1_small_size=_L1_SMALL_SIZE),
+            torus_xy_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE, l1_small_size=_L1_SMALL_SIZE),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4-torus-xy",
         ),
         pytest.param(
             (8, 4),
             1,
-            fabric2d_device_params(l1_small_size=_L1_SMALL_SIZE),
+            fabric2d_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE, l1_small_size=_L1_SMALL_SIZE),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4-fabric2d",
         ),
@@ -159,7 +159,8 @@ def test_kimi_k3_layer0_dev_run(mesh_device: ttnn.MeshDevice, tensor_parallel_ax
     sp_size = tuple(mesh_device.shape)[sp_axis]
     program_config = _override(
         kimi_k3_program_config(
-            active_seq_len_local=_CALL // sp_size, tp_ccl_topology=per_axis_topology()[tensor_parallel_axis]
+            active_seq_len_local=_CALL // sp_size,
+            tp_ccl_topology=per_axis_topology(mesh_device=mesh_device)[tensor_parallel_axis],
         ),
         overrides,
     )
@@ -183,7 +184,7 @@ def test_kimi_k3_layer0_dev_run(mesh_device: ttnn.MeshDevice, tensor_parallel_ax
         "high_power": is_high_power(),
         "mesh": list(mesh_device.shape),
         "layout": f"SP{sp_size}xTP{tuple(mesh_device.shape)[tensor_parallel_axis]}",
-        "fabric_config": ttnn.get_fabric_config().name,
+        "fabric_config": ttnn.get_fabric_config(mesh_device).name,
         "tp_axis_wrapped": tp_axis_is_wrapped(mesh_device),
         "call_tokens": _CALL,
         "tokens": tokens,
@@ -197,7 +198,7 @@ def test_kimi_k3_layer0_dev_run(mesh_device: ttnn.MeshDevice, tensor_parallel_ax
     (run_dir / "run.json").write_text(json.dumps(meta, indent=1))
 
     # Perf first, on a fresh layer: median traced-replay wall of one 5,120-token call at start 0.
-    samples_ms, _ = _trace_wall_samples_ms(
+    samples_ms = _trace_wall_samples_ms(
         mesh_device, layer, first_hidden_tt, _PERF_REPETITIONS, actual_start=0, actual_end=_CALL
     )
     median_ms = statistics.median(samples_ms)

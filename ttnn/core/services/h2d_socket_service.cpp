@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/services/h2d_socket_service.hpp"
+#include "ttnn/core.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -342,6 +343,7 @@ volatile uint32_t* completion_word(void* base, uint32_t offset) {
 //   [13] completion_pcie_addr_hi          (uint32, high 32 bits of PCIe offset)
 //   [14] completion_src_l1_addr           (uint32, local service-core L1 scratch)
 Program build_persistent_h2d_program(
+    distributed::MeshDevice& mesh_device,
     const Buffer& device_buffer,
     const CoreCoord& recv_core,
     uint32_t socket_config_buffer_address,
@@ -352,7 +354,7 @@ Program build_persistent_h2d_program(
     const H2DWorkerSyncArgs& worker_sync,
     const MetadataArgs& metadata,
     const CompletionArgs& completion) {
-    auto program = CreateProgram();
+    auto program = CreateProgram(mesh_device);
 
     constexpr tt::CBIndex data_cb_index = tt::CBIndex::c_0;
     constexpr tt::CBIndex metadata_cb_index = tt::CBIndex::c_1;
@@ -730,6 +732,7 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
         }
 
         auto program = build_persistent_h2d_program(
+            *mesh_device_,
             *dbuf,
             core.core_coord,
             s->get_config_buffer_address(),
@@ -744,7 +747,7 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
         ++completion_index;
     }
 
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload_, /*blocking=*/false);
+    EnqueueMeshWorkload(ttnn::core::current_mesh_command_queue(*mesh_device_), *workload_, /*blocking=*/false);
     start_host_push_workers();
 }
 
@@ -826,7 +829,7 @@ H2DStreamService::~H2DStreamService() {
         signal_termination();
 
         if (mesh_device_) {
-            distributed::Finish(mesh_device_->mesh_command_queue());
+            distributed::Finish(ttnn::core::current_mesh_command_queue(*mesh_device_));
         }
 
         // Wait for each kernel to actually return (RUN_MSG_DONE), not just for
@@ -1167,6 +1170,32 @@ CoreCoord H2DStreamService::get_service_core(const distributed::MeshCoordinate& 
         "in this service?).",
         coord);
     return it->second;
+}
+
+StreamInputCounters H2DStreamService::get_input_counters(const distributed::MeshCoordinate& coord) const {
+    require_owner(is_owner_, "H2DStreamService::get_input_counters");
+    for (const auto& s : sockets_) {
+        if (s->get_active_cores()[0].device_coord == coord) {
+            TT_FATAL(
+                s->get_fifo_size() % socket_page_size_ == 0,
+                "H2DStreamService::get_input_counters: fifo_size {} B is not a whole number of {} B socket pages, so "
+                "each wrap also adds the bytes past the last page to bytes_sent. Pass a multiple of the socket page "
+                "as fifo_size_bytes, or 0 to auto-size.",
+                s->get_fifo_size(),
+                socket_page_size_);
+            const CoreCoord core = get_service_core(coord);
+            // bytes_sent is the first word of the receiver's socket config; metadata takes one page.
+            const uint32_t pages = num_socket_pages_ + (cfg_.metadata_size_bytes > 0 ? 1 : 0);
+            return {
+                .arrived = {core, s->get_config_buffer_address(), pages * socket_page_size_},
+                .consumed = {core, get_consumed_counter_addr(coord), num_workers_},
+            };
+        }
+    }
+    TT_THROW(
+        "H2DStreamService::get_input_counters: no socket at coord {} (does this coord participate in this "
+        "service?).",
+        coord);
 }
 
 DeviceAddr H2DStreamService::get_metadata_addr() const {

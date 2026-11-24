@@ -18,17 +18,35 @@ inline void hardshrink_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
+}  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_hardshrink_bf16.h"
+
+namespace ckernel::sfpu {
+
+// The param0 the generated hardshrink kernel is fitted for, as FP32 bits; any other param0 runs the stock kernel.
+inline constexpr std::uint32_t hardshrink_bf16_param0_bits = 0x3f000000u;
+// Whether BF16 DEST runs the generated hardshrink kernel as one call over the whole tile.
+inline constexpr bool hardshrink_bf16_whole_tile = true;
+
 /**
  * @brief hardshrink(x, lambda) = x if |x| > lambda, else 0, over ITERATIONS Dest rows.
  *
  * @tparam APPROXIMATION_MODE: Unused; the kernel is exact in both modes.
  * @tparam ITERATIONS: Number of Dest rows to process; must be even.
+ * @tparam is_fp32_dest_acc_en: false selects the generated kernel for BF16 Dest, a whole tile and lambda = 0.5.
  * @param param0: lambda as fp32 bits.
  * @note Call @ref hardshrink_init first: the body advances Dest through ADDR_MOD_6.
  */
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en = true>
 inline void calculate_hardshrink(std::uint32_t param0) {
     static_assert(ITERATIONS % 2 == 0, "calculate_hardshrink() processes dest rows in pairs.");
+    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
+        if (bf16_dest_hardshrink() && param0 == ckernel::sfpu::hardshrink_bf16_param0_bits) {
+            calculate_hardshrink_bf16<ITERATIONS>();
+            return;
+        }
+    }
     // Single comparison against the magnitude: setsgn(v, 1) forms -|v|.
     // param0 contains lambda as FP32 bits. For BF16 inputs, the host pre-rounds
     // lambda to BF16 precision (then re-expands to FP32) so that FP32→FP19b

@@ -14,6 +14,10 @@
 inline void dbg_read_dest_acc_row(int row_addr, uint32_t* rd_data) {
     ckernel::dbg_get_array_row(ckernel::dbg_array_id::DEST, row_addr, rd_data);
 }
+// tt-llk's harness includes this header without device_print.h when printing is off.
+#ifndef DEVICE_PRINT_FORCE_NOINLINE
+#define DEVICE_PRINT_FORCE_NOINLINE
+#endif
 #endif
 #include "tensix_types.h"
 
@@ -48,8 +52,9 @@ inline void dprint_array_with_data_type(uint32_t data_format, uint32_t* data) {
 }
 
 #ifndef ARCH_QUASAR  // references Bfp*/Lf8/UInt32 formats absent from the Quasar DataFormat enum
-// Dprints data format as string given an uint
-inline void dprint_data_format(uint8_t data_format) {
+// Dprints data format as string given an uint. The dprint_tensix*.h dumpers are DEVICE_PRINT_FORCE_NOINLINE: one copy
+// per kernel instead of one per caller.
+DEVICE_PRINT_FORCE_NOINLINE inline void dprint_data_format(uint8_t data_format) {
     switch (data_format) {
         case (uint8_t)DataFormat::Float32: DPRINT("Float32"); break;
         case (uint8_t)DataFormat::Float16: DPRINT("Float16"); break;

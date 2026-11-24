@@ -10,12 +10,12 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/experimental/metal2_host_api/arg_value.hpp>
-#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
-#include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
+#include <tt-metalium/workload/utils/arg_value.hpp>
+#include <tt-metalium/workload/specification/kernel_spec.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/tensor_parameter.hpp>
+#include <tt-metalium/workload/utils/table.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/experimental/tensor_prefetcher.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -241,8 +241,9 @@ private:
  * @brief Replays @p command_list on @p cq.
  * @p cq must match the device and queue used to build the list.
  *
- * A tensor range is the DRAM footprint of a tensor bound to a recorded program, recorded when SetProgramRunArgs() or
- * UpdateProgramRunArgs() binds it, or when CommandList::update_args() patches it.
+ * A tensor range is the DRAM footprint of a tensor bound to a recorded program, recorded when
+ * Program::set_program_run_args() or Program::update_program_run_args() binds it, or when CommandList::update_args()
+ * patches it.
  *
  * @param cq                    Command queue to replay on.
  * @param command_list          Command list to replay.

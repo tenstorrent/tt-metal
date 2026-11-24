@@ -5,28 +5,51 @@ set(TT_METAL_PUBLIC_API
     api/internal/disaggregation/layer_completion_queue.hpp
     api/internal/disaggregation/layer_completion_router.hpp
     api/internal/reload_table.hpp
+    api/tt-metalium/mesh/allocator.hpp
     api/tt-metalium/allocator.hpp
+    api/tt-metalium/workload/specification/compute_modes.hpp
     api/tt-metalium/base_types.hpp
+    api/tt-metalium/data_formats/bfloat16.hpp
     api/tt-metalium/bfloat16.hpp
+    api/tt-metalium/data_formats/bfloat2.hpp
     api/tt-metalium/bfloat2.hpp
+    api/tt-metalium/data_formats/bfloat4.hpp
     api/tt-metalium/bfloat4.hpp
+    api/tt-metalium/data_formats/bfloat8.hpp
     api/tt-metalium/bfloat8.hpp
+    api/tt-metalium/data_formats/float8.hpp
     api/tt-metalium/float8.hpp
+    api/tt-metalium/memory/buffer/buffer.hpp
     api/tt-metalium/buffer.hpp
+    api/tt-metalium/memory/buffer/buffer_distribution_spec.hpp
     api/tt-metalium/buffer_distribution_spec.hpp
+    api/tt-metalium/memory/buffer/buffer_page_mapping.hpp
     api/tt-metalium/buffer_page_mapping.hpp
+    api/tt-metalium/memory/buffer/buffer_types.hpp
     api/tt-metalium/buffer_types.hpp
+    api/tt-metalium/workload/legacy/circular_buffer.hpp
     api/tt-metalium/circular_buffer.hpp
+    api/tt-metalium/workload/legacy/circular_buffer_config.hpp
     api/tt-metalium/circular_buffer_config.hpp
+    api/tt-metalium/workload/legacy/circular_buffer_constants.h
     api/tt-metalium/circular_buffer_constants.h
+    api/tt-metalium/discovery/cluster.hpp
     api/tt-metalium/cluster.hpp
+    api/tt-metalium/data_formats/tile_constants.hpp
     api/tt-metalium/constants.hpp
+    api/tt-metalium/vocabulary/core_coord.hpp
     api/tt-metalium/core_coord.hpp
+    api/tt-metalium/mesh/legacy/device.hpp
     api/tt-metalium/device.hpp
+    api/tt-metalium/vocabulary/device_types.hpp
     api/tt-metalium/device_types.hpp
+    api/tt-metalium/mesh/dispatch_core_config.hpp
     api/tt-metalium/dispatch_core_common.hpp
+    api/tt-metalium/execution/distributed.hpp
     api/tt-metalium/distributed.hpp
+    api/tt-metalium/mesh/multihost/distributed_context.hpp
     api/tt-metalium/distributed_context.hpp
+    api/tt-metalium/memory/buffer/distributed_host_buffer.hpp
     api/tt-metalium/distributed_host_buffer.hpp
     api/tt-metalium/experimental/sram_arena/sram_arena.hpp
     api/tt-metalium/experimental/sram_arena/sram_arena_properties.hpp
@@ -34,6 +57,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/allocator.hpp
     api/tt-metalium/experimental/dispatch_telemetry.hpp
     api/tt-metalium/experimental/mesh_device_properties.hpp
+    api/tt-metalium/experimental/mesh_workload_runtime_args.hpp
     api/tt-metalium/experimental/trace_allocation_tracker.hpp
     api/tt-metalium/experimental/context/metal_env.hpp
     api/tt-metalium/experimental/core_subset_write/buffer_write.hpp
@@ -77,23 +101,25 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/blaze/named_kernel_args.hpp
     api/tt-metalium/experimental/command_list.hpp
     api/tt-metalium/experimental/metal2_host_api/advanced_options.hpp
-    api/tt-metalium/experimental/metal2_host_api/arg_value.hpp
-    api/tt-metalium/experimental/metal2_host_api/compute_hardware_config.hpp
-    api/tt-metalium/experimental/metal2_host_api/data_movement_hardware_config.hpp
-    api/tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp
-    api/tt-metalium/experimental/metal2_host_api/kernel_spec.hpp
-    api/tt-metalium/experimental/metal2_host_api/node_coord.hpp
+    api/tt-metalium/workload/utils/arg_value.hpp
+    api/tt-metalium/workload/specification/compute_hardware_config.hpp
+    api/tt-metalium/workload/specification/data_movement_hardware_config.hpp
+    api/tt-metalium/workload/specification/dataflow_buffer_spec.hpp
+    api/tt-metalium/workload/specification/global_semaphore_parameter.hpp
+    api/tt-metalium/workload/specification/kernel_hardware_types.hpp
+    api/tt-metalium/workload/specification/kernel_spec.hpp
+    api/tt-metalium/vocabulary/node_coord.hpp
     api/tt-metalium/experimental/metal2_host_api/prefetcher_pipe_parameter.hpp
-    api/tt-metalium/experimental/metal2_host_api/program.hpp
-    api/tt-metalium/experimental/metal2_host_api/program_run_args.hpp
-    api/tt-metalium/experimental/metal2_host_api/program_spec.hpp
+    api/tt-metalium/workload/run_args/program_run_args.hpp
+    api/tt-metalium/workload/run_args/validation_mode.hpp
+    api/tt-metalium/workload/specification/program_spec.hpp
     api/tt-metalium/experimental/metal2_host_api/sram_arena_parameter.hpp
-    api/tt-metalium/experimental/metal2_host_api/scratchpad_spec.hpp
-    api/tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp
-    api/tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp
-    api/tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp
-    api/tt-metalium/experimental/metal2_host_api/utility/group.hpp
-    api/tt-metalium/experimental/metal2_host_api/utility/table.hpp
+    api/tt-metalium/workload/specification/scratchpad_spec.hpp
+    api/tt-metalium/workload/specification/semaphore_spec.hpp
+    api/tt-metalium/workload/specification/tensor_parameter.hpp
+    api/tt-metalium/workload/specification/tensor_spec_relaxations.hpp
+    api/tt-metalium/workload/utils/group.hpp
+    api/tt-metalium/workload/utils/table.hpp
     api/tt-metalium/experimental/mock_device/mock_allocator.hpp
     api/tt-metalium/experimental/mock_device/mock_device.hpp
     api/tt-metalium/experimental/noc_estimator/noc_estimator.hpp
@@ -134,15 +160,26 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/tensor_prefetcher.hpp
     api/tt-metalium/experimental/tensor_serialization_support.hpp
     api/tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp
+    api/tt-metalium/experimental/work_split.hpp
+    api/tt-metalium/memory/tensor/host_tensor.hpp
     api/tt-metalium/tensor/host_tensor.hpp
+    api/tt-metalium/memory/tensor/mesh_tensor.hpp
     api/tt-metalium/tensor/mesh_tensor.hpp
+    api/tt-metalium/memory/tensor/spec/layout/alignment.hpp
     api/tt-metalium/tensor/spec/layout/alignment.hpp
+    api/tt-metalium/memory/tensor/spec/layout/layout.hpp
     api/tt-metalium/tensor/spec/layout/layout.hpp
+    api/tt-metalium/memory/tensor/spec/layout/page_config.hpp
     api/tt-metalium/tensor/spec/layout/page_config.hpp
+    api/tt-metalium/memory/tensor/spec/layout/tensor_layout.hpp
     api/tt-metalium/tensor/spec/layout/tensor_layout.hpp
+    api/tt-metalium/memory/tensor/spec/memory_config/memory_config.hpp
     api/tt-metalium/tensor/spec/memory_config/memory_config.hpp
+    api/tt-metalium/memory/tensor/spec/tensor_spec.hpp
     api/tt-metalium/tensor/spec/tensor_spec.hpp
+    api/tt-metalium/memory/tensor/tensor_apis.hpp
     api/tt-metalium/tensor/tensor_apis.hpp
+    api/tt-metalium/memory/tensor/tensor_types.hpp
     api/tt-metalium/tensor/tensor_types.hpp
     api/tt-metalium/experimental/udm/mesh_builder.hpp
     api/tt-metalium/experimental/udm/mesh_circular_buffer.hpp
@@ -152,14 +189,23 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/udm/mesh_tensor_builder.hpp
     api/tt-metalium/experimental/udm/mesh_utils.hpp
     api/tt-metalium/experimental/udm/types.hpp
+    api/tt-metalium/data_formats/face_geometry.hpp
     api/tt-metalium/face_geometry.hpp
+    api/tt-metalium/memory/cross_program/global_circular_buffer.hpp
     api/tt-metalium/global_circular_buffer.hpp
+    api/tt-metalium/memory/cross_program/global_semaphore.hpp
     api/tt-metalium/global_semaphore.hpp
+    api/tt-metalium/observability/capture_hooks.hpp
     api/tt-metalium/graph_tracking.hpp
+    api/tt-metalium/discovery/hal.hpp
     api/tt-metalium/hal.hpp
+    api/tt-metalium/vocabulary/hal_types.hpp
     api/tt-metalium/hal_types.hpp
+    api/tt-metalium/workload/legacy/host_api.hpp
     api/tt-metalium/host_api.hpp
+    api/tt-metalium/memory/buffer/host_buffer.hpp
     api/tt-metalium/host_buffer.hpp
+    api/tt-metalium/data_formats/int8.hpp
     api/tt-metalium/int8.hpp
     api/internal/blitz_decode_pipeline.hpp
     api/internal/cluster.hpp
@@ -170,46 +216,85 @@ set(TT_METAL_PUBLIC_API
     api/internal/fabric.hpp
     api/internal/graph_function_abort.hpp
     api/internal/l1_ecc_halt.hpp
+    api/tt-metalium/workload/legacy/kernel_types.hpp
     api/tt-metalium/kernel_types.hpp
+    api/tt-metalium/utils/math.hpp
     api/tt-metalium/math.hpp
+    api/tt-metalium/vocabulary/maybe_remote.hpp
     api/tt-metalium/maybe_remote.hpp
+    api/tt-metalium/memory/utils/memory_pin.hpp
     api/tt-metalium/memory_pin.hpp
+    api/tt-metalium/observability/memory_reporter.hpp
     api/tt-metalium/memory_reporter.hpp
+    api/tt-metalium/memory/buffer/mesh_buffer.hpp
     api/tt-metalium/mesh_buffer.hpp
+    api/tt-metalium/execution/mesh_command_queue.hpp
     api/tt-metalium/mesh_command_queue.hpp
+    api/tt-metalium/mesh/mesh_config.hpp
     api/tt-metalium/mesh_config.hpp
+    api/tt-metalium/vocabulary/mesh_coord.hpp
     api/tt-metalium/mesh_coord.hpp
+    api/tt-metalium/mesh/mesh_device.hpp
     api/tt-metalium/mesh_device.hpp
+    api/tt-metalium/mesh/mesh_device_view.hpp
     api/tt-metalium/mesh_device_view.hpp
+    api/tt-metalium/execution/mesh_event.hpp
     api/tt-metalium/mesh_event.hpp
+    api/tt-metalium/vocabulary/mesh_trace_id.hpp
     api/tt-metalium/mesh_trace_id.hpp
+    api/tt-metalium/workload/mesh_workload.hpp
     api/tt-metalium/mesh_workload.hpp
+    api/tt-metalium/data_formats/mxfp4.hpp
     api/tt-metalium/mxfp4.hpp
+    api/tt-metalium/data_formats/mxfp6.hpp
     api/tt-metalium/mxfp6.hpp
+    api/tt-metalium/data_formats/mxfp8.hpp
     api/tt-metalium/mxfp8.hpp
+    api/tt-metalium/data_formats/mxint.hpp
     api/tt-metalium/mxint.hpp
+    api/tt-metalium/workload/legacy/workload_descriptor.hpp
     api/tt-metalium/workload_descriptor.hpp
+    api/tt-metalium/observability/profiler/device_profiler.hpp
+    api/tt-metalium/observability/profiler/profiler_optional_metadata.hpp
     api/tt-metalium/profiler_optional_metadata.hpp
+    api/tt-metalium/observability/profiler/profiler_types.hpp
     api/tt-metalium/profiler_types.hpp
+    api/tt-metalium/workload/program.hpp
     api/tt-metalium/program.hpp
+    api/tt-metalium/utils/program_cache.hpp
     api/tt-metalium/program_cache.hpp
+    api/tt-metalium/workload/legacy/program_descriptors.hpp
     api/tt-metalium/program_descriptors.hpp
+    api/tt-metalium/workload/legacy/runtime_args_data.hpp
     api/tt-metalium/runtime_args_data.hpp
+    api/tt-metalium/vocabulary/shape.hpp
     api/tt-metalium/shape.hpp
+    api/tt-metalium/vocabulary/shape2d.hpp
     api/tt-metalium/shape2d.hpp
+    api/tt-metalium/vocabulary/shape_base.hpp
     api/tt-metalium/shape_base.hpp
+    api/tt-metalium/memory/buffer/shard_data_transfer.hpp
     api/tt-metalium/shard_data_transfer.hpp
+    api/tt-metalium/mesh/sub_device.hpp
     api/tt-metalium/sub_device.hpp
+    api/tt-metalium/mesh/sub_device_types.hpp
     api/tt-metalium/sub_device_types.hpp
+    api/tt-metalium/discovery/system_mesh.hpp
     api/tt-metalium/system_mesh.hpp
+    api/tt-metalium/workload/legacy/tensor_accessor_args.hpp
     api/tt-metalium/tensor_accessor_args.hpp
+    api/tt-metalium/data_formats/tile.hpp
     api/tt-metalium/tile.hpp
+    api/tt-metalium/data_formats/tilize_utils.hpp
     api/tt-metalium/tilize_utils.hpp
-    api/tt-metalium/tt_align.hpp
+    api/tt-metalium/data_formats/data_format.hpp
     api/tt-metalium/tt_backend_api_types.hpp
+    api/tt-metalium/execution/slow_dispatch.hpp
     api/tt-metalium/tt_metal.hpp
-    api/tt-metalium/tt_metal_profiler.hpp
+    api/tt-metalium/data_formats/uint8.hpp
     api/tt-metalium/uint8.hpp
+    api/tt-metalium/utils/runtime_config.hpp
+    api/tt-metalium/utils/work_split.hpp
     api/tt-metalium/work_split.hpp
 )
 
@@ -264,6 +349,7 @@ set(JITAPI_FILES
     impl/dispatch/kernels/cq_common.hpp
     impl/dispatch/kernels/cq_prefetch.hpp
     impl/dispatch/kernels/cq_relay.hpp
+    impl/dispatch/kernels/dispatch_noc_trids.hpp
     impl/dispatch/kernels/cq_helpers.hpp
     impl/dispatch/kernels/telemetry.hpp
     impl/dispatch/kernels/cq_telemetry_dispatch_subordinate.hpp
@@ -291,11 +377,18 @@ set(JITAPI_FILES
     impl/dispatch/kernels/cq_realtime_profiler_push.cpp
     impl/dispatch/kernels/device_print_dispatch.h
     impl/buffers/kernels/tensor_prefetcher.cpp
+    impl/buffers/kernels/tensor_prefetcher_fifo_device.h
+    impl/buffers/kernels/tensor_prefetcher_groups.h
+    impl/buffers/kernels/tensor_prefetcher_pusher.cpp
+    impl/buffers/kernels/tensor_prefetcher_reader.cpp
+    impl/buffers/kernels/tensor_prefetcher_reader.h
+    impl/buffers/tensor_prefetcher_fifo.hpp
     impl/buffers/tensor_prefetcher_request.hpp
     fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp
     fabric/impl/kernels/edm_fabric/fabric_router_mux_extension.cpp
     fabric/impl/kernels/edm_fabric/fabric_router_relay_extension.cpp
     fabric/impl/kernels/edm_fabric/fabric_router_udm_mux_extension.cpp
+    fabric/impl/kernels/host_rdma_service.cpp
     fabric/impl/kernels/tt_fabric_mux.cpp
     fabric/impl/kernels/tt_fabric_mux_v2.cpp
     fabric/impl/kernels/tt_fabric_mux_v2_forwarder.hpp
