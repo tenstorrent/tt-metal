@@ -50,6 +50,8 @@ CASES = {
         True,
     ),
     "text_embed_2": (512, 5120, 5120, 1, None, ttnn.bfloat16, ttnn.bfloat16, ttnn.MathFidelity.HiFi2, True, True),
+    # The T5 encoder's linears have no bias: the switch leaves them on the 1.0 kernel (the LLK 2.0 one needs a bias).
+    "t5_no_bias": (512, 4096, 4096, 1, None, ttnn.bfloat16, ttnn.bfloat16, ttnn.MathFidelity.HiFi2, True, True),
 }
 
 
@@ -59,15 +61,15 @@ def test_llk2_wan_variant(device, name):
     torch.manual_seed(0)
     x = torch.randn((M, K), dtype=torch.float32)
     w = torch.randn((K, N), dtype=torch.float32) / K**0.5
-    b = torch.randn((1, N), dtype=torch.float32)
-    expected = x @ w + b
+    b = None if name == "t5_no_bias" else torch.randn((1, N), dtype=torch.float32)
+    expected = x @ w + (b if b is not None else 0)
     if act == "gelu_tanh":
         expected = torch.nn.functional.gelu(expected, approximate="tanh")
 
     grid = device.compute_with_storage_grid_size()
     config = get_matmul_config(M, K, N, grid) if table else None
     common = dict(
-        bias_tensor=to_tt(b, device, ttnn.bfloat16),
+        bias_tensor=to_tt(b, device, ttnn.bfloat16) if b is not None else None,
         compute_kernel_config=compute_config(device, fidelity, l1_acc),
         config=config,
         dtype=out_dtype,

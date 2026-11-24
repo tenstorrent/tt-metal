@@ -477,6 +477,23 @@ bool minimal_matmul_llk2_from_env() {
     const char* value = std::getenv("TT_MINIMAL_MATMUL_LLK2");
     return value != nullptr && std::strtoul(value, nullptr, 10) != 0;
 }
+
+// What the LLK 2.0 kernel does: a bias, optionally gelu_tanh or a broadcast addcmul of scalar 1.0, no SwiGLU. The
+// switch means "LLK 2.0 where it does the matmul": any other matmul keeps the 1.0 kernel (e.g. the T5 encoder's
+// bias-less linears in the Wan2.2 pipeline).
+bool llk2_does(
+    const std::optional<Tensor>& bias_tensor,
+    const std::optional<operations::unary::UnaryWithParam>& fused_activation,
+    std::optional<float> fused_ternary_scalar,
+    const std::optional<Tensor>& fused_ternary_input_b,
+    bool fuse_swiglu) {
+    const bool activation_ok =
+        !fused_activation.has_value() || fused_activation->op_type == operations::unary::UnaryOpType::GELU_TANH;
+    const bool addcmul_ok =
+        !fused_ternary_scalar.has_value() || (*fused_ternary_scalar == 1.0f && fused_ternary_input_b.has_value() &&
+                                              fused_ternary_input_b->logical_shape()[-2] == 1);
+    return bias_tensor.has_value() && !fuse_swiglu && activation_ok && addcmul_ok;
+}
 }  // namespace
 
 std::vector<Tensor> minimal_matmul(
@@ -506,6 +523,11 @@ std::vector<Tensor> minimal_matmul(
         true /*packer_acc*/);
     ttnn::verify_numerical_configuration(arch, compute_kernel_config);
 
+    // Decided before fused_activation is moved into the attributes.
+    const bool llk2_compute =
+        minimal_matmul_llk2_from_env() &&
+        llk2_does(bias_tensor, fused_activation, fused_ternary_scalar, fused_ternary_input_b, fuse_swiglu);
+
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .config = config,
@@ -517,7 +539,7 @@ std::vector<Tensor> minimal_matmul(
             .chunks = chunks,
             .dim = dim,
             .fuse_swiglu = fuse_swiglu,
-            .llk2_compute = minimal_matmul_llk2_from_env()},
+            .llk2_compute = llk2_compute},
         OperationType::tensor_args_t{
             .input_tensor = input_tensor,
             .weight_tensor = weight_tensor,
