@@ -819,6 +819,8 @@ def _read_slot_kv_and_check_pcc(
         return _read_slot_kv_and_check_pcc_llama(table, device_map, slot_id, real_len, trace_dir)
     if ADAPTER.name == "gpt_oss_d_p":
         return _read_slot_kv_and_check_pcc_gpt_oss(table, device_map, slot_id, real_len, trace_dir, num_ranks)
+    if hasattr(ADAPTER, "read_slot_kv_and_check_pcc"):
+        return ADAPTER.read_slot_kv_and_check_pcc(table, device_map, slot_id, real_len, trace_dir)
     return _read_slot_kv_and_check_pcc_mla(table, device_map, slot_id, real_len, trace_dir)
 
 
