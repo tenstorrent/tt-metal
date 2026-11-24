@@ -1388,6 +1388,9 @@ void RunMcastTest(
     bool use_write_mcast_flush,
     bool use_semaphore_mcast_flush) {
     auto compute_grid_size = mesh_device->compute_with_storage_grid_size();
+    if (compute_grid_size.x * compute_grid_size.y < 2) {
+        GTEST_SKIP() << "Multicast test requires a compute grid of at least 2 cores";
+    }
 
     CoreCoord sender_core = {0, 0};
     CoreRange sender_range(sender_core, sender_core);
@@ -1481,6 +1484,9 @@ TEST_F(NOCDebuggingFixture, McastNoFlushes) {
                     fixture, mesh_device, /*use_write_mcast_flush=*/false, /*use_semaphore_mcast_flush=*/false);
             },
             mesh_device);
+        if (this->IsSkipped()) {
+            return;
+        }
     }
 }
 
@@ -1491,6 +1497,9 @@ TEST_F(NOCDebuggingFixture, McastOnlyWriteFlush) {
                 RunMcastTest(fixture, mesh_device, /*use_write_mcast_flush=*/true, /*use_semaphore_mcast_flush=*/false);
             },
             mesh_device);
+        if (this->IsSkipped()) {
+            return;
+        }
     }
 }
 
@@ -1501,6 +1510,9 @@ TEST_F(NOCDebuggingFixture, McastWithAllFlushes) {
                 RunMcastTest(fixture, mesh_device, /*use_write_mcast_flush=*/true, /*use_semaphore_mcast_flush=*/true);
             },
             mesh_device);
+        if (this->IsSkipped()) {
+            return;
+        }
     }
 }
 
