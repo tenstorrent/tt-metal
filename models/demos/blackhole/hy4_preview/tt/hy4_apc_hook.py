@@ -99,6 +99,7 @@ class Hy4ApcHook:
         rid = str(request_id)
         c = self.cached.pop(rid, None)
         if c is not None:
+            self._claim_log(rid, prompt_token_ids, int(c), "actual-rid", None)
             return int(c), "actual"
         fp, hit = self.sched_peek.pop(rid, (None, 0))
         if fp is None:
@@ -111,8 +112,19 @@ class Hy4ApcHook:
             if SF.enabled("ridmap"):
                 self.rid_row[rid] = row
                 self.report["ridmap"] += 1
+            self._claim_log(rid, prompt_token_ids, int(c), "actual-fp", hit)
             return int(c), "actual"
+        self._claim_log(rid, prompt_token_ids, int(hit), "peek" if hit else "none", hit)
         return int(hit), ("peek" if hit else "none")
+
+    def _claim_log(self, rid, toks, value, src, peek):
+        """hy4fix: one line per usage claim (arm B: usage cached_tokens was 0 on the 8 requests that had a tail promote, equal to the engine hit on the others; this line shows which source answered)."""
+        try:
+            from loguru import logger
+
+            logger.info(f"HY4 usage claim: rid={str(rid)[-8:]} prompt={len(toks)} cached={value} src={src} peek={peek}")
+        except Exception:  # noqa: BLE001
+            pass
 
     def free_per_row(self, finished_ids=None):
         """1 when the row has no live request (a request the scheduler finished but the model was not told yet counts as gone), else 0."""
