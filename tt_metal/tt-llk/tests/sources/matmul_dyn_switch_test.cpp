@@ -299,7 +299,7 @@ constexpr bool matmul_half_end_fold_k = false;
 #endif
 // Wormhole and Quasar take main's template arguments: the tile MOP, reuse direction and fold parameters are Blackhole's
 #ifdef ARCH_BLACKHOLE
-#define MATMUL_DEST_DONE_ARGS dest_sync, is_fp32_dest_acc_en, fused_post_flip, next_op_sets_base
+#define MATMUL_DEST_DONE_ARGS dest_sync, is_fp32_dest_acc_en, fused_post_flip, next_op_sets_base, false
 #else
 #define MATMUL_DEST_DONE_ARGS dest_sync, is_fp32_dest_acc_en
 #endif

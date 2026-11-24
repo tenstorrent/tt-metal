@@ -2620,6 +2620,21 @@ inline constexpr matmul_section_end_cell matmul_main_section_end_cells[] = {
     {DataFormat::Float32, DataFormat::Float32, DataFormat::Tf32, 1, 2, 2},
 };
 
+// HiFi2 half sync blocks with a Float32 operand and a Bfp8_b output keep main's section end at any block: there the RISC-pushed
+// base write holds the post (4-16 cy per section)
+constexpr bool matmul_main_section_end_class(
+    const MathFidelity fidelity,
+    const bool half_sync,
+    const DataFormat in1,
+    const DataFormat in0,
+    const DataFormat out,
+    const std::uint32_t throttle = 0,
+    const bool l1_acc            = false)
+{
+    return fidelity == MathFidelity::HiFi2 && half_sync && out == DataFormat::Bfp8_b && (in0 == DataFormat::Float32 || in1 == DataFormat::Float32) &&
+           throttle == 0 && !l1_acc;
+}
+
 constexpr bool matmul_main_section_end(
     const MathFidelity fidelity,
     const bool half_sync,
@@ -2633,6 +2648,10 @@ constexpr bool matmul_main_section_end(
     const std::uint32_t throttle = 0,
     const bool l1_acc            = false)
 {
+    if (matmul_main_section_end_class(fidelity, half_sync, in1, in0, out, throttle, l1_acc))
+    {
+        return true;
+    }
     if (fidelity != MathFidelity::LoFi || !half_sync || !fp32_acc || throttle != 0 || l1_acc)
     {
         return false;

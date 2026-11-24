@@ -806,6 +806,8 @@ _TRUE_MAIN_KEEP = (
     "_D",
     "MATMUL_NB",
     "MATMUL_OPERAND_SIZES",
+    # main's own row MOP (#65115) is main's code for a row_mop cell, not a harness opt-in
+    "MATMUL_MAIN_ROW_MOP",
 )
 
 
