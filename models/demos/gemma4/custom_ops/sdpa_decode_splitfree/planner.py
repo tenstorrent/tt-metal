@@ -37,7 +37,7 @@ Vocabulary (tokens are KV positions of one row's paged cache):
 * slot: ``(b*G + g) * n_slots + (u mod n_slots)`` of the scratch, ``n_slots`` the most units one row can have
   live at once (``min(K, chunks of the page table)`` with the position's unit, all of them with a fixed unit;
   ``ceil((window-1)/C) + 1`` with a window). A slot is ``2 + DHt`` fp32 tiles: ``m``, ``l``, then ``O``'s
-  ``DHt`` tiles.
+  ``DHt`` tiles, of which the kernels write and read the group's ``heads_per_group`` head rows alone.
 * combine: jobs ``(bg, blk)`` -- the row-group ``bg = b*G + g`` and the block ``blk < NCB = DHt / CT`` of ``CT``
   O tiles -- on core ``(bg*NCB + blk) mod n_cores``, ``CT`` the smallest divisor of DHt whose ``B*G*NCB`` jobs
   fit the grid (``choose_combine_tiles``: one O tile per job, 16 jobs per row, up to 8 rows on 13x10). A job

@@ -15,7 +15,8 @@ allocates once (``allocate_scratch``) and passes in:
    (``sdpa_flash_decode.cpp``'s chunk body on ``compute_common.hpp``) over the unit's fixed ``chunk``-token
    sub-chunks in ascending order, fp32 statistics and accumulator, masking the chunk that holds ``cur_pos`` (and
    the window start on a sliding layer) exactly as the stock kernels mask it, and writes the unit's (m, l, O) as
-   fp32 tiles to its scratch slot.
+   fp32 tiles to its scratch slot -- the group's head rows of each tile only (8x less traffic for 4 of 32 rows).
+   A unit reads the slice of its row's page table its chunks reach, not the whole row.
 2. combine (``kernels/*_combine*.cpp``): jobs (row, group, block of ``CT`` O tiles) on distinct cores (16 jobs
    per row up to 8 rows on 13x10: ``planner.choose_combine_tiles``) merge the live units' partials in ascending
    unit order, normalise once and write the group's head rows of the job's tiles in bf16. The merge
@@ -36,7 +37,9 @@ same in every decode graph. ``GEMMA4_SDPA_SPLITFREE_UNIT=<tokens>`` (or ``SPLIT=
 fixed unit for A/B and the bit gate.
 
 Contract (the stock ``paged_scaled_dot_product_attention_decode`` call of ``tt/attention/decode.py``):
-``q [1, B <= 32, Hq <= 32, D]`` bf16 TILE interleaved (DRAM or L1), ``k / v [blocks, nkv, block, D]`` bf16 or
+``q [1, B <= 32, Hq <= 32, D]`` bf16 TILE, interleaved (DRAM or L1) or height-sharded in L1 (the fused head ops'
+layout, one user's tile row per shard: read in place through its accessor, no copy; refused when its shard and the
+partials' CBs exceed the L1 budget), ``k / v [blocks, nkv, block, D]`` bf16 or
 bfloat8_b TILE (the cache view may be overridden by ``num_kv_heads`` / ``block_size`` as the stock geometry
 override does), ``page_table [B, max_blocks]`` int32 ROW_MAJOR, ``cur_pos [B]`` int32 ROW_MAJOR (-1 = padding row,
 its output rows untouched), ``scale``, ``sliding_window`` (None: attend everything), ``cache_position_modulo``
@@ -210,8 +213,13 @@ class SdpaDecodeSplitfree:
     ):
         """None when the call is in contract (shapes, formats, the L1 fit of the plan, the scratch capacity),
         else why (the caller keeps the stock op)."""
-        if q.layout != ttnn.TILE_LAYOUT or q.dtype != ttnn.bfloat16 or q.is_sharded():
-            return "q must be a bf16 TILE interleaved tensor"
+        if q.layout != ttnn.TILE_LAYOUT or q.dtype != ttnn.bfloat16:
+            return "q must be a bf16 TILE tensor"
+        q_mem = q.memory_config()
+        if q.is_sharded() and (
+            q_mem.memory_layout != ttnn.TensorMemoryLayout.HEIGHT_SHARDED or q_mem.buffer_type != ttnn.BufferType.L1
+        ):
+            return "a sharded q must be HEIGHT_SHARDED in L1 (read in place); move it to DRAM"
         if len(q.shape) != 4 or int(q.shape[0]) != 1 or int(q.shape[1]) > P.MAX_ROWS or int(q.shape[2]) > P.MAX_ROWS:
             return f"q must be [1, B <= 32, Hq <= 32, D], got {list(q.shape)}"
         if int(q.shape[3]) % TILE:
@@ -255,6 +263,13 @@ class SdpaDecodeSplitfree:
             return str(e)
         if not plan.fits:
             return f"the circular buffers do not fit the per-core L1: {plan.describe()}"
+        if q.is_sharded():
+            shard_bytes = int(q_mem.shard_spec.shape[0]) * int(q_mem.shard_spec.shape[1]) * 2
+            if plan.partial_cb_bytes + shard_bytes > plan.budget_bytes:
+                return (
+                    f"the L1 q shard ({shard_bytes:,} B) and the partials' CBs ({plan.partial_cb_bytes:,} B) exceed "
+                    f"the {plan.budget_bytes:,} B L1 budget; move q to DRAM"
+                )
         cap = cls.scratch_capacity(scratch)
         if plan.scratch_tiles > cap:
             return f"the scratch holds {cap} fp32 tiles, the call needs {plan.scratch_tiles}: {plan.describe()}"

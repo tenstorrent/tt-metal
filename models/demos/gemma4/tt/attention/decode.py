@@ -1017,26 +1017,31 @@ def decode_forward(
             "follow the decode batch"
         )
     if not split and page_table is not None and sdpa_scratch is not None and splitfree_sdpa_enabled(config):
-        # GEMMA4_SDPA_DECODE_SPLITFREE: the custom op (custom_ops/sdpa_decode_splitfree): fixed KV units per
-        # (row, group) on a static core mapping, fp32 partials in the model's scratch, a fixed-order combine --
-        # the row's bits do not depend on the padded batch or the cores (tt-metal#59300), and a lone row's units
-        # sit on consecutive cores whatever the padded batch (64 cores at 256K). Out of contract (the wrapper
-        # says why), the stock op serves.
+        # GEMMA4_SDPA_DECODE_SPLITFREE: the custom op (custom_ops/sdpa_decode_splitfree): KV units per (row, group)
+        # from the row's own position (at most K = 32 per row) on a static core mapping, fp32 partials in the
+        # model's scratch, a fixed-order combine split by output tile -- the row's bits do not depend on the padded
+        # batch or the cores (tt-metal#59300), and a lone row's units sit on distinct cores whatever the padded
+        # batch. Out of contract (the wrapper says why), the stock op serves.
         from models.demos.gemma4.custom_ops.sdpa_decode_splitfree import SdpaDecodeSplitfree
 
         sdpa_num_local_kv_heads = 1 if weights.kv_replicated else config.num_key_value_heads // tp
-        if tt_q.is_sharded():  # the fused head ops leave q height-sharded in L1; the op reads interleaved tiles
-            q_dram = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
-            tt_q.deallocate(True)
-            tt_q = q_dram
         splitfree_kwargs = dict(
             num_kv_heads=sdpa_num_local_kv_heads,
             block_size=effective_block_size(k_cache, config.head_dim, sdpa_num_local_kv_heads),
             sliding_window=sliding_window,
         )
+        # the fused head ops leave q height-sharded in L1: the op reads it in place; a q it refuses (e.g. its shard
+        # beside the partials' CBs over the L1 budget) goes to DRAM, as the op and the stock op took it before
         splitfree_reason = SdpaDecodeSplitfree.unsupported_reason(
             tt_q, k_cache, v_cache, cache_pos, page_table, sdpa_scratch, **splitfree_kwargs
         )
+        if splitfree_reason is not None and tt_q.is_sharded():
+            q_dram = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
+            tt_q.deallocate(True)
+            tt_q = q_dram
+            splitfree_reason = SdpaDecodeSplitfree.unsupported_reason(
+                tt_q, k_cache, v_cache, cache_pos, page_table, sdpa_scratch, **splitfree_kwargs
+            )
         if splitfree_reason is None:
             tt_sdpa = SdpaDecodeSplitfree.op(
                 tt_q,
