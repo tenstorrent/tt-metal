@@ -383,7 +383,7 @@ inline __attribute__((always_inline)) void vec_execute(std::uint32_t dest_row, c
     constexpr std::uint32_t half_face      = P.face_r_dim / 2;   // two steps per face
     constexpr std::uint32_t half_steps     = 2 * faces_per_call; // per call
     static_assert(half_face <= vec_max_rwc_step, "a half face must fit one SETRWC step");
-    constexpr MathCounter next_half_face {.dest = AdvanceAndReset(half_face)};
+    constexpr auto next_half_face = MathCounter {.dest = AdvanceAndReset(half_face)};
     if constexpr (wrapper::is_rt_v<Tiles>)
     {
         // Above the bound the block walk would run the Dest row counter past the tensor's section.

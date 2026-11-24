@@ -323,8 +323,8 @@ inline __attribute__((always_inline)) void reduce_execute(std::uint32_t dest_row
     using namespace hal::counters::rwc;
     // The Src zero-flag rule, as configure_math_formats applies it.
     constexpr std::uint32_t default_zero_flag = src_zero_flag_disabled(P.src_a_format, P.src_b_format) ? 1u : 0u;
-    constexpr std::uint32_t keep_every_datum = 1;
-    constexpr MathCounter release_scaler {.src_a = Set(0), .src_b = Set(0), .dest = Set(0), .flip = Src::B, .clear_fidelity = true};
+    constexpr std::uint32_t keep_every_datum  = 1;
+    constexpr auto release_scaler             = MathCounter {.src_a = Set(0), .src_b = Set(0), .dest = Set(0), .flip = Src::B, .clear_fidelity = true};
     if constexpr (wrapper::is_rt_v<Folded>)
     {
         LLK_ASSERT(wrapper::value(folded) >= 1 && wrapper::value(folded) <= P.k_tiles, "a run-time row length is outside 1..its bound");

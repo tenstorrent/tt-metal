@@ -228,9 +228,10 @@ inline __attribute__((always_inline)) void matmul_k_step(std::uint32_t dest_row,
     constexpr std::uint32_t reused_tiles = P.reuse_in0 ? P.tile_rows : P.tile_cols;
     // The reused bank back to the unpacker, after its last streamed tile: with every counter to 0, or with Dest left
     // where the walk below has it.
-    constexpr MathCounter release_reused {.src_a = Set(0), .src_b = Set(0), .dest = Set(0), .flip = P.reuse_in0 ? Src::B : Src::A, .clear_fidelity = true};
-    constexpr MathCounter release_reused_keep_dest {.src_a = Set(0), .src_b = Set(0), .flip = P.reuse_in0 ? Src::B : Src::A, .clear_fidelity = true};
-    constexpr auto release_streamed = P.reuse_in0 ? hal::fpu::SourceRelease::SrcA : hal::fpu::SourceRelease::SrcB;
+    constexpr auto release_reused =
+        MathCounter {.src_a = Set(0), .src_b = Set(0), .dest = Set(0), .flip = P.reuse_in0 ? Src::B : Src::A, .clear_fidelity = true};
+    constexpr auto release_reused_keep_dest = MathCounter {.src_a = Set(0), .src_b = Set(0), .flip = P.reuse_in0 ? Src::B : Src::A, .clear_fidelity = true};
+    constexpr auto release_streamed         = P.reuse_in0 ? hal::fpu::SourceRelease::SrcA : hal::fpu::SourceRelease::SrcB;
 
     // The Dest row counter walks the output tiles: its CR register is the tile's first row, counted from the math Dest
     // offset, and the tile's last MVMUL moves it on (matmul_tile_end). With in0 held the runs follow each other in Dest

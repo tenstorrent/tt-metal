@@ -166,7 +166,7 @@ template <copy_params P>
 inline __attribute__((always_inline)) void copy_through_src(std::uint32_t dest_row)
 {
     using namespace hal::counters::rwc;
-    constexpr MathCounter release_src_a {.src_a = Set(0), .dest = Set(0), .flip = Src::A};
+    constexpr auto release_src_a = MathCounter {.src_a = Set(0), .dest = Set(0), .flip = Src::A};
     for (std::uint32_t tile = 0; tile < P.tiles; tile++)
     {
         set_math_dest_tile<P>(dest_row, tile);
