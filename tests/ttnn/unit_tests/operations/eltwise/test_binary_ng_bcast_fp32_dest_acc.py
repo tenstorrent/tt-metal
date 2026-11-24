@@ -169,3 +169,47 @@ def test_binary_ng_bcast_bf16_in_fp32_out_matrix(device, op_name, bcast_input, w
     assert torch.equal(
         out, ref
     ), f"{op_name} COL_{bcast_input.upper()} W={w_tiles}: max abs diff = {(out - ref).abs().max()}"
+
+
+# ─── bf16 inputs, fp32 output, every broadcast (issue 67031) ───────────────
+
+_FULL_SHAPE = (2, 64, 64)
+_BCAST_SHAPES = {"none": (2, 64, 64), "scalar": (2, 1, 1), "col": (2, 64, 1), "row": (2, 1, 64)}
+
+
+def _bf16_device(device, t):
+    return ttnn.from_torch(t.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+
+def _fp32_output(device):
+    return ttnn.from_torch(torch.zeros(_FULL_SHAPE), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+
+@pytest.mark.parametrize("bcast", list(_BCAST_SHAPES))
+@pytest.mark.parametrize("op_name", ["add", "multiply", "maximum"])
+@pytest.mark.parametrize("bcast_input", ["a", "b"])
+def test_binary_bf16_in_fp32_out_bcast(device, op_name, bcast, bcast_input):
+    torch.manual_seed(0)
+    full = torch.randint(-8, 8, _FULL_SHAPE).float()
+    small = torch.randint(-8, 8, _BCAST_SHAPES[bcast]).float()
+    lhs, rhs = (small, full) if bcast_input == "a" else (full, small)
+
+    result = getattr(ttnn, op_name)(
+        _bf16_device(device, lhs), _bf16_device(device, rhs), output_tensor=_fp32_output(device)
+    )
+    assert torch.equal(ttnn.to_torch(result), getattr(torch, op_name)(lhs, rhs))
+
+
+@pytest.mark.parametrize("bcast", list(_BCAST_SHAPES))
+@pytest.mark.parametrize("variant", ["TTS", "TST"])
+def test_where_bf16_in_fp32_out_bcast(device, variant, bcast):
+    cond = torch.arange(torch.Size(_FULL_SHAPE).numel()).reshape(_FULL_SHAPE) % 3 != 0
+    shape = _BCAST_SHAPES[bcast]
+    value = (torch.arange(torch.Size(shape).numel()).reshape(shape) % 7 + 10).float()
+    if variant == "TTS":
+        args, expected = (_bf16_device(device, value), 3.0), torch.where(cond, value, 3.0)
+    else:
+        args, expected = (3.0, _bf16_device(device, value)), torch.where(cond, 3.0, value)
+
+    result = ttnn.where(_bf16_device(device, cond), *args, output_tensor=_fp32_output(device))
+    assert torch.equal(ttnn.to_torch(result), expected)
