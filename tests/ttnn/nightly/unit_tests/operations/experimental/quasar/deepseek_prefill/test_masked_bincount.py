@@ -1,0 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_masked_bincount import *  # noqa: F403
