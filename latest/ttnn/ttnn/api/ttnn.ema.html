@@ -356,7 +356,7 @@
 <p>For a given <cite>input</cite> of size T along the last dimension, the <cite>output</cite> will also contain T elements and be such that:</p>
 <div class="math notranslate nohighlight">
 \[\mathrm{{output}}_t = \alpha \times \mathrm{{output}}_{t-1} + (1 - \alpha) \times \mathrm{{input}}_t\]</div>
-<p>with mathrm{{output}}_0 = mathrm{{input}}_0</p>
+<p>with mathrm{{output}}_{{-1}} = 0, so that mathrm{{output}}_0 = (1 - alpha) times mathrm{{input}}_0</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>

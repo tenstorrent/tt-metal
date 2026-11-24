@@ -335,7 +335,7 @@ and query Metal host runtime data.</p>
 <span class="n">export</span> <span class="n">TT_METAL_INSPECTOR_RPC</span><span class="o">=</span><span class="mi">1</span>                              <span class="c1"># optional: enable/disable the Inspector RPC server. Default is `1` (enabled).</span>
 </pre></div>
 </div>
-<p>Enabling the Inspector will override <cite>TT_METAL_RISCV_DEBUG_INFO</cite> and debugging info will be generated for riscv elfs.
+<p>RISC-V debug info defaults to on when the Inspector is enabled; set <cite>TT_METAL_RISCV_DEBUG_INFO=0</cite> to disable it, or <cite>TT_METAL_RISCV_DEBUG_INFO=1</cite> to enable it independently of the Inspector.
 You can also use unix sockets for the RPC server by setting <cite>TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS</cite> to a unix socket path,
 e.g. <cite>unix:/tmp/inspector_socket</cite>.</p>
 </section>
