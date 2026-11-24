@@ -261,6 +261,9 @@ void directed_performance_test(
 /* ========== TEST CASES ========== */
 
 TEST_F(UnitMeshFastDispatchFixture, AtomicSemaphoreAdjacentIncrementValueSweep) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     uint32_t test_id = 340;
 
     unit_tests::dm::atomics::increment_value_sweep_test(
@@ -272,6 +275,9 @@ TEST_F(UnitMeshFastDispatchFixture, AtomicSemaphoreAdjacentIncrementValueSweep) 
 }
 
 TEST_F(UnitMeshFastDispatchFixture, AtomicSemaphoreNonAdjacentIncrementValueSweep) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     uint32_t test_id = 341;
 
     auto logical_grid_size = this->device().logical_grid_size();

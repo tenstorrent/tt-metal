@@ -400,6 +400,9 @@ void grid_packet_sizes_test(distributed::MeshDevice& mesh_device, uint32_t test_
 
 /* ========== Full grid directed ideal ========== */
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementMultiInterleavedDirectedIdeal) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     uint32_t test_case_id = 110;
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = this->device().compute_with_storage_grid_size();
@@ -409,6 +412,9 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementMultiInterleavedDirectedId
 
 /* ========== Full grid packet sizes sweep ========== */
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementMultiInterleavedSizes) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     uint32_t test_case_id = 111;
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = this->device().compute_with_storage_grid_size();
@@ -418,6 +424,9 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementMultiInterleavedSizes) {
 
 /* ========== Full grid read kernel directed ideal ========== */
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementMultiInterleavedReadDirectedIdeal) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     uint32_t test_case_id = 112;
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = this->device().compute_with_storage_grid_size();
@@ -427,6 +436,9 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementMultiInterleavedReadDirect
 
 /* ========== Full grid read kernel packet sizes sweep ========== */
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementMultiInterleavedReadSizes) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     uint32_t test_case_id = 113;
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = this->device().compute_with_storage_grid_size();
@@ -436,6 +448,9 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementMultiInterleavedReadSizes)
 
 /* ========== Full grid write kernel directed ideal ========== */
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementMultiInterleavedWriteDirectedIdeal) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     uint32_t test_case_id = 114;
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = this->device().compute_with_storage_grid_size();
@@ -445,6 +460,9 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementMultiInterleavedWriteDirec
 
 /* ========== Full grid write kernel packet sizes sweep ========== */
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementMultiInterleavedWriteSizes) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     uint32_t test_case_id = 115;
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = this->device().compute_with_storage_grid_size();
@@ -455,6 +473,9 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementMultiInterleavedWriteSizes
 /* ========== 2x2 CORE TESTS ========== */
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement2x2MultiInterleavedDirectedIdeal) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     uint32_t test_case_id = 116;
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = {2, 2};
@@ -463,6 +484,9 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement2x2MultiInterleavedDirecte
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement2x2MultiInterleavedSizes) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     uint32_t test_case_id = 117;
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = {2, 2};
@@ -471,6 +495,9 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement2x2MultiInterleavedSizes) 
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement2x2MultiInterleavedReadDirectedIdeal) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     uint32_t test_case_id = 118;
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = {2, 2};
@@ -479,6 +506,9 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement2x2MultiInterleavedReadDir
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement2x2MultiInterleavedReadSizes) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     uint32_t test_case_id = 119;
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = {2, 2};
@@ -487,6 +517,9 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement2x2MultiInterleavedReadSiz
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement2x2MultiInterleavedWriteDirectedIdeal) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     uint32_t test_case_id = 120;
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = {2, 2};
@@ -495,6 +528,9 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement2x2MultiInterleavedWriteDi
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement2x2MultiInterleavedWriteSizes) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     uint32_t test_case_id = 121;
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = {2, 2};
@@ -555,16 +591,25 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement6x6MultiInterleavedWriteSi
 /* ========== GRID SWEEP TESTS ========== */
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementMultiInterleavedGridSweepSizes) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     uint32_t test_case_id = 128;
     unit_tests::dm::multi_interleaved::grid_packet_sizes_test(this->device(), test_case_id, true, true);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementMultiInterleavedReadGridSweepSizes) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     uint32_t test_case_id = 129;
     unit_tests::dm::multi_interleaved::grid_packet_sizes_test(this->device(), test_case_id, true, false);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementMultiInterleavedWriteGridSweepSizes) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     uint32_t test_case_id = 130;
     unit_tests::dm::multi_interleaved::grid_packet_sizes_test(this->device(), test_case_id, false, true);
 }

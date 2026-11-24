@@ -198,6 +198,9 @@ bool run_dm(distributed::MeshDevice& mesh_device, const InterleavedConfig& test_
 
 /* ========== Test case for varying number of pages; Test id = 61 ========== */
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDRAMInterleavedPageNumbers) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     // Physical Constraints
     auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
         tt::tt_metal::unit_tests::dm::compute_physical_constraints(this->device());
@@ -268,6 +271,9 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDRAMInterleavedPageCoreLoc
 
 /* ========== Test noc_async_read_page kernel only; Test id = 63 ========== */
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDRAMInterleavedPageReadNumbers) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     // Physical Constraints
     auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
         tt::tt_metal::unit_tests::dm::compute_physical_constraints(this->device());
@@ -310,6 +316,9 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDRAMInterleavedPageReadNum
 
 /* ========== Test noc_async_write_page kernel only; Test id = 64 ========== */
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDRAMInterleavedPageWriteNumbers) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     // Physical Constraints
     auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
         tt::tt_metal::unit_tests::dm::compute_physical_constraints(this->device());
@@ -352,6 +361,9 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDRAMInterleavedPageWriteNu
 
 /* ========== Directed Ideal Test Case; Test id = 65 ========== */
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDRAMInterleavedPageDirectedIdeal) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     // Physical Constraints
     auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
         tt::tt_metal::unit_tests::dm::compute_physical_constraints(this->device());
@@ -471,6 +483,9 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDRAMInterleavedPageWriteNo
 
 /* ========== Test case for varying number of pages using interleaved L1; Test id = 66 ========== */
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementL1InterleavedPageNumbers) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     // Physical Constraints
     auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
         tt::tt_metal::unit_tests::dm::compute_physical_constraints(this->device());
@@ -542,6 +557,9 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementL1InterleavedPageCoreLocat
 
 /* ========== Test noc_async_read_page only; Test id = 68 ========== */
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementL1InterleavedPageReadNumbers) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     // Physical Constraints
     auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
         tt::tt_metal::unit_tests::dm::compute_physical_constraints(this->device());
@@ -583,6 +601,9 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementL1InterleavedPageReadNumbe
 }
 /* ========== Test noc_async_write_page only; Test id = 69 ========== */
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementL1InterleavedPageWriteNumbers) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     // Physical Constraints
     auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
         tt::tt_metal::unit_tests::dm::compute_physical_constraints(this->device());
@@ -625,6 +646,9 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementL1InterleavedPageWriteNumb
 
 /* ========== Directed Ideal Test Case; Test id = 71 ========== */
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementL1InterleavedPageDirectedIdeal) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     // Physical Constraints
     auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
         tt::tt_metal::unit_tests::dm::compute_physical_constraints(this->device());

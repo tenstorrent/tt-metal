@@ -335,6 +335,9 @@ bool run_multiple_test(distributed::MeshDevice& mesh_device, const MatmulTestCon
 }  // namespace unit_tests::dm::one_d_matmul
 
 TEST_P(Matmul1DParamFixture, Test1DMatmul) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     EXPECT_TRUE(unit_tests::dm::one_d_matmul::run_multiple_test(this->device(), GetParam()));
 }
 

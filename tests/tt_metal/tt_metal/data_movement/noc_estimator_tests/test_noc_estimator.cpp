@@ -1368,76 +1368,130 @@ static void sweep_column_to_column(distributed::MeshDevice& mesh_device, uint32_
 
 // ---- L1 tests (800-809) ----
 TEST_F(UnitMeshFastDispatchFixture, NocEstimatorL1OneToOne) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     unit_tests::dm::noc_estimator::sweep_one_to_one(this->device(), 800);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, NocEstimatorL1OneFromOne) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     unit_tests::dm::noc_estimator::sweep_one_from_one(this->device(), 801);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, NocEstimatorL1OneToAll) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     unit_tests::dm::noc_estimator::sweep_one_to_all(this->device(), 802);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, NocEstimatorL1OneFromAll) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     unit_tests::dm::noc_estimator::sweep_one_from_all(this->device(), 803);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, NocEstimatorL1AllToAll) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     unit_tests::dm::noc_estimator::sweep_all_to_all(this->device(), 804);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, NocEstimatorL1AllFromAll) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     unit_tests::dm::noc_estimator::sweep_all_from_all(this->device(), 805);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, NocEstimatorL1OneToRow) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     unit_tests::dm::noc_estimator::sweep_one_to_row(this->device(), 806);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, NocEstimatorL1RowToRow) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     unit_tests::dm::noc_estimator::sweep_row_to_row(this->device(), 807);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, NocEstimatorL1OneToColumn) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     unit_tests::dm::noc_estimator::sweep_one_to_column(this->device(), 808);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, NocEstimatorL1ColumnToColumn) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     unit_tests::dm::noc_estimator::sweep_column_to_column(this->device(), 809);
 }
 
 // ---- DRAM Read tests (810-813) ----
 TEST_F(UnitMeshFastDispatchFixture, NocEstimatorDRAMShardedOneFromOne) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     unit_tests::dm::noc_estimator::sweep_dram_sharded_one_from_one(this->device(), 810);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, NocEstimatorDRAMShardedAllFromAll) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     unit_tests::dm::noc_estimator::sweep_dram_sharded_all_from_all(this->device(), 811);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, NocEstimatorDRAMInterleavedOneFromAll) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     unit_tests::dm::noc_estimator::sweep_dram_interleaved_one_from_all(this->device(), 812);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, NocEstimatorDRAMInterleavedAllFromAll) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     unit_tests::dm::noc_estimator::sweep_dram_interleaved_all_from_all(this->device(), 813);
 }
 
 // ---- DRAM Write tests (814-817) ----
 TEST_F(UnitMeshFastDispatchFixture, NocEstimatorDRAMShardedOneToOne) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     unit_tests::dm::noc_estimator::sweep_dram_sharded_one_to_one(this->device(), 814);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, NocEstimatorDRAMShardedAllToAll) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     unit_tests::dm::noc_estimator::sweep_dram_sharded_all_to_all(this->device(), 815);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, NocEstimatorDRAMInterleavedOneToAll) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     unit_tests::dm::noc_estimator::sweep_dram_interleaved_one_to_all(this->device(), 816);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, NocEstimatorDRAMInterleavedAllToAll) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     unit_tests::dm::noc_estimator::sweep_dram_interleaved_all_to_all(this->device(), 817);
 }
 
