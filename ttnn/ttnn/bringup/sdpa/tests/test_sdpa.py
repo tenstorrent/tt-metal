@@ -158,7 +158,97 @@ def run_ring_mla(case, mesh):
     determinism.assert_deterministic(lambda: call(q_a, kv_a), lambda: call(q_b, kv_b), first=out, label=case["id"])
 
 
-RUNNERS = {"ring_mla": run_ring_mla}
+def _sparse_sdpa_inputs(case, seed):
+    """Random q, kv, sink; valid ids: per row a random count of distinct keys of [0, T) (a quarter of the rows use
+    every slot, as at the model's full context), the rest of the row MASKED_INDEX (the op wants a contiguous tail)."""
+    import torch  # local: tt-metal's check-torch-imports-in-ttnn forbids a global torch import under ttnn/
+
+    g = torch.Generator().manual_seed(seed)
+    _, H, S, _ = case["q_shape"]
+    T, TOPK = case["kv_shape"][2], case["indices_shape"][3]
+    q = torch.randn(case["q_shape"], generator=g).to(torch.bfloat16)
+    kv = torch.randn(case["kv_shape"], generator=g).to(torch.bfloat16)
+    idx = torch.full(case["indices_shape"], ref.MASKED_INDEX, dtype=torch.int64)
+    nvalid = torch.randint(1, TOPK + 1, (S,), generator=g)
+    nvalid[torch.randperm(S, generator=g)[: S // 4]] = TOPK
+    for s in range(S):
+        idx[0, 0, s, : nvalid[s]] = torch.randperm(T, generator=g)[: nvalid[s]]
+    # sinks from negligible to dominant softmax shares (scaled-logit domain; the op multiplies the sink by scale)
+    sink = ((torch.randn(case["sink_shape"], generator=g) * 3 + 2) / case["scale"]).to(torch.bfloat16)
+    return q, kv, idx, sink
+
+
+def _sparse_sdpa_dev(host, mesh):
+    import torch  # local: tt-metal's check-torch-imports-in-ttnn forbids a global torch import under ttnn/
+
+    def put(t, dtype):
+        return ttnn.from_torch(
+            t,
+            dtype=dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        )
+
+    q, kv, idx, sink = host
+    # MASKED_INDEX wraps to -1 in int32: the same 32 bits
+    return (
+        put(q, ttnn.bfloat16),
+        put(kv, ttnn.bfloat16),
+        put(idx.to(torch.int32), ttnn.uint32),
+        put(sink, ttnn.bfloat16),
+    )
+
+
+def run_sparse_sdpa(case, mesh):
+    """The inputs are replicated, so every device's output is checked against the same torch reference."""
+    import torch  # local: tt-metal's check-torch-imports-in-ttnn forbids a global torch import under ttnn/
+
+    built = {"dtype": "bfloat16", "layout": "ROW_MAJOR", "memory": "DRAM_INTERLEAVED", "kv_format": "BF16"}
+    for name, value in built.items():
+        assert case[name] == value, f"{name}={case[name]}: not built by this test"
+    k = case["compute_kernel_config"]
+    kwargs = dict(
+        kv_format=getattr(ttnn.bringup.SparseKVFormat, case["kv_format"]),
+        scale=case["scale"],
+        k_chunk_size=case["k_chunk_size"],
+        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+            math_fidelity=getattr(ttnn.MathFidelity, k["math_fidelity"]),
+            math_approx_mode=k["math_approx_mode"],
+            fp32_dest_acc_en=k["fp32_dest_acc_en"],
+            packer_l1_acc=k["packer_l1_acc"],
+            dst_full_sync_en=k["dst_full_sync_en"],
+        ),
+        exact_exp=case["exact_exp"],
+    )
+
+    def call(inp):
+        q, kv, idx, sink = inp
+        return ttnn.bringup.sparse_sdpa(q, kv, idx, case["v_dim"], attention_sink=sink, **kwargs)
+
+    host_a = _sparse_sdpa_inputs(case, case["seed"])
+    inp_a = _sparse_sdpa_dev(host_a, mesh)
+    out = call(inp_a)
+    shards = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(out)]
+    assert len(shards) == case["mesh"][0] * case["mesh"][1]
+    q, kv, idx, sink = host_a
+    want = ref.sparse_sdpa(q.float(), kv.float(), idx, case["scale"], case["v_dim"], sink.float())
+    for d, got in enumerate(shards):
+        assert tuple(got.shape) == tuple(want.shape), f"device {d}: shape {tuple(got.shape)}"
+        assert torch.isfinite(got).all(), f"device {d}: non-finite output"
+        pcc = _pcc(got, want)
+        rel = float((got - want).norm() / want.norm())
+        if d == 0:
+            print(f"{case['id']}: pcc {pcc:.6f}, rel {rel:.5f}")
+        assert pcc >= case["pcc"], f"device {d}: pcc {pcc:.6f} < {case['pcc']}"
+        assert rel <= case["max_rel"], f"device {d}: rel {rel:.5f} > {case['max_rel']}"
+
+    inp_b = _sparse_sdpa_dev(_sparse_sdpa_inputs(case, case["seed"] + 1), mesh)
+    determinism.assert_deterministic(lambda: call(inp_a), lambda: call(inp_b), first=out, label=case["id"])
+
+
+RUNNERS = {"ring_mla": run_ring_mla, "sparse_sdpa": run_sparse_sdpa}
 FABRIC = {"FABRIC_1D_RING": ttnn.FabricConfig.FABRIC_1D_RING}
 
 

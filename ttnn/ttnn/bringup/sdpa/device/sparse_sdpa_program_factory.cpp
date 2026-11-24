@@ -317,6 +317,9 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     compute_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = core_grid;
     compute_desc.compile_time_args = compute_ct;
+    if (attrs.exact_exp) {  // bring-up fork: off = the source op's program (no define)
+        compute_desc.defines = {{"SPARSE_SDPA_EXACT_EXP", "1"}};
+    }
     // fp8 inputs must unpack into a 32-bit dest (fp8 -> fp32 in DEST, then packed to bfp8 cb_*_in).
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);

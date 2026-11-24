@@ -416,6 +416,9 @@ void bind_sdpa(nb::module_& mod) {
                 is multiplied by scale and contributes only to the softmax denominator. DeepSeek-V4
                 sinks are already scaled logits: pass (model_sink / scale).reshape(1, 1, 1, H)
                 (scale != 0) to contribute exp(model_sink). Defaults to None.
+            exact_exp (bool): bring-up fork option. The softmax score exp uses the accurate exp
+                (fp32 Cody-Waite + polynomial with fp32 dest) instead of the fast Schraudolph form, which
+                over-estimates exp by about 1 % on average. Defaults to False (the source op's program).
             scale (float, optional): defaults to K_DIM**-0.5.
             k_chunk_size (int): defaults to 128 (must divide TOPK, multiple of 32).
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional).
@@ -449,7 +452,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("block_cyclic_sp_axis") = nb::none(),
         nb::arg("block_cyclic_chunk_local") = nb::none(),
         nb::arg("block_cyclic_cache_tp_sharded") = false,
-        nb::arg("attention_sink") = nb::none());
+        nb::arg("attention_sink") = nb::none(),
+        nb::arg("exact_exp") = false);
 
     ttnn::bind_function<"sparse_sdpa_msa", "ttnn.bringup.">(
         mod,

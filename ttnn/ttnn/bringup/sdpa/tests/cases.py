@@ -56,4 +56,39 @@ CASES = [
         "pcc": 0.9998,
         "rel": 0.02,
     },
+    {
+        # hy4_preview attention (both attention layers), chunk 640 at the last ladder rung: per chip 64 heads x 160
+        # query rows (heads -> sequence over TP), the slot's kvpe [0, 56320) in natural order, top-2048 ids
+        "id": "hy4_preview-sparse_sdpa-h64-s160-t56320-k2048-sink-exact_exp",
+        "model": "hy4_preview",
+        "task": "O.1",
+        "sig": "676f72c7a6",
+        "op": "sparse_sdpa",
+        "mesh": [8, 4],
+        "fabric_config": "FABRIC_1D_RING",
+        "q_shape": [1, 64, 160, 576],
+        "kv_shape": [1, 1, 56320, 576],
+        "indices_shape": [1, 1, 160, 2048],
+        "sink_shape": [1, 1, 1, 64],
+        "dtype": "bfloat16",
+        "layout": "ROW_MAJOR",
+        "memory": "DRAM_INTERLEAVED",
+        "v_dim": 512,
+        "kv_format": "BF16",
+        "scale": 0.0625,
+        "k_chunk_size": 128,
+        "exact_exp": True,
+        "compute_kernel_config": {
+            "math_fidelity": "HiFi4",
+            "math_approx_mode": False,
+            "fp32_dest_acc_en": True,
+            "packer_l1_acc": False,
+            "dst_full_sync_en": False,
+        },
+        "seed": 1234,
+        # measured (seeds 1234/1235/1236, BH Galaxy): pcc 0.999993 / 0.999989 / 0.999909, rel 0.00699 / 0.00693 /
+        # 0.00676 (the op's bf16 running output / row-sum); a 1 % scale of the output fails max_rel
+        "pcc": 0.9995,
+        "max_rel": 0.01,
+    },
 ]

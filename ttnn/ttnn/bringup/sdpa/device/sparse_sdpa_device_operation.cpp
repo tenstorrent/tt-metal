@@ -267,7 +267,8 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
         attrs.block_cyclic.has_value() ? attrs.block_cyclic->chunk_local : 0u,
         t.indices.logical_shape(),
         t.indices.dtype(),
-        t.attention_sink);
+        t.attention_sink,
+        attrs.exact_exp);
 }
 
 Tensor sparse_sdpa(
@@ -281,7 +282,8 @@ Tensor sparse_sdpa(
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx,
     std::optional<BlockCyclicLayout> block_cyclic,
-    const std::optional<Tensor>& attention_sink) {
+    const std::optional<Tensor>& attention_sink,
+    bool exact_exp) {
     using OperationType = ttnn::prim::bringup::SparseSDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -292,6 +294,7 @@ Tensor sparse_sdpa(
             .compute_kernel_config = compute_kernel_config,
             .cache_batch_idx = cache_batch_idx,
             .block_cyclic = block_cyclic,
+            .exact_exp = exact_exp,
         },
         OperationType::tensor_args_t{
             .q = q,

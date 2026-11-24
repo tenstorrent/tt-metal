@@ -650,6 +650,11 @@ void sub_exp_block_bcast_cols(
                     dst_index,
                     vector_mode_exp));
                 dst_index++;
+#elif defined(SPARSE_SDPA_EXACT_EXP)
+                // bring-up fork (sparse_sdpa exact_exp): the accurate exp, scale applied in the call (the
+                // Schraudolph init that folds the scale is not used); -inf (masked) -> +0
+                exp_packthread_tile<false, true, InputClamping::None, iterations>(
+                    dst_index++, vector_mode_exp, static_cast<uint16_t>(scale_fp32 >> 16));
 #else
                 exp_packthread_tile<true, false, InputClamping::None, iterations>(dst_index++, vector_mode_exp);
 #endif

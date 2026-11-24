@@ -4,7 +4,7 @@
 - Source SHA: `b5ce2601ea32fe06238509093250484a33b108ff`
 - Python: `ttnn.bringup.*` (was `ttnn.transformer.*`)
 - Forked for: kimi_k27_code C.attn_dense.attention
-- Used by: kimi_k27_code
+- Used by: kimi_k27_code, hy4_preview
 
 Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMake target `ttnn_op_bringup_sdpa`, kernel paths and includes pointing at this folder, Python prefix `ttnn.bringup.`.
 
@@ -56,3 +56,22 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
 - Files: device/kernels/compute/compute_streaming.hpp, device/ring_joint_sdpa_device_operation_types.hpp,
   device/ring_joint_sdpa_device_operation.{hpp,cpp}, device/ring_joint_sdpa_program_factory.cpp, sdpa.{hpp,cpp},
   sdpa_nanobind.cpp
+
+### sparse_sdpa: exact_exp (accurate softmax score exp)
+- What: `ttnn.bringup.sparse_sdpa(..., exact_exp=False)`. True compiles the compute kernel with
+  `SPARSE_SDPA_EXACT_EXP`: the score exp in `sub_exp_block_bcast_cols` becomes `exp_packthread_tile<false, true>`
+  (accurate fp32 exp, the softmax scale applied in the call) instead of the fast Schraudolph form with the scale folded
+  into its init. False: no define, the source program. `exact_exp` is in the program hash. Ported from the hy4_preview
+  bring-up's own fork of the same op (source `924b8cda3d60`), whose sparse_sdpa sources are this fork's apart from
+  this change.
+- Why: the fast exp over-estimates exp by ~1 % on average; the sink term (`exp_tile_first_column`, already accurate)
+  does not, so each head-row is shrunk by about 1 % x its sink share. Hy4 layer 1 (sinks take 0.7-0.9 of the
+  softmax mass in some heads): those head-rows ~0.8 % low, attention output worst row norm ratio 0.984 vs the
+  component limit 0.985. With exact_exp: ratio min 0.987, bias -0.0007 (was -0.0023); op on random inputs rel
+  0.021 -> 0.013 (unit test). The op's bf16 running output / row-sum are unchanged and leave a smaller bias.
+- Needed by: hy4_preview C.dsa_moe.attention (both attention layers call it)
+- Files: sparse_sdpa.hpp, sparse_sdpa.cpp, sdpa_nanobind.cpp, device/sparse_sdpa_device_operation_types.hpp,
+  device/sparse_sdpa_device_operation.hpp, device/sparse_sdpa_device_operation.cpp,
+  device/sparse_sdpa_program_factory.cpp, device/kernels/compute/compute_streaming.hpp (an `#elif` beside
+  ring_mla's `SDPA_EXACT_SCORE_EXP`), tests/unit/test_sparse_sdpa_exact_exp.py, tests/cases.py, tests/reference.py,
+  tests/test_sdpa.py
