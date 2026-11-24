@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 from dataclasses import dataclass
 from typing import List
 
@@ -132,6 +133,30 @@ TAN_RTOL = {
     DataFormat.Float32: 2 * 2.0**-23,
     DataFormat.Float16_b: 2 * 2.0**-7,
 }
+
+# Max |result - golden| for erf / erfc on [-3, 3], about two bf16 steps near 1; the suite's 0.05 is
+# far looser. Without INP_FLOAT32, erf uses its bf16 table even for Float32 output.
+ERF_ERFC_ATOL = {
+    (MathOperation.Erf, ApproximationMode.No, DataFormat.Float16_b): 2.0**-7,
+    (MathOperation.Erf, ApproximationMode.No, DataFormat.Float32): 2.0**-7,
+    (MathOperation.Erf, ApproximationMode.Yes, DataFormat.Float16_b): 2.0**-6,
+    (MathOperation.Erf, ApproximationMode.Yes, DataFormat.Float32): 2.0**-6,
+    (MathOperation.Erfc, ApproximationMode.No, DataFormat.Float16_b): 2.0**-6,
+    (MathOperation.Erfc, ApproximationMode.No, DataFormat.Float32): 2.0**-7,
+}
+ERF_FP32_TABLE_ATOL = 2.0**-21
+
+
+def _erf_erfc_atol(mathop, approx_mode, output_format):
+    if (
+        mathop == MathOperation.Erf
+        and approx_mode == ApproximationMode.No
+        and output_format == DataFormat.Float32
+        and "INP_FLOAT32" in os.environ.get("LLK_EXTRA_DEFINES", "").split(",")
+    ):
+        return ERF_FP32_TABLE_ATOL
+    return ERF_ERFC_ATOL[(mathop, approx_mode, output_format)]
+
 
 # The six comparison-to-zero modes. These run integer formats too (and UInt16 via
 # the Int16 container), so the sweep adds them to the float formats above.
@@ -473,9 +498,11 @@ def prepare_inputs_for_operation(
         MathOperation.Softplus,
         MathOperation.Softsign,
         MathOperation.I0,
+        MathOperation.Erf,
+        MathOperation.Erfc,
     ):
-        # for_op spans softplus' t < -5 tail and linear threshold, softsign's [-5, 5] and i0's
-        # |x| <= 3.75 fit.
+        # for_op spans softplus' t < -5 tail and linear threshold, softsign's [-5, 5], i0's
+        # |x| <= 3.75 fit and erf / erfc's [-3, 3].
         spec = for_op(mathop, input_format).spec_A
         min_val = spec.low
         max_val = spec.high
@@ -1396,6 +1423,7 @@ TENSOR_DIMS = ([32, 32], [64, 64])
 PERF_INPUT_DIMENSIONS_UNARY = [[64, 64]]
 DEST_SYNC_MODES = (DestSync.Half, DestSync.Full)
 _APPROX_MATHOPS = (
+    MathOperation.Erf,
     MathOperation.Exp,
     MathOperation.Gelu,
     MathOperation.Reciprocal,
@@ -1467,6 +1495,8 @@ OP_CONFIGS = [
     OpConfig(MathOperation.Softsign, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     # Reaches calculate_i0 through SFPU_UNARY_INIT(i0), the Compute API's i0_tile_init.
     OpConfig(MathOperation.I0, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    OpConfig(MathOperation.Erf, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    OpConfig(MathOperation.Erfc, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     *[OpConfig(op, TENSOR_DIMS, DEST_SYNC_MODES) for op in UNARY_MAX_MIN_OPS],
     # Column-wise cumulative sum: a whole-tile op (VectorMode::RC_custom, one call per
     # tile) whose running total lives in LREG4-7 between calls. Every tile is swept with
@@ -1894,6 +1924,17 @@ def run_eltwise_unary_sfpu_quasar(
                 atol=0.0,
             )
         ), "tan is more than two output steps from the golden"
+
+    if mathop in (MathOperation.Erf, MathOperation.Erfc):
+        err = (
+            (res_tensor.to(torch.float64) - golden_tensor.to(torch.float64))
+            .abs()
+            .max()
+            .item()
+        )
+        assert err <= _erf_erfc_atol(
+            mathop, approx_mode, formats.output_format
+        ), f"{mathop.name} is {err} from the golden"
 
     if mathop == MathOperation.Softplus:
         # atol 0.05 lets a flush to 0 through. Require t < -5 to stay positive
