@@ -317,7 +317,11 @@ inline void set_unpacker_x_end()
     }
 }
 
+#ifndef HAL_PORT_UNPACK_TO_DEST_SEM_DEFINED
+#define HAL_PORT_UNPACK_TO_DEST_SEM_DEFINED
+// Shared with llk_math_common.h; whichever header is included first defines it.
 inline constexpr hal::sync::Semaphore UNPACK_TO_DEST_SEM = static_cast<hal::sync::Semaphore>(ckernel::semaphore::UNPACK_TO_DEST);
+#endif
 
 // Wait (on the unpacker) until math has freed dest for an unpack-to-dest tile.
 inline void wait_for_dest_available()

@@ -98,7 +98,11 @@ inline void set_disable_implied_srca_fmt()
 }
 
 // ckernel::semaphore::UNPACK_TO_DEST / MATH_DONE
+#ifndef HAL_PORT_UNPACK_TO_DEST_SEM_DEFINED
+#define HAL_PORT_UNPACK_TO_DEST_SEM_DEFINED
+// Shared with llk_unpack_common.h; whichever header is included first defines it.
 inline constexpr sync::Semaphore UNPACK_TO_DEST_SEM = sync::Semaphore::S2;
+#endif
 inline constexpr sync::Semaphore MATH_DONE_SEM      = sync::Semaphore::S7;
 
 // TTI_STALLWAIT(STALL_MATH, MATH | SRCB_VLD): MOVD2B writes SrcB, so it is outside the Src auto-wait.
