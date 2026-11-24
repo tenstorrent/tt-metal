@@ -30,7 +30,16 @@ void PrepareChunkRecurrenceOperation::validate_on_program_cache_miss(
     constexpr std::string_view operation_name = "prepare_chunk_recurrence";
     check_allocated_device_tensor(in.q, operation_name, "q");
     const auto arch = in.q.device()->arch();
-    TT_FATAL(arch == tt::ARCH::BLACKHOLE, "{} is only supported on Blackhole, got {}", operation_name, arch);
+    // GLM-5.3-Flash port: this op was Blackhole-gated, but its kernels use only portable LLK
+    // (the TF32 references are precision notes about the FP32 DST path, not a required
+    // instruction). Widened for Wormhole B0. Note that on Wormhole the op still fails later, at
+    // kernel placement, because it needs 33 DataflowBufferSpecs per core and Gen1 allows 32; see
+    // models/experimental/glm53_flash/tests/test_kda.py::PREP_BLOCKER.
+    TT_FATAL(
+        arch == tt::ARCH::BLACKHOLE || arch == tt::ARCH::WORMHOLE_B0,
+        "{} is only supported on Blackhole and Wormhole B0, got {}",
+        operation_name,
+        arch);
     check_layout(in.q, Layout::TILE, operation_name, "q");
     check_dtype(in.q, DataType::BFLOAT16, operation_name, "q");
     check_interleaved(in.q, operation_name, "q");
