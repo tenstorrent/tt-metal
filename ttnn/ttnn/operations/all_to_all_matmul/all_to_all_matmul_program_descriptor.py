@@ -58,6 +58,9 @@ NOC1 = ttnn.NOC.RISCV_0_default
 # 134.0 -> 99.4 us fastest chip (reader NoC0 / writer NoC1 before); with PORT_BATCH_CHUNKS 8: 94.5 us.
 COMPUTE_READER_NOC = NOC1
 COMPUTE_WRITER_NOC = NOC0
+# Output in L1 interleaved (Refinement 1 re-check, Kimi model case, harness): NoC1 fastest 81.01 -> 78.53 us but slowest
+# 84.92 -> 86.15 us (beyond noise) -> rejected by eval.ccl_perf compare; kept on NoC0 as a live knob.
+COMPUTE_WRITER_NOC_L1_OUT = NOC0
 PORT_READER_NOC = NOC0  # NoC1 (shared with the sender) hung
 PORT_SENDER_NOC = NOC1  # blackhole-fabric.md rule 7
 
@@ -546,7 +549,12 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
                 runtime_args=writer_rt,
                 common_runtime_args=[out_addr],
                 config=ttnn.DataMovementConfigDescriptor(
-                    processor=ttnn.DataMovementProcessor.RISCV_0, noc=COMPUTE_WRITER_NOC
+                    processor=ttnn.DataMovementProcessor.RISCV_0,
+                    noc=(
+                        COMPUTE_WRITER_NOC_L1_OUT
+                        if memory_config.buffer_type == ttnn.BufferType.L1
+                        else COMPUTE_WRITER_NOC
+                    ),
                 ),
             ),
         ]

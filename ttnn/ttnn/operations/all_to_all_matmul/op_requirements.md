@@ -38,7 +38,7 @@
 - **Golden baseline**: 16 supported_pass / 132 xfail_expected / 0 loud (per verifier CLI); acceptance + precision 14/14
 - **Perf (Phase 0 loose case, Kimi, 7232 B)**: fastest chip 94.4 us, slowest 104.2 us (roofline 63.0, target 84.0); exchange + fence alone 49.3 us
 
-### [ ] Refinement 1 — Model configuration: 16-bit DEST, bfloat8_b weight, L1 output
+### [x] Refinement 1 — Model configuration: 16-bit DEST, bfloat8_b weight, L1 output
 
 **Goal**: add `False` to `SUPPORTED["fp32_dest_acc_en"]`, `ttnn.bfloat8_b` to `SUPPORTED["weight_dtype"]` and `ttnn.BufferType.L1` to `SUPPORTED["output_buffer"]`. This is the full perf-focus contract (`LOOSE_CASES[0]`: Kimi, HiFi2, `fp32_dest_acc_en=False`, output in L1, bf16 weight) plus the remaining numeric value (bfloat8_b weight). Everything is in-kernel:
 - 16-bit DEST: the host subblock rule already picks the 8-tile limit.

@@ -54,7 +54,14 @@ Compute core:
 
 Port core: `L1_port = 2*PORT_BATCH_CHUNKS*packet_tiles*tile_bytes` = 96 KiB at 7232 B, 224 KiB at 14400 B.
 
-An L1 output (refinement) adds its interleaved per-bank share (Kimi: 15.7 MB over the L1 banks ≈ 143 KiB) to every core.
+An L1 output (Refinement 1, landed) adds its interleaved per-bank share (Kimi: 15.7 MB over the L1 banks ≈ 143 KiB) to every
+core, port cores included; the allocator places it above the CB region and beside the persistent `landing_scratch`. Tightest
+case DeepSeek (400 KiB CBs + 80 KiB A + ~188 KiB output share) fits and passes (golden + LOOSE_CASES).
+
+Refinement 1 — bfloat8_b weight: `cb_weight` pages are Bfp8_b tiles (1088 B, format = `weight.dtype`); `WEIGHT_BLOCK_BYTES`
+is in bytes, so `block_n` is the largest divisor of Nt within it (Kimi: block_n stays Nt = 16, the block shrinks
+128 → 68 KiB; deep K 4096: block_n stays 1, Kt·2·1088 B > 256 KiB, block 256 → 136 KiB). 16-bit DEST: `cb_out` is the output ABI (bf16) either way; the subblock limit
+becomes 8 tiles (host rule). No CB added, resized by formula only.
 
 ## Data-movement budget (per device, per call; chosen split R1, Kimi focus shape)
 
