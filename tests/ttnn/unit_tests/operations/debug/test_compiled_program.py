@@ -14,6 +14,7 @@ import os
 import pytest
 import torch
 import ttnn
+from tt_py_test_utils_common.utility_functions import skip_for_slow_dispatch
 
 NUM_TILES = 8
 TILE_BYTES = 2 * 1024  # one bfloat16 tile
@@ -138,3 +139,20 @@ def test_run_from_kernel_config_buffer(device, expect_error):
     buffer.deallocate()
     with expect_error(RuntimeError, "deallocated"):
         ttnn.experimental.run_compiled_program(compiled, io_tensors, descriptor, kernel_config_buffer=buffer)
+
+
+@skip_for_slow_dispatch()
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 32768}], indirect=True)
+def test_run_rejects_trace_capture(device, expect_error):
+    _, input_tensor, output_tensor = make_io(device)
+    io_tensors = [input_tensor, output_tensor]
+    descriptor = copy_descriptor(input_tensor, output_tensor, plain_cb())
+    compiled = ttnn.experimental.compile_generic_op(io_tensors, descriptor)
+
+    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    try:
+        with expect_error(RuntimeError, "while a trace is being captured"):
+            ttnn.experimental.run_compiled_program(compiled, io_tensors, descriptor)
+    finally:
+        ttnn.end_trace_capture(device, trace_id, cq_id=0)
+        ttnn.release_trace(device, trace_id)
