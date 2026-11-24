@@ -95,11 +95,10 @@ on:
         type: boolean
         default: false
         description: "Group: ring-joint SDPA perf + high-bandwidth all-gather / sparse KV push perf"
-      # TEMP (revert before review): moe_gate's box selects the GLM-5.4 SC4 perf leg while PR #67064 is a draft.
-      glm_5_4:
+      moe_gate:
         type: boolean
         default: false
-        description: "TEMP: GLM-5.4 SC4 perf leg only (moe_gate's box; revert before review)"
+        description: "Cross-model: moe_gate"
       platform:
         required: false
         type: choice
