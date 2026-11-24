@@ -237,11 +237,15 @@ def test_read_padded_kv_cache_round_trip(mesh_device):
                 cluster_axis=0,
                 tp_axis=1,
             )
+            # The wire format is a plain row-major regrouping: packing the raw read must give what collect sends.
+            raw, rows = rows, ttnn.reshape(rows, handoff.kvpe_packed_shape())
+            if raw.buffer_address() != rows.buffer_address():
+                ttnn.deallocate(raw)
         else:
             sender.collect(source, meta)
-            rows = sender.kvpe
+            rows = sender.kvpe_packed
         write_kvpe_copy(copy, rows, meta, handoff, first_kv_layer=first, num_kv_layers=num_layers)
-        if rows is not sender.kvpe:
+        if rows is not sender.kvpe_packed:
             ttnn.deallocate(rows)
     ttnn.synchronize_device(mesh_device)
     entries = NUM_USERS * num_layers
@@ -424,7 +428,7 @@ def test_glm54_loop_handoff(mesh_device, traced):
             ttnn.synchronize_device(g2)
 
             _assert_shards_equal(activation, recv_act, f"chunk {n} activation")
-            _assert_shards_equal(sender_handoff.kvpe, recv_extras[0], f"chunk {n} KVPE rows")
+            _assert_shards_equal(sender_handoff.kvpe_packed, recv_extras[0], f"chunk {n} KVPE rows (packed)")
             for i, (sent, got) in enumerate(zip(sender_handoff.index_sets, recv_extras[1:])):
                 _assert_shards_equal(sent, got, f"chunk {n} top-k set {i}")
                 composer = ttnn.ConcatMesh2dToTensor(g2, dims=(2, 3), mesh_shape=g2.shape)
