@@ -716,8 +716,13 @@ whose baked-in suite predates the phase has the `--skip-sys-triage` and
 `diag/captures.py` reads tray power (HSC latches, VIN sag and peaks, VR power-good, bricks), chip drops and hangs
 and PCIe errors around each stage and step, and saves the evidence of a drop (tray power dump, the vendor CPLD dump
 when installed, SEL, kernel log) before a reset clears it. `python3 -m diag.captures <event> <step> <status> <outdir>`
-runs one event from outside the suite. It only reads unless asked: `--hsc-clear` (CLEAR_FAULTS), `--brick-mux` (on a
-host `--site-data` names) and `--hang-guard` (a hung chip off PCIe); every BMC I2C transaction takes `--i2c-lock`.
+runs one event from outside the suite. The run's first event also reads the 8 power bricks once, idle, on every box
+(PMBus MFR_ID, MFR_MODEL, MFR_REVISION, MFR_DATE, MFR_SERIAL, VOUT_MODE and VOUT_COMMAND, plus the 54 V rail): one
+`brick U<n> at run start` line each in the report and `captures/brick_id.txt`, one `WARNING brick reads` line for
+values that did not read, and one `brick reads skipped: <why>` line when the host has no BMC route or sudo rights.
+Apart from the brick mux that pass selects and restores, it only reads unless asked: `--hsc-clear` (CLEAR_FAULTS), `--brick-mux` (the brick passes around each
+stage and under load, on a host `--site-data` names) and `--hang-guard` (a hung chip off PCIe); every BMC I2C
+transaction takes `--i2c-lock`.
 
 In the galaxy load each event of `diag/events.py` runs them (one state per run, in `--output`'s directory), the
 links test as its own stage, every `glx_reset` first takes the `reset` read and the end sequence is followed by the

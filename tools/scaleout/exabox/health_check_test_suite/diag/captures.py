@@ -38,6 +38,8 @@ PEAK_PCT = 20  # a feed's peak this far over the median of the others: WARN
 OC_LIMIT_A = (50, 1000)  # a plausible IOUT_OC limit; outside: not read
 POWER_S = 2  # power poll period
 AER_S = 60  # corrected AER rate poll period
+_MUX = ("raw", "0x06", "0x52", f"{hsc.BRICK_BUS:#04x}", f"{hsc.BRICK_MUX:#04x}")
+BRICK_SUDO = ((*_MUX, "0x01"), (*_MUX, "0x00", "0x01"))  # the mux reads and writes the brick pass makes
 BRICK_LOAD_S = 90  # the poller's brick pass under load (10-15 s of BMC reads): the HSC VIN sampler loses under a sixth
 RESET_MASK_S = 40  # VR power-good falls this near a reset are the reset's
 COLLAPSE_W, HOLD_W = 50, 600  # one tray at or under COLLAPSE_W while every other holds HOLD_W: its 12 V collapsed
@@ -313,20 +315,51 @@ def _judge(step: str, before: dict, after: dict, peaks: dict, samples: dict, st:
     return out
 
 
-def _bricks(bmc: Bmc, d: Path, when: str, args) -> None:
-    if not _brick_host(args):
+def _bricks(bmc: Bmc, d: Path, when: str, args, idle: bool = False) -> None:
+    """One brick pass. *idle*: the run-start pass, on every box, site row or not, that also reads each brick's ID."""
+    if not idle and not _brick_host(args):
         host = socket.gethostname().split(".")[0]
         return log(
             f"WARNING brick reads skipped: no brick_mux row for {host} in --site-data {args.site_data or '(none)'}"
         )
-    if not bmc.cmd:
-        return log(f"brick reads skipped: {bmc.why}")
-    modes = _brick_modes(d)
-    rows, notes, fails = hsc.brick_pass(bmc, modes)
+    why = bmc.why
+    if bmc.cmd and not all(bmc.listed(*a) for a in BRICK_SUDO):
+        why = f"sudo -n -l does not list ipmitool {' '.join(BRICK_SUDO[0][:4])} (the brick mux)"
+    if why:
+        return log(f"brick reads skipped: {why}")
+    modes, ident, bmc.failed = _brick_modes(d), {} if idle else None, ""
+    timed_out = []
+
+    def stop() -> bool:  # the idle pass runs on every box: one timed-out read ends it (the mux is still restored)
+        if idle and bmc.failed == "ipmitool rc 124":
+            timed_out.append(1)
+        return bool(timed_out)
+
+    rows, notes, fails = hsc.brick_pass(bmc, modes, stop=stop, ident=ident)
     (d / "brick_mode.json").write_text(json.dumps(modes))  # the exponents the poller's load pass reads Vout by
     _brick_rows(d, when, rows)
+    if idle:
+        return _brick_ids(d, when, rows, ident, notes, fails)
     bricks = ", ".join(f"{r[0]} {_f3(r[1], ' V')} {_f3(r[2], ' A')}" for r in rows)
     log(f"bricks and the 54 V rail {when}: {bricks}" + "".join(f"; {n}" for n in notes + fails))
+
+
+def _brick_ids(d: Path, when: str, rows, ident: dict, notes: list[str], fails: list[str]) -> None:
+    """One line per brick (ID fields, Vout) and one for the 54 V rail (with the pass's notes), to the report and
+    captures/brick_id.txt; one WARNING line for the reads that failed."""
+    lines = [
+        f"brick {r[0]} {when}: "
+        + ", ".join(f"{k} {v if v is not None else 'not read'}" for k, v in ident.get(r[0], {"MFR_*": None}).items())
+        + f", Vout {_f3(r[1], ' V')}"
+        if r[0] != "FAN"
+        else f"54 V rail {when}: {_f3(r[1], ' V')}" + "".join(f"; {n}" for n in notes)
+        for r in rows
+    ]
+    (d / "brick_id.txt").write_text("".join(f"{ln}\n" for ln in lines))
+    for ln in lines:
+        log(ln)
+    if fails:  # one WARN line for the pass; the run goes on
+        log(f"WARNING brick reads {when}: {'; '.join(fails)}")
 
 
 def _brick_modes(d: Path) -> dict:
@@ -862,7 +895,10 @@ def run(event: str, step: str, status: str, outdir, args) -> list[str]:
     except (OSError, ValueError):
         st = {}
     bmc = Bmc(args.ipmitool, args.i2c_lock)
-    out = [] if "run" in st else _run_start(bmc, st, args)
+    first = "run" not in st
+    out = _run_start(bmc, st, args) if first else []
+    if first:  # idle, before any load or reset
+        _bricks(bmc, d, "at run start", args, idle=True)
     if event == "before" and "stage" in st:
         st["stage"]["part"] = [step, time.time()]
     if event == "before" and step == "heavy":  # the heavy step's core voltage, read through it only

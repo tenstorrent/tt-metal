@@ -329,7 +329,9 @@ class TestBricks(unittest.TestCase):
 
     def test_no_mux_write_without_the_flag_and_a_site_row(self):
         f = Fake(self)
-        f.run("stage-start")
+        f.run("stage-start")  # the run-start pass reads the bricks on every box; the stage passes need flag and row
+        f.calls.clear()
+        f.run("stage-end")
         site = f.d / "site.tsv"
         site.write_text("# rows\nbrick_mux other-host why\n")
         f.run("stage-start", brick_mux=True, site_data=str(site))
@@ -337,6 +339,80 @@ class TestBricks(unittest.TestCase):
         site.write_text("brick_mux * every box\n")
         f.run("stage-start", brick_mux=True, site_data=str(site))
         self.assertTrue([c for c in f.calls if " 0x09 0xec " in c])
+
+    def test_run_start_pass_reads_every_brick_once_idle_with_one_line_each(self):
+        f = Fake(self)
+        f.regs.update({"0x09 0xec 0x01": "05", "0x09 0xc0 0x20": "16", "0x09 0xc0 0x21": "00 30"})
+        for code, text in ((0x99, "DELTA"), (0x9E, "SN0001")):
+            f.regs[f"0x09 0xc0 {code:#04x}"] = " ".join(f"{b:02x}" for b in [len(text), *text.encode()] + [0] * 20)
+        with mock.patch.object(captures, "log") as log:
+            f.run("stage-start")
+            f.run("stage-end")
+        said = [c.args[0] for c in log.call_args_list if c.args[0].startswith(("brick", "54 V", "WARNING brick"))]
+        bricks = [ln for ln in said if ln.startswith("brick U")]
+        self.assertEqual([ln.split()[1] for ln in bricks], [f"U{n}" for n in range(1, 9)])
+        self.assertIn(
+            "MFR_ID DELTA, MFR_MODEL , MFR_REVISION , MFR_DATE , MFR_SERIAL SN0001, VOUT_MODE 0x16", bricks[0]
+        )
+        self.assertIn("VOUT_COMMAND 12.0000 V", bricks[0])
+        self.assertEqual(len([ln for ln in said if ln.startswith("54 V rail at run start")]), 1)
+        self.assertEqual(len((f.d / "out" / "captures" / "brick_id.txt").read_text().splitlines()), 9)
+        self.assertEqual(len([c for c in f.calls if c.startswith("raw 0x06 0x52 0x09 0xec 0x01")]), 4)  # one pass only
+        mux = [c.split()[-1] for c in f.calls if c.startswith("raw 0x06 0x52 0x09 0xec 0x00")]
+        self.assertEqual(mux, ["0x01", "0x05", "0x02", "0x05", "0x04", "0x05", "0x08", "0x05"])  # restored per channel
+
+    def test_run_start_pass_with_no_route_logs_one_skipped_line_and_a_missing_value_one_warning(self):
+        with tempfile.TemporaryDirectory() as t, mock.patch.object(captures, "log") as log:
+            captures.run("stage-start", "busbar", "-", t, _args(ipmitool="/nonexistent/ipmitool"))
+        self.assertEqual(
+            [c.args[0] for c in log.call_args_list if "brick" in c.args[0]],
+            ["brick reads skipped: /nonexistent/ipmitool not found"],
+        )
+        f = Fake(self)
+        f.regs.update({"0x09 0xec 0x01": "05", "0x09 0xc0 0x99": None, "0x09 0xc2 0x21": None})
+        with mock.patch.object(captures, "log") as log:
+            f.run("stage-start")
+        said = [c.args[0] for c in log.call_args_list]
+        warn = [ln for ln in said if ln.startswith("WARNING brick reads")]
+        self.assertEqual(len(warn), 1)
+        self.assertIn("U1 bus 0x09 addr 0xc0 code 0x99", warn[0])
+        self.assertIn("U2 bus 0x09 addr 0xc2 code 0x21", warn[0])
+        self.assertEqual(len([ln for ln in said if ln.startswith("brick U")]), 8)  # the run went on
+        with tempfile.TemporaryDirectory() as t, mock.patch.object(
+            hsc.Bmc, "listed", return_value=False
+        ), mock.patch.object(captures, "log") as log:
+            captures.run("stage-start", "busbar", "-", t, _args(ipmitool=str(f.ipmi)))
+        self.assertEqual(
+            [c.args[0] for c in log.call_args_list if "brick" in c.args[0]],
+            ["brick reads skipped: sudo -n -l does not list ipmitool raw 0x06 0x52 0x09 (the brick mux)"],
+        )
+        g = Fake(self)
+        g.regs["0x09 0xec 0x01"] = None  # the mux cannot be read: nothing is selected or read
+        with mock.patch.object(captures, "log") as log:
+            g.run("stage-start")
+        said = [c.args[0] for c in log.call_args_list]
+        self.assertEqual(len([ln for ln in said if ln.startswith("WARNING brick reads")]), 1)
+        self.assertIn("brick U1 at run start: MFR_* not read, Vout -", said)
+        self.assertFalse([c for c in g.calls if c.startswith("raw 0x06 0x52 0x09 0xec 0x00")])
+
+    def test_run_start_pass_stops_for_good_after_one_timed_out_read(self):
+        f = Fake(self)
+        f.regs["0x09 0xec 0x01"] = "05"
+        real = f.raw
+
+        def raw(bmc, *a, lock=True):
+            r = real(bmc, *a, lock=lock)
+            bmc.failed = "ipmitool rc 124" if a[2:4] == (0x09, 0xC0) and a[-1] == 0x20 else ""  # U1's VOUT_MODE hangs
+            return None if bmc.failed else r
+
+        with mock.patch.object(hsc.Bmc, "raw", lambda b, *x, lock=True: raw(b, *x, lock=lock)), mock.patch.object(
+            captures, "log"
+        ) as log, tempfile.TemporaryDirectory() as t:
+            captures._bricks(hsc.Bmc(str(f.ipmi), str(f.d / "lock")), Path(t), "at run start", _args(), idle=True)
+        self.assertEqual([c for c in f.calls if " 0x09 0xc2 " in c or " 0x09 0xc4 " in c], [])  # no later brick read
+        mux = [c.split()[-1] for c in f.calls if c.startswith("raw 0x06 0x52 0x09 0xec 0x00")]
+        self.assertEqual(mux, ["0x01", "0x05"])  # restored
+        self.assertEqual(len([c for c in log.call_args_list if c.args[0].startswith("WARNING brick reads")]), 1)
 
 
 class TestEvidence(unittest.TestCase):
