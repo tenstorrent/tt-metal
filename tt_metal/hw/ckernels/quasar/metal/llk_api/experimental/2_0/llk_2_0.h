@@ -4,7 +4,7 @@
 
 #pragma once
 
-// Id-free (2.0) Quasar LLK API: copy (FPU datacopy and unpack-to-dest), eltwise binary, matmul, pack.
+// Id-free (2.0) Quasar LLK API: copy (FPU datacopy and unpack-to-dest), eltwise binary and broadcast, matmul, pack.
 // New functions only -- the legacy DFB-id LLK API (llk_*_api.h) is untouched. Every function takes the operand's
 // LLKMemDescriptor (L1 format + tile shape) as an NTTP and, where the op reads/writes L1, a buffer-descriptor base
 // (16B units) at init and L1 tile indices relative to it at execute. No DFB id, no host format tables.
@@ -28,13 +28,19 @@
 #include "llk_tdma_guard.h"
 #endif
 #ifdef TRISC_UNPACK
+#include "llk_unpack_binary_broadcast_operands.h"
+#include "llk_unpack_binary_operands.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand.h"
+#include "llk_unpack_unary_broadcast_operands.h"
 #include "llk_unpack_unary_operand_to_dest.h"
 #endif
 #ifdef TRISC_MATH
 #include "llk_math_common.h"
+#include "llk_math_eltwise_binary.h"
+#include "llk_math_eltwise_binary_broadcast.h"
 #include "llk_math_eltwise_unary_datacopy.h"
+#include "llk_math_unary_broadcast.h"
 #endif
 #ifdef TRISC_PACK
 #include "llk_pack.h"
@@ -134,6 +140,60 @@ inline void unpack_to_dest(const std::uint32_t bd_base, const std::uint32_t l1_t
     tdma_guard_note_bd(bd_base);
     _llk_unpack_unary_operand_to_dest_tile_(l1_tile, dst_index);
 }
+
+/**
+ * @brief Init for unpacking two operands, A -> SrcA (Unp0) and B -> SrcB (Unp1): descriptors, formats, MOP.
+ * @tparam DA, DB: Operand descriptors (same tile shape).
+ * @tparam BCAST: SrcB broadcast (NONE / COL / ROW / SCALAR).
+ * @param bd_a, bd_b: Buffer-descriptor bases (16B units) of A and B.
+ */
+template <LLKMemDescriptor DA, LLKMemDescriptor DB, BroadcastType BCAST = BroadcastType::NONE>
+LLK_2_0_NOINLINE void unpack_AB_init(const std::uint32_t bd_a, const std::uint32_t bd_b) {
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(DA.shape, bd_a, static_cast<std::uint32_t>(DA.format));
+    constexpr std::uint8_t bfd_a = ckernel::trisc::BFD_ID_UNP0;
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP1>(DB.shape, bd_b, static_cast<std::uint32_t>(DB.format));
+    constexpr std::uint8_t bfd_b = ckernel::trisc::BFD_ID_UNP1;
+    _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(DA.format, DB.format);
+    if constexpr (BCAST == BroadcastType::NONE) {
+        _llk_unpack_binary_operands_init_(bfd_a, bfd_b, DA.shape, 1);
+    } else {
+        _llk_unpack_binary_broadcast_operands_init_<BCAST>(bfd_a, bfd_b, DA.shape, 1);
+    }
+}
+
+/** @brief Unpack A tile `tile_a` -> SrcA and B tile `tile_b` -> SrcB (indices relative to the init's bases). */
+template <LLKMemDescriptor DA, BroadcastType BCAST = BroadcastType::NONE>
+inline void unpack_AB(
+    const std::uint32_t bd_a, const std::uint32_t bd_b, const std::uint32_t tile_a, const std::uint32_t tile_b) {
+    tdma_guard_note_bd(bd_a);
+    tdma_guard_note_bd(bd_b);
+    if constexpr (BCAST == BroadcastType::NONE) {
+        _llk_unpack_binary_operands_(tile_a, tile_b, DA.shape);
+    } else {
+        _llk_unpack_binary_broadcast_operands_(tile_a, tile_b, DA.shape);
+    }
+}
+
+/**
+ * @brief Init for unpacking one operand to SrcB with a broadcast (Unp1): descriptor at `bd_base`, SrcB format, MOP.
+ * Full 32x32 tiles only (the broadcast unpacker indexes L1 in whole tiles).
+ * @tparam D: Operand descriptor.
+ * @tparam BCAST: Broadcast (COL / ROW / SCALAR).
+ * @tparam EN_32BIT_DEST: 32-bit Dest mode.
+ * @param bd_base: Buffer-descriptor base (16B units); tile indices of @ref unpack_B_bcast are relative to it.
+ */
+template <LLKMemDescriptor D, BroadcastType BCAST, bool EN_32BIT_DEST>
+LLK_2_0_NOINLINE void unpack_B_bcast_init(const std::uint32_t bd_base) {
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP1>(D.shape, bd_base, static_cast<std::uint32_t>(D.format));
+    _llk_unpack_configure_unary_<p_unpacr::UNP_B>(D.format);
+    _llk_unpack_unary_broadcast_operands_init_<p_unpacr::UNP_B, BCAST, EN_32BIT_DEST>(ckernel::trisc::BFD_ID_UNP1, 1);
+}
+
+/** @brief Unpack L1 tile `l1_tile` (relative to the init's base `bd_base`) into SrcB, broadcast. */
+inline void unpack_B_bcast(const std::uint32_t bd_base, const std::uint32_t l1_tile) {
+    tdma_guard_note_bd(bd_base);
+    _llk_unpack_unary_broadcast_operands_<p_unpacr::UNP_B>(l1_tile);
+}
 #endif
 
 #ifdef TRISC_MATH
@@ -169,6 +229,51 @@ LLK_2_0_NOINLINE void math_datacopy_init() {
 
 /** @brief Copy the SrcA tile into Dest tile `dst_index`. */
 inline void math_datacopy(const std::uint32_t dst_index) { _llk_math_eltwise_unary_datacopy_(dst_index); }
+
+/**
+ * @brief Init for Dest = SrcA [op] SrcB (ALU formats + MOP); mul keeps `FIDELITY`, add/sub run LoFi.
+ * @tparam BCAST: SrcB broadcast (NONE / COL / ROW / SCALAR), same as the unpack init.
+ * @param acc_to_dest: Accumulate into Dest instead of overwriting it.
+ */
+template <
+    EltwiseBinaryType TYPE,
+    LLKMemDescriptor DA,
+    LLKMemDescriptor DB,
+    bool EN_32BIT_DEST,
+    ckernel::MathFidelity FIDELITY,
+    BroadcastType BCAST = BroadcastType::NONE>
+LLK_2_0_NOINLINE void math_binary_init(const bool acc_to_dest) {
+    constexpr ckernel::MathFidelity fidelity =
+        TYPE == EltwiseBinaryType::ELWMUL ? FIDELITY : ckernel::MathFidelity::LoFi;
+    math_alu_formats<EN_32BIT_DEST>(DA.format, DB.format);
+    if constexpr (BCAST == BroadcastType::NONE) {
+        _llk_math_eltwise_binary_init_<TYPE, fidelity>(DA.format, DB.format, DA.shape, acc_to_dest);
+    } else {
+        _llk_math_eltwise_binary_broadcast_init_<TYPE, BCAST, fidelity>(DA.format, DB.format, DA.shape, acc_to_dest);
+    }
+}
+
+/** @brief Dest tile `dst_index` = SrcA [op] SrcB (broadcast per BCAST, same as the init). */
+template <EltwiseBinaryType TYPE, LLKMemDescriptor DA, BroadcastType BCAST = BroadcastType::NONE>
+inline void math_binary(const std::uint32_t dst_index) {
+    if constexpr (BCAST == BroadcastType::NONE) {
+        _llk_math_eltwise_binary_<TYPE>(dst_index, DA.shape);
+    } else {
+        _llk_math_eltwise_binary_broadcast_(dst_index);
+    }
+}
+
+/** @brief Init for the broadcast SrcB -> Dest copy of one 32x32 tile (ALU formats + MOP). */
+template <LLKMemDescriptor D, BroadcastType BCAST, bool EN_32BIT_DEST>
+LLK_2_0_NOINLINE void math_unary_bcast_init() {
+    math_alu_formats<EN_32BIT_DEST>(D.format, D.format);
+    _llk_math_eltwise_unary_broadcast_init_<BCAST, EN_32BIT_DEST, false /*unpack_to_dest*/>(D.shape);
+}
+
+/** @brief Copy the broadcast SrcB tile into Dest tile `dst_index`. */
+inline void math_unary_bcast(const std::uint32_t dst_index) {
+    _llk_math_eltwise_unary_broadcast_<false /*unpack_to_dest*/>(dst_index);
+}
 #endif
 
 #ifdef TRISC_PACK

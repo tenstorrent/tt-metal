@@ -16,12 +16,13 @@
 // IDENTICAL to binary_add_block_legacy.cpp except the block add uses experimental::add_block[/add_init] built
 // from LLKOperands (no CB id). compute_kernel_hw_startup / pack_tile stay the legacy CB-id API so the
 // differential isolates add_block. Output must be bit-for-bit identical to the legacy kernel. num_tiles must be
-// a multiple of BLOCK_TILES and the CBs at least BLOCK_TILES deep (a block keeps BLOCK_TILES tiles resident via
-// wait_front, so a 1-deep CB deadlocks).
+// a multiple of BLOCK_TILES (static_assert) and the CBs at least BLOCK_TILES deep (a block keeps BLOCK_TILES tiles
+// resident via wait_front, so a 1-deep CB deadlocks).
 constexpr std::uint32_t BLOCK_TILES = 4;  // fits DST for both fp32 and non-fp32 dest
 
 void kernel_main() {
-    std::uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
+    constexpr std::uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
+    static_assert(per_core_tile_cnt % BLOCK_TILES == 0, "no tails: BLOCK_TILES divides the tile count");
 
     CircularBuffer cb0(tt::CBIndex::c_0);
     CircularBuffer cb1(tt::CBIndex::c_1);
@@ -38,14 +39,14 @@ void kernel_main() {
     experimental::add_init(AOp(in0_cb.read_address()));
 
     for (std::uint32_t b = 0; b < per_core_tile_cnt; b += BLOCK_TILES) {
-        std::uint32_t ntiles = (per_core_tile_cnt - b) < BLOCK_TILES ? (per_core_tile_cnt - b) : BLOCK_TILES;
+        constexpr std::uint32_t ntiles = BLOCK_TILES;
 
         tile_regs_acquire();
         cb0.wait_front(ntiles);
         cb1.wait_front(ntiles);
         cb16.reserve_back(ntiles);
 
-        experimental::add_block(AOp(in0_cb.read_address()), BOp(in1_cb.read_address()), 0, 0, 0, ntiles);
+        experimental::add_block<ntiles, 1>(AOp(in0_cb.read_address()), BOp(in1_cb.read_address()), 0, 0, 0);
 
         tile_regs_commit();
         tile_regs_wait();
