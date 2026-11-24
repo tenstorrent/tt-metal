@@ -283,48 +283,20 @@ def test_typecast_sharded_bfloat8b_to_bfloat16(shape, shard_shape, core_grid, sh
     assert torch.equal(golden_torch, output_torch), "Sharded typecast should match interleaved typecast"
 
 
-def test_bfloat8b_from_torch_vs_typecast_differ(device):
-    """
-    Document that from_torch(dtype=bfloat8_b) and typecast(bfloat8_b) produce different results.
-
-    This is expected because:
-    - from_torch uses host-side bfloat8_b quantization
-    - typecast uses device-side bfloat8_b quantization (with bfp8_pack_precise)
-
-    Both results are valid bfloat8_b representations, but they may differ due to
-    different shared exponent calculation or rounding modes.
-    """
+def test_bfloat8b_from_torch_matches_typecast(device):
+    """from_torch(dtype=bfloat8_b) on the host and typecast(bfloat8_b) on the device give the same bits."""
     torch.manual_seed(42)
     shape = (1, 1, 128, 128)
 
-    # Create bfloat16 input
     torch_input = torch.rand(shape, dtype=torch.bfloat16) * 200.0 - 100.0  # Range [-100, 100]
 
-    # Method 1: from_torch directly to bfloat8_b (host-side quantization)
     tt_from_torch = ttnn.from_torch(torch_input, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
-
-    # Method 2: from_torch to bfloat16, then typecast to bfloat8_b (device-side quantization)
     tt_bfloat16 = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     tt_typecast = ttnn.typecast(tt_bfloat16, ttnn.bfloat8_b)
 
-    # Convert both to torch for comparison
     from_torch_result = ttnn.to_torch(tt_from_torch, dtype=torch.bfloat16)
     typecast_result = ttnn.to_torch(tt_typecast, dtype=torch.bfloat16)
-
-    # These should NOT be exactly equal (documenting the known difference)
-    # but should be very close (high PCC)
-    are_equal = torch.equal(from_torch_result, typecast_result)
-
-    # Verify the two bfloat8_b methods produce highly correlated results
-    pcc = ttnn.pearson_correlation_coefficient(from_torch_result, typecast_result)
-    assert pcc > 0.99, f"from_torch and typecast should produce highly correlated results, got PCC={pcc}"
-
-    # Document that they differ (this test passes whether they're equal or not,
-    # it just documents the behavior)
-    if are_equal:
-        print("Note: from_torch and typecast produced identical bfloat8_b results")
-    else:
-        print("Note: from_torch and typecast produced different bfloat8_b results (expected)")
+    assert torch.equal(from_torch_result, typecast_result)
 
 
 @pytest.mark.parametrize(
