@@ -20,9 +20,11 @@ The dataloader state is stored once (``"dataloader"``) when every rank's is the 
 (``"dataloader_ranks"``) when the ranks' differ, as data-parallel loaders that keep a seed or a shard of their own do.
 A rank then restores its own; one the checkpoint holds none for (a world with more ranks than the save, or a rank
 that saved without a dataloader) is missing it, which a strict load refuses: a loader that starts over while the
-others resume would repeat data without a word. The reverse, a rank that passes no dataloader (or scheduler) while
-another rank passes one and the checkpoint holds state for it, is allowed, since ``load`` restores what it is passed,
-but warns: the state goes unread.
+others resume would repeat data without a word. The reverse, a rank that passes no dataloader while another rank
+passes one and the checkpoint holds state for it, is allowed, since ``load`` restores what it is passed, but warns: the
+state goes unread. The scheduler state is one copy, which every rank restores, as ``save`` requires the ranks' states
+to agree: a strict load refuses ranks that disagree on passing a scheduler (one that passes none would train on with
+another learning rate), and a load that is not strict warns on the ranks that pass none.
 
 ``load`` checks what it can before it touches anything (the RNG block's format, and that this rank's entry decodes)
 and restores in an order that keeps a refusal cheap: the scheduler first (its ``set_state_dict`` leaves it unchanged
@@ -328,6 +330,21 @@ def passed_components(*, scheduler=None, dataloader=None) -> int:
     """What a rank passes ``load``, as the bits ``load`` gathers from every rank: 1 a scheduler, 2 a dataloader."""
     components = {"scheduler": scheduler, "dataloader": dataloader}
     return sum(bit for name, bit in _PASSED_BITS if components[name] is not None)
+
+
+def check_schedulers_agree(passed: list[int]) -> None:
+    """A strict load's refusal of ranks that disagree on passing a scheduler, from every rank's
+    ``passed_components``, so every rank raises alike. The checkpoint stores one scheduler state, which every rank
+    restores: a rank that passes none would train on with another learning rate until the next save refuses it."""
+    bit = dict(_PASSED_BITS)["scheduler"]
+    passing = [r for r, bits in enumerate(passed) if bits & bit]
+    if passing and len(passing) < len(passed):
+        others = [r for r in range(len(passed)) if r not in passing]
+        raise CheckpointError(
+            f"rank(s) {others} of {len(passed)} pass no scheduler while rank(s) {passing} pass one; the checkpoint "
+            "stores one scheduler state, which every rank restores: pass one on every rank, or strict=False to load "
+            "without it on the others"
+        )
 
 
 def warn_unread_train_state(

@@ -310,8 +310,9 @@ def test_a_rank_that_placed_its_tensors_says_so_when_another_rank_fails(two_rank
 def test_differing_dataloaders_are_stored_per_rank(two_ranks, expect_error):
     """Data-parallel loaders keep a position (a seed, a shard) of their own: the ranks' differing states are stored
     per world rank, and each rank restores its own. A rank that saved without a dataloader has no state to restore,
-    which a strict load with one refuses on every rank. A rank that passes no dataloader or scheduler while the other
-    passes one leaves the state stored for it unread, which a strict load allows with a warning."""
+    which a strict load with one refuses on every rank. A rank that passes no scheduler while the other passes one is
+    refused by a strict load on both ranks, since every rank restores the one stored scheduler state; a load that is
+    not strict leaves the scheduler and dataloader state stored for that rank unread, with a warning."""
     rank, local, root = two_ranks
     model, params, opt = fresh_tp(DIM)
     loader = Loader()
@@ -337,9 +338,13 @@ def test_differing_dataloaders_are_stored_per_rank(two_ranks, expect_error):
     # Last, after the test's other collectives: the ranks expect different outcomes here, and a rank that failed
     # before a collective would leave the other rank waiting in it.
     sched, resumed = (CosineAnnealingScheduler(opt, T_max=8), Loader()) if rank == 0 else (None, None)
+    with expect_error(dcp.CheckpointError, r"^rank\(s\) \[1\] of 2 pass no scheduler while rank\(s\) \[0\] pass one"):
+        dcp.load(per_rank, model=model, scheduler=sched, dataloader=resumed, rng=False)
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        restored = dcp.load(per_rank, model=model, scheduler=sched, dataloader=resumed, rng=False).restored
+        restored = dcp.load(
+            per_rank, model=model, scheduler=sched, dataloader=resumed, rng=False, strict=False
+        ).restored
     assert {"scheduler", "dataloader"} & set(restored) == ({"scheduler", "dataloader"} if rank == 0 else set())
     unread = [str(w.message).split(",")[0] for w in caught if "passes none" in str(w.message)]
     assert unread == (

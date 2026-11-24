@@ -936,6 +936,18 @@ def test_a_failure_while_placing_the_first_tensor_on_a_shared_mesh_says_to_resta
         assert "partly restored" not in str(err), "no rank replaced a tensor"
 
 
+def test_a_strict_load_refuses_ranks_that_disagree_on_passing_a_scheduler(tmp_path, monkeypatch):
+    """Rank 0 alone passing a scheduler stops every rank before anything is read: the checkpoint's one scheduler state
+    is every rank's to restore."""
+    _, _, _, _, shards, body = _four_rank_load(tmp_path, monkeypatch)
+    _, errors = _run_ranks(4, lambda group, fake: body(group, fake, scheduler=object() if group.rank == 0 else None))
+    assert set(errors) == {0, 1, 2, 3}, errors
+    refused = "rank(s) [1, 2, 3] of 4 pass no scheduler while rank(s) [0] pass one"
+    for rank, err in errors.items():
+        assert type(err) is CheckpointError and refused in str(err), (rank, str(err))
+    assert shards == {}, "no rank read or placed anything"
+
+
 def test_a_tensor_counts_as_placed_once_installed(tmp_path, monkeypatch):
     """A tensor whose label check fails after it was installed is counted: every rank's error says one tensor was
     placed and the model is partly restored."""

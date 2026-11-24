@@ -30,6 +30,7 @@ from ttml.distributed_checkpointing._train_state import (
     TRAIN_STATE_KEY,
     capture_rng,
     capture_train_state,
+    check_schedulers_agree,
     check_train_state,
     missing_train_state,
     passed_components,
@@ -268,6 +269,21 @@ def test_a_rank_that_leaves_state_another_rank_restores_unread_warns():
         warn_unread_train_state(stored, [both, both], scheduler=object(), dataloader=Loader(), rank=1, world_rank=1)
         warn_unread_train_state(stored, [2, 0], rank=1, world_rank=2)  # no dataloader state stored for world rank 2
         warn_unread_train_state({}, [both, 0], rank=1, world_rank=1)
+
+
+def test_a_strict_load_refuses_ranks_that_disagree_on_passing_a_scheduler(expect_error):
+    """The checkpoint stores one scheduler state, which every rank restores: ranks that disagree on passing a scheduler
+    are refused, from the flags every rank gathered, while ranks that disagree on a dataloader are not."""
+    scheduler, loader = passed_components(scheduler=object()), passed_components(dataloader=Loader())
+    both = passed_components(scheduler=object(), dataloader=Loader())
+    for agreed in ([0, 0], [scheduler, both], [loader, 0]):
+        check_schedulers_agree(agreed)
+    with expect_error(
+        CheckpointError,
+        r"^rank\(s\) \[1, 2\] of 3 pass no scheduler while rank\(s\) \[0\] pass one; the checkpoint stores one "
+        r"scheduler state, which every rank restores",
+    ):
+        check_schedulers_agree([both, loader, 0])
 
 
 def test_component_without_state_setter_is_refused(expect_error):

@@ -50,6 +50,7 @@ from ._state_dict import (
 )
 from ._topology import chunk_boxes, crc31
 from ._train_state import (
+    check_schedulers_agree,
     check_train_state,
     missing_train_state,
     missing_train_state_error,
@@ -432,8 +433,9 @@ def load(
     scalars (steps, learning rates) are restored through ``set_state_dict``. ``scheduler`` and ``dataloader`` are
     restored through their ``set_state_dict`` from the state ``save`` stored (a dataloader from this world rank's own
     when the saving ranks' states differed); a rank that passes none while another rank passes one leaves the state
-    stored for it unread, with a warning. With ``rng`` so is every random generator ``save`` captured for this world
-    rank (ttml, ttml.init, python, numpy, torch when imported). By default (``None``)
+    stored for it unread, with a warning, except that a strict load refuses ranks that disagree on passing a
+    scheduler, whose one stored state every rank restores. With ``rng`` so is every random generator ``save``
+    captured for this world rank (ttml, ttml.init, python, numpy, torch when imported). By default (``None``)
     the generators are restored whenever a scheduler or a dataloader is, on any rank, since a resume that restores
     those but keeps the current generators takes a different step (a rank that passes neither, while another rank
     resumes its dataloader, restores its generators too); ``rng=False`` keeps them (a deliberate reseed), ``rng=True``
@@ -486,6 +488,8 @@ def load(
     # A resume: the generators come back with the scheduler or the dataloader, which some ranks may not pass (a
     # dataloader on rank 0 alone): the default is agreed, so the ranks of one training restore theirs together.
     passed = group.allgather(passed_components(scheduler=scheduler, dataloader=dataloader))
+    if strict:
+        check_schedulers_agree(passed)  # from the gathered flags, so every rank raises alike, before anything is read
     if rng_by_default:
         rng = any(passed)
 
