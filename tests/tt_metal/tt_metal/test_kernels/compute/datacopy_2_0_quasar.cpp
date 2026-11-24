@@ -55,8 +55,8 @@ void copy_block(In in, std::uint32_t start_itile) {
 }
 
 // One Dest section of N tiles: in DFB -> copy -> Dest -> pack -> out DFB.
-template <std::uint32_t N, typename In, typename Out, typename Dfb>
-void copy_section(Dfb& in, Dfb& out) {
+template <std::uint32_t N, typename In, typename Out, typename DfbIn, typename DfbOut>
+void copy_section(DfbIn& in, DfbOut& out) {
     in.wait_front(N);
     out.reserve_back(N);
     ckernel::tile_regs_acquire();
@@ -80,8 +80,8 @@ constexpr std::uint32_t block() {
     return b;
 }
 
-template <std::uint32_t NumTiles, typename In, typename Out, typename Dfb>
-void copy_sections(Dfb& in, Dfb& out) {
+template <std::uint32_t NumTiles, typename In, typename Out, typename DfbIn, typename DfbOut>
+void copy_sections(DfbIn& in, DfbOut& out) {
     constexpr std::uint32_t B = block<NumTiles>();
     static_assert(NumTiles % B == 0);
     copy_init(in.template front<In>());

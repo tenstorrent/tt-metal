@@ -83,6 +83,12 @@ struct ProgramIo {
     bool fp32_l1 = false;  // every DFB Float32 (needs fp32_dest); Tiles hold (lo, hi) 16-bit halves per element
     std::uint32_t fp32_in_mask = 0;  // input DFBs (bit i = in<i>) that are Float32 even without fp32_l1
     bool lta = false;  // operands are resident L1 tensors (LocalTensorAccessor), not DFBs fed by DM kernels
+    // DFB thread pattern: compute and writer threads, and the compute side's pattern on each in<i>. STRIDED: the
+    // readers run `threads` threads too, so the compute side's stride_tiles is `threads`. BLOCKED: the same, with
+    // blocks of `threads` tiles on in<i> and out<i>, so each STRIDED DM op is one tile. ALL: one reader and every
+    // compute thread copies every tile, so out<i> holds each input tile `threads` times in a row.
+    std::uint8_t threads = 1;
+    DFBAccessPattern pattern = DFBAccessPattern::STRIDED;
 };
 
 // Builds and runs one program, returns one tile stream per output DFB.
@@ -138,7 +144,7 @@ inline std::vector<Tiles> run_program(distributed::MeshDevice& mesh_device, cons
     KernelSpec compute{
         .unique_id = KernelSpecName{"compute"},
         .source = io.compute_kernel,
-        .num_threads = 1,
+        .num_threads = io.threads,
         .hw_config = hw,
     };
     for (const auto& [k, v] : io.ct_args) {
@@ -175,12 +181,16 @@ inline std::vector<Tiles> run_program(distributed::MeshDevice& mesh_device, cons
             continue;
         }
         dfbs.push_back(dfb_spec(dfb, io.in_depth[i], f32));
-        compute.dfb_bindings.push_back(ConsumerOf(DFBSpecName{dfb}, dfb));
+        compute.dfb_bindings.push_back(
+            io.pattern == DFBAccessPattern::BLOCKED ? BlockedConsumerOf(DFBSpecName{dfb}, dfb, io.threads)
+            : io.pattern == DFBAccessPattern::ALL   ? AllConsumerOf(DFBSpecName{dfb}, dfb)
+                                                    : ConsumerOf(DFBSpecName{dfb}, dfb));
+        const std::uint8_t readers = io.pattern == DFBAccessPattern::ALL ? 1 : io.threads;
         const KernelSpecName name{"reader" + std::to_string(i)};
         kernels.push_back(KernelSpec{
             .unique_id = name,
             .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary_2_0.cpp",
-            .num_threads = 1,
+            .num_threads = readers,
             .dfb_bindings = {ProducerOf(DFBSpecName{dfb}, "out")},
             .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
             .hw_config = DataMovementHardwareConfig{},
@@ -196,7 +206,7 @@ inline std::vector<Tiles> run_program(distributed::MeshDevice& mesh_device, cons
                  node,
                  {{"src_addr", in_bufs.back()->address()},
                   {"src_bank_id", 0u},
-                  {"num_tiles", tiles},
+                  {"num_tiles", tiles / readers},
                   {"dram_page_stride", 2 * tile_halves(f32)}})});
     }
     for (std::size_t i = 0; i < io.out_tiles.size(); ++i) {
@@ -209,12 +219,14 @@ inline std::vector<Tiles> run_program(distributed::MeshDevice& mesh_device, cons
             continue;
         }
         dfbs.push_back(dfb_spec(dfb, io.out_depth[i], io.fp32_l1));
-        compute.dfb_bindings.push_back(ProducerOf(DFBSpecName{dfb}, dfb));
+        compute.dfb_bindings.push_back(
+            io.pattern == DFBAccessPattern::BLOCKED ? BlockedProducerOf(DFBSpecName{dfb}, dfb, io.threads)
+                                                    : ProducerOf(DFBSpecName{dfb}, dfb));
         const KernelSpecName name{"writer" + std::to_string(i)};
         kernels.push_back(KernelSpec{
             .unique_id = name,
             .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary_2_0.cpp",
-            .num_threads = 1,
+            .num_threads = io.threads,
             .dfb_bindings = {ConsumerOf(DFBSpecName{dfb}, "in")},
             .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
             .hw_config = DataMovementHardwareConfig{},
@@ -230,7 +242,7 @@ inline std::vector<Tiles> run_program(distributed::MeshDevice& mesh_device, cons
                  node,
                  {{"dst_addr", out_bufs.back()->address()},
                   {"dst_bank_id", 0u},
-                  {"num_tiles", io.out_tiles[i]},
+                  {"num_tiles", io.out_tiles[i] / io.threads},
                   {"dram_page_stride", 2 * tile_halves(io.fp32_l1)}})});
     }
     kernels.push_back(compute);
