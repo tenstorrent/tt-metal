@@ -198,9 +198,11 @@ TEST_F(L1EccHaltTest, UnpopulatedRowErrorsAreIgnoredOnEveryCore) {
     distributed::MeshWorkload workload;
     auto zero = distributed::MeshCoordinate(0, 0);
     workload.add_program(distributed::MeshCoordinateRange(zero, zero), std::move(program));
+    std::string error;
     try {
         this->RunProgram(devices_[0], workload);
-    } catch (const std::exception&) {
+    } catch (const std::exception& e) {
+        error = e.what();
         get_shared_devices().needs_recovery = true;
         ctx.set_l1_ecc_halt_detected(false);
     }
@@ -218,6 +220,7 @@ TEST_F(L1EccHaltTest, UnpopulatedRowErrorsAreIgnoredOnEveryCore) {
         }
     }
     EXPECT_EQ(num_halted, 0u) << "cores halted on a false error, with the logged row:" << halted;
+    EXPECT_TRUE(error.empty() || num_halted > 0) << "the program failed without an L1 ECC halt: " << error;
 }
 
 // The branch predictor indexes by a hash of the PC, so a taken branch elsewhere can make it predict the handler's mret
