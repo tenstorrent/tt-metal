@@ -12,6 +12,7 @@
 #include "core/tt_tensor_utils.hpp"
 #include "metal/common/tensor_validation.hpp"
 #include "ttnn/operations/data_movement/repeat_interleave/repeat_interleave.hpp"
+#include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads/nlp_create_qkv_heads.hpp"
 #include "ttnn/operations/reduction/accumulation/cumsum/cumsum.hpp"
 #include "ttnn_fixed/matmuls.hpp"
 
@@ -31,15 +32,21 @@ Tensor to_rm_f32(const Tensor& x) {
     return ttnn::to_layout(ttnn::typecast(x, kF32), ttnn::Layout::ROW_MAJOR);
 }
 
-// [B, 1, T, Hs*D] -> [B*Hs*G, T/C, C, D] fp32 TILE; every one of the Hs heads is repeated G times (GVA).
+// [B, 1, T, Hs*D] bf16 -> [B*Hs*G, T/C, C, D] fp32 TILE; every one of the Hs heads is repeated G times (GVA).
 Tensor heads_chunked(const Tensor& flat, uint32_t B, uint32_t T, uint32_t Hs, uint32_t D, uint32_t G, uint32_t C) {
-    auto x = ttnn::reshape(to_rm_f32(flat), ttnn::Shape{B, T, Hs, D});
-    x = ttnn::permute(x, ttsl::SmallVector<int64_t>{0, 2, 1, 3});  // [B, Hs, T, D]
+    auto x = std::get<0>(ttnn::experimental::nlp_create_qkv_heads(
+        flat,
+        std::nullopt,
+        /*num_q_heads=*/Hs,
+        /*num_kv_heads=*/0U,
+        /*transpose_k_heads=*/false,
+        /*kv_tied=*/false,
+        /*memory_config=*/std::nullopt,
+        /*optional_output_tensors=*/std::nullopt));  // [B, Hs, T, D]
     if (G > 1U) {
         x = ttnn::repeat_interleave(x, G, /*dim=*/1);  // [B, Hs*G, T, D]
     }
-    x = ttnn::reshape(x, ttnn::Shape{B * Hs * G, T / C, C, D});
-    return ttnn::to_layout(x, ttnn::Layout::TILE);
+    return ttnn::reshape(ttnn::typecast(x, kF32), ttnn::Shape{B * Hs * G, T / C, C, D});
 }
 
 // [B, 1, T, HV] -> [B*HV, T/C, 1, C] fp32 TILE: one row of C gate values per chunk.
