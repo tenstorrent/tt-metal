@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import re
+import signal
 import socket
 import statistics
 import subprocess
@@ -37,6 +38,7 @@ PEAK_PCT = 20  # a feed's peak this far over the median of the others: WARN
 OC_LIMIT_A = (50, 1000)  # a plausible IOUT_OC limit; outside: not read
 POWER_S = 2  # power poll period
 AER_S = 60  # corrected AER rate poll period
+BRICK_LOAD_S = 90  # the poller's brick pass under load (10-15 s of BMC reads): the HSC VIN sampler loses under a sixth
 RESET_MASK_S = 40  # VR power-good falls this near a reset are the reset's
 COLLAPSE_W, HOLD_W = 50, 600  # one tray at or under COLLAPSE_W while every other holds HOLD_W: its 12 V collapsed
 CPLD_DUMP_MAX = 4
@@ -318,11 +320,39 @@ def _bricks(bmc: Bmc, d: Path, when: str, args) -> None:
         )
     if not bmc.cmd:
         return log(f"brick reads skipped: {bmc.why}")
-    rows, notes = hsc.brick_pass(bmc)
-    with open(d / "brick.tsv", "a") as fh:
-        fh.writelines("\t".join([f"{time.time():.0f}", when, r[0], *map(_f3, r[1:])]) + "\n" for r in rows)
+    modes = _brick_modes(d)
+    rows, notes, fails = hsc.brick_pass(bmc, modes)
+    (d / "brick_mode.json").write_text(json.dumps(modes))  # the exponents the poller's load pass reads Vout by
+    _brick_rows(d, when, rows)
     bricks = ", ".join(f"{r[0]} {_f3(r[1], ' V')} {_f3(r[2], ' A')}" for r in rows)
-    log(f"bricks and the 54 V rail {when}: {bricks}" + "".join(f"; {n}" for n in notes))
+    log(f"bricks and the 54 V rail {when}: {bricks}" + "".join(f"; {n}" for n in notes + fails))
+
+
+def _brick_modes(d: Path) -> dict:
+    with suppress(OSError, ValueError):
+        return json.loads((d / "brick_mode.json").read_text())
+    return {}
+
+
+def _brick_rows(d: Path, when: str, rows) -> None:
+    t = f"{time.time():.0f}"  # one stamp per pass: _brick_load counts passes by it
+    with open(d / "brick.tsv", "a") as fh:
+        fh.writelines("\t".join([t, when, r[0], *map(_f3, r[1:])]) + "\n" for r in rows)
+
+
+def _brick_load(d: Path, step: str, t0: float) -> str | None:
+    """The poller's brick passes under load since *t0*: the lowest Vout per brick and of the 54 V rail."""
+    lo: dict[str, float] = {}
+    n = set()
+    for r in (r.split("\t") for r in _lines(d / "brick.tsv")):
+        if len(r) > 3 and r[1] == "under load" and float(r[0]) >= t0:
+            n.add(r[0])
+            with suppress(ValueError):
+                lo[r[2]] = min(lo.get(r[2], 99.0), float(r[3]))
+    if n:
+        v = ", ".join(f"{k} {x:.3f} V" for k, x in lo.items()) or "none read"
+        return f"bricks under load during {step}: {len(n)} pass(es), every {BRICK_LOAD_S} s; min Vout {v}"
+    return None
 
 
 def _dump_tray(bmc: Bmc, d: Path, t: int, what: str) -> str:
@@ -496,6 +526,11 @@ def poll(d: Path, watch: int, args) -> None:
     power and current to chips.tsv, a newly hung chip to hung.tsv; every AER_S the AER rate to aer_min.tsv."""
     bmc, stop, bdfs, sweep, nxt = Bmc(args.ipmitool, args.i2c_lock), d / "poll.stop", chips(), 0, 0.0
     rate, nxt_aer = _AerRate(), time.time() + AER_S
+    bricks = bool(args.brick_mux and bmc.cmd and _brick_host(args))
+    nxt_brick, modes = time.time() + BRICK_LOAD_S, _brick_modes(d)
+    signal.signal(
+        signal.SIGTERM, lambda *_: sys.exit(143)
+    )  # a stop past its wait: the brick pass still restores its mux
     files = [open(d / f"{n}.tsv", "a") for n in ("vin", "power", "chips", "hung", "aer_min")]
     fv, fp, fc, fh, fa = files
     while not stop.exists() and _alive(watch, group=True):
@@ -523,6 +558,12 @@ def poll(d: Path, watch: int, args) -> None:
                 rate.sample(fa)
             for f in files:
                 f.flush()
+        if bricks and time.time() >= nxt_brick:
+            rows, notes, fails = hsc.brick_pass(bmc, modes, load=True, stop=stop.exists)
+            nxt_brick = time.time() + BRICK_LOAD_S
+            _brick_rows(d, "under load", rows)
+            for n in notes + fails:
+                log(n)
         time.sleep(0.05)
     rate.sample(fa)  # the stage's last minute
     for f in files:
@@ -607,6 +648,7 @@ def _poll_start(st: dict, d: Path, args, mode: str = "poll") -> None:
     argv += ["--vcore-s", str(args.vcore_s)] if mode == "vcore" else []
     argv += [x for k, v in (("--ipmitool", args.ipmitool), ("--i2c-lock", args.i2c_lock)) if v for x in (k, v)]
     argv += ["--hang-guard"] if args.hang_guard else []
+    argv += ["--brick-mux", "--site-data", args.site_data] if args.brick_mux and args.site_data else []
     with open(d / f"{mode}.err", "a") as err:
         p = subprocess.Popen(
             argv, cwd=SUITE_DIR, start_new_session=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=err
@@ -784,6 +826,8 @@ def _stage_end(bmc: Bmc, st: dict, d: Path, step: str, status: str, args) -> lis
         out += aer.aer_lines(s["aer"], now := aer.read_aer(PCI), (time.time() - s["t0"]) / 3600, f"during {step}")
         st["aer_last"] = now
     if args.brick_mux:
+        if s and (ln := _brick_load(d, step, s["t0"])):
+            log(ln)
         _bricks(bmc, d, f"after {step}", args)
     return out
 
@@ -839,11 +883,13 @@ def sample(args) -> None:
                 v = bmc.hsc(t, a, n)
                 print(f"{time.time():.3f}\t{t}\t{a:#04x}\t0x{hsc.REG[n][0]:02X}\t{'-' if v is None else v}")
     if args.brick_mux and _brick_host(args):
-        rows, notes = hsc.brick_pass(bmc)
+        rows, notes, fails = hsc.brick_pass(bmc)
         for r in rows:
             print("\t".join([f"{time.time():.0f}", r[0], "ina238" if r[0] == "FAN" else "brick", *map(_f3, r[1:])]))
         for n in notes:
             print(f"#note {n}")
+        for n in fails:  # stderr: a busy BMC's dropped reads stay out of the stream's notes
+            log(n)
 
 
 def main(argv=None) -> int:

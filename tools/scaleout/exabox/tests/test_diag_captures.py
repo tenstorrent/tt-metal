@@ -166,7 +166,9 @@ class TestHscJudge(unittest.TestCase):
             "4.2 A over it, idle VIN 12.00 V; WARN only, not a finding",
             out,
         )
-        self.assertTrue(any("HSC 0x42: IOUT peak 221.5 A" in x and "margin to the trip 6.5 A, idle VIN" in x for x in out), out)
+        self.assertTrue(
+            any("HSC 0x42: IOUT peak 221.5 A" in x and "margin to the trip 6.5 A, idle VIN" in x for x in out), out
+        )
         self.f.run("stage-start")
         with mock.patch.object(captures, "log") as lg:
             low = self.f.run("stage-end", load_pct=60)
@@ -193,7 +195,8 @@ class TestHscJudge(unittest.TestCase):
         out = self.f.run("stage-end", load_pct=60)
         self.assertFalse([x for x in out if "VIN" in x], out)  # 11.0 V while the load was not reached
         self.f.run("stage-start", "links")
-        self.assertFalse([x for x in self.f.run("stage-end", "links") if "VIN" in x])  # 11.0 V outside the bus-bar stage
+        out = self.f.run("stage-end", "links")
+        self.assertFalse([x for x in out if "VIN" in x])  # 11.0 V outside the bus-bar stage
         self.f.run("stage-start", "links")
         self.f.set(3, 0x42, 0x88, "5c 01")  # 348 / 32 = 10.875 V
         self.assertEqual(
@@ -231,12 +234,84 @@ class TestBricks(unittest.TestCase):
         )  # mux byte, 2^-10, 2^-12
         f.regs.update({"0x09 0xc0 0x8b": "00 30", "0x09 0xc2 0x8b": "00 c0"})  # 12288, 49152
         with f.raw_patch():
-            rows, notes = hsc.brick_pass(hsc.Bmc(str(f.ipmi), str(f.d / "lock")))
+            rows, notes, fails = hsc.brick_pass(hsc.Bmc(str(f.ipmi), str(f.d / "lock")), modes := {})
         v = {r[0]: r[1] for r in rows}
         self.assertEqual((v["U1"], v["U2"]), (12.0, 12.0))
         self.assertIn("fan rail current not read: SHUNT_CAL unset", notes)
+        self.assertEqual((modes["U1"], modes["U2"], fails), (0x16, 0x14, []))
         mux = [c.split()[-1] for c in f.calls if c.startswith("raw 0x06 0x52 0x09 0xec 0x00")]
         self.assertEqual(mux, ["0x01", "0x05", "0x02", "0x05", "0x04", "0x05", "0x08", "0x05"])
+
+    def test_load_pass_reads_vout_and_vin_by_the_cached_mode_only(self):
+        f = Fake(self)
+        f.regs.update({"0x09 0xec 0x01": "05", "0x09 0xc0 0x20": "16", "0x09 0xc2 0x20": "14"})
+        f.regs.update({"0x09 0xc0 0x8b": "00 30", "0x09 0xc2 0x8b": "00 c0"})
+        modes = {f"U{n}": 0x16 for n in range(1, 9) if n != 2}  # U2 not cached yet
+        with f.raw_patch():
+            rows, _, fails = hsc.brick_pass(hsc.Bmc(str(f.ipmi), str(f.d / "lock")), modes, load=True)
+            self.assertEqual(({r[0]: r[1] for r in rows}["U2"], modes["U2"], fails), (12.0, 0x14, []))
+            f.calls.clear()
+            hsc.brick_pass(hsc.Bmc(str(f.ipmi), str(f.d / "lock")), modes, load=True)
+        codes = sorted({c.split()[-1] for c in f.calls if c.startswith("raw 0x06 0x52 0x09 0xc")})
+        self.assertEqual(codes, ["0x88", "0x8b"])  # no VOUT_MODE once cached, no IOUT or TEMP
+        fan = [c.split()[-1] for c in f.calls if c.startswith("raw 0x06 0x52 0x01 0x80")]
+        self.assertEqual(fan, ["0x05"])  # the 54 V rail's VBUS only
+
+    def test_a_timed_out_read_is_not_tried_again_and_is_named_with_its_rc(self):
+        f = Fake(self)
+        f.ipmi.write_text(
+            FAKE.replace(
+                "a = sys.argv[1:]",
+                'a = sys.argv[1:]\nif a[-2:] == ["0x02", "0x88"] and a[4] == "0xc0":\n    open(sys.argv[0] + ".n", "a").write("x"); import time; time.sleep(2)',
+            )
+        )
+        bmc = hsc.Bmc(str(f.ipmi), str(f.d / "lock"))
+        with mock.patch.object(hsc, "READ_TIMEOUT_S", 0.5):
+            rows, _, fails = hsc.brick_pass(bmc, {}, load=True)
+        self.assertEqual(
+            fails,
+            [f"brick read failed: U{n} bus 0x09 addr 0xc0 code 0x88 (ipmitool rc 124)" for n in (1, 3, 5, 7)],
+        )
+        self.assertIsNone({r[0]: r[5] for r in rows}["U1"])
+        self.assertEqual(Path(f"{f.ipmi}.n").read_text(), "xxxx")  # one try per brick: a timeout holds the lock
+        self.assertEqual(bmc.raw(0x06, 0x52, 0x09, 0xEC, 0x00, 0x05), [])  # a write's empty answer is a good one
+        f.ipmi.write_text("#!/bin/sh\nexit 1\n")
+        self.assertEqual((bmc.raw(0x06, 0x52, 0x09, 0xEC, 0x01), bmc.failed), (None, "ipmitool rc 1"))
+
+    def test_a_stop_ends_the_pass_at_once_with_the_mux_restored(self):
+        f = Fake(self)
+        f.regs.update({"0x09 0xec 0x01": "05"})
+        n = iter(range(100))
+        with f.raw_patch():
+            rows, _, fails = hsc.brick_pass(hsc.Bmc(str(f.ipmi), str(f.d / "lock")), {}, stop=lambda: next(n) >= 3)
+        self.assertEqual([r[0] for r in rows], ["U1", "U2"])  # channel 0's bricks, U2 not read
+        self.assertEqual((rows[1][1:], fails), ((None,) * 5, []))
+        mux = [c.split()[-1] for c in f.calls if c.startswith("raw 0x06 0x52 0x09 0xec 0x00")]
+        self.assertEqual(mux, ["0x01", "0x05"])
+
+    def test_poller_load_pass_and_a_stop_that_returns_at_once(self):
+        f = Fake(self)
+        f.regs.update({"0x09 0xec 0x01": "05"})
+        site, d = f.d / "site.tsv", f.d / "out" / "captures"
+        site.write_text("brick_mux * every box\n")
+        d.mkdir(parents=True)
+        (d / "brick_mode.json").write_text(json.dumps({f"U{n}": 0x16 for n in range(1, 9)}))
+        a = _args(ipmitool=str(f.ipmi), i2c_lock=str(f.d / "lock"), brick_mux=True, site_data=str(site))
+        slow = lambda b, *x, lock=True: (time.sleep(0.02), f.raw(b, *x, lock=lock))[1]  # noqa: E731
+        stopper = threading.Timer(1.0, (d / "poll.stop").touch)
+        stopper.start()
+        self.addCleanup(stopper.cancel)
+        t0 = time.time()
+        with mock.patch.object(captures, "PCI", f.pci), mock.patch.object(
+            captures, "BRICK_LOAD_S", 0.3
+        ), mock.patch.object(hsc.Bmc, "raw", slow), mock.patch.object(captures.signal, "signal"):
+            captures.poll(d, os.getpgrp(), a)
+        self.assertLess(time.time() - t0, 2.0)  # the stop is seen between reads, not after a cadence sleep
+        rows = [r.split("\t") for r in (d / "brick.tsv").read_text().splitlines()]
+        self.assertTrue(rows and all(r[1] == "under load" for r in rows), rows[:2])
+        self.assertTrue(captures._brick_load(d, "busbar", t0).startswith("bricks under load during busbar: "))
+        mux = [c.split()[-1] for c in f.calls if c.startswith("raw 0x06 0x52 0x09 0xec 0x00")]
+        self.assertEqual(mux[-1], "0x05")  # restored, also when the stop came mid-pass
 
     def test_no_mux_write_without_the_flag_and_a_site_row(self):
         f = Fake(self)

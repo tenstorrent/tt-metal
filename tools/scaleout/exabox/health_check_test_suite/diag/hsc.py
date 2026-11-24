@@ -74,6 +74,7 @@ class Bmc:
 
     def __init__(self, ipmitool: str | None = None, lock: str | None = None):
         self.lock, self.cmd, self.why, self._listed = lock or f"/tmp/hc-bmc-{os.getuid()}.lock", [], "", {}
+        self.failed = ""  # why the last raw call failed: 'ipmitool rc N' (124: it timed out)
         if ipmitool:
             self.cmd = shlex.split(ipmitool)
             self.why = "" if shutil.which(self.cmd[0]) else f"{self.cmd[0]} not found"
@@ -113,6 +114,7 @@ class Bmc:
 
     def raw(self, *args: int, lock: bool = True) -> list[int] | None:
         """One ``ipmitool raw`` call; the bytes it returned, None when it failed or there is no route."""
+        self.failed = "no route"
         if not self.cmd:
             return None
         try:
@@ -123,9 +125,18 @@ class Bmc:
                     text=True,
                     timeout=READ_TIMEOUT_S,
                 )
-            return [int(b, 16) for b in cp.stdout.split()] if cp.returncode == 0 else None
-        except (OSError, subprocess.TimeoutExpired, ValueError):
-            return None
+            self.failed = f"ipmitool rc {cp.returncode}"
+            if cp.returncode:
+                return None
+            self.failed = f"not hex: {cp.stdout.strip()[:16]}"
+            b = [int(x, 16) for x in cp.stdout.split()]
+            self.failed = ""
+            return b
+        except subprocess.TimeoutExpired:
+            self.failed = "ipmitool rc 124"
+        except (OSError, ValueError):
+            pass
+        return None
 
     def i2c(self, bus: int, addr: int, code: int, nbytes: int, lock: bool = True) -> int | None:
         """A PMBus/SMBus read (master write-read), little-endian; None when it did not answer in full."""
@@ -191,28 +202,57 @@ def vin_limit(name: str, raw: int | None) -> str:
     )
 
 
-def _brick(bmc: Bmc, addr: int) -> tuple:
+def _brick(bmc: Bmc, name: str, addr: int, modes: dict, load: bool, stop, fails: list) -> tuple:
     """(volts, amps, watts, temp_C, vin) of one brick, None = not read. Vout by the brick's own VOUT_MODE exponent:
-    bricks of one box differ (2^-10 or 2^-12 V)."""
-    regs = ((0x20, 1), (0x8B, 2), (0x88, 2), (0x8C, 2), (0x8D, 2))
-    mode, vout, vin, iout, temp = (bmc.i2c(BRICK_BUS, addr, c, n, lock=False) for c, n in regs)
+    bricks of one box differ (2^-10 or 2^-12 V); *modes* caches it per brick. Under *load* only VOUT and VIN, and
+    VOUT_MODE only while not cached. A read that fails, other than by timeout, is read once more (the BMC's own I2C traffic drops
+    single reads), then named in *fails*; once *stop* says so nothing more is read."""
+
+    def rd(code: int, n: int) -> int | None:
+        for _ in range(2):
+            if stop():
+                return None
+            if (x := bmc.i2c(BRICK_BUS, addr, code, n, lock=False)) is not None:
+                return x
+            if bmc.failed == "ipmitool rc 124":  # a timeout is not read again: it would hold the I2C lock twice as long
+                break
+        why = bmc.failed or "short answer"
+        fails.append(f"brick read failed: {name} bus {BRICK_BUS:#04x} addr {addr:#04x} code {code:#04x} ({why})")
+        return None
+
+    if (mode := modes.get(name) if load else None) is None and (mode := rd(0x20, 1)) is not None:
+        modes[name] = mode
+    vout, vin = rd(0x8B, 2), rd(0x88, 2)
+    iout, temp = (None, None) if load else (rd(0x8C, 2), rd(0x8D, 2))
     v = vout * 2.0 ** ((mode & 31) - (32 if mode & 16 else 0)) if None not in (mode, vout) and mode >> 5 == 0 else None
     i, temp, vin = (None if x is None else lin11(x) for x in (iout, temp, vin))
     return v, i, v * i if None not in (v, i) else None, temp, vin
 
 
-def brick_pass(bmc: Bmc) -> tuple[list[tuple], list[str]]:
-    """One pass over the bricks and the fan rail: ``(name, volts, amps, watts, temp_C, vin)`` rows and notes. Per mux
-    channel, under one hold of the I2C lock: save the mux's control byte, select the channel, read its two bricks and
-    write the saved byte back, also on an error."""
-    rows, notes = [], []
+def brick_pass(
+    bmc: Bmc, modes: dict | None = None, load: bool = False, stop=lambda: False
+) -> tuple[list[tuple], list[str], list[str]]:
+    """One pass over the bricks and the fan rail: ``(name, volts, amps, watts, temp_C, vin)`` rows, notes and read
+    failures. Per mux channel, under one hold of the I2C lock: save the mux's control byte, select the channel, read
+    its two bricks and write the saved byte back, also on an error. *load*: the pass under load reads only each
+    brick's VOUT and VIN (VOUT_MODE from *modes*) and the fan rail's VBUS. Once *stop* says so it reads nothing
+    more: the mux is still restored and the rows so far returned."""
+    rows, notes, fails, modes = [], [], [], {} if modes is None else modes
     for ch in range(4):
+        if stop():
+            return rows, notes, fails
         with bmc.locked():
+            if stop():  # a stop during the lock wait: no mux write left to restore
+                return rows, notes, fails
             saved = bmc.raw(0x06, 0x52, BRICK_BUS, BRICK_MUX, 0x01, lock=False)
             saved = saved[0] if saved and len(saved) == 1 else None
             ok = saved is not None and bmc.raw(0x06, 0x52, BRICK_BUS, BRICK_MUX, 0x00, 1 << ch, lock=False) is not None
             try:
-                rows += [(n, *(_brick(bmc, a) if ok else (None,) * 5)) for n, (c, a) in BRICKS.items() if c == ch]
+                rows += [
+                    (n, *(_brick(bmc, n, a, modes, load, stop, fails) if ok else (None,) * 5))
+                    for n, (c, a) in BRICKS.items()
+                    if c == ch
+                ]
             finally:
                 if saved is not None and bmc.raw(0x06, 0x52, BRICK_BUS, BRICK_MUX, 0x00, saved, lock=False) is None:
                     notes.append(
@@ -223,15 +263,19 @@ def brick_pass(bmc: Bmc) -> tuple[list[tuple], list[str]]:
         b = bmc.raw(0x06, 0x52, FAN_BUS, FAN_ADDR, n, code)
         return int.from_bytes(bytes(b), "big") if b and len(b) == n else None
 
+    if stop():
+        return rows, notes, fails
     vbus, cur, pw = be(0x05, 2), None, None
-    if be(0x02, 2):  # SHUNT_CAL is only read: unset, the current and power read nothing
+    if load:  # under load the rail's VBUS only
+        pass
+    elif be(0x02, 2):  # SHUNT_CAL is only read: unset, the current and power read nothing
         c, p = be(0x07, 2), be(0x08, 3)
         cur = (c - 65536 if c >= 32768 else c) * FAN_CUR_LSB if c is not None else None
         pw = p * 0.2 * FAN_CUR_LSB if p is not None else None
     else:
         notes.append("fan rail current not read: SHUNT_CAL unset")
     rows.append(("FAN", vbus * 0.003125 if vbus is not None else None, cur, pw, None, None))
-    return rows, notes
+    return rows, notes, fails
 
 
 def judge_hsc(before: HscStatus, after: HscStatus, phase: Phase) -> None:
