@@ -1,8 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host-only: a traced packed forward runs empty chunk positions in a scratch slot past the real users, so the GLM-5.3
-adapter must allocate that slot in both its caches, and only then; the engine still addresses num_users slots."""
+"""Host-only: a traced packed forward's warm passes, captures and MTP layer run empty chunk positions in a scratch slot
+past the real users, so the GLM-5.3 adapter must allocate that slot in both its caches, and only then; the engine still
+addresses num_users slots."""
 
 from types import SimpleNamespace
 
