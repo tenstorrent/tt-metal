@@ -96,9 +96,6 @@ protected:
      */
     virtual std::unique_ptr<FabricRouterBuilder> make_router(const RouterLocation& location);
 
-    /**
-     * Routers on links the control plane doesn't route over (inter-domain perimeter links). Stock has none.
-     */
     virtual std::vector<RouterLocation> perimeter_router_locations() const { return {}; }
 
     /**
