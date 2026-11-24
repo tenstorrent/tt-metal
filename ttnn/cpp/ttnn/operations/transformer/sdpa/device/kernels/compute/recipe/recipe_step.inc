@@ -1330,13 +1330,18 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                             if (pair) {
                                 copy_tile(out_cb, rbase + 1, 1);
                             }
-                            // The chunk PV: plane 1 of the row, or the scratch CB's row of the step.
-                            const uint32_t pv_cb = recipe::pv_scratch ? recipe::pv_scratch_cb : out_cb;
-                            const uint32_t pbase =
-                                recipe::pv_scratch ? (g * qkt_subblock_h + r) * vDHt + j : rbase + vDHt;
-                            copy_tile(pv_cb, pbase, pair ? 2 : 1);
-                            if (pair) {
-                                copy_tile(pv_cb, pbase + 1, 3);
+                            if constexpr (!recipe::pv_scratch) {
+                                copy_tile(out_cb, rbase + vDHt, pair ? 2 : 1);
+                                if (pair) {
+                                    copy_tile(out_cb, rbase + vDHt + 1, 3);
+                                }
+                            } else {
+                                // The chunk PV in the scratch CB's row of the step (O's format).
+                                const uint32_t pbase = (g * qkt_subblock_h + r) * vDHt + j;
+                                copy_tile(recipe::pv_scratch_cb, pbase, pair ? 2 : 1);
+                                if (pair) {
+                                    copy_tile(recipe::pv_scratch_cb, pbase + 1, 3);
+                                }
                             }
                             reconfig_data_format_srca(cb_exp_max_diff);
                             unary_bcast_init<BroadcastType::COL>(cb_exp_max_diff);
@@ -1451,28 +1456,41 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                                 blocked_matmul_and_pack<false, v_in1_stride, vDHt>(
                                     cb_qkt_im,
                                     cb_v_in,
-                                    recipe::pv_scratch && pv_plane_offset(0) != 0 ? recipe::pv_scratch_cb : out_cb,
+                                    out_cb,
                                     qktv_in0_index_offset + pv_inner_offset,
                                     qktv_in1_index,
                                     0,
-                                    v_subblock * qktv_subblock_w +
-                                        (recipe::fp32 || recipe::pv_scratch ? 0 : pv_plane_offset(0)),
+                                    v_subblock * qktv_subblock_w + (recipe::fp32 ? 0 : pv_plane_offset(0)),
                                     qktv_subblock_w,
                                     first_h,
                                     matmul_inner,
                                     KT_stride,
                                     /*skip_pack_configure=*/true,
                                     /*pv_l1_acc=*/kt_sub > 0 || inplace_numerator);
+                            } else if constexpr (recipe::pv_scratch) {
+                                // A changed group's chunk PV goes to the scratch CB, at its rows in the step.
+                                blocked_matmul_and_pack<false, v_in1_stride, vDHt>(
+                                    cb_qkt_im,
+                                    cb_v_in,
+                                    pv_plane_offset(0) != 0 ? recipe::pv_scratch_cb : out_cb,
+                                    qktv_in0_index_offset + pv_inner_offset,
+                                    qktv_in1_index,
+                                    0,
+                                    v_subblock * qktv_subblock_w,
+                                    qktv_subblock_w,
+                                    first_h,
+                                    matmul_inner,
+                                    KT_stride,
+                                    /*skip_pack_configure=*/true);
                             } else {
                                 blocked_matmul_and_pack<false, v_in1_stride, vDHt>(
                                     cb_qkt_im,
                                     cb_v_in,
-                                    recipe::pv_scratch && pv_plane_offset(0) != 0 ? recipe::pv_scratch_cb : out_cb,
+                                    out_cb,
                                     qktv_in0_index_offset + pv_inner_offset,
                                     qktv_in1_index,
                                     0,
-                                    v_subblock * qktv_subblock_w +
-                                        (recipe::fp32 || recipe::pv_scratch ? 0 : pv_plane_offset(0)),
+                                    v_subblock * qktv_subblock_w + (recipe::fp32 ? 0 : pv_plane_offset(0)),
                                     qktv_subblock_w,
                                     first_h,
                                     matmul_inner,
@@ -1688,11 +1706,6 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                 if constexpr (v_in_k) {
                     matmul_set_in1_column_stride(cb_v_in, KT_stride);
                 }
-                // A changed group's PV in the scratch CB sits at its rows in the step (the CB is never pushed); O's
-                // rows count from O's write pointer (the pushed groups).
-                const bool pv_to_scratch = recipe::pv_scratch && pv_plane_offset(q_subblock) != 0;
-                const uint32_t pv_cb = pv_to_scratch ? recipe::pv_scratch_cb : out_cb;
-                const uint32_t pv_row = pv_to_scratch ? q_subblock : w_q;
                 // Configure once before v_subblock loop; skip inside.
                 configure_row_pack_width(out_cb, qktv_subblock_w);
                 for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
@@ -1701,28 +1714,44 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                         blocked_matmul_and_pack<false, v_in1_stride, vDHt>(
                             cb_qkt_im,
                             cb_v_in,
-                            pv_cb,
+                            out_cb,
                             qktv_in0_index_offset,
                             qktv_in1_index,
-                            cur_h == qktv_h ? pv_row : pv_row * qktv_h,
-                            v_subblock * qktv_subblock_w +
-                                (recipe::fp32 || recipe::pv_scratch ? 0 : pv_plane_offset(q_subblock)),
+                            cur_h == qktv_h ? w_q : w_q * qktv_h,
+                            v_subblock * qktv_subblock_w + (recipe::fp32 ? 0 : pv_plane_offset(q_subblock)),
                             qktv_subblock_w,
                             cur_h,
                             active_Sk,
                             KT_stride,
                             /*skip_pack_configure=*/true,
                             /*pv_l1_acc=*/inplace_numerator);
+                    } else if constexpr (recipe::pv_scratch) {
+                        // A changed group's chunk PV goes to the scratch CB at its rows in the step (the CB is never
+                        // pushed); O's rows count from O's write pointer (the pushed groups).
+                        const bool to_scratch = pv_plane_offset(q_subblock) != 0;
+                        const uint32_t row = to_scratch ? q_subblock : w_q;
+                        blocked_matmul_and_pack<false, v_in1_stride, vDHt>(
+                            cb_qkt_im,
+                            cb_v_in,
+                            to_scratch ? recipe::pv_scratch_cb : out_cb,
+                            qktv_in0_index_offset,
+                            qktv_in1_index,
+                            cur_h == qktv_h ? row : row * qktv_h,
+                            v_subblock * qktv_subblock_w,
+                            qktv_subblock_w,
+                            cur_h,
+                            active_Sk,
+                            KT_stride,
+                            /*skip_pack_configure=*/true);
                     } else {
                         blocked_matmul_and_pack<false, v_in1_stride, vDHt>(
                             cb_qkt_im,
                             cb_v_in,
-                            pv_cb,
+                            out_cb,
                             qktv_in0_index_offset,
                             qktv_in1_index,
-                            cur_h == qktv_h ? pv_row : pv_row * qktv_h,
-                            v_subblock * qktv_subblock_w +
-                                (recipe::fp32 || recipe::pv_scratch ? 0 : pv_plane_offset(q_subblock)),
+                            cur_h == qktv_h ? w_q : w_q * qktv_h,
+                            v_subblock * qktv_subblock_w + (recipe::fp32 ? 0 : pv_plane_offset(q_subblock)),
                             qktv_subblock_w,
                             cur_h,
                             active_Sk,

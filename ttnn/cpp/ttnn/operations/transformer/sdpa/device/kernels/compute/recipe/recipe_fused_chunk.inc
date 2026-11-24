@@ -431,10 +431,26 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
     constexpr bool v_in_k = cb_v_in == cb_kt_in;
     // The unpacker's column stride needs PV subblocks at least as wide as tall (one-row Q chunks: any width).
     static_assert(!v_in_k || Sq_chunk_t == 1 || pv_w >= H, "in-place V subblocks");
+    // Key padding (tail_clip): a piece stops at the chunk's first K tile masked whole; with no tile left, only the
+    // waits a PV would do (V, and the group's scores before the chunk pops them). First pieces always hold one.
     auto pv_piece = [&](uint32_t g, uint32_t k0, uint32_t k_len, uint32_t plane, bool accumulate) SDPA_FUSED_STEP {
         SDPA_FUSED_LEAVE_QK();
         const uint32_t h = rows(g);
         const uint32_t row0 = H * g;
+        if constexpr (tail_clip) {
+            const uint32_t end = k0 + k_len < recipe_ring_kt_live ? k0 + k_len : recipe_ring_kt_live;
+            if (end <= k0) {
+                if (!v_ready) {
+                    if constexpr (!v_in_k) {
+                        CircularBuffer(cb_v_in).wait_front(KT * vDHt);
+                    }
+                    v_ready = true;
+                }
+                CircularBuffer(cb_qkt_im).wait_front((row0 + h) * KT);
+                return;
+            }
+            k_len = end - k0;
+        }
         if constexpr (recipe::ring_stream_state) {
             if (plane == 0) {
                 recipe_stream_wait_rows(row0 + h);
@@ -452,54 +468,52 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         if constexpr (v_in_k) {
             matmul_set_in1_column_stride(cb_v_in, KT);
         }
-        uint32_t pv_cb = out_cb;
-        if constexpr (recipe::pv_scratch) {
-            if (plane != 0) {
-                pv_cb = recipe::pv_scratch_cb;
-                plane = 0;
+        if constexpr (!recipe::pv_scratch) {
+            set_pack(out_cb);
+            PACK((llk_pack_reconfig_l1_acc(accumulate ? 1 : 0)));
+            configure_row_pack_width(out_cb, pv_w);
+            for (uint32_t v = 0; v < n_pv; ++v) {
+                blocked_matmul_and_pack<false, v_in_k ? 1 : vDHt, vDHt>(
+                    cb_qkt_im,
+                    cb_v_in,
+                    out_cb,
+                    row0 * KT + k0,
+                    v_in_k ? v * pv_w * KT + k0 : k0 * vDHt + v * pv_w,
+                    0,
+                    v * pv_w + plane,
+                    pv_w,
+                    h,
+                    k_len,
+                    KT,
+                    /*skip_pack_configure=*/true);
             }
-        }
-        set_pack(pv_cb);
-        PACK((llk_pack_reconfig_l1_acc(accumulate ? 1 : 0)));
-        configure_row_pack_width(pv_cb, pv_w);
-        for (uint32_t v = 0; v < n_pv; ++v) {
-            blocked_matmul_and_pack<false, v_in_k ? 1 : vDHt, vDHt>(
-                cb_qkt_im,
-                cb_v_in,
-                pv_cb,
-                row0 * KT + k0,
-                v_in_k ? v * pv_w * KT + k0 : k0 * vDHt + v * pv_w,
-                0,
-                v * pv_w + plane,
-                pv_w,
-                h,
-                k_len,
-                KT,
-                /*skip_pack_configure=*/true);
+        } else {
+            // A redone group's chunk PV in the scratch CB's rows 0..h-1.
+            const uint32_t pv_cb = plane != 0 ? recipe::pv_scratch_cb : out_cb;
+            set_pack(pv_cb);
+            PACK((llk_pack_reconfig_l1_acc(accumulate ? 1 : 0)));
+            configure_row_pack_width(pv_cb, pv_w);
+            for (uint32_t v = 0; v < n_pv; ++v) {
+                blocked_matmul_and_pack<false, v_in_k ? 1 : vDHt, vDHt>(
+                    cb_qkt_im,
+                    cb_v_in,
+                    pv_cb,
+                    row0 * KT + k0,
+                    v_in_k ? v * pv_w * KT + k0 : k0 * vDHt + v * pv_w,
+                    0,
+                    v * pv_w,
+                    pv_w,
+                    h,
+                    k_len,
+                    KT,
+                    /*skip_pack_configure=*/true);
+            }
         }
         PACK((llk_pack_reconfig_l1_acc(0)));
         if constexpr (v_in_k) {
             matmul_set_in1_column_stride(cb_v_in, 1);
         }
     };
-
-    // Key padding: PV over the piece's tiles before the first masked-whole one (tail_clip). With none, only the waits a
-    // PV would do (V, and the group's scores before the chunk pops them). First pieces always hold a valid tile.
-    [[maybe_unused]] auto pv_piece_live =
-        [&](uint32_t g, uint32_t k0, uint32_t k_len, uint32_t plane, bool accumulate) SDPA_FUSED_STEP {
-            const uint32_t end = k0 + k_len < recipe_ring_kt_live ? k0 + k_len : recipe_ring_kt_live;
-            if (end > k0) {
-                pv_piece(g, k0, end - k0, plane, accumulate);
-                return;
-            }
-            if (!v_ready) {
-                if constexpr (!v_in_k) {
-                    CircularBuffer(cb_v_in).wait_front(KT * vDHt);
-                }
-                v_ready = true;
-            }
-            CircularBuffer(cb_qkt_im).wait_front((H * g + rows(g)) * KT);
-        };
 
     // Block mask: PV over the piece's runs of valid K tiles only (the others' P is zero), accumulating onto O. With no
     // valid tile, only the waits a PV would do (V, and the group's scores before the chunk pops them).
@@ -628,11 +642,7 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         srca = cb_qkt_im;
         pack_to_unpack_barrier();
         for (uint32_t piece = 0; piece < n_pieces; ++piece) {
-            if constexpr (tail_clip) {
-                pv_piece_live(g, piece_k0(piece), piece_k0(piece + 1) - piece_k0(piece), vDHt, piece > 0);
-            } else {
-                pv_piece(g, piece_k0(piece), piece_k0(piece + 1) - piece_k0(piece), vDHt, piece > 0);
-            }
+            pv_piece(g, piece_k0(piece), piece_k0(piece + 1) - piece_k0(piece), vDHt, piece > 0);
         }
         pack_to_unpack_barrier();
         const uint32_t read_base = is_last_iter ? 0 : row0;
@@ -686,12 +696,17 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
                 if (pair) {
                     copy_tile(out_cb, rbase + 1, 1);
                 }
-                // The chunk PV: plane 1 of the row, or the scratch CB's row r (same format: srcA stays configured).
-                const uint32_t pv_cb = recipe::pv_scratch ? recipe::pv_scratch_cb : out_cb;
-                const uint32_t pbase = recipe::pv_scratch ? r * vDHt + j : rbase + vDHt;
-                copy_tile(pv_cb, pbase, pair ? 2 : 1);
-                if (pair) {
-                    copy_tile(pv_cb, pbase + 1, 3);
+                if constexpr (!recipe::pv_scratch) {
+                    copy_tile(out_cb, rbase + vDHt, pair ? 2 : 1);
+                    if (pair) {
+                        copy_tile(out_cb, rbase + vDHt + 1, 3);
+                    }
+                } else {
+                    // The chunk PV in the scratch CB's row r (O's format: srcA stays configured).
+                    copy_tile(recipe::pv_scratch_cb, r * vDHt + j, pair ? 2 : 1);
+                    if (pair) {
+                        copy_tile(recipe::pv_scratch_cb, r * vDHt + j + 1, 3);
+                    }
                 }
                 set_srca(cb_recip_scratch);
                 unary_bcast_init<BroadcastType::COL>(cb_recip_scratch);
@@ -801,8 +816,6 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
             if (do_pv) {
                 if constexpr (recipe::ring && recipe::ring_mask == 3) {
                     pv_piece_kept(pg, piece_k0(piece), piece_k0(piece + 1) - piece_k0(piece));
-                } else if constexpr (tail_clip) {
-                    pv_piece_live(pg, piece_k0(piece), piece_k0(piece + 1) - piece_k0(piece), 0, true);
                 } else {
                     pv_piece(pg, piece_k0(piece), piece_k0(piece + 1) - piece_k0(piece), 0, true);
                 }
