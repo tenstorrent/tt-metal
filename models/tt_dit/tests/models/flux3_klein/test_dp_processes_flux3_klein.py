@@ -249,7 +249,7 @@ class ThreadContext:
         return parent, ThreadEnd(child)
 
 
-def fake_serve(conns, pipeline_kwargs, warmup, group_shape):
+def fake_serve(conns, pipeline_kwargs, warmup, group_shape, depth=1):
     if pipeline_kwargs.get("fail_start"):
         for conn in conns:
             conn.send(("error", "RuntimeError: no mesh"))

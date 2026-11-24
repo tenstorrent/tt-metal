@@ -45,10 +45,12 @@ class Flux3KleinPromptEncoder:
         inputs = tokenizer(text, return_tensors="pt", padding="max_length", truncation=True, max_length=length or valid)
         return inputs["input_ids"], inputs["attention_mask"], valid
 
-    def encode(self, prompt: str, length: int | None = None) -> tuple[torch.Tensor, torch.Tensor, int]:
+    def encode(
+        self, prompt: str, length: int | None = None, tokens: tuple[torch.Tensor, torch.Tensor, int] | None = None
+    ) -> tuple[torch.Tensor, torch.Tensor, int]:
         """`[1, L, 20480]` bf16 text tokens on device (replicated), their RoPE ids and the attended length (see
-        `tokenize`)."""
-        input_ids, attention_mask, valid = self.tokenize(prompt, length)
+        `tokenize`; `tokens` = its result when already tokenized)."""
+        input_ids, attention_mask, valid = tokens or self.tokenize(prompt, length)
 
         tt_ids = ttnn.from_torch(input_ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self._device)
         tt_mask = tensor.from_torch(attention_mask.bool(), device=self._device)

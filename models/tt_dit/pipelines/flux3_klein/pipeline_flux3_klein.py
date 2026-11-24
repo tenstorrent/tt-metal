@@ -8,7 +8,8 @@ import hashlib
 import math
 import time
 from collections import OrderedDict
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -99,6 +100,19 @@ class Flux3KleinResult:
     seed: int
     timings: dict[str, float]
     cached_steps: int = 0
+
+
+@dataclass
+class _Prepared:
+    request: Flux3KleinRequest
+    canvases: list[Image.Image]
+    ref_bucket: int
+    prompt: str
+    seed: int
+    latent_job: Future
+    text_rows: int
+    tokens: tuple[torch.Tensor, torch.Tensor, int]
+    timings: dict[str, float]
 
 
 def make_noise(seed: int, h: int, w: int) -> torch.Tensor:
@@ -334,11 +348,49 @@ class Flux3KleinPipeline:
         return self._generate(request, None)
 
     def _generate(self, request: Flux3KleinRequest, text_rows: int | None) -> Flux3KleinResult:
+        return self._result(*self._run(self._prepare(request, text_rows)))
+
+    def serve(self, receive: Callable[[], Flux3KleinRequest | None], emit: Callable[[object], None]) -> None:
+        """Answers requests in order until `receive` returns None; `emit` gets each result or exception. The next request
+        is received and prepared (references, tokens, noise) on a helper thread while this one runs, and each image is
+        built and emitted on another, so the device does not wait for the host between queued requests."""
+        if self._upsampler is not None:
+            raise ValueError("serve needs the upsampler off: it runs on this pipeline's device")
+
+        def prepare() -> _Prepared | Exception | None:
+            request = receive()
+            if request is None:
+                return None
+            try:
+                return self._prepare(request, None)
+            except Exception as e:  # noqa: BLE001
+                return e
+
+        def answer(run: tuple) -> None:
+            try:
+                result = self._result(*run)
+            except Exception as e:  # noqa: BLE001
+                result = e
+            emit(result)
+
+        with ThreadPoolExecutor(1, thread_name_prefix="flux3_klein_ahead") as ahead, ThreadPoolExecutor(
+            1, thread_name_prefix="flux3_klein_emit"
+        ) as out:
+            pending = ahead.submit(prepare)
+            while (prepared := pending.result()) is not None:
+                pending = ahead.submit(prepare)
+                if isinstance(prepared, Exception):
+                    out.submit(emit, prepared)
+                    continue
+                try:
+                    out.submit(answer, self._run(prepared))
+                except Exception as e:  # noqa: BLE001
+                    out.submit(emit, e)
+
+    def _prepare(self, request: Flux3KleinRequest, text_rows: int | None) -> _Prepared:
+        """The host-only part of a request: its references, prompt tokens and noise (the noise on the pre-step thread)."""
         self.validate_request(request)
         size = request.width
-        steps = request.steps or STEPS[request.model]
-        guidance = GUIDANCE[request.model] if request.guidance is None else request.guidance
-        guidance = None if request.model == "distilled" else guidance
         references = [r if isinstance(r, Image.Image) else Image.open(r) for r in request.images]
         reference = references[0] if references else None
         if len(references) > 1:
@@ -354,17 +406,35 @@ class Flux3KleinPipeline:
         prompt = request.prompt if self._upsampler is None else self._upsampler(request.prompt, reference)
         timings["upsample"] = time.time() - t0
         seed = caption_seed(prompt) if request.seed is None else request.seed
-        h, w = latent_shape(size, size)
         # The noise and the latent's host tensor are built on a helper thread while this thread dispatches the text
         # encoder; the device copy stays on this thread
         sp = self._transformers[request.model].sp_factor
-        latent_job = self._prestep_pool().submit(self._prepare_latent_host, seed, h, w, sp)
+        latent_job = self._prestep_pool().submit(self._prepare_latent_host, seed, *latent_shape(size, size), sp)
 
         t0 = time.time()
         text_rows = text_rows or self._text_rows(prompt, size, ref_bucket)
-        self._claim_pairs((request.model, size, ref_bucket, text_rows), free_others=size == max(SIZES))
-        text = self._prompt_encoder.encode(prompt, text_rows)
+        tokens = self._prompt_encoder.tokenize(prompt, text_rows)
         timings["encode"] = time.time() - t0
+        return _Prepared(request, canvases, ref_bucket, prompt, seed, latent_job, text_rows, tokens, timings)
+
+    def _run(self, prepared: _Prepared) -> tuple[_Prepared, torch.Tensor, int]:
+        """The device part of a prepared request: its image as `[size, size * 3]` uint8 rows on the host."""
+        request, canvases, ref_bucket, timings = (
+            prepared.request,
+            prepared.canvases,
+            prepared.ref_bucket,
+            prepared.timings,
+        )
+        size = request.width
+        steps = request.steps or STEPS[request.model]
+        guidance = GUIDANCE[request.model] if request.guidance is None else request.guidance
+        guidance = None if request.model == "distilled" else guidance
+        h, w = latent_shape(size, size)
+
+        t0 = time.time()
+        self._claim_pairs((request.model, size, ref_bucket, prepared.text_rows), free_others=size == max(SIZES))
+        text = self._prompt_encoder.encode(prepared.prompt, prepared.text_rows, tokens=prepared.tokens)
+        timings["encode"] += time.time() - t0
 
         t0 = time.time()
         image_cond = None
@@ -379,7 +449,7 @@ class Flux3KleinPipeline:
         timings["encode_reference"] = time.time() - t0
 
         t0 = time.time()
-        noise, x_host = latent_job.result()
+        noise, x_host = prepared.latent_job.result()
         state, cached_steps = self._denoise(
             request.model,
             noise,
@@ -403,13 +473,21 @@ class Flux3KleinPipeline:
         t0 = time.time()
         u8 = image_to_uint8(decoded)
         rows = tensor.to_torch(u8, mesh_axes=[None, self._vae.h_axis, self._vae.w_axis])[0]
-        image = Image.fromarray(rows.reshape(size, size, 3).numpy())
         ttnn.deallocate(u8)
         ttnn.deallocate(decoded)
         ttnn.deallocate(state)
         timings["to_host"] = time.time() - t0
+        return prepared, rows, cached_steps
+
+    def _result(self, prepared: _Prepared, rows: torch.Tensor, cached_steps: int) -> Flux3KleinResult:
+        request, timings, size = prepared.request, prepared.timings, prepared.request.width
+        t0 = time.time()
+        image = Image.fromarray(rows.reshape(size, size, 3).numpy())
+        timings["to_host"] += time.time() - t0
         logger.info(f"FLUX 3 Klein {request.model} {size}x{size} refs {len(request.images)}: {timings}")
-        return Flux3KleinResult(image=image, prompt=prompt, seed=seed, timings=timings, cached_steps=cached_steps)
+        return Flux3KleinResult(
+            image=image, prompt=prepared.prompt, seed=prepared.seed, timings=timings, cached_steps=cached_steps
+        )
 
     def _free_other_plans(self, image_rows: int, cond_rows: int) -> None:
         """Frees the cached plans of every other layout: at the largest size, the reference encoder and the denoise need
