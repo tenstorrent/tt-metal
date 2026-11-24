@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// HAL port of tt_llk_blackhole/llk_lib/llk_pack_untilize.h: same Tensix instruction sequence and access kinds as
+// production, except the listed HAL-GAP (CFGSHIFTMASK).
+
 #pragma once
 
 #include <cstdint>
@@ -9,9 +12,18 @@
 #include "ckernel.h"
 #include "ckernel_globals.h"
 #include "ckernel_ops.h"
-#include "ckernel_template.h"
+#include "ckernel_template.h" // not used here: kept for production-copy headers that include llk_pack_untilize.h
+#include "hal/cfg.h"
+#include "hal/counters/adc.h"
+#include "hal/mop.h"
+#include "hal/nop.h"
+#include "hal/pack.h"
+#include "hal/replay.h"
+#include "hal/scalar.h"
+#include "hal/sync.h"
 #include "llk_assert.h"
 #include "llk_defs.h"
+#include "llk_pack.h" // hal_port::set_addr_mod_pack
 #include "llk_pack_common.h"
 
 using namespace ckernel;
@@ -29,18 +41,12 @@ inline void _llk_pack_untilize_configure_addrmod_()
     // the tile within Dest.
     // ADDR_MOD_0: used by every inner-loop PACR. y_src stays on the current row;
     // W advances via INCADCZW between tiles.
-    addr_mod_pack_t {
-        .y_src = {.incr = 0, .clr = 0},
-    }
-        .set(ADDR_MOD_0);
+    hal_port::set_addr_mod_pack<hal::cfg::Sec::S0, 0 /*y_src_incr*/, 0 /*y_src_clr*/, 0 /*y_src_cr*/, 0 /*z_src_incr*/, 0 /*z_src_clr*/>();
 
     // ADDR_MOD_1: used by the row-closing PACR (set_last_inner_loop_instr).
     // y_src.incr=1 advances to the next Dest face-row after packing, folding the
     // explicit INCADCXY end_op into the PACR itself.
-    addr_mod_pack_t {
-        .y_src = {.incr = 1, .clr = 0},
-    }
-        .set(ADDR_MOD_1);
+    hal_port::set_addr_mod_pack<hal::cfg::Sec::S1, 1 /*y_src_incr*/, 0 /*y_src_clr*/, 0 /*y_src_cr*/, 0 /*z_src_incr*/, 0 /*z_src_clr*/>();
 }
 
 /*
@@ -93,77 +99,63 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
     tile block_ct_dim-1: row 64*(block_ct_dim-1), row 64*(block_ct_dim-1)+16
     This processes is repeated for each row of the block in dest.
     */
-    ckernel::ckernel_template tmp(
-        MOP_OUTER_LOOP,
-        MOP_INNER_LOOP,
-        TT_OP_INCADCZW(p_setadc::PAC, 0, 0, 1, 0), // w cnt points to the next tile
-        TT_OP_PACR(
-            p_pacr::CFG_CTXT_0,
-            p_pacr::NO_ROW_PAD_ZERO,
-            p_pacr::DST_ACCESS_STRIDED_MODE,
-            ADDR_MOD_0,
-            p_pacr::ADDR_CNT_CTXT_0,
-            0,
-            PACK_INTF_SEL,
-            0,
-            0,
-            p_pacr::NO_CTXT_CTRL,
-            0,
-            0));
+    using namespace hal::mop;
+    namespace adc = hal::counters::adc;
+    using hal::pack::DataTransfer;
+    using hal::pack::DestAccess;
+    using hal::pack::TileBoundary;
+
+    // w cnt points to the next tile: INCADCZW(PAC, 0, 0, 1, 0)
+    constexpr std::uint32_t next_tile =
+        adc::AddrCounter {.action = adc::Action::Increment, .channel0 = {.w = 1}}.for_clients<adc::Client::Packers>().operation();
+
+    DataTransfer transfer {
+        .address_modifier = ADDR_MOD_0,
+        .interfaces       = static_cast<std::uint8_t>(PACK_INTF_SEL),
+        .dest_access      = DestAccess::Strided,
+    };
+    const std::uint32_t row = transfer.get_operation();
 
     /*
     Since there are two inner loop operations, the instruction set by set_last_inner_loop_instr
     will replace the second inner loop operation (in the last iteration, call the PACR instruction
     with the Last bit set to 1 instead of 0 to close the row).
-    The W counter CR shadow (W_Cr) is established by TT_SETADC(...SET_W...) in _llk_pack_untilize_
+    The W counter CR shadow (W_Cr) is established by the SETADC of W in _llk_pack_untilize_
     before run() is called; the SETADCZW there only initializes Z.
     ADDRCRZW with increment 0 resets W to the stored W_Cr value at the start of each outer loop
     iteration (row), without needing tile_dst_offset baked into this MOP template.
     */
-    tmp.set_start_op(TT_OP_ADDRCRZW(p_setadc::PAC, 0, 0, 0, 0, 0b0010 /*CH0_W*/)); // W = W_Cr (restore W to start of block)
+    // W = W_Cr (restore W to start of block): ADDRCRZW(PAC, 0, 0, 0, 0, 0b0010 /*CH0_W*/)
+    constexpr std::uint32_t restore_w =
+        adc::AddrCounter {.action = adc::Action::AdvanceAndReset, .channel0 = {.w = 0}}.for_clients<adc::Client::Packers>().operation();
 
-    const std::uint32_t replay_buf_len = 2;
-    load_replay_buf(
-        ckernel::packer::replay_buf_offset,
-        replay_buf_len,
+    constexpr hal::replay::BufferRange l1_advance {ckernel::packer::replay_buf_offset, 2};
+    hal::replay::record<l1_advance>(
         []
         {
             // THCON_SEC0_REG1_L1_Dest_addr_ADDR32 += SCRATCH_SEC[CurrentThread].val
             // Scratch slot loaded in _llk_pack_untilize_init_ holds the per-row L1 stride.
             // Replaces ADDDMAREG + STALLWAIT + WRCFG + NOP — saves ~3 cyc + 1 STALLWAIT per row.
             // Mirrors llk_unpack_tilize.h:285 precedent.
-            TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
-            TTI_NOP;
+            TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG1_L1_Dest_addr_ADDR32); // HAL-GAP: no HAL API for CFGSHIFTMASK
+            hal::nop::thread();
         });
-
-    // After the inner loop finishes, update L1 address. The "advance Dst face-row" is folded
-    // into the row-closing PACR's AddrMod (ADDR_MOD_1, set below), so no INCADCXY end_op is needed.
-    tmp.set_end_op(lltt::replay_insn(ckernel::packer::replay_buf_offset, replay_buf_len));
 
     /*
     Close the row in the block by setting the Last bit to 1 in the last inner loop instruction.
     Use ADDR_MOD_1 so the packer auto-advances y_src by 1 (next row in face) post-PACR.
-    Revisit after #22820 to convert last_loop_op to constexpr.
     */
-    std::uint32_t last_loop_op = TT_OP_PACR(
-        p_pacr::CFG_CTXT_0,
-        p_pacr::NO_ROW_PAD_ZERO,
-        p_pacr::DST_ACCESS_STRIDED_MODE,
-        ADDR_MOD_1,
-        p_pacr::ADDR_CNT_CTXT_0,
-        0,
-        PACK_INTF_SEL,
-        0,
-        0,
-        p_pacr::NO_CTXT_CTRL,
-        0,
-        1);
+    transfer.address_modifier        = ADDR_MOD_1;
+    transfer.boundary                = TileBoundary::Last;
+    const std::uint32_t last_loop_op = transfer.get_operation();
 
-    tmp.set_last_inner_loop_instr(last_loop_op);
-
-    tmp.set_last_outer_loop_instr(last_loop_op);
-
-    tmp.program();
+    // After the inner loop finishes, update L1 address (replay). The "advance Dst face-row" is folded into the
+    // row-closing PACR's AddrMod (ADDR_MOD_1), so no INCADCXY end_op is needed. The explicit NOP second end op keeps
+    // production's MOP_CFG store (end_op1 = NOP) unchanged.
+    const auto config = loop(MOP_OUTER_LOOP, restore_w, loop(MOP_INNER_LOOP, next_tile, row), hal::replay::get_operation<l1_advance>(), TT_OP_NOP)
+                            .patch(last_outer, last_loop_op);
+    // The last-inner op is never issued with an outer count of 1 (HAL requires the patch to be skipped then).
+    program(MOP_OUTER_LOOP > 1 ? config.patch(last_inner, last_loop_op) : config);
 }
 
 /**
@@ -214,7 +206,7 @@ inline void _llk_pack_untilize_init_(
     std::uint32_t x_stride       = datum_size_in_bytes(pack_src_format);
     std::uint32_t y_stride       = FACE_C_DIM * x_stride;
     const std::uint32_t z_stride = 2 * face_r_dim * y_stride;
-    cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(z_stride);
+    hal::cfg::write<hal::cfg::Access::TensixCfgUnit, hal::cfg::Packer[0].AddrCtrl[hal::cfg::PackerReg::Reg0].Zstride, hal::cfg::Sec::S0>(z_stride);
 
     std::uint32_t output_addr_offset;
     if constexpr (narrow_row)
@@ -230,22 +222,25 @@ inline void _llk_pack_untilize_init_(
     // CFGSHIFTMASK to do `THCON_SEC0_REG1_L1_Dest_addr += SCRATCH` per row.
     // ScratchIndex=0b11 in the CFGSHIFTMASK selects SCRATCH_SEC[CurrentThread]; pack thread
     // is TRISC2, so this slot is SCRATCH_SEC2.
-    TT_SETDMAREG(0, LOWER_HALFWORD(output_addr_offset / 16), 0, LO_16(p_gpr_pack::OUTPUT_ADDR_OFFSET));
-    TT_SETDMAREG(0, UPPER_HALFWORD(output_addr_offset / 16), 0, HI_16(p_gpr_pack::OUTPUT_ADDR_OFFSET));
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
-    TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR_OFFSET, 0, SCRATCH_SEC2_val_ADDR32);
-    TTI_NOP;
+    constexpr auto row_offset = hal::gpr<p_gpr_pack::OUTPUT_ADDR_OFFSET>();
+    hal::scalar::set_low(row_offset, LOWER_HALFWORD(output_addr_offset / 16));
+    hal::scalar::set_high(row_offset, UPPER_HALFWORD(output_addr_offset / 16));
+    hal::sync::wait::stall<hal::sync::StallTarget::Config, hal::sync::StallCondition::ScalarIdle>();
+    static_assert(hal::cfg::Scratch::val.addr32(hal::cfg::Sec::S2) == SCRATCH_SEC2_val_ADDR32, "pack thread scratch word");
+    hal::cfg::write<
+        hal::cfg::Access::TensixCfgUnit,
+        hal::cfg::Scratch::val,
+        hal::cfg::Sec::S2,
+        hal::cfg::GprTransferSize::Bits32,
+        hal::cfg::WrcfgCompletion::Deferred>(row_offset);
+    hal::nop::thread();
 
     // Always include setup calls for safety (as recommended by maintainer)
     // Program packer to pack out the correct number of datums per row
-    if constexpr (narrow_row)
-    {
-        TTI_SETADCXX(p_setadc::PAC, row_num_datums - 1, 0x0);
-    }
-    else
-    {
-        TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
-    }
+    // SETADCXX(PAC, x_end, 0)
+    namespace adc                 = hal::counters::adc;
+    constexpr std::uint32_t x_end = narrow_row ? row_num_datums - 1 : FACE_C_DIM - 1;
+    adc::set<adc::AddrCounter {.channel0 = {.x = 0}, .channel1 = {.x = x_end}}.for_clients<adc::Client::Packers>()>();
 }
 
 /**
@@ -287,7 +282,7 @@ inline void _llk_pack_untilize_(const std::uint32_t address, const std::uint32_t
     each block the size of block_ct_dim. This function is called for each block.
     */
     // program_packer_untilized_destination<block_ct_dim, full_ct_dim, diagonal>(address, pack_dst_format);
-    program_packer_destination(address);
+    hal_port::program_packer_destination(address);
     const std::uint32_t num_faces_per_rdim_tile = (num_faces > 2) ? 2 : 1;
 
     const std::uint32_t tile_dst_offset = tile_dst_ct_offset + tile_dst_rt_offset;
@@ -295,20 +290,28 @@ inline void _llk_pack_untilize_(const std::uint32_t address, const std::uint32_t
     // MOP START_OP resets W to this value at the start of each outer loop iteration (row).
     // The first INCADCZW in the inner loop then advances W to tile_dst_offset for the first tile.
     // SETADCZW's Ch0_W field is only 3 bits (0-7), so SETADC is used to carry the full 4-bit W value.
-    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0001);                                         // reset ch0 z counter
-    TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, (15 + tile_dst_offset) & 0xF); // set ch0 w counter, establishing W_Cr
-    TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b0011);                                         // reset ch0 xy counters
+    namespace adc = hal::counters::adc;
+    // reset ch0 z counter: SETADCZW(PAC, mask 0b0001). A single counter, so the HAL planner emits SETADC(PAC, CH_0, Z, 0).
+    adc::set<adc::AddrCounter {.channel0 = {.z = 0}}.for_clients<adc::Client::Packers>()>();
+    // set ch0 w counter, establishing W_Cr: SETADC(PAC, CH_0, SET_W, (15 + tile_dst_offset) & 0xF), the same instruction
+    // set_dst_write_addr issues.
+    set_dst_write_addr((15 + tile_dst_offset) & 0xF);
+    // reset ch0 xy counters: SETADCXY(PAC, mask 0b0011)
+    adc::set<adc::AddrCounter {.channel0 = {.x = 0, .y = 0}}.for_clients<adc::Client::Packers>()>();
 
     // Iterate over top, then over bottom faces in the block (if num_faces > 2)
     for (std::uint32_t face = 0; face < num_faces_per_rdim_tile; face++)
     {
-        ckernel::ckernel_template::run();
+        hal::mop::Runner<hal::mop::MopTemplate::Template1>::run();
 
-        TTI_INCADCZW(p_setadc::PAC, 0, 0, 0, 1);         // z cnt increments by 2xface_r_dimxFACE_C_DIM
-        TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b0010); // reset ch0_y counters
+        // z cnt increments by 2xface_r_dimxFACE_C_DIM: INCADCZW(PAC, 0, 0, 0, 1)
+        adc::set<adc::AddrCounter {.action = adc::Action::Increment, .channel0 = {.z = 1}}.for_clients<adc::Client::Packers>()>();
+        // reset ch0_y counters: SETADCXY(PAC, mask 0b0010). A single counter, so the HAL planner emits SETADC(PAC, CH_0, Y, 0).
+        adc::set<adc::AddrCounter {.channel0 = {.y = 0}}.for_clients<adc::Client::Packers>()>();
     }
 
-    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101); // reset z counters
+    // reset z counters: SETADCZW(PAC, mask 0b0101)
+    adc::set<adc::AddrCounter {.channel0 = {.z = 0}, .channel1 = {.z = 0}}.for_clients<adc::Client::Packers>()>();
     set_dst_write_addr(tile_dst_offset);             // reset w counter
 }
 
@@ -323,7 +326,7 @@ inline void _llk_pack_untilize_(const std::uint32_t address, const std::uint32_t
  */
 inline void _llk_pack_untilize_uninit_(const std::uint32_t pack_src_format)
 {
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
+    hal::sync::wait::stall<hal::sync::StallTarget::Config, hal::sync::StallCondition::PackerIdle>();
     const std::uint32_t z_stride = SCALE_DATUM_SIZE(pack_src_format, FACE_R_DIM * FACE_C_DIM);
-    cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(z_stride);
+    hal::cfg::write<hal::cfg::Access::TensixCfgUnit, hal::cfg::Packer[0].AddrCtrl[hal::cfg::PackerReg::Reg0].Zstride, hal::cfg::Sec::S0>(z_stride);
 }
