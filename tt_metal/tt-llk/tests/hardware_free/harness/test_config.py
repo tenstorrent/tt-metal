@@ -203,6 +203,33 @@ def test_a_helpers_tree_replaces_the_linker_scripts_it_has(
     )
 
 
+def test_a_relative_helpers_tree_gives_absolute_linker_scripts(
+    isolated_search_dirs, tmp_path, monkeypatch
+):
+    """The link runs in ``$LLK_HOME/tests``, where a path relative to the suite points somewhere else."""
+    (tmp_path / "helpers" / "ld").mkdir(parents=True)
+    (tmp_path / "helpers" / "ld" / "brisc.ld").touch()
+    monkeypatch.chdir(tmp_path)
+    TestConfig.add_helpers_tree("helpers")
+
+    assert TestConfig.linker_script("brisc.ld") == tmp_path / "helpers/ld/brisc.ld"
+
+
+def test_linker_script_dirs_change_the_variant_id(isolated_search_dirs, tmp_path):
+    """The same headers and sources with and without the tree's ``ld/`` link differently.
+
+    CONSUME mode finds its ELF by the id, so the two must not share one.
+    """
+    TestConfig.add_include_dirs(tmp_path / "include")
+    TestConfig.add_src_include_dirs(tmp_path / "src")
+    without_linker_scripts = variant_id()
+
+    clear_search_dirs(False)
+    TestConfig.add_helpers_tree(tmp_path)
+
+    assert variant_id() != without_linker_scripts
+
+
 @_IN_TREE_REGIMES
 def test_search_dir_precedence_changes_the_variant_id(isolated_search_dirs, in_tree):
     """Registration order is a compilation input: it decides which copy wins."""

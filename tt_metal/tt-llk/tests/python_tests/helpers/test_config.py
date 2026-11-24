@@ -925,7 +925,8 @@ class TestConfig:
             tree = Path(tree)
             includes.append(tree / "include")
             sources.append(tree / "src")
-            linker_scripts.append(tree / "ld")
+            # Absolute, as _as_include_flags makes the other two: the link runs in $LLK_HOME/tests.
+            linker_scripts.append((tree / "ld").expanduser().resolve())
         TestConfig.add_include_dirs(*includes, prepend=prepend)
         TestConfig.add_src_include_dirs(*sources, prepend=prepend)
         if prepend:
@@ -1511,6 +1512,13 @@ class TestConfig:
             "<<src-append>>",
             *src_include_append,
         ]
+        # Which linker scripts a variant links with. Fenced only when a tree is registered, so the ids of
+        # every variant that has none stay as they were.
+        if TestConfig.EXTRA_LINKER_SCRIPT_DIRS:
+            search_dirs += [
+                "<<linker-scripts>>",
+                *map(str, TestConfig.EXTRA_LINKER_SCRIPT_DIRS),
+            ]
 
         # Process-wide build switches live outside ``self.__dict__``, and CONSUME
         # mode never rebuilds an ELF, so ``variant_id`` must key them explicitly.

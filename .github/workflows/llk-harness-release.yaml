@@ -52,13 +52,14 @@ jobs:
         if: ${{ github.event_name == 'push' }}
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
           BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
-          # The file as it was before the push; the new version must be greater. No file there is the first release.
-          if content=$(gh api "repos/${GITHUB_REPOSITORY}/contents/${VERSION_FILE}?ref=${BEFORE}" --jq .content); then
-            echo "version=$(echo "$content" | base64 --decode)" >> "$GITHUB_OUTPUT"
+          # The file as it was before the push; the new version must be greater. A commit that cannot be fetched
+          # stops the release: only the file being absent from that commit makes this the first one.
+          git fetch --quiet --depth=1 origin "$BEFORE"
+          if [ -n "$(git ls-tree --name-only "$BEFORE" -- "$VERSION_FILE")" ]; then
+            echo "version=$(git show "$BEFORE:$VERSION_FILE")" >> "$GITHUB_OUTPUT"
           else
             echo "No ${VERSION_FILE} at ${BEFORE}: this is the first release."
           fi
@@ -124,6 +125,52 @@ jobs:
           cp "$LLK_PATH/tests/requirements.txt" dist/requirements.txt
       - name: Install ORAS
         uses: oras-project/setup-oras@5e2f2482b30b0cb3e14e67f89a80c88c659a7c63 # v2.0.3
+      # Before anything is uploaded, and by status code: an answer that is neither "it is there" nor "it is not"
+      # stops the release, with the answer printed.
+      - name: Check the package and the version before publishing
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # A package that exists must not be public: a wheel pushed to it would be out before the check after.
+          name="${GITHUB_REPOSITORY#*/}%2Ftt-llk-harness"
+          status=$(curl -sS -o package.json -w '%{http_code}' \
+            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "${GITHUB_API_URL}/orgs/${GITHUB_REPOSITORY_OWNER}/packages/container/${name}")
+          case "$status" in
+            200)
+              visibility=$(jq -r .visibility package.json)
+              echo "Package visibility: $visibility"
+              if [ "$visibility" = "public" ]; then
+                echo "::error::The tt-llk-harness package is public. Set it to private or internal in its settings."
+                exit 1
+              fi
+              ;;
+            404) echo "No tt-llk-harness package yet: this release creates it." ;;
+            *)
+              echo "::error::Could not read the package (HTTP $status)."
+              cat package.json
+              exit 1
+              ;;
+          esac
+          # A release is never replaced: suites pin a version and must keep getting the same bytes for it.
+          status=$(curl -sS -o manifest.json -w '%{http_code}' \
+            -H "Authorization: Bearer $(printf %s "$GH_TOKEN" | base64 -w0)" \
+            -H "Accept: application/vnd.oci.image.manifest.v1+json" \
+            "https://ghcr.io/v2/${GITHUB_REPOSITORY}/tt-llk-harness/manifests/${VERSION}")
+          case "$status" in
+            404) echo "$PACKAGE:$VERSION is not published yet." ;;
+            200)
+              echo "::error::$PACKAGE:$VERSION is already published. Raise the VERSION file instead."
+              exit 1
+              ;;
+            *)
+              echo "::error::Could not tell whether $PACKAGE:$VERSION is published (HTTP $status)."
+              cat manifest.json
+              exit 1
+              ;;
+          esac
       - name: Publish the wheel
         shell: bash
         env:
@@ -131,11 +178,6 @@ jobs:
         run: |
           set -euo pipefail
           echo "$GH_TOKEN" | oras login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-          # A release is never replaced: suites pin a version and must keep getting the same bytes for it.
-          if oras manifest fetch "$PACKAGE:$VERSION" > /dev/null 2>&1; then
-            echo "::error::$PACKAGE:$VERSION is already published. Raise the VERSION file instead."
-            exit 1
-          fi
           cd dist
           oras push "$PACKAGE:$VERSION,latest" \
             --artifact-type application/vnd.tenstorrent.tt-llk-harness.v1 \
