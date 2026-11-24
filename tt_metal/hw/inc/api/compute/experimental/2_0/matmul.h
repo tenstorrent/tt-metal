@@ -4,6 +4,153 @@
 
 #pragma once
 
+#ifdef ARCH_QUASAR
+
+#include <cstdint>
+#include "api/compute/common_globals.h"
+#include "api/compute/experimental/2_0/internal/op_hooks.h"
+#include "api/compute/experimental/2_0/llk_operand.h"
+#include "experimental/2_0/llk_2_0.h"  // id-free Quasar LLK API
+
+namespace ckernel {
+namespace experimental {
+
+// Id-free (2.0) matmul, Quasar: same names and argument order as Blackhole (below). in0 -> SrcB, in1 -> SrcA.
+// Quasar re-inits before every op: the inits program the operands' buffer descriptors, formats and MOPs.
+
+// clang-format off
+/**
+ * Init for matmul_block, Quasar: C[rt_dim, ct_dim] += in0[rt_dim, kt_dim] x in1[kt_dim, ct_dim]. Unpack TRISC
+ * programs Unp1 (in0 -> SrcB) and Unp0 (in1 -> SrcA) buffer descriptors at the operands' bases, their formats and
+ * the matmul unpack MOP (with in1 transpose when set); math TRISC programs the ALU formats and the matmul MOP at the
+ * kernel's math fidelity. Re-init when another op ran in between or the block shape changes. No uninit. Only
+ * 16-bit float operands.
+ *
+ * | Param Type | Name      | Description                                    | Type       | Valid Range                     | Required |
+ * |------------|-----------|------------------------------------------------|------------|---------------------------------|----------|
+ * | Function   | in0 / in1 | Input operands (in0 -> SrcB, in1 -> SrcA)      | LLKOperand | N/A                             | True     |
+ * | Template   | ct_dim    | Output block columns (tiles)                   | uint32_t   | ct_dim * rt_dim <= section size | False    |
+ * | Template   | rt_dim    | Output block rows (tiles)                      | uint32_t   | ct_dim * rt_dim <= section size | False    |
+ * | Template   | kt_dim    | Inner dim (in0 columns, in1 rows) in tiles     | uint32_t   | >= 1                            | False    |
+ * | Function   | transpose | Transpose each in1 tile (e.g. Q x K^T)         | uint32_t   | 0, 1 (1: full four-face in1)    | False    |
+ */
+// clang-format on
+template <
+    std::uint32_t ct_dim = 1,
+    std::uint32_t rt_dim = 1,
+    std::uint32_t kt_dim = 1,
+    DataFormat F0,
+    TensorShape S0,
+    DataFormat F1,
+    TensorShape S1>
+ALWI void matmul_block_init(LLKOperand<F0, S0> in0, LLKOperand<F1, S1> in1, std::uint32_t transpose = 0) {
+    static_assert(
+        llk_2_0::is_supported_format(F0) && llk_2_0::is_supported_format(F1),
+        "matmul_block_init: Float16_b / Float16 only.");
+    static_assert(is_legal_tile_shape(S0) && is_legal_tile_shape(S1), "matmul_block_init: illegal tile shape.");
+    static_assert(
+        ct_dim * rt_dim <= detail::dest_section_tiles<DST_ACCUM_MODE>(), "matmul_block_init: block exceeds Dest");
+    if (transpose) {
+        UNPACK((llk_2_0::unpack_matmul_init<LLKOperand<F0, S0>::descriptor, LLKOperand<F1, S1>::descriptor, true>(
+            in0.l1_address, in1.l1_address, ct_dim, rt_dim, kt_dim)));
+    } else {
+        UNPACK((llk_2_0::unpack_matmul_init<LLKOperand<F0, S0>::descriptor, LLKOperand<F1, S1>::descriptor, false>(
+            in0.l1_address, in1.l1_address, ct_dim, rt_dim, kt_dim)));
+    }
+    MATH((llk_2_0::math_matmul_init<
+          LLKOperand<F0, S0>::descriptor,
+          LLKOperand<F1, S1>::descriptor,
+          DST_ACCUM_MODE,
+          MATH_FIDELITY>(ct_dim, rt_dim)));
+}
+
+// clang-format off
+/**
+ * Init for matmul_tiles: matmul_block_init<1, 1, 1>(in0, in1, transpose). Re-init when another op ran in between.
+ * No uninit. Only 16-bit float operands.
+ *
+ * | Param Type | Name      | Description                                    | Type       | Valid Range | Required |
+ * |------------|-----------|------------------------------------------------|------------|-------------|----------|
+ * | Function   | in0 / in1 | Input operands (in0 -> SrcB, in1 -> SrcA)      | LLKOperand | N/A         | True     |
+ * | Function   | transpose | Transpose each in1 tile (e.g. Q x K^T)         | uint32_t   | 0, 1        | False    |
+ */
+// clang-format on
+template <DataFormat F0, TensorShape S0, DataFormat F1, TensorShape S1>
+ALWI void matmul_init(LLKOperand<F0, S0> in0, LLKOperand<F1, S1> in1, std::uint32_t transpose = 0) {
+    matmul_block_init<1, 1, 1>(in0, in1, transpose);
+}
+
+// clang-format off
+/**
+ * Tile matmul, Quasar: Dest[idst] += in0[in0_tile_index] x in1[in1_tile_index]. Tile i of an operand is L1 tile
+ * entry_idx + i * stride_tiles of its buffer. To accumulate over k, call it kt times into the same idst. Pair with
+ * matmul_init.
+ *
+ * | Param Type | Name                            | Description                     | Type       | Valid Range            | Required |
+ * |------------|---------------------------------|---------------------------------|------------|------------------------|----------|
+ * | Function   | in0 / in1                       | Input operands                  | LLKOperand | N/A                    | True     |
+ * | Function   | in0_tile_index / in1_tile_index | Tile indices within in0 / in1   | uint32_t   | N/A                    | True     |
+ * | Function   | idst                            | Dest tile index for the result  | uint32_t   | < Dest tiles / section | True     |
+ */
+// clang-format on
+template <DataFormat F0, TensorShape S0, DataFormat F1, TensorShape S1>
+ALWI void matmul_tiles(
+    LLKOperand<F0, S0> in0,
+    LLKOperand<F1, S1> in1,
+    std::uint32_t in0_tile_index,
+    std::uint32_t in1_tile_index,
+    std::uint32_t idst) {
+    UNPACK((llk_2_0::unpack_matmul<LLKOperand<F0, S0>::descriptor, LLKOperand<F1, S1>::descriptor>(
+        in0.l1_address, in1.l1_address, in0.tile(in0_tile_index), in1.tile(in1_tile_index), 1, 1, 1)));
+    MATH((llk_2_0::math_matmul_tile(idst)));
+}
+
+// clang-format off
+/**
+ * Block matmul step, Quasar: Dest[0, ct_dim * rt_dim) += in0 column block x in1 row block for one k: in0 tiles
+ * in0_tile_index + r * kt_dim (r < rt_dim), in1 tiles in1_tile_index + c (c < ct_dim). For a full
+ * C[rt, ct] = in0[rt, kt] x in1[kt, ct] call it for k < kt_dim with in0_tile_index = k, in1_tile_index = k * ct_dim
+ * inside one section. Quasar: idst must be 0 (the block LLK writes from Dest tile 0; LLK_ASSERT). The tiles inside
+ * a block step are contiguous, so both operands must have stride_tiles == 1 unless the block is 1x1 (asserted).
+ * Pair with matmul_block_init of the same shape. No tails: the kernel picks a block that divides the output.
+ *
+ * | Param Type | Name                            | Description                               | Type       | Valid Range                     | Required |
+ * |------------|---------------------------------|-------------------------------------------|------------|---------------------------------|----------|
+ * | Template   | ct_dim / rt_dim                 | Output block columns / rows (tiles)       | uint32_t   | ct_dim * rt_dim <= section size | True     |
+ * | Template   | kt_dim                          | Inner dim in tiles (in0 row pitch)        | uint32_t   | >= 1                            | True     |
+ * | Function   | in0 / in1                       | Input operands                            | LLKOperand | N/A                             | True     |
+ * | Function   | in0_tile_index / in1_tile_index | First tiles of this k step                | uint32_t   | N/A                             | True     |
+ * | Function   | idst                            | Dest tile of the first result tile        | uint32_t   | 0                               | True     |
+ */
+// clang-format on
+template <
+    std::uint32_t ct_dim,
+    std::uint32_t rt_dim,
+    std::uint32_t kt_dim,
+    DataFormat F0,
+    TensorShape S0,
+    DataFormat F1,
+    TensorShape S1>
+ALWI void matmul_block(
+    LLKOperand<F0, S0> in0,
+    LLKOperand<F1, S1> in1,
+    std::uint32_t in0_tile_index,
+    std::uint32_t in1_tile_index,
+    [[maybe_unused]] std::uint32_t idst) {
+    LLK_ASSERT(idst == 0, "matmul_block: Quasar block matmul writes from Dest tile 0");
+    LLK_ASSERT(
+        (ct_dim == 1 && rt_dim == 1) || (in0.stride_tiles == 1 && in1.stride_tiles == 1),
+        "matmul_block: a block step needs contiguous operand tiles");
+    UNPACK((llk_2_0::unpack_matmul<LLKOperand<F0, S0>::descriptor, LLKOperand<F1, S1>::descriptor>(
+        in0.l1_address, in1.l1_address, in0.tile(in0_tile_index), in1.tile(in1_tile_index), ct_dim, rt_dim, kt_dim)));
+    MATH((llk_2_0::math_matmul_block(ct_dim, rt_dim)));
+}
+
+}  // namespace experimental
+}  // namespace ckernel
+
+#else  // Blackhole
+
 #include <cstdint>
 #include "api/compute/common_globals.h"
 #include "api/compute/experimental/2_0/llk_operand.h"
@@ -79,24 +226,25 @@ ALWI void matmul_tiles(
 /**
  * Short init for matmul_block. Configures the unpacker + math engine for block matmul. Pair with matmul_block.
  * compute_kernel_hw_startup<SrcOrder::Reverse>(in0, in1, out) must already have run. in0 -> SrcB, in1 -> SrcA.
- * ct_dim / rt_dim / kt_dim are the output-block geometry (see matmul_block) and are RUNTIME args; the register
+ * ct_dim / rt_dim / kt_dim are the output-block geometry (see matmul_block), compile-time; the register
  * formats + tile geometry are FORMAT-FREE and come from the two operand descriptors.
  *
  * | Function | in0 / in1 | Input operands (in0 -> SrcB, in1 -> SrcA) | LLKOperand | | True |
+ * | Template | ct_dim    | Output block column dim (== B col dim)    | uint32_t   | | False |
+ * | Template | rt_dim    | Output block row dim (== A row dim)       | uint32_t   | | False |
+ * | Template | kt_dim    | Inner dim (== A col dim)                  | uint32_t   | | False |
  * | Function | transpose | Transpose flag for tiles in B             | uint32_t   | | False |
- * | Function | ct_dim    | Output block column dim (== B col dim)    | uint32_t   | | False |
- * | Function | rt_dim    | Output block row dim (== A row dim)       | uint32_t   | | False |
- * | Function | kt_dim    | Inner dim (== A col dim)                  | uint32_t   | | False |
  */
 // clang-format on
-template <DataFormat F0, TensorShape S0, DataFormat F1, TensorShape S1>
-ALWI void matmul_block_init(
-    LLKOperand<F0, S0> /*in0*/,
-    LLKOperand<F1, S1> /*in1*/,
-    std::uint32_t transpose = 0,
+template <
     std::uint32_t ct_dim = 1,
     std::uint32_t rt_dim = 1,
-    std::uint32_t kt_dim = 1) {
+    std::uint32_t kt_dim = 1,
+    DataFormat F0,
+    TensorShape S0,
+    DataFormat F1,
+    TensorShape S1>
+ALWI void matmul_block_init(LLKOperand<F0, S0> /*in0*/, LLKOperand<F1, S1> /*in1*/, std::uint32_t transpose = 0) {
     static_assert(is_legal_tile_shape(S0), "matmul_block_init: illegal tile shape for in0.");
     static_assert(is_legal_tile_shape(S1), "matmul_block_init: illegal tile shape for in1.");
     MATH((llk_math_matmul_init<
@@ -120,21 +268,25 @@ ALWI void matmul_block_init(
  * | Function | in0 / in1                       | Input operands (in0 -> SrcB, in1 -> SrcA)    | LLKOperand | | True |
  * | Function | in0_tile_index / in1_tile_index | Base tile indices within in0 / in1           | uint32_t   | | True |
  * | Function | idst                            | DST register index for the first result tile | uint32_t   | | True |
- * | Function | ct_dim                          | Output block column dim (== B col dim)       | uint32_t   | | True |
- * | Function | rt_dim                          | Output block row dim (== A row dim)          | uint32_t   | | True |
- * | Function | kt_dim                          | Inner dim (== A col dim)                     | uint32_t   | | True |
+ * | Template | ct_dim                          | Output block column dim (== B col dim)       | uint32_t   | | True |
+ * | Template | rt_dim                          | Output block row dim (== A row dim)          | uint32_t   | | True |
+ * | Template | kt_dim                          | Inner dim (== A col dim)                     | uint32_t   | | True |
  */
 // clang-format on
-template <DataFormat F0, TensorShape S0, DataFormat F1, TensorShape S1>
+template <
+    std::uint32_t ct_dim,
+    std::uint32_t rt_dim,
+    std::uint32_t kt_dim,
+    DataFormat F0,
+    TensorShape S0,
+    DataFormat F1,
+    TensorShape S1>
 ALWI void matmul_block(
     LLKOperand<F0, S0> in0,
     LLKOperand<F1, S1> in1,
     std::uint32_t in0_tile_index,
     std::uint32_t in1_tile_index,
-    std::uint32_t idst,
-    std::uint32_t ct_dim,
-    std::uint32_t rt_dim,
-    std::uint32_t kt_dim) {
+    std::uint32_t idst) {
     static_assert(is_legal_tile_shape(S0), "matmul_block: illegal tile shape for in0.");
     static_assert(is_legal_tile_shape(S1), "matmul_block: illegal tile shape for in1.");
     UNPACK((llk_unpack_AB_matmul<LLKOperand<F0, S0>::descriptor, LLKOperand<F1, S1>::descriptor>(
@@ -145,3 +297,5 @@ ALWI void matmul_block(
 
 }  // namespace experimental
 }  // namespace ckernel
+
+#endif  // ARCH_QUASAR
