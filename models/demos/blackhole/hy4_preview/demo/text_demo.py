@@ -72,7 +72,8 @@ def text_mode(ctx):
             )
         except Exception:  # noqa: BLE001
             x = tok.apply_chat_template([{"role": "user", "content": p}], add_generation_prompt=True, tokenize=True)
-        ids.append(list(x["input_ids"] if isinstance(x, dict) else x))
+        x = x["input_ids"] if hasattr(x, "keys") else x
+        ids.append([int(t) for t in x])
     S.release_all(ctx.eng)
     first, md5, dt, _ = S.prefill(ctx, {r: ids[r] for r in range(4)})
     n = max(len(i) for i in ids)
