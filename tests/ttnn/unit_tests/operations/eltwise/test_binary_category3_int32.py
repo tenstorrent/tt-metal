@@ -51,9 +51,12 @@ fmod are integer kernels and exact, as is torch.floor_divide; INT32_MIN / -1
 wraps to INT32_MIN.
 
 The int32 divide kernel loads its operands in sign-magnitude form, where
-INT32_MIN (0x80000000) is -0, so INT32_MIN on either side of divide and
-div_no_nan is read as zero; those pairs are pinned by strict xfails. The
-integer rounding modes, remainder and fmod are correct at INT32_MIN.
+INT32_MIN (0x80000000) is -0, so INT32_MIN / b gives 0 and a / INT32_MIN
+gives NaN on Blackhole and ±inf on Wormhole (NaN for 0 / INT32_MIN) in
+divide and div_no_nan; those pairs are pinned by strict xfails. The
+integer rounding modes, remainder and fmod are correct at INT32_MIN, as is
+div_no_nan with a scalar divisor, which multiplies by the float32 reciprocal
+of the scalar instead of running the divide kernel.
 
 Integer division by zero raises in torch. On the device the float32 divide
 gives ±inf and NaN as for float32 operands (pinned below); the rounding
@@ -76,12 +79,15 @@ Accuracy criteria
 |                       |                               | quotient for          |
 |                       |                               | abs(a), abs(b) ≤ 2^24 |
 |                       | b = 0                         | ±inf, NaN for 0 / 0   |
-|                       | an INT32_MIN operand          | strict xfail          |
+|                       | an INT32_MIN operand, and     | strict xfail          |
+|                       | INT32_MIN / 0                 |                       |
 | divide trunc / floor, | b ≠ 0                         | exact                 |
 | remainder, fmod       |                               |                       |
 | div_no_nan            | no INT32_MIN                  | ULP ≤ 1 vs torch.div, |
 |                       |                               | 0 where b = 0         |
-|                       | an INT32_MIN operand          | strict xfail          |
+|                       | an INT32_MIN tensor operand   | strict xfail          |
+| div_no_nan (scalar)   | full grid, DIVISOR_SCALARS    | ULP ≤ 1 vs torch.div, |
+|                       | and 0                         | 0 for scalar 0        |
 | pow                   | exponent 0, 1, 2, 3, 5, 16,   | exact (wraps)         |
 |                       | 31, 32                        |                       |
 """
@@ -193,6 +199,27 @@ def test_int32_divide_by_zero(device):
     strict=True,
     reason="the int32 divide kernel loads its operands as sign-magnitude, where INT32_MIN (0x80000000) is -0",
 )
+@pytest.mark.parametrize("divisor", ["tensor", "scalar"])
+def test_int32_divide_int_min_by_zero(device, divisor):
+    """INT32_MIN divided by a zero tensor or the scalar 0.
+
+    | Input         | Check | Reason                                         |
+    |---------------|-------|------------------------------------------------|
+    | INT32_MIN / 0 | -inf  | INT32_MIN is negative; the device reads it as  |
+    |               |       | -0 and returns NaN, as for 0 / 0               |
+    """
+    input_a = torch.full((32, 32), INT32_MIN, dtype=torch.int32)
+    input_b = torch.zeros_like(input_a) if divisor == "tensor" else 0
+
+    result = run_int32_binary(device, ttnn.divide, input_a, input_b)
+    assert result.dtype == torch.float32, f"expected a float32 result, got {result.dtype}"
+    assert torch.isneginf(result).all(), f"INT32_MIN / 0 gave {result.flatten()[0].item()!r}, expected -inf"
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="the int32 divide kernel loads its operands as sign-magnitude, where INT32_MIN (0x80000000) is -0",
+)
 @pytest.mark.parametrize("operand", ["dividend", "divisor"])
 def test_int32_divide_int_min(device, operand):
     """divide with INT32_MIN as the dividend or the divisor.
@@ -200,8 +227,13 @@ def test_int32_divide_int_min(device, operand):
     | Input            | Check                | Reason                       |
     |------------------|----------------------|------------------------------|
     | INT32_MIN / b    | ULP ≤ 1 vs torch.div | the device returns 0         |
-    | a / INT32_MIN    | ULP ≤ 1 vs torch.div | the device returns ±inf, and |
-    |                  |                      | NaN for 0 / INT32_MIN        |
+    | a / INT32_MIN    | ULP ≤ 1 vs torch.div | the device returns NaN on    |
+    |                  |                      | Blackhole: the integer b ≠ 0 |
+    |                  |                      | guard passes, so the         |
+    |                  |                      | residual step runs on        |
+    |                  |                      | 1 / -0 = -inf. On Wormhole   |
+    |                  |                      | the guard skips it, giving   |
+    |                  |                      | ±inf (NaN for 0 / INT32_MIN) |
     """
     values = _nonzero(generate_int32_binary_grid(include_int_min=False))
     int_min = torch.full_like(values, INT32_MIN)
@@ -279,16 +311,20 @@ def test_int32_div_no_nan(device):
     assert_equal(torch.zeros_like(result[input_b == 0]), result[input_b == 0])
 
 
-@pytest.mark.parametrize("scalar", [0] + [s for s in DIVISOR_SCALARS if s != INT32_MIN])
+@pytest.mark.parametrize("scalar", [0] + DIVISOR_SCALARS)
 def test_int32_div_no_nan_scalar(device, scalar):
-    """The grid without INT32_MIN against an int scalar.
+    """The grid against an int scalar.
 
     | Input range   | Check                | Reason                         |
     |---------------|----------------------|--------------------------------|
-    | scalar ≠ 0    | ULP ≤ 1 vs torch.div | the divide kernel              |
+    | scalar ≠ 0    | ULP ≤ 1 vs torch.div | a multiply by the float32      |
+    |               |                      | reciprocal of the scalar, not  |
+    |               |                      | the int32 divide kernel, so    |
+    |               |                      | INT32_MIN is correct on either |
+    |               |                      | side                           |
     | scalar = 0    | exact 0              | every element                  |
     """
-    input_a = scalar_rows(generate_int32_binary_grid(include_int_min=False))
+    input_a = scalar_rows(generate_int32_binary_grid())
 
     result = run_int32_binary(device, ttnn.div_no_nan, input_a, scalar)
     if scalar == 0:
@@ -310,8 +346,9 @@ def test_int32_div_no_nan_int_min(device, operand):
     | Input            | Check                | Reason                       |
     |------------------|----------------------|------------------------------|
     | INT32_MIN / b    | ULP ≤ 1 vs torch.div | the device returns 0         |
-    | a / INT32_MIN    | ULP ≤ 1 vs torch.div | the device returns 0 on      |
-    |                  |                      | Wormhole                     |
+    | a / INT32_MIN    | ULP ≤ 1 vs torch.div | the device returns NaN, or 0 |
+    |                  |                      | on Wormhole where eqz(b) is  |
+    |                  |                      | true                         |
     """
     values = _nonzero(generate_int32_binary_grid(include_int_min=False))
     int_min = torch.full_like(values, INT32_MIN)
