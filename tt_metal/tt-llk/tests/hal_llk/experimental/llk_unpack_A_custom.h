@@ -37,7 +37,8 @@ inline void _llk_unpack_A_custom_(const std::uint32_t address)
     // cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(1); // Disable haloize mode
 
     // Program srcA base address
-    volatile std::uint32_t tt_reg_ptr *cfg = hcfg::detail::state_cfg_bank(); // get pointer to registers for current state ID
+    // Production's get_cfg_pointer (RISC pointer select only), so the per-tile branch layout stays as production's.
+    volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer(); // get pointer to registers for current state ID
 
     // Wait for free context
     hal_port::wait_for_next_context(2);
