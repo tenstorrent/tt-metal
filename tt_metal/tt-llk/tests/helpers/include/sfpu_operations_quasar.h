@@ -348,7 +348,7 @@ void init_unary_sfpu_operation_quasar()
     }
     else if constexpr (OPERATION == SfpuType::mish)
     {
-        mish_init<APPROX>();
+        mish_init<APPROX, is_fp32_dest_acc_en>();
     }
     else if constexpr (OPERATION == SfpuType::hardshrink)
     {

@@ -544,6 +544,12 @@ def prepare_inputs_for_operation(
         max_val = 10.0
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
         src_A = src_A.to(torch_format)
+    elif mathop == MathOperation.Mish:
+        # [-20, 10] covers both forms and the x >= 8 saturation.
+        min_val = -20.0
+        max_val = 10.0
+        src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
+        src_A = src_A.to(torch_format)
     elif mathop == MathOperation.Silu:
         # Scale to range [-10, 10] for SiLU (avoid overflow with negative exponential)
         min_val = -10.0
@@ -1585,6 +1591,7 @@ _APPROX_MATHOPS = (
     MathOperation.Reciprocal,
     MathOperation.Rsqrt,
     MathOperation.Softsign,
+    MathOperation.Mish,
 )
 _QSR_EXTRA_MATHOPS = (
     MathOperation.Relu,
@@ -1651,6 +1658,7 @@ OP_CONFIGS = [
     OpConfig(MathOperation.Silu, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     # Reaches hardmish through SFPU_UNARY_INIT(hardmish), the Compute API's hardmish_tile_init.
     OpConfig(MathOperation.Hardmish, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    OpConfig(MathOperation.Mish, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Clamp, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Neg, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     # p = 0 only (golden x * 2.0); seeding is test_dropout_reseed_quasar, p = 1 the fuser YAMLs.
