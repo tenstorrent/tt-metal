@@ -3498,8 +3498,8 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         for (auto& kernels : kernels_) {
             for (auto& [id, kernel] : kernels) {
                 // A kernel without a build task, or with precompiled binaries, is left to the program that uses it.
-                auto task = kernel->precompiled_config().has_value() ? std::function<void()>{}
-                                                                     : kernel->build_task(device);
+                auto task =
+                    kernel->precompiled_config().has_value() ? std::function<void()>{} : kernel->build_task(device);
                 if (!task) {
                     continue;
                 }

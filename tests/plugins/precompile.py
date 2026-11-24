@@ -89,7 +89,7 @@ def _stand_ins():
         except ImportError:
             continue
         for name, value in vars(module).items():
-            if callable(value) and name.startswith(tuple(prefixes.split())) and getattr(value, "__module__", "") == module.__name__:
+            if name.startswith(tuple(prefixes.split())) and getattr(value, "__module__", "") == module.__name__:
                 stand_ins[id(value)] = _passed
     return stand_ins
 
