@@ -32,21 +32,21 @@ using namespace ckernel::packer;
 /**
  * @brief Configure the ADDR_MOD slots used by the untilize pack MOP.
  *
- * ADDR_MOD_0 keeps y_src on the current Dest face-row (used by every inner-loop PACR); ADDR_MOD_1
- * advances y_src by one row and is used by the row-closing PACR.
+ * ADDR_MOD_0 steps z_src to the next tile (used by every inner-loop PACR); ADDR_MOD_1 advances y_src by one
+ * row and clears z_src back to the first tile of the block (used by the row-closing PACR).
  */
 inline void _llk_pack_untilize_configure_addrmod_()
 {
-    // In DST_STRIDED_MODE, y_src tracks the row within each Dest face and W tracks
-    // the tile within Dest.
-    // ADDR_MOD_0: used by every inner-loop PACR. y_src stays on the current row;
-    // W advances via INCADCZW between tiles.
-    hal_port::set_addr_mod_pack<hal::cfg::Sec::S0, 0 /*y_src_incr*/, 0 /*y_src_clr*/, 0 /*y_src_cr*/, 0 /*z_src_incr*/, 0 /*z_src_clr*/>();
+    // In DST_STRIDED_MODE, Y tracks the Dest row (tile offset + row within the face), Z the tile within the block
+    // (Z stride = one tile slot) and W the face pair (W stride = two faces); see _llk_pack_untilize_init_.
+    // Production steps the tile with an INCADCZW of W per tile; only Y and Z can be stepped by a PACR's ADDR_MOD, so
+    // the Z and W roles are swapped and the PACR itself moves to the next tile.
+    // ADDR_MOD_0: used by every inner-loop PACR. z_src.incr=1 moves to the next tile.
+    hal_port::set_addr_mod_pack<hal::cfg::Sec::S0, 0 /*y_src_incr*/, 0 /*y_src_clr*/, 0 /*y_src_cr*/, 1 /*z_src_incr*/, 0 /*z_src_clr*/>();
 
-    // ADDR_MOD_1: used by the row-closing PACR (set_last_inner_loop_instr).
-    // y_src.incr=1 advances to the next Dest face-row after packing, folding the
-    // explicit INCADCXY end_op into the PACR itself.
-    hal_port::set_addr_mod_pack<hal::cfg::Sec::S1, 1 /*y_src_incr*/, 0 /*y_src_clr*/, 0 /*y_src_cr*/, 0 /*z_src_incr*/, 0 /*z_src_clr*/>();
+    // ADDR_MOD_1: used by the row-closing PACR (the last-inner op). y_src.incr=1 advances to the next Dest row and
+    // z_src.clr=1 returns to the first tile of the block for the next row.
+    hal_port::set_addr_mod_pack<hal::cfg::Sec::S1, 1 /*y_src_incr*/, 0 /*y_src_clr*/, 0 /*y_src_cr*/, 0 /*z_src_incr*/, 1 /*z_src_clr*/>();
 }
 
 /*
@@ -105,10 +105,6 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
     using hal::pack::DestAccess;
     using hal::pack::TileBoundary;
 
-    // w cnt points to the next tile: INCADCZW(PAC, 0, 0, 1, 0)
-    constexpr std::uint32_t next_tile =
-        adc::AddrCounter {.action = adc::Action::Increment, .channel0 = {.w = 1}}.for_clients<adc::Client::Packers>().operation();
-
     DataTransfer transfer {
         .address_modifier = ADDR_MOD_0,
         .interfaces       = static_cast<std::uint8_t>(PACK_INTF_SEL),
@@ -117,18 +113,10 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
     const std::uint32_t row = transfer.get_operation();
 
     /*
-    Since there are two inner loop operations, the instruction set by set_last_inner_loop_instr
-    will replace the second inner loop operation (in the last iteration, call the PACR instruction
-    with the Last bit set to 1 instead of 0 to close the row).
-    The W counter CR shadow (W_Cr) is established by the SETADC of W in _llk_pack_untilize_
-    before run() is called; the SETADCZW there only initializes Z.
-    ADDRCRZW with increment 0 resets W to the stored W_Cr value at the start of each outer loop
-    iteration (row), without needing tile_dst_offset baked into this MOP template.
+    The inner loop has one op, the PACR. Each inner PACR uses ADDR_MOD_0 (Z + 1: next tile); the last one of every row
+    is replaced by the row-closing PACR (Last = 1, ADDR_MOD_1: Y + 1, Z = 0), so no start op and no per-tile counter
+    instruction is needed: N + 2 slots per row instead of production's 2N + 3.
     */
-    // W = W_Cr (restore W to start of block): ADDRCRZW(PAC, 0, 0, 0, 0, 0b0010 /*CH0_W*/)
-    constexpr std::uint32_t restore_w =
-        adc::AddrCounter {.action = adc::Action::AdvanceAndReset, .channel0 = {.w = 0}}.for_clients<adc::Client::Packers>().operation();
-
     constexpr hal::replay::BufferRange l1_advance {ckernel::packer::replay_buf_offset, 2};
     hal::replay::record<l1_advance>(
         []
@@ -143,7 +131,7 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
 
     /*
     Close the row in the block by setting the Last bit to 1 in the last inner loop instruction.
-    Use ADDR_MOD_1 so the packer auto-advances y_src by 1 (next row in face) post-PACR.
+    Use ADDR_MOD_1 so the packer advances y_src by 1 (next row) and returns z_src to the first tile post-PACR.
     */
     transfer.address_modifier        = ADDR_MOD_1;
     transfer.boundary                = TileBoundary::Last;
@@ -151,9 +139,8 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
 
     // After the inner loop finishes, update L1 address (replay). The "advance Dst face-row" is folded into the
     // row-closing PACR's AddrMod (ADDR_MOD_1), so no INCADCXY end_op is needed. The explicit NOP second end op keeps
-    // production's MOP_CFG store (end_op1 = NOP) unchanged.
-    const auto config = loop(MOP_OUTER_LOOP, restore_w, loop(MOP_INNER_LOOP, next_tile, row), hal::replay::get_operation<l1_advance>(), TT_OP_NOP)
-                            .patch(last_outer, last_loop_op);
+    // production's MOP_CFG store (end_op1 = NOP).
+    const auto config = loop(MOP_OUTER_LOOP, loop(MOP_INNER_LOOP, row), hal::replay::get_operation<l1_advance>(), TT_OP_NOP).patch(last_outer, last_loop_op);
     // The last-inner op is never issued with an outer count of 1 (HAL requires the patch to be skipped then).
     program(MOP_OUTER_LOOP > 1 ? config.patch(last_inner, last_loop_op) : config);
 }
@@ -161,7 +148,7 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
 /**
  * @brief Initialize the packer for an untilize pack op.
  *
- * Configures ADDR_MODs and the untilize MOP, programs the Z stride, and stores the per-row L1
+ * Configures ADDR_MODs and the untilize MOP, programs the Z and W strides, and stores the per-row L1
  * destination address offset into a scratch config slot so the MOP can advance the L1 address per row.
  *
  * @tparam block_ct_dim: Number of input tiles per block.
@@ -202,11 +189,16 @@ inline void _llk_pack_untilize_init_(
 
     _llk_pack_untilize_mop_config_<block_ct_dim, narrow_row, dense>(face_r_dim, num_faces);
 
-    // Set CH0 Zstride = 2x16x16 faces, .z_src = {.incr = 1} jumps 2 faces
-    std::uint32_t x_stride       = datum_size_in_bytes(pack_src_format);
-    std::uint32_t y_stride       = FACE_C_DIM * x_stride;
-    const std::uint32_t z_stride = 2 * face_r_dim * y_stride;
-    hal::cfg::write<hal::cfg::Access::TensixCfgUnit, hal::cfg::Packer[0].AddrCtrl[hal::cfg::PackerReg::Reg0].Zstride, hal::cfg::Sec::S0>(z_stride);
+    // CH0 Zstride = one 32x32 tile slot in Dest (ADDR_MOD_0 z_src.incr steps to the next tile), CH0 Wstride = 2 faces
+    // (an INCADCZW of W moves to the bottom face pair). Production has these two roles the other way round. Both
+    // fields share one CFG word: one grouped write.
+    constexpr auto ch0           = hal::cfg::Packer[0].AddrCtrl[hal::cfg::PackerReg::Reg0];
+    const std::uint32_t x_stride = datum_size_in_bytes(pack_src_format);
+    const std::uint32_t y_stride = FACE_C_DIM * x_stride;
+    const std::uint32_t z_stride = TILE_NUM_FACES * FACE_R_DIM * y_stride;
+    const std::uint32_t w_stride = 2 * face_r_dim * y_stride;
+    hal::cfg::write<hal::cfg::Access::TensixCfgUnit>(
+        hal::cfg::set<ch0.Zstride, hal::cfg::Sec::S0>(z_stride), hal::cfg::set<ch0.Wstride, hal::cfg::Sec::S0>(w_stride));
 
     std::uint32_t output_addr_offset;
     if constexpr (narrow_row)
@@ -246,9 +238,9 @@ inline void _llk_pack_untilize_init_(
 /**
  * @brief Untilize-pack one block of tiles from the destination register to L1.
  *
- * Programs the L1 destination address and the packer Z/W/XY counters (establishing the W_Cr shadow so
- * each MOP row restores W), then runs the MOP once per face group, advancing the Z counter between
- * face groups and resetting counters afterward.
+ * Programs the L1 destination address and the packer counters (Y = first Dest row of the block, Z = 0 for the
+ * first tile, W = 0 for the top face pair), then runs the MOP once per face pair, advancing W and rewinding Y between
+ * the pairs, and leaves Z = 0, W = tile_dst_offset and Y = 0 afterward.
  *
  * @tparam block_ct_dim: Number of input tiles per block.
  * @tparam full_ct_dim: Total number of input tiles across all blocks.
@@ -286,47 +278,57 @@ inline void _llk_pack_untilize_(const std::uint32_t address, const std::uint32_t
     const std::uint32_t num_faces_per_rdim_tile = (num_faces > 2) ? 2 : 1;
 
     const std::uint32_t tile_dst_offset = tile_dst_ct_offset + tile_dst_rt_offset;
-    // Set W = (15 + tile_dst_offset) & 0xF, establishing the W_Cr shadow so that ADDRCRZW in the
-    // MOP START_OP resets W to this value at the start of each outer loop iteration (row).
-    // The first INCADCZW in the inner loop then advances W to tile_dst_offset for the first tile.
-    // SETADCZW's Ch0_W field is only 3 bits (0-7), so SETADC is used to carry the full 4-bit W value.
-    namespace adc = hal::counters::adc;
-    // reset ch0 z counter: SETADCZW(PAC, mask 0b0001). A single counter, so the HAL planner emits SETADC(PAC, CH_0, Z, 0).
-    adc::set<adc::AddrCounter {.channel0 = {.z = 0}}.for_clients<adc::Client::Packers>()>();
-    // set ch0 w counter, establishing W_Cr: SETADC(PAC, CH_0, SET_W, (15 + tile_dst_offset) & 0xF), the same instruction
-    // set_dst_write_addr issues.
-    set_dst_write_addr((15 + tile_dst_offset) & 0xF);
-    // reset ch0 xy counters: SETADCXY(PAC, mask 0b0011)
-    adc::set<adc::AddrCounter {.channel0 = {.x = 0, .y = 0}}.for_clients<adc::Client::Packers>()>();
+    // The block's first Dest row: the tile offset is carried by Y (Ystride = one Dest row), because Z now steps the
+    // tiles inside the block and W the face pairs. Y is 13 bits: tile_dst_offset <= 15 gives at most 991 after the
+    // last row.
+    const std::uint32_t block_row  = tile_dst_offset * (TILE_NUM_FACES * FACE_R_DIM);
+    namespace adc                  = hal::counters::adc;
+    constexpr std::uint8_t packers = adc::AddrCounter {}.for_clients<adc::Client::Packers>().clients;
+    // SETADC(PAC, CH_0, Y, block_row) with the single-counter encoder set_dst_write_addr uses: the public runtime
+    // adc::set() made GCC stop inlining this function into the caller's loop, which costs the RISC-bound short blocks
+    // ~16 cycles per call.
+    // HAL-GAP: no public runtime encoder for a single address counter; uses hal::counters::adc::detail::single.
+    const std::uint32_t set_block_row = adc::detail::single(packers, false /*xy*/, 1 /*channel 0, Y*/, block_row);
+    // ch0 Z = 0 (first tile), ch0 W = 0 (top face pair), ch1 Z = 0: SETADCZW(PAC, mask 0b0111).
+    adc::set<adc::AddrCounter {.channel0 = {.z = 0, .w = 0}, .channel1 = {.z = 0}}.for_clients<adc::Client::Packers>()>();
+    // ch0 X = 0: SETADC(PAC, CH_0, X, 0).
+    adc::set<adc::AddrCounter {.channel0 = {.x = 0}}.for_clients<adc::Client::Packers>()>();
+    // ch0 Y = first Dest row of the block: SETADC(PAC, CH_0, Y, block_row).
+    TT_INSN(set_block_row);
 
     // Iterate over top, then over bottom faces in the block (if num_faces > 2)
     for (std::uint32_t face = 0; face < num_faces_per_rdim_tile; face++)
     {
         hal::mop::Runner<hal::mop::MopTemplate::Template1>::run();
 
-        // z cnt increments by 2xface_r_dimxFACE_C_DIM: INCADCZW(PAC, 0, 0, 0, 1)
-        adc::set<adc::AddrCounter {.action = adc::Action::Increment, .channel0 = {.z = 1}}.for_clients<adc::Client::Packers>()>();
-        // reset ch0_y counters: SETADCXY(PAC, mask 0b0010). A single counter, so the HAL planner emits SETADC(PAC, CH_0, Y, 0).
-        adc::set<adc::AddrCounter {.channel0 = {.y = 0}}.for_clients<adc::Client::Packers>()>();
+        // next face pair: INCADCZW(PAC, 0, 0, 1, 0). Z is already 0: the row-closing PACR cleared it.
+        adc::set<adc::AddrCounter {.action = adc::Action::Increment, .channel0 = {.w = 1}}.for_clients<adc::Client::Packers>()>();
+        // rewind ch0 Y to the block's first row: SETADC(PAC, CH_0, Y, block_row).
+        TT_INSN(set_block_row);
     }
 
-    // reset z counters: SETADCZW(PAC, mask 0b0101)
-    adc::set<adc::AddrCounter {.channel0 = {.z = 0}, .channel1 = {.z = 0}}.for_clients<adc::Client::Packers>()>();
-    set_dst_write_addr(tile_dst_offset);             // reset w counter
+    // Leave production's final state: Z = 0 (cleared by the last PACR), Y = 0, W = tile_dst_offset.
+    // reset ch0_y counter: SETADC(PAC, CH_0, Y, 0).
+    adc::set<adc::AddrCounter {.channel0 = {.y = 0}}.for_clients<adc::Client::Packers>()>();
+    set_dst_write_addr(tile_dst_offset); // reset w counter
 }
 
 /**
- * @brief Restore the packer Z stride after an untilize pack op.
+ * @brief Restore the packer Z and W strides after an untilize pack op.
  *
- * Stalls on the pack pipe and reprograms the Z stride to its default (single face) value, undoing the
- * strided-mode stride set in @ref _llk_pack_untilize_init_.
+ * Stalls on the pack pipe and reprograms the Z stride to its default (single face) value and the W stride to its
+ * default (one tile) value, undoing the strides set in @ref _llk_pack_untilize_init_.
  *
- * @param pack_src_format: Source (dest register) data format used to size the default Z stride.
+ * @param pack_src_format: Source (dest register) data format used to size the default Z and W strides.
  * @note Pairs with @ref _llk_pack_untilize_init_.
  */
 inline void _llk_pack_untilize_uninit_(const std::uint32_t pack_src_format)
 {
     hal::sync::wait::stall<hal::sync::StallTarget::Config, hal::sync::StallCondition::PackerIdle>();
+    constexpr auto ch0           = hal::cfg::Packer[0].AddrCtrl[hal::cfg::PackerReg::Reg0];
     const std::uint32_t z_stride = SCALE_DATUM_SIZE(pack_src_format, FACE_R_DIM * FACE_C_DIM);
-    hal::cfg::write<hal::cfg::Access::TensixCfgUnit, hal::cfg::Packer[0].AddrCtrl[hal::cfg::PackerReg::Reg0].Zstride, hal::cfg::Sec::S0>(z_stride);
+    // W stride as set_packer_strides programs it (the init moved the face-pair stride into W).
+    const std::uint32_t w_stride = TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * datum_size_in_bytes(pack_src_format);
+    hal::cfg::write<hal::cfg::Access::TensixCfgUnit>(
+        hal::cfg::set<ch0.Zstride, hal::cfg::Sec::S0>(z_stride), hal::cfg::set<ch0.Wstride, hal::cfg::Sec::S0>(w_stride));
 }
