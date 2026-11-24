@@ -54,6 +54,9 @@ TEST_F(MockDeviceAPINightlyFixture, NIGHTLY_SwitchFromMockToRealHardwareWithDevi
 }
 
 TEST_F(MockDeviceAPINightlyFixture, NIGHTLY_SwitchFromRealToMockHardware) {
+    if (std::getenv("TT_METAL_SIMULATOR") != nullptr) {
+        GTEST_SKIP() << "Needs physical hardware: TT_METAL_SIMULATOR is set so the 'Real' hardware is the simulator.";
+    }
     // Skip if no real hardware available
     tt::ARCH detected_arch = get_physical_architecture();
     if (detected_arch == tt::ARCH::Invalid) {

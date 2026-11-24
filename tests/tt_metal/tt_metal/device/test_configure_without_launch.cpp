@@ -20,6 +20,8 @@
 #include <tt-metalium/execution/slow_dispatch.hpp>
 
 #include "device_fixture.hpp"
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "impl/program/slow_dispatch.hpp"
 #include "distributed/mesh_device_impl.hpp"
 
@@ -29,7 +31,7 @@ namespace {
 
 constexpr uint32_t MARKER = 0xC0FFEE01;
 // One data-movement kernel that writes its second runtime arg to the L1 address in its first.
-constexpr const char* MARKER_KERNEL = "tests/tt_metal/tt_metal/test_kernels/misc/write_l1_marker.cpp";
+constexpr const char* MARKER_KERNEL = "tests/tt_metal/tt_metal/test_kernels/misc/write_l1_marker_named_args.cpp";
 
 uint32_t read_word(IDevice* device, const CoreCoord& core, uint32_t addr) {
     std::vector<uint32_t> words;
@@ -49,13 +51,26 @@ TEST_F(MeshDeviceFixture, TensixConfigureProgramWithoutLaunchInstallsButDoesNotR
         std::vector<uint32_t> zero{0};
         detail::WriteToDeviceL1(device, core, addr, zero);
 
-        Program program = CreateProgram(*mesh);
-        KernelHandle kernel = CreateKernel(
-            program,
-            MARKER_KERNEL,
-            core,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
-        SetRuntimeArgs(program, kernel, core, {addr, MARKER});
+        // Metal 2.0 program. config_1xx applies only on Wormhole/Blackhole and is ignored on Quasar.
+        const KernelSpecName MARKER_KERNEL_NAME{"write_l1_marker"};
+        KernelSpec kernel_spec{
+            .unique_id = MARKER_KERNEL_NAME,
+            .source = MARKER_KERNEL,
+            .runtime_arg_schema = {.runtime_arg_names = {"address", "value"}},
+            .hw_config = DataMovementHardwareConfig{
+                .config_1xx = DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default}}};
+        ProgramSpec spec{
+            .name = "configure_without_launch",
+            .kernels = {kernel_spec},
+            .work_units = {{.name = "main", .kernels = {MARKER_KERNEL_NAME}, .target_nodes = core}},
+        };
+        Program program(*mesh, spec);
+        ProgramRunArgs run_args;
+        run_args.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
+            .kernel = MARKER_KERNEL_NAME,
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(core, {{"address", addr}, {"value", MARKER}})}};
+        program.set_program_run_args(run_args);
 
         // Configured: the launch message names a binary, but the kernel has not run.
         experimental::ConfigureProgramWithoutLaunch(device, program);

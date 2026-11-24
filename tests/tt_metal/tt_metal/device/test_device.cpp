@@ -27,6 +27,7 @@
 #include <tt-metalium/mesh/legacy/device.hpp>
 #include "device_fixture.hpp"
 #include "multi_device_fixture.hpp"
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/execution/distributed.hpp>
 #include <tt-metalium/discovery/hal.hpp>
 #include <tt-metalium/vocabulary/hal_types.hpp>
@@ -243,20 +244,30 @@ TEST_F(MeshDeviceFixture, TensixValidateKernelDoesNotTargetHarvestedCores) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
-
         std::string kernel_name = "tests/tt_metal/tt_metal/test_kernels/misc/ping_legal_l1s.cpp";
         CoreCoord logical_target_core(0, 0);
         uint32_t intermediate_l1_addr = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
         uint32_t size_bytes = host_input.size() * sizeof(uint32_t);
-        tt_metal::CreateKernel(
-            program,
-            kernel_name,
-            logical_target_core,
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = tt_metal::NOC::NOC_0,
-                .compile_args = {l1_address, intermediate_l1_addr, size_bytes}});
+
+        // Metal 2.0 program. config_1xx applies only on Wormhole/Blackhole and is ignored on Quasar.
+        const KernelSpecName PING_KERNEL{"ping_legal_l1s"};
+        KernelSpec ping_spec{
+            .unique_id = PING_KERNEL,
+            .source = kernel_name,
+            .compile_time_args =
+                {{"base_l1_address", l1_address},
+                 {"intermediate_l1_addr", intermediate_l1_addr},
+                 {"size_bytes", size_bytes}},
+            .hw_config = DataMovementHardwareConfig{
+                .config_1xx = DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::NOC_0}}};
+        ProgramSpec spec{
+            .name = "ping_legal_l1s",
+            .kernels = {ping_spec},
+            .work_units = {{.name = "main", .kernels = {PING_KERNEL}, .target_nodes = logical_target_core}},
+        };
+        tt_metal::Program program(*mesh_device, spec);
+        program.set_program_run_args(ProgramRunArgs{});
 
         workload.add_program(device_range, std::move(program));
         distributed::EnqueueMeshWorkload(cq, workload, false);
@@ -302,15 +313,19 @@ TEST_F(MeshDeviceFixture, TestDeviceToHostMemChannelAssignment) {
 
 // Test to ensure writing from 16B aligned L1 address to 16B aligned PCIe address works
 TEST_F(MeshDeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
+    // Zebu emulation has no host-memory bridge. aether's emulation adapter has no AxiRamUMD models (it logs "AXI RAM
+    // UMD callbacks are not supported in emulation mode"), so NOC writes to the PCIe tile never reach host sysmem and
+    // the kernel waits at its write barrier forever. RTL simulation (vcs-*) does have the bridge.
+    if (MetalContext::instance().rtoptions().get_simulator_name().starts_with("emu-")) {
+        GTEST_SKIP() << "Skipped on Zebu emulation: writes from the device to host memory over PCIe are not "
+                        "supported in emulation mode.";
+    }
     auto mesh_device = this->devices_.at(0);
     auto* device = mesh_device->impl().get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
-    workload.add_program(device_range, std::move(program));
-    auto& program_ = workload.get_programs().at(device_range);
 
     EXPECT_TRUE(device->is_mmio_capable());
     CoreCoord logical_core(0, 0);
@@ -329,14 +344,27 @@ TEST_F(MeshDeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
 
     tt_metal::detail::WriteToDeviceL1(device, logical_core, base_l1_src_address, src);
 
-    CreateKernel(
-        program_,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/pcie_write_16b.cpp",
-        logical_core,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = {base_l1_src_address, base_pcie_dst_address, num_16b_writes}});
+    // Metal 2.0 program. config_1xx applies only on Wormhole/Blackhole and is ignored on Quasar.
+    const KernelSpecName PCIE_WRITE_KERNEL{"pcie_write_16b"};
+    KernelSpec pcie_write_spec{
+        .unique_id = PCIE_WRITE_KERNEL,
+        .source =
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/pcie_write_16b_named_args.cpp",
+        .compile_time_args =
+            {{"base_l1_src_address", base_l1_src_address},
+             {"base_pcie_dst_address", base_pcie_dst_address},
+             {"num_16b_writes", num_16b_writes}},
+        .hw_config = DataMovementHardwareConfig{
+            .config_1xx = DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_0_default}}};
+    ProgramSpec spec{
+        .name = "pcie_write_16b",
+        .kernels = {pcie_write_spec},
+        .work_units = {{.name = "main", .kernels = {PCIE_WRITE_KERNEL}, .target_nodes = logical_core}},
+    };
+    tt_metal::Program program(*mesh_device, spec);
+    program.set_program_run_args(ProgramRunArgs{});
+    workload.add_program(device_range, std::move(program));
 
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
@@ -405,6 +433,10 @@ TEST_F(BlackholeSingleCardFixture, TensixL1DataCache) {
 // Test to verify that logical to virtual coordinate mapping is correct.
 // Reads mapping from L1 memory and compares it to the host mapping.
 TEST_F(MeshDeviceFixture, VerifyLogicalToVirtualMap) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Quasar firmware does not define or populate the worker logical-to-virtual coordinate tables "
+                        "(worker_logical_{col,row}_to_virtual_{col,row}), so the kernel cannot link.";
+    }
     std::map<CoreCoord, CoreCoord> logical_to_virtual_map;
 
     auto mesh_device = this->devices_.at(0);
@@ -412,9 +444,6 @@ TEST_F(MeshDeviceFixture, VerifyLogicalToVirtualMap) {
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
-    workload.add_program(device_range, std::move(program));
-    auto& program_ = workload.get_programs().at(device_range);
 
     auto logical_grid_size = mesh_device->logical_grid_size();
     for (int r = 0; r < logical_grid_size.y; r++) {
@@ -431,25 +460,43 @@ TEST_F(MeshDeviceFixture, VerifyLogicalToVirtualMap) {
     uint32_t read_size = sizeof(uint32_t) * (logical_grid_size.x + logical_grid_size.y);
 
     auto kernel0_l1_address = l1_unreserved_base;
-    tt_metal::CreateKernel(
-        program_,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/read_logical_to_virtual_table.cpp",
-        logical_core_range,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::NOC_0,
-            .compile_args = {kernel0_l1_address, logical_grid_size.x, logical_grid_size.y}});
-
     auto kernel1_l1_address = l1_unreserved_base + (tt::round_up(logical_grid_size.x, 4) * sizeof(uint32_t)) +
                               (tt::round_up(logical_grid_size.y, 4) * sizeof(uint32_t));
-    tt_metal::CreateKernel(
-        program_,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/read_logical_to_virtual_table.cpp",
-        logical_core_range,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt_metal::NOC::NOC_1,
-            .compile_args = {kernel1_l1_address, logical_grid_size.x, logical_grid_size.y}});
+
+    // Metal 2.0 program: the same kernel source on both data movement RISCs, each writing its table to its own L1
+    // address. config_1xx applies only on Wormhole/Blackhole and is ignored on Quasar.
+    const std::string table_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/read_logical_to_virtual_table.cpp";
+    const KernelSpecName TABLE_KERNEL_0{"read_table_riscv_0"};
+    const KernelSpecName TABLE_KERNEL_1{"read_table_riscv_1"};
+    KernelSpec table_spec_0{
+        .unique_id = TABLE_KERNEL_0,
+        .source = table_kernel,
+        .compile_time_args =
+            {{"table_address", kernel0_l1_address},
+             {"num_logical_cols", logical_grid_size.x},
+             {"num_logical_rows", logical_grid_size.y}},
+        .hw_config = DataMovementHardwareConfig{
+            .config_1xx = DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::NOC_0}}};
+    KernelSpec table_spec_1{
+        .unique_id = TABLE_KERNEL_1,
+        .source = table_kernel,
+        .compile_time_args =
+            {{"table_address", kernel1_l1_address},
+             {"num_logical_cols", logical_grid_size.x},
+             {"num_logical_rows", logical_grid_size.y}},
+        .hw_config = DataMovementHardwareConfig{
+            .config_1xx = DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::NOC_1}}};
+    ProgramSpec spec{
+        .name = "read_logical_to_virtual_table",
+        .kernels = {table_spec_0, table_spec_1},
+        .work_units =
+            {{.name = "main", .kernels = {TABLE_KERNEL_0, TABLE_KERNEL_1}, .target_nodes = logical_core_range}},
+    };
+    tt_metal::Program program(*mesh_device, spec);
+    program.set_program_run_args(ProgramRunArgs{});
+    workload.add_program(device_range, std::move(program));
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);

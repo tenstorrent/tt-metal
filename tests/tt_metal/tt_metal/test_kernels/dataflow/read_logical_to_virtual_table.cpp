@@ -5,11 +5,15 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/kernel_args.h"
+#if defined(ARCH_QUASAR)
+#include "risc_common.h"
+#endif
 
 void kernel_main() {
-    constexpr uint32_t table_address = get_compile_time_arg_val(0);
-    constexpr uint32_t num_logical_cols = get_compile_time_arg_val(1);
-    constexpr uint32_t num_logical_rows = get_compile_time_arg_val(2);
+    constexpr uint32_t table_address = get_arg(args::table_address);
+    constexpr uint32_t num_logical_cols = get_arg(args::num_logical_cols);
+    constexpr uint32_t num_logical_rows = get_arg(args::num_logical_rows);
 
     volatile tt_l1_ptr uint32_t* table_address_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(table_address);
 
@@ -23,4 +27,8 @@ void kernel_main() {
         *table_address_ptr = virtual_coord.y;
         table_address_ptr++;
     }
+#if defined(ARCH_QUASAR)
+    // Quasar L1 is cacheable: flush the table so the host sees it.
+    flush_l2_cache_range(table_address, (num_logical_cols + num_logical_rows) * sizeof(uint32_t));
+#endif
 }

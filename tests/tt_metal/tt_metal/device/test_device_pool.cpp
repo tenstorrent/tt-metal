@@ -80,7 +80,7 @@ TEST(DevicePool, DevicePoolReconfigDevices) {
 
 TEST(DevicePool, DevicePoolAddDevices) {
     if (GetNumAvailableDevices() != 8) {
-        GTEST_SKIP();
+        GTEST_SKIP() << "Needs 8 available devices";
     }
     std::vector<ChipId> device_ids{0};
     int num_hw_cqs = 1;
@@ -112,7 +112,7 @@ TEST(DevicePool, DevicePoolAddDevices) {
 
 TEST(DevicePool, DevicePoolReduceDevices) {
     if (GetNumAvailableDevices() != 8) {
-        GTEST_SKIP();
+        GTEST_SKIP() << "Needs 8 available devices";
     }
     std::vector<ChipId> device_ids{0, 1, 2, 3};
     int num_hw_cqs = 1;
