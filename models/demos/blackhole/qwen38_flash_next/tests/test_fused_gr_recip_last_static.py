@@ -1,11 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""The GR read's rsqrt-last front (``gr_recip_last``) without a device: the registry entry (COMPONENT, opt-in, never
-default without a proof) and the model hook, the kernel argument contracts against the Python side, the stats and
-recip bodies kept verbatim from gr_read's kernels (the statistics and the rsqrt stay the chain's bits), the worker's
-per-stream dest index, the three-phase writer's order with the gate signal between phase A and B, the reader's gate on
-the gathered-stats stream, and the transports and semaphores shared with gr_fold."""
+"""Host tests of the fused gr_recip_last family (recip_last, front3, front3 rowtrim) without a device."""
 
 from __future__ import annotations
 
@@ -13,10 +9,27 @@ import inspect
 import re
 from pathlib import Path
 
+import pytest
+
 from models.demos.blackhole.qwen38_flash_next.ttnn import fused
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused import gr_fold, gr_read
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused import gr_recip_last as gl
+from models.demos.blackhole.qwen38_flash_next.ttnn.fused import gr_recip_last as grl
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused import program as fp
+from models.demos.blackhole.qwen38_flash_next.ttnn.fused.gr_recip_last import front3
+
+# ============================================================================
+# was test_fused_gr_recip_last_static.py
+# The GR read's rsqrt-last front (``gr_recip_last``) without a device: the registry entry (COMPONENT, opt-in, never
+# default without a proof) and the model hook, the kernel argument contracts against the Python side, the stats and
+# recip bodies kept verbatim from gr_read's kernels (the statistics and the rsqrt stay the chain's bits), the worker's
+# per-stream dest index, the three-phase writer's order with the gate signal between phase A and B, the reader's gate on
+# the gathered-stats stream, and the transports and semaphores shared with gr_fold.
+# ============================================================================
+
+# SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 
 SRC = {name: (fp.REPO_ROOT / path).read_text() for name, path in gl.KERNELS.items()}
 GR_KERNELS = fp.REPO_ROOT / fp.KERNEL_ROOT / "gr_read" / "kernels"
@@ -307,3 +320,114 @@ def test_cb_indices_are_distinct_per_core_set():
         gr_fold.PARTIALS_SCRATCH_CB,
     ]
     assert len(set(workers)) == len(workers)
+
+
+# ============================================================================
+# was test_gr_front3_static.py
+# No-device contract of the GR front v3 (QWEN38_GR_FRONT_V3, default on): sources, the selection hook, the token protocol's ordering rules, the
+# slot size that carries the token, the reader's reorder.
+# ============================================================================
+
+# SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+
+KERNELS = Path(grl.__file__).parent / "kernels"
+
+
+def _text(name):
+    return (KERNELS / name).read_text()
+
+
+def test_sources_and_hook():
+    for name in ("transport4.cpp", "front_reader3.cpp", "mcast_writer5.cpp", "raw_writer3.cpp", "mcast_reader4.cpp"):
+        assert (KERNELS / name).is_file()
+    init = Path(grl.__file__).read_text()
+    assert init.count("QWEN38_GR_FRONT_V3") == 1 and 'os.environ.get("QWEN38_GR_FRONT_V3", "1") == "1"' in init
+    assert front3.ENV == "QWEN38_GR_FRONT_V3" and not front3._STATE3 is None
+    src = Path(front3.__file__).read_text()
+    assert "+ 16  # + the call token" in src and "my_tiles * pack_tile + 16 <=" in src
+
+
+def test_token_protocol_text():
+    t = _text("transport4.cpp")
+    p = t[t.index("FORCE_INLINE void partials_phase") : t.index("void kernel_main()")]
+    assert "const uint32_t token = count + 1" in p
+    assert p.index("= token;") < p.index("fabric_multicast_noc_fused_unicast_with_atomic_inc") < p.index("line.close()")
+    assert "TOKEN_OFF + 16," in p  # the payload carries the token as its last 16 B
+    assert p.index("if (*flag != token)") < p.index("noc_async_write(") < p.index("noc_async_write_barrier()")
+    assert "invalidate_l1_cache()" in p
+    # the data semaphore is still counted and reset, and the counter stepped only after NCRISC finished
+    assert (
+        p.index("noc_semaphore_wait_min(data, RING - 1)")
+        < p.index("noc_semaphore_set(data, 0)")
+        < p.index("done.wait(1)")
+    )
+    assert p.index("done.wait(1)") < p.index("*counter = *counter + 1")
+    assert "FIRST_TILE = 0" in p and "FIRST_TILE = 1" in p  # BRISC even tiles, NCRISC odd tiles
+    assert "unpack.wait" not in p and "unpack.set" not in p
+
+
+def test_reader_reorder():
+    r = _text("front_reader3.cpp")
+    k = r[r.index("void kernel_main()") :]
+    assert (
+        k.index("issue_stream(args0")
+        < k.index("make_const<")
+        < k.index("noc_async_read_barrier()")
+        < k.index("gate(2)")
+    )
+
+
+# ============================================================================
+# was test_gr_front3_rowtrim_static.py
+# No-device contract of QWEN38_FRONT_ROWTRIM: default on, a 2-iteration rsqrt only for rows <= 4, rsqrt_tile untouched
+# when the define is absent.
+# ============================================================================
+
+# SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+
+KERNEL = Path(grl.__file__).parent / "kernels" / "stats_u_recip_compute.cpp"
+DEFINE = "QWEN38_FRONT_ROWTRIM_ITERS"
+
+
+def test_default_on_and_off_switch(monkeypatch):
+    monkeypatch.delenv(front3.ROWTRIM_ENV, raising=False)
+    assert front3.ROWTRIM_ENV == "QWEN38_FRONT_ROWTRIM"
+    assert front3.rowtrim_defines(1) == [(DEFINE, "2")]
+    assert front3.rowtrim_defines(8) == [(DEFINE, "4")]
+    assert front3.rowtrim_defines(16) == []
+    monkeypatch.setenv(front3.ROWTRIM_ENV, "0")
+    for rows in (1, 2, 4, 8, 16):
+        assert front3.rowtrim_defines(rows) == []
+
+
+@pytest.mark.parametrize("rows", [1, 2, 3, 4])
+def test_on_small_rows(monkeypatch, rows):
+    monkeypatch.setenv(front3.ROWTRIM_ENV, "1")
+    assert front3.rowtrim_defines(rows) == [(DEFINE, "2")]
+
+
+@pytest.mark.parametrize("rows", [5, 6, 7, 8])
+def test_on_rows_five_to_eight_runs_four_iterations(monkeypatch, rows):
+    monkeypatch.setenv(front3.ROWTRIM_ENV, "1")
+    assert front3.rowtrim_defines(rows) == [(DEFINE, "4")]
+
+
+@pytest.mark.parametrize("rows", [0, 16])
+def test_on_large_rows_unchanged(monkeypatch, rows):
+    monkeypatch.setenv(front3.ROWTRIM_ENV, "1")
+    assert front3.rowtrim_defines(rows) == []
+
+
+def test_kernel_has_rsqrt_as_the_only_sfpu_op_and_keeps_the_wrapper_when_off():
+    text = KERNEL.read_text()
+    assert f"#ifdef {DEFINE}\n            rsqrt_tile_rows(0);\n#else\n            rsqrt_tile(0);\n#endif" in text
+    helper = text[text.index(f"#ifdef {DEFINE}\n// rsqrt_tile") : text.index("ALWI void ACQ()")]
+    assert "calculate_rsqrt" in helper and "VectorMode::R)" in helper and "VectorMode::RC" not in helper
+    assert helper.count(f"{DEFINE} /* ITERATIONS */") == 1
+    assert "copy_tile" not in text and "typecast_tile" not in text
+    for op in ("exp_tile", "recip_tile", "sigmoid_tile", "sqrt_tile", "silu_tile"):
+        assert op not in text.replace("rsqrt_tile", "")

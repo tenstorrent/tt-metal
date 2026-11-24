@@ -15,7 +15,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from models.demos.blackhole.qwen38_flash_next.tests.test_mtp_v2_step4_rows_no_device import (
+from models.demos.blackhole.qwen38_flash_next.tests.test_mtp_v2_rows_no_device import (
     BF16,
     TILE,
     TP,
@@ -23,7 +23,7 @@ from models.demos.blackhole.qwen38_flash_next.tests.test_mtp_v2_step4_rows_no_de
     _bf16,
     _cat,
 )
-from models.demos.blackhole.qwen38_flash_next.tests.test_mtp_v2_step5_verify_no_device import (  # noqa: F401
+from models.demos.blackhole.qwen38_flash_next.tests.test_mtp_v2_verify_draft_no_device import (  # noqa: F401
     _mtp_input,
     fake,
 )

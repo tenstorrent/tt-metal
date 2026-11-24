@@ -23,7 +23,7 @@ from models.demos.blackhole.qwen38_flash_next.tests.test_mtp_lanes_no_device imp
     fake,
     gdn_weights,
 )
-from models.demos.blackhole.qwen38_flash_next.tests.test_mtp_v2_step5_verify_no_device import CONTEXT
+from models.demos.blackhole.qwen38_flash_next.tests.test_mtp_v2_verify_draft_no_device import CONTEXT
 from models.demos.blackhole.qwen38_flash_next.ttnn import qsa as qsa_module
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused import qsa_block
 

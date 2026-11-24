@@ -33,8 +33,8 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from models.demos.blackhole.qwen38_flash_next.tests import test_mtp_v2_step6_draft_no_device as step6
-from models.demos.blackhole.qwen38_flash_next.tests.test_mtp_v2_step4_rows_no_device import (
+from models.demos.blackhole.qwen38_flash_next.tests import test_mtp_v2_verify_draft_no_device as step6
+from models.demos.blackhole.qwen38_flash_next.tests.test_mtp_v2_rows_no_device import (
     BF16,
     FP32,
     ROW_MAJOR,
@@ -54,7 +54,7 @@ from models.demos.blackhole.qwen38_flash_next.tests.test_mtp_v2_step4_rows_no_de
     _seed_state,
     install_source_chunk_fake,
 )
-from models.demos.blackhole.qwen38_flash_next.tests.test_mtp_v2_step5_verify_no_device import (
+from models.demos.blackhole.qwen38_flash_next.tests.test_mtp_v2_verify_draft_no_device import (
     BLOCKS,
     CONTEXT,
     HOST_TENSOR_CALLS,
@@ -1080,10 +1080,7 @@ def _install_admission_ops(fake) -> None:
     verify writer's tensors), and a ``view`` that ALIASES its source whenever the tile-page reinterpretation is a plain
     reshape (a fill through the view then lands in the owner, as on device)."""
 
-    from models.demos.blackhole.qwen38_flash_next.tests.test_mtp_v2_step4_rows_no_device import (
-        _from_tile_pages,
-        _tile_pages,
-    )
+    from models.demos.blackhole.qwen38_flash_next.tests.test_mtp_v2_rows_no_device import _from_tile_pages, _tile_pages
 
     def fill_cache(cache, source, batch_idx: int):
         for target, part in zip(cache.locals, source.torch_shards()):
@@ -1528,7 +1525,7 @@ def _draft_world(fake, monkeypatch, *, drafts: int, positions, accepted):
         accepted_lanes=_lane_column(accepted),
         active_lanes=_lane_column([1] * lanes),
         token_row=_replicated(torch.full((1, 1, 1, 32), -1.0), FP32),
-        draft_lanes=step6._lanes([]),
+        draft_lanes=step6._s6_lanes([]),
         _owner=owner,
     )
 
@@ -1581,7 +1578,7 @@ def _draft_world(fake, monkeypatch, *, drafts: int, positions, accepted):
     def resolve_rows(model_, hidden, *, rows, sentinel_tail):
         ids = world.resolve(hidden).torch_shards()[0].reshape(-1).tolist()[:rows]
         assert sentinel_tail.shape == (1, 1, 1, 32 - rows)
-        return step6._lanes(ids)
+        return step6._s6_lanes(ids)
 
     monkeypatch.setattr(mtp_lanes, "_validate_lane_verify_state", lambda model_, verify_: None)
     monkeypatch.setattr(mtp_lanes, "_forward_layer_verify_lanes", forward_layer_verify_lanes)
@@ -1618,7 +1615,7 @@ def test_forward_draft_lanes_is_the_eager_row_chain_per_lane_and_assembles_the_n
     next_tokens, first_drafts = [17 + u for u in range(lanes)], [41 + 3 * u for u in range(lanes)]
     argmaxes, alignment_row = list(range(32)), list(range(100, 132))
     readback = mtp_v2.Qwen38TTNNVerifyOutput(
-        step6._lanes(
+        step6._s6_lanes(
             [float(a) for a in accepted] + next_tokens + first_drafts + argmaxes + alignment_row,
             width=mtp_lanes.lane_readback_width(lanes),
         )
@@ -1628,7 +1625,7 @@ def test_forward_draft_lanes_is_the_eager_row_chain_per_lane_and_assembles_the_n
     raw_rows_before = alignment_rows.raw_rows.torch_shards()[0].clone()
     mtp_lanes.forward_draft_lanes(model, verify, draft, readback)
     pass_readback, tokens = mtp_lanes.read_lane_pass_row(verify, draft)
-    residual_all = step6._cat(verify.alignment.residual)
+    residual_all = step6._s6_cat(verify.alignment.residual)
     expected_tokens = []
     for u in range(lanes):
         lane_residual = step6._sharded(residual_all[:, :, u : u + 1])

@@ -42,7 +42,7 @@ def _load(name: str):
     return module
 
 
-step4 = _load("test_mtp_v2_step4_rows_no_device")
+step4 = _load("test_mtp_v2_rows_no_device")
 gr_test = _load("test_gr_rows_no_device")
 qsa_test = _load("test_ttnn_qsa_chunk_no_device")
 BF16, FP32, TILE, TP, FakeTensor = step4.BF16, step4.FP32, step4.TILE, step4.TP, step4.FakeTensor

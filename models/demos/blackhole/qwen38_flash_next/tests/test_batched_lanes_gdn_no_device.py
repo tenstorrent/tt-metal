@@ -55,7 +55,7 @@ def _load(name: str):
     return module
 
 
-step4 = _load("test_mtp_v2_step4_rows_no_device")
+step4 = _load("test_mtp_v2_rows_no_device")
 gr_test = _load("test_gr_rows_no_device")
 lanes_test = _load("test_batched_lanes_no_device")
 BF16, FP32, TILE = step4.BF16, step4.FP32, step4.TILE

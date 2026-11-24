@@ -77,7 +77,7 @@ def _load(name: str):
     return module
 
 
-step4 = _load("test_mtp_v2_step4_rows_no_device")
+step4 = _load("test_mtp_v2_rows_no_device")
 BF16, FP32, TILE, ROW_MAJOR = step4.BF16, step4.FP32, step4.TILE, step4.ROW_MAJOR
 FakeContract, FakeTensor = step4.FakeContract, step4.FakeTensor
 U32 = step4._DType("uint32", torch.int64)  # UINT32 values as int64 in [0, 2**32)

@@ -32,7 +32,7 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.blackhole.qwen38_flash_next.tests import test_mtp_v2_step6_draft_no_device as step6
+from models.demos.blackhole.qwen38_flash_next.tests import test_mtp_v2_verify_draft_no_device as step6
 from models.demos.blackhole.qwen38_flash_next.tests.test_mtp_lanes_no_device import (  # noqa: F401 (fixtures)
     LANE_FORMS,
     _FakeLaneMoE,
@@ -42,7 +42,7 @@ from models.demos.blackhole.qwen38_flash_next.tests.test_mtp_lanes_no_device imp
     fake,
     gdn_weights,
 )
-from models.demos.blackhole.qwen38_flash_next.tests.test_mtp_v2_step4_rows_no_device import (
+from models.demos.blackhole.qwen38_flash_next.tests.test_mtp_v2_rows_no_device import (
     BF16,
     FP32,
     ROW_MAJOR,
@@ -53,7 +53,7 @@ from models.demos.blackhole.qwen38_flash_next.tests.test_mtp_v2_step4_rows_no_de
     _gdn_module,
     _ple_module,
 )
-from models.demos.blackhole.qwen38_flash_next.tests.test_mtp_v2_step5_verify_no_device import (
+from models.demos.blackhole.qwen38_flash_next.tests.test_mtp_v2_verify_draft_no_device import (
     CONTEXT,
     _qsa_module,
     _replicated,

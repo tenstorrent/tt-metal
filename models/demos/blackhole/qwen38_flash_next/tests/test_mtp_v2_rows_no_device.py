@@ -1,17 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""MTP v2 step 4: the GDN and PLE multi-row device paths against their 1-row paths, on a torch-backed ttnn.
-
-No device.  ``ttnn`` is replaced in ``ttnn/gdn.py``, ``ttnn/ple.py`` and ``ttnn/layer.py`` by a mesh-of-four
-torch model of the op surface the modules use (elementwise ops in the operand dtype, row-serial matmuls,
-norms and transcendental ops so a row's result does not depend on how many rows share its tensor, collectives
-over the four locals).  The chunk kernel is pluggable: the step form (the 1-row path's fp32 arithmetic) shows
-that everything around the recurrence is bitwise the 1-row path at R = 1; the torch chunk reference (fp32 WY
-form, bf16 q scaling as the composite does it) shows R = 5 rows against five sequential steps and every
-commit(a) against the a + 1 committed steps.  The source pins hold the trace contract of the new methods
-(one full chunk, device-resident constants, no host upload, no per-pass host ints, the 1-row bodies untouched).
-"""
+"""MTP v2 host tests, steps 2 and 4: accept logic, GDN chunk, rows, and the row-serial fakes shared by the later steps."""
 
 from __future__ import annotations
 
@@ -25,20 +15,775 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from models.demos.blackhole.qwen38_flash_next.tools.mtp_v2_verify_reference import row_serial_torch
+from models.demos.blackhole.qwen38_flash_next.reference import (
+    _l2_norm,
+    build_ngram_hash_spec,
+    causal_depthwise_conv1d,
+    gated_delta_recurrent,
+    mtp_input_fusion,
+    ngram_token_ids,
+)
+from models.demos.blackhole.qwen38_flash_next.tools.mtp_v2_verify_reference import (
+    accept_select,
+    chain_alphas,
+    expected_tokens_per_pass,
+    row_serial_torch,
+    tf32,
+    ulp_distance,
+)
 from models.demos.blackhole.qwen38_flash_next.tt.gdn import (
     Qwen38GDN,
     Qwen38GDNDimensions,
     Qwen38GDNState,
     Qwen38GDNWeights,
 )
-from models.demos.blackhole.qwen38_flash_next.tt.ple import Qwen38PLEWeights
+from models.demos.blackhole.qwen38_flash_next.tt.gr import Qwen38GatedResidual, Qwen38GatedResidualWeights
+from models.demos.blackhole.qwen38_flash_next.tt.model import Qwen38FinalMixer, Qwen38FinalMixerWeights
+from models.demos.blackhole.qwen38_flash_next.tt.moe import (
+    Qwen38ExpertWeights,
+    Qwen38MoE,
+    Qwen38SharedExpertShard,
+    weighted_routed_reduce,
+)
+from models.demos.blackhole.qwen38_flash_next.tt.ple import Qwen38PLE, Qwen38PLEState, Qwen38PLEWeights
 from models.demos.blackhole.qwen38_flash_next.ttnn import gdn as gdn_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import layer as layer_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import mtp_v2
 from models.demos.blackhole.qwen38_flash_next.ttnn import ple as ple_module
+from models.demos.blackhole.qwen38_flash_next.ttnn.embedding import GREEDY_TIE_BREAK_EPS, TP_SIZE
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused import gdn_rows_wrap
-from models.experimental.gated_attention_gated_deltanet.torch_functional.delta_rule_ops import chunk_gated_delta_rule
+from models.experimental.gated_attention_gated_deltanet.torch_functional.delta_rule_ops import (
+    chunk_gated_delta_rule,
+    recurrent_gated_delta_rule,
+)
+
+# ============================================================================
+# Step 2 accept: device accept logic, tie rule, tok/pass arithmetic (was test_mtp_v2_step2_accept_no_device.py)
+# MTP v2 step 2 (c, d): device accept logic on integer ids, the argmax tie rule, and the tok/pass arithmetic.
+#
+# No device.  The accept model is the design's section 2.6 op sequence in fp32 with the FPU reduce stages
+# read through TF32 (the greedy-resolve precision model, silicon-confirmed: fp32 integers survive an FPU
+# reduce only below 2048).
+# ============================================================================
+
+# SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+
+# Ids seen on the pinned prefixes and at the vocabulary edge: below and above the 2048 TF32 limit.
+SMALL_IDS = (17, 15, 16, 21, 12, 20, 11, 0, 2047)
+LARGE_IDS = (2048, 95859, 62086, 248044, 248319)
+R6_HISTOGRAM = [74, 75, 55, 38, 92]  # accepted drafts 0..4 over 334 rounds (r6 arm, 2026-09-02)
+
+
+def _s2a_rows(pattern: tuple[int, ...], ids: tuple[int, ...]) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Verify-row argmaxes, drafts and alignment argmaxes realizing one match/mismatch pattern."""
+
+    k = len(pattern)
+    cycle = itertools.cycle(ids)
+    targets = torch.tensor([next(cycle) for _ in range(k + 1)], dtype=torch.float32)
+    drafts = torch.empty(k, dtype=torch.float32)
+    for j, match in enumerate(pattern):
+        other = next(value for value in ids if value != int(targets[j]))
+        drafts[j] = targets[j] if match else other
+    alignment = torch.tensor([next(cycle) for _ in range(k + 1)], dtype=torch.float32)
+    return targets, drafts, alignment
+
+
+def _leading_matches(pattern: tuple[int, ...]) -> int:
+    return next((j for j, match in enumerate(pattern) if not match), len(pattern))
+
+
+@pytest.mark.parametrize("k", (3, 4, 5))
+def test_accept_count_and_gather_select_are_exact_for_every_pattern(k: int) -> None:
+    for pattern in itertools.product((0, 1), repeat=k):
+        for ids in (SMALL_IDS, LARGE_IDS, SMALL_IDS + LARGE_IDS):
+            targets, drafts, alignment = _s2a_rows(pattern, ids)
+            result = accept_select(targets, drafts, alignment)
+            accepted = _leading_matches(pattern)
+            assert result["accepted"] == accepted, (pattern, ids, result)
+            assert result["next_token_gather"] == int(targets[accepted]), (pattern, ids, result)
+            assert result["first_draft_gather"] == int(alignment[accepted]), (pattern, ids, result)
+
+
+@pytest.mark.parametrize("k", (3, 4, 5))
+def test_sum_select_is_exact_only_below_the_tf32_integer_limit(k: int) -> None:
+    """Design 2.6 writes t' = sum(one_hot * argmax rows); through an FPU reduce that is wrong from id 2048."""
+
+    wrong_large = 0
+    for pattern in itertools.product((0, 1), repeat=k):
+        small = accept_select(*_s2a_rows(pattern, SMALL_IDS))
+        assert small["next_token_sum"] == small["next_token_gather"], pattern
+        assert small["first_draft_sum"] == small["first_draft_gather"], pattern
+        large = accept_select(*_s2a_rows(pattern, LARGE_IDS))
+        wrong_large += large["next_token_sum"] != large["next_token_gather"]
+        wrong_large += large["first_draft_sum"] != large["first_draft_gather"]
+        # Same ops with an exact reduce (fp32 accumulate of exact inputs): the arithmetic itself is fine.
+        exact = accept_select(*_s2a_rows(pattern, LARGE_IDS), fpu_rounding=lambda x: x)
+        assert exact["next_token_sum"] == exact["next_token_gather"], pattern
+    assert wrong_large > 0, "the TF32 model must reject the sum select on large ids"
+    assert tf32(torch.tensor([95859.0, 248044.0])).tolist() == [95872.0, 248064.0]
+
+
+def test_accept_count_survives_the_fpu_reduce_and_position_update_is_exact() -> None:
+    flags = torch.ones(5, dtype=torch.float32)
+    assert tf32(flags).sum().item() == 5.0
+    for position in (0, 4, 31, 2047, 2048, 32767, 2**16 - 1):
+        for accepted in range(6):
+            # P <- P + a + 1 as an SFPU add on fp32 (exact below 2**24) or a uint32 add.
+            assert float(position) + float(accepted) + 1.0 == float(position + accepted + 1)
+
+
+def _ranked_owner(values: torch.Tensor) -> torch.Tensor:
+    # resolve_greedy_on_device rule, rows batched: bf16 maxima -> fp32 -> minus owner * eps -> argmax.
+    assert values.dtype == torch.bfloat16
+    ranked = values.to(torch.float32) - torch.arange(TP_SIZE, dtype=torch.float32) * GREEDY_TIE_BREAK_EPS
+    return torch.argmax(ranked, dim=-1)
+
+
+def test_row_batched_owner_tie_break_picks_the_lowest_owner_like_resolve_greedy() -> None:
+    torch.manual_seed(7)
+    for _ in range(2000):
+        rows = torch.randint(1, 6, ()).item()
+        values = (torch.randn(rows, TP_SIZE) * 8).to(torch.bfloat16)
+        values[0] = values[0, 0]  # all four owners tie on row 0
+        if rows > 1:
+            values[1, 2] = values[1, 1]  # a two-way tie on row 1
+        expected = torch.argmax(values.to(torch.float32), dim=-1)  # first owner on ties (resolve_greedy)
+        assert torch.equal(_ranked_owner(values), expected)
+        ranked = values.to(torch.float32) - torch.arange(TP_SIZE, dtype=torch.float32) * GREEDY_TIE_BREAK_EPS
+        # No row keeps a tie after the shift, so the device argmax kernel's tie rule cannot matter.
+        top = ranked.max(dim=-1, keepdim=True).values
+        assert torch.all((ranked == top).sum(dim=-1) == 1)
+
+
+def test_tie_break_shift_keeps_distinct_bf16_logits_ordered() -> None:
+    # Adjacent bf16 values from 2**-6 up: the larger one minus 3 * eps stays above the smaller one.
+    exponents = torch.arange(-6, 8, dtype=torch.float32)
+    for exponent in exponents.tolist():
+        base = torch.tensor(2.0**exponent, dtype=torch.bfloat16)
+        step = torch.nextafter(base.to(torch.float32), torch.tensor(float("inf")))
+        larger = step.to(torch.bfloat16)
+        while larger == base:
+            step = torch.nextafter(step, torch.tensor(float("inf")))
+            larger = step.to(torch.bfloat16)
+        assert larger.to(torch.float32) - 3 * GREEDY_TIE_BREAK_EPS > base.to(torch.float32), exponent
+
+
+def test_r6_histogram_reproduces_the_pooled_alphas_and_tok_per_pass() -> None:
+    alphas = chain_alphas(R6_HISTOGRAM)
+    assert sum(R6_HISTOGRAM) == 334
+    assert [round(alpha, 3) for alpha in alphas] == [0.778, 0.712, 0.703, 0.708]
+    mean_accepted = sum(count * drafts for drafts, count in enumerate(R6_HISTOGRAM)) / sum(R6_HISTOGRAM)
+    assert round(mean_accepted, 2) == 2.00
+    assert round(expected_tokens_per_pass(alphas, 3), 2) == 2.72
+    assert round(expected_tokens_per_pass(alphas, 4), 2) == 3.00
+    # With the full chain, E[tok/pass] at k=4 is exactly 1 + the mean accepted count.
+    assert expected_tokens_per_pass(alphas, 4) == pytest.approx(1.0 + mean_accepted, abs=1e-12)
+    # The rounded alphas of the results note give the same two decimals.
+    assert round(expected_tokens_per_pass([0.778, 0.712, 0.703], 3), 2) == 2.72
+    assert round(expected_tokens_per_pass([0.778, 0.712, 0.703, 0.708], 4), 2) == 3.00
+
+
+def test_design_section_three_chains_reproduce_the_cost_model_rows(expect_error) -> None:
+    measured = [0.791, 0.768, 0.767]  # CPU free-run chain; alpha_4|3 = alpha_5|4 = 0.767 extrapolated
+    assert [round(expected_tokens_per_pass(measured, k), 3) for k in (1, 2, 3, 4, 5)] == [
+        1.791,
+        2.398,
+        2.864,
+        3.222,
+        3.496,
+    ]
+    geometric = [0.791]
+    assert [round(expected_tokens_per_pass(geometric, k), 3) for k in (1, 2, 3, 4, 5)] == [
+        1.791,
+        2.417,
+        2.912,
+        3.303,
+        3.613,
+    ]
+    with expect_error(ValueError):  # allow-pytest.raises: pure arithmetic contract
+        expected_tokens_per_pass([], 3)
+
+
+# ============================================================================
+# Step 2 GDN chunk (was test_mtp_v2_step2_gdn_chunk_no_device.py)
+# MTP v2 step 2 (b): the GDN chunk path against the fp32 step recurrence, with the masked catch-up.
+#
+# No device.  The chunk model is the torch reference of the chunk kernel (``torch_functional.delta_rule_ops``:
+# fp32 WY form, chunk 32 or 64); the step model is the CPU oracle's ``gated_delta_recurrent``.  Per-device
+# geometry: 12 value heads, K = V = 128.  q and k are L2-normalized once, up front, in bf16 (the oracle's
+# normalize-in-input-dtype rule): torch's bf16 reduction blocks differently for 1 and 5 rows, and a 1-ULP flip
+# in a normalized k moves the state by 4e-3, which would hide the algorithmic gap under test.  ULP gaps are
+# printed with ``-s``; the gate is fp32 closeness (rtol 1e-4) of the chunk form to the step form.
+# The diagonal-regularized WY form of ``ttnn_delta_rule_seq`` (QWEN_GDN_DIAG_ALPHA, default 0.25) is modelled
+# as well: only alpha = 0 is the step recurrence.  The conv window rule for the GDN FIR and the dilated PLE conv
+# (new history = window rows [committed, committed + state_len)) is checked against the reference convolution.
+# ============================================================================
+
+# SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+
+S2G_HEADS = 12
+S2G_HEAD_DIM = 128
+S2G_ROWS = 5
+RTOL = 1e-4  # measured: output rel <= 2.1e-6, state rel <= 1.2e-5 against the step recurrence
+ATOL = 5e-6
+
+
+def _s2g_rows(rows: int, seed: int = 1) -> dict[str, torch.Tensor]:
+    torch.manual_seed(seed)
+    return {
+        "q": _l2_norm(torch.randn(1, rows, S2G_HEADS, S2G_HEAD_DIM).to(torch.bfloat16)),
+        "k": _l2_norm(torch.randn(1, rows, S2G_HEADS, S2G_HEAD_DIM).to(torch.bfloat16)),
+        "v": torch.randn(1, rows, S2G_HEADS, S2G_HEAD_DIM).to(torch.bfloat16),
+        "beta": torch.sigmoid(torch.randn(1, rows, S2G_HEADS)).to(torch.bfloat16),
+        "g": -torch.rand(1, rows, S2G_HEADS) * 0.5,  # fp32 log decay, as the oracle's -exp(A_log) * softplus(.)
+        "state": torch.randn(1, S2G_HEADS, S2G_HEAD_DIM, S2G_HEAD_DIM) * 0.3,
+    }
+
+
+def _step(x: dict[str, torch.Tensor], rows: slice = slice(None)) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Oracle step recurrence (bf16 output, fp32 state) and the same recurrence's fp32 output."""
+
+    q, k, v, beta, g = (x[name][:, rows] for name in ("q", "k", "v", "beta", "g"))
+    output, state = gated_delta_recurrent(q, k, v, g, beta, x["state"], l2_normalize_qk=False)
+    output_fp32, state_fp32 = recurrent_gated_delta_rule(
+        q, k, v, beta, g, initial_state=x["state"], output_final_state=True
+    )
+    assert torch.equal(state_fp32, state)  # the two step forms are the same fp32 recurrence
+    return output, output_fp32, state
+
+
+def _chunk(x: dict[str, torch.Tensor], chunk_size: int, rows: slice = slice(None), **overrides):
+    values = {**x, **overrides}
+    q, k, v, beta, g = (values[name][:, rows] for name in ("q", "k", "v", "beta", "g"))
+    return chunk_gated_delta_rule(
+        q, k, v, g, beta, chunk_size=chunk_size, initial_state=values["state"], output_final_state=True
+    )
+
+
+def _report(label: str, output, output_ref_fp32, output_ref_bf16, state, state_ref) -> None:
+    out_bf16 = int(ulp_distance(output, output_ref_bf16, torch.bfloat16).max())
+    out_fp32 = int(ulp_distance(output, output_ref_fp32, torch.float32).max())
+    state_fp32 = int(ulp_distance(state, state_ref, torch.float32).max())
+    out_rel = float(((output - output_ref_fp32).abs() / output_ref_fp32.abs().clamp_min(1e-2)).max())
+    state_rel = float(((state - state_ref).abs() / state_ref.abs().clamp_min(1e-2)).max())
+    print(
+        f"{label}: output max ULP bf16 {out_bf16} (vs the oracle's bf16 output) fp32 {out_fp32} rel {out_rel:.2e}; "
+        f"state max ULP fp32 {state_fp32} rel {state_rel:.2e}"
+    )
+    torch.testing.assert_close(output, output_ref_fp32, rtol=RTOL, atol=ATOL)
+    torch.testing.assert_close(state, state_ref, rtol=RTOL, atol=ATOL)
+
+
+@pytest.mark.parametrize("chunk_size", (32, 64))
+@pytest.mark.parametrize("rows", (1, 2, 3, 4, 5))
+def test_chunk_matches_the_step_recurrence_with_an_initial_state(rows: int, chunk_size: int) -> None:
+    x = _s2g_rows(rows)
+    step_out, step_out_fp32, step_state = _step(x)
+    chunk_out, chunk_state = _chunk(x, chunk_size)
+    assert step_out.dtype == torch.bfloat16 and chunk_out.dtype == torch.float32
+    assert chunk_out.shape == (1, rows, S2G_HEADS, S2G_HEAD_DIM) and chunk_state.shape == x["state"].shape
+    _report(f"T={rows} chunk={chunk_size} chunk vs step", chunk_out, step_out_fp32, step_out, chunk_state, step_state)
+
+
+@pytest.mark.parametrize("committed", range(S2G_ROWS + 1))
+def test_masked_catch_up_equals_the_committed_prefix(committed: int) -> None:
+    """Design 2.4 step 1: beta and g of rows at or past the committed count are zeroed; k and v may stay."""
+
+    x = _s2g_rows(S2G_ROWS, seed=2)
+    mask = (torch.arange(S2G_ROWS) < committed).to(torch.float32).reshape(1, S2G_ROWS, 1)
+    masked = {"beta": (x["beta"].float() * mask).to(torch.bfloat16), "g": x["g"] * mask}
+    masked_out, state_masked = _chunk(x, 32, **masked)
+    keep = mask.unsqueeze(-1) > 0
+    zeros = torch.zeros_like(x["q"])
+    _, state_zeroed = _chunk(x, 32, k=torch.where(keep, x["k"], zeros), v=torch.where(keep, x["v"], zeros), **masked)
+    # Zeroing k and v as well (the design's padding rule) changes nothing: beta = 0 already makes the write vanish.
+    assert torch.equal(state_masked, state_zeroed)
+    if committed == 0:
+        assert torch.equal(state_masked, x["state"])  # identity update, bitwise in the torch model
+        return
+    _, state_prefix = _chunk(x, 32, rows=slice(0, committed))
+    assert torch.equal(state_masked, state_prefix)  # the masked rows contribute exact zeros
+    step_out, step_out_fp32, step_state = _step(x, slice(0, committed))
+    _report(
+        f"catch-up committed={committed} vs step",
+        masked_out[:, :committed],
+        step_out_fp32,
+        step_out,
+        state_masked,
+        step_state,
+    )
+    # Rows before the committed count are unaffected by the mask (the verify outputs of the committed rows).
+    full_out, _ = _chunk(x, 32)
+    assert torch.equal(masked_out[:, :committed], full_out[:, :committed])
+
+
+def test_catch_up_mask_counts_committed_rows_not_accepted_drafts() -> None:
+    """Row 0 is the base token and is always committed: a accepted drafts commit a + 1 rows.
+
+    The design writes the mask as ``arange(k+1) < a_prev``; with a_prev the accepted-draft count that is one
+    row short.  ``a_prev`` there has to be the committed row count (accepted drafts + 1).
+    """
+
+    x = _s2g_rows(S2G_ROWS, seed=3)
+    for accepted in range(S2G_ROWS):
+        short = (torch.arange(S2G_ROWS) < accepted).to(torch.float32).reshape(1, S2G_ROWS, 1)
+        _, state_short = _chunk(x, 32, beta=(x["beta"].float() * short).to(torch.bfloat16), g=x["g"] * short)
+        _, _, state_committed = _step(x, slice(0, accepted + 1))
+        assert not torch.allclose(state_short, state_committed, rtol=1e-3, atol=1e-3), accepted
+
+
+def _chunk_with_diagonal_regularization(x: dict[str, torch.Tensor], alpha: float, chunk_size: int = 32):
+    """The ``ttnn_delta_rule_seq`` WY form: L = I + strict_lower(kk * L_mask) + alpha * diag(kk * L_mask), solved."""
+
+    q, k, v, beta, g = [x[name].transpose(1, 2).contiguous().to(torch.float32) for name in ("q", "k", "v", "beta", "g")]
+    T = q.shape[-2]
+    pad = (chunk_size - T % chunk_size) % chunk_size
+    q, k, v = (F.pad(t, (0, 0, 0, pad)) for t in (q, k, v))
+    beta, g = (F.pad(t, (0, pad)) for t in (beta, g))
+    B, H, L, K = q.shape
+    q = q * K**-0.5
+    chunks = lambda t: t.reshape(B, H, -1, chunk_size, t.shape[-1])
+    q_c, k_c = chunks(q), chunks(k)
+    v_beta_c, k_beta_c = chunks(v * beta[..., None]), chunks(k * beta[..., None])
+    decay = g.reshape(B, H, -1, chunk_size).cumsum(-1)
+    decay_exp = decay.exp()[..., None]
+    L_mask = (decay.unsqueeze(-1) - decay.unsqueeze(-2)).tril().exp().tril()
+    kk = (k_beta_c @ k_c.transpose(-1, -2)) * L_mask
+    eye = torch.eye(chunk_size)
+    L_mat = eye + kk.tril(-1) + alpha * torch.diag_embed(kk.diagonal(dim1=-2, dim2=-1))
+    attn = torch.linalg.solve_triangular(L_mat, eye.expand_as(L_mat), upper=False)
+    v_corrected = attn @ v_beta_c
+    k_cumdecay = attn @ (k_beta_c * decay_exp)
+    S = x["state"].to(torch.float32)
+    causal = torch.triu(torch.ones(chunk_size, chunk_size, dtype=torch.bool), diagonal=1)
+    o = torch.zeros_like(v_corrected)
+    for i in range(L // chunk_size):
+        q_i, k_i = q_c[:, :, i], k_c[:, :, i]
+        intra = (q_i @ k_i.transpose(-1, -2) * L_mask[:, :, i]).masked_fill_(causal, 0)
+        v_new = v_corrected[:, :, i] - k_cumdecay[:, :, i] @ S
+        o[:, :, i] = (q_i * decay[:, :, i, :, None].exp()) @ S + intra @ v_new
+        S = (
+            S * decay[:, :, i, -1, None, None].exp()
+            + (k_i * (decay[:, :, i, -1, None] - decay[:, :, i]).exp()[..., None]).transpose(-1, -2) @ v_new
+        )
+    return o.reshape(B, H, -1, o.shape[-1])[:, :, :T].transpose(1, 2).contiguous(), S
+
+
+def test_seq_reference_diagonal_regularization_is_the_step_recurrence_only_at_alpha_zero() -> None:
+    x = _s2g_rows(S2G_ROWS, seed=4)
+    step_out, step_out_fp32, step_state = _step(x)
+    exact_out, exact_state = _chunk_with_diagonal_regularization(x, alpha=0.0)
+    _report("seq WY form alpha=0 vs step", exact_out, step_out_fp32, step_out, exact_state, step_state)
+    fla_out, fla_state = _chunk(x, 32)
+    _report("seq WY form alpha=0 vs FLA chunk", exact_out, fla_out, fla_out.to(torch.bfloat16), exact_state, fla_state)
+    damped_out, damped_state = _chunk_with_diagonal_regularization(x, alpha=0.25)  # the module's default
+    out_ulp = int(ulp_distance(damped_out, step_out, torch.bfloat16).max())
+    state_rel = float(((damped_state - step_state).abs() / step_state.abs().clamp_min(1e-2)).max())
+    print(f"seq WY form alpha=0.25 vs step: output max ULP bf16 {out_ulp}; state max rel {state_rel:.2e}")
+    assert out_ulp > 4 and state_rel > 1e-2
+
+
+def _gdn_weights() -> Qwen38GDNWeights:
+    torch.manual_seed(5)
+    dims = Qwen38GDNDimensions(
+        hidden_size=2560, q_heads=16, value_heads=48, key_head_dim=128, value_head_dim=128, conv_kernel=4
+    )
+    bf16 = lambda *shape, scale=1.0: (torch.randn(*shape) * scale).to(torch.bfloat16)
+    return Qwen38GDNWeights(
+        layer_idx=0,
+        dimensions=dims,
+        rms_norm_eps=1e-6,
+        output_gate="sigmoid",
+        qkv=bf16(dims.qkv_width, 2560, scale=2560**-0.5),
+        z=bf16(dims.value_width, 2560, scale=2560**-0.5),
+        a=bf16(48, 2560, scale=2560**-0.5),
+        b=bf16(48, 2560, scale=2560**-0.5),
+        out=bf16(2560, dims.value_width, scale=dims.value_width**-0.5),
+        conv=bf16(dims.qkv_width, 1, 4, scale=0.5),
+        dt_bias=bf16(48, scale=0.1),
+        A_log=bf16(48, scale=0.1),
+        norm=bf16(128, scale=0.1),
+    )
+
+
+def test_gdn_oracle_five_rows_equals_five_sequential_steps() -> None:
+    gdn = Qwen38GDN(_gdn_weights())
+    hidden = torch.randn(1, S2G_ROWS, 2560).to(torch.bfloat16)
+    state = Qwen38GDNState(
+        conv=torch.randn(1, gdn.weights.dimensions.qkv_width, 3).to(torch.bfloat16),
+        recurrent=torch.randn(1, 48, 128, 128) * 0.3,
+    )
+    with row_serial_torch():
+        output, next_state = gdn.forward(hidden, state)
+        rows = []
+        threaded = state
+        for r in range(S2G_ROWS):
+            row, threaded = gdn.forward(hidden[:, r : r + 1], threaded)
+            rows.append(row)
+    assert torch.equal(output, torch.cat(rows, dim=1))
+    assert torch.equal(next_state.conv, threaded.conv)
+    assert torch.equal(next_state.recurrent, threaded.recurrent)
+
+
+@pytest.mark.parametrize(("label", "dilation", "channels"), (("GDN FIR", 1, 2560), ("PLE conv", 3, 640)))
+def test_conv_window_rows_give_the_outputs_and_the_next_history(label: str, dilation: int, channels: int) -> None:
+    torch.manual_seed(6)
+    taps = torch.randn(channels, 4).to(torch.bfloat16)
+    state_len = 3 * dilation
+    history = torch.randn(1, channels, state_len).to(torch.bfloat16)
+    new_rows = torch.randn(1, channels, S2G_ROWS).to(torch.bfloat16)
+    window = torch.cat([history, new_rows], dim=-1)  # [history | k+1 new rows], the design's W
+
+    batched, _ = causal_depthwise_conv1d(new_rows, taps, history, dilation=dilation, activation="silu")
+    for j in range(S2G_ROWS):
+        # Output row j reads window rows j, j + d, j + 2d, j + 3d: the same op on the window slice starting at j.
+        single, _ = causal_depthwise_conv1d(
+            new_rows[..., j : j + 1], taps, window[..., j : j + state_len], dilation=dilation, activation="silu"
+        )
+        assert torch.equal(batched[..., j], single[..., 0]), (label, j)
+    for committed in range(S2G_ROWS + 1):
+        threaded = history
+        for j in range(committed):
+            _, threaded = causal_depthwise_conv1d(new_rows[..., j : j + 1], taps, threaded, dilation=dilation)
+        # New history after committing c rows: window rows [c, c + state_len) (the design's W[a+1 : a+5] with c = a+1).
+        assert torch.equal(threaded, window[..., committed : committed + state_len]), (label, committed)
+
+
+# ============================================================================
+# Step 2 rows (was test_mtp_v2_step2_rows_no_device.py)
+# MTP v2 step 2 (a): the CPU oracle at R = 5 rows equals its per-row results, stage by stage.
+#
+# No device, synthetic weights at the model's widths.  GR read/write (full and TP4 forms), final mixer (full
+# and TP4), MTP input mixer, PLE (post-lookup equations with the real n-gram hash and a fake table), LM head
+# (sharded logits and the owner argmax), and MoE (router/top-k/shared/expert combine, full and EP4 forms).
+# Row independence is the property the (k+1)-row verify body relies on; each stage is compared bitwise under
+# ``row_serial_torch`` (torch's own bf16 GEMM/reduction blocking differs between M = 1 and M = 5 by up to
+# 1 bf16 ULP, which is a torch artifact, not a coupling between rows).
+# ============================================================================
+
+# SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+
+S2R_ROWS = 5
+HIDDEN = 2560
+BRANCHES = 4
+RANK = 320
+EPS = 1e-6
+S2R_TP = 4
+VOCAB_SHARD = 2048  # synthetic LM head: 4 x 2048 rows
+S2R_EOS = 248044
+
+
+def _ranges(total: int) -> tuple[tuple[int, int], ...]:
+    width = total // S2R_TP
+    return tuple((d * width, (d + 1) * width) for d in range(S2R_TP))
+
+
+def _placement(hidden: int, experts: int = 64) -> SimpleNamespace:
+    config = SimpleNamespace(
+        hidden_size=hidden,
+        residual_branches=BRANCHES,
+        residual_rank=RANK,
+        residual_width=BRANCHES * hidden,
+        rms_norm_eps=EPS,
+        num_experts=experts,
+        top_k=10,
+        norm_topk_prob=True,
+    )
+    return SimpleNamespace(config=config, hidden_ranges=_ranges(hidden), expert_ranges=_ranges(experts))
+
+
+def _s2r_bf16(*shape: int, scale: float = 1.0) -> torch.Tensor:
+    return (torch.randn(*shape) * scale).to(torch.bfloat16)
+
+
+def _assert_rows_equal(batched: torch.Tensor, per_row: list[torch.Tensor], label: str) -> None:
+    stacked = torch.cat(per_row, dim=1)
+    assert stacked.shape == batched.shape, (label, stacked.shape, batched.shape)
+    assert stacked.dtype == batched.dtype, (label, stacked.dtype, batched.dtype)
+    if not torch.equal(stacked, batched):
+        gap = (stacked.float() - batched.float()).abs()
+        raise AssertionError(f"{label}: rows differ, max abs {gap.max().item():.3e} at {gap.argmax().item()}")
+
+
+@pytest.fixture(scope="module")
+def residual() -> torch.Tensor:
+    torch.manual_seed(1)
+    return _s2r_bf16(1, S2R_ROWS, BRANCHES * HIDDEN)
+
+
+@pytest.fixture(autouse=True)
+def _row_serial():
+    with row_serial_torch():
+        yield
+
+
+def test_gr_read_and_write_are_row_independent(residual) -> None:
+    torch.manual_seed(2)
+    weights = Qwen38GatedResidualWeights(
+        placement=_placement(HIDDEN),
+        layer_index=0,
+        block="attn",
+        norm=_s2r_bf16(BRANCHES * HIDDEN, scale=0.1),
+        down=_s2r_bf16(RANK, BRANCHES * HIDDEN, scale=BRANCHES * HIDDEN**-0.5),
+        up=_s2r_bf16(BRANCHES * HIDDEN, RANK, scale=RANK**-0.5),
+        inject=_s2r_bf16(BRANCHES, BRANCHES * HIDDEN, scale=(BRANCHES * HIDDEN) ** -0.5),
+    )
+    gr = Qwen38GatedResidual(weights)
+    block_output = _s2r_bf16(1, S2R_ROWS, HIDDEN)
+
+    block_input, state = gr.read(residual)
+    written = gr.write(block_output, state)
+    rows = [gr.read(residual[:, r : r + 1]) for r in range(S2R_ROWS)]
+    _assert_rows_equal(block_input, [row[0] for row in rows], "GR read block input")
+    _assert_rows_equal(state.injection, [row[1].injection for row in rows], "GR read injection")
+    _assert_rows_equal(written, [gr.write(block_output[:, r : r + 1], rows[r][1]) for r in range(S2R_ROWS)], "GR write")
+
+    shards = gr.shard_residual(residual)
+    block_shards, tp_state = gr.read_tp4(shards)
+    output_shards = gr.shard_hidden(block_output)
+    written_shards = gr.write_tp4(output_shards, tp_state)
+    for d in range(S2R_TP):
+        per_row = []
+        per_row_written = []
+        for r in range(S2R_ROWS):
+            row_shards = tuple(shard[:, r : r + 1] for shard in shards)
+            row_blocks, row_state = gr.read_tp4(row_shards)
+            per_row.append(row_blocks[d])
+            per_row_written.append(gr.write_tp4(tuple(s[:, r : r + 1] for s in output_shards), row_state)[d])
+        _assert_rows_equal(block_shards[d], per_row, f"GR TP4 read shard {d}")
+        _assert_rows_equal(written_shards[d], per_row_written, f"GR TP4 write shard {d}")
+    _assert_rows_equal(
+        tp_state.injection,
+        [gr.read_tp4(tuple(s[:, r : r + 1] for s in shards))[1].injection for r in range(S2R_ROWS)],
+        "GR TP4 injection",
+    )
+    assert torch.equal(gr.combine_residual_shards(written_shards), written)
+
+
+def test_final_mixer_is_row_independent(residual) -> None:
+    torch.manual_seed(3)
+    weights = Qwen38FinalMixerWeights(
+        placement=_placement(HIDDEN),
+        norm=_s2r_bf16(BRANCHES * HIDDEN, scale=0.1),
+        down=_s2r_bf16(RANK, BRANCHES * HIDDEN, scale=(BRANCHES * HIDDEN) ** -0.5),
+        up=_s2r_bf16(BRANCHES * HIDDEN, RANK, scale=RANK**-0.5),
+    )
+    mixer = Qwen38FinalMixer(weights)
+    _assert_rows_equal(mixer(residual), [mixer(residual[:, r : r + 1]) for r in range(S2R_ROWS)], "final mixer")
+    shards = mixer.shard_residual(residual)
+    outputs = mixer.forward_tp4(shards)
+    for d in range(S2R_TP):
+        per_row = [mixer.forward_tp4(tuple(s[:, r : r + 1] for s in shards))[d] for r in range(S2R_ROWS)]
+        _assert_rows_equal(outputs[d], per_row, f"final mixer TP4 shard {d}")
+
+
+def test_mtp_input_mixer_is_row_independent(residual) -> None:
+    torch.manual_seed(4)
+    embedding = _s2r_bf16(1, S2R_ROWS, HIDDEN)
+    weights = dict(
+        embedding_norm_weight=_s2r_bf16(HIDDEN, scale=0.1),
+        hidden_norm_weight=_s2r_bf16(BRANCHES * HIDDEN, scale=0.1),
+        fc_embedding_weight=_s2r_bf16(HIDDEN, HIDDEN, scale=HIDDEN**-0.5),
+        fc_hidden_weight=_s2r_bf16(HIDDEN, HIDDEN, scale=HIDDEN**-0.5),
+        hc_count=BRANCHES,
+        hidden_size=HIDDEN,
+        eps=EPS,
+    )
+    mixed = mtp_input_fusion(embedding, residual, **weights)
+    per_row = [mtp_input_fusion(embedding[:, r : r + 1], residual[:, r : r + 1], **weights) for r in range(S2R_ROWS)]
+    _assert_rows_equal(mixed, per_row, "MTP input mixer")
+
+
+class _FakeHostPLEEmbedding:
+    """The real n-gram hash and context threading over a small fake table (the checkpoint table is 360 GB away)."""
+
+    def __init__(self) -> None:
+        self.config = SimpleNamespace(ngram_size=3, eos_token_id=S2R_EOS, ple_checkpoint_layer=1)
+        self.spec = build_ngram_hash_spec(
+            unigram_vocab_size=248320,
+            ngram_size=3,
+            heads_per_ngram=8,
+            ngram_vocab_size_base=20_000_000,
+            ple_layer_index=0,
+            seed=1234,
+            divisible_by=128,
+        )
+        self.embedding_head_dim = HIDDEN // 16
+        self.table = _s2r_bf16(4096, self.embedding_head_dim)
+
+    def lookup(self, input_ids: torch.Tensor, previous_context: torch.Tensor | None):
+        ids, next_context = ngram_token_ids(input_ids, previous_context, S2R_EOS, self.spec)
+        rows = self.table[ids.reshape(-1) % self.table.shape[0]]
+        return rows.reshape(*ids.shape, self.embedding_head_dim).flatten(-2), next_context
+
+
+def test_ple_rows_equal_sequential_steps_with_threaded_state(residual) -> None:
+    torch.manual_seed(5)
+    weights = Qwen38PLEWeights(
+        layer_idx=1,
+        hidden_size=HIDDEN,
+        residual_branches=BRANCHES,
+        embedding_width=HIDDEN,
+        conv_kernel=4,
+        conv_dilation=3,
+        rms_norm_eps=EPS,
+        key=_s2r_bf16(BRANCHES * HIDDEN, HIDDEN, scale=HIDDEN**-0.5),
+        value=_s2r_bf16(HIDDEN, HIDDEN, scale=HIDDEN**-0.5),
+        norm_key=_s2r_bf16(BRANCHES * HIDDEN, scale=0.1),
+        norm_query=_s2r_bf16(BRANCHES * HIDDEN, scale=0.1),
+        norm_conv=_s2r_bf16(BRANCHES * HIDDEN, scale=0.1),
+        conv=_s2r_bf16(BRANCHES * HIDDEN, 1, 4, scale=0.5),
+    )
+    ple = Qwen38PLE(_FakeHostPLEEmbedding(), weights)
+    input_ids = torch.tensor([[17, 15, 16, 95859, 20]], dtype=torch.long)
+    state = Qwen38PLEState(
+        token_context=torch.tensor([[S2R_EOS, 12]], dtype=torch.long),
+        conv=_s2r_bf16(1, BRANCHES * HIDDEN, 9),
+    )
+
+    output, next_state = ple.forward(residual, input_ids, state)
+    per_row = []
+    threaded = state
+    for r in range(S2R_ROWS):
+        row_output, threaded = ple.forward(residual[:, r : r + 1], input_ids[:, r : r + 1], threaded)
+        per_row.append(row_output)
+    _assert_rows_equal(output, per_row, "PLE output")
+    assert torch.equal(next_state.token_context, threaded.token_context)
+    assert torch.equal(next_state.conv, threaded.conv)
+    # The conv state after R rows is the last 9 rows of [history | normalized new rows], as the design's window select.
+    assert next_state.conv.shape == (1, BRANCHES * HIDDEN, 9)
+
+
+def _sharded_greedy(hidden: torch.Tensor, head_shards: list[torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
+    """LM head per vocabulary shard, local argmax, owner = first shard holding the maximum (resolve_greedy)."""
+
+    logits = torch.cat([F.linear(hidden, shard) for shard in head_shards], dim=-1)
+    values, indices = zip(*(F.linear(hidden, shard).max(dim=-1) for shard in head_shards))
+    values = torch.stack(values, dim=-1).float()
+    indices = torch.stack(indices, dim=-1)
+    owner = values.argmax(dim=-1, keepdim=True)
+    starts = torch.arange(S2R_TP) * VOCAB_SHARD
+    return logits, (indices.gather(-1, owner) + starts[owner]).squeeze(-1)
+
+
+def test_lm_head_logits_and_owner_argmax_are_row_independent() -> None:
+    torch.manual_seed(6)
+    hidden = _s2r_bf16(1, S2R_ROWS, HIDDEN)
+    head_shards = [_s2r_bf16(VOCAB_SHARD, HIDDEN, scale=HIDDEN**-0.5) for _ in range(S2R_TP)]
+    # Row 3: copy the winning head row into the next shard, so two owners tie at the maximum.
+    logits, _ = _sharded_greedy(hidden, head_shards)
+    winner = int(logits[0, 3].argmax())
+    head_shards[(winner // VOCAB_SHARD + 1) % S2R_TP][winner % VOCAB_SHARD] = head_shards[winner // VOCAB_SHARD][
+        winner % VOCAB_SHARD
+    ]
+    logits, tokens = _sharded_greedy(hidden, head_shards)
+    per_row = [_sharded_greedy(hidden[:, r : r + 1], head_shards) for r in range(S2R_ROWS)]
+    _assert_rows_equal(logits, [row[0] for row in per_row], "LM head logits")
+    assert tokens.shape == (1, S2R_ROWS)
+    assert tokens[0].tolist() == [int(row[1]) for row in per_row]
+    # The tie on row 3 resolves to the lowest owner in both forms.
+    row3 = logits[0, 3]
+    tied = torch.nonzero(row3 == row3.max()).reshape(-1)
+    assert tied.numel() >= 2 and int(tokens[0, 3]) == int(tied.min())
+
+
+class _FakeMoEWeights:
+    """Router, shared expert and per-expert weights at a small width; the oracle math is width-generic."""
+
+    def __init__(self, hidden: int, intermediate: int, experts: int) -> None:
+        self.placement = _placement(hidden, experts)
+        self.config = self.placement.config
+        self.expert_ranges = self.placement.expert_ranges
+        self.router_weight = _s2r_bf16(experts, hidden, scale=hidden**-0.5)
+        self.shared_gate_proj = _s2r_bf16(intermediate, hidden, scale=hidden**-0.5)
+        self.shared_up_proj = _s2r_bf16(intermediate, hidden, scale=hidden**-0.5)
+        self.shared_down_proj = _s2r_bf16(hidden, intermediate, scale=intermediate**-0.5)
+        self.shared_scalar_gate = _s2r_bf16(1, hidden, scale=hidden**-0.5)
+        self.experts = [
+            Qwen38ExpertWeights(
+                _s2r_bf16(2 * intermediate, hidden, scale=hidden**-0.5),
+                _s2r_bf16(hidden, intermediate, scale=intermediate**-0.5),
+                intermediate,
+            )
+            for _ in range(experts)
+        ]
+
+    def owner(self, expert_index: int) -> int:
+        return next(d for d, (start, end) in enumerate(self.expert_ranges) if start <= expert_index < end)
+
+    def expert(self, expert_index: int) -> Qwen38ExpertWeights:
+        return self.experts[expert_index]
+
+    def shared_shard(self, device_index: int) -> Qwen38SharedExpertShard:
+        width = self.shared_gate_proj.shape[0] // S2R_TP
+        start, end = device_index * width, (device_index + 1) * width
+        hidden_start, hidden_end = self.placement.hidden_ranges[device_index]
+        return Qwen38SharedExpertShard(
+            gate_proj=self.shared_gate_proj[start:end],
+            up_proj=self.shared_up_proj[start:end],
+            down_proj=self.shared_down_proj[:, start:end],
+            scalar_gate=self.shared_scalar_gate[:, hidden_start:hidden_end],
+        )
+
+
+def test_moe_router_topk_shared_and_expert_combine_are_row_independent() -> None:
+    torch.manual_seed(8)
+    moe = Qwen38MoE(_FakeMoEWeights(hidden=512, intermediate=128, experts=64))
+    hidden = _s2r_bf16(1, S2R_ROWS, 512)
+
+    output, routing = moe(hidden)
+    per_row = [moe(hidden[:, r : r + 1]) for r in range(S2R_ROWS)]
+    _assert_rows_equal(output, [row[0] for row in per_row], "MoE output")
+    assert torch.equal(routing.indices, torch.cat([row[1].indices for row in per_row], dim=0))
+    assert torch.equal(routing.scores, torch.cat([row[1].scores for row in per_row], dim=0))
+    assert torch.equal(routing.logits, torch.cat([row[1].logits for row in per_row], dim=0))
+    # The five rows touch more distinct experts than any single row: the R1 cost driver, not a numerics change.
+    assert len(set(routing.indices.reshape(-1).tolist())) > 10
+
+    ep4 = moe.expert_parallel_forward(hidden)
+    per_row_ep4 = [moe.expert_parallel_forward(hidden[:, r : r + 1]) for r in range(S2R_ROWS)]
+    for d in range(S2R_TP):
+        _assert_rows_equal(ep4.hidden_shards[d], [row.hidden_shards[d] for row in per_row_ep4], f"MoE EP4 shard {d}")
+        # Local selection over five rows is the union of the per-row selections, in row order.
+        assert ep4.local_selected_experts[d] == tuple(
+            expert for row in per_row_ep4 for expert in row.local_selected_experts[d]
+        )
+    # The score-weighted combine (the device fast-reduce input form [TOP_K, R, H]) is per row.
+    expert_outputs = _s2r_bf16(S2R_ROWS, 10, 512)
+    combined = weighted_routed_reduce(expert_outputs, routing.scores)
+    _assert_rows_equal(
+        combined.unsqueeze(0),
+        [
+            weighted_routed_reduce(expert_outputs[r : r + 1], routing.scores[r : r + 1]).unsqueeze(0)
+            for r in range(S2R_ROWS)
+        ],
+        "weighted routed reduce",
+    )
+
+
+# ============================================================================
+# Step 4 rows (was test_mtp_v2_step4_rows_no_device.py)
+# MTP v2 step 4: the GDN and PLE multi-row device paths against their 1-row paths, on a torch-backed ttnn.
+#
+# No device.  ``ttnn`` is replaced in ``ttnn/gdn.py``, ``ttnn/ple.py`` and ``ttnn/layer.py`` by a mesh-of-four
+# torch model of the op surface the modules use (elementwise ops in the operand dtype, row-serial matmuls,
+# norms and transcendental ops so a row's result does not depend on how many rows share its tensor, collectives
+# over the four locals).  The chunk kernel is pluggable: the step form (the 1-row path's fp32 arithmetic) shows
+# that everything around the recurrence is bitwise the 1-row path at R = 1; the torch chunk reference (fp32 WY
+# form, bf16 q scaling as the composite does it) shows R = 5 rows against five sequential steps and every
+# commit(a) against the a + 1 committed steps.  The source pins hold the trace contract of the new methods
+# (one full chunk, device-resident constants, no host upload, no per-pass host ints, the 1-row bodies untouched).
+# ============================================================================
+
+# SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 
 ROOT = Path(__file__).resolve().parents[1]
 GDN_SOURCE = ROOT / "ttnn" / "gdn.py"

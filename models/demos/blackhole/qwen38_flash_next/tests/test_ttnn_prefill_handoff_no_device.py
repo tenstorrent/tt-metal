@@ -19,7 +19,7 @@ import inspect
 import pytest
 import torch
 
-from models.demos.blackhole.qwen38_flash_next.tests.test_mtp_v2_step4_rows_no_device import (  # noqa: F401  (pytest fixture)
+from models.demos.blackhole.qwen38_flash_next.tests.test_mtp_v2_rows_no_device import (  # noqa: F401  (pytest fixture)
     BF16,
     FP32,
     ROW_MAJOR,

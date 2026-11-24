@@ -6,7 +6,7 @@ QSA derive, RoPE rows and greedy resolve, the PLE lanes and the GDN/GR lane vali
 
 The integer ops (position row, QSA lane derive, RoPE lookup, greedy resolve) run on a small torch-backed ttnn
 that models the exact UINT32/FP32 op surface they use; the PLE lanes and the GDN state run on the step-4 fake
-(``test_mtp_v2_step4_rows_no_device``), the GR rows on the GR fake (``test_gr_rows_no_device``).  Every lane
+(``test_mtp_v2_rows_no_device``), the GR rows on the GR fake (``test_gr_rows_no_device``).  Every lane
 result is compared bitwise to the 1-row path on that lane's stream.  The source pins hold the 1-row bodies
 untouched and the lane derive free of host I/O.
 """
@@ -78,7 +78,7 @@ def _load(name: str):
     return module
 
 
-step4 = _load("test_mtp_v2_step4_rows_no_device")
+step4 = _load("test_mtp_v2_rows_no_device")
 gr_test = _load("test_gr_rows_no_device")
 BF16, FP32, TILE, ROW_MAJOR = step4.BF16, step4.FP32, step4.TILE, step4.ROW_MAJOR
 FakeContract, FakeTensor = step4.FakeContract, step4.FakeTensor

@@ -3,7 +3,7 @@
 
 """Prefill chunk: the GR read/write over 32 rows against the 1-row read/write, row for row, on a torch-backed ttnn.
 
-No device.  The step-4 fake (``test_mtp_v2_step4_rows_no_device``) is extended with the GR ops the 1-row path
+No device.  The step-4 fake (``test_mtp_v2_rows_no_device``) is extended with the GR ops the 1-row path
 uses (the async gather + fast reduce of the partial, the zero-copy views, the fused sigmoid multiply, the FP32
 linear output).  Every op is per row or per element, so ``read_rows``/``write_rows`` must equal 32 ``read``/``write``
 calls bitwise.  The source pins hold the 1-row bodies untouched and the rows bodies free of views and host I/O.
@@ -36,7 +36,7 @@ GR_SOURCE = Path(__file__).resolve().parents[1] / "ttnn" / "gr.py"
 ROWS = 32
 # The tests directory is not a package: load the step-4 fake by path.
 _spec = importlib.util.spec_from_file_location(
-    "test_mtp_v2_step4_rows_no_device", Path(__file__).with_name("test_mtp_v2_step4_rows_no_device.py")
+    "test_mtp_v2_rows_no_device", Path(__file__).with_name("test_mtp_v2_rows_no_device.py")
 )
 step4 = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(step4)
