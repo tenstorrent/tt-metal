@@ -11,11 +11,16 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
 from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
     check_readable,
+    docstring_dtype_conversion_params,
     docstring_dtype_layout_params,
     docstring_interleaved_buffer_type_params,
     interleaved_memory_config,
 )
-from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import assert_exact, full_range_input
+from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import (
+    assert_exact,
+    convertible_input,
+    full_range_input,
+)
 from tests.ttnn.python_api_testing.sweep_tests.ttnn_pytorch_ops import (
     tilize_with_val_padding as pytorch_tilize_with_val_padding,
 )
@@ -1335,3 +1340,24 @@ def test_tilize_with_val_padding_returns_host_tile_input(module_name, entry):
     assert output.storage_type() == ttnn.StorageType.HOST
     assert output.layout == ttnn.TILE_LAYOUT
     assert torch.equal(ttnn.to_torch(output), torch_input)
+
+
+@pytest.mark.parametrize(
+    "input_dtype, output_dtype", docstring_dtype_conversion_params(ttnn.tilize_with_val_padding, "input", "output")
+)
+def test_tilize_with_val_padding_docstring_dtype_conversions(input_dtype, output_dtype, device):
+    """Runs each output dtype the ttnn.tilize_with_val_padding docstring lists for an input of another dtype, with values that both
+    dtypes hold exactly and no NaN. Zeros are compared by value."""
+    check_readable(input_dtype, output_dtype)
+    shape = (2, 3, 50, 70)
+    input_tensor = ttnn.from_torch(
+        convertible_input(shape, input_dtype, output_dtype),
+        dtype=input_dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    output = ttnn.tilize_with_val_padding(input_tensor, (2, 3, 64, 96), 0.0, dtype=output_dtype)
+
+    assert output.dtype == output_dtype
+    assert output.layout == ttnn.TILE_LAYOUT
+    assert_exact(ttnn.to_torch(input_tensor), ttnn.to_torch(output), signed_zeros=False)

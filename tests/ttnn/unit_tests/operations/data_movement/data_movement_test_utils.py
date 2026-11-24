@@ -31,15 +31,8 @@ def full_range_input(shape, dtype, seed=0, nan=True):
     Floats get random signs, exponents and mantissas, so every normal exponent occurs. Their first elements are
     +inf, -inf, NaN (left out if ``nan`` is False), -0.0 and +0.0. Subnormals are left out, since the hardware may
     flush them to zero. Integers cover their whole range, and their first elements are their smallest and largest
-    values. Block floats share one exponent per 16 values, so they get standard normal values instead. FP8_E4M3
-    gets every value it holds except subnormals, which the host conversion flushes to zero: NaN, -0.0, +0.0 and every
-    normal value up to +-448, repeated over the shape.
+    values. Block floats share one exponent per 16 values, so they get standard normal values instead.
     """
-    if dtype == ttnn.fp8_e4m3:
-        values = torch.arange(256, dtype=torch.uint8).view(torch.float8_e4m3fn).float()
-        values = values[values.isnan() | (values == 0) | (values.abs() >= 2.0**-6)]
-        count = math.prod(shape)
-        return values.repeat(count // values.numel() + 1)[:count].reshape(shape)
     torch.manual_seed(seed)
     if dtype in _FLOATS:
         torch_dtype, bits_dtype, mantissa_bits = _FLOATS[dtype]
@@ -108,22 +101,16 @@ def assert_exact(expected, actual, signed_zeros=True):
 _BLOCK_FLOAT_FRACTION_BITS = {ttnn.bfloat8_b: 6, ttnn.bfloat4_b: 2}
 
 
-def convertible_input(shape, input_dtype, output_dtype, seed=0):
-    """Values for a dtype change from ``input_dtype`` to ``output_dtype`` that keep every value, with no NaN.
+def convertible_input(shape, *dtypes, seed=0):
+    """Values that each of ``dtypes`` holds exactly, with no NaN, so a dtype change between them keeps every value.
 
-    A block-float output gets +-(1 + k / 2**bits): values that share one exponent and fit its fraction bits. A
-    block-float input gets standard normal values, so its blocks have different shared exponents and most values sit
-    below their block's largest; once quantized to the input dtype, each one is exact in BFLOAT16 and FLOAT32.
-    Otherwise the values are BFLOAT16 ``full_range_input`` values without NaN, which FLOAT32 also holds.
+    With a block float, the values are +-(1 + k / 2**bits): they share one exponent and fit the block float's fraction
+    bits. Otherwise they are BFLOAT16 ``full_range_input`` values without NaN, which FLOAT32 also holds.
     """
-    if output_dtype in _BLOCK_FLOAT_FRACTION_BITS:
-        bits = min(
-            _BLOCK_FLOAT_FRACTION_BITS[d] for d in (input_dtype, output_dtype) if d in _BLOCK_FLOAT_FRACTION_BITS
-        )
-        torch.manual_seed(seed)
-        magnitude = 1 + torch.randint(0, 2**bits, shape) / 2**bits
-        return torch.where(torch.randint(0, 2, shape, dtype=torch.bool), -magnitude, magnitude)
-    if input_dtype in _BLOCK_FLOAT_FRACTION_BITS:
-        return full_range_input(shape, input_dtype, seed=seed)
-    assert {input_dtype, output_dtype} <= {ttnn.bfloat16, ttnn.float32}, f"no convertible input for {input_dtype}"
-    return full_range_input(shape, ttnn.bfloat16, seed=seed, nan=False).float()
+    bits = [_BLOCK_FLOAT_FRACTION_BITS[dtype] for dtype in dtypes if dtype in _BLOCK_FLOAT_FRACTION_BITS]
+    if not bits:
+        assert set(dtypes) <= {ttnn.bfloat16, ttnn.float32}, f"no convertible input for {dtypes}"
+        return full_range_input(shape, ttnn.bfloat16, seed=seed, nan=False).float()
+    torch.manual_seed(seed)
+    magnitude = 1 + torch.randint(0, 2 ** min(bits), shape) / 2 ** min(bits)
+    return torch.where(torch.randint(0, 2, shape, dtype=torch.bool), -magnitude, magnitude)
