@@ -125,7 +125,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // Run 1: restore a normal packer and write the checked output.
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(
-        formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * num_faces, FACE_R_DIM, TILE_C_DIM, num_faces);
+        formats.pack_src,
+        formats.pack_dst,
+        FACE_R_DIM * FACE_C_DIM * num_faces,
+        ckernel::tensor_shape_from_legacy_pack_geometry(FACE_R_DIM, TILE_C_DIM, num_faces));
     _llk_pack_init_<ckernel::PackMode::Default, false /* zero_output */>(
         formats.pack_src, FACE_R_DIM, TILE_C_DIM, num_faces, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
     // Preserve the Dest half selected by run 0; reinit would desynchronize pack from math.

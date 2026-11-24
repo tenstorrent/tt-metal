@@ -180,7 +180,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("INIT")
         _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(
-            formats.pack_src, formats.pack_dst, TILE_SIZE_PACK, FACE_R_DIM, ckernel::TILE_C_DIM, num_faces);
+            formats.pack_src, formats.pack_dst, TILE_SIZE_PACK, ckernel::tensor_shape_from_legacy_pack_geometry(FACE_R_DIM, ckernel::TILE_C_DIM, num_faces));
         _llk_pack_init_<ckernel::PackMode::Default, false /* zero_output */>(
             formats.pack_src, FACE_R_DIM, ckernel::TILE_C_DIM, num_faces, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
         _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
