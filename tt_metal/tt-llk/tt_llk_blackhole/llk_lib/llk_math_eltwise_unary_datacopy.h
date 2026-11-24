@@ -365,6 +365,7 @@ inline void _llk_math_eltwise_unary_datacopy_block_(
                 dst_format_masked == (std::uint32_t)DataFormat::UInt32);
             const std::uint32_t tiles_per_bank = clear_fp32 ? 4 : 8;
             // A block that fills its half takes one clear instead of one per face: the clears sit between the unpack drain and the post
+#if !defined(TT_METAL_TTSIM) // ttsim takes the zero flags clear on 32-bit 16-row clears only (tensix_zeroacc)
             if constexpr (Dst == DstSync::SyncHalf)
             {
                 if (num_tiles == tiles_per_bank && (start_dst_index & (tiles_per_bank - 1)) == 0)
@@ -373,6 +374,7 @@ inline void _llk_math_eltwise_unary_datacopy_block_(
                     return;
                 }
             }
+#endif
 #pragma GCC unroll 0
             for (std::uint32_t tile = 0; tile < num_tiles; tile++)
             {

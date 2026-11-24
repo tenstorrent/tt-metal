@@ -11,6 +11,11 @@
 namespace ckernel
 {
 
+#if defined(TT_METAL_TTSIM)
+// The outer loop count of the last ckernel_template::program(), which run_outer puts back on ttsim.
+inline std::uint32_t mop_programmed_outer_loop_len = 1;
+#endif
+
 class ckernel_template
 {
     // Here is the basic outline of a MOP loop and the definition of the
@@ -68,6 +73,8 @@ public:
     void program();         // just programs the registers
     static void run();      // runs - assumes that registers were already programmed
     void program_and_run(); // calls program, then run
+    // runs mop, a template 1 MOP that sets this run's outer loop count
+    static void run_outer(std::uint32_t mop);
 };
 
 class ckernel_unpack_template
@@ -351,6 +358,23 @@ inline void ckernel_template::run()
     TTI_MOP(1, 0, 0); // run the double-loop template
 }
 
+// Non-zero bits 19:10 of a template 1 MOP replace the programmed outer loop count for that run only (tt_mop_decode.sv:113-115).
+TT_ALWAYS_INLINE void ckernel_template::run_outer(const std::uint32_t mop)
+{
+#if defined(TT_METAL_TTSIM)
+    // ttsim models no override (mop_ingest rejects a template 1 zmask): program the count for the run, then put the last one back
+    volatile std::uint32_t *mop_cfg    = reinterpret_cast<volatile std::uint32_t *>(TENSIX_MOP_CFG_BASE);
+    const std::uint32_t outer_loop_len = (mop >> 10) & 0x3FF;
+    mop_sync();
+    mop_cfg[0] = outer_loop_len != 0 ? outer_loop_len : mop_programmed_outer_loop_len;
+    TTI_MOP(1, 0, 0);
+    mop_sync();
+    mop_cfg[0] = mop_programmed_outer_loop_len;
+#else
+    TT_INSN(mop);
+#endif
+}
+
 inline void ckernel_template::program()
 {
     volatile std::uint32_t *mop_cfg = reinterpret_cast<volatile std::uint32_t *>(TENSIX_MOP_CFG_BASE);
@@ -366,6 +390,9 @@ inline void ckernel_template::program()
     mop_cfg[6] = m_loop_op1;
     mop_cfg[7] = m_loop0_last_instr;
     mop_cfg[8] = m_loop1_last_instr;
+#if defined(TT_METAL_TTSIM)
+    mop_programmed_outer_loop_len = m_outer_loop_len;
+#endif
 }
 
 inline void ckernel_unpack_template::program_and_run(const std::uint8_t count, const std::uint32_t zmask)

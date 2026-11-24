@@ -55,10 +55,19 @@ constexpr std::uint32_t LLK_PACK_PAGE_WORDS_NARROW = 128;
 static_assert(16 * LLK_PACK_PAGE_WORDS_WIDE <= PACK_W_REACH_WORDS);
 constexpr std::uint32_t LLK_PACK_W_MAX_TILES_WIDE = PACK_W_REACH_WORDS / LLK_PACK_PAGE_WORDS_WIDE;
 
+// ttsim models no packer channel-1 W offset (PCK0_ADDR_CTRL_ZW_REG_1_Wstride, the ch1 W counter): there the closed and
+// W offset forms, which move the output with it, pack per tile and as blocks.
+#if defined(TT_METAL_TTSIM)
+inline constexpr bool llk_pack_ch1_w_modeled = false;
+#else
+inline constexpr bool llk_pack_ch1_w_modeled = true;
+#endif
+
 // The CB page must fit the packer's W stride and the W offset reach.
 inline bool llk_pack_block_is_closable(const std::uint32_t output_id)
 {
-    return get_local_cb_interface(output_id).fifo_page_size <= (llk_pack_dst_is_wide(output_id) ? LLK_PACK_PAGE_WORDS_WIDE : LLK_PACK_PAGE_WORDS_NARROW);
+    return llk_pack_ch1_w_modeled &&
+           get_local_cb_interface(output_id).fifo_page_size <= (llk_pack_dst_is_wide(output_id) ? LLK_PACK_PAGE_WORDS_WIDE : LLK_PACK_PAGE_WORDS_NARROW);
 }
 
 // W offset blocks program the output base and stride once and move each block with the channel-1 W counter. The base
@@ -1008,8 +1017,8 @@ __attribute__((always_inline)) inline void llk_pack_block(std::uint32_t start_ti
         _llk_pack_close_fast_untilize_<DST_SYNC_MODE>();
     }
     const bool straddle = guard_dest_straddle && IS_BFP_FORMAT(pack_dst_format[output_id]) && ntiles == 2 && (start_tile_index & 3) == 3;
-    const bool take_w =
-        form == 'W' && (forms == 0 || (forms & 4) != 0) && (llk_pack_block_is_contiguous(output_id) || (llk_pack_block_is_closable(output_id) && !straddle));
+    const bool take_w   = llk_pack_ch1_w_modeled && form == 'W' && (forms == 0 || (forms & 4) != 0) &&
+                        (llk_pack_block_is_contiguous(output_id) || (llk_pack_block_is_closable(output_id) && !straddle));
     // A W offset block stores the state in llk_pack_w_take, after it reads it.
     if (!take_w)
     {
