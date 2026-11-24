@@ -73,6 +73,7 @@ from .golden_generators import (
     dummy_golden_generator,
     get_golden_proxied,
 )
+from .harness_files import harness_files_root
 from .llk_params import (
     DestAccumulation,
     L1Accumulation,
@@ -659,8 +660,14 @@ class TestConfig:
             f"-DTENSIX_FIRMWARE -DENV_LLK_INFRA -DKERNEL_BUILD {llk_assert_define}{TestConfig.ARCH_DEFINE} "
             f"{'-DSPEED_OF_LIGHT' if TestConfig.SPEED_OF_LIGHT else ''}"
         )
+        # A harness that is not LLK_HOME's (an installed one) compiles the headers its own Python parses and generates
+        # against (counters.h, operand.h), not LLK_HOME's copy, and falls back to its perf counter headers when
+        # LLK_HOME has none.
+        harness = harness_files_root()
+        installed = harness != TestConfig.LLK_ROOT.resolve()
         TestConfig.INCLUDES = (
-            [
+            [f"-I{harness}/tests/helpers/include"] * installed
+            + [
                 "-Isfpi/include",
                 # Relative to tests/ (compile cwd), not pytest's cwd.
                 *[
@@ -681,6 +688,7 @@ class TestConfig:
                 # TODO: remove this after kernels get moved into Metal experimental (#52837)
                 "-I../../../ttnn/cpp/ttnn/operations/experimental",
             ]
+            + [f"-I{harness}/tools/include"] * installed
         )
         TestConfig._apply_extra_includes()
 

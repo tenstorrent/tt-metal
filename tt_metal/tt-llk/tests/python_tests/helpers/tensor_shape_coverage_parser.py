@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from datetime import datetime, timezone
@@ -43,7 +44,8 @@ from helpers.tile_constants import FACE_C_DIM
 
 HELPERS_DIR = Path(__file__).resolve().parent
 PYTHON_TESTS_DIR = HELPERS_DIR.parent
-LLK_ROOT = PYTHON_TESTS_DIR.parent.parent
+# The LLK tree whose common/ headers this regenerates: LLK_HOME, or this checkout.
+LLK_ROOT = Path(os.environ.get("LLK_HOME") or PYTHON_TESTS_DIR.parent.parent)
 COMMON_DIR = LLK_ROOT / "common"
 
 DEFAULT_COVERAGE_JSON = PYTHON_TESTS_DIR / "tensor_shape_coverage" / "coverage.json"

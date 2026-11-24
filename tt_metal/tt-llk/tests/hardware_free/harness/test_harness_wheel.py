@@ -50,22 +50,19 @@ def test_wheel_holds_the_harness_packages(names):
         "helpers/pack.py",
         "helpers/unpack.py",
         "helpers/llk_pytest_plugin.py",
-        "tt_llk_perf/__init__.py",
         "ttsim_error.py",
     ):
         assert expected in names, f"{expected} is missing from the wheel"
 
 
-def test_wheel_holds_every_harness_python_file(names):
-    """Nothing in the packaged directories is left behind, data files included."""
-    for source, package in build_wheel.PACKAGES.items():
-        root = build_wheel.LLK_ROOT / source
-        for path in root.rglob("*"):
-            if not path.is_file() or "__pycache__" in path.parts:
-                continue
-            if path.suffix in (".pyc", ".pyo"):
-                continue
-            assert f"{package}/{path.relative_to(root).as_posix()}" in names
+def test_wheel_installs_no_package_another_wheel_owns(names):
+    """``tt_llk_perf`` is a top-level package of the ttnn wheel; here it stays under ``llk_home``."""
+    assert {name.split("/")[0] for name in names} == {
+        "helpers",
+        "tt_llk_harness",
+        "ttsim_error.py",
+        f"tt_llk_harness-{VERSION}.dist-info",
+    }
 
 
 def test_wheel_holds_the_tt_llk_files_the_harness_reads(names):
@@ -75,6 +72,8 @@ def test_wheel_holds_the_tt_llk_files_the_harness_reads(names):
         f"{prefix}/tests/helpers/include/operand.h",
         f"{prefix}/tools/include/perf_counters/types.h",
         f"{prefix}/tests/perf_split_costs.json",
+        f"{prefix}/tools/python/tt_llk_perf/__init__.py",
+        f"tt_llk_harness-{VERSION}.dist-info/licenses/LICENSE",
         "tt_llk_harness/requirements.txt",
     ):
         assert expected in names, f"{expected} is missing from the wheel"
@@ -86,14 +85,14 @@ def test_wheel_holds_no_kernel_or_firmware_source(names):
     assert not compiled, compiled
 
 
-def test_metadata_carries_the_version_and_the_pinned_extra(wheel):
+def test_metadata_carries_the_version_and_the_requirements(wheel):
     with zipfile.ZipFile(wheel) as archive:
         metadata = archive.read(f"tt_llk_harness-{VERSION}.dist-info/METADATA").decode()
     assert f"Version: {VERSION}\n" in metadata
     pins = build_wheel.pinned_requirements()
-    assert pins, "tests/requirements.txt has no pinned requirement"
-    for pin in pins:
-        assert f'Requires-Dist: {pin} ; extra == "pinned"\n' in metadata
+    for name in build_wheel.RUNTIME_REQUIREMENTS:
+        assert f"Requires-Dist: {name}\n" in metadata
+        assert f'Requires-Dist: {pins[name]} ; extra == "pinned"\n' in metadata
 
 
 def test_record_lists_every_file(wheel, names):

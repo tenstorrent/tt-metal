@@ -34,9 +34,6 @@ class ChipArchitecture(Enum):
         return enum_value
 
 
-QUASAR_ARCH_ROOT = Path(__file__).resolve().parents[3] / "tt_llk_quasar" / "arch"
-
-
 # Other spellings tt-metal accepts for TT_METAL_QUASAR_VARIANT. Empty means the base Quasar part.
 QUASAR_VARIANT_ALIASES = {
     "quasar": "",
@@ -49,10 +46,13 @@ QUASAR_VARIANT_ALIASES = {
 def quasar_variant():
     raw = os.getenv("TT_METAL_QUASAR_VARIANT", "").strip().lower()
     variant = QUASAR_VARIANT_ALIASES.get(raw, raw)
-    if variant and not (QUASAR_ARCH_ROOT / variant).is_dir():
-        known = sorted(p.name for p in QUASAR_ARCH_ROOT.iterdir() if p.is_dir())
+    # The LLK tree is LLK_HOME; this checkout only when that is not set yet.
+    llk_home = os.environ.get("LLK_HOME") or Path(__file__).resolve().parents[3]
+    arch_root = Path(llk_home) / "tt_llk_quasar" / "arch"
+    if variant and not (arch_root / variant).is_dir():
+        known = sorted(p.name for p in arch_root.glob("*/"))
         raise ValueError(
-            f"TT_METAL_QUASAR_VARIANT={raw!r} has no directory under {QUASAR_ARCH_ROOT}; known variants: {known}"
+            f"TT_METAL_QUASAR_VARIANT={raw!r} has no directory under {arch_root}; known variants: {known}"
         )
     return variant
 

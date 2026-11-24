@@ -139,7 +139,6 @@ CONTRACT_SURFACES = {
             "get_num_blocks_and_num_tiles_in_block",
             "golden_registry",
             "goldens",
-            "harness_files_root",
             "input_output_formats",
             "parametrize",
             "params",

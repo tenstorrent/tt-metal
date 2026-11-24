@@ -72,7 +72,6 @@ from helpers.golden_generators import (
 
 # NOTE: ``get_golden_generator`` is deliberately absent from that list. It is
 # defined as a forwarding function at the bottom of this module; see why there.
-from helpers.harness_files import harness_files_root
 from helpers.llk_params import (
     ApproximationMode,
     BlocksCalculationAlgorithm,
@@ -164,7 +163,6 @@ __all__ = [
     "StimuliConfig",
     "StimuliSpec",
     "generate_stimuli",
-    "harness_files_root",
     # describing a variant
     "DataFormat",
     "input_output_formats",

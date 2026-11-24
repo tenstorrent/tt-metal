@@ -37,7 +37,17 @@ jobs:
         uses: re-actors/alls-green@release/v1
         with:
           jobs: ${{ toJSON(needs) }}
-      # The harness as a wheel, from a commit whose e2e run passed (the step above stops the job otherwise).
+
+  # The harness as a wheel, from a commit whose e2e run passed. A job of its own, so a failed build or upload is not
+  # reported as an e2e failure and the release token is only in a job that runs pinned actions with a read-only token.
+  llk-harness-wheel:
+    name: "LLK harness wheel"
+    needs: llk-e2e-summary
+    runs-on: ubuntu-slim
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
       - name: Checkout tt-llk
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
@@ -62,9 +72,11 @@ jobs:
           path: dist/
           if-no-files-found: error
           retention-days: 30
-      # Only when a release repository is configured; its visibility decides who can download the wheel.
+          overwrite: true
+      # Only the nightly run of main, and only when a release repository is configured; its visibility decides who can
+      # download the wheel.
       - name: Publish the harness wheel as a release
-        if: ${{ vars.LLK_HARNESS_WHEEL_RELEASE_REPO != '' }}
+        if: ${{ github.event_name == 'schedule' && github.ref == 'refs/heads/main' && vars.LLK_HARNESS_WHEEL_RELEASE_REPO != '' }}
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.LLK_HARNESS_WHEEL_RELEASE_TOKEN }}

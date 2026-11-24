@@ -31,7 +31,7 @@ def harness_python_root() -> Path:
     """Directory that holds the harness packages (``tt_llk_harness``, ``helpers``).
 
     ``tests/python_tests`` of the checkout, or, when ``LLK_HARNESS_SITE`` names
-    one, the directory an installed harness wheel was unpacked into. The second
+    one, the directory the harness wheel was installed into. The second
     is how the same contract is checked against the wheel.
     """
     site = os.environ.get("LLK_HARNESS_SITE")

@@ -13,25 +13,28 @@ packaged so that suite installs it instead of putting a tt-llk checkout on
 - ``helpers``: build and run of a test variant, stimuli generation, golden
   generators, packing and unpacking of L1 data, comparison, the pytest plugin;
 - ``tt_llk_harness``: the supported interface to it;
-- ``tt_llk_perf`` and ``ttsim_error``, which ``helpers`` imports;
+- ``ttsim_error``, which ``helpers`` imports;
 - under ``tt_llk_harness/llk_home``, in tt-llk layout, the tt-llk files the
-  harness's own Python reads and the headers its generated ``build.h``
-  includes (``LLK_HOME_FILES`` below; ``tt_llk_harness.harness_files_root()``
-  returns that directory);
-- ``tt_llk_harness/requirements.txt``, the pinned Python requirements, which
-  are also the wheel's ``pinned`` extra.
+  harness's own Python reads, the headers its generated ``build.h`` includes
+  and ``tt_llk_perf`` (``LLK_HOME_FILES`` below);
+- ``tt_llk_harness/requirements.txt``, the Python requirements the harness is
+  tested with. The wheel requires what the harness imports
+  (``RUNTIME_REQUIREMENTS``), unpinned; its ``pinned`` extra pins those to the
+  versions in that file.
 
 It holds no LLK, kernel, test driver, firmware source, linker script or
 toolchain: the suite that installs it supplies those through ``LLK_HOME`` and
 ``TestConfig.add_include_dirs`` / ``add_helpers_tree``.
 
-The version is ``<API major>.<API minor>.<commit date>+g<commit>``, the API
-being ``tt_llk_harness.HARNESS_API_VERSION``, so wheels order by API and then by
-day, and an installed wheel names the commit it was built from.
+The version is ``<API major>.<API minor>.<commit time>+g<commit>``, the API
+being ``tt_llk_harness.HARNESS_API_VERSION`` and the time ``YYYYMMDDHHMM`` in
+UTC, so wheels order by API and then by commit time, and an installed wheel
+names the commit it was built from.
 
 The wheel is written directly (a pure-Python wheel is a zip archive with three
-metadata files, PEP 427), so building it needs only the standard library and
-the same commit always gives the same bytes.
+metadata files, PEP 427), uncompressed, so building it needs only git and the
+standard library, and the same commit always gives the same bytes. It holds the
+files git tracks or would add, so nothing ignored.
 """
 
 from __future__ import annotations
@@ -39,9 +42,11 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import os
 import re
 import subprocess
 import sys
+import time
 import zipfile
 from pathlib import Path
 
@@ -53,7 +58,6 @@ DISTRIBUTION = "tt_llk_harness"
 PACKAGES = {
     "tests/python_tests/helpers": "helpers",
     "tests/python_tests/tt_llk_harness": "tt_llk_harness",
-    "tools/python/tt_llk_perf": "tt_llk_perf",
 }
 # Top-level modules: file in tt-llk -> module in the wheel.
 MODULES = {
@@ -70,25 +74,55 @@ LLK_HOME_FILES = (
     # the perf split's cost tables (helpers/llk_pytest_plugin.py)
     "tests/perf_split_costs.json",
     "tests/perf_split_costs_sol.json",
+    # imported by helpers; the pytest plugin puts this directory on sys.path. Not a top-level package of this wheel:
+    # the ttnn wheel installs one of that name.
+    "tools/python/tt_llk_perf",
 )
 LLK_HOME_PREFIX = "tt_llk_harness/llk_home"
 REQUIREMENTS = "tests/requirements.txt"
 REQUIREMENTS_IN_WHEEL = "tt_llk_harness/requirements.txt"
+# What the harness imports, by the names tests/requirements.txt pins.
+RUNTIME_REQUIREMENTS = (
+    "filelock",
+    "loguru",
+    "ml_dtypes",
+    "mpmath",
+    "numpy",
+    "pandas",
+    "pyarrow",
+    "pytest",
+    "pyyaml",
+    "torch",
+    "tt-exalens",
+    "typing-extensions",
+)
 
-_IGNORED_DIRS = {"__pycache__"}
-_IGNORED_SUFFIXES = {".pyc", ".pyo"}
 # Zip's earliest timestamp: a fixed one keeps the archive a function of its contents.
 _ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 
 
-def _files_under(source: Path):
-    """Every file of a package or data directory, sorted, as paths relative to it."""
-    for path in sorted(source.rglob("*")):
-        if not path.is_file() or path.suffix in _IGNORED_SUFFIXES:
-            continue
-        if _IGNORED_DIRS.intersection(path.relative_to(source).parts):
-            continue
-        yield path.relative_to(source)
+def _git(directory: Path, *args: str) -> str:
+    # Run from a git hook, these variables point at the hook's index and work tree.
+    env = {
+        name: value
+        for name, value in os.environ.items()
+        if name not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
+    }
+    return subprocess.run(
+        ["git", "-C", str(directory), *args],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    ).stdout.strip()
+
+
+def _files_under(source: Path) -> list[Path]:
+    """The files of a directory that git tracks or would add, sorted, as paths relative to it."""
+    listed = _git(source, "ls-files", "--cached", "--others", "--exclude-standard")
+    return sorted(
+        Path(name) for name in listed.splitlines() if (source / name).is_file()
+    )
 
 
 def wheel_contents(llk_root: Path = LLK_ROOT) -> dict[str, Path]:
@@ -136,39 +170,28 @@ def api_version(llk_root: Path = LLK_ROOT) -> tuple[int, int]:
     return int(match.group(1)), int(match.group(2))
 
 
-def _git(llk_root: Path, *args: str) -> str:
-    return subprocess.run(
-        ["git", "-C", str(llk_root), *args],
-        check=True,
-        capture_output=True,
-        text=True,
-        env={"TZ": "UTC", "PATH": "/usr/bin:/bin:/usr/local/bin"},
-    ).stdout.strip()
-
-
 def default_version(llk_root: Path = LLK_ROOT) -> str:
-    """``<API major>.<API minor>.<commit date, UTC>+g<commit>``, with ``.dirty`` for uncommitted harness changes."""
+    """``<API major>.<API minor>.<commit time, UTC>+g<commit>``, with ``.dirty`` for uncommitted harness changes."""
     major, minor = api_version(llk_root)
     try:
         commit = _git(llk_root, "rev-parse", "--short=12", "HEAD")
-        date = _git(llk_root, "log", "-1", "--format=%cd", "--date=format-local:%Y%m%d")
+        committed = int(_git(llk_root, "log", "-1", "--format=%ct"))
         sources = [*PACKAGES, *MODULES, *LLK_HOME_FILES, REQUIREMENTS]
         dirty = _git(llk_root, "status", "--porcelain", "--", *sources)
     except (OSError, subprocess.CalledProcessError) as error:
         raise RuntimeError(
             "Cannot derive the wheel version from git; pass --version."
         ) from error
-    return f"{major}.{minor}.{date}+g{commit}{'.dirty' if dirty else ''}"
+    # To the minute: the ``+g<commit>`` part orders lexically, so it cannot order two wheels of one day.
+    stamp = time.strftime("%Y%m%d%H%M", time.gmtime(committed))
+    return f"{major}.{minor}.{stamp}+g{commit}{'.dirty' if dirty else ''}"
 
 
-def pinned_requirements(llk_root: Path = LLK_ROOT) -> list[str]:
-    """The ``name==version`` lines of tests/requirements.txt."""
-    pins = []
-    for line in (llk_root / REQUIREMENTS).read_text().splitlines():
-        line = line.split("#", 1)[0].strip()
-        if line and not line.startswith("-"):
-            pins.append(line)
-    return pins
+def pinned_requirements(llk_root: Path = LLK_ROOT) -> dict[str, str]:
+    """Name -> ``name==version`` for the lines of tests/requirements.txt that are exactly that."""
+    text = (llk_root / REQUIREMENTS).read_text()
+    pin = re.compile(r"^([A-Za-z0-9._-]+)==[A-Za-z0-9.]+$", re.MULTILINE)
+    return {match[1]: match[0] for match in pin.finditer(text)}
 
 
 def _metadata(version: str, llk_root: Path) -> str:
@@ -182,9 +205,12 @@ def _metadata(version: str, llk_root: Path) -> str:
         "Requires-Python: >=3.10",
         "Provides-Extra: pinned",
     ]
+    # A KeyError here is a requirement the harness imports that tests/requirements.txt no longer pins as name==version.
+    pins = pinned_requirements(llk_root)
+    lines += [f"Requires-Dist: {name}" for name in RUNTIME_REQUIREMENTS]
     lines += [
-        f'Requires-Dist: {pin} ; extra == "pinned"'
-        for pin in pinned_requirements(llk_root)
+        f'Requires-Dist: {pins[name]} ; extra == "pinned"'
+        for name in RUNTIME_REQUIREMENTS
     ]
     return "\n".join(lines) + "\n"
 
@@ -215,6 +241,7 @@ def build_wheel(
     dist_info = f"{DISTRIBUTION}-{version}.dist-info"
     entries[f"{dist_info}/METADATA"] = _metadata(version, llk_root).encode()
     entries[f"{dist_info}/WHEEL"] = _WHEEL.encode()
+    entries[f"{dist_info}/licenses/LICENSE"] = (llk_root / "LICENSE").read_bytes()
     entries[f"{dist_info}/top_level.txt"] = "".join(
         f"{name}\n"
         for name in sorted(
@@ -227,10 +254,10 @@ def build_wheel(
 
     out_dir.mkdir(parents=True, exist_ok=True)
     wheel = out_dir / f"{DISTRIBUTION}-{version}-py3-none-any.whl"
-    with zipfile.ZipFile(wheel, "w", zipfile.ZIP_DEFLATED) as archive:
+    # Stored, not deflated: the bytes then do not depend on the zlib that built them.
+    with zipfile.ZipFile(wheel, "w") as archive:
         for name, data in sorted(entries.items()):
             info = zipfile.ZipInfo(name, date_time=_ZIP_TIMESTAMP)
-            info.compress_type = zipfile.ZIP_DEFLATED
             info.external_attr = 0o644 << 16
             archive.writestr(info, data)
     return wheel
@@ -248,7 +275,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--version",
-        help="wheel version (default: <API major>.<API minor>.<commit date>+g<commit>)",
+        help="wheel version (default: <API major>.<API minor>.<commit time>+g<commit>)",
     )
     args = parser.parse_args()
     print(build_wheel(args.out_dir, args.version))

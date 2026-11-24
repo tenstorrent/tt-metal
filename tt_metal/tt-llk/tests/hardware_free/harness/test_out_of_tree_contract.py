@@ -26,7 +26,6 @@ import subprocess
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
-import zipfile
 from pathlib import Path
 
 import pytest
@@ -112,8 +111,9 @@ def test_out_of_tree_contract_fixture_passes_on_the_installed_wheel():
 
     ``tests/harness_wheel/make_wheel.py`` packages the harness so an external
     suite can install it instead of putting a checkout on ``sys.path``. This
-    builds that wheel, unpacks it the way installing a pure-Python wheel does,
-    and points the fixture at the result (``LLK_HARNESS_SITE``). The fixture
+    builds that wheel, has pip install it into a directory, and points the
+    fixture at the result (``LLK_HARNESS_SITE``), which the fixture puts behind
+    its own directories on ``sys.path``, where site-packages is. The fixture
     asserts that ``helpers`` resolved from there, so a pass means the installed
     copy was the one exercised.
 
@@ -129,8 +129,14 @@ def test_out_of_tree_contract_fixture_passes_on_the_installed_wheel():
         )
         assert built.returncode == 0, f"wheel build failed:\n{built.stderr}"
         site = Path(child_temp) / "site"
-        with zipfile.ZipFile(built.stdout.strip()) as wheel:
-            wheel.extractall(site)
+        # --no-deps: the requirements are this environment's; pip still validates the wheel's metadata and RECORD.
+        installed = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--no-deps", "--target", site]
+            + [built.stdout.strip()],
+            capture_output=True,
+            text=True,
+        )
+        assert installed.returncode == 0, f"pip install failed:\n{installed.stderr}"
 
         report = Path(child_temp) / "fixture-report.xml"
         result = _run_fixture(child_temp, report, harness_site=site)

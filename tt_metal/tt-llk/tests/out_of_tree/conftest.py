@@ -32,7 +32,11 @@ if not (_harness_python / "tt_llk_harness").is_dir():
         "tt-llk root (contains tests/ and tt_llk_*), or LLK_HARNESS_SITE to the "
         "directory an installed harness lives in."
     )
-sys.path.insert(0, str(_harness_python))
+# An installed harness sits in site-packages, behind the suite's own directories; a checkout goes first.
+if os.environ.get("LLK_HARNESS_SITE"):
+    sys.path.append(str(_harness_python))
+else:
+    sys.path.insert(0, str(_harness_python))
 
 pytest_plugins = ["tt_llk_harness.plugin"]
 
