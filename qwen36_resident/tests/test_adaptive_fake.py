@@ -385,7 +385,8 @@ def test_pay_policy_decides_an_unmeasured_live_count_at_once(monkeypatch, n, exp
 
 def test_pay_policy_excludes_prefills(monkeypatch):
     """a prefill between two decode steps (another user's prompt) is not the step's time: 40 ms verify steps with 3.2
-    tokens each pay at 8 users even when a 300 ms prefill runs between every two of them"""
+    tokens each pay at 8 users even when a 300 ms prefill runs between every other two of them (the step across a
+    prefill is not sampled: its device time outlasts the call)"""
     import time as _time
 
     m, pf = make(monkeypatch)
@@ -399,9 +400,11 @@ def test_pay_policy_excludes_prefills(monkeypatch):
     monkeypatch.setattr(ResidentRowsAdapter, "prefill_forward", slow_prefill)
     m._pay["last_t"] = clock[0]
     pays = None
-    for _ in range(A.PAY_MIN + 4):
+    for i in range(A.PAY_MIN + 4):
         clock[0] += 0.040
-        m.prefill_forward(None, None, None, [1], empty_slots=[0], prefill_final_mask=[False])
+        if i % 2:
+            m.prefill_forward(None, None, None, [1], empty_slots=[0], prefill_final_mask=[False])
+            clock[0] += 0.015  # (the prefill's device time past its call: in the step across it, not sampled)
         m._pay["kind"], m._pay["n"] = "verify", 8
         pays = m._measure([3.2] * 8)
     assert pays is True and abs(m._pay["spec_ms"][8] - 40.0) < 1e-6, (m._pay, pays)

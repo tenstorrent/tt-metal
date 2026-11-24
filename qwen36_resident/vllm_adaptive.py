@@ -348,6 +348,8 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         dt_ms = None if pay["last_t"] is None else (now - pay["last_t"] - pay.get("excl", 0.0)) * 1000
         pay["last_t"], pay["excl"] = now, 0.0
         n, ctx = max(1, pay["n"]), pay.get("ctx", 0)
+        if pay.pop("skip", False):  # (a step across a prefill: no time sample; its acceptance still counts)
+            dt_ms = -1.0
         if dt_ms is not None and dt_ms < 5000:  # (an idle gap is no step)
             # (the time at no context: the estimates' unit; a sample under 1 / OUTLIER of the default model is no
             # device step — the fake engine's microseconds — and is skipped like a high outlier)
@@ -469,8 +471,11 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         if len(self.live) > SPEC_USERS and self.mode == "SPEC":
             logger.info(f"adaptive: {len(self.live)} live users -> PLAIN")
             self.mode, self.low_calls = "PLAIN", 0
-        # (a prefill between two decode steps is no step's cost either: excluded from the policy's step times)
+        # (a prefill between two decode steps is no step's cost either: excluded from the policy's step times, and the
+        # step across it not sampled — its device time outlasts the call: plain estimates 21-22 ms vs 16.5-20 at 1-8
+        # users let 6-7 users arriving together pass the step-time model, rc-20261124l)
         self._pay["excl"] = self._pay.get("excl", 0.0) + time.perf_counter() - t0
+        self._pay["skip"] = True
         return res
 
     # ------------------------------------------------------------------ decode
