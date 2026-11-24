@@ -1,104 +1,113 @@
 # DeepSeek-V4.1-Flash, disaggregated: set up, build, run
 
-Prefill and decode run on two Blackhole Galaxies (8x4, 32 chips each), one host each. The prefill server
-(`demo/prefill_server.py`) runs on one. The decode server (`demo/server.py`) runs on the other, sends every
-prompt to the prefill server, and loads the KV cache that comes back. Two ways to move that cache:
+This guide runs prefill and decode on two separate Blackhole Galaxies (8x4, 32 chips each), each with its own
+host. For one host and one Galaxy, use `QUICKSTART.md` instead.
 
-| Mode | How the KV cache moves | How you launch | What you need |
+* The **prefill server** (`demo/prefill_server.py`) runs on one host.
+* The **decode server** (`demo/server.py`) runs on the other. It accepts client requests, sends each prompt to
+  the prefill server, and loads the KV cache that comes back.
+
+The KV cache can move between the two in one of two ways. You will pick one in section 3.
+
+| Mode | How the KV cache moves | Requires | Time to first token at 1M tokens |
 | --- | --- | --- | --- |
-| **fabric push** | prefill writes it into decode's DRAM over TT-Fabric; TCP carries only control messages | both servers as the two ranks of one `tt-run` job (`demo/run_d_p_servers.sh`) | the Galaxies cabled to each other, and section 4 passing |
-| **TCP** | prefill reads it back to its host, sends it over TCP, decode writes it onto the device | two processes, one per host | an IP route between the hosts |
+| **Fabric push** (faster) | Prefill writes it straight into decode's device memory over TT-Fabric | The Galaxies cabled to each other, and the link test in section 3 passing | 26.4 s |
+| **TCP** (fallback) | Prefill copies it to its host and sends it over the network; decode writes it onto its device | A network route between the hosts | 33.6 s |
 
-At 1M tokens the push finishes in ~1.4 s after the prefill. TCP takes ~14 s. Use TCP when section 4 fails, when
-the Galaxies are not cabled to each other, or when you need to start and stop the two servers separately.
+## Before you start
 
-Details: `PREFILL_D_P_FABRIC_PUSH.md` (push), `PREFILL_D_P_INTEGRATION.md` (TCP),
-`PREFILL_D_P_PREFIX_CACHE.md` (prefix cache). One host and one Galaxy: `QUICKSTART.md`.
-
-## 1. Name your hosts
-
-Set these in every shell you run the commands from:
-
-```bash
-export PREFILL_HOST=<prefill host, as ssh and MPI reach it>   # rank 0
-export DECODE_HOST=<decode host, as ssh and MPI reach it>     # rank 1
-export PREFILL_IP=<prefill host's IP>                         # decode connects here
-export DECODE_IP=<decode host's IP>                           # clients connect here
-export MPI_IFACE=<network interface MPI uses, on both hosts>
-export REPO=<checkout path; the same path on both hosts>
-export PREFILL_PORT=9041 DECODE_PORT=8000
-```
-
-Check:
-
-* `$MPI_IFACE` is up on both hosts (`ip -br addr show $MPI_IFACE`) and each host can reach the other on it.
-* From the prefill host, `ssh -o BatchMode=yes $DECODE_HOST hostname` prints the decode hostname without a
-  password prompt. `tt-run` connects to the decode host over ssh from the prefill host.
-* On the decode host, `getent hosts $PREFILL_HOST`. If the decode host cannot reach that address, use
-  `$PREFILL_IP` in the prefill URLs below.
-* Someone else may be using the cards. Before a command that opens a device:
+* **Disk:** ~480 GB on both hosts for the checkpoint, plus ~700 GB on the decode host for the expert weight cache.
+* **RAM:** ~210 GB free on the prefill host.
+* **Shared cards:** other users may be using the Galaxies. Before any command that opens a device, check:
   `ps -eo user,pid,args | grep -E "tt-run|server.py|pytest"`.
 
-## 2. Set up and build, on both hosts
+## 1. Set the host variables
 
-`tt-run` runs the launch host's paths on every rank. Unless `$REPO` is on storage both hosts mount, each host
-needs its own checkout of the same commit, at the same path, and each checkout has to be built.
+Set these in every shell you run commands from, on both hosts:
+
+```bash
+export PREFILL_IP=<prefill host's IP>       # decode connects here
+export DECODE_IP=<decode host's IP>         # clients connect here
+export PREFILL_PORT=9041 DECODE_PORT=8000
+export REPO=<absolute checkout path; the same path on both hosts>
+
+# Fabric push only:
+export PREFILL_HOST=<prefill hostname, as ssh and MPI reach it>
+export DECODE_HOST=<decode hostname, as ssh and MPI reach it>
+export MPI_IFACE=<network interface MPI uses, on both hosts>
+```
+
+For fabric push, also check:
+
+* `ip -br addr show $MPI_IFACE` shows the interface up on both hosts.
+* On the prefill host, `ssh -o BatchMode=yes $DECODE_HOST hostname` prints the decode hostname without asking
+  for a password. Fabric push starts both servers from the prefill host over ssh.
+
+## 2. Set up both hosts
+
+Do this on each host. Each host needs its own checkout and build, unless `$REPO` is on storage both hosts mount.
 
 ```bash
 cd $REPO
 git checkout <the branch both hosts will run>
-sudo ./install_dependencies.sh            # first time on this host
-./build_metal.sh                          # again after C++ changes; files under kernels/ compile at runtime
-./create_venv.sh                          # first time on this host
+sudo ./install_dependencies.sh     # first time only
+./build_metal.sh                   # rerun after C++ changes; kernels/ files compile at runtime
+./create_venv.sh                   # first time only
 source python_env/bin/activate
-```
-
-On the decode host, build the Rust host runtime. The decode server runs its per-step host work there. Without
-the build it uses slower Python threads and starts no web monitor. If `cargo` is missing:
-`curl https://sh.rustup.rs -sSf | sh -s -- -y && source ~/.cargo/env`.
-
-```bash
-models/experimental/deepseek_v41_flash/host_rs/build.sh
-```
-
-Download the checkpoint on both hosts. It is ~480 GB. Both servers read the default Hugging Face cache,
-`~/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4.1-Flash-1017`.
-
-```bash
 hf download deepseek-ai/DeepSeek-V4.1-Flash-1017
 ```
 
-On the decode host, fill the expert weight cache before the first server start. Otherwise that start converts
-the experts one at a time. Host only, no device. The cache is ~700 GB.
+The checkpoint lands in the default Hugging Face cache, where both servers look for it.
 
-```bash
-python models/experimental/deepseek_v41_flash/tools/fill_expert_cache.py --all-layers
-python models/experimental/deepseek_v41_flash/tools/fill_expert_cache.py --dspark --dtype bfloat8_b
-```
+**On the decode host only**, two more steps:
 
-The prefill host needs ~210 GB of free RAM for the Engram lookup tables. The first start builds them into
-`/dev/shm/deepseek_v41_d_p_engram` (`ENGRAM_SHM_DIR`). Later starts map that directory.
+1. Build the Rust host runtime. Without it, decode runs slower and has no web monitor. If `cargo` is missing,
+   first run `curl https://sh.rustup.rs -sSf | sh -s -- -y && source ~/.cargo/env`.
 
-### Keep the two checkouts on the same commit
+   ```bash
+   models/experimental/deepseek_v41_flash/host_rs/build.sh
+   ```
 
-Commit on one host, then fast-forward the other over ssh. This example runs on the prefill host and pulls the
-decode host's commits. The prefill working tree has to be clean, and `$REPO` has to be an absolute path:
+2. Fill the expert weight cache. This runs on the host only, without the device. If you skip it, the first
+   server start converts the experts one at a time.
+
+   ```bash
+   python models/experimental/deepseek_v41_flash/tools/fill_expert_cache.py --all-layers
+   python models/experimental/deepseek_v41_flash/tools/fill_expert_cache.py --dspark --dtype bfloat8_b
+   ```
+
+### Keep both hosts on the same commit
+
+Both hosts must run the same code. To pull the decode host's commits into the prefill host's checkout (the
+prefill working tree must be clean):
 
 ```bash
 git fetch ssh://$DECODE_HOST$REPO <branch>:refs/remotes/decode/<branch>
 git merge --ff-only decode/<branch>
 ```
 
-If both hosts have commits the other does not, merge. Then `./build_metal.sh` on any host whose C++ changed.
-Before a launch:
+If each host has commits the other lacks, merge them instead, then rerun `./build_metal.sh` on any host whose
+C++ changed. Before every launch, confirm the two hashes match:
 
 ```bash
 git rev-parse HEAD; ssh $DECODE_HOST "git -C $REPO rev-parse HEAD"
 ```
 
-## 3. Shell variables
+## 3. Start the servers: pick one option
 
-On the prefill host, from `$REPO`, with the venv active. Section 4 uses `$CFG` and `$MPI`.
+Use **option A (fabric push)** if the Galaxies are cabled to each other. If its link test fails, or you need to
+start and stop the two servers separately, use **option B (TCP)**.
+
+Run all commands from `$REPO` with the venv active.
+
+### Option A: fabric push
+
+#### Step 1: test the link
+
+Run this before the first launch, and again after re-cabling, after `tt-smi -glx_reset`, or after a failed push.
+If either test fails or hangs, use option B.
+
+On the prefill host, set up the MPI arguments for the tests:
 
 ```bash
 CFG=tests/tt_metal/distributed/config
@@ -107,22 +116,12 @@ MPI="--host $PREFILL_HOST,$DECODE_HOST --map-by rankfile:file=/tmp/d_p.rankfile 
   --mca btl self,tcp --mca btl_tcp_if_include $MPI_IFACE --bind-to none --tag-output"
 ```
 
-The rank-binding files in section 4 have `40_41` in the name. That is the pair of machines they were first
-written for. The files do not name your hosts. The rankfile above does: rank 0 on `$PREFILL_HOST`, rank 1 on
-`$DECODE_HOST`.
+Rank 0 is the prefill host and rank 1 is the decode host. `tt-run` prefixes each output line with its rank, as
+`[1,0]` or `[1,1]`. The rank-binding files have `40_41` in their names after the machines they were written
+for. They work on any pair of hosts, because the rankfile above picks the hosts.
 
-## 4. Test the link between the Galaxies
-
-Run level 1 and level 2 before the first fabric-push launch, and again after you re-cable, run
-`tt-smi -glx_reset`, or a push fails. Each command exits 0 when it passes. `tt-run` prefixes every line with
-`[job,rank]`. Rank 0 is the prefill host, rank 1 the decode host. With a single job those prefixes are `[1,0]`
-and `[1,1]`.
-
-If level 1 or level 2 fails, serve with section 6. Level 3 checks the TCP path that section 6 uses.
-
-### Level 1: traffic across the cables
-
-Both Galaxies as one 16x4 mesh (8 rows on each host), and an `all_reduce` across the host boundary.
+**Test 1: traffic across the cables.** Joins both Galaxies into one 16x4 mesh and runs an `all_reduce` across
+the host boundary.
 
 ```bash
 tt-run --rank-binding $CFG/dual_8x4_hosts_40_41_rank_bindings.yaml --mpi-args "$MPI" \
@@ -131,11 +130,8 @@ tt-run --rank-binding $CFG/dual_8x4_hosts_40_41_rank_bindings.yaml --mpi-args "$
 
 Pass: both ranks print `ALL CHECKS PASSED`.
 
-### Level 2: the write the servers do
-
-Two meshes, one Galaxy each, with the servers' 6208-byte packet size. Rank 1 allocates decode-shaped KV pools
-and sends their addresses to rank 0. Rank 0 writes them over the fabric. Rank 1 checks the bytes. Keep
-`--payload 6208`.
+**Test 2: the KV write the servers do.** Rank 0 writes into KV-cache-shaped buffers on rank 1's device over the
+fabric, using the servers' packet size. Keep `--payload 6208`.
 
 ```bash
 tt-run --rank-binding $CFG/dual_bh_galaxy_8x4_hosts_40_41_two_mesh_rank_bindings.yaml --mpi-args "$MPI" \
@@ -144,71 +140,63 @@ tt-run --rank-binding $CFG/dual_bh_galaxy_8x4_hosts_40_41_two_mesh_rank_bindings
     exec python \$D/receiver_init.py --sender $PREFILL_IP --payload 6208"
 ```
 
-Pass: rank 1 prints `PASS`. Then, on the decode host, after that job has exited, check the bytes are still in
-DRAM. This command does not open the device:
+Pass: rank 1 prints `PASS`. Then, after the job exits, run this on the decode host to confirm the bytes are
+still in device memory. It also prints `PASS`, and does not open the device:
 
 ```bash
-python models/experimental/deepseek_v41_flash/tests/xhost_kv/receiver_verify.py   # prints PASS
+python models/experimental/deepseek_v41_flash/tests/xhost_kv/receiver_verify.py
 ```
 
-A timeout while the fabric is coming up, a rank reporting links down, a hang, or `FAIL`: use section 6. If a
-hang drops a chip off PCIe, `tt-smi` on that host shows fewer than 32 chips. `tt-smi -glx_reset` there brings
-them back, then rerun this section.
+#### Step 2: launch
 
-`tests/xhost_kv/d_p_push.py` loads both models and compares a real push with the TCP path. Sections 5 and 6 run
-without it. The launch command in its docstring names the original 40/41 hosts, and the run takes several
-minutes. Rank 1 prints `PASS: byte-exact`.
-
-### Level 3: TCP
-
-Start a prefill server with section 6. On the decode host, venv active (torch only, no device):
-
-```bash
-python models/experimental/deepseek_v41_flash/demo/prefill_client.py --server $PREFILL_IP:$PREFILL_PORT --random 16384 --repeat 3
-```
-
-Pass: it prints `PASS`. With no server up, `nc -zv $PREFILL_IP $PREFILL_PORT` only tells you the port is open.
-
-## 5. Run fabric push
-
-After section 4 passes. On the prefill host, from `$REPO`, venv active:
+On the prefill host:
 
 ```bash
 models/experimental/deepseek_v41_flash/demo/run_d_p_servers.sh --prefill-port $PREFILL_PORT -- \
   --host 0.0.0.0 --port $DECODE_PORT --prefill-url $PREFILL_IP:$PREFILL_PORT --kv-transfer-mode fabric
 ```
 
-The script reads `PREFILL_HOST`, `DECODE_HOST`, and `MPI_IFACE`. Rank 0 is the prefill server, rank 1 the
-decode server, and they are one job: Ctrl-C on the prefill host stops both. Decode retries the prefill server
-for up to two hours (`DEEPSEEK_V41_PREFILL_WAIT`) while prefill loads weights and warms up.
+This one command starts both servers as a single `tt-run` job: prefill on this host, decode on `$DECODE_HOST`.
+Ctrl-C here stops both.
 
-At the default 1M-token context, a cold start is about 200 s of weight load, 160 s of first-run compile, and
-22 s of warmup. The prefill server is listening when it logs `prefill server on ...`. Decode then logs
-`disaggregated prefill connected to ... KV pushed over TT-Fabric`. It is ready for requests when it logs
-`serving 'deepseek-v4.1-flash' on http://...`.
+A cold start takes about 6.5 minutes: ~200 s loading weights, ~160 s compiling, ~22 s warming up. Watch for these
+log lines, in order:
 
-## 6. Run TCP
+1. `prefill server on ...`: prefill is listening.
+2. `disaggregated prefill connected to ... KV pushed over TT-Fabric`: decode has connected to prefill.
+3. `serving 'deepseek-v4.1-flash' on http://...`: ready for requests.
 
-Two processes. No `tt-run`. Venv active in both shells.
+### Option B: TCP
 
-Prefill host:
+You start the two servers separately, one on each host. Either one can be restarted on its own. Decode
+reconnects on the next prompt.
+
+On the prefill host:
 
 ```bash
 python models/experimental/deepseek_v41_flash/demo/prefill_server.py --port $PREFILL_PORT
 ```
 
-Decode host. `--prefill-wait 7200` is the same two-hour retry as section 5:
+On the decode host:
 
 ```bash
 python models/experimental/deepseek_v41_flash/demo/server.py --host 0.0.0.0 --port $DECODE_PORT \
   --prefill-url $PREFILL_IP:$PREFILL_PORT --kv-transfer-mode tcp --prefill-wait 7200
 ```
 
-You can restart either process on its own. Decode connects again on the next prompt.
+Decode retries the prefill server for up to `--prefill-wait` seconds (two hours) while prefill loads. Decode is
+ready when it logs `serving 'deepseek-v4.1-flash' on http://...`.
 
-## 7. Send a request
+To test the TCP path on its own, run this on the decode host once prefill logs `prefill server on ...`. It needs
+no device. Pass: it prints `PASS`.
 
-From a machine that can reach the decode host (`$DECODE_IP` and `$DECODE_PORT` set there too):
+```bash
+python models/experimental/deepseek_v41_flash/demo/prefill_client.py --server $PREFILL_IP:$PREFILL_PORT --random 16384 --repeat 3
+```
+
+## 4. Send a request
+
+From any machine that can reach the decode host, with `DECODE_IP` and `DECODE_PORT` set:
 
 ```bash
 curl -s --no-buffer -X POST http://$DECODE_IP:$DECODE_PORT/v1/chat/completions \
@@ -216,33 +204,50 @@ curl -s --no-buffer -X POST http://$DECODE_IP:$DECODE_PORT/v1/chat/completions \
     -d '{"messages": [{"role": "user", "content": "Hello"}], "stream": true}'
 ```
 
-The web monitor is `http://$DECODE_IP:8090` (prefill progress, decode tok/s, KV pools) when the Rust runtime
-from section 2 is built. The page stays up after the decode server exits. Use the curl above to see if the
-server is still up.
+The web monitor at `http://$DECODE_IP:8090` shows prefill progress, decode tokens/s, and KV cache usage. It needs
+the Rust runtime from section 2. The page stays up even after the decode server exits, so use the curl above to
+check whether the server is running.
 
-Prompt-length sweep:
+To measure performance across prompt lengths:
 
 ```bash
 python models/experimental/deepseek_v41_flash/demo/perf_client.py --url http://$DECODE_IP:$DECODE_PORT --min-len 32k --decode-tokens 3072
 ```
 
-One measured fabric-push run, one user, DSpark on (the decode server's default; `--no-dspark` turns it off):
+Reference numbers from one run of each mode, with one user and DSpark on (the default; `--no-dspark` turns it
+off).
 
-| length | TTFT (s) | prefill tok/s | decode tok/s |
+Fabric push:
+
+| Prompt length | Time to first token (s) | Prefill tokens/s | Decode tokens/s |
 | --- | --- | --- | --- |
 | 32K | 1.40 | 23,470 | 189.5 |
 | 128K | 3.48 | 37,668 | 183.7 |
 | 512K | 12.09 | 43,365 | 165.0 |
 | 1M | 26.44 | 39,542 | 153.0 |
 
-## 8. Troubleshooting
+TCP:
+
+| Prompt length | Time to first token (s) | Prefill tokens/s | Decode tokens/s |
+| --- | --- | --- | --- |
+| 32K | 3.37 | 9,718 | 164.6 |
+| 64K | 4.29 | 15,286 | 170.6 |
+| 128K | 5.47 | 23,961 | 133.5 |
+| 256K | 7.65 | 34,278 | 146.0 |
+| 512K | 15.11 | 34,700 | 132.8 |
+| 1M | 33.59 | 31,124 | 139.2 |
+
+## 5. Troubleshooting
 
 | What you see | What to do |
 | --- | --- |
-| `tt-run` cannot reach the decode host | Passwordless ssh from the prefill host to `$DECODE_HOST` (section 1). |
-| Fabric init times out, or a rank reports links down | Rerun section 4, level 2. If it still fails, use section 6. |
-| Import error, or an op one host has and the other does not | The checkouts differ, or one host was not rebuilt (section 2). |
-| `prefill server ... not listening yet; retrying` | Prefill is still loading or warming up. Decode gives up after `--prefill-wait` seconds. |
-| Decode cannot connect to the prefill server | The hostname in the URL resolves to an address decode cannot reach. Use `$PREFILL_IP`. |
-| `tt-smi` shows fewer than 32 chips after a hang | `tt-smi -glx_reset` on that host, then section 4. |
-| The first prefill start spends many minutes building Engram tables | Expected. They land in `/dev/shm/deepseek_v41_d_p_engram`. The next start maps them. |
+| `tt-run` cannot reach the decode host | Set up passwordless ssh from the prefill host to `$DECODE_HOST` (section 1). |
+| Fabric init times out, or a rank reports links down | Rerun test 2 in section 3, option A. If it still fails, use option B. |
+| `tt-smi` shows fewer than 32 chips after a hang | Run `tt-smi -glx_reset` on that host, then rerun the link test. |
+| Import error, or an op exists on one host but not the other | The checkouts differ, or one host was not rebuilt (section 2). |
+| `prefill server ... not listening yet; retrying` | Prefill is still loading. Decode gives up after `--prefill-wait` seconds. |
+| Decode cannot connect to the prefill server | From the decode host, run `nc -zv $PREFILL_IP $PREFILL_PORT`. If it fails, fix the IP or the network route. |
+| The first prefill start spends many minutes building Engram tables | Expected. They are saved to `/dev/shm/deepseek_v41_d_p_engram`, and later starts reuse them. |
+
+More detail: `PREFILL_D_P_FABRIC_PUSH.md` (fabric push), `PREFILL_D_P_INTEGRATION.md` (TCP),
+`PREFILL_D_P_PREFIX_CACHE.md` (prefix cache).

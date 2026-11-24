@@ -16,10 +16,14 @@ It reports TTFT, prefill tok/s/user, total decode tok/s (all users together) and
 decode would not fit the server's context window is capped at ``context_window - decode_tokens -``
 :data:`_CONTINUE_MARGIN` (so 1M prefills a little under 1M - 1K); a length above the context window is skipped.
 
-The server takes text, not token ids, so the prompt is built from `` hello`` / `` world`` words and sized from two
-short calibration requests, which measure the chat template's overhead and the tokens per word. Each prompt starts
-with a random run of those words, so no slot's cache holds a prefix of it, and its session is deleted afterwards so
-its KV blocks go back to the pools.
+The prompt text is GSM8K (``openai/gsm8k``, ``main``, train and test: 8792 problems, ~1.4M tokens), each problem as
+``Question: ...`` / ``Answer: ...`` with its worked solution, so prefill routes real text through the experts and the
+decode phase continues a math solution. The server takes text, not token ids, so the prompt is sized with the
+checkpoint's tokenizer (``--tokenizer``): whole problems while they fit, then the next one cut at the token, which
+tokenizes to exactly the target (problems join at a pre-tokenizer boundary); one calibration request measures the
+chat template's overhead. The problems are shuffled once per run (``--seed``) and every prompt starts at a problem
+of its own, wrapping around the set, so no slot's cache holds a prefix of it, and its session is deleted afterwards
+so its KV blocks go back to the pools.
 
     python models/experimental/deepseek_v41_flash/demo/perf_client.py --url http://127.0.0.1:8000
     python models/experimental/deepseek_v41_flash/demo/perf_client.py --min-len 1k --max-len 128k --users 4
@@ -28,6 +32,7 @@ its KV blocks go back to the pools.
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 import random
 import threading
@@ -38,9 +43,10 @@ import urllib.request
 import uuid
 from dataclasses import dataclass
 
-_WORDS = ("hello", "world")
-_RANDOM_HEAD_WORDS = 64
-_CALIBRATION_WORDS = (256, 1280)
+import datasets
+from transformers import AutoTokenizer
+
+_CALIBRATION_TOKENS = 1024
 _CONTINUE_PROMPT = "Continue."
 # Room in the context for the prefill's one-token reply and the decode phase's follow-up turn.
 _CONTINUE_MARGIN = 64
@@ -90,12 +96,35 @@ def _fmt_len(n: int) -> str:
     return str(n)
 
 
-def _make_prompt(num_words: int, rng: random.Random) -> str:
-    head = min(_RANDOM_HEAD_WORDS, max(num_words - 1, 0))
-    words = [_WORDS[0]]
-    words += [rng.choice(_WORDS) for _ in range(head)]
-    words += [_WORDS[i % 2] for i in range(max(num_words - 1 - head, 0))]
-    return " ".join(words)
+@dataclass
+class _Gsm8k:
+    """GSM8K's problems in a random order, with each one's token ids, to cut prompts of an exact length from."""
+
+    tokenizer: object
+    problems: list[str]
+    ids: list[list[int]]
+
+    @classmethod
+    def load(cls, tokenizer, rng: random.Random) -> _Gsm8k:
+        data = datasets.load_dataset("openai/gsm8k", "main", split="train+test")
+        problems = [f"Question: {q}\nAnswer: {a}\n\n" for q, a in zip(data["question"], data["answer"])]
+        rng.shuffle(problems)
+        return cls(tokenizer, problems, tokenizer(problems, add_special_tokens=False)["input_ids"])
+
+    def prompt(self, start: int, num_tokens: int) -> str:
+        """``num_tokens`` tokens of problems from ``start`` on (wrapping around), the last one cut at the token."""
+        parts = []
+        i = start
+        while num_tokens > 0:
+            k = i % len(self.problems)
+            if len(self.ids[k]) <= num_tokens:
+                parts.append(self.problems[k])
+                num_tokens -= len(self.ids[k])
+            else:
+                parts.append(self.tokenizer.decode(self.ids[k][:num_tokens]))
+                num_tokens = 0
+            i += 1
+        return "".join(parts)
 
 
 def _context_window(url: str, model: str) -> int | None:
@@ -192,21 +221,14 @@ def _query_once(url: str, model: str, user: str, messages: list[dict], max_token
     )
 
 
-def _calibrate(
-    url: str, model: str, run_id: str, rng: random.Random, timeout: float, retry_for: float
-) -> tuple[float, float]:
-    """Returns (tokens per word, constant token overhead) of a prompt built by :func:`_make_prompt`."""
-    counts = []
-    for i, n in enumerate(_CALIBRATION_WORDS):
-        user = f"perf-{run_id}-calib{i}"
-        try:
-            messages = [{"role": "user", "content": _make_prompt(n, rng)}]
-            counts.append(_query(url, model, user, messages, 1, timeout, retry_for).prompt_tokens)
-        finally:
-            _delete_session(url, user)
-    (n1, n2), (p1, p2) = _CALIBRATION_WORDS, counts
-    slope = (p2 - p1) / (n2 - n1)
-    return slope, p1 - slope * n1
+def _calibrate(url: str, model: str, run_id: str, text: str, timeout: float, retry_for: float) -> int:
+    """The chat template's tokens around a user turn of ``text`` (:data:`_CALIBRATION_TOKENS` tokens)."""
+    user = f"perf-{run_id}-calib"
+    try:
+        messages = [{"role": "user", "content": text}]
+        return _query(url, model, user, messages, 1, timeout, retry_for).prompt_tokens - _CALIBRATION_TOKENS
+    finally:
+        _delete_session(url, user)
 
 
 def _error_text(i: int, e: BaseException) -> str:
@@ -215,12 +237,12 @@ def _error_text(i: int, e: BaseException) -> str:
 
 
 def _run_length(
-    args, run_id: str, rng: random.Random, target: int, slope: float, overhead: float
+    args, run_id: str, gsm8k: _Gsm8k, starts: itertools.count, target: int, overhead: int
 ) -> tuple[list[Result], list[Result]]:
     """Prefills every user one after another, then decodes them all at once. Returns (prefills, decodes)."""
-    num_words = max(1, round((target - overhead) / slope))
+    num_tokens = max(1, target - overhead)
     users = [f"perf-{run_id}-{target}-u{i}" for i in range(args.users)]
-    conversations = [[{"role": "user", "content": _make_prompt(num_words, rng)}] for _ in range(args.users)]
+    conversations = [[{"role": "user", "content": gsm8k.prompt(next(starts), num_tokens)}] for _ in range(args.users)]
     try:
         prefills = []
         for i, user in enumerate(users):
@@ -279,7 +301,12 @@ def main() -> None:
         help="Users per length, each with its own prompt: prefilled one at a time, then decoded together",
     )
     p.add_argument("--timeout", type=float, default=7200.0, help="Socket timeout per request (s)")
-    p.add_argument("--seed", type=int, default=None, help="Seed for the prompts' random heads")
+    p.add_argument("--seed", type=int, default=None, help="Seed for the order of the GSM8K problems")
+    p.add_argument(
+        "--tokenizer",
+        default="deepseek-ai/DeepSeek-V4.1-Flash-1017",
+        help="Tokenizer (Hugging Face id or directory) the prompts are sized with; the server's checkpoint's",
+    )
     p.add_argument(
         "--retry-for",
         type=float,
@@ -300,8 +327,11 @@ def main() -> None:
 
     context = _context_window(args.url, args.model)
     print(f"server {args.url}, context window {context}, {args.users} user(s), {args.decode_tokens} decode tokens")
-    slope, overhead = _calibrate(args.url, args.model, run_id, rng, args.timeout, args.retry_for)
-    print(f"calibration: {slope:.3f} tokens/word, {overhead:.1f} tokens of template overhead\n")
+    gsm8k = _Gsm8k.load(AutoTokenizer.from_pretrained(args.tokenizer), rng)
+    starts = itertools.count()
+    calibration = gsm8k.prompt(next(starts), _CALIBRATION_TOKENS)
+    overhead = _calibrate(args.url, args.model, run_id, calibration, args.timeout, args.retry_for)
+    print(f"GSM8K: {len(gsm8k.problems)} problems; calibration: {overhead} tokens of template overhead\n")
 
     header = (
         f"{'length':>7} {'prompt':>8} {'TTFT_s':>9} {'prefill_t/s/u':>14} "
@@ -317,7 +347,7 @@ def main() -> None:
                 continue
             target = min(length, context - args.decode_tokens - _CONTINUE_MARGIN)
         try:
-            prefills, decodes = _run_length(args, run_id, rng, target, slope, overhead)
+            prefills, decodes = _run_length(args, run_id, gsm8k, starts, target, overhead)
         except Exception as e:  # noqa: BLE001 - one failing length should not end the sweep
             print(f"{_fmt_len(length):>7}  failed: {e}")
             continue
