@@ -286,6 +286,11 @@ void init_unary_sfpu_operation_quasar()
     {
         init_signbit();
     }
+    else if constexpr (is_isinf_isnan_op(OPERATION))
+    {
+        // What SFPU_UNARY_INIT(<op>) expands to in the Compute API's *_tile_init, so the bare init's dispatch to isinf_isnan_init is what runs.
+        ::ckernel::llk_math_eltwise_unary_sfpu_init<OPERATION>();
+    }
     else if constexpr (OPERATION == SfpuType::typecast)
     {
         init_typecast();
@@ -534,7 +539,8 @@ void init_unary_sfpu_operation_quasar()
     }
     else if constexpr (OPERATION == SfpuType::tiled_prod)
     {
-        tiled_prod_init();
+        // The Compute API's tiled_prod_tile_init expression, so the bare init's dispatch to tiled_prod_init is what runs.
+        SFPU_UNARY_INIT(tiled_prod);
     }
     else if constexpr (OPERATION == SfpuType::alt_complex_rotate90)
     {
@@ -1687,7 +1693,7 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
         SFPU_BINARY_INIT_FN_NO_ARGS(bitwise_and, sfpu::binary_bitwise_init);
     }
     // RSHFT / LSHFT / LOGICAL_RSHFT need no init beyond the shared SFPU one.
-    // ADD / SUB / GT / LT / LE / GE / COPY_DEST / RESHUFFLE_ROWS are stateless — no init.
+    // ADD / SUB / GT / LT / LE / GE / COPY_DEST / RESHUFFLE_ROWS / MUL_SM_SHIFT23 are stateless — no init.
 }
 
 /**
@@ -1734,8 +1740,9 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
 {
     static_assert(
         TILE_SHAPE == ckernel::trisc::DstTileShape::Tile32x32 || OP == BinaryOp::ADD || OP == BinaryOp::SUB || OP == BinaryOp::RSUB || OP == BinaryOp::MUL ||
-            OP == BinaryOp::DIV || OP == BinaryOp::GT || OP == BinaryOp::LT || OP == BinaryOp::LE || OP == BinaryOp::GE || OP == BinaryOp::ATAN2 ||
-            OP == BinaryOp::COPY_DEST || OP == BinaryOp::GCD || OP == BinaryOp::LCM || quasar_binary_op_is_quant(OP) || quasar_binary_op_is_max_min(OP),
+            OP == BinaryOp::MUL_SM_SHIFT23 || OP == BinaryOp::DIV || OP == BinaryOp::GT || OP == BinaryOp::LT || OP == BinaryOp::LE || OP == BinaryOp::GE ||
+            OP == BinaryOp::ATAN2 || OP == BinaryOp::COPY_DEST || OP == BinaryOp::GCD || OP == BinaryOp::LCM || quasar_binary_op_is_quant(OP) ||
+            quasar_binary_op_is_max_min(OP),
         "This Quasar binary SFPU operation requires 32x32 tiles");
 
     if constexpr (BCAST_TYPE != BroadcastType::NONE)
@@ -1849,6 +1856,21 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
             TILE_SHAPE,
             calculate_binary_comp_int32,
             (false, ITERATIONS, SfpuType::ge, SIGN_MAGNITUDE_FORMAT),
+            src0_tile,
+            src1_tile,
+            dst_tile,
+            vector_mode);
+    }
+    else if constexpr (OP == BinaryOp::MUL_SM_SHIFT23)
+    {
+        // sign * ((|a| * |b|) >> 23), the requant rescale.
+        LLK_ASSERT(math_format == DataFormat::Int32, "mul_int32 sm_shift23 supports Int32 only");
+        SFPU_BINARY_CALL_TINY_TILE(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            TILE_SHAPE,
+            _mul_int32_sm_shift23_,
+            (false, ITERATIONS, SIGN_MAGNITUDE_FORMAT),
             src0_tile,
             src1_tile,
             dst_tile,

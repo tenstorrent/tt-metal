@@ -16,7 +16,9 @@ void bitwise_xor_init();
 void hardmish_init();
 void heaviside_init();
 void i0_init();
+void isinf_isnan_init();
 void softcap_init();
+void tiled_prod_init();
 }  // namespace sfpu
 
 // The bare init runs the common SFPU init, plus the op's own init for the ops whose Compute API
@@ -43,8 +45,17 @@ inline void llk_math_eltwise_unary_sfpu_init() {
         sfpu::heaviside_init();
     } else if constexpr (sfpu_op == SfpuType::i0) {
         sfpu::i0_init();
+    } else if constexpr (
+        sfpu_op == SfpuType::isinf || sfpu_op == SfpuType::isposinf || sfpu_op == SfpuType::isneginf ||
+        sfpu_op == SfpuType::isnan || sfpu_op == SfpuType::isfinite) {
+        // _calculate_sfpu_isinf_isnan_ advances Dest through the ADDR_MOD_6 isinf_isnan_init programs.
+        sfpu::isinf_isnan_init();
     } else if constexpr (sfpu_op == SfpuType::softcap) {
         sfpu::softcap_init();
+    } else if constexpr (sfpu_op == SfpuType::tiled_prod) {
+        // calculate_tiled_prod advances Dest through ADDR_MOD_6 and reads 1.0 from vConstFloatPrgm0,
+        // both set by tiled_prod_init.
+        sfpu::tiled_prod_init();
     }
 }
 
