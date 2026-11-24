@@ -269,15 +269,39 @@ Any OpenAI client then works with base URL `http://127.0.0.1:8000/v1` (any API k
   sampler (the plugin routes them there).
 - Greedy output equals the demo's tokens (golden prompt 0, 64 tokens).
 
-Measured on one p100a, default mode, `--max-model-len 196608`, at 4K positions:
+Speculative decode (see "Opt-in modes") runs through the plugin's model-owned drafter contract. Select the
+other class, give the traces more room and add the speculative config:
 
-| | vLLM | demo |
-|---|---:|---:|
-| greedy, tok/s (300 tokens, streamed) | 64.7 | 66.2 with a token read per step, 68.8 without |
-| sampled, tok/s (temperature 0.8, top-k 40, top-p 0.95) | 60 | |
-| time to first token, 25-token prompt | 0.37 s | |
-| time to first token, 8,424-token prompt | 126.5 s (66.6 tok/s) | |
-| start to `/health` 200 | 39 s (weights in the page cache) | |
+```
+export TT_MODEL_CLASS_OVERRIDES=Inkling2ForCausalLM=models.demos.inkling2_mini.tt.generator_vllm:Inkling2SpecForCausalLM
+vllm serve ... (as above, with "trace_region_size": 536870912) --no-async-scheduling \
+    --speculative-config '{"method": "custom_class", "model": "vllm_tt_plugin.model_owned_drafter", "num_speculative_tokens": 2}'
+```
+
+- The plugin's `propose_draft_tokens` call runs the draft pass (and commits the pass before it), a `[1, 3]` decode
+  call runs the verify pass, and a plain decode call the plain step. The drafter declines above
+  `modes.spec_max_ctx()` and when its cost model expects no gain.
+- Greedy requests speculate, and sampled ones that the adapter samples (`sample_on_device_mode`): each verify
+  row's token is one draw of the adapter's sampler, and a draft is kept only when the draw is that token. The
+  replies are the plain class's, token for token: greedy, and sampled for the same seed.
+- Requests for vLLM's host sampler (penalties, logprobs, ...) run plain steps; vLLM refuses `min_p` and
+  `logit_bias` on a speculative launch.
+- It needs the drafter weights (`convert.mtp`) and DRAM for them; when they are missing it says so and decodes
+  plain.
+
+Measured on one p100a, default mode, `--max-model-len 196608`, at 4K positions (plain = `Inkling2ForCausalLM`,
+spec = `Inkling2SpecForCausalLM`; the same tokens in both columns of a row):
+
+| | vLLM plain | vLLM spec | demo |
+|---|---:|---:|---:|
+| greedy, tok/s (golden prompt 0, 300 tokens, streamed) | 64.2 to 64.7 | 75.7 | 66.2 with a token read per step, 68.8 without |
+| one-sentence chat answer, greedy (66 tokens), s after the first token | 0.98 | 0.82 | |
+| sampled, tok/s (temperature 0.8, top-k 40, top-p 0.95, two seeds) | 60, 60 | 66 to 68, 59 to 60 | |
+| time to first token, 25-token prompt | 0.37 s | 0.38 s | |
+| time to first token, 8,424-token prompt | 126.5 s (66.6 tok/s) | 127.3 s (66.2 tok/s) | |
+| greedy, tok/s after that prompt (64 tokens) | 62.5 | 74.9 | |
+| start to `/health` 200 (weights in the page cache) | 39 to 70 s | 82 to 113 s | |
+| DRAM free while serving | 2.84 GiB | 0.89 GiB | |
 
 ## Run the tests
 
