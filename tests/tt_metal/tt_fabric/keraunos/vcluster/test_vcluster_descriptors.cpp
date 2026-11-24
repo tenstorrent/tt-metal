@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The descriptor generator, without a device. VclusterGenerate.FromEnvironment is the generator's entry point for a
-// run; it is skipped unless VCLUSTER_MANIFEST is set.
+// run; it is skipped unless TT_VCLUSTER_MANIFEST is set.
 
 #include <gtest/gtest.h>
 
@@ -677,21 +677,22 @@ TEST(VclusterDescriptors, EveryRefusalListed) {
 
 // --- The generator's entry point for a run ------------------------------------------------------------------------
 
-// Reads VCLUSTER_MANIFEST, VCLUSTER_PACKAGE_SOC_DESC and VCLUSTER_OUT, and generates; skipped when
-// VCLUSTER_MANIFEST is unset. The generator runs check_manifest() itself; each row or refusal is a failure.
+// Reads TT_VCLUSTER_MANIFEST, TT_VCLUSTER_PACKAGE_SOC_DESC (package_soc_desc()) and TT_VCLUSTER_OUT (unset: a
+// directory under gtest's temp dir, named for this process and kept), and generates; skipped when TT_VCLUSTER_MANIFEST
+// is unset. The generator runs check_manifest() itself; each row or refusal is a failure.
 TEST(VclusterGenerate, FromEnvironment) {
-    const char* manifest_path = std::getenv("VCLUSTER_MANIFEST");
+    const char* manifest_path = std::getenv("TT_VCLUSTER_MANIFEST");
     if (manifest_path == nullptr || *manifest_path == '\0') {
-        GTEST_SKIP() << "VCLUSTER_MANIFEST is not set";
+        GTEST_SKIP() << "TT_VCLUSTER_MANIFEST is not set";
     }
-    const char* package = std::getenv("VCLUSTER_PACKAGE_SOC_DESC");
-    const char* out = std::getenv("VCLUSTER_OUT");
-    ASSERT_TRUE(package != nullptr && *package != '\0') << "VCLUSTER_PACKAGE_SOC_DESC is not set";
-    ASSERT_TRUE(out != nullptr && *out != '\0') << "VCLUSTER_OUT is not set";
+    const char* out_env = std::getenv("TT_VCLUSTER_OUT");
+    const fs::path out = out_env != nullptr && *out_env != '\0'
+                             ? fs::path(out_env)
+                             : fs::path(::testing::TempDir()) / ("vcluster_generated_" + std::to_string(::getpid()));
     const Manifest manifest = load_manifest(manifest_path);
     GeneratedDescriptors g;
     try {
-        g = generate_descriptors(manifest, package, out);
+        g = generate_descriptors(manifest, package_soc_desc(), out);
     } catch (const DescriptorGenerationError& error) {
         for (const auto& row : error.rows()) {
             ADD_FAILURE() << "row " << static_cast<uint32_t>(row.check) << ": " << row.detail;

@@ -17,9 +17,9 @@
 namespace tt::tt_fabric::vcluster::test {
 
 // The package descriptor, UMD descriptors/soc_descs/mmk.yaml, located from this source file so a test runs from any
-// working directory. VCLUSTER_PACKAGE_SOC_DESC overrides it, for a tree whose UMD checkout is elsewhere.
+// working directory. TT_VCLUSTER_PACKAGE_SOC_DESC overrides it, for a tree whose UMD checkout is elsewhere.
 inline std::filesystem::path package_soc_desc() {
-    if (const char* path = std::getenv("VCLUSTER_PACKAGE_SOC_DESC"); path != nullptr && *path != '\0') {
+    if (const char* path = std::getenv("TT_VCLUSTER_PACKAGE_SOC_DESC"); path != nullptr && *path != '\0') {
         return path;
     }
     // This file is five directories below the tree's root.
