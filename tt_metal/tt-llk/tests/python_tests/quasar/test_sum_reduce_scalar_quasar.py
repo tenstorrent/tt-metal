@@ -35,10 +35,9 @@ FORMATS = [
     InputOutputFormat(DataFormat.Float16, DataFormat.Float32),
 ]
 
-# Each shape puts its faces in DEST differently. Tiles of 1, 2 and 4 rows need a one row MOVD2A
-# that ttsim does not support yet, so the Metal SumReduceScalarBlazeShape test covers them.
-ALL_TILE_DIMENSIONS = [[32, 32], [16, 32], [16, 16], [8, 32]]
-FP32_DEST_TILE_DIMENSIONS = [[32, 32], [16, 32], [8, 32]]
+# Each shape puts its faces in DEST differently. Faces of 1, 2 and 4 rows take the SrcB staging path.
+ALL_TILE_DIMENSIONS = [[32, 32], [16, 32], [16, 16], [8, 32], [4, 32], [2, 32], [1, 32]]
+FP32_DEST_TILE_DIMENSIONS = [[32, 32], [8, 32], [1, 32]]
 FLOAT16_TILE_DIMENSIONS = [[32, 32], [8, 32]]
 
 # Poison tiles after the input catch a read past the last tile

@@ -84,7 +84,8 @@ inline void _llk_math_mul_reduce_scalar_init_(const DataFormat src_format, const
 /**
  * @brief Move DEST tile @p tile_idx into SrcA, or row 0 of it into SrcB.
  *
- * Each face goes to its own 16 rows of SrcA. Rows a short face leaves untouched stay zero.
+ * Each face goes to its own 16 rows of SrcA. Rows a short face leaves untouched stay zero. Faces
+ * shorter than an FPU row group pass through SrcB rows 32 and up, which the final pool reuses later.
  *
  * @tparam BINARY_REUSE_DEST: DEST_TO_SRCA or DEST_TO_SRCB.
  * @param tile_idx: DEST tile to move.
@@ -108,14 +109,35 @@ inline void _llk_math_mul_reduce_scalar_move_dest_to_src_(const std::uint32_t ti
 
         const ckernel::TensorShape& shape  = mul_reduce_scalar_shape;
         const std::uint32_t face_dest_rows = padded_face_rows(shape);
-        const bool whole_fpu_groups        = (shape.face_r_dim % ELTWISE_MATH_ROWS) == 0;
-        const std::uint32_t rows_per_move  = whole_fpu_groups ? ELTWISE_MATH_ROWS : 1;
-        const std::uint32_t move_mode      = whole_fpu_groups ? FPU_MOV_ROWS : p_movd2a::MOV_1_ROW;
-        for (std::uint32_t face = 0; face < shape.total_num_faces(); face++)
+        if (shape.face_r_dim % ELTWISE_MATH_ROWS == 0)
         {
-            for (std::uint32_t row = 0; row < shape.face_r_dim; row += rows_per_move)
+            for (std::uint32_t face = 0; face < shape.total_num_faces(); face++)
             {
-                TT_MOVD2A(0 /*dest_32b_lo*/, face * FACE_R_DIM + row /*src*/, ADDR_MOD_0, move_mode, face * face_dest_rows + row /*dst*/);
+                for (std::uint32_t row = 0; row < shape.face_r_dim; row += ELTWISE_MATH_ROWS)
+                {
+                    TT_MOVD2A(0 /*dest_32b_lo*/, face * FACE_R_DIM + row /*src*/, ADDR_MOD_0, FPU_MOV_ROWS, face * face_dest_rows + row /*dst*/);
+                }
+            }
+        }
+        else
+        {
+            // ttsim has no one row MOVD2A, so a short face goes row by row into spare SrcB rows and then
+            // moves to SrcA as one row group. The unwritten SrcB rows are still zero from the unpacker.
+            LLK_ASSERT(shape.face_r_dim < ELTWISE_MATH_ROWS, "A short face must fit in one FPU row group");
+            TTI_STALLWAIT(p_stall::STALL_MATH, 0, 0, p_stall::SRCB_VLD);
+            for (std::uint32_t face = 0; face < shape.total_num_faces(); face++)
+            {
+                for (std::uint32_t row = 0; row < shape.face_r_dim; row++)
+                {
+                    TT_MOVD2B(
+                        0 /*dest_32b_lo*/,
+                        p_movd2b::SRC_ROW32_OFFSET + row /*src*/,
+                        ADDR_MOD_0,
+                        p_movd2b::MOV_1_ROW,
+                        0 /*transpose*/,
+                        face * face_dest_rows + row /*dst*/);
+                }
+                TT_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + face * FACE_R_DIM, ADDR_MOD_0, FPU_MOV_ROWS, p_movb2a::SRCB_ROW32_OFFSET);
             }
         }
     }
