@@ -10,6 +10,10 @@ Weights come from ``$INKLING_CACHE`` (default: the run mode's cache, see modes.p
 ``INKLING_MODE=fast`` picks the faster, less exact own3-l8 experts). ``--prompt`` is wrapped in the model's chat template (tokenizer from
 ``--tokenizer``, default ``$INKLING_CKPT``) and replaces the golden prompts; without it the golden prompts
 (``--golden``, default ``$INKLING_GOLDEN``) are generated and prompt 0 is compared with the golden greedy tokens.
+
+The same runs as tests (they skip when the caches, the golden prompts or the checkpoint are not there):
+
+    pytest models/demos/inkling2_mini/demo/demo.py [-k "golden or prompt or fast or spec"]
 """
 
 from __future__ import annotations
@@ -64,7 +68,7 @@ def trace_one_app(model, L=11, p=1, pos=5):
     }
 
 
-def main():
+def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument(
         "--max-ctx",
@@ -96,7 +100,7 @@ def main():
         "the same tokens as plain greedy (checked here), more tokens per second. Needs the drafter weights "
         "(convert.mtp) and a --max-ctx that leaves DRAM for it (default mode: up to ~150K)",
     )
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
     if args.prompt is None and args.golden is None:
         ap.error("give --prompt, or --golden / INKLING_GOLDEN for the golden prompts")
     if args.prompt is not None and args.tokenizer is None:
@@ -237,6 +241,58 @@ def main():
         ttnn.close_device(dev)
     if args.json:
         Path(args.json).write_text(json.dumps(res, indent=1, ensure_ascii=False))
+    return res
+
+
+def _run(*argv, need_ckpt=False):
+    """The demo with argv, for the tests below; skips when its inputs are not on this machine."""
+    import pytest
+
+    fast, golden = "--fast" in argv, os.environ.get("INKLING_GOLDEN")
+    cache = modes.roots(fast)[0]
+    if not (cache / "manifest.json").is_file():
+        pytest.skip(f"weight cache {cache} missing (set INKLING_CACHE_DIR or INKLING_CACHE)")
+    if "--prompt" not in argv and not (golden and (Path(golden) / "greedy.json").is_file()):
+        pytest.skip("golden prompts missing (set INKLING_GOLDEN)")
+    if need_ckpt and not os.environ.get("INKLING_CKPT"):
+        pytest.skip("checkpoint missing (set INKLING_CKPT)")
+    res = main(list(argv))
+    assert res["step_trace_bit_equal"], res
+    return res
+
+
+SHORT = ("--max-ctx", "4096", "--skip-app-trace", "--perf-pos", "2048")
+
+
+def test_demo_golden():
+    """Default arguments: prompt 0 gives the golden greedy tokens, the traced step replays bit-equal."""
+    res = _run()
+    assert res["app_trace_bit_equal"] and res["step_trace_eq_eager"], res
+    assert res["gen"][0]["first_mismatch"] is None, res["gen"][0]
+
+
+def test_demo_prompt():
+    """--prompt: a user message through the chat template, answered."""
+    res = _run("--prompt", "Write a haiku about a mountain lake at dawn.", "--gen", "32", *SHORT, need_ckpt=True)
+    assert len(res["gen"][0]["ids"]) == 32 and res["gen"][0]["text"], res["gen"]
+
+
+def test_demo_fast():
+    """--fast: the faster, less exact experts; the golden prompts run and the step replays bit-equal."""
+    res = _run("--fast", *SHORT)
+    assert all(len(g["ids"]) == 64 for g in res["gen"]), res["gen"]
+
+
+def test_demo_spec():
+    """--spec: speculative decode gives the plain greedy tokens (needs the drafter weights, convert.mtp)."""
+    import pytest
+
+    from models.demos.inkling2_mini.tt.mtp import mtp_root
+
+    if not (mtp_root() / "manifest.json").is_file():
+        pytest.skip(f"drafter weights {mtp_root()} missing (python -m models.demos.inkling2_mini.convert.mtp)")
+    res = _run("--spec", *SHORT, need_ckpt=True)
+    assert all(g["spec_equals_plain"] for g in res["gen"]), res["gen"]
 
 
 if __name__ == "__main__":
