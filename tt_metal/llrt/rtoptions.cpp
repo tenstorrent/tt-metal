@@ -633,9 +633,9 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_EMULE_MODE: this->runtime_target_device_ = tt::TargetDevice::Emule; break;
 
         // TT_METAL_QUASAR_MOCK_JIT
-        // Set (to any value): a Quasar Mock device builds its firmware and JIT-compiles program kernels.
-        // Default: Quasar Mock skips both.
-        case EnvVarID::TT_METAL_QUASAR_MOCK_JIT: this->quasar_mock_jit = true; break;
+        // 1: a Quasar Mock device builds its firmware and JIT-compiles program kernels.
+        // Default: 0 (Quasar Mock skips both).
+        case EnvVarID::TT_METAL_QUASAR_MOCK_JIT: this->quasar_mock_jit = is_env_enabled(value); break;
 
         // TT_METAL_VISIBLE_DEVICES
         // Comma-separated list of device IDs to make visible to the runtime.
