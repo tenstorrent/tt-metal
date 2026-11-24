@@ -2701,25 +2701,10 @@ class ttMLA:
             return None
         other = "presend" if parity is None else None
         self._push.prefetched[self.layer_idx + 1] = (plan, other)
-        self._push.pushes[SparseKvPushPart.PREFIX.name] += 1
         storage = kvpe_cache.storage
         output = self._pass2_push_output(other)
         slot = self._sparse_push_slot_kwargs(storage, self._cache_batch_idx(cache_user_id, target_layer_idx), metadata)
-        _, push_grid = self._push_prefetch_grids
-        return lambda: ttnn.experimental.sparse_kv_push(
-            storage,
-            output_tensor=output,
-            table=plan.table,
-            stripe_chunk=plan.stripe_chunk,
-            max_rows=plan.max_rows,
-            part=SparseKvPushPart.PREFIX,
-            num_links=self.ccl_num_links,
-            sp_axis=self.sp_axis,
-            **slot,
-            ready_semaphore=self._push.ready_semaphore,
-            done_semaphore=self._push.done_semaphore,
-            core_grid=push_grid,
-        )
+        return self._prefix_push(storage, output, plan, slot)
 
     def _sparse_push_slot_kwargs(self, storage, cache_batch_idx, metadata):
         """Cache slot of a push. On the metadata path it is recomposed on device from the user id tensor, so a captured
@@ -2820,12 +2805,17 @@ class ttMLA:
         indices = own_indices if next_step.indices is None else next_step.indices
         plan = self._sparse_push_plan(indices, next_step.kv_actual_isl, next_step.metadata)
         self._push.prefetched[self.layer_idx + next_step.layer_offset] = (plan, parity)
-        self._push.pushes[SparseKvPushPart.PREFIX.name] += 1
         storage = kvpe_cache.storage
         output = self._push_buffer(parity)
         slot = self._sparse_push_slot_kwargs(
             storage, self._cache_batch_idx(next_step.cache_user_id, target_layer_idx), next_step.metadata
         )
+        return self._prefix_push(storage, output, plan, slot)
+
+    def _prefix_push(self, storage, output, plan, slot):
+        """A pre-send (pass 1's _presend, pass 2's _pass2_presend): the PREFIX push of ``plan`` from ``storage``'s slot
+        ``slot`` into ``output`` on the push sub-device, as a callable for _beside_prefetch; counted when enqueued."""
+        self._push.pushes[SparseKvPushPart.PREFIX.name] += 1
         _, push_grid = self._push_prefetch_grids
         return lambda: ttnn.experimental.sparse_kv_push(
             storage,

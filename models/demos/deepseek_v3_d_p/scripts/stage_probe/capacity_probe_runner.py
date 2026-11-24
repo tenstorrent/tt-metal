@@ -29,10 +29,6 @@ does not exist yet (q171.2.5 / q171.2.6 / q171.2.7):
 GLM-5.4 (``STAGE_PROBE_MODEL=glm54``, manifest glm54.json; tt_metal_tracker-q171.3.18): the launcher applies the
 patches above that fit (stub weights, ``STAGE_DRAM``), also logs ``STAGE_DRAM`` after the trace is captured and when it
 is released (after the request), and then runs trunk_probe_runner, so the run keeps its push-reuse check.
-``CAP_PASS2_PRESEND_BUFFER=1``: on a stage that runs loop pass 2, the first pass-2 push (the warm pass, before trace
-capture, where the push planner creates its buffers) also creates one more push buffer of the pass-2 push spec
-(``buffer_spec(dense, **_pass2_push_geometry)``), the second buffer a pass-2 pre-send would fill while a layer reads
-the dense gather buffer, and logs ``STAGE_DRAM`` before and after it. The buffer is never written.
 
 Use with ``STAGE_PROBE_RUNNER_MODULE=models.demos.deepseek_v3_d_p.scripts.stage_probe.capacity_probe_runner``.
 """
@@ -223,29 +219,6 @@ def _patch_runtime_logging() -> None:
     TtPrefillRuntime.release_trace = release_trace
 
 
-def _patch_pass2_presend_buffer() -> None:
-    """One more push buffer of the pass-2 push spec, created at the first pass-2 push (see the module docstring)."""
-    from models.demos.deepseek_v3_d_p.tt.mla.mla import ttMLA
-
-    push_output = ttMLA._pass2_push_output
-
-    def pass2_push_output(self, *args, **kwargs):
-        out = push_output(self, *args, **kwargs)
-        if not _EXTRA:
-            dense = self._sparse_kv_gather_buffer
-            spec = self._push.buffer_spec(dense, **self._pass2_push_geometry)
-            _log_dram(self.mesh_device, "before pass-2 pre-send buffer")
-            _EXTRA.append(self._push.push_buffer("pass2_presend", dense, **self._pass2_push_geometry))
-            logger.info(
-                f"CAP_PRESEND_BUFFER layer={self.layer_idx} spec={list(spec.shape)} {spec.dtype} "
-                f"reuses_dense={self._pass2_push_reuses_dense} dense={list(dense.shape)}"
-            )
-            _log_dram(self.mesh_device, "after pass-2 pre-send buffer")
-        return out
-
-    ttMLA._pass2_push_output = pass2_push_output
-
-
 def main() -> None:
     glm54 = os.environ.get("PREFILL_MANIFEST", "").endswith("glm54.json")
     assert glm54 or os.environ.get("PREFILL_MODEL", "glm_5_3") == "glm_5_3"
@@ -256,12 +229,9 @@ def main() -> None:
         _patch_placeholder_indices()
     _patch_build_and_logging(stub=os.environ.get("CAP_STUB_WEIGHTS") == "1")
     if not glm54:
-        assert os.environ.get("CAP_PASS2_PRESEND_BUFFER") != "1", "GLM-5.3 runs no loop pass 2"
         runpy.run_module("models.demos.common.prefill.runners.prefill_runner", run_name="__main__")
         return
     _patch_runtime_logging()
-    if os.environ.get("CAP_PASS2_PRESEND_BUFFER") == "1":
-        _patch_pass2_presend_buffer()
     from models.demos.deepseek_v3_d_p.scripts.stage_probe import trunk_probe_runner
 
     trunk_probe_runner.main()

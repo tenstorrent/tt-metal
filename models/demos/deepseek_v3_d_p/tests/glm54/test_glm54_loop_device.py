@@ -444,9 +444,18 @@ def test_glm54_loop_on_device(mesh_device, device_params, num_links):
         ttnn.synchronize_device(mesh_device)
         return {k: natural(v) for k, v in out.items()}
 
-    first, second = eager(), eager()
+    planner = transformer.layers[config.loop_first_layer].mla._push
+    before = dict(planner.pushes)
+    first = eager()
+    pushes = {k: planner.pushes[k] - before.get(k, 0) for k in ("ALL", "PREFIX", "REST")}
+    second = eager()
     _stage("eager forwards x2 done", t0)
     failures = []
+    # Sparse-KV pushes per forward of the FFSF stack (loop L1..L2, L2 reuses L1's top-k): pass 1's L1 pre-sends L2's
+    # prefix and L2 pushes the rest; pass 2's L1 pushes all its rows and pre-sends L2's bank A (q171.3.18), L2 pushes
+    # its ring rows. Without the pass-2 pre-send it would be ALL 2, PREFIX 1, REST 1.
+    if pushes != {"ALL": 1, "PREFIX": 2, "REST": 2}:
+        failures.append(f"sparse-KV pushes per forward {pushes}, expected ALL 1, PREFIX 2, REST 2")
     for name, _ in [("embed", None)] + names:
         assert torch.isfinite(first[name]).all(), f"{name} not finite"
         if not torch.equal(first[name], second[name]):
