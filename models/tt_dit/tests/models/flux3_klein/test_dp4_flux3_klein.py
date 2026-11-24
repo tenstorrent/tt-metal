@@ -161,5 +161,42 @@ def test_claim_pairs_frees_only_pairs_other_largest_size_layouts_used(monkeypatc
     assert ccl.live == {"small ring", "vae", "r1 ring"}
 
 
+def test_a_size_switch_frees_only_pairs_other_sizes_used(monkeypatch) -> None:
+    monkeypatch.setattr(ttnn, "synchronize_device", lambda device: None)
+    k1, k1t = ("distilled", 1024, 0, 1024), ("distilled", 1024, 0, 2048)
+    k2, k4 = ("distilled", 2048, 0, 1024), ("distilled", 4096, 0, 1024)
+    ccl, freed = SimpleNamespace(live=set(), used=set()), []
+
+    def take_used():
+        used, ccl.used = ccl.used, set()
+        return used
+
+    def free(keys):
+        freed.extend(keys)
+        ccl.live.difference_update(keys)
+
+    ccl.ping_pong_keys = lambda: set(ccl.live)
+    ccl.take_used_ping_pong_keys = take_used
+    ccl.free_ping_pong_buffers = free
+    pipe = Flux3KleinPipeline.__new__(Flux3KleinPipeline)
+    pipe._device, pipe._ccl_managers, pipe._pair_users, pipe._last_layout = None, (ccl,), {}, None
+
+    def render(layout, *keys):
+        switched = pipe._last_layout is not None and pipe._last_layout[1] != layout[1]
+        pipe._claim_pairs(layout, free_others=False, free_other_sizes=switched)
+        ccl.live.update(keys)
+        ccl.used.update(keys)
+
+    render(k1, "shared", "1k ring")
+    render(k1t, "shared", "1k text")  # same size: nothing goes
+    assert freed == []
+    render(k2, "shared", "2k ring")  # every pair only 1024 used goes, re-created if 2048 needs it
+    assert sorted(freed) == ["1k ring", "1k text", "shared"]
+    render(k4, "4k ring")
+    render(k1, "1k ring")
+    assert sorted(freed) == sorted(["1k ring", "1k text", "shared", "shared", "2k ring", "4k ring"])
+    assert ccl.live == {"1k ring"}
+
+
 def test_pairs_are_freed_from_4096_on_dp4_and_from_2048_on_dp8() -> None:
     assert PAIR_FREEING_FROM_SIZE == {(4, 2): max(SIZES), (2, 2): 2048}
