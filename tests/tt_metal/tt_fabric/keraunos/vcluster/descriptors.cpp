@@ -244,6 +244,8 @@ std::string soc_desc(
     return emit(desc);
 }
 
+std::string soc_desc_file(uint32_t fabric_chip) { return fmt::format("chip_{}_soc_desc.yaml", fabric_chip); }
+
 // N Quasar chips, each its own board and MMIO chip, with one Ethernet connection for each of the manifest's links.
 std::string cluster_desc(const Manifest& manifest) {
     const auto num_chips = static_cast<uint32_t>(manifest.devices.size());
@@ -310,6 +312,11 @@ std::string cluster_desc(const Manifest& manifest) {
         out << YAML::Key << chip << YAML::Value << 0;
     }
     out << YAML::EndMap;
+    out << YAML::Key << "chip_soc_descs" << YAML::Value << YAML::BeginMap;
+    for (uint32_t chip = 0; chip < num_chips; chip++) {
+        out << YAML::Key << chip << YAML::Value << soc_desc_file(chip);
+    }
+    out << YAML::EndMap;
     out << YAML::EndMap;
     TT_FATAL(out.good(), "YAML emitter: {}", out.GetLastError());
     return std::string(out.c_str()) + "\n";
@@ -359,11 +366,10 @@ GeneratedDescriptors generate(
         throw DescriptorGenerationError(std::move(rows), std::move(findings));
     }
 
-    // TT_METAL_EMU_SOC_DESC lists the SoC descriptors comma-separated, and each env file holds one variable a line.
+    // Each env file holds one variable a line.
     const std::filesystem::path dir = std::filesystem::absolute(out_dir);
-    if (dir.string().find_first_of(",\n") != std::string::npos) {
-        TT_THROW(
-            "Output directory {} contains a comma or a newline, which would split TT_METAL_EMU_SOC_DESC", dir.string());
+    if (dir.string().find('\n') != std::string::npos) {
+        TT_THROW("Output directory {} contains a newline, which would split a line of its env files", dir.string());
     }
     std::filesystem::create_directories(dir);
     // A rerun that fails partway leaves no env file to point at a mix of new and old descriptors.
@@ -373,7 +379,7 @@ GeneratedDescriptors generate(
     GeneratedDescriptors generated;
     generated.soc_descs.resize(num_devices);
     for (const Device& device : manifest.devices) {
-        const std::filesystem::path path = dir / fmt::format("chip_{}_soc_desc.yaml", device.fabric_chip);
+        const std::filesystem::path path = dir / soc_desc_file(device.fabric_chip);
         write_file(path, soc_desc(package, cores, views, device, num_devices));
         generated.soc_descs[device.fabric_chip] = path;
     }
@@ -381,18 +387,13 @@ GeneratedDescriptors generate(
     write_file(generated.cluster_desc, cluster_desc(manifest));
     generated.mesh_graph_desc = dir / kMeshGraphDescFile;
     write_file(generated.mesh_graph_desc, mesh_graph_desc(num_devices));
-    std::vector<std::string> soc_paths;
-    for (const auto& path : generated.soc_descs) {
-        soc_paths.push_back(path.string());
-    }
     const auto env = [&](const char* cluster_desc_variable) {
         return fmt::format(
-            "{}={}\nTT_METAL_EMU_SOC_DESC={}\nTT_MESH_GRAPH_DESC_PATH={}\nTT_METAL_EMU_PACKAGE_SOC_DESC={}\n",
+            "{}={}\nTT_METAL_EMU_SOC_DESC={}\nTT_MESH_GRAPH_DESC_PATH={}\n",
             cluster_desc_variable,
             generated.cluster_desc.string(),
-            fmt::join(soc_paths, ","),
-            generated.mesh_graph_desc.string(),
-            std::filesystem::absolute(package_soc_desc).string());
+            std::filesystem::absolute(package_soc_desc).string(),
+            generated.mesh_graph_desc.string());
     };
     // Metal refuses TT_METAL_EMU_CLUSTER_DESC without an emulator server; Mock takes TT_METAL_MOCK_CLUSTER_DESC_PATH.
     generated.env_emu = dir / kEnvEmuFile;

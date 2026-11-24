@@ -59,24 +59,24 @@ struct GeneratedDescriptors {
     std::filesystem::path cluster_desc;
     std::vector<std::filesystem::path> soc_descs;  // index = fabric_chip
     std::filesystem::path mesh_graph_desc;
-    // env.emu: TT_METAL_EMU_CLUSTER_DESC, TT_METAL_EMU_SOC_DESC, TT_MESH_GRAPH_DESC_PATH,
-    // TT_METAL_EMU_PACKAGE_SOC_DESC (the absolute `package_soc_desc`)
+    // env.emu: TT_METAL_EMU_CLUSTER_DESC, TT_METAL_EMU_SOC_DESC (the absolute `package_soc_desc`),
+    // TT_MESH_GRAPH_DESC_PATH
     std::filesystem::path env_emu;
     std::filesystem::path
         env_mock;  // env.mock: the same with TT_METAL_MOCK_CLUSTER_DESC_PATH for the cluster descriptor
 };
 
 // Writes, into `out_dir` (created if missing, files replaced if present), chip_<fabric_chip>_soc_desc.yaml for each
-// device, cluster_desc.yaml, mesh_graph_descriptor.textproto, env.emu and env.mock. `package_soc_desc` is the whole
-// package's SoC descriptor (UMD descriptors/soc_descs/mmk.yaml).
+// device, cluster_desc.yaml (whose chip_soc_descs names those files, relative to it), mesh_graph_descriptor.textproto,
+// env.emu and env.mock. `package_soc_desc` is the whole package's SoC descriptor (UMD descriptors/soc_descs/mmk.yaml).
 //
 // Runs check_manifest(`manifest`, package_facts(`package_soc_desc`)) and the G1 to G6 refusals, and throws
 // DescriptorGenerationError, before creating or writing anything, when any row or refusal holds; it reports every
 // one. Throws std::runtime_error (TT_FATAL) when `package_soc_desc` cannot be read, lacks a key the generator reads
 // (dram_views, eth, keraunos.cores, eth_l1_size) or holds a value of the wrong type (naming the file), when
-// `manifest` has no devices or a router slot without a port, when the absolute `out_dir` contains a comma or a
-// newline, or when a file cannot be written. Before writing, it removes `out_dir`'s env.emu and env.mock, and it
-// writes them last: a write failure leaves no env file, and can leave other files of this call in `out_dir`.
+// `manifest` has no devices or a router slot without a port, when the absolute `out_dir` contains a newline, or when a
+// file cannot be written. Before writing, it removes `out_dir`'s env.emu and env.mock, and it writes them last: a write
+// failure leaves no env file, and can leave other files of this call in `out_dir`.
 GeneratedDescriptors generate_descriptors(
     const Manifest& manifest, const std::filesystem::path& package_soc_desc, const std::filesystem::path& out_dir);
 

@@ -359,6 +359,11 @@ TEST(VclusterDescriptors, Line3) {
         yaml_difference(
             cluster["chip_unique_ids"], YAML::Load("{0: 5497558138880, 1: 5497558138881, 2: 5497558138882}")),
         "");
+    EXPECT_EQ(
+        yaml_difference(
+            cluster["chip_soc_descs"],
+            YAML::Load("{0: chip_0_soc_desc.yaml, 1: chip_1_soc_desc.yaml, 2: chip_2_soc_desc.yaml}")),
+        "");
     EXPECT_EQ(g.mesh_graph_desc, out.path() / "mesh_graph_descriptor.textproto");
     EXPECT_NE(textproto_canonical(g.mesh_graph_desc).find("dims[1,3]"), std::string::npos)
         << textproto_canonical(g.mesh_graph_desc);
@@ -402,22 +407,6 @@ TEST(VclusterDescriptors, BackendInNoFile) {
     }
 }
 
-// The NAME=value lines of an env file.
-std::map<std::string, std::string> env_vars(const fs::path& path) {
-    std::map<std::string, std::string> vars;
-    std::istringstream lines(read_text(path));
-    for (std::string line; std::getline(lines, line);) {
-        if (line.empty()) {
-            continue;
-        }
-        const size_t eq = line.find('=');
-        EXPECT_NE(eq, std::string::npos) << line;
-        EXPECT_FALSE(vars.contains(line.substr(0, eq))) << "repeated " << line;
-        vars[line.substr(0, eq)] = line.substr(eq + 1);
-    }
-    return vars;
-}
-
 // The non-empty lines of an env file, in file order.
 std::vector<std::string> env_lines(const fs::path& path) {
     std::vector<std::string> found;
@@ -430,34 +419,17 @@ std::vector<std::string> env_lines(const fs::path& path) {
     return found;
 }
 
-// Three lines NAME=value with absolute paths, the SoC descriptors
-// comma-separated in chip order; env.mock names the cluster descriptor TT_METAL_MOCK_CLUSTER_DESC_PATH where env.emu
-// names it TT_METAL_EMU_CLUSTER_DESC. TT_METAL_EMU_PACKAGE_SOC_DESC, the
-// absolute path of the package descriptor given, is the last line of both, after those three.
+// Three lines NAME=value with absolute paths: env.mock names the cluster descriptor TT_METAL_MOCK_CLUSTER_DESC_PATH
+// where env.emu names it TT_METAL_EMU_CLUSTER_DESC, then TT_METAL_EMU_SOC_DESC (the package descriptor given) and
+// TT_MESH_GRAPH_DESC_PATH.
 TEST(VclusterDescriptors, EnvFiles) {
     const TempDir out("env");
     const GeneratedDescriptors g = generate_descriptors(checked(kLine), package_soc_desc(), out.path());
     EXPECT_EQ(g.env_emu, out.path() / "env.emu");
     EXPECT_EQ(g.env_mock, out.path() / "env.mock");
-    std::string socs;
-    for (const auto& soc : g.soc_descs) {
-        socs += (socs.empty() ? "" : ",") + fs::absolute(soc).string();
-    }
-    const std::map<std::string, std::string> shared = {
-        {"TT_METAL_EMU_SOC_DESC", socs},
-        {"TT_MESH_GRAPH_DESC_PATH", fs::absolute(g.mesh_graph_desc).string()},
-        {"TT_METAL_EMU_PACKAGE_SOC_DESC", fs::absolute(package_soc_desc()).string()}};
-    auto emu = shared;
-    emu["TT_METAL_EMU_CLUSTER_DESC"] = fs::absolute(g.cluster_desc).string();
-    auto mock = shared;
-    mock["TT_METAL_MOCK_CLUSTER_DESC_PATH"] = fs::absolute(g.cluster_desc).string();
-    EXPECT_EQ(env_vars(g.env_emu), emu);
-    EXPECT_EQ(env_vars(g.env_mock), mock);
-
     const std::vector<std::string> after_the_cluster = {
-        "TT_METAL_EMU_SOC_DESC=" + socs,
-        "TT_MESH_GRAPH_DESC_PATH=" + fs::absolute(g.mesh_graph_desc).string(),
-        "TT_METAL_EMU_PACKAGE_SOC_DESC=" + fs::absolute(package_soc_desc()).string()};
+        "TT_METAL_EMU_SOC_DESC=" + fs::absolute(package_soc_desc()).string(),
+        "TT_MESH_GRAPH_DESC_PATH=" + fs::absolute(g.mesh_graph_desc).string()};
     auto emu_lines = after_the_cluster;
     emu_lines.insert(emu_lines.begin(), "TT_METAL_EMU_CLUSTER_DESC=" + fs::absolute(g.cluster_desc).string());
     auto mock_lines = after_the_cluster;
@@ -475,10 +447,10 @@ TEST(VclusterDescriptors, EnvFilesPackagePathAbsolute) {
     const GeneratedDescriptors g = generate_descriptors(checked(kLine), relative, out.path());
     for (const auto& env_file : {g.env_emu, g.env_mock}) {
         const std::vector<std::string> lines = env_lines(env_file);
-        ASSERT_EQ(lines.size(), 4u) << env_file;
-        const std::string name = "TT_METAL_EMU_PACKAGE_SOC_DESC=";
-        ASSERT_EQ(lines.back().substr(0, name.size()), name) << env_file;
-        const fs::path written = lines.back().substr(name.size());
+        ASSERT_EQ(lines.size(), 3u) << env_file;
+        const std::string name = "TT_METAL_EMU_SOC_DESC=";
+        ASSERT_EQ(lines[1].substr(0, name.size()), name) << env_file;
+        const fs::path written = lines[1].substr(name.size());
         EXPECT_TRUE(written.is_absolute()) << written;
         EXPECT_TRUE(fs::equivalent(written, package_soc_desc())) << written;
     }
@@ -545,6 +517,9 @@ links:
     ASSERT_EQ(cluster["ethernet_connections"].size(), 1u);
     EXPECT_EQ(cluster["ethernet_connections"][0][0]["chip"].as<int>(), 0);
     EXPECT_EQ(cluster["ethernet_connections"][0][1]["chip"].as<int>(), 1);
+    EXPECT_EQ(
+        yaml_difference(cluster["chip_soc_descs"], YAML::Load("{0: chip_0_soc_desc.yaml, 1: chip_1_soc_desc.yaml}")),
+        "");
 }
 
 // A device's router cores in port order, and keraunos.cores in the same order, whatever the

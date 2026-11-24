@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Per-chip SoC descriptors inside metal: the refusals E0 to E7 on Mock, and that a chip's descriptor and the package's
-// give a core one translated coordinate.
+// Per-chip SoC descriptors inside metal: the refusals K0 to K4 and E1 to E7 on Mock, and that a chip's descriptor and
+// the package's give a core one translated coordinate.
 //
 // Metal reads its environment once a process, so each Mock case opens metal in a child process of its own (a
 // threadsafe death test). The child generates the descriptors, changes one thing, exports the variables, opens, and
@@ -55,10 +55,10 @@ fs::path temp_dir(const std::string& name) {
     return fs::path(::testing::TempDir()) / ("vcluster_metal_desc_" + std::to_string(::getpid()) + "_" + name);
 }
 
-// The files one case opens metal on. `package` is what TT_METAL_EMU_PACKAGE_SOC_DESC names; empty leaves it unset.
+// The files one case opens metal on. `package` is what TT_METAL_EMU_SOC_DESC names; empty leaves it unset.
 struct Files {
     fs::path dir;
-    std::vector<fs::path> socs;  // TT_METAL_EMU_SOC_DESC, in order
+    std::vector<fs::path> socs;  // index = chip
     fs::path cluster;
     fs::path mesh_graph;
     fs::path package;
@@ -114,72 +114,21 @@ YAML::Node package_keraunos_entry(const std::string& core) {
     throw std::runtime_error("the package has no keraunos.cores entry for " + core);
 }
 
-// Chip `from` becomes chip `to` everywhere in a cluster descriptor of the generator's shape.
-void renumber_chip(YAML::Node& cluster, uint32_t from, uint32_t to) {
-    const std::string from_key = std::to_string(from);
-    const std::string to_key = std::to_string(to);
-    for (const char* by_chip : {"arch", "chip_unique_ids", "harvesting", "chip_to_boardtype", "asic_locations"}) {
-        YAML::Node map = cluster[by_chip];
-        if (!map.IsMap() || !map[from_key]) {
-            throw std::runtime_error(std::string("cluster descriptor: no chip ") + from_key + " in " + by_chip);
-        }
-        const YAML::Node value = YAML::Clone(map[from_key]);
-        map.remove(from_key);
-        map[to_key] = value;
-    }
-    for (auto connection : cluster["ethernet_connections"]) {
-        for (auto end : connection) {
-            if (end["chip"].as<uint32_t>() == from) {
-                end["chip"] = to;
-            }
-        }
-    }
-    YAML::Node mmio(YAML::NodeType::Sequence);
-    for (const auto& entry : cluster["chips_with_mmio"]) {
-        YAML::Node renamed(YAML::NodeType::Map);
-        for (const auto& kv : entry) {
-            renamed[kv.first.as<uint32_t>() == from ? to_key : kv.first.Scalar()] = kv.second;
-        }
-        mmio.push_back(renamed);
-    }
-    cluster["chips_with_mmio"] = mmio;
-    for (auto board : cluster["boards"]) {
-        for (auto field : board) {
-            if (!field["chips"]) {
-                continue;
-            }
-            YAML::Node chips(YAML::NodeType::Sequence);
-            for (const auto& chip : field["chips"]) {
-                chips.push_back(chip.as<uint32_t>() == from ? to : chip.as<uint32_t>());
-            }
-            field["chips"] = chips;
-        }
-    }
-}
-
 enum Outcome : int { kOpened = 0, kRefused = 3, kWrongView = 4, kSetupFailed = 5 };
 
 // The Mock environment: no emulator server, the cluster descriptor in the Mock
-// variable, the list when `files.socs` is not empty, and the package variable when `files.package` is not empty.
+// variable, and the package variable when `files.package` is not empty.
 void export_mock(const Files& files) {
-    for (const char* unset :
-         {"TT_METAL_EMU_SERVER", "TT_METAL_EMU_CLUSTER_DESC", "TT_METAL_SIMULATOR", "TT_METAL_EMU_PACKAGE_SOC_DESC"}) {
+    for (const char* unset : {"TT_METAL_EMU_SERVER", "TT_METAL_EMU_CLUSTER_DESC", "TT_METAL_SIMULATOR"}) {
         ::unsetenv(unset);
     }
-    std::string socs;
-    for (const auto& soc : files.socs) {
-        socs += (socs.empty() ? "" : ",") + soc.string();
-    }
     ::setenv("TT_METAL_MOCK_CLUSTER_DESC_PATH", files.cluster.c_str(), 1);
-    if (socs.empty()) {
+    if (files.package.empty()) {
         ::unsetenv("TT_METAL_EMU_SOC_DESC");
     } else {
-        ::setenv("TT_METAL_EMU_SOC_DESC", socs.c_str(), 1);
+        ::setenv("TT_METAL_EMU_SOC_DESC", files.package.c_str(), 1);
     }
     ::setenv("TT_MESH_GRAPH_DESC_PATH", files.mesh_graph.c_str(), 1);
-    if (!files.package.empty()) {
-        ::setenv("TT_METAL_EMU_PACKAGE_SOC_DESC", files.package.c_str(), 1);
-    }
 }
 
 using Change = std::function<void(Files&)>;
@@ -245,7 +194,7 @@ std::string core_at(const tt::Cluster& cluster, uint32_t chip, uint32_t channel)
 
 // --- The generated files open, so each refusal below is the one change's -----------------------------------------
 
-// With the list and the package variable metal's view of a chip is the chip's file: chip 1's channel 0 is 4-1 to
+// With chip_soc_descs and the package variable metal's view of a chip is the chip's file: chip 1's channel 0 is 4-1 to
 // metal.
 TEST_F(VclusterMetalDescDeathTest, GeneratedFilesOpen) {
     for (const std::string manifest : {"line3_eth.yaml", "line3_am.yaml", "line3_noc.yaml"}) {
@@ -261,56 +210,125 @@ TEST_F(VclusterMetalDescDeathTest, GeneratedFilesOpen) {
     }
 }
 
-// One entry and no package variable is the package descriptor for every chip.
-TEST_F(VclusterMetalDescDeathTest, OneEntryNoPackageVariableOpens) {
+// Without chip_soc_descs Mock opens every chip on its own Quasar descriptor, which has no Ethernet core, and does not
+// read TT_METAL_EMU_SOC_DESC.
+TEST_F(VclusterMetalDescDeathTest, NoKeyOpensOnTheMockDescriptor) {
+    EXPECT_OPENS(
+        [](Files& files) { edit(files.cluster, [](YAML::Node& cluster) { cluster.remove("chip_soc_descs"); }); },
+        [](const tt::Cluster& cluster) {
+            return cluster.get_soc_desc(0).get_num_eth_channels() == 0 &&
+                   cluster.get_soc_desc(1).get_num_eth_channels() == 0;
+        });
+}
+
+// An absolute path is taken as written.
+TEST_F(VclusterMetalDescDeathTest, AbsolutePathOpens) {
     EXPECT_OPENS(
         [](Files& files) {
-            files.socs = {files.package};
-            files.package.clear();
+            if (!files.socs.at(1).is_absolute()) {
+                throw std::runtime_error("generated path " + files.socs[1].string() + " is not absolute");
+            }
+            edit(files.cluster, [&](YAML::Node& cluster) { cluster["chip_soc_descs"]["1"] = files.socs[1].string(); });
         },
-        [](const tt::Cluster& cluster) {
-            return cluster.get_soc_desc(0).get_num_eth_channels() == 8 &&
-                   cluster.get_soc_desc(2).get_num_eth_channels() == 8 && core_at(cluster, 1, 0) == "4-0";
-        });
+        [](const tt::Cluster& cluster) { return core_at(cluster, 1, 0) == "4-1" && core_at(cluster, 1, 1) == "4-2"; });
 }
 
 // --- Refusals ---------------------------------------------------------------------------------------------------
 
-// E0, first condition: the list with no package variable.
-TEST_F(VclusterMetalDescDeathTest, E0ListWithoutPackageVariable) {
+YAML::Node a_map() {
+    YAML::Node map(YAML::NodeType::Map);
+    map["a"] = 1;
+    return map;
+}
+
+YAML::Node a_sequence() {
+    YAML::Node sequence(YAML::NodeType::Sequence);
+    sequence.push_back("a");
+    return sequence;
+}
+
+// A change to the cluster descriptor's chip_soc_descs.
+Change in_chip_soc_descs(const std::function<void(YAML::Node&)>& change) {
+    return [change](Files& files) {
+        edit(files.cluster, [&](YAML::Node& cluster) {
+            YAML::Node map = cluster["chip_soc_descs"];
+            change(map);
+        });
+    };
+}
+
+const std::string kCluster = "Cluster descriptor [^ ]*cluster_desc\\.yaml";
+
+// K0: the key without the package variable.
+TEST_F(VclusterMetalDescDeathTest, K0KeyWithoutPackageVariable) {
     EXPECT_REFUSED(
         [](Files& files) { files.package.clear(); },
-        "TT_METAL_EMU_SOC_DESC lists 3 descriptors: TT_METAL_EMU_PACKAGE_SOC_DESC must name the package descriptor");
+        kCluster +
+            " names chip SoC descriptors \\(chip_soc_descs\\): TT_METAL_EMU_SOC_DESC must name the package "
+            "descriptor they narrow");
 }
 
-// E0, second condition: the package variable with one entry in the list.
-TEST_F(VclusterMetalDescDeathTest, E0PackageVariableWithOneEntry) {
-    EXPECT_REFUSED(
-        [](Files& files) { files.socs = {files.package}; },
-        "TT_METAL_EMU_PACKAGE_SOC_DESC is set and TT_METAL_EMU_SOC_DESC has one entry");
-}
-
-// E1: four entries and three chips open. The fourth lists no core and no view, so E5 and E6 hold nothing against it.
-TEST_F(VclusterMetalDescDeathTest, E1ListLongerThanTheChips) {
+// K1: chip_soc_descs is a sequence.
+TEST_F(VclusterMetalDescDeathTest, K1NotAMap) {
     EXPECT_REFUSED(
         [](Files& files) {
-            const fs::path extra = files.dir / "chip_3_soc_desc.yaml";
-            fs::copy_file(files.socs[0], extra);
-            edit(extra, [](YAML::Node& soc) {
-                soc["eth"] = YAML::Node(YAML::NodeType::Sequence);
-                soc["keraunos"]["cores"] = YAML::Node(YAML::NodeType::Sequence);
-                soc["dram_views"] = YAML::Node(YAML::NodeType::Sequence);
-            });
-            files.socs.push_back(extra);
+            edit(files.cluster, [](YAML::Node& cluster) { cluster["chip_soc_descs"] = a_sequence(); });
         },
-        "TT_METAL_EMU_SOC_DESC lists 4 chip descriptors and 3 chips are open");
+        kCluster + ": chip_soc_descs is \\[a\\], not a map of chip id to SoC descriptor path");
 }
 
-// E2: three entries and three chips open, with ids 0, 1 and 3.
-TEST_F(VclusterMetalDescDeathTest, E2ChipIdBeyondTheList) {
+// K2: a key that is not a chip id.
+TEST_F(VclusterMetalDescDeathTest, K2KeyNotAChipId) {
     EXPECT_REFUSED(
-        [](Files& files) { edit(files.cluster, [](YAML::Node& cluster) { renumber_chip(cluster, 2, 3); }); },
-        "TT_METAL_EMU_SOC_DESC has no descriptor for chip 3");
+        in_chip_soc_descs([](YAML::Node& map) { map["-1"] = "chip_0_soc_desc.yaml"; }),
+        kCluster + ": chip_soc_descs entry -1: chip_0_soc_desc\\.yaml is not a chip id and a path");
+}
+
+// K2: a value that is not a path.
+TEST_F(VclusterMetalDescDeathTest, K2ValueNotAPath) {
+    EXPECT_REFUSED(
+        in_chip_soc_descs([](YAML::Node& map) { map["1"] = a_sequence(); }),
+        kCluster + ": chip_soc_descs entry 1: \\[a\\] is not a chip id and a path");
+}
+
+// K3: one chip id written twice, as one key repeated.
+TEST_F(VclusterMetalDescDeathTest, K3ChipTwice) {
+    EXPECT_REFUSED(
+        [](Files& files) {
+            edit(files.cluster, [](YAML::Node& cluster) { cluster.remove("chip_soc_descs"); });
+            std::ofstream(files.cluster, std::ios::app)
+                << "chip_soc_descs:\n  0: chip_0_soc_desc.yaml\n  1: chip_1_soc_desc.yaml\n  2: chip_2_soc_desc.yaml\n"
+                   "  1: chip_1_soc_desc.yaml\n";
+        },
+        kCluster + ": chip_soc_descs lists chip 1 twice");
+}
+
+// K3: one chip id written twice, as two keys.
+TEST_F(VclusterMetalDescDeathTest, K3ChipTwiceAsTwoKeys) {
+    EXPECT_REFUSED(
+        in_chip_soc_descs([](YAML::Node& map) { map["01"] = "chip_1_soc_desc.yaml"; }),
+        kCluster + ": chip_soc_descs lists chip 1 twice");
+}
+
+// K4: an entry names a file that does not exist, relative to the cluster descriptor.
+TEST_F(VclusterMetalDescDeathTest, K4FileMissing) {
+    EXPECT_REFUSED(
+        in_chip_soc_descs([](YAML::Node& map) { map["1"] = "missing_soc_desc.yaml"; }),
+        kCluster + ": chip 1 SoC descriptor [^ ]*/missing_soc_desc\\.yaml does not exist");
+}
+
+// E1: an entry for chip 3, which the cluster descriptor does not have.
+TEST_F(VclusterMetalDescDeathTest, E1ChipNotInTheClusterDescriptor) {
+    EXPECT_REFUSED(
+        in_chip_soc_descs([](YAML::Node& map) { map["3"] = "chip_0_soc_desc.yaml"; }),
+        kCluster + ": chip_soc_descs names chip 3, which the descriptor does not have");
+}
+
+// E2: no entry for chip 2, which is open.
+TEST_F(VclusterMetalDescDeathTest, E2OpenChipWithoutEntry) {
+    EXPECT_REFUSED(
+        in_chip_soc_descs([](YAML::Node& map) { map.remove("2"); }),
+        kCluster + ": chip_soc_descs has no descriptor for chip 2");
 }
 
 // E3: chip 1's Ethernet harvesting mask in the cluster descriptor is 1. On Mock UMD refuses the mask when it builds
@@ -476,27 +494,8 @@ TEST_F(VclusterMetalDescDeathTest, E6NonProgrammableDramViewInTwoChipsOpens) {
 
 // --- Further refusals -------------------------------------------------------------------------------------------
 
-// E0 on Mock: the package variable set and the list unset.
-TEST_F(VclusterMetalDescDeathTest, E0PackageVariableWithoutTheList) {
-    EXPECT_REFUSED(
-        [](Files& files) { files.socs.clear(); },
-        "TT_METAL_EMU_PACKAGE_SOC_DESC is set and TT_METAL_EMU_SOC_DESC is not( |$)");
-}
-
 // E4's message for chip 1 with `key` the whole key named, not a prefix of it.
 std::string e4_kind(const std::string& key) { return e4(key) + "( |$)"; }
-
-YAML::Node a_map() {
-    YAML::Node map(YAML::NodeType::Map);
-    map["a"] = 1;
-    return map;
-}
-
-YAML::Node a_sequence() {
-    YAML::Node sequence(YAML::NodeType::Sequence);
-    sequence.push_back("a");
-    return sequence;
-}
 
 // E4, node kinds: each of these is refused with E4's text and never as a yaml-cpp exception.
 TEST_F(VclusterMetalDescDeathTest, E4EthIsAMap) {
@@ -600,7 +599,7 @@ TEST_F(VclusterMetalDescDeathTest, E7ArchitectureNotQuasar) {
                 edit(soc, to_blackhole);
             }
         },
-        "TT_METAL_EMU_SOC_DESC lists 3 descriptors on architecture [^;]*; a descriptor a chip is read on Quasar only");
+        kCluster + " names chip SoC descriptors on architecture [^;]*; they are read on Quasar only");
 }
 
 // --- The two views agree, no device -------------------------------------------------------------------------------
