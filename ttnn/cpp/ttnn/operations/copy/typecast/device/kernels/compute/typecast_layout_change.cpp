@@ -8,6 +8,7 @@
 // SAME_DTYPE skips the typecast: there is no dfb::mid and the layout op writes dfb::out directly.
 
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/reconfig_data_format.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
@@ -77,6 +78,8 @@ void kernel_main() {
 #ifdef TILIZE_INPUT
     compute_kernel_hw_startup(dfb::in, dfb::mid);
     for (uint32_t b = 0; b < num_blocks; ++b) {
+        // The helpers reconfigure SrcA only; keep SrcB on the same format so no stale operand format remains.
+        reconfig_data_format_srcb(dfb::in);
         ckl::tilize<
             block_width_tiles,
             dfb::in,
@@ -85,12 +88,16 @@ void kernel_main() {
             TilizeWait::WaitBlock,
             TilizeReconfig::UnpackAndPackReconfigure,
             lossless>(in, mid, 1);
+        reconfig_data_format_srcb(dfb::mid);
         ckl::unary<Cast, cast_input, cast_output>(block, mid, out);
     }
 #else
     compute_kernel_hw_startup(dfb::in, dfb::mid);
     for (uint32_t b = 0; b < num_blocks; ++b) {
+        // The helpers reconfigure SrcA only; keep SrcB on the same format so no stale operand format remains.
+        reconfig_data_format_srcb(dfb::in);
         ckl::unary<Cast, cast_input, cast_output>(block, in, mid);
+        reconfig_data_format_srcb(dfb::mid);
         ckl::untilize<
             block_width_tiles,
             dfb::mid,
