@@ -21,8 +21,8 @@ for T in ${THREAD//,/ }; do
   esac
   PAT=${PAT:+$PAT|}$P
 done
-rm -rf "$OUT"; mkdir -p "$OUT/experimental"
-for f in "$LLK"/tests/hal_llk/*.h "$LLK"/tests/hal_llk/experimental/*.h; do
+rm -rf "$OUT"; mkdir -p "$OUT/experimental" "$OUT/debug"
+for f in "$LLK"/tests/hal_llk/*.h "$LLK"/tests/hal_llk/experimental/*.h "$LLK"/tests/hal_llk/debug/*.h; do
   rel=${f#"$LLK"/tests/hal_llk/}; base=$(basename "$rel")
   if [[ $base =~ $PAT ]]; then
     ln -s "$f" "$OUT/$rel"
