@@ -1314,10 +1314,10 @@ void bind_mesh_programs(nb::module_& mod) {
 
 namespace {
 
-// The tensors of a run args object made in Python, as its _tensor_args attribute holds them, or None for run args made
-// in C++, which Python cannot have given tensors.
+// The tensors of a run args object made in Python, read with get_owners so that a Python subclass cannot hide them, or
+// None for run args made in C++, which Python cannot have given tensors.
 nb::object tensor_owners(nb::handle python_object) {
-    return python_object.is_valid() ? nb::getattr(python_object, TENSOR_ARGS_ATTRIBUTE, nb::none()) : nb::none();
+    return python_object.is_valid() ? get_owners(python_object, TENSOR_ARGS_ATTRIBUTE, nb::none()) : nb::none();
 }
 
 // Calls visit for each entry of one of those dicts. ProgramRunArgs and MeshProgramRunArgs write the dicts themselves,
