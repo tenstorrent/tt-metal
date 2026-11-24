@@ -1172,13 +1172,28 @@ def test_minimax_h3_transformer_block_ff1_bf8(
         capacity = padded_sequence_length(fixture.seq_len, fixture.sp_factor)
         extra |= dict(dynamic_length=True, kv_gather_capacity=capacity, norm_row_capacity=capacity // fixture.sp_factor)
 
-    def run(ff1_output_dtype) -> torch.Tensor:
+    def run(ff1_output_dtype) -> tuple[torch.Tensor, set]:
         tt_model = MiniMaxH3TransformerBlock(**fixture.block_kwargs, **extra, ff1_output_dtype=ff1_output_dtype)
         tt_model.load_torch_state_dict(fixture.torch_model.state_dict())
-        return fixture.run(tt_model)
+        dtypes = set()
 
-    bf16_out = run(None)
-    bf8_out = run(ttnn.bfloat8_b)
+        def record(forward):
+            def recording_forward(x, *args, **kwargs):
+                out = forward(x, *args, **kwargs)
+                dtypes.add((x.dtype, out.dtype))
+                return out
+
+            return recording_forward
+
+        ff2 = tt_model.ff.ff2
+        ff2.forward = record(ff2.forward)
+        ff2.forward_fused_addcmul = record(ff2.forward_fused_addcmul)
+        return fixture.run(tt_model), dtypes
+
+    bf16_out, bf16_dtypes = run(None)
+    bf8_out, bf8_dtypes = run(ttnn.bfloat8_b)
+    assert bf16_dtypes == {(ttnn.bfloat16, ttnn.bfloat16)}
+    assert bf8_dtypes == {(ttnn.bfloat8_b, ttnn.bfloat16)}
     assert_quality(fixture.torch_out, bf8_out, pcc=MIN_PCC)
     assert not torch.equal(bf16_out, bf8_out)
 

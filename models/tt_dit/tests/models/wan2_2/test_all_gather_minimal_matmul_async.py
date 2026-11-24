@@ -369,6 +369,8 @@ def run_test_linear_impl(
 
         check_result = []
         for c in range(chunks):
+            if output_dtype is not None:
+                assert tt_output[c].dtype == output_dtype, tt_output[c].dtype
             tt_output_chunk = ttnn.from_device(tt_output[c])
             tt_output_chunk = ttnn.to_torch(
                 tt_output_chunk,
