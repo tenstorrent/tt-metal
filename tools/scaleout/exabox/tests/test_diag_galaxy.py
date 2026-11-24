@@ -141,7 +141,8 @@ class TestResets(unittest.TestCase):
             with self.subTest(named=named), mock.patch.object(resets, "run", fail), mock.patch.object(
                 resets, "KNOWN_DROPPED", {2}
             ), mock.patch("diag.snapshot_checks.KNOWN_DROPPED", {2}):
-                self.assertEqual(self._reset([up])[1]["reset_1"].status, want)
+                c = self._reset([up])[1]["reset_1"]
+                self.assertEqual((c.status, [m["bdf"] for m in c.data["blamed_chips"]]), (want, [f"0000:{named}:00.0"]))
 
     def test_firmware_not_ready_gets_a_second_round_then_fails(self):
         node = Path(resets.SYS, "bus/pci/devices/0000:01:00.0/tenstorrent/tenstorrent!0")

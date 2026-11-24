@@ -23,6 +23,7 @@ from .busbar import Step, run_step
 from .common import emit_result, emit_running, log, print_phase_summary, root_cmd, run, write_command_log
 from .galaxy import EXPECTED_CHIP_COUNT, KNOWN_DROPPED, TRAY_TO_UBB_NIBBLE, expected_bdf, parse_bdf_physical
 from .model import FAIL, PASS, SKIP, WARN, Check, Phase
+from .naming import blamed
 from .snapshot import resolve_tt_smi, take_snapshot
 from .snapshot_checks import pcie_enum_check, validate_snapshot
 
@@ -163,8 +164,8 @@ def glx_reset(
     bdfs = pcie_bdfs()
     named = set(re.findall(r"[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]", out + err))
     kd = named.isdisjoint(bdfs or ()) and all((parse_bdf_physical(b) or (0,))[0] in KNOWN_DROPPED for b in named)
-    if status == FAIL and named and kd:  # the known drop itself
-        check.status, check.details = WARN, f"{details}; names only the known-dropped tray's chips, still off PCIe"
+    if status == FAIL and named:  # the chips it names; only the known-dropped tray's, still off PCIe: that known drop
+        check.data["blamed_chips"], check.status = blamed(sorted(named)), WARN if kd else FAIL
     if KNOWN_DROPPED and bdfs and all(b in bdfs for b in ALL_BDFS if parse_bdf_physical(b)[0] in KNOWN_DROPPED):
         log(f"{name}: known-dropped tray {', '.join(map(str, sorted(KNOWN_DROPPED)))} answers: the full run")
         KNOWN_DROPPED.clear()
