@@ -2,30 +2,49 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Phase 2 (pre-test reset stability loop) and phase 4 (post-test reset)."""
+"""The resets: tt-smi -glx_reset only, never tt-smi -r. After each, the root port of every chip it left off PCIe is
+rescanned and the chips are recounted, the missing ones named by BDF, tray and ASIC. Phase 2 (the pre-test reset
+loop), phase 4 (the post-test reset), the recovery between bus-bar steps and the end sequence after the post-test
+reset. A reset that cannot run here (no root or sudo rule for it, the reset gate refuses) is a SKIP that says why."""
 from __future__ import annotations
 
-import re
+import shlex
 import subprocess
 import time
-from dataclasses import asdict
+from collections import Counter
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Sequence
 
-from .common import emit_result, emit_running, log, print_phase_summary, run, write_command_log
-from .galaxy import EXPECTED_CHIP_COUNT
-from .model import FAIL, PASS, WARN, Check, Phase
+from .aer import aer_check, aer_new, read_aer
+from .busbar import Step, run_step
+from .common import emit_result, emit_running, log, print_phase_summary, root_cmd, run, write_command_log
+from .galaxy import EXPECTED_CHIP_COUNT, TRAY_TO_UBB_NIBBLE, expected_bdf
+from .model import FAIL, PASS, SKIP, WARN, Check, Phase
 from .snapshot import resolve_tt_smi, take_snapshot
 from .snapshot_checks import pcie_enum_check, validate_snapshot
 
 # The tt-smi flags a tier's reset plan may name.
-RESET_FLAGS = ("-r", "-glx_reset")
+RESET_FLAGS = ("-glx_reset",)
+SYS = Path("/sys")
+ALL_BDFS = tuple(expected_bdf(t, a) for t in TRAY_TO_UBB_NIBBLE for a in range(1, 9))
+RESCAN_WAIT_S, RESCAN_EVERY_S = 60, 5  # a missing chip's root port is rescanned every 5 s until it is back, up to 60 s
+END_DELAY_S = 60  # end sequence: the wait after the post-test reset before the fabric open
+END_DBI_S = 10  # the end sequence's DRAM byte/DBI readback on the open mesh, s
 
-# tt-smi prints this banner before attempting `-r` on Galaxy units when the CPLD
-# FW is older than v1.16. The PCIe-level reset path is unreliable on those CPLDs
-# (chips re-enumerate but UMD's post-reset register reads return 0xffffffff).
-# Workaround per the banner: use `-glx_reset` instead.
-CPLD_OLD_BANNER_RE = re.compile(r"CPLD FW v1\.16 or higher is required to use tt-smi -r", re.IGNORECASE)
+
+def add_args(ap) -> None:
+    ap.add_argument(
+        "--reset-gate",
+        metavar="CMD",
+        help="A command run before every reset; a non-zero exit skips that reset, its last output line saying why.",
+    )
+    ap.add_argument(
+        "--end-delay-s",
+        type=int,
+        default=END_DELAY_S,
+        help=f"End sequence: seconds between the post-test reset and the fabric open. Default {END_DELAY_S}.",
+    )
 
 
 def pcie_bdfs() -> list[str] | None:
@@ -38,10 +57,126 @@ def pcie_bdfs() -> list[str] | None:
 
 
 def recount_check(name: str, bdfs: list[str] | None) -> Check:
-    """The chip recount after a reset, from the PCIe listing: how many of the 32 are back, each missing one by BDF, tray and ASIC."""
+    """The chip recount after a reset, from the PCIe listing: how many of the 32 are back, each missing one by BDF, tray
+    and ASIC, and how many each tray is short."""
     if bdfs is None:
         return Check(name=name, status=FAIL, details="chips could not be listed (lspci failed)", ip="pcie")
-    return pcie_enum_check([{"board_info": {"bus_id": b}} for b in bdfs], name)
+    c = pcie_enum_check([{"board_info": {"bus_id": b}} for b in bdfs], name)
+    short = Counter(m["tray"] for m in c.data["missing"])
+    c.data["trays_short"] = dict(short)
+    if short:
+        c.details += "; " + ", ".join(f"tray {t}: {n} of 8 missing" for t, n in sorted(short.items()))
+    return c
+
+
+def root_port(bdf: str) -> str | None:
+    """The bridge whose secondary bus is *bdf*'s bus: the port to rescan, found also for a chip gone from PCIe."""
+    bus = str(int(bdf.split(":")[-2], 16))
+    for f in sorted((SYS / "bus/pci/devices").glob("*/secondary_bus_number")):
+        try:
+            if f.read_text().strip() == bus:
+                return f.parent.name
+        except OSError:
+            continue
+    return None
+
+
+def rescan(missing: Sequence[str]) -> tuple[dict[str, str], list[str]]:
+    """Rescan the root port of each *missing* chip every RESCAN_EVERY_S s until the chip is back on PCIe, up to
+    RESCAN_WAIT_S. The chips that came back, each with its root port, and why a root port could not be rescanned."""
+    ports = {b: root_port(b) for b in missing}
+    whys = [f"{b}: root port not found" for b, rp in ports.items() if rp is None]
+    cmds = {}
+    for rp in sorted({rp for rp in ports.values() if rp}):
+        cmds[rp], why = root_cmd(["tee", str(SYS / "bus/pci/devices" / rp / "rescan")])
+        if why:
+            whys.append(why)
+    left, back, t0 = {b: rp for b, rp in ports.items() if cmds.get(rp)}, {}, time.time()
+    while left and time.time() - t0 < RESCAN_WAIT_S:
+        for rp in sorted(set(left.values())):
+            subprocess.run(cmds[rp], input="1", capture_output=True, text=True, timeout=15)
+        time.sleep(RESCAN_EVERY_S)
+        now = set(pcie_bdfs() or ())
+        back.update({b: left.pop(b) for b in list(left) if b in now})
+    return back, whys
+
+
+def _gate(cmd: str | None) -> str:
+    """Why the reset gate refuses a reset now; "" when there is none or it allows it."""
+    if not cmd:
+        return ""
+    try:
+        cp = subprocess.run(shlex.split(cmd), capture_output=True, text=True, timeout=300)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return f"reset gate did not run: {e}"
+    last = (cp.stdout + cp.stderr).strip().splitlines()
+    return "" if cp.returncode == 0 else f"reset gate: {last[-1] if last else f'rc {cp.returncode}'}"
+
+
+def glx_reset(
+    tt_smi: str,
+    phase: Phase,
+    name: str,
+    recount: str,
+    dry_run: bool,
+    logs_dir: Path | None = None,
+    gate: str | None = None,
+) -> list[str] | None:
+    """One tt-smi -glx_reset as check *name*, then the rescan of the root ports of the chips it left missing (check
+    rescan_<name> when one came back only that way or a port could not be rescanned) and the recount as check
+    *recount*. The chips on PCIe after it, or None when the reset could not run (a SKIP 'reset cannot run: <why>')."""
+    cmd, why = ([tt_smi, "-glx_reset"], "") if dry_run else root_cmd([tt_smi, "-glx_reset"])
+    why = why or ("" if dry_run else _gate(gate))
+    if why:
+        log(f"{name}: reset cannot run: {why}")
+        phase.add(Check(name=name, status=SKIP, details=f"reset cannot run: {why}", ip="other"))
+        return None
+    emit_running(name)
+    t0 = time.time()
+    cp = run(cmd, dry_run=dry_run, capture_output=True, text=True)
+    dt = time.time() - t0
+    if logs_dir is not None and not dry_run:
+        write_command_log(logs_dir / f"{name}.log", " ".join(cmd), cp.returncode, dt, cp.stdout, cp.stderr)
+    status = PASS if cp.returncode == 0 else FAIL
+    emit_result(name, status, suffix=f"({dt:.1f}s)")
+    if status == FAIL:
+        for line in ((cp.stderr or "").strip() or (cp.stdout or "").strip()).splitlines()[-5:]:
+            log(f"  ! {line}")
+    phase.add(
+        Check(
+            name=name,
+            status=status,
+            details=f"tt-smi -glx_reset rc={cp.returncode} dur={dt:.1f}s",
+            data={
+                "rc": cp.returncode,
+                "duration_s": dt,
+                "stdout_tail": (cp.stdout or "")[-2000:],
+                "stderr_tail": (cp.stderr or "")[-2000:],
+            },
+            ip="other",
+        )
+    )
+    if dry_run:
+        return list(ALL_BDFS)
+    bdfs = pcie_bdfs()
+    missing = [b for b in ALL_BDFS if bdfs is not None and b not in bdfs]
+    if missing:
+        back, whys = rescan(missing)
+        bdfs = pcie_bdfs() if back else bdfs
+        if back or whys:
+            phase.add(
+                Check(
+                    name=f"rescan_{name}",
+                    status=WARN if back else SKIP,
+                    details="; ".join(
+                        [*(f"{b} back only after a rescan of root port {rp}" for b, rp in back.items()), *whys]
+                    ),
+                    data={"back": back, "not_rescanned": whys},
+                    ip="pcie",
+                )
+            )
+    phase.add(recount_check(recount, bdfs))
+    return bdfs
 
 
 def reset_loop(
@@ -52,13 +187,13 @@ def reset_loop(
     snapshot_out: Path | None = None,
     post_reset_phases: list | None = None,
     logs_dir: Path | None = None,
+    gate: str | None = None,
 ) -> None:
-    """Per SYS-4365: first -r, then stick to -glx_reset for subsequent iterations.
+    """The plan's glx_resets in order (see glx_reset); it stops at one that cannot run or leaves chips missing.
 
     If `snapshot_out` and `post_reset_phases` are provided, a fresh snapshot is
-    taken + validated after each reset iteration (including any CPLD auto-recover),
-    and appended to `post_reset_phases` as (name, Phase) pairs for the caller to
-    splice into the report.
+    taken + validated after each reset and appended to `post_reset_phases` as
+    (name, Phase) pairs for the caller to splice into the report.
     """
 
     def _post_reset_snapshot(label: str) -> None:
@@ -78,110 +213,38 @@ def reset_loop(
         print_phase_summary(sp.name, asdict(sp))
 
     for i, flag in enumerate(plan):
-        check_name = f"reset_{i+1}_{flag.lstrip('-')}"
-        emit_running(check_name)
-        t0 = time.time()
-        cp = run([tt_smi, flag], dry_run=dry_run, capture_output=True, text=True)
-        dt = time.time() - t0
+        label = f"r{i+1}_{flag.lstrip('-')}"
+        bdfs = glx_reset(tt_smi, phase, f"reset_{i+1}_{flag.lstrip('-')}", f"recount_{i+1}", dry_run, logs_dir, gate)
+        if bdfs is None:
+            return
+        _post_reset_snapshot(label)
+        if len(bdfs) != EXPECTED_CHIP_COUNT:
+            log(f"Reset {i+1} left {len(bdfs)}/{EXPECTED_CHIP_COUNT} chips; stopping reset loop")
+            return
 
-        if logs_dir is not None and not dry_run:
-            log_path = logs_dir / f"{check_name}.log"
-            if write_command_log(log_path, f"{tt_smi} {flag}", cp.returncode, dt, cp.stdout, cp.stderr):
-                log(f"  log:  {log_path}")
 
-        # Quick post-reset enum check
-        bdfs = None if dry_run else pcie_bdfs()
-        post_count = EXPECTED_CHIP_COUNT if dry_run else -1 if bdfs is None else len(bdfs)
-        status = PASS if (dry_run or (cp.returncode == 0 and post_count == EXPECTED_CHIP_COUNT)) else FAIL
-        emit_result(check_name, status, suffix=f"({dt:.1f}s, post_pcie={post_count})")
-
-        # A failed reset is the one case where the console should say why
-        # without the reader having to go and open the log.
-        if status == FAIL and not dry_run:
-            text = (cp.stderr or "").strip() or (cp.stdout or "").strip()
-            for line in text.splitlines()[-5:]:
-                log(f"  ! {line}")
-        phase.add(
-            Check(
-                name=check_name,
-                status=status,
-                details=f"flag={flag} rc={cp.returncode if not dry_run else '(dry)'} "
-                f"dur={dt:.1f}s post_pcie={post_count}",
-                data={
-                    "flag": flag,
-                    "rc": cp.returncode,
-                    "duration_s": dt,
-                    "post_pcie_count": post_count,
-                    "stdout_tail": cp.stdout[-2000:] if cp.stdout else "",
-                    "stderr_tail": cp.stderr[-2000:] if cp.stderr else "",
-                },
-                ip="other",
-            )
+def recover(args, outdir: Path) -> list[str]:
+    """Recovery between bus-bar steps, after one that did not pass: a glx_reset, root-port rescan and recount. Its
+    finding lines: why the reset could not run, the chips back only after a rescan, the chips still missing; none when
+    every chip is back."""
+    if args.skip_reset:
+        return ["reset cannot run: --skip-reset"]
+    phase = Phase(name="recover")
+    try:
+        glx_reset(
+            resolve_tt_smi(args.tt_smi_path),
+            phase,
+            "reset_recover",
+            "recount_recover",
+            args.dry_run,
+            outdir,
+            args.reset_gate,
         )
-        cpld_old = flag == "-r" and not dry_run and cp.stdout and CPLD_OLD_BANNER_RE.search(cp.stdout)
-        if cpld_old:
-            phase.add(
-                Check(
-                    name="cpld_fw_old",
-                    status=WARN,
-                    details="CPLD FW < v1.16 detected — `tt-smi -r` unreliable on this system; "
-                    "use `tt-smi -glx_reset` instead and request a CPLD update from the sysadmin",
-                    ip="other",
-                )
-            )
-        # Auto-recover: -r on CPLD < v1.16 doesn't just fail, it leaves chips in a
-        # bad state (UMD reads 0xffffffff on subsequent calls) until -glx_reset is
-        # run. Recover so we don't strand the system.
-        if cpld_old and status == FAIL:
-            emit_running("cpld_auto_recover")
-            t0 = time.time()
-            rcp = run([tt_smi, "-glx_reset"], dry_run=False, capture_output=True, text=True)
-            rdt = time.time() - t0
-            rbdfs = pcie_bdfs()
-            rpost = -1 if rbdfs is None else len(rbdfs)
-            recovered = rcp.returncode == 0 and rpost == EXPECTED_CHIP_COUNT
-            rstatus = PASS if recovered else FAIL
-            emit_result("cpld_auto_recover", rstatus, suffix=f"({rdt:.1f}s, post_pcie={rpost})")
-            phase.add(
-                Check(
-                    name="cpld_auto_recover",
-                    status=rstatus,
-                    details=(
-                        f"ran `tt-smi -glx_reset` after -r failed; "
-                        f"rc={rcp.returncode} post_pcie={rpost} "
-                        f"{'recovered' if recovered else 'still broken — manual intervention needed'}"
-                    ),
-                    data={
-                        "rc": rcp.returncode,
-                        "duration_s": rdt,
-                        "post_pcie_count": rpost,
-                        "stdout_tail": rcp.stdout[-2000:] if rcp.stdout else "",
-                        "stderr_tail": rcp.stderr[-2000:] if rcp.stderr else "",
-                    },
-                    ip="other",
-                )
-            )
-            # If recovery worked, refresh post_count so the enumeration-break
-            # bailout below doesn't trip on the pre-recovery state.
-            if recovered:
-                post_count, bdfs = rpost, rbdfs
-                # Downgrade the original -r FAIL to WARN now that we know it's
-                # CPLD-attributable and the unit is back up. Hard FAIL is reserved
-                # for -r failures we *can't* explain or recover from.
-                for c in phase.checks:
-                    if c.name == check_name and c.status == FAIL:
-                        c.status = WARN
-                        c.details += " (downgraded to WARN: CPLD-attributable, auto-recovered)"
-                        break
-        if not dry_run:
-            phase.add(recount_check(f"recount_{i+1}", bdfs))
-        # Post-reset snapshot: validate the unit's state after this iteration
-        # (including any auto-recovery). Skipped on dry-run / offline.
-        _post_reset_snapshot(f"r{i+1}_{flag.lstrip('-')}")
-        # Bail if a reset broke enumeration — no point chasing the rest
-        if not dry_run and post_count != EXPECTED_CHIP_COUNT:
-            log(f"Reset {i+1} broke enumeration ({post_count}/{EXPECTED_CHIP_COUNT}); stopping reset loop")
-            break
+    except SystemExit as e:  # resolve_tt_smi: no tt-smi
+        return [f"reset cannot run: {e}"]
+    return [
+        c.details if c.status == SKIP else f"{c.status} {c.name}: {c.details}" for c in phase.checks if c.status != PASS
+    ]
 
 
 def fold_post_reset_snapshots(report: dict, post_reset_phases: list[tuple[str, Phase]]) -> None:
@@ -245,9 +308,11 @@ def fold_post_reset_snapshots(report: dict, post_reset_phases: list[tuple[str, P
         report["phases"]["snapshot"]["status"] = PASS
 
 
-def run_post_test_reset(tt_smi_path: str | None, plan: Sequence[str], phase: Phase, dry_run: bool) -> bool:
-    """Reset the unit between the tests and the triage phase. True when the reset left the unit healthy; only
-    the checks it adds are judged, not ones *phase* already held.
+def run_post_test_reset(
+    tt_smi_path: str | None, plan: Sequence[str], phase: Phase, dry_run: bool, gate: str | None = None
+) -> bool:
+    """Reset the unit between the tests and the triage phase. False when the reset left the unit degraded; only
+    the checks it adds are judged, not ones *phase* already held. A reset that cannot run leaves the unit as it is.
 
     Deliberately bare: reset_loop() is called without snapshot_out /
     post_reset_phases, so it takes no revalidation snapshot and stays out of
@@ -258,7 +323,7 @@ def run_post_test_reset(tt_smi_path: str | None, plan: Sequence[str], phase: Pha
     held = len(phase.checks)
     try:
         tt_smi = resolve_tt_smi(tt_smi_path)
-        reset_loop(tt_smi, plan, phase, dry_run)
+        reset_loop(tt_smi, plan, phase, dry_run, gate=gate)
     except Exception as e:
         phase.error = repr(e)
         phase.add(Check(name="post_test_reset", status=FAIL, details=repr(e), ip="other"))
@@ -269,16 +334,46 @@ def run_post_test_reset(tt_smi_path: str | None, plan: Sequence[str], phase: Pha
     # enumeration here would leave no trace on the verdict. Restate the
     # outcome under a name that counts.
     broke = [c.name for c in phase.checks[held:] if c.status == FAIL]
+    skipped = [c.details for c in phase.checks[held:] if c.status == SKIP and c.name.startswith("reset_")]
     phase.add(
         Check(
             name="post_test_reset_ok",
-            status=FAIL if broke else PASS,
+            status=FAIL if broke else SKIP if skipped else PASS,
             details=(
                 f"post-test reset left the unit degraded: {', '.join(broke)}"
                 if broke
+                else skipped[0]
+                if skipped
                 else f"unit healthy after {' '.join(plan)}"
             ),
             ip="other",
         )
     )
     return not broke
+
+
+def run_end(tt_smi_path: str | None, phase: Phase, out: Path, dry_run: bool, delay_s: int, gate: str | None) -> None:
+    """The end sequence, after the post-test reset: *delay_s* of quiet, then one whole-box fabric open and close
+    with the DRAM byte/DBI readback on the open mesh, judged with the AER errors over it. A failed or hung open, or an
+    uncorrectable AER error, gets one more glx_reset, rescan and recount, so no chip is left hung."""
+    log(f"end sequence: {delay_s} s, then the fabric open and close")
+    if not dry_run:
+        time.sleep(delay_s)
+    before = {} if dry_run else read_aer()
+    t0 = time.time()
+    argv = ("fabric_open.py", "--rows", "{out}/rows.jsonl", "--beat", "{out}/beat", "--label", "open")
+    opened = run_step(
+        Step(
+            "fabric", "fabric open and close after the reset", (*argv, "--dbi-wall-s", str(END_DBI_S)), 60 + END_DBI_S
+        ),
+        out,
+        dry_run,
+        test="end",
+    )
+    phase.add(opened)
+    if dry_run:
+        return
+    aer = replace(aer_check(aer_new(before, read_aer()), (time.time() - t0) / 3600), name="end_aer")
+    phase.add(aer)
+    if FAIL in (opened.status, aer.status):
+        glx_reset(resolve_tt_smi(tt_smi_path), phase, "reset_end", "recount_end", dry_run, out, gate)

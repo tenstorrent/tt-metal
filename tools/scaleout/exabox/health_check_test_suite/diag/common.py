@@ -92,6 +92,17 @@ def write_command_log(path: Path, cmdline: str, rc: int, duration_s: float, stdo
     return True
 
 
+def root_cmd(cmd: list[str]) -> tuple[list[str] | None, str]:
+    """*cmd* run as root: as is for root, under sudo -n when sudo -n -l lists it exactly; else None and why not."""
+    if os.geteuid() == 0:
+        return cmd, ""
+    try:
+        listed = subprocess.run(["sudo", "-n", "-l", *cmd], capture_output=True, timeout=15).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        listed = False
+    return (["sudo", "-n", *cmd], "") if listed else (None, f"not root, and sudo -n -l does not list {' '.join(cmd)}")
+
+
 def resolve_optional_tool(override: str | None, binary: str, flag: str, absent: str) -> tuple[str | None, str]:
     """An optional tool's binary, or None plus the reason its phase can't run.
 

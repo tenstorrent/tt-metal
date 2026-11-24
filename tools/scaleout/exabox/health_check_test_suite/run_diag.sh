@@ -11,17 +11,17 @@
 # --help text in step with it):
 #   flash           quick ETH link health, the unit read as found: snapshot validate
 #                   + two tt-triage check_eth_status reads 30 s apart. No resets, no tests
-#   daily           snapshot validate + 2 resets (-r, -glx_reset) + GDDR fast-pattern stress
+#   daily           snapshot validate + 1 reset (-glx_reset) + GDDR fast-pattern stress
 #                   + eth link_up + eth bandwidth + the galaxy load at smoke length (bus-bar steps,
 #                   then the pair link test with a sweep on a fault and a fabric open/close)
 #                   + tray HSC input-voltage and chip recount around the tests
-#                   + post-test -glx_reset + triage (host_side + device_side)
+#                   + post-test -glx_reset, end sequence + triage (host_side + device_side)
 #                   + QSFP tests (ETH link, cabling and module state), if the host has the package
-#   weekly          3 resets (1x -r then 2x -glx_reset) + full GDDR patterns + eth link_up
+#   weekly          2 resets (-glx_reset) + full GDDR patterns + eth link_up
 #                   + eth bandwidth + didt matmul stress (bf16 and bf8) + fabric all-gather under matmul (pytest, galaxy mesh)
 #                   + the galaxy load at plain length
 #                   + tray HSC input-voltage and chip recount around the tests
-#                   + post-test -glx_reset + triage (host_side + device_side)
+#                   + post-test -glx_reset, end sequence + triage (host_side + device_side)
 #                   + QSFP tests (ETH link, cabling and module state), if the host has the package
 #   full            weekly with the galaxy load at full length
 #                   + AER errors over the run + ETH status read

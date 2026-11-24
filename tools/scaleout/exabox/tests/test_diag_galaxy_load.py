@@ -458,6 +458,7 @@ class TestLinks(unittest.TestCase):
         live_aer=False,
         tests=None,
         busbar_stub=None,
+        stage_order=None,
     ):
         """run_diag on *tier* with its device tests, bus-bar and links tests stubbed: ``order`` is what ran, in
         order, ``device`` the names run_tests got, ``mode`` the length the bus-bar test was given, ``fault`` whether
@@ -496,8 +497,11 @@ class TestLinks(unittest.TestCase):
             phase.add(Check(name="busbar_qb", status=FAIL if busbar_fails else PASS, data={"hung": busbar_fails}))
             return busbar_fails
 
-        def fake_loop(tt_smi, plan, phase, dry_run):
+        def fake_loop(tt_smi, plan, phase, dry_run, gate=None):
             phase.add(Check(name="reset_glx", status=FAIL if reset_fails else PASS, details=""))
+
+        def fake_end(tt_smi_path, phase, out, dry_run, delay_s, gate):
+            got["order"].append("end")
 
         def fake_links(phase, out, fault, reset, dry_run):
             got["order"].append("links")
@@ -516,6 +520,10 @@ class TestLinks(unittest.TestCase):
             resets, "reset_loop", fake_loop
         ), mock.patch.object(
             diag_runner, "reset_loop"
+        ), mock.patch.object(
+            diag_runner, "run_end", fake_end
+        ), mock.patch.object(
+            diag_runner, "read_sel", return_value=(None, "not read in tests")
         ), mock.patch.object(
             diag_runner, "collect_fru_info"
         ), mock.patch.object(
@@ -541,6 +549,7 @@ class TestLinks(unittest.TestCase):
                 snapshot_out=d / "snapshot.json",
                 skip_reset=skip_reset,
                 tests=tests,
+                stage_order=stage_order,
             )
         return got
 
@@ -567,7 +576,8 @@ class TestLinks(unittest.TestCase):
 
     def test_aer_counts_across_each_reset_and_is_judged_last(self):
         for skip_triage, events in (
-            (False, ["open", "mark", "rebase", "mark", "rebase", "check"]),  # the sweep's reset, the post-test reset
+            # the sweep's reset, the post-test reset, the end sequence
+            (False, ["open", "mark", "rebase", "mark", "rebase", "mark", "rebase", "check"]),
             (True, ["open", "mark", "rebase", "check"]),  # no post-test reset, the verdict all the same
         ):
             with self.subTest(skip_triage=skip_triage):
@@ -591,6 +601,24 @@ class TestLinks(unittest.TestCase):
     def test_a_bus_bar_fault_makes_the_links_test_sweep(self):
         self.assertTrue(self._run_load(busbar_fails=True)["fault"])
         self.assertFalse(self._run_load(busbar_fails=False)["fault"])
+
+    def test_the_end_sequence_follows_the_post_test_reset(self):
+        got = self._run_load(skip_triage=False)
+        self.assertEqual(got["order"], ["device", "busbar", "links", "end"])
+        self.assertIn("post_test_reset", got["report"]["phases"])
+
+    def test_stage_order_picks_the_stages(self):
+        for order, ran, resets, end in (
+            ("reset,busbar,links,end", ["busbar", "links", "end"], True, True),
+            ("reset,end", ["end"], True, True),  # no load: the resets and the end sequence alone
+            ("busbar_heavy", ["busbar"], False, False),  # one step, no reset before or after it
+        ):
+            with self.subTest(order=order):
+                got = self._run_load("weekly", stage_order=order)
+                self.assertEqual(got["order"], ran)
+                rl = got["report"]["phases"]["reset_loop"]["checks"]  # reset_loop is stubbed: a SKIP only when none ran
+                self.assertEqual(not any(c["status"] == SKIP for c in rl), resets, rl)
+                self.assertEqual("post_test_reset" in got["report"]["phases"], end)
 
     def test_skip_tests_skips_the_load(self):
         got = self._run_load(skip_tests=True)

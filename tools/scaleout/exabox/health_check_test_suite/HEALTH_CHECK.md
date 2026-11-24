@@ -88,8 +88,8 @@ BMC_IP=... BMC_USER=... BMC_PASSWORD=... \
 | Tier | Resets | Tests | Triage | ETH status | QSFP tests | sys-triage | Duration | Use when |
 |---|---|---|---|---|---|---|---|---|
 | `flash` | none | — | — | 2 reads, 30 s apart | — | — | snapshot + 2 triage reads + 30 s | Quick ETH link health, the unit read as found |
-| `daily` | `tt-smi -r`, `tt-smi -glx_reset`, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + gddr_fast (DRAM_TEST_FAST=1) + the [galaxy load](#the-galaxy-load) at `smoke`: `busbar` (the `qb`, `mix`, `step`, `heavy` and `code` steps, ~1 min planned) + `links` (pair link test, sweep on a fault, fabric open/close) + HSC input-voltage and chip recount around the tests | host_side + device_side | — | yes, if installed | — | ~5 min + galaxy load (~10 min at `smoke`, estimated) + triage + ~7 min | The scheduled fleet run |
-| `weekly` | `tt-smi -r`, `tt-smi -glx_reset` × 2, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + didt_matmul_galaxy (pytest, bf16 and bf8 variants, ~12 min measured) + fabric_all_gather_matmul_galaxy (pytest, ~1 min measured) + the galaxy load at `plain` (~19 min planned) + HSC input-voltage and chip recount around the tests | host_side + device_side | — | yes, if installed | — | ~17 min measured + galaxy load (~30 min at `plain`, estimated) + triage + ~7 min | Every test, less often |
+| `daily` | `tt-smi -glx_reset`, then `-glx_reset` and the end sequence after the tests | eth_link_up + eth_bandwidth + gddr_fast (DRAM_TEST_FAST=1) + the [galaxy load](#the-galaxy-load) at `smoke`: `busbar` (the `qb`, `mix`, `step`, `heavy` and `code` steps, ~1 min planned) + `links` (pair link test, sweep on a fault, fabric open/close) + HSC input-voltage and chip recount around the tests | host_side + device_side | — | yes, if installed | — | ~5 min + galaxy load (~10 min at `smoke`, estimated) + triage + ~7 min | The scheduled fleet run |
+| `weekly` | `tt-smi -glx_reset` × 2, then `-glx_reset` and the end sequence after the tests | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + didt_matmul_galaxy (pytest, bf16 and bf8 variants, ~12 min measured) + fabric_all_gather_matmul_galaxy (pytest, ~1 min measured) + the galaxy load at `plain` (~19 min planned) + HSC input-voltage and chip recount around the tests | host_side + device_side | — | yes, if installed | — | ~17 min measured + galaxy load (~30 min at `plain`, estimated) + triage + ~7 min | Every test, less often |
 | `full` | as `weekly` | as `weekly`, with the galaxy load at `full` (~56 min planned) | host_side + device_side, then the AER diff over the whole run (`pcie_aer`, the last phase) | yes | yes, if installed | yes, if installed and BMC credentials set | `weekly`'s other tests + galaxy load (~65 min at `full`, estimated) + triage + ~7 min + ETH status + sys-triage | A unit with an issue: everything, for the logs on its DIIM ticket |
 | `pre_bmc_reboot` | none | — | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | snapshot + triage + ~7 min + sys-triage | Collect data before a BMC reboot |
 | `post_bmc_reboot` | none | — | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | snapshot + triage + ~7 min + sys-triage | Collect data after a BMC reboot; for now the same as `pre_bmc_reboot` |
@@ -254,6 +254,16 @@ written and the latches are not cleared. A weak bus bar often does not fail the
 test that sags it: the chip survives and the input under-voltage flag stays
 latched, a tray trips off on over-current, or a chip drops off PCIe after the load. See `hsc_input_status` and
 `pcie_enum_count_after_tests` in the checks below.
+
+Every reset is `tt-smi -glx_reset`; `tt-smi -r` is never run. After each one the root port of every chip it left
+off PCIe is rescanned (every 5 s, up to 60 s) and the chips are recounted: `rescan_<reset>` (WARN) names a chip that
+came back only through the rescan, `recount_<n>` (FAIL) each chip still missing by BDF, tray and ASIC and how many each
+tray is short. A reset that cannot run here (not root and no `sudo -n -l` entry for `tt-smi -glx_reset`, or
+`--reset-gate` refuses) is a SKIP that says `reset cannot run: <why>`, and the run goes on. With the galaxy load the
+post-test reset is followed by the end sequence: `--end-delay-s` (60 s) of quiet, one fabric open and close with a
+10 s DRAM byte/DBI readback (`end_fabric`), the AER errors over it (`end_aer`), and one more `glx_reset` when either
+fails. The BMC SEL is read before the tests (`sel_history`: the last 7 days) and after the end sequence (`sel_new`: a
+thermal trip FAILs its tray, any other new FRB, power, voltage or temperature event is a WARN).
 
 The reset cadence and test set per tier are in `tiers.py`; the gtest filters and
 pytest invocations themselves are `TESTS` / `PYTESTS` in `diag/device_tests.py`.
@@ -739,6 +749,9 @@ whose baked-in suite predates the phase has the `--skip-sys-triage` and
 | `--dry-run` | off | Print intended subprocess calls; skip destructive steps |
 | `--skip-reset` | off | Skip every reset: the reset loop phase, the post-test reset and the `glx_reset` before the links sweep. The sweep itself still runs on a link fault. |
 | `--tests LIST` | the tier's tests | Run only these tests of the tier, comma-separated: a test name (`links`, `busbar`, a gtest) or one bus-bar step (`busbar_qb`, `busbar_mix`, `busbar_step`, `busbar_heavy`, `busbar_code`). A name the tier does not run is an error. E.g. `daily --tests busbar_heavy --heavy-s 60`, `daily --tests links --skip-reset`. `run_health_check.py --tests` passes it on. |
+| `--stage-order LIST` | the tier's stages | Run only these stages, in the order they run: `reset` (the pre-test resets), tests as `--tests` names them, `end` (the post-test reset and the end sequence). A stage not named does not run; an order they do not run in is an error. E.g. `weekly --stage-order reset,busbar,links,end`, `daily --stage-order reset,end`. Not with `--tests`. |
+| `--reset-gate CMD` | — | Run before every reset; a non-zero exit skips that reset (`reset cannot run: reset gate: <its last line>`). |
+| `--end-delay-s N` | 60 | End sequence: seconds between the post-test reset and the fabric open. |
 | `--skip-tests` | off | Skip the tests phase entirely: the gtests, the pytests and the galaxy load |
 | `--skip-triage` | off | Skip the post-test reset and the triage phase entirely. `--skip-reset` also suppresses the post-test reset. |
 | `--triage-dir PATH` | `$HC_TRIAGE_DIR`, else `<repo>/tools/scaleout/kmd_triage` | Directory holding the triage scripts. Override only to run a working copy against a deployed checkout. |

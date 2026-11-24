@@ -18,7 +18,7 @@ pcie_aer, whose phases are left out of the report when there is nothing to run.
 
 Where the steps a tier can name are defined:
 
-    resets, post_test_resets  tt-smi flags: "-r" or "-glx_reset"
+    resets, post_test_resets  tt-smi flags: "-glx_reset" (never "-r" on a Galaxy)
     tests                     TESTS (gtest) and PYTESTS (pytest) in diag/device_tests.py, then
                               LOAD_TESTS (the galaxy load) in diag/busbar.py
     triage                    TRIAGE_TOOLS in diag/triage.py
@@ -45,8 +45,8 @@ from diag.triage import TRIAGE_TOOLS
 
 @dataclass(frozen=True)
 class Tier:
-    # Pre-test reset loop, in order. Per SYS-4365 the first reset is -r, then
-    # stick to -glx_reset. Each is followed by a fresh snapshot, revalidated.
+    # Pre-test reset loop, in order. Each is a glx_reset, a root-port rescan of
+    # the chips it left missing and a recount, then a fresh snapshot, revalidated.
     resets: tuple[str, ...] = ()
 
     # Device tests, in order: names from TESTS / PYTESTS, then the galaxy load
@@ -64,6 +64,7 @@ class Tier:
     # outright rather than being reported. A discrete reset that completes
     # first rules both out. Bare: no revalidation snapshot (see
     # diag.resets.run_post_test_reset). Skipped by --skip-reset and --skip-triage.
+    # With the galaxy load it is followed by the end sequence (diag.resets.run_end).
     post_test_resets: tuple[str, ...] = ()
 
     # First-step triage tools: names from TRIAGE_TOOLS.
@@ -103,7 +104,7 @@ class Tier:
 
 
 _WEEKLY = Tier(
-    resets=("-r", "-glx_reset", "-glx_reset"),
+    resets=("-glx_reset", "-glx_reset"),
     tests=(
         "gddr_full",
         "eth_link_up",
@@ -131,7 +132,7 @@ TIERS: dict[str, Tier] = {
     # The scheduled run. The galaxy load at smoke length: every bus-bar step,
     # each cut to a few seconds, and the links test.
     "daily": Tier(
-        resets=("-r", "-glx_reset"),
+        resets=("-glx_reset",),
         tests=("gddr_fast", "eth_link_up", "eth_bandwidth", *LOAD_TESTS),
         load_mode="smoke",
         post_test_resets=("-glx_reset",),
@@ -197,6 +198,38 @@ def select_tests(tier: Tier, only: str) -> tuple[Tier, tuple[str, ...]]:
     picked = tuple(s for s in STEPS if "busbar" in names or f"busbar_{s}" in names)
     tests = tuple(t for t in tier.tests if t in names or (t == "busbar" and picked))
     return replace(tier, tests=tests), picked
+
+
+# The stages around the tests that --stage-order names: the pre-test resets first, the post-test reset and the end
+# sequence last.
+STAGES = ("reset", "end")
+
+
+def select_stages(tier: Tier, order: str) -> tuple[Tier, tuple[str, ...]]:
+    """*tier* cut down to the stages named in *order* (comma-separated; --stage-order), and the bus-bar steps to run:
+    "reset" (its pre-test resets), its tests as --tests names them (see select_tests), "end" (its post-test reset and the
+    end sequence). A stage not named does not run. The order must be the one the stages run in: reset, the tier's
+    tests in its order, end; any other is a ValueError that names it."""
+    names = [n for n in order.replace(" ", "").split(",") if n]
+    tests = [n for n in names if n not in STAGES]
+    cut, steps = select_tests(tier, ",".join(tests)) if tests else (replace(tier, tests=()), ())
+
+    def rank(n: str) -> tuple[int, ...]:
+        if n in STAGES:
+            return (0,) if n == "reset" else (2,)
+        step = n.removeprefix("busbar_")
+        return (1, cut.tests.index("busbar" if step in STEPS else n), STEPS.index(step) if step in STEPS else -1)
+
+    if [rank(n) for n in names] != sorted(map(rank, names)):
+        raise ValueError(f"--stage-order {order!r}: the stages run in the order {','.join(sorted(names, key=rank))}")
+    return (
+        replace(
+            cut,
+            resets=tier.resets if "reset" in names else (),
+            post_test_resets=(tier.post_test_resets or RESET_FLAGS[:1]) if "end" in names else (),
+        ),
+        steps,
+    )
 
 
 def _validate() -> None:

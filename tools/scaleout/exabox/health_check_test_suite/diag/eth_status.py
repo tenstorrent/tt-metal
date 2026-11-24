@@ -390,14 +390,15 @@ def _ubbs(trays: Sequence[int]) -> str:
 
 
 def _where(dev: int, channel: int | None, chip_bdfs: dict[int, str]) -> str:
-    """'UBB2/U6 ch4 (TRACE P9, dev 13)', or 'dev 13 ch4' when the chip's place is not known."""
+    """'UBB2/U6 ch4 (QSFP P6, 0000:46:00.0, dev 13)': tray, ASIC, port and BDF; 'dev 13 ch4' when the chip's place is
+    not known."""
     ch = "" if channel is None else f" ch{channel}"
     pos = parse_bdf_physical(chip_bdfs.get(dev, ""))
     if pos is None:
         return f"dev {dev}{ch}"
     tray, asic = pos
     port = UBB_ETH_PORT_OF.get((asic, channel)) if channel is not None else None
-    return f"UBB{tray}/U{asic}{ch} ({f'{_port_name(*port)}, ' if port else ''}dev {dev})"
+    return f"UBB{tray}/U{asic}{ch} ({f'{_port_name(*port)}, ' if port else ''}{chip_bdfs[dev]}, dev {dev})"
 
 
 def _link_state_checks(

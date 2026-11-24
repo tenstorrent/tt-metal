@@ -49,7 +49,14 @@ from diag.eth_summary import SUMMARY_FILE, render_eth_summary  # noqa: E402
 from diag.hsc import judge_hsc, read_hsc_status  # noqa: E402
 from diag.model import FAIL, PASS, SKIP, WARN, Check, Phase  # noqa: E402
 from diag.qsfp import QSFP_TOOL_BIN, run_qsfp_tests  # noqa: E402
-from diag.resets import fold_post_reset_snapshots, reset_loop, run_post_test_reset  # noqa: E402
+from diag.resets import (  # noqa: E402
+    END_DELAY_S,
+    add_args as add_reset_args,
+    fold_post_reset_snapshots,
+    reset_loop,
+    run_end,
+    run_post_test_reset,
+)
 from diag.snapshot import (  # noqa: E402
     DEFAULT_TT_SMI_PROVISIONED,
     collect_fru_info,
@@ -57,10 +64,11 @@ from diag.snapshot import (  # noqa: E402
     resolve_tt_smi,
     take_snapshot,
 )
+from diag.sel import history_check, new_check, read_sel  # noqa: E402
 from diag.snapshot_checks import pcie_enum_check, validate_snapshot  # noqa: E402
 from diag.sys_triage import SYS_TRIAGE_BIN, run_sys_triage  # noqa: E402
 from diag.triage import TRIAGE_DIR_ENV, TRIAGE_SUBDIR, default_triage_dir, run_triage  # noqa: E402
-from tiers import DEPRECATED_TIER_ALIASES, TIERS, select_tests  # noqa: E402
+from tiers import DEPRECATED_TIER_ALIASES, TIERS, select_stages, select_tests  # noqa: E402
 
 
 def build_diag_arg_parser() -> argparse.ArgumentParser:
@@ -84,6 +92,15 @@ def build_diag_arg_parser() -> argparse.ArgumentParser:
             "Run only these of the tier's tests, comma-separated, in the tier's order; a bus-bar step by its check "
             "name (busbar_qb, busbar_mix, busbar_step, busbar_heavy, busbar_code), busbar for all of them. "
             "The other phases run as usual (their --skip-* flags skip them). Default: all of the tier's tests."
+        ),
+    )
+    ap.add_argument(
+        "--stage-order",
+        metavar="LIST",
+        help=(
+            "Run only these stages, comma-separated, in the order they run: reset (the pre-test resets), the tier's "
+            "tests as --tests names them, end (the post-test reset and the end sequence). A stage not named does not "
+            "run; the other phases run as usual. Not with --tests."
         ),
     )
     ap.add_argument(
@@ -178,6 +195,7 @@ def build_diag_arg_parser() -> argparse.ArgumentParser:
             flag, dest=key, type=typ, default=None, help=f"Galaxy load: {what}. Not given: the tier's plan."
         )
     captures.add_args(ap)
+    add_reset_args(ap)
     ap.add_argument("--output", type=Path, default=Path("diag_report.json"))
     ap.add_argument("--snapshot-out", type=Path, default=Path("/tmp/diag_snapshot.json"))
     return ap
@@ -332,6 +350,9 @@ def run_diag(
     snapshot_out: Path = Path("/tmp/diag_snapshot.json"),
     overrides: dict | None = None,
     tests: str | None = None,
+    stage_order: str | None = None,
+    reset_gate: str | None = None,
+    end_delay_s: int = END_DELAY_S,
 ) -> tuple[int, dict]:
     """Run the full pipeline (snapshot → resets → tests → triage → ETH status → QSFP tests → sys-triage → AER).
 
@@ -349,6 +370,9 @@ def run_diag(
     if tests is not None:
         plan, steps = select_tests(plan, tests)
         log(f"--tests: running {', '.join(plan.tests) or 'no tests'}")
+    if stage_order is not None:
+        plan, steps = select_stages(plan, stage_order)
+        log(f"--stage-order: running {stage_order}")
     if tt_metal_path is None:
         tt_metal_path = default_tt_metal_path()
 
@@ -385,6 +409,14 @@ def run_diag(
     # store-only forensics alongside the chip-level snapshot checks; runs even
     # when the tt-smi snapshot itself failed.
     collect_fru_info(snap_phase, dry_run)
+    # The post-test reset (phase 4), and after it, with the galaxy load or --stage-order, the end sequence. Its SEL
+    # read is judged against the one taken here.
+    post_test_plan = () if skip_reset or (skip_triage and stage_order is None) else plan.post_test_resets
+    end_seq = bool(post_test_plan) and (plan.galaxy_load or stage_order is not None)
+    live = not (input_snapshot or dry_run)
+    sel_before, sel_why = read_sel() if end_seq and live else (None, "")
+    if end_seq and live:
+        snap_phase.add(history_check(sel_before, sel_why, time.time()))
     _finish(report, snap_phase, t0, summary=True)
 
     # Where every phase drops its raw tool output. Derived once: the reset
@@ -416,6 +448,7 @@ def run_diag(
                 snapshot_out=snap_out_for_resets,
                 post_reset_phases=post_reset_phases,
                 logs_dir=logs_dir,
+                gate=reset_gate,
             )
 
         _guarded(reset_phase, "reset_loop", FAIL, _resets)
@@ -447,7 +480,7 @@ def run_diag(
         if skip_reset:
             log("links sweep: no glx_reset first (--skip-reset)")
             return ""
-        ok = aer_reset(lambda: run_post_test_reset(tt_smi_path, ("-glx_reset",), test_phase, dry_run))
+        ok = aer_reset(lambda: run_post_test_reset(tt_smi_path, ("-glx_reset",), test_phase, dry_run, reset_gate))
         return "" if ok else "reset failed"
 
     t0 = time.time()
@@ -461,7 +494,6 @@ def run_diag(
         # runs even under --skip-reset (a weak bus bar often drops a chip or
         # latches a flag without failing the test that sagged it). Not on an
         # input snapshot or a dry run: no live hardware to read.
-        live = not (input_snapshot or dry_run)
         hsc_before = read_hsc_status() if live else None
         device_tests = [t for t in plan.tests if t not in LOAD_TESTS]
         if device_tests:  # none when --tests picks only the galaxy load
@@ -492,12 +524,24 @@ def run_diag(
 
     # Phase 4: post-test reset. Its job is to hand phase 5 a freshly reset unit
     # and to guarantee the triage probes, which open every chip read-write,
-    # never run concurrently with the tests.
-    post_test_plan = () if (skip_triage or skip_reset) else plan.post_test_resets
+    # never run concurrently with the tests. After the galaxy load (or when --stage-order names end), the end
+    # sequence follows it in the same phase: the wait, the fabric open and close, the AER errors over it.
     if post_test_plan:
         post_reset_phase = Phase(name="post_test_reset")
         t0 = time.time()
-        aer_reset(lambda: run_post_test_reset(tt_smi_path, post_test_plan, post_reset_phase, dry_run))
+        aer_reset(lambda: run_post_test_reset(tt_smi_path, post_test_plan, post_reset_phase, dry_run, reset_gate))
+        if end_seq:
+            _guarded(
+                post_reset_phase,
+                "end_sequence",
+                FAIL,
+                lambda: aer_reset(
+                    lambda: run_end(tt_smi_path, post_reset_phase, logs_dir / "end", dry_run, end_delay_s, reset_gate)
+                ),
+            )
+        if end_seq and live:
+            sel_after, why = read_sel()
+            post_reset_phase.add(new_check(sel_before, sel_after, sel_why or why))
         _finish(report, post_reset_phase, t0, summary=False)
 
     # Phase 5: triage tools, from tools/scaleout/kmd_triage in this repo.
@@ -655,11 +699,13 @@ def main() -> int:
     args = ap.parse_args()
     overrides = {k: getattr(args, k) for k in OVERRIDES}
     tier = TIERS[DEPRECATED_TIER_ALIASES.get(args.tier, args.tier)]
-    if args.tests is not None:
-        try:
-            tier = select_tests(tier, args.tests)[0]
-        except ValueError as e:
-            ap.error(str(e))
+    if args.tests is not None and args.stage_order is not None:
+        ap.error("--tests and --stage-order both pick the tests: give one")
+    try:
+        tier = select_tests(tier, args.tests)[0] if args.tests is not None else tier
+        tier = select_stages(tier, args.stage_order)[0] if args.stage_order is not None else tier
+    except ValueError as e:
+        ap.error(str(e))
     if any(v is not None for v in overrides.values()) and "busbar" not in tier.tests:
         loaded = ", ".join(n for n, t in TIERS.items() if t.galaxy_load)
         ap.error(
@@ -696,6 +742,9 @@ def main() -> int:
         snapshot_out=args.snapshot_out,
         overrides=overrides,
         tests=args.tests,
+        stage_order=args.stage_order,
+        reset_gate=args.reset_gate,
+        end_delay_s=args.end_delay_s,
     )
     return rc
 

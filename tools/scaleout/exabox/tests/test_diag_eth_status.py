@@ -179,7 +179,14 @@ class TestLinkFaults(unittest.TestCase):
         rows = galaxy_rows(overrides={(1, 5, 0): {"Link": "Down"}})
         c = judge(rows, rows)["eth_status_links_down"]
         self.assertEqual(c.status, FAIL)
-        self.assertIn(f"UBB1/U5 ch0 (TRACE P1, dev {CHIP_OF[1, 5]}): link down", c.details)
+        self.assertIn(f"UBB1/U5 ch0 (TRACE P1, 0000:05:00.0, dev {CHIP_OF[1, 5]}): link down", c.details)
+
+    def test_qsfp_link_down_names_tray_port_asic_and_bdf(self):
+        rows = galaxy_rows(overrides={(2, 1, 2): {"Link": "Down"}})
+        c = judge(rows, rows)["eth_status_links_down"]
+        self.assertEqual(c.status, FAIL)
+        self.assertIn(f"UBB2/U1 ch2 (QSFP P2, 0000:41:00.0, dev {CHIP_OF[2, 1]}): link down", c.details)
+        self.assertEqual(c.data["link_ends"][0]["a"]["port"], "QSFP P2")
 
     def test_link_gone_between_the_reads(self):
         c = judge(galaxy_rows(), galaxy_rows(drop={(4, 8, 2)}))["eth_status_links_down"]
@@ -501,7 +508,9 @@ class TestSummary(unittest.TestCase):
         rows = galaxy_rows(overrides={(1, 7, 2): {"Retrain Count": "5"}})
         text = judged_report(rows)
         self.assertIn("VERDICT: WARNING - nothing proven broken, worth a look (1 found)", text)
-        self.assertIn(f"- UBB1/U7 ch2 (TRACE P10, dev {CHIP_OF[1, 7]}): 5 retrains since the last reset", text)
+        self.assertIn(
+            f"- UBB1/U7 ch2 (TRACE P10, 0000:07:00.0, dev {CHIP_OF[1, 7]}): 5 retrains since the last reset", text
+        )
         self.assertRegex(text, r"retrains since last reset\s+1 link\(s\) at >= 3\s+< 3 per link\s+\*\* WARNING \*\*")
 
     def test_problems_first_then_warnings(self):

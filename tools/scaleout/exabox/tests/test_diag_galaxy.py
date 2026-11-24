@@ -3,22 +3,27 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""The Galaxy chip checks without hardware: a chip is named by BDF/tray/ASIC, the
-chip recount after a reset names the missing ones, the thermal and telemetry
-checks ignore garbage readings, and the AER diff counts the errors over a run."""
+"""The Galaxy chip checks without hardware: a chip is named by BDF/tray/ASIC, a reset is a glx_reset (or says why it
+cannot run), the root-port rescan and the chip recount after it name the missing ones, the thermal and telemetry
+checks ignore garbage readings, the AER diff counts the errors over a run, and the SEL reads are judged."""
 
 from __future__ import annotations
 
+import argparse
+import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 TESTS_DIR = Path(__file__).resolve().parent
 SUITE_DIR = TESTS_DIR.parent / "health_check_test_suite"
 sys.path.insert(0, str(SUITE_DIR))
 
-from diag import resets  # noqa: E402
+import tiers  # noqa: E402
+from diag import resets, sel  # noqa: E402
 from diag.aer import AerWindow, aer_check, aer_new, read_aer  # noqa: E402
 from diag.galaxy import TRAY_TO_UBB_NIBBLE, expected_bdf  # noqa: E402
 from diag.model import FAIL, PASS, SKIP, WARN, Phase  # noqa: E402
@@ -75,6 +80,164 @@ class TestRecount(unittest.TestCase):
 
     def test_lspci_failure_fails(self):
         self.assertEqual(resets.recount_check("recount_1", None).status, FAIL)
+
+    def test_short_trays_counted(self):
+        c = resets.recount_check("recount_1", [b for b in all_bdfs() if not b.startswith("0000:4")])
+        self.assertEqual(c.data["trays_short"], {2: 8})
+        self.assertIn("tray 2: 8 of 8 missing", c.details)
+
+
+def _ok(*_a, **_k):
+    return subprocess.CompletedProcess([], 0, stdout="", stderr="")
+
+
+class TestResets(unittest.TestCase):
+    """glx_reset with tt-smi, sudo, lspci and the rescan writes stubbed: /sys is a temp dir with one bridge."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        rp = Path(tmp.name, "bus/pci/devices/0000:40:01.7")
+        rp.mkdir(parents=True)
+        (rp / "secondary_bus_number").write_text(f"{0x47}\n")
+        self.rescanned = rp / "rescan"
+        for target, value in (("SYS", Path(tmp.name)), ("RESCAN_EVERY_S", 0), ("run", _ok)):
+            patcher = mock.patch.object(resets, target, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def _reset(self, listings, root=True, gate=None):
+        """glx_reset with pcie_bdfs giving *listings* in turn (the last one again after them)."""
+        it = iter(listings)
+        last = []
+
+        def bdfs():
+            last[:] = [next(it, last[0] if last else None)]
+            return last[0]
+
+        phase = resets.Phase(name="t")
+        why = "" if root else "not root, and sudo -n -l does not list tt-smi -glx_reset"
+        with mock.patch.object(resets, "root_cmd", lambda c: (c if root else None, why)), mock.patch.object(
+            resets, "pcie_bdfs", bdfs
+        ):
+            out = resets.glx_reset("tt-smi", phase, "reset_1", "recount_1", False, gate=gate)
+        return out, {c.name: c for c in phase.checks}
+
+    def test_a_reset_that_cannot_run_says_why_and_runs_nothing(self):
+        with mock.patch.object(resets, "run", side_effect=AssertionError("ran")):
+            out, checks = self._reset([], root=False)
+        self.assertIsNone(out)
+        self.assertEqual(checks["reset_1"].status, SKIP)
+        self.assertEqual(
+            checks["reset_1"].details, "reset cannot run: not root, and sudo -n -l does not list tt-smi -glx_reset"
+        )
+
+    def test_the_reset_gate_can_refuse(self):
+        out, checks = self._reset([], gate="sh -c 'echo serving; exit 1'")
+        self.assertIsNone(out)
+        self.assertEqual(checks["reset_1"].details, "reset cannot run: reset gate: serving")
+
+    def test_all_back_needs_no_rescan(self):
+        out, checks = self._reset([all_bdfs()])
+        self.assertEqual(len(out), 32)
+        self.assertEqual((checks["reset_1"].status, checks["recount_1"].status), (PASS, PASS))
+        self.assertNotIn("rescan_reset_1", checks)
+
+    def test_a_chip_back_only_after_the_rescan_is_named(self):
+        gone = [b for b in all_bdfs() if b != "0000:47:00.0"]
+        out, checks = self._reset([gone, all_bdfs()])
+        self.assertEqual(self.rescanned.read_text(), "1")
+        self.assertEqual(checks["rescan_reset_1"].status, WARN)
+        self.assertIn(
+            "0000:47:00.0 back only after a rescan of root port 0000:40:01.7", checks["rescan_reset_1"].details
+        )
+        self.assertEqual(checks["recount_1"].status, PASS)
+
+    def test_a_chip_still_missing_is_named_with_its_tray(self):
+        gone = [b for b in all_bdfs() if b != "0000:47:00.0"]
+        with mock.patch.object(resets, "RESCAN_WAIT_S", 0.01):
+            out, checks = self._reset([gone])
+        self.assertEqual(len(out), 31)
+        self.assertEqual(checks["recount_1"].status, FAIL)
+        self.assertIn("tray 2: 1 of 8 missing", checks["recount_1"].details)
+
+    def test_the_tiers_never_run_tt_smi_r(self):
+        self.assertEqual(resets.RESET_FLAGS, ("-glx_reset",))
+        for name, tier in tiers.TIERS.items():
+            self.assertNotIn("-r", (*tier.resets, *tier.post_test_resets), name)
+
+    def test_recover_returns_its_finding_lines(self):
+        args = argparse.Namespace(skip_reset=False, tt_smi_path=None, dry_run=False, reset_gate=None)
+        with mock.patch.object(resets, "resolve_tt_smi", return_value="tt-smi"), mock.patch.object(
+            resets, "root_cmd", return_value=(None, "not root")
+        ):
+            self.assertEqual(resets.recover(args, Path("/nonexistent")), ["reset cannot run: not root"])
+        self.assertEqual(
+            resets.recover(argparse.Namespace(skip_reset=True), Path(".")), ["reset cannot run: --skip-reset"]
+        )
+
+    def test_post_test_reset_that_cannot_run_is_a_skip(self):
+        phase = resets.Phase(name="post_test_reset")
+        with mock.patch.object(resets, "resolve_tt_smi", return_value="tt-smi"), mock.patch.object(
+            resets, "root_cmd", return_value=(None, "not root")
+        ):
+            self.assertTrue(resets.run_post_test_reset(None, ("-glx_reset",), phase, False))
+        self.assertEqual((phase.checks[-1].status, phase.checks[-1].details), (SKIP, "reset cannot run: not root"))
+
+
+class TestStageOrder(unittest.TestCase):
+    def test_stages_in_run_order(self):
+        weekly = tiers.TIERS["weekly"]
+        cut, steps = tiers.select_stages(weekly, "reset,busbar,links,end")
+        self.assertEqual(
+            (cut.resets, cut.tests, cut.post_test_resets), (weekly.resets, ("busbar", "links"), ("-glx_reset",))
+        )
+        cut, steps = tiers.select_stages(weekly, "busbar_heavy")
+        self.assertEqual((cut.resets, cut.tests, cut.post_test_resets, steps), ((), ("busbar",), (), ("heavy",)))
+        cut, _ = tiers.select_stages(tiers.TIERS["flash"], "reset,end")
+        self.assertEqual((cut.resets, cut.tests, cut.post_test_resets), ((), (), ("-glx_reset",)))
+
+    def test_an_order_the_stages_do_not_run_in_is_refused(self):
+        for order in ("links,busbar", "end,reset", "busbar_mix,busbar_qb"):
+            with self.subTest(order=order), self.assertRaisesRegex(ValueError, "the stages run in the order"):
+                tiers.select_stages(tiers.TIERS["weekly"], order)
+
+
+def _sel(when, sensor, event, state="Asserted"):
+    return f"   1 | {time.strftime('%m/%d/%Y | %H:%M:%S', time.localtime(when))} | {sensor} | {event} | {state}"
+
+
+class TestSel(unittest.TestCase):
+    def test_history_warns_per_tray(self):
+        now = time.time()
+        rows = [_sel(now - 3600, "Processor UBB1_FRB3", "FRB3/Processor Startup/Initialization failure")]
+        rows += [_sel(now - 60, "Memory #0x1", "Bus Correctable Error")] * 19
+        rows += [_sel(now - 8 * 86400, "Processor UBB0_FRB3", "FRB3/Processor Startup/Initialization failure")]
+        c = sel.history_check(rows, "", now)
+        self.assertEqual(c.status, WARN)
+        self.assertEqual(c.details, "tray 2: 1 FRB3 processor init failures in 7 days")
+
+    def test_new_thermal_trip_fails_its_tray(self):
+        now = time.time()
+        before = [_sel(now - 60, "Processor UBB1_FRB3", "FRB3/Processor Startup/Initialization failure")]
+        after = before + [
+            _sel(now, "Temperature UBB2_TEMP", "Upper Critical going high"),
+            _sel(now, "Power Supply PSU3", "Failure detected"),
+            _sel(now, "Temperature UBB0_TEMP", "Upper Critical going high", "Deasserted"),
+        ]
+        c = sel.new_check(before, after, "")
+        self.assertEqual(c.status, FAIL)
+        self.assertEqual(
+            c.data["findings"],
+            [
+                "thermal trip tray 3: UBB2_TEMP Upper Critical going high Asserted",
+                "host: PSU3 Failure detected Asserted",
+            ],
+        )
+
+    def test_not_read_is_a_skip_that_says_why(self):
+        self.assertEqual(sel.history_check(None, "not root", 0).details, "SEL not read: not root")
+        self.assertEqual(sel.new_check([], None, "not root").status, SKIP)
 
 
 class TestThermalAndTelemetry(unittest.TestCase):
