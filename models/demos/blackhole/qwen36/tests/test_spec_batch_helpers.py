@@ -175,3 +175,32 @@ def test_spec_kv_write_conflicts(expect_error):
     # a write past the page table is an error, not a silent skip
     with expect_error(IndexError, "past its 2-block page table"):
         spec_kv_write_conflicts(shared, [3, 127], T, BS)
+
+
+def test_spec_kv_write_conflicts_across_calls(monkeypatch, expect_error):
+    """The multi-row verify KV write sends every candidate of every user in one call, so a tile two users reach at
+    different candidates is a race too; a user meeting its own tile again is not."""
+    BS, T = 64, 2
+    # (e) above: tile (5, 1) is reached by user 1 at candidate 0 and by user 0 at candidate 1
+    assert spec_kv_write_conflicts([[5, 6], [5, 6]], [31, 63], T, BS, across_calls=True) == [(1, 1, 0, 5, 1)]
+    # one user's candidates sharing a tile, distinct users' blocks, null-block writes, inactive users: no race
+    assert spec_kv_write_conflicts([[5, 6]], [0], 4, BS, across_calls=True) == []
+    vllm = torch.zeros(4, 8, dtype=torch.int32)
+    for u in range(4):
+        vllm[u, :2] = torch.tensor([1 + 2 * u, 2 + 2 * u])
+    assert spec_kv_write_conflicts(vllm, [3, 60, 64 + 3, 100], 8, BS, across_calls=True) == []
+    eol = torch.zeros(2, 65, dtype=torch.int32)
+    eol[0, :64] = torch.arange(1, 65)
+    eol[1, :64] = torch.arange(65, 129)
+    assert spec_kv_write_conflicts(eol, [4094, 4094], 4, BS, across_calls=True) == []
+    assert spec_kv_write_conflicts([[5, 6], [5, 6]], [31, -1], T, BS, across_calls=True) == []
+
+    # the verify refuses such a replay before staging anything
+    from models.demos.blackhole.qwen36.tt import model as model_mod
+
+    monkeypatch.setattr(model_mod, "get_block_size", lambda caches: BS)
+    m = object.__new__(model_mod.Qwen36Model)
+    m._vfy_T, m._paged_kv_caches = T, None
+    m._vfy_check_kv_writes(torch.tensor([[5, 6], [7, 8]], dtype=torch.int32), [31, 63])
+    with expect_error(RuntimeError, r"first \(candidate j, user, user, block, tile\): \[\(1, 1, 0, 5, 1\)\]"):
+        m._vfy_check_kv_writes(torch.tensor([[5, 6], [5, 6]], dtype=torch.int32), [31, 63])

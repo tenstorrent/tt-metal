@@ -9,6 +9,7 @@ import math
 import os
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
@@ -83,9 +84,19 @@ def tp_reduce_scatter(partial, mesh, tt_ccl, args, dim=3, memory_config=ttnn.DRA
     return out
 
 
+# Workers per link and direction of a 1xN prefill reduce-scatter (tp_reduce_scatter of more than one tile row: the
+# MLP-down and attention-wo partials). These reduce-scatters are worker-bound at tt_all_reduce's 2;
+# reduce_scatter_minimal_async's own Blackhole default above 1 MB per link is 8. The ring sums a tile's partials in the
+# same order whatever the worker split, so the output does not change.
+PREFILL_RS_WORKERS_PER_LINK = 8
+
+
 def _tp_reduce_scatter(partial, mesh, tt_ccl, args, dim, memory_config):
     """tp_reduce_scatter without the bf8 option; consumes `partial`."""
     if not is_2d_mesh(mesh):
+        # A partial of at most one tile row (a decode or verify width) keeps tt_all_reduce's workers, so decode and its
+        # traces do not change. args.prefill_rs_hparams, when set, takes precedence.
+        rs = {} if partial.shape[-2] <= TILE_SIZE else {"num_workers_per_link": PREFILL_RS_WORKERS_PER_LINK}
         # tt_all_reduce takes cluster_axis=0 on 1xN to reach its reduce-scatter branch, but link discovery on that
         # size-1 axis falls back to 1 link (#58659); the TP ring is axis 1, so pass its link count explicitly.
         return tt_all_reduce(
@@ -98,7 +109,7 @@ def _tp_reduce_scatter(partial, mesh, tt_ccl, args, dim, memory_config):
             num_all_gather_links=tt_ccl.get_num_links(1),
             topology=args.ccl_topology(),
             memory_config=memory_config,
-            **prefill_rs_kwargs(args),
+            **{**rs, **prefill_rs_kwargs(args)},
         )
     # tt_all_reduce wants dims 0 and 1 to be 1
     shape = partial.shape
@@ -236,21 +247,25 @@ def create_dram_sharded_matmul_program_config(m, k, n, num_cores=None):
     )
 
 
-def create_matmul_1d_decode_progcfg(m, k, n, num_cores, fused_activation=None, fp32_acc=True, grid_w=8):
+def create_matmul_1d_decode_progcfg(
+    m, k, n, num_cores, fused_activation=None, fp32_acc=True, grid_w=8, max_in0_block_w=8
+):
     """Explicit-grid 1D (mcast_in0) decode matmul progcfg on ~`num_cores` cores — small grids beat
     the ~80-core DRAM-sharded grid on the bandwidth-bound skinny decode matmuls. Weight must be interleaved.
 
     Grid is shaped WIDE-first (cols up to `grid_w`, the device worker-grid width — 11 on BH P150, 8 on
     WH): for a fixed core budget a wide-short grid shortens the in0 multicast column and beats a
     tall-narrow one (~2% on this matmul; see test_mlp_matmul_sweep wide1d_* vs forced1d_*). Default
-    grid_w=8 preserves the legacy shaping for callers that don't pass the device width."""
+    grid_w=8 preserves the legacy shaping for callers that don't pass the device width.
+
+    in0_block_w is the largest divisor of k_tiles up to `max_in0_block_w`."""
     cols = min(grid_w, num_cores)
     rows = math.ceil(num_cores / cols)
     m_tiles = math.ceil(m / TILE_SIZE)
     k_tiles = math.ceil(k / TILE_SIZE)
     n_tiles = math.ceil(n / TILE_SIZE)
     # mcast_in0: every core streams the full K, so in0_block_w must divide the full k_tiles.
-    per_core_k = _find_largest_divisor(k_tiles)
+    per_core_k = _find_largest_divisor(k_tiles, max_in0_block_w)
     per_core_n = math.ceil(n_tiles / (cols * rows))
     cap = 4 if fp32_acc else 8  # fp32_dest_acc caps subblock area at 4
     sub_w = max(i for i in range(1, cap + 1) if per_core_n % i == 0)
@@ -629,6 +644,75 @@ def prefill_sdpa_chunks(args, S, default_chunk, max_chunk=None):
     return min(q_chunk, cap), min(k_chunk, cap), bool(exp_approx)
 
 
+# Tuned launch configs of the prefill all_gather_minimal_matmul_async (all_gather_matmul_prefill,
+# all_gather_swiglu_prefill) per weight shape and row count: (swiglu, K, N per device), both rounded up to a tile (the
+# GDN in-projection is 2060 wide), -> {rows: (grid_x, grid_y, M_block, N_block, transpose)}. Qwen3.8-27B at TP=8: MLP
+# gate|up, GDN qkvzab, attention QKV, GDN out (column-parallel). 2 links, workers per link = ceil(in0 sender axis / 2)
+# (grid_x transposed, grid_y not), subblock (1, 4) and K_block = agmm_k_block_size(K per device) as the default config:
+# every output tile accumulates the same K blocks in the same order, so the output does not change. A shape or row
+# count without an entry, or an entry wider than the device grid, keeps the default config. Device ms per op on an
+# 8-chip Blackhole ring with a 12-wide grid (bf16 activation, bfloat8_b weight), default -> tuned:
+#   gate|up   8192: 3.03 -> 2.21  2048: 0.714 -> 0.586  1024: 0.414 -> 0.369  512: 0.297 -> 0.265  128: 0.286 -> 0.236
+#   qkvzab    8192: 1.64 -> 1.49  128: 0.109 -> 0.099
+#   attn qkv  8192: 1.63 -> 1.49  128: 0.107 -> 0.100
+#   gdn_out   8192: 1.65 -> 1.56  2048: 0.428 -> 0.409  1024: 0.226 -> 0.214
+_AGMM_TUNED = {
+    (True, 5120, 4352): {
+        128: (12, 9, 8, 16, False),
+        512: (12, 9, 8, 16, False),
+        1024: (12, 9, 8, 16, False),
+        2048: (11, 9, 8, 16, True),
+        8192: (12, 9, 8, 16, True),
+    },
+    (False, 5120, 2080): {128: (12, 9, 4, 8, False), 8192: (12, 9, 8, 8, True)},
+    (False, 5120, 2048): {128: (12, 9, 4, 8, False), 8192: (12, 9, 8, 16, True)},
+    (False, 6144, 640): {1024: (12, 9, 4, 8, True), 2048: (11, 9, 4, 8, True), 8192: (11, 9, 4, 8, True)},
+}
+_AGMM_TUNED_LOGGED = set()
+
+
+def agmm_tuned_config(rows, weight, k_local, swiglu, mesh_device):
+    """(MinimalMatmulConfig, num_links, num_workers_per_link, force_transpose) of the tuned prefill AGMM for this
+    weight and row count (_AGMM_TUNED), or None for the default config: no entry, a decode width, an entry wider than
+    the device grid, or a non-transposed entry that the op would transpose anyway because rows > N."""
+    if rows <= TILE_SIZE:
+        return None
+    key = (bool(swiglu), _roundup(int(weight.shape[-2]), TILE_SIZE), _roundup(int(weight.shape[-1]), TILE_SIZE))
+    entry = _AGMM_TUNED.get(key, {}).get(int(rows))
+    if entry is None:
+        return None
+    gx, gy, mb, nb, transpose = entry
+    full = mesh_device.compute_with_storage_grid_size()
+    if gx > full.x or gy >= full.y:  # the fabric muxes take the row below the compute grid
+        return None
+    if not transpose and rows > (key[2] // 2 if swiglu else key[2]):
+        return None  # force_transpose=False only means "do not force": the op transposes M > N itself
+    num_links = 2
+    workers = -(-(gx if transpose else gy) // num_links)
+    if key not in _AGMM_TUNED_LOGGED:
+        _AGMM_TUNED_LOGGED.add(key)
+        logger.info(f"prefill AGMM: tuned configs for swiglu={key[0]} K={key[1]} N={key[2]}")
+    cfg = ttnn.MinimalMatmulConfig(
+        M_block_size=mb,
+        K_block_size=agmm_k_block_size(k_local),
+        N_block_size=nb,
+        subblock_h=1,
+        subblock_w=4,
+        compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+    )
+    return cfg, num_links, workers, transpose
+
+
+def _agmm_config(S, weight, K_local, swiglu, tt_ccl, grid, M_block, N_block, config_override):
+    """(MinimalMatmulConfig, num_links, num_workers_per_link, force_transpose) of one prefill AGMM launch:
+    `config_override` when given (_agmm_launch_config), else the tuned config for the shape and row count, else the
+    default config."""
+    tuned = None if config_override else agmm_tuned_config(S, weight, K_local, swiglu, tt_ccl.mesh_device)
+    if tuned is not None:
+        return tuned
+    return (*_agmm_launch_config(K_local, grid, M_block, N_block, config_override), True)
+
+
 def all_gather_matmul_prefill(
     x,
     weight,
@@ -659,7 +743,7 @@ def all_gather_matmul_prefill(
         x4, persistent_output_buffer, bf8_tmp = _agmm_bf8_inputs(x4, tt_ccl, persistent_output_buffer)
     # AG-bound: 2 ethernet links parallelize the gather (P150x4 max; traced_8k TTFT win). grid.x must
     # = num_links*workers, and the 7-wide default (prime) forces 1 link -> widen to 8 (2 links, 4 workers).
-    cfg, num_links, workers = _agmm_launch_config(K_local, grid, 4, 8, config_override)
+    cfg, num_links, workers, transpose = _agmm_config(S, weight, K_local, False, tt_ccl, grid, 4, 8, config_override)
     out = ttnn.experimental.all_gather_minimal_matmul_async(
         input_tensor=x4,
         weight_tensor=weight,
@@ -672,7 +756,7 @@ def all_gather_matmul_prefill(
         cluster_axis=cluster_axis,
         memory_config=out_memory_config,
         dtype=ttnn.bfloat16,
-        force_transpose=True,
+        force_transpose=transpose,
         num_workers_per_link=workers,
         num_buffers_per_channel=8,
         persistent_output_buffer=persistent_output_buffer,
@@ -709,7 +793,7 @@ def all_gather_swiglu_prefill(
     bf8_tmp, gather_buf = None, None
     if act_bf8:
         x4, gather_buf, bf8_tmp = _agmm_bf8_inputs(x4, tt_ccl, None)
-    cfg, num_links, workers = _agmm_launch_config(K_local, grid, 8, 16, config_override)
+    cfg, num_links, workers, transpose = _agmm_config(S, weight, K_local, True, tt_ccl, grid, 8, 16, config_override)
     out = ttnn.experimental.all_gather_minimal_matmul_async(
         input_tensor=x4,
         weight_tensor=weight,
@@ -721,7 +805,7 @@ def all_gather_swiglu_prefill(
         cluster_axis=cluster_axis,
         memory_config=out_memory_config,
         dtype=ttnn.bfloat16,
-        force_transpose=True,
+        force_transpose=transpose,
         num_workers_per_link=workers,
         num_buffers_per_channel=8,
         fuse_swiglu=True,

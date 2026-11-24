@@ -12,6 +12,8 @@ import torch
 
 import ttnn
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
+from models.demos.blackhole.qwen36.tt.gdn.fused_chunk import _FUSED_CHUNK_SIZE, mask_delta_inputs
+from models.demos.blackhole.qwen36.tt.kv_cache_spec import GdnDims, pack_conv_taps
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
     fused_recurrent_gated_delta_rule_ttnn,
     recurrent_gated_delta_rule_decode_ttnn,
@@ -22,6 +24,13 @@ from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_seq i
 )
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import _causal_conv1d_fir
 from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
+
+# gdn_spec_step's speed options for a verify (T > 1): value_blocks=4 (up to 4 cores per (row, value head), clamped to the
+# grid) and every kernel_opts bit the operation accepts (2 | 8 | 16 | 32 | 64 | 128 | 1024). Each is bit-identical to
+# the minimal program, tested only at the TP=8 per-device geometry (Nv, Nk, Dk, Dv, conv kernel) below; the kernel config
+# buffer fit depends on the shape, so any other geometry keeps the minimal program.
+SPEC_STEP_FAST_OPTIONS = dict(value_blocks=4, kernel_opts=1274)
+SPEC_STEP_FAST_GEOMETRY = (6, 2, 128, 128, 4)
 
 
 def _replace(old, new):
@@ -326,7 +335,168 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
     # Conv taps (4), sharded per Q/K/V head grouping
     taps = tpc.prepare_conv_taps(conv1d_w, key_dim, nk, dk, nv, dv, args.gdn_conv_kernel_size, tp)
     tw["conv_taps"] = [tpc.shard_small(taps[j], mesh, c(f"tap{j}")) for j in range(args.gdn_conv_kernel_size)]
+    dims = GdnDims(nk=nk // tp, nv=nv // tp, dk=dk, dv=dv, kconv=args.gdn_conv_kernel_size)
+    if tp > 1 and not dims.decode_step_problems():
+        tw.update(_decode_step_weights(mesh, sd, P, taps, dims, tp))
     return tw
+
+
+def _decode_step_weights(mesh, sd, P, taps, dims, tp):
+    """The constants gdn_decode_step reads (GDN decode on state in KV cache blocks): dt_bias and -exp(A_log) in
+    float32 (tw["dt_bias"] / tw["neg_exp_A"] are bfloat16), the norm weight as a [Dv] bfloat16 tensor, and each
+    device's conv taps packed into [Nv, 4, 32, 32] head tiles; gdn_spec_step reads the same taps as [1, 4, C] rows.
+    Small, so they skip the weight cache."""
+
+    def fp32_sharded(t):
+        return ttnn.from_torch(
+            t.float().reshape(1, 1, -1),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            mesh_mapper=tpc.tp_shard_mapper(mesh, -1),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    C = dims.conv_dim
+    packed = torch.cat(
+        [pack_conv_taps([t[d * C : (d + 1) * C] for t in taps], dims) for d in range(tp)], dim=0
+    )  # [tp * Nv, 4, 32, 32]
+    return {
+        "dt_bias_fp32": fp32_sharded(sd[P + "dt_bias"]),
+        "neg_exp_A_fp32": fp32_sharded(-torch.exp(sd[P + "A_log"].float())),
+        "norm_w_1d": ttnn.from_torch(
+            sd[P + "norm.weight"].reshape(-1).to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        ),
+        "conv_taps_packed": ttnn.from_torch(
+            packed.to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            mesh_mapper=tpc.tp_shard_mapper(mesh, 0),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        ),
+        "conv_taps_rows": ttnn.from_torch(
+            torch.stack([t.reshape(-1) for t in taps])
+            .unsqueeze(0)
+            .to(torch.bfloat16),  # [1, 4, tp * C], tap j in row j
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            mesh_mapper=tpc.tp_shard_mapper(mesh, -1),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        ),
+    }
+
+
+# Rows of the identity update that rounds a prefill checkpoint: one chunk of chunk_gated_delta_rule.
+IDENTITY_ROWS = _FUSED_CHUNK_SIZE
+
+
+class PrefillCheckpoint:
+    """Device constants with which every GDN layer of one prefill forward over T token rows also computes its state
+    after the first ``length`` tokens (TPGatedDeltaNet.forward_prefill ``checkpoint``). One instance serves all layers
+    of the forward; the caller frees it.
+
+    ``length`` is a multiple of the delta-rule chunk (IDENTITY_ROWS, 32 tokens): the forward splits its
+    chunk_gated_delta_rule call after ``length`` rows (TPGatedDeltaNet._delta_rule_split). It is fixed when the
+    tensors are built, so a captured trace serves one checkpoint position.
+    conv_select [1, K - 1, T] bfloat16 is one-hot on input rows length - K + 1 .. length - 1, the convolution history
+    after ``length`` tokens.
+    zero_rows [1, IDENTITY_ROWS, 1] float32 zeros: beta and g of the identity update rows times it.
+
+    ``in_buffers`` (PrefillCheckpoint.buffers): the tensors are inputs of a captured trace, and each GDN layer copies its
+    checkpoint into its own persistent buffers (TPGatedDeltaNet.alloc_prefill_trace_buffers) instead of keeping new
+    tensors."""
+
+    def __init__(self, mesh, T, length, kconv, in_buffers=False):
+        if length <= 0 or length % IDENTITY_ROWS or not length + IDENTITY_ROWS <= T:
+            raise ValueError(
+                f"a prefill checkpoint after {length} of {T} token rows must be a positive multiple of {IDENTITY_ROWS} "
+                f"rows with {IDENTITY_ROWS} rows after it"
+            )
+        sel = self.host_tensors(T, length, kconv)
+        self.length = int(length)
+        self.in_buffers = in_buffers
+        rep = ttnn.ReplicateTensorToMesh(mesh)
+        self.conv_select = ttnn.from_torch(
+            sel, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=rep
+        )
+        self.zero_rows = ttnn.from_torch(
+            torch.zeros(1, IDENTITY_ROWS, 1, dtype=torch.float32),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            mesh_mapper=rep,
+        )
+
+    @staticmethod
+    def host_tensors(T, length, kconv):
+        """conv_select [1, K - 1, T] bfloat16 of a checkpoint after ``length`` of T token rows, as a torch tensor."""
+        if not kconv - 1 <= length < T:
+            raise ValueError(f"a prefill checkpoint after {length} of {T} token rows needs {kconv - 1} <= length < {T}")
+        taps = torch.arange(kconv - 1)
+        sel = torch.zeros(1, kconv - 1, T, dtype=torch.bfloat16)
+        sel[0, taps, length - (kconv - 1) + taps] = 1.0
+        return sel
+
+    @classmethod
+    def buffers(cls, mesh, T, kconv, length):
+        """The checkpoint after ``length`` tokens of a captured trace (see the class description)."""
+        return cls(mesh, T, length, kconv, in_buffers=True)
+
+    def free(self):
+        ttnn.deallocate(self.conv_select)
+        ttnn.deallocate(self.zero_rows)
+
+
+class PrefillMasks:
+    """Persistent device inputs with which a GDN prefill forward over T token rows treats the rows from ``valid_len`` on
+    as padding (TPGatedDeltaNet.forward_prefill ``masks``). They hold what the masked-bucket forward builds on the host
+    from valid_len, so the forward runs the same operations without a host write and can be a captured trace that
+    serves every valid_len; ``host_tensors`` gives their values, which the caller stages before each replay.
+
+    conv_select [1, K - 1, K - 1 + T] bfloat16: _causal_conv1d_fir's one-hot over [K - 1 history rows ; T input rows],
+    the convolution history after valid_len tokens. gate_mask [1, T, 1] float32 and qkv_mask [1, T, 1] bfloat16: 1 for
+    the first valid_len rows and 0 after them, chunk_gated_delta_rule_fused_adapter's masks of beta and g and of q, k
+    and v."""
+
+    def __init__(self, mesh, T, kconv):
+        self.T = int(T)
+        self.kconv = int(kconv)
+        rep = ttnn.ReplicateTensorToMesh(mesh)
+        zeros = self.host_tensors(self.T, 0, self.kconv)
+        self.conv_select, self.gate_mask, self.qkv_mask = (
+            ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=rep)
+            for t, dtype in zip(zeros, self.dtypes())
+        )
+
+    @staticmethod
+    def dtypes():
+        """ttnn dtypes of (conv_select, gate_mask, qkv_mask)."""
+        return ttnn.bfloat16, ttnn.float32, ttnn.bfloat16
+
+    @staticmethod
+    def host_tensors(T, valid_len, kconv):
+        """(conv_select, gate_mask, qkv_mask) for ``valid_len`` real rows of T, as torch tensors; valid_len 0 gives the
+        zero tensors of an allocation."""
+        if not 0 <= valid_len <= T:
+            raise ValueError(f"{valid_len} real token rows do not fit {T}")
+        conv_select = torch.zeros(1, kconv - 1, kconv - 1 + T, dtype=torch.float32)
+        if valid_len:
+            taps = torch.arange(kconv - 1)
+            conv_select[0, taps, valid_len + taps] = 1.0
+        gate = torch.zeros(1, T, 1, dtype=torch.float32)
+        gate[:, :valid_len] = 1.0
+        return conv_select, gate, gate.clone()
+
+    def free(self):
+        for t in (self.conv_select, self.gate_mask, self.qkv_mask):
+            ttnn.deallocate(t)
 
 
 class TPGatedDeltaNet:
@@ -379,6 +549,9 @@ class TPGatedDeltaNet:
         self._fused_const_tiles = build_fused_const_tiles(mesh, _FUSED_CHUNK_SIZE)
         self.conv_states = None
         self.rec_state = None
+        # Views of the vLLM KV cache blocks that hold the request state, bound by gdn_block_state.GdnBlockState. When
+        # set, decode reads and writes the blocks and rec_state / conv_carry are only the batch-1 prefill workspace.
+        self.state_blocks = None
         # ---- Batched (multi-user) spec-decode verify buffers, allocated by prepare_spec_verify. ----
         # (n_users, T) the spec buffers are sized for; None until prepare_spec_verify runs.
         self._spec_shape = None
@@ -434,6 +607,148 @@ class TPGatedDeltaNet:
         self._zero_rec = None
         self._zero_rec_f32 = None  # batch-1 zero initial state for carry_state=False prefill (_ensure_zero_rec_f32)
         self._pending = []  # per-user (rec, conv) states collected during batched per-user prefill
+        # (recurrent state, conv history) after PrefillCheckpoint.length tokens of the last forward_prefill that had a
+        # checkpoint, until take_prefill_checkpoint hands them over.
+        self.prefill_checkpoint = None
+        # Persistent buffers of a captured prefill trace (alloc_prefill_trace_buffers): the (recurrent state, conv
+        # carry) that the trace copies into the batch-1 workspace before its forward, and the (recurrent state, conv
+        # history) it copies its checkpoint into. None until allocated.
+        self.prefill_init = None
+        self.prefill_checkpoint_buffers = None
+        self._prefill_init_zero = True
+
+    def take_prefill_checkpoint(self):
+        """(recurrent state [1, Nv, Dk, Dv] float32, conv history [1, K - 1, qkv_dim_tp] bfloat16) that the last
+        forward_prefill with a ``checkpoint`` computed. The caller hands them back to release_prefill_checkpoint."""
+        ck = self.prefill_checkpoint
+        if ck is None:
+            raise ValueError(
+                "this GDN layer holds no prefill checkpoint: no prefill forward computed one since the last take"
+            )
+        self.prefill_checkpoint = None
+        return ck
+
+    def release_prefill_checkpoint(self, rec, conv):
+        """Free a checkpoint from take_prefill_checkpoint, unless it is the persistent buffers of a captured trace."""
+        bufs = self.prefill_checkpoint_buffers
+        if bufs is not None and rec is bufs[0]:
+            return
+        ttnn.deallocate(rec)
+        ttnn.deallocate(conv)
+
+    def _rows(self, t, start, count):
+        """(rows [start, start + count) of a [1, T, D] tile tensor, True when it is a view of ``t``). A DRAM-interleaved
+        tensor whose first such row tile lies in DRAM bank 0 gives a view (ttnn.narrow, no copy); any other a copy."""
+        tiles = start // ttnn.TILE_SIZE * (t.padded_shape[-1] // ttnn.TILE_SIZE)
+        mc = t.memory_config()
+        if getattr(self, "_dram_bank_count", None) is None:
+            grid = self.mesh.dram_grid_size()
+            self._dram_bank_count = int(grid.x * grid.y)
+        if (
+            mc.buffer_type == ttnn.BufferType.DRAM
+            and mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+            and tiles % self._dram_bank_count == 0
+        ):
+            return ttnn.narrow(t, 1, start, count), True
+        end = (1, start + count, t.shape[-1])
+        return ttnn.slice(t, (0, start, 0), end, memory_config=ttnn.DRAM_MEMORY_CONFIG), False
+
+    def _delta_rule_split(self, delta_fn, call, qkvbg, init_state, checkpoint, valid_len, masks):
+        """chunk_gated_delta_rule over all T rows as two calls split after checkpoint.length rows, and the prefill
+        checkpoint. Returns (o, final state, checkpoint recurrent state).
+
+        The op carries its state from chunk to chunk in float32 and returns that float32 state as its final state, and
+        a chunk's outputs depend only on the chunk's inputs and the state entering it, so the two calls return the
+        outputs and final state of one call over the same masked inputs. The checkpoint is the state after
+        checkpoint.length rows passed through one chunk of identity updates (beta = g = 0) of the op, on the next
+        chunk's rows: a checkpoint block holds the state that one call over all rows with beta and g zero past the
+        checkpoint returns, and an identity chunk reads the state through the matmul's TF32 source registers and
+        scales it by exp(0) = 1, so further identity chunks do not change it."""
+        q, k, v, beta, g = qkvbg
+        L, T, n = checkpoint.length, q.shape[1], IDENTITY_ROWS
+        device_masks = None if masks is None else (masks.gate_mask, masks.qkv_mask)
+        masked = mask_delta_inputs(q, k, v, beta, g, valid_len=valid_len, masks=device_masks, device=self.mesh)
+        copies = [m for m, t in zip(masked, qkvbg) if m is not t]
+
+        def rows(t, start, count):
+            r, view = self._rows(t, start, count)
+            if not view:
+                copies.append(r)
+            return r
+
+        o_first, state = delta_fn(*(rows(t, 0, L) for t in masked), initial_state=init_state, **call)
+        o_second, final_state = delta_fn(*(rows(t, L, T - L) for t in masked), initial_state=state, **call)
+        o = ttnn.concat([o_first, o_second], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        _dram = ttnn.DRAM_MEMORY_CONFIG
+        id_beta = ttnn.multiply(rows(beta, L, n), checkpoint.zero_rows, memory_config=_dram)
+        id_g = ttnn.multiply(rows(g, L, n), checkpoint.zero_rows, memory_config=_dram)
+        id_o, ck_rec = delta_fn(rows(q, L, n), rows(k, L, n), rows(v, L, n), id_beta, id_g, initial_state=state, **call)
+        for t in (o_first, o_second, state, id_o, id_beta, id_g, *copies):
+            ttnn.deallocate(t)
+        return o, final_state, ck_rec
+
+    def _keep_prefill_checkpoint(self, rec, conv):
+        if self.prefill_checkpoint is not None:
+            self.release_prefill_checkpoint(*self.prefill_checkpoint)
+        self.prefill_checkpoint = (rec, conv)
+
+    def alloc_prefill_trace_buffers(self, checkpoint):
+        """Allocate the persistent buffers of a captured prefill trace on the bound batch-1 workspace (zeros, the
+        shapes and dtypes of rec_state and conv_carry): the trace's initial state, and with ``checkpoint`` the
+        buffers its checkpoint goes into. Before any trace capture. Idempotent."""
+        rep = ttnn.ReplicateTensorToMesh(self.mesh)
+
+        def zeros_like(t):
+            return ttnn.from_torch(
+                torch.zeros(tuple(t.shape), dtype=torch.float32 if t.dtype == ttnn.float32 else torch.bfloat16),
+                dtype=t.dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=rep,
+            )
+
+        if self.prefill_init is None:
+            self.prefill_init = (zeros_like(self.rec_state), zeros_like(self.conv_carry))
+            self._prefill_init_zero = True
+        if checkpoint and self.prefill_checkpoint_buffers is None:
+            self.prefill_checkpoint_buffers = (zeros_like(self.rec_state), zeros_like(self.conv_carry))
+
+    def free_prefill_trace_buffers(self):
+        if self.prefill_checkpoint is not None and self.prefill_checkpoint_buffers is not None:
+            if self.prefill_checkpoint[0] is self.prefill_checkpoint_buffers[0]:
+                self.prefill_checkpoint = None
+        for bufs in (self.prefill_init, self.prefill_checkpoint_buffers):
+            for t in bufs or ():
+                ttnn.deallocate(t)
+        self.prefill_init = None
+        self.prefill_checkpoint_buffers = None
+
+    def stage_prefill_init(self, carry):
+        """Set the initial state of the next captured prefill replay: the batch-1 workspace (``carry``: a prefill that
+        continues) or zero state. Zero state costs no copies while the buffers are still zero."""
+        rec, conv = self.prefill_init
+        if carry:
+            ttnn.copy(self.rec_state, rec)
+            ttnn.copy(self.conv_carry, conv)
+        elif not self._prefill_init_zero:
+            ttnn.copy(self._zero_rec, rec)
+            ttnn.copy(self._zero_conv_carry, conv)
+        self._prefill_init_zero = not carry
+
+    def load_prefill_init(self):
+        """Copy the initial state of a captured prefill (stage_prefill_init) into the workspace; part of the trace."""
+        rec, conv = self.prefill_init
+        ttnn.copy(rec, self.rec_state)
+        ttnn.copy(conv, self.conv_carry)
+
+    def note_traced_prefill(self, checkpoint):
+        """After a captured prefill trace ran: the host-side state that its forward_prefill sets when it runs eagerly
+        (the conv taps written by capture_state; with ``checkpoint`` the checkpoint in prefill_checkpoint_buffers)."""
+        self._conv_taps_stale = False
+        self._conv_win_stale = True
+        if checkpoint:
+            self._keep_prefill_checkpoint(*self.prefill_checkpoint_buffers)
 
     def _release_spec_bufs(self):
         """Free the batched spec-verify buffers and forget their shape (prepare_spec_verify reallocs)."""
@@ -757,7 +1072,16 @@ class TPGatedDeltaNet:
         return qkv, z, a, b
 
     def forward_prefill(
-        self, x, chunk_size=128, valid_len=None, capture_state=False, return_state=False, carry_state=True, sp=None
+        self,
+        x,
+        chunk_size=128,
+        valid_len=None,
+        capture_state=False,
+        return_state=False,
+        carry_state=True,
+        sp=None,
+        checkpoint=None,
+        masks=None,
     ):
         """Causal chunk-prefill from scratch. x [1,1,T,dim]: K-sharded (dim/tp per device) when the
         fused in-proj AG-matmul path is active (``_fuse_agmm`` and T>TILE — the norm skips its
@@ -773,11 +1097,35 @@ class TPGatedDeltaNet:
         sp: tt/sp.py SeqParallel: x holds this mesh row's T tokens of a sequence split over the rows. The conv takes its
         history from the previous row and the recurrence entry state is chained over the rows (from zero state, single
         pass: needs carry_state=False, valid_len=None and the kda-conv / head-major-out / flat-qkv paths).
+        checkpoint: a PrefillCheckpoint; the forward also computes the state after its first checkpoint.length tokens
+        into ``prefill_checkpoint`` (carried single-sequence prefill only): chunk_gated_delta_rule runs in two calls
+        split there, and one identity update chunk gives the checkpoint (_delta_rule_split).
+        masks: a PrefillMasks in place of valid_len (carried single-sequence prefill only): the same masking from
+        persistent device inputs, so that the forward can be captured in a trace that serves every valid_len.
         """
         tw, Nk, Nv, Dk, Dv = self.tw, self.Nk, self.Nv, self.Dk, self.Dv
         if len(x.shape) == 4:
             x = ttnn.reshape(x, (1, x.shape[-2], x.shape[-1]))
         T = x.shape[1]
+        if masks is not None and (
+            masks.T != T or valid_len is not None or sp is not None or return_state or not carry_state
+        ):
+            raise ValueError(
+                f"prefill masks for {masks.T} rows need a carried single-sequence prefill of {T} rows without "
+                f"valid_len (got valid_len={valid_len}, sp={sp is not None}, return_state={return_state}, "
+                f"carry_state={carry_state})"
+            )
+        if checkpoint is not None:
+            real = T if valid_len is None else valid_len
+            short = not 0 < checkpoint.length < real
+            if sp is not None or return_state or not carry_state or short:
+                raise ValueError(
+                    f"a prefill checkpoint after {checkpoint.length} tokens needs a carried single-sequence prefill "
+                    f"of more tokens (got {real} real tokens, sp={sp is not None}, return_state={return_state}, "
+                    f"carry_state={carry_state})"
+                )
+            if checkpoint.in_buffers and self.prefill_checkpoint_buffers is None:
+                raise ValueError("a prefill checkpoint in persistent buffers needs alloc_prefill_trace_buffers first")
         if sp is not None:
             assert not carry_state and valid_len is None, "sequence parallelism is a from-zero-state single pass"
             assert self._gdn_kda_conv and self._gdn_fuse_out and self._gdn_flat_qkv, "sp needs kda conv + flat-qkv"
@@ -808,12 +1156,21 @@ class TPGatedDeltaNet:
         # Prefill qkvzab in L1 (DRAM above S=2048): keeps proj + q/k/v/z/a/b resident for conv+gate prep.
         _L1 = tpc.prefill_act_mem(T, ttnn.L1_MEMORY_CONFIG)
         qkv, z, a, b = self._project_qkvzab(x, T, out_mc=_L1)
+        if checkpoint is not None:
+            # Every checkpoint is at least K - 1 tokens into this forward, so its history rows are all in qkv.
+            ck_conv = ttnn.matmul(
+                checkpoint.conv_select,
+                qkv,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=self._cfg_onehot,
+            )
 
         # Causal conv + SiLU; conv_state = previous chunk's last K-1 inputs (None/zero from scratch).
         # q/k/v/beta/g stay DRAM — alive across chunk kernel; L1 crashes it.
         _cstate = self.conv_carry if carry else None
         kd = self.key_dim_tp
-        if self._gdn_kda_conv and valid_len is None:
+        if self._gdn_kda_conv and valid_len is None and masks is None:
             # KDA op: conv + SiLU + q/k/v split in one program; its outputs are already the three
             # token-major tensors the flat-qkv path wants (masked buckets keep the MAC FIR below).
             q, k, v, conv_new_state = self._kda_conv_prefill(
@@ -841,6 +1198,7 @@ class TPGatedDeltaNet:
                 weight_taps=tw["conv_taps"],
                 bias_dev=None,
                 valid_len=valid_len,
+                new_state_select=None if masks is None else masks.conv_select,
             )
             ttnn.deallocate(qkv)
             if self._gdn_flat_qkv:
@@ -894,22 +1252,32 @@ class TPGatedDeltaNet:
             if _use_fused
             else {}
         )
-        o, final_state = _delta_fn(
-            q,
-            k,
-            v,
-            beta,
-            g,
+        _call = dict(
             chunk_size=chunk_size,
             scale=self.scale,
-            initial_state=_init_state,
             device=self.mesh,
             cached_masks=self.chunk_seq_masks,
-            valid_len=valid_len,
             qkv_head_dims=_delta_head_dims,
             return_o_bh=self._gdn_fuse_out,
             **_extra,
         )
+        if checkpoint is not None:
+            o, final_state, ck_rec = self._delta_rule_split(
+                _delta_fn, _call, (q, k, v, beta, g), _init_state, checkpoint, valid_len, masks
+            )
+            if checkpoint.in_buffers:
+                # A replay must find its checkpoint where the previous one was: copy into the persistent buffers.
+                rec_buf, conv_buf = self.prefill_checkpoint_buffers
+                ttnn.copy(ck_rec, rec_buf)
+                ttnn.copy(ck_conv, conv_buf)
+                ttnn.deallocate(ck_rec)
+                ttnn.deallocate(ck_conv)
+                ck_rec, ck_conv = rec_buf, conv_buf
+            self._keep_prefill_checkpoint(ck_rec, ck_conv)
+        else:
+            if masks is not None:
+                _call["masks"] = (masks.gate_mask, masks.qkv_mask)
+            o, final_state = _delta_fn(q, k, v, beta, g, initial_state=_init_state, valid_len=valid_len, **_call)
         B, D = 1, self.qkv_dim_tp
         captured = None
         if sp is not None:
@@ -1444,6 +1812,8 @@ class TPGatedDeltaNet:
         )
 
     def forward_decode(self, x):
+        if self.state_blocks is not None:
+            return self._forward_decode_blocks(x)
         tw, Nk, Nv, Dk, Dv = self.tw, self.Nk, self.Nv, self.Dk, self.Dv
         Bmax = self.B
         _L1 = ttnn.L1_MEMORY_CONFIG  # keep decode conv→recurrence→norm/gate chain L1-resident
@@ -1574,6 +1944,53 @@ class TPGatedDeltaNet:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         return out
+
+    def _forward_decode_blocks(self, x):
+        """Decode rows [0, B) on the state in vLLM KV cache blocks: ONE gdn_decode_step does the causal conv on the
+        packed history, the gates, the recurrence and the gated norm, reading and writing the pages that
+        state_blocks.idx names for each row. Then the out-projection and all-reduce of forward_decode."""
+        tw, sb = self.tw, self.state_blocks
+        if len(x.shape) == 4:
+            x = ttnn.reshape(x, (1, x.shape[-2], x.shape[-1]))
+        B = x.shape[-2]
+        qkvzab = tpc.matmul_1d_decode(
+            x, tw["qkvz"], self.args.gdn_qkvz_decode_1d_progcfg, self.cfg, out_memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        qkvzab = ttnn.reshape(qkvzab, (1, B, qkvzab.shape[-1]))  # [q | k | v | z | a | b] rows
+        gated = ttnn.experimental.gdn.gdn_decode_step(
+            qkvzab,
+            tw["dt_bias_fp32"],
+            tw["neg_exp_A_fp32"],
+            sb.rec_k,
+            tw["norm_w_1d"],
+            self.Nv,
+            self.Nk,
+            self.Dk,
+            self.Dv,
+            scale=self.scale,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            output_dtype=ttnn.bfloat16,
+            conv_hist=sb.hist,
+            conv_taps=tw["conv_taps_packed"],
+            qkvz_dim=self.qkvz_dim_tp,
+            fast_mode=True,
+            fp32_state=True,
+            state_page_idx=sb.idx,
+            **({} if sb.rec_v is None else {"state_pool2": sb.rec_v}),
+        )  # [1, B, Nv * Dv]
+        ttnn.deallocate(qkvzab)
+        partial = self._row_proj(gated, tw["out"])
+        ttnn.deallocate(gated)
+        partial = ttnn.reshape(partial, (1, 1, B, partial.shape[-1]))
+        return tt_all_reduce(
+            partial,
+            self.mesh,
+            self.tt_ccl,
+            cluster_axis=0,
+            dim=3,
+            topology=self.args.ccl_topology(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     # ------------------------------------------------------------------ #
     # Batched (multi-user) speculative verify
@@ -1755,7 +2172,87 @@ class TPGatedDeltaNet:
         e_parts = {u: up(e, self._verify_win_buf.dtype) for u, (_, e) in states.items()}
         self._write_spec_rows(ring_parts, e_parts)
 
-    def forward_verify_recurrent(self, x, valid_len, pre_gathered=False, n_users=1, state_blk_idx=None, conv_sel=None):
+    def _spec_step_options(self, T):
+        """The gdn_spec_step options of a T-token verify: SPEC_STEP_FAST_OPTIONS at the tested geometry, else none."""
+        geometry = (self.Nv, self.Nk, self.Dk, self.Dv, self.K)
+        return dict(SPEC_STEP_FAST_OPTIONS) if T > 1 and geometry == SPEC_STEP_FAST_GEOMETRY else {}
+
+    def _forward_verify_blocks(self, x, valid_len, n_users, decode_ar=None):
+        """Speculative verify of n_users rows x T = valid_len / n_users tokens on the state in vLLM KV cache blocks:
+        ONE gdn_spec_step reads each row's full state (recurrent state and packed history) from its start block and
+        writes the full state after every token into the block that the verify tables name (state_blocks.verify,
+        written by GdnBlockState.set_verify_blocks), so nothing is committed or kept here. Arithmetic of
+        gdn_decode_step on the same blocks, token by token. Then the out-projection and all-reduce of decode; with
+        decode_ar the out-projection writes the RES40 partial (decode_allreduce.ResidualAllReduce.out_matmul).
+        n_users below the tables' rows (a verify row bucket) runs the tables' first n_users rows: gdn_spec_step reads
+        them from the ctrl page of all rows (max_users)."""
+        tw, sb = self.tw, self.state_blocks
+        vb = getattr(sb, "verify", None)
+        assert vb is not None and valid_len == n_users * vb.T, (
+            f"the verify tables are bound for T = {getattr(vb, 'T', None)} tokens per row; got {valid_len} rows for "
+            f"{n_users} users"
+        )
+        table_rows = getattr(vb, "rows", n_users)
+        assert n_users <= table_rows, f"{n_users} verify users, the verify tables hold {table_rows} rows"
+        if len(x.shape) == 4:
+            x = ttnn.reshape(x, (1, x.shape[-2], x.shape[-1]))
+        qkvzab = tpc.matmul_1d_decode(
+            x, tw["qkvz"], self.args.gdn_qkvz_decode_1d_progcfg, self.cfg, out_memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        qkvzab = ttnn.reshape(qkvzab, (1, valid_len, qkvzab.shape[-1]))  # [q | k | v | z | a | b] rows u * T + t
+        gated = ttnn.experimental.gdn.gdn_spec_step(
+            qkvzab,
+            None,  # no window pair: the history is in the blocks (conv_hist)
+            None,
+            sb.rec_k,
+            vb.ctrl,
+            tw["conv_taps_rows"],
+            tw["dt_bias_fp32"],
+            tw["neg_exp_A_fp32"],
+            tw["norm_w_1d"],
+            self.Nv,
+            self.Nk,
+            self.Dk,
+            self.Dv,
+            vb.T,
+            n_users,
+            self.qkvz_dim_tp,
+            conv_kernel=self.K,
+            scale=self.scale,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            output_dtype=ttnn.bfloat16,
+            fast_mode=True,
+            fp32_state=True,
+            ring_page_idx=vb.idx,
+            conv_hist=sb.hist,
+            **({} if sb.rec_v is None else {"ring_pool2": sb.rec_v}),
+            **({} if n_users == table_rows else {"max_users": table_rows}),
+            **self._spec_step_options(vb.T),
+        )  # [1, n_users * T, Nv * Dv]
+        ttnn.deallocate(qkvzab)
+        partial = None
+        if decode_ar is not None and getattr(self.args, "proj_1d_decode", False):
+            # In RES40 straight from the matmul (the K loop of _row_proj's 1D decode matmul), so no reshard.
+            partial = decode_ar.out_matmul(gated, tw["out"], self.cfg)
+        if partial is None:
+            partial = self._row_proj(gated, tw["out"])
+            partial = ttnn.reshape(partial, (1, 1, valid_len, partial.shape[-1]))
+        ttnn.deallocate(gated)
+        if decode_ar is not None:
+            return decode_ar.all_reduce(partial)
+        return tt_all_reduce(
+            partial,
+            self.mesh,
+            self.tt_ccl,
+            cluster_axis=0,
+            dim=3,
+            topology=self.args.ccl_topology(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def forward_verify_recurrent(
+        self, x, valid_len, pre_gathered=False, n_users=1, state_blk_idx=None, conv_sel=None, decode_ar=None
+    ):
         """Batched hybrid spec-decode verify for GDN: advance B users x T candidate rows at once.
 
         x : [1, 1, bucket, dim] prefill-normed input; the first ``valid_len`` rows are real and
@@ -1775,7 +2272,17 @@ class TPGatedDeltaNet:
         Side effects: the ring is updated in place (every candidate's state, for every user) and
         _verify_win_buf becomes the new E_prev. rec_state and conv_states are untouched; the host
         commits later by index.
+
+        With the state in vLLM KV cache blocks (state_blocks bound) the verify reads and writes the blocks instead
+        (_forward_verify_blocks); state_blk_idx and conv_sel are not used. Only then may decode_ar (a
+        decode_allreduce.ResidualAllReduce, x the norm of the replicated decode residual) sum the out-projection
+        partials and add the residual.
         """
+        if self.state_blocks is not None:
+            assert pre_gathered, "the verify on KV cache blocks takes the decode-config (full-dim) norm output"
+            return self._forward_verify_blocks(x, valid_len, n_users, decode_ar)
+        if decode_ar is not None:
+            raise ValueError("the replicated decode residual needs the GDN state in vLLM KV cache blocks")
         assert valid_len <= tpc.TILE_SIZE, f"verify bucket {valid_len} exceeds one tile"
         assert n_users == self.B, f"spec verify runs the whole decode batch: n_users={n_users}, B={self.B}"
         assert valid_len % n_users == 0, f"valid_len {valid_len} is not {n_users} whole user row-groups"
