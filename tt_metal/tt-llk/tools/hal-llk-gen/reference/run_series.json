@@ -1,0 +1,81 @@
+{
+ "description": "Run series 7 (7a-7e) and 8 (8a-8e): static counts per build (unpack+math+pack, -k add, LLK asserts off, average over the 10 builds) and perf L1->L1 cycles-per-tile ratio, HAL / original.",
+ "source": "branch ctr-sbratic/hal-llk-generation-results, commit 2ce984c2752: hal_llk_generation_results/runs/run<name>/static_counts/assert_off/tt_tti_counts.json (summary.<side>.sum.avg) and hal_llk_generation_results/perf/perf_summary_hal.json (<name>.l1.ratio_median)",
+ "original": {
+  "text_bytes": 5800.8,
+  "tti": 78.0,
+  "tt_all_paths": 41.0
+ },
+ "runs": {
+  "7a": {
+   "series": "7",
+   "text_bytes": 3861.6,
+   "tti": 114.6,
+   "tt_all_paths": 64.2,
+   "cycles_l1_ratio": 2.8262683398288346
+  },
+  "7b": {
+   "series": "7",
+   "text_bytes": 4496.0,
+   "tti": 123.0,
+   "tt_all_paths": 95.8,
+   "cycles_l1_ratio": 2.8153819002807827
+  },
+  "7c": {
+   "series": "7",
+   "text_bytes": 4580.0,
+   "tti": 117.8,
+   "tt_all_paths": 115.8,
+   "cycles_l1_ratio": 3.0572125236387335
+  },
+  "7d": {
+   "series": "7",
+   "text_bytes": 4618.0,
+   "tti": 141.0,
+   "tt_all_paths": 98.6,
+   "cycles_l1_ratio": 3.831328169137351
+  },
+  "7e": {
+   "series": "7",
+   "text_bytes": 4332.0,
+   "tti": 98.0,
+   "tt_all_paths": 94.6,
+   "cycles_l1_ratio": 2.997677023923745
+  },
+  "8a": {
+   "series": "8",
+   "text_bytes": 4191.2,
+   "tti": 167.0,
+   "tt_all_paths": 55.2,
+   "cycles_l1_ratio": 1.323878902407381
+  },
+  "8b": {
+   "series": "8",
+   "text_bytes": 3941.6,
+   "tti": 154.6,
+   "tt_all_paths": 49.2,
+   "cycles_l1_ratio": 3.4891033006452115
+  },
+  "8c": {
+   "series": "8",
+   "text_bytes": 4070.8,
+   "tti": 150.8,
+   "tt_all_paths": 59.6,
+   "cycles_l1_ratio": 1.4181856087681677
+  },
+  "8d": {
+   "series": "8",
+   "text_bytes": 4132.0,
+   "tti": 153.6,
+   "tt_all_paths": 59.4,
+   "cycles_l1_ratio": 1.319534964684755
+  },
+  "8e": {
+   "series": "8",
+   "text_bytes": 3876.4,
+   "tti": 124.2,
+   "tt_all_paths": 58.1,
+   "cycles_l1_ratio": 1.4494997617913292
+  }
+ }
+}
