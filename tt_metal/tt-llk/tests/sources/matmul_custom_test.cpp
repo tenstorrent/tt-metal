@@ -172,6 +172,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_pack_common.h"
 #include "params.h"
 
+#ifdef ARCH_BLACKHOLE
+// The pack traits a production kernel gets from compute/experimental/matmul_custom.h and pack_math_context.h.
+namespace ckernel::packer
+{
+template <>
+struct llk_pack_matmul_api<3>
+{
+    static constexpr bool value = true;
+};
+template <>
+struct llk_pack_lofi_api<1>
+{
+    static constexpr bool value = MATH_FIDELITY == ckernel::MathFidelity::LoFi;
+};
+} // namespace ckernel::packer
+#endif
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
