@@ -72,6 +72,10 @@ def mul_program(
     """
     num_tiles = out.volume() // (32 * 32)
     work = num_tiles if tile_limit is None else min(tile_limit, num_tiles)
+    # split_tiles clamps the work to its second argument, so fewer cores' worth of tiles than work would silently drop tiles.
+    assert (
+        cores_for_tiles is None or cores_for_tiles >= work
+    ), f"cores_for_tiles={cores_for_tiles} is below the {work} tiles to process"
     cores, num_tiles_by_core, start_id_by_core = split_tiles(a.device(), cores_for_tiles or num_tiles, work)
 
     dfb_names = ["in_a", "in_b", "out"]
@@ -373,7 +377,8 @@ def exp_program(input_tensor, output_tensor, compute_threads=1):
     return spec, run_args
 
 
-def exp_inputs(device, num_tiles):
+def exp_inputs(device, num_tiles, seed=0):
+    torch.manual_seed(seed)
     torch_input = torch.rand([1, num_tiles, 32, 32]).to(torch.bfloat16)
     input_tensor = ttnn.from_torch(
         torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -542,6 +547,7 @@ def test_array_args_and_aliased_buffers(device):
     assert torch.equal(result[5 * 1024 :], tile_order(initial)[5 * 1024 :])
 
 
+@pytest.mark.timeout(60)  # a regression hangs in synchronize_device; fail fast instead of waiting for the global 300 s
 def test_semaphores_start_at_zero_on_every_call(device):
     out = ttnn.allocate_tensor_on_device(ttnn.TensorSpec((32, 32), ttnn.bfloat16, ttnn.TILE_LAYOUT), device)
     node = ttnn.CoreCoord(0, 0)
@@ -806,17 +812,19 @@ def test_tensor_args_must_match_the_parameters(device, cache_hit, expect_error):
 
 def test_tensors_on_another_mesh_device_are_rejected(device, expect_error):
     submesh = device.create_submesh(ttnn.MeshShape(1, 1))
-    _, a, b, _ = inputs(device)
-    out = ttnn.allocate_tensor_on_device(a.spec, submesh)
-    spec, run_args = mul_program(a, b, out)
+    out = None
     try:
+        _, a, b, _ = inputs(device)
+        out = ttnn.allocate_tensor_on_device(a.spec, submesh)
+        spec, run_args = mul_program(a, b, out)
         with expect_error(RuntimeError, "io_tensors\\[0\\] is on a different MeshDevice than the output tensor"):
             E.generic_op([a, b, out], spec, run_args)
     finally:
         # The parent MeshDevice keeps its submeshes alive, so an open submesh would outlive the device fixture's close
         # and then close the chip again, on hardware while the next test was opening it. Close it while the parent is
         # open.
-        ttnn.deallocate(out)
+        if out is not None:
+            ttnn.deallocate(out)
         ttnn.close_mesh_device(submesh)
 
 
@@ -1400,9 +1408,16 @@ def hash_spec(**kernel_fields):
     )
 
 
+# Fields the edit helpers may touch; anything else (typos, dunder names) fails loudly instead of being set.
+_EDITABLE_LIST_FIELDS = frozenset({"kernels", "dataflow_buffers", "tensor_parameters", "work_units"})
+_EDITABLE_SPEC_FIELDS = frozenset({"name", "semaphores", "scratchpads"})
+
+
 def with_field(program_spec, field, index, /, **changes):
+    assert field in _EDITABLE_LIST_FIELDS, f"unexpected ProgramSpec list field: {field!r}"
     items = getattr(program_spec, field)
     for name, value in changes.items():
+        assert hasattr(items[index], name), f"{field}[{index}] has no attribute {name!r}"
         setattr(items[index], name, value)
     setattr(program_spec, field, items)
     return program_spec
@@ -1468,10 +1483,14 @@ NON_STRUCTURAL_EDITS = {
 
 
 def setattr_and_return(spec, field, value):
+    assert field in _EDITABLE_SPEC_FIELDS, f"unexpected ProgramSpec field: {field!r}"
     setattr(spec, field, value)
     return spec
 
 
+# Python does not enforce "every": STRUCTURAL_EDITS is a hand-kept list. The real guard is the static_assert tripwires at
+# the top of compute_program_spec_hash (generic_program_spec_device_operation.cpp), which fail the build when ProgramSpec,
+# WorkUnitSpec or TensorParameter gains or loses a field; add the matching edit here when that happens.
 @pytest.mark.parametrize("edit", STRUCTURAL_EDITS.values(), ids=STRUCTURAL_EDITS.keys())
 def test_hash_changes_with_every_structural_field(edit):
     assert E.compute_program_spec_hash(edit()) != E.compute_program_spec_hash(hash_spec())
@@ -1488,6 +1507,19 @@ def test_hash_ignores_relaxed_tensor_fields():
     first = with_field(hash_spec(), "tensor_parameters", 0, relaxations=relaxations)
     second = with_field(hash_spec(), "tensor_parameters", 0, relaxations=relaxations, spec=small)
     assert E.compute_program_spec_hash(first) == E.compute_program_spec_hash(second)
+
+
+def _scratchpad_spec(**fields):
+    program_spec = hash_spec()
+    program_spec.scratchpads = [E.ScratchpadSpec(unique_id="scratch", size_per_node=64, **fields)]
+    return program_spec
+
+
+def test_hash_tells_an_unset_scratchpad_data_format_from_float32():
+    # The scratchpad half of the same libc++ workaround (hash_data_formats_set in the C++ spec hash).
+    unset = _scratchpad_spec()
+    float32 = _scratchpad_spec(data_format_metadata=ttnn.float32)
+    assert E.compute_program_spec_hash(unset) != E.compute_program_spec_hash(float32)
 
 
 def test_hash_tells_an_unset_data_format_from_float32():
