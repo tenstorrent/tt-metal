@@ -52,15 +52,30 @@
         "probe": "@1020k",
         "margin": {
           "@1020k": {
-            "throughput_tok_s": 0.03,
+            "throughput_tok_s": 0.1,
             "ttft_s": 0.03,
-            "chunk_time_ms": 0.15
+            "chunk_time_ms": 0.25
           }
         },
         "8kw": {
-          "throughput_tok_s": 30615,
+          "throughput_tok_s": 31990,
           "ttft_s": 25.31,
-          "chunk_time_ms": 541
+          "chunk_time_ms": 607
+        }
+      },
+      "sc4_rr_packed": {
+        "probe": "@1020k",
+        "margin": {
+          "@1020k": {
+            "throughput_tok_s": 0.1,
+            "ttft_s": 0.03,
+            "chunk_time_ms": 0.25
+          }
+        },
+        "8kw": {
+          "throughput_tok_s": 35003,
+          "ttft_s": 24.08,
+          "chunk_time_ms": 928
         }
       }
     },

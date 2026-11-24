@@ -2347,7 +2347,7 @@
   sp_config: sc4
 
 # The packed twin of the SC4 [RING,RING] leg above: the same 8 [RING,RING] 4x4 stages and golden tail, two 2,560-token
-# chunks per forward, traced, with D2H acks from each stage leader's chips. PCC-gated only (PREFILL_PERF_GATE=0).
+# chunks per forward, traced, with D2H acks from each stage leader's chips. PCC- and perf-gated (glm53.sc4_rr_packed).
 - name: "(GLM-5.3-744B) disaggregated prefill 8x[4,4] [RING,RING] packed KV accuracy 1M tail@2.5k, two chunks per forward, SC4"
   cmd: |
     set -euo pipefail
@@ -2356,7 +2356,7 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
-    export PREFILL_PERF_GATE=0 TABLE_WAIT_SECS=3000 PREFILL_STALL_SECS=600
+    export TABLE_WAIT_SECS=3000 PREFILL_STALL_SECS=600
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc4_rr --variant packed
   test_type: prefill_runner_kv_pcc
   test_tags: [glm_5_3, runner, kv_cache, glm53_trace, glm_packed]
