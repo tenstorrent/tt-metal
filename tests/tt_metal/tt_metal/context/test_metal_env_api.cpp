@@ -5,9 +5,14 @@
 #include <gtest/gtest.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <cstdlib>
 #include <filesystem>
 #include <limits>
+#include <optional>
 #include <stdexcept>
+#include <string>
+#include <string_view>
+#include <vector>
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -16,6 +21,8 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_accessor.hpp"
 #include "impl/device/mock_device_util.hpp"
+#include "impl/drisc_service/seat_lock.hpp"
+#include "tt_metal/llrt/hal.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 
 namespace tt::tt_metal {
@@ -445,6 +452,101 @@ TEST(MetalEnv, FailedCreateUnitMeshesDoesNotLeakContext) {
     }
 
     EXPECT_EQ(next_free_context_id(mock_path).get(), baseline.get());
+}
+
+// Seat locks against a real MetalEnv. Needs Blackhole silicon whose firmware turns the DRAM programmable cores on.
+// Seat locks exclude each other within one process too, so this process stands in for another one (a DRISC service
+// client, say). Opens no device, so no DRISC is touched whatever the override says.
+class MetalEnvSeatLocks : public ::testing::Test {
+protected:
+    static constexpr const char* override_var = "TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES";
+
+    void SetUp() override {
+        if (const char* value = std::getenv(override_var)) {
+            saved_override_ = value;
+        }
+        // Unset, metal decides from the firmware.
+        unsetenv(override_var);
+        MetalEnv env;
+        const auto& cluster = MetalEnvAccessor(env).impl().get_cluster();
+        if (cluster.arch() != tt::ARCH::BLACKHOLE || cluster.get_target_device_type() != tt::TargetDevice::Silicon) {
+            GTEST_SKIP() << "Seat locks guard the DRAM programmable cores of Blackhole silicon only";
+        }
+        if (!dram_cores_on(env)) {
+            GTEST_SKIP() << "This firmware leaves the DRAM programmable cores off";
+        }
+        for (const ChipId chip : cluster.all_chip_ids()) {
+            const uint64_t asic_id = cluster.get_unique_chip_ids().at(chip);
+            for (const CoreCoord& core : cluster.get_soc_desc(chip).get_metal_dram_cores(CoordSystem::NOC0)) {
+                seats_.push_back({
+                    .asic_id = asic_id,
+                    .noc0_x = static_cast<uint32_t>(core.x),
+                    .noc0_y = static_cast<uint32_t>(core.y),
+                });
+            }
+        }
+    }
+
+    void TearDown() override {
+        if (saved_override_.has_value()) {
+            setenv(override_var, saved_override_->c_str(), /*overwrite=*/1);
+        } else {
+            unsetenv(override_var);
+        }
+    }
+
+    static bool dram_cores_on(MetalEnv& env) {
+        return MetalEnvAccessor(env).impl().get_hal().has_programmable_core_type(HalProgrammableCoreType::DRAM);
+    }
+
+    // The seat of every DRAM core a MetalEnv programs on this host.
+    std::vector<internal::drisc_service::SeatId> seats_;
+
+private:
+    std::optional<std::string> saved_override_;
+};
+
+// While another process holds the seats, a MetalEnv turns its DRAM programmable cores off, fails when they are forced
+// on, and turns them on again once the seats are free.
+TEST_F(MetalEnvSeatLocks, LeavesDramCoresWhoseSeatsAreHeld) {
+    std::vector<internal::drisc_service::SeatLock> held;
+    for (const internal::drisc_service::SeatId& seat : seats_) {
+        std::optional<internal::drisc_service::SeatLock> lock =
+            internal::drisc_service::SeatLock::try_acquire_client(seat);
+        ASSERT_TRUE(lock.has_value()) << "another process holds the seat of DRAM core (" << seat.noc0_x << ", "
+                                      << seat.noc0_y << ")";
+        held.push_back(std::move(*lock));
+    }
+    {
+        MetalEnv env;
+        EXPECT_FALSE(dram_cores_on(env)) << "metal turned its DRAM programmable cores on while their seats were held";
+    }
+    setenv(override_var, "1", /*overwrite=*/1);
+    try {
+        MetalEnv env;
+        ADD_FAILURE() << "metal started with its DRAM programmable cores forced on while their seats were held";
+    } catch (const std::exception& e) {
+        EXPECT_NE(std::string_view(e.what()).find("holds the seat of"), std::string_view::npos) << e.what();
+    }
+    unsetenv(override_var);
+    held.clear();
+    MetalEnv env;
+    EXPECT_TRUE(dram_cores_on(env)) << "metal kept its DRAM programmable cores off after the seats were freed";
+}
+
+// One held seat turns every DRAM core off, so metal must give back the seats it took before reaching the held one.
+TEST_F(MetalEnvSeatLocks, ReleasesEverySeatWhenOneIsHeld) {
+    ASSERT_FALSE(seats_.empty());
+    const std::optional<internal::drisc_service::SeatLock> last =
+        internal::drisc_service::SeatLock::try_acquire_client(seats_.back());
+    ASSERT_TRUE(last.has_value()) << "another process holds the seat of the last DRAM core";
+    MetalEnv env;
+    ASSERT_FALSE(dram_cores_on(env)) << "metal turned its DRAM programmable cores on while a seat was held";
+    for (size_t i = 0; i + 1 < seats_.size(); i++) {
+        EXPECT_TRUE(internal::drisc_service::SeatLock::try_acquire_exclusive(seats_[i]).has_value())
+            << "metal kept the seat of DRAM core (" << seats_[i].noc0_x << ", " << seats_[i].noc0_y
+            << ") with its DRAM programmable cores off";
+    }
 }
 
 }  // namespace tt::tt_metal
