@@ -54,10 +54,6 @@ LAUNCHER_STDERR_DRAIN_S = 2.0
 # fixed: `mpirun --version`, run to tell Open MPI's major version.
 MPI_VERSION_PROBE_TIMEOUT_S = 10.0
 
-# The launcher's own transport to other hosts (prterun's ssh / srun to each remote daemon): not part of the job's ranks,
-# so never a leftover; each ends when its remote daemon exits.
-LAUNCHER_TRANSPORT = frozenset({"ssh", "srun", "rsh", "qrsh", "blaunch"})
-
 # --- exit codes ------------------------------------------------------------------------------------------------------
 PRTE_TIMEOUT_EXIT_CODE = 241  # a job stopped at tt-run's --job-timeout, or by PRRTE's own --timeout (its code)
 
@@ -431,28 +427,48 @@ class LaunchedJob:
         return removed
 
     @staticmethod
-    def _wait_gone(pids: List[int], timeout_s: float, wake_fd: Optional[int] = None) -> None:
-        """Block until every pid has exited (a zombie counts), timeout_s has passed, or wake_fd is readable (a signal at
-        tt-run): one pidfd per process (Linux 5.3+), no polling."""
-        fds = []
-        for pid in pids:
-            try:
-                fds.append(os.pidfd_open(pid))
-            except ProcessLookupError:
-                pass
+    def _wait_gone(pidfds: List[int], timeout_s: float, wake_fd: Optional[int] = None) -> None:
+        """Block until every process has exited (its pidfd is readable; a zombie counts), timeout_s has passed, or
+        wake_fd is readable (a signal at tt-run). No polling."""
+        fds = list(pidfds)
         end = time.monotonic() + timeout_s
-        try:
-            while fds and time.monotonic() < end:
-                left = max(0.0, end - time.monotonic())  # read once: a second read can be past the end
-                ready, _, _ = select.select(fds + ([wake_fd] if wake_fd is not None else []), [], [], left)
-                if wake_fd is not None and wake_fd in ready:
-                    return
-                for fd in ready:
-                    fds.remove(fd)
-                    os.close(fd)
-        finally:
-            for fd in fds:
-                os.close(fd)
+        while fds and time.monotonic() < end:
+            left = max(0.0, end - time.monotonic())  # read once: a second read can be past the end
+            ready, _, _ = select.select(fds + ([wake_fd] if wake_fd is not None else []), [], [], left)
+            if wake_fd is not None and wake_fd in ready:
+                return
+            fds = [fd for fd in fds if fd not in ready]
+
+    @staticmethod
+    def _alive(pidfd: int) -> bool:
+        """Whether the process behind a pidfd is still running (its pidfd turns readable when it exits)."""
+        return not select.select([pidfd], [], [], 0)[0]
+
+    def _watch(self, pids: List[int]) -> Dict[int, int]:
+        """The pidfd of each of these processes (opened once, kept for the job), so every wait and signal reaches that
+        process and never another one that reuses its pid. A pid that cannot be opened (gone, or not a process this
+        tt-run can address: a thread, another pid namespace) is left alone: never waited for, never signalled."""
+        out = {}
+        for pid in pids:
+            if pid not in self._pidfds and pid not in self._unwatchable:
+                try:
+                    self._pidfds[pid] = os.pidfd_open(pid)
+                except ProcessLookupError:
+                    continue
+                except OSError as e:
+                    self._unwatchable.add(pid)
+                    logger.warning(
+                        f"{TT_RUN_PREFIX} cannot watch pid {pid} ({e.strerror}): it is left alone, never signalled"
+                    )
+                    continue
+            if pid in self._pidfds:
+                out[pid] = self._pidfds[pid]
+        return out
+
+    def _close_pidfds(self) -> None:
+        for fd in self._pidfds.values():
+            os.close(fd)
+        self._pidfds.clear()
 
     @staticmethod
     def _still_running(pid: int) -> bool:
@@ -487,6 +503,8 @@ class LaunchedJob:
         self._guard: Optional[subprocess.Popen] = None  # tt-run-rank --guard: stops the job if tt-run is killed
         self._guard_fd: Optional[int] = None  # the write end of the guard's stdin
         self.ended: List[int] = []  # ranks the teardown had to end itself (the launcher should have)
+        self._pidfds: Dict[int, int] = {}  # leftovers' pidfds: every wait and signal goes through them (no pid reuse)
+        self._unwatchable: set = set()  # leftovers whose pidfd could not be opened: left alone
         self._previous_handlers: dict = {}
         self._teardown = contextlib.ExitStack()
         self._abort_seen = False  # prterun announced a rank's MPI_Abort (the prrte#2815 guard arms on this)
@@ -744,12 +762,15 @@ class LaunchedJob:
                 logger.warning(f"{TT_RUN_PREFIX} the job is paused; fg or bg resumes it (the ranks get SIGCONT)")
                 self._pause_self()
 
-    def _pass_to(self, pids: List[int]) -> float:
-        """Pass the signals tt-run received on to these processes directly: the job's leftovers once the launcher has
-        returned, when there is no job control left to reach them through. Returns the seconds tt-run was paused."""
+    def _pass_to(self, leftovers: Dict[int, int]) -> float:
+        """Pass the signals tt-run received on to these processes directly (through their pidfds): the job's leftovers
+        once the launcher has returned, when there is no job control left to reach them through. Returns the seconds
+        tt-run was paused."""
         pending, self.passed[:] = list(self.passed), []
         paused = 0.0
-        pids = [pid for pid in pids if self._parent(pid) not in pids]  # as the ranks got it, not their children
+        pids = [
+            pid for pid in leftovers if self._parent(pid) not in leftovers
+        ]  # as the ranks got it, not their children
         for i, signum in enumerate(pending):
             if i > 0 and pending[i - 1] == signum:
                 continue
@@ -757,7 +778,7 @@ class LaunchedJob:
             send = signal.SIGSTOP if signum == signal.SIGTSTP else signum
             for pid in pids:
                 try:
-                    os.kill(pid, send)
+                    signal.pidfd_send_signal(leftovers[pid], send)
                 except ProcessLookupError:
                     pass
             if pids:
@@ -933,18 +954,14 @@ class LaunchedJob:
 
     def _survivors(self) -> List[int]:
         """Live pids of this job on this host — session id catches the ranks, process group catches a re-sessioned
-        launcher — excluding this harness, the launcher itself and the launcher's transport to other hosts (its ssh
-        or srun sessions to the remote daemons, which end with them). Best effort: /proc is racy."""
+        launcher — excluding this harness and the launcher itself. Best effort: /proc is racy."""
         out = []
         for d in os.listdir("/proc"):
             if not d.isdigit():
                 continue
             try:
                 with open(f"/proc/{d}/stat") as fh:
-                    head, tail = fh.read().rsplit(")", 1)
-                if head.split("(", 1)[1] in LAUNCHER_TRANSPORT:
-                    continue  # the launcher's session to a remote daemon, not a rank: it ends when that daemon does
-                fields = tail.split()
+                    fields = fh.read().rsplit(")", 1)[1].split()
                 pgrp, session = int(fields[2]), int(fields[3])  # after comm: state ppid pgrp session ...
                 pid = int(d)
                 if fields[0] == "Z":
@@ -967,7 +984,14 @@ class LaunchedJob:
         failed = self.proc is not None and self.proc.returncode not in (None, 0)
         stopping = self.forwarded or self.forced_why or self.stop_sent or self._abort_seen or failed
         settle_s = 0.0 if stopping else self.grace
-        survivors = self._survivors()
+        try:
+            self._end_watched(stopping, settle_s)
+        finally:
+            self._close_pidfds()
+
+    def _end_watched(self, stopping, settle_s: float) -> None:
+        """_end_survivors' body, on the leftovers' pidfds (see _watch)."""
+        survivors = self._watch(self._survivors())
         if survivors and settle_s:
             logger.warning(
                 f"{TT_RUN_PREFIX} {len(survivors)} process(es) of the job still running on {socket.gethostname()} "
@@ -985,13 +1009,13 @@ class LaunchedJob:
                 # early; any other signal goes on to these processes, as it would have to the ranks, and the wait goes
                 # on (a Ctrl-Z pauses its clock too).
                 while survivors and not self.forwarded and time.monotonic() < deadline:
-                    self._wait_gone(survivors, deadline - time.monotonic(), wake_r)
+                    self._wait_gone(list(survivors.values()), deadline - time.monotonic(), wake_r)
                     try:
                         while os.read(wake_r, 512):
                             pass
                     except BlockingIOError:
                         pass
-                    survivors = self._survivors()
+                    survivors = {p: fd for p, fd in self._watch(self._survivors()).items() if self._alive(fd)}
                     deadline += self._pass_to(survivors)
             finally:
                 signal.set_wakeup_fd(previous_wakeup)
@@ -999,7 +1023,7 @@ class LaunchedJob:
                 os.close(wake_w)
             settle_s = time.monotonic() - settle_t0  # what it waited, for the message below
             stopping = stopping or self.forwarded
-            survivors = self._survivors()
+            survivors = {p: fd for p, fd in self._watch(self._survivors()).items() if self._alive(fd)}
         if not survivors:
             return
         detail = "\n".join(self._describe(pid) for pid in survivors)
@@ -1019,13 +1043,13 @@ class LaunchedJob:
             )
         self.ended = list(survivors)
         for sig in (signal.SIGTERM, signal.SIGKILL):
-            for pid in survivors:
+            for fd in survivors.values():
                 try:
-                    os.kill(pid, sig)
+                    signal.pidfd_send_signal(fd, sig)  # this process, never another that reuses its pid
                 except ProcessLookupError:
                     pass
-            self._wait_gone(survivors, KILL_GRACE_S)
-            survivors = [pid for pid in survivors if self._still_running(pid)]
+            self._wait_gone(list(survivors.values()), KILL_GRACE_S)
+            survivors = {p: fd for p, fd in survivors.items() if self._alive(fd)}
             if not survivors:
                 return
 

@@ -2629,22 +2629,40 @@ class TestJobOwnership:
         assert {k: seen["env"][k] for k in rank_env} == rank_env, "not the rank environment mpirun's ranks get"
         assert seen["env"]["TT_RUN_RANK"] == "0" and "TT_METAL_RUNTIME_ROOT" in seen["env"], seen["env"]
 
-    def test_the_launchers_ssh_sessions_are_not_leftovers(self, tmp_path):
+    def test_a_leftover_that_exits_during_the_wait_is_not_a_leak_whatever_its_name(self, tmp_path):
         import shutil
-        import subprocess
         import time
 
         from ttnn.distributed.ttrun import run_launcher
 
-        # prterun reaches the remote daemons through ssh (or srun); those sessions can outlive prterun by a moment
-        # and end with their daemon. They are not ranks: a clean job must not wait on them (SC4 failed on that).
+        # prterun reaches the remote daemons through ssh (or srun); those sessions can outlive prterun by a moment and
+        # end with their daemon. No name is special: like any process still exiting after a clean launcher exit, it is
+        # waited for, and the job ends clean once it is gone.
         ssh = tmp_path / "ssh"
         shutil.copy("/bin/sleep", ssh)  # a process whose name is ssh
         t0 = time.time()
-        text, rc = self._logged_rc(lambda: run_launcher(["bash", "-c", f"({ssh} 20 &) ; exit 0"], cwd=tmp_path))
-        assert rc == 0 and time.time() - t0 < 10, text
-        assert "still running" not in text and "outcome=clean exit=0" in text, text
-        subprocess.run(["pkill", "-f", f"{ssh} 2[0]"], check=False)
+        text, rc = self._logged_rc(lambda: run_launcher(["bash", "-c", f"({ssh} 2 &) ; exit 0"], cwd=tmp_path))
+        assert rc == 0 and time.time() - t0 < 20, text
+        assert "a leak" not in text and "outcome=clean exit=0" in text, text
+
+    def test_a_leftover_that_cannot_be_watched_is_left_alone_not_a_crash(self, tmp_path, monkeypatch):
+        import errno
+
+        from ttnn.distributed import ttrun as m
+
+        # pidfd_open can refuse a pid that is no longer a process tt-run can address (EINVAL: a thread reusing the
+        # number, another pid namespace). That pid is left alone, never signalled, and the job keeps its own code
+        # (the SC4 multicast run at 71e3b64 exited 1 on an unhandled EINVAL here).
+        def refuse(pid, flags=0):
+            raise OSError(errno.EINVAL, "Invalid argument")
+
+        sent = []
+        monkeypatch.setattr(m.os, "pidfd_open", refuse)
+        monkeypatch.setattr(m.signal, "pidfd_send_signal", lambda fd, sig: sent.append(sig))
+        text, rc = self._logged_rc(lambda: m.run_launcher(["bash", "-c", "(sleep 3 &) ; exit 0"], cwd=tmp_path))
+        assert rc == 0 and "outcome=clean exit=0" in text, text
+        assert "cannot watch pid" in text and "left alone, never signalled" in text, text
+        assert sent == [], "a pid that could not be opened must never be signalled"
 
     def test_the_prterun_address_is_read_only_from_this_users_own_files(self, tmp_path, monkeypatch):
         import tempfile
