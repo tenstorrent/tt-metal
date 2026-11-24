@@ -473,9 +473,11 @@ class TestConfig:
         TestConfig.LLK_ROOT = sources_path
         TestConfig.TESTS_WORKING_DIR = TestConfig.LLK_ROOT / "tests"
         # None found is not an error here: a session that never compiles needs no toolchain (require_toolchain()).
-        TestConfig.SFPI_ROOT = toolchain.find_sfpi_root(
-            TestConfig.LLK_ROOT
-        ) or toolchain.in_tree_sfpi_root(TestConfig.LLK_ROOT)
+        # Then the first place looked in stands in, so a named root that is missing is not replaced by the in-tree one.
+        TestConfig.SFPI_ROOT = (
+            toolchain.find_sfpi_root(TestConfig.LLK_ROOT)
+            or toolchain.candidate_sfpi_roots(TestConfig.LLK_ROOT)[0]
+        )
         TestConfig.TOOL_PATH = TestConfig.SFPI_ROOT / "compiler/bin"
 
         # The harness's own helper tree, not LLK_HOME's: its Python and these sources are one commit.
