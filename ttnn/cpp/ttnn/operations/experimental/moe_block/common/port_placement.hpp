@@ -34,8 +34,10 @@ struct PortKey {
 using PortCores = std::map<PortKey, tt::tt_metal::CoreCoord>;  // logical worker core per port
 
 // One port core per (chip, direction, link), from `allowed` (logical cores, e.g. the ones another op leaves free;
-// nullopt: the whole grid): per chip the free core fewest NoC1 hops from the link's Ethernet core (the sender is on
-// NoC1), each core used at most once.
+// nullopt: the whole grid), each core used at most once: per chip the ports heaviest first (the destination chips the
+// fabric's first hop sends their way), each on the free core with the fewest NoC1 hops from its link's Ethernet core
+// (the sender is on NoC1) plus a cost for the load already placed in that core's column - a port's rows go north up
+// its column first, so ports sharing a column share its links.
 PortCores place_ports(
     tt::tt_metal::distributed::MeshDevice& mesh_device,
     const MeshPlan& plan,
