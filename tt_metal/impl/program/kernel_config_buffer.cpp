@@ -35,19 +35,34 @@
 
 namespace tt::tt_metal::experimental {
 
-KernelConfigBuffer::KernelConfigBuffer(std::shared_ptr<KernelConfigBufferImpl> impl) : impl_(std::move(impl)) {}
+KernelConfigBuffer::KernelConfigBuffer(std::unique_ptr<KernelConfigBufferImpl> impl) : impl_(std::move(impl)) {
+    TT_FATAL(impl_ != nullptr, "A kernel config buffer needs an implementation");
+}
+KernelConfigBuffer::~KernelConfigBuffer() = default;
+KernelConfigBuffer::KernelConfigBuffer(KernelConfigBuffer&&) noexcept = default;
+KernelConfigBuffer& KernelConfigBuffer::operator=(KernelConfigBuffer&&) noexcept = default;
 
-uint32_t KernelConfigBuffer::max_size() const { return impl_->max_size(); }
+KernelConfigBufferImpl& KernelConfigBuffer::impl() {
+    TT_FATAL(impl_ != nullptr, "Kernel config buffer was moved from");
+    return *impl_;
+}
+
+const KernelConfigBufferImpl& KernelConfigBuffer::impl() const {
+    TT_FATAL(impl_ != nullptr, "Kernel config buffer was moved from");
+    return *impl_;
+}
+
+uint32_t KernelConfigBuffer::max_size() const { return impl().max_size(); }
 
 uint32_t KernelConfigBuffer::size(const distributed::MeshCoordinate& device_coord, const CoreCoord& core) const {
-    return impl_->size(device_coord, core);
+    return impl().size(device_coord, core);
 }
 
 DeviceAddr KernelConfigBuffer::address(const distributed::MeshCoordinate& device_coord, const CoreCoord& core) const {
-    return impl_->address(device_coord, core);
+    return impl().address(device_coord, core);
 }
 
-void KernelConfigBuffer::deallocate() { impl_->deallocate(); }
+void KernelConfigBuffer::deallocate() { impl().deallocate(); }
 
 KernelConfigBufferImpl::KernelConfigBufferImpl(std::vector<Shards> shards, const distributed::MeshDevice& mesh_device) :
     shards_(std::move(shards)), mesh_device_id_(mesh_device.id()) {
@@ -190,7 +205,7 @@ KernelConfigBuffer CreateKernelConfigBuffer(distributed::MeshDevice& device, dis
         }
     }
     TT_FATAL(!shards.empty(), "The workload has no Tensix kernels on this host's devices, so no kernel binaries");
-    return KernelConfigBuffer(std::make_shared<KernelConfigBufferImpl>(std::move(shards), device));
+    return KernelConfigBuffer(std::make_unique<KernelConfigBufferImpl>(std::move(shards), device));
 }
 
 void EnqueueMeshWorkload(

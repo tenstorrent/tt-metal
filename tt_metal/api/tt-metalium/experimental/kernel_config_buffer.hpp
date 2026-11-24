@@ -32,10 +32,18 @@ class KernelConfigBufferImpl;
 // dispatch only.
 //
 // Nothing is attached to a program: pass the buffer to each launch (EnqueueMeshWorkload below).
-// Copies share one allocation; the L1 is freed by deallocate() or when the last copy is destroyed.
+//
+// Ownership: the buffer owns its L1, which is freed by deallocate() or when the buffer is destroyed. It is move-only;
+// moving it moves the L1 with it, and a moved-from buffer cannot be used. The caller keeps it alive and allocated while
+// a launch that runs from it can still be executing.
 class KernelConfigBuffer {
 public:
-    explicit KernelConfigBuffer(std::shared_ptr<KernelConfigBufferImpl> impl);
+    explicit KernelConfigBuffer(std::unique_ptr<KernelConfigBufferImpl> impl);
+    ~KernelConfigBuffer();
+    KernelConfigBuffer(KernelConfigBuffer&&) noexcept;
+    KernelConfigBuffer& operator=(KernelConfigBuffer&&) noexcept;
+    KernelConfigBuffer(const KernelConfigBuffer&) = delete;
+    KernelConfigBuffer& operator=(const KernelConfigBuffer&) = delete;
 
     // Bytes of the largest shard on any device.
     uint32_t max_size() const;
@@ -44,14 +52,14 @@ public:
     uint32_t size(const distributed::MeshCoordinate& device_coord, const CoreCoord& core) const;
     // Shard address on `core` of the device at `device_coord`. Differs per core and per device.
     DeviceAddr address(const distributed::MeshCoordinate& device_coord, const CoreCoord& core) const;
-    // Frees the L1 now, for every copy. Launching with a deallocated buffer is an error.
+    // Frees the L1 now. Launching with a deallocated buffer is an error.
     void deallocate();
 
-    KernelConfigBufferImpl& impl() { return *impl_; }
-    const KernelConfigBufferImpl& impl() const { return *impl_; }
+    KernelConfigBufferImpl& impl();
+    const KernelConfigBufferImpl& impl() const;
 
 private:
-    std::shared_ptr<KernelConfigBufferImpl> impl_;
+    std::unique_ptr<KernelConfigBufferImpl> impl_;
 };
 
 // Allocates a buffer on the Tensix cores of `workload`'s programs, on each of this host's devices. Compiles and lays
