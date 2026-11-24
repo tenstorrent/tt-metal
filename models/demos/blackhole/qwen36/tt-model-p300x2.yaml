@@ -73,8 +73,9 @@ runtime:
   # Then 0c319a7 + c0ec046 (an optional preempt_request(slot, token_ids) hook: Strata S3 swap) and ed900d6 (on a
   # model whose SpecPlan sets narrow_decode_resolves_commits, requests needing host-only sampling -- logprobs,
   # structured output, logit_bias, bad_words, allowed_token_ids, min_tokens -- are decoded without speculation
-  # instead of refused; every step stays an ordinary host-sampled decode while one is live).
-  plugin: {repo: https://github.com/changh95/vllm-tt-plugin, ref: ed900d628601b63f20ee5d3e726483a0acc5c154}
+  # instead of refused; every step stays an ordinary host-sampled decode while one is live), 615dfba (min_p /
+  # logit_bias too: upstream's speculative-launch refusal lifted on such a plan, every builtin logits processor on host).
+  plugin: {repo: https://github.com/changh95/vllm-tt-plugin, ref: 615dfbadfa9f33f6f48bad180021456f29178683}
   extra_models_dir: qwen36_resident/vllm_models    # main_class qwen36_resident.generator_vllm:Qwen36ResidentForCausalLM
 
 serve:                         # common to every profile; a profile's env MERGES over this (it cannot unset a key)
