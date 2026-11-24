@@ -33,8 +33,7 @@ import time
 
 import noc_walk
 from chunk_sched import dbi_lines, tray_of
-from numeric_check import umd_map_from_stdout
-from quiet_clock import kmd_pci
+from quiet_clock import pci_id_bdf
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--rows", required=True)
@@ -64,18 +63,8 @@ def row(**kw):
 
 
 def chip_id(m, i):
-    """(device id D, BDF or ''): the mesh's metal id -> PCIe id D (UMD's 'Opening local chip ids/PCIe ids' line, as
-    chunk_load does), then D -> BDF by sysfs, else by --map. Raises when the mesh's ids do not read."""
-    mid = list(m.get_device_ids())[i]  # row-major in the mesh, as get_device_tensors
-    umd = umd_map_from_stdout()
-    did = umd.get(mid, mid) if umd else mid
-    try:
-        bdf = kmd_pci().get(did) or next(
-            (w[0] for w in (l.split() for l in open(a.map)) if len(w) == 2 and w[1] == str(did)), ""
-        )
-    except OSError:
-        bdf = ""
-    return did, bdf
+    """(device id D, BDF or ''); raises when the mesh's ids do not read."""
+    return pci_id_bdf(list(m.get_device_ids())[i], a.map)  # row-major in the mesh, as get_device_tensors
 
 
 def chip_name(m, i, r, c):

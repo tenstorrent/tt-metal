@@ -18,7 +18,9 @@ Nothing here reads or changes a power limit: only the two clock-state messages a
 import os
 import threading
 import time
+
 from chunk_sched import tray_of  # noqa: E402  the one tray_of, bus & 0xF0 -> tray 1-4
+from numeric_check import umd_map_from_stdout  # noqa: E402
 
 IDLE_MHZ = 800  # cold idle AICLK (ub0_repro.IDLE_MHZ)
 LOST_AICLK = 100000  # tt_aiclk reads 0xFFFFFFFF (or fails) once a chip is gone
@@ -220,6 +222,20 @@ def kmd_pci():
     for d in glob.glob(os.path.join(os.environ.get("UB0_SYS_ROOT", "/sys"), "class", "tenstorrent", "tenstorrent!*")):
         out[int(d.rsplit("!", 1)[1])] = os.path.basename(os.path.realpath(os.path.join(d, "device")))
     return out
+
+
+def pci_id_bdf(mid, mapf):
+    """(device id D, BDF or ''): metal id mid -> PCIe id D (UMD's 'Opening local chip ids/PCIe ids' line in this
+    process's stdout file, as chunk_load does), then D -> BDF by sysfs, else by mapf's '<bdf> <D>' rows."""
+    umd = umd_map_from_stdout()
+    did = umd.get(mid, mid) if umd else mid
+    try:
+        bdf = kmd_pci().get(did) or next(
+            (w[0] for w in (l.split() for l in open(mapf)) if len(w) == 2 and w[1] == str(did)), ""
+        )
+    except OSError:
+        bdf = ""
+    return did, bdf
 
 
 if __name__ == "__main__":
