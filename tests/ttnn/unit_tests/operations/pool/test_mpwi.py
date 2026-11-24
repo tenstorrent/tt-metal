@@ -9,6 +9,7 @@ import pytest
 
 from tests.sweep_framework.sweep_utils.pool2d_common import run_max_pool2d_with_indices, validate_maxpool2d_indices
 from ttnn.operations.pool import golden_maxpool2d
+from tt_py_test_utils_common.utility_functions import run_for_wormhole_b0
 
 pytestmark = pytest.mark.use_module_device
 
@@ -304,6 +305,7 @@ def test_mpwi_32_bit_index(device, ttnn_dtype, input_spec):
         ((3, 3), (1, 1)),  # 9-row SFPU network
     ],
 )
+@run_for_wormhole_b0("the below -inf padding sentinel is Wormhole only")
 def test_mpwi_padded_all_neg_inf(device, kernel_size, padding):
     """Every window ties on -inf with its padding; each returned index must be a valid input
     position inside its own window (padding positions are not input elements)."""
