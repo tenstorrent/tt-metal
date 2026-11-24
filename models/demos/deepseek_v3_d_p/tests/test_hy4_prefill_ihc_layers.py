@@ -110,10 +110,16 @@ class _SiteRecorder:
 
         orig_pre, orig_post = TtPrefillBlock._ihc_pre, TtPrefillBlock._ihc_post
 
+        def scored(layer, s):
+            """The reference streams cover the first layers only; deeper sites run unscored (KV is still scored)."""
+            return (REF_DIR / f"streams_L{layer}_{s}.pt").is_file()
+
         def pre(wrap, streams):
             layer, s = site(self.k_pre)
             self.k_pre += 1
             y, post = orig_pre(wrap, streams)
+            if not scored(layer, s):
+                return y, post
             name = f"L{layer}.{s}"
             dev_in = host(streams)
             ref_in = ref_before(layer, s)
@@ -133,6 +139,8 @@ class _SiteRecorder:
             layer, s = site(self.k_post)
             self.k_post += 1
             new = orig_post(wrap, sublayer_out, streams, post, free_streams)
+            if not scored(layer, s):
+                return new
             name = f"L{layer}.{s}"
             dev_out = host(new)
             ref_out = _ref_streams(f"L{layer}_{s}")
