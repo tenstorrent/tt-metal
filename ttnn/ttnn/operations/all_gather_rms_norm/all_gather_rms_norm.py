@@ -98,6 +98,9 @@ SUPPORTED = {
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
     ],
+    # Where the output lands. "l1_interleaved" (ttnn.L1_MEMORY_CONFIG, the MLA q_a norm's real call at 640 tokens per
+    # chip) is a refinement candidate: not in the list yet.
+    "output_placement": ["dram_interleaved", "l1_sharded"],
     "cluster_axis": [0, 1],
     "topology": [Topology.Linear, Topology.Ring],
     "num_links": [1, 2],
@@ -153,6 +156,15 @@ def _check_weight(name, w, W):
         raise ValueError(f"all_gather_rms_norm: {name} shape {shape} != {want} for W={W} ({w.layout})")
 
 
+def _output_placement(mc):
+    """The output_placement axis value of a requested output memory config (None = the default, DRAM interleaved)."""
+    if mc is None:
+        return "dram_interleaved"
+    if mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED:
+        return "l1_interleaved" if mc.buffer_type == ttnn.BufferType.L1 else "dram_interleaved"
+    return "l1_sharded"
+
+
 def validate(
     input_tensor,
     *,
@@ -203,6 +215,9 @@ def validate(
         "norm_type": norm_type,
         "beta_mode": "beta" if beta is not None else "no_beta",
         "memory_layout": input_tensor.memory_config().memory_layout,
+        "output_placement": _output_placement(
+            output_tensor.memory_config() if output_tensor is not None else memory_config
+        ),
         "cluster_axis": cluster_axis,
         "topology": topology,
         "num_links": num_links,

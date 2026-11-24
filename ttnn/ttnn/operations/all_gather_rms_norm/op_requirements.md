@@ -197,3 +197,45 @@ member has cw == 1); the LN perf case keeps the identical path (LN 21.27 µs, fo
 pre-existing CB OOM (fails identically on the R3 kernels; host CB plan unchanged since R3): ~1.2 MB of CBs
 (`cb_ln_sq` 512 KB, γ / β 256 KB each at cw = 256) beside the caller's 835 KB of L1 shards. Fitting it needs
 column-chunked T and a γ / β-streaming normalize for wide sharded LN rows — outside this refinement's scope.
+
+
+### [ ] Refinement 5 — L1 INTERLEAVED output (the real call of the MLA q_a norm)
+
+**Type**: feature (contract)
+
+**Goal**: accept `memory_config=ttnn.L1_MEMORY_CONFIG` (and an `output_tensor` in L1 interleaved) for an interleaved input,
+so `SUPPORTED["output_placement"]` gains `"l1_interleaved"`. Today `validate()` refuses it (`interleaved output must be in
+DRAM`). The model asks for exactly this: the MLA q_a norm at 640 tokens per chip on Blackhole writes its output into L1
+interleaved because the q_b_proj matmul that follows reads its input from L1 (models/demos/deepseek_v3_d_p/tt/mla/mla.py
+`_get_act_mem_config("q_b_proj", ...)`, mla_config.py). The golden suite now has the axis (feature_spec `output_placement`:
+`dram_interleaved` / `l1_interleaved` / `l1_sharded`, coupled to `memory_layout` in INVALID), and a loose case with the real call
+(`1x1x640x384`, RMS, bf16, gamma ROW_MAJOR, Ring, 2 links, `output_placement=l1_interleaved`). The INPUT stays DRAM interleaved
+(that is what the model passes); do not add L1 interleaved input.
+
+**What makes it more than a flag** (read `op_design.md`, `l1_ledger.md` and `kernels/agrn_port_common.hpp` first): the output
+placement is built around the DRAM bank structure: `nb` = the DRAM bank count (8 on this part), the lane walk is bank-major, a
+"run" is a set of pages consecutive in ONE bank, the port sender precomputes per-bank router-side addresses when
+`nb <= 16` (`fast_banks`), and the own entry is read back from the DRAM bank runs. An L1 interleaved buffer has one bank per worker
+core (~100+ banks), pages go round-robin over them, so a bank holds only a handful of pages of a 640x1536 bf16 output (960 tiles):
+runs are short and the per-bank lane structure and `fast_banks` path do not apply. First make it correct (the generic
+`TensorAccessor` page addressing path: `dst.get_noc_addr(page)` per page, for the peers' writes and for the own read-back), then
+look at packetization.
+
+**L1 budget**: the interleaved output now shares the cores' L1 with the op's statically allocated circular buffers. The failure
+mode seen in this run for sharded cells is `Statically allocated circular buffers ... clash with L1 buffers` (program.cpp:2535).
+For every shape where the interleaved L1 output plus the CBs cannot fit, refuse with a clear `UnsupportedAxisValue` /
+`EXCLUSIONS` entry that carries the measured numbers (not a hang, not a CB clash). The 640x384 / 640x32 / 640x512 production
+shapes must fit.
+
+**Done when**:
+- every `output_placement=l1_interleaved` cell the gate tier selects (`GOLDEN_TIER=gate`) passes or is a documented EXCLUSION, the loose
+  case above passes, and no cell that passed before fails (the completion gate's three bullets hold);
+- `SUPPORTED["output_placement"]` lists `"l1_interleaved"` and `validate()` no longer refuses it for the supported shapes;
+- the op's own acceptance tests (`tests/ttnn/unit_tests/operations/all_gather_rms_norm/test_all_gather_rms_norm.py`) gain L1
+  interleaved output tests: RMS and layer_norm (gamma + beta), bf16 and fp32 DEST, `640x384`, `640x32`, a non-aligned shape, one
+  test that passes a preallocated `output_tensor` in L1 interleaved, and one that checks an interleaved L1 INPUT is still refused;
+- report, with `eval.ccl_perf` (`CCL_PERF_CASES=<the l1 loose case index>`), the fastest-chip time of the L1 interleaved call next
+  to the DRAM call of the same shape. Not a gate; say whether the L1 call is slower than DRAM and by how much, and why.
+
+**Verifier notes**: filed by hand, not by the verifier: a contract gap found when the generated op was checked against the model's real
+call sites (not a golden failure). Local to the output path: the compute kernel and the exchange protocol should not change.
