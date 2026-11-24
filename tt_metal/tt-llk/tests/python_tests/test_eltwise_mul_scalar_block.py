@@ -32,7 +32,7 @@ def test_eltwise_mul_scalar_block(
     block_layout,
     dest_acc,
     dest_sync,
-    addrmod_caller_scoped=False,
+    addrmod_caller_scoped,
     *,
     is_perf=False,
     perf_report=None,
