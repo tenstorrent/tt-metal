@@ -852,7 +852,7 @@ CompiledProgram compile(
         &detail::get_cached_workload<mesh_device_operation_t>,
         std::move(key),
         operation_name,
-        mesh_device);
+        mesh_device->id());
     tt::tt_metal::experimental::program_preparation::compile(*mesh_device, compiled.workload());
     return compiled;
 }
@@ -894,10 +894,10 @@ typename device_operation_t::tensor_return_value_t run(
 
     ttnn::MeshDevice* mesh_device = mesh_device_operation_utils::get_mesh_device(operation_attributes, tensor_args);
     TT_FATAL(
-        mesh_device == &compiled_program.mesh_device(),
+        mesh_device->id() == compiled_program.mesh_device_id(),
         "Device operation \"{}\" was compiled for MeshDevice {}, but its tensors are on MeshDevice {}",
         operation_name,
-        compiled_program.mesh_device().id(),
+        compiled_program.mesh_device_id(),
         mesh_device->id());
 
     if constexpr (HasSkipLaunch<mesh_device_operation_t>) {

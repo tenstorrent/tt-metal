@@ -49,8 +49,13 @@ DeviceAddr KernelConfigBuffer::address(const distributed::MeshCoordinate& device
 
 void KernelConfigBuffer::deallocate() { impl_->deallocate(); }
 
-KernelConfigBufferImpl::KernelConfigBufferImpl(std::vector<Shards> shards, const distributed::MeshDevice* mesh_device) :
-    shards_(std::move(shards)), mesh_device_(mesh_device) {
+KernelConfigBufferImpl::KernelConfigBufferImpl(std::vector<Shards> shards, const distributed::MeshDevice& mesh_device) :
+    shards_(std::move(shards)), mesh_device_id_(mesh_device.id()) {
+    for (const distributed::MeshCoordinate& coord : distributed::MeshCoordinateRange(mesh_device.shape())) {
+        if (mesh_device.impl().is_local(coord)) {
+            device_ids_.emplace(coord, mesh_device.impl().get_device(coord)->id());
+        }
+    }
     TT_FATAL(!shards_.empty(), "A kernel config buffer needs at least one shard");
     for (size_t index = 0; index < shards_.size(); ++index) {
         const Shards& shards = shards_[index];
@@ -80,11 +85,12 @@ const KernelConfigBufferImpl::Shards& KernelConfigBufferImpl::at(ChipId device_i
 }
 
 ChipId KernelConfigBufferImpl::device_id(const distributed::MeshCoordinate& device_coord) const {
+    const auto device_id = device_ids_.find(device_coord);
     TT_FATAL(
-        mesh_device_->impl().is_local(device_coord),
+        device_id != device_ids_.end(),
         "Kernel config buffer has no shard on the device at {}, which is not on this host",
         device_coord);
-    return mesh_device_->impl().get_device(device_coord)->id();
+    return device_id->second;
 }
 
 uint32_t KernelConfigBufferImpl::size(ChipId device_id, const CoreCoord& core) const {
@@ -184,7 +190,7 @@ KernelConfigBuffer CreateKernelConfigBuffer(distributed::MeshDevice& device, dis
         }
     }
     TT_FATAL(!shards.empty(), "The workload has no Tensix kernels on this host's devices, so no kernel binaries");
-    return KernelConfigBuffer(std::make_shared<KernelConfigBufferImpl>(std::move(shards), &device));
+    return KernelConfigBuffer(std::make_shared<KernelConfigBufferImpl>(std::move(shards), device));
 }
 
 void EnqueueMeshWorkload(
@@ -198,11 +204,10 @@ void EnqueueMeshWorkload(
         "A kernel config buffer can only be allocated in slow dispatch mode: fast dispatch places kernel binaries in "
         "its own ring buffer");
     TT_FATAL(buffer.impl().is_allocated(), "Kernel config buffer was deallocated");
-    const distributed::MeshDevice* buffer_device = buffer.impl().mesh_device();
     TT_FATAL(
-        buffer_device == &device,
+        buffer.impl().mesh_device_id() == device.id(),
         "Kernel config buffer is allocated on MeshDevice {}, but the workload is enqueued on MeshDevice {}",
-        buffer_device->id(),
+        buffer.impl().mesh_device_id(),
         device.id());
     // Short-circuit for inactive MeshDevices (no-op), as distributed::EnqueueMeshWorkload does.
     if (device.get_device_ids().empty()) {

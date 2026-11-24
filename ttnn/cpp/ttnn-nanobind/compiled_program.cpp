@@ -17,8 +17,8 @@ namespace ttnn::compiled_program {
 namespace {
 
 tt::tt_metal::experimental::KernelConfigBuffer create_kernel_config_buffer(
-    ttnn::device_operation::CompiledProgram& compiled) {
-    return ttnn::device_operation::create_kernel_config_buffer(compiled);
+    ttnn::MeshDevice& mesh_device, ttnn::device_operation::CompiledProgram& compiled) {
+    return ttnn::device_operation::create_kernel_config_buffer(mesh_device, compiled);
 }
 
 }  // namespace
@@ -50,8 +50,8 @@ void py_module(nb::module_& mod) {
             "Free the buffer's L1 now. Running with a deallocated buffer is an error.");
 
     const char* doc = R"doc(
-        Allocate a kernel config buffer for a compiled program: L1 on its Tensix cores, each core's shard sized for
-        its own kernel group's Tensix kernel binaries, at a per-core address.
+        Allocate a kernel config buffer on a device for a program compiled for it: L1 on the program's Tensix cores,
+        each core's shard sized for its own kernel group's Tensix kernel binaries, at a per-core address.
 
         Pass it to the program's run function to run the binaries from it instead of the KERNEL_CONFIG window, whose
         size then limits only the rest of the kernel configuration: runtime arguments, semaphores, and CB and DFB
@@ -60,13 +60,14 @@ void py_module(nb::module_& mod) {
         Needs slow dispatch and the device opened with ``TT_METAL_ALLOCATOR_MODE_HYBRID=1``.
 
         Args:
+            device (ttnn.MeshDevice): The device ``compiled_program`` was compiled for.
             compiled_program (ttnn.experimental.CompiledProgram): The program to size the buffer for.
 
         Returns:
             KernelConfigBuffer: The buffer.
         )doc";
     ttnn::bind_function<"create_kernel_config_buffer", "ttnn.experimental.">(
-        mod, doc, &create_kernel_config_buffer, nb::arg("compiled_program"));
+        mod, doc, &create_kernel_config_buffer, nb::arg("device"), nb::arg("compiled_program"));
 }
 
 }  // namespace ttnn::compiled_program

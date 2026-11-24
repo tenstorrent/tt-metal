@@ -129,7 +129,7 @@ def test_run_from_kernel_config_buffer(device, expect_error):
     io_tensors = [input_tensor, output_tensor]
     descriptor = copy_descriptor(input_tensor, output_tensor, plain_cb())
     compiled = ttnn.experimental.compile_generic_op(io_tensors, descriptor)
-    buffer = ttnn.experimental.create_kernel_config_buffer(compiled)
+    buffer = ttnn.experimental.create_kernel_config_buffer(device, compiled)
     assert buffer.max_size > 0
 
     ttnn.experimental.run_compiled_program(compiled, io_tensors, descriptor, kernel_config_buffer=buffer)

@@ -11,6 +11,7 @@
 #include <tt-metalium/experimental/kernel_config_buffer.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/program_cache.hpp>
+#include <tt_stl/assert.hpp>
 
 #include "ttnn/distributed/types.hpp"
 
@@ -23,7 +24,7 @@ namespace ttnn::device_operation {
 // attributes and tensors that have the same program cache key, applying their runtime arguments as a cache hit does,
 // optionally from a kernel config buffer (create_kernel_config_buffer).
 //
-// Tied to the MeshDevice it was compiled for. Move-only.
+// Tied to the MeshDevice it was compiled for, which it records by ID only. Move-only.
 class CompiledProgram {
 public:
     // Finds the mesh workload in a CachedProgramFactory (device_operation::detail::get_cached_workload).
@@ -35,12 +36,12 @@ public:
         WorkloadOf workload_of,
         tt::tt_metal::program_cache::detail::ProgramCacheKey key,
         std::string operation_name,
-        ttnn::MeshDevice* mesh_device) :
+        int mesh_device_id) :
         cached_program_factory_(std::move(cached_program_factory)),
         workload_of_(workload_of),
         key_(std::move(key)),
         operation_name_(std::move(operation_name)),
-        mesh_device_(mesh_device) {}
+        mesh_device_id_(mesh_device_id) {}
 
     CompiledProgram(CompiledProgram&&) noexcept = default;
     CompiledProgram& operator=(CompiledProgram&&) noexcept = default;
@@ -55,21 +56,30 @@ public:
     const tt::tt_metal::program_cache::detail::ProgramCacheKey& key() const { return key_; }
     // The device operation it was compiled from.
     const std::string& operation_name() const { return operation_name_; }
-    ttnn::MeshDevice& mesh_device() const { return *mesh_device_; }
+    // ID of the MeshDevice it was compiled for.
+    int mesh_device_id() const { return mesh_device_id_; }
 
 private:
     tt::tt_metal::program_cache::detail::CachedProgramFactory cached_program_factory_;
     WorkloadOf workload_of_;
     tt::tt_metal::program_cache::detail::ProgramCacheKey key_;
     std::string operation_name_;
-    ttnn::MeshDevice* mesh_device_;
+    int mesh_device_id_;
 };
 
-// A kernel config buffer for `compiled` (experimental::CreateKernelConfigBuffer), for device_operation::run to run its
-// Tensix kernel binaries from instead of the KERNEL_CONFIG window. Needs slow dispatch and the device opened with
+// A kernel config buffer on `mesh_device` for `compiled` (experimental::CreateKernelConfigBuffer), for
+// device_operation::run to run its Tensix kernel binaries from instead of the KERNEL_CONFIG window. `mesh_device` must
+// be the MeshDevice `compiled` was compiled for. Needs slow dispatch and the device opened with
 // TT_METAL_ALLOCATOR_MODE_HYBRID=1.
-inline tt::tt_metal::experimental::KernelConfigBuffer create_kernel_config_buffer(CompiledProgram& compiled) {
-    return tt::tt_metal::experimental::CreateKernelConfigBuffer(compiled.mesh_device(), compiled.workload());
+inline tt::tt_metal::experimental::KernelConfigBuffer create_kernel_config_buffer(
+    ttnn::MeshDevice& mesh_device, CompiledProgram& compiled) {
+    TT_FATAL(
+        mesh_device.id() == compiled.mesh_device_id(),
+        "\"{}\" was compiled for MeshDevice {}, not MeshDevice {}",
+        compiled.operation_name(),
+        compiled.mesh_device_id(),
+        mesh_device.id());
+    return tt::tt_metal::experimental::CreateKernelConfigBuffer(mesh_device, compiled.workload());
 }
 
 }  // namespace ttnn::device_operation
