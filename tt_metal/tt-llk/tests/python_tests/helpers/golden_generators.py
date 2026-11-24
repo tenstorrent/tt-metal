@@ -6066,6 +6066,67 @@ class TopKXLGolden:
 
 
 @register_golden
+class TopKXLSortedListGolden:
+    """Dest image of a K-element list that a TopK-XL sort leaves sorted (K = 512/1024/2048).
+
+    The list is 32-bit fused words [bf16 value (31:16) | u16 index (15:0)], and the SFPU
+    compare orders them as sign-magnitude numbers: the value decides, and equal values
+    are told apart by their index bits, larger index above for a positive value and
+    below for a negative one.
+
+    The sorted list is laid out in the stock TopK-XL order. Rank p of the list (0 the
+    first in sort direction) is held by the Dest word at (tile, row, column) of the
+    32x32 tiles, faces in raster order, with, from the most significant bit of p down:
+    column bits [3:0], tile (K = 2048 only), row bit 4, column bit 4, row bits [3:0].
+    A K = 512 list keeps to rows 0..15 of its tile (faces 0 and 1).
+
+    Args:
+        words: integer tensor of the K fused words, in any order.
+        K: list length, 512, 1024 or 2048.
+        ascending: True puts the smallest word at rank 0.
+        fill: the word expected in the Dest words the list does not use (K = 512).
+    Returns:
+        int64 tensor of the expected words in packed Dest order: one tile for K <= 1024,
+        two for K = 2048.
+    """
+
+    TILE = 1024
+    FACE = 16
+
+    @staticmethod
+    def _sign_magnitude_key(word: int) -> int:
+        return -(word & 0x7FFFFFFF) if word & 0x80000000 else word
+
+    def rank_at(self, offset: int, K: int):
+        """Rank of the list held by Dest word `offset`, or None for a word the list does not use."""
+        tile, within_tile = divmod(offset, self.TILE)
+        face, within_face = divmod(within_tile, self.FACE * self.FACE)
+        row = (face // 2) * self.FACE + within_face // self.FACE
+        column = (face % 2) * self.FACE + within_face % self.FACE
+        if K == 512 and row >= self.FACE:
+            return None
+        return (
+            (K // self.FACE) * (column % self.FACE)
+            + 64 * tile
+            + 32 * (row // self.FACE)
+            + self.FACE * (column // self.FACE)
+            + row % self.FACE
+        )
+
+    def __call__(self, words, K, ascending, fill=0):
+        assert K in (512, 1024, 2048), f"K must be 512, 1024 or 2048, got {K}"
+        words = [int(w) & 0xFFFFFFFF for w in words]
+        assert len(words) == K, f"expected {K} words, got {len(words)}"
+        ordered = sorted(words, key=self._sign_magnitude_key, reverse=not ascending)
+        tiles = (K + self.TILE - 1) // self.TILE
+        image = []
+        for offset in range(tiles * self.TILE):
+            rank = self.rank_at(offset, K)
+            image.append(fill if rank is None else ordered[rank])
+        return torch.tensor(image, dtype=torch.int64)
+
+
+@register_golden
 class Top32RmGolden:
     """Golden generator for the DeepSeek top32_rm LLKs (row-major top-32, K=32).
 

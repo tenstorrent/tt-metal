@@ -1427,6 +1427,42 @@ class TOPK_XL(TemplateParameter):
 
 
 @dataclass
+class TOPK_XL_PARTS(TemplateParameter):
+    """Compile-time knobs for ``topk_xl_parts_test.cpp`` (the topk_xl halves / quarters split sort).
+
+    ``parts``               2 sorts the 2048-element row as two 1024 halves, 4 as four 512 quarters.
+    ``parts_combine``       False stops after the local sorts and packs the part tiles; True combines
+                            the parts into one list in the stock topk_xl 2048 order and packs that.
+    ``parts_ascending``     direction of the combined list.
+    ``half0_ascending``     direction of the first half (its local sort, or for quarters its combine);
+                            the second half runs the other way.
+    ``quarter0_ascending``  direction of the first quarter of each half; the second runs the other way.
+    ``parts_core_id``       core id the index stamp puts in bits [15:11].
+    """
+
+    parts: int = 2
+    parts_combine: bool = True
+    parts_ascending: bool = False
+    half0_ascending: bool = True
+    quarter0_ascending: bool = True
+    parts_core_id: int = 0
+
+    def convert_to_cpp(self) -> str:
+        if self.parts not in (2, 4):
+            raise ValueError(f"parts must be 2 or 4, got {self.parts}")
+        return "\n".join(
+            [
+                f"constexpr std::uint32_t TOPK_XL_PARTS = {self.parts};",
+                f"constexpr bool TOPK_XL_PARTS_COMBINE = {str(self.parts_combine).lower()};",
+                f"constexpr bool TOPK_XL_PARTS_ASCENDING = {str(self.parts_ascending).lower()};",
+                f"constexpr bool TOPK_XL_HALF0_ASCENDING = {str(self.half0_ascending).lower()};",
+                f"constexpr bool TOPK_XL_QUARTER0_ASCENDING = {str(self.quarter0_ascending).lower()};",
+                f"constexpr std::uint32_t TOPK_XL_PARTS_CORE_ID = {self.parts_core_id};",
+            ]
+        )
+
+
+@dataclass
 class TOP32_RM(TemplateParameter):
     """Compile-time knobs for ``top32_rm_test.cpp`` (the DeepSeek top32_rm family).
 
