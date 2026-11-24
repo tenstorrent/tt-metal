@@ -78,8 +78,8 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_small_b(
 
 // b >= 2^31: a < 2^32 <= 2b and a % b = (a >=u b) ? a - b : a.
 // a is a signed vInt, so a < 0 means the uint32's MSB is set i.e. a >= 2^31.
-// Only a >= 2^31 can be >=u b, so low-half a keeps r = a. For low-half a and high-half b,
-// a - b overflows. Gating on `a < 0` ensures the compare only runs when both operands are in [2^31, 2^32).
+// Only a >= 2^31 can be >=u b, so low-half a keeps r = a. For low-half a, t = a - b may overflow;
+// the `a < 0` predicate discards t on those lanes.
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 __attribute__((noinline)) void calculate_remainder_uint32_scalar_big_b(uint scalar) {
     sfpi::vInt b = static_cast<int>(scalar);
@@ -120,6 +120,7 @@ __attribute__((noinline)) void calculate_remainder_uint32_scalar_small_b(uint sc
     sfpi::vMag MASK_11{0x7ff};
     sfpi::vFloat b0 = sfpi::convert<sfpi::vFloat>(b_mag & MASK_11, sfpi::RoundMode::Nearest);
 
+    // unroll 2: a full unroll grows .text with no cycle gain
 #pragma GCC unroll 2
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vInt a = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
@@ -148,6 +149,7 @@ __attribute__((noinline)) void calculate_remainder_uint32_scalar_general(uint sc
     sfpi::vInt b = static_cast<int>(scalar);
     sfpi::vFloat inv_b_f = unsigned_remainder_recip(b);
 
+    // No unroll: the body is large, so unrolling grows .text with no cycle gain
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vInt a = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
@@ -168,23 +170,44 @@ __attribute__((noinline)) void calculate_remainder_uint32_scalar_general(uint sc
     }
 }
 
-// Runtime-divisor entry: picks the class on the RISC side.
+// Divisor class of the unary uint32 remainder, shared by every class dispatch.
 //   scalar >= 2^31 -> one conditional subtract
 //   power-of-two -> bitmask
 //   scalar < 2^11 -> range-reduce + small-b helper (b0 + 1/b hoisted, skips high chunks)
 //   else (< 2^31) -> range-reduce + full helper (1/b hoisted)
+enum class RemainderUint32Class { BigB, Pow2, SmallB, General };
+
+constexpr RemainderUint32Class remainder_uint32_class(const uint scalar) {
+    if (scalar >= 0x80000000u) {
+        return RemainderUint32Class::BigB;
+    }
+    if ((scalar & (scalar - 1u)) == 0u) {
+        return RemainderUint32Class::Pow2;
+    }
+    if (scalar < (1u << 11)) {
+        return RemainderUint32Class::SmallB;
+    }
+    return RemainderUint32Class::General;
+}
+
+// Runtime-divisor entry: picks the class on the RISC side.
 // Callers with a literal divisor should dispatch on it themselves (see llk_math_eltwise_unary_sfpu_remainder_uint32):
 // through an SFPU call wrapper this function's address is taken, so all four paths get linked.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_remainder_uint32_scalar(uint scalar) {
-    if (scalar >= 0x80000000u) {
-        calculate_remainder_uint32_scalar_big_b<APPROXIMATION_MODE, ITERATIONS>(scalar);
-    } else if ((scalar & (scalar - 1u)) == 0u) {
-        calculate_remainder_uint32_scalar_pow2<APPROXIMATION_MODE, ITERATIONS>(scalar);
-    } else if (scalar < (1u << 11)) {
-        calculate_remainder_uint32_scalar_small_b<APPROXIMATION_MODE, ITERATIONS>(scalar);
-    } else {
-        calculate_remainder_uint32_scalar_general<APPROXIMATION_MODE, ITERATIONS>(scalar);
+inline void calculate_remainder_uint32_scalar(const uint scalar) {
+    switch (remainder_uint32_class(scalar)) {
+        case RemainderUint32Class::BigB:
+            calculate_remainder_uint32_scalar_big_b<APPROXIMATION_MODE, ITERATIONS>(scalar);
+            break;
+        case RemainderUint32Class::Pow2:
+            calculate_remainder_uint32_scalar_pow2<APPROXIMATION_MODE, ITERATIONS>(scalar);
+            break;
+        case RemainderUint32Class::SmallB:
+            calculate_remainder_uint32_scalar_small_b<APPROXIMATION_MODE, ITERATIONS>(scalar);
+            break;
+        case RemainderUint32Class::General:
+            calculate_remainder_uint32_scalar_general<APPROXIMATION_MODE, ITERATIONS>(scalar);
+            break;
     }
 }
 
