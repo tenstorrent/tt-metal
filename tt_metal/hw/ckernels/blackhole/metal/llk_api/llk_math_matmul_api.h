@@ -147,7 +147,9 @@ inline void llk_math_matmul_init(
         StateDiscard<std::uint32_t>(in1_tile_c_dim),
         StateDiscard<bool>(partial_face)));
 
-    if constexpr (inline_rows && THROTTLE_LEVEL == 0 && !row_mop && !tile_mop && reuse_dir == 0) {
+    // the execute runs the row form only where matmul_row_mop_supported (off on ttsim)
+    if constexpr (
+        inline_rows && THROTTLE_LEVEL == 0 && !row_mop && !tile_mop && reuse_dir == 0 && matmul_row_mop_supported) {
         if ((in0_tile_r_dim > FACE_R_DIM) && (in0_tile_c_dim > FACE_C_DIM) && (in1_tile_r_dim > FACE_R_DIM) &&
             (in1_tile_c_dim > FACE_C_DIM)) {
             _llk_math_matmul_init_rows_<math_fidelity, row_end_fold, key_ct, key_rt, key_ct == 0 || key_rt == 0 || llk_math_matmul_bias_class<math_fidelity, key_ct, key_rt>()>(
