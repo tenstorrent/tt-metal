@@ -165,6 +165,9 @@ def glx_reset(
     kd = named.isdisjoint(bdfs or ()) and all((parse_bdf_physical(b) or (0,))[0] in KNOWN_DROPPED for b in named)
     if status == FAIL and named and kd:  # the known drop itself
         check.status, check.details = WARN, f"{details}; names only the known-dropped tray's chips, still off PCIe"
+    if KNOWN_DROPPED and bdfs and all(b in bdfs for b in ALL_BDFS if parse_bdf_physical(b)[0] in KNOWN_DROPPED):
+        log(f"{name}: known-dropped tray {', '.join(map(str, sorted(KNOWN_DROPPED)))} answers: the full run")
+        KNOWN_DROPPED.clear()
     missing = [
         b for b in ALL_BDFS if bdfs is not None and b not in bdfs and parse_bdf_physical(b)[0] not in KNOWN_DROPPED
     ]

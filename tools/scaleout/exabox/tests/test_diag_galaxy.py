@@ -128,6 +128,11 @@ class TestResets(unittest.TestCase):
         self.assertEqual((checks["recount_1"].status, sorted(checks)), (PASS, ["recount_1", "reset_1"]))
         self.assertIn("tray 2: known drop", checks["recount_1"].details)
 
+    def test_a_known_dropped_tray_that_answers_gets_the_full_run(self):
+        with mock.patch.object(resets, "KNOWN_DROPPED", {2}):
+            self._reset([all_bdfs()])
+            self.assertEqual(resets.KNOWN_DROPPED, set())
+
     def test_a_reset_that_fails_naming_only_the_known_dropped_chips_is_a_warn(self):
         m = "Timeout waiting for reset marker to clear for device 0000:{}:00.0."
         up = [b for b in all_bdfs() if not b.startswith("0000:4")]
