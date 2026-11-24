@@ -3,6 +3,7 @@
 """HiFi crossover (ad hoc): the block-float pack forms of llk_pack_block behind matmul math at LoFi, HiFi2, HiFi3 and HiFi4 (matmul_pack_sweep_test.cpp)."""
 
 import pytest
+from conftest import skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import TILE_DIM
 from helpers.llk_params import DestAccumulation, DestSync, MathFidelity, Transpose
@@ -26,6 +27,8 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     UNPACK_TRANS_FACES,
 )
+
+pytestmark = [pytest.mark.llk_sweep, skip_for_wormhole]
 
 F = DataFormat
 OUTS = [F.Bfp8_b, F.Bfp4_b, F.Bfp2_b, F.Bfp8]

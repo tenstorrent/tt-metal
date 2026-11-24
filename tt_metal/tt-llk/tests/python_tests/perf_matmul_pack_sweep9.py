@@ -5,6 +5,7 @@
 from dataclasses import dataclass
 
 import pytest
+from conftest import skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import TILE_DIM
 from helpers.llk_params import DestAccumulation, DestSync, MathFidelity, Transpose
@@ -31,6 +32,8 @@ from helpers.test_variant_parameters import (
     UNPACK_TRANS_FACES,
     TemplateParameter,
 )
+
+pytestmark = [pytest.mark.llk_sweep, skip_for_wormhole]
 
 F = DataFormat
 OUTS = [F.Bfp8_b, F.Bfp4_b, F.Bfp2_b, F.Bfp8, F.Bfp4, F.Bfp2, F.Float16_b, F.Float32]

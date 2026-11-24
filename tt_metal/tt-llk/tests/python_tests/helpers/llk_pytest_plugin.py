@@ -757,20 +757,32 @@ def _select_node_list(config, items):
 
 
 def _thin_sweep(config, items):
-    """In the perf CI runner (--perf-splits), keep one id in LLK_SWEEP_STRIDE (default 50, chosen by a hash of the node id) of the tests marked llk_sweep; LLK_SWEEP_ALL=1 keeps every id."""
+    """The perf CI runner (--perf-splits) leaves out the tests marked llk_sweep, the local study modules.
+
+    LLK_SWEEP_ALL=1 keeps every id; LLK_SWEEP_STRIDE=n keeps one id in n (chosen by a hash of the node id) and the module's
+    LLK_SWEEP_KEEP ids.
+    """
     if (
         config.getoption("--perf-splits") is None
         or os.environ.get("LLK_SWEEP_ALL") == "1"
     ):
         return
-    stride = int(os.environ.get("LLK_SWEEP_STRIDE", "50"))
-    items[:] = [
-        item
-        for item in items
-        if item.get_closest_marker("llk_sweep") is None
-        or zlib.crc32(item.nodeid.encode()) % stride == 0
-        or item.name in getattr(item.module, "LLK_SWEEP_KEEP", ())
-    ]
+    stride = int(os.environ.get("LLK_SWEEP_STRIDE", "0"))
+    kept, dropped = [], []
+    for item in items:
+        if item.get_closest_marker("llk_sweep") is None or (
+            stride
+            and (
+                zlib.crc32(item.nodeid.encode()) % stride == 0
+                or item.name in getattr(item.module, "LLK_SWEEP_KEEP", ())
+            )
+        ):
+            kept.append(item)
+        else:
+            dropped.append(item)
+    if dropped:
+        config.hook.pytest_deselected(items=dropped)
+        items[:] = kept
 
 
 def _split_by_cost(config, items):
