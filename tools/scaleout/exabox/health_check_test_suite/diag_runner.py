@@ -368,6 +368,7 @@ def run_diag(
     link_fault_before: bool = False,
     pair_s: int = links.PAIR_S,
     sweep_s: int = links.SWEEP_S,
+    bw_s: int = links.BW_S,
 ) -> tuple[int, dict]:
     """Run the full pipeline (snapshot → resets → tests → triage → ETH status → QSFP tests → sys-triage → AER).
 
@@ -540,6 +541,7 @@ def run_diag(
                 link_fault_before,
                 pair_s=pair_s,
                 sweep_s=sweep_s,
+                bw_s=bw_s,
             )
         if live:
             _guarded(test_phase, "hsc_input_status", WARN, lambda: judge_hsc(hsc_before, read_hsc_status(), test_phase))
@@ -730,8 +732,8 @@ def main() -> int:
         tier = select_stages(tier, args.stage_order)[0] if args.stage_order is not None else tier
     except ValueError as e:
         ap.error(str(e))
-    if args.pair_s < 1 or args.sweep_s < 0:
-        ap.error("--pair-s: at least 1; --sweep-s: at least 0")
+    if args.pair_s < 1 or args.sweep_s < 0 or args.bw_s < 0:
+        ap.error("--pair-s: at least 1; --sweep-s, --bw-s: at least 0")
     if args.load_mode and not tier.galaxy_load:
         ap.error(f"--load-mode: tier {args.tier} with these --tests runs no galaxy load")
     if any(v is not None for v in overrides.values()) and "busbar" not in tier.tests:
@@ -779,6 +781,7 @@ def main() -> int:
         link_fault_before=args.link_fault,
         pair_s=args.pair_s,
         sweep_s=args.sweep_s,
+        bw_s=args.bw_s,
     )
     try:  # the run's report, last; a fault here costs the report, never the run's exit code
         print("\n".join(report.lines(args.output.resolve().parent, args)), flush=True)

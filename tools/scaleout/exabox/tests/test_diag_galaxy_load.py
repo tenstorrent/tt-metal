@@ -15,6 +15,7 @@ import contextlib
 import io
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -712,7 +713,7 @@ class TestLinks(unittest.TestCase):
         _, pt = self._run_links(True, lambda: "", pair_s=4, sweep_s=60)
         self.assertEqual(
             [(c.args[2], c.args[3], c.kwargs.get("cap_s")) for c in pt.call_args_list],
-            [("pair", 4, None), ("sweep", 4, 60)],
+            [("pair", links.BW_S, None), ("sweep", 4, 60)],  # the pair test runs at least BW_S for the bandwidth check
         )
 
     def test_sweep_only_after_a_fault(self):
@@ -733,8 +734,8 @@ class TestLinks(unittest.TestCase):
         after = {"bdfs": {0: "0000:01:00.0", 1: "0000:41:00.0"}, "links": {}}
         tested = []
 
-        def fake_pair_test(phase, out, name, seconds, disc, dry_run, cap_s=None):
-            tested.append((name, seconds, cap_s, disc))
+        def fake_pair_test(phase, out, name, seconds, disc, dry_run, cap_s=None, bw=False):
+            tested.append((name, seconds, cap_s, bw, disc))
             phase.add(Check(name=f"links_{name}", status=PASS))
             return False
 
@@ -742,8 +743,17 @@ class TestLinks(unittest.TestCase):
             links, "pair_test", fake_pair_test
         ):
             links.run_links(Phase(name="links"), Path("/tmp"), True, lambda: "")
-        # the sweep: PAIR_S per pair like the pair test, SWEEP_S for the whole sweep
-        self.assertEqual(tested, [("pair", links.PAIR_S, None, before), ("sweep", links.PAIR_S, links.SWEEP_S, after)])
+        # the pair test runs BW_S per pair and is judged on bandwidth; the sweep: PAIR_S per pair, SWEEP_S in total, unjudged
+        self.assertEqual(
+            tested,
+            [("pair", links.BW_S, None, True, before), ("sweep", links.PAIR_S, links.SWEEP_S, False, after)],
+        )
+        tested.clear()
+        with mock.patch.object(links, "discover", side_effect=[before]), mock.patch.object(
+            links, "pair_test", fake_pair_test
+        ):
+            links.run_links(Phase(name="links"), Path("/tmp"), False, lambda: "", bw_s=0)
+        self.assertEqual(tested, [("pair", links.PAIR_S, None, False, before)])  # --bw-s 0: off
 
     def test_a_failed_rediscovery_fails_the_sweep(self):
         phase = Phase(name="links")
@@ -1274,6 +1284,97 @@ class TestLinks(unittest.TestCase):
         self.assertTrue(failed)
         self.assertEqual({f["why"] for f in c.data["failed"]}, {"hung"})
         self.assertEqual(max(t for t in timeouts if t is not None), links.PAIR_S + links.OP_TIMEOUT_S + links.COMPILE_S)
+
+    def _bw_test(self, runs, name="pair", bw=True):
+        """pair_test over the grid with each pair program faked to write its rows: *runs(lab)* gives the GBps_total of
+        each launch of that pair's next run, launch 0 first. Returns the failed flag, the checks and the run dir."""
+        started = []
+
+        class P:
+            pid = 1
+
+            def wait(self, timeout=None):
+                return 0
+
+        def start(d, lab, idx, seconds):
+            started.append(lab)
+            rows = [{"event": "iter", "i": i, "s": 1.0, "GBps_total": g} for i, g in enumerate(runs(lab))]
+            (d / f"{lab}.rows").write_text("".join(json.dumps(r) + "\n" for r in rows))
+            (d / f"{lab}.log").write_text("")
+            return P()
+
+        phase = Phase(name="links")
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d)
+        with mock.patch.object(links, "umd_index", return_value=[0, 1]), mock.patch.object(
+            links, "_start_pair", start
+        ), mock.patch.object(links, "stop_group"), contextlib.redirect_stdout(io.StringIO()):
+            failed = links.pair_test(phase, d, name, 20, self._grid_disc(), bw=bw)
+        return failed, {c.name: c for c in phase.checks}, d / name, started
+
+    def _labs(self):
+        return {links._label(self._grid_disc(), a, b): len(ch) for r in links.pairs(self.links) for a, b, ch in r}
+
+    @staticmethod
+    def _gbps(per_link, n_links):
+        return per_link * n_links * 2 / 8  # GBps_total, both ways over the pair's links
+
+    def test_bandwidth_judges_the_median_of_warm_launches_per_link_each_way(self):
+        labs = self._labs()
+        # launch 0 (open and compile) and one slow warm launch do not move the median
+        failed, checks, _, _ = self._bw_test(
+            lambda lab: [
+                self._gbps(5, labs[lab]),
+                self._gbps(177, labs[lab]),
+                self._gbps(60, labs[lab]),
+                self._gbps(178, labs[lab]),
+            ]
+        )
+        c = checks["links_bandwidth"]
+        self.assertEqual((failed, checks["links_pair"].status, c.status), (False, PASS, PASS))
+        self.assertEqual((c.data["judged"], c.data["low"], c.data["not_judged"]), (len(labs), [], []))
+        self.assertIn(f"{len(labs)} pairs judged, 177-177 Gbps per link each way, 0 below 140 Gbps", c.details)
+        self.assertEqual(list(checks), ["links_pair", "links_bandwidth"])
+        self.assertEqual(links.warm_gbps(Path("/nonexistent.rows"), 2), (None, 0))
+
+    def test_a_slow_pair_fails_bandwidth_by_its_ends_and_arms_no_sweep(self):
+        labs = self._labs()
+        slow = sorted(labs)[0]
+        failed, checks, _, _ = self._bw_test(lambda lab: [0] + [self._gbps(120 if lab == slow else 175, labs[lab])] * 3)
+        c = checks["links_bandwidth"]
+        self.assertFalse(failed)  # a slow link passes data: no sweep
+        self.assertEqual((checks["links_pair"].status, c.status), (PASS, FAIL))
+        self.assertEqual([(l["pair"], l["gbps"]) for l in c.data["low"]], [(slow, 120.0)])
+        self.assertTrue(c.data["link_ends"])
+        self.assertIn("1 below 140 Gbps", c.details)
+        self.assertIn(f"{slow} (channels", c.details)
+
+    def test_a_cold_pair_reruns_once_then_is_not_judged(self):
+        labs = self._labs()
+        cold, stuck = sorted(labs)[:2]
+        seen = {}
+
+        def runs(lab):
+            seen[lab] = seen.get(lab, 0) + 1
+            fast = self._gbps(176, labs[lab])
+            if lab == stuck or (lab == cold and seen[lab] == 1):
+                return [0, fast]  # one warm launch: the cold cache ate the window
+            return [0, fast, fast]
+
+        failed, checks, d, started = self._bw_test(runs)
+        c = checks["links_bandwidth"]
+        self.assertFalse(failed)
+        self.assertEqual(sorted(l for l in started if started.count(l) > 1), sorted([cold, cold, stuck, stuck]))
+        self.assertTrue((d / f"{cold}.cold.rows").exists())
+        self.assertEqual(
+            (c.status, c.data["judged"], c.data["not_judged"]), (WARN, len(labs) - 1, [f"{stuck} (1 warm)"])
+        )
+        self.assertIn("1 not judged (under 2 warm launches)", c.details)
+
+    def test_the_sweep_is_not_judged_on_bandwidth(self):
+        failed, checks, _, started = self._bw_test(lambda lab: [0], name="sweep", bw=False)
+        self.assertNotIn("links_bandwidth", checks)
+        self.assertEqual(len(started), len(self._labs()))  # no rerun without bw
 
     def test_link_fault_counts_ccl_errors_and_the_op_timeout_hang_line(self):
         def fault(*lines, status=FAIL, **data):
