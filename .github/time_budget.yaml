@@ -195,7 +195,7 @@ shield:
     bh_p150b_civ2: 70
     bh_p150: 2
   device_perf:
-    wh_n150: 140
+    wh_n150: 180
     wh_n300_civ2: 10
     bh_p150: 60
   demo:

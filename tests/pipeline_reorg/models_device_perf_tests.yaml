@@ -94,7 +94,7 @@
   model: sdxl
   skus:
     wh_n150:
-      timeout: 120
+      timeout: 160
     bh_p150:
       timeout: 45
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
