@@ -55,8 +55,8 @@ std::vector<uint32_t> reference_answers(
         mesh_device,
         ttnn::operations::ccl::common::mesh_distributed_context(mesh_device),
         words,
-        [&reference, &compute](const tt::tt_metal::distributed::MeshCoordinate& coord) {
-            return coord == reference ? compute(coord) : std::vector<uint32_t>{};
+        [&reference, &compute, words](const tt::tt_metal::distributed::MeshCoordinate& coord) {
+            return coord == reference ? compute(coord) : std::vector<uint32_t>(words, 0);
         });
     return records.at(reference.to_linear_index(mesh_device.shape()));
 }
