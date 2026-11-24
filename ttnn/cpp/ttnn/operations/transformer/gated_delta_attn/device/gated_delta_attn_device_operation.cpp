@@ -23,18 +23,6 @@ static void validate_tensor(const Tensor& t, const std::string& name) {
 
 void GatedDeltaAttnSeqDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
-    validate_tensor(in.L_unit, "L_unit");
-    validate_tensor(in.v_beta_sc, "v_beta_sc");
-    validate_tensor(in.k_bd_sc, "k_bd_sc");
-    validate_tensor(in.intra_attn, "intra_attn");
-    validate_tensor(in.q_decay, "q_decay");
-    validate_tensor(in.k_decay_t, "k_decay_t");
-    validate_tensor(in.dl_exp, "dl_exp");
-    validate_tensor(in.L_inv, "L_inv");
-    if (in.initial_state.has_value()) {
-        validate_tensor(*in.initial_state, "initial_state");
-    }
-
     const uint32_t BH = attrs.num_heads;
     const uint32_t NC = attrs.num_chunks;
     const uint32_t C = attrs.chunk_size;
@@ -46,6 +34,18 @@ void GatedDeltaAttnSeqDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         !attrs.output_mem_config.is_sharded() && attrs.output_mem_config.buffer_type() == BufferType::DRAM,
         "output_mem_config must be interleaved DRAM");
+
+    validate_tensor(in.L_unit, "L_unit");
+    validate_tensor(in.v_beta_sc, "v_beta_sc");
+    validate_tensor(in.k_bd_sc, "k_bd_sc");
+    validate_tensor(in.intra_attn, "intra_attn");
+    validate_tensor(in.q_decay, "q_decay");
+    validate_tensor(in.k_decay_t, "k_decay_t");
+    validate_tensor(in.dl_exp, "dl_exp");
+    validate_tensor(in.L_inv, "L_inv");
+    if (in.initial_state.has_value()) {
+        validate_tensor(*in.initial_state, "initial_state");
+    }
 
     // The device kernels are hardwired to exactly four 32-wide block rows (Ct == Kt == Vt == 4):
     // the compute kernel calls fwd_sub_4rows unconditionally and the reader always fetches the 4
