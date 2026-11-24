@@ -125,7 +125,7 @@ def test_run_rejects_a_different_program(device, expect_error):
 
 
 @needs_kernel_config_buffer
-def test_run_from_kernel_config_buffer(device, expect_error):
+def test_run_from_kernel_config_buffer(device):
     data, input_tensor, output_tensor = make_io(device)
     io_tensors = [input_tensor, output_tensor]
     descriptor = copy_descriptor(input_tensor, output_tensor, plain_cb())
@@ -135,10 +135,6 @@ def test_run_from_kernel_config_buffer(device, expect_error):
 
     ttnn.experimental.run_compiled_program(compiled, io_tensors, descriptor, kernel_config_buffer=buffer)
     assert torch.equal(output_of(device, output_tensor), data)
-
-    buffer.deallocate()
-    with expect_error(RuntimeError, "deallocated"):
-        ttnn.experimental.run_compiled_program(compiled, io_tensors, descriptor, kernel_config_buffer=buffer)
 
 
 @skip_for_slow_dispatch()

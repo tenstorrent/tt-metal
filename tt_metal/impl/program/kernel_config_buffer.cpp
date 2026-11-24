@@ -58,8 +58,6 @@ CoreL1Region KernelConfigBuffer::region(const distributed::MeshCoordinate& devic
     return {.address = impl().address(device_coord, core), .size = impl().size(device_coord, core)};
 }
 
-void KernelConfigBuffer::deallocate() { impl().deallocate(); }
-
 KernelConfigBufferImpl::KernelConfigBufferImpl(std::vector<Shards> shards, const distributed::MeshDevice& mesh_device) :
     shards_(std::move(shards)), mesh_device_id_(mesh_device.id()) {
     for (const distributed::MeshCoordinate& coord : distributed::MeshCoordinateRange(mesh_device.shape())) {
@@ -119,17 +117,6 @@ uint32_t KernelConfigBufferImpl::size(const distributed::MeshCoordinate& device_
 DeviceAddr KernelConfigBufferImpl::address(
     const distributed::MeshCoordinate& device_coord, const CoreCoord& core) const {
     return address(device_id(device_coord), core);
-}
-
-bool KernelConfigBufferImpl::is_allocated() const {
-    return std::all_of(
-        shards_.begin(), shards_.end(), [](const Shards& shards) { return shards.buffer->is_allocated(); });
-}
-
-void KernelConfigBufferImpl::deallocate() {
-    for (const Shards& shards : shards_) {
-        shards.buffer->impl().deallocate(*shards.buffer);
-    }
 }
 
 namespace {
@@ -214,7 +201,6 @@ void EnqueueMeshWorkload(
         !MetalContext::instance(device.impl().get_context_id()).rtoptions().get_fast_dispatch(),
         "A kernel config buffer can only be allocated in slow dispatch mode: fast dispatch places kernel binaries in "
         "its own ring buffer");
-    TT_FATAL(buffer.impl().is_allocated(), "Kernel config buffer was deallocated");
     TT_FATAL(
         buffer.impl().mesh_device_id() == device.id(),
         "Kernel config buffer is allocated on MeshDevice {}, but the workload is enqueued on MeshDevice {}",

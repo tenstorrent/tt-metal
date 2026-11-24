@@ -39,9 +39,9 @@ struct CoreL1Region {
 //
 // Nothing is attached to a program: pass the buffer to each launch (EnqueueMeshWorkload below).
 //
-// Ownership: the buffer owns its L1, which is freed by deallocate() or when the buffer is destroyed. It is move-only;
-// moving it moves the L1 with it, and a moved-from buffer cannot be used. The caller keeps it alive and allocated while
-// a launch that runs from it can still be executing.
+// Ownership: the buffer owns its L1, which is freed when the buffer is destroyed. It is move-only; moving it moves the
+// L1 with it, and a moved-from buffer cannot be used. The caller keeps it alive while a launch that runs from it can
+// still be executing.
 class KernelConfigBuffer {
 public:
     explicit KernelConfigBuffer(std::unique_ptr<KernelConfigBufferImpl> impl);
@@ -56,8 +56,6 @@ public:
     // The shard on `core` of the device at `device_coord`: sized for the binaries of the core's kernel group in that
     // device's program. Its address differs per core and per device.
     CoreL1Region region(const distributed::MeshCoordinate& device_coord, const CoreCoord& core) const;
-    // Frees the L1 now. Launching with a deallocated buffer is an error.
-    void deallocate();
 
     KernelConfigBufferImpl& impl();
     const KernelConfigBufferImpl& impl() const;

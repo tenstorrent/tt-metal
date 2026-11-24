@@ -43,11 +43,7 @@ void py_module(nb::module_& mod) {
         .def_prop_ro(
             "max_size",
             [](const tt::tt_metal::experimental::KernelConfigBuffer& self) { return self.max_size(); },
-            "Bytes of the largest shard, aligned to L1 alignment.")
-        .def(
-            "deallocate",
-            &tt::tt_metal::experimental::KernelConfigBuffer::deallocate,
-            "Free the buffer's L1 now. Running with a deallocated buffer is an error.");
+            "Bytes of the largest shard, aligned to L1 alignment.");
 
     const char* doc = R"doc(
         Allocate a kernel config buffer on a device for a program compiled for it: L1 on the program's Tensix cores,
@@ -55,7 +51,7 @@ void py_module(nb::module_& mod) {
 
         Pass it to the program's run function to run the binaries from it instead of the KERNEL_CONFIG window, whose
         size then limits only the rest of the kernel configuration: runtime arguments, semaphores, and CB and DFB
-        configs. The L1 is freed by ``deallocate()`` or when the buffer is garbage collected.
+        configs. The L1 is freed when the buffer is garbage collected: drop the last reference to free it.
 
         Needs slow dispatch and the device opened with ``TT_METAL_ALLOCATOR_MODE_HYBRID=1``.
 
