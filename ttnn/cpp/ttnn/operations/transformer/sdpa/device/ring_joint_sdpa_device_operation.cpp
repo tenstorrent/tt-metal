@@ -8,6 +8,7 @@
 #include "ttnn/device_operation.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <array>
 #include <limits>
 #include <variant>
@@ -473,6 +474,28 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto& gathered_input_tensor_k = tensor_args.gathered_k;
 
     validate_metadata_tensors(tensor_args, args.kv_stripe_split);
+
+    if (args.llk2_compute) {
+        // What the LLK 2.0 ring kernel (tt_metal/tt-llk/llk2/kernels/ring_joint_sdpa.cpp) does not do yet; the
+        // program factory refuses the rest (what it derives from the shapes and the program config).
+        TT_FATAL(
+            input_tensor_q.device()->arch() == tt::ARCH::BLACKHOLE,
+            "TT_RING_SDPA_LLK2: the LLK 2.0 ring SDPA kernel is Blackhole-only");
+        TT_FATAL(!args.is_causal && !args.is_balanced, "TT_RING_SDPA_LLK2: causal attention is not supported");
+        TT_FATAL(!tensor_args.joint_q.has_value(), "TT_RING_SDPA_LLK2: a joint sequence is not supported");
+        TT_FATAL(args.sliding_window_size.value_or(0) == 0, "TT_RING_SDPA_LLK2: a sliding window is not supported");
+        TT_FATAL(!tensor_args.attention_sink.has_value(), "TT_RING_SDPA_LLK2: an attention sink is not supported");
+        TT_FATAL(
+            !args.dynamic_local_n && !tensor_args.has_logical_n_tensor() && !tensor_args.has_logical_l_tensor(),
+            "TT_RING_SDPA_LLK2: a run-time sequence length is not supported");
+        TT_FATAL(
+            !kv_pad_rotation_active(args, tensor_args) && !tensor_args.has_metadata() &&
+                !args.kv_cache_batch_idx.has_value(),
+            "TT_RING_SDPA_LLK2: KV caches and KV-pad rotation are not supported");
+        TT_FATAL(
+            !tensor_args.has_latent_v() && args.kv_stripe_split == 1,
+            "TT_RING_SDPA_LLK2: latent V and split KV are not supported");
+    }
 
     // The sliding-window halo and the per-device slab checks below divide by the chunk sizes.
     TT_FATAL(
@@ -1313,7 +1336,8 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
             args.kv_cache_batch_idx.has_value(),
             args.has_kv_pad_rotation(),
             args.circular_kv_cache,
-            args.latent_v_head_dim);
+            args.latent_v_head_dim,
+            args.llk2_compute);
     }
 
     std::vector<Tensor> input_tensors = {tensor_args.input_q, tensor_args.input_k};
@@ -1371,7 +1395,8 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         tensor_args.v_head_dim(args.latent_v_head_dim),
         args.sliding_window_size,
         args.all_gather_operation_attributes,
-        args.all_gather_tensor_args);
+        args.all_gather_tensor_args,
+        args.llk2_compute);
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceOperation::create_op_performance_model(
@@ -1466,6 +1491,15 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceO
 
     return operation::OpPerformanceModelGeneral<Tensors>(input_tensors, output_tensors, ideal_cycles);
 }
+
+namespace {
+// LLK 2.0 switch for ring attention: TT_RING_SDPA_LLK2=1 (unset or 0 = the 1.0 kernel), apart from plain SDPA's
+// TT_SDPA_LLK2. Read at launch so the value lands in RingJointSDPAParams and therefore in the program cache key.
+bool ring_sdpa_llk2_from_env() {
+    const char* value = std::getenv("TT_RING_SDPA_LLK2");
+    return value != nullptr && std::strtoul(value, nullptr, 10) != 0;
+}
+}  // namespace
 
 RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,
@@ -1735,7 +1769,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         sliding_window_size,
         circular_kv_cache,
         resolved_kv_stripe_split,
-        dynamic_local_n);
+        dynamic_local_n,
+        ring_sdpa_llk2_from_env());
 
     auto tensor_args = OperationType::tensor_args_t{
         .input_q = input_tensor_q,
