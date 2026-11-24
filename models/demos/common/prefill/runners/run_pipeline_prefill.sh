@@ -99,16 +99,22 @@ if [ "$NEED_BINDINGS" -eq 1 ] || [ "$NEED_MGD" -eq 1 ]; then
   RANK_BINDING="$GENERATED"
 fi
 
+# Forward every PREFILL_* knob to all ranks, not just the launching host: a knob set only on rank 0 would
+# silently run the other ranks with the adapter default.
+FWD_ENV=""
+for name in $(compgen -e); do
+  case "$name" in
+    PREFILL_*) FWD_ENV="${FWD_ENV} -x ${name}" ;;
+  esac
+done
+
 # PP_DRY_RUN=1 prints the binding tt-run would get and stops -- no MPI, no devices. Drives the tests.
 if [ "${PP_DRY_RUN:-0}" != "0" ]; then
+  echo "forward-env:${FWD_ENV}" >&2
   echo "rank-binding: $RANK_BINDING"
   cat "$RANK_BINDING"
   exit 0
 fi
-
-FWD_ENV=""
-[ -n "${PREFILL_MANIFEST:-}" ] && FWD_ENV="${FWD_ENV} -x PREFILL_MANIFEST"
-[ -n "${PREFILL_MODEL:-}" ] && FWD_ENV="${FWD_ENV} -x PREFILL_MODEL"
 
 exec python3 ttnn/ttnn/distributed/ttrun.py \
   --tcp-interface "$TCP_IFACE" \
