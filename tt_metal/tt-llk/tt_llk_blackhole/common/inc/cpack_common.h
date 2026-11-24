@@ -440,6 +440,13 @@ struct llk_pack_in32_api
     static constexpr bool value = false;
 };
 
+// Specialized from the kernel's pack formats (llk_pack_common_api.h): every pack output is 32 bit.
+template <int api>
+struct llk_pack_out32_api
+{
+    static constexpr bool value = false;
+};
+
 // Only a kernel with a matmul API reaches the matmul contexts; dep, a template parameter of the caller, delays the lookup.
 template <std::uint32_t dep>
 constexpr bool llk_pack_matmul_kernel()
@@ -489,6 +496,14 @@ constexpr bool llk_pack_matmul_pack_bound()
            !llk_pack_norm_api<dep * 0 + 1>::value;
 }
 
+// A custom matmul (no MOP) at LoFi with a 32-bit operand or output keeps the early release: its math does not wait on it there.
+template <std::uint32_t dep>
+constexpr bool llk_pack_custom_early()
+{
+    return llk_pack_matmul_api<dep * 0 + 3>::value && llk_pack_lofi_api<dep * 0 + 1>::value &&
+           (llk_pack_in32_api<dep * 0 + 1>::value || llk_pack_out32_api<dep * 0 + 1>::value);
+}
+
 // A matmul kernel other than a norm one, whose unpackers bound it: at half sync with fp32 DEST or at LoFi an earlier pack start
 // costs them L1 grants. Only tall blocks lose them, so a kernel whose constant blocks are all not tall keeps the early start; at LoFi
 // a one-row block of two or more tiles (mark 9) loses them too (1xN Bfp8_b / Bfp4_b / Tf32-out +0.3..+1.5 cy/block, census 65c1c).
@@ -497,7 +512,8 @@ constexpr bool llk_pack_late_start(const bool is_fp32_dest_acc_en)
 {
     return (is_fp32_dest_acc_en || llk_pack_lofi_api<dep * 0 + 1>::value) && llk_pack_matmul_kernel<dep>() && !llk_pack_norm_api<dep * 0 + 1>::value &&
            !(llk_pack_shape_marked<5, dep>(0) && !llk_pack_shape_marked<6, dep>(0) &&
-             !(llk_pack_lofi_api<dep * 0 + 1>::value && llk_pack_shape_marked<9, dep>(0) && !llk_pack_shape_marked<11, dep>(0)));
+             !(llk_pack_lofi_api<dep * 0 + 1>::value && llk_pack_shape_marked<9, dep>(0) && !llk_pack_shape_marked<11, dep>(0))) &&
+           !llk_pack_custom_early<dep>();
 }
 
 // Specialized by the headers of the pack-thread SFPU inits (compute_kernel_api.h, seven eltwise_unary headers and

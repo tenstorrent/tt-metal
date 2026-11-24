@@ -369,6 +369,34 @@ class MATMUL_PRODUCTION(TemplateParameter):
         ]
 
 
+class MATMUL_CUSTOM_PACK32(TemplateParameter):
+    """matmul_custom_test: the 32-bit operand / output pack traits a ttnn kernel's CB formats give (llk_pack_in32_api,
+    llk_pack_out32_api). Picked from the formats the test already reports, so it adds no column.
+    """
+
+    def __init__(self, in32: bool = False, out32: bool = False):
+        self.pack32 = (bool(in32), bool(out32))
+
+    def __repr__(self) -> str:
+        return f"MATMUL_CUSTOM_PACK32{self.pack32}"
+
+    def __eq__(self, other) -> bool:
+        return isinstance(other, MATMUL_CUSTOM_PACK32) and other.pack32 == self.pack32
+
+    def __hash__(self) -> int:
+        return hash(self.pack32)
+
+    def convert_to_cpp(self) -> str:
+        return "\n".join(
+            d
+            for d, on in zip(
+                ("#define MATMUL_CUSTOM_IN32 1", "#define MATMUL_CUSTOM_OUT32 1"),
+                self.pack32,
+            )
+            if on
+        )
+
+
 @dataclass
 class MATMUL_FUNC_BLOCKS(TemplateParameter):
     """Blackhole matmul functional run of several output blocks (LOOP_FACTOR of them) on the real buffers, each block packed to the next result tiles."""
@@ -1559,6 +1587,16 @@ class BROADCAST_TYPE(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr auto BROADCAST_TYPE = ckernel::BroadcastType::{self.broadcast_type.value};"
+
+
+@dataclass
+class SEED_BROADCAST_TYPE(TemplateParameter):
+    """Broadcast type of the plain pass that seeds Dest before an ``ACC_TO_DEST`` broadcast pass."""
+
+    seed_broadcast_type: BroadcastType
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr auto SEED_BROADCAST_TYPE = ckernel::BroadcastType::{self.seed_broadcast_type.value};"
 
 
 @dataclass
@@ -4225,13 +4263,13 @@ class MUL_REDUCE_SCALAR_CHUNK_SIZE(RuntimeParameter):
 class ZERO_PAD_ROWS(TemplateParameter):
     """SFPU row bounds for _zero_pad_tile_."""
 
-    valid_rows: int = 0
-    total_rows: int = 32
+    zero_pad_valid_rows: int = 0
+    zero_pad_total_rows: int = 32
 
     def convert_to_cpp(self) -> str:
         return (
-            f"constexpr int ZERO_PAD_VALID_ROWS = {self.valid_rows};\n"
-            f"constexpr int ZERO_PAD_TOTAL_ROWS = {self.total_rows};"
+            f"constexpr int ZERO_PAD_VALID_ROWS = {self.zero_pad_valid_rows};\n"
+            f"constexpr int ZERO_PAD_TOTAL_ROWS = {self.zero_pad_total_rows};"
         )
 
 
@@ -4258,14 +4296,14 @@ class SPARSE_K_CONFIG(TemplateParameter):
 @dataclass
 class CLAMPED_SILU_PARAMS(TemplateParameter):
     clamped_silu_op: str = "GATE"
-    scalar0: float = 1.0
-    scalar1: float = 1.0
+    clamped_silu_scalar0: float = 1.0
+    clamped_silu_scalar1: float = 1.0
 
     def convert_to_cpp(self) -> str:
         return (
             f"#define CLAMPED_SILU_OP_{self.clamped_silu_op}\n"
-            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR0 = {fp32_bits(self.scalar0)}u;\n"
-            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR1 = {fp32_bits(self.scalar1)}u;"
+            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR0 = {fp32_bits(self.clamped_silu_scalar0)}u;\n"
+            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR1 = {fp32_bits(self.clamped_silu_scalar1)}u;"
         )
 
 

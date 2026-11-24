@@ -78,17 +78,17 @@ gates the `Float16` binary rows: re-measure before relying on one.
 
 ## Lanes the sweep does not count
 
-`ulp_sweep.measurable_mask` drops the lanes no step count can describe: either side NaN,
+`ulp_sweep.Swept.measurable` drops the lanes no step count can describe: either side NaN,
 the two sides disagreeing about being non-finite, an input the unpack flushes or
 saturates (a `Float32` input into a `Float16` Dest, below 2^-14 or past 65504), an
-answer an fp16 Dest lost under a wider output (`dest_holds`: NaN or the golden's sign in
+answer an fp16 Dest lost under a wider output (`Swept.dest_holds`: NaN or the golden's sign in
 the Dest's top binade where the golden is past 65504, or a flush across 2^-14), and the
-tensor's zero padding. `claimed_lanes` then keeps only where the op claims an answer: the
+tensor's zero padding. `Swept.claimed` then keeps only where the op claims an answer: the
 whole format less the undefined side of each singularity in
 `sfpu_domains._OP_SINGULARITIES`, the non-positive integers for the gamma family, and
 `Sin`/`Cos`/`Tan` past 65504, where the range reduction breaks.
 
-A non-finite disagreement is a *failure*, not a non-question: `nonfinite_failures`
+A non-finite disagreement is a *failure*, not a non-question: `Swept.nonfinite_failures`
 reports it over the claimed lanes, and the cell is written `not measurable` instead of
 measured. Excused there: a NaN golden, a golden past the output's range answered by a
 saturated store (NaN, an infinity of the golden's sign, or the fp16 pack's clamp to
@@ -178,6 +178,22 @@ fp16 subnormals the pack does not reproduce.
   re-emit in a change of its own; `python -m helpers.ulp_budget_diff diff --base <old>
   --head <new>` lists every cell a change loosens, judged under the architecture the
   `--head` file's name says (`--arch` to name it).
+- **CI.** PR Gate's `llk_sfpu_ulp_pr_check` legs (`tests/run_sfpu_ulp_pr_check.sh`, rows of
+  `tests/pipeline_reorg/llk_pr_gate_tests.yaml`) sweep the cells a change can move (its
+  kernel builds differently, or its row changed), on a Wormhole and a Blackhole card, and
+  fail one that measures worse than its row. The cells are the sweep's: the unary ops
+  with a block in the table. It runs for a change to an SFPU kernel (a file named
+  `*sfpu*`, or under a directory so named, in either architecture's `tt-llk` or
+  `hw/ckernels` tree) or to a table; a change to the harness, the golden, SFPI or any
+  other header is caught by the nightly. It also fails a loosened budget unless the PR
+  has the `ulp-budget-raise-approved` label and changes only the tables and, in
+  `hardware_free/accuracy/test_sfpu_accuracy_budget.py`, the acknowledgement lists
+  (`_UNMEASURABLE_CELLS_ACKNOWLEDGED*` and `ONLY_EVER_TOLERANCE`). A new row's recorded
+  figure is never a loosening; its declared `atol`/`rtol` is, for a new op too, since it
+  replaces the per-format default the functional drivers held the variant to. A change
+  to the check itself (its script, `ulp_affected.py` or `test_unary_sfpu_ulp.py`)
+  sweeps every cell. Every cell, on both cards, runs nightly (the `llk_sfpu_ulp_sweep`
+  rows of `llk_e2e_tests.yaml`).
 - **Most specific key wins.** Key fields are `input`, `output`, `approx`, `dest` and
   `arch`, all optional; two rows matching one variant equally specifically are refused.
 - **A row holds for the configuration it was measured in**: `FAST_MODE(No)` and
@@ -213,7 +229,7 @@ bfloat16's ceiling of 6: that entry is why the cell as a whole is not gated, whi
 two others are gated at 3. `log` answers nothing below 0 and is 1 step from 0 up.
 
 - An entry holds the lanes whose input, *as the kernel received it*
-  (`ulp_sweep.received_inputs`: truncated to the 16-bit Dest for a `Float32` input at
+  (`ulp_sweep.Swept.received`: truncated to the 16-bit Dest for a `Float32` input at
   `dest: "No"`), satisfies `L <= x < H`; `U` is the worst ranked lane there outside the
   row's floor. An entry with no `ulp` has fewer than `DOMAIN_MIN_BIN_LANES` ranked lanes
   in each of its binades; its strays are held to the row's largest figure.
@@ -238,8 +254,8 @@ two others are gated at 3. `log` answers nothing below 0 and is 1 step from 0 up
 
 - **Any host pytest run in `tests/` wipes `/tmp/tt-llk-build`**: chain
   `--compile-producer` and `--compile-consumer`, and run host suites afterwards.
-- **The sweep is marked `accuracy`**, which every LLK workflow deselects; run it by name
-  or `-m accuracy`.
+- **The sweep is marked `accuracy`**, which the general LLK legs deselect; only the
+  `llk_sfpu_ulp_*` legs run it, by file. Locally, run it by name or `-m accuracy`.
 - **Both runs take the same op set**: every unary op with a block in the table, whatever
   its rows say. `--ulp-emit` changes what is written, not what is collected.
 - **A plain gate run does not judge tolerance cells**: it skips them with the measured
@@ -271,10 +287,11 @@ two others are gated at 3. `log` answers nothing below 0 and is 1 step from 0 up
 | `python_tests/helpers/ulp.py` | the metric: `ulp_distance`, the elementwise verdict, the near-zero floor |
 | `python_tests/helpers/ulp_sweep.py` | what the sweep feeds, what it masks, and the emitter |
 | `python_tests/helpers/sfpu_accuracy_budget_wh.yaml`, `_bh.yaml` | the table, per architecture |
-| `python_tests/helpers/ulp_table.py` | the table as typed rows, its reader and writer, and the `--ulp-measure` records |
-| `python_tests/helpers/sfpu_accuracy_budget.py` | how a row is resolved |
+| `python_tests/helpers/ulp_table.py` | the table as typed rows, how a variant resolves to one (`resolve`), its reader and writer, and the `--ulp-measure` records |
+| `python_tests/helpers/sfpu_accuracy_budget.py` | the loaded table the drivers ask (`accuracy_contract`) |
 | `python_tests/helpers/ulp_domains.py` | the `domains` list and the rule that draws it; `Problem` and `TableError` |
 | `python_tests/helpers/ulp_budget_diff.py` | the PR guard and the headroom report |
+| `python_tests/helpers/ulp_affected.py` | the cells a change can move, for PR Gate's sweep |
 
 ## Notes on the table
 

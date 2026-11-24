@@ -247,7 +247,11 @@ typename DevicePrintParserImpl<PointerSize>::ParsedStringInfo* DevicePrintParser
                         placeholder.enum_info = get_enum_info(placeholder.enum_type_name);
                     }
                     parsed_info.argument_types[placeholder.arg_id] = serialization_type;
-                    parsed_info.arguments_size += get_argument_size_from_type_id(serialization_type);
+                }
+                // Count each argument once: with {N}, several placeholders can print the same argument, but the
+                // device serializes it only once.
+                for (char argument_type : parsed_info.argument_types) {
+                    parsed_info.arguments_size += get_argument_size_from_type_id(argument_type);
                 }
             }
         }

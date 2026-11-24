@@ -186,6 +186,20 @@ struct llk_pack_lofi_api<1>
 {
     static constexpr bool value = MATH_FIDELITY == ckernel::MathFidelity::LoFi;
 };
+#ifdef MATMUL_CUSTOM_IN32
+template <>
+struct llk_pack_in32_api<1>
+{
+    static constexpr bool value = true;
+};
+#endif
+#ifdef MATMUL_CUSTOM_OUT32
+template <>
+struct llk_pack_out32_api<1>
+{
+    static constexpr bool value = true;
+};
+#endif
 } // namespace ckernel::packer
 #endif
 
