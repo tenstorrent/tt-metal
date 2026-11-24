@@ -3486,7 +3486,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         named.emplace_back("is_chunked", 0u);
         named.emplace_back("sliding_window_size", 0u);
         named.emplace_back("use_attention_sink", 0u);
-        named.emplace_back("k_partial_col", global_n_partial_col);
+        // With a logical_n tensor, the placeholder says nothing of the last key tile: the mask step stays (the
+        // writer makes its tile, partial_tile_present) and the kernel takes the live column from the reader's page.
+        named.emplace_back("k_partial_col", has_global_n_partial_tile ? std::max(global_n_partial_col, 1u) : 0u);
+        named.emplace_back("logical_n_from_tensor", static_cast<uint32_t>(has_logical_n_tensor));
         named.emplace_back("use_zigzag", 0u);
         named.emplace_back("use_k_range", 0u);
         named.emplace_back("kv_retain_heads", 0u);
@@ -3526,6 +3529,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         buffer("cb_sum_out", cb_sum_out, stats_df);
         buffer("cb_prev_out", cb_prev_out, out_df);
         buffer("cb_signal", cb_signal, tt::DataFormat::UInt16);
+        buffer("cb_kv_pad_derived", cb_kv_pad_derived, tt::DataFormat::UInt32);  // the reader's page, with a tensor
     }
     compute_kernel.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,

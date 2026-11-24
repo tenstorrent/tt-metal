@@ -485,9 +485,10 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(!tensor_args.joint_q.has_value(), "TT_RING_SDPA_LLK2: a joint sequence is not supported");
         TT_FATAL(args.sliding_window_size.value_or(0) == 0, "TT_RING_SDPA_LLK2: a sliding window is not supported");
         TT_FATAL(!tensor_args.attention_sink.has_value(), "TT_RING_SDPA_LLK2: an attention sink is not supported");
+        // A logical_n tensor is (the reader sends the kernel its length); a dynamic local length is not.
         TT_FATAL(
-            !args.dynamic_local_n && !tensor_args.has_logical_n_tensor() && !tensor_args.has_logical_l_tensor(),
-            "TT_RING_SDPA_LLK2: a run-time sequence length is not supported");
+            !args.dynamic_local_n && !tensor_args.has_logical_l_tensor(),
+            "TT_RING_SDPA_LLK2: a dynamic local length or a joint length tensor is not supported");
         TT_FATAL(
             !kv_pad_rotation_active(args, tensor_args) && !tensor_args.has_metadata() &&
                 !args.kv_cache_batch_idx.has_value(),
