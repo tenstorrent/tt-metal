@@ -294,15 +294,27 @@ LOG_OPS = (MathOperation.Log, MathOperation.LogWithBase)
 # of two and one, plus the inputs whose log is NaN (-inf, NaN, negatives). The Float16_b golden
 # turns a NaN result into +inf, so those are planted only into Float32 stimuli.
 LOG_SPECIAL_VALUES = (
-    0.0, -0.0, math.inf,
-    2.0**-126, 1.5 * 2.0**-126, 1.75 * 2.0**-126, 2.0**-125,
-    1.0, 2.0, 0.5, 2.0**100, 2.0**-100, 3.0e38,
+    0.0,
+    -0.0,
+    math.inf,
+    2.0**-126,
+    1.5 * 2.0**-126,
+    1.75 * 2.0**-126,
+    2.0**-125,
+    1.0,
+    2.0,
+    0.5,
+    2.0**100,
+    2.0**-100,
+    3.0e38,
 )
 LOG_NAN_VALUES = (-math.inf, math.nan, -1.0, -2.5, -(2.0**-126))
 
 
 def _log_special_values(torch_format) -> tuple:
-    return LOG_SPECIAL_VALUES + (LOG_NAN_VALUES if torch_format == torch.float32 else ())
+    return LOG_SPECIAL_VALUES + (
+        LOG_NAN_VALUES if torch_format == torch.float32 else ()
+    )
 
 
 def _plant_log_special_values(src_A: torch.Tensor) -> torch.Tensor:
@@ -1321,7 +1333,9 @@ OP_CONFIGS = [
     OpConfig(MathOperation.Reciprocal, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Sqrt, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Log, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
-    OpConfig(MathOperation.LogWithBase, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    OpConfig(
+        MathOperation.LogWithBase, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True
+    ),
     # Shares the log kernel's calculate_log_body.
     OpConfig(MathOperation.Erfinv, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Tanh, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
