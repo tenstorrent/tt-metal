@@ -23,6 +23,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <cstdlib>
 #include <map>
 #include <string>
 #include <tuple>
@@ -952,6 +953,16 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
         .runtime_arg_schema = compute_schema,
         .hw_config = compute_hw,
     });
+    if (!llk2 && std::getenv("TT_MINIMAL_MATMUL_LLK2") != nullptr) {
+        // CI-ONLY (not for merge): a matmul the LLK 2.0 kernel does not do keeps the 1.0 kernel; say which.
+        log_warning(
+            tt::LogOp,
+            "minimal_matmul compute kernel: 1.0 (switch set; bias {}, activation {}, addcmul {}, swiglu {})",
+            use_bias,
+            fused_activation.has_value(),
+            use_fused_ternary,
+            fuse_swiglu);
+    }
     if (llk2) {
         // LLK 2.0 kernel (TT_MINIMAL_MATMUL_LLK2): the same DFBs, runtime args and block args as compute_metal2.cpp,
         // plus each DFB's data format as the named arg <dfb>_format, the same on all three TRISCs (LLK 2.0 plans on
