@@ -183,6 +183,9 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
         }
         buffer->impl().set_per_core_addresses(std::move(addrs));
         allocated_buffers_.insert(buffer);
+        if (const uint32_t owner_id = current_memory_owner_id(); owner_id != 0) [[unlikely]] {
+            buffer_owners_[buffer] = owner_id;
+        }
         if (tracking_enabled_ && !unsafe_tracked_ids_by_manager_and_trace_.empty()) [[unlikely]] {
             this->record_allocation_if_unsafe(buffer);
         }
@@ -290,6 +293,9 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
         }
     }
     allocated_buffers_.insert(buffer);
+    if (const uint32_t owner_id = current_memory_owner_id(); owner_id != 0) [[unlikely]] {
+        buffer_owners_[buffer] = owner_id;
+    }
     if (tracking_enabled_ && !unsafe_tracked_ids_by_manager_and_trace_.empty()) [[unlikely]] {
         this->record_allocation_if_unsafe(buffer);
     }
@@ -310,6 +316,9 @@ void AllocatorImpl::deallocate_buffer(Buffer* buffer) {
             l1_manager_->deallocate_buffer(addr, AllocatorID{bank_id + 1});
         }
         allocated_buffers_.erase(buffer);
+        if (!buffer_owners_.empty()) [[unlikely]] {
+            buffer_owners_.erase(buffer);
+        }
         if (tracking_enabled_ && !unsafe_allocation_contexts_.empty()) [[unlikely]] {
             this->record_deallocation(buffer->unique_id());
         }
@@ -326,6 +335,9 @@ void AllocatorImpl::deallocate_buffer(Buffer* buffer) {
         }
     }
     allocated_buffers_.erase(buffer);
+    if (!buffer_owners_.empty()) [[unlikely]] {
+        buffer_owners_.erase(buffer);
+    }
     if (tracking_enabled_ && !unsafe_allocation_contexts_.empty()) [[unlikely]] {
         this->record_deallocation(buffer->unique_id());
     }
@@ -689,6 +701,7 @@ AllocatorImpl::~AllocatorImpl() {
         }
     }
     allocated_buffers_.clear();
+    buffer_owners_.clear();
 }
 
 AllocatorState AllocatorImpl::extract_state() const {
@@ -737,6 +750,7 @@ void AllocatorImpl::override_state(const AllocatorState& state) {
         this->record_all_deallocations();
     }
     allocated_buffers_.clear();
+    buffer_owners_.clear();
 
     // Apply state for each buffer type
     for (const auto& [buffer_type, type_state] : state.get_states_per_buffer_type()) {

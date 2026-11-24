@@ -18,6 +18,8 @@
 #include <utility>
 #include <vector>
 
+#include <enchantum/enchantum.hpp>
+#include <fmt/format.h>
 #include <nanobind/nanobind.h>
 #include <nanobind/operators.h>
 #include <nanobind/stl/array.h>
@@ -44,6 +46,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/memory_reporter.hpp>
+#include <tt-metalium/experimental/memory_owner.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/experimental/kernel_cache.hpp>
 #include <tt-metalium/experimental/operation_timeout.hpp>
@@ -208,6 +211,27 @@ void py_device_module_types(nb::module_& m_device) {
             "largest_contiguous_bytes_free_per_bank",
             &tt::tt_metal::detail::MemoryView::largest_contiguous_bytes_free_per_bank)
         .def_ro("block_table", &tt::tt_metal::detail::MemoryView::block_table);
+
+    using tt::tt_metal::experimental::MemoryUsageByOwner;
+    nb::class_<MemoryUsageByOwner>(
+        m_device, "MemoryUsageByOwner", "Live device buffers of one owner and buffer type (see ttnn.memory_owner).")
+        .def_ro("owner", &MemoryUsageByOwner::owner, "Owner name; empty for buffers allocated with no owner set")
+        .def_ro("buffer_type", &MemoryUsageByOwner::buffer_type)
+        .def_ro("num_buffers", &MemoryUsageByOwner::num_buffers)
+        .def_ro("total_bytes", &MemoryUsageByOwner::total_bytes, "Sum of the buffers' sizes over all banks")
+        .def_ro(
+            "bytes_per_bank",
+            &MemoryUsageByOwner::bytes_per_bank,
+            "Largest footprint in any one bank: per core for L1, per channel for DRAM")
+        .def("__repr__", [](const MemoryUsageByOwner& self) {
+            return fmt::format(
+                "MemoryUsageByOwner(owner='{}', buffer_type={}, num_buffers={}, total_bytes={}, bytes_per_bank={})",
+                self.owner,
+                enchantum::to_string(self.buffer_type),
+                self.num_buffers,
+                self.total_bytes,
+                self.bytes_per_bank);
+        });
 }
 
 void device_module(nb::module_& m_device) {
@@ -598,6 +622,26 @@ void device_module(nb::module_& m_device) {
         nb::arg("device").noconvert(),
         nb::arg("prefix").noconvert() = std::string(""),
         dump_device_memory_state_doc.data());
+
+    m_device.def(
+        "push_memory_owner",
+        [](const std::string& owner) { tt::tt_metal::experimental::push_memory_owner(owner); },
+        nb::arg("owner"),
+        "Attribute device buffers allocated on this thread to ``owner`` until the matching pop. Prefer "
+        "ttnn.memory_owner.");
+    m_device.def(
+        "pop_memory_owner",
+        []() { tt::tt_metal::experimental::pop_memory_owner(); },
+        "Restore the memory owner that was set before the matching push.");
+    m_device.def(
+        "current_memory_owner",
+        []() { return tt::tt_metal::experimental::current_memory_owner(); },
+        "The memory owner set on this thread, or an empty string.");
+    m_device.def(
+        "get_memory_usage_by_owner",
+        [](MeshDevice* device) { return tt::tt_metal::experimental::get_memory_usage_by_owner(*device); },
+        nb::arg("device").noconvert(),
+        "Live device buffers of the mesh device grouped by owner and buffer type.");
 
     constexpr std::string_view get_memory_view_doc = R"doc(
         Populates MemoryView for BufferType [dram, l1, l1 small, trace]. Used when storing to disk is not an option.

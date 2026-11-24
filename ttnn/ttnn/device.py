@@ -240,6 +240,41 @@ def get_memory_view(device, buffer_type):
     return ttnn._ttnn.device.GetMemoryView(device, buffer_type)
 
 
+@contextlib.contextmanager
+def memory_owner(owner: str):
+    """Attribute device buffers allocated on this thread inside the block to ``owner``.
+
+    Use it to tell apart the memory of several models (or other workloads) that share one device in one process.
+    Scopes nest; the innermost owner wins. Attribution is recorded when a buffer is allocated, including buffers that
+    operations allocate internally, and dropped when it is freed. Query with :func:`get_memory_usage_by_owner`.
+
+    Example:
+        >>> with ttnn.memory_owner("llama"):
+        ...     model = load_model(device)
+    """
+    ttnn._ttnn.device.push_memory_owner(owner)
+    try:
+        yield
+    finally:
+        ttnn._ttnn.device.pop_memory_owner()
+
+
+def current_memory_owner() -> str:
+    """Return the owner set on this thread by :func:`memory_owner`, or ``""`` when none is set."""
+    return ttnn._ttnn.device.current_memory_owner()
+
+
+def get_memory_usage_by_owner(device):
+    """Return the live device buffers of ``device`` grouped by owner and buffer type.
+
+    Each entry has ``owner`` (``""`` for buffers allocated with no owner set), ``buffer_type``, ``num_buffers``,
+    ``total_bytes`` (summed over all banks) and ``bytes_per_bank`` (the owner's largest footprint in any one bank:
+    per core for L1, per channel for DRAM). Buffers from the global allocator and the active sub-device manager's
+    allocators are included.
+    """
+    return ttnn._ttnn.device.get_memory_usage_by_owner(device)
+
+
 def get_allocator_base_address(device, buffer_type):
     """Return the lowest address (bytes) of the given allocator region.
 
