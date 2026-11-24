@@ -189,8 +189,9 @@ card:
     - DFlash2 helps most on short and medium prompts. On long, hard-to-predict text the gain shrinks to about 1.3x over
       plain decoding; it stayed faster at every length measured (32K to 250K).
     - New in this release (2026-11-24, third): `batch` speculates for sampled requests too (temperature > 0 with the
-      device's top-k: one user on natural chat at T 0.7 gets ~87 t/s/u vs 61, two ~81 vs 59, four ~61 vs 56); a
-      request with its own seed decodes without speculation, so the same seed gives the same text.
+      device's top-k: one user on natural chat at T 0.7 gets ~89 t/s/u vs 61, two ~78 vs 59, four ~63 vs 56); a
+      request with its own seed decodes without speculation, so the same seed gives the same text. Greedy decoding
+      gives up ~5% for it (one user 91 vs 96 t/s/u: the verify rows now draw tokens instead of taking the argmax).
     - Earlier today: `batch` became the speculating engine (the `batch-dflash2` profile replaced the plain `batch`), its
       KV pool stores V in 4-bit block floats (1,792,000 tokens, +27%), a request preempted when the pool runs out
       resumes from host RAM instead of re-prefilling, and requests with logprobs, structured output, logit_bias,
@@ -199,8 +200,8 @@ card:
     ### Which profile
     - One user, greedy (temperature 0): `single-user`.
     - Anything else (sampling, 2 to 32 users, logprobs, structured output): `batch`. Its greedy and sampled requests
-      speculate while a few users are live (one user on natural text gets about 92-96 t/s/u greedy, 87 sampled at
-      T 0.7; four about 63 / 61); more users, penalized or seeded requests get the plain decode (60 t/s/u for one user,
+      speculate while a few users are live (one user on natural text gets about 91 t/s/u greedy, 89 sampled at
+      T 0.7; four about 61 / 63); more users, penalized or seeded requests get the plain decode (60 t/s/u for one user,
       22 at 32).
     - If the time to the first token matters more than decode speed: `batch` with the TTFT-first option below.
 
@@ -275,9 +276,9 @@ card:
 
     | users | `batch` greedy t/s/u | `batch` sampled t/s/u | plain decode t/s/u |
     |---|---|---|---|
-    | 1 | 92 | 87 | 61 |
-    | 2 | 82 | 81 | 59 |
-    | 4 | 63 | 61 | 56 |
+    | 1 | 91 | 89 | 61 |
+    | 2 | 80 | 78 | 59 |
+    | 4 | 61 | 63 | 56 |
     | 8 | 51 | 51 | 51 |
 
     ### Prefill and decode on `batch`, and the TTFT-first option
@@ -298,29 +299,29 @@ card:
     | `single-user` | 1 | 128 / 128 | 124.0 | 142.1 | 0.14 s |
     | `single-user` | 1 | 8192 / 128 | 73.5 | 175.2 | 1.02 s |
     | `single-user` | 1 | 32768 / 128 | 29.8 | 209.0 | 3.69 s |
-    | `batch` | 1 | 128 / 128 | 52.6 | 58.1 | 0.25 s |
-    | `batch` | 8 | 128 / 128 | 314.5 | 50.1 | 0.72 s |
-    | `batch` | 16 | 128 / 128 | 443.2 | 36.0 | 1.09 s |
-    | `batch` | 32 | 128 / 128 | 535.7 | 21.9 | 1.84 s |
-    | `batch` | 32 | 128 / 1024 | 661.3 | 21.4 | 1.81 s |
-    | `batch` | 32 | 2048 / 128 | 286.2 | 20.9 | 8.24 s |
-    | `batch` | 32 | 8192 / 1024 | 403.0 | 18.2 | 25.00 s |
-    | `batch` | 1 | 32768 / 128 | 21.2 | 89.2 | 4.60 s |
-    | `batch` | 1 | 250000 / 128 | 2.1 | 39.1 | 58.77 s |
-    | `batch`, greedy | 1 | 128 / 128 | 61.0 | 68.6 | 0.25 s |
-    | `batch`, greedy | 2 | 128 / 128 | 96.9 | 59.0 | 0.37 s |
-    | `batch`, greedy | 4 | 128 / 128 | 161.8 | 46.3 | 0.41 s |
-    | `batch`, greedy | 8 | 128 / 128 | 311.5 | 50.1 | 0.75 s |
-    | `batch`, greedy | 8 | 2048 / 128 | 194.1 | 48.4 | 2.65 s |
-    | `batch`, greedy | 1 | 8192 / 128 | 42.9 | 89.4 | 1.56 s |
-    | `batch`, greedy | 1 | 32768 / 128 | 21.1 | 86.7 | 4.61 s |
-    | `batch`, greedy | 1 | 250000 / 128 | 2.1 | 38.7 | 58.67 s |
+    | `batch` | 1 | 128 / 128 | 51.4 | 56.5 | 0.25 s |
+    | `batch` | 8 | 128 / 128 | 314.4 | 50.1 | 0.72 s |
+    | `batch` | 16 | 128 / 128 | 443.2 | 36.0 | 1.10 s |
+    | `batch` | 32 | 128 / 128 | 535.9 | 21.9 | 1.83 s |
+    | `batch` | 32 | 128 / 1024 | 661.7 | 21.4 | 1.81 s |
+    | `batch` | 32 | 2048 / 128 | 286.2 | 20.9 | 8.23 s |
+    | `batch` | 32 | 8192 / 1024 | 402.6 | 18.1 | 25.00 s |
+    | `batch` | 1 | 32768 / 128 | 18.0 | 51.6 | 4.63 s |
+    | `batch` | 1 | 250000 / 128 | 2.1 | 43.3 | 58.46 s |
+    | `batch`, greedy | 1 | 128 / 128 | 61.4 | 69.0 | 0.24 s |
+    | `batch`, greedy | 2 | 128 / 128 | 93.2 | 57.9 | 0.37 s |
+    | `batch`, greedy | 4 | 128 / 128 | 160.9 | 46.6 | 0.41 s |
+    | `batch`, greedy | 8 | 128 / 128 | 313.3 | 50.0 | 0.73 s |
+    | `batch`, greedy | 8 | 2048 / 128 | 194.0 | 48.4 | 2.65 s |
+    | `batch`, greedy | 1 | 8192 / 128 | 42.7 | 89.3 | 1.58 s |
+    | `batch`, greedy | 1 | 32768 / 128 | 21.0 | 85.6 | 4.60 s |
+    | `batch`, greedy | 1 | 250000 / 128 | 2.1 | 51.4 | 58.49 s |
 
     `batch` rows use the model's default sampling (temperature > 0), which now speculates where it pays too; the
     greedy rows run greedy. Both use random-token prompts, on which drafts are accepted much less than on natural text
     (see the table above): such requests are probed and then decoded plainly, which costs a few percent (1-user 128-token
-    rows 58 vs 60.5 t/s/u plain; the 250K rows ~39 vs 43), and the long-context rows vary run to run with how much of
-    each request ends up speculating.
+    rows 56.5 vs 60.5 t/s/u plain, the 32K sampled row 51.6 vs 57.6), and the long-context rows vary run to run with how
+    much of each request ends up speculating.
 
   performance: |
     | profile | ISL | OSL | concurrency | N | TTFT (ms) | prefill tok/s/u | decode tok/s/u | E2EL (s) |
@@ -329,21 +330,21 @@ card:
     | `single-user` | 8,192 | 128 | 1 | 2 | 1,015 | 8,070 | 175.2 | 1.7 |
     | `single-user` | 32,768 | 128 | 1 | 1 | 3,685 | 8,891 | 209.0 | 4.3 |
     | `single-user` | 131,072 | 128 | 1 | 1 | 21,710 | 6,037 | 93.9 | 23.1 |
-    | `batch` | 128 | 128 | 1 | 4 | 246 | 519 | 58.1 | 2.4 |
+    | `batch` | 128 | 128 | 1 | 4 | 245 | 522 | 56.5 | 2.5 |
     | `batch` | 128 | 128 | 8 | 32 | 722 | 177 | 50.1 | 3.3 |
-    | `batch` | 128 | 128 | 16 | 64 | 1,092 | 117 | 36.0 | 4.6 |
-    | `batch` | 128 | 128 | 32 | 128 | 1,841 | 70 | 21.9 | 7.6 |
-    | `batch` | 128 | 1,024 | 32 | 64 | 1,815 | 71 | 21.4 | 49.6 |
-    | `batch` | 2,048 | 128 | 32 | 64 | 8,238 | 249 | 20.9 | 14.3 |
-    | `batch` | 8,192 | 1,024 | 32 | 64 | 24,995 | 328 | 18.2 | 81.3 |
-    | `batch` | 32,768 | 128 | 1 | 1 | 4,602 | 7,120 | 89.2 | 6.0 |
-    | `batch` | 250,000 | 128 | 1 | 1 | 58,765 | 4,254 | 39.1 | 62.0 |
-    | `batch`, greedy | 128 | 128 | 1 | 4 | 248 | 517 | 68.6 | 2.1 |
-    | `batch`, greedy | 128 | 128 | 4 | 16 | 414 | 309 | 46.3 | 3.2 |
-    | `batch`, greedy | 128 | 128 | 8 | 32 | 750 | 171 | 50.1 | 3.3 |
-    | `batch`, greedy | 2,048 | 128 | 8 | 16 | 2,649 | 773 | 48.4 | 5.3 |
-    | `batch`, greedy | 8,192 | 128 | 1 | 2 | 1,560 | 5,250 | 89.4 | 3.0 |
-    | `batch`, greedy | 32,768 | 128 | 1 | 1 | 4,606 | 7,114 | 86.7 | 6.1 |
+    | `batch` | 128 | 128 | 16 | 64 | 1,096 | 117 | 36.0 | 4.6 |
+    | `batch` | 128 | 128 | 32 | 128 | 1,834 | 70 | 21.9 | 7.6 |
+    | `batch` | 128 | 1,024 | 32 | 64 | 1,815 | 71 | 21.4 | 49.5 |
+    | `batch` | 2,048 | 128 | 32 | 64 | 8,232 | 249 | 20.9 | 14.3 |
+    | `batch` | 8,192 | 1,024 | 32 | 64 | 25,005 | 328 | 18.1 | 81.4 |
+    | `batch` | 32,768 | 128 | 1 | 1 | 4,632 | 7,074 | 51.6 | 7.1 |
+    | `batch` | 250,000 | 128 | 1 | 1 | 58,463 | 4,276 | 43.3 | 61.4 |
+    | `batch`, greedy | 128 | 128 | 1 | 4 | 244 | 525 | 69.0 | 2.1 |
+    | `batch`, greedy | 128 | 128 | 4 | 16 | 410 | 312 | 46.6 | 3.1 |
+    | `batch`, greedy | 128 | 128 | 8 | 32 | 730 | 175 | 50.0 | 3.3 |
+    | `batch`, greedy | 2,048 | 128 | 8 | 16 | 2,652 | 772 | 48.4 | 5.3 |
+    | `batch`, greedy | 8,192 | 128 | 1 | 2 | 1,575 | 5,201 | 89.3 | 3.0 |
+    | `batch`, greedy | 32,768 | 128 | 1 | 1 | 4,599 | 7,125 | 85.6 | 6.1 |
 
     Means of `vllm bench serve` runs (random prompts, ignore_eos; `single-user` greedy) on a P300x2 with chip clocks
     logged: `single-user` 2026-11-20 (median 1350 MHz), `batch` 2026-11-24 (median 1350 MHz, at most 68 °C; prefix
@@ -355,7 +356,7 @@ card:
     Prefix caching (`batch`, on by default: `RESIDENT_PREFIX_CACHE_GB`, 32 GB of host RAM; 0 turns it off): a prompt's
     state at its last 1,024-token boundary is kept in host memory (for the speculating build also the drafter's taps),
     and a later prompt that starts with it restores it instead of prefilling it. A 3-turn chat over a 12,021-token
-    document (greedy, served, 2026-11-24): TTFT 1.98 / 0.70 / 0.72 s vs 1.42 / 1.38 / 1.37 s without the cache
+    document (greedy, served, 2026-11-24): TTFT 1.98 / 0.71 / 0.69 s vs 1.42 / 1.38 / 1.37 s without the cache
     (2026-11-22); the answers are identical. Storing a long prompt that misses the cache costs its first request about
     +0.9 s at 32K tokens (the 32K TTFT above).
   limitations: |
