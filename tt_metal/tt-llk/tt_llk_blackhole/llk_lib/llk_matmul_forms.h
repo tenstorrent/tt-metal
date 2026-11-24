@@ -1103,6 +1103,7 @@ inline constexpr std::uint64_t matmul_grid_main_cells[] = {
     0x00'10'06'07'00'61'03'01,
     0x00'10'06'07'00'71'03'01,
     0x00'10'06'07'00'81'03'01,
+    0x00'11'06'06'05'13'01'01,
     0x00'11'06'06'05'21'01'01,
     0x01'11'06'06'00'11'01'04,
     0x00'10'06'06'00'17'02'01,
@@ -2619,6 +2620,36 @@ inline constexpr matmul_section_end_cell matmul_main_section_end_cells[] = {
     {DataFormat::Float32, DataFormat::Float32, DataFormat::Tf32, 3, 1, 2},
     {DataFormat::Float32, DataFormat::Float32, DataFormat::Tf32, 1, 2, 2},
 };
+
+// Blocks the tt-llk perf harness unpacks per row (no hoisted row invariants): there the shorter unpack call only moved the
+// hand-off and lost against main (LoFi half sync, abl9/abl10). The compute API decides the hoist without the block.
+inline constexpr matmul_grid_main_cell matmul_unhoist_cells[] = {
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp8_b, 2, 1, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Float32, 4, 1, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Float16_b, 1, 3, 1, 0, false, 1},
+};
+
+constexpr bool matmul_unhoist_cell(
+    const MathFidelity fidelity,
+    const bool half_sync,
+    const bool fp32_acc,
+    const DataFormat in1,
+    const DataFormat in0,
+    const DataFormat out,
+    const std::uint32_t rt,
+    const std::uint32_t ct,
+    const std::uint32_t kt)
+{
+    for (const matmul_grid_main_cell& c : matmul_unhoist_cells)
+    {
+        if (c.fidelity == fidelity && c.half_sync == half_sync && c.fp32_acc == fp32_acc && c.in1 == in1 && c.in0 == in0 && c.out == out && c.rt == rt &&
+            c.ct == ct && c.kt == kt)
+        {
+            return true;
+        }
+    }
+    return false;
+}
 
 // HiFi2 half sync blocks with a Float32 operand and a Bfp8_b output keep main's section end at any block: there the RISC-pushed
 // base write holds the post (4-16 cy per section)
