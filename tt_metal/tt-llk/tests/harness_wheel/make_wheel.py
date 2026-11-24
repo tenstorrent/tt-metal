@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Build the wheel of the tt-llk Python test harness.
 
-    tests/harness_wheel/make_wheel.py [--out-dir DIR] [--version VERSION]
+    tests/harness_wheel/make_wheel.py [--out-dir DIR]
 
 The wheel is the harness an out-of-tree suite attaches to through
 ``tt_llk_harness`` (docs/tests/getting_started.md, "The supported surface"),
@@ -19,8 +19,7 @@ packaged so that suite installs it instead of putting a tt-llk checkout on
   and ``tt_llk_perf`` (``LLK_HOME_FILES`` below);
 - ``tt_llk_harness/requirements.txt``, the Python requirements the harness is
   tested with. The wheel requires what the harness imports
-  (``RUNTIME_REQUIREMENTS``), unpinned; its ``pinned`` extra pins those to the
-  versions in that file.
+  (``RUNTIME_REQUIREMENTS``), unpinned; installing that file first pins them.
 
 It holds no LLK, kernel, test driver, firmware source, linker script or
 toolchain: the suite that installs it supplies those through ``LLK_HOME`` and
@@ -40,15 +39,20 @@ files git tracks or would add, so nothing ignored.
 from __future__ import annotations
 
 import argparse
+import ast
 import base64
+import csv
 import hashlib
+import io
 import os
-import re
 import subprocess
 import sys
 import time
 import zipfile
-from pathlib import Path
+from email.message import Message
+from email.policy import compat32
+from pathlib import Path, PurePosixPath
+from typing import NamedTuple
 
 LLK_ROOT = Path(__file__).resolve().parents[2]
 
@@ -56,12 +60,12 @@ DISTRIBUTION = "tt_llk_harness"
 
 # Python packages: directory in tt-llk -> package in the wheel.
 PACKAGES = {
-    "tests/python_tests/helpers": "helpers",
-    "tests/python_tests/tt_llk_harness": "tt_llk_harness",
+    "tests/python_tests/helpers": PurePosixPath("helpers"),
+    "tests/python_tests/tt_llk_harness": PurePosixPath("tt_llk_harness"),
 }
 # Top-level modules: file in tt-llk -> module in the wheel.
 MODULES = {
-    "tests/python_tests/ttsim_error.py": "ttsim_error.py",
+    "tests/python_tests/ttsim_error.py": PurePosixPath("ttsim_error.py"),
 }
 # tt-llk files and directories the harness needs beside its Python, kept at these same paths under LLK_HOME_PREFIX.
 LLK_HOME_FILES = (
@@ -78,10 +82,10 @@ LLK_HOME_FILES = (
     # the ttnn wheel installs one of that name.
     "tools/python/tt_llk_perf",
 )
-LLK_HOME_PREFIX = "tt_llk_harness/llk_home"
+LLK_HOME_PREFIX = PurePosixPath("tt_llk_harness/llk_home")
 REQUIREMENTS = "tests/requirements.txt"
-REQUIREMENTS_IN_WHEEL = "tt_llk_harness/requirements.txt"
-# What the harness imports, by the names tests/requirements.txt pins.
+REQUIREMENTS_IN_WHEEL = PurePosixPath("tt_llk_harness/requirements.txt")
+# What the harness imports.
 RUNTIME_REQUIREMENTS = (
     "filelock",
     "loguru",
@@ -111,25 +115,28 @@ def _git(directory: Path, *args: str) -> str:
     return subprocess.run(
         ["git", "-C", str(directory), *args],
         check=True,
-        capture_output=True,
+        stdout=subprocess.PIPE,
         text=True,
         env=env,
-    ).stdout.strip()
+    ).stdout
 
 
 def _files_under(source: Path) -> list[Path]:
     """The files of a directory that git tracks or would add, sorted, as paths relative to it."""
-    listed = _git(source, "ls-files", "--cached", "--others", "--exclude-standard")
+    # -z: one NUL-terminated name per file, exactly as stored, with no quoting to undo.
+    listed = _git(
+        source, "ls-files", "-z", "--cached", "--others", "--exclude-standard"
+    )
     return sorted(
-        Path(name) for name in listed.splitlines() if (source / name).is_file()
+        Path(name) for name in listed.split("\0") if (source / name).is_file()
     )
 
 
-def wheel_contents(llk_root: Path = LLK_ROOT) -> dict[str, Path]:
+def wheel_contents(llk_root: Path = LLK_ROOT) -> dict[PurePosixPath, Path]:
     """Path in the wheel -> file in tt-llk, for everything but the metadata."""
-    contents: dict[str, Path] = {}
+    contents: dict[PurePosixPath, Path] = {}
 
-    def add(target: str, source: Path) -> None:
+    def add(target: PurePosixPath, source: Path) -> None:
         if not source.is_file():
             raise FileNotFoundError(
                 f"{source} is listed in {Path(__file__).name} but does not exist"
@@ -141,123 +148,132 @@ def wheel_contents(llk_root: Path = LLK_ROOT) -> dict[str, Path]:
         if not (root / "__init__.py").is_file():
             raise FileNotFoundError(f"{root} is not a Python package")
         for relative in _files_under(root):
-            add(f"{package}/{relative.as_posix()}", root / relative)
+            add(package / relative, root / relative)
     for source, module in MODULES.items():
         add(module, llk_root / source)
     for source in LLK_HOME_FILES:
         path = llk_root / source
         if path.is_dir():
             for relative in _files_under(path):
-                add(
-                    f"{LLK_HOME_PREFIX}/{source}/{relative.as_posix()}", path / relative
-                )
+                add(LLK_HOME_PREFIX / source / relative, path / relative)
         else:
-            add(f"{LLK_HOME_PREFIX}/{source}", path)
+            add(LLK_HOME_PREFIX / source, path)
     add(REQUIREMENTS_IN_WHEEL, llk_root / REQUIREMENTS)
     return contents
 
 
 def api_version(llk_root: Path = LLK_ROOT) -> tuple[int, int]:
-    """``HARNESS_API_VERSION``, read from the source: importing the harness needs its requirements installed."""
-    text = (llk_root / "tests/python_tests/tt_llk_harness/__init__.py").read_text()
-    match = re.search(
-        r"^HARNESS_API_VERSION\s*=\s*\((\d+),\s*(\d+)\)", text, re.MULTILINE
+    """``HARNESS_API_VERSION``, read from the parsed source: importing the harness needs its requirements installed."""
+    source = llk_root / "tests/python_tests/tt_llk_harness/__init__.py"
+    for statement in ast.parse(source.read_text()).body:
+        if isinstance(statement, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "HARNESS_API_VERSION"
+            for target in statement.targets
+        ):
+            major, minor = ast.literal_eval(statement.value)
+            return major, minor
+    raise RuntimeError(f"{source} does not assign HARNESS_API_VERSION")
+
+
+class Version(NamedTuple):
+    """The wheel's version, ``<API major>.<API minor>.<commit time>+g<commit>``, by its parts."""
+
+    api: tuple[int, int]
+    committed: int  # commit time, seconds since the epoch
+    commit: int  # the commit's SHA-1
+    dirty: bool = False  # built with uncommitted harness changes
+
+    def __str__(self) -> str:
+        major, minor = self.api
+        # To the minute: the ``+g<commit>`` part orders lexically, so it cannot order two wheels of one day.
+        stamp = time.strftime("%Y%m%d%H%M", time.gmtime(self.committed))
+        # The first 12 of the SHA-1's 40 hex digits.
+        commit = self.commit >> 4 * (40 - 12)
+        return f"{major}.{minor}.{stamp}+g{commit:012x}{'.dirty' if self.dirty else ''}"
+
+
+def default_version(llk_root: Path = LLK_ROOT) -> Version:
+    """The version of the commit ``llk_root`` is at."""
+    sources = [*PACKAGES, *MODULES, *LLK_HOME_FILES, REQUIREMENTS]
+    return Version(
+        api=api_version(llk_root),
+        committed=int(_git(llk_root, "log", "-1", "--format=%ct")),
+        commit=int(_git(llk_root, "rev-parse", "HEAD"), 16),
+        dirty=bool(_git(llk_root, "status", "--porcelain", "--", *sources)),
     )
-    if match is None:
-        raise RuntimeError(
-            "HARNESS_API_VERSION not found in tt_llk_harness/__init__.py"
-        )
-    return int(match.group(1)), int(match.group(2))
 
 
-def default_version(llk_root: Path = LLK_ROOT) -> str:
-    """``<API major>.<API minor>.<commit time, UTC>+g<commit>``, with ``.dirty`` for uncommitted harness changes."""
-    major, minor = api_version(llk_root)
-    try:
-        commit = _git(llk_root, "rev-parse", "--short=12", "HEAD")
-        committed = int(_git(llk_root, "log", "-1", "--format=%ct"))
-        sources = [*PACKAGES, *MODULES, *LLK_HOME_FILES, REQUIREMENTS]
-        dirty = _git(llk_root, "status", "--porcelain", "--", *sources)
-    except (OSError, subprocess.CalledProcessError) as error:
-        raise RuntimeError(
-            "Cannot derive the wheel version from git; pass --version."
-        ) from error
-    # To the minute: the ``+g<commit>`` part orders lexically, so it cannot order two wheels of one day.
-    stamp = time.strftime("%Y%m%d%H%M", time.gmtime(committed))
-    return f"{major}.{minor}.{stamp}+g{commit}{'.dirty' if dirty else ''}"
+def _headers(fields: list[tuple[str, str]]) -> bytes:
+    """A ``Name: value`` metadata file (METADATA and WHEEL are both in the email header format)."""
+    message = Message(policy=compat32.clone(max_line_length=0))
+    for name, value in fields:
+        message[name] = value
+    return message.as_bytes()
 
 
-def pinned_requirements(llk_root: Path = LLK_ROOT) -> dict[str, str]:
-    """Name -> ``name==version`` for the lines of tests/requirements.txt that are exactly that."""
-    text = (llk_root / REQUIREMENTS).read_text()
-    pin = re.compile(r"^([A-Za-z0-9._-]+)==[A-Za-z0-9.]+$", re.MULTILINE)
-    return {match[1]: match[0] for match in pin.finditer(text)}
+def _metadata(version: Version) -> bytes:
+    return _headers(
+        [
+            ("Metadata-Version", "2.1"),
+            ("Name", "tt-llk-harness"),
+            ("Version", str(version)),
+            (
+                "Summary",
+                "tt-llk Python test harness: build and run of a test variant, stimuli, goldens, comparison",
+            ),
+            (
+                "Home-page",
+                "https://github.com/tenstorrent/tt-metal/tree/main/tt_metal/tt-llk",
+            ),
+            ("License", "Apache-2.0"),
+            ("Requires-Python", ">=3.10"),
+            *(("Requires-Dist", name) for name in RUNTIME_REQUIREMENTS),
+        ]
+    )
 
 
-def _metadata(version: str, llk_root: Path) -> str:
-    lines = [
-        "Metadata-Version: 2.1",
-        "Name: tt-llk-harness",
-        f"Version: {version}",
-        "Summary: tt-llk Python test harness: build and run of a test variant, stimuli, goldens, comparison",
-        "Home-page: https://github.com/tenstorrent/tt-metal/tree/main/tt_metal/tt-llk",
-        "License: Apache-2.0",
-        "Requires-Python: >=3.10",
-        "Provides-Extra: pinned",
+_WHEEL = _headers(
+    [
+        ("Wheel-Version", "1.0"),
+        ("Generator", "tt-llk tests/harness_wheel/make_wheel.py"),
+        ("Root-Is-Purelib", "true"),
+        ("Tag", "py3-none-any"),
     ]
-    # A KeyError here is a requirement the harness imports that tests/requirements.txt no longer pins as name==version.
-    pins = pinned_requirements(llk_root)
-    lines += [f"Requires-Dist: {name}" for name in RUNTIME_REQUIREMENTS]
-    lines += [
-        f'Requires-Dist: {pins[name]} ; extra == "pinned"'
-        for name in RUNTIME_REQUIREMENTS
-    ]
-    return "\n".join(lines) + "\n"
+)
 
 
-_WHEEL = """Wheel-Version: 1.0
-Generator: tt-llk tests/harness_wheel/make_wheel.py
-Root-Is-Purelib: true
-Tag: py3-none-any
-"""
-
-
-def _record_line(name: str, data: bytes) -> str:
-    digest = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=")
-    return f"{name},sha256={digest.decode()},{len(data)}"
+def _record(entries: dict[PurePosixPath, bytes], record: PurePosixPath) -> bytes:
+    """RECORD: a CSV row of path, hash and size per file, and one without hash and size for itself."""
+    out = io.StringIO()
+    rows = csv.writer(out, lineterminator="\n")
+    for name, data in sorted(entries.items()):
+        digest = base64.urlsafe_b64encode(hashlib.sha256(data).digest())
+        rows.writerow([name, f"sha256={digest.rstrip(b'=').decode()}", len(data)])
+    rows.writerow([record, "", ""])
+    return out.getvalue().encode()
 
 
 def build_wheel(
-    out_dir: Path, version: str | None = None, llk_root: Path = LLK_ROOT
+    out_dir: Path, version: Version | None = None, llk_root: Path = LLK_ROOT
 ) -> Path:
     """Write the wheel into ``out_dir`` and return its path."""
     version = version or default_version(llk_root)
-    if not re.fullmatch(r"\d+(\.\d+)*(\+[A-Za-z0-9]+(\.[A-Za-z0-9]+)*)?", version):
-        raise ValueError(f"not a wheel version: {version!r}")
 
     entries = {
         name: path.read_bytes() for name, path in wheel_contents(llk_root).items()
     }
-    dist_info = f"{DISTRIBUTION}-{version}.dist-info"
-    entries[f"{dist_info}/METADATA"] = _metadata(version, llk_root).encode()
-    entries[f"{dist_info}/WHEEL"] = _WHEEL.encode()
-    entries[f"{dist_info}/licenses/LICENSE"] = (llk_root / "LICENSE").read_bytes()
-    entries[f"{dist_info}/top_level.txt"] = "".join(
-        f"{name}\n"
-        for name in sorted(
-            [*PACKAGES.values(), *(Path(m).stem for m in MODULES.values())]
-        )
-    ).encode()
-    record = [_record_line(name, data) for name, data in sorted(entries.items())]
-    record.append(f"{dist_info}/RECORD,,")
-    entries[f"{dist_info}/RECORD"] = ("\n".join(record) + "\n").encode()
+    dist_info = PurePosixPath(f"{DISTRIBUTION}-{version}.dist-info")
+    entries[dist_info / "METADATA"] = _metadata(version)
+    entries[dist_info / "WHEEL"] = _WHEEL
+    entries[dist_info / "licenses" / "LICENSE"] = (llk_root / "LICENSE").read_bytes()
+    entries[dist_info / "RECORD"] = _record(entries, dist_info / "RECORD")
 
     out_dir.mkdir(parents=True, exist_ok=True)
     wheel = out_dir / f"{DISTRIBUTION}-{version}-py3-none-any.whl"
     # Stored, not deflated: the bytes then do not depend on the zlib that built them.
     with zipfile.ZipFile(wheel, "w") as archive:
         for name, data in sorted(entries.items()):
-            info = zipfile.ZipInfo(name, date_time=_ZIP_TIMESTAMP)
+            info = zipfile.ZipInfo(str(name), date_time=_ZIP_TIMESTAMP)
             info.external_attr = 0o644 << 16
             archive.writestr(info, data)
     return wheel
@@ -273,12 +289,8 @@ def main() -> int:
         default=Path.cwd() / "dist",
         help="directory the wheel is written to (default: ./dist)",
     )
-    parser.add_argument(
-        "--version",
-        help="wheel version (default: <API major>.<API minor>.<commit time>+g<commit>)",
-    )
     args = parser.parse_args()
-    print(build_wheel(args.out_dir, args.version))
+    print(build_wheel(args.out_dir))
     return 0
 
 

@@ -596,11 +596,11 @@ An external suite does not need a tt-llk checkout on `sys.path`: the harness is 
 
 ```bash
 tests/harness_wheel/make_wheel.py --out-dir dist          # needs only git and the Python standard library
-pip install "dist/tt_llk_harness-<version>-py3-none-any.whl[pinned]" \
-    --extra-index-url https://download.pytorch.org/whl/cpu
+pip install -r tests/requirements.txt                      # the versions the harness is tested with
+pip install dist/tt_llk_harness-<version>-py3-none-any.whl
 ```
 
-The wheel requires what the harness imports (torch, tt-exalens, pytest, ...), unpinned. The `pinned` extra pins those to the versions in `tests/requirements.txt`, the ones the harness is tested with; the wheel also carries that whole file as `tt_llk_harness/requirements.txt`. Install with `--no-deps` to manage the requirements yourself.
+The wheel requires what the harness imports (torch, tt-exalens, pytest, ...), unpinned. `tests/requirements.txt` holds the versions the harness is tested with, so installing it first pins them; the wheel carries that file as `tt_llk_harness/requirements.txt`, and the nightly artifact has it beside the wheel.
 
 The nightly **LLK e2e Tests** workflow (`.github/workflows/llk-e2e.yaml`) builds the wheel in its own job once the tests have passed and keeps it as the `llk-harness-wheel` artifact of the run. On the scheduled run of `main`, if the repository variable `LLK_HARNESS_WHEEL_RELEASE_REPO` names a repository, it also publishes the wheel there as a release, using the token in the `LLK_HARNESS_WHEEL_RELEASE_TOKEN` secret. Who can download that release is decided by that repository's visibility.
 

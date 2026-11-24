@@ -9,8 +9,11 @@ wheel. The tests here pin the packaging itself.
 
 from __future__ import annotations
 
+import csv
 import importlib.util
+import io
 import zipfile
+from email.parser import BytesParser
 from pathlib import Path
 
 import pytest
@@ -20,7 +23,7 @@ _spec = importlib.util.spec_from_file_location("build_wheel", _BUILDER)
 build_wheel = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(build_wheel)
 
-VERSION = "1.2.3+gtest"
+VERSION = build_wheel.Version(api=(1, 2), committed=0, commit=0xABC << 148)
 
 
 @pytest.fixture(scope="module")
@@ -85,20 +88,25 @@ def test_wheel_holds_no_kernel_or_firmware_source(names):
     assert not compiled, compiled
 
 
+def test_version_is_api_then_commit_time_then_commit():
+    assert str(VERSION) == "1.2.197001010000+gabc000000000"
+    later = build_wheel.Version(api=(1, 2), committed=60, commit=0, dirty=True)
+    assert str(later) == "1.2.197001010001+g000000000000.dirty"
+
+
 def test_metadata_carries_the_version_and_the_requirements(wheel):
     with zipfile.ZipFile(wheel) as archive:
-        metadata = archive.read(f"tt_llk_harness-{VERSION}.dist-info/METADATA").decode()
-    assert f"Version: {VERSION}\n" in metadata
-    pins = build_wheel.pinned_requirements()
-    for name in build_wheel.RUNTIME_REQUIREMENTS:
-        assert f"Requires-Dist: {name}\n" in metadata
-        assert f'Requires-Dist: {pins[name]} ; extra == "pinned"\n' in metadata
+        metadata = BytesParser().parsebytes(
+            archive.read(f"tt_llk_harness-{VERSION}.dist-info/METADATA")
+        )
+    assert metadata["Version"] == str(VERSION)
+    assert metadata.get_all("Requires-Dist") == list(build_wheel.RUNTIME_REQUIREMENTS)
 
 
 def test_record_lists_every_file(wheel, names):
     with zipfile.ZipFile(wheel) as archive:
         record = archive.read(f"tt_llk_harness-{VERSION}.dist-info/RECORD").decode()
-    recorded = {line.split(",")[0] for line in record.splitlines()}
+    recorded = {path for path, _hash, _size in csv.reader(io.StringIO(record))}
     assert recorded == names
 
 
@@ -112,10 +120,4 @@ def test_default_version_leads_with_the_api_version():
     import tt_llk_harness
 
     assert build_wheel.api_version() == tt_llk_harness.HARNESS_API_VERSION
-    major, minor = tt_llk_harness.HARNESS_API_VERSION
-    assert build_wheel.default_version().startswith(f"{major}.{minor}.")
-
-
-def test_a_version_that_is_not_a_wheel_version_is_rejected(tmp_path):
-    with pytest.raises(ValueError):  # allow-pytest.raises: no expect_error in LLK suite
-        build_wheel.build_wheel(tmp_path, "nightly build")
+    assert build_wheel.default_version().api == tt_llk_harness.HARNESS_API_VERSION
