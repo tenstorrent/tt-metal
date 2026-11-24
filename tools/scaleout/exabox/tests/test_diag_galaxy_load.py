@@ -1014,18 +1014,19 @@ class TestLinks(unittest.TestCase):
             (bb["status"], bb["details"]), (SKIP, "known drop: tray 3 is down and the load needs the 4x8 mesh")
         )
 
-    def test_the_hook_hears_each_stage_start_and_can_hold_the_links_back(self):
+    def test_the_hook_hears_each_stage_start_can_hold_the_links_back_and_reads_the_tests_at_the_end(self):
         import diag_runner
 
         heard = []
 
-        def hear(stage, out, dry):
-            heard.append(stage)
+        def hear(stage, out, dry):  # at the end stage start, the tests' checks are in the report already
+            phases = json.loads((out.parent / "report.json").read_text())["phases"] if stage == "end" else {}
+            heard.append((stage, "tests" in phases))
             return 7 if stage == "links" else 0
 
         with mock.patch.object(diag_runner, "_hear", hear):
             got = self._run_load("weekly", stage_order="reset,busbar,links,end")
-        self.assertEqual(heard, ["reset", "links", "end"])
+        self.assertEqual(heard, [("reset", False), ("links", False), ("end", True)])
         self.assertNotIn("links", got["order"])
         ln = next(c for c in got["report"]["phases"]["tests"]["checks"] if c["name"] == "links")
         self.assertEqual((ln["status"], ln["details"]), (SKIP, "held back by the hook (rc 7)"))

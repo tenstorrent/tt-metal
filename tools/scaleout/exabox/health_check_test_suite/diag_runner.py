@@ -555,6 +555,7 @@ def run_diag(
     if post_test_plan:
         post_reset_phase = Phase(name="post_test_reset")
         t0 = time.time()
+        output.write_text(json.dumps(report, indent=2))  # the tests' checks so far, for the hook's end stage start
         _hear("end", logs_dir, dry_run)
         aer_reset(lambda: run_post_test_reset(tt_smi_path, post_test_plan, post_reset_phase, dry_run, reset_gate))
         if end_seq:
