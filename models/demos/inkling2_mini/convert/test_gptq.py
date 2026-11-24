@@ -83,7 +83,8 @@ def test_weights(tmp_path):
 
 @pytest.mark.skipif(not os.environ.get("INKLING_CKPT"), reason="tokenizer missing (set INKLING_CKPT)")
 def test_corpus(tmp_path):
-    """Sequences come out in command-line order, one kind per source, numbered from --first."""
+    """Sequences come out in command-line order, one kind per source, numbered from --first; the same command
+    gives the same ids; @ and # start a text at a fraction of its characters or tokens."""
     chat = tmp_path / "chat.jsonl"
     talk = lambda i: [
         {"role": "user", "content": f"Count to {i}."},
@@ -104,3 +105,17 @@ def test_corpus(tmp_path):
     assert tuple(d["ids"].shape) == (4, 64) and d["ids"].dtype == torch.int32
     assert d["kinds"] == ["chat", "chat", "docs", "book"] and d["first"] == 5
     assert d["src"][2] == "z.md"
+    G.main(["corpus", "--out", f"{tmp_path}/again.pt", "--seq", "64", "--chat", f"chat:2:{chat}", "--ask", ask]
+           + ["--text", f"book:{book}#0.5", "--text", f"book:{book},{book}", "--reasoning-effort", "none"])  # fmt: skip
+    e = torch.load(f"{tmp_path}/again.pt")
+    assert not torch.equal(e["ids"][0], d["ids"][0])  # the template option changes the chat sequences
+    from transformers import AutoTokenizer
+
+    enc = lambda s: AutoTokenizer.from_pretrained(os.environ["INKLING_CKPT"])(s, add_special_tokens=False)[
+        "input_ids"
+    ]  # noqa: E731
+    text = book.read_text()
+    whole = enc(text)
+    assert d["ids"][3].tolist() == enc(text[len(text) // 2 :])[:64]  # @0.5: half the characters in
+    assert e["ids"][3].tolist() == whole[len(whole) // 2 :][:64]  # #0.5: half the tokens in
+    assert e["ids"][4].tolist() == (whole + enc("\n\n") + whole)[:64]  # files joined by a blank line's tokens

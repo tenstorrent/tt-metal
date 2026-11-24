@@ -7,12 +7,16 @@ Three steps; the result is ``codes:DIR`` (``L{nn}.pt``) for ``convert.variant --
 
 1. corpus   (host) python -m models.demos.inkling2_mini.convert.gptq_calib corpus --out calib/ids.pt \\
                 --chat chat:12:chat.jsonl --ask "code:6:CODE_DIR:.py,.cpp,.hpp:Explain what this code does." \\
-                --text book:BOOK.txt@0.2
+                --text book:BOOK.txt#0.2
    Token sequences of ``--seq`` tokens (2048), in command-line order. ``--chat KIND:N:FILE``: N sequences of whole
    conversations (jsonl, one message list per line) through the chat template. ``--ask KIND:N:ROOT:EXTS:QUESTION``:
    the same with each file under ROOT as one user message (QUESTION, then the file's first 12000 characters).
-   ``--text KIND:FILE[,FILE...][@FRAC]``: one sequence of raw text, from FRAC (0..1) of the joined files. KIND
-   names the domain (chat, code, book, ...) for ``weights``. Use none of the golden / gate prompts.
+   ``--text KIND:FILE[,FILE...][@FRAC|#FRAC]``: one sequence of raw text, the files' tokens with a blank line's
+   after each; it starts at FRAC (0..1) of the first file's characters (@) or tokens (#). KIND names the domain
+   (chat, code, book, ...) for ``weights``. Use none of the golden / gate prompts. Nothing is drawn at random: the
+   same files and options give the same ids.
+   ``data --out DIR`` fetches the public chat sets and books of the documented calibration set (the README has the
+   corpus commands): ultrachat.jsonl, oasst.jsonl, dolly.jsonl, pgN.txt, pgN.body.txt.
    ``weights --ids IDS... --share chat=.35,code=.26,... --out w.json`` writes the ``solve --weights`` map that gives
    each kind that share of the Hessians.
 2. capture  (card) prefill each sequence on the tt model with ``Inkling2Prefill.moe_tap`` set: writes per
@@ -32,7 +36,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import time
+from fractions import Fraction
 from pathlib import Path
 
 import torch
@@ -53,12 +59,13 @@ def corpus(args):
     tok = AutoTokenizer.from_pretrained(args.tokenizer)
     enc = lambda s: tok(s, add_special_tokens=False)["input_ids"]  # noqa: E731
     seq, seqs = args.seq, []  # (ids, kind, source names)
+    template = {"reasoning_effort": args.reasoning_effort} if args.reasoning_effort else {}
 
     def pack(convs, n, kind):
         """n sequences of whole conversations (name, messages); each one starts at a conversation start."""
         cur, src = [], []
         for name, msgs in convs:
-            cur += enc(tok.apply_chat_template(msgs, tokenize=False))
+            cur += enc(tok.apply_chat_template(msgs, tokenize=False, **template))
             src.append(name)
             if len(cur) >= seq:
                 seqs.append((cur[:seq], kind, ",".join(src)))
@@ -85,9 +92,15 @@ def corpus(args):
             pack(((p.name, [{"role": "user", "content": f"{ask}\n\n{text(p)}"}]) for p in files), int(n), kind)
         else:  # text
             kind, rest = spec.split(":", 1)
-            names, _, frac = rest.partition("@")
-            text = "\n\n".join(Path(f).read_text(errors="ignore") for f in names.split(","))
-            ids = enc(text[int(len(text) * float(frac or 0)) :])
+            names, how_frac, frac = re.match(r"(.*?)(?:([@#])([0-9.]+))?$", rest).groups()
+            frac = Fraction(frac or 0)  # of the first file: @ of its characters, # of its tokens
+            ids = []
+            for i, f in enumerate(names.split(",")):  # each file's tokens, then a blank line's
+                text = Path(f).read_text(errors="ignore")
+                if i == 0 and how_frac == "@":
+                    text = text[int(len(text) * frac) :]
+                part = enc(text)
+                ids += (part[int(len(part) * frac) :] if i == 0 and how_frac == "#" else part) + enc("\n\n")
             if len(ids) < seq:
                 raise SystemExit(f"{kind}: {rest} gives {len(ids)} tokens, a sequence takes {seq}")
             seqs.append((ids[:seq], kind, rest))
@@ -99,6 +112,70 @@ def corpus(args):
     torch.save({"ids": ids, "kinds": kinds, "src": [s for _, _, s in seqs], "first": args.first}, args.out)
     count = ", ".join(f"{k} {kinds.count(k)}" for k in dict.fromkeys(kinds))
     print(f"{args.out}: {ids.shape[0]} x {seq} tokens ({count})")
+
+
+DATASETS = {  # name: (Hugging Face dataset, split, first row, last row); rows below the first are held out
+    "ultrachat": ("HuggingFaceH4/ultrachat_200k", "test_sft", 0, 99),
+    "oasst": ("OpenAssistant/oasst_top1_2023-08-25", "test", 190, 399),
+    "dolly": ("databricks/databricks-dolly-15k", "train", 59, 299),
+}
+BOOKS = (84, 98, 1400, 345)  # Project Gutenberg numbers
+
+
+def data(args):
+    """The public texts of the calibration set, as corpus reads them: NAME.jsonl (one message list per line) from
+    the Hugging Face datasets API; pgN.txt (the N-0.txt plain text) from the Project Gutenberg mirror and
+    pgN.body.txt, its text between the START and END marker lines."""
+    import urllib.request
+
+    def get(url, tries=4):
+        for i in range(tries):
+            try:
+                with urllib.request.urlopen(url, timeout=120) as r:
+                    return r.read().decode("utf-8")
+            except OSError as e:  # a timeout or a busy host: wait and ask again
+                if i == tries - 1:
+                    raise
+                print(f"{url}: {e}; retry", flush=True)
+                time.sleep(5 * (i + 1))
+
+    def english(s):
+        return sum(c.isascii() for c in s) / max(1, len(s)) > 0.98
+
+    def messages(name, row):
+        if name == "ultrachat":
+            return row["messages"]
+        if name == "dolly":
+            ask = row["instruction"] + (f"\n\n{row['context']}" if row["context"].strip() else "")
+            if english(ask + row["response"]):
+                return [{"role": "user", "content": ask}, {"role": "assistant", "content": row["response"]}]
+            return None
+        msgs = []  # oasst: <|im_start|>role\n text <|im_end|> turns
+        for seg in row["text"].split("<|im_start|>")[1:]:
+            role, _, body = seg.partition("\n")
+            msgs.append({"role": role.strip(), "content": body.split("<|im_end|>")[0].strip()})
+        return msgs if english(row["text"]) and msgs and msgs[0]["role"] == "user" else None
+
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    for name, (dataset, split, first, last) in DATASETS.items():
+        n = 0
+        with open(out / f"{name}.jsonl", "w") as f:
+            for off in range(first - first % 100, last + 1, 100):
+                url = "https://datasets-server.huggingface.co/rows?config=default&length=100"
+                page = json.loads(get(f"{url}&dataset={dataset.replace('/', '%2F')}&split={split}&offset={off}"))
+                for r in page["rows"]:
+                    msgs = messages(name, r["row"]) if first <= r["row_idx"] <= last else None
+                    if msgs:
+                        f.write(json.dumps(msgs) + "\n")
+                        n += 1
+        print(f"{out}/{name}.jsonl: {n} conversations ({dataset} {split}, rows {first}-{last})")
+    for n in BOOKS:
+        text = get(f"https://gutenberg.pglaf.org/{'/'.join(str(n)[:-1])}/{n}/{n}-0.txt")
+        (out / f"pg{n}.txt").write_text(text)
+        body = text[text.index("\n", text.index("*** START OF")) + 1 : text.index("*** END OF")]
+        (out / f"pg{n}.body.txt").write_text(body)
+        print(f"{out}/pg{n}.txt: {len(text)} characters, {len(body)} between the markers")
 
 
 def weights(args):
@@ -370,9 +447,12 @@ def main(argv=None):
     c.add_argument("--tokenizer", default=os.environ.get("INKLING_CKPT"))
     c.add_argument("--chat", action=Source, metavar="KIND:N:FILE", help="jsonl, one message list per line")
     c.add_argument("--ask", action=Source, metavar="KIND:N:ROOT:EXTS:QUESTION", help="files as user messages")
-    c.add_argument("--text", action=Source, metavar="KIND:FILE[,FILE...][@FRAC]", help="one raw-text sequence")
+    c.add_argument("--text", action=Source, metavar="KIND:FILE[,FILE...][@FRAC|#FRAC]", help="one raw-text sequence")
     c.add_argument("--seq", type=int, default=SEQ, help="tokens per sequence")
     c.add_argument("--first", type=int, default=0, help="number of this file's first sequence (capture names)")
+    c.add_argument("--reasoning-effort", help="passed to the chat template of --chat and --ask (e.g. none)")
+    d = sub.add_parser("data")
+    d.add_argument("--out", required=True, help="directory for ultrachat.jsonl, oasst.jsonl, dolly.jsonl, pgN.txt")
     w = sub.add_parser("weights")
     w.add_argument("--ids", nargs="+", required=True, help="the corpus files of one calibration set")
     w.add_argument("--share", required=True, help="KIND=FRACTION,...: each kind's share of the Hessians")
@@ -398,7 +478,7 @@ def main(argv=None):
     s.add_argument("--dn8", default="", help="layers whose down is solved on the BFP8 grid (q8 codes)")
     s.add_argument("--threads", type=int, default=int(os.environ.get("OMP_NUM_THREADS", "40")))
     args = ap.parse_args(argv)
-    {"corpus": corpus, "weights": weights, "capture": capture, "solve": solve}[args.cmd](args)
+    {"data": data, "corpus": corpus, "weights": weights, "capture": capture, "solve": solve}[args.cmd](args)
 
 
 if __name__ == "__main__":
