@@ -113,8 +113,22 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_bf16_(sfpi::vFloat x, C0 c0, C1 c1, C2 c2) {
     return sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
 }
 
+}  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_exp2_bf16.h"
+
+namespace ckernel::sfpu {
+
+// Whether BF16 DEST runs the generated exp2 kernel as one call over the whole tile.
+inline constexpr bool exp2_bf16_whole_tile = true;
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_exp2() {
+    if constexpr (!is_fp32_dest_acc_en && APPROXIMATION_MODE == true && ITERATIONS == 32) {
+        if (bf16_dest_exp2()) {
+            calculate_exp2_bf16<ITERATIONS>();
+            return;
+        }
+    }
     if constexpr (is_fp32_dest_acc_en) {
         // fp32 path is a hand-scheduled ILP-interleaved body — leave it rolled so
         // the compiler keeps its per-row schedule (unrolling only bloats it).
@@ -124,12 +138,10 @@ inline void calculate_exp2() {
             sfpi::dst_reg++;
         }
     } else {
-        // bf16: the raw-TTI replay body of exp. BASE_TWO makes its range reduction x * LCONST_1 + 127,
-        // and fl(x * 1 + 127) == fl(x + 127): the same algorithm and coefficients as _sfpu_exp2_bf16_
-        // (FP32_C0 loads c0 as the fp32 EXP_21F_BF16_C0), so the output bits match it. BASE_TWO also
-        // reads the upper-clamp 255 from LREG12 (exp2_init), so the body hoists all its constants and
-        // pipelines two rows: a row pair takes 33 cycles (29 instructions and 4 SFPSWAP stalls)
-        // where the sfpi loop issued 24 slots per row.
+        // bf16 outside the generated kernel: the raw-TTI replay body of exp. BASE_TWO makes its range
+        // reduction x * LCONST_1 + 127, and fl(x * 1 + 127) == fl(x + 127): the same algorithm and
+        // coefficients as _sfpu_exp2_bf16_ (FP32_C0 loads c0 as the fp32 EXP_21F_BF16_C0), so the
+        // output bits match it. BASE_TWO also reads the upper-clamp 255 from LREG12 (exp2_init).
         _sfpu_exp_21f_bf16_tti_<
             false /*SCALE_EN*/,
             false /*is_fp32_dest_acc_en*/,

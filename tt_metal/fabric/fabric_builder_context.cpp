@@ -110,6 +110,7 @@ void FabricBuilderContext::compute_max_channel_counts() {
 
     // Always have MESH routers
     bool intermesh_vc_config_active = intermesh_vc_config_.requires_vc1 || intermesh_vc_config_.requires_vc2 ||
+                                      intermesh_vc_config_.requires_host_rdma ||
                                       intermesh_vc_config_.intermesh_vc_disabled;
     possible_shapes.push_back(router_vc_shape(
         topology,
@@ -403,6 +404,24 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
         bool is_udm_mode = (tensix_config == FabricTensixConfig::UDM);
         bool is_mux_extension = (tensix_config == FabricTensixConfig::MUX);
         config.requires_vc2 = is_blackhole && !is_udm_mode && !is_mux_extension;
+    }
+
+    if (fabric_context_.get_rtoptions().get_enable_fabric_host_rdma()) {
+        TT_FATAL(
+            fabric_context_.get_hal().get_arch() == tt::ARCH::BLACKHOLE,
+            "TT_METAL_ENABLE_FABRIC_HOST_RDMA is supported on Blackhole only");
+        TT_FATAL(
+            fabric_context_.is_2D_routing_enabled(),
+            "TT_METAL_ENABLE_FABRIC_HOST_RDMA is supported on 2D fabrics only");
+        TT_FATAL(
+            !fabric_context_.get_rtoptions().get_fabric_graph_builder(),
+            "TT_METAL_ENABLE_FABRIC_HOST_RDMA is not supported with TT_METAL_FABRIC_GRAPH_BUILDER");
+        const auto tensix_config = fabric_context_.get_fabric_tensix_config();
+        TT_FATAL(
+            tensix_config == FabricTensixConfig::DISABLED,
+            "TT_METAL_ENABLE_FABRIC_HOST_RDMA is not supported with the Tensix {} extension",
+            tensix_config == FabricTensixConfig::UDM ? "UDM" : "mux");
+        config.requires_host_rdma = true;
     }
 
     // The fabric router runs neither Tensix extension (mux, UDM) with an inter-mesh VC.

@@ -9,7 +9,7 @@
 
 #include "tt-metalium/allocator.hpp"
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include "tt-metalium/buffer_types.hpp"
 #include "tt-metalium/work_split.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
