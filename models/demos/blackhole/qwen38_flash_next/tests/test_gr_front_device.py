@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Device test of the GR read front (ttnn/fused/gr_recip_last) on the TP=8 mesh: today's program vs the front-v2 program
-(QWEN38_GR_FRONT_V2=1) on random residuals.  Compared bit for bit (valid rows only): the gathered stats pages, the
+"""Device test of the GR read front (ttnn/fused/gr_recip_last) on the TP=8 mesh: today's program vs the front-v3 program on random residuals.
+Compared bit for bit (valid rows only): the gathered stats pages, the
 normalized' tensor (the gate's operand) and the gathered partials pages gr_read's low-rank cores read.  Also the traced
 time per call (slope of a 12-op and a 4-op trace) of each, back-to-back calls and a trace replay (parity reuse).
 Run: QWEN38_FUSED_DEVICE_TEST=1 MESH_DEVICE=P150x8 TT_VISIBLE_DEVICES=0..7 pytest this_file -s."""
@@ -35,12 +35,6 @@ DRAM = ttnn.DRAM_MEMORY_CONFIG
 
 def candidates():
     out = [("default", grl.stats_recip_down_gather)]
-    try:
-        from models.demos.blackhole.qwen38_flash_next.ttnn.fused.gr_recip_last import front2
-
-        out.append(("v2", front2.stats_recip_down_gather))
-    except ImportError:
-        pass
     try:
         from models.demos.blackhole.qwen38_flash_next.ttnn.fused.gr_recip_last import front3
 

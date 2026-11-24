@@ -157,13 +157,11 @@ def test_gate_candidates(mesh_device, rows):
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("rows", [1, 2, 16, 32])
 def test_pipeline_front_to_gate(mesh_device, rows):
-    """Random residuals through the front (default and v2) into the gate (default and v3): the block output and the injection
-    of every front x gate combination are bit-identical on the valid rows (the front v2 leaves the pad rows of the gathered pages
-    unwritten; the gate must not care)."""
+    """Random residuals through the front into the gate (default and v3): the block output and the injection
+    of every gate variant are bit-identical on the valid rows."""
 
     from models.demos.blackhole.qwen38_flash_next.tests import test_gr_front_device as F
     from models.demos.blackhole.qwen38_flash_next.ttnn.fused import gr_recip_last as grl
-    from models.demos.blackhole.qwen38_flash_next.ttnn.fused.gr_recip_last import front2
 
     mesh = mesh_device
     mesh.enable_program_cache()
@@ -180,7 +178,7 @@ def test_pipeline_front_to_gate(mesh_device, rows):
     for step in range(4):
         res, gam, down = F.make_inputs(mesh, rows, 300 + step)
         got = {}
-        for fname, front in (("front", grl.stats_recip_down_gather), ("front2", front2.stats_recip_down_gather)):
+        for fname, front in (("front", grl.stats_recip_down_gather),):
             stats, norm, parts = front(res, gam, down)
             ttnn.deallocate(stats)
             for gname in ("default", "v3"):

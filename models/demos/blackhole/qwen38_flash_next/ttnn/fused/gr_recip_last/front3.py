@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""The GR front v3 (``QWEN38_GR_FRONT_V3=1``, default off): ``gr_recip_last``'s front with a cheaper partials exchange.
+"""The GR front v3 (``QWEN38_GR_FRONT_V3=1``, default on): ``gr_recip_last``'s front with a cheaper partials exchange.
 
 Same cores, same compute kernels, same stats phase, same packed bytes on the wire and the same pages in the gathered
 partials as the default front (bit-identical valid rows); what changes is the data movement after the partial tile exists:

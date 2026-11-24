@@ -300,22 +300,14 @@ def _front_v3_on() -> bool:
     return os.environ.get("QWEN38_GR_FRONT_V3", "1") == "1"
 
 
-def _front_v2_on() -> bool:
-    return os.environ.get("QWEN38_GR_FRONT_V2", "0") == "1"
-
-
 def prepare_front(mesh) -> None:
-    """Create the persistent landing buffers of the selected front (v3, else v2) at model construction, before any warm
+    """Create the persistent landing buffers of the selected front (v3) at model construction, before any warm
     pass; the default front has none."""
 
     if _front_v3_on():
         from . import front3
 
         front3.prepare(mesh)
-    elif _front_v2_on():
-        from . import front2
-
-        front2.prepare(mesh)
 
 
 def read_front(residual, gamma_rows, down_inject, live_rows=None):
@@ -326,15 +318,6 @@ def read_front(residual, gamma_rows, down_inject, live_rows=None):
 
         gathered_stats, normalized, gathered_partials = front3.stats_recip_down_gather(
             residual, gamma_rows, down_inject, live_rows=live_rows
-        )
-    elif _front_v2_on():
-        # front2.py: the cheaper exchanges, bit-identical valid rows (rows > 16: this front). Default OFF: its lockstep L1
-        # landing buffer (~12 KB per row count) makes the batched prefill program's CBs clash with L1 buffers (x64 sweep);
-        # x44 measured -0.72 ms at B=1.
-        from . import front2
-
-        gathered_stats, normalized, gathered_partials = front2.stats_recip_down_gather(
-            residual, gamma_rows, down_inject
         )
     else:
         gathered_stats, normalized, gathered_partials = stats_recip_down_gather(residual, gamma_rows, down_inject)
