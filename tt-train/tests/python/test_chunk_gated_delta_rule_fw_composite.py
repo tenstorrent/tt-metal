@@ -138,7 +138,7 @@ def _upload(x, shape, gate_dtype, device):
     }
 
 
-def _dispatch(t, shape, chunk, scale=None, output_head_major=False, save_for_backward=True, output_dtype=ttnn.float32):
+def _dispatch(t, shape, chunk, scale=None, save_for_backward=True, output_dtype=ttnn.float32):
     return ttml.ops.chunk_gated_delta_rule.chunk_gated_delta_rule_fw_composite(
         t["q"],
         t["k"],
@@ -149,14 +149,13 @@ def _dispatch(t, shape, chunk, scale=None, output_head_major=False, save_for_bac
         initial_state=t["h0"],
         chunk_size=chunk,
         scale=scale,
-        output_head_major=output_head_major,
         output_dtype=output_dtype,
         save_for_backward=save_for_backward,
     )
 
 
-def _run(x, shape, chunk, gate_dtype, device, scale=None, output_head_major=False):
-    return _dispatch(_upload(x, shape, gate_dtype, device), shape, chunk, scale, output_head_major)
+def _run(x, shape, chunk, gate_dtype, device, scale=None):
+    return _dispatch(_upload(x, shape, gate_dtype, device), shape, chunk, scale)
 
 
 def _to_host(outs):
@@ -167,8 +166,7 @@ def _to_head_major(outs, shape):
     """ttml outputs -> o [BH,T,V], final [B,HV,K,V], h [BH,NC,K,V], v_new [BH,T,V], A [BH,T,C]."""
     B, T, HK, HV, K, V = shape
     o, fs, h, vn, a = outs
-    o = o.reshape(B, T, HV, V).permute(0, 2, 1, 3).reshape(B * HV, T, V)
-    return [o, fs, h, vn.reshape(B * HV, T, V), a.reshape(B * HV, T, -1)]
+    return [o.reshape(B * HV, T, V), fs, h, vn.reshape(B * HV, T, V), a.reshape(B * HV, T, -1)]
 
 
 def _reference(x, shape, chunk, gate_dtype, scale=None):
@@ -285,27 +283,12 @@ def test_explicit_scale(scale, device):
         assert torch.equal(g, d), f"{name} depends on scale"
 
 
-@pytest.mark.parametrize("shape,chunk", [SHAPES[3], SHAPES[4]], ids=[SHAPE_IDS[3], SHAPE_IDS[4]])
-def test_head_major_output_is_permuted_token_major(shape, chunk, device):
-    B, T, HK, HV, K, V = shape
-    x = _build_inputs(shape, with_h0=True, seed=2)
-    t = _upload(x, shape, ttnn.bfloat16, device)
-    token_major = _to_host(_dispatch(t, shape, chunk))
-    head_major = _to_host(_dispatch(t, shape, chunk, output_head_major=True))
-    assert tuple(head_major[0].shape) == (B * HV, 1, T, V)
-    tm = token_major[0].reshape(B, T, HV, V).permute(0, 2, 1, 3).reshape(B * HV, 1, T, V)
-    assert torch.equal(head_major[0], tm)
-    for name, hm, tmj in zip(OUT_NAMES[1:], head_major[1:], token_major[1:]):
-        assert torch.equal(hm, tmj), f"{name}: differs between output layouts"
-
-
-@pytest.mark.parametrize("head_major", [False, True], ids=["token_major", "head_major"])
-def test_bf16_output_only_rounds_o(head_major, device):
+def test_bf16_output_only_rounds_o(device):
     shape, chunk = SHAPES[2]
     x = _build_inputs(shape, with_h0=True, seed=11)
     t = _upload(x, shape, ttnn.float32, device)
-    full = _dispatch(t, shape, chunk, output_head_major=head_major)
-    packed = _dispatch(t, shape, chunk, output_head_major=head_major, output_dtype=ttnn.bfloat16)
+    full = _dispatch(t, shape, chunk)
+    packed = _dispatch(t, shape, chunk, output_dtype=ttnn.bfloat16)
     assert full[0].dtype == ttnn.float32 and packed[0].dtype == ttnn.bfloat16
     assert all(p.dtype == ttnn.float32 for p in packed[1:]), "only o follows output_dtype"
     o32, o16 = ttnn.to_torch(full[0]).double(), ttnn.to_torch(packed[0]).double()

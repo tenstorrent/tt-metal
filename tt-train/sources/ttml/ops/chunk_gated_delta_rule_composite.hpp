@@ -14,7 +14,7 @@ namespace ttml::ops {
 // What the composite forward returns.  All fp32 TILE except `output`; BH = B*HV, NC = T/chunk_size, and the per-head
 // tensors are head-major (row bh = b*HV + hv).
 struct ChunkGatedDeltaRuleCompositeResult {
-    ttnn::Tensor output;       // [B, 1, T, HV*V], or [BH, 1, T, V] with output_head_major
+    ttnn::Tensor output;       // [BH, 1, T, V]
     ttnn::Tensor final_state;  // [B, HV, K, V]
     // What the backward reads; empty when save_for_backward is false.
     std::optional<ttnn::Tensor> h;      // [BH, NC, K, V]  state entering each chunk; h[:, 0] is the initial state
@@ -35,7 +35,8 @@ struct ChunkGatedDeltaRuleCompositeResult {
 // HK must divide HV (value head h reads key head h / (HV / HK)); key_head_dim is K, which cannot be read off the flat
 // q width.  T must be a multiple of chunk_size (32 or 64) and K, V multiples of 32.  scale defaults to K^-0.5.
 //
-// All intermediates and the state are fp32.  output_dtype is the dtype of `output` (FLOAT32 or BFLOAT16).
+// The output is head-major, as the backward and the per-head gated RMSNorm after it read it.  All intermediates and
+// the state are fp32.  output_dtype is the dtype of `output` (FLOAT32 or BFLOAT16).
 // save_for_backward = false (inference, or no input requires a gradient) returns h, v_new and a empty.
 //
 // The state-independent per-chunk terms, (I + N)^-1 included, come from ttnn's chunk_gdn_prep, the first phase of
@@ -50,7 +51,6 @@ ChunkGatedDeltaRuleCompositeResult chunk_gated_delta_rule_fw_composite(
     const std::optional<ttnn::Tensor>& initial_state = std::nullopt,
     uint32_t chunk_size = 64U,
     std::optional<float> scale = std::nullopt,
-    bool output_head_major = false,
     tt::tt_metal::DataType output_dtype = tt::tt_metal::DataType::FLOAT32,
     bool save_for_backward = true);
 

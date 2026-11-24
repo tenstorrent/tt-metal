@@ -57,10 +57,6 @@ Tensor chunk_at(const Tensor& x, uint32_t i) {
         ttsl::SmallVector<uint32_t>{1U, 1U, 1U, 1U});
 }
 
-Tensor concat_or_single(std::vector<Tensor>& parts, int dim) {
-    return parts.size() == 1U ? parts.front() : ttnn::concat(parts, dim);
-}
-
 // The constant fp32 inputs of chunk_gdn_prep: the [1, 1, C, C] identity, inclusive lower ones and ones, and the three
 // 16x16 quadrant masks of a 32x32 tile packed into [1, 1, 32, 96] (top-left, bottom-right, bottom-left).  Uploaded
 // once per device, so a forward does no host writes (which trace capture forbids).
@@ -195,7 +191,6 @@ ChunkGatedDeltaRuleCompositeResult chunk_gated_delta_rule_fw_composite(
     const std::optional<ttnn::Tensor>& initial_state,
     uint32_t chunk_size,
     std::optional<float> scale,
-    bool output_head_major,
     tt::tt_metal::DataType output_dtype,
     bool save_for_backward) {
     const uint32_t K = key_head_dim;
@@ -265,17 +260,11 @@ ChunkGatedDeltaRuleCompositeResult chunk_gated_delta_rule_fw_composite(
         v_new_parts.push_back(ttnn::add(chunk_at(u, i), mm(chunk_at(neg_w, i), state)));  // [BH, 1, C, V]
         state = ttnn::add(ttnn::multiply(state, chunk_at(decay_last, i)), mm(chunk_at(k_dec_t, i), v_new_parts.back()));
     }
-    auto h = concat_or_single(h_parts, /*dim=*/1);          // [BH, NC, K, V]
-    auto v_new = concat_or_single(v_new_parts, /*dim=*/1);  // [BH, NC, C, V]
+    auto h = ttnn::concat(h_parts, /*dim=*/1);          // [BH, NC, K, V]
+    auto v_new = ttnn::concat(v_new_parts, /*dim=*/1);  // [BH, NC, C, V]
 
     auto out = ttnn::multiply(ttnn::add(mm(q_decay, h), mm(intra, v_new)), q_scale);
     out = ttnn::reshape(out, ttnn::Shape{BH, 1U, T, V});
-    if (!output_head_major) {
-        // [BH, 1, T, V] -> [B, 1, T, HV*V]
-        auto o = ttnn::reshape(ttnn::to_layout(out, ttnn::Layout::ROW_MAJOR), ttnn::Shape{B, HV, T, V});
-        o = ttnn::permute(o, ttsl::SmallVector<int64_t>{0, 2, 1, 3});  // [B, T, HV, V]
-        out = ttnn::to_layout(ttnn::reshape(o, ttnn::Shape{B, 1U, T, HV * V}), ttnn::Layout::TILE);
-    }
     if (out.dtype() != output_dtype) {
         out = ttnn::typecast(out, output_dtype);
     }
