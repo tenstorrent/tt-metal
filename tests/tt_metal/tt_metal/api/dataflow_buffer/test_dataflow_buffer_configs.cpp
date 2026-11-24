@@ -546,7 +546,7 @@ TEST_F(UnitMeshFixture, DfbSerializeImplicitSyncRingOver255) {
     if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
-    for (const auto [num_entries, expected_txn_ids] : {std::pair<uint32_t, uint32_t>{593, 1}, {600, 2}}) {
+    for (const auto& [num_entries, expected_txn_ids] : {std::pair<uint32_t, uint32_t>{593, 1}, {600, 2}}) {
         SCOPED_TRACE("num_entries " + std::to_string(num_entries));
         experimental::dfb::DataflowBufferConfig config{
             .entry_size = 256,
