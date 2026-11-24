@@ -68,6 +68,8 @@ from helpers.matmul_sweep import generate_tile_dims as _gtd
 from helpers.param_config import parametrize
 from helpers.test_variant_parameters import TemplateParameter
 
+pytestmark = pytest.mark.llk_sweep
+
 
 @dataclass
 class TINY_F32(TemplateParameter):
