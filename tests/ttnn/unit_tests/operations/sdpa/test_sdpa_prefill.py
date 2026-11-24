@@ -793,7 +793,7 @@ def test_sdpa_noncausal_sliding_window_unaligned_rows(device, s, sliding_window,
     mask = torch.where(in_window, 0.0, float("-inf")).double()
     expected = torch.softmax(qd @ kd.transpose(-2, -1) / math.sqrt(d) + mask, dim=-1) @ vd
     row_error = (ttnn.to_torch(out)[..., :s, :].double() - expected).abs().amax(dim=(0, 1, 3))
-    bad_rows = (row_error > 0.05).nonzero().flatten().tolist()
+    bad_rows = ((row_error > 0.05) | ~torch.isfinite(row_error)).nonzero().flatten().tolist()
     assert not bad_rows, f"rows {bad_rows} differ from the reference, max error {row_error.max().item():.3f}"
 
 
