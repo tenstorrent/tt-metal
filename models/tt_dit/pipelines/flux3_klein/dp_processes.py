@@ -100,27 +100,18 @@ def _answer(conn, pipeline) -> None:
         conn.close()  # a loop that dies (a request that does not unpickle) fails the parent's request instead of hanging it
 
 
-def serve(
-    conns: Sequence,
-    pipeline_kwargs: Mapping,
-    warmup: bool | Sequence[int],
-    group_shape: tuple[int, int] = GROUP_SHAPE,
-) -> None:
-    """A process: one pipeline per group (`conns`, one per group), each warmed (every served shape, or `warmup` sizes);
-    then each group answers its requests in its own thread until it gets None."""
+def open_groups(groups: int, group_shape: tuple[int, int] = GROUP_SHAPE, **pipeline_kwargs):
+    """In a process: its mesh and one pipeline per group, built one after another (they share the weight cache).
+    Returns (mesh, pipelines); close each pipeline, then the mesh. Raises with nothing left open."""
     import ttnn
 
     from .pipeline_flux3_klein import Flux3KleinPipeline
 
-    try:
-        mesh = open_group_mesh(process_shape(len(conns), group_shape))
-    except Exception as e:  # noqa: BLE001
-        _send_error(conns, e)
-        return
+    mesh = open_group_mesh(process_shape(groups, group_shape))
     pipelines = []
     sp_axis, tp_axis = GROUP_AXES[group_shape]
     try:
-        submeshes = mesh.create_submeshes(ttnn.MeshShape(*group_shape)) if len(conns) > 1 else [mesh]
+        submeshes = mesh.create_submeshes(ttnn.MeshShape(*group_shape)) if groups > 1 else [mesh]
         for submesh in submeshes:
             pipelines.append(
                 Flux3KleinPipeline.create(
@@ -132,10 +123,35 @@ def serve(
                     **pipeline_kwargs,
                 )
             )
+    except BaseException:
+        for pipeline in pipelines:
+            pipeline.close()
+        ttnn.close_mesh_device(mesh)
+        raise
+    return mesh, pipelines
+
+
+def serve(
+    conns: Sequence,
+    pipeline_kwargs: Mapping,
+    warmup: bool | Sequence[int],
+    group_shape: tuple[int, int] = GROUP_SHAPE,
+) -> None:
+    """A process: one pipeline per group (`conns`, one per group), each warmed (every served shape, or `warmup` sizes);
+    then each group answers its requests in its own thread until it gets None."""
+    import ttnn
+
+    try:
+        mesh, pipelines = open_groups(len(conns), group_shape, **pipeline_kwargs)
+    except Exception as e:  # noqa: BLE001
+        _send_error(conns, e)
+        return
+    try:
+        for pipeline in pipelines:
             if warmup is True:
-                pipelines[-1].warmup()
+                pipeline.warmup()
             elif warmup:
-                pipelines[-1].warmup(tuple(warmup))
+                pipeline.warmup(tuple(warmup))
         threads = [threading.Thread(target=_answer, args=pair) for pair in zip(conns, pipelines)]
         for thread in threads:
             thread.start()

@@ -176,7 +176,7 @@ def test_serve_warms_every_group_before_ready_and_closes_the_mesh(monkeypatch, g
     kw = {"sp_axis": sp_axis, "tp_axis": tp_axis, "axis_topologies": axis_topologies, "upsample": False}
     if group_shape == dp.LINE_GROUP_SHAPE:
         kw["topology"] = ttnn.Topology.Linear
-    assert calls == [c for m in meshes for c in (("create", m, kw), ("warmup", m, sizes))]
+    assert calls == [("create", m, kw) for m in meshes] + [("warmup", m, sizes) for m in meshes]
     for (parent, _), m in zip(pipes, meshes):
         parent.send("r")
         assert parent.recv() == ("ok", f"r on {m}")
@@ -184,6 +184,33 @@ def test_serve_warms_every_group_before_ready_and_closes_the_mesh(monkeypatch, g
         parent.send(None)
     thread.join(5)
     assert calls[-groups - 1 :] == [("close", m) for m in meshes] + [("close_mesh", mesh)]
+
+
+@pytest.mark.parametrize("groups", [1, 2])
+def test_open_groups_closes_what_it_built_when_a_group_fails(monkeypatch, groups, expect_error):
+    import ttnn
+
+    calls = []
+
+    class FakePipeline:
+        def __init__(self, mesh):
+            self.mesh = mesh
+
+        def close(self):
+            calls.append(("close", self.mesh))
+
+    def create(cls, m, **kw):
+        if m == ("sub1" if groups == 2 else "mesh"):
+            raise RuntimeError("out of DRAM")
+        return FakePipeline(m)
+
+    mesh = FakeMesh(dp.LINE_GROUP_SHAPE) if groups == 2 else "mesh"
+    monkeypatch.setattr(dp, "open_group_mesh", lambda s: mesh)
+    monkeypatch.setattr(pl.Flux3KleinPipeline, "create", classmethod(create))
+    monkeypatch.setattr(ttnn, "close_mesh_device", lambda m: calls.append(("close_mesh", m)))
+    with expect_error(RuntimeError, "out of DRAM"):
+        dp.open_groups(groups, dp.LINE_GROUP_SHAPE)
+    assert calls == ([("close", "sub0")] if groups == 2 else []) + [("close_mesh", mesh)]
 
 
 def _explode():
