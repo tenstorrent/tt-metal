@@ -5,7 +5,9 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <functional>
+#include <memory>
 #include <span>
 #include <string_view>
 #include <utility>
@@ -76,6 +78,17 @@ std::vector<tt::tt_metal::distributed::MeshCoordinate> extract_tensor_coordinate
     tt::tt_metal::distributed::MeshDevice* mesh_device);
 
 /**
+ * Which of `tensors` are backed by the same MeshTensor: for each tensor, the position of the first
+ * tensor holding the same MeshTensor (its own position if none precedes it). Returns an empty
+ * vector when no two tensors share a MeshTensor, so the common case allocates nothing.
+ *
+ * MeshTensor identity is what the spec-factory adapters bind tensors by, so two calls with equal
+ * signatures can share a cache entry's recorded tensor bindings (see compute_mesh_workload_cache_key).
+ */
+std::vector<std::uint32_t> compute_tensor_alias_signature(
+    const std::vector<std::reference_wrapper<const ttnn::Tensor>>& tensors);
+
+/**
  * Fail if `tensor` is per-core allocated. Called by launch() for every tensor in tensor_args when
  * the operation does not satisfy SupportsPerCoreAllocation.
  *
@@ -112,11 +125,13 @@ struct CmdListProgramBindings {
 };
 
 // Adds `workload` to the CommandListBuilder recording on the calling thread instead of enqueueing it, recording as
-// TTNN command-list parameters the active binds that match `programs`.
+// TTNN command-list parameters the active binds that match `programs`. `op_owned_tensors` are the tensors the
+// workload's factory allocated for itself; lists built from the recording keep them alive.
 void record_to_command_list(
     std::string_view operation_name,
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     tt::tt_metal::distributed::MeshWorkload& workload,
-    std::span<const CmdListProgramBindings> programs = {});
+    std::span<const CmdListProgramBindings> programs = {},
+    std::span<const std::shared_ptr<const std::vector<tt::tt_metal::MeshTensor>>> op_owned_tensors = {});
 
 }  // namespace ttnn::device_operation::detail

@@ -8,10 +8,12 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
 #include <cstdint>
 #include <exception>
+#include <functional>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -27,6 +29,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/normalization/softmax/device/softmax_device_operation.hpp"
@@ -49,6 +52,65 @@ protected:
         const TensorSpec spec(
             ttnn::Shape{1, 1, 32, 64}, TensorLayout(DataType::BFLOAT16, Layout::TILE, MemoryConfig{}));
         return Tensor::from_vector(values, spec, device_);
+    }
+
+    // Records a single-core row-major ttnn::pad, whose factory allocates an L1 pad-value tensor and hands it to the
+    // program cache, then replays the list and checks the output. after_build runs between build() and the replay.
+    void expect_pad_replays(const std::function<void()>& after_build) const {
+        constexpr uint32_t width = 32;
+        constexpr float pad_value = 3.0f;
+        std::vector<float> values(32 * width);
+        for (size_t i = 0; i < values.size(); ++i) {
+            values[i] = static_cast<float>(static_cast<int>(i % 11) - 5);
+        }
+        const Tensor input = Tensor::from_vector(
+            values,
+            TensorSpec(
+                ttnn::Shape{1, 1, 32, width}, TensorLayout(DataType::BFLOAT16, Layout::ROW_MAJOR, MemoryConfig{})),
+            device_);
+
+        CommandListBuilder builder(*device_);
+        Tensor output;
+        {
+            auto recording = builder.record_scope();
+            output = ttnn::pad(
+                input,
+                ttsl::SmallVector<std::array<uint32_t, 2>>{{0, 0}, {0, 0}, {0, 0}, {0, width}},
+                pad_value,
+                /*use_multicore=*/false);
+        }
+        CommandList command_list = builder.build(QueueId{0});
+        builder.deallocate();
+        after_build();
+
+        // Same spec as pad's pad-value tensor, so it takes that tensor's L1 if the list let it be freed.
+        const Tensor clobber = Tensor::from_vector(
+            std::vector<uint32_t>(16, 0),
+            TensorSpec(
+                ttnn::Shape{1, 1, 1, 16},
+                TensorLayout(
+                    DataType::UINT32,
+                    Layout::ROW_MAJOR,
+                    MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1})),
+            device_);
+
+        command_list.enqueue(/*blocking=*/true);
+
+        const std::vector<float> result = output.to_vector<float>();
+        ASSERT_EQ(result.size(), values.size() * 2);
+        for (uint32_t row = 0; row < 32; ++row) {
+            for (uint32_t col = 0; col < 2 * width; ++col) {
+                const float expected = col < width ? values[(row * width) + col] : pad_value;
+                EXPECT_EQ(result[(row * 2 * width) + col], expected) << "at row " << row << ", column " << col;
+            }
+        }
+
+        const auto l1_allocated = [&] {
+            return device_->allocator()->get_statistics(BufferType::L1).total_allocated_bytes;
+        };
+        const size_t l1_held = l1_allocated();
+        command_list.deallocate();
+        EXPECT_LT(l1_allocated(), l1_held) << "The list should hold pad's pad-value tensor until it is deallocated";
     }
 };
 
@@ -80,6 +142,15 @@ TEST_F(CommandListTest, RecordBuildReplay) {
         EXPECT_EQ(result[i], std::max(values[i], 0.0f)) << "at index " << i;
     }
     command_list.deallocate();
+}
+
+TEST_F(CommandListTest, PadReplaysAfterProgramCacheClear) {
+    expect_pad_replays([this] { device_->clear_program_cache(); });
+}
+
+TEST_F(CommandListTest, PadReplaysWithProgramCacheDisabled) {
+    device_->disable_and_clear_program_cache();
+    expect_pad_replays([] {});
 }
 
 TEST_F(CommandListTest, LegacyOpIsRejected) {

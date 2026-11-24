@@ -39,4 +39,19 @@ void calculate_mul(std::uint32_t param) {
     return;
 }
 
+// Quasar has no UInt32 data format. The Compute API keeps add_unary_tile_uint32 / sub_unary_tile_uint32 on every
+// arch so binop_with_scalar.h stays includable; a kernel that calls one fails to build.
+[[gnu::error("add_unary_tile_uint32 / sub_unary_tile_uint32 are not supported on Quasar")]] void
+unary_uint32_binop_with_scalar_is_not_supported_on_quasar();
+
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_add_uint32([[maybe_unused]] std::uint32_t scalar) {
+    unary_uint32_binop_with_scalar_is_not_supported_on_quasar();
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_sub_uint32([[maybe_unused]] std::uint32_t scalar) {
+    unary_uint32_binop_with_scalar_is_not_supported_on_quasar();
+}
+
 }  // namespace ckernel::sfpu
