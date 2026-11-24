@@ -229,14 +229,12 @@ uint32_t reserve_cpu_for_physical_device(
             workers_per_cpu,
             placement.next_cpu_per_numa_node[numa_node]);
     }
-    uint32_t cpu = 0;
     if (!allowed_cpus.empty()) {
-        cpu = allowed_cpus[physical_device_id % allowed_cpus.size()];
-    } else {
-        uint32_t num_threads = std::thread::hardware_concurrency();
-        TT_FATAL(num_threads, "Could not detect the number of CPU cores on host.");
-        cpu = physical_device_id % num_threads;
+        return pick_cpu(allowed_cpus, pool_cpus, workers_per_cpu, placement.next_cpu_per_numa_node[-1]);
     }
+    uint32_t num_threads = std::thread::hardware_concurrency();
+    TT_FATAL(num_threads, "Could not detect the number of CPU cores on host.");
+    const uint32_t cpu = physical_device_id % num_threads;
     workers_per_cpu[cpu]++;
     return cpu;
 }

@@ -209,6 +209,12 @@ TEST(ThreadPoolTest, PickCpuFillsWholeCores) {
     EXPECT_EQ(unknown, (std::vector<uint32_t>{0, 1, 2, 3}));
 }
 
+// Workers beyond the devices pick from the allowed list around the core-ordered node picks.
+TEST(ThreadPoolTest, PickCpuFallbackAfterNodePicks) {
+    ExplicitTopology placement{.node_cpus = {{0, 4, 1, 5, 2, 6, 3, 7}, {0, 1, 2, 3, 4, 5, 6, 7}}};
+    EXPECT_EQ(distinct(placement.place({0, 0, 1, 1, 1, 1, 1, 1})), 8);
+}
+
 TEST(ThreadPoolTest, ParallelForOneWorkerRunsOnCaller) {
     auto thread_pool = create_device_bound_thread_pool(DEFAULT_CONTEXT_ID, 2);
     const auto caller_id = std::this_thread::get_id();
