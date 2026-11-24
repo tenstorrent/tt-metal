@@ -293,6 +293,9 @@ public:
 
     tt::tt_fabric::fabric_connection_info_t get_host_rdma_connection_info(
         FabricNodeId fabric_node_id, chan_id_t eth_chan) const;
+    // edm_direction left unset
+    tt::tt_fabric::fabric_connection_info_t get_router_connection_info(
+        FabricNodeId fabric_node_id, chan_id_t eth_chan, uint32_t sender_channel) const;
 
     // Return ethernet channels on a chip that face external meshes (inter-mesh exit nodes)
     std::vector<chan_id_t> get_intermesh_facing_eth_chans(FabricNodeId fabric_node_id) const;

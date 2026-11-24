@@ -23,6 +23,7 @@
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
 
 namespace tt::tt_fabric {
 namespace {
@@ -119,6 +120,27 @@ TEST_F(RouterLayoutMockTest, ManagedClientHasRouterLayouts) {
             ++routers;
             EXPECT_NE(builder_context.find_router_channel_layout(node, chan), nullptr)
                 << "router " << node << " channel " << static_cast<int>(chan);
+        }
+    }
+    mesh->close();
+    EXPECT_GT(routers, 0u);
+}
+
+TEST_F(RouterLayoutMockTest, RouterConnectionInfoMatchesLayout) {
+    SetFabricConfig(FabricConfig::FABRIC_2D);
+    auto mesh = MeshDevice::create(MeshDeviceConfig(SystemMesh::instance().shape()));
+    const auto& control_plane = MetalContext::instance().get_control_plane();
+    const auto& builder_context = control_plane.get_fabric_context().get_builder_context();
+    size_t routers = 0;
+    for (const auto id : mesh->get_device_ids()) {
+        const auto node = control_plane.get_fabric_node_id_from_physical_chip_id(id);
+        for (const auto& [chan, direction] : control_plane.get_active_fabric_eth_channels(node)) {
+            ++routers;
+            const auto info = control_plane.get_router_connection_info(node, chan, 0);
+            const auto& ch0 = builder_context.get_router_channel_layout(node, chan).senders[0].at(0);
+            EXPECT_EQ(info.edm_buffer_base_addr, ch0.base_address);
+            EXPECT_EQ(info.num_buffers_per_channel, ch0.num_slots);
+            EXPECT_EQ(info.worker_free_slots_stream_id, connection_interface::sender_channel_0_free_slots_stream_id);
         }
     }
     mesh->close();
