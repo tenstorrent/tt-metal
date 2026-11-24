@@ -50,12 +50,12 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@7586e1e528b173057dbaa828c9ae1fa945fd2a9f # cachew checkout
         timeout-minutes: 20
       - name: Compile and fingerprint
-        timeout-minutes: 120
+        timeout-minutes: 130
         shell: bash
         run: |
           echo "OUT=$RUNNER_TEMP/out/${ARCH}" >> "$GITHUB_ENV"
           nproc; free -g
-          OUT="$RUNNER_TEMP/out/${ARCH}" bash min_cover_trial/run_leg.sh
+          OUT="$RUNNER_TEMP/out/${ARCH}" bash min_cover_trial/run_leg2.sh
       - name: Upload results
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
