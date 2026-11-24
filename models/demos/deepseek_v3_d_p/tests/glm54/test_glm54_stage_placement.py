@@ -225,23 +225,24 @@ def test_transformer_handoff_roles():
     [(G0, (), False), (G1, (1,), False), (G2, (2,), True), (G3, (), False), ((0, 106), (1, 2), True)],
     ids=["G0", "G1", "G2", "G3", "whole_trunk"],
 )
-def test_every_block_of_a_stage_addresses_the_allocated_slot_length(schedule, stage, loop_passes, ring):
-    """The KVPE slot length the trunk blocks and the MTP block are built with (stage_kv_cache_seq_len) is the one the
-    adapter allocates (kv_cache_slot_rows): max_seq_len, plus pass 2's window ring on a stage that runs pass 2
-    (q171.2.10: MTP on the whole trunk once took max_seq_len and its dense KV gather mismatched the slot)."""
+def test_allocated_slot_rows_per_stage(schedule, stage, loop_passes, ring):
+    """The KVPE slot the adapter allocates per stage (kv_cache_slot_rows, which derives it from the model's
+    stage_kv_cache_seq_len): max_seq_len, bank-aligned for migration, except on a stage that runs loop pass 2 (G2,
+    the whole trunk), whose slots also hold pass 2's 4-chunk window ring and are never migrated."""
     from types import SimpleNamespace
-
-    from models.demos.deepseek_v3_d_p.tt.mla.two_bank import pass2_kv_cache_seq_len
-    from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import stage_kv_cache_seq_len
 
     max_seq, chunk = 1064960, 5120
     rank = schedule.rank_slice(*stage)
     assert rank.loop_passes == loop_passes
-    config = glm_5_4_hf_config()
-    rows = stage_kv_cache_seq_len(config, rank.first_layer, rank.num_layers, rank.loop_passes, max_seq, chunk)
-    params = SimpleNamespace(loop_passes=rank.loop_passes, max_seq_len=max_seq, chunk_size=chunk)
-    assert rows == GLM54Adapter().kv_cache_slot_rows(config, params)[0]
-    assert rows == (pass2_kv_cache_seq_len(max_seq, chunk) if ring else max_seq)
+    params = SimpleNamespace(
+        first_layer_idx=rank.first_layer,
+        num_layers=rank.num_layers,
+        loop_passes=rank.loop_passes,
+        max_seq_len=max_seq,
+        chunk_size=chunk,
+    )
+    expected = (max_seq + 4 * chunk, False) if ring else (max_seq, True)
+    assert GLM54Adapter().kv_cache_slot_rows(glm_5_4_hf_config(), params) == expected
 
 
 def test_glm53_stage_slot_length_is_max_seq_len():

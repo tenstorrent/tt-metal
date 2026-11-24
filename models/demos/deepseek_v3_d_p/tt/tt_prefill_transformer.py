@@ -94,9 +94,9 @@ def stage_kv_cache_seq_len(
     config, first_layer_idx: int, num_layers: int, loop_passes: Optional[tuple], max_seq_len, chunk_size: int
 ):
     """KVPE positions per cache slot of a stage: ``max_seq_len``, plus pass 2's window ring past every slot's pass-1
-    positions when the stage runs a loop layer in pass 2 (``pass2_kv_cache_seq_len``; the cache allocator sizes the
-    slots alike, ``kv_cache_slot_rows``). Every block that addresses the stage's KVPE cache is built with it, the MTP
-    block included: its slot past the trunk's has the same length."""
+    positions when the stage runs a loop layer in pass 2 (``pass2_kv_cache_seq_len``). The cache allocator sizes the
+    slots with it (``GLM54Adapter.kv_cache_slot_rows``), and every block that addresses the stage's KVPE cache is built
+    with it, the MTP block included: its slot past the trunk's has the same length."""
     if stage_pass2_layers(config, first_layer_idx, num_layers, loop_passes):
         assert max_seq_len is not None, "loop pass 2 runs chunked over a max_seq_len cache"
         return pass2_kv_cache_seq_len(max_seq_len, chunk_size)

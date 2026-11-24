@@ -83,15 +83,23 @@ class GLM54Adapter(GLM53Adapter):
         return super().allocate_kv_cache(mesh_device=mesh_device, hf_config=stage_config, params=params)
 
     def kv_cache_slot_rows(self, hf_config, params) -> tuple[int, bool]:
-        """A stage that runs loop pass 2 (one rank, or G2) keeps pass 2's window in a ring past each slot's pass-1
-        positions (tt.mla.two_bank). Such a cache is never migrated (prefill_runner builds no chunk table for a looped
-        model), so its slots need no bank alignment."""
-        from models.demos.deepseek_v3_d_p.reference.glm_5_4.schedule import runs_later_loop_pass
-        from models.demos.deepseek_v3_d_p.tt.mla.two_bank import pass2_kv_cache_seq_len
+        """The stage's slot length as its blocks address it (``stage_kv_cache_seq_len``, the model's own function): a
+        stage that runs a loop layer in pass 2 (one rank, or G2) keeps pass 2's window in a ring past each slot's
+        pass-1 positions (tt.mla.two_bank). Such a cache is never migrated (prefill_runner builds no chunk table for a
+        looped model), so its slots need no bank alignment; any other stage's are GLM-5.3's."""
+        from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import stage_kv_cache_seq_len
 
-        if not runs_later_loop_pass(params.loop_passes):
+        rows = stage_kv_cache_seq_len(
+            hf_config,
+            params.first_layer_idx,
+            params.num_layers,
+            params.loop_passes,
+            params.max_seq_len,
+            params.chunk_size,
+        )
+        if rows == params.max_seq_len:
             return super().kv_cache_slot_rows(hf_config, params)
-        return pass2_kv_cache_seq_len(params.max_seq_len, params.chunk_size), False
+        return rows, False
 
 
 def _with_indexer_types(hf_config, indexer_types: list):
