@@ -11,17 +11,16 @@ dtype + layout. ``device=None`` (default) returns host tensors, so a module can 
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 import ttnn
+from models.demos.inkling2_mini import modes
 
-# The weight caches loaded by default: experts rounded by GPTQ ("own2-def": same dtypes and bytes as v1).
+# The weight caches loaded by default: the run mode's (modes.py: own3-def8, or own3-l8 with INKLING_MODE=fast).
 # Decode: the PF expert layout (expert prefetch). Prefill: the TILE twin (prefill reads the experts as tiles).
-# $INKLING_CACHE / $INKLING_TILE_CACHE override them; the earlier defaults were cache/v1-pf and cache/v1.
-CACHE_DIR = Path("/work/inkling-bringup/cache")
-DEFAULT_ROOT = Path(os.environ.get("INKLING_CACHE") or CACHE_DIR / "own2-def-pf")
-DEFAULT_TILE_ROOT = Path(os.environ.get("INKLING_TILE_CACHE") or CACHE_DIR / "own2-def-tile")
+# $INKLING_CACHE / $INKLING_TILE_CACHE override them; the earlier defaults were cache/own2-def-pf and -tile.
+CACHE_DIR = modes.CACHE_DIR
+DEFAULT_ROOT, DEFAULT_TILE_ROOT = modes.roots()
 
 
 def _root(root) -> Path:

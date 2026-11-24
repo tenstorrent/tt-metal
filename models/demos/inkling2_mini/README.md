@@ -26,17 +26,31 @@ against the Hugging Face reference, `demo/` the demo, golden check and perf harn
 ## Setup
 
 Build tt-metal and activate its python env as usual. The scripts take their data from these variables
-(or the matching command-line flags); none has a built-in default:
+(or the matching command-line flags):
 
 | variable | what |
 |---|---|
 | `INKLING_CKPT` | the Hugging Face checkpoint directory (safetensors, config.json, tokenizer) |
-| `INKLING_CACHE` | the converted weight cache the model loads |
-| `INKLING_TILE_CACHE` | a cache with the experts as tiles, for the chunked prefill and its test |
+| `INKLING_MODE` | `default` or `fast`: which expert weights load (see "Run modes"; `--fast` in the demo) |
+| `INKLING_CACHE` | the converted weight cache the model loads (overrides the mode's) |
+| `INKLING_TILE_CACHE` | a cache with the experts as tiles, for the chunked prefill and its test (overrides the mode's) |
 | `INKLING_GOLDEN` | CPU golden outputs (per-prompt hidden states and logits), for the golden check and perf gate |
 | `INKLING_PERF_DIR` | where perf.py appends its results and keeps its baseline |
 | `INKLING_REF_PYTHON` | a python with transformers >= 5.24 (Inkling2), for the HF-reference tests |
 | `INKLING_CONFIG` | the model config.json for those tests (default `$INKLING_CKPT/config.json`) |
+
+## Run modes
+
+Two sets of expert weights, picked with `--fast` (demo) or `INKLING_MODE=fast` (every script).
+They differ only in how many expert layers are 4-bit; the rest of the model is the same.
+
+| mode | experts | decode cache | prefill cache | decode 4K / 128K | KL vs bf16 model |
+|---|---|---|---|---:|---:|
+| default | own3-def8: GPTQ, BFP4/BFP8 as `convert/default_dtype_map.json` | `own3-def8-pf` | `own3-def8-tile` | 14.6 / 19.9 ms | .0067 |
+| fast | own3-l8: GPTQ, layers 0-19 all BFP4 | `own3-l8-pf` | `own3-l8-tile` | 13.1 / 18.5 ms | .0096 |
+
+The caches live in `/work/inkling-bringup/cache/` (`modes.py`). Prefill uses the same LoFi K-blocked
+defaults in both modes.
 
 ## Convert the weights
 
@@ -88,7 +102,7 @@ pytest models/demos/inkling2_mini/tests models/demos/inkling2_mini/convert
 ```
 
 - Without `INKLING_REF_PYTHON` (and transformers < 5.24 in the tt-metal env) the HF-reference tests skip;
-  without `INKLING_CACHE` / `INKLING_GOLDEN` the full-model and prefill tests skip.
+  without the mode's caches (or `INKLING_CACHE`) and `INKLING_GOLDEN` the full-model and prefill tests skip.
 - Host only (with the mock cluster above): `tests/test_convert_pack.py` (converter packing vs the modules),
   `tests/test_perf_gate.py`, `convert/test_cache.py`. `convert/test_dequant.py` runs in the reference python.
 - `tests/test_model.py`: full model vs the golden, teacher-forced per-layer PCC >= 0.99, logits PCC >= 0.98.

@@ -2,11 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """Inkling-2-Mini on one p100a: DRAM report, trace checks, greedy generation, decode speed.
 
-    python -m models.demos.inkling2_mini.demo.demo --prompt "Write a haiku about a lake." [--gen 64]
+    python -m models.demos.inkling2_mini.demo.demo --prompt "Write a haiku about a lake." [--gen 64] [--fast]
     python -m models.demos.inkling2_mini.demo.demo --golden DIR --max-ctx 131072 \
         [--skip-app-trace] [--gen 64] [--perf-pos 2048 32768] [--json out.json]
 
-Weights come from ``$INKLING_CACHE`` (default: cache/own2-def-pf, see convert/cache.py). ``--prompt`` is wrapped in the model's chat template (tokenizer from
+Weights come from ``$INKLING_CACHE`` (default: the run mode's cache, see modes.py; ``--fast`` or
+``INKLING_MODE=fast`` picks the faster, less exact own3-l8 experts). ``--prompt`` is wrapped in the model's chat template (tokenizer from
 ``--tokenizer``, default ``$INKLING_CKPT``) and replaces the golden prompts; without it the golden prompts
 (``--golden``, default ``$INKLING_GOLDEN``) are generated and prompt 0 is compared with the golden greedy tokens.
 """
@@ -22,6 +23,7 @@ from pathlib import Path
 import torch
 
 import ttnn
+from models.demos.inkling2_mini import modes
 from models.demos.inkling2_mini.tt.device import open_device
 from models.demos.inkling2_mini.tt.generator import Generator
 from models.demos.inkling2_mini.tt.model import Inkling2Model
@@ -80,6 +82,11 @@ def main():
     ap.add_argument("--prompt", type=str, help="user message to answer (replaces the golden prompts)")
     ap.add_argument("--golden", type=Path, default=os.environ.get("INKLING_GOLDEN"), help="golden dir")
     ap.add_argument("--tokenizer", default=os.environ.get("INKLING_CKPT"), help="HF tokenizer dir (checkpoint dir)")
+    ap.add_argument(
+        "--fast",
+        action="store_true",
+        help="fast mode (also INKLING_MODE=fast): own3-l8 experts, ~1.5 ms/token faster decode, KL .0096 vs .0067",
+    )
     args = ap.parse_args()
     if args.prompt is None and args.golden is None:
         ap.error("give --prompt, or --golden / INKLING_GOLDEN for the golden prompts")
@@ -90,7 +97,8 @@ def main():
     dev = open_device(trace_region_size=args.trace_mib << 20)
     try:
         res["dram_free_open_gib"] = dram_free(dev)[0]
-        model = Inkling2Model(dev, max_ctx=args.max_ctx, log=lambda s: None)
+        res["cache"] = str(modes.roots(args.fast)[0])
+        model = Inkling2Model(dev, root=res["cache"], max_ctx=args.max_ctx, log=lambda s: None)
         res["load_s"] = round(time.time() - t0, 1)
         res["dram_free_after_load_gib"], res["dram_largest_after_load_gib"] = dram_free(dev)
         print(json.dumps(res), flush=True)

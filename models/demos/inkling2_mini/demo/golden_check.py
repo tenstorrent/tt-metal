@@ -9,7 +9,7 @@ messages follow from those inputs. Prints per-app PCC over all positions, then l
 
 The golden directory (``--golden``, default ``$INKLING_GOLDEN``) holds one sub-directory per prompt with the CPU
 reference tensors; the weight cache is ``$INKLING_CACHE``
-(default: cache/own2-def-pf, see convert/cache.py).
+(default: the run mode's cache, see modes.py).
 """
 
 from __future__ import annotations
