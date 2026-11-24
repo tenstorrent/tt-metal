@@ -221,7 +221,7 @@ jobs:
         test-group: ${{ fromJSON(needs.load-test-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
     runs-on: ${{ matrix.test-group.runs_on }}
-    timeout-minutes: 1500
+    timeout-minutes: ${{ matrix.test-group.timeout }}
     container:
       image: ${{ inputs.docker-image }}
       options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
@@ -253,7 +253,6 @@ jobs:
           PY
       - name: Run ttnop sweep
         id: ttnop
-        timeout-minutes: ${{ matrix.test-group.timeout }}
         shell: bash
         working-directory: ${{ env.LLK_PATH }}
         env:
