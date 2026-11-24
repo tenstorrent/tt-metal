@@ -105,6 +105,9 @@ TEST_P(DeviceParamFixture, DeviceInitializeAndTeardown) {
 }
 
 TEST_P(DeviceParamFixture, TensixDeviceLoadBlankKernels) {
+    if (this->arch == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates DataMovement and Compute kernels, which Quasar rejects";
+    }
     unsigned int num_devices = resolve_num_devices(GetParam());
     unsigned int num_pci_devices = tt::tt_metal::GetNumPCIeDevices();
     if (num_devices > num_pci_devices) {

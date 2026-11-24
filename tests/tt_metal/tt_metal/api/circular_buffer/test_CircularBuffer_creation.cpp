@@ -82,6 +82,9 @@ bool test_cb_config_written_to_core(
 }
 
 TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferAtValidIndices) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates DataMovement and Compute kernels, which Quasar rejects";
+    }
     CBConfig cb_config;
 
     CoreRange cr({0, 0}, {0, 1});
@@ -280,6 +283,9 @@ TEST_F(MeshDispatchFixture, TensixTestCircularBufferFromDescriptorMergesCoreRang
 // CB index 0 has a different size on two adjacent core groups, and the merged range of CB index 1 overlaps both.
 // Each core must still receive its own group's config for index 0.
 TEST_F(MeshDispatchFixture, TensixTestCircularBufferFromDescriptorWithOverlappingCoreRanges) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     CoreRangeSet cores0(CoreRange({0, 0}, {2, 0}));
     CoreRangeSet cores1(CoreRange({3, 0}, {4, 0}));
     CoreRangeSet all_cores(std::vector<CoreRange>{CoreRange({0, 0}, {2, 0}), CoreRange({3, 0}, {4, 0})});

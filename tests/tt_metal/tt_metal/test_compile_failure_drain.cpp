@@ -103,6 +103,9 @@ void clear_kernel_cache(distributed::MeshDevice& mesh_device) {
 }  // namespace
 
 TEST_F(UnitMeshAnyDispatchFixture, CompileProgramWithFailingKernelThrowsCleanly) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates DataMovement and Compute kernels, which Quasar rejects";
+    }
     // Sanity: prove the "good" compute kernel actually compiles on this device/arch, so the
     // throw below is attributable to the deliberately-broken kernel and not the valid ones.
     {

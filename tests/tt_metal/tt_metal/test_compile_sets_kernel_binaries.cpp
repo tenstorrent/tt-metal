@@ -101,6 +101,9 @@ void construct_program(Program& program, distributed::MeshDevice& mesh_device, C
 class CompileSetsKernelBinariesFixture : public AnyDispatchMeshDeviceFixture {};
 
 TEST_F(CompileSetsKernelBinariesFixture, CompileSetsKernelBinaries) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates DataMovement and Compute kernels, which Quasar rejects";
+    }
     CoreCoord core = {0, 0};
     std::vector<Program> programs;
     std::map<uint64_t, std::vector<const ll_api::memory*>> compute_binaries;
