@@ -194,6 +194,25 @@ TEST(ThreadPoolTest, PickCpuNextToLivePools) {
     EXPECT_EQ(distinct(placement.place({0, 0, 0, 0})), 4);
 }
 
+// A preferred CPU is taken while it is on the node, outside the pool and unused; otherwise the usual pick applies.
+TEST(ThreadPoolTest, PickCpuPreferred) {
+    std::unordered_map<uint32_t, uint32_t> workers_per_cpu;
+    size_t next = 0;
+    const std::vector<uint32_t> node_cpus = {0, 1, 2, 3};
+    EXPECT_EQ(thread_binding::pick_cpu(node_cpus, {}, workers_per_cpu, next, 2), 2);
+    EXPECT_EQ(thread_binding::pick_cpu(node_cpus, {}, workers_per_cpu, next, 2), 0);   // 2 is in use.
+    EXPECT_EQ(thread_binding::pick_cpu(node_cpus, {1}, workers_per_cpu, next, 1), 3);  // 1 is the pool's.
+    EXPECT_EQ(thread_binding::pick_cpu(node_cpus, {}, workers_per_cpu, next, 7), 1);   // 7 is off the node.
+}
+
+TEST(ThreadPoolTest, ParseCpuList) {
+    EXPECT_EQ(thread_binding::parse_cpu_list("0,32\n"), (std::vector<uint32_t>{0, 32}));
+    EXPECT_EQ(thread_binding::parse_cpu_list("8-10"), (std::vector<uint32_t>{8, 9, 10}));
+    EXPECT_EQ(thread_binding::parse_cpu_list("5"), (std::vector<uint32_t>{5}));
+    EXPECT_TRUE(thread_binding::parse_cpu_list("x").empty());
+    EXPECT_TRUE(thread_binding::parse_cpu_list("3-1").empty());
+}
+
 TEST(ThreadPoolTest, ParallelForOneWorkerRunsOnCaller) {
     auto thread_pool = create_device_bound_thread_pool(DEFAULT_CONTEXT_ID, 2);
     const auto caller_id = std::this_thread::get_id();
