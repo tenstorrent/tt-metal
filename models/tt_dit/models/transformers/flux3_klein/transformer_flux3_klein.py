@@ -26,6 +26,7 @@ from ....utils.matmul import (
     grid_12_9_configs,
     register_fused_mmrs_configs,
     register_matmul_configs,
+    register_shape_configs,
 )
 from ....utils.substate import rename_substate
 from .transformer_block_flux3_klein import HIDDEN, Flux3KleinTransformerBlock
@@ -187,6 +188,32 @@ register_matmul_configs(
         }
     }
 )
+# SP8 x TP4 only (keyed by TP, so the transformer registers them for that layout): all-gather matmul configs swept at
+# the exact per-device shape, same output as today's config (same K block). QKV (N 2304) and MLP-in (N 4608) at the
+# text, reference and image rows of 1024 / 2048 / 4096, mostly 10 of the 12 M cores with N block 8 on QKV, and linear1
+# (N 6912) at 13440 rows.
+SP8_AGMM_SHAPE_CONFIGS = {
+    (128, 3072, 2304, 4): ((12, 9), (1, 8, 8, (1, 2)), 16),
+    (512, 3072, 2304, 4): ((10, 9), (2, 8, 8, (2, 1)), 24),
+    (640, 3072, 2304, 4): ((12, 8), (2, 8, 9, (2, 1)), 8),
+    (2048, 3072, 2304, 4): ((10, 9), (7, 8, 8, (1, 2)), 24),
+    (2176, 3072, 2304, 4): ((10, 9), (7, 8, 8, (1, 4)), 8),
+    (2688, 3072, 2304, 4): ((10, 9), (6, 8, 8, (1, 4)), 8),
+    (2688, 3072, 4608, 4): ((12, 9), (7, 8, 16, (1, 4)), 16),
+    (3200, 3072, 2304, 4): ((10, 9), (5, 8, 8, (1, 2)), 16),
+    (3200, 3072, 4608, 4): ((10, 9), (5, 8, 16, (1, 4)), 24),
+    (4224, 3072, 2304, 4): ((10, 9), (7, 8, 8, (1, 4)), 16),
+    (4224, 3072, 4608, 4): ((12, 9), (6, 8, 16, (1, 4)), 16),
+    (5120, 3072, 2304, 4): ((10, 9), (6, 8, 8, (2, 1)), 16),
+    (5760, 3072, 2304, 4): ((10, 9), (6, 8, 8, (1, 4)), 24),
+    (5760, 3072, 4608, 4): ((12, 9), (5, 8, 16, (1, 4)), 24),
+    (13440, 3072, 6912, 4): ((12, 9), (6, 8, 8, (1, 4)), 24),
+}
+
+
+def register_layout_shape_configs(sp_factor: int, tp_factor: int) -> None:
+    if (sp_factor, tp_factor) == (8, 4):
+        register_shape_configs(agmm=SP8_AGMM_SHAPE_CONFIGS)
 
 
 @dataclass(frozen=True)
@@ -483,6 +510,7 @@ class Flux3KleinTransformer(Module):
         tp_axis = parallel_config.tensor_parallel.mesh_axis
         self.flow_map = flow_map
         self.sp_factor = parallel_config.sequence_parallel.factor
+        register_layout_shape_configs(self.sp_factor, parallel_config.tensor_parallel.factor)
         self._device = device
         self._ccl_manager = ccl_manager
         self._parallel_config = parallel_config
