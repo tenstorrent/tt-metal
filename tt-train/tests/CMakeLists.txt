@@ -83,6 +83,7 @@ set(SOURCES
     ops/softmax_backward_op_test.cpp
     ops/silu_op_test.cpp
     ops/qkv_causal_conv1d_silu_op_test.cpp
+    ops/chunk_gated_delta_rule_fw_composite_test.cpp
     ops/sdpa_fw_op_test.cpp
     ops/sdpa_bw_op_test.cpp
     ops/layernorm_bw_fused_op_test.cpp
