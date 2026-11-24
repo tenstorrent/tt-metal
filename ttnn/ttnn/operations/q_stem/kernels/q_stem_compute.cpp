@@ -22,6 +22,11 @@ using namespace compute_kernel_lib;
 
 namespace {
 // in1 (resident q_b slice, fronted once) offset of K-block kb: kb * s1_kb rows of `cols` tiles.
+// Fixed in1 offset (a resident head's weights inside cb_wkv).
+struct TileOffset {
+    uint32_t tiles;
+    ALWI uint32_t operator()(uint32_t) const { return tiles; }
+};
 struct QbKBlockOffset {
     uint32_t tiles_per_kblock;
     ALWI uint32_t operator()(uint32_t block) const { return block * tiles_per_kblock; }
@@ -55,6 +60,7 @@ void kernel_main() {
     const uint32_t cols = get_arg_val<uint32_t>(0);
     const uint32_t sbw1 = get_arg_val<uint32_t>(1);
     const uint32_t hpc = get_arg_val<uint32_t>(2);
+    const uint32_t n_r = get_arg_val<uint32_t>(3);
 
     CircularBuffer x_buf(cb_x_round), qb_buf(cb_qb_slice), q_buf(cb_q_slice), q_partial_buf(cb_q_partial);
     CircularBuffer landing_buf(cb_landing), wkv_buf(cb_wkv), prefix_buf(cb_prefix_out);
@@ -113,54 +119,95 @@ void kernel_main() {
     }
 
     // ---- stage 3 ----------------------------------------------------------------------------------------------------
+    // Consumption order = landing order: the n_r remote heads row-major across heads (R1: all their weights resident,
+    // head u at in1 offset u * Dn_t * N_t), then the local heads head-major.
     const auto shape3 = MatmulBlockShape::of(1, s3n / sbw3, 1, sbw3, Dn_t, 1);
+    constexpr uint32_t head_tiles = Dn_t * N_t;
     DeviceZoneScopedN("S3");
-    for (uint32_t u = 0; u < hpc; ++u) {
-        if constexpr (wkv_resident) {
-            cb_wait_front(cb_wkv, Dn_t * N_t);  // the head's weights, held across its rows (NoWaitNoPop)
-        }
-        for (uint32_t t = 0; t < rows_per_head; ++t) {
+    auto row_block = [&](uint32_t wkv_offset) {
+        for (uint32_t nb = 0; nb < n_nb; ++nb) {
 #ifdef ABLATE_S3
-            cb_wait_front(cb_landing, Dn_t + Dr_t);
-            cb_pop_front(cb_landing, Dn_t + Dr_t);
-            for (uint32_t nb = 0; nb < n_nb; ++nb) {
-                if constexpr (!wkv_resident) {
-                    cb_wait_front(cb_wkv, Dn_t * s3n);
-                    cb_pop_front(cb_wkv, Dn_t * s3n);
-                }
-                cb_reserve_back(cb_prefix_out, s3n);
-                cb_push_back(cb_prefix_out, s3n);
+            if constexpr (!wkv_resident) {
+                cb_wait_front(cb_wkv, Dn_t * s3n);
+                cb_pop_front(cb_wkv, Dn_t * s3n);
             }
-            cb_reserve_back(cb_rope_out, Dr_t);
-            cb_push_back(cb_rope_out, Dr_t);
+            cb_wait_front(cb_landing, Dn_t);
+            cb_reserve_back(cb_prefix_out, s3n);
+            cb_push_back(cb_prefix_out, s3n);
             continue;
 #endif
-            for (uint32_t nb = 0; nb < n_nb; ++nb) {
-                if constexpr (wkv_resident) {
-                    matmul_block<
-                        false,
-                        false,
-                        LastBlockTarget::Out,
-                        OutputCBLayout::SubblockMajor,
-                        matmul_config::InitMode::Short,
-                        InputPolicy::WaitAndRetainOnLastBlock,
-                        InputPolicy::NoWaitNoPop>(landing_buf, wkv_buf, prefix_buf, prefix_buf, shape3);
-                } else {
-                    matmul_block<
-                        false,
-                        false,
-                        LastBlockTarget::Out,
-                        OutputCBLayout::SubblockMajor,
-                        matmul_config::InitMode::Short,
-                        InputPolicy::WaitAndRetainOnLastBlock,
-                        InputPolicy::WaitAndPopPerKBlock>(landing_buf, wkv_buf, prefix_buf, prefix_buf, shape3);
-                }
+            if constexpr (wkv_resident) {
+                matmul_block<
+                    false,
+                    false,
+                    LastBlockTarget::Out,
+                    OutputCBLayout::SubblockMajor,
+                    matmul_config::InitMode::Short,
+                    InputPolicy::WaitAndRetainOnLastBlock,
+                    InputPolicy::NoWaitNoPop,
+                    NoPostCompute,
+                    NoPreKBlock,
+                    NoPostKBlock,
+                    0,
+                    NoKBlockInnerDimFn,
+                    NoIn0Source,
+                    TileOffset>(
+                    landing_buf,
+                    wkv_buf,
+                    prefix_buf,
+                    prefix_buf,
+                    shape3,
+                    {},
+                    {},
+                    0,
+                    0,
+                    {},
+                    {},
+                    {},
+                    TileOffset{wkv_offset});
+            } else {
+                matmul_block<
+                    false,
+                    false,
+                    LastBlockTarget::Out,
+                    OutputCBLayout::SubblockMajor,
+                    matmul_config::InitMode::Short,
+                    InputPolicy::WaitAndRetainOnLastBlock,
+                    InputPolicy::WaitAndPopPerKBlock>(landing_buf, wkv_buf, prefix_buf, prefix_buf, shape3);
             }
-            cb_pop_front(cb_landing, Dn_t);  // the row's nope, retained across the N-blocks
-            copy<input(cb_landing), output(cb_rope_out)>(IterationShape::tiles(Dr_t));
+        }
+        cb_pop_front(cb_landing, Dn_t);  // the row's nope, retained across the N-blocks
+#ifdef ABLATE_S3
+        cb_wait_front(cb_landing, Dr_t);
+        cb_pop_front(cb_landing, Dr_t);
+        cb_reserve_back(cb_rope_out, Dr_t);
+        cb_push_back(cb_rope_out, Dr_t);
+        return;
+#endif
+        copy<input(cb_landing), output(cb_rope_out)>(IterationShape::tiles(Dr_t));
+    };
+    if (n_r > 0) {
+        if constexpr (wkv_resident) {
+            cb_wait_front(cb_wkv, n_r * head_tiles);
+        }
+        for (uint32_t t = 0; t < rows_per_head; ++t) {
+            for (uint32_t u = 0; u < n_r; ++u) {
+                row_block(u * head_tiles);
+            }
         }
         if constexpr (wkv_resident) {
-            cb_pop_front(cb_wkv, Dn_t * N_t);
+            cb_pop_front(cb_wkv, n_r * head_tiles);
+        }
+    }
+    for (uint32_t u = n_r; u < hpc; ++u) {
+        if constexpr (wkv_resident) {
+            cb_wait_front(cb_wkv, head_tiles);
+        }
+        for (uint32_t t = 0; t < rows_per_head; ++t) {
+            row_block(0);
+        }
+        if constexpr (wkv_resident) {
+            cb_pop_front(cb_wkv, head_tiles);
         }
     }
 }

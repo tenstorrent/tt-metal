@@ -42,10 +42,10 @@ S1_COLS_PER_CORE = 2  # stage-1 columns per core: sizes the stage-1 rect; the re
 S3_COST_FACTOR = 2.5
 FREE_CORE_START = 0.35
 X_ROUND_TILES_CAP = 64
-X_ROUND_DEPTH = 2
+X_ROUND_DEPTH = 3
 S3_BLOCK_M_TILES = 1
 S3_BLOCK_N_CAP = 16
-WKV_RESIDENT_BYTES = 256 * 1024
+WKV_RESIDENT_BYTES = 512 * 1024  # per core: every remote head's weights resident (row-major consumption)
 WKV_DEPTH = 2
 OUT_DEPTH = 2
 PORT_BATCH_SEGMENTS = 4
@@ -86,6 +86,10 @@ def _merge(*sets):
     for s in sets[1:]:
         out = out.merge(s)
     return out
+
+
+def _crs_list(cores):
+    return _merge(*[_crs([c]) for c in cores])
 
 
 def _pack(c):
@@ -169,8 +173,21 @@ class Geometry:
         self.rows_per_head = B * self.qrt
         self.compute_core_list, self.heads_of = head_placement(self)
         self.hpc_max = max(len(hs) for hs in self.heads_of)
+        s1_set = {(c.x, c.y) for c in self.s1_cores()}
+        # R1 wkv units a core holds at once: all its remote heads (consumed row-major) + up to WKV_DEPTH local heads,
+        # max over destination chips; per core set (stage-1 rect / the rest), so each gets its own cb_wkv size.
+        self.wkv_units_s1, self.wkv_units_free = 1, 1
+        for k, hs in enumerate(self.heads_of):
+            c = self.compute_core_list[k]
+            for dest in range(G):
+                n_l = sum(1 for h in hs if h // self.Hl == dest)
+                need = len(hs) - n_l + min(WKV_DEPTH, n_l)
+                if (c.x, c.y) in s1_set:
+                    self.wkv_units_s1 = max(self.wkv_units_s1, need)
+                else:
+                    self.wkv_units_free = max(self.wkv_units_free, need)
         wkv_head_bytes = self.Dn_t * self.N_t * self.wkv_tile_bytes
-        self.wkv_resident = min(2, self.hpc_max) * wkv_head_bytes <= WKV_RESIDENT_BYTES
+        self.wkv_resident = max(self.wkv_units_s1, self.wkv_units_free) * wkv_head_bytes <= WKV_RESIDENT_BYTES
         self.s3n = self.N_t if self.wkv_resident else _largest_divisor_leq(self.N_t, S3_BLOCK_N_CAP)
         self.n_nb = self.N_t // self.s3n
         self.wkv_unit_tiles = self.Dn_t * self.s3n
@@ -297,6 +314,18 @@ def head_placement(geo):
     return cores, heads_of
 
 
+def landing_slot(heads, h, dest, geo):
+    """(base, stride) in tiles of head h's rows in its core's landing shard on chip `dest`: row t at base + t * stride.
+    Remote heads are consumed row-major across heads (row t of every remote head, then row t + 1: all remote heads
+    land with the same row profile), the local heads head-major after them."""
+    order = consumption_order(heads, dest, geo)
+    n_r = sum(1 for hh in order if hh // geo.Hl != dest)
+    idx = order.index(h)
+    if idx < n_r:
+        return idx * geo.hw, n_r * geo.hw
+    return (n_r * geo.rows_per_head + (idx - n_r) * geo.rows_per_head) * geo.hw, geo.hw
+
+
 def consumption_order(heads, dest, geo):
     """Landing slot order of a core's heads on destination chip `dest`, by expected completion: ring neighbours'
     heads first (their rows land during stage 1), then farther sources, the local heads last (the own quarter is
@@ -418,6 +447,15 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
         dirmap = [route[(p, d)] if d != p else 0 for d in range(G)]
 
         program = ttnn.ProgramDescriptor()
+        if geo.wkv_resident:
+            unit = geo.Dn_t * geo.N_t
+            wkv_cbs = [_cb(CB_WKV, wkv.dtype, geo.wkv_tile_bytes, geo.wkv_units_s1 * unit, s1_rect)]
+            if other_compute:
+                wkv_cbs.append(
+                    _cb(CB_WKV, wkv.dtype, geo.wkv_tile_bytes, geo.wkv_units_free * unit, _crs_list(other_compute))
+                )
+        else:
+            wkv_cbs = [_cb(CB_WKV, wkv.dtype, geo.wkv_tile_bytes, wkv_depth * geo.wkv_unit_tiles, compute_rect)]
         key = "|".join(
             str(v)
             for v in (
@@ -464,13 +502,7 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
             cbs.append(_cb(CB_Q_PARTIAL, ttnn.float32, ttnn.tile_size(ttnn.float32), geo.m * geo.cols_max, s1_rect))
         cbs += [
             ttnn.cb_descriptor_from_sharded_tensor(CB_LANDING, scratch),
-            _cb(
-                CB_WKV,
-                wkv.dtype,
-                geo.wkv_tile_bytes,
-                wkv_depth * (geo.Dn_t * geo.N_t if geo.wkv_resident else geo.wkv_unit_tiles),
-                compute_rect,
-            ),
+            *wkv_cbs,
             _cb(CB_PREFIX_OUT, bf16, geo.tile_bytes, OUT_DEPTH * geo.s3m * geo.s3n, compute_rect),
             _cb(CB_ROPE_OUT, bf16, geo.tile_bytes, OUT_DEPTH * geo.s3m * geo.Dr_t, compute_rect),
             _cb(CB_PORT_STAGE, bf16, geo.tile_bytes, 2 * PORT_BATCH_SEGMENTS * geo.hw, port_crs),
@@ -485,8 +517,7 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
                 port_args += [_pack(virt(ports[(d, l)])), d]
 
         def head_slot(h, dest):
-            k = core_of_head[h]
-            return consumption_order(heads_of[k], dest, geo).index(h)
+            return landing_slot(heads_of[core_of_head[h]], h, dest, geo)
 
         reader_rt_s1, reader_rt_other = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         compute_rt = ttnn.RuntimeArgs()
@@ -496,6 +527,7 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
             c0, cols = geo.s1_cols(i) if i is not None else (0, 0)
             heads = consumption_order(heads_of[k], p, geo)
             hpc = len(heads)
+            n_r = sum(1 for h in heads if h // geo.Hl != p)
             # reader
             rargs = [int(q_b.buffer_address()), c0, cols, int(wkv.buffer_address()), p]
             rargs += arrive_addrs
@@ -503,7 +535,7 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
             (reader_rt_s1 if i is not None else reader_rt_other)[core.x][core.y] = rargs
             # compute
             sbw1 = _largest_divisor_leq(cols, geo.dest_limit) if cols else 1
-            compute_rt[core.x][core.y] = [cols, sbw1, hpc]
+            compute_rt[core.x][core.y] = [cols, sbw1, hpc, n_r]
             # writer: local-delivery pieces of my columns (own quarter), port list, heads for the output
             pieces = []
             if cols:
@@ -514,13 +546,13 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
                     n = min(c0 + cols, (hl + 1) * geo.hw) - c
                     h = p * geo.Hl + hl
                     dest_core = compute_cores[core_of_head[h]]
-                    u = head_slot(h, p)
-                    pieces += [c - c0, n, _pack(virt(dest_core)), u * geo.rows_per_head * geo.hw + cc]
+                    base, stride = head_slot(h, p)
+                    pieces += [c - c0, n, _pack(virt(dest_core)), base + cc, stride]
                     c += n
             wargs = [p, cols, int(out.buffer_address()), landing_addr, arrive_addrs[p]]
             wargs += dirmap + rorder + port_args
-            wargs += [len(pieces) // 4] + pieces
-            wargs += [hpc] + heads
+            wargs += [len(pieces) // 5] + pieces
+            wargs += [hpc, n_r] + heads
             writer_rt[core.x][core.y] = wargs
 
         # ---------------- ports ---------------------------------------------------------------------------------
@@ -563,7 +595,9 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
                     last_of_group = idx + 1 == len(my_heads) or core_of_head[p * geo.Hl + my_heads[idx + 1]] != k
                     group = sum(1 for hh in my_heads if core_of_head[p * geo.Hl + hh] == k)
                     inc = group * geo.hw if last_of_group else 0
-                    sargs += [_pack(virt(compute_cores[k])), inc] + [head_slot(h, t) if t != p else 0 for t in range(G)]
+                    sargs += [_pack(virt(compute_cores[k])), inc]
+                    for t in range(G):
+                        sargs += list(head_slot(h, t)) if t != p else [0, 0]
                 sargs += [len(ready_targets)]
                 for s, sdir in ready_targets:
                     rc = virt(ports[(sdir, l)])
@@ -601,29 +635,39 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
             *qb_ct,
             *wkv_ct,
         ]
+        # CT 16 = the core set's wkv capacity in units (R1: remote heads + local depth; R2: wkv_depth)
+        reader_ct_s1, reader_ct_other = list(reader_ct), list(reader_ct)
+        if geo.wkv_resident:
+            reader_ct_s1[16], reader_ct_other[16] = geo.wkv_units_s1, geo.wkv_units_free
         reader_s1 = ttnn.KernelDescriptor(
             kernel_source=str(KERNEL_DIR / "q_stem_reader.cpp"),
             core_ranges=s1_rect,
-            compile_time_args=list(reader_ct),
+            compile_time_args=reader_ct_s1,
             runtime_args=reader_rt_s1,
             config=_dm("RISCV_1", ttnn.NOC.NOC_0),
         )
         inj_rt = ttnn.RuntimeArgs()
         inj_rt[injector.x][injector.y] = [int(x.buffer_address()), p] + rorder
-        injector_k = ttnn.KernelDescriptor(
-            kernel_source=str(KERNEL_DIR / "q_stem_injector.cpp"),
+        injector_reader_k = ttnn.KernelDescriptor(
+            kernel_source=str(KERNEL_DIR / "q_stem_injector_reader.cpp"),
             core_ranges=inj_crs,
             compile_time_args=[CB_X_ROUND, geo.x_tile_bytes, geo.Q_t, geo.s1_kb, geo.nkb, *geo_ct, *x_ct],
             runtime_args=inj_rt,
+            config=_dm("RISCV_0", ttnn.NOC.NOC_1),
+        )
+        injector_k = ttnn.KernelDescriptor(
+            kernel_source=str(KERNEL_DIR / "q_stem_injector.cpp"),
+            core_ranges=inj_crs,
+            compile_time_args=[CB_X_ROUND, geo.x_tile_bytes, geo.round_tiles, geo.num_blocks * geo.nkb],
+            runtime_args=ttnn.RuntimeArgs(),
             config=_dm("RISCV_1", ttnn.NOC.NOC_0),
         )
-
         kernels_tail = []
         if other_compute:
             reader_other = ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "q_stem_reader.cpp"),
-                core_ranges=_merge(*[_crs([c]) for c in other_compute]),
-                compile_time_args=list(reader_ct),
+                core_ranges=_crs_list(other_compute),
+                compile_time_args=reader_ct_other,
                 runtime_args=reader_rt_other,
                 config=_dm("RISCV_1", ttnn.NOC.NOC_0),
             )
@@ -710,7 +754,16 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
             ttnn.McastConfig(noc=ttnn.NOC.NOC_0, handshake=True),
         )
         mc.attach(program, "mcast", [injector_k, reader_s1])
-        program.kernels = [injector_k, reader_s1, *kernels_tail, compute_k, writer_k, port_reader_k, port_sender_k]
+        program.kernels = [
+            injector_reader_k,
+            injector_k,
+            reader_s1,
+            *kernels_tail,
+            compute_k,
+            writer_k,
+            port_reader_k,
+            port_sender_k,
+        ]
         ablate = [a for a in os.environ.get("QSTEM_ABLATE", "").split(",") if a]  # perf ablation only (TEMP)
         if ablate:
             for kd in program.kernels:

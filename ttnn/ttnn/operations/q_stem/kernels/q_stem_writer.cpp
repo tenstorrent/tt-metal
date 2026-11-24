@@ -55,8 +55,9 @@ void kernel_main() {
     a += 2 * n_ports;
     const uint32_t n_pieces = get_arg_val<uint32_t>(a++);
     const uint32_t pieces_idx = a;
-    a += 4 * n_pieces;
+    a += 5 * n_pieces;
     const uint32_t hpc = get_arg_val<uint32_t>(a++);
+    const uint32_t n_r = get_arg_val<uint32_t>(a++);  // remote heads (first, consumed row-major across heads)
     const uint32_t heads_idx = a;
 
     // ---- stage 1 hand-off -------------------------------------------------------------------------------------------
@@ -78,11 +79,11 @@ void kernel_main() {
                 const uint32_t row = b * qrt + r0 + i;
                 const uint32_t src_row = q_base + (j * m + i) * cols * tile_bytes;
                 for (uint32_t e = 0; e < n_pieces; ++e) {
-                    const uint32_t t = pieces_idx + 4 * e;
+                    const uint32_t t = pieces_idx + 5 * e;
                     const uint32_t lc = get_arg_val<uint32_t>(t);
                     const uint32_t n = get_arg_val<uint32_t>(t + 1);
                     const uint32_t dc = get_arg_val<uint32_t>(t + 2);
-                    const uint32_t slot = get_arg_val<uint32_t>(t + 3) + row * hw;
+                    const uint32_t slot = get_arg_val<uint32_t>(t + 3) + row * get_arg_val<uint32_t>(t + 4);
                     noc_async_write(
                         src_row + lc * tile_bytes,
                         get_noc_addr(q_stem::unpack_x(dc), q_stem::unpack_y(dc), landing_addr + slot * tile_bytes),
@@ -91,7 +92,7 @@ void kernel_main() {
             }
             noc_async_write_barrier();
             for (uint32_t e = 0; e < n_pieces; ++e) {
-                const uint32_t t = pieces_idx + 4 * e;
+                const uint32_t t = pieces_idx + 5 * e;
                 const uint32_t dc = get_arg_val<uint32_t>(t + 2);
                 noc_semaphore_inc(
                     get_noc_addr(q_stem::unpack_x(dc), q_stem::unpack_y(dc), arrive_p_addr),
@@ -104,30 +105,44 @@ void kernel_main() {
 
     // ---- stage 3 output ---------------------------------------------------------------------------------------------
     const auto out = TensorAccessor(out_args, out_addr, tile_bytes);
-    for (uint32_t u = 0; u < hpc; ++u) {
+    // store_row_block: one (head, row) = n_nb prefix blocks + the rope tiles, in the compute's consumption order
+    auto store_row = [&](uint32_t u, uint32_t t) {
         const uint32_t h = get_arg_val<uint32_t>(heads_idx + u);
-        for (uint32_t t = 0; t < rows_per_head; ++t) {
-            const uint32_t b = t / qrt;
-            const uint32_t r = t - b * qrt;
-            const uint32_t page0 = ((b * H + h) * qrt + r) * out_w;
-            for (uint32_t nb = 0; nb < n_nb; ++nb) {
-                cb_wait_front(cb_prefix_out, s3n);
-                uint32_t l1 = get_read_ptr(cb_prefix_out);
-                for (uint32_t c = 0; c < s3n; ++c) {
-                    noc_async_write(l1, out.get_noc_addr(page0 + nb * s3n + c), tile_bytes);
-                    l1 += tile_bytes;
-                }
-                noc_async_write_barrier();
-                cb_pop_front(cb_prefix_out, s3n);
-            }
-            cb_wait_front(cb_rope_out, Dr_t);
-            uint32_t l1 = get_read_ptr(cb_rope_out);
-            for (uint32_t c = 0; c < Dr_t; ++c) {
-                noc_async_write(l1, out.get_noc_addr(page0 + N_t + c), tile_bytes);
+        const uint32_t b = t / qrt;
+        const uint32_t r = t - b * qrt;
+        const uint32_t page0 = ((b * H + h) * qrt + r) * out_w;
+        for (uint32_t nb = 0; nb < n_nb; ++nb) {
+            cb_wait_front(cb_prefix_out, s3n);
+            uint32_t l1 = get_read_ptr(cb_prefix_out);
+            for (uint32_t c = 0; c < s3n; ++c) {
+#ifndef ABLATE_OUT_WRITE
+                noc_async_write(l1, out.get_noc_addr(page0 + nb * s3n + c), tile_bytes);
+#endif
                 l1 += tile_bytes;
             }
-            noc_async_write_barrier();
-            cb_pop_front(cb_rope_out, Dr_t);
+            noc_async_writes_flushed();  // the tiles have left L1 (acks are collected once, at the end)
+            cb_pop_front(cb_prefix_out, s3n);
+        }
+        cb_wait_front(cb_rope_out, Dr_t);
+        uint32_t l1 = get_read_ptr(cb_rope_out);
+        for (uint32_t c = 0; c < Dr_t; ++c) {
+#ifndef ABLATE_OUT_WRITE
+            noc_async_write(l1, out.get_noc_addr(page0 + N_t + c), tile_bytes);
+#endif
+            l1 += tile_bytes;
+        }
+        noc_async_writes_flushed();
+        cb_pop_front(cb_rope_out, Dr_t);
+    };
+    for (uint32_t t = 0; t < rows_per_head; ++t) {
+        for (uint32_t u = 0; u < n_r; ++u) {
+            store_row(u, t);
         }
     }
+    for (uint32_t u = n_r; u < hpc; ++u) {
+        for (uint32_t t = 0; t < rows_per_head; ++t) {
+            store_row(u, t);
+        }
+    }
+    noc_async_write_barrier();
 }

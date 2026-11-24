@@ -97,6 +97,9 @@ void kernel_main() {
     for (uint32_t u = 0; u < hpc; ++u) {
         nh[src_of(u)]++;
     }
+    // Consumption order (host: consumption_order / landing_slot): the n_r remote heads first, row-major across them
+    // (they all land with the same row profile), then the local heads head-major.
+    const uint32_t n_r = hpc - nh[my_pos];
 
     const auto wkv = TensorAccessor(wkv_args, wkv_addr, wkv_tile_bytes);
     const uint32_t total_units = wkv_resident ? hpc : hpc * rows_per_head * n_nb;
@@ -104,10 +107,15 @@ void kernel_main() {
     auto unit_page = [&](uint32_t idx, uint32_t w) {
         uint32_t u, nb;
         if constexpr (wkv_resident) {
-            u = idx;
+            u = idx;  // one unit per head, in consumption order
             nb = 0;
-        } else {
-            u = idx / (rows_per_head * n_nb);
+        } else {  // one unit per (row, head, N-block), in consumption order
+            const uint32_t a_units = n_r * rows_per_head * n_nb;
+            if (idx < a_units) {
+                u = (idx % (n_r * n_nb)) / n_nb;
+            } else {
+                u = n_r + (idx - a_units) / (rows_per_head * n_nb);
+            }
             nb = idx % n_nb;
         }
         const uint32_t kt = w / s3n;
@@ -183,29 +191,45 @@ void kernel_main() {
             ++next_unit;
         }
     };
-    bool local_waited = false;
-    for (uint32_t u = 0; u < hpc; ++u) {
-        const uint32_t src = src_of(u);
-        volatile tt_l1_ptr uint32_t* arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrive_addr[src]);
-        if (src == my_pos && !local_waited) {
-            noc_semaphore_wait_min(arrived, nh[src] * rows_per_head * hw);
-            local_waited = true;
+    auto ensure_units = [&](uint32_t upto) {
+        while (next_unit < upto) {
+            load_next_unit();
         }
-        for (uint32_t t = 0; t < rows_per_head; ++t) {
-            if (src != my_pos) {
-                noc_semaphore_wait_min(arrived, (t + 1) * nh[src] * hw);
-            }
+    };
+    // Phase A: remote heads, row-major. R1: every remote head's weights resident before the first row (a core outside
+    // the stage-1 rect loads them once that row has landed); R2: the row's N-block units right after its credit.
+    for (uint32_t t = 0; t < rows_per_head; ++t) {
+        for (uint32_t u = 0; u < n_r; ++u) {
+            const uint32_t src = src_of(u);
+            noc_semaphore_wait_min(
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrive_addr[src]), (t + 1) * nh[src] * hw);
             if constexpr (wkv_resident) {
-                if (t == 0 && u >= prefetched) {
-                    load_next_unit();  // the head's weights, once its first row is here
+                if (t == 0 && u == 0) {
+                    ensure_units(n_r);
                 }
             }
             cb_reserve_back(cb_landing, hw);
             cb_push_back(cb_landing, hw);  // credits only: the row is already in my landing shard
             if constexpr (!wkv_resident) {
-                for (uint32_t nb = 0; nb < n_nb; ++nb) {
-                    load_next_unit();
-                }
+                ensure_units(((t * n_r) + u + 1) * n_nb);
+            }
+        }
+    }
+    // Phase B: local heads, head-major; the own quarter comes from many stage-1 writers in any order, so wait for
+    // all of it once.
+    if (n_r < hpc) {
+        noc_semaphore_wait_min(
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrive_addr[my_pos]), nh[my_pos] * rows_per_head * hw);
+    }
+    for (uint32_t u = n_r; u < hpc; ++u) {
+        if constexpr (wkv_resident) {
+            ensure_units(u + 1);
+        }
+        for (uint32_t t = 0; t < rows_per_head; ++t) {
+            cb_reserve_back(cb_landing, hw);
+            cb_push_back(cb_landing, hw);
+            if constexpr (!wkv_resident) {
+                ensure_units(n_r * rows_per_head * n_nb + ((u - n_r) * rows_per_head + t + 1) * n_nb);
             }
         }
     }
