@@ -7,7 +7,6 @@
 #include <tt-metalium/sub_device_types.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operations/data_movement/repeat/repeat.hpp"
 #include "ttnn/operations/experimental/quasar/binary_ng/device/binary_ng_device_operation.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
@@ -421,39 +420,6 @@ inline Tensor binary_impl(
     }
 
     TT_THROW("Unsupported operation");
-}
-
-inline auto preprocess_inputs(BinaryOpType binary_op_type, Tensor a, Tensor b) {
-    // TODO: #7731 (Remove calls to repeat)
-    constexpr auto repeat_smaller = [](const Tensor& first, Tensor& second) {
-        const auto& first_shape = first.logical_shape();
-        const auto& second_shape = second.logical_shape();
-        // repeats second if it is smaller
-        if (first_shape.rank() == 4 and second_shape.rank() == 4 and first_shape[0] > second_shape[0]) {
-            TT_FATAL(second_shape[0] == 1, "Dimension trying to broadcast is not equal to 1");
-            Shape repeats(std::array<uint32_t, 4>{first_shape[0], 1, 1, 1});
-            second = ttnn::repeat(second, repeats);
-        }
-        // repeats second if it is smaller
-        if (first_shape.rank() >= 3 and second_shape.rank() >= 3 and first_shape[-3] > second_shape[-3]) {
-            TT_FATAL(second_shape[-3] == 1, "Dimension trying to broadcast is not equal to 1");
-            int rank_a = first_shape.rank();
-            std::vector<uint32_t> repeat_dim(rank_a, 1);
-            repeat_dim[rank_a - 3] = first_shape[rank_a - 3];
-            Shape repeats(repeat_dim);
-            second = ttnn::repeat(second, repeats);
-        }
-    };
-
-    repeat_smaller(a, b);
-    repeat_smaller(b, a);
-
-    // Swap tensors if a needs to be broadcasted to b
-    if (detail::is_associative(binary_op_type) and a.logical_volume() < b.logical_volume()) {
-        return std::make_tuple(b, a);
-    }
-
-    return std::make_tuple(a, b);
 }
 
 inline auto any_sharded_block_format(const Tensor& a, const auto& b) {
