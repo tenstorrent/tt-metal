@@ -34,7 +34,8 @@ ttnn::Tensor sparse_ring_sdpa(
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
     uint32_t block_size,
     std::optional<uint32_t> q_blocks_per_pass,
-    const std::optional<ttnn::Tensor>& block_counts) {
+    const std::optional<ttnn::Tensor>& block_counts,
+    const std::optional<ttnn::Tensor>& logical_n_tensor) {
     auto output_tensors = ttnn::prim::sparse_ring_sdpa(
         input_tensor_q,
         input_tensor_k,  // AllGather input
@@ -59,7 +60,8 @@ ttnn::Tensor sparse_ring_sdpa(
         core_allocation_strategy,
         block_size,
         q_blocks_per_pass,
-        block_counts);
+        block_counts,
+        logical_n_tensor);
     return output_tensors[prim::SPARSE_RING_SDPA_OUTPUT_IDX];
 }
 
