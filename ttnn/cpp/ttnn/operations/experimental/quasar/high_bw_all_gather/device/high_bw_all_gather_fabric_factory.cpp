@@ -754,14 +754,19 @@ uint32_t host_cache_slot_first_page(const HighBwAllGatherParams& args, const Chi
 // per cache slot, geometry at 8; sender [0] output [1] shards-arrived counter [2] downstream-started counter, geometry
 // at 3. The chip shard geometry: [0] prefix tensor address [1] valid pages per outer slice (host) [2] outer slices [3]
 // pages per outer slice [4] ranks [5] KV slab [6] full gathered length [7] pages per KV slab.
+constexpr uint32_t kReaderInputAddressArg = 0;
+constexpr uint32_t kReaderOutputAddressArg = 1;
 constexpr uint32_t kReaderShardsArrivedCounterArg = 2;
+constexpr uint32_t kReaderBatchIndexAddressArg = 3;
 constexpr uint32_t kReaderLayersPerUserArg = 4;
 constexpr uint32_t kReaderLayerArg = 5;
 constexpr uint32_t kReaderCacheSlotFirstPageArg = 6;
 constexpr uint32_t kReaderGeometryArg = 8;
+constexpr uint32_t kSenderOutputAddressArg = 0;
 constexpr uint32_t kSenderShardsArrivedCounterArg = 1;
 constexpr uint32_t kSenderDownstreamStartedCounterArg = 2;
 constexpr uint32_t kSenderGeometryArg = 3;
+constexpr uint32_t kGeometryPrefixAddressArg = 0;
 constexpr uint32_t kGeometryValidPagesPerOuterSliceArg = 1;
 
 // Kernel indices: the order create_workload_descriptor pushes the kernels (a descriptor kernel's index is its handle).
@@ -1186,6 +1191,17 @@ tt::tt_metal::WorkloadDescriptor HighBwAllGatherFabricFactory::create_workload_d
                 }
             }
         }
+        // A cache hit that swaps in caller semaphores reads the link worker cores back from which cores have reader
+        // args (fabric_link_worker_cores_of), so every link worker must get a non-empty reader arg list.
+        TT_FATAL(
+            fabric_link_worker_reader.runtime_args.size() == fabric_link_workers.size() &&
+                std::all_of(
+                    fabric_link_worker_reader.runtime_args.begin(),
+                    fabric_link_worker_reader.runtime_args.end(),
+                    [](const auto& core_args) { return !core_args.second.empty(); }),
+            "high_bw_all_gather: every fabric link worker needs reader runtime args ({} workers, {} arg lists)",
+            fabric_link_workers.size(),
+            fabric_link_worker_reader.runtime_args.size());
         // Local copy core c of n owns chunk numbers c, c + n, ... of this chip's shard (interleaved input), or
         // conversion blocks c, c + n, ... of it (non-interleaved input, for_each_contiguous_input_run); the latter
         // signals every fabric link worker of this chip per block.
@@ -1249,8 +1265,26 @@ void HighBwAllGatherMeshWorkloadFactory::override_runtime_arguments(
         }
     }
 
-    // Default adapter behaviour: patch the Buffer* bindings (input, output, cache slot and prefix tensors).
-    descriptor_adapter_t::apply_descriptor(cached_workload, args, tensor_args, output_tensor);
+    // Default adapter behaviour: patch the Buffer* bindings (input, output, cache slot and prefix tensors). When the
+    // cache-filling call passed one buffer in two tensor slots, the adapter could not tell which slot holds which
+    // buffer, recorded no bindings, and would refuse this hit; the addresses are then written directly below instead,
+    // as the legacy factory always did.
+    const bool bindings_resolved = std::all_of(
+        cached_workload.shared_variables.begin(), cached_workload.shared_variables.end(), [](const auto& entry) {
+            return !entry.second.resolved_bindings.empty();
+        });
+    if (bindings_resolved) {
+        descriptor_adapter_t::apply_descriptor(cached_workload, args, tensor_args, output_tensor);
+    }
+    const auto address_of = [](const std::optional<Tensor>& tensor) -> uint32_t {
+        return tensor.has_value() ? static_cast<uint32_t>(tensor->mesh_buffer().address()) : 0u;
+    };
+    const uint32_t input_address = static_cast<uint32_t>(tensor_args.input_tensor.mesh_buffer().address());
+    const uint32_t output_address = static_cast<uint32_t>(output_tensor.mesh_buffer().address());
+    const uint32_t batch_index_address =
+        tensor_args.has_batch_index_metadata() ? address_of(tensor_args.input_batch_index_tensor) : 0u;
+    const uint32_t prefix_address =
+        tensor_args.has_gathered_prefix_metadata() ? address_of(tensor_args.gathered_prefix_tensor) : 0u;
 
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared = cached_workload.shared_variables.at(coordinate_range);
@@ -1267,6 +1301,12 @@ void HighBwAllGatherMeshWorkloadFactory::override_runtime_arguments(
             static_cast<uint32_t>(shared.workload_descriptor.semaphores.at(kDownstreamStartedCounterSlot).address());
         auto patch_reader_common = [&](uint32_t kernel) {
             auto& common = GetCommonRuntimeArgs(program, kernel);
+            if (!bindings_resolved) {
+                common[kReaderInputAddressArg] = input_address;
+                common[kReaderOutputAddressArg] = output_address;
+                common[kReaderBatchIndexAddressArg] = batch_index_address;
+                common[kReaderGeometryArg + kGeometryPrefixAddressArg] = prefix_address;
+            }
             common[kReaderShardsArrivedCounterArg] = shards_arrived_counter_address;
             common[kReaderLayersPerUserArg] = hash_excluded.layers_per_user;
             common[kReaderLayerArg] = hash_excluded.layer;
@@ -1278,6 +1318,10 @@ void HighBwAllGatherMeshWorkloadFactory::override_runtime_arguments(
         patch_reader_common(kLocalCopyCoreReaderKernel);
         patch_reader_common(kLocalCopyCoreWriterKernel);  // the local copy writer takes the reader's common args
         auto& sender_common = GetCommonRuntimeArgs(program, kFabricLinkWorkerSenderKernel);
+        if (!bindings_resolved) {
+            sender_common[kSenderOutputAddressArg] = output_address;
+            sender_common[kSenderGeometryArg + kGeometryPrefixAddressArg] = prefix_address;
+        }
         sender_common[kSenderShardsArrivedCounterArg] = shards_arrived_counter_address;
         sender_common[kSenderDownstreamStartedCounterArg] = downstream_started_counter_address;
         sender_common[kSenderGeometryArg + kGeometryValidPagesPerOuterSliceArg] =

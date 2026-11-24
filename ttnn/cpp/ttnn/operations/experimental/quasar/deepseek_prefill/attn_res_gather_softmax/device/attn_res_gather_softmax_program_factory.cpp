@@ -72,6 +72,12 @@ enum WriterCommonArg : uint32_t {
 constexpr uint32_t kGatherStatsAddrIdx = 0;
 constexpr uint32_t kGatherSemAddrIdx = 2;
 
+}  // namespace
+
+// Unique per translation unit: unity builds merge the anonymous namespaces of sibling factories, which define
+// constants with the same names (e.g. kGatherKernel in attn_res_block_stats).
+namespace CMAKE_UNIQUE_NAMESPACE {
+
 // Kernel handles are positions in `desc.kernels`, pinned to create_descriptor's push order.
 constexpr tt::tt_metal::KernelHandle kReaderKernel = 0;
 constexpr tt::tt_metal::KernelHandle kWriterKernel = 1;
@@ -87,7 +93,9 @@ constexpr uint32_t kChunkSemId = 2;
 // Shared with the override, which needs it to find the gather kernel's per-core args.
 CoreCoord attn_res_gather_core(const CoreCoord& grid) { return CoreCoord{grid.x - 1, grid.y - 1}; }
 
-}  // namespace
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+
+using namespace CMAKE_UNIQUE_NAMESPACE;
 
 AttnResGatherSoftmaxSiteOffsets attn_res_gather_softmax_site_offsets(
     const AttnResGatherSoftmaxParams& operation_attributes, const AttnResGatherSoftmaxInputs& tensor_args) {

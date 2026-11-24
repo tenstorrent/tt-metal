@@ -50,8 +50,11 @@ struct HighBwAllGatherDescriptorAdapterOperation {
 // Wraps the WorkloadDescriptor factory so a cache hit first patches the Buffer* bindings exactly as the default
 // adapter does (input, output and the optional metadata tensors), then re-applies the common runtime args the bindings
 // cannot cover: the hash-excluded slot / prefix scalars (input_batch_index, gathered_dim_size, batch_slot_num_layers,
-// batch_slot_layer_idx) and, for caller-owned semaphores, their current addresses. The per-Program
-// override_runtime_arguments hook is never called on the WorkloadDescriptor path, hence this workload-scoped one.
+// batch_slot_layer_idx) and, for caller-owned semaphores, their current addresses. It is workload-scoped rather than a
+// per-Program override_runtime_arguments hook because a semaphore swap must also replace the GlobalSemaphores parked in
+// each program's shared variables (keeping them alive with the cached workload), which a per-Program hook cannot
+// reach. It also writes the tensor addresses itself when the cache-filling call aliased two tensor slots and the
+// adapter therefore recorded no bindings.
 struct HighBwAllGatherMeshWorkloadFactory {
     using descriptor_adapter_t = ttnn::device_operation::MeshDeviceOperationAdapter<
         HighBwAllGatherDescriptorAdapterOperation>::DescriptorMeshWorkloadAdapter<HighBwAllGatherFabricFactory>;
