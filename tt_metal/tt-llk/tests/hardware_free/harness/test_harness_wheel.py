@@ -25,7 +25,7 @@ _spec = importlib.util.spec_from_file_location("build_wheel", _BUILDER)
 build_wheel = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(build_wheel)
 
-VERSION = build_wheel.Version(api=(1, 2), committed=0, commit=0xABC << 148)
+VERSION = build_wheel.Version(number=(1, 2, 3), committed=0, commit=0xABC << 148)
 
 
 @pytest.fixture(scope="module")
@@ -102,11 +102,33 @@ def test_wheel_holds_the_tt_llk_files_the_harness_reads(names):
         assert expected in names, f"{expected} is missing from the wheel"
 
 
-def test_version_is_api_then_commit_time_then_commit():
-    assert str(VERSION) == "1.2.197001010000+gabc000000000"
-    assert VERSION.tag == "v1.2.197001010000-gabc000000000"
-    later = build_wheel.Version(api=(1, 2), committed=60, commit=0, dirty=True)
-    assert str(later) == "1.2.197001010001+g000000000000.dirty"
+def test_a_release_is_named_by_its_number_alone():
+    """What a release publishes is ``X.Y.Z``: the version a suite pins, with nothing of the build in it."""
+    assert str(VERSION._replace(release=True)) == "1.2.3"
+
+
+def test_any_other_build_names_its_commit_and_orders_by_commit_time():
+    assert str(VERSION) == "1.2.3+197001010000.gabc000000000"
+    later = build_wheel.Version(number=(1, 2, 3), committed=60, commit=0, dirty=True)
+    assert str(later) == "1.2.3+197001010001.g000000000000.dirty"
+
+
+@pytest.mark.parametrize(
+    "text", ["1.2", "1.2.3.4", "1.2.x", "v1.2.3", "1.02.3", "1.2.-3", "1.2.3+g0", ""]
+)
+def test_a_version_that_is_not_three_plain_numbers_is_refused(text):
+    with pytest.raises(ValueError):  # allow-pytest.raises: no expect_error in LLK suite
+        build_wheel.parse_version_number(text)
+
+
+def test_version_file_is_major_minor_patch():
+    """The file is what a suite pins and what the release workflow publishes under."""
+    text = (build_wheel.LLK_ROOT / build_wheel.VERSION_FILE).read_text()
+
+    assert (
+        build_wheel.parse_version_number(text) == build_wheel.harness_version_number()
+    )
+    assert text == text.strip() + "\n", "one line, nothing else"
 
 
 def test_metadata_carries_the_version_and_the_requirements(wheel):
@@ -130,12 +152,35 @@ def test_same_sources_give_the_same_wheel(wheel, tmp_path):
     assert again.read_bytes() == wheel.read_bytes()
 
 
-def test_default_version_leads_with_the_api_version():
-    """The wheel's version is read from the source; it must be the one the harness reports."""
+def test_the_wheel_and_the_harness_report_one_version(names):
+    """The builder reads the VERSION file without importing the harness; both must say the same."""
     import tt_llk_harness
 
-    assert build_wheel.api_version() == tt_llk_harness.HARNESS_API_VERSION
-    assert build_wheel.default_version().api == tt_llk_harness.HARNESS_API_VERSION
+    number = build_wheel.default_version().number
+    assert ".".join(str(part) for part in number) == tt_llk_harness.__version__
+    assert number[:2] == tt_llk_harness.HARNESS_API_VERSION
+    assert (
+        "tt_llk_harness/VERSION" in names
+    ), "the harness reads its version from this file"
+
+
+def test_a_release_is_not_built_from_a_tree_with_changes(monkeypatch):
+    """A published version must be reproducible from its commit."""
+    real_run = build_wheel.subprocess.run
+
+    def run_with_a_change(argv, **options):
+        result = real_run(argv, **options)
+        if argv[:2] == ["git", "status"]:
+            result.stdout = " M tests/python_tests/helpers/utils.py\n"
+        return result
+
+    monkeypatch.setattr(build_wheel.subprocess, "run", run_with_a_change)
+
+    assert build_wheel.default_version().dirty
+    with pytest.raises(  # allow-pytest.raises: no expect_error in LLK suite
+        RuntimeError, match="uncommitted changes"
+    ):
+        build_wheel.default_version(release=True)
 
 
 # The harness module that imports an in-tree test module, so it works from a checkout only.

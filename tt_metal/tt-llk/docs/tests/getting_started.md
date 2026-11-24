@@ -602,25 +602,17 @@ In-tree tests are unchanged: `conftest.py` still re-exports the arch skip marker
 
 ### Installing the harness as a wheel
 
-An external suite does not need a tt-llk checkout on `sys.path`: the harness is also built as a wheel, `tt_llk_harness-<version>-py3-none-any.whl`. The nightly **LLK e2e Tests** workflow (`.github/workflows/llk-e2e.yaml`) builds it in its own job on every run, whether or not the tests passed, and keeps it for 30 days as the `llk-harness-wheel` artifact: the wheel, `requirements.txt` and `e2e-result.txt`.
+An external suite does not need a tt-llk checkout on `sys.path`: the harness is also released as a wheel, `tt_llk_harness-<version>-py3-none-any.whl`. Releases are kept as a package of this repository on ghcr.io, `ghcr.io/tenstorrent/tt-metal/tt-llk-harness`, one tag per version and `latest` for the newest. The package is private: there is no public package of the harness. GitHub Packages has no Python registry, so pip cannot install the harness by name; a release is downloaded and its wheel installed as a file.
 
-The steps below are the whole setup on a machine that has no tt-metal checkout. They need the GitHub CLI, logged in to an account that can read tenstorrent/tt-metal (`gh auth status` says whether it is).
+The steps below are the whole setup on a machine that has no tt-metal checkout. They need the [ORAS](https://oras.land) CLI and a GitHub account that may read the package.
 
-1. Once per machine, define two `gh` commands:
+1. Log in to the registry once, then download a release into the current directory:
    ```bash
-   gh alias set llk-wheel --shell 'gh run download -R tenstorrent/tt-metal -n llk-harness-wheel "$(gh api "repos/tenstorrent/tt-metal/actions/workflows/llk-e2e.yaml/runs?branch=${1:-main}&status=completed&per_page=1" -q ".workflow_runs[0].id")"'
-   gh alias set llk-wheel-build --shell 'R=tenstorrent/tt-metal; B="${1:-main}"; gh workflow run llk-e2e.yaml -R $R --ref "$B" -f wheel_only=true && sleep 10 && I=$(gh api "repos/$R/actions/workflows/llk-e2e.yaml/runs?branch=$B&event=workflow_dispatch&per_page=1" -q ".workflow_runs[0].id") && gh run watch $I -R $R --exit-status > /dev/null && gh run download $I -R $R -n llk-harness-wheel'
+   gh auth refresh -s read:packages          # once: lets the token of the GitHub CLI read packages
+   gh auth token | oras login ghcr.io -u "$(gh api user -q .login)" --password-stdin
+   oras pull ghcr.io/tenstorrent/tt-metal/tt-llk-harness:1.1.0
    ```
-   `gh llk-wheel` finds the newest completed run of the workflow on a branch and downloads that run's `llk-harness-wheel` artifact. `gh llk-wheel-build` does not wait for the nightly: it starts a manual run of the workflow with its `wheel_only` input, which skips the tests and builds the wheel from the branch's current head, waits for it (about half a minute) and downloads the result. It needs write access to the repository, as starting any workflow does. Both use only `gh api`, `gh workflow run`, `gh run watch` and `gh run download`, so that they also run on older releases of the GitHub CLI. `gh alias list` shows whether the machine already has them; setting one that exists is refused ("name already taken") unless `--clobber` is added.
-
-   Then, in the directory the wheel should land in:
-   ```bash
-   gh llk-wheel               # the newest wheel built from main
-   gh llk-wheel <branch>      # the newest wheel built from a branch, by a manual run of the workflow on it
-   gh llk-wheel-build         # build a wheel from main now, and download it
-   gh llk-wheel-build <branch>
-   ```
-   Each leaves `tt_llk_harness-<version>-py3-none-any.whl`, `requirements.txt` and `e2e-result.txt` in the current directory. `e2e-result.txt` is one word, the outcome of the e2e tests of the run that built the wheel: `success`, `failure`, or `skipped` when the run built the wheel only, as `gh llk-wheel-build` does. "no artifact matches" means there is no wheel to get: the newest run of that branch built none (it was cancelled, or it predates the wheel job), or the branch never ran the workflow.
+   This leaves `tt_llk_harness-1.1.0-py3-none-any.whl` and `requirements.txt`. A suite names the version it was written against; `latest` is for trying the newest. In a workflow of another repository, the job needs `packages: read`, logs in with its own `GITHUB_TOKEN`, and the package has to list that repository under "Manage Actions access" in its settings.
 
 2. Install it into the suite's environment:
    ```bash
@@ -642,11 +634,30 @@ The steps below are the whole setup on a machine that has no tt-metal checkout. 
    LLK_HOME=<tree with the LLKs> LLK_SFPI_ROOT=<SFPI root> pytest --compile-consumer .
    ```
 
-To build the wheel from a checkout instead, run `tests/harness_wheel/make_wheel.py --out-dir dist` in tt-llk (it needs only git and the Python standard library); `tests/requirements.txt` is the constraints file to install it with.
+To build a wheel from a checkout instead, run `tests/harness_wheel/make_wheel.py --out-dir dist` in tt-llk (it needs only git and the Python standard library); `tests/requirements.txt` is the constraints file to install it with. Such a build is not a release and says so in its version, `X.Y.Z+<commit time>.g<commit>`: it orders after the release `X.Y.Z` and names the commit it was built from (`pip show tt-llk-harness`). `tests/harness_wheel/verify_wheel.sh <wheel>` checks a wheel the way the release does.
 
-On the scheduled run of `main`, if the tests passed and the repository variable `LLK_HARNESS_WHEEL_RELEASE_REPO` names a repository, the job also publishes the wheel there as a release (`gh release download -R <that repository> -p '*.whl'` then gets the newest tested one); nothing here deletes old releases. The token is the `LLK_HARNESS_WHEEL_RELEASE_TOKEN` secret of the `llk-harness-wheel-release` environment, which should allow deployments from `main` only. Who can download a release is decided by that repository's visibility.
+#### Versions
 
-The version is `<API major>.<API minor>.<commit time>+g<commit>`: the first two numbers are `HARNESS_API_VERSION` and the third is the commit time as `YYYYMMDDHHMM` in UTC, so wheels order by the contract first and by commit time within it, and an installed wheel names the commit it was built from (`pip show tt-llk-harness`).
+The harness has one version, `MAJOR.MINOR.PATCH`, in `tests/python_tests/tt_llk_harness/VERSION`. It is `tt_llk_harness.__version__`, and its first two numbers are `HARNESS_API_VERSION`, the version `require_version` checks.
+
+| Raise | When |
+| --- | --- |
+| MAJOR | a name leaves `__all__` or changes meaning, after its deprecation period |
+| MINOR | `__all__` gains a name, or the harness gains something a suite can rely on from outside (an option of the plugin, a variable such as `LLK_SFPI_ROOT`) |
+| PATCH | any other release: fixes, goldens, parameters, the helper tree, with nothing new to rely on |
+
+`tests/out_of_tree/` pins the exported surface per MAJOR.MINOR, so the first two cannot be skipped: a surface that changed fails there until the version has moved.
+
+#### Releasing the harness
+
+A release is a pull request that raises the number in `VERSION`. When it merges, the **LLK harness release** workflow (`.github/workflows/llk-harness-release.yaml`) builds the wheel of that commit, named by the number alone, verifies it (`verify_wheel.sh`: a new environment with only what the wheel requires, then the `tests/out_of_tree/` fixture on the installed copy for Wormhole and Blackhole) and publishes it under that version.
+
+- Not every change to the harness is a release. `helpers` changes with the LLKs most days; raise the version when a suite outside this repository needs what changed.
+- A version is published once. The workflow refuses a number that is not greater than the one before it, and refuses to replace a version the package already has, so a suite that pins a version keeps getting the same bytes.
+- What gates a release is the pull request's own checks and the verification above, not the nightly e2e tests on silicon.
+- A manual run of the workflow builds and verifies the wheel of the branch it is run on, and publishes nothing.
+
+Two things are set up once, by an organisation admin. The `llk-harness-release` environment, which the publish job names, should allow deployments from `main` only; required reviewers there make every release wait for an approval. And after the first release, the package's settings decide its visibility (private) and who may read it: teams, and the repositories whose workflows download it. The publish job fails if it finds the package public.
 
 #### What the wheel holds
 

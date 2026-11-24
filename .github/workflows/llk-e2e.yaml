@@ -11,11 +11,6 @@ on:
         required: false
         default: "not perf and not quasar and not accuracy"
         type: string
-      wheel_only:
-        description: "Build the harness wheel only, without running the tests"
-        required: false
-        default: false
-        type: boolean
 
 permissions:
   checks: write
@@ -25,7 +20,6 @@ permissions:
 jobs:
   llk-e2e-tests:
     name: "LLK e2e Tests"
-    if: ${{ !inputs.wheel_only }}
     uses: ./.github/workflows/llk-e2e-impl.yaml
     secrets: inherit
     with:
@@ -34,7 +28,7 @@ jobs:
 
   llk-e2e-summary:
     name: "LLK e2e summary"
-    if: ${{ always() && !inputs.wheel_only }}
+    if: always()
     needs:
       - llk-e2e-tests
     runs-on: ubuntu-slim
@@ -44,71 +38,10 @@ jobs:
         with:
           jobs: ${{ toJSON(needs) }}
 
-  # The harness as a wheel, every run, whatever the tests did: the artifact is how a suite outside this repository gets
-  # the harness. A job of its own, so a failed build or upload is not reported as an e2e failure and the release token is
-  # only in a job that runs pinned actions with a read-only token.
-  llk-harness-wheel:
-    name: "LLK harness wheel"
-    needs: llk-e2e-summary
-    if: ${{ !cancelled() }}
-    runs-on: ubuntu-slim
-    timeout-minutes: 30
-    # The release token is a secret of this environment, which only main may deploy to; other runs name none.
-    environment: ${{ github.event_name == 'schedule' && github.ref == 'refs/heads/main' && 'llk-harness-wheel-release' || '' }}
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout tt-llk
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
-        timeout-minutes: 20
-        with:
-          fetch-depth: 1
-          sparse-checkout: |
-            tt_metal/tt-llk
-          sparse-checkout-cone-mode: true
-      - name: Build the harness wheel
-        id: wheel
-        shell: bash
-        env:
-          E2E_RESULT: ${{ needs.llk-e2e-summary.result }}
-        run: |
-          set -euo pipefail
-          # Sets the step's version and tag outputs.
-          python3 tt_metal/tt-llk/tests/harness_wheel/make_wheel.py --out-dir dist
-          cp tt_metal/tt-llk/tests/requirements.txt dist/requirements.txt
-          # success, failure or skipped: whether the e2e tests ran on this commit, and how they ended.
-          echo "$E2E_RESULT" > dist/e2e-result.txt
-      - name: Upload the harness wheel
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        with:
-          name: llk-harness-wheel
-          path: dist/
-          if-no-files-found: error
-          retention-days: 30
-          overwrite: true
-      # Only the nightly run of main, only when its tests passed, and only when a release repository is configured; its
-      # visibility decides who can download the wheel.
-      - name: Publish the harness wheel as a release
-        if: ${{ needs.llk-e2e-summary.result == 'success' && github.event_name == 'schedule' && github.ref == 'refs/heads/main' && vars.LLK_HARNESS_WHEEL_RELEASE_REPO != '' }}
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.LLK_HARNESS_WHEEL_RELEASE_TOKEN }}
-          RELEASE_REPO: ${{ vars.LLK_HARNESS_WHEEL_RELEASE_REPO }}
-          VERSION: ${{ steps.wheel.outputs.version }}
-          TAG: ${{ steps.wheel.outputs.tag }}
-        run: |
-          set -euo pipefail
-          if gh release view "$TAG" --repo "$RELEASE_REPO" > /dev/null 2>&1; then
-            gh release upload "$TAG" dist/* --repo "$RELEASE_REPO" --clobber
-          else
-            gh release create "$TAG" dist/* --repo "$RELEASE_REPO" --latest \
-              --title "tt-llk harness $VERSION" --notes "tt-llk Python test harness $VERSION"
-          fi
-
   report-status:
     name: "Report status"
     runs-on: ubuntu-slim
-    if: ${{ always() && !inputs.wheel_only }}
+    if: always()
     needs: llk-e2e-summary
     steps:
       - name: Checkout repository

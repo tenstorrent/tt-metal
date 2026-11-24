@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Build the wheel of the tt-llk Python test harness.
 
-    tests/harness_wheel/make_wheel.py [--out-dir DIR]
+    tests/harness_wheel/make_wheel.py [--out-dir DIR] [--release [--after VERSION]]
 
 The wheel is the harness an out-of-tree suite attaches to through
 ``tt_llk_harness`` (docs/tests/getting_started.md, "The supported surface"),
@@ -27,10 +27,12 @@ supplies those through ``LLK_HOME`` and ``TestConfig.add_include_dirs`` /
 ``add_helpers_tree``. SFPI in particular is installed on its own and named with
 ``LLK_SFPI_ROOT`` (``helpers/toolchain.py``); the wheel carries no pin of it.
 
-The version is ``<API major>.<API minor>.<commit time>+g<commit>``, the API
-being ``tt_llk_harness.HARNESS_API_VERSION`` and the time ``YYYYMMDDHHMM`` in
-UTC, so wheels order by API and then by commit time, and an installed wheel
-names the commit it was built from.
+The version is the harness's ``VERSION`` file, ``MAJOR.MINOR.PATCH``, whose
+first two numbers are ``tt_llk_harness.HARNESS_API_VERSION``. ``--release``
+builds the wheel a release publishes, named by that number alone
+(.github/workflows/llk-harness-release.yaml). Any other build is
+``X.Y.Z+<commit time>.g<commit>``, the time ``YYYYMMDDHHMM`` in UTC: it names
+the commit it was built from and cannot be taken for a release.
 
 The wheel is written directly (a pure-Python wheel is a zip archive with three
 metadata files, PEP 427), uncompressed, so building it needs only git and the
@@ -41,7 +43,6 @@ files git tracks, so nothing untracked or ignored.
 from __future__ import annotations
 
 import argparse
-import ast
 import base64
 import csv
 import hashlib
@@ -85,6 +86,8 @@ LLK_HOME_FILES = (
 )
 LLK_HOME_PREFIX = PurePosixPath("tt_llk_harness/llk_home")
 REQUIREMENTS = "tests/requirements.txt"
+# The harness's version, MAJOR.MINOR.PATCH. It ships with the package; a change of it on main publishes a release.
+VERSION_FILE = "tests/python_tests/tt_llk_harness/VERSION"
 REQUIREMENTS_IN_WHEEL = PurePosixPath("tt_llk_harness/requirements.txt")
 # What an installed harness needs: distribution -> the top-level modules the harness imports from it.
 # tests/hardware_free/harness/test_harness_wheel.py holds this to the imports of the files that ship.
@@ -161,51 +164,52 @@ def wheel_contents(llk_root: Path = LLK_ROOT) -> dict[PurePosixPath, Path]:
     return contents
 
 
-def api_version(llk_root: Path = LLK_ROOT) -> tuple[int, int]:
-    """``HARNESS_API_VERSION``, read from the parsed source: importing the harness needs its requirements installed."""
-    source = llk_root / "tests/python_tests/tt_llk_harness/__init__.py"
-    for statement in ast.parse(source.read_text()).body:
-        if isinstance(statement, ast.Assign) and any(
-            isinstance(target, ast.Name) and target.id == "HARNESS_API_VERSION"
-            for target in statement.targets
-        ):
-            major, minor = ast.literal_eval(statement.value)
-            return major, minor
-    raise RuntimeError(f"{source} does not assign HARNESS_API_VERSION")
+def parse_version_number(text: str) -> tuple[int, int, int]:
+    """``MAJOR.MINOR.PATCH`` as three integers; anything else is refused."""
+    numbers = text.strip().split(".")
+    # The round trip through int leaves plain numbers only: no sign, no leading zero.
+    if len(numbers) != 3 or not all(
+        number.isdecimal() and str(int(number)) == number for number in numbers
+    ):
+        raise ValueError(f"not MAJOR.MINOR.PATCH: {text.strip()!r}")
+    major, minor, patch = (int(number) for number in numbers)
+    return major, minor, patch
+
+
+def harness_version_number(llk_root: Path = LLK_ROOT) -> tuple[int, int, int]:
+    """The harness's version, from its ``VERSION`` file: importing the harness needs its requirements installed."""
+    return parse_version_number((llk_root / VERSION_FILE).read_text())
 
 
 class Version(NamedTuple):
-    """The wheel's version, ``<API major>.<API minor>.<commit time>+g<commit>``, by its parts."""
+    """The wheel's version: ``X.Y.Z`` for a release, ``X.Y.Z+<commit time>.g<commit>`` for any other build."""
 
-    api: tuple[int, int]
+    number: tuple[int, int, int]  # tt_llk_harness/VERSION
     committed: int  # commit time, seconds since the epoch
     commit: int  # the commit's SHA-1
     dirty: bool = False  # built with uncommitted changes to tracked tt-llk files
+    release: bool = False  # built to be published: named by its number alone
 
     @property
-    def release(self) -> str:
-        major, minor = self.api
-        # To the minute: the ``+g<commit>`` part orders lexically, so it cannot order two wheels of one day.
-        stamp = time.strftime("%Y%m%d%H%M", time.gmtime(self.committed))
-        return f"{major}.{minor}.{stamp}"
+    def public(self) -> str:
+        return ".".join(str(part) for part in self.number)
 
     @property
     def local(self) -> str:
-        # The first 12 of the SHA-1's 40 hex digits.
+        # The commit time leads, to the minute: a numeric segment orders as a number, so the builds of one
+        # version number order by commit time. The first 12 of the SHA-1's 40 hex digits follow.
+        stamp = time.strftime("%Y%m%d%H%M", time.gmtime(self.committed))
         commit = self.commit >> 4 * (40 - 12)
-        return f"g{commit:012x}{'.dirty' if self.dirty else ''}"
+        return f"{stamp}.g{commit:012x}{'.dirty' if self.dirty else ''}"
 
     def __str__(self) -> str:
-        return f"{self.release}+{self.local}"
-
-    @property
-    def tag(self) -> str:
-        """The git tag of a release of this wheel; a tag cannot hold the ``+``."""
-        return f"v{self.release}-{self.local}"
+        # The local part makes a build that is not a release order after the release of its number, and marks it
+        # as something an index of releases does not hold.
+        return self.public if self.release else f"{self.public}+{self.local}"
 
 
-def default_version(llk_root: Path = LLK_ROOT) -> Version:
-    """The version of the commit ``llk_root`` is at."""
+def default_version(llk_root: Path = LLK_ROOT, release: bool = False) -> Version:
+    """The version of the commit ``llk_root`` is at; ``release`` for the wheel a release publishes."""
     here = _in(llk_root)
     committed = subprocess.run(["git", "log", "-1", "--format=%ct"], **here).stdout
     commit = subprocess.run(["git", "rev-parse", "HEAD"], **here).stdout
@@ -213,11 +217,16 @@ def default_version(llk_root: Path = LLK_ROOT) -> Version:
     changes = subprocess.run(
         ["git", "status", "--porcelain", "--untracked-files=no", "."], **here
     ).stdout
+    if release and changes:
+        raise RuntimeError(
+            "A release is built from a commit; this tree has uncommitted changes."
+        )
     return Version(
-        api=api_version(llk_root),
+        number=harness_version_number(llk_root),
         committed=int(committed),
         commit=int(commit, 16),
         dirty=bool(changes),
+        release=release,
     )
 
 
@@ -304,13 +313,37 @@ def main() -> int:
         default=Path.cwd() / "dist",
         help="directory the wheel is written to (default: ./dist)",
     )
+    parser.add_argument(
+        "--release",
+        action="store_true",
+        help="build the wheel a release publishes: named by the VERSION file alone, from a tree without changes",
+    )
+    parser.add_argument(
+        "--after",
+        metavar="VERSION",
+        type=parse_version_number,
+        help="with --release: refuse to build unless the VERSION file is greater than this, the release before it",
+    )
     args = parser.parse_args()
-    version = default_version()
-    print(build_wheel(args.out_dir, version))
+    version = default_version(release=args.release)
+    if args.after is not None and not version.number > args.after:
+        parser.error(
+            f"version {version.public} does not come after {'.'.join(map(str, args.after))}; "
+            "a release is never replaced and never goes back"
+        )
+    wheel = build_wheel(args.out_dir, version)
+    print(wheel)
     # In a GitHub Actions step, the step's outputs.
     if "GITHUB_OUTPUT" in os.environ:
+        digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
         with open(os.environ["GITHUB_OUTPUT"], "a") as outputs:
-            print(f"version={version}", f"tag={version.tag}", sep="\n", file=outputs)
+            print(
+                f"version={version}",
+                f"wheel={wheel.name}",
+                f"sha256={digest}",
+                sep="\n",
+                file=outputs,
+            )
     return 0
 
 
