@@ -710,7 +710,7 @@
     pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_combine_fabric2d.py models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_hybrid_routed_expert_combine.py -vvv --tb=short -k "(test_combine_fabric2d and torus-xy-8x4) or (test_hybrid_routed_expert_combine_overlap and 8x4)"
     T=models/demos/deepseek_v3_d_p/tests/op_unit_tests
     models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh --half top -- $T/test_ttnn_dispatch_combine.py $T/test_prefill_dispatch.py $T/test_prefill_combine.py $T/test_combine_fabric2d.py $T/test_masked_bincount.py $T/test_offset_cumsum.py $T/test_zero_padded_kv_cache.py $T/test_deepseek_prefill_update_padded_kv_cache.py -vvv --tb=short -k "4x4 and sp1 and not perf_no_pcc and (not test_ttnn_dispatch_combine or (tile and random and (kimi_k2_7 or dsv3))) and (not test_prefill_dispatch or (random and (kimi_k2_7 or dsv3))) and (not test_ttnn_combine or random)"
-    # read_padded_kv_cache's round trip on the tray half with SP on mesh axis 0 (the GLM-5.4 stage layout).
+    # read_padded_kv_cache's round trip on the tray half with SP on mesh axis 0, as on GLM-5.4's 8x4 stages.
     models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh --half top -- "$T/test_deepseek_prefill_read_padded_kv_cache.py::test_read_padded_kv_cache_round_trip[blackhole-4x4-sp0]" -vvv --tb=short
   skus:
     bh_galaxy:

@@ -1030,7 +1030,7 @@
 # trace on Weka (read only; it skips without it). Its host tests run in the LB leg of ops_unit_tests.yaml, and the
 # SC4 perf leg is the GLM-5.4 entry of the disaggregated prefill section.
 # Measured on bh-glx-120-b06u02 at this leg's environment (CI=true, torus_xy profile), one pytest process, warm JIT:
-# 18 passed in 1169 s (19.5 min; two-bank 10.7, loop 7.0, stage 5.8, damp gate + handoff 1.9 min of it). The 40 min
+# 18 passed in 1169 s (19.5 min; two-bank 8.1, loop 5.5, stage 4.9, damp gate + handoff 1.0 min of it). The 40 min
 # bound covers a cold JIT; it is the shield team's first bh_sc1 leg (120 min budget, none used before).
 - name: "(GLM-5.4-744B) damp gate, two-bank attention, loop, stage placement and loop handoff accuracy 5k"
   fabric_profile: torus_xy
