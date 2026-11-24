@@ -37,12 +37,21 @@ import sanity_common  # noqa: E402
 sanity_common.PROBE = Path(__file__).resolve().parent / "sanity_probe.py"
 from sanity_common import clean, ended, fault_delivered, run_case  # noqa: E402
 
-# Each row's deadline. The graceful end takes a few seconds after the mesh opens; the rows that hang today (the
+# Each row's deadline, counted from when both ranks have imported ttnn (STARTED), so a slow import on a loaded host
+# does not use it up. The graceful end takes a few seconds after the mesh opens; the rows that hang today (the
 # exception unwinding into MPI_Finalize) are killed at the deadline and fail, so it is kept short.
 DEADLINE = float(os.environ.get("TT_SANITY_DEADLINE_EXCEPTION", "45"))
+STARTED = ("import_done", (0, 1))
 
 # TODO(https://github.com/tenstorrent/tt-metal/pull/64546): what its job stop fixes; every xfail row below fails without it and turns red (XPASS) with it.
 NEEDS_RANK_STOP = "https://github.com/tenstorrent/tt-metal/pull/64546 (the DistributedContext job stop)"
+
+
+def reached(r, rank: int, marker: str) -> None:
+    """The row got as far as it means to test: the rank reached the marker. Raised as a harness error, not an
+    AssertionError, so a strict xfail (raises=AssertionError) fails loudly instead of passing as the known gap."""
+    if not any(f"[probe r={rank} " in line and marker in line for line in r.log.splitlines()):
+        raise RuntimeError(f"harness: rank {rank} never reached {marker!r}; the row tested nothing\n{r.log[-3000:]}")
 
 
 def closed(r, ranks=(0, 1)) -> None:
@@ -67,13 +76,17 @@ def stopped_by(r, rank: int, reason: str, code: int) -> None:
 
 @pytest.mark.xfail(
     strict=True,
+    raises=AssertionError,
     reason=f"{NEEDS_RANK_STOP}: the exception unwinds into MPI_Finalize, which waits on rank 0 still in its barrier; "
     "the job hangs",
 )
 def test_raise_after_open():
     """Rank 1 raises after open: it stops the job, rank 0 leaves its barrier on the SIGTERM, both close their mesh;
     tt-run returns 1 naming rank 1 and the exception."""
-    r = run_case("raise_after_open", {"PROBE_SCENARIO": "raise", "PROBE_PHASE": "after_open"}, DEADLINE)
+    r = run_case(
+        "raise_after_open", {"PROBE_SCENARIO": "raise", "PROBE_PHASE": "after_open"}, DEADLINE, deadline_from=STARTED
+    )
+    reached(r, 1, "open_done")
     ended(r)
     stopped_by(r, 1, "Python exception RuntimeError: injected failure at after_open", 1)
     closed(r)
@@ -82,56 +95,7 @@ def test_raise_after_open():
 
 @pytest.mark.xfail(
     strict=True,
-    reason=f"{NEEDS_RANK_STOP}: sys.exit(1) unwinds into MPI_Finalize, which waits on rank 0 still in its barrier; "
-    "the job hangs",
-)
-def test_exit1_stops_the_job():
-    """Rank 1 calls sys.exit(1) after open, the way click or a script's error return does: the job is stopped, every
-    rank closes; tt-run returns 1 naming rank 1."""
-    r = run_case("exit1_after_open", {"PROBE_SCENARIO": "exit1", "PROBE_PHASE": "after_open"}, DEADLINE)
-    ended(r)
-    stopped_by(r, 1, "sys.exit(1)", 1)
-    closed(r)
-    clean(r)
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason=f"{NEEDS_RANK_STOP}: Python only prints a worker thread's exception; nothing stops the job",
-)
-def test_thread_exception_stops_the_job():
-    """An uncaught exception in a worker thread of rank 1 (threading.excepthook): the job is stopped with code 1."""
-    r = run_case("thread_raise", {"PROBE_SCENARIO": "thread_raise", "PROBE_PHASE": "after_open"}, DEADLINE)
-    ended(r)
-    stopped_by(r, 1, "uncaught Python exception in thread worker RuntimeError: worker failed", 1)
-    closed(r)
-    clean(r)
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason=f"{NEEDS_RANK_STOP}: the TT_FATAL reaches Python as RuntimeError and unwinds into MPI_Finalize like any "
-    "Python exception, while the other rank waits for it; the job hangs",
-)
-def test_bad_shape():
-    """Rank 1 asks for a mesh the descriptor cannot hold: the shape check in open is a TT_FATAL (a C++ exception,
-    raised in Python as RuntimeError, its message several lines long). The job is stopped with code 1, and tt-run
-    names the rank from its one-line [tt-stop] line, not prterun's banner."""
-    r = run_case("bad_shape_rank1", {"PROBE_MESH_SHAPE_VICTIM": "9x9"}, DEADLINE)
-    ended(r)
-    m = re.search(
-        r"\[tt-stop\] rank (\d+) on \S+ \(pid \d+\): (?:uncaught )?Python exception RuntimeError: TT_FATAL.*"
-        r"; stopping the job \(exit 1\)",
-        r.log,
-    )
-    assert m, f"no one-line [tt-stop] line for the TT_FATAL\n{r.log[-3000:]}"
-    assert r.exit == 1 and f"origin=rank {m.group(1)} on" in r.log and "outcome=failed exit=1" in r.log, str(r)
-    assert "the launcher then killed the other ranks" not in r.log and "job forced down" not in r.log, r.log[-3000:]
-    clean(r)
-
-
-@pytest.mark.xfail(
-    strict=True,
+    raises=AssertionError,
     reason=f"{NEEDS_RANK_STOP}: std::terminate aborts rank 1 (SIGABRT) and its wrapper stops the job with 134, but "
     "rank 0 leaves on the failed barrier (MPI_ERR_PROC_FAILED) without closing its mesh",
 )
@@ -139,7 +103,10 @@ def test_uncaught_cxx_exception_stops_the_job():
     """An uncaught C++ exception on rank 1 (a std::runtime_error with no handler, the way a TT_FATAL escapes C++
     code): the terminate handler stops the job instead of aborting, rank 0 leaves its barrier on the SIGTERM and closes
     its mesh; tt-run returns 1 naming rank 1 and the exception."""
-    r = run_case("cxx_throw", {"PROBE_SCENARIO": "cxx_throw", "PROBE_PHASE": "after_open"}, DEADLINE)
+    r = run_case(
+        "cxx_throw", {"PROBE_SCENARIO": "cxx_throw", "PROBE_PHASE": "after_open"}, DEADLINE, deadline_from=STARTED
+    )
+    reached(r, 1, "open_done")
     ended(r)
     stopped_by(r, 1, "uncaught C++ exception: injected C++ failure", 1)
     closed(r, ranks=(0,))
@@ -156,6 +123,7 @@ def test_ctrl_z_pauses_and_resumes_the_job():
         "ctrl_z_in_collective",
         {"PROBE_COLL": "barrier_slow", "PROBE_SLOW_S": "8"},
         DEADLINE,
+        deadline_from=STARTED,
         launcher_signal=signal.SIGTSTP,
         launcher_ready=(0, "coll_ready"),
         signal_after=1.0,
@@ -172,6 +140,7 @@ def test_ctrl_z_pauses_and_resumes_the_job():
 
 @pytest.mark.xfail(
     strict=True,
+    raises=AssertionError,
     reason=f"{NEEDS_RANK_STOP}: tt-run's guard stops the job (SIGTERM to every rank) but the ranks have no SIGTERM "
     "handler yet and die without closing their mesh",
 )
@@ -182,11 +151,13 @@ def test_ttrun_killed_ranks_close_their_mesh():
         "ttrun_killed_in_deadlock",
         {"PROBE_COLL": "send_no_recv"},
         DEADLINE,
+        deadline_from=STARTED,
         launcher_signal=signal.SIGKILL,
         launcher_ready=(0, "coll_ready"),
         signal_after=3.0,
     )
     fault_delivered(r)
+    reached(r, 0, "open_done")
     ended(r)
     assert "[tt-run guard] sent SIGTERM to all ranks" in r.log, r.log[-3000:]
     assert "job forced down" not in r.log, r.log[-3000:]

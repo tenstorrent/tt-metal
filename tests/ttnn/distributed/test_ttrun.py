@@ -58,8 +58,11 @@ find_built_tt_run_rank = ttrun_module.find_tt_run_rank_executable
 @pytest.fixture(autouse=True)
 def _no_rank_wrapper(monkeypatch):
     """Launch lines here are compared verbatim, so they never depend on whether tt-run-rank happens to be built; the
-    wrapper's own tests patch find_tt_run_rank_executable themselves."""
+    wrapper's own tests patch find_tt_run_rank_executable themselves. The stop grace is tt-run's default whatever the
+    shell exports (tests that need another grace set it themselves)."""
     monkeypatch.setattr(ttrun_module, "find_tt_run_rank_executable", lambda: None)
+    monkeypatch.delenv("TT_RUN_STOP_GRACE_S", raising=False)
+    ttrun_module._LOGGED_ONCE.clear()  # each test sees the TCP choice's messages
 
 
 @pytest.fixture
@@ -1056,12 +1059,13 @@ class TestNewModeFlow:
         rank_bindings_path.write_text("rank_bindings:\n  - rank: 0\n")
         rankfile_path.write_text("rank 0=node1 slot=0\n")
 
-        with patch.object(
-            ttrun_module, "run_phase1_generate_rank_bindings", return_value=(rank_bindings_path, rankfile_path)
-        ) as mock_phase1, patch.object(ttrun_module, "legacy_flow") as mock_legacy, patch.object(
-            ttrun_module, "resolve_path", return_value=mgd_path
-        ), patch.object(
-            ttrun_module, "find_generate_rank_bindings_executable"
+        with (
+            patch.object(
+                ttrun_module, "run_phase1_generate_rank_bindings", return_value=(rank_bindings_path, rankfile_path)
+            ) as mock_phase1,
+            patch.object(ttrun_module, "legacy_flow") as mock_legacy,
+            patch.object(ttrun_module, "resolve_path", return_value=mgd_path),
+            patch.object(ttrun_module, "find_generate_rank_bindings_executable"),
         ):
             runner.invoke(
                 main,
@@ -1108,10 +1112,11 @@ class TestNewModeFlow:
             run_dir, compute_phase1_cache_fingerprint_full(mgd_path, sorted(["node1", "node2"]), None)
         )
 
-        with patch.object(ttrun_module, "run_phase1_generate_rank_bindings") as mock_p1, patch.object(
-            ttrun_module, "legacy_flow"
-        ) as mock_legacy, patch.object(ttrun_module, "resolve_path", return_value=mgd_path), patch.object(
-            ttrun_module, "find_generate_rank_bindings_executable"
+        with (
+            patch.object(ttrun_module, "run_phase1_generate_rank_bindings") as mock_p1,
+            patch.object(ttrun_module, "legacy_flow") as mock_legacy,
+            patch.object(ttrun_module, "resolve_path", return_value=mgd_path),
+            patch.object(ttrun_module, "find_generate_rank_bindings_executable"),
         ):
             result = runner.invoke(
                 main,
@@ -1157,14 +1162,15 @@ class TestNewModeFlow:
             run_dir, compute_phase1_cache_fingerprint_full(mgd_path, sorted(["node1", "node2"]), None)
         )
 
-        with patch.object(
-            ttrun_module,
-            "run_phase1_generate_rank_bindings",
-            return_value=(run_dir / "rank_bindings.yaml", run_dir / "rankfile"),
-        ) as mock_p1, patch.object(ttrun_module, "legacy_flow") as mock_legacy, patch.object(
-            ttrun_module, "resolve_path", return_value=mgd_path
-        ), patch.object(
-            ttrun_module, "find_generate_rank_bindings_executable"
+        with (
+            patch.object(
+                ttrun_module,
+                "run_phase1_generate_rank_bindings",
+                return_value=(run_dir / "rank_bindings.yaml", run_dir / "rankfile"),
+            ) as mock_p1,
+            patch.object(ttrun_module, "legacy_flow") as mock_legacy,
+            patch.object(ttrun_module, "resolve_path", return_value=mgd_path),
+            patch.object(ttrun_module, "find_generate_rank_bindings_executable"),
         ):
             result = runner.invoke(
                 main,
@@ -1212,12 +1218,15 @@ class TestNewModeFlow:
         rank_bindings_path.write_text("rank_bindings:\n  - rank: 0\n")
         rankfile_path.write_text("rank 0=localhost slot=0\n")
 
-        with patch.object(
-            ttrun_module, "run_phase1_generate_rank_bindings", return_value=(rank_bindings_path, rankfile_path)
-        ) as mock_phase1, patch.object(ttrun_module, "legacy_flow") as mock_legacy, patch.object(
-            ttrun_module, "resolve_path", side_effect=lambda p, **kwargs: Path(p) if Path(p).exists() else mgd_path
-        ), patch.object(
-            ttrun_module, "find_generate_rank_bindings_executable"
+        with (
+            patch.object(
+                ttrun_module, "run_phase1_generate_rank_bindings", return_value=(rank_bindings_path, rankfile_path)
+            ) as mock_phase1,
+            patch.object(ttrun_module, "legacy_flow") as mock_legacy,
+            patch.object(
+                ttrun_module, "resolve_path", side_effect=lambda p, **kwargs: Path(p) if Path(p).exists() else mgd_path
+            ),
+            patch.object(ttrun_module, "find_generate_rank_bindings_executable"),
         ):
             result = runner.invoke(
                 main,
@@ -1575,7 +1584,7 @@ class TestJobOwnership:
     # "ranks" are gone (the fake helper creates REC/ranks_gone) or it is signalled. Every signal it gets is
     # recorded in REC/launcher.signals; IGNORE_TERM=1 makes it ignore the force (SIGINT) like a wedged launcher.
     _FAKE_PRTERUN = (
-        'd="$TMPDIR/prterun.fakehost.$$.$(id -u)"; mkdir -p "$d"; '
+        'd="$TMPDIR/prterun.$(hostname).$$.$(id -u)"; mkdir -p "$d"; '
         'printf "fake-uri-%s\\n5.0.5\\n%s\\n" $$ $$ > "$d/pmix.fakehost.tool.$$"; '
         'if [ "$IGNORE_TERM" = 1 ]; then trap "echo INT >> $REC/launcher.signals" INT; '
         'else trap "echo INT >> $REC/launcher.signals; exit 130" INT; fi; '
@@ -1932,9 +1941,11 @@ class TestJobOwnership:
         # any more); its tt-run-rank wrapper sees it was reparented and sends its program SIGTERM.
         wrapper = find_built_tt_run_rank()  # the built one, not the autouse stand-in
         if wrapper is None:
+            if os.environ.get("CI"):
+                pytest.fail("tt-run-rank is not built: the wrapper's tests cannot run")
             pytest.skip("tt-run-rank is not built")
         out = tmp_path / "out"
-        program = 'trap "echo got TERM; exit 7" TERM; sleep 60 & wait'
+        program = 'trap "echo got TERM; kill $!; exit 7" TERM; sleep 60 & wait'  # its sleep goes with it'
         # the "daemon": a shell that starts the wrapper and waits on it
         daemon = subprocess.Popen(
             ["bash", "-c", f'"{wrapper}" -- bash -c \'{program}\' >"{out}" 2>&1 & echo $!; wait'],
@@ -1944,7 +1955,10 @@ class TestJobOwnership:
         )
         wrapper_pid = int(daemon.stdout.readline())
         try:
-            time.sleep(0.5)
+            end = time.time() + 30  # the wrapper reads its daemon's pid as it starts its program: kill only after that
+            while not open(f"/proc/{wrapper_pid}/task/{wrapper_pid}/children").read().split():
+                assert time.time() < end, "the wrapper never started its program"
+                time.sleep(0.05)
             os.kill(daemon.pid, signal.SIGKILL)
             daemon.wait()
             end = time.time() + 5
@@ -1985,6 +1999,8 @@ class TestJobOwnership:
         # do not exit within the stop grace (or it cannot reach prterun), the force through the launcher.
         wrapper = find_built_tt_run_rank()  # the built one, not the autouse stand-in
         if wrapper is None:
+            if os.environ.get("CI"):
+                pytest.fail("tt-run-rank is not built: the wrapper's tests cannot run")
             pytest.skip("tt-run-rank is not built")
         rec = self._fake_job(tmp_path, monkeypatch, stop_ends_ranks=case == "ttrun_died")
         monkeypatch.setenv("TT_RUN_STOP_GRACE_S", "1")
@@ -2202,13 +2218,23 @@ class TestJobOwnership:
         cmd = ["bash", "-c", f"(sh -c '{child}') & disown; exit 0"]
         signum = getattr(signal, sig)
 
+        running = threading.Event()  # signal this process only while run_launcher has its handlers installed
+
         def poke():
             time.sleep(1.0)
-            os.kill(os.getpid(), signum)
+            if running.is_set():
+                os.kill(os.getpid(), signum)
+
+        def launch():
+            running.set()
+            try:
+                return run_launcher(cmd, cwd=tmp_path)
+            finally:
+                running.clear()
 
         threading.Thread(target=poke, daemon=True).start()
         t0 = time.time()
-        text, rc = self._logged_rc(lambda: run_launcher(cmd, cwd=tmp_path))
+        text, rc = self._logged_rc(launch)
         if sig == "SIGINT":
             assert rc != 0 and time.time() - t0 < 2.5, text
         else:
@@ -2255,11 +2281,158 @@ class TestJobOwnership:
         finally:
             if ttrun.poll() is None:
                 ttrun.kill()
+            ps = subprocess.run(["ps", "-u", str(os.getuid()), "-o", "pid=,args="], capture_output=True, text=True)
+            for line in ps.stdout.splitlines():
+                if str(rec) in line:  # this test's leftover, paused and orphaned: never leave it behind
+                    for sig in (signal.SIGCONT, signal.SIGKILL):
+                        try:
+                            os.kill(int(line.split()[0]), sig)
+                        except ProcessLookupError:
+                            pass
         text = log.read_text()
         assert "SIGTSTP received: passed it on to the 1 process(es) still exiting" in text, text
         assert "SIGCONT received: passed it on to the 1 process(es) still exiting" in text, text
         assert "a leak" not in text and "job end: outcome=clean exit=0" in text, text
         assert rec.read_text().strip() == "cont", text
+
+    @pytest.mark.parametrize("context", [True, False], ids=["tt_metal_rank", "plain_program"])
+    def test_rank_wrapper_names_a_quiet_exit_even_with_a_stop_pending(self, context, tmp_path):
+        import signal
+        import subprocess
+        import time
+
+        # A tt-metal rank (its context up: "context" written to the wrapper) that exits non-zero without saying it
+        # stopped the job (os._exit(1) skips every hook) failed on its own, even when a peer saw it die first and the
+        # stop reached its wrapper before the wrapper saw the exit: the wrapper names it. A plain program's non-zero
+        # exit after a stop is taken as the stop's.
+        wrapper = find_built_tt_run_rank()
+        if wrapper is None:
+            if os.environ.get("CI"):
+                pytest.fail("tt-run-rank is not built: the wrapper's tests cannot run")
+            pytest.skip("tt-run-rank is not built")
+        ready = tmp_path / "ready"
+        say = 'echo context >&"$TT_RUN_RANK_FD"; ' if context else ""
+        program = f'{say}trap "" TERM; touch {ready}; sleep 0.5; exit 1'
+        p = subprocess.Popen([wrapper, "--", "bash", "-c", program], stderr=subprocess.PIPE, text=True)
+        try:
+            end = time.time() + 30
+            while not ready.exists():
+                assert time.time() < end and p.poll() is None, "the program never started"
+                time.sleep(0.02)
+            p.send_signal(signal.SIGTERM)  # the job's stop, before the wrapper sees the exit
+            _, err = p.communicate(timeout=30)
+        finally:
+            if p.poll() is None:
+                p.kill()
+        named = "[tt-stop] rank" in err and "exited with code 1 without stopping the job" in err
+        assert named == context, err
+        assert p.returncode == 1, err
+
+    def test_phase1_ranks_run_in_the_wrapper_like_phase2(self, tmp_path, monkeypatch):
+        from ttnn.distributed import ttrun as m
+
+        # Phase 1's generate_rank_bindings ranks run in tt-run-rank, with mpi_ft_enable, as Phase 2's ranks do: a
+        # rank that dies there stops the job and is named.
+        wrapper = tmp_path / "tt-run-rank"
+        monkeypatch.setattr(m, "find_tt_run_rank_executable", lambda: str(wrapper))
+        exe, mgd = tmp_path / "generate_rank_bindings", tmp_path / "mesh.textproto"
+        mgd.write_text("")
+        mock = m.build_generate_rank_bindings_mpi_cmd(exe, mgd, None, tmp_path, {0: tmp_path / "a", 1: tmp_path / "b"})
+        hosts = m.build_generate_rank_bindings_mpi_cmd(exe, mgd, ["h1", "h2"], tmp_path)
+        for cmd, ranks in ((mock, 2), (hosts, 1)):  # one app context per mock rank; one -np for the hosts
+            assert cmd.count(str(wrapper)) == ranks, cmd
+            i = cmd.index(str(wrapper))
+            assert cmd[i : i + 3] == [str(wrapper), "--", str(exe.resolve())], cmd
+            assert m.has_mca_param(cmd, "mpi_ft_enable"), cmd
+        monkeypatch.setattr(m, "find_tt_run_rank_executable", lambda: None)  # not built: unwrapped, no mpi_ft_enable
+        bare = m.build_generate_rank_bindings_mpi_cmd(exe, mgd, ["h1", "h2"], tmp_path)
+        assert str(wrapper) not in bare and not m.has_mca_param(bare, "mpi_ft_enable"), bare
+
+    def test_phase1_takes_the_job_timeout_and_keeps_its_exit_code(self, tmp_path, monkeypatch, expect_error):
+        from ttnn.distributed import ttrun as m
+
+        # --job-timeout reaches Phase 1's launch; a Phase 1 that was stopped (130) or timed out (241) keeps that
+        # code instead of becoming a generic failure.
+        seen = {}
+
+        def fake_launcher(cmd, cwd, job_timeout=None, prrte_timeout=False):
+            seen.update(job_timeout=job_timeout, prrte_timeout=prrte_timeout)
+            return 130
+
+        monkeypatch.setattr(m, "run_launcher", fake_launcher)
+        monkeypatch.setattr(m, "find_generate_rank_bindings_executable", lambda: tmp_path / "generate_rank_bindings")
+        mgd = tmp_path / "mesh.textproto"
+        mgd.write_text("")
+        with expect_error(m.Phase1Failed, "generate_rank_bindings failed with exit code 130") as e:
+            m.run_phase1_generate_rank_bindings(mgd, ["h1"], tmp_path, mpi_args=["--timeout", "9"], job_timeout=60.0)
+        assert e.value.exit_code == 130
+        assert seen == {"job_timeout": 60.0, "prrte_timeout": True}, seen
+
+    def test_a_stop_goes_before_a_burst_of_passed_signals(self, monkeypatch):
+        import signal
+
+        from ttnn.distributed import ttrun as m
+
+        # A window being resized sends a burst of SIGWINCH; each passed signal is a call of the signal tool. The
+        # burst goes once, and a stop that arrives meanwhile is acted on first (the rest is passed after it).
+        job = m.LaunchedJob(["true"], Path("."))
+        sent = []
+        monkeypatch.setattr(job, "_signal_ranks", lambda signum: sent.append(signum) or "")
+        job.passed[:] = [signal.SIGWINCH] * 50 + [signal.SIGUSR1, signal.SIGWINCH]
+        job._pass_on()
+        assert sent == [signal.SIGWINCH, signal.SIGUSR1], sent
+        sent.clear()
+        job.passed[:] = [signal.SIGWINCH] * 50
+        job.forwarded.append(signal.SIGINT)  # a stop not acted on yet
+        job._pass_on()
+        assert sent == [] and job.passed == [signal.SIGWINCH], (sent, job.passed)
+
+    def test_a_hangup_never_ends_tt_run_between_the_phases(self, sample_rank_binding_yaml):
+        import signal
+
+        from click.testing import CliRunner
+
+        from ttnn.distributed import ttrun as m
+
+        # SIGHUP is ignored for tt-run's whole run (logged), not only while a launcher runs: a closed terminal between
+        # Phase 1 and Phase 2 must not end a new-mode run.
+        previous = signal.getsignal(signal.SIGHUP)
+        try:
+            result = CliRunner().invoke(m.main, ["--rank-binding", str(sample_rank_binding_yaml), "--dry-run", "echo"])
+            assert result.exit_code == 0, result.output
+            assert signal.getsignal(signal.SIGHUP) is m._hangup_outside_a_job
+        finally:
+            signal.signal(signal.SIGHUP, previous)
+
+    @pytest.mark.parametrize("value", ["inf", "nan", "0", "-5", "abc"])
+    def test_a_grace_or_timeout_that_is_not_a_positive_number_is_refused(
+        self, value, sample_rank_binding_yaml, monkeypatch
+    ):
+        from click.testing import CliRunner
+
+        from ttnn.distributed import ttrun as m
+
+        # TT_RUN_STOP_GRACE_S falls back to the default with a warning; --job-timeout is refused at the start.
+        monkeypatch.setenv("TT_RUN_STOP_GRACE_S", value)
+        out = {}
+        text = self._logged(lambda: out.setdefault("grace", m.stop_grace_s()))
+        assert out["grace"] == m.STOP_GRACE_S and "is not a number of seconds above 0" in text, text
+        result = CliRunner().invoke(
+            m.main, ["--job-timeout", value, "--rank-binding", str(sample_rank_binding_yaml), "--dry-run", "echo"]
+        )
+        assert result.exit_code != 0, result.output
+
+    @pytest.mark.parametrize("prrte_timeout", [True, False], ids=["prrte_timeout_given", "a_rank_exit_241"])
+    def test_241_is_prrtes_timeout_only_when_mpi_args_gave_one(self, prrte_timeout):
+        from ttnn.distributed.ttrun import run_launcher
+
+        # A launcher exiting 241 is PRRTE's own --timeout only when --mpi-args set one; otherwise it is a rank's code.
+        text, rc = self._logged_rc(
+            lambda: run_launcher(["bash", "-c", "exit 241"], cwd=Path.cwd(), prrte_timeout=prrte_timeout)
+        )
+        assert rc == 241, text
+        assert ("PRRTE --timeout from --mpi-args" in text) == prrte_timeout, text
+        assert ("cause=--timeout" in text) == prrte_timeout, text
 
     def test_the_prterun_address_is_read_only_from_this_users_own_files(self, tmp_path, monkeypatch):
         import tempfile
@@ -2268,19 +2441,26 @@ class TestJobOwnership:
 
         # The tmpdir is shared: a decoy another user plants (their uid in the name) or a symlink with this user's name
         # must not point tt-run's stop at another server. Only this user's own directory and file count.
+        import socket
+
         monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
-        pid, uid = 4242, os.getuid()
-        decoy = tmp_path / f"prterun.h.{pid}.{uid + 1}"
+        pid, uid, h = 4242, os.getuid(), socket.gethostname().split(".")[0]
+        decoy = tmp_path / f"prterun.{h}.{pid}.{uid + 1}"
         decoy.mkdir()
-        (decoy / f"pmix.h.tool.{pid}").write_text("tcp4://decoy:1\n")
+        (decoy / f"pmix.{h}.tool.{pid}").write_text("tcp4://decoy:1\n")
         elsewhere = tmp_path / "elsewhere"
         elsewhere.mkdir()
-        (elsewhere / f"pmix.h.tool.{pid}").write_text("tcp4://symlinked:1\n")
-        (tmp_path / f"prterun.h.{pid}.{uid}").symlink_to(elsewhere)
+        (elsewhere / f"pmix.{h}.tool.{pid}").write_text("tcp4://symlinked:1\n")
+        (tmp_path / f"prterun.{h}.{pid}.{uid}").symlink_to(elsewhere)
+        # a shared TMPDIR: another host's prterun with the same pid and this user's uid is not this job's
+        other = tmp_path / f"prterun.otherhost.{pid}.{uid}"
+        other.mkdir()
+        (other / f"pmix.otherhost.tool.{pid}").write_text("tcp4://otherhost:1\n")
         assert LaunchedJob.prterun_tool_uri(pid) is None
-        real = tmp_path / f"prterun.h2.{pid}.{uid}"
+        (tmp_path / f"prterun.{h}.{pid}.{uid}").unlink()
+        real = tmp_path / f"prterun.{h}.{pid}.{uid}"
         real.mkdir()
-        (real / f"pmix.h2.tool.{pid}").write_text("tcp4://real:1\n")
+        (real / f"pmix.{h}.tool.{pid}").write_text("tcp4://real:1\n")
         assert LaunchedJob.prterun_tool_uri(pid) == "tcp4://real:1"
 
     def test_launch_env_drops_a_tcp_interface_variable_the_line_contradicts(self, monkeypatch):
@@ -2335,7 +2515,7 @@ class TestJobOwnership:
         # rank program's own --timeout (pytest's) is never read.
         seen = {}
         monkeypatch.setattr(
-            m, "run_launcher", lambda cmd, cwd, job_timeout=None: seen.update(cmd=cmd, t=job_timeout) or 0
+            m, "run_launcher", lambda cmd, cwd, job_timeout=None, **kw: seen.update(cmd=cmd, t=job_timeout) or 0
         )
         args = ["--job-timeout", "30"] if where == "tt_run" else ["--mpi-args", "--timeout 30"]
         result = CliRunner().invoke(
@@ -2358,7 +2538,7 @@ class TestJobOwnership:
         # PRRTE's own --timeout (from --mpi-args) killed every rank: tt-run keeps its 241 and says the job was forced
         # down and the devices may need a reset.
         text, rc = self._logged_rc(
-            lambda: run_launcher(["bash", "-c", f"exit {PRTE_TIMEOUT_EXIT_CODE}"], cwd=Path.cwd())
+            lambda: run_launcher(["bash", "-c", f"exit {PRTE_TIMEOUT_EXIT_CODE}"], cwd=Path.cwd(), prrte_timeout=True)
         )
         assert rc == PRTE_TIMEOUT_EXIT_CODE
         assert "job forced down" in text and "PRRTE --timeout" in text and "tt-smi -r" in text, text
@@ -2466,22 +2646,25 @@ class TestJobOwnership:
 
         # P25: a killed launcher never runs prterun's exit path, so its <tmp>/prterun.<host>.<pid>.<uid> directory
         # stays. The same sweep removes the ones whose launcher pid is dead and keeps a live job's directory.
-        uid = os.getuid()
+        import socket
+
+        uid, h = os.getuid(), socket.gethostname().split(".")[0]
         tmp = Path(tempfile.gettempdir())
-        dead = tmp / f"prterun.ttrun-pytest.2147483646.{uid}"  # a pid past pid_max: never alive
-        live = tmp / f"prterun.ttrun-pytest.{os.getpid()}.{uid}"  # this process: alive
+        dead = tmp / f"prterun.{h}.2147483646.{uid}"  # a pid past pid_max: never alive
+        live = tmp / f"prterun.{h}.{os.getpid()}.{uid}"  # this process: alive
+        other = tmp / f"prterun.ttrun-pytest-otherhost.2147483646.{uid}"  # another host's (a shared TMPDIR): not ours
         try:
-            dead.mkdir()
-            (dead / "hwloc.sm").write_bytes(b"\0")
-            live.mkdir()
-            (live / "hwloc.sm").write_bytes(b"\0")
+            for d in (dead, live, other):
+                d.mkdir()
+                (d / "hwloc.sm").write_bytes(b"\0")
 
             remove_stale_launcher_leftovers()
 
             assert not dead.exists(), "a session dir whose launcher pid is dead was not removed"
             assert live.exists(), "a session dir whose launcher pid is alive must be kept"
+            assert other.exists(), "another host's session dir must be kept: its pid is not this host's"
         finally:
-            for p in (dead, live):
+            for p in (dead, live, other):
                 shutil.rmtree(p, ignore_errors=True)
 
     def test_wait_does_not_force_down_a_running_job_with_no_forwarded_signal(self, monkeypatch, tmp_path):

@@ -172,8 +172,17 @@ int main(int argc, char** argv) {
         for (int i = 0;; i++) {
             if (g_caught_signal) {
                 mark("caught signal %d; exiting gracefully", (int)g_caught_signal);
-                if (const char* d = getenv("PROBE_STOP_DELAY_MS")) {
-                    sleep_ms(atoi(d));  // the time a real rank takes to close its devices
+                const char* d = getenv("PROBE_STOP_DELAY_MS");      // the time a real rank takes to close its devices
+                const char* l = getenv("PROBE_STOP_STDERR_LINES");  // what it writes to stderr meanwhile
+                const int delay = d != nullptr ? atoi(d) : 0;
+                const int lines = l != nullptr ? atoi(l) : 0;
+                for (int n = 0; n < lines; ++n) {
+                    std::fprintf(stderr, "[probe r=%d] stop line %d\n", g_rank, n);
+                    std::fflush(stderr);
+                    sleep_ms(delay / lines);
+                }
+                if (lines == 0 && delay > 0) {
+                    sleep_ms(delay);
                 }
                 mark("main_exit");
                 return 0;  // atexit -> MPI_Finalize: a graceful exit, not a kill

@@ -324,7 +324,9 @@ if(ENABLE_DISTRIBUTED)
         endif()
     endif()
     list(APPEND _tt_run_rank_pmix_hints /usr/lib/x86_64-linux-gnu/pmix2/include)
-    find_path(TT_RUN_RANK_PMIX_INCLUDE pmix_tool.h PATHS ${_tt_run_rank_pmix_hints} NO_DEFAULT_PATH)
+    # NO_CACHE: looked up on every configure, so a changed TT_RUN_RANK_ULFM_PREFIX (or MPI) is followed and the header
+    # and the library always come from one install.
+    find_path(TT_RUN_RANK_PMIX_INCLUDE pmix_tool.h PATHS ${_tt_run_rank_pmix_hints} NO_DEFAULT_PATH NO_CACHE)
     if(TT_RUN_RANK_PMIX_INCLUDE)
         get_filename_component(_tt_run_rank_pmix_prefix ${TT_RUN_RANK_PMIX_INCLUDE} DIRECTORY)
         find_library(
@@ -334,10 +336,12 @@ if(ENABLE_DISTRIBUTED)
                 ${_tt_run_rank_pmix_prefix}/lib
                 ${_tt_run_rank_pmix_prefix}/lib64
             NO_DEFAULT_PATH
+            NO_CACHE
         )
     endif()
     add_executable(tt-run-rank)
     target_sources(tt-run-rank PRIVATE src/tt_run_rank.cpp)
+    target_link_libraries(tt-run-rank PRIVATE Threads::Threads) # the guard's stderr drain
     set_target_properties(
         tt-run-rank
         PROPERTIES

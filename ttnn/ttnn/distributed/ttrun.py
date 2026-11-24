@@ -10,6 +10,7 @@ import contextlib
 import hashlib
 import importlib.util
 import json
+import math
 import os
 import re
 import select
@@ -41,7 +42,8 @@ from pydantic import BaseModel, Field, ValidationError, ValidationInfo, field_va
 # default 120, override TT_RUN_STOP_GRACE_S: how long the ranks get to exit after a stop before tt-run forces the job
 # (SIGINT to prterun: SIGTERM, then SIGKILL 250 ms later). There is no job clock unless tt-run --job-timeout is given.
 STOP_GRACE_S = 120.0
-# fixed: SIGKILL this long after any SIGTERM tt-run sends a process (a forced launcher, a leftover, a lingering prterun).
+# fixed: SIGKILL this long after tt-run signals a process to end it (a forced launcher with SIGINT; a leftover or a
+# lingering prterun with SIGTERM).
 KILL_GRACE_S = 10.0
 # fixed: one call of the signal tool (tt-run-rank --uri), which asks prterun to signal every rank.
 SIGNAL_HELPER_TIMEOUT_S = 5.0
@@ -53,7 +55,6 @@ LAUNCHER_STDERR_DRAIN_S = 2.0
 MPI_VERSION_PROBE_TIMEOUT_S = 10.0
 
 # --- exit codes ------------------------------------------------------------------------------------------------------
-INTERRUPTED_EXIT_CODE = 130  # 128 + SIGINT
 PRTE_TIMEOUT_EXIT_CODE = 241  # a job stopped at tt-run's --job-timeout, or by PRRTE's own --timeout (its code)
 
 # --- signals ---------------------------------------------------------------------------------------------------------
@@ -217,6 +218,30 @@ def find_tt_run_rank_executable() -> Optional[str]:
     return str(path) if path else None
 
 
+def _hangup_outside_a_job(signum, frame) -> None:
+    """SIGHUP while no launcher runs (before Phase 1, between the phases, at the end): the run goes on."""
+    os.write(
+        2, f"{TT_RUN_PREFIX} SIGHUP received (the terminal closed?): tt-run keeps going (pid {os.getpid()})\n".encode()
+    )
+
+
+def stop_grace_s() -> float:
+    """STOP_GRACE_S, or TT_RUN_STOP_GRACE_S when it is a finite number of seconds above 0 (else a warning)."""
+    raw = os.environ.get("TT_RUN_STOP_GRACE_S")
+    if raw is None:
+        return STOP_GRACE_S
+    try:
+        value = float(raw)
+    except ValueError:
+        value = math.nan
+    if math.isfinite(value) and value > 0:
+        return value
+    logger.warning(
+        f"{TT_RUN_PREFIX} TT_RUN_STOP_GRACE_S={raw!r} is not a number of seconds above 0; using {STOP_GRACE_S:g}"
+    )
+    return STOP_GRACE_S
+
+
 def find_signal_helper() -> Tuple[Optional[str], str]:
     """(tt-run-rank, "") to signal the job with, or (None, why not)."""
     path = find_tt_run_rank_executable()
@@ -249,11 +274,20 @@ class LaunchedJob:
         return st.st_uid == os.getuid() and not stat.S_ISLNK(st.st_mode)
 
     @staticmethod
+    def _host_names() -> List[str]:
+        """This host's names as PRRTE writes them in its session directory: without the domain (its default), and full."""
+        full = socket.gethostname()
+        return sorted({full.split(".")[0], full})
+
+    @staticmethod
     def prterun_tool_uri(prterun_pid: int) -> Optional[str]:
         """prterun's PMIx URI for tools (the first line of its rendezvous file), or None. Only this user's own
         directory and file count, so another user cannot redirect the stop."""
         uid = os.getuid()
-        for f in glob.glob(f"{tempfile.gettempdir()}/prterun.*.{prterun_pid}.{uid}/pmix.*.tool.{prterun_pid}"):
+        found = []
+        for host in LaunchedJob._host_names():  # this host's: TMPDIR may be shared storage
+            found += glob.glob(f"{tempfile.gettempdir()}/prterun.{host}.{prterun_pid}.{uid}/pmix.*.tool.{prterun_pid}")
+        for f in found:
             if not (LaunchedJob._owned(os.path.dirname(f)) and LaunchedJob._owned(f)):
                 continue
             try:
@@ -373,7 +407,8 @@ class LaunchedJob:
                 except OSError:
                     pass
         # PRRTE session directories whose launcher pid is dead (prterun.<host>.<pid>.<uid>).
-        for d in glob.glob(f"{tempfile.gettempdir()}/prterun.*.{uid}"):
+        dirs = [d for h in LaunchedJob._host_names() for d in glob.glob(f"{tempfile.gettempdir()}/prterun.{h}.*.{uid}")]
+        for d in dirs:  # this host's only: TMPDIR may be shared storage, where another host's job is alive
             if not LaunchedJob._owned(d) or not os.path.isdir(d):
                 continue
             try:
@@ -401,10 +436,11 @@ class LaunchedJob:
                 fds.append(os.pidfd_open(pid))
             except ProcessLookupError:
                 pass
-        end = time.time() + timeout_s
+        end = time.monotonic() + timeout_s
         try:
-            while fds and time.time() < end:
-                ready, _, _ = select.select(fds + ([wake_fd] if wake_fd is not None else []), [], [], end - time.time())
+            while fds and time.monotonic() < end:
+                left = max(0.0, end - time.monotonic())  # read once: a second read can be past the end
+                ready, _, _ = select.select(fds + ([wake_fd] if wake_fd is not None else []), [], [], left)
                 if wake_fd is not None and wake_fd in ready:
                     return
                 for fd in ready:
@@ -430,6 +466,7 @@ class LaunchedJob:
         self.sid = -1
         self.pgid = -1
         self.forwarded: List[int] = []  # stop signals tt-run received (SIGINT/SIGTERM), first one decides the code
+        self._stops_handled = 0  # of those, the ones wait() has acted on
         self.passed: List[int] = []  # other signals tt-run received, not yet passed on to the ranks (PASSED_SIGNALS)
         self.hangups = 0  # SIGHUPs received (a closed terminal): the job goes on
         self._hangups_said = 0
@@ -441,13 +478,10 @@ class LaunchedJob:
         self._abort_seen = False  # prterun announced a rank's MPI_Abort (the prrte#2815 guard arms on this)
         self._stderr_tail: List[str] = []  # the launcher's last stderr lines: prterun's failure banners
         self._pump: Optional[threading.Thread] = None
-        try:
-            self.grace = float(os.environ.get("TT_RUN_STOP_GRACE_S", STOP_GRACE_S))  # STOP_GRACE_S, or its override
-        except ValueError:
-            self.grace = STOP_GRACE_S
+        self.grace = stop_grace_s()
         self._helper: Optional[str] = None
         self._helper_why = ""
-        self.t0 = time.time()
+        self.t0 = time.monotonic()
         self.stop_t0: Optional[float] = None  # when the first stop signal arrived
         self.stop_sent = False  # the ranks were sent SIGTERM through PRRTE job control
         self.forced_why = ""  # set once tt-run forced the job down (SIGINT to the launcher, its kill path)
@@ -465,8 +499,6 @@ class LaunchedJob:
 
     def __enter__(self) -> "LaunchedJob":
         self.remove_stale_launcher_leftovers()  # before launch: clear a prior killed job's /dev/shm + session-dir leak
-        # Own only the launcher's stderr (stdout, the bulk of rank output, stays inherited) so a pump thread can
-        # watch for prterun's MPI_ABORT banner; the thread re-emits every line, so owning the pipe swallows nothing.
         self._helper, self._helper_why = find_signal_helper()
         # A prterun launcher starts with SIGTERM blocked (it keeps it so; its ranks start with it unblocked): a SIGTERM
         # sent to every process at once must not start its kill path. tt-run forces it with SIGINT instead.
@@ -478,6 +510,8 @@ class LaunchedJob:
             )
         previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM}) if shield else None
         try:
+            # Own only the launcher's stderr (stdout, the bulk of rank output, stays inherited) so a pump thread can
+            # watch for prterun's MPI_ABORT banner; the thread re-emits every line, so owning the pipe swallows nothing.
             self.proc = subprocess.Popen(
                 self.cmd,
                 cwd=self.cwd,
@@ -493,16 +527,17 @@ class LaunchedJob:
                 signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
         self._pump = threading.Thread(target=self._pump_stderr, daemon=True)
         self._pump.start()
-        # Register the teardown NOW, right after Popen, so even if the setup below raises (os.getsid,
-        # signal.signal) the launcher is still torn down: on failure we close the stack before re-raising, and
-        # __exit__ closes it on the normal path. ExitStack runs callbacks LIFO, so registering in this order makes
-        # the teardown read: restore handlers, stop the launcher if it is still alive, end survivors, then sweep
-        # this job's leftovers (its launcher is gone by now, so its session dir is swept too).
+        # Register the teardown NOW, right after Popen, so even if the setup below raises (a Ctrl-C before the handlers
+        # exist, os.getsid, signal.signal) the job is still ended: on failure the launcher is handed to the guard (or
+        # forced) and the stack closed before re-raising; __exit__ does the same on the normal path. ExitStack runs
+        # callbacks LIFO, so the teardown reads: end the survivors (with tt-run's handlers still installed), restore
+        # the handlers, sweep this job's leftovers (its launcher is gone by now, so its session dir too), release the
+        # guard.
         try:
             self._teardown.callback(self._release_guard)  # last: the job is over, whatever the teardown had to do
             self._start_guard()
             self._teardown.callback(self.remove_stale_launcher_leftovers)
-            self._teardown.callback(self._restore_handlers)  # after the sweep: a Ctrl-C during it is still tt-run's
+            self._teardown.callback(self._restore_handlers)  # before the sweep, after the survivors are ended
             self._teardown.callback(self._end_survivors)
             # Capture the session and process group WHILE the launcher is alive, so the sweep can find its ranks
             # even if it re-sessioned or was reaped before we look.
@@ -513,8 +548,11 @@ class LaunchedJob:
             self._previous_handlers = {s: signal.signal(s, self._relay) for s in (signal.SIGINT, signal.SIGTERM)}
             self._previous_handlers.update({s: signal.signal(s, self._pass) for s in PASSED_SIGNALS})
             self._previous_handlers[signal.SIGHUP] = signal.signal(signal.SIGHUP, self._hangup)
-        except BaseException:
-            self._teardown.close()  # the launcher is already running; do not leak it if __enter__ fails
+        except BaseException as e:
+            # The launcher is already running: do not leave it (and its ranks) behind if __enter__ fails.
+            if self.proc.poll() is None:
+                self._launcher_left_running(type(e))
+            self._teardown.close()
             raise
         return self
 
@@ -536,6 +574,7 @@ class LaunchedJob:
             self._handed_over = True
             return
         logger.warning(f"{TT_RUN_PREFIX} the launcher (pid {self.proc.pid}) is still running at teardown; forcing it")
+        self.forced_why = f"tt-run failed ({exc_type.__name__})"
         for sig in (signal.SIGINT, signal.SIGKILL):
             try:
                 self.proc.send_signal(sig)
@@ -593,11 +632,13 @@ class LaunchedJob:
             return
         if self.stop_t0 is None:
             self.stop_reason = "rank"
-            self.stop_t0 = time.time()
+            self.stop_t0 = time.monotonic()
             self.stop_sent = True
+            if self.proc is not None and self.proc.poll() is not None:
+                return  # read after the launcher exited (the drain): the job is already over
             logger.warning(
-                f"{TT_RUN_PREFIX} rank {m.group(1)} on {m.group(2)} stopped the job ({m.group(4)}): all ranks were "
-                f"sent SIGTERM; waiting up to {self.grace:g} s for them to exit (Ctrl-C to force)"
+                f"{TT_RUN_PREFIX} rank {m.group(1)} on {m.group(2)} stopped the job ({m.group(4)}): its wrapper sends "
+                f"SIGTERM to every rank; waiting up to {self.grace:g} s for them to exit (Ctrl-C to force)"
             )
 
     def _start_guard(self) -> None:
@@ -609,11 +650,16 @@ class LaunchedJob:
             logger.debug(f"{TT_RUN_PREFIX} no tt-run-rank: the job is not guarded against tt-run being killed")
             return
         read_fd, write_fd = os.pipe()
+        # The guard also holds the launcher's stderr (its read end), and drains it once tt-run is gone: with no reader
+        # left prterun aborts the job on SIGPIPE, which would turn the guard's graceful stop into a SIGKILL of every rank.
+        drain = self.proc.stderr.fileno()
         try:
             self._guard = subprocess.Popen(
                 [wrapper, "--guard", str(self.proc.pid)] + ([self._helper] if self._helper else []),
                 stdin=read_fd,
                 start_new_session=True,
+                pass_fds=(drain,),
+                env={**os.environ, "TT_RUN_GUARD_DRAIN_FD": str(drain)},
             )
         except OSError as e:
             os.close(write_fd)
@@ -633,7 +679,11 @@ class LaunchedJob:
             os.close(self._guard_fd)
             self._guard_fd = None
             if self._guard is not None:
-                self._guard.wait()  # it exits as soon as it reads "done"
+                try:
+                    self._guard.wait(timeout=KILL_GRACE_S)  # it exits as soon as it reads "done"
+                except subprocess.TimeoutExpired:
+                    self._guard.kill()
+                    self._guard.wait()
 
     def _relay(self, signum, frame) -> None:
         # Only record it: the first stop signal makes wait() send SIGTERM to every rank, a second one makes it force.
@@ -651,8 +701,16 @@ class LaunchedJob:
     def _pass_on(self) -> None:
         """Pass the signals tt-run received since the last poll on to every rank, in order (a burst of one signal, a
         window being resized, goes once). After SIGTSTP tt-run pauses itself too, as Ctrl-Z expects."""
-        pending, self.passed[:] = list(self.passed), []
+        pending = []
+        while self.passed:  # one by one: a signal handled meanwhile is appended, never lost
+            signum = self.passed.pop(0)
+            if signum in pending and signum not in (signal.SIGTSTP, signal.SIGCONT):
+                continue  # a burst (a window being resized) goes once; a pause and a resume keep their order
+            pending.append(signum)
         for i, signum in enumerate(pending):
+            if len(self.forwarded) > self._stops_handled:
+                self.passed[:0] = pending[i:]  # a stop arrived: it goes first, these after it
+                return
             if i > 0 and pending[i - 1] == signum:
                 continue
             name = signal.Signals(signum).name
@@ -694,9 +752,9 @@ class LaunchedJob:
                     f"{TT_RUN_PREFIX} {name} received: passed it on to the {len(pids)} process(es) still exiting"
                 )
             if signum == signal.SIGTSTP:
-                t = time.time()
+                t = time.monotonic()
                 self._pause_self()
-                paused += time.time() - t
+                paused += time.monotonic() - t
         return paused
 
     @staticmethod
@@ -716,7 +774,7 @@ class LaunchedJob:
     def _begin_stop(self, reason: str, said: str, then: str) -> None:
         """Stop the job: SIGTERM to every rank on every host through PRRTE job control (prterun does not abort, no
         SIGKILL follows), then the stop grace. If it cannot be sent, force at once."""
-        self.stop_reason, self.stop_t0 = reason, time.time()
+        self.stop_reason, self.stop_t0 = reason, time.monotonic()
         why = self._signal_ranks(signal.SIGTERM)
         if why:
             self._force(f"{said}, could not reach prterun: {why}", 0)
@@ -752,7 +810,7 @@ class LaunchedJob:
         """PRRTE's kill path: SIGINT to the launcher (every rank on every host gets SIGTERM, then SIGKILL 250 ms
         later). Said once, with what it means for the devices."""
         self.forced_why = why
-        self._kill_at = time.time() + KILL_GRACE_S
+        self._kill_at = time.monotonic() + KILL_GRACE_S
         logger.error(
             f"{TT_RUN_PREFIX} job forced down after {elapsed:.0f} s ({why}): the launcher killed every rank (SIGTERM, "
             f"then SIGKILL 250 ms later) without a graceful shutdown, so devices may be left unhealthy. Run tt-smi -r "
@@ -788,12 +846,21 @@ class LaunchedJob:
             os.close(wake_w)
 
     def _wait(self, wake_r: int) -> int:
-        handled = 0  # stop signals acted on so far
         while True:
             rc = self.proc.poll()
             if rc is not None:
                 return 128 - rc if rc < 0 else rc
-            now = time.time()
+            now = time.monotonic()
+            # A stop first, each one counted (two Ctrl-Cs in one wake force), then the signals passed on.
+            while len(self.forwarded) > self._stops_handled:
+                self._stops_handled += 1
+                name = signal.Signals(self.forwarded[self._stops_handled - 1]).name
+                if self.stop_t0 is None:
+                    self._begin_stop("signal", f"{name} received", " (Ctrl-C again to force)")
+                elif not self.forced_why:
+                    first = self._stops_handled == 1  # the job was already stopping because a rank stopped it
+                    why = f"{name} received while the job was stopping" if first else f"second {name}"
+                    self._force(why, now - self.stop_t0)
             if self.passed:
                 self._pass_on()
             if self.hangups > self._hangups_said:
@@ -802,15 +869,6 @@ class LaunchedJob:
                     f"{TT_RUN_PREFIX} SIGHUP received (the terminal closed?): the job keeps running under tt-run "
                     f"(pid {os.getpid()}); stop it with kill -INT {os.getpid()}"
                 )
-            if len(self.forwarded) > handled:  # a stop signal arrived since the last wake
-                handled = len(self.forwarded)
-                name = signal.Signals(self.forwarded[-1]).name
-                if self.stop_t0 is None:
-                    self._begin_stop("signal", f"{name} received", " (Ctrl-C again to force)")
-                elif not self.forced_why:
-                    first = handled == 1  # the job was already stopping because a rank stopped it
-                    why = f"{name} received while the job was stopping" if first else f"second {name}"
-                    self._force(why, now - self.stop_t0)
             if self.job_timeout is not None and self.stop_t0 is None and now - self.t0 >= self.job_timeout:
                 self._begin_stop(
                     "timeout", f"the job reached its --job-timeout of {self.job_timeout:g} s", ", then forcing"
@@ -835,8 +893,9 @@ class LaunchedJob:
                 except ProcessLookupError:
                     pass
                 rc = self.proc.wait()
-                if not self.forced_why:
-                    return 1  # the job failed: a rank aborted and the launcher had to be ended
+                if not self.forced_why:  # a rank aborted and the launcher had to be ended: the abort's code, else 1
+                    m = re.search(r"Errorcode: (-?\d+)", "".join(self._stderr_tail))
+                    return int(m.group(1)) % 256 or 1 if m else 1
                 return 128 - rc if rc < 0 else rc
             # Sleep until the next deadline, or until something happens.
             deadlines = [self._kill_at]
@@ -895,14 +954,14 @@ class LaunchedJob:
             os.set_blocking(wake_r, False)
             os.set_blocking(wake_w, False)
             previous_wakeup = signal.set_wakeup_fd(wake_w, warn_on_full_buffer=False)  # every handled signal wakes it
-            settle_t0 = time.time()
+            settle_t0 = time.monotonic()
             deadline = settle_t0 + settle_s
             try:
                 # Let a rank still in its exit path leave on its own. Only a stop (Ctrl-C, SIGTERM) ends the wait
                 # early; any other signal goes on to these processes, as it would have to the ranks, and the wait goes
                 # on (a Ctrl-Z pauses its clock too).
-                while survivors and not self.forwarded and time.time() < deadline:
-                    self._wait_gone(survivors, deadline - time.time(), wake_r)
+                while survivors and not self.forwarded and time.monotonic() < deadline:
+                    self._wait_gone(survivors, deadline - time.monotonic(), wake_r)
                     try:
                         while os.read(wake_r, 512):
                             pass
@@ -914,7 +973,7 @@ class LaunchedJob:
                 signal.set_wakeup_fd(previous_wakeup)
                 os.close(wake_r)
                 os.close(wake_w)
-            settle_s = time.time() - settle_t0  # what it waited, for the message below
+            settle_s = time.monotonic() - settle_t0  # what it waited, for the message below
             stopping = stopping or self.forwarded
             survivors = self._survivors()
         if not survivors:
@@ -966,16 +1025,17 @@ class LaunchedJob:
         return f"  pid {pid} state={state} wchan={wchan} cmd={cmd}"
 
 
-def run_launcher(cmd: List[str], cwd: Path, job_timeout: Optional[float] = None) -> int:
+def run_launcher(cmd: List[str], cwd: Path, job_timeout: Optional[float] = None, prrte_timeout: bool = False) -> int:
     """Run the launcher until the job is gone and return its code: the failing rank's, 128 + a signal at tt-run,
-    241 at a timeout, never 0 with a rank left alive. Logs one `job end:` line."""
+    241 at a timeout, never 0 with a rank left alive. Logs one `job end:` line. prrte_timeout: --mpi-args set PRRTE's
+    own --timeout (its 241 is then that timeout, not a rank's code)."""
     with LaunchedJob(cmd, cwd, job_timeout) as job:
         rc = job.wait()
     # __exit__ has torn the job down (handlers restored, leftover ranks ended, shm swept). Classify the result,
     # say it once, and end with one summary line every run has.
-    elapsed, origin = time.time() - job.t0, ""
+    elapsed, origin = time.monotonic() - job.t0, ""
     launcher_stderr = job.launcher_stderr()  # drained first: a rank's [tt-stop] line may be the last thing it wrote
-    if job.stop_reason == "timeout":  # tt-run stopped the job at its --timeout
+    if job.stop_reason == "timeout":  # tt-run stopped the job at its --job-timeout
         rc, cause = PRTE_TIMEOUT_EXIT_CODE, "--timeout"
         outcome = "forced" if job.forced_why else "stopped"
         if not job.forced_why:
@@ -995,7 +1055,7 @@ def run_launcher(cmd: List[str], cwd: Path, job_timeout: Optional[float] = None)
         rc = 128 + job.forwarded[0]
         cause = signal.Signals(job.forwarded[0]).name
         outcome = "forced" if job.forced_why else "stopped"
-    elif rc == PRTE_TIMEOUT_EXIT_CODE:  # PRRTE's own --timeout (from --mpi-args) killed every rank
+    elif rc == PRTE_TIMEOUT_EXIT_CODE and prrte_timeout:  # PRRTE's own --timeout (from --mpi-args) killed every rank
         logger.error(
             f"{TT_RUN_PREFIX} job forced down after {elapsed:.0f} s (PRRTE --timeout from --mpi-args): the launcher killed "
             "every rank (SIGTERM, then SIGKILL 250 ms later) without a graceful shutdown, so devices may be left "
@@ -1954,6 +2014,10 @@ def build_generate_rank_bindings_mpi_cmd(
 
     # Always enable tagged output for easier debugging (prefixes output with rank info)
     cmd.extend(["--tag-output"])
+    # Each rank runs in tt-run-rank, as Phase 2's do: a rank that dies stops the job and is named.
+    rank_wrapper = find_tt_run_rank_executable()
+    rank_program = ([rank_wrapper, "--"] if rank_wrapper else []) + [str(executable.resolve())]
+    cmd.extend(peer_failure_mca_args(mpi_args, rank_wrapper))
 
     parent_env_prefix = _parent_env_prefix_from_environ()
 
@@ -2016,7 +2080,7 @@ def build_generate_rank_bindings_mpi_cmd(
             binding = phase1_config.rank_bindings[i]
             cmd.extend(["-np", "1"])
             cmd.extend(build_rank_environment_args(binding, phase1_config, parent_env_prefix=parent_env_prefix))
-            cmd.append(str(executable.resolve()))
+            cmd.extend(rank_program)
             cmd.extend(mgd_arg)
             cmd.extend(["--output-dir", str(output_dir.resolve())])
 
@@ -2031,7 +2095,7 @@ def build_generate_rank_bindings_mpi_cmd(
             cmd.extend(["--oversubscribe"])
         cmd.extend(["--host", hosts_str])
         cmd.extend(["-np", str(np)])
-        cmd.append(str(executable.resolve()))
+        cmd.extend(rank_program)
         cmd.extend(mgd_arg)
         cmd.extend(["--output-dir", str(output_dir.resolve())])
     else:
@@ -2040,7 +2104,9 @@ def build_generate_rank_bindings_mpi_cmd(
     return cmd
 
 
-def run_generate_rank_bindings(cmd: List[str], cwd: Path, subprocess_run=None) -> int:
+def run_generate_rank_bindings(
+    cmd: List[str], cwd: Path, subprocess_run=None, job_timeout: Optional[float] = None, prrte_timeout: bool = False
+) -> int:
     """Run the Phase 1 generate_rank_bindings command.
 
     Args:
@@ -2054,9 +2120,17 @@ def run_generate_rank_bindings(cmd: List[str], cwd: Path, subprocess_run=None) -
         Exit code from the subprocess
     """
     if subprocess_run is None:
-        return run_launcher(cmd, cwd=cwd)
+        return run_launcher(cmd, cwd=cwd, job_timeout=job_timeout, prrte_timeout=prrte_timeout)
     result = subprocess_run(cmd, cwd=cwd)
     return result.returncode if hasattr(result, "returncode") else result
+
+
+class Phase1Failed(RuntimeError):
+    """Phase 1 ended non-zero; exit_code is its code (128 + a signal at tt-run, a failing rank's, 241 at a timeout)."""
+
+    def __init__(self, exit_code: int, message: str):
+        super().__init__(message)
+        self.exit_code = exit_code
 
 
 def run_phase1_generate_rank_bindings(
@@ -2069,6 +2143,7 @@ def run_phase1_generate_rank_bindings(
     *,
     mgd_is_mapping_yaml: Optional[bool] = None,
     factory_system_descriptor: Optional[Path] = None,
+    job_timeout: Optional[float] = None,
 ) -> tuple[Path, Path]:
     """Run Phase 1: generate_rank_bindings for rank_bindings (or overlay mapping), rankfile, and mocks.
 
@@ -2113,10 +2188,18 @@ def run_phase1_generate_rank_bindings(
     logger.debug(f"{TT_RUN_PREFIX} Phase 1 command: {' '.join(cmd)}")
 
     # generate_rank_bindings writes to output_dir (passed via --output-dir)
-    exit_code = run_generate_rank_bindings(cmd, cwd=ORIGINAL_CWD, subprocess_run=subprocess_run)
+    exit_code = run_generate_rank_bindings(
+        cmd,
+        cwd=ORIGINAL_CWD,
+        subprocess_run=subprocess_run,
+        job_timeout=job_timeout,
+        prrte_timeout=mpi_args_timeout(mpi_args) is not None,
+    )
 
     if exit_code != 0:
-        raise RuntimeError(f"generate_rank_bindings failed with exit code {exit_code}. " f"Command: {' '.join(cmd)}")
+        raise Phase1Failed(
+            exit_code, f"generate_rank_bindings failed with exit code {exit_code}. Command: {' '.join(cmd)}"
+        )
 
     # Validate outputs exist (single-MGD: rank_bindings.yaml; multi: rank_bindings_mapping.yaml + per-sub-context YAMLs).
     _, rankfile_path = get_generate_rank_bindings_output_paths(output_dir)
@@ -2184,6 +2267,16 @@ def validate_network_interface(interface: str, verbose: bool = False) -> None:
         logger.info(f"{TT_RUN_PREFIX} Network interface '{interface}' found on local host")
 
 
+_LOGGED_ONCE: set = set()
+
+
+def _log_once(log, message: str) -> None:
+    """Log a message once per tt-run run: Phase 1 and Phase 2 make the same choice and would say it twice."""
+    if message not in _LOGGED_ONCE:
+        _LOGGED_ONCE.add(message)
+        log(message)
+
+
 def default_multihost_mpi_args(tcp_interface: Optional[str], mpi_args: Optional[List[str]] = None) -> List[str]:
     """The MCA arguments tt-run adds for multi-host TCP, for Phase 1 and Phase 2 alike (unless --bare); the caller puts
     them before --mpi-args. Each is added only when nothing else already chose it, in this order of precedence:
@@ -2198,22 +2291,24 @@ def default_multihost_mpi_args(tcp_interface: Optional[str], mpi_args: Optional[
         if os.environ.get(f"OMPI_MCA_{k}")
     }
     if user_chose and tcp_interface:
-        logger.warning(
+        _log_once(
+            logger.warning,
             f"{TT_RUN_PREFIX} Ignoring --tcp-interface={tcp_interface} because --mpi-args already "
-            "specifies btl_tcp_if_include or btl_tcp_if_exclude."
+            "specifies btl_tcp_if_include or btl_tcp_if_exclude.",
         )
     if not user_chose and tcp_interface:
         args += ["--mca", "btl_tcp_if_include", tcp_interface]
     line_sets = user_chose or (["btl_tcp_if_include"] if tcp_interface else [])
     for k in line_sets:  # the same parameter on the line silently wins; the opposite one is dropped by launch_env
         if k in env_chose:
-            logger.warning(
-                f"{TT_RUN_PREFIX} the launch line's {k} replaces the environment's OMPI_MCA_{k}={env_chose[k]}"
+            _log_once(
+                logger.warning,
+                f"{TT_RUN_PREFIX} the launch line's {k} replaces the environment's OMPI_MCA_{k}={env_chose[k]}",
             )
     if not line_sets:
         if env_chose:
             env_text = ", ".join(f"OMPI_MCA_{k}" for k in env_chose)
-            logger.info(f"{TT_RUN_PREFIX} TCP interface selection left to the environment ({env_text})")
+            _log_once(logger.info, f"{TT_RUN_PREFIX} TCP interface selection left to the environment ({env_text})")
         else:
             args += ["--mca", "btl_tcp_if_exclude", "docker0,lo"]
     return args
@@ -3055,7 +3150,9 @@ def build_mpi_command(
         cmd.extend(yield_when_idle_mca_args(effective_mpi_args))
 
     rank_wrapper = find_tt_run_rank_executable()
-    cmd.extend(peer_failure_mca_args(effective_mpi_args, rank_wrapper))
+    cmd.extend(
+        peer_failure_mca_args(effective_mpi_args, None if debug_gdbserver else rank_wrapper)
+    )  # wrapped ranks only
 
     if effective_mpi_args:
         cmd.extend(effective_mpi_args)
@@ -3610,7 +3707,9 @@ def legacy_flow(
         logger.info(f"{TT_RUN_PREFIX} (gdb) continue")
 
     try:
-        rc = run_launcher(mpi_cmd, cwd=ORIGINAL_CWD, job_timeout=job_timeout)  # clears stale /dev/shm first
+        rc = run_launcher(  # clears stale /dev/shm first
+            mpi_cmd, cwd=ORIGINAL_CWD, job_timeout=job_timeout, prrte_timeout=prrte_timeout is not None
+        )
         if rc != 0:
             log_phase2_exit_reason(rc, effective_mpi_args, phase2_failure_hint, launcher_reported=True)
         sys.exit(rc)
@@ -3783,6 +3882,7 @@ def new_mode_flow(
     if verbose and hosts_for_phase1:
         logger.info(f"{TT_RUN_PREFIX} Phase 1 canonical host order (sorted): {','.join(hosts_for_phase1)}")
 
+    flow_t0 = time.monotonic()  # --job-timeout is one budget for Phase 1 and Phase 2 together
     # Apply default multihost MPI args to Phase 1 (same as Phase 2) unless --bare
     phase1_mpi_args: Optional[List[str]] = None
     if tcp_interface and not bare:
@@ -3888,7 +3988,13 @@ def new_mode_flow(
                 mpi_args=phase1_mpi_args,
                 mgd_is_mapping_yaml=mgd_mapping_yaml,
                 factory_system_descriptor=resolved_fsd,
+                job_timeout=job_timeout,
             )
+        except Phase1Failed as e:
+            # tt-run has said how Phase 1 ended (its job end line); return the same code as Phase 2 would: 128 + a
+            # signal at tt-run, the failing rank's code, 241 at the --job-timeout.
+            logger.error(f"{TT_RUN_PREFIX} Phase 1 (generate_rank_bindings) failed: {e}")
+            sys.exit(e.exit_code)
         except (FileNotFoundError, RuntimeError) as e:
             raise click.ClickException(f"Phase 1 (generate_rank_bindings) failed: {e}")
         write_phase1_cache_key_file(run_dir, fingerprint_full)
@@ -3941,7 +4047,8 @@ def new_mode_flow(
         phase2_failure_hint=phase2_failure_hint,
         tracy_args=tracy_args,
         factory_system_descriptor=resolved_fsd,  # Propagate FSD to Phase 2 workload
-        job_timeout=job_timeout,
+        # what is left of the --job-timeout after Phase 1 (at least 1 s: Phase 1 stops itself at the budget)
+        job_timeout=None if job_timeout is None else max(1.0, job_timeout - (time.monotonic() - flow_t0)),
     )
 
 
@@ -4064,7 +4171,7 @@ def new_mode_flow(
 @click.option(
     "--job-timeout",
     "job_timeout",
-    type=float,
+    type=click.FloatRange(min=0, min_open=True),
     default=None,
     help="Stop the job gracefully after this many seconds: SIGTERM to every rank, then TT_RUN_STOP_GRACE_S, then the "
     "force (exit 241). No clock by default. A --timeout in --mpi-args is PRRTE's own and kills every rank at once.",
@@ -4134,6 +4241,12 @@ def main(
     if not verbose:
         logger.remove()
         logger.add(sys.stderr, level="INFO")
+    # A closed terminal never stops a job: SIGHUP is ignored for tt-run's whole run (a launcher's job logs it), not
+    # only while a launcher runs, so a new-mode run is not ended between Phase 1 and Phase 2. A handler, not SIG_IGN,
+    # so the processes tt-run starts do not inherit an ignored SIGHUP.
+    signal.signal(signal.SIGHUP, _hangup_outside_a_job)
+    if job_timeout is not None and not math.isfinite(job_timeout):
+        raise click.BadParameter("must be a finite number of seconds", param_hint="--job-timeout")
 
     if rank_binding is not None and rank_bindings_mapping is not None:
         raise click.ClickException("Specify at most one of --rank-binding and --rank-bindings-mapping (not both).")

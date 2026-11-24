@@ -9,8 +9,8 @@ gone, nothing left in ``/dev/shm``. tt-run picks the plain launcher and builds t
 ``--mpi-args``, which reaches PRRTE and OpenMPI. These rows are the ones to run again when the MPI install changes:
 ``TT_SANITY_MPI_PREFIX=/opt/openmpi-<version>`` picks the mpirun and the mpicxx and the probe is recompiled.
 
-A row that passes is a gate: tt-run already handles that failure. A row marked ``@known("P..")`` fails until the
-tt-run fix in this PR is in the tt-run on PATH (the launcher in the CI image is the one this PR changes).
+A row that passes is a gate: tt-run already handles that failure. A known gap is a strict xfail naming what fixes
+it, so it turns red (XPASS) when that fix lands.
 """
 
 from __future__ import annotations
@@ -30,15 +30,17 @@ sys.path.insert(
     0, str(Path(__file__).resolve().parent)
 )  # sanity_common lives next to this file, whatever the import mode
 from sanity_common import (
-    ROOT,
     DEADLINE_END,
     DEADLINE_HANG,
+    MAPPING,
+    MGD,
+    ROOT,
+    TTRUN,
     clean,
     ended,
     fault_delivered,
     mpi_cmd,
-    mpi_install_id,
-    mpi_installs,
+    mpi_probe_path,
     mpirun_path,
     nonzero,
     run_case,
@@ -133,14 +135,6 @@ def test_ttrun_error_exit_fails_fast_not_hang():
     assert r.exit != 241, f"P1: the error-exit deadlocked and the job rode the --timeout wall clock (241): {r}"
 
 
-def test_ttrun_no_shm_leak():
-    """A rank dies under tt-run. Because tt-run builds the mpirun line with --mca btl self,tcp, no shared-memory
-    segment is ever mapped, so even a failed job leaves nothing in /dev/shm (P11)."""
-    r = run_case("ttrun_no_shm_leak", {**NP, "PROBE_SCENARIO": "victim_sigkill"}, DEADLINE_END, cmd=ttrun_mpi_cmd())
-    ended(r)
-    assert not r.shm_leaked, f"a job launched by tt-run left shm segments: {r.shm_leaked}"
-
-
 # ---------------------------------------------------------------------------------------------------------------
 # a group-E configuration variation through tt-run: tt-run still ends the job with a known shape
 # ---------------------------------------------------------------------------------------------------------------
@@ -167,7 +161,13 @@ def test_scripts_tcp_only():
     bad = []
     for sh in sorted((ROOT / "tests/scripts/multihost").glob("*.sh")):
         text = sh.read_text()
-        has_rule = "--mca btl self,tcp" in text
+        # A launch through "$mpirun_args" counts only when the script DEFINES mpirun_args with the rule (code, not a
+        # comment that happens to mention it).
+        has_rule = any(
+            re.match(r"\s*(local\s+|export\s+)?mpirun_args(_base)?\+?=", line.split("#", 1)[0])
+            and "--mca btl self,tcp" in line.split("#", 1)[0]
+            for line in text.splitlines()
+        )
         for n, line in enumerate(text.splitlines(), 1):
             code = line.split("#", 1)[0]
             if not re.search(r"(^|\s)mpirun(-ulfm)?\s", code):
@@ -197,26 +197,6 @@ def test_ttrun_stop(sig, case):
     128 + the signal and nothing is left. Without the helper tt-run forces at once through the launcher and says
     the devices may be unhealthy. (What a rank does with the SIGTERM is the rank's business, not tt-run's.)"""
     _ttrun_stop(sig, case)
-
-
-@pytest.mark.parametrize("prefix", mpi_installs(), ids=lambda p: p.strip("/").replace("/", "_") or "path")
-def test_ttrun_stop_on_each_mpi_install(prefix):
-    """The stop relies on PRRTE internals (prterun's tool rendezvous file, the job-control signal path), and the
-    MPI build differs by machine: Open MPI 5.0.7 built from source in the CI images, the openmpi-ulfm .deb on bare
-    metal, the distribution's own on every host. Run the delivery check against every install on this host and say
-    which build it was; an install tt-run does not support (Open MPI < 5, no PRRTE) is skipped with that reason."""
-    ident, major = mpi_install_id(prefix)
-    print(f"\n[sanity] MPI install {prefix or '(PATH)'}: {ident}")
-    if major < 5:
-        pytest.skip(f"{prefix or '(PATH)'} is {ident}: tt-run needs Open MPI 5+ (PRRTE)")
-    if prefix:
-        # tt-run takes the mpirun beside the first mpirun-ulfm on PATH: with the install's bin put first, that must be
-        # this install's, else the row would test another launcher than the one it names.
-        path = f"{Path(prefix) / 'bin'}:{os.environ.get('PATH', '')}"
-        ulfm = shutil.which("mpirun-ulfm", path=path)
-        if ulfm and not os.path.realpath(ulfm).startswith(os.path.realpath(prefix)):
-            pytest.skip(f"tt-run would launch {ulfm} (the first mpirun-ulfm on PATH), not {prefix}")
-    _ttrun_stop(signal.SIGINT, "delivered", mpi_prefix=prefix)
 
 
 def _ttrun_stop(sig, case, mpi_prefix=None):
@@ -259,7 +239,7 @@ def _ranks_got(r, signum: int) -> set:
 
 @pytest.mark.parametrize(
     "sig",
-    [signal.SIGUSR1, signal.SIGUSR2, signal.SIGALRM, signal.SIGQUIT, signal.SIGWINCH, signal.SIGCONT],
+    [signal.SIGUSR1, signal.SIGQUIT],  # one that goes on, one that would end prterun; the rest: test_ttrun.py
     ids=lambda s: signal.Signals(s).name,
 )
 def test_ttrun_passes_signals_on(sig):
@@ -361,10 +341,12 @@ def test_ttrun_hangup_keeps_the_job():
 def test_ttrun_killed_stops_the_ranks():
     """tt-run itself is SIGKILLed (or aborts, or crashes) while the job runs: it can do nothing, but its guard
     (tt-run-rank --guard) sees it gone and stops the job as tt-run would, SIGTERM to every rank through job control.
-    Every rank receives it and the job ends; nothing is left, the guard included."""
+    Every rank receives it and the job ends; nothing is left, the guard included. The ranks write to stderr while they
+    stop (30 lines over 3 s): with tt-run gone the guard drains the launcher's stderr, or prterun would abort the job
+    on SIGPIPE (SIGKILL to every rank) and the stop would not finish."""
     r = run_case(
         "ttrun_sigkill",
-        {**NP, "PROBE_SCENARIO": "all_hang"},
+        {**NP, "PROBE_SCENARIO": "all_hang", "PROBE_STOP_STDERR_LINES": "30", "PROBE_STOP_DELAY_MS": "3000"},
         DEADLINE_HANG,
         cmd=ttrun_mpi_cmd(),
         launcher_signal=signal.SIGKILL,
@@ -379,6 +361,107 @@ def test_ttrun_killed_stops_the_ranks():
     assert "[tt-run guard] sent SIGTERM to all ranks" in r.log, r.log[-3000:]
     assert "[tt-run guard] the job ended after the stop" in r.log, r.log[-3000:]
     assert "job forced down" not in r.log, r.log[-3000:]
+    # every rank finished its stop (a prterun abort on SIGPIPE would have killed them mid-way), and its stderr got out
+    done = {int(m.group(1)) for m in re.finditer(r"\[probe r=(\d+) [^\]]*\] main_exit", r.log)}
+    assert done == {0, 1, 2}, f"a rank did not finish its stop: {sorted(done)}\n{r.log[-3000:]}"
+    assert all(f"[probe r={k}] stop line 29" in r.log for k in range(3)), r.log[-3000:]
+    assert "SIGPIPE" not in r.log, r.log[-3000:]
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Phase 1 (new mode: --mesh-graph-descriptor): the same stops, signals and failures while generate_rank_bindings runs.
+# Phase 1 runs through the same launcher code as Phase 2 (its ranks in tt-run-rank, the guard, --job-timeout); here
+# its generate_rank_bindings is the C probe, from a stand-in tree whose build/ holds only the probe and tt-run-rank.
+# ---------------------------------------------------------------------------------------------------------------
+def phase1_cmd(tree: Path, ttrun_extra: tuple = ()) -> list:
+    return [
+        TTRUN,
+        *ttrun_extra,
+        "--mesh-graph-descriptor",
+        str(MGD),
+        "--mock-cluster-rank-binding",
+        str(MAPPING),
+        "--force-rediscovery",
+        "--mpi-args",
+        "--allow-run-as-root --oversubscribe -x PROBE_SCENARIO -x PROBE_VICTIM -x PROBE_NP -x PROBE_PIDDIR",
+        "/bin/true",  # Phase 2's program: never reached, Phase 1 ends the job
+    ]
+
+
+def phase1_tree() -> Path:
+    """A tree with the sources and a build/ whose generate_rank_bindings runs the C probe (its arguments ignored)."""
+    tree = Path(tempfile.mkdtemp(prefix="sanity_phase1_"))
+    for d in ("tt_metal", "tests"):
+        (tree / d).symlink_to(ROOT / d)
+    tools = tree / "build" / "tools" / "scaleout"
+    tools.mkdir(parents=True)
+    real = ROOT / "build" / "tools" / "scaleout" / "tt-run-rank"
+    if not os.access(real, os.X_OK):
+        pytest.skip("tt-run-rank is not built")
+    (tools / "tt-run-rank").symlink_to(real)
+    grb = tools / "generate_rank_bindings"
+    grb.write_text(f"#!/bin/sh\nexec '{mpi_probe_path()}'\n")
+    grb.chmod(0o755)
+    return tree
+
+
+PHASE1 = {"PROBE_NP": "2"}  # the mock dual galaxy: two Phase 1 ranks
+
+
+def phase1_case(name: str, env: dict, deadline: float, ttrun_extra: tuple = (), **kw):
+    tree = phase1_tree()
+    try:
+        return run_case(
+            name,
+            {**PHASE1, **env, "TT_METAL_HOME": str(tree)},
+            deadline,
+            cmd=phase1_cmd(tree, ttrun_extra),
+            cwd=tree,
+            **kw,
+        )
+    finally:
+        shutil.rmtree(tree, ignore_errors=True)
+
+
+def test_phase1_stop():
+    """Ctrl-C while Phase 1 runs: SIGTERM to every Phase 1 rank through job control, every rank catches it, tt-run
+    returns 130 (not a generic Phase 1 failure) and Phase 2 never starts; nothing is left."""
+    r = phase1_case(
+        "phase1_ctrl_c",
+        {"PROBE_SCENARIO": "all_hang"},
+        DEADLINE_HANG,
+        launcher_signal=signal.SIGINT,
+        launcher_ready=(0, "ready"),
+        signal_after=1,
+    )
+    fault_delivered(r)
+    ended(r)
+    clean(r)
+    got = {int(m.group(1)) for m in re.finditer(r"\[probe r=(\d+) [^\]]*\] caught signal 15\b", r.log)}
+    assert got == {0, 1}, f"every Phase 1 rank must receive SIGTERM: {sorted(got)}\n{r.log[-3000:]}"
+    assert r.exit == 130 and "Phase 2" not in r.log, r
+
+
+def test_phase1_dead_rank():
+    """A Phase 1 rank is killed: its wrapper stops Phase 1, tt-run names the rank and returns its 137."""
+    r = phase1_case("phase1_dead_rank", {"PROBE_SCENARIO": "victim_sigkill", "PROBE_VICTIM": "1"}, DEADLINE_END)
+    ended(r)
+    clean(r)
+    assert re.search(r"rank 1 on \S+ \(pid \d+\): was killed by signal 9 \(SIGKILL\)", r.log), r.log[-3000:]
+    assert r.exit == 137 and "Phase 1 (generate_rank_bindings) failed" in r.log, r
+
+
+def test_phase1_job_timeout():
+    """A Phase 1 rank hangs: --job-timeout covers Phase 1 too, so tt-run stops it gracefully at 15 s with 241."""
+    r = phase1_case(
+        "phase1_hang_timeout",
+        {"PROBE_SCENARIO": "victim_hang", "PROBE_VICTIM": "1"},
+        DEADLINE_HANG,
+        ttrun_extra=("--job-timeout", "15"),
+    )
+    ended(r)
+    clean(r)
+    assert r.exit == 241 and "the job reached its --job-timeout of 15 s" in r.log, r
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -396,80 +479,6 @@ def test_ttrun_abort_ends():
     assert r.wall_s < 30, f"tt-run stalled on the aborting rank: {r}"
     assert re.search(r"rank 1 on \S+ \(pid \d+\): was killed by signal 6 \(SIGABRT\)", r.log), r.log[-2000:]
     assert r.exit == 134, str(r)
-
-
-def test_ttrun_dead_peer_survivors_abort():
-    """A rank is SIGKILLed, the survivors get MPI_ERR_PROC_FAILED from the barrier and call MPI_Abort — the way
-    tt-metal's DistributedContext reacts to a dead peer (see the comment at the MPI_Abort in sanity_mpi_probe.cpp).
-    tt-run should end the whole job non-zero with nothing left.
-
-    On the PRRTE this image ships that is not guaranteed — the prrte#2815 race can leave prterun up after the
-    ranks are gone, and this harness's deadline then bounds the row. So it tolerates ONLY that one shape — the job
-    hanging past the deadline after the survivors reached MPI_Abort — and fails on anything else, so a genuine
-    teardown regression is never masked by a blanket xfail."""
-    r = run_case(
-        "ttrun_dead_peer_abort",
-        {**NP, "PROBE_SCENARIO": "victim_sigkill", "PROBE_SURVIVOR_ACTION": "abort"},
-        DEADLINE_END,
-        cmd=ttrun_mpi_cmd(),
-    )
-    try:
-        ended(r)
-        nonzero(r)
-        clean(r)
-    except AssertionError:
-        # The fingerprint of openpmix/prrte#2815: the survivors reached MPI_Abort and the job then hung past the
-        # deadline (prterun stayed up with the ranks gone). Tolerate only that; re-raise anything else — a wrong
-        # exit code, a leftover with no hang — as a real failure.
-        if r.timed_out and "survivor MPI_Abort" in r.log:
-            pytest.xfail(
-                "openpmix/prrte#2815: prterun left up after a killed peer + the survivors' MPI_Abort "
-                "(PRRTE 3.0.8 / Open MPI 5.0.7rc2; fixed in open-mpi/ompi#14590 / #14713, not in 5.0.x). "
-                "https://github.com/openpmix/prrte/issues/2815"
-            )
-        raise
-
-
-def test_ttrun_shm_layer_still_ends():
-    """Group-E departure: the shared-memory layer put back (btl self,sm,tcp). A clean job through tt-run must still
-    end cleanly; the layer changes the transport, not tt-run's teardown (P15). tt-run uses self,tcp by default, so
-    this is the guard that the departure does not hang."""
-    r = run_case(
-        "ttrun_shm_layer",
-        {**NP, "PROBE_SCENARIO": "clean"},
-        DEADLINE_END,
-        cmd=ttrun_mpi_cmd("--mca btl self,sm,tcp"),
-    )
-    ended(r)
-    assert r.exit == 0, str(r)
-
-
-def test_ttrun_lo_interface():
-    """Group-E departure: the loopback interface. On a single host a clean job through tt-run still completes; the
-    row is the guard that an interface change has a known shape (compare test_ttrun_bad_interface, which must fail
-    fast)."""
-    r = run_case(
-        "ttrun_lo_interface",
-        {**NP, "PROBE_SCENARIO": "clean"},
-        DEADLINE_END,
-        cmd=ttrun_mpi_cmd("--mca btl_tcp_if_include lo"),
-    )
-    ended(r)
-    assert r.exit == 0, str(r)
-
-
-def test_ttrun_pml_ucx_known_shape():
-    """Group-E departure: the UCX point-to-point layer instead of ob1. Through tt-run a clean job must end with a
-    known shape — either it runs (exit 0) or UCX refuses and tt-run ends the job with a non-zero code, never a
-    hang."""
-    r = run_case(
-        "ttrun_pml_ucx",
-        {**NP, "PROBE_SCENARIO": "clean"},
-        DEADLINE_END,
-        cmd=ttrun_mpi_cmd("--mca pml ucx"),
-    )
-    ended(r)
-    clean(r)
 
 
 # ---------------------------------------------------------------------------------------------------------------

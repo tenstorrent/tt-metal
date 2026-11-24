@@ -10,7 +10,6 @@ else the mpirun on PATH and the probe binary the build made (``build/test/tt_met
 
 from __future__ import annotations
 
-import functools
 import glob
 import hashlib
 import os
@@ -39,9 +38,6 @@ MAPPING = (
     / "tt_metal/third_party/tt-cluster-descriptors/blackhole/dual_glx_2.5d_torus/dual_glx_2.5d_torus_cluster_desc_mapping.yaml"
 )
 # a different Blackhole machine, dropped into one rank's slot to make the two ranks disagree (test_bad_descriptor)
-CONFLICT_DESC = (
-    "tt_metal/third_party/tt-cluster-descriptors/blackhole/single_bh_galaxy_clus_desc/single_bh_galaxy_clus_desc.yaml"
-)
 MGD = ROOT / "tt_metal/fabric/mesh_graph_descriptors/dual_bh_galaxy_torus_xy_graph_descriptor.textproto"
 PYTHON = os.environ.get("TT_SANITY_PYTHON", "python3")
 TTRUN = shutil.which("tt-run") or "tt-run"
@@ -50,6 +46,8 @@ TTRUN = shutil.which("tt-run") or "tt-run"
 DEADLINE_END = float(os.environ.get("TT_SANITY_DEADLINE", "90"))
 DEADLINE_HANG = float(os.environ.get("TT_SANITY_DEADLINE_HANG", "60"))
 SETTLE_S = 3.0  # after the launcher returns, before the census
+# how long a job may take to start (the Python import alone takes minutes on a loaded host), on top of a row's deadline
+STARTUP_S = float(os.environ.get("TT_SANITY_STARTUP_S", "600"))
 
 RANK_MARK = re.compile(r"\[probe r=(\d+) pid=\d+ t=[\d.]+\] (.*)")
 
@@ -165,25 +163,6 @@ def legacy_cmd(mpi_extra: str = "", mapping: Path = MAPPING) -> list:
     ]
 
 
-MGD_QUAD = ROOT / "tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
-
-
-def solve_cmd(mpi_extra: str = "", mgd: Path = MGD) -> list:
-    """tt-run in new mode: phase 1 (generate_rank_bindings on the mock descriptors) then the ranks."""
-    return [
-        TTRUN,
-        "--mesh-graph-descriptor",
-        str(mgd),
-        "--mock-cluster-rank-binding",
-        str(MAPPING),
-        "--mpi-args",
-        ("--allow-run-as-root --oversubscribe " + mpi_extra).strip(),
-        "--force-rediscovery",
-        PYTHON,
-        str(PROBE),
-    ]
-
-
 MPI_PREFIX = os.environ.get("TT_SANITY_MPI_PREFIX", "")
 MPI_PROBE_SRC = HERE / "sanity_mpi_probe.cpp"
 MPI_PROBE_BUILT = ROOT / "build/test/tt_metal/distributed/teardown_mpi_probe"
@@ -293,15 +272,6 @@ def ttrun_mpi_cmd(mpi_extra: str = "", np: int = 3, mpi_prefix: str | None = Non
     ]
 
 
-def conflict_mapping(tmp: Path) -> Path:
-    """The dual-galaxy mapping with rank 1's descriptor replaced by a different Blackhole machine: two ranks that disagree."""
-    text = MAPPING.read_text()
-    lines = [(f'  1: "{CONFLICT_DESC}"' if line.strip().startswith('1: "') else line) for line in text.splitlines()]
-    p = tmp / "conflict_mapping.yaml"
-    p.write_text("\n".join(lines) + "\n")
-    return p
-
-
 def run_case(
     name: str,
     env_over: dict,
@@ -317,6 +287,7 @@ def run_case(
     phase1_kill: bool = False,  # SIGKILL the first generate_rank_bindings process that appears (new mode)
     mpi_prefix: str | None = None,  # the MPI install for this run (default: TT_SANITY_MPI_PREFIX)
     cwd: Path | None = None,  # where tt-run starts (default: the repo root)
+    deadline_from: tuple | None = None,  # (marker, ranks): the deadline counts from when every rank dropped it
 ) -> Result:
     cmd = cmd or legacy_cmd()
     piddir = tempfile.mkdtemp(prefix="sanity_pids_")
@@ -352,7 +323,7 @@ def run_case(
 
     def pid_of(rank: int) -> int:
         f = Path(piddir) / f"rank_{rank}.pid"
-        end = time.time() + deadline
+        end = time.time() + deadline + STARTUP_S
         while time.time() < end:
             if f.exists() and f.read_text().strip():
                 return int(f.read_text().strip())
@@ -363,7 +334,7 @@ def run_case(
         """Block until the rank drops this phase marker (e.g. ``open_enter``), so a parent-sent signal lands at the
         tested point. If the marker never arrives within the deadline the fault was not delivered — a harness error."""
         f = Path(piddir) / f"rank_{rank}.{name}"
-        end = time.time() + deadline
+        end = time.time() + deadline + STARTUP_S
         while time.time() < end:
             if f.exists():
                 return
@@ -432,21 +403,42 @@ def run_case(
 
     if launcher_signal is not None or rank_signal is not None or phase1_kill:
         threading.Thread(target=worker, daemon=True).start()
-    timed_out, alive, out, rc = False, [], "", None
+    timed_out, alive, rc, out = False, [], None, ""
+    lines: list = []  # read all along, so a chatty start-up cannot fill the pipe and stall the ranks
+    reader = threading.Thread(target=lambda: lines.extend(iter(proc.stdout.readline, "")), daemon=True)
+    reader.start()
     try:
+        budget = deadline
+        if deadline_from is not None:
+            # A slow start (the Python import takes minutes on a loaded host) must not use up the row's deadline: count
+            # it from when every rank has reached the marker, within STARTUP_S.
+            marker, ranks = deadline_from
+            end = time.time() + STARTUP_S
+            while proc.poll() is None and time.time() < end:
+                if all((Path(piddir) / f"rank_{r}.{marker}").exists() for r in ranks):
+                    break
+                time.sleep(0.1)
+            budget = deadline + (time.time() - t0)
         try:
-            out, _ = proc.communicate(timeout=deadline)
+            # The job is over when its output ends (every writer closed it: tt-run, and the launcher and the guard,
+            # which outlive a killed tt-run), as communicate() saw it, not when tt-run alone exits.
+            reader.join(timeout=max(budget - (time.time() - t0), 0.1))
+            if reader.is_alive():
+                raise subprocess.TimeoutExpired(cmd, budget)
+            proc.wait(timeout=max(budget - (time.time() - t0), SETTLE_S))
             rc = proc.returncode
         except subprocess.TimeoutExpired:
             timed_out = True
             alive = [f"{c}({p})" for p, (c, a) in _procs(piddir).items()]
             kill_job()  # the whole job tree, not just the launcher's process group, so the stdout pipe is released
             try:
-                out, _ = proc.communicate(timeout=SETTLE_S)  # bounded: the writers are dead, so this is EOF, not a wait
+                proc.wait(timeout=SETTLE_S)  # bounded: the writers are dead, so this ends at once
             except subprocess.TimeoutExpired:
                 proc.kill()
-                out, _ = proc.communicate(timeout=SETTLE_S)
+                proc.wait(timeout=SETTLE_S)
             rc = proc.returncode
+        reader.join(timeout=SETTLE_S)
+        out = "".join(lines)
         wall = time.time() - t0
         time.sleep(SETTLE_S)
         left = [f"{c}({p})" for p, (c, a) in _procs(piddir).items()]
@@ -469,22 +461,6 @@ def run_case(
 # ---------------------------------------------------------------------------------------------------------------
 # the assertions a row can make
 # ---------------------------------------------------------------------------------------------------------------
-def known(error: str):
-    """Mark a row that fails today with the error of the teardown plan it exposes. The row still fails (CI is red
-    until the fix lands), and the failure message starts with the error id and the fix, so the job's annotation
-    says what is broken and where. When the fix lands the row passes and the marker is simply dropped."""
-
-    def deco(fn):
-        @functools.wraps(fn)
-        def wrapper(*a, **k):
-            try:
-                return fn(*a, **k)
-            except AssertionError as e:
-                raise AssertionError(f"known error {error}\n{e}") from None
-
-        return wrapper
-
-    return deco
 
 
 def ended(r: Result) -> None:
@@ -508,16 +484,3 @@ def fault_delivered(r: Result) -> None:
     that arrived during a clean early exit — so a missed injection must fail the row, not slip through."""
     assert "FAULT NOT DELIVERED" not in r.signal_sent, f"the fault was not injected: {r}"
     assert r.signal_sent, f"no fault was injected (nothing sent): {r}"
-
-
-def rank_reached(r: Result, rank: int, marker: str) -> None:
-    assert (
-        r.reached.get(rank) == marker
-    ), f"rank {rank} ended at {r.reached.get(rank)!r}, not {marker!r}\n{r.log[-3000:]}"
-
-
-def rc_contains(r: Result, rank: int, needle: str) -> None:
-    lines = r.rcs.get(rank, [])
-    assert any(
-        needle in x for x in lines
-    ), f"rank {rank} did not report {needle!r}; it reported {lines}\n{r.log[-3000:]}"

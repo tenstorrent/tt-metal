@@ -21,7 +21,7 @@ hosts=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --hosts) hosts="$2"; shift 2;;
-    -h|--help) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
+    -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
     *) echo "unknown argument: $1 (try --help)"; exit 2;;
   esac
 done
@@ -76,12 +76,17 @@ probe_loads="ldd '$probe' 2>&1 | grep -q 'not found' && exit 1 || exit 0"
 for host in $(host_names); do
   remote_sh "$host" "mkdir -p '$(dirname "$probe")'" \
     || { echo "::error::could not create the probe directory on $host"; exit 1; }
-  for f in "$probe" "$probe_src"; do  # a no-op on the compile host (or a shared TMPDIR); verified next
+  for f in "$probe" "$probe_src"; do
+    dest="$(dirname "$probe")/$(basename "$f")"
+    # Written under a temporary name and renamed: on the launch host (or a shared TMPDIR) the destination IS the
+    # source, which a direct write would truncate.
     if [ "${TEARDOWN_REMOTE:-ssh}" = srun ]; then
-      srun --overlap -N1 -n1 -w "$host" dd status=none of="$(dirname "$probe")/$(basename "$f")" <"$f" 2>/dev/null || true
-      srun --overlap -N1 -n1 -w "$host" chmod +x "$(dirname "$probe")/$(basename "$f")" 2>/dev/null || true
+      srun --overlap -N1 -n1 -w "$host" bash -c "cat > '$dest.staging.$$' && chmod +x '$dest.staging.$$' && mv -f '$dest.staging.$$' '$dest'" <"$f" \
+        || { echo "::error::could not stage $(basename "$f") on $host"; exit 1; }
     else
-      scp -q "${SSH_OPTS[@]}" "$f" "$(rtarget "$host"):$(dirname "$probe")/" 2>/dev/null || true
+      scp -q "${SSH_OPTS[@]}" "$f" "$(rtarget "$host"):$dest.staging.$$" \
+        && remote_sh "$host" "chmod +x '$dest.staging.$$' && mv -f '$dest.staging.$$' '$dest'" \
+        || { echo "::error::could not stage $(basename "$f") on $host"; exit 1; }
     fi
   done
   if ! remote_sh "$host" "$probe_loads"; then
@@ -117,7 +122,17 @@ binding="$(mktemp --suffix=.yaml)"
 mkdir -p generated/teardown_sanity
 rankfile="generated/teardown_sanity/rankfile_$$"
 r=0; for host in $(host_names); do printf 'rank %d=%s slot=0\n' "$r" "$host"; r=$((r + 1)); done >"$rankfile"
-trap 'rm -f "$binding" "$rankfile"' EXIT
+# Leave nothing on any host, whatever ends the script (a failed case, a CI timeout or cancel): this run's probes
+# (kill_stragglers), the probe directory staged on every host, the binding and the rankfile.
+cleanup() {
+  kill_stragglers >/dev/null 2>&1
+  for host in $(host_names); do remote_sh "$host" "rm -rf '$(dirname "$probe")'" >/dev/null 2>&1; done
+  rm -rf "$(dirname "$probe")"
+  rm -f "$binding" "$rankfile"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # Launch the probe through tt-run with the PROBE_* settings of the caller, under the harness's `timeout 120` (124 if
 # the job never ends). usage: ttrun_job [more --mpi-args]. With bound=() the job runs unbounded, for a case that signals
@@ -178,6 +193,18 @@ kill_this_jobs_prted() {
 REMOTE
 }
 
+# The census once the job has settled: polls up to 15 s for this job's ranks to be gone (a rank its wrapper is still
+# stopping is not a leftover yet), then reports what is left.
+settled_census() {
+  local n
+  for _ in $(seq 1 30); do
+    n=$(ranks_still_alive)
+    [ "$n" = 0 ] && break
+    sleep 0.5
+  done
+  echo "$n"
+}
+
 failures=0
 # assert a teardown shape. usage: expect <clean|torn_down> <name> <exit-code> [exact-code]
 #   clean      -> the job must exit 0
@@ -188,9 +215,8 @@ failures=0
 # in both cases nothing of this job may be left alive on any host.
 expect() {
   local shape="$1" name="$2" rc="$3" exact="${4:-}"
-  sleep 2  # let PRRTE finish tearing the job down before we count
   local alive problem=""
-  alive=$(ranks_still_alive)
+  alive=$(settled_census)
   if [ "$shape" = "clean" ] && [ "$rc" -ne 0 ]; then problem="expected exit 0, got $rc"; fi
   if [ "$shape" = "torn_down" ]; then
     if [ "$rc" -eq 0 ]; then
@@ -244,12 +270,18 @@ echo "       with 124, and expect rejects that as the failure."
 ( for _ in $(seq 1 30); do
     remote_sh "$last_host" "pgrep -f '$probe_pat' >/dev/null 2>&1" && break; sleep 1
   done
-  kill_this_jobs_prted "$last_host" || echo "::error::daemon-death fault was not injected on $last_host" ) &
+  kill_this_jobs_prted "$last_host" ) &
 inject_pid=$!
 PROBE_SCENARIO=victim_hang PROBE_VICTIM="$victim_rank" PROBE_NP="$num_hosts" ttrun_job
 rc=$?
-wait "$inject_pid"  # require the injector to finish and report what it did before we judge the teardown
-expect torn_down "multihost_remote_daemon_death" $rc
+# The injector's own exit status decides whether the fault happened: a job that failed for another reason, with no
+# daemon killed, must not pass as a daemon-death teardown.
+if wait "$inject_pid"; then
+  expect torn_down "multihost_remote_daemon_death" $rc
+else
+  echo "::error::  FAIL  multihost_remote_daemon_death  (the daemon-death fault was not injected on $last_host; the job's exit $rc says nothing)"
+  failures=$((failures + 1)); kill_stragglers
+fi
 
 echo "--- 5. an interrupt at tt-run is forwarded to EVERY rank (P7), remote hosts included, as a catchable signal the"
 echo "       rank handles — NOT a direct kill. On SIGINT tt-run sends SIGTERM to every rank through PRRTE job control;"
@@ -272,7 +304,7 @@ kill -9 "$ttrun_pid" 2>/dev/null || true
 wait "$ttrun_pid" 2>/dev/null; sig_rc=$?
 caught=$(grep -c "caught signal 15" "$sig_log" 2>/dev/null)  # grep -c prints 0 itself (and exits 1) on no match
 caught=${caught:-0}
-sleep 2; sig_alive=$(ranks_still_alive)
+sig_alive=$(settled_census)
 grep "caught signal" "$sig_log" 2>/dev/null | sed 's/^/    /'
 if [ "$caught" -eq "$num_hosts" ] && [ "$sig_alive" = 0 ] && [ "$sig_rc" -eq 130 ]; then
   echo "  PASS  multihost_interrupt_forwarded_to_ranks  ($caught/$num_hosts ranks caught SIGTERM, nothing left; exit $sig_rc)"
