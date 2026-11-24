@@ -427,9 +427,3 @@ jobs:
           api-key: ${{ secrets.TT_CHAT_API_KEY }}
           api-url: ${{ secrets.TT_CHAT_URL }}
           job-name: ${{ matrix.test-group.name }}
-
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() && steps.skip-non-retryable.outcome != 'failure' }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: ${{ matrix.test-group.owner_id }}
