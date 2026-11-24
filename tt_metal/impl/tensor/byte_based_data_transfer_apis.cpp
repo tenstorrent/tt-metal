@@ -43,11 +43,25 @@ std::vector<distributed::ShardDataTransfer> to_shard_transfers(
     for (const auto& c : distributed::MeshCoordinateRange(queue.device()->shape())) {
         coords.push_back(c);
     }
-    std::vector<distributed::ShardDataTransfer> out;
-    out.reserve(transfers.size());
+    // A run of transfers that continue one another on the same shard, both in the buffer and in host memory, becomes
+    // one transfer: callers describe paged data page by page, and a dispatch per page is the slow part.
+    std::vector<ShardRegionTransfer> merged;
+    merged.reserve(transfers.size());
     for (const auto& t : transfers) {
         TT_FATAL(t.shard < coords.size(), "shard {} out of range: the mesh has {} devices", t.shard, coords.size());
         TT_FATAL(t.host != nullptr && t.size > 0, "empty transfer for shard {}", t.shard);
+        if (!merged.empty()) {
+            auto& last = merged.back();
+            if (last.shard == t.shard && last.offset + last.size == t.offset && last.host + last.size == t.host) {
+                last.size += t.size;
+                continue;
+            }
+        }
+        merged.push_back(t);
+    }
+    std::vector<distributed::ShardDataTransfer> out;
+    out.reserve(merged.size());
+    for (const auto& t : merged) {
         out.push_back(
             distributed::ShardDataTransfer{coords[t.shard]}.host_data(t.host).region(BufferRegion(t.offset, t.size)));
     }

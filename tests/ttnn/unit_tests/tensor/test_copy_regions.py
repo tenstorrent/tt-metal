@@ -1,0 +1,86 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+import numpy as np
+import pytest
+import torch
+
+import ttnn
+
+# Bytes of one 32x32 tile page in a DRAM interleaved TILE_LAYOUT buffer.
+TILE_BYTES = {ttnn.bfloat8_b: 1088, ttnn.bfloat16: 2048}
+NUM_BLOCKS, HEADS, BLOCK_SIZE, HEAD_DIM = 6, 2, 64, 128
+
+
+def _paged_cache(device, dtype, seed):
+    torch.manual_seed(seed)
+    data = torch.randn(NUM_BLOCKS, HEADS, BLOCK_SIZE, HEAD_DIM, dtype=torch.bfloat16)
+    return ttnn.from_torch(
+        data, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+
+def _block_bytes(dtype):
+    # A paged cache is tiled block by block, so one block is one byte range of the buffer.
+    return HEADS * (BLOCK_SIZE // 32) * (HEAD_DIM // 32) * TILE_BYTES[dtype]
+
+
+def _all_bytes(tensor, dtype):
+    out = np.zeros(NUM_BLOCKS * _block_bytes(dtype), dtype=np.uint8)
+    ttnn.copy_device_to_host_regions(tensor, [(0, 0, out.nbytes, out.ctypes.data)])
+    return out
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize("form", ["tuples", "array"])
+def test_blocks_round_trip_through_host(device, dtype, form):
+    src = _paged_cache(device, dtype, seed=0)
+    dst = _paged_cache(device, dtype, seed=1)
+    bb = _block_bytes(dtype)
+    src_bytes, dst_before = _all_bytes(src, dtype), _all_bytes(dst, dtype)
+
+    # Blocks 4 and 1 of src go to host slots 0 and 1, then to blocks 0 and 5 of dst.
+    host = np.zeros(2 * bb, dtype=np.uint8)
+    base = host.ctypes.data
+    reads = [(0, 4 * bb, bb, base), (0, 1 * bb, bb, base + bb)]
+    writes = [(0, 0 * bb, bb, base), (0, 5 * bb, bb, base + bb)]
+    if form == "array":
+        reads, writes = np.array(reads, dtype=np.uint64), np.array(writes, dtype=np.uint64)
+    ttnn.copy_device_to_host_regions(src, reads)
+    ttnn.copy_host_to_device_regions(dst, writes)
+
+    dst_after = _all_bytes(dst, dtype)
+    expected = dst_before.copy()
+    expected[0:bb] = src_bytes[4 * bb : 5 * bb]
+    expected[5 * bb : 6 * bb] = src_bytes[1 * bb : 2 * bb]
+    np.testing.assert_array_equal(dst_after, expected)
+
+
+def test_non_blocking_read_lands_after_synchronize(device):
+    dtype = ttnn.bfloat8_b
+    src = _paged_cache(device, dtype, seed=2)
+    bb = _block_bytes(dtype)
+    expected = _all_bytes(src, dtype)[2 * bb : 3 * bb]
+
+    host = np.zeros(bb, dtype=np.uint8)
+    regions = np.array([(0, 2 * bb, bb, host.ctypes.data)], dtype=np.uint64)
+    ttnn.copy_device_to_host_regions(src, regions, blocking=False)
+    ttnn.synchronize_device(device)
+    np.testing.assert_array_equal(host, expected)
+
+
+def test_page_by_page_regions_equal_one_region(device):
+    dtype = ttnn.bfloat8_b
+    src = _paged_cache(device, dtype, seed=3)
+    page, bb = TILE_BYTES[dtype], _block_bytes(dtype)
+    whole = _all_bytes(src, dtype)
+
+    # One region per tile page of blocks 1..3, back to back in host memory: they merge into one transfer.
+    host = np.zeros(3 * bb, dtype=np.uint8)
+    pages = np.arange(3 * bb // page, dtype=np.uint64)
+    regions = np.stack(
+        [np.zeros_like(pages), bb + pages * page, np.full_like(pages, page), host.ctypes.data + pages * page], axis=1
+    )
+    ttnn.copy_device_to_host_regions(src, np.ascontiguousarray(regions))
+    np.testing.assert_array_equal(host, whole[bb : 4 * bb])
