@@ -74,7 +74,7 @@ constexpr bool llk_unpack_AB_matmul_runtime_one_tile() {
 }
 
 // kt_per_section and out_format pick the per-row or hoisted call (unpack_AB_matmul_hoist_rows); 0 and Invalid when
-// unknown.
+// unknown. unhoist: per row whatever the keys (matmul_unhoist_cell, matmul_custom_unhoist_block).
 template <
     std::uint32_t auto_ttsync = false,
     std::uint32_t kt_per_section = 0,
@@ -82,7 +82,8 @@ template <
     std::uint32_t reuse_dir = 0,
     std::uint32_t stream_z = 0,
     bool unkeyed_hoist = true,
-    bool one_tile_key = false>
+    bool one_tile_key = false,
+    bool unhoist = false>
 inline void llk_unpack_AB_matmul_impl(
     const std::uint32_t base_address_a,
     const std::uint32_t base_address_b,
@@ -109,9 +110,10 @@ inline void llk_unpack_AB_matmul_impl(
         // unpack thread; not in a kernel bound by the kernel config buffer, where the hoisted body costs program size,
         // nor above LoFi with a 32-bit DEST, where it measured slower (minimal_matmul 888 2x2 bf16 HiFi2 +0.37 %, 444
         // 1x2 bfp8 HiFi2 +0.15 %)
-        (unkeyed_hoist && kt_per_section == 0 && !LLK_SIZE_MODE &&
-         (MATH_FIDELITY == MathFidelity::LoFi || !DST_ACCUM_MODE)) ||
-            unpack_AB_matmul_hoist_rows<MATH_FIDELITY, DST_SYNC_MODE, DST_ACCUM_MODE, kt_per_section, out_format>(),
+        !unhoist &&
+            ((unkeyed_hoist && kt_per_section == 0 && !LLK_SIZE_MODE &&
+              (MATH_FIDELITY == MathFidelity::LoFi || !DST_ACCUM_MODE)) ||
+             unpack_AB_matmul_hoist_rows<MATH_FIDELITY, DST_SYNC_MODE, DST_ACCUM_MODE, kt_per_section, out_format>()),
         // an unkeyed caller (kt_per_section 0) masks the low byte of the context 1 zmask as main does; the keyed forms
         // keep the full mask for rows of 9 to 16 tiles
         kt_per_section == 0 ? 8u : get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>(),
@@ -249,7 +251,8 @@ template <
     std::uint32_t reuse_dir = 0,
     std::uint32_t stream_z = 0,
     bool unkeyed_hoist = true,
-    bool one_tile_key = false>
+    bool one_tile_key = false,
+    bool unhoist = false>
 inline void llk_unpack_AB_matmul(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
@@ -309,7 +312,8 @@ inline void llk_unpack_AB_matmul(
         reuse_dir,
         stream_z,
         unkeyed_hoist,
-        one_tile_key>(
+        one_tile_key,
+        unhoist>(
         base_address_a,
         base_address_b,
         tile_index_a,
@@ -322,4 +326,25 @@ inline void llk_unpack_AB_matmul(
         rt_dim,
         kt_dim,
         held_a);
+}
+
+// compute/experimental/matmul_custom.h's call: the matmul_custom_unhoist_block calls of a matmul_custom_unhoist_kernel
+// unpack per row
+template <MathFidelity math_fidelity>
+inline void llk_unpack_AB_matmul_custom(
+    const std::uint32_t operandA,
+    const std::uint32_t operandB,
+    const std::uint32_t tile_index_a,
+    const std::uint32_t tile_index_b,
+    const std::uint32_t ct_dim,
+    const std::uint32_t rt_dim,
+    const std::uint32_t kt_dim) {
+    if constexpr (matmul_custom_unhoist_kernel(math_fidelity, DST_SYNC_MODE == DstSync::SyncHalf, unpack_src_format)) {
+        if (matmul_custom_unhoist_block(rt_dim, ct_dim, kt_dim)) {
+            llk_unpack_AB_matmul<false, 0, DataFormat::Invalid, 0, 0, true, false, true>(
+                operandA, operandB, tile_index_a, tile_index_b, ct_dim, rt_dim, kt_dim);
+            return;
+        }
+    }
+    llk_unpack_AB_matmul(operandA, operandB, tile_index_a, tile_index_b, ct_dim, rt_dim, kt_dim);
 }

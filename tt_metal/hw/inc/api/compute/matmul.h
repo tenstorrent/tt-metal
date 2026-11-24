@@ -112,6 +112,33 @@ constexpr bool llk_matmul_main_cell() {
     return false;
 }
 
+// A block (keys given) that unpacks per row (llk_matmul_forms.h matmul_unhoist_cell)
+template <
+    std::uint32_t block_rt,
+    std::uint32_t block_ct,
+    std::uint32_t block_kt,
+    DataFormat in0,
+    DataFormat in1,
+    DataFormat out_format>
+constexpr bool llk_matmul_unhoist_cell() {
+#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_UNPACK)
+    if constexpr (
+        block_rt != 0 && block_ct != 0 && block_kt != 0 && in0 != DataFormat::Invalid && in1 != DataFormat::Invalid) {
+        return matmul_unhoist_cell(
+            MATH_FIDELITY,
+            DST_SYNC_MODE == DstSync::SyncHalf,
+            DST_ACCUM_MODE,
+            in1,
+            in0,
+            out_format,
+            block_rt,
+            block_ct,
+            block_kt);
+    }
+#endif
+    return false;
+}
+
 // A block that keeps its tile MOP though the caller opts into the row MOP (llk_matmul_forms.h matmul_row_mop_off).
 template <
     std::uint32_t block_rt,
@@ -776,14 +803,16 @@ ALWI void matmul_block_llk(
     const std::uint32_t kt_dim,
     const std::uint32_t held_a = matmul_held_a_init) {
     constexpr bool one_tile_key = block_rt == 1 && block_ct == 1;
-    UNPACK(
-        (llk_unpack_AB_matmul < unpack_ttsync,
-         kt_key,
-         form_out,
-         llk_dir,
-         stream_z,
-         matmul_fe_unkeyed_hoist(),
-         one_tile_key > (in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim, held_a)));
+    UNPACK((llk_unpack_AB_matmul<
+            unpack_ttsync,
+            kt_key,
+            form_out,
+            llk_dir,
+            stream_z,
+            matmul_fe_unkeyed_hoist(),
+            one_tile_key,
+            llk_matmul_unhoist_cell<block_rt, block_ct, block_kt, in0_format, in1_format, out_format>()>(
+        in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim, held_a)));
 #ifdef TRISC_MATH
     if constexpr (matmul_fe_main_math<llk_dir, row_mop_on, kt_key, form_out, in1_order, row_end_fold, in0_format, in1_format, out_format, block_rt, block_ct>()) {
         if constexpr (matmul_fe_rowform_min_kt<llk_dir, row_mop_on, kt_key>() != 0) {
