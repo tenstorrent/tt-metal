@@ -67,6 +67,8 @@ from .upsampler_flux3_klein import Flux3KleinSharedUpsampler, reserve_upsampler_
 from .weights_flux3_klein import resolve_weights_dir
 
 SIZES = tuple(side for side, _ in FLUX3_KLEIN_SERVING_SIZES)
+# Images of the smallest size decoded as one VAE batch: 4 hold the activations of one image of the next size
+DECODE_BATCH_MAX = 4
 DEFAULT_SIZE = FLUX3_KLEIN_DEFAULT_SIZE[0]
 MAX_REFERENCES = FLUX3_KLEIN_MAX_REFERENCES
 MATCH_MAX_PIXELS = FLUX3_KLEIN_REFERENCE_MAX_PIXELS
@@ -231,8 +233,10 @@ class Flux3KleinPipeline:
         upsample: bool = False,
         free_other_sizes: bool = False,
         text_batch: int = 1,
+        decode_batch: int = 1,
     ) -> None:
         """``text_batch`` > 1 lets `serve` encode up to that many queued prompts at once, one per sequence-parallel row.
+        ``decode_batch`` > 1 lets `serve` decode up to that many queued images of the smallest size as one VAE batch.
         With ``upsample``, the prompt upsampler shares the first chip of ``mesh_device``, which must be opened
         with upsampler_flux3_klein.SHARED_MESH_PARAMS, and every prompt is rewritten before it is encoded. With
         ``free_other_sizes``, a request of another size than the last one frees the CCL pairs and plans only other sizes
@@ -315,6 +319,9 @@ class Flux3KleinPipeline:
         if not 0 < text_batch <= mesh_shape[sp_axis]:
             raise ValueError(f"text_batch {text_batch} must be 1 to the {mesh_shape[sp_axis]} sequence-parallel rows")
         self._text_batch = text_batch
+        if not 0 < decode_batch <= DECODE_BATCH_MAX:
+            raise ValueError(f"decode_batch {decode_batch} must be 1 to {DECODE_BATCH_MAX}")
+        self._decode_batch = decode_batch
 
     @classmethod
     def create(
@@ -365,6 +372,14 @@ class Flux3KleinPipeline:
                 [tokens] * batch, [rope] * batch, self._sp_axis, self._ccl_managers[0]
             ):
                 ttnn.deallocate(text[0])
+        if self._decode_batch > 1 and SIZES[0] in sizes:
+            model = next(iter(self._transformers))
+            request = Flux3KleinRequest(WARMUP_PROMPT, model=model, width=SIZES[0], height=SIZES[0], seed=0, steps=2)
+            runs = []
+            for _ in range(self._decode_batch):
+                prepared = self._prepare(request, None)
+                runs.append((prepared, *self._denoised(prepared)))
+            self._decode_rows(runs)
 
     def validate_request(self, request: Flux3KleinRequest) -> None:
         if request.model not in self._transformers:
@@ -390,7 +405,9 @@ class Flux3KleinPipeline:
         """Answers requests in order until `receive` returns None; `emit` gets each result or exception. Requests are
         received and prepared (references, tokens, noise) on a helper thread while one runs, and each image is built and
         emitted on another, so the device does not wait for the host between queued requests. With `text_batch` > 1 the
-        prepared requests of the shortest text bucket are encoded up to that many at once, one per sequence-parallel row."""
+        prepared requests of the shortest text bucket are encoded up to that many at once, one per sequence-parallel
+        row. With `decode_batch` > 1 denoised images of the smallest size wait, up to that many, for one batched decode
+        while more requests are queued."""
         if self._upsampler is not None:
             raise ValueError("serve needs the upsampler off: it runs on this pipeline's device")
         prepared: queue.SimpleQueue = queue.SimpleQueue()
@@ -414,12 +431,23 @@ class Flux3KleinPipeline:
                 result = e
             emit(result)
 
-        ready, done = deque(), False
+        ready, done, pending = deque(), False, []
+
+        def decode_pending() -> None:
+            for run in self._decode_rows(pending):
+                if isinstance(run, Exception):
+                    out.submit(emit, run)
+                else:
+                    out.submit(answer, run)
+            pending.clear()
+
         # a daemon: if this loop raises, the caller closes the connection while the receiver may still wait on it
         threading.Thread(target=receive_all, name="flux3_klein_ahead", daemon=True).start()
         with ThreadPoolExecutor(1, thread_name_prefix="flux3_klein_emit") as out:
             while ready or not done:
                 if not ready:
+                    if pending and prepared.empty():
+                        decode_pending()
                     while not done and (not ready or len(ready) < self._text_batch):
                         try:
                             item = prepared.get(block=not ready)
@@ -431,13 +459,25 @@ class Flux3KleinPipeline:
                     ready = self._encode_rows(ready)
                     continue
                 item = ready.popleft()
+                batched = isinstance(item, _Prepared) and self._decode_batch > 1 and item.request.width == SIZES[0]
+                if pending and not batched:
+                    decode_pending()
                 if isinstance(item, Exception):
                     out.submit(emit, item)
                     continue
                 try:
-                    out.submit(answer, self._run(item))
+                    if batched:
+                        pending.append((item, *self._denoised(item)))
+                    else:
+                        out.submit(answer, self._run(item))
                 except Exception as e:  # noqa: BLE001
+                    if pending:
+                        decode_pending()
                     out.submit(emit, e)
+                if len(pending) == self._decode_batch:
+                    decode_pending()
+            if pending:
+                decode_pending()
         if failed:
             raise failed[0]
 
@@ -495,6 +535,10 @@ class Flux3KleinPipeline:
 
     def _run(self, prepared: _Prepared) -> tuple[_Prepared, torch.Tensor, int]:
         """The device part of a prepared request: its image as `[size, size * 3]` uint8 rows on the host."""
+        return self._decode_rows([(prepared, *self._denoised(prepared))])[0]
+
+    def _denoised(self, prepared: _Prepared) -> tuple[ttnn.Tensor, int]:
+        """A prepared request's denoised latent state and its cached steps."""
         request, canvases, ref_bucket, timings = (
             prepared.request,
             prepared.canvases,
@@ -550,20 +594,37 @@ class Flux3KleinPipeline:
         finally:
             ttnn.deallocate(text[0])
         timings["denoise"] = time.time() - t0
+        return state, cached_steps
 
-        t0 = time.time()
-        decoded = self._vae.decode(state, size=size)
-        ttnn.synchronize_device(self._device)
-        timings["decode"] = time.time() - t0
+    def _decode_rows(self, runs: list[tuple[_Prepared, ttnn.Tensor, int]]) -> list[tuple[_Prepared, torch.Tensor, int]]:
+        """The images of denoised requests of one size as `[size, size * 3]` uint8 rows on the host; frees the states.
+        More than one are decoded as one VAE batch of `decode_batch` (a short batch repeats its last state); a failed
+        batch becomes each request's answer."""
+        size, n = runs[0][0].request.width, len(runs)
+        states = [state for _, state, _ in runs]
+        try:
+            t0 = time.time()
+            batch = states[0] if n == 1 else states + states[-1:] * (self._decode_batch - n)
+            decoded = self._vae.decode(batch, size=size)
+            ttnn.synchronize_device(self._device)
+            decode = (time.time() - t0) / n
 
-        t0 = time.time()
-        u8 = image_to_uint8(decoded)
-        rows = tensor.to_torch(u8, mesh_axes=[None, self._vae.h_axis, self._vae.w_axis])[0]
-        ttnn.deallocate(u8)
-        ttnn.deallocate(decoded)
-        ttnn.deallocate(state)
-        timings["to_host"] = time.time() - t0
-        return prepared, rows, cached_steps
+            t0 = time.time()
+            u8 = image_to_uint8(decoded)
+            rows = tensor.to_torch(u8, mesh_axes=[None, self._vae.h_axis, self._vae.w_axis])
+            ttnn.deallocate(u8)
+            ttnn.deallocate(decoded)
+        except Exception as e:  # noqa: BLE001
+            if n == 1:
+                raise
+            return [e] * n
+        finally:
+            for state in states:
+                ttnn.deallocate(state)
+        to_host = (time.time() - t0) / n
+        for prepared, _, _ in runs:
+            prepared.timings["decode"], prepared.timings["to_host"] = decode, to_host
+        return [(prepared, rows[i], cached_steps) for i, (prepared, _, cached_steps) in enumerate(runs)]
 
     def _result(self, prepared: _Prepared, rows: torch.Tensor, cached_steps: int) -> Flux3KleinResult:
         request, timings, size = prepared.request, prepared.timings, prepared.request.width
