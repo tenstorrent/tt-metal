@@ -645,7 +645,10 @@ jobs:
         with:
           fetch-depth: 0
           filter: tree:0
-          sparse-checkout: .github
+          # The classifier reads the perf tests to see which functional tests they import.
+          sparse-checkout: |
+            .github
+            tt_metal/tt-llk/tests/python_tests
       - name: Classify this entry's own changes
         id: classify
         env:
