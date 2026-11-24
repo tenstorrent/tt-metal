@@ -33,6 +33,7 @@ Build tt-metal and activate its python env as usual. The scripts take their data
 | `INKLING_CKPT` | the Hugging Face checkpoint directory (safetensors, config.json, tokenizer) |
 | `INKLING_MODE` | `default` or `fast`: which expert weights load (see "Run modes"; `--fast` in the demo) |
 | `INKLING_SPEC` | `1`: the demo also runs each prompt through speculative decode (`--spec`; see "Speculative decode") |
+| `INKLING_SPEC_MAX_CTX` | the position below which a caller should draft (`modes.spec_max_ctx()`, default 143360) |
 | `INKLING_CACHE` | the converted weight cache the model loads (overrides the mode's) |
 | `INKLING_TILE_CACHE` | a cache with the experts as tiles, for the chunked prefill and its test (overrides the mode's) |
 | `INKLING_PF_GATE_BF16` | `0`: prefill keeps the loop gate messages and outputs fp32 (default `1`: bf16, faster) |
@@ -78,6 +79,12 @@ Measured on one card, ms/token, 128 to 192 greedy tokens, plain = the default pl
 | 130K real prompt, prefill feeds the drafter, default mode | 20.65 | 16.92 | 1.91 |
 | 130K real prompt, prefill feeds the drafter, fast mode | 19.02 | 17.84 | 1.68 |
 | 130K real prompt, prefill without the drafter feed, default mode | 20.52 | 22.01 | 1.44 |
+
+`modes.SPEC_MAX_CTX` (143,360; `INKLING_SPEC_MAX_CTX`) is the position below which a caller should draft
+(`spec_generator.build(..., spec_ctx=modes.spec_max_ctx())`); past it the tapped model runs its quiet step with the
+same tokens, so spec decode does not lower the context limit. The drafter keeps 4,608 B of DRAM per position below
+it (two of its three layers read the last 1,032 positions only and keep rings), beside the far KV's 19,584 B per
+token of `--max-ctx`.
 
 A chunked prefill gives the drafter no context for the prompt unless it is told to: set
 `Inkling2Prefill.drafter = <the DSparkDrafter>` before `prefill()` and every chunk also writes the drafter's context

@@ -19,6 +19,16 @@ CACHE_DIR = Path("/work/inkling-bringup/cache")
 CACHES = {"default": ("own3-def8-pf", "own3-def8-tile"), "fast": ("own3-l8-pf", "own3-l8-tile")}
 
 
+# A caller of speculative decode drafts at the positions below this (spec_generator.build(spec_ctx=...)); from
+# there on it runs plain steps, so the context limit is the plain one. $INKLING_SPEC_MAX_CTX overrides it.
+# The drafter keeps 4,608 B of DRAM per covered position.
+SPEC_MAX_CTX = 143360
+
+
+def spec_max_ctx() -> int:
+    return int(os.environ.get("INKLING_SPEC_MAX_CTX") or SPEC_MAX_CTX)
+
+
 def mode(fast=False) -> str:
     m = "fast" if fast else os.environ.get("INKLING_MODE") or "default"
     if m not in CACHES:
