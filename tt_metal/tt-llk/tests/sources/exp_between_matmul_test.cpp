@@ -131,7 +131,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_matmul.h"
 #include "sfpu_operations.h"
 
-// Accurate exp on a bf16 Dest records its body into the replay buffer; it runs on a spare Dest
+// Accurate EXP_OP on a bf16 Dest records its body into the replay buffer; it runs on a spare Dest
 // tile between two K steps of one matmul, as a fused activation runs between matmul_block calls.
 constexpr std::uint32_t EXP_SPARE_DEST_TILE = MAX_TILES_DEST - 1;
 
@@ -163,13 +163,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
             RT_DIM);
         _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
         test_utils::call_unary_sfpu_operation_init<
-            SfpuType::exponential,
+            EXP_OP,
             false /* APPROX_MODE */,
             is_fp32_dest_acc_en,
             32 /* ITERATIONS */,
             false /* FAST_MODE */,
             false /* STABLE_SORT */,
-            true /* CLAMP_NEGATIVE */>(formats.math);
+            EXP_CLAMP_NEGATIVE>(formats.math);
         PROFILER_SYNC();
     }
     {
@@ -190,13 +190,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         test_utils::call_unary_sfpu_operation<
                             dest_sync,
                             is_fp32_dest_acc_en,
-                            SfpuType::exponential,
+                            EXP_OP,
                             false /* APPROX_MODE */,
                             is_fp32_dest_acc_en,
                             32 /* ITERATIONS */,
                             false /* FAST_MODE */,
                             false /* STABLE_SORT */,
-                            true /* CLAMP_NEGATIVE */>(EXP_SPARE_DEST_TILE, formats.math);
+                            EXP_CLAMP_NEGATIVE>(EXP_SPARE_DEST_TILE, formats.math);
                     }
                     _llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL>(/* dest_index */ 0, CT_DIM, RT_DIM);
                 }

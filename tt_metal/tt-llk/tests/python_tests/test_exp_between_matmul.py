@@ -1,13 +1,18 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Accurate exp on a bf16 Dest between two K steps of one matmul.
+"""Accurate exp / exp2 / exp with base on a bf16 Dest between two K steps of one matmul.
 
 The matmul replays its MVMUL sequence from the FPU half of the replay buffer, recorded once in
 its init. Exp records its body into the replay buffer on every call; a record longer than the
 SFPU half overwrites the start of the matmul sequence, and the second K step then computes
 garbage. Exp writes a spare Dest tile, so the packed result is the plain matmul.
+
+A throttled matmul (THROTTLE_LEVEL > 0, built with MM_THROTTLE as ttnn does) programs ADDR_MOD_6,
+which selects the exp body's MM_THROTTLE dest-advance path.
 """
+
+from dataclasses import dataclass
 
 import torch
 from helpers.format_config import DataFormat
@@ -34,9 +39,34 @@ from helpers.test_variant_parameters import (
     THROTTLE_LEVEL,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
+    TemplateParameter,
 )
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
+
+
+@dataclass
+class EXP_VARIANT(TemplateParameter):
+    """SfpuType run between the K steps, and its CLAMP_NEGATIVE."""
+
+    op: str = "exponential"
+    clamp_negative: bool = True
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"constexpr SfpuType EXP_OP = SfpuType::{self.op};\n"
+            f"constexpr bool EXP_CLAMP_NEGATIVE = {str(self.clamp_negative).lower()};"
+        )
+
+
+@dataclass
+class MM_THROTTLE_DEFINE(TemplateParameter):
+    """MM_THROTTLE as ttnn defines it for a throttled matmul kernel."""
+
+    level: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"#define MM_THROTTLE {self.level}" if self.level else ""
 
 
 @parametrize(
@@ -44,8 +74,15 @@ from helpers.utils import passed_test
     math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi4],
     # (A, B) dimensions: K of two and four tiles, so exp runs between K steps.
     dims=[([32, 64], [64, 32]), ([64, 128], [128, 64])],
+    variant=[
+        ("exponential", True),
+        ("exponential", False),
+        ("exp2", True),
+        ("exp_with_base", True),
+    ],
+    throttle=[0, 3, 5],
 )
-def test_exp_between_matmul(formats, math_fidelity, dims):
+def test_exp_between_matmul(formats, math_fidelity, dims, variant, throttle):
     input_A_dimensions, input_B_dimensions = dims
     spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -83,7 +120,9 @@ def test_exp_between_matmul(formats, math_fidelity, dims):
             MATH_FIDELITY(math_fidelity),
             PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
             DEST_SYNC(),
-            THROTTLE_LEVEL(),
+            THROTTLE_LEVEL(throttle),
+            MM_THROTTLE_DEFINE(throttle),
+            EXP_VARIANT(*variant),
         ],
         runtimes=[
             NUM_FACES(),
