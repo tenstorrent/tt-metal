@@ -157,11 +157,27 @@ ttnn::Tensor untilize(
     const ttnn::Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     bool use_multicore,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<ttnn::Tensor>& gathered_prefix_tensor,
+    uint32_t gathered_slab_global,
+    uint32_t num_segments) {
     using ttnn::operations::data_movement::untilize_codegen::codegen_cb_plan_fits_live_l1;
     using ttnn::operations::data_movement::untilize_codegen::is_demoted;
     using ttnn::operations::data_movement::untilize_codegen::supported_by_codegen;
     using ttnn::operations::data_movement::untilize_codegen::supported_execution_controls;
+
+    if (gathered_prefix_tensor.has_value()) {
+        // The gathered-prefix form exists only in the codegen prim (its own program; no native counterpart), so it is
+        // not routed: an input the codegen prim does not take is an error here, not a silent full untilize.
+        const auto output_mem_config = memory_config.value_or(input_tensor.memory_config());
+        TT_FATAL(
+            operations::data_movement::codegen_supported_on_arch(input_tensor) &&
+                supported_execution_controls(use_multicore, sub_core_grids) &&
+                supported_by_codegen(input_tensor, output_mem_config),
+            "untilize with gathered_prefix_tensor: the input is outside the codegen untilize's scope");
+        return ttnn::prim::untilize_codegen(
+            input_tensor, output_mem_config, gathered_prefix_tensor, gathered_slab_global, num_segments);
+    }
 
     // Nothing to untilize. The routes below split work by block count, which is 0 for an empty
     // input, so no work unit is emitted while the dataflow buffers are already declared and the

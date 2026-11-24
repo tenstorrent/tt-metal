@@ -30,6 +30,45 @@ void UntilizeCodegenDeviceOperation::validate_on_program_cache_miss(
         ttnn::operations::data_movement::untilize_codegen::supported_by_codegen(
             tensor_args.input, operation_attributes.output_mem_config),
         "UntilizeCodegenDeviceOperation invoked for a case not supported by the codegen implementation");
+    if (tensor_args.gathered_prefix_tensor.has_value()) {
+        const auto& ext = *tensor_args.gathered_prefix_tensor;
+        const auto& input = tensor_args.input;
+        TT_FATAL(
+            ext.storage_type() == ttnn::StorageType::DEVICE && ext.buffer() != nullptr,
+            "untilize: gathered_prefix_tensor must be allocated on device");
+        TT_FATAL(
+            ext.dtype() == tt::tt_metal::DataType::UINT32,
+            "untilize: gathered_prefix_tensor must be UINT32, got {}",
+            ext.dtype());
+        TT_FATAL(ext.layout() == ttnn::Layout::ROW_MAJOR, "untilize: gathered_prefix_tensor must be ROW_MAJOR");
+        TT_FATAL(ext.logical_volume() == 1, "untilize: gathered_prefix_tensor must hold one element");
+        TT_FATAL(
+            ext.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM && !ext.memory_config().is_sharded(),
+            "untilize: gathered_prefix_tensor must be DRAM interleaved");
+        TT_FATAL(
+            !input.memory_config().is_sharded() && !operation_attributes.output_mem_config.is_sharded(),
+            "untilize with gathered_prefix_tensor: input and output must be interleaved");
+        const auto& ls = input.logical_shape();
+        TT_FATAL(ls == input.padded_shape(), "untilize with gathered_prefix_tensor: the input must be tile-aligned");
+        TT_FATAL(
+            ls.rank() == 4 && ls[0] == 1 && ls[1] == 1,
+            "untilize with gathered_prefix_tensor: input must be [1, 1, H, W], got {}",
+            ls);
+        const uint32_t nseg = operation_attributes.num_segments;
+        const uint32_t slab = operation_attributes.gathered_slab_global;
+        const uint32_t h = ls[2];
+        TT_FATAL(
+            nseg >= 1 && h % (nseg * tt::constants::TILE_HEIGHT) == 0,
+            "untilize: input height {} must split into {} segments of whole tile rows",
+            h,
+            nseg);
+        TT_FATAL(
+            slab > 0 && slab % (nseg * tt::constants::TILE_HEIGHT) == 0 && h % slab == 0,
+            "untilize: gathered_slab_global {} must be a multiple of {} x 32 dividing the height {}",
+            slab,
+            nseg,
+            h);
+    }
 }
 
 UntilizeCodegenDeviceOperation::spec_return_value_t UntilizeCodegenDeviceOperation::compute_output_specs(
@@ -81,10 +120,18 @@ ttsl::hash::hash_t UntilizeCodegenDeviceOperation::compute_program_hash(
         ttsl::hash::type_hash<UntilizeCodegenDeviceOperation>, operation_attributes, tensor_args, chosen.tier);
 }
 
-Tensor untilize_codegen(const Tensor& input, tt::tt_metal::MemoryConfig output_mem_config) {
+Tensor untilize_codegen(
+    const Tensor& input,
+    tt::tt_metal::MemoryConfig output_mem_config,
+    const std::optional<Tensor>& gathered_prefix_tensor,
+    uint32_t gathered_slab_global,
+    uint32_t num_segments) {
     return ttnn::device_operation::launch<UntilizeCodegenDeviceOperation>(
-        UntilizeCodegenOperationAttributes{.output_mem_config = std::move(output_mem_config)},
-        UntilizeCodegenTensorArgs{.input = input});
+        UntilizeCodegenOperationAttributes{
+            .output_mem_config = std::move(output_mem_config),
+            .gathered_slab_global = gathered_slab_global,
+            .num_segments = num_segments},
+        UntilizeCodegenTensorArgs{.input = input, .gathered_prefix_tensor = gathered_prefix_tensor});
 }
 
 }  // namespace ttnn::prim

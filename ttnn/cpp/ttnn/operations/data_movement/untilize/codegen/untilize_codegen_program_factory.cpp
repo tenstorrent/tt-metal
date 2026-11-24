@@ -404,6 +404,94 @@ std::optional<ProgramDescriptor> build_with_unpadding(
     return desc;
 }
 
+// Gathered-prefix untilize (gathered_prefix_tensor): only the first g / num_segments rows of each of num_segments
+// equal row segments, g = min(round_up(start + slab, slab), H) from the device-held chunk start (the extent
+// high_bw_all_gather's gathered_prefix_tensor writes). The extent is read on the device, so one program (and one
+// trace) serves every chunk. The valid tile rows (segment-major) are dealt round-robin over every core of the grid,
+// so a short prefix still spreads over all cores; each core derives its count at run time (reader -> compute through
+// a one-page mailbox CB; the writer reads the extent itself). Its own kernels: the other builders' are unchanged.
+constexpr uint32_t kCbMeta = tt::CBIndex::c_3;
+constexpr uint32_t kCbWriterScratch = tt::CBIndex::c_4;
+
+CBDescriptor make_u32_cb(uint32_t cb_id, const CoreRangeSet& cores) {
+    return CBDescriptor{
+        .total_size = 64,
+        .core_ranges = cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(cb_id),
+            .data_format = tt::DataFormat::UInt32,
+            .page_size = 64,
+        }}},
+    };
+}
+
+std::optional<ProgramDescriptor> build_extent_split(
+    const CommonArgs& a,
+    uint32_t wt,
+    uint32_t total_tile_rows,
+    Buffer* extent_buf,
+    uint32_t slab_rows,
+    uint32_t num_segments) {
+    auto grid = a.device->compute_with_storage_grid_size();
+    const CoreRangeSet all_cores(CoreRange({0, 0}, {grid.x - 1, grid.y - 1}));
+    const auto cores = corerange_to_cores(all_cores, std::nullopt, true);
+    const uint32_t num_cores = static_cast<uint32_t>(cores.size());
+    const uint32_t seg_tile_rows = total_tile_rows / num_segments;
+    const uint32_t total_rows = total_tile_rows * TILE_HEIGHT;
+    const uint32_t row_size_bytes = wt * TILE_WIDTH * a.out_elem_size;
+
+    // Two tile rows in flight each side (reader -> compute -> writer).
+    const uint32_t in_depth = 2 * wt;
+    const uint32_t out_depth = 2 * wt;
+    const uint64_t need = static_cast<uint64_t>(in_depth) * aligned_tile_page_size(a.in_tile_size) +
+                          static_cast<uint64_t>(out_depth) * aligned_tile_page_size(a.out_tile_size) + 128;
+    if (need > a.usable_l1) {
+        return std::nullopt;
+    }
+
+    ProgramDescriptor desc;
+    desc.cbs.push_back(make_tile_cb(kCbIn, a.in_fmt, in_depth, a.in_tile_size, all_cores));
+    desc.cbs.push_back(make_tile_cb(kCbOut, a.out_fmt, out_depth, a.out_tile_size, all_cores));
+    desc.cbs.push_back(make_u32_cb(kCbMeta, all_cores));
+    desc.cbs.push_back(make_u32_cb(kCbWriterScratch, all_cores));
+
+    KernelDescriptor reader;
+    reader.kernel_source = kernel_path("reader_untilize_extent.cpp");
+    reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader.core_ranges = all_cores;
+    reader.compile_time_args = {kCbIn, kCbMeta, wt, seg_tile_rows, num_segments, slab_rows, total_rows};
+    TensorAccessorArgs(*a.in_buf).append_to(reader.compile_time_args);
+    TensorAccessorArgs(*extent_buf).append_to(reader.compile_time_args);
+    reader.config = ReaderConfigDescriptor{};
+
+    KernelDescriptor writer;
+    writer.kernel_source = kernel_path("writer_untilize_extent.cpp");
+    writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer.core_ranges = all_cores;
+    writer.compile_time_args = {
+        kCbOut, kCbWriterScratch, wt, row_size_bytes, seg_tile_rows, num_segments, slab_rows, total_rows};
+    TensorAccessorArgs(*a.out_buf).append_to(writer.compile_time_args);
+    TensorAccessorArgs(*extent_buf).append_to(writer.compile_time_args);
+    writer.config = WriterConfigDescriptor{};
+
+    for (uint32_t c = 0; c < num_cores; ++c) {
+        reader.emplace_runtime_args(cores[c], {a.in_buf, extent_buf, c, num_cores});
+        writer.emplace_runtime_args(cores[c], {a.out_buf, extent_buf, c, num_cores});
+    }
+
+    KernelDescriptor compute;
+    compute.kernel_source = kernel_path("compute_untilize_extent.cpp");
+    compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute.core_ranges = all_cores;
+    compute.compile_time_args = {wt, kCbIn, kCbOut, a.max_bct, kCbMeta};
+    compute.config = ComputeConfigDescriptor{.fp32_dest_acc_en = a.fp32};
+
+    desc.kernels.push_back(std::move(reader));
+    desc.kernels.push_back(std::move(writer));
+    desc.kernels.push_back(std::move(compute));
+    return desc;
+}
+
 // No codegen CB plan fits the L1 that is free right now. ttnn::untilize runs the same chooser
 // (codegen_cb_plan_fits_live_l1) before dispatching and routes such a case to the native prim as a
 // whole, so this factory never builds anything but a codegen program; reaching here means L1
@@ -472,6 +560,19 @@ ProgramDescriptor UntilizeCodegenProgramFactory::create_descriptor(
     uint32_t wt = w / TILE_WIDTH;
     uint32_t ht = h / TILE_HEIGHT;
     uint32_t total_tile_rows = nc * ht;
+
+    if (tensor_args.gathered_prefix_tensor.has_value()) {
+        if (auto desc = build_extent_split(
+                a,
+                wt,
+                total_tile_rows,
+                tensor_args.gathered_prefix_tensor->buffer(),
+                operation_attributes.gathered_slab_global,
+                operation_attributes.num_segments)) {
+            return std::move(*desc);
+        }
+        throw_no_codegen_cb_plan(a.usable_l1);
+    }
 
     // Each branch below picks the codegen builder this shape belongs to. A builder declines
     // (nullopt) when its CB plan does not fit the L1 that is free right now; choose_codegen_cb_plan

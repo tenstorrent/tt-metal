@@ -32,6 +32,12 @@ void bind_untilize(nb::module_& mod) {
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
                 use_multicore (bool, optional): Whether to use multicore. Defaults to `True`.
                 sub_core_grids (ttnn.CoreRangeSet, optional): Sub core grids. Defaults to `None`.
+                gathered_prefix_tensor (ttnn.Tensor, optional): a 1-element uint32 DRAM tensor holding a chunk start
+                    (read on the device, trace-safe). Only the gathered prefix of a [1, 1, H, W] input is untilized:
+                    g = min(round_up(start + gathered_slab_global, gathered_slab_global), H) rows over num_segments
+                    equal row segments, the first g / num_segments rows of each; the rest of the output is left as it is.
+                gathered_slab_global (int, optional): the slab the extent rounds up to. Defaults to 0.
+                num_segments (int, optional): equal row segments of the input. Defaults to 1.
 
             Returns:
                 List of ttnn.Tensor: the output tensor.
@@ -45,7 +51,10 @@ void bind_untilize(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("use_multicore") = true,
-        nb::arg("sub_core_grids") = nb::none());
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("gathered_prefix_tensor") = nb::none(),
+        nb::arg("gathered_slab_global") = 0,
+        nb::arg("num_segments") = 1);
 
     // Bound with a plain def rather than ttnn::bind_function: the latter tags the callable for
     // auto_register_ttnn_cpp_operations, which would republish these as ttnn.* operations. They are
