@@ -10,3 +10,4 @@
 {"event":"test_run","refinement":4,"status":"pass","tests":"unit dir 57/57, golden LN slices 364 passed, regression 32/32","perf":"LN 26.324->21.417 us fastest, focus null","ts":"2026-11-23T20:20:28+00:00"}
 {"event":"test_run","status":"fail_preexisting","suite":"golden_full","passed":1457,"failed":1,"hangs":0,"note":"only failure 128x8192 bf8b HEIGHT_SHARDED LN CB OOM, pre-existing (fails on R3 kernels)","ts":"2026-11-23T21:04:22+00:00"}
 {"event":"test_run","refinement":5,"result":"pass","detail":"L1 interleaved out: gate 86/86 + 4 xfail, loose 3/3; perf L1 bank-walk 58.27us -> row-walk 35.88us vs DRAM 28.36us","ts":"2026-11-24T13:04:26+00:00"}
+{"event":"fix_applied","what":"R5b: cb_stage budget = min(STAGE_L1_BUDGET, L1 room below lowest L1 buffer - other static CBs); generalized _check_l1_fit","test":"sharded_numeric 13/13, golden full 1543p/0f/0 hangs","ts":"2026-11-24T13:23:51+00:00"}

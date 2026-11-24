@@ -189,6 +189,10 @@ Bullet 3 FAIL: REGRESSION — prior-passing golden cells no longer pass (respons
 
 **Done when**: the gate passes — zero hangs in SUPPORTED, acceptance + refinement tests pass, golden majority with no regression.
 
+**Outcome**: fixed — `cb_stage` (Perf 1 own-entry staging) is sized from the L1 left below the lowest L1 buffer
+(here the 786 KB fp32 output shard), capped at 128 KiB; the fit guard is generalized to any L1 tenant. The failing case
+and its file pass (13/13); full golden 1543 passed / 0 failed / 0 hangs.
+
 **Outcome**: the R4 regression was a kernel-config-buffer overflow (71536 > 70656 B) on
 `1x1x64x1000` w_non_aligned LN WIDTH_SHARDED fp32-DEST: R4's `cw == 1` local-stats fast path was a runtime branch, so
 every fp32-DEST LN build carried both it and the general reduce paths. Now gated at compile time (`cw_nom == 1` ⇔ every
@@ -248,3 +252,17 @@ shapes must fit.
 
 **Verifier notes**: filed by hand, not by the verifier: a contract gap found when the generated op was checked against the model's real
 call sites (not a golden failure). Local to the output path: the compute kernel and the exchange protocol should not change.
+
+
+### [x] Refinement 5b — L1 INTERLEAVED output (the real call of the MLA q_a norm) (debug: fix gate violations)
+
+**Goal**: fix the hard violation from Refinement 5 so the completion gate's three bullets hold.
+
+**Verifier notes** (mechanical, from the harness completion gate):
+
+```
+Bullet 2 FAIL: acceptance/refinement tests failing:
+  - tests/ttnn/unit_tests/operations/all_gather_rms_norm/test_all_gather_rms_norm_sharded_numeric.py::test_sharded_and_16bit_dest[silicon_arch_name=blackhole-1x1x640x1536-HEIGHT_SHARDED-rms_norm-FLOAT32-fp32dest1-1x4-torus_xy] - RuntimeError: TT_THROW @ /home/malimpic/localdev/2026_11_23/1317_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_run1/tt-metal/tt_metal/impl/program/program.cpp:2535: tt::exception
+```
+
+**Done when**: the gate passes — zero hangs in SUPPORTED, acceptance + refinement tests pass, golden majority with no regression.

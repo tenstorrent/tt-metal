@@ -540,22 +540,36 @@ def _num_banks(mesh_device, t):
     return int(ttnn.get_memory_view(mesh_device, mc.buffer_type).num_banks)
 
 
-def _check_l1_interleaved_fit(mesh_device, cbs, output_tensor):
-    """L1 INTERLEAVED output (Refinement 5): the output pages share every core's L1 with this program's static CBs
-    (allocated upward from the L1 base; the output sits at the same bank offset on every core). Refuse a call whose CB
-    region would reach the output with the numbers, instead of the program's 'circular buffers clash with L1 buffers'
-    throw. Every CB here is static (an interleaved input: no shard-backed CB). Each CB is placed DRAM-aligned."""
-    align = 64
+CB_ALIGN = 64  # each static CB is placed at a DRAM-aligned offset in the CB region
+
+
+def _static_cb_bytes(cbs):
+    """Bytes of the static CB region (allocated upward from the L1 base on every core of the program). Shard-backed CBs
+    (cb_descriptor_from_sharded_tensor: the caller's resident shard) live in their tensor's buffer, not here."""
+    return sum(-(-int(c.total_size) // CB_ALIGN) * CB_ALIGN for c in cbs if not c.has_buffer())
+
+
+def _l1_cb_room(mesh_device):
+    """(base, lowest): the static CB region may grow from the L1 allocator base up to the lowest allocated L1 buffer
+    (L1 buffers are allocated top-down: the caller's L1 output / shards / any other live L1 tensor). Past it the program
+    throws 'circular buffers clash with L1 buffers' (program.cpp)."""
     base = int(ttnn.get_allocator_base_address(mesh_device, ttnn.BufferType.L1))
-    cb_end = base + sum(-(-int(c.total_size) // align) * align for c in cbs)
-    out_lo = int(output_tensor.buffer_address())
-    if cb_end > out_lo:
+    mv = ttnn.get_memory_view(mesh_device, ttnn.BufferType.L1)
+    used = [int(b["address"]) for b in mv.block_table if b["allocated"] == "yes"]
+    return base, base + (min(used) if used else int(mv.total_bytes_per_bank))
+
+
+def _check_l1_fit(fixed_bytes, base, lowest, output_tensor):
+    """Refuse a call whose CBs (without the optional own-entry staging) cannot fit below the lowest L1 buffer with the
+    numbers, instead of the program's CB clash throw."""
+    if base + fixed_bytes > lowest:
         from ttnn.operations._op_contract import UnsupportedAxisValue
 
         raise UnsupportedAxisValue(
-            f"all_gather_rms_norm: L1 interleaved output does not fit next to the op's circular buffers: CB region "
-            f"[{base}, {cb_end}) ({cb_end - base} B per core) reaches the output at L1 address {out_lo} "
-            f"(shape {list(output_tensor.shape)} {output_tensor.dtype}); use a DRAM output for this shape"
+            f"all_gather_rms_norm: the op's circular buffers do not fit next to the L1 buffers: CB region "
+            f"[{base}, {base + fixed_bytes}) ({fixed_bytes} B per core) reaches the lowest L1 buffer at {lowest} "
+            f"(output shape {list(output_tensor.shape)} {output_tensor.dtype}, {output_tensor.memory_config()}); "
+            f"use a DRAM output or free L1 for this shape"
         )
 
 
@@ -690,7 +704,6 @@ def create_mesh_program_descriptor(
     payload_bytes = run_pages * out_page
     stats_payload = ttnn.get_tt_fabric_max_payload_size_bytes()
     out_sharded = output_tensor.memory_config().is_sharded()
-    out_l1_interleaved = not out_sharded and output_tensor.memory_config().buffer_type == ttnn.BufferType.L1
     # HEIGHT in -> HEIGHT out, one tile-row per shard on the same cores: the own slice of a worker's output shard is
     # Wlt contiguous pages, so cb_out_block IS that slice (normalize packs into its final place — no block, no own
     # write; the ports pull it from there)
@@ -851,7 +864,7 @@ def create_mesh_program_descriptor(
     # ---- own-entry staging plan (per chip: the own slot's walk depends on p) ----
     stage_cp = run_pages  # pages per staging chunk
 
-    def stage_plan(p):
+    def stage_plan(p, budget):
         """Per lane l: unit page counts (walk order), staged unit count (a prefix within the L1 budget), per-bank lane
         offsets; the chunk count and cb_stage slots per core."""
         if not stage_on:
@@ -879,7 +892,9 @@ def create_mesh_program_descriptor(
                     off += c
             lane_pages.append(pages)
         # cap: at most max_slots chunks per core over the active workers, whole lane units (a lane's staged prefix)
-        max_slots = max(1, _knob("STAGE_L1_BUDGET", STAGE_L1_BUDGET) // (stage_cp * out_page))
+        max_slots = budget // (stage_cp * out_page)
+        if max_slots == 0:
+            return None
         cap = (max_slots * split.n_active // L) * stage_cp
         lanes = []
         for pages in lane_pages:
@@ -893,9 +908,6 @@ def create_mesh_program_descriptor(
         nch_max = max(-(-ln["tot"] // stage_cp) for ln in lanes)
         slots = -(-(L * nch_max) // split.n_active)
         return dict(lanes=lanes, unit_off=unit_off, max_pages=slots * stage_cp, nch_max=nch_max)
-
-    stage_plans = {coord: stage_plan(ch["p"]) for coord, ch in chips.items()}
-    stage_max_pages = max([sp["max_pages"] for sp in stage_plans.values() if sp] + [0])
 
     # ---- compute config ----
     cfg = ttnn.ComputeConfigDescriptor()
@@ -936,6 +948,93 @@ def create_mesh_program_descriptor(
     dst_addr = int(dst_tensor.buffer_address())
     g_addr = int(gamma.buffer_address()) if has_gamma else 0
     b_addr = int(beta.buffer_address()) if has_beta else 0
+
+    # ---- CBs (all on the full program range: identical addresses on every core of the chip) ----
+    def make_cbs(p, stage_pages):
+        if x_sharded:
+            cb_x_desc = ttnn.cb_descriptor_from_sharded_tensor(CB_X, input_tensor)  # zero-copy: the shard IS cb_x
+            cb_x_desc.core_ranges = full
+        else:
+            cb_x_desc = _cb(CB_X, crt_max * cw_max, T_in, x_dtype, full)
+        cbs = [
+            cb_x_desc,
+            _cb(CB_SCALER, 1, ttnn.tile_size(ttnn.bfloat16), ttnn.bfloat16, full),
+            # per-row CBs hold one row chunk (row_chunk = the whole block unless pre_combine)
+            _cb(CB_PARTIAL, row_chunk * nstats, T32, ttnn.float32, full),
+            _cb(CB_RECORD_STAGING, row_chunk * nstats, RECORD_BYTES, ttnn.float32, full),
+            _cb(CB_GATHER_ROWS, row_chunk * nstats * gt_max, T32, ttnn.float32, full),
+            _cb(CB_GATHERED, row_chunk * nstats * gt_max, T32, ttnn.float32, full),
+            _cb(CB_INV, row_chunk, T_acc, acc_dtype, full),
+            (
+                ttnn.cb_descriptor_from_sharded_tensor(
+                    CB_OUT_BLOCK, output_tensor, p * geo.Wlt * out_page, geo.Wlt * out_page, full
+                )
+                if out_in_place
+                else _cb(CB_OUT_BLOCK, crt_max * cw_max, out_page, out_dtype, full)
+            ),
+            _cb(CB_PORT_CHUNKS, 2 * batch_chunks * run_pages, out_page, out_dtype, full),
+            _cb(CB_PORT_DESC, 2 * batch_chunks, PORT_DESC_BYTES, ttnn.float32, full),
+            *([_cb(CB_STAGE, stage_pages, out_page, out_dtype, full)] if stage_pages else []),
+            # program-scoped: same address on every core of every chip, no persistent L1 (see agrn_common.hpp)
+            _cb(CB_STATS_TABLE, table_bytes // RECORD_BYTES, RECORD_BYTES, ttnn.float32, full),
+        ]
+        if has_gamma:
+            cbs.append(_cb(CB_GAMMA, cw_max, gamma_page, g_dtype, full))
+            cbs.append(_cb(CB_GAMMA_ROWS, 1, (cw_max + 2) * 128 + 64, ttnn.float32, full))
+        if has_beta:
+            cbs.append(_cb(CB_BETA, cw_max, gamma_page, g_dtype, full))
+        if is_ln or mask_tail:
+            # T_acc like cb_ln_sq: the reduce helper's masked fold (interleaved LN T) unpacks the mask as srcB without a
+            # format reconfig. Sharded LN on a 16-bit-mantissa x: cb_ln_sq ((x - K)^2 scratch, one block of tiles
+            # beside the caller's resident in/out shards) is bf16 — the sharded paths never fold it with the mask.
+            sq_dtype = ttnn.bfloat16 if (is_ln and x_sharded and not x_is_f32) else acc_dtype
+            cbs += [
+                _cb(CB_MASK, cw_max if mask_tail else 1, T_acc, acc_dtype, full),  # sharded tail: the mask block
+                _cb(CB_LN_SQ, row_chunk * cw_max, ttnn.tile_size(sq_dtype), sq_dtype, full),
+            ]
+        if is_ln:
+            cbs += [
+                _cb(CB_LN_M, row_chunk, T32, ttnn.float32, full),
+                _cb(CB_LN_SHIFT, row_chunk, T32, ttnn.float32, full),
+                _cb(CB_STAT_CONSTS, gt_pc if pre_combine else gather_tiles, T32, ttnn.float32, full),
+                _cb(CB_MEAN_COL, row_chunk, T32, ttnn.float32, full),
+                _cb(CB_MEAN_B, row_chunk, T32, ttnn.float32, full),
+                _cb(CB_RSTD_B, row_chunk, T_acc, acc_dtype, full),
+                _cb(CB_LN_TMP, row_chunk * gt_max, T32, ttnn.float32, full),
+            ]
+            if pre_combine:
+                cbs += [
+                    _cb(CB_STAT_CONSTS_X, gather_tiles, T32, ttnn.float32, full),
+                    _cb(CB_FINAL_MEAN, row_chunk, T32, ttnn.float32, full),
+                ]
+            # 16-bit DEST / sharded input: the LN paths read cb_x itself (bf16 / bf8b lands in DEST exactly anyway)
+            if not x_is_f32 and fp32_dest and not x_sharded:
+                cbs.append(_cb(CB_X32, crt_max * cw_max, T32, ttnn.float32, full))
+        else:
+            cbs.append(_cb(CB_SUMSQ, row_chunk, T_acc, acc_dtype, full))
+        if xg_pre:
+            cbs.append(_cb(CB_XG, crt_max * cw_max, T_acc, acc_dtype, full))
+        if is_ru:
+            cbs.append(_cb(CB_ASSEMBLE, src_max + 1, out_page, out_dtype, full))
+        if pre_combine:
+            x_stats_desc = ttnn.cb_descriptor_from_sharded_tensor(CB_X_STATS, input_tensor)  # zero-copy, 2nd view
+            x_stats_desc.core_ranges = full
+            cbs += [
+                x_stats_desc,
+                _cb(CB_PRE_TABLE, rpo * k * nstats, RECORD_BYTES, ttnn.float32, full),
+                _cb(CB_FINAL_TABLE, geo.R * nfinal, RECORD_BYTES, ttnn.float32, full),
+                _cb(CB_FINAL_INV, row_chunk, T32, ttnn.float32, full),
+            ]
+        return cbs
+
+    # own-entry staging is a perf cache with a read-back fallback: its budget is what the L1 leaves after every other
+    # CB (a big sharded / L1 output can sit low in L1), capped by STAGE_L1_BUDGET
+    l1_base, l1_lowest = _l1_cb_room(mesh_device)
+    fixed_cb_bytes = _static_cb_bytes(make_cbs(0, 0))
+    _check_l1_fit(fixed_cb_bytes, l1_base, l1_lowest, output_tensor)
+    stage_budget = min(_knob("STAGE_L1_BUDGET", STAGE_L1_BUDGET), l1_lowest - l1_base - fixed_cb_bytes - CB_ALIGN)
+    stage_plans = {coord: stage_plan(ch["p"], stage_budget) for coord, ch in chips.items()}
+    stage_max_pages = max([sp["max_pages"] for sp in stage_plans.values() if sp] + [0])
 
     mesh_desc = ttnn.MeshProgramDescriptor()
     for coord, ch in chips.items():
@@ -1020,84 +1119,7 @@ def create_mesh_program_descriptor(
             )
         ]
 
-        # ---- CBs (all on the full program range: identical addresses on every core of the chip) ----
-        if x_sharded:
-            cb_x_desc = ttnn.cb_descriptor_from_sharded_tensor(CB_X, input_tensor)  # zero-copy: the shard IS cb_x
-            cb_x_desc.core_ranges = full
-        else:
-            cb_x_desc = _cb(CB_X, crt_max * cw_max, T_in, x_dtype, full)
-        cbs = [
-            cb_x_desc,
-            _cb(CB_SCALER, 1, ttnn.tile_size(ttnn.bfloat16), ttnn.bfloat16, full),
-            # per-row CBs hold one row chunk (row_chunk = the whole block unless pre_combine)
-            _cb(CB_PARTIAL, row_chunk * nstats, T32, ttnn.float32, full),
-            _cb(CB_RECORD_STAGING, row_chunk * nstats, RECORD_BYTES, ttnn.float32, full),
-            _cb(CB_GATHER_ROWS, row_chunk * nstats * gt_max, T32, ttnn.float32, full),
-            _cb(CB_GATHERED, row_chunk * nstats * gt_max, T32, ttnn.float32, full),
-            _cb(CB_INV, row_chunk, T_acc, acc_dtype, full),
-            (
-                ttnn.cb_descriptor_from_sharded_tensor(
-                    CB_OUT_BLOCK, output_tensor, p * geo.Wlt * out_page, geo.Wlt * out_page, full
-                )
-                if out_in_place
-                else _cb(CB_OUT_BLOCK, crt_max * cw_max, out_page, out_dtype, full)
-            ),
-            _cb(CB_PORT_CHUNKS, 2 * batch_chunks * run_pages, out_page, out_dtype, full),
-            _cb(CB_PORT_DESC, 2 * batch_chunks, PORT_DESC_BYTES, ttnn.float32, full),
-            *([_cb(CB_STAGE, stage_max_pages, out_page, out_dtype, full)] if stage_max_pages else []),
-            # program-scoped: same address on every core of every chip, no persistent L1 (see agrn_common.hpp)
-            _cb(CB_STATS_TABLE, table_bytes // RECORD_BYTES, RECORD_BYTES, ttnn.float32, full),
-        ]
-        if has_gamma:
-            cbs.append(_cb(CB_GAMMA, cw_max, gamma_page, g_dtype, full))
-            cbs.append(_cb(CB_GAMMA_ROWS, 1, (cw_max + 2) * 128 + 64, ttnn.float32, full))
-        if has_beta:
-            cbs.append(_cb(CB_BETA, cw_max, gamma_page, g_dtype, full))
-        if is_ln or mask_tail:
-            # T_acc like cb_ln_sq: the reduce helper's masked fold (interleaved LN T) unpacks the mask as srcB without a
-            # format reconfig. Sharded LN on a 16-bit-mantissa x: cb_ln_sq ((x - K)^2 scratch, one block of tiles
-            # beside the caller's resident in/out shards) is bf16 — the sharded paths never fold it with the mask.
-            sq_dtype = ttnn.bfloat16 if (is_ln and x_sharded and not x_is_f32) else acc_dtype
-            cbs += [
-                _cb(CB_MASK, cw_max if mask_tail else 1, T_acc, acc_dtype, full),  # sharded tail: the mask block
-                _cb(CB_LN_SQ, row_chunk * cw_max, ttnn.tile_size(sq_dtype), sq_dtype, full),
-            ]
-        if is_ln:
-            cbs += [
-                _cb(CB_LN_M, row_chunk, T32, ttnn.float32, full),
-                _cb(CB_LN_SHIFT, row_chunk, T32, ttnn.float32, full),
-                _cb(CB_STAT_CONSTS, gt_pc if pre_combine else gather_tiles, T32, ttnn.float32, full),
-                _cb(CB_MEAN_COL, row_chunk, T32, ttnn.float32, full),
-                _cb(CB_MEAN_B, row_chunk, T32, ttnn.float32, full),
-                _cb(CB_RSTD_B, row_chunk, T_acc, acc_dtype, full),
-                _cb(CB_LN_TMP, row_chunk * gt_max, T32, ttnn.float32, full),
-            ]
-            if pre_combine:
-                cbs += [
-                    _cb(CB_STAT_CONSTS_X, gather_tiles, T32, ttnn.float32, full),
-                    _cb(CB_FINAL_MEAN, row_chunk, T32, ttnn.float32, full),
-                ]
-            # 16-bit DEST / sharded input: the LN paths read cb_x itself (bf16 / bf8b lands in DEST exactly anyway)
-            if not x_is_f32 and fp32_dest and not x_sharded:
-                cbs.append(_cb(CB_X32, crt_max * cw_max, T32, ttnn.float32, full))
-        else:
-            cbs.append(_cb(CB_SUMSQ, row_chunk, T_acc, acc_dtype, full))
-        if xg_pre:
-            cbs.append(_cb(CB_XG, crt_max * cw_max, T_acc, acc_dtype, full))
-        if is_ru:
-            cbs.append(_cb(CB_ASSEMBLE, src_max + 1, out_page, out_dtype, full))
-        if pre_combine:
-            x_stats_desc = ttnn.cb_descriptor_from_sharded_tensor(CB_X_STATS, input_tensor)  # zero-copy, 2nd view
-            x_stats_desc.core_ranges = full
-            cbs += [
-                x_stats_desc,
-                _cb(CB_PRE_TABLE, rpo * k * nstats, RECORD_BYTES, ttnn.float32, full),
-                _cb(CB_FINAL_TABLE, geo.R * nfinal, RECORD_BYTES, ttnn.float32, full),
-                _cb(CB_FINAL_INV, row_chunk, T32, ttnn.float32, full),
-            ]
-        if out_l1_interleaved:
-            _check_l1_interleaved_fit(mesh_device, cbs, output_tensor)
-        program.cbs = cbs
+        program.cbs = make_cbs(p, stage_max_pages)
 
         # ---- worker kernels (common runtime args only) ----
         worker_set = full.subtract(_single_cores(port_set))

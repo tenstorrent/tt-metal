@@ -495,3 +495,21 @@ Nothing graduated, so no raw LLK or helper bypass was added.
     640×32, 640×512, fp32 128×384, non-aligned 17×50 and 100×512), `test_l1_interleaved_preallocated_output`, and
     `test_l1_interleaved_input_refused`.
   - `test_all_gather_rms_norm_l1_fit_debug.py`: the largest golden shapes, fp32 / bf16 LN, with an L1 output.
+
+## Refinement 5b — L1 INTERLEAVED output: gate fix (CB clash on 640×1536 fp32 HEIGHT_SHARDED)
+- Date: 2026-11-24
+- What was done: the harness gate failed `test_sharded_and_16bit_dest[1x1x640x1536-HEIGHT_SHARDED-rms_norm-FLOAT32-fp32dest1]`
+  with `Statically allocated circular buffers ... clash with L1 buffers` (program.cpp:2535). It is not new in Refinement 5
+  (the pre-Refinement-5 descriptor fails the same way): Perf 1's own-entry staging CB (`cb_stage`, up to 128 KiB/core) was
+  sized without looking at the L1 the caller's big output shard leaves free. The fix: the CB list is built by one closure
+  (`make_cbs(p, stage_pages)`), its non-staging static bytes are measured against the room below the lowest allocated L1
+  buffer (memory-view block table, `_l1_cb_room`), and the staging budget is min(`STAGE_L1_BUDGET`, what is left); a
+  budget below one chunk turns staging off (the existing read-back path). The Refinement 5 L1-interleaved fit guard is
+  generalized into `_check_l1_fit` (any L1 tenant, shard-backed CBs excluded) — refuses with `UnsupportedAxisValue` and
+  the numbers instead of a CB clash. No kernel change; the staging cap binds (as before) on every other shape.
+- Accuracy achieved: unchanged (helpers.TOLERANCES; the failing cell now passes).
+- Golden test progress: full suite 1543 passed, 138 skipped, 128 xfailed, 0 failed, 0 hangs.
+- Issues encountered: running the whole unit-test directory in one pytest process mixes the
+  `perf_experiments/fabric_mcast_relay` bench's own mesh fixture with the op tests (`devices_still_open`); that bench
+  (Perf 2 record) fails on its own with or without this change. Every op test file passes run on its own.
+- Tests added: none (the gate's failing case pins it).

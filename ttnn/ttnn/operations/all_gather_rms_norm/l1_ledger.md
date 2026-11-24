@@ -184,7 +184,7 @@ is CPU-bound per page, not DRAM-bound. `OWN_SRC_DST = 0` restores the L1 pull (6
 | `cb_stats_table` | 25 | unchanged (`G · R · kt · nstats` × 128 B, full range) | **now live on every core**: the hubs multicast each completed slot into the same address on the whole program grid (the fwd hub the own slot once the records are in, each hub the slots landing in it), so the workers gather from their own L1. Before, the copy on workers was allocated but unused (identical-address rule). Shares: none (written by the multicast during the stats round, read by the gather). |
 | `cb_record_landing` | 11 | — | **deleted**: the gather places the records straight from the local table (no hub read, no landing copy). Frees `G · kt · nstats` × 128 B per core. |
 | `cb_xg` | 33 | `crt_max · cw_max` × `T_acc` (focus: 3 × 4 KiB) | **new, only with `XG_PRE = 1`** (default 0, parked): x·γ of the block, computed in the stats shadow, read by the normalize. Gated by `XG_L1_BUDGET` = 128 KiB. Shares: cannot alias `cb_x` (bf16 x would round x·γ a second time) or `cb_out_block` (the normalize reads `cb_xg` while packing `cb_out_block`). |
-| `cb_stage` (active workers; full range, identical-address rule) | 34 | `ceil(L · nch / n_active) · run_pages` × `out_page`, capped by `STAGE_L1_BUDGET` = 128 KiB (focus: 1 slot × 7 × 2 KiB = 14 KiB; 2048×1280 bf16 ≈ 56 KiB) | **Perf 1**: own-entry staging. Chunk g of a port's own walk lives on worker g·n_active/(L·nch); every worker writes its normalized pages there (NoC1), the port reads each packet with ≤ 2 L1 reads. Live from the normalize to the end of the own entry; cannot alias `cb_out_block` (a worker's own block and the chunks it hosts are different pages). Past the cap, a lane's walk tail is read back from DRAM. |
+| `cb_stage` (active workers; full range, identical-address rule) | 34 | `ceil(L · nch / n_active) · run_pages` × `out_page`, capped by min(`STAGE_L1_BUDGET` = 128 KiB, the L1 left below the lowest L1 buffer after every other CB) (focus: 1 slot × 7 × 2 KiB = 14 KiB; 2048×1280 bf16 ≈ 56 KiB) | **Perf 1**: own-entry staging. Chunk g of a port's own walk lives on worker g·n_active/(L·nch); every worker writes its normalized pages there (NoC1), the port reads each packet with ≤ 2 L1 reads. Live from the normalize to the end of the own entry; cannot alias `cb_out_block` (a worker's own block and the chunks it hosts are different pages). Past the cap, a lane's walk tail is read back from DRAM. |
 | own-ready band counters | — | `OWN_BANDS_MAX` = 16 global semaphores on the port cores (16 B each) | **new, only used with `OWN_BANDS > 1`** (default 1, parked). Persistent and re-armed at the end of every call. |
 
 Data-movement budget: unchanged in DRAM. The cross-core NoC drops from ~80 · G · 2 hub reads per call (the
@@ -208,9 +208,19 @@ effect); not done to keep one CB layout per program variant. Data-movement budge
   live across the call and after it.
 - `cb_stage` is now live for an aligned L1 interleaved output too: the row-major walk (shard_w = 1, see op_design.md
   Refinement 5) puts it under the existing `stage_on` rule (row lanes), same size formula as above.
-- Fit guard (`_check_l1_interleaved_fit`): CB region end = L1 base + Σ CBs (64 B aligned) must stay below the
-  output's bank address, else `UnsupportedAxisValue` with the numbers. Measured headroom: 640×384 bf16 RMS — CBs end at
+- Fit guard (`_check_l1_fit`, generalized in Refinement 5b): L1 base + Σ static CBs except `cb_stage` (64 B aligned;
+  shard-backed CBs excluded) must stay below the LOWEST allocated L1 buffer (memory-view block table — the L1 output, the
+  caller's shards, any other live L1 tensor), else `UnsupportedAxisValue` with the numbers; `cb_stage` then gets what is
+  left (≤ 128 KiB), or is dropped when not one chunk fits (the read-back path). Measured headroom: 640×384 bf16 RMS — CBs end at
   380 800 B, output at 1 168 128 B (787 KB free); 2048×1280 fp32 LN + γ + β (the largest golden shape) — CBs end at
   810 880 B, output at 1 187 840 B (377 KB free). Every golden INPUTS shape fits (fp32 and bf16), so no EXCLUSIONS entry.
 - Data-movement budget: the output write moves from DRAM to L1 (same bytes, 1 crossing per output page per chip); the
   R_U staging scratch stays in DRAM.
+
+## Refinement 5b — cb_stage sized from the free L1 (gate fix)
+
+- 640×1536 fp32 HEIGHT_SHARDED RMS (fp32 DEST): the 786 432 B output shard sits at 393 216 B, so the static CB region may
+  use 281 600 B above the base (111 616 B). The non-staging CBs take 187 328 B; `cb_stage` at its 128 KiB cap (30 × 4 KiB
+  pages = 122 880 B) pushed the region to 421 824 B — the program's CB clash. Now `cb_stage` gets
+  min(128 KiB, 281 600 − 187 328 − 64) = 94 208 B → 23 pages; the walk tail beyond the staged prefix reads back from the
+  output shard. Every other shape is unchanged (the cap, not the room, binds).
