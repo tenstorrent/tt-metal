@@ -563,7 +563,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id].get_mcast_wptr();
     const SubDeviceRecorder sub_device_recorder(mesh_device_, sub_device_id);
 #if defined(TRACY_ENABLE)
-    // Device zones reach Tracy only while a profiler is connected, so tag only then.
+    // Device zones reach Tracy only while a profiler is connected.
     const bool tag_tracy_zones =
         !tt::tt_metal::getDeviceProfilerState(mesh_device_->impl().metal_env()) && TracyIsConnected;
 #endif
