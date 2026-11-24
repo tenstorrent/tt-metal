@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include "combine_program.hpp"
 #include <tuple>
 #include <optional>
@@ -175,6 +176,15 @@ tt::tt_metal::KernelHandle dm_kernel(
     merge_named(named, options);
     kernel_descriptor.compile_time_args = std::move(ct);
     kernel_descriptor.named_compile_time_args = std::move(named);
+    if (std::getenv("ZZ_TIMING")) {  // (measurement probe: port / y-writer wait breakdowns)
+            kernel_descriptor.defines.emplace_back("ZZ_TIMING", "1");
+        }
+        if (const char* zz = std::getenv("ZZ_REC_ADDR")) {  // (TEMPORARY local probe)
+        kernel_descriptor.defines.emplace_back("ZZ_REC_ADDR", zz);
+            if (const char* zm = std::getenv("ZZ_REC_MODE_ADDR")) {
+                kernel_descriptor.defines.emplace_back("ZZ_REC_MODE_ADDR", zm);
+            }
+    }
     kernel_descriptor.opt_level = tt::tt_metal::KernelBuildOptLevel::O2;  // (DataMovementConfig's default)
     kernel_descriptor.config = tt::tt_metal::DataMovementConfigDescriptor{
         .processor =
@@ -483,6 +493,13 @@ std::shared_ptr<const CombinePlan> make_combine_plan(
     }
     plan->injection_ring_slots = injection_ring_slots;
     plan->local_ring_slots = local_ring_slots;
+    log_debug(  // (measurement probe)
+        tt::LogOp,
+        "ZZCOMB injection_ring_slots {} (wanted {}) local_ring_slots {} accumulators_on_ports {} landing_on_flat {} "
+        "shared_landing {} landing_slots_per_source {} A {} slot_bytes {} arena {}",
+        injection_ring_slots, injection_ring_slots_wanted, local_ring_slots, plan->accumulators_on_ports,
+        landing_on_flat_expert_cores, plan->shared_landing, plan->landing_slots_per_source, plan->accumulator_count,
+        slot_bytes, in.arena_bytes);
     // the placement (sparse_combine_rf_prepare.build): ports apart - the injection ring at the state block's end, the
     // accumulator table after it, then CB_TAB; accumulators - CB_TAB and their CBs after the landing pool, then the
     // local ring (accumulators on the ports: then the injection ring)

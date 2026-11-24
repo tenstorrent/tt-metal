@@ -30,6 +30,9 @@
 // blocks; 0: one load)
 // Runtime args: 0 with 16-column units, 1 when this core's first unit is the right half of an h tile
 #include <cstdint>
+#ifndef ZZ_PROBE  // (TEMPORARY local probe - not for commit)
+#define ZZ_PROBE 0
+#endif
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
@@ -125,6 +128,9 @@ __attribute__((noinline)) void matmul_x_block_short(uint32_t x_index, uint32_t w
 
 template <uint32_t FULL>
 FORCE_INLINE void matmul_x_block(uint32_t x_index, uint32_t w_index, uint32_t rows) {
+    if constexpr (ZZ_PROBE & 8192) {  // (probe: no gate/up matmul)
+        return;
+    }
     if (rows == FULL) [[likely]] {
         for (uint32_t k = 0; k < x_block_k_tiles; ++k) {
             matmul_block(x_cb, weight_cb, x_index + k, w_index + k * row_width, 0, false, row_width, FULL, x_block_k_tiles);

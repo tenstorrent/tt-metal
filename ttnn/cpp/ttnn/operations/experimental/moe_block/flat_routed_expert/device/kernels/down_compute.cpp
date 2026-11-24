@@ -15,6 +15,10 @@
 // Named compile-time args (flat_options.hpp): row_tiles_per_sub_block, intermediate_tiles (the K tiles),
 // down_k_block_tiles (K tiles per weight block), down_columns (y tile columns of this core), down_block_tiles (tiles
 // per weight block), down_weight_ring_blocks (the in1 ring's blocks)
+#include "api/debug/kernel_profiler.hpp"
+#ifndef ZZ_PROBE  // (TEMPORARY local probe - not for commit)
+#define ZZ_PROBE 0
+#endif
 #include <cstdint>
 
 #include "api/compute/compute_kernel_api.h"
@@ -109,6 +113,7 @@ void compute_schedule() {
     };
     read_entry();
     for (uint32_t done = 0; done < total_sub_blocks; ++done) {
+        DeviceZoneScopedN("DN-SB");  // (profiling: one sub-block, the h wait included)
         const bool last_sub_block = sub_block + 1 == entry_sub_blocks;
         // row tiles holding tokens (the rest are never written out)
         const uint32_t rows = last_sub_block ? entry_last_row_tiles : row_tiles;
@@ -140,7 +145,7 @@ void compute_schedule() {
                                                             load * blocks_per_expert + block, region_first_slot + block)
                                                       : weight_block(entry * blocks_per_expert + block);
                     }
-                    matmul_block(
+                    if (!(ZZ_PROBE & 16384)) matmul_block(  // (probe: no down matmul)
                         h_cb,
                         weight_cb,
                         row + k * row_tiles,

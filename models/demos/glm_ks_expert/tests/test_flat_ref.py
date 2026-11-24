@@ -85,3 +85,37 @@ def test_flat_ref_profile(device, M):
     for _ in range(3):
         ttnn.deallocate(op(*args))
     ttnn.ReadDeviceProfiler(device)
+
+
+UTIL = [("glm53", e, M) for e in (8, 16) for M in (32, 64, 96, 128, 160, 256, 320, 512, 768, 1024)]
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
+@pytest.mark.parametrize("model, epc, M", UTIL, ids=lambda v: str(v))
+def test_flat_util(device, model, epc, M):
+    """The flat expert alone: DRAM (weights only / with x and y) % of 512 GB/s, math % of LoFi peak on its compute
+    cores and on the whole grid."""
+    chk._skip_unless_supported(device)
+    md = chk.cases.MODELS[model]
+    gids = [(md["E"] // epc) * e + 1 for e in range(epc)]
+    op = W.FlatRoutedExpert(
+        device, "uninitialized", m=max(CAP, epc * M), H=md["H"], I=md["I"], gids=[gids], n_global=md["E"],
+        act=md["act"], pin=1,
+    )  # fmt: skip
+    lay = op.lay
+    args = _inputs(device, md, gids, M)
+    ttnn.deallocate(op(*args))
+    t = op_device_times(device, lambda: [ttnn.deallocate(op(*args)) for _ in range(PERF_RUNS)], chk.FLAT_OPS)
+    us = statistics.median(t["flat_routed_expert"][-PERF_RUNS:]) / 1e3
+    H, I = md["H"], md["I"]
+    grid = device.compute_with_storage_grid_size()
+    n_compute = len(lay["gate_up_cores"]) + lay["down_core_count"]
+    w = epc * 3 * H * I / 1024 * 576
+    xy = epc * M * H * (2 + 1088 / 1024)
+    peak = 4096 * 1.35e9
+    flops = epc * M * 6 * H * I
+    logger.info(
+        f"[util] FLAT {md['name']} e{epc} M {M}: {us:.1f} us, DRAM {w / (us * 1e-6) / 512e9:.1%} (with x / y "
+        f"{(w + xy) / (us * 1e-6) / 512e9:.1%}), math {flops / (us * 1e-6) / (peak * n_compute):.1%} of {n_compute} "
+        f"({flops / (us * 1e-6) / (peak * grid.x * grid.y):.1%} of {grid.x * grid.y})"
+    )

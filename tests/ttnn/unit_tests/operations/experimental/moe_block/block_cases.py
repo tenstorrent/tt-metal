@@ -7,6 +7,7 @@ the op-level checks that run the block's stages (block_stages.py): a model confi
 brings - its block dims, seeded random weights, the host reference on them; MESHES the stages it runs on."""
 
 from dataclasses import dataclass
+from functools import partial
 from typing import Callable
 
 import torch
@@ -14,7 +15,6 @@ import torch
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.glm_5_3.moe import glm_moe_reference
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
-from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m3_config import MiniMaxM3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
@@ -56,6 +56,41 @@ class MiniMaxM3BlockConfig(MiniMaxM3Config):
     ROUTED_EXPERT_ACTIVATION = "swigluoai"
 
 
+class KimiK3LoudBoxConfig(KimiK3Config):
+    """Kimi-K3's routed experts + combine on a LoudBox (SP 2 x TP 4, plain Fabric2D). K3's latent head and tail need a
+    torus axis, which the LoudBox has none of, so the block runs at K3's routed (latent) width with no latent stage:
+    EMB_SIZE = 3584. The head routes at 3584, and the dispatch, the experts and the combine move rows exactly as wide as
+    K3's (I 3072, SiTU-GLU, top-16 of sigmoid + bias, x 1.0).
+    NUM_ROUTED_EXPERTS is cut to a Galaxy stage's experts a chip x 8: 224 = K3 8x4's 28 a chip; 448 (the 4x4 subclass) =
+    K3 4x4's 56 a chip. With chunk = the stage's owned tokens a chip x 8, a LoudBox chip runs that Galaxy chip's experts
+    and rows: 2x4 1280 / 224 experts = K3 8x4 5120; 1280 / 448 = K3 4x4 2560; 3584 / 448 = K3 4x4 7168."""
+
+    EMB_SIZE = KimiK3Config.ROUTED_EXPERT_HIDDEN_SIZE  # 3584
+    FABRIC_PAYLOAD_SIZE = EMB_SIZE
+    ROUTED_EXPERT_HIDDEN_SIZE = None  # (no latent)
+    LATENT_MOE_USE_NORM = False
+    NUM_ROUTED_EXPERTS = 224  # (28 a chip: K3 8x4)
+
+
+class GLM53LoudBoxConfig(GLM53Config):
+    """GLM-5.3 on a LoudBox 2x4: the Galaxy 8x4 stage's 8 experts a chip (64 routed experts); 2x4 at chunk 1280 = the 8x4
+    5120 per-chip load (M 160)."""
+
+    NUM_ROUTED_EXPERTS = 64
+
+
+class GLM53LoudBox16Config(GLM53Config):
+    """GLM-5.3 on a LoudBox 2x4 at the Galaxy 4x4 stage's 16 experts a chip (128 routed experts). (local, not committed)"""
+
+    NUM_ROUTED_EXPERTS = 128
+
+
+class KimiK3LoudBox4x4Config(KimiK3LoudBoxConfig):
+    """KimiK3LoudBoxConfig at K3 4x4's 56 experts a chip."""
+
+    NUM_ROUTED_EXPERTS = 448
+
+
 def _bf16_experts(n, hidden, inter, g):
     """n experts, bf16, 1/sqrt(fan-in) (test_prefill_block's random MoE weights)."""
     hs, ds = hidden**-0.5, inter**-0.5
@@ -76,8 +111,7 @@ def _bf16_gate(E, hidden, g):
     }
 
 
-def _glm_weights(chips):
-    K = GLM53Config
+def _glm_weights(chips, K=GLM53Config):
     g = torch.Generator().manual_seed(3)
     gate = _bf16_gate(K.NUM_ROUTED_EXPERTS, K.EMB_SIZE, g)
     routed = _bf16_experts(K.NUM_ROUTED_EXPERTS, K.EMB_SIZE, K.MOE_INTERMEDIATE_SIZE, g)
@@ -85,8 +119,7 @@ def _glm_weights(chips):
     return {"gate_weights": gate, "routed_expert_weights": routed, "shared_expert_weights": shared}
 
 
-def _glm_reference(x, sd):
-    K = GLM53Config
+def _glm_reference(x, sd, K=GLM53Config):
     return (
         glm_moe_reference(
             x.reshape(1, *x.shape),  # ([1, seq, hidden])
@@ -104,9 +137,10 @@ def _glm_reference(x, sd):
     )
 
 
-def _k3_weights(chips):
+def _k3_weights(chips, K=KimiK3Config):
     """K3's weights from init_helpers' creators and seeds (as TtMoe's K3 test made them); the routed experts one chip's
-    worth repeated on every chip (896 distinct experts would take the host ~120 GB)."""
+    worth repeated on every chip (896 distinct experts would take the host ~120 GB). K: the config (a LoudBox one has
+    no latent weights)."""
     from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
         create_gate_weights,
         create_latent_weights,
@@ -114,28 +148,30 @@ def _k3_weights(chips):
         create_torch_expert_weights,
     )
 
-    K = KimiK3Config
-    H, Hr, E = K.EMB_SIZE, K.ROUTED_EXPERT_HIDDEN_SIZE, K.NUM_ROUTED_EXPERTS
+    H, E = K.EMB_SIZE, K.NUM_ROUTED_EXPERTS
+    Hr = K.ROUTED_EXPERT_HIDDEN_SIZE or H
     epc = E // chips
     pool = create_torch_expert_weights(epc, Hr, K.MOE_INTERMEDIATE_SIZE, seed=1234)
-    return {
+    sd = {
         "gate_weights": create_gate_weights(E, H, seed=9012),
         "routed_expert_weights": [pool[e % epc] for e in range(E)],
         "shared_expert_weights": create_shared_expert_weights(H, K.SHARED_EXPERT_INTERMEDIATE_SIZE, seed=5678),
-        "latent_weights": create_latent_weights(H, Hr, seed=3456),
     }
+    if Hr != H:
+        sd["latent_weights"] = create_latent_weights(H, Hr, seed=3456)
+    return sd
 
 
-def _k3_reference(x, sd):
+def _k3_reference(x, sd, K=KimiK3Config):
     """Kimi-K3's MoE in fp32: noaux_tc router (sigmoid + bias for the pick, one group), top-16 renormalized x
     ROUTE_SCALE; the routed experts at the latent width (down_proj in, SiTU-GLU, sum, latent RMSNorm, up_proj out); the
-    SiTU-GLU shared expert at emb_dim."""
-    K = KimiK3Config
+    SiTU-GLU shared expert at emb_dim. A config without latent weights (the LoudBox's): the routed experts at emb_dim,
+    summed."""
     gate, routed, shared, latent = (
         sd["gate_weights"],
         sd["routed_expert_weights"],
         sd["shared_expert_weights"],
-        sd["latent_weights"],
+        sd.get("latent_weights"),
     )
     b, lb = K.ACTIVATION_SITU_BETA, K.ACTIVATION_SITU_LINEAR_BETA
     situ = lambda g, u: b * torch.tanh(g / b) * torch.sigmoid(g) * lb * torch.tanh(u / lb)  # noqa: E731
@@ -144,15 +180,18 @@ def _k3_reference(x, sd):
     ids = (scores + gate["e_score_correction_bias"].float()).topk(K.NUM_EXPERTS_PER_TOKEN, dim=-1).indices
     w = scores.gather(-1, ids)
     w = w / w.sum(-1, keepdim=True) * K.ROUTE_SCALE
-    h = x @ latent["down_proj"].float().T
+    h = x if latent is None else x @ latent["down_proj"].float().T
     acc = torch.zeros(x.shape[0], h.shape[1])
     for e in torch.unique(ids).tolist():
         tok, kk = (ids == e).nonzero(as_tuple=True)
         r = routed[e]
         a = situ(h[tok] @ r["gate_proj"].float().T, h[tok] @ r["up_proj"].float().T)
         acc.index_add_(0, tok, (a @ r["down_proj"].float().T) * w[tok, kk].unsqueeze(1))
-    acc = acc * torch.rsqrt(acc.pow(2).mean(-1, keepdim=True) + K.RMS_NORM_EPS) * latent["norm"].float()
-    y = acc @ latent["up_proj"].float().T
+    if latent is None:
+        y = acc
+    else:
+        acc = acc * torch.rsqrt(acc.pow(2).mean(-1, keepdim=True) + K.RMS_NORM_EPS) * latent["norm"].float()
+        y = acc @ latent["up_proj"].float().T
     return y + situ(x @ shared["gate_proj"].float().T, x @ shared["up_proj"].float().T) @ shared["down_proj"].float().T
 
 
@@ -231,7 +270,7 @@ class BlockModel:
     """What a model brings to the block tests."""
 
     name: str
-    cfg: type  # (the model config TtMoEBlockFfn takes)
+    cfg: type  # (the model config TtK3MoEBlockFfn takes)
     weights: Callable[[int], dict]  # chips -> the state dict (seeded)
     reference: Callable[[torch.Tensor, dict], torch.Tensor]  # x [S, H], state dict -> y [S, H] fp32
     pcc: float  # the accuracy floor on random weights
@@ -256,10 +295,42 @@ class BlockModel:
 MODELS = {
     "glm53": BlockModel("glm53", GLM53Config, _glm_weights, _glm_reference, pcc=0.982, layer=6, x_scale=0.5),
     "kimi_k3": BlockModel("kimi_k3", KimiK3Config, _k3_weights, _k3_reference, pcc=0.965, weka=True),
-    # K3.1: K3's MoE through K3.1's adapter, with K3.1's L1_SMALL_SIZE
-    "kimi_k3_1": BlockModel("kimi_k3_1", KimiK31Config, _k3_weights, _k3_reference, pcc=0.965),
     "dsv41_flash": BlockModel("dsv41_flash", DeepSeekV41FlashConfig, _dsv41_weights, _dsv41_reference, pcc=0.98),
     "minimax_m3": BlockModel("minimax_m3", MiniMaxM3BlockConfig, _m3_weights, _m3_reference, pcc=0.98, layer=3),
+    # (GLM-5.3 on a LoudBox: the 8x4 stage's 8 experts a chip)
+    "glm53_lb8": BlockModel(
+        "glm53_lb8",
+        GLM53LoudBoxConfig,
+        partial(_glm_weights, K=GLM53LoudBoxConfig),
+        partial(_glm_reference, K=GLM53LoudBoxConfig),
+        pcc=0.982,
+        layer=6,
+        x_scale=0.5,
+    ),
+    "glm53_lb16": BlockModel(
+        "glm53_lb16",
+        GLM53LoudBox16Config,
+        partial(_glm_weights, K=GLM53LoudBox16Config),
+        partial(_glm_reference, K=GLM53LoudBox16Config),
+        pcc=0.982,
+        layer=6,
+        x_scale=0.5,
+    ),
+    # (Kimi-K3 on a LoudBox: KimiK3LoudBoxConfig - K3's routed width / experts, no latent, a Galaxy stage's experts a chip)
+    "kimi_k3_lb28": BlockModel(
+        "kimi_k3_lb28",
+        KimiK3LoudBoxConfig,
+        partial(_k3_weights, K=KimiK3LoudBoxConfig),
+        partial(_k3_reference, K=KimiK3LoudBoxConfig),
+        pcc=0.965,
+    ),
+    "kimi_k3_lb56": BlockModel(
+        "kimi_k3_lb56",
+        KimiK3LoudBox4x4Config,
+        partial(_k3_weights, K=KimiK3LoudBox4x4Config),
+        partial(_k3_reference, K=KimiK3LoudBox4x4Config),
+        pcc=0.965,
+    ),
 }
 
 

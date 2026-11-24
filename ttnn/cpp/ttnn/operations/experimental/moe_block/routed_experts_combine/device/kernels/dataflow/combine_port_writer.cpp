@@ -45,6 +45,19 @@
 #include "combine_formats.hpp"
 #include "combine_options.hpp"
 #include "../combine_names.hpp"
+#include "api/debug/kernel_profiler.hpp"  // (measurement probes: ZZ_TIMING, ZZ_REC_ADDR)
+#ifdef ZZ_TIMING
+#define ZZT(...) __VA_ARGS__
+#else
+#define ZZT(...)
+#endif
+#ifdef ZZ_REC_ADDR  // (TEMPORARY local probe: record / replay the hand-off's row trailers - mode word at page 0)
+#define ZZ_REC_MAXR 4096
+FORCE_INLINE uint64_t zz_rec_noc(uint32_t page) {
+    return get_noc_addr_from_bank_id<true>(page % NUM_DRAM_BANKS, ZZ_REC_ADDR + (page / NUM_DRAM_BANKS) * 64);
+}
+FORCE_INLINE uint64_t zz_mode_noc() { return get_noc_addr_from_bank_id<true>(0, ZZ_REC_MODE_ADDR); }
+#endif
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/combine_plan_words.hpp"
 using namespace tt::tt_fabric;
 
@@ -145,9 +158,10 @@ void kernel_main() {
     } else {
         rec::wait_released(bar_addr, call);  // (the accumulator's reader on this core zeroes it)
     }
-    uint32_t n_inj = 0, n_ret = 0;
+    uint32_t n_inj = 0, n_ret = 0, zz_pid = 0, zz_mode = 0;
     {  // (the device plan: this port's counts at its id)
         const uint32_t plan = moe_block_args::arg(a++), pid = moe_block_args::arg(a++);
+        zz_pid = pid;
         const uint32_t sc = (area + MISC + 4 * combine_formats::kMiscPlanScratch + 63) & ~63u;
         noc_async_read(
             TensorAccessor(plan_args, plan, moe_block_plan_words::kPlanBytes).get_noc_addr(0),
@@ -156,6 +170,11 @@ void kernel_main() {
         noc_async_read_barrier();
         n_inj = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sc)[pid];
         n_ret = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sc)[8 + pid];
+#ifdef ZZ_REC_ADDR
+        noc_async_read(zz_mode_noc(), sc, 64);
+        noc_async_read_barrier();
+        zz_mode = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sc)[0];
+#endif
     }
     uint16_t chip_id[N];
     for (uint32_t i = 0; i < N; ++i) {
@@ -288,6 +307,30 @@ void kernel_main() {
         if (!accumulators_on_ports || hpushed >= n_inj) {
             return;
         }
+#ifdef ZZ_REC_ADDR
+        if (zz_mode == 2) {  // (replay: every free slot gets its recorded trailer at once - no writers)
+            const uint32_t ilim = get_local_cb_interface(cb_inj).fifo_limit;
+            const uint32_t isz = get_local_cb_interface(cb_inj).fifo_size;
+            uint32_t g = hgranted;
+            while (g < n_inj && cb_pages_reservable_at_back(cb_inj, g - hpushed + 1)) {
+                uint32_t slot = get_write_ptr(cb_inj) + (g - hpushed) * ISLOT;
+                if (slot >= ilim) {
+                    slot -= isz;
+                }
+                noc_async_read(zz_rec_noc(1 + zz_pid * ZZ_REC_MAXR + g), slot + LASTPB, 32);
+                ++g;
+            }
+            if (g > hgranted) {
+                noc_async_read_barrier();
+                hgranted = g;
+            }
+            while (hpushed < hgranted) {
+                cb_push_back(cb_inj, 1);
+                ++hpushed;
+            }
+            return;
+        }
+#endif
         const uint32_t want = hpushed + hQ < n_inj ? hpushed + hQ : n_inj;
         uint32_t g = hgranted;
         while (g < want && cb_pages_reservable_at_back(cb_inj, g - hpushed + 1)) {
@@ -305,6 +348,12 @@ void kernel_main() {
             m = v < m ? v : m;
         }
         while (hpushed < m && hpushed < hgranted) {
+#ifdef ZZ_REC_ADDR
+            if (zz_mode == 1) {  // (record: the landed row's trailer)
+                noc_async_write(get_write_ptr(cb_inj) + LASTPB, zz_rec_noc(1 + zz_pid * ZZ_REC_MAXR + hpushed), 32);
+                noc_async_write_barrier();
+            }
+#endif
             cb_push_back(cb_inj, 1);
             ++hpushed;
         }
@@ -370,6 +419,8 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* gidh = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(area + grant_ids_offset);
     volatile tt_l1_ptr uint32_t* grec = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(area + grant_snapshots_offset);
     uint32_t inj_done = 0, sent = 0, unflushed = 0;
+    ZZT(uint32_t zz_fab = 0, zz_flush = 0, zz_busy = 0, zz_blocked = 0, zz_norow = 0, zz_tail = 0;)  // (probe)
+    ZZT(bool zz_blockedrow = false;)
     // skip-ahead: rows of the injection ring go out in any order (a row waits only for its own ring's room or grant,
     // not for the rows ahead of it); bit j: the row j pages past the ring's front is sent. The ring frees its front
     // pages once they are sent and flushed (their slots are written again by the hand-off)
@@ -543,7 +594,9 @@ void kernel_main() {
         constexpr uint32_t pb = row_bytes + 32;
         auto* h = hdr_at(home, sent % NH);
         h->to_noc_unicast_write(NocUnicastCommandHeader{dn}, pb);
+        ZZT(const uint32_t zt = get_timestamp_32b();)  // (probe: the fabric connection's back-pressure)
         conn.wait_for_empty_write_slot();
+        ZZT(zz_fab += get_timestamp_32b() - zt;)
         conn.send_current_slot_non_blocking(src, pb, reinterpret_cast<uint32_t>(h));
         ++sent;
         ++unflushed;
@@ -551,8 +604,11 @@ void kernel_main() {
         return true;
     };
 
+    ZZT(const uint32_t zz_t0 = get_timestamp_32b();)
     while (inj_done < n_inj || returned - ret0 < n_ret || acc_on_ports_more() || lay_pend) {
+        ZZT(const uint32_t zz_it = get_timestamp_32b();)
         bool did = false;
+        ZZT(bool zz_sent = false;)
         invalidate_l1_cache();
         hand_off();
         write_out();
@@ -580,16 +636,44 @@ void kernel_main() {
                 sentm |= 1u << j;
                 ++inj_done;
                 did = true;
+                ZZT(zz_sent = true;)
+            } else {
+                ZZT(zz_blockedrow = true;)
             }
         }
         if (unflushed >= NH || (!did && unflushed)) {
+            ZZT(const uint32_t zf = get_timestamp_32b();)
             flush();
+            ZZT(zz_flush += get_timestamp_32b() - zf;)
             did = true;
         }
         if (!did && pending) {
             give_back(true);
         }
+#ifdef ZZ_TIMING
+        const uint32_t zz_d = get_timestamp_32b() - zz_it;
+        if (zz_sent) {
+            zz_busy += zz_d;
+        } else if (zz_blockedrow) {
+            zz_blocked += zz_d;  // (rows here, none sendable: their rings' room / layout)
+        } else if (inj_done < n_inj) {
+            zz_norow += zz_d;  // (no row from the experts yet)
+        } else {
+            zz_tail += zz_d;  // (all rows out: credits / layouts / drain)
+        }
+        zz_blockedrow = false;
+#endif
     }
+#ifdef ZZ_TIMING
+    DeviceTimestampedData("ZZ-PLOOP", get_timestamp_32b() - zz_t0);
+    DeviceTimestampedData("ZZ-PBUSY", zz_busy);
+    DeviceTimestampedData("ZZ-PFAB", zz_fab);
+    DeviceTimestampedData("ZZ-PFLUSH", zz_flush);
+    DeviceTimestampedData("ZZ-PBLOCK", zz_blocked);
+    DeviceTimestampedData("ZZ-PNOROW", zz_norow);
+    DeviceTimestampedData("ZZ-PTAIL", zz_tail);
+    DeviceTimestampedData("ZZ-PROWS", n_inj);
+#endif
     flush();
     misc[combine_formats::kMiscReturned] = returned;
     if constexpr (accumulators_on_ports) {

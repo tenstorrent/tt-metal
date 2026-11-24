@@ -24,6 +24,9 @@
 // 3.. the schedule args (expert_schedule.hpp); with row-major y then the y address and this core's first y tile
 // column; running with the combine then this core's writer index, report and hand-off args (flat_program.hpp)
 #include <cstdint>
+#ifndef ZZ_PROBE
+#define ZZ_PROBE 0
+#endif
 #include <type_traits>
 
 #include "api/dataflow/dataflow_api.h"
@@ -135,7 +138,7 @@ void kernel_main() {
             landing[i] = destination(block + i, i);
         }
         for (uint32_t i = 0; i < count; ++i) {
-            noc_async_read(block_source(expert_block(block + i)), landing[i], block_bytes);
+            if (!(ZZ_PROBE & 4)) noc_async_read(block_source(expert_block(block + i)), landing[i], block_bytes);
         }
         while (!ncrisc_noc_reads_flushed(noc_index)) {
             poll_y();

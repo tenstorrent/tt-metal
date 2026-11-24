@@ -33,6 +33,9 @@
 // RT: 0 the grant counter's sem id here, 1 column group CG, 2 NH (chain heads of the group), 3 the GATH sem id, 4
 //     h_all address, 5.. the expert_schedule.hpp args. Common args: the NH head xy
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/moe_block_args.hpp"
+#ifndef ZZ_PROBE
+#define ZZ_PROBE 0
+#endif
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "expert_schedule.hpp"
@@ -70,7 +73,7 @@ void kernel_main() {
     static_assert(!units || (ncc * units_per_core) % 2 == 0);
     static_assert(!units || h_tile_bytes == 2048 || h_tile_bytes == 1088, "16-column units: bf16 or bfp8 h tiles");
     auto write_h = [](uint32_t src, uint64_t dst, uint32_t bytes) {
-        noc_async_write(src, dst, bytes, noc_index, h_vc);
+        if (!(ZZ_PROBE & 1)) noc_async_write(src, dst, bytes, noc_index, h_vc);
     };
     constexpr uint32_t half_bytes = h_all_tiles * h_tile_bytes;
     static_assert(hbuf >= 1 && hbuf <= 3);

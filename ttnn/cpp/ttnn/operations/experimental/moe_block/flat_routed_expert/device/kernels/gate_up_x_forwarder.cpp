@@ -27,6 +27,9 @@
 //     3 successor xy (0: chain tail), 4 relay xy, 5 the relay's word for this core (a chain head), 6.. the
 //     gate_up_weight_read.hpp args
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/moe_block_args.hpp"
+#ifndef ZZ_PROBE
+#define ZZ_PROBE 0
+#endif
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "expert_schedule.hpp"
@@ -116,7 +119,7 @@ void kernel_main() {
                 const uint32_t off = ((iss / xp) % x_slots) * x_bytes + (iss % xp) * piece;
                 for (uint32_t o = 0; o < piece; o += NOC_MAX_BURST_SIZE) {
                     const uint32_t n = piece - o < NOC_MAX_BURST_SIZE ? piece - o : NOC_MAX_BURST_SIZE;
-                    noc_async_write_one_packet_with_trid(x_ring + off + o, s_ring + off + o, n, 1 + iss % depth);
+                    if (!(ZZ_PROBE & 32)) noc_async_write_one_packet_with_trid(x_ring + off + o, s_ring + off + o, n, 1 + iss % depth);
                 }
                 ++iss;
             }

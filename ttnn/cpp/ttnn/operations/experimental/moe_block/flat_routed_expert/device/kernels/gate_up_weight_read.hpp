@@ -13,6 +13,9 @@
 // core's first block in the bank (slot region + block j), 3 chunk bytes (RG blocks), 4 landing ring address
 #pragma once
 #include <stdint.h>
+#ifndef ZZ_PROBE
+#define ZZ_PROBE 0
+#endif
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/moe_block_args.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "flat_options.hpp"
@@ -64,7 +67,7 @@ struct GateUpWeightReads {
             const uint32_t src = base + ((v & 0xFF) * per_e + ce) * chunk + pc * pbytes;
             const uint32_t dst = land + (((v >> 8) & 0xFF) * per_e + ce) * blk + pc * pbytes;
             noc_async_read_set_trid(kGateUpReadFirstTrid + ri);
-            noc_async_read(get_noc_addr_from_bank_id<true>(bank, src), dst, pbytes);
+            if (!(ZZ_PROBE & 8)) noc_async_read(get_noc_addr_from_bank_id<true>(bank, src), dst, pbytes);
             ++iss;
             ri = ri + 1 == depth ? 0 : ri + 1;
             if (++pc == pieces) {

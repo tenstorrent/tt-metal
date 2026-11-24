@@ -58,6 +58,10 @@ class Case:
 
 CASES = [
     Case("glm53", "8x4", 5120),
+    Case("glm53_lb8", "2x4", 1280),
+    # (local util sweep: GLM-5.3 at 8 / 16 experts a chip, mean M = chunk / 8 / chunk / 16)
+    *[Case("glm53_lb8", "2x4", c) for c in (256, 512, 2560, 4096, 8192)],
+    *[Case("glm53_lb16", "2x4", c) for c in (512, 1024, 2560, 5120, 6144, 8192)],
     Case("kimi_k3", "8x4", 5120),
     Case("dsv41_flash", "8x4", 5120),
     Case("glm53", "4x4-y", 5120),
@@ -67,6 +71,12 @@ CASES = [
     Case("minimax_m3", "2x4", 5120),
     Case("minimax_m3", "2x4", 4096),
     Case("minimax_m3", "2x4", 2048),
+    # Kimi-K3 on a LoudBox (block_cases.KimiK3LoudBoxConfig: K3's routed width and experts, no latent): a LoudBox chip
+    # at a Galaxy K3 stage's per-chip load - 28 experts a chip at 1280 = K3 8x4 5120; 56 a chip at 1280 / 3584 = K3
+    # 4x4 2560 / 7168
+    Case("kimi_k3_lb28", "2x4", 1280),
+    Case("kimi_k3_lb56", "2x4", 1280),
+    Case("kimi_k3_lb56", "2x4", 3584),
 ]
 
 

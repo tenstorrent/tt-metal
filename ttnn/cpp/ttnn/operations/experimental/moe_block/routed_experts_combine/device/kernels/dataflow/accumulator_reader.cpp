@@ -65,6 +65,13 @@ constexpr uint32_t BAR_SLOT = get_named_compile_time_arg_val(combine_names::kBar
 constexpr auto plan_args =
     TensorAccessorArgs<get_named_compile_time_arg_val(combine_names::kAccumulatorReaderPlanAccessorFirstArg)>();
 constexpr uint32_t LASTPB = row_bytes;  // where the row's trailer starts (fmt::kTrailerBytes; one fabric packet a row)
+#ifdef ZZ_REC_ADDR  // (TEMPORARY local probe: record / replay the hand-off's row trailers - mode word at page 0)
+#define ZZ_REC_MAXR 4096
+FORCE_INLINE uint64_t zz_rec_noc(uint32_t page) {
+    return get_noc_addr_from_bank_id<true>(page % NUM_DRAM_BANKS, ZZ_REC_ADDR + (page / NUM_DRAM_BANKS) * 64);
+}
+FORCE_INLINE uint64_t zz_mode_noc() { return get_noc_addr_from_bank_id<true>(0, ZZ_REC_MODE_ADDR); }
+#endif
 // The shared landing (combine_options.hpp): slots granted to sources by id, at most grants_per_source outstanding a
 // source, the ids written at grant_ids_offset in the home port's state
 constexpr bool shared_landing = combine_options::shared_landing;
@@ -174,6 +181,12 @@ void kernel_main() {
             want[k] = k == hc ? 0 : reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sc + 4 * pw::kAccMax)[k];
         }
     }
+    uint32_t zz_mode = 0;
+#ifdef ZZ_REC_ADDR
+    noc_async_read(zz_mode_noc(), sc, 64);
+    noc_async_read_barrier();
+    zz_mode = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sc)[0];
+#endif
     uint32_t n_rows = n_local;
     for (uint32_t k = 0; k < N; ++k) {
         n_rows += want[k];
@@ -348,6 +361,17 @@ void kernel_main() {
         lgrant_to(n_local < QL ? n_local : QL);
     }
     auto take_local = [&]() -> bool {  // the next local row (L1 hand-off ring), if every writer landed it
+#ifdef ZZ_REC_ADDR
+        if (zz_mode == 2) {  // (replay: the recorded trailer, no writers)
+            const uint32_t sl = LB + (li % QL) * SLOT;
+            noc_async_read(zz_rec_noc(1 + (8 + me) * ZZ_REC_MAXR + li), sl + LASTPB, 32);
+            noc_async_read_barrier();
+            push_row(sl);
+            ++li;
+            ++done;
+            return true;
+        }
+#endif
         uint32_t m = 0xFFFFFFFF;
         for (uint32_t w = 0; w < WL; ++w) {
             const uint32_t v = landed[w] - lbase;
@@ -357,6 +381,12 @@ void kernel_main() {
             return false;
         }
         const uint32_t sl = LB + (li % QL) * SLOT;
+#ifdef ZZ_REC_ADDR
+        if (zz_mode == 1) {  // (record)
+            noc_async_write(sl + LASTPB, zz_rec_noc(1 + (8 + me) * ZZ_REC_MAXR + li), 32);
+            noc_async_write_barrier();
+        }
+#endif
         push_row(sl);
         ++li;
         ++done;

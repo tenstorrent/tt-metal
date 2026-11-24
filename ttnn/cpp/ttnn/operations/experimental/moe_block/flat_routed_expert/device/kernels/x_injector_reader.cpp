@@ -27,6 +27,9 @@
 // order),
 //     then per expert: region row offset, token count
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/moe_block_args.hpp"
+#ifndef ZZ_PROBE
+#define ZZ_PROBE 0
+#endif
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "flat_accessors.hpp"
@@ -51,7 +54,7 @@ void kernel_main() {
     auto read_seg = [&](uint32_t row, uint32_t j, uint32_t dst) {
         const uint32_t b = j * seg;
         for (uint32_t q = 0; q < seg; q += pread) {
-            noc_async_read(xg.get_noc_addr(row * ppr + (b + q) / row_bytes, (b + q) % row_bytes), dst + q, pread);
+            if (!(ZZ_PROBE & 256)) noc_async_read(xg.get_noc_addr(row * ppr + (b + q) / row_bytes, (b + q) % row_bytes), dst + q, pread);
         }
     };
     // x_indexed: one page holds the whole [1, rows] index row: address it as bank 0's page 0 plus a byte offset

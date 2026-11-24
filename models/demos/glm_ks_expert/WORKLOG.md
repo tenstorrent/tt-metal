@@ -205,3 +205,23 @@ mesh barrier:
   bottom-row sender for channel 11 over the harvested column x 10, each flow landing in the bottom row of its arrival
   router's column; channel -> x from the connection args with channels 5 / 8 fused): 1843.7 us vs 1843.5 simple,
   bfp8 rows 995.0 vs 995.1 - placement does not matter here, the cut's links do (~20.6 GB/s a link, ~82% of raw).
+
+## Measurement probes (commit "measurement probes", not for merge)
+
+Everything is off unless its environment variable is set when the programs are built; a build without them runs the
+production kernels (GLM e16 M 384 experts + combine 2550 us, as before).
+
+| variable | what it does | where |
+|---|---|---|
+| `ZZ_FLAT_PROBE=<mask>` | flat expert traffic / compute probes: the stream's bytes are not moved, its counts and semaphores move as before (perf only, wrong outputs). 1 h to the down chain heads, 2 h along the down chains, 4 down weight reads, 8 gate/up weight reads, 16 y tile writes, 32 x forwarding, 64 primary relay -> snake head, 128 helper -> primary, 256 helper x DRAM reads, 8192 gate/up matmul, 16384 down matmul (511: every data stream; 25087: no data, no matmul). Removing a matmul can hang the flat expert alone (its BRISC stops publishing x once all h is sent - see codex's analysis in the session; fine inside experts + combine) | flat kernels (`ZZ_PROBE` define), flat program factory |
+| `ZZ_TIMING=1` (+ `TT_METAL_DEVICE_PROFILER=1`) | per-call wait breakdowns as profiler data: combine ports `ZZ-PLOOP / PBUSY / PFAB (fabric connection waits) / PFLUSH / PBLOCK (landing credits) / PNOROW (no row from the experts) / PTAIL / PROWS`; y writers `ZZ-YISSUE / YIDS / YTILE (compute's row tiles) / YGRANT (port slot grants) / YTABLE (table page reads) / YTABLEN / YUNITS / YPARTIAL (head-of-line split units)` | combine_port_writer.cpp, y_row_major.hpp |
+| `ZZ_REC_ADDR`, `ZZ_REC_MODE_ADDR` | decoupled experts + combine: the first call (mode word 1) records every row trailer the ports and the accumulators' local rings receive; later calls (mode 2) replay them - ports / local rings take rows as soon as their slots free, the y writers hand nothing off (the experts and the combine as two independent ops on the grid). Set by `zz_scratch_util_sweep.py::test_decoupled` | combine_port_writer.cpp, accumulator_reader.cpp, y_row_major.hpp, both factories |
+
+Tests: `tests/.../routed_experts_combine/zz_scratch_util_sweep.py` (`test_util_sweep`: GLM 8 / 16 experts a chip over
+chunk sizes, `test_decoupled`), `models/demos/glm_ks_expert/tests/test_flat_ref.py` (`test_flat_ref`,
+`test_flat_util`, `test_flat_ref_profile`), the LoudBox GLM cases in `block_cases.py` / `block_stages.py`
+(`glm53_lb8`, `glm53_lb16`). The combine planner's ring choice is logged at debug level ("ZZCOMB").
+
+Results so far (GLM 16 experts a chip, M 384, LoudBox 2 x 4, 200G): experts + combine 2556 us; expert work removed
+2432; decoupled 2252; bare all-to-all 1844 (the 2 x 4's cut bound ~1.51-1.61 ms). Decoupled ports: edge chips (4
+ports) ~50% of the call in fabric connection waits, middle chips done after ~1.25 ms.

@@ -23,6 +23,9 @@
 // RT: 0 x ring address, 1 snake head xy, 2 the head's freed word address (here), 3 helper 0 xy, 4 landing rings
 //     address, 5 landing slots, 6 helper 1 xy, 7.. the expert_schedule.hpp args
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/moe_block_args.hpp"
+#ifndef ZZ_PROBE
+#define ZZ_PROBE 0
+#endif
 #include <stdint.h>
 constexpr uint32_t kXnh = 2;  // the helper relays feeding a primary
 #include "api/dataflow/dataflow_api.h"
@@ -104,7 +107,7 @@ void kernel_main() {
         for (uint32_t k = 0; k < per_sb; ++k) {
             const uint32_t dst = ring + ((sent + k) % x_slots) * blk_bytes;
             for (uint32_t m = 0; m < lr; ++m) {
-                noc_async_write_one_packet_with_trid(
+                if (!(ZZ_PROBE & 64)) noc_async_write_one_packet_with_trid(
                     src + (m * sbt + k * kblk) * tb,
                     get_noc_addr(hxy >> 16, hxy & 0xFFFF, dst + m * piece),
                     piece,

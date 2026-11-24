@@ -39,6 +39,9 @@
 //     minimum of the done words (a summed count would let fast down cores stand in for a slow one); the coordinator
 //     zeroes them again at the end.
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/moe_block_args.hpp"
+#ifndef ZZ_PROBE
+#define ZZ_PROBE 0
+#endif
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "flat_accessors.hpp"
@@ -107,7 +110,7 @@ void kernel_main() {
     auto write_trid = [](uint32_t src, uint64_t dst, uint32_t bytes, uint32_t trid) {
         for (uint32_t o = 0; o < bytes; o += NOC_MAX_BURST_SIZE) {
             const uint32_t n = bytes - o < NOC_MAX_BURST_SIZE ? bytes - o : NOC_MAX_BURST_SIZE;
-            noc_async_write_one_packet_with_trid(src + o, dst + o, n, trid, write_cmd_buf, noc_index, h_vc);
+            if (!(ZZ_PROBE & 2)) noc_async_write_one_packet_with_trid(src + o, dst + o, n, trid, write_cmd_buf, noc_index, h_vc);
         }
     };
 
@@ -170,7 +173,7 @@ void kernel_main() {
                 }
                 const uint32_t trow = schedule.first_row[y_a] / kTileRows + y_s * mt + r;
                 for (uint32_t c = 0; c < pcd; ++c) {
-                    noc_async_write_page(trow * ht + col0 + c, y, src + (r * pcd + c) * out_page);
+                    if (!(ZZ_PROBE & 16)) noc_async_write_page(trow * ht + col0 + c, y, src + (r * pcd + c) * out_page);
                 }
             }
             y_pending = true;

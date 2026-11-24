@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include <set>
 #include <tracy/Tracy.hpp>
 #include "flat_routed_expert_program_factory.hpp"
@@ -368,6 +369,18 @@ FlatProgramHandles add_flat_routed_expert_program(
         // runtime_args_to_dram overwrites these when it converts the kernel.
         fill_args_table_named_args(kernel_descriptor);
         kernel_descriptor.opt_level = KernelBuildOptLevel::O2;  // (DataMovementConfig's default)
+        if (const char* zz = std::getenv("ZZ_FLAT_PROBE")) {  // (TEMPORARY local traffic probe - not for commit)
+            kernel_descriptor.defines.emplace_back("ZZ_PROBE", zz);
+        }
+        if (std::getenv("ZZ_TIMING")) {  // (measurement probe: port / y-writer wait breakdowns)
+            kernel_descriptor.defines.emplace_back("ZZ_TIMING", "1");
+        }
+        if (const char* zz = std::getenv("ZZ_REC_ADDR")) {  // (TEMPORARY local probe: hand-off record / replay)
+            kernel_descriptor.defines.emplace_back("ZZ_REC_ADDR", zz);
+            if (const char* zm = std::getenv("ZZ_REC_MODE_ADDR")) {
+                kernel_descriptor.defines.emplace_back("ZZ_REC_MODE_ADDR", zm);
+            }
+        }
         kernel_descriptor.config =
             DataMovementConfigDescriptor{.processor = proc, .noc = noc, .noc_mode = NOC_MODE::DM_DEDICATED_NOC};
         return add_kernel(program, std::move(kernel_descriptor));
@@ -386,6 +399,12 @@ FlatProgramHandles add_flat_routed_expert_program(
         kernel_descriptor.opt_level = KernelBuildOptLevel::O3;  // (ComputeConfig's default)
         kernel_descriptor.config =
             ComputeConfigDescriptor{.math_fidelity = fidelity, .fp32_dest_acc_en = fp32, .dst_full_sync_en = full_sync};
+        if (const char* zz = std::getenv("ZZ_FLAT_PROBE")) {  // (TEMPORARY local probe - not for commit)
+            kernel_descriptor.defines.emplace_back("ZZ_PROBE", zz);
+        }
+        if (const char* zz = std::getenv("ZZ_FLAT_NO_THROTTLE")) {  // (TEMPORARY local probe - not for commit)
+            kernel_descriptor.defines.emplace_back("ZZ_NO_THROTTLE", zz);
+        }
         return add_kernel(program, std::move(kernel_descriptor));
     };
 

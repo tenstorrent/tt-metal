@@ -13,6 +13,7 @@
 // Running with the combine (flat_options::hands_y_to_combine), y is not written to DRAM: each token row goes straight
 // into a landing slot of its destination combine core (CombineHandoff below).
 #pragma once
+#include "api/debug/kernel_profiler.hpp"  // (TEMPORARY local probe)
 
 #include <cstdint>
 
@@ -35,6 +36,27 @@
 // once they grant more, so a ring smaller than one tile's rows for it (e.g. an accumulator's local ring of a few slots)
 // never blocks the writer for good. Each unit has its own transaction id and landed counts; the tile's out CB pages go
 // when its last unit retires.
+// (TEMPORARY local probe: what the y writer waits on, cycles by the reason its last issue() returned)
+inline uint32_t zz_y_acc[8] = {0, 0, 0, 0, 0, 0, 0, 0};  // + 6 units issued, 7 partial units  // 0 issued, 1 ids full, 2 tile not ready, 3 no grants, 4 table read
+inline uint32_t zz_y_last_t = 0, zz_y_last_r = 0;
+inline void zz_y_mark(uint32_t reason) {
+#ifndef ZZ_TIMING
+    return;
+#endif
+    const uint32_t now = get_timestamp_32b();
+    if (zz_y_last_t) {
+        zz_y_acc[zz_y_last_r] += now - zz_y_last_t;
+    }
+    zz_y_last_t = now;
+    zz_y_last_r = reason;
+}
+#ifdef ZZ_REC_ADDR  // (TEMPORARY local probe: record / replay the hand-off's row trailers - mode word at page 0)
+#define ZZ_REC_MAXR 4096
+FORCE_INLINE uint64_t zz_rec_noc(uint32_t page) {
+    return get_noc_addr_from_bank_id<true>(page % NUM_DRAM_BANKS, ZZ_REC_ADDR + (page / NUM_DRAM_BANKS) * 64);
+}
+FORCE_INLINE uint64_t zz_mode_noc() { return get_noc_addr_from_bank_id<true>(0, ZZ_REC_MODE_ADDR); }
+#endif
 namespace combine_handoff {
 
 // The hand-off args in this core's per-core block, from flat_options::combine_handoff_arg (host: kFlatYL1Args, filled
@@ -68,6 +90,7 @@ template <uint32_t in_flight>
 struct State<true, in_flight> {
     uint32_t destinations = 0, slot_stride = 0, words = 0, writer_index = 0, table_address = 0;
     uint32_t cached_table_page = 0xFFFFFFFF;
+    uint32_t zz_replay = 0;  // (TEMPORARY probe: replay - nothing handed off, the combine replays recorded trailers)
     uint32_t dest_x[kMaxDestinations], dest_y[kMaxDestinations], dest_first_slot[kMaxDestinations];
     uint32_t dest_slots[kMaxDestinations], dest_landed[kMaxDestinations];
     uint32_t rows_issued[kMaxDestinations];          // rows issued per destination this call
@@ -111,6 +134,11 @@ struct State<true, in_flight> {
             noc_semaphore_inc(get_noc_addr(gate_xy & 0xFFFF, gate_xy >> 16, gate_words + 8), 1);
             noc_async_atomic_barrier();
         }
+#ifdef ZZ_REC_ADDR
+        noc_async_read(zz_mode_noc(), words + kWordsTablePageBytes, 64);
+        noc_async_read_barrier();
+        zz_replay = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words + kWordsTablePageBytes)[0] == 2;
+#endif
     }
     // after the last row: the grants this call consumed
     void finish() {
@@ -163,6 +191,17 @@ struct RowMajorYWriter {
     void finish() {
         if constexpr (hands_off) {
             handoff.finish();
+#ifdef ZZ_TIMING
+            zz_y_mark(0);
+            DeviceTimestampedData("ZZ-YISSUE", zz_y_acc[0]);
+            DeviceTimestampedData("ZZ-YIDS", zz_y_acc[1]);
+            DeviceTimestampedData("ZZ-YTILE", zz_y_acc[2]);
+            DeviceTimestampedData("ZZ-YGRANT", zz_y_acc[3]);
+            DeviceTimestampedData("ZZ-YTABLE", zz_y_acc[4]);
+            DeviceTimestampedData("ZZ-YTABLEN", zz_y_acc[5]);
+            DeviceTimestampedData("ZZ-YUNITS", zz_y_acc[6]);
+            DeviceTimestampedData("ZZ-YPARTIAL", zz_y_acc[7]);
+#endif
         }
     }
 
@@ -178,8 +217,12 @@ struct RowMajorYWriter {
                    cb_pages_available_at_front(out_cb, (issued - retired + 1) * columns);
         };
         if constexpr (hands_off) {  // (a tile partly handed off is ready)
-            if (handoff.units_issued - handoff.units_retired == in_flight ||
-                (handoff.tile_rows_issued == 0 && !tile_ready())) {
+            if (handoff.units_issued - handoff.units_retired == in_flight) {
+                zz_y_mark(1);
+                return false;
+            }
+            if (handoff.tile_rows_issued == 0 && !tile_ready()) {
+                zz_y_mark(2);
                 return false;
             }
         } else if (!tile_ready()) {
@@ -193,8 +236,10 @@ struct RowMajorYWriter {
         if constexpr (hands_off) {
             const UnitIssued unit = issue_handoff_unit(source, first_row, rows);
             if (unit == UnitIssued::None) {
+                zz_y_mark(3);
                 return false;
             }
+            zz_y_mark(0);
             if (unit == UnitIssued::PartOfTile) {  // the tile's other rows in a later unit: the cursor stays on it
                 return true;
             }
@@ -279,7 +324,7 @@ private:
         const uint32_t unit = state.units_issued % in_flight;
         const uint32_t trid = first_trid + unit;
         uint8_t* unit_rows = state.unit_rows[unit];
-        if (state.destinations == 0) {  // nothing to hand off to: the flat expert alone without y
+        if (state.destinations == 0 || state.zz_replay) {  // nothing to hand off to: the flat expert alone without y
             for (uint32_t d = 0; d < kMaxDestinations; ++d) {
                 unit_rows[d] = 0;
             }
@@ -290,10 +335,13 @@ private:
         // this tile's table page: (destination, header word) per row
         const uint32_t page = first_row / 32, table_l1 = state.words + kWordsTablePageBytes;
         if (page != state.cached_table_page) {
+            const uint32_t zt = get_timestamp_32b();
             const auto table = TensorAccessor(flat_acc::y_table, state.table_address, kTablePageBytes);
             noc_async_read(table.get_noc_addr(page), table_l1, kTablePageBytes);
             noc_async_read_barrier();
             state.cached_table_page = page;
+            zz_y_acc[4] += get_timestamp_32b() - zt;
+            ++zz_y_acc[5];
         }
         const volatile tt_l1_ptr uint32_t* table_rows = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(table_l1);
         for (uint32_t d = 0; d < state.destinations; ++d) {
@@ -356,6 +404,10 @@ private:
             }
         }
         state.unit_ends_tile[unit] = unit_end == rows ? 1 : 0;
+        ++zz_y_acc[6];
+        if (unit_end < rows || state.tile_rows_issued != 0) {
+            ++zz_y_acc[7];  // (a unit that is not a whole tile: head-of-line split)
+        }
         ++state.units_issued;
         if (unit_end < rows) {
             state.tile_rows_issued = unit_end;

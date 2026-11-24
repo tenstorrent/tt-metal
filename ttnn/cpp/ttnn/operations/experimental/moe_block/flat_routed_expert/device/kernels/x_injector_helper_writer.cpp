@@ -20,6 +20,9 @@
 // local_experts, super_blocks_per_sub_block (NSB)
 // RT: 0 primary xy, 1 landing ring address, 2 super-blocks, 3 round, 4 place, 5.. expert_schedule.hpp args
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/moe_block_args.hpp"
+#ifndef ZZ_PROBE
+#define ZZ_PROBE 0
+#endif
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "flat_options.hpp"
@@ -65,8 +68,10 @@ void kernel_main() {
         // (row tile major: a short last sub-block's rows are the super-block's first bytes - only those go)
         const uint32_t g = x2k + (place + b * round_) * x2s;
         const uint32_t bytes = sub_block_row_tiles(schedule, g / nsb) * sbt * tb;
-        noc_async_write(get_read_ptr(sb_cb), prim_land + (b % land_slots) * sb_bytes, bytes);
-        noc_async_write(get_read_ptr(sb_cb), prim2_land + (b % land_slots) * sb_bytes, bytes);
+        if (!(ZZ_PROBE & 128)) {
+            noc_async_write(get_read_ptr(sb_cb), prim_land + (b % land_slots) * sb_bytes, bytes);
+            noc_async_write(get_read_ptr(sb_cb), prim2_land + (b % land_slots) * sb_bytes, bytes);
+        }
         noc_async_write_barrier();
         noc_semaphore_inc(prim_data, 1);
         noc_semaphore_inc(prim2_data, 1);
