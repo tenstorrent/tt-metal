@@ -120,6 +120,17 @@ class MATMUL_ROW_MOP(TemplateParameter):
 
 
 @dataclass
+class ADDRMOD_CALLER_SCOPED(TemplateParameter):
+    """Scalar-block multiply: the kernel brackets its executes with the addrmod set/restore helpers."""
+
+    caller_scoped: bool = False
+
+    def convert_to_cpp(self) -> str:
+        scope = "CallerScoped" if self.caller_scoped else "PerCall"
+        return f"constexpr auto ADDRMOD_SCOPE = ckernel::AddrModScope::{scope};"
+
+
+@dataclass
 class MATH_TRANSPOSE_FACES(TemplateParameter):
     math_transpose_faces: Transpose
 
