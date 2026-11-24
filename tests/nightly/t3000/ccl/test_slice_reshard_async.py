@@ -29,6 +29,7 @@ def run_slice_reshard_impl(
     enable_trace,
     slice_reshard_topology,
     num_iters,
+    check_program_cache=False,
 ):
     torch.manual_seed(0)
 
@@ -131,6 +132,17 @@ def run_slice_reshard_impl(
             ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
             logger.info(f"Done op")
 
+            # Every iteration uses its own (still alive) input tensor with different data and its own
+            # final/barrier semaphores, so iterations after the first are cache hits that must patch
+            # the input/output addresses and re-apply both semaphore addresses.
+            if check_program_cache:
+                if i == 0:
+                    cache_entries_after_first = mesh_device.num_program_cache_entries()
+                else:
+                    assert (
+                        mesh_device.num_program_cache_entries() == cache_entries_after_first
+                    ), f"iteration {i} added a program cache entry: {mesh_device.num_program_cache_entries()} != {cache_entries_after_first}"
+
             logger.info(f"Done iteration {i}")
 
     for i in range(num_iters):
@@ -213,4 +225,72 @@ def test_slice_reshard_async(
         enable_trace=enable_trace,
         slice_reshard_topology=slice_reshard_topology,
         num_iters=num_iters,
+    )
+
+
+@skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
+@pytest.mark.parametrize(
+    "num_devices, input_shape, dim, layout, input_dtype, output_offset, output_shape",
+    [
+        (8, [96, 120, 212, 512], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 0, 88),
+        (4, [84, 120, 106, 512], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 84),
+    ],
+    ids=[
+        "8mochi_vae_1_offset0",
+        "4mochi_vae_1_offset2",
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config_input, mem_config_output",
+    [
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        )
+    ],
+)
+@pytest.mark.parametrize(
+    "device_params, slice_reshard_topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D}, ttnn.Topology.Linear),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_linear"],
+)
+def test_slice_reshard_async_program_cache(
+    mesh_device,
+    num_links,
+    num_devices,
+    input_shape,
+    dim,
+    layout,
+    input_dtype,
+    output_offset,
+    output_shape,
+    mem_config_input,
+    mem_config_output,
+    slice_reshard_topology,
+):
+    submesh_device = mesh_device.create_submesh(ttnn.MeshShape([1, num_devices]))
+
+    # All iterations run inside one run_slice_reshard_impl call: loading a sub-device manager clears the
+    # program cache, so the cache-entry check must stay within a single manager lifetime.
+    run_slice_reshard_impl(
+        submesh_device,
+        num_devices=num_devices,
+        input_shape=input_shape,
+        dim=dim,
+        output_offset=output_offset,
+        output_shape=output_shape,
+        num_links=num_links,
+        input_dtype=input_dtype,
+        layout=layout,
+        mem_config_input=mem_config_input,
+        mem_config_output=mem_config_output,
+        enable_trace=False,
+        slice_reshard_topology=slice_reshard_topology,
+        num_iters=3,
+        check_program_cache=True,
     )

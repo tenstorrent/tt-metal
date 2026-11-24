@@ -49,6 +49,7 @@ class DispatchQueryManager;
 class DPrintServer;
 class WatcherServer;
 class DispatchMemMap;
+class HostTransferStats;
 class NOCDebugState;
 
 // A class to manage one-time initialization and teardown (FW, dispatch, fabric, cluster) and access to related state.
@@ -78,6 +79,13 @@ public:
 
     // Check if a MetalContext for a given context id exists.
     static bool instance_exists(ContextId context_id = DEFAULT_CONTEXT_ID);
+
+    // Deprecated thread-local command queue selection (see Push/Pop/GetCurrentCommandQueueIdForThread in host_api.hpp).
+    // Returns the id on top of this thread's stack, or 0 if the stack is empty or the default context does not exist
+    // (never creates a context). Only consulted when a caller omits the queue id; Metal-internal code and TTNN always
+    // pass one. Removed together with the public API.
+    // TODO: https://github.com/tenstorrent/tt-metal/issues/39819 (make this work for non-default contexts)
+    static uint8_t current_command_queue_id_for_thread();
 
     // Returns the id of this instance. The ID cannot be used to uniquely identify the context.
     // IDs are recycled after instances are destroyed.
@@ -146,6 +154,8 @@ public:
 
     std::unique_ptr<ProfilerStateManager>& profiler_state_manager() { return profiler_state_manager_; }
     std::unique_ptr<DataCollector>& data_collector() { return data_collector_; }
+    // Lives as long as the context; teardown logs and clears it.
+    HostTransferStats& host_transfer_stats() { return *host_transfer_stats_; }
     std::unique_ptr<DeviceManager>& device_manager() { return device_manager_; }
     bool is_device_manager_initialized() const { return device_manager_ != nullptr; }
 
@@ -292,6 +302,7 @@ private:
     std::unique_ptr<WatcherServer> watcher_server_;
     std::unique_ptr<ProfilerStateManager> profiler_state_manager_;
     std::unique_ptr<DataCollector> data_collector_;
+    std::unique_ptr<HostTransferStats> host_transfer_stats_;
     std::unique_ptr<DeviceManager> device_manager_;
     std::unique_ptr<NOCDebugState> noc_debug_state_;
     // The context descriptor used for runtime components.

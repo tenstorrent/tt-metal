@@ -157,6 +157,7 @@ def run_single_routed_expert(
     weights_dtype=ttnn.bfloat4_b,
     pcc_threshold: float = 0.97,
     min_cap_frac: tuple[float, float] | None = None,
+    count_overshoot: int = 0,
 ):
     """
     Simplest scenario: 1 chip, 1 expert. Shared body for the per-model entrypoints below — they
@@ -191,6 +192,10 @@ def run_single_routed_expert(
     each element is the floor for both of that half's tails). Set it on any case whose point is the saturated
     region: without it, a change to ``weight_scale``, the dims or the seed would quietly drop
     the case back into the near-linear middle of both tanhs while still passing.
+
+    ``count_overshoot`` is added to the token count handed to the device only, so the op sees
+    more active rows than its ``allocated_tokens`` capacity. The kernels must clamp it to the
+    capacity; the reference and the PCC still cover the ``active_tokens`` real rows.
     """
     if active_tokens is None:
         active_tokens = allocated_tokens
@@ -281,7 +286,7 @@ def run_single_routed_expert(
         )
 
     global_expert_idx_tt = _make_idx_tensor([0])
-    expert_token_counts_tt = _make_idx_tensor([active_tokens])
+    expert_token_counts_tt = _make_idx_tensor([active_tokens + count_overshoot])
     expert_region_offsets_tt = _make_idx_tensor([0])
 
     # Create TtRoutedExpert
@@ -393,6 +398,10 @@ _ISL_FUNCTIONAL_SWEEP = [251, 768, 3001]
 # Exhaustive sweep: the full range from empty to fully-packed
 _ISL_EXHAUSTIVE_SWEEP = [0, 128, 256, 512, 768, 1024, 2048, 4096, 5120]
 _ISL_EXHAUSTIVE_MODELS = ("kimi_k2_7", "glm_53")
+
+# Perf sweep: the exhaustive sweep plus 32/64/96 -- one to three tile-rows, below its first live
+# count -- so the perf gates also cover an expert that receives only a handful of tokens.
+_ISL_PERF_SWEEP = sorted([32, 64, 96] + _ISL_EXHAUSTIVE_SWEEP)
 
 
 def _isl_params(active_sweep, only_models=None):
@@ -615,3 +624,69 @@ def test_single_routed_expert_dsv4_clamped(
         pcc_threshold=pcc_threshold,
         min_cap_frac=min_cap_frac,
     )
+
+
+# Over-capacity counts: counts[] is device-produced and only its shape is validated on the host, so
+# a count past the expert's region reaches the kernels unchecked. They clamp it to the program's
+# capacity; every row past that must be dropped without corrupting L1 or hanging. A buffer that is
+# full (allocated == active) puts the clamped last tile-row exactly at capacity, the case where the
+# row-major x multicast used to size its last tile-row from the unclamped count. Overshoots: one
+# stick past a tile-row, a few tile-rows, and far past L1.
+_OVER_CAPACITY_TOKENS = 512
+_OVER_CAPACITY_OVERSHOOTS = [1, 100, 100_000]
+
+
+@pytest.mark.parametrize("count_overshoot", _OVER_CAPACITY_OVERSHOOTS, ids=lambda o: f"over-{o}")
+@pytest.mark.parametrize("model_name", ["glm_53", "kimi_k2_7"])
+@pytest.mark.skipif(not is_blackhole(), reason="device-side count-aware sparsity is Blackhole-only")
+def test_single_routed_expert_over_capacity_count(device, model_name: str, count_overshoot: int):
+    config = {name: cfg for name, cfg, _ in SINGLE_EXPERT_MODELS}[model_name]
+    run_single_routed_expert(
+        device,
+        _OVER_CAPACITY_TOKENS,
+        config.EMB_SIZE,
+        config.MOE_INTERMEDIATE_SIZE,
+        x_row_major=True,
+        count_overshoot=count_overshoot,
+    )
+    # The device must still be healthy afterwards: a normal in-capacity run on the same device.
+    run_single_routed_expert(
+        device,
+        _OVER_CAPACITY_TOKENS,
+        config.EMB_SIZE,
+        config.MOE_INTERMEDIATE_SIZE,
+        active_tokens=_OVER_CAPACITY_TOKENS - 40,
+        x_row_major=True,
+    )
+
+
+# The chunked Blackhole path (M_tiles > 64) narrows x and the output into tile-sized chunks, and ttnn.narrow
+# bounds-checks against the logical shape. So routed_expert_ffn requires a tile-aligned logical M there and
+# rejects anything else up front. The weights are tiny because the check fires before they are read.
+_CHUNKED_PADDED_M = 2080  # 65 tiles, past the 64-tile single-chunk limit
+_CHUNKED_UNALIGNED_M = 2056  # pads to _CHUNKED_PADDED_M
+_CHUNKED_DIM = 64
+
+
+def _chunked_ffn_tensor(device, rows, cols):
+    return ttnn.from_torch(
+        torch.zeros(rows, cols, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="the chunked routed expert path is Blackhole-only")
+@pytest.mark.parametrize("unaligned", ["x", "output"])
+def test_routed_expert_chunked_rejects_unaligned_logical_m(device, unaligned, expect_error):
+    x_rows = _CHUNKED_UNALIGNED_M if unaligned == "x" else _CHUNKED_PADDED_M
+    x = _chunked_ffn_tensor(device, x_rows, _CHUNKED_DIM)
+    gate = _chunked_ffn_tensor(device, _CHUNKED_DIM, _CHUNKED_DIM)
+    up = _chunked_ffn_tensor(device, _CHUNKED_DIM, _CHUNKED_DIM)
+    down = _chunked_ffn_tensor(device, _CHUNKED_DIM, _CHUNKED_DIM)
+    # An output whose padded M matches x but whose logical M is unaligned only trips the output check.
+    output = _chunked_ffn_tensor(device, _CHUNKED_UNALIGNED_M, _CHUNKED_DIM) if unaligned == "output" else None
+    with expect_error(RuntimeError, "logical M"):
+        ttnn.experimental.deepseek_prefill.routed_expert_ffn(x, gate, up, down, output=output)

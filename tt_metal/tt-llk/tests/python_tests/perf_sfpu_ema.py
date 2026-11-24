@@ -18,7 +18,7 @@ Both DEST widths are swept; the Float32 form unpacks straight to Dest and has no
 
 import pytest
 from helpers.param_config import parametrize
-from helpers.perf.core import PerfRunType
+from helpers.perf.core import ALL_PERF_RUN_TYPES
 from test_sfpu_ema import (
     EMA_ALPHA,
     EMA_BETA,
@@ -30,14 +30,7 @@ from test_sfpu_ema import (
 @pytest.mark.perf
 @parametrize(
     **SFPU_EMA_PERF_SWEEP,
-    run_types=[
-        [
-            PerfRunType.MATH_ISOLATE,
-            PerfRunType.L1_TO_L1,
-            PerfRunType.UNPACK_ISOLATE,
-            PerfRunType.PACK_ISOLATE,
-        ]
-    ],
+    run_types=[ALL_PERF_RUN_TYPES],
     loop_factor=[16],  # amortise profiler overhead
     input_dimensions=[[128, 64]],  # tile_cnt: 8
     is_perf=[True],

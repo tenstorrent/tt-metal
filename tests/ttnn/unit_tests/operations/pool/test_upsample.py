@@ -659,3 +659,22 @@ def test_upsample_nearest_float_rejects_uint32_overflow(device, expect_error):
     )
     with expect_error(RuntimeError, "overflows uint32"):
         ttnn.upsample(input_tensor, [1e10, 1.0], mode="nearest")
+
+
+# Bilinear mode builds a halo from the scale factors before the device operation validates them.
+@pytest.mark.parametrize(
+    "scale_factor, message",
+    [
+        (0, "scale_factor_h must be positive"),
+        (-1, "scale_factor_h must be positive"),
+        ((2, 0), "scale_factor_w must be positive"),
+        ([0.5, 1.0], "bilinear mode requires integer scale factors"),
+    ],
+    ids=["zero", "negative", "zero_w", "fractional"],
+)
+def test_upsample_bilinear_rejects_invalid_scale(device, expect_error, scale_factor, message):
+    input_tensor = ttnn.from_torch(
+        torch.randn(1, 4, 4, 32, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, message):
+        ttnn.upsample(input_tensor, scale_factor, mode="bilinear")

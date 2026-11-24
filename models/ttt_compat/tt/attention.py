@@ -12,7 +12,7 @@ from models.common.rmsnorm import RMSNorm
 from models.common.utility_functions import copy_to_buffer, nearest_32
 from models.ttt_compat.tt.ccl import tt_all_gather, tt_all_reduce
 from models.ttt_compat.tt.common import Mode
-from models.ttt_compat.tt.model_config import OpGroup, TensorGroup, num_to_corerange
+from models.ttt_compat.tt.model_config import OpGroup, TensorGroup, qk_fused_core_ranges
 
 
 class Attention(LightweightModule):
@@ -321,8 +321,11 @@ class Attention(LightweightModule):
                 x = ttnn.to_memory_config(x, mem_cfg, dtype=x.dtype)
             return x
 
+        self._q_norm_module: RMSNorm | None = None
+        self._k_norm_module: RMSNorm | None = None
+
         if f"{q_norm_str}.weight" in state_dict:
-            fn_q_norm = RMSNorm(
+            self._q_norm_module = RMSNorm(
                 device=self.mesh_device,
                 dim=self.head_dim,
                 eps=configuration.norm_eps,
@@ -335,12 +338,13 @@ class Attention(LightweightModule):
                 is_distributed=False,
                 tt_ccl=self.tt_ccl,
             )
+            fn_q_norm = self._q_norm_module
             self.q_norm = lambda x, mode, norm_config: norm_reshard(x, fn_q_norm, mode, norm_config)
         else:
             self.q_norm = lambda x, mode, norm_config: x
 
         if f"{k_norm_str}.weight" in state_dict:
-            fn_k_norm = RMSNorm(
+            self._k_norm_module = RMSNorm(
                 device=self.mesh_device,
                 dim=self.head_dim,
                 eps=configuration.norm_eps,
@@ -353,6 +357,7 @@ class Attention(LightweightModule):
                 is_distributed=False,
                 tt_ccl=self.tt_ccl,
             )
+            fn_k_norm = self._k_norm_module
             self.k_norm = lambda x, mode, norm_config: norm_reshard(x, fn_k_norm, mode, norm_config)
         else:
             self.k_norm = lambda x, mode, norm_config: x
@@ -630,12 +635,11 @@ class Attention(LightweightModule):
         raise NotImplementedError("wqkv_bias update is not yet implemented")
 
     def _update_qk_norm(self, which: str, weight: ttnn.Tensor) -> None:
-        """In-place replace the optional Q-/K-RMSNorm gamma. Not yet implemented:
-        ``self.q_norm``/``self.k_norm`` are lambdas closing over an internal
-        ``RMSNorm`` not exposed on ``self``, so we can't delegate to
-        ``RMSNorm.update`` without a small refactor.
-        """
-        raise NotImplementedError(f"{which} update is not yet implemented")
+        """In-place replace the optional Q-/K-RMSNorm gamma via ``RMSNorm.update``."""
+        module = self._q_norm_module if which == "q_norm" else self._k_norm_module
+        if module is None:
+            raise ValueError(f"Attention was constructed without a {which}, but an update was requested.")
+        module.update(weight=weight)
 
     def update(
         self,
@@ -753,11 +757,9 @@ class Attention(LightweightModule):
         k_batch = k_tensor.shape[1]
         assert q_batch == k_batch
 
-        row_size = 8  # We assume a row size of 8 cores
-        k_start_core = ttnn.CoreCoord(q_batch % row_size, q_batch // row_size)
-
-        q_core_grid = ttnn.CoreRangeSet({num_to_corerange(q_batch)})
-        k_core_grid = ttnn.CoreRangeSet({num_to_corerange(k_batch, start_core=k_start_core)})
+        q_range, k_range = qk_fused_core_ranges(q_batch)
+        q_core_grid = ttnn.CoreRangeSet({q_range})
+        k_core_grid = ttnn.CoreRangeSet({k_range})
 
         q_mem_config = ttnn.create_sharded_memory_config(
             shape=(nearest_32(n_q_heads), self.head_dim),

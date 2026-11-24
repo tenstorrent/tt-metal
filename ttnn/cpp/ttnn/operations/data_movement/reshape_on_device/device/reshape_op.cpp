@@ -6,10 +6,12 @@
 #include "reshape_on_device/device/reshape_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/workload/specification/tensor_spec_relaxations.hpp>
 
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -92,7 +94,7 @@ ReshapeDeviceOperation::spec_return_value_t ReshapeDeviceOperation::compute_outp
     const auto& input_tensor = tensor_args.input_tensor;
     return tt::tt_metal::TensorSpec(
         operation_attributes.logical_output_shape,
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             input_tensor.dtype(),
             input_tensor.tensor_spec().page_config(),
             operation_attributes.output_mem_config,
@@ -111,15 +113,17 @@ ttsl::hash::hash_t ReshapeDeviceOperation::compute_program_hash(
     const auto& input_tensor = tensor_args.input_tensor;
     auto program_factory = select_program_factory(operation_attributes, tensor_args);
 
+    // The input is keyed as Metal 2.0 matches it under match_padded_shape_only +
+    // relax_tensor_layout_alignment: its padded shape and the rest of its TensorLayout (dtype, page config,
+    // memory config) (#59915). Its logical shape and Alignment are left out: the factories work only from
+    // the padded shape.
     return operation::hash_operation<ReshapeDeviceOperation>(
         operation_attributes.logical_output_shape,
         operation_attributes.padded_output_shape,
         operation_attributes.output_mem_config,
         program_factory.index(),
-        input_tensor.dtype(),
-        input_tensor.memory_config(),
-        input_tensor.layout(),
-        input_tensor.padded_shape());
+        tt::tt_metal::hash_tensorspec_with_relaxation(
+            input_tensor.tensor_spec(), {.match_padded_shape_only = true, .relax_tensor_layout_alignment = true}));
 }
 
 ttnn::Tensor reshape_on_device(

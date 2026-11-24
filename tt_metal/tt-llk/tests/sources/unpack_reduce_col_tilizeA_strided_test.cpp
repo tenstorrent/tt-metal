@@ -75,7 +75,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             // Both architectures set one SrcA and one SrcB dvalid per face.
-            _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(LOOP_FACTOR * TILE_CNT * num_faces);
+            _perf_unpack_stream_set_valid<true /*set_a*/, true /*set_b*/, PERF_RUN_TYPE>(LOOP_FACTOR * TILE_CNT * num_faces);
         }
         else
         {
@@ -127,9 +127,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
-            _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(LOOP_FACTOR * TILE_CNT * num_faces);
+            _perf_math_stream_clear_valid<true /*clear_a*/, true /*clear_b*/, PERF_RUN_TYPE>(LOOP_FACTOR * TILE_CNT * num_faces);
         }
         else
         {
@@ -199,7 +199,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
-            constexpr bool sync_with_math = PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION;
+            constexpr bool sync_with_math = PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 if constexpr (sync_with_math)
@@ -211,7 +211,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     LLK_ASSERT((tile < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "tile exceeds max dest tiles");
                     _llk_pack_<dest_sync, is_fp32_dest_acc_en, PackMode::Default>(tile, L1_ADDRESS(buffer_Res[tile]));
                 }
-                if constexpr (sync_with_math)
+                // Wormhole PACK_ISOLATE also releases every section to drain the packers.
+                if constexpr (sync_with_math || PERF_PACK_SECTION_RELEASE)
                 {
                     _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
                 }

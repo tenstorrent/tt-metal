@@ -10,7 +10,7 @@ from helpers.constraints import (
     is_valid_quasar_dest_mode_conversion,
 )
 from helpers.data_format_inference import infer_data_formats, unpacks_to_dest
-from helpers.format_config import DataFormat, FormatConfig
+from helpers.format_config import DataFormat, FormatConfig, InputOutputFormat
 from helpers.golden_generators import (
     DataCopyGolden,
     PackGolden,
@@ -25,6 +25,8 @@ from helpers.llk_params import (
     PerfRunType,
 )
 from helpers.param_config import (
+    flat_axes,
+    generate_dest_depth_input_dimensions,
     generate_perf_input_dimensions,
     generate_reduced_input_dimensions,
     get_num_blocks_and_num_tiles_in_block,
@@ -49,6 +51,7 @@ from helpers.test_variant_parameters import (
     NUM_FACES_R_DIM,
     NUM_TILES_IN_BLOCK,
     RELU_CONFIG,
+    RELU_TYPE,
     TEST_FACE_DIMS,
     TILE_COUNT,
     generate_input_dim,
@@ -175,18 +178,57 @@ PACK_FORMATS = input_output_formats(
         DataFormat.MxInt2,
     ]
 )
+# Column names of the tuples ``generate_qsr_pack_combinations`` returns.
+PACK_FLAT_NAMES = (
+    "formats",
+    "dest_acc",
+    "dest_sync",
+    "input_dimensions",
+    "relu_type",
+    "tile_dimensions",
+)
 ALL_PACK_COMBINATIONS = generate_qsr_pack_combinations(PACK_FORMATS)
 PERF_PACK_COMBINATIONS = generate_qsr_pack_combinations(PACK_FORMATS, is_perf=True)
+
+# 4 and 8 full Dest sections per run. Float32 takes the unpack-to-Dest path, Float16_b the FPU one.
+PACK_DEST_DEPTH_COMBINATIONS = [
+    (
+        fmt,
+        dest_acc,
+        dest_sync,
+        runtime(dimensions),
+        runtime(PackerReluType.NoRelu),
+        runtime((32, 32)),
+    )
+    for fmt, dest_acc_modes in (
+        (
+            InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+            (DestAccumulation.No, DestAccumulation.Yes),
+        ),
+        (
+            InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+            (DestAccumulation.Yes,),
+        ),
+    )
+    for dest_acc in dest_acc_modes
+    for dest_sync in quasar_dest_sync_modes()
+    for dimensions in generate_dest_depth_input_dimensions(dest_acc, dest_sync)
+]
 
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_dims_relu=ALL_PACK_COMBINATIONS,
+    **flat_axes(PACK_FLAT_NAMES, ALL_PACK_COMBINATIONS),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
 def test_pack_quasar(
-    formats_dest_acc_sync_dims_relu,
+    formats,
+    dest_acc,
+    dest_sync,
+    input_dimensions,
+    relu_type,
+    tile_dimensions,
     run_types,
     loop_factor,
     boot_mode=BootMode.DEFAULT,
@@ -194,15 +236,6 @@ def test_pack_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    (
-        formats,
-        dest_acc,
-        dest_sync_mode,
-        input_dimensions,
-        relu_type,
-        tile_dimensions,
-    ) = formats_dest_acc_sync_dims_relu
-
     tile_shape = construct_tile_shape(tile_dimensions)
 
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
@@ -216,7 +249,7 @@ def test_pack_quasar(
     num_faces = tile_shape.total_num_faces()
 
     num_blocks, tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        dest_sync_mode,
+        dest_sync,
         dest_acc,
         formats,
         input_dimensions,
@@ -301,7 +334,8 @@ def test_pack_quasar(
         "test_name": "sources/quasar/pack_quasar_test.cpp",
         "formats": formats,
         "templates": [
-            DEST_SYNC(dest_sync_mode),
+            DEST_SYNC(dest_sync),
+            RELU_TYPE(relu_type),
         ],
         "runtimes": [
             TEST_FACE_DIMS(tile_shape.face_r_dim),
@@ -395,3 +429,20 @@ def test_pack_quasar(
         test_passed = True
 
     assert test_passed, "Assert against golden failed"
+
+
+@pytest.mark.quasar
+@parametrize(**flat_axes(PACK_FLAT_NAMES, PACK_DEST_DEPTH_COMBINATIONS))
+def test_pack_dest_depth_quasar(
+    formats, dest_acc, dest_sync, input_dimensions, relu_type, tile_dimensions
+):
+    test_pack_quasar(
+        formats,
+        dest_acc,
+        dest_sync,
+        input_dimensions,
+        relu_type,
+        tile_dimensions,
+        [PerfRunType.L1_TO_L1],
+        1,
+    )

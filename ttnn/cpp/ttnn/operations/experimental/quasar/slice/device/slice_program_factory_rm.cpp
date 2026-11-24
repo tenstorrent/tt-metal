@@ -10,14 +10,15 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/math.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
+using tt::tt_metal::experimental::AdvancedKernelRunArgs;
 
 namespace ttnn::operations::experimental::quasar {
 
@@ -88,10 +89,10 @@ SliceRmRuntimeArgs get_slice_runtime_args_rm(
         accumulated_total_per_dim[i] = num_total_dim * accumulated_total_per_dim[i - 1];
     }
 
-    auto src_buffer_alignment = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto src_buffer_alignment = input_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? ::hal::get_dram_alignment()
                                     : ::hal::get_l1_alignment();
-    auto dst_buffer_alignment = output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto dst_buffer_alignment = output_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? ::hal::get_dram_alignment()
                                     : ::hal::get_l1_alignment();
     auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
@@ -99,17 +100,11 @@ SliceRmRuntimeArgs get_slice_runtime_args_rm(
     uint32_t misalignment = begins_bytes % src_buffer_alignment;
     uint32_t unpadded_row_size_bytes_offset = tt::round_up(unpadded_row_size_bytes, alignment);
 
-    // shard_W * elem_size for B/W-sharded (splits row across shards); full row otherwise.
-    // Fallback is padded for the reader tensor, unpadded for the writer tensor.
-    const auto per_shard_page_size_bytes = [&](const Tensor& t, uint32_t row_bytes) -> uint32_t {
-        const auto& mc = t.memory_config();
-        if (mc.is_sharded() && (mc.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
-                                mc.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED)) {
-            const auto& spec = mc.shard_spec().value();
-            return spec.shape[1] * t.element_size();
-        }
-        return row_bytes;
-    };
+    // A sharded RM page is one shard row, which an ND shard narrower than the tensor makes shorter than a
+    // tensor row. HEIGHT and ND sharded tensors take the buffer's aligned page size; BLOCK and WIDTH sharded
+    // tensors take the unaligned shard_W * element_size. Interleaved falls back to the row: padded for the
+    // reader tensor, unpadded for the writer tensor.
+    using ttnn::operations::data_movement::per_shard_page_size_bytes;
     const uint32_t reader_page_size = per_shard_page_size_bytes(input_tensor, padded_row_size_bytes);
 
     SliceRmRuntimeArgs ret;
@@ -182,10 +177,10 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_cb_size(
     const Shape& output_tensor_start,
     const uint32_t num_sticks_per_core_group_1,
     const uint32_t num_sticks_per_core_group_2) {
-    auto src_buffer_alignment = input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto src_buffer_alignment = input.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? ::hal::get_dram_alignment()
                                     : ::hal::get_l1_alignment();
-    auto dst_buffer_alignment = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto dst_buffer_alignment = output.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? ::hal::get_dram_alignment()
                                     : ::hal::get_l1_alignment();
     const auto single_alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
@@ -233,7 +228,7 @@ ttnn::device_operation::ProgramArtifacts SliceRmProgramFactory::create_program_a
             ? tt::tt_metal::split_work_to_cores(args.sub_core_grids.value(), num_unpadded_sticks)
             : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_sticks);
 
-    tt::tt_metal::Buffer* dst_buffer = output.buffer();
+    const auto* dst_buffer = &output.mesh_buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());

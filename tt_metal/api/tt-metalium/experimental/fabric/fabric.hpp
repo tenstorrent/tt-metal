@@ -195,6 +195,11 @@ void SetFabricConfig(
     FabricManagerMode fabric_manager = FabricManagerMode::DEFAULT,
     FabricRouterConfig router_config = FabricRouterConfig{});
 
+// Returns the fabric configuration in effect in `mesh_device`'s context.
+FabricConfig GetFabricConfig(const tt::tt_metal::distributed::MeshDevice& mesh_device);
+
+// Same, in the default context.
+[[deprecated("Use the overload that takes a MeshDevice instead. This API will be removed after 2026-12-31.")]]
 FabricConfig GetFabricConfig();
 
 namespace experimental {
@@ -223,9 +228,10 @@ class FabricMuxConfig {
     static constexpr size_t default_num_iters_between_teardown_checks = 32;
 
 public:
-    // Builds the config in the default MetalContext's context.
-    // TODO(#52020): replace with a const MeshDevice& form for callers that hold a device (ttnn ops, Python).
+    // Builds the config in `mesh_device`'s context. The config keeps no handle to the device, so the fabric must be
+    // set up (the device open) by the time it is built.
     FabricMuxConfig(
+        const tt::tt_metal::distributed::MeshDevice& mesh_device,
         uint8_t num_full_size_channels,
         uint8_t num_header_only_channels,
         uint8_t num_buffers_full_size_channel,
@@ -251,18 +257,19 @@ public:
         CoreType core_type = CoreType::WORKER,
         size_t usable_l1_end_address = 0);
 
-    // Returns the compile time args to be passed for the mux kernel
+    // Returns the compile time args to be passed for the mux kernel. The mux connects to the fabric tensix extension
+    // when the context's fabric has it enabled, and to the fabric router otherwise.
     std::vector<uint32_t> get_fabric_mux_compile_time_args() const;
 
     // Returns the compile time args for relay mux. The relay mux always connects to the fabric router (never a
-    // tensix extension), so it passes the control plane it is built against.
-    std::vector<uint32_t> get_fabric_mux_compile_time_args_for_relay_mux(const ControlPlane& control_plane) const;
+    // tensix extension) and waits for the router to be ready.
+    std::vector<uint32_t> get_fabric_mux_compile_time_args_for_relay_mux() const;
 
     // Returns the run-time arguments for the mux kernel depending on the connection setup with fabric router.
-    // Resolves the fabric connection in the default MetalContext's context.
-    // TODO(#52020): replace with a const MeshDevice& form for callers that hold a device (ttnn ops, Python).
+    // Resolves the fabric connection in `mesh_device`'s context. src and dst do not have to belong to the device.
     template <typename ProgramOrDescriptor = tt::tt_metal::Program>
     std::vector<uint32_t> get_fabric_mux_run_time_args(
+        const tt::tt_metal::distributed::MeshDevice& mesh_device,
         const FabricNodeId& src_fabric_node_id,
         const FabricNodeId& dst_fabric_node_id,
         uint32_t link_idx,
@@ -295,6 +302,25 @@ public:
 
     size_t get_memory_map_end_address() const;
 
+    // The get_memory_map_end_address() a config built with these arguments against `mesh_device` would have, without
+    // building one.
+    static size_t compute_memory_map_end_address(
+        const tt::tt_metal::distributed::MeshDevice& mesh_device,
+        uint8_t num_full_size_channels,
+        uint8_t num_header_only_channels,
+        uint8_t num_buffers_full_size_channel,
+        uint8_t num_buffers_header_only_channel,
+        size_t buffer_size_bytes_full_size_channel,
+        size_t base_l1_address);
+
+    // The address a mux's memory map must end by on a `core_type` core of `mesh_device`: the physical end of L1, or
+    // usable_l1_end_address when that is lower (0 means no lower bound). The constructor fails when the map ends past
+    // it, so compare compute_memory_map_end_address() against it to size a mux that will build.
+    static size_t compute_l1_end_address(
+        const tt::tt_metal::distributed::MeshDevice& mesh_device,
+        CoreType core_type = CoreType::WORKER,
+        size_t usable_l1_end_address = 0);
+
     // Returns vector of pairs of base addresses and size to clear
     std::vector<std::pair<size_t, size_t>> get_memory_regions_to_clear() const;
 
@@ -324,7 +350,7 @@ private:
 
     // Returns the base compile time args without stream IDs
     std::vector<uint32_t> get_fabric_mux_compile_time_main_args(
-        const tt::tt_fabric::FabricEriscDatamoverConfig& fabric_router_config) const;
+        size_t fabric_endpoint_channel_num_buffers, bool wait_for_fabric_endpoint_ready) const;
 
     void validate_channel_id(FabricMuxChannelType channel_type, uint8_t channel_id) const;
     uint8_t get_channel_global_offset(FabricMuxChannelType channel_type, uint8_t channel_id) const;
@@ -347,6 +373,37 @@ private:
         size_t get_total_size() const;
     };
 
+    // The mux's L1 regions, in address order from the base address.
+    struct MemoryMap {
+        MemoryRegion status;
+        MemoryRegion local_fabric_router_status;
+        MemoryRegion termination_signal;
+        MemoryRegion connection_info;
+        MemoryRegion connection_handshake;
+        MemoryRegion flow_control;
+        MemoryRegion buffer_index;
+        MemoryRegion full_size_channels;
+        MemoryRegion header_only_channels;
+
+        // The end of the last region (header-only channels)
+        size_t get_end_address() const;
+    };
+
+    // Lays out the mux's L1 regions from `base_l1_address`. The constructor and compute_memory_map_end_address() both
+    // use it, so the end address a caller budgets with is the one the mux gets.
+    static MemoryMap lay_out_memory_map(
+        size_t base_l1_address,
+        size_t noc_aligned_address_size_bytes,
+        uint8_t num_full_size_channels,
+        uint8_t num_header_only_channels,
+        uint8_t num_buffers_full_size_channel,
+        uint8_t num_buffers_header_only_channel,
+        size_t buffer_size_bytes_full_size_channel,
+        size_t buffer_size_bytes_header_only_channel);
+
+    // A channel built with 0 buffers gets default_num_buffers, so its kernel compiles; it carries no traffic.
+    static uint8_t num_buffers_or_default(uint8_t num_buffers);
+
     CoreType core_type_ = CoreType::WORKER;
     uint8_t core_type_index_ = 0;
 
@@ -359,27 +416,16 @@ private:
     size_t buffer_size_bytes_full_size_channel_ = 0;
     size_t buffer_size_bytes_header_only_channel_ = 0;
 
-    size_t full_size_channel_size_bytes_ = 0;
-    size_t header_only_channel_size_bytes_ = 0;
-
     size_t num_full_size_channel_iters_ = default_num_full_size_channel_iters;
     size_t num_iters_between_teardown_checks_ = default_num_iters_between_teardown_checks;
-    mutable bool wait_for_fabric_endpoint_ready_ = false;
-    mutable size_t fabric_endpoint_channel_num_buffers_ = 0;
-    mutable size_t fabric_endpoint_status_address_ = 0;
+    // The fabric endpoints the mux can connect to, read from the fabric context when the config is built. A channel
+    // count of 0 means that endpoint is unavailable in the context.
+    bool connect_via_tensix_ = false;
+    size_t fabric_router_channel_num_buffers_ = 0;
+    size_t fabric_tensix_channel_num_buffers_ = 0;
+    size_t fabric_endpoint_status_address_ = 0;
 
-    // memory regions
-    MemoryRegion status_region_{};
-    MemoryRegion local_fabric_router_status_region_{};
-    MemoryRegion termination_signal_region_{};
-    MemoryRegion connection_info_region_{};
-    MemoryRegion connection_handshake_region_{};
-    MemoryRegion flow_control_region_{};
-    MemoryRegion buffer_index_region_{};
-    MemoryRegion full_size_channels_region_{};
-    MemoryRegion header_only_channels_region_{};
-
-    size_t memory_map_end_address_;
+    MemoryMap memory_map_{};
 
     // Set by place_in_program_local_l1.
     bool in_program_local_l1_ = false;
@@ -550,7 +596,15 @@ void add_fabric_mux_v2_to_program(
     uint32_t link_idx,
     tt::tt_metal::NOC forwarder_noc = tt::tt_metal::NOC::RISCV_0_default);
 
-// Returns the eth direction in which the data should be forwarded from the src to reach the dest
+// Returns the eth direction in which the data should be forwarded from the src to reach the dest, in
+// `mesh_device`'s context. The device only selects the context: src and dst don't have to belong to it.
+std::optional<eth_chan_directions> get_eth_forwarding_direction(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
+    FabricNodeId src_fabric_node_id,
+    FabricNodeId dst_fabric_node_id);
+
+// Same, in the default context.
+[[deprecated("Use the overload that takes a MeshDevice instead. This API will be removed after 2026-12-31.")]]
 std::optional<eth_chan_directions> get_eth_forwarding_direction(
     FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id);
 
