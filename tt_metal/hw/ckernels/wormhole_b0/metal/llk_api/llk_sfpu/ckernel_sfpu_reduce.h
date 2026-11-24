@@ -85,8 +85,7 @@ inline void int32_to_swap_order() {
     TTI_SFPENCC(0 /*imm12_math*/, 0 /*lreg_c*/, 0 /*lreg_dest*/, 0 /*instr_mod1*/);
 }
 
-// Instructions emitted by int32_to_swap_order (and by uint32_to_swap_order); the Int32 / UInt32 column window is sized
-// from it.
+// Instructions emitted by int32_to_swap_order; the Int32 / UInt32 column window is sized from it.
 constexpr std::uint32_t INT32_SWAP_ORDER_LEN = 3;
 
 // Which order map the 32-bit integer MAX/MIN reduces apply to every loaded operand (see to_swap_order).
@@ -120,6 +119,11 @@ inline void uint32_to_swap_order() {
     TTI_SFPXOR(0 /*imm12_math*/, INT32_SWAP_ORDER_REG, reg, 0 /*instr_mod1*/);
     TTI_SFPENCC(0 /*imm12_math*/, 0 /*lreg_c*/, 0 /*lreg_dest*/, 0 /*instr_mod1*/);
 }
+
+// Instructions emitted by uint32_to_swap_order.
+constexpr std::uint32_t UINT32_SWAP_ORDER_LEN = 3;
+static_assert(
+    UINT32_SWAP_ORDER_LEN == INT32_SWAP_ORDER_LEN, "the Int32 and UInt32 column windows share one replay layout");
 
 /**
  * @brief Map the word in @p reg, in place, onto SFPSWAP(VEC_MIN_MAX)'s sign-magnitude order (int32_to_swap_order or
@@ -1226,7 +1230,7 @@ inline void init_reduce_max_min_int32() {
  *        chain; the column path maps LREG4/5 itself) and, above it, the row butterfly-stage window (see the slot
  *        map). Used instead of the sign-magnitude (INT32_2S_COMP) path so INT32_MIN is handled correctly.
  *
- * No direction is set here: both Int32 MAX/MIN calculates set their own on entry
+ * No direction is set here: both Int32 / UInt32 MAX/MIN calculates set their own on entry
  * (calculate_reduce_max_min_int32_uint32_col, perform_reduce_row_max_min_int32_uint32), and the recorded swaps read it
  * at replay time.
  *
