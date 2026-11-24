@@ -21,6 +21,7 @@ Knobs (single source each; every dependent quantity derives from them):
   WKV_DEPTH          cb_wkv depth (units: heads in R1, N-blocks in R2)
   OUT_DEPTH          cb_prefix_out / cb_rope_out depth (row blocks)
   PORT_BATCH_SEGMENTS port staging batch (segments per flush); the staging CB holds 2 batches
+  QB_READ_BATCH      q_b slice reads per barrier
 """
 
 from __future__ import annotations
@@ -49,7 +50,8 @@ WKV_RESIDENT_BYTES = 512 * 1024  # per core: every remote head's weights residen
 WKV_DEPTH = 2
 OUT_DEPTH = 2
 PORT_BATCH_SEGMENTS = 4
-MAX_HEADERS = 12  # PacketHeaderPool: <= 12 headers per RISC
+QB_READ_BATCH = 8  # q_b slice reads per barrier (dm shortlist tie; rank-1 batch 4 is lamp L10)
+MAX_HEADERS = 12  # PacketHeaderPool: <= 12 headers per RISC (passed to the port sender: one source)
 HDRS_PER_DEST_CAP = 4
 
 # ---- CB indices (semantic) ---------------------------------------------------------------------------------------------
@@ -74,7 +76,12 @@ def _node(mesh, coord):
 
 
 def _crs(cores):
-    return ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
+    """Cores -> a CoreRangeSet merged into rectangles (a per-core range list makes dispatch write every kernel
+    binary / CB config core by core)."""
+    out = ttnn.CoreRangeSet([ttnn.CoreRange(cores[0], cores[0])])
+    for c in cores[1:]:
+        out = out.merge(ttnn.CoreRangeSet([ttnn.CoreRange(c, c)]))
+    return out
 
 
 def _rect(x0, y0, x1, y1):
@@ -86,10 +93,6 @@ def _merge(*sets):
     for s in sets[1:]:
         out = out.merge(s)
     return out
-
-
-def _crs_list(cores):
-    return _merge(*[_crs([c]) for c in cores])
 
 
 def _pack(c):
@@ -384,6 +387,55 @@ def _resources(mesh, geo, ports, injector):
 
 
 # ---------------------------------------------------------------------------------------------------------------------
+# L1 fit (l1_ledger.md "Total per compute core"): every resident term, checked before the program is built
+# ---------------------------------------------------------------------------------------------------------------------
+
+
+def cb_l1_budget(mesh):
+    """Bytes of L1 per core the CBs may occupy: CBs grow bottom-up from the allocator base, L1 buffers (the landing
+    scratch, an L1 latent) top-down, so the budget is the lowest allocated L1 address."""
+    view = ttnn.get_memory_view(mesh, ttnn.BufferType.L1)
+    allocated = [int(b["address"]) for b in view.block_table if b["allocated"] == "yes"]
+    return min(allocated) if allocated else int(view.total_bytes_per_bank)
+
+
+def l1_terms(geo, wkv_depth):
+    """{core set: {term: bytes}} of the statically allocated CBs (cb_landing lives in the scratch buffer)."""
+    tb = geo.tile_bytes
+    s3_out = OUT_DEPTH * geo.s3m * (geo.s3n + geo.Dr_t) * tb
+    wkv_unit = geo.wkv_unit_tiles * geo.wkv_tile_bytes
+    wkv_s1 = (geo.wkv_units_s1 if geo.wkv_resident else wkv_depth) * wkv_unit
+    wkv_free = (geo.wkv_units_free if geo.wkv_resident else wkv_depth) * wkv_unit
+    q_slice = geo.num_blocks * geo.m * geo.cols_max * tb
+    stage1 = {
+        "cb_q_slice": q_slice,
+        "cb_x_round": X_ROUND_DEPTH * geo.round_tiles * geo.x_tile_bytes,
+        "cb_qb_slice": geo.Q_t * geo.cols_max * geo.qb_tile_bytes,
+        "cb_q_partial": geo.m * geo.cols_max * ttnn.tile_size(ttnn.float32) if geo.nkb > 1 else 0,
+        "cb_wkv": wkv_s1,
+        "cb_prefix_out+cb_rope_out": s3_out,
+    }
+    return {
+        "stage-1 core": stage1,
+        "stage-3-only core": {"cb_wkv": wkv_free, "cb_prefix_out+cb_rope_out": s3_out},
+        "port core": {"cb_q_slice": q_slice, "cb_port_stage": 2 * PORT_BATCH_SEGMENTS * geo.hw * tb},
+    }
+
+
+def check_fits_l1(mesh, geo, wkv_depth):
+    budget = cb_l1_budget(mesh)
+    for role, terms in l1_terms(geo, wkv_depth).items():
+        total = sum(terms.values())
+        if total > budget:
+            worst = max(terms, key=terms.get)
+            raise RuntimeError(
+                f"q_stem: per-core L1 does not fit on a {role}: {total} B of CBs > {budget} B free "
+                f"(largest term {worst} = {terms[worst]} B; terms {terms}). Regime R3 (stage-1 streaming) "
+                f"is not built."
+            )
+
+
+# ---------------------------------------------------------------------------------------------------------------------
 # Program per chip
 # ---------------------------------------------------------------------------------------------------------------------
 
@@ -437,6 +489,7 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
     hdr_per_dest = max(1, min(HDRS_PER_DEST_CAP, MAX_HEADERS // max(1, G - 1)))
     wkv_units_total_max = geo.hpc_max if geo.wkv_resident else geo.hpc_max * geo.rows_per_head * geo.n_nb
     wkv_depth = max(1, min(WKV_DEPTH, wkv_units_total_max))
+    check_fits_l1(mesh, geo, wkv_depth)
 
     mesh_desc = ttnn.MeshProgramDescriptor()
     for coord, ch in chips.items():
@@ -452,7 +505,7 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
             wkv_cbs = [_cb(CB_WKV, wkv.dtype, geo.wkv_tile_bytes, geo.wkv_units_s1 * unit, s1_rect)]
             if other_compute:
                 wkv_cbs.append(
-                    _cb(CB_WKV, wkv.dtype, geo.wkv_tile_bytes, geo.wkv_units_free * unit, _crs_list(other_compute))
+                    _cb(CB_WKV, wkv.dtype, geo.wkv_tile_bytes, geo.wkv_units_free * unit, _crs(other_compute))
                 )
         else:
             wkv_cbs = [_cb(CB_WKV, wkv.dtype, geo.wkv_tile_bytes, wkv_depth * geo.wkv_unit_tiles, compute_rect)]
@@ -470,6 +523,7 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
                 x.dtype,
                 q_b.dtype,
                 wkv.dtype,
+                x.memory_config().buffer_type,  # the injector's accessor differs for an L1 / DRAM latent
                 compute_config.math_fidelity,
                 compute_config.fp32_dest_acc_en,
                 compute_config.math_approx_mode,
@@ -630,15 +684,14 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
             geo.s3n,
             geo.n_nb,
             int(geo.wkv_resident),
-            wkv_depth,
-            *geo_ct,
-            *qb_ct,
-            *wkv_ct,
         ]
-        # CT 16 = the core set's wkv capacity in units (R1: remote heads + local depth; R2: wkv_depth)
-        reader_ct_s1, reader_ct_other = list(reader_ct), list(reader_ct)
-        if geo.wkv_resident:
-            reader_ct_s1[16], reader_ct_other[16] = geo.wkv_units_s1, geo.wkv_units_free
+
+        def reader_ct_for(wkv_units):
+            # wkv capacity of the core set in units (R1: remote heads + local depth; R2: wkv_depth)
+            return reader_ct + [wkv_units, QB_READ_BATCH, *geo_ct, *qb_ct, *wkv_ct]
+
+        reader_ct_s1 = reader_ct_for(geo.wkv_units_s1 if geo.wkv_resident else wkv_depth)
+        reader_ct_other = reader_ct_for(geo.wkv_units_free if geo.wkv_resident else wkv_depth)
         reader_s1 = ttnn.KernelDescriptor(
             kernel_source=str(KERNEL_DIR / "q_stem_reader.cpp"),
             core_ranges=s1_rect,
@@ -666,7 +719,7 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
         if other_compute:
             reader_other = ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "q_stem_reader.cpp"),
-                core_ranges=_crs_list(other_compute),
+                core_ranges=_crs(other_compute),
                 compile_time_args=reader_ct_other,
                 runtime_args=reader_rt_other,
                 config=_dm("RISCV_1", ttnn.NOC.NOC_0),
@@ -742,6 +795,7 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
                 PORT_BATCH_SEGMENTS,
                 hdr_per_dest,
                 *geo_ct,
+                MAX_HEADERS,
             ],
             runtime_args=port_sender_rt,
             config=_dm("RISCV_0", ttnn.NOC.NOC_1),
@@ -764,7 +818,9 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
             port_reader_k,
             port_sender_k,
         ]
-        ablate = [a for a in os.environ.get("QSTEM_ABLATE", "").split(",") if a]  # perf ablation only (TEMP)
+        # Perf-breakdown hook (verification_report.md): QSTEM_ABLATE=<STAGE,...> stubs stage payloads (wrong output
+        # by design). Kept for the perf refinements' per-stage breakdown; part of custom_program_hash.
+        ablate = [a for a in os.environ.get("QSTEM_ABLATE", "").split(",") if a]
         if ablate:
             for kd in program.kernels:
                 kd.defines = [(f"ABLATE_{a}", "1") for a in ablate]

@@ -45,13 +45,28 @@ L1(core) = tb·tensor_row_tiles·core_cols_max          // cb_q_slice      — s
          + tb·hpc·B·quarter_row_tiles·head_w_tiles     // cb_landing      — scales with S3·heads, S3·rows (whole)
          + tb_wkv·(R1 ? min(2,hpc)·Dn_t·N_t : 2·Dn_t·s3_block_n_tiles)  // cb_wkv
          + tb·out_depth·s3_block_m_tiles·(s3_block_n_tiles + Dr_t)      // cb_prefix_out + cb_rope_out
-fits_l1 := L1(core) ≤ L1_BUDGET  (allocator L1 size − reserved − 64 KiB margin; checked on host before building)
+fits_l1 := L1(core) ≤ cb_l1_budget(mesh)  (lowest allocated L1 address; checked on host before building — check_fits_l1)
 ```
 
-Evaluated (11×10 grid, C = 99): Kimi S=640 **724 KiB**; S=512 696; S=256 640; DeepSeek-V3.2 912; GLM-5.3 S=640 936;
-long chunk S=2048 **1032 KiB** (max); deep Q=4096 1004; wide N (R2) 484; smallest 34. Every INPUTS shape fits. Port
-cores: `cb_q_slice` + `cb_port_stage` ≤ 256 + 96 KiB. The persistent landing scratch is the only L1 held across
-calls: `hpc·B·quarter_row_tiles·head_w_tiles·tb` per compute core (60 KiB Kimi, 192 KiB long chunk).
+Evaluated by the implemented predicate (`q_stem_program_descriptor.l1_terms` / `check_fits_l1`, verifier pass,
+11×10 Blackhole grid, live budget `cb_l1_budget` = lowest allocated L1 address = **1427 KiB** with the landing
+scratch allocated), statically allocated CBs per core in KiB (stage-1 core / stage-3-only core / port core;
+`cb_landing` is the scratch, listed separately):
+
+| Shape | Regime | C1 | hpc_max | stage-1 | stage-3-only | port | landing scratch |
+|-------|--------|----|---------|---------|--------------|------|-----------------|
+| Kimi S=640 | R1 | 72 | 2 | 760 | 328 | 176 | 120 |
+| Kimi S=512 / 256 | R1 | 72 | 2 | 744 / 712 | 328 | 160 / 128 | 96 / 48 |
+| DeepSeek-V3.2 S=640 | R1 | 99 | 3 | 1016 | 200 | 176 | 180 |
+| GLM-5.3 S=640 / 512 / 256 | R1 | 64 | 2 | 984 / 968 / 936 | 456 | 208 / 192 / 160 | 160 / 128 / 64 |
+| long chunk S=2048 | R1 | 24 | 1 | 936 | 200 | 352 | 192 |
+| deep Q=4096 (K-blocked) | R1 | 12 | 1 | **1120** (max) | 200 | 112 | 12 |
+| wide N=4096 | R2 | 12 | 1 | 504 | 328 | 112 | 12 |
+| smallest (one tile) | R1 | 2 | 1 | 46 | 10 | 48 | 4 |
+
+Every INPUTS shape fits with ≥ 307 KiB headroom (deep Q). A shape that does not raises RuntimeError naming the
+role and the largest term (regime R3 is not built). An L1 latent (input_buffer = L1, refinement) lowers the
+budget by its per-bank share (Kimi: 1.97 MB over 110 banks ≈ 18 KiB) — the predicate reads it live.
 
 ## Data-movement budget (per chip, Kimi K3.1 S=640)
 
@@ -95,3 +110,17 @@ device. Schemes the schedule tool refuses (L1→L1 port pulls, fabric sends, `al
   the R2 predicate is `max units per core set * head bytes > 512 KiB` (wide-N shape still R2).
 - Verified fits: every acceptance + supported golden shape builds (no CB / L1-buffer clash) with the single grow-only
   landing scratch per mesh.
+
+## Verifier notes (Phase 0 audit)
+
+- `fits_l1` was described here but not implemented; the verifier added `l1_terms` + `check_fits_l1` (RuntimeError
+  naming the term) and re-evaluated the totals above (the planner's 724 / 1032 KiB figures were stale: the
+  implementer's L7 / L8 changes moved C1 and hpc).
+- `cb_q_partial` is Float32 unconditionally. Correct under Phase 0's fp32 DEST; under `fp32_dest_acc_en = False`
+  (Refinement 1) it becomes a wide page behind a 16-bit DEST — the format must follow the flag (folded into
+  Refinement 1).
+- `cb_x_round` / `cb_qb_slice` (stage-1 only) and `cb_prefix_out` / `cb_rope_out` (stage 3) have disjoint
+  lifetimes on a stage-1 core and are not aliased: justified (wkv prefetch overlaps stage 1; no shape is within
+  300 KiB of the budget).
+- `cb_q_slice` on the port cores is an unused copy kept for address identity (176–352 KiB per port core): justified
+  (ports read the stage-1 cores' copy at the same address); the bounded-ring alternative is R3.

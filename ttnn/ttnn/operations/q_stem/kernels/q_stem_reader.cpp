@@ -61,11 +61,12 @@ void kernel_main() {
     constexpr uint32_t n_nb = get_compile_time_arg_val(14);
     constexpr bool wkv_resident = get_compile_time_arg_val(15) != 0;
     constexpr uint32_t wkv_depth = get_compile_time_arg_val(16);
-    constexpr uint32_t B = get_compile_time_arg_val(17);
-    constexpr uint32_t qrt = get_compile_time_arg_val(18);
-    constexpr uint32_t G = get_compile_time_arg_val(20);
-    constexpr uint32_t hw = get_compile_time_arg_val(21);
-    constexpr auto qb_args = TensorAccessorArgs<22>();
+    constexpr uint32_t qb_batch = get_compile_time_arg_val(17);  // q_b reads per barrier (host QB_READ_BATCH)
+    constexpr uint32_t B = get_compile_time_arg_val(18);
+    constexpr uint32_t qrt = get_compile_time_arg_val(19);
+    constexpr uint32_t G = get_compile_time_arg_val(21);
+    constexpr uint32_t hw = get_compile_time_arg_val(22);
+    constexpr auto qb_args = TensorAccessorArgs<23>();
     constexpr auto wkv_args = TensorAccessorArgs<qb_args.next_compile_time_args_offset()>();
     constexpr auto mc = McastArgs<
         get_named_compile_time_arg_val("mcast_ct_offset"),
@@ -73,7 +74,6 @@ void kernel_main() {
 
     constexpr uint32_t rows_per_head = B * qrt;
     constexpr uint32_t unit_tiles = Dn_t * s3n;  // one wkv unit (R1: s3n == N_t, one head)
-    constexpr uint32_t qb_batch = 8;             // reads per barrier (dm shortlist)
 
     size_t a = 0;
     const uint32_t qb_addr = get_arg_val<uint32_t>(a++);

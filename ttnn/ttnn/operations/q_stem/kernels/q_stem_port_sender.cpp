@@ -50,7 +50,7 @@ void kernel_main() {
     constexpr uint32_t G = get_compile_time_arg_val(8);
     constexpr uint32_t hw = get_compile_time_arg_val(9);
     constexpr uint32_t seg_bytes = hw * tile_bytes;
-    constexpr uint32_t max_headers = 12;
+    constexpr uint32_t max_headers = get_compile_time_arg_val(10);  // PacketHeaderPool cap (host MAX_HEADERS)
     constexpr uint32_t head_words = 2 + 2 * G;  // dest core, inc value, (slot base, row stride) per destination
 
     size_t a = 0;

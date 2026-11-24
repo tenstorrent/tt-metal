@@ -1,0 +1,368 @@
+{
+ "summary": {
+  "total": 1103,
+  "supported_pass": 15,
+  "supported_fail": 0,
+  "supported_marked_xfail": 0,
+  "supported_skipped": 0,
+  "supported_other": 0,
+  "xfail_expected": 1077,
+  "xpass_drift": 0,
+  "xfail_wrong_mode": 0,
+  "xfail_other": 0,
+  "invalid_skipped": 0,
+  "invalid_unexpected": 0,
+  "infeasible_skipped": 0,
+  "no_axes_found": 11
+ },
+ "note": "compact copy (full report > 500 KB pre-commit limit): xfail_expected listed by count only",
+ "by_category": {
+  "supported_pass": [
+   {
+    "nodeid": "eval/golden_tests/q_stem/test_golden.py::test_op[1x1x640x1536-qb1536x4608-w96x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-input_buffer=DRAM-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_layout=TILE-q_b_proj_dtype=BFLOAT16-rope_mode=nope-topology=Ring-wkv_b1_dtype=BFLOAT16]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "q_b_proj_dtype": "BFLOAT16",
+     "wkv_b1_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "output_layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "rope_mode": "nope",
+     "input_buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "cluster_axis": 1,
+     "topology": "Ring",
+     "num_links": 2,
+     "alignment": "tile_aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/q_stem/test_golden.py::test_op[1x1x512x1536-qb1536x4608-w96x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-input_buffer=DRAM-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_layout=TILE-q_b_proj_dtype=BFLOAT16-rope_mode=nope-topology=Ring-wkv_b1_dtype=BFLOAT16]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "q_b_proj_dtype": "BFLOAT16",
+     "wkv_b1_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "output_layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "rope_mode": "nope",
+     "input_buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "cluster_axis": 1,
+     "topology": "Ring",
+     "num_links": 2,
+     "alignment": "tile_aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/q_stem/test_golden.py::test_op[1x1x256x1536-qb1536x4608-w96x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-input_buffer=DRAM-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_layout=TILE-q_b_proj_dtype=BFLOAT16-rope_mode=nope-topology=Ring-wkv_b1_dtype=BFLOAT16]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "q_b_proj_dtype": "BFLOAT16",
+     "wkv_b1_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "output_layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "rope_mode": "nope",
+     "input_buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "cluster_axis": 1,
+     "topology": "Ring",
+     "num_links": 2,
+     "alignment": "tile_aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/q_stem/test_golden.py::test_op[1x1x640x1536-qb1536x6144-w128x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-input_buffer=DRAM-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_layout=TILE-q_b_proj_dtype=BFLOAT16-rope_mode=nope-topology=Ring-wkv_b1_dtype=BFLOAT16]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "q_b_proj_dtype": "BFLOAT16",
+     "wkv_b1_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "output_layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "rope_mode": "nope",
+     "input_buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "cluster_axis": 1,
+     "topology": "Ring",
+     "num_links": 2,
+     "alignment": "tile_aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/q_stem/test_golden.py::test_op[1x1x640x2048-qb2048x4096-w64x192x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-input_buffer=DRAM-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_layout=TILE-q_b_proj_dtype=BFLOAT16-rope_mode=nope-topology=Ring-wkv_b1_dtype=BFLOAT16]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "q_b_proj_dtype": "BFLOAT16",
+     "wkv_b1_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "output_layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "rope_mode": "nope",
+     "input_buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "cluster_axis": 1,
+     "topology": "Ring",
+     "num_links": 2,
+     "alignment": "tile_aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/q_stem/test_golden.py::test_op[1x1x512x2048-qb2048x4096-w64x192x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-input_buffer=DRAM-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_layout=TILE-q_b_proj_dtype=BFLOAT16-rope_mode=nope-topology=Ring-wkv_b1_dtype=BFLOAT16]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "q_b_proj_dtype": "BFLOAT16",
+     "wkv_b1_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "output_layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "rope_mode": "nope",
+     "input_buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "cluster_axis": 1,
+     "topology": "Ring",
+     "num_links": 2,
+     "alignment": "tile_aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/q_stem/test_golden.py::test_op[1x1x256x2048-qb2048x4096-w64x192x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-input_buffer=DRAM-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_layout=TILE-q_b_proj_dtype=BFLOAT16-rope_mode=nope-topology=Ring-wkv_b1_dtype=BFLOAT16]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "q_b_proj_dtype": "BFLOAT16",
+     "wkv_b1_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "output_layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "rope_mode": "nope",
+     "input_buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "cluster_axis": 1,
+     "topology": "Ring",
+     "num_links": 2,
+     "alignment": "tile_aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/q_stem/test_golden.py::test_op[1x1x128x64-qb64x128-w8x32x32-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-input_buffer=DRAM-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_layout=TILE-q_b_proj_dtype=BFLOAT16-rope_mode=nope-topology=Ring-wkv_b1_dtype=BFLOAT16]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "q_b_proj_dtype": "BFLOAT16",
+     "wkv_b1_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "output_layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "rope_mode": "nope",
+     "input_buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "cluster_axis": 1,
+     "topology": "Ring",
+     "num_links": 2,
+     "alignment": "tile_aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/q_stem/test_golden.py::test_op[1x1x256x256-qb256x384-w16x64x128-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-input_buffer=DRAM-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_layout=TILE-q_b_proj_dtype=BFLOAT16-rope_mode=nope-topology=Ring-wkv_b1_dtype=BFLOAT16]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "q_b_proj_dtype": "BFLOAT16",
+     "wkv_b1_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "output_layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "rope_mode": "nope",
+     "input_buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "cluster_axis": 1,
+     "topology": "Ring",
+     "num_links": 2,
+     "alignment": "tile_aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/q_stem/test_golden.py::test_op[2x1x128x512-qb512x1536-w32x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-input_buffer=DRAM-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_layout=TILE-q_b_proj_dtype=BFLOAT16-rope_mode=nope-topology=Ring-wkv_b1_dtype=BFLOAT16]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "q_b_proj_dtype": "BFLOAT16",
+     "wkv_b1_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "output_layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "rope_mode": "nope",
+     "input_buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "cluster_axis": 1,
+     "topology": "Ring",
+     "num_links": 2,
+     "alignment": "tile_aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/q_stem/test_golden.py::test_op[1x1x2048x1536-qb1536x1536-w32x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-input_buffer=DRAM-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_layout=TILE-q_b_proj_dtype=BFLOAT16-rope_mode=nope-topology=Ring-wkv_b1_dtype=BFLOAT16]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "q_b_proj_dtype": "BFLOAT16",
+     "wkv_b1_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "output_layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "rope_mode": "nope",
+     "input_buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "cluster_axis": 1,
+     "topology": "Ring",
+     "num_links": 2,
+     "alignment": "tile_aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/q_stem/test_golden.py::test_op[1x1x128x4096-qb4096x768-w16x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-input_buffer=DRAM-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_layout=TILE-q_b_proj_dtype=BFLOAT16-rope_mode=nope-topology=Ring-wkv_b1_dtype=BFLOAT16]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "q_b_proj_dtype": "BFLOAT16",
+     "wkv_b1_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "output_layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "rope_mode": "nope",
+     "input_buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "cluster_axis": 1,
+     "topology": "Ring",
+     "num_links": 2,
+     "alignment": "tile_aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/q_stem/test_golden.py::test_op[1x1x128x512-qb512x768-w16x128x4096-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-input_buffer=DRAM-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_layout=TILE-q_b_proj_dtype=BFLOAT16-rope_mode=nope-topology=Ring-wkv_b1_dtype=BFLOAT16]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "q_b_proj_dtype": "BFLOAT16",
+     "wkv_b1_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "output_layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "rope_mode": "nope",
+     "input_buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "cluster_axis": 1,
+     "topology": "Ring",
+     "num_links": 2,
+     "alignment": "tile_aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/q_stem/test_golden.py::test_op[1x1x128x512-qb512x1024-w16x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-input_buffer=DRAM-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_layout=TILE-q_b_proj_dtype=BFLOAT16-rope_mode=nope-topology=Ring-wkv_b1_dtype=BFLOAT16]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "q_b_proj_dtype": "BFLOAT16",
+     "wkv_b1_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "output_layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "rope_mode": "nope",
+     "input_buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "cluster_axis": 1,
+     "topology": "Ring",
+     "num_links": 2,
+     "alignment": "tile_aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/q_stem/test_golden.py::test_op_loose[1x1x640x1536-qb1536x4608-w96x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-input_buffer=DRAM-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_layout=TILE-q_b_proj_dtype=BFLOAT16-rope_mode=nope-topology=Ring-wkv_b1_dtype=BFLOAT16]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "q_b_proj_dtype": "BFLOAT16",
+     "wkv_b1_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "output_layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "rope_mode": "nope",
+     "input_buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "cluster_axis": 1,
+     "topology": "Ring",
+     "num_links": 2,
+     "alignment": "tile_aligned"
+    },
+    "status": "passed"
+   }
+  ],
+  "xfail_expected": {
+   "count": 1077
+  },
+  "no_axes_found": [
+   {
+    "nodeid": "eval/golden_tests/q_stem/test_regression.py::test_head_provenance",
+    "test_name": "test_head_provenance",
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/q_stem/test_regression.py::test_row_provenance",
+    "test_name": "test_row_provenance",
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/q_stem/test_regression.py::test_rope_pairing",
+    "test_name": "test_rope_pairing",
+    "status": "xfail"
+   },
+   {
+    "nodeid": "eval/golden_tests/q_stem/test_regression.py::test_rope_positions[pos0]",
+    "test_name": "test_rope_positions[pos0]",
+    "status": "xfail"
+   },
+   {
+    "nodeid": "eval/golden_tests/q_stem/test_regression.py::test_rope_positions[pos65632]",
+    "test_name": "test_rope_positions[pos65632]",
+    "status": "xfail"
+   },
+   {
+    "nodeid": "eval/golden_tests/q_stem/test_regression.py::test_distribution[small]",
+    "test_name": "test_distribution[small]",
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/q_stem/test_regression.py::test_distribution[large]",
+    "test_name": "test_distribution[large]",
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/q_stem/test_regression.py::test_distribution[offset]",
+    "test_name": "test_distribution[offset]",
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/q_stem/test_regression.py::test_back_to_back",
+    "test_name": "test_back_to_back",
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/q_stem/test_regression.py::test_deterministic",
+    "test_name": "test_deterministic",
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/q_stem/test_regression.py::test_small_packet_size",
+    "test_name": "test_small_packet_size",
+    "status": "failed"
+   }
+  ]
+ }
+}

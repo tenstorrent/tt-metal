@@ -36,3 +36,25 @@ compute-bound at HiFi4 + x supply), stage-3 tail to ~180 us = the stage-1 cores'
 output writes (ablating them: ~161 us). Next levers (not built): interleave stage-3 rows into the stage-1 compute loop
 so the stage-1 cores' output writes overlap stage 1; K-split stage 1 (R6); a cheaper stage-3 row (per-row matmul
 init + fp32 pack overheads).
+
+## Phase 0 — Verification (incremental-verifier)
+- **Date**: 2026-11-24
+- **What was done**: code review, acceptance + golden suite + verifier CLI, precision baseline, per-stage perf
+  ablation, refinement queue (`op_requirements.md`), `verification_report.md`.
+- **SUPPORTED at Phase 0**: dtype=[bfloat16], q_b_proj_dtype=[bfloat16], wkv_b1_dtype=[bfloat16], layout=[TILE],
+  output_layout=[TILE], fp32_dest_acc_en=[True], rope_mode=[nope], alignment=[tile_aligned], input_buffer=[DRAM],
+  memory_layout=[INTERLEAVED], cluster_axis=[1], topology=[Ring], num_links=[2]
+- **Accuracy achieved**: PCC=0.999997, max_abs_err=0.0197, mean_abs_err=0.0018, rel_rms_err=0.0023 (Kimi K3.1
+  shape; 4 shapes × 4 devices measured via test_q_stem_precision_baseline.py, all within 0.999997–0.999998 /
+  rel RMS 0.0021–0.0023; got/true ratio median 1.0000)
+- **Golden suite at Phase 0**: 15 supported_pass / 0 supported_fail / 1077 xfail_expected / 0 xpass_drift /
+  0 xfail_wrong_mode (1103 collected; `verifier_report.json`)
+- **Perf**: Phase-0 Kimi loose case 190.5 µs fastest / 207.3 µs slowest chip (roofline 90.6, target 120.8);
+  fabric payload fully hidden; output writes −22.7 µs; stage 3 + out + wkv −53.1 µs (ablation)
+- **Issues encountered / fixes**: added the missing host `fits_l1` check (`check_fits_l1`, RuntimeError naming the
+  term); `QB_READ_BATCH` and `MAX_HEADERS` routed host → CT (were duplicated kernel literals); reader CT list built
+  per core set instead of a magic-index patch; `_crs` merges core ranges into rectangles; latent buffer type added
+  to `custom_program_hash` (pre-empts aliasing once input_buffer=L1 lands); `QSTEM_ABLATE` documented as the
+  perf-breakdown hook; `l1_ledger.md` totals re-evaluated from the predicate. `--dev` mode cannot open the fabric
+  mesh on this board (ACTIVE_ETH kernel config overflow) — tests ran in default mode.
+- **Tests added**: test_q_stem_precision_baseline.py
