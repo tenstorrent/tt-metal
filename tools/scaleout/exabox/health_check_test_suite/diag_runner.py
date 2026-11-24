@@ -50,6 +50,7 @@ from diag.firmware import firmware_check  # noqa: E402
 from diag.hsc import judge_hsc, read_hsc_status  # noqa: E402
 from diag.model import FAIL, PASS, SKIP, WARN, Check, Phase  # noqa: E402
 from diag.qsfp import QSFP_TOOL_BIN, run_qsfp_tests  # noqa: E402
+from diag import report  # noqa: E402
 from diag.resets import (  # noqa: E402
     END_DELAY_S,
     add_args as add_reset_args,
@@ -199,6 +200,7 @@ def build_diag_arg_parser() -> argparse.ArgumentParser:
     add_reset_args(ap)
     ap.add_argument("--output", type=Path, default=Path("diag_report.json"))
     ap.add_argument("--snapshot-out", type=Path, default=Path("/tmp/diag_snapshot.json"))
+    report.add_args(ap)
     return ap
 
 
@@ -753,6 +755,10 @@ def main() -> int:
         reset_gate=args.reset_gate,
         end_delay_s=args.end_delay_s,
     )
+    try:  # the run's report, last; a fault here costs the report, never the run's exit code
+        print("\n".join(report.lines(args.output.resolve().parent, args)), flush=True)
+    except Exception as e:
+        log(f"could not print the run report: {e!r}")
     return rc
 
 
