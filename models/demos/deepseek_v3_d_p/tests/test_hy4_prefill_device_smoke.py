@@ -15,9 +15,9 @@ Layer 0 is asserted >= 0.99 on all three. It sees the real embeddings, so it iso
 and their RoPE frames (``hy4_checkpoint.indexer_to_device_frame``; the MLA rope rows need no reorder). Deeper layers are recorded only: the learnable sink (#65921) and
 iHC residual (#65891) are not implemented, so their inputs already differ from HF.
 
-It runs the DEV / NUMERICS layout (``glm_prefill_sp8_tp4``, the 8x4 mesh): the Hy4 layout is TP32 / DP1 (#65884),
-which the shared prefill stack cannot run yet. ``PREFILL_HY4_LAYOUT`` defaults to the dev layout here; naming
-``tp32`` fails with its blockers (``tt/hy4/layout.py``).
+It runs the DEV / NUMERICS layout (``glm_prefill_sp8_tp4``, the 8x4 mesh) by default; ``PREFILL_HY4_LAYOUT=tp32``
+runs the Hy4 layout (#65884) with the model config and hf_config switches the runner's adapter sets for it. The mesh
+opens with the Hy4 runner's L1_SMALL (``Hy4Adapter.l1_small_size``) either way.
 
 Needs (each missing one skips): the Hy4 checkpoint, the golden trace (``PREFILL_TRACE_DIR``), a Hy4 weight
 cache built at the current ``HY4_MLA_CACHE_FORMAT`` (build it with the prefill runner, which writes the
@@ -31,9 +31,11 @@ Env: ``HY4_HF_MODEL`` / ``PREFILL_HF_MODEL`` (checkpoint), ``TT_HY4_PREFILL_TTNN
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from loguru import logger
@@ -171,7 +173,7 @@ class _PccRecorder:
             MESH,
             torus_xy_device_params(
                 fabric_payload_size=chunked.moe_fabric_payload(GLM53Config),
-                l1_small_size=chunked.GLM_L1_SMALL_SIZE,
+                l1_small_size=Hy4Adapter.l1_small_size,
                 trace_region_size=chunked.GLM_TRACE_REGION_SIZE,
             ),
             2,
@@ -195,6 +197,12 @@ def test_hy4_prefill_layer0_kv_and_index_k_pcc(
     # The adapter's layout gate, which this driver (TtPrefillTransformer directly) does not pass through.
     monkeypatch.setenv(hy4_layout.LAYOUT_ENV, os.environ.get(hy4_layout.LAYOUT_ENV) or hy4_layout.DEV_LAYOUT)
     hy4_layout.resolve_layout(MESH[sp_axis], MESH[1 - sp_axis], sp_axis, Hy4Config.NUM_ATTENTION_HEADS)
+    # The layout's model-constants class and hf_config switches, as Hy4Adapter.build_runtime sets them (patched on the
+    # shared variant instance for this test only).
+    params = SimpleNamespace(sp_factor=MESH[sp_axis], tp_factor=MESH[1 - sp_axis], sp_axis=sp_axis)
+    monkeypatch.setattr(variant, "model_config", variant.model_config_for(params))
+    config_only = copy.deepcopy(config_only)
+    variant.apply_layout_to_config(config_only, params)
 
     num_devices = mesh_device.get_num_devices()
     cache = _mesh_cache_dir(num_devices)

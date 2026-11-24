@@ -3,8 +3,9 @@
 """Hy4-preview prefill with iHC (#65891): the first layers on device vs the HF hy_v4 golden.
 
 Same driver and golden as ``test_hy4_prefill_device_smoke.py`` (``TtPrefillTransformer`` through the chunked driver,
-one 4096-token chunk = the whole 4K golden, the dev / numerics layout ``glm_prefill_sp8_tp4`` on the 8x4 mesh), with the
-model now running iHC: embedding -> 4 fp32 streams -> per layer, an iHC site around attention and one around the FFN /
+one 4096-token chunk = the whole 4K golden, on the 8x4 mesh), in two layouts: the dev / numerics layout
+``glm_prefill_sp8_tp4`` and the Hy4 layout ``tp32`` (#65884: vocab-sharded embedding, 2D-TP attention + indexer, 2D-TP
+FFN, EP32 MoE; the model config and hf_config switches the runner's adapter sets for it). The model runs iHC: embedding -> 4 fp32 streams -> per layer, an iHC site around attention and one around the FFN /
 MoE. Scored per layer:
 
   * the KVPE cache (nope / pe) and the index-key cache (full indexer layers), against the golden;
@@ -21,7 +22,8 @@ hooked to save ``x4`` after each site: ``streams_embed.pt``, ``streams_L{i}_attn
 (``[S, 4, 6144]`` fp32).
 
 The last layer is built kv-only (as the driver and the runner do), so with ``HY4_IHC_LAYERS=5`` layers 0-3 are fully
-scored and layer 4 contributes its KV. Weight-cache pieces the cache lacks (the ``ihc`` category, the learnable sink in
+scored and layer 4 contributes its KV. Both layouts read the dev cache dir (``<root>/.../8x4``): tp32's own pieces are
+named by their layout (``mla2d_*``, ``*_8x4_h4ax1_i8ax0``, ``embed_vocab32_8x4``), the rest are shared. Weight-cache pieces the cache lacks (the ``ihc`` category, the learnable sink in
 ``mla``) are read from the checkpoint exactly as the runner's rebuild does (``missing_trunk_categories`` +
 ``load_hy4_trunk_state_dict``) and written to the cache while the model builds.
 
@@ -32,9 +34,11 @@ Env: ``HY4_HF_MODEL`` (checkpoint), ``TT_HY4_PREFILL_TTNN_CACHE`` / ``PREFILL_TT
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -43,8 +47,10 @@ from loguru import logger
 import models.demos.deepseek_v3_d_p.tests.test_hy4_prefill_device_smoke as smoke
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
+from models.demos.deepseek_v3_d_p.reference.hy4_config import Hy4TP32Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.hy4 import ihc as hy4_ihc
+from models.demos.deepseek_v3_d_p.tt.hy4.layout import HY4_L1_SMALL_SIZE
 
 chunked = smoke.chunked
 NUM_LAYERS = int(os.environ.get("HY4_IHC_LAYERS", "5"))
@@ -142,7 +148,7 @@ class _SiteRecorder:
 
 
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, sp_axis",
+    "mesh_device, device_params, num_links, sp_axis, layout_name",
     [
         pytest.param(
             smoke.MESH,
@@ -153,7 +159,23 @@ class _SiteRecorder:
             ),
             2,
             0,
+            "glm_prefill_sp8_tp4",
             id="dev-sp8tp4-torus-xy-8x4",
+        ),
+        # TP32 / DP1 (#65884) end to end through TtPrefillTransformer: the vocab-sharded embedding (#65892), ttMLA2DTP
+        # + TtIndexer2D, TtMlp2D, EP32 MoE, iHC; the model config and hf_config switches the runner's adapter sets
+        # (Hy4Adapter.model_config_for / apply_layout_to_config), and its L1_SMALL.
+        pytest.param(
+            smoke.MESH,
+            torus_xy_device_params(
+                fabric_payload_size=chunked.moe_fabric_payload(Hy4TP32Config),
+                l1_small_size=HY4_L1_SMALL_SIZE,
+                trace_region_size=chunked.GLM_TRACE_REGION_SIZE,
+            ),
+            2,
+            0,
+            "tp32",
+            id="tp32-torus-xy-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -161,7 +183,7 @@ class _SiteRecorder:
 @pytest.mark.parametrize("variant", ["hy4_preview"], indirect=True, ids=["hy4"])
 @pytest.mark.timeout(0)
 def test_hy4_prefill_ihc_layers_vs_golden(
-    variant, config_only, mesh_device, device_params, num_links, sp_axis, monkeypatch
+    variant, config_only, mesh_device, device_params, num_links, sp_axis, layout_name, monkeypatch
 ):
     from models.demos.deepseek_v3_d_p.reference.hy4_config import Hy4Config
     from models.demos.deepseek_v3_d_p.tt.hy4 import layout as hy4_layout
@@ -171,9 +193,15 @@ def test_hy4_prefill_ihc_layers_vs_golden(
     from models.demos.deepseek_v3_d_p.tt.runners import weight_categories as wc
     from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 
-    monkeypatch.setenv(hy4_layout.LAYOUT_ENV, hy4_layout.DEV_LAYOUT)
+    monkeypatch.setenv(hy4_layout.LAYOUT_ENV, layout_name)
     hy4_layout.resolve_layout(smoke.MESH[sp_axis], smoke.MESH[1 - sp_axis], sp_axis, Hy4Config.NUM_ATTENTION_HEADS)
     monkeypatch.setattr(smoke, "NUM_LAYERS", NUM_LAYERS)  # the KV / index-K recorders count layers from it
+    # What the runner's adapter does for the layout (Hy4Adapter.build_runtime): its model-constants class and hf_config
+    # switches. The variant is a shared adapter instance, so the class is patched for this test only.
+    params = SimpleNamespace(sp_factor=smoke.MESH[sp_axis], tp_factor=smoke.MESH[1 - sp_axis], sp_axis=sp_axis)
+    monkeypatch.setattr(variant, "model_config", variant.model_config_for(params))
+    config_only = copy.deepcopy(config_only)
+    variant.apply_layout_to_config(config_only, params)
 
     cache = smoke._mesh_cache_dir(mesh_device.get_num_devices())
     if not cache.is_dir():
@@ -256,7 +284,7 @@ def test_hy4_prefill_ihc_layers_vs_golden(
         hc.stamp_mla_cache(cache, range(NUM_LAYERS))
 
     kv_rows = {r["layer"]: r for r in kv.table()}
-    logger.info("Hy4 prefill with iHC vs golden (layout glm_prefill_sp8_tp4: SP 8 on axis 0, TP 4 on axis 1):")
+    logger.info(f"Hy4 prefill with iHC vs golden (layout {layout_name}: SP 8 on axis 0, TP 4 on axis 1):")
     logger.info("layer  kvpe_nope  kvpe_pe   index_k_rope  index_k_nope")
     for layer, r in sorted(kv_rows.items()):
         ik = f"{r['index_k_rope']:12.6f}  {r['index_k_nope']:12.6f}" if "index_k_rope" in r else f"{'-':>12}  {'-':>12}"
@@ -269,7 +297,7 @@ def test_hy4_prefill_ihc_layers_vs_golden(
         )
     if os.environ.get("HY4_IHC_REPORT"):
         Path(os.environ["HY4_IHC_REPORT"]).write_text(
-            json.dumps({"layout": hy4_layout.DEV_LAYOUT, "kv": list(kv_rows.values()), "sites": sites.rows}, indent=1)
+            json.dumps({"layout": layout_name, "kv": list(kv_rows.values()), "sites": sites.rows}, indent=1)
         )
 
     bad = [

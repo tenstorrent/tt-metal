@@ -84,6 +84,9 @@ class Hy4Config(GLM53Config):
     # Shared expert / dense layer-0 FFN placement (#65890). Off here: the dev SP8 x TP4 layout keeps GLM-5.3's TP-only
     # TtSharedExpert / TtFfn and their caches. The SC1 layout runs Hy4TP32Config, which turns it on (TtMlp2D).
     FFN_2D_TP = False
+    # Token embedding placement (#65892). Off here: the dev layout keeps TtParallelEmbedding (hidden over TP, the
+    # table replicated over the 8 SP rows). Hy4TP32Config turns it on (tt/hy4/embedding.py, decode's vocab-32 table).
+    EMBED_VOCAB_SHARDED = False
 
     # --- Indexer delta -------------------------------------------------------------------------
     INDEX_TOPK_PATTERN = _HY4_INDEX_PATTERN
@@ -139,6 +142,9 @@ class Hy4TP32Config(Hy4Config):
     # cache names carry it (tt_mlp_2d.cache_names: *_8x4_h4ax1_i8ax0), so caches from another split never load.
     FFN_2D_MESH = (8, 4)
     FFN_2D_HIDDEN_AXIS = 1
+    # The embedding table vocab-sharded over the same 32 chips (decode's TtHy4Embedding shards, 3776 ids per chip;
+    # tt/hy4/embedding.py), its cache named for FFN_2D_MESH (embed_vocab32_8x4).
+    EMBED_VOCAB_SHARDED = True
 
 
 # ---------------------------------------------------------------------------------------------------

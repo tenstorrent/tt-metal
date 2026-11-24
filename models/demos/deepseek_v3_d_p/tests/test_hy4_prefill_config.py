@@ -350,10 +350,9 @@ def test_layouts_and_heads_per_chip():
     assert tp32.hidden_axis == dev.hidden_axis == 1
     assert tp32.heads_per_chip(64) == 8  # heads over the 8-chip axis 0 (#65884's 8 columns), with the sequence
     assert dev.heads_per_chip(64) == 16  # heads over the 4-chip TP axis, with the hidden
-    # TP32 is blocked until the shared stack has its placement; every blocker names its owning issue.
-    assert not tp32.runnable
-    # 2D TP attention (#65885) and its indexer (#65887) landed; the vocab-sharded embedding (#65892) is left.
-    assert {issue for _, issue in tp32.blockers} == {"#65892"}
+    # 2D TP attention (#65885), its indexer (#65887) and the vocab-sharded embedding (#65892) landed: nothing blocks
+    # tp32 on the shared stack.
+    assert hy4_layout.TP32_BLOCKERS == () and tp32.blockers == () and tp32.runnable
     # The layouts differ in the attention / FFN modules too: tp32 builds ttMLA2DTP (+ TtIndexer2D) and TtMlp2D.
     assert (tp32.mla_2d_tp, tp32.ffn_2d_tp) == (True, True) and (dev.mla_2d_tp, dev.ffn_2d_tp) == (False, False)
 
@@ -367,14 +366,13 @@ def test_layout_cache_keys_differ():
 
 def test_resolve_layout(monkeypatch, expect_error):
     monkeypatch.delenv(hy4_layout.LAYOUT_ENV, raising=False)
-    # Unset on a full Galaxy means tp32, which fails fast naming its blockers and the dev override.
-    for mesh in ((4, 8, 0), (8, 4, 0)):
-        with expect_error(NotImplementedError, "tp32 .*#65892.*glm_prefill_sp8_tp4"):
-            hy4_layout.resolve_layout(*mesh, 64)
+    # Unset on a full Galaxy means tp32: it runs on the 8x4 mesh (SP 8 on axis 0) and refuses any other.
+    assert hy4_layout.resolve_layout(8, 4, 0, 64).name == "tp32"
+    with expect_error(ValueError, "tp32 needs PREFILL_SP=8"):
+        hy4_layout.resolve_layout(4, 8, 0, 64)
     assert hy4_layout.resolve_layout(2, 4, 0, 64) is None  # small test mesh, nothing requested
     monkeypatch.setenv(hy4_layout.LAYOUT_ENV, "tp32")
-    with expect_error(NotImplementedError, "cannot run on the shared prefill stack yet"):
-        hy4_layout.resolve_layout(4, 8, 0, 64)
+    assert hy4_layout.resolve_layout(8, 4, 0, 64).name == "tp32"
     monkeypatch.setenv(hy4_layout.LAYOUT_ENV, "glm_prefill_sp8_tp4")
     assert hy4_layout.resolve_layout(8, 4, 0, 64).name == "glm_prefill_sp8_tp4"
     with expect_error(ValueError, "needs PREFILL_SP=8"):
@@ -385,6 +383,22 @@ def test_resolve_layout(monkeypatch, expect_error):
     monkeypatch.delenv(hy4_layout.LAYOUT_ENV)
     with expect_error(ValueError, "do not split"):
         hy4_layout.resolve_layout(4, 6, 0, 64)
+
+
+def test_blocked_layout_fails_naming_its_blockers(monkeypatch, expect_error):
+    """The blocker gate itself (no layout is blocked today): a layout with blockers fails fast, naming each blocker's
+    issue and the dev override, before the mesh check."""
+    import dataclasses
+
+    blocked = dataclasses.replace(
+        hy4_layout.HY4_PREFILL_LAYOUTS["tp32"], blockers=(("something missing", "#1"), ("another", "#2"))
+    )
+    assert not blocked.runnable
+    monkeypatch.setitem(hy4_layout.HY4_PREFILL_LAYOUTS, "tp32", blocked)
+    monkeypatch.delenv(hy4_layout.LAYOUT_ENV, raising=False)
+    for mesh in ((4, 8, 0), (8, 4, 0)):
+        with expect_error(NotImplementedError, "tp32 .*#1, #2.*glm_prefill_sp8_tp4"):
+            hy4_layout.resolve_layout(*mesh, 64)
 
 
 def test_manifest_selects_tp32():
@@ -442,7 +456,7 @@ def test_adapter_identity(adapter):
 
 
 def test_adapter_layout_gate_and_cache_key(adapter, tmp_path, monkeypatch, expect_error):
-    """The runner resolves weight_cache_path before it opens the mesh, so TP32 fails there, at startup."""
+    """The runner resolves weight_cache_path before it opens the mesh, so a mesh / layout mismatch fails there."""
     import ttnn
     from models.common.utility_functions import is_blackhole
     from models.demos.common.prefill.adapter import PrefillRunParams
@@ -450,12 +464,12 @@ def test_adapter_layout_gate_and_cache_key(adapter, tmp_path, monkeypatch, expec
     monkeypatch.setenv("PREFILL_TTNN_CACHE", str(tmp_path))
     monkeypatch.setattr(ttnn, "get_num_devices", lambda: 32)
     monkeypatch.delenv(hy4_layout.LAYOUT_ENV, raising=False)
-    with expect_error(NotImplementedError, "#65892"):
-        adapter.weight_cache_path((4, 8), sp_axis=0)
-    with expect_error(NotImplementedError, "#65892"):
-        adapter.weight_cache_path((8, 4), sp_axis=0)
-    monkeypatch.setenv(hy4_layout.LAYOUT_ENV, "glm_prefill_sp8_tp4")
     arch = "bh" if is_blackhole() else "wh"
+    with expect_error(ValueError, "tp32 needs PREFILL_SP=8"):
+        adapter.weight_cache_path((4, 8), sp_axis=0)
+    # tp32 (the default on 32 chips) keys its cache apart from the dev layout's.
+    assert adapter.weight_cache_path((8, 4), sp_axis=0) == tmp_path / f"hy4_preview_{arch}_32dev" / "8x4_tp32"
+    monkeypatch.setenv(hy4_layout.LAYOUT_ENV, "glm_prefill_sp8_tp4")
     assert adapter.weight_cache_path((8, 4), sp_axis=0) == tmp_path / f"hy4_preview_{arch}_32dev" / "8x4"
     params = PrefillRunParams(
         mesh_shape=(8, 4),
@@ -474,8 +488,10 @@ def test_adapter_layout_gate_and_cache_key(adapter, tmp_path, monkeypatch, expec
     )
     adapter._check_layout(params)
     monkeypatch.setenv(hy4_layout.LAYOUT_ENV, "tp32")
-    with expect_error(NotImplementedError, "glm_prefill_sp8_tp4"):
-        adapter._check_layout(params)
+    adapter._check_layout(params)  # runnable on the shared stack (#65892 was its last blocker)
+    assert adapter.model_config_for(params).EMBED_VOCAB_SHARDED is True
+    monkeypatch.setenv(hy4_layout.LAYOUT_ENV, "glm_prefill_sp8_tp4")
+    assert adapter.model_config_for(params).EMBED_VOCAB_SHARDED is False
 
 
 def test_adapter_loads_and_validates_config_json(adapter, tmp_path, monkeypatch, expect_error):

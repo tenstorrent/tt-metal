@@ -109,6 +109,21 @@ def _kv_only_indexer_cache_complete(cache_path: Path, prefix: str, layer_idx: in
     return TtIndexer.check_cache_complete(cache_path, f"{prefix}.mla")
 
 
+def _kv_only_mla_cache_complete(cache_path: Path, prefix: str, layer_idx: int, model_cfg, hf_config, tp_factor) -> bool:
+    """The MLA cache a kv-only last layer loads. ttMLA: its KV projections (+ its indexer on a ``full`` layer).
+    ttMLA2DTP (Hy4 tp32): the whole layer under its layout stamp, because a kv-only 2D build reads the cache only
+    under a stamp a full build wrote and otherwise converts its KV weights from the checkpoint, uncached; a cache
+    holding none of the layer's 2D shards must report MLA missing so the runner hands it those weights."""
+    from models.demos.deepseek_v3_d_p.tt.mla.mla_2d import uses_2d_tp
+    from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import pattern_exists
+
+    if hf_config is not None and uses_2d_tp(hf_config):
+        return _mla_cache_complete(cache_path, prefix, layer_idx, model_cfg, hf_config, tp_factor)
+    return all(
+        pattern_exists(f"{prefix}.mla.{name}*.tensorbin", "MLA") for name in ("kv_a_layernorm", "kv_a_proj_with_mqa")
+    ) and _kv_only_indexer_cache_complete(cache_path, prefix, layer_idx, hf_config)
+
+
 def missing_trunk_categories(
     cache_path: Path,
     *,
@@ -140,9 +155,8 @@ def missing_trunk_categories(
     from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
     from models.demos.deepseek_v3_d_p.tt.tt_ffn import TtFfn
     from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
-    from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
-    from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import rank_loads_embedding
-    from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker, pattern_exists
+    from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import embedding_cache_complete, rank_loads_embedding
+    from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 
     missing: dict[str, list[int]] = {}
 
@@ -157,7 +171,7 @@ def missing_trunk_categories(
     exists = cache_path.is_dir()
 
     if rank_loads_embedding(is_first_rank, is_last_rank, mtp_levels):
-        if not (exists and TtParallelEmbedding.check_cache_complete(cache_path)):
+        if not (exists and embedding_cache_complete(cache_path, model_cfg)):
             miss(EMBEDDING, -1)
 
     from models.demos.deepseek_v3_d_p.tt.hy4 import ihc as hy4_ihc
@@ -178,12 +192,7 @@ def missing_trunk_categories(
             if not (exists and TtDistributedRmsNorm.check_cache_complete(cache_path, f"{prefix}.attn_norm")):
                 miss(NORMS, layer_idx)
             if not (
-                exists
-                and all(
-                    pattern_exists(f"{prefix}.mla.{name}*.tensorbin", "MLA")
-                    for name in ("kv_a_layernorm", "kv_a_proj_with_mqa")
-                )
-                and _kv_only_indexer_cache_complete(cache_path, prefix, layer_idx, hf_config)
+                exists and _kv_only_mla_cache_complete(cache_path, prefix, layer_idx, model_cfg, hf_config, tp_factor)
             ):
                 miss(MLA, layer_idx)
             continue

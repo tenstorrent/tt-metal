@@ -2,9 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Hy4-preview prefill blocks with iHC on the TP32 layout (#65884, #65891), layers 0..N-1 vs the fp32 reference.
 
-The TP32 pieces do not compose in ``TtPrefillTransformer`` yet (``tt/hy4/layout.py`` TP32_BLOCKERS): the embedding is
-not vocab-sharded (#65892). This test runs the blocks themselves on the TP32 placement instead, the embedding from the
-host:
+This test runs the blocks themselves on the TP32 placement, the embedding from the host (the whole model, with the
+vocab-sharded embedding of #65892, is ``test_hy4_prefill_ihc_layers.py[tp32]``):
 
   * mesh: the physical 8x4 torus with #65884's split: the residual's hidden over axis 1 (4 chips), heads (8 per chip)
     and the prefill sequence over axis 0 (8 chips); residual ``[S / 8, 6144 / 4]`` per chip. NOT RUN YET: it needs
