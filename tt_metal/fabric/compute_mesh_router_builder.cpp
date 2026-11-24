@@ -591,9 +591,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
 
     if (cluster.arch() == tt::ARCH::BLACKHOLE && fabric_context.get_rtoptions().get_enable_2_erisc_mode()) {
         // Enable updates at a fixed interval for link stability and link status updates
-        // A switch after about 1000 idle passes, as before with 32-pass rounds (end_round switches once more than
-        // this many idle rounds have passed: 2 rounds of 512 passes).
-        constexpr uint32_t k_BlackholeFabricRouterContextSwitchInterval = 0;
+        constexpr uint32_t k_BlackholeFabricRouterContextSwitchInterval = 0;  // keeps ~1000 idle passes per switch
         edm_builder->set_firmware_context_switch_interval(k_BlackholeFabricRouterContextSwitchInterval);
         for (auto& risc_config : edm_builder->config.risc_configs) {
             risc_config.set_iterations_between_ctx_switch_and_teardown_checks(
@@ -930,7 +928,7 @@ void ComputeMeshRouterBuilder::configure_for_dispatch() {
     // Dispatch requires higher context switching frequency to service slow dispatch / UMD / debug tools
     constexpr uint32_t k_DispatchFabricRouterContextSwitchInterval = 16;
     erisc_builder_->set_firmware_context_switch_interval(k_DispatchFabricRouterContextSwitchInterval);
-    for (auto& risc_config : erisc_builder_->config.risc_configs) {  // the default round length: interval in its rounds
+    for (auto& risc_config : erisc_builder_->config.risc_configs) {
         risc_config.set_iterations_between_ctx_switch_and_teardown_checks(
             FabricEriscDatamoverConfig::default_iterations_between_ctx_switch_and_teardown_checks);
     }

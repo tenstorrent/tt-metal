@@ -152,10 +152,7 @@ struct FabricEriscDatamoverConfig {
     static constexpr std::size_t buffer_alignment = 32;
     static constexpr std::size_t eth_word_l1_alignment = 16;
     static constexpr uint32_t default_iterations_between_ctx_switch_and_teardown_checks = 32;
-    // Blackhole compute routers (two ERISCs, idle context switching): longer rounds. The once-per-round work (round
-    // checks, telemetry, the context-switch count; ~190 cycles) every 32 passes recurs about once per round trip of a
-    // ping-pong and phase-locks onto its packets (a bimodal +100 ns per hop on 16 B latency); every 512 passes it
-    // rarely lands on a packet. The context switch interval is scaled to keep about the same switch cadence in passes.
+    // Longer rounds on Blackhole compute routers to reduce latency jitter from the per-round overhead.
     static constexpr uint32_t blackhole_iterations_between_ctx_switch_and_teardown_checks = 512;
     static_assert(((buffer_alignment - 1) & buffer_alignment) == 0);
 
