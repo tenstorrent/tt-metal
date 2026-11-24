@@ -290,8 +290,10 @@ void bind_generic_operation_compilation(nb::module_& mod) {
         the program cache.
 
         Run the result with ``ttnn.experimental.run_compiled_program``, as many times as needed, with tensors and
-        descriptors that have the same program cache key. Runtime-argument values and which buffer backs a CB are
-        not part of the key (whether a CB has a backing buffer is), so each run may name other tensors and buffers.
+        descriptors that have the same program cache key. Runtime-argument values are not part of the key, and neither
+        is which tensor's buffer backs a CB (only whether a CB has one), so each run may name other tensors and
+        buffers. The io tensors must keep their layouts (dtype, page and memory config), though their shapes may
+        change, and a CB backed by a global circular buffer must keep the same global circular buffer.
 
         In slow dispatch the program's kernel-configuration blocks are not checked against the KERNEL_CONFIG window
         here: a program whose kernel binaries make it too large for the window runs them from a kernel config buffer
