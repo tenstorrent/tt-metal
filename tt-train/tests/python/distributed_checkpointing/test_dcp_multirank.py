@@ -292,8 +292,8 @@ def test_a_rank_that_placed_its_tensors_says_so_when_another_rank_fails(two_rank
 
         monkeypatch.setattr(_load, "_place", place_then_fail_at_the_last)
     pattern = (
-        r"^reading and placing the shards failed on rank\(s\) \[1\] of 2: rank 1: CheckpointError: load failed at "
-        rf".*\(RuntimeError: simulated device out of memory\) after {n - 1} of {n} tensors were placed"
+        r"^reading and placing the shards failed on rank\(s\) \[1\] of 2: rank 1: CheckpointError: the load failed at "
+        rf".* after {n - 1} of {n} tensors were placed .* The error: RuntimeError: simulated device out of memory"
     )
     try:
         with expect_error(dcp.CheckpointError, pattern) as raised:

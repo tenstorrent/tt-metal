@@ -319,12 +319,14 @@ def _shares_mesh(local: set[tuple[int, ...]]) -> bool:
 
 def _raise_partly_restored(err: Exception, at: str, placed: list[str], total: int, shared_mesh: bool = False) -> None:
     """Re-raise ``err``, as a ``CheckpointError`` that says the live state is partly restored once a tensor was
-    placed, and what to do about it (``_partly_restored_advice``)."""
+    placed, and what to do about it (``_partly_restored_advice``). The advice comes before the error's own text, which
+    can be long (a device error carries its backtrace), so the cap on the message a rank sends the others
+    (``MESSAGE_LIMIT``) cuts only that text."""
     if not placed:
         raise err
     raise CheckpointError(
-        f"load failed at {at} ({type(err).__name__}: {err}) after {len(placed)} of {total} tensors were placed (the "
-        f"first: {placed[0]}); {_partly_restored_advice(shared_mesh)}"
+        f"the load failed at {at} after {len(placed)} of {total} tensors were placed (the first: {placed[0]}); "
+        f"{_partly_restored_advice(shared_mesh)}. The error: {type(err).__name__}: {err}"
     ) from err
 
 

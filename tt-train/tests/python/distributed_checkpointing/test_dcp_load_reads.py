@@ -16,6 +16,7 @@ from dcp_oracle import R, S, FakeCheckpoint, arange, assert_shards_equal, expect
 
 from ttml.distributed_checkpointing import _load
 from ttml.distributed_checkpointing._errors import CheckpointError, IncompleteCheckpointError
+from ttml.distributed_checkpointing._coordinator import MESSAGE_LIMIT, failure_message
 from ttml.distributed_checkpointing._layouts import Identity
 from ttml.distributed_checkpointing._load import _read_chunk, chunk_reads, elect_checkers
 from ttml.distributed_checkpointing._planner import create_load_plan
@@ -306,15 +307,26 @@ def test_a_partly_restored_load_says_what_to_do(expect_error):
     err = RuntimeError("simulated read error")
     with expect_error(
         CheckpointError,
-        r"after 1 of 2 tensors were placed \(the first: a\); the model and optimizer are partly restored: load again "
-        r"or discard them$",
+        r"^the load failed at b after 1 of 2 tensors were placed \(the first: a\); the model and optimizer are partly "
+        r"restored: load again or discard them\. The error: RuntimeError: simulated read error$",
     ):
         _load._raise_partly_restored(err, "b", ["a"], 2)
     with expect_error(
         CheckpointError,
         r"partly restored, and the ranks sharing this mesh may now hold different device allocations: end the job and "
-        r"restart it instead of loading again$",
+        r"restart it instead of loading again\. The error: RuntimeError: simulated read error$",
     ):
         _load._raise_partly_restored(err, "b", ["a"], 2, shared_mesh=True)
     with expect_error(RuntimeError, r"^simulated read error$"):
         _load._raise_partly_restored(err, "a", [], 2, shared_mesh=True)
+
+
+def test_the_advice_survives_the_cap_on_a_ranks_message(expect_error):
+    """A rank's failure message reaches the other ranks capped at MESSAGE_LIMIT bytes, and a device error carries its
+    backtrace: the advice, which comes before the error's own text, is kept, and only that text is cut."""
+    long_error = RuntimeError("TT_THROW @ device.cpp:603: tt::exception\nbacktrace:\n" + " --- frame\n" * 2000)
+    with expect_error(CheckpointError, "end the job and restart it") as raised:
+        _load._raise_partly_restored(long_error, "b", ["a"], 2, shared_mesh=True)
+    sent = failure_message(1, raised.value).decode("utf-8")
+    assert len(sent.encode("utf-8")) == MESSAGE_LIMIT, "precondition: the message is cut"
+    assert "end the job and restart it instead of loading again" in sent
