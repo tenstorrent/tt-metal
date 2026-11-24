@@ -235,10 +235,10 @@ def recount_after_tests(snapshot: Callable[[], dict]) -> Check:
     return pcie_enum_check(snap.get("device_info") or [], name)
 
 
-def _hear(stage: str, out: Path, dry_run: bool) -> None:
-    """The caller's --hook hears a stage start (reset, links, end; the bus-bar stage says so itself)."""
-    if events.hook and not dry_run:
-        subprocess.run([events.hook, "stage-start", stage, "-", str(out)], check=False)
+def _hear(stage: str, out: Path, dry_run: bool) -> int:
+    """The caller's --hook hears a stage start (reset, links, end; the bus-bar stage says so itself); its rc."""
+    hook = events.hook and not dry_run
+    return subprocess.run([events.hook, "stage-start", stage, "-", str(out)], check=False).returncode if hook else 0
 
 
 def _run_galaxy_load(
@@ -263,8 +263,9 @@ def _run_galaxy_load(
     elif "busbar" in tests:
         _guarded(phase, "busbar", FAIL, lambda: run_busbar(phase, out, mode, dry_run, tuple(steps), **overrides))
     fault = link_fault_before or any(link_fault(c) for c in phase.checks[held:] if c.name != "busbar")
-    if "links" in tests:
-        _hear("links", out, dry_run)
+    if "links" in tests and (rc := _hear("links", out, dry_run)):
+        phase.add(Check(name="links", status=SKIP, details=f"held back by the hook (rc {rc})", ip="other"))
+    elif "links" in tests:
         _guarded(phase, "links", FAIL, lambda: run_links(phase, out, fault, sweep_reset, dry_run, **links_kw))
 
 
