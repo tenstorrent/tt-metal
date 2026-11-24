@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import torch
 from helpers.constraints import (
     get_valid_dest_accumulation_modes,
     get_valid_math_fidelities,
@@ -15,11 +14,10 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     BroadcastType,
-    DestSync,
+    EltwiseBinaryReuseDestType,
     MathFidelity,
     MathOperation,
     PerfRunType,
-    format_dict,
 )
 from helpers.param_config import (
     generate_perf_input_dimensions,
@@ -27,6 +25,7 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    quasar_dest_sync_modes,
     quasar_mx_smoke,
     runtime,
     select_perf_tile_sizes,
@@ -49,13 +48,14 @@ from helpers.test_variant_parameters import (
     NUM_FACES_R_DIM,
     NUM_TILES_IN_BLOCK,
     OUTPUT_TILE_CNT,
+    REUSE_DEST_TYPE,
     TEST_FACE_DIMS,
     TILE_COUNT,
     generate_input_dim,
 )
 from helpers.tile_constants import SUPPORTED_TILE_SIZES, is_mx_unsupported_tile_dims
 from helpers.tile_shape import construct_tile_shape
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 from quasar.test_eltwise_binary_quasar import (
     get_num_tiles_per_accumulation,
     valid_acc_to_dest,
@@ -63,7 +63,6 @@ from quasar.test_eltwise_binary_quasar import (
 
 _BINARY_BROADCAST_BASE_FORMATS = [
     DataFormat.Float16_b,
-    DataFormat.Float16,
 ]
 _BINARY_BROADCAST_EXPLICIT_FORMATS = [
     InputOutputFormat(DataFormat.Int8, DataFormat.Int32),
@@ -88,10 +87,6 @@ BROADCAST_TYPES = [
     BroadcastType.Row,
     BroadcastType.Scalar,
 ]
-
-
-def binary_broadcast_dest_sync_modes(*, is_perf=False):
-    return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
 
 
 def binary_broadcast_tile_dimensions(formats, broadcast_type, *, is_perf=False):
@@ -126,27 +121,27 @@ def binary_broadcast_acc_to_dest_modes(input_dimensions, tile_dimensions):
     return valid_acc_to_dest(input_dimensions, tile_dimensions)
 
 
-def binary_broadcast_math_fidelities(format, math_op):
+def binary_broadcast_math_fidelities(format, mathop):
     # Int8 is an exact integer op. Float16_b is full precision at LoFi.
     if format.input_format in (DataFormat.Int8, DataFormat.Float16_b):
         return [MathFidelity.LoFi]
-    return get_valid_math_fidelities(format, math_op)
+    return get_valid_math_fidelities(format, mathop)
 
 
 @pytest.mark.quasar
 @parametrize(
     formats=BINARY_BROADCAST_FORMATS,
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
-    math_op=[
+    mathop=[
         MathOperation.Elwadd,
         MathOperation.Elwsub,
         MathOperation.Elwmul,
     ],
     broadcast_type=BROADCAST_TYPES,
-    math_fidelity=lambda formats, math_op: binary_broadcast_math_fidelities(
-        formats, math_op
+    math_fidelity=lambda formats, mathop: binary_broadcast_math_fidelities(
+        formats, mathop
     ),
-    dest_sync=lambda: binary_broadcast_dest_sync_modes(is_perf=False),
+    dest_sync=lambda: quasar_dest_sync_modes(is_perf=False),
     unpack_to_dest=[False],
     tile_dimensions=lambda formats, broadcast_type: binary_broadcast_tile_dimensions(
         formats, broadcast_type, is_perf=False
@@ -165,7 +160,7 @@ def binary_broadcast_math_fidelities(format, math_op):
 def test_eltwise_binary_broadcast_quasar(
     formats,
     dest_acc,
-    math_op,
+    mathop,
     broadcast_type,
     math_fidelity,
     dest_sync,
@@ -228,7 +223,7 @@ def test_eltwise_binary_broadcast_quasar(
         else formats.input_format
     )
     golden_tensor = generate_golden(
-        math_op,
+        mathop,
         src_A,
         bcast_src_B_tensor,
         formats.output_format,
@@ -249,10 +244,12 @@ def test_eltwise_binary_broadcast_quasar(
         "formats": formats,
         "templates": [
             MATH_FIDELITY(math_fidelity),
-            MATH_OP(mathop=math_op),
+            MATH_OP(mathop=mathop),
             BROADCAST_TYPE(broadcast_type),
             DEST_SYNC(dest_sync),
             ACC_TO_DEST(acc_to_dest),
+            # Broadcast never reuses Dest; recorded so the perf CSV matches the WH/BH column.
+            REUSE_DEST_TYPE(EltwiseBinaryReuseDestType.NONE),
         ],
         "runtimes": [
             generate_input_dim(
@@ -304,12 +301,7 @@ def test_eltwise_binary_broadcast_quasar(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format

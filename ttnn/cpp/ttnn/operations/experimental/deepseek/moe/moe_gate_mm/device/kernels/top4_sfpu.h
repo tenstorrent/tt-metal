@@ -24,7 +24,7 @@
  * Input:  8 FP16B values per lane, read from the lower face (rows 0-7) of the DST
  *         tile at offset 32 (face 1).
  * Output: One uint16 bitmask per lane (bits 0-7, one per core), written to row 0
- *         of face 0 of the same DST tile (LO16 mode).
+ *         of face 0 of the same DST tile (LO16_ONLY mode).
  */
 
 namespace ckernel {
@@ -158,7 +158,7 @@ inline void _calculate_top4_() {
 
     //-------------------------------------------------------------------------
     // Step 9: Write back the 4 indices as raw uint16 values
-    // Using LO16 mode to write the lower 16 bits (the indices)
+    // Using LO16_ONLY mode to write the lower 16 bits (the indices)
     //-------------------------------------------------------------------------
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_0, 0);  // Write 1st index

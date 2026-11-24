@@ -13,7 +13,6 @@
 #include "ckernel_sfpu_exp.h"  // For _sfpu_round_to_nearest_int32_
 #include "ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_recip.h"
-#include "sfpu/ckernel_sfpu_cdf.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
 #include "ckernel_sfpu_erf.h"  // ERF_LUT, ERF_NUM_DEGREE, ERF_DEN_DEGREE (INP_FLOAT32 branch for FP32 path)
 #include "ckernel_sfpu_piecewise_rational.h"
@@ -377,6 +376,8 @@ inline void calculate_gelu_tanh() {
     }
 }
 
+// Wormhole keeps the stock body in both DEST modes, so the state is written in both.
+template <bool is_fp32_dest_acc_en = true>
 inline void gelu_tanh_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     // initialise constants for _sfpu_tanh_fp32_accurate_

@@ -396,20 +396,14 @@ def reference_apply_penalties(logits, prompt_mask, output_mask, output_counts, p
     Algorithm source: vLLM's ``apply_penalties`` in ``vllm/model_executor/layers/utils.py``
     (https://github.com/vllm-project/vllm/blob/main/vllm/model_executor/layers/utils.py).
 
-    - Presence: subtract flat penalty for each token that appeared in output
-    - Frequency: subtract penalty proportional to token occurrence count
     - Repetition: sign-dependent scaling for tokens in prompt OR output
       (positive logits divided by penalty, negative logits multiplied by penalty)
+    - Presence: subtract flat penalty for each token that appeared in output
+    - Frequency: subtract penalty proportional to token occurrence count
     """
     logits = logits.clone().float()
     output_mask_f = output_mask.float()
     output_counts_f = output_counts.float()
-
-    # Presence: logits -= output_mask * presence  (vLLM: presence_penalties * output_mask)
-    logits -= output_mask_f * presence
-
-    # Frequency: logits -= output_counts * frequency  (vLLM: frequency_penalties * output_bin_counts)
-    logits -= output_counts_f * frequency
 
     # Repetition: sign-dependent scaling  (vLLM: apply_repetition_penalties on combined prompt+output mask)
     combined = ((prompt_mask + output_mask) > 0).float()
@@ -421,6 +415,13 @@ def reference_apply_penalties(logits, prompt_mask, output_mask, output_counts, p
         torch.where(combined.bool(), repetition, torch.ones_like(logits)),
     )
     logits *= scale
+
+    # Presence: logits -= output_mask * presence  (vLLM: presence_penalties * output_mask)
+    logits -= output_mask_f * presence
+
+    # Frequency: logits -= output_counts * frequency  (vLLM: frequency_penalties * output_bin_counts)
+    logits -= output_counts_f * frequency
+
     return logits
 
 

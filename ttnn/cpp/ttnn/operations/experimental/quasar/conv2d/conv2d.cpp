@@ -43,6 +43,7 @@
 #include "ttnn/operations/experimental/quasar/to_device/to_device.hpp"
 #include "ttnn/operations/experimental/quasar/op_slicing/op_slicing.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace ttnn::operations::conv {
 // get_conv_padded_input_shape_and_mem_config has external linkage but is not declared in
@@ -250,7 +251,7 @@ static std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard
                 Tensor resharded_input_tensor = ttnn::create_device_tensor(
                     tt::tt_metal::TensorSpec(
                         input_tensor.logical_shape(),
-                        tt::tt_metal::TensorLayout(
+                        tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
                             input_tensor.dtype(),
                             tt::tt_metal::PageConfig(input_tensor.layout()),
                             input_tensor_sharded_memory_config_to_layout,
@@ -276,8 +277,7 @@ static std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard
 // QUASAR matmul program config (ttnn::operations::experimental::quasar::matmul) so the 1x1-conv
 // GEMM runs on the quasar matmul/linear instead of the original. Mirrors the shared helper
 // field-for-field; the config structs are identical copies.
-static ttnn::operations::experimental::quasar::matmul::MatmulProgramConfig
-determine_matmul_op_config_from_conv_op_config_qsr(
+ttnn::operations::experimental::quasar::matmul::MatmulProgramConfig determine_matmul_op_config_from_conv_op_config_qsr(
     Conv2dParallelizationConfig conv_parallelization_config,
     Conv2dBlockConfig conv_blocking_config,
     bool height_sharded,

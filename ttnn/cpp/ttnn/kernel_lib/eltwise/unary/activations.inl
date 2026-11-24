@@ -27,10 +27,13 @@ struct Relu : UnaryOp<Relu<Slot>, Slot> {
     static ALWI void exec_impl(uint32_t slot_offset) { relu_tile(to_u32(Slot) + slot_offset); }
 };
 
-template <Dst Slot>
-struct Sigmoid : UnaryOp<Sigmoid<Slot>, Slot> {
-    static ALWI void init() { sigmoid_tile_init(); }
-    static ALWI void exec_impl(uint32_t slot_offset) { sigmoid_tile(to_u32(Slot) + slot_offset); }
+template <Dst Slot, Approx fast, SigmoidPrecision Precision>
+struct Sigmoid : UnaryOp<Sigmoid<Slot, fast, Precision>, Slot> {
+    static ALWI void init() { sigmoid_tile_init<static_cast<bool>(fast)>(); }
+    static ALWI void exec_impl(uint32_t slot_offset) {
+        constexpr bool fp32_accurate = Precision == SigmoidPrecision::Dest && DST_ACCUM_MODE;
+        sigmoid_tile<VectorMode::RC, static_cast<bool>(fast), fp32_accurate>(to_u32(Slot) + slot_offset);
+    }
 };
 
 template <Dst Slot>

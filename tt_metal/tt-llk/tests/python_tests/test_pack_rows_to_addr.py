@@ -22,23 +22,23 @@ from helpers.llk_params import (
     BlocksCalculationAlgorithm,
     DestAccumulation,
     DestSync,
-    format_dict,
 )
 from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
 )
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     NUM_BLOCKS,
     NUM_ROWS_TO_PACK,
     NUM_TILES_IN_BLOCK,
+    TILE_COUNT,
     generate_input_dim,
 )
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 max_tiles = 4
 tile_dim = 32
@@ -50,8 +50,7 @@ dimension_combinations = [
     if m * n <= max_tiles * tile_dim * tile_dim
 ]
 
-
-@parametrize(
+PACK_ROWS_TO_ADDR_SWEEP = dict(
     formats=input_output_formats(
         [
             DataFormat.Bfp8_b,
@@ -65,14 +64,20 @@ dimension_combinations = [
     num_rows_to_pack=[1, 16, 50, 64],
     dimensions=dimension_combinations,
 )
+
+
+@parametrize(**PACK_ROWS_TO_ADDR_SWEEP)
 def test_pack_rows_to_addr(
     formats,
     dest_acc,
     num_rows_to_pack,
     dimensions,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
 ):
-    row_num_datums = 16
-
     try:
         num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
             DestSync.Half,
@@ -93,9 +98,40 @@ def test_pack_rows_to_addr(
         input_dimensions_B=dimensions,
     )
 
-    # Golden is identical to base pack_rows: pack_rows_to_addr lands the same
-    # rows at the same L1 layout (the wrapper's `l1_addr - 1` is compensated by
-    # the kernel supplying L1_ADDRESS(buffer_Res[t]) + 1).
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name="sources/pack_rows_to_addr_test.cpp",
+            formats=formats,
+            templates=[
+                generate_input_dim(dimensions, dimensions),
+            ],
+            runtimes=[
+                NUM_BLOCKS(num_blocks),
+                NUM_TILES_IN_BLOCK(num_tiles_in_block),
+                NUM_ROWS_TO_PACK(num_rows_to_pack),
+                TILE_COUNT(tile_cnt_A),
+            ],
+            variant_stimuli=StimuliConfig(
+                src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=tile_cnt_A,
+                tile_count_B=tile_cnt_B,
+                tile_count_res=tile_cnt_A,
+            ),
+            dest_acc=dest_acc,
+            unpack_to_dest=formats.input_format.is_32_bit(),
+        ),
+    )
+    if is_perf:
+        return
+
     generate_golden = get_golden_generator(PackRowsGolden)
     golden_tensor = generate_golden(
         src_A,
@@ -105,40 +141,12 @@ def test_pack_rows_to_addr(
         tile_count=tile_cnt_A,
     )
 
-    # Number of defined datums per tile (only these are validated).
-    output_elements_per_tile = num_rows_to_pack * row_num_datums
-
-    configuration = TestConfig(
-        "sources/pack_rows_to_addr_test.cpp",
-        formats,
-        templates=[
-            generate_input_dim(dimensions, dimensions),
-        ],
-        runtimes=[
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-            NUM_ROWS_TO_PACK(num_rows_to_pack),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-        ),
-        dest_acc=dest_acc,
-        unpack_to_dest=formats.input_format.is_32_bit(),
-    )
-
-    res_from_L1 = configuration.run().result
-
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_from_L1 = outcome.result
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
 
     # Each tile occupies 1024 datums in the result buffer; only the first
     # output_elements_per_tile of each are defined by pack_rows_to_addr.
+    output_elements_per_tile = num_rows_to_pack * 16
     extracted_data = [
         res_tensor[i * 1024 : i * 1024 + output_elements_per_tile]
         for i in range(tile_cnt_A)

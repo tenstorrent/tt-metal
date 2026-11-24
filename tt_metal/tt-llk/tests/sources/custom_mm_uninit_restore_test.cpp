@@ -118,7 +118,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Plain datacopy: puts PACK_NUM_TILES known tiles at the standard 64-row DEST
     // spacing. The packer state -- not the math -- is what this test varies.
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
-        TILE_NUM_FACES, formats.math);
+        ckernel::DEFAULT_TENSOR_SHAPE, formats.math);
 
     _llk_math_wait_for_dest_available_<DST_SYNC>();
 

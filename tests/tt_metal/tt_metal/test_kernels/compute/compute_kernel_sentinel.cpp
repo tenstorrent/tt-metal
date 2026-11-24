@@ -109,8 +109,8 @@ void kernel_main() {
     transpose_init(cb_in1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
 
-    // Migrated off unary_op_init_common (now a deprecated compute_kernel_hw_startup + copy_init
-    // forwarder, which is unsafe mid-kernel). The equivalent mid-kernel reconfig sequence produces
+    // Migrated off unary_op_init_common (a now-removed compute_kernel_hw_startup + copy_init
+    // forwarder, which was unsafe mid-kernel). The equivalent mid-kernel reconfig sequence produces
     // the same SrcA/Pack diff the sentinel asserts: SrcA only here (pack already cb_out0).
     reconfig_data_format_srca(cb_in0);
     copy_init(cb_in0);

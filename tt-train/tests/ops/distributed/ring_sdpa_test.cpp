@@ -15,31 +15,29 @@
 #include <array>
 #include <core/xtensor_utils.hpp>
 #include <tt-metalium/distributed_context.hpp>
-#include <umd/device/cluster.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/distributed/socket_manager.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/distributed/ring_attention_sdpa.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
+#include "test_utils/mesh_utils.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/distributed/create_socket.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 
-static bool check_32_chips() {
-    auto cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
-    auto all_chips = cluster_desc->get_all_chips();
-    return all_chips.size() == 32;
-}
-
 class GalaxyRingSDPATest : public ::testing::Test {
 public:
+    static inline const tt::tt_metal::distributed::MeshShape kMeshShape{8, 4};
+
     static void SetUpTestSuite() {
-        if (check_32_chips()) {
-            ttml::autograd::ctx().initialize_distributed_context(0, nullptr);
-            ttml::ttnn_fixed::distributed::enable_fabric(32);
-            ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(8, 4));
+        if (ttml::test_utils::system_supports_mesh(kMeshShape)) {
+            if (!ttml::autograd::ctx().is_distributed_context_initialized()) {
+                ttml::autograd::ctx().initialize_distributed_context(0, nullptr);
+            }
+            ttml::ttnn_fixed::distributed::enable_fabric(static_cast<uint32_t>(kMeshShape.mesh_size()));
+            ttml::autograd::ctx().open_device(kMeshShape);
             ttml::autograd::ctx().set_seed(42);
             ttml::autograd::ctx().initialize_socket_manager(ttnn::distributed::SocketType::FABRIC);
 
@@ -49,14 +47,30 @@ public:
         }
     }
     static void TearDownTestSuite() {
-        if (check_32_chips()) {
+        if (ttml::test_utils::system_supports_mesh(kMeshShape)) {
             ttml::autograd::ctx().close_device();
         }
     }
 
     void SetUp() override {
-        if (!check_32_chips()) {
-            GTEST_SKIP() << "Skipping Galaxy specific tests";
+        SKIP_UNLESS_MESH_SUPPORTED(kMeshShape);
+    }
+};
+
+// CP2 ring attention on a 1x2 mesh.
+class Mesh1x2RingSDPATest : public ttml::test_utils::Mesh1x2SuiteFixture {
+protected:
+    static void SetUpTestSuite() {
+        Mesh1x2SuiteFixture::SetUpTestSuite();
+        if (ttml::test_utils::system_supports_mesh(mesh_shape())) {
+            if (!ttml::autograd::ctx().is_distributed_context_initialized()) {
+                ttml::autograd::ctx().initialize_distributed_context(0, nullptr);
+            }
+            ttml::autograd::ctx().set_seed(42);
+            ttml::autograd::ctx().initialize_socket_manager(ttnn::distributed::SocketType::FABRIC);
+            // A 1x2 mesh is a line, so CP takes its only non-trivial axis: cp_axis = 1, ring size 2.
+            ttml::autograd::ctx().initialize_parallelism_context(
+                {.enable_ddp = false, .enable_tp = false, .enable_cp = true});
         }
     }
 };
@@ -489,6 +503,36 @@ TEST_F(GalaxyRingSDPATest, LargerSequenceCausalMaskBackward) {
         /*batch=*/2,
         /*num_heads=*/4,
         /*seq_len=*/256,
+        /*head_dim=*/64,
+        /*test_backward=*/true);
+}
+
+// CP2: step 0 is the diagonal block on both devices; at step 1 device 0 skips (its K/V come from later in the
+// sequence) while device 1 attends to device 0's chunk without a mask.
+TEST_F(Mesh1x2RingSDPATest, WithCausalMask) {
+    TestRingAttention(
+        /*batch=*/1,
+        /*num_heads=*/4,
+        /*seq_len=*/128,
+        /*head_dim=*/64,
+        /*test_backward=*/false);
+}
+
+TEST_F(Mesh1x2RingSDPATest, WithCausalMaskBackward) {
+    TestRingAttention(
+        /*batch=*/1,
+        /*num_heads=*/4,
+        /*seq_len=*/128,
+        /*head_dim=*/64,
+        /*test_backward=*/true);
+}
+
+// 256 rows per device, so each step's SDPA spans several tile rows, heads and batch entries.
+TEST_F(Mesh1x2RingSDPATest, LargerBatchSequenceBackward) {
+    TestRingAttention(
+        /*batch=*/2,
+        /*num_heads=*/8,
+        /*seq_len=*/512,
         /*head_dim=*/64,
         /*test_backward=*/true);
 }

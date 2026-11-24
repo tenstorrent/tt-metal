@@ -37,6 +37,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tile.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>         // is_2d_fabric_config
 #include <tt-metalium/experimental/fabric/control_plane.hpp>  // get_fabric_node_id_from_physical_chip_id
 
@@ -267,9 +268,10 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
     auto& impl = program.impl();  // non-const: get_kernels/get_kernel_groups/get_program_config_sizes
     const auto& hw = MetalContext::instance().hal();
     auto& metal_context = MetalContext::instance(impl.get_context_id());
+    const tt::ARCH arch = metal_context.get_cluster().arch();
     const auto& rtoptions = MetalEnvAccessor(metal_context.get_env()).impl().get_rtoptions();
     std::string quasar_arch_include;
-    if (metal_context.get_cluster().arch() == tt::ARCH::QUASAR) {
+    if (arch == tt::ARCH::QUASAR) {
         auto variant = metal_context.get_cluster().get_quasar_ip_variant();
         const std::string lower_variant = [&]() {
             std::string result = std::string(enchantum::to_string(variant));
@@ -391,11 +393,15 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                 kd.num_threads = procs.num_threads;
                 kd.is_quasar_compute = kd.is_compute && (qck != nullptr);
             }
+            TT_FATAL(
+                k.global_semaphore_binding_handles().empty(),
+                "Kernel '{}' binds a GlobalSemaphore, which emulation does not support yet",
+                k.kernel_source().name());
             // Metal 2.0 binding handles (mirror build_metal2_snapshot).
             kd.bindings.is_metal2 = k.is_metal2_kernel();
             kd.bindings.rta_names = k.get_runtime_arg_names();
             kd.bindings.crta_names = k.get_common_runtime_arg_names();
-            k.process_dataflow_buffer_binding_handles([&kd](
+            k.process_dataflow_buffer_binding_handles([&kd, arch](
                                                           const std::string& name,
                                                           uint16_t id,
                                                           bool is_relay,
@@ -404,34 +410,47 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                                                           uint8_t /*pap*/,
                                                           uint8_t /*cap*/) {
                 kd.bindings.dfb.push_back(
-                    DfbBinding{name, id, is_relay, pipe, llk ? serialize_llk_metadata(*llk) : ""});
+                    DfbBinding{name, id, is_relay, pipe, llk ? serialize_llk_metadata(*llk, arch) : ""});
             });
             k.process_semaphore_binding_handles(
                 [&kd](const std::string& name, uint16_t id, auto scope, uint32_t harts) {
                     kd.bindings.sem.push_back(
                         SemBinding{name, id, static_cast<tt_emule::SemScope>(static_cast<uint8_t>(scope)), harts});
                 });
-            k.process_tensor_binding_handles([&kd](
+            k.process_tensor_binding_handles([&kd, arch](
                                                  const std::string& name,
                                                  uint32_t cta_off,
-                                                 uint32_t addr_crta_off,
+                                                 bool is_per_node,
+                                                 uint32_t addr_offset,
                                                  uint32_t /*num_rt*/,
                                                  const LLKMetadata& llk) {
                 // num_rt needs no handling: crta_vararg_offset (below) already counts those words.
-                kd.bindings.tensor.push_back(TensorBinding{name, cta_off, addr_crta_off, serialize_llk_metadata(llk)});
+                kd.bindings.tensor.push_back(
+                    TensorBinding{name, cta_off, addr_offset, serialize_llk_metadata(llk, arch), is_per_node});
             });
             k.process_prefetcher_pipe_binding_handles([&kd](const std::string& name, uint8_t prefetcher_pipe_id) {
                 kd.bindings.prefetcher_pipe.push_back(PrefetcherPipeBinding{name, prefetcher_pipe_id});
             });
-            k.process_scratchpad_binding_handles([&kd](
+            k.process_scratchpad_binding_handles([&kd, arch](
                                                      const std::string& name,
                                                      uint32_t size_bytes,
                                                      uint32_t addr_crta_word,
                                                      const std::optional<LLKMetadata>& llk) {
                 kd.bindings.scratch.push_back(
-                    ScratchBinding{name, size_bytes, addr_crta_word, llk ? serialize_llk_metadata(*llk) : ""});
+                    ScratchBinding{name, size_bytes, addr_crta_word, llk ? serialize_llk_metadata(*llk, arch) : ""});
             });
             kd.bindings.crta_vararg_offset = k.get_crta_layout().vararg_section_offset;
+            kd.bindings.rta_vararg_offset = k.get_rta_layout().vararg_section_offset;
+            {
+                const KernelArrayArgs& arrays = k.get_array_args();
+                for (const auto& a : arrays.runtime) {
+                    kd.bindings.array_args.runtime.push_back(ArrayArg{a.name, a.word_offset, a.size});
+                }
+                for (const auto& a : arrays.common_runtime) {
+                    kd.bindings.array_args.common_runtime.push_back(ArrayArg{a.name, a.word_offset, a.size});
+                }
+                kd.bindings.array_args.compile_time = arrays.compile_time;
+            }
             k.process_tensor_binding_sequences([&kd](const std::string& name, const std::vector<std::string>& members) {
                 kd.bindings.tensor_sequences.push_back(TensorBindingSequence{name, members});
             });

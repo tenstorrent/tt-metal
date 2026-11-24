@@ -6,9 +6,11 @@ dest_acc: true
 
 operands:
   - name: "input_A"
+    tile_dims: all
     dims: [64, 64]
     format: "Float16_b"
   - name: "datacopy_out"
+    tile_dims: all
     dims: [64, 64]
     format: "Float16_b"
 

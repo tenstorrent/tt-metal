@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <cstdint>
 #include <cstdio>
 #include <map>
@@ -13,8 +13,7 @@
 #include <utility>
 #include <vector>
 
-#include <umd/device/soc_descriptor.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 #include "debug_helpers.hpp"
 #include "impl/context/metal_env_impl.hpp"
 

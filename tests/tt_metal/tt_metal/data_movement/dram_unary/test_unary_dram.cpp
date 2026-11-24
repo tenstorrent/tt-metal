@@ -5,12 +5,12 @@
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/specification/kernel_spec.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/semaphore_spec.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -153,7 +153,7 @@ bool run_dm(distributed::MeshDevice& mesh_device, const DramConfig& test_config)
         }},
     };
 
-    Program program = MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     ProgramRunArgs run_params;
     ProgramRunArgs::KernelRunArgs reader_run{.kernel = reader_spec.unique_id};
@@ -176,7 +176,7 @@ bool run_dm(distributed::MeshDevice& mesh_device, const DramConfig& test_config)
             {"dram_addr", (uint32_t)output_dram_address},
         });
     run_params.kernel_run_args.push_back(writer_run);
-    SetProgramRunArgs(program, run_params);
+    program.set_program_run_args(run_params);
 
     // Assign unique id
     log_info(LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);

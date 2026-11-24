@@ -6,6 +6,7 @@ set(UNIT_TESTS_LLK_SRC
     test_broadcast.cpp
     test_compute_kernel_sentinel.cpp
     test_copy_block_matmul_partials.cpp
+    test_copy_dest_rows.cpp
     test_csa_index_remap_compute.cpp
     test_cumsum.cpp
     test_custom_mm_operands.cpp
@@ -29,7 +30,9 @@ set(UNIT_TESTS_LLK_SRC
     test_rope_fused_compute.cpp
     test_sdpa_reconciliation.cpp
     test_sfpu_binary_bcast.cpp
+    test_sfpu_binary_int32_after_fpu_init.cpp
     test_sfpu_compute.cpp
+    test_sfpu_exp_fp32_replay.cpp
     test_sfpu_reduce.cpp
     test_single_core_binary_compute.cpp
     test_single_core_matmul_compute.cpp

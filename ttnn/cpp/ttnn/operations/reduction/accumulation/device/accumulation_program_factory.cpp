@@ -12,8 +12,8 @@
 #include "tt-metalium/kernel_types.hpp"
 #include "tt-metalium/tt_backend_api_types.hpp"
 #include "ttnn/tensor/types.hpp"
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/work_split.hpp>
 
 #include <bit>
@@ -27,7 +27,7 @@ using AccumulationProgramFactory = AccumulationDeviceOperation::AccumulationProg
 
 namespace {
 
-using namespace tt::tt_metal::experimental;
+using namespace tt::tt_metal;
 
 // The constants below carry a per-factory prefix so this file and the sibling EMA factory can
 // safely share a translation unit: both are sources of the unity-built ttnn_op_reduction target,
@@ -250,7 +250,6 @@ ttnn::device_operation::ProgramArtifacts AccumulationProgramFactory::create_prog
     Tensor& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
 
     const auto& input_tensor{tensor_args.input_tensor.mesh_tensor()};
     const auto& output_tensor{tensor_return_value.mesh_tensor()};
@@ -450,7 +449,6 @@ ttnn::device_operation::ProgramArtifacts AccumulationProgramFactory::create_tile
     Tensor& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
 
     const auto& input_tensor{tensor_args.input_tensor.mesh_tensor()};
     const auto& output_tensor{tensor_return_value.mesh_tensor()};
@@ -497,6 +495,9 @@ ttnn::device_operation::ProgramArtifacts AccumulationProgramFactory::create_tile
     }
     if (operation_attributes.op == AccumulationOp::CUMPROD) {
         compute_defines_map["CUMPROD"] = "1";
+    } else if (output_dataformat == DataFormat::Float32 && !operation_attributes.disable_compensation) {
+        // fp32 cumsum keeps the compensated (Kahan) sum of the permuted path.
+        compute_defines_map["COMPENSATED_SUM"] = "1";
     }
     const KernelSpec::CompilerOptions::Defines compute_defines(compute_defines_map);
 
@@ -536,6 +537,18 @@ ttnn::device_operation::ProgramArtifacts AccumulationProgramFactory::create_tile
         {accum_make_dfb(ACCUM_SRC, input_dataformat, in_tiles),
          accum_make_dfb(ACCUM_DST, output_dataformat, out_tiles)},
         "accumulation_tile_axis");
+}
+
+ttnn::command_list::CmdListBindings AccumulationProgramFactory::map_cmd_list_parameters(
+    const AccumulationParams& attributes,
+    const AccumulationInputs&,
+    const tt::tt_metal::ProgramSpec& spec,
+    const tt::tt_metal::ProgramRunArgs& run_params) {
+    ttnn::command_list::CmdListBinder binder{spec, run_params};
+    // cumsum and cumprod share this factory but name their input keyword differently.
+    const char* input_keyword = attributes.op == AccumulationOp::CUMSUM ? "input" : "input_tensor";
+    binder.tensor(/*invoke_name=*/input_keyword, /*program_spec_param_name=*/tt::tt_metal::TensorParamName{"input"});
+    return binder.finish();
 }
 
 }  // namespace ttnn::prim

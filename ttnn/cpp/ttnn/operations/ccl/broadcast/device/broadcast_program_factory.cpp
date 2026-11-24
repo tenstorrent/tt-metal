@@ -34,8 +34,8 @@ tt::tt_metal::ProgramDescriptor build_broadcast_descriptor_at(
     const tt::tt_metal::GlobalSemaphore& barrier_semaphore) {
     const auto& input_tensor = tensor_args.input_tensor;
     tt::tt_metal::ProgramDescriptor desc;
-    TT_FATAL(input_tensor.buffer() != nullptr, "broadcast requires an allocated input buffer");
-    TT_FATAL(tensor_return_value.buffer() != nullptr, "broadcast requires an allocated output buffer");
+    TT_FATAL(input_tensor.is_allocated(), "broadcast requires an allocated input buffer");
+    TT_FATAL(tensor_return_value.is_allocated(), "broadcast requires an allocated output buffer");
 
     auto* mesh_device = input_tensor.device();
 
@@ -79,7 +79,7 @@ tt::tt_metal::ProgramDescriptor build_broadcast_descriptor_at(
 
     // Info for RM tensors
     uint32_t row_size = input_tensor.logical_shape()[-1] * input_tensor.element_size();
-    uint32_t page_size = input_tensor.buffer()->aligned_page_size();
+    uint32_t page_size = input_tensor.mesh_buffer().aligned_page_size();
 
     uint32_t num_rows = std::accumulate(
         input_tensor.logical_shape().cbegin(),
@@ -96,7 +96,7 @@ tt::tt_metal::ProgramDescriptor build_broadcast_descriptor_at(
         dtype == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size_bytes) : fabric_max_packet_size_bytes;
     const size_t packet_size_bytes = tilized ? fabric_max_packet_size_bytes : MAX_PACKET_SIZE_BYTES;
     size_t max_packet_size = packet_size_bytes;
-    uint32_t l1_scratch_cb_page_size_bytes = input_tensor.buffer()->aligned_page_size();
+    uint32_t l1_scratch_cb_page_size_bytes = input_tensor.mesh_buffer().aligned_page_size();
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t cb_num_pages = 3 * num_pages_per_packet;  // triple buffering
     uint32_t src0_cb_index = tt::CB::c_in0;
@@ -129,16 +129,16 @@ tt::tt_metal::ProgramDescriptor build_broadcast_descriptor_at(
     });
 
     // Tensor Info
-    const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
+    const auto input_tensor_num_pages = input_tensor.mesh_buffer().num_pages();
     bool is_sender = coord == operation_attributes.sender_coord;
 
     // KERNEL CREATION
     // Reader
     std::vector<uint32_t> reader_compile_args = {
-        src0_cb_index,                               // cb0_id
-        num_pages_per_packet,                        // packet_size_in_pages
-        input_tensor.buffer()->aligned_page_size(),  // tensor0_page_size
-        is_sender,                                   // is_sender
+        src0_cb_index,                                   // cb0_id
+        num_pages_per_packet,                            // packet_size_in_pages
+        input_tensor.mesh_buffer().aligned_page_size(),  // tensor0_page_size
+        is_sender,                                       // is_sender
     };
 
     if (!tilized) {
@@ -155,12 +155,12 @@ tt::tt_metal::ProgramDescriptor build_broadcast_descriptor_at(
 
     // Writer kernel
     std::vector<uint32_t> writer_compile_args = {
-        src0_cb_index,                               // cb0_id
-        num_pages_per_packet,                        // packet_size_in_pages
-        input_tensor.buffer()->aligned_page_size(),  // tensor0_page_size
-        num_targets_forward,                         // num_targets_forward_direction
-        num_targets_backward,                        // num_targets_backward_direction
-        is_sender,                                   // is_sender
+        src0_cb_index,                                   // cb0_id
+        num_pages_per_packet,                            // packet_size_in_pages
+        input_tensor.mesh_buffer().aligned_page_size(),  // tensor0_page_size
+        num_targets_forward,                             // num_targets_forward_direction
+        num_targets_backward,                            // num_targets_backward_direction
+        is_sender,                                       // is_sender
     };
 
     if (!tilized) {
@@ -296,7 +296,14 @@ tt::tt_metal::ProgramDescriptor build_broadcast_descriptor_at(
         }
 
         tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
-            sender_fabric_node_id, dst_nodes, {link}, desc, worker_sender_writer_kernel_id, core, writer_rt_args);
+            *mesh_device,
+            sender_fabric_node_id,
+            dst_nodes,
+            {link},
+            desc,
+            worker_sender_writer_kernel_id,
+            core,
+            writer_rt_args);
 
         ttnn::ccl::emplace_runtime_args_with_leading_buffers(
             desc.kernels[worker_sender_writer_kernel_id], core, {tensor_return_value.buffer()}, writer_rt_args);

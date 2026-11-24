@@ -74,7 +74,7 @@ Accuracy criteria (FTZ = flush-to-zero, SNB = smallest normal bfloat16)
 | sigmoid                  | FastApproximate                | abs ≤ 0.12                     |
 | xielu                    | x > 0                          | ULP ≤ 2 vs float64             |
 |                          | x <= 0                         | rtol 1e-5, atol 1e-6           |
-| softplus                 | beta * x <= -2^23              | xfail (#55798)                 |
+| softplus                 | beta * x <= -2^23              | exactly 0                      |
 |                          | beta * x <= -87.5, golden < SNB| exactly 0                      |
 |                          | beta * x > threshold           | exact                          |
 |                          | elsewhere                      | rtol 5.1e-4                    |
@@ -90,18 +90,12 @@ Accuracy criteria (FTZ = flush-to-zero, SNB = smallest normal bfloat16)
 |                          | [RELU, TYPECAST(bfloat16)]     | exact                          |
 
 Scalar parameters reach the float32 kernel at full float32 precision, so
-goldens are given the same Python floats. A -0.0 scalar comes back as +0.0
-from threshold and clamp; the select ops are compared by bit pattern so the
-sign of zero is part of the check.
+goldens are given the same Python floats. The select ops are compared by bit
+pattern, so a -0.0 scalar must come back as -0.0 from threshold and clamp.
 """
 
 
 FLT_MAX = torch.finfo(torch.float32).max
-
-
-def _canonicalize_negative_zero(tensor):
-    """Map -0.0 to +0.0, which is what the device does to a -0.0 scalar parameter."""
-    return torch.where(tensor == 0, torch.zeros_like(tensor), tensor)
 
 
 def _assert_bitwise_equal(result, golden, label):
@@ -219,8 +213,8 @@ def test_clamp_clip_scalar(device, ttnn_op, min_val, max_val):
 
     | Input range | Check               | Reason                                    |
     |-------------|---------------------|-------------------------------------------|
-    | all         | exact (bit pattern) | every output is x or a bound; a -0.0      |
-    |             |                     | bound comes back as +0.0                  |
+    | all         | exact (bit pattern) | every output is x or a bound, including   |
+    |             |                     | the sign of a -0.0 bound                  |
 
     degenerate (min > max) collapses to a constant. inexact_* bounds are not
     bfloat16 values. max_bounds and tiny_bounds are the ends of the normal range.
@@ -233,7 +227,7 @@ def test_clamp_clip_scalar(device, ttnn_op, min_val, max_val):
 
     result = ttnn.to_torch(ttnn_op(tt_in, min_val, max_val))
 
-    _assert_bitwise_equal(result, _canonicalize_negative_zero(golden), f"{ttnn_op.__name__}({min_val}, {max_val})")
+    _assert_bitwise_equal(result, golden, f"{ttnn_op.__name__}({min_val}, {max_val})")
 
 
 @pytest.mark.parametrize("ttnn_op", [ttnn.clamp, ttnn.clip])
@@ -273,8 +267,8 @@ def test_threshold(device, threshold_val, value):
 
     | Input range | Check               | Reason                                   |
     |-------------|---------------------|------------------------------------------|
-    | all         | exact (bit pattern) | every output is x or value; value = -0.0 |
-    |             |                     | comes back as +0.0                       |
+    | all         | exact (bit pattern) | every output is x or value, including    |
+    |             |                     | the sign of value = -0.0                 |
     """
     input_tensor = generate_float32_bits()
 
@@ -284,7 +278,46 @@ def test_threshold(device, threshold_val, value):
 
     result = ttnn.to_torch(ttnn.threshold(tt_in, threshold_val, value))
 
-    _assert_bitwise_equal(result, _canonicalize_negative_zero(golden), f"threshold({threshold_val}, {value})")
+    _assert_bitwise_equal(result, golden, f"threshold({threshold_val}, {value})")
+
+
+@pytest.mark.parametrize("ttnn_op", [ttnn.threshold, ttnn.clamp, ttnn.clip, ttnn.hardtanh])
+@pytest.mark.parametrize("scalars", [(0.0, -0.0, 0.0), (-0.0, 0.0, -0.0)], ids=["pos_first", "neg_first"])
+def test_signed_zero_scalar_program_cache(device, ttnn_op, scalars):
+    """+0.0 and -0.0 scalars must not share a cached program (#62557).
+
+    | Input | Check               | Reason                                         |
+    |-------|---------------------|------------------------------------------------|
+    | -1.0  | exact (bit pattern) | every output is the scalar, whose bits are     |
+    |       |                     | embedded in the kernel defines                 |
+
+    The scalar is threshold's value (threshold 0.0) or the min bound of
+    clamp/clip/hardtanh (max 1.0).
+    Each sign compiles its own program on first use and hits it on reuse, so the
+    output does not depend on which sign ran first.
+    """
+    tt_in = to_float32_tt_tensor(torch.full((64, 64), -1.0, dtype=torch.float32), device)
+    device.clear_program_cache()
+
+    seen_signs = set()
+    prev_entries = device.num_program_cache_entries()
+    for scalar in scalars:
+        expected = torch.full((64, 64), scalar, dtype=torch.float32)
+        if ttnn_op is ttnn.threshold:
+            tt_out = ttnn.threshold(tt_in, 0.0, scalar)
+        elif ttnn_op is ttnn.hardtanh:
+            tt_out = ttnn.hardtanh(tt_in, min_val=scalar, max_val=1.0)
+        else:
+            tt_out = ttnn_op(tt_in, scalar, 1.0)
+        entries = device.num_program_cache_entries()
+        sign = math.copysign(1.0, scalar)
+        if sign in seen_signs:
+            assert entries == prev_entries, f"scalar {scalar} should hit its cached program"
+        else:
+            assert entries > prev_entries, f"scalar {scalar} should compile a new program"
+            seen_signs.add(sign)
+        prev_entries = entries
+        _assert_bitwise_equal(ttnn.to_torch(tt_out), expected, f"scalar {scalar}")
 
 
 def _tril_triu_input():
@@ -662,8 +695,9 @@ def test_xielu(device, alpha_p, alpha_n):
 # softplus
 # ─────────────────────────────────────────────────────────────────────────────
 
-# exp(beta * x) in the float32 tail rounds beta * x / ln2 to int32 without a
-# clamp, which breaks down for beta * x below about -8.8e6.
+# exp(t) underflows to 0 for t <= -2^23. The fp32 tail used to round t / ln2 to
+# int32 without a clamp and return garbage there (#55798); that range is checked
+# on its own in test_softplus_tail_breakdown.
 SOFTPLUS_TAIL_BREAKDOWN = -(2.0**23)
 
 
@@ -705,14 +739,21 @@ def test_softplus(device, beta, threshold_val):
     assert_allclose(expected_result=golden[curve], actual_result=result[curve], rtol=5.1e-4, atol=0)
 
 
-@pytest.mark.xfail(strict=True, reason="#55798: float32 softplus tail rounds beta * x / ln2 to int32 without a clamp")
+def test_softplus_negative_nan(device):
+    """A NaN input, including -NaN, must come back as NaN on the fp32 path."""
+    words = torch.tensor([0x7FC00000, 0xFFC00000], dtype=torch.uint32).repeat(512)
+    src = words.view(torch.float32).reshape(1, 1, 32, 32)
+    result = ttnn.to_torch(ttnn.softplus(to_float32_tt_tensor(src, device), beta=1.0, threshold=20.0))
+    assert torch.isnan(result).all()
+
+
 def test_softplus_tail_breakdown(device):
     """softplus(x) for beta * x <= -2^23, default beta and threshold.
 
-    | Input range  | Check     | Device returns                                    |
+    | Input range  | Check     | Reason                                            |
     |--------------|-----------|---------------------------------------------------|
-    | x <= -2^23   | exactly 0 | +inf, NaN or a large finite value for 128 inputs  |
-    |              |           | in [-1.74e7, -8.78e6]; 0 elsewhere                |
+    | x <= -2^23   | exactly 0 | exp(x) underflows; the unclamped int32 round of   |
+    |              |           | x / ln2 used to return non-zero garbage (#55798)  |
     """
     input_tensor = generate_float32_bits()
     input_tensor = input_tensor[input_tensor <= SOFTPLUS_TAIL_BREAKDOWN].reshape(1, -1)

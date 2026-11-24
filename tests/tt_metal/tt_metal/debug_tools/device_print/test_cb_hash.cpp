@@ -94,7 +94,7 @@ struct Setup {
         size_t buf_sz = NUM_TILES * tile_size;
 
         auto device_range = distributed::MeshCoordinateRange(zero, zero);
-        Program prog = CreateProgram();
+        Program prog = CreateProgram(*mesh_device);
         workload.add_program(device_range, std::move(prog));
         program = &workload.get_programs().at(device_range);
 
@@ -206,7 +206,16 @@ uint32_t run_once_sfpu(
 
 }  // namespace
 
-class CbHashTest : public DevicePrintFixture {};
+class CbHashTest : public DevicePrintFixture {
+protected:
+    void SetUp() override {
+        DevicePrintFixture::SetUp();
+        if (this->arch_ == tt::ARCH::QUASAR) {
+            GTEST_SKIP() << "Quasar: this test builds its kernels with CreateKernel(), which Quasar rejects; it needs "
+                            "porting to ProgramSpec";
+        }
+    }
+};
 
 // ---------- hash_cb_trisc: scalar FNV-1a-32 ----------
 

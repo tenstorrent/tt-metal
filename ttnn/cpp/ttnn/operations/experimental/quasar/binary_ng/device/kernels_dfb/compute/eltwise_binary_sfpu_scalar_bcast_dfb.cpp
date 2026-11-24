@@ -6,9 +6,9 @@
 //
 // Copy of eltwise_binary_scalar_bcast_dfb.cpp (the FPU SCALAR kernel) with the binary-op section swapped
 // to the SFPU path -- the SAME delta eltwise_binary_sfpu_no_bcast_dfb.cpp / eltwise_binary_sfpu_row_bcast_dfb.cpp
-// / eltwise_binary_sfpu_col_bcast_dfb.cpp apply (unary_op_init_common + BINARY_SFPU_INIT + the
-// copy-both-operands-to-DST / BINARY_SFPU_OP body, with the ARCH_QUASAR copy_tile_to_dst_init_short
-// handling). The broadcast pass (unary_bcast<SCALAR> through the intermediate llk_post DFB -- MOVB2D LLK
+// / eltwise_binary_sfpu_col_bcast_dfb.cpp apply (compute_kernel_hw_startup + copy_init + BINARY_SFPU_INIT + the
+// copy-both-operands-to-DST / BINARY_SFPU_OP body, with reconfig_data_format_srca + copy_init before each
+// operand copy). The broadcast pass (unary_bcast<SCALAR> through the intermediate llk_post DFB -- MOVB2D LLK
 // datacopy, same as ROW/COL, keyed by SCALAR's broadcast constants dst_lo=1/bcast0=1/num_rows spanning all
 // faces) with its two pack_reconfig_data_format / pack_init (ARCH_QUASAR gasket) calls, and the
 // freq/tile_start reuse loop (freq = Ht * Wt here, vs COL's Wt), are IDENTICAL to the FPU SCALAR kernel --
@@ -33,6 +33,7 @@
 #include "api/compute/mul_int_sfpu.h"
 #include "api/compute/binary_max_min.h"
 #include "api/compute/binary_comp.h"
+#include "api/compute/atan2.h"
 // SFPU op headers NOT yet ported to Quasar: they unconditionally pull in WH/BH-only ckernel impls or
 // symbols (InstrModLoadStore, DataFormat::UInt32, ckernel_sfpu_div_int32_floor.h, ...) absent from the
 // Quasar ckernel tree, so they only compile off-Quasar. The float SFPU binary ops this kernel runs on
@@ -49,7 +50,6 @@
 #include "api/compute/gcd.h"
 #include "api/compute/lcm.h"
 #include "api/compute/xlogy.h"
-#include "api/compute/atan2.h"
 #include "api/compute/isclose.h"
 #endif
 #include "api/compute/bcast.h"

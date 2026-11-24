@@ -4,8 +4,10 @@
 """Host-side guards for ``helpers/ulp_sweep.py``: which lanes the sweep ranks, the
 lists it draws, and the emitter that folds a sweep back into a typed table."""
 
+import json
 import math
 from dataclasses import replace
+from itertools import product
 from types import SimpleNamespace
 
 import helpers.ulp_domains as rule
@@ -39,48 +41,47 @@ from helpers.ulp_sweep import (
     _FP32_STRIDE,
     _KNOWN_NONFINITE_LANES,
     _SWEEP_TENSOR,
-    DOMAINS,
     EMIT_MAX_NEAR_ZERO_ATOL,
     MEASURED,
     SWEEP_FORMATS,
     EmitRefused,
-    Floored,
+    Measured,
+    Swept,
     Unmeasurable,
     _binade_index,
     _verdict,
     binade_maxima,
     cell_key,
-    claimed_lanes,
-    dest_holds,
     domain_figures,
     entry_readings,
     export_measured,
     finish_emit,
     floor_covered,
     floored_profile,
+    fp16_dest_unusable,
     golden_input,
-    measurable_mask,
     merge_measured,
     near_zero_floor,
-    nonfinite_failures,
     nonfinite_verdict,
     padding_lanes,
-    ranked_mask,
     record,
     record_unmeasurable,
-    stale_excuses,
     sweep_cells,
     sweep_spec,
     swept_value_count,
     write_table,
 )
 from helpers.ulp_table import (
+    MEASURED_ARCH,
+    OTHER_ARCH,
+    TABLE_PATHS,
     BudgetKey,
     Measurement,
     Metric,
     Reading,
     Row,
     load_table,
+    most_specific,
     write_table_file,
 )
 
@@ -88,6 +89,9 @@ F16, F16B, F32 = DataFormat.Float16, DataFormat.Float16_b, DataFormat.Float32
 NO, YES = ApproximationMode.No, ApproximationMode.Yes
 D_NO, D_YES = DestAccumulation.No, DestAccumulation.Yes
 GELU = MathOperation.Gelu
+# The pairs that hold fp16 in a 16-bit Dest at `dest_acc=No`, by hand: Blackhole sweeps
+# them at `dest_acc=Yes` only (`fp16_dest_unusable`).
+_FP16_IN_DEST = {(F16, F16), (F16, F16B), (F16, F32), (F32, F16)}
 # An op defined everywhere, so the non-finite tests turn on the exclusion they mean.
 _OP = MathOperation.Abs
 # The key of a cell whose coordinates a test is not about.
@@ -101,35 +105,29 @@ _TWO = (Domain(-_INF, 0, 5), Domain(0, _INF, 2))
 
 @pytest.fixture(autouse=True)
 def _host_only_arch(monkeypatch):
-    """`sweep_cells` asks the chip which cells promote; judge the Wormhole table
-    whatever CHIP_ARCH the host sets."""
+    """`sweep_cells` asks the chip which cells promote; judge the session's table
+    (the one `MEASURED_ARCH` named on first use) whatever CHIP_ARCH the host sets."""
     import helpers.chip_architecture as chip
 
-    monkeypatch.setenv("CHIP_ARCH", "wormhole")
+    monkeypatch.setenv("CHIP_ARCH", MEASURED_ARCH.value)
     monkeypatch.setattr(chip, "_cached_chip_architecture", None)
 
 
 @pytest.fixture(autouse=True)
 def _no_records():
     MEASURED.clear()
-    DOMAINS.clear()
     yield
     MEASURED.clear()
-    DOMAINS.clear()
 
 
-def _failures(op, src, golden, result, in_fmt, out_fmt, approx=NO, dest=D_YES, **kw):
-    return nonfinite_failures(
-        op,
-        src,
-        golden,
-        result,
-        in_fmt,
-        out_fmt,
-        approx_mode=approx,
-        dest_acc=dest,
-        **kw,
-    )
+def _swept(src, golden, result, in_fmt, out_fmt, dest=D_YES, op=_OP, approx=NO):
+    return Swept(src, golden, result, in_fmt, out_fmt, dest, op, approx)
+
+
+def _failures(op, src, golden, result, in_fmt, out_fmt, approx=NO, dest=D_YES):
+    return _swept(
+        src, golden, result, in_fmt, out_fmt, dest, op, approx
+    ).nonfinite_failures
 
 
 # ── The emitter ───────────────────────────────────────────────────────────────
@@ -140,7 +138,7 @@ _TABLE = {
         Row(metric=Metric.TOLERANCE, atol=0.13, rtol=0.05, note="an op-wide anchor"),
         Row(input=F16, output=F16, measured=7, note="superseded"),
         Row(input=F16B, output=F32, measured=9, note="a pair not swept here"),
-        Row(input=F16B, output=F16B, arch=ChipArchitecture.BLACKHOLE, measured=44),
+        Row(input=F16B, output=F16B, arch=OTHER_ARCH, measured=44),
         Row(output=F32, measured=0, note="a wildcard"),
         Row(
             input=F16,
@@ -214,7 +212,7 @@ def test_a_cell_recorded_twice_keeps_the_worst_lane():
     """Last-write-wins is the polarity that hides error."""
     record(GELU, _CELL, 12)
     record(GELU, _CELL, 3)
-    assert MEASURED[GELU][_CELL] == 12
+    assert MEASURED[GELU][_CELL] == Measured(12)
 
 
 def test_an_anti_diagonal_grid_is_refused_rather_than_collapsed(table):
@@ -266,7 +264,24 @@ def test_xdist_workers_measurements_merge_worst_lane_first():
     merge_measured(worker_b)
     merge_measured(worker_b)  # the same reading again, as two workers can send it
     merge_measured(None)  # a worker that recorded nothing
-    assert MEASURED == {GELU: {_CELL: 9, other: 2, floored: Floored(_WORST, *_FLOOR)}}
+    assert MEASURED == {
+        GELU: {
+            _CELL: Measured(9),
+            other: Measured(2),
+            floored: Measured(_WORST, _FLOOR),
+        }
+    }
+
+
+def test_the_xdist_handoff_is_json_text():
+    """What a worker hands over is data: JSON text in the table's plain form, which the
+    controller parses and cannot be made to execute."""
+    record(GELU, _CELL, 5)
+    blob = export_measured()
+    assert isinstance(blob, str)
+    assert [entry[:1] + entry[3:] for entry in json.loads(blob)] == [
+        ["Gelu", {"max_ulp": 5}]
+    ]
 
 
 @pytest.mark.parametrize(
@@ -356,7 +371,7 @@ def test_three_readings_of_one_cell_merge_alike_in_any_order():
 
 @pytest.mark.parametrize(
     "arch, clean",
-    [(ChipArchitecture.BLACKHOLE, True), (ChipArchitecture.WORMHOLE, False)],
+    [(OTHER_ARCH, True), (MEASURED_ARCH, False)],
     ids=["other-arch", "unclean-session"],
 )
 def test_emit_refuses_what_the_session_cannot_vouch_for(table, arch, clean):
@@ -373,7 +388,7 @@ def test_emit_refuses_a_partly_measured_grid(table):
     record(GELU, _CELL, 5)
     before = table.read_text()
     with pytest.raises(EmitRefused):  # allow-pytest.raises: host-only test
-        finish_emit(ChipArchitecture.WORMHOLE, True, table)
+        finish_emit(MEASURED_ARCH, True, table)
     assert table.read_text() == before
 
 
@@ -386,9 +401,9 @@ def test_a_whole_table_emit_over_the_real_table_loads(tmp_path):
     write_table_file(load_table(), path)
     ops = sweep._sweep_ops()
     for op in ops:
-        for cell in sweep_cells(ChipArchitecture.WORMHOLE):
+        for cell in sweep_cells(MEASURED_ARCH):
             record(op, cell_key(*cell), 1)
-    written = finish_emit(ChipArchitecture.WORMHOLE, True, path)
+    written = finish_emit(MEASURED_ARCH, True, path)
     assert set(written) == set(ops)
     load_table(path)
 
@@ -399,7 +414,7 @@ def test_the_plugin_prints_the_emit_summary_on_a_clean_session(
     monkeypatch.setattr(ulp_sweep, "EMIT", True)
     monkeypatch.setattr("helpers.ulp_table.TABLE_PATH", table)
     monkeypatch.setattr(
-        llk_pytest_plugin, "get_chip_architecture", lambda: ChipArchitecture.WORMHOLE
+        llk_pytest_plugin, "get_chip_architecture", lambda: MEASURED_ARCH
     )
     _record_grid(GELU, F16, F16, 5)
     session = _session(pytest.ExitCode.OK)
@@ -451,7 +466,7 @@ def test_a_session_that_measured_its_grids_but_did_not_end_clean_writes_nothing(
     monkeypatch.setattr(ulp_sweep, "EMIT", True)
     monkeypatch.setattr("helpers.ulp_table.TABLE_PATH", table)
     monkeypatch.setattr(
-        llk_pytest_plugin, "get_chip_architecture", lambda: ChipArchitecture.WORMHOLE
+        llk_pytest_plugin, "get_chip_architecture", lambda: MEASURED_ARCH
     )
     _record_grid(GELU, F16, F16, 5)
     before = table.read_text()
@@ -519,7 +534,7 @@ def test_a_tied_reading_resolves_the_same_whichever_arrives_first():
         for floor in order:
             record(GELU, _CELL, _WORST, floor)
         outcomes.append(MEASURED[GELU][_CELL])
-    assert outcomes == [_WORST, _WORST]
+    assert outcomes == [Measured(_WORST), Measured(_WORST)]
 
 
 @pytest.mark.parametrize(
@@ -536,7 +551,7 @@ def test_differing_readings_of_a_floored_cell_drop_the_floor(first, second):
     unfloored."""
     for max_ulp, floor in (first, second):
         record(GELU, _CELL, max_ulp, floor=floor)
-    assert MEASURED[GELU][_CELL] == _WORST
+    assert MEASURED[GELU][_CELL] == Measured(_WORST)
 
 
 def test_a_cell_with_a_list_is_written_as_the_list_and_its_floor_and_nothing_else(
@@ -550,7 +565,6 @@ def test_a_cell_with_a_list_is_written_as_the_list_and_its_floor_and_nothing_els
     # The entries were measured outside the floor, so it rides with the list even when
     # the cell as a whole is past the ceiling.
     MEASURED.clear()
-    DOMAINS.clear()
     past = (Domain(-_INF, 0, 14337), Domain(0, _INF, 100))
     _record_grid(GELU, F16, F16, _WORST, floor=(100, 1e-3), domains=past)
     write_table(table)
@@ -578,20 +592,18 @@ def test_a_list_survives_the_xdist_merge_and_a_differing_reading_drops_it():
     record(GELU, _CELL, 5, domains=_TWO)
     blob = export_measured()
     MEASURED.clear()
-    DOMAINS.clear()
     merge_measured(blob)
-    assert DOMAINS[GELU][_CELL] == _TWO
+    assert MEASURED[GELU][_CELL] == Measured(5, domains=_TWO)
     record(GELU, _CELL, 9, floor=(3, 1e-6), domains=_ONE)
-    assert MEASURED[GELU][_CELL] == 9 and _CELL not in DOMAINS[GELU]
+    assert MEASURED[GELU][_CELL] == Measured(9)
     MEASURED.clear()
-    DOMAINS.clear()
     # The worse reading's list would hold only its own worst lanes: 5 below zero, from
     # the first reading, is not in _ONE's figure there. And a list once dropped stays
     # dropped, whatever reading arrives next.
     record(GELU, _CELL, 5, domains=_TWO)
     record(GELU, _CELL, 9, domains=_ONE)
     record(GELU, _CELL, 2, domains=_TWO)
-    assert MEASURED[GELU][_CELL] == 9 and _CELL not in DOMAINS[GELU]
+    assert MEASURED[GELU][_CELL] == Measured(9)
 
 
 @pytest.mark.parametrize("order", [1, -1], ids=["a,b", "b,a"])
@@ -603,9 +615,9 @@ def test_two_readings_with_one_maximum_and_different_lists_keep_no_list(order):
     b = (Domain(-_INF, 0, 5), Domain(0, _INF, 1))
     for domains in (a, b)[::order]:
         record(GELU, _CELL, 5, domains=domains)
-    assert MEASURED[GELU][_CELL] == 5 and _CELL not in DOMAINS[GELU]
+    assert MEASURED[GELU][_CELL] == Measured(5)
     record(GELU, _CELL, 5, domains=a)
-    assert _CELL not in DOMAINS[GELU]
+    assert MEASURED[GELU][_CELL] == Measured(5)
 
 
 # ── Which lanes count ─────────────────────────────────────────────────────────
@@ -617,7 +629,7 @@ def test_a_nonfinite_disagreement_is_reported_rather_than_only_masked_out():
     src = torch.tensor([1.0, 2.0, 3.0], dtype=torch.bfloat16)
     golden = torch.tensor([1.0, 2.0, 3.0], dtype=torch.bfloat16)
     result = torch.tensor([1.0, float("inf"), 3.0], dtype=torch.bfloat16)
-    assert measurable_mask(src, golden, result, F16B, F16B, D_YES).tolist() == [
+    assert _swept(src, golden, result, F16B, F16B, D_YES).measurable.tolist() == [
         True,
         False,
         True,
@@ -675,12 +687,12 @@ def test_the_unpack_format_bounds_which_inputs_count():
     src = torch.tensor([1e-6, 1.0, 1e6], dtype=torch.float32)
     golden = torch.tensor([1.0, 1.0, float("inf")], dtype=torch.float16)
     result = torch.tensor([0.0, 1.0, 11.8], dtype=torch.float16)
-    assert measurable_mask(src, golden, result, F32, F16, D_NO).tolist() == [
+    assert _swept(src, golden, result, F32, F16, D_NO).measurable.tolist() == [
         False,
         True,
         False,
     ]
-    assert measurable_mask(src, golden, result, F32, F16, D_YES)[0]
+    assert _swept(src, golden, result, F32, F16, D_YES).measurable[0]
     assert not _failures(_OP, src, golden, result, F32, F16, dest=D_NO).any()
     assert _failures(_OP, src, golden, result, F32, F16, dest=D_YES)[2]
     largest = torch.tensor(
@@ -688,7 +700,7 @@ def test_the_unpack_format_bounds_which_inputs_count():
     )
     assert float(largest[0]) > torch.finfo(torch.bfloat16).max
     same = largest.to(torch.bfloat16)
-    assert measurable_mask(largest, same, same, F32, F16B, D_NO).tolist() == [True]
+    assert _swept(largest, same, same, F32, F16B, D_NO).measurable.tolist() == [True]
 
 
 def test_an_fp16_pack_clamp_is_a_saturated_store():
@@ -721,7 +733,7 @@ def test_the_sweeps_own_zero_padding_is_not_data():
     assert not bool(pad[:swept].any()) and bool(pad[swept:].all())
     golden = torch.full_like(src, 1.0)
     result = torch.full_like(src, float("inf"))
-    assert not measurable_mask(src, golden, result, F16B, F16B, D_YES)[swept:].any()
+    assert not _swept(src, golden, result, F16B, F16B, D_YES).measurable[swept:].any()
     assert not _failures(_OP, src, golden, result, F16B, F16B)[swept:].any()
 
 
@@ -745,7 +757,7 @@ def test_the_claim_limit_follows_what_the_stimuli_format_can_reach():
     # The ranking mask keeps the claimed lanes and drops the rest.
     src = torch.tensor([3.0, 4.0, 60000.0, 70000.0], dtype=torch.bfloat16)
     zeros = torch.zeros(4, dtype=torch.bfloat16)
-    ranked = ranked_mask(op, src, zeros, zeros.clone(), F16B, F16B, D_NO)
+    ranked = _swept(src, zeros, zeros.clone(), F16B, F16B, D_NO, op=op).ranked
     assert ranked.tolist() == [True, True, True, False]
 
 
@@ -849,7 +861,7 @@ def test_a_known_nonfinite_lane_is_excused_on_its_cell_and_nowhere_else():
     ]
     assert _failures(celu, src, golden, result, F16, F16, YES, D_YES).all()
     assert _failures(_OP, src, golden, result, F16, F16, YES, D_NO).all()
-    assert measurable_mask(src, golden, golden.clone(), F16, F16, D_NO).all()
+    assert _swept(src, golden, golden.clone(), F16, F16, D_NO).measurable.all()
 
 
 def test_an_entry_no_lane_of_which_disagrees_is_stale():
@@ -857,20 +869,23 @@ def test_an_entry_no_lane_of_which_disagrees_is_stale():
     entry another exclusion already covers is stale too."""
     src = torch.tensor([65408.0, 65504.0], dtype=torch.float16)
     golden = src.clone()
-    cell = dict(approx_mode=NO, dest_acc=D_NO)
+    cell = dict(approx=NO, dest=D_NO)
     celu = MathOperation.Celu
     still_broken = torch.tensor([float("inf"), 65504.0], dtype=torch.float16)
-    assert stale_excuses(celu, src, golden, still_broken, F16, F16, **cell) == []
+    assert (
+        _swept(src, golden, still_broken, F16, F16, op=celu, **cell).stale_excuses == []
+    )
     fixed = golden.clone()
     assert [
-        e.issue for e in stale_excuses(celu, src, golden, fixed, F16, F16, **cell)
+        e.issue
+        for e in _swept(src, golden, fixed, F16, F16, op=celu, **cell).stale_excuses
     ] == [58607]
-    other = dict(approx_mode=NO, dest_acc=D_YES)
-    assert stale_excuses(celu, src, golden, fixed, F16, F16, **other) == []
+    other = dict(approx=NO, dest=D_YES)
+    assert _swept(src, golden, fixed, F16, F16, op=celu, **other).stale_excuses == []
     nan_golden = torch.full_like(golden, float("nan"))
-    assert stale_excuses(celu, src, nan_golden, still_broken, F16, F16, **cell) == [
-        _KNOWN_NONFINITE_LANES[celu][0]
-    ]
+    assert _swept(
+        src, nan_golden, still_broken, F16, F16, op=celu, **cell
+    ).stale_excuses == [_KNOWN_NONFINITE_LANES[celu][0]]
 
 
 def test_every_known_lane_entry_names_an_issue_and_a_gateable_cell():
@@ -882,6 +897,77 @@ def test_every_known_lane_entry_names_an_issue_and_a_gateable_cell():
             assert has_ulp_gate(entry.output), where
 
 
+def test_no_blackhole_cell_holds_fp16_in_a_16_bit_dest():
+    """Blackhole's SFPU reads garbage from fp16 in a 16-bit Dest, so no `Float16` cell
+    at `dest_acc=No` is swept there; every one is swept on Wormhole."""
+    fp16_at_16_bit = lambda cells: {  # noqa: E731
+        (i, o) for i, o, _, d in cells if d == D_NO and F16 in (i, o)
+    }
+    assert fp16_at_16_bit(sweep_cells(ChipArchitecture.BLACKHOLE)) == set()
+    assert fp16_at_16_bit(sweep_cells(ChipArchitecture.WORMHOLE)) == _FP16_IN_DEST
+
+
+def test_no_cell_left_out_on_blackhole_resolves_to_a_step_budget_there():
+    """The sweep measures no cell `fp16_dest_unusable` leaves out, so the Blackhole
+    table may not hold one to a step budget, through a dest-less row least of all:
+    Sign from Float16 to Float32 at `dest_acc=No` is 1.3e8 steps off there. Read from
+    `_bh.yaml` itself, so both hardware-free passes check it."""
+    bh = ChipArchitecture.BLACKHOLE
+    left_out = [
+        (i, o)
+        for i, o in product(SWEEP_FORMATS, SWEEP_FORMATS)
+        if fp16_dest_unusable(i, o, D_NO, bh)
+    ]
+    covered = []
+    for op, rows in load_table(TABLE_PATHS[bh]).items():
+        for (i, o), approx in product(left_out, (*ApproximationMode, None)):
+            query = BudgetKey(
+                approx_mode=approx,
+                input_format=i,
+                output_format=o,
+                dest_acc=D_NO,
+                arch=bh,
+            )
+            row = most_specific(rows, query)
+            if row is not None and row.contract.metric is Metric.ULP:
+                covered.append(f"{op.name} {query.describe()}: {row.key.describe()}")
+    assert not covered, covered
+
+
+def test_a_promoted_cell_is_not_an_fp16_dest_cell():
+    """An exponent-B input packed to Float16 runs at a 32-bit Dest whatever it asks
+    for, so it holds no fp16 in a 16-bit Dest even at `dest_acc=No`."""
+    unusable = {
+        (i, o)
+        for i, o in product(SWEEP_FORMATS, SWEEP_FORMATS)
+        if fp16_dest_unusable(i, o, D_NO, ChipArchitecture.BLACKHOLE)
+    }
+    assert unusable == _FP16_IN_DEST
+    assert not any(
+        fp16_dest_unusable(i, o, d, ChipArchitecture.WORMHOLE)
+        for i, o, d in product(SWEEP_FORMATS, SWEEP_FORMATS, DestAccumulation)
+    )
+
+
+def test_a_pair_swept_at_one_dest_because_the_other_holds_fp16_keeps_its_dest(
+    tmp_path,
+):
+    """On Blackhole a Float16 -> Float32 pair is swept at `dest_acc=Yes` only. Its
+    cells agree, but a dest-less row would also answer the `No` cell nobody measured
+    (where Sign is 1.3e8 steps off), so the row keeps `dest`. A promoted cell is not
+    excluded (its `No` request runs the `Yes` kernel): Sqrt, with no excluded cell in
+    this run, still drops `dest` from its Float16_b -> Float16 pair."""
+    path = tmp_path / "budget.yaml"
+    write_table_file({}, path)
+    sqrt = MathOperation.Sqrt
+    for approx in ApproximationMode:
+        record(GELU, cell_key(F16, F32, approx, D_YES), 0)
+        record(sqrt, cell_key(F16B, F16, approx, D_YES), 0)
+    write_table(path, ChipArchitecture.BLACKHOLE)
+    assert set(_rows(path)) == {_pair(F16, F32, dest_acc=D_YES)}
+    assert set(_rows(path, sqrt)) == {_pair(F16B, F16)}
+
+
 @pytest.mark.parametrize(
     "arch",
     [ChipArchitecture.WORMHOLE, ChipArchitecture.BLACKHOLE],
@@ -889,7 +975,8 @@ def test_every_known_lane_entry_names_an_issue_and_a_gateable_cell():
 )
 def test_the_sweep_cells_are_the_ones_testconfig_builds_as_asked(arch, monkeypatch):
     """A cell is swept exactly when the TestConfig built for it runs the Dest it asks
-    for; the promoted exponent-B -> Float16 `No` cells are the ones left out."""
+    for; the promoted exponent-B -> Float16 `No` cells are the ones left out, and on
+    Blackhole the cells that would hold fp16 in a 16-bit Dest."""
     monkeypatch.setattr(TestConfig, "CHIP_ARCH", arch)
     built_as_asked = [
         (i, o, a, d)
@@ -904,26 +991,29 @@ def test_the_sweep_cells_are_the_ones_testconfig_builds_as_asked(arch, monkeypat
             skip_build_header=True,
         ).dest_acc
         == d
+        and not fp16_dest_unusable(i, o, d, arch)
     ]
     cells = sweep_cells(arch)
     assert cells == built_as_asked
-    promoted = {(i, o) for i, o, _, d in cells if d == D_NO} ^ {
+    one_dest = {(i, o) for i, o, _, d in cells if d == D_NO} ^ {
         (i, o) for i, o, _, d in cells if d == D_YES
     }
-    assert promoted == {(F16B, F16)}
+    assert one_dest == {(F16B, F16)} | (
+        _FP16_IN_DEST if arch == ChipArchitecture.BLACKHOLE else set()
+    )
 
 
 def test_no_step_budget_names_an_arch_sweep_cells_does_not_filter_for():
-    """`sweep_cells` applies only the Dest promotion off Wormhole, not another arch's
-    format support; a ULP row naming one would send unsupported cells to the device."""
+    """`sweep_cells` applies only the Dest promotion and Blackhole's fp16 rule, not a
+    third architecture's format support; a ULP row naming one would send unsupported
+    cells to the device."""
     from helpers.sfpu_accuracy_budget import _SFPU_ACCURACY_BUDGET
-    from helpers.ulp_table import MEASURED_ARCH
 
     elsewhere = [
-        (op.name, key)
+        (op.name, row.key)
         for op, rows in _SFPU_ACCURACY_BUDGET.items()
-        for key, contract in rows.items()
-        if contract.metric is Metric.ULP and key.arch not in (None, MEASURED_ARCH)
+        for row in rows
+        if row.contract.metric is Metric.ULP and row.arch not in (None, MEASURED_ARCH)
     ]
     assert elsewhere == []
 
@@ -1087,7 +1177,9 @@ def test_the_claim_excludes_the_poles_of_the_gamma_family():
     """A pole at every non-positive integer, -0.0 included; -2.5 is not one; an op
     without the lattice keeps every lane."""
     src = torch.tensor([-3.0, -2.5, -0.0, 0.0, 0.5, 2.0], dtype=torch.float32)
-    assert claimed_lanes(MathOperation.Digamma, src, F32, F32, D_YES).tolist() == [
+    assert _swept(
+        src, src, src, F32, F32, D_YES, op=MathOperation.Digamma
+    ).claimed.tolist() == [
         False,
         True,
         False,
@@ -1095,7 +1187,7 @@ def test_the_claim_excludes_the_poles_of_the_gamma_family():
         True,
         True,
     ]
-    assert claimed_lanes(MathOperation.Abs, src, F32, F32, D_YES).all()
+    assert _swept(src, src, src, F32, F32, D_YES, op=MathOperation.Abs).claimed.all()
 
 
 def test_the_claim_judges_a_float32_input_as_the_16bit_dest_truncates_it():
@@ -1104,11 +1196,11 @@ def test_the_claim_judges_a_float32_input_as_the_16bit_dest_truncates_it():
     src = torch.tensor([-8326436.5, -2.5], dtype=torch.float32)
     op = MathOperation.Polygamma
     for out in (F16B, F32):
-        assert claimed_lanes(op, src, F32, out, D_NO).tolist() == [
+        assert _swept(src, src, src, F32, out, D_NO, op=op).claimed.tolist() == [
             False,
             True,
         ], out.name
-        assert claimed_lanes(op, src, F32, out, D_YES).all(), out.name
+        assert _swept(src, src, src, F32, out, D_YES, op=op).claimed.all(), out.name
 
 
 def test_the_polygamma_golden_is_the_pole_on_every_nonpositive_integer():
@@ -1143,12 +1235,12 @@ def test_a_lane_the_dest_lost_is_neither_ranked_nor_a_failure():
         dtype=torch.float32,
     )
     lost = [False] * 6 + [True, True]
-    assert dest_holds(golden, result, F16, F32, D_NO).tolist() == lost
-    assert dest_holds(golden, result, F16, F16, D_NO).all()
-    assert dest_holds(golden, result, F16B, F32, D_NO).all()
-    assert dest_holds(golden, result, F16, F32, D_YES).all()
+    assert _swept(golden, golden, result, F16, F32, D_NO).dest_holds.tolist() == lost
+    assert _swept(golden, golden, result, F16, F16, D_NO).dest_holds.all()
+    assert _swept(golden, golden, result, F16B, F32, D_NO).dest_holds.all()
+    assert _swept(golden, golden, result, F16, F32, D_YES).dest_holds.all()
     src = torch.full((8,), 2.0, dtype=torch.float16)
-    assert measurable_mask(src, golden, result, F16, F32, D_NO).tolist() == lost
+    assert _swept(src, golden, result, F16, F32, D_NO).measurable.tolist() == lost
     assert not _failures(
         MathOperation.Exp, src, golden, result, F16, F32, dest=D_NO
     ).any()
@@ -1166,9 +1258,9 @@ def test_an_answer_the_dest_did_not_saturate_to_stays_judged():
         [-1.0, -131008.0, 30000.0, 0.0, 3 * tiny, math.inf, -math.inf],
         dtype=torch.float32,
     )
-    assert dest_holds(golden, result, F16, F32, D_NO).all()
+    assert _swept(golden, golden, result, F16, F32, D_NO).dest_holds.all()
     src = torch.full((7,), 2.0, dtype=torch.float16)
-    assert measurable_mask(src, golden, result, F16, F32, D_NO).tolist() == (
+    assert _swept(src, golden, result, F16, F32, D_NO).measurable.tolist() == (
         [True] * 5 + [False, False]
     )
     assert _failures(

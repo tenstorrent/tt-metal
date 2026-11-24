@@ -5,7 +5,7 @@
 #include <tt_stl/assert.hpp>
 #include <buffer.hpp>
 #include <buffer_types.hpp>
-#include <core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <device.hpp>
 #include "impl/dataflow_buffer/cross_node_dfb.hpp"
 #include "impl/context/metal_context.hpp"
@@ -13,7 +13,7 @@
 #include "impl/context/context_types.hpp"
 #include "impl/program/program_impl.hpp"
 #include "tt_metal/api/tt-metalium/hal_types.hpp"
-#include <tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <cstdint>
 #include <variant>
 #include <vector>

@@ -4,10 +4,15 @@
 
 #include "unary.hpp"
 #include "device/unary_device_operation.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
+
+#include <algorithm>
+
+#include <tt-metalium/constants.hpp>
 
 namespace ttnn::operations::unary::detail {
 
@@ -34,7 +39,14 @@ Tensor unary_impl(
     DataType output_dtype = input_dtype;
     if (op_chain.back().type() == unary::UnaryOpType::TYPECAST ||
         op_chain.back().type() == unary::UnaryOpType::BITCAST) {
-        output_dtype = static_cast<DataType>(*op_chain.back().get_param_if<float>(1));
+        // The cast's parameters may be float, int32_t or uint32_t backed; a float-only read would
+        // dereference an empty optional for an integer-backed cast.
+        const auto target_dtype = unary::utils::typecast_target_dtype(op_chain.back());
+        TT_FATAL(
+            target_dtype.has_value(),
+            "Unary: {} needs two parameters (input and target dtype).",
+            op_chain.back().type());
+        output_dtype = *target_dtype;
         if (optional_output_tensor.has_value()) {
             TT_FATAL(
                 output_dtype == optional_output_tensor->dtype(),
@@ -64,6 +76,32 @@ Tensor unary_impl(
     auto output_memory_config = optional_output_tensor.has_value()
                                     ? optional_output_tensor.value().memory_config()
                                     : memory_config.value_or(input_tensor.memory_config());
+
+    // A BFLOAT8_B / BFLOAT4_B pack shares one exponent per 16-lane block of a row, padding included. When the logical
+    // width is not a multiple of 16 and the op is inf or nan at the zero padding (reciprocal / rsqrt / log of 0), that
+    // value sets the exponent of the last block and its real lanes are packed as 0. Produce BFLOAT16 and let the
+    // typecast zero the padding before packing.
+    if (is_block_float(output_dtype) && input_tensor.layout() == Layout::TILE &&
+        input_tensor.logical_shape()[-1] % tt::constants::FACE_WIDTH != 0 &&
+        std::ranges::any_of(op_chain, unary::utils::is_non_finite_at_zero)) {
+        // The LOGIT kernel packs its temporary in the input format with the packer set up for the output, so a
+        // block-float input must be widened to match the BFLOAT16 output.
+        const Tensor widened_input =
+            op_chain.front().type() == unary::UnaryOpType::LOGIT && is_block_float(input_dtype)
+                ? ttnn::typecast(input_tensor, DataType::BFLOAT16, std::nullopt, std::nullopt, sub_core_grids)
+                : input_tensor;
+        Tensor result = prim::unary(
+            widened_input,
+            op_chain,
+            DataType::BFLOAT16,
+            output_memory_config,
+            fp32_dest_acc_en,
+            preserve_fp32_precision,
+            /*bfp8_pack_precise=*/false,
+            std::nullopt,
+            sub_core_grids);
+        return ttnn::typecast(result, output_dtype, output_memory_config, optional_output_tensor, sub_core_grids);
+    }
 
     return prim::unary(
         input_tensor,
@@ -621,64 +659,71 @@ Tensor unary_chain(
         input_tensor, ops_chain, memory_config, optional_output_tensor, sub_core_grids);
 }
 
-template <typename T>
+namespace {
+
+Tensor unary_with_scalar_variant(
+    operations::unary::UnaryOpType op_type,
+    const Tensor& input_tensor,
+    operations::unary::ScalarVariant param,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    // Floating-point codegen casts the scalar to float, so normalizing here keeps add_sfpu(t, 128) and
+    // add_sfpu(t, 128.0f) on one program cache entry. Integer dtypes keep the exact scalar.
+    if (is_floating_point(input_tensor.dtype())) {
+        param = std::visit([](auto value) { return static_cast<float>(value); }, param);
+    }
+    return std::visit(
+        [&](auto value) {
+            return operations::unary::detail::unary_impl(
+                input_tensor,
+                {operations::unary::EltwiseUnaryWithParam{op_type, value}},
+                memory_config,
+                optional_output_tensor,
+                sub_core_grids);
+        },
+        param);
+}
+
+}  // namespace
+
 Tensor rsub_sfpu(
     const Tensor& input_tensor,
-    T param,
+    operations::unary::ScalarVariant param,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    using namespace operations::unary;
-    return operations::unary::detail::unary_impl(
+    return unary_with_scalar_variant(
+        operations::unary::UnaryOpType::RSUB,
         input_tensor,
-        {EltwiseUnaryWithParam{UnaryOpType::RSUB, {param}}},
-        memory_config,
-        optional_output_tensor,
-        sub_core_grids);
-}
-
-template Tensor ttnn::rsub_sfpu<float>(
-    const Tensor&,
-    float,
-    const std::optional<MemoryConfig>&,
-    const std::optional<Tensor>&,
-    const std::optional<CoreRangeSet>&);
-
-template Tensor ttnn::rsub_sfpu<int>(
-    const Tensor&,
-    int,
-    const std::optional<MemoryConfig>&,
-    const std::optional<Tensor>&,
-    const std::optional<CoreRangeSet>&);
-
-Tensor add_sfpu(
-    const Tensor& input_tensor,
-    float param,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
-    using namespace operations::unary;
-    return operations::unary::detail::unary_impl(
-        input_tensor,
-        {EltwiseUnaryWithParam(UnaryOpType::ADD_UNARY_SFPU, param)},
+        param,
         memory_config,
         optional_output_tensor,
         sub_core_grids);
 }
 
 Tensor add_sfpu(
-    float param,
+    const Tensor& input_tensor,
+    operations::unary::ScalarVariant param,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return unary_with_scalar_variant(
+        operations::unary::UnaryOpType::ADD_UNARY_SFPU,
+        input_tensor,
+        param,
+        memory_config,
+        optional_output_tensor,
+        sub_core_grids);
+}
+
+Tensor add_sfpu(
+    operations::unary::ScalarVariant param,
     const Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    using namespace operations::unary;
-    return operations::unary::detail::unary_impl(
-        input_tensor,
-        {EltwiseUnaryWithParam(UnaryOpType::ADD_UNARY_SFPU, param)},
-        memory_config,
-        optional_output_tensor,
-        sub_core_grids);
+    return add_sfpu(input_tensor, param, memory_config, optional_output_tensor, sub_core_grids);
 }
 
 Tensor mul_sfpu(
@@ -713,32 +758,26 @@ Tensor mul_sfpu(
 
 Tensor sub_sfpu(
     const Tensor& input_tensor,
-    float param,
+    operations::unary::ScalarVariant param,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    using namespace operations::unary;
-    return operations::unary::detail::unary_impl(
+    return unary_with_scalar_variant(
+        operations::unary::UnaryOpType::SUB_UNARY_SFPU,
         input_tensor,
-        {EltwiseUnaryWithParam{UnaryOpType::SUB_UNARY_SFPU, param}},
+        param,
         memory_config,
         optional_output_tensor,
         sub_core_grids);
 }
 
 Tensor sub_sfpu(
-    float param,
+    operations::unary::ScalarVariant param,
     const Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    using namespace operations::unary;
-    return operations::unary::detail::unary_impl(
-        input_tensor,
-        {EltwiseUnaryWithParam{UnaryOpType::RSUB, param}},
-        memory_config,
-        optional_output_tensor,
-        sub_core_grids);
+    return rsub_sfpu(input_tensor, param, memory_config, optional_output_tensor, sub_core_grids);
 }
 
 Tensor div_sfpu(

@@ -8,8 +8,8 @@
 #include <vector>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -17,7 +17,7 @@
 
 using namespace tt::tt_metal;
 using namespace tt::constants;
-using namespace tt::tt_metal::experimental;
+using namespace tt::tt_metal;
 
 namespace ttnn::prim::qsr {
 using ttnn::operations::data_movement::float_to_uint16;
@@ -70,7 +70,7 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedWidthOnlyProgramFactory::cr
     const auto& ordered_cores_with_data = get_optimal_worker_cores_for_sharded_tensor(output);
     auto all_cores_padded = CoreRangeSet(ttsl::Span<const CoreCoord>(ordered_cores_with_data));
 
-    TT_ASSERT(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());

@@ -8,8 +8,8 @@
 #include <gmock/gmock.h>
 #include <unordered_map>
 
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/metal2_host_api/program_spec/construction/resource/resource.hpp"
@@ -36,7 +36,7 @@ using test_helpers::ProgramSpecTestQuasar;
 // census, then resolve.
 SemScope ResolveScopeFor(MetalEnvImpl& env, const ProgramSpec& spec, const char* semaphore_name) {
     const CollectedSpecData collected = CollectSpecData(spec);
-    // Resolve against the mesh device's env, mirroring BuildProgramFromSpec; configure_mock_mode
+    // Resolve against the mesh device's env, mirroring BuildProgramFromSpec; the mock MetalEnv
     // in each test fixture sets that env's arch.
     return ResolveSemaphoreScopes(spec, collected.semaphore_binders, env).at(SemaphoreSpecName{semaphore_name});
 }
@@ -84,7 +84,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SemaphoreSharedByComputeAndDMIsRejected) {
     BindSemaphoreToKernels(spec, "shared_sem", {"dm_kernel", "compute_kernel"});
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("bound by both a compute kernel and a data-movement kernel")));
 }

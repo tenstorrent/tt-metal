@@ -5,6 +5,9 @@
 #pragma once
 #include "types.hpp"
 
+#include <optional>
+#include <vector>
+
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/tensor/layout/layout.hpp"
 #include <tt_stl/optional_reference.hpp>
@@ -54,6 +57,16 @@ void copy_to_host(
     std::optional<QueueId> cq_id = std::nullopt);
 
 Tensor cpu(const Tensor& input_tensor, bool blocking = true, std::optional<QueueId> cq_id = std::nullopt);
+
+// Reads the shards at `coords` of a device tensor to the host in one command-queue batch and returns one single-device
+// host tensor per coordinate, in the order given, as get_device_tensors returns a host tensor's shards. Every
+// coordinate must be one the tensor holds a shard at, and none may repeat. The device tensor and its topology label are
+// untouched.
+std::vector<Tensor> cpu_shards(
+    const Tensor& input_tensor,
+    const std::vector<tt::tt_metal::distributed::MeshCoordinate>& coords,
+    bool blocking = true,
+    std::optional<QueueId> cq_id = std::nullopt);
 
 Tensor pad(
     const Tensor& input_tensor,

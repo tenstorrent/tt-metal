@@ -10,6 +10,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 #include "ttnn/global_semaphore.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
@@ -28,10 +29,10 @@ struct SliceReshardAsyncDeviceOperation {
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<SliceReshardAsyncProgramFactory>;
-    using shared_variables_t = SliceReshardAsyncProgramFactory::shared_variables_t;
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+    static tt::tt_metal::operation::Hash compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::experimental::prim
