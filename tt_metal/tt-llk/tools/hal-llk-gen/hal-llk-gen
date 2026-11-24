@@ -180,16 +180,18 @@ checks() {  # <dry: 0|1> <mode: B|TRIVIAL>
 
   if has_stage harness; then
     [[ -n "$REPO" ]] && git -C "$REPO" rev-parse --git-dir > /dev/null 2>&1 || die "REPO is not set and $TOOL_DIR is not in a git checkout"
-    local missing=() r specs=()
+    local missing=() r
     for c in $BASE_COMMIT $HAL_COMMIT ${DOCS_COMMIT:-}; do git -C "$REPO" cat-file -e "$c^{commit}" 2> /dev/null || missing+=("$c"); done
     if (( ${#missing[@]} )) && [[ -n "${FETCH_REFS:-}" ]]; then
       echo "  fetching $FETCH_REFS from $FETCH_REMOTE (missing: ${missing[*]})"
-      for r in $FETCH_REFS; do specs+=("+refs/heads/$r:refs/remotes/$FETCH_REMOTE/$r"); done
-      git -C "$REPO" fetch -q "$FETCH_REMOTE" "${specs[@]}" || die "git fetch failed"
+      for r in $FETCH_REFS; do  # one by one: a branch that is missing on the remote does not stop the others
+        git -C "$REPO" fetch -q "$FETCH_REMOTE" "+refs/heads/$r:refs/remotes/$FETCH_REMOTE/$r" 2> /dev/null ||
+          warn "could not fetch branch $r from $FETCH_REMOTE"
+      done
       missing=()
       for c in $BASE_COMMIT $HAL_COMMIT ${DOCS_COMMIT:-}; do git -C "$REPO" cat-file -e "$c^{commit}" 2> /dev/null || missing+=("$c"); done
     fi
-    (( ${#missing[@]} == 0 )) || die "commits missing in $REPO: ${missing[*]} (fetch the branches that hold them)"
+    (( ${#missing[@]} == 0 )) || die "commits missing in $REPO: ${missing[*]} (not in FETCH_REFS of profile $PROFILE on $FETCH_REMOTE; fetch the branches that hold them)"
 
     # Isolation: the harness denies the agent REPO, RESULTS_ROOT, the other runs, $WORK/{runs,batches,dynamic-analysis},
     # this tool and EXTRA_DENY, so the run's own folder must not be inside any of those.
