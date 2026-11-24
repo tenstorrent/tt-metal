@@ -411,7 +411,7 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
         TT_FATAL(config.requires_vc2, "inter-domain fabric needs VC2: Blackhole, no UDM or mux");
         config.vc2_forwards = !config.requires_vc1;
         if (config.requires_vc1) {
-            log_warning(tt::LogFabric, "inter-domain on a multi-mesh fabric: VC2 doesn't span the domain");
+            log_warning(tt::LogFabric, "inter-domain on a multi-mesh fabric: VC2 doesn't span the domain (#67139)");
         }
     }
 
