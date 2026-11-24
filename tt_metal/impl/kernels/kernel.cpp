@@ -131,10 +131,10 @@ const DeviceBuildEnv& device_build_env_for(const IDevice& device) {
     return build_env_manager_for(device).get_device_build_env(device.build_id());
 }
 
-// Empty at the config's default level, so hashes (and cached binaries) of default-level kernels are unchanged.
+// Every level, the default too: a cache slot from before the level was in the hash may hold any level's binary.
 template <typename Config>
 std::string opt_level_suffix(const Config& config) {
-    return config.opt_level == Config{}.opt_level ? "" : fmt::format("_{}", enchantum::to_string(config.opt_level));
+    return fmt::format("_{}", enchantum::to_string(config.opt_level));
 }
 }  // namespace
 
