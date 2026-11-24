@@ -61,6 +61,21 @@
           "ttft_s": 108.88,
           "chunk_time_ms": 748
         }
+      },
+      "sc4_rr": {
+        "probe": "@1020k",
+        "margin": {
+          "@1020k": {
+            "throughput_tok_s": 0.03,
+            "ttft_s": 0.03,
+            "chunk_time_ms": 0.15
+          }
+        },
+        "8kw": {
+          "throughput_tok_s": 30615,
+          "ttft_s": 25.31,
+          "chunk_time_ms": 541
+        }
       }
     },
     "kimi_k3": {

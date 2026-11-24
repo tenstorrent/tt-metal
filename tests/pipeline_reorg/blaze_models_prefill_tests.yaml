@@ -2341,7 +2341,7 @@
 # ranks by tt-run discovery. Four stages sit inside one Galaxy; the four seam stages span two neighbouring hosts
 # (PREFILL_STAGE_HOSTS=1,2,1,2,1,2,1,2), with row-block D2D services on each 1-host <-> 2-host boundary. One
 # 2,560-token chunk per forward; every rank's KV and index caches are PCC'd against the 1M golden tail. Perf is
-# reported, not gated: no [RING,RING] baseline yet.
+# gated at the 1M probe against the sc4_rr baseline.
 - name: "(GLM-5.3-744B) disaggregated prefill 8x[4,4] [RING,RING] KV accuracy 1M tail@2.5k, SC4"
   cmd: |
     set -euo pipefail
@@ -2350,7 +2350,7 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
-    export PREFILL_PERF_GATE=0 TABLE_WAIT_SECS=3000 PREFILL_STALL_SECS=600
+    export TABLE_WAIT_SECS=3000 PREFILL_STALL_SECS=600
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc4_rr
   test_type: prefill_runner_kv_pcc
   test_tags: [glm_5_3, runner, kv_cache, glm53_trace]
