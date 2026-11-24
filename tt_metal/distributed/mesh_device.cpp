@@ -1907,7 +1907,11 @@ bool MeshDeviceImpl::initialize_impl(
         }
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
             mesh_command_queues_.push_back(std::make_unique<SDMeshCommandQueue>(
-                pimpl_wrapper, cq_id, std::bind(&MeshDeviceImpl::lock_api, this), active_distributed_context_));
+                pimpl_wrapper,
+                cq_id,
+                dispatch_thread_pool_,
+                std::bind(&MeshDeviceImpl::lock_api, this),
+                active_distributed_context_));
         }
     }
     Inspector::mesh_device_initialized(this);
