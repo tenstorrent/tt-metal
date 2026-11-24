@@ -28,6 +28,8 @@ void bind_normalization_rms_norm(nb::module_& mod) {
         Returns:
             ttnn.DeviceComputeKernelConfig: The default compute config for RMS norm (HiFi4, approx_mode=False, fp32_dest_acc_en=True).
                 On Quasar: approx_mode=True, fp32_dest_acc_en=False.
+                :func:`ttnn.rms_norm` without a compute_kernel_config uses approx_mode=True, fp32_dest_acc_en=False with a
+                ROW_MAJOR weight or bias, and with a sharded program_config whose subblock_w is above 4.
         )doc");
 
     const auto* doc = R"doc(
