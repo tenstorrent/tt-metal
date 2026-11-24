@@ -20,11 +20,13 @@ RUN_NAME="${MODEL}${VARIANT}"
 # First entry is the default; membership is the validation. These models support sc1 only.
 # Kimi-K3's and Kimi-K3.1's sc4 and sc1 are 4x4 stages, two per galaxy (their manifests' layout); their _8x4
 # configs keep the one-stage-per-galaxy layout for hand comparisons. GLM-5.3's sc4 and sc1 are 8x4 stages, its
-# production layout; its _4x4 configs run 4x4 stages, two per galaxy.
+# production layout; its _4x4 configs run 4x4 stages, two per galaxy. GLM-5.4 runs sc4 only: its production placement
+# is one 8x4 stage per galaxy, four of them.
 case "${MODEL}" in
   mistral4|gptoss120b) MODEL_CONFIGS="sc1" ;;
   kimi_k3|kimi_k3_1)   MODEL_CONFIGS="sc4 sc1 sc4_8x4 sc1_8x4" ;;
   glm53)               MODEL_CONFIGS="sc4 sc1 sc4_4x4 sc1_4x4" ;;
+  glm54)               MODEL_CONFIGS="sc4" ;;
   *)                   MODEL_CONFIGS="sc4 sc1" ;;
 esac
 CONFIG="${2:-${MODEL_CONFIGS%% *}}"
@@ -118,6 +120,12 @@ SC1_NUM_LAYERS=""
 SC1_NUM_USERS=1
 REQUEST_LEN=""
 SC1_REQUEST_LEN=""
+# 1 for a perf-only leg: no golden, so no KV table, PCC or validators. Its runner publishes no KV table, so readiness is
+# READY_RANKS runner ranks logging that they entered the request loop; one producer process feeds rank 0 and drains
+# every rank's layer acks into CHUNK_RETIRE lines (stage_probe_producer.py), and the PCC gate is skipped.
+PERF_ONLY=0
+READY_RANKS=0
+PRODUCER_MODULE=models.demos.common.prefill.runners.prefill_producer
 
 case "${MODEL}" in
   gptoss120b)
@@ -198,6 +206,38 @@ case "${MODEL}" in
         RUNNER_ENV+=" export PREFILL_TTNN_CACHE='${GLM_CACHE}';"
         ;;
     esac
+    ;;
+  glm54)
+    # GLM-5.4 (GLM-5.3 with layers 27-54 run twice) on its production placement: four 8x4 stages, one per galaxy, over
+    # the adapter's 106 layer passes. The runner's default split is that placement: G0 = passes 0-25 (L1-26), G1 =
+    # 26-53 (loop pass 1 + gate 1), G2 = 54-81 (loop pass 2 + gate 2, sent G1's loop handoff), G3 = 82-105 (L55-78),
+    # with MTP on G3 at GLM-5.3's production MTP settings (glm53_mtp_kv_share.json, as run_glm54_trunk.sh reads them).
+    # Tier-2 weights: the adapter reads GLM-5.3's checkpoint and TTNN cache and never builds or writes a cache
+    # (builds_missing_weight_cache=False), with seeded synthetic loop gates. Perf only: GLM-5.4 has no golden, and a
+    # looped model builds no KV chunk table. The prompt is the GLM-5.3 CI golden's 1M tokens, as the trunk probes use.
+    export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/glm54_prefill_runner_kv}"
+    MANIFEST="${MANIFEST_DIR}/glm54.json"
+    PERF_ONLY=1
+    READY_RANKS=4
+    PRODUCER_MODULE=models.demos.deepseek_v3_d_p.scripts.stage_probe.stage_probe_producer
+    MTP_ENV=""
+    for k in PREFILL_MTP_LEVELS PREFILL_MTP_DECODE_LEVELS TT_GLM53_MTP_TTNN_CACHE; do
+      MTP_ENV+=" export ${k}=$(MANIFEST="${MANIFEST_DIR}/glm53_mtp_kv_share.json" manifest_env "${k}");"
+    done
+    # PREFILL_D2D_TIMING: per-chunk stage and D2D boundary stamps (the G1->G2 loop handoff), which the summary reports.
+    # PREFILL_D2D_TIMING=0 in the leg's cmd turns it off, e.g. to rule it out of a failure.
+    RUNNER_ENV="${MTP_ENV} export PREFILL_D2D_TIMING=${PREFILL_D2D_TIMING:-1};"
+    PRODUCER_ENV="${MTP_ENV} export PREFILL_PRODUCER_CHECK_PCC=0; \
+      export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/glm53-1020k-last5120;"
+    REQUEST_LEN=1044480
+    # Slots: below the measured traced pipeline capacity of 35 (q171.3.5, G1 binding) for margin on this first
+    # multi-rank run; a chunk's time does not depend on the slot count. glm54.json leaves slots to its callers.
+    : "${PREFILL_NUM_USERS:=32}"
+    export PREFILL_NUM_USERS
+    # No glm54 baseline yet: demand a measurement, so a leg that measured nothing cannot pass green.
+    REQUIRE_TPS="${PREFILL_REQUIRE_TPS:-1}"
+    # Four galaxies bring up 106 traced layer passes; stays below the leg's 90 min job timeout.
+    TABLE_WAIT_DEFAULT=2700
     ;;
   kimi_k3)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/kimi_k3_prefill_runner_kv}"
@@ -297,7 +337,7 @@ if [ "${PP_RANKS}" -eq 0 ]; then
 fi
 
 MAX_SEQ_LEN=${VARIANT_MAX_SEQ_LEN:-$(manifest_env PREFILL_MAX_SEQ_LEN)}
-NUM_USERS=$(manifest_env PREFILL_NUM_USERS)
+NUM_USERS=${PREFILL_NUM_USERS:-$(manifest_env PREFILL_NUM_USERS)}
 
 RUNNER_OVERRIDES="${VARIANT_MAX_SEQ_LEN:+export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN};}"
 SC4_MAX_SEQ_LEN=${MAX_SEQ_LEN}
@@ -577,18 +617,35 @@ WATCHDOG_PID=$!
 # shallower models nothing. Keep it below the leg's job timeout, or the container is killed first
 # and this diagnostic never prints.
 TABLE_WAIT_SECS="${TABLE_WAIT_SECS:-${TABLE_WAIT_DEFAULT}}"
+# A perf-only leg's runner publishes no table: it is ready once every rank has entered its request loop.
+READY_WHAT="publishing the KV table"
+[ "${PERF_ONLY}" = 1 ] && READY_WHAT="all ${READY_RANKS} ranks entered the request loop"
+ranks_ready() {
+  find "${RANKLOGS}" -type f \( -name stderr -o -name stdout \) -exec grep -l -F "setup complete, entering request loop" {} + 2>/dev/null | wc -l
+}
+runner_ready() {
+  if [ "${PERF_ONLY}" = 1 ]; then
+    [ "$(ranks_ready)" -ge "${READY_RANKS}" ]
+  else
+    [ -f "${TABLE_PATH}" ]
+  fi
+}
 WAITED=0
 while [ "${WAITED}" -lt "${TABLE_WAIT_SECS}" ]; do
-  [ -f "${TABLE_PATH}" ] && break
+  runner_ready && break
   kill -0 "${RUNNER_PID}" 2>/dev/null || {
-    echo "runner exited before publishing the KV table"
+    echo "runner exited before ${READY_WHAT}"
     [ -f "${CRASH_FLAG}" ] && echo "a rank crashed: $(tr '\n' ' ' < "${CRASH_FLAG}")"
     wait "${RUNNER_PID}"; exit 1;
   }
   sleep 5
   WAITED=$((WAITED + 5))
+  if [ $((WAITED % 60)) -eq 0 ]; then
+    echo "[$(date -u +%FT%TZ)] waiting ${WAITED}s for the runner: ${READY_WHAT}$([ "${PERF_ONLY}" = 1 ] && echo " ($(ranks_ready)/${READY_RANKS} ready)")"
+  fi
 done
-[ -f "${TABLE_PATH}" ] || { echo "KV table not published within ${TABLE_WAIT_SECS}s"; exit 1; }
+runner_ready || { echo "runner not ready within ${TABLE_WAIT_SECS}s: ${READY_WHAT}"; exit 1; }
+echo "[$(date -u +%FT%TZ)] runner ready after ~${WAITED}s"
 
 # A PP binding already fixed the rank count and host; only discovery has to parse them back out.
 if [ "${PP_RANKS}" -eq 0 ] || [ "${PP_4X4_HOSTS}" -ne 0 ]; then
@@ -603,11 +660,16 @@ if [ "${PP_RANKS}" -eq 0 ] || [ "${PP_4X4_HOSTS}" -ne 0 ]; then
   if [ "${PP_RANKS}" -ne 0 ] && [ "${EXPECTED_RANKS}" -ne "${PP_RANKS}" ]; then
     echo "tt-run discovery bound ${EXPECTED_RANKS} ranks; ${MODEL}/${CONFIG} needs ${PP_RANKS}"; exit 1
   fi
+  if [ "${READY_RANKS}" -ne 0 ] && [ "${EXPECTED_RANKS}" -ne "${READY_RANKS}" ]; then
+    echo "tt-run discovery bound ${EXPECTED_RANKS} ranks; ${MODEL}/${CONFIG} is ${READY_RANKS} stages"; exit 1
+  fi
   # The binding tt-run solved, kept with the run's evidence.
   BINDING="${RANKFILE%/*}/rank_bindings.yaml"
 fi
 
 PRODUCER_PLACEMENT=(-np "${EXPECTED_RANKS}" --map-by slot)
+# A perf-only leg runs no validators: its one producer process lands on HOSTS' first host, runner rank 0's.
+[ "${PERF_ONLY}" = 1 ] && PRODUCER_PLACEMENT=(-np 1 --map-by slot)
 # Producer rank r must share a host with runner rank r, which --map-by slot over HOSTS gives only
 # when each host's ranks are contiguous -- as tt-run binds a host's two 4x4 meshes.
 if [ "${PP_4X4_HOSTS}" -ne 0 ] && [ "$(printf '%s\n' "${RANK_HOSTS}" | uniq | wc -l)" -ne "${PP_4X4_HOSTS}" ]; then
@@ -720,7 +782,7 @@ set +e
     ${NUM_LAYERS_ENV} \
     ${PRODUCER_ENV} \
     export LOGURU_LEVEL=INFO; \
-    exec python3 -m models.demos.common.prefill.runners.prefill_producer" 2>&1 | tee "${PRODUCER_LOG}"
+    exec python3 -m ${PRODUCER_MODULE}" 2>&1 | tee "${PRODUCER_LOG}"
 PROD_RC=${PIPESTATUS[0]}
 set -e
 
@@ -777,6 +839,9 @@ if [ "${REQUIRE_TPS}" = 1 ] || [ -n "${EXPECTED_TPS}" ] || [ -f "${PERF_BASELINE
 fi
 
 PCC_GATE_RC=0
+if [ "${PERF_ONLY}" = 1 ]; then
+  echo "PCC GATE SKIPPED: ${RUN_NAME} is a perf-only leg (no golden, no KV table)" | tee -a "${GATE_LOG}"
+else
 python3 - "${PCC_DIR}" "${EXPECTED_RANKS}" "${PCC_THRESHOLD}" "${PRODUCER_USERS}" "${MTP_PCC_THRESHOLD}" <<'PY' 2>&1 | tee -a "${GATE_LOG}" || PCC_GATE_RC=$?
 import glob, json, math, os, sys
 
@@ -839,6 +904,7 @@ if bad:
     sys.exit(1)
 print(f"PCC GATE PASS: {len(files)}/{expected} ranks ok, all caches >= threshold")
 PY
+fi
 
 if [ "${PROD_RC}" -ne 0 ]; then
   exit "${PROD_RC}"

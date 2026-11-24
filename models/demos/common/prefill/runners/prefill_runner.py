@@ -204,6 +204,11 @@ USE_TRACE = os.environ.get("PREFILL_USE_TRACE", "0") == "1"
 HYBRID_PAGE_POOL_V2 = os.environ.get("PREFILL_HYBRID_PAGE_POOL_V2", "0") == "1"
 # GLM KVPE cache: scaled FP8 unless PREFILL_SCALED_FP8_KV_CACHE=0 (bf16). Dense-MLA models get None.
 SCALED_FP8_KV_CACHE = os.environ.get("PREFILL_SCALED_FP8_KV_CACHE", "1") == "1"
+# PREFILL_D2D_TIMING=1: every pipeline rank logs one D2D_TIMING line per chunk (run_request_loop) with the host clock's
+# view of three device points: its previous chunk's work done (post), this chunk's receive done (recv), and its
+# boundary links free again (free); see _D2DStageClock for what each costs. The CI summary (ci/summarize_ci_run.py)
+# turns the lines into stage and boundary-transfer times.
+D2D_TIMING = os.environ.get("PREFILL_D2D_TIMING", "0") == "1"
 
 
 def _sparse_kv_cache_format():
@@ -402,15 +407,20 @@ def _h2d_drain_op(h2d_service, sockets, n_mtp: int):
     )
 
 
-def _socket_next(h2d_service, sockets, n_mtp: int = 0, stage_metadata=None) -> tuple:
+def _socket_next(h2d_service, sockets, n_mtp: int = 0, stage_metadata=None, before_read=None) -> tuple:
+    """``before_read``: called after the drain is enqueued, right before the blocking host read of its metadata."""
     if sockets.drain_trace is not None:
         sockets.drain_trace.replay()
         if stage_metadata is not None:
             stage_metadata(sockets.metadata)
+        if before_read is not None:
+            before_read()
         return sockets.tokens, sockets.overhang, _decode_metadata(sockets.metadata)
     outs = _h2d_drain_op(h2d_service, sockets, n_mtp)
     tokens, overhang = (outs[0], outs[1]) if n_mtp else (outs[0], None)
     sockets.metadata = outs[-1]
+    if before_read is not None:
+        before_read()
     return tokens, overhang, _decode_metadata(sockets.metadata)
 
 
@@ -530,11 +540,11 @@ def _d2d_drain_op(inbound, sockets):
     )
 
 
-def _d2d_recv(inbound, sockets, stage_metadata=None) -> tuple:
+def _d2d_recv(inbound, sockets, stage_metadata=None, before_read=None) -> tuple:
     """Return ``(activation, extra segments, decoded metadata)``. The extras are the persistent
     ``sockets.extras`` when set, freshly allocated otherwise; the list itself is always the caller's.
     ``stage_metadata`` is handed the drained metadata before the blocking host read of it, once the
-    drain is traced (the runtime's capture exists by then)."""
+    drain is traced (the runtime's capture exists by then). ``before_read`` is called right before that read."""
     t0 = time.perf_counter()
     if sockets.drain_trace is not None:
         sockets.drain_trace.replay()
@@ -543,6 +553,8 @@ def _d2d_recv(inbound, sockets, stage_metadata=None) -> tuple:
         act, *extras, sockets.metadata = _d2d_drain_op(inbound, sockets)
     if stage_metadata is not None and sockets.drain_trace is not None:
         stage_metadata(sockets.metadata)
+    if before_read is not None:
+        before_read()
     meta = _decode_metadata(sockets.metadata, with_provided_levels=bool(MTP_LEVELS))
     where = f"[{meta['actual_start']},{meta['actual_end']}) slot={meta['slot_id']}{_chunks_str(meta)}"
     logger.info(f"[pp] RECV-d2d {where} [xfer] sync={(time.perf_counter() - t0) * 1000.0:.2f}ms")
@@ -984,6 +996,47 @@ def _compute_and_send(
     return t_start
 
 
+class _D2DStageClock:
+    """PREFILL_D2D_TIMING's stamps for one chunk on this rank: host time.perf_counter() seconds at which the host saw
+    the device reach each point. Waiting for post costs nothing: the host blocks on the metadata read right after.
+    Waiting for free holds the forward's dispatch until the fence passes, where it would otherwise already sit
+    queued behind the fence: one trace replay's dispatch latency added per chunk.
+
+    post: this rank's previous chunk done -- its forward, its send handed to the outbound service with the link
+          granted, and the next receive granted. A sender's transfer and a receiver's wait start here.
+    recv: this chunk's inbound drain done (the host read of its metadata returned).
+    free: the lease fence passed: every inbound and outbound service is off its links, so the previous chunk's
+          outbound transfer has landed. The forward starts here.
+    """
+
+    def __init__(self, mesh_device):
+        self._mesh_device = mesh_device
+        self._post_event = None
+        self.post = self.recv = self.free = None
+
+    def mark_post(self) -> None:
+        self._post_event = ttnn.record_event(self._mesh_device)
+
+    def wait_post(self) -> None:
+        ttnn.event_synchronize(self._post_event)
+        self.post = time.perf_counter()
+
+    def mark_recv(self) -> None:
+        self.recv = time.perf_counter()
+
+    def wait_free(self) -> None:
+        ttnn.event_synchronize(ttnn.record_event(self._mesh_device))
+        self.free = time.perf_counter()
+
+    def log(self, rank: int, c: int, meta: Optional[dict] = None) -> None:
+        """One line per chunk; ``meta`` None marks the shutdown sentinel, whose post ends the last chunk."""
+        where = f"slot={meta['slot_id']} start={meta['actual_start']}" if meta is not None else "slot=- start=-"
+        logger.info(
+            f"[pp rank {rank}] D2D_TIMING c={c} {where} "
+            f"post={self.post:.6f} recv={self.recv:.6f} free={self.free:.6f}"
+        )
+
+
 def _drain_and_log_e2e(runtime, rank: int, outbound: D2DBoundary, first_compute_start, n_done: int, t0: float) -> None:
     for service in outbound.channels():
         service.wait_for_fabric_links()
@@ -1036,13 +1089,19 @@ def run_request_loop(
         if outbound.activation is not None:
             _forward_shutdown(outbound, rank, d2d_rows, d2d_width, outbound_planes)
 
+    clock = _D2DStageClock(runtime.mesh_device) if D2D_TIMING and num_ranks > 1 else None
     _lease_grant_receive(inbound)  # fill: grant the first receive
     while not _shutdown:
         inp = mtp_tokens = None
         mtp_id_segments = []
+        if clock is not None:
+            clock.mark_post()
+        before_read = clock.wait_post if clock is not None else None
         try:
             if cfg.is_first_rank:
-                inp, mtp_tokens, meta = _socket_next(h2d_service, sockets, NUM_MTP_TOKENS, stage_metadata)
+                inp, mtp_tokens, meta = _socket_next(
+                    h2d_service, sockets, NUM_MTP_TOKENS, stage_metadata, before_read=before_read
+                )
                 meta["provided_levels"] = (
                     _no_provided_levels() if _is_shutdown_sentinel(meta) else mtp_provided_levels(mtp_tokens, meta)
                 )
@@ -1055,8 +1114,12 @@ def run_request_loop(
                         max_seq_len=MAX_SEQ_LEN,
                     )
             else:
-                inp, mtp_id_segments, meta = _d2d_recv(inbound.activation, sockets, stage_metadata)
+                inp, mtp_id_segments, meta = _d2d_recv(
+                    inbound.activation, sockets, stage_metadata, before_read=before_read
+                )
                 mtp_tokens = None
+            if clock is not None:
+                clock.mark_recv()
         except BaseException:
             # Release the downstream ranks before failing, whatever stopped this one.
             if inp is not None:
@@ -1077,6 +1140,8 @@ def run_request_loop(
             loop_handoff, mtp_id_segments = mtp_id_segments[-n_handoff:], mtp_id_segments[:-n_handoff]
         indices = mtp_id_segments.pop() if recv_indices else None
         _lease_reclaim(inbound, outbound)
+        if clock is not None:
+            clock.wait_free()
         warmup = _is_warmup_sentinel(meta)
         if stage_metadata is not None and (warmup or _is_shutdown_sentinel(meta)):
             runtime.discard_staged_metadata()
@@ -1085,6 +1150,8 @@ def run_request_loop(
             if hang_detector is not None:
                 hang_detector.stop()
             logger.info(f"[pp rank {rank}] SHUTDOWN sentinel received after {c} forwards; exiting request loop")
+            if clock is not None:
+                clock.log(rank, c)  # the last chunk's end (post) for the summary
             if sockets.tokens is None:
                 ttnn.deallocate(inp)
             # A sentinel chunk runs no prefill_chunk, so a drain-allocated record has no other owner.
@@ -1137,6 +1204,8 @@ def run_request_loop(
             forward_shutdown()
             raise
         _lease_grant_receive(inbound)
+        if clock is not None:
+            clock.log(rank, c, meta)
         if first is None:
             first = t
         c += 1
@@ -1168,6 +1237,7 @@ def _print_config() -> None:
         ("PREFILL_TP_SHARD_KV", str(TP_SHARD_KV)),
         ("PREFILL_HYBRID_PAGE_POOL_V2", str(int(HYBRID_PAGE_POOL_V2))),
         ("PREFILL_LAYER_ACK_D2H", os.environ.get("PREFILL_LAYER_ACK_D2H", "0")),
+        ("PREFILL_D2D_TIMING", str(int(D2D_TIMING))),
         ("PREFILL_CHUNK_SIZE", str(CHUNK_SIZE)),
         (
             "PREFILL_FORWARD_TOKENS_BUDGET",

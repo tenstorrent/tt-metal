@@ -35,7 +35,7 @@
 #   test_group: Group identifier for selecting multiple related tests at once.
 #   test_tags: Optional list of coarse selectors for workflow_dispatch, matched exactly and
 #              OR-ed with test_type / test_group. Two vocabularies in one list: the model a
-#              leg covers (kimi_k2_7, kimi_k3, kimi_k3_1, glm_5_3, dsv4_flash, dsv4_pro, minimax_m3)
+#              leg covers (kimi_k2_7, kimi_k3, kimi_k3_1, glm_5_3, glm_5_4, dsv4_flash, dsv4_pro, minimax_m3)
 #              and the unit under test (moe, gate, mla, hca, swa, csa, sdpa, ccl, block, transformer,
 #              kv_cache, dflash, mtp, runner, determinism). So `moe` runs every MoE leg and `kimi_k3`
 #              every K3 leg. Multiple tokens UNION, they do not intersect: `moe,kimi_k3` is every MoE
@@ -2388,6 +2388,36 @@
       release_ready: false
   owner_id: U09L76N1MAT # Nenad Babin
   team: models
+  budget_type: demo
+  sp_config: sc4
+
+
+# 4-galaxy (SC4) GLM-5.4 prefill throughput on its production placement: GLM-5.3 with layers 27-54 run twice, as
+# four 8x4 stages over the 106 layer passes (G0 L1-26, G1 loop pass 1 + gate 1, G2 loop pass 2 + gate 2 fed by G1's
+# loop handoff over D2D, G3 L55-78 + MTP). Perf only: GLM-5.4's weights are not published, so it runs GLM-5.3's
+# weights and TTNN cache read-only with seeded synthetic loop gates, has no golden and no KV PCC. The summary reports
+# per-stage chunk times and each boundary's D2D transfer (PREFILL_D2D_TIMING) next to tok/s and TTFT.
+- name: "(GLM-5.4-744B) disaggregated prefill perf 1M@5k, SC4"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm54
+  test_type: prefill_runner_perf
+  test_tags: [glm_5_4, runner, mtp]
+  test_group: disagg_prefill
+  skus:
+    bh_sc4:
+      # Not yet measured: the GLM-5.3 SC4 leg's 60 min, scaled for 106 layer passes against 78 and a first
+      # multi-rank bring-up of the looped model; the launcher's readiness wait is 45 min of it.
+      timeout: 90
+      tier: 1
+      release_ready: false
+  owner_id: U0AC4LTJH1P # Jaksa Jovicic
+  team: shield
   budget_type: demo
   sp_config: sc4
 

@@ -8,6 +8,9 @@ consume the layer-completion channel: no CHUNK_RETIRE lines, no stage times. Thi
 (warmup chunks, then the configured request, as the stock producer schedules them), drains the acks into the
 stock _ChunkRetireClock, which logs one CHUNK_RETIRE line per chunk with per-layer ack times, and shuts the runner
 down. Configuration is the stock producer's: PREFILL_PRODUCER_MANIFEST and PREFILL_* env vars.
+
+CI's perf-only legs (ci/run_multirank_pcc.sh, e.g. GLM-5.4 on SC4) run it the same way against a multi-rank runner: a
+looped model has no KV table either, and the master rank's completion ring carries every rank's acks.
 """
 
 import os

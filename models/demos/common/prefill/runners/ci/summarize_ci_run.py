@@ -13,6 +13,16 @@ _CHUNK_RETIRE = re.compile(
     r"(?: acks=(\d+))?"
 )
 
+# The runner's PREFILL_D2D_TIMING line (prefill_runner._D2DStageClock): rank-clock seconds of three device points per
+# chunk. slot=- marks the shutdown sentinel, whose post ends the last chunk.
+_D2D_TIMING = re.compile(
+    r"\[pp rank (\d+)\] D2D_TIMING c=(\d+) slot=(-|\d+) start=(-|\d+) post=([\d.]+) recv=([\d.]+) free=([\d.]+)"
+)
+# The rank's stage, as the runner prints it at startup (a looped model's pass positions first).
+_RANK_STAGE = re.compile(
+    r"\[pp rank (\d+)/\d+\] mesh=.*? ((?:passes=\[\d+, \d+\) loop_passes=\([\d, ]*\) )?layers=\[\d+, \d+\))"
+)
+
 # Chunks spanned by a throughput probe. A single chunk can run half again as long as its neighbours,
 # so one interval is too noisy to be a rate; eight is still under 5% of the shortest measured request.
 _TPUT_WINDOW = 8
@@ -130,6 +140,149 @@ def _spans_from_logs(root, real_chunks):
     return spans[-real_chunks:] if real_chunks > 0 else spans
 
 
+def _probes(n, chunk_size, probe_chunks, offsets, *, skip_first_chunk=False):
+    """[(label, chunk)]: the launcher's probe chunks within the n measured ones, else the chunks holding `offsets`."""
+    if probe_chunks is None:
+        picked = {max(0, min(n - 1, tok // chunk_size)) for tok in offsets}
+    else:
+        picked = {d for d in probe_chunks if 0 <= d < n}
+    if skip_first_chunk:
+        picked.discard(0)
+    picked = sorted(picked)
+    toks = [(d + 1) * chunk_size for d in picked]
+    labels = [f"@{round(t / 1048576)}M" if t >= 1048576 else f"@{round(t / 1024)}k" for t in toks]
+    if len(set(labels)) != len(labels):
+        labels = [f"@{t}" for t in toks]
+    return list(zip(labels, picked))
+
+
+def _stage_records(root, real_chunks, chunk_size):
+    """{rank: [(post, recv, free)]} for the measured request's chunks plus the shutdown record that ends the last,
+    and {rank: its stage text}. A rank's records are its last real_chunks chunks, which must be the request's chunks
+    in order (start = index x chunk_size); a rank that does not show that is left out, with a note."""
+    raw, stages, notes = {}, {}, []
+    for line in _iter_lines(root):
+        m = _D2D_TIMING.search(line)
+        if m:
+            rank, c = int(m.group(1)), int(m.group(2))
+            start = None if m.group(4) == "-" else int(m.group(4))
+            raw.setdefault(rank, {})[c] = (start, float(m.group(5)), float(m.group(6)), float(m.group(7)))
+            continue
+        m = _RANK_STAGE.search(line)
+        if m:
+            stages[int(m.group(1))] = m.group(2)
+    records = {}
+    for rank, by_c in sorted(raw.items()):
+        rows = [by_c[c] for c in sorted(by_c)]
+        if not rows or rows[-1][0] is not None:
+            notes.append(f"rank {rank}: no shutdown record, so its last chunk has no end; left out")
+            continue
+        measured = rows[-1 - real_chunks : -1] if real_chunks > 0 else rows[:-1]
+        if [r[0] for r in measured] != [i * chunk_size for i in range(len(measured))] or (
+            real_chunks > 0 and len(measured) != real_chunks
+        ):
+            notes.append(f"rank {rank}: its last {real_chunks} chunks are not the request's in order; left out")
+            continue
+        records[rank] = [r[1:] for r in measured] + [rows[-1][1:]]
+    return records, stages, notes
+
+
+def _median(values):
+    s = sorted(v for v in values if v is not None)
+    if not s:
+        return None
+    return s[len(s) // 2] if len(s) % 2 else 0.5 * (s[len(s) // 2 - 1] + s[len(s) // 2])
+
+
+def _stage_metrics(records, stages, notes, chunk_size, probe_chunks=None):
+    """Per-stage chunk times and per-boundary D2D transfer times from the runners' D2D_TIMING lines.
+
+    Every quantity is a difference of one rank's own stamps, so no cross-host clock enters. For chunk i on rank r
+    (post/recv/free as prefill_runner._D2DStageClock defines them; i+1 is the next chunk, or the shutdown record):
+      fwd   = post(i+1) - free(i)    the stage's forward and send hand-off: its compute per chunk
+      cycle = post(i+1) - post(i)    the rank's period: fwd plus the receive and the lease fence
+      recv  = recv(i) - post(i)      receive side: waiting for the upstream send, then the transfer (rank > 0)
+      send  = free(i+1) - post(i+1)  send side: waiting for the downstream grant, then the transfer, then the fence;
+                                     it also holds the next chunk's receive (rank < last)
+    A boundary's transfer for chunk i is min(sender's send, receiver's recv): each side is the transfer plus a wait
+    for the other side, and at most one side waits, so the smaller is the transfer (an upper bound if both waited).
+    Each probe is the median over the chunks d-4..d+4."""
+    if not records:
+        return [], {}
+    n = min(len(rows) - 1 for rows in records.values())
+    ranks = sorted(records)
+    last = max(ranks)
+
+    def per_chunk(rank):
+        rows = records[rank]
+        out = []
+        for i in range(n):
+            (post, recv, free), (post_next, _, free_next) = rows[i], rows[i + 1]
+            out.append(
+                {
+                    "fwd": (post_next - free) * 1000.0,
+                    "cycle": (post_next - post) * 1000.0,
+                    "recv": (recv - post) * 1000.0 if rank > 0 else None,
+                    "send": (free_next - post_next) * 1000.0 if rank < last else None,
+                }
+            )
+        return out
+
+    chunks = {rank: per_chunk(rank) for rank in ranks}
+    window = _TPUT_WINDOW // 2
+    probes = _probes(n, chunk_size, probe_chunks, (0, 50000, n * chunk_size // 2, (n - 1) * chunk_size))
+    rec = {"stage": {}, "stage_ms": {}, "boundary_ms": {}}
+    out = [
+        "==================== per-stage chunk time and D2D boundary transfer (runner D2D_TIMING) ===================="
+    ]
+    out.append(
+        "each value is one rank's own clock (no cross-host clock); median over chunks d-4..d+4 of the measured request"
+    )
+    out.append("fwd = stage compute per chunk (lease fence passed -> its forward and send hand-off done)")
+    out.append("cycle = the rank's period; recv / send = receive / send side of its inbound / outbound boundary")
+    for note in notes:
+        out.append(f"note: {note}")
+    for rank in ranks:
+        rec["stage"][str(rank)] = stages.get(rank, "")
+        out.append(f"rank {rank}: {stages.get(rank, '(stage line not found)')}")
+    out.append(
+        f"{'rank':>4}  {'probe':>8}  {'chunk':>5}  {'fwd ms':>9}  {'cycle ms':>9}  {'recv ms':>9}  {'send ms':>9}"
+    )
+    fmt = lambda v: f"{v:>9.3f}" if v is not None else f"{'-':>9}"  # noqa: E731
+    for rank in ranks:
+        cells = rec["stage_ms"].setdefault(str(rank), {})
+        for label, d in probes:
+            span = chunks[rank][max(0, d - window) : d + window + 1]
+            cell = {key: _median(c[key] for c in span) for key in ("fwd", "cycle", "recv", "send")}
+            cells[label] = {k: v for k, v in cell.items() if v is not None}
+            out.append(
+                f"{rank:>4}  {label:>8}  {d:>5}  {fmt(cell['fwd'])}  {fmt(cell['cycle'])}  {fmt(cell['recv'])}  "
+                f"{fmt(cell['send'])}"
+            )
+    out.append("boundary transfer per chunk = min(sender's send, receiver's recv); median over chunks d-4..d+4")
+    out.append(f"{'boundary':>8}  {'probe':>8}  {'chunk':>5}  {'send ms':>9}  {'recv ms':>9}  {'transfer':>9}")
+    for src in ranks:
+        dst = src + 1
+        if dst not in chunks:
+            continue
+        cells = rec["boundary_ms"].setdefault(f"{src}->{dst}", {})
+        for label, d in probes:
+            lo, hi = max(0, d - window), d + window + 1
+            send = [c["send"] for c in chunks[src][lo:hi]]
+            recv = [c["recv"] for c in chunks[dst][lo:hi]]
+            cell = {
+                "send": _median(send),
+                "recv": _median(recv),
+                "transfer": _median(min(s, r) for s, r in zip(send, recv)),
+            }
+            cells[label] = cell
+            out.append(
+                f"{src:>3}->{dst:<3}  {label:>8}  {d:>5}  {fmt(cell['send'])}  {fmt(cell['recv'])}  "
+                f"{fmt(cell['transfer'])}"
+            )
+    return out, rec
+
+
 def _perf_metrics(spans, chunk_size, pipeline_ranks, probe_chunks=None):
     n = len(spans)
     if n == 0 or chunk_size <= 0:
@@ -150,18 +303,7 @@ def _perf_metrics(spans, chunk_size, pipeline_ranks, probe_chunks=None):
     }
 
     def probes(offsets, *, skip_first_chunk=False):
-        if probe_chunks is None:
-            picked = {max(0, min(n - 1, tok // chunk_size)) for tok in offsets}
-        else:
-            picked = {d for d in probe_chunks if 0 <= d < n}
-        if skip_first_chunk:
-            picked.discard(0)
-        picked = sorted(picked)
-        toks = [(d + 1) * chunk_size for d in picked]
-        labels = [f"@{round(t / 1048576)}M" if t >= 1048576 else f"@{round(t / 1024)}k" for t in toks]
-        if len(set(labels)) != len(labels):
-            labels = [f"@{t}" for t in toks]
-        return list(zip(labels, picked))
+        return _probes(n, chunk_size, probe_chunks, offsets, skip_first_chunk=skip_first_chunk)
 
     out = ["==================== perf metrics (measured request, warmup excluded) ===================="]
     out.append(f"max_seq={max_seq} tok ({n} chunks x {chunk_size})")
@@ -221,10 +363,17 @@ def main():
     if args.probe_chunks:
         probe_chunks = {int(tok) for tok in args.probe_chunks.split(",") if tok.strip()}
     spans = _spans_from_logs(args.ranklogs, args.real_chunks)
-    if not spans:
+    lines, rec = [], {}
+    if spans:
+        lines, rec = _perf_metrics(spans, args.chunk_size, args.pipeline_ranks, probe_chunks)
+    else:
         print("no producer CHUNK_RETIRE lines found (the producer's completion drain did not run)")
-        return
-    lines, rec = _perf_metrics(spans, args.chunk_size, args.pipeline_ranks, probe_chunks)
+    if args.chunk_size > 0:
+        stage_lines, stage_rec = _stage_metrics(
+            *_stage_records(args.ranklogs, args.real_chunks, args.chunk_size), args.chunk_size, probe_chunks
+        )
+        lines += stage_lines
+        rec.update(stage_rec)
     if lines:
         _publish(lines, args.summary_name)
     _publish_json(rec, args.summary_name)

@@ -128,6 +128,12 @@ elif args[:1] == ["-m"] and args[1].endswith("prefill_runner"):
         log.write_text("Traceback (most recent call last):\nRuntimeError: retrying the D2D connect\n")
     if crash != "bringup":
         Path(os.environ["PREFILL_MIGRATION_TABLE_PATH"]).touch()
+        # Every rank's entry into its request loop, which a perf-only leg waits for instead of the table.
+        for rank in range(int(os.environ.get("TEST_READY_RANKS", "4"))):
+            log = Path(os.environ["TEST_RUNNER_LOGS"]) / "1" / ("rank.%d" % rank) / "stderr"
+            log.parent.mkdir(parents=True, exist_ok=True)
+            with log.open("a") as f:
+                f.write("[pp rank %d] setup complete, entering request loop\n" % rank)
     if crash:
         # Rank 1's device times out: it leaves a traceback and an Inspector dump, then hangs in
         # teardown, as in run 40947298596. Only the watchdog's kill ends it. Mid-request, as there,
@@ -188,6 +194,10 @@ elif args[:1] == ["-m"] and args[1].endswith("prefill_producer"):
                 verdict["per_cache"]["kvpe"] = float("nan")
         filename_rank = num_ranks if rank == last and mode == "wrong_rank" else rank
         (verdict_dir / ("rank%d.json" % filename_rank)).write_text(json.dumps(verdict))
+    (root / "producer_done").touch()
+elif args[:1] == ["-m"] and args[1].endswith("stage_probe_producer"):
+    # The perf-only feeder: no verdicts, it only feeds and drains.
+    record("producer")
     (root / "producer_done").touch()
 elif args and args[0].endswith("summarize_ci_run.py"):
     record("summary")
@@ -251,7 +261,14 @@ class MultirankPccHarnessTests(unittest.TestCase):
                 json.dumps({"env": {"PREFILL_MAX_SEQ_LEN": max_seq_len, "PREFILL_NUM_USERS": num_users}})
             )
         # Kimi-K3's, Kimi-K3.1's and GLM-5.3's layouts are their manifests', so the harness reads the real ones.
-        for name in ("kimi_k3.json", "kimi_k3_1.json", "glm53.json", "glm53_4x4.json", "glm53_mtp_kv_share.json"):
+        for name in (
+            "kimi_k3.json",
+            "kimi_k3_1.json",
+            "glm53.json",
+            "glm53_4x4.json",
+            "glm53_mtp_kv_share.json",
+            "glm54.json",
+        ):
             shutil.copyfile(REPO / MANIFESTS / name, manifest_dir / name)
         checkpoint = root / "checkpoint"
         checkpoint.mkdir()
@@ -304,7 +321,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
         }
         # K3.1 demands a throughput measurement (PREFILL_REQUIRE_TPS defaults to 1 for it), so its runs
         # report one unless a test says otherwise.
-        if model == "kimi_k3_1":
+        if model in ("kimi_k3_1", "glm54"):
             env["TEST_TPS"] = "1000"
         env.update(extra_env or {})
         command = ["bash", str(harness), model]
@@ -816,6 +833,58 @@ class MultirankPccHarnessTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 2)
                 self.assertIn(f"{model} does not support config '{config}'", result.stderr)
                 self.assertFalse(records)
+
+    def test_glm54_sc4_is_a_perf_only_run_of_four_8x4_stages_with_mtp(self):
+        result, records = self.run_harness("glm54")
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, output)
+        launch = self.one_record(records, "runner_launch")["args"]
+        self.assertTrue(launch[launch.index("--mesh-graph-descriptor") + 1].endswith("ci/sc4_mgd.textproto"))
+        runner = self.one_record(records, "runner")["env"]
+        self.assertTrue(runner["PREFILL_MANIFEST"].endswith("manifests/glm54.json"))
+        # The production split is the runner's default over the 106 passes: no layer counts, no 4x4 layout.
+        for key in ("PREFILL_SP", "PREFILL_TP", "PREFILL_SP_AXIS", "PREFILL_PP_LAYER_COUNTS", "PREFILL_NUM_LAYERS"):
+            self.assertNotIn(key, runner, key)
+        self.assertEqual(runner["PREFILL_D2D_TIMING"], "1")
+        self.assertEqual(runner["PREFILL_NUM_USERS"], "32")
+        # One producer process on runner rank 0's host: it feeds and drains acks, no PCC, no validators.
+        producer_mpi = [r for r in records if r["kind"] == "mpi" and "stage_probe_producer" in r["args"][-1]]
+        self.assertEqual(len(producer_mpi), 1)
+        self.assertEqual(producer_mpi[0]["args"][producer_mpi[0]["args"].index("-np") + 1], "1")
+        producer = self.one_record(records, "producer")["env"]
+        self.assertEqual(producer["TEST_MPI_HOST"], "worker0:1,worker1:1,worker2:1,worker3:1")
+        self.assertEqual(producer["PREFILL_PRODUCER_CHECK_PCC"], "0")
+        self.assertEqual(producer["PREFILL_PRODUCER_CHUNKS"], str(1044480 // 5120))
+        self.assertEqual(producer["PREFILL_NUM_USERS"], "1")
+        self.assertTrue(producer["PREFILL_TRACE_DIR"].endswith("golden_traces/glm53-1020k-last5120"))
+        # GLM-5.3's production MTP settings, on both sides.
+        for env in (runner, producer):
+            self.assertEqual((env["PREFILL_MTP_LEVELS"], env["PREFILL_MTP_DECODE_LEVELS"]), ("1", "4"))
+        # GLM-5.3's MTP cache tree, read only (the stub records no TT_GLM53_* env, so read the rank's command).
+        self.assertIn("export TT_GLM53_MTP_TTNN_CACHE=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/", launch[-1])
+        summary = self.one_record(records, "summary")["args"]
+        # 5k, 50k, 100k, 255k, 510k and 1020k into the 204-chunk request.
+        self.assertEqual(summary[summary.index("--probe-chunks") + 1], "0,9,19,50,101,203")
+        self.assertEqual(summary[summary.index("--summary-name") + 1], "glm54_sc4")
+        self.assertIn("PCC GATE SKIPPED", result.stdout)
+        self.assertNotIn("PCC GATE PASS", result.stdout)
+
+    def test_glm54_waits_for_all_four_ranks_and_has_no_table_to_wait_for(self):
+        result, records = self.run_harness("glm54", extra_env={"TEST_READY_RANKS": "3", "TABLE_WAIT_SECS": "10"})
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("runner not ready within 10s: all 4 ranks entered the request loop", result.stdout)
+        self.assertFalse([record for record in records if record["kind"] == "producer"])
+
+    def test_glm54_demands_a_measurement(self):
+        result, _ = self.run_harness("glm54", extra_env={"TEST_TPS": ""})
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("TPS GATE FAIL", result.stdout + result.stderr)
+
+    def test_glm54_runs_sc4_only(self):
+        result, records = self.run_harness("glm54", config="sc1")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("glm54 does not support config 'sc1'", result.stderr)
+        self.assertFalse(records)
 
     def test_runner_failure_after_successful_producer_fails(self):
         result, records = self.run_harness("mistral4", runner_rc=17)

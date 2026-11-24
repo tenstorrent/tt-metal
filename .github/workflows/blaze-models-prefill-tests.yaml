@@ -330,6 +330,10 @@ jobs:
           - model: kimi_k3_1
             title: "(Kimi-K3.1) disaggregated prefill SC4 perf"
             sc4_only: true
+          # sc4 alone: GLM-5.4 runs only its four-stage production placement.
+          - model: glm54
+            title: "(GLM-5.4-744B) disaggregated prefill SC4 perf"
+            sc4_only: true
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
