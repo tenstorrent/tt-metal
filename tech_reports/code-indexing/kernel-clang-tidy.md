@@ -23,7 +23,8 @@ Related reading:
 
 ## Running it locally
 
-Prerequisites: any clang-tidy ≥ 17.
+Prerequisites: clang-tidy 23, which is what CI runs (any clang-tidy ≥ 17 works, but
+findings may differ).
 
 ```bash
 cd <tt-metal root>
@@ -165,8 +166,8 @@ to both tools.
 
 CodeChecker's compilation-database parser consults `ClangSA.analyzer_binary()`
 unconditionally, so a `clang` binary must be resolvable even though only
-clang-tidy runs. Both jobs install `update-alternatives` symlinks for `clang`,
-`clang++` and `clang-tidy`, as `tt-umd`'s `code-analysis.yaml` does.
+clang-tidy runs. Both jobs install `update-alternatives` symlinks for `clang` and
+`clang++` (v20) and `clang-tidy` (v23), as `tt-umd`'s `code-analysis.yaml` does.
 
 ### The consolidated report
 

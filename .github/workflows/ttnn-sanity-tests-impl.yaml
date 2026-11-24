@@ -362,6 +362,7 @@ jobs:
           done
           update-alternatives --install /usr/bin/clang-tidy clang-tidy /usr/bin/clang-tidy-23 100
           update-alternatives --set clang-tidy /usr/bin/clang-tidy-23
+          clang-tidy --version | grep -q 'version 23\.' || { echo "::error::expected clang-tidy 23"; exit 1; }
           uv pip install codechecker==6.27.1
 
       - name: ${{ matrix.test-group.name }} tests
