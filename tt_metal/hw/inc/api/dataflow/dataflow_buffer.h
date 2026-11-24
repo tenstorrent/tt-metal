@@ -410,12 +410,21 @@ public:
 #ifdef COMPILE_FOR_TRISC
     // Returns the LLKOperand pointing to the front (reading address) of the DFB
     // Functionalities meant to be used with LLKOperand for LLK 2.0
+    // Take the operand after wait_front(n) and before pop_front(): it names the waited entries.
+    // Quasar: {ring base (one buffer descriptor covers the ring), current read entry, stride in tiles}, no -1.
     //
     // Parameters:
     // - Operand: The LLKOperand type to return. (hint: use LLKOperandFrom<dfb::token>)
     template <typename Operand>
     [[nodiscard]] Operand front() const {
-#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_ISOLATE_SFPU)
+#ifdef ARCH_QUASAR
+#ifdef UCK_CHLKC_UNPACK
+        const auto& dfb = local_dfb_interface_;
+        return Operand{dfb.tc_slots[0].base_addr, dfb.tc_slots[dfb.tc_idx].cursor_entry_idx, dfb.stride_size_tiles};
+#else
+        return Operand{0};  // only the unpack TRISC reads the front; other TRISCs never use the address
+#endif
+#elif defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_ISOLATE_SFPU)
         return Operand{0};
 #else
         return Operand{(get_read_ptr_impl() >> (4 - cb_addr_shift)) - 1};
@@ -424,12 +433,21 @@ public:
 
     // Returns the LLKOperand pointing to the back (writing address) of the DFB
     // Functionalities meant to be used with LLKOperand for LLK 2.0
+    // Take the operand after reserve_back(n) and before push_back(): it names the reserved entries.
+    // Quasar: {ring base (one buffer descriptor covers the ring), current write entry, stride in tiles}, no -1.
     //
     // Parameters:
     // - Operand: The LLKOperand type to return. (hint: use LLKOperandFrom<dfb::token>)
     template <typename Operand>
     [[nodiscard]] Operand back() const {
-#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_ISOLATE_SFPU)
+#ifdef ARCH_QUASAR
+#ifdef UCK_CHLKC_PACK
+        const auto& dfb = local_dfb_interface_;
+        return Operand{dfb.tc_slots[0].base_addr, dfb.tc_slots[dfb.tc_idx].cursor_entry_idx, dfb.stride_size_tiles};
+#else
+        return Operand{0};  // only the pack TRISC writes the back; other TRISCs never use the address
+#endif
+#elif defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_ISOLATE_SFPU)
         return Operand{0};
 #else
         return Operand{(get_write_ptr_impl() >> (4 - cb_addr_shift)) - 1};
