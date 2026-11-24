@@ -44,13 +44,13 @@ inline void llk_math_eltwise_unary_sfpu_init() {
         sfpu::heaviside_init();
     } else if constexpr (sfpu_op == SfpuType::i0) {
         sfpu::i0_init();
-    } else if constexpr (sfpu_op == SfpuType::softcap) {
-        sfpu::softcap_init();
     } else if constexpr (
         sfpu_op == SfpuType::isinf || sfpu_op == SfpuType::isposinf || sfpu_op == SfpuType::isneginf ||
         sfpu_op == SfpuType::isnan || sfpu_op == SfpuType::isfinite) {
-        // ADDR_MOD_6 for the store-side Dest increment of _calculate_sfpu_isinf_isnan_.
+        // _calculate_sfpu_isinf_isnan_ advances Dest through the ADDR_MOD_6 isinf_isnan_init programs.
         sfpu::isinf_isnan_init();
+    } else if constexpr (sfpu_op == SfpuType::softcap) {
+        sfpu::softcap_init();
     }
 }
 

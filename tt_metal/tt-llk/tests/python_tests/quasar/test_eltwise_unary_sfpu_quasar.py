@@ -598,6 +598,8 @@ def prepare_unary_inputs(
         return prepare_signbit_inputs(src_A, src_B, input_format, output_format)
     if mathop == MathOperation.Heaviside:
         return prepare_heaviside_inputs(src_A, src_B, input_format, output_format)
+    if mathop in FLOAT_CLASS_PREDICATES:
+        return prepare_float_class_inputs(src_A, src_B, input_format, output_format)
     if mathop in COMP_FORMAT_OPS:
         # Unsigned formats need non-negative stimuli (a signed split would wrap under the unsigned
         # dtype); signed formats use the sign-vs-magnitude builder.
@@ -874,6 +876,119 @@ def heaviside_expected(src: torch.Tensor, variant: QuasarSfpuVariant) -> torch.T
     expected = torch.where(sign_set, 0.0, 1.0)
     expected = torch.where(is_zero, HEAVISIDE_VALUE_AT_ZERO, expected)
     return expected.to(format_dict[variant.formats.output_format])
+
+
+# isinf / isposinf / isneginf / isnan / isfinite and the torch predicate each one must equal.
+FLOAT_CLASS_PREDICATES = {
+    MathOperation.Isinf: torch.isinf,
+    MathOperation.Isposinf: torch.isposinf,
+    MathOperation.Isneginf: torch.isneginf,
+    MathOperation.Isnan: torch.isnan,
+    MathOperation.Isfinite: torch.isfinite,
+}
+
+# Raw bits on either side of every bound the predicates compare against, per float input format:
+# (signed view dtype, bit width, patterns). Both infinities, the largest finite, the smallest and
+# largest NaN payload and a quiet NaN of either sign, then ordinary values: both zeros, the smallest
+# normal and +/-1.0.
+_FLOAT_CLASS_EDGE_BITS = {
+    DataFormat.Float32: (
+        torch.int32,
+        32,
+        (
+            0x7F800000,
+            0xFF800000,
+            0x7F7FFFFF,
+            0xFF7FFFFF,
+            0x7F800001,
+            0xFF800001,
+            0x7FFFFFFF,
+            0xFFFFFFFF,
+            0x7FC00000,
+            0xFFC00000,
+            0x00000000,
+            0x80000000,
+            0x00800000,
+            0x80800000,
+            0x3F800000,
+            0xBF800000,
+        ),
+    ),
+    DataFormat.Float16_b: (
+        torch.int16,
+        16,
+        (
+            0x7F80,
+            0xFF80,
+            0x7F7F,
+            0xFF7F,
+            0x7F81,
+            0xFF81,
+            0x7FFF,
+            0xFFFF,
+            0x7FC0,
+            0xFFC0,
+            0x0000,
+            0x8000,
+            0x0080,
+            0x8080,
+            0x3F80,
+            0xBF80,
+        ),
+    ),
+}
+# One SFPU pass covers two 16-lane Dest rows; this is the pass of each face that is filled with
+# non-finite values only.
+_FLOAT_CLASS_NON_FINITE_PASS = 5
+_SFPU_PASS_ELEMS = 2 * FACE_C_DIM
+
+
+def _write_raw_bits(bits: torch.Tensor, start: int, patterns, width: int) -> None:
+    """Write unsigned bit patterns through a signed integer view, from *start* on."""
+    for i, pattern in enumerate(patterns):
+        bits[start + i] = pattern - (1 << width) if pattern >> (width - 1) else pattern
+
+
+def prepare_float_class_inputs(
+    src_A: torch.Tensor,
+    src_B: torch.Tensor,
+    input_format: DataFormat,
+    output_format: DataFormat,
+) -> torch.Tensor:
+    """
+    Comp stimuli (finite values of both signs) with the bound patterns planted in every face.
+
+    As in prepare_heaviside_inputs, the run of patterns moves one row and one lane per face. Every
+    face also gets one SFPU pass of non-finite values only: with the finite passes around it, each
+    predicate sees passes in which no lane matches, so a Dest step that depended on the predicated
+    store writing a lane would misplace every later row.
+    """
+    values = prepare_comp_inputs(src_A, src_B, input_format, output_format)
+    int_dtype, width, patterns = _FLOAT_CLASS_EDGE_BITS[input_format]
+    non_finite = [
+        p for p in patterns if (p & (0xFF << (width - 9))) == 0xFF << (width - 9)
+    ]
+    flat = values.flatten().clone()
+    bits = flat.view(int_dtype)
+    for face, base in enumerate(range(0, flat.numel(), FACE_ELEMS)):
+        _write_raw_bits(bits, base + 8 + 17 * (face % 4), patterns, width)
+        pass_start = base + _FLOAT_CLASS_NON_FINITE_PASS * _SFPU_PASS_ELEMS
+        _write_raw_bits(bits, pass_start, (non_finite * 4)[:_SFPU_PASS_ELEMS], width)
+    return flat.reshape(values.shape)
+
+
+def float_class_expected(
+    mathop: MathOperation, src: torch.Tensor, output_format: DataFormat
+) -> torch.Tensor:
+    """
+    1.0 where the predicate holds and 0.0 elsewhere.
+
+    The class of a value is the same on every route of float_edge_variants: Unpack-to-Dest delivers
+    the input bits, and the ELWADD datacopy changes only the sign of a zero or a NaN and a denormal's
+    magnitude.
+    """
+    holds = FLOAT_CLASS_PREDICATES[mathop](src.flatten().to(torch.float32))
+    return torch.where(holds, 1.0, 0.0).to(format_dict[output_format])
 
 
 # ---------------------------------------------------------------------------
@@ -1426,6 +1541,8 @@ def run_eltwise_unary_sfpu_quasar(
             )
         elif mathop == MathOperation.Heaviside:
             golden_tensor = heaviside_expected(src_A, format_variant)
+        elif mathop in FLOAT_CLASS_PREDICATES:
+            golden_tensor = float_class_expected(mathop, src_A, formats.output_format)
         elif format_dict[formats.input_format].is_floating_point:
             generate_golden = get_golden_generator(UnarySFPUGolden)
             golden_tensor = generate_golden(
@@ -1576,6 +1693,13 @@ def run_eltwise_unary_sfpu_quasar(
         assert not bool(
             mismatch.any()
         ), f"heaviside differs from its bit-level model in {int(mismatch.sum())} lanes"
+
+    if mathop in FLOAT_CLASS_PREDICATES:
+        # Two exact outputs, so nothing short of equality is a pass.
+        mismatch = res_tensor.to(torch.float32) != golden_tensor.to(torch.float32)
+        assert not bool(
+            mismatch.any()
+        ), f"{mathop.name} differs from torch in {int(mismatch.sum())} lanes"
 
     if mathop == MathOperation.Tan:
         # The suite tolerance passes a tangent whose polynomial coefficients are bound in the
@@ -1812,15 +1936,15 @@ def test_unary_max_min_scalar_quasar(
     )
 
 
-def heaviside_edge_variants() -> List[QuasarSfpuVariant]:
+def float_edge_variants(mathop) -> List[QuasarSfpuVariant]:
     """
-    Heaviside routes on which the input bits reach Dest without a narrowing unpack: Unpack-to-Dest
+    Routes of *mathop* on which the input bits reach Dest without a narrowing unpack: Unpack-to-Dest
     at the input's own width (16-bit and 32-bit Dest), and the FPU datacopy into a 32-bit Dest.
     """
     return [
         variant
         for variant in generate_quasar_sfpu_format_variants(
-            MathOperation.Heaviside, SFPU_UNARY_FORMATS, full_format_route_sweep=True
+            mathop, SFPU_UNARY_FORMATS, full_format_route_sweep=True
         )
         if variant.uses_fpu or variant.unpack_dst == variant.formats.input_format
     ]
@@ -1829,7 +1953,7 @@ def heaviside_edge_variants() -> List[QuasarSfpuVariant]:
 @pytest.mark.quasar
 @parametrize(
     mathop=[MathOperation.Heaviside],
-    format_variant=heaviside_edge_variants(),
+    format_variant=float_edge_variants(MathOperation.Heaviside),
     input_dimensions=runtime(list(TENSOR_DIMS[:1])),
 )
 def test_eltwise_unary_sfpu_heaviside_edges_quasar(
@@ -1840,6 +1964,33 @@ def test_eltwise_unary_sfpu_heaviside_edges_quasar(
     """Heaviside, bit-exact, on both zeros, denormals, infinities and NaN of either sign.
 
     See prepare_heaviside_inputs for the stimulus and heaviside_expected for the model.
+    """
+    run_eltwise_unary_sfpu_quasar(
+        format_variant.formats,
+        format_variant.dest_acc,
+        mathop,
+        ApproximationMode.No,
+        input_dimensions,
+        DestSync.Half,
+        format_variant=format_variant,
+    )
+
+
+@pytest.mark.quasar
+@parametrize(
+    mathop=list(FLOAT_CLASS_PREDICATES),
+    format_variant=float_edge_variants,
+    input_dimensions=runtime(list(TENSOR_DIMS)),
+)
+def test_eltwise_unary_sfpu_float_class_quasar(
+    mathop,
+    format_variant,
+    input_dimensions,
+):
+    """isinf, isposinf, isneginf, isnan and isfinite, exact, on the bits either side of each bound.
+
+    See prepare_float_class_inputs for the stimulus. One and four tiles: the kernel steps Dest from
+    its predicated store, so a missed step shows as rows shifted in every later face and tile.
     """
     run_eltwise_unary_sfpu_quasar(
         format_variant.formats,
