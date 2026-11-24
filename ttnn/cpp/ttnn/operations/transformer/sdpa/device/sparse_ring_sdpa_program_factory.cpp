@@ -887,10 +887,10 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         return bytes;
     };
 
-    // Pass split. S = slots per pass: the largest count (at most the recipe's slot limit, the core's block count and
-    // q_blocks_per_pass) whose CBs end below the lowest live L1 buffer. P passes split every core's blocks evenly, so
-    // each working core needs at least P blocks (no empty pass; group members stay in lockstep).
-    // The live L1 top is not in the program hash: a cached program keeps the S of the call that built it.
+    // Pass split. The slots per pass fit below the lowest live L1 buffer (at most the recipe's slot limit, the core's
+    // block count and q_blocks_per_pass). P passes split every core's blocks evenly, so each working core needs at
+    // least P blocks (no empty pass; group members stay in lockstep).
+    // The live L1 top is not in the program hash: a cached program keeps the plan of the call that built it.
     const uint64_t usable_l1 = ttnn::operations::core::available_program_l1_capacity(mesh_device);
     uint32_t max_slots = std::min(kResidentMaxSlots, max_q_per_core);
     if (args.q_blocks_per_pass.has_value()) {
@@ -906,43 +906,81 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const auto passes_for = [&](uint32_t slots) {
         return slots > 0 ? tt::div_up(max_q_per_core, slots) : std::numeric_limits<uint32_t>::max();
     };
-    // The K/V depth with the fewest passes (a pass re-streams every piece); at equal passes the deeper one (3 with
-    // group delivery, then 2).
+    // Plan: P passes, the K/V CB depth and the step stack (slots per recipe step, at most the recipe's Q chunk of
+    // kRecipeMaxQTiles rows; stacked blocks must align with the BF16 recipes' two-row groups). A pass re-streams every
+    // piece, so fewer passes win, except that a step of fewer than two of the fused chunk's two-row groups leaves its
+    // lagged QK / check / PV pipeline nothing to overlap with. Measured (BH Galaxy): 5s k384 one pass at depth 3 fits
+    // stack 1 (9.71 / 4.53 ms at density 1.0 / 0.15) where depth 2 fits stack 2 (8.51 / 4.33) and two passes stack 5
+    // (8.86 / 6.57); lofi 10s kept one pass fits stack 1 (13.71) where two passes fit stack 9 (12.67). Order: a step
+    // of two groups first, then the fewest passes, the deeper K/V CB (3 with group delivery: the producer sends the
+    // next piece while members compute), the larger stack.
     const bool pair_steps = false;
-    uint32_t fit_slots = 0;
+    constexpr uint32_t kRecipeMaxQTiles = 32;
+    constexpr uint32_t kPipelinedStepRows = 2 * 2;  // two of the BF16 recipes' two-row groups
+    // Every working core holds base or base + 1 blocks (all hold one when there are fewer blocks than cores).
+    const uint32_t min_q_per_working_core = std::max(1u, all_heads_num_q_chunks / num_cores);
+    const auto stack_for = [&](uint32_t slots, uint32_t kv_pages) {
+        uint32_t stack = block_tiles % 2 == 0 ? std::min(slots, kRecipeMaxQTiles / Sq_chunk_t) : 1u;
+        while (stack > 1 && cb_bytes_for_slots(slots, kv_pages, stack) > usable_l1) {
+            --stack;
+        }
+        return stack;
+    };
+    struct QPlan {
+        uint32_t passes = std::numeric_limits<uint32_t>::max(), slots = 0, kv_pages = 0, stack = 0;
+    };
+    const auto pipelined = [&](const QPlan& p) { return p.slots > 0 && p.stack * Sq_chunk_t >= kPipelinedStepRows; };
+    const auto better = [&](const QPlan& a, const QPlan& b) {
+        if (pipelined(a) != pipelined(b)) {
+            return pipelined(a);
+        }
+        if (a.passes != b.passes) {
+            return a.passes < b.passes;
+        }
+        return a.kv_pages != b.kv_pages ? a.kv_pages > b.kv_pages : a.stack > b.stack;
+    };
+    QPlan plan;
     for (const uint32_t pages : {kv_cb_pages, 2u}) {
-        if (pages > kv_cb_pages) {
+        const uint32_t fit = fit_slots_for(pages);
+        if (fit == 0) {
             continue;
         }
-        const uint32_t slots = fit_slots_for(pages);
-        if (slots > 0 && passes_for(slots) < passes_for(fit_slots)) {
-            fit_slots = slots;
-            kv_cb_pages = pages;
+        // More passes only to reach a pipelined step (a single head shares K over every core: one pass).
+        const uint32_t last_passes =
+            k_uses_batch_chain ? passes_for(fit) : std::max(passes_for(fit), min_q_per_working_core);
+        for (uint32_t passes = passes_for(fit); passes <= last_passes; ++passes) {
+            const uint32_t slots = tt::div_up(max_q_per_core, passes);
+            const QPlan candidate{passes, slots, pages, stack_for(slots, pages)};
+            if (better(candidate, plan)) {
+                plan = candidate;
+            }
+            if (pipelined(candidate)) {
+                break;
+            }
         }
     }
     TT_FATAL(
-        fit_slots > 0,
+        plan.slots > 0,
         "SparseRingSDPA CBs need {} B with one Q block per core but only {} B of L1 are usable (k_chunk={}); reduce "
         "k_chunk_size.",
         cb_bytes_for_slots(1, 2),
         usable_l1,
         Sk_chunk_t * tt::constants::TILE_HEIGHT);
-    const uint32_t num_q_passes = passes_for(fit_slots);
-    // Every working core holds base or base + 1 blocks (all hold one when there are fewer blocks than cores).
-    const uint32_t min_q_per_working_core = std::max(1u, all_heads_num_q_chunks / num_cores);
+    const uint32_t num_q_passes = plan.passes;
+    kv_cb_pages = plan.kv_pages;
     TT_FATAL(
         num_q_passes <= min_q_per_working_core,
         "SparseRingSDPA: {} passes of at most {} Q blocks would leave a core with {} blocks an empty pass; allow more "
         "Q blocks per pass (q_blocks_per_pass) or reduce k_chunk_size",
         num_q_passes,
-        fit_slots,
+        plan.slots,
         min_q_per_working_core);
     TT_FATAL(
         num_q_passes == 1 || !k_uses_batch_chain,
         "SparseRingSDPA: several Q passes need more than one local head (a single head shares K over every core), got "
         "NH {}",
         NH);
-    const uint32_t resident_slots = tt::div_up(max_q_per_core, num_q_passes);
+    const uint32_t resident_slots = plan.slots;
     log_debug(
         tt::LogOp,
         "SparseRingSDPA: {} Q blocks per core at most, {} pass(es) of at most {}, {} K/V pages ({} of {} B of L1 for "
@@ -953,13 +991,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         kv_cb_pages,
         cb_bytes_for_slots(resident_slots, kv_cb_pages),
         usable_l1);
-    // Stacked step: the most slots per recipe step that fit beside the pass's slots (at most the recipe's Q chunk of
-    // kRecipeMaxQTiles rows; stacked blocks must align with the BF16 recipes' two-row groups).
-    constexpr uint32_t kRecipeMaxQTiles = 32;
-    uint32_t stack_slots = block_tiles % 2 == 0 ? std::min(resident_slots, kRecipeMaxQTiles / Sq_chunk_t) : 1u;
-    while (stack_slots > 1 && cb_bytes_for_slots(resident_slots, kv_cb_pages, stack_slots) > usable_l1) {
-        --stack_slots;
-    }
+    const uint32_t stack_slots = plan.stack;
     log_debug(
         tt::LogOp,
         "SparseRingSDPA: {} Q blocks per step ({} of {} B of L1 for CBs)",
