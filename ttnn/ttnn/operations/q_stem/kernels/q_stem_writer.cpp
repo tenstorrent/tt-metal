@@ -10,10 +10,8 @@
 //                                         the tiles written (after the write barrier)
 //   kpart_send_block  (K-split, partner groups) per q block: my partial (cb_q_kpart, m x cols) -> the owner core's
 //                       cb_q_recv<g> slot (same CB address on every stage-1 core), once the owner has credited the
-//                       slot; then one increment of the owner's ready count for my group
-//   kpart_recv_block  (K-split, owners) per q block, before its hand-off: credit free cb_q_recv<g> slots to the
-//                       partners (up to the CB depth ahead), wait each partner's ready count, push the block
-//                       (credits only: the data is already in my L1) for kpart_combine_block
+//                       slot; then one increment of the owner's ready count for my group (the owner's reader
+//                       credits the slots and pushes the landed blocks: kpart_recv_service, q_stem_reader.cpp)
 //   store_row_block   per (head, row): prefix N-blocks + rope tiles -> output pages, one flush per block
 //                       TILE:      one page per tile
 //                       ROW_MAJOR: the compute untilized each block into 32 sticks (cb_prefix_rm / cb_rope_rm);
@@ -120,40 +118,7 @@ void kernel_main() {
     if (cols > 0 && kgroup == 0) {
         const uint32_t q_base = get_read_ptr(cb_q_slice);  // never popped before the end: block j at j*m*cols tiles
         const uint32_t block_ready = get_semaphore(sem_block_ready_id);
-        // kpart_recv_block state (K-split): per partner group, slots credited so far
-        [[maybe_unused]] const uint32_t blk = m * cols;
-        [[maybe_unused]] uint32_t credited[ksplit > 1 ? ksplit - 1 : 1];
-        for (uint32_t g = 0; g + 1 < ksplit; ++g) {
-            credited[g] = 0;
-        }
-        auto kpart_recv_block = [&](uint32_t j) {
-            if constexpr (ksplit > 1) {
-                const uint32_t ahead = kpart_tiles / blk;  // >= 2 blocks (host kpart_tiles)
-                for (uint32_t g = 0; g + 1 < ksplit; ++g) {
-                    const uint32_t cb = g == 0 ? cb_q_recv1 : cb_q_recv2;
-                    const uint64_t peer_credit = get_noc_addr(
-                        q_stem::unpack_x(kpeer[g]), q_stem::unpack_y(kpeer[g]), get_semaphore(sem_kpart_credit));
-                    // blocks < j are pushed; slots j .. credited-1 are credited; credit more while they are free
-                    while (credited[g] < num_blocks && credited[g] < j + ahead) {
-                        const uint32_t pages = (credited[g] - j + 1) * blk;
-                        if (credited[g] == j) {
-                            cb_reserve_back(cb, pages);
-                        } else if (!cb_pages_reservable_at_back(cb, pages)) {
-                            break;
-                        }
-                        noc_semaphore_inc(peer_credit, 1);
-                        ++credited[g];
-                    }
-                }
-                for (uint32_t g = 0; g + 1 < ksplit; ++g) {
-                    noc_semaphore_wait_min(
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_kpart_ready + g)), j + 1);
-                    cb_push_back(g == 0 ? cb_q_recv1 : cb_q_recv2, blk);
-                }
-            }
-        };
         q_stem::for_each_block(B, qrt, m, G, p, rorder, [&](uint32_t j, uint32_t b, uint32_t d, uint32_t r0) {
-            kpart_recv_block(j);
             cb_wait_front(cb_q_slice, (j + 1) * m * cols);
             if (d != p) {
                 for (uint32_t k = 0; k < n_ports; ++k) {

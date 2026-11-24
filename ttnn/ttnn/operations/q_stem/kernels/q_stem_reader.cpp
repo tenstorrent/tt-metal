@@ -8,6 +8,11 @@
 //                        the first `wkv_depth` units are prefetched before stage 1 (they need no remote data)
 //   land_row_block       wait the row's arrival count on the landing scratch, then push credits into cb_landing
 //                        (zero-copy: cb_landing IS this core's landing shard); re-arm the counters at the end.
+//   kpart_recv_service   (K-split, owners) credit free cb_q_recv<g> slots to partner group g (up to the CB depth past
+//                        the pushed blocks) and push every partial block partner g has reported landed (credits
+//                        only: the partner wrote it into my L1). Non-blocking, polled after every x round, then
+//                        drained before stage 3. Here, not in the writer: the writer's hand-off write barriers
+//                        would hold the owner's kpart_combine_block back.
 //   rope_tables_block    (RoPE, cores holding heads) the trans tile (rotate_half_meta as a 32x32 0/+-1 matrix,
 //                        generated in L1: NoC zero-fill + its 32 non-zeros) and the quarter's cos / sin rows
 //                        (qrt x Dr_t tiles each, one DRAM read batch), once, resident for every rope_block.
@@ -40,7 +45,9 @@ namespace {
 // injector r % NI (an atomic inc on its credit semaphore) as soon as the slot is free, up to `ahead` =
 // min(NI, x_round_depth) rounds ahead — one outstanding round per injector, so each injector's data-ready flag is
 // seen and cleared before that injector is credited again (Flag signal: linked multicast, no per-round barrier).
-template <uint32_t NI, typename MC0, typename MC1, typename F>
+// `idle` is polled while a slot is not yet free (the K-split owner services its partial blocks there: its compute
+// frees the slot only after kpart_combine_block, which needs them).
+template <uint32_t NI, typename MC0, typename MC1, typename F, typename I>
 void receive_x_rounds(
     const MC0& mc0,
     const MC1& mc1,
@@ -49,7 +56,8 @@ void receive_x_rounds(
     uint32_t num_rounds,
     uint32_t ahead,
     const uint64_t* injector_credit,
-    F&& after_round) {
+    F&& after_round,
+    I&& idle) {
     if constexpr (MC0::active) {
         static_assert(NI == 1 || MC1::active, "a second injector needs its multicast family");
         Noc noc;
@@ -59,7 +67,9 @@ void receive_x_rounds(
             while (acked < num_rounds && acked < r + ahead) {
                 const uint32_t pages = (acked - r + 1) * round_tiles;  // slots r .. acked free
                 if (block_first && acked == r) {
-                    cb_reserve_back(cb_x_round, pages);
+                    while (!cb_pages_reservable_at_back(cb_x_round, pages)) {
+                        idle();
+                    }
                 } else if (!cb_pages_reservable_at_back(cb_x_round, pages)) {
                     break;
                 }
@@ -132,8 +142,15 @@ void kernel_main() {
     constexpr uint32_t x_injectors = get_named_compile_time_arg_val("x_injectors");
     constexpr uint32_t x_round_depth = get_named_compile_time_arg_val("x_round_depth");
     constexpr uint32_t sem_x_credit = get_named_compile_time_arg_val("sem_x_credit");
+    constexpr uint32_t ksplit = get_named_compile_time_arg_val("ksplit");
+    constexpr uint32_t cb_q_recv1 = get_named_compile_time_arg_val("cb_q_recv1");
+    constexpr uint32_t cb_q_recv2 = get_named_compile_time_arg_val("cb_q_recv2");
+    constexpr uint32_t kpart_tiles = get_named_compile_time_arg_val("kpart_tiles");
+    constexpr uint32_t sem_kpart_ready = get_named_compile_time_arg_val("sem_kpart_ready");  // + g
+    constexpr uint32_t sem_kpart_credit = get_named_compile_time_arg_val("sem_kpart_credit");
 
     constexpr uint32_t rows_per_head = B * qrt;
+    constexpr uint32_t m_blk = get_compile_time_arg_val(20);  // s1_block_m_tiles
     constexpr uint32_t unit_tiles = Dn_t * s3n;  // one wkv unit (R1: s3n == N_t, one head)
 
     size_t a = 0;
@@ -141,6 +158,12 @@ void kernel_main() {
     const uint32_t c0 = get_arg_val<uint32_t>(a++);
     const uint32_t cols = get_arg_val<uint32_t>(a++);
     const uint32_t k_off = get_arg_val<uint32_t>(a++);  // first K tile of my group's slice (K-split; else 0)
+    [[maybe_unused]] const uint32_t kgroup = get_arg_val<uint32_t>(a++);  // K group (0: owner of q)
+    // K-split: an owner's partners (packed virtual xy of groups 1 .. ksplit-1, same group-local index)
+    [[maybe_unused]] uint32_t kpeer[ksplit > 1 ? ksplit - 1 : 1];
+    for (uint32_t g = 0; g + 1 < ksplit; ++g) {
+        kpeer[g] = get_arg_val<uint32_t>(a++);
+    }
     const uint32_t wkv_addr = get_arg_val<uint32_t>(a++);
     const uint32_t my_pos = get_arg_val<uint32_t>(a++);
     [[maybe_unused]] const uint32_t cos_addr = get_arg_val<uint32_t>(a++);
@@ -244,6 +267,46 @@ void kernel_main() {
             i == 0 ? get_named_compile_time_arg_val("x_inj0_xy") : get_named_compile_time_arg_val("x_inj1_xy");
         injector_credit[i] = get_noc_addr(q_stem::unpack_x(xy), q_stem::unpack_y(xy), get_semaphore(sem_x_credit));
     }
+    // kpart_recv_service state (K-split owners): per partner group, slots credited and blocks pushed so far
+    [[maybe_unused]] const uint32_t kblk = mc.active ? m_blk * cols : 1;
+    [[maybe_unused]] uint32_t credited[ksplit > 1 ? ksplit - 1 : 1];
+    [[maybe_unused]] uint32_t pushed[ksplit > 1 ? ksplit - 1 : 1];
+    for (uint32_t g = 0; g + 1 < ksplit; ++g) {
+        credited[g] = 0;
+        pushed[g] = 0;
+    }
+    const bool kowner = ksplit > 1 && mc.active && kgroup == 0;
+    auto kpart_recv_service = [&]() {
+        if constexpr (ksplit > 1) {
+            const uint32_t ahead = kpart_tiles / kblk;  // >= 2 blocks (host kpart_tiles)
+            for (uint32_t g = 0; g + 1 < ksplit; ++g) {
+                const uint32_t cb = g == 0 ? cb_q_recv1 : cb_q_recv2;
+                while (credited[g] < num_blocks && credited[g] < pushed[g] + ahead &&
+                       cb_pages_reservable_at_back(cb, (credited[g] - pushed[g] + 1) * kblk)) {
+                    noc_semaphore_inc(
+                        get_noc_addr(
+                            q_stem::unpack_x(kpeer[g]), q_stem::unpack_y(kpeer[g]), get_semaphore(sem_kpart_credit)),
+                        1);
+                    ++credited[g];
+                }
+                volatile tt_l1_ptr uint32_t* ready =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_kpart_ready + g));
+                invalidate_l1_cache();  // the partner's increments land over the NoC (as in noc_semaphore_wait_min)
+                while (pushed[g] < credited[g] && *ready > pushed[g]) {
+                    cb_push_back(cb, kblk);
+                    ++pushed[g];
+                }
+            }
+        }
+    };
+    auto kpart_all_pushed = [&]() {
+        for (uint32_t g = 0; g + 1 < ksplit; ++g) {
+            if (pushed[g] < num_blocks) {
+                return false;
+            }
+        }
+        return true;
+    };
     receive_x_rounds<x_injectors>(
         mc,
         mc1,
@@ -256,7 +319,21 @@ void kernel_main() {
             const uint32_t to = issued + per_round < prefetch_tiles ? issued + per_round : prefetch_tiles;
             issue_tiles(0, issued, to, prefetch_l1);
             issued = to;
+            if (kowner) {
+                kpart_recv_service();
+            }
+        },
+        [&]() {
+            if (kowner) {
+                kpart_recv_service();
+            }
         });
+    if (kowner) {
+        while (!kpart_all_pushed()) {
+            kpart_recv_service();
+        }
+        noc_async_atomic_barrier();
+    }
     if (prefetched > 0) {
         issue_tiles(0, issued, prefetch_tiles, prefetch_l1);
         noc_async_read_barrier();

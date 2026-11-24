@@ -85,6 +85,7 @@ S1_WRITER_NOC = 1  # the same for the stage-1 rect (its reader, incl. the x-mult
 QB_READ_BATCH = 8  # q_b slice reads per barrier (dm shortlist tie; rank-1 batch 4 is lamp L10)
 # Regime R6 (Refinement 7): K groups of stage 1 (1, 2 or 3; clamped to a divisor of Q_t and to the compute rows).
 S1_KSPLIT = 1
+S1_KPART_DEPTH = 2  # K-split partial CBs (cb_q_kpart / cb_q_recv<g>): at least this many q blocks deep
 MAX_HEADERS = 12  # PacketHeaderPool: <= 12 headers per RISC (passed to the port sender: one source)
 HDRS_PER_DEST_CAP = 4
 
@@ -236,7 +237,7 @@ class Geometry:
         # K-split partial-block CBs: whole blocks of m * cols tiles for both column counts (no block wraps the CB
         # end), >= 2 blocks deep (the partner computes block j+1 while block j travels)
         lcm = math.lcm(self.cols_base, self.cols_max)
-        self.kpart_tiles = self.m * lcm * -(-2 * self.cols_max // lcm)
+        self.kpart_tiles = self.m * lcm * -(-max(2, S1_KPART_DEPTH) * self.cols_max // lcm)
 
         # stage 3
         assert S3_BLOCK_M_TILES == 1, "the landing row layout [nope | rope] per row needs s3_block_m_tiles = 1"
@@ -667,6 +668,7 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
                 X_INJECTORS,
                 tuple(X_INJECTOR_NOCS),
                 S1_KSPLIT,
+                S1_KPART_DEPTH,
                 S1_COLS_PER_CORE,
                 QB_READ_BATCH,
                 S3_COST_FACTOR,
@@ -753,8 +755,13 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
             hpc = len(heads)
             n_r = sum(1 for h in heads if h // geo.Hl != p)
             # reader
-            rargs = [int(q_b.buffer_address()), c0, cols, g * geo.Q_ks, int(wkv.buffer_address()), p, cos_addr]
-            rargs += [sin_addr]
+            # K-split peers: an owner's partners (groups 1 .. ks-1, same group-local index), a partner's owner
+            peers = []
+            if i is not None and ks > 1:
+                peers = [geo.s1_cores(h)[i] for h in range(1, ks)] if g == 0 else [geo.s1_cores(0)[i]]
+            peer_args = [_pack(virt(c)) for c in peers] + [0] * (ks - 1 - len(peers))
+            rargs = [int(q_b.buffer_address()), c0, cols, g * geo.Q_ks, g, *peer_args]
+            rargs += [int(wkv.buffer_address()), p, cos_addr, sin_addr]
             rargs += arrive_addrs
             rargs += [hpc] + [v for h in heads for v in (h, h // geo.Hl)]
             (reader_rt_s1 if i is not None else reader_rt_other)[core.x][core.y] = rargs
@@ -774,13 +781,7 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
                     base, stride, _ = head_slot(h, p)  # local heads: contiguous rows, no jump
                     pieces += [c - c0, n, _pack(virt(dest_core)), base + cc, stride]
                     c += n
-            wargs = [p, cols, int(out.buffer_address()), landing_addr, arrive_addrs[p], g]
-            # K-split peers: an owner's partners (groups 1 .. ks-1, same group-local index), a partner's owner
-            if i is not None and ks > 1:
-                peers = [geo.s1_cores(h)[i] for h in range(1, ks)] if g == 0 else [geo.s1_cores(0)[i]]
-                wargs += [_pack(virt(c)) for c in peers] + [0] * (ks - 1 - len(peers))
-            else:
-                wargs += [0] * (ks - 1)
+            wargs = [p, cols, int(out.buffer_address()), landing_addr, arrive_addrs[p], g, *peer_args]
             wargs += dirmap + rorder + port_args
             wargs += [len(pieces) // 5] + pieces
             wargs += [hpc, n_r] + heads
@@ -875,6 +876,16 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
 
         reader_ct_s1 = reader_ct_for(geo.wkv_units_s1 if geo.wkv_resident else wkv_depth)
         reader_ct_other = reader_ct_for(geo.wkv_units_free if geo.wkv_resident else wkv_depth)
+        ks_named = [
+            ("ksplit", ks),
+            ("cb_q_kpart", CB_Q_KPART),
+            ("cb_q_recv1", CB_Q_RECV1),
+            ("cb_q_recv2", CB_Q_RECV2),
+            ("kpart_tiles", geo.kpart_tiles),
+            ("kpart_tile_bytes", geo.partial_tile_bytes),
+            ("sem_kpart_ready", SEM_KPART_READY),
+            ("sem_kpart_credit", SEM_KPART_CREDIT),
+        ]
         # one stage-1 reader per K group: x rounds from that group's injector (its own Mcast family `mcast<g>`)
         s1_readers = []
         for g, grect in enumerate(group_rects):
@@ -887,7 +898,7 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
                     kernel_source=str(KERNEL_DIR / "q_stem_reader.cpp"),
                     core_ranges=grect,
                     compile_time_args=reader_ct_s1,
-                    named_compile_time_args=rope_named + named,
+                    named_compile_time_args=rope_named + named + ks_named,
                     defines=[("Q_STEM_X_FAMILY", str(g))],
                     runtime_args=_rt_subset(reader_rt_s1, geo.s1_cores(g)),
                     config=_dm("RISCV_1", ttnn.NOC.NOC_1 if S1_WRITER_NOC == 0 else ttnn.NOC.NOC_0),
@@ -950,7 +961,7 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
                 kernel_source=str(KERNEL_DIR / "q_stem_reader.cpp"),
                 core_ranges=_crs(cores),
                 compile_time_args=reader_ct_other,
-                named_compile_time_args=rope_named + x_named,
+                named_compile_time_args=rope_named + x_named + ks_named,
                 runtime_args=_rt_subset(reader_rt_other, cores),
                 config=_dm("RISCV_1", ttnn.NOC.NOC_1 if wnoc == 0 else ttnn.NOC.NOC_0),
             )
@@ -958,16 +969,6 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
             ttnn.attach_absent(reader_other, "mcast1")
             kernels_tail.append(reader_other)
 
-        ks_named = [
-            ("ksplit", ks),
-            ("cb_q_kpart", CB_Q_KPART),
-            ("cb_q_recv1", CB_Q_RECV1),
-            ("cb_q_recv2", CB_Q_RECV2),
-            ("kpart_tiles", geo.kpart_tiles),
-            ("kpart_tile_bytes", geo.partial_tile_bytes),
-            ("sem_kpart_ready", SEM_KPART_READY),
-            ("sem_kpart_credit", SEM_KPART_CREDIT),
-        ]
         compute_k = ttnn.KernelDescriptor(
             kernel_source=str(KERNEL_DIR / "q_stem_compute.cpp"),
             core_ranges=compute_rect,
