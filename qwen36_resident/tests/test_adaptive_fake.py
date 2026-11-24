@@ -361,6 +361,7 @@ def test_sampled_requests_speculate_with_sampled_verify_rows(monkeypatch):
     own positions with its seed, a draft accepted while the draw equals it, so its tokens stay its seeded reference
     (the plain build's draws) through the moves; greedy users alongside keep theirs"""
     monkeypatch.setattr(A, "SPEC_SAMPLE", True)
+    monkeypatch.setattr(A, "SEEDED_PLAIN", False)  # (the fake's sampled references need seeds)
     m, pf = make(monkeypatch)
     run = Runner(m)
     prompts = {r: [(r * 23 + i * 7) % V for i in range(28 + 3 * r)] for r in range(3)}
@@ -392,7 +393,7 @@ def test_acceptance_priors_per_kind(monkeypatch):
     assert abs(m._prior["s"] - (2.2 + 0.3 * (1.5 - 2.2))) < 1e-9 and m._prior["g"] == A.PROMOTE_ACC
     m.temp_reqs.add(1)
     m._note_finished(1)  # (never speculated: back toward 2.2)
-    assert abs(m._prior["s"] - (1.99 + 0.1 * (2.2 - 1.99))) < 1e-9, m._prior
+    assert abs(m._prior["s"] - (1.99 + A.PRIOR_RECOVER * (2.2 - 1.99))) < 1e-9, m._prior
     for _ in range(6):  # (a run of hard requests: the prior falls under the 1-user break-even, no more probes)
         m.temp_reqs.add(2)
         m._req_stat[2] = [13, 10]
@@ -408,6 +409,8 @@ def test_penalized_requests_stay_plain_with_sampled_speculation(monkeypatch):
     assert A.Qwen36ResidentAdaptiveForCausalLM._non_speculable(sp, 0)
     sp.presence_penalty = [0.0]
     assert not A.Qwen36ResidentAdaptiveForCausalLM._non_speculable(sp, 0)
+    sp.seed = [1234]  # (a seeded sampled request decodes plainly: the same seed gives the same text)
+    assert A.Qwen36ResidentAdaptiveForCausalLM._non_speculable(sp, 0)
 
 
 def test_sampled_request_joins_spec(monkeypatch):

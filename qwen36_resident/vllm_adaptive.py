@@ -65,7 +65,11 @@ PROMOTE_ACC = float(os.environ.get("RESIDENT_ADAPTIVE_PROMOTE_ACC", "2.7"))
 # and the pay check's probe use them: sampled c4 (~2.0 < the 4-user break-even ~2.4) stays plain while c1 / c2 gain,
 # and random-token sampled traffic does not re-probe every request (served 2026-11-24: c1 55 vs 60.5, c4 45 vs 55)
 PROMOTE_ACC_SAMPLED = float(os.environ.get("RESIDENT_ADAPTIVE_PROMOTE_ACC_SAMPLED", "2.2"))
-PRIOR_ALPHA, PRIOR_RECOVER, PRIOR_MIN = 0.3, 0.1, 8
+PRIOR_ALPHA, PRIOR_RECOVER, PRIOR_MIN = 0.3, 0.3, 8
+# a sampled candidate must clear the gate at its prior / SAMPLED_MARGIN: 3-4 sampled users sit at the break-even
+# (~2.2-2.4 tokens a verify), where the probe and the moves made c4 swing between +12% and -8% run to run
+SAMPLED_MARGIN = float(os.environ.get("RESIDENT_ADAPTIVE_SAMPLED_MARGIN", "1.1"))
+SEEDED_PLAIN = True  # (a seeded sampled request decodes plainly; the fake tests turn it off to drive seeded draws)
 PROMOTE_OUT = float(os.environ.get("RESIDENT_ADAPTIVE_PROMOTE_OUT", "256"))
 REFILL_MS_FIXED, REFILL_MS_PER_TOKEN = 20.0, 0.13  # (defaults: tests/refill_batch.py, 2026-11-23)
 SPEC_MS_DEFAULT = lambda n: 28.0 + 4.6 * (n - 1)  # noqa: E731  (served verify steps, rc-20261124j: 1 / 2 / 4 / 8
@@ -338,12 +342,14 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
             return pay["spec_ms"].get(n, SPEC_MS_DEFAULT(n)) + SPEC_CTX_MS * ctx
         return pay["plain_ms"].get(n, PLAIN_MS_DEFAULT(n)) + PLAIN_CTX_MS * ctx
 
-    def _prior_of(self, rs):
-        """the acceptance expected of these requests (their kinds' priors, mean; PROMOTE_ACC for none)"""
+    def _prior_of(self, rs, gate=False):
+        """the acceptance expected of these requests (their kinds' priors, mean; PROMOTE_ACC for none); gate: sampled
+        ones at prior / SAMPLED_MARGIN"""
         rs = list(rs)
         if not rs:
             return PROMOTE_ACC
-        return sum(self._prior["s" if r in self.temp_reqs else "g"] for r in rs) / len(rs)
+        m = SAMPLED_MARGIN if gate else 1.0
+        return sum(self._prior["s"] / m if r in self.temp_reqs else self._prior["g"] for r in rs) / len(rs)
 
     def _note_finished(self, r):
         """a finished request's acceptance into its kind's prior (PRIOR_ALPHA), or back toward the default if it never
@@ -360,7 +366,7 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         pay, n = self._pay, max(1, len(self.live))
         ctx = sum(len(self.history.get(r) or ()) for r in self.live)
         plain, spec = self._step_ms("plain", n, ctx), self._step_ms("verify", n, ctx)
-        acc = self._prior_of(cands)
+        acc = self._prior_of(cands, gate=True)
         save = plain - spec / acc  # (ms a token, per user)
         out = pay["out"] or PROMOTE_OUT
         left = [
@@ -474,8 +480,13 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
             if not isinstance(getattr(sp, name, default), (list, tuple))
             else getattr(sp, name)[i]
         )  # noqa: E731
+        sampled = float(val("temperature", 0.0) or 0.0) != 0.0
+        # (sampled speculation: a request with its own seed decodes plainly — whether it speculates depends on the
+        # policy's state, and the two builds' logits differ at bf16 level, so the same seed would not give the same
+        # text twice; served rc-20261124r: "seeded sample reproducible: False")
+        seeded = SEEDED_PLAIN and val("seed", None) is not None
         return (
-            (float(val("temperature", 0.0) or 0.0) != 0.0 and not SPEC_SAMPLE)
+            (sampled and (not SPEC_SAMPLE or seeded))
             or float(val("presence_penalty", 0.0) or 0.0) != 0.0
             or float(val("frequency_penalty", 0.0) or 0.0) != 0.0
             or float(val("repetition_penalty", 1.0) or 1.0) != 1.0
