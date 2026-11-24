@@ -2,21 +2,25 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Host access to one Blackhole DRISC through a UMD cluster: its L1, its NIU modes and its reset. Knows nothing about
-// what runs on the core, and needs no metal device.
+// Host access to one Blackhole DRISC through a UMD cluster: its L1, its NIU modes, its reset, and an L1 write the KMD
+// makes when an fd closes. Knows nothing about what runs on the core, and needs no metal device.
 
 #pragma once
 
 #include <array>
 #include <cstdint>
+#include <memory>
 
 #include <tt-metalium/vocabulary/device_types.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/io_window_config.hpp>
+#include <tt-umd/utils/noc_cleanup_write.hpp>
 
 #include "internal/tt-1xx/blackhole/noc/noc_parameters.h"
 
 namespace tt::umd {
 class Cluster;
+class IoWindow;
 }  // namespace tt::umd
 
 namespace ll_api {
@@ -49,14 +53,40 @@ public:
     void write_l1(uint32_t addr, const void* data, uint32_t size) const;
     void read_l1(uint32_t addr, void* data, uint32_t size) const;
     uint32_t read_l1_u32(uint32_t addr) const;
+    void write_l1_u32(uint32_t addr, uint32_t value) const;
 
     // NIU_CFG_0 of NIU0 and NIU1. Bit 15 set means NOC2AXI, clear means stream mode.
     std::array<uint32_t, NUM_NOCS> read_niu_cfg() const;
+
+    // A window onto this DRISC's L1 that stays mapped while it lives, for writes at L1 addresses below `size`: WC
+    // combines a write into one PCIe burst, UC sends each word on its own. Null when the device has no TLB to spare
+    // (it has 202 for every process to share).
+    std::unique_ptr<tt::umd::IoWindow> map_l1(tt::umd::HostMemoryCaching caching, uint32_t size) const;
+
+    tt::umd::Cluster& cluster() const { return *cluster_; }
+    ChipId chip() const { return chip_; }
+    const tt::umd::CoreCoord& translated() const { return translated_; }
 
 private:
     tt::umd::Cluster* cluster_;
     ChipId chip_;
     tt::umd::CoreCoord translated_;
+};
+
+// The KMD writes `value` to the DRISC's L1 at `addr` when this object is destroyed, or when the process dies without
+// destroying it (tt::umd::NocCleanupWrite, whose fork caveat applies). The process's other fds may close first, so host
+// memory they pinned can be gone before the core sees the write; memory pinned through pin() is not. Not copyable or
+// movable.
+class ExitWrite {
+public:
+    // Throws whatever tt::umd::NocCleanupWrite throws.
+    ExitWrite(const DriscCore& core, uint32_t addr, uint32_t value);
+
+    // Pins host memory on this write's fd, so the KMD unpins it only after sending the write. Returns its IOVA.
+    uint64_t pin(void* addr, size_t size) { return cleanup_.pin(addr, size); }
+
+private:
+    tt::umd::NocCleanupWrite cleanup_;
 };
 
 }  // namespace tt::tt_metal::internal::drisc_service

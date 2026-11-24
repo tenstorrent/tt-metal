@@ -6,6 +6,9 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-umd-workload/cluster.hpp>
+#include <tt-umd/io_window/io_window.hpp>
+#include <tt-umd/pcie/pci_device.hpp>
+#include <tt-umd/tt_device/tt_device.hpp>
 
 #include "internal/tt-1xx/blackhole/dev_mem_map.h"
 #include "internal/tt-1xx/blackhole/noc/noc_parameters.h"
@@ -81,6 +84,24 @@ uint32_t DriscCore::read_l1_u32(uint32_t addr) const {
     return value;
 }
 
+void DriscCore::write_l1_u32(uint32_t addr, uint32_t value) const { write_l1(addr, &value, sizeof(value)); }
+
+std::unique_ptr<tt::umd::IoWindow> DriscCore::map_l1(tt::umd::HostMemoryCaching caching, uint32_t size) const {
+    try {
+        return cluster_->create_io_window(
+            chip_,
+            translated_,
+            MEM_DRISC_L1_NOC_OFFSET,
+            tt::umd::HostIoWindowConfig{caching, size},
+            tt::umd::IoOrdering::Strict,
+            std::nullopt,
+            tt::umd::WindowFlags::UnicastWrite);
+    } catch (const std::exception& e) {
+        log_debug(tt::LogMetal, "drisc_service: no L1 window on {}: {}", translated_.str(), e.what());
+        return nullptr;
+    }
+}
+
 std::array<uint32_t, NUM_NOCS> DriscCore::read_niu_cfg() const {
     std::array<uint32_t, NUM_NOCS> cfg{};
     for (size_t niu = 0; niu < cfg.size(); niu++) {
@@ -88,5 +109,14 @@ std::array<uint32_t, NUM_NOCS> DriscCore::read_niu_cfg() const {
     }
     return cfg;
 }
+
+ExitWrite::ExitWrite(const DriscCore& core, uint32_t addr, uint32_t value) :
+    cleanup_(
+        core.cluster().get_tt_device(core.chip())->get_pci_device()->get_device_num(),
+        static_cast<uint8_t>(core.translated().x),
+        static_cast<uint8_t>(core.translated().y),
+        0,
+        MEM_DRISC_L1_NOC_OFFSET + addr,
+        value) {}
 
 }  // namespace tt::tt_metal::internal::drisc_service

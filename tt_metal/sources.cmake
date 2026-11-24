@@ -5,6 +5,7 @@ set(TT_METAL_PUBLIC_API
     api/internal/disaggregation/layer_completion_queue.hpp
     api/internal/disaggregation/layer_completion_router.hpp
     api/internal/reload_table.hpp
+    api/internal/drisc_service/client.hpp
     api/internal/drisc_service/commands.hpp
     api/tt-metalium/mesh/allocator.hpp
     api/tt-metalium/workload/specification/compute_modes.hpp
