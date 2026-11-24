@@ -126,16 +126,17 @@ def test_out_of_tree_contract_fixture_passes_on_the_installed_wheel():
     """
     with tempfile.TemporaryDirectory(prefix="oot-wheel-") as child_temp:
         built = subprocess.run(
-            [sys.executable, str(WHEEL_BUILDER), "--out-dir", child_temp],
+            [sys.executable, str(WHEEL_BUILDER), "--out-dir", f"{child_temp}/dist"],
             capture_output=True,
             text=True,
         )
         assert built.returncode == 0, f"wheel build failed:\n{built.stderr}"
+        (wheel,) = (Path(child_temp) / "dist").iterdir()
         site = Path(child_temp) / "site"
         # --no-deps: the requirements are this environment's; pip still validates the wheel's metadata and RECORD.
         installed = subprocess.run(
             [sys.executable, "-m", "pip", "install", "--no-deps", "--target", site]
-            + [built.stdout.strip()],
+            + [wheel],
             capture_output=True,
             text=True,
         )

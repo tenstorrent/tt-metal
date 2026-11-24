@@ -50,7 +50,11 @@ def quasar_variant():
     llk_home = os.environ.get("LLK_HOME") or Path(__file__).resolve().parents[3]
     arch_root = Path(llk_home) / "tt_llk_quasar" / "arch"
     if variant and not (arch_root / variant).is_dir():
-        known = sorted(p.name for p in arch_root.glob("*/"))
+        known = (
+            sorted(p.name for p in arch_root.iterdir() if p.is_dir())
+            if arch_root.is_dir()
+            else []
+        )
         raise ValueError(
             f"TT_METAL_QUASAR_VARIANT={raw!r} has no directory under {arch_root}; known variants: {known}"
         )

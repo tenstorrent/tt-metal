@@ -63,10 +63,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          wheel=$(python3 tt_metal/tt-llk/tests/harness_wheel/make_wheel.py --out-dir dist)
+          # Sets the step's version and tag outputs.
+          python3 tt_metal/tt-llk/tests/harness_wheel/make_wheel.py --out-dir dist
           cp tt_metal/tt-llk/tests/requirements.txt dist/requirements.txt
-          echo "version=$(basename "$wheel" | cut -d- -f2)" >> "$GITHUB_OUTPUT"
-          echo "Built \`$(basename "$wheel")\`" >> "$GITHUB_STEP_SUMMARY"
       - name: Upload the harness wheel
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -84,22 +83,15 @@ jobs:
           GH_TOKEN: ${{ secrets.LLK_HARNESS_WHEEL_RELEASE_TOKEN }}
           RELEASE_REPO: ${{ vars.LLK_HARNESS_WHEEL_RELEASE_REPO }}
           VERSION: ${{ steps.wheel.outputs.version }}
+          TAG: ${{ steps.wheel.outputs.tag }}
         run: |
           set -euo pipefail
-          # A tag cannot hold the '+' of the wheel's version.
-          tag="v${VERSION//+/-}"
-          if gh release view "$tag" --repo "$RELEASE_REPO" > /dev/null 2>&1; then
-            gh release upload "$tag" dist/* --repo "$RELEASE_REPO" --clobber
+          if gh release view "$TAG" --repo "$RELEASE_REPO" > /dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --repo "$RELEASE_REPO" --clobber
           else
-            gh release create "$tag" dist/* --repo "$RELEASE_REPO" --latest \
+            gh release create "$TAG" dist/* --repo "$RELEASE_REPO" --latest \
               --title "tt-llk harness $VERSION" --notes "tt-llk Python test harness $VERSION"
           fi
-          # Keep the 30 newest harness releases (the list is newest first); other releases of the repository are not touched.
-          gh release list --repo "$RELEASE_REPO" --limit 1000 --json name,tagName \
-            --jq '[.[] | select(.name | startswith("tt-llk harness "))][30:][].tagName' |
-            while read -r old; do
-              gh release delete "$old" --repo "$RELEASE_REPO" --yes --cleanup-tag
-            done
 
   report-status:
     name: "Report status"

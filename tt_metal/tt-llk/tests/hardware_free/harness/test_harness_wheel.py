@@ -14,7 +14,7 @@ import importlib.util
 import io
 import zipfile
 from email.parser import BytesParser
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -60,7 +60,7 @@ def test_wheel_holds_the_harness_packages(names):
 
 def test_wheel_installs_no_package_another_wheel_owns(names):
     """``tt_llk_perf`` is a top-level package of the ttnn wheel; here it stays under ``llk_home``."""
-    assert {name.split("/")[0] for name in names} == {
+    assert {PurePosixPath(name).parts[0] for name in names} == {
         "helpers",
         "tt_llk_harness",
         "ttsim_error.py",
@@ -86,6 +86,7 @@ def test_wheel_holds_the_tt_llk_files_the_harness_reads(names):
 
 def test_version_is_api_then_commit_time_then_commit():
     assert str(VERSION) == "1.2.197001010000+gabc000000000"
+    assert VERSION.tag == "v1.2.197001010000-gabc000000000"
     later = build_wheel.Version(api=(1, 2), committed=60, commit=0, dirty=True)
     assert str(later) == "1.2.197001010001+g000000000000.dirty"
 

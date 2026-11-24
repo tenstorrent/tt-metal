@@ -176,13 +176,26 @@ class Version(NamedTuple):
     commit: int  # the commit's SHA-1
     dirty: bool = False  # built with uncommitted changes to tracked tt-llk files
 
-    def __str__(self) -> str:
+    @property
+    def release(self) -> str:
         major, minor = self.api
         # To the minute: the ``+g<commit>`` part orders lexically, so it cannot order two wheels of one day.
         stamp = time.strftime("%Y%m%d%H%M", time.gmtime(self.committed))
+        return f"{major}.{minor}.{stamp}"
+
+    @property
+    def local(self) -> str:
         # The first 12 of the SHA-1's 40 hex digits.
         commit = self.commit >> 4 * (40 - 12)
-        return f"{major}.{minor}.{stamp}+g{commit:012x}{'.dirty' if self.dirty else ''}"
+        return f"g{commit:012x}{'.dirty' if self.dirty else ''}"
+
+    def __str__(self) -> str:
+        return f"{self.release}+{self.local}"
+
+    @property
+    def tag(self) -> str:
+        """The git tag of a release of this wheel; a tag cannot hold the ``+``."""
+        return f"v{self.release}-{self.local}"
 
 
 def default_version(llk_root: Path = LLK_ROOT) -> Version:
@@ -252,11 +265,8 @@ def _record(entries: dict[PurePosixPath, bytes], record: PurePosixPath) -> bytes
     return out.getvalue().encode()
 
 
-def build_wheel(
-    out_dir: Path, version: Version | None = None, llk_root: Path = LLK_ROOT
-) -> Path:
+def build_wheel(out_dir: Path, version: Version, llk_root: Path = LLK_ROOT) -> Path:
     """Write the wheel into ``out_dir`` and return its path."""
-    version = version or default_version(llk_root)
 
     entries = {
         name: path.read_bytes() for name, path in wheel_contents(llk_root).items()
@@ -289,7 +299,12 @@ def main() -> int:
         help="directory the wheel is written to (default: ./dist)",
     )
     args = parser.parse_args()
-    print(build_wheel(args.out_dir))
+    version = default_version()
+    print(build_wheel(args.out_dir, version))
+    # In a GitHub Actions step, the step's outputs.
+    if "GITHUB_OUTPUT" in os.environ:
+        with open(os.environ["GITHUB_OUTPUT"], "a") as outputs:
+            print(f"version={version}", f"tag={version.tag}", sep="\n", file=outputs)
     return 0
 
 
