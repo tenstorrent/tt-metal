@@ -271,7 +271,8 @@ def test_far_bfp4_rows(device, monkeypatch):
     slots = [r % 1024 for r in rows]
     mass = torch.zeros(8, steps, 32)
     mass[..., 0] = 1.0
-    want = bfp4(torch.cat([v[:, slots], mass, k[:, slots]], dim=-1).unsqueeze(0))[0]
+    mid = [] if AF.FAR_UNIT else [mass]  # the stored mass block of a build without unit_k_tile_col
+    want = bfp4(torch.cat([v[:, slots], *mid, k[:, slots]], dim=-1).unsqueeze(0))[0]
     assert torch.equal(after[:, rows], want)
     keep = [r for r in range(p - 32, p + 32) if r not in rows]
     assert torch.equal(after[:, keep], before[:, keep])

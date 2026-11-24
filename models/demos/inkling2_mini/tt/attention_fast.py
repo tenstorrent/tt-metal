@@ -21,9 +21,10 @@ Global layers: logits `near ++ far ++ sink`, one softmax (HF), as two exact part
   denominator). The output is the far share A of the full output; a constant-1 value column
   gives the far mass a. `O = (A r + O_n (1 - a)) / (a r + 1 - a)`, `r = exp(s_bf16 - L_n)`
   undoes the bf16 rounding of the sink. Far is zeroed for pos < 1024.
-- far cache: one `kv_full [1, 8, max_ctx, 288] = [v(128) | 1, 0 x 31 | k(128)]` per (layer, pass).
-  MLA mode uses the first 160 columns as V and reuses K from L1: 288 columns per key instead of
-  256 (K + V), +12.5% memory, no separate V read.
+- far cache: one `kv_full [1, 8, max_ctx, 256] = [v(128) | k(128)]` per (layer, pass). The kernel sees
+  rows `[v(128) | 1, 0 x 31 | k(128)]` (288): MLA mode uses the first 160 columns as V and reuses K
+  from L1, no separate V read. The mass block `1, 0 x 31` is the same for every key, so the reader
+  writes it itself (sdpa `unit_k_tile_col`); a build without that option stores it (288 columns).
 
 `DecodePositionsFast` = `DecodePositions` without the O(max_ctx) far mask, plus `far`.
 """
@@ -60,7 +61,7 @@ from models.demos.inkling2_mini.tt.fused.attn import AttnNear, AttnOut, AttnPrep
 from models.demos.inkling2_mini.tt.fused.attn_wo import AttnWo
 
 V_WIDTH = 160  # v(128) + mass column block
-KV_WIDTH = V_WIDTH + HEAD_DIM  # 288
+KV_WIDTH = V_WIDTH + HEAD_DIM  # 288: the far call's q and the cache rows as the kernel sees them
 SCALE = HEAD_DIM**-0.5
 FAR_CHUNK = 128  # sdpa K chunk of the far cache (measured at 120K: 128 beats 256 and 512)
 # needs the sdpa_decode options of the custom C++ build; a stock build has neither field
@@ -69,6 +70,13 @@ FAR_OPTS = (
     if hasattr(ttnn.SDPAProgramConfig, "qk_skip_head_dim")
     else {}
 )
+# The far cache does not store the mass block: 256 columns per key instead of 288, same output (the reader writes
+# the block). Needs sdpa_decode `unit_k_tile_col`; INKLING_FAR_MASS=1 keeps the stored block (A/B on one build).
+FAR_UNIT = hasattr(ttnn.SDPAProgramConfig, "unit_k_tile_col") and os.environ.get("INKLING_FAR_MASS") != "1"
+if FAR_UNIT:
+    FAR_OPTS["unit_k_tile_col"] = True
+V_MEM = HEAD_DIM if FAR_UNIT else V_WIDTH  # columns of the cache before k
+KV_MEM = V_MEM + HEAD_DIM  # columns of the cache: 256, or 288 with the stored mass block
 # far call with the kv groups as the batch (q [1, 8, 3, 288], cache viewed as [8, 1, S, 288]): 16-row Q tiles, so
 # the softmax runs on half the rows; exact exp keeps it bit-equal to the 24-head call (custom C++ build only)
 FAR_GRP = hasattr(ttnn.SDPAProgramConfig, "exact_exp_half_tile")
@@ -155,10 +163,10 @@ class FastAttentionState(AttentionState):
         self.kv_full = self.kv_grp = None
         if is_global:
             self.kv_full = ttnn.zeros(
-                [1, N_KV, max_ctx, KV_WIDTH], dtype=FAR_DTYPE or cache_dtype, layout=ttnn.TILE_LAYOUT, device=device
+                [1, N_KV, max_ctx, KV_MEM], dtype=FAR_DTYPE or cache_dtype, layout=ttnn.TILE_LAYOUT, device=device
             )
-            # the same buffer as [8, 1, max_ctx, 288] (the far call with kv groups as the batch)
-            self.kv_grp = ttnn.reshape(self.kv_full, [N_KV, 1, max_ctx, KV_WIDTH])
+            # the same buffer as [8, 1, max_ctx, KV_MEM] (the far call with kv groups as the batch)
+            self.kv_grp = ttnn.reshape(self.kv_full, [N_KV, 1, max_ctx, KV_MEM])
             assert self.kv_grp.buffer_address() == self.kv_full.buffer_address()
 
     def tensors(self):
@@ -176,10 +184,11 @@ class FastAttentionState(AttentionState):
             ring[:, slots] = src[lo:].transpose(0, 1).float()
             dst.append((cache, ring))
         if self.kv_full is not None:
-            full = torch.zeros(N_KV, self.kv_full.shape[-2], KV_WIDTH)
+            full = torch.zeros(N_KV, self.kv_full.shape[-2], KV_MEM)
             full[:, :p, :HEAD_DIM] = values.transpose(0, 1).float()
-            full[:, :p, HEAD_DIM] = 1.0
-            full[:, :p, V_WIDTH:] = keys.transpose(0, 1).float()
+            if not FAR_UNIT:
+                full[:, :p, HEAD_DIM] = 1.0
+            full[:, :p, V_MEM:] = keys.transpose(0, 1).float()
             dst.append((self.kv_full, full))
         for tensor, value in dst:
             host = ttnn.from_torch(value.reshape(list(tensor.shape)), dtype=tensor.dtype, layout=ttnn.TILE_LAYOUT)
@@ -259,7 +268,7 @@ class Inkling2AttentionFast(Inkling2Attention):
         self.far_cfg = sdpa_cfg(self.far_chunk, **FAR_OPTS)
         self.far_grp_cfg = sdpa_cfg(self.far_chunk, **FAR_OPTS, exact_exp_half_tile=True) if FAR_GRP else None
         self.kv_full_shard = ttnn.create_sharded_memory_config(
-            shape=(32, KV_WIDTH),
+            shape=(32, KV_MEM),
             core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -640,7 +649,8 @@ class Inkling2AttentionFast(Inkling2Attention):
             self._write(state.k_ring, k, positions.ring)
             self._write(state.v_ring, v, positions.ring)
         if self.is_global:
-            row = ttnn.to_memory_config(ttnn.concat([v, self.mass_col, k], dim=-1), self.kv_full_shard)
+            row = ttnn.concat([v, k] if FAR_UNIT else [v, self.mass_col, k], dim=-1)
+            row = ttnn.to_memory_config(row, self.kv_full_shard)
             ttnn.experimental.paged_update_cache(state.kv_full, row, update_idxs_tensor=positions.pos)
 
         bias = self._rel_bias(rel, positions)

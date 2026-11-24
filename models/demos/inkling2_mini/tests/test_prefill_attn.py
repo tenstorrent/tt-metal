@@ -13,7 +13,7 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.inkling2_mini.tt.attention_fast import KV_WIDTH, V_WIDTH
+from models.demos.inkling2_mini.tt.attention_fast import FAR_UNIT, KV_MEM, V_MEM
 from models.demos.inkling2_mini.tt.prefill_model import (
     D_REL,
     HEAD_DIM,
@@ -112,10 +112,11 @@ def test_attention_core(device, path, is_global, s, t):
     for pos in range(max(0, s - WINDOW), s):  # slot = pos % 1024 holds the last 1024 positions before the chunk
         ring_k[:, :, pos % WINDOW] = k_pos[:, :, pos]
         ring_v[:, :, pos % WINDOW] = v_pos[:, :, pos]
-    kv = torch.zeros(1, N_KV, max_ctx, KV_WIDTH)
+    kv = torch.zeros(1, N_KV, max_ctx, KV_MEM)
     kv[:, :, :n, :HEAD_DIM] = v_pos
-    kv[:, :, :n, HEAD_DIM] = 1
-    kv[:, :, :n, V_WIDTH:] = k_pos
+    if not FAR_UNIT:
+        kv[:, :, :n, HEAD_DIM] = 1
+    kv[:, :, :n, V_MEM:] = k_pos
     st = types.SimpleNamespace(k_ring=put(ring_k), v_ring=put(ring_v), kv_full=put(kv))
     pf = _pf(device, max_ctx, st, path == "r3")
     args = (lp, put(qs), put(rel), put(sink), st, put(k_pos[:, :, s:]), put(v_pos[:, :, s:]), s, t)

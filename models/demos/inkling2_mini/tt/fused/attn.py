@@ -203,7 +203,9 @@ class AttnPrep:
         assert not q or nitems * len(cores) == N_HEADS, len(cores)
         dyn = int(self.dyn and not q)
         has_tau = int(self.dyn and q)
-        mass = int(self.dyn and kind == "v")
+        # the far cache's mass block, where it is stored (288 columns; attention_fast FAR_UNIT stores 256)
+        far_tiles = state.kv_full.padded_shape[-1] // 32 if self.dyn else 0
+        mass = int(self.dyn and kind == "v" and far_tiles == 9)
         # bfp4 far cache (opt-in): the writer converts the bfp8 row
         far4 = int(bool(self.dyn and not q) and state.kv_full.dtype == ttnn.bfloat4_b)
         r_rt, w_rt = [], []
@@ -245,7 +247,7 @@ class AttnPrep:
                 if self.dyn:
                     full = state.kv_full
                     seq = full.padded_shape[-2] // 32
-                    w += [full.buffer_address(), seq, full.padded_shape[-1] // 32, 5 if kind == "k" else 0]
+                    w += [full.buffer_address(), seq, far_tiles, far_tiles - 4 if kind == "k" else 0]
                     w += [positions.pos.buffer_address()]
             if chain is not None and not q:
                 wait, nxt = chain

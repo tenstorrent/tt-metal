@@ -57,7 +57,7 @@ from models.demos.inkling2_mini.tt.attention import (
     WINDOW,
     log_scale,
 )
-from models.demos.inkling2_mini.tt.attention_fast import KV_WIDTH, V_WIDTH
+from models.demos.inkling2_mini.tt.attention_fast import FAR_UNIT, KV_MEM, V_MEM
 from models.demos.inkling2_mini.tt.fused.common import (
     dense_matrix,
     probe_rms_bf16,
@@ -842,12 +842,12 @@ class Inkling2Prefill:
         if self._pfheads is None:
             qs = ttnn.typecast(ttnn.multiply(_f32(q), SCALE), ttnn.bfloat16)  # kernel adds mask to raw q.k
 
-        if is_global:  # far cache rows [v | 1, 0 x 31 | k] (attention_fast kv_full)
+        if is_global:  # far cache rows [v | k], or [v | 1, 0 x 31 | k] without FAR_UNIT (attention_fast kv_full)
             # shortcut: no prefill write for the bfp4 far cache opt-in (attention_fast FAR_DTYPE); port G3's FarFill4
             # when prefill must run with it
             assert st.kv_full.dtype == k_c.dtype, "prefill: bfp4 far cache (FAR_DTYPE) not supported"
-            mass = _rows(self.c_mass[cdt], 0, t)
-            ttnn.fill_cache(st.kv_full, ttnn.concat([v_c, mass, k_c], dim=-1), 0, update_idx=s)
+            row = [v_c, k_c] if FAR_UNIT else [v_c, _rows(self.c_mass[cdt], 0, t), k_c]
+            ttnn.fill_cache(st.kv_full, ttnn.concat(row, dim=-1), 0, update_idx=s)
         if self.r3:
             attn = self._attention_r3(lp, qs, rel, sink, st, k_c, v_c, s, t)
         elif not is_global:
@@ -888,8 +888,8 @@ class Inkling2Prefill:
             if s == 0:
                 kk, vv = k_c, v_c
             else:
-                kv = ttnn.slice(st.kv_full, [0, 0, 0, 0], [1, N_KV, s + t, KV_WIDTH])
-                kk, vv = _cols(kv, V_WIDTH, KV_WIDTH), _cols(kv, 0, HEAD_DIM)
+                kv = ttnn.slice(st.kv_full, [0, 0, 0, 0], [1, N_KV, s + t, KV_MEM])
+                kk, vv = _cols(kv, V_MEM, KV_MEM), _cols(kv, 0, HEAD_DIM)
             window = None
         else:
             if s == 0:
@@ -1052,8 +1052,8 @@ class Inkling2Prefill:
 
         ka, va = self.c_anchors
         zcol = _rows(self.c_zcol, 0, far)
-        kv = ttnn.slice(st.kv_full, [0, 0, 0, 0], [1, N_KV, far, KV_WIDTH])
-        kf = ttnn.concat([ttnn.concat([_bf16(_cols(kv, V_WIDTH, KV_WIDTH)), zcol], dim=-1), ka], dim=2)
+        kv = ttnn.slice(st.kv_full, [0, 0, 0, 0], [1, N_KV, far, KV_MEM])
+        kf = ttnn.concat([ttnn.concat([_bf16(_cols(kv, V_MEM, KV_MEM)), zcol], dim=-1), ka], dim=2)
         vf = ttnn.concat([ttnn.concat([_bf16(_cols(kv, 0, HEAD_DIM)), zcol], dim=-1), va], dim=2)
         of = ttnn.transformer.scaled_dot_product_attention(
             qf,
