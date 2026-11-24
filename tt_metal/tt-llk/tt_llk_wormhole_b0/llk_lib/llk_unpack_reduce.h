@@ -14,6 +14,8 @@
 #include "cunpack_common.h"
 #include "llk_assert.h"
 #include "llk_unpack_common.h"
+#include "tensor_shape.h"
+#include "tensor_shape_coverage_unpack.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
@@ -26,11 +28,14 @@ using namespace ckernel::unpacker;
  *
  * @tparam type: Reduction pooling op, values = <SUM/AVG/MAX>
  * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
- * @param num_faces: Number of faces in the tile, valid values = <1, 2, 4>.
+ * @param tensor_shape: Tile geometry of the operand (rows/cols per face and the face grid).
+ * @note Asserted unsupported (in init): faces shorter than 16 rows and the 32x16 (2x1) face grid.
  */
 template <PoolType type, ReduceDim dim>
-inline void _llk_unpack_reduce_mop_config_(const std::uint32_t num_faces)
+inline void _llk_unpack_reduce_mop_config_(const ckernel::TensorShape tensor_shape)
 {
+    LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_reduce_mop_config_", tensor_shape);
+    const std::uint32_t num_faces = tensor_shape.total_num_faces();
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     static constexpr std::uint32_t unpack_srca     = TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr std::uint32_t unpack_zerosrca = TT_OP_UNPACR_NOP(p_unpacr_nop::UNP0, p_unpacr_nop::UNP_ZEROSRC);
@@ -55,7 +60,7 @@ inline void _llk_unpack_reduce_mop_config_(const std::uint32_t num_faces)
  * @param unpB_src_format: Source data format of the scaler operand (SrcB) in L1.
  * @param unpB_dst_format: Destination data format the scaler operand is converted to.
  * @param within_face_16x16_transpose: Nonzero to enable the 16x16 within-face transpose.
- * @param num_faces: Number of faces in the tile, valid values = <1, 2, 4>.
+ * @param tensor_shape: Tile geometry of the operand (rows/cols per face and the face grid).
  * @ref _llk_unpack_reduce_ is the matching execute call.
  * @ref _llk_math_reduce_init_ is the matching init on the math thread (single-operand unpack pairing).
  */
@@ -64,8 +69,10 @@ inline void _llk_unpack_reduce_init_(
     const std::uint32_t unpB_src_format,
     const std::uint32_t unpB_dst_format,
     const std::uint32_t within_face_16x16_transpose = 0,
-    const std::uint32_t num_faces                   = 4)
+    const ckernel::TensorShape tensor_shape         = ckernel::DEFAULT_TENSOR_SHAPE)
 {
+    LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_reduce_init_", tensor_shape);
+    const std::uint32_t num_faces = tensor_shape.total_num_faces();
     // This path's MOP clears SrcA to zero for every pool type, which a min reduce would lose to.
     static_assert(
         type != PoolType::MIN,
@@ -73,6 +80,9 @@ inline void _llk_unpack_reduce_init_(
         "Use the SFPU reduce instead (ckernel_sfpu_reduce.h::calculate_reduce).");
 
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    // The MOP unpacks full 16-row faces in row order, so short faces and a 2x1 face grid give wrong output.
+    LLK_ASSERT(tensor_shape.face_r_dim == MAX_FACE_R_DIM, "Unpack reduce requires 16-row faces");
+    LLK_ASSERT(!is_tensor_shape_2x1_face_grid(tensor_shape), "Unpack reduce does not support 32x16 tiles");
 
     // Configure SrcB format registers
     cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32, 0, 0xf>(unpB_src_format);
@@ -90,7 +100,7 @@ inline void _llk_unpack_reduce_init_(
     TTI_SETADCXX(p_setadc::UNP0, FACE_R_DIM * FACE_C_DIM - 1, 0x0);
     TTI_SETADCXX(p_setadc::UNP1, FACE_C_DIM - 1, 0x0);
 
-    _llk_unpack_reduce_mop_config_<type, dim>(num_faces);
+    _llk_unpack_reduce_mop_config_<type, dim>(tensor_shape);
 }
 
 /**
