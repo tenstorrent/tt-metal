@@ -473,7 +473,9 @@ inline void set_dst_write_addr(const std::uint32_t &context_id, const std::uint3
     else
     {
         cfg::write<cfg::Access::TensixCfgUnit, R2.Unpack_if_sel_cntx1, cfg::Sec::S0, 1>();
-        cfg::write<cfg::Access::TensixCfgUnit, R5.Dest_cntx1_address, cfg::Sec::S0>(dst_byte_addr);
+        // HAL-GAP (codegen): cfg::write of the upper-halfword field re-derives its bytes with three shifts per tile and
+        // costs the caller's tile loop a register; production's RMW lets GCC share the context-0 byte. Same RMWCIBs.
+        cfg_reg_rmw_tensix<THCON_SEC0_REG5_Dest_cntx1_address_RMW>(dst_byte_addr);
     }
 }
 

@@ -403,7 +403,7 @@ inline void _llk_unpack_tilize_(
         // Trisc::SEMPOST for context acquire
         sync::semaphore::post<sync::Access::MMIO, hal_port::UNPACK_SYNC_SEM>();
 
-        if (unpack_to_dest) [[unlikely]]
+        if (unpack_to_dest)
         {
             // Unpack to dest
             hal_port::set_dst_write_addr(unp_cfg_context, unpack_src_format);
@@ -416,7 +416,7 @@ inline void _llk_unpack_tilize_(
         // Run MOP
         hal::mop::Runner<hal::mop::MopTemplate::Template1>::run();
 
-        if (unpack_to_dest) [[unlikely]]
+        if (unpack_to_dest)
         {
             // Pair with set_dst_write_addr above (both keyed on unpack_src_format), so the
             // canonical Z-stride restore matches the value programmed on entry.

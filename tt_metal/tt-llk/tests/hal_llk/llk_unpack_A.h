@@ -516,7 +516,8 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
     adc::set<adc::AddrCounter {.channel0 = {.z = 0, .w = 0}, .channel1 = {.z = 0, .w = 0}}.for_clients<adc::Client::Unpacker0, adc::Client::Unpacker1>()>();
 
     // Program srcA and srcB base addresses
-    volatile std::uint32_t tt_reg_ptr *cfg = hcfg::detail::state_cfg_bank(); // get pointer to registers for current state ID
+    // Production's get_cfg_pointer (RISC pointer select only), so the per-tile branch layout stays as production's.
+    volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer(); // get pointer to registers for current state ID
 
     // Wait for free context
     hal_port::wait_for_next_context(2);
