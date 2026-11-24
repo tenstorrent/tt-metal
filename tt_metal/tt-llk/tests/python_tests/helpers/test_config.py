@@ -1830,6 +1830,11 @@ class TestConfig:
     def _compile_kernel_part(self, name, compile_command, source):
         cache = os.environ.get("LLK_OBJ_CACHE")
         if not cache:
+            if os.environ.get("LLK_ELF_CACHE") or os.environ.get("LLK_ELF_CACHE_STATS"):
+                from .elf_cache import compile_elf
+
+                compile_elf(compile_command, source, TestConfig.TESTS_WORKING_DIR)
+                return
             run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR, source)
             return
         head = compile_command[: compile_command.index("-x")]
