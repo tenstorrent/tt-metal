@@ -51,7 +51,7 @@ void copy_sections(Dfb& in, Dfb& out, std::uint32_t num_tiles) {
         if (n == TPS) {
             ex::pack_block<TPS, 1>(out.template back<Out>(), 0);
         } else {
-            ex::pack_block(out.template back<Out>(), 0, 0, n);
+            ex::pack_block(out.template back<Out>(), 0, n);
         }
         ckernel::tile_regs_release();
         out.push_back(n);

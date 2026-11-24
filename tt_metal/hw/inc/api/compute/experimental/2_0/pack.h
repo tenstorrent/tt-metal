@@ -28,12 +28,13 @@ enum class Relu : std::uint8_t { None, Zero };
  *
  * | Param Type | Name                | Description                                       | Type        | Valid Range        | Required |
  * |------------|---------------------|---------------------------------------------------|-------------|--------------------|----------|
- * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                         | bool        |                    | False    |
+ * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                         | bool        | DST_ACCUM_MODE     | False    |
+ * | Template   | relu                | Packer ReLU                                       | Relu        | None, Zero         | False    |
  * | Template   | Format / Shape      | Output L1 format + geometry (deduced)             | DataFormat/TensorShape | Float16_b, Float16, Float32 (32-bit Dest) | True |
  * | Function   | out                 | Output operand (e.g. DataflowBuffer::back)        | LLKOperand  | N/A                | True     |
  */
 // clang-format on
-template <Relu relu = Relu::None, bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, Relu relu = Relu::None, DataFormat Format, TensorShape Shape>
 inline void pack_init(LLKOperand<Format, Shape> out) {
     static_assert(
         llk_2_0::is_supported_format(Format, is_fp32_dest_acc_en),
@@ -52,21 +53,24 @@ inline void pack_init(LLKOperand<Format, Shape> out) {
  *
  * | Param Type | Name           | Description                                  | Type        | Valid Range            | Required |
  * |------------|----------------|----------------------------------------------|-------------|------------------------|----------|
+ * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode               | bool        | DST_ACCUM_MODE         | False    |
  * | Template   | Format / Shape | Output L1 format + geometry (deduced)        | DataFormat/TensorShape | N/A   | True     |
  * | Function   | out            | Output operand (its base = the pack_init's)  | LLKOperand  | N/A                    | True     |
  * | Function   | itile          | Output tile index within out                 | uint32_t    | N/A                    | True     |
  * | Function   | ifrom_dst      | Dest tile index                              | uint32_t    | < Dest tiles / section | True     |
  */
 // clang-format on
-template <DataFormat Format, TensorShape Shape>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
 inline void pack_tile(LLKOperand<Format, Shape> out, std::uint32_t itile, std::uint32_t ifrom_dst) {
+    static_assert(is_fp32_dest_acc_en == DST_ACCUM_MODE, "pack_tile: Dest mode is kernel-wide (DST_ACCUM_MODE)");
     PACK((llk_2_0::pack<LLKOperand<Format, Shape>::descriptor>(out.l1_address, ifrom_dst, out.tile(itile))));
 }
 
 // clang-format off
 /**
  * Id-free block pack, Quasar: a pack of each tile of a ct_dim x rt_dim block, Dest tiles
- * start_idst + i -> output tiles start_itile + i, i < ct_dim * rt_dim. The block must fit one Dest section
+ * ifrom_dst + i -> output tiles start_out_tile + i, i < ct_dim * rt_dim. Argument order = the runtime pack_block
+ * without ntiles. The block must fit one Dest section
  * (static_assert).
  * No tails: every block op between two inits must cover the same tile count (LLK_ASSERT); for leftover tiles
  * re-init, then run the shorter block.
@@ -76,8 +80,8 @@ inline void pack_tile(LLKOperand<Format, Shape> out, std::uint32_t itile, std::u
  * | Template   | ct_dim / rt_dim     | Block columns / rows (tiles)       | uint32_t   | ct_dim * rt_dim <= section size | True     |
  * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode          | bool       |                                 | False    |
  * | Function   | out                 | Output operand                     | LLKOperand | N/A                             | True     |
- * | Function   | start_itile         | First output tile within out       | uint32_t   | N/A                             | True     |
- * | Function   | start_idst          | First Dest tile                    | uint32_t   | N/A                             | False    |
+ * | Function   | ifrom_dst           | First Dest tile                    | uint32_t   | N/A                             | True     |
+ * | Function   | start_out_tile      | First output tile within out       | uint32_t   | N/A                             | False    |
  */
 // clang-format on
 template <
@@ -86,16 +90,16 @@ template <
     bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
     DataFormat Format,
     TensorShape Shape>
-inline void pack_block(LLKOperand<Format, Shape> out, std::uint32_t start_itile, std::uint32_t start_idst = 0) {
+inline void pack_block(LLKOperand<Format, Shape> out, std::uint32_t ifrom_dst, std::uint32_t start_out_tile = 0) {
     static_assert(
         ct_dim * rt_dim <= detail::dest_section_tiles<is_fp32_dest_acc_en>(), "pack_block: block exceeds Dest");
-    pack_block<is_fp32_dest_acc_en>(out, start_itile, start_idst, ct_dim * rt_dim);
+    pack_block<is_fp32_dest_acc_en>(out, ifrom_dst, ct_dim * rt_dim, start_out_tile);
 }
 
 // clang-format off
 /**
  * Id-free block pack with a runtime tile count, Quasar: a pack of each of `ntiles` tiles,
- * Dest tiles start_idst + i -> output tiles start_itile + i.
+ * Dest tiles ifrom_dst + i -> output tiles start_out_tile + i. Same argument order as Blackhole.
  * No tails: every block op between two inits must cover the same tile count (LLK_ASSERT); for leftover tiles
  * re-init, then run the shorter block.
  *
@@ -103,21 +107,21 @@ inline void pack_block(LLKOperand<Format, Shape> out, std::uint32_t start_itile,
  * |------------|---------------------|------------------------------------|------------|-------------------------------------|----------|
  * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode          | bool       |                                     | False    |
  * | Function   | out                 | Output operand                     | LLKOperand | N/A                                 | True     |
- * | Function   | start_itile         | First output tile within out       | uint32_t   | N/A                                 | True     |
- * | Function   | start_idst          | First Dest tile                    | uint32_t   | N/A                                 | True     |
- * | Function   | ntiles              | Number of tiles                    | uint32_t   | start_idst + ntiles <= section size | True     |
+ * | Function   | ifrom_dst           | First Dest tile                    | uint32_t   | N/A                                 | True     |
+ * | Function   | ntiles              | Number of tiles                    | uint32_t   | ifrom_dst + ntiles <= section size  | True     |
+ * | Function   | start_out_tile      | First output tile within out       | uint32_t   | N/A                                 | False    |
  */
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
 inline void pack_block(
-    LLKOperand<Format, Shape> out, std::uint32_t start_itile, std::uint32_t start_idst, std::uint32_t ntiles) {
+    LLKOperand<Format, Shape> out, std::uint32_t ifrom_dst, std::uint32_t ntiles, std::uint32_t start_out_tile = 0) {
     LLK_ASSERT(
-        start_idst + ntiles <= detail::dest_section_tiles<is_fp32_dest_acc_en>(), "pack_block: block exceeds Dest");
+        ifrom_dst + ntiles <= detail::dest_section_tiles<is_fp32_dest_acc_en>(), "pack_block: block exceeds Dest");
     detail::check_block_tiles<DstClient::PACK>(ntiles);
-    LLK_ASSERT(start_itile + ntiles <= out.ntiles(), "pack_block: tiles past the output's window");
+    LLK_ASSERT(start_out_tile + ntiles <= out.ntiles(), "pack_block: tiles past the output's window");
     for (std::uint32_t i = 0; i < ntiles; ++i) {
         PACK((llk_2_0::pack<LLKOperand<Format, Shape>::descriptor>(
-            out.l1_address, start_idst + i, out.tile(start_itile + i))));
+            out.l1_address, ifrom_dst + i, out.tile(start_out_tile + i))));
     }
 }
 
