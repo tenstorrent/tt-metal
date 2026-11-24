@@ -394,7 +394,13 @@ class ChainStore:
         vs = [e for e in self.entries.values() if e.tier == tier]
         if not vs:
             return False
-        v = min(vs, key=lambda e: (len(e.tokens), e.t))
+        # HY4_CAP_EVICT=largest (hy4fix, simulated c=6 tail-park 88.3 -> 89.5-91.0 % hit): victim = the LARGEST entry, evicted only if it is smaller than the incoming chain (a big tail is never displaced for a smaller chain); default = the smallest
+        key = (
+            (lambda e: (-len(e.tokens), e.t))
+            if os.environ.get("HY4_CAP_EVICT", "smallest") == "largest"
+            else (lambda e: (len(e.tokens), e.t))
+        )
+        v = min(vs, key=key)
         if len(v.tokens) >= incoming_tokens:
             return False
         self.entries.pop(v.eid)

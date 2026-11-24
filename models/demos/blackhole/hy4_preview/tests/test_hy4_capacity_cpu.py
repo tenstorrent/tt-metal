@@ -605,3 +605,36 @@ def test_no_headroom_skips_cross_row_candidate_cleanly_and_keeps_going():
     assert st["failed"] == 0
     m, c = run(e, 0, A)
     assert m == m0  # whichever path served it (own-row tail, host, cold), the result equals cold
+
+
+def test_evict_largest_policy_flag(monkeypatch):
+    """HY4_CAP_EVICT=largest: the largest entry smaller than the incoming chain is the victim (default: the smallest)."""
+    import numpy as np
+
+    from models.demos.blackhole.hy4_preview.tt import hy4_chainstore as CS2
+
+    for mode, expect in (("smallest", 40000), ("largest", 90000)):
+        monkeypatch.setenv("HY4_CAP_EVICT", mode)
+        e = FakeCapEngine()
+        st = e.cap.store
+        for i, n in enumerate((40000, 90000)):
+            st.entries[i + 1] = CS2.Entry(
+                i + 1, np.arange(n, dtype=np.int32) + 100000 * (i + 1), "tail", row=i + 1, page0=100, t=float(i)
+            )
+        assert st._evict_one(120000, "tail")
+        left = {len(x.tokens) for x in st.entries.values()}
+        assert expect not in left, (mode, left)
+
+
+def test_tailpark_only_never_touches_host_payloads():
+    """HY4_HOSTTIER=0 (host=False): demote / evict / promote cycles never call to_host / from_host and hold no host entry."""
+    e = FakeCapEngine(host=False)
+    A, m0 = park_long_on_row0(e)
+    busy(e)
+    for sd in (9, 10, 11):
+        run(e, 0, toks(2000, sd))
+        e.release(0)
+    run(e, 0, A)
+    st = e.cap.store
+    assert st.stats["host_xfer_bytes"] == 0 and st.stats["demoted_host"] == 0
+    assert not [x for x in st.entries.values() if x.tier == "host"]

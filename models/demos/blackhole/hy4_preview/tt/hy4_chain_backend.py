@@ -103,7 +103,9 @@ class DeviceBackend(Backend):
                 hs = [ttnn.from_device(d, blocking=False) for d in self._row_devs(stage, row)]
                 ttnn.synchronize_device(self.md)
                 blk = torch.stack([ttnn.to_torch(h).reshape(-1, pb // 4) for h in hs])  # [cols, cp*u, pb/4]
-                out.append((name, ci, n, blk))
+                out.append(
+                    (name, ci, n, blk[:, : n * u].clone())
+                )  # trim the padding of a partial chunk (a 17-page slice used to store 128 pages: port2 host RSS 549 GB)
         return out
 
     def from_host(self, payload, row, page0, npages):
@@ -128,6 +130,12 @@ class DeviceBackend(Backend):
                     dtype=ttnn.uint32,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                 )
+                if blk.shape[1] < cp * u:  # trimmed payload: pad back to the stage shape (rows past n*u are never read)
+                    blk = blk.view(torch.int32) if blk.dtype != torch.int32 else blk
+                    blk = torch.cat(
+                        [blk, torch.zeros((blk.shape[0], cp * u - blk.shape[1], blk.shape[2]), dtype=torch.int32)],
+                        dim=1,
+                    )
                 mine = [mk(b) for b in blk]
                 if (
                     self.h2d_mode == "sparse"
