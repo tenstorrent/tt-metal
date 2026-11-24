@@ -19,6 +19,7 @@
 // Wall-clock stamps (cycles) at the runtime-arg L1 address: [0, 1] UNPACK start / end, [2, 3] MATH, [4, 5] PACK.
 // CT: 0 MODE, 1 KT, 2 RT_SB, 3 PR, 4 NSB (sub-blocks a launch, operands reused), 5 WC
 #include <cstdint>
+#include "api/debug/kernel_profiler.hpp"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/matmul.h"
@@ -33,6 +34,10 @@ constexpr uint32_t RT_SB = get_compile_time_arg_val(2);
 constexpr uint32_t PR = get_compile_time_arg_val(3);
 constexpr uint32_t NSB = get_compile_time_arg_val(4);
 constexpr uint32_t WC = get_compile_time_arg_val(5);
+// MODE 0 variants: 0 matmul_block a K tile; 1 no activation; 2 matmul_block_k (all KT steps in one call);
+// 3 one-row passes (PR 1) with matmul_block_k + the row MOP; 4 as 0 with the pass's row tiles a runtime value (as the
+// flat expert's gate_up_compute.cpp passes them)
+constexpr uint32_t VAR = get_compile_time_arg_val(6);
 constexpr uint32_t PASSES = RT_SB / PR;
 
 constexpr uint32_t x_cb = 0, w_cb = 1, pin_cb = 2, id_cb = 3, h_cb = 16, pout_cb = 17;
@@ -41,15 +46,27 @@ constexpr auto act = expert_activation::Kind::Silu;
 FORCE_INLINE uint32_t wall() { return *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L); }
 
 // DEST[r][c] += x[rows row0 .. row0 + PR)[all KT] @ W[:, col0 .. col0 + 2)
+uint32_t pr_rt = PR;  // (VAR 4: runtime arg 1)
+
 FORCE_INLINE void mm_pass(uint32_t row0, uint32_t col0) {
-    for (uint32_t k = 0; k < KT; ++k) {
-        matmul_block(x_cb, w_cb, row0 * KT + k, k * WC + col0, 0, false, 2, PR, KT);
+    if constexpr (VAR == 4) {
+        for (uint32_t k = 0; k < KT; ++k) {
+            matmul_block(x_cb, w_cb, row0 * KT + k, k * WC + col0, 0, false, 2, pr_rt, KT);
+        }
+    } else if constexpr (VAR == 2) {
+        matmul_block_k(x_cb, w_cb, row0 * KT, col0, 0, false, 2, PR, KT, KT, WC);
+    } else if constexpr (VAR == 3) {
+        matmul_block_k<true>(x_cb, w_cb, row0 * KT, col0, 0, false, 2, PR, KT, KT, WC);
+    } else {
+        for (uint32_t k = 0; k < KT; ++k) {
+            matmul_block(x_cb, w_cb, row0 * KT + k, k * WC + col0, 0, false, 2, PR, KT);
+        }
     }
 }
 
 FORCE_INLINE void pack_h(uint32_t row0) {
     PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
-    for (uint32_t r = 0; r < PR; ++r) {
+    for (uint32_t r = 0; r < PR && VAR != 1; ++r) {
         expert_activation::tile_pair<act>(2 * r);
     }
     PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
@@ -60,8 +77,15 @@ FORCE_INLINE void pack_h(uint32_t row0) {
 
 void kernel_main() {
     volatile tt_l1_ptr uint32_t* stamps = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(0));
+    if constexpr (VAR == 4) {
+        pr_rt = get_arg_val<uint32_t>(1);
+    }
     compute_kernel_hw_startup<SrcOrder::Reverse>(x_cb, w_cb, h_cb);
-    matmul_block_init(x_cb, w_cb, false, 2, PR, KT);
+    if constexpr (VAR == 3) {
+        matmul_block_init<true>(x_cb, w_cb, false, 2, PR, KT);
+    } else {
+        matmul_block_init(x_cb, w_cb, false, 2, PR, KT);
+    }
     expert_activation::init<act>();
     cb_wait_front(x_cb, RT_SB * KT);
     cb_wait_front(w_cb, KT * WC);
@@ -75,6 +99,7 @@ void kernel_main() {
     MATH(stamps[2] = wall());
     PACK(stamps[4] = wall());
     for (uint32_t sb = 0; sb < NSB; ++sb) {
+        DeviceZoneScopedN("GU-SB");  // (profiling: one sub-block)
         if constexpr (MODE == 0) {
             cb_reserve_back(h_cb, RT_SB);
             for (uint32_t p = 0; p < PASSES; ++p) {

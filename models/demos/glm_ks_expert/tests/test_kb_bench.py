@@ -33,8 +33,9 @@ from models.demos.glm_ks_expert.bench_util import (
 RT_SB, PR = 4, 2  # 128-row sub-blocks, passes of 2 row tiles (fp32 DEST half-sync: 4 tiles)
 
 
-def run(device, mode, nsb=100, part="fp32", spin=None, pad=0):
+def run(device, mode, nsb=100, part="fp32", spin=None, pad=0, var=0, pr=None):
     core = (0, 0)
+    PR_ = pr or PR
     grid = crs([core])
     KH = GLM["H"] // 32
     KT = KH if mode == 0 else KH // 2
@@ -79,7 +80,7 @@ def run(device, mode, nsb=100, part="fp32", spin=None, pad=0):
     wr_rt = ttnn.RuntimeArgs()
     wr_rt[core[0]][core[1]] = [h_t.buffer_address(), po_t.buffer_address(), nsb, RT_SB, 0 if mode == 0 else RT_SB * 2]
     cp_rt = ttnn.RuntimeArgs()
-    cp_rt[core[0]][core[1]] = [st.buffer_address()]
+    cp_rt[core[0]][core[1]] = [st.buffer_address(), PR_]
     ta = lambda t: list(ttnn.TensorAccessorArgs(t).get_compile_time_args())
     rd = ttnn.KernelDescriptor(
         kernel_source=kpath("kb_reader.cpp"),
@@ -105,7 +106,7 @@ def run(device, mode, nsb=100, part="fp32", spin=None, pad=0):
     cp = ttnn.KernelDescriptor(
         kernel_source=kpath("kb_compute.cpp"),
         core_ranges=grid,
-        compile_time_args=[mode, KT, RT_SB, PR, nsb, WC],
+        compile_time_args=[mode, KT, RT_SB, PR_, nsb, WC, var],
         named_compile_time_args=ACT_ARGS,
         runtime_args=cp_rt,
         config=cfg,
@@ -162,3 +163,9 @@ def test_kb_spin(device, spin):
 def test_kb_pad(device, pad):
     r = run(device, 0, pad=pad)
     logger.info(f"KBPAD today, pad {pad}: {r['cpt']:.2f} cyc / tile product ({1600 / r['cpt']:.1f}% LoFi)")
+
+
+@pytest.mark.parametrize("var, pr", [(0, 2), (1, 2), (2, 2), (0, 1), (2, 1), (3, 1), (4, 2)], ids=["block_2x2", "noact_2x2", "blockk_2x2", "block_1x2", "blockk_1x2", "rowmop_1x2", "rt_runtime_2x2"])
+def test_kb_mm(device, var, pr):
+    r = run(device, 0, var=var, pr=pr)
+    logger.info(f"KBMM var {var} pass rows {pr}: {r['cpt']:.2f} cyc / tile product ({1600 / r['cpt']:.1f}% LoFi) pcc {r['pcc_h']:.6f}")

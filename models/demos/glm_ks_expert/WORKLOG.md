@@ -131,3 +131,24 @@ semaphores move as before; perf only):
 
 Budget of the 1358 us (874 us = the matmuls at LoFi peak): matmul efficiency at 89.5% ~100 us, sub-block structure
 (block syncs, weight ring) ~70 us, multi-core coupling ~70 us, fill / drain ~100 us, data movement ~110 us.
+
+## Why one core gets 90% and the expert with every stream off does not: a runtime rt_dim
+
+- Same GU-SB zone in the one-core bench: 20.29 us (the profiler does not inflate it); the expert with all streams off
+  26.6 us a sub-block - a real 6.3 us. Sum zones in the real kernel: unpacker CB waits ~2.1 us a sub-block (weights
+  1.7, mostly the zones' own cost), the MATH thread's DEST waits 1 us a call, the packer's 1 us a call.
+- The real gate_up_compute.cpp alone on one core (test_flat_compute_alone.py: the plan's named args, x / weight blocks
+  handed over as fast as the rings free, kf_feed / kf_drain): 28.2 us a sub-block - the kernel, not its surroundings.
+- The difference: its matmul_block gets the pass's row tiles (rt_dim) as a runtime value (computed from the
+  schedule's rows); a compile-time rt_dim lets the LLK unroll its per-tile loops. Bench, GLM 2 x 2 blocks, K 192:
+  compile-time 17.89 cycles a tile product (89.5%), runtime 20.82 (76.8%). (Perf counters: the MATH thread has no
+  instruction queued 25% of the call in the expert vs 7% in the bench.)
+- Fix (gate_up_compute.cpp matmul_x_block<FULL>): full sub-blocks / passes use the compile-time row count, a short
+  last sub-block the runtime one. The kernel alone: 22.9 us a sub-block (bench 20.3; the rest is its [4 x 8] x
+  blocks' syncs and ring offsets). Flat checks: 67 passed (accuracy, determinism). Perf, LoudBox, % vs before:
+  GLM-5.3 8x4 5120 hot -6.1, 10240 uniform -4.2, zipf -2.6, 5120 zipf -1.1, 4x4 7680 -1.0; GLM e16 (test_flat_ref)
+  M 320 1186 -> 1141 (-3.8%), M 384 1358 -> 1288 (-5.2%), M 512 1763 -> 1661 (-5.8%); K3, DSv4.1-Flash, GLM-Flash,
+  K2.7, M3 within +-0.6% (their gate/up compute is not what paces them).
+- Other one-core matmul facts (test_kb_mm): the activation on the PACK thread costs ~2.3 points (FPU busy 88.3 ->
+  90.1% without it); matmul_block_k (all K steps one call) changes nothing; the row MOP with 1-row passes 17.51 cycles
+  (91.4%); unpacker A busy 98.5% at 2 x 2 (it delivers 2 weight + 2 x tiles every 4 tile products).
