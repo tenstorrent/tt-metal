@@ -203,6 +203,50 @@ def tail_invalidate(ctx, n_long=16384, n_short=2048, rounds=NTOK, seed=12):
     _free_all(ctx)
 
 
+def tail_overlap(ctx, n_long=16384, n_extra=1024, seed=16):
+    """hy4fix (arm B 09:15:14Z / 09:40:39Z): a tail entry on row B at page 10 whose destination pages [0, n) on the SAME row overlap it is promoted by the ascending chunked in-row copy (HY4_CAP_PLAN_FIX=1): hit == cold (logits md5, 48 tokens).
+    The entry is built by hand: cross-row copy of the retained chain of row 0 into row 1 pages 10.., then ``store.promote`` into row 1 pages 0.. (device: bcopy page-list kernel with overlapping ranges split in disjoint chunks).
+    """
+    s = "tail_overlap"
+    if not _need(ctx, s, "HY4_TAILPARK", "tail_on"):
+        return
+    if os.environ.get("HY4_CAP_PLAN_FIX", "0") != "1":
+        return ctx.gate(s, "plan_fix_enabled", None, "HY4_CAP_PLAN_FIX=1 not set")
+    from models.demos.blackhole.hy4_preview.tt import hy4_chainstore as CS
+
+    eng = ctx.eng
+    st = eng.cap.store
+    _free_all(ctx)
+    S.set_pfx(ctx, True)
+    A = S.prompt(seed, n_long)
+    B = list(A) + list(S.prompt(seed + 1, n_extra))
+    S.set_pfx(ctx, False)
+    f0, m0, _, _ = S.prefill(ctx, {0: B})  # cold reference of the long prompt B
+    s0, _, _ = S.decode(ctx, f0, NTOK, rows=[0])
+    eng.release(0)
+    _free_all(ctx)
+    S.set_pfx(ctx, True)
+    S.prefill(ctx, {0: A})
+    eng.release(0)
+    n = n_long // 512
+    st.be.copy_pages(0, 0, 1, 10, n)  # the chain parked at page 10 of row 1
+    import numpy as np
+
+    ent = CS.Entry(900, np.asarray(A, dtype=np.int32), "tail", row=1, page0=10, t=0.0)
+    st.entries[900] = ent
+    eng.ret[1] = None
+    ok = st.promote(ent, 1, n * 512)  # destination pages [0, n) overlap [10, 10 + n)
+    ctx.gate(s, "overlap_promote_ok", ok is True, f"ok={ok} entries={len(st.entries)}")
+    eng.ret[1] = np.asarray(A, dtype=np.int32)[: n * 512].copy()
+    f2, m2, _, c2 = S.prefill(ctx, {1: B})
+    s2, _, _ = S.decode(ctx, f2, NTOK, rows=[1])
+    eng.release(1)
+    ctx.gate(s, "real_hit", c2.get(1, 0) >= n * 512 - 1024, f"last_cached={c2.get(1, 0)} of {len(B)}")
+    ctx.gate(s, "hit_md5_equals_cold", m2.get(1) == m0.get(0), f"{m2.get(1)} vs {m0.get(0)}")
+    ctx.gate(s, "hit_48_tokens_equal_cold", s2[1][:NTOK] == s0[0][:NTOK], S.md5_ints(s2[1][:NTOK]))
+    _free_all(ctx)
+
+
 def tail_neighbours(ctx, n_long=16384, n_short=2048, rounds=24, seed=13):
     """rows B-D decode (rounds running) while row A demotes and promotes: their greedy streams are bit-identical to the uninterrupted run (masked-scenario pattern)."""
     s = "tail_neighbours"
@@ -367,6 +411,7 @@ SCENARIOS = {
     "hostspill": hostspill,
     "tail_invalidate": tail_invalidate,
     "tail_neighbours": tail_neighbours,
+    "tail_overlap": tail_overlap,
     "tail_error": tail_error,
 }
 

@@ -64,10 +64,8 @@ class Capacity:
                 continue
             if e.tier == "tail" and e.row != r and not eng.live[e.row] and e.row not in taken:
                 own_e = eng.hit_len(e.row, a)
-                # hy4fix (arm B, 09:40:39Z: a 516 k chain dropped 'overlaps its destination'): a same-row promote needs the tail pages [page0, page0+n) disjoint from the destination pages [0, n)
-                if fix and e.page0 < -(-h // 512):
-                    pass
-                elif self.store.worth_promoting(e, h, max(own_e, 0), e.row) and own_e < h:
+                # (hy4fix: a same-row tail whose pages overlap the destination is promoted by a chunked in-row copy, see ChainStore.promote)
+                if self.store.worth_promoting(e, h, max(own_e, 0), e.row) and own_e < h:
                     taken.discard(r)
                     taken.add(e.row)
                     out[i] = r = e.row

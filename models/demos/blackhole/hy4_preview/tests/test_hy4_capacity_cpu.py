@@ -679,19 +679,43 @@ def test_plan_fix_keeps_request_on_row_with_longer_own_prefix(monkeypatch):
         monkeypatch.delenv("HY4_CAP_PLAN_FIX")
 
 
-def test_plan_fix_overlapping_same_row_promote_keeps_entry(monkeypatch):
-    """HY4_CAP_PLAN_FIX=1 (arm B 09:40:39Z): a tail entry whose pages overlap the destination pages of a same-row promote is KEPT (default: dropped = 516 k tokens recomputed cold)."""
+def test_plan_fix_overlapping_same_row_promote_is_chunked_and_exact(monkeypatch):
+    """HY4_CAP_PLAN_FIX=1 (arm B 09:15:14Z / 09:40:39Z): a tail entry whose pages overlap the destination pages of a same-row promote is promoted by an ascending chunked in-row copy (every call has disjoint ranges, hit == cold); default: dropped."""
     from models.demos.blackhole.hy4_preview.tt import hy4_chainstore as CS2
 
     for fix in ("0", "1"):
         monkeypatch.setenv("HY4_CAP_PLAN_FIX", fix)
-        e = FakeCapEngine()
+        e = FakeCapEngine(pages=300)
+        A = toks(60 * 512, 7)  # 60 pages
+        run(e, 0, A)
+        e.release(0)
         st = e.cap.store
-        ent = CS2.Entry(
-            1, toks(40960, 7), "tail", row=1, page0=20, t=0.0
-        )  # pages 20..100 on row 1; a 80-page promote into row 1 overlaps
-        st.entries[1] = ent
-        ok = st.promote(ent, 1, 80 * 512)
-        assert ok is False
-        assert (1 in st.entries) == (fix == "1")
+        e.backend.copy_pages(0, 0, 1, 20, 60)  # the chain parked in a tail of row 1, pages 20..79
+        ent = CS2.Entry(9, A, "tail", row=1, page0=20, t=0.0)
+        st.entries[9] = ent
+        e.ret[1] = None
+        calls0 = len(e.backend.calls)
+        ok = st.promote(ent, 1, 60 * 512)  # destination row 1 pages 0..59 overlap the tail
+        if fix == "0":
+            assert ok is False and 9 not in st.entries
+        else:
+            assert ok is True and 9 not in st.entries
+            cs = [c for c in e.backend.calls[calls0:] if c[0] == "copy"]
+            assert len(cs) == 3 and all(c[1] == c[3] and abs(c[2] - c[4]) >= c[5] for c in cs), cs
+            e.ret[1] = A.copy()
+            B = np.concatenate([A, toks(1500, 8)])
+            m, c = run(e, 1, B)
+            assert c >= 60 * 512 - 512 and m == cold(B, 300)
         monkeypatch.delenv("HY4_CAP_PLAN_FIX")
+
+
+def test_tail_overlap_scenario_passes_on_fake(monkeypatch):
+    from models.demos.blackhole.hy4_preview.demo import scenarios as S
+
+    monkeypatch.setenv("HY4_CAP_PLAN_FIX", "1")
+    eng = FakeCapEngine(pages=520, tail=True, host=False, min_spill=8192)
+    eng.max_seq_len = 520 * 512
+    ctx = S.Ctx(eng, log=lambda s: None)
+    S.SCENARIOS["tail_overlap"](ctx)
+    bad = [g for g in ctx.gates if g[2] != "PASS"]
+    assert ctx.gates and not bad, ctx.gates

@@ -398,6 +398,16 @@ class ChainStore:
         mode = os.environ.get("HY4_CAP_EVICT", "smallest")
         if mode == "largest":
             key = lambda e: (-len(e.tokens), e.t)
+        elif (
+            mode == "dupdisc"
+        ):  # dup entries (chain also retained on a row) count at HY4_CAP_DUP_DISCOUNT x their size: a 512 k duplicate (disc 0.3 = 154 k) still outranks a 68 k chain
+            res = [np.asarray(x) for x in (self.resident_fn() if getattr(self, "resident_fn", None) else [])]
+            disc = float(os.environ.get("HY4_CAP_DUP_DISCOUNT", "0.3"))
+
+            def key(e):
+                dup = any(len(x) >= len(e.tokens) and np.array_equal(x[: len(e.tokens)], e.tokens) for x in res)
+                return (disc if dup else 1.0) * len(e.tokens), e.t
+
         elif mode == "dupfirst":
             res = [np.asarray(x) for x in (self.resident_fn() if getattr(self, "resident_fn", None) else [])]
 
@@ -408,7 +418,11 @@ class ChainStore:
         else:
             key = lambda e: (len(e.tokens), e.t)
         v = min(vs, key=key)
-        if len(v.tokens) >= incoming_tokens and not (mode == "dupfirst" and key(v)[0] == 0):
+        if (
+            len(v.tokens) >= incoming_tokens
+            and not (mode == "dupfirst" and key(v)[0] == 0)
+            and not (mode == "dupdisc" and key(v)[0] < incoming_tokens)
+        ):
             return False
         self.entries.pop(v.eid)
         self.stats["evicted_" + tier] += 1
@@ -535,10 +549,10 @@ class ChainStore:
         n = h // PAGE
         if h <= 0 or h % PAGE or n > e.npages:
             return False
-        if e.tier == "tail" and e.row == dst_row and e.page0 < n:
-            if os.environ.get("HY4_CAP_PLAN_FIX", "0") != "1":
-                self._drop(e, "overlaps its destination")
-            return False  # (fixed: the entry stays; the caller recomputes this request cold only when no other row could take the copy)
+        overlap = e.tier == "tail" and e.row == dst_row and e.page0 < n
+        if overlap and os.environ.get("HY4_CAP_PLAN_FIX", "0") != "1":
+            self._drop(e, "overlaps its destination")
+            return False
         if e.tier == "tail":
             ok_, why = self.be.can_copy(e.row, dst_row, n)
             if not ok_:  # keep the entry: a later promote may have the memory
@@ -547,7 +561,17 @@ class ChainStore:
                 return False
         t0 = time.perf_counter()
         try:
-            if e.tier == "tail":
+            if overlap:
+                # hy4fix (arm B 09:15:14Z / 09:40:39Z: the only free row held the request's own 511 k tail entry, 'overlaps its destination' -> invalidated/dropped = 1650 s cold prefill): copy ascending in chunks of page0 pages: the destination [k, k+m) never touches the not yet read source [page0+k+m, ..) and each call has disjoint ranges
+                k = 0
+                while k < n:
+                    m = min(e.page0, n - k)
+                    self.be.copy_pages(e.row, e.page0 + k, dst_row, k, m)
+                    k += m
+                self.entries.pop(
+                    e.eid, None
+                )  # its pages are partly overwritten now: the chain lives on the row (retained) instead
+            elif e.tier == "tail":
                 self.be.copy_pages(e.row, e.page0, dst_row, 0, n)
             else:
                 self._restore(e, dst_row, n)
