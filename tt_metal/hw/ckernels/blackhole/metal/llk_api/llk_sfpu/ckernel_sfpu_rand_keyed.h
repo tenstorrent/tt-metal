@@ -23,7 +23,7 @@ namespace ckernel::sfpu {
 // instructions, so both architectures give identical bits, and the host can reproduce them exactly.
 //
 // The counter of an element is ((tile_index * 4 + face) * 8 + row) * 32 + lane, where row is the
-// SFPU iteration within the face. It is unique for the first 2^22 tiles of a stream.
+// SFPU iteration within the face. It is unique for 2^22 tiles; keyed_rand_tile_key covers the rest.
 
 constexpr std::uint32_t keyed_rand_elements_per_face = 256;
 constexpr std::uint32_t keyed_rand_lanes = 32;
@@ -35,6 +35,14 @@ inline std::uint32_t keyed_rand_key(std::uint32_t seed) {
     seed *= 0xC2B2AE35u;
     seed ^= seed >> 16;
     return seed;
+}
+
+// The counter is unique for 2^22 tiles. A tile index past that folds its high bits into the key, so every 32-bit
+// tile index draws its own values; below 2^22 the key is keyed_rand_key(seed).
+inline std::uint32_t keyed_rand_tile_key(std::uint32_t seed, std::uint32_t tile_index) {
+    const std::uint32_t key = keyed_rand_key(seed);
+    const std::uint32_t high = tile_index >> 22;
+    return high == 0 ? key : keyed_rand_key(key ^ keyed_rand_key(high));
 }
 
 sfpi_inline sfpi::vUInt wang_hash32(sfpi::vUInt x) {

@@ -4,8 +4,8 @@
 
 """Host reference for the counter-based generator behind rand_keyed_tile and dropout_keyed_tile.
 
-Each element's draw is wang(wang(counter ^ key) + key), with key = fmix32(seed) and
-counter = ((tile_index * 4 + face) * 8 + row) * 32 + lane.
+Each element's draw is wang(wang(counter ^ key) + key), with counter = ((tile_index * 4 + face) * 8 + row) * 32
++ lane modulo 2^32, key = fmix32(seed) below tile 2^22 and fmix32(fmix32(seed) ^ fmix32(tile_index >> 22)) from it.
 """
 
 import numpy as np
@@ -33,7 +33,9 @@ def wang_hash32(x):
 
 def reference_draw31(seed, tile_indices):
     """Top 31 bits of each element's draw, laid out as [tiles, 32, 32]."""
-    key = np.uint32(fmix32(seed))
+    seed_key = fmix32(seed)
+    keys = [seed_key if t >> 22 == 0 else fmix32(seed_key ^ fmix32(t >> 22)) for t in np.asarray(tile_indices).tolist()]
+    key = np.asarray(keys, dtype=np.uint32)[:, None, None]
     r = np.arange(32)[:, None]
     c = np.arange(32)[None, :]
     face = (r // 16) * 2 + c // 16

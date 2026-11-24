@@ -44,8 +44,9 @@ def worker_cores(device, count):
     return cores[:count]
 
 
-def run_keyed(device, num_tiles, num_cores, seed, param0, param1, dtype=ttnn.float32, input_tensor=None):
-    """Runs the test kernel with tiles split contiguously over num_cores cores. Returns [tiles, 32, 32]."""
+def run_keyed(device, num_tiles, num_cores, seed, param0, param1, dtype=ttnn.float32, input_tensor=None, tile_offset=0):
+    """Runs the test kernel with tiles split contiguously over num_cores cores; output tile i is tile
+    tile_offset + i of the stream. Returns [tiles, 32, 32]."""
     cores = worker_cores(device, num_cores)
     core_set = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in cores])
     output = ttnn.from_torch(
@@ -56,7 +57,7 @@ def run_keyed(device, num_tiles, num_cores, seed, param0, param1, dtype=ttnn.flo
     start = 0
     for k, core in enumerate(cores):
         count = base + (1 if k < extra else 0)
-        compute_args[core.x][core.y] = [count, start, seed, param0, param1]
+        compute_args[core.x][core.y] = [count, start, seed, param0, param1, tile_offset]
         writer_args[core.x][core.y] = [output.buffer_address(), count, start]
         if input_tensor is not None:
             reader_args[core.x][core.y] = [input_tensor.buffer_address(), count, start]
@@ -163,6 +164,20 @@ def test_rand_keyed_does_not_depend_on_core_split(device, num_cores):
     run_keyed(device, num_tiles, num_cores, 5, f2u(0.0), f2u(1.0))
     split = run_keyed(device, num_tiles, num_cores, 99, f2u(0.0), f2u(1.0))
     assert torch.equal(single_core, split)
+
+
+@pytest.mark.parametrize("tile_offset", [2**22 - 2, 2**32 - 2], ids=["past_2_22", "last_indices"])
+@counter_hash_only
+def test_rand_keyed_tile_indices_past_counter_range(device, tile_offset):
+    # The counter repeats every 2^22 tiles; past that the tile index's high bits go into the key instead.
+    seed = 7
+    num_tiles = 2 if tile_offset == 2**32 - 2 else 4
+    result = run_keyed(device, num_tiles, 1, seed, f2u(0.0), f2u(1.0), tile_offset=tile_offset)
+    tiles = [(tile_offset + i) % 2**32 for i in range(num_tiles)]
+    assert torch.equal(result, torch.from_numpy(reference_uniform(seed, tiles)))
+    # The last tile is past 2^22, so it must differ from the tile 2^22 below it, whose counters it repeats.
+    wrapped = run_keyed(device, 1, 1, seed, f2u(0.0), f2u(1.0), tile_offset=tiles[-1] % 2**22)
+    assert not torch.equal(result[-1], wrapped[0])
 
 
 @counter_hash_only

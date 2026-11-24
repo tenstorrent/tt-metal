@@ -10,15 +10,17 @@
 #include "api/compute/eltwise_unary/dropout.h"
 #include "api/dataflow/circular_buffer.h"
 
-// Runtime args: num_tiles, start_tile, seed, param0, param1. Tile i of this core is tile start_tile + i of
-// the stream. With KEYED_DROPOUT each input tile from c_0 goes through dropout_keyed_tile (param0 is the
-// probability, param1 the scale); otherwise each output tile is rand_keyed_tile (param0 is from, param1 scale).
+// Runtime args: num_tiles, start_tile, seed, param0, param1, tile_offset. Tile i of this core is page
+// start_tile + i, and tile tile_offset + start_tile + i of the stream. With KEYED_DROPOUT each input tile from c_0 goes
+// through dropout_keyed_tile (param0 is the probability, param1 the scale); otherwise each output tile is
+// rand_keyed_tile (param0 is from, param1 scale).
 void kernel_main() {
     const uint32_t num_tiles = get_arg_val<uint32_t>(0);
     const uint32_t start_tile = get_arg_val<uint32_t>(1);
     const uint32_t seed = get_arg_val<uint32_t>(2);
     const uint32_t param0 = get_arg_val<uint32_t>(3);
     const uint32_t param1 = get_arg_val<uint32_t>(4);
+    const uint32_t first_tile = get_arg_val<uint32_t>(5) + start_tile;
 
     CircularBuffer cb_in(tt::CBIndex::c_0);
     CircularBuffer cb_out(tt::CBIndex::c_16);
@@ -38,9 +40,9 @@ void kernel_main() {
 #ifdef KEYED_DROPOUT
         cb_in.wait_front(1);
         copy_tile(tt::CBIndex::c_0, 0, 0);
-        dropout_keyed_tile(0, seed, start_tile + i, param0, param1);
+        dropout_keyed_tile(0, seed, first_tile + i, param0, param1);
 #else
-        rand_keyed_tile(0, seed, start_tile + i, param0, param1);
+        rand_keyed_tile(0, seed, first_tile + i, param0, param1);
 #endif
         tile_regs_commit();
         tile_regs_wait();

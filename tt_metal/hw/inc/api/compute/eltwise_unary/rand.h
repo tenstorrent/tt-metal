@@ -68,10 +68,11 @@ ALWI void rand_tile_init(uint32_t seed = 0, uint32_t stream_id = 0) {
  * idst with a value in [from, from + scale] that is a pure function of (seed, tile_index, position
  * in the tile). The result does not depend on which core computes the tile, on what ran before, or
  * on the SFPU PRNG state, and Wormhole and Blackhole give identical values. Give every tile of a
- * stream its own tile_index (for example its index in the tensor); indices are unique for the first
- * 2^22 tiles. Call rand_keyed_tile_init() once before the first call. No seeding or wait is needed.
- * On Quasar this reseeds the SFPU PRNG with rand_tile_init(seed, tile_index) and calls rand_tile, so
- * values are deterministic per tile but differ from Wormhole and Blackhole.
+ * stream its own tile_index (for example its index in the tensor); every 32-bit index gives distinct
+ * values. Call rand_keyed_tile_init() once before the first call. No seeding or wait is needed.
+ * On Quasar this waits for the thread's earlier Tensix work, reseeds the SFPU PRNG with
+ * rand_tile_init(seed, tile_index) and calls rand_tile, so values are deterministic per tile but
+ * differ from Wormhole and Blackhole. Each tile there pays that drain and the reseed's settle time.
  * On Wormhole, this operation records replay slots 0-15, programs LREG12-LREG14 and overwrites
  * ADDR_MOD_6 (dest incr 2). Callers sharing that state with other SFPU operations must re-run their
  * inits after it.
@@ -85,13 +86,15 @@ ALWI void rand_tile_init(uint32_t seed = 0, uint32_t stream_id = 0) {
  * |----------------|---------------------------------------------------------------|----------|-------------------------------------------------------|-----------|
  * | idst           | The index of the tile in the DST register buffer              | uint32_t | Must be less than the size of the DST register buffer | True      |
  * | seed           | Seed of the stream                                            | uint32_t | Any value                                             | True      |
- * | tile_index     | Index of the tile within the stream                           | uint32_t | 0 to 2^22 - 1 for distinct values                     | True      |
+ * | tile_index     | Index of the tile within the stream                           | uint32_t | Any value                                             | True      |
  * | from           | FP32 bit pattern for the inclusive lower bound                | uint32_t | Any supported FP32 value                              | True      |
  * | scale          | FP32 bit pattern producing [from, from + scale], inclusively  | uint32_t | Must be non-negative; zero produces a constant tile   | True      |
  */
 // clang-format on
 ALWI void rand_keyed_tile(uint32_t idst, uint32_t seed, uint32_t tile_index, uint32_t from, uint32_t scale) {
 #ifdef ARCH_QUASAR
+    // The seed is a RISC write to config: wait for the previous tile's SFPU work so it can't draw from it.
+    MATH(tensix_sync());
     rand_tile_init(seed, tile_index);
     rand_tile(idst, from, scale);
 #else
@@ -105,7 +108,7 @@ ALWI void rand_keyed_tile(uint32_t idst, uint32_t seed, uint32_t tile_index, uin
         VectorMode::RC,
         from,
         scale,
-        sfpu::keyed_rand_key(seed),
+        sfpu::keyed_rand_tile_key(seed, tile_index),
         face_index));
 #endif
 }
