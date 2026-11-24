@@ -5,6 +5,7 @@ on:
     # 04:00 UTC every Tuesday. Org/Slack membership changes are infrequent
     # enough that a daily check wasn't worth the noise.
     - cron: "0 4 * * 2"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -19,6 +20,7 @@ env:
 
 jobs:
   escalate:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
