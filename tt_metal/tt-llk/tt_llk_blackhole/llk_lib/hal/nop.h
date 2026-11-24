@@ -9,6 +9,7 @@
 #include "ckernel.h"
 #include "unpack.h"
 #include "utils/helpers.h"
+#include "utils/issue.h"
 
 namespace hal::nop
 {
@@ -24,7 +25,7 @@ constexpr std::uint32_t thread_operation()
 /** @brief Consume one frontend issue slot and cycle (NOP). */
 inline __attribute__((always_inline)) void thread()
 {
-    TTI_INSN(thread_operation());
+    ::hal::detail::issue<thread_operation()>();
 }
 
 /** @brief Encode a ThCon/TDMA queue bubble (DMANOP). */
@@ -36,7 +37,7 @@ constexpr std::uint32_t scalar_operation()
 /** @brief Consume one TDMA instruction slot and cycle (DMANOP). */
 inline __attribute__((always_inline)) void scalar()
 {
-    TTI_INSN(scalar_operation());
+    ::hal::detail::issue<scalar_operation()>();
 }
 
 /** @brief Encode an SFPU issue bubble (SFPNOP). */
@@ -48,7 +49,7 @@ constexpr std::uint32_t vector_operation()
 /** @brief Consume one SFPU issue slot and cycle (SFPNOP). */
 inline __attribute__((always_inline)) void vector()
 {
-    TTI_INSN(vector_operation());
+    ::hal::detail::issue<vector_operation()>();
 }
 
 /**
@@ -78,7 +79,7 @@ constexpr std::uint32_t unpacker_operation()
 template <hal::unpack::Engine Engine>
 inline __attribute__((always_inline)) void unpacker()
 {
-    TTI_INSN((unpacker_operation<Engine>()));
+    ::hal::detail::issue<(unpacker_operation<Engine>())>();
 }
 
 } // namespace hal::nop

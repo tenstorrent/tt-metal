@@ -13,6 +13,7 @@
 #include "sync.h"
 #include "utils/gpr.h"
 #include "utils/validate.h"
+#include "utils/issue.h"
 
 namespace hal::atomic
 {
@@ -587,11 +588,11 @@ inline __attribute__((always_inline)) void issue(const std::uint32_t encoding)
 {
     if (__builtin_constant_p(encoding))
     {
-        TTI_INSN(encoding);
+        ::hal::detail::issue_immediate(encoding);
     }
     else
     {
-        TT_INSN(encoding);
+        ::hal::detail::issue_buffered(encoding);
     }
 }
 } // namespace detail
@@ -716,7 +717,7 @@ inline __attribute__((always_inline)) bool is_valid_fifo_batch(const FifoAcquire
 
     // Complete earlier scalar work before reading the address through the RISC GPR window.
     sync::wait::stall<sync::StallTarget::Scalar, sync::StallCondition::ScalarIdle>();
-    ckernel::tensix_sync();
+    ::hal::detail::tensix_sync();
     const std::uint32_t line_address = ckernel::regfile[operation.address.index];
 
     // Blackhole's noncoherent L0 must be flushed before observing externally updated L1.
@@ -927,7 +928,7 @@ inline __attribute__((always_inline)) void store_masked(const hal::Gpr<AddressIn
     constexpr MaskedWrite<AddressIndex, DataIndex> descriptor {hal::Gpr<AddressIndex> {}, hal::Gpr<DataIndex> {}, GranuleMask};
     static_assert(is_valid(descriptor), "invalid atomic descriptor");
     constexpr std::uint32_t encoding = descriptor.operation();
-    TTI_INSN(encoding);
+    ::hal::detail::issue<encoding>();
 }
 
 /**
@@ -949,7 +950,7 @@ inline __attribute__((always_inline)) void store_masked(const hal::Gpr<AddressIn
     static_assert(detail::is_valid_static_gpr<DataIndex>, "ATSWAP data GPR index must be in [0, 63]");
     static_assert(DataIndex == hal::detail::DynamicGprIndex || DataIndex % detail::GprsPerQuad == 0u, "ATSWAP data GPR must be four-aligned");
     const MaskedWrite<AddressIndex, DataIndex> descriptor {address, data, granule_mask};
-    TT_INSN(descriptor.operation());
+    ::hal::detail::issue_buffered(descriptor.operation());
 }
 
 } // namespace hal::atomic

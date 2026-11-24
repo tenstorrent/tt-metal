@@ -8,6 +8,7 @@
 
 #include "ckernel.h"
 #include "utils/validate.h"
+#include "utils/issue.h"
 
 namespace hal::dst
 {
@@ -135,13 +136,13 @@ inline __attribute__((always_inline)) void run()
 {
     static_assert(detail::is_valid(Operation), "invalid ZEROACC descriptor");
     constexpr std::uint32_t operation = detail::encode(Operation);
-    TTI_INSN(operation);
+    ::hal::detail::issue<operation>();
 }
 
 /** @brief Issue a runtime-selected Dst zeroing operation. */
 inline __attribute__((always_inline)) void run(const Zero operation)
 {
-    TT_INSN(operation.get_operation());
+    ::hal::detail::issue_buffered(operation.get_operation());
 }
 
 } // namespace hal::dst

@@ -9,6 +9,7 @@
 #include "ckernel.h"
 #include "llk_assert.h"
 #include "utils/source.h"
+#include "utils/issue.h"
 
 namespace hal
 {
@@ -112,7 +113,7 @@ public:
         src_ops::Fill Value      = src_ops::Fill::Zero>
     static inline __attribute__((always_inline)) void fill()
     {
-        TTI_INSN((fill_operation<Scope, Owner, Value>()));
+        ::hal::detail::issue<(fill_operation<Scope, Owner, Value>())>();
     }
 
     // ---------------- Data-valid handoff ----------------
@@ -136,7 +137,7 @@ public:
     template <src_ops::BankAdvance Advance = src_ops::BankAdvance::Flip>
     static inline __attribute__((always_inline)) void release()
     {
-        TTI_INSN((release_operation<Advance>()));
+        ::hal::detail::issue<(release_operation<Advance>())>();
     }
 
     /**
@@ -155,7 +156,7 @@ public:
     /** @brief Publish the unpacker-side write bank(s) to the math thread (SETDVALID). */
     static inline __attribute__((always_inline)) void publish()
     {
-        TTI_INSN(publish_operation());
+        ::hal::detail::issue<publish_operation()>();
     }
 
     // ---------------- Pipeline clock gating ----------------
@@ -169,7 +170,7 @@ public:
     /** @brief Reset the selected source pipelines' clock gating to "don't gate" (GATESRCRST). */
     static inline __attribute__((always_inline)) void reset_pipeline_gating()
     {
-        TTI_INSN(reset_pipeline_gating_operation());
+        ::hal::detail::issue<reset_pipeline_gating_operation()>();
     }
 
     // ---------------- Single-register features ----------------
@@ -192,7 +193,7 @@ public:
     /** @brief Transpose the selected register in place (TRNSPSRCA / TRNSPSRCB). */
     static inline __attribute__((always_inline)) void transpose()
     {
-        TTI_INSN(transpose_operation());
+        ::hal::detail::issue<transpose_operation()>();
     }
 
     /**
@@ -214,7 +215,7 @@ public:
     template <src_ops::ShiftDirection Direction>
     static inline __attribute__((always_inline)) void shift_columns()
     {
-        TTI_INSN((shift_columns_operation<Direction>()));
+        ::hal::detail::issue<(shift_columns_operation<Direction>())>();
     }
 
     /**
@@ -246,13 +247,13 @@ public:
     template <std::uint32_t Row, src_ops::ShiftFill Feed = src_ops::ShiftFill::Zero, std::uint8_t AddressMode = 0>
     static inline __attribute__((always_inline)) void shift_row()
     {
-        TTI_INSN((shift_row_operation<Row, Feed, AddressMode>()));
+        ::hal::detail::issue<(shift_row_operation<Row, Feed, AddressMode>())>();
     }
 
     template <src_ops::ShiftFill Feed = src_ops::ShiftFill::Zero, std::uint8_t AddressMode = 0>
     static inline __attribute__((always_inline)) void shift_row(const std::uint32_t row)
     {
-        TT_INSN((shift_row_operation<Feed, AddressMode>(row)));
+        ::hal::detail::issue_buffered((shift_row_operation<Feed, AddressMode>(row)));
     }
 
     /**
@@ -270,7 +271,7 @@ public:
     /** @brief Rarefy the SrcB registers (RAREB). */
     static inline __attribute__((always_inline)) void rarefy()
     {
-        TTI_INSN(rarefy_operation());
+        ::hal::detail::issue<rarefy_operation()>();
     }
 
     /**
@@ -319,25 +320,25 @@ public:
     template <std::uint32_t RegisterMask, std::uint32_t HaloMask = 0>
     static inline __attribute__((always_inline)) void set_right_shift_mask_horizontal()
     {
-        TTI_INSN((right_shift_mask_horizontal_operation<RegisterMask, HaloMask>()));
+        ::hal::detail::issue<(right_shift_mask_horizontal_operation<RegisterMask, HaloMask>())>();
     }
 
     template <std::uint32_t RegisterMask, std::uint32_t HaloMask = 0>
     static inline __attribute__((always_inline)) void set_right_shift_mask_horizontal_thread0()
     {
-        TTI_INSN((right_shift_mask_horizontal_thread0_operation<RegisterMask, HaloMask>()));
+        ::hal::detail::issue<(right_shift_mask_horizontal_thread0_operation<RegisterMask, HaloMask>())>();
     }
 
     template <std::uint32_t RegisterMask>
     static inline __attribute__((always_inline)) void set_right_shift_mask_horizontal_thread1()
     {
-        TTI_INSN((right_shift_mask_horizontal_thread1_operation<RegisterMask>()));
+        ::hal::detail::issue<(right_shift_mask_horizontal_thread1_operation<RegisterMask>())>();
     }
 
     template <std::uint32_t RegisterMask>
     static inline __attribute__((always_inline)) void set_right_shift_mask_vertical()
     {
-        TTI_INSN((right_shift_mask_vertical_operation<RegisterMask>()));
+        ::hal::detail::issue<(right_shift_mask_vertical_operation<RegisterMask>())>();
     }
 };
 

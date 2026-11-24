@@ -10,6 +10,7 @@
 #include "ckernel.h"
 #include "llk_assert.h"
 #include "utils/validate.h"
+#include "utils/issue.h"
 
 namespace hal::mop
 {
@@ -429,7 +430,7 @@ inline __attribute__((always_inline)) void program(const cfg<detail::Template0Pl
     const std::uint32_t skip_a0 = config.skip_a0;
     const std::uint32_t skip_b  = config.skip_b;
 
-    ckernel::mop_sync();
+    ::hal::detail::mop_sync();
 
     mop_cfg[1] = flags;
     if constexpr (HasB)
@@ -467,20 +468,32 @@ inline void program(const cfg<detail::Template1Plan<HasEndOp>> &config)
 {
     volatile std::uint32_t *mop_cfg = reinterpret_cast<volatile std::uint32_t *>(TENSIX_MOP_CFG_BASE);
 
-    ckernel::mop_sync();
+    // Copy the configuration into scalars before the sync; reading the aggregate between the
+    // volatile MopCfg accesses forces it onto the stack instead of into registers.
+    const std::uint32_t outer_count   = config.outer_count;
+    const std::uint32_t inner_count   = config.inner_count;
+    const std::uint32_t start_op      = config.start_op;
+    const std::uint32_t end_op        = config.end_op;
+    const std::uint32_t second_end_op = config.second_end_op;
+    const std::uint32_t op            = config.op;
+    const std::uint32_t alternate_op  = config.alternate_op;
+    const std::uint32_t last_outer_op = config.last_outer_op;
+    const std::uint32_t last_inner_op = config.last_inner_op;
 
-    mop_cfg[0] = config.outer_count;
-    mop_cfg[1] = config.inner_count;
-    mop_cfg[2] = config.start_op;
-    mop_cfg[3] = config.end_op;
+    ::hal::detail::mop_sync();
+
+    mop_cfg[0] = outer_count;
+    mop_cfg[1] = inner_count;
+    mop_cfg[2] = start_op;
+    mop_cfg[3] = end_op;
     if constexpr (HasEndOp)
     {
-        mop_cfg[4] = config.second_end_op;
+        mop_cfg[4] = second_end_op;
     }
-    mop_cfg[5] = config.op;
-    mop_cfg[6] = config.alternate_op;
-    mop_cfg[7] = config.last_outer_op;
-    mop_cfg[8] = config.last_inner_op;
+    mop_cfg[5] = op;
+    mop_cfg[6] = alternate_op;
+    mop_cfg[7] = last_outer_op;
+    mop_cfg[8] = last_inner_op;
 }
 
 // ---------------- Updates ----------------
@@ -511,7 +524,7 @@ inline __attribute__((always_inline)) void update(const Update<Words>... updates
     (hal::detail::require(!detail::is_count_word(Words) || detail::is_valid_count(updates.value), "Template 1 MOP loop count must fit in 10 bits"), ...);
     (hal::detail::require(Words != detail::OUTER_COUNT_WORD || updates.value != 0, "Template 1 MOP configuration issues nothing"), ...);
 
-    ckernel::mop_sync();
+    ::hal::detail::mop_sync();
 
     ((mop_cfg[Words] = updates.value), ...);
 }
@@ -603,7 +616,7 @@ public:
     template <std::uint32_t Mask>
     inline __attribute__((always_inline)) static void configure_mask_high()
     {
-        TTI_MOP_CFG(Mask >> MASK_LO_WIDTH);
+        HAL_TTI_MOP_CFG(Mask >> MASK_LO_WIDTH);
     }
 
     /**
@@ -613,7 +626,7 @@ public:
      */
     inline __attribute__((always_inline)) static void configure_mask_high(const std::uint32_t mask)
     {
-        TT_MOP_CFG(mask >> MASK_LO_WIDTH);
+        HAL_TT_MOP_CFG(mask >> MASK_LO_WIDTH);
     }
 
     /**
@@ -633,7 +646,7 @@ public:
         {
             configure_mask_high<Mask>();
         }
-        TTI_MOP(0 /*mop_type*/, Count - 1, Mask & MASK_LO);
+        HAL_TTI_MOP(0 /*mop_type*/, Count - 1, Mask & MASK_LO);
     }
 
     /**
@@ -653,7 +666,7 @@ public:
         {
             configure_mask_high<Mask>();
         }
-        TT_MOP(0 /*mop_type*/, count - 1, Mask & MASK_LO);
+        HAL_TT_MOP(0 /*mop_type*/, count - 1, Mask & MASK_LO);
     }
 
     /**
@@ -674,7 +687,7 @@ public:
         {
             configure_mask_high(mask);
         }
-        TT_MOP(0 /*mop_type*/, Count - 1, mask & MASK_LO);
+        HAL_TT_MOP(0 /*mop_type*/, Count - 1, mask & MASK_LO);
     }
 
     /**
@@ -694,7 +707,7 @@ public:
         {
             configure_mask_high(mask);
         }
-        TT_MOP(0 /*mop_type*/, count - 1, mask & MASK_LO);
+        HAL_TT_MOP(0 /*mop_type*/, count - 1, mask & MASK_LO);
     }
 };
 
@@ -711,7 +724,7 @@ struct Runner<MopTemplate::Template1>
      */
     inline __attribute__((always_inline)) static void run()
     {
-        TTI_MOP(1 /*mop_type*/, 0 /*loop_count*/, 0 /*zmask_lo16_or_loop_count*/);
+        HAL_TTI_MOP(1 /*mop_type*/, 0 /*loop_count*/, 0 /*zmask_lo16_or_loop_count*/);
     }
 
     /** @brief Encode @ref run as a MOP instruction. */

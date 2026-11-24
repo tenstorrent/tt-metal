@@ -14,6 +14,7 @@
 #include "../utils/helpers.h"
 #include "../utils/validate.h"
 #include "ckernel.h"
+#include "../utils/issue.h"
 
 /**
  * @brief Register-word counters (RWCs) of the issuing math thread.
@@ -407,12 +408,12 @@ inline __attribute__((always_inline)) void set()
     if constexpr (detail::issues(issued, detail::Instr::Setrwc))
     {
         constexpr std::uint32_t word = detail::setrwc(Descriptor, issued);
-        TTI_INSN(word);
+        ::hal::detail::issue<word>();
     }
     if constexpr (detail::issues(issued, detail::Instr::Incrwc))
     {
         constexpr std::uint32_t word = detail::incrwc(Descriptor, issued);
-        TTI_INSN(word);
+        ::hal::detail::issue<word>();
     }
 }
 
@@ -430,11 +431,11 @@ inline __attribute__((always_inline)) void set(const MathCounter descriptor)
     hal::detail::require(issued != detail::Instr::None, "math-counter descriptor must update a counter, flip a bank, or clear the fidelity phase");
     if (detail::issues(issued, detail::Instr::Setrwc))
     {
-        TT_INSN(detail::setrwc(descriptor, issued));
+        ::hal::detail::issue_buffered(detail::setrwc(descriptor, issued));
     }
     if (detail::issues(issued, detail::Instr::Incrwc))
     {
-        TT_INSN(detail::incrwc(descriptor, issued));
+        ::hal::detail::issue_buffered(detail::incrwc(descriptor, issued));
     }
 }
 

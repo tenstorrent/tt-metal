@@ -9,6 +9,7 @@
 #include "ckernel.h"
 #include "utils/helpers.h"
 #include "utils/validate.h"
+#include "utils/issue.h"
 
 namespace hal::unpack
 {
@@ -470,11 +471,11 @@ inline __attribute__((always_inline)) void issue(const std::uint32_t encoding)
 {
     if (__builtin_constant_p(encoding))
     {
-        TTI_INSN(encoding);
+        ::hal::detail::issue_immediate(encoding);
     }
     else
     {
-        TT_INSN(encoding);
+        ::hal::detail::issue_buffered(encoding);
     }
 }
 } // namespace detail
