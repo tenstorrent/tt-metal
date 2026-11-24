@@ -77,6 +77,10 @@ constexpr bool addcmul = true;
 constexpr bool addcmul = false;
 #endif
 
+#ifndef LLK2_MM_GELU_THREAD
+#define LLK2_MM_GELU_THREAD Thread::Pack
+#endif
+
 constexpr std::uint32_t tile = default_tile_dim;
 
 // The blocks along a tile row, for the matmul and the epilogue: the largest divisor of N_block_tiles that fits a Dest
@@ -109,13 +113,48 @@ constexpr mul_modifiers times_row {.bcast = Broadcast::Row};
 constexpr mul_modifiers plus_times_row {.bcast = Broadcast::Row, .accumulate = true};
 constexpr pack_modifiers accumulated {.l1_acc = Toggle::Runtime};
 
+/// A full block of row_block tile columns: cols_of below takes it as compile-time width.
+struct FullBlock
+{
+};
+
+/// The columns [c0, c0 + n) of t: n is row_block (FullBlock) or a run-time 1..row_block.
+template <class T>
+inline __attribute__((always_inline)) auto cols_of(const T& t, std::uint32_t c0, FullBlock)
+{
+    return cols<row_block>(t, c0);
+}
+
+template <class T>
+inline __attribute__((always_inline)) auto cols_of(const T& t, std::uint32_t c0, std::uint32_t n)
+{
+    return cols_up_to<row_block>(t, c0, n);
+}
+
+/// f(c0, n) for the blocks of row_block tile columns of [0, n_cols): the full blocks with n a FullBlock, then the last,
+/// narrower one (where n_cols is not a multiple of row_block) with n its run-time width. The columns past n_cols are
+/// past the tensor's (the writer drops them), so nothing computes them.
+template <class F>
+inline __attribute__((always_inline)) void for_row_blocks(std::uint32_t n_cols, const F& f)
+{
+    std::uint32_t c0 = 0;
+    for (; c0 + row_block <= n_cols; c0 += row_block)
+    {
+        f(c0, FullBlock {});
+    }
+    if (c0 < n_cols)
+    {
+        f(c0, n_cols - c0);
+    }
+}
+
 /// The activation on y, on the pack thread (math moves on while pack runs it); y itself without one.
 template <class Y>
 inline __attribute__((always_inline)) auto activation(const Y& y)
 {
     if constexpr (gelu_tanh)
     {
-        return vec_gelu_tanh<vec_modifiers {.thread = Thread::Pack}>(y);
+        return vec_gelu_tanh<vec_modifiers {.thread = LLK2_MM_GELU_THREAD}>(y);
     }
     else
     {
@@ -130,12 +169,14 @@ inline __attribute__((always_inline)) void k_block_of(const X& x, const W& w, co
 {
     for (std::uint32_t r = 0; r < m_rows; ++r)
     {
-        for (std::uint32_t c0 = 0; c0 < n_cols; c0 += row_block)
-        {
-            const auto y = matmul(row(x, r), cols<row_block>(w, c0), reserve_back<RowRing>());
-            pack<accumulated>(y, cols<row_block>(row(slot, r), c0), add);
-            release(y);
-        }
+        for_row_blocks(
+            n_cols,
+            [&](std::uint32_t c0, auto n) __attribute__((always_inline))
+            {
+                const auto y = matmul(row(x, r), cols_of(w, c0, n), reserve_back<RowRing>());
+                pack<accumulated>(y, cols_of(row(slot, r), c0, n), add);
+                release(y);
+            });
     }
 }
 
