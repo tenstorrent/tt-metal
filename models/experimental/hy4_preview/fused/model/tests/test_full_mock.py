@@ -95,11 +95,13 @@ def build_random_full(mesh_device, layers, small_streams=True, extra_sites=(), e
 
 
 @galaxy
+@pytest.mark.parametrize("split", ["tp32", "tp8g4"])
 @pytest.mark.parametrize("layers", DEPTHS, ids=lambda n: f"L{n}")
-def test_mock(mesh_device, layers):
+def test_mock(mesh_device, layers, split):
+    """The whole step compiles and fits, with either expert layout of the MoE layers (Stack(mlp_split=))."""
     if not is_mock():
         pytest.skip("the mock's compile and size check")
-    st = build_random_full(mesh_device, layers)
+    st = build_random_full(mesh_device, layers, mlp_split=split)
     full = [s.key for s in st.layers if s.full]
     programs = st.step_programs(audit=True)
     names, entries = [], []
@@ -142,6 +144,7 @@ def test_mock(mesh_device, layers):
                     f"HY4_MF mock {layers} layers L1 {label} {key[0]} chip {key[1]}: {kernels} kernels, {cbs} CBs; largest CB set "
                     f"{cb} B on core {worst}; with the tensors {cb + report['tensors']} of {core} B ({core - cb - report['tensors']} free)"
                 )
+                assert cb + report["tensors"] <= core, f"{split}: {key[0]} on chip {key[1]} does not fit a core's L1"
     # the registry and the restore: every L1 tensor the host wrote (the full set's, the scan's, the merge's in it)
     hw = st.hw
     hw.mark_per_step(st.a.rope)

@@ -10,6 +10,7 @@ same environment before the board job.
     HY4_DM_LAYERS    6 (default) | 78            the depth (a decode golden of that depth must exist)
     HY4_DM_PROMPT    31 (default) | 1000 | 1022 | 3000   the golden's prompt length
     HY4_DM_TRACE     0 (default): every step program by program | 1: the step as one trace (DecodeModel(trace=True))
+    HY4_DM_SPLIT     tp32 (default) | tp8g4      the MoE layers' expert layout (DecodeModel(mlp_split=))
     HY4_DM_ROWS      the rows that run the conversation in test_golden / test_free (default all 8; the others idle)
     HY4_DM_STEPS     test_golden: only the first steps (3: a first run on the board); HY4_DM_PROBE_FIRST: how many of
                      the first steps run program by program with the checks between programs (default 2);
@@ -62,6 +63,7 @@ MESH = (8, 4)
 LAYERS = int(os.environ.get("HY4_DM_LAYERS", "6"))
 PROMPT = int(os.environ.get("HY4_DM_PROMPT", "31"))
 TRACE = os.environ.get("HY4_DM_TRACE", "0") == "1"
+SPLIT = os.environ.get("HY4_DM_SPLIT", "tp32")
 ROWS_ON = [int(v) for v in os.environ.get("HY4_DM_ROWS", "0,1,2,3,4,5,6,7").split(",")]
 MAX_POSITIONS = int(os.environ.get("HY4_DM_MAX_POSITIONS", "65536"))
 TOPK = 2048
@@ -94,7 +96,13 @@ CHECK_EVERY = int(
 
 def build(mesh_device, trace=TRACE):
     return DecodeModel(
-        mesh_device, layers=LAYERS, max_positions=MAX_POSITIONS, trace=trace, keep_logits=True, check_every=CHECK_EVERY
+        mesh_device,
+        layers=LAYERS,
+        max_positions=MAX_POSITIONS,
+        trace=trace,
+        keep_logits=True,
+        check_every=CHECK_EVERY,
+        mlp_split=SPLIT,
     )
 
 
@@ -676,7 +684,9 @@ def test_open():
     N, steps, ids = g["meta"]["prompt_len"], g["meta"]["steps"], [int(v) for v in g["input_ids"]]
     label = label_of("decode model, open() / close()")
     t0 = time.perf_counter()
-    model = DecodeModel.open(layers=LAYERS, keep_logits=True, max_positions=16_384, check_every=CHECK_EVERY)
+    model = DecodeModel.open(
+        layers=LAYERS, keep_logits=True, max_positions=16_384, check_every=CHECK_EVERY, mlp_split=SPLIT
+    )
     try:
         assert model.supports_logits and model.traced and model.max_positions == 16_384 and model.rows == 8
         t1 = time.perf_counter()

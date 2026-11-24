@@ -97,8 +97,13 @@ def replicated(mesh_device, data, dtype, layout=ttnn.ROW_MAJOR_LAYOUT):
     return ttnn.from_torch(data, dtype=dtype, layout=layout, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device))
 
 
-def load_streams(mesh_device, layer, split="tp32", root=prepare.DEFAULT_OUT):
-    """The layer's two weight streams as mesh tensors with one shard per chip (fused/moe/prepare.py's files)."""
+def load_streams(
+    mesh_device, layer, split="tp32", root=prepare.DEFAULT_OUT, dense=False, shared_group=prepare.GROUP_SHARED
+):
+    """The layer's two weight streams as mesh tensors with one shard per chip (fused/moe/prepare.py's files).
+    The files' stamp is compared first with what this half is about to run (prepare.check_stamp: the split, the
+    entries, the shared expert's group, the format): files of another container are refused, not read."""
+    prepare.check_stamp(root, layer, split, dense=dense, shared_group=shared_group)
     chips = mesh_device.get_num_devices()
     out = []
     for which in (0, 1):
@@ -314,7 +319,9 @@ class MlpLayer:
         else:
             self._set_router(router_weight, router_bias)
         self.w_gate_up, self.w_down = (
-            streams if streams is not None else load_streams(self.mesh, layer, split=self.split)
+            streams
+            if streams is not None
+            else load_streams(self.mesh, layer, split=self.split, dense=self.dense, shared_group=self.shared_group)
         )
         router_address = 0 if self.dense else op.w_router.buffer_address()
         for one in (self.op, self.op_root):  # the cores' constants: hand-over words zero, roles, stream addresses

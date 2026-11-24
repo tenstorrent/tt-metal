@@ -123,6 +123,7 @@ class DecodeModel:
         zero=True,
         check_every=64,
         slow_pass_s=1.0,
+        mlp_split="tp32",
     ):
         """layers: the checkpoint's first ``layers`` layers with the model's head (78: the model; fewer: the cut
         models the reference's goldens are recorded for). max_positions: rounded up to frames of 8,192.
@@ -134,7 +135,10 @@ class DecodeModel:
         after every pass that took longer than slow_pass_s on the host and after every check_every-th pass (0:
         only the slow ones). A bounded wait that ran out leaves a status and wrong data and takes seconds (its
         bound is 30,000,000 polls); one status() read costs 0.42 s on the host (32 chips' words, measured:
-        mf_dm_L6_rw_tr), so it is not read after every pass. A stuck program raises by the operation timeout."""
+        mf_dm_L6_rw_tr), so it is not read after every pass. A stuck program raises by the operation timeout.
+        mlp_split: the MoE layers' expert layout (Stack(mlp_split=)): "tp32", or "tp8g4" (a mesh column owns 64
+        routed experts, 1/8 of each on each of its 8 chips); the prepared streams of that split must be on disk
+        (fused/model/convert.py --split). Layer 0's dense FFN is tp32 either way."""
         assert (
             rope_pairing() == "interleaved"
         ), "this checkpoint's RoPE pairing is interleaved: HY4_ROPE_PAIRING=interleaved"
@@ -143,6 +147,7 @@ class DecodeModel:
         self.mesh, self.layers, self.traced = mesh_device, int(layers), bool(trace)
         self.supports_logits, self.check_every, self._opened = bool(keep_logits), int(check_every), False
         self.slow_pass_s = float(slow_pass_s)
+        self.mlp_split = mlp_split
         self.full = [n for n in range(self.layers) if PP.is_full(n)]
         self.frames = -(-int(max_positions) // kv_frames.FRAME_TOKENS)
         assert 1 <= self.frames <= kv_frames.TABLE_FRAMES
@@ -154,6 +159,7 @@ class DecodeModel:
             moe_fidelity=moe_fidelity,
             wait_limit=wait_limit,
             attn_kwargs=dict(append=append),
+            mlp_split=mlp_split,
         )
         # the two stores (allocated here, zeroed after every L1 tensor of the step exists)
         lat = kv_frames.Kind(
@@ -188,7 +194,7 @@ class DecodeModel:
         self._last = None
         logger.info(
             f"HY4_MF DecodeModel: {self.layers} layers ({len(self.full)} full-indexer: {self.full[:6]}{'...' if len(self.full) > 6 else ''}), "
-            f"{self.max_positions} positions a row ({self.frames} frames), append {append}, built in {time.perf_counter() - t0:.0f} s; "
+            f"{self.max_positions} positions a row ({self.frames} frames), append {append}, experts {mlp_split}, built in {time.perf_counter() - t0:.0f} s; "
             f"L1 tensors {st.l1_bytes()} B per core"
         )
 

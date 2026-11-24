@@ -60,7 +60,9 @@ contexts (mean union 48.5) the 78-layer step is 46.2 ms, measured, tokens 8 of 8
 have a union near 53 by the reference router's picks (about 47 ms, estimated). These figures are of the step with
 every layer in shared-indexer form; the step with the full-indexer layers chained in (`DecodeModel`) has not been
 timed as a step of record (the selection was about 2.3 ms by the unit's own measurement). With the tp8g4 expert
-layout the same shared-form step is 42.2 to 43.9 ms. A row's result does not depend on the other rows of its pass
+layout the same shared-form step is 42.2 to 43.9 ms; `DecodeModel(mlp_split="tp8g4")` runs the full-indexer form
+with it (6 layers on the board: the same 216 of 256 golden tokens as tp32; the MLP program's tightest core keeps
+72,960 B of L1 free, against 275,712 B with tp32). A row's result does not depend on the other rows of its pass
 (`DecodeModel`, 78 layers: each row alone equals the same row among the others in every bit).
 
 ## Accuracy
@@ -93,7 +95,13 @@ change as the prefill stack's conversion, so that the two never disagree on one 
 ## Notes on this tree
 - Comments cite sections of `PLAN.md`: the pieces' development notes, which are not part of this tree.
 - Paths under `generated/hy4_preview/` are where tests read converted weights and goldens and write measurements;
-  `model/convert.py` writes the decode weights.
+  `model/convert.py` writes the decode weights: the routed experts' streams, one directory per layer and expert
+  layout.
+- The expert files are a container with a format number. `moe/prepare.py`'s docstring is its description: the
+  values and their rounding, the order inside a DRAM bank, which entries of a chip are routed experts, and the
+  shared expert as two BFP4 terms behind them (with tp8g4: on the chips of one group, zeros on the others). Every
+  directory carries the stamp of what it holds in `manifest.json`; the loaders compare it with the layout they
+  are about to run before they read a file, and the conversion counts a layer as complete only with it.
 - The serving loop (an OpenAI server over `DecodeModel`) and the MLP half's latency work (router and expert
   hand-over changes) are not in this tree.
 
