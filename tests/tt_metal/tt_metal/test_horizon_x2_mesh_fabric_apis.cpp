@@ -219,13 +219,22 @@ void HorizonFabricUnicastCommon(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HorizonConnectionManagerUnicastWriteCommon
+// HorizonConnectionManagerCommon
 //
-// CM unicast write helper. Runs the existing CM sender kernel then runs the
-// unified checker twice — once per recv buffer — to verify both CM slots.
+// Unified CM helper for unicast and scatter write, stateless and stateful.
+// noc_pkt_type: 0 = NOC_UNICAST_WRITE, 4 = NOC_UNICAST_SCATTER_WRITE.
+// with_state:   false = stateless, true = set_state + with_state.
+//
+// Allocates 4 recv bufs (a_0, b_0, a_1, b_1). For unicast, b_N is zeroed but
+// unused by the sender. Runs checker twice — once per CM slot.
 // ─────────────────────────────────────────────────────────────────────────────
-void HorizonConnectionManagerUnicastWriteCommon(
-    distributed::MeshDevice& src_device, distributed::MeshDevice& tgt_device, ChipId src_chip, ChipId tgt_chip) {
+void HorizonConnectionManagerCommon(
+    distributed::MeshDevice& src_device,
+    distributed::MeshDevice& tgt_device,
+    ChipId src_chip,
+    ChipId tgt_chip,
+    uint32_t noc_pkt_type,
+    bool with_state) {
     auto& cluster = MetalContext::instance().get_cluster();
     distributed::MeshCommandQueue& src_cq = src_device.mesh_command_queue();
     distributed::MeshCommandQueue& tgt_cq = tgt_device.mesh_command_queue();
@@ -234,47 +243,63 @@ void HorizonConnectionManagerUnicastWriteCommon(
     const CoreCoord tgt_virt =
         cluster.get_virtual_coordinate_from_logical_coordinates(tgt_chip, logical_core, CoreType::WORKER);
 
+    bool is_scatter = (noc_pkt_type == NOC_UNICAST_SCATTER_WRITE);
+    uint32_t chunk_size_a = is_scatter ? HALF_BYTES : TEST_BYTES;
+    uint32_t chunk_words_a = is_scatter ? HALF_WORDS : TEST_WORDS;
+
     auto src_buf = make_l1_buffer(src_device, logical_core);
-    auto recv_buf_0 = make_l1_buffer(tgt_device, logical_core);
-    auto recv_buf_1 = make_l1_buffer(tgt_device, logical_core);
+    auto recv_buf_a_0 = make_l1_buffer(tgt_device, logical_core);
+    auto recv_buf_b_0 = make_l1_buffer(tgt_device, logical_core);
+    auto recv_buf_a_1 = make_l1_buffer(tgt_device, logical_core);
+    auto recv_buf_b_1 = make_l1_buffer(tgt_device, logical_core);
     auto result_buf_0 = make_l1_buffer(tgt_device, logical_core);
     auto result_buf_1 = make_l1_buffer(tgt_device, logical_core);
 
     const uint32_t base = 0xC0FE0100u;
     auto pattern = make_pattern(base);
     distributed::EnqueueWriteMeshBuffer(src_cq, src_buf, pattern, true);
-    zero_l1(tgt_chip, tgt_virt, recv_buf_0->address());
-    zero_l1(tgt_chip, tgt_virt, recv_buf_1->address());
+    zero_l1(tgt_chip, tgt_virt, recv_buf_a_0->address());
+    zero_l1(tgt_chip, tgt_virt, recv_buf_b_0->address());
+    zero_l1(tgt_chip, tgt_virt, recv_buf_a_1->address());
+    zero_l1(tgt_chip, tgt_virt, recv_buf_b_1->address());
     zero_l1(tgt_chip, tgt_virt, result_buf_0->address());
     zero_l1(tgt_chip, tgt_virt, result_buf_1->address());
 
+    // ── Sender ───────────────────────────────────────────────────────────────
+    // For unicast, dst_l1_addr_b_N is passed but unused by the kernel.
     std::vector<uint32_t> sender_rt_args = {
         src_buf->address(),
         static_cast<uint32_t>(tgt_virt.x),
         static_cast<uint32_t>(tgt_virt.y),
-        recv_buf_0->address(),
-        recv_buf_1->address(),
+        recv_buf_a_0->address(),
+        is_scatter ? recv_buf_b_0->address() : recv_buf_a_0->address(),
+        recv_buf_a_1->address(),
+        is_scatter ? recv_buf_b_1->address() : recv_buf_a_1->address(),
+        chunk_size_a,
         TEST_BYTES,
+        noc_pkt_type,
+        static_cast<uint32_t>(with_state),
     };
 
     auto src_node = tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId{0}, src_chip);
     auto dst_node = tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId{0}, tgt_chip);
 
-    const KernelSpecName SENDER{"mesh_cm_unicast_write_sender"};
+    const KernelSpecName SENDER{"mesh_cm_sender"};
     KernelSpec sender_kernel_spec{
         .unique_id = SENDER,
         .source = OVERRIDE_KERNEL_PREFIX
         "tests/tt_metal/tt_metal/test_kernels/dataflow/"
         "horizon_mesh_connection_manager_unicast_write_sender.cpp",
         .num_threads = 1,
-        .runtime_arg_schema =
-            {.runtime_arg_names =
-                 {
-                     "src_l1_addr", "dst_noc_x",     "dst_noc_y",      "dst_l1_addr_0", "dst_l1_addr_1",
-                     "size",        "cm_s0_w0",      "cm_s0_w1",       "cm_s0_w2",      "cm_s0_w3",
-                     "cm_s1_w0",    "cm_s1_w1",      "cm_s1_w2",       "cm_s1_w3",      "cm_my_chip",
-                     "cm_my_mesh",  "cm_s0_dst_dev", "cm_s0_dst_mesh", "cm_s1_dst_dev", "cm_s1_dst_mesh",
-                 }},
+        .runtime_arg_schema = {.runtime_arg_names = {"src_l1_addr",     "dst_noc_x",       "dst_noc_y",
+                                                     "dst_l1_addr_a_0", "dst_l1_addr_b_0", "dst_l1_addr_a_1",
+                                                     "dst_l1_addr_b_1", "chunk_size_a",    "total_size",
+                                                     "noc_pkt_type",    "with_state",      "cm_s0_w0",
+                                                     "cm_s0_w1",        "cm_s0_w2",        "cm_s0_w3",
+                                                     "cm_s1_w0",        "cm_s1_w1",        "cm_s1_w2",
+                                                     "cm_s1_w3",        "cm_my_chip",      "cm_my_mesh",
+                                                     "cm_s0_dst_dev",   "cm_s0_dst_mesh",  "cm_s1_dst_dev",
+                                                     "cm_s1_dst_mesh"}},
         .hw_config = DataMovementHardwareConfig{},
     };
 
@@ -289,7 +314,7 @@ void HorizonConnectionManagerUnicastWriteCommon(
         tt::tt_fabric::FabricApiType::Mesh);
 
     ProgramSpec sender_spec{
-        .name = "horizon_mesh_cm_unicast_write",
+        .name = "horizon_mesh_cm_write",
         .kernels = {std::move(sender_kernel_spec)},
         .work_units = {WorkUnitSpec{.name = "main", .kernels = {SENDER}, .target_nodes = logical_core}},
     };
@@ -298,23 +323,26 @@ void HorizonConnectionManagerUnicastWriteCommon(
     sender_run.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
         .kernel = SENDER,
         .runtime_arg_values = MakeRuntimeArgsForSingleNode(
-            logical_core, {{"src_l1_addr", sender_rt_args[0]},    {"dst_noc_x", sender_rt_args[1]},
-                           {"dst_noc_y", sender_rt_args[2]},      {"dst_l1_addr_0", sender_rt_args[3]},
-                           {"dst_l1_addr_1", sender_rt_args[4]},  {"size", sender_rt_args[5]},
-                           {"cm_s0_w0", sender_rt_args[6]},       {"cm_s0_w1", sender_rt_args[7]},
-                           {"cm_s0_w2", sender_rt_args[8]},       {"cm_s0_w3", sender_rt_args[9]},
-                           {"cm_s1_w0", sender_rt_args[10]},      {"cm_s1_w1", sender_rt_args[11]},
-                           {"cm_s1_w2", sender_rt_args[12]},      {"cm_s1_w3", sender_rt_args[13]},
-                           {"cm_my_chip", sender_rt_args[14]},    {"cm_my_mesh", sender_rt_args[15]},
-                           {"cm_s0_dst_dev", sender_rt_args[16]}, {"cm_s0_dst_mesh", sender_rt_args[17]},
-                           {"cm_s1_dst_dev", sender_rt_args[18]}, {"cm_s1_dst_mesh", sender_rt_args[19]}}),
+            logical_core, {{"src_l1_addr", sender_rt_args[0]},     {"dst_noc_x", sender_rt_args[1]},
+                           {"dst_noc_y", sender_rt_args[2]},       {"dst_l1_addr_a_0", sender_rt_args[3]},
+                           {"dst_l1_addr_b_0", sender_rt_args[4]}, {"dst_l1_addr_a_1", sender_rt_args[5]},
+                           {"dst_l1_addr_b_1", sender_rt_args[6]}, {"chunk_size_a", sender_rt_args[7]},
+                           {"total_size", sender_rt_args[8]},      {"noc_pkt_type", sender_rt_args[9]},
+                           {"with_state", sender_rt_args[10]},     {"cm_s0_w0", sender_rt_args[11]},
+                           {"cm_s0_w1", sender_rt_args[12]},       {"cm_s0_w2", sender_rt_args[13]},
+                           {"cm_s0_w3", sender_rt_args[14]},       {"cm_s1_w0", sender_rt_args[15]},
+                           {"cm_s1_w1", sender_rt_args[16]},       {"cm_s1_w2", sender_rt_args[17]},
+                           {"cm_s1_w3", sender_rt_args[18]},       {"cm_my_chip", sender_rt_args[19]},
+                           {"cm_my_mesh", sender_rt_args[20]},     {"cm_s0_dst_dev", sender_rt_args[21]},
+                           {"cm_s0_dst_mesh", sender_rt_args[22]}, {"cm_s1_dst_dev", sender_rt_args[23]},
+                           {"cm_s1_dst_mesh", sender_rt_args[24]}}),
     }};
     experimental::SetProgramRunArgs(sender_prog, sender_run);
     distributed::MeshWorkload sender_workload;
     sender_workload.add_program(distributed::MeshCoordinateRange(src_device.shape()), std::move(sender_prog));
     distributed::EnqueueMeshWorkload(src_cq, sender_workload, true);
 
-    // Checker spec reused for both recv buffers.
+    // ── Checker (reused for both CM slots) ───────────────────────────────────
     const KernelSpecName CHECKER{"mesh_unicast_write_checker"};
     ProgramSpec checker_spec{
         .name = "horizon_mesh_unicast_write_checker",
@@ -337,20 +365,20 @@ void HorizonConnectionManagerUnicastWriteCommon(
         .work_units = {WorkUnitSpec{.name = "main", .kernels = {CHECKER}, .target_nodes = logical_core}},
     };
 
-    auto run_checker = [&](uint32_t recv_addr, uint32_t result_addr) {
+    auto run_checker = [&](uint32_t recv_addr_a, uint32_t recv_addr_b, uint32_t result_addr) {
         Program prog = experimental::MakeProgramFromSpec(tgt_device, checker_spec);
         ProgramRunArgs run;
         run.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
             .kernel = CHECKER,
             .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 logical_core,
-                {{"recv_l1_addr_a", recv_addr},
-                 {"recv_l1_addr_b", recv_addr},
+                {{"recv_l1_addr_a", recv_addr_a},
+                 {"recv_l1_addr_b", recv_addr_b},
                  {"num_words", TEST_WORDS},
                  {"base_value", base},
                  {"result_l1_addr", result_addr},
-                 {"chunk_words_a", TEST_WORDS},
-                 {"noc_packet_type", NOC_UNICAST_WRITE}}),
+                 {"chunk_words_a", chunk_words_a},
+                 {"noc_packet_type", noc_pkt_type}}),
         }};
         experimental::SetProgramRunArgs(prog, run);
         distributed::MeshWorkload wl;
@@ -358,14 +386,17 @@ void HorizonConnectionManagerUnicastWriteCommon(
         distributed::EnqueueMeshWorkload(tgt_cq, wl, true);
     };
 
-    run_checker(recv_buf_0->address(), result_buf_0->address());
-    run_checker(recv_buf_1->address(), result_buf_1->address());
+    // For unicast, recv_b_N == recv_a_N (checker ignores recv_b for NOC_UNICAST_WRITE).
+    uint32_t check_b_0 = is_scatter ? recv_buf_b_0->address() : recv_buf_a_0->address();
+    uint32_t check_b_1 = is_scatter ? recv_buf_b_1->address() : recv_buf_a_1->address();
+    run_checker(recv_buf_a_0->address(), check_b_0, result_buf_0->address());
+    run_checker(recv_buf_a_1->address(), check_b_1, result_buf_1->address());
 
     std::vector<uint32_t> r0(1, 0), r1(1, 0);
     cluster.read_core(r0.data(), sizeof(uint32_t), tt_cxy_pair(tgt_chip, tgt_virt), result_buf_0->address());
     cluster.read_core(r1.data(), sizeof(uint32_t), tt_cxy_pair(tgt_chip, tgt_virt), result_buf_1->address());
-    EXPECT_EQ(r0[0], 1u) << "CM checker buf_0 failed: 0x" << std::hex << r0[0];
-    EXPECT_EQ(r1[0], 1u) << "CM checker buf_1 failed: 0x" << std::hex << r1[0];
+    EXPECT_EQ(r0[0], 1u) << "CM checker slot0 failed: 0x" << std::hex << r0[0];
+    EXPECT_EQ(r1[0], 1u) << "CM checker slot1 failed: 0x" << std::hex << r1[0];
 }
 
 }  // namespace
@@ -393,5 +424,17 @@ TEST_F(HorizonX2MeshFabricApiFixture, HorizonX2MeshScatterWriteStateful) {
 // ── Connection Manager ────────────────────────────────────────────────────────
 
 TEST_F(HorizonX2MeshFabricApiFixture, HorizonX2MeshConnectionManagerUnicastWrite) {
-    HorizonConnectionManagerUnicastWriteCommon(*devices_[0], *devices_[1], 0, 1);
+    HorizonConnectionManagerCommon(*devices_[0], *devices_[1], 0, 1, NOC_UNICAST_WRITE, false);
+}
+
+TEST_F(HorizonX2MeshFabricApiFixture, HorizonX2MeshConnectionManagerUnicastWriteStateful) {
+    HorizonConnectionManagerCommon(*devices_[0], *devices_[1], 0, 1, NOC_UNICAST_WRITE, true);
+}
+
+TEST_F(HorizonX2MeshFabricApiFixture, HorizonX2MeshConnectionManagerScatterWriteStateless) {
+    HorizonConnectionManagerCommon(*devices_[0], *devices_[1], 0, 1, NOC_UNICAST_SCATTER_WRITE, false);
+}
+
+TEST_F(HorizonX2MeshFabricApiFixture, HorizonX2MeshConnectionManagerScatterWriteStateful) {
+    HorizonConnectionManagerCommon(*devices_[0], *devices_[1], 0, 1, NOC_UNICAST_SCATTER_WRITE, true);
 }
