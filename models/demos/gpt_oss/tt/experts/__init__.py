@@ -72,6 +72,7 @@ class Experts:
         tensor_cache_path=None,
         indexed_decode=False,
         dense_decode_tokens=None,
+        down_weight_dtype=None,
     ):
         """
         Initialize expert layers.
@@ -94,6 +95,8 @@ class Experts:
         self.config = config
         self.mesh_config = mesh_config
         self.weight_dtype, self.tensor_cache_path = weight_dtype, tensor_cache_path
+        # down_proj's dtype (default weight_dtype; the ND experts can keep down in another dtype than gate / up)
+        self.down_weight_dtype = down_weight_dtype or weight_dtype
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.program_config = program_config
@@ -103,6 +106,15 @@ class Experts:
         # 128k-token context needs at batch 32).
         self.weights = None
         self.prefill_sparsity = None
+        # TP=1 fused decode (one chip) and gpt-oss-120b at TP=4: the experts are stored once, ND-sharded, and both
+        # prefill and the fused decode read them (fused_decode/nd.py); there is no room for a decode-only copy next to
+        # them (fused_decode/config.py nd_experts_on).
+        from ..bfp4_quant import expert_bfp4_rounding
+        from ..fused_decode.config import nd_experts_on
+
+        nd = bool(indexed_decode) and nd_experts_on(mesh_config.decode.tp, config.num_experts)
+        # BFP4 rounding (../bfp4_quant.py): the fused decode path's (GPT_OSS_EXPERT_BFP4); the original path keeps ttnn's
+        self.bfp4_rounding = expert_bfp4_rounding(nd) if indexed_decode else "max"
         if not dense_decode_tokens:
             self.weights = load_expert_weights(
                 mesh_device=mesh_device,
@@ -111,6 +123,9 @@ class Experts:
                 mesh_config=mesh_config,
                 weight_dtype=weight_dtype,
                 tensor_cache_path=tensor_cache_path,
+                nd=nd,
+                down_weight_dtype=self.down_weight_dtype,
+                rounding=self.bfp4_rounding,
             )
             # Cache prefill sparsity (created once, reused for all prefill calls)
             self.prefill_sparsity = self._create_prefill_sparsity()
@@ -119,15 +134,25 @@ class Experts:
         # DRAM-streaming ops of fused_decode/stream.py (ops and buffers shared by every layer through the CCL manager).
         self.decode_weights = None
         self.decode_stream = None
-        if indexed_decode:
+        self.decode_nd = None
+        if nd:
+            assert mesh_config.decode.ep == 1, "fused decode needs EP == 1"
+            self._init_decode_nd(state_dict)
+        elif indexed_decode:
             assert mesh_config.decode.tp > 1 and mesh_config.decode.ep == 1, "fused decode needs TP > 1, EP == 1"
+            from ..fused_decode.config import expert_decode_weight_dtype
+
+            # The decode copies have their own dtype (fused_decode/config.py: GPT_OSS_FUSED_EXPERT_DTYPE, BFP4 by
+            # default, K-grouped); prefill keeps weight_dtype.
+            self.decode_weight_dtype = expert_decode_weight_dtype()
             self.decode_weights = load_decode_expert_weights(
                 mesh_device=mesh_device,
                 config=config,
                 state_dict=state_dict,
                 mesh_config=mesh_config,
-                weight_dtype=weight_dtype,
+                weight_dtype=self.decode_weight_dtype,
                 tensor_cache_path=tensor_cache_path,
+                rounding=self.bfp4_rounding,
             )
             self.decode_stream = ccl_manager.get_decode_expert_stream(
                 config.hidden_size,
@@ -135,6 +160,8 @@ class Experts:
                 config.num_experts_per_tok,
                 config.swiglu_limit,
                 config.alpha,
+                weight_dtype=self.decode_weight_dtype,
+                k_grouped=self.decode_weights.k_grouped,
             )
 
         self.dense_decode_weights = None
@@ -162,15 +189,72 @@ class Experts:
         if (
             (opt_switches.on("DECODE_TOPK") or opt_switches.on("PREFILL_FUSEBIAS"))
             and self.weights is not None
-            and not indexed_decode
+            and (not indexed_decode or nd)
             and mesh_config.decode.ep == 1
         ):
-            self.indexed_decode_tensors = IndexedDecodeTensors(mesh_device, self.weights, config)
+            # ND experts at TP > 1 (gpt-oss-120b): only prefill uses the tables; built per prefill call (32x padded
+            # rows: ~1.3 GB per device for 36 layers of 128 experts).
+            lazy = nd and mesh_config.decode.tp > 1
+            self.indexed_decode_tensors = IndexedDecodeTensors(mesh_device, self.weights, config, lazy=lazy)
 
         # For backward compatibility
         self.intermediate_size = config.intermediate_size
         self.num_experts = config.num_experts
         self.hidden_size = config.hidden_size
+
+    def _init_decode_nd(self, state_dict):
+        """Fused decode MoE over the ND-sharded experts (fused_decode/nd.py; TP=1, or TP > 1 for gpt-oss-120b): the
+        routed-expert ops streaming self.weights' ND-sharded gate / up / down tensors, plus their decode-only bias tiles
+        (per device: the packed [E, 2 I_pad] = [gate | up] shard biases and the [E, H] down bias, real on the first TP
+        device only (row-parallel)), in the experts' weight dtype."""
+        import torch
+
+        from ..fused_decode.nd import ND_BIAS_PACK, nd_bias_tensor
+        from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
+
+        c = self.config
+        E, H, I = c.num_experts, c.hidden_size, c.intermediate_size
+        tp = self.mesh_config.decode.tp
+        il = I // tp
+        ip = self.weights.intermediate_size_per_device  # il padded to whole tiles (ND experts at TP > 1)
+        names = {ttnn.bfloat8_b: "bfp8", ttnn.bfloat4_b: "bfp4"}
+        dt, ddt = names[self.weight_dtype], names[self.down_weight_dtype]
+        # TP > 1: bias tiles packed 8 columns to a tile (fused_decode/nd.py ND_BIAS_PACK)
+        pack = 1 if tp == 1 else ND_BIAS_PACK
+        tag = "" if tp == 1 else f"_tp{tp}_i{ip}_p{pack}"
+        gu_bias = dn_bias = None
+        if state_dict:
+            b = state_dict["gate_up_proj_bias"].float().reshape(E, 2 * I)  # gate / up interleaved
+
+            def shard(v, d):
+                return torch.nn.functional.pad(v[:, d * il : (d + 1) * il], (0, ip - il))
+
+            # per device d: [gate shard d | up shard d], each padded to ip; devices side by side (sharded on dim -1)
+            gu_bias = torch.cat([torch.cat([shard(b[..., ::2], d), shard(b[..., 1::2], d)], -1) for d in range(tp)], -1)
+            db = state_dict["down_proj_bias"].float().reshape(E, H)
+            dn_bias = torch.cat([db] + [torch.zeros_like(db)] * (tp - 1), -1)
+        self.nd_gate_up_bias = nd_bias_tensor(
+            self.mesh_device,
+            gu_bias,
+            E,
+            get_cache_file_name(self.tensor_cache_path, f"nd_gate_up_bias_{dt}{tag}"),
+            dtype=self.weight_dtype,
+            tp=tp,
+            parts=2,
+            pack=pack,
+        )
+        self.nd_down_bias = nd_bias_tensor(
+            self.mesh_device,
+            dn_bias,
+            E,
+            get_cache_file_name(self.tensor_cache_path, f"nd_down_bias_{ddt}{tag}"),
+            dtype=self.down_weight_dtype,
+            tp=tp,
+            pack=pack,
+        )
+        self.decode_nd = self.ccl_manager.get_decode_expert_nd(
+            H, ip, c.num_experts_per_tok, c.swiglu_limit, c.alpha, self.weight_dtype, self.down_weight_dtype, pack
+        )
 
     def _create_prefill_sparsity(self):
         """Create prefill sparsity mask once and reuse."""
@@ -216,6 +300,28 @@ class Experts:
         Returns:
             Expert output tensor [1, batch, seq_len, hidden_size]
         """
+        if is_decode and self.decode_nd is not None:
+            # ND experts (TP=1, gpt-oss-120b at TP=4): the routed experts streamed from the ND-sharded prefill tensors
+            # (fused_decode/nd.py)
+            nd, w = self.decode_nd, self.weights
+            act = nd["gate_up"](
+                hidden_states,
+                topk_expert_indices,
+                topk_expert_weights,
+                w.gate_proj,
+                w.up_proj,
+                self.nd_gate_up_bias,
+                nd["act"],
+            )
+            return nd["down"](
+                act,
+                topk_expert_indices,
+                topk_expert_weights,
+                w.down_proj,
+                self.nd_down_bias,
+                nd["partial"],
+                send=self.ccl_manager.decode_boundary_send(self.config.hidden_size, "moe"),
+            )
         if is_decode and self.decode_stream is not None:
             return decode_forward_stream(
                 hidden_states,
@@ -275,7 +381,10 @@ class Experts:
                 program_config=self.program_config,
             )
         else:
-            return prefill_forward(
+            fuse_bias = opt_switches.on("PREFILL_FUSEBIAS") and self.indexed_decode_tensors is not None
+            if fuse_bias:
+                self.indexed_decode_tensors.materialize()
+            out = prefill_forward(
                 hidden_states=hidden_states,
                 routing_weights=topk_expert_weights,
                 weights=self.weights,
@@ -285,12 +394,11 @@ class Experts:
                 ccl_manager=self.ccl_manager,
                 program_config=self.program_config,
                 prefill_sparsity=self.prefill_sparsity,
-                **(
-                    {"indexed_tensors": self.indexed_decode_tensors}
-                    if opt_switches.on("PREFILL_FUSEBIAS") and self.indexed_decode_tensors is not None
-                    else {}
-                ),
+                **({"indexed_tensors": self.indexed_decode_tensors} if fuse_bias else {}),
             )
+            if fuse_bias:
+                self.indexed_decode_tensors.release()
+            return out
 
     def _prefill_forward_dense(self, hidden_states, routing_weights):
         """Prefill MoE of the batched dense path: the sequence in tiles of plan tokens, each through

@@ -16,6 +16,8 @@ class CCLManager:
         self._decode_boundary = {}
         self._decode_expert_stream = {}
         self._decode_stream_buffers = {}
+        # boundary call sites; the model adds "entry" for a vocab-sharded embedding (fused_decode/inputs.py)
+        self.decode_boundary_sites = ("attn", "moe")
 
         # Setup semaphores
         self._init_subdevice()
@@ -107,7 +109,9 @@ class CCLManager:
         from .fused_decode.boundary import DecodeBoundary
 
         if hidden_size not in self._decode_boundary:
-            self._decode_boundary[hidden_size] = DecodeBoundary(self.mesh_device, hidden_size, eps, cluster_axis)
+            self._decode_boundary[hidden_size] = DecodeBoundary(
+                self.mesh_device, hidden_size, eps, cluster_axis, sites=self.decode_boundary_sites
+            )
         return self._decode_boundary[hidden_size]
 
     def decode_boundary_send(self, hidden_size, site):
@@ -115,23 +119,74 @@ class CCLManager:
         from .fused_decode.config import DECODE_BOUNDARY_CCL, DECODE_BOUNDARY_FUSED_SEND
 
         if DECODE_BOUNDARY_FUSED_SEND and DECODE_BOUNDARY_CCL == "fabric":
-            return (self.get_decode_boundary(hidden_size), site)
+            boundary = self.get_decode_boundary(hidden_size)
+            # TP=1: nothing to all-reduce (the boundary reads the producer's partial directly)
+            return (boundary, site) if boundary.ring > 1 else None
         return None
 
-    def get_decode_expert_stream(self, hidden, inter_pad, top_k, swiglu_limit, alpha):
+    def get_decode_expert_stream(
+        self, hidden, inter_pad, top_k, swiglu_limit, alpha, weight_dtype=ttnn.bfloat4_b, k_grouped=False
+    ):
         """Routed-expert stream ops (fused_decode/stream.py) and their persistent buffers, shared by every decoder
-        layer's decode path: the [k, I_pad] BF16 row-major activation and the flat partial sum (get_decode_partial)."""
-        key = (hidden, inter_pad, top_k)
+        layer's decode path: the [k, I_pad] BF16 row-major activation and the flat partial sum (get_decode_partial).
+        k_grouped: the weights' tiles are stored transposed (K-grouped BFP4, ../bfp4_quant.py)."""
+        key = (hidden, inter_pad, top_k, weight_dtype, k_grouped)
         if key not in self._decode_expert_stream:
             from .fused_decode.config import DOWN_STREAM_READERS, GATE_UP_STREAM_READERS
             from .fused_decode.stream import ExpertDownStream, ExpertGateUpStream
 
             self._decode_expert_stream[key] = {
                 "gate_up": ExpertGateUpStream(
-                    self.mesh_device, hidden, inter_pad, top_k, swiglu_limit, alpha, readers=GATE_UP_STREAM_READERS
+                    self.mesh_device,
+                    hidden,
+                    inter_pad,
+                    top_k,
+                    swiglu_limit,
+                    alpha,
+                    readers=GATE_UP_STREAM_READERS,
+                    weight_dtype=weight_dtype,
+                    k_grouped=k_grouped,
                 ),
-                "down": ExpertDownStream(self.mesh_device, hidden, inter_pad, top_k, readers=DOWN_STREAM_READERS),
+                "down": ExpertDownStream(
+                    self.mesh_device,
+                    hidden,
+                    inter_pad,
+                    top_k,
+                    readers=DOWN_STREAM_READERS,
+                    weight_dtype=weight_dtype,
+                    k_grouped=k_grouped,
+                ),
                 "act": self._persistent_zeros((top_k, inter_pad), ttnn.bfloat16, ttnn.L1_MEMORY_CONFIG),
+                "partial": self.get_decode_partial(hidden),
+            }
+        return self._decode_expert_stream[key]
+
+    def get_decode_expert_nd(
+        self, hidden, inter, top_k, swiglu_limit, alpha, weight_dtype, down_dtype=None, bias_pack=1
+    ):
+        """Routed-expert ops (fused_decode/nd.py: TP=1, gpt-oss-120b at TP=4) streaming the ND-sharded expert tensors,
+        shared by every decoder layer, with the [k, I] BF16 row-major activation (I: this device's intermediate shard)
+        and the flat partial sum (get_decode_partial). bias_pack: columns per bias tile (nd.py ND_BIAS_PACK)."""
+        down_dtype = down_dtype or weight_dtype
+        key = ("nd", hidden, inter, top_k, weight_dtype, down_dtype, bias_pack)
+        if key not in self._decode_expert_stream:
+            from .fused_decode.nd import NdExpertDown, NdExpertGateUp
+
+            self._decode_expert_stream[key] = {
+                "gate_up": NdExpertGateUp(
+                    self.mesh_device,
+                    hidden,
+                    inter,
+                    top_k,
+                    swiglu_limit,
+                    alpha,
+                    weight_dtype=weight_dtype,
+                    bias_pack=bias_pack,
+                ),
+                "down": NdExpertDown(
+                    self.mesh_device, hidden, inter, top_k, weight_dtype=down_dtype, bias_pack=bias_pack
+                ),
+                "act": self._persistent_zeros((top_k, inter), ttnn.bfloat16, ttnn.L1_MEMORY_CONFIG),
                 "partial": self.get_decode_partial(hidden),
             }
         return self._decode_expert_stream[key]
@@ -184,6 +239,47 @@ class CCLManager:
                 heads(num_heads, ttnn.CoreCoord(0, 0)),
                 heads(num_kv_heads, ttnn.CoreCoord(1, 0)),
                 heads(num_kv_heads, ttnn.CoreCoord(0, 0)),
+            )
+        return self._decode_stream_buffers[key]
+
+    def get_decode_sda_out(self, num_heads, head_dim):
+        """The split decode attention's output [1, 1, heads, head_dim] (BF16, L1) and constants (a BFP8 ones tile),
+        shared by every layer and slice configuration: allocated at layer construction, never while a trace is live
+        (fused_decode/split_attn.py)."""
+        key = ("sda_out", num_heads, head_dim)
+        if key not in self._decode_stream_buffers:
+            from .fused_decode.split_attn import consts_tensor, output_tensor
+
+            self._decode_stream_buffers[key] = (
+                output_tensor(self.mesh_device, num_heads, head_dim),
+                consts_tensor(self.mesh_device),
+            )
+        return self._decode_stream_buffers[key]
+
+    def get_decode_split_attention(self, num_heads, num_kv_heads, head_dim, window, qkv_stream):
+        """The split decode attention of a layer type (window 0: full attention), fused into the decode QKV program
+        `qkv_stream` (fused_decode/split_attn.py): its slice cores are the cores that program leaves free (not the QKV
+        stream's workers, the boundary core, the Q / K head buffers' cores (0, 0), (1, 0)) as few rectangles as
+        possible. Slices per kv head and min chunks per slice: fused_decode/config.py sda_slices."""
+        from .fused_decode.boundary import BOUNDARY_CORE
+        from .fused_decode.config import sda_slices
+        from .fused_decode.split_attn import SplitDecodeAttention, max_slices, pick_cores
+
+        taken = {(0, 0), (1, 0)} | {(c.x, c.y) for c, *_ in qkv_stream.assignments} | {tuple(BOUNDARY_CORE)}
+        slices, min_chunks = sda_slices(bool(window), max_slices(self.mesh_device, taken, num_kv_heads), num_kv_heads)
+        key = ("sda", num_heads, num_kv_heads, head_dim, window, slices, min_chunks, tuple(sorted(taken)))
+        if key not in self._decode_stream_buffers:
+            self._decode_stream_buffers[key] = SplitDecodeAttention(
+                self.mesh_device,
+                num_heads,
+                num_kv_heads,
+                head_dim,
+                window,
+                pick_cores(self.mesh_device, taken, num_kv_heads, slices),
+                slices,
+                min_chunks=min_chunks,
+                out=self.get_decode_sda_out(num_heads, head_dim)[0],
+                consts=self.get_decode_sda_out(num_heads, head_dim)[1],
             )
         return self._decode_stream_buffers[key]
 

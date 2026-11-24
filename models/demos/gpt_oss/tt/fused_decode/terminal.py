@@ -37,12 +37,15 @@ from .config import (
     LM_HEAD_DECODE_WEIGHT_DTYPE,
     LM_HEAD_STREAM_PREFETCH,
     LM_HEAD_STREAM_READERS,
+    LM_RESCORE_COLUMNS,
+    lm_rescore_on,
 )
-from .stream import LinearStream, as_stream_tensor, linear_stream_rows, stream_linear_layout
+from .stream import LinearStream, as_stream_tensor, linear_stream_rows, stream_cache_exists, stream_linear_layout
 
 TILE = ttnn.TILE_SIZE
 MASK = -1.0e30  # logit of a padded vocab id
 TOPK = 32  # candidates per folded row, per device and per device after the merge (ttnn.sampling max_top_k)
+MIN_SAMPLER_CANDIDATES = 2 * TOPK  # ttnn.sampling sorts candidate tiles in pairs: at least two per row (TP = 1)
 MERGE_CORE = ttnn.CoreCoord(0, 0)
 # The fused exchange's merge / fabric-send core: not an LM-head stream worker and not the boundary core (asserted).
 EXCHANGE_CORE = ttnn.CoreCoord(4, 0)
@@ -101,6 +104,38 @@ class DecodeTerminal:
             _cache_name(tensor_cache_path, f"lm_head.weight_stream_{dt}_vd{self.vd}_b{banks}"),
         )
 
+        # Two-stage LM head (config.py LM_RESCORE_COLUMNS): the BFP4 first-pass copy and its op. TP > 1 only: the
+        # rescore pass (kernels/stream_linear_writer.cpp LM_RESCORE) is written for the 4-device vocab split; one chip
+        # keeps the single BF8 LM head.
+        self.weights4 = self.op4 = None
+        if self.tp > 1 and lm_rescore_on():
+            name4 = _cache_name(tensor_cache_path, f"lm_head.weight_stream_bfp4_vd{self.vd}_b{banks}")
+            layouts4 = layouts
+            if layouts4 is None and not stream_cache_exists(name4, ttnn.bfloat4_b):
+                from ..dflash.lm_head import _hf_lm_head
+
+                w = _hf_lm_head().transpose(0, 1).float()
+                layouts4 = []
+                for d in range(self.tp):
+                    lo, hi = d * self.vd, min((d + 1) * self.vd, self.vocab_size)
+                    wd = torch.zeros(self.hidden, self.vd)
+                    wd[:, : hi - lo] = w[:, lo:hi]
+                    bias = torch.zeros(self.vd)
+                    bias[hi - lo :] = MASK
+                    layouts4.append(stream_linear_layout(wd, bias, banks))
+                del w
+            self.weights4 = as_stream_tensor(mesh_device, layouts4, rows, ttnn.bfloat4_b, name4)
+            self.op4 = LinearStream(
+                mesh_device,
+                self.hidden // TILE,
+                self.vd,
+                ttnn.bfloat4_b,
+                readers=LM_HEAD_STREAM_READERS,
+                heads=(self.n_tiles, 0),
+                head_tiles=self.row_tiles,
+                prefetch_cols=LM_HEAD_STREAM_PREFETCH,
+            )
+
         replicate = ttnn.ReplicateTensorToMesh(mesh_device)
         shard = ttnn.ShardTensorToMesh(mesh_device, dim=0)
         l1 = ttnn.L1_MEMORY_CONFIG
@@ -125,11 +160,16 @@ class DecodeTerminal:
             torch.zeros(self.tp, 1, TILE, TOPK, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, shard
         )
         # Rows 1..31 (unused sampling users) keep distinct finite filler values: nothing writes them later.
-        gathered_filler = torch.zeros(1, 1, TILE, TOPK * self.tp)
-        gathered_filler[0, 0, 1:] = -(100.0 + torch.arange(TOPK * self.tp, dtype=torch.float32))
+        # TP = 1: row 0 is padded past the device's 32 candidates to two tiles (MIN_SAMPLER_CANDIDATES) with distinct
+        # values far below any logit (never picked or drawn by a top-k <= 32), id 0.
+        self.cand_width = max(TOPK * self.tp, MIN_SAMPLER_CANDIDATES)
+        gathered_filler = torch.zeros(1, 1, TILE, self.cand_width)
+        gathered_filler[0, 0, 1:] = -(100.0 + torch.arange(self.cand_width, dtype=torch.float32))
+        pad = self.cand_width - TOPK * self.tp
+        gathered_filler[0, 0, 0, TOPK * self.tp :] = -(1.0e4 + 160.0 * torch.arange(pad, dtype=torch.float32))
         self.gathered_values = dev(gathered_filler, ttnn.bfloat16, ttnn.TILE_LAYOUT)
         self.gathered_ids = dev(
-            torch.zeros(1, 1, TILE, TOPK * self.tp, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
+            torch.zeros(1, 1, TILE, self.cand_width, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
         )
         self.exchange = TerminalExchange(self) if DECODE_TERMINAL_EXCHANGE == "fused" else None
         self._init_stock_layout(mesh_device)
@@ -147,6 +187,10 @@ class DecodeTerminal:
         # Every call gathers the candidates (one program for both decode modes: no mode-specific LM-head program is
         # compiled after the first trace capture); only the position advance depends on `sampling`.
         exchange = self.exchange.bind(current_pos, rot_idxs, advance=sampling) if self.exchange is not None else None
+        if self.op4 is not None and exchange is not None and lm_rescore_on():
+            rescore = (self.weights, LM_RESCORE_COLUMNS)
+            self.op4(x, self.weights4, (self.folded, self.folded, self.folded), exchange=exchange, rescore=rescore)
+            return self.folded
         self.op(x, self.weights, (self.folded, self.folded, self.folded), exchange=exchange)
         return self.folded
 
@@ -196,7 +240,8 @@ class DecodeTerminal:
         zero-padded weight columns give), and select row d with the device's one-hot selector (a matmul, exact with
         FP32 accumulation). Row-major rows stay at most stock_width wide (one page per row)."""
         dram = ttnn.DRAM_MEMORY_CONFIG
-        gathered = ttnn.all_gather(folded, dim=2, memory_config=dram)  # [1, 1, tp * 32, width] tiles
+        # [1, 1, tp * 32, width] tiles (TP = 1: the folded logits themselves)
+        gathered = ttnn.all_gather(folded, dim=2, memory_config=dram) if self.tp > 1 else folded
         x = ttnn.untilize(gathered, memory_config=dram)
         x = ttnn.slice(x, [0, 0, 0, 0], [1, 1, self.tp * TILE, self.row_len], memory_config=dram)
         local = ttnn.reshape(x, [1, 1, self.tp, TILE * self.row_len])  # row d: device d's local vocab in order
@@ -455,7 +500,8 @@ class _ExchangeCall:
                 ),
             )
             program.kernels = list(program.kernels) + [merger, sender]
-            src = mesh.get_fabric_node_id(coord)
+            # TP = 1 (a ring of one): no fabric neighbours (both hop counts are 0), nothing to connect
+            src = mesh.get_fabric_node_id(coord) if ex.ring > 1 else None
             fabric_args = []
             for step, hops in ((1, ex.fwd_hops), (-1, ex.bwd_hops)):
                 fabric_args.append(1 if hops > 0 else 0)

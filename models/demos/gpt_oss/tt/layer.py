@@ -9,6 +9,7 @@ from .attention import Attention, AttentionConfig
 from .attention_configs import GPTOSSAttentionProgramConfig
 from .fused_decode.boundary import PendingBoundary
 from .fused_decode.config import DECODE_BOUNDARY_FUSE_CONSUMER
+from .fused_decode.inputs import EntryPartial
 from .mlp import MLP
 from .rms_norm import RMSNorm
 
@@ -57,6 +58,7 @@ class DecoderLayer:
             mesh_config=mesh_config,
             use_throughput_experts=use_throughput_experts,
             tokens_per_device=tokens_per_device,
+            layer_idx=layer_idx,
         )
 
         self.attention_type = hf_config.layer_types[layer_idx]
@@ -103,7 +105,11 @@ class DecoderLayer:
             # The producing o_proj / MoE down ops send their partial sums themselves, and each boundary runs inside the
             # op consuming its output (fused_decode/config.py).
             self.boundary_sent = ccl_manager.decode_boundary_send(hf_config.hidden_size, "attn") is not None
-            self.boundary_fuse_consumer = DECODE_BOUNDARY_FUSE_CONSUMER and self.boundary_sent
+            # TP=1 (one chip): no all-reduce to send; each boundary reads the producer's partial directly and still
+            # runs inside its consumer op.
+            self.boundary_fuse_consumer = DECODE_BOUNDARY_FUSE_CONSUMER and (
+                self.boundary_sent or self.boundary.ring == 1
+            )
             self.input_norm_gamma = self.boundary.flat_gamma(self.input_layernorm)
             self.post_norm_gamma = self.boundary.flat_gamma(self.post_attention_layernorm)
             self.next_norm_gamma = None  # set_decode_next_norm (the model knows the next layer)
@@ -119,6 +125,8 @@ class DecoderLayer:
             )
             ccl_manager.get_decode_partial(hf_config.hidden_size)
             ccl_manager.get_decode_router_out()
+            # (the split decode attention's output: tiny, allocated with the model, never while a trace is live)
+            ccl_manager.get_decode_sda_out(mesh_config.shard_size(attn_config.num_heads), attn_config.head_dim)
         # Batched decode (one 32-token tile per device, dense MoE; batched_decode.py): BF16 residual width-sharded in L1,
         # sharded RMSNorms, one-op all-reduces of the attention and MoE partial sums.
         self.batched_decode = not self.fused_decode and self.mlp.dense_decode
@@ -207,6 +215,11 @@ class DecoderLayer:
         the width-sharded [1, 1, 32, hidden] layout)."""
         if isinstance(hidden_states, PendingBoundary):
             pending = hidden_states
+        elif isinstance(hidden_states, EntryPartial):
+            # vocab-sharded embedding (fused_decode/embed.py): all-reduce the sent rows onto a zero residual
+            pending = PendingBoundary(
+                self.boundary, hidden_states.residual, self.input_norm_gamma, hidden_states.partial, "entry", sent=True
+            )
         else:
             pending = PendingBoundary(self.boundary, hidden_states, self.input_norm_gamma, entry=True)
         attn_partial = self.self_attn(

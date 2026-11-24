@@ -22,8 +22,8 @@ from pathlib import Path
 
 import torch
 from safetensors import safe_open
-from transformers.integrations.mxfp4 import convert_moe_packed_tensors
 
+from models.demos.gpt_oss.utils.mxfp4_dequant import dequant_mxfp4
 from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
 
 _MXFP4_SUFFIXES = ("_blocks", "_scales")
@@ -44,7 +44,8 @@ class GptOssLazyStateDict(Mapping[str, torch.Tensor]):
     """Mapping with the keys of the HF ``GptOssForCausalLM.state_dict()``.
 
     - ``*.mlp.experts.{gate_up_proj,down_proj}`` are dequantized from their ``_blocks`` / ``_scales``
-      pair with the same HF function ``from_pretrained`` uses, so values are bit-identical.
+      pair, bit-identical to the HF function ``from_pretrained`` uses (mxfp4_dequant.dequant_mxfp4: one parallel
+      numba pass, ~10x faster; it calls the HF function when numba is missing).
     - With ``convert_to_meta_format=True`` the q/k projections are permuted exactly like
       ``convert_hf_qkv_to_meta_format`` does on an eager state dict.
     - Every other float tensor is returned as bf16 (``from_pretrained(torch_dtype=torch.bfloat16)``).
@@ -88,7 +89,7 @@ class GptOssLazyStateDict(Mapping[str, torch.Tensor]):
         if key in self._mxfp4_keys:
             blocks = handle.get_tensor(f"{key}_blocks")
             scales = handle.get_tensor(f"{key}_scales")
-            return convert_moe_packed_tensors(blocks, scales, dtype=torch.bfloat16)
+            return dequant_mxfp4(blocks, scales, dtype=torch.bfloat16)
 
         tensor = handle.get_tensor(key)
         if tensor.is_floating_point() and tensor.dtype != torch.bfloat16:

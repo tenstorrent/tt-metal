@@ -1,15 +1,19 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Fused decode path (tt/fused_decode) against the HuggingFace reference on Blackhole 1x4.
+"""Fused decode path (tt/fused_decode) against the HuggingFace reference on Blackhole 1x4 and one chip (1x1, TP=1).
 
 A 2-layer model (layer 0 sliding-window, layer 1 full attention) with random weights decodes a short sequence one
 token at a time through the fused decode path: decode inputs op, layer boundaries (fabric all-reduce + residual add +
-RMSNorm), streamed QKV / o_proj / router / routed experts, and the streamed LM head with folded logits. Every step's
+RMSNorm; at TP=1 no all-reduce), streamed QKV / o_proj / router / routed experts (TP=1: streamed from the ND-sharded
+expert tensors prefill reads), and the streamed LM head with folded logits. Every step's
 logits, unfolded on the host by Model.process_output_decode, are compared with the reference logits at that position.
 
-Run on a QuietBox 2 (Blackhole 1x4):
+Run on a QuietBox 2 (Blackhole 1x4) or one Blackhole chip (-k 1x1):
     HF_MODEL=models/demos/gpt_oss/configs/gpt-oss-20b pytest models/demos/gpt_oss/tests/unit/test_fused_decode.py
+gpt-oss-120b config (128 experts: ND-sharded experts shared with prefill, router top-4 of 128, vocab-sharded embedding),
+1x4 only:
+    HF_MODEL=models/demos/gpt_oss/configs/gpt-oss-120b pytest models/demos/gpt_oss/tests/unit/test_fused_decode.py -k 1x4
 """
 
 import os
@@ -30,13 +34,17 @@ DECODE_STEPS = 8
 PAGE_BLOCK = 64
 PAGE_BLOCKS = 64  # 4096-token KV cache, as the demo (decode SDPA reads keys in chunks of up to 256 tokens)
 PCC_THRESHOLD = 0.95
+# More than 32 experts: positions whose reference routing is a near-tie (k-th / (k+1)-th router logit closer than
+# ROUTER_MARGIN in some layer) check NEAR_TIE_PCC_THRESHOLD only (see test_fused_decode_matches_reference).
+ROUTER_MARGIN = 0.1
+NEAR_TIE_PCC_THRESHOLD = 0.85
 
 
 @pytest.mark.skipif(
     os.environ.get("CI") == "true",
     reason="~45 s on a QuietBox 2; the CI gpt-oss-20b unit job has a 5-minute budget. Run locally on Blackhole 1x4.",
 )
-@parametrize_mesh_with_fabric([(1, 4)])
+@parametrize_mesh_with_fabric([(1, 1), (1, 4)])
 def test_fused_decode_matches_reference(mesh_device, device_params, reset_seeds):
     from transformers.models.gpt_oss.modeling_gpt_oss import GptOssForCausalLM
 
@@ -76,11 +84,22 @@ def test_fused_decode_matches_reference(mesh_device, device_params, reset_seeds)
 
     input_ids = torch.randint(0, config.vocab_size, (1, DECODE_STEPS))
     with torch.no_grad():
-        reference_logits = reference(
+        reference_out = reference(
             input_ids=input_ids,
             position_ids=torch.arange(DECODE_STEPS).unsqueeze(0),
             use_cache=False,
-        ).logits[0]
+            output_router_logits=True,
+        )
+    reference_logits = reference_out.logits[0]
+    # Per position, the smallest gap between the k-th and (k+1)-th router logit over the layers. With 128 random experts
+    # (gpt-oss-120b config) that gap is often below the fused path's activation error (BF16 / BFP8 against fp32), the
+    # routing then differs and the position's logits move as a whole (the original decode path too: PCC 0.92-0.98):
+    # such positions only have to stay correlated.
+    k = config.num_experts_per_tok
+    margins = torch.full((DECODE_STEPS,), float("inf"))
+    for rl in reference_out.router_logits:
+        top = rl.reshape(DECODE_STEPS, -1).float().topk(k + 1, dim=-1).values
+        margins = torch.minimum(margins, top[:, k - 1] - top[:, k])
 
     for pos in range(DECODE_STEPS):
         tokens, current_pos, rot_idxs, tt_page_table = model.prepare_inputs_decode(
@@ -91,16 +110,20 @@ def test_fused_decode_matches_reference(mesh_device, device_params, reset_seeds)
         )
         logits = model.process_output_decode(tt_logits.cpu(), B=1).reshape(-1)
         assert logits.shape[-1] == config.vocab_size
-        passing, pcc = comp_pcc(reference_logits[pos], logits.float(), PCC_THRESHOLD)
-        logger.info(f"position {pos}: logits PCC {pcc}")
-        assert passing, f"position {pos}: logits PCC {pcc} < {PCC_THRESHOLD}"
+        decisive = config.num_local_experts <= 32 or margins[pos] >= ROUTER_MARGIN
+        threshold = PCC_THRESHOLD if decisive else NEAR_TIE_PCC_THRESHOLD
+        passing, pcc = comp_pcc(reference_logits[pos], logits.float(), threshold)
+        logger.info(
+            f"position {pos}: logits PCC {pcc} (router margin {float(margins[pos]):.4f}, threshold {threshold})"
+        )
+        assert passing, f"position {pos}: logits PCC {pcc} < {threshold}"
 
 
 @pytest.mark.skipif(
     os.environ.get("CI") == "true",
     reason="QuietBox 2 only; the CI gpt-oss-20b unit job has a 5-minute budget. Run locally on Blackhole 1x4.",
 )
-@parametrize_mesh_with_fabric([(1, 4)])
+@parametrize_mesh_with_fabric([(1, 1), (1, 4)])
 def test_stock_logits_layout(mesh_device, device_params):
     """DecodeTerminal.stock_logits (penalties / log-probs / grammar requests) turns the folded logits into the original
     decode path's layout exactly: device d holds the common sampler's vocab shard d in row 0, zeros elsewhere."""
