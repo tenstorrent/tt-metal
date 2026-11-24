@@ -10,7 +10,8 @@ chip stored and the sets, and sends them as extra segments of the activation's o
 the rows into its copy of the cache. A multi-chunk schedule covers chunk-aligned starts, a 32-aligned start that is
 not chunk-aligned (rotated per-chip offsets) and partial ends. Asserted bit for bit: every received top-k set and
 KVPE segment against what G1 sent, and G2's whole cache against G1's. ``traced`` replays a captured G1 collect+send
-and a captured G2 drain+write for every chunk after the first.
+and a captured G2 drain+write for every chunk after the first. The read op's own contract (offsets, FP8 as bytes,
+program-cache hits) is op_unit_tests/test_deepseek_prefill_read_padded_kv_cache.py's.
 """
 
 from types import SimpleNamespace
@@ -142,122 +143,6 @@ def _host_index_sets(handoff, end, generator):
         idx[0, 0][tail] = SENTINEL
         sets.append(idx)
     return sets
-
-
-@pytest.mark.parametrize(
-    "mesh_device, device_params",
-    [
-        pytest.param(
-            (8, 4),
-            fabric2d_device_params(),
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="fabric2d-8x4",
-        ),
-    ],
-    indirect=["mesh_device", "device_params"],
-)
-def test_read_padded_kv_cache_round_trip(mesh_device):
-    """The read op at the production 8x4 geometry (SP 8 x TP 4, 160 rows per chip per chunk), without D2D: read a
-    layer range back after each chunk's TP-deduped write and write it into a second cache in complete-mesh mode;
-    the two caches must match bit for bit over those layers, and the unread layer must stay untouched. Alternate
-    chunks read into a fresh output, and half way the metadata tensors are replaced, so program-cache hits must
-    patch both addresses."""
-    if not is_blackhole():
-        pytest.skip("FP8_E4M3 needs Blackhole")
-    mesh_device.enable_program_cache()
-    num_layers, first, count = 3, 1, 2
-    caches = [
-        init_mla_kv_cache(
-            cache_format=MlaKvCacheFormat.SCALED_FP8,
-            hf_config=SimpleNamespace(kv_lora_rank=512, qk_rope_head_dim=64),
-            mesh_device=mesh_device,
-            seq_len=MAX_SEQ,
-            mesh_shape=list(mesh_device.shape),
-            sp_axis=0,
-            num_kvpe_cache_layers=num_layers,
-            num_users=NUM_USERS,
-            tp_axis=1,
-            bank_aligned=True,
-        ).storage
-        for _ in range(2)
-    ]
-    source, copy = caches
-    sp, tp = mesh_device.shape
-    handoff = LoopHandoff(
-        mesh_shape=(sp, tp),
-        chunk_size_global=CHUNK,
-        kv_layers=count,
-        kv_width=int(source.shape[-1]),
-        kv_dtype=source.dtype,
-        index_shape=(1, 1, CHUNK // (sp * tp), TOP_K),
-        num_index_sets=0,
-    )
-    assert handoff.chunk_rows == 160
-    sender = LoopHandoffSender(mesh_device, handoff, index_sets=[], first_kv_layer=first, num_kv_layers=num_layers)
-    meta = [_scalar(mesh_device, 0) for _ in range(3)]
-    generator = torch.Generator().manual_seed(27)
-    rows_mapper = ttnn.create_mesh_mapper(
-        mesh_device, ttnn.MeshMapperConfig(placements=[ttnn.PlacementShard(2), ttnn.PlacementReplicate()])
-    )
-    for n, (slot, start, end) in enumerate(SCHEDULE):
-        if n == len(SCHEDULE) // 2:
-            # Fresh metadata tensors on a program-cache hit: the read must patch their new addresses.
-            meta = [_scalar(mesh_device, 0) for _ in range(3)]
-        for dst, value in zip(meta, (slot, start, end)):
-            _fill(dst, [value])
-        for layer in range(num_layers):
-            rows = torch.randn(1, 1, CHUNK, int(source.shape[-1]), generator=generator).to(torch.bfloat16)
-            bf16 = ttnn.from_torch(
-                rows, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rows_mapper
-            )
-            fp8 = ttnn.typecast(bf16, ttnn.fp8_e4m3)
-            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-                source,
-                fp8,
-                meta[0],
-                meta[1],
-                layer_idx=layer,
-                num_layers=num_layers,
-                cluster_axis=0,
-                valid_global=meta[2],
-                tp_axis=1,
-            )
-            ttnn.deallocate(bf16)
-            ttnn.deallocate(fp8)
-        if n % 2:
-            # A freshly allocated output (output=None) on a cache hit: its address must be patched too.
-            rows = ttnn.experimental.deepseek_prefill.read_padded_kv_cache(
-                source,
-                meta[0],
-                meta[1],
-                first_layer=first,
-                num_read_layers=count,
-                num_layers=num_layers,
-                chunk_size_global=CHUNK,
-                cluster_axis=0,
-                tp_axis=1,
-            )
-            # The wire format is a plain row-major regrouping: packing the raw read must give what collect sends.
-            raw, rows = rows, ttnn.reshape(rows, handoff.kvpe_packed_shape())
-            if raw.buffer_address() != rows.buffer_address():
-                ttnn.deallocate(raw)
-        else:
-            sender.collect(source, meta)
-            rows = sender.kvpe_packed
-        write_kvpe_copy(copy, rows, meta, handoff, first_kv_layer=first, num_kv_layers=num_layers)
-        if rows is not sender.kvpe_packed:
-            ttnn.deallocate(rows)
-    ttnn.synchronize_device(mesh_device)
-    entries = NUM_USERS * num_layers
-    for k, (a, b) in enumerate(zip(_shards(source), _shards(copy))):
-        ta, tb = _bits(a), _bits(b)
-        for entry in range(entries):
-            layer = entry % num_layers
-            if first <= layer < first + count:
-                assert torch.equal(ta[entry], tb[entry]), f"chip {k} entry {entry}: copy differs from source"
-                assert torch.count_nonzero(ta[entry]) > 0, f"chip {k} entry {entry}: nothing written"
-            else:
-                assert torch.count_nonzero(tb[entry]) == 0, f"chip {k} entry {entry}: unread layer was written"
 
 
 @pytest.mark.parametrize("traced", [False, True], ids=["eager", "traced"])
