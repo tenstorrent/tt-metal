@@ -187,21 +187,26 @@ def _mismatch_lines(a, b):
     return lines
 
 
-def _nondeterminism_message(op, args, kwargs, out1, out2, rerun, nan_equal):
+def _structure(output):
+    """Recursive signature: nesting, lengths and None positions (list vs tuple is not distinguished)."""
+    if isinstance(output, (tuple, list)):
+        return tuple(_structure(item) for item in output)
+    return "none" if output is None else "tensor"
+
+
+def _nondeterminism_message(op, args, kwargs, out1, out2, host1, host2, rerun, nan_equal):
+    """``host1``/``host2`` are the host copies ({path: torch tensor}) already read for the failed comparison."""
     lines = [
         f"{getattr(op, 'python_fully_qualified_name', op)}: two runs with identical inputs gave different outputs "
         "(both outputs were still alive on device when compared).",
         *_describe_inputs(args, kwargs),
     ]
-    leaves1, leaves2 = dict(_leaves(out1)), dict(_leaves(out2))
-    if leaves1.keys() != leaves2.keys():
-        lines.append(f"output structure differs: run1={sorted(leaves1)} run2={sorted(leaves2)}")
-        return lines
+    device1, device2 = dict(_leaves(out1)), dict(_leaves(out2))
 
     first_bad = None
     reported = 0
-    for path, o1 in leaves1.items():
-        t1, t2 = _to_torch(o1), _to_torch(leaves2[path])
+    for path, t1 in host1.items():
+        t2 = host2[path]
         label = f"output{path}" if path else "output"
         if t1.shape != t2.shape or t1.dtype != t2.dtype:
             lines.append(
@@ -222,24 +227,26 @@ def _nondeterminism_message(op, args, kwargs, out1, out2, rerun, nan_equal):
         return lines
     path, t1, t2 = first_bad
 
-    # Re-reading the same device buffers: different from the first read => readback problem, same => compute.
-    o1, o2 = leaves1[path], leaves2[path]
+    # Re-reading the same device buffers and comparing with the ORIGINAL reads: different => readback problem,
+    # same => the device data really differs. Matching NaNs count as identical here regardless of the caller's policy,
+    # since a stable NaN says nothing about readback.
+    o1, o2 = device1[path], device2[path]
     if not isinstance(o1, torch.Tensor) and not isinstance(o2, torch.Tensor):
         try:
             r1, r2 = ttnn.to_torch(o1), ttnn.to_torch(o2)
             lines.append(
                 "re-read of the SAME output buffers: "
-                f"run1 identical to first read={torch.equal(r1, t1)}, run2 identical to first read={torch.equal(r2, t2)}"
+                f"run1 identical to first read={_equal(r1, t1, True)}, run2 identical to first read={_equal(r2, t2, True)}"
             )
         except Exception as e:  # noqa: BLE001
             lines.append(f"re-read failed: {e!r}")
 
-    # A third run says which of the first two was the outlier.
+    # A third run says which of the first two was the outlier (same NaN policy as the failed comparison).
     if rerun is not None:
         try:
             t3 = _to_torch(dict(_leaves(rerun()))[path])
             lines.append(
-                f"third run: identical to run1={torch.equal(t3, t1)}, identical to run2={torch.equal(t3, t2)} "
+                f"third run: identical to run1={_equal(t3, t1, nan_equal)}, identical to run2={_equal(t3, t2, nan_equal)} "
                 "(matches run2 only => run1 was the outlier, i.e. the first launch after earlier work on this device; "
                 "matches run1 only => run2 was the outlier)"
             )
@@ -251,22 +258,22 @@ def _nondeterminism_message(op, args, kwargs, out1, out2, rerun, nan_equal):
 def assert_deterministic(op, args, kwargs, out1, out2, rerun=None, nan_equal=False):
     """Raise AssertionError (with diagnostics) unless ``out1`` and ``out2`` are identical.
 
-    ``out1``/``out2`` may be ttnn or torch tensors, None, or nested tuples/lists of those.
+    ``out1``/``out2`` may be ttnn or torch tensors, None, or nested tuples/lists of those; their structure
+    (nesting, lengths, None positions) must match.
     ``nan_equal=False`` keeps ``torch.equal`` semantics (NaN != NaN); True treats NaN at matching positions as equal.
     ``rerun`` is an optional zero-argument callable that runs the op once more, used only on failure.
     """
-    leaves1, leaves2 = dict(_leaves(out1)), dict(_leaves(out2))
-    if (out1 is None) != (out2 is None) or leaves1.keys() != leaves2.keys():
-        raise AssertionError(
-            f"the two runs returned different output structures: {sorted(leaves1)} vs {sorted(leaves2)}"
-        )
-    ok = True
-    for path, o1 in leaves1.items():
-        ok = ok and _equal(_to_torch(o1), _to_torch(leaves2[path]), nan_equal)
-    if ok:
+    structure1, structure2 = _structure(out1), _structure(out2)
+    if structure1 != structure2:
+        raise AssertionError(f"the two runs returned different output structures: {structure1!r} vs {structure2!r}")
+    # Read every output once, up front, and keep the host copies: the report must analyse exactly what failed the
+    # comparison, and re-reading would hide a transient readback error.
+    host1 = {path: _to_torch(o) for path, o in _leaves(out1)}
+    host2 = {path: _to_torch(o) for path, o in _leaves(out2)}
+    if all(_equal(host1[path], host2[path], nan_equal) for path in host1):
         return
     try:
-        message = "\n".join(_nondeterminism_message(op, args, kwargs, out1, out2, rerun, nan_equal))
+        message = "\n".join(_nondeterminism_message(op, args, kwargs, out1, out2, host1, host2, rerun, nan_equal))
     except Exception as e:  # noqa: BLE001 - never let diagnostics hide the failure
         message = f"the two runs produced different outputs (diagnostics failed: {e!r})"
     if len(message) > _MAX_MESSAGE_CHARS:
