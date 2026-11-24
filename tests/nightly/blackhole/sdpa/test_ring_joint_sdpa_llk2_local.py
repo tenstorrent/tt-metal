@@ -129,7 +129,9 @@ def test_ring_joint_sdpa_llk2_local(ring1, monkeypatch):
         durations = [
             e["duration_ns"] for _, e in sorted(per_program.items()) if "ring_joint_reader" in str(e["kernel_sources"])
         ]
-        assert len(durations) == RUNS, f"expected {RUNS} programs, got {len(durations)}"
+        # Now and then one program from before the window is reported too: keep the last RUNS.
+        assert len(durations) >= RUNS, f"expected {RUNS} programs, got {len(durations)}"
+        durations = durations[-RUNS:]
         medians[k] = statistics.median(durations)
         _out(
             f"LLK2_RING_PERF {k} median_ns={medians[k]:.0f} runs={RUNS} min_ns={min(durations):.0f} "
