@@ -25,6 +25,7 @@ Drafter numerics never reach the output: every accepted token is the target's ow
 from __future__ import annotations
 
 import math
+import os
 
 import torch
 from ttnn.tools.trace_allocation_tracker import acknowledge_corruptible
@@ -64,8 +65,7 @@ def bank(device, w, cfg, out_dtype, cores_per_bank=6):
 
 
 class DSparkDrafter:
-    def __init__(self, model, root=None, max_ctx=None, k=BLOCK - 1, fast=True, unembed_dtype=None,
-                 ckpt="/work/models/Inkling-2-Mini"):  # fmt: skip
+    def __init__(self, model, root=None, max_ctx=None, k=BLOCK - 1, fast=True, unembed_dtype=None,ckpt="/work/models/Inkling-2-Mini"):  # fmt: skip
         """model: built Inkling2Model (shares embed, embed_norm, unembed, DecodePositions.pos).
         k: draft tokens per pass (markov steps). fast=False: E9's ttnn.linear matmuls (A/B only).
         unembed_dtype: None = the decode head's unembed; ttnn.bfloat4_b = a drafter-only 4-bit copy (+0.25 GB).
@@ -74,7 +74,14 @@ class DSparkDrafter:
         self.model = model
         self.k = k
         self.max_ctx = max_ctx or model.max_ctx
-        root = root or (wcache.DEFAULT_ROOT / "mtp")
+        # the drafter weights (convert/mtp.py) do not depend on the run mode: $INKLING_MTP_CACHE, else the mtp
+        # directory of the decode cache or of its prefill twin (the first with a manifest)
+        cands = [r / "mtp" for r in (wcache.DEFAULT_ROOT, wcache.DEFAULT_TILE_ROOT)]
+        root = (
+            root
+            or os.environ.get("INKLING_MTP_CACHE")
+            or next((c for c in cands if (c / "manifest.json").is_file()), cands[0])
+        )
         dram = ttnn.DRAM_MEMORY_CONFIG
         host = wcache.load_global(root, None)
         self.ckc = ttnn.init_device_compute_kernel_config(
@@ -150,7 +157,7 @@ class DSparkDrafter:
         del c, sn
         self.blk_ids = ttnn.from_torch(
             torch.zeros(1, 32, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev
-        )  # fmt: skip  p .. p+31
+        )
         self.commit_ids = ttnn.from_torch(torch.zeros(1, 1, dtype=torch.int32), dtype=ttnn.uint32,
                                           layout=ttnn.ROW_MAJOR_LAYOUT, device=dev)  # fmt: skip
         self.blk_pos = ttnn.from_torch(torch.zeros(1, dtype=torch.int32), dtype=ttnn.int32, device=dev)  # p
@@ -175,6 +182,7 @@ class DSparkDrafter:
                                                exp_approx_mode=False, max_cores_per_head_batch=16)  # fmt: skip
         # block K/V writer: one core per (k | v, head) on rows 0..1 of column 0..7
         self.kv_cores = [ttnn.CoreCoord(x, y) for y in range(2) for x in range(NKV)]
+        self._mix = {}  # commit_rows mix matrices (_mix_rows)
         self.trace = None
         self.tokens = None
         self.top_probs = False  # early stop (spec_generator.py): also compute each step's argmax probability
@@ -296,17 +304,34 @@ class DSparkDrafter:
         fr = self._rms(ttnn.slice(mix, [0, 0, N_LAYERS, 0], [1, 1, N_LAYERS + 1, HIDDEN]), "rnn_norm")
         ttnn.copy(fr, self.f_rnn)
 
+    def _mix_rows(self, i, R, ntap):
+        """[1, 1, R, ntap * R] fp32: row r = alpha row i on the stacked-feats rows of position r (ntap * r + j, j
+        the tap), so one matmul gives mix row i of the R positions as [1, 1, R, C] (a row slice of a tile tensor is
+        untilize + slice + tilize; the R slices + concat cost ~55 us per mix row). A position's taps stay adjacent
+        and in order: spread over the tile (tap-major rows) the sum rounds differently."""
+        key = (i, R, ntap)
+        if key not in self._mix:
+            a = ttnn.to_torch(self.w["alpha"]).float()[0, 0]
+            assert not a[i, ntap:].any()
+            m = torch.zeros(1, 1, R, ntap * R)
+            for r in range(R):
+                m[0, 0, r, ntap * r : ntap * (r + 1)] = a[i, :ntap]
+            self._mix[key] = ttnn.from_torch(m, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=self.device,
+                                             memory_config=ttnn.DRAM_MEMORY_CONFIG)  # fmt: skip
+        return self._mix[key]
+
     def commit_rows(self, feats, pos0, ids):
-        """commit() for R consecutive positions in one pass (speculative verify): feats = R tensors [1,1,32,C] (rows
-        0..3 = the taps of position p0 + r), pos0 int32 [1] = p0, ids uint32 [1, R] ROW_MAJOR = p0 .. p0+R-1. The
-        context K / V rows go to p0 .. p0+R-1 in one write per layer; f_rnn of row r goes to self.f_rnn_rows row r
-        (the caller copies the accepted row into f_rnn). Same math per row as commit()."""
-        R = len(feats)
-        mixes = [ttnn.matmul(self.w["alpha"], ttnn.typecast(f, ttnn.float32) if f.dtype != ttnn.float32 else f,
-                             dtype=ttnn.float32, compute_kernel_config=self.ckc) for f in feats]  # fmt: skip
+        """commit() for R consecutive positions in one pass (speculative verify): feats [1, 1, ntap * R, C], row
+        ntap * r + j = tap j of position p0 + r (the commit() feats rows of the R positions in turn), pos0 int32 [1]
+        = p0, ids uint32 [1, R] ROW_MAJOR = p0 .. p0+R-1. The context K / V rows go to p0 .. p0+R-1 in one write per
+        layer; f_rnn of row r goes to self.f_rnn_rows row r (the caller copies the accepted row into f_rnn). Same
+        math per row as commit(): each mix row is the same products in the same order, plus zeros."""
+        R = ids.shape[-1]
+        ntap = feats.shape[-2] // R
+        f = ttnn.typecast(feats, ttnn.float32) if feats.dtype != ttnn.float32 else feats
 
         def rows_of(j):  # mix row j of every position -> [1, 1, R, C]
-            return ttnn.concat([ttnn.slice(m, [0, 0, j, 0], [1, 1, j + 1, HIDDEN]) for m in mixes], dim=2)
+            return ttnn.matmul(self._mix_rows(j, R, ntap), f, dtype=ttnn.float32, compute_kernel_config=self.ckc)
 
         cos, sin = self._rope_rows(ids, R)
         for i in range(N_LAYERS):

@@ -236,7 +236,6 @@ class VerifyStep:
                 self.collect.append([ttnn.clone(h) for h in hs])
         # final attn-res: one shared [1, 1, R, C] output (row r = token r); the final norm is row-wise
         x_all = m._rms(F.per_row(dev, R, lambda r: m.final_res(None, hs[r], n + 1)[0])[0], m.final_norm)
-        fin = [ttnn.slice(x_all, [0, 0, t, 0], [1, 1, t + 1, HIDDEN]) for t in range(R)]
         if m.head_tail is not None:  # the plain step's fused tail, all rows in one program: logits / token bit-equal
             lt = m.head_tail.rows(x_all)
             logits = [lg for lg, _ in lt]
@@ -246,9 +245,10 @@ class VerifyStep:
             # shortcut: argmax on raw + mask, not on the softcapped row (ties after softcap may differ); only
             # reached without the fused head
             tokens = [ttnn.argmax(ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT), dim=-1, keepdim=True)]
-        # drafter context for every row in one pass (rejected rows land at positions the next draft overwrites first)
-        feats = [ttnn.pad(ttnn.concat(taps[t] + [fin[t]], dim=2), [(0, 0), (0, 0), (0, 28), (0, 0)], 0.0)
-                 for t in range(R)]  # fmt: skip
+        # drafter context for every row in one pass (rejected rows land at positions the next draft overwrites
+        # first): feats rows 4t .. 4t+3 = token t's taps and final-norm row
+        fin = [ttnn.slice(x_all, [0, 0, t, 0], [1, 1, t + 1, HIDDEN]) for t in range(R)]
+        feats = ttnn.concat([x for t in range(R) for x in taps[t] + [fin[t]]], dim=2)
         self.d.commit_rows(feats, self.positions[0].pos, self.ids)
         self.out = {"token": tokens, "logits": logits}
         return self.out
