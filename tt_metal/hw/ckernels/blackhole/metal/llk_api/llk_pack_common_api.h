@@ -34,6 +34,10 @@ struct llk_pack_in32_api<1> {
     static constexpr bool value = llk_pack_out32(unpack_src_format[0]) || llk_pack_out32(unpack_src_format[1]);
 };
 template <>
+struct llk_pack_out32_api<1> {
+    static constexpr bool value = llk_pack_out32_kind(pack_dst_format) == 1;
+};
+template <>
 struct llk_pack_in0_only32<1> {
     static constexpr bool value = DST_ACCUM_MODE && llk_pack_out32(unpack_src_format[0]) &&
                                   unpack_src_format[1] != static_cast<std::uint8_t>(DataFormat::Invalid) && !llk_pack_out32(unpack_src_format[1]);

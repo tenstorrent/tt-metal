@@ -27,6 +27,7 @@ from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
     DEST_SYNC,
     MATH_FIDELITY,
+    MATMUL_CUSTOM_PACK32,
     NUM_FACES,
     PACK_SRC_FROM_OUTPUT,
     THROTTLE_LEVEL,
@@ -139,6 +140,10 @@ def _run_matmul_custom(
                 THROTTLE_LEVEL(throttle_level),
                 PACK_SRC_FROM_OUTPUT(),
                 DEST_SYNC(dest_sync),
+                MATMUL_CUSTOM_PACK32(
+                    in32=formats.input_format == DataFormat.Float32,
+                    out32=formats.output_format == DataFormat.Float32,
+                ),
             ],
             runtimes=[
                 NUM_FACES(),
