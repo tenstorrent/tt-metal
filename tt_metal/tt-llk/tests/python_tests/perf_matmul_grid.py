@@ -54,9 +54,7 @@ from helpers.test_variant_parameters import (
     UNPACK_TRANS_FACES,
 )
 
-pytestmark = (
-    pytest.mark.llk_sweep
-)  # exhaustive sweep: CI keeps a thin subset (LLK_SWEEP_ALL=1 for all)
+pytestmark = pytest.mark.llk_sweep
 LLK_SWEEP_KEEP = frozenset(  # ids kept besides the thin subset: one per value of each swept dimension the subset misses
     [
         "test_perf_matmul_grid[case:(InputOutputFormat[A:Bfp4_b,B:Float16_b,out:Bfp8_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([32, 1024], [1024, 512]), <MathFidelity.HiFi3: 3>, 0, <L1Accumulation.No: 0>)]",

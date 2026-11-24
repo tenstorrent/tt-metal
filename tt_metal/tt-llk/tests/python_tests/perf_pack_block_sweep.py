@@ -32,6 +32,8 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 
+pytestmark = pytest.mark.llk_sweep
+
 F16B = DataFormat.Float16_b
 BFP = [
     DataFormat.Bfp8_b,

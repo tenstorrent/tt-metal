@@ -15,9 +15,7 @@ from helpers.param_config import parametrize
 from helpers.perf.core import ALL_PERF_RUN_TYPES
 from test_pack_tiny_tile_block import _make_config as _run_tiny_config
 
-pytestmark = (
-    pytest.mark.llk_sweep
-)  # exhaustive sweep: CI keeps a thin subset (LLK_SWEEP_ALL=1 for all)
+pytestmark = pytest.mark.llk_sweep
 LLK_SWEEP_KEEP = frozenset(  # ids kept besides the thin subset: one per value of each swept dimension the subset misses
     [
         "test_perf_pack_grid_tiny[formats:Float16_b->Bfp8_b-dest_acc:No-tile_dims:(16, 32)-block_tiles:1-dest_index:0-pack_mode:1-loop_factor:32]",

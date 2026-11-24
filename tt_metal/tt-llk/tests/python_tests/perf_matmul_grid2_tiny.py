@@ -50,9 +50,7 @@ from helpers.test_variant_parameters import (
 )
 from perf_matmul_grid2 import _tiny_cases, tiny_config
 
-pytestmark = (
-    pytest.mark.llk_sweep
-)  # exhaustive sweep: CI keeps a thin subset (LLK_SWEEP_ALL=1 for all)
+pytestmark = pytest.mark.llk_sweep
 
 
 @pytest.mark.perf
