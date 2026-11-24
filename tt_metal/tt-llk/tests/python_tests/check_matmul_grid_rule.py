@@ -29,7 +29,7 @@ HEADER = (
 STUB = """#pragma once
 #include <cstdint>
 namespace ckernel {
-enum class DataFormat { Invalid, Float32, Tf32, Float16, Float16_b, Bfp8, Bfp8_b, Bfp4_b, Bfp2, Bfp2_b, Bfp4, Int8, UInt8, Int32 };
+enum class DataFormat : std::uint8_t { Float32 = 0, Float16 = 1, Bfp8 = 2, Bfp4 = 3, Tf32 = 4, Float16_b = 5, Bfp8_b = 6, Bfp4_b = 7, Int32 = 8, Bfp2 = 11, Int8 = 14, Bfp2_b = 15, UInt8 = 30, Invalid = 0xff };  // the values of tensix_types.h: the packed cells of llk_matmul_forms.h hold them
 enum class MathFidelity { LoFi = 0, HiFi2 = 2, HiFi3 = 3, HiFi4 = 4 };
 enum class DstSync { SyncHalf, SyncFull };
 }
