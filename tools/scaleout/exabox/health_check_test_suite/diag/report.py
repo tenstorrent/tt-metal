@@ -405,6 +405,14 @@ def rule(l, kind, u, findings, stage, lines):
             ),
             f"watch it; a marker timeout (RESET FAIL) that repeats: tt-smi reset it again, then the board of tray {u}",
         )
+    if not warn and l.startswith("LINK FAIL") and "Ethernet bandwidth" in l:  # the links stage's bandwidth check
+        cab = has_port(part_of(l, u)[1])
+        return (
+            "Ethernet link up and passing data, but below the Deployment Test's bandwidth: a link trained or running "
+            "degraded" + (" (QSFP-DD cable or connector, or a tray board)" if cab else " (in-box, no cable: the tray-to-tray connection or a tray board)"),
+            ("reseat or replace that QSFP-DD cable" if cab else "reseat the trays at both ends")
+            + f"; if it stays slow after a reset, the board of tray {u}",
+        )
     if kind == "link" and hang:
         return f"link pair hung: cable, connector or an end chip -> next: reseat or replace the cable; triage {path_of(l, findings, stage)}"
     if l.startswith("ETH INCOMPLETE "):
@@ -1179,15 +1187,20 @@ def drop(v, m):
     )
 
 
-@reads(rf"^LINK (FAIL|HANG) ({BDF}) \(tray [1-4]\) e([0-9,]+) <-> ({BDF}) \(tray [1-4]\) e([0-9,]+): (.*)$")
+@reads(rf"^LINK (FAIL|HANG) {XBDF} \(tray [1-4]\) e([0-9,]+) <-> {XBDF} \(tray [1-4]\) e([0-9,]+): (.*)$")
 def link(v, m):
     x, y = sorted([(m[2], tuple(chans(m[3]))), (m[4], tuple(chans(m[5])))])
     where, kind = link_where(x[0], list(x[1]), y[0], list(y[1]))
     w = re.search(r"(\d+) words wrong", m[6])
+    bw = re.search(r"Ethernet bandwidth (\d+(?:\.\d+)?) Gbps", m[6])  # the links stage's bandwidth check
     what = (
         "Ethernet link hung (no progress)"
         if m[1] == "HANG"
-        else "wrong data over an Ethernet link" + (f" ({w.group(1)} words wrong)" if w else "")
+        else (
+            f"Ethernet link below bandwidth ({bw.group(1)} Gbps per link each way)"
+            if bw
+            else "wrong data over an Ethernet link" + (f" ({w.group(1)} words wrong)" if w else "")
+        )
     )
     v.fault(("link", x, y), what, where, link_do(kind, x[0], y[0], x[1], y[1]))
 
@@ -1416,6 +1429,7 @@ RULES = [
     ),
     (r"^in-box link down or bad", "the tray-to-tray connection of link {p}, then the tray boards"),
     (r"^link pair hung|^link down or bad", "the cable or port of link {p}"),
+    (r"^Ethernet link up and passing data, but below", "reseat or replace the slow Ethernet link {p}, then the tray boards"),
     (r"^weak PCIe link|^correctable AER rate outlier|^PCIe path", LOSS[0]),
     (r"^CCL group fault: one bad result from the likely source", "NUMERIC:{s}"),
     (r"^chip compute fault|^chip DRAM fault|^chip read fault", "NUMERIC:{b}"),

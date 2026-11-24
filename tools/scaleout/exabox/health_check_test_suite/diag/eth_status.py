@@ -180,7 +180,7 @@ def pcie_gate_check(functions: list[PcieFunction]) -> Check:
         "unverified": [f.bdf for f in unverified],
         "blamed_chips": blamed(f.bdf for f in dropped + unverified),
     }
-    unread = f"{len(unverified)} more could not be checked: {_listing([format_bdf(f.bdf) for f in unverified])}"
+    unread = f"{len(unverified)} more could not be checked: {listing([format_bdf(f.bdf) for f in unverified])}"
     if not functions:
         return Check(
             name="eth_status_pcie_gate",
@@ -190,17 +190,17 @@ def pcie_gate_check(functions: list[PcieFunction]) -> Check:
             ip="pcie",
         )
     if dropped:
-        listing = [
+        items = [
             f"{format_bdf(f.bdf)} "
             + ("not answering" if f.vendor == 0xFFFF else f"memory decoding off (Command=0x{f.command:04x})")
             for f in dropped
         ]
-        data["findings"] = _findings(FAIL, [f"{item} on PCIe: do NOT reset, report it" for item in listing])
+        data["findings"] = _findings(FAIL, [f"{item} on PCIe: do NOT reset, report it" for item in items])
         return Check(
             name="eth_status_pcie_gate",
             status=FAIL,
             details=(
-                f"{len(dropped)} of {len(functions)} chip(s) dropped off PCIe: {_listing(listing)}"
+                f"{len(dropped)} of {len(functions)} chip(s) dropped off PCIe: {listing(items)}"
                 + (f"; {unread}" if unverified else "")
                 + ". Links not read and the unit left as found: report it before resetting, a reset wipes the evidence"
             ),
@@ -208,17 +208,17 @@ def pcie_gate_check(functions: list[PcieFunction]) -> Check:
             ip="pcie",
         )
     if unverified:
-        listing = [format_bdf(f.bdf) for f in unverified]
+        items = [format_bdf(f.bdf) for f in unverified]
         data["findings"] = _findings(
             WARN,
-            [f"{item}: PCI config space unreadable, so whether it is safe to open is not known" for item in listing],
+            [f"{item}: PCI config space unreadable, so whether it is safe to open is not known" for item in items],
         )
         return Check(
             name="eth_status_pcie_gate",
             status=WARN,
             details=(
                 f"PCI config space of {len(unverified)} of {len(functions)} chip(s) could not be read: "
-                f"{_listing(listing)}. Whether they are safe to open is not known, so the links were not read"
+                f"{listing(items)}. Whether they are safe to open is not known, so the links were not read"
             ),
             data=data,
             ip="pcie",
@@ -368,7 +368,7 @@ def parse_chip_bdfs(tables: Tables) -> dict[int, str]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _listing(items: list[str], limit: int = 6) -> str:
+def listing(items: list[str], limit: int = 6) -> str:
     shown = "; ".join(items[:limit])
     return shown + (f"; ... and {len(items) - limit} more" if len(items) > limit else "")
 
@@ -430,7 +430,7 @@ def _link_state_checks(
         name="eth_status_links_down",
         status=FAIL if down else PASS,
         details=(
-            f"{len(down)} of {len(live)} link(s) down or unreadable: {_listing(down)}"
+            f"{len(down)} of {len(live)} link(s) down or unreadable: {listing(down)}"
             if down
             else f"{len(live)}/{len(live)} links up on {chips} chips"
             + (", none lost between the reads" if before is not None else "")
@@ -452,7 +452,7 @@ def _link_state_checks(
         name="eth_status_heartbeat",
         status=FAIL if stopped else PASS if beating else SKIP,
         details=(
-            f"{len(stopped)} eth core(s) stopped, heartbeat not moving: {_listing(stopped)}"
+            f"{len(stopped)} eth core(s) stopped, heartbeat not moving: {listing(stopped)}"
             if stopped
             else f"heartbeat moving (or core released to metal) on {beating} eth cores"
             if beating
@@ -472,7 +472,7 @@ def _link_state_checks(
         name="eth_status_port_state",
         status=WARN if odd else PASS,
         details=(
-            f"{len(odd)} port(s) in a state that cannot be judged: {_listing(odd)}"
+            f"{len(odd)} port(s) in a state that cannot be judged: {listing(odd)}"
             if odd
             else f"no port {', '.join(sorted(ODD_PORT_STATES))}"
         ),
@@ -565,12 +565,12 @@ def _counter_checks(
         )
         if bad:
             status = FAIL
-            details = f"uncorrected FEC errors rising on {len(bad)} link(s), these links corrupt data: {_listing(bad)}"
+            details = f"uncorrected FEC errors rising on {len(bad)} link(s), these links corrupt data: {listing(bad)}"
             if high:
                 details += f"; {len(high)} more >= {UNCORR_WARN_PER_S:g}/s"
         elif high:
             status = WARN
-            details = f"uncorrected FEC errors rising on {len(high)} link(s): {_listing(high)}"
+            details = f"uncorrected FEC errors rising on {len(high)} link(s): {listing(high)}"
         else:
             worst_k, worst = ranked[0]
             status = PASS
@@ -591,7 +591,7 @@ def _counter_checks(
         status = WARN if many else PASS
         details = (
             f"{len(many)} link(s) with >= {UNCORR_WARN_TOTAL:,} uncorrected FEC errors since the last reset; "
-            f"one read only, so whether they are still rising is not known: {_listing(many)}"
+            f"one read only, so whether they are still rising is not known: {listing(many)}"
             if many
             else f"one read only, no rate: max {max(totals):,} since the last reset"
         ) + reset_note
@@ -608,7 +608,7 @@ def _counter_checks(
         ranked = sorted(crc.items(), key=lambda kv: -kv[1])
         status = WARN if high else PASS
         details = (
-            f"CRC errors (bad frames) rising on {len(high)} link(s): {_listing(high)}"
+            f"CRC errors (bad frames) rising on {len(high)} link(s): {listing(high)}"
             if high
             else f"max {ranked[0][1]:,.1f}/s {span} on {len(crc)} links"
         ) + reset_note
@@ -647,10 +647,10 @@ def _counter_checks(
         status, details = SKIP, "check_eth_status reported no retrain counts"
     elif flap:
         status = FAIL
-        details = f"{len(flap)} link(s) retrained during the check, they are flapping: {_listing(flap)}"
+        details = f"{len(flap)} link(s) retrained during the check, they are flapping: {listing(flap)}"
     elif many:
         status = WARN
-        details = f"{len(many)} link(s) with >= {RETRAIN_WARN_TOTAL} retrains since the last reset: {_listing(many)}"
+        details = f"{len(many)} link(s) with >= {RETRAIN_WARN_TOTAL} retrains since the last reset: {listing(many)}"
     else:
         status = PASS
         details = (
@@ -673,7 +673,7 @@ def _counter_checks(
     else:
         status = WARN if latched else PASS
         details = (
-            f"{len(latched)} link(s) with a latched link error: {_listing(latched)}" if latched else "none latched"
+            f"{len(latched)} link(s) with a latched link error: {listing(latched)}" if latched else "none latched"
         )
     checks.append(
         Check(
@@ -766,7 +766,7 @@ def _topology_checks(now: dict[tuple[int, str], EthLink], chip_bdfs: dict[int, s
         shape = f"{found}: not a cabling with a name here, which says nothing about whether it is the intended one"
     counts = f"{len(live)} on-host links: {bi_have}/{bi_total} built-in + {on_cables} on cables"
     if unnamed:
-        counts += f" + {len(unnamed)} on channels with no port name ({_listing(unnamed, 4)})"
+        counts += f" + {len(unnamed)} on channels with no port name ({listing(unnamed, 4)})"
 
     return [
         Check(
@@ -774,7 +774,7 @@ def _topology_checks(now: dict[tuple[int, str], EthLink], chip_bdfs: dict[int, s
             status=FAIL if builtin_off else PASS,
             details=(
                 f"{bi_total - bi_have} of {bi_total} built-in links not linked, a fault on any Galaxy: "
-                f"{_listing(builtin_off)}"
+                f"{listing(builtin_off)}"
                 if builtin_off
                 else f"{bi_have}/{bi_total} built-in links linked (board traces and linking boards, 4 UBBs)"
             ),
@@ -791,7 +791,7 @@ def _topology_checks(now: dict[tuple[int, str], EthLink], chip_bdfs: dict[int, s
             status=FAIL if half else PASS,
             details=(
                 f"{len(half)} QSFP port(s) with only part of their lanes linked: the cable is there and "
-                f"part of it is dead: {_listing(half)}"
+                f"part of it is dead: {listing(half)}"
                 if half
                 else "no QSFP port linked in part"
             ),
@@ -806,7 +806,7 @@ def _topology_checks(now: dict[tuple[int, str], EthLink], chip_bdfs: dict[int, s
             status=WARN if uneven else PASS,
             details=(
                 f"{len(uneven)} QSFP port(s) linked on some UBBs and not on the others; UBBs are normally "
-                f"cabled alike, so a cable is probably dead or missing: {_listing(uneven)}"
+                f"cabled alike, so a cable is probably dead or missing: {listing(uneven)}"
                 if uneven
                 else "no QSFP port linked on some UBBs and not on the others"
             ),

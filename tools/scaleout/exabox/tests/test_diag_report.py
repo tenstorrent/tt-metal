@@ -10,13 +10,16 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import tempfile
 from pathlib import Path
+from unittest import mock
 
 SUITE_DIR = Path(__file__).resolve().parent.parent / "health_check_test_suite"
 sys.path.insert(0, str(SUITE_DIR))
 sys.path.append(str(SUITE_DIR / "galaxy"))
 
-from diag import report  # noqa: E402
+from diag import events, report  # noqa: E402
+from diag.model import FAIL  # noqa: E402
 
 POWER = [
     "POWER DROP tray 4 (8 chips lost: 81:00.0 82:00.0 83:00.0 84:00.0 85:00.0 86:00.0 87:00.0 88:00.0) in the bus-bar "
@@ -347,3 +350,44 @@ def test_first_action_thermal_and_psu_get_no_prefix(tmp_path):  # no fleet recor
     i = "the PSU named in the PSU FINDING line; the tray 3 board carrying 85:00.0"
     fam = {"the PSU named in the PSU FINDING line": None, "the tray 3 board carrying 85:00.0": "math"}
     assert report.lead(i, fam, report.history(None)) == i
+
+
+def test_ethernet_bandwidth_link_finding(tmp_path):
+    """A links_bandwidth low pair: one LINK FAIL line, its cause, verdict wording and repair line."""
+    # the 0000:-prefixed BDFs are what events._check_lines emits from UMD discovery
+    line = (
+        "LINK FAIL 0000:c1:00.0 (tray 3) e16 <-> 0000:c2:00.0 (tray 3) e0: Ethernet bandwidth 118 Gbps per link "
+        "each way, below 140 Gbps"
+    )
+    warn = "links WARN 02:00.0 (tray 1) e8: 1 pair not judged (under 2 warm launches)"
+    out = run(tmp_path, [line, warn], {line: "C5", warn: "C5"}, rc=8, verdict="FAIL (exit 8)")
+    assert any(
+        "Ethernet bandwidth 118 Gbps per link each way, below 140 Gbps" in l for l in out
+    ), out
+    assert "Final verdict: FAIL: 1 fault: Ethernet link below bandwidth" in out
+    repair = next(l for l in out if l.startswith("Repair recommendation:"))
+    assert "reseat or replace the slow Ethernet link" in repair
+    low = [l for l in out if "Ethernet link up and passing data, but below the Deployment Test's bandwidth" in l]
+    assert low and "reseat the trays at both ends" in low[0]
+
+
+def test_ethernet_bandwidth_events_lines(tmp_path):
+    """A links_bandwidth check's data['failed'] renders as one LINK FAIL per low pair; ends and why carry through."""
+    ends = [
+        {
+            "a": {"bdf": "0000:c1:00.0", "tray": 3, "channel": 16},
+            "b": {"bdf": "0000:c2:00.0", "tray": 3, "channel": 0},
+        }
+    ]
+    failed = [
+        {"why": "Ethernet bandwidth 118 Gbps per link each way, below 140 Gbps", "ends": ends},
+    ]
+    report = {"phases": {"tests": {"checks": [{"name": "links_bandwidth", "status": FAIL, "details": "x", "data": {"failed": failed}}]}}}
+    with tempfile.TemporaryDirectory() as d:
+        with mock.patch.object(events, "args", argparse.Namespace(dry_run=False, output=Path(d) / "r.json")):
+            events.check_findings(report)
+            got = (Path(d) / "finding_stage.tsv").read_text().splitlines()
+    assert got == [
+        "C5\tLINK FAIL 0000:c1:00.0 (tray 3) e16 <-> 0000:c2:00.0 (tray 3) e0: "
+        "Ethernet bandwidth 118 Gbps per link each way, below 140 Gbps"
+    ]

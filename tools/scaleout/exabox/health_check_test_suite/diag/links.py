@@ -30,7 +30,7 @@ from pathlib import Path
 from . import events
 from .busbar import GALAXY_DIR, SETUP_S
 from .common import emit_result, emit_running, log, start_group, stop_group
-from .eth_status import _listing
+from .eth_status import listing
 from .model import FAIL, PASS, SKIP, WARN, Check, Phase
 from .naming import chip, link_end
 
@@ -217,9 +217,13 @@ def _label(disc: dict, a: int, b: int) -> str:
 
 def _rerun_cold(d: Path, rounds: list, disc: dict, seconds: int, sys_root: str, failed: list) -> None:
     """A pair that passed with under BW_WARM warm launches runs once more, with its round's other such pairs (its first
-    run's files kept as <pair>.cold.*); a failure of that run joins *failed*."""
+    run's files kept as <pair>.cold.*); a failure of that run joins *failed* (its why says the warm rerun). A round the
+    time cap cut off (its pairs never ran) is not rerun: its pairs are reported by the pair check, not this one."""
     bad = {f["pair"] for f in failed}
     for r in rounds:
+        ran = [(a, b, ch) for a, b, ch in r if _label(disc, a, b) not in bad]
+        if not all((d / f"{_label(disc, a, b)}.log").exists() for a, b, _ in ran):
+            continue  # the cap cut this round off: no rows file, nothing measured to rerun
         cold = [
             (a, b, ch)
             for a, b, ch in r
@@ -231,18 +235,22 @@ def _rerun_cold(d: Path, rounds: list, disc: dict, seconds: int, sys_root: str, 
                 if f.exists():
                     f.rename(d / f"{_label(disc, a, b)}.cold.{ext}")
         if cold:
-            failed += _round(d, cold, disc, seconds, sys_root)
+            reran = _round(d, cold, disc, seconds, sys_root)
+            for f in reran:
+                f["why"] = f"warm rerun {f['why']}"
+            failed.extend(reran)
 
 
 def eth_bandwidth(phase: Phase, d: Path, rounds: list, disc: dict, failed: list) -> None:
     """Adds the links_bandwidth check for the pairs of *rounds* not in *failed*: FAIL names each pair below BW_GBPS
     per link each way, WARN the pairs with under BW_WARM warm launches (not judged)."""
     bad = {f["pair"] for f in failed}
-    got, low, unjudged = [], [], []
+    got, low, unjudged, uends = [], [], [], {}
     for a, b, ch in (p for r in rounds for p in r if _label(disc, *p[:2]) not in bad):
         lab = _label(disc, a, b)
         g, n = warm_gbps(d / f"{lab}.rows", len(ch))
         if g is None or n < BW_WARM:
+            uends[lab] = link_ends(disc, a, b, ch)
             unjudged.append(f"{lab} ({n} warm)")
             continue
         got.append(g)
@@ -252,7 +260,7 @@ def eth_bandwidth(phase: Phase, d: Path, rounds: list, disc: dict, failed: list)
     what += f", {len(low)} below {BW_GBPS:g} Gbps (Deployment Test bidirectional criterion)"
     what += "".join(f"; {l['pair']} (channels {','.join(map(str, l['channels']))}): {l['gbps']:g} Gbps" for l in low)
     if unjudged:
-        what += f"; {len(unjudged)} not judged (under {BW_WARM} warm launches): {_listing(unjudged)}"
+        what += f"; {len(unjudged)} not judged (under {BW_WARM} warm launches): {listing(unjudged)}"
     status = FAIL if low else WARN if unjudged else PASS if got else SKIP
     emit_result("links_bandwidth", status, suffix=f"({len(got)} pairs)")
     phase.add(
@@ -266,7 +274,14 @@ def eth_bandwidth(phase: Phase, d: Path, rounds: list, disc: dict, failed: list)
                 "judged": len(got),
                 "low": low,
                 "not_judged": unjudged,
-                "link_ends": [e for l in low for e in l["ends"]],
+                # the low pairs as _check_lines-shaped "failed" entries: events._check_lines renders each as a
+                # LINK FAIL naming both ends by BDF, tray and ETH channels
+                "failed": [
+                    {"why": f"Ethernet bandwidth {l['gbps']:g} Gbps per link each way, below {BW_GBPS:g} Gbps",
+                     "ends": l["ends"]}
+                    for l in low
+                ],
+                "link_ends": [e for l in low for e in l["ends"]] + [e for k, ends in uends.items() for e in ends],
                 "dir": str(d),
             },
         )

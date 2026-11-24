@@ -185,9 +185,12 @@ Each tier runs the load at its own length, `load_mode` in `tiers.py`:
 | `full` | `full` | about 56 min | last chunk 25 min, longer G3b/N1/N2/register-file checks, full L1 march, heavy 750 s, code readback 60 s |
 
 Mesh open, compile and the links test come on top, at every length: about
-10 min more by estimate, not yet measured. The links test keeps its 10 s per
-pair and the sweep its 300 s cap whatever the length, so a sweep after a fault
-adds the same on every tier. `run_health_check.py` gives each of these tiers its own whole-run
+10 min more by estimate, not yet measured. The links test runs each pair at
+the longer of `--pair-s` and `--bw-s` (20 s per pair by default, plus one
+rerun round for pairs with under 2 warm launches) and the sweep keeps its
+300 s cap whatever the length, so the pair test adds about 0.75 min to every
+tier (measured on a reference Galaxy); a sweep after a fault adds the same on
+every tier. `run_health_check.py` gives each of these tiers its own whole-run
 timeout for that: 90 min for `daily`, 120 for `weekly`, 180 for `full` (60 for
 the other tiers).
 
