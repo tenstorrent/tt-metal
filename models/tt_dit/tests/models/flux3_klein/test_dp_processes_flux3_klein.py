@@ -213,6 +213,19 @@ def test_open_groups_closes_what_it_built_when_a_group_fails(monkeypatch, groups
     assert calls == ([("close", "sub0")] if groups == 2 else []) + [("close_mesh", mesh)]
 
 
+def test_open_groups_passes_the_servers_snapshots_through_create(monkeypatch, tmp_path):
+    import ttnn
+
+    built = []
+    monkeypatch.setattr(dp, "open_group_mesh", lambda s: "mesh")
+    monkeypatch.setattr(pl, "resolve_weights_dir", lambda model: pytest.fail("snapshots were given"))
+    monkeypatch.setattr(pl.Flux3KleinPipeline, "__init__", lambda self, m, **kw: built.append((m, kw)))
+    monkeypatch.setattr(ttnn, "close_mesh_device", lambda m: None)
+    mesh, pipelines = dp.open_groups(1, snapshots={"distilled": tmp_path}, upsample=False)
+    assert mesh == "mesh" and len(pipelines) == 1
+    assert built[0][1]["snapshots"] == {"distilled": tmp_path} and built[0][1]["upsample"] is False
+
+
 def _explode():
     raise ValueError("cannot rebuild")
 
