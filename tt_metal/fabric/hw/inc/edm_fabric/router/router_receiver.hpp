@@ -746,9 +746,15 @@ FORCE_INLINE Connections set_up_channels(const RuntimeArgs& args) {
     if constexpr (is_receiver_role) {
         if constexpr (any_forwards_on_vc(0)) {
             init_downstreams(downstreams.vc0, args.vc0());
+            if constexpr (!stream_registers_available) {
+                init_downstream_write_counts(downstreams.vc0, args.vc0(), args.vc0_args.producer_cursors);
+            }
         }
         if constexpr (any_forwards_on_vc(1)) {
             init_downstreams(downstreams.vc1, args.vc1());
+            if constexpr (!stream_registers_available) {
+                init_downstream_write_counts(downstreams.vc1, args.vc1(), args.vc1_args.producer_cursors);
+            }
         }
         if constexpr (udm_mode) {
             init_relay(downstreams.relay, args.relay);

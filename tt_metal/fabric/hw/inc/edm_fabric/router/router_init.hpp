@@ -256,7 +256,7 @@ struct RuntimeArgs {
 private:
     template <size_t N>
     DownstreamArgs of(const VcDownstreamArgs<N>& a, size_t first_teardown_sem) const {
-        DownstreamArgs args{
+        return {
             a.mask & ((1u << max_downstreams) - 1),
             a.first_slot_addrs.data(),
             a.location_info.data(),
@@ -264,10 +264,6 @@ private:
             teardown_sems.data() + first_teardown_sem,
             a.noc_x,
             a.noc_y};
-        if constexpr (!stream_registers_available) {
-            args.producer_cursor_addrs = a.producer_cursors.data();
-        }
-        return args;
     }
 };
 

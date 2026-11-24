@@ -186,8 +186,7 @@ FORCE_INLINE void forward_stateless(
 
 // The downstream connections of one VC as the runtime args describe them: which entries have a downstream (one bit
 // each), and for those, by dense index, first slot address, location-info and registration addresses on the
-// downstream, this router's teardown semaphore for it, and the NoC coordinates (packed, one byte per dense index);
-// without stream registers also the downstream sender channel's producer-cursor block (absent with them).
+// downstream, this router's teardown semaphore for it, and the NoC coordinates (packed, one byte per dense index).
 struct DownstreamArgs {
     uint32_t entries;
     const uint32_t* first_slot_addrs;
@@ -196,7 +195,6 @@ struct DownstreamArgs {
     const size_t* teardown_sems;
     uint32_t noc_x_packed;
     uint32_t noc_y_packed;
-    [[no_unique_address]] Present<!stream_registers_available, const uint32_t*, 0> producer_cursor_addrs;
 };
 
 FORCE_INLINE uint32_t dense_noc_x(const DownstreamArgs& args, uint32_t dense) {
@@ -540,12 +538,11 @@ struct DownstreamConnections {
 // Init (out of line, once)
 // ---------------------------------------------------------------------------------------------------------------------
 
-// Before the Ethernet handshake: zero the teardown semaphores, set the local credit copies to the ring size (without
-// stream registers: zero the write counts and the downstreams' read counts), fill the links and the progress. Args
-// (DownstreamArgs) is a template parameter so that the absent producer_cursor_addrs is named only in template-dependent
-// code.
-template <size_t VC, typename Args>
-__attribute__((noinline)) void init_downstreams(Downstreams<VC>& downstreams, const Args& args) {
+// Before the Ethernet handshake: zero the teardown semaphores, set the local credit copies to the ring size, fill the
+// links and the progress. Without stream registers init_downstream_write_counts() sets the counts and the links'
+// credit addresses.
+template <size_t VC>
+__attribute__((noinline)) void init_downstreams(Downstreams<VC>& downstreams, const DownstreamArgs& args) {
     using Traits = DownstreamTraits<VC>;
     auto& links = downstreams.links;
     uint32_t dense = 0;
@@ -564,19 +561,33 @@ __attribute__((noinline)) void init_downstreams(Downstreams<VC>& downstreams, co
             if constexpr (stream_registers_available) {
                 links[entry].credit_noc_addr = get_noc_addr(
                     x, y, get_stream_reg_write_addr(Traits::template remote_credit_stream<entry>), Traits::noc);
-            } else {
-                downstreams.written[entry] = 0;
-                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(Traits::template downstream_read_count_addr<entry>) = 0;
-                links[entry].credit_noc_addr = get_noc_addr(
-                    x,
-                    y,
-                    args.producer_cursor_addrs[dense] +
-                        offsetof(tt::tt_fabric::SenderChannelProducerCursor, write_counter),
-                    Traits::noc);
             }
             dense++;
         }
         downstreams.progress[entry] = {/*free_slots=*/0, /*next_slot_addr=*/links[entry].first_slot_addr};
+    });
+}
+
+// Without stream registers, after init_downstreams: zero the write counts and the downstreams' read counts, and point
+// each link's credit address at the write count of its downstream sender channel's producer-cursor block
+// (`producer_cursors`, by dense index, as VcDownstreamArgs holds them).
+template <size_t VC, typename Cursors>
+__attribute__((noinline)) void init_downstream_write_counts(
+    Downstreams<VC>& downstreams, const DownstreamArgs& args, const Cursors& producer_cursors) {
+    using Traits = DownstreamTraits<VC>;
+    uint32_t dense = 0;
+    for_each_index<Traits::count>([&](auto entry_constant) {
+        constexpr size_t entry = decltype(entry_constant)::value;
+        if ((args.entries >> entry) & 1u) {
+            downstreams.written[entry] = 0;
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(Traits::template downstream_read_count_addr<entry>) = 0;
+            downstreams.links[entry].credit_noc_addr = get_noc_addr(
+                dense_noc_x(args, dense),
+                dense_noc_y(args, dense),
+                producer_cursors[dense] + offsetof(tt::tt_fabric::SenderChannelProducerCursor, write_counter),
+                Traits::noc);
+            dense++;
+        }
     });
 }
 
