@@ -140,6 +140,7 @@ KV_ROW = (HD // TILE) * TILE_BYTES[ttnn.bfloat8_b]  # one position tile of a K c
 # Strata S0 step 1 (RESIDENT_KV_V_BFP4, default off): the V caches / pool in bfp4 tiles, K stays bf8 (V tolerates 4-bit
 # mantissas: corpus NLL +0.13% at 8K, within noise at 32K; the pool holds ~34% more tokens per byte)
 V_BFP4 = os.environ.get("RESIDENT_KV_V_BFP4", "0") == "1"
+SPEC_SAMPLE = os.environ.get("RESIDENT_SPEC_SAMPLE", "0") == "1"
 V_DT = ttnn.bfloat4_b if V_BFP4 else ttnn.bfloat8_b
 V_ROW = (HD // TILE) * TILE_BYTES[V_DT]  # one position tile of a V cache page
 
@@ -673,7 +674,9 @@ class ResidentModel:
         # one group keeps them in the head's words 1 .. batch
         self.tok_pos_off = 0
         self.fc = fc is not None
-        self.sample = embed is not None and not verify  # the hub draws the fed token (sampling.hpp)
+        # the hub draws the fed token (sampling.hpp); verify rows only with RESIDENT_SPEC_SAMPLE (each row sampled with
+        # its user's parameters at its own position: sampled speculation, a feasibility flag — default off)
+        self.sample = embed is not None and (not verify or (SPEC_SAMPLE and self.vrows))
         # (verify rows: users of R rows, 8 / R per row group — 4 x 8 or 8 x 4 at four groups)
         self.vusers = groups * 8 // R if self.vrows else 0
         if self.vrows:
