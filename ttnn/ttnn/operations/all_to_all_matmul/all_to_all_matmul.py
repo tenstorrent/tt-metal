@@ -141,6 +141,12 @@ def _check_caller_errors(input_tensor, weight, cluster_axis, topology, num_links
                     raise ValueError(
                         f"all_to_all_matmul: hop {s} -> {d} has {len(links)} usable link(s), {num_links} requested"
                     )
+    # The weight must be TILE / interleaved and the input in DRAM (contract; no TARGET axis enumerates either).
+    wmc = weight.memory_config()
+    if weight.layout != ttnn.TILE_LAYOUT or wmc.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+        raise ValueError("all_to_all_matmul: weight must be TILE, interleaved")
+    if input_tensor.memory_config().buffer_type != ttnn.BufferType.DRAM:
+        raise ValueError("all_to_all_matmul: input must be DRAM interleaved")
     payload = int(ttnn.get_tt_fabric_max_payload_size_bytes())
     tile_bytes = int(input_tensor.buffer_page_size()) if input_tensor.layout == ttnn.TILE_LAYOUT else 2048
     if payload // tile_bytes < 1:
@@ -185,12 +191,6 @@ def validate(
     for exc in EXCLUSIONS:
         if all(axes.get(k) == v for k, v in exc.items()):
             raise ExcludedCell(f"all_to_all_matmul: unsupported combination (refinement candidate): {exc}")
-    # The weight must also be TILE / DRAM interleaved (contract; no TARGET axis enumerates it).
-    wmc = weight.memory_config()
-    if weight.layout != ttnn.TILE_LAYOUT or wmc.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
-        raise ValueError("all_to_all_matmul: weight must be TILE, interleaved")
-    if input_tensor.memory_config().buffer_type != ttnn.BufferType.DRAM:
-        raise ValueError("all_to_all_matmul: input must be DRAM interleaved")
 
 
 # ---------------------------------------------------------------------------

@@ -14,7 +14,7 @@ minus the union of every chip's port cores — 101 compute cores on the QuietBox
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
 | `cb_a_landed` | `scratch_slot_capacity_tiles` = shard of `landing_scratch`, `≥ heads_per_core_max * block_m_tiles * Kt` (grow-only; equals it on the largest call seen) | `heads_this_core * block_m_tiles * Kt` — every slot of the core is resident at once: remote routers write any slot at any moment of the call | `{head: spans → heads_per_core_max slots, rows: spans → block_m_tiles, k: spans → Kt, n: streams (retained across n-blocks, not scaled by them), entry: spans → one entry per slot}` | input dtype tiles (Float16_b): a dataflow payload landed bit-exact, never through DEST | reader | compute | whole call (persistent buffer across calls; contents per call) | Cannot share: written by remote chips concurrently with every other CB's lifetime; it **is** the destination (pack-into-destination pattern for the exchange: no staging copy exists). Capacity above live set on cores with fewer heads than `heads_per_core_max` or after a grow: one shard size per sharded tensor |
-| `cb_weight` | `WEIGHT_DEPTH * Kt * block_n_tiles` (`WEIGHT_DEPTH` = 2) | `2 * Kt * block_n_tiles` (one block multiplied while the next loads; on a 1-block core, the one block) | `{head: streams, rows: streams (weight independent of rows), k: spans → Kt, n: spans → block_n_tiles, entry: streams}` | weight dtype (Float16_b; Bfp8_b refinement) — input operand | reader | compute | whole call | Cannot share with `cb_out` / `cb_a_landed`: concurrent (weight of block i+1 loads while block i packs out). Over-capacity on a single-block core (Kimi: 1 head, 1 n-block → second half unused) is the depth knob's price; perf lamp |
+| `cb_weight` | `weight_depth * Kt * block_n_tiles`, `weight_depth = min(WEIGHT_DEPTH, heads_per_core_max * num_n_blocks)` (`WEIGHT_DEPTH` = 2; verifier: capped at the blocks a core processes per call) | `weight_depth * Kt * block_n_tiles` (one block multiplied while the next loads; on a 1-block core — Kimi, GLM — the one block) | `{head: streams, rows: streams (weight independent of rows), k: spans → Kt, n: spans → block_n_tiles, entry: streams}` | weight dtype (Float16_b; Bfp8_b refinement) — input operand | reader | compute | whole call | Cannot share with `cb_out` / `cb_a_landed`: concurrent (weight of block i+1 loads while block i packs out). Verifier fix: the second buffer is no longer allocated when no core has a second block (Kimi / GLM: 1 head x 1 n-block): measured neutral (fastest chip 94.47 → 94.42 us, within noise), L1 peak 368672 → 270368 B (Kimi), 458752 → 262144 B (GLM) |
 | `cb_out` | `OUT_DEPTH * out_subblock_h * block_n_tiles` (`OUT_DEPTH` = 2) | `2 * out_subblock_h * block_n_tiles` | `{head: streams, rows: streams in out_subblock_h row groups, k: streams (accumulated in DEST, never stored), n: spans → block_n_tiles, entry: streams}` | output dtype Float16_b — output ABI (the final rounding of the fp32 DEST sum to the bf16 output); not an intermediate, so audit 2's under-width finding does not apply | compute | writer | whole call | Cannot share: concurrent with both inputs. Also serves as `matmul_block`'s interm placeholder (one K-block: no spill, `matmul_block_helpers.hpp:247-249`), so no partials CB exists (fold-into-DEST pattern: the K-sum never leaves DEST) |
 
 ## Port cores (2·num_links per chip)
@@ -36,18 +36,19 @@ Inventory check (Rules 1 and 3): no intermediate CB — the exchange packs into 
 | `out_subblock_h` | divides `block_m_tiles`; `out_subblock_h * out_subblock_w ≤ DEST_AUTO_LIMIT` (4 fp32 / 8 bf16) | host subblock rule |
 | `packet_tiles = floor(max_payload / tile_bytes)` | 1 ≤ packet_tiles ≤ 7 (14400 B, bf16) | validate (`≥ 1`); Blackhole max payload |
 | `WEIGHT_DEPTH`, `OUT_DEPTH`, `PORT_BATCH_CHUNKS` | 2, 2, 8 | host constants |
+| `weight_depth` | `min(WEIGHT_DEPTH, heads_per_core_max * num_n_blocks)` ≤ 2 | host derivation |
 
 ## Total per-core footprint
 
 Compute core:
-`L1_compute = scratch_slot_capacity_tiles*2048 + WEIGHT_DEPTH*Kt*block_n_tiles*weight_tile_bytes + OUT_DEPTH*out_subblock_h*block_n_tiles*2048`
+`L1_compute = scratch_slot_capacity_tiles*2048 + weight_depth*Kt*block_n_tiles*weight_tile_bytes + OUT_DEPTH*out_subblock_h*block_n_tiles*2048`
 ≤ 384 KiB (A, scales with heads_per_core and block_m) + 2 × 256 KiB (weight, scales with Kt·block_n and WEIGHT_DEPTH) + `OUT_DEPTH*out_subblock_h*block_n_tiles*2048` (scales with block_n and out_subblock_h; 128 KiB at block_n = 32, sb_h = 1, the largest over INPUTS).
 
 | Case | A slots | weight | out | total |
 |------|---------|--------|-----|-------|
-| Kimi (1 head, Kt 4, Nt 16, sb 1x4) | 40 KiB | 256 KiB | 64 KiB | 360 KiB |
-| DeepSeek (2 heads) | 80 KiB | 256 KiB | 64 KiB | 400 KiB |
-| GLM (Kt 6) | 60 KiB | 384 KiB | 64 KiB | 508 KiB |
+| Kimi (1 head, Kt 4, Nt 16, sb 1x4; weight_depth 1) | 40 KiB | 128 KiB | 64 KiB | 232 KiB |
+| DeepSeek (2 heads; weight_depth 2) | 80 KiB | 256 KiB | 64 KiB | 400 KiB |
+| GLM (Kt 6; weight_depth 1) | 60 KiB | 192 KiB | 64 KiB | 316 KiB |
 | deep K (Kt 128, block_n 1) | 256 KiB | 512 KiB | 4 KiB | 772 KiB |
 | wide N 8192 (block_n 32) | 8 KiB | 512 KiB | 128 KiB | 648 KiB |
 

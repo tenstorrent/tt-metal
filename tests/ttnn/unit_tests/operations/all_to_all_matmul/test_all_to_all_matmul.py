@@ -18,8 +18,8 @@ import pytest
 import torch
 import ttnn
 
-# Golden-suite fixtures (mesh opened once per session with the fabric; never opened manually here).
-from eval.golden_tests.all_to_all_matmul.conftest import _fabric_mesh_cache, mesh_device  # noqa: F401
+# Golden-suite fixtures (mesh_device, _fabric_mesh_cache) come from this directory's conftest.py: one session cache
+# shared by every module (a per-module import would make a second cache that re-opens the fabric under the first).
 from eval.golden_tests.all_to_all_matmul.helpers import (
     _tolerance_for,
     check_output,

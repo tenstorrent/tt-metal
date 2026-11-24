@@ -1,0 +1,2434 @@
+{
+  "summary": {
+    "total": 156,
+    "supported_pass": 16,
+    "supported_fail": 0,
+    "supported_marked_xfail": 0,
+    "supported_skipped": 0,
+    "supported_other": 0,
+    "xfail_expected": 132,
+    "xpass_drift": 0,
+    "xfail_wrong_mode": 0,
+    "xfail_other": 0,
+    "invalid_skipped": 0,
+    "invalid_unexpected": 0,
+    "infeasible_skipped": 0,
+    "no_axes_found": 8
+  },
+  "by_category": {
+    "supported_pass": [
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x24x640x128-w1x96x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x24x512x128-w1x96x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x24x256x128-w1x96x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x32x640x128-w1x128x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x16x640x192-w1x64x192x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x16x512x192-w1x64x192x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x16x256x192-w1x64x192x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x4x128x32-w1x16x32x32-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x4x128x64-w1x16x64x128-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x8x256x128-w1x32x128x256-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[2x8x128x128-w1x32x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x8x2048x128-w1x32x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x4x128x4096-w1x16x4096x128-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x4x128x128-w1x16x128x4096-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x4x128x128-w1x16x128x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op_loose[1x24x640x128-w1x96x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      }
+    ],
+    "xfail_expected": [
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x24x640x128-w1x96x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x24x640x128-w1x96x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x24x640x128-w1x96x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x24x640x128-w1x96x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x24x640x128-w1x96x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x24x640x128-w1x96x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x24x640x128-w1x96x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x24x512x128-w1x96x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x24x512x128-w1x96x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x24x512x128-w1x96x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x24x512x128-w1x96x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x24x512x128-w1x96x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x24x512x128-w1x96x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x24x512x128-w1x96x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x24x256x128-w1x96x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x24x256x128-w1x96x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x24x256x128-w1x96x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x24x256x128-w1x96x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x24x256x128-w1x96x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x24x256x128-w1x96x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x24x256x128-w1x96x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x32x640x128-w1x128x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x32x640x128-w1x128x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x32x640x128-w1x128x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x32x640x128-w1x128x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x32x640x128-w1x128x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x32x640x128-w1x128x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x32x640x128-w1x128x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x16x640x192-w1x64x192x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x16x640x192-w1x64x192x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x16x640x192-w1x64x192x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x16x640x192-w1x64x192x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x16x640x192-w1x64x192x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x16x640x192-w1x64x192x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x16x640x192-w1x64x192x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x16x512x192-w1x64x192x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x16x512x192-w1x64x192x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x16x512x192-w1x64x192x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x16x512x192-w1x64x192x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x16x512x192-w1x64x192x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x16x512x192-w1x64x192x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x16x512x192-w1x64x192x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x16x256x192-w1x64x192x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x16x256x192-w1x64x192x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x16x256x192-w1x64x192x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x16x256x192-w1x64x192x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x16x256x192-w1x64x192x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x16x256x192-w1x64x192x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x16x256x192-w1x64x192x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x4x128x32-w1x16x32x32-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x4x128x32-w1x16x32x32-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x4x128x32-w1x16x32x32-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x4x128x32-w1x16x32x32-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x4x128x32-w1x16x32x32-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x4x128x32-w1x16x32x32-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x4x128x32-w1x16x32x32-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x4x128x64-w1x16x64x128-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x4x128x64-w1x16x64x128-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x4x128x64-w1x16x64x128-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x4x128x64-w1x16x64x128-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x4x128x64-w1x16x64x128-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x4x128x64-w1x16x64x128-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x4x128x64-w1x16x64x128-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x8x256x128-w1x32x128x256-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x8x256x128-w1x32x128x256-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x8x256x128-w1x32x128x256-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x8x256x128-w1x32x128x256-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x8x256x128-w1x32x128x256-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x8x256x128-w1x32x128x256-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x8x256x128-w1x32x128x256-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[2x8x128x128-w1x32x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[2x8x128x128-w1x32x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[2x8x128x128-w1x32x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[2x8x128x128-w1x32x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[2x8x128x128-w1x32x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[2x8x128x128-w1x32x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[2x8x128x128-w1x32x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x8x2048x128-w1x32x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x8x2048x128-w1x32x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x8x2048x128-w1x32x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x8x2048x128-w1x32x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x8x2048x128-w1x32x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x8x2048x128-w1x32x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x8x2048x128-w1x32x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x4x128x4096-w1x16x4096x128-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x4x128x4096-w1x16x4096x128-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x4x128x4096-w1x16x4096x128-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x4x128x4096-w1x16x4096x128-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x4x128x4096-w1x16x4096x128-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x4x128x4096-w1x16x4096x128-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x4x128x4096-w1x16x4096x128-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x4x128x128-w1x16x128x4096-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x4x128x128-w1x16x128x4096-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x4x128x128-w1x16x128x4096-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x4x128x128-w1x16x128x4096-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x4x128x128-w1x16x128x4096-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x4x128x128-w1x16x128x4096-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x4x128x128-w1x16x128x4096-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x4x128x128-w1x16x128x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x4x128x128-w1x16x128x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x4x128x128-w1x16x128x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x4x128x128-w1x16x128x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x4x128x128-w1x16x128x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x4x128x128-w1x16x128x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x4x128x128-w1x16x128x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x24x160x128-w1x96x128x512-alignment=m_non_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "m_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x24x160x128-w1x96x128x512-alignment=m_non_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "m_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x24x160x128-w1x96x128x512-alignment=m_non_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "m_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x24x160x128-w1x96x128x512-alignment=m_non_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "m_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x24x160x128-w1x96x128x512-alignment=m_non_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "m_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x24x160x128-w1x96x128x512-alignment=m_non_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "m_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x24x160x128-w1x96x128x512-alignment=m_non_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "m_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x24x160x128-w1x96x128x512-alignment=m_non_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "m_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x8x96x128-w1x32x128x512-alignment=m_non_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "m_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x8x96x128-w1x32x128x512-alignment=m_non_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "m_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x8x96x128-w1x32x128x512-alignment=m_non_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "m_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x8x96x128-w1x32x128x512-alignment=m_non_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "m_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x8x96x128-w1x32x128x512-alignment=m_non_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "m_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x8x96x128-w1x32x128x512-alignment=m_non_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "m_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x8x96x128-w1x32x128x512-alignment=m_non_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "m_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x8x96x128-w1x32x128x512-alignment=m_non_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "m_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x8x48x64-w1x32x64x128-alignment=m_non_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "m_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x8x48x64-w1x32x64x128-alignment=m_non_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "m_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x8x48x64-w1x32x64x128-alignment=m_non_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "m_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x8x48x64-w1x32x64x128-alignment=m_non_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "m_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x8x48x64-w1x32x64x128-alignment=m_non_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "m_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x8x48x64-w1x32x64x128-alignment=m_non_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "m_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x8x48x64-w1x32x64x128-alignment=m_non_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=DRAM-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "DRAM",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "m_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op[1x8x48x64-w1x32x64x128-alignment=m_non_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT8_B]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "m_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op_loose[1x24x640x128-w1x96x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op_loose[1x32x640x128-w1x128x128x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_golden.py::test_op_loose[1x16x640x192-w1x64x192x512-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=TILE-memory_layout=INTERLEAVED-num_links=2-output_buffer=L1-topology=Ring-weight_dtype=BFLOAT16]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": false,
+          "output_buffer": "L1",
+          "memory_layout": "INTERLEAVED",
+          "cluster_axis": 1,
+          "topology": "Ring",
+          "num_links": 2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      }
+    ],
+    "no_axes_found": [
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_regression.py::test_head_provenance",
+        "test_name": "test_head_provenance",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_regression.py::test_row_provenance",
+        "test_name": "test_row_provenance",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_regression.py::test_distribution[small]",
+        "test_name": "test_distribution[small]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_regression.py::test_distribution[large]",
+        "test_name": "test_distribution[large]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_regression.py::test_distribution[offset]",
+        "test_name": "test_distribution[offset]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_regression.py::test_back_to_back",
+        "test_name": "test_back_to_back",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_regression.py::test_deterministic",
+        "test_name": "test_deterministic",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_to_all_matmul/test_regression.py::test_small_packet_size",
+        "test_name": "test_small_packet_size",
+        "status": "failed"
+      }
+    ]
+  }
+}

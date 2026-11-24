@@ -13,7 +13,7 @@ Per chip p of a group (ring of G chips along cluster_axis):
                              core's landing slot (same L1 address on every chip), the last packet of an entry fused
                              with an increment of that slot's arrival counter.
   compute cores (grid minus every chip's port cores; heads split across them, the same map on every chip):
-    reader  (RISCV_1, NoC0)  per head slot (local-source heads first, then remote heads by source-local index j):
+    reader  (RISCV_1, NoC1)  per head slot (local-source heads first, then remote heads by source-local index j):
                              weight block 0 from DRAM, then the slot (local: DRAM read of the own quarter; remote:
                              wait for the arrival counter, re-arm it), then the remaining weight blocks.
     compute (TRISC)          matmul_block per (slot, n-block): A slot retained across n-blocks, popped after.
@@ -385,6 +385,9 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
     heads_per_core_max = max(len(hs) for _, hs in assign)
     if heads_per_core_max > MAX_HEADS_PER_CORE:
         raise RuntimeError(f"all_to_all_matmul: {heads_per_core_max} heads per core > {MAX_HEADS_PER_CORE}")
+    # cb_weight depth: WEIGHT_DEPTH is the knob, but a core never holds more weight blocks than it processes per call
+    # (Kimi: 1 head x 1 n-block -> one 128 KiB block; a second buffer would never be live).
+    weight_depth = min(WEIGHT_DEPTH, heads_per_core_max * num_n_blocks)
     cap_tiles = heads_per_core_max * slot_tiles
     if cap_tiles * in_tile > A_SLOT_BUDGET_BYTES:
         raise RuntimeError(
@@ -486,7 +489,7 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
         cbs = [
             ttnn.cb_descriptor_from_sharded_tensor(CB_A_LANDED, res.scratch),
             ttnn.CBDescriptor(
-                total_size=WEIGHT_DEPTH * Kt * block_n * w_tile,
+                total_size=weight_depth * Kt * block_n * w_tile,
                 core_ranges=active_crs,
                 format_descriptors=[ttnn.CBFormatDescriptor(CB_WEIGHT, weight.dtype, w_tile)],
             ),
