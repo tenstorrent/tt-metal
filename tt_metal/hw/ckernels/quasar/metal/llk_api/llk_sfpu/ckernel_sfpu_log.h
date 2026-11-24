@@ -197,7 +197,7 @@ template <
     bool IS_BASE_TWO = false>
 inline void calculate_log(std::uint32_t log_base_scale_factor) {
     if constexpr (HAS_BASE_SCALING) {
-        // Once per face rather than two SFPLOADIs per pass; calculate_log_body reads it from Prgm3.
+        // Prgm3 holds the base scale (1 / ln(base)) that calculate_log_body multiplies by.
         sfpi::vConstFloatPrgm3 = sfpi::as<sfpi::vFloat>(sfpi::vUInt(log_base_scale_factor));
     }
 #pragma GCC unroll 8

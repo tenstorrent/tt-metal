@@ -287,12 +287,10 @@ def prepare_square_inputs(
     return _log_uniform_signed_inputs(src_A, src_B, input_format, max_safe_value)
 
 
-LOG_OPS = (MathOperation.Log, MathOperation.LogWithBase)
+LOG_OPS = (MathOperation.Log, MathOperation.LogWithBase, MathOperation.Log10)
 
-# Inputs the log kernel handles outside its polynomial, overwritten onto the first lanes of the
-# stimulus: zeros of both signs, +inf, the smallest normal binade [2^-126, 2^-125) and exact powers
-# of two and one, plus the inputs whose log is NaN (-inf, NaN, negatives). The Float16_b golden
-# turns a NaN result into +inf, so those are planted only into Float32 stimuli.
+# Log inputs outside the polynomial, planted on the first lanes; NaN-result ones only in Float32
+# because the Float16_b golden turns NaN into +inf.
 LOG_SPECIAL_VALUES = (
     0.0,
     -0.0,
@@ -447,7 +445,7 @@ def prepare_inputs_for_operation(
             src_A_float32,
         )
         src_A = src_A_float32.to(torch_format)
-    elif mathop in (MathOperation.Rsqrt, MathOperation.Log, MathOperation.LogWithBase):
+    elif mathop == MathOperation.Rsqrt or mathop in LOG_OPS:
         # Full representable range via log-uniform distribution
         # (rsqrt and log accept only positive inputs).
         finfo = torch.finfo(torch_format)
@@ -1276,6 +1274,7 @@ _APPROX_MATHOPS = (
     MathOperation.Gelu,
     MathOperation.Log,
     MathOperation.LogWithBase,
+    MathOperation.Log10,
     MathOperation.Reciprocal,
     MathOperation.Rsqrt,
     MathOperation.Softsign,
@@ -1285,6 +1284,7 @@ _QSR_EXTRA_MATHOPS = (
     MathOperation.Cumsum,
     MathOperation.Ema,
     MathOperation.Dropout,
+    MathOperation.Log10,
 )
 _BH_UNARY_OPS = sfpu_unary_ops()
 
@@ -1336,6 +1336,7 @@ OP_CONFIGS = [
     OpConfig(
         MathOperation.LogWithBase, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True
     ),
+    OpConfig(MathOperation.Log10, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     # Shares the log kernel's calculate_log_body.
     OpConfig(MathOperation.Erfinv, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Tanh, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
@@ -1756,6 +1757,10 @@ def run_eltwise_unary_sfpu_quasar(
         got = res_tensor.flatten()[:n].to(torch.float32)
         want = golden_tensor.flatten()[:n].to(torch.float32)
         same = (got == want) | (torch.isnan(got) & torch.isnan(want))
+        if mathop == MathOperation.Log10:
+            # log10's scale multiply rounds once more, so finite lanes may be one ULP off.
+            ulp = torch.nextafter(want.abs(), torch.tensor(math.inf)) - want.abs()
+            same |= torch.isfinite(want) & ((got - want).abs() <= ulp)
         assert bool(
             same.all()
         ), f"{mathop} special inputs {[values[i] for i in torch.nonzero(~same).flatten().tolist()]}: got {got[~same].tolist()}, want {want[~same].tolist()}"
