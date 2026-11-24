@@ -197,3 +197,11 @@ mesh barrier:
   (8 flows x 768 rows): 1.86 ms is ~20 GB/s a link, 86% of 200G. The fabric has 2 channels between neighbours here
   (link_idx 2: out of bounds), so 2 links is the ceiling.
 - The combine at this load: 2252 us decoupled (+21% over the bare traffic), 2556 us with the experts (+37%).
+- (Marko: "35 GB/s a chip sounds really slow - did you take all the ws findings?") The 2 x 4's links, from the cluster
+  descriptor: 10 neighbour pairs x 2 links = 20 (no wrap: corner chips 4 links, middle 6). A uniform all-to-all
+  must move every row between the column halves {0,1} / {2,3} across that cut: 16 flows x 9.46 MB = 151 MB a
+  direction over 4 links (2 a mesh row) -> >= 1.51 ms at 25 GB/s a link (raw 200G), ~1.61 ms at a link's ~23.5 -
+  in any routing or placement. ws placement (placement="ws": each sender under its own ethernet core on NOC1, the NOC0
+  bottom-row sender for channel 11 over the harvested column x 10, each flow landing in the bottom row of its arrival
+  router's column; channel -> x from the connection args with channels 5 / 8 fused): 1843.7 us vs 1843.5 simple,
+  bfp8 rows 995.0 vs 995.1 - placement does not matter here, the cut's links do (~20.6 GB/s a link, ~82% of raw).

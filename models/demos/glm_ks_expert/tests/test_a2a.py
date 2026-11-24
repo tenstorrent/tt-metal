@@ -30,6 +30,8 @@ CASES = {
     "glm_rows_pay15232": (15232, A2ACfg(PB=12320)),
     "glm_bfp8_rows_pay6560": (6560, A2ACfg(PB=6560)),
     "glm_rows_1link": (12320, A2ACfg(PB=12320, links=1)),
+    "glm_rows_ws": (12320, A2ACfg(PB=12320, placement="ws")),
+    "glm_bfp8_rows_ws": (6560, A2ACfg(PB=6560, placement="ws")),
 }
 
 
