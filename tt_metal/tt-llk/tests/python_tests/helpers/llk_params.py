@@ -116,6 +116,14 @@ class MathOperation(Enum):
     Relu = OpSpec("relu", MathOpType.SFPU_UNARY)
     ReshuffleRows = OpSpec("reshuffle_rows", MathOpType.SFPU_UNARY)
     Rsqrt = OpSpec("rsqrt", MathOpType.SFPU_UNARY)
+    # add_rsqrt_tile: rsqrt(x + addend), the addend taken from the fuser's fill_const_value.
+    AddRsqrt = OpSpec("add_rsqrt", MathOpType.SFPU_UNARY)
+    # add_rsqrt_tile with every non-default template knob: rsqrt(x * ADD_RSQRT_INPUT_SCALE + addend),
+    # fast_and_approx and typed_bf16_store set (helpers/sfpu_dispatch_constants.py).
+    AddRsqrtScaled = OpSpec("add_rsqrt_scaled", MathOpType.SFPU_UNARY)
+    # csa_index_remap on Int32 at a ROW_OFFSET of 0 and of CSA_INDEX_REMAP_ROW_OFFSET.
+    CsaIndexRemap = OpSpec("csa_index_remap", MathOpType.SFPU_UNARY)
+    CsaIndexRemapOffset = OpSpec("csa_index_remap_offset", MathOpType.SFPU_UNARY)
     Sigmoid = OpSpec("sigmoid", MathOpType.SFPU_UNARY)
     Sin = OpSpec("sine", MathOpType.SFPU_UNARY)
     Silu = OpSpec("silu", MathOpType.SFPU_UNARY)

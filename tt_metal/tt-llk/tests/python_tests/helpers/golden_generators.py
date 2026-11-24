@@ -35,9 +35,11 @@ from helpers.pack import (
     pack_mxint8,
 )
 from helpers.sfpu_dispatch_constants import (
+    ADD_RSQRT_INPUT_SCALE,
     CLAMP_MAX,
     CLAMP_MIN,
     CLAMPED_SILU_GLU_LIMIT,
+    CSA_INDEX_REMAP_ROW_OFFSET,
     DROPOUT_PROBABILITY_MAX,
     DROPOUT_SCALE,
     EMA_ALPHA,
@@ -2356,6 +2358,10 @@ class UnarySFPUGolden:
             MathOperation.Reciprocal: self._reciprocal,
             MathOperation.Relu: self._relu,
             MathOperation.Rsqrt: self._rsqrt,
+            MathOperation.AddRsqrt: self._add_rsqrt,
+            MathOperation.AddRsqrtScaled: self._add_rsqrt_scaled,
+            MathOperation.CsaIndexRemap: self._csa_index_remap,
+            MathOperation.CsaIndexRemapOffset: self._csa_index_remap_offset,
             MathOperation.Sin: self._sin,
             MathOperation.Signbit: self._signbit,
             MathOperation.Sqrt: self._sqrt,
@@ -2510,6 +2516,8 @@ class UnarySFPUGolden:
             # signbit on Int32 runs calculate_signbit_int32, which writes bit 31 as the integer
             # 0 or 1 rather than the float 0.0 or 1.0. See _signbit.
             MathOperation.Signbit,
+            MathOperation.CsaIndexRemap,
+            MathOperation.CsaIndexRemapOffset,
         }
         # Fixed dispatch constants shared with sfpu_operations.h: unary shift by 3
         # bits, integer unary max/min against the scalar 1000.
@@ -2822,7 +2830,7 @@ class UnarySFPUGolden:
             op_res = [
                 (
                     self.ops[operation](x, fill_const_value)
-                    if operation == MathOperation.Fill
+                    if operation in (MathOperation.Fill, *self._ADD_RSQRT_OPS)
                     else self.ops[operation](x)
                 )
                 for x in result.tolist()[window]
@@ -3129,6 +3137,49 @@ class UnarySFPUGolden:
 
     def _rsqrt(self, x):
         return self._torch_unary(x, torch.rsqrt)
+
+    # add_rsqrt takes its addend from the fuser's fill_const_value.
+    _ADD_RSQRT_OPS = (MathOperation.AddRsqrt, MathOperation.AddRsqrtScaled)
+
+    def _add_rsqrt_with_scale(self, x, addend, scale):
+        # calculate_add_rsqrt forms x * scale + addend in fp32 (one SFPMAD, so one rounding; one SFPADD
+        # when the scale is 1.0) and takes rsqrt of that: 0 gives +inf, a negative NaN. The fp64
+        # product of two fp32 values is exact, so rounding the fp64 sum to fp32 is the kernel's one
+        # rounding (up to a double-rounding tie).
+        def to_fp32(value):
+            return struct.unpack("<f", struct.pack("<f", value))[0]
+
+        argument = to_fp32(float(x) * to_fp32(scale) + to_fp32(addend))
+        return self._torch_unary(argument, torch.rsqrt)
+
+    def _add_rsqrt(self, x, addend):
+        return self._add_rsqrt_with_scale(x, addend, 1.0)
+
+    def _add_rsqrt_scaled(self, x, addend):
+        return self._add_rsqrt_with_scale(x, addend, ADD_RSQRT_INPUT_SCALE)
+
+    @staticmethod
+    def _csa_index_remap_with_offset(x, row_offset):
+        # Blackhole test_csa_index_remap.py's arithmetic golden, independent of the kernel's masks: the
+        # input packs [device:3 | bank:3 | bank-local row:14]; the 256-row chunks are interleaved
+        # device-major into a global position, offset, then re-encoded as bank << 14 | row-in-bank.
+        # Exact for inputs below 2**20 (stimuli stay there).
+        packed = int(x)
+        device, bank, local_row = (
+            (packed >> 17) & 7,
+            (packed >> 14) & 7,
+            packed & 0x3FFF,
+        )
+        chunk, within_chunk = divmod(local_row, 32)
+        position = ((chunk * 8 + device) * 8 + bank) * 32 + within_chunk + row_offset
+        output_row, output_bank = divmod(position, 8)
+        return output_bank * 16384 | output_row
+
+    def _csa_index_remap(self, x):
+        return self._csa_index_remap_with_offset(x, 0)
+
+    def _csa_index_remap_offset(self, x):
+        return self._csa_index_remap_with_offset(x, CSA_INDEX_REMAP_ROW_OFFSET)
 
     def _sqrt(self, x):
         return self._torch_unary(x, torch.sqrt)

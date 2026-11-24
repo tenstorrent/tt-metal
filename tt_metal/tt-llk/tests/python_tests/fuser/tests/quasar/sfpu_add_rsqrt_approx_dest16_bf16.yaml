@@ -1,0 +1,34 @@
+# add_rsqrt_tile with APPROX on a 16-bit Dest. rtol 2e-2 is Blackhole's bound for the SQRT_10-bits body on a bf16
+# output (measured 7.6e-3). Addend 1.0; x = -1.0 makes a zero argument (+inf).
+
+dest_acc: false
+
+operands:
+  - name: "input_A"
+    dims: [64, 32]
+    format: [Float16_b]
+    stimuli:
+      include:
+        - [-0.9, -0.1]
+        - [0.1, 4.0]
+        - [4.01, 16.0]
+        - [990.0, 1000.0]
+        - -1.0
+        - 0.0
+  - name: "sfpu_out"
+    dims: [64, 32]
+    format: Float16_b
+    atol: 0.0
+    rtol: 2.0e-2
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: false, block_size: [64, 32]}
+      - type: "UnarySfpu"
+        operation: [AddRsqrt, AddRsqrtScaled]
+        approximation_mode: true
+        iterations: 32
+        fill_const_value: 1.0
+        block_size: [64, 32]
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [64, 32]}
