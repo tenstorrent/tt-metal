@@ -157,7 +157,7 @@ inline void llk_pack_dest_section_done() {
         // main's two-argument form, which a kernel may wrap.
         _llk_pack_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
     } else {
-        _llk_pack_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en, !math_clears_dest, words>();
+        _llk_pack_dest_section_done_ext_<DST_SYNC_MODE, is_fp32_dest_acc_en, !math_clears_dest, words>();
     }
 }
 
