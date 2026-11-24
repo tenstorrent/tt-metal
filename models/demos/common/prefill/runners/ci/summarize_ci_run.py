@@ -23,21 +23,37 @@ _RANK_STAGE = re.compile(
     r"\[pp rank (\d+)/\d+\] mesh=.*? ((?:passes=\[\d+, \d+\) loop_passes=\([\d, ]*\) )?layers=\[\d+, \d+\))"
 )
 
+# The runner's line when a rank has built its stage and entered its request loop.
+_RANK_READY = re.compile(r"\[pp rank (\d+)\] setup complete, entering request loop")
+
 # Chunks spanned by a throughput probe. A single chunk can run half again as long as its neighbours,
 # so one interval is too noisy to be a rate; eight is still under 5% of the shortest measured request.
 _TPUT_WINDOW = 8
 
 
-def _iter_lines(root):
+def _log_files(root):
+    # Every file under the root, whatever its name: OpenMPI's --output-filename writes rank.N/{stdout,stderr} on some
+    # builds and flat <prefix>.<job>@1.N.{out,err} files on others (the SC4 runners).
     for dirpath, _dirs, files in os.walk(root):
         for name in sorted(files):
-            path = os.path.join(dirpath, name)
-            try:
-                with open(path, errors="replace") as fh:
-                    for line in fh:
-                        yield line
-            except OSError:
-                continue
+            yield os.path.join(dirpath, name)
+
+
+def _iter_lines(root):
+    for path in _log_files(root):
+        try:
+            with open(path, errors="replace") as fh:
+                for line in fh:
+                    yield line
+        except OSError:
+            continue
+
+
+def ready_ranks(root):
+    """(rank-log files under root, distinct runner ranks that logged entering their request loop)."""
+    files = sum(1 for _ in _log_files(root))
+    ranks = {m.group(1) for line in _iter_lines(root) if (m := _RANK_READY.search(line))}
+    return files, len(ranks)
 
 
 def _pcc_matrix(root):
@@ -354,7 +370,15 @@ def main():
     ap.add_argument(
         "--summary-name", default=None, help="<model>_<config>; names the metrics sidecar the scaling job reads"
     )
+    ap.add_argument(
+        "--ready-ranks",
+        action="store_true",
+        help="print '<rank-log files> <ranks in their request loop>' and exit (the launcher's readiness check)",
+    )
     args = ap.parse_args()
+    if args.ready_ranks:
+        print(*ready_ranks(args.ranklogs))
+        return
     if not os.path.isdir(args.ranklogs):
         print(f"ranklogs dir {args.ranklogs} not found; nothing to summarize")
         return

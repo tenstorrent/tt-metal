@@ -555,6 +555,9 @@ else
   RUNNER_PLACEMENT=""
 fi
 
+# TTRUN_CWD outlives runs, so only a rankfile newer than this mark is this launch's (readiness, below).
+LAUNCH_MARK="${MR_DIR}/runner_launched"
+touch "${LAUNCH_MARK}"
 cd "${TTRUN_CWD}"
 setsid python3 "${TTRUN_PY}" \
   --skip-executable-check \
@@ -617,15 +620,28 @@ TABLE_WAIT_SECS="${TABLE_WAIT_SECS:-${TABLE_WAIT_DEFAULT}}"
 # A perf-only leg's runner publishes no table: it is ready once every rank has entered its request loop.
 READY_WHAT="publishing the KV table"
 [ "${PERF_ONLY}" = 1 ] && READY_WHAT="all ${READY_RANKS} ranks entered the request loop"
-ranks_ready() {
-  # Count distinct ranks, not files: --output-filename writes rank.N/{stdout,stderr} on some OpenMPI builds and flat
-  # runner.<job>@1.N.out files on the SC4 runners (run 45402728033 counted 0/4 by file name while all 4 ranks served).
-  { find "${RANKLOGS}" -type f -path "${RANKLOGS}/runner*" -exec grep -h -o -E "\[pp rank [0-9]+\] setup complete, entering request loop" {} + 2>/dev/null || true; } \
-    | sort -u | wc -l
+# Perf-only readiness reads the rank logs as the summary does: by content over every file under RANKLOGS, since the
+# --output-filename layout differs between OpenMPI builds (run 45402728033 matched no file by name and counted 0/4
+# while all 4 ranks served). The rank logs start only once tt-run launches the ranks: with --force-rediscovery its
+# Phase 1 first runs its own discovery mpirun (18 s in run 45418316719, output on tt-run's stdout, not in RANKLOGS)
+# and writes its rankfile. So the grace runs from that rankfile; with a given --rank-binding there is no Phase 1 and it
+# runs from the launch. A live runner with no rank log READY_LOG_GRACE_SECS after the ranks launched has its logs
+# somewhere else, and readiness could never be seen.
+READY_LOG_GRACE_SECS=120
+READY_LOG_FILES=0
+READY_RANK_COUNT=0
+RANKS_LAUNCHED_AT=""
+ranks_launched() {
+  [ "${TTRUN_ARGS[0]}" != --force-rediscovery ] \
+    || [ -n "$(find "${TTRUN_CWD}/generated/ttrun" -name rankfile -newer "${LAUNCH_MARK}" 2>/dev/null | head -1)" ]
 }
 runner_ready() {
   if [ "${PERF_ONLY}" = 1 ]; then
-    [ "$(ranks_ready)" -ge "${READY_RANKS}" ]
+    read -r READY_LOG_FILES READY_RANK_COUNT < <(
+      python3 "${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/summarize_ci_run.py" \
+        --ranklogs "${RANKLOGS}" --ready-ranks 2>/dev/null || echo "0 0"
+    )
+    [ "${READY_RANK_COUNT}" -ge "${READY_RANKS}" ]
   else
     [ -f "${TABLE_PATH}" ]
   fi
@@ -638,13 +654,26 @@ while [ "${WAITED}" -lt "${TABLE_WAIT_SECS}" ]; do
     [ -f "${CRASH_FLAG}" ] && echo "a rank crashed: $(tr '\n' ' ' < "${CRASH_FLAG}")"
     wait "${RUNNER_PID}"; exit 1;
   }
+  if [ "${PERF_ONLY}" = 1 ]; then
+    [ -z "${RANKS_LAUNCHED_AT}" ] && ranks_launched && RANKS_LAUNCHED_AT=${WAITED}
+    if [ -n "${RANKS_LAUNCHED_AT}" ] && [ $((WAITED - RANKS_LAUNCHED_AT)) -ge "${READY_LOG_GRACE_SECS}" ] \
+      && [ "${READY_LOG_FILES}" -eq 0 ]; then
+      echo "runner alive for ${WAITED}s, $((WAITED - RANKS_LAUNCHED_AT))s since tt-run launched the ranks, but no rank" \
+        "log under ${RANKLOGS}: their logs land elsewhere, so cannot see ${READY_WHAT}"
+      exit 1
+    fi
+  fi
   sleep 5
   WAITED=$((WAITED + 5))
   if [ $((WAITED % 60)) -eq 0 ]; then
-    echo "[$(date -u +%FT%TZ)] waiting ${WAITED}s for the runner: ${READY_WHAT}$([ "${PERF_ONLY}" = 1 ] && echo " ($(ranks_ready)/${READY_RANKS} ready)")"
+    echo "[$(date -u +%FT%TZ)] waiting ${WAITED}s for the runner: ${READY_WHAT}$([ "${PERF_ONLY}" = 1 ] && echo " (${READY_RANK_COUNT}/${READY_RANKS} ready)")"
   fi
 done
-runner_ready || { echo "runner not ready within ${TABLE_WAIT_SECS}s: ${READY_WHAT}"; exit 1; }
+runner_ready || {
+  echo "runner not ready within ${TABLE_WAIT_SECS}s: ${READY_WHAT}"
+  [ "${PERF_ONLY}" = 1 ] && [ -z "${RANKS_LAUNCHED_AT}" ] && echo "tt-run never wrote its rankfile: Phase 1 discovery did not finish"
+  exit 1
+}
 echo "[$(date -u +%FT%TZ)] runner ready after ~${WAITED}s"
 
 # A PP binding already fixed the rank count and host; only discovery has to parse them back out.

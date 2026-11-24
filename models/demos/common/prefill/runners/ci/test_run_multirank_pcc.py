@@ -14,6 +14,7 @@ import io
 import itertools
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -90,6 +91,8 @@ elif args and args[0].endswith("ttrun.py"):
         os.environ["TEST_RUNNER_LOGS"] = mpi_args[mpi_args.index("--output-filename") + 1]
     # Explicit bindings do not produce discovery artifacts in real tt-run.
     if "--rank-binding" not in args:
+        # Phase 1: tt-run's own discovery mpirun, before it writes the rankfile and launches the ranks.
+        time.sleep(float(os.environ.get("TEST_TTRUN_PHASE1_SECS", "0")))
         rankfile = Path.cwd() / "generated/ttrun/test/rankfile"
         rankfile.parent.mkdir(parents=True, exist_ok=True)
         if args[args.index("--mesh-graph-descriptor") + 1].endswith("4x4_sp1_mgd.textproto"):
@@ -128,9 +131,17 @@ elif args[:1] == ["-m"] and args[1].endswith("prefill_runner"):
         log.write_text("Traceback (most recent call last):\nRuntimeError: retrying the D2D connect\n")
     if crash != "bringup":
         Path(os.environ["PREFILL_MIGRATION_TABLE_PATH"]).touch()
-        # Every rank's entry into its request loop, which a perf-only leg waits for instead of the table.
-        for rank in range(int(os.environ.get("TEST_READY_RANKS", "4"))):
-            log = Path(os.environ["TEST_RUNNER_LOGS"]) / "1" / ("rank.%d" % rank) / "stderr"
+        # Every rank's entry into its request loop, which a perf-only leg waits for instead of the table. The
+        # --output-filename layout is OpenMPI's: rank.N/stderr on some builds, flat <prefix>.<job>@1.N.err files on the
+        # SC4 runners; "none" writes no rank log at all.
+        layout = os.environ.get("TEST_RANKLOG_LAYOUT", "nested")
+        for rank in range(int(os.environ.get("TEST_READY_RANKS", "4")) if layout != "none" else 0):
+            if layout == "flat":
+                log = Path(os.environ["TEST_RUNNER_LOGS"] + ".prterun-stub-2471@1.%d.err" % rank)
+                log.parent.mkdir(parents=True, exist_ok=True)
+                log.with_suffix(".out").write_text("stdout\n")
+            else:
+                log = Path(os.environ["TEST_RUNNER_LOGS"]) / "1" / ("rank.%d" % rank) / "stderr"
             log.parent.mkdir(parents=True, exist_ok=True)
             with log.open("a") as f:
                 f.write("[pp rank %d] setup complete, entering request loop\n" % rank)
@@ -199,6 +210,9 @@ elif args[:1] == ["-m"] and args[1].endswith("prefill_producer"):
         filename_rank = num_ranks if rank == last and mode == "wrong_rank" else rank
         (verdict_dir / ("rank%d.json" % filename_rank)).write_text(json.dumps(verdict))
     (root / "producer_done").touch()
+elif args and args[0].endswith("summarize_ci_run.py") and "--ready-ranks" in args:
+    # The launcher's readiness check runs the real lookup.
+    os.execv(os.environ["TEST_REAL_PYTHON"], [os.environ["TEST_REAL_PYTHON"], *args])
 elif args and args[0].endswith("summarize_ci_run.py"):
     record("summary")
     if os.environ.get("TEST_TPS"):
@@ -291,6 +305,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
         perf_gate = metal / "models/demos/common/prefill/runners/ci/perf_gate.py"
         perf_gate.parent.mkdir(parents=True)
         shutil.copyfile(HARNESS.with_name("perf_gate.py"), perf_gate)
+        shutil.copyfile(HARNESS.with_name("summarize_ci_run.py"), perf_gate.with_name("summarize_ci_run.py"))
         ci_failure = metal / "models/common/ci_failure.py"
         ci_failure.parent.mkdir(parents=True)
         shutil.copyfile(HARNESS.parents[6] / "models/common/ci_failure.py", ci_failure)
@@ -876,6 +891,38 @@ class MultirankPccHarnessTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("runner not ready within 10s: all 4 ranks entered the request loop", result.stdout)
         self.assertFalse([record for record in records if record["kind"] == "producer"])
+
+    def test_glm54_reads_flat_rank_logs_by_content(self):
+        # The SC4 runners' layout, which run 45402728033's name-based search missed (0/4 ready while all 4 served).
+        result, records = self.run_harness("glm54", extra_env={"TEST_RANKLOG_LAYOUT": "flat"})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("runner ready after", result.stdout)
+        self.one_record(records, "producer")
+
+    def test_glm54_fails_fast_when_a_live_runner_writes_no_rank_log(self):
+        result, records = self.run_harness("glm54", extra_env={"TEST_RANKLOG_LAYOUT": "none"})
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertRegex(
+            result.stdout, r"120s since tt-run launched the ranks, but no rank log under \S+: their logs land"
+        )
+        self.assertNotIn("runner not ready within", result.stdout)
+        self.assertFalse([record for record in records if record["kind"] == "producer"])
+
+    def test_glm54_fail_fast_grace_starts_after_ttrun_phase_1(self):
+        # A slow discovery (Phase 1) writes no rank log; the grace counts only from its rankfile.
+        result, _ = self.run_harness("glm54", extra_env={"TEST_RANKLOG_LAYOUT": "none", "TEST_TTRUN_PHASE1_SECS": "3"})
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        waited = re.search(r"runner alive for (\d+)s, 120s since tt-run launched the ranks", result.stdout)
+        self.assertIsNotNone(waited, result.stdout)
+        self.assertGreater(int(waited.group(1)), 120)
+
+    def test_glm54_names_phase_1_when_ttrun_never_launches_the_ranks(self):
+        result, _ = self.run_harness(
+            "glm54", extra_env={"TEST_RANKLOG_LAYOUT": "none", "TEST_TTRUN_PHASE1_SECS": "5", "TABLE_WAIT_SECS": "10"}
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("runner not ready within 10s", result.stdout)
+        self.assertIn("tt-run never wrote its rankfile: Phase 1 discovery did not finish", result.stdout)
 
     def test_glm54_demands_a_measurement(self):
         result, _ = self.run_harness("glm54", extra_env={"TEST_TPS": ""})
