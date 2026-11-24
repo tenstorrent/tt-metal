@@ -8,6 +8,8 @@
 #include "topk_large_indices_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
+#include <tt-metalium/program_descriptors.hpp>
+
 #include <optional>
 #include <vector>
 
@@ -34,34 +36,21 @@ struct CoreRowAssignment {
 std::vector<CoreRowAssignment> derive_core_row_assignments(
     const CoreRangeSet& core_grid, uint32_t num_rows, uint32_t num_chunks, bool row_split);
 
-struct TopkLargeIndicesSharedVariables {
-    tt::tt_metal::KernelHandle reader_kernel_id{};
-    tt::tt_metal::KernelHandle compute_kernel_id{};
-    tt::tt_metal::KernelHandle writer_kernel_id{};
-    CoreRangeSet core_grid;
-    std::vector<CoreCoord> cores;
-    ttnn::Shape input_shape;
-    std::optional<uint32_t> valid_length;
-    uint32_t llk_k = 0;
-    bool row_split = false;
-    uint32_t num_rows = 0;
-    uint32_t num_chunks = 0;
-};
-
 struct TopkLargeIndicesProgramFactory {
-    using shared_variables_t = TopkLargeIndicesSharedVariables;
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value);
 
+    // Cache-hit refresh. The hash leaves out the row count, the last-dim width and valid_length (one program serves
+    // every shape in a hashed class), so beyond the buffer addresses this re-applies the search length and row
+    // stride, and re-derives the per-core row assignment when the row count or chunk count moved. Patched in place.
     static void override_runtime_arguments(
-        cached_program_t& cached_program,
+        tt::tt_metal::Program& program,
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        tensor_return_value_t& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 ComputeBodyMode compute_body_mode(uint32_t k, uint32_t input_last_dim);
