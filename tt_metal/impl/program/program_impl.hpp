@@ -396,6 +396,10 @@ public:
     void check_kernel_config_fits(
         IDevice* device, const experimental::KernelConfigBufferImpl* kernel_config_buffer = nullptr);
 
+    // Whether `program`'s whole kernel-config block, kernel binaries included, fits each core type's KERNEL_CONFIG
+    // window on `device`: what check_kernel_config_fits checks with no kernel config buffer, without throwing.
+    static bool fits_kernel_config_window(ContextId context_id, IDevice* device, const ProgramImpl& program);
+
     // Marks a fast-dispatch kernels' program. Its Tensix KERNEL_CONFIG window ends at DEFAULT_UNRESERVED, where the
     // dispatch kernels' own L1 starts, rather than at the allocator's l1_unreserved_base, which a large
     // worker_l1_size pulls below it.
