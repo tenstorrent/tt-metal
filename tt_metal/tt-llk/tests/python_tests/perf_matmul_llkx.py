@@ -54,9 +54,7 @@ from helpers.test_variant_parameters import (
     UNPACK_TRANS_FACES,
 )
 
-pytestmark = (
-    pytest.mark.llk_sweep
-)  # exhaustive sweep: CI keeps a thin subset (LLK_SWEEP_ALL=1 for all)
+pytestmark = pytest.mark.llk_sweep
 LLK_SWEEP_KEEP = frozenset(  # ids kept besides the thin subset: one per value of each swept dimension the subset misses
     [
         "test_perf_matmul_llkx[case:(InputOutputFormat[A:Bfp2_b,B:Bfp2_b,out:Float16], <DestAccumulation.Yes: True>, <DestSync.Half: 'SyncHalf'>, ([32, 32], [32, 32]), <MathFidelity.LoFi: 0>, 0, <Transpose.No: False>, None)]",

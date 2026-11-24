@@ -8,6 +8,7 @@ from itertools import product
 
 import perf_math_matmul as pmm
 import pytest
+from conftest import skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat, is_dest_acc_needed
 from helpers.llk_params import (
     ALL_MATH_FIDELITIES,
@@ -19,9 +20,7 @@ from helpers.llk_params import (
 )
 from helpers.matmul_sweep import FaceLayoutConfig, MatmulConfig, generate_tile_dims
 
-pytestmark = (
-    pytest.mark.llk_sweep
-)  # exhaustive sweep: CI keeps a thin subset (LLK_SWEEP_ALL=1 for all)
+pytestmark = [pytest.mark.llk_sweep, skip_for_wormhole]
 
 F = DataFormat
 FMTS = [

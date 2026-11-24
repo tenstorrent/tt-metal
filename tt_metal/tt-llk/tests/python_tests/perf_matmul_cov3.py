@@ -52,9 +52,7 @@ from helpers.test_variant_parameters import (
     UNPACK_TRANS_FACES,
 )
 
-pytestmark = (
-    pytest.mark.llk_sweep
-)  # exhaustive sweep: CI keeps a thin subset (LLK_SWEEP_ALL=1 for all)
+pytestmark = pytest.mark.llk_sweep
 LLK_SWEEP_KEEP = frozenset(  # ids kept besides the thin subset: one per value of each swept dimension the subset misses
     [
         "test_perf_matmul_cov3[case:(InputOutputFormat[A:Bfp4_b,B:Bfp4_b,out:Bfp4_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([128, 32], [32, 128]), <MathFidelity.LoFi: 0>, 0)]",
