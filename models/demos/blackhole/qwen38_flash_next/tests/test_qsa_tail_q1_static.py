@@ -21,11 +21,8 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.fused import qsa_block
 
 PKG = "models.demos.blackhole.qwen38_flash_next.ttnn.fused"
 # the upstream builder the flags extend (9bb1f0f698c, with the paged index_tail, spread and one-row staging forms)
-ORIG = Path(
-    os.environ.get(
-        "Q1_ORIG_INIT", "/home/ttuser/atupe/qwen38_work/runs/plan_nov06/p1_pull/q1_orig/qsa_block__init__.py"
-    )
-)
+# set Q1_ORIG_INIT to a copy of the upstream qsa_block/__init__.py; the comparison tests skip without it
+ORIG = Path(os.environ["Q1_ORIG_INIT"]) if os.environ.get("Q1_ORIG_INIT") else None
 KERNELS_Q1 = fp.REPO_ROOT / fp.KERNEL_ROOT / "qsa_block" / "kernels_q1"
 BF16, U32, I32 = ttnn.bfloat16, ttnn.uint32, ttnn.int32
 TILE, RM = ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT
@@ -61,7 +58,7 @@ def _mesh():
 
 
 def _load_orig(monkeypatch):
-    if not ORIG.is_file():
+    if ORIG is None or not ORIG.is_file():
         return None
     name = f"{PKG}.qsa_block.orig_q1"
     spec = importlib.util.spec_from_file_location(name, ORIG, submodule_search_locations=None)
@@ -229,7 +226,7 @@ def test_flags_off_programs_use_the_original_kernels(monkeypatch):
 def test_flags_off_programs_equal_the_pre_flag_builders(monkeypatch):
     orig = _load_orig(monkeypatch)
     if orig is None:
-        pytest.skip(f"{ORIG} is absent")
+        pytest.skip("Q1_ORIG_INIT is unset or absent")
     assert not hasattr(orig, "ownpos_enabled")
     assert _programs(orig, monkeypatch, {}) == _programs(qsa_block, monkeypatch, FLAGS_OFF)
 

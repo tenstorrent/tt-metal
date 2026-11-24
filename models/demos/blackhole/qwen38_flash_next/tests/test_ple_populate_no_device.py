@@ -10,9 +10,9 @@ from unittest import mock
 
 import pytest
 
-HF = os.environ.get("HF_MODEL", "/home/ttuser/models/Qwen3.8-Flash-Next")
-CACHE = os.environ.get("TT_CACHE_PATH", "/home/ttuser/models/qwen38_cache")
-pytestmark = pytest.mark.skipif(not Path(HF).exists(), reason="Qwen3.8-Flash-Next checkpoint not present")
+HF = os.environ.get("HF_MODEL", "")
+CACHE = os.environ.get("TT_CACHE_PATH", "")
+pytestmark = pytest.mark.skipif(not HF or not Path(HF).exists(), reason="Qwen3.8-Flash-Next checkpoint not present")
 
 LANES, CALLS = 32, 6
 

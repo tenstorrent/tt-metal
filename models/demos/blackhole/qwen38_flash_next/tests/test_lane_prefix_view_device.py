@@ -4,7 +4,7 @@
 """A W-lane prefix alias of an 8-lane tensor (same device buffer) made with ttnn.experimental.view or
 ttnn.reshape(logical, padded). Per kind x W: address, write ops, host write, 3-op trace, dealloc safety.
 
-Run: flock -w 7200 /home/ttuser/atupe/device.lock timeout 1800 python -m pytest \
+Run: flock -w 7200 the group's device lock timeout 1800 python -m pytest \
   models/demos/blackhole/qwen38_flash_next/tests/test_lane_prefix_view_device.py -s -p no:cacheprovider -o addopts=
 Env: MESH_DEVICE=P150x8 TT_VISIBLE_DEVICES=0,1,2,3,7,6,5,4 QWEN38_X8_ROUTE=4,0,1,2,3,7,6,5. Result JSON: LPV_OUT.
 """

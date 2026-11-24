@@ -6,7 +6,7 @@ rows only.  For live rows 1, 3, 5, 8 (and 32 for the no-op case) each program ru
 the LIVE rows (and the KV cache) must be bit-identical; the dead rows only have to be finite / the documented constants.
 Traced per-call time (slope of two trace lengths) is printed as QSA_LIVE_TIMING lines.
 Run (group 2): MESH_DEVICE=P150x8 TT_VISIBLE_DEVICES=16,17,18,19,23,22,21,20 QWEN38_FUSED_DEVICE_TEST=1 flock
-/home/ttuser/atupe/device.lock.g2 python_env/bin/pytest <this file> -s -p no:cacheprovider -o addopts=
+the group's device lock python_env/bin/pytest <this file> -s -p no:cacheprovider -o addopts=
 """
 
 import json

@@ -12,7 +12,7 @@ partial ``[1, 1, rows, 2560]`` with mixed magnitudes (so the rounding of every a
   * a host emulation of the summation tree in both line directions (which neighbour is "forward" is established here).
 ``row_reduce`` must equal the stock reduce-scatter.  The time of each is the slope of a 12-op and a 4-op trace.
 
-Run:  flock -w 10800 /home/ttuser/atupe/device.lock timeout 1800 python -m pytest \
+Run:  flock -w 10800 the group's device lock timeout 1800 python -m pytest \
           models/demos/blackhole/qwen38_flash_next/tests/test_fused_row_reduce_device.py -s -p no:cacheprovider -o addopts=
 Env:  MESH_DEVICE=P150x8 TT_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 (as demo/text_demo.py).
 """

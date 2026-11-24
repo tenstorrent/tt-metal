@@ -65,7 +65,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.builder import RESIDENT_QSA_C
 
 MODEL_DIR = Path(__file__).resolve().parents[1]
 SERVER_MODULE = "models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_server"
-ACCEPTANCE_PROMPTS = MODEL_DIR / "tools" / "acceptance" / "greedy-prompts"
+ACCEPTANCE_PROMPTS = MODEL_DIR / "tools" / "acceptance" / "greedy-prompts.jsonl"
 DEFAULT_HF_MODEL = "Qwen/Qwen3.8-Flash-Next"
 DEFAULT_PROFILE = "p150-line"
 DEFAULT_ALLOCATED_CONTEXT = 32768

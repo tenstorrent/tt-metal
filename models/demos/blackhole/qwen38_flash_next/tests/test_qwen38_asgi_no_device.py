@@ -96,7 +96,9 @@ def test_settings_on_four_other_nodes_move_the_line_profile_and_parse_with_the_s
     parsed = chat_server._parser().parse_args(argv)  # the server's own parser admits every composed flag
     assert (parsed.mtp, parsed.sampling, parsed.require_json_96) == (4, True, True)
     assert parsed.stall_seconds == 300.0 and parsed.device_nodes == "4,5,6,7" and parsed.allocated_context == 65536
-    assert asgi.ACCEPTANCE_PROMPTS.is_dir() and (asgi.ACCEPTANCE_PROMPTS / "SHA256SUMS").is_file()
+    assert (
+        asgi.ACCEPTANCE_PROMPTS.is_file() and asgi.ACCEPTANCE_PROMPTS.with_name("greedy-prompts.jsonl.sha256").is_file()
+    )
 
 
 def test_settings_on_the_profile_nodes_pass_no_device_nodes_and_a_ring_profile_exports_its_descriptor(

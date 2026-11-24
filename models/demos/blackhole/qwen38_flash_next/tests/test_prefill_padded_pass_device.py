@@ -470,7 +470,7 @@ def test_hand_off_state_against_the_other_plans(mesh_device, harness, form):
     assert max(report["legacy_vs_rerun"].values()) == 0.0
 
 
-ACCEPTANCE_DIR = Path(__file__).resolve().parents[1] / "tools" / "acceptance" / "greedy-prompts"
+ACCEPTANCE_FILE = Path(__file__).resolve().parents[1] / "tools" / "acceptance" / "greedy-prompts.jsonl"
 
 
 @run_for_blackhole()
@@ -487,7 +487,8 @@ def test_an_acceptance_record_whose_plan_changed(mesh_device, harness, record):
     below the plans' noise is a near-tie flip, not a defect), and the teacher-forced logit differences."""
 
     built, _checkpoint = harness
-    prompt = json.loads((ACCEPTANCE_DIR / f"prompt-{record}-greedy.json").read_text())["prompt_token_ids"]
+    records = [json.loads(line) for line in ACCEPTANCE_FILE.read_text().splitlines()]
+    prompt = next(item for item in records if item["prompt"] == record)["prompt_token_ids"]
     legacy = built.prefill_and_decode(prompt, plan="legacy", steps=8)
     built.release()
     cost = built.prefill_and_decode(prompt, plan="cost", steps=8, force=legacy[1])

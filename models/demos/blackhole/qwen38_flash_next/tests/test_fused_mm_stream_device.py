@@ -150,8 +150,11 @@ def test_mm_stream_real_weights(mesh_device, op):
     device = mesh_device
     spec = SHAPES[op]
     k, n = spec["k"], spec["n"]
-    root = "/home/ttuser/models/qwen38_cache/caches/c32768-vllm/components/"
-    path = glob.glob(root + REAL[op], recursive=True)[0]
+    root = os.path.join(os.environ.get("TT_CACHE_PATH", ""), "caches/c32768-vllm/components/")
+    found = glob.glob(root + REAL[op], recursive=True) if os.environ.get("TT_CACHE_PATH") else []
+    if not found:
+        pytest.skip("TT_CACHE_PATH is unset or has no cached component for this op")
+    path = found[0]
     host = ttnn.load_tensor(path)
     part = ttnn.get_device_tensors(host)[0]
     weight = ttnn.to_device(part, device, memory_config=part.memory_config())

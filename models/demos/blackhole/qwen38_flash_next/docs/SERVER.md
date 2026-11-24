@@ -490,7 +490,7 @@ to it.  Numerics: the slab body is tolerance-class against the 32-row chunk bodi
 class": each dense linear's output within one bf16 ULP of its scale, top-1 moving at a handful of positions on prompts
 longer than a slab), the 128-row chunks give the 32-row chunks' tokens (`docs/NUMERICS.md`), and the `json` acceptance
 record (85 prompt tokens, shorter than one 128-row chunk) stays bitwise in every form.  A server with a prefill slab
-also replays the slab record (`prompt-document-greedy.json`, 2,228 prompt tokens: one slab, then the chunk forms); a
+also replays the slab record (the `document` record, 2,228 prompt tokens: one slab, then the chunk forms); a
 server without one skips it by name (`acceptance_record_skipped`), so the chunked forms replay the twelve study records
 only.  Prefill rates measured on the
 standalone server (README, 2026-09-25): 3.0-3.5 ms per prompt token in 32-row chunks, 1.45-1.56 with the 128-row

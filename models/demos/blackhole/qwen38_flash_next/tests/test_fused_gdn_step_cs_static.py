@@ -197,13 +197,3 @@ def test_per_tile_conv_equals_whole_row():
             torch.nn.functional.silu(sum(w[:, sl].float() * t[sl].float() for w, t in zip(window, taps)).bfloat16())
         )
     assert torch.equal(torch.cat(pieces, dim=1), whole)
-
-
-SYNTAX = Path("/home/ttuser/atupe/qwen38_work/runs/flash_next_tp8/x34_gdn_cs/syntax.sh")
-
-
-@pytest.mark.skipif(not SYNTAX.is_file(), reason="needs the x34 syntax recipe, the sfpi toolchain and a JIT cache")
-@pytest.mark.parametrize("kernel", ["compute_cs.cpp", "conv_compute.cpp"])
-def test_compute_kernels_syntax(kernel):
-    result = subprocess.run(["nice", "-n", "19", str(SYNTAX), kernel], capture_output=True, text=True, timeout=1500)
-    assert result.stdout.count("rc=0") == 3, result.stdout

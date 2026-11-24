@@ -10,7 +10,7 @@
    Inf, NaNs, ...), and the one-row program's bits for the same row (the table is printed as MT_ROW_TABLE lines).
  * test_mt_row_timing: traced slope per call of both programs.
 Run (group 2): MESH_DEVICE=P150x8 TT_VISIBLE_DEVICES=16,17,18,19,23,22,21,20 QWEN38_FUSED_DEVICE_TEST=1 flock
-/home/ttuser/atupe/device.lock.g2 python_env/bin/pytest <this file> -s -p no:cacheprovider -o addopts=
+the group's device lock python_env/bin/pytest <this file> -s -p no:cacheprovider -o addopts=
 """
 
 import json

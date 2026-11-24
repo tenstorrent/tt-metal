@@ -417,9 +417,9 @@ sampled TPOT (median of 6 chats) 17.60 ms non-thinking and 19.32 ms thinking aga
 
 ## The acceptance mechanism
 
-`--acceptance` replays the shipped CPU greedy records under `tools/acceptance/greedy-prompts/` against the CPU before
+`--acceptance` replays the shipped CPU greedy records in `tools/acceptance/greedy-prompts.jsonl` against the CPU before
 the server listens: the twelve study records, and on a server with a prefill slab the slab record
-(`prompt-document-greedy.json`, 2,228 prompt tokens, a document made of the twelve records' answers: the only record
+(the `document` record, 2,228 prompt tokens, a document made of the twelve records' answers: the only record
 that runs a slab).  `--require-json-96` refuses to serve unless the `json` record matches the CPU 96/96 (the
 other records diverge from the CPU after 2-75 tokens, the known greedy-prompt pattern; their first divergence index is
 in `acceptance.json` in the run directory).  The records were rendered by the CPU study with the system prompt

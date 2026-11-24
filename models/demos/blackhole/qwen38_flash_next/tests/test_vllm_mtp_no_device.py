@@ -14,6 +14,7 @@ The tests need the plugin's ``spec_decode`` module (no vLLM): ``PYTHONPATH`` inc
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -38,8 +39,8 @@ from models.demos.blackhole.qwen38_flash_next.tools.qwen38_vllm_mtp import (
     mtp_ple_early_from_env,
 )
 
-_PLUGIN_SRC = Path("/home/ttuser/atupe/qwen38-flash-next/vllm-tt-plugin/src")
-if _PLUGIN_SRC.is_dir() and str(_PLUGIN_SRC) not in sys.path:
+_PLUGIN_SRC = Path(os.environ["VLLM_TT_PLUGIN_SRC"]) if os.environ.get("VLLM_TT_PLUGIN_SRC") else None
+if _PLUGIN_SRC is not None and _PLUGIN_SRC.is_dir() and str(_PLUGIN_SRC) not in sys.path:
     sys.path.append(str(_PLUGIN_SRC))
 spec_decode = pytest.importorskip("vllm_tt_plugin.spec_decode")
 

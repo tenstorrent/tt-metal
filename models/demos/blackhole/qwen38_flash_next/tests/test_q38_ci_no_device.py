@@ -1088,7 +1088,7 @@ def test_committed_baselines_belong_to_baseline_pins_and_carry_their_source():
     # gr_recip_last the fold read plain decode's index on all 12 (chat 2, math 61, summary 75 on 2026-09-26)
     assert mtp4 == {**chunked, "math": 61}
     # the slab tables (--prefill-slab 2048 with and without --mtp 4) carry a thirteenth row, the slab record: the one
-    # acceptance record long enough to run a 2048-row slab (tools/acceptance/greedy-prompts/prompt-document-greedy.json,
+    # acceptance record long enough to run a 2048-row slab (the "document" line of tools/acceptance/greedy-prompts.jsonl,
     # replayed only under --prefill-slab).  The twelve study records stay under 2048 tokens (no slab fires), so on them
     # the drafting slab table is the --mtp 4 table by construction, streams included; the slab record's row is the only
     # pin exercising a slab body under MTP, tolerance-class against the chunked forms (docs/NUMERICS.md)

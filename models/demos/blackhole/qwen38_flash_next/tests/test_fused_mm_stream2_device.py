@@ -24,7 +24,16 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.fused import program as fp
 BF8, BF16, BF4 = ttnn.bfloat8_b, ttnn.bfloat16, ttnn.bfloat4_b
 RESULTS = Path(os.environ.get("X60_RESULTS", "/tmp/x60_stream2.jsonl"))
 SEEDS = [int(s) for s in os.environ.get("X60_SEEDS", "0,1,2,3,4,5,6,7").split(",")]
-ROOT = "/home/ttuser/models/qwen38_cache/caches/c32768-vllm/components/"
+ROOT = os.path.join(os.environ.get("TT_CACHE_PATH", ""), "caches/c32768-vllm/components/")
+
+
+def _real_path(pattern):
+    found = glob.glob(ROOT + pattern, recursive=True) if os.environ.get("TT_CACHE_PATH") else []
+    if not found:
+        pytest.skip("TT_CACHE_PATH is unset or has no cached component for this op")
+    return found[0]
+
+
 # name: K, N, dtype, stock readers, activation cores, columns per core, K rows per block
 SHAPES = {
     "router": dict(k=2560, n=512, dtype=BF16, readers=1, cores=5, cols=1, blk=10),
@@ -188,7 +197,7 @@ def test_real_weights(mesh_device, op):
     device = mesh_device
     spec = SHAPES[op]
     act_cfg, prog, ccfg, _wcfg, nb = stock_config(device, spec)
-    path = glob.glob(ROOT + REAL[op], recursive=True)[0]
+    path = _real_path(REAL[op])
     part = ttnn.get_device_tensors(ttnn.load_tensor(path))[0]
     weight = ttnn.to_device(part, device, memory_config=part.memory_config())
     assert check(device, op, weight, spec, SEEDS, act_cfg, prog, ccfg, nb, "real")

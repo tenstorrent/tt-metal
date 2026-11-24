@@ -28,7 +28,7 @@
 #   --lanes-stall-budget S  with --lanes: the admission work (seconds) the decoding lanes wait for before their pass
 #                           runs between two segments of an admission; off: every admission runs whole (default 0.5)
 #   --port N --host ADDR    default 8000 on 0.0.0.0
-#   --acceptance            replay the shipped CPU greedy records (tools/acceptance/greedy-prompts) at startup
+#   --acceptance            replay the shipped CPU greedy records (tools/acceptance/greedy-prompts.jsonl) at startup
 #   --acceptance-prompts D  replay the records in D instead
 #   --require-json-96       refuse to serve unless the json record matches the CPU 96/96
 #   --acceptance-only       replay acceptance, write evidence and stop (requires --acceptance or --acceptance-prompts)
@@ -202,7 +202,7 @@ fi
 [[ "$stall_seconds" == 0 ]] || args+=(--stall-seconds "$stall_seconds")
 [[ -z "$lanes" ]] || args+=(--lanes "$lanes")
 [[ -z "$lanes_stall_budget" ]] || args+=(--lanes-stall-budget "$lanes_stall_budget")
-[[ -z "$acceptance" ]] || args+=(--acceptance-prompts "$HERE/acceptance/greedy-prompts")
+[[ -z "$acceptance" ]] || args+=(--acceptance-prompts "$HERE/acceptance/greedy-prompts.jsonl")
 [[ -z "$acceptance_prompts" ]] || args+=(--acceptance-prompts "$acceptance_prompts")
 [[ -z "$acceptance_only" ]] || args+=(--acceptance-only)
 [[ -z "$require_json_96" ]] || args+=(--require-json-96)

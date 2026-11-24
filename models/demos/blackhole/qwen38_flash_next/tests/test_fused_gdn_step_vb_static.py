@@ -7,7 +7,6 @@ ordering rules, a torch emulation showing the column-block split of the recurren
 toolchain) a -fsyntax-only compile of compute_vb.cpp for VT 1 and 2, decay-first on and off."""
 
 import re
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -20,7 +19,6 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.fused.gdn_step import conv_sp
 KERNELS = Path(module.__file__).parent / "kernels"
 TP8 = pytest.mark.skipif(module.HEADS != 6, reason="the split layout is the TP=8 one (MESH_DEVICE=P150x8)")
 ARGS = dict(k_tile0=8, v_tile0=16, qk_repeat=3)
-SYNTAX = Path("/home/ttuser/atupe/qwen38_work/runs/flash_next_tp8/x34_gdn_cs/syntax.sh")
 
 
 def _text(name):
@@ -165,14 +163,3 @@ def test_column_split_of_the_recurrence_is_exact():
             parts = [step(slice(b * w, (b + 1) * w)) for b in range(vbn)]
             assert torch.equal(torch.cat([p[0] for p in parts], dim=1), full_S)
             assert torch.equal(torch.cat([p[1] for p in parts], dim=1), full_o)
-
-
-@pytest.mark.skipif(not SYNTAX.is_file(), reason="needs the x34 syntax recipe, the sfpi toolchain and a JIT cache")
-@pytest.mark.parametrize("vt", [1, 2])
-@pytest.mark.parametrize("decay_first", [0, 1])
-def test_compute_vb_syntax(vt, decay_first):
-    flags = [f"-DKERNEL_COMPILE_TIME_ARGS={vt}", *(["-DDECAY_FIRST=1"] if decay_first else [])]
-    result = subprocess.run(
-        ["nice", "-n", "19", str(SYNTAX), "compute_vb.cpp", *flags], capture_output=True, text=True, timeout=1500
-    )
-    assert result.stdout.count("rc=0") == 3, result.stdout

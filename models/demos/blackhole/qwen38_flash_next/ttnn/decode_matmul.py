@@ -110,7 +110,7 @@ DENSE_MATH_FIDELITY_NAMES: dict[Any, str] = {ttnn.bfloat16: "HiFi4", ttnn.bfloat
 DENSE_TILE_BYTES: dict[Any, int] = {ttnn.bfloat16: 2048, ttnn.bfloat8_b: 1088, ttnn.bfloat4_b: 576}
 # The two-reader bank layouts are whole tiles per reader (bank_tiles), so they do not depend on the tile's bytes; a
 # dtype enters this set once one reader and two readers were checked bitwise equal on the device for every shape of
-# TWO_WORKER_PROJECTIONS (tools/qualify_dense_two_readers.py).  A dtype outside it runs one reader everywhere (the
+# TWO_WORKER_PROJECTIONS.  A dtype outside it runs one reader everywhere (the
 # builder records the reason in decode_dram_workers_fallback).  Qualified 2026-09-24 on a QuietBox p150b (eight
 # banks): bf16, bf8b (HiFi2) and bf4b (LoFi) bitwise equal one vs two readers on all five shapes at 32 rows.
 TWO_READER_QUALIFIED_DTYPES: frozenset = frozenset({ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b})

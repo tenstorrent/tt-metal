@@ -12,7 +12,7 @@ including 4 repeated calls and a 3-call trace replayed 3 times.  Traced time per
 stock, the moe minimal async op, row_reduce with 1 link and with 2 links.  The test runs every case, prints one
 ROW_REDUCE_ROWS_RESULT json line per case and asserts at the end that no case had a mismatch.
 
-Run:  flock -w 10800 /home/ttuser/atupe/device.lock timeout 1800 python -m pytest \
+Run:  flock -w 10800 the group's device lock timeout 1800 python -m pytest \
           models/demos/blackhole/qwen38_flash_next/tests/test_fused_row_reduce_rows_device.py -s -p no:cacheprovider -o addopts=
 """
 

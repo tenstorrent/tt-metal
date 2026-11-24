@@ -21,8 +21,8 @@ format and component tests).
 ## The acceptance gate
 
 Start the server with `--acceptance --require-json-96` (the README's section 4).  The shipped CPU greedy records
-under `tools/acceptance/greedy-prompts/` replay against the CPU before the server listens (the twelve study records;
-with `--prefill-slab` also the slab record, `prompt-document-greedy.json`, 2,228 prompt tokens); the `json` record
+in `tools/acceptance/greedy-prompts.jsonl` replay against the CPU before the server listens (the twelve study records;
+with `--prefill-slab` also the slab record, the `document` record, 2,228 prompt tokens); the `json` record
 must match 96/96 or the server refuses to serve, and every record's first divergence index lands in `acceptance.json`
 in the run directory.  The pinned indices a start is compared against are `tools/ci/baselines/A3-chunked-32k-divergence_index.json`
 (plain decode with the chunked prefill) and `tools/ci/baselines/A3-mtp4-32k-divergence_index.json` (`--mtp 4`); a

@@ -18,7 +18,7 @@ their S rows to the host, so the zero check runs on the S = 32 cases (same kerne
 case interleaved checks that the 1-/2-row program and the rows program share a mesh.  Traced time per call (slope of a 12-op
 and a 4-op trace): stock ``ttnn.all_gather`` vs the fused call.  One ROW_GATHER_ROWS_RESULT json line per case.
 
-Run:  flock -w 7200 /home/ttuser/atupe/device.lock.g3 timeout 3000 python -m pytest \
+Run:  flock -w 7200 the group's device lock timeout 3000 python -m pytest \
           models/demos/blackhole/qwen38_flash_next/tests/test_fused_row_gather_rows_device.py -s -p no:cacheprovider -o addopts=
 """
 

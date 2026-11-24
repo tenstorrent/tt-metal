@@ -26,13 +26,17 @@ IDLE_LIMIT_S = 15 * 60
 
 
 def test_draft_row_1row_vs_verify_form_rows():
+    checkpoint = os.environ.get("HF_MODEL")
+    cache_root = os.environ.get("TT_CACHE_PATH")
+    if not checkpoint or not cache_root:
+        pytest.skip("HF_MODEL and TT_CACHE_PATH name the checkpoint and the cache this test starts the server on")
     out = (
         Path(os.environ.get("DR2_OUT", "/tmp/dr2_out")) / f"run-{int(time.time())}"
     )  # the server refuses a used evidence dir
     out.mkdir(parents=True, exist_ok=True)
     nodes = os.environ.get("DR2_VISIBLE_DEVICES", "8,9,10,11,15,14,13,12")  # PCIe ids (TT_VISIBLE_DEVICES)
     dev_nodes = os.environ.get("DR2_DEVICE_NODES", nodes)  # /dev/tenstorrent nodes of the partition, in mesh order
-    cache = "/mnt/nvme5/tmp/qwen38fn/cache_W/caches"
+    cache = f"{cache_root}/caches"
     env = dict(os.environ)
     env.update(
         QWEN38_DRAFT_1ROW="probe",
@@ -65,7 +69,7 @@ def test_draft_row_1row_vs_verify_form_rows():
         "--device-nodes",
         dev_nodes,
         "--checkpoint",
-        "/mnt/nvme5/tmp/qwen38fn/hf",
+        checkpoint,
         "--component-cache-root",
         f"{cache}/c32768-vllm/components",
         "--routed-bf4-scratch-root",

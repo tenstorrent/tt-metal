@@ -11,13 +11,17 @@ import os
 import time
 from pathlib import Path
 
+import pytest
+
 import ttnn
 
-CACHE_ROOT = Path(os.environ.get("TT_CACHE_PATH", "/home/ttuser/models/qwen38_cache")) / "caches" / "bf4-experts"
+CACHE_ROOT = Path(os.environ["TT_CACHE_PATH"]) / "caches" / "bf4-experts" if os.environ.get("TT_CACHE_PATH") else None
 
 
 def cache_dir() -> Path:
     """The BF4 expert cache of 64 experts per die and an 8-bank ring that was read most recently (the TP=8 serving cache)."""
+    if CACHE_ROOT is None or not CACHE_ROOT.is_dir():
+        pytest.skip("TT_CACHE_PATH is unset or has no bf4-experts cache")
     best = None
     for manifest in CACHE_ROOT.glob("*/manifest.json"):
         identity = json.loads(manifest.read_text())["identity"]
@@ -27,7 +31,7 @@ def cache_dir() -> Path:
             if best is None or stamp > best[0]:
                 best = (stamp, manifest.parent)
     if best is None:
-        raise RuntimeError(f"no 64-expert 8-ring BF4 cache under {CACHE_ROOT}")
+        pytest.skip(f"no 64-expert 8-ring BF4 cache under {CACHE_ROOT}")
     return best[1]
 
 

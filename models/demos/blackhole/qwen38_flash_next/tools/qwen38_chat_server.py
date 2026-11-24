@@ -1740,20 +1740,18 @@ class Qwen38ChatHandler(http.server.BaseHTTPRequestHandler):
 # -- acceptance replay ---------------------------------------------------------------------------
 
 
-def load_acceptance_records(directory: Path) -> list[dict[str, Any]]:
-    """The CPU study's ``prompt-*-greedy.json`` records, digest-checked against the directory's SHA256SUMS."""
+def load_acceptance_records(path: Path) -> list[dict[str, Any]]:
+    """The CPU study's greedy prompt records (one JSON object per line of ``greedy-prompts.jsonl``), digest-checked
+    against the ``.sha256`` file beside it.  A record's ``sha256`` is the digest of its original standalone file."""
 
-    directory = directory.resolve(strict=True)
-    sums = {}
-    for line in (directory / "SHA256SUMS").read_text(encoding="utf-8").splitlines():
-        digest, _, name = line.partition("  ")
-        sums[name.strip()] = digest
+    path = path.resolve(strict=True)
+    digest, _, name = path.with_name(path.name + ".sha256").read_text(encoding="utf-8").strip().partition("  ")
+    actual = hashlib.sha256(path.read_bytes()).hexdigest()
+    if name.strip() != path.name or digest != actual:
+        raise ValueError(f"{path.name}: sha256 {actual} vs {path.name}.sha256 {digest} ({name.strip()})")
     records = []
-    for path in sorted(directory.glob("prompt-*-greedy.json")):
-        actual = hashlib.sha256(path.read_bytes()).hexdigest()
-        if sums.get(path.name) != actual:
-            raise ValueError(f"{path.name}: sha256 {actual} vs SHA256SUMS {sums.get(path.name)}")
-        document = json.loads(path.read_text(encoding="utf-8"))
+    for line in path.read_text(encoding="utf-8").splitlines():
+        document = json.loads(line)
         prompt_ids = document.get("prompt_token_ids")
         generated = document.get("generated_token_ids")
         if (
@@ -1767,19 +1765,20 @@ def load_acceptance_records(directory: Path) -> list[dict[str, Any]]:
             or document.get("prompt_length") != len(prompt_ids)
             or document.get("stop_reason") not in ("eos", "max_continuation")
         ):
-            raise ValueError(f"{path.name} is not a greedy prompt record with vocabulary-ranged token lists")
+            raise ValueError(
+                f"{path.name}: line {len(records) + 1} is not a greedy prompt record with vocabulary-ranged token lists"
+            )
         records.append(
             {
                 "prompt": document["prompt"],
                 "prompt_token_ids": prompt_ids,
                 "generated_token_ids": generated,
                 "stop_reason": document["stop_reason"],
-                "sha256": actual,
+                "sha256": document["sha256"],
             }
         )
     if not records:
-        raise ValueError(f"no prompt-*-greedy.json records in {directory}")
-    # The gate prompt first: its 96/96 result is the go/no-go for serving.
+        raise ValueError(f"no records in {path}")
     records.sort(key=lambda record: (record["prompt"] != ACCEPTANCE_GATE_PROMPT, record["prompt"]))
     return records
 
@@ -2243,7 +2242,7 @@ def _parser() -> argparse.ArgumentParser:
         "--allow-lan", action="store_true", help="accept a non-loopback --host on a profile that does not serve the LAN"
     )
     parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--acceptance-prompts", type=Path, default=None, help="the CPU study's prompt-*-greedy.json")
+    parser.add_argument("--acceptance-prompts", type=Path, default=None, help="the CPU study's greedy-prompts.jsonl")
     parser.add_argument("--require-json-96", action="store_true", help="refuse to serve unless json matches 96/96")
     parser.add_argument(
         "--acceptance-only",

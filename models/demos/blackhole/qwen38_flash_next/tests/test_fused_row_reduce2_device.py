@@ -6,7 +6,7 @@
 Per case (bf16 rows 1 and 2, DRAM and L1 width-sharded; fp32 row 1): v2 == stock on rows < rows bit for bit, 8 repeated
 calls, a trace of 5 calls kept alive and replayed 7 times (parity carried across replays), traced time of stock / v1 / v2.
 Plus one trace that interleaves all the cases (the one landing buffer, counter and semaphore pair serve every shape).
-Run (env of run_timing.sh):  flock -w 10800 /home/ttuser/atupe/device.lock timeout 1800 python -m pytest <this file> -s ...
+Run (env of run_timing.sh):  flock -w 10800 the group's device lock timeout 1800 python -m pytest <this file> -s ...
 """
 
 import json

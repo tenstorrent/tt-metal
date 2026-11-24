@@ -55,7 +55,7 @@ from typing import Any, Sequence
 MODEL_DIR = Path(__file__).resolve().parents[1]
 REPO_ROOT = MODEL_DIR.parents[3]
 REFERENCE_DIR = Path(__file__).with_name("reference")
-ACCEPTANCE_DIR = Path(__file__).with_name("acceptance") / "greedy-prompts"
+ACCEPTANCE_DIR = Path(__file__).with_name("acceptance") / "greedy-prompts.jsonl"
 TALE_OF_TWO_CITIES = REPO_ROOT / "models" / "ttt_compat" / "tests" / "tale-of-two-cities.txt.bz2"
 
 CORPUS_ID = "Q38-REF-v1"
@@ -417,7 +417,7 @@ def _tool_requests() -> list[tuple[str, list[dict[str, Any]], list[dict[str, Any
 def freeze_corpus(
     *,
     checkpoint: Path,
-    acceptance_dir: Path,
+    acceptance_file: Path,
     tale_path: Path,
     moby_dick_path: Path,
     eval_items_dir: Path,
@@ -437,7 +437,7 @@ def freeze_corpus(
         return tuple(protocol.render_prompt(tokenizer, list(messages), list(tools), **flags))
 
     # acceptance: the records' prompt ids, whose transcript must re-render to the same ids (the extraction is exact)
-    records = load_acceptance_records(acceptance_dir)
+    records = load_acceptance_records(acceptance_file)
     record_messages: dict[str, list[dict[str, str]]] = {}
     for record in records:
         messages = messages_from_transcript(tokenizer.decode(record["prompt_token_ids"]))
@@ -1181,7 +1181,7 @@ def _parser() -> argparse.ArgumentParser:
 
     freeze = modes.add_parser("freeze", help="build the corpus files")
     freeze.add_argument("--checkpoint", type=Path, required=True)
-    freeze.add_argument("--acceptance-dir", type=Path, default=ACCEPTANCE_DIR)
+    freeze.add_argument("--acceptance-file", type=Path, default=ACCEPTANCE_DIR)
     freeze.add_argument("--tale", type=Path, default=TALE_OF_TWO_CITIES, help="tale-of-two-cities.txt.bz2")
     freeze.add_argument("--moby-dick", type=Path, required=True, help="Project Gutenberg ebook 2701 as plain text")
     freeze.add_argument("--eval-items", type=Path, required=True, help="directory with gsm8k.jsonl and humaneval.jsonl")
@@ -1266,7 +1266,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.mode == "freeze":
         manifest = freeze_corpus(
             checkpoint=args.checkpoint,
-            acceptance_dir=args.acceptance_dir,
+            acceptance_file=args.acceptance_file,
             tale_path=args.tale,
             moby_dick_path=args.moby_dick,
             eval_items_dir=args.eval_items,

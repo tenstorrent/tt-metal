@@ -164,9 +164,11 @@ def test_readers(mesh_device, op, real):
     if real:
         import glob
 
-        path = glob.glob("/home/ttuser/models/qwen38_cache/caches/c32768-vllm/components/" + REAL[op], recursive=True)[
-            0
-        ]
+        root = os.path.join(os.environ.get("TT_CACHE_PATH", ""), "caches/c32768-vllm/components/")
+        found = glob.glob(root + REAL[op], recursive=True) if os.environ.get("TT_CACHE_PATH") else []
+        if not found:
+            pytest.skip("TT_CACHE_PATH is unset or has no cached component for this op")
+        path = found[0]
         part = ttnn.get_device_tensors(ttnn.load_tensor(path))[0]
         weight = ttnn.to_device(part, device, memory_config=part.memory_config())
     else:

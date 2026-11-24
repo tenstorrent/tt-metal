@@ -3,7 +3,7 @@
 
 """``derive_fabric_line_route``: a ring under the 1x4 LINE descriptor opens in the order the fabric embedded the line.
 
-The fixtures are two real boxes' cluster descriptors and fabric mappings (``tools/qb_mesh_smoke.py`` results of
+The fixtures are two real boxes' cluster descriptors and fabric mappings (results of
 2026-09-18): the QuietBox (4x p150, where the fabric's order equals the ring walk from chip 0) and a QuietBox 2
 (2x p300c, where it does not: the ring walk (0, 1, 2, 3) put the mesh pair 1-2 on the ring link the fabric line
 does not carry and the first all_gather failed with "Could not find any forwarding direction").
