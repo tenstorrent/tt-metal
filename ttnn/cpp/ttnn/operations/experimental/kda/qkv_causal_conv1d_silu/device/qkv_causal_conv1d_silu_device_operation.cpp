@@ -185,21 +185,32 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
     const Shape expected_history_shape =
         tail.token_paged ? Shape({entries, qkv_conv::history_rows, width})
                          : Shape({entries, width / tail.page_channels, qkv_conv::history_rows * tail.page_channels});
-    const uint32_t slab_parts = qkv_causal_conv1d_silu_slab_parts(attrs, in);
-    if (slab_parts > 1) {
+    if (in.slab_index.has_value()) {
         // An SP-sharded slab: each rank's entry holds its slice of every branch, whole pages per slice.
+        const uint32_t sp_size = mesh->shape()[attrs.sequence_parallel_axis];
+        TT_FATAL(
+            !tail.token_paged && sp_size > 1,
+            "qkv_causal_conv1d_silu: a history slab is channel-paged and SP-sharded over more than one SP rank");
         for (const uint32_t branch_width : {attrs.q_width, attrs.k_width, attrs.v_width}) {
             TT_FATAL(
-                branch_width % (tail.page_channels * slab_parts) == 0,
-                "qkv_causal_conv1d_silu: an SP-sharded history slab needs each of Q/K/V divisible into {} slices of "
-                "whole {}-channel pages, got width {}",
-                slab_parts,
+                branch_width % (tail.page_channels * sp_size) == 0,
+                "qkv_causal_conv1d_silu: a history slab needs each of Q/K/V divisible into {} slices of whole "
+                "{}-channel pages, got width {}",
+                sp_size,
                 tail.page_channels,
                 branch_width);
         }
+        const Shape expected_slab_shape(
+            {entries, width / (tail.page_channels * sp_size), qkv_conv::history_rows * tail.page_channels});
+        TT_FATAL(
+            history_shape == expected_slab_shape,
+            "qkv_causal_conv1d_silu: a history slab must be {} (this SP rank's channels of Q+K+V = {}), got {}",
+            expected_slab_shape,
+            channels,
+            history_shape);
     }
     TT_FATAL(
-        slab_parts > 1 || history_shape == expected_history_shape,
+        in.slab_index.has_value() || history_shape == expected_history_shape,
         "qkv_causal_conv1d_silu: history must be {} for Q+K+V = {} and page_channels = {}, got {}",
         expected_history_shape,
         channels,

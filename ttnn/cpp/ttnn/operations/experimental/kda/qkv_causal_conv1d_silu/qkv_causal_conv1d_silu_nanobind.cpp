@@ -133,13 +133,12 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
         With ``slab_index`` (replicated UINT32 scalar, read on device),
         ``history`` is a slab of carries: entry ``slab_index * slab_index_scale +
         slab_index_offset`` is read (zeros when ``actual_start`` reads 0) and
-        replaced in place; the fourth output is the slab. An entry holds every
-        channel, ``[entries, (Q+K+V) / P, 3P]``, or is SP-sharded,
+        replaced in place; the fourth output is the slab. The slab is SP-sharded,
         ``[entries, (Q+K+V) / (P * SP), 3P]``: SP rank ``r`` holds, per Q/K/V
         branch in order, the branch's channels ``[r * W / SP, (r + 1) * W / SP)``.
-        Sharded, the ranks send their channels of the old tail to the
-        chronologically first rank over the fabric, and each rank writes back
-        only its own channels of the replacement.
+        The ranks send their channels of the old tail to the chronologically
+        first rank over the fabric, and each rank writes back only its own
+        channels of the replacement.
 
         Returns:
             tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: ``q``, ``k``,

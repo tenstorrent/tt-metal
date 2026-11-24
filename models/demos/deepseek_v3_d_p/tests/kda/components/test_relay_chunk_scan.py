@@ -6,8 +6,6 @@ call after call and bit-identically: on torus and unwrapped 2D fabrics, with Kim
 heads) and fabric payload, and within its device-time reference.
 """
 
-import statistics
-
 import pytest
 import torch
 
@@ -858,57 +856,3 @@ def test_relay_chunk_scan_sharded_slab_matches_tensor_state(mesh_device):
         for tensor in scalars:
             ttnn.deallocate(tensor)
         ttnn.deallocate(slab.slab)
-
-
-@_SHARDED_MESH
-def test_relay_chunk_scan_sharded_slab_device_time(mesh_device):
-    """Report only: device time of the model's relay call on a replicated slab entry (every rank holds every head) and
-    on a sharded one, at the layer gate's start (a split first rank), interleaved R S S R S R R S, medians of
-    _PERF_SAMPLES single calls each."""
-    require_realtime_profiler("the sharded slab device-time comparison")
-    from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import nd_dram_memory_config
-    from models.demos.deepseek_v3_d_p.tt.kda.state_contract import KDA_RECURRENT_BAND_WIDTH
-
-    relay = _relay(mesh_device)
-    transforms = _Transforms(mesh_device, relay, seed=_PERF_START)
-    sharded = _ShardedSlab(mesh_device, seed=5)
-    replicated = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([_SLAB_SLOTS * _SLAB_LAYERS, _HEADS, _KEY, _KEY]),
-        ttnn.float32,
-        ttnn.TILE_LAYOUT,
-        mesh_device,
-        nd_dram_memory_config(mesh_device, [1, 1, _KEY, KDA_RECURRENT_BAND_WIDTH]),
-    )
-    slot, actual_start = make_actual_start(mesh_device, 0), make_actual_start(mesh_device, _PERF_START)
-    arms = {
-        "replicated": SlabEntry(replicated, slot, _SLAB_LAYERS, 1),
-        "sharded": sharded.entry(slot, 1),
-    }
-    medians = {name: [] for name in arms}
-    try:
-        for name in "RSSRSRRS":
-            arm = "replicated" if name == "R" else "sharded"
-
-            def call(entry=arms[arm]):
-                output, _ = relay(
-                    transforms.packed,
-                    *transforms.inputs[:1],
-                    entry,
-                    *transforms.inputs[1:],
-                    transforms.norm,
-                    actual_start,
-                )
-                ttnn.synchronize_device(mesh_device)
-                return (output,)
-
-            medians[arm].append(median_device_us(mesh_device, call, _PERF_KERNEL, _PERF_SAMPLES))
-        layout = "SP{}xTP{}".format(*_sp_tp(mesh_device))
-        summary = {arm: statistics.median(values) for arm, values in medians.items()}
-        print(
-            f"relay_chunk_scan {layout} slab device time: replicated {summary['replicated']:.1f} us "
-            f"{[round(v, 1) for v in medians['replicated']]}, sharded {summary['sharded']:.1f} us "
-            f"{[round(v, 1) for v in medians['sharded']]}, delta {summary['sharded'] - summary['replicated']:+.1f} us"
-        )
-    finally:
-        for tensor in (slot, actual_start, replicated, sharded.slab):
-            ttnn.deallocate(tensor)

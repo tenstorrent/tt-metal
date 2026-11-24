@@ -12,7 +12,7 @@
 // A 2D multicast leaves every hop in one ETH direction, so on a 2D fabric whose SP axis turns the barrier and the
 // carry go to each other rank as a 2D unicast instead (unicast_peers).
 //
-// An SP-sharded history slab (slab_parts == sp_size) holds on each rank only its slice of every Q/K/V branch. Only
+// A history slab is SP-sharded: each rank holds only its slice of every Q/K/V branch of an entry. Only
 // the chronologically first rank reads the old tail, so after the entry barrier every other rank sends its slices of
 // the slot's old tail into that rank's exchange history rows and bumps its history semaphore; the first rank copies
 // its own slices there, waits for the others' and releases its convolution cores (history_ready), which read the old
@@ -67,12 +67,9 @@ void kernel_main() {
     constexpr uint32_t slab_scale = get_arg(args::slab_scale);
     constexpr uint32_t slab_offset = get_arg(args::slab_offset);
     constexpr uint32_t entry_pages = get_arg(args::entry_pages);
-    constexpr uint32_t slab_parts = get_arg(args::slab_parts);
     constexpr uint32_t peer_routes = get_arg(args::peer_routes);
-    constexpr bool sharded = slab && slab_parts > 1;
-    static_assert(
-        !sharded || (slab_parts == sp_size && !token_paged), "a sharded slab is channel-paged, one slice per SP rank");
-    // Native tail pages per Q/K/V branch; a sharded rank stores branch_pages / slab_parts of each.
+    static_assert(!slab || (sp_size > 1 && !token_paged), "a history slab is channel-paged and SP-sharded");
+    // Native tail pages per Q/K/V branch; a slab rank stores branch_pages / sp_size of each.
     constexpr uint32_t branch_pages[3] = {get_arg(args::q_pages), get_arg(args::k_pages), get_arg(args::v_pages)};
     const uint32_t entry_semaphore = get_arg(args::entry_semaphore);
     const uint32_t predecessor_semaphore = get_arg(args::predecessor_semaphore);
@@ -96,7 +93,6 @@ void kernel_main() {
     const auto final_history = TensorAccessor(tensor::final_history);
     Semaphore staged(sem::staged);
     Semaphore predecessor_ready(sem::predecessor_ready);
-    Semaphore history_consumed(sem::history_consumed);
     Semaphore history_ready(sem::history_ready);
 
     // Scratch, from an aligned base: a slot for the chronology scalars, then three outgoing rows and three carry rows.
@@ -120,11 +116,11 @@ void kernel_main() {
         }
     };
 
-    // SP-sharded slab: this rank's slices, as (branch, row) runs of whole pages' rows. Run (b, r) is the rank's
+    // The slab: this rank's slices, as (branch, row) runs of whole pages' rows. Run (b, r) is the rank's
     // channels of branch b in tail row r: native pages [native_page(b), + own_pages(b)) of the full row, stored pages
     // [stored_page(b), + own_pages(b)) of the slab entry, each page holding history_rows rows of page_channels.
     constexpr uint32_t page_row_bytes = page_channels * element_bytes;
-    const auto own_pages = [&](uint32_t b) { return branch_pages[b] / slab_parts; };
+    const auto own_pages = [&](uint32_t b) { return branch_pages[b] / sp_size; };
     const auto stored_page = [&](uint32_t b) {
         uint32_t page = 0;
         for (uint32_t i = 0; i < b; ++i) {
@@ -171,7 +167,7 @@ void kernel_main() {
             if (from_layer_history && layer_carry.zeros) {
                 noc.async_write_zeros(scratch, row_bytes, {.offset_bytes = destination});
                 noc.write_zeros_l1_barrier();
-            } else if (from_layer_history && sharded) {
+            } else if (from_layer_history && slab) {
                 // Gathered into this (the first) rank's history rows.
                 noc.async_read(
                     exchange_buffer,
@@ -388,7 +384,7 @@ void kernel_main() {
         noc.async_read_barrier();
 
         unicast_rows(outgoing, predecessor_page, predecessor_semaphore);
-        if constexpr (sharded) {
+        if constexpr (slab) {
             if (!layer_carry.zeros) {
                 // The carry rows are free until the carry: stage this rank's slices there.
                 stage_own_slices(carry);
@@ -436,11 +432,8 @@ void kernel_main() {
     }
     // The replacement carry, three full rows in scratch, goes out in history's layout; the outgoing rows have been
     // sent, so their scratch gathers its pages.
-    if constexpr (slab && !sharded) {
-        history_consumed.wait_min(num_convolution_cores);
-    }
     if (layer_carry.writes) {
-        if constexpr (sharded) {
+        if constexpr (slab) {
             // This rank's slices only: native page native_page(b) + i is stored page stored_page(b) + i.
             write_tail<token_paged, page_channels>(
                 noc,

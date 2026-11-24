@@ -39,17 +39,13 @@ using qkv_conv::no_fabric_connection;
 
 const SemaphoreSpecName predecessor_ready_semaphore{"predecessor_ready"};
 const SemaphoreSpecName staged_semaphore{"staged"};
-// With a history slab holding every channel: every convolution core has read the old carry before the exchange core
-// replaces it.
-const SemaphoreSpecName history_consumed_semaphore{"history_consumed"};
-// With an SP-sharded history slab: on the chronologically first rank, the exchange core has gathered every rank's
-// channels of the old tail into the exchange buffer's history rows.
+// With a history slab: on the chronologically first rank, the exchange core has gathered every rank's channels of the
+// old tail into the exchange buffer's history rows.
 const SemaphoreSpecName history_ready_semaphore{"history_ready"};
 const TensorParamName slab_index_tensor{"slab_index"};
 
 void add_slab_args(KernelSpec& kernel, const QkvCausalConv1dSiluParams& attrs, const QkvCausalConv1dSiluInputs& in) {
     const bool slab = in.slab_index.has_value();
-    const auto tail = qkv_causal_conv1d_silu_tail_layout(attrs);
     const auto [has_slab, limit, scale, offset] = kda_factory_detail::slab_kernel_args(
         slab ? &in.history : nullptr, attrs.slab_index_scale, attrs.slab_index_offset);
     for (const auto& [name, value] :
@@ -57,11 +53,7 @@ void add_slab_args(KernelSpec& kernel, const QkvCausalConv1dSiluParams& attrs, c
           {"slab_index_limit", limit},
           {"slab_scale", scale},
           {"slab_offset", offset},
-          {"entry_pages", static_cast<uint32_t>(in.history.logical_shape()[1])},
-          {"slab_parts", qkv_causal_conv1d_silu_slab_parts(attrs, in)},
-          {"q_pages", attrs.q_width / tail.page_channels},
-          {"k_pages", attrs.k_width / tail.page_channels},
-          {"v_pages", attrs.v_width / tail.page_channels}}) {
+          {"entry_pages", static_cast<uint32_t>(in.history.logical_shape()[1])}}) {
         kernel.compile_time_args.insert({name, value});
     }
     if (slab) {
@@ -289,7 +281,6 @@ void add_history_exchange(
                 {
                     SemaphoreBinding{staged_semaphore, "staged"},
                     SemaphoreBinding{predecessor_ready_semaphore, "predecessor_ready"},
-                    SemaphoreBinding{history_consumed_semaphore, "history_consumed"},
                     SemaphoreBinding{history_ready_semaphore, "history_ready"},
                     SemaphoreBinding{teardown[0], "teardown0"},
                     SemaphoreBinding{buffer_index[0], "buffer_index0"},
@@ -327,7 +318,11 @@ void add_history_exchange(
                  {"token_paged", uint32_t(tail.token_paged)},
                  {"page_channels", tail.page_channels},
                  {"unicast_peers", uint32_t(route.unicast_peers)},
-                 {"peer_routes", uint32_t(route.peer_routes)}},
+                 {"peer_routes", uint32_t(route.peer_routes)},
+                 // A slab rank's channels: whole tail pages of each Q/K/V branch.
+                 {"q_pages", attrs.q_width / tail.page_channels},
+                 {"k_pages", attrs.k_width / tail.page_channels},
+                 {"v_pages", attrs.v_width / tail.page_channels}},
             .runtime_arg_schema =
                 {.runtime_arg_names =
                      {"entry_semaphore",
@@ -398,20 +393,6 @@ void add_history_exchange(
 }
 
 }  // namespace
-
-uint32_t qkv_causal_conv1d_silu_slab_parts(
-    const QkvCausalConv1dSiluParams& attrs, const QkvCausalConv1dSiluInputs& in) {
-    const auto tail = qkv_causal_conv1d_silu_tail_layout(attrs);
-    if (!in.slab_index.has_value() || tail.token_paged) {
-        return 1;
-    }
-    const uint32_t sp_size = in.history.device()->shape()[attrs.sequence_parallel_axis];
-    const uint32_t pages = (attrs.q_width + attrs.k_width + attrs.v_width) / tail.page_channels;
-    const auto& shape = in.history.logical_shape();
-    const bool sharded = sp_size > 1 && shape.rank() == 3 && shape[1] * sp_size == pages &&
-                         shape[2] == qkv_conv::history_rows * tail.page_channels;
-    return sharded ? sp_size : 1;
-}
 
 ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory::create_mesh_workload_artifacts(
     const QkvCausalConv1dSiluParams& attrs,
@@ -515,7 +496,6 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
             },
         .semaphore_bindings =
             {SemaphoreBinding{predecessor_ready_semaphore, "predecessor_ready"},
-             SemaphoreBinding{history_consumed_semaphore, "history_consumed"},
              SemaphoreBinding{history_ready_semaphore, "history_ready"}},
         .scratchpad_bindings = {{act_window_name, "act_window"}},
         .tensor_bindings =
@@ -657,7 +637,6 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
             {
                 SemaphoreSpec{.unique_id = predecessor_ready_semaphore, .target_nodes = semaphore_cores},
                 SemaphoreSpec{.unique_id = staged_semaphore, .target_nodes = semaphore_cores},
-                SemaphoreSpec{.unique_id = history_consumed_semaphore, .target_nodes = semaphore_cores},
                 SemaphoreSpec{.unique_id = history_ready_semaphore, .target_nodes = semaphore_cores},
             },
         .scratchpads =
