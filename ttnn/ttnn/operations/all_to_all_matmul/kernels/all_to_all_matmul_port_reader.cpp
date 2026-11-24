@@ -8,10 +8,14 @@
 // ((b * Hl + j) * St + t * Mq_t) * Kt are consecutive. One CB page = one fabric packet (packet_tiles tiles; the
 // entry's last packet may be short). A batch is up to PORT_BATCH_CHUNKS packets, ends at a group boundary of the
 // 2 x PORT_BATCH_CHUNKS CB (a reservation never wraps) and at the end of an entry; the sender mirrors this rule.
+// Regime R1' (Mq % 32 != 0, compile-time `retile`): per image the quarter's source tile rows are staged in
+// cb_retile_stage (one DRAM barrier), then each destination tile is re-tiled into the packet page by core-local copies
+// (all_to_all_matmul_retile.hpp); the batch's single barrier before the push covers them.
 
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "all_to_all_matmul_retile.hpp"
 
 #if defined(ABLATE_ZONES)
 #include "tools/profiler/kernel_profiler.hpp"
@@ -30,7 +34,10 @@ void kernel_main() {
     constexpr uint32_t Kt = get_compile_time_arg_val(6);
     constexpr uint32_t St = get_compile_time_arg_val(7);
     constexpr uint32_t Hl = get_compile_time_arg_val(8);
-    constexpr auto in_args = TensorAccessorArgs<9>();
+    constexpr uint32_t Mq = get_compile_time_arg_val(9);  // rows per device
+    constexpr uint32_t cb_retile_stage = get_compile_time_arg_val(10);
+    constexpr bool retile = (Mq % 32) != 0;
+    constexpr auto in_args = TensorAccessorArgs<11>();
     constexpr uint32_t quarter_tiles = Mq_t * Kt;
     constexpr uint32_t slot_tiles = B * quarter_tiles;
     constexpr uint32_t entry_chunks = (slot_tiles + packet_tiles - 1) / packet_tiles;
@@ -39,6 +46,10 @@ void kernel_main() {
     const uint32_t in_addr = get_arg_val<uint32_t>(0);
     const uint32_t n_entries = get_arg_val<uint32_t>(1);
     const auto in = TensorAccessor(in_args, in_addr, tile_bytes);
+    uint32_t stage = 0;
+    if constexpr (retile) {
+        stage = get_write_ptr(cb_retile_stage);  // scratch (never pushed)
+    }
 
     A2AMM_ZONE("prd_all");
     uint32_t pos = 0;  // packets pushed so far
@@ -47,7 +58,8 @@ void kernel_main() {
         const uint32_t j = word & 0xFFFF;
         const uint32_t t = word >> 16;
         uint32_t b = 0, r = 0;  // tile cursor within the entry
-        uint32_t base = (j * St + t * Mq_t) * Kt;
+        const auto qr = a2amm_retile::quarter_of<Mq>(t);  // aligned: t0 = t * Mq_t, shift 0
+        uint32_t base = (j * St + qr.t0) * Kt;
         uint32_t tile = 0;
         for (uint32_t c = 0; c < entry_chunks;) {
             const uint32_t room = batch_chunks - pos % batch_chunks;
@@ -60,13 +72,20 @@ void kernel_main() {
                 uint32_t dst = wp + i * packet_bytes;
                 for (uint32_t tt = 0; tt < n; ++tt) {
 #ifndef ABLATE_NOPORTREAD
-                    noc_async_read(in.get_noc_addr(base + r), dst, tile_bytes);
+                    if constexpr (retile) {
+                        if (r == 0) {
+                            a2amm_retile::stage_rows<tile_bytes, Kt>(in, base, qr.nsrc, stage);
+                        }
+                        a2amm_retile::retile_tile<tile_bytes, Kt, Mq>(stage, dst, qr.shift, r / Kt, r % Kt);
+                    } else {
+                        noc_async_read(in.get_noc_addr(base + r), dst, tile_bytes);
+                    }
 #endif
                     dst += tile_bytes;
                     if (++r == quarter_tiles) {
                         r = 0;
                         ++b;
-                        base = ((b * Hl + j) * St + t * Mq_t) * Kt;
+                        base = ((b * Hl + j) * St + qr.t0) * Kt;
                     }
                 }
                 tile += n;

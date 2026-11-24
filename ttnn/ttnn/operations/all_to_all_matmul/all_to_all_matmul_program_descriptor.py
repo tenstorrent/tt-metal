@@ -49,6 +49,7 @@ CB_A_LANDED = 0
 CB_WEIGHT = 1
 CB_OUT = 2
 CB_PORT_CHUNKS = 3
+CB_RETILE_STAGE = 4  # regime R1' only: one image's source tile rows of a quarter (scratch)
 
 FWD, BWD = 0, 1
 NOC0 = ttnn.NOC.RISCV_1_default
@@ -362,11 +363,13 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
     chips = _topology_plan(mesh, cluster_axis, num_links)
     G = next(iter(chips.values()))["G"]
 
-    # ---- geometry (alignment-aware; R1 is tile_aligned) ----
+    # ---- geometry (alignment-aware: R1 tile_aligned, R1' m_non_aligned re-tiles the quarters in the readers) ----
     Kt, Nt = K // 32, N // 32
     Mq = S // G
     Mq_t = (Mq + 31) // 32
     St = (S + 31) // 32
+    retile = Mq % 32 != 0  # regime R1': the quarter starts mid-tile; kernels derive the same flag from Mq
+    stage_tiles = (Mq_t + 1) * Kt  # source tile rows one image's quarter can span, all K
     block_m = B * Mq_t  # batch folded into the row axis; the whole head's rows in one block
     slot_tiles = block_m * Kt
     in_tile = int(input_tensor.buffer_page_size())
@@ -507,6 +510,17 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
                 format_descriptors=[ttnn.CBFormatDescriptor(CB_PORT_CHUNKS, input_tensor.dtype, packet_bytes)],
             ),
         ]
+        if retile:
+            # One descriptor per core set: a single descriptor over the (non-rectangular) union of the compute and
+            # port cores was placed inside cb_port_chunks on some chips (measured: DEVICE_PRINT of both addresses).
+            cbs += [
+                ttnn.CBDescriptor(
+                    total_size=stage_tiles * in_tile,
+                    core_ranges=crs,
+                    format_descriptors=[ttnn.CBFormatDescriptor(CB_RETILE_STAGE, input_tensor.dtype, in_tile)],
+                )
+                for crs in (active_crs, port_crs)
+            ]
         program.cbs = cbs
 
         # ---- compute cores ----
@@ -518,6 +532,7 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
             compute_rt[xy[0]][xy[1]] = [len(order)]
             writer_rt[xy[0]][xy[1]] = [len(order)] + order
         reader_ct = [CB_A_LANDED, CB_WEIGHT, Kt, Nt, block_n, num_n_blocks, B, Mq_t, St, Hl, in_tile, w_tile]
+        reader_ct += [Mq, CB_RETILE_STAGE]
         reader_ct += in_ct + w_ct
         compute_ct = [CB_A_LANDED, CB_WEIGHT, CB_OUT, block_m, Kt, block_n, num_n_blocks, sbh, sbw]
         writer_ct = [CB_OUT, in_tile, block_m, Mq_t, Nt, block_n, num_n_blocks, sbh, H] + out_ct
@@ -593,7 +608,20 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
                     )
                 )
             port_sender_rt[px][py] = args
-        port_reader_ct = [CB_PORT_CHUNKS, in_tile, packet_tiles, PORT_BATCH_CHUNKS, B, Mq_t, Kt, St, Hl] + in_ct
+        port_reader_ct = [
+            CB_PORT_CHUNKS,
+            in_tile,
+            packet_tiles,
+            PORT_BATCH_CHUNKS,
+            B,
+            Mq_t,
+            Kt,
+            St,
+            Hl,
+            Mq,
+            CB_RETILE_STAGE,
+        ]
+        port_reader_ct += in_ct
         port_sender_ct = [CB_PORT_CHUNKS, in_tile, packet_tiles, PORT_BATCH_CHUNKS, slot_tiles, MAX_PACKET_HEADERS]
         kernels += [
             ttnn.KernelDescriptor(

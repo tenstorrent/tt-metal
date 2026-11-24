@@ -14,11 +14,15 @@
 //                                then push the slot (compute retains it across the head's n-blocks)
 //   load_weight_block(slot, nb)  the head's remaining n-blocks
 //
+// Regime R1' (Mq % 32 != 0): the local quarter is re-tiled per image through cb_retile_stage
+// (all_to_all_matmul_retile.hpp), exactly as the port reader does for the remote quarters.
+//
 // Slot tile order (b, mt, k) = matmul_block's in0 order (rows of Kt tiles).
 
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "all_to_all_matmul_retile.hpp"
 
 #if defined(ABLATE_ZONES)
 #include "tools/profiler/kernel_profiler.hpp"
@@ -40,7 +44,10 @@ void kernel_main() {
     constexpr uint32_t Hl = get_compile_time_arg_val(9);
     constexpr uint32_t in_tile_bytes = get_compile_time_arg_val(10);
     constexpr uint32_t w_tile_bytes = get_compile_time_arg_val(11);
-    constexpr auto in_args = TensorAccessorArgs<12>();
+    constexpr uint32_t Mq = get_compile_time_arg_val(12);  // rows per device
+    constexpr uint32_t cb_retile_stage = get_compile_time_arg_val(13);
+    constexpr bool retile = (Mq % 32) != 0;
+    constexpr auto in_args = TensorAccessorArgs<14>();
     constexpr auto w_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
     constexpr uint32_t quarter_tiles = Mq_t * Kt;       // one batch's rows of one head quarter
     constexpr uint32_t slot_tiles = B * quarter_tiles;  // = block_m * Kt
@@ -101,11 +108,21 @@ void kernel_main() {
             A2AMM_ZONE("rd_local_a");
             const uint32_t j = h - my_q * Hl;
             uint32_t ap = get_write_ptr(cb_a_landed);
+            const auto qr = a2amm_retile::quarter_of<Mq>(my_q);  // aligned: t0 = my_q * Mq_t, shift 0
             for (uint32_t b = 0; b < B; ++b) {
-                const uint32_t base = ((b * Hl + j) * St + my_q * Mq_t) * Kt;
-                for (uint32_t r = 0; r < quarter_tiles; ++r) {
-                    noc_async_read(in.get_noc_addr(base + r), ap, in_tile_bytes);
-                    ap += in_tile_bytes;
+                const uint32_t base = ((b * Hl + j) * St + qr.t0) * Kt;
+                if constexpr (retile) {
+                    const uint32_t stage = get_write_ptr(cb_retile_stage);  // scratch (never pushed)
+                    a2amm_retile::stage_rows<in_tile_bytes, Kt>(in, base, qr.nsrc, stage);
+                    for (uint32_t r = 0; r < quarter_tiles; ++r) {
+                        a2amm_retile::retile_tile<in_tile_bytes, Kt, Mq>(stage, ap, qr.shift, r / Kt, r % Kt);
+                        ap += in_tile_bytes;
+                    }
+                } else {
+                    for (uint32_t r = 0; r < quarter_tiles; ++r) {
+                        noc_async_read(in.get_noc_addr(base + r), ap, in_tile_bytes);
+                        ap += in_tile_bytes;
+                    }
                 }
             }
             noc_async_read_barrier();

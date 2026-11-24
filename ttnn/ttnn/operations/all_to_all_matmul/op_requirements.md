@@ -57,7 +57,7 @@ Cells that fail out of the box go to `EXCLUSIONS` only if they are structural. A
 
 **Done when**: every `fp32_dest_acc_en=False`, `weight_dtype=bfloat8_b` and `output_buffer=L1` tile-aligned golden cell passes (or is harness-skipped as infeasible), all 4 `LOOSE_CASES` pass, and `perf_measure.py` with `CCL_PERF_CASES=all` reports a number for each case with no DISPATCH-BOUND flag.
 
-### [ ] Refinement 2 — Non-tile-aligned rows per device (regime R1')
+### [x] Refinement 2 — Non-tile-aligned rows per device (regime R1')
 
 **Goal**: add `"m_non_aligned"` to `SUPPORTED["alignment"]` (`S % 32 != 0` or `(S/G) % 32 != 0`; INPUTS: `(1,24,160,128)` 40 rows per device, `(1,8,96,128)` 24 rows, `(1,8,48,64)` input 1.5 tiles / 12 rows per device). This is the design's regime R1'. A destination's quarter starts at row `q*Mq`, which is not tile-aligned. The **port reader** and the **local-quarter reader** therefore re-tile the quarter's rows before the entry is sent or landed: read the two source tiles a destination tile straddles, copy the shifted face rows into the CB page in L1, and zero the padding rows. Landing, arrival counters, the fence and compute are unchanged (`Mq_t = ceil(Mq/32)`), and the output's padded tile rows are written as computed. No host-side `ttnn.to_layout` / pad / slice wrappers.
 

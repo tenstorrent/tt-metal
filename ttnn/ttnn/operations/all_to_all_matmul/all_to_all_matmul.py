@@ -40,7 +40,7 @@ def default_compute_kernel_config():
 
 
 def tag_alignment(inputs, axes):
-    """inputs = ((B, Hl, S, K), (1, H, K, N), G): rows per device must be whole tiles."""
+    """inputs = ((B, Hl, S, K), (1, H, K, N), G): are the rows per device whole tiles (R1) or not (R1', re-tiled)?"""
     (_, _, S, _), _, G = inputs
     if S % 32 or (S // G) % 32:
         return "m_non_aligned"
@@ -61,7 +61,7 @@ SUPPORTED = {
     "weight_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
     "layout": [ttnn.TILE_LAYOUT],
     "fp32_dest_acc_en": [True, False],
-    "alignment": ["tile_aligned"],
+    "alignment": ["tile_aligned", "m_non_aligned"],
     "output_buffer": [ttnn.BufferType.DRAM, ttnn.BufferType.L1],
     "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED],
     "cluster_axis": [1],
