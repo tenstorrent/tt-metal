@@ -238,6 +238,11 @@ def pci_id_bdf(mid, mapf):
     return did, bdf
 
 
+def bdf_label(bdf, did, extra=""):
+    """'<BDF> (tray T, ASIC A, device id D<extra>)': how fabric_open.py and pcie_bw.py name a chip."""
+    return f"{bdf[5:]} (tray {tray_of(bdf)}, ASIC {int(bdf.split(':')[-2], 16) & 0x0F}, device id {did}{extra})"
+
+
 if __name__ == "__main__":
     # quiet_clock.py settle <label>: the clock check on every chip of this host (run.sh's idle_clocks, before each try)
     import sys

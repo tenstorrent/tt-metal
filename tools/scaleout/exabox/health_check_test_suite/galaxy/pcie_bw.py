@@ -22,8 +22,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.realpath(__file__)))
 import time
 
-from chunk_sched import tray_of
-from quiet_clock import pci_id_bdf
+from quiet_clock import bdf_label, pci_id_bdf
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--rows", required=True)
@@ -59,7 +58,7 @@ def chip_name(m, i):
         return f"chip {i}"
     if not bdf:
         return f"chip {i} (device id {did}, not in the map)"
-    return f"{bdf[5:]} (tray {tray_of(bdf)}, ASIC {int(bdf.split(':')[-2], 16) & 0x0F}, device id {did})"
+    return bdf_label(bdf, did)
 
 
 def first_line(e):

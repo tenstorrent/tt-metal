@@ -33,7 +33,7 @@ import time
 
 import noc_walk
 from chunk_sched import dbi_lines, tray_of
-from quiet_clock import pci_id_bdf
+from quiet_clock import bdf_label, pci_id_bdf
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--rows", required=True)
@@ -75,9 +75,7 @@ def chip_name(m, i, r, c):
         return f"chip {i} (mesh r{r} c{c})"
     if not bdf:
         return f"chip {i} (mesh r{r} c{c}, device id {did}, not in the map)"
-    return (
-        f"{bdf[5:]} (tray {tray_of(bdf)}, ASIC {int(bdf.split(':')[-2], 16) & 0x0F}, device id {did}, mesh r{r} c{c})"
-    )
+    return bdf_label(bdf, did, f", mesh r{r} c{c}")
 
 
 def chips_of(m, R, C):
