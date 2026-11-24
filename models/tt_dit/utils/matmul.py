@@ -608,6 +608,13 @@ grid_12_8_configs = {
     (128, 6144, 768): (4, 12, 4, (2, 2)),  # 87.4 µs, −2.2% vs 12×9 — attn to_out prompt
 }
 
+# Swept at one exact per-device shape, matched only at that shape (no nearest / same-M-per-core borrowing), and winning
+# over every other resolution, an explicit core_grid included; every other shape resolves as before.
+# all_gather_minimal_matmul_async: (M, K, N, cluster_size) -> ((grid_x, grid_y), blocking, num_buffers_per_channel)
+agmm_shape_configs: dict[tuple[int, int, int, int], tuple] = {}
+# minimal_matmul: (M, K, N, grid_x, grid_y) -> blocking
+matmul_shape_configs: dict[tuple[int, int, int, int, int], tuple] = {}
+
 _grid_config_lookup = {
     (8, 8): grid_88_configs,
     (8, 9): grid_89_configs,
@@ -719,7 +726,9 @@ def _resolve_matmul_config(M, K, N, core_grid, default_block_size, use_heuristic
     grid_x = getattr(core_grid, "x", None)
     grid_y = getattr(core_grid, "y", None)
     grid_dict = _grid_config_lookup.get((grid_x, grid_y))
-    if grid_dict is not None:
+    if (M, K, N, grid_x, grid_y) in matmul_shape_configs:
+        config_tuple = matmul_shape_configs[(M, K, N, grid_x, grid_y)]
+    elif grid_dict is not None:
         config_tuple = grid_dict.get((M, K, N))
         if config_tuple is None:
             near = _same_m_per_core_match(grid_dict, M, K, N, grid_x)
@@ -818,6 +827,11 @@ def _ring_safe_k_block(config, M, K, N, cluster_size):
 _logged_agmm_v3_signatures = set()
 
 
+def agmm_shape_buffers(M, K, N, cluster_size) -> int | None:
+    entry = agmm_shape_configs.get((M, K, N, cluster_size))
+    return entry[2] if entry else None
+
+
 def get_agmm_config(
     M,
     K,
@@ -836,6 +850,8 @@ def get_agmm_config(
     `all_gather_minimal_matmul_async`.
 
     Precedence -- anything measured or explicit wins, bit-for-bit identical to the legacy path:
+      0. An exact-shape entry (`agmm_shape_configs`, keyed `(M, K, N, cluster_size)`): it overrides an
+         explicit `core_grid` too.
       1. An explicit `core_grid` or `default_block_size` from the caller.
       2. A swept `(M, K, N)` table entry for the legacy grid (`_grid_config_lookup`, i.e.
          `grid_12_9_configs` and entries added via `register_matmul_configs`).
@@ -891,6 +907,21 @@ def _resolve_agmm_config(
     # The op transposes when the caller forces it or the output is wide, and places its in0 muxes
     # on the axis the worker grid leaves free -- reserve a row when transposed, a column when not.
     transpose_core_grid = force_transpose or M > N
+    if (M, K, N, cluster_size) in agmm_shape_configs:
+        (grid_x, grid_y), (m_blk, k_blk, n_blk, (sub_h, sub_w)), _ = agmm_shape_configs[(M, K, N, cluster_size)]
+        config = ttnn.MinimalMatmulConfig(
+            M_block_size=m_blk,
+            K_block_size=k_blk,
+            N_block_size=n_blk,
+            subblock_h=sub_h,
+            subblock_w=sub_w,
+            compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
+        )
+        return (
+            config.compute_with_storage_grid_size,
+            config,
+            math.ceil((grid_x if transpose_core_grid else grid_y) / num_links),
+        )
     legacy_grid = core_grid or agmm_worker_grid(full_grid, transpose_core_grid, num_links)
     # in0 senders group along the M-parallel axis (grid.x transposed, grid.y not); split it into
     # exactly num_links groups, matching the op's `ceil(in0_axis / workers) == num_links` assert.
@@ -1233,6 +1264,14 @@ def resolves_fused_mmrs_config(M, K, N, device_core_grid) -> bool:
 def _clear_config_caches() -> None:
     for resolve in (_resolve_matmul_config, _resolve_agmm_config, _resolve_fused_mmrs_config):
         resolve.cache_clear()
+
+
+def register_shape_configs(agmm: dict | None = None, matmul: dict | None = None) -> None:
+    """Register exact-shape entries: `agmm_shape_configs` (all-gather matmul) and `matmul_shape_configs`
+    (minimal_matmul)."""
+    agmm_shape_configs.update(agmm or {})
+    matmul_shape_configs.update(matmul or {})
+    _clear_config_caches()
 
 
 def register_matmul_configs(configs: dict) -> None:
