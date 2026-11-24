@@ -632,9 +632,13 @@ def test_promotion_gate_blocks_moves(monkeypatch):
     m._promote()
     assert not m.spec_of and not m.ae.moves and m.mode == "SPEC"
     m = _gate_case(monkeypatch, 1, 300, 1)
-    m._pay["spec_ms"][1] = 2.7 * 17.0  # (no faster than the 16.5 ms plain step at 2.7 tokens a verify)
+    m._prior["g"] = 1.6  # (learned low acceptance: a spec step saves nothing at 1.6 tokens a verify)
     m._promote()
     assert not m.spec_of and not m.ae.moves
+    m._prior["g"] = A.PROMOTE_ACC
+    m._pay["spec_ms"][1] = 2.7 * 17.0  # (an inflated 1-user estimate: capped at SPEC_CAP x the default, the gate opens)
+    ok, line = m._promotion_pays([0])
+    assert ok, line
 
 
 def _with_swap(monkeypatch, m, pf):

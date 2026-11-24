@@ -79,6 +79,10 @@ SPEC_MS_DEFAULT = lambda n: 28.0 + 4.6 * (n - 1)  # noqa: E731  (served verify s
 # decisions add the current context's share — a 250K request's ~44 ms verify steps kept as the 1-user estimate closed
 # the promotion gate for the short chats after it (rc-20261124i natural c1: 61 vs 97 tok/s). (served, 2026-11-24:
 # plain 16.5 / 17.3 / 23.3 ms at 128 / 32K / 250K context, verify ~28 / ~31 / ~44 ms)
+# a measured verify-step estimate counts at most SPEC_CAP x the default model's: an estimate inflated by transitional
+# steps (moves, mixed spec / plain steps, host-sampled interludes) is only re-measured while speculating, so it locked a
+# live count out — smoke rc-20261124s2: the 1-user estimate at 36.2 ms (steady ~30) kept every sampled c1 request plain
+SPEC_CAP = float(os.environ.get("RESIDENT_ADAPTIVE_SPEC_CAP", "1.15"))
 PLAIN_CTX_MS = float(os.environ.get("RESIDENT_ADAPTIVE_PLAIN_CTX_MS", "2.7e-5"))
 SPEC_CTX_MS = float(os.environ.get("RESIDENT_ADAPTIVE_SPEC_CTX_MS", "6.5e-5"))
 # P2d: promotions fill the drafter from the prefill's taps when kept (RESIDENT_ADAPTIVE_P2D, default on); a fill's cost
@@ -334,12 +338,13 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         old = self._pay["out"] or PROMOTE_OUT
         self._pay["out"] = old + OUT_ALPHA * (n_out - old)
 
-    def _step_ms(self, kind, n, ctx):
+    def _step_ms(self, kind, n, ctx, cap=False):
         """a step's estimated ms: the live count's estimate at no context + the context's share (PLAIN_CTX_MS /
         SPEC_CTX_MS)"""
         pay = self._pay
         if kind == "verify":
-            return pay["spec_ms"].get(n, SPEC_MS_DEFAULT(n)) + SPEC_CTX_MS * ctx
+            ms = pay["spec_ms"].get(n, SPEC_MS_DEFAULT(n))
+            return (min(ms, SPEC_CAP * SPEC_MS_DEFAULT(n)) if cap else ms) + SPEC_CTX_MS * ctx
         return pay["plain_ms"].get(n, PLAIN_MS_DEFAULT(n)) + PLAIN_CTX_MS * ctx
 
     def _prior_of(self, rs, gate=False):
@@ -365,7 +370,7 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         """the promotion gate (PROMOTE_GATE): (verdict, its log line)"""
         pay, n = self._pay, max(1, len(self.live))
         ctx = sum(len(self.history.get(r) or ()) for r in self.live)
-        plain, spec = self._step_ms("plain", n, ctx), self._step_ms("verify", n, ctx)
+        plain, spec = self._step_ms("plain", n, ctx), self._step_ms("verify", n, ctx, cap=True)
         acc = self._prior_of(cands, gate=True)
         save = plain - spec / acc  # (ms a token, per user)
         out = pay["out"] or PROMOTE_OUT
@@ -420,7 +425,9 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         # (the probe's acceptance: the priors of the speculating users, else of the live promotable ones)
         cand = list(self.spec_of) or [r for r in self.live if r in self.greedy_ok]
         pay["acc_used"] = self._prior_of(cand) if probing else pay["acc"]
-        return pay["acc_used"] / self._step_ms("verify", n, ctx) >= PAY_MARGIN / self._step_ms("plain", n, ctx)
+        # (the probe trusts a capped step estimate — SPEC_CAP; after PAY_MIN verifies the fresh measurement decides)
+        spec = self._step_ms("verify", n, ctx, cap=probing)
+        return pay["acc_used"] / spec >= PAY_MARGIN / self._step_ms("plain", n, ctx)
 
     def _pay_line(self):
         pay, n, ctx = self._pay, max(1, self._pay["n"]), self._pay.get("ctx", 0)
