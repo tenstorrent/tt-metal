@@ -1507,10 +1507,8 @@ inline void calculate_reduce_max_min_uint16() {
         {16, 16, 48, 48}  // j=1: Face 1 and Face 3
     };
 
-    // The intermediate stores below land in non-row-0 dest slots that we reload, so they use the
-    // plain (full 32-bit) instruction mode. Only the final row-0 stores are packer-visible and use
-    // mode 9 (SFPSTORE_MOD0_FMT_LO16) when the OUTPUT is UInt16 in a 32-bit dest (pack_low16), so the
-    // packer reads the low 16 bits of the dest word.
+    // The row-0 result stores are packer-visible: mode 9 (SFPSTORE_MOD0_FMT_LO16) when the OUTPUT is UInt16 in a
+    // 32-bit dest (pack_low16), so the packer reads the low 16 bits of the dest word, else the plain mode.
     constexpr std::uint32_t STORE_MODE =
         pack_low16 ? 9u /* SFPSTORE_MOD0_FMT_LO16 */ : static_cast<std::uint32_t>(INSTRUCTION_MODE);
 
