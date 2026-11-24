@@ -763,6 +763,30 @@ def test_pad_for_tensor_in_tile_layout(device, h, w, padding, value, expect_erro
     assert torch.equal(torch_output_tensor, output_tensor)
 
 
+@pytest.mark.parametrize(
+    "shape, padding",
+    [
+        ((1, 1, 2, 4), ((0, 0), (0, 0), (0, 0), (0, 1))),
+        ((1, 1, 2, 4), ((0, 0), (0, 0), (0, 0), (1, 0))),
+        ((1, 1, 2, 4), ((0, 0), (0, 0), (1, 1), (1, 1))),
+        ((1, 2, 4), ((0, 0), (0, 0), (0, 1))),
+        ((1, 1, 1, 2, 4), ((0, 0),) * 4 + ((0, 1),)),
+    ],
+    ids=["rank4_after", "rank4_before", "rank4_both", "rank3_after", "rank5_after"],
+)
+def test_pad_host_tensor(shape, padding):
+    # Host ttnn.pad returns the padded shape as the logical shape, like on device.
+    torch_input_tensor = (torch.arange(prod(shape)) / 8 + 1).reshape(shape).bfloat16()
+    torch_padding = [p for dim in reversed(padding) for p in dim]
+    torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, torch_padding, mode="constant", value=-1.0)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.pad(input_tensor, padding=padding, value=-1.0)
+
+    assert list(output_tensor.padded_shape) == list(torch_output_tensor.shape)
+    assert_tensors_equal(torch_output_tensor, ttnn.to_torch(output_tensor))
+
+
 @skip_for_blackhole("Fails on Blackhole. Issue #20698")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bfloat16", "float32"])
 @pytest.mark.parametrize("use_multicore", [True, False], ids=["multicore", "singlecore"])

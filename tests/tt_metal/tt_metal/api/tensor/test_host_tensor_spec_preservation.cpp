@@ -286,5 +286,47 @@ TEST(HostTensorSpecPreservation, UnpadShardedConvertibleNdResetsToInterleaved) {
     CMAKE_UNIQUE_NAMESPACE::expect_packed_sizes(unpadded);
 }
 
+TEST(HostTensorSpecPreservation, UnpadMultiDeviceHostStoragePerShard) {
+    const Shape shape{4, 6};
+    const Shape start{1, 2};
+    const Shape end{3, 5};
+    auto source_spec =
+        TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
+
+    auto topology = TensorTopology::create_fully_replicated_tensor_topology(distributed::MeshShape(1, 2));
+    auto distributed_buffer = DistributedHostBuffer::create(distributed::MeshShape(1, 2));
+    auto data_0 = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
+    auto data_1 = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
+    for (auto& v : data_1) {
+        v += 100.0f;
+    }
+    distributed_buffer.emplace_shard(
+        distributed::MeshCoordinate(0, 0), [&]() { return HostBuffer(std::vector<float>(data_0)); });
+    distributed_buffer.emplace_shard(
+        distributed::MeshCoordinate(0, 1), [&]() { return HostBuffer(std::vector<float>(data_1)); });
+    auto source = host_tensor_from_buffer_with_topology(std::move(distributed_buffer), source_spec, topology);
+
+    auto unpadded = unpad(source, start, end);
+    EXPECT_EQ(unpadded.logical_shape(), Shape({2, 3}));
+    EXPECT_EQ(get_tensor_topology(unpadded), topology);
+    EXPECT_EQ(unpadded.buffer().shard_coords(), source.buffer().shard_coords());
+
+    // Each shard is unpadded from its own data.
+    for (const auto& [coord, data] :
+         {std::pair{distributed::MeshCoordinate(0, 0), &data_0},
+          std::pair{distributed::MeshCoordinate(0, 1), &data_1}}) {
+        std::vector<float> expected;
+        for (uint32_t row = start[0]; row < end[0]; ++row) {
+            for (uint32_t col = start[1]; col < end[1]; ++col) {
+                expected.push_back((*data)[(row * shape[1]) + col]);
+            }
+        }
+        auto shard = unpadded.buffer().get_shard(coord);
+        ASSERT_TRUE(shard.has_value());
+        auto view = shard->view_as<float>();
+        EXPECT_EQ(std::vector<float>(view.begin(), view.end()), expected);
+    }
+}
+
 }  // namespace
 }  // namespace tt::tt_metal

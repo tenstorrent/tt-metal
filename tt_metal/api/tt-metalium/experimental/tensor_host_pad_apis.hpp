@@ -25,15 +25,9 @@ namespace tt::tt_metal {
  * pre-conditions:
  * - **tensor** layout must be ROW_MAJOR.
  * - **tensor** dtype is not FP8_E4M3.
- * - **input_tensor_start** and **output_padded_shape** have the rank of the
- *   **tensor** padded shape. A rank 0/1 tensor may also use a higher output rank;
- *   its padded shape is then extended with leading 1s.
- * - In every dim, input_tensor_start[i] + tensor padded shape[i] <=
- *   output_padded_shape[i]: the whole padded input must fit in the output.
  *
  * post-conditions:
  * - Result padded shape equals **output_padded_shape**.
- * - Result logical shape equals the **tensor** logical shape.
  * - Result MemoryConfig is default-constructed (DRAM Interleaved); input memory
  *   config is not preserved.
  */
@@ -44,15 +38,11 @@ HostTensor pad(
  * Unpad **tensor** to the half-open range [**output_tensor_start**, **output_tensor_end**):
  * start indices are included, end indices are not.
  *
- * Return: a new HostTensor containing only the selected sub-volume, with shape
- * output_tensor_end - output_tensor_start.
+ * Return: a new HostTensor containing only the selected sub-volume.
  *
  * pre-conditions:
  * - **tensor** layout must be ROW_MAJOR.
  * - **tensor** dtype is not FP8_E4M3.
- * - **output_tensor_start** and **output_tensor_end** have the rank of the
- *   **tensor** padded shape.
- * - In every dim, output_tensor_start[i] <= output_tensor_end[i] <= tensor padded shape[i].
  *
  * post-conditions:
  * - Result MemoryConfig is default-constructed (DRAM Interleaved).
