@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
@@ -43,6 +45,18 @@ SP4_TP2_RING_SDPA_CHUNKS = (128, 512)
 SP4_TP2_RING_SDPA_CHUNKS_BY_LOCAL_ROWS: dict[int, tuple[int, int]] = {
     rows: (224, 512) for rows in (16384, 16640, 16896, 17408, 17920, 18432, 20736, 20992, 21504)
 }
+# Opt-in (FLUX3_SDPA_QFAST=1): the fastest q per local row count at k 512. Same k; only the reduction order changes.
+SP4_TP2_QFAST_RING_SDPA_CHUNKS_BY_LOCAL_ROWS: dict[int, tuple[int, int]] = (
+    {
+        1280: (160, 512),
+        2048: (256, 512),
+        3328: (192, 512),
+        4096: (224, 512),
+        4352: (256, 512),
+    }
+    if os.environ.get("FLUX3_SDPA_QFAST") == "1"
+    else {}
+)
 # The ring all-gather keeps the CCL row's cores x < 4 with 2 links
 RING_SDPA_CCL_ROW_START_X = 4
 # linear1 (QKV + MLP-in as one all-gather matmul): N cores of its transposed grid, and the rows from which it runs
@@ -73,6 +87,8 @@ class Flux3KleinAttention(Attention):
             chunks = RING_SDPA_CHUNKS_BY_LOCAL_ROWS.get(rows)
             if sp == 4:
                 chunks = SP4_TP2_RING_SDPA_CHUNKS_BY_LOCAL_ROWS.get(rows, chunks)
+                if tp == 2:
+                    chunks = SP4_TP2_QFAST_RING_SDPA_CHUNKS_BY_LOCAL_ROWS.get(rows, chunks)
             if chunks is None and (True, sp, tp) not in self.ring_sdpa_chunk_size_map:
                 chunks = SP4_TP2_RING_SDPA_CHUNKS
             if chunks is None:
