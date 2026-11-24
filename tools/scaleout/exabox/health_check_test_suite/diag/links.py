@@ -245,12 +245,12 @@ def eth_bandwidth(phase: Phase, d: Path, rounds: list, disc: dict, failed: list)
     """Adds the links_bandwidth check for the pairs of *rounds* not in *failed*: FAIL names each pair below BW_GBPS
     per link each way, WARN the pairs with under BW_WARM warm launches (not judged)."""
     bad = {f["pair"] for f in failed}
-    got, low, unjudged, uends = [], [], [], {}
+    got, low, unjudged, uends = [], [], [], []
     for a, b, ch in (p for r in rounds for p in r if _label(disc, *p[:2]) not in bad):
         lab = _label(disc, a, b)
         g, n = warm_gbps(d / f"{lab}.rows", len(ch))
         if g is None or n < BW_WARM:
-            uends[lab] = link_ends(disc, a, b, ch)
+            uends += link_ends(disc, a, b, ch)
             unjudged.append(f"{lab} ({n} warm)")
             continue
         got.append(g)
@@ -277,11 +277,13 @@ def eth_bandwidth(phase: Phase, d: Path, rounds: list, disc: dict, failed: list)
                 # the low pairs as _check_lines-shaped "failed" entries: events._check_lines renders each as a
                 # LINK FAIL naming both ends by BDF, tray and ETH channels
                 "failed": [
-                    {"why": f"Ethernet bandwidth {l['gbps']:g} Gbps per link each way, below {BW_GBPS:g} Gbps",
-                     "ends": l["ends"]}
+                    {
+                        "why": f"Ethernet bandwidth {l['gbps']:g} Gbps per link each way, below {BW_GBPS:g} Gbps",
+                        "ends": l["ends"],
+                    }
                     for l in low
                 ],
-                "link_ends": [e for l in low for e in l["ends"]] + [e for k, ends in uends.items() for e in ends],
+                "link_ends": [e for l in low for e in l["ends"]] or uends,
                 "dir": str(d),
             },
         )

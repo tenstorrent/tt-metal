@@ -409,7 +409,12 @@ def rule(l, kind, u, findings, stage, lines):
         cab = has_port(part_of(l, u)[1])
         return (
             "Ethernet link up and passing data, but below the Deployment Test's bandwidth: a link trained or running "
-            "degraded" + (" (QSFP-DD cable or connector, or a tray board)" if cab else " (in-box, no cable: the tray-to-tray connection or a tray board)"),
+            "degraded"
+            + (
+                " (QSFP-DD cable or connector, or a tray board)"
+                if cab
+                else " (in-box, no cable: the tray-to-tray connection or a tray board)"
+            ),
             ("reseat or replace that QSFP-DD cable" if cab else "reseat the trays at both ends")
             + f"; if it stays slow after a reset, the board of tray {u}",
         )
@@ -1193,15 +1198,16 @@ def link(v, m):
     where, kind = link_where(x[0], list(x[1]), y[0], list(y[1]))
     w = re.search(r"(\d+) words wrong", m[6])
     bw = re.search(r"Ethernet bandwidth (\d+(?:\.\d+)?) Gbps", m[6])  # the links stage's bandwidth check
-    what = (
-        "Ethernet link hung (no progress)"
-        if m[1] == "HANG"
-        else (
-            f"Ethernet link below bandwidth ({bw.group(1)} Gbps per link each way)"
-            if bw
-            else "wrong data over an Ethernet link" + (f" ({w.group(1)} words wrong)" if w else "")
-        )
-    )
+    if m[1] == "HANG":
+        what = "Ethernet link hung (no progress)"
+    elif bw:
+        what = f"Ethernet link below bandwidth ({bw.group(1)} Gbps per link each way)"
+    elif w or "data mismatch" in m[6]:
+        what = "wrong data over an Ethernet link" + (f" ({w.group(1)} words wrong)" if w else "")
+    elif "not opened" in m[6]:
+        what = "Ethernet link not opened (a chip has no tt-kmd node)"
+    else:
+        what = f"Ethernet link test error ({m[6]})"
     v.fault(("link", x, y), what, where, link_do(kind, x[0], y[0], x[1], y[1]))
 
 
@@ -1429,7 +1435,10 @@ RULES = [
     ),
     (r"^in-box link down or bad", "the tray-to-tray connection of link {p}, then the tray boards"),
     (r"^link pair hung|^link down or bad", "the cable or port of link {p}"),
-    (r"^Ethernet link up and passing data, but below", "reseat or replace the slow Ethernet link {p}, then the tray boards"),
+    (
+        r"^Ethernet link up and passing data, but below",
+        "reseat or replace the slow Ethernet link {p}, then the tray boards",
+    ),
     (r"^weak PCIe link|^correctable AER rate outlier|^PCIe path", LOSS[0]),
     (r"^CCL group fault: one bad result from the likely source", "NUMERIC:{s}"),
     (r"^chip compute fault|^chip DRAM fault|^chip read fault", "NUMERIC:{b}"),

@@ -361,9 +361,7 @@ def test_ethernet_bandwidth_link_finding(tmp_path):
     )
     warn = "links WARN 02:00.0 (tray 1) e8: 1 pair not judged (under 2 warm launches)"
     out = run(tmp_path, [line, warn], {line: "C5", warn: "C5"}, rc=8, verdict="FAIL (exit 8)")
-    assert any(
-        "Ethernet bandwidth 118 Gbps per link each way, below 140 Gbps" in l for l in out
-    ), out
+    assert any("Ethernet bandwidth 118 Gbps per link each way, below 140 Gbps" in l for l in out), out
     assert "Final verdict: FAIL: 1 fault: Ethernet link below bandwidth" in out
     repair = next(l for l in out if l.startswith("Repair recommendation:"))
     assert "reseat or replace the slow Ethernet link" in repair
@@ -382,7 +380,13 @@ def test_ethernet_bandwidth_events_lines(tmp_path):
     failed = [
         {"why": "Ethernet bandwidth 118 Gbps per link each way, below 140 Gbps", "ends": ends},
     ]
-    report = {"phases": {"tests": {"checks": [{"name": "links_bandwidth", "status": FAIL, "details": "x", "data": {"failed": failed}}]}}}
+    report = {
+        "phases": {
+            "tests": {
+                "checks": [{"name": "links_bandwidth", "status": FAIL, "details": "x", "data": {"failed": failed}}]
+            }
+        }
+    }
     with tempfile.TemporaryDirectory() as d:
         with mock.patch.object(events, "args", argparse.Namespace(dry_run=False, output=Path(d) / "r.json")):
             events.check_findings(report)
@@ -391,3 +395,22 @@ def test_ethernet_bandwidth_events_lines(tmp_path):
         "C5\tLINK FAIL 0000:c1:00.0 (tray 3) e16 <-> 0000:c2:00.0 (tray 3) e0: "
         "Ethernet bandwidth 118 Gbps per link each way, below 140 Gbps"
     ]
+
+
+def test_link_failures_get_their_own_verdicts(tmp_path):
+    """A hang in the warm rerun is still a LINK HANG; only a data mismatch is 'wrong data'."""
+    end = lambda b, t, c: {"bdf": b, "tray": t, "channel": c}  # noqa: E731
+    ends = [{"a": end("0000:c1:00.0", 3, 16), "b": end("0000:c2:00.0", 3, 0)}]
+    whys = ["warm rerun hung", "rc 1", "a chip has no tt-kmd node: not opened", "data mismatch"]
+    lines = []
+    for w in whys:
+        data = {"failed": [{"why": w, "ends": ends}]}
+        lines += events._check_lines({"name": "links_pair", "status": FAIL, "details": "x", "data": data})
+    assert [l.split()[1] for l in lines] == ["HANG", "FAIL", "FAIL", "FAIL"], lines
+    got = []
+    for ln in lines:
+        _, out = faults(tmp_path, f"l{len(got)}", [ln])
+        got.append("\n".join(out))
+    for g, what in zip(got, ["Ethernet link hung", "test error (rc 1)", "not opened", "wrong data"]):
+        assert what in g, g
+    assert "wrong data" not in "".join(got[:3]), got

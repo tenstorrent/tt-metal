@@ -672,9 +672,7 @@ def _counter_checks(
         status, details = SKIP, "check_eth_status reported no ERR_STAT"
     else:
         status = WARN if latched else PASS
-        details = (
-            f"{len(latched)} link(s) with a latched link error: {listing(latched)}" if latched else "none latched"
-        )
+        details = f"{len(latched)} link(s) with a latched link error: {listing(latched)}" if latched else "none latched"
     checks.append(
         Check(
             name="eth_status_err_stat",

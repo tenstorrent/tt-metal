@@ -75,7 +75,8 @@ def _check_lines(c: dict) -> list[str]:
     d = c.get("data") or {}
     end = lambda e: f"{e.get('bdf')} (tray {e.get('tray')}) e{e.get('channel')}"  # noqa: E731
     links = [
-        f"LINK {'HANG' if f.get('why') == 'hung' else 'FAIL'} {end(x['a'])} <-> {end(x['b'])}: {f.get('why')}"
+        f"LINK {'HANG' if str(f.get('why')).endswith('hung') else 'FAIL'} {end(x['a'])} <-> {end(x['b'])}: "
+        f"{f.get('why')}"
         for f in d.get("failed") or []
         if isinstance(f, dict)
         for x in f.get("ends") or []
