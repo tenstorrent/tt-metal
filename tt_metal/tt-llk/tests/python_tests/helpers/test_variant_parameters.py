@@ -2601,13 +2601,13 @@ class MUL_REDUCE_SCALAR_CHUNK_SIZE(RuntimeParameter):
 class ZERO_PAD_ROWS(TemplateParameter):
     """SFPU row bounds for _zero_pad_tile_."""
 
-    valid_rows: int = 0
-    total_rows: int = 32
+    zero_pad_valid_rows: int = 0
+    zero_pad_total_rows: int = 32
 
     def convert_to_cpp(self) -> str:
         return (
-            f"constexpr int ZERO_PAD_VALID_ROWS = {self.valid_rows};\n"
-            f"constexpr int ZERO_PAD_TOTAL_ROWS = {self.total_rows};"
+            f"constexpr int ZERO_PAD_VALID_ROWS = {self.zero_pad_valid_rows};\n"
+            f"constexpr int ZERO_PAD_TOTAL_ROWS = {self.zero_pad_total_rows};"
         )
 
 
