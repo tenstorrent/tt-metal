@@ -273,6 +273,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_pack_common.h"
 #include "params.h"
 
+#ifdef ARCH_BLACKHOLE
+// As compute/experimental/custom_mm_reuse_dest_srcb.h marks the kernel: main's half-sync release.
+namespace ckernel::packer
+{
+template <>
+inline constexpr bool pack_main_release<3> = true;
+} // namespace ckernel::packer
+#endif
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
