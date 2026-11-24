@@ -164,6 +164,33 @@ constexpr std::uint32_t matmul_max_row_tiles = 8;
 #elif defined(ARCH_BLACKHOLE)
 constexpr std::uint32_t matmul_max_row_tiles = get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>();
 #endif
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS) && defined(MATMUL_PACK_KEYS)
+// the cells the harness unpacks per row (llk_matmul_forms.h matmul_unhoist_cell)
+constexpr bool matmul_unhoist_k = ckernel::matmul_unhoist_cell(
+    MATH_FIDELITY,
+    dest_sync == ckernel::DstSync::SyncHalf,
+    is_fp32_dest_acc_en,
+    MATMUL_KEY_IN1,
+    MATMUL_KEY_IN0,
+    MATMUL_OUT_FORMAT,
+    MATMUL_PK_RT,
+    MATMUL_PK_CT,
+    MATMUL_PK_KT);
+#elif defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS) && defined(MATMUL_BLOCK)
+// a main-form cell carries its block in the form keys
+constexpr bool matmul_unhoist_k = ckernel::matmul_unhoist_cell(
+    MATH_FIDELITY,
+    dest_sync == ckernel::DstSync::SyncHalf,
+    is_fp32_dest_acc_en,
+    MATMUL_KEY_IN1,
+    MATMUL_KEY_IN0,
+    MATMUL_OUT_FORMAT,
+    MATMUL_BLOCK_RT,
+    MATMUL_BLOCK_CT,
+    MATMUL_BLOCK_KT);
+#else
+constexpr bool matmul_unhoist_k = false;
+#endif
 #if defined(MATMUL_FORCE_FORM)
 // math MOP kind (0 tile, 1 rows, 2 row) and hoisted unpack of the cell, whatever the forms table says: MATMUL_FORCE_FORM = 2 * kind + hoist
 constexpr bool matmul_hoist_rows = (MATMUL_FORCE_FORM % 2) == 1;
@@ -171,7 +198,8 @@ constexpr bool matmul_hoist_rows = (MATMUL_FORCE_FORM % 2) == 1;
 constexpr bool matmul_hoist_rows = matmul_force_form ? (MATMUL_FORCE_FORM_CHAR == 'h' || MATMUL_FORCE_FORM_CHAR == 'R')
                                                      : unpack_AB_matmul_hoist_rows<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, matmul_kt_key, MATMUL_OUT_FORMAT>();
 #elif defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
-constexpr bool matmul_hoist_rows = unpack_AB_matmul_hoist_rows<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, matmul_kt_key, MATMUL_OUT_FORMAT>();
+constexpr bool matmul_hoist_rows =
+    unpack_AB_matmul_hoist_rows<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, matmul_kt_key, MATMUL_OUT_FORMAT>() && !matmul_unhoist_k;
 #elif defined(ARCH_BLACKHOLE) && defined(MATMUL_PRODUCTION) && defined(MATMUL_PACK_TILES)
 // minimal_matmul's run-time calls take the compute API's unkeyed hoist (matmul_fe_unkeyed_hoist: subblock_h RT, subblock_w CT,
 // K_block_tiles KT), and above LoFi only with a 16-bit DEST. The key has no M block or bias epilogue: MATMUL_PK_M_BLOCK and

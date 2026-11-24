@@ -71,10 +71,27 @@ constexpr std::uint32_t matmul_max_row_tiles = 8;
 #elif defined(ARCH_BLACKHOLE)
 constexpr std::uint32_t matmul_max_row_tiles = get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>();
 #endif
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS) && defined(MATMUL_PACK_KEYS)
+// the cells the harness unpacks per row (llk_matmul_forms.h matmul_unhoist_cell)
+constexpr bool matmul_unhoist_k = ckernel::matmul_unhoist_cell(
+    MATH_FIDELITY,
+    dest_sync == ckernel::DstSync::SyncHalf,
+    is_fp32_dest_acc_en,
+    MATMUL_KEY_IN1,
+    MATMUL_KEY_IN0,
+    MATMUL_OUT_FORMAT,
+    MATMUL_PK_RT,
+    MATMUL_PK_CT,
+    MATMUL_PK_KT);
+#else
+constexpr bool matmul_unhoist_k = false;
+#endif
+#line 74
 #if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORCE_FORM_CHAR)
 constexpr bool matmul_hoist_rows = MATMUL_FORCE_FORM_CHAR == 'h' || MATMUL_FORCE_FORM_CHAR == 'R';
 #elif defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
-constexpr bool matmul_hoist_rows = unpack_AB_matmul_hoist_rows<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, matmul_kt_key, MATMUL_OUT_FORMAT>();
+constexpr bool matmul_hoist_rows =
+    unpack_AB_matmul_hoist_rows<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, matmul_kt_key, MATMUL_OUT_FORMAT>() && !matmul_unhoist_k;
 #elif defined(ARCH_BLACKHOLE)
 constexpr bool matmul_hoist_rows = unpack_AB_matmul_hoist_rows<MATH_FIDELITY, dest_sync>();
 #endif
@@ -128,7 +145,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #undef MATMUL_UNPACK_INIT_TEMPLATE_ARGS
 #define MATMUL_UNPACK_INIT_TEMPLATE_ARGS
 #undef MATMUL_UNPACK_TEMPLATE_ARGS
-#define MATMUL_UNPACK_TEMPLATE_ARGS
+#define MATMUL_UNPACK_TEMPLATE_ARGS 0, 0, false, 16, !matmul_unhoist_k
 #undef MATMUL_K_LOOP
 #endif
 #else
