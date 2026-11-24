@@ -9,6 +9,8 @@ from helpers.perf.core import ALL_PERF_RUN_TYPES
 from test_pack_block_alt import PAIRS, TILES
 from test_pack_block_alt import test_pack_block_alt as run_alt
 
+pytestmark = pytest.mark.llk_sweep
+
 
 @pytest.mark.perf
 @skip_for_wormhole

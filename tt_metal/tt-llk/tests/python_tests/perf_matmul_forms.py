@@ -35,9 +35,7 @@ from helpers.test_variant_parameters import (
 )
 from perf_matmul import matmul_combos
 
-pytestmark = (
-    pytest.mark.llk_sweep
-)  # exhaustive sweep: CI keeps a thin subset (LLK_SWEEP_ALL=1 for all)
+pytestmark = pytest.mark.llk_sweep
 
 FIDELITIES = [
     MathFidelity.LoFi,
