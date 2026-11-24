@@ -12,6 +12,7 @@
 #include <unordered_map>
 
 #include "core/distributed/ccl_resources.hpp"
+#include "core/distributed/cp_sharding.hpp"
 #include "core/distributed/socket_manager.hpp"
 #include "core/mesh_device.hpp"
 #include "core/tt_profiler.hpp"
@@ -26,6 +27,7 @@ struct ContextParallelConfig {
     // Ring attention keeps the forward's K/V for backward instead of shifting them again, at the cost of
     // 2 * (cp_size - 2) K-sized tensors per device (see ops::distributed::ring_attention_sdpa).
     bool reuse_forward_kv = false;
+    core::distributed::CpSharding sharding = core::distributed::CpSharding::Contiguous;
 };
 
 struct DistributedConfig {
