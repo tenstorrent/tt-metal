@@ -8,6 +8,7 @@
 
 #include "ckernel.h"
 #include "utils/validate.h"
+#include "utils/issue.h"
 
 namespace hal::pack
 {
@@ -147,7 +148,7 @@ constexpr std::uint32_t flush_write_aligners_operation()
 /** @brief Flush the packer's non-empty write-aligners with no new data (PACR Flush). */
 inline __attribute__((always_inline)) void flush_write_aligners()
 {
-    TTI_INSN(flush_write_aligners_operation());
+    ::hal::detail::issue<flush_write_aligners_operation()>();
 }
 
 /** @brief Encode a clear of the packer exponent histogram (CLREXPHIST). */
@@ -159,7 +160,7 @@ constexpr std::uint32_t clear_exponent_histogram_operation()
 /** @brief Clear the packer exponent histogram (CLREXPHIST). */
 inline __attribute__((always_inline)) void clear_exponent_histogram()
 {
-    TTI_INSN(clear_exponent_histogram_operation());
+    ::hal::detail::issue<clear_exponent_histogram_operation()>();
 }
 
 namespace detail
@@ -292,14 +293,14 @@ inline __attribute__((always_inline)) void run()
 {
     static_assert(detail::is_valid(Operation), "invalid packer descriptor");
     constexpr std::uint32_t operation = Operation.get_operation();
-    TTI_INSN(operation);
+    ::hal::detail::issue<operation>();
 }
 
 /** @brief Issue a runtime-selected packer descriptor. */
 template <typename Operation>
 inline __attribute__((always_inline)) void run(const Operation operation)
 {
-    TT_INSN(operation.get_operation());
+    ::hal::detail::issue_buffered(operation.get_operation());
 }
 
 } // namespace hal::pack

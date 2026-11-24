@@ -17,6 +17,7 @@
 #include "detail/write_backend.h"
 #include "detail/write_operands.h"
 #include "registers.h"
+#include "../utils/issue.h"
 
 namespace hal::cfg
 {
@@ -166,7 +167,7 @@ inline __attribute__((always_inline)) void read(hal::Gpr<GprIndex>)
     static_assert(F.shamt(S) + F.width <= 32, "field crosses a CFG word boundary");
     static_assert(F.addr32(S) < detail::StateCfgWordCount, "CFG read source lies outside the state bank");
 
-    TTI_RDCFG(GprIndex, F.addr32(S));
+    HAL_TTI_RDCFG(GprIndex, F.addr32(S));
 }
 
 /*************************************************************************************************
@@ -207,7 +208,7 @@ inline __attribute__((always_inline)) void write(const std::uint32_t value)
     {
         if constexpr (F.scope == RegisterScope::Thread)
         {
-            TT_SETC16(cfg_word_addr, (value << F.shamt(S)) & detail::ThreadCfgWordMask);
+            HAL_TT_SETC16(cfg_word_addr, (value << F.shamt(S)) & detail::ThreadCfgWordMask);
         }
         else
         {
