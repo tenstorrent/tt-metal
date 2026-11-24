@@ -4,9 +4,9 @@
 """Host-only: GLM-5.4's four-stage placement (q171.2.8), without a device.
 
 * The runner splits the 106 layer passes, and four ranks land on the approved stages G0 L1-26, G1 L27-54 pass 1,
-  G2 L27-54 pass 2, G3 L55-78 (with and without the MTP tail); no rank starts inside a loop pass.
-* Layer acks: every pass acks once per chunk; G2's ids (104-131) collide with no other rank's id and no MTP row, and
-  G2 migrates no layer (its KVPE is a copy of G1's).
+  G2 L27-54 pass 2, G3 L55-78 (with and without the MTP tail); a split cutting a loop pass is rejected. The
+  schedule's generic contracts (rank slices, ack ids, the ack layout, no KV table) are
+  common/prefill/tests/test_pass_schedule.py's.
 * G2 builds its loop layers 'shared' (no indexer, no index cache) and injects pass-1 layer L's own top-k set (A5).
 * The glm_5_4 adapter reads GLM-5.3's TTNN cache directory and never creates one of its own.
 * TtPrefillTransformer runs exactly its stage's steps, gates and ack ids.
@@ -14,12 +14,12 @@
 
 import pytest
 
-from models.demos.common.prefill.runners.layer_completion_layout import layer_completion_layout
-from models.demos.common.prefill.runners.pass_schedule import PassSchedule, RankSlice, builds_kv_chunk_table
+from models.demos.common.prefill.runners.pass_schedule import PassSchedule, RankSlice
 from models.demos.common.prefill.runners.runner_utils import compute_layer_split
 from models.demos.deepseek_v3_d_p.reference.glm_5_4 import LoopStep
 from models.demos.deepseek_v3_d_p.reference.glm_5_4.schedule import (
     loop_count,
+    loop_schedule,
     pass_schedule,
     runs_later_loop_pass,
     runs_only_later_loop_passes,
@@ -39,18 +39,13 @@ def schedule() -> PassSchedule:
     return pass_schedule(glm_5_4_hf_config())
 
 
-def test_106_pass_schedule(schedule):
-    assert len(schedule) == 106 and schedule.num_layers == 78
-    assert schedule.passes[:26] == tuple((layer, 0) for layer in range(26))
-    assert schedule.passes[26:54] == tuple((layer, 1) for layer in range(26, 54))
-    assert schedule.passes[54:82] == tuple((layer, 2) for layer in range(26, 54))
-    assert schedule.passes[82:] == tuple((layer, 0) for layer in range(54, 78))
-
-
-def test_rank_starts_exclude_the_inside_of_a_loop_pass(schedule):
-    starts = schedule.valid_starts()
-    assert set(range(27, 54)).isdisjoint(starts) and set(range(55, 82)).isdisjoint(starts)
-    assert {0, 25, 26, 54, 82, 100} <= starts
+def test_pass_schedule_projects_the_loop_schedule(schedule):
+    """The runner's positions are the reference loop_schedule's layer steps (its owner, reference/glm_5_4/tests,
+    pins the 106 passes); the projection adds the layer count and the pass tags."""
+    config = glm_5_4_hf_config()
+    steps = loop_schedule(config.num_hidden_layers, config.loop_first_layer, config.loop_last_layer, 2)
+    assert schedule.num_layers == 78
+    assert schedule.passes == tuple((s.layer, s.loop_pass) for s in steps if s.kind == "layer")
 
 
 @pytest.mark.parametrize("mtp_levels", [0, 1], ids=["trunk", "mtp1"])
@@ -71,59 +66,10 @@ def test_one_rank_runs_the_whole_trunk(schedule):
     assert schedule.rank_slice(0, 106) == RankSlice(0, 78, (1, 2))
 
 
-@pytest.mark.parametrize("first, n", [(20, 20), (30, 40), (60, 30)], ids=["into-pass1", "pass1-to-pass2", "into-pass2"])
-def test_a_rank_cutting_a_loop_pass_is_rejected(schedule, first, n, expect_error):
-    with expect_error(ValueError, "a rank holds whole loop passes"):
-        schedule.rank_slice(first, n)
-
-
 def test_a_cut_inside_a_loop_pass_is_rejected_by_the_split(schedule, monkeypatch, expect_error):
     monkeypatch.setenv("PREFILL_PP_LAYER_COUNTS", "30,24,28,24")
     with expect_error(ValueError, "not a valid boundary"):
         compute_layer_split(106, 4, GLM54Adapter().layer_split_boundaries(106))
-
-
-def test_mixed_stages_hold_prelude_or_coda_layers_around_a_pass(schedule):
-    assert schedule.rank_slice(20, 34) == RankSlice(20, 34, (1,))  # L21-26 + pass 1
-    assert schedule.rank_slice(54, 36) == RankSlice(26, 36, (2,))  # pass 2 + L55-62
-
-
-def test_ack_ids_are_distinct_and_g2_never_acks_a_pass1_layer(schedule):
-    ids = {name: schedule.ack_ids(*stage) for name, stage in zip("G0 G1 G2 G3".split(), STAGES)}
-    assert ids["G0"] == list(range(0, 26))
-    assert ids["G1"] == list(range(26, 54))
-    assert ids["G2"] == list(range(104, 132))
-    assert ids["G3"] == list(range(54, 78))
-    flat = [i for stage in ids.values() for i in stage]
-    assert len(flat) == len(set(flat)) == 106
-    assert 78 not in flat  # MTP's row
-
-
-@pytest.mark.parametrize("mtp_levels", [0, 1], ids=["trunk", "mtp1"])
-def test_layer_completion_layout_per_stage(schedule, mtp_levels):
-    layouts = [layer_completion_layout(STAGES, r, extra_layers=mtp_levels, pass_schedule=schedule) for r in range(4)]
-    assert {lay.completions_per_chunk for lay in layouts} == {106 + mtp_levels}
-    assert [lay.rank_first_record for lay in layouts] == [0, 26, 54, 82]
-    assert [lay.rank_record_count for lay in layouts] == [26, 28, 28, 24 + mtp_levels]
-    assert layouts[2].rank_layer_ids == list(range(104, 132))
-    assert layouts[3].rank_layer_ids == list(range(54, 78)) + [78] * mtp_levels
-    # Every record of a chunk has its own id.
-    all_ids = [i for lay in layouts for i in lay.rank_layer_ids]
-    assert len(all_ids) == len(set(all_ids)) == 106 + mtp_levels
-
-
-def test_mtp_rows_must_not_reach_the_loop_ack_ids(schedule, expect_error):
-    with expect_error(AssertionError, "collide with loop pass ack ids"):
-        layer_completion_layout(STAGES, 3, extra_layers=27, pass_schedule=schedule)
-
-
-def test_a_looped_model_publishes_no_kv_table(schedule, expect_error):
-    """The runner's guard (prefill_runner, migration setup): G2's bank-A copy can never reach the migration table,
-    because a looped model builds none, and a run asking for migration is refused rather than silently unmigrated."""
-    assert builds_kv_chunk_table(None, migration_requested=True, model_name="glm_5_3")
-    assert not builds_kv_chunk_table(schedule, migration_requested=False, model_name="glm_5_4")
-    with expect_error(RuntimeError, "KV migration of a looped model is not supported"):
-        builds_kv_chunk_table(schedule, migration_requested=True, model_name="glm_5_4")
 
 
 def test_g2_runs_no_indexer_and_injects_layer_ls_own_set():
@@ -276,10 +222,3 @@ def test_loop_count_and_stage_config():
     g2 = stage_config(config, (2,))
     assert g2 is not config and g2.indexer_types == stage_indexer_types(config, (2,))
     assert config.indexer_types == model_map
-
-
-def test_completion_readers_accept_every_ack_id(schedule):
-    """The producer's ring reader takes layer ids in [0, bound): the bound covers pass 2's ids (G2 104-131)."""
-    assert schedule.ack_id_bound == 132
-    for first, n in STAGES:
-        assert max(schedule.ack_ids(first, n)) < schedule.ack_id_bound
