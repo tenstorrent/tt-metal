@@ -18,7 +18,6 @@
 #include "api/dataflow/prefetcher_pipe_binding_token.h"
 
 #if !defined(COMPILE_FOR_TRISC)
-#include <optional>
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -170,9 +169,9 @@ namespace experimental {
 //
 //  Host: a DataflowBufferSpec with prefetcher_pipe_relays naming the pipe(s), produced by
 //  the receiver DM kernel that binds those pipes and consumed by the compute kernel.
-//  The relay token carries both access patterns. DM must call bind_relay(): either the
-//  untyped form, which builds the relay itself, or the typed form, handing it a DataflowBuffer
-//  the kernel built from the token (required when either side of the relay is BLOCKED).
+//  The relay token carries both access patterns. DM must call bind_relay(), which builds the relay
+//  and returns a producer-only view: bind_relay() builds it untyped, bind_relay(dfb::relay) types it
+//  from the token (required when either side of the relay is BLOCKED).
 //
 //  DM (receiver kernel) — single producer:
 //    PrefetcherPipe pipe(pipe::in);
@@ -191,8 +190,7 @@ namespace experimental {
 //    pipe.pop_front(n);
 //
 //  DM — typed relay (any patterns; required when either side is BLOCKED):
-//    DataflowBuffer relay(dfb::relay);
-//    pipe.bind_relay(relay);
+//    auto relay = pipe.bind_relay(dfb::relay);
 //    const uint32_t share = relay.get_producer_share();  // entries this thread pushes at a time
 //    pipe.wait_front(n);
 //    for (uint32_t i = 0; i < n * relay_entries_per_pipe_entry; i += share) {
@@ -322,7 +320,7 @@ public:
     // consumed its E1 entries. Consume the sender's matching pad credits, without
     // requiring the sender's newer E2 payload to drain.
     // If this core has a relay, also rewrite the local relay DFB iface (page size,
-    // usable limit, rd/wr) so a RelayView from bind_relay() is not left on E1.
+    // usable limit, rd/wr) so the view bind_relay() returned is not left on E1.
     // TRISC must already have consumed the previous-size tiles (relay-backed pop_front);
     // its local CB is a separate object aligned at DataflowBuffer construction.
     FORCE_INLINE void set_receiver_entry_size(uint32_t entry_size) {
@@ -934,57 +932,43 @@ public:
     // Host-declared relay DFB (DM → compute)
     // -----------------------------------------------------------------------
 
-    // Producer-only view over the pipe-owned local DFB. Reserve/push stay here;
-    // pop_front waits on that same DFB so WH/BH and Quasar share one object.
-    class RelayView {
+    // Producer-only view that owns the relay DFB, typed by the relay token's access patterns. Only
+    // bind_relay() makes one, and it binds the relay before handing it out.
+    template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
+    class BasicRelayView {
     public:
         FORCE_INLINE void reserve_back(uint16_t num_entries) { dfb_.reserve_back(num_entries); }
         FORCE_INLINE void push_back(uint16_t num_entries) { dfb_.push_back(num_entries); }
+        FORCE_INLINE uint16_t get_producer_share() const { return dfb_.get_producer_share(); }
+        FORCE_INLINE uint32_t get_write_ptr() const { return dfb_.get_write_ptr(); }
+        FORCE_INLINE uint32_t get_entry_size() const { return dfb_.get_entry_size(); }
+        FORCE_INLINE uint32_t get_stride_size() const { return dfb_.get_stride_size(); }
+        FORCE_INLINE uint32_t get_local_size_bytes() const { return dfb_.get_local_size_bytes(); }
+        FORCE_INLINE uint32_t get_ring_span_bytes() const { return dfb_.get_ring_span_bytes(); }
 
     private:
         friend class PrefetcherPipe;
-        FORCE_INLINE explicit RelayView(DataflowBufferAnyPattern& dfb) : dfb_(dfb) {}
-        DataflowBufferAnyPattern& dfb_;
+        FORCE_INLINE BasicRelayView(PrefetcherPipe& pipe, RelayDFBBindingToken<Pap, Cap> token) : dfb_(token) {
+            pipe.bind_relay_dfb(dfb_);
+        }
+        DataflowBufferFor<Pap, Cap> dfb_;
     };
 
+    using RelayView = BasicRelayView<dfb::AccessPattern::UNKNOWN, dfb::AccessPattern::UNKNOWN>;
+
     // Open the relay DFB the host registered for this slot (DataflowBufferSpec::
-    // prefetcher_pipe_relays). Constructs the local DataflowBuffer (Quasar: dfb_ensure_ready)
-    // as an untyped DataflowBufferAnyPattern and binds it exactly like the typed form below.
+    // prefetcher_pipe_relays) untyped, and bind it exactly like the typed form below.
+    // Multi-producer: each pipe-consumer hart gets its own DataflowBuffer of the
+    // same relay id; STRIDED pap partitions producer slots.
     FORCE_INLINE RelayView bind_relay() {
-        ASSERT(!relay_dfb_.has_value());
+        ASSERT(!relay_bound_);
         ASSERT(interface_.receiver.relay_id != RELAY_DFB_INVALID);
-        // Construct first: Quasar DataflowBuffer ctor runs dfb_ensure_ready (resets slots).
-        // Multi-producer: each pipe-consumer hart gets its own DataflowBuffer view of the
-        // same relay id; STRIDED pap partitions producer slots.
-        relay_dfb_.emplace(RelayDFBBindingToken{interface_.receiver.relay_id});
-        bind_relay(*relay_dfb_);
-        return RelayView(*relay_dfb_);
+        return RelayView(*this, RelayDFBBindingToken{interface_.receiver.relay_id});
     }
 
-    // Typed form: the kernel builds `DataflowBuffer relay(dfb::relay)` (its token carries the access
-    // patterns, so the relay is typed at compile time), passes it here, and then uses that same
-    // object for reserve_back / push_back.
-    // Aligns the relay's slots with the receiver's current cursor and page size, on every thread,
-    // so each lane of a multi-lane receiver resumes at its own position. TRISC aligns in its ctor.
-    DFB_TEMPLATE_DECL
-    FORCE_INLINE void bind_relay(DFB_CLASS& relay) {
-        const CrossNodeReceiverDFBInterface& iface = interface_.receiver;
-        ASSERT(iface.relay_id != RELAY_DFB_INVALID);
-        ASSERT(relay.get_id() == iface.relay_id);
-        ASSERT(!relay_bound_);
-        // Before anything re-pages the relay: it still has the page size firmware set from the relay's
-        // config, which fixes how many relay pages one pipe entry is.
-        relay_pages_per_entry_ =
-            static_cast<uint16_t>(prefetcher_pipe_relay_pages_per_entry(iface.relay_id, iface.fifo_page_size));
-        relay_share_ = relay.get_producer_share();
-        sync_threads();  // every producer hart has constructed its relay before any of them aligns
-        align_local_dfb_to_prefetcher_pipe_receiver_iface(iface.relay_id, iface, relay_pages_per_entry_, relay_share_);
-#ifndef ARCH_QUASAR
-        const uintptr_t entries_acked_ptr = reinterpret_cast<uintptr_t>(get_cb_tiles_acked_ptr(iface.relay_id));
-        relay_entries_acked_checkpoint_ = static_cast<uint16_t>(reg_read(entries_acked_ptr));
-#endif
-        sync_threads();
-        relay_bound_ = true;
+    template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
+    [[nodiscard]] FORCE_INLINE BasicRelayView<Pap, Cap> bind_relay(RelayDFBBindingToken<Pap, Cap> token) {
+        return BasicRelayView<Pap, Cap>(*this, token);
     }
 #endif
 
@@ -1071,7 +1055,6 @@ private:
     uint32_t free_units_floor_ = 0;
 
 #if !defined(COMPILE_FOR_TRISC)
-    std::optional<DataflowBufferAnyPattern> relay_dfb_;
     bool relay_bound_ = false;
     // Relay pages per pipe entry, fixed at bind_relay() (see prefetcher_pipe_relay_pages_per_entry).
     uint16_t relay_pages_per_entry_ = 1;
@@ -1188,6 +1171,29 @@ private:
 #else
         (void)lane_offset_bytes;
 #endif
+    }
+
+    // Aligns the relay's slots with the receiver's current cursor and page size, on every thread,
+    // so each lane of a multi-lane receiver resumes at its own position. TRISC aligns in its ctor.
+    DFB_TEMPLATE_DECL
+    FORCE_INLINE void bind_relay_dfb(DFB_CLASS& relay) {
+        const CrossNodeReceiverDFBInterface& iface = interface_.receiver;
+        ASSERT(iface.relay_id != RELAY_DFB_INVALID);
+        ASSERT(relay.get_id() == iface.relay_id);
+        ASSERT(!relay_bound_);
+        // Before anything re-pages the relay: it still has the page size firmware set from the relay's
+        // config, which fixes how many relay pages one pipe entry is.
+        relay_pages_per_entry_ =
+            static_cast<uint16_t>(prefetcher_pipe_relay_pages_per_entry(iface.relay_id, iface.fifo_page_size));
+        relay_share_ = relay.get_producer_share();
+        sync_threads();  // every producer hart has constructed its relay before any of them aligns
+        align_local_dfb_to_prefetcher_pipe_receiver_iface(iface.relay_id, iface, relay_pages_per_entry_, relay_share_);
+#ifndef ARCH_QUASAR
+        const uintptr_t entries_acked_ptr = reinterpret_cast<uintptr_t>(get_cb_tiles_acked_ptr(iface.relay_id));
+        relay_entries_acked_checkpoint_ = static_cast<uint16_t>(reg_read(entries_acked_ptr));
+#endif
+        sync_threads();
+        relay_bound_ = true;
     }
 
     FORCE_INLINE void wait_relay_consumed(uint32_t num_entries) {

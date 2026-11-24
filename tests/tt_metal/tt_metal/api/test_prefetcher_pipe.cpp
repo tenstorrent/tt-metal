@@ -3172,7 +3172,12 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_MultiDM_RelayProducers2_Blocked_BB_
     auto mesh_device = devices_[0];
     constexpr uint32_t entry_size = 512;  // two relay entries of 256
     constexpr uint32_t ring_depth = 4;
-    auto pipe = make_pipe(mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), entry_size * ring_depth);
+    auto pipe = make_pipe(
+        mesh_device.get(),
+        CoreCoord(0, 0),
+        CoreRangeSet(CoreRange({1, 0})),
+        entry_size * ring_depth,
+        /*num_credit_lanes=*/2);
     EXPECT_EQ(
         run_prefetcher_pipe_relay(
             mesh_device,
@@ -3203,7 +3208,12 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_MultiDM_RelayProducers2_Blocked_BS_
     auto mesh_device = devices_[0];
     constexpr uint32_t entry_size = 512;  // two relay entries of 256
     constexpr uint32_t ring_depth = 4;
-    auto pipe = make_pipe(mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), entry_size * ring_depth);
+    auto pipe = make_pipe(
+        mesh_device.get(),
+        CoreCoord(0, 0),
+        CoreRangeSet(CoreRange({1, 0})),
+        entry_size * ring_depth,
+        /*num_credit_lanes=*/2);
     EXPECT_EQ(
         run_prefetcher_pipe_relay(
             mesh_device,
@@ -3234,7 +3244,12 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_MultiDM_RelayProducers2_Blocked_BAL
     auto mesh_device = devices_[0];
     constexpr uint32_t entry_size = 512;  // two relay entries of 256
     constexpr uint32_t ring_depth = 4;
-    auto pipe = make_pipe(mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), entry_size * ring_depth);
+    auto pipe = make_pipe(
+        mesh_device.get(),
+        CoreCoord(0, 0),
+        CoreRangeSet(CoreRange({1, 0})),
+        entry_size * ring_depth,
+        /*num_credit_lanes=*/2);
     EXPECT_EQ(
         run_prefetcher_pipe_relay(
             mesh_device,

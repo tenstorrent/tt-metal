@@ -6,7 +6,7 @@
 //
 // Bindings:
 //   pipe::in               — KernelAdvancedOptions::PrefetcherPipeBinding accessor (program slot id baked in)
-//   dfb::relay             — PRODUCER accessor of the relay DFB; built here and handed to pipe.bind_relay()
+//   dfb::relay             — PRODUCER accessor of the relay DFB; pipe.bind_relay(dfb::relay) builds and binds it
 // Args (named CTAs):
 //   args::total_entries    - pipe entries this core consumes over the run
 //   args::batch_size       - pipe entries per wait_front / pop_front
@@ -49,8 +49,7 @@ void kernel_main() {
 
     Noc noc;
     experimental::PrefetcherPipe pipe(pipe::in);
-    DataflowBuffer relay(dfb::relay);
-    pipe.bind_relay(relay);
+    auto relay = pipe.bind_relay(dfb::relay);
     const uint32_t share = relay.get_producer_share();
 
     const uint32_t tid = get_my_thread_id();

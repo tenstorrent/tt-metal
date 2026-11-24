@@ -352,8 +352,9 @@ struct DFBAdvancedOptions {
     // Requirements (validated at Program construction):
     //  - mutually exclusive with DataflowBufferSpec::borrowed_from and allocation_override
     //  - entry_size divides the pipe entry_size (the relay may page one pipe entry as several
-    //    relay entries) and entry_size * num_entries covers the pipe ring's whole entries, for
-    //    every named pipe (all named pipes share ring_size and entry_size)
+    //    relay entries), and entry_size * num_entries equals the pipe's ring_size rounded down to
+    //    a multiple of the pipe entry_size, for every named pipe (all named pipes share ring_size
+    //    and entry_size)
     //  - the DFB's node set (union of its bound kernels' nodes) is the receiver kernel's node set:
     //    the union of the named pipes' receiver nodes, which must be pairwise disjoint, plus that
     //    kernel's extra_nodes (KernelAdvancedOptions::PrefetcherPipeBinding::extra_nodes). The
