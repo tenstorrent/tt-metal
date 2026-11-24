@@ -132,30 +132,51 @@ def test_fabric_mismatch():
     clean(r)
 
 
-def test_prte_timeout():
-    """A send nobody receives under --timeout 60: at 60 s tt-run sends SIGTERM to every rank (the timeout is graceful;
-    PRRTE's own kill stays only as a backstop after the stop grace), both ranks close, and tt-run returns 241.
+def test_job_timeout():
+    """A send nobody receives under tt-run's --job-timeout 60: at 60 s tt-run sends SIGTERM to every rank (graceful;
+    the force only after the stop grace), both ranks leave their wait, close their mesh, and tt-run returns 241.
 
     The timeout is longer than the ttnn import on a loaded runner, and the row checks that both ranks were past
     open when the clock fired, so it is the deadlock that was ended and not the start-up."""
+    r = run_case(
+        "send_no_recv+job_timeout60",
+        {"PROBE_COLL": "send_no_recv"},
+        DEADLINE_END + 60,
+        cmd=legacy_cmd(ttrun_extra=("--job-timeout", "60")),
+    )
+    ended(r)
+    assert r.exit == 241, str(r)
+    _both_ranks_were_in_the_collective(r)
+    closed(r)  # the --job-timeout is graceful: both ranks leave the collective on SIGTERM and close their mesh
+    assert "the job reached its --job-timeout of 60 s: sent SIGTERM to all ranks" in r.log, r.log[-3000:]
+    assert "outcome=stopped exit=241" in r.log and "job forced down" not in r.log, r.log[-3000:]
+    clean(r)
+
+
+def test_prte_timeout():
+    """The same deadlock under PRRTE's own clock (--mpi-args "--timeout 60"), passed to the launcher unchanged: at
+    60 s PRRTE ends every rank itself (SIGTERM, SIGKILL 250 ms later) and tt-run reports the job as forced, 241.
+    The SIGTERM still reaches the rank's handler first: both ranks leave their wait and close their mesh inside
+    PRRTE's window, so even the launcher's own kill path ends with the devices closed."""
     r = run_case(
         "send_no_recv+prte_timeout60", {"PROBE_COLL": "send_no_recv"}, DEADLINE_END + 60, cmd=legacy_cmd("--timeout 60")
     )
     ended(r)
     assert r.exit == 241, str(r)
-    # Require positive evidence that the wall clock ended the intended deadlock, not a slow start-up: both ranks
-    # must have entered the collective section (a ``coll_*`` marker in their output), past open — not merely "not a
-    # startup marker", which would also accept ``open_enter`` (entered open, never completed). The last marker is no
-    # longer the collective itself: PRRTE's timeout ends the ranks with SIGTERM, which since P28 makes the collective
-    # return and the rank close its device (``close_done``) on the way out.
+    _both_ranks_were_in_the_collective(r)
+    closed(r)
+    assert "PRRTE --timeout from --mpi-args" in r.log and "outcome=forced exit=241" in r.log, r.log[-3000:]
+    clean(r)
+
+
+def _both_ranks_were_in_the_collective(r) -> None:
+    """Positive evidence that the wall clock ended the intended deadlock, not a slow start-up: both ranks entered the
+    collective section (a ``coll_*`` marker), past open. The last marker is not the collective itself: the SIGTERM
+    makes the collective return and the rank close its device (``close_done``) on the way out."""
     for rank in (0, 1):
         assert f"[probe r={rank} " in r.log and any(
             f"[probe r={rank} " in line and "] coll_" in line for line in r.log.splitlines()
         ), f"rank {rank} had not reached the collective when the wall clock fired: {r}"
-    closed(r)  # the --timeout is graceful: both ranks leave the collective on SIGTERM and close their mesh
-    assert "the job reached its --timeout of 60 s: sent SIGTERM to all ranks" in r.log, r.log[-3000:]
-    assert "outcome=stopped exit=241" in r.log and "job forced down" not in r.log, r.log[-3000:]
-    clean(r)
 
 
 def test_exit_nofinalize():

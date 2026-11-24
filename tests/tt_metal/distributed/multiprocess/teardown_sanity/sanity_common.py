@@ -170,10 +170,12 @@ def _parse(out: str) -> tuple:
 # ---------------------------------------------------------------------------------------------------------------
 # launching
 # ---------------------------------------------------------------------------------------------------------------
-def legacy_cmd(mpi_extra: str = "", mapping: Path = MAPPING) -> list:
-    """tt-run in legacy mode: the rank binding and the mock descriptor per rank, no solve."""
+def legacy_cmd(mpi_extra: str = "", mapping: Path = MAPPING, ttrun_extra: tuple = ()) -> list:
+    """tt-run in legacy mode: the rank binding and the mock descriptor per rank, no solve. ``ttrun_extra`` are tt-run's
+    own options (``--job-timeout``, ...); ``mpi_extra`` goes to the launcher through ``--mpi-args``."""
     return [
         TTRUN,
+        *ttrun_extra,
         "--rank-binding",
         str(BINDING),
         "--mock-cluster-rank-binding",

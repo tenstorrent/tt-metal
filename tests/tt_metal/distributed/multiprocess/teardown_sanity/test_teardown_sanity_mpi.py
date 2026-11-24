@@ -21,6 +21,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -75,23 +76,41 @@ def test_ttrun_dead_rank():
 
 
 def test_ttrun_hang_timeout():
-    """A rank spins forever. With --timeout 20 in --mpi-args, tt-run sends SIGTERM to every rank at 20 s (graceful; PRRTE's
-    own --timeout stays as a backstop after the stop grace), the job ends with 241 and leaves nothing (P5)."""
+    """A rank spins forever. With tt-run's --job-timeout 20, tt-run sends SIGTERM to every rank at 20 s (graceful), the job
+    ends with 241 and leaves nothing (P5)."""
     r = run_case(
         "ttrun_hang_timeout",
         {**NP, "PROBE_SCENARIO": "victim_hang"},
         DEADLINE_END,
-        cmd=ttrun_mpi_cmd("--timeout 20 --report-state-on-timeout"),
+        cmd=ttrun_mpi_cmd(ttrun_extra=("--job-timeout", "20")),
     )
     ended(r)
     nonzero(r)
-    assert r.exit == 241, f"expected PRRTE's timeout code 241, got {r.exit} — the wall clock was not what ended it: {r}"
+    assert r.exit == 241, f"expected the timeout code 241, got {r.exit} — the clock was not what ended it: {r}"
     # tt-run's own job time (launch to the end of the job), not the harness wall clock that also counts start-up
     m = re.search(r"job end: .* elapsed=([0-9.]+)s", r.log)
     assert m, r.log[-2000:]
     assert 20 <= float(m.group(1)) < 40, f"the job did not end at the ~20 s --timeout but at {m.group(1)} s: {r}"
-    assert "the job reached its --timeout of 20 s: sent SIGTERM to all ranks" in r.log, r.log[-2000:]
+    assert "the job reached its --job-timeout of 20 s: sent SIGTERM to all ranks" in r.log, r.log[-2000:]
     clean(r)
+
+
+def test_ttrun_mpi_args_timeout_is_prrtes_own():
+    """--mpi-args "--timeout 20" is PRRTE's own clock and reaches mpirun unchanged: tt-run warns at the start that it
+    kills every rank at once, PRRTE ends the job at 20 s with 241, tt-run says it was forced, nothing is left."""
+    r = run_case(
+        "ttrun_mpi_args_timeout",
+        {**NP, "PROBE_SCENARIO": "victim_hang"},
+        DEADLINE_END,
+        cmd=ttrun_mpi_cmd("--timeout 20"),
+    )
+    ended(r)
+    clean(r)
+    assert r.exit == 241, r
+    assert "sets PRRTE's own --timeout 20" in r.log, r.log[-2000:]
+    assert "job forced down" in r.log and "PRRTE --timeout" in r.log and "outcome=forced exit=241" in r.log, r.log[
+        -2000:
+    ]
 
 
 @pytest.mark.xfail(
@@ -184,8 +203,14 @@ def test_ttrun_stop(sig, case):
 
 def _ttrun_stop(sig, case, mpi_prefix=None):
     env = {**NP, "PROBE_SCENARIO": "all_hang" if case == "delivered" else "victim_hang"}
-    if case == "no_helper":
-        env["TT_RUN_SIGNAL_HELPER"] = "/nonexistent/tt-run-signal"
+    cwd = None
+    if case == "no_helper":  # a tree with the sources but no build/, and no installed copy: no tt-run-rank
+        cwd = Path(tempfile.mkdtemp(prefix="sanity_nobuild_"))
+        for d in ("tt_metal", "tests"):
+            (cwd / d).symlink_to(ROOT / d)
+        env["TT_METAL_HOME"] = str(cwd)
+        path = os.environ.get("PATH", "").split(os.pathsep)
+        env["PATH"] = os.pathsep.join(d for d in path if not os.access(os.path.join(d, "tt-run-rank"), os.X_OK))
     r = run_case(
         f"ttrun_stop_{signal.Signals(sig).name}_{case}",
         env,
@@ -195,6 +220,7 @@ def _ttrun_stop(sig, case, mpi_prefix=None):
         launcher_ready=(0, "ready"),  # the ranks are up and hanging before we stop them, not still starting
         signal_after=1,
         mpi_prefix=mpi_prefix,
+        cwd=cwd,
     )
     fault_delivered(r)
     ended(r)
@@ -527,19 +553,12 @@ def _run(cmd: list, timeout: int = 30, env: dict | None = None) -> subprocess.Co
 
 
 def test_mpi_build_is_open_mpi_5_plus():
-    """tt-run's launch line (PRRTE --timeout, --map-by, the self,tcp btl line) is Open MPI 5.x / PRRTE. Confirm the
+    """tt-run's launch line (--map-by, the self,tcp btl line, PRRTE job control) is Open MPI 5.x / PRRTE. Confirm the
     mpirun tt-run would use is that build, so an older or foreign MPI on PATH is caught early, not mid-job."""
     out = (_run([mpirun_path(), "--version"]).stdout or "") + (_run([mpirun_path(), "--version"]).stderr or "")
     m = re.search(r"Open MPI[)\s]+v?(\d+)\.(\d+)", out)
     assert m, f"not an Open MPI build: {out.strip()[:120]!r}"
     assert int(m.group(1)) >= 5, f"Open MPI >= 5.0 required (PRRTE launcher); got {m.group(1)}.{m.group(2)}"
-
-
-def test_launcher_supports_timeout():
-    """tt-run's opt-in wall clock (P5) is PRRTE's own --timeout, reachable only through --mpi-args. Confirm this
-    launcher accepts it — a trivial job with --timeout must run, not be rejected as an unknown option."""
-    r = _run([mpirun_path(), "--timeout", "10", "--allow-run-as-root", "-np", "1", "true"])
-    assert r.returncode == 0, f"the launcher does not accept --timeout (P5 backstop unreachable): {r.stderr[:200]}"
 
 
 def test_required_mca_components_available():
