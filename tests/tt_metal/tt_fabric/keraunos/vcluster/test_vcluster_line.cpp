@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The Keraunos line from a manifest: the topology and the link kinds come from the manifest
-// at VCLUSTER_MANIFEST, and the descriptors in the environment must be the ones generated from it (env.emu on the
-// emulator, env.mock on Mock). Run with TT_METAL_SLOW_DISPATCH_MODE=1; skipped when VCLUSTER_MANIFEST is unset. The
+// at TT_VCLUSTER_MANIFEST, and the descriptors in the environment must be the ones generated from it (env.emu on the
+// emulator, env.mock on Mock). Run with TT_METAL_SLOW_DISPATCH_MODE=1; skipped when TT_VCLUSTER_MANIFEST is unset. The
 // traffic, the verdict and the path proof (steps 5 and 6) are run_line_unicast()'s; this test adds steps 1 to 4.
 
 #include <gtest/gtest.h>
@@ -28,6 +28,7 @@
 #include "tt_metal/tt_fabric/keraunos/co_launched_line.hpp"
 #include "tt_metal/tt_fabric/keraunos/vcluster/descriptors.hpp"
 #include "tt_metal/tt_fabric/keraunos/vcluster/manifest.hpp"
+#include "tt_metal/tt_fabric/keraunos/vcluster/test_support.hpp"
 
 namespace tt::tt_fabric::fabric_router_tests {
 namespace {
@@ -133,7 +134,7 @@ void expect_workers_are_the_lines(const vc::Manifest& manifest) {
     EXPECT_EQ(workers, expected) << "the idle CCE1 slots are not beside the routers that face the line on its two ends";
 }
 
-// With VCLUSTER_MANIFEST set, every skip but Mock's is a failure, so this fixture does not skip in SetUp when fewer
+// With TT_VCLUSTER_MANIFEST set, every skip but Mock's is a failure, so this fixture does not skip in SetUp when fewer
 // than two devices are open (BaseFabricFixture::SetUp); FromManifest checks the device count itself.
 class VclusterLine : public KeraunosCoLaunchedWorkers {
 protected:
@@ -141,12 +142,11 @@ protected:
 };
 
 TEST_F(VclusterLine, FromManifest) {
-    const char* manifest_path = env("VCLUSTER_MANIFEST");
+    const char* manifest_path = env("TT_VCLUSTER_MANIFEST");
     if (manifest_path == nullptr) {
-        GTEST_SKIP() << "VCLUSTER_MANIFEST is not set";
+        GTEST_SKIP() << "TT_VCLUSTER_MANIFEST is not set";
     }
-    const char* package = env("VCLUSTER_PACKAGE_SOC_DESC");
-    ASSERT_NE(package, nullptr) << "VCLUSTER_PACKAGE_SOC_DESC is not set";
+    const std::filesystem::path package = vc::test::package_soc_desc();
 
     // Step 1, before the devices open: the manifest loads and passes every row, with the package's facts (the
     // generated per-chip descriptors each hold one chip's cores and cannot give them).
@@ -156,7 +156,7 @@ TEST_F(VclusterLine, FromManifest) {
         ADD_FAILURE() << "row " << static_cast<uint32_t>(finding.check) << ": " << finding.detail;
     }
     ASSERT_TRUE(findings.empty()) << "the manifest fails the checks";
-    const YAML::Node package_desc = YAML::LoadFile(package);
+    const YAML::Node package_desc = YAML::LoadFile(package.string());
 
     // run_line_unicast() skips off Quasar and when a NOC link's chip is beyond the open chips; with a manifest set,
     // either means the environment is not the manifest's (env.emu or env.mock not exported), so it fails here instead.
