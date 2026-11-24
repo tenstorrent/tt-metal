@@ -563,7 +563,9 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id].get_mcast_wptr();
     const SubDeviceRecorder sub_device_recorder(mesh_device_, sub_device_id);
 #if defined(TRACY_ENABLE)
-    const bool tag_tracy_zones = !tt::tt_metal::getDeviceProfilerState(mesh_device_->impl().metal_env());
+    // Only while a profiler is connected: the device zones these tags pair with reach Tracy only then.
+    const bool tag_tracy_zones =
+        !tt::tt_metal::getDeviceProfilerState(mesh_device_->impl().metal_env()) && TracyIsConnected;
 #endif
 
     // Iterate over all programs. Update dispatch commands per program to reflect
