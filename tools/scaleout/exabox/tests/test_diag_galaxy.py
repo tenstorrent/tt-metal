@@ -128,6 +128,16 @@ class TestResets(unittest.TestCase):
         self.assertEqual((checks["recount_1"].status, sorted(checks)), (PASS, ["recount_1", "reset_1"]))
         self.assertIn("tray 2: known drop", checks["recount_1"].details)
 
+    def test_a_reset_that_fails_naming_only_the_known_dropped_chips_is_a_warn(self):
+        m = "Timeout waiting for reset marker to clear for device 0000:{}:00.0."
+        up = [b for b in all_bdfs() if not b.startswith("0000:4")]
+        for named, want in (("41", WARN), ("01", FAIL)):
+            fail = lambda *_a, **_k: subprocess.CompletedProcess([], 1, stdout=m.format(named), stderr="")  # noqa: E731
+            with self.subTest(named=named), mock.patch.object(resets, "run", fail), mock.patch.object(
+                resets, "KNOWN_DROPPED", {2}
+            ), mock.patch("diag.snapshot_checks.KNOWN_DROPPED", {2}):
+                self.assertEqual(self._reset([up])[1]["reset_1"].status, want)
+
     def test_firmware_not_ready_gets_a_second_round_then_fails(self):
         node = Path(resets.SYS, "bus/pci/devices/0000:01:00.0/tenstorrent/tenstorrent!0")
         node.mkdir(parents=True)

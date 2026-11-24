@@ -6,6 +6,7 @@
 sequence) and the recovery between bus-bar steps."""
 from __future__ import annotations
 
+import re
 import shlex
 import subprocess
 import sys
@@ -156,10 +157,14 @@ def glx_reset(
     out, err = (cp.stdout or "")[-2000:], (cp.stderr or "")[-2000:]
     data = {"rc": cp.returncode, "duration_s": dt, "stdout_tail": out, "stderr_tail": err}
     details = f"tt-smi -glx_reset rc={cp.returncode} dur={dt:.1f}s"
-    phase.add(Check(name=name, status=status, details=details, data=data, ip="other"))
+    phase.add(check := Check(name=name, status=status, details=details, data=data, ip="other"))
     if dry_run:
         return list(ALL_BDFS)
     bdfs = pcie_bdfs()
+    named = set(re.findall(r"[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]", out + err))
+    kd = named.isdisjoint(bdfs or ()) and all((parse_bdf_physical(b) or (0,))[0] in KNOWN_DROPPED for b in named)
+    if status == FAIL and named and kd:  # the known drop itself
+        check.status, check.details = WARN, f"{details}; names only the known-dropped tray's chips, still off PCIe"
     missing = [
         b for b in ALL_BDFS if bdfs is not None and b not in bdfs and parse_bdf_physical(b)[0] not in KNOWN_DROPPED
     ]
