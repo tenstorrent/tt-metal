@@ -178,6 +178,7 @@ private:
     static constexpr uint8_t own_bank_endpoint = 1;
     static constexpr uint8_t stream_mode_endpoint = 2;
     std::array<uint8_t, size_t{1} << abi::CMD_KIND_SHIFT> endpoint_flags_{};  // indexed by noc_xy_addr
+    PeerWindows* peers_ = nullptr;                                            // the owning Client's
     DriscCore core_;
     std::optional<SeatLock> lock_;
     // Pinned on exit_write_'s fd, so the KMD sends the detach before unpinning them.

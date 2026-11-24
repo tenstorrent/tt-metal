@@ -24,7 +24,10 @@
 #include <tt-umd/chip_helpers/sysmem_buffer.hpp>
 #include <tt-umd/cluster_descriptor.hpp>
 #include <tt-umd/driver_atomics.hpp>
+#include <tt-umd/arch/blackhole_implementation.hpp>
 #include <tt-umd/io_window/io_window.hpp>
+#include <tt-umd/pcie/pci_device.hpp>
+#include <tt-umd/pcie/tlb_window.hpp>
 #include <tt-umd-workload/cluster.hpp>
 
 #include "impl/buffers/dram_sender_topology.hpp"
@@ -139,6 +142,105 @@ ll_api::ElfFile load_service_image(const std::string& path) {
 }
 
 }  // namespace
+
+// 2 MiB windows on other chips that the seats of one chip write into over PCIe, each mapped into that chip's IOMMU
+// domain. KMD unmaps only when the chip's device closes, so windows are freed only with the client.
+class PeerWindows {
+public:
+    PeerWindows(tt::umd::Cluster& cluster, ChipId chip) :
+        cluster_(cluster), chip_(chip), pcie_noc_xy_addr_(pcie_noc_xy(cluster, chip)) {}
+    ~PeerWindows() {
+        if (leak_) {
+            for (Window& window : windows_) {
+                (void)window.io.release();
+            }
+        }
+    }
+    PeerWindows(const PeerWindows&) = delete;
+    PeerWindows& operator=(const PeerWindows&) = delete;
+    PeerWindows(PeerWindows&&) = delete;
+    PeerWindows& operator=(PeerWindows&&) = delete;
+
+    abi::NocEndpoint endpoint(ChipId peer, const tt::umd::CoreCoord& core, uint64_t addr, uint64_t size);
+
+    // True when [addr, addr + size) on this chip's PCIe tile touches a peer window.
+    bool overlaps(uint32_t noc_xy_addr, uint64_t addr, uint64_t size) const {
+        if (noc_xy_addr != pcie_noc_xy_addr_) {
+            return false;
+        }
+        for (const Window& window : windows_) {
+            if (addr < window.dma_addr + window_size && window.dma_addr < addr + size) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // A seat whose slot was never freed may still write into the windows: keep them allocated.
+    void leak() { leak_ = true; }
+
+private:
+    // A 4 GiB window would need MAP_PEER_BAR's 32-bit offset and length to reach past BAR4's first 4 GiB, and no
+    // mapping that size fits below 4 GiB of IOVA space, the only addresses under the PCIe tile's direct limit.
+    static constexpr uint64_t window_size = tt::umd::blackhole::TLB_2M_SIZE;
+    struct Window {
+        ChipId peer;
+        tt::umd::CoreCoord core;
+        uint64_t base;      // first address of `core` the window reaches, 2 MiB aligned
+        uint64_t dma_addr;  // the address this chip's PCIe tile names for `base`
+        std::unique_ptr<tt::umd::IoWindow> io;
+    };
+    tt::umd::Cluster& cluster_;
+    ChipId chip_;
+    uint32_t pcie_noc_xy_addr_;
+    std::vector<Window> windows_;
+    bool leak_ = false;
+};
+
+abi::NocEndpoint PeerWindows::endpoint(ChipId peer, const tt::umd::CoreCoord& core, uint64_t addr, uint64_t size) {
+    TT_FATAL(peer != chip_, "drisc_service: chip {} cannot be its own peer", peer);
+    const uint64_t base = addr - addr % window_size;
+    TT_FATAL(
+        size <= window_size && addr - base <= window_size - size,
+        "drisc_service: chip {} {} [{:#x}, +{:#x}) crosses a 2 MiB block; a peer range must fit one 2 MiB window",
+        peer,
+        core.str(),
+        addr,
+        size);
+    for (const Window& window : windows_) {
+        if (window.peer == peer && window.core == core && window.base == base) {
+            return {window.dma_addr + (addr - base), pcie_noc_xy_addr_};
+        }
+    }
+    std::unique_ptr<tt::umd::IoWindow> io = cluster_.create_io_window(
+        peer,
+        core,
+        base,
+        tt::umd::HostIoWindowConfig{tt::umd::HostMemoryCaching::WC, window_size},
+        tt::umd::IoOrdering::Posted,
+        std::nullopt,
+        tt::umd::WindowFlags::UnicastWrite);
+    // KMD places the 2 MiB TLBs at the start of BAR0, each at its index times its size.
+    const int tlb_id = dynamic_cast<tt::umd::TlbWindow&>(*io).handle_ref().get_tlb_id();
+    const uint64_t dma_addr = cluster_.get_tt_device(chip_)->get_pci_device()->map_peer_bar(
+        *cluster_.get_tt_device(peer)->get_pci_device(),
+        0,
+        static_cast<uint32_t>(tlb_id * window_size),
+        static_cast<uint32_t>(window_size));
+    // Linux maps below 4 GiB until that fails once for a device, then hands it 64-bit addresses until it is probed
+    // again: KMD sets a 64-bit DMA mask.
+    TT_FATAL(
+        dma_addr + window_size <= pcie_direct_window_end,
+        "drisc_service: chip {}'s window on chip {} maps to {:#x}, past the {:#x} its PCIe tile reaches without an "
+        "iATU region, which MAP_PEER_BAR cannot set up; the chip's IOMMU now hands out 64-bit addresses until it is "
+        "probed again",
+        chip_,
+        peer,
+        dma_addr,
+        pcie_direct_window_end);
+    windows_.push_back(Window{peer, core, base, dma_addr, std::move(io)});
+    return {dma_addr + (addr - base), pcie_noc_xy_addr_};
+}
 
 void UnmapPages::operator()(void* va) const noexcept { ::munmap(va, size); }
 
@@ -476,6 +578,9 @@ SeatClientImpl::~SeatClientImpl() {
         // The kernel may still write into them.
         (void)control_page_memory_.release();
         (void)batch_memory_.release();
+        if (peers_ != nullptr) {
+            peers_->leak();
+        }
     }
     if (window_ != nullptr) {
         window_.reset();
@@ -486,6 +591,12 @@ SeatClientImpl::~SeatClientImpl() {
 
 void SeatClientImpl::validate(const abi::KernelCommand& command, bool src_in_own_bank) const {
     validate_command(command, seat_.bank_size);
+    // A peer window's static VC carries writes; a read through it crashes the host (UMD architecture_tlbs.cpp).
+    TT_FATAL(
+        peers_ == nullptr || !peers_->overlaps(command.src_noc_xy_addr, command.src_addr, command.size),
+        "drisc_service: source {:#x} + {} B lies in a peer window, which must never be read through",
+        command.src_addr,
+        command.size);
     if (abi::command_kind(command) != abi::CMD_SINGLE) {
         return;
     }
@@ -647,7 +758,7 @@ Client::Client(
     std::vector<uint32_t> banks,
     const std::string& root,
     IssuePath issue_path) :
-    banks_(std::move(banks)) {
+    banks_(std::move(banks)), peers_(std::make_unique<PeerWindows>(cluster, chip)) {
     TT_FATAL(!banks_.empty(), "drisc_service: a client needs at least one bank");
     std::sort(banks_.begin(), banks_.end());
     banks_.erase(std::unique(banks_.begin(), banks_.end()), banks_.end());
@@ -675,6 +786,7 @@ Client::Client(
     for (const Seat& seat : seats) {
         seats_.push_back(std::unique_ptr<SeatClient>(
             new SeatClient(std::make_unique<SeatClientImpl>(cluster, seat, images[seat.noc], issue_path))));
+        seats_.back()->impl_->peers_ = peers_.get();
     }
 }
 
@@ -686,6 +798,39 @@ void Client::drain(std::chrono::milliseconds timeout) const {
         const auto left =
             std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now());
         seat->drain(std::max(left, std::chrono::milliseconds(0)));
+    }
+}
+
+abi::NocEndpoint Client::peer_endpoint(ChipId peer, const tt::umd::CoreCoord& core, uint64_t addr, uint64_t size) {
+    return peers_->endpoint(peer, core, addr, size);
+}
+
+// A read-only window: a static VC shared by reads and writes crashes the host (UMD architecture_tlbs.cpp).
+PeerFlag::PeerFlag(tt::umd::Cluster& cluster, ChipId chip, const tt::umd::CoreCoord& core, uint64_t addr) :
+    window_(cluster.create_io_window(
+        chip,
+        core,
+        addr,
+        tt::umd::HostIoWindowConfig{tt::umd::HostMemoryCaching::UC, sizeof(uint32_t)},
+        tt::umd::IoOrdering::Strict,
+        std::nullopt,
+        tt::umd::WindowFlags::UnicastRead)) {}
+
+PeerFlag::~PeerFlag() = default;
+
+uint32_t PeerFlag::value() const { return window_->read32(0); }
+
+void PeerFlag::wait(uint32_t seq, std::chrono::milliseconds timeout) const {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    uint32_t now = value();
+    while (static_cast<int32_t>(now - seq) < 0) {
+        TT_FATAL(
+            std::chrono::steady_clock::now() < deadline,
+            "drisc_service: flag stayed at {:#x}, short of {:#x}, for {} ms",
+            now,
+            seq,
+            timeout.count());
+        now = value();
     }
 }
 

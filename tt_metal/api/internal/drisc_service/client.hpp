@@ -18,10 +18,12 @@
 #include <vector>
 
 #include <tt-metalium/vocabulary/device_types.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <internal/drisc_service/commands.hpp>
 
 namespace tt::umd {
 class Cluster;
+class IoWindow;
 class SysmemBuffer;
 }  // namespace tt::umd
 
@@ -47,6 +49,7 @@ std::unique_ptr<tt::umd::SysmemBuffer> allocate_host_buffer(
 enum class IssuePath { Shared, Window };
 inline constexpr uint32_t max_windows_per_chip = 16;
 
+class PeerWindows;
 class SeatClientImpl;
 
 // One client's attachment to the service on one seat, made by a Client. Attaching launches the kernel when none runs;
@@ -74,8 +77,9 @@ public:
     // source and destination both lie in this seat's bank, in 16 B units, is sent as the CMD_LOCAL that copies it.
     // Throws, issuing nothing, when the command is not CMD_SINGLE or CMD_LOCAL, its size is 0, its source coords do not
     // fit in abi::CMD_KIND_SHIFT bits, src or dst is not 64 B aligned, src and dst overlap on one endpoint, a CMD_LOCAL
-    // size is not a multiple of abi::LOCAL_SIZE_ALIGN or runs past the NoC-addressable part of the bank. Endpoints
-    // and sizes are otherwise not checked.
+    // size is not a multiple of abi::LOCAL_SIZE_ALIGN or runs past the NoC-addressable part of the bank, or its source
+    // lies in a peer window of the client that owns this seat (peer windows are never read through). Endpoints and
+    // sizes are otherwise not checked.
     // Commands run concurrently and complete in issue order, with no ordering between their data: drain() between a
     // command and one that reads what it wrote.
     [[nodiscard]] std::optional<uint64_t> issue(const abi::KernelCommand& command);
@@ -169,9 +173,45 @@ public:
     void drain(std::chrono::milliseconds timeout) const;
     const std::vector<uint32_t>& banks() const { return banks_; }
 
+    // The destination a command on any of this client's seats names to write `size` bytes at `addr` of core `core`
+    // (TRANSLATED) on chip `peer`, over PCIe. The first range no window covers gets a 2 MiB window on `peer`, mapped
+    // into this chip's IOMMU domain; the client keeps its windows until its seats have detached.
+    //
+    // The peer takes the writes posted (it does not wait for its DRAM's acks), on one static VC, so they land in the
+    // order the seat issues them. A copy completes by a flag the same seat writes after the data, at the same peer
+    // core, which the receiver, or this process, polls with a PeerFlag; done_count says only that the writes left this
+    // chip.
+    //
+    // Throws when `peer` is this client's chip, the range crosses a 2 MiB block, `peer` has no window free, KMD refuses
+    // the mapping, or the mapping lands where this chip's PCIe tile cannot reach it.
+    abi::NocEndpoint peer_endpoint(ChipId peer, const tt::umd::CoreCoord& core, uint64_t addr, uint64_t size);
+
 private:
-    std::vector<uint32_t> banks_;                     // ascending, unique
+    std::vector<uint32_t> banks_;  // ascending, unique
+    // Before seats_, so destroyed after every seat has detached.
+    std::unique_ptr<PeerWindows> peers_;
     std::vector<std::unique_ptr<SeatClient>> seats_;  // [2 * i + noc] serves banks_[i]
+};
+
+// A 32-bit flag in a chip's memory, read through a read-only window of its own: the receiver of a peer copy polls it,
+// and so can the sender, which has the receiving chip open. Not copyable or movable.
+class PeerFlag {
+public:
+    // The flag at `addr` of core `core` (TRANSLATED) on `chip`. Throws when the chip has no TLB window free.
+    PeerFlag(tt::umd::Cluster& cluster, ChipId chip, const tt::umd::CoreCoord& core, uint64_t addr);
+    ~PeerFlag();
+
+    PeerFlag(const PeerFlag&) = delete;
+    PeerFlag& operator=(const PeerFlag&) = delete;
+    PeerFlag(PeerFlag&&) = delete;
+    PeerFlag& operator=(PeerFlag&&) = delete;
+
+    uint32_t value() const;
+    // Spins until the flag reaches `seq` in 32-bit sequence order, so a later value also counts. Throws on `timeout`.
+    void wait(uint32_t seq, std::chrono::milliseconds timeout) const;
+
+private:
+    std::unique_ptr<tt::umd::IoWindow> window_;
 };
 
 }  // namespace tt::tt_metal::internal::drisc_service

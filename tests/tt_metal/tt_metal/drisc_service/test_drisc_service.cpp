@@ -58,6 +58,7 @@ namespace abi = internal::drisc_service::abi;
 using internal::drisc_service::Client;
 using internal::drisc_service::DriscCore;
 using internal::drisc_service::IssuePath;
+using internal::drisc_service::PeerFlag;
 using internal::drisc_service::Seat;
 using internal::drisc_service::seat_of;
 using internal::drisc_service::SeatClient;
@@ -1775,6 +1776,259 @@ TEST_F(DriscService, DetachMidBatch) {
         v.reset();
     }
     survivor.reset();
+    expect_all_stopped({0});
+}
+
+// ---- Peer copies: the chip under test writes into another chip's DRAM over PCIe -----------------------------------
+
+class DriscServicePeer : public DriscService {
+protected:
+    void SetUp() override {
+        DriscService::SetUp();
+        if (!IsSkipped() && peers().empty()) {
+            GTEST_SKIP() << "Needs a second chip with its own PCIe link";
+        }
+    }
+
+    static std::vector<ChipId> peers() {
+        std::vector<ChipId> chips;
+        for (const ChipId chip : device().umd.get_target_mmio_device_ids()) {
+            if (chip != chip_id) {
+                chips.push_back(chip);
+            }
+        }
+        return chips;
+    }
+
+    // Bank `bank` of chip `peer` through its NoC0 endpoint, as UMD's own DRAM reads name it.
+    struct PeerBank {
+        tt::umd::CoreCoord core;
+        uint64_t offset;
+    };
+    static PeerBank peer_bank(ChipId peer, uint32_t bank) {
+        const metal_SocDescriptor soc = internal::drisc_service::soc_descriptor(device().umd, peer);
+        const CoreCoord endpoint = soc.get_preferred_worker_core_for_dram_view(static_cast<int>(bank), 0);
+        return {
+            {endpoint.x, endpoint.y, tt::CoreType::DRAM, tt::CoordSystem::TRANSLATED},
+            soc.get_address_offset(static_cast<int>(bank))};
+    }
+};
+
+// 1 MiB from bank 0 into bank 0 of every other chip, from both seats: the data, then a flag right after it,
+// which this process waits for through a PeerFlag as the receiver would, then checks every byte.
+TEST_F(DriscServicePeer, CopiesToEveryPeer) {
+    constexpr uint32_t size = 1 << 20;
+    std::optional<Client> client;
+    attach(client, {0});
+    HostMemory flags(device(), 4096);
+    std::vector<uint32_t> words(size / sizeof(uint32_t));
+    uint32_t seq = static_cast<uint32_t>(next_nonce());
+    for (const ChipId peer : peers()) {
+        const PeerBank bank = peer_bank(peer, 0);
+        const uint64_t dst = bank.offset + dram_test_offset;
+        const abi::NocEndpoint target = client->peer_endpoint(peer, bank.core, dst, size + 64);
+        PeerFlag flag(device().umd, peer, bank.core, dst + size);
+        for (uint32_t noc = 0; noc < 2; noc++) {
+            const uint64_t nonce = next_nonce();
+            fill_pattern(words.data(), size, nonce, 0, dram_test_offset);
+            device().write_dram(0, dram_test_offset, words.data(), size);
+            // The flag starts one short of what this copy writes, so a stale value cannot satisfy the wait.
+            const uint32_t before = seq++;
+            device().umd.write_to_device(&before, sizeof(before), peer, bank.core, dst + size);
+            *flags.at(0) = seq;
+            SeatClient& seat = client->seat(0, noc);
+            ASSERT_TRUE(seat.issue_batch(std::array{
+                abi::make_single_command(device().dram_endpoint(0, dram_test_offset, noc), target, size),
+                abi::make_single_command(seat.host_endpoint(flags.device_addr(0)), target.at_offset(size), 64)}));
+            flag.wait(seq, drain_timeout);
+            std::fill(words.begin(), words.end(), 0);
+            device().umd.read_from_device(words.data(), peer, bank.core, dst, size);
+            const std::string mismatch = pattern_mismatch(words.data(), size, nonce, 0, dram_test_offset);
+            EXPECT_TRUE(mismatch.empty()) << "chip " << peer << " NoC" << noc << ": " << mismatch;
+            seat.drain(drain_timeout);
+        }
+    }
+    client.reset();
+    expect_all_stopped({0});
+}
+
+// A copy into a Posted window, then its flag: chip B's own seat samples the flag and the data's last line together,
+// with one 128 B DMA read from its DRAM, hundreds of times a round while chip A writes. A sample holding the new flag
+// next to an old line is a flag that passed its data. A calibration that writes the line well after the flag must be
+// caught first, or a clean result proves nothing. The receiving bank is loaded throughout: another chip writing into it
+// over PCIe, and chip B copying within it.
+TEST_F(DriscServicePeer, PostedFlagNeverPassesItsData) {
+    if (peers().size() < 2) {
+        GTEST_SKIP() << "Needs two other chips with their own PCIe links";
+    }
+    constexpr uint64_t window = 2 << 20;
+    constexpr uint32_t slices = 16;
+    constexpr uint32_t sample_bytes = 128;
+    constexpr uint32_t sample_batches = 4;
+    constexpr uint32_t samples = sample_batches * abi::BATCH_MAX_COMMANDS;
+    constexpr uint32_t filler_bytes = 64 << 10;
+    constexpr uint64_t filler_offset = window / 2 + window / 4;
+    constexpr int rounds = 2000;
+    const ChipId receiver = peers()[0];
+    const ChipId other = peers()[1];
+    const PeerBank dst_bank = peer_bank(receiver, 0);
+    const uint64_t data_base = dram_test_offset + (64ull << 20);
+    std::optional<Client> client;
+    attach(client, {0});
+    SeatClient& seat = client->seat(0, 0);
+    HostMemory flags(device(), 4096);
+    const abi::NocEndpoint target = client->peer_endpoint(receiver, dst_bank.core, dst_bank.offset + data_base, window);
+    Client receiver_client(device().umd, receiver, {0});
+    SeatClient& sampler = receiver_client.seat(0, 0);
+    uint64_t samples_addr = 0;
+    const auto samples_buffer =
+        internal::drisc_service::allocate_host_buffer(device().umd, receiver, samples * sample_bytes, samples_addr);
+    const auto* sample_words = static_cast<const volatile uint32_t*>(samples_buffer->get_va());
+
+    Client other_client(device().umd, other, {0});
+    std::atomic<bool> stop{false};
+    std::thread load([&] {
+        const PeerBank other_src = peer_bank(other, 0);
+        const abi::NocEndpoint src{
+            other_src.offset + dram_test_offset, abi::noc_xy(other_src.core.x, other_src.core.y)};
+        const abi::NocEndpoint dst = other_client.peer_endpoint(
+            receiver, dst_bank.core, dst_bank.offset + dram_test_offset + (128ull << 20), window);
+        const uint64_t local = dst_bank.offset + dram_test_offset + (256ull << 20);
+        const std::array pushes{
+            abi::make_single_command(src, dst, 1u << 20),
+            abi::make_single_command(src, dst.at_offset(1u << 20), 1u << 20)};
+        const std::array copies{abi::make_local_command(local, local + (64ull << 20), 1u << 20)};
+        while (!stop) {
+            while (other_client.seat(0, 0).issue_batch(pushes)) {
+            }
+            while (receiver_client.seat(0, 1).issue_batch(copies)) {
+            }
+        }
+        other_client.drain(drain_timeout);
+        receiver_client.seat(0, 1).drain(drain_timeout);
+    });
+
+    for (const uint32_t size : {64u << 10, 1u << 20}) {
+        const uint64_t nonce = next_nonce();
+        std::vector<uint32_t> words(uint64_t{slices} * size / sizeof(uint32_t));
+        fill_pattern(words.data(), slices * size, nonce, 0, dram_test_offset);
+        device().write_dram(0, dram_test_offset, words.data(), slices * size);
+        // Layout in the window: data [0, size), flag [size, size + 64), the data's last line again [size + 64, size +
+        // 128).
+        const abi::NocEndpoint flag_and_line{
+            dst_bank.offset + data_base + size, abi::noc_xy(dst_bank.core.x, dst_bank.core.y)};
+        std::array<std::vector<abi::KernelCommand>, sample_batches> sample_cmds;
+        for (uint32_t b = 0; b < sample_batches; b++) {
+            for (uint32_t i = 0; i < abi::BATCH_MAX_COMMANDS; i++) {
+                const uint64_t slot = uint64_t{b * abi::BATCH_MAX_COMMANDS + i} * sample_bytes;
+                sample_cmds[b].push_back(
+                    abi::make_single_command(flag_and_line, sampler.host_endpoint(samples_addr + slot), sample_bytes));
+            }
+        }
+        for (const bool calibrate : {true, false}) {
+            uint32_t stale_rounds = 0;
+            uint32_t covered_rounds = 0;
+            for (int r = 0; r < rounds; r++) {
+                const uint32_t k = r % slices;
+                const uint32_t flag =
+                    static_cast<uint32_t>(nonce) ^ static_cast<uint32_t>(r + 1) ^ (calibrate ? 0x80000000u : 0);
+                *flags.at(0) = flag;
+                const abi::NocEndpoint src = device().dram_endpoint(0, dram_test_offset + uint64_t{k} * size, 0);
+                const abi::NocEndpoint flag_src = seat.host_endpoint(flags.device_addr(0));
+                const auto data = abi::make_single_command(src, target, size);
+                const auto line = abi::make_single_command(src.at_offset(size - 64), target.at_offset(size + 64), 64);
+                if (calibrate) {
+                    ASSERT_TRUE(seat.issue_batch(std::array{
+                        data,
+                        abi::make_single_command(flag_src, target.at_offset(size), 64),
+                        abi::make_single_command(src, target.at_offset(filler_offset), filler_bytes),
+                        line}));
+                } else {
+                    ASSERT_TRUE(seat.issue_batch(
+                        std::array{data, line, abi::make_single_command(flag_src, target.at_offset(size), 64)}));
+                }
+                for (const auto& batch : sample_cmds) {
+                    ASSERT_TRUE(sampler.issue_batch(batch));
+                }
+                sampler.drain(drain_timeout);
+                seat.drain(drain_timeout);
+                bool saw_old = false;
+                bool saw_new = false;
+                bool stale = false;
+                const uint64_t line_addr = dram_test_offset + uint64_t{k} * size + size - 64;
+                for (uint32_t s = 0; s < samples; s++) {
+                    const volatile uint32_t* w = sample_words + s * sample_bytes / sizeof(uint32_t);
+                    if (w[0] != flag) {
+                        saw_old = true;
+                        continue;
+                    }
+                    saw_new = true;
+                    uint32_t got[16];
+                    for (uint32_t i = 0; i < 16; i++) {
+                        got[i] = w[16 + i];
+                    }
+                    stale |= !pattern_mismatch(got, 64, nonce, 0, line_addr).empty();
+                }
+                covered_rounds += saw_old && saw_new ? 1 : 0;
+                stale_rounds += stale ? 1 : 0;
+            }
+            log_info(
+                tt::LogTest,
+                "{} {} B: flag ahead of its line in {} of {} rounds; samples saw the flag change in {}",
+                calibrate ? "calibration (line written after the flag)" : "flag written last",
+                size,
+                stale_rounds,
+                rounds,
+                covered_rounds);
+            if (calibrate) {
+                EXPECT_GT(stale_rounds, 0u) << size << " B: the samples never caught a line written after its flag";
+            } else {
+                EXPECT_EQ(stale_rounds, 0u) << size << " B: the flag passed its data in " << stale_rounds << " rounds";
+                EXPECT_GT(covered_rounds, uint32_t{rounds / 10})
+                    << size << " B: the samples rarely saw the flag change";
+            }
+        }
+    }
+    stop = true;
+    load.join();
+    client.reset();
+    expect_all_stopped({0});
+}
+
+TEST_F(DriscServicePeer, RejectsBadPeerRangesAndCommands) {
+    constexpr uint32_t size = 4096;
+    constexpr uint64_t two_mib = 2 << 20;
+    std::optional<Client> client;
+    attach(client, {0});
+    SeatClient& seat = client->seat(0, 0);
+    const ChipId peer = peers().front();
+    const PeerBank bank = peer_bank(peer, 0);
+    const auto expect_rejected = [](auto call, std::string_view reason, const std::string& what) {
+        try {
+            (void)call();
+            ADD_FAILURE() << what << " was accepted";
+        } catch (const std::exception& e) {
+            EXPECT_NE(std::string_view(e.what()).find(reason), std::string_view::npos)
+                << what << " was rejected for another reason: " << e.what();
+        }
+    };
+    expect_rejected(
+        [&] { return client->peer_endpoint(chip_id, bank.core, 0, size); }, "cannot be its own peer", "own chip");
+    expect_rejected(
+        [&] { return client->peer_endpoint(peer, bank.core, 0, 2 * two_mib); }, "crosses a 2 MiB block", "4 MiB");
+    expect_rejected(
+        [&] { return client->peer_endpoint(peer, bank.core, two_mib - size, 2 * size); },
+        "crosses a 2 MiB block",
+        "range across a 2 MiB block");
+
+    HostMemory host(device(), 4096);
+    const abi::NocEndpoint target = client->peer_endpoint(peer, bank.core, bank.offset + dram_test_offset, size);
+    expect_rejected(
+        [&] { return seat.issue(abi::make_single_command(target, seat.host_endpoint(host.device_addr(0)), size)); },
+        "must never be read through",
+        "a peer window as a source");
+    EXPECT_EQ(seat.in_flight(), 0u) << "a rejected command was issued";
+    client.reset();
     expect_all_stopped({0});
 }
 
