@@ -736,6 +736,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             tt::tt_metal::ComputeConfigDescriptor{
                 .math_fidelity = math_fidelity,
                 .fp32_dest_acc_en = fp32_dest_acc_en,
+                .dst_full_sync_en = dst_full_sync_en,
                 .math_approx_mode = math_approx_mode,
             },
     });
