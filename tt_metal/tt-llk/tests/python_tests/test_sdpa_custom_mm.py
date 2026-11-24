@@ -77,9 +77,6 @@ _SIM_CFG_CONTEXT_REASON = (
     "simulator does not support tensix_unpacr with cfg_context_id=1, "
     "used by the mask/restore sequence"
 )
-_SIM_MOP_LOOP_COUNT_REASON = (
-    "simulator does not support a MOP loop count above 31, which kt_dim 256 needs"
-)
 
 
 def _skip_on_simulator(request, reason):
@@ -326,9 +323,8 @@ def test_sdpa_custom_mm(shape):
     _run(M, K, N, signal_granularity=1, read_transposed=False, mm_transpose=False)
 
 
-def test_sdpa_custom_mm_face_walk_exact(request):
+def test_sdpa_custom_mm_face_walk_exact():
     """kt_dim = 256 as two SrcB face walks, compared exactly against A @ B."""
-    _skip_on_simulator(request, _SIM_MOP_LOOP_COUNT_REASON)
     M, kt, ct = 8, 256, 1
     torch_a, torch_b = (t.to(torch.bfloat16) for t in face_walk_operands(M, kt, ct))
     res = _run(
