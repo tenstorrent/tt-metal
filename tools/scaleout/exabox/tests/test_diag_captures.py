@@ -150,9 +150,59 @@ class TestHscJudge(unittest.TestCase):
     def test_peak_at_warn_limit_warns(self):
         self.f.run("stage-start")
         self.f.set(1, 0x42, 0xA6, "c0 0d")  # 3520 x 1/16 = 220 A
-        out = " | ".join(self.f.run("stage-end"))
-        self.assertIn("HSC WARN tray 1 (01:00.0-08:00.0) HSC 0x42: IOUT peak 220.0 A", out)
-        self.assertIn("margin 8.0 A", out)
+        out = " | ".join(self.f.run("stage-end", "C9"))
+        self.assertIn("HSC WARN tray 1 (01:00.0-08:00.0) HSC 0x42: IOUT peak 220.0 A during C9", out)
+        self.assertIn("margin to the trip 8.0 A; WARN only, not a tray verdict", out)
+        self.assertNotIn("marginal", out)
+
+    def test_bus_bar_peak_near_the_trip_is_the_marginal_12_v_feed(self):
+        self.f.run("stage-start")
+        self.f.set(1, 0x40, 0xA6, "84 0e")  # 3716 x 1/16 = 232.25 A, over the 228 A trip
+        self.f.set(1, 0x42, 0xA6, "d8 0d")  # 221.5 A
+        out = self.f.run("stage-end")
+        self.assertIn(
+            "HSC WARN tray 1 (01:00.0-08:00.0) HSC 0x40: IOUT peak 232.2 A during busbar, at or above its own "
+            "IOUT_OC_WARN_LIMIT 219 A (4Ah), marginal 12 V feed, trip IOUT_OC_FAULT_LIMIT 228.0 A (46h), the peak is "
+            "4.2 A over it, idle VIN 12.00 V; WARN only, not a finding",
+            out,
+        )
+        self.assertTrue(any("HSC 0x42: IOUT peak 221.5 A" in x and "margin to the trip 6.5 A, idle VIN" in x for x in out), out)
+        self.f.run("stage-start")
+        with mock.patch.object(captures, "log") as lg:
+            low = self.f.run("stage-end", load_pct=60)
+        self.assertFalse([x for x in low if "marginal" in x], low)
+        self.assertTrue([x for x in low if "IOUT peak 232.2 A" in x and x.endswith("not a tray verdict")], low)
+        said = [c.args[0] for c in lg.call_args_list]
+        self.assertIn(
+            "HSC feed margin not judged: bus-bar load 60%, under 80% of the planned load; the peak WARNs above are the plain peak WARNs",
+            said,
+        )
+
+    def test_bus_bar_vin_floor_is_the_marginal_12_v_feed(self):
+        self.f.run("stage-start")
+        self.f.set(3, 0x42, 0x88, "64 01")  # 356 / 32 = 11.125 V after the load
+        out = self.f.run("stage-end")
+        self.assertEqual(
+            [x for x in out if "VIN" in x],
+            [
+                "HSC WARN tray 3 (c1:00.0-c8:00.0) HSC 0x42: marginal 12 V feed: min VIN 11.12 V, below 11.15 V "
+                "(idle VIN 12.00 V; bus-bar load) during busbar (0 sample(s)); WARN only, not a finding"
+            ],
+        )
+        self.f.run("stage-start")
+        out = self.f.run("stage-end", load_pct=60)
+        self.assertFalse([x for x in out if "VIN" in x], out)  # 11.0 V while the load was not reached
+        self.f.run("stage-start", "links")
+        self.assertFalse([x for x in self.f.run("stage-end", "links") if "VIN" in x])  # 11.0 V outside the bus-bar stage
+        self.f.run("stage-start", "links")
+        self.f.set(3, 0x42, 0x88, "5c 01")  # 348 / 32 = 10.875 V
+        self.assertEqual(
+            [x for x in self.f.run("stage-end", "links") if "VIN" in x],
+            [
+                "HSC WARN tray 3 (c1:00.0-c8:00.0) HSC 0x42: min VIN 10.88 V during links, below 11.0 V (0 sample(s)); "
+                "WARN only, not a finding"
+            ],
+        )
 
     def test_clear_faults_opt_in_once_and_never_with_an_hsc_off(self):
         self.f.run("stage-start")

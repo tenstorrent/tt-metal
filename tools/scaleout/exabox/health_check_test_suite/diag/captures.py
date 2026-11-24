@@ -29,6 +29,7 @@ from .hsc import HSC_ADDRS, HSC_BUS, INPUT_BITS, IOUT_LSB, VIN_LSB, WORD_BITS, B
 EVENTS = ("stage-start", "before", "after", "stage-end", "reset", "run")
 LOAD_JUDGED_PCT = 80  # under this share of the planned load a clean HSC proves nothing
 VIN_MIN_V = 11.0  # a loaded VIN under this: WARN
+FEED_VIN_MIN_V = 11.15  # bus-bar stage: VIN floor of the marginal 12 V feed WARN
 SAG_MOHM, SAG_INFO_MOHM = 13.0, 11.0  # 12 V sag (idle VIN - VIN) / IOUT: WARN over, said over
 SAG_MIN_A, IDLE_MAX_A = 40, 30  # sag samples at or above; idle VIN from samples at or below
 FEED_GAP_V = 0.25  # a feed's loaded VIN median this far under the other feeds' median: the weakest feed, WARN
@@ -189,7 +190,10 @@ def _vin_rows(d: Path, t0: float) -> dict[str, list[tuple[float, float | None]]]
 
 
 def _judge(step: str, before: dict, after: dict, peaks: dict, samples: dict, st: dict, args, pset: dict) -> list[str]:
-    out, info, named, sag, fails, loaded = [], [], set(st.setdefault("named", [])), {}, {}, {}
+    out, info, named, sag, fails, loaded, refs = [], [], set(st.setdefault("named", [])), {}, {}, {}, {}
+    # the bus-bar stage judges its feeds when its load was reached
+    bb, low = step == "busbar", args.load_pct < LOAD_JUDGED_PCT
+    feed = bb and not low
     lims = st["run"].get("regs", {})
     for k, a in after.items():
         b = before.get(k) or {}
@@ -210,21 +214,23 @@ def _judge(step: str, before: dict, after: dict, peaks: dict, samples: dict, st:
         why = [f"{'+'.join(uv)} latched during {step} (clear before; {regs})"] if uv else []
         if "VIN_UV_WARN" in uv:
             lim = hsc.vin_limit("VIN_UV_WARN_LIMIT", lims.get(k, {}).get("VIN_UV_WARN_LIMIT"))
-            low = f"poll min {min(v for v, _ in s):.2f} V over {len(s)} sample(s)" if s else "no poll sample"
-            why.append(f"VIN fell below the UV warn limit {lim} (58h) at least once, depth unknown ({low})")
+            pmin = f"poll min {min(v for v, _ in s):.2f} V over {len(s)} sample(s)" if s else "no poll sample"
+            why.append(f"VIN fell below the UV warn limit {lim} (58h) at least once, depth unknown ({pmin})")
         if wd:
             why.append(f"{'+'.join(wd)} set during {step} ({regs})")
         if why:
             parts = "; per-part reads: " + ", then ".join(pset[k]) if pset.get(k) else ""
             out.append(fails.setdefault(k, f"HSC FAIL {_where(k)}: {'; '.join(why)}{parts}"))
             named |= {f"{k}:{n}" for n in uv + wd}
-        elif vins and min(vins) < VIN_MIN_V:
-            out.append(
-                f"HSC WARN {_where(k)}: min VIN {min(vins):.2f} V during {step}, below {VIN_MIN_V} V ({len(s)} sample(s)); WARN only, not a finding"
-            )
         idle = [v for v, i in s if i is not None and 2 < i <= IDLE_MAX_A]
         ref = None if b.get("READ_VIN") is None else b["READ_VIN"] * VIN_LSB
-        ref = statistics.median(idle) if len(idle) >= 3 else ref
+        ref = refs[k] = statistics.median(idle) if len(idle) >= 3 else ref
+        iv = "idle VIN not read" if ref is None else f"idle VIN {ref:.2f} V"
+        if not why and vins and min(vins) < (FEED_VIN_MIN_V if feed else VIN_MIN_V):
+            what = f"min VIN {min(vins):.2f} V during {step}, below {VIN_MIN_V} V"
+            if feed:  # the bus-bar stage's floor is the marginal 12 V feed line
+                what = f"marginal 12 V feed: min VIN {min(vins):.2f} V, below {FEED_VIN_MIN_V:.2f} V ({iv}; bus-bar load) during {step}"
+            out.append(f"HSC WARN {_where(k)}: {what} ({len(s)} sample(s)); WARN only, not a finding")
         load = [v for v, i in s if i is not None and i >= SAG_MIN_A]
         if load and ref is not None and not ((sw0 or 0) | (sw1 or 0)) & 0x40:  # an HSC that read OFF gives no number
             loaded[k] = statistics.median(load)
@@ -240,15 +246,28 @@ def _judge(step: str, before: dict, after: dict, peaks: dict, samples: dict, st:
     for k, p in pk.items():
         w, f = (_plaus(lims.get(k, {}).get(n)) for n in ("IOUT_OC_WARN_LIMIT", "IOUT_OC_FAULT_LIMIT"))
         if w and p >= w:
-            trip = f"trip IOUT_OC_FAULT_LIMIT {f:.0f} A (46h), margin {f - p:.1f} A" if f else ""
-            out.append(
-                f"HSC WARN {_where(k)}: IOUT peak {p:.1f} A during {step}, at or above its own IOUT_OC_WARN_LIMIT {w:.0f} A (4Ah), {trip or 'IOUT_OC_FAULT_LIMIT (46h) not read'}; WARN only, not a tray verdict"
-            )
+            trip = f"trip IOUT_OC_FAULT_LIMIT {f:.1f} A (46h), " if f else "IOUT_OC_FAULT_LIMIT (46h) not read"
+            if f and p > f:
+                trip += f"the peak is {p - f:.1f} A over it"
+            elif f and p == f:
+                trip += "the peak is at its trip limit"
+            elif f:
+                trip += f"margin to the trip {f - p:.1f} A"
+            head = f"HSC WARN {_where(k)}: IOUT peak {p:.1f} A during {step}, at or above its own IOUT_OC_WARN_LIMIT {w:.0f} A (4Ah)"
+            if feed:
+                iv = "not read" if refs.get(k) is None else f"{refs[k]:.2f} V"
+                out.append(f"{head}, marginal 12 V feed, {trip}, idle VIN {iv}; WARN only, not a finding")
+            else:
+                out.append(f"{head}, {trip}; WARN only, not a tray verdict")
         others = [x for j, x in pk.items() if j != k]
         if len(others) >= 3 and (m := statistics.median(others)) > 0 and p > m * (1 + PEAK_PCT / 100):
             out.append(
                 f"HSC WARN {_where(k)}: IOUT peak {p:.1f} A during {step}, {(p / m - 1) * 100:.0f}% above the median {m:.1f} A of the other {len(others)} feeds; WARN only, not a finding"
             )
+    if bb and low and pk:
+        info.append(
+            f"HSC feed margin not judged: bus-bar load {args.load_pct:.0f}%, under {LOAD_JUDGED_PCT}% of the planned load; the peak WARNs above are the plain peak WARNs"
+        )
     gaps = {
         k: statistics.median([x for j, x in loaded.items() if j != k]) - v for k, v in loaded.items() if len(loaded) > 1
     }
@@ -265,7 +284,7 @@ def _judge(step: str, before: dict, after: dict, peaks: dict, samples: dict, st:
     st["named"] = sorted(named)
     uvl = [k for k, a in after.items() if (a["STATUS_INPUT"] or 0) & 0x30]
     judged = "UV latched: " + (", ".join(uvl) or "none")
-    if not uvl and args.load_pct < LOAD_JUDGED_PCT:
+    if not uvl and low:
         judged = f"UV not judged: load not reached ({args.load_pct:.0f}% of the planned load)"
     vmin = ", ".join(f"{k} {min(v for v, _ in s):.2f}" for k, s in samples.items() if s)
     sags = ", ".join(f"{k} {r:.1f}" for k, r in sag.items()) or "none"
