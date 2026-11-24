@@ -255,17 +255,11 @@ test that sags it: the chip survives and the input under-voltage flag stays
 latched, a tray trips off on over-current, or a chip drops off PCIe after the load. See `hsc_input_status` and
 `pcie_enum_count_after_tests` in the checks below.
 
-Every reset is `tt-smi -glx_reset`; `tt-smi -r` is never run. After each one the root port of every chip it left
-off PCIe is rescanned (every 5 s, up to 60 s) and the chips are recounted: `rescan_<reset>` (WARN) names a chip that
-came back only through the rescan, `recount_<n>` (FAIL) each chip still missing by BDF, tray and ASIC and how many each
-tray is short. A reset that cannot run here (not root and no `sudo -n -l` entry for `tt-smi -glx_reset`, or
-`--reset-gate` refuses) is a SKIP that says `reset cannot run: <why>`, and the run goes on. With the galaxy load the
-post-test reset is followed by the end sequence: `--end-delay-s` (60 s) of quiet, one fabric open and close with a
-10 s DRAM byte/DBI readback (`end_fabric`), the AER errors over it (`end_aer`), and one more `glx_reset` when either
-fails. The BMC SEL is read before the tests (`sel_history`: the last 7 days) and after the end sequence (`sel_new`: a
-thermal trip FAILs its tray, any other new FRB, power, voltage or temperature event is a WARN). Before the tests the
-firmware reads (`firmware_reads`, galaxy/fw_reads.py) check each chip's SPI boot-fs checksums (FAIL), its ETH mailbox
-firmware version and heartbeat and its TLB readback against the other chips (WARN).
+Every reset is `tt-smi -glx_reset`, never `tt-smi -r`. After each, the root port of every missing chip is rescanned
+(`rescan_<reset>` WARN names a chip back only that way) and the chips are recounted (`recount_<n>` FAIL names each
+missing one). A reset that cannot run here (no root or `sudo -n -l` entry, or `--reset-gate` refuses) is a SKIP that
+says why. With the galaxy load the post-test reset is followed by the end sequence (`end_fabric`, `end_aer`), the SEL
+is judged before the tests and after it (`sel_history`, `sel_new`), and `firmware_reads` runs before the tests.
 
 The reset cadence and test set per tier are in `tiers.py`; the gtest filters and
 pytest invocations themselves are `TESTS` / `PYTESTS` in `diag/device_tests.py`.
@@ -719,12 +713,11 @@ whose baked-in suite predates the phase has the `--skip-sys-triage` and
 
 ## Hardware captures
 
-`diag/captures.py` reads tray power, drops, hangs and PCIe errors around each stage and step:
-`captures.run(event, step, status, outdir, args)` for the events `stage-start`, `before`, `after`, `stage-end` and
-`reset` (before a reset or tray re-power) returns the FAIL and WARN lines; the rest goes to the log and to
-`<outdir>/captures/`. The same calls run as separate processes, for a sequencer outside this suite:
-`PYTHONPATH=<suite dir> python3 -m diag.captures <event> <step> <status> <outdir> [flags]`, and
-`python3 -m diag.captures sample` prints one HSC sweep for a telemetry stream.
+`diag/captures.py` reads tray power (HSC latches, VIN sag and peaks, VR power-good, bricks), chip drops and hangs
+and PCIe errors around each stage and step, and saves the evidence of a drop (tray power dump, the vendor CPLD dump
+when installed, SEL, kernel log) before a reset clears it. `python3 -m diag.captures <event> <step> <status> <outdir>`
+runs one event from outside the suite. It only reads unless asked: `--hsc-clear` (CLEAR_FAULTS), `--brick-mux` (on a
+host `--site-data` names) and `--hang-guard` (a hung chip off PCIe); every BMC I2C transaction takes `--i2c-lock`.
 
 In the galaxy load each event of `diag/events.py` runs them (one state per run, in `--output`'s directory), the
 links test as its own stage, every `glx_reset` first takes the `reset` read and the end sequence is followed by the
@@ -732,21 +725,6 @@ final HSC and brick read. After a bus-bar part that hung, failed a CCL or left a
 `glx_reset`, root-port rescan and recount runs before the next part. A tray's VR power-good fall stops the running
 part and holds the later ones; each part and stage logs a `LOAD` line from the poll. The finding lines, and every
 FAIL or WARN check of a phase that gates, go to `findings.txt` and `finding_stage.tsv` for the run report.
-
-- **HSC**: the run-start latches, limits and peaks (one pre-existing WARN); per stage a new under-voltage, OFF or
-  over-current latch is a FAIL naming the tray and HSC (and the step that set it), a loaded VIN under 11 V, a 12 V sag
-  over 13 mOhm and a peak at the HSC's own warn limit WARN. Under 80% of the planned load (`--load-pct`) a clean HSC
-  is not counted as a good feed.
-- **Poll** (one process per stage, ends with the caller): each HSC's VIN and IOUT, the BMC power sensors, each tray's VR
-  power-good byte (a fall on two polls in a row is a `12V FAIL`), each chip's power and current (peaks per chip), and
-  each root port's corrected AER a minute from sysfs and the kernel log (over 500 a minute: a weak-link WARN).
-- **Evidence** when a tray loses chips or a step hangs or fails: both HSCs and the CPLD power bytes of the tray, the
-  vendor CPLD dump when installed (`--cpld-dump`, else `cpld-dump.sh` on PATH; "not installed" otherwise), the SEL
-  and the kernel log. A read that needs root and is not listed by `sudo -n -l` exactly is skipped with the reason.
-- **Writes are opt-in**: `--hsc-clear` (CLEAR_FAULTS once per HSC per run, none when any HSC reads OFF), `--brick-mux`
-  (select a power-brick mux channel, read, restore; only on a host a `brick_mux <host|*>` row of `--site-data`
-  names), `--hang-guard` (take a chip whose config space reads all ones off PCIe, as root). Every BMC I2C transaction
-  takes `--i2c-lock`.
 
 ## Flags
 

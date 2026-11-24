@@ -53,14 +53,8 @@ from diag.hsc import judge_hsc, read_hsc_status  # noqa: E402
 from diag.model import FAIL, PASS, SKIP, WARN, Check, Phase  # noqa: E402
 from diag.qsfp import QSFP_TOOL_BIN, run_qsfp_tests  # noqa: E402
 from diag import report  # noqa: E402
-from diag.resets import (  # noqa: E402
-    END_DELAY_S,
-    add_args as add_reset_args,
-    fold_post_reset_snapshots,
-    reset_loop,
-    run_end,
-    run_post_test_reset,
-)
+from diag import resets  # noqa: E402
+from diag.resets import END_DELAY_S, fold_post_reset_snapshots, reset_loop, run_end, run_post_test_reset  # noqa: E402
 from diag.snapshot import (  # noqa: E402
     DEFAULT_TT_SMI_PROVISIONED,
     collect_fru_info,
@@ -98,15 +92,7 @@ def build_diag_arg_parser() -> argparse.ArgumentParser:
             "The other phases run as usual (their --skip-* flags skip them). Default: all of the tier's tests."
         ),
     )
-    ap.add_argument(
-        "--stage-order",
-        metavar="LIST",
-        help=(
-            "Run only these stages, comma-separated, in the order they run: reset (the pre-test resets), the tier's "
-            "tests as --tests names them, end (the post-test reset and the end sequence), eth (the ETH status read). "
-            "A stage not named does not run; the other phases run as usual. Not with --tests."
-        ),
-    )
+    ap.add_argument("--stage-order", metavar="LIST", help="Run only these stages in run order: reset, tests, end, eth")
     ap.add_argument(
         "--skip-tests", action="store_true", help="Skip the tests phase entirely: gtests, pytests and the galaxy load."
     )
@@ -202,7 +188,7 @@ def build_diag_arg_parser() -> argparse.ArgumentParser:
             flag, dest=key, type=typ, default=None, help=f"Galaxy load: {what}. Not given: the tier's plan."
         )
     captures.add_args(ap)
-    add_reset_args(ap)
+    resets.add_args(ap)
     events.add_args(ap)
     links.add_args(ap)
     ap.add_argument("--output", type=Path, default=Path("diag_report.json"))
@@ -427,20 +413,16 @@ def run_diag(
     # store-only forensics alongside the chip-level snapshot checks; runs even
     # when the tt-smi snapshot itself failed.
     collect_fru_info(snap_phase, dry_run)
-    # The post-test reset (phase 4), and after it, with the galaxy load or --stage-order, the end sequence. Before
-    # it, the firmware reads and the SEL; its SEL read is judged against the one taken here.
+    # With the galaxy load or --stage-order, the post-test reset is followed by the end sequence, and the firmware
+    # reads and the SEL are read first (the SEL again after it).
     post_test_plan = () if skip_reset or (skip_triage and stage_order is None) else plan.post_test_resets
     end_seq = bool(post_test_plan) and (plan.galaxy_load or stage_order is not None)
     live = not (input_snapshot or dry_run)
     sel_before, sel_why = read_sel() if end_seq and live else (None, "")
     if end_seq and live:
         snap_phase.add(history_check(sel_before, sel_why, time.time()))
-        _guarded(
-            snap_phase,
-            "firmware_reads",
-            WARN,
-            lambda: snap_phase.add(firmware_check(output.resolve().parent / "logs" / "firmware")),
-        )
+        fw_dir = output.resolve().parent / "logs" / "firmware"
+        _guarded(snap_phase, "firmware_reads", WARN, lambda: snap_phase.add(firmware_check(fw_dir)))
     _finish(report, snap_phase, t0, summary=True)
 
     # Where every phase drops its raw tool output. Derived once: the reset
@@ -551,21 +533,14 @@ def run_diag(
 
     # Phase 4: post-test reset. Its job is to hand phase 5 a freshly reset unit
     # and to guarantee the triage probes, which open every chip read-write,
-    # never run concurrently with the tests. After the galaxy load (or when --stage-order names end), the end
-    # sequence follows it in the same phase: the wait, the fabric open and close, the AER errors over it.
+    # never run concurrently with the tests.
     if post_test_plan:
         post_reset_phase = Phase(name="post_test_reset")
         t0 = time.time()
         aer_reset(lambda: run_post_test_reset(tt_smi_path, post_test_plan, post_reset_phase, dry_run, reset_gate))
         if end_seq:
-            _guarded(
-                post_reset_phase,
-                "end_sequence",
-                FAIL,
-                lambda: aer_reset(
-                    lambda: run_end(tt_smi_path, post_reset_phase, logs_dir / "end", dry_run, end_delay_s, reset_gate)
-                ),
-            )
+            end = lambda: run_end(tt_smi_path, post_reset_phase, logs_dir / "end", dry_run, end_delay_s, reset_gate)
+            _guarded(post_reset_phase, "end_sequence", FAIL, lambda: aer_reset(end))
             events.capture("stage-end", "end")  # the final HSC read, judged against the run's start, and the bricks
         if end_seq and live:
             sel_after, why = read_sel()

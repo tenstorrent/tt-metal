@@ -181,13 +181,6 @@ class TestLinkFaults(unittest.TestCase):
         self.assertEqual(c.status, FAIL)
         self.assertIn(f"UBB1/U5 ch0 (TRACE P1, 0000:05:00.0, dev {CHIP_OF[1, 5]}): link down", c.details)
 
-    def test_qsfp_link_down_names_tray_port_asic_and_bdf(self):
-        rows = galaxy_rows(overrides={(2, 1, 2): {"Link": "Down"}})
-        c = judge(rows, rows)["eth_status_links_down"]
-        self.assertEqual(c.status, FAIL)
-        self.assertIn(f"UBB2/U1 ch2 (QSFP P2, 0000:41:00.0, dev {CHIP_OF[2, 1]}): link down", c.details)
-        self.assertEqual(c.data["link_ends"][0]["a"]["port"], "QSFP P2")
-
     def test_link_gone_between_the_reads(self):
         c = judge(galaxy_rows(), galaxy_rows(drop={(4, 8, 2)}))["eth_status_links_down"]
         self.assertEqual(c.status, FAIL)

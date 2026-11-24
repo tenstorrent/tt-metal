@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import re
 import time
+from contextlib import suppress
 from pathlib import Path
 
 from .model import FAIL, PASS, SKIP, WARN, Check
@@ -19,21 +20,16 @@ KINDS = {"corr": "aer_dev_correctable", "nonfatal": "aer_dev_nonfatal", "fatal":
 # Correctable errors are normal background; they WARN only at this many new ones and this many per hour.
 CORR_MIN = 2
 CORR_PER_HOUR = 6.0
-# Corrected errors a minute on one root port that WARN as a weak link (one chip logged 5,230 in a run whose counters read
-# nothing, then dropped off the bus hours later).
-RATE_PER_MIN = 500
+RATE_PER_MIN = 500  # corrected errors a minute on one root port that WARN as a weak link
 BDF = re.compile(r"\b([0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7])\b")
 
 
 def tt_devices(devices: Path = PCI_DEVICES) -> list[Path]:
-    """The sysfs node of every Tenstorrent device on PCIe."""
     out = []
     for dev in sorted(devices.glob("*")):
-        try:
+        with suppress(OSError):
             if (dev / "vendor").read_text().strip() == TENSTORRENT_VENDOR:
                 out.append(dev)
-        except OSError:
-            pass
     return out
 
 
@@ -57,7 +53,6 @@ def _total(path: Path) -> int | None:
 
 
 def root_ports(devices: Path = PCI_DEVICES) -> dict[Path, list[Path]]:
-    """Each Tenstorrent chip's upstream PCIe port: ``{port: [chips]}``."""
     out: dict[Path, list[Path]] = {}
     for dev in tt_devices(devices):
         out.setdefault(dev.resolve().parent, []).append(dev)
@@ -65,21 +60,18 @@ def root_ports(devices: Path = PCI_DEVICES) -> dict[Path, list[Path]]:
 
 
 def port_corrected(port: Path, chips: list[Path]) -> int | None:
-    """A root port's corrected errors: aer_rootport_total_err_cor (every one the port took) or its own and its chips'
-    aer_dev_correctable, the larger, so a port whose one counter stays put while the other moves still counts."""
+    """A root port's corrected errors: the larger of aer_rootport_total_err_cor and its own and its chips'
+    aer_dev_correctable (either can stay put while the other moves)."""
     own = [n for p in (port, *chips) if (n := _total(p / "aer_dev_correctable")) is not None]
-    try:
-        root = int((port / "aer_rootport_total_err_cor").read_text().split()[0])
-    except (OSError, ValueError, IndexError):
-        root = None
-    vals = [x for x in (root, sum(own) if own else None) if x is not None]
-    return max(vals) if vals else None
+    vals = [sum(own)] if own else []
+    with suppress(OSError, ValueError, IndexError):
+        vals.append(int((port / "aer_rootport_total_err_cor").read_text().split()[0]))
+    return max(vals, default=None)
 
 
 def kernel_events(lines) -> dict[str, list[int]]:
-    """``{bdf: [corrected, uncorrected]}`` from kernel log lines: one per native 'PCIe Bus Error' line, or per
-    firmware-first record's 'device_id: <bdf>' line with that record's 'event severity:' (firmware-first hosts report
-    through these records and leave the sysfs counters at 0)."""
+    """``{bdf: [corrected, uncorrected]}`` from kernel log lines: native 'PCIe Bus Error' lines, and firmware-first
+    records ('device_id: <bdf>' with the record's 'event severity:'; those hosts leave the sysfs counters at 0)."""
     ev: dict[str, list[int]] = {}
     sev: dict[str, str] = {}
     for ln in lines:
@@ -145,22 +137,15 @@ class AerWindow:
         return aer_check(self.new, (time.time() - self.t0) / 3600, len(self.last), unread(self.first, self.last))
 
 
-def judge(new: dict, hours: float) -> tuple[dict, dict]:
+def judge(new: dict, hours: float) -> tuple[list, list]:
     """The chips with uncorrectable new errors, and those with correctable ones at CORR_MIN and CORR_PER_HOUR."""
-    bad = {b: d for b, d in new.items() if d.get("nonfatal") or d.get("fatal")}
-    noisy = {
-        b: d
-        for b, d in new.items()
-        if d.get("corr", 0) >= CORR_MIN and d["corr"] >= CORR_PER_HOUR * hours and b not in bad
-    }
-    return bad, noisy
+    bad = [b for b, d in new.items() if d.get("nonfatal") or d.get("fatal")]
+    return bad, [b for b, d in new.items() if CORR_MIN <= d.get("corr", 0) >= CORR_PER_HOUR * hours and b not in bad]
 
 
 def aer_lines(before: dict, after: dict, hours: float, when: str) -> list[str]:
-    """One finding line per chip whose new errors between two reads judge FAIL or WARN, e.g.
-    'AER FAIL 81:00.0 (tray 4): nonfatal +1 during <stage>'."""
-    new = aer_new(before, after)
-    bad, noisy = judge(new, hours)
+    """'AER FAIL 81:00.0 (tray 4): nonfatal +1 <when>': a line per chip whose new errors judge FAIL or WARN."""
+    bad, noisy = judge(new := aer_new(before, after), hours)
     return [
         f"AER {'FAIL' if b in bad else 'WARN'} {b.split(':', 1)[-1]} (tray {chip(b)['tray']}): "
         + ", ".join(f"{k} +{n}" for k, n in new[b].items())

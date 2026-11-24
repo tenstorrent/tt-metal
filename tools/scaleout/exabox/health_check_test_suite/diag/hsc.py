@@ -2,18 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tray power reads through the in-band BMC channel (``ipmitool raw``): each Galaxy tray's two hot-swap controllers
-(HSCs), each tray CPLD's power-good byte, the BMC's power sensors and, opt-in, the power bricks behind their I2C mux.
-
-Each tray's HSCs latch an input under-voltage flag when the tray's 12 V input sags, and an over-current fault when they
-trip on the tray's current (usually turning the tray off). A weak bus bar usually does not fail the test that sags it:
-the chip survives and the flag stays latched. So the flags are read before and after the load and a newly set one is
-reported.
-
-Every transaction is one ipmitool call under one box-wide lock file, so two readers never overlap on the BMC's I2C
-master (overlapping write-reads garble the command byte and latch the HSCs' communication-fault bit). Only reads,
-except two opt-in writes: CLEAR_FAULTS to a tray HSC, and the brick mux's channel select and its restore.
-"""
+"""Tray power reads through the in-band BMC (``ipmitool raw``): the tray hot-swap controllers (HSCs), the tray CPLDs'
+power-good byte, the BMC's power sensors and, opt-in, the power bricks. A weak bus bar seldom fails the test that sags
+it, but the HSC's under-voltage flag stays latched, so the flags are read before and after the load. Every transaction
+takes one box-wide lock (overlapping I2C write-reads latch the HSCs' comm-fault bit). Only reads, except the opt-in
+CLEAR_FAULTS and brick mux select/restore."""
 from __future__ import annotations
 
 import fcntl
@@ -22,8 +15,9 @@ import shlex
 import shutil
 import subprocess
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 
+from .common import root_cmd
 from .model import FAIL, PASS, SKIP, WARN, Check, Phase
 
 # Tray number -> I2C bus of its HSCs, and the two HSC addresses on each.
@@ -31,30 +25,12 @@ HSC_BUS = {1: 0x11, 2: 0x13, 3: 0x0D, 4: 0x0F}
 HSC_ADDRS = (0x40, 0x42)
 TRAY_CPLD = 0x80  # on the same bus as the tray's HSCs
 
-# PMBus registers read: name -> (code, bytes). The two peaks clear when read.
-REG = {
-    "STATUS_WORD": (0x79, 2),
-    "STATUS_VOUT": (0x7A, 1),
-    "STATUS_IOUT": (0x7B, 1),
-    "STATUS_INPUT": (0x7C, 1),
-    "STATUS_TEMPERATURE": (0x7D, 1),
-    "STATUS_CML": (0x7E, 1),
-    "STATUS_MFR_SPECIFIC": (0x80, 1),
-    "READ_VIN": (0x88, 2),
-    "READ_VOUT": (0x8B, 2),
-    "READ_IOUT": (0x8C, 2),
-    "READ_PIN": (0x97, 2),
-    "FAULT_RECORD": (0xFA, 2),
-    "FAULT_RECORD_LAST": (0xFB, 2),
-    "IOUT_OC_FAULT_LIMIT": (0x46, 2),
-    "IOUT_OC_WARN_LIMIT": (0x4A, 2),
-    "VIN_OV_FAULT_LIMIT": (0x55, 2),
-    "VIN_OV_WARN_LIMIT": (0x57, 2),
-    "VIN_UV_WARN_LIMIT": (0x58, 2),
-    "VIN_UV_FAULT_LIMIT": (0x59, 2),
-    "READ_IOUT_PEAK": (0xA6, 2),
-    "READ_TEMP_PEAK": (0xAF, 2),
-}
+# PMBus registers: name -> (code, bytes). The two peaks clear when read.
+_R = """STATUS_WORD 79 2 STATUS_VOUT 7A 1 STATUS_IOUT 7B 1 STATUS_INPUT 7C 1 STATUS_TEMPERATURE 7D 1 STATUS_CML 7E 1
+STATUS_MFR_SPECIFIC 80 1 READ_VIN 88 2 READ_VOUT 8B 2 READ_IOUT 8C 2 READ_PIN 97 2 FAULT_RECORD FA 2
+FAULT_RECORD_LAST FB 2 IOUT_OC_FAULT_LIMIT 46 2 IOUT_OC_WARN_LIMIT 4A 2 VIN_OV_FAULT_LIMIT 55 2 VIN_OV_WARN_LIMIT 57 2
+VIN_UV_WARN_LIMIT 58 2 VIN_UV_FAULT_LIMIT 59 2 READ_IOUT_PEAK A6 2 READ_TEMP_PEAK AF 2""".split()
+REG = {n: (int(c, 16), int(b)) for n, c, b in zip(_R[::3], _R[1::3], _R[2::3])}
 STATUS_WORD, STATUS_INPUT = REG["STATUS_WORD"], REG["STATUS_INPUT"]
 VIN_LIMITS = ("VIN_OV_FAULT_LIMIT", "VIN_OV_WARN_LIMIT", "VIN_UV_WARN_LIMIT", "VIN_UV_FAULT_LIMIT")
 VIN_LSB, IOUT_LSB = 0.03125, 0.0625  # V and A per count (READ_VIN, READ_VOUT; READ_IOUT, READ_IOUT_PEAK)
@@ -67,22 +43,9 @@ INPUT_BITS = {0x10: "VIN_UV_FAULT", 0x20: "VIN_UV_WARN"}
 FLAG_ORDER = (*WORD_BITS.values(), *INPUT_BITS.values())
 CML = 0x02  # STATUS_WORD's communication-fault bit: not power
 
-# BMC sensors (Get Sensor Reading): number -> scale. Power_UBB0-3 (trays 1-4, W), the HSC sum (W), Power_PSU0-3 (W),
-# inlet and outlet air (C).
-SENSORS = {
-    0x35: 10,
-    0x36: 10,
-    0x37: 10,
-    0x38: 10,
-    0x60: 2,
-    0x31: 20,
-    0x32: 20,
-    0x33: 20,
-    0x34: 20,
-    0x1E: 1,
-    0x1F: 1,
-    0x3E: 1,
-}
+# BMC sensor number -> scale: Power_UBB0-3 (trays 1-4), the HSC sum, Power_PSU0-3 (W); inlet and outlet air (C).
+SENSORS = dict(zip((0x35, 0x36, 0x37, 0x38, 0x60), (10, 10, 10, 10, 2)))
+SENSORS |= dict(zip((0x31, 0x32, 0x33, 0x34, 0x1E, 0x1F, 0x3E), (20, 20, 20, 20, 1, 1, 1)))
 
 # The power bricks U1-U8 (two per mux channel) and the 54 V fan rail's current monitor, on the box's power board.
 BRICK_BUS, BRICK_MUX = 0x09, 0xEC
@@ -95,14 +58,12 @@ LOCK_WAIT_S = 10
 HscStatus = dict[tuple[int, int], "tuple[int, int] | None"]  # (tray, addr) -> (STATUS_WORD, STATUS_INPUT)
 
 
-def lin11(x: int) -> float:
-    """A PMBus LINEAR11 word."""
+def lin11(x: int) -> float:  # a PMBus LINEAR11 word
     e, m = x >> 11, x & 0x7FF
     return (m - 2048 if m >= 1024 else m) * 2.0 ** (e - 32 if e >= 16 else e)
 
 
-def tray_bdfs(tray: int) -> str:
-    """'81:00.0-88:00.0': the tray's chips."""
+def tray_bdfs(tray: int) -> str:  # '81:00.0-88:00.0': the tray's chips
     n = {1: 0, 2: 4, 3: 0xC, 4: 8}[tray]
     return f"{n:x}1:00.0-{n:x}8:00.0"
 
@@ -112,37 +73,27 @@ class Bmc:
     ``why`` says why there is no route (``cmd`` is then empty)."""
 
     def __init__(self, ipmitool: str | None = None, lock: str | None = None):
-        self.lock = lock or f"/tmp/hc-bmc-{os.getuid()}.lock"
-        self.cmd: list[str] = []
-        self.why = ""
-        self._listed: dict[tuple, bool] = {}
+        self.lock, self.cmd, self.why, self._listed = lock or f"/tmp/hc-bmc-{os.getuid()}.lock", [], "", {}
         if ipmitool:
             self.cmd = shlex.split(ipmitool)
             self.why = "" if shutil.which(self.cmd[0]) else f"{self.cmd[0]} not found"
         elif not shutil.which("ipmitool"):
             self.why = "ipmitool not found"
-        elif os.geteuid() == 0:
-            self.cmd = ["ipmitool"]
         else:
-            self.cmd = ["sudo", "-n", "ipmitool"]
-            if not self.listed("raw", "0x06", "0x52", "0x11", "0x40", "0x02", "0x79"):
-                self.why = "no root, and sudo -n -l does not list ipmitool raw 0x06 0x52"
+            self.cmd = (root_cmd(["ipmitool", "raw", "0x06", "0x52", "0x11", "0x40", "0x02", "0x79"])[0] or [])[:-7]
+            self.why = "" if self.cmd else "no root, and sudo -n -l does not list ipmitool raw 0x06 0x52"
         if self.why:
             self.cmd = []
 
     def listed(self, *args: str) -> bool:
-        """Whether this exact ipmitool command may run: always as root or a given command; under sudo only when
-        ``sudo -n -l`` lists it (some sites list fixed command lines only)."""
-        if self.cmd[:1] != ["sudo"]:
-            return True
-        if args not in self._listed:
-            self._listed[args] = sudo_listed(["ipmitool", *args])
-        return self._listed[args]
+        """Whether this exact ipmitool command may run: under sudo only when ``sudo -n -l`` lists it."""
+        if self.cmd[:1] == ["sudo"] and args not in self._listed:
+            self._listed[args] = root_cmd(["ipmitool", *args])[0] is not None
+        return self._listed.get(args, True)
 
     @contextmanager
     def locked(self):
-        """The box-wide I2C lock, held for one transaction (or one mux select-read-restore). A holder past the wait, or a
-        lock file this user cannot open, does not stop the read."""
+        """The box-wide I2C lock; a holder past LOCK_WAIT_S or an unopenable lock file does not stop the read."""
         try:
             f = open(self.lock, "a")
         except OSError:
@@ -164,13 +115,14 @@ class Bmc:
         """One ``ipmitool raw`` call; the bytes it returned, None when it failed or there is no route."""
         if not self.cmd:
             return None
-        cmd = [*self.cmd, "raw", *(f"{a:#04x}" for a in args)]
         try:
-            if lock:
-                with self.locked():
-                    cp = subprocess.run(cmd, capture_output=True, text=True, timeout=READ_TIMEOUT_S)
-            else:
-                cp = subprocess.run(cmd, capture_output=True, text=True, timeout=READ_TIMEOUT_S)
+            with self.locked() if lock else nullcontext():
+                cp = subprocess.run(
+                    [*self.cmd, "raw", *(f"{a:#04x}" for a in args)],
+                    capture_output=True,
+                    text=True,
+                    timeout=READ_TIMEOUT_S,
+                )
             return [int(b, 16) for b in cp.stdout.split()] if cp.returncode == 0 else None
         except (OSError, subprocess.TimeoutExpired, ValueError):
             return None
@@ -181,30 +133,18 @@ class Bmc:
         return int.from_bytes(bytes(b), "little") if b is not None and len(b) == nbytes else None
 
     def hsc(self, tray: int, addr: int, name: str) -> int | None:
-        code, n = REG[name]
-        return self.i2c(HSC_BUS[tray], addr, code, n)
+        return self.i2c(HSC_BUS[tray], addr, *REG[name])
 
-    def clear_faults(self, tray: int, addr: int) -> bool:
-        """PMBus CLEAR_FAULTS (a send-byte): resets the HSC's status latches and nothing else."""
+    def clear_faults(self, tray: int, addr: int) -> bool:  # a send-byte: resets the HSC's status latches only
         return self.raw(0x06, 0x52, HSC_BUS[tray], addr, 0x00, CLEAR_FAULTS) is not None
 
     def sensor(self, num: int) -> str:
         """One BMC sensor scaled, 'NA' when the BMC marks it unavailable, 'ERR' when it did not answer."""
         b = self.raw(0x04, 0x2D, num)
-        if not b or len(b) < 2:
-            return "ERR"
-        return "NA" if b[1] & 0x20 else str(b[0] * SENSORS[num])
+        return "ERR" if not b or len(b) < 2 else "NA" if b[1] & 0x20 else str(b[0] * SENSORS[num])
 
-    def cpld(self, tray: int, reg: int) -> int | None:
-        """One byte of a tray CPLD: 0x19 VR power-good, 0x1E chip alive, 0x2D thermal trip (one bit per chip)."""
+    def cpld(self, tray: int, reg: int) -> int | None:  # 0x19 VR power-good, 0x1E chip alive, 0x2D thermal trip
         return self.i2c(HSC_BUS[tray], TRAY_CPLD, reg, 1)
-
-
-def sudo_listed(argv: list[str]) -> bool:
-    try:
-        return subprocess.run(["sudo", "-n", "-l", *argv], capture_output=True, timeout=15).returncode == 0
-    except (OSError, subprocess.TimeoutExpired):
-        return False
 
 
 def read_regs(bmc: Bmc, names, trays=HSC_BUS) -> dict[tuple[int, int], dict[str, int | None]]:
@@ -216,9 +156,8 @@ def read_regs(bmc: Bmc, names, trays=HSC_BUS) -> dict[tuple[int, int], dict[str,
             r = out[(t, a)] = {}
             for n in names:
                 code, nb = REG[n]
-                listed = n not in VIN_LIMITS or bmc.listed(
-                    "raw", *(f"{x:#04x}" for x in (6, 0x52, HSC_BUS[t], a, nb, code))
-                )
+                cmd = ("raw", *(f"{x:#04x}" for x in (6, 0x52, HSC_BUS[t], a, nb, code)))
+                listed = n not in VIN_LIMITS or bmc.listed(*cmd)
                 r[n] = bmc.hsc(t, a, n) if listed and (n == names[0] or r[names[0]] is not None) else None
     return out
 
@@ -242,28 +181,29 @@ def flag_names(flags: set[str]) -> str:
 
 
 def vin_limit(name: str, raw: int | None) -> str:
-    """A VIN limit as text: bits 6:0 x 125 mV; a UV fault limit of 0 means UV fault reporting is off."""
+    """A VIN limit: bits 6:0 x 125 mV; a UV fault limit of 0 turns UV fault reporting off."""
     if raw is None:
         return "not read"
-    if name == "VIN_UV_FAULT_LIMIT" and raw % 128 == 0:
-        return "0 V (UV fault reporting disabled)"
-    return f"{(raw % 128) * 0.125:.2f} V"
+    return (
+        "0 V (UV fault reporting disabled)"
+        if name == "VIN_UV_FAULT_LIMIT" and raw % 128 == 0
+        else f"{(raw % 128) * 0.125:.2f} V"
+    )
 
 
 def _brick(bmc: Bmc, addr: int) -> tuple:
-    """(volts, amps, watts, temp_C, vin) of one brick, None = not read. Vout uses the brick's own VOUT_MODE exponent:
-    bricks of one box differ (2^-10 or 2^-12 V), so a fixed scale reads some 4x off."""
-    rd = lambda code, n=2: bmc.i2c(BRICK_BUS, addr, code, n, lock=False)  # noqa: E731
-    mode, vout, vin, iout, temp = rd(0x20, 1), rd(0x8B), rd(0x88), rd(0x8C), rd(0x8D)
+    """(volts, amps, watts, temp_C, vin) of one brick, None = not read. Vout by the brick's own VOUT_MODE exponent:
+    bricks of one box differ (2^-10 or 2^-12 V)."""
+    regs = ((0x20, 1), (0x8B, 2), (0x88, 2), (0x8C, 2), (0x8D, 2))
+    mode, vout, vin, iout, temp = (bmc.i2c(BRICK_BUS, addr, c, n, lock=False) for c, n in regs)
     v = vout * 2.0 ** ((mode & 31) - (32 if mode & 16 else 0)) if None not in (mode, vout) and mode >> 5 == 0 else None
-    i = lin11(iout) if iout is not None else None
-    lin = lambda x: lin11(x) if x is not None else None  # noqa: E731
-    return v, i, v * i if None not in (v, i) else None, lin(temp), lin(vin)
+    i, temp, vin = (None if x is None else lin11(x) for x in (iout, temp, vin))
+    return v, i, v * i if None not in (v, i) else None, temp, vin
 
 
 def brick_pass(bmc: Bmc) -> tuple[list[tuple], list[str]]:
     """One pass over the bricks and the fan rail: ``(name, volts, amps, watts, temp_C, vin)`` rows and notes. Per mux
-    channel, under one hold of the I2C lock: read the mux's control byte, select the channel, read its two bricks and
+    channel, under one hold of the I2C lock: save the mux's control byte, select the channel, read its two bricks and
     write the saved byte back, also on an error."""
     rows, notes = [], []
     for ch in range(4):

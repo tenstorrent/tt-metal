@@ -2,16 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""The resets: tt-smi -glx_reset only, never tt-smi -r. After each, the root port of every chip it left off PCIe is
-rescanned and the chips are recounted, the missing ones named by BDF, tray and ASIC. Phase 2 (the pre-test reset
-loop), phase 4 (the post-test reset), the recovery between bus-bar steps and the end sequence after the post-test
-reset. A reset that cannot run here (no root or sudo rule for it, the reset gate refuses) is a SKIP that says why."""
+"""The resets, tt-smi -glx_reset only: phase 2 (the pre-test reset loop), phase 4 (the post-test reset and the end
+sequence) and the recovery between bus-bar steps."""
 from __future__ import annotations
 
 import shlex
 import subprocess
 import time
 from collections import Counter
+from contextlib import suppress
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Sequence
@@ -30,21 +29,13 @@ RESET_FLAGS = ("-glx_reset",)
 SYS = Path("/sys")
 ALL_BDFS = tuple(expected_bdf(t, a) for t in TRAY_TO_UBB_NIBBLE for a in range(1, 9))
 RESCAN_WAIT_S, RESCAN_EVERY_S = 60, 5  # a missing chip's root port is rescanned every 5 s until it is back, up to 60 s
-END_DELAY_S = 60  # end sequence: the wait after the post-test reset before the fabric open
-END_DBI_S = 10  # the end sequence's DRAM byte/DBI readback on the open mesh, s
+END_DELAY_S, END_DBI_S = 60, 10  # end sequence: the wait before the fabric open; its DRAM byte/DBI readback, s
 
 
 def add_args(ap) -> None:
+    ap.add_argument("--reset-gate", metavar="CMD", help="run before each reset; a non-zero exit skips that reset")
     ap.add_argument(
-        "--reset-gate",
-        metavar="CMD",
-        help="A command run before every reset; a non-zero exit skips that reset, its last output line saying why.",
-    )
-    ap.add_argument(
-        "--end-delay-s",
-        type=int,
-        default=END_DELAY_S,
-        help=f"End sequence: seconds between the post-test reset and the fabric open. Default {END_DELAY_S}.",
+        "--end-delay-s", type=int, default=END_DELAY_S, help="s from the post-test reset to the end fabric open"
     )
 
 
@@ -58,8 +49,8 @@ def pcie_bdfs() -> list[str] | None:
 
 
 def recount_check(name: str, bdfs: list[str] | None) -> Check:
-    """The chip recount after a reset, from the PCIe listing: how many of the 32 are back, each missing one by BDF, tray
-    and ASIC, and how many each tray is short."""
+    """The chip recount after a reset: how many of the 32 are back, each missing one by BDF, tray and ASIC, and how
+    many each tray is short."""
     if bdfs is None:
         return Check(name=name, status=FAIL, details="chips could not be listed (lspci failed)", ip="pcie")
     c = pcie_enum_check([{"board_info": {"bus_id": b}} for b in bdfs], name)
@@ -71,39 +62,34 @@ def recount_check(name: str, bdfs: list[str] | None) -> Check:
 
 
 def root_port(bdf: str) -> str | None:
-    """The bridge whose secondary bus is *bdf*'s bus: the port to rescan, found also for a chip gone from PCIe."""
+    """The bridge whose secondary bus is *bdf*'s bus, found also for a chip gone from PCIe."""
     bus = str(int(bdf.split(":")[-2], 16))
     for f in sorted((SYS / "bus/pci/devices").glob("*/secondary_bus_number")):
-        try:
+        with suppress(OSError):
             if f.read_text().strip() == bus:
                 return f.parent.name
-        except OSError:
-            continue
     return None
 
 
 def rescan(missing: Sequence[str]) -> tuple[dict[str, str], list[str]]:
-    """Rescan the root port of each *missing* chip every RESCAN_EVERY_S s until the chip is back on PCIe, up to
-    RESCAN_WAIT_S. The chips that came back, each with its root port, and why a root port could not be rescanned."""
+    """Rescan the root port of each *missing* chip until it is back on PCIe, up to RESCAN_WAIT_S: the chips back with
+    their root port, and why a root port could not be rescanned."""
     ports = {b: root_port(b) for b in missing}
     whys = [f"{b}: root port not found" for b, rp in ports.items() if rp is None]
-    cmds = {}
-    for rp in sorted({rp for rp in ports.values() if rp}):
-        cmds[rp], why = root_cmd(["tee", str(SYS / "bus/pci/devices" / rp / "rescan")])
-        if why:
-            whys.append(why)
-    left, back, t0 = {b: rp for b, rp in ports.items() if cmds.get(rp)}, {}, time.time()
+    rps = sorted(set(ports.values()) - {None})
+    cmds = {rp: root_cmd(["tee", str(SYS / "bus/pci/devices" / rp / "rescan")]) for rp in rps}
+    whys += [why for _, why in cmds.values() if why]
+    left, back, t0 = {b: rp for b, rp in ports.items() if rp and cmds[rp][0]}, {}, time.time()
     while left and time.time() - t0 < RESCAN_WAIT_S:
         for rp in sorted(set(left.values())):
-            subprocess.run(cmds[rp], input="1", capture_output=True, text=True, timeout=15)
+            subprocess.run(cmds[rp][0], input="1", capture_output=True, text=True, timeout=15)
         time.sleep(RESCAN_EVERY_S)
         now = set(pcie_bdfs() or ())
         back.update({b: left.pop(b) for b in list(left) if b in now})
     return back, whys
 
 
-def _gate(cmd: str | None) -> str:
-    """Why the reset gate refuses a reset now; "" when there is none or it allows it."""
+def _gate(cmd: str | None) -> str:  # why the reset gate refuses a reset now, or ""
     if not cmd:
         return ""
     try:
@@ -115,17 +101,10 @@ def _gate(cmd: str | None) -> str:
 
 
 def glx_reset(
-    tt_smi: str,
-    phase: Phase,
-    name: str,
-    recount: str,
-    dry_run: bool,
-    logs_dir: Path | None = None,
-    gate: str | None = None,
+    tt_smi, phase: Phase, name: str, recount: str, dry_run: bool, logs_dir=None, gate=None
 ) -> list[str] | None:
-    """One tt-smi -glx_reset as check *name*, then the rescan of the root ports of the chips it left missing (check
-    rescan_<name> when one came back only that way or a port could not be rescanned) and the recount as check
-    *recount*. The chips on PCIe after it, or None when the reset could not run (a SKIP 'reset cannot run: <why>')."""
+    """One tt-smi -glx_reset as check *name*, the rescan of the chips it left missing (check rescan_<name>) and the
+    recount (check *recount*): the chips on PCIe after it, or None when it could not run (a SKIP that says why)."""
     cmd, why = ([tt_smi, "-glx_reset"], "") if dry_run else root_cmd([tt_smi, "-glx_reset"])
     why = why or ("" if dry_run else _gate(gate))
     if why:
@@ -145,20 +124,10 @@ def glx_reset(
     if status == FAIL:
         for line in ((cp.stderr or "").strip() or (cp.stdout or "").strip()).splitlines()[-5:]:
             log(f"  ! {line}")
-    phase.add(
-        Check(
-            name=name,
-            status=status,
-            details=f"tt-smi -glx_reset rc={cp.returncode} dur={dt:.1f}s",
-            data={
-                "rc": cp.returncode,
-                "duration_s": dt,
-                "stdout_tail": (cp.stdout or "")[-2000:],
-                "stderr_tail": (cp.stderr or "")[-2000:],
-            },
-            ip="other",
-        )
-    )
+    out, err = (cp.stdout or "")[-2000:], (cp.stderr or "")[-2000:]
+    data = {"rc": cp.returncode, "duration_s": dt, "stdout_tail": out, "stderr_tail": err}
+    details = f"tt-smi -glx_reset rc={cp.returncode} dur={dt:.1f}s"
+    phase.add(Check(name=name, status=status, details=details, data=data, ip="other"))
     if dry_run:
         return list(ALL_BDFS)
     bdfs = pcie_bdfs()
@@ -167,17 +136,9 @@ def glx_reset(
         back, whys = rescan(missing)
         bdfs = pcie_bdfs() if back else bdfs
         if back or whys:
-            phase.add(
-                Check(
-                    name=f"rescan_{name}",
-                    status=WARN if back else SKIP,
-                    details="; ".join(
-                        [*(f"{b} back only after a rescan of root port {rp}" for b, rp in back.items()), *whys]
-                    ),
-                    data={"back": back, "not_rescanned": whys},
-                    ip="pcie",
-                )
-            )
+            said = "; ".join([*(f"{b} back only after a rescan of root port {rp}" for b, rp in back.items()), *whys])
+            data = {"back": back, "not_rescanned": whys}
+            phase.add(Check(name=f"rescan_{name}", status=WARN if back else SKIP, details=said, data=data, ip="pcie"))
     phase.add(recount_check(recount, bdfs))
     return bdfs
 
@@ -227,24 +188,16 @@ def reset_loop(
 
 
 def recover(args, outdir: Path) -> list[str]:
-    """Recovery between bus-bar steps, after one that did not pass: a glx_reset, root-port rescan and recount. Its
-    finding lines: why the reset could not run, the chips back only after a rescan, the chips still missing; none when
+    """Recovery after a bus-bar step that did not pass: a glx_reset, rescan and recount; its finding lines, none when
     every chip is back."""
     if args.skip_reset:
         return ["reset cannot run: --skip-reset"]
     phase = Phase(name="recover")
     try:
-        glx_reset(
-            resolve_tt_smi(args.tt_smi_path),
-            phase,
-            "reset_recover",
-            "recount_recover",
-            args.dry_run,
-            outdir,
-            args.reset_gate,
-        )
-    except SystemExit as e:  # resolve_tt_smi: no tt-smi
+        tt_smi = resolve_tt_smi(args.tt_smi_path)
+    except SystemExit as e:  # no tt-smi
         return [f"reset cannot run: {e}"]
+    glx_reset(tt_smi, phase, "reset_recover", "recount_recover", args.dry_run, outdir, args.reset_gate)
     return [
         c.details if c.status == SKIP else f"{c.status} {c.name}: {c.details}" for c in phase.checks if c.status != PASS
     ]
@@ -315,7 +268,7 @@ def run_post_test_reset(
     tt_smi_path: str | None, plan: Sequence[str], phase: Phase, dry_run: bool, gate: str | None = None
 ) -> bool:
     """Reset the unit between the tests and the triage phase. False when the reset left the unit degraded; only
-    the checks it adds are judged, not ones *phase* already held. A reset that cannot run leaves the unit as it is.
+    the checks it adds are judged, not ones *phase* already held.
 
     Deliberately bare: reset_loop() is called without snapshot_out /
     post_reset_phases, so it takes no revalidation snapshot and stays out of
@@ -356,10 +309,8 @@ def run_post_test_reset(
 
 
 def run_end(tt_smi_path: str | None, phase: Phase, out: Path, dry_run: bool, delay_s: int, gate: str | None) -> None:
-    """The end sequence, after the post-test reset: *delay_s* of quiet, then one whole-box fabric open and close
-    with the DRAM byte/DBI readback on the open mesh, judged with the AER errors over it. A failed or hung open, or an
-    uncorrectable AER error, gets one more glx_reset, rescan and recount, so no chip is left hung. Not run when the
-    post-test reset did not leave every chip back: the open would test nothing the recount has not already named."""
+    """After a post-test reset that left every chip back: *delay_s* of quiet, one fabric open and close with the DRAM
+    byte/DBI readback, judged with the AER errors over it; a FAIL gets one more glx_reset so no chip is left hung."""
     reset = next((c for c in reversed(phase.checks) if c.name == "post_test_reset_ok"), None)
     if reset is not None and reset.status != PASS:
         phase.add(Check(name="end_fabric", status=SKIP, details=f"not run: {reset.details}", ip="eth"))
@@ -369,15 +320,9 @@ def run_end(tt_smi_path: str | None, phase: Phase, out: Path, dry_run: bool, del
         time.sleep(delay_s)
     before = {} if dry_run else read_aer()
     t0 = time.time()
-    argv = ("fabric_open.py", "--rows", "{out}/rows.jsonl", "--beat", "{out}/beat", "--label", "open")
-    opened = run_step(
-        Step(
-            "fabric", "fabric open and close after the reset", (*argv, "--dbi-wall-s", str(END_DBI_S)), 60 + END_DBI_S
-        ),
-        out,
-        dry_run,
-        test="end",
-    )
+    argv = ("fabric_open.py", "--rows", "{out}/rows.jsonl", "--beat", "{out}/beat", "--label", "open", "--dbi-wall-s")
+    step = Step("fabric", "fabric open and close after the reset", (*argv, str(END_DBI_S)), 60 + END_DBI_S)
+    opened = run_step(step, out, dry_run, test="end")
     phase.add(opened)
     if dry_run:
         return

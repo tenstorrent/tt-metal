@@ -459,7 +459,10 @@ class TestRunStep(unittest.TestCase):
 
     def test_a_tray_drop_shape_goes_to_the_mix_with_its_trays(self):
         mix = next(s for s in busbar.plan("plain", shape="h3-replay", trays="1,2,3,4", shape_tray=3) if s.name == "mix")
-        self.assertIn(("--trays", "1,2,3,4", "--shape", "h3-replay", "--shape-tray", "3"), [mix.argv[i : i + 6] for i in range(len(mix.argv))])
+        self.assertIn(
+            ("--trays", "1,2,3,4", "--shape", "h3-replay", "--shape-tray", "3"),
+            [mix.argv[i : i + 6] for i in range(len(mix.argv))],
+        )
         for bad in ({"shape": "h3-replay"}, {"shape": "h3-replay", "trays": "2", "shape_tray": 5}):
             with self.assertRaises(ValueError):
                 busbar.plan("plain", **bad)
@@ -824,12 +827,11 @@ class TestLinks(unittest.TestCase):
             resets, "reset_loop", fake_loop
         ), mock.patch.object(
             diag_runner, "reset_loop"
-        ), mock.patch.object(
-            diag_runner, "run_end", fake_end
-        ), mock.patch.object(
-            diag_runner, "read_sel", return_value=(None, "not read in tests")
-        ), mock.patch.object(
-            diag_runner, "firmware_check", return_value=Check(name="firmware_reads", status=SKIP)
+        ), mock.patch.multiple(
+            diag_runner,
+            run_end=lambda *a: got["order"].append("end"),
+            read_sel=lambda: (None, "not read in tests"),
+            firmware_check=lambda _: Check(name="firmware_reads", status=SKIP),
         ), mock.patch.object(
             diag_runner, "collect_fru_info"
         ), mock.patch.object(

@@ -2,10 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""The BMC's system event log (SEL), read in-band with ipmitool before the tests and after the end sequence. Before:
-the last 7 days' events that point at the unit (WARN). After: the events that are new since (a thermal trip FAILs its
-tray, any other FRB, presence, power, current, voltage or temperature event is a WARN). Without root or a sudo rule
-for the read, a SKIP that says why. The BMC names tray N's sensors UBB<N-1>."""
+"""The BMC's system event log (SEL), read in-band before the tests (the last 7 days) and after the end sequence (the
+new events). Without root or a sudo rule for the read, a SKIP that says why. The BMC names tray N's sensors UBB<N-1>."""
 from __future__ import annotations
 
 import re
@@ -51,18 +49,13 @@ def _rows(lines: list[str]):
 
 
 def _check(name: str, status: str, findings: list[str], ok: str) -> Check:
-    return Check(
-        name=name,
-        status=status if findings else PASS,
-        details="; ".join(findings) or ok,
-        data={"findings": findings},
-        ip="board",
-    )
+    status = status if findings else PASS
+    return Check(name=name, status=status, details="; ".join(findings) or ok, data={"findings": findings}, ip="board")
 
 
 def history_check(lines: list[str] | None, why: str, now: float) -> Check:
-    """The events of the HISTORY_S before *now*: many bus correctable errors, an FRB3, repeated FRB2 hangs in POST and
-    critical threshold crossings, each a WARN naming its tray."""
+    """In the HISTORY_S before *now*: many bus correctable errors, an FRB3, repeated FRB2 hangs in POST and critical
+    threshold crossings, each a WARN naming its tray."""
     if lines is None:
         return Check(name="sel_history", status=SKIP, details=f"SEL not read: {why}", ip="board")
     n: Counter = Counter()
@@ -83,16 +76,15 @@ def history_check(lines: list[str] | None, why: str, now: float) -> Check:
 
 
 def new_check(before: list[str] | None, after: list[str] | None, why: str) -> Check:
-    """The SEL rows that are new since *before*: a temperature sensor's thermal trip FAILs its tray, any other row about
-    FRB, presence, power, current, voltage or temperature is a WARN naming its tray."""
+    """The rows new since *before*: a temperature sensor's thermal trip FAILs its tray, any other row about FRB,
+    presence, power, current, voltage or temperature is a WARN naming its tray."""
     if before is None or after is None:
         return Check(name="sel_new", status=SKIP, details=f"SEL not read: {why}", ip="board")
-    old = set(before)
-    trips, others = [], []
-    for _t, sensor, event, state, row in _rows([r for r in after if r not in old and NEW_EVENT.search(r)]):
-        if "Deasserted" in state:
-            continue
-        trip = re.search(r"Temp|Thermal|TMAX", sensor, re.I) and THERMAL_TRIP.search(f"{event} {state}")
-        (trips if trip else others).append(f"{_tray(sensor)}: {sensor} {event} {state}".strip())
-    found = [f"thermal trip {x}" for x in trips] + others
-    return _check("sel_new", FAIL if trips else WARN, found, "no new SEL events to flag")
+    old, trips, others = set(before), [], []
+    for _t, sensor, event, state, _row in _rows([r for r in after if r not in old and NEW_EVENT.search(r)]):
+        if "Deasserted" not in state:
+            trip = re.search(r"Temp|Thermal|TMAX", sensor, re.I) and THERMAL_TRIP.search(f"{event} {state}")
+            (trips if trip else others).append(f"{_tray(sensor)}: {sensor} {event} {state}".strip())
+    return _check(
+        "sel_new", FAIL if trips else WARN, [f"thermal trip {x}" for x in trips] + others, "no new SEL events to flag"
+    )

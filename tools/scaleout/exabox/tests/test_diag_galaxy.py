@@ -3,9 +3,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""The Galaxy chip checks without hardware: a chip is named by BDF/tray/ASIC, a reset is a glx_reset (or says why it
-cannot run), the root-port rescan and the chip recount after it name the missing ones, the thermal and telemetry
-checks ignore garbage readings, the AER diff counts the errors over a run, and the SEL reads are judged."""
+"""The Galaxy chip checks without hardware: chip naming, the glx_reset with its rescan and recount, the thermal and
+telemetry checks, the AER diff over a run, the firmware reads and the SEL reads."""
 
 from __future__ import annotations
 
@@ -87,10 +86,6 @@ class TestRecount(unittest.TestCase):
         self.assertIn("tray 2: 8 of 8 missing", c.details)
 
 
-def _ok(*_a, **_k):
-    return subprocess.CompletedProcess([], 0, stdout="", stderr="")
-
-
 class TestResets(unittest.TestCase):
     """glx_reset with tt-smi, sudo, lspci and the rescan writes stubbed: /sys is a temp dir with one bridge."""
 
@@ -101,25 +96,16 @@ class TestResets(unittest.TestCase):
         rp.mkdir(parents=True)
         (rp / "secondary_bus_number").write_text(f"{0x47}\n")
         self.rescanned = rp / "rescan"
-        for target, value in (("SYS", Path(tmp.name)), ("RESCAN_EVERY_S", 0), ("run", _ok)):
-            patcher = mock.patch.object(resets, target, value)
-            patcher.start()
-            self.addCleanup(patcher.stop)
+        ok = lambda *_a, **_k: subprocess.CompletedProcess([], 0, stdout="", stderr="")  # noqa: E731
+        mock.patch.multiple(resets, SYS=Path(tmp.name), RESCAN_EVERY_S=0, run=ok).start()
+        self.addCleanup(mock.patch.stopall)
 
     def _reset(self, listings, root=True, gate=None):
-        """glx_reset with pcie_bdfs giving *listings* in turn (the last one again after them)."""
-        it = iter(listings)
-        last = []
-
-        def bdfs():
-            last[:] = [next(it, last[0] if last else None)]
-            return last[0]
-
+        """glx_reset with pcie_bdfs giving *listings* in turn, then the last one again."""
+        bdfs = lambda: listings.pop(0) if len(listings) > 1 else (listings or [None])[0]  # noqa: E731
         phase = resets.Phase(name="t")
         why = "" if root else "not root, and sudo -n -l does not list tt-smi -glx_reset"
-        with mock.patch.object(resets, "root_cmd", lambda c: (c if root else None, why)), mock.patch.object(
-            resets, "pcie_bdfs", bdfs
-        ):
+        with mock.patch.multiple(resets, root_cmd=lambda c: (c if root else None, why), pcie_bdfs=bdfs):
             out = resets.glx_reset("tt-smi", phase, "reset_1", "recount_1", False, gate=gate)
         return out, {c.name: c for c in phase.checks}
 
@@ -127,38 +113,32 @@ class TestResets(unittest.TestCase):
         with mock.patch.object(resets, "run", side_effect=AssertionError("ran")):
             out, checks = self._reset([], root=False)
         self.assertIsNone(out)
-        self.assertEqual(checks["reset_1"].status, SKIP)
+        c = checks["reset_1"]
         self.assertEqual(
-            checks["reset_1"].details, "reset cannot run: not root, and sudo -n -l does not list tt-smi -glx_reset"
+            (c.status, c.details), (SKIP, "reset cannot run: not root, and sudo -n -l does not list tt-smi -glx_reset")
         )
 
     def test_the_reset_gate_can_refuse(self):
         out, checks = self._reset([], gate="sh -c 'echo serving; exit 1'")
-        self.assertIsNone(out)
-        self.assertEqual(checks["reset_1"].details, "reset cannot run: reset gate: serving")
+        self.assertEqual((out, checks["reset_1"].details), (None, "reset cannot run: reset gate: serving"))
 
     def test_all_back_needs_no_rescan(self):
         out, checks = self._reset([all_bdfs()])
-        self.assertEqual(len(out), 32)
-        self.assertEqual((checks["reset_1"].status, checks["recount_1"].status), (PASS, PASS))
+        self.assertEqual((len(out), checks["reset_1"].status, checks["recount_1"].status), (32, PASS, PASS))
         self.assertNotIn("rescan_reset_1", checks)
 
     def test_a_chip_back_only_after_the_rescan_is_named(self):
-        gone = [b for b in all_bdfs() if b != "0000:47:00.0"]
-        out, checks = self._reset([gone, all_bdfs()])
+        out, checks = self._reset([[b for b in all_bdfs() if b != "0000:47:00.0"], all_bdfs()])
         self.assertEqual(self.rescanned.read_text(), "1")
-        self.assertEqual(checks["rescan_reset_1"].status, WARN)
-        self.assertIn(
-            "0000:47:00.0 back only after a rescan of root port 0000:40:01.7", checks["rescan_reset_1"].details
-        )
+        c = checks["rescan_reset_1"]
+        self.assertEqual(c.status, WARN)
+        self.assertIn("0000:47:00.0 back only after a rescan of root port 0000:40:01.7", c.details)
         self.assertEqual(checks["recount_1"].status, PASS)
 
     def test_a_chip_still_missing_is_named_with_its_tray(self):
-        gone = [b for b in all_bdfs() if b != "0000:47:00.0"]
         with mock.patch.object(resets, "RESCAN_WAIT_S", 0.01):
-            out, checks = self._reset([gone])
-        self.assertEqual(len(out), 31)
-        self.assertEqual(checks["recount_1"].status, FAIL)
+            out, checks = self._reset([[b for b in all_bdfs() if b != "0000:47:00.0"]])
+        self.assertEqual((len(out), checks["recount_1"].status), (31, FAIL))
         self.assertIn("tray 2: 1 of 8 missing", checks["recount_1"].details)
 
     def test_the_tiers_never_run_tt_smi_r(self):
@@ -168,47 +148,33 @@ class TestResets(unittest.TestCase):
 
     def test_recover_returns_its_finding_lines(self):
         args = argparse.Namespace(skip_reset=False, tt_smi_path=None, dry_run=False, reset_gate=None)
-        with mock.patch.object(resets, "resolve_tt_smi", return_value="tt-smi"), mock.patch.object(
-            resets, "root_cmd", return_value=(None, "not root")
-        ):
+        with mock.patch.multiple(resets, resolve_tt_smi=lambda _: "tt-smi", root_cmd=lambda _: (None, "not root")):
             self.assertEqual(resets.recover(args, Path("/nonexistent")), ["reset cannot run: not root"])
-        self.assertEqual(
-            resets.recover(argparse.Namespace(skip_reset=True), Path(".")), ["reset cannot run: --skip-reset"]
-        )
-
-    def test_post_test_reset_that_cannot_run_is_a_skip(self):
-        phase = resets.Phase(name="post_test_reset")
-        with mock.patch.object(resets, "resolve_tt_smi", return_value="tt-smi"), mock.patch.object(
-            resets, "root_cmd", return_value=(None, "not root")
-        ):
+            phase = resets.Phase(name="post_test_reset")  # the post-test reset that cannot run is a SKIP
             self.assertTrue(resets.run_post_test_reset(None, ("-glx_reset",), phase, False))
         self.assertEqual((phase.checks[-1].status, phase.checks[-1].details), (SKIP, "reset cannot run: not root"))
+        args.skip_reset = True
+        self.assertEqual(resets.recover(args, Path(".")), ["reset cannot run: --skip-reset"])
 
     def test_no_end_sequence_after_a_post_test_reset_that_did_not_run_clean(self):
         phase = resets.Phase(name="post_test_reset")
         phase.add(resets.Check(name="post_test_reset_ok", status=SKIP, details="reset cannot run: not root"))
         with mock.patch.object(resets, "run_step", side_effect=AssertionError("opened")):
             resets.run_end(None, phase, Path("/nonexistent"), False, 60, None)
-        self.assertEqual(
-            (phase.checks[-1].name, phase.checks[-1].details), ("end_fabric", "not run: reset cannot run: not root")
-        )
+        c = phase.checks[-1]
+        self.assertEqual((c.name, c.details), ("end_fabric", "not run: reset cannot run: not root"))
 
 
 class TestStageOrder(unittest.TestCase):
     def test_stages_in_run_order(self):
-        weekly = tiers.TIERS["weekly"]
-        cut, steps = tiers.select_stages(weekly, "reset,busbar,links,end")
-        self.assertEqual(
-            (cut.resets, cut.tests, cut.post_test_resets), (weekly.resets, ("busbar", "links"), ("-glx_reset",))
-        )
-        cut, steps = tiers.select_stages(weekly, "busbar_heavy")
-        self.assertEqual((cut.resets, cut.tests, cut.post_test_resets, steps), ((), ("busbar",), (), ("heavy",)))
-        cut, _ = tiers.select_stages(tiers.TIERS["flash"], "reset,end")
-        self.assertEqual(
-            (cut.resets, cut.tests, cut.post_test_resets, cut.eth_status), ((), (), ("-glx_reset",), False)
-        )
-        cut, _ = tiers.select_stages(weekly, "reset,busbar,links,end,eth")
-        self.assertTrue(cut.eth_status)
+        weekly, cut = tiers.TIERS["weekly"], tiers.select_stages
+        c = cut(weekly, "reset,busbar,links,end")[0]
+        self.assertEqual((c.resets, c.tests, c.post_test_resets), (weekly.resets, ("busbar", "links"), ("-glx_reset",)))
+        c, steps = cut(weekly, "busbar_heavy")
+        self.assertEqual((c.resets, c.tests, c.post_test_resets, steps), ((), ("busbar",), (), ("heavy",)))
+        c = cut(tiers.TIERS["flash"], "reset,end")[0]
+        self.assertEqual((c.resets, c.tests, c.post_test_resets, c.eth_status), ((), (), ("-glx_reset",), False))
+        self.assertTrue(cut(weekly, "reset,busbar,links,end,eth")[0].eth_status)
 
     def test_an_order_the_stages_do_not_run_in_is_refused(self):
         for order in ("links,busbar", "end,reset", "busbar_mix,busbar_qb", "eth,end"):
@@ -221,11 +187,9 @@ class TestFirmwareReads(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             for n, bdf in enumerate(("0000:01:00.0", "0000:41:00.0")):
-                dev = root / "devices" / bdf
-                dev.mkdir(parents=True)
-                node = root / "class/tenstorrent" / f"tenstorrent!{n}"
-                node.mkdir(parents=True)
-                (node / "device").symlink_to(dev)
+                (root / "devices" / bdf).mkdir(parents=True)
+                (root / "class/tenstorrent" / f"tenstorrent!{n}").mkdir(parents=True)
+                (root / "class/tenstorrent" / f"tenstorrent!{n}" / "device").symlink_to(root / "devices" / bdf)
             no_device = lambda argv, out: out.write_text('{"err": "no device in tests"}\n')  # noqa: E731
             with mock.patch.object(firmware, "SYS", root), mock.patch.object(firmware, "_step", no_device):
                 c = firmware.firmware_check(root / "out")
@@ -241,13 +205,11 @@ def _sel(when, sensor, event, state="Asserted"):
 
 class TestSel(unittest.TestCase):
     def test_history_warns_per_tray(self):
-        now = time.time()
-        rows = [_sel(now - 3600, "Processor UBB1_FRB3", "FRB3/Processor Startup/Initialization failure")]
+        now, frb3 = time.time(), "FRB3/Processor Startup/Initialization failure"
+        rows = [_sel(now - 3600, "Processor UBB1_FRB3", frb3), _sel(now - 8 * 86400, "Processor UBB0_FRB3", frb3)]
         rows += [_sel(now - 60, "Memory #0x1", "Bus Correctable Error")] * 19
-        rows += [_sel(now - 8 * 86400, "Processor UBB0_FRB3", "FRB3/Processor Startup/Initialization failure")]
         c = sel.history_check(rows, "", now)
-        self.assertEqual(c.status, WARN)
-        self.assertEqual(c.details, "tray 2: 1 FRB3 processor init failures in 7 days")
+        self.assertEqual((c.status, c.details), (WARN, "tray 2: 1 FRB3 processor init failures in 7 days"))
 
     def test_new_thermal_trip_fails_its_tray(self):
         now = time.time()
@@ -258,14 +220,8 @@ class TestSel(unittest.TestCase):
             _sel(now, "Temperature UBB0_TEMP", "Upper Critical going high", "Deasserted"),
         ]
         c = sel.new_check(before, after, "")
-        self.assertEqual(c.status, FAIL)
-        self.assertEqual(
-            c.data["findings"],
-            [
-                "thermal trip tray 3: UBB2_TEMP Upper Critical going high Asserted",
-                "host: PSU3 Failure detected Asserted",
-            ],
-        )
+        trip = "thermal trip tray 3: UBB2_TEMP Upper Critical going high Asserted"
+        self.assertEqual((c.status, c.data["findings"]), (FAIL, [trip, "host: PSU3 Failure detected Asserted"]))
 
     def test_not_read_is_a_skip_that_says_why(self):
         self.assertEqual(sel.history_check(None, "not root", 0).details, "SEL not read: not root")
