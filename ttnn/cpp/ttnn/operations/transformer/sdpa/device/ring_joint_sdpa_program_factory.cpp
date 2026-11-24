@@ -2596,14 +2596,42 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t cb_identity_scale_in = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
     const uint32_t cb_col_identity = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
 
-    const uint32_t cb_qk_im = allocate_tile_cb(qk_tiles, qk_im_tile_size, qk_im_df);
+    // TT_RING_SDPA_LLK2: the LLK 2.0 kernel (tt_metal/tt-llk/llk2/kernels/ring_joint_sdpa.cpp) works on groups of Q
+    // tile rows with a buffer per intermediate, as the LLK 2.0 plain SDPA kernel does (sdpa_program_factory.cpp):
+    //   scores 2 x [group, Sk_chunk_t], probabilities [group, Sk_chunk_t], row max [group, 1], alpha 2 x [group, 1],
+    //   inverse [group, 1]
+    // in place of the 1.0 kernel's qk_im, exp_max_diff and recip_scratch, whose ids then name the first three (the
+    // writer takes every compute CB id; it reads none of these). A group is 2, 3 or 1 rows, dividing the Q chunk.
+    const bool llk2 = args.llk2_compute;
+    uint32_t llk2_group_rows = 1;
+    for (const uint32_t rows : {2u, 3u}) {
+        if (Sq_chunk_t % rows == 0) {
+            llk2_group_rows = rows;
+            break;
+        }
+    }
+    const bool llk2_last_p_beside_m = llk2_group_rows * Sk_chunk_t >= 6 * dst_size;
+    struct {
+        uint32_t scores, probabilities, row_max, alpha, inverse;
+    } llk2_cbs{};
+    if (llk2) {
+        const uint32_t group_tiles = llk2_group_rows * Sk_chunk_t;
+        llk2_cbs.scores = allocate_tile_cb(2 * group_tiles, qk_im_tile_size, qk_im_df);
+        llk2_cbs.probabilities = allocate_tile_cb(group_tiles, qk_im_tile_size, qk_im_df);
+        llk2_cbs.row_max = allocate_tile_cb(llk2_group_rows, stats_tile_size, stats_df);
+        llk2_cbs.alpha = allocate_tile_cb(2 * llk2_group_rows, stats_tile_size, stats_df);
+        llk2_cbs.inverse = allocate_tile_cb(llk2_group_rows, sum_tile_size, sum_df);  // 1 / L in L's format
+    }
+
+    const uint32_t cb_qk_im = llk2 ? llk2_cbs.scores : allocate_tile_cb(qk_tiles, qk_im_tile_size, qk_im_df);
     const uint32_t cb_out_im_A = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
     const uint32_t cb_out_im_B = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
     const uint32_t cb_max_A = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
     const uint32_t cb_max_B = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
     const uint32_t cb_sum_A = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
     const uint32_t cb_sum_B = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
-    const uint32_t cb_exp_max_diff = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+    const uint32_t cb_exp_max_diff =
+        llk2 ? llk2_cbs.alpha : allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
 
     const uint32_t cb_out = allocate_tile_cb(out0_t, out_tile_size, out_df);
 
@@ -2620,7 +2648,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
     // Streaming compute v2: 1-tile recip scratch CB for normalize_row_streaming.
     // cb_scale_in is live in ring joint, so streaming uses a dedicated scratch CB.
-    const uint32_t cb_recip_scratch = use_streaming_compute ? allocate_tile_cb(1, im_tile_size, im_df) : inactive_cb;
+    const uint32_t cb_recip_scratch =
+        llk2 ? llk2_cbs.inverse : (use_streaming_compute ? allocate_tile_cb(1, im_tile_size, im_df) : inactive_cb);
 
     // Deferred norm: sum save/restore CBs for multi Q-chunk DRAM round-trip.
     // cb_sum_out = compute pushes sum for writer to save to DRAM.
@@ -3402,6 +3431,91 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     reader_kernel.named_compile_time_args.emplace_back(
         "v_row_Wt", input_tensor_v.padded_shape()[3] / tt::constants::TILE_WIDTH);
     compute_kernel.defines = kernel_defines;
+    if (llk2) {
+        // LLK 2.0 kernel (TT_RING_SDPA_LLK2): the 1.0 kernel's streaming protocol with the reader and writer, and its
+        // run-time args. LLK 2.0 plans on every TRISC, so the kernel settings come as defines (MATH_FIDELITY exists
+        // only on math and pack), the op as named args, each buffer's id as the named arg <name> and its format as
+        // <name>_format. What the kernel does not do (validate_on_program_cache_miss refuses the attributes):
+        TT_FATAL(!fp32_dest_acc_en, "TT_RING_SDPA_LLK2: fp32_dest_acc_en is not supported");
+        TT_FATAL(L == 0, "TT_RING_SDPA_LLK2: a joint sequence is not supported");
+        TT_FATAL(
+            ksplit_count == 1 && !seg_accum,
+            "TT_RING_SDPA_LLK2: k_splits and segmented_accumulation are not supported");
+        TT_FATAL(!use_rotated_q_split && !padded_q_slots_enabled, "TT_RING_SDPA_LLK2: rotated or padded Q slots");
+        TT_FATAL(grouped_sources == 1 && !v_shares_k_buffer, "TT_RING_SDPA_LLK2: grouped or latent K/V");
+        TT_FATAL(
+            !dynamic_local_n && !kv_pad_rotation_enabled && !kv_pad_from_metadata,
+            "TT_RING_SDPA_LLK2: dynamic lengths");
+        // m, L and U go to DRAM and back through the writer's staging buffers, which hold them in these formats.
+        TT_FATAL(
+            out_df == im_df && sum_df == stats_df,
+            "TT_RING_SDPA_LLK2: the output must be bfloat16 (U is staged in the output's format), got {}",
+            out_df);
+        compute_kernel.kernel_source = "tt_metal/tt-llk/llk2/kernels/ring_joint_sdpa.cpp";
+        auto llk2_defines = defines;
+        llk2_defines["LLK2_DEST_FP32"] = "0";
+        llk2_defines["LLK2_MATH_FIDELITY"] = std::to_string(static_cast<uint32_t>(math_fidelity));
+        compute_kernel.defines = KernelDescriptor::Defines(llk2_defines.begin(), llk2_defines.end());
+        auto& named = compute_kernel.named_compile_time_args;
+        const auto buffer = [&](const std::string& name, uint32_t id, tt::DataFormat data_format) {
+            named.emplace_back(name, id == inactive_cb ? 0u : id);
+            named.emplace_back(name + "_format", static_cast<uint32_t>(data_format));
+        };
+        // The op, as sdpa.cpp reads it (it is included there): a share of the keys stands for its sequence.
+        named.emplace_back("DHt", DHt);
+        named.emplace_back("vDHt", vDHt);
+        named.emplace_back("Sq_chunk_t", Sq_chunk_t);
+        named.emplace_back("q_num_chunks", num_local_q_chunks);
+        named.emplace_back("Sk_chunk_t", Sk_chunk_t);
+        named.emplace_back("k_num_chunks", num_local_k_chunks);
+        named.emplace_back("valid_Skt", kv_local_padded_Nt);
+        named.emplace_back("scale", scale_packed);
+        named.emplace_back("is_causal", 0u);
+        named.emplace_back("use_provided_mask", 0u);
+        named.emplace_back("is_chunked", 0u);
+        named.emplace_back("sliding_window_size", 0u);
+        named.emplace_back("use_attention_sink", 0u);
+        named.emplace_back("k_partial_col", global_n_partial_col);
+        named.emplace_back("use_zigzag", 0u);
+        named.emplace_back("use_k_range", 0u);
+        named.emplace_back("kv_retain_heads", 0u);
+        named.emplace_back("q_rows_per_group", llk2_group_rows);
+        named.emplace_back("last_p_beside_m", static_cast<uint32_t>(llk2_last_p_beside_m));
+        // The ring.
+        named.emplace_back("kv_local_padded_Nt", kv_local_padded_Nt);
+        named.emplace_back("rank_mapping", rank_mapping_compile_time_arg(rank_mapping));
+        named.emplace_back("snake_orientation", static_cast<uint32_t>(rank_mapping.orientation));
+        named.emplace_back("mesh_rows", rank_mapping.mesh_rows);
+        named.emplace_back("mesh_cols", rank_mapping.mesh_cols);
+        buffer("cb_q_in", cb_q_in, q_df);
+        buffer("cb_k_in", cb_k_in, k_df);
+        buffer("cb_v_in", cb_v_in, v_df);
+        buffer("cb_identity_scale_in", cb_identity_scale_in, scalar_df);
+        buffer("cb_mask_in", cb_mask_in, mask_df);  // the writer's mask tiles; a placeholder without them
+        buffer("cb_attention_sink", 0u, tt::DataFormat::Float16_b);  // placeholders: no sink
+        buffer("cb_sink_term", 0u, tt::DataFormat::Float16_b);
+        buffer("cb_chunk_start_idx", 0u, tt::DataFormat::Int32);
+        buffer("cb_k_range", 0u, tt::DataFormat::Int32);
+        buffer("cb_scores", llk2_cbs.scores, qk_im_df);
+        buffer("cb_probabilities", llk2_cbs.probabilities, qk_im_df);
+        buffer("cb_row_max", llk2_cbs.row_max, stats_df);
+        buffer("cb_alpha", llk2_cbs.alpha, stats_df);
+        buffer("cb_inverse", llk2_cbs.inverse, sum_df);
+        buffer("cb_max_A", cb_max_A, stats_df);
+        buffer("cb_max_B", cb_max_B, stats_df);
+        buffer("cb_sum_A", cb_sum_A, sum_df);
+        buffer("cb_sum_B", cb_sum_B, sum_df);
+        buffer("cb_out_im_A", cb_out_im_A, im_df);
+        buffer("cb_out_im_B", cb_out_im_B, im_df);
+        buffer("cb_out", cb_out, out_df);
+        // The staging buffers, in the formats the writer moves them in.
+        buffer("cb_max_in", cb_stats_in, im_df);
+        buffer("cb_max_out", cb_stats_out, im_df);
+        buffer("cb_sum_in", cb_sum_in, stats_df);
+        buffer("cb_sum_out", cb_sum_out, stats_df);
+        buffer("cb_prev_out", cb_prev_out, out_df);
+        buffer("cb_signal", cb_signal, tt::DataFormat::UInt16);
+    }
     compute_kernel.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,

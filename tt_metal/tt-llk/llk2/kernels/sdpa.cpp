@@ -291,6 +291,23 @@ struct KRangeOf
     std::uint32_t end_chunk;
     std::uint32_t last_tiles;
 
+    // What a ring iteration changes (ring_joint_sdpa.cpp's RingKRange); nothing, for one op over all the keys.
+    static constexpr bool restored       = false;
+    static constexpr bool continues      = false;
+    static constexpr bool staged         = false;
+    static constexpr std::uint32_t phase = 0;
+
+    /// K chunk `chunk` holds the tensor's last key tile, which is not whole (partial_key_cols): its column there.
+    static constexpr bool holds_partial_key(std::uint32_t chunk)
+    {
+        return chunk == k_chunks - 1;
+    }
+
+    static constexpr std::uint32_t partial_key_col()
+    {
+        return last_width - 1;
+    }
+
     /// Of the Q chunk whose first tile row is the sequence's row q_tile; [sent_first, sent_end) is what the reader
     /// sent for it, when it sends a range. The reader sends K and V by the same rule (reader_interleaved.cpp):
     ///   causal      up to the chunk with the last row's own keys, and of that chunk the tiles up to them
@@ -331,13 +348,60 @@ struct KRangeOf<false>
     static constexpr std::uint32_t end_chunk   = k_chunks;
     static constexpr std::uint32_t last_tiles  = last_width;
 
+    // What a ring iteration changes (ring_joint_sdpa.cpp's RingKRange); nothing, for one op over all the keys.
+    static constexpr bool restored       = false;
+    static constexpr bool continues      = false;
+    static constexpr bool staged         = false;
+    static constexpr std::uint32_t phase = 0;
+
+    /// K chunk `chunk` holds the tensor's last key tile, which is not whole (partial_key_cols): its column there.
+    static constexpr bool holds_partial_key(std::uint32_t chunk)
+    {
+        return chunk == k_chunks - 1;
+    }
+
+    static constexpr std::uint32_t partial_key_col()
+    {
+        return last_width - 1;
+    }
+
     static constexpr KRangeOf at(std::uint32_t, std::uint32_t, std::uint32_t)
     {
         return {};
     }
 };
 
+#ifdef LLK2_SDPA_RING
+/// ring_joint_sdpa.cpp: the K chunks a Q chunk meets in one ring iteration, those of one device's share of the keys,
+/// and what the iteration does with m, L and U. Its K chunks are the share's up to the sequence's end: the last one
+/// last_tiles wide, by the share's padding or by the sequence's end, whichever comes first.
+struct RingKRange
+{
+    static constexpr std::uint32_t q_tile      = 0;
+    static constexpr std::uint32_t first_chunk = 0;
+    std::uint32_t end_chunk;
+    std::uint32_t last_tiles;
+    std::uint32_t phase; // which of the two buffers the first K chunk writes, in turn with the earlier iterations' chunks
+    bool restored;       // m, L and U come from an earlier ring iteration: the first K chunk is not the first
+    bool continues;      // a later ring iteration goes on from m, L and U: kept, not normalized into the output
+    bool staged;         // they go through the writer's buffers (to DRAM and back) rather than stay in the A/B ones
+    bool partial_key;    // the share holds the sequence's last key tile, which is not whole
+
+    constexpr bool holds_partial_key(std::uint32_t chunk) const
+    {
+        return partial_key && chunk == end_chunk - 1;
+    }
+
+    constexpr std::uint32_t partial_key_col() const
+    {
+        return last_tiles - 1;
+    }
+};
+
+using KRange = RingKRange;
+#else
 using KRange = KRangeOf<k_range_per_q_chunk>;
+#endif
 
 /// The first Q tile row's place in the sequence, for the Q chunk at `flat` of the op's Q chunks (q_per_head of them
 /// per head, the heads one after the other), where the op's first Q chunk is the sequence's chunk q_chunk_offset.
@@ -366,10 +430,10 @@ struct Group : KRange // the K chunks its Q chunk meets
         return chunk < end_chunk;
     }
 
-    /// In the Q chunk's first K chunk: it has nothing from an earlier one.
+    /// In the Q chunk's first K chunk, which has nothing from an earlier one (in a ring, from an earlier iteration).
     constexpr bool first() const
     {
-        return chunk == first_chunk;
+        return chunk == first_chunk && !this->restored;
     }
 
     /// In the Q chunk's last K chunk: it is normalized into the output.
@@ -416,18 +480,36 @@ struct Group : KRange // the K chunks its Q chunk meets
 };
 
 /// A statistic that goes from one K chunk to the next through two buffers: a chunk writes one, the next reads it.
+/// In a ring it also goes from one ring iteration to the next: through the same two, in turn (phase), or through the
+/// writer's buffers, which it reads into DRAM and back (staged): the last K chunk writes staged_out and the next
+/// iteration's first reads staged_in.
 struct Carried
 {
     DataflowBuffer a, b;
+#ifdef LLK2_SDPA_RING
+    DataflowBuffer staged_in, staged_out;
+#endif
 
     DataflowBuffer& written_by(const Group& g)
     {
-        return g.chunk % 2 == 0 ? a : b;
+#ifdef LLK2_SDPA_RING
+        if (g.staged && g.continues && g.last())
+        {
+            return staged_out;
+        }
+#endif
+        return (g.chunk + g.phase) % 2 == 0 ? a : b;
     }
 
     DataflowBuffer& read_by(const Group& g)
     {
-        return g.chunk % 2 == 0 ? b : a;
+#ifdef LLK2_SDPA_RING
+        if (g.staged && g.restored && g.chunk == g.first_chunk)
+        {
+            return staged_in;
+        }
+#endif
+        return (g.chunk + g.phase) % 2 == 0 ? b : a;
     }
 };
 
@@ -560,9 +642,9 @@ inline __attribute__((always_inline)) void mask_scores_row(const Group& g, std::
         }
         if constexpr (partial_key_cols != 0)
         {
-            if (g.chunk == k_chunks - 1) // the K chunk with the tensor's last key tile
+            if (g.holds_partial_key(g.chunk)) // the K chunk with the tensor's last key tile
             {
-                add_made_mask(made_masks, partial_key_mask_tile, s_row, last_width - 1, width);
+                add_made_mask(made_masks, partial_key_mask_tile, s_row, g.partial_key_col(), width);
             }
         }
     }
@@ -589,7 +671,8 @@ inline __attribute__((always_inline)) void mask_scores(const Group& g, bool exis
 }
 
 /// m = max(m_prev, row max of S) for the group g, whose S is at the front of scores: into row_maxes, for g's P blocks
-/// and its alpha, and into the buffer the next K chunk reads m_prev from (unless g's chunk is the last).
+/// and its alpha, and into the buffer the next K chunk reads m_prev from (unless g's chunk is the last, and in a ring
+/// no later iteration goes on from it).
 template <class Unit>
 inline __attribute__((always_inline)) void running_row_max(const Group& g, const Unit& unit, DataflowBuffer& scores, DataflowBuffer& row_maxes, Carried& m)
 {
@@ -604,7 +687,7 @@ inline __attribute__((always_inline)) void running_row_max(const Group& g, const
         reduce<row_max>(s, unit, peek_front<carried_m_spec>(m.read_by(g)), acc); // the pooling starts from m_prev
     }
     release(pack(acc, reserve_back<m_spec>(row_maxes)));
-    if (!g.last() || sinks) // with sinks the last K chunk's m is read by its groups' outputs
+    if (!g.last() || sinks || g.continues) // with sinks the last K chunk's m is read by its groups' outputs
     {
         release(pack(acc, reserve_back<carried_m_spec>(m.written_by(g))));
     }
@@ -719,6 +802,7 @@ inline __attribute__((always_inline)) std::uint32_t first_q_chunk_of_op(ChunkSta
     }
 }
 
+#ifndef LLK2_SDPA_RING // a ring takes its range from its iteration (ring_joint_sdpa.cpp)
 /// The K chunks met by the Q chunk whose first tile row is the sequence's row q_tile: when the reader sends them, from
 /// the two words of its page.
 template <class KRangeIn>
@@ -737,6 +821,7 @@ inline __attribute__((always_inline)) KRange k_range_of(std::uint32_t q_tile, KR
         return KRange::at(q_tile, 0, 0);
     }
 }
+#endif
 
 /// The first stage of a pass: P of the group cur and S of the group after it, next, block by block: the exp on the
 /// pack thread, the matmul on the FPU. After the last S block comes S(next)'s mask step. Each P block adds into its
@@ -801,6 +886,7 @@ inline __attribute__((always_inline)) void probabilities_and_scores(
 
 } // namespace
 
+#ifndef LLK2_SDPA_RING // ring_joint_sdpa.cpp has a kernel_main of its own
 void kernel_main()
 {
     // A buffer only some builds of the kernel have is a buffer_if: nothing is made for it in the others.
@@ -934,3 +1020,4 @@ void kernel_main()
         }
     }
 }
+#endif // LLK2_SDPA_RING
