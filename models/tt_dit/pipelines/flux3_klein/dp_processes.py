@@ -22,10 +22,13 @@ from pathlib import Path
 from loguru import logger
 
 GROUP_SHAPE = (4, 2)
-# A (4, 2) group's throughput defaults: requests in flight, queued prompts encoded together, one per sequence-parallel
-# row (the same images, DP4 loaded img/s +1.3 to +3.0 %), and queued 1024 images decoded as one VAE batch (golden within
-# 0.03 dB, +0.4 to +2.1 %)
-SERVE_DEFAULTS = {(4, 2): {"depth": 8, "text_batch": 4, "decode_batch": 4}}
+# A group's throughput defaults: requests in flight, queued prompts encoded together, one per sequence-parallel row
+# (the same images, DP4 loaded img/s +1.3 to +3.0 %), and queued 1024 images decoded as one VAE batch (golden within
+# 0.03 dB, +0.4 to +2.1 %); a (2, 2) group decodes 2, as many per chip as a (4, 2) group's 4
+SERVE_DEFAULTS = {
+    (4, 2): {"depth": 8, "text_batch": 4, "decode_batch": 4},
+    (2, 2): {"depth": 8, "text_batch": 2, "decode_batch": 2},
+}
 # Each group shape's (sp_axis, tp_axis): the sequence runs on the group's ring axis. (2, 8) keeps the Galaxy's 8-chip
 # ring (SP8 x TP2); (4, 4) is a 4x4 half (SP4 x TP4, the TP axis a line).
 GROUP_AXES = {(4, 2): (0, 1), (2, 8): (1, 0), (4, 4): (0, 1), (2, 2): (0, 1)}
