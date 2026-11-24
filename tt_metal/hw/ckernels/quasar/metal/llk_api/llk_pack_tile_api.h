@@ -108,7 +108,8 @@ inline void llk_pack(
  * written with the mask value; with every row masked (PACK_STRIDE_ROW_MASK=0xF) the two together suppress
  * the store entirely, so the output buffer is left untouched. ClrDatValid is 0, so the DEST valid bits are
  * preserved for a later real pack. The strided-pack config is restored to pass-through afterwards so a
- * subsequent pack-untilize (also PACR_STRIDE) is unaffected.
+ * subsequent pack-untilize (also PACR_STRIDE) is unaffected. Side effect: Packer 0's source and destination
+ * tile/face/row counters are zeroed.
  *
  * Suppressing the store does not suppress the descriptor fetch: PACR_STRIDE still reads the bd_table entry
  * it names and validates its tile size. The entry must therefore be programmed, so this primitive requires
@@ -123,8 +124,8 @@ inline void llk_pack_dummy(const std::uint32_t pack_output) {
     cfg_rmw(THCON_PACKER0_REG3_PACK_STRIDE_ROW_MASK_RMW, 0xF);
 
     // PACR_STRIDE reads Dest at the source tile counter, which an earlier pack can leave anywhere (PACR_UNTILIZE
-    // advances it and resets only the face counter, #66474). Zero the counters so the read stays in Dest; every
-    // pack sets its own counters before packing, so this does not disturb the next one.
+    // advances it and resets only the face counter, #66474). Zero the counters so the read stays in Dest. This
+    // leaves them as the pack inits do, so the next pack sees init state.
     TTI_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_FACE_ROW_SEL, p_pacr::PACK0, 0);
     TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_FACE_ROW_SEL, p_pacr::PACK0, 0);
 
