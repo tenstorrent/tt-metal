@@ -213,3 +213,34 @@ def test_where_bf16_in_fp32_out_bcast(device, variant, bcast):
 
     result = ttnn.where(_bf16_device(device, cond), *args, output_tensor=_fp32_output(device))
     assert torch.equal(ttnn.to_torch(result), expected)
+
+
+# A row operand against a column operand: both are broadcast (ROW_A_COL_B / ROW_B_COL_A).
+_ROW, _COL = (2, 1, 64), (2, 64, 1)
+
+
+@pytest.mark.parametrize("op_name", ["add", "multiply", "maximum"])
+@pytest.mark.parametrize("lhs_shape, rhs_shape", [(_ROW, _COL), (_COL, _ROW)], ids=["row_col", "col_row"])
+def test_binary_bf16_in_fp32_out_row_col_bcast(device, op_name, lhs_shape, rhs_shape):
+    torch.manual_seed(0)
+    lhs = torch.randint(-8, 8, lhs_shape).float()
+    rhs = torch.randint(-8, 8, rhs_shape).float()
+
+    result = getattr(ttnn, op_name)(
+        _bf16_device(device, lhs), _bf16_device(device, rhs), output_tensor=_fp32_output(device)
+    )
+    assert torch.equal(ttnn.to_torch(result), getattr(torch, op_name)(lhs, rhs))
+
+
+@pytest.mark.parametrize("variant", ["TTS", "TST"])
+@pytest.mark.parametrize("cond_shape, value_shape", [(_ROW, _COL), (_COL, _ROW)], ids=["row_col", "col_row"])
+def test_where_bf16_in_fp32_out_row_col_bcast(device, variant, cond_shape, value_shape):
+    cond = torch.arange(torch.Size(cond_shape).numel()).reshape(cond_shape) % 3 != 0
+    value = (torch.arange(torch.Size(value_shape).numel()).reshape(value_shape) % 7 + 10).float()
+    if variant == "TTS":
+        args, expected = (_bf16_device(device, value), 3.0), torch.where(cond, value, 3.0)
+    else:
+        args, expected = (3.0, _bf16_device(device, value)), torch.where(cond, 3.0, value)
+
+    result = ttnn.where(_bf16_device(device, cond), *args, output_tensor=_fp32_output(device))
+    assert torch.equal(ttnn.to_torch(result), expected)
