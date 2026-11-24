@@ -405,7 +405,11 @@ def run_diag(
             report["tt_smi_version"] = ".".join(str(x) for x in version) if version else None
             log(f"using tt-smi: {tt_smi} (version={report['tt_smi_version']})")
             snap = take_snapshot(tt_smi, snapshot_out)
-        report["detected_board_rev"] = validate_snapshot(snap, snap_phase)
+        if snap:
+            report["detected_board_rev"] = validate_snapshot(snap, snap_phase)
+        else:  # a caller that took its own snapshot (one stage at a time) passes an empty one: nothing to judge
+            why = f"not judged: input snapshot {input_snapshot} is empty"
+            snap_phase.add(Check(name="snapshot_capture", status=SKIP, details=why))
     except Exception as e:
         snap_phase.error = repr(e)
         snap_phase.add(Check(name="snapshot_capture", status=FAIL, details=repr(e)))

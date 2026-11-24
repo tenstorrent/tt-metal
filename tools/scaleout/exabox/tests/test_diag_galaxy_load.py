@@ -794,6 +794,7 @@ class TestLinks(unittest.TestCase):
         stage_order=None,
         load_mode=None,
         link_fault_before=False,
+        snapshot=None,
     ):
         """run_diag on *tier* with its device tests, bus-bar and links tests stubbed: ``order`` is what ran, in
         order, ``device`` the names run_tests got, ``mode`` the length the bus-bar test was given, ``fault`` whether
@@ -872,6 +873,8 @@ class TestLinks(unittest.TestCase):
             io.StringIO()
         ):
             d = Path(tmp)
+            if snapshot is not None:
+                (d / "missing.json").write_text(json.dumps(snapshot))
             _rc, got["report"] = diag_runner.run_diag(
                 tier,
                 dry_run=not live_aer,
@@ -994,6 +997,11 @@ class TestLinks(unittest.TestCase):
                 rl = got["report"]["phases"]["reset_loop"]["checks"]  # reset_loop is stubbed: a SKIP only when none ran
                 self.assertEqual(not any(c["status"] == SKIP for c in rl), resets, rl)
                 self.assertEqual("post_test_reset" in got["report"]["phases"], end)
+
+    def test_one_stage_on_an_empty_input_snapshot_judges_no_snapshot(self):
+        snap = self._run_load("weekly", stage_order="links", snapshot={})["report"]["phases"]["snapshot"]
+        self.assertEqual([(c["name"], c["status"]) for c in snap["checks"]], [("snapshot_capture", SKIP)])
+        self.assertNotEqual(snap["status"], FAIL)
 
     def test_skip_tests_skips_the_load(self):
         got = self._run_load(skip_tests=True)
