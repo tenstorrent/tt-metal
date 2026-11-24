@@ -6,7 +6,7 @@
 
 #include <cstdint>
 #include <functional>
-#include <optional>
+#include <tt_stl/optional_reference.hpp>
 #include <span>
 #include <string>
 #include <vector>
@@ -22,7 +22,7 @@ namespace ttnn::operations::ccl::common {
 using ChipRecords = std::vector<std::vector<uint32_t>>;
 
 // A co-owner context borrowed from a mesh; empty when the mesh has no co-owners.
-using MeshContext = std::optional<std::reference_wrapper<const tt::tt_metal::distributed::multihost::DistributedContext>>;
+using MeshContext = ttsl::optional_reference<const tt::tt_metal::distributed::multihost::DistributedContext>;
 
 // Computes a record for every coordinate of `mesh`, including those on other hosts.
 //
@@ -43,7 +43,7 @@ using MeshContext = std::optional<std::reference_wrapper<const tt::tt_metal::dis
 // `config_key` must name every other input the records depend on.
 ChipRecords exchange_chip_records(
     const ttnn::MeshDevice& mesh,
-    const MeshContext& context,
+    MeshContext context,
     uint32_t words_per_chip,
     const std::function<std::vector<uint32_t>(const ttnn::MeshCoordinate&)>& local_record,
     const std::string& config_key = {});

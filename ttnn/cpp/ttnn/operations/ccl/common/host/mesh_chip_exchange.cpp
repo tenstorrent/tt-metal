@@ -60,7 +60,7 @@ MeshContext mesh_distributed_context(const ttnn::MeshDevice& mesh) {
 
 ChipRecords exchange_chip_records(
     const ttnn::MeshDevice& mesh,
-    const MeshContext& context,
+    MeshContext context,
     uint32_t words_per_chip,
     const std::function<std::vector<uint32_t>(const ttnn::MeshCoordinate&)>& local_record,
     const std::string& config_key) {
@@ -104,7 +104,7 @@ ChipRecords exchange_chip_records(
 
     std::vector<uint32_t> all = mine;
     if (context.has_value()) {
-        context->get().all_reduce(
+        context->all_reduce(
             std::span<uint32_t>(mine), std::span<uint32_t>(all), tt::tt_metal::distributed::multihost::ReduceOp::SUM);
     }
 

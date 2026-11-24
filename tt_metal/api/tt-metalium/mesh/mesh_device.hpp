@@ -6,6 +6,7 @@
 
 #include <initializer_list>
 #include <tt_stl/move_only_function.hpp>
+#include <tt_stl/optional_reference.hpp>
 #include <tt_stl/span.hpp>
 #include <cstddef>
 #include <cstdint>
@@ -248,7 +249,7 @@ public:
     // Sub-context over the ranks driving this mesh's devices, or nullopt when this rank drives all of them. Created on
     // first use, collectively across the co-owners. The mesh owns the context: the reference is valid only while the
     // mesh is alive, and ownership is not shared with the caller.
-    std::optional<std::reference_wrapper<const multihost::DistributedContext>> coowner_context() const;
+    ttsl::optional_reference<const multihost::DistributedContext> coowner_context() const;
 
     DeviceIds get_device_ids() const;
 
