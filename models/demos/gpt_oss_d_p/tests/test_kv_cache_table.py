@@ -295,7 +295,9 @@ def test_gpt_oss_kv_chunk_table_readback(mesh_device, num_users, num_layers, seq
         for slot in range(num_users):
             for layer in range(num_layers):
                 for position in range(0, seq_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
-                    raw_bytes = table.read_device_chunk(layer=layer, position=position, slot=slot, config_id=config_id)
+                    raw_bytes = table.read_device_chunk(
+                        mesh_device, layer=layer, position=position, slot=slot, config_id=config_id
+                    )
                     assert len(raw_bytes) == table.config(config_id).chunk_size_bytes
                     chunk_tt = ttnn.experimental.disaggregation.tensor_from_bfp8_bytes(raw_bytes, chunk_shape)
                     chunk_torch = ttnn.to_torch(chunk_tt).to(torch.bfloat16)
@@ -393,7 +395,7 @@ def test_gpt_oss_kv_chunk_table_1k_all_layers_two_slots(mesh_device, device_para
 
     fill_slot(0)
     slot0_bytes = {
-        (config, layer, position): bytes(table.read_device_chunk(layer, position, 0, config))
+        (config, layer, position): bytes(table.read_device_chunk(mesh_device, layer, position, 0, config))
         for config in range(16)
         for layer in range(36)
         for position in range(0, 1024, 32)
@@ -406,7 +408,7 @@ def test_gpt_oss_kv_chunk_table_1k_all_layers_two_slots(mesh_device, device_para
             for config in range(16):
                 kind, head = divmod(config, 8)
                 for position in range(0, 1024, 32):
-                    raw = table.read_device_chunk(layer, position, slot, config)
+                    raw = table.read_device_chunk(mesh_device, layer, position, slot, config)
                     assert len(raw) == 2176
                     if slot == 0:
                         assert bytes(raw) == slot0_bytes[config, layer, position], (config, layer, position)
@@ -479,7 +481,7 @@ def test_gpt_oss_kv_chunk_table_two_chunks_plain_token_order(mesh_device, device
             for config in range(2 * num_heads):
                 kind, head = divmod(config, num_heads)
                 for position in range(0, seq_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
-                    raw = table.read_device_chunk(layer, position, slot, config)
+                    raw = table.read_device_chunk(mesh_device, layer, position, slot, config)
                     tensor = ttnn.experimental.disaggregation.tensor_from_bfp8_bytes(
                         raw, [1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, HEAD_DIM]
                     )

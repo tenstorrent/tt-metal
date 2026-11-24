@@ -188,7 +188,7 @@ def test_slabs_round_trip_and_table(mesh_device, device_params, layer_ids, num_s
         rec_segments = {
             segment: recurrent_segment_to_torch(
                 table.read_device_chunk(
-                    layer, kda_position(geometry, "kda_recurrent", segment), slot, table.config_id_of("01")
+                    mesh_device, layer, kda_position(geometry, "kda_recurrent", segment), slot, table.config_id_of("01")
                 ),
                 geometry,
             )
@@ -198,7 +198,11 @@ def test_slabs_round_trip_and_table(mesh_device, device_params, layer_ids, num_s
         conv_segments = {
             segment: convolution_segment_to_torch(
                 table.read_device_chunk(
-                    layer, kda_position(geometry, "kda_convolution", segment), slot, table.config_id_of("02")
+                    mesh_device,
+                    layer,
+                    kda_position(geometry, "kda_convolution", segment),
+                    slot,
+                    table.config_id_of("02"),
                 ),
                 geometry,
             )

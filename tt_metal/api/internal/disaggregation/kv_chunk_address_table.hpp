@@ -18,6 +18,10 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/strong_type.hpp>
 
+namespace tt::tt_metal::distributed {
+class MeshDevice;
+}  // namespace tt::tt_metal::distributed
+
 namespace tt::tt_metal::internal::disaggregation {
 
 // Strongly-typed index into the device group side table.
@@ -261,12 +265,20 @@ public:
     // --- Device reads ---
 
     // Read a single chunk's raw bytes from the primary replica device
-    // (first FabricNodeId in the chunk's DeviceGroup). Returns a buffer
-    // of size loc.size_bytes. Resolves the device internally via the
-    // global ControlPlane — no device list required from the caller.
-    std::vector<uint8_t> read_device_chunk(uint32_t layer, uint32_t position, uint32_t slot, uint32_t config_id = 0) const;
+    // (first FabricNodeId in the chunk's DeviceGroup), resolved in
+    // `mesh_device`'s context. Returns a buffer of size loc.size_bytes.
     std::vector<uint8_t> read_device_chunk(
-        uint32_t layer, uint32_t position, uint32_t slot, const std::string& config) const;
+        const tt::tt_metal::distributed::MeshDevice& mesh_device,
+        uint32_t layer,
+        uint32_t position,
+        uint32_t slot,
+        uint32_t config_id = 0) const;
+    std::vector<uint8_t> read_device_chunk(
+        const tt::tt_metal::distributed::MeshDevice& mesh_device,
+        uint32_t layer,
+        uint32_t position,
+        uint32_t slot,
+        const std::string& config) const;
 
     // --- Config introspection ---
 
