@@ -60,7 +60,14 @@ PROMOTE_GATE = os.environ.get("RESIDENT_ADAPTIVE_PROMOTE_GATE", "1") == "1"
 PROMOTE_ACC = float(os.environ.get("RESIDENT_ADAPTIVE_PROMOTE_ACC", "2.7"))
 PROMOTE_OUT = float(os.environ.get("RESIDENT_ADAPTIVE_PROMOTE_OUT", "256"))
 REFILL_MS_FIXED, REFILL_MS_PER_TOKEN = 20.0, 0.13  # (defaults: tests/refill_batch.py, 2026-11-23)
-SPEC_MS_DEFAULT = lambda n: 28.0 + 3.5 * (n - 1)  # noqa: E731  (served verify steps, 2026-11-23: 1 / 4 / 8 users)
+SPEC_MS_DEFAULT = lambda n: 28.0 + 4.6 * (n - 1)  # noqa: E731  (served verify steps, rc-20261124j: 1 / 2 / 4 / 8
+# users ~29 / 35 / 41 / 60 ms; 52.5 at 8 users let the gate promote 8 users before any 8-user step was measured)
+# promotions wait until no request has started for PROMOTE_SETTLE propose calls: users arriving together (8 at once)
+# were promoted one by one while the live count was still small (each promotion paid at 1-4 users) and ended up 8
+# speculating, which does not pay (~60 ms verify steps vs ~20 ms plain at ~3 tokens a verify): the probe, its moves
+# back and mixed steps cost natural c8 41.7 vs 50.7 tok/s per user (rc-20261124j). (P2d promotions cost ~20 ms a user:
+# waiting a few steps costs a single user ~1%)
+PROMOTE_SETTLE = int(os.environ.get("RESIDENT_ADAPTIVE_PROMOTE_SETTLE", "4"))
 # step times grow with the live users' total context (attention reads every row's KV): the estimates above are kept
 # per live count at no context (a measured step's time minus its context's share, these ms per context token) and the
 # decisions add the current context's share — a 250K request's ~44 ms verify steps kept as the 1-user estimate closed
@@ -168,6 +175,8 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         # the history, so it waits for a propose with no step in flight (a step the runner does not overlap: after a
         # prefill / layout change, any speculative step)
         self._calls = [0, 0]
+        # (PROMOTE_SETTLE: the live set at the last propose, propose calls since a request started)
+        self._seen_live, self._settle = set(), 0
         # (the acceptance-aware policy's measurements: EMAs of tokens per spec user-step and of step times per kind)
         self._pay = self._new_pay()
         self.prompt_len = {}  # slot -> its prompt's length (generated tokens = history - prompt)
@@ -670,7 +679,10 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
                 logger.info(f"adaptive: {live} live users for {self.low_calls} steps -> SPEC")
                 self.mode, self.low_calls = "SPEC", 0
         self._calls[1] += 1
-        if self.mode == "SPEC" and self._calls[0] == self._calls[1]:
+        started = bool(self.live - self._seen_live)
+        self._seen_live = set(self.live)
+        self._settle = 0 if started else self._settle + 1
+        if self.mode == "SPEC" and self._calls[0] == self._calls[1] and self._settle >= PROMOTE_SETTLE:
             self._promote()  # (known-greedy plain users into the spec build: state moves + drafter refill; drafts below)
         ids = torch.zeros(B, K, dtype=torch.int32)
         valid = torch.zeros(B, dtype=torch.int32)
