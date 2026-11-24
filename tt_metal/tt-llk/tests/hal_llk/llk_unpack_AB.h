@@ -216,9 +216,10 @@ inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape_a, cons
     const bool transpose_of_faces          = transpose == ckernel::Transpose::InterFace || transpose == ckernel::Transpose::Both;
     // _llk_unpack_AB_ uses config context 0 only, ordered by Auto TTSync (AutoTTSync.md): RISC stores to unpacker
     // config are ordered against the UNPACR/MOP pushes around them, so context 0 is rewritten in place without the
-    // two-context semaphore handshake. Scoped to AB unpacking; _llk_unpack_AB_uninit_ turns it off again.
+    // two-context semaphore handshake. Scoped to AB unpacking; _llk_unpack_AB_uninit_ turns it off again, and every
+    // kernel starts with it off. Free when already on (re-init inside a loop).
     hal_port::reset_config_context();
-    hal_port::enable_unpack_auto_ttsync();
+    hal_port::unpack_sync_mode<hal_port::UnpackSyncMode::AutoTTSync>();
 
     // transpose within the face
     cfg::write<cfg::Access::TensixCfgUnit, cfg::Thcon[cfg::Reg2].Haloize_mode, cfg::Sec::S0>(within_face_16x16_transpose);
@@ -296,7 +297,7 @@ inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const 
  */
 inline void _llk_unpack_AB_uninit_()
 {
-    hal_port::disable_unpack_auto_ttsync();
+    hal_port::unpack_sync_mode<hal_port::UnpackSyncMode::Handshake>();
 }
 
 /**
@@ -322,6 +323,7 @@ inline void _llk_unpack_AB_(
     [[maybe_unused]] const std::uint32_t bcast_row_idx = 0,
     [[maybe_unused]] const std::uint32_t srcb_format   = 0)
 {
+    LLK_ASSERT(hal_port::unpack_sync_mode_state == hal_port::UnpackSyncMode::AutoTTSync, "_llk_unpack_AB_ needs Auto TTSync: call _llk_unpack_AB_init_ first");
     volatile std::uint32_t tt_reg_ptr *cfg = hal::cfg::detail::state_cfg_bank(); // get pointer to registers for current state ID
 
     if constexpr (BType == BroadcastType::ROW)

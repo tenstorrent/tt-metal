@@ -108,45 +108,88 @@ inline void reset_config_context()
         cfg::set<cfg::UnpackMiscCfg::CfgContextOffset_0, cfg::Sec::S0, 0>(), cfg::set<cfg::UnpackMiscCfg::CfgContextOffset_1, cfg::Sec::S0, 0>());
 }
 
-// Auto TTSync setting used by the unpack thread: track backend config (split per unpacker) against Tensix instructions.
-inline void enable_unpack_auto_ttsync()
-{
-    namespace cfg = hal::cfg;
-    // SETC16.md: after reset, Auto TTSync only tracks the right Config bank once a SETC16 of CFG_STATE_ID has executed.
-    // The software tracker ckernel::cfg_state_id is 0 here (no state flip in this kernel), so write 0.
-    LLK_ASSERT(ckernel::cfg_state_id == 0, "Auto TTSync setup assumes config state 0");
-    cfg::write<cfg::Access::TensixCfgUnit, cfg::CfgStateId::StateID, cfg::Sec::S0, 0>();
-    cfg::write<cfg::Access::TensixCfgUnit>(
-        cfg::set<cfg::TensixTriscSync::TrackGlobalCfg, cfg::Sec::S0, 1>(),
-        cfg::set<cfg::TensixTriscSync::EnSubdividedCfgForUnpacr, cfg::Sec::S0, 1>(),
-        cfg::set<cfg::TensixTriscSync::TrackGPR, cfg::Sec::S0, 0>(),
-        cfg::set<cfg::TensixTriscSync::TrackTDMARegs, cfg::Sec::S0, 0>(),
-        cfg::set<cfg::TensixTriscSync::TrackTensixInstructions, cfg::Sec::S0, 1>());
-    // AutoTTSync.md: a change to the TENSIX_TRISC_SYNC fields must take effect before relying on it.
-    // HAL-GAP: no HAL wrapper for the Manual TTSync idle wait; production's tensix_sync() is used.
-    ckernel::tensix_sync();
-}
-
-// Turn Auto TTSync off again for the unpack thread. The setting is sticky per thread, so code relying on the
-// two-context handshake (or on Auto TTSync being off for performance) must restore it.
-inline void disable_unpack_auto_ttsync()
-{
-    namespace cfg = hal::cfg;
-    cfg::write<cfg::Access::TensixCfgUnit>(
-        cfg::set<cfg::TensixTriscSync::TrackGlobalCfg, cfg::Sec::S0, 0>(),
-        cfg::set<cfg::TensixTriscSync::EnSubdividedCfgForUnpacr, cfg::Sec::S0, 0>(),
-        cfg::set<cfg::TensixTriscSync::TrackGPR, cfg::Sec::S0, 0>(),
-        cfg::set<cfg::TensixTriscSync::TrackTDMARegs, cfg::Sec::S0, 0>(),
-        cfg::set<cfg::TensixTriscSync::TrackTensixInstructions, cfg::Sec::S0, 0>());
-    ckernel::tensix_sync();
-}
-
 // Sync on unpacker idle via waiting busy contexts counter 0
 inline void wait_for_idle()
 {
     while (hal::sync::semaphore::read<UNPACK_SYNC_SEM>() > 0)
     {
     }
+}
+
+/**
+ * @brief How unpack ops order RISC stores to unpacker config against the UNPACRs that read it.
+ *
+ * Handshake: production's two config contexts, the UNPACK_SYNC busy-context semaphore and a STALLWAIT on RISC config
+ * writes; Auto TTSync off. AutoTTSync: one config context, rewritten in place; Auto TTSync orders the stores
+ * (AutoTTSync.md). Each op's init asks for the mode it needs through @ref unpack_sync_mode; Auto TTSync is sticky per
+ * thread, so the op's uninit asks for Handshake again. Every kernel starts in Handshake: the boot code (trisc.cpp) turns
+ * Auto TTSync off and crt0 zeroes the mode flag. configure_unpack_AB leaves the mode alone, so an init may come before it.
+ */
+enum class UnpackSyncMode : std::uint8_t
+{
+    Handshake,
+    AutoTTSync
+};
+
+// Mode the hardware is in, as last set by unpack_sync_mode (Handshake at kernel start).
+inline UnpackSyncMode unpack_sync_mode_state = UnpackSyncMode::Handshake;
+
+// Push the TENSIX_TRISC_SYNC write for mode M, then a Tensix SEMPOST of UNPACK_SYNC that cannot pass the Wait Gate before
+// the Configuration Unit has executed that write. Callers have waited for UNPACK_SYNC to read 0.
+template <UnpackSyncMode M>
+inline void push_unpack_sync_mode()
+{
+    namespace cfg              = hal::cfg;
+    namespace sync             = hal::sync;
+    constexpr std::uint32_t on = M == UnpackSyncMode::AutoTTSync ? 1 : 0;
+    if constexpr (M == UnpackSyncMode::AutoTTSync)
+    {
+        // SETC16.md erratum: Auto TTSync only tracks the right Config bank once a SETC16 of CFG_STATE_ID has executed
+        // after reset. Write the bank the software tracker selects, so the two cannot disagree (llk_hw_cleanup flips it).
+        cfg::write<cfg::Access::TensixCfgUnit, cfg::CfgStateId::StateID, cfg::Sec::S0>(ckernel::cfg_state_id);
+    }
+    // Track backend config (split per unpacker) against Tensix instructions, or nothing.
+    cfg::write<cfg::Access::TensixCfgUnit>(
+        cfg::set<cfg::TensixTriscSync::TrackGlobalCfg, cfg::Sec::S0, on>(),
+        cfg::set<cfg::TensixTriscSync::EnSubdividedCfgForUnpacr, cfg::Sec::S0, on>(),
+        cfg::set<cfg::TensixTriscSync::TrackGPR, cfg::Sec::S0, 0>(),
+        cfg::set<cfg::TensixTriscSync::TrackTDMARegs, cfg::Sec::S0, 0>(),
+        cfg::set<cfg::TensixTriscSync::TrackTensixInstructions, cfg::Sec::S0, on>());
+    // AutoTTSync.md: a change to TENSIX_TRISC_SYNC needs a mechanism outside Auto TTSync to wait for it. SETC16 runs in the
+    // Configuration Unit; hold the SEMPOST until that unit is idle. Instructions pass the Wait Gate in order, so once the
+    // SEMPOST has executed, the SETC16 and every earlier instruction (and so every earlier UNPACR's base address read,
+    // MemoryOrdering.md) are done with the gate. Unlike tensix_sync(), this does not wait for UNPACRs still unpacking.
+    sync::wait::stall<sync::StallTarget::Sync, sync::StallCondition::ConfigUnitIdle>();
+    sync::semaphore::post<UNPACK_SYNC_SEM>();
+}
+
+// Second half of push_unpack_sync_mode: wait until its SEMPOST has executed, then take the count back (Tensix SEMGET, so
+// a later wait_for_idle also waits for it).
+inline void wait_unpack_sync_mode()
+{
+    while (hal::sync::semaphore::read<UNPACK_SYNC_SEM>() == 0)
+    {
+    }
+    hal::sync::semaphore::get<UNPACK_SYNC_SEM>();
+}
+
+/**
+ * @brief Put the unpack thread in sync mode M. No-op when it already is.
+ *
+ * Waits for the two-context ops in flight to free their contexts, writes the mode, and waits until the write and every
+ * earlier instruction have passed the Wait Gate, so the next RISC config store may rewrite any unpacker base.
+ */
+template <UnpackSyncMode M>
+inline void unpack_sync_mode()
+{
+    if (unpack_sync_mode_state == M)
+    {
+        return;
+    }
+    wait_for_idle();
+    push_unpack_sync_mode<M>();
+    wait_unpack_sync_mode();
+    unpack_sync_mode_state = M;
 }
 
 template <bool is_fp32_dest_acc_en, bool row_pool = false, bool fpu_srnd_en = false, bool pack_srnd_en = false>
@@ -293,9 +336,8 @@ inline void configure_unpack_AB(
 
     // Clear context ID
     hal_port::reset_config_context();
-    // Auto TTSync is enabled by _llk_unpack_AB_init_, the only user of the single-context path, not here: other
-    // unpack ops configured through this function keep the production two-context handshake, which hangs under
-    // Auto TTSync (test_sdpa_custom_mm_mask_extent_restore).
+    // The unpack sync mode is left as it is: ops that use one context with Auto TTSync turn it on in their init
+    // (hal_port::unpack_sync_mode), which may come before this function.
 }
 
 template <std::uint32_t UNP_SEL, std::uint32_t face_r_dim>
