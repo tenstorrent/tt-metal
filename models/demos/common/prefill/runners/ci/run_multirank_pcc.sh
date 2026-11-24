@@ -621,7 +621,10 @@ TABLE_WAIT_SECS="${TABLE_WAIT_SECS:-${TABLE_WAIT_DEFAULT}}"
 READY_WHAT="publishing the KV table"
 [ "${PERF_ONLY}" = 1 ] && READY_WHAT="all ${READY_RANKS} ranks entered the request loop"
 ranks_ready() {
-  find "${RANKLOGS}" -type f \( -name stderr -o -name stdout \) -exec grep -l -F "setup complete, entering request loop" {} + 2>/dev/null | wc -l
+  # Count distinct ranks, not files: --output-filename writes rank.N/{stdout,stderr} on some OpenMPI builds and flat
+  # runner.<job>@1.N.out files on the SC4 runners (run 45402728033 counted 0/4 by file name while all 4 ranks served).
+  { find "${RANKLOGS}" -type f -path "${RANKLOGS}/runner*" -exec grep -h -o -E "\[pp rank [0-9]+\] setup complete, entering request loop" {} + 2>/dev/null || true; } \
+    | sort -u | wc -l
 }
 runner_ready() {
   if [ "${PERF_ONLY}" = 1 ]; then
