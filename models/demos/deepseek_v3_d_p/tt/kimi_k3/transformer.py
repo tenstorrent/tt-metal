@@ -44,6 +44,10 @@ from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbe
 class TtKimiK3Transformer(LightweightModule):
     """A slice of Kimi-K3's layers, plus the tail when this rank holds it."""
 
+    # forward_packed's traced form takes active_chunks (the empty tail skips its attention), so a traced packed
+    # runtime captures one forward per real-chunk count (TtPrefillRuntime._capture_trace_packed).
+    packed_trace_skips_empty_positions = True
+
     @staticmethod
     def check_cache_complete(
         cache_path,
@@ -319,6 +323,10 @@ class TtKimiK3Transformer(LightweightModule):
         # The MoE layers' implementation (tt/moe_impl.py; one for the whole model): the MoE block takes a packed forward's
         # padding as a MoEBlockPacking, TtMoe as a PackedPadding (forward_packed; TtPrefillRuntime's traced path).
         self.moe_is_block = any(getattr(layer, "moe_block", False) for layer in self.layers)
+        # One set of persistent zero blocks (a traced packed forward's empty tail) for every layer.
+        self._zero_blocks = {}
+        for layer in self.layers:
+            layer.zero_blocks = self._zero_blocks
         self.norm = None
         if is_last_rank and build_tail and not kv_only_last_layer:
             self.norm = TtDistributedRmsNorm(
@@ -584,6 +592,7 @@ class TtKimiK3Transformer(LightweightModule):
         layer_tap: Optional[Callable] = None,
         seed_indexer_indices=None,
         zero_pad: bool = False,
+        active_chunks: Optional[int] = None,
     ):
         """One packed forward of ``chunks`` (PrefillChunk, forward_chunks of them, any users at any depth): every
         layer runs its attention once per non-empty chunk against that chunk's slot and offset (MLA: its KV slab;
@@ -608,6 +617,11 @@ class TtKimiK3Transformer(LightweightModule):
         metadata / padding_config: the traced form. One ``(slot, actual_start, actual_end)`` device triple per
             chunk position replaces ``chunks`` (then None), and the runtime's persistent PackedPadding replaces the
             one built from the chunks. Every position runs (an empty one points at a scratch slot); no acks.
+        active_chunks: traced form only. The first ``active_chunks`` positions hold the forward's real chunks and the
+            rest are empty (validate_chunks puts empties at the tail). The empty tail skips its attention, so it
+            writes no KV, index key or KDA state, and its rows pass through as in the eager form. None: every
+            position runs (TtPrefillRuntime captures one forward per real-chunk count when
+            packed_trace_skips_empty_positions).
 
         Returns the post-norm hidden state over all rows, or None with kv_only_last_layer.
         """
@@ -623,6 +637,8 @@ class TtKimiK3Transformer(LightweightModule):
             raise ValueError("Kimi-K3.1's DSA layers write and read an indexer key cache; pass index_kv_cache")
         if traced and (padding_config is None or on_layer_complete is not None):
             raise ValueError("a traced packed forward takes the persistent padding_config and no host acks")
+        if active_chunks is not None and not (traced and 1 <= active_chunks <= n):
+            raise ValueError(f"active_chunks={active_chunks} needs the traced form and 1..{n}")
 
         attn_input_tap = None
         if on_layer_hidden is not None:
@@ -646,7 +662,11 @@ class TtKimiK3Transformer(LightweightModule):
         )
         rows = hidden.shape[2] // n
         sp_factor = tuple(self.mesh_device.shape)[self.sp_axis]
-        empty = [False] * n if traced else [c.is_empty for c in chunks]
+        if traced:
+            active = n if active_chunks is None else active_chunks
+            empty = [k >= active for k in range(n)]
+        else:
+            empty = [c.is_empty for c in chunks]
         if not traced:
             # One MoE padding for every layer of the forward: the MoE block's planner reads the chunks themselves
             # (MoEBlockPacking); TtMoe's PackedPadding is None when every row is real.
@@ -663,7 +683,7 @@ class TtKimiK3Transformer(LightweightModule):
         try:
             for k in range(n):
                 chunk = None if traced else chunks[k]
-                if not traced and chunk.is_empty:
+                if empty[k]:
                     ctxs.append(None)
                     continue
                 slot = 0 if traced else chunk.slot_id

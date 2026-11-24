@@ -568,3 +568,38 @@ def test_k31_packed_forward_takes_the_index_cache(expect_error):
         fwd(_k31_stub(has_indexer=False), None, None, chunks, index_kv_cache=object())
     with expect_error(_GuardsPassed, "argument checks passed"):
         fwd(_k31_stub(has_indexer=False), None, None, chunks)
+
+
+def test_kimi_packed_forward_skips_only_a_traced_empty_tail(expect_error):
+    """active_chunks (the traced empty tail skips its attention) needs the traced form and 1..forward_chunks; with it
+    the runtime captures one forward per real-chunk count (packed_trace_skips_empty_positions)."""
+    assert TtKimiK3Transformer.packed_trace_skips_empty_positions
+    fwd = TtKimiK3Transformer.forward_packed
+    eager = [PrefillChunk(0, 0, 2560), EMPTY_CHUNK]
+    with expect_error(ValueError, "needs the traced form"):
+        fwd(_k31_stub(), None, None, eager, index_kv_cache=object(), active_chunks=1)
+    metadata = [object(), object()]
+    for bad in (0, 3):
+        with expect_error(ValueError, "needs the traced form"):
+            fwd(
+                _k31_stub(),
+                None,
+                None,
+                None,
+                index_kv_cache=object(),
+                metadata=metadata,
+                padding_config=object(),
+                active_chunks=bad,
+            )
+    for good in (None, 1, 2):
+        with expect_error(_GuardsPassed, "argument checks passed"):
+            fwd(
+                _k31_stub(),
+                None,
+                None,
+                None,
+                index_kv_cache=object(),
+                metadata=metadata,
+                padding_config=object(),
+                active_chunks=good,
+            )

@@ -14,8 +14,10 @@ counterparts of `test_k3_prefill_multiuser.py`, with the index cache compared be
   the same model, then against a model built for one chunk per forward. Plain residual stream: bit-exact output, KV,
   index cache and KDA carries. AttnRes: PCC bars (it rounds a row by its position in the call; see the K3 test).
 * test_k31_packed_traced_matches_eager: the same schedule through TtKimiK3Runtime.prefill_forward with use_trace
-  (one capture, replayed per forward, every chunk position's slot and bounds read on device, an empty position in
-  the scratch slot) must leave the caches and carries the eager packed forward leaves, bit for bit.
+  (one capture per real-chunk count, every chunk position's slot and bounds read on device; a forward with an empty
+  tail replays the capture in which that tail skips its attention) must leave the caches and carries the eager
+  packed forward leaves, bit for bit. Every forward with an empty tail replays its own capture, and no capture or
+  replay compiles a program.
 * test_k31_packed_pipeline_matches_one_rank: the K3.1 runtime split over two pipeline ranks on one mesh (layers 0-11
   and 12-15, two DSA layers each side), packed activations handed rank to rank and D2H acks from rank 0, must match
   one rank (plain residual, eager: bit-exact), and traced must match eager on both ranks (bit-exact). No indexer
@@ -387,14 +389,52 @@ def _runtime(
 
 
 def _release_runtimes(pairs):
-    """Every runtime's trace before any sub-device manager (the models share one mesh here), then the slabs."""
+    """Every runtime's traces before any sub-device manager (the models share one mesh here), then the slabs."""
     for rt, _ in pairs:
+        for partial in rt._controllers_by_real_count.values():
+            partial.release()
+        rt._controllers_by_real_count = {}
         if rt._controller is not None:
             rt._controller.release()
     for rt, caches in pairs:
         rt.release_trace()  # also the model's sub-device managers
         if caches.kda_states is not None:
             caches.kda_states.deallocate()
+
+
+def _count_replays(rt):
+    """Wrap every capture's replay with a counter: {real-chunk count (F for the full capture): replays}."""
+    counts = {}
+
+    def counting(controller, real):
+        replay = controller.replay
+
+        def wrapped(*args, **kwargs):
+            counts[real] = counts.get(real, 0) + 1
+            return replay(*args, **kwargs)
+
+        controller.replay = wrapped
+
+    counting(rt._controller, FORWARD_CHUNKS)
+    for real, controller in rt._controllers_by_real_count.items():
+        counting(controller, real)
+    return counts
+
+
+def _expected_replays(forwards):
+    want = {}
+    for chunks in forwards:
+        real = sum(not c.is_empty for c in chunks)
+        want[real] = want.get(real, 0) + 1
+    return want
+
+
+def _assert_skip_captures(rt):
+    """K3.1 declares packed_trace_skips_empty_positions: one capture per real-chunk count 1..F-1 beside the full one,
+    none of which compiled a program (compile() warmed each)."""
+    assert type(rt.model).packed_trace_skips_empty_positions
+    assert sorted(rt._controllers_by_real_count) == list(range(1, FORWARD_CHUNKS)), rt._controllers_by_real_count
+    assert all(n == 0 for n in rt.capture_new_programs.values()), f"captures compiled: {rt.capture_new_programs}"
 
 
 @pytest.mark.timeout(3600)
@@ -417,6 +457,9 @@ def test_k31_packed_traced_matches_eager(mesh_device, device_params):
         model = rt.model
         rt.compile(caches)
         rt.capture_trace(caches)
+        _assert_skip_captures(rt)
+        replays = _count_replays(rt)
+        programs = mesh_device.num_program_cache_entries()
 
         def forward_input(chunks, user_of):
             return rt.make_forward_input(
@@ -428,6 +471,8 @@ def test_k31_packed_traced_matches_eager(mesh_device, device_params):
             logger.info(f"[traced] forward {f}: {chunks}")
             rt.prefill_forward(forward_input(chunks, lambda s: s), caches, chunks)
         ttnn.synchronize_device(mesh_device)
+        assert replays == _expected_replays(forwards), f"replays by real-chunk count {replays}"
+        assert mesh_device.num_program_cache_entries() == programs, "a traced forward compiled a program"
 
         for chunks in forwards:
             ref = [
@@ -525,6 +570,8 @@ def test_k31_packed_pipeline_matches_one_rank(mesh_device, device_params, traced
             ranks[0][0].set_d2h_ack_service(d2h)
             for rt, caches in ranks:
                 rt.capture_trace(caches)
+                _assert_skip_captures(rt)
+            replays = [_count_replays(rt) for rt, _ in ranks]
             warm = _read_d2h_records(d2h, ranks[0][0].warmup_ack_count())
             logger.info(f"[pipeline] drained {len(warm)} warm-up D2H records")
 
@@ -546,6 +593,7 @@ def test_k31_packed_pipeline_matches_one_rank(mesh_device, device_params, traced
             assert got == want, f"forward {f}: D2H records {got} != {want}"
 
         if traced:
+            assert replays == [_expected_replays(forwards)] * 2, f"replays by real-chunk count per rank {replays}"
             for chunks in forwards:
                 shifted = [
                     c if c.is_empty else PrefillChunk(c.slot_id + num_users, c.actual_start, c.actual_end)

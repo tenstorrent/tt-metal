@@ -1050,6 +1050,9 @@ def _release(runtimes):
     """Every runtime's traces before any sub-device manager (the models share one mesh here; in the runner each rank is
     its own process), then each model's managers."""
     for r in runtimes:
+        for partial in r._controllers_by_real_count.values():  # the captures for forwards with an empty tail
+            partial.release()
+        r._controllers_by_real_count = {}
         if r._controller is not None:
             r._controller.release()
     for r in runtimes:

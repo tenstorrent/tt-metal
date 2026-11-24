@@ -320,8 +320,8 @@ class TtKimiK3Block(LightweightModule):
 
         on_layer_complete: ``(global layer index, k)`` once per non-empty chunk k, after its attention (and, on an
             MLA layer, its KV write and pad-zero).
-        empty: per chunk, whether it is empty. A traced forward runs every position (an empty one in a scratch
-            slot) and passes all False.
+        empty: per chunk, whether it is empty. A traced forward runs every position below its active_chunks (an
+            empty one there in a scratch slot) and passes the tail past it as empty.
         zero_pad: on an MLA layer, zero each chunk's KV pad window without acking it (the caller acks later).
         """
         n = len(ctxs)
@@ -385,14 +385,19 @@ class TtKimiK3Block(LightweightModule):
 
         # An empty chunk adds zeros: its rows pass through the residual unchanged. Shaped like a real chunk's
         # output (same rows, dtype and layout, so the concat is uniform); validate_chunks guarantees one exists.
+        # A traced forward with an empty tail (active_chunks) takes one persistent read-only zero block instead:
+        # zeros_like writes from the host, which a capture refuses, and the warm pass of the same forward builds it.
         template = next(out for out in outs if out is not None)
+        traced = ctxs[0].metadata is not None
+        zero = self._zero_block(template) if traced else None
         for k in range(n):
             if outs[k] is None:
-                outs[k] = ttnn.zeros_like(template)
+                outs[k] = zero if traced else ttnn.zeros_like(template)
         attn_out = outs[0] if n == 1 else ttnn.concat(outs, dim=2)
         if n > 1:
             for out in outs:
-                ttnn.deallocate(out)
+                if out is not zero:
+                    ttnn.deallocate(out)
         residual.write(attn_out)
         residual.release(hidden)
 
@@ -409,6 +414,20 @@ class TtKimiK3Block(LightweightModule):
         ttnn.deallocate(ffn_norm_out)
         residual.write(ffn_out)
         residual.release(pre_ffn)
+
+    # Persistent zero blocks for a traced packed forward's empty tail: (shape, dtype, layout, memory config) ->
+    # tensor. TtKimiK3Transformer hands every layer its one dict, so the layers share them. Built by a warm pass
+    # (outside any capture) and never written.
+    zero_blocks: Optional[dict] = None
+
+    def _zero_block(self, like) -> ttnn.Tensor:
+        if self.zero_blocks is None:
+            self.zero_blocks = {}
+        key = (tuple(like.shape), like.dtype, like.layout, str(like.memory_config()))
+        zero = self.zero_blocks.get(key)
+        if zero is None:
+            zero = self.zero_blocks[key] = ttnn.zeros_like(like)
+        return zero
 
     def _ffn_path(
         self,
