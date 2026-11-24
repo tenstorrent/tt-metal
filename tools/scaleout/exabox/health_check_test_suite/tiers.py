@@ -200,23 +200,23 @@ def select_tests(tier: Tier, only: str) -> tuple[Tier, tuple[str, ...]]:
     return replace(tier, tests=tests), picked
 
 
-# The stages around the tests that --stage-order names: the pre-test resets first, the post-test reset and the end
-# sequence last.
-STAGES = ("reset", "end")
+# The stages around the tests that --stage-order names, in run order: the pre-test resets before them; the post-test
+# reset with the end sequence, then the ETH status read, after them.
+STAGES = ("reset", "end", "eth")
 
 
 def select_stages(tier: Tier, order: str) -> tuple[Tier, tuple[str, ...]]:
     """*tier* cut down to the stages named in *order* (comma-separated; --stage-order), and the bus-bar steps to run:
     "reset" (its pre-test resets), its tests as --tests names them (see select_tests), "end" (its post-test reset and the
-    end sequence). A stage not named does not run. The order must be the one the stages run in: reset, the tier's
-    tests in its order, end; any other is a ValueError that names it."""
+    end sequence), "eth" (the ETH status read). A stage not named does not run. The order must be the one the stages run
+    in: reset, the tier's tests in its order, end, eth; any other is a ValueError that names it."""
     names = [n for n in order.replace(" ", "").split(",") if n]
     tests = [n for n in names if n not in STAGES]
     cut, steps = select_tests(tier, ",".join(tests)) if tests else (replace(tier, tests=()), ())
 
     def rank(n: str) -> tuple[int, ...]:
         if n in STAGES:
-            return (0,) if n == "reset" else (2,)
+            return (0,) if n == "reset" else (2, STAGES.index(n))
         step = n.removeprefix("busbar_")
         return (1, cut.tests.index("busbar" if step in STEPS else n), STEPS.index(step) if step in STEPS else -1)
 
@@ -227,6 +227,8 @@ def select_stages(tier: Tier, order: str) -> tuple[Tier, tuple[str, ...]]:
             cut,
             resets=tier.resets if "reset" in names else (),
             post_test_resets=(tier.post_test_resets or RESET_FLAGS[:1]) if "end" in names else (),
+            eth_status="eth" in names,
+            eth_summary=tier.eth_summary and "eth" in names,
         ),
         steps,
     )

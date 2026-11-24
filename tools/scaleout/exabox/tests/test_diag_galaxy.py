@@ -195,10 +195,14 @@ class TestStageOrder(unittest.TestCase):
         cut, steps = tiers.select_stages(weekly, "busbar_heavy")
         self.assertEqual((cut.resets, cut.tests, cut.post_test_resets, steps), ((), ("busbar",), (), ("heavy",)))
         cut, _ = tiers.select_stages(tiers.TIERS["flash"], "reset,end")
-        self.assertEqual((cut.resets, cut.tests, cut.post_test_resets), ((), (), ("-glx_reset",)))
+        self.assertEqual(
+            (cut.resets, cut.tests, cut.post_test_resets, cut.eth_status), ((), (), ("-glx_reset",), False)
+        )
+        cut, _ = tiers.select_stages(weekly, "reset,busbar,links,end,eth")
+        self.assertTrue(cut.eth_status)
 
     def test_an_order_the_stages_do_not_run_in_is_refused(self):
-        for order in ("links,busbar", "end,reset", "busbar_mix,busbar_qb"):
+        for order in ("links,busbar", "end,reset", "busbar_mix,busbar_qb", "eth,end"):
             with self.subTest(order=order), self.assertRaisesRegex(ValueError, "the stages run in the order"):
                 tiers.select_stages(tiers.TIERS["weekly"], order)
 

@@ -100,8 +100,8 @@ def build_diag_arg_parser() -> argparse.ArgumentParser:
         metavar="LIST",
         help=(
             "Run only these stages, comma-separated, in the order they run: reset (the pre-test resets), the tier's "
-            "tests as --tests names them, end (the post-test reset and the end sequence). A stage not named does not "
-            "run; the other phases run as usual. Not with --tests."
+            "tests as --tests names them, end (the post-test reset and the end sequence), eth (the ETH status read). "
+            "A stage not named does not run; the other phases run as usual. Not with --tests."
         ),
     )
     ap.add_argument(
