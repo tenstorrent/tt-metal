@@ -145,56 +145,19 @@ inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const 
     // 0x4B000000 + sum, so the integer can be read straight from the bit pattern:
     //   * mid and top are shifted left by 11 and 22, and 0x4B000000's lowest set bit
     //     is bit 24, so the constant term vanishes mod 2**32;
-    //   * low is not shifted, so its 0x4B000000 would survive. Instead of an SFPEXMAN
-    //     the top chain starts from 2**23 + 724: (724 << 22) == -0x4B000000 mod 2**32,
-    //     cancelling low's constant term in the final integer add. top + 724 stays
-    //     below 2**23, so the fp32 sums remain exact.
+    //   * low is not shifted, so its 0x4B000000 would survive; the top chain starts
+    //     from 2**23 + 724 instead: (724 << 22) == -0x4B000000 mod 2**32 cancels it
+    //     in the final integer add. top + 724 stays below 2**23, so the fp32 sums
+    //     remain exact.
     //
-    // Issue schedule (22 slots per row, 2 of them SFPNOP). Each SFPLOADMACRO loads
-    // one operand and schedules its shift / cast / multiply on the Round, Simple and
-    // MAD sub-units (`[x]` below), so the issue stream only carries the loads, the
-    // four masks, five multiplies and the five-instruction integer tail. The
-    // sub-unit rules this obeys: one op per sub-unit per cycle, never a Simple and a
-    // Round op in the same cycle, a MAD result is read two instructions later and
-    // never in the instruction right after the MAD, and every scheduled op fires
-    // before the row's own store, so rows do not overlap and the Dst address modes
-    // are the same as before (ADDR_MOD_3 loads, ADDR_MOD_2 store).
-    //
-    //  t | issue                    | Simple          | MAD                  | Round
-    // ---+--------------------------+-----------------+----------------------+------------
-    //  0 | [b2] load b              |                 |                      |
-    //  1 | nop                      |                 |                      | [b2] >>= 22
-    //  2 | [a0] load a              | [b2] = cast     |                      |
-    //  3 | a0 &= 0x7ff              | a0 &= 0x7ff     |                      |
-    //  4 | [a1] load a              | [a0] = cast     |                      |
-    //  5 | top = a0*b2 + (2**23+724)|                 | top = ...            | [a1] >>= 11
-    //  6 | a1 &= 0x7ff              | a1 &= 0x7ff     |                      |
-    //  7 | [b0] load b              | [a1] = cast     |                      |
-    //  8 | b0 &= 0x7ff              | b0 &= 0x7ff     |                      |
-    //  9 | [b1] load b              | [b0] = cast     |                      |
-    // 10 | low = a0*b0 + 2**23      |                 | low = ...            | [b1] >>= 11
-    // 11 | b1 &= 0x7ff              | b1 &= 0x7ff     |                      |
-    // 12 | [a2] load a              | [b1] = cast     |                      |
-    // 13 | top += a1*b1             |                 | top += a1*b1         | [a2] >>= 22
-    // 14 | nop                      | [a2] = cast     | [b1] mid = a0*b1+2**23|
-    // 15 | top += a2*b0             |                 | top += a2*b0         |
-    // 16 | mid += a1*b0             |                 | mid += a1*b0         |
-    // 17 | top <<= 22               | top <<= 22      |                      |
-    // 18 | mid <<= 11               | mid <<= 11      |                      |
-    // 19 | top += low               | top += low      |                      |
-    // 20 | top += mid               | top += mid      |                      |
-    // 21 | store top                |                 |                      |
-    //
-    // Macro index / shape (see mul_int32_init):
-    //   0: a0, b0  cast at +2
-    //   1: b1      >>11 at +1, cast at +3, mid = a0*b1 + 2**23 in place at +5
-    //   2: a2, b2  >>22 at +1, cast at +2
-    //   3: a1      >>11 at +1, cast at +3
-    //
-    // Rows overlap by one load: the t = 14 slot loads the next row's b2 (Dst address
-    // + 2, which the row's own store reaches through ADDR_MOD_2) into the other one of
-    // LREG5 / LREG7, so only the first row issues t = 0 and t = 1; every later row is
-    // t = 2..21 (20 slots), and the last row keeps the t = 14 nop.
+    // Each SFPLOADMACRO loads one operand and runs its shift / cast (and for b1 the
+    // mid MAD) on the Round / Simple / MAD sub-units, so a row issues only loads, four
+    // masks, five MADs and the integer tail: 20 slots. The row's slot after the
+    // a2 load loads the next row's b2 (Dst + 2, reached through the store's
+    // ADDR_MOD_2) into the other of LREG5 / LREG7; the first row has a two-slot b2
+    // prologue and the last row a nop in that slot. Sub-unit rules: one op per
+    // sub-unit per cycle, no Simple and Round op in the same cycle, and a MAD result
+    // is read no earlier than two instructions after the MAD.
     TT_SFPLOADMACRO(
         (2 << 2) | (p_sfpu::LREG5 & 3), InstrModLoadStore::INT32, ADDR_MOD_3, offset1 | (p_sfpu::LREG5 >> 2));
     TTI_SFPNOP;
@@ -210,15 +173,10 @@ inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const 
 
 template <bool APPROXIMATION_MODE>
 inline void mul_int32_init() {
-#ifdef DISABLE_SFPLOADMACRO
     sfpi::vConstIntPrgm0 = 0x7ff;                  // LREG12: 11-bit chunk mask
     sfpi::vConstFloatPrgm1 = 8388608.0f + 724.0f;  // LREG13: 2**23 + 724, start of the top chain
     sfpi::vConstFloatPrgm2 = 8388608.0f;           // LREG14: 2**23
-#else
-    sfpi::vConstIntPrgm0 = 0x7ff;                  // LREG12: 11-bit chunk mask
-    sfpi::vConstFloatPrgm1 = 8388608.0f + 724.0f;  // LREG13: 2**23 + 724, start of the top chain
-    sfpi::vConstFloatPrgm2 = 8388608.0f;           // LREG14: 2**23
-
+#ifndef DISABLE_SFPLOADMACRO
     // SFPLOADMACRO instruction templates; an instruction with VD = 12 + i writes
     // template i. The macro sequence overrides VD (and VB, with the 0x80 flag) with
     // the loaded register, so the shifts and the cast act in place on it and the

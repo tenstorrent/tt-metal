@@ -2172,12 +2172,7 @@ _MUL_INT32_EDGE_VALUES = [
 
 
 def test_eltwise_binary_sfpu_mul_int32_full_range():
-    """Full-width Int32 multiply against the product modulo 2**32, bit-exact.
-
-    Edge cross product (11-bit chunk boundaries, 2**22 bias neighbours, INT32_MIN/MAX,
-    negatives, overflowing products) plus random full-range pairs. Run under
-    TT_METAL_DISABLE_SFPLOADMACRO=1 as well to cover the plain path.
-    """
+    """Bit-exact Int32 multiply mod 2**32 on chunk-boundary edge pairs and random full-range pairs."""
     edges = [(a, b) for a in _MUL_INT32_EDGE_VALUES for b in _MUL_INT32_EDGE_VALUES]
     gen = np.random.default_rng(0x3238)
     n = 2 * _ELEMENTS_PER_TILE
