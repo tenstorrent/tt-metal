@@ -154,6 +154,8 @@ inline void _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_mop_config_(const std:
 __attribute__((always_inline)) inline void _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_init_(
     const std::uint32_t nt_dim = 1, const std::uint32_t unpA_face_r_dim = FACE_R_DIM, const std::uint32_t unpA_num_faces = 4)
 {
+    // Two-context handshake op: an earlier op's init may have left Auto TTSync on, and tt-metal calls no uninit.
+    hal_port::unpack_sync_mode<hal_port::UnpackSyncMode::Handshake>();
     namespace cfg = hal::cfg;
     namespace adc = hal::counters::adc;
 

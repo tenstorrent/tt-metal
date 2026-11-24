@@ -27,6 +27,8 @@ using namespace unpacker;
 
 inline void _llk_unpack_AB_scalar_block_init_(const ckernel::TensorShape& tensor_shape_a, const ckernel::TensorShape& tensor_shape_b)
 {
+    // Two-context handshake op: an earlier op's init may have left Auto TTSync on, and tt-metal calls no uninit.
+    hal_port::unpack_sync_mode<hal_port::UnpackSyncMode::Handshake>();
     namespace cfg = hal::cfg;
     namespace adc = hal::counters::adc;
 
