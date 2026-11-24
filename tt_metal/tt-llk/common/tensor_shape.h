@@ -147,6 +147,17 @@ constexpr TensorShape tensor_shape_from_num_faces(const std::uint32_t face_r_dim
     return TensorShape {static_cast<std::uint8_t>(face_r_dim), MAX_FACE_C_DIM, num_faces_r_dim, num_faces_c_dim};
 }
 
+constexpr bool is_valid_face_r_dim(const std::uint8_t face_r_dim)
+{
+    return face_r_dim == 1 || face_r_dim == 2 || face_r_dim == 4 || face_r_dim == 8 || face_r_dim == MAX_FACE_R_DIM;
+}
+
+// Out of line because C++17 allows no asm (the assert) in a constexpr body.
+inline void assert_inexact_tile_dims_()
+{
+    LLK_ASSERT(false, "tile dims have no exact TensorShape");
+}
+
 /**
  * @brief Build a TensorShape from total tile dimensions.
  *
@@ -155,18 +166,18 @@ constexpr TensorShape tensor_shape_from_num_faces(const std::uint32_t face_r_dim
  *
  * @param tile_r_dim: Tile rows (1, 2, 4, 8, 16, or 32).
  * @param tile_c_dim: Tile columns (16 or 32).
+ * @note Asserts the dims map to a TensorShape exactly (when LLK asserts are on).
  */
 constexpr TensorShape tensor_shape_from_tile_dims(const std::uint32_t tile_r_dim, const std::uint32_t tile_c_dim)
 {
     const std::uint8_t face_r_dim      = static_cast<std::uint8_t>(tile_r_dim > MAX_FACE_R_DIM ? MAX_FACE_R_DIM : tile_r_dim);
     const std::uint8_t num_faces_r_dim = tile_r_dim > MAX_FACE_R_DIM ? MAX_NUM_FACES_R_DIM : 1;
     const std::uint8_t num_faces_c_dim = tile_c_dim > MAX_FACE_C_DIM ? MAX_NUM_FACES_C_DIM : 1;
+    if (!(face_r_dim * num_faces_r_dim == tile_r_dim && MAX_FACE_C_DIM * num_faces_c_dim == tile_c_dim && is_valid_face_r_dim(face_r_dim)))
+    {
+        assert_inexact_tile_dims_();
+    }
     return TensorShape {face_r_dim, MAX_FACE_C_DIM, num_faces_r_dim, num_faces_c_dim};
-}
-
-constexpr bool is_valid_face_r_dim(const std::uint8_t face_r_dim)
-{
-    return face_r_dim == 1 || face_r_dim == 2 || face_r_dim == 4 || face_r_dim == 8 || face_r_dim == MAX_FACE_R_DIM;
 }
 
 /**
@@ -248,18 +259,6 @@ inline TensorShape make_tensor_shape_from_legacy(const std::uint8_t face_r_dim, 
 }
 
 /**
- * @brief @ref tensor_shape_from_tile_dims that asserts the tile dims map to a TensorShape exactly.
- */
-inline TensorShape make_tensor_shape_from_tile_dims(const std::uint32_t tile_r_dim, const std::uint32_t tile_c_dim)
-{
-    const TensorShape tensor_shape = tensor_shape_from_tile_dims(tile_r_dim, tile_c_dim);
-    LLK_ASSERT(
-        tensor_shape.total_row_dim() == tile_r_dim && tensor_shape.total_col_dim() == tile_c_dim && is_valid_face_r_dim(tensor_shape.face_r_dim),
-        "tile dims have no exact TensorShape");
-    return tensor_shape;
-}
-
-/**
  * @brief Validates shapes for ops that depend on face positioning within a tile.
  *
  * Keep this conservative until larger TensorShape variants have coverage.
@@ -311,6 +310,7 @@ constexpr bool is_tensor_shape_2x1_face_grid(const TensorShape& tensor_shape)
  */
 constexpr bool matmul_unpack_face_by_face(const TensorShape& tensor_shape)
 {
-    return tensor_shape.total_row_dim() < MAX_FACE_R_DIM * MAX_NUM_FACES_R_DIM;
+    // Same as total_row_dim() < 32 on every valid shape (two face rows means 16-row faces), without a multiply.
+    return tensor_shape.num_faces_r_dim < MAX_NUM_FACES_R_DIM;
 }
 } // namespace ckernel

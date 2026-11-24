@@ -323,13 +323,13 @@ inline void _llk_unpack_AB_matmul_(
     // In1/InB -> srcA
     LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_AB_matmul_", in0_tensor_shape);
     LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_AB_matmul_", in1_tensor_shape);
-    const bool unpA_partial_face = ckernel::matmul_unpack_face_by_face(in1_tensor_shape);
-    const bool unpB_partial_face = ckernel::matmul_unpack_face_by_face(in0_tensor_shape);
-
     volatile std::uint32_t* cfg = get_cfg_pointer(); // get pointer to registers for current state ID
 
     const bool reuse_a        = ct_dim >= rt_dim;
     const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
+    // Only one operand is unpacked here (in0 when reusing A, else in1). One flag instead of two keeps the TRISC
+    // loop free of extra live registers.
+    const bool partial_face = ckernel::matmul_unpack_face_by_face(reuse_a ? in0_tensor_shape : in1_tensor_shape);
 
     if (!reuse_a)
     {
@@ -369,7 +369,7 @@ inline void _llk_unpack_AB_matmul_(
 
         if (reuse_a)
         {
-            if (unpB_partial_face)
+            if (partial_face)
             {
                 TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_ZEROSRC);
                 // Do face by face unpacking
@@ -397,7 +397,7 @@ inline void _llk_unpack_AB_matmul_(
                     TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC1_REG3_Base_cntx1_address_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0);
                 }
                 TTI_DMANOP;
-                if (unpB_partial_face)
+                if (partial_face)
                 {
                     TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_ZEROSRC_STALL_RESET_WR_RDY);
                     // Do face by face unpacking
@@ -416,7 +416,7 @@ inline void _llk_unpack_AB_matmul_(
         }
         else
         {
-            if (unpA_partial_face)
+            if (partial_face)
             {
                 // Do face by face unpacking
                 TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC);
@@ -444,7 +444,7 @@ inline void _llk_unpack_AB_matmul_(
                     TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG3_Base_cntx1_address_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0);
                 }
                 TTI_DMANOP;
-                if (unpA_partial_face)
+                if (partial_face)
                 {
                     // Do face by face unpacking
                     TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC_STALL_RESET_WR_RDY);

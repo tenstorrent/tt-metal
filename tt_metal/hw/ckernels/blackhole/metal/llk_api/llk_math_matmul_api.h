@@ -41,10 +41,8 @@ inline void llk_math_matmul_init_impl(
     const std::uint32_t transpose,
     const std::uint32_t ct_dim,
     const std::uint32_t rt_dim) {
-    const ckernel::TensorShape in0_tensor_shape =
-        ckernel::make_tensor_shape_from_tile_dims(in0_tile_r_dim, in0_tile_c_dim);
-    const ckernel::TensorShape in1_tensor_shape =
-        ckernel::make_tensor_shape_from_tile_dims(in1_tile_r_dim, in1_tile_c_dim);
+    const ckernel::TensorShape in0_tensor_shape = ckernel::tensor_shape_from_tile_dims(in0_tile_r_dim, in0_tile_c_dim);
+    const ckernel::TensorShape in1_tensor_shape = ckernel::tensor_shape_from_tile_dims(in1_tile_r_dim, in1_tile_c_dim);
     LLK_ASSERT(
         partial_face == (in0_tensor_shape.face_r_dim < FACE_R_DIM), "matmul partial_face does not match in0 tile dims");
     llk_math_matmul_init_impl<math_fidelity, THROTTLE_LEVEL, ROW_MOP>(
