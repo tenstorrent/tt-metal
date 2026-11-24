@@ -188,6 +188,15 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlocke
                                    ? 1u
                                    : 0u;
 
+    // cb_in packs input rows back to back, as tilize requires. When a row is not a multiple of the input's NoC read
+    // alignment (e.g. 32 B UINT8 rows vs 64 B BH DRAM), a row's L1 slot can sit at a different offset within an
+    // alignment block than its source, so the reader bounces such rows through an aligned scratchpad window.
+    const uint32_t read_alignment = input_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
+                                        ? tt::tt_metal::hal::get_dram_alignment()
+                                        : tt::tt_metal::hal::get_l1_alignment();
+    const bool bounce_misaligned_rows = !input_tensor.is_sharded() && (input_cb_page_size % read_alignment != 0);
+    const ScratchpadSpecName BOUNCE_SP{"bounce"};
+
     // we are focused on reading one row at a time, in a pattern that allows us to write an entire output row at a time
     // if W is being swapped with another dim X (e.g. H), then we need to read X rows at a time (X is the new row
     // dimension) CB is thus X pages in size (X*W*element_size) we read in X input rows of size W, and write out W
@@ -258,10 +267,16 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlocke
             "reader_permute_interleaved_rm_blocked_generic.cpp",
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = SRC_CB, .accessor_name = "cb_in", .endpoint_type = DFBEndpointType::PRODUCER}},
+        .scratchpad_bindings = bounce_misaligned_rows
+                                   ? Group<KernelSpec::ScratchpadBinding>{KernelSpec::ScratchpadBinding{
+                                         .scratchpad_spec_name = BOUNCE_SP, .accessor_name = "bounce"}}
+                                   : Group<KernelSpec::ScratchpadBinding>{},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
         .compile_time_args =
             {{"N", N},
              {"page_size", input_cb_page_size},
+             {"read_alignment", read_alignment},
+             {"bounce_misaligned_rows", bounce_misaligned_rows},
              {"num_rows", num_rows},
              {"x_dim", x_dim},
              {"num_blocks_total", num_blocks_total},
@@ -306,7 +321,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlocke
         .advanced_options = {.num_runtime_varargs = 3 * N},
     };
 
-    // 8-bit ints go through 32-bit Dest; BH RM UInt8 is routed via UInt8->UInt32 at the user API.
+    // 8-bit ints go through 32-bit Dest; BH RM Int8 (and sharded UInt8) is routed via UInt32 in prim::permute.
     bool fp32_dest_acc_en = requires_32bit_dest(cb_data_format_output);
     ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
     // UnpackToDest lowers to UnpackToDestFp32; only safe for 32-bit formats. 8-bit ints must
@@ -382,6 +397,10 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlocke
     // ---- Assemble ----
     ProgramSpec spec;
     spec.name = "permute_rm_blocked_generic";
+    if (bounce_misaligned_rows) {
+        spec.scratchpads = {
+            ScratchpadSpec{.unique_id = BOUNCE_SP, .size_per_node = 2 * read_alignment + input_cb_page_size}};
+    }
     spec.kernels = {std::move(reader), std::move(writer), std::move(compute)};
     spec.dataflow_buffers = {std::move(src_cb), std::move(out_cb), std::move(tilize_cb)};
     spec.tensor_parameters = {std::move(input_param), std::move(output_param)};

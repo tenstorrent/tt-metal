@@ -11,6 +11,7 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#include "api/scratchpad.h"
 
 void kernel_main() {
     constexpr uint32_t N = get_arg(args::N);
@@ -23,9 +24,22 @@ void kernel_main() {
     constexpr uint32_t x_block_size = get_arg(args::x_block_size);
     constexpr uint32_t w_block_size = get_arg(args::w_block_size);
     constexpr uint32_t element_size = get_arg(args::element_size);
+    constexpr uint32_t read_alignment = get_arg(args::read_alignment);
+    // The bounce scratchpad is bound only when this is set, hence get_token_if_present below.
+    constexpr bool bounce_misaligned_rows = static_cast<bool>(get_arg(args::bounce_misaligned_rows));
+    constexpr uint32_t read_alignment_minus_one = read_alignment - 1;
 
     // Precomputed constants: size of a 32 element block along the W dimension (measured in bytes)
     constexpr uint32_t w_block_size_bytes = w_block_size * element_size;
+
+    // An aligned window of read_alignment bytes plus room for one row past its end.
+    [[maybe_unused]] uint32_t bounce_window = 0;
+    if constexpr (bounce_misaligned_rows) {
+        const Scratchpad<uint32_t> bounce(*scratch::get_token_if_present<"bounce">());
+        const uint32_t bounce_base =
+            static_cast<uint32_t>(local_mem::detail::AddressAccess::address(bounce.local_mem()));
+        bounce_window = (bounce_base + read_alignment_minus_one) & ~read_alignment_minus_one;
+    }
 
     uint32_t start_block = get_arg(args::start_block);
     uint32_t end_block = get_arg(args::end_block);
@@ -118,6 +132,29 @@ void kernel_main() {
         // Read along the X dimension
         for (uint32_t x = x_start; x < x_end; ++x) {
             uint64_t addr_offset = base_addr_offset + x * X_stride;
+            if constexpr (bounce_misaligned_rows) {
+                const uint32_t l1_dst = src_buffer_l1_addr + page_offset;
+                const uint32_t src_offset =
+                    (uint32_t)s0.get_noc_addr(static_cast<uint32_t>(addr_offset), w_offset) & read_alignment_minus_one;
+                if (src_offset != (l1_dst & read_alignment_minus_one)) {
+                    const uint32_t bounce_dst = bounce_window + src_offset;
+                    noc.async_read(
+                        s0,
+                        CoreLocalMem<uint32_t>(bounce_dst),
+                        w_read_size_bytes,
+                        {.page_id = static_cast<uint32_t>(addr_offset), .offset_bytes = w_offset},
+                        {});
+                    noc.async_read_barrier();
+#ifdef ARCH_QUASAR
+                    tt::data_movement::common::copy_via_memmove<false>(l1_dst, bounce_dst, w_read_size_bytes);
+#else
+                    tt::data_movement::common::tt_memmove<false, false, false, w_block_size_bytes>(
+                        noc, l1_dst, bounce_dst, w_read_size_bytes);
+#endif
+                    page_offset += input_cb_page_size;
+                    continue;
+                }
+            }
             if constexpr (fast_path) {
                 noc.async_read<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
                     s0,

@@ -1066,6 +1066,31 @@ def test_permute_dtype_uint8(device, shape, dims, input_layout):
     assert torch.equal(got, x.permute(dims))
 
 
+# MultiCoreBlockedGeneric: 32 B UINT8 rows vs 64 B BH DRAM read alignment (#61827). Covers partial W blocks,
+# odd W block counts and partial X blocks; L1 input takes the non-bounce path.
+@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
+@pytest.mark.parametrize(
+    "shape, dims",
+    [
+        ((2, 8, 3), (2, 1, 0)),
+        ((2, 1, 17), (1, 2, 0)),
+        ((5, 64, 7), (2, 1, 0)),
+        ((3, 33, 65), (2, 0, 1)),
+        ((2, 3, 4, 5), (3, 1, 2, 0)),
+        ((2, 3, 40, 70), (0, 3, 1, 2)),
+        ((1, 8, 100, 48), (0, 1, 3, 2)),
+    ],
+)
+def test_permute_uint8_rm_read_alignment(device, shape, dims, memory_config):
+    torch.manual_seed(0)
+    x = torch.randint(0, 256, shape, dtype=torch.uint8)
+    ttnn_in = ttnn.from_torch(
+        x, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory_config
+    )
+    got = ttnn.to_torch(ttnn.permute(ttnn_in, dims))
+    assert torch.equal(got, x.permute(dims))
+
+
 # INT8 shares the 8-bit int-FPU reconstruct path with UINT8; covers the 4D BH workaround
 # (dims[-1] != rank-1). WH Int8 RM permute has pre-existing gaps (#63926), so BH-only.
 @pytest.mark.parametrize(
