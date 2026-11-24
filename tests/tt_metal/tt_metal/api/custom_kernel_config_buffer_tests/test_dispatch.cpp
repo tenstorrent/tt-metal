@@ -255,16 +255,18 @@ TEST_F(SmallKernelConfigWindowTest, RunsBinariesFromTheOnlyFreeCore) {
         make_workload(device, CoreRange(kBlockedCore), *result, *cb_backing, /*extra_args=*/0, /*pad_code=*/true);
     expect_throw_containing([&] { experimental::CreateKernelConfigBuffer(device, on_full_core); }, "Out of Memory");
 
-    // 8 KB of runtime args do not fit the window, even with the binaries in a buffer.
-    auto large_args = make_workload(device, CoreRange(kFreeCore), *result, *cb_backing, /*extra_args=*/2048);
-    auto large_args_buffer = experimental::CreateKernelConfigBuffer(device, large_args);
-    expect_throw_containing(
-        [&] {
-            experimental::EnqueueMeshWorkload(
-                device.mesh_command_queue(), large_args, large_args_buffer, /*blocking=*/true);
-        },
-        "too large for kernel config buffer");
-    large_args_buffer.deallocate();
+    // 8 KB of runtime args do not fit the window, even with the binaries in a buffer. The buffer is freed at the end of
+    // the scope, leaving the free core's L1 for the next one.
+    {
+        auto large_args = make_workload(device, CoreRange(kFreeCore), *result, *cb_backing, /*extra_args=*/2048);
+        auto large_args_buffer = experimental::CreateKernelConfigBuffer(device, large_args);
+        expect_throw_containing(
+            [&] {
+                experimental::EnqueueMeshWorkload(
+                    device.mesh_command_queue(), large_args, large_args_buffer, /*blocking=*/true);
+            },
+            "too large for kernel config buffer");
+    }
 
     auto workload =
         make_workload(device, CoreRange(kFreeCore), *result, *cb_backing, /*extra_args=*/0, /*pad_code=*/true);

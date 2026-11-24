@@ -50,8 +50,6 @@ public:
 
     // The shards on `core` of `device_id`, or null.
     const Shards* find(ChipId device_id, const CoreCoord& core) const;
-    bool is_allocated() const;
-    void deallocate();
 
 private:
     ChipId device_id(const distributed::MeshCoordinate& device_coord) const;
