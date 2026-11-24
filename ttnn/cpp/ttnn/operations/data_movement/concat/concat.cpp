@@ -40,21 +40,6 @@ inline void concat_db_print(bool condition, const std::string& msg) {
 
 namespace ttnn::operations::data_movement {
 
-namespace {
-// Max buffer alignment across inputs (RM width-concat NOC rule). Shared by fast and normal paths.
-uint32_t rm_width_concat_common_alignment(const std::vector<ttnn::Tensor>& tensors) {
-    uint32_t align = 0;
-    for (const auto& t : tensors) {
-        TT_FATAL(
-            t.storage_type() == ttnn::StorageType::DEVICE,
-            "ttnn.concat: expected device storage, got storage type {}",
-            t.storage_type());
-        align = std::max<uint32_t>(align, t.mesh_buffer().alignment());
-    }
-    return align;
-}
-}  // namespace
-
 using OwnedConcatArgs = std::tuple<std::vector<ttnn::Tensor>, int, unsigned int>;
 
 using MassagedConcat = MassagedOperation<ttnn::Tensor, const std::vector<ttnn::Tensor>&, int, unsigned int>;
@@ -206,16 +191,13 @@ MassagedConcat build_non_aligned_last_dim_concat(
     // this is a special case of pre-post transpose concat where we're
     // concatting on the last dim and the last dims of the input tensors are
     // not all aligned
-    auto dim_aligned = [](const std::vector<ttnn::Tensor>& tensors, int dim) -> bool {
+    auto dim_aligned = [&output_memory_config](const std::vector<ttnn::Tensor>& tensors, int dim) -> bool {
         const bool rm_width_concat =
             tensors.front().layout() == ttnn::ROW_MAJOR_LAYOUT && dim == tensors.front().logical_shape().rank() - 1;
-        // RM width-concat uses max alignment across inputs; TILE uses per-input (tile pages unaffected).
-        const uint32_t common_align = rm_width_concat ? rm_width_concat_common_alignment(tensors) : 0;
+        // RM width-concat uses max alignment across inputs and output; TILE uses per-input (tile pages unaffected).
+        const uint32_t common_align =
+            rm_width_concat ? rm_width_concat_common_alignment(tensors, output_memory_config) : 0;
         return std::all_of(tensors.begin(), tensors.end(), [&](const ttnn::Tensor& tensor) {
-            TT_FATAL(
-                tensor.storage_type() == ttnn::StorageType::DEVICE,
-                "ttnn.concat: expected device storage, got storage type {}",
-                tensor.storage_type());
             const uint32_t align = rm_width_concat ? common_align : tensor.mesh_buffer().alignment();
             return (tensor.padded_shape()[dim] * tensor.element_size()) % align == 0;
         });
