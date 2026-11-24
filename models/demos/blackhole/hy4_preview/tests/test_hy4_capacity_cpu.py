@@ -651,3 +651,47 @@ def test_demo_scenarios_pass_back_to_back_on_one_engine():
         S.SCENARIOS[name](ctx)
     bad = [g for g in ctx.gates if g[2] == "FAIL"]
     assert ctx.gates and not bad, bad
+
+
+def test_plan_fix_keeps_request_on_row_with_longer_own_prefix(monkeypatch):
+    """HY4_CAP_PLAN_FIX=1 (arm B 09:13:16Z 'partial'): a request whose assigned free row retains a LONGER own prefix than the tail hit is not moved to the row holding the (older, shorter) tail entry."""
+
+    for fix, expect_row in (("0", 1), ("1", 0)):
+        monkeypatch.setenv("HY4_CAP_PLAN_FIX", fix)
+        e = FakeCapEngine()
+        old = toks(20000, 3)
+        new = np.concatenate([old, toks(3000, 4)])  # the session's newer, longer chain
+        run(e, 0, old)
+        e.release(0)
+        busy(e, rows=(2, 3))
+        run(e, 0, toks(9000, 5))  # evicts old from row 0: parked in a tail of row 1
+        e.release(0)
+        assert e.cap.store.entries
+        e.release(2), e.release(3)
+        run(e, 0, new)  # row 0 retains the longer chain `new`
+        e.release(0)
+        p = np.concatenate([new, toks(1000, 6)])
+        e.live[:] = [False] * 4
+        rows = e.assign_rows([p.tolist()], [0])
+        assert rows == [0] or fix == "0", (fix, rows)
+        if fix == "1":
+            assert rows == [0]
+        monkeypatch.delenv("HY4_CAP_PLAN_FIX")
+
+
+def test_plan_fix_overlapping_same_row_promote_keeps_entry(monkeypatch):
+    """HY4_CAP_PLAN_FIX=1 (arm B 09:40:39Z): a tail entry whose pages overlap the destination pages of a same-row promote is KEPT (default: dropped = 516 k tokens recomputed cold)."""
+    from models.demos.blackhole.hy4_preview.tt import hy4_chainstore as CS2
+
+    for fix in ("0", "1"):
+        monkeypatch.setenv("HY4_CAP_PLAN_FIX", fix)
+        e = FakeCapEngine()
+        st = e.cap.store
+        ent = CS2.Entry(
+            1, toks(40960, 7), "tail", row=1, page0=20, t=0.0
+        )  # pages 20..100 on row 1; a 80-page promote into row 1 overlaps
+        st.entries[1] = ent
+        ok = st.promote(ent, 1, 80 * 512)
+        assert ok is False
+        assert (1 in st.entries) == (fix == "1")
+        monkeypatch.delenv("HY4_CAP_PLAN_FIX")

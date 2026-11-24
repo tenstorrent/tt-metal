@@ -394,14 +394,21 @@ class ChainStore:
         vs = [e for e in self.entries.values() if e.tier == tier]
         if not vs:
             return False
-        # HY4_CAP_EVICT=largest (hy4fix, simulated c=6 tail-park 88.3 -> 89.5-91.0 % hit): victim = the LARGEST entry, evicted only if it is smaller than the incoming chain (a big tail is never displaced for a smaller chain); default = the smallest
-        key = (
-            (lambda e: (-len(e.tokens), e.t))
-            if os.environ.get("HY4_CAP_EVICT", "smallest") == "largest"
-            else (lambda e: (len(e.tokens), e.t))
-        )
+        # HY4_CAP_EVICT: smallest (default) | largest (hy4fix: HARMFUL on the real arm B trace, 84.4 % vs 98.1 % [S]: it kept a 512 k duplicate and lost a 444 k chain) | dupfirst (entries whose chain is also retained on a row go first, then the smallest)
+        mode = os.environ.get("HY4_CAP_EVICT", "smallest")
+        if mode == "largest":
+            key = lambda e: (-len(e.tokens), e.t)
+        elif mode == "dupfirst":
+            res = [np.asarray(x) for x in (self.resident_fn() if getattr(self, "resident_fn", None) else [])]
+
+            def key(e):
+                dup = any(len(x) >= len(e.tokens) and np.array_equal(x[: len(e.tokens)], e.tokens) for x in res)
+                return (0 if dup else 1, len(e.tokens), e.t)
+
+        else:
+            key = lambda e: (len(e.tokens), e.t)
         v = min(vs, key=key)
-        if len(v.tokens) >= incoming_tokens:
+        if len(v.tokens) >= incoming_tokens and not (mode == "dupfirst" and key(v)[0] == 0):
             return False
         self.entries.pop(v.eid)
         self.stats["evicted_" + tier] += 1
@@ -529,8 +536,9 @@ class ChainStore:
         if h <= 0 or h % PAGE or n > e.npages:
             return False
         if e.tier == "tail" and e.row == dst_row and e.page0 < n:
-            self._drop(e, "overlaps its destination")
-            return False
+            if os.environ.get("HY4_CAP_PLAN_FIX", "0") != "1":
+                self._drop(e, "overlaps its destination")
+            return False  # (fixed: the entry stays; the caller recomputes this request cold only when no other row could take the copy)
         if e.tier == "tail":
             ok_, why = self.be.can_copy(e.row, dst_row, n)
             if not ok_:  # keep the entry: a later promote may have the memory

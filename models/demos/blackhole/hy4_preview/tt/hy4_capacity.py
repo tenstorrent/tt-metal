@@ -12,6 +12,7 @@ Calls made by the engine:
 """
 from __future__ import annotations
 
+import os
 import time
 
 import numpy as np
@@ -29,6 +30,7 @@ class Capacity:
         self.last = {}  # row -> dict(promoted=h, tier=..) of the last pre_prefill (usage / tests)
         store.extent_fn = self.extent
         store.live_fn = lambda r: bool(eng.live[r])
+        store.resident_fn = lambda: [x for x in eng.ret if x is not None]
 
     # -- extent of a row: what its pages must keep
     def extent(self, r):
@@ -56,9 +58,16 @@ class Capacity:
                 continue
             own = eng.hit_len(r, a)
             # a free row that holds the entry itself is the cheapest destination (row-local copy): move the request there when it is free and not used by another request of this call
+            fix = os.environ.get("HY4_CAP_PLAN_FIX", "0") == "1"
+            # hy4fix (arm B, 09:13:16Z: 'partial'): never move the request off a row whose OWN retained prefix is at least as long as the tail hit (the move destroyed the longer chain and recomputed 2.5-8 k tokens per turn)
+            if fix and own >= h:
+                continue
             if e.tier == "tail" and e.row != r and not eng.live[e.row] and e.row not in taken:
                 own_e = eng.hit_len(e.row, a)
-                if self.store.worth_promoting(e, h, max(own_e, 0), e.row) and own_e < h:
+                # hy4fix (arm B, 09:40:39Z: a 516 k chain dropped 'overlaps its destination'): a same-row promote needs the tail pages [page0, page0+n) disjoint from the destination pages [0, n)
+                if fix and e.page0 < -(-h // 512):
+                    pass
+                elif self.store.worth_promoting(e, h, max(own_e, 0), e.row) and own_e < h:
                     taken.discard(r)
                     taken.add(e.row)
                     out[i] = r = e.row
