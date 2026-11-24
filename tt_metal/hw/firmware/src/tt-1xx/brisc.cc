@@ -228,7 +228,7 @@ inline __attribute__((always_inline)) void clear_l1_ecc_error() {
 }
 
 // Records the ECC state for the host and halts the core until the next device open releases it.
-inline __attribute__((always_inline, noreturn)) void halt_on_ecc_error(uint32_t last_l1_error_banks_0_15, bool l1_dbe) {
+inline __attribute__((always_inline, noreturn)) void halt_on_ecc_error(uint32_t last_l1_error_banks_0_15) {
     tt_l1_ptr l1_ecc_halt_slot_t* const slot = reinterpret_cast<tt_l1_ptr l1_ecc_halt_slot_t*>(MEM_L1_ECC_HALT_BASE);
     slot->record.ecc_ctrl = *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_ECC_CTRL);
     slot->record.l1_counts = read_ecc_view(EccView::L1_COUNTS);
@@ -236,6 +236,9 @@ inline __attribute__((always_inline, noreturn)) void halt_on_ecc_error(uint32_t 
     slot->record.last_l1_error_banks_16_31 = read_ecc_view(EccView::LAST_L1_ERROR_BANKS_16_31);
     slot->record.program_id = mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.host_assigned_id;
     asm volatile("fence" ::: "memory");
+    // A valid last error here is in a populated row and is treated as a DBE: a DBE in the last error's word interrupts
+    // without counting, so the DBE count can be 0. Without one, IRQ 3 came from another source (the watchdog).
+    bool l1_dbe = last_l1_error_banks_0_15 & ECC_LAST_ERR_VALID_MASK;
     slot->record.reason = l1_dbe ? L1_ECC_HALT_REASON_DBE : L1_ECC_HALT_REASON_UNEXPECTED;
     WAYPOINT("ECCH");
     while (true) {
@@ -254,10 +257,7 @@ extern "C" __attribute__((noinline, used)) void l1_ecc_check() {
         clear_l1_ecc_error();
         return;
     }
-    // Every return clears the counts, so these are the DBEs since the last return. A DBE in the last error's word
-    // interrupts without counting, so a valid last error in a populated row is also a DBE.
-    const bool dbe_counted = (read_ecc_view(EccView::L1_COUNTS) & (ECC_DBE_COUNT_MASK | ECC_DBE_OVERFLOW_MASK)) != 0;
-    halt_on_ecc_error(last_l1_error_banks_0_15, dbe_counted || (last_l1_error_banks_0_15 & ECC_LAST_ERR_VALID_MASK));
+    halt_on_ecc_error(last_l1_error_banks_0_15);
 }
 
 // IRQ 3 handler. Saves the caller-saved registers around l1_ecc_check.
