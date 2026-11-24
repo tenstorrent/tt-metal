@@ -52,6 +52,29 @@ They differ only in how many expert layers are 4-bit; the rest of the model is t
 The caches live in `/work/inkling-bringup/cache/` (`modes.py`). Prefill uses the same LoFi K-blocked
 defaults in both modes.
 
+## Speculative decode (off by default)
+
+`tt/spec_generator.py` (`SpecGenerator.generate_rows`, `generate_rows_from`): a small drafter proposes 2 tokens, one
+verify pass checks them with the full model, and the accepted ones are kept. The tokens are the same as plain greedy
+decode. Nothing turns it on: the demo and the perf harness run the plain step. It needs the drafter
+weights (`python -m models.demos.inkling2_mini.convert.mtp`, or `$INKLING_MTP_CACHE`).
+
+Measured on one card, ms/token, 128 to 192 greedy tokens, plain = the default plain step in the same harness:
+
+| run | plain | spec | tokens / pass |
+|---|---|---|---|
+| 4K, code prompt, default mode | 15.15 | 13.29 | 2.23 |
+| 4K, prose prompt, default mode | 15.15 | 12.10 | 2.35 |
+| 4K, code prompt, fast mode | 13.68 | 13.20 | 1.76 |
+| 4K, prose prompt, fast mode | 13.68 | 10.62 | 2.40 |
+| 130K real prompt (chunked prefill), default mode | 20.52 | 22.01 | 1.44 |
+| 130K real prompt (chunked prefill), fast mode | 18.99 | 19.62 | 1.48 |
+
+After a chunked prefill the drafter has no context for the prompt (the prefill does not feed it), and fewer drafts
+are accepted: the same 4K prompts with the drafter context cleared give 1.7 to 1.9 tokens per pass and 15.3 to 16.4
+ms/token. Spec decode pays off only where the prompt went through the decode step. It also runs without the expert
+prefetch (the drafter's programs and the prefetch ring do not fit in L1 together).
+
 ## Convert the weights
 
 Host only, one layer at a time (peak host RSS ~3 GB; the checkpoint is ~19 GB, the cache ~21 GB):

@@ -258,19 +258,22 @@ class SpecGenerator(Generator):
         early_stop=None: every pass verifies the largest verify step's R rows (k = R - 1 drafts). early_stop=thr
         (needs drafter.top_probs and verify steps for each row count): keep draft i while the product of the drafts'
         top probs up to i is >= thr; 0 kept runs a plain step. Returns (new ids, stats)."""
-        import time as _t
-
-        m, d = self.model, self.drafter
-        kmax = max(self.verifies) - 1
-        assert d.k >= kmax and (early_stop is None or d.top_probs)
-        m.reset()
+        self.model.reset()
         out = None
         for pos, t in enumerate(prompt_ids):
             out = self.decode(t, pos, True)
             if pos % 64 == 63:
                 self.read_token(out)
-        nxt = self.read_token(out)
-        pos = len(prompt_ids)
+        return self.generate_rows_from(self.read_token(out), len(prompt_ids), max_new, on_pass, early_stop)
+
+    def generate_rows_from(self, nxt, pos, max_new, on_pass=None, early_stop=None):
+        """generate_rows from the model's present state: nxt = the token at position pos (the last decode step's
+        argmax, which that step left in drafter.anchor). Returns ([nxt] + the new ids, stats)."""
+        import time as _t
+
+        m, d = self.model, self.drafter
+        kmax = max(self.verifies) - 1
+        assert d.k >= kmax and (early_stop is None or d.top_probs)
         new, acc, rows, t_draft, t_ver = [nxt], [], [], 0.0, 0.0
         while len(new) < max_new:
             t0 = _t.perf_counter()
