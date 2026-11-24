@@ -179,7 +179,8 @@ inline void combined_tail_tile() {
 //   cb_t: t, the part's tail: sum of exp(x - m) over the part, except that first maximum.
 // The parts are
 //   - the SFPU lanes of one core, after its pass over its tile columns;
-//   - the cores sharing a row (chunks > 1), one per lane, after the exchange through DRAM.
+//   - the cores sharing a row (chunks > 1), one per lane, after the exchange through DRAM;
+//   - the vocabulary shards of a row (vocabulary-parallel cross-entropy), one per lane, with global column indices.
 // The inputs are consumed (popped).
 //
 // Outputs, one value per row (a column vector), each pushed to its buffer:
@@ -295,10 +296,10 @@ inline void partial_statistics_tiles() {
     cb_pop_front(Cbs::ctail, 1);
 }
 
-// The row's statistics from this unit's logits, with `chunks` cores sharing the row: M (cmax), K (cpivot) and
-// l = log1p(T) (cnorm).
+// The row's statistics from this unit's logits, with `chunks` cores sharing the row, before the log1p: M (cmax),
+// K (cpivot) and the tail T (ctail).
 template <typename Cbs, uint32_t chunks>
-inline void row_statistics(uint32_t begin, uint32_t end) {
+inline void row_tail_statistics(uint32_t begin, uint32_t end) {
     lane_statistics_tiles<Cbs>(begin, end);           // cm, cs, cic = m, t, c per lane
     absolute_column_tile<Cbs>();                      // ci = i
     combine_lanes<Cbs, Cbs::cm, Cbs::ci, Cbs::cs>();  // cmax, cpivot, ctail = M, K, T of this core's columns
@@ -306,5 +307,12 @@ inline void row_statistics(uint32_t begin, uint32_t end) {
         partial_statistics_tiles<Cbs>();                              // cpartout = this core's (M, K, T)
         combine_lanes<Cbs, Cbs::cpart0, Cbs::cpart1, Cbs::cpart2>();  // cmax, cpivot, ctail = M, K, T of the whole row
     }
-    log_normalizer_tile<Cbs>();  // cnorm = l = log1p(T)
+}
+
+// The row's statistics from this unit's logits, with `chunks` cores sharing the row: M (cmax), K (cpivot) and
+// l = log1p(T) (cnorm).
+template <typename Cbs, uint32_t chunks>
+inline void row_statistics(uint32_t begin, uint32_t end) {
+    row_tail_statistics<Cbs, chunks>(begin, end);  // cmax, cpivot, ctail = M, K, T
+    log_normalizer_tile<Cbs>();                    // cnorm = l = log1p(T)
 }
