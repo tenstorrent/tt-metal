@@ -307,33 +307,15 @@ __attribute__((naked)) void l1_ecc_irq_entry() {
 
 // After a power cycle, flops in the L1 ECC error logic hold stale banks that no reset clears, and while they do, a
 // false error from an unpopulated row is logged at a stale bank's last access: a populated row, so the core halts.
-// Only an ECC error on the read-modify-write path flushes them, so this writes 4 B (a read-modify-write) into each
-// word of the first unpopulated row. It runs before arming, and noc_local_state_init later picks up the acks.
+// Only an ECC error on the read-modify-write path flushes them, so this stores 4 B (a read-modify-write) into each
+// word of the first unpopulated row.
 void flush_l1_ecc_error_banks() {
 #if defined(L1_ECC_HALT)
-    constexpr uint32_t noc = 0;
-    noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
-    uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_CFG(NOC_ID_LOGICAL));
-    uint32_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
-    uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
-    uint32_t acked = NOC_STATUS_READ_REG(noc, NIU_MST_WR_ACK_RECEIVED);
     for (uint32_t bank = 0; bank < l1_ecc_banks; bank++) {
-        while (!noc_cmd_buf_ready(noc, BRISC_WR_CMD_BUF)) {
-        }
-        ncrisc_noc_fast_write<DM_DEDICATED_NOC, false, false>(
-            noc,
-            BRISC_WR_CMD_BUF,
-            MEM_ZEROS_BASE,
-            NOC_XY_ADDR(my_x, my_y, MEM_L1_SIZE + bank * l1_ecc_word_bytes),
-            4,
-            NOC_UNICAST_WRITE_VC,
-            false,
-            false,
-            1,
-            false);
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MEM_L1_SIZE + bank * l1_ecc_word_bytes) = 0;
     }
-    while (NOC_STATUS_READ_REG(noc, NIU_MST_WR_ACK_RECEIVED) != acked + l1_ecc_banks) {
-    }
+    // The stores must land before arming clears the errors they raise.
+    asm volatile("fence" ::: "memory");
 #endif
 }
 
