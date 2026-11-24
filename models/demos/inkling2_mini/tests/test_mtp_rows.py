@@ -69,3 +69,36 @@ def test_commit_rows(drafter, R, dtype):
     fr = ttnn.to_torch(d.f_rnn_rows).float()[0, 0]
     for r in range(R):
         assert torch.equal(fr[r], ref_f[r]), r
+
+
+def test_commit_chunk(drafter):
+    """commit_chunk (the chunked prefill's drafter feed, generic ops) against commit(): rows agree to rounding."""
+    d, dev = drafter, drafter.device
+    ntap = len(TAP_LP) + 1
+    torch.manual_seed(5)
+    s, t, n = 256, 64, 40
+    taps = torch.randn(ntap, t, HIDDEN)
+    put = lambda x, **kw: ttnn.from_torch(x, device=dev, **kw)  # noqa: E731
+    rows = [0, 17, 31, 32, n - 1]
+
+    def caches():
+        return [ttnn.to_torch(c).float()[0, :, s : s + t].clone() for c in d.k_cache + d.v_cache]
+
+    ref, ref_f = {}, None
+    for r in rows:
+        f = torch.zeros(1, 1, 32, HIDDEN)
+        f[0, 0, :ntap] = taps[:, r]
+        d.set_commit_pos(s + r)
+        d.commit(
+            put(f, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
+            put(torch.tensor([s + r], dtype=torch.int32), dtype=ttnn.int32),
+        )
+        ref_f = ttnn.to_torch(d.f_rnn).float().reshape(-1).clone()
+    ref = caches()
+    d.commit_chunk([put(x.view(1, 1, t, HIDDEN), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT) for x in taps], s, n)
+    got = caches()
+    pcc = lambda a, b: float(torch.corrcoef(torch.stack([a.flatten(), b.flatten()]))[0, 1])  # noqa: E731
+    for j, (a, b) in enumerate(zip(got, ref)):
+        p = pcc(a[:, rows], b[:, rows])
+        assert p > 0.9995, ("kkkvvv"[j], j % 3, p)
+    assert pcc(ttnn.to_torch(d.f_rnn).float().reshape(-1), ref_f) > 0.9995

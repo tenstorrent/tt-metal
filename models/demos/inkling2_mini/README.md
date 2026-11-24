@@ -68,13 +68,18 @@ Measured on one card, ms/token, 128 to 192 greedy tokens, plain = the default pl
 | 4K, prose prompt, default mode | 15.15 | 12.10 | 2.35 |
 | 4K, code prompt, fast mode | 13.68 | 13.20 | 1.76 |
 | 4K, prose prompt, fast mode | 13.68 | 10.62 | 2.40 |
-| 130K real prompt (chunked prefill), default mode | 20.52 | 22.01 | 1.44 |
-| 130K real prompt (chunked prefill), fast mode | 18.99 | 19.62 | 1.48 |
+| 130K real prompt, chunked prefill, default mode | 20.52 | 22.01 | 1.44 |
+| 130K real prompt, chunked prefill, fast mode | 18.99 | 19.62 | 1.48 |
+| 130K real prompt, prefill feeds the drafter, default mode | 20.52 | 20.97 | 1.49 |
+| 130K real prompt, prefill feeds the drafter, fast mode | 18.99 | 18.70 | 1.54 |
 
-After a chunked prefill the drafter has no context for the prompt (the prefill does not feed it), and fewer drafts
-are accepted: the same 4K prompts with the drafter context cleared give 1.7 to 1.9 tokens per pass and 15.3 to 16.4
-ms/token. Spec decode pays off only where the prompt went through the decode step. It also runs without the expert
-prefetch (the drafter's programs and the prefetch ring do not fit in L1 together).
+A chunked prefill gives the drafter no context for the prompt unless it is told to: set
+`Inkling2Prefill.drafter = <the DSparkDrafter>` before `prefill()` and every chunk also writes the drafter's context
+(`DSparkDrafter.commit_chunk`). Without it fewer drafts are accepted: the 4K prompts with the drafter context
+cleared give 1.7 to 1.9 tokens per pass and 15.3 to 16.4 ms/token; with the context from the prefill they give the
+same 2.35 to 2.44 tokens per pass as after decode. At 130K the feed lifts 3-row passes from 1.58 to 1.68 tokens, and
+a 3-row pass there costs 1.7 plain steps, so spec is about level with plain. Spec decode also runs without the
+expert prefetch (the drafter's programs and the prefetch ring do not fit in L1 together).
 
 ## Convert the weights
 

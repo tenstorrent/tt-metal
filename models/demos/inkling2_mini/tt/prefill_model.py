@@ -611,11 +611,21 @@ class Inkling2Prefill:
         self.fused_rel = True  # PfHeads for the 16-wide rel heads (needs _pfheads and r3)
         self._traces, self._warm, self._in = {}, set(), {}
         self._cap = self._cur = self._mem = None
+        # a tt/mtp.DSparkDrafter: every chunk also writes the drafter's context for its positions (commit_chunk),
+        # so speculative decode after the prefill drafts with the prompt in view
+        self.drafter = None
+        self._taps = None
         self.n_dropped = 0  # times the traces were dropped (memory use changed between calls)
         self.slots_used = []  # real expert slots per routing (of _nslot(t)); the caller may clear it
         self.times = defaultdict(float)
         self._t = None
         self._consts()
+
+    @property
+    def drafter_taps(self):
+        from models.demos.inkling2_mini.tt.mtp import TAP_APPS
+
+        return TAP_APPS
 
     @staticmethod
     def _chunk_ok(chunk):
@@ -1501,6 +1511,7 @@ class Inkling2Prefill:
         pre = None
         h12_in = None
         msgs = None
+        taps = self._taps = [] if self.drafter is not None else None
         for a, (L, p) in enumerate(APPS):
             if L == LOOP_START:
                 if p == 1:
@@ -1516,6 +1527,8 @@ class Inkling2Prefill:
                 if L == 12:
                     h12_in = h
             lm = msgs(L - LOOP_START) if (msgs is not None and LOOP_START <= L < LOOP_END and p > 1) else None
+            if taps is not None and a in self.drafter_taps:
+                taps.append(ttnn.clone(h))  # the app's input rows (h may be a buffer a later app reuses)
             h, stack = self._app(L, p, h, stack, lm, s, n, tau, ctx)
             if collect is not None:
                 collect.append(ttnn.to_torch(h).reshape(t, HIDDEN)[:n].clone())
@@ -1674,7 +1687,7 @@ class Inkling2Prefill:
             raise
         finally:
             self._cap = None
-        rec["x"], rec["snap"] = x, self._snap(ctx)
+        rec["x"], rec["snap"], rec["taps"] = x, self._snap(ctx), self._taps
         self._traces[key] = rec
         return x
 
@@ -1684,6 +1697,7 @@ class Inkling2Prefill:
             if i < len(rec["routes"]):
                 self._route_host(rec["routes"][i], n)
         self._restore(ctx, rec["snap"])
+        self._taps = rec["taps"]
         return rec["x"]
 
     def release_traces(self):
@@ -1735,18 +1749,27 @@ class Inkling2Prefill:
                     for name in ("attn", "mlp"):
                         tails[name].keep = (ctx["ext"][c], name)
             self._set_inputs(chunk_ids, s, n)
-            key = (chunk, t, s, last, n < t)
+            feed = self.drafter is not None
+            key = (chunk, t, s, last, n < t, feed)
+            eager = False
             if traced and key in self._traces:
                 x = self._replay(self._traces[key], ctx, n)
             elif traced and key in self._warm:
-                x = self._capture(key, chunk_ids, s, n, ctx, bool(rows))
+                x = self._capture(key, chunk_ids, s, n, ctx, bool(rows) or feed)
             else:
                 col = [] if collect is not None else None
-                x = self._chunk(chunk_ids, s, n, ctx, bool(rows), force, col)
+                x = self._chunk(chunk_ids, s, n, ctx, bool(rows) or feed, force, col)
+                eager = True
                 if collect is not None:
                     collect.append(col)
                 if traced:
                     self._warm.add(key)
+            if feed:  # outside the chunk's trace: its tap clones and x stay readable after a replay
+                self.drafter.commit_chunk(self._taps + [x], s, n if last else None)
+                if eager:
+                    for tp in self._taps:
+                        ttnn.deallocate(tp)
+                self._taps = None
             if rows:
                 outs.append(self._logits(x, rows))
             if log:

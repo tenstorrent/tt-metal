@@ -183,6 +183,7 @@ class DSparkDrafter:
         # block K/V writer: one core per (k | v, head) on rows 0..1 of column 0..7
         self.kv_cores = [ttnn.CoreCoord(x, y) for y in range(2) for x in range(NKV)]
         self._mix = {}  # commit_rows mix matrices (_mix_rows)
+        self._alpha = None  # host alpha (commit_chunk)
         self.trace = None
         self.tokens = None
         self.top_probs = False  # early stop (spec_generator.py): also compute each step's argmax probability
@@ -350,6 +351,50 @@ class DSparkDrafter:
             self.f_rnn_rows = ttnn.clone(fr)
         else:
             ttnn.copy(fr, self.f_rnn_rows)
+
+    def commit_chunk(self, taps, s, n=None):
+        """Chunked prefill (Inkling2Prefill.drafter): the drafter context of positions s .. s + t - 1 in one pass.
+        taps: the 4 commit() feats rows as tensors [1, 1, t, C] (the inputs of the tapped apps, then the final-norm
+        rows), s and t multiples of 32. n: on the last chunk, its real rows (f_rnn = row n - 1; rows n .. t - 1 land
+        at positions the first draft after the prompt overwrites). Same math as commit() with the generic ops, so
+        the rows agree with it to rounding, not bit for bit: draft quality only, the decoded tokens do not depend
+        on it."""
+        t = taps[0].shape[-2]
+        assert len(taps) == len(TAP_APPS) + 1 and s % 32 == 0 and t % 32 == 0 and s + t <= self.S, (s, t)
+        if self._alpha is None:
+            self._alpha = ttnn.to_torch(self.w["alpha"]).float()[0, 0]
+        f = [x if x.dtype == ttnn.float32 else ttnn.typecast(x, ttnn.float32) for x in taps]
+
+        def mix(i):
+            y = None
+            for j, x in enumerate(f):
+                term = ttnn.multiply(x, float(self._alpha[i, j]))
+                y = term if y is None else ttnn.add(y, term)
+            return y
+
+        def norm(x, name):
+            return ttnn.rms_norm(x, weight=self.w[name], epsilon=EPS, compute_kernel_config=self.ckc)
+
+        cos, sin = (
+            ttnn.from_torch(x.view(1, 1, t, D), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+            for x in rope_tables(s, t)
+        )
+        for i in range(N_LAYERS):
+            c = ttnn.typecast(norm(mix(i), f"l{i}.ctx_norm"), ttnn.bfloat16)
+            kv = ttnn.linear(c, self.w[f"l{i}.wkv_ctx"], dtype=ttnn.bfloat16, compute_kernel_config=self.mmc)
+
+            def heads(c0):
+                h = ttnn.reshape(ttnn.slice(kv, [0, 0, 0, c0], [1, 1, t, c0 + NKV * D]), [1, t, NKV, D])
+                return ttnn.permute(h, (0, 2, 1, 3))  # [1, 8, t, 128]
+
+            k = self._rope(norm(heads(0), f"l{i}.k_norm_ctx"), cos, sin)
+            v = heads(NKV * D)
+            for cache, x in ((self.k_cache[i], k), (self.v_cache[i], v)):
+                x = x if x.dtype == ttnn.bfloat16 else ttnn.typecast(x, ttnn.bfloat16)
+                ttnn.experimental.slice_write(x, cache, [0, 0, s, 0], [1, NKV, s + t, D], [1, 1, 1, 1])
+        if n is not None:
+            fr = ttnn.slice(norm(mix(N_LAYERS), "rnn_norm"), [0, 0, n - 1, 0], [1, 1, n, HIDDEN])
+            ttnn.copy(ttnn.typecast(fr, ttnn.bfloat16), self.f_rnn)
 
     def _layer(self, i, res):
         h = self._rms(res, f"l{i}.in_norm")
