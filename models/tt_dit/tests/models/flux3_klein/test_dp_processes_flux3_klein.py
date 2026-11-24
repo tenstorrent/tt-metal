@@ -300,7 +300,13 @@ class ThreadProcess:
     def start(self):
         self.env = {
             key: os.environ.get(key)
-            for key in ("TT_VISIBLE_DEVICES", "TT_MESH_GRAPH_DESC_PATH", "TT_METAL_EXECUTOR_THREADS")
+            for key in (
+                "TT_VISIBLE_DEVICES",
+                "TT_MESH_GRAPH_DESC_PATH",
+                "TT_METAL_EXECUTOR_THREADS",
+                "FLUX3_SDPA_QFAST",
+                "FLUX3_SDPA_K256",
+            )
         }
         self._thread.start()
 
@@ -395,6 +401,18 @@ def test_each_process_sees_only_its_chips_and_gets_the_warmup(thread_groups, mon
         assert {p.args[2] for p in groups._processes} == {(1024,)}
     assert os.environ["TT_VISIBLE_DEVICES"] == "parent"
     assert "TT_MESH_GRAPH_DESC_PATH" not in os.environ
+
+
+def test_dp4_processes_get_the_attention_tables_unless_the_caller_set_them(thread_groups, monkeypatch):
+    monkeypatch.delenv("FLUX3_SDPA_QFAST", raising=False)
+    monkeypatch.setenv("FLUX3_SDPA_K256", "0")
+    with dp.Flux3KleinProcessGroups(dp.HALF_PCIE_IDS, warmup=(1024,)) as groups:
+        assert {(p.env["FLUX3_SDPA_QFAST"], p.env["FLUX3_SDPA_K256"]) for p in groups._processes} == {("1", "0")}
+    assert "FLUX3_SDPA_QFAST" not in os.environ
+    with dp.Flux3KleinProcessGroups(dp.HALF_PCIE_IDS, group_shape=(4, 4), warmup=(1024,)) as groups:
+        assert {p.env["FLUX3_SDPA_QFAST"] for p in groups._processes} == {None}
+    with dp.Flux3KleinProcessGroups(dp.QUARTER_PCIE_IDS, group_shape=(2, 2), warmup=(1024,)) as groups:
+        assert {p.env["FLUX3_SDPA_QFAST"] for p in groups._processes} == {None}
 
 
 def test_two_processes_of_two_groups(halves):
