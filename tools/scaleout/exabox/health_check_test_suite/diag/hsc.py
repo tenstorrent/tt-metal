@@ -239,7 +239,9 @@ def _brick(bmc: Bmc, name: str, addr: int, modes: dict, load: bool, stop, fails:
     if (mode := modes.get(name) if load else None) is None and (mode := rd(0x20, 1)) is not None:
         modes[name] = mode
     if ident is not None:
-        ident[name] = {k: None if (x := rd(c)) is None else x.decode("ascii", "replace").strip(" \x00") for k, c in BRICK_ID}
+        ident[name] = {
+            k: None if (x := rd(c)) is None else x.decode("ascii", "replace").strip(" \x00") for k, c in BRICK_ID
+        }
         ident[name]["VOUT_MODE"] = None if mode is None else f"{mode:#04x}"
         cmd = rd(0x21, 2)
         ident[name]["VOUT_COMMAND"] = None if None in (mode, cmd) or mode >> 5 else f"{cmd * 2.0 ** _exp(mode):.4f} V"

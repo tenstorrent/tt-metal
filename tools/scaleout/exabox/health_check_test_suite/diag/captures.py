@@ -347,14 +347,13 @@ def _bricks(bmc: Bmc, d: Path, when: str, args, idle: bool = False) -> None:
 def _brick_ids(d: Path, when: str, rows, ident: dict, notes: list[str], fails: list[str]) -> None:
     """One line per brick (ID fields, Vout) and one for the 54 V rail (with the pass's notes), to the report and
     captures/brick_id.txt; one WARNING line for the reads that failed."""
+    got = {r[0]: r for r in rows}  # a pass that stopped early has no row for the rest: those say "not read"
     lines = [
-        f"brick {r[0]} {when}: "
-        + ", ".join(f"{k} {v if v is not None else 'not read'}" for k, v in ident.get(r[0], {"MFR_*": None}).items())
-        + f", Vout {_f3(r[1], ' V')}"
-        if r[0] != "FAN"
-        else f"54 V rail {when}: {_f3(r[1], ' V')}" + "".join(f"; {n}" for n in notes)
-        for r in rows
-    ]
+        f"brick {n} {when}: "
+        + ", ".join(f"{k} {v if v is not None else 'not read'}" for k, v in ident.get(n, {"MFR_*": None}).items())
+        + f", Vout {_f3(got[n][1] if n in got else None, ' V')}"
+        for n in hsc.BRICKS
+    ] + [f"54 V rail {when}: {_f3(got['FAN'][1] if 'FAN' in got else None, ' V')}" + "".join(f"; {n}" for n in notes)]
     (d / "brick_id.txt").write_text("".join(f"{ln}\n" for ln in lines))
     for ln in lines:
         log(ln)

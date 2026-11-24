@@ -323,7 +323,9 @@ class TestBricks(unittest.TestCase):
         self.assertIsNone(captures._brick_load(d, "C9", t0))  # a pass is its own stage's
         rows = (("U8", 1.2), ("U2", 1.1))
         (d / "brick.tsv").write_text("".join(f"{time.time():.0f}\tduring busbar\t{n}\t{v}\t1.0\n" for n, v in rows))
-        self.assertTrue(captures._brick_load(d, "busbar", t0).endswith("min Vout U2 1.100 V, U8 1.200 V"))  # by brick name
+        self.assertTrue(
+            captures._brick_load(d, "busbar", t0).endswith("min Vout U2 1.100 V, U8 1.200 V")
+        )  # by brick name
         mux = [c.split()[-1] for c in f.calls if c.startswith("raw 0x06 0x52 0x09 0xec 0x00")]
         self.assertEqual(mux[-1], "0x05")  # restored, also when the stop came mid-pass
 
@@ -412,7 +414,11 @@ class TestBricks(unittest.TestCase):
         self.assertEqual([c for c in f.calls if " 0x09 0xc2 " in c or " 0x09 0xc4 " in c], [])  # no later brick read
         mux = [c.split()[-1] for c in f.calls if c.startswith("raw 0x06 0x52 0x09 0xec 0x00")]
         self.assertEqual(mux, ["0x01", "0x05"])  # restored
-        self.assertEqual(len([c for c in log.call_args_list if c.args[0].startswith("WARNING brick reads")]), 1)
+        said = [c.args[0] for c in log.call_args_list]
+        self.assertEqual(len([ln for ln in said if ln.startswith("WARNING brick reads")]), 1)
+        self.assertEqual(len([ln for ln in said if ln.startswith("brick U")]), 8)  # the unread bricks say "not read"
+        self.assertIn("brick U8 at run start: MFR_* not read, Vout -", said)
+        self.assertIn("54 V rail at run start: -", said)
 
 
 class TestEvidence(unittest.TestCase):
