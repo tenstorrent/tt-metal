@@ -2034,20 +2034,15 @@ def test_cumsum_tilized_dest_quasar(formats, dest_acc):
     ), f"cumsum mismatch:\ngot\n{result}\nexpected\n{expected}"
 
 
-# ---------------------------------------------------------------------------
-# tiled_prod, bit for bit.
-#
-# The fuser cases check tiled_prod within a tolerance on finite inputs. This one compares raw
-# result words against a model of the SFPU chain, on inputs where one skipped or repeated
-# multiply, load or store changes a word: signed zeros, infinities, NaNs and overflow.
-# ---------------------------------------------------------------------------
+# tiled_prod, raw result words against a model of the chain. The fuser cases cover finite inputs
+# within a tolerance; these add signed zeros, infinities, NaNs and overflow.
 TILED_PROD_TILES = 4
 TILED_PROD_LANES = 32  # 4 Dest rows x 8 column pairs
 TILED_PROD_STEPS = 32  # 8 per face, faces 0-3
 _TILE_ELEMS = MAX_NUM_FACES * MAX_FACE_R_DIM * FACE_C_DIM
 
-# (lane, step, fp32 bits) planted in tile 0; tile t plants them 5 * t lanes further on. Every
-# pattern has a zero low half, so its high half is the same value in Float16_b.
+# (lane, step, fp32 bits); tile t plants them 5 * t lanes further on. The low half of every
+# pattern is zero, so the high half is the same value in Float16_b.
 _TILED_PROD_SPECIALS = (
     (0, 0, 0x80000000),  # -0.0 as the first element
     (1, 0, 0x7F800000),  # +inf first, then inf * -0.0
@@ -2067,10 +2062,9 @@ _TILED_PROD_SPECIALS = (
 
 def _tiled_prod_index(tile: int, lane: int, step: int) -> int:
     """
-    Flat index of the *step*-th element of SFPU *lane*, in the face-by-face order of L1 and Dest.
+    Flat index, face by face, of the *step*-th element of SFPU *lane* (4 Dest rows x 8 column pairs).
 
-    A lane is one of 4 Dest rows and 8 column pairs. Per face it takes 8 steps: the even then the
-    odd column of its pair, 4 Dest rows further down each time.
+    Per face a lane takes 8 steps: the even then the odd column of its pair, 4 rows down each time.
     """
     face, face_step = divmod(step, 8)
     lane_row, lane_col = divmod(lane, 8)
@@ -2082,7 +2076,7 @@ def _tiled_prod_index(tile: int, lane: int, step: int) -> int:
 
 
 def _tiled_prod_stimulus(input_format: DataFormat) -> torch.Tensor:
-    """Magnitudes in [0.8, 1.25) of either sign, so a 32-long product stays finite, plus the specials."""
+    """Magnitudes in [0.8, 1.25) of either sign, so a product stays finite, plus the specials."""
     count = TILED_PROD_TILES * _TILE_ELEMS
     magnitude = 0.8 + 0.45 * torch.rand(count)
     sign = torch.where(torch.rand(count) < 0.5, -1.0, 1.0)
@@ -2100,7 +2094,7 @@ def _tiled_prod_stimulus(input_format: DataFormat) -> torch.Tensor:
 
 
 def tiled_prod_variants() -> List[QuasarSfpuVariant]:
-    """Same-format tiled_prod routes: Unpack-to-Dest into a 16-bit and a 32-bit Dest, and the FPU datacopy."""
+    """Same-format routes: Unpack-to-Dest into a 16-bit and a 32-bit Dest, and the FPU datacopy."""
     return [
         variant
         for variant in generate_quasar_sfpu_format_variants(
@@ -2118,12 +2112,10 @@ def tiled_prod_variants() -> List[QuasarSfpuVariant]:
 
 def _tiled_prod_expected(src: torch.Tensor, variant: QuasarSfpuVariant) -> torch.Tensor:
     """
-    The chain per lane: product = 1.0, then for each element product *= element, stored in place.
+    Per lane: product = 1.0, then product *= element, stored in place, carried in fp32.
 
-    The product is carried in fp32. As ttsim's SFPMUL does, a zero product is +0.0 whatever the signs
-    of its factors and a NaN product is the positive quiet NaN, so the result does not depend on
-    whether the route kept the sign of a -0.0 or NaN input. A store to a 16-bit Dest keeps the high
-    half of the word; a Float16_b pack from a 32-bit Dest rounds to nearest, ties to even.
+    As on ttsim, a zero product is +0.0 and a NaN product is the positive quiet NaN. A store to a
+    16-bit Dest truncates; a Float16_b pack from a 32-bit Dest rounds to nearest even.
     """
     values = src.to(torch.float32).numpy().copy()
     out = values.copy()
@@ -2157,12 +2149,7 @@ def _tiled_prod_expected(src: torch.Tensor, variant: QuasarSfpuVariant) -> torch
     format_variant=tiled_prod_variants(),
 )
 def test_tiled_prod_bit_exact_quasar(mathop, format_variant):
-    """
-    tiled_prod against a bit-level model, on four tiles with special values in every tile.
-
-    Each tile's chain must leave the next tile alone, so tiles 1-3 are also the guard for the
-    tile before them.
-    """
+    """tiled_prod, bit-exact, on four tiles; each tile also guards the one before it."""
     formats = format_variant.formats
     src_A = _tiled_prod_stimulus(formats.input_format)
     src_B = torch.zeros_like(src_A)
