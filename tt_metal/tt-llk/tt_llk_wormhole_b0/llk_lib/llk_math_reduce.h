@@ -186,7 +186,7 @@ inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape)
             const std::uint32_t replay_buf_len = tensor_shape.num_faces_c_dim * 2 * fid_count;
             const std::uint32_t replay_start   = ckernel::math::replay_buf_offset;
 
-            TTI_REPLAY(replay_start, replay_buf_len, 0, 1);
+            TT_REPLAY(replay_start, replay_buf_len, 0, 1);
             for (std::uint32_t faces_remaining = tensor_shape.num_faces_c_dim; faces_remaining > 0; faces_remaining--)
             {
                 for (std::uint32_t p = 0; p < fid_count - 1; p++)

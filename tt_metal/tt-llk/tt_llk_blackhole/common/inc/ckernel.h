@@ -688,7 +688,7 @@ template <ExecBool Exec = NoExec, typename Callable, typename... Args>
 #endif
 
     // Issue instruction to load replay buffer
-    TTI_REPLAY(start, len, Exec, 1);
+    TT_REPLAY(start, len, Exec, 1);
 
     // Send in the user's desired instructions
     callable(std::forward<Args>(args)...);
