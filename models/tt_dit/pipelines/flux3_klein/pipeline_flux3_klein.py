@@ -290,8 +290,18 @@ class Flux3KleinPipeline:
         self._upsampler = Flux3KleinSharedUpsampler(mesh_device) if upsample else None
 
     @classmethod
-    def create(cls, mesh_device: ttnn.MeshDevice, *, models: tuple[str, ...] = ("distilled",), **kwargs):
-        return cls(mesh_device, snapshots={model: resolve_weights_dir(model) for model in models}, **kwargs)
+    def create(
+        cls,
+        mesh_device: ttnn.MeshDevice,
+        *,
+        models: tuple[str, ...] = ("distilled",),
+        snapshots: dict[str, Path] | None = None,
+        **kwargs,
+    ):
+        """`snapshots` (model -> weights dir), when given, replace `models`: a caller that already resolved them."""
+        if snapshots is None:
+            snapshots = {model: resolve_weights_dir(model) for model in models}
+        return cls(mesh_device, snapshots=snapshots, **kwargs)
 
     def warmup(self, sizes: tuple[int, ...] = SIZES) -> None:
         """Compile every program of the served shapes: each size without a reference and with one per reference token
