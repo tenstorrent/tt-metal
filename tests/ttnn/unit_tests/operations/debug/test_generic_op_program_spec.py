@@ -1937,7 +1937,7 @@ def hash_spec(**kernel_fields):
 
 # Fields the edit helpers may touch; anything else (typos, dunder names) fails loudly instead of being set.
 _EDITABLE_LIST_FIELDS = frozenset({"kernels", "dataflow_buffers", "tensor_parameters", "work_units"})
-_EDITABLE_SPEC_FIELDS = frozenset({"name", "semaphores", "scratchpads"})
+_EDITABLE_SPEC_FIELDS = frozenset({"name", "semaphores", "scratchpads", "global_semaphore_parameters"})
 
 
 def with_field(program_spec, field, index, /, **changes):
