@@ -52,3 +52,32 @@ def test_flat_ref(device, M):
     us = statistics.median(t["flat_routed_expert"][-PERF_RUNS:]) / 1e3
     sb = epc * -(-M // 128)
     logger.info(f"FLATREF glm53 e{epc} M{M}: {us:.1f} us, {sb} sub-blocks a core ({us / sb:.2f} us a sub-block)")
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
+@pytest.mark.parametrize("M", [384])
+def test_flat_ref_profile(device, M):
+    """3 calls under the device profiler (run with TT_METAL_DEVICE_PROFILER=1); the CSV is copied by the caller."""
+    import json
+
+    chk._skip_unless_supported(device)
+    md = chk.cases.MODELS["glm53"]
+    epc = 16
+    gids = [(md["E"] // epc) * e + 1 for e in range(epc)]
+    op = W.FlatRoutedExpert(
+        device, "uninitialized", m=max(CAP, epc * M), H=md["H"], I=md["I"], gids=[gids], n_global=md["E"],
+        act=md["act"], pin=1,
+    )  # fmt: skip
+    lay = op.lay
+    meta = {
+        "H": md["H"], "I": md["I"], "epc": epc, "M": M, "rows_sb": lay["row_tiles_per_sub_block"] * 32,
+        "n_gu": len(lay["gate_up_cores"]), "n_dn": lay["down_core_count"], "dn_cols": lay["down_columns_per_core"],
+        "sub_blocks_per_expert": -(-M // (lay["row_tiles_per_sub_block"] * 32)),
+    }  # fmt: skip
+    out = Path("generated/zz_balprof")
+    out.mkdir(parents=True, exist_ok=True)
+    (out / f"best-ref-M{M}.meta.json").write_text(json.dumps(meta))
+    args = _inputs(device, md, gids, M)
+    for _ in range(3):
+        ttnn.deallocate(op(*args))
+    ttnn.ReadDeviceProfiler(device)

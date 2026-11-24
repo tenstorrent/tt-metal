@@ -33,7 +33,7 @@ from models.demos.glm_ks_expert.bench_util import (
 RT_SB, PR = 4, 2  # 128-row sub-blocks, passes of 2 row tiles (fp32 DEST half-sync: 4 tiles)
 
 
-def run(device, mode, nsb=100, part="fp32"):
+def run(device, mode, nsb=100, part="fp32", spin=None, pad=0):
     core = (0, 0)
     grid = crs([core])
     KH = GLM["H"] // 32
@@ -88,8 +88,10 @@ def run(device, mode, nsb=100, part="fp32"):
         runtime_args=rd_rt,
         config=ttnn.ReaderConfigDescriptor(),
     )
+    if spin is not None:
+        wr_rt[core[0]][core[1]] = [nsb, RT_SB, 0 if mode == 0 else RT_SB * 2, spin, st.buffer_address() + 64]
     wr = ttnn.KernelDescriptor(
-        kernel_source=kpath("kb_writer.cpp"),
+        kernel_source=kpath("kb_writer.cpp" if spin is None else "kb_spin.cpp"),
         core_ranges=grid,
         compile_time_args=ta(h_t) + ta(po_t),
         runtime_args=wr_rt,
@@ -108,8 +110,10 @@ def run(device, mode, nsb=100, part="fp32"):
         runtime_args=cp_rt,
         config=cfg,
     )
-    cbs = [
-        cb(0, ttnn.bfloat8_b, RT_SB * KT, grid),
+    cbs = [cb(0, ttnn.bfloat8_b, RT_SB * KT, grid)]
+    if pad:  # (shifts CB 1's address: the x / weight L1 placement)
+        cbs.append(ttnn.CBDescriptor(total_size=pad, core_ranges=grid, format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=7, data_format=ttnn.bfloat16, page_size=pad)]))
+    cbs += [
         cb(1, ttnn.bfloat4_b, KT * WC, grid),
         cb(2, part_dt, max(1, n[2]), grid),
         cb(3, ttnn.bfloat16, 4, grid),
@@ -146,3 +150,15 @@ def test_kb_bench(device, mode, part):
         f"err {r['err_h']:.2e} (vs unsplit fp32 {r['err_full']:.2e}) partials err {r.get('err_p', 0):.2e}; aiclk {r['aiclk']}"
     )
     assert r["pcc_h"] > 0.999
+
+
+@pytest.mark.parametrize("spin", [0, 1, 2])
+def test_kb_spin(device, spin):
+    r = run(device, 0, spin=spin)
+    logger.info(f"KBSPIN today, writer spin mode {spin}: {r['cpt']:.2f} cyc / tile product ({1600 / r['cpt']:.1f}% LoFi)")
+
+
+@pytest.mark.parametrize("pad", [0, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 65536])
+def test_kb_pad(device, pad):
+    r = run(device, 0, pad=pad)
+    logger.info(f"KBPAD today, pad {pad}: {r['cpt']:.2f} cyc / tile product ({1600 / r['cpt']:.1f}% LoFi)")

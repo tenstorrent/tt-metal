@@ -100,3 +100,34 @@ All bit-checked (h pcc >= 0.99992, y pcc >= 0.99972).
   down side is slower than the real one (29.5 us a sub-block, 1508 us): it paces both forms equally.
 - Conclusion for GLM: the K split is not a lever; the gap to the floor sits in the coupling with the down side / h path
   (or in what the real kernels do beyond this model). Next: find the real flat's extra ~3 us a sub-block.
+
+## Where the real flat expert's time goes (GLM e16 M 384; temporary local probes, not committed)
+
+Probes (ZZ_FLAT_PROBE bit mask compiled into every flat kernel: the stream's bytes are not moved, its counters and
+semaphores move as before; perf only):
+
+| stream off | us | vs 1358 |
+|---|---|---|
+| none | 1358.2 | |
+| h to the down chain heads / along the chains / both | 1359.5 / 1352.8 / 1352.0 | -0.5% |
+| down weight reads | 1339.9 | -1.3% |
+| gate/up weight reads | 1298.9 | -4.4% |
+| both weight streams | 1292.5 | -4.8% |
+| y writes | 1359.6 | 0 |
+| x forwarding along the snakes | 1317.8 | -3.0% |
+| relays (primary -> head / helper -> primary / helper DRAM reads / all three) | 1348 / 1355 / 1356 / 1339 | -0.3..-1.4% |
+| all x / x + both weights / everything | 1307.7 / 1257.5 / 1245.6 | -3.7 / -7.4 / -8.3% |
+
+- With no data at all the expert still takes 1246 us: data costs ~110 us (gate/up weights ~60, x forwarding ~40,
+  down weights ~18, h ~6), roughly additive.
+- Inside the gate/up compute (no data): the activation off -0.2%, the per-pass pack reconfig off 0, the matmul off ->
+  962 us (the down side then paces). The ARC firmware's matmul throttle (matmul_block_math_dynamic_throttle) forced off:
+  no change (it never engages here).
+- The profiler's GU-SB zone (26.6 us) is inflated by the profiling itself: the unprofiled totals are what compare.
+  Perf counters (FPU|PACK|UNPACK|INSTRN), gate/up cores: FPU busy 71.5% of the window in the real expert without data,
+  75.1% in this model with data (today_chip, 1209 us); no srcA / srcB valid waits in either.
+- One core, chain-structured (today_1core): 21.15 us a sub-block resident (bench 20.35: +0.8 for the [4 x 8] x blocks,
+  their CB syncs and ring offsets), 21.83 with its weights streamed (+0.7).
+
+Budget of the 1358 us (874 us = the matmuls at LoFi peak): matmul efficiency at 89.5% ~100 us, sub-block structure
+(block syncs, weight ring) ~70 us, multi-core coupling ~70 us, fill / drain ~100 us, data movement ~110 us.

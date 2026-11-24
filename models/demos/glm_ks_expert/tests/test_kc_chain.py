@@ -11,6 +11,8 @@ from models.demos.glm_ks_expert.ks_chain import ChainCfg, plan_geometry, run_cha
 CASES = {
     "today_2x2": ChainCfg(mode=0, W=2, H=2, relay_y=0, nsb=8),
     "ks_2x2": ChainCfg(mode=1, W=2, H=2, relay_y=0, nsb=8),
+    "today_1core": ChainCfg(mode=0, W=1, H=1, relay_y=0),
+    "today_1core_w": ChainCfg(mode=0, W=1, H=1, relay_y=0, w_stream=True),
     "today_west": ChainCfg(mode=0),
     "ks_west": ChainCfg(mode=1),
     "ks_west_xs12": ChainCfg(mode=1, xs=12),
