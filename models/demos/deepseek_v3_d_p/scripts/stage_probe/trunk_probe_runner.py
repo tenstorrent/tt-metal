@@ -23,6 +23,7 @@ Nothing here changes what the runner computes or when; every check only observes
   MTP wrote its KV there. The cache starts zero-filled and two runs feed identical tokens, so equal digests across
   runs mean bit-identical KV; the last chunk's layer-77 rows depend on every pass of every chunk.
   ``TRUNK_DIGEST_SLOT_RANGES`` (e.g. ``0-53,54-76,77-77``) adds a digest per stage-slot range (``chunk=<c>s<lo>_<hi>``).
+  ``TRUNK_PUSH_PRESEND=0`` turns the sparse-KV pre-sends off (a KV control, not a timing run).
   ``TRUNK_KV_DUMP_DIR`` also saves those rows per cache slot as logical bf16 (``_kv_dump``), to compare runs by PCC.
 * MTP wiring (q171.2.10), with MTP on. Every forward records the blocks it runs, the trunk norm's input and output, and
   the tensor MTP is seeded with. ``TRUNK_ASSERT mtp_input PASS|FAIL`` (logged with the checks above) needs, in every
@@ -82,6 +83,24 @@ def _patch_mla() -> None:
     ttMLA._build_two_bank_index = build_two_bank_index
     ttMLA._pass2_push_output = pass2_push_output
     SparseKvPushPlanner.push_buffer = push_buffer_recording
+
+
+def _patch_presend_switch() -> None:
+    """``TRUNK_PUSH_PRESEND=0``: every sparse-KV push planner starts with pre-sends off (``SparseKvPushPlanner.presend``,
+    the switch the device tests use), so every pushed layer pushes all its rows in line. A control for comparing KV
+    with and without pre-sends; it changes what runs, so not for timing runs."""
+    if os.environ.get("TRUNK_PUSH_PRESEND", "1") != "0":
+        return
+    from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SparseKvPushPlanner
+
+    init = SparseKvPushPlanner.__init__
+
+    def init_presend_off(self, *args, **kwargs):
+        init(self, *args, **kwargs)
+        self.presend = False
+
+    SparseKvPushPlanner.__init__ = init_presend_off
+    logger.warning("TRUNK_PUSH_PRESEND=0: sparse-KV pre-sends off (control run)")
 
 
 def _push_reuse_verdict() -> None:
@@ -470,6 +489,7 @@ def main() -> None:
     manifest = os.environ.get("PREFILL_MANIFEST", "")
     assert manifest.endswith("glm54.json"), f"the trunk probe runs GLM-5.4 (STAGE_PROBE_MODEL=glm54), got {manifest!r}"
     _patch_mla()
+    _patch_presend_switch()
     _patch_runtime()
     _patch_mtp_wiring()
     _patch_profile()
