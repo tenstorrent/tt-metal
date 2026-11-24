@@ -1,0 +1,146 @@
+name: "LLK perf compile"
+# One perf shard built on a CPU runner and uploaded as llk-elfs-<arch>-<group><suffix>.tar.zst.
+# Called by llk-perf-impl.yaml for the shadow compile and for the per-leg offload.
+
+on:
+  workflow_call:
+    inputs:
+      test-group:
+        description: "The matrix row of the leg (JSON)"
+        required: true
+        type: string
+      runner:
+        required: true
+        type: string
+      workers:
+        description: "pytest -n"
+        required: true
+        type: number
+      timeout:
+        required: true
+        type: number
+      image:
+        required: true
+        type: string
+      ref:
+        required: false
+        default: ""
+        type: string
+      architecture:
+        required: true
+        type: string
+      artifact-suffix:
+        required: false
+        default: ""
+        type: string
+      split-durations:
+        description: "'true' when load-test-matrix uploaded the test durations"
+        required: true
+        type: string
+      speed-of-light:
+        required: true
+        type: boolean
+      debug-symbols:
+        required: true
+        type: boolean
+      perf-run-types:
+        required: false
+        default: ""
+        type: string
+      pipeline:
+        required: false
+        default: ""
+        type: string
+
+env:
+  LLK_PATH: tt_metal/tt-llk
+
+jobs:
+  compile:
+    continue-on-error: true
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: ${{ inputs.timeout }}
+    container:
+      image: ${{ inputs.image }}
+      options: "--rm"
+    steps:
+      # Not cachew: on the CPU runners its cache fetch times out after 120 s, and this checkout takes 15 s.
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
+        timeout-minutes: 10
+        with:
+          ref: ${{ inputs.ref }}
+      - name: Install SFPI and zstd
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          cd tests
+          ./setup_testing_env.sh
+          command -v zstd || { apt-get update -qq && apt-get install -y -qq zstd; }
+      - name: Set CHIP_ARCH
+        shell: bash
+        env:
+          RUN_ON_LABELS: ${{ join(fromJSON(inputs.test-group).runs_on, ' ') }}
+        run: |
+          RUN_LABEL="${RUN_ON_LABELS%% *}"
+          if [[ "$RUN_LABEL" =~ N150 ]]; then
+            CHIP_ARCH=wormhole
+          elif [[ "$RUN_LABEL" =~ P150 ]]; then
+            CHIP_ARCH=blackhole
+          else
+            echo "::error::cannot tell the architecture from '$RUN_ON_LABELS'"
+            exit 1
+          fi
+          echo "CHIP_ARCH=$CHIP_ARCH" >> "$GITHUB_ENV"
+      - name: Download test durations
+        if: inputs.split-durations == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: split-durations-${{ inputs.architecture }}${{ inputs.artifact-suffix }}
+          path: split-durations
+      - name: Use the test durations for --perf-splits
+        if: inputs.split-durations == 'true'
+        shell: bash
+        run: |
+          if [[ -f "split-durations/$CHIP_ARCH.json" ]]; then
+            echo "LLK_SPLIT_DURATIONS=$PWD/split-durations/$CHIP_ARCH.json" >> "$GITHUB_ENV"
+          fi
+      - name: Compile
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          SPEED_OF_LIGHT: ${{ inputs.speed-of-light }}
+          LLK_PERF_DEBUG_SYMBOLS: ${{ inputs.debug-symbols }}
+          TT_LLK_DISABLE_ASSERTS: "1"
+          LLK_PERF_RUN_TYPES: ${{ inputs.perf-run-types }}
+          PIPELINE: ${{ inputs.pipeline }}
+          LLK_PERF_PHASE: compile
+          LLK_PERF_COMPILE_WORKERS: ${{ inputs.workers }}
+          MATRIX_CMD: ${{ fromJSON(inputs.test-group).cmd }}
+        run: |
+          "$GITHUB_WORKSPACE/.github/scripts/utils/host-load-sidecar.sh" \
+            --interval 5 \
+            --label "compile ${{ fromJSON(inputs.test-group).name }} on ${{ inputs.runner }} (-n ${{ inputs.workers }})" \
+            --output "$GITHUB_STEP_SUMMARY" \
+            -- bash -c "$MATRIX_CMD"
+      - name: Pack the ELFs
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          SPEED_OF_LIGHT: ${{ inputs.speed-of-light }}
+          LLK_PERF_DEBUG_SYMBOLS: ${{ inputs.debug-symbols }}
+          TT_LLK_DISABLE_ASSERTS: "1"
+          LLK_PERF_RUN_TYPES: ${{ inputs.perf-run-types }}
+          PIPELINE: ${{ inputs.pipeline }}
+          MATRIX_CMD: ${{ fromJSON(inputs.test-group).cmd }}
+        run: |
+          python3 tests/llk_perf_offload.py pack --cmd "$MATRIX_CMD" \
+            --out "$RUNNER_TEMP/shadow/llk-elfs-${CHIP_ARCH}-${{ fromJSON(inputs.test-group).split_group }}${{ inputs.artifact-suffix }}.tar.zst" \
+            --junit tests/python_tests/pytest-report-*-${{ fromJSON(inputs.test-group).split_group }}-compile.xml
+      - name: Upload the ELFs
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          path: ${{ runner.temp }}/shadow/llk-elfs-${{ env.CHIP_ARCH }}-${{ fromJSON(inputs.test-group).split_group }}${{ inputs.artifact-suffix }}.tar.zst
+          archive: false
+          retention-days: 1
+          if-no-files-found: error
