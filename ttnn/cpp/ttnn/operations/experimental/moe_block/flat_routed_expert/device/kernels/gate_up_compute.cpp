@@ -108,6 +108,23 @@ FORCE_INLINE void free_weight_block() {
     ++weight_blocks_freed;
 }
 
+// The K steps of one x block: x row tiles [rows][x_block_k_tiles] from tile x_index on, times the weight block at
+// w_index. A full sub-block (or pass) takes the compile-time row count FULL, which lets the LLK unroll its per-tile
+// loops; only a short last sub-block runs with the runtime one. (A runtime rt_dim costs 16%: GLM-5.3's 2 x 2 blocks
+// 17.89 -> 20.82 cycles a tile product on one core, operands resident.)
+template <uint32_t FULL>
+FORCE_INLINE void matmul_x_block(uint32_t x_index, uint32_t w_index, uint32_t rows) {
+    if (rows == FULL) {
+        for (uint32_t k = 0; k < x_block_k_tiles; ++k) {
+            matmul_block(x_cb, weight_cb, x_index + k, w_index + k * row_width, 0, false, row_width, FULL, x_block_k_tiles);
+        }
+    } else {
+        for (uint32_t k = 0; k < x_block_k_tiles; ++k) {
+            matmul_block(x_cb, weight_cb, x_index + k, w_index + k * row_width, 0, false, row_width, rows, x_block_k_tiles);
+        }
+    }
+}
+
 // The activation over DST tiles [0, tiles): each (gate, up) pair becomes its h tile, on the PACK thread's SFPU (after
 // tile_regs_wait). Half-width: tiles t, t + 1 hold [gate | up] of an h tile's left and right 16 columns; both land in
 // the h tile's DST tile.
@@ -146,10 +163,7 @@ FORCE_INLINE void compute_sub_block(uint32_t first_block, uint32_t first_slot, b
     tile_regs_acquire();
     for (uint32_t block = 0; block < blocks_per_load; ++block) {
         cb_wait_front(x_cb, row_tiles * x_block_k_tiles);
-        const uint32_t weights = weight_block(first_block + block, first_slot + block);
-        for (uint32_t k = 0; k < x_block_k_tiles; ++k) {
-            matmul_block(x_cb, weight_cb, k, weights + k * row_width, 0, false, row_width, rows, x_block_k_tiles);
-        }
+        matmul_x_block<row_tiles>(0, weight_block(first_block + block, first_slot + block), rows);
         cb_pop_front(x_cb, row_tiles * x_block_k_tiles);
         if (frees_weights) {  // free the block for the next load as soon as possible
             free_weight_block();
@@ -198,19 +212,8 @@ FORCE_INLINE void compute_sub_block_in_row_passes(
                                static_cast<int32_t>((front + block) % x_ring_blocks) - static_cast<int32_t>(front)) *
                            x_block_tiles;
             }
-            const uint32_t weights = weight_block(first_block + block, first_slot + block);
-            for (uint32_t k = 0; k < x_block_k_tiles; ++k) {
-                matmul_block(
-                    x_cb,
-                    weight_cb,
-                    x_offset + first_row * x_block_k_tiles + k,
-                    weights + k * row_width,
-                    0,
-                    false,
-                    row_width,
-                    pass_rows,
-                    x_block_k_tiles);
-            }
+            matmul_x_block<pass_row_tiles>(
+                x_offset + first_row * x_block_k_tiles, weight_block(first_block + block, first_slot + block), pass_rows);
             if (last_pass) {
                 cb_pop_front(x_cb, x_block_tiles);
                 ++x_blocks_freed;
