@@ -21,9 +21,12 @@
     256
    ]
   ],
-  "dtype": "bfloat16",
+  "dtypes": [
+   "bfloat16",
+   "float32",
+   "int32"
+  ],
   "layout": "ROW_MAJOR",
-  "memcfg": "DRAM",
   "variant": "mainline",
   "kwargs": {}
  },
@@ -43,9 +46,12 @@
     256
    ]
   ],
-  "dtype": "bfloat16",
+  "dtypes": [
+   "bfloat16",
+   "float32",
+   "int32"
+  ],
   "layout": "ROW_MAJOR",
-  "memcfg": "DRAM",
   "variant": "mainline",
   "kwargs": {}
  },
@@ -71,9 +77,12 @@
     512
    ]
   ],
-  "dtype": "bfloat16",
+  "dtypes": [
+   "bfloat16",
+   "float32",
+   "int32"
+  ],
   "layout": "TILE",
-  "memcfg": "DRAM",
   "variant": "mainline",
   "kwargs": {}
  },
@@ -87,9 +96,12 @@
     256
    ]
   ],
-  "dtype": "bfloat16",
+  "dtypes": [
+   "bfloat16",
+   "float32",
+   "int32"
+  ],
   "layout": "TILE",
-  "memcfg": "DRAM",
   "variant": "mainline",
   "kwargs": {}
  },
@@ -102,9 +114,13 @@
     8400
    ]
   ],
-  "dtype": "bfloat16",
+  "dtypes": [
+   "bfloat16",
+   "float32",
+   "int32",
+   "uint8"
+  ],
   "layout": "TILE",
-  "memcfg": "DRAM",
   "variant": "mainline",
   "kwargs": {
    "new_shape": [
@@ -125,9 +141,13 @@
     1024
    ]
   ],
-  "dtype": "bfloat16",
+  "dtypes": [
+   "bfloat16",
+   "float32",
+   "int32",
+   "uint8"
+  ],
   "layout": "TILE",
-  "memcfg": "DRAM",
   "variant": "mainline",
   "kwargs": {
    "new_shape": [
@@ -148,9 +168,13 @@
     128
    ]
   ],
-  "dtype": "bfloat16",
+  "dtypes": [
+   "bfloat16",
+   "float32",
+   "int32",
+   "uint8"
+  ],
   "layout": "TILE",
-  "memcfg": "DRAM",
   "variant": "mainline",
   "kwargs": {
    "starts": [
@@ -177,9 +201,13 @@
     2048
    ]
   ],
-  "dtype": "bfloat16",
+  "dtypes": [
+   "bfloat16",
+   "float32",
+   "int32",
+   "uint8"
+  ],
   "layout": "TILE",
-  "memcfg": "DRAM",
   "variant": "mainline",
   "kwargs": {
    "starts": [
@@ -206,9 +234,13 @@
     2560
    ]
   ],
-  "dtype": "bfloat16",
+  "dtypes": [
+   "bfloat16",
+   "float32",
+   "int32",
+   "uint8"
+  ],
   "layout": "TILE",
-  "memcfg": "DRAM",
   "variant": "mainline",
   "kwargs": {
    "starts": [

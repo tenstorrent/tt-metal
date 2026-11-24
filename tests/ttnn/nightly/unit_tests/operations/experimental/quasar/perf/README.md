@@ -11,8 +11,17 @@ Run it from the tt-metal root with the tree built and its venv active:
         --out results.tsv
 
 `--sim-dir` holds `libttsim.so` and the SoC descriptor as `soc_descriptor.yaml` (see the ttsim README for the
-Quasar setup). `manifest_tm_ops.json` carries the 14 shapes the branch was measured with, tensors in DRAM;
-change `memcfg` to `L1` for L1-resident tensors.
+Quasar setup). `manifest_tm_ops.json` carries the 14 shapes the Quasar changes were measured with, and for each
+case the data types it is valid for. Two options choose what runs, so no shape is listed twice:
+
+- `--dtypes` picks the data types: `bfloat16` by default, which is the short run (about 4 minutes on the
+  performance simulator), a comma list such as `bfloat16,float32`, or `all`.
+- `--memcfg` picks where the tensors live: `DRAM` by default, `L1`, or `DRAM,L1` for both.
+- `--list` prints the cases the options select without running them.
+
+`--dtypes all --memcfg DRAM,L1` is the full run. The tilize and untilize cases do not list `uint8`: on Quasar
+those two ops return wrong data for uint8 with or without the changes measured here (issue #62255), and a run
+that included them could never pass.
 
 TSV columns: `span_cycles` is the program span from the first kernel start to the last kernel end anywhere on the
 grid, in simulator cycles; `cyc_per_tile_per_cluster` is span times active clusters over output tiles;

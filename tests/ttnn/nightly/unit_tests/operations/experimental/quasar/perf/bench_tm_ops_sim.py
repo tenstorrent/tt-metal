@@ -4,11 +4,15 @@
 per op, and a bit-exact check of every output against PyTorch.
 
 Usage (parent): python bench_tm_ops_sim.py --sim-dir <dir with libttsim.so + soc_descriptor.yaml> \
-    --manifest manifest_tm_ops.json --out results.tsv [--grid 3,2] [--perf-trace] [--timeout 1800]
-Each manifest case is {"op": "untilize", "shapes": [[1,1,32,2048], ...], "dtype": "bfloat16", "layout": "TILE",
-"memcfg": "DRAM" | "L1", "variant": "mainline", "kwargs": {...}}. Shapes in one case share a process; cases do
-not, because a program-cache hit would replay the first variant's program. The parent exits 2 when any output
-was not exact, so a run doubles as a regression check. A simulator here is craq-sim (the internal full-chip
+    --manifest manifest_tm_ops.json --out results.tsv [--dtypes bfloat16,float32 | all] [--memcfg DRAM,L1]
+    [--list] [--grid 3,2] [--perf-trace] [--timeout 1800]
+Each manifest case is {"op": "untilize", "shapes": [[1,1,32,2048], ...], "dtypes": ["bfloat16", "float32"],
+"layout": "TILE", "variant": "mainline", "kwargs": {...}}. "dtypes" lists the data types the case is valid for;
+--dtypes picks which of them run (default bfloat16, the short run) and --memcfg where the tensors live (default
+DRAM). A case that names a single "dtype" or a "memcfg" is pinned to it and ignores the matching option. Each
+(case, dtype, memcfg) runs in its own process: shapes in one case share a process, cases do not, because a
+program-cache hit would replay the first variant's program. The parent exits 2 when any output was not exact, so
+a run doubles as a regression check. A simulator here is craq-sim (the internal full-chip
 simulator) or ttsim; the TSV's lifetime_by_risc column is each RISC's kernel lifetime as a fraction of the span,
 waits included, not a busy figure.
 """
@@ -127,9 +131,9 @@ def run_child(case, out_path):
                         "fw_span_cycles": prof.fw_span,
                         "n_cores": prof.n_cores,
                         "tiles": ntiles,
-                        "cyc_per_tile_per_cluster": (prof.span * prof.n_cores / ntiles)
-                        if prof.span and ntiles
-                        else None,
+                        "cyc_per_tile_per_cluster": (
+                            (prof.span * prof.n_cores / ntiles) if prof.span and ntiles else None
+                        ),
                         "active_riscs": prof.active_set(),
                         "lifetime_by_risc": prof.by_risc_type(),
                         "overflow": prof.overflow,
@@ -163,9 +167,9 @@ def run_child(case, out_path):
                             "span_cycles": prof.span,
                             "fw_span_cycles": prof.fw_span,
                             "n_cores": prof.n_cores,
-                            "cyc_per_tile_per_cluster": (prof.span * prof.n_cores / ntiles)
-                            if prof.span and ntiles
-                            else None,
+                            "cyc_per_tile_per_cluster": (
+                                (prof.span * prof.n_cores / ntiles) if prof.span and ntiles else None
+                            ),
                             "active_riscs": prof.active_set(),
                             "lifetime_by_risc": prof.by_risc_type(),
                             "overflow": prof.overflow,
@@ -182,6 +186,35 @@ def run_child(case, out_path):
 
 
 # ---------------------------------------------------------------- parent ---------------------------------------------
+DTYPES = ("bfloat16", "float32", "int32", "uint8", "uint16", "uint32")
+MEMCFGS = ("DRAM", "L1")
+
+
+def expand_cases(cases, dtypes_arg, memcfg_arg):
+    """One concrete case per (manifest case, dtype, memcfg) that the options select."""
+    want_dtypes = None if dtypes_arg == "all" else dtypes_arg.split(",")
+    want_memcfgs = memcfg_arg.split(",")
+    for name in want_dtypes or ():
+        if name not in DTYPES:
+            raise SystemExit(f"unknown dtype {name!r}; known: {', '.join(DTYPES)} or all")
+    for name in want_memcfgs:
+        if name not in MEMCFGS:
+            raise SystemExit(f"unknown memcfg {name!r}; known: {', '.join(MEMCFGS)}")
+    expanded = []
+    for case in cases:
+        if "dtypes" in case:
+            dtypes = [d for d in case["dtypes"] if want_dtypes is None or d in want_dtypes]
+        else:
+            dtypes = [case.get("dtype", "bfloat16")]
+        memcfgs = [case["memcfg"]] if "memcfg" in case else want_memcfgs
+        for dtype in dtypes:
+            for memcfg in memcfgs:
+                concrete = {k: v for k, v in case.items() if k != "dtypes"}
+                concrete.update(dtype=dtype, memcfg=memcfg)
+                expanded.append(concrete)
+    return expanded
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--sim-dir", required=True)
@@ -189,6 +222,9 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--grid", default=None, help="TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE value, e.g. 3,2")
     ap.add_argument("--perf-trace", action="store_true", help="craq-sim only: TTSIM_PERF_TRACE per dispatch")
+    ap.add_argument("--dtypes", default="bfloat16", help="comma list of dtypes to run, or all (default: bfloat16)")
+    ap.add_argument("--memcfg", default="DRAM", help="comma list of DRAM and L1 (default: DRAM)")
+    ap.add_argument("--list", action="store_true", help="print the cases the options select and exit")
     ap.add_argument("--timeout", type=int, default=1800)
     ap.add_argument("--child", default=None, help=argparse.SUPPRESS)
     ap.add_argument("--child-out", default=None, help=argparse.SUPPRESS)
@@ -200,13 +236,19 @@ def main():
         return
 
     with open(args.manifest) as f:
-        cases = json.load(f)
+        cases = expand_cases(json.load(f), args.dtypes, args.memcfg)
+    if not cases:
+        raise SystemExit("the options select no case of this manifest")
+    if args.list:
+        for case in cases:
+            print(case["op"], case["dtype"], case["memcfg"], case["shapes"])
+        return
     out_dir = os.path.dirname(os.path.abspath(args.out)) or "."
     os.makedirs(out_dir, exist_ok=True)
     tt_metal_home = os.environ["TT_METAL_HOME"]
     all_results = []
     for i, case in enumerate(cases):
-        tag = f"{i:03d}_{case['op']}_{case.get('variant', 'mainline')}"
+        tag = f"{i:03d}_{case['op']}_{case.get('variant', 'mainline')}_{case['dtype']}_{case['memcfg'].lower()}"
         case_dir = os.path.join(out_dir, tag)
         os.makedirs(case_dir, exist_ok=True)
         case_path = os.path.join(case_dir, "case.json")
