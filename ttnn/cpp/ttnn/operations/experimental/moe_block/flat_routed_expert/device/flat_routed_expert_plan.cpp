@@ -486,8 +486,8 @@ FlatRoutedExpertPlan make_plan(
     };
     // The down cores stay the free cores in raster order, the bank anchors and their east neighbours last (above); each
     // then reads from the bank(s) nearest it (the bank patterns below). Picking the down cores by their distance to the
-    // banks instead takes exactly those anchor-side cores, and the combine's ports - the cores the flat expert leaves
-    // free - end up sharing one or two columns (GLM-5.3 4x4 torus, experts + combine 1630 -> 1693 us).
+    // banks instead would take exactly those anchor-side cores and leave the combine's ports - on the cores the flat
+    // expert leaves free - one or two columns to share.
     uint32_t ND = p.down_cores.size();
     const uint32_t n_slots = p.dram_banks;  // (weight slot r: bank r)
     p.gate_up_weight_slots = n_slots;
@@ -568,10 +568,9 @@ FlatRoutedExpertPlan make_plan(
         }
         // Then min-max: swap a core of the worst slot (the highest mean hops) with one of another slot while that
         // lowers the higher of the two slots' means below the worst's. Each bank serves 1/banks of every expert and
-        // every core waits for the whole expert, so the slowest bank paces the call: nearest-first leaves one bank with
-        // all the cores the other banks did not take (Galaxy / P150: bank 4 at 13.5 hops, 4 of its 8 readers ~20 hops
-        // away); min-max shares them out (the worst bank 6.9; experts + combine K3 / M3 a further -3..-7%). The slots
-        // keep their cores' count, so the weight layout does not change - only which core reads which slot.
+        // every core waits for the whole expert, so the slowest bank paces the call, and nearest-first leaves the last
+        // bank all the far cores the other banks did not take; min-max shares them out. The slots keep their cores'
+        // count, so the weight layout does not change - only which core reads which slot.
         std::vector<std::vector<uint32_t>> H(n_slots, std::vector<uint32_t>(gu_all.size()));
         for (uint32_t r = 0; r < n_slots; ++r) {
             for (uint32_t ci = 0; ci < gu_all.size(); ++ci) {
@@ -622,11 +621,6 @@ FlatRoutedExpertPlan make_plan(
                 break;
             }
             std::swap(per_slot[w][bi], per_slot[bs][bj]);
-        }
-        for (uint32_t r = 0; r < n_slots; ++r) {
-            for (uint32_t ci : per_slot[r]) {
-                p.gate_up_bank_hops.push_back(H[r][ci]);
-            }
         }
     }
     for (uint32_t r = 0; r < n_slots; ++r) {
@@ -720,13 +714,12 @@ FlatRoutedExpertPlan make_plan(
     p.gate_up_weight_region_bytes = p.experts_per_chip * p.gate_up_k_blocks * p.column_groups_per_weight_slot *
                                     p.weight_block_tiles * p.weight_tile_bytes;
     // The down cores' weight blocks: each core's dram_banks positions (block k at position k % banks) in the bank(s)
-    // nearest it, every bank the same down bytes (columns x positions). Pinning a core to a bank by index ran at 55% of
-    // DRAM peak, rotating every core over all banks 65% - pinning was never the problem, distance was: the nearest
-    // banks give 88% (expert_combine_reschedule findings 1-3). Two passes over the (hops, bank, core) pairs, nearest
+    // nearest it, every bank the same down bytes (columns x positions). The down reads' rate is set by their NOC0
+    // distance to the bank, not by how many cores share a bank. Two passes over the (hops, bank, core) pairs, nearest
     // first. 1: whole cores, at most ND / banks a bank; 2: the cores left, a pair giving the core's next positions to
     // the bank while the bank has room (each bank: the columns x positions of an even share). Positions left (uneven
     // columns) go to the least loaded banks. Every bank then holds its whole cores' regions from slot 0 and the split
-    // cores' at one level: the DRAM footprint is rotate's.
+    // cores' at one level: the DRAM footprint is that of every core rotating over all banks.
     {
         const uint32_t banks = p.dram_banks;
         TT_FATAL(banks >= 1 && banks <= 8 && banks == nbanks, "flat_routed_expert: down bank patterns hold 8 banks");
@@ -778,7 +771,6 @@ FlatRoutedExpertPlan make_plan(
         // Single-bank cores first, each bank filled from slot 0.
         p.down_bank_pattern.assign(ND, 0);
         p.down_weight_slot.assign(ND, 0);
-        p.down_bank_hops.assign(ND, 0);
         uint32_t region_tiles = 0;
         for (uint32_t d = 0; d < ND; ++d) {
             const uint32_t kd = FlatRoutedExpertPlan::down_k_block_tiles(
@@ -790,9 +782,6 @@ FlatRoutedExpertPlan make_plan(
                 v |= pat[d][j] << (4 * j);
             }
             p.down_bank_pattern[d] = v;
-            for (const uint32_t b : std::set<uint32_t>(pat[d].begin(), pat[d].end())) {
-                p.down_bank_hops[d] = std::max(p.down_bank_hops[d], bank_hops(b, p.down_cores[d]));
-            }
         }
         std::vector<uint32_t> fill(banks, 0), order(ND);
         for (uint32_t d = 0; d < ND; ++d) {

@@ -71,9 +71,6 @@ nb::dict plan_dict(const FlatRoutedExpertPlan& p) {
     }
     d["down_weight_slots"] = p.down_weight_slot;
     d["down_weight_slot_count"] = p.down_weight_slot_count;
-    d["down_bank_hops"] = p.down_bank_hops;
-    d["gate_up_bank_hops"] = p.gate_up_bank_hops;
-    d["bank_anchor_cores"] = cores(p.bank_anchor_cores);
     d["down_h_buffers"] = p.down_h_buffers;
     d["gate_up_block_pieces"] = p.gate_up_block_pieces;
     d["down_chains"] = p.down_chains;

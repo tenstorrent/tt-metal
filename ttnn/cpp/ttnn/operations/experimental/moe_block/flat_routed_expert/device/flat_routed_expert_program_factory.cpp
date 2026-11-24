@@ -171,10 +171,12 @@ FlatProgramHandles add_flat_routed_expert_program(
     // along the snake (down a column, wrapping inside the rectangle, one column over, on down), each piece once its
     // successor has freed the block's slot. One snake a rectangle (2: the relay writes every block twice - GLM-5.3 M
     // 1024 238.7 vs 205.5 us / expert, multicast 211.5), 4 cut-through pieces, the forwarder on the gate/up NCRISC
-    // (gate_up_x_forwarder.cpp) on NOC0 with 3 pieces in flight, the receiver (gate_up_core_reader.cpp, BRISC) on NOC1.
+    // (gate_up_x_forwarder.cpp) on NOC0 with X_FWD_DEPTH pieces in flight, the receiver (gate_up_core_reader.cpp,
+    // BRISC) on NOC1.
     const auto aligned = [&](uint32_t n) { return x_bytes % n == 0 && (x_bytes / n) % 16 == 0; };
     const uint32_t x_pieces = aligned(4) ? 4 : (aligned(2) ? 2 : 1);
-    constexpr uint32_t X_FWD_DEPTH = 6;  // (<= 7: ids 8..15 are the weight reads'; 3 -> 6: K3 / M3 M 320 -14 / -18%)
+    // (a hop's bandwidth: its bytes in flight over the NoC latency; at most 7, ids 8..15 are the weight reads')
+    constexpr uint32_t X_FWD_DEPTH = 6;
     log_info(
         tt::LogOp,
         "flat_routed_expert: x read once (helpers), unicast snakes (snakes 1 pieces {} NCRISC forwarder NOC0 depth {})",
