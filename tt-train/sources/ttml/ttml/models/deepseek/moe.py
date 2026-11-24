@@ -42,6 +42,11 @@ from .autograd_ops import (
 )
 
 
+# A tensor's own dtype: get_value()'s default (HALF) hands an FP32 tensor, such as the token counts, back as a
+# BF16 copy.
+NATIVE = ttml.autograd.PreferredPrecision.NATIVE
+
+
 class Expert(AbstractModuleBase):
     """Single SwiGLU expert with its own weight parameters."""
 
@@ -226,10 +231,12 @@ class MoE(AbstractModuleBase):
         )
 
         # On-device accumulator for token counts per expert [1, 1, 1, num_experts]
-        # Each forward adds to this; update_expert_bias reads and resets it.
+        # Each forward adds to this; update_expert_bias reads and resets it. FP32: it holds integer counts exactly
+        # (BF16 does so only up to 256), and their average over the devices keeps its fraction through the update's
+        # comparison with the mean.
         self._token_counts = Buffer(
             ttml.autograd.create_tensor(
-                ttnn.zeros(shape, device=device, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.Layout.TILE)
+                ttnn.zeros(shape, device=device, dtype=ttnn.DataType.FLOAT32, layout=ttnn.Layout.TILE)
             )
         )
         # Both buffers are replicated: one bias and one count per expert on every device. A ttnn op on them takes the
@@ -283,8 +290,8 @@ class MoE(AbstractModuleBase):
             routing_weights = scores
 
         mask_bs_flat = ttnn.reshape(expert_mask_all, [1, 1, B * S, self.num_experts])
-        batch_counts = ttnn.sum(mask_bs_flat, dim=-2, keepdim=True)
-        new_counts = ttnn.add(self._token_counts.tensor.get_value(), batch_counts)
+        batch_counts = ttnn.sum(ttnn.typecast(mask_bs_flat, ttnn.DataType.FLOAT32), dim=-2, keepdim=True)
+        new_counts = ttnn.add(self._token_counts.tensor.get_value(NATIVE), batch_counts)
         new_counts.update_tensor_topology(self._buffer_topology)
         self._token_counts.tensor.set_value(new_counts)
 
@@ -451,7 +458,7 @@ class MoE(AbstractModuleBase):
         ``sum(counts) == n_activated * total_tokens`` so no batch-size /
         grad-accum bookkeeping is required at the call site.
         """
-        counts = ttnn.to_torch(self._token_counts.tensor.get_value())
+        counts = ttnn.to_torch(self._token_counts.tensor.get_value(NATIVE))
         counts_np = counts.float().cpu().numpy().flatten()
         total = float(counts_np.sum())
         if total <= 0.0:
@@ -467,7 +474,7 @@ class MoE(AbstractModuleBase):
         parallelism, or ``SparseMoEEP``'s batch gathered over "dp") hold equal counts, which the average returns
         unchanged. The average gives the update the same signs as the sum.
         """
-        counts = self._token_counts.tensor.get_value()
+        counts = self._token_counts.tensor.get_value(NATIVE)
         mesh = ttml.maybe_mesh()
         axes = [] if mesh is None else [mesh.axis_index(name) for name in mesh.axis_names if mesh.axis_size(name) > 1]
         if not axes:
@@ -498,9 +505,10 @@ class MoE(AbstractModuleBase):
         delta = ttnn.subtract(delta, delta_mean)
 
         # Update bias
-        new_bias = ttnn.add(self._expert_bias.tensor.get_value(), delta)
+        bias = self._expert_bias.tensor.get_value()
+        new_bias = ttnn.add(bias, ttnn.typecast(delta, bias.dtype))
         self._expert_bias.tensor.set_value(new_bias)
 
         # Reset token counts
-        zeros = ttnn.zeros_like(self._token_counts.tensor.get_value())
+        zeros = ttnn.zeros_like(self._token_counts.tensor.get_value(NATIVE))
         self._token_counts.tensor.set_value(zeros)
