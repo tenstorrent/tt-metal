@@ -173,6 +173,9 @@ def glx_reset(
     bad = {} if bdfs is None else unready(bdfs)
     if bad and not name.endswith("_round2"):  # a second re-power round for chips missing, not ready or not opening
         log(f"{name}: {len(bad)} chip(s) not back: a second tt-smi -glx_reset")
+        said = "; ".join(f"{b} {why}" for b, why in bad.items())  # a FAIL even when the second round brings them back
+        ready = Check(name=f"ready_{name}", status=FAIL, details=f"not back: {said}", data={"unready": bad}, ip="pcie")
+        phase.add(ready)
         return glx_reset(tt_smi, phase, f"{name}_round2", recount, dry_run, logs_dir, gate)
     if bad.keys() - {b for b, why in bad.items() if why == "missing from PCIe"}:
         said = "; ".join(f"{b} {why}" for b, why in bad.items() if why != "missing from PCIe")

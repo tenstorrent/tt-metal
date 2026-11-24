@@ -133,7 +133,7 @@ class TestResets(unittest.TestCase):
         node.mkdir(parents=True)
         (node / "tt_fw_bundle_ver").write_text("0.0.0.0\n")
         out, checks = self._reset([all_bdfs()])
-        self.assertEqual(checks["reset_1_round2"].status, PASS)
+        self.assertEqual((checks["ready_reset_1"].status, checks["reset_1_round2"].status), (FAIL, PASS))
         self.assertEqual(
             checks["ready_recount_1"].details, "0000:01:00.0 firmware not ready (tt_fw_bundle_ver 0.0.0.0)"
         )
