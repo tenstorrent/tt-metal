@@ -156,16 +156,19 @@ class TtFusedMTP(LightweightModule):
         return _to_ttnn(w, "eh_proj")
 
     @staticmethod
-    def check_cache_complete(cache_path: Path, cache_name_prefix: str = "mtp_0") -> bool:
-        """Whether the fused-MTP weight cache (both norms + eh_proj) is present."""
+    def check_cache_complete(
+        cache_path: Path, cache_name_prefix: str = "mtp_0", weights_dtype: ttnn.DataType = ttnn.bfloat16
+    ) -> bool:
+        """Whether the fused-MTP weight cache (both norms + eh_proj at ``weights_dtype``, the cached dtype) is present."""
         from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import pattern_exists
 
         if not TtDistributedRmsNorm.check_cache_complete(cache_path, f"{cache_name_prefix}.enorm"):
             return False
         if not TtDistributedRmsNorm.check_cache_complete(cache_path, f"{cache_name_prefix}.hnorm"):
             return False
-        # Pinned to the cached dtype (weights_dtype default; the matmul's bfp8 copy is cast after load).
-        if not pattern_exists(f"{cache_name_prefix}.eh_proj_dtype_BFLOAT16_layout_TILE.tensorbin", "FusedMTP"):
+        # Pinned to the cached dtype; the matmul's bfp8 copy is cast after load.
+        eh_proj_file = f"{cache_name_prefix}.eh_proj_dtype_{weights_dtype.name}_layout_TILE.tensorbin"
+        if not pattern_exists(eh_proj_file, "FusedMTP"):
             logger.debug(f"TTNN cache missing: {cache_name_prefix}.eh_proj")
             return False
         return True
@@ -210,7 +213,8 @@ class TtFusedMTP(LightweightModule):
     def act_memory_config(self, rows_local: int, width_local: int) -> ttnn.MemoryConfig:
         """Where the norm outputs and concat live: L1 on Blackhole when they fit L1_ACT_MAX_BYTES (0.30 vs 0.34 ms per
         5k chunk on Galaxy 8x4), else DRAM."""
-        live_bytes = 2 * (2 * rows_local * width_local)  # e and h, then the concat of both, all bf16
+        rows = -(-rows_local // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        live_bytes = 8 * rows * width_local  # e and h (2 B x r x w each) live with their concat (2 B x r x 2w), bf16
         if self._is_blackhole and live_bytes <= self.L1_ACT_MAX_BYTES:
             return ttnn.L1_MEMORY_CONFIG
         return ttnn.DRAM_MEMORY_CONFIG
@@ -369,22 +373,24 @@ class TtMTPModule(LightweightModule):
         owns_indexer: bool = True,
     ) -> bool:
         """Whether the module's cache is present: fused MTP + block + shared_head.norm, or with ``kv_only`` what a
-        KV-only build loads (fused MTP, attn_norm, the MLA KV branch and, if the layer ``owns_indexer``, the
-        indexer's key side)."""
+        KV-only build loads (fused MTP, attn_norm, the MLA KV branch). When the layer ``owns_indexer``, also its
+        indexer: every file, or the key side only for ``kv_only``."""
         if not TtFusedMTP.check_cache_complete(cache_path, cache_name_prefix):
             return False
         if kv_only:
-            if not TtPrefillBlock.check_cache_complete(
+            block_ok = TtPrefillBlock.check_cache_complete(
                 cache_path, layer_idx, is_dense=False, model_cfg=model_cfg, kv_only=True
-            ):
-                return False
-            return not owns_indexer or TtIndexer.check_cache_complete(
-                cache_path, f"layer_{layer_idx}.mla", key_only=True
             )
-        if not TtDistributedRmsNorm.check_cache_complete(cache_path, f"{cache_name_prefix}.shared_head_norm"):
+        else:
+            block_ok = TtDistributedRmsNorm.check_cache_complete(
+                cache_path, f"{cache_name_prefix}.shared_head_norm"
+            ) and TtPrefillBlock.check_cache_complete(
+                cache_path, layer_idx, is_dense=False, experts_per_chip=experts_per_chip, model_cfg=model_cfg
+            )
+        if not block_ok:
             return False
-        return TtPrefillBlock.check_cache_complete(
-            cache_path, layer_idx, is_dense=False, experts_per_chip=experts_per_chip, model_cfg=model_cfg
+        return not owns_indexer or TtIndexer.check_cache_complete(
+            cache_path, f"layer_{layer_idx}.mla", key_only=kv_only
         )
 
     def forward(self, embed: ttnn.Tensor, hidden: ttnn.Tensor, rope_tensors: dict, kvpe_cache, **fwd_kwargs):

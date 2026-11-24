@@ -110,6 +110,7 @@ class ttMLA:
         has_indexer: bool = False,
         has_output_gate: bool = False,
         kv_only: bool = False,
+        indexer_key_only: bool = False,
     ) -> bool:
         """Check that the dense MLA weight cache files exist, plus the indexer tensorbins when sparse.
 
@@ -117,8 +118,8 @@ class ttMLA:
         (``{prefix}.indexer_*``) must also be complete — a disjoint prefix space from the dense MLA
         names, so the dense loop here never matches indexer files and vice versa
         (see ``TtIndexer.check_cache_complete``). ``has_output_gate=True`` additionally requires
-        ``g_proj`` (Kimi-K3). ``kv_only`` checks only what a KV-only build loads: the KV branch and the
-        indexer's key side."""
+        ``g_proj`` (Kimi-K3). ``kv_only`` checks only the KV branch a kv_only build loads; ``indexer_key_only`` checks
+        only the indexer's key side (a layer built with ``indexer_key_only``)."""
         from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import pattern_exists
 
         globs = (
@@ -130,7 +131,7 @@ class ttMLA:
             if not pattern_exists(f"{cache_name_prefix}.{name}{suffix}", "MLA"):
                 logger.debug(f"TTNN cache missing: {cache_name_prefix}.{name}{suffix}")
                 return False
-        if has_indexer and not TtIndexer.check_cache_complete(cache_path, cache_name_prefix, key_only=kv_only):
+        if has_indexer and not TtIndexer.check_cache_complete(cache_path, cache_name_prefix, key_only=indexer_key_only):
             return False
         return True
 
