@@ -165,3 +165,34 @@ init + fp32 pack overheads).
   quarter) and now visible in the SEND_PAYLOAD ablation (−15 µs). Next OVERLAP lever: interleave landed stage-3
   rows into the stage-1 loop on the stage-1 cores (L2), not built here.
 - Tests added: `perf_ablate.py`, `zone_probe.py`, `zone_summary.py` (tools, no `test_` prefix → not collected).
+
+## Refinement 4 — Rows per device that are not whole tiles (m_non_aligned)
+- Date: 2026-11-24
+- What was done: `SUPPORTED["alignment"]` += `m_non_aligned` (regime R9). Every stage now works in **quarter-aligned row
+  tiles**: `Geometry.qrt = ceil(Sq/32)` (Sq = S/G), row tile r of quarter d = latent rows `d*Sq + 32r .. +31` of the image.
+  The x injector's DRAM half realigns them (`x_realign_block` in `q_stem_injector_reader.cpp`): when `g0 = d*Sq + 32r` is
+  not a tile boundary it reads the two latent tiles the rows straddle (Ta, Tb; Tb past the image -> Ta, padding rows only)
+  into the new injector-only scratch `cb_x_stage` (2·s1_kb pages, allocated only when non-aligned) and assembles each
+  slot tile from face-row runs (<= 4 runs per column half, local L1->L1 NoC reads — the DRAM read alignment forbids the
+  shift in flight). Aligned row tiles (delta = 0, incl. every tile-aligned shape) keep the direct read. The RM writer writes
+  only the `min(32, Sq - 32r)` valid sticks of a quarter's last row tile at stick `(b*H + h)*Sq + 32r`; TILE writes the
+  padded tile as before. Nothing else changed: stage 1, exchange, landing layout, arrival thresholds and stage 3 all
+  run on `qrt` as before.
+  **Deviation from the design** (recorded in op_design.md R9): the plan put a 0/1 row-shift matmul at the destination,
+  before stage 3 (ceil-covering 2 tile rows on the fabric, landing / thresholds / output mapping reshaped). Applying the same
+  row permutation to x before stage 1 is legal by the same algebra (`(P x) @ q_b = P (x @ q_b)`), keeps q bit-identical
+  (exact copies, unchanged per-tile K accumulation), sends `ceil(Sq/32)` tile rows per quarter (<= the plan's), and leaves
+  every downstream stage — and Refinement 5's cos/sin rows, which follow the output rows — untouched. Cost: stage 1
+  computes `B*G*ceil(Sq/32)` row tiles instead of `B*ceil(S/32)` (Kimi S=160: 8 vs 5) and shifted x tiles are read twice.
+  None of the m_non_aligned shapes is a perf case.
+  Reused: the whole pipeline, `qrt`/`for_each_block`, the injector's read loop, `store_sticks`. Added: `Geometry.Sq/x_St/aligned`,
+  `cb_x_stage`, the realign branch (injector), the valid-stick count (writer), 4 CT args.
+- Accuracy achieved: the realignment is an exact copy, so accuracy is that of the aligned path at the same config; every
+  m_non_aligned cell passes the golden `check_output` at its tolerance (S=48 / 96 / 160; bf16 + bfp8 weights, fp32 / 16-bit
+  DEST, TILE / ROW_MAJOR, DRAM / L1 latent).
+- Golden test progress: 96/96 m_non_aligned NoPE cells (3 shapes x 32 configs; the rope cells stay xfail until Refinement 5).
+  Regression: test_q_stem.py 9/9, test_regression.py 8 passed / 3 xfailed (unchanged), 58 aligned NoPE cells incl. the
+  NoPE loose cases (PERF FOCUS + Phase-0 Kimi), R2 streamed wkv and B=2 bfp8. PERF FOCUS fastest chip 147.9 us
+  (R3: 147.7, noise).
+- Issues encountered: None.
+- Tests added: none (the 96 golden m_non_aligned cells pin the path).

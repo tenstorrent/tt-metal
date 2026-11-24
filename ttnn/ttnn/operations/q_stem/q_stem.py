@@ -51,7 +51,7 @@ SUPPORTED = {
     "output_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     "fp32_dest_acc_en": [True, False],
     "rope_mode": ["nope"],
-    "alignment": ["tile_aligned"],
+    "alignment": ["tile_aligned", "m_non_aligned"],
     "input_buffer": [ttnn.BufferType.DRAM, ttnn.BufferType.L1],
     "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED],
     "cluster_axis": [1],

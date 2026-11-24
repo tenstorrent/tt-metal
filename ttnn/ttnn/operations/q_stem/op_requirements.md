@@ -152,7 +152,7 @@ routed one way and lands the last remote rows ~30 µs after stage 1 (SEND_PAYLOA
 TRANSPORT lever is now in play. Next OVERLAP lever: interleave landed rows into the stage-1 loop (L2). It was not
 built: it restructures all three compute-core kernels, and the transport tail would bound its gain.
 
-### [ ] Refinement 4 — Rows per device that are not whole tiles (m_non_aligned)
+### [x] Refinement 4 — Rows per device that are not whole tiles (m_non_aligned)
 
 **Goal**: add `"m_non_aligned"` to `SUPPORTED["alignment"]`: `S % 32 != 0` or `(S/G) % 32 != 0`. INPUTS: Kimi
 S=160 (40 rows per device), S=96 (24 rows per device), S=48 (latent 1.5 tiles, 12 rows per device). This is the
@@ -176,6 +176,8 @@ the valid sticks (ROW_MAJOR).
 
 **Done when**: every golden cell with `alignment=m_non_aligned` whose other axis values are SUPPORTED passes, verifier
 categories clean, acceptance + regression green.
+
+**Outcome**: built with the realignment at the x injector instead of a destination-side shift matmul (same row-permutation algebra, one stage earlier): every stage runs on quarter-aligned row tiles (`ceil(Sq/32)` per quarter), so the exchange / landing / stage 3 are unchanged and Refinement 5's cos/sin rows need no shift. All 96 golden m_non_aligned NoPE cells pass; fabric bytes per quarter are `ceil(Sq/32)` tile rows (≤ the planned ceil-covering 2), see op_design.md R9.
 
 ### [ ] Refinement 5 — Rotary embedding (rope_mode = rope)
 

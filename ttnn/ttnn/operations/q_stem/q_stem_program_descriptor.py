@@ -87,6 +87,7 @@ CB_ROPE_OUT = 7
 CB_PORT_STAGE = 8
 CB_PREFIX_RM = 9
 CB_ROPE_RM = 10
+CB_X_STAGE = 11  # injector only, m_non_aligned: the two latent tiles a realigned x tile straddles
 
 # ---- program semaphore ids (port cores; declared on every core the program uses) -------------------------------------
 SEM_BLOCK_READY = 0
@@ -168,8 +169,15 @@ class Geometry:
         self.Q_t, self.Dn_t, self.Dr_t, self.N_t = Q // 32, Dn // 32, self.Dr // 32, N // 32
         self.hw = self.Dn_t + self.Dr_t  # head_w_tiles
         self.Cq_t = self.Hl * self.hw
-        self.St = S // 32  # row tiles per image
-        self.qrt = (S // G) // 32  # quarter_row_tiles
+        # Rows: a device's quarter is Sq = S / G rows. Every downstream stage (stage-1 blocks, exchange, landing,
+        # stage 3, output) works in quarter-aligned row tiles: qrt = ceil(Sq / 32) tiles per quarter, quarter row
+        # tile r = latent rows d * Sq + 32 r .. + 31 of quarter d. When Sq % 32 != 0 (alignment m_non_aligned, regime
+        # R9) those rows straddle latent tiles: the x injector realigns them (row shift of the x tiles, exact copies)
+        # before stage 1 — a left row permutation commutes with @ q_b, @ wkv_b1 and the elementwise rope part.
+        self.Sq = S // G
+        self.x_St = -(-S // 32)  # latent row tiles per image (TILE-padded)
+        self.qrt = -(-self.Sq // 32)  # quarter_row_tiles
+        self.aligned = self.Sq % 32 == 0
         self.tile_bytes = ttnn.tile_size(ttnn.bfloat16)
         self.qb_tile_bytes = ttnn.tile_size(q_b.dtype)
         self.wkv_tile_bytes = ttnn.tile_size(wkv.dtype)
@@ -604,6 +612,8 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
         cbs = [
             _cb(CB_Q_SLICE, bf16, geo.tile_bytes, geo.num_blocks * geo.m * geo.cols_max, _merge(s1_rect, port_crs)),
             _cb(CB_X_ROUND, x.dtype, geo.x_tile_bytes, X_ROUND_DEPTH * geo.round_tiles, _merge(s1_rect, inj_crs)),
+            # m_non_aligned: per realigned x row tile, its two source tiles for every K tile of the round
+            _cb(CB_X_STAGE, x.dtype, geo.x_tile_bytes, 2 * geo.s1_kb if not geo.aligned else 1, inj_crs),
             _cb(CB_QB_SLICE, q_b.dtype, geo.qb_tile_bytes, geo.Q_t * geo.cols_max, s1_rect),
         ]
         if geo.nkb > 1:
@@ -763,7 +773,18 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
         injector_reader_k = ttnn.KernelDescriptor(
             kernel_source=str(KERNEL_DIR / "q_stem_injector_reader.cpp"),
             core_ranges=inj_crs,
-            compile_time_args=[CB_X_ROUND, geo.x_tile_bytes, geo.Q_t, geo.s1_kb, geo.nkb, *geo_ct, *x_ct],
+            compile_time_args=[
+                CB_X_ROUND,
+                geo.x_tile_bytes,
+                geo.Q_t,
+                geo.s1_kb,
+                geo.nkb,
+                *geo_ct,
+                geo.Sq,
+                geo.x_St,
+                CB_X_STAGE,
+                *x_ct,
+            ],
             runtime_args=inj_rt,
             config=_dm("RISCV_0", ttnn.NOC.NOC_1),
         )
@@ -851,6 +872,7 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
             CB_ROPE_RM,
             int(geo.full_stick),
             geo.ts,
+            geo.Sq,
             *out_ct,
         ]
         writer_k = ttnn.KernelDescriptor(

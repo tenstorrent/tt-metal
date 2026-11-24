@@ -44,7 +44,8 @@ void kernel_main() {
     constexpr uint32_t cb_rope_rm = get_compile_time_arg_val(20);
     constexpr bool full_stick = get_compile_time_arg_val(21) != 0;  // RM: one [prefix | rope] block per row
     constexpr uint32_t ts = get_compile_time_arg_val(22);           // stage-3 consumption order (q_stem::RowOrder)
-    constexpr auto out_args = TensorAccessorArgs<23>();
+    constexpr uint32_t Sq = get_compile_time_arg_val(23);  // output rows per (image, head); qrt = ceil(Sq / 32)
+    constexpr auto out_args = TensorAccessorArgs<24>();
     constexpr uint32_t stick_tile_bytes = tile_bytes / 32;  // one tile-width of one row-major stick (bf16: 64 B)
     constexpr uint32_t out_w = N_t + Dr_t;
     constexpr uint32_t rows_per_head = B * qrt;
@@ -130,13 +131,14 @@ void kernel_main() {
         noc_async_writes_flushed();  // the tiles have left L1 (acks are collected once, at the end)
         cb_pop_front(cb, n_tiles);
     };
-    // ROW_MAJOR: one untilized block of n_tiles tile-widths = 32 sticks of n_tiles * 64 B, written into sticks
-    // stick0 .. stick0 + 31 at byte offset col_byte (32 writes, one flush)
-    auto store_sticks = [&](uint32_t cb, uint32_t n_tiles, uint32_t stick0, uint32_t col_byte) {
+    // ROW_MAJOR: one untilized block of n_tiles tile-widths = 32 sticks of n_tiles * 64 B, the first n_sticks of
+    // them (32, or the valid rows of a quarter's last row tile when Sq % 32 != 0) written into sticks
+    // stick0 .. stick0 + n_sticks - 1 at byte offset col_byte (one write per stick, one flush)
+    auto store_sticks = [&](uint32_t cb, uint32_t n_tiles, uint32_t stick0, uint32_t n_sticks, uint32_t col_byte) {
         const uint32_t seg = n_tiles * stick_tile_bytes;
         cb_wait_front(cb, n_tiles);
         uint32_t l1 = get_read_ptr(cb);
-        for (uint32_t i = 0; i < 32; ++i) {
+        for (uint32_t i = 0; i < n_sticks; ++i) {
 #ifndef ABLATE_OUT_WRITE
             noc_async_write(l1, out.get_noc_addr(stick0 + i, col_byte), seg);
 #endif
@@ -152,15 +154,16 @@ void kernel_main() {
         const uint32_t r = t - b * qrt;
         const uint32_t row_tile = (b * H + h) * qrt + r;  // output tile row (32 output rows)
         if constexpr (out_rm) {
-            const uint32_t stick0 = row_tile * 32;
-            if constexpr (full_stick) {  // 32 whole output pages, one write each
-                store_sticks(cb_prefix_rm, out_w, stick0, 0);
+            const uint32_t stick0 = (b * H + h) * Sq + r * 32;  // output row = stick
+            const uint32_t n_sticks = Sq - r * 32 < 32 ? Sq - r * 32 : 32;
+            if constexpr (full_stick) {  // whole output pages, one write each
+                store_sticks(cb_prefix_rm, out_w, stick0, n_sticks, 0);
                 return;
             }
             for (uint32_t nb = 0; nb < n_nb; ++nb) {
-                store_sticks(cb_prefix_rm, s3n, stick0, nb * s3n * stick_tile_bytes);
+                store_sticks(cb_prefix_rm, s3n, stick0, n_sticks, nb * s3n * stick_tile_bytes);
             }
-            store_sticks(cb_rope_rm, Dr_t, stick0, N_t * stick_tile_bytes);
+            store_sticks(cb_rope_rm, Dr_t, stick0, n_sticks, N_t * stick_tile_bytes);
         } else {
             const uint32_t page0 = row_tile * out_w;
             for (uint32_t nb = 0; nb < n_nb; ++nb) {
