@@ -53,9 +53,7 @@ from helpers.test_variant_parameters import (
 )
 from perf_matmul import matmul_combos
 
-pytestmark = (
-    pytest.mark.llk_sweep
-)  # exhaustive sweep: CI keeps a thin subset (LLK_SWEEP_ALL=1 for all)
+pytestmark = pytest.mark.llk_sweep
 LLK_SWEEP_KEEP = frozenset(  # ids kept besides the thin subset: one per value of each swept dimension the subset misses
     [
         "test_perf_matmul_cov2[case:(InputOutputFormat[A:Bfp4_b,B:Bfp8_b,out:Bfp4_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, ([128, 128], [128, 128]), <MathFidelity.LoFi: 0>, 0, <L1Accumulation.No: 0>)]",
