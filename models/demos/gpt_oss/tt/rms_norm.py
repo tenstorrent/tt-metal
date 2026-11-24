@@ -7,6 +7,8 @@ import ttnn
 from models.demos.gpt_oss.config import MeshConfig, ModeConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name, get_default_num_links
 
+from . import opt_switches
+
 
 class RMSNorm(nn.Module):
     def __init__(self, mesh_device, hf_config, state_dict, tensor_cache_path=None, mesh_config=None):
@@ -81,6 +83,14 @@ class RMSNorm(nn.Module):
             ttnn.deallocate(tt_gathered_stats)
             return tt_output
         else:
+            # GPT_OSS_OPT_DECODE_NORM: multi-core sharded RMSNorm for one-tile-row inputs.
+            if (
+                opt_switches.on("DECODE_NORM")
+                and not x.is_sharded()
+                and x.shape[-2] == 1
+                and x.padded_shape[-2] == ttnn.TILE_SIZE
+            ):
+                return self._forward_one_tile_row_sharded(x)
             tt_output = ttnn.rms_norm(
                 x,
                 weight=self.tt_weight,
@@ -88,6 +98,29 @@ class RMSNorm(nn.Module):
                 # program_config=program_config,
             )
             return tt_output
+
+    def _forward_one_tile_row_sharded(self, x):
+        """GPT_OSS_OPT_DECODE_NORM: a one-token activation (decode) normed on 30
+        cores (width-sharded [32, hidden / 30], sharded multi-core rms_norm as batched decode uses) instead of the
+        interleaved rms_norm, which runs it on one core; returned in the input's memory config."""
+        from .batched_decode import sharded_norm_program_config
+        from .fused_decode.config import RESIDUAL_CORES, width_sharded_memory_config
+
+        if x.shape[-1] % (RESIDUAL_CORES * ttnn.TILE_SIZE) != 0:
+            return ttnn.rms_norm(x, weight=self.tt_weight, epsilon=self.eps)
+        sharded = width_sharded_memory_config(self.mesh_device, x.shape[-1], RESIDUAL_CORES)
+        xs = ttnn.to_memory_config(x, sharded)
+        ys = ttnn.rms_norm(
+            xs,
+            weight=self.tt_weight,
+            epsilon=self.eps,
+            program_config=sharded_norm_program_config(sharded),
+            memory_config=sharded,
+        )
+        xs.deallocate(True)
+        y = ttnn.to_memory_config(ys, x.memory_config())
+        ys.deallocate(True)
+        return y
 
     def forward_sharded(self, x):
         """Batched decode residual stream (batched_decode.py): width-sharded multi-core norm on the activation's own

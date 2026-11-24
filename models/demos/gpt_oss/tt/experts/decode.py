@@ -6,8 +6,14 @@
 import ttnn
 from models.demos.gpt_oss.config import Mode
 
+from . import operations as _ops
 from .config import ExpertConfig, ProgramConfig
-from .operations import apply_expert_parallel_allreduce, apply_swiglu, apply_tensor_parallel_allreduce
+from .operations import (
+    apply_expert_parallel_allreduce,
+    apply_swiglu,
+    apply_tensor_parallel_allreduce,
+    decode_tp_all_reduce,
+)
 from .weights import ExpertWeights
 
 
@@ -175,7 +181,9 @@ def decode_forward(
     next_states = ttnn.unsqueeze_to_4D(next_states)
 
     # Tensor parallel communication
-    if tp > 1:
+    if tp > 1 and _ops.use_decode_ar():
+        next_states = decode_tp_all_reduce(next_states, mesh_config, ccl_manager, config.hidden_size, "moe")
+    elif tp > 1:
         # Note: apply_tensor_parallel_allreduce already handles deallocating the input tensor
         next_states = apply_tensor_parallel_allreduce(
             next_states,
@@ -194,6 +202,129 @@ def decode_forward(
     )
 
     return next_states
+
+
+class IndexedDecodeTensors:
+    """GPT_OSS_OPT_DECODE_TOPK: per-expert bias tables for the indexed (gather)
+    sparse_matmul ([E, 1, N] TILE BF16: tile row e holds expert e's bias in row 0) and the operand-only sparsity mask
+    (the indexed kernels never read it). Built on device from the loaded bias tensors, so no new cache entries."""
+
+    def __init__(self, mesh_device, weights: ExpertWeights, config: ExpertConfig):
+        import torch
+
+        e = config.num_experts
+
+        def per_expert(bias):
+            # [1, E, N] -> [E, 1, N]: each expert's bias row in row 0 of its own tile row.
+            return ttnn.reshape(bias, (e, 1, bias.shape[-1]))
+
+        self.gate_bias = per_expert(weights.gate_proj_bias)
+        self.up_bias = per_expert(weights.up_proj_bias)
+        self.down_bias = per_expert(weights.down_proj_bias)
+        self.unused_sparsity = ttnn.from_torch(
+            torch.zeros((1, 1, 1, e), dtype=torch.bfloat16),
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        # Every expert id in order (GPT_OSS_OPT_PREFILL_FUSEBIAS: the indexed mode over
+        # all experts, for its fused per-expert bias; the compact output then equals the expanded one).
+        self.all_indices = ttnn.from_torch(
+            torch.arange(e, dtype=torch.int32).reshape(1, 1, 1, e),
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.uint16,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+
+def decode_forward_indexed(
+    hidden_states,
+    expert_indices,
+    expert_weights,
+    weights: ExpertWeights,
+    tensors: IndexedDecodeTensors,
+    config: ExpertConfig,
+    mesh_config,
+    mesh_device,
+    ccl_manager,
+    program_config: ProgramConfig,
+):
+    """Decode MoE for one token over its top-k experts only (GPT_OSS_OPT_DECODE_TOPK, gated in mlp.py and
+    experts/__init__.py).
+
+    The mask-mode decode_forward computes the routed experts but writes zero-filled outputs for all E experts, so the
+    bias adds, SwiGLU, permute, routing multiply and expert sum that follow each process E tile-padded rows to keep k.
+    Here the sparse matmuls run in indexed/gather mode (`indices` = the router's top-k ids, per-expert bias fused into
+    the matmul), the outputs are compact [k, ...], and the weighted sum is over k rows.
+
+    hidden_states: [1, 1, 1, H]; expert_indices: top-k ids [1, k] (UINT16 TILE, as ttnn.topk returns them);
+    expert_weights: softmax over the top-k logits [1, k] in the same order.
+    """
+    activation_dtype = ttnn.bfloat8_b
+    k = config.num_experts_per_tok
+    I = weights.intermediate_size_per_device
+    mode_config = mesh_config.get_config(Mode.DECODE)
+    assert mode_config.ep == 1, "indexed decode experts: EP=1 only"
+    output_tile = ttnn.Tile([32, 32])
+
+    idx = ttnn.to_layout(expert_indices, ttnn.ROW_MAJOR_LAYOUT)
+    idx = ttnn.reshape(idx, (1, 1, 1, k))
+
+    def project(weight, bias):
+        out = ttnn.sparse_matmul(
+            hidden_states,
+            weight,
+            sparsity=tensors.unused_sparsity,
+            indices=idx,
+            bias=bias,
+            is_input_b_sparse=True,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            output_tile=output_tile,
+            program_config=program_config.get_decode_gate_up_config(
+                hidden_states.shape[2], weight.shape[3], k=hidden_states.shape[-1]
+            ),
+            dtype=activation_dtype,
+        )
+        # [.., k, 1, I] with each expert's row in its own tile row: merging the leading dims is a view. (Packing the k
+        # rows into one tile row would cost a typecast + reshape + fill-pad round trip per tensor.)
+        return ttnn.reshape(out, (1, k, 1, I))
+
+    gate = project(weights.gate_proj, tensors.gate_bias)
+    up = project(weights.up_proj, tensors.up_bias)
+    hidden_states.deallocate(True)
+    down_input = apply_swiglu(gate, up, config)
+    down = ttnn.sparse_matmul(
+        down_input,
+        weights.down_proj,
+        sparsity=tensors.unused_sparsity,
+        indices=idx,
+        bias=tensors.down_bias,
+        is_input_a_sparse=True,
+        is_input_b_sparse=True,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        output_tile=output_tile,
+        program_config=program_config.get_decode_down_config(1, weights.down_proj.shape[-1], k=down_input.shape[-1]),
+        dtype=activation_dtype,
+    )
+    down_input.deallocate(True)
+    idx.deallocate(True)
+    # Weighted sum over the k routed experts: [1, k, 1, H] * [1, k, 1, 1] -> sum over k.
+    w = ttnn.permute(expert_weights, (1, 0))
+    w = ttnn.reshape(w, (1, k, 1, 1))
+    next_states = ttnn.mul(down, w, output_tensor=down)
+    w.deallocate(True)
+    next_states = ttnn.unsqueeze_to_4D(ttnn.experimental.fast_reduce_nc(next_states, dims=[1]))
+    down.deallocate(True)
+
+    if mode_config.tp > 1 and _ops.use_decode_ar():
+        next_states = decode_tp_all_reduce(next_states, mesh_config, ccl_manager, config.hidden_size, "moe")
+    elif mode_config.tp > 1:
+        next_states = apply_tensor_parallel_allreduce(next_states, mesh_config, mesh_device, 1, ccl_manager)
+    return ttnn.reshape(next_states, (1, 1, 1, config.hidden_size), (1, 1, 32, config.hidden_size))
 
 
 class DenseDecodePlan:
