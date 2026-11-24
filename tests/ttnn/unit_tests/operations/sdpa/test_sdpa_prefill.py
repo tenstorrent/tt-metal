@@ -755,6 +755,48 @@ def test_sdpa_sliding_window_streaming_parity(
     )
 
 
+# Non-causal sliding window with S not a multiple of 32: when the window ends inside the last K chunk, before its
+# partial tile, the padding mask must not be applied to the window's last real tile (the bug #65758 fixed for ring).
+@pytest.mark.parametrize(
+    "s, sliding_window, q_chunk_size, k_chunk_size",
+    [(500, 64, 64, 256), (1000, 128, 128, 512), (500, 64, 32, 128), (512, 64, 64, 256)],
+)
+def test_sdpa_noncausal_sliding_window_unaligned_rows(device, s, sliding_window, q_chunk_size, k_chunk_size):
+    torch.manual_seed(0)
+    d = 64
+    q, k, v = (torch.rand(1, 1, s, d) * 2 - 1 for _ in range(3))
+    tt_q, tt_k, tt_v = (
+        ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device) for t in (q, k, v)
+    )
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+    )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=False
+    )
+    out = ttnn.transformer.scaled_dot_product_attention(
+        tt_q,
+        tt_k,
+        tt_v,
+        is_causal=False,
+        sliding_window_size=sliding_window,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+    )
+
+    # Reference from the bfloat16 values on device, each query attending to keys within sliding_window // 2
+    qd, kd, vd = (ttnn.to_torch(t)[..., :s, :].double() for t in (tt_q, tt_k, tt_v))
+    positions = torch.arange(s)
+    in_window = (positions[None, :] - positions[:, None]).abs() <= sliding_window // 2
+    mask = torch.where(in_window, 0.0, float("-inf")).double()
+    expected = torch.softmax(qd @ kd.transpose(-2, -1) / math.sqrt(d) + mask, dim=-1) @ vd
+    row_error = (ttnn.to_torch(out)[..., :s, :].double() - expected).abs().amax(dim=(0, 1, 3))
+    bad_rows = (row_error > 0.05).nonzero().flatten().tolist()
+    assert not bad_rows, f"rows {bad_rows} differ from the reference, max error {row_error.max().item():.3f}"
+
+
 @pytest.mark.parametrize("fp32_dest_acc_en", [False, True], ids=["bf16_dest", "fp32_dest"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
 @pytest.mark.parametrize("is_causal", [True, False], ids=["causal", "noncausal"])
