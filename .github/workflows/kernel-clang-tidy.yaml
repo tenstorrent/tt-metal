@@ -104,9 +104,11 @@ jobs:
         run: |
           # CodeChecker resolves `clang` even though only clang-tidy runs; see
           # the matching step in ttnn-sanity-tests-impl.yaml.
-          for tool in clang clang++ clang-tidy; do
+          for tool in clang clang++; do
             update-alternatives --install "/usr/bin/$tool" "$tool" "/usr/bin/${tool}-20" 100
           done
+          update-alternatives --install /usr/bin/clang-tidy clang-tidy /usr/bin/clang-tidy-23 100
+          update-alternatives --set clang-tidy /usr/bin/clang-tidy-23
           uv pip install codechecker==6.27.1
 
       - name: Download per-leg captures

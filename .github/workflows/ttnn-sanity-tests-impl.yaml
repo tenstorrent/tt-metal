@@ -353,13 +353,15 @@ jobs:
         if: ${{ inputs.enable-kernel-clang-tidy && !startsWith(matrix.test-group.sku, 'sim_') }}
         continue-on-error: true
         run: |
-          # The image ships clang-20/clang-tidy-20 under versioned names only.
+          # The image ships clang-20/clang-tidy-23 under versioned names only.
           # CodeChecker needs to resolve `clang` even though only clang-tidy runs:
           # ClangSA.analyzer_binary() is consulted unconditionally, and None
           # crashes compilation-database parsing.
-          for tool in clang clang++ clang-tidy; do
+          for tool in clang clang++; do
             update-alternatives --install "/usr/bin/$tool" "$tool" "/usr/bin/${tool}-20" 100
           done
+          update-alternatives --install /usr/bin/clang-tidy clang-tidy /usr/bin/clang-tidy-23 100
+          update-alternatives --set clang-tidy /usr/bin/clang-tidy-23
           uv pip install codechecker==6.27.1
 
       - name: ${{ matrix.test-group.name }} tests
