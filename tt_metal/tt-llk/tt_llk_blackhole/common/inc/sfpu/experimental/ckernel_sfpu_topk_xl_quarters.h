@@ -38,10 +38,10 @@ inline void topk_xl_quarter_exchange(const std::uint32_t row_base, const bool as
                     TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, 4);
                     TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::INT32, ADDR_MOD_7, 8);
                     TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::INT32, ADDR_MOD_7, 12);
-                    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_7, topk_xl_tile_rows + 0);
-                    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_7, topk_xl_tile_rows + 4);
-                    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_7, topk_xl_tile_rows + 8);
-                    TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::INT32, ADDR_MOD_7, topk_xl_tile_rows + 12);
+                    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_7, 64 + 0);
+                    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_7, 64 + 4);
+                    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_7, 64 + 8);
+                    TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::INT32, ADDR_MOD_7, 64 + 12);
                     topk_xl_swap4<p_sfpu::LREG0, p_sfpu::LREG4, p_sfpu::LREG1, p_sfpu::LREG5, p_sfpu::LREG2, p_sfpu::LREG6, p_sfpu::LREG3, p_sfpu::LREG7>(
                         ascending);
                     TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
@@ -54,10 +54,10 @@ inline void topk_xl_quarter_exchange(const std::uint32_t row_base, const bool as
                 4,
                 []
                 {
-                    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_7, topk_xl_tile_rows + 0);
-                    TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_7, topk_xl_tile_rows + 4);
-                    TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_7, topk_xl_tile_rows + 8);
-                    TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::INT32, ADDR_MOD_7, topk_xl_tile_rows + 12);
+                    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_7, 64 + 0);
+                    TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_7, 64 + 4);
+                    TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_7, 64 + 8);
+                    TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::INT32, ADDR_MOD_7, 64 + 12);
                 });
         }
         else
@@ -75,12 +75,12 @@ inline void topk_xl_quarter_loads()
 {
     TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, in_rows + 0);
     TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, in_rows + 16);
-    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::INT32, ADDR_MOD_7, in_rows + topk_xl_tile_rows + 0);
-    TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::INT32, ADDR_MOD_7, in_rows + topk_xl_tile_rows + 16);
+    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::INT32, ADDR_MOD_7, in_rows + 64);
+    TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::INT32, ADDR_MOD_7, in_rows + 80);
     TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_7, in_rows + 4);
     TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_7, in_rows + 20);
-    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_7, in_rows + topk_xl_tile_rows + 4);
-    TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::INT32, ADDR_MOD_7, in_rows + topk_xl_tile_rows + 20);
+    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_7, in_rows + 68);
+    TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::INT32, ADDR_MOD_7, in_rows + 84);
 }
 
 // After the SFPTRANSP LREG (g, l1, l0) holds (b7, b6, b5) with (b9, b4) in its rows: rows +8 g, face column +16 l1,
@@ -106,14 +106,14 @@ inline void topk_xl_quarter_pass()
 {
     static_assert(out_tile < in_tile || out_tile > in_tile + 1, "the pass reads and writes different tiles");
     constexpr std::uint32_t lower = in_tile < out_tile ? in_tile : out_tile;
-    constexpr int in_rows         = topk_xl_tile_rows * static_cast<int>(in_tile - lower);
-    constexpr int out_rows        = topk_xl_tile_rows * static_cast<int>(out_tile - lower);
+    constexpr int in_rows         = 64 * static_cast<int>(in_tile - lower);
+    constexpr int out_rows        = 64 * static_cast<int>(out_tile - lower);
     // lltt::replay takes an immediate start, which `it` picks, so the loop unrolls whatever GCC's size heuristics say.
 #pragma GCC unroll 4
     for (std::uint32_t it = 0; it < 4; ++it)
     {
         // Iteration (b8, parity).
-        set_dst_write_addr_offset(topk_xl_tile_rows * lower + 4 * (it >> 1) + 2 * (it & 1));
+        set_dst_write_addr_offset(64 * lower + 4 * (it >> 1) + 2 * (it & 1));
         if (it == 0)
         {
             load_replay_buf<Exec>(0, 8, [] { topk_xl_quarter_loads<in_rows>(); });
@@ -146,19 +146,19 @@ template <std::uint32_t in_tile, std::uint32_t out_tile>
 inline void _topk_xl_combine_quarters_(const bool ascending)
 {
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    topk_xl_quarter_exchange(topk_xl_tile_rows * in_tile, ascending);
+    topk_xl_quarter_exchange(64 * in_tile, ascending);
     topk_rebuild_build2048_mop_config();
-    topk_xl_rebuild_at<512>(topk_xl_tile_rows * in_tile, ascending);
-    topk_xl_rebuild_at<512>(topk_xl_tile_rows * (in_tile + 1), ascending);
+    topk_xl_rebuild_at<512>(64 * in_tile, ascending);
+    topk_xl_rebuild_at<512>(64 * (in_tile + 1), ascending);
     topk_mop_config<true>();
     enter_transpose_cfg_block();
-    set_dst_write_addr_offset(topk_xl_tile_rows * in_tile);
+    set_dst_write_addr_offset(64 * in_tile);
     topk_xl_transpose_faces(2);
-    set_dst_write_addr_offset(topk_xl_tile_rows * (in_tile + 1));
+    set_dst_write_addr_offset(64 * (in_tile + 1));
     topk_xl_transpose_faces(2);
     leave_transpose_cfg_block();
     topk_xl_quarter_pass<in_tile, out_tile>();
-    set_dst_write_addr_offset(topk_xl_tile_rows * out_tile);
+    set_dst_write_addr_offset(64 * out_tile);
     TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);
 }
 
