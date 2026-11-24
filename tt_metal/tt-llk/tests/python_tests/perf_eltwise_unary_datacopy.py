@@ -68,7 +68,7 @@ def test_perf_eltwise_unary_datacopy(
 @parametrize(
     formats=DATACOPY_BLOCK_PERF_FORMATS,
     dest_acc=get_valid_dest_accumulation_modes,
-    num_faces=[1, 2, 4],
+    tile_dimensions=[[16, 16], [16, 32], [32, 32]],
     tilize=Tilize.No,
     input_dimensions=[[128, 256]],
     run_types=[ALL_PERF_RUN_TYPES],
@@ -79,7 +79,7 @@ def test_perf_eltwise_unary_datacopy_block(
     perf_report,
     formats,
     dest_acc,
-    num_faces,
+    tile_dimensions,
     tilize,
     input_dimensions,
     run_types,
@@ -89,7 +89,7 @@ def test_perf_eltwise_unary_datacopy_block(
     _run_unary_datacopy_test(
         formats,
         dest_acc,
-        num_faces,
+        tile_dimensions,
         tilize,
         input_dimensions,
         run_types=run_types,
