@@ -324,4 +324,34 @@ NodeType get_bh_glx_rev_from_system() {
     return *cached;
 }
 
+Architecture get_node_type_architecture(NodeType node_type) {
+    switch (node_type) {
+        case NodeType::N300_LB:
+        case NodeType::N300_QB:
+        case NodeType::WH_GALAXY: return Architecture::WORMHOLE;
+        case NodeType::P150_LB:
+        case NodeType::P150_QB_AE:
+        case NodeType::P300_QB_GE:
+        case NodeType::BH_GALAXY_REV_AB:
+        case NodeType::BH_GALAXY_REV_C:
+        case NodeType::BH_GALAXY: return Architecture::BLACKHOLE;
+    }
+    throw std::runtime_error("Unknown node type: " + std::string(enchantum::to_string(node_type)));
+}
+
+BoardRevision get_node_type_board_revision(NodeType node_type) {
+    switch (node_type) {
+        case NodeType::WH_GALAXY: return BoardRevision::WH_GALAXY;
+        case NodeType::BH_GALAXY_REV_AB: return BoardRevision::BH_GALAXY_REV_AB;
+        case NodeType::BH_GALAXY_REV_C: return BoardRevision::BH_GALAXY_REV_C;
+        case NodeType::N300_LB:
+        case NodeType::N300_QB:
+        case NodeType::P150_LB:
+        case NodeType::P150_QB_AE:
+        case NodeType::P300_QB_GE:
+        case NodeType::BH_GALAXY: return BoardRevision::UNSPECIFIED;
+    }
+    throw std::runtime_error("Unknown node type: " + std::string(enchantum::to_string(node_type)));
+}
+
 }  // namespace tt::scaleout_tools

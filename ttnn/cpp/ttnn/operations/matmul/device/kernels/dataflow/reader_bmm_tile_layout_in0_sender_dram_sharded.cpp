@@ -317,10 +317,12 @@ void kernel_main() {
                         in0_mcast_dest_noc_end_x,
                         in0_mcast_dest_noc_end_y,
                         in0_mcast_num_cores);
-                    // Flush to ensure the NoC has read the VALID value from receiver_sem's L1
-                    // address before the next iteration overwrites it with INVALID.
-                    noc.async_writes_flushed();
                 }
+                // A flush only guarantees the requests left this core. Only write acks show that this core's own
+                // looped-back copies of the block and of VALID have landed. Without this, the next iteration's
+                // receiver_sem INVALID can be overwritten by a late VALID, and compute could consume a block
+                // that has not arrived.
+                noc.async_write_barrier();
 
                 if constexpr (shards_per_block == 1) {
                     local_read_addr += in0_block_row_bytes;
