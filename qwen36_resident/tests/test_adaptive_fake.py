@@ -373,12 +373,24 @@ def test_pay_policy(monkeypatch, acc, expect):
     assert pays is expect, (m._pay, pays)
 
 
-@pytest.mark.parametrize("n,expect", [(1, True), (4, True), (8, False)])
-def test_pay_policy_decides_an_unmeasured_live_count_at_once(monkeypatch, n, expect):
-    """before any verify step at a live count, the default step-time model with the acceptance at least PROMOTE_ACC
-    decides: 1-4 users speculate (a probe), 8 do not — 8 users arriving together were promoted one by one and the
-    8-user probe's PAY_MIN ~60 ms verify steps ran before PLAIN (rc-20261124j natural c8 41.7 vs 50.7 tok/s per user)"""
+@pytest.mark.parametrize(
+    "n,acc,expect",
+    [
+        (1, None, True),  # (before PAY_MIN verifies: a probe at the prior PROMOTE_ACC)
+        (4, None, True),
+        (8, None, True),
+        (8, 3.1, True),  # natural text at 8 users: ~50 ms verify steps at ~3.1 tokens beat ~20 ms plain steps
+        (8, 2.2, False),  # random-token prompts: they do not
+        (4, 1.5, False),
+    ],
+)
+def test_pay_policy_decides_an_unmeasured_live_count_at_once(monkeypatch, n, acc, expect):
+    """an unmeasured live count is decided by the default step-time model at once (no PAY_MIN-step probe at each new
+    count: 8 users arriving together ran the 8-user probe's slow first steps before PLAIN, rc-20261124j natural c8 41.7
+    vs 50.7 tok/s per user); before PAY_MIN verifies the acceptance counts as at least PROMOTE_ACC"""
     m = _gate_case(monkeypatch, n, 200, 1)
+    if acc is not None:
+        m._pay["acc"], m._pay["verifies"] = acc, A.PAY_MIN
     m._pay["kind"], m._pay["n"], m._pay["ctx"] = "plain", n, 200 * n
     assert m._measure([]) is expect, m._pay_line()
 
@@ -430,7 +442,7 @@ def _gate_case(monkeypatch, n_live, ctx, generated, out=None):
         (8, 2048, 1, None, False),  # 8 users arriving with 2K prompts: ~2.1 s refill x 8 users vs ~1 ms saved a token
         (8, 2048, 1, 128, False),
         (4, 256, 1, None, True),  # 4 short chats
-        (8, 128, 1, None, False),  # 8 short chats: a 150 ms refill x 8 waiting users vs ~0.6 ms saved a token
+        (8, 128, 1, None, True),  # 8 short chats: ~1.4 ms saved a token (~50 ms verify steps) pays a 150 ms refill x 8
         (1, 12000, 1, 16, False),  # short answers learned (out 16 tokens) on a long context: the refill does not pay
         (1, 12000, 240, 256, True),  # (at least a quarter of the expected output left: 64 tokens)
     ],
