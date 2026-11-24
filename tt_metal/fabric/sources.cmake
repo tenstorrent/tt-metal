@@ -80,6 +80,7 @@ set(FABRIC_SOURCES
     serialization/intermesh_connections_serialization.cpp
     serialization/port_descriptor_serialization.cpp
     ccl/ccl_common.cpp
+    ethernet_link_reset.cpp
     link_health.cpp
     fsd_host_filter.cpp
     physical_node_id.cpp

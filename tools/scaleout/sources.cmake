@@ -33,7 +33,6 @@ set(SCALEOUT_TOOLS_SRCS
 set(RUN_CLUSTER_VALIDATION_SRCS
     validation/run_cluster_validation.cpp
     validation/utils/ethernet_link_metrics_serialization.cpp
-    validation/utils/ethernet_link_api.cpp
     validation/utils/cluster_validation_utils.cpp
 )
 

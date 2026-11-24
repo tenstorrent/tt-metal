@@ -11,7 +11,6 @@ set(TEST_LINK_RETRAINING_SRCS
     # sources directly — bad practice, should come from a shared target instead.
     ${PROJECT_SOURCE_DIR}/tools/scaleout/validation/utils/cluster_validation_utils.cpp
     ${PROJECT_SOURCE_DIR}/tools/scaleout/validation/utils/ethernet_link_metrics_serialization.cpp
-    ${PROJECT_SOURCE_DIR}/tools/scaleout/validation/utils/ethernet_link_api.cpp
 )
 
 set(TEST_CABLING_DESCRIPTOR_MGD_GENERATION_SRCS test_cabling_descriptor_mgd_generation.cpp)
