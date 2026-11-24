@@ -168,5 +168,5 @@ def replica_groups(chunks: Sequence[Chunk]) -> dict[tuple[int, ...], list[Chunk]
 def crc31(text: str) -> int:
     """A stable 31-bit hash of ``text``: zlib's CRC32 without its top bit, the same in every process, and small
     enough for the C int that carries a hash between the ranks. A lone surrogate, which ``os.fsdecode`` makes of a
-    path's non-UTF-8 bytes on Linux, hashes as that byte: valid text hashes as its UTF-8, as before."""
+    path's non-UTF-8 bytes on Linux, hashes as that byte, and valid text as its UTF-8."""
     return zlib.crc32(text.encode("utf-8", errors="surrogateescape")) & 0x7FFFFFFF

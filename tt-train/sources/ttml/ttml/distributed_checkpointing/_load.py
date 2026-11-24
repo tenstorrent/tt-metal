@@ -77,8 +77,8 @@ class LoadResult:
 def _read_into(
     fd: int, data_start: int, plan: KeyPlan, item: ReadItem, itemsize: int, carrier, dest: np.ndarray
 ) -> int:
-    """Copy ``item.src`` of the chunk into ``item.dst`` of ``dest`` with the fewest contiguous reads; returns bytes read.
-    ``_read_chunk`` calls it only for items that need under half of the chunk, so some dim is read in part."""
+    """Copy ``item.src`` of the chunk into ``item.dst`` of ``dest`` with the fewest contiguous reads; returns the bytes
+    read. ``_read_chunk`` calls it only for items that need under half of the chunk, so some dim is read in part."""
     record = plan.entry.chunks[item.chunk]
     chunk = record.box.sizes
     src, dst = item.src, item.dst
@@ -452,10 +452,10 @@ def load(
     then says, on every rank, how many tensors each rank that placed any had placed, and the model should be loaded
     again or discarded. On a mesh several ranks share, the ranks may then have placed different tensors, and such a mesh
     needs every rank to make the same device allocations in the same order: the error then says to end the job and
-    restart it instead of loading again, on the ranks that placed nothing too. A
-    scheduler or dataloader without a ``set_state_dict`` is refused before anything is placed; one that refuses its
-    state can only say so after, and raises a ``CheckpointError`` naming it, with the tensors, the optimizer scalars and
-    the scheduler (when the dataloader refuses) already restored.
+    restart it instead of loading again, on the ranks that placed nothing too. A scheduler or dataloader without a
+    ``set_state_dict`` is refused before anything is placed; one that refuses its state can only say so after, and
+    raises a ``CheckpointError`` naming it, with the tensors, the optimizer scalars and the scheduler (when the
+    dataloader refuses) already restored.
 
     Under ``tt-run`` with several ranks the call is collective (the package docstring has the rules): every rank
     restores the shards of the coordinates it holds, and ``strict`` judges unexpected entries over the union of the

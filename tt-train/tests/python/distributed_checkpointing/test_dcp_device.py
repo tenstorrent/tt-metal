@@ -367,8 +367,8 @@ def test_failed_load_says_model_is_partly_restored(tp_mesh, tmp_path, monkeypatc
     monkeypatch.setattr(_load, "_place", place_then_fail)
     with expect_error(
         dcp.CheckpointError,
-        r"^the load failed at .* after 1 of \d+ tensors were placed \(the first: .*\); the model and optimizer are partly "
-        r"restored: load again or discard them\. The error: RuntimeError: simulated device out of memory$",
+        r"^the load failed at .* after 1 of \d+ tensors were placed \(the first: .*\); the model and optimizer are "
+        r"partly restored: load again or discard them\. The error: RuntimeError: simulated device out of memory$",
     ):
         dcp.load(path, model=model2, optimizer=opt2)
 

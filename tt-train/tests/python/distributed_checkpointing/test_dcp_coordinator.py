@@ -969,7 +969,7 @@ def test_a_check_that_fails_on_one_rank_stops_every_rank_before_any_device_work(
     only once every rank has passed the checks a rank can fail alone: a header that has no JSON form on one rank, or
     a dataloader one rank asks for that the checkpoint holds no state for, stops every rank before any rank reshards,
     so the ranks never go on with different modules gathered and different device allocations."""
-    _, path, _, _, _, load_body = _four_rank_load(tmp_path, monkeypatch)
+    load_body = _four_rank_load(tmp_path, monkeypatch)[-1]
     resharded = []
     monkeypatch.setattr(_load, "reshard_fsdp_modules", lambda model: resharded.append("load") or [])
     _, errors = _run_ranks(
