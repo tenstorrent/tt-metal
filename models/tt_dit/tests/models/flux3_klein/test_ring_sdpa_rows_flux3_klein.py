@@ -21,6 +21,8 @@ import pytest
 from ....blocks import attention_opt
 from ....models.transformers.flux3_klein.transformer_block_flux3_klein import (
     RING_SDPA_CHUNKS_BY_LOCAL_ROWS,
+    SP4_TP2_K256_RING_SDPA_CHUNKS_BY_LOCAL_ROWS,
+    SP4_TP2_QFAST_RING_SDPA_CHUNKS_BY_LOCAL_ROWS,
     SP4_TP2_RING_SDPA_CHUNKS_BY_LOCAL_ROWS,
     Flux3KleinAttention,
 )
@@ -81,11 +83,14 @@ def test_sp8_tp4_picks_are_unchanged(size):
 
 
 @pytest.mark.parametrize("size", SIZES)
-def test_dp4_picks_a_512_k_chunk(size):
+def test_dp4_picks_a_512_k_chunk_and_its_tables(size):
     for n in _lengths(4, size):
-        assert _chunks(4, 2, n)[1] == 512, n
-        if size == 4096 and n // 4 in SP4_TP2_RING_SDPA_CHUNKS_BY_LOCAL_ROWS:
-            assert _chunks(4, 2, n) == (224, 512), n
+        rows, (q, k) = n // 4, _chunks(4, 2, n)
+        assert k == (256 if rows in SP4_TP2_K256_RING_SDPA_CHUNKS_BY_LOCAL_ROWS else 512), n
+        if rows in SP4_TP2_QFAST_RING_SDPA_CHUNKS_BY_LOCAL_ROWS:
+            assert (q, k) == SP4_TP2_QFAST_RING_SDPA_CHUNKS_BY_LOCAL_ROWS[rows], n
+        elif size == 4096 and rows in SP4_TP2_RING_SDPA_CHUNKS_BY_LOCAL_ROWS:
+            assert (q, k) == (224, 512), n
 
 
 @pytest.mark.parametrize("size", SIZES)

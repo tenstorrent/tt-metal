@@ -300,7 +300,11 @@ class ThreadProcess:
     def start(self):
         self.env = {
             key: os.environ.get(key)
-            for key in ("TT_VISIBLE_DEVICES", "TT_MESH_GRAPH_DESC_PATH", "TT_METAL_EXECUTOR_THREADS")
+            for key in (
+                "TT_VISIBLE_DEVICES",
+                "TT_MESH_GRAPH_DESC_PATH",
+                "TT_METAL_EXECUTOR_THREADS",
+            )
         }
         self._thread.start()
 

@@ -43,6 +43,19 @@ SP4_TP2_RING_SDPA_CHUNKS = (128, 512)
 SP4_TP2_RING_SDPA_CHUNKS_BY_LOCAL_ROWS: dict[int, tuple[int, int]] = {
     rows: (224, 512) for rows in (16384, 16640, 16896, 17408, 17920, 18432, 20736, 20992, 21504)
 }
+# SP4 x TP2 (DP4 groups): the fastest q per local row count at k 512 (same k; only the reduction order changes)
+SP4_TP2_QFAST_RING_SDPA_CHUNKS_BY_LOCAL_ROWS: dict[int, tuple[int, int]] = {
+    1280: (160, 512),
+    2048: (256, 512),
+    2304: (256, 512),
+    3328: (192, 512),
+    4352: (256, 512),
+    6400: (224, 512),
+    8448: (224, 512),
+    18688: (224, 512),
+}
+# SP4 x TP2: k 256 where a 512 K chunk would be half padding (bit-identical to (128, 512))
+SP4_TP2_K256_RING_SDPA_CHUNKS_BY_LOCAL_ROWS: dict[int, tuple[int, int]] = {256: (128, 256)}
 # The ring all-gather keeps the CCL row's cores x < 4 with 2 links
 RING_SDPA_CCL_ROW_START_X = 4
 # linear1 (QKV + MLP-in as one all-gather matmul): N cores of its transposed grid, and the rows from which it runs
@@ -73,6 +86,9 @@ class Flux3KleinAttention(Attention):
             chunks = RING_SDPA_CHUNKS_BY_LOCAL_ROWS.get(rows)
             if sp == 4:
                 chunks = SP4_TP2_RING_SDPA_CHUNKS_BY_LOCAL_ROWS.get(rows, chunks)
+                if tp == 2:
+                    chunks = SP4_TP2_QFAST_RING_SDPA_CHUNKS_BY_LOCAL_ROWS.get(rows, chunks)
+                    chunks = SP4_TP2_K256_RING_SDPA_CHUNKS_BY_LOCAL_ROWS.get(rows, chunks)
             if chunks is None and (True, sp, tp) not in self.ring_sdpa_chunk_size_map:
                 chunks = SP4_TP2_RING_SDPA_CHUNKS
             if chunks is None:

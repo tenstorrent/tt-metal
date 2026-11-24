@@ -237,7 +237,10 @@ class Flux3KleinProcessGroups:
                 max(1, (os.cpu_count() or 1) // len(processes))
             )
             for pcie_ids in processes:
-                env = {**group_env(pcie_ids, group_shape), "TT_METAL_EXECUTOR_THREADS": threads}
+                env = {
+                    **group_env(pcie_ids, group_shape),
+                    "TT_METAL_EXECUTOR_THREADS": threads,
+                }
                 pipes = [context.Pipe() for _ in range(process_groups(pcie_ids, group_shape))]
                 children = [child for _, child in pipes]
                 process = context.Process(
