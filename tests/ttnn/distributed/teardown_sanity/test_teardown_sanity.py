@@ -35,28 +35,25 @@ import pytest
 
 # The harness (sanity_common) is shared with the raw-MPI rows in tests/tt_metal/distributed/multiprocess/teardown_sanity.
 sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "tests/tt_metal/distributed/multiprocess/teardown_sanity"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # sanity_rank_rows, this suite's own helpers
 import sanity_common  # noqa: E402
 
 sanity_common.PROBE = Path(__file__).resolve().parent / "sanity_probe.py"
 from sanity_common import (
     _session_dirs,
-    CONFLICT_DESC,
     DEADLINE_END,
     DEADLINE_HANG,
     clean,
-    conflict_mapping,
     ended,
     fault_delivered,
     legacy_cmd,
     mpirun_path,
     nonzero,
-    rc_contains,
     run_case,
-    solve_cmd,
-    MGD_QUAD,
     PYTHON,
     ROOT,
 )
+from sanity_rank_rows import CONFLICT_DESC, MGD_QUAD, conflict_mapping, rc_contains, solve_cmd  # noqa: E402
 
 
 def reached(r, rank: int, marker: str) -> None:
