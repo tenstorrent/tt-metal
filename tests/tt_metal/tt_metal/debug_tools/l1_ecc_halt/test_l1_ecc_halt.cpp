@@ -204,7 +204,6 @@ TEST_F(L1EccHaltTest, UnpopulatedRowErrorsAreIgnoredOnEveryCore) {
     } catch (const std::exception& e) {
         error = e.what();
         get_shared_devices().needs_recovery = true;
-        ctx.set_l1_ecc_halt_detected(false);
     }
 
     uint32_t num_halted = 0;
