@@ -136,6 +136,21 @@ const RouterChannelLayout* RouterChannelLayouts::find(FabricNodeId node, chan_id
     return it == layouts_.end() ? nullptr : &it->second;
 }
 
+PeerLayout RouterChannelLayouts::peer(FabricNodeId node, chan_id_t eth_chan) const {
+    std::lock_guard lock(mutex_);
+    if (const auto it = layouts_.find({node, eth_chan}); it != layouts_.end()) {
+        return std::cref(it->second);
+    }
+    // a chip in the build publishes every router it has
+    const auto first = layouts_.lower_bound({node, chan_id_t{0}});
+    TT_FATAL(
+        first == layouts_.end() || first->first.first != node,
+        "No channel layout for the router at {} channel {}: its chip was built but this router wasn't",
+        node,
+        eth_chan);
+    return NullPeerLayout{};
+}
+
 const RouterChannelLayout& RouterChannelLayouts::get(FabricNodeId node, chan_id_t eth_chan) const {
     const auto* layout = find(node, eth_chan);
     TT_FATAL(

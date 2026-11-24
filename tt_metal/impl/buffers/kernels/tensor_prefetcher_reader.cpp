@@ -29,14 +29,15 @@ static_assert(tensor_prefetcher::kPlansBlocks, "The DRAM reader reads the weight
 namespace {
 
 // Reads each receiver's blocks from its slab in its lane's DRAM bank. Weights are receiver-contiguous, so
-// block `b` of a group is `b` blocks past the start of that group in the receiver's slab, and every block is
-// ready. A grouped weight's slab stacks its groups, and the reader stages the blocks of every selected group
-// in ascending group order.
+// block `b` of a group is `b` blocks past the start of that group in the receiver's slab, every block is
+// ready, and a run of a group's blocks is one read. A grouped weight's slab stacks its groups, and the reader stages
+// the blocks of every selected group in ascending group order.
 class DramBlockSource {
 public:
-    uint32_t plan_blocks(volatile tt_l1_ptr fifo::SlotHeader* slot, uint32_t e, const TensorStream& stream) {
+    uint32_t plan_blocks(
+        volatile tt_l1_ptr fifo::SlotHeader* slot, uint32_t e, const TensorStream& stream, uint32_t read_trid) {
         // Every lane names the same groups and the same selector.
-        return groups_.select(LanePage(slot, 0).entry(e)) * stream.block_count;
+        return groups_.select(LanePage(slot, 0).entry(e), read_trid) * stream.block_count;
     }
     void begin_tensor(
         volatile tt_l1_ptr fifo::SlotHeader* slot, uint32_t e, const TensorStream& stream, uint32_t /*blocks*/) {
@@ -50,21 +51,32 @@ public:
             bank_[i] = slot->lane_bank_id[lane];
             slab_base_[i] = entry->bank_local_base +
                             (layout->recv_index_base + stream.receiver_in_lane[i]) * layout->recv_stride_bytes;
+            selected_[i] = 0;
+            group_block_[i] = 0;
         }
         const LanePage page(slot, 0);
         group_stride_ = page.layout_of(page.entry(e))->group_stride_bytes;
     }
     bool ready(uint32_t /*i*/, uint32_t /*block*/) const { return true; }
-    void read(uint32_t i, uint32_t block, uint32_t dst) const {
-        const uint32_t selected = block / block_count_;
-        const uint32_t group_block = block - selected * block_count_;
+    // A group's blocks are back to back in the slab, so a read runs to the end of the block's group.
+    uint32_t contiguous_blocks(uint32_t i, uint32_t block, uint32_t max_blocks) const {
+        ASSERT(block == selected_[i] * block_count_ + group_block_[i]);
+        const uint32_t to_group_end = block_count_ - group_block_[i];
+        return to_group_end < max_blocks ? to_group_end : max_blocks;
+    }
+    void read(uint32_t i, uint32_t block, uint32_t num_blocks, uint32_t dst) {
+        ASSERT(block == selected_[i] * block_count_ + group_block_[i]);
         noc_async_read(
             get_noc_addr_from_bank_id<true>(
-                bank_[i], slab_base_[i] + groups_.group(selected) * group_stride_ + group_block * block_bytes_),
+                bank_[i], slab_base_[i] + groups_.group(selected_[i]) * group_stride_ + group_block_[i] * block_bytes_),
             dst,
-            block_bytes_);
+            num_blocks * block_bytes_);
+        group_block_[i] += num_blocks;
+        if (group_block_[i] == block_count_) {
+            group_block_[i] = 0;
+            ++selected_[i];
+        }
     }
-    void release(uint32_t /*i*/, uint32_t /*block*/) {}
 
 private:
     // The reader's own state holds a group selector's mask.
@@ -74,6 +86,10 @@ private:
     uint32_t group_stride_ = 0;
     uint32_t bank_[fifo::kMaxReceivers];
     uint32_t slab_base_[fifo::kMaxReceivers];
+    // Where each receiver's next read starts: which of the selected groups, and which block of it. The reader reads
+    // each receiver's blocks in order, so these follow it without dividing by the group's block count.
+    uint32_t selected_[fifo::kMaxReceivers];
+    uint32_t group_block_[fifo::kMaxReceivers];
 };
 
 }  // namespace
