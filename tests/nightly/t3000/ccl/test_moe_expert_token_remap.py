@@ -553,6 +553,44 @@ def test_moe_expert_token_remap_rejects_mismatched_seq_and_preallocated_outputs(
     with expect_error(RuntimeError, "Expected metadata dim 2 to be equal to topk dim 2"):
         ttnn.moe_expert_token_remap(tt_topk, tt_expert_mapping, bad_metadata, reduction_size=REDUCTION_SIZE)
 
+    # Undivisible experts count (experts % num_devices != 0)
+    undivisible_mapping = ttnn.from_torch(
+        torch.zeros((1, 1, experts + 1, (experts + 1) // devices), dtype=torch.int16),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    undivisible_topk = ttnn.from_torch(
+        torch.zeros((devices, batch, seq, experts + 1), dtype=torch.bfloat16),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+    with expect_error(RuntimeError, "to be divisible by num_devices"):
+        ttnn.moe_expert_token_remap(undivisible_topk, undivisible_mapping, tt_metadata, reduction_size=REDUCTION_SIZE)
+
+    # Mismatched preallocated optional_output_mapping_tensor shape (last dim 4 != 8)
+    bad_mapping_out = ttnn.from_torch(
+        torch.zeros((devices, 1, batch * seq, 4), dtype=torch.int16),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+    with expect_error(RuntimeError, "Invalid optional_output_mapping_tensor spec"):
+        ttnn.moe_expert_token_remap(
+            tt_topk,
+            tt_expert_mapping,
+            tt_metadata,
+            reduction_size=REDUCTION_SIZE,
+            optional_output_mapping_tensor=bad_mapping_out,
+        )
+
     # Mismatched preallocated optional_output_reduced_tensor shape (last dim 4 != 8)
     bad_reduced = ttnn.from_torch(
         torch.zeros((devices, 1, (batch * seq) // REDUCTION_SIZE, 4), dtype=torch.int16),
@@ -570,3 +608,40 @@ def test_moe_expert_token_remap_rejects_mismatched_seq_and_preallocated_outputs(
             reduction_size=REDUCTION_SIZE,
             optional_output_reduced_tensor=bad_reduced,
         )
+
+    # Valid preallocated outputs passing validation and matching golden output
+    golden_mapping, golden_reduced = ttnn.moe_expert_token_remap(
+        tt_topk, tt_expert_mapping, tt_metadata, reduction_size=REDUCTION_SIZE
+    )
+    prealloc_mapping = ttnn.from_torch(
+        torch.zeros((devices, 1, batch * seq, experts // devices), dtype=torch.int16),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+    prealloc_reduced = ttnn.from_torch(
+        torch.zeros((devices, 1, (batch * seq) // REDUCTION_SIZE, experts // devices), dtype=torch.int16),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+    out_mapping, out_reduced = ttnn.moe_expert_token_remap(
+        tt_topk,
+        tt_expert_mapping,
+        tt_metadata,
+        reduction_size=REDUCTION_SIZE,
+        optional_output_mapping_tensor=prealloc_mapping,
+        optional_output_reduced_tensor=prealloc_reduced,
+    )
+    assert_equal(
+        ttnn.to_torch(out_mapping, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)),
+        ttnn.to_torch(golden_mapping, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)),
+    )
+    assert_equal(
+        ttnn.to_torch(out_reduced, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)),
+        ttnn.to_torch(golden_reduced, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)),
+    )
