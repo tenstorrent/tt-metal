@@ -86,8 +86,7 @@ inline void int32_to_swap_order() {
     TTI_SFPENCC(0 /*imm12_math*/, 0 /*lreg_c*/, 0 /*lreg_dest*/, 0 /*instr_mod1*/);
 }
 
-// Instructions emitted by int32_to_swap_order (and by uint32_to_swap_order); the Int32 / UInt32 column window is sized
-// from it.
+// Instructions emitted by int32_to_swap_order; the Int32 / UInt32 column window is sized from it.
 constexpr std::uint32_t INT32_SWAP_ORDER_LEN = 3;
 
 // Which order map the 32-bit integer MAX/MIN reduces apply to every loaded operand (see to_swap_order).
@@ -121,6 +120,11 @@ inline void uint32_to_swap_order() {
     TTI_SFPXOR(0 /*imm12_math*/, INT32_SWAP_ORDER_REG, reg, 0 /*instr_mod1*/);
     TTI_SFPENCC(0 /*imm12_math*/, 0 /*lreg_c*/, 0 /*lreg_dest*/, 0 /*instr_mod1*/);
 }
+
+// Instructions emitted by uint32_to_swap_order.
+constexpr std::uint32_t UINT32_SWAP_ORDER_LEN = 3;
+static_assert(
+    UINT32_SWAP_ORDER_LEN == INT32_SWAP_ORDER_LEN, "the Int32 and UInt32 column windows share one replay layout");
 
 /**
  * @brief Map the word in @p reg, in place, onto SFPSWAP(VEC_MIN_MAX)'s sign-magnitude order (int32_to_swap_order or
@@ -386,7 +390,7 @@ inline void perform_reduce_col_sum_avg() {
         if constexpr (is_integer_mode) {
             lltt::replay(0, 3);  // Reuse first 3 positions of sequential integer buffer (A1,A2,A3)
         } else {
-            // Half reduce A1, A3 | A2 (recorded without its NOP): A2 reads A3's LREG0, and the SFPSTORE (SUM) or
+            // Half reduce A1, A3 | A2: A2 reads A3's LREG0, and the SFPSTORE (SUM) or
             // SFPMUL (AVG) reads A2's, so each needs one slot in between. LREG4-7 are dead after the transpose,
             // so both slots take the next face pair's first lower loads instead of NOPs (NOPs on the last pair).
             lltt::replay(COL_SUM_FLOAT_HALF_START, COL_SUM_FLOAT_A2_SLOT - COL_SUM_FLOAT_HALF_START);  // A1, A3
@@ -1275,15 +1279,15 @@ inline void perform_reduce_row_max_min_int32_uint32(std::uint32_t block_ct_dim, 
 
         if (block_ct_dim > 1) {
             // The partials stay mapped; the combine compares them with plain SFPSWAPs and maps the results back.
-            // Each tile is addressed through the Dest RWC counter instead of a runtime offset, so the per-tile
-            // loads and stores stay single TTI instructions rather than RISC-built ones.
+            // Tiles advance through the Dest RWC counter, so the per-tile address does not depend on j.
             for (std::uint32_t j = 0; j < block_ct_dim; j++) {
                 perform_reduce_row_max_tile<
                     INSTRUCTION_MODE,
                     false /*clear_high_bits*/,
                     swap_order,
                     false /*map_back*/>(tile_row_offset, tile_store_mode);
-                // ROWS_PER_TILE = 64 Dest rows; the INCRWC Dest field is 4 bits.
+                // The INCRWC Dest field is 4 bits, so one tile step takes 4 x 15 + 4 rows.
+                static_assert(4 * 15 + 4 == ROWS_PER_TILE, "INCRWC sequence must advance Dest by one tile");
                 TTI_INCRWC(0, 15, 0, 0);
                 TTI_INCRWC(0, 15, 0, 0);
                 TTI_INCRWC(0, 15, 0, 0);
@@ -1363,7 +1367,7 @@ inline void init_reduce_max_min_int32() {
  *        chain; the column path maps LREG4/5 itself) and, above it, the row butterfly-stage window (see the slot
  *        map). Used instead of the sign-magnitude (INT32_2S_COMP) path so INT32_MIN is handled correctly.
  *
- * No direction is set here: both Int32 MAX/MIN calculates set their own on entry
+ * No direction is set here: both Int32 / UInt32 MAX/MIN calculates set their own on entry
  * (calculate_reduce_max_min_int32_uint32_col, perform_reduce_row_max_min_int32_uint32), and the recorded swaps read it
  * at replay time.
  *
@@ -1650,10 +1654,8 @@ inline void calculate_reduce_max_min_uint16() {
         {16, 16, 48, 48}  // j=1: Face 1 and Face 3
     };
 
-    // The intermediate stores below land in non-row-0 dest slots that we reload, so they use the
-    // plain (full 32-bit) instruction mode. Only the final row-0 stores are packer-visible and use
-    // mode 9 (SFPSTORE_MOD0_FMT_LO16) when the OUTPUT is UInt16 in a 32-bit dest (pack_low16), so the
-    // packer reads the low 16 bits of the dest word.
+    // The row-0 result stores are packer-visible: mode 9 (SFPSTORE_MOD0_FMT_LO16) when the OUTPUT is UInt16 in a
+    // 32-bit dest (pack_low16), so the packer reads the low 16 bits of the dest word, else the plain mode.
     constexpr std::uint32_t STORE_MODE =
         pack_low16 ? 9u /* SFPSTORE_MOD0_FMT_LO16 */ : static_cast<std::uint32_t>(INSTRUCTION_MODE);
 
