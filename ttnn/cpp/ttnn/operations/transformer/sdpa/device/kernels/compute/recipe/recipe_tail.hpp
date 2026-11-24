@@ -249,6 +249,27 @@ ALWI void recipe_ring_band(uint32_t q_tile, uint32_t k_tile, int32_t& lo, int32_
     }
 }
 
+// Ring positional masks (recipe::ring_mask 1 or 2): whether the current chunk (its RecipeRingMask fields set) masks any
+// key of a q_tiles x k_tiles chunk, by the pack-thread hook's own skip test per tile (a tile with every column valid
+// and its band covering the whole tile is left alone). A chunk it would leave untouched need not set
+// RecipeRingMask::masked: the QK subblocks then skip the hook and keep their matmul setup. Every thread computes it.
+template <uint32_t q_tiles, uint32_t k_tiles>
+ALWI bool recipe_ring_chunk_needs_mask() {
+    for (uint32_t row = 0; row < q_tiles; ++row) {
+        for (uint32_t col = 0; col < k_tiles; ++col) {
+            uint32_t valid = recipe_valid_k_columns(col);
+            int32_t lo = -kRecipeBandOpen, hi = kRecipeBandOpen;
+            if (valid != 0) {
+                recipe_ring_band(row, col, lo, hi, valid);
+            }
+            if (!(valid >= 32 && hi >= 31 && lo <= -31)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 // Stamp chunk padding (and, on rings, positional masks) before packing QK, so neither maxima nor the denominator see
 // masked keys. PACK owns SFPU while MATH overlaps the next matmul; using a math-thread fill here would race the
 // pack-thread exponential. No math-counter reset is needed. Aligned recipes compile without this hook.

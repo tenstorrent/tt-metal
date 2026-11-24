@@ -528,6 +528,8 @@ __attribute__((optimize("Os"))) void kernel_main() {
                                 recipe_ring_mask.k_seq_tile0 = plan.global_k_chunk_at(chunk) * Sk_chunk_t;
                             }
                             recipe_ring_mask.ring_id = ref.source_ring_id;
+                            // Interior chunks (every key visible to every row) skip the pack-thread mask hook.
+                            recipe_ring_mask.masked = recipe_ring_chunk_needs_mask<Sq_chunk_t, Sk_chunk_t>();
                             if (seeded_rows != all_rows) {
                                 for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
                                     const uint32_t q =
