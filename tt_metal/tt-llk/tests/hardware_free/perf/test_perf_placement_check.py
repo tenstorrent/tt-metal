@@ -155,7 +155,7 @@ def test_missing_fingerprint_is_judged_by_the_positions(tmp_path):
 
 def test_position_not_measured_is_unmeasured(tmp_path):
     base = _side(tmp_path / "base", [_BASE] * 5)
-    cur = _side(tmp_path / "cur", [_BASE * 1.2] * 5, window="bbb", skip=("p36",))
+    cur = _side(tmp_path / "cur", [_BASE * 1.2] * 5, window="bbb", skip=("p44",))
 
     [result] = _decide(tmp_path, base, cur)
 
@@ -239,7 +239,7 @@ def test_placement_only_is_not_a_failure_but_is_reported(tmp_path):
 
 def test_nothing_measured_is_not_called_clean(tmp_path):
     base = _side(tmp_path / "base", [_BASE] * 5)
-    cur = _side(tmp_path / "cur", [_BASE * 1.2] * 5, window="bbb", skip=("p36",))
+    cur = _side(tmp_path / "cur", [_BASE * 1.2] * 5, window="bbb", skip=("p44",))
 
     report = render(_decide(tmp_path, base, cur), "wormhole")
 

@@ -21,15 +21,14 @@ from .llk_params import ApproximationMode, DestAccumulation, MathOperation
 from .ulp import FLUSH_SUBNORMAL_OUTPUTS
 from .ulp_domains import Domain
 from .ulp_table import (
-    TOLERANCE_CONTRACT,
     AccuracyContract,
     BudgetKey,
-    contracts_of,
+    Resolved,
+    Table,
     load_table,
-    most_specific,
-    resolve_variant,
+    resolve,
     steps_bind,
-    validate_contracts,
+    validate_table,
 )
 
 
@@ -53,17 +52,20 @@ def _current_test() -> str:
     return os.environ.get("PYTEST_CURRENT_TEST", "").rsplit(" (", 1)[0]
 
 
-# One op's keyed budgets.
-_Contracts = dict[BudgetKey, AccuracyContract]
-
-_SFPU_ACCURACY_BUDGET: dict[MathOperation, _Contracts] = contracts_of(load_table())
+_SFPU_ACCURACY_BUDGET: Table = load_table()
 
 
-def resolve_contract(table: _Contracts, query: BudgetKey) -> AccuracyContract:
-    """The most specific contract in *table* covering *query*, or
-    :data:`TOLERANCE_CONTRACT`."""
-    found = most_specific(table, query)
-    return TOLERANCE_CONTRACT if found is None else found[1]
+def _resolve(
+    op, output_format, arch, input_format, approx_mode, dest_acc
+) -> tuple[BudgetKey, Resolved]:
+    query = BudgetKey(
+        approx_mode=approx_mode,
+        input_format=input_format,
+        output_format=output_format,
+        dest_acc=dest_acc,
+        arch=arch,
+    )
+    return query, resolve(_SFPU_ACCURACY_BUDGET.get(op, ()), query)
 
 
 def accuracy_contract(
@@ -75,25 +77,17 @@ def accuracy_contract(
     approx_mode: ApproximationMode | None = None,
     dest_acc: DestAccumulation | None = None,
 ) -> AccuracyContract:
-    """The contract for one op variant, or :data:`TOLERANCE_CONTRACT`. Not a pure lookup:
-    it also publishes the variant as :data:`LAST_QUERY` for the ``--ulp-measure``
-    recorder, so resolve once, right before the comparison."""
-    query = BudgetKey(
-        approx_mode=approx_mode,
-        input_format=input_format,
-        output_format=output_format,
-        dest_acc=dest_acc,
-        arch=arch,
+    """The contract for one op variant, or :data:`~.ulp_table.TOLERANCE_CONTRACT`. Not a
+    pure lookup: it also publishes the variant as :data:`LAST_QUERY` for the
+    ``--ulp-measure`` recorder, so resolve once, right before the comparison."""
+    query, resolved = _resolve(
+        op, output_format, arch, input_format, approx_mode, dest_acc
     )
     global LAST_QUERY, PENDING_AMBIGUOUS
     here = _current_test()
     PENDING_AMBIGUOUS = LAST_QUERY is not None and LAST_QUERY.test == here
     LAST_QUERY = Query(here, op, query)
-
-    table = _SFPU_ACCURACY_BUDGET.get(op)
-    if table is None:
-        return TOLERANCE_CONTRACT
-    return resolve_variant(table, query)
+    return resolved.contract
 
 
 def assert_against_contract(
@@ -140,23 +134,13 @@ def domains_of(
 ) -> tuple[tuple[Domain, ...], float | None]:
     """The ``domains`` list one variant is held to and the row's floor, or ``((),
     None)``. Pure: publishes no query."""
-    table = _SFPU_ACCURACY_BUDGET.get(op)
-    if table is None:
-        return (), None
-    query = BudgetKey(
-        approx_mode=approx_mode,
-        input_format=input_format,
-        output_format=output_format,
-        dest_acc=dest_acc,
-        arch=arch,
+    query, resolved = _resolve(
+        op, output_format, arch, input_format, approx_mode, dest_acc
     )
-    found = most_specific(table, query)
-    if found is None:
+    row = resolved.row
+    if row is None or not row.domains or not steps_bind(row.key, query):
         return (), None
-    key, contract = found
-    if not contract.domains or not steps_bind(key, query):
-        return (), None
-    return contract.domains, contract.near_zero_atol
+    return row.domains, row.near_zero_atol
 
 
 def enrolled_ops() -> tuple[MathOperation, ...]:
@@ -166,6 +150,5 @@ def enrolled_ops() -> tuple[MathOperation, ...]:
 
 def validate_registry() -> None:
     """Raise if any op of the loaded registry can resolve ambiguously; the writer runs
-    the same check on a proposed table (:func:`~helpers.ulp_table.validate_contracts`).
-    """
-    validate_contracts(_SFPU_ACCURACY_BUDGET)
+    the same check on a proposed table (:func:`~helpers.ulp_table.validate_table`)."""
+    validate_table(_SFPU_ACCURACY_BUDGET)

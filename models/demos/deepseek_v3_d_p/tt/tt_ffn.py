@@ -107,7 +107,7 @@ class TtFfn(TtSharedExpert):
         )
         tp = mesh_device.shape[tp_axis]
         grid = mesh_device.compute_with_storage_grid_size()
-        fused_grid = matmul_grid(grid, FUSED_GATE_UP_MAX_CORES)
+        fused_grid = matmul_grid(grid, min(FUSED_GATE_UP_MAX_CORES, (grid.x - 1) * grid.y))
         # The gather's fabric workers need a core column outside the matmul grid; its buffer is bf16.
         self.fuses_tp_collectives = (
             fuse_tp_collectives

@@ -1206,6 +1206,7 @@ class ttMLA:
         seq_subshard_axis: Optional[int] = None,
         row_major_output: bool = False,
         compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None,
+        memory_config: Optional[ttnn.MemoryConfig] = None,
     ) -> ttnn.Tensor:
         """Chunked rotated RoPE via the indexed op. rope_tensors carry the whole-cache,
         block-cyclic-sharded cos/sin (or NoPE's one-slab identity tables, read at start 0); the op
@@ -1226,6 +1227,7 @@ class ttMLA:
             seq_subshard_axis=seq_subshard_axis,
             row_major_output=row_major_output,
             compute_kernel_config=compute_kernel_config,
+            memory_config=memory_config,
         )
 
     def _apply_rope_none(
@@ -1635,7 +1637,7 @@ class ttMLA:
     def _q_stem_seq_sharded(self, tt_q, rope_tensors, kv_actual_isl, seq_len_local, metadata):
         """_q_stem after q_b_proj, for _early_q_reshard: one all-to-all heads -> sequence on the projected rows, the
         head split over all heads, wkv_b1 over all heads on this chip's 1/tp of the rows, then RoPE with the
-        prefix, row-major. Returns [1, H, S/(sp*tp), 576]."""
+        prefix, row-major (into L1 when it fits). Returns [1, H, S/(sp*tp), 576]."""
         # [1, 1, S/sp, H/tp*qk] -> [1, 1, S/(sp*tp), H*qk]: each TP rank's head columns are contiguous, so the
         # concatenation is in global head order.
         q_seq = ttnn.experimental.all_to_all_async_generic(
@@ -1667,11 +1669,16 @@ class ttMLA:
             )
         else:
             rope_kwargs = dict(rope_tensors=rope_tensors, kv_actual_isl=kv_actual_isl, metadata=metadata)
+        # q in L1: sparse_sdpa reads it one (head, token) row at a time, and from DRAM those reads stall its start.
+        # Up to K3.1's 160-row case (16.9 MiB, measured); q above 18 MiB stays in DRAM.
+        q_bytes = rope_seq.shape[1] * rope_seq.shape[2] * (prefix.shape[-1] + rope_seq.shape[-1]) * 2
+        q_memory_config = ttnn.L1_MEMORY_CONFIG if q_bytes <= 18 << 20 else ttnn.DRAM_MEMORY_CONFIG
         tt_q = self._apply_rope_padded(
             rope_seq,
             concat_prefix=prefix,
             seq_subshard_axis=self.tp_axis,
             row_major_output=True,
+            memory_config=q_memory_config,
             **rope_kwargs,
         )
         ttnn.deallocate(prefix)

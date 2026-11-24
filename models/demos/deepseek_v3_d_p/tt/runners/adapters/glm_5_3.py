@@ -50,14 +50,12 @@ class GLM53Adapter(MLAPrefillAdapter):
         "/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/vllm-glm53-indexer-kcache-55k"
     )
 
-    # Routing consumes 512 B; leave 256 B for sparse-MLA high-bandwidth-gather semaphores and rest for other needs.
-    # 1216: the tp_sharded fallback gather (used wherever the snake ring
-    # cannot close) adds two high_bw_all_gather programs at two 16 B/bank semaphores each.
-    # 1536: #58681 gave every all_gather multicast program a second (done) semaphore, which pushed the
-    # traced path one 16 B slot past 1216 (Blaze run 37730295536).
-    # 1664: the dense FFN's fused TP collectives (#66628) add seven 16 B/bank semaphores: three for its gather and four
-    # for matmul_reduce_scatter_prefill. Keep in sync with GLM_L1_SMALL_SIZE.
-    l1_small_size = 1664
+    # GLM53Config.L1_SMALL_SIZE: the model's own use - routing 512 B, sparse-MLA gather semaphores, the snake-ring
+    # fallback gathers, #58681's done semaphores, the dense FFN's fused TP collectives (#66628: seven 16 B/bank
+    # semaphores) - plus the MoE block's persistent words.
+    l1_small_size = GLM53Config.L1_SMALL_SIZE
+    # GLM-5.3's MoE layers run on the MoE block (moe_impl.py).
+    moe_impl = "block"
     routing_use_l1_small_for_semaphores = True
 
     supports_mtp = True

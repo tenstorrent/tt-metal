@@ -29,10 +29,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
-    const std::uint32_t TILE_CNT    = params.TILE_CNT;
-    const Operand& buffer_A         = params.buffer_A;
-    const Operand& buffer_B         = params.buffer_B;
+    const std::uint32_t LOOP_FACTOR              = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT                 = params.TILE_CNT;
+    const std::uint32_t INPUT_NUM_TILES_IN_BLOCK = params.INPUT_NUM_TILES_IN_BLOCK;
+    const Operand& buffer_A                      = params.buffer_A;
+    const Operand& buffer_B                      = params.buffer_B;
 #endif
     const ckernel::TensorShape tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
 
@@ -48,7 +49,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         const auto scaler_format    = static_cast<DataFormat>(formats.unpack_B_dst);
         _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(data_in_srcb ? scaler_format : data_format, data_in_srcb ? data_format : scaler_format);
         const bool data_2x = data_format == DataFormat::MxFp4_2x_A || data_format == DataFormat::MxFp4_2x_B;
-        _llk_unpack_reduce_init_<POOL_TYPE, REDUCE_DIM>(bfd_a, bfd_b, tensor_shape_A, 1 /*num_tiles_per_unpack*/, data_2x /*clear_data_src*/);
+        _llk_unpack_reduce_init_<POOL_TYPE, REDUCE_DIM>(bfd_a, bfd_b, tensor_shape_A, INPUT_NUM_TILES_IN_BLOCK, data_2x /*clear_data_src*/);
         PROFILER_SYNC();
     }
     {
@@ -72,7 +73,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t i = 0; i < TILE_CNT; ++i)
+                for (std::uint32_t i = 0; i < TILE_CNT; i += INPUT_NUM_TILES_IN_BLOCK)
                 {
                     _llk_unpack_reduce_<POOL_TYPE, REDUCE_DIM>(i, 0 /*start_l1_tile_idx_1*/, tensor_shape_A);
                 }
