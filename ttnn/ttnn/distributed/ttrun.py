@@ -1052,7 +1052,8 @@ def run_launcher(
     """Run the launcher until the job is gone and return its code: the failing rank's, 128 + a signal at tt-run,
     241 at a timeout, never 0 with a rank left alive. Logs one `job end:` line. prrte_timeout: --mpi-args set PRRTE's
     own --timeout (its 241 is then that timeout, not a rank's code). env: the launcher's environment (default tt-run's
-    own). direct: cmd is one process, not an MPI launcher (the offline Phase 1); it is stopped and signalled directly."""
+    own). direct: cmd is one process, not an MPI launcher (the offline Phase 1); it is stopped and signalled directly.
+    """
     with LaunchedJob(cmd, cwd, job_timeout, env, direct) as job:
         rc = job.wait()
     # __exit__ has torn the job down (handlers restored, leftover ranks ended, shm swept). Classify the result,
@@ -2169,9 +2170,7 @@ def run_generate_rank_bindings(
         Exit code from the subprocess
     """
     if subprocess_run is None:
-        return run_launcher(
-            cmd, cwd=cwd, job_timeout=job_timeout, prrte_timeout=prrte_timeout, env=env, direct=direct
-        )
+        return run_launcher(cmd, cwd=cwd, job_timeout=job_timeout, prrte_timeout=prrte_timeout, env=env, direct=direct)
     result = subprocess_run(cmd, cwd=cwd, env=env)
     return result.returncode if hasattr(result, "returncode") else result
 
