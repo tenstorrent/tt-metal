@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// HAL port of tt_llk_blackhole/llk_lib/llk_math_eltwise_unary_sfpu.h, ported except SFPU. Same Tensix instruction sequence as production.
+
 #pragma once
 #include <cstdint>
 #include <type_traits>
@@ -11,6 +13,7 @@
 #include "ckernel_ops.h"
 #include "ckernel_sfpu.h"
 #include "cmath_common.h"
+#include "hal/cfg.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_sfpu_common.h"
 #include "llk_sfpu_types.h"
@@ -25,21 +28,11 @@ inline void eltwise_unary_sfpu_configure_addrmod()
     //       A2D, which is using ADDR_MOD_0 and ADDR_MOD_2, so use one
     //       that doesn't conflict!
 
-    addr_mod_t {
-        .srca = {.incr = 0},
-        .srcb = {.incr = 0},
-        .dest = {.incr = 0},
-    }
-        .set(ADDR_MOD_7);
+    hal_port::set_sfpu_addr_mod<hal::cfg::Sec::S7 /*ADDR_MOD_7*/, 0>();
 
     if constexpr (sfpu_op == SfpuType::topk_local_sort)
     {
-        addr_mod_t {
-            .srca = {.incr = 0},
-            .srcb = {.incr = 0},
-            .dest = {.incr = 32},
-        }
-            .set(ADDR_MOD_6);
+        hal_port::set_sfpu_addr_mod<hal::cfg::Sec::S6 /*ADDR_MOD_6*/, 32>();
     }
 
     if constexpr (
@@ -49,12 +42,7 @@ inline void eltwise_unary_sfpu_configure_addrmod()
         sfpu_op == SfpuType::less_than_zero || sfpu_op == SfpuType::greater_than_equal_zero || sfpu_op == SfpuType::less_than_equal_zero ||
         sfpu_op == SfpuType::greater_than_zero)
     {
-        addr_mod_t {
-            .srca = {.incr = 0},
-            .srcb = {.incr = 0},
-            .dest = {.incr = 2},
-        }
-            .set(ADDR_MOD_6);
+        hal_port::set_sfpu_addr_mod<hal::cfg::Sec::S6 /*ADDR_MOD_6*/, 2>();
     }
 }
 
@@ -63,7 +51,7 @@ inline void _llk_math_eltwise_unary_sfpu_init_()
 {
     sfpu::_init_sfpu_config_reg();
     eltwise_unary_sfpu_configure_addrmod<sfpu_op>();
-    math::reset_counters(p_setrwc::SET_ABD_F);
+    hal_port::reset_counters_abd_f();
 }
 
 // Kernel-invariant SFPU init. Runs the parts of the per-op init that are identical for every SFPU op and
@@ -79,10 +67,5 @@ inline void _llk_math_eltwise_unary_sfpu_init_once_()
     // NOTE: this kernel is typically used in conjunction with
     //       A2D, which is using ADDR_MOD_0 and ADDR_MOD_2, so use one
     //       that doesn't conflict!
-    addr_mod_t {
-        .srca = {.incr = 0},
-        .srcb = {.incr = 0},
-        .dest = {.incr = 0},
-    }
-        .set(ADDR_MOD_7);
+    hal_port::set_sfpu_addr_mod<hal::cfg::Sec::S7 /*ADDR_MOD_7*/, 0>();
 }

@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// HAL port of tt_llk_blackhole/llk_lib/llk_math_eltwise_binary_sfpu.h, ported except SFPU. Same Tensix instruction sequence as production.
+
 #pragma once
 
 #include <cstdint>
@@ -12,6 +14,7 @@
 #include "ckernel_ops.h"
 #include "ckernel_sfpu.h"
 #include "cmath_common.h"
+#include "hal/cfg.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_sfpu_common.h"
 #include "llk_sfpu_types.h"
@@ -26,12 +29,7 @@ inline void eltwise_binary_sfpu_configure_addrmod()
     //       A2D, which is using ADDR_MOD_0 and ADDR_MOD_2, so use one
     //       that doesn't conflict!
 
-    addr_mod_t {
-        .srca = {.incr = 0},
-        .srcb = {.incr = 0},
-        .dest = {.incr = 0},
-    }
-        .set(ADDR_MOD_7);
+    hal_port::set_sfpu_addr_mod<hal::cfg::Sec::S7 /*ADDR_MOD_7*/, 0>();
 
     if constexpr (
         sfpu_op == SfpuType::mul_int32 || sfpu_op == SfpuType::mul_uint16 || sfpu_op == SfpuType::max || sfpu_op == SfpuType::min ||
@@ -40,12 +38,7 @@ inline void eltwise_binary_sfpu_configure_addrmod()
         sfpu_op == SfpuType::eq_int || sfpu_op == SfpuType::ne_int || sfpu_op == SfpuType::lt || sfpu_op == SfpuType::gt || sfpu_op == SfpuType::le ||
         sfpu_op == SfpuType::ge || sfpu_op == SfpuType::eq || sfpu_op == SfpuType::ne)
     {
-        addr_mod_t {
-            .srca = {.incr = 0},
-            .srcb = {.incr = 0},
-            .dest = {.incr = 2},
-        }
-            .set(ADDR_MOD_6);
+        hal_port::set_sfpu_addr_mod<hal::cfg::Sec::S6 /*ADDR_MOD_6*/, 2>();
     }
 }
 
@@ -54,5 +47,5 @@ inline void _llk_math_eltwise_binary_sfpu_init_()
 {
     sfpu::_init_sfpu_config_reg();
     eltwise_binary_sfpu_configure_addrmod<sfpu_op>();
-    math::reset_counters(p_setrwc::SET_ABD_F);
+    hal_port::reset_counters_abd_f();
 }
