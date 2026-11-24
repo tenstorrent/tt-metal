@@ -103,8 +103,8 @@ bool test_socket_send_recv(
 
     bool is_data_match = true;
 
-    auto fabric_max_packet_size = tt_fabric::get_tt_fabric_max_payload_size_bytes();
-    auto packet_header_size_bytes = tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    auto fabric_max_packet_size = tt_fabric::get_tt_fabric_max_payload_size_bytes(*mesh_device_);
+    auto packet_header_size_bytes = tt_fabric::get_tt_fabric_packet_header_size_bytes(*mesh_device_);
 
     auto my_mesh_id = get_local_mesh_id();
 

@@ -273,7 +273,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     constexpr auto packet_header_cb_id = tt::CBIndex::c_6;
     constexpr auto buffering_factor = 2;
     constexpr auto num_packet_headers_storable = 2;
-    const auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    const auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(*mesh_device);
     tt::tt_metal::CircularBufferConfig cb_header_config =
         tt::tt_metal::CircularBufferConfig(
             num_packet_headers_storable * packet_header_size_bytes * buffering_factor,
@@ -284,7 +284,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     // The writers append the s and m pages after the l payload, so a packet is 2 aligned pages larger than the payload.
     const uint32_t total_pkt_size = packet_size_bytes + (2 * aligned_input_page_size_bytes);
 
-    const uint32_t fabric_max_payload_size_bytes = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    const uint32_t fabric_max_payload_size_bytes = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(*mesh_device);
     TT_FATAL(
         total_pkt_size <= fabric_max_payload_size_bytes,
         "ReduceToRoot needs to send {} B per shard core ({} B of l payload plus 2 x {} B for the s and m pages), which "

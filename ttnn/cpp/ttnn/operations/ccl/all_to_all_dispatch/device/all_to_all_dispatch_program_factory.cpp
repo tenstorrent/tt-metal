@@ -64,7 +64,7 @@ std::pair<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_cb_sizes(
     // Headers: payload, metadata (Ring: also the positive-arc completion credit), negative-arc completion credit.
     constexpr uint32_t num_packet_headers = 3;
 
-    auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(*input_tensor.device());
 
     std::array<uint32_t, 6> cb_sizes = {
         buffering_factor * aligned_input_page_size,
@@ -316,7 +316,7 @@ tt::tt_metal::ProgramDescriptor build_dispatch_program_descriptor(
     log_debug(tt::LogOp, "dest_mesh_id: {}", common::stringify(dest_mesh_id));
     log_debug(tt::LogOp, "directions: {}", common::stringify(directions));
 
-    auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(*mesh_device);
     const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
 
     std::vector<uint32_t> reader_compile_time_args = {

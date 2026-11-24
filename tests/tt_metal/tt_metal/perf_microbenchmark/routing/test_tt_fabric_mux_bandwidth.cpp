@@ -412,7 +412,7 @@ int main(int argc, char** argv) {
     const uint32_t l1_unreserved_base_address =
         mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
 
-    const auto packet_header_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    const auto packet_header_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(*mesh_device);
     test_params.buffer_size_bytes_full_size_channel = packet_header_size + test_params.packet_payload_size_bytes;
     test_params.buffer_size_bytes_header_only_channel = packet_header_size;
 

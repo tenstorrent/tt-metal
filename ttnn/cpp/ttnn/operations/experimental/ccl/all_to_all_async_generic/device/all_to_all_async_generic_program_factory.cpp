@@ -418,7 +418,7 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
     const uint32_t row_bytes = tensor_args.input_tensor.mesh_buffer().page_size();
     // Tile rows buffered between the reader, the tilize kernel and the writer, so each can work while the next waits.
     constexpr uint32_t buffered_tile_rows = 2;
-    const uint32_t max_payload_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    const uint32_t max_payload_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(*device);
     const uint32_t payload_capacity_pages = max_payload_size / page_size;
     const uint32_t num_dram_banks = device->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
     // With more than four pages, assign each stream whole destination DRAM banks. Output pages separated by the
@@ -652,7 +652,7 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
 
     // Create CB for fabric
     const auto reserved_packet_header_CB_index = tt::CB::c_in4;
-    auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(*device);
     const uint32_t num_packet_headers_storable = 4;
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = num_packet_headers_storable * packet_header_size_bytes * 2,

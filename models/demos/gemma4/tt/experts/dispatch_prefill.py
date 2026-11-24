@@ -412,7 +412,7 @@ class Gemma4DispatchExperts:
             # dispatch_fabric2d sends a whole token page per packet: refuse here, with the router config that
             # would work, instead of the op's TT_FATAL (tt-metal CI at 1aaff4164cc: 5632 + 64 B > 4352 B)
             try:
-                live_payload = int(ttnn.get_tt_fabric_max_payload_size_bytes())
+                live_payload = int(ttnn.get_tt_fabric_max_payload_size_bytes(mesh_device))
             except Exception as exc:  # noqa: BLE001 - no fabric context: the op would fail the same way
                 raise ValueError(f"the ring transport needs an initialized fabric: {exc}") from exc
             reason = ring_transport_reason(self.hidden, live_payload)

@@ -139,7 +139,7 @@ tt::tt_metal::ProgramDescriptor SendAsyncProgramFactory::create_descriptor(
 
     auto fabric_max_payload_size = tt::round_down(
         std::min(
-            tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(),
+            tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(*socket_mesh_device),
             static_cast<size_t>(mesh_socket.get_config().socket_mem_config.fifo_size)),
         max_alignment);
     auto num_pages_per_packet = fabric_max_payload_size / socket_aligned_page_size;
@@ -178,7 +178,7 @@ tt::tt_metal::ProgramDescriptor SendAsyncProgramFactory::create_descriptor(
 
     constexpr uint8_t packet_header_cb_index = tt::CBIndex::c_1;
     uint32_t packet_header_cb_num_pages = 2;  // One for data, one for sync
-    uint32_t packet_header_cb_page_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    uint32_t packet_header_cb_page_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(*socket_mesh_device);
     desc.cbs.push_back(CBDescriptor{
         .total_size = packet_header_cb_num_pages * packet_header_cb_page_size,
         .core_ranges = sender_core_range_set,

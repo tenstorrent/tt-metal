@@ -177,7 +177,7 @@ class BroadcastConfig:
         return defines
 
     def _resolve_chunk_size(self, chunk_size_bytes):
-        max_payload = int(ttnn.get_tt_fabric_max_payload_size_bytes())
+        max_payload = int(ttnn.get_tt_fabric_max_payload_size_bytes(self.mesh_device))
         if chunk_size_bytes is None:
             self.chunk_size_bytes = min(self.tensor_size_bytes, max_payload)
         else:

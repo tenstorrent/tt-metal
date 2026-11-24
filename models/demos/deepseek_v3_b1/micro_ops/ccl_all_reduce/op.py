@@ -175,11 +175,11 @@ class ChunkConfig:
     num_chunks: int
 
 
-def resolve_chunk_config(total_num_tiles, tile_size_bytes, chunk_num_tiles=None):
+def resolve_chunk_config(mesh_device, total_num_tiles, tile_size_bytes, chunk_num_tiles=None):
     if total_num_tiles <= 0:
         raise ValueError(f"total_num_tiles must be > 0, got {total_num_tiles}")
 
-    max_payload = int(ttnn.get_tt_fabric_max_payload_size_bytes())
+    max_payload = int(ttnn.get_tt_fabric_max_payload_size_bytes(mesh_device))
     max_tiles_per_packet = max_payload // tile_size_bytes
     if max_tiles_per_packet <= 0:
         raise ValueError(f"Invalid max payload/tile size: max_payload={max_payload}, tile_size_bytes={tile_size_bytes}")
@@ -316,7 +316,7 @@ class AllReduceConfig:
             self.element_size = 2
             self.tile_size_bytes = CCL_TILE_H * CCL_TILE_W * self.element_size
 
-        self.chunk = resolve_chunk_config(self.total_num_tiles, self.tile_size_bytes, chunk_num_tiles)
+        self.chunk = resolve_chunk_config(self.mesh_device, self.total_num_tiles, self.tile_size_bytes, chunk_num_tiles)
 
         self.data_format = metadata_sample.dtype
         self.standard_tile_descriptor = ttnn.TileDescriptor(CCL_TILE_H, CCL_TILE_W)

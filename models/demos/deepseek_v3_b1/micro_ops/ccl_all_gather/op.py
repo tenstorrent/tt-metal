@@ -59,8 +59,8 @@ class ByteChunkConfig:
     last_chunk_bytes: int
 
 
-def resolve_byte_chunk_config(slice_size_bytes, max_chunk_size_bytes=None):
-    max_payload = int(ttnn.get_tt_fabric_max_payload_size_bytes())
+def resolve_byte_chunk_config(mesh_device, slice_size_bytes, max_chunk_size_bytes=None):
+    max_payload = int(ttnn.get_tt_fabric_max_payload_size_bytes(mesh_device))
     if max_chunk_size_bytes is not None:
         max_payload = min(max_payload, int(max_chunk_size_bytes))
     if max_payload <= 0:
@@ -337,7 +337,7 @@ class AllGatherConfig:
         shard_elements = input_shard.shape[0] * input_shard.shape[1]
         self.slice_size_bytes = shard_elements * element_size
 
-        self.chunk = resolve_byte_chunk_config(self.slice_size_bytes, max_chunk_size_bytes)
+        self.chunk = resolve_byte_chunk_config(self.mesh_device, self.slice_size_bytes, max_chunk_size_bytes)
 
         # L1 addresses (uniform across devices for same tensor allocation)
         self.input_addr = input_per_device[0].buffer_address()
@@ -393,7 +393,7 @@ class AllGatherConfig:
         self.handoff_sem_addr = int(handoff_sem_addr)
         self.recv_sem_addr = int(recv_sem_addr)
         self.slice_size_bytes = int(slice_size_bytes)
-        self.chunk = resolve_byte_chunk_config(self.slice_size_bytes, max_chunk_size_bytes)
+        self.chunk = resolve_byte_chunk_config(self.mesh_device, self.slice_size_bytes, max_chunk_size_bytes)
 
         # NOC coords passed directly (caller already resolved them to the
         # fused kernel's owning cores).

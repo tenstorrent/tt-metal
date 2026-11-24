@@ -124,7 +124,7 @@ void sliding_halo_exchange_helper(
     constexpr uint32_t reader_meta_cb = tt::CB::c_in4;
     constexpr uint32_t writer_meta_cb = tt::CB::c_in5;
     constexpr uint32_t meta_cb_page_size = 32;
-    const uint32_t packet_header_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    const uint32_t packet_header_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(*mesh_device);
 
     desc.cbs.push_back(CBDescriptor{
         .total_size = cb_pages * page_size,

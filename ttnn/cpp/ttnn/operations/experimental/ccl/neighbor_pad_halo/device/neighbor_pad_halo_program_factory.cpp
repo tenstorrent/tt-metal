@@ -812,7 +812,8 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
     const uint32_t progress_t_batch_size = 0;
 
     // H-send bank-major coalescing
-    const uint32_t fabric_max_payload = static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes());
+    const uint32_t fabric_max_payload =
+        static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(*mesh_device));
     const uint32_t max_coalesce_sticks = std::max(1u, std::min(64u, fabric_max_payload / page_size));
     // Zeros only: the bank-major coalesced path handles the interior + zero fill
     uint32_t h_coalesce_n = 0;

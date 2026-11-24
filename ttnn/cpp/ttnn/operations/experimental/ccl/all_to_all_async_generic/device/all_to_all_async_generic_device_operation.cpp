@@ -123,7 +123,7 @@ void AllToAllAsyncGenericDeviceOperation::validate_on_program_cache_miss(
     const auto& page_size = input_tensor.mesh_buffer().page_size();
     const auto& input_shape = input_tensor.logical_shape();
     auto rank = input_shape.rank();
-    const auto max_payload_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    const auto max_payload_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(*mesh_device);
 
     TT_FATAL(operation_attributes.in_dim >= 0 && operation_attributes.in_dim < rank, "in_dim out of range");
     TT_FATAL(operation_attributes.out_dim >= 0 && operation_attributes.out_dim < rank, "out_dim out of range");
@@ -306,7 +306,7 @@ ttsl::hash::hash_t AllToAllAsyncGenericDeviceOperation::compute_program_hash(
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     const auto fabric_config = tt::tt_fabric::GetFabricConfig(*mesh_device);
-    const auto max_payload_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    const auto max_payload_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(*mesh_device);
     // The cached program contains the fabric mux kernel and client ABI. Bump this whenever either changes.
     constexpr uint32_t fabric_mux_implementation_version = 2;
     return tt::tt_metal::operation::hash_operation<AllToAllAsyncGenericDeviceOperation>(

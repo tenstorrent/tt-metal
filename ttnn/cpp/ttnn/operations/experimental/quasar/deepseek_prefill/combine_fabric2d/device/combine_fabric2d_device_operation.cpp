@@ -145,19 +145,20 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
         cmbf2d::FORWARDING_METADATA_SIZE);
     // A token goes as one packet or as two halves, and a forwarded token's last packet also carries its
     // routing tail, so the payload the fabric must accept is that last packet plus the tail.
-    const uint32_t first_packet = cmbf2d::first_packet_bytes(token_page);
+    const uint32_t first_packet = cmbf2d::first_packet_bytes(*buf.device(), token_page);
     TT_FATAL(
         first_packet % 16 == 0,
         "combine_fabric2d: a token's first packet {} B must be 16-byte aligned for NoC transfers",
         first_packet);
     const uint32_t last_packet = first_packet == token_page ? token_page : token_page - first_packet;
     TT_FATAL(
-        last_packet + cmbf2d::FORWARDING_METADATA_SIZE <= tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(),
+        last_packet + cmbf2d::FORWARDING_METADATA_SIZE <=
+            tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(*buf.device()),
         "combine_fabric2d: a token's last packet {} B + {} B routing tail exceeds the fabric max payload {}. "
         "Raise max_payload_size in the device's fabric_router_config.",
         last_packet,
         cmbf2d::FORWARDING_METADATA_SIZE,
-        tt::tt_fabric::get_tt_fabric_max_payload_size_bytes());
+        tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(*buf.device()));
     const auto buf_shape = buf.logical_shape();
     TT_FATAL(buf_shape.rank() >= 2, "combine_fabric2d: dispatched_buffer must be rank 2 or more");
     // A token's slot is its index along dim -2, which is also where the kernels clamp to the buffer's end, so any

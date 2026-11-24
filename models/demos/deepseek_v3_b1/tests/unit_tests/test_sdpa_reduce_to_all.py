@@ -200,6 +200,7 @@ def build_sdpa_reduce_to_all_test_inputs(
     )
 
     forwarder_buffer_size_bytes = compute_forwarder_scratch_size(
+        mesh_device=submesh_device,
         batch_size=BATCH_SIZE,
         l_width=L_WIDTH,
         num_cores=NUM_CORES,

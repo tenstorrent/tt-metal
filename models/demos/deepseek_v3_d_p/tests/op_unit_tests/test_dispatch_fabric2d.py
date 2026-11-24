@@ -892,7 +892,7 @@ def test_dispatch_fabric2d_split_token(mesh_device, device_params, num_links, em
     non-blocking send while it is rebuilt would hand back the wrong page.
     """
     assert (
-        ttnn.get_tt_fabric_max_payload_size_bytes() < 2 * emb_dim + 64
+        ttnn.get_tt_fabric_max_payload_size_bytes(mesh_device) < 2 * emb_dim + 64
     ), "the mesh must be too small for a whole token"
     cfg = extract_mesh_config(mesh_device)
     H, G = cfg.dispatch_group_size, cfg.num_dispatch_groups

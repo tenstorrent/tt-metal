@@ -296,7 +296,7 @@ ProgramDescriptor build_descriptor_at(
 
     if (gathers) {
         // A payload header and an increment header per direction, and a batch of pages staged.
-        const auto header_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+        const auto header_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(*device);
         desc.cbs.push_back(make_cb(cb_headers, gather_core_set, 2 * 2, header_size, DataFormat::UInt32));
         desc.cbs.push_back(make_cb(cb_stage, gather_core_set, kGatherBatch, out_tile_size, out_format));
 

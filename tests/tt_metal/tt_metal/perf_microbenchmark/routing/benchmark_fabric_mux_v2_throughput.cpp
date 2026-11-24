@@ -94,7 +94,8 @@ std::vector<MuxV2ThroughputCase> get_standalone_mux_v2_throughput_cases() {
 
 void BM_StandaloneMuxV2Throughput(
     benchmark::State& state, FabricMuxV2BenchmarkContext* context, const MuxV2ThroughputCase& benchmark_case) {
-    const auto resolved_payload_size_bytes = resolve_packet_payload_size_bytes(benchmark_case);
+    const auto resolved_payload_size_bytes =
+        resolve_packet_payload_size_bytes(*context->get_mesh_device(), benchmark_case);
     const auto num_packets = benchmark_case.num_packets;
 
     state.counters["senders"] = benchmark::Counter(static_cast<double>(benchmark_case.num_senders));

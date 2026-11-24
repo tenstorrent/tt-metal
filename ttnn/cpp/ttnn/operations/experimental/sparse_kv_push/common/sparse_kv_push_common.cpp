@@ -27,7 +27,7 @@ void validate_stripe_chunk(uint32_t stripe_chunk, uint32_t max_rows) {
 }
 
 PacketShape packet_shape(tt::tt_metal::distributed::MeshDevice* mesh_device, uint32_t page_bytes) {
-    const auto max_payload = static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes());
+    const auto max_payload = static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(*mesh_device));
     TT_FATAL(
         page_bytes > 0 && page_bytes <= max_payload,
         "the sparse KV push needs a row page of 1 to {} bytes (the fabric's max payload), got {}",

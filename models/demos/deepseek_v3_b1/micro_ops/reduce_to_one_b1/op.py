@@ -211,7 +211,7 @@ class ReduceToOneB1:
             compute_tile_height * compute_tile_width
         )
 
-        packet_header_size_bytes = ttnn.get_tt_fabric_packet_header_size_bytes()
+        packet_header_size_bytes = ttnn.get_tt_fabric_packet_header_size_bytes(mesh_device)
         slot_size_bytes = packet_header_size_bytes + payload_size_bytes
 
         # CB indices (matching C++ implementation)

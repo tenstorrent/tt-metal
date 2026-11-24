@@ -139,7 +139,7 @@ def test_strided_all_gather_minimal_matmul_async(
     ag_offset,
     read_local_slice_from_input,
 ):
-    logger.info(f"fabric max payload = {ttnn._ttnn.fabric.get_tt_fabric_max_payload_size_bytes()} B")
+    logger.info(f"fabric max payload = {ttnn._ttnn.fabric.get_tt_fabric_max_payload_size_bytes(mesh_device)} B")
 
     grid = mesh_device.compute_with_storage_grid_size()
     if grid.x < mm_core_grid.x or grid.y < ag_offset[1] + 1:

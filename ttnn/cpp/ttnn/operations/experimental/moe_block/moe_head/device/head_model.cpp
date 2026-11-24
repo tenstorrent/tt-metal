@@ -314,7 +314,7 @@ std::shared_ptr<const HeadModel> make_head_model(
     model.ring = shape.ring && shape.tp_size > 2;
     model.wrap_y = shape.sp_ring && shape.sp_rows > 2;
     model.gather_links = shape.links;
-    model.payload = u32(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes());
+    model.payload = u32(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(mesh));
     model.luts = luts;
     const uint32_t tp_size = model.tp_size, engine_columns = layout.engine_columns, engine_rows = layout.engine_rows,
                    row_tiles_per_core = layout.row_tiles_per_core;

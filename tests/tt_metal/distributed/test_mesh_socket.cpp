@@ -585,7 +585,7 @@ void test_single_connection_multi_device_socket(
 
     auto recv_virtual_coord = md1->worker_core_from_logical_core(recv_logical_coord);
 
-    auto fabric_max_packet_size = tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    auto fabric_max_packet_size = tt_fabric::get_tt_fabric_max_payload_size_bytes(*md0);
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
@@ -758,7 +758,7 @@ void test_single_connection_multi_device_socket_with_workers(
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
-    auto fabric_max_packet_size = tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    auto fabric_max_packet_size = tt_fabric::get_tt_fabric_max_payload_size_bytes(*md0);
 
     // Used to setup fabric connections
     const uint32_t sender_physical_device_id = md0->impl().get_device(MeshCoordinate(0, 0))->id();
@@ -929,7 +929,7 @@ std::shared_ptr<Program> create_sender_program(
         control_plane.get_fabric_node_id_from_physical_chip_id(sender_physical_device_id);
     const auto recv_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(recv_physical_device_id);
 
-    auto fabric_max_packet_size = tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    auto fabric_max_packet_size = tt_fabric::get_tt_fabric_max_payload_size_bytes(*sender_socket.get_mesh_device());
     auto sender_program = std::make_shared<Program>(CreateProgram(*sender_socket.get_mesh_device()));
     auto sender_kernel = CreateKernel(
         *sender_program,

@@ -771,7 +771,7 @@ class LMHeadSampling:
             reduce_compute_tile_size = 32 * 32 * reduce_element_size
             reduce_num_tiles = (reduce_shard_elements + 32 * 32 - 1) // (32 * 32)
 
-            reduce_packet_header_size = ttnn.get_tt_fabric_packet_header_size_bytes()
+            reduce_packet_header_size = ttnn.get_tt_fabric_packet_header_size_bytes(mesh_device)
             reduce_slot_size_bytes = reduce_packet_header_size + reduce_payload_size_bytes
 
             # CB17 (matmul out) size per core — the offset where CB20 (reduce received) begins

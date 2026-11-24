@@ -352,9 +352,9 @@ class PostSDPA:
                 tile_width=sdpa_tile_width,
                 bytes_per_element=sdpa_element_size_bytes,
                 num_links=sdpa_num_forwarders,
-                packet_header_size_bytes=ttnn.get_tt_fabric_packet_header_size_bytes(),
+                packet_header_size_bytes=ttnn.get_tt_fabric_packet_header_size_bytes(mesh_device),
                 l1_alignment=sdpa_l1_alignment,
-                max_payload_size_bytes=ttnn.get_tt_fabric_max_payload_size_bytes(),
+                max_payload_size_bytes=ttnn.get_tt_fabric_max_payload_size_bytes(mesh_device),
             )
             sdpa_input_page_size_bytes = sdpa_config.input_page_size_bytes
             sdpa_out_tiles = sdpa_config.out_tiles

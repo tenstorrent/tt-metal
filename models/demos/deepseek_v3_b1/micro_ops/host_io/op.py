@@ -278,7 +278,7 @@ class HostInterface:
         partial_packet_size_per_link = 0
 
         if use_fabric:
-            fabric_max_payload_size = ttnn.get_tt_fabric_max_payload_size_bytes()
+            fabric_max_payload_size = ttnn.get_tt_fabric_max_payload_size_bytes(self.mesh_device)
             base_data_transfer_size = self.embedding_page_size if self.has_embedding else self.h2d_page_size
             total_data_transfer_size = base_data_transfer_size + self.metadata_size_bytes
             page_size_per_link = total_data_transfer_size // self.num_fwd_links
@@ -428,7 +428,7 @@ class HostInterface:
 
         if use_fabric:
             packet_header_cb_num_pages = self.num_fwd_links + self.num_bwd_links
-            packet_header_cb_page_size = ttnn.get_tt_fabric_packet_header_size_bytes()
+            packet_header_cb_page_size = ttnn.get_tt_fabric_packet_header_size_bytes(self.mesh_device)
 
             packet_header_cb_desc = ttnn.CBDescriptor(
                 total_size=packet_header_cb_num_pages * packet_header_cb_page_size,

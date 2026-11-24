@@ -335,13 +335,14 @@ static_assert(offsetof(FwdMetadata, this_addr) == 3 * sizeof(uint64_t));
 // Bytes of a token its first fabric packet carries. A token goes whole when it fits the fabric payload with its
 // routing tail, else as two halves with the tail on the second, so the mesh needs only half a token of payload:
 // a larger payload means larger fabric router buffers, and so fewer of them.
-inline uint32_t first_packet_bytes(uint32_t token_size_bytes) {
-    const auto max_payload = static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes());
+inline uint32_t first_packet_bytes(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device, uint32_t token_size_bytes) {
+    const auto max_payload = static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(mesh_device));
     return token_size_bytes + FORWARDING_METADATA_SIZE <= max_payload ? token_size_bytes : token_size_bytes / 2;
 }
 
-inline uint32_t packets_per_token(uint32_t token_size_bytes) {
-    return first_packet_bytes(token_size_bytes) == token_size_bytes ? 1 : 2;
+inline uint32_t packets_per_token(const tt::tt_metal::distributed::MeshDevice& mesh_device, uint32_t token_size_bytes) {
+    return first_packet_bytes(mesh_device, token_size_bytes) == token_size_bytes ? 1 : 2;
 }
 #endif
 

@@ -74,6 +74,7 @@ constexpr uint32_t kRopeStreamBlocks = 2u;
 // Called from the sizing path shared by the op and create_stats_buffer. `rows_pinned`: num_tile_rows is a
 // row capacity that one program serves for every smaller row count, so the row-dependent knee is skipped.
 uint32_t derive_worker_cap(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
     const CoreCoord& grid_size,
     uint32_t num_links,
     tt::ARCH arch,
@@ -105,7 +106,7 @@ uint32_t derive_worker_cap(
     // raw grid budget is 108 (12x10) -> 54 workers/forwarder > 32 -> would TT_FATAL;
     // this clamps it to the valid 64 (RMS, 128 B sticks) or 32 (LayerNorm, 256 B).
     const uint32_t sticks_per_packet =
-        std::max<uint32_t>(1u, tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() / stick_bytes);
+        std::max<uint32_t>(1u, tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(mesh_device) / stick_bytes);
     cap = std::min(cap, sticks_per_packet * num_forwarders);
     // Perf knee is ARCH- AND WORKLOAD-specific. The BH worker sweep (2026-07-01, in
     // REBENCH_baseline_vs_fused.md) shows the optimum is set by two competing effects:
@@ -334,6 +335,7 @@ DitFusedDistributedRmsnormSizing compute_sizing(
         s.num_workers = pick_num_workers_tp_gt_1(
             s.capacity_tile_rows,
             derive_worker_cap(
+                *device,
                 device->compute_with_storage_grid_size(),
                 args.num_links,
                 device->arch(),
@@ -360,8 +362,8 @@ DitFusedDistributedRmsnormSizing compute_sizing(
         // existing page formula by setting window_size = sticks_per_packet:
         // page_size_bytes = TILE_HEIGHT(=32) * window_size * 4 = sticks * 128.
         // Token-tiles (each stick_bytes wide) that fit one fabric packet.
-        const uint32_t sticks_per_packet =
-            std::max<uint32_t>(1u, tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() / s.stick_bytes);
+        const uint32_t sticks_per_packet = std::max<uint32_t>(
+            1u, tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(*input.device()) / s.stick_bytes);
         // window_size is the logical fp32 page width / TILE_HEIGHT; keep the page
         // formula page_size = TILE_HEIGHT * window_size * 4 == sticks_per_packet * stick_bytes.
         s.window_size = sticks_per_packet * s.stats_per_token;
@@ -1054,7 +1056,7 @@ ProgramDescriptor build_program_descriptor(
         // stick into its forwarder's copy at this same address; the forwarder reads
         // its own). page == one fabric packet (sticks_per_packet * 128 B), depth 2.
         const uint32_t sticks_per_packet =
-            std::max<uint32_t>(1u, tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() / stick_bytes);
+            std::max<uint32_t>(1u, tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(*mesh_device) / stick_bytes);
         unit_packet_bytes = sticks_per_packet * stick_bytes;
         TT_FATAL(
             sticks_per_packet >= workers_per_forwarder,
@@ -1192,12 +1194,12 @@ ProgramDescriptor build_program_descriptor(
     // Packet header CB. The forwarder reserves 2 header slots (fwd+bwd) from it,
     // so on the AG path it lives on the FORWARDER cores. is_tp_1's drain-only
     // writer never touches it (1-slot stub on the worker cores).
-    // get_tt_fabric_packet_header_size_bytes() reaches the fabric context (null at TP=1 on a
+    // get_tt_fabric_packet_header_size_bytes reaches the fabric context (null at TP=1 on a
     // single device with fabric uninitialized). Only the AG path (use_mux) uses this CB, so on
     // the is_tp_1 path use a fixed stub page size instead of querying fabric — the stub is
     // allocated for CB-index consistency but never read.
     const uint32_t packet_header_size_bytes =
-        use_mux ? tt::tt_fabric::get_tt_fabric_packet_header_size_bytes() : sizeof(uint32_t);
+        use_mux ? tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(*device) : sizeof(uint32_t);
     {
         const uint32_t header_tiles = use_mux ? 4u : 1u;
         const CoreRangeSet& header_cores = use_mux ? forwarder_core_set : worker_core_set;

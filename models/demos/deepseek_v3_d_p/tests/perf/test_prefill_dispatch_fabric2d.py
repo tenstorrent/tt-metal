@@ -150,7 +150,7 @@ def test_dispatch_fabric2d_perf_worker(mesh_device, device_params, num_links):
         f"perf worker: mesh={tuple(mesh_device.shape)} seq={seq_len_per_chip} emb={EMB_DIM} "
         f"experts={NUM_ROUTED_EXPERTS} topk={NUM_EXPERTS_PER_TOK} epc={experts_per_chip} "
         f"capacity={max_dispatch_buffer_token_size} links={num_links} iters={ITERATIONS} "
-        f"fabric_payload={ttnn.get_tt_fabric_max_payload_size_bytes()}"
+        f"fabric_payload={ttnn.get_tt_fabric_max_payload_size_bytes(mesh_device)}"
     )
     logger.info(f"routing {routing}: picks landing in this dispatch group {100 * realized:.1f}%")
     logger.info(f"input layout: {layout}")

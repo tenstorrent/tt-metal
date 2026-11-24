@@ -57,7 +57,7 @@ tt::tt_metal::ProgramDescriptor build_program(
     const uint32_t head_tiles = prefix_shape[-2] * prefix_shape[-1] / tt::constants::TILE_HW;
     const uint32_t tail_groups = in.rank_final.logical_shape().rank() == 4 ? in.rank_final.logical_shape()[1] : 1;
     const uint32_t page_size = in.prefix_final.mesh_buffer().aligned_page_size();
-    const uint32_t max_payload = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    const uint32_t max_payload = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(*mesh);
     TT_FATAL(page_size <= max_payload, "select_final_carry: a {} B tile exceeds the fabric payload", page_size);
     const uint32_t packet_pages = std::min<uint32_t>(2, max_payload / page_size);
 

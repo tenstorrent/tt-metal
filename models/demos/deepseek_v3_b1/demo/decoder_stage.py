@@ -522,6 +522,7 @@ def create_decoder_block_tensors(
     sdpa_forwarder_cores = [ttnn.CoreCoord(9, 8), ttnn.CoreCoord(10, 8)]
     sdpa_forwarder_grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in sdpa_forwarder_cores])
     sdpa_fwd_buffer_bytes = compute_forwarder_scratch_size(
+        mesh_device=submesh,
         batch_size=SDPA_L_HEIGHT,
         l_width=sdpa_l_per_worker,
         num_cores=NUM_SDPA_WORKERS,

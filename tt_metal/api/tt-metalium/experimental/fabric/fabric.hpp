@@ -37,7 +37,11 @@ enum class RoutingDirection;
 struct FabricEriscDatamoverConfig;
 // Maximum buffer size of one full-size fabric channel in `mesh_device`'s context.
 size_t get_tt_fabric_channel_buffer_size_bytes(const tt::tt_metal::distributed::MeshDevice& mesh_device);
+size_t get_tt_fabric_packet_header_size_bytes(const tt::tt_metal::distributed::MeshDevice& mesh_device);
+size_t get_tt_fabric_max_payload_size_bytes(const tt::tt_metal::distributed::MeshDevice& mesh_device);
+[[deprecated("Use the overload that takes a MeshDevice instead. This API will be removed after 2026-12-31.")]]
 size_t get_tt_fabric_packet_header_size_bytes();
+[[deprecated("Use the overload that takes a MeshDevice instead. This API will be removed after 2026-12-31.")]]
 size_t get_tt_fabric_max_payload_size_bytes();
 
 // Used to get the run-time args for establishing connection with the fabric router.

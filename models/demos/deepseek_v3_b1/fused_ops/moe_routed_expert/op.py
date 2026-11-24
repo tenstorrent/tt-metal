@@ -1246,7 +1246,7 @@ class MoeRoutedExpert:
             )
 
             reduce_payload_size_bytes = reduce_shard_elements * reduce_element_size
-            reduce_packet_header_size = ttnn.get_tt_fabric_packet_header_size_bytes()
+            reduce_packet_header_size = ttnn.get_tt_fabric_packet_header_size_bytes(mesh_device)
             reduce_slot_size_bytes = reduce_packet_header_size + reduce_payload_size_bytes
 
             # Worker cores from final_output_tensor shard grid (same as gate_proj cores)

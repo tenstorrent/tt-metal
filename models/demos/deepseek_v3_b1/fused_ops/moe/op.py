@@ -2129,7 +2129,7 @@ class MoeRoutedExpertOp:
             )
 
             reduce_payload_size_bytes = reduce_shard_elements * reduce_element_size
-            reduce_packet_header_size = ttnn.get_tt_fabric_packet_header_size_bytes()
+            reduce_packet_header_size = ttnn.get_tt_fabric_packet_header_size_bytes(mesh_device)
             reduce_slot_size_bytes = reduce_packet_header_size + reduce_payload_size_bytes
 
             # Worker cores = gate_proj cores (DRAM bank cores)
@@ -6096,7 +6096,7 @@ class MoeOp:
         bcast_num_neighbors = len(self.bcast_dst_nodes)
 
         bcast_tensor_size_bytes = bp["page_size_bytes"] * bp["input_num_pages"]
-        bcast_max_payload = int(ttnn.get_tt_fabric_max_payload_size_bytes())
+        bcast_max_payload = int(ttnn.get_tt_fabric_max_payload_size_bytes(mesh_device))
         bcast_chunk_size_bytes = min(bcast_tensor_size_bytes, bcast_max_payload)
         bcast_last_chunk_size_bytes = bcast_tensor_size_bytes % bcast_chunk_size_bytes or bcast_chunk_size_bytes
         bcast_num_chunks = (bcast_tensor_size_bytes + bcast_chunk_size_bytes - 1) // bcast_chunk_size_bytes

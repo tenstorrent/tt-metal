@@ -273,7 +273,7 @@ static std::tuple<ReduceScatterMinimalDirectParams, ReduceScatterMinimalDirectIn
         axis_num_links[axis] = ttnn::operations::ccl::common::get_num_links(*mesh_device, axis);
     }
     const uint32_t num_devices = axis_num_devices[0] * axis_num_devices[1];
-    const size_t packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    const size_t packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(*mesh_device);
 
     uint32_t active_axis = 0;
     for (uint32_t a = 0; a < 2; ++a) {

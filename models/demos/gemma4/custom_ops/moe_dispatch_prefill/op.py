@@ -166,8 +166,8 @@ class _FabricPlan:
         self.axis, self.num_links, self.topology = int(cluster_axis), int(num_links), topology
         self.is_2d = is_2d_fabric(mesh_device)
         self.l1_alignment = int(ttnn.get_l1_alignment())
-        self.packet_header_bytes = int(ttnn.get_tt_fabric_packet_header_size_bytes())
-        self.fabric_max_packet = int(ttnn.get_tt_fabric_max_payload_size_bytes())
+        self.packet_header_bytes = int(ttnn.get_tt_fabric_packet_header_size_bytes(mesh_device))
+        self.fabric_max_packet = int(ttnn.get_tt_fabric_max_payload_size_bytes(mesh_device))
         self.dest_mesh_id, self.dest_chip_id = [], []
         for r in range(self.rows):
             for c in range(self.cols):

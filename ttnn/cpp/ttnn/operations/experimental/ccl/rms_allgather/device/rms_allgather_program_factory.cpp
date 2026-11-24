@@ -204,7 +204,7 @@ ProgramDescriptor build_rms_allgather_program_descriptor(
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
 
     static constexpr auto num_packet_headers_storable = 8;
-    auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(*mesh_device);
 
     // packer_l1_acc is not consumed: ComputeConfigDescriptor has no field for it and this op's kernels ignore it.
     [[maybe_unused]] auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =

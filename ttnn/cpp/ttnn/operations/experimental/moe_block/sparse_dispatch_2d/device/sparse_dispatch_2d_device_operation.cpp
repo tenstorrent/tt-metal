@@ -101,7 +101,7 @@ void SparseDispatch2dDeviceOperation::validate_on_program_cache_miss(
         lay::kSlot.bits);
 
     const uint32_t row_bytes = t.xbuf.buffer()->aligned_page_size();
-    const size_t payload = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    const size_t payload = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(*mesh);
     TT_FATAL(args.pack == 1 || args.pack == 2, "sparse_dispatch_2d: pack must be 1 or 2, got {}", args.pack);
     TT_FATAL(
         args.pack * row_bytes <= payload,

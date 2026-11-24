@@ -281,7 +281,8 @@ bool supports_output_bank_owned_schedule(
                           tensor.buffer()->buffer_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
                           tensor.buffer()->aligned_page_size() == transport_page_size;
                }) &&
-           tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() / transport_page_size >= kMaxScatterPagesPerPacket;
+           tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(*device) / transport_page_size >=
+               kMaxScatterPagesPerPacket;
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
@@ -360,7 +361,7 @@ void ring_attention_neighbor_halo_exchange_helper(
     constexpr uint32_t reader_meta_cb = tt::CB::c_in4;
     constexpr uint32_t writer_meta_cb = tt::CB::c_in5;
     constexpr uint32_t meta_cb_page_size = 32;
-    const uint32_t packet_header_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    const uint32_t packet_header_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(*mesh_device);
 
     desc.cbs.push_back(CBDescriptor{
         .total_size = cb_pages * page_size,
@@ -863,7 +864,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         std::swap(num_targets_forward, num_targets_backward);
     }
     // L1 Scratch CB Creation
-    const uint32_t max_payload_size_bytes = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    const uint32_t max_payload_size_bytes = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(*mesh_device);
     const uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
     const uint32_t num_dram_banks = mesh_device->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
     const bool output_bank_owned_schedule =
@@ -967,7 +968,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
 
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
     const auto reserved_packet_header_forward_CB_index = tt::CB::c_in1;
-    const auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    const auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(*mesh_device);
     desc.cbs.push_back(CBDescriptor{
         .total_size = kPacketHeaderSlots * packet_header_size_bytes * kDoubleBufferingFactor,
         .core_ranges = sender_forward_core_ranges,

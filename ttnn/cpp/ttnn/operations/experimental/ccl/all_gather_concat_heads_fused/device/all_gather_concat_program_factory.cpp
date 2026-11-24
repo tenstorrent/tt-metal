@@ -303,7 +303,7 @@ ProgramDescriptor build_program_descriptor(
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
     const auto reserved_packet_header_CB_index = tt::CB::c_in1;
     static constexpr auto num_packet_headers_storable = 8;
-    const auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    const auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(*mesh_device);
     const uint32_t packet_header_page_size = static_cast<uint32_t>(packet_header_size_bytes);
     push_cb(
         desc,

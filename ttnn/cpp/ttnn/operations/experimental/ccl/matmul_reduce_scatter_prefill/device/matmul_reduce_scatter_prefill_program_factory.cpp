@@ -499,7 +499,7 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
     const std::array<uint32_t, 2> arr_addr{sem_addr(MeshSem::ARR_FWD), sem_addr(MeshSem::ARR_BWD)};
     const uint32_t ready_addr = sem_addr(MeshSem::READY);
     const uint32_t credit_addr = sem_addr(MeshSem::CREDIT);
-    const auto max_payload = static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes());
+    const auto max_payload = static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(*mesh));
     const uint32_t chunk_tiles = std::max(1u, std::min(max_payload / tile_bytes, P));
 
     // ---- compile-time args ----

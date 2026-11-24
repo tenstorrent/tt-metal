@@ -503,7 +503,7 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
     program_handles.reserve(devices.size());
     std::vector<size_t> mux_termination_signal_addresses;
 
-    const auto packet_header_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    const auto packet_header_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(*devices[0]);
     size_t buffer_size_bytes_full_size_channel = packet_header_size + test_config.packet_payload_size_bytes;
     size_t buffer_size_bytes_header_only_channel = packet_header_size;
 

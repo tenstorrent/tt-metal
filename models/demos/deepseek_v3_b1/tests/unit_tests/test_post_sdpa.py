@@ -961,6 +961,7 @@ def test_post_sdpa_with_sdpa_phase(
     # Compute proper size using the same formula as sdpa_reduce_to_all op
     sdpa_l_per_worker = SDPA_L_WIDTH // NUM_SDPA_WORKERS  # 512 per worker
     sdpa_fwd_buffer_bytes = compute_forwarder_scratch_size(
+        mesh_device=submesh,
         batch_size=SDPA_L_HEIGHT,
         l_width=sdpa_l_per_worker,
         num_cores=NUM_SDPA_WORKERS,

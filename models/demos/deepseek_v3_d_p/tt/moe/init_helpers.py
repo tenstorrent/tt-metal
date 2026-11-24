@@ -167,7 +167,7 @@ def fabric2d_setup_error(
     else:
         packet_bytes = combine_overlap_payload_size(emb_dim)
         what = f"combine_fabric2d sends a {emb_dim}-wide bf16 token as two halves at most"
-    max_payload = ttnn.get_tt_fabric_max_payload_size_bytes()
+    max_payload = ttnn.get_tt_fabric_max_payload_size_bytes(mesh_device)
     if max_payload < packet_bytes:
         return (
             f"{what}, the last with a {CMB_FABRIC2D_ROUTING_INFO_BYTES} B routing tail ({packet_bytes} B), but "

@@ -355,7 +355,7 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
     const auto reserved_packet_header_CB_index = tt::CBIndex::c_3;
     static constexpr auto num_packet_headers_storable = 8;
-    auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(*mesh_device);
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_packet_headers_storable * packet_header_size_bytes * 2,
         .core_ranges = sender_worker_core_range,
