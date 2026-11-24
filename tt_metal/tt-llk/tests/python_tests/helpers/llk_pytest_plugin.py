@@ -790,12 +790,20 @@ def _thin_sweep(config, items):
         return
     perf_run = config.getoption("--perf-splits") is not None
     sweep_module = {}
+    # a test id named on the command line runs, as a named study module does
+    named = {
+        (Path(arg.split("::", 1)[0]).name, arg.split("::", 1)[1])
+        for arg in config.args
+        if "::" in arg
+    }
 
     def thinned(item):
         if item.get_closest_marker("llk_sweep") is None:
             return False
         if perf_run:
             return True
+        if (item.path.name, item.nodeid.split("::", 1)[-1]) in named:
+            return False
         if item.path not in sweep_module:
             sweep_module[item.path] = _is_sweep_module(item.path)
         return not sweep_module[item.path]
