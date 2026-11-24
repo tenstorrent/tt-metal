@@ -66,6 +66,8 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     UNPACK_TRANS_FACES,
     UNPACK_TRANS_WITHIN_FACE,
+    matmul_keyed_cell,
+    matmul_main_form,
     matmul_two_row_off,
 )
 from helpers.tilize_untilize import tilize_block
@@ -78,6 +80,9 @@ MATMUL_FORMATS = input_output_formats(
     ]
 )
 DEST_SYNC_MODES = [DestSync.Half, DestSync.Full]
+# Every id is main's; the block keys of the Blackhole forms make one ELF per keyed build (28398 against main's 112), so one keyed
+# build in this many keeps them and the other ids run main's form (helpers/test_variant_parameters.py matmul_keyed_cell).
+MATH_MATMUL_KEYED_STRIDE = 128
 STOCHASTIC_ROUNDING_MODES = [StochasticRounding.No]
 MATMUL_COMBINATIONS = sweep_matmul(
     MATMUL_FORMATS,
@@ -368,97 +373,102 @@ def test_math_matmul(
     )
 
     def make_config(mop_per_row):
+        templates = [
+            STOCHASTIC_ROUNDING(matmul_config.stochastic_rnd),
+            MATH_FIDELITY(math_fidelity),
+            *MATMUL_PHASE_ELIDE.for_block(
+                formats,
+                math_fidelity,
+                matmul_config.dest_acc,
+                throttle,
+                matmul_config.face_layout_config.unpack_transpose_faces,
+                MATMUL_PHASE_ELIDE.keeps_requested(
+                    matmul_config.tile_dimensions,
+                    matmul_config.dest_sync,
+                    math_fidelity,
+                ),
+            ),
+            THROTTLE_LEVEL(throttle),
+            DEST_SYNC(matmul_config.dest_sync),
+            PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
+            *MATMUL_STREAM_NARROW.for_block(
+                formats,
+                matmul_config.dest_acc,
+                matmul_config.dest_sync,
+                matmul_config.tile_dimensions.ct_dim,
+                matmul_config.tile_dimensions.rt_dim,
+                matmul_config.tile_dimensions.in0_tile_r_dim,
+                math_fidelity=math_fidelity,
+            ),
+            *MATMUL_REUSE_DIR.for_block(
+                formats,
+                math_fidelity,
+                matmul_config.tile_dimensions.ct_dim,
+                matmul_config.tile_dimensions.rt_dim,
+                matmul_config.dest_sync,
+                two_row_off,
+            ),
+            *MATMUL_STREAM_Z.for_block(
+                formats,
+                matmul_config.dest_acc,
+                matmul_config.dest_sync,
+                matmul_config.tile_dimensions.ct_dim,
+                matmul_config.tile_dimensions.rt_dim,
+                matmul_config.tile_dimensions.in0_tile_r_dim,
+                math_fidelity=math_fidelity,
+                in1_faces=matmul_config.face_layout_config.num_faces_in1,
+                in1_partial=matmul_config.face_layout_config.partial_face_in1,
+                kt_dim=matmul_config.tile_dimensions.kt_dim,
+                throttle=throttle,
+                two_row_off=two_row_off,
+            ),
+            *k_loop,
+            *MATMUL_ROW_END_FOLD.for_block(
+                matmul_config.tile_dimensions.ct_dim,
+                matmul_config.tile_dimensions.rt_dim,
+            ),
+            *MATMUL_FORM_KEYS.for_block(
+                formats,
+                matmul_config.tile_dimensions.kt_dim,
+                matmul_config.tile_dimensions.ct_dim,
+                matmul_config.tile_dimensions.rt_dim,
+                math_fidelity=math_fidelity,
+                dest_sync=matmul_config.dest_sync,
+                dest_acc=matmul_config.dest_acc,
+                two_row_off=two_row_off,
+            ),
+            *MATMUL_IN1_ALT.for_tiles(
+                formats,
+                matmul_config.dest_acc,
+                math_fidelity,
+                matmul_config.tile_dimensions.in0_tile_r_dim,
+                matmul_config.tile_dimensions.in0_tile_c_dim,
+                matmul_config.tile_dimensions.in1_tile_r_dim,
+                matmul_config.tile_dimensions.in1_tile_c_dim,
+            ),
+            MATMUL_PACK_BLOCK(
+                matmul_pack_form(
+                    formats,
+                    matmul_config.dest_sync,
+                    math_fidelity,
+                    matmul_config.tile_dimensions.rt_dim,
+                    matmul_config.tile_dimensions.ct_dim,
+                    matmul_config.tile_dimensions.kt_dim,
+                    matmul_config.tile_dimensions.in0_tile_r_dim,
+                    matmul_config.tile_dimensions.in1_tile_c_dim,
+                    throttle,
+                )
+            ),
+            MATMUL_MAIN_ROW_MOP(mop_per_row),
+        ]
+        if not matmul_keyed_cell(
+            formats, matmul_config.dest_acc, templates, MATH_MATMUL_KEYED_STRIDE
+        ):
+            templates = matmul_main_form(templates)
         return TestConfig(
             "sources/math_matmul_test.cpp",
             formats,
-            templates=[
-                STOCHASTIC_ROUNDING(matmul_config.stochastic_rnd),
-                MATH_FIDELITY(math_fidelity),
-                *MATMUL_PHASE_ELIDE.for_block(
-                    formats,
-                    math_fidelity,
-                    matmul_config.dest_acc,
-                    throttle,
-                    matmul_config.face_layout_config.unpack_transpose_faces,
-                    MATMUL_PHASE_ELIDE.keeps_requested(
-                        matmul_config.tile_dimensions,
-                        matmul_config.dest_sync,
-                        math_fidelity,
-                    ),
-                ),
-                THROTTLE_LEVEL(throttle),
-                DEST_SYNC(matmul_config.dest_sync),
-                PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
-                *MATMUL_STREAM_NARROW.for_block(
-                    formats,
-                    matmul_config.dest_acc,
-                    matmul_config.dest_sync,
-                    matmul_config.tile_dimensions.ct_dim,
-                    matmul_config.tile_dimensions.rt_dim,
-                    matmul_config.tile_dimensions.in0_tile_r_dim,
-                    math_fidelity=math_fidelity,
-                ),
-                *MATMUL_REUSE_DIR.for_block(
-                    formats,
-                    math_fidelity,
-                    matmul_config.tile_dimensions.ct_dim,
-                    matmul_config.tile_dimensions.rt_dim,
-                    matmul_config.dest_sync,
-                    two_row_off,
-                ),
-                *MATMUL_STREAM_Z.for_block(
-                    formats,
-                    matmul_config.dest_acc,
-                    matmul_config.dest_sync,
-                    matmul_config.tile_dimensions.ct_dim,
-                    matmul_config.tile_dimensions.rt_dim,
-                    matmul_config.tile_dimensions.in0_tile_r_dim,
-                    math_fidelity=math_fidelity,
-                    in1_faces=matmul_config.face_layout_config.num_faces_in1,
-                    in1_partial=matmul_config.face_layout_config.partial_face_in1,
-                    kt_dim=matmul_config.tile_dimensions.kt_dim,
-                    throttle=throttle,
-                    two_row_off=two_row_off,
-                ),
-                *k_loop,
-                *MATMUL_ROW_END_FOLD.for_block(
-                    matmul_config.tile_dimensions.ct_dim,
-                    matmul_config.tile_dimensions.rt_dim,
-                ),
-                *MATMUL_FORM_KEYS.for_block(
-                    formats,
-                    matmul_config.tile_dimensions.kt_dim,
-                    matmul_config.tile_dimensions.ct_dim,
-                    matmul_config.tile_dimensions.rt_dim,
-                    math_fidelity=math_fidelity,
-                    dest_sync=matmul_config.dest_sync,
-                    dest_acc=matmul_config.dest_acc,
-                    two_row_off=two_row_off,
-                ),
-                *MATMUL_IN1_ALT.for_tiles(
-                    formats,
-                    matmul_config.dest_acc,
-                    math_fidelity,
-                    matmul_config.tile_dimensions.in0_tile_r_dim,
-                    matmul_config.tile_dimensions.in0_tile_c_dim,
-                    matmul_config.tile_dimensions.in1_tile_r_dim,
-                    matmul_config.tile_dimensions.in1_tile_c_dim,
-                ),
-                MATMUL_PACK_BLOCK(
-                    matmul_pack_form(
-                        formats,
-                        matmul_config.dest_sync,
-                        math_fidelity,
-                        matmul_config.tile_dimensions.rt_dim,
-                        matmul_config.tile_dimensions.ct_dim,
-                        matmul_config.tile_dimensions.kt_dim,
-                        matmul_config.tile_dimensions.in0_tile_r_dim,
-                        matmul_config.tile_dimensions.in1_tile_c_dim,
-                        throttle,
-                    )
-                ),
-                MATMUL_MAIN_ROW_MOP(mop_per_row),
-            ],
+            templates=templates,
             runtimes=[
                 TILE_COUNT(matmul_config.tile_dimensions.tile_cnt),
                 NUM_BLOCKS(num_blocks),

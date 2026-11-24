@@ -56,6 +56,8 @@ from helpers.test_variant_parameters import (
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
 
+pytestmark = pytest.mark.llk_sweep
+
 
 def generate_format_aware_matmul_combinations(
     formats_list: List[FormatConfig],

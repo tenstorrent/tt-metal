@@ -62,6 +62,8 @@ from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
 from perf_matmul_grid2 import _hash, _tiny_rows, tiny_config
 
+pytestmark = pytest.mark.llk_sweep
+
 
 def _golden_cases():
     """One perf row per (tile shape, SrcA format, SrcB format)."""
