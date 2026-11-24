@@ -26,7 +26,7 @@ from _pytest.runner import runtestprotocol
 _MODE = os.environ.get("PRECOMPILE", "auto")
 # A dry body that runs longer than this is ended (a loop driven by device data that was never read, for example).
 _BODY_SECONDS = float(os.environ.get("PRECOMPILE_BODY_SECONDS", "60"))
-_STATE = {"dry": False, "bodies": 0, "ended_early": 0, "timed_out": 0}
+_STATE = {"dry": False, "bodies": 0, "ended_early": 0, "timed_out": 0, "body_seconds": 0.0}
 
 
 # Calls that reach the device outside the command queue, or wait for an answer no blocked op will send: a dry body ends
@@ -53,20 +53,27 @@ class _BodyStop(BaseException):
     pass
 
 
+# Shared comparison helpers. A dry body reads no real data from the device, so a check on device data says nothing; these
+# report a pass, which lets the body go on to the programs after the check and skips the cost of a failure message.
+_PASS_CHECKS = {
+    "tt_py_test_utils_common.comparison_funcs": "comp_",
+    "tt_py_test_utils_common.utils_for_testing": "assert_ comp_ check_",
+}
+
+
 def _stop(*args, **kwargs):
     raise _BodyStop()
 
 
-def _swap_stops(saved):
-    """With saved=None: replace every listed call by one that ends the body, and return what was replaced. With that
-    list: put the real ones back."""
+def _passed(*args, **kwargs):
+    return True, 1.0
+
+
+def _stand_ins():
+    """{id(real function): stand-in} for the calls that end a dry body and the checks that pass in one."""
     import importlib
 
-    if saved is not None:
-        for module, name, real in saved:
-            setattr(module, name, real)
-        return None
-    saved = []
+    stand_ins = {}
     for module_name, names in _STOP_AT.items():
         try:
             module = importlib.import_module(module_name)
@@ -74,9 +81,39 @@ def _swap_stops(saved):
             continue
         for name in names.split():
             if hasattr(module, name):
-                saved.append((module, name, getattr(module, name)))
-                setattr(module, name, _stop)
-    return saved
+                stand_ins[id(getattr(module, name))] = _stop
+    for module_name, prefixes in _PASS_CHECKS.items():
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError:
+            continue
+        for name, value in vars(module).items():
+            if callable(value) and name.startswith(tuple(prefixes.split())) and getattr(value, "__module__", "") == module.__name__:
+                stand_ins[id(value)] = _passed
+    return stand_ins
+
+
+def _rebind(stand_ins):
+    """Put the stand-ins in place of the real functions in every loaded module, also where a test file imported one
+    by name. Returns what was replaced, for _restore."""
+    import sys
+
+    replaced = []
+    for module in list(sys.modules.values()):
+        namespace = getattr(module, "__dict__", None)
+        if not isinstance(namespace, dict):
+            continue
+        for name, value in list(namespace.items()):
+            stand_in = stand_ins.get(id(value))
+            if stand_in is not None:
+                replaced.append((namespace, name, value))
+                namespace[name] = stand_in
+    return replaced
+
+
+def _restore(replaced):
+    for namespace, name, value in replaced:
+        namespace[name] = value
 
 
 def _decide(session):
@@ -136,6 +173,7 @@ def pytest_pyfunc_call(pyfuncitem):
     previous = signal.signal(signal.SIGALRM, on_alarm)
     signal.setitimer(signal.ITIMER_REAL, _BODY_SECONDS)
     ttnn._ttnn.device.BeginDryRun()
+    body_start = time.monotonic()
     try:
         yield
     except KeyboardInterrupt:
@@ -146,11 +184,13 @@ def pytest_pyfunc_call(pyfuncitem):
         # A failed check, a skip, or an error from reading data the device never produced: the body ends here.
         _STATE["ended_early"] += 1
     finally:
+        _STATE["body_seconds"] += time.monotonic() - body_start
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, previous)
         ttnn._ttnn.device.EndDryRun()
-    # What the body left behind must be gone before its fixtures close the device.
-    gc.collect()
+    # What the body left behind must be gone before its fixtures close the device. Its objects are young; a full
+    # collection costs about 70 ms per test with torch and ttnn loaded.
+    gc.collect(1)
     return True
 
 
@@ -171,7 +211,7 @@ def pytest_runtestloop(session):
     rng = (random.getstate(), numpy.random.get_state(), torch.get_rng_state())
     properties = [list(item.user_properties) for item in items]
     real_set_fabric_config = _open_fabric_without_routers(ttnn)
-    stops = _swap_stops(None)
+    replaced = _rebind(_stand_ins())
     start = time.monotonic()
     _STATE["dry"] = True
     try:
@@ -182,7 +222,7 @@ def pytest_runtestloop(session):
     finally:
         _STATE["dry"] = False
         ttnn.set_fabric_config = real_set_fabric_config
-        _swap_stops(stops)
+        _restore(replaced)
     dry_seconds = time.monotonic() - start
     ttnn._ttnn.device.WaitForQueuedBuilds()
     wait_seconds = time.monotonic() - start - dry_seconds
@@ -194,7 +234,8 @@ def pytest_runtestloop(session):
     _STATE["present"], _STATE["ahead"] = present, _kernels_in_cache() - present
     print(
         f"\nPRECOMPILE: on ({why}). Dry pass over {len(items)} tests took {dry_seconds:.1f} s "
-        f"({_STATE['bodies']} bodies, {_STATE['ended_early']} ended early, {_STATE['timed_out']} timed out), "
+        f"({_STATE['bodies']} bodies, {_STATE['ended_early']} ended early, {_STATE['timed_out']} timed out; "
+        f"{_STATE['body_seconds']:.1f} s in bodies), "
         f"then {wait_seconds:.1f} s waiting for builds. Kernels: {present} already present, "
         f"{_STATE['ahead']} built ahead.",
         flush=True,
