@@ -66,9 +66,11 @@ TEST_F(CustomKernelConfigBufferTest, CreatesPerCoreBufferForWorkload) {
     auto workload = make_workload(device);
     auto buffer = experimental::CreateKernelConfigBuffer(device, workload);
 
-    EXPECT_GT(buffer.size(kDevice, kBlockedCore), 0u);
-    EXPECT_GT(buffer.size(kDevice, kFreeCore), 0u);
-    EXPECT_NE(buffer.address(kDevice, kBlockedCore), buffer.address(kDevice, kFreeCore));
+    const auto blocked_region = buffer.region(kDevice, kBlockedCore);
+    const auto free_region = buffer.region(kDevice, kFreeCore);
+    EXPECT_GT(blocked_region.size, 0u);
+    EXPECT_GT(free_region.size, 0u);
+    EXPECT_NE(blocked_region.address, free_region.address);
 }
 
 // Each core's shard is sized for its own kernel group: kFreeCore also runs a second kernel, so its binaries, and its
@@ -92,8 +94,8 @@ TEST_F(CustomKernelConfigBufferTest, SizesEachCoreForItsKernelGroup) {
 
     auto buffer = experimental::CreateKernelConfigBuffer(device, workload);
 
-    EXPECT_LT(buffer.size(kDevice, kBlockedCore), buffer.size(kDevice, kFreeCore));
-    EXPECT_EQ(buffer.max_size(), buffer.size(kDevice, kFreeCore));
+    EXPECT_LT(buffer.region(kDevice, kBlockedCore).size, buffer.region(kDevice, kFreeCore).size);
+    EXPECT_EQ(buffer.max_size(), buffer.region(kDevice, kFreeCore).size);
 }
 
 }  // namespace tt::tt_metal

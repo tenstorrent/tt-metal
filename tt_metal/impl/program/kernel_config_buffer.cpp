@@ -54,12 +54,8 @@ const KernelConfigBufferImpl& KernelConfigBuffer::impl() const {
 
 uint32_t KernelConfigBuffer::max_size() const { return impl().max_size(); }
 
-uint32_t KernelConfigBuffer::size(const distributed::MeshCoordinate& device_coord, const CoreCoord& core) const {
-    return impl().size(device_coord, core);
-}
-
-DeviceAddr KernelConfigBuffer::address(const distributed::MeshCoordinate& device_coord, const CoreCoord& core) const {
-    return impl().address(device_coord, core);
+CoreL1Region KernelConfigBuffer::region(const distributed::MeshCoordinate& device_coord, const CoreCoord& core) const {
+    return {.address = impl().address(device_coord, core), .size = impl().size(device_coord, core)};
 }
 
 void KernelConfigBuffer::deallocate() { impl().deallocate(); }
