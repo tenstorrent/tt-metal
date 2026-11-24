@@ -1,480 +1,168 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <api/compute/cb_api.h>
-#include <api/compute/pack.h>
-#include <api/compute/reconfig_data_format.h>
-#include <api/compute/reg_api.h>
-#include <api/debug/dprint.h>
-#include <hostdevcommon/kernel_structs.h>
-#include <tensix.h>
+// The fused cross-entropy backward: per row, the gradient s * softmax(x) with the target's entry
+// s * expm1((x_t - M) - l), s times the row's upstream gradient with UPSTREAM_GRAD (see row_softmax_program.hpp).
+// The row statistics and the conventions of the steps are in row_softmax_compute.hpp.
+#include "tt-train/sources/ttml/metal/ops/log_softmax/device/kernels/compute/row_softmax_compute.hpp"
 
-#include <cstdint>
+#ifdef TRISC_MATH
+namespace ckernel::sfpu {
+// Cross-entropy gradient: +0 logits x (overwritten), +1 row maximum m, +2 q = s * exp(-l), both broadcast
+// across the row: dx = exp(x - m) * q = s * softmax(x). Tile padding holds -inf and gets zero.
+inline void calculate_cross_entropy_grad() {
+    constexpr uint32_t off_max = 1 * kDstSlotRows, off_q = 2 * kDstSlotRows;
+#pragma GCC unroll 0
+    for (int i = 0; i < 8; ++i) {
+        const sfpi::vFloat x = sfpi::dst_reg[0];
+        const sfpi::vFloat m = sfpi::dst_reg[off_max];
+        const sfpi::vFloat e = log_softmax_exp(x - m);
+        const sfpi::vFloat q = sfpi::dst_reg[off_q];
+        sfpi::dst_reg[0] = e * q;
+        sfpi::dst_reg++;
+    }
+}
+}  // namespace ckernel::sfpu
+#endif
+namespace ckernel {
+// Call log_softmax_online_init first.
+ALWI void cross_entropy_grad(uint32_t dst) {
+    MATH(SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_cross_entropy_grad, dst, VectorMode::RC));
+}
+}  // namespace ckernel
 
-#include "api/compute/bcast.h"
-#include "api/compute/binary_max_min.h"
-#include "api/compute/common.h"
-#include "api/compute/compute_kernel_api.h"
-#include "api/compute/compute_kernel_hw_startup.h"
-#include "api/compute/eltwise_binary.h"
-#include "api/compute/eltwise_binary_sfpu.h"
-#include "api/compute/eltwise_unary/binop_with_scalar.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_unary/exp.h"
-#include "api/compute/eltwise_unary/recip.h"
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
-#include "api/compute/eltwise_unary/sqrt.h"
-#include "api/compute/mask.h"
-#include "api/compute/matmul.h"
-#include "api/compute/reduce.h"
-#include "api/compute/tile_move_copy.h"
-#include "tt-train/sources/ttml/metal/common/sdpa_compute_utils_common.hpp"
+constexpr uint32_t chunks = get_compile_time_arg_val(0);
+constexpr uint32_t scaler_bits = get_compile_time_arg_val(1);  // s.
+// Circular buffers (see row_softmax_program.cpp), passed to the row-statistics steps as their `Cbs`.
+struct Cb {
+    static constexpr uint32_t cx = 0, ccols = 2, cm = 3, cs = 4, cic = 5, ci = 6, cmax = 7, cpivot = 10, ctail = 11,
+                              cd = 12, cnorm = 13, cout = 16, cpart0 = 17, cpart1 = 18, cpart2 = 19, cpivotgrad = 21,
+                              cpartout = 23, ctargetx = 25, cupstream = 29;
+    static constexpr uint32_t cfp32 = ccols;  // Any FP32 buffer, for source-A reconfigurations.
+};
 
-constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);  // rows to process in this kernel
-constexpr uint32_t block_size = get_compile_time_arg_val(1);         // size of block
-constexpr uint32_t Wt = get_compile_time_arg_val(2);
-constexpr uint32_t scaler_bits = get_compile_time_arg_val(3);
-
-constexpr auto cb_input = tt::CBIndex::c_0;
-constexpr auto cb_mask = tt::CBIndex::c_2;
-constexpr auto cb_max_mask = tt::CBIndex::c_3;
-constexpr auto cb_reduction_scaler = tt::CBIndex::c_4;
-constexpr auto cb_max_value_before_reduction = tt::CBIndex::c_5;
-constexpr auto cb_max_value_after_reduction = tt::CBIndex::c_6;
-constexpr auto cb_exp_sum_before_reduction = tt::CBIndex::c_7;
-constexpr auto cb_exp_sum_after_reduction = tt::CBIndex::c_8;
-constexpr auto cb_mat_mul_reduce = tt::CBIndex::c_9;
-constexpr auto cb_output = tt::CBIndex::c_10;
-
-constexpr uint32_t onetile = 1U;
-
-#ifdef DO_MASK_W
-constexpr bool do_mask_w = true;
-#else
-constexpr bool do_mask_w = false;
+#ifdef UPSTREAM_GRAD
+// Multiplies the column vector in DST tile `dst` by each row's upstream gradient g (cupstream, column 0), using DST
+// tile dst + 1. Part of a step: the caller holds DST.
+inline void multiply_by_upstream_tile(uint32_t dst) {
+    copy_init(Cb::cupstream);
+    copy_tile(Cb::cupstream, 0, dst + 1);  // dst[dst + 1] = g, the upstream gradient
+    mul_binary_tile_init();
+    mul_binary_tile(dst, dst + 1, dst);  // dst[dst] *= g
+}
 #endif
 
-#ifdef EVERYTHING_FITS_IN_L1
-
-void find_max_value_in_row() {
-    const uint32_t max_value_register = 0;
-    const uint32_t tile_register = 1U;
-    cb_reserve_back(cb_max_value_before_reduction, onetile);
-    tile_regs_acquire();
-    reconfig_data_format(cb_input, cb_input);
-    for (uint32_t col = 0; col < Wt;) {
-        // try to process data by blocks to improve performance
-        cb_wait_front(cb_input, col + block_size);
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx, ++col) {
-            auto working_register = col == 0 ? max_value_register : tile_register;
-            copy_init(cb_input);
-            copy_tile(cb_input, /* tile_idx */ col, /* register_idx */ working_register);
-
-            if constexpr (do_mask_w) {
-                if (col + 1 == Wt) {
-                    // this is limitation of the function mask_tile
-                    // mask tile currently does not work for mask register that is not next to data register
-                    const uint32_t mask_register =
-                        working_register + 1U;  // mask register should be next to data register
-
-                    // the next 4 lines are important because we overwrite what's in the trash padding.
-                    // it's possible that the padding contains a NaN, and operations like NaN + (-inf) = NaN,
-                    // instead of the expected -inf. similarly, -inf * 0 = NaN.
-                    copy_init(cb_mask);
-                    copy_tile(cb_mask, /* tile_idx */ 0, /* register idx */ mask_register);
-
-                    mask_tile_init();
-                    mask_tile(working_register, mask_register);  // mask should be next to tile register.
-
-                    copy_init(cb_max_mask);
-                    copy_tile(cb_max_mask, /* tile_idx */ 0, /* register idx */ mask_register);
-
-                    add_binary_tile_init();
-                    add_binary_tile(working_register, mask_register, working_register);
-                }
-            }
-
-            if (col > 0) {
-                binary_max_tile_init();
-                binary_max_tile(max_value_register, tile_register, max_value_register);
-            }
-        }
-    }
-    tile_regs_commit();
-
-    tile_regs_wait();
-    pack_reconfig_data_format(cb_max_value_before_reduction);
-    pack_tile(max_value_register, cb_max_value_before_reduction);
-    tile_regs_release();
-    cb_push_back(cb_max_value_before_reduction, onetile);
-}
-
-#else
-
-void find_max_value_in_row() {
-    cb_reserve_back(cb_max_value_before_reduction, onetile);
-    tile_regs_acquire();
-    const uint32_t max_value_register = 0;
-    const uint32_t tile_register = 1U;
-    for (uint32_t col = 0; col < Wt;) {
-        cb_wait_front(cb_input, block_size);  // wait until reader kernel has written block_size tiles to input buffer
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx, ++col) {
-            auto working_register = col == 0 ? max_value_register : tile_register;
-            copy_init(cb_input);
-            copy_tile(cb_input, /* tile_idx */ block_idx, /* register_idx */ working_register);
-
-            if constexpr (do_mask_w) {
-                if (col + 1 == Wt) {
-                    // this is limitation of the function mask_tile
-                    // mask tile currently does not work for mask register that is not next to data register
-                    const uint32_t mask_register =
-                        working_register + 1U;  // mask register should be next to data register
-
-                    // the next 4 lines are important because we overwrite what's in the trash padding.
-                    // it's possible that the padding contains a NaN, and operations like NaN + (-inf) = NaN,
-                    // instead of the expected -inf. similarly, -inf * 0 = NaN.
-                    copy_init(cb_mask);
-                    copy_tile(cb_mask, /* tile_idx */ 0, /* register idx */ mask_register);
-
-                    mask_tile_init();
-                    mask_tile(working_register, mask_register);  // mask should be next to tile register.
-
-                    copy_init(cb_max_mask);
-                    copy_tile(cb_max_mask, /* tile_idx */ 0, /* register idx */ mask_register);
-
-                    add_binary_tile_init();
-                    add_binary_tile(working_register, mask_register, working_register);
-                }
-            }
-
-            if (col > 0) {
-                binary_max_tile_init();
-                binary_max_tile(max_value_register, tile_register, max_value_register);
-            }
-        }
-        cb_pop_front(cb_input, block_size);  // delete block_size tiles from input buffer
-    }
-    tile_regs_commit();
-
-    tile_regs_wait();
-    pack_reconfig_data_format(cb_max_value_before_reduction);
-    pack_tile(max_value_register, cb_max_value_before_reduction);
-    tile_regs_release();
-    cb_push_back(cb_max_value_before_reduction, onetile);
-}
-
+// q = s * exp(-l) (times g with UPSTREAM_GRAD), so that dx = exp(x - M) * q = s * softmax(x): cnorm -> cd.
+inline void cross_entropy_scale_tile() {
+    cb_wait_front(Cb::cnorm, 1);
+#ifdef UPSTREAM_GRAD
+    cb_wait_front(Cb::cupstream, 1);
 #endif
-
-void reduce_max_value() {
-    // reduce max value and push it to cb_max_value_after_reduction
-    cb_wait_front(cb_max_value_before_reduction, onetile);
-    cb_reserve_back(cb_max_value_after_reduction, onetile);
-
-    const uint32_t reduction_register = 0;
     tile_regs_acquire();
-    reconfig_data_format(cb_max_value_before_reduction, cb_reduction_scaler);
-    reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>(
-        cb_max_value_before_reduction, cb_reduction_scaler, cb_max_value_after_reduction);
-    reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>(
-        cb_max_value_before_reduction,
-        cb_reduction_scaler,
-        /* tile_idx */ 0,
-        /* tile_idx */ 0,
-        reduction_register);
-    reduce_uninit();
-    tile_regs_commit();
-
-    tile_regs_wait();
-
-    pack_reconfig_data_format(cb_max_value_after_reduction);
-    pack_tile(reduction_register, cb_max_value_after_reduction);
-    tile_regs_release();
-
-    cb_push_back(cb_max_value_after_reduction, onetile);   // push tile after reduction
-    cb_pop_front(cb_max_value_before_reduction, onetile);  // pop tile before reduction
-}
-
-#ifdef EVERYTHING_FITS_IN_L1
-
-// calculate sum of exp(x - max(x))
-void calculate_sum_exp_x() {
-    cb_wait_front(cb_max_value_after_reduction, onetile);  // wait until we get max value in each row
-
-    // run through all tiles in row
-    const uint32_t accum_register = 0;
-    const uint32_t tile_register = 1U;
-
-    cb_reserve_back(cb_exp_sum_before_reduction, onetile);
-    tile_regs_acquire();
-
-    const uint32_t max_value_register = 3U;
-    reconfig_data_format(cb_max_value_after_reduction, cb_input);
-    // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
-    compute_kernel_hw_startup(cb_max_value_after_reduction, cb_max_value_after_reduction);
-    unary_bcast_init<BroadcastType::COL>(cb_max_value_after_reduction);
-    unary_bcast<BroadcastType::COL>(
-        cb_max_value_after_reduction, /* tile idx */ 0, /* reg tile idx */ max_value_register);
-    for (uint32_t col = 0; col < Wt; ++col) {
-        auto working_register = col == 0 ? accum_register : tile_register;
-
-        copy_init(cb_input);
-        copy_tile(cb_input, /* tile_idx */ col, /* register_idx */ working_register);
-
-        sub_binary_tile_init();
-        sub_binary_tile(working_register, max_value_register, working_register);  // subtract max value from each tile
-
-        // exp via the shared SDPA path: on Blackhole this dispatches to the hand-scheduled
-        // TTI exp (~3x cheaper on the SFPU than the generic accurate exp_tile at bf16
-        // output precision); on Wormhole it falls back to the same accurate sfpi exp.
-        sdpa_exp_tile_init();
-        sdpa_exp_tile(working_register);  // calculate exp for each tile in tile register
-
-        if constexpr (do_mask_w) {
-            if (col + 1 == Wt) {
-                // this is limitation of the function mask_tile
-                // mask tile currently does not work for mask register that is not next to data register
-                const uint32_t mask_register = working_register + 1U;  // mask register should be next to data register
-                copy_init(cb_mask);
-                copy_tile(cb_mask, /* tile_idx */ 0, /* register idx */ mask_register);
-
-                mask_tile_init();
-                mask_tile(working_register, mask_register);  // mask should be next to tile register
-            }
-        }
-
-        if (col > 0) {
-            add_binary_tile_init();
-            add_binary_tile(accum_register, working_register, accum_register);
-        }
-    }
-    tile_regs_commit();
-
-    // packing to cb_exp_sum_before_reduction
-    tile_regs_wait();
-    pack_reconfig_data_format(cb_exp_sum_before_reduction);
-    pack_tile(accum_register, cb_exp_sum_before_reduction);
-    tile_regs_release();
-    cb_push_back(cb_exp_sum_before_reduction, onetile);
-}
-
-#else
-
-// calculate sum of exp(x - max(x))
-void calculate_sum_exp_x() {
-    // wait until we get max value in each row
-    cb_wait_front(cb_max_value_after_reduction, onetile);  // wait until we get max value in each row
-    cb_reserve_back(cb_exp_sum_before_reduction, onetile);
-    // run through all tiles in row
-    const uint32_t accum_register = 0;
-    const uint32_t tile_register = 1U;
-
-    tile_regs_acquire();
-
-    const uint32_t max_value_register = 3U;
-    reconfig_data_format(cb_max_value_after_reduction, cb_input);
-    // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
-    compute_kernel_hw_startup(cb_max_value_after_reduction, cb_max_value_after_reduction);
-    unary_bcast_init<BroadcastType::COL>(cb_max_value_after_reduction);
-    unary_bcast<BroadcastType::COL>(
-        cb_max_value_after_reduction, /* tile idx */ 0, /* reg tile idx */ max_value_register);
-    for (uint32_t col = 0; col < Wt;) {
-        cb_wait_front(cb_input, block_size);  // wait until reader kernel has written block_size tiles to input buffer
-        reconfig_data_format(cb_max_value_after_reduction, cb_input);
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx, ++col) {
-            auto working_register = col == 0 ? accum_register : tile_register;
-
-            copy_init(cb_input);
-            copy_tile(cb_input, /* tile_idx */ block_idx, /* register_idx */ working_register);
-
-            sub_binary_tile_init();
-            sub_binary_tile(
-                working_register, max_value_register, working_register);  // subtract max value from each tile
-
-            sdpa_exp_tile_init();
-            sdpa_exp_tile(working_register);  // calculate exp for each tile in tile register
-
-            if constexpr (do_mask_w) {
-                if (col + 1 == Wt) {
-                    // this is limitation of the function mask_tile
-                    // mask tile currently does not work for mask register that is not next to data register
-                    const uint32_t mask_register =
-                        working_register + 1U;  // mask register should be next to data register
-                    copy_init(cb_mask);
-                    copy_tile(cb_mask, /* tile_idx */ 0, /* register idx */ mask_register);
-
-                    mask_tile_init();
-                    mask_tile(working_register, mask_register);  // mask should be next to tile register
-                }
-            }
-
-            if (col > 0) {
-                add_binary_tile_init();
-                add_binary_tile(accum_register, working_register, accum_register);
-            }
-        }
-        cb_pop_front(cb_input, block_size);
-    }
-    tile_regs_commit();
-
-    // packing to cb_exp_sum_before_reduction
-    tile_regs_wait();
-    pack_reconfig_data_format(cb_exp_sum_before_reduction);
-    pack_tile(accum_register, cb_exp_sum_before_reduction);
-    tile_regs_release();
-    cb_push_back(cb_exp_sum_before_reduction, onetile);
-}
-
+    copy_init(Cb::cnorm);
+    copy_tile(Cb::cnorm, 0, 0);  // dst0 = l
+    negative_tile_init();
+    negative_tile(0);  // dst0 = -l
+    exp_tile_init<USE_APPROXIMATE_EXPONENTIAL>();
+    exp_tile<USE_APPROXIMATE_EXPONENTIAL>(0);  // dst0 = exp(-l) = 1 / (1 + T)
+    binop_with_scalar_tile_init();
+    mul_unary_tile(0, scaler_bits);  // dst0 = q = s * exp(-l)
+#ifdef UPSTREAM_GRAD
+    multiply_by_upstream_tile(0);  // dst0 = q * g
 #endif
-
-void reduce_sum_exp_x() {
-    // reduce exp sum to cb_exp_sum_after_reduction
-    cb_wait_front(cb_exp_sum_before_reduction, onetile);
-    cb_reserve_back(cb_exp_sum_after_reduction, onetile);
-
-    // use only for testing
-    cb_wait_front(cb_mat_mul_reduce, onetile);
-
-    tile_regs_acquire();
-    const uint32_t reduction_register = 0;
-
-    // reconfig_data_format(cb_exp_sum_before_reduction, cb_reduction_scaler);
-    // reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(
-    //     cb_exp_sum_before_reduction, cb_reduction_scaler, cb_exp_sum_after_reduction);
-    // reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(
-    //     cb_exp_sum_before_reduction,
-    //     cb_reduction_scaler,
-    //     /* tile_idx */ 0,
-    //     /* tile_idx */ 0,
-    //     /* reduction_register */ reduction_register);
-    // reduce_uninit();
-
-    // We used matmul_tiles instead of reduce_tile, because reduce_tile causes a loss of precision. The same issue has
-    // been observed in moreh’s ops.
-    reconfig_data_format(cb_mat_mul_reduce, cb_exp_sum_before_reduction);
-    matmul_init(cb_exp_sum_before_reduction, cb_mat_mul_reduce, 0);
-    matmul_tiles(
-        cb_exp_sum_before_reduction, cb_mat_mul_reduce, /* tile_idx */ 0, /* tile_idx */ 0, reduction_register);
-
-    recip_tile_init();
-    recip_tile(reduction_register);  // DST[0] = 1/sum(exp(x))
-
     tile_regs_commit();
-
     tile_regs_wait();
-    pack_reconfig_data_format(cb_exp_sum_after_reduction);
-    pack_tile(/* tile_idx */ reduction_register, cb_exp_sum_after_reduction);
+    pack_one_tile<Cb::cd>(0);  // cd = q
     tile_regs_release();
-    cb_push_back(cb_exp_sum_after_reduction, onetile);
-    cb_pop_front(cb_exp_sum_before_reduction, onetile);
+}
+
+// The target's gradient dx_t = s * (p_t - 1) = s * expm1(y_t) (times g), y_t = (x_t - M) - l: for a target at the
+// selected maximum that is -s * T / (1 + T), the sum of the other gradients (arXiv:2610.31642, Eq. 7), without
+// subtracting nearly equal values. ctargetx, cmax, cnorm -> cpivotgrad, which the writer substitutes. Pops ctargetx
+// (and cupstream).
+inline void target_gradient_tile() {
+    cb_wait_front(Cb::ctargetx, 1);
+    cb_wait_front(Cb::cmax, 1);
+    tile_regs_acquire();
+    copy_init(Cb::ctargetx);
+    copy_tile(Cb::ctargetx, 0, 0);  // dst0 = x_t
+    copy_init(Cb::cmax);
+    copy_tile(Cb::cmax, 0, 1);  // dst1 = M
+    sfpu_bcast_col_init();
+    sfpu_sub_bcast_col(0, 1);  // dst0 = x_t - M
+    copy_init(Cb::cnorm);
+    copy_tile(Cb::cnorm, 0, 1);  // dst1 = l
+    sfpu_bcast_col_init();
+    sfpu_sub_bcast_col(0, 1);  // dst0 = y_t = (x_t - M) - l
+    expm1_tile_init();
+    expm1_tile(0);  // dst0 = p_t - 1 = expm1(y_t)
+    binop_with_scalar_tile_init();
+    mul_unary_tile(0, scaler_bits);  // dst0 = s * (p_t - 1)
+#ifdef UPSTREAM_GRAD
+    multiply_by_upstream_tile(0);  // dst0 = s * (p_t - 1) * g
+#endif
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_one_tile<Cb::cpivotgrad>(0);  // cpivotgrad = dx_t, the target's gradient
+    tile_regs_release();
+    cb_pop_front(Cb::ctargetx, 1);
+#ifdef UPSTREAM_GRAD
+    cb_pop_front(Cb::cupstream, 1);
+#endif
+}
+
+// dx = exp(x - M) * q over this unit's logits, with M (cm) and q (cs) broadcast across the row: cx -> cout. Pops
+// each logits tile.
+inline void cross_entropy_grad_tiles(uint32_t begin, uint32_t end) {
+    cb_wait_front(Cb::cm, 1);
+    cb_wait_front(Cb::cs, 1);
+    log_softmax_online_init();
+    for (uint32_t col = begin; col < end; ++col) {
+        cb_wait_front(Cb::cx, 1);
+        tile_regs_acquire();
+        copy_init(Cb::cm);
+        copy_tile(Cb::cm, 0, 1);  // dst1 = M
+        copy_init(Cb::cs);
+        copy_tile(Cb::cs, 0, 2);  // dst2 = q
+        reconfig_data_format_srca(Cb::cfp32, Cb::cx);
+        copy_init(Cb::cx);
+        copy_tile(Cb::cx, 0, 0);  // dst0 = x
+        reconfig_data_format_srca(Cb::cx, Cb::cfp32);
+        cross_entropy_grad(0);  // dst0 = dx = exp(x - M) * q
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_one_tile<Cb::cout>(0);  // cout = dx
+        tile_regs_release();
+        cb_pop_front(Cb::cx, 1);
+    }
+}
+
+// One row of the cross-entropy gradient: dx = s * softmax(x), with the writer substituting the target's dx_t.
+// Consumes the row statistics cmax, cpivot, cnorm.
+inline void cross_entropy_grad_row(uint32_t begin, uint32_t end) {
+    cross_entropy_scale_tile();                // cd = q
+    broadcast_column_tile<Cb::cd, Cb::cs>(0);  // cs = q in every column
+    cb_pop_front(Cb::cd, 1);
+    target_gradient_tile();                      // cpivotgrad = dx_t
+    broadcast_column_tile<Cb::cmax, Cb::cm>(0);  // cm = M in every column
+    cb_pop_front(Cb::cmax, 1);
+    cb_pop_front(Cb::cpivot, 1);
+    cb_pop_front(Cb::cnorm, 1);
+    cross_entropy_grad_tiles(begin, end);  // cout = dx
+    cb_pop_front(Cb::cm, 1);
+    cb_pop_front(Cb::cs, 1);
 }
 
 void kernel_main() {
-    if constexpr (do_mask_w) {
-        cb_wait_front(cb_mask, onetile);
-        cb_wait_front(cb_max_mask, onetile);
+    const uint32_t count = get_arg_val<uint32_t>(0), begin = get_arg_val<uint32_t>(1), end = get_arg_val<uint32_t>(2);
+    compute_kernel_hw_startup(Cb::cx, Cb::cx, Cb::cout);
+    reconfig_data_format_srca(Cb::cx, Cb::cfp32);  // Steps start with source A set for the FP32 statistics.
+    cb_wait_front(Cb::ccols, 1);
+    for (uint32_t row = 0; row < count; ++row) {
+        row_statistics<Cb, chunks>(begin, end);  // cmax, cpivot, cnorm = M, K, l
+        cross_entropy_grad_row(begin, end);
     }
-    cb_wait_front(cb_reduction_scaler, onetile);
-
-    compute_kernel_hw_startup(cb_input, cb_input, cb_output);
-    copy_init(cb_input);
-
-    for (uint32_t row = 0; row < num_rows_per_core; ++row) {
-        find_max_value_in_row();  // find max value in each row
-        reduce_max_value();       // reduce max value to cb_max_value_after_reduction
-
-        calculate_sum_exp_x();  // calculate sum of exp(x - max(x))
-        reduce_sum_exp_x();     // reduce sum(exp(x - max(x))), take log and push to cb_exp_sum_after_reduction
-
-        cb_wait_front(cb_exp_sum_after_reduction, onetile);  //  wait log(sum(exp(x - max(x)))
-
-        const uint32_t working_register = 0;
-        const uint32_t sum_exp_register = block_size;
-
-        for (uint32_t col = 0; col < Wt; col += block_size) {
-#ifndef EVERYTHING_FITS_IN_L1
-            cb_wait_front(cb_input, block_size);
-#endif
-            cb_reserve_back(cb_output, block_size);
-
-            tile_regs_acquire();
-            reconfig_data_format(cb_exp_sum_after_reduction, cb_exp_sum_after_reduction);
-            // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
-            compute_kernel_hw_startup(cb_exp_sum_after_reduction, cb_exp_sum_after_reduction);
-            unary_bcast_init<BroadcastType::COL>(cb_exp_sum_after_reduction);
-            unary_bcast<BroadcastType::COL>(
-                cb_exp_sum_after_reduction, /* tile idx */ 0, /* reg tile idx */ sum_exp_register);
-
-            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-#ifdef EVERYTHING_FITS_IN_L1
-                const uint32_t input_tile_idx = col + block_idx;
-#else
-                const uint32_t input_tile_idx = block_idx;
-#endif
-
-                reconfig_data_format(cb_input, cb_max_value_after_reduction);
-                sub_bcast_cols_init(cb_input, cb_max_value_after_reduction);
-                sub_tiles_bcast<BroadcastType::COL>(
-                    cb_input,
-                    cb_max_value_after_reduction,
-                    /* tile_idx */ input_tile_idx,
-                    /* tile_idx */ 0,
-                    /* register idx */ block_idx);
-
-                sdpa_exp_tile_init();
-                sdpa_exp_tile(block_idx);  // calculate exp for each tile in tile register
-
-                mul_binary_tile_init();
-                mul_binary_tile(block_idx, sum_exp_register, block_idx);  // multiply by scaler
-
-                binop_with_scalar_tile_init();
-                mul_unary_tile(block_idx, scaler_bits);  // multiply by scaler
-
-                if constexpr (do_mask_w) {
-                    // Zero the vocab-padding lanes of the last tile so no gradient flows into
-                    // padded weight columns (exp(x - max) is nonzero there otherwise).
-                    if (col + block_idx + 1 == Wt) {
-                        // mask_tile requires the mask in the register right after the data
-                        // register. Wt % block_size == 0, so the last tile lands in the final
-                        // block_idx and that register is sum_exp_register; clobbering it is safe
-                        // because this tile has already consumed it and it is re-broadcast from
-                        // the CB at the start of every block.
-                        const uint32_t mask_register = block_idx + 1U;
-                        copy_init(cb_mask);
-                        copy_tile(cb_mask, /* tile_idx */ 0, /* register idx */ mask_register);
-
-                        mask_tile_init();
-                        mask_tile(block_idx, mask_register);
-                    }
-                }
-            }
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_reconfig_data_format(cb_output);
-            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                pack_tile(block_idx, cb_output);
-            }
-            tile_regs_release();
-            cb_push_back(cb_output, block_size);
-
-#ifndef EVERYTHING_FITS_IN_L1
-            cb_pop_front(cb_input, block_size);
-#endif
-        }
-
-        cb_pop_front(cb_max_value_after_reduction, onetile);  // pop tile after reduction
-        cb_pop_front(cb_exp_sum_after_reduction, onetile);    // pop tile after reduction
-
-#ifdef EVERYTHING_FITS_IN_L1
-        cb_pop_front(cb_input, Wt);  // pop Wt tiles from input buffer
-#endif
-    }
-
-    // pop scaler and masks
-    if constexpr (do_mask_w) {
-        cb_pop_front(cb_mask, onetile);
-        cb_pop_front(cb_max_mask, onetile);
-    }
-    cb_pop_front(cb_reduction_scaler, onetile);
+    cb_pop_front(Cb::ccols, 1);
 }

@@ -6,21 +6,56 @@
 
 #include "cross_entropy_bw_program_factory.hpp"
 #include "metal/common/tensor_validation.hpp"
+#include "metal/ops/log_softmax/device/row_softmax_program.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttml::metal::ops::cross_entropy_bw::device {
+
+namespace {
+// The gradient in the input's dtype and memory configuration. The program writes its tiles in the input's format,
+// so a preallocated output must have exactly this spec.
+tt::tt_metal::TensorSpec output_spec(const ttnn::Tensor& input) {
+    return tt::tt_metal::TensorSpec(
+        input.logical_shape(),
+        tt::tt_metal::TensorLayout(
+            input.dtype(),
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE, input.tensor_spec().tile()),
+            input.memory_config()));
+}
+}  // namespace
 
 void CrossEntropyBackwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     const auto& target_tensor = tensor_args.target;
     const auto& preallocated_output_tensor = tensor_args.preallocated_output;
-    check_device_tensor(input_tensor, "CrossEntropyBackward", "Input");
+    check_device_tensor(
+        input_tensor,
+        "CrossEntropyBackward",
+        "Input",
+        {.dtypes = {tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::DataType::FLOAT32},
+         .layout = tt::tt_metal::Layout::TILE,
+         .buffer_type = tt::tt_metal::BufferType::DRAM});
+    // The fused row-softmax program streams interleaved tiles and keeps column indices as exact FP32.
+    TT_FATAL(
+        input_tensor.logical_shape().rank() == 4 && input_tensor.memory_config() == ttnn::DRAM_MEMORY_CONFIG &&
+            row_softmax::supports_tile(input_tensor.tensor_spec().tile()),
+        "CrossEntropyBackward: input must be a rank-4 interleaved DRAM tensor of supported tiles, got {} with tile {}",
+        input_tensor.logical_shape(),
+        input_tensor.tensor_spec().tile().get_tile_shape());
+    TT_FATAL(
+        input_tensor.logical_shape()[-1] > 0 && input_tensor.logical_shape()[-1] <= (1U << 24),
+        "CrossEntropyBackward: vocabulary width must be in [1, 2^24], got {}",
+        input_tensor.logical_shape()[-1]);
+    // The kernels take tile counts from the padded shape and mask only the last tile's columns past the logical
+    // width; the output has one tile row per logical tile row.
+    check_tile_padding(input_tensor, "CrossEntropyBackward", "Input");
     check_device_tensor(
         target_tensor,
         "CrossEntropyBackward",
         "Target",
         {.dtypes = {tt::tt_metal::DataType::UINT32}, .layout = tt::tt_metal::Layout::ROW_MAJOR});
+    check_same_device(target_tensor, input_tensor, "CrossEntropyBackward", "Target", "Input");
 
     // The reader walks one row-major target page per batch-channel slice of the input
     // (page = tile_row / Ht over NC * Ht rows) and sizes each page read from the target's
@@ -44,7 +79,45 @@ void CrossEntropyBackwardDeviceOperation::validate_on_program_cache_miss(
         input_nc_pages);
 
     if (preallocated_output_tensor.has_value()) {
-        check_device_tensor(preallocated_output_tensor.value(), "CrossEntropyBackward", "Preallocated Output");
+        const auto& output = preallocated_output_tensor.value();
+        check_device_tensor(
+            output,
+            "CrossEntropyBackward",
+            "Preallocated Output",
+            {.dtypes = {tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::DataType::FLOAT32},
+             .buffer_type = tt::tt_metal::BufferType::DRAM});
+        check_same_device(output, input_tensor, "CrossEntropyBackward", "Preallocated Output", "Input");
+        // Another dtype or shape would be written past the end of the buffer or read back in the wrong format.
+        const auto expected = output_spec(input_tensor);
+        TT_FATAL(
+            output.tensor_spec() == expected,
+            "CrossEntropyBackward: preallocated output must be {} {} in interleaved DRAM like the input, got {} {}",
+            expected.logical_shape(),
+            enchantum::to_string(expected.data_type()),
+            output.logical_shape(),
+            enchantum::to_string(output.dtype()));
+    }
+
+    if (tensor_args.upstream.has_value()) {
+        const auto& upstream = tensor_args.upstream.value();
+        check_device_tensor(
+            upstream,
+            "CrossEntropyBackward",
+            "Upstream",
+            {.dtypes = {tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::DataType::FLOAT32},
+             .layout = tt::tt_metal::Layout::TILE,
+             .buffer_type = tt::tt_metal::BufferType::DRAM});
+        check_same_device(upstream, input_tensor, "CrossEntropyBackward", "Upstream", "Input");
+        auto per_row_shape = input_tensor.logical_shape();
+        per_row_shape[-1] = 1U;
+        TT_FATAL(
+            upstream.tensor_spec().tile() == input_tensor.tensor_spec().tile() &&
+                (upstream.logical_shape() == ttnn::Shape({1, 1, 1, 1}) ||
+                 (upstream.logical_shape() == per_row_shape &&
+                  upstream.padded_shape()[-2] == input_tensor.padded_shape()[-2])),
+            "CrossEntropyBackward: upstream must be [1, 1, 1, 1] or {} in the input's tiles, got {}",
+            per_row_shape,
+            upstream.logical_shape());
     }
 }
 
@@ -53,11 +126,7 @@ CrossEntropyBackwardDeviceOperation::spec_return_value_t CrossEntropyBackwardDev
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output->tensor_spec();
     }
-    auto input_logical_shape = tensor_args.input.logical_shape();
-    return tt::tt_metal::TensorSpec(
-        ttnn::Shape(input_logical_shape),
-        tt::tt_metal::TensorLayout(
-            tensor_args.input.dtype(), tt::tt_metal::Layout::TILE, tensor_args.input.memory_config()));
+    return output_spec(tensor_args.input);
 }
 
 CrossEntropyBackwardDeviceOperation::tensor_return_value_t CrossEntropyBackwardDeviceOperation::create_output_tensors(
@@ -91,7 +160,8 @@ ttml_cross_entropy_bw(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& target_tensor,
     float scaler,
-    const std::optional<ttnn::Tensor>& preallocated_output) {
+    const std::optional<ttnn::Tensor>& preallocated_output,
+    const std::optional<ttnn::Tensor>& upstream) {
     using OperationType = ttml::metal::ops::cross_entropy_bw::device::CrossEntropyBackwardDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{.scaler = scaler};
@@ -99,6 +169,7 @@ ttml_cross_entropy_bw(
         .input = input_tensor,
         .target = target_tensor,
         .preallocated_output = preallocated_output,
+        .upstream = upstream,
     };
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
