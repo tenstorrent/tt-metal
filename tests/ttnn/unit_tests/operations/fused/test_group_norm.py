@@ -2716,6 +2716,7 @@ def test_group_norm_output_defaults_to_input_memory_config(device, input_memory)
 
     core_grid = None
     memory_config = ttnn.DRAM_MEMORY_CONFIG if input_memory == "dram" else ttnn.L1_MEMORY_CONFIG
+
     if input_memory == "height_sharded":
         core_grid = ttnn.CoreGrid(y=1, x=8)
         memory_config = ttnn.create_sharded_memory_config(
@@ -2726,6 +2727,11 @@ def test_group_norm_output_defaults_to_input_memory_config(device, input_memory)
         memory_config = ttnn.create_sharded_memory_config(
             (N * HW // 4, C // 2), core_grid, ttnn.ShardStrategy.BLOCK, use_height_and_width_as_shard_shape=True
         )
+
+    if core_grid is not None:
+        device_grid = device.compute_with_storage_grid_size()
+        if device_grid.x < core_grid.x or device_grid.y < core_grid.y:
+            pytest.skip(f"device grid too small for {core_grid.x}x{core_grid.y}")
 
     tt_input = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
     tt_output = ttnn.group_norm(tt_input, num_groups=G, epsilon=1e-5, core_grid=core_grid, inplace=False)
