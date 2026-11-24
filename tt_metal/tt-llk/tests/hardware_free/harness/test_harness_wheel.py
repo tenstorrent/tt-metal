@@ -9,9 +9,11 @@ wheel. The tests here pin the packaging itself.
 
 from __future__ import annotations
 
+import ast
 import csv
 import importlib.util
 import io
+import sys
 import zipfile
 from email.parser import BytesParser
 from pathlib import Path, PurePosixPath
@@ -134,3 +136,53 @@ def test_default_version_leads_with_the_api_version():
 
     assert build_wheel.api_version() == tt_llk_harness.HARNESS_API_VERSION
     assert build_wheel.default_version().api == tt_llk_harness.HARNESS_API_VERSION
+
+
+# The harness module that imports an in-tree test module, so it works from a checkout only.
+_IN_TREE_ONLY_IMPORTS = {"helpers/bf16_sweep.py": {"test_eltwise_unary_sfpu"}}
+
+
+def _imported(source: bytes) -> set[str]:
+    """Top-level names of the absolute imports of a module, wherever in it they are."""
+    names = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            names.update(alias.name.partition(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0:
+            names.add(node.module.partition(".")[0])
+    return names
+
+
+def test_wheel_requires_what_its_python_imports(wheel):
+    """Every test here runs where all of ``tests/requirements.txt`` is installed, so a requirement the wheel
+    does not declare breaks nothing until somebody installs the wheel on its own."""
+    shipped = {
+        *(package.name for package in build_wheel.PACKAGES.values()),
+        *(module.stem for module in build_wheel.MODULES.values()),
+        "tt_llk_perf",
+    }
+    declared = {
+        module
+        for modules in build_wheel.RUNTIME_REQUIREMENTS.values()
+        for module in modules
+    }
+    imported = set()
+    with zipfile.ZipFile(wheel) as archive:
+        for name in archive.namelist():
+            if name.endswith(".py"):
+                imported |= _imported(archive.read(name)) - _IN_TREE_ONLY_IMPORTS.get(
+                    name, set()
+                )
+    third_party = imported - set(sys.stdlib_module_names) - shipped
+
+    assert sorted(third_party - declared) == [], "imported, but not required"
+    assert sorted(declared - third_party) == [], "required, but no longer imported"
+
+
+def test_wheel_requires_the_plugin_its_fixtures_come_from():
+    """``worker_id``, which the harness plugin's report fixtures take, is pytest-xdist's; no import shows that.
+
+    ``test_out_of_tree_contract.py`` runs the installed wheel with this plugin
+    and no other, so one the harness comes to need without requiring it fails there.
+    """
+    assert "pytest-xdist" in build_wheel.RUNTIME_REQUIREMENTS

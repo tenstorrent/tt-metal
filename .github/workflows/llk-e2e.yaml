@@ -69,11 +69,15 @@ jobs:
       - name: Build the harness wheel
         id: wheel
         shell: bash
+        env:
+          E2E_RESULT: ${{ needs.llk-e2e-summary.result }}
         run: |
           set -euo pipefail
           # Sets the step's version and tag outputs.
           python3 tt_metal/tt-llk/tests/harness_wheel/make_wheel.py --out-dir dist
           cp tt_metal/tt-llk/tests/requirements.txt dist/requirements.txt
+          # success, failure or skipped: whether the e2e tests ran on this commit, and how they ended.
+          echo "$E2E_RESULT" > dist/e2e-result.txt
       - name: Upload the harness wheel
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:

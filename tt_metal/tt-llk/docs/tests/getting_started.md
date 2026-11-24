@@ -602,16 +602,16 @@ In-tree tests are unchanged: `conftest.py` still re-exports the arch skip marker
 
 ### Installing the harness as a wheel
 
-An external suite does not need a tt-llk checkout on `sys.path`: the harness is also built as a wheel, `tt_llk_harness-<version>-py3-none-any.whl`. The nightly **LLK e2e Tests** workflow (`.github/workflows/llk-e2e.yaml`) builds it in its own job on every run, whether or not the tests passed, and keeps it for 30 days as the `llk-harness-wheel` artifact: the wheel and `requirements.txt`.
+An external suite does not need a tt-llk checkout on `sys.path`: the harness is also built as a wheel, `tt_llk_harness-<version>-py3-none-any.whl`. The nightly **LLK e2e Tests** workflow (`.github/workflows/llk-e2e.yaml`) builds it in its own job on every run, whether or not the tests passed, and keeps it for 30 days as the `llk-harness-wheel` artifact: the wheel, `requirements.txt` and `e2e-result.txt`.
 
 The steps below are the whole setup on a machine that has no tt-metal checkout. They need the GitHub CLI, logged in to an account that can read tenstorrent/tt-metal (`gh auth status` says whether it is).
 
 1. Once per machine, define two `gh` commands:
    ```bash
-   gh alias set llk-wheel --clobber --shell 'gh run download -R tenstorrent/tt-metal -n llk-harness-wheel $(gh run list -R tenstorrent/tt-metal -w llk-e2e.yaml -b "${1:-main}" -s completed -L1 --json databaseId -q ".[].databaseId")'
-   gh alias set llk-wheel-build --clobber --shell 'R=tenstorrent/tt-metal; B="${1:-main}"; gh workflow run llk-e2e.yaml -R $R --ref "$B" -f wheel_only=true && sleep 10 && I=$(gh run list -R $R -w llk-e2e.yaml -b "$B" -e workflow_dispatch -L1 --json databaseId -q ".[].databaseId") && gh run watch $I -R $R --exit-status > /dev/null && gh run download $I -R $R -n llk-harness-wheel'
+   gh alias set llk-wheel --shell 'gh run download -R tenstorrent/tt-metal -n llk-harness-wheel "$(gh api "repos/tenstorrent/tt-metal/actions/workflows/llk-e2e.yaml/runs?branch=${1:-main}&status=completed&per_page=1" -q ".workflow_runs[0].id")"'
+   gh alias set llk-wheel-build --shell 'R=tenstorrent/tt-metal; B="${1:-main}"; gh workflow run llk-e2e.yaml -R $R --ref "$B" -f wheel_only=true && sleep 10 && I=$(gh api "repos/$R/actions/workflows/llk-e2e.yaml/runs?branch=$B&event=workflow_dispatch&per_page=1" -q ".workflow_runs[0].id") && gh run watch $I -R $R --exit-status > /dev/null && gh run download $I -R $R -n llk-harness-wheel'
    ```
-   `gh llk-wheel` finds the newest completed run of the workflow on a branch and downloads that run's `llk-harness-wheel` artifact. `gh llk-wheel-build` does not wait for the nightly: it starts a manual run of the workflow with its `wheel_only` input, which skips the tests and builds the wheel from the branch's current head, waits for it (about half a minute) and downloads the result. It needs write access to the repository, as starting any workflow does. `gh alias list` shows whether the machine already has them; setting them again is harmless.
+   `gh llk-wheel` finds the newest completed run of the workflow on a branch and downloads that run's `llk-harness-wheel` artifact. `gh llk-wheel-build` does not wait for the nightly: it starts a manual run of the workflow with its `wheel_only` input, which skips the tests and builds the wheel from the branch's current head, waits for it (about half a minute) and downloads the result. It needs write access to the repository, as starting any workflow does. Both use only `gh api`, `gh workflow run`, `gh run watch` and `gh run download`, so that they also run on older releases of the GitHub CLI. `gh alias list` shows whether the machine already has them; setting one that exists is refused ("name already taken") unless `--clobber` is added.
 
    Then, in the directory the wheel should land in:
    ```bash
@@ -620,14 +620,13 @@ The steps below are the whole setup on a machine that has no tt-metal checkout. 
    gh llk-wheel-build         # build a wheel from main now, and download it
    gh llk-wheel-build <branch>
    ```
-   Each leaves `tt_llk_harness-<version>-py3-none-any.whl` and `requirements.txt` in the current directory. "no artifact matches" means there is no wheel to get: the newest run of that branch built none (it was cancelled, or it predates the wheel job), or the branch never ran the workflow.
+   Each leaves `tt_llk_harness-<version>-py3-none-any.whl`, `requirements.txt` and `e2e-result.txt` in the current directory. `e2e-result.txt` is one word, the outcome of the e2e tests of the run that built the wheel: `success`, `failure`, or `skipped` when the run built the wheel only, as `gh llk-wheel-build` does. "no artifact matches" means there is no wheel to get: the newest run of that branch built none (it was cancelled, or it predates the wheel job), or the branch never ran the workflow.
 
 2. Install it into the suite's environment:
    ```bash
-   pip install -r requirements.txt          # the versions the harness is tested with
-   pip install tt_llk_harness-*.whl
+   pip install -c requirements.txt tt_llk_harness-*.whl
    ```
-   The wheel requires what the harness imports (torch, tt-exalens, pytest, ...), unpinned, so installing `requirements.txt` first pins them. The wheel carries the same file as `tt_llk_harness/requirements.txt`.
+   The wheel requires what the harness needs (torch, tt-exalens, pytest, pytest-xdist, ...), unpinned. `requirements.txt` is tt-llk's own test environment, the versions the harness is tested with; as constraints (`-c`) it pins what the wheel pulls in and installs nothing else of that environment. It also names the package index the CPU build of torch comes from. The wheel carries the same file as `tt_llk_harness/requirements.txt`.
 
 3. In the suite's rootdir `conftest.py`, load the plugin and state the API the suite was written against:
    ```python
@@ -643,7 +642,7 @@ The steps below are the whole setup on a machine that has no tt-metal checkout. 
    LLK_HOME=<tree with the LLKs> LLK_SFPI_ROOT=<SFPI root> pytest --compile-consumer .
    ```
 
-To build the wheel from a checkout instead, run `tests/harness_wheel/make_wheel.py --out-dir dist` in tt-llk (it needs only git and the Python standard library); `tests/requirements.txt` is the file to install before it.
+To build the wheel from a checkout instead, run `tests/harness_wheel/make_wheel.py --out-dir dist` in tt-llk (it needs only git and the Python standard library); `tests/requirements.txt` is the constraints file to install it with.
 
 On the scheduled run of `main`, if the tests passed and the repository variable `LLK_HARNESS_WHEEL_RELEASE_REPO` names a repository, the job also publishes the wheel there as a release (`gh release download -R <that repository> -p '*.whl'` then gets the newest tested one); nothing here deletes old releases. The token is the `LLK_HARNESS_WHEEL_RELEASE_TOKEN` secret of the `llk-harness-wheel-release` environment, which should allow deployments from `main` only. Who can download a release is decided by that repository's visibility.
 

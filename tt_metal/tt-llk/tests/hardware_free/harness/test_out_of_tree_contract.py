@@ -244,6 +244,11 @@ def _run_fixture(
         str(report),
         ".",
     ]
+    if harness_site is not None:
+        # An installed harness gets the pytest plugins its wheel requires (pytest-xdist) and no other: one that is
+        # merely installed in this environment must not be what the fixture passes with.
+        env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
+        argv += ["-p", "xdist.plugin"]
 
     # start_new_session so the whole process group can be killed on timeout:
     # the child fans compiles out across a ThreadPoolExecutor, and killing only

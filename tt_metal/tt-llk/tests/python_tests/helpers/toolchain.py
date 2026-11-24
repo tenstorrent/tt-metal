@@ -107,7 +107,11 @@ def installed_sfpi_version(root: Path) -> SfpiVersion:
     compiler = root / _COMPILER
     try:
         banner = subprocess.run(
-            [str(compiler), "--version"], check=True, capture_output=True, text=True
+            ["riscv-tt-elf-g++", "--version"],
+            executable=compiler,
+            check=True,
+            capture_output=True,
+            text=True,
         ).stdout
     except (OSError, subprocess.CalledProcessError) as error:
         # A toolchain built for another machine lands here (an x86_64 SFPI on an aarch64 host, say).

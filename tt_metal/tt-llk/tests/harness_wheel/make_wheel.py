@@ -86,22 +86,26 @@ LLK_HOME_FILES = (
 LLK_HOME_PREFIX = PurePosixPath("tt_llk_harness/llk_home")
 REQUIREMENTS = "tests/requirements.txt"
 REQUIREMENTS_IN_WHEEL = PurePosixPath("tt_llk_harness/requirements.txt")
-# What the harness imports.
-RUNTIME_REQUIREMENTS = (
-    "filelock",
-    "loguru",
-    "ml_dtypes",
-    "mpmath",
-    "numpy",
-    "pandas",
-    "pyarrow",
-    "pytest",
-    "pytest-xdist",  # the plugin's fixtures take worker_id
-    "pyyaml",
-    "torch",
-    "tt-exalens",
-    "typing-extensions",
-)
+# What an installed harness needs: distribution -> the top-level modules the harness imports from it.
+# tests/hardware_free/harness/test_harness_wheel.py holds this to the imports of the files that ship.
+RUNTIME_REQUIREMENTS = {
+    "filelock": ("filelock",),
+    "loguru": ("loguru",),
+    "ml_dtypes": ("ml_dtypes",),
+    "mpmath": ("mpmath",),
+    "numpy": ("numpy",),
+    "pandas": ("pandas",),
+    "pyarrow": ("pyarrow",),
+    "pytest": ("pytest",),
+    # Imported by nothing: the plugin's report fixtures take ``worker_id``, a fixture of this plugin.
+    "pytest-xdist": (),
+    "pyyaml": ("yaml",),
+    "torch": ("torch",),
+    "tt-exalens": ("ttexalens",),
+    # A requirement of tt-exalens as well, but the harness imports it itself (helpers/hardware_controller.py).
+    "tt-umd": ("tt_umd",),
+    "typing-extensions": ("typing_extensions",),
+}
 
 # Zip's earliest timestamp: a fixed one keeps the archive a function of its contents.
 _ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
