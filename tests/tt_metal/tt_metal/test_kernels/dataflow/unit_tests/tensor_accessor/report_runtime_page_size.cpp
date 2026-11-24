@@ -30,7 +30,12 @@ void kernel_main() {
     constexpr uint32_t input_page_size_crta_index = 0;
 
     constexpr uint32_t input_ta_cta_offset = 0;
+#ifdef RUNTIME_CRTA_OFFSET
+    // The input's common runtime args start at an offset given to the args object, not in its type.
+    constexpr auto input_ta_args = TensorAccessorArgs<input_ta_cta_offset>(RUNTIME_CRTA_OFFSET);
+#else
     constexpr auto input_ta_args = TensorAccessorArgs<input_ta_cta_offset>();
+#endif
 
     // A-collapse: the input accessor consumes one fewer CTA word (no page-size slot), so the
     // output accessor's CTA offset must come from next_compile_time_args_offset(), not a fixed +2.
@@ -39,7 +44,12 @@ void kernel_main() {
 
     // 3-arg ctor: feed the page size from the args getter (which reads the CRTA), mirroring the
     // Metal 2.0 binding token. The default-constructed args reads common arg index 0.
+#ifdef RUNTIME_CRTA_OFFSET
+    // 2-arg ctor: the accessor must take the page size from these args, at their offset.
+    auto input_accessor = TensorAccessor(input_ta_args, input_addr);
+#else
     auto input_accessor = TensorAccessor(input_ta_args, input_addr, input_ta_args.get_aligned_page_size());
+#endif
     auto output_accessor = TensorAccessor(output_ta_args, output_addr);
 
     constexpr uint32_t output_cb = 0;

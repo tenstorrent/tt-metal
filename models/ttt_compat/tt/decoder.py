@@ -251,7 +251,7 @@ class TransformerBlock(LightweightModule):
         layer prefix and routes each layer's slice here.
 
         Strict: missing required keys raise ``KeyError``; any unconsumed key
-        (e.g. an extra bias, q/k-norm, or Gemma-style pre/post-FF norm not yet
+        (e.g. an extra bias or Gemma-style pre/post-FF norm not yet
         wired into the leaf ``update()`` methods) raises ``ValueError``.
 
         ``hf_rope`` is forwarded to ``Attention.update``.
@@ -271,6 +271,8 @@ class TransformerBlock(LightweightModule):
             k_proj=consume("self_attn.k_proj.weight"),
             v_proj=consume("self_attn.v_proj.weight"),
             o_proj=consume("self_attn.o_proj.weight"),
+            q_norm=consume("self_attn.q_norm.weight") if self.attention._q_norm_module is not None else None,
+            k_norm=consume("self_attn.k_norm.weight") if self.attention._k_norm_module is not None else None,
             hf_rope=hf_rope,
         )
         self.feed_forward.update(
@@ -286,7 +288,7 @@ class TransformerBlock(LightweightModule):
             raise ValueError(
                 f"TransformerBlock.update_weights (layer {self.layer_num}): "
                 f"{len(unconsumed)} HF key(s) not consumed within this layer. "
-                f"This usually means an extra weight (a bias, q/k norm, or "
+                f"This usually means an extra weight (a bias or "
                 f"Gemma-style pre/post-FF norm) that the leaf .update() "
                 f"doesn't yet support. Showing up to 10: {sample}"
             )

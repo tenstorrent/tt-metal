@@ -5,6 +5,7 @@ import math
 from dataclasses import dataclass
 from typing import List
 
+import numpy as np
 import pytest
 import torch
 from helpers.constraints import is_valid_quasar_fpu_path
@@ -44,9 +45,12 @@ from helpers.sfpu_dispatch_constants import (
     DROPOUT_PROBABILITY_MAX,
     DROPOUT_SCALE,
     DROPOUT_SEED,
+    HARDSHRINK_LAMBDA,
     INT_MAXMIN_SCALAR,
     RELU_MAX_THRESHOLD,
     RELU_MIN_THRESHOLD,
+    THRESHOLD_T,
+    THRESHOLD_V,
     UNARY_MAX_MIN_VALUE,
 )
 from helpers.sfpu_domains import for_op, op_edge_points, sfpu_unary_ops
@@ -596,6 +600,10 @@ def prepare_unary_inputs(
         return prepare_trig_inputs(src_A, mathop, input_format)
     if mathop == MathOperation.Signbit:
         return prepare_signbit_inputs(src_A, src_B, input_format, output_format)
+    if mathop == MathOperation.Heaviside:
+        return prepare_heaviside_inputs(src_A, src_B, input_format, output_format)
+    if mathop in FLOAT_CLASS_PREDICATES:
+        return prepare_float_class_inputs(src_A, src_B, input_format, output_format)
     if mathop in COMP_FORMAT_OPS:
         # Unsigned formats need non-negative stimuli (a signed split would wrap under the unsigned
         # dtype); signed formats use the sign-vs-magnitude builder.
@@ -769,6 +777,222 @@ def _elwadd_datacopy_dest_image(src: torch.Tensor) -> torch.Tensor:
     one (torch's fp32 -> bf16 cast), which would put the sign bit back.
     """
     return torch.where((src == 0) | torch.isnan(src), torch.zeros_like(src), src)
+
+
+# Heaviside edge inputs as raw bits, per float input format: (signed view dtype, bit width, patterns).
+# Both zeros, the smallest and largest denormal and the smallest normal of either sign, both
+# infinities, a quiet NaN of either sign, the largest finite of either sign, and +/-1.0.
+_HEAVISIDE_EDGE_BITS = {
+    DataFormat.Float32: (
+        torch.int32,
+        32,
+        (
+            0x00000000,
+            0x80000000,
+            0x00000001,
+            0x80000001,
+            0x007FFFFF,
+            0x807FFFFF,
+            0x00800000,
+            0x80800000,
+            0x7F800000,
+            0xFF800000,
+            0x7FC00000,
+            0xFFC00000,
+            0x7F7FFFFF,
+            0xFF7FFFFF,
+            0x3F800000,
+            0xBF800000,
+        ),
+    ),
+    DataFormat.Float16_b: (
+        torch.int16,
+        16,
+        (
+            0x0000,
+            0x8000,
+            0x0001,
+            0x8001,
+            0x007F,
+            0x807F,
+            0x0080,
+            0x8080,
+            0x7F80,
+            0xFF80,
+            0x7FC0,
+            0xFFC0,
+            0x7F7F,
+            0xFF7F,
+            0x3F80,
+            0xBF80,
+        ),
+    ),
+}
+# The value calculate_heaviside returns at zero in the tt-llk harness (sfpu_operations_quasar.h).
+HEAVISIDE_VALUE_AT_ZERO = 0.5
+
+
+def prepare_heaviside_inputs(
+    src_A: torch.Tensor,
+    src_B: torch.Tensor,
+    input_format: DataFormat,
+    output_format: DataFormat,
+) -> torch.Tensor:
+    """
+    Comp stimuli (finite values of both signs) with the edge patterns planted in every face.
+
+    The run of patterns starts one row and one lane later in each face of a tile, so across a tile
+    every pattern lands in different lanes and in both rows of an SFPU pass. The offset repeats every
+    four faces, which keeps the run inside its face for any tile count.
+    """
+    values = prepare_comp_inputs(src_A, src_B, input_format, output_format)
+    int_dtype, width, patterns = _HEAVISIDE_EDGE_BITS[input_format]
+    flat = values.flatten().clone()
+    bits = flat.view(int_dtype)
+    for face, base in enumerate(range(0, flat.numel(), FACE_ELEMS)):
+        for i, pattern in enumerate(patterns):
+            # Two's-complement spelling, so the write goes through the signed integer view.
+            signed = pattern - (1 << width) if pattern >> (width - 1) else pattern
+            bits[base + 8 + 17 * (face % 4) + i] = signed
+    return flat.reshape(values.shape)
+
+
+def heaviside_expected(src: torch.Tensor, variant: QuasarSfpuVariant) -> torch.Tensor:
+    """
+    calculate_heaviside on the bits that reach the SFPU: the value at either zero, else 0.0 for a
+    set sign bit and 1.0 for a clear one. Infinities, denormals and NaN dispatch on the sign bit like
+    any other non-zero.
+
+    Unpack-to-Dest delivers the input bits unchanged. The 32-bit-Dest FPU datacopy is an ELWADD (see
+    _drops_zero_and_nan_sign): it clears the sign of -0.0 and of a negative NaN, and ttsim also has it
+    flush a denormal to zero, so there a denormal takes the value at zero and every NaN is 1.0.
+    """
+    int_dtype, width, _ = _HEAVISIDE_EDGE_BITS[variant.formats.input_format]
+    flat = src.flatten().contiguous()
+    bits = flat.view(int_dtype).to(torch.int64)
+    sign_set = bits < 0
+    magnitude = bits & ((1 << (width - 1)) - 1)
+    is_zero = magnitude == 0
+    if variant.uses_fpu:
+        is_denormal = flat.to(torch.float32).abs() < torch.finfo(torch.float32).tiny
+        is_zero = is_zero | is_denormal
+        sign_set = sign_set & ~torch.isnan(flat)
+    expected = torch.where(sign_set, 0.0, 1.0)
+    expected = torch.where(is_zero, HEAVISIDE_VALUE_AT_ZERO, expected)
+    return expected.to(format_dict[variant.formats.output_format])
+
+
+# isinf / isposinf / isneginf / isnan / isfinite and the torch predicate each one must equal.
+FLOAT_CLASS_PREDICATES = {
+    MathOperation.Isinf: torch.isinf,
+    MathOperation.Isposinf: torch.isposinf,
+    MathOperation.Isneginf: torch.isneginf,
+    MathOperation.Isnan: torch.isnan,
+    MathOperation.Isfinite: torch.isfinite,
+}
+
+# Raw bits on either side of every bound the predicates compare against, per float input format:
+# (signed view dtype, bit width, patterns). Both infinities, the largest finite, the smallest and
+# largest NaN payload and a quiet NaN of either sign, then ordinary values: both zeros, the smallest
+# normal and +/-1.0.
+_FLOAT_CLASS_EDGE_BITS = {
+    DataFormat.Float32: (
+        torch.int32,
+        32,
+        (
+            0x7F800000,
+            0xFF800000,
+            0x7F7FFFFF,
+            0xFF7FFFFF,
+            0x7F800001,
+            0xFF800001,
+            0x7FFFFFFF,
+            0xFFFFFFFF,
+            0x7FC00000,
+            0xFFC00000,
+            0x00000000,
+            0x80000000,
+            0x00800000,
+            0x80800000,
+            0x3F800000,
+            0xBF800000,
+        ),
+    ),
+    DataFormat.Float16_b: (
+        torch.int16,
+        16,
+        (
+            0x7F80,
+            0xFF80,
+            0x7F7F,
+            0xFF7F,
+            0x7F81,
+            0xFF81,
+            0x7FFF,
+            0xFFFF,
+            0x7FC0,
+            0xFFC0,
+            0x0000,
+            0x8000,
+            0x0080,
+            0x8080,
+            0x3F80,
+            0xBF80,
+        ),
+    ),
+}
+# One SFPU pass covers two 16-lane Dest rows; this is the pass of each face that is filled with
+# non-finite values only.
+_FLOAT_CLASS_NON_FINITE_PASS = 5
+_SFPU_PASS_ELEMS = 2 * FACE_C_DIM
+
+
+def _write_raw_bits(bits: torch.Tensor, start: int, patterns, width: int) -> None:
+    """Write unsigned bit patterns through a signed integer view, from *start* on."""
+    for i, pattern in enumerate(patterns):
+        bits[start + i] = pattern - (1 << width) if pattern >> (width - 1) else pattern
+
+
+def prepare_float_class_inputs(
+    src_A: torch.Tensor,
+    src_B: torch.Tensor,
+    input_format: DataFormat,
+    output_format: DataFormat,
+) -> torch.Tensor:
+    """
+    Comp stimuli (finite values of both signs) with the bound patterns planted in every face.
+
+    As in prepare_heaviside_inputs, the run of patterns moves one row and one lane per face. Every
+    face also gets one SFPU pass of non-finite values only: with the finite passes around it, each
+    predicate sees passes in which no lane matches, so a Dest step that depended on the predicated
+    store writing a lane would misplace every later row.
+    """
+    values = prepare_comp_inputs(src_A, src_B, input_format, output_format)
+    int_dtype, width, patterns = _FLOAT_CLASS_EDGE_BITS[input_format]
+    non_finite = [
+        p for p in patterns if (p & (0xFF << (width - 9))) == 0xFF << (width - 9)
+    ]
+    flat = values.flatten().clone()
+    bits = flat.view(int_dtype)
+    for face, base in enumerate(range(0, flat.numel(), FACE_ELEMS)):
+        _write_raw_bits(bits, base + 8 + 17 * (face % 4), patterns, width)
+        pass_start = base + _FLOAT_CLASS_NON_FINITE_PASS * _SFPU_PASS_ELEMS
+        _write_raw_bits(bits, pass_start, (non_finite * 4)[:_SFPU_PASS_ELEMS], width)
+    return flat.reshape(values.shape)
+
+
+def float_class_expected(
+    mathop: MathOperation, src: torch.Tensor, output_format: DataFormat
+) -> torch.Tensor:
+    """
+    1.0 where the predicate holds and 0.0 elsewhere.
+
+    The class of a value is the same on every route of float_edge_variants: Unpack-to-Dest delivers
+    the input bits, and the ELWADD datacopy changes only the sign of a zero or a NaN and a denormal's
+    magnitude.
+    """
+    holds = FLOAT_CLASS_PREDICATES[mathop](src.flatten().to(torch.float32))
+    return torch.where(holds, 1.0, 0.0).to(format_dict[output_format])
 
 
 # ---------------------------------------------------------------------------
@@ -1319,6 +1543,10 @@ def run_eltwise_unary_sfpu_quasar(
                 input_dimensions,
                 max_min_scalar=scalar,
             )
+        elif mathop == MathOperation.Heaviside:
+            golden_tensor = heaviside_expected(src_A, format_variant)
+        elif mathop in FLOAT_CLASS_PREDICATES:
+            golden_tensor = float_class_expected(mathop, src_A, formats.output_format)
         elif format_dict[formats.input_format].is_floating_point:
             generate_golden = get_golden_generator(UnarySFPUGolden)
             golden_tensor = generate_golden(
@@ -1462,6 +1690,20 @@ def run_eltwise_unary_sfpu_quasar(
         assert torch.equal(
             res_tensor, golden_tensor
         ), "hardmish is not bit-exact against the golden"
+
+    if mathop == MathOperation.Heaviside:
+        # Three exact outputs, so nothing short of equality is a pass.
+        mismatch = res_tensor.to(torch.float32) != golden_tensor.to(torch.float32)
+        assert not bool(
+            mismatch.any()
+        ), f"heaviside differs from its bit-level model in {int(mismatch.sum())} lanes"
+
+    if mathop in FLOAT_CLASS_PREDICATES:
+        # Two exact outputs, so nothing short of equality is a pass.
+        mismatch = res_tensor.to(torch.float32) != golden_tensor.to(torch.float32)
+        assert not bool(
+            mismatch.any()
+        ), f"{mathop.name} differs from torch in {int(mismatch.sum())} lanes"
 
     if mathop == MathOperation.Tan:
         # The suite tolerance passes a tangent whose polynomial coefficients are bound in the
@@ -1698,6 +1940,73 @@ def test_unary_max_min_scalar_quasar(
     )
 
 
+def float_edge_variants(mathop) -> List[QuasarSfpuVariant]:
+    """
+    Routes of *mathop* on which the input bits reach Dest without a narrowing unpack: Unpack-to-Dest
+    at the input's own width (16-bit and 32-bit Dest), and the FPU datacopy into a 32-bit Dest.
+    """
+    return [
+        variant
+        for variant in generate_quasar_sfpu_format_variants(
+            mathop, SFPU_UNARY_FORMATS, full_format_route_sweep=True
+        )
+        if variant.uses_fpu or variant.unpack_dst == variant.formats.input_format
+    ]
+
+
+@pytest.mark.quasar
+@parametrize(
+    mathop=[MathOperation.Heaviside],
+    format_variant=float_edge_variants(MathOperation.Heaviside),
+    input_dimensions=runtime(list(TENSOR_DIMS[:1])),
+)
+def test_eltwise_unary_sfpu_heaviside_edges_quasar(
+    mathop,
+    format_variant,
+    input_dimensions,
+):
+    """Heaviside, bit-exact, on both zeros, denormals, infinities and NaN of either sign.
+
+    See prepare_heaviside_inputs for the stimulus and heaviside_expected for the model.
+    """
+    run_eltwise_unary_sfpu_quasar(
+        format_variant.formats,
+        format_variant.dest_acc,
+        mathop,
+        ApproximationMode.No,
+        input_dimensions,
+        DestSync.Half,
+        format_variant=format_variant,
+    )
+
+
+@pytest.mark.quasar
+@parametrize(
+    mathop=list(FLOAT_CLASS_PREDICATES),
+    format_variant=float_edge_variants,
+    input_dimensions=runtime(list(TENSOR_DIMS)),
+)
+def test_eltwise_unary_sfpu_float_class_quasar(
+    mathop,
+    format_variant,
+    input_dimensions,
+):
+    """isinf, isposinf, isneginf, isnan and isfinite, exact, on the bits either side of each bound.
+
+    See prepare_float_class_inputs for the stimulus. One and four tiles: the kernel steps Dest from
+    its predicated store, so a missed step shows as rows shifted in every later face and tile.
+    """
+    run_eltwise_unary_sfpu_quasar(
+        format_variant.formats,
+        format_variant.dest_acc,
+        mathop,
+        ApproximationMode.No,
+        input_dimensions,
+        DestSync.Half,
+        format_variant=format_variant,
+    )
+
+
 @pytest.mark.quasar
 @parametrize(
     mathop=[MathOperation.Signbit],
@@ -1877,6 +2186,357 @@ def test_cumsum_tilized_dest_quasar(formats, dest_acc):
     assert torch.allclose(
         result, expected, rtol=0, atol=1e-3
     ), f"cumsum mismatch:\ngot\n{result}\nexpected\n{expected}"
+
+
+# hardshrink and threshold, exact: values on either side of the bound, and rows in which no lane,
+# or every lane, is overwritten (both kernels step Dest from the second row's store).
+_SFPI_ROW_ELEMS = 2 * FACE_C_DIM  # one sfpi row is two 16-lane Dest rows
+_BODY_ELEMS = 2 * _SFPI_ROW_ELEMS
+_BODIES_PER_FACE = MAX_FACE_R_DIM * FACE_C_DIM // _BODY_ELEMS
+
+
+@dataclass(frozen=True)
+class OverwriteOp:
+    """An op that overwrites the lanes on one side of a bound: where they lie and what is stored."""
+
+    bound: float
+    overwritten: tuple  # (low, high) of values the kernel overwrites
+    kept: tuple  # (low, high) of values it leaves alone
+    expected: object  # float32 tensor -> float32 tensor
+
+
+OVERWRITE_OPS = {
+    MathOperation.Hardshrink: OverwriteOp(
+        bound=HARDSHRINK_LAMBDA,
+        overwritten=(-HARDSHRINK_LAMBDA, HARDSHRINK_LAMBDA),
+        kept=(1.0, 4.0),
+        expected=lambda x: torch.where(
+            x.abs() > HARDSHRINK_LAMBDA, x, torch.zeros_like(x)
+        ),
+    ),
+    MathOperation.Threshold: OverwriteOp(
+        bound=THRESHOLD_T,
+        overwritten=(-4.0, THRESHOLD_T),
+        kept=(6.0, 20.0),
+        expected=lambda x: torch.where(
+            x > THRESHOLD_T, x, torch.full_like(x, THRESHOLD_V)
+        ),
+    ),
+}
+
+
+def _bound_neighbours(bound: float, dtype: torch.dtype) -> torch.Tensor:
+    """+/-bound, the representable values next to each in *dtype*, both zeros and both infinities."""
+    is_fp32 = dtype == torch.float32
+    int_dtype = torch.int32 if is_fp32 else torch.int16
+    at_bound = torch.tensor([bound, -bound], dtype=dtype).view(int_dtype)
+    steps = torch.tensor([-1, 0, 1], dtype=int_dtype)
+    near = (at_bound.unsqueeze(1) + steps).flatten().view(dtype)
+    return torch.cat(
+        [near, torch.tensor([0.0, -0.0, math.inf, -math.inf], dtype=dtype)]
+    )
+
+
+def prepare_overwrite_inputs(
+    mathop: MathOperation, input_format: DataFormat, tile_count: int
+) -> torch.Tensor:
+    """Four two-row bodies per face (see ``bodies``), rotated by one body per face."""
+    op = OVERWRITE_OPS[mathop]
+    dtype = format_dict[input_format]
+
+    def uniform(low, high, count):
+        return low + (high - low) * torch.rand(count)
+
+    def mixed(count):
+        picks_kept = torch.rand(count) < 0.5
+        return torch.where(
+            picks_kept, uniform(*op.kept, count), uniform(*op.overwritten, count)
+        )
+
+    edges = _bound_neighbours(op.bound, dtype)
+    faces = []
+    for face in range(tile_count * MAX_NUM_FACES):
+        bodies = [
+            # Both rows mixed.
+            mixed(_BODY_ELEMS),
+            # A mixed row, then one in which no lane is overwritten.
+            torch.cat([mixed(_SFPI_ROW_ELEMS), uniform(*op.kept, _SFPI_ROW_ELEMS)]),
+            # A row in which no lane is overwritten, then one in which every lane is.
+            torch.cat(
+                [
+                    uniform(*op.kept, _SFPI_ROW_ELEMS),
+                    uniform(*op.overwritten, _SFPI_ROW_ELEMS),
+                ]
+            ),
+            # Mixed, with the bound's neighbours planted in both rows below.
+            mixed(_BODY_ELEMS),
+        ]
+        bodies = [body.to(dtype) for body in bodies]
+        bodies[3][3 : 3 + edges.numel()] = edges
+        bodies[3][_SFPI_ROW_ELEMS + 5 : _SFPI_ROW_ELEMS + 5 + edges.numel()] = edges
+        shift = face % _BODIES_PER_FACE
+        faces.extend(bodies[shift:] + bodies[:shift])
+    return torch.cat(faces)
+
+
+@pytest.mark.quasar
+@parametrize(
+    mathop=list(OVERWRITE_OPS),
+    format_variant=lambda mathop: [
+        variant
+        for variant in generate_quasar_sfpu_format_variants(
+            mathop, SFPU_UNARY_FORMATS, full_format_route_sweep=True
+        )
+        if variant.uses_fpu or variant.unpack_dst == variant.formats.input_format
+    ],
+    input_dimensions=runtime(list(TENSOR_DIMS)),
+)
+def test_eltwise_unary_sfpu_overwrite_quasar(mathop, format_variant, input_dimensions):
+    """hardshrink and threshold, exact, on one and four tiles; see prepare_overwrite_inputs."""
+    formats = format_variant.formats
+    tile_count = (
+        input_dimensions[0]
+        * input_dimensions[1]
+        // (DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM)
+    )
+    src_A = prepare_overwrite_inputs(mathop, formats.input_format, tile_count)
+    src_B = torch.zeros_like(src_A)
+    unpack_to_dest = format_variant.unpack_to_dest
+
+    configuration = create_test_or_perf_config(
+        is_perf=False,
+        run_types=(PerfRunType.L1_TO_L1,),
+        test_config_kwargs={
+            "test_name": "sources/quasar/eltwise_unary_sfpu_quasar_test.cpp",
+            "formats": formats,
+            "templates": [
+                MATH_OP(mathop=mathop),
+                APPROX_MODE(ApproximationMode.No),
+                DATA_COPY_TYPE(DataCopyType.A2D),
+                UNPACKER_ENGINE_SEL(
+                    UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
+                ),
+                DEST_SYNC(DestSync.Half),
+                TYPECAST_FORMATS(),
+            ],
+            "runtimes": [
+                TILE_COUNT(tile_count),
+                NUM_FACES(MAX_NUM_FACES),
+                TEST_FACE_DIMS(),
+                DEST_INDEX(0),
+                LOOP_FACTOR(1),
+            ],
+            "variant_stimuli": StimuliConfig(
+                src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=tile_count,
+                tile_count_B=tile_count,
+                tile_count_res=tile_count,
+                num_faces=MAX_NUM_FACES,
+            ),
+            "unpack_to_dest": unpack_to_dest,
+            "dest_acc": format_variant.dest_acc,
+        },
+    )
+    format_variant.apply_formats(configuration.formats_config)
+
+    res_from_L1 = configuration.run().result
+    out_dtype = format_dict[formats.output_format]
+    result = result_tensor(res_from_L1, formats.output_format).to(torch.float32)
+    expected = (
+        OVERWRITE_OPS[mathop]
+        .expected(src_A.to(torch.float32))
+        .to(out_dtype)
+        .to(torch.float32)
+    )
+
+    wrong = (
+        (result.view(torch.int32) != expected.view(torch.int32))
+        .nonzero()
+        .flatten()
+        .tolist()
+    )
+    assert not wrong, (
+        f"{mathop.name} differs in {len(wrong)} of {expected.numel()} words; first at flat index "
+        f"{wrong[0]}: input {src_A[wrong[0]].item()}, got {result[wrong[0]].item()}, "
+        f"expected {expected[wrong[0]].item()}"
+    )
+
+
+# tiled_prod, raw result words against a model of the chain. The fuser cases cover finite inputs
+# within a tolerance; these add signed zeros, infinities, NaNs and overflow.
+TILED_PROD_TILES = 4
+TILED_PROD_LANES = 32  # 4 Dest rows x 8 column pairs
+TILED_PROD_STEPS = 32  # 8 per face, faces 0-3
+_TILE_ELEMS = MAX_NUM_FACES * MAX_FACE_R_DIM * FACE_C_DIM
+
+# (lane, step, fp32 bits); tile t plants them 5 * t lanes further on. The low half of every
+# pattern is zero, so the high half is the same value in Float16_b.
+_TILED_PROD_SPECIALS = (
+    (0, 0, 0x80000000),  # -0.0 as the first element
+    (1, 0, 0x7F800000),  # +inf first, then inf * -0.0
+    (1, 9, 0x80000000),
+    (2, 0, 0x7FC00000),  # NaN of either sign first
+    (3, 0, 0xFFC00000),
+    (4, 5, 0xFF800000),  # -inf inside a face
+    (5, 7, 0x00000000),  # zeros at a face's last step and inside a later face
+    (5, 20, 0x80000000),
+    (7, 2, 0x7F7F0000),  # two large values: the product overflows
+    (7, 3, 0x7F7F0000),
+    (8, 31, 0x7FC00000),  # NaN as the last element
+    (9, 15, 0x80000000),  # -0.0 then +inf across the face 1 -> 2 boundary
+    (9, 16, 0x7F800000),
+)
+
+
+def _tiled_prod_index(tile: int, lane: int, step: int) -> int:
+    """
+    Flat index, face by face, of the *step*-th element of SFPU *lane* (4 Dest rows x 8 column pairs).
+
+    Per face a lane takes 8 steps: the even then the odd column of its pair, 4 rows down each time.
+    """
+    face, face_step = divmod(step, 8)
+    lane_row, lane_col = divmod(lane, 8)
+    row = 4 * (face_step // 2) + lane_row
+    col = 2 * lane_col + (face_step & 1)
+    return (
+        tile * _TILE_ELEMS + face * MAX_FACE_R_DIM * FACE_C_DIM + row * FACE_C_DIM + col
+    )
+
+
+def _tiled_prod_stimulus(input_format: DataFormat) -> torch.Tensor:
+    """Magnitudes in [0.8, 1.25) of either sign, so a product stays finite, plus the specials."""
+    count = TILED_PROD_TILES * _TILE_ELEMS
+    magnitude = 0.8 + 0.45 * torch.rand(count)
+    sign = torch.where(torch.rand(count) < 0.5, -1.0, 1.0)
+    values = (magnitude * sign).to(format_dict[input_format])
+    is_fp32 = input_format == DataFormat.Float32
+    bits = values.view(torch.int32 if is_fp32 else torch.int16)
+    width = 32 if is_fp32 else 16
+    for tile in range(TILED_PROD_TILES):
+        for lane, step, pattern in _TILED_PROD_SPECIALS:
+            word = pattern if is_fp32 else pattern >> 16
+            signed = word - (1 << width) if word >> (width - 1) else word
+            index = _tiled_prod_index(tile, (lane + 5 * tile) % TILED_PROD_LANES, step)
+            bits[index] = signed
+    return values
+
+
+def tiled_prod_variants() -> List[QuasarSfpuVariant]:
+    """Same-format routes: Unpack-to-Dest into a 16-bit and a 32-bit Dest, and the FPU datacopy."""
+    return [
+        variant
+        for variant in generate_quasar_sfpu_format_variants(
+            MathOperation.TiledProd,
+            [
+                fmt
+                for fmt in SFPU_UNARY_FORMATS
+                if fmt.input_format == fmt.output_format
+            ],
+            full_format_route_sweep=True,
+        )
+        if variant.uses_fpu or variant.unpack_dst == variant.formats.input_format
+    ]
+
+
+def _tiled_prod_expected(src: torch.Tensor, variant: QuasarSfpuVariant) -> torch.Tensor:
+    """
+    Per lane: product = 1.0, then product *= element, stored in place, carried in fp32.
+
+    As on ttsim, a zero product is +0.0 and a NaN product is the positive quiet NaN. A store to a
+    16-bit Dest truncates; a Float16_b pack from a 32-bit Dest rounds to nearest even.
+    """
+    values = src.to(torch.float32).numpy().copy()
+    out = values.copy()
+    narrow = variant.sfpu_dst != DataFormat.Float32
+    with np.errstate(all="ignore"):
+        for tile in range(TILED_PROD_TILES):
+            for lane in range(TILED_PROD_LANES):
+                product = np.float32(1.0)
+                for step in range(TILED_PROD_STEPS):
+                    index = _tiled_prod_index(tile, lane, step)
+                    product = np.float32(product * values[index])
+                    if np.isnan(product):
+                        product = np.float32(np.nan)
+                    elif product == 0:
+                        product = np.float32(0.0)
+                    out[index] = product
+    out_bits = out.view(np.uint32)
+    if narrow:
+        out_bits &= np.uint32(0xFFFF0000)
+    elif variant.formats.output_format != DataFormat.Float32:
+        tie_to_even = (out_bits & np.uint32(0x1FFFF)) == np.uint32(0x8000)
+        out_bits += np.uint32(0x8000)
+        out_bits[tie_to_even] -= np.uint32(0x8000)
+        out_bits &= np.uint32(0xFFFF0000)
+    return torch.from_numpy(out.view(np.int32).copy())
+
+
+@pytest.mark.quasar
+@parametrize(
+    mathop=[MathOperation.TiledProd],
+    format_variant=tiled_prod_variants(),
+)
+def test_tiled_prod_bit_exact_quasar(mathop, format_variant):
+    """tiled_prod, bit-exact, on four tiles; each tile also guards the one before it."""
+    formats = format_variant.formats
+    src_A = _tiled_prod_stimulus(formats.input_format)
+    src_B = torch.zeros_like(src_A)
+    unpack_to_dest = format_variant.unpack_to_dest
+
+    configuration = create_test_or_perf_config(
+        is_perf=False,
+        run_types=(PerfRunType.L1_TO_L1,),
+        test_config_kwargs={
+            "test_name": "sources/quasar/eltwise_unary_sfpu_quasar_test.cpp",
+            "formats": formats,
+            "templates": [
+                MATH_OP(mathop=mathop),
+                APPROX_MODE(ApproximationMode.No),
+                DATA_COPY_TYPE(DataCopyType.A2D),
+                UNPACKER_ENGINE_SEL(
+                    UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
+                ),
+                DEST_SYNC(DestSync.Half),
+                TYPECAST_FORMATS(),
+            ],
+            "runtimes": [
+                TILE_COUNT(TILED_PROD_TILES),
+                NUM_FACES(MAX_NUM_FACES),
+                TEST_FACE_DIMS(),
+                DEST_INDEX(0),
+                LOOP_FACTOR(1),
+            ],
+            "variant_stimuli": StimuliConfig(
+                src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=TILED_PROD_TILES,
+                tile_count_B=TILED_PROD_TILES,
+                tile_count_res=TILED_PROD_TILES,
+                num_faces=MAX_NUM_FACES,
+            ),
+            "unpack_to_dest": unpack_to_dest,
+            "dest_acc": format_variant.dest_acc,
+        },
+    )
+    format_variant.apply_formats(configuration.formats_config)
+
+    res_from_L1 = configuration.run().result
+    result = result_tensor(res_from_L1, formats.output_format).to(torch.float32)
+    got = result.view(torch.int32)
+    expected = _tiled_prod_expected(src_A, format_variant)
+
+    wrong = (got != expected).nonzero().flatten().tolist()
+    assert not wrong, (
+        f"tiled_prod differs from the model in {len(wrong)} words; first at flat index {wrong[0]}: "
+        f"got {got[wrong[0]].item() & 0xFFFFFFFF:#010x}, expected {expected[wrong[0]].item() & 0xFFFFFFFF:#010x}"
+    )
 
 
 # reshuffle_rows: needs an L1 row mask (written to buffer_B) and (input, accumulator) tile pairs,
@@ -2296,6 +2956,8 @@ def _run_fp32_to_int_edge_case(
                 tile_count_B=1,
                 tile_count_res=1,
                 num_faces=MAX_NUM_FACES,
+                # Int32 is two's complement on Quasar; Int8/Int16 stay sign-magnitude.
+                twos_complement=out_format == DataFormat.Int32,
             ),
             "unpack_to_dest": variant.unpack_to_dest,
             "dest_acc": variant.dest_acc,

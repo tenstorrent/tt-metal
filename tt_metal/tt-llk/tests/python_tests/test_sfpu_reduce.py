@@ -671,10 +671,8 @@ def _run_integer_reduce(
     return golden_tensor[:, 0], res_tensor[:, 0]
 
 
-# Green on both arches. The Blackhole INT32_MIN divergence this was written against is fixed: #49589
-# routes Int32 MAX/MIN through calculate_reduce_max_min_int32_col and perform_reduce_row_max_min_int32,
-# dedicated two's-complement compare-and-swap paths correct over the full Int32 range, rather than the
-# sign-magnitude cast around a plain SFPSWAP that ranked INT32_MIN as 0.
+# Int32 MAX/MIN maps operands through the swap-order map (int32_to_swap_order) before a plain SFPSWAP,
+# so the full Int32 range orders correctly, including INT32_MIN.
 #
 @pytest.mark.parametrize(
     "mathop", [MathOperation.ReduceColumn, MathOperation.ReduceRow]
