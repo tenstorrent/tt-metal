@@ -385,6 +385,48 @@ class TestLlamaIntegration:
 
         ttml.autograd.AutoContext.get_instance().reset_graph()
 
+    @pytest.mark.parametrize(
+        "runner_type",
+        [ttml.models.RunnerType.Default, ttml.models.RunnerType.MemoryEfficient],
+    )
+    def test_arange_positions_match_no_positions(self, tiny_config, runner_type):
+        """Per-row positions 0..S-1 give the same logits and gradients as no positions."""
+        cfg = replace(tiny_config, runner_type=runner_type)
+        model = Llama(cfg)
+        model.train()
+        optimizer = ttml.optimizers.SGD(model.parameters(), ttml.optimizers.SGDConfig.make(0.01, 0.0, 0.0, 0.0, False))
+
+        batch_size = 2
+        seq_len = cfg.max_position_embeddings
+        tokens = np.random.randint(0, cfg.vocab_size, size=(batch_size, 1, 1, seq_len)).astype(np.uint32)
+        positions = np.tile(np.arange(seq_len, dtype=np.uint32), (batch_size, 1))
+        mask = create_causal_mask(seq_len)
+
+        def logits_and_grads(unpadded_token_positions):
+            optimizer.zero_grad()
+            input_tensor = ttml.autograd.Tensor.from_numpy(
+                tokens, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
+            )
+            logits = model(input_tensor, mask, unpadded_token_positions=unpadded_token_positions)
+            ttml.ops.unary.mean(logits).backward(False)
+            grads = {
+                name: p.get_grad_tensor().to_numpy(ttnn.DataType.FLOAT32)
+                for name, p in model.parameters().items()
+                if p.is_grad_initialized()
+            }
+            result = logits.to_numpy(ttnn.DataType.FLOAT32), grads
+            ttml.autograd.AutoContext.get_instance().reset_graph()
+            return result
+
+        logits, grads = logits_and_grads(None)
+        ids = ttml.autograd.Tensor.from_numpy(positions, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32)
+        ids_logits, ids_grads = logits_and_grads(ids)
+
+        np.testing.assert_array_equal(ids_logits, logits)
+        assert ids_grads.keys() == grads.keys()
+        for name, grad in grads.items():
+            np.testing.assert_array_equal(ids_grads[name], grad, err_msg=name)
+
     def test_output_values_finite(self, tiny_config):
         """Test that model outputs are finite (no NaN/Inf)."""
         model = Llama(tiny_config)

@@ -157,15 +157,15 @@ void validate_allocations(
         TT_FATAL(tensor->is_allocated(), "combine_fabric2d: {} has no device buffer", name);
     }
     TT_FATAL(
-        output.buffer()->aligned_page_size() == token_size_bytes(tensor_args),
+        output.mesh_buffer().aligned_page_size() == token_size_bytes(tensor_args),
         "combine_fabric2d: output page size {} must equal the token page size {} — the op moves whole tokens "
         "between the two",
-        output.buffer()->aligned_page_size(),
+        output.mesh_buffer().aligned_page_size(),
         token_size_bytes(tensor_args));
     TT_FATAL(
-        output.buffer()->num_pages() >= args.seq_len_per_chip * args.num_experts_per_tok,
+        output.mesh_buffer().num_pages() >= args.seq_len_per_chip * args.num_experts_per_tok,
         "combine_fabric2d: output holds {} pages but seq_len_per_chip x num_experts_per_tok = {} are needed",
-        output.buffer()->num_pages(),
+        output.mesh_buffer().num_pages(),
         args.seq_len_per_chip * args.num_experts_per_tok);
 }
 
@@ -674,20 +674,6 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
 
 uint32_t channel_semaphore_count(uint32_t ring_extent) {
     return channel_semaphore_count_for_vcs(num_vcs(ring_extent));
-}
-
-tt::tt_metal::TensorSpec forwarding_buffer_spec(const CombineFabric2dParams& args, uint32_t token_size_bytes) {
-    TT_FATAL(args.num_links >= 1 && args.num_links <= 4, "num_links must be between 1 and 4 (got {})", args.num_links);
-    const uint32_t page_bytes = token_size_bytes + cmbf2d::FORWARDING_METADATA_SIZE;
-    TT_FATAL(
-        page_bytes % 64 == 0, "combine_fabric2d: forwarding page {} B must be 64-byte aligned for DRAM", page_bytes);
-    const uint32_t pages = stream_count(args.num_links) * fwd_pages_per_stream(args);
-    return tt::tt_metal::TensorSpec(
-        ttnn::Shape({pages, page_bytes / static_cast<uint32_t>(sizeof(uint32_t))}),
-        tt::tt_metal::TensorLayout(
-            tt::tt_metal::DataType::UINT32,
-            tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
-            tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM}));
 }
 
 tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_descriptor(

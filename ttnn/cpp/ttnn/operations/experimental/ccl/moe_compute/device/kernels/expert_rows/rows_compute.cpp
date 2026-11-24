@@ -2,22 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// expert rows, compute of one core of one expert group. Per job (one expert, at most 32 routed rows per row tile):
-//  gate/up projection: for each of this core's W0/W1 column groups, [g0 u0 g1 u1] = x . [W0 j0, W1 j0, W0 j1, W1 j1]
-//      over all hidden tiles, then the activation on the packer's SFPU, act(g0) u0 and act(g1) u1 -> cb_activated; a
-//      half block-column (the last group of a ring position with an odd column count in the compact layout) is
-//      [g0 u0] = x . [W0 j0, W1 j0] -> act(g0) u0.
-//  down projection: the job's intermediate (every column, from the exchange in rows_writer.cpp) . W2 for each of this
-//      core's 4-tile output groups (the last output group of a ring position can be two tiles wide), the W2 rows in
-//      moe_compute's per-core rotated order -> cb_rows (4 bf16 tiles; the writer sends the real rows).
-// Each output tile sums the same K rows in the same order as the ring program (compute.cpp), at ct_dim 2 where it
-// uses 2. Job order: gate/up(0), gate/up(1), down(0), gate/up(2), down(1), ..., down(jobs - 1).
-// A job of several row tiles (row_tiles > 1) streams its weights once for all its row tiles: the gate/up projection
-// walks x in chunks of chunk_tiles hidden tiles (chunk-major weights) and the down projection walks each output group's
-// W2 rows in chunks of w2_chunk_rows; between chunks each (group, row tile) leaves its DEST tiles in cb_partials (FP32
-// with FP32 DEST) and the next chunk loads them back before it accumulates, so every output tile is summed over K in
-// the same order as with one row tile per job. With a single chunk (chunk_tiles covers x, w2_chunk_rows the W2 rows;
-// always with row_tiles = 1) nothing is spilled.
+// Compute of one expert group core. Per job: x . W0/W1 for this core's column groups and the activation ->
+// cb_activated, then the whole intermediate (exchanged by rows_writer.cpp) . W2 for this core's output groups ->
+// cb_rows. Each output tile sums the same K rows in the same order as compute.cpp. Weight-stationary jobs walk the
+// weights in chunks and keep each (group, row tile)'s partials in cb_partials between chunks.
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
@@ -62,14 +50,13 @@ static_assert(block_tiles % group_tiles == 0, "a block holds whole K rows of a c
 constexpr uint32_t gate_up_chunks = expert_rows::div_up(hidden_tiles, chunk_tiles);
 constexpr uint32_t down_chunks = expert_rows::div_up(intermediate_tiles, w2_chunk_rows);
 constexpr uint32_t unit_tiles = chunk_blocks * block_tiles;  // weight pages of one chunk unit (rows_reader.cpp)
-// A job of one row tile holds nothing for other row tiles: x chunks as large as its slot, its weights streamed in whole
-// runs. When units are held (row_tiles > 1, rows_reader.cpp), its pass is padded to whole units of unit_blocks blocks.
+// One-row-tile jobs take x chunks as large as their slot; weight-stationary, their passes are padded to whole units.
 constexpr uint32_t single_chunk_tiles = expert_rows::single_chunk_tiles(chunk_tiles, row_tiles, hidden_tiles);
 constexpr uint32_t single_chunks = expert_rows::div_up(hidden_tiles, single_chunk_tiles);
-constexpr uint32_t unit_blocks = row_tiles > 1 ? chunk_blocks : 1;
-// cb_partials holds one slot of partial_slot_tiles per (group, row tile), whatever the group's width (a half group
-// fills 2 of them): partial CB = row_tiles * groups * partial_slot_tiles tiles, so every reserve starts at a multiple
-// of partial_slot_tiles and none runs past the CB's end.
+constexpr bool weight_stationary = row_tiles > 1;
+constexpr uint32_t unit_blocks = weight_stationary ? chunk_blocks : 1;
+constexpr uint32_t bias_rows = has_bias ? 1 : 0;
+// cb_partials holds one full-width slot per (group, row tile), half groups included, so no reserve wraps the CB.
 constexpr uint32_t partial_slot_tiles = group_tiles;
 
 // intermediate columns of each ring position, and the first of them
@@ -174,8 +161,7 @@ FORCE_INLINE void fill_ones_tile() {
     cb_ones.wait_front(1);
 }
 
-// DEST 0..width-1 <- this (group, row tile)'s partials of the previous chunk, in the order they were packed; then the
-// matmul of a group `width` tiles wide
+// DEST 0..width-1 <- this (group, row tile)'s partials from the previous chunk; then re-inits the matmul for `width`.
 FORCE_INLINE void reload_partials(uint32_t cb_in0_id, uint32_t width) {
     CircularBuffer cb_partials(cb_partials_id);
     reconfig_data_format_srca(cb_w_id, cb_partials_id);
@@ -201,9 +187,8 @@ FORCE_INLINE void pack_slot(uint32_t cb_id, uint32_t tiles) {
     cb.push_back(group_tiles);
 }
 
-// The activation of a group `width` tiles wide on the packer's SFPU (DEST 0..width-1), its activated tiles (DEST 0 and,
-// for a full group, 2) -> cb_activated [first_tile, first_tile + width / 2) (as compute.cpp's
-// compute_w0_w1_block_column: wait for math plus a CFG stall before the SFPU's DEST offset)
+// Activation of a group `width` tiles wide on the packer's SFPU; DEST 0 (and 2 for a full group) -> cb_activated from
+// first_tile. The SEMWAIT also stalls CFG so that TT_SETC16 waits for math, as in compute.cpp.
 FORCE_INLINE void pack_activation(uint32_t width, uint32_t first_tile) {
     PACK(TTI_SEMWAIT(
         p_stall::STALL_TDMA | p_stall::STALL_CFG, semaphore::t6_sem(semaphore::MATH_PACK), p_stall::STALL_ON_ZERO));
@@ -220,9 +205,9 @@ FORCE_INLINE void pack_activation(uint32_t width, uint32_t first_tile) {
     }
 }
 
-// The weight blocks that pad a one-row-tile pass to whole units (row_tiles > 1, rows_reader.cpp).
-FORCE_INLINE void pop_unit_padding(uint32_t blocks) {
-    const uint32_t pad = (unit_blocks - blocks % unit_blocks) % unit_blocks;
+// Pops the weight blocks that pad a one-row-tile pass to whole units (weight-stationary, rows_reader.cpp).
+FORCE_INLINE void pop_unit_padding(uint32_t pass_blocks) {
+    const uint32_t pad = expert_rows::unit_padding(pass_blocks, unit_blocks);
     if (pad) {
         CircularBuffer cb_w(cb_w_id);
         cb_w.wait_front(pad * block_tiles);
@@ -238,16 +223,12 @@ FORCE_INLINE void init_gate_up_projection() {
     matmul_block_init(cb_x_id, cb_w_id, /*transpose=*/false, /*ct_dim=*/group_tiles, /*rt_dim=*/1, /*kt_dim=*/1);
 }
 
-// A job of one row tile has its own walk: its weights arrive block by block from the stream (WeightStream) in whole
-// runs, while a job of several row tiles holds each chunk unit in cb_w for all of its row tiles.
-
 // Gate/up projection and activation of a job of one row tile: x in chunks of single_chunk_tiles, each column group's
 // weights in whole runs from the stream.
 FORCE_INLINE void gate_up_one_row_tile(const CoreGroups& groups, WeightStream& weights, PackTarget& pack_target) {
     CircularBuffer cb_x(cb_x_id);
     CircularBuffer cb_activated(cb_activated_id);
     init_gate_up_projection();
-    uint32_t blocks = 0;
     for (uint32_t chunk = 0; chunk < single_chunks; ++chunk) {
         const bool last = chunk + 1 == single_chunks;
         const uint32_t k_tiles = last ? hidden_tiles - chunk * single_chunk_tiles : single_chunk_tiles;
@@ -273,7 +254,6 @@ FORCE_INLINE void gate_up_one_row_tile(const CoreGroups& groups, WeightStream& w
                 }
             }
             weights.end_run();
-            blocks += expert_rows::run_blocks(width, k_tiles + (has_bias && last ? 1 : 0), block_tiles);
             tile_regs_commit();
             if (last) {
                 pack_activation(width, expert_rows::group_columns * column_group);
@@ -285,7 +265,10 @@ FORCE_INLINE void gate_up_one_row_tile(const CoreGroups& groups, WeightStream& w
         cb_x.pop_front(chunk_tiles * row_tiles);
     }
     cb_activated.push_back(row_tiles * activated_tiles);
-    pop_unit_padding(blocks);
+    if constexpr (weight_stationary) {
+        pop_unit_padding(expert_rows::gate_up_pass_blocks(
+            groups.columns(), hidden_tiles, single_chunk_tiles, bias_rows, block_tiles));
+    }
 }
 
 // Gate/up projection and activation of a job of job_row_tiles row tiles: x chunk slot = [hidden tile of the chunk][row
@@ -345,7 +328,6 @@ FORCE_INLINE void down_one_row_tile(const CoreGroups& groups, WeightStream& weig
     cb_intermediate.wait_front(row_tiles * intermediate_tiles);
     matmul_block_init(
         cb_intermediate_id, cb_w_id, /*transpose=*/false, /*ct_dim=*/group_tiles, /*rt_dim=*/1, /*kt_dim=*/1);
-    uint32_t blocks = 0;
     for (uint32_t output_group = 0; output_group < groups.output_groups; ++output_group) {
         const uint32_t width = groups.outputs().width(output_group);
         if (width != group_tiles) {
@@ -362,13 +344,14 @@ FORCE_INLINE void down_one_row_tile(const CoreGroups& groups, WeightStream& weig
             matmul_block(cb_ones_id, cb_w_id, 0, weights.take(width), 0, false, width, 1, 1);
         }
         weights.end_run();
-        blocks += expert_rows::run_blocks(width, intermediate_tiles + (has_bias ? 1 : 0), block_tiles);
         tile_regs_commit();
         pack_slot(cb_rows_id, group_tiles);
         tile_regs_release();
     }
     cb_intermediate.pop_front(row_tiles * intermediate_tiles);
-    pop_unit_padding(blocks);
+    if constexpr (weight_stationary) {
+        pop_unit_padding(expert_rows::down_pass_blocks(groups.outputs(), intermediate_tiles, bias_rows, block_tiles));
+    }
 }
 
 // Down projection of a job of job_row_tiles row tiles: intermediate slot = [row tile][intermediate column], rows ->
@@ -424,7 +407,7 @@ FORCE_INLINE void down_row_tiles(uint32_t job_row_tiles, const CoreGroups& group
 
 // row tiles of this group's job `job` (cb_ctl, rows_reader.cpp); always 1 with row_tiles = 1
 FORCE_INLINE uint32_t row_tiles_of_job(uint32_t job) {
-    return row_tiles > 1 ? CircularBuffer(cb_ctl_id).read_tile_value(0, 1 + job) : 1;
+    return weight_stationary ? CircularBuffer(cb_ctl_id).read_tile_value(0, 1 + job) : 1;
 }
 
 FORCE_INLINE void gate_up_projection(

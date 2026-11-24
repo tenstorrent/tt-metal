@@ -11,6 +11,7 @@
 
 #include "selective_reduce_combine_device_operation_types.hpp"
 
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/workload_descriptor.hpp>
 
@@ -57,7 +58,44 @@ SelectiveReduceCombineWorkerLayout compute_worker_layout(
     uint32_t num_data_parallel_cores,
     bool local_combine = false);
 
+struct MuxCorePlacement {
+    CoreCoord logical_core;
+    tt::tt_fabric::FabricNodeId dst_node_id;
+    uint32_t link = 0;
+};
+
 }  // namespace detail
+
+// Host side of kernels/dataflow/combine_fabric.hpp for one device. worker_runtime_args is in the order of the workers
+// passed to plan_combine_fabric.
+struct CombineFabric {
+    tt::tt_metal::KernelDescriptor::NamedCompileTimeArgs named_compile_time_args;
+    tt::tt_metal::KernelDescriptor::Defines defines;
+    std::vector<std::vector<uint32_t>> worker_runtime_args;
+    tt::tt_fabric::FabricMuxV2Config mux_config;
+    tt::tt_fabric::FabricNodeId src_node_id;
+    std::vector<detail::MuxCorePlacement> mux_placements;
+
+    // Call after adding the worker kernels so their indices stay fixed.
+    void append_mux_kernels(const MeshDevice& mesh_device, tt::tt_metal::ProgramDescriptor& desc) const;
+};
+
+// Plans num_links mux cores per neighbor along `axis`; adds the workers' packet-header CB and semaphores to desc.
+CombineFabric plan_combine_fabric(
+    tt::tt_metal::ProgramDescriptor& desc,
+    const MeshDevice& mesh_device,
+    const MeshCoordinate& mesh_coordinate,
+    const std::vector<MeshCoordinate>& all_mesh_coordinates,
+    tt::tt_fabric::Topology topology,
+    uint32_t axis,
+    uint32_t num_links,
+    const CoreRangeSet& mux_core_range_set,
+    const std::vector<CoreCoord>& workers,
+    uint32_t packet_header_cb_id,
+    uint32_t max_packet_size_bytes);
+
+// The largest fabric packet a combine sends for tokens of `dtype` (a power of two for bf16 rows).
+uint32_t combine_max_packet_size_bytes(const MeshDevice& mesh_device, tt::tt_metal::DataType dtype);
 
 struct UnifiedSelectReduce {
     using operation_attributes_t = SelectiveReduceCombineParams;
@@ -95,17 +133,22 @@ uint32_t append_selective_reduce_combine_to_descriptor(
     // output feeds that column. Presence switches the writer to a double-buffered source.
     const std::optional<std::vector<std::vector<CoreCoord>>>& compute_cores_by_combine_column = std::nullopt);
 
-// The combine's init and final barrier semaphores on combine_cores, held in workload.semaphores and published with a
-// Synchronize. The final barrier is cross_device_semaphore when the caller passes one.
+// Returns the {init, final} barrier semaphores, held in workload.semaphores. The final one is cross_device_semaphore
+// when given.
 std::pair<GlobalSemaphore, GlobalSemaphore> add_selective_reduce_combine_barrier_semaphores(
     tt::tt_metal::WorkloadDescriptor& workload,
     ttnn::MeshDevice* mesh_device,
     const CoreRangeSet& combine_cores,
     const std::optional<GlobalSemaphore>& cross_device_semaphore);
 
-// Cache hit with a caller-owned cross-device semaphore: writes its address into the combine writer's runtime args
-// (kernel writer_kernel_idx of program) on every core that has them.
-void override_selective_reduce_combine_cross_device_semaphore(
-    tt::tt_metal::Program& program, uint32_t writer_kernel_idx, const GlobalSemaphore& cross_device_semaphore);
+// The combine writer's runtime arg that holds the final barrier (cross-device) semaphore's address.
+constexpr uint32_t kCombineWriterCrossDeviceSemaphoreArgIdx = 4;
+
+// On a cache hit, writes the caller-owned cross-device semaphore's address into arg arg_idx of kernel_idx.
+void override_cross_device_semaphore_arg(
+    tt::tt_metal::Program& program,
+    uint32_t kernel_idx,
+    uint32_t arg_idx,
+    const GlobalSemaphore& cross_device_semaphore);
 
 }  // namespace ttnn::experimental::prim

@@ -9,14 +9,15 @@
 #include <span>
 #include <vector>
 
+#include <fmt/ranges.h>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 
 #include "circular_buffer_constants.h"
-#include "core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include "device.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "hostdev/remote_dfb_constants.h"
 #include "impl/buffers/circular_buffer.hpp"
 #include "impl/context/metal_context.hpp"
@@ -140,7 +141,7 @@ void ConfigureDeviceWithProgram(IDevice& device, Program& program, bool force_sl
         program.impl().validate_circular_buffer_region(validation_device);
         program.impl().allocate_dataflow_buffers(validation_device);
         // Pre-size Metal 2.0 RTA/CRTA buffers from schema when not already reserved
-        // (e.g. MakeProgramFromSpec). Idempotent if SetProgramRunArgs already sized them.
+        // (e.g. the Program constructor). Idempotent if Program::set_program_run_args already sized them.
         program.impl().reserve_runtime_arg_buffers();
         // Metal 2.0 scratchpads stack on the DFB allocations, so allocate them AFTER the DFBs are placed.
         // Scratchpads are passed as implicit CRTAs, so they must be allocated before the CRTAs are committed.
@@ -310,6 +311,7 @@ void WriteRuntimeArgsToDevice(IDevice& device, Program& program, bool force_slow
     if (!force_slow_dispatch) {
         metal_ctx.device_manager()->check_dispatch_mode(/*fast_dispatch=*/false);
     }
+    program.impl().validate_scratchpad_bindings();
 
     const auto& hal = metal_ctx.hal();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
@@ -340,13 +342,13 @@ void WriteRuntimeArgsToDevice(IDevice& device, Program& program, bool force_slow
                                 log_trace(
                                     tt::LogMetal,
                                     "{} - Writing {} unique rtargs to core {} (physical: {}) addr 0x{:x} => args: "
-                                    "{}",
+                                    "[{}]",
                                     __FUNCTION__,
                                     rt_args.size(),
                                     logical_core.str(),
                                     physical_core.str(),
                                     rt_args_addr,
-                                    rt_args);
+                                    fmt::join(rt_args, ", "));
                                 write_program_config(metal_ctx, device_id, physical_core, rt_args, rt_args_addr);
                             }
 
@@ -356,13 +358,13 @@ void WriteRuntimeArgsToDevice(IDevice& device, Program& program, bool force_slow
                                 log_trace(
                                     tt::LogMetal,
                                     "{} - Writing {} common rtargs to core {} (physical: {}) addr 0x{:x} => args: "
-                                    "{}",
+                                    "[{}]",
                                     __FUNCTION__,
                                     common_rt_args.size(),
                                     logical_core.str(),
                                     physical_core.str(),
                                     common_rt_args_addr,
-                                    common_rt_args);
+                                    fmt::join(common_rt_args, ", "));
                                 write_program_config(
                                     metal_ctx, device_id, physical_core, common_rt_args, common_rt_args_addr);
                             }

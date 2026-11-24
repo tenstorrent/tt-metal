@@ -15,7 +15,7 @@
 #include <utility>
 #include <vector>
 
-#include "core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include "dispatch/dispatch_settings.hpp"
 #include "kernel_types.hpp"
 #include "program_impl.hpp"
@@ -24,6 +24,7 @@
 #include "trace/trace_node.hpp"
 
 namespace tt::tt_metal {
+class CommandSink;
 class Device;
 class IDevice;
 class LaunchMessageRingBufferState;
@@ -221,6 +222,27 @@ void pack_program_command_sequence(
     bool send_binary,
     vector_aligned<uint32_t>& packed);
 
+// One command chunk as packed by pack_program_command_sequence: its bytes in the cached sequence and where they
+// start in the packed buffer.
+struct PackedCommandChunk {
+    const uint8_t* data;
+    uint32_t size_bytes;
+    uint32_t packed_offset;
+};
+
+// As above, also recording every packed chunk (to map a location in the cached sequence to its packed offset).
+void pack_program_command_sequence(
+    const ProgramCommandSequence& program_command_sequence,
+    bool stall_first,
+    bool stall_before_program,
+    bool send_binary,
+    vector_aligned<uint32_t>& packed,
+    std::vector<PackedCommandChunk>& chunks);
+
+// Byte offset in the packed buffer of `location` (inside one of the sequence's command buffers); fails if no packed
+// chunk holds it.
+uint32_t packed_offset_of(const std::vector<PackedCommandChunk>& chunks, const void* location, uint32_t size_bytes);
+
 // Visits the command chunks in their canonical device-execution order.
 void for_each_program_command_sequence_chunk(
     const ProgramCommandSequence& sequence,
@@ -231,11 +253,23 @@ void for_each_program_command_sequence_chunk(
 
 void write_program_command_sequence(
     const ProgramCommandSequence& program_command_sequence,
-    SystemMemoryManager& manager,
-    uint32_t command_queue_id,
+    CommandSink& sink,
     bool stall_first,
     bool stall_before_program,
     bool send_binary = true);
+
+// As write_program_command_sequence, with per-device runtime args: each patch's words are written in place of the
+// sequence's words at patch.location (chunks holding a patch are copied and patched; the sequence is not written).
+// If `patch_write_offsets` is set, it receives, per patch, the issue-queue write pointer its first word was written
+// at (for a TraceCaptureBuffer: the byte offset in the recorded stream).
+void write_program_command_sequence(
+    const ProgramCommandSequence& program_command_sequence,
+    CommandSink& sink,
+    bool stall_first,
+    bool stall_before_program,
+    bool send_binary,
+    ttsl::Span<const RtaPatch> patches,
+    std::vector<uint32_t>* patch_write_offsets);
 
 KernelHandle get_device_local_kernel_handle(KernelHandle kernel_handle);
 

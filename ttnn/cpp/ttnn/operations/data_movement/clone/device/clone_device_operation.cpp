@@ -6,6 +6,8 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace ttnn::operations::data_movement::clone {
 void CloneOperation::validate_inputs(
@@ -16,6 +18,22 @@ void CloneOperation::validate_inputs(
     }
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Clone: input must be on device");
     TT_FATAL(input.is_allocated(), "Clone: input must be allocated in buffer on device");
+
+    auto validate_tile_shape = [](const Tensor& tensor, const char* name) {
+        if (tensor.layout() != Layout::TILE) {
+            return;
+        }
+        const auto tile_shape = tensor.tensor_spec().tile().get_tile_shape();
+        TT_FATAL(
+            tile_shape[0] == tt::constants::TILE_HEIGHT && tile_shape[1] == tt::constants::TILE_WIDTH,
+            "Clone supports only {}x{} tiles, but {} has a {}x{} tile",
+            tt::constants::TILE_HEIGHT,
+            tt::constants::TILE_WIDTH,
+            name,
+            tile_shape[0],
+            tile_shape[1]);
+    };
+    validate_tile_shape(input, "the input tensor");
 
     auto input_memory_layout = input.memory_config().memory_layout();
     auto output_memory_layout = operation_attributes.memory_config.memory_layout();
@@ -53,7 +71,7 @@ CloneOperation::spec_return_value_t CloneOperation::compute_output_specs(
     const auto& input = tensor_args.input;
     return tt::tt_metal::TensorSpec(
         input.logical_shape(),
-        tt::tt_metal::TensorLayout::fromPaddedShape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             operation_attributes.dtype,
             tt::tt_metal::PageConfig(input.layout()),
             operation_attributes.memory_config,

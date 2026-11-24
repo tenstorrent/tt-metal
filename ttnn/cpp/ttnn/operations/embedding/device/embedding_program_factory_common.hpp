@@ -24,4 +24,6 @@ struct CoreSplitResult {
 };
 
 CoreSplitResult split_work_to_cores_aligned(CoreCoord grid_size, uint32_t units_to_divide, uint32_t alignment);
+
+uint32_t weight_cache_row_bytes(tt::tt_metal::distributed::MeshDevice* device, uint32_t weight_page_size);
 }  // namespace ttnn::prim

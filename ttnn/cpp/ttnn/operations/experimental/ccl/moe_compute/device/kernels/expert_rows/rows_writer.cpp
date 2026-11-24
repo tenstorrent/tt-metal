@@ -2,23 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// expert rows, second data-movement RISC of one core of one expert group (group_cores cores). Per job (one expert, at
-// most 32 * row_tiles of its routed rows, from the routing table; job = its index in this group's list):
-// - x: the job's x moves in chunks of chunk_tiles hidden tiles (one chunk when chunk_tiles covers them all). Every
-//   group core owns an equal piece of each chunk (so all of them send at once): it reads that slice of each of the
-//   job's token rows from the row-major input, rearranges it into tile faces ([hidden tile][row tile]: the job's row
-//   `row` is row row % 32 of row tile row / 32) and writes it into slot (chunk % x_slots) of every group core's cb_x,
-//   then increments that slot's semaphore on every group core.
-// - intermediate exchange: this core's activated tiles (its real intermediate columns of every row tile) to slot
-//   (job % intermediate_slots) of every group core's cb_intermediate, one semaphore per slot.
-// - output rows: per W2 output group and row tile, the compute leaves 4 bf16 tiles in cb_rows; the job's real rows are
-//   copied out of the tile faces and written as posted writes to output row (first row of the job + row), columns of
-//   the group's real output tiles.
-// Slot reuse. With one x chunk per job and intermediate_slots >= 3 (no credits) the exchange orders it: once a core
-// holds every group core's activated tiles of job j, every core finished the gate/up projection of jobs j (x slot of
-// job j free) and j - 1, hence the down projection of job j - 3. With several chunks per job a slot is reused only
-// after every group core handed it back (a credit after its compute popped the slot's previous chunk), and the
-// intermediate slot the same way; a slot's first use waits for nothing.
+// Second data-movement RISC of one expert group core. Per job it tilizes this core's piece of each x chunk into every
+// group core's cb_x, exchanges this core's activated tiles into every group core's cb_intermediate, and writes the
+// job's real output rows from cb_rows to the row buffer, all acknowledged before the kernel ends.
+// Slot reuse: with one row tile per job, a core sends job j's activated tiles only after it holds every core's tiles of
+// job j - 1, so every core has finished down(j - 3) and intermediate_slots >= 3 suffices. Weight-stationary slots are
+// reused only after every group core hands them back (credits).
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"
@@ -52,10 +41,10 @@ constexpr uint32_t sem_x_free = get_named_compile_time_arg_val("sem_x_free");   
 constexpr uint32_t row_tiles = get_named_compile_time_arg_val("row_tiles");
 constexpr uint32_t chunk_tiles = get_named_compile_time_arg_val("chunk_tiles");
 constexpr uint32_t chunk_piece_max = get_named_compile_time_arg_val("chunk_piece_max");
-constexpr bool slot_credits = get_named_compile_time_arg_val("slot_credits") == 1;
+constexpr bool weight_stationary = row_tiles > 1;  // x chunks; slots handed back by credits
 static_assert(x_slots == 1 || x_slots == 2, "one or two x slots");
-static_assert(slot_credits || intermediate_slots >= 3, "intermediate slots without credits");
-static_assert(slot_credits || chunk_tiles == hidden_tiles, "x slots without credits: one chunk per job");
+static_assert(weight_stationary || intermediate_slots >= 3, "intermediate slots without credits (slot reuse above)");
+static_assert(weight_stationary || chunk_tiles == hidden_tiles, "x slots without credits: one chunk per job");
 // bf16 tile geometry (expert_rows_common.h): a face row, a tile row (two faces side by side), a face, a tile
 constexpr uint32_t tile_rows = expert_rows::tile_rows;
 constexpr uint32_t face_row_bytes = expert_rows::face_columns * expert_rows::bf16_bytes;
@@ -66,8 +55,7 @@ constexpr uint32_t tile_bytes = tile_rows * tile_row_bytes;
 constexpr uint32_t group_tiles = expert_rows::group_tiles;            // tiles of an output group
 constexpr uint32_t output_row_stride = group_tiles * tile_row_bytes;  // staging bytes of one row of one output group
 constexpr uint32_t piece_row_stride = chunk_piece_max * tile_row_bytes;
-// a job of several row tiles takes x in chunks of chunk_tiles hidden tiles, a job of one row tile in chunks as large as
-// an x slot of row_tiles row tiles holds (rows_compute.cpp)
+// x chunk of a one-row-tile job: a whole x slot (must match rows_compute.cpp)
 constexpr uint32_t single_chunk_tiles = expert_rows::single_chunk_tiles(chunk_tiles, row_tiles, hidden_tiles);
 constexpr uint32_t virtual_x_arg = 0, virtual_y_arg = grid_w;  // common args: virtual x / y of the grid
 
@@ -105,12 +93,11 @@ FORCE_INLINE void increment_group(const Noc& noc, uint32_t semaphore_id, uint32_
     }
 }
 
-// This group's jobs in the routing table (rows_reader.cpp): job j is table job group + expert_groups j with one row
-// tile per job, else the group's j-th as the root dealt them (from the group's first job in the ctl block).
-using GroupJobs = expert_rows::GroupJobs<(row_tiles > 1), expert_groups, volatile tt_l1_ptr expert_rows::JobRecord*>;
+// This group's jobs in the routing table (rows_reader.cpp).
+using GroupJobs = expert_rows::GroupJobs<weight_stationary, expert_groups, volatile tt_l1_ptr expert_rows::JobRecord*>;
 
 FORCE_INLINE uint32_t x_chunk_tiles(const GroupJobs& jobs, uint32_t job) {
-    return jobs.rows(job) > tile_rows ? chunk_tiles : single_chunk_tiles;
+    return jobs.held(job) ? chunk_tiles : single_chunk_tiles;
 }
 
 FORCE_INLINE uint32_t x_chunks(const GroupJobs& jobs, uint32_t job) {
@@ -130,13 +117,10 @@ FORCE_INLINE XPiece x_piece(const GroupJobs& jobs, uint32_t job, uint32_t chunk,
     return {first, (member + 1) * tiles / group_cores - first};
 }
 
-// The schedule calls the steps below from several places; they stay out of line (kernel size) and build their own
-// Noc: a Noc passed to an out-of-line function carries its id as a run-time value, which costs instructions in every
-// NoC command.
+// The steps below are noinline (kernel size) and build their own Noc: a Noc passed to an out-of-line function carries
+// its id as a run-time value.
 
-// The x stream of this core: its piece of each x chunk, built from the job's token rows, to every group core. The piece
-// is tilized on this RISC, not by the compute: each core builds only its piece, once, for every group core, while the
-// computes run on the previous chunk.
+// This core's piece of each x chunk, tilized from the job's token rows and sent to every group core.
 template <typename XAccessor>
 struct XStream {
     CircularBuffer cb_x;
@@ -149,6 +133,7 @@ struct XStream {
     uint32_t group_mask_arg;
 
     // The piece of chunk `chunk` for every row of a job, as tiles [piece tile][row tile] at piece_tiles_addr.
+    // TODO: try tilizing the staged rows on the compute kernel instead of with these NoC copies.
     __attribute__((noinline)) void build_piece(const GroupJobs& jobs, uint32_t job, uint32_t chunk) const {
         const Noc noc;
         const uint32_t first_row = jobs.first_row(job), rows = jobs.rows(job);
@@ -197,7 +182,7 @@ struct XStream {
         const uint32_t rows = jobs.rows(job);
         const uint32_t job_row_tiles = expert_rows::row_tiles_of(rows);
         const uint32_t slot = seq % x_slots, use = seq / x_slots;
-        if constexpr (slot_credits) {
+        if constexpr (weight_stationary) {
             cb_x.reserve_back(chunk_tiles * row_tiles);  // this core's compute popped the slot's previous chunk
             if (use > 0) {  // a slot starts free on every group core: only reuses wait for the hand-back
                 increment_group(noc, sem_x_free + slot, group_mask_arg);
@@ -243,7 +228,7 @@ struct XStream {
     FORCE_INLINE void push_chunk(uint32_t seq) {
         const uint32_t slot = seq % x_slots, use = seq / x_slots;
         Semaphore<>(sem_x + slot).wait_min(group_cores * (use + 1));
-        if constexpr (!slot_credits) {
+        if constexpr (!weight_stationary) {
             cb_x.reserve_back(chunk_tiles * row_tiles);
         }
         cb_x.push_back(chunk_tiles * row_tiles);
@@ -266,7 +251,7 @@ struct IntermediateExchange {
         const uint32_t slot = job % intermediate_slots, use = job / intermediate_slots;
         cb_activated.wait_front(row_tiles * activated_tiles);
         const uint32_t activated_addr = cb_activated.get_read_ptr();
-        if constexpr (slot_credits) {
+        if constexpr (weight_stationary) {
             cb_intermediate.reserve_back(row_tiles * intermediate_tiles);  // this core's compute popped the slot
             if (use > 0) {
                 increment_group(noc, sem_intermediate_free + slot, group_mask_arg);
@@ -289,16 +274,15 @@ struct IntermediateExchange {
         increment_group(noc, sem_intermediate + slot, group_mask_arg);
         cb_activated.pop_front(row_tiles * activated_tiles);
         Semaphore<>(sem_intermediate + slot).wait_min(group_cores * (use + 1));
-        if constexpr (!slot_credits) {
+        if constexpr (!weight_stationary) {
             cb_intermediate.reserve_back(row_tiles * intermediate_tiles);
         }
         cb_intermediate.push_back(row_tiles * intermediate_tiles);
     }
 };
 
-// The output rows of a job: per output group and row tile, the real rows out of the compute's 4 bf16 tiles into
-// row-major staging, then to the row buffer. The rows are untilized on this RISC, not by the packer: a per-job
-// pack_untilize init / uninit between rows_compute.cpp's normal packs hangs the program's second launch on Blackhole.
+// A job's real output rows, untilized from the compute's bf16 tiles on this RISC, to the row buffer. Switching the
+// packer to pack_untilize per job between rows_compute.cpp's normal packs hangs relaunches on Blackhole.
 template <typename RowsAccessor>
 struct OutputRows {
     CircularBuffer cb_rows;
@@ -340,18 +324,16 @@ struct OutputRows {
                 }
                 noc.async_read_barrier();
                 cb_rows.pop_front(group_tiles);
-                // posted writes: non-posted row writes, many in flight under the weight stream, go unacknowledged and
-                // hang the device
                 const uint32_t column_offset = (first_output_tile + group_tiles * output_group) * tile_row_bytes;
                 for (uint32_t row = 0; row < tile_real_rows; ++row) {
-                    noc.async_write<NocOptions::POSTED>(
+                    noc.async_write(
                         CoreLocalMem<uint32_t>(staging + row * output_row_stride),
                         row_buffer,
                         real_tiles * tile_row_bytes,
                         {},
                         {.page_id = first_row + tile_rows * row_tile + row, .offset_bytes = column_offset});
                 }
-                noc.async_writes_flushed<NocOptions::POSTED>();
+                noc.async_writes_flushed();  // the staging rows are refilled for the next row tile
             }
         }
     }
@@ -399,15 +381,12 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(routing + routing_row_tokens);
     volatile tt_l1_ptr expert_rows::JobRecord* job_table =
         reinterpret_cast<volatile tt_l1_ptr expert_rows::JobRecord*>(routing + routing_jobs);
-    volatile tt_l1_ptr uint32_t* ctl = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(routing + routing_ctl);
+    auto* ctl = reinterpret_cast<volatile tt_l1_ptr expert_rows::CtlHeader*>(routing + routing_ctl);
     volatile tt_l1_ptr uint16_t* group_first_job =
         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(routing + routing_ctl + expert_rows::ctl_header_bytes);
-    const uint32_t table_jobs = ctl[0];
-    const GroupJobs jobs = expert_rows::group_jobs<(row_tiles > 1), expert_groups>(job_table, group_first_job, group);
-    // the group's jobs: from the ctl block when dealt, else its share of the table's jobs
-    const uint32_t job_count =
-        row_tiles > 1 ? group_first_job[group + 1] - jobs.first
-                      : (table_jobs > group ? (table_jobs - group + expert_groups - 1) / expert_groups : 0);
+    const GroupJobs jobs =
+        expert_rows::group_jobs<weight_stationary, expert_groups>(job_table, group_first_job, group, ctl->table_jobs);
+    const uint32_t job_count = jobs.count;
     if (job_count == 0) {
         return;
     }
@@ -436,10 +415,9 @@ void kernel_main() {
         .output_tiles = output_tiles,
         .staging = row_staging};
 
-    if constexpr (!slot_credits) {
-        // One chunk per job: job j's x goes to slot j % x_slots after the exchange of job j - x_slots (every core
-        // finished its gate/up projection); job j - 1's rows are drained after the exchange of job j: the compute packs
-        // them in the down projection of job j - 1, right after the gate/up projection of job j.
+    if constexpr (!weight_stationary) {
+        // One chunk per job: job j's x reuses its slot after the exchange of job j - x_slots; job j - 1's rows are
+        // drained after the exchange of job j.
         for (uint32_t job = 0; job < x_slots && job < job_count; ++job) {
             x_stream.build_piece(jobs, job, 0);
             x_stream.send_piece(jobs, job, 0, job);
@@ -460,12 +438,8 @@ void kernel_main() {
         }
         output_rows.write(jobs, job_count - 1);
     } else {
-        // Several chunks per job: one stream of x chunks over all of this group's jobs; each chunk's piece is built
-        // while the other group cores send theirs. The compute runs gate/up(0), gate/up(1), down(0), gate/up(2),
-        // down(1), ...: once the first x_slots chunks of job j + 1 are in (their slots were freed by gate/up(j)), drain
-        // the rows of down(j - 1) and exchange job j's activated tiles, which with one intermediate slot needs
-        // down(j - 1) done on every group core. The next job's first chunks are then already in place when down(j)
-        // ends.
+        // One stream of x chunks over all of this group's jobs. Once the first x_slots chunks of job j + 1 are in,
+        // drain down(j - 1)'s rows and exchange job j's activated tiles.
         uint32_t seq = 0;
         x_stream.build_piece(jobs, 0, 0);
         for (uint32_t job = 0; job < job_count; ++job) {

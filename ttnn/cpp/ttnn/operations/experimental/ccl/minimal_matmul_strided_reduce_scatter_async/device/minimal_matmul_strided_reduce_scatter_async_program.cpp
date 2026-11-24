@@ -113,12 +113,12 @@ void MinimalMatmulStridedReduceScatterAsyncProgramFactory::override_runtime_argu
     uint32_t progress_addr = 0;
     if (caller_progress) {
         TT_FATAL(tensor_args.mm_progress_counters->is_allocated(), "mm_progress_counters must have a buffer");
-        progress_addr = static_cast<uint32_t>(tensor_args.mm_progress_counters->buffer()->address());
+        progress_addr = static_cast<uint32_t>(tensor_args.mm_progress_counters->mesh_buffer().address());
     }
     uint32_t credit_addr = 0;
     if (caller_credit) {
         TT_FATAL(tensor_args.mm_credit_counters->is_allocated(), "mm_credit_counters must have a buffer");
-        credit_addr = static_cast<uint32_t>(tensor_args.mm_credit_counters->buffer()->address());
+        credit_addr = static_cast<uint32_t>(tensor_args.mm_credit_counters->mesh_buffer().address());
     }
     uint32_t reader_progress_arg = kReaderArgPrefix;
     if (output_tensor[1].is_sharded()) {

@@ -77,7 +77,7 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
 
         Returns:
             tuple[ttnn.Tensor, ttnn.Tensor]: New tensors containing BFLOAT16 token
-                outputs ``Y[B*H*G,N,32,V]`` and FLOAT32 final state ``S[B*H*G,K,V]``.
+                outputs ``Y[B*H*G,N*32,V]`` and FLOAT32 final state ``S[B*H*G,K,V]``.
                 Each valid group's state remains at its group index. For a nonempty
                 padded rank, the last valid group's state is also copied to group
                 ``G-1`` for fixed-slot carry selection. Other padded slots are unspecified.
@@ -124,14 +124,18 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
 
             S_after = A @ S_before + B
 
-        and is stored as ``K`` rows of ``[A | B]`` in a ``[S, N, K, K+V]`` tensor. Slot 0
-        holds head transforms; with ``tail``, slot 1 holds tail transforms (``S = 2``).
+        and is stored in complement form, ``E = A - I``, as ``K`` rows of ``[E | B]`` in a
+        ``[S, N, K, K+V]`` tensor, so a transition close to the identity keeps the precision
+        of its small change through the BF16 transport. ``affine_exclusive_scan``
+        composes summaries in A form at TF32 source-register precision, which then
+        bounds a composed transition's precision. Slot 0 holds head transforms; with
+        ``tail``, slot 1 holds tail transforms (``S = 2``).
         A group crossing the chronological wrap has both a head and a tail transform,
         allowing other ranks' transitions to be applied between them. Groups wholly
         before or after the split have only a head or only a tail segment, respectively,
         and unsplit ranks have only head segments. A slot whose segment holds no valid
         chunk -- including every slot of a group past ``actual_end`` or of a rank with
-        no valid chunk -- holds the identity ``(I, 0)`` with ``init``, and is unspecified
+        no valid chunk -- holds the identity, ``(0, 0)`` in complement form, with ``init``, and is unspecified
         without it.
 
         It derives the transform through two parallel recurrence evaluations:
@@ -176,14 +180,14 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
                 Compute-kernel configuration.
 
             tail (bool, optional): Also write tail transforms as slot 1. Defaults to False.
-            init (bool, optional): Write the identity ``(I, 0)`` into every slot without a
+            init (bool, optional): Write the identity ``(0, 0)`` into every slot without a
                 valid segment. When False those slots are unspecified. Defaults to True.
             emit_outputs (bool, optional): With one group per head, also return each chunk's
                 zero-seeded output ``F(0)`` and identity-seeded output ``F(I)`` as one terms tensor
                 ``[B*H*N/C, 2, C*32, V]`` (each block of ``C`` chunks holds its ``F(0)`` rows, then
-                its ``F(I)`` rows), and the last segment's ``A`` and ``B`` ``[B*H,K,V]``, all
+                its ``F(I)`` rows), and the last segment's ``E = A - I`` and ``B`` ``[B*H,K,V]``, all
                 FLOAT32: a chunk's output is ``F(0) + (F(I) - F(0)) @ entry`` and the final state
-                ``A @ entry + B``, where entry is the group's entry state before the chronological
+                ``entry + (E @ entry + B)``, where entry is the group's entry state before the chronological
                 reset chunk and the tail's entry state from it on. Defaults to False.
             emit_memory_config (ttnn.MemoryConfig, optional): Memory configuration of the
                 emitted terms. Height-sharded, a shard holds one block (``C`` is its height over
@@ -192,10 +196,11 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
         Returns:
             ttnn.Tensor: BFLOAT16 TILE tensor ``[S, B*H*G, K, K+V]`` with ``S = 2`` when
                 ``tail`` is set and ``S = 1`` otherwise, in ``memory_config``. With
-                ``emit_outputs``, a list of it followed by the terms, ``A`` and ``B``.
+                ``emit_outputs``, a list of it followed by the terms, ``E`` and ``B``.
 
         Note:
-            Summaries accumulate in FLOAT32 and pack directly to BFLOAT16 for transport.
+            Summaries accumulate in FLOAT32; E is formed in FLOAT32 and packs directly to
+            BFLOAT16 for transport. Requires ``fp32_dest_acc_en``.
             Consumers must use the same chronology and geometry.
 
             The current summary path requires ``K=V``. ``q_decay`` and ``intra`` are

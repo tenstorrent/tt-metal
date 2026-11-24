@@ -12,10 +12,7 @@
 #include "noc_nonblocking_api.h"
 #include "core_config.h"
 
-static_assert(
-    proc_type == static_cast<uint8_t>(TensixProcessorTypes::DM0) ||
-        proc_type == static_cast<uint8_t>(TensixProcessorTypes::DM1),
-    "PacketHeaderPool is only supported for TensixProcessorTypes::DM0 or TensixProcessorTypes::DM1");
+static_assert(proc_type < MaxDMProcessorsPerCoreType, "PacketHeaderPool: proc_type must be a valid DM processor index");
 
 // Simple packet header pool manager for fabric networking
 // This class manages allocation of packet headers from a fixed pool

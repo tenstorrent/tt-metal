@@ -21,6 +21,9 @@ MOE_RING_HEADER = REPO_ROOT / ("ttnn/cpp/ttnn/operations/experimental/ccl/moe_co
 MOE_CONFIG_HEADER = REPO_ROOT / (
     "ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/hostdevcommon/config.hpp"
 )
+MOE_ACTIVATION_HEADER = REPO_ROOT / (
+    "ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/moe_activation.h"
+)
 MOE_SWIGLU_HEADER = REPO_ROOT / ("ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/swiglu_sfpu.h")
 REQUIRED_STREAMING_HEADERS = (
     "api/compute/experimental/matmul_custom.h",
@@ -245,7 +248,14 @@ def test_moe_compute_readyseed_relative_header_closure_is_installed_without_flat
     assert "device/kernels/*.h" in moe_gpt_cmake
     assert "${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt" in moe_gpt_cmake
     assert compute.count('#include "moe_ring_common.h"') == 1
-    assert compute.count('#include "../../../moe_gpt/device/kernels/swiglu_sfpu.h"') == 1
+    # Upstream compute.cpp pulls swiglu_sfpu.h in through the same-directory moe_activation.h.
+    activation = MOE_ACTIVATION_HEADER.read_text(encoding="utf-8")
+    assert compute.count('#include "moe_activation.h"') == 1
+    assert (
+        activation.count('#include "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/swiglu_sfpu.h"')
+        == 1
+    )
+    assert activation.count('#include "../hostdevcommon/config.hpp"') == 1
     assert ring.count('#include "../hostdevcommon/config.hpp"') == 1
     assert MOE_CONFIG_HEADER.is_file()
     assert MOE_SWIGLU_HEADER.is_file()

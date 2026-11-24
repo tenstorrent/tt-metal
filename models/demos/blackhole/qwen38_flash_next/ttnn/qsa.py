@@ -454,7 +454,8 @@ def _sparse_sdpa_key_splits(device, rows: int) -> int:
     [1, min(64, grid cores)].  Prefill and the generic call never use it."""
 
     del rows  # batch invariance: N must not depend on the row count
-    if os.environ.get("QWEN38_SDPA_KSPLIT", "1") != "1":
+    # main's sparse_sdpa has its own split-K and no key_splits kwarg
+    if os.environ.get("QWEN38_SDPA_KSPLIT", "0") != "1":
         return 1
     n = int(os.environ.get("QWEN38_SDPA_KSPLIT_N", "8"))
     grid = device.compute_with_storage_grid_size()

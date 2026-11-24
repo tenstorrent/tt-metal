@@ -6,6 +6,7 @@
 #include "kernels/moe_ring_common.h"
 #include "moe_compute_device_operation.hpp"
 #include "moe_compute_program_factory.hpp"
+#include "moe_expert_rows.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
@@ -19,10 +20,8 @@
 
 #include <tt-umd/types/arch.hpp>
 
-#include <algorithm>
 #include <array>
 #include <cmath>
-#include <limits>
 #include <utility>
 
 namespace ttnn::experimental::prim {
@@ -33,21 +32,8 @@ constexpr auto DOUBLE_BUFFER_SIZE = 2;
 
 }  // namespace detail
 MoEComputeDeviceOperation::program_factory_t MoEComputeDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
-    if (tensor_args.expert_rows_tensor.has_value()) {
-        return MoEComputePlaceFactory{};
-    }
+    const operation_attributes_t&, const tensor_args_t&) {
     return MoEComputeMeshWorkloadFactory{};
-}
-
-ttsl::hash::hash_t MoEComputeDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    // The ring program compiles the layer in; the expert rows path's placement program never reads the weights, so one
-    // program serves every layer (the expert rows program takes the layer as a runtime offset).
-    if (tensor_args.expert_rows_tensor.has_value()) {
-        return hash_without_layer_id(args, tensor_args);
-    }
-    return ttsl::hash::hash_objects_with_default_seed(args, tensor_args);
 }
 
 void validate_activation_limit(detail::MoEActivationFunction activation_type, std::optional<float> activation_limit) {
@@ -152,61 +138,24 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
     const auto combine_token_parallel_cores = args.num_token_parallel_cores;
     const auto combine_data_parallel_cores = args.num_data_parallel_cores;
 
-    if (args.path == MoEComputePath::SingleCluster) {
-        // Nothing is staged in the combine cores' L1 on this path and the tilize cores keep the routing as packed
-        // (token, k slot) lists (moe_ring::token_list), so the token count is bounded by the entry format, not by
-        // the shared buffer.
-        const auto select_experts_k = tensor_args.tilize_expert_indices_tensor.logical_shape()[-1];
-        TT_FATAL(
-            total_tokens <= moe_ring::token_list::TOKEN_MASK + 1,
-            "moe_compute over a mesh axis of extent 1 packs the token id into {} bits; got {} tokens",
-            moe_ring::token_list::TOKEN_BITS,
-            total_tokens);
-        TT_FATAL(
-            select_experts_k <= moe_ring::token_list::MAX_K_SLOTS,
-            "moe_compute over a mesh axis of extent 1 packs the k slot into {} bits; got k = {}",
-            32 - moe_ring::token_list::TOKEN_BITS,
-            select_experts_k);
-        // The packed page and the pair lists (two RISC halves of div_up(T, 2) x k pairs, staged together on the
-        // drain) are sized in 32 bits. Bound them in 64 bits so that a token count times k too large to represent
-        // is refused here instead of wrapping into an undersized buffer.
-        const uint32_t experts_per_device = tensor_args.matmul_w0_w1_tensor.logical_shape()[2];
-        const uint64_t num_pairs = uint64_t{total_tokens} * select_experts_k;
-        const uint64_t page_bytes = (uint64_t{moe_ring::token_list::header_words(experts_per_device)} + num_pairs +
-                                     uint64_t{moe_ring::token_list::SEGMENT_ALIGN_ENTRIES} * (experts_per_device + 1) +
-                                     moe_ring::TOKENS_PER_CHUNK) *
-                                    moe_ring::token_list::ENTRY_BYTES;
-        const uint64_t staged_pair_lists_bytes = (num_pairs + select_experts_k) * moe_ring::token_list::PAIR_BYTES +
-                                                 2 * tt::tt_metal::hal::get_l1_alignment();
-        TT_FATAL(
-            std::max(page_bytes, staged_pair_lists_bytes) <= std::numeric_limits<uint32_t>::max(),
-            "moe_compute over a mesh axis of extent 1 keeps {} tokens x k = {} as packed (token, k) lists, which would "
-            "need more than 4 GiB",
-            total_tokens,
-            select_experts_k);
-    } else {
-        // make sure the shared L1 buffer is sufficiently large enough to contain all output tokens
-        const auto max_tokens = detail::TOKEN_SIZE * combine_data_parallel_cores * combine_token_parallel_cores;
-        TT_FATAL(
-            max_tokens >= total_tokens,
-            "Too many tokens in input, got: {} but expected max: {}",
-            total_tokens,
-            max_tokens);
-    }
+    // make sure the shared L1 buffer is sufficiently large enough to contain all output tokens
+    const auto max_tokens = detail::TOKEN_SIZE * combine_data_parallel_cores * combine_token_parallel_cores;
+    TT_FATAL(
+        max_tokens >= total_tokens, "Too many tokens in input, got: {} but expected max: {}", total_tokens, max_tokens);
 
     // Mode-specific validation of combine_params and optional_output_tensor.
     // - ComputeOnly: no combine_params, no optional_output_tensor (5 outputs).
     // - SingleDevice: combine_params must be set with local_combine=true; only on a 1x1 mesh;
     //   optional_output_tensor is allowed as the combine output sink (6 outputs, no CCL).
-    // - SingleCluster: combine_params describes the final [k, T, H] output (6 outputs, no combine
-    //   kernels: dm1 writes the output). The cluster_axis has extent 1; on a multi-device mesh
+    // - SingleCluster: combine_params describes the final [k, T, H] output (6 outputs, written on
+    //   the device, no fabric). The cluster_axis has extent 1; on a multi-device mesh
     //   that leaves one partial per coordinate for the caller to reduce, so the token set and its
     //   routing metadata must be replicated (every coordinate sees the same tokens, indices,
     //   scores and mapping). Only the rows of the experts a coordinate holds are written, as the
     //   combine writes only the rows it receives. The output is written one token row (2 x H
     //   bytes) at a time through a TensorAccessor page, the same addressing as the combine writer,
     //   so it takes the combine's output memory config check. The optional_output_tensor, when
-    //   given, is the buffer dm1 addresses (create_output_tensors returns it as slot 5).
+    //   given, is the buffer the op writes (create_output_tensors returns it as slot 5).
     // - FullCcl: combine_params must be set with local_combine=false (6 outputs, CCL path).
     auto* mesh_device = tensor_args.tilize_input_tensor.device();
     if (args.path == MoEComputePath::ComputeOnly) {
@@ -231,8 +180,7 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
                 args.combine_params->local_combine,
                 "path=SingleDevice requires combine_params->local_combine to be true");
         } else if (args.path == MoEComputePath::SingleCluster) {
-            // No fabric runs on this path. The CCL knobs keep their checks (num_links > 0, Linear or Ring), and
-            // the worker placement still avoids mux_core_range_set.
+            // The CCL knobs are accepted and unused on this path; num_links keeps its range check.
             TT_FATAL(args.combine_params->num_links > 0, "num_links must be greater than 0");
             TT_FATAL(
                 mesh_shape[args.combine_params->axis] == 1,
@@ -529,29 +477,6 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
     const auto output_spec = ttnn::experimental::prim::SelectiveReduceCombineDeviceOperation::compute_output_specs(
         args.combine_params.value(), combine_tensor_args);
 
-    if (args.path == MoEComputePath::SingleCluster) {
-        // No combine reads the routing on this path: output 1 is a one-page placeholder and output 2 the packed
-        // token-list page (moe_ring::token_list) dm1 fetches one chunk at a time; neither scales L1 with the tokens.
-        const auto placeholder_row_words = l1_alignment / sizeof(uint32_t);
-        const auto tilize_expert_activation_placeholder_spec = TensorSpec(
-            ttnn::Shape({1, placeholder_row_words}),
-            TensorLayout(DataType::UINT32, PageConfig(Layout::ROW_MAJOR), ttnn::DRAM_MEMORY_CONFIG));
-        const auto select_experts_k = tensor_args.tilize_expert_indices_tensor.logical_shape()[-1];
-        const auto packed_token_list_spec = TensorSpec(
-            ttnn::Shape(
-                {1,
-                 moe_ring::token_list::page_words(
-                     total_tokens, select_experts_k, experts_per_device, moe_ring::TOKENS_PER_CHUNK)}),
-            TensorLayout(DataType::UINT32, PageConfig(Layout::ROW_MAJOR), ttnn::DRAM_MEMORY_CONFIG));
-        return {
-            tilize_per_expert_total_tokens_spec,
-            tilize_expert_activation_placeholder_spec,
-            packed_token_list_spec,
-            tilize_output_spec,
-            matmul_output_spec,
-            output_spec};
-    }
-
     return {
         tilize_per_expert_total_tokens_spec,
         tilize_expert_activation_spec,
@@ -760,8 +685,8 @@ std::vector<ttnn::Tensor> moe_compute(
     } else if (!compute_only) {
         // An axis of extent 1 has nothing to combine (SingleCluster: dm1 writes the final output), so
         // skip link discovery and the fabric topology lookup, both of which need an initialized
-        // fabric context that a mesh opened without a fabric config lacks. Explicit CCL options keep
-        // their checks there (num_links > 0, Linear or Ring) and the placement still avoids the mux range.
+        // fabric context that a mesh opened without a fabric config lacks. Explicit CCL options are
+        // accepted and unused there; num_links is still checked > 0 below.
         const bool axis_has_neighbours = !single_cluster;
         // The local output leaves one partial per mesh coordinate that the caller sums, so a
         // shared expert would be counted once per coordinate.
@@ -769,19 +694,6 @@ std::vector<ttnn::Tensor> moe_compute(
             axis_has_neighbours || num_shared_experts_per_device.value_or(0) == 0,
             "moe_compute over a mesh axis of extent 1 writes a local output and does not support shared experts; "
             "run them separately and add their partial before the cross-device reduction");
-        // Every coordinate writes its partial into a whole [k, T, H] output, and the outputs take the inputs'
-        // replicated topology (compute_output_topologies), so a caller's output must be replicated too. Checked
-        // here, before launch: by the time the device op validates, a sharded tensor already carries the
-        // replicated label.
-        if (single_cluster && optional_output_tensor.has_value() && mesh_device->num_devices() > 1) {
-            for (const auto& placement : optional_output_tensor->tensor_topology().placements()) {
-                TT_FATAL(
-                    std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Replicate>(placement),
-                    "moe_compute over a mesh axis of extent 1 on a multi-device mesh requires a fully replicated "
-                    "optional_output_tensor topology (every coordinate writes its partial into a whole [k, tokens, "
-                    "hidden] buffer)");
-            }
-        }
         // see #27196 for potential limitations
         const uint32_t resolved_num_links = num_links.value_or(
             axis_has_neighbours ? ttnn::operations::ccl::common::get_num_links(*mesh_device, *cluster_axis) : 1);
@@ -834,15 +746,6 @@ std::vector<ttnn::Tensor> moe_compute(
             .optional_cross_device_semaphore = optional_cross_device_semaphore};
     }
 
-    experimental::prim::MoEComputePath path = experimental::prim::MoEComputePath::FullCcl;
-    if (compute_only) {
-        path = experimental::prim::MoEComputePath::ComputeOnly;
-    } else if (single_device) {
-        path = experimental::prim::MoEComputePath::SingleDevice;
-    } else if (single_cluster) {
-        path = experimental::prim::MoEComputePath::SingleCluster;
-    }
-
     const OperationType::operation_attributes_t attributes{
         .layer_id = layer_id,
         .output_height_shard_dim = output_height_shard_dim,
@@ -851,16 +754,16 @@ std::vector<ttnn::Tensor> moe_compute(
         .has_bias = has_bias,
         .num_token_parallel_cores = num_token_parallel_cores,
         .num_data_parallel_cores = num_data_parallel_cores,
-        .path = path,
+        .path = compute_only     ? experimental::prim::MoEComputePath::ComputeOnly
+                : single_device  ? experimental::prim::MoEComputePath::SingleDevice
+                : single_cluster ? experimental::prim::MoEComputePath::SingleCluster
+                                 : experimental::prim::MoEComputePath::FullCcl,
         .bh_ring_size = ring_n,
         .combine_params = combine_params,
         .activation_type = activation_type.value_or(experimental::prim::detail::MoEActivationFunction::SILU),
         .activation_limit = activation_limit,
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en};
-    // filled by the expert rows program before the launch; tensor_args refers to them
-    std::optional<ttnn::Tensor> expert_rows;
-    std::optional<ttnn::Tensor> expert_rows_table;
     const OperationType::tensor_args_t tensor_args{
         .tilize_input_tensor = tilize_input_tensor,
         .tilize_expert_indices_tensor = tilize_expert_indices_tensor,
@@ -868,22 +771,32 @@ std::vector<ttnn::Tensor> moe_compute(
         .tilize_expert_mapping_tensor = tilize_expert_mapping_tensor,
         .matmul_w0_w1_tensor = matmul_w0_w1_tensor,
         .matmul_w2_tensor = matmul_w2_tensor,
-        .optional_output_tensor = optional_output_tensor,
-        .expert_rows_tensor = expert_rows,
-        .expert_rows_table_tensor = expert_rows_table};
-    if (const auto params = experimental::prim::select_moe_compute_expert_rows(attributes, tensor_args)) {
-        auto rows_and_table = ttnn::prim::moe_expert_rows(
-            tilize_input_tensor,
-            tilize_expert_indices_tensor,
-            tilize_expert_scores_tensor,
-            tilize_expert_mapping_tensor,
-            matmul_w0_w1_tensor,
-            matmul_w2_tensor,
-            *params);
-        expert_rows = std::move(rows_and_table[0]);
-        expert_rows_table = std::move(rows_and_table[1]);
+        .optional_output_tensor = optional_output_tensor};
+    const auto params = experimental::prim::select_moe_compute_expert_rows(attributes, tensor_args);
+    if (!params.has_value()) {
+        return ttnn::device_operation::launch<OperationType>(attributes, tensor_args);
     }
-    return ttnn::device_operation::launch<OperationType>(attributes, tensor_args);
+    // the expert rows path: the rows and the routing table, then moe_compute's outputs from them
+    const auto rows_and_table = ttnn::prim::moe_expert_rows(
+        tilize_input_tensor,
+        tilize_expert_indices_tensor,
+        tilize_expert_scores_tensor,
+        tilize_expert_mapping_tensor,
+        matmul_w0_w1_tensor,
+        matmul_w2_tensor,
+        *params);
+    return ttnn::device_operation::launch<experimental::prim::MoEComputePlaceDeviceOperation>(
+        attributes,
+        experimental::prim::MoEComputePlaceInputs{
+            .tilize_input_tensor = tilize_input_tensor,
+            .tilize_expert_indices_tensor = tilize_expert_indices_tensor,
+            .tilize_expert_scores_tensor = tilize_expert_scores_tensor,
+            .tilize_expert_mapping_tensor = tilize_expert_mapping_tensor,
+            .matmul_w0_w1_tensor = matmul_w0_w1_tensor,
+            .matmul_w2_tensor = matmul_w2_tensor,
+            .optional_output_tensor = optional_output_tensor,
+            .row_buffer_tensor = rows_and_table[0],
+            .routing_table_tensor = rows_and_table[1]});
 }
 
 }  // namespace ttnn::prim

@@ -31,8 +31,7 @@ namespace ttnn::experimental::prim {
 //   multi-device mesh the token set and its routing metadata must be replicated and every
 //   coordinate writes only the rows of its own experts, like the combine; a caller that sums the
 //   partials across the other axis passes a zeroed output tensor. Returns 6 tensors like
-//   FullCcl, but slot 4 (the staged matmul output) is not written: nothing is staged; slots 1 and 2
-//   are a placeholder and the packed (token, k) lists (moe_ring::token_list).
+//   FullCcl, but slot 4 (the staged matmul output) is not written: nothing is staged.
 //   `combine_params` only describes the output (k, tokens, hidden, memory config, axis).
 // - `ComputeOnly` bypasses the combine path: no combine cores allocated, no fabric setup,
 //   no global semaphores; op emits 5 tensors instead of 6 (matmul_output is the final output).
@@ -99,7 +98,7 @@ struct MoEComputeParams {
     }
 };
 
-// Both moe_compute programs check it: CLAMPED_SILU needs a finite, positive limit, the other activations take none.
+// CLAMPED_SILU needs a finite, positive limit; the other activations take none.
 void validate_activation_limit(detail::MoEActivationFunction activation_type, std::optional<float> activation_limit);
 
 struct MoEComputeInputs {
@@ -110,10 +109,6 @@ struct MoEComputeInputs {
     const ttnn::Tensor& matmul_w0_w1_tensor;
     const ttnn::Tensor& matmul_w2_tensor;
     const std::optional<ttnn::Tensor>& optional_output_tensor;
-    // expert rows: the expert rows program's row buffer and routing table, inputs of the placement program
-    // (MoEComputePlaceFactory); empty for the ring
-    const std::optional<ttnn::Tensor>& expert_rows_tensor;
-    const std::optional<ttnn::Tensor>& expert_rows_table_tensor;
 };
 
 }  // namespace ttnn::experimental::prim

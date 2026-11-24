@@ -30,9 +30,6 @@ struct SparseSDPAParams {
     bool has_scaled_kv() const { return kv_format == transformer::SparseKVFormat::SCALED_FP8; }
     // Worker cores: sub_core_grids, or all cores of the first subdevice.
     tt::tt_metal::CoreRangeSet worker_core_grid;
-    // Key-split decode: N cores share one token's selected keys (core c = token c / N, rank c % N) and combine
-    // their partial softmax states with an on-device binary tree. 1 = today's one-core-per-token program.
-    uint32_t key_splits = 1;
 };
 
 struct SparseSDPAInputs {

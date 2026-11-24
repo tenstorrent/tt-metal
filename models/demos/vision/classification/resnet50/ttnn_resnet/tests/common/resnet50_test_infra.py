@@ -20,7 +20,7 @@ from models.demos.vision.classification.resnet50.ttnn_resnet.tt.ttnn_functional_
     is_blackhole_p100,
     resnet50,
 )
-from tests.ttnn.utils_for_testing import check_with_pcc
+from tt_py_test_utils_common.utils_for_testing import check_with_pcc
 
 
 def load_resnet50_model(model_location_generator):

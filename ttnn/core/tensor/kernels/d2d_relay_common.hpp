@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Helpers shared by the exit and entry relay kernels. Same streaming as persistent_d2d_sender.cpp,
-// with sizes as template parameters because a relay copies many tensors.
+// Helpers shared by the exit and entry relay kernels; the sender kernel uses the page streaming.
+// Sizes are template parameters because a relay copies many tensors.
 
 #pragma once
 
@@ -63,10 +63,12 @@ FORCE_INLINE void fabric_atomic_inc(
     conn.send_payload_flush_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
 }
 
-// Point a packet header at chip `chip_id` of mesh `mesh_id`. 2D fabric only.
-FORCE_INLINE void set_route(volatile tt_l1_ptr PACKET_HEADER_TYPE* header, uint32_t chip_id, uint32_t mesh_id) {
+// Point a packet header at chip `chip_id` of mesh `mesh_id`. 2D fabric only. A template so the check
+// fires only where a kernel routes by chip id: the sender includes this header on any fabric.
+template <typename Header>
+FORCE_INLINE void set_route(volatile tt_l1_ptr Header* header, uint32_t chip_id, uint32_t mesh_id) {
     static_assert(
-        std::is_same_v<PACKET_HEADER_TYPE, tt::tt_fabric::HybridMeshPacketHeader>,
+        std::is_same_v<Header, tt::tt_fabric::HybridMeshPacketHeader>,
         "D2D relay mode needs a 2D fabric (HybridMeshPacketHeader)");
     fabric_set_unicast_route(header, chip_id, mesh_id);
 }
@@ -81,10 +83,132 @@ FORCE_INLINE bool terminated(uint32_t termination_addr, uint32_t terminate_value
     return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_addr)[0] == terminate_value;
 }
 
-// Copy pages [page_start, page_end) to another chip over fabric, reading up to Depth pages
-// ahead (one NoC transaction id per ring slot). Same loop as stream_half in the sender kernel.
-// A nonzero inc_addr is fused into the last packet (see fabric_write_bytes).
-template <uint32_t PageSize, uint32_t MaxPayload, uint32_t Depth, uint32_t TridBase, typename InAcc, typename OutAcc>
+// The host's packed_slot_bytes caps groups at the same chunk count (kMaxPagesPerPacket).
+static_assert(NOC_SCATTER_WRITE_MAX_CHUNKS == 4, "keep kMaxPagesPerPacket in d2d_stream_service.cpp in sync");
+
+// Pages per fabric packet: the most that fit both MaxPayload and one ring slot (SlotBytes), capped
+// by the scatter chunk limit, as a power of 2. Per-packet router and flush costs dominate small
+// pages, so tile pages ride several to a packet. A scatter chunk is sourced at payload base + the
+// earlier chunk sizes, so pages off 16 B stay one per packet.
+template <uint32_t MaxPayload, uint32_t SlotBytes>
+FORCE_INLINE uint32_t pages_per_packet(uint32_t page_size) {
+    if (page_size == 0 || page_size % 16 != 0) {
+        return 1;
+    }
+    constexpr uint32_t cap = MaxPayload < SlotBytes ? MaxPayload : SlotBytes;
+    uint32_t fit = cap / page_size;
+    fit = fit < NOC_SCATTER_WRITE_MAX_CHUNKS ? fit : NOC_SCATTER_WRITE_MAX_CHUNKS;
+    return fit < 2 ? 1 : floor_pow2(fit);
+}
+
+// Write `count` pages that sit back to back in L1 at l1_src_addr, starting at page `first`, as one
+// scatter packet; a single page goes as a plain write and may carry the fused increment.
+template <uint32_t MaxPayload, typename OutAcc>
+FORCE_INLINE void fabric_write_pages(
+    tt::tt_fabric::WorkerToFabricEdmSender& conn,
+    const OutAcc& out_acc,
+    uint32_t first,
+    uint32_t count,
+    uint32_t l1_src_addr,
+    uint32_t page_size,
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* header,
+    uint64_t inc_addr = 0) {
+    if (count == 1) {
+        fabric_write_bytes<MaxPayload>(conn, out_acc.get_noc_addr(first), l1_src_addr, page_size, header, inc_addr);
+        return;
+    }
+    uint64_t dst[NOC_SCATTER_WRITE_MAX_CHUNKS];
+    uint16_t sizes[NOC_SCATTER_WRITE_MAX_CHUNKS - 1];
+    for (uint32_t i = 0; i < count; ++i) {
+        dst[i] = out_acc.get_noc_addr(first + i);
+        if (i + 1 < count) {
+            sizes[i] = static_cast<uint16_t>(page_size);
+        }
+    }
+    header->to_noc_unicast_scatter_write(
+        tt::tt_fabric::NocUnicastScatterCommandHeader(dst, sizes, static_cast<uint8_t>(count)), count * page_size);
+    conn.wait_for_empty_write_slot();
+    conn.send_payload_without_header_non_blocking_from_address(l1_src_addr, count * page_size);
+    conn.send_payload_flush_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
+}
+
+// Copy pages [page_start, page_end) to another chip over fabric, reading up to Depth packets of
+// pages ahead (one NoC transaction id per ring slot of SlotBytes). The sender kernel streams with it
+// too. A nonzero inc_addr is fused into the last packet, which then carries the last page alone.
+template <uint32_t MaxPayload, uint32_t SlotBytes, uint32_t Depth, uint32_t TridBase, typename InAcc, typename OutAcc>
+FORCE_INLINE void stream_sized_pages(
+    const Noc& noc,
+    tt::tt_fabric::WorkerToFabricEdmSender& conn,
+    const InAcc& in_acc,
+    const OutAcc& out_acc,
+    uint32_t cb_l1_addr,
+    uint32_t page_start,
+    uint32_t page_end,
+    uint32_t page_size,
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* header,
+    uint64_t inc_addr = 0) {
+    static_assert(Depth > 0 && (Depth & (Depth - 1)) == 0, "ring depth must be a power of 2");
+    const uint32_t n = page_end - page_start;
+    const uint32_t pack = pages_per_packet<MaxPayload, SlotBytes>(page_size);
+    const uint32_t group_bytes = pack * page_size;
+    const uint32_t groups = (n + pack - 1) / pack;
+    CoreLocalMem<uint32_t> scratch(cb_l1_addr);
+    auto read_group = [&](uint32_t g) {
+        const uint32_t slot = g & (Depth - 1);
+        const uint32_t first = g * pack;
+        const uint32_t count = n - first < pack ? n - first : pack;
+        for (uint32_t i = 0; i < count; ++i) {
+            noc.async_read<NocOptions::TXN_ID>(
+                in_acc,
+                scratch,
+                page_size,
+                {.page_id = page_start + first + i},
+                {.offset_bytes = (slot * group_bytes) + (i * page_size)},
+                NocOptVals{.trid = TridBase + slot});
+        }
+    };
+    const uint32_t prime = Depth < groups ? Depth : groups;
+    for (uint32_t g = 0; g < prime; ++g) {
+        read_group(g);
+    }
+    for (uint32_t g = 0; g < groups; ++g) {
+        const uint32_t slot = g & (Depth - 1);
+        noc.async_read_barrier<NocOptions::TXN_ID>(NocOptVals{.trid = TridBase + slot});
+        const uint32_t first = g * pack;
+        const uint32_t count = n - first < pack ? n - first : pack;
+        const uint32_t src = cb_l1_addr + (slot * group_bytes);
+        if (g + 1 < groups || inc_addr == 0) {
+            fabric_write_pages<MaxPayload>(conn, out_acc, page_start + first, count, src, page_size, header);
+        } else {
+            if (count > 1) {
+                fabric_write_pages<MaxPayload>(conn, out_acc, page_start + first, count - 1, src, page_size, header);
+            }
+            fabric_write_pages<MaxPayload>(
+                conn,
+                out_acc,
+                page_start + first + count - 1,
+                1,
+                src + ((count - 1) * page_size),
+                page_size,
+                header,
+                inc_addr);
+        }
+        // The flush in fabric_write_pages has read the slot out of L1, so it can be refilled.
+        if (g + Depth < groups) {
+            read_group(g + Depth);
+        }
+    }
+}
+
+// The primary tensor's page size is a compile-time constant, so its slot offsets fold.
+template <
+    uint32_t PageSize,
+    uint32_t MaxPayload,
+    uint32_t SlotBytes,
+    uint32_t Depth,
+    uint32_t TridBase,
+    typename InAcc,
+    typename OutAcc>
 FORCE_INLINE void stream_pages(
     const Noc& noc,
     tt::tt_fabric::WorkerToFabricEdmSender& conn,
@@ -95,39 +219,48 @@ FORCE_INLINE void stream_pages(
     uint32_t page_end,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* header,
     uint64_t inc_addr = 0) {
-    static_assert(Depth > 0 && (Depth & (Depth - 1)) == 0, "ring depth must be a power of 2");
-    const uint32_t n = page_end - page_start;
-    const uint32_t prime = Depth < n ? Depth : n;
-    CoreLocalMem<uint32_t> scratch(cb_l1_addr);
-    for (uint32_t i = 0; i < prime; ++i) {
-        noc.async_read<NocOptions::TXN_ID>(
-            in_acc,
-            scratch,
-            PageSize,
-            {.page_id = page_start + i},
-            {.offset_bytes = i * PageSize},
-            NocOptVals{.trid = TridBase + i});
-    }
-    for (uint32_t k = 0; k < n; ++k) {
-        const uint32_t slot = k & (Depth - 1);
-        const uint32_t trid = TridBase + slot;
-        noc.async_read_barrier<NocOptions::TXN_ID>(NocOptVals{.trid = trid});
-        fabric_write_bytes<MaxPayload>(
-            conn,
-            out_acc.get_noc_addr(page_start + k),
-            cb_l1_addr + slot * PageSize,
-            PageSize,
-            header,
-            k + 1 == n ? inc_addr : 0);
-        const uint32_t next = k + Depth;
-        if (next < n) {
-            noc.async_read<NocOptions::TXN_ID>(
+    stream_sized_pages<MaxPayload, SlotBytes, Depth, TridBase>(
+        noc, conn, in_acc, out_acc, cb_l1_addr, page_start, page_end, PageSize, header, inc_addr);
+}
+
+// Extra segments (D2DStreamConfig::extra_tensors) ride with the primary tensor in every copy.
+// Their CT args follow the primary accessor's at CtOffset: kRelayExtraSegmentCtArgs words per segment
+// [page_size, half_pages, total_pages], then one accessor block shared by all of them (they are
+// DRAM interleaved). The caller's RT args at addr_arg hold a (src, dst) address pair per segment.
+// The lanes split each segment like the primary: the master takes [0, half) when there are two.
+constexpr uint32_t kRelayExtraSegmentCtArgs = 3;
+
+// NumExtra is a template parameter so that `if constexpr` defers the accessor block: with no
+// extra segments it would sit past the last CT arg.
+template <uint32_t NumExtra, uint32_t CtOffset, uint32_t MaxPayload, uint32_t SlotBytes, uint32_t Depth, uint32_t TridBase>
+FORCE_INLINE void stream_extra_segments(
+    const Noc& noc,
+    tt::tt_fabric::WorkerToFabricEdmSender& conn,
+    uint32_t cb_l1_addr,
+    size_t addr_arg,
+    bool master,
+    bool two_lanes,
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* header) {
+    if constexpr (NumExtra > 0) {
+        constexpr auto seg_args = TensorAccessorArgs<CtOffset + (kRelayExtraSegmentCtArgs * NumExtra)>();
+        for (uint32_t s = 0; s < NumExtra; ++s) {
+            const uint32_t ct = CtOffset + (kRelayExtraSegmentCtArgs * s);
+            const uint32_t seg_page_size = kernel_compile_time_args[ct];
+            const uint32_t half = kernel_compile_time_args[ct + 1];
+            const uint32_t total = kernel_compile_time_args[ct + 2];
+            const auto in_acc = TensorAccessor(seg_args, get_arg_val<uint32_t>(addr_arg + (2 * s)), seg_page_size);
+            const auto out_acc =
+                TensorAccessor(seg_args, get_arg_val<uint32_t>(addr_arg + (2 * s) + 1), seg_page_size);
+            stream_sized_pages<MaxPayload, SlotBytes, Depth, TridBase>(
+                noc,
+                conn,
                 in_acc,
-                scratch,
-                PageSize,
-                {.page_id = page_start + next},
-                {.offset_bytes = slot * PageSize},
-                NocOptVals{.trid = trid});
+                out_acc,
+                cb_l1_addr,
+                master ? 0u : half,
+                (master && two_lanes) ? half : total,
+                seg_page_size,
+                header);
         }
     }
 }
@@ -135,7 +268,14 @@ FORCE_INLINE void stream_pages(
 // Copy pages [page_start, page_end), then md_size bytes of metadata from md_l1_addr to md_dst
 // (none when md_size is 0), and increment inc_addr by 1 in the same packet as the last write.
 // With nothing to write, the increment goes alone with the same flush.
-template <uint32_t PageSize, uint32_t MaxPayload, uint32_t Depth, uint32_t TridBase, typename InAcc, typename OutAcc>
+template <
+    uint32_t PageSize,
+    uint32_t MaxPayload,
+    uint32_t SlotBytes,
+    uint32_t Depth,
+    uint32_t TridBase,
+    typename InAcc,
+    typename OutAcc>
 FORCE_INLINE void stream_pages_then_inc(
     const Noc& noc,
     tt::tt_fabric::WorkerToFabricEdmSender& conn,
@@ -150,11 +290,11 @@ FORCE_INLINE void stream_pages_then_inc(
     uint64_t inc_addr,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* header) {
     if (md_size > 0) {
-        stream_pages<PageSize, MaxPayload, Depth, TridBase>(
+        stream_pages<PageSize, MaxPayload, SlotBytes, Depth, TridBase>(
             noc, conn, in_acc, out_acc, cb_l1_addr, page_start, page_end, header);
         fabric_write_bytes<MaxPayload>(conn, md_dst, md_l1_addr, md_size, header, inc_addr);
     } else if (page_end > page_start) {
-        stream_pages<PageSize, MaxPayload, Depth, TridBase>(
+        stream_pages<PageSize, MaxPayload, SlotBytes, Depth, TridBase>(
             noc, conn, in_acc, out_acc, cb_l1_addr, page_start, page_end, header, inc_addr);
     } else {
         fabric_atomic_inc(conn, inc_addr, true, header);

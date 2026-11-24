@@ -146,6 +146,7 @@ _WH_ONLY = pytest.mark.skipif(is_blackhole(), reason="Wormhole-only mesh configu
 
 MESH_4X8_RING = pytest.param((4, 8), _ring_8k, id="4x8", marks=_BH_ONLY)
 MESH_4X8_LINE = pytest.param((4, 8), _line_8k, id="4x8_line", marks=[_BH_ONLY, _LINE_OPT_IN])
+MESH_4X32_RING = pytest.param((4, 32), _ring_8k, id="4x32", marks=_BH_ONLY)
 MESH_4X32_RING_TRACED = pytest.param((4, 32), _ring_8k_trace, id="4x32_TRACED", marks=_BH_ONLY)
 # Links and residency come from the pipeline's `_PRESETS_WH`, so the row carries only device params.
 MESH_4X8_RING_WH = pytest.param((4, 8), _ring_4k, id="4x8_WH", marks=_WH_ONLY)
@@ -153,9 +154,13 @@ MESH_4X8_RING_WH = pytest.param((4, 8), _ring_4k, id="4x8_WH", marks=_WH_ONLY)
 GALAXY_MESHES = [MESH_4X8_RING, MESH_4X8_LINE, MESH_4X32_RING_TRACED, MESH_4X8_RING_WH]
 
 
-def fabric_topology() -> ttnn.Topology:
+def fabric_topology(mesh_device) -> ttnn.Topology:
     """CCL topology for the open fabric: a ring collective on a `FABRIC_1D` line has no forwarding direction."""
-    return ttnn.Topology.Linear if ttnn.get_fabric_config() == ttnn.FabricConfig.FABRIC_1D else ttnn.Topology.Ring
+    return (
+        ttnn.Topology.Linear
+        if ttnn.get_fabric_config(mesh_device) == ttnn.FabricConfig.FABRIC_1D
+        else ttnn.Topology.Ring
+    )
 
 
 def randomize_norm_weights(module: torch.nn.Module, *, scale: float = 0.5) -> torch.nn.Module:
@@ -203,6 +208,26 @@ GALAXY_RING = pytest.mark.parametrize(
         ),
         pytest.param(
             (4, 8), 1, 0, 4, _ring_4k, ttnn.Topology.Ring, True, id="4x8sp1tp0nl4_ring_is_fsdp1", marks=_WH_ONLY
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+
+# The ring rows plus the opt-in line-fabric row.
+GALAXY_RING_AND_LINE = pytest.mark.parametrize(
+    GALAXY_RING.args[0],
+    [
+        *GALAXY_RING.args[1],
+        pytest.param(
+            (4, 8),
+            1,
+            0,
+            2,
+            _line_8k,
+            ttnn.Topology.Linear,
+            False,
+            id="4x8sp1tp0nl2_line_is_fsdp0",
+            marks=[_BH_ONLY, _LINE_OPT_IN],
         ),
     ],
     indirect=["mesh_device", "device_params"],

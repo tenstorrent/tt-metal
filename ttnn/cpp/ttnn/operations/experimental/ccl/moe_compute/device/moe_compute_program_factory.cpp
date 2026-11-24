@@ -75,11 +75,13 @@ inline uint32_t non_tile_cb_page_size(tt::DataFormat data_format, uint32_t l1_al
     return std::max({tt::datum_size(data_format), l1_alignment, CIRCULAR_BUFFER_COMPUTE_WORD_SIZE});
 }
 
-uint32_t get_num_pages_st(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->num_pages(); }
+uint32_t get_num_pages_st(const ttnn::Tensor& tensor) { return (uint32_t)tensor.mesh_buffer().num_pages(); }
 
-uint32_t get_page_size_st(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->page_size(); }
+uint32_t get_page_size_st(const ttnn::Tensor& tensor) { return (uint32_t)tensor.mesh_buffer().page_size(); }
 
-uint32_t get_aligned_page_size_st(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->aligned_page_size(); }
+uint32_t get_aligned_page_size_st(const ttnn::Tensor& tensor) {
+    return (uint32_t)tensor.mesh_buffer().aligned_page_size();
+}
 
 uint32_t get_num_rows_st(const ttnn::Tensor& tensor) {
     auto logical_volume = tensor.logical_shape().volume();
@@ -108,12 +110,7 @@ get_cores(
     uint32_t bh_ring_size,
     const tt::tt_metal::CoreRangeSet& mux_core_range_set) {
     const auto selection = ttnn::operations::ccl::common::select_moe_compute_cores(
-        mesh_device,
-        combine_token_parallel_cores,
-        combine_data_parallel_cores,
-        hidden_size,
-        mux_core_range_set,
-        bh_ring_size);
+        mesh_device, combine_token_parallel_cores, combine_data_parallel_cores, hidden_size, mux_core_range_set, bh_ring_size);
 
     return {
         selection.tilize_cores,
@@ -663,38 +660,16 @@ tt::tt_metal::ProgramDescriptor build_moe_compute_program_descriptor(
         std::max(tilize_units_per_core_work_group_1, tilize_units_per_core_work_group_2) *
         tilize_subtoken_bytes_aligned;
 
-    constexpr uint32_t tokens_per_chunk = moe_ring::TOKENS_PER_CHUNK;
+    constexpr uint32_t tokens_per_chunk = 32;  // Hardcoding for now, can adjust when tiny tiles support added
 
-    // Per-token L1 on the tilize cores: the fused-combine paths keep dense token lists and activation rows (about
-    // 36 B per token per local expert, 4.6 KB at 128 experts); the local output path keeps pair lists (c_9 NCRISC,
-    // c_10 BRISC), the non-drain cores' lists staged on the drain (c_12) and the packed page (c_7,
-    // moe_ring::token_list), which admits a whole prefill slab.
-    uint32_t pairs_capacity_bytes = 0;
-    if (local_output) {
-        // The last tilize core takes the remainder of the token split (the runtime args below); each RISC
-        // processes half of its core's range.
-        const uint32_t max_tokens_per_tilize_core = tokens - (tilize_num_cores - 1) * (tokens / tilize_num_cores);
-        pairs_capacity_bytes = tt::align(
-            tt::div_up(max_tokens_per_tilize_core, 2) * selected_experts_k * moe_ring::token_list::PAIR_BYTES,
-            l1_alignment);
-        const uint32_t page_words =
-            moe_ring::token_list::page_words(tokens, selected_experts_k, experts_per_device, tokens_per_chunk);
-        TT_FATAL(
-            tilize_e_t_output_page_size == page_words * sizeof(uint32_t),
-            "moe_compute: the packed token-list page is {} B, the kernels expect {} words",
-            tilize_e_t_output_page_size,
-            page_words);
-        push_cb(desc, e_t_cb_id, tilize_core_range_set, tilize_e_t_output_page_size, 1, tilize_e_t_output_data_format);
-    } else {
-        // e_t buffer entry size must be 16B aligned for NOC DMA during BRISC->NCRISC merge
-        push_cb(
-            desc,
-            e_t_cb_id,
-            tilize_core_range_set,
-            tilize_e_t_output_page_size,
-            experts_per_device,  // number of experts on the device
-            tilize_e_t_output_data_format);
-    }
+    // e_t buffer entry size must be 16B aligned for NOC DMA during BRISC->NCRISC merge
+    push_cb(
+        desc,
+        e_t_cb_id,
+        tilize_core_range_set,
+        tilize_e_t_output_page_size,
+        experts_per_device,  // number of experts on the device
+        tilize_e_t_output_data_format);
 
     // Assume indices tensor is sharded in L1
     push_cb(
@@ -738,6 +713,26 @@ tt::tt_metal::ProgramDescriptor build_moe_compute_program_descriptor(
         tokens_per_chunk,
         tilize_input_data_format);
 
+    push_cb(
+        desc,
+        expert_activation_cb_id,
+        tilize_core_range_set,
+        static_cast<uint32_t>(tt::align((2 * experts_per_device + 1) * sizeof(uint32_t), l1_alignment)),
+        tokens,
+        tt::DataFormat::UInt32);
+
+    // BRISC's e_t buffer for parallel metadata processing
+    // BRISC processes the second half of tokens (tokens/2 to tokens)
+    // Single page containing all experts' token lists, each with capacity ceil(tokens/2)
+    // Uses same 16B entry alignment as main e_t buffer for NOC DMA compatibility
+    push_cb(
+        desc,
+        brisc_e_t_cb_id,
+        tilize_core_range_set,
+        tt::div_up(tokens, 2) * l1_alignment * experts_per_device,  // full buffer, ceil(tokens/2) 16B entries/expert
+        1,
+        tt::DataFormat::UInt32);
+
     // BRISC's per-expert token counts to communicate to NCRISC
     // Single page containing counts for all experts
     push_cb(
@@ -748,72 +743,32 @@ tt::tt_metal::ProgramDescriptor build_moe_compute_program_descriptor(
         1,
         tt::DataFormat::UInt32);
 
-    // Each non-drain core's record for the drain: its per-expert counts and an activated-token count, or under
-    // local_output its per-expert counts and both pair-list lengths; 16B aligned per core's data.
-    const uint32_t counts_per_remote_core = experts_per_device + (local_output ? 2 : 1);
-    const uint32_t remote_counts_entry_size = tt::align(counts_per_remote_core * sizeof(uint32_t), l1_alignment);
+    // BRISC's expert activation buffer - same format as main expert_activation buffer
+    // [token_id, k_indices[experts_per_device], scores[experts_per_device]] per activated token
+    // Single page containing all activation rows (max ceil(tokens/2))
+    uint32_t brisc_activation_row_size = tt::align((2 * experts_per_device + 1) * sizeof(uint32_t), l1_alignment);
+    push_cb(
+        desc,
+        brisc_expert_activation_cb_id,
+        tilize_core_range_set,
+        brisc_activation_row_size * tt::div_up(tokens, 2),  // full buffer in one page
+        1,
+        tt::DataFormat::UInt32);
 
-    if (local_output) {
-        // Pair lists: NCRISC's (c_9) and BRISC's (c_10), one page each.
-        for (const auto pairs_cb_id : {expert_activation_cb_id, brisc_e_t_cb_id}) {
-            push_cb(desc, pairs_cb_id, tilize_core_range_set, pairs_capacity_bytes, 1, tt::DataFormat::UInt32);
-        }
-        // Staging on the drain: the two lists of every non-drain core (one page per core); the remote cores write
-        // it directly, like the counts record.
-        if (tilize_num_cores > 1) {
-            push_cb(
-                desc,
-                brisc_expert_activation_cb_id,
-                tilize_core_range_set,
-                2 * pairs_capacity_bytes,
-                tilize_num_cores - 1,
-                tt::DataFormat::UInt32);
-        }
-    } else {
-        push_cb(
-            desc,
-            expert_activation_cb_id,
-            tilize_core_range_set,
-            static_cast<uint32_t>(tt::align((2 * experts_per_device + 1) * sizeof(uint32_t), l1_alignment)),
-            tokens,
-            tt::DataFormat::UInt32);
+    // BRISC's activated token count (single uint32_t to communicate to NCRISC)
+    push_cb(
+        desc,
+        brisc_activated_count_cb_id,
+        tilize_core_range_set,
+        static_cast<uint32_t>(sizeof(uint32_t)),
+        1,
+        tt::DataFormat::UInt32);
 
-        // BRISC's e_t buffer for parallel metadata processing
-        // BRISC processes the second half of tokens (tokens/2 to tokens)
-        // Single page containing all experts' token lists, each with capacity ceil(tokens/2)
-        // Uses same 16B entry alignment as main e_t buffer for NOC DMA compatibility
-        push_cb(
-            desc,
-            brisc_e_t_cb_id,
-            tilize_core_range_set,
-            tt::div_up(tokens, 2) * l1_alignment *
-                experts_per_device,  // full buffer, ceil(tokens/2) 16B entries/expert
-            1,
-            tt::DataFormat::UInt32);
-
-        // BRISC's expert activation buffer - same format as main expert_activation buffer
-        // [token_id, k_indices[experts_per_device], scores[experts_per_device]] per activated token
-        // Single page containing all activation rows (max ceil(tokens/2))
-        uint32_t brisc_activation_row_size = tt::align((2 * experts_per_device + 1) * sizeof(uint32_t), l1_alignment);
-        push_cb(
-            desc,
-            brisc_expert_activation_cb_id,
-            tilize_core_range_set,
-            brisc_activation_row_size * tt::div_up(tokens, 2),  // full buffer in one page
-            1,
-            tt::DataFormat::UInt32);
-
-        // BRISC's activated token count (single uint32_t to communicate to NCRISC)
-        push_cb(
-            desc,
-            brisc_activated_count_cb_id,
-            tilize_core_range_set,
-            static_cast<uint32_t>(sizeof(uint32_t)),
-            1,
-            tt::DataFormat::UInt32);
-    }
-
-    // CB for receiving the records from non-drain tilize cores (only used on drain core)
+    // CB for receiving counts from non-drain tilize cores (only used on drain core)
+    // Each non-drain core sends: [e_t_count_expert0, e_t_count_expert1, activated_count]
+    // Layout: 3 values per core × (tilize_num_cores - 1) cores, 16B aligned per core's data
+    uint32_t counts_per_remote_core = experts_per_device + 1;  // e_t counts + activated count
+    uint32_t remote_counts_entry_size = tt::align(counts_per_remote_core * sizeof(uint32_t), l1_alignment);
     push_cb(
         desc,
         remote_counts_cb_id,
@@ -885,14 +840,11 @@ tt::tt_metal::ProgramDescriptor build_moe_compute_program_descriptor(
         push_cb(desc, index, matmul_core_range_set, bytes_per_tile, tiles_per_cb, data_format);
     }
 
-    // LOCAL_OUTPUT: dm1's per-chunk copy of the current expert's packed entries (one 4-B (k slot, token id)
-    // entry per token, a whole chunk per read), read from the e_t output page in DRAM: the L1 destination of a
-    // DRAM read must be DRAM-aligned, so the CB carries one alignment of slack and dm1 aligns inside it. c_9 is
-    // free on the matmul cores (c_8 is the bias ones tile).
+    // LOCAL_OUTPUT: dm1's per-chunk copy of the current expert's e_t entries (one 16-B entry per
+    // token: word 0 token id, word 1 k slot). c_9 is free on the matmul cores (c_8 is the bias ones tile).
     constexpr uint32_t local_output_map_cb_id = tt::CBIndex::c_9;
     if (local_output) {
-        const uint32_t map_bytes =
-            tt::align(tokens_per_chunk * moe_ring::token_list::ENTRY_BYTES, dram_alignment) + dram_alignment;
+        const uint32_t map_bytes = tokens_per_chunk * l1_alignment;
         push_cb(
             desc,
             local_output_map_cb_id,
@@ -1057,11 +1009,9 @@ tt::tt_metal::ProgramDescriptor build_moe_compute_program_descriptor(
 
         // Bypass selective_reduce_combine path entirely (1=skip combine semaphore inc/wait/set).
         {"compute_only", args.path == MoEComputePath::ComputeOnly ? 1u : 0u},
-        // SingleCluster: no combine kernels either; the drain packs the expert -> token lists (moe_ring::token_list)
-        // and publishes them before releasing the matmul cores, since dm1 reads them for its output
-        // rows. pairs_capacity_bytes sizes one RISC's pair list (a staging slot on the drain).
-        {"local_output", local_output ? 1u : 0u},
-        {"pairs_capacity_bytes", pairs_capacity_bytes}};
+        // SingleCluster: no combine kernels either; the drain publishes the e_t tensor (token id + k
+        // slot per entry) before releasing the matmul cores, since dm1 reads it for its output rows.
+        {"local_output", local_output ? 1u : 0u}};
 
     std::vector<uint32_t> tilize_compile_time_args = {};
     tt::tt_metal::TensorAccessorArgs(tilize_input_tensor.buffer()).append_to(tilize_compile_time_args);
@@ -1290,7 +1240,7 @@ tt::tt_metal::ProgramDescriptor build_moe_compute_program_descriptor(
         tt::tt_metal::TensorAccessorArgs(*tensor->buffer()).append_to(matmul_compile_time_args);
     }
     if (local_output) {
-        // LOCAL_OUTPUT: dm1 reads the packed token-list page and writes the final output. Accessor args follow the
+        // LOCAL_OUTPUT: dm1 reads the e_t pages and writes the final output. Accessor args follow the
         // three matmul tensors; dm0 and compute stop after those. Addresses are Buffer* bindings below.
         TT_FATAL(
             tensor_return_value.size() == 6, "path=SingleCluster expects 6 output tensors, got {}", tensor_return_value.size());
@@ -1312,7 +1262,7 @@ tt::tt_metal::ProgramDescriptor build_moe_compute_program_descriptor(
         source_shard_shape[0],
         source_shard_shape[1],
         hidden_size / combine_data_parallel_cores,
-        tilize_output_tensor.buffer()->aligned_size_per_bank(),
+        tilize_output_tensor.mesh_buffer().aligned_size_per_bank(),
         token_segment_size_bytes,
         num_source_buffers);
     const uint32_t token_expert_row_offset = fused_source_layout.rows_per_buffer;
@@ -1337,8 +1287,8 @@ tt::tt_metal::ProgramDescriptor build_moe_compute_program_descriptor(
     // holds w0_w1_bank_blocks_per_expert whole blocks per (layer, expert). dm0 derives the
     // geometry from the shape compile args; check here that the tensor was packed that way
     // (a tensor packed with the old per-core stride has a different page count).
-    const uint32_t w0_w1_total_pages_buf = static_cast<uint32_t>(matmul_w0_w1_tensor.buffer()->num_pages());
-    const uint32_t w2_total_pages_buf = static_cast<uint32_t>(matmul_w2_tensor.buffer()->num_pages());
+    const uint32_t w0_w1_total_pages_buf = static_cast<uint32_t>(matmul_w0_w1_tensor.mesh_buffer().num_pages());
+    const uint32_t w2_total_pages_buf = static_cast<uint32_t>(matmul_w2_tensor.mesh_buffer().num_pages());
     {
         const uint32_t w0_w1_layers = matmul_w0_w1_tensor.logical_shape()[1];
         const uint32_t w0_w1_bank_blocks = moe_ring::w0_w1_bank_blocks_per_expert(
@@ -1430,11 +1380,10 @@ tt::tt_metal::ProgramDescriptor build_moe_compute_program_descriptor(
         {"matmul_combine_sync_semaphore_id", matmul_combine_sync_semaphore_id},
         // Bypass combine signaling/wait when no combine kernels are built.
         {"compute_only", args.path == MoEComputePath::ComputeOnly ? 1u : 0u},
-        // LOCAL_OUTPUT (dm1): write each token row slice straight into the final [k, T, H] output,
-        // page k * total_tokens + t from the expert's packed token-list entries.
+        // LOCAL_OUTPUT (dm1): write each token row slice straight into the final [k, T, H] output.
         {"local_output", local_output ? 1u : 0u},
         {"total_tokens", tokens},
-        {"dram_alignment", dram_alignment},
+        {"e_t_entry_size", l1_alignment},
         {"local_output_map_cb_id", local_output_map_cb_id},
     };
 
@@ -1574,8 +1523,8 @@ tt::tt_metal::ProgramDescriptor build_moe_compute_program_descriptor(
     // helper `get_weight_mem_configs` enforces matching invariants when constructing the
     // ShardSpec, so this is belt-and-braces.
     {
-        const uint32_t w0_w1_total_pages = static_cast<uint32_t>(matmul_w0_w1_tensor.buffer()->num_pages());
-        const uint32_t w2_total_pages = static_cast<uint32_t>(matmul_w2_tensor.buffer()->num_pages());
+        const uint32_t w0_w1_total_pages = static_cast<uint32_t>(matmul_w0_w1_tensor.mesh_buffer().num_pages());
+        const uint32_t w2_total_pages = static_cast<uint32_t>(matmul_w2_tensor.mesh_buffer().num_pages());
         TT_FATAL(
             w0_w1_total_pages % num_dram_banks == 0,
             "moe_compute: w0_w1 total pages ({}) must be divisible by num_banks ({})",
@@ -1746,8 +1695,11 @@ void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
         !args.combine_params->optional_cross_device_semaphore.has_value()) {
         return;
     }
-    override_selective_reduce_combine_cross_device_semaphore(
-        program, kCombineWriterKernelIdx, *args.combine_params->optional_cross_device_semaphore);
+    override_cross_device_semaphore_arg(
+        program,
+        kCombineWriterKernelIdx,
+        kCombineWriterCrossDeviceSemaphoreArgIdx,
+        *args.combine_params->optional_cross_device_semaphore);
 }
 
 }  // namespace ttnn::experimental::prim
