@@ -1,0 +1,52 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-License-Identifier: Apache-2.0
+
+// all_to_all_matmul compute (TRISC0/1/2).
+//
+// Per head slot: for each n-block, matmul_block(A slot [block_m x Kt], weight block [Kt x block_n]) -> cb_out in
+// TileRowMajor row groups of out_subblock_h x block_n. One K-block (R1): the K-sum stays in DEST, so cb_out is also
+// the interm placeholder. A is retained across the head's n-blocks (WaitAndRetainOnLastBlock) and popped after the
+// last one (release_slot); the weight block is waited and popped per call.
+
+#include <cstdint>
+
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/cb_api.h"
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
+
+using namespace compute_kernel_lib;
+
+void kernel_main() {
+    constexpr uint32_t cb_a_landed = get_compile_time_arg_val(0);
+    constexpr uint32_t cb_weight = get_compile_time_arg_val(1);
+    constexpr uint32_t cb_out = get_compile_time_arg_val(2);
+    constexpr uint32_t block_m = get_compile_time_arg_val(3);
+    constexpr uint32_t Kt = get_compile_time_arg_val(4);
+    constexpr uint32_t block_n = get_compile_time_arg_val(5);
+    constexpr uint32_t num_n_blocks = get_compile_time_arg_val(6);
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(7);
+    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(8);
+    constexpr uint32_t slot_tiles = block_m * Kt;
+    static_assert(block_m % out_subblock_h == 0 && block_n % out_subblock_w == 0, "subblocks must tile the block");
+
+    const uint32_t n_slots = get_arg_val<uint32_t>(0);
+
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_a_landed, cb_weight, cb_out);
+    CircularBuffer a_buf(cb_a_landed), w_buf(cb_weight), out_buf(cb_out);
+    constexpr auto shape =
+        MatmulBlockShape::of(block_m / out_subblock_h, block_n / out_subblock_w, out_subblock_h, out_subblock_w, Kt, 1);
+
+    for (uint32_t s = 0; s < n_slots; ++s) {
+        for (uint32_t nb = 0; nb < num_n_blocks; ++nb) {
+            matmul_block<
+                false,
+                false,
+                LastBlockTarget::Out,
+                OutputCBLayout::TileRowMajor,
+                matmul_config::InitMode::Short,
+                InputPolicy::WaitAndRetainOnLastBlock,
+                InputPolicy::WaitAndPopPerKBlock>(a_buf, w_buf, out_buf, out_buf, shape);
+        }
+        cb_pop_front(cb_a_landed, slot_tiles);  // release_slot
+    }
+}
