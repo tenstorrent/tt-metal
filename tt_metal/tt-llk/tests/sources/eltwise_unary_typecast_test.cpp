@@ -48,6 +48,21 @@ static constexpr ckernel::DstSync DST_SYNC             = ckernel::DstSync::SyncH
 static constexpr std::uint32_t MAX_TILES_DEST          = ckernel::get_dest_max_tiles<DST_SYNC, is_fp32_dest_acc_en, ckernel::DstTileShape::Tile32x32>();
 static constexpr ckernel::BroadcastType BROADCAST_TYPE = ckernel::BroadcastType::NONE;
 
+#if defined(ARCH_BLACKHOLE)
+// The unpack to dest handshake a production kernel with these CBs takes (llk_size_mode.h LLK_U2D_MAIN_HANDSHAKE): main's at 16-bit
+// DEST and in a 32-bit DEST kernel with an integer CB.
+constexpr bool typecast_int_format(const DataFormat f)
+{
+    return f == DataFormat::Int32 || f == DataFormat::UInt32 || f == DataFormat::UInt16 || f == DataFormat::UInt8 || f == DataFormat::Int8;
+}
+constexpr bool u2d_main_handshake = !is_fp32_dest_acc_en || typecast_int_format(TYPECAST_IN_FORMAT) || typecast_int_format(TYPECAST_OUT_FORMAT);
+#define TYPECAST_U2D_UNPACK_ARGS , false /*early_context_poll*/, false /*z_stride_per_tile*/, u2d_main_handshake
+#define TYPECAST_U2D_MATH_ARGS   , false /*unroll_zero_flag_clears*/, u2d_main_handshake
+#else
+#define TYPECAST_U2D_UNPACK_ARGS
+#define TYPECAST_U2D_MATH_ARGS
+#endif
+
 #ifdef LLK_TRISC_UNPACK
 
 #include "llk_unpack_A.h"
@@ -101,7 +116,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
                 {
-                    _llk_unpack_A_<BROADCAST_TYPE, UNPACK_ACC_TO_DEST, reuse_dest_type, unpack_to_dest>(
+                    _llk_unpack_A_<BROADCAST_TYPE, UNPACK_ACC_TO_DEST, reuse_dest_type, unpack_to_dest TYPECAST_U2D_UNPACK_ARGS>(
                         L1_ADDRESS(buffer_A[tile]), formats.unpack_A_src, formats.unpack_A_dst);
                 }
             }
@@ -169,7 +184,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     if constexpr (unpack_to_dest)
                     {
                         // Unpack-to-Dest datacopy only acknowledges Dest; it copies no data.
-                        _llk_math_eltwise_unary_datacopy_<data_copy_type, DST_SYNC, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
+                        _llk_math_eltwise_unary_datacopy_<data_copy_type, DST_SYNC, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest TYPECAST_U2D_MATH_ARGS>(
                             tile % MAX_TILES_DEST, formats.math, formats.math);
                     }
                     else
@@ -192,7 +207,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         if constexpr (!unpack_to_dest)
                         {
                             LLK_ASSERT(block_tile < MAX_TILES_DEST, "block_tile exceeds max dest tiles");
-                            _llk_math_eltwise_unary_datacopy_<data_copy_type, DST_SYNC, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
+                            _llk_math_eltwise_unary_datacopy_<data_copy_type, DST_SYNC, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest TYPECAST_U2D_MATH_ARGS>(
                                 block_tile, formats.math, formats.math);
                         }
                         test_utils::call_unary_sfpu_operation<
@@ -222,7 +237,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     for (std::uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)
                     {
                         LLK_ASSERT(block_tile < MAX_TILES_DEST, "block_tile exceeds max dest tiles");
-                        _llk_math_eltwise_unary_datacopy_<data_copy_type, DST_SYNC, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
+                        _llk_math_eltwise_unary_datacopy_<data_copy_type, DST_SYNC, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest TYPECAST_U2D_MATH_ARGS>(
                             block_tile, formats.math, formats.math);
                         test_utils::call_unary_sfpu_operation<
                             DST_SYNC,
