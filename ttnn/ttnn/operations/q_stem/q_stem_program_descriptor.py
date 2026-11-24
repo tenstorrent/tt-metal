@@ -19,7 +19,9 @@ Knobs (single source each; every dependent quantity derives from them):
   S3_BLOCK_N_CAP     stage-3 N block cap in the streamed-wkv regime (R2)
   WKV_RESIDENT_BYTES wkv_b1 residency budget (R1 vs R2)
   WKV_DEPTH          cb_wkv depth (units: heads in R1, N-blocks in R2)
-  OUT_DEPTH          cb_prefix_out / cb_rope_out depth (row blocks)
+  OUT_DEPTH          output staging depth (row blocks): cb_prefix_out / cb_rope_out (TILE out) or
+                     cb_prefix_rm / cb_rope_rm (ROW_MAJOR out; the tiled CBs then only feed the in-kernel untilize
+                     and hold one block)
   PORT_BATCH_SEGMENTS port staging batch (segments per flush); the staging CB holds 2 batches
   QB_READ_BATCH      q_b slice reads per barrier
 """
@@ -64,6 +66,8 @@ CB_WKV = 5
 CB_PREFIX_OUT = 6
 CB_ROPE_OUT = 7
 CB_PORT_STAGE = 8
+CB_PREFIX_RM = 9
+CB_ROPE_RM = 10
 
 # ---- program semaphore ids (port cores; declared on every core the program uses) -------------------------------------
 SEM_BLOCK_READY = 0
@@ -135,7 +139,7 @@ def _dest_limit(fp32_dest_acc_en):
 
 
 class Geometry:
-    def __init__(self, input_tensor, q_b, wkv, G, grid, fp32_dest_acc_en):
+    def __init__(self, input_tensor, q_b, wkv, G, grid, fp32_dest_acc_en, output_layout=ttnn.TILE_LAYOUT):
         B, _, S, Q = (int(v) for v in input_tensor.shape)
         _, H, Dn, N = (int(v) for v in wkv.shape)
         Cq = int(q_b.shape[3])
@@ -200,6 +204,11 @@ class Geometry:
         self.sbw3 = _largest_divisor_leq(self.s3n, self.dest_limit)
         self.landing_tiles = self.hpc_max * self.rows_per_head * self.hw
         self.out_w_tiles = self.N_t + self.Dr_t
+        # output: ROW_MAJOR -> the compute untilizes each block (cb_prefix_out -> cb_prefix_rm, cb_rope_out ->
+        # cb_rope_rm) and the writer writes sticks; the tiled CBs are then compute-internal (one block deep)
+        self.out_rm = output_layout == ttnn.ROW_MAJOR_LAYOUT
+        self.out_tile_depth = 1 if self.out_rm else OUT_DEPTH
+        self.out_page_bytes = self.out_w_tiles * (self.tile_bytes // 32) if self.out_rm else self.tile_bytes
 
     # stage-1 cores, row-major over the W1 x R1 rect anchored at (0, 1)
     def s1_cores(self):
@@ -405,7 +414,7 @@ def cb_l1_budget(mesh):
 def l1_terms(geo, wkv_depth):
     """{core set: {term: bytes}} of the statically allocated CBs (cb_landing lives in the scratch buffer)."""
     tb = geo.tile_bytes
-    s3_out = OUT_DEPTH * geo.s3m * (geo.s3n + geo.Dr_t) * tb
+    s3_out = (geo.out_tile_depth + (OUT_DEPTH if geo.out_rm else 0)) * geo.s3m * (geo.s3n + geo.Dr_t) * tb
     wkv_unit = geo.wkv_unit_tiles * geo.wkv_tile_bytes
     wkv_s1 = (geo.wkv_units_s1 if geo.wkv_resident else wkv_depth) * wkv_unit
     wkv_free = (geo.wkv_units_free if geo.wkv_resident else wkv_depth) * wkv_unit
@@ -416,11 +425,11 @@ def l1_terms(geo, wkv_depth):
         "cb_qb_slice": geo.Q_t * geo.cols_max * geo.qb_tile_bytes,
         "cb_q_partial": geo.m * geo.cols_max * geo.partial_tile_bytes if geo.nkb > 1 else 0,
         "cb_wkv": wkv_s1,
-        "cb_prefix_out+cb_rope_out": s3_out,
+        "cb_prefix/rope_out(+_rm)": s3_out,
     }
     return {
         "stage-1 core": stage1,
-        "stage-3-only core": {"cb_wkv": wkv_free, "cb_prefix_out+cb_rope_out": s3_out},
+        "stage-3-only core": {"cb_wkv": wkv_free, "cb_prefix/rope_out(+_rm)": s3_out},
         "port core": {"cb_q_slice": q_slice, "cb_port_stage": 2 * PORT_BATCH_SEGMENTS * geo.hw * tb},
     }
 
@@ -456,10 +465,11 @@ def _cb(index, dtype, page, pages, cores):
 
 
 def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axis, num_links):
+    output_layout = out.layout
     mesh = x.device()
     grid = mesh.compute_with_storage_grid_size()
     chips, G = exchange_plan(mesh, cluster_axis, num_links)
-    geo = Geometry(x, q_b, wkv, G, grid, bool(compute_config.fp32_dest_acc_en))
+    geo = Geometry(x, q_b, wkv, G, grid, bool(compute_config.fp32_dest_acc_en), output_layout)
     L = num_links
     ports = port_cores(geo.gx, L)
     injector = injector_core(geo.gx, ports)
@@ -527,6 +537,7 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
                 q_b.dtype,
                 wkv.dtype,
                 x.memory_config().buffer_type,  # the injector's accessor differs for an L1 / DRAM latent
+                output_layout,  # TILE pages vs in-kernel untilize + stick writer
                 compute_config.math_fidelity,
                 compute_config.fp32_dest_acc_en,
                 compute_config.math_approx_mode,
@@ -560,10 +571,15 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
         cbs += [
             ttnn.cb_descriptor_from_sharded_tensor(CB_LANDING, scratch),
             *wkv_cbs,
-            _cb(CB_PREFIX_OUT, bf16, geo.tile_bytes, OUT_DEPTH * geo.s3m * geo.s3n, compute_rect),
-            _cb(CB_ROPE_OUT, bf16, geo.tile_bytes, OUT_DEPTH * geo.s3m * geo.Dr_t, compute_rect),
+            _cb(CB_PREFIX_OUT, bf16, geo.tile_bytes, geo.out_tile_depth * geo.s3m * geo.s3n, compute_rect),
+            _cb(CB_ROPE_OUT, bf16, geo.tile_bytes, geo.out_tile_depth * geo.s3m * geo.Dr_t, compute_rect),
             _cb(CB_PORT_STAGE, bf16, geo.tile_bytes, 2 * PORT_BATCH_SEGMENTS * geo.hw, port_crs),
         ]
+        if geo.out_rm:  # untilized stick blocks (tile-sized pages: 32 sticks of block-width * 64 B)
+            cbs += [
+                _cb(CB_PREFIX_RM, bf16, geo.tile_bytes, OUT_DEPTH * geo.s3m * geo.s3n, compute_rect),
+                _cb(CB_ROPE_RM, bf16, geo.tile_bytes, OUT_DEPTH * geo.s3m * geo.Dr_t, compute_rect),
+            ]
         program.cbs = cbs
 
         # ---------------- per-compute-core assignment ------------------------------------------------------------
@@ -755,6 +771,9 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
                 geo.n_nb,
                 int(geo.wkv_resident),
                 geo.sbw3,
+                int(geo.out_rm),
+                CB_PREFIX_RM,
+                CB_ROPE_RM,
             ],
             runtime_args=compute_rt,
             config=compute_config,
@@ -776,6 +795,10 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
                 2 * L,
                 SEM_BLOCK_READY,
                 *geo_ct,
+                int(geo.out_rm),
+                geo.out_page_bytes,
+                CB_PREFIX_RM,
+                CB_ROPE_RM,
                 *out_ct,
             ],
             runtime_args=writer_rt,
@@ -832,14 +855,14 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
     return mesh_desc, scratch
 
 
-def run_q_stem(x, q_b, wkv, *, cluster_axis, num_links, compute_config):
+def run_q_stem(x, q_b, wkv, *, cluster_axis, num_links, compute_config, output_layout=ttnn.TILE_LAYOUT):
     mesh = x.device()
     B, _, S, _ = (int(v) for v in x.shape)
     _, H, Dn, N = (int(v) for v in wkv.shape)
     G = tuple(mesh.shape)[cluster_axis]
     Dr = int(q_b.shape[3]) // (H // G) - Dn
     out = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([B, H, S // G, N + Dr]), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG
+        ttnn.Shape([B, H, S // G, N + Dr]), ttnn.bfloat16, output_layout, mesh, ttnn.DRAM_MEMORY_CONFIG
     )
     desc, scratch = create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axis, num_links)
     return ttnn.generic_op([x, q_b, wkv, scratch, out], desc)

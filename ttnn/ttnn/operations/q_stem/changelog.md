@@ -84,3 +84,32 @@ init + fp32 pack overheads).
   not an op scale bug. No EXCLUSIONS needed.
 - Tests added: `test_q_stem_model_config_precision` in test_q_stem_precision_baseline.py (bfp8 q_b ± bfp8 wkv,
   HiFi2, 16-/32-bit DEST, L1 latent; Kimi + K-blocked shapes; ratio-band scale-bug check for 16-bit DEST).
+
+## Refinement 2 — Row-major query output (in-kernel untilize + stick writer)
+- Date: 2026-11-24
+- What was done: `SUPPORTED["output_layout"]` += ROW_MAJOR. The output tensor is allocated ROW_MAJOR
+  (`run_q_stem(output_layout=…)`). Stage 3 gains `untilize_row_block`: after each prefix N-block's matmul,
+  `untilize<s3n, cb_prefix_out, cb_prefix_rm>(1)`; after the rope producer (NoPE copy),
+  `untilize<Dr_t, cb_rope_out, cb_rope_rm>(1)` — a separate block op behind the producers, so a rotated rope tile
+  (Refinement 5) and realigned rows (Refinement 4) slot in front of it unchanged. The writer's `store_row_block`
+  gains a ROW_MAJOR branch: each untilized block's 32 sticks go straight to DRAM as segments at their byte offset
+  in the (N+Dr)·2 B output page (`TensorAccessor` over the RM output, `get_noc_addr(stick, col_byte)`): prefix
+  segment(s) of `s3n`·64 B at `nb·s3n·64`, rope segment of `Dr_t`·64 B at `N·2` — 32 writes per block, one
+  `noc_async_writes_flushed` per block (not per stick), one write barrier at the end. No `ttnn.to_layout` /
+  untilize op anywhere: one dispatch. Under ROW_MAJOR the tiled `cb_prefix_out` / `cb_rope_out` are
+  compute-internal and shrink to one block (`Geometry.out_tile_depth`); the RM pair takes `OUT_DEPTH`.
+  `output_layout` added to `custom_program_hash`; `l1_terms` / `l1_ledger.md` carry the RM CBs.
+  Reused: the stage-3 matmul/copy producers, `store_row_block` loop order, `OUT_DEPTH`, the output accessor.
+  Added: `cb_prefix_rm` / `cb_rope_rm`, two `untilize` helper calls, `store_sticks` (writer), 3 CT args each side.
+- Accuracy achieved: unchanged from the TILE path (untilize and the stick writes are exact copies); every
+  ROW_MAJOR cell run passes the golden `check_output` at its tolerance (incl. PERF FOCUS loose case, HiFi2 / bfp8
+  q_b / 16-bit DEST / L1 latent).
+- Perf (PERF FOCUS, `perf_measure.py`, 5 experiments): fastest chip **167.4 µs** (sem 0.08), slowest 177.2 µs,
+  spread 9.8 µs, not dispatch-bound (gap ~0.58 µs). Saved as `agent_logs/perf_r2_focus_rowmajor.json` — the
+  `ccl_perf compare` base for Refinement 3. (Phase-0 TILE / HiFi4 / fp32 / DRAM-latent Kimi was 190.5 µs; not the
+  same config, so not a like-for-like delta.)
+- Golden test progress: 25/25 targeted ROW_MAJOR cells passing (11: Kimi / one-tile / B=2 / K-blocked Q=4096 /
+  streamed-wkv N=4096 × fp32 DEST on/off + the PERF FOCUS loose case; 14: every shape at bfp8 q_b + bfp8 wkv +
+  16-bit DEST + L1 latent). Unit suite test_q_stem.py 9/9 (TILE path regression).
+- Issues encountered: None.
+- Tests added: none (the golden ROW_MAJOR cells cover the path; the TILE unit suite is the regression net).

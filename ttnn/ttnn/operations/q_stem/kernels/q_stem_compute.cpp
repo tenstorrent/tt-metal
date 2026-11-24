@@ -7,7 +7,10 @@
 //                       local-delivery writer read it in place)
 //   prefix_matmul_block per landed row: nope (1 x Dn_t) @ wkv_b1[h] (Dn_t x s3n) -> cb_prefix_out, per N-block
 //   rope_block (NoPE)   copy of the row's Dr_t rope tiles -> cb_rope_out
-// All through kernel_lib helpers (matmul_block, eltwise copy).
+//   untilize_row_block  (ROW_MAJOR output only) cb_prefix_out N-block -> cb_prefix_rm, cb_rope_out -> cb_rope_rm:
+//                       32 sticks per block for the writer. A separate block op after the producers, so a rotated
+//                       rope (RoPE) slots in front of it unchanged.
+// All through kernel_lib helpers (matmul_block, eltwise copy, untilize).
 
 #include <cstdint>
 
@@ -17,6 +20,7 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
 using namespace compute_kernel_lib;
 
@@ -55,6 +59,9 @@ void kernel_main() {
     constexpr uint32_t n_nb = get_compile_time_arg_val(18);
     constexpr bool wkv_resident = get_compile_time_arg_val(19) != 0;
     constexpr uint32_t sbw3 = get_compile_time_arg_val(20);
+    constexpr bool out_rm = get_compile_time_arg_val(21) != 0;
+    constexpr uint32_t cb_prefix_rm = get_compile_time_arg_val(22);
+    constexpr uint32_t cb_rope_rm = get_compile_time_arg_val(23);
     constexpr bool k_blocked = nkb > 1;
 
     const uint32_t cols = get_arg_val<uint32_t>(0);
@@ -134,6 +141,9 @@ void kernel_main() {
             cb_wait_front(cb_landing, Dn_t);
             cb_reserve_back(cb_prefix_out, s3n);
             cb_push_back(cb_prefix_out, s3n);
+            if constexpr (out_rm) {
+                untilize<s3n, cb_prefix_out, cb_prefix_rm>(1);
+            }
             continue;
 #endif
             if constexpr (wkv_resident) {
@@ -175,6 +185,9 @@ void kernel_main() {
                     InputPolicy::WaitAndRetainOnLastBlock,
                     InputPolicy::WaitAndPopPerKBlock>(landing_buf, wkv_buf, prefix_buf, prefix_buf, shape3);
             }
+            if constexpr (out_rm) {
+                untilize<s3n, cb_prefix_out, cb_prefix_rm>(1);  // untilize_row_block (prefix N-block)
+            }
         }
         cb_pop_front(cb_landing, Dn_t);  // the row's nope, retained across the N-blocks
 #ifdef ABLATE_S3
@@ -182,9 +195,12 @@ void kernel_main() {
         cb_pop_front(cb_landing, Dr_t);
         cb_reserve_back(cb_rope_out, Dr_t);
         cb_push_back(cb_rope_out, Dr_t);
-        return;
-#endif
+#else
         copy<input(cb_landing), output(cb_rope_out)>(IterationShape::tiles(Dr_t));
+#endif
+        if constexpr (out_rm) {
+            untilize<Dr_t, cb_rope_out, cb_rope_rm>(1);  // untilize_row_block (rope)
+        }
     };
     if (n_r > 0) {
         if constexpr (wkv_resident) {

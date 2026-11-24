@@ -8,7 +8,11 @@
 //                       own quarter    -> write my columns of each head-row into the destination core's landing
 //                                         scratch (same address on every core), then increment its arrive[p] by
 //                                         the tiles written (after the write barrier)
-//   store_row_block   per (head, row): prefix N-blocks + rope tiles -> output pages (TILE), one barrier per block
+//   store_row_block   per (head, row): prefix N-blocks + rope tiles -> output pages, one flush per block
+//                       TILE:      one page per tile
+//                       ROW_MAJOR: the compute untilized each block into 32 sticks (cb_prefix_rm / cb_rope_rm);
+//                                  each output row's stick is written as segments (prefix N-block(s) | rope) at
+//                                  their byte offsets inside the (N + Dr) * 2 B output page
 
 #include <cstdint>
 
@@ -33,7 +37,12 @@ void kernel_main() {
     constexpr uint32_t m = get_compile_time_arg_val(14);
     constexpr uint32_t G = get_compile_time_arg_val(15);
     constexpr uint32_t hw = get_compile_time_arg_val(16);
-    constexpr auto out_args = TensorAccessorArgs<17>();
+    constexpr bool out_rm = get_compile_time_arg_val(17) != 0;
+    constexpr uint32_t out_page_bytes = get_compile_time_arg_val(18);  // tile (TILE) or (N + Dr) * 2 B stick (RM)
+    constexpr uint32_t cb_prefix_rm = get_compile_time_arg_val(19);
+    constexpr uint32_t cb_rope_rm = get_compile_time_arg_val(20);
+    constexpr auto out_args = TensorAccessorArgs<21>();
+    constexpr uint32_t stick_tile_bytes = tile_bytes / 32;  // one tile-width of one row-major stick (bf16: 64 B)
     constexpr uint32_t out_w = N_t + Dr_t;
     constexpr uint32_t rows_per_head = B * qrt;
 
@@ -104,35 +113,54 @@ void kernel_main() {
     }
 
     // ---- stage 3 output ---------------------------------------------------------------------------------------------
-    const auto out = TensorAccessor(out_args, out_addr, tile_bytes);
+    const auto out = TensorAccessor(out_args, out_addr, out_page_bytes);
+    // TILE: n_tiles tile pages from the front of cb, starting at output tile page `page`
+    auto store_tiles = [&](uint32_t cb, uint32_t n_tiles, uint32_t page) {
+        cb_wait_front(cb, n_tiles);
+        uint32_t l1 = get_read_ptr(cb);
+        for (uint32_t c = 0; c < n_tiles; ++c) {
+#ifndef ABLATE_OUT_WRITE
+            noc_async_write(l1, out.get_noc_addr(page + c), tile_bytes);
+#endif
+            l1 += tile_bytes;
+        }
+        noc_async_writes_flushed();  // the tiles have left L1 (acks are collected once, at the end)
+        cb_pop_front(cb, n_tiles);
+    };
+    // ROW_MAJOR: one untilized block of n_tiles tile-widths = 32 sticks of n_tiles * 64 B, written into sticks
+    // stick0 .. stick0 + 31 at byte offset col_byte (32 writes, one flush)
+    auto store_sticks = [&](uint32_t cb, uint32_t n_tiles, uint32_t stick0, uint32_t col_byte) {
+        const uint32_t seg = n_tiles * stick_tile_bytes;
+        cb_wait_front(cb, n_tiles);
+        uint32_t l1 = get_read_ptr(cb);
+        for (uint32_t i = 0; i < 32; ++i) {
+#ifndef ABLATE_OUT_WRITE
+            noc_async_write(l1, out.get_noc_addr(stick0 + i, col_byte), seg);
+#endif
+            l1 += seg;
+        }
+        noc_async_writes_flushed();
+        cb_pop_front(cb, n_tiles);
+    };
     // store_row_block: one (head, row) = n_nb prefix blocks + the rope tiles, in the compute's consumption order
     auto store_row = [&](uint32_t u, uint32_t t) {
         const uint32_t h = get_arg_val<uint32_t>(heads_idx + u);
         const uint32_t b = t / qrt;
         const uint32_t r = t - b * qrt;
-        const uint32_t page0 = ((b * H + h) * qrt + r) * out_w;
-        for (uint32_t nb = 0; nb < n_nb; ++nb) {
-            cb_wait_front(cb_prefix_out, s3n);
-            uint32_t l1 = get_read_ptr(cb_prefix_out);
-            for (uint32_t c = 0; c < s3n; ++c) {
-#ifndef ABLATE_OUT_WRITE
-                noc_async_write(l1, out.get_noc_addr(page0 + nb * s3n + c), tile_bytes);
-#endif
-                l1 += tile_bytes;
+        const uint32_t row_tile = (b * H + h) * qrt + r;  // output tile row (32 output rows)
+        if constexpr (out_rm) {
+            const uint32_t stick0 = row_tile * 32;
+            for (uint32_t nb = 0; nb < n_nb; ++nb) {
+                store_sticks(cb_prefix_rm, s3n, stick0, nb * s3n * stick_tile_bytes);
             }
-            noc_async_writes_flushed();  // the tiles have left L1 (acks are collected once, at the end)
-            cb_pop_front(cb_prefix_out, s3n);
+            store_sticks(cb_rope_rm, Dr_t, stick0, N_t * stick_tile_bytes);
+        } else {
+            const uint32_t page0 = row_tile * out_w;
+            for (uint32_t nb = 0; nb < n_nb; ++nb) {
+                store_tiles(cb_prefix_out, s3n, page0 + nb * s3n);
+            }
+            store_tiles(cb_rope_out, Dr_t, page0 + N_t);
         }
-        cb_wait_front(cb_rope_out, Dr_t);
-        uint32_t l1 = get_read_ptr(cb_rope_out);
-        for (uint32_t c = 0; c < Dr_t; ++c) {
-#ifndef ABLATE_OUT_WRITE
-            noc_async_write(l1, out.get_noc_addr(page0 + N_t + c), tile_bytes);
-#endif
-            l1 += tile_bytes;
-        }
-        noc_async_writes_flushed();
-        cb_pop_front(cb_rope_out, Dr_t);
     };
     for (uint32_t t = 0; t < rows_per_head; ++t) {
         for (uint32_t u = 0; u < n_r; ++u) {

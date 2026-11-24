@@ -48,7 +48,7 @@ SUPPORTED = {
     "q_b_proj_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
     "wkv_b1_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
     "layout": [ttnn.TILE_LAYOUT],
-    "output_layout": [ttnn.TILE_LAYOUT],
+    "output_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     "fp32_dest_acc_en": [True, False],
     "rope_mode": ["nope"],
     "alignment": ["tile_aligned"],
@@ -219,4 +219,5 @@ def q_stem(
         cluster_axis=cluster_axis,
         num_links=num_links,
         compute_config=cfg,
+        output_layout=output_layout,
     )

@@ -16,6 +16,8 @@ Phase 0: bf16 everywhere, `fp32_dest_acc_en = True`. "tb" = bytes per page of th
 | `cb_wkv` (**two descriptors**: stage-1 rect / the rest) | R1: `(n_remote + min(WKV_DEPTH, n_local)) * Dn_t * N_t`, max over chips, per core set (Kimi: 4 heads = 512 KiB outside the rect, 1–2 heads in it); R2: `WKV_DEPTH * Dn_t * s3_block_n_tiles` | R1: every remote head's weights at once (remote rows are consumed row-major across heads) + local heads streamed; R2: 2 N-blocks | {S3·N: spans → `N_t` (R1) / `s3_block_n_tiles` (R2), S3·heads: streams → depth `min(2,hpc)`, S3·rows: streams (reused across rows, R1), S1·*: none, X·seg: none} | Float16_b (Bfp8_b when `wkv_b1_dtype = bfloat8_b`) | reader | compute | from stage 1 (prefetch) to end | Not shared: prefetch overlaps stage 1 by design (stall shadow) |
 | `cb_prefix_out` | `out_depth * s3_block_m_tiles * s3_block_n_tiles` (2·1·16 = 32) | 2 row blocks | {S3·N: spans → `s3_block_n_tiles`, S3·rows: streams → `s3_block_m_tiles` per slot, S3·heads: streams, S1·*: none, X·seg: none} | Float16_b — output ABI (bf16 output); the K=Dn accumulation finished in DEST (single K-block), so no fp32 partial crosses this CB | compute | writer | stage 3 | Could alias stage-1-only CBs (`cb_qb_slice`, `cb_x_round`) — deferred; not needed for fit (max total 1032 KiB) |
 | `cb_rope_out` | `out_depth * s3_block_m_tiles * Dr_t` | 2 row blocks | {S3·rows: streams → `s3_block_m_tiles`, S3·N: none (rope columns `Dr_t`), S3·heads: streams, S1·*: none, X·seg: none} | Float16_b — output ABI; NoPE copy is exact | compute | writer | stage 3 | Separate from `cb_prefix_out`: different push quantum (`Dr_t` vs `s3_block_n_tiles`) — one CB would break the ring-wrap invariant in R2 |
+| `cb_prefix_rm` (ROW_MAJOR out only; Refinement 2) | `out_depth * s3_block_m_tiles * s3_block_n_tiles` (2·1·16 = 32 tile-sized pages = 2 × 32 sticks of `s3_block_n_tiles`·64 B) | 2 row blocks (untilize of block k+1 overlaps the writer's 32 stick writes of block k) | {S3·N: spans → `s3_block_n_tiles`, S3·rows: streams, S3·heads: streams, S1·*: none, X·seg: none} | Float16_b row-major — output ABI | compute (untilize_row_block) | writer (stick segments) | stage 3 | Cannot be `cb_prefix_out` in place (the untilize helper requires in ≠ out); under ROW_MAJOR `cb_prefix_out` shrinks to **one** block (its consumer is the same compute thread), so the RM pair costs +1 block vs TILE, not +2 |
+| `cb_rope_rm` (ROW_MAJOR out only; Refinement 2) | `out_depth * s3_block_m_tiles * Dr_t` | 2 row blocks | {S3·rows: streams, S3·N: none (`Dr_t`), S3·heads: streams, S1·*: none, X·seg: none} | Float16_b row-major — output ABI | compute (untilize_row_block) | writer | stage 3 | Separate from `cb_prefix_rm`: different push quantum (`Dr_t` vs `s3_block_n_tiles`), and kept apart so a rotated rope (RoPE) feeds the same untilize; `cb_rope_out` shrinks to one block under ROW_MAJOR |
 | `cb_port_stage` (ports only) | `2 * port_batch_segments * head_w_tiles` (2·4·6 = 48) | 2 batches | {X·seg: spans → `port_batch_segments * head_w_tiles`, all others: none} | Float16_b (raw payload) | reader (port) | writer (port sender) | port lifetime | Port cores hold no compute CBs except the unused `cb_q_slice` copy; nothing to share with |
 
 ## Symbol table (every non-block parameter in a capacity expression)
@@ -44,7 +46,9 @@ L1(core) = tb·tensor_row_tiles·core_cols_max          // cb_q_slice      — s
          + [Q_t/s1_kb > 1]·(4096 | 2048 at 16-bit DEST)·s1_block_m_tiles·core_cols_max   // cb_q_partial
          + tb·hpc·B·quarter_row_tiles·head_w_tiles     // cb_landing      — scales with S3·heads, S3·rows (whole)
          + tb_wkv·(R1 ? min(2,hpc)·Dn_t·N_t : 2·Dn_t·s3_block_n_tiles)  // cb_wkv
-         + tb·out_depth·s3_block_m_tiles·(s3_block_n_tiles + Dr_t)      // cb_prefix_out + cb_rope_out
+         + tb·(out_tile_depth + [RM]·out_depth)·s3_block_m_tiles·(s3_block_n_tiles + Dr_t)
+                                 // cb_prefix_out + cb_rope_out (+ cb_prefix_rm + cb_rope_rm under ROW_MAJOR out;
+                                 //  out_tile_depth = 1 under ROW_MAJOR, out_depth under TILE)
 fits_l1 := L1(core) ≤ cb_l1_budget(mesh)  (lowest allocated L1 address; checked on host before building — check_fits_l1)
 ```
 
@@ -68,6 +72,10 @@ Every INPUTS shape fits with ≥ 307 KiB headroom (deep Q). A shape that does no
 role and the largest term (regime R3 is not built). An L1 latent (input_buffer = L1, refinement) lowers the
 budget by its per-bank share (Kimi: 1.97 MB over 110 banks ≈ 18 KiB) — the predicate reads it live.
 
+Refinement 2 (ROW_MAJOR out): the stage-3 output staging goes from 2 tiled blocks to 1 tiled + 2 RM blocks —
++(s3_block_n_tiles + Dr_t)·tb per core (+36 KiB at N = 512, Dr = 64: deep-Q max → ~1156 KiB, still ≥ 270 KiB
+headroom). TILE output is unchanged.
+
 ## Data-movement budget (per chip, Kimi K3.1 S=640)
 
 | Tensor | DRAM crossings | Why that many | Cross-core traffic added |
@@ -76,7 +84,7 @@ budget by its per-bank share (Kimi: 1.97 MB over 110 banks ≈ 18 KiB) — the p
 | q_b_proj (14.16 MB bf16 / 7.52 MB bfp8) | 1 | column split: each column owned by one core, slice resident across row blocks | none |
 | q (5.90 MB bf16) | **0** | resident in `cb_q_slice`, pulled by ports / delivered locally from L1 | port pulls 4.42 MB (NoC0); local quarter 1.47 MB (NoC1); fabric 4.42 MB sent |
 | wkv_b1 (12.58 MB bf16) | 1 (R1); `B*quarter_row_tiles/s3_block_m_tiles` in R2 (=1 for the INPUTS shape) | resident per head across its rows | none |
-| output (17.69 MB bf16) | 1 (write) | each row block written once | none |
+| output (17.69 MB bf16) | 1 (write) | each row block written once (ROW_MAJOR: same bytes, as 32 stick segments of `s3_block_n_tiles`·64 B + 32 of `Dr_t`·64 B per row block, one flush per block) | none |
 | cos/sin (RoPE) | 1 | read once per core that owns heads (rows of the quarter) | — |
 
 Totals: DRAM **46.4 MB** (Phase 0, bf16, latent in DRAM) → 90.6 µs at 512 GB/s = the Phase-0 roofline's DRAM term;

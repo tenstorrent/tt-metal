@@ -82,7 +82,7 @@ source change for the injector's `TensorAccessor` (interleaved over L1 banks). C
 wkv_b1_dtype=bfloat8_b, fp32_dest_acc_en=False, input_buffer=L1} passes (or sits in a justified `EXCLUSIONS` entry),
 verifier categories clean, acceptance + regression green.
 
-### [ ] Refinement 2 — Row-major query output (in-kernel untilize + stick writer)
+### [x] Refinement 2 — Row-major query output (in-kernel untilize + stick writer)
 
 **Goal**: add `ttnn.ROW_MAJOR_LAYOUT` to `SUPPORTED["output_layout"]`. Stage 3 adds the `untilize_row_block` the
 design names (`untilize<s3_block_n_tiles,…>` on `cb_prefix_out`, `untilize<Dr_t,…>` on `cb_rope_out`, into RM CBs).
