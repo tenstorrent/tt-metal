@@ -260,7 +260,7 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_kraw, cb_kraw, cb_sq);
     cb_wait_front(cb_mean, 1);
     if constexpr (kKRot) {
-        cb_wait_front(cb_had, Dt * Dt);
+        cb_wait_front(cb_had, 1);
     }
     cb_wait_front(cb_rope, kRopeTail);
     if constexpr (packed) {

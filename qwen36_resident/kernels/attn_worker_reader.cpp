@@ -257,7 +257,7 @@ void kernel_main() {
         }
         push_resident(cb_mean, 1);
         if constexpr (kKRot) {
-            push_resident(cb_had, Dt * Dt);  // (S0-8: HAD's tiles, resident)
+            push_resident(cb_had, 1);  // (S0-8: HAD's tiles, resident)
         }
     }
 

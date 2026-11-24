@@ -244,46 +244,55 @@ constexpr uint32_t cb_out = 27;    // gated output (Dt)
 constexpr uint32_t cb_flush = 28;  // updated tail k as bf8 (Dt per tail tile), written back to DRAM
 constexpr uint32_t cb_flushv = 33;  // updated tail v in V's format (Dt per tail tile), written back to DRAM
 constexpr uint32_t cb_mean = 29;   // reduce scaler 1 / (32 Dt)
-constexpr uint32_t cb_had = 43;    // S0-8: HAD (Dt x Dt tiles, bfp4; resident) — leader and tail cores
+constexpr uint32_t cb_had = 43;    // S0-8: H32 / 16 (one bf16 tile; resident) — leader and tail cores
+constexpr uint32_t cb_rot2 = 46;   // S0-8: the rotation's butterfly ping-pong (Dt, bf16)
 constexpr uint32_t cb_rotx = 44;   // S0-8: norm_rope's output before the rotation (Dt, bf16)
 constexpr uint32_t cb_knr = 45;    // S0-8: the tail's rotated k rows before the writer rounds them into cb_knew
 
 // S0-8: the device packer truncates toward zero when it packs bfp4, so a decode-written K row is rounded to nearest on
 // the bfp4 grid first (by the tail writer, as prefill/kernels/v_rtn.cpp rounds the prefill's): one face row (16 bf16
 // sharing an exponent in the packed tile), 3 magnitude bits, ties away from zero, m capped at 7
-FORCE_INLINE void rtn_bfp4_face_row(volatile tt_l1_ptr uint16_t* r) {
-    uint32_t emax = 0;
-    for (uint32_t i = 0; i < 16; i++) {
-        const uint32_t e = (r[i] >> 7) & 0xFF;
-        emax = e > emax ? e : emax;
+FORCE_INLINE uint32_t rtn_bfp4_one(uint32_t b, uint32_t emax) {
+    const uint32_t e = (b >> 7) & 0xFF, sign = b & 0x8000;
+    const uint32_t sh = emax - e + 5;
+    if (e == 0 || sh >= 16) {
+        return sign;  // (a signed zero: below the row's smallest step)
     }
-    for (uint32_t i = 0; i < 16; i++) {
-        const uint32_t b = r[i];
-        const uint32_t e = (b >> 7) & 0xFF;
-        const uint32_t sign = b & 0x8000;
-        uint32_t m = 0;
-        if (e != 0) {
-            const uint32_t sh = emax - e + 5;
-            if (sh < 16) {
-                m = (128 + (b & 0x7F) + (1u << (sh - 1))) >> sh;
-                m = m > 7 ? 7 : m;
-            }
+    uint32_t m = (128 + (b & 0x7F) + (1u << (sh - 1))) >> sh;
+    if (m == 0) {
+        return sign;
+    }
+    m = m > 7 ? 7 : m;
+    const uint32_t p = m >= 4 ? 2 : (m >= 2 ? 1 : 0);  // m's leading bit
+    return sign | ((emax - 2 + p) << 7) | ((m << (7 - p)) & 0x7F);
+}
+
+// one face row as 8 words (two bf16 each)
+FORCE_INLINE void rtn_bfp4_face_row(volatile tt_l1_ptr uint32_t* w) {
+    uint32_t emax = 0;
+    for (uint32_t i = 0; i < 8; i++) {
+        const uint32_t x = w[i], e0 = (x >> 7) & 0xFF, e1 = (x >> 23) & 0xFF;
+        emax = e0 > emax ? e0 : emax;
+        emax = e1 > emax ? e1 : emax;
+    }
+    if (emax < 3) {
+        for (uint32_t i = 0; i < 8; i++) {
+            w[i] = w[i] & 0x80008000u;
         }
-        if (m == 0 || emax < 3) {
-            r[i] = sign;
-            continue;
-        }
-        const uint32_t p = m >= 4 ? 2 : (m >= 2 ? 1 : 0);
-        r[i] = sign | ((emax - 2 + p) << 7) | ((m << (7 - p)) & 0x7F);
+        return;
+    }
+    for (uint32_t i = 0; i < 8; i++) {
+        const uint32_t x = w[i];
+        w[i] = rtn_bfp4_one(x & 0xFFFF, emax) | (rtn_bfp4_one(x >> 16, emax) << 16);
     }
 }
 
 // row `row` of a bf16 32 x 32 tile at `tile` (L1): its two face rows (faces 0 / 1 for rows < 16, 2 / 3 above)
 FORCE_INLINE void rtn_bfp4_tile_row(uint32_t tile, uint32_t row) {
-    volatile tt_l1_ptr uint16_t* t = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(tile);
-    const uint32_t base = (row < 16 ? 0 : 512) + (row & 15) * 16;
+    volatile tt_l1_ptr uint32_t* t = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile);
+    const uint32_t base = (row < 16 ? 0 : 256) + (row & 15) * 8;  // (words: a face is 128)
     rtn_bfp4_face_row(t + base);
-    rtn_bfp4_face_row(t + base + 256);
+    rtn_bfp4_face_row(t + base + 128);
 }
 constexpr uint32_t cb_stage = 2;   // leader: gated output rows as batch x 32 tiles (heads x Dt)
 

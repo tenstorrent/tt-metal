@@ -1033,8 +1033,9 @@ class ResidentModel:
         mean_grid = lead_grid.merge(C(workers[len(workers) - u_tails :])) if u_tails > self.attn_tails else prep_grid
         mean_t = l1(torch.full(((1 + u_tails) * TILE, TILE), 1.0 / HD), mean_grid, [TILE, TILE], tile=full, key="mean")
         # (S0-8: HAD on the leader and the tail core(s) — norm_rope rotates q and k after RoPE; +-1/16 is exact in bfp4)
+        # (as H32 / 16: norm_rope applies HAD = (H8 x H32) / 16 as 8 tile matmuls + 3 butterfly stages)
         had_t = (
-            l1(HAD.repeat(1 + u_tails, 1), mean_grid, [HD, HD], dtype=ttnn.bfloat4_b, tile=full, key="had")
+            l1(hadamard(TILE).repeat(1 + u_tails, 1) * (32**0.5 / 16), mean_grid, [TILE, TILE], tile=full, key="had")
             if K_BFP4
             else None
         )
@@ -1522,7 +1523,9 @@ class ResidentModel:
                 # leader and tail core
                 cb(13, prep_grid, Dt),
                 cb(14, prep_grid, 2),
-                *([T(43, had_t), cb(44, prep_grid, Dt)] if K_BFP4 else []),  # (S0-8: HAD, norm_rope's pre-rotation)
+                *(
+                    [T(43, had_t), cb(44, prep_grid, Dt), cb(46, prep_grid, Dt)] if K_BFP4 else []
+                ),  # (S0-8: H32 / 16, the rotation's scratch)
                 *(
                     [cb(45, tail_grid, Dt)] if K_BFP4 else []
                 ),  # (S0-8: the tail's rotated k before the writer rounds it)

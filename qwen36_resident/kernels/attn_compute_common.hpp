@@ -285,33 +285,70 @@ FORCE_INLINE void norm_rope(
     }
     cb_pop_front(cb_sq, Dt);
     if constexpr (kKRot) {
-        // out tile j = sum_i x_i @ HAD[i, j] (HAD's 32 x 32 blocks, row-major Dt x Dt in cb_had; fp32 dest)
+        // HAD = (H8 x H32) / 16 (tile index x column in tile): y_i = x_i @ (H32 / 16) (cb_had, one tile), then H8's +-1
+        // across the Dt tiles as three butterfly stages (stride s: tile j <- y_j + y_j+s, tile j + s <- y_j - y_j+s),
+        // ping-ponging cb_rotx -> cb_rot2 -> cb_rotx -> cb_rot2 -> out_a / out_b (8 tile matmuls instead of 64)
         cb_wait_front(cb_rotx, Dt);
-        cb_reserve_back(out_a, Dt);
-        if (out_b != out_a) {
-            cb_reserve_back(out_b, Dt);
-        }
+        cb_reserve_back(cb_rot2, Dt);
         reconfig_data_format(cb_had, cb_rotx);
-        pack_reconfig_data_format(out_a);
+        pack_reconfig_data_format(cb_rot2);
         matmul_init(cb_rotx, cb_had, 0);
-        for (uint32_t j = 0; j < Dt; j++) {
+        for (uint32_t i = 0; i < Dt; i++) {
             tile_regs_acquire();
-            for (uint32_t i = 0; i < Dt; i++) {
-                matmul_tiles(cb_rotx, cb_had, i, i * Dt + j, 0);
-            }
+            matmul_tiles(cb_rotx, cb_had, i, 0, 0);
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(0, out_a);
-            if (out_b != out_a) {
-                pack_tile(0, out_b);
-            }
+            pack_tile(0, cb_rot2);
             tile_regs_release();
         }
-        cb_push_back(out_a, Dt);
-        if (out_b != out_a) {
-            cb_push_back(out_b, Dt);
-        }
+        cb_push_back(cb_rot2, Dt);
         cb_pop_front(cb_rotx, Dt);
+        uint32_t src = cb_rot2, dst = cb_rotx;
+        for (uint32_t s = 1; s < Dt; s <<= 1) {
+            const bool last = (s << 1) >= Dt;
+            const uint32_t o_a = last ? out_a : dst, o_b = last ? out_b : dst;
+            cb_wait_front(src, Dt);
+            cb_reserve_back(o_a, Dt);
+            if (o_b != o_a) {
+                cb_reserve_back(o_b, Dt);
+            }
+            reconfig_data_format(src, src);
+            pack_reconfig_data_format(o_a);
+            for (uint32_t pass = 0; pass < 2; pass++) {  // (the sums, then the differences)
+                if (pass == 0) {
+                    add_init(src, src);
+                } else {
+                    sub_init(src, src);
+                }
+                for (uint32_t j = 0; j < Dt; j++) {
+                    if (((j & s) != 0) != (pass == 1)) {
+                        continue;
+                    }
+                    const uint32_t lo = pass == 0 ? j : j - s;
+                    tile_regs_acquire();
+                    if (pass == 0) {
+                        add_tiles(src, src, lo, lo + s, 0);
+                    } else {
+                        sub_tiles(src, src, lo, lo + s, 0);
+                    }
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    pack_tile<true>(0, o_a, j);
+                    if (o_b != o_a) {
+                        pack_tile<true>(0, o_b, j);
+                    }
+                    tile_regs_release();
+                }
+            }
+            cb_push_back(o_a, Dt);
+            if (o_b != o_a) {
+                cb_push_back(o_b, Dt);
+            }
+            cb_pop_front(src, Dt);
+            const uint32_t t = src;
+            src = dst;
+            dst = t;
+        }
         reconfig_data_format(cb_sq, cb_sq);  // (the unpack formats norm_rope leaves without the rotation)
     }
 }

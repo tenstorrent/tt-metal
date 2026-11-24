@@ -88,7 +88,7 @@ void kernel_main() {
     zero_tiles(cb_gate, 2 * Dt);
     push_resident(cb_mean, 1);
     if constexpr (kKRot) {
-        push_resident(cb_had, Dt * Dt);  // (S0-8: HAD's tiles, resident)
+        push_resident(cb_had, 1);  // (S0-8: HAD's tiles, resident)
     }
     {
         const InterleavedAddrGen<true> tok{
