@@ -239,9 +239,9 @@ case "${MODEL}" in
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/kimi_k3_1_prefill_runner_kv}"
     MANIFEST="${MANIFEST_DIR}/kimi_k3_1.json"
     if [ "${VARIANT}" = _packed ]; then
-      # Two 2,560-token chunks per forward (kimi_k3_1_packed.json), traced with D2H acks; one slot fewer than
-      # kimi_k3_1.json, for the traced packed forward's scratch slot. Same golden and PCC gate. 4x4 only: the 8x4
-      # layout's 5,120-token chunk equals the budget, so it would run one chunk per forward.
+      # Four 2,560-token chunks per forward (kimi_k3_1_packed.json), the production shape, traced with D2H acks; one
+      # slot fewer than kimi_k3_1.json, for the traced packed forward's scratch slot. Same golden and PCC gate. 4x4
+      # only: on the 8x4 layout's 5,120-token chunks the budget would pack two, not the four production runs.
       case "${CONFIG}" in
         sc1|sc4) ;;
         *) echo "${MODEL} --variant packed runs the 4x4 configs (sc1, sc4) only" >&2; exit 2 ;;
