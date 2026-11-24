@@ -139,7 +139,8 @@ constexpr uint32_t kPart = Dt + 1;         // a partial: Dt output tiles, then t
 constexpr uint32_t kMSlot = top_faces ? 256 : 1024;
 constexpr uint32_t kMRows0 = (qrows < 16 ? qrows : 16) * 32, kMRows2 = top_faces ? 0 : (qrows - 16) * 32;
 constexpr uint32_t kTile = 2048;           // bf16 32x32 tile
-constexpr uint32_t kKvTile = 1088;         // bf8 32x32 tile (the K cache)
+// the K cache's tile: bf8 (1088 B), or bfp4 (576 B) with S0-8's RESIDENT_KV_K_BFP4 (named arg kv_k_tile)
+constexpr uint32_t kKvTile = get_named_compile_time_arg_val("kv_k_tile");
 // the V cache's tile: bf8 (1088 B), or bfp4 (576 B) with S0's RESIDENT_KV_V_BFP4 (named arg kv_v_tile)
 constexpr uint32_t kVTile = get_named_compile_time_arg_val("kv_v_tile");
 constexpr uint32_t kFaceRow = 32;          // bytes of one 16-element face row (bf16)

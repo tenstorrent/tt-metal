@@ -136,7 +136,12 @@ TOK_SLOT = 4  # token state word: the GDN state slot of row 0 (verify)
 TOK_SLOT_ROWS = 15  # the same for a verify of R > 2 rows (words 1 .. R hold their positions)
 TOK_ACTIVE, TOK_PRESERVE = 9, 10  # rows mode token state words (kernels/active_rows.hpp)
 TOP_K = 32  # sampling::kTopK: the candidates of on-device sampling, the largest top-k it serves
-KV_ROW = (HD // TILE) * TILE_BYTES[ttnn.bfloat8_b]  # one position tile of a K cache page (bf8)
+# Strata S0 step 2 part 1 (S0-8, RESIDENT_KV_K_BFP4, default off — WORK IN PROGRESS, the kernels follow): K stored
+# Hadamard-rotated in bfp4 tiles — q and k rotated by HAD after RoPE (scores unchanged: HAD is orthogonal; the rotation
+# spreads K's outlier channels so 4-bit mantissas hold it: emulated NLL +0.28% at 8K, within noise at 32K)
+K_BFP4 = os.environ.get("RESIDENT_KV_K_BFP4", "0") == "1"
+K_DT = ttnn.bfloat4_b if K_BFP4 else ttnn.bfloat8_b
+KV_ROW = (HD // TILE) * TILE_BYTES[K_DT]  # one position tile of a K cache page (bf8; bfp4 with K_BFP4)
 # Strata S0 step 1 (RESIDENT_KV_V_BFP4, default off): the V caches / pool in bfp4 tiles, K stays bf8 (V tolerates 4-bit
 # mantissas: corpus NLL +0.13% at 8K, within noise at 32K; the pool holds ~34% more tokens per byte)
 V_BFP4 = os.environ.get("RESIDENT_KV_V_BFP4", "0") == "1"
@@ -147,6 +152,19 @@ V_ROW = (HD // TILE) * TILE_BYTES[V_DT]  # one position tile of a V cache page
 
 def bf16(t):
     return t.bfloat16().float()
+
+
+def hadamard(n):
+    """the normalized Sylvester Hadamard matrix of order n (symmetric, orthogonal): H_n = H_2 x .. x H_2 / sqrt(n); for
+    n = 256 it is H_8 x H_32 (tile index x column in tile), which the decode kernels apply as one 32 x 32 tile matmul
+    per tile and three butterfly stages across the 8 tiles"""
+    h = torch.ones(1, 1)
+    while h.shape[0] < n:
+        h = torch.cat([torch.cat([h, h], 1), torch.cat([h, -h], 1)], 0)
+    return h / h.shape[0] ** 0.5
+
+
+HAD = hadamard(HD)  # (S0-8: K's rotation; q gets the same so q . k is unchanged)
 
 
 # Live decode models, for the persistent-L1 layout check of traces captured beside them (see l1_layout)
@@ -319,7 +337,7 @@ class State:
         for _ in range(attn_copies if kv else 0):
             ks, vs = [], []
             for _ in range(d.n):
-                k, v = quantize_rows(rn(max_pos, HD)), quantize_rows(rn(max_pos, HD), V_DT)
+                k, v = quantize_rows(rn(max_pos, HD), K_DT), quantize_rows(rn(max_pos, HD), V_DT)
                 k[pos:], v[pos:] = 0, 0
                 ks.append(k)
                 vs.append(v)
@@ -390,13 +408,15 @@ def torch_step(x0, d, w, st, layers, interval, lm_head=False, attn_out=None, xs=
                 k, v = y[d.k0 : d.v0], y[d.v0 : d.v0 + HD]
                 qn = rope(rmsnorm(q, wa["wq"] / math.sqrt(HD)), cos, sin)
                 kn = bf16(rope(rmsnorm(k, wa["wk"]), cos, sin))
+                if K_BFP4:  # (S0-8: both rotated after RoPE, as the kernels do: bf16 in, bf16 out)
+                    qn, kn = bf16(bf16(qn) @ HAD), bf16(kn @ HAD)
                 K = torch.cat([st.K[c][chip][:pos], kn[None]])
                 V = torch.cat([st.V[c][chip][:pos], v[None]])
                 p = torch.softmax(qn @ K.T, dim=-1)
                 o = bf16((p @ V) * torch.sigmoid(gate)).flatten()
                 if attn_out is not None:
                     attn_out.append((l, chip, o))
-                st.K[c][chip][pos] = quantize_rows(kn[None])[0]
+                st.K[c][chip][pos] = quantize_rows(kn[None], K_DT)[0]
                 st.V[c][chip][pos] = quantize_rows(v[None], V_DT)[0]
                 parts.append(o @ w["out"][l % len(w["out"])][chip] + (x if chip == 0 else 0))
             a_i += 1
@@ -1033,6 +1053,7 @@ class ResidentModel:
 
         def cache(which, sts_=sts):
             assert not V_BFP4, "RESIDENT_KV_V_BFP4: paged KV only (the contiguous caches share one K / V stride)"
+            assert not K_BFP4, "RESIDENT_KV_K_BFP4: paged KV only (the contiguous caches share one K / V stride)"
             if sts_[0].K is None:
                 # no host images: zero-filled on device (stale rows are only ever read masked, but must be finite)
                 return device_zeros(
@@ -1468,7 +1489,7 @@ class ResidentModel:
                 T(0, q_t),
                 T(3, M_t),
                 T(4, one_t),
-                cb(1, work_grid, 2 * kv_block * Dt, ttnn.bfloat8_b, kv_page),
+                cb(1, work_grid, 2 * kv_block * Dt, K_DT, TILE_BYTES[K_DT]),  # (S0-8: K's format)
                 cb(2, work_grid, 2 * kv_block * Dt, V_DT, TILE_BYTES[V_DT]),  # (S0: V's format)
                 cb(5, work_grid, kv_block, *f32),
                 cb(6, work_grid, kv_block),
@@ -1529,7 +1550,7 @@ class ResidentModel:
                 # decode of the same model; bf16 kept them unrounded within the step)
                 *(
                     [
-                        cb(19, tail_grid, 2 * Dt, ttnn.bfloat8_b, kv_page),
+                        cb(19, tail_grid, 2 * Dt, K_DT, TILE_BYTES[K_DT]),
                         cb(20, tail_grid, 2 * Dt, V_DT, TILE_BYTES[V_DT]),
                     ]
                     if self.vrows
@@ -1538,8 +1559,8 @@ class ResidentModel:
                 cb(21, tail_grid, Dt),
                 cb(22, tail_grid, 2 * attn_users * groups if packed else LR),
                 # the tail's k (bf8) and v (V's format) as read (31 / 32) and as written back (28 / 33)
-                cb(28, tail_grid, (2 if packed else 1) * Dt, ttnn.bfloat8_b, kv_page),
-                cb(31, tail_grid, (2 if packed else 1) * Dt, ttnn.bfloat8_b, kv_page),
+                cb(28, tail_grid, (2 if packed else 1) * Dt, K_DT, TILE_BYTES[K_DT]),
+                cb(31, tail_grid, (2 if packed else 1) * Dt, K_DT, TILE_BYTES[K_DT]),
                 cb(32, tail_grid, (2 if packed else 1) * Dt, V_DT, TILE_BYTES[V_DT]),
                 cb(33, tail_grid, (2 if packed else 1) * Dt, V_DT, TILE_BYTES[V_DT]),
             ]
@@ -1588,6 +1609,7 @@ class ResidentModel:
                 ("sem_raddr", SEM_RADDR),
                 ("attn_tails", self.attn_tails),  # (attn_common.hpp kTails)
                 ("kv_v_tile", TILE_BYTES[V_DT]),  # (attn_common.hpp kVTile: the V cache's tile, S0)
+                ("kv_k_tile", TILE_BYTES[K_DT]),  # (attn_common.hpp kKvTile: the K cache's tile, S0-8)
             ]
 
             def kernel(src, core_ranges, ct, rt, config, named=()):
@@ -2725,11 +2747,12 @@ class ResidentModel:
             ), "share: another KV pool geometry"
             assert sts[0].K is None, "share: no host KV images (the pool is the shared model's)"
             assert sh.V_t.dtype == V_DT, "share: a V pool of another format"
+            assert sh.K_t.dtype == K_DT, "share: a K pool of another format"
             self.K_t, self.V_t = sh.K_t, sh.V_t
             return
         pools = []
         for which in ("K", "V"):
-            dt = V_DT if which == "V" else ttnn.bfloat8_b  # (S0: V's format)
+            dt = V_DT if which == "V" else K_DT  # (S0: V's format; S0-8: K's)
             if sts[0].K is None:  # no host images (State kv=False): zero-filled on device
                 shape = [banks * self._kv_pool_rows * TILE, HD]
                 pools.append(device_zeros(self.mesh, shape, dt, self._pool_mc))
@@ -2877,7 +2900,7 @@ class ResidentModel:
                 (
                     ttnn.from_torch(
                         pool.reshape(-1, HD),
-                        dtype=V_DT if which == "V" else ttnn.bfloat8_b,
+                        dtype=V_DT if which == "V" else K_DT,
                         layout=ttnn.TILE_LAYOUT,
                         mesh_mapper=per_chip,
                     ),
@@ -2914,7 +2937,7 @@ class ResidentModel:
                 (
                     ttnn.from_torch(
                         kv,
-                        dtype=V_DT if which == "V" else ttnn.bfloat8_b,
+                        dtype=V_DT if which == "V" else K_DT,
                         layout=ttnn.TILE_LAYOUT,
                         mesh_mapper=per_chip,
                     ),
