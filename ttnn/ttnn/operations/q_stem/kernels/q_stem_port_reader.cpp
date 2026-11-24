@@ -48,8 +48,9 @@ void kernel_main() {
     }
 
     const uint32_t q_base = get_read_ptr(cb_q_slice);
-    volatile tt_l1_ptr uint32_t* block_ready =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_block_ready_id));
+    // block-ready ring (host BLOCK_READY_RING): the owners' idx-th report of my direction lands on semaphore
+    // sem_block_ready_id + idx % ring; block idx is ready once that one holds every owner's report for idx
+    constexpr uint32_t ready_ring = get_named_compile_time_arg_val("ready_ring");
     const uint32_t big = cols_extra * (cols_base + 1);  // columns owned by the cores with one extra column
 
     uint32_t mine = 0;
@@ -58,8 +59,10 @@ void kernel_main() {
         if (d == p || dirmap[d] != my_dir) {
             return;
         }
-        ++mine;
-        noc_semaphore_wait_min(block_ready, mine * C1);
+        const uint32_t idx = mine++;
+        noc_semaphore_wait_min(
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_block_ready_id + idx % ready_ring)),
+            (idx / ready_ring + 1) * C1);
         uint32_t pending = 0;  // segments read into the reserved batch, not yet pushed
         uint32_t limit = 0;    // segments in the reserved batch (<= batch, up to the CB end)
         uint32_t l1 = 0;

@@ -117,10 +117,14 @@ void kernel_main() {
     // ---- stage 1 hand-off -------------------------------------------------------------------------------------------
     if (cols > 0 && kgroup == 0) {
         const uint32_t q_base = get_read_ptr(cb_q_slice);  // never popped before the end: block j at j*m*cols tiles
-        const uint32_t block_ready = get_semaphore(sem_block_ready_id);
+        // block-ready ring on the ports (host BLOCK_READY_RING): my idx-th report for a direction -> semaphore
+        // sem_block_ready_id + idx % ring, so a port waiting for report idx counts no later block of a faster owner
+        constexpr uint32_t ready_ring = get_named_compile_time_arg_val("ready_ring");
+        uint32_t reported[2] = {0, 0};  // per direction (FWD / BWD)
         q_stem::for_each_block(B, qrt, m, G, p, rorder, [&](uint32_t j, uint32_t b, uint32_t d, uint32_t r0) {
             cb_wait_front(cb_q_slice, (j + 1) * m * cols);
             if (d != p) {
+                const uint32_t block_ready = get_semaphore(sem_block_ready_id + reported[dirmap[d]]++ % ready_ring);
                 for (uint32_t k = 0; k < n_ports; ++k) {
                     if (get_arg_val<uint32_t>(ports_idx + 2 * k + 1) == dirmap[d]) {
                         const uint32_t pc = get_arg_val<uint32_t>(ports_idx + 2 * k);

@@ -114,7 +114,13 @@ CB_Q_RECV1 = 17
 CB_Q_RECV2 = 18
 
 # ---- program semaphore ids (port cores; declared on every core the program uses) -------------------------------------
-SEM_BLOCK_READY = 0
+SEM_BLOCK_READY = 0  # base id of the block-ready ring when BLOCK_READY_RING == 1 (else unused)
+# Block-ready reports (owner writers -> ports) per direction go to ring semaphore idx % BLOCK_READY_RING on the port
+# (ids SEM_BLOCK_READY_RING ..). One aggregate counter let a fast owner's report for block idx+1 stand in for a slow
+# owner's missing idx, so the port pulled q rows not yet packed (Refinement 7: K-split owners with uneven columns
+# drift apart). Exact while owners stay < ring blocks apart; the x rounds bound that drift (block_ready_ring()).
+SEM_BLOCK_READY_RING = 5
+BLOCK_READY_RING = 8
 SEM_X_CREDIT = 1  # injectors: cumulative slot credits from the stage-1 receivers
 SEM_KPART_READY = 2  # owners: partial blocks landed from partner group 1 (id 2) / group 2 (id 3), cumulative
 SEM_KPART_CREDIT = 4  # partners: recv slots the owner has freed for them, cumulative
@@ -623,6 +629,13 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
     wkv_units_total_max = geo.hpc_max if geo.wkv_resident else geo.hpc_max * geo.rows_per_head * geo.n_nb
     wkv_depth = max(1, min(WKV_DEPTH, wkv_units_total_max))
     check_fits_l1(mesh, geo, wkv_depth)
+    # an owner reports block idx only after packing it, i.e. after its x round idx; the injector sends round idx only
+    # once every owner freed its slot (consumed round idx - X_ROUND_DEPTH), and a K-split owner packs a block one
+    # round after consuming it: owners stay < ceil(depth / nkb) + 2 blocks apart. Margin of 2 for writer lag.
+    ring = BLOCK_READY_RING
+    if ring < -(-X_ROUND_DEPTH // geo.nkb) + 4 or SEM_BLOCK_READY_RING + ring > 16:
+        raise RuntimeError(f"q_stem: BLOCK_READY_RING={ring} does not cover the owners' block drift")
+    ready_named = [("ready_ring", ring)]
 
     mesh_desc = ttnn.MeshProgramDescriptor()
     for coord, ch in chips.items():
@@ -669,6 +682,7 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
                 tuple(X_INJECTOR_NOCS),
                 S1_KSPLIT,
                 S1_KPART_DEPTH,
+                BLOCK_READY_RING,
                 S1_COLS_PER_CORE,
                 QB_READ_BATCH,
                 S3_COST_FACTOR,
@@ -696,6 +710,9 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
             ttnn.SemaphoreDescriptor(id=SEM_KPART_READY, core_ranges=all_crs, initial_value=0),
             ttnn.SemaphoreDescriptor(id=SEM_KPART_READY + 1, core_ranges=all_crs, initial_value=0),
             ttnn.SemaphoreDescriptor(id=SEM_KPART_CREDIT, core_ranges=all_crs, initial_value=0),
+        ] + [  # port cores only: the owners' Mcast families keep their ids >= 5
+            ttnn.SemaphoreDescriptor(id=SEM_BLOCK_READY_RING + k, core_ranges=port_crs, initial_value=0)
+            for k in range(ring)
         ]
 
         # ---------------- CBs (allocation order matters only for address identity of cb_q_slice / cb_x_round) ------
@@ -1016,7 +1033,7 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
             geo.s3n,
             geo.n_nb,
             2 * L,
-            SEM_BLOCK_READY,
+            SEM_BLOCK_READY_RING,
             *geo_ct,
             int(geo.out_rm),
             geo.out_page_bytes,
@@ -1031,7 +1048,7 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
             kernel_source=str(KERNEL_DIR / "q_stem_writer.cpp"),
             core_ranges=s1_all_rect,
             compile_time_args=writer_ct,
-            named_compile_time_args=ks_named,
+            named_compile_time_args=ks_named + ready_named,
             runtime_args=writer_rt_s1,
             config=_dm("RISCV_0", ttnn.NOC.NOC_0 if S1_WRITER_NOC == 0 else ttnn.NOC.NOC_1),
         )
@@ -1041,7 +1058,7 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
                     kernel_source=str(KERNEL_DIR / "q_stem_writer.cpp"),
                     core_ranges=_crs(cores),
                     compile_time_args=writer_ct,
-                    named_compile_time_args=ks_named,
+                    named_compile_time_args=ks_named + ready_named,
                     runtime_args=_rt_subset(writer_rt_other, cores),
                     config=_dm("RISCV_0", ttnn.NOC.NOC_0 if wnoc == 0 else ttnn.NOC.NOC_1),
                 )
@@ -1054,11 +1071,12 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
                 CB_Q_SLICE,
                 geo.tile_bytes,
                 geo.C1,
-                SEM_BLOCK_READY,
+                SEM_BLOCK_READY_RING,
                 *geo_ct,
                 PORT_BATCH_SEGMENTS,
             ],
             runtime_args=port_reader_rt,
+            named_compile_time_args=ready_named,
             config=_dm("RISCV_1", ttnn.NOC.NOC_0),
         )
         port_sender_k = ttnn.KernelDescriptor(
