@@ -276,6 +276,8 @@ inline void _llk_unpack_AB_custom_mm_init_(
     const std::uint32_t ct_dim         = 1,
     const std::uint32_t unpA_num_faces = TILE_NUM_FACES)
 {
+    // Two-context handshake op: an earlier op's init may have left Auto TTSync on, and tt-metal calls no uninit.
+    hal_port::unpack_sync_mode<hal_port::UnpackSyncMode::Handshake>();
     LLK_ASSERT(custom_mm_legal_in1_num_faces(unpA_num_faces), "custom_mm: in1 must have 4 faces, or 2 for a [32, 16] tile");
     namespace cfg = hal::cfg;
     namespace adc = hal::counters::adc;

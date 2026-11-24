@@ -46,6 +46,8 @@ template <bool unpack_to_dest = false>
 inline void _llk_unpack_A_top32_rm_init_(
     const std::uint32_t within_face_16x16_transpose, const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format)
 {
+    // Two-context handshake op: an earlier op's init may have left Auto TTSync on, and tt-metal calls no uninit.
+    hal_port::unpack_sync_mode<hal_port::UnpackSyncMode::Handshake>();
     namespace cfg = hal::cfg;
     namespace adc = hal::counters::adc;
 

@@ -202,6 +202,8 @@ inline void _llk_unpack_AB_reduce_block_max_row_mop_config_()
 template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false, bool respect_trigger = false>
 inline void _llk_unpack_AB_reduce_block_max_row_init_(const ckernel::TensorShape tensor_shape)
 {
+    // Two-context handshake op: an earlier op's init may have left Auto TTSync on, and tt-metal calls no uninit.
+    hal_port::unpack_sync_mode<hal_port::UnpackSyncMode::Handshake>();
     hal_port::reduce_block_max::configure(tensor_shape);
 
     _llk_unpack_AB_reduce_block_max_row_mop_config_<block_ct_dim, respect_trigger>(); // Unpack operand and scaler
