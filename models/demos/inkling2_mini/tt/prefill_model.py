@@ -1448,13 +1448,24 @@ class Inkling2Prefill:
         t = len(ids)
         b = self._cur = self._inputs(t)
         self._write(b["tok"], torch.tensor(ids, dtype=torch.int32).view(1, t), ttnn.uint32)
-        tau = torch.tensor([log_scale(p) for p in range(s, s + t)], dtype=torch.float32).view(1, 1, t, 1)
-        self._write(b["tau"], tau, ttnn.float32, ttnn.TILE_LAYOUT)
-        if "nreal" in b:
+        # tau and the row masks depend on (s, n) only and no program writes them: a buffer that holds the values
+        # of this (s, n) already (the same prompt length again) is not rewritten
+        held = b.setdefault("held", {})
+
+        def stale(name, key):
+            if held.get(name) == key:
+                return False
+            held[name] = key
+            return True
+
+        if stale("tau", s):
+            tau = torch.tensor([log_scale(p) for p in range(s, s + t)], dtype=torch.float32).view(1, 1, t, 1)
+            self._write(b["tau"], tau, ttnn.float32, ttnn.TILE_LAYOUT)
+        if "nreal" in b and stale("nreal", n):
             self._write(b["nreal"], torch.tensor([[n] + [0] * 15], dtype=torch.int32), ttnn.uint32)
-        if n < t:
+        if n < t and stale("valid", n):
             self._write(b["valid"], (torch.arange(t) < n).float().view(1, 1, t, 1), ttnn.bfloat16, ttnn.TILE_LAYOUT)
-        if b["ringm"]:
+        if b["ringm"] and stale("ringm", n):
             src = self._ring_src(n)
             for k, m in enumerate(b["ringm"]):
                 mask = ((src >= k * WINDOW) & (src < (k + 1) * WINDOW)).float().view(1, 1, WINDOW, 1)
