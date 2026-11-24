@@ -75,6 +75,9 @@ public:
     // index}, the space get_physical_dram_core_from_logical and CreateKernel(DramConfig) use), not
     // UMD's {channel, raw subchannel}.
     std::vector<tt::tt_metal::CoreCoord> get_metal_dram_cores(tt::CoordSystem coord_system) const;
+    // Narrows get_metal_dram_cores to `translated_cores` (TRANSLATED coords): the DRAM cores Metal reserved, where
+    // it shares the chip's DRAM cores with another owner. Every core named must be one get_metal_dram_cores returns.
+    void restrict_metal_dram_cores(const std::vector<tt::tt_metal::CoreCoord>& translated_cores);
     tt::tt_metal::CoreCoord get_logical_core_for_dram_view(int dram_view) const;
     size_t get_address_offset(int dram_view) const;
     size_t get_channel_for_dram_view(int dram_view) const;
@@ -124,4 +127,7 @@ private:
         const std::optional<uint32_t>& mrisc_noc2axi_ports, std::optional<uint64_t> dram_view_size_limit);
     void generate_logical_eth_coords_mapping();
     void generate_physical_routing_to_profiler_flat_id();
+
+    // Set by restrict_metal_dram_cores: the only DRAM cores get_metal_dram_cores returns, as TRANSLATED coords.
+    std::optional<std::vector<tt::tt_metal::CoreCoord>> reserved_metal_dram_cores_;
 };

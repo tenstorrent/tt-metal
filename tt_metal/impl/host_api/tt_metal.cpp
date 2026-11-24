@@ -783,6 +783,25 @@ static KernelHandle CreateDramKernel(
     TT_FATAL(
         metal_context.hal().has_programmable_core_type(HalProgrammableCoreType::DRAM),
         "DRAM programmable cores are not enabled; they auto-enable on Blackhole with firmware >= 19.12.0.0.");
+    if (!metal_context.rtoptions().get_dram_kernel_seats().empty()) {
+        // Metal loaded firmware on its reserved seats only: a kernel on any other DRAM core would never start.
+        const Cluster& cluster = metal_context.get_cluster();
+        for (const ChipId chip : cluster.all_chip_ids()) {
+            const std::vector<CoreCoord> reserved =
+                cluster.get_soc_desc(chip).get_metal_dram_cores(CoordSystem::LOGICAL);
+            for (const CoreRange& range : core_range_set.ranges()) {
+                for (size_t y = range.start_coord.y; y <= range.end_coord.y; y++) {
+                    for (size_t x = range.start_coord.x; x <= range.end_coord.x; x++) {
+                        TT_FATAL(
+                            std::find(reserved.begin(), reserved.end(), CoreCoord{x, y}) != reserved.end(),
+                            "DRAM core {} of chip {} is not a seat TT_METAL_DRAM_KERNEL_SEATS reserves for metal",
+                            CoreCoord{x, y}.str(),
+                            chip);
+                    }
+                }
+            }
+        }
+    }
     std::shared_ptr<Kernel> kernel = std::make_shared<DramKernel>(context_id, kernel_src, core_range_set, config);
     return program.impl().add_kernel(kernel, HalProgrammableCoreType::DRAM);
 }

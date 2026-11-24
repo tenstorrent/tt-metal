@@ -654,6 +654,10 @@ const metal_SocDescriptor& Cluster::get_soc_desc(ChipId chip) const {
     return this->sdesc_per_chip_.at(chip);
 }
 
+void Cluster::restrict_metal_dram_cores(ChipId chip, const std::vector<tt::tt_metal::CoreCoord>& translated_cores) {
+    this->sdesc_per_chip_.at(chip).restrict_metal_dram_cores(translated_cores);
+}
+
 void Cluster::generate_virtual_to_umd_coord_mapping() {
     TT_ASSERT(this->hal_ != nullptr, "Hal is not set. Need to call set_hal() first.");
     for (auto chip_id : this->driver_->get_target_device_ids()) {
