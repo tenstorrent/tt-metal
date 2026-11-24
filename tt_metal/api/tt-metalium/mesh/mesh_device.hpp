@@ -10,7 +10,6 @@
 #include <tt_stl/span.hpp>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
