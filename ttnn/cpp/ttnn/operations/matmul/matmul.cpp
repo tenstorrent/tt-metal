@@ -9,6 +9,7 @@
 
 #include "device/config/matmul_program_config_types.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
@@ -250,6 +251,42 @@ static bool auto_config_reads_nd_dram_b(
         matmul_struct));
 }
 
+// Matmul walks an interleaved TILE operand's tiles on the default tile grid of its logical shape and takes its
+// tile counts from the padded shape. An operand whose padded shape has whole tiles past that grid (e.g. from
+// tilize_with_val_padding) is returned rebuilt on it; nullopt means the operand can be used as is.
+static std::optional<ttnn::Tensor> rebuilt_on_default_tile_grid(const ttnn::Tensor& tensor) {
+    if (tensor.layout() != Layout::TILE || tensor.storage_type() != StorageType::DEVICE || tensor.is_sharded()) {
+        return std::nullopt;
+    }
+    const auto& logical = tensor.logical_shape();
+    const auto& padded = tensor.padded_shape();
+    const auto& tile = tensor.tensor_spec().tile();
+    const auto within_one_tile = [&] {
+        if (logical.rank() < 2 || padded.rank() != logical.rank() || padded[-1] - logical[-1] >= tile.get_width() ||
+            padded[-2] - logical[-2] >= tile.get_height()) {
+            return false;
+        }
+        for (int i = 0; i < static_cast<int>(logical.rank()) - 2; ++i) {
+            if (padded[i] != logical[i]) {
+                return false;
+            }
+        }
+        return true;
+    };
+    if (within_one_tile()) {
+        return std::nullopt;
+    }
+    const auto default_padded_shape =
+        tt::tt_metal::TensorSpec(
+            tensor.logical_shape(),
+            tt::tt_metal::TensorLayout(tensor.dtype(), tensor.tensor_spec().page_config(), MemoryConfig{}))
+            .padded_shape();
+    if (tensor.padded_shape() == default_padded_shape) {
+        return std::nullopt;
+    }
+    return ttnn::reshape(tensor, tensor.logical_shape());
+}
+
 static ttnn::Tensor bound_matmul(
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
@@ -263,6 +300,20 @@ static ttnn::Tensor bound_matmul(
             input_tensor_b.logical_shape());
     }
 
+    {
+        const auto a = rebuilt_on_default_tile_grid(input_tensor_a);
+        const auto b = rebuilt_on_default_tile_grid(input_tensor_b);
+        const auto c = bias.has_value() ? rebuilt_on_default_tile_grid(*bias) : std::nullopt;
+        if (a.has_value() || b.has_value() || c.has_value()) {
+            return bound_matmul(
+                a.value_or(input_tensor_a),
+                b.value_or(input_tensor_b),
+                c.has_value() ? std::optional<const Tensor>(*c) : bias,
+                parameters,
+                optional_output_tensor);
+        }
+    }
+
     // Auto-generated program configs read a sharded operand's 2D shard spec, which an ND shard spec
     // only has when its shards flatten to a height-, width- or block-sharded layout.
     if (!parameters.program_config.has_value()) {
@@ -273,8 +324,9 @@ static ttnn::Tensor bound_matmul(
             };
             const bool move_a = lacks_2d_shard_spec(input_tensor_a);
             const Tensor a = move_a ? to_dram(input_tensor_a) : input_tensor_a;
-            const bool move_b = lacks_2d_shard_spec(input_tensor_b) &&
-                                !auto_config_reads_nd_dram_b(a, input_tensor_b, bias, parameters, optional_output_tensor);
+            const bool move_b =
+                lacks_2d_shard_spec(input_tensor_b) &&
+                !auto_config_reads_nd_dram_b(a, input_tensor_b, bias, parameters, optional_output_tensor);
             if (move_a || move_b) {
                 return bound_matmul(
                     a, move_b ? to_dram(input_tensor_b) : input_tensor_b, bias, parameters, optional_output_tensor);
