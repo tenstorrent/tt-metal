@@ -21,6 +21,9 @@ namespace detail {
 // Legacy rule: a 32-bit L1 format (Float32) at a 32-bit Dest (DST_ACCUM_MODE) unpacks straight to Dest (UNPACK, which
 // borrows the Dest section from MATH); anything else is an FPU datacopy through SrcA (MATH), including a 16-bit format
 // at a 32-bit Dest.
+// The borrow calls the LLK (_llk_tile_regs_borrow_) directly: tile_regs_borrow<MATH, UNPACK> compiles away unless the
+// JIT flag UnpackToDestEn is set, and that flag comes only from a DFB's unpack_modes. The path here follows the
+// operand's format, so a Float32 operand with no such DFB entry (e.g. a local tensor) still needs the borrow.
 template <DataFormat Format, TensorShape Shape>
 constexpr bool copy_to_dest = DST_ACCUM_MODE && Format == DataFormat::Float32;
 
@@ -93,11 +96,11 @@ template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorSh
 inline void copy_tile(LLKOperand<Format, Shape> src, std::uint32_t itile, std::uint32_t idst) {
     static_assert(is_fp32_dest_acc_en == DST_ACCUM_MODE, "copy_tile: Dest mode is kernel-wide (DST_ACCUM_MODE)");
     if constexpr (detail::copy_to_dest<Format, Shape>) {
-        tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
+        _llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();
     }
     detail::copy_one(src, itile, idst);
     if constexpr (detail::copy_to_dest<Format, Shape>) {
-        tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
+        _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
     }
 }
 
@@ -123,13 +126,13 @@ inline void copy_block(
         start_idst + ntiles <= detail::dest_section_tiles<is_fp32_dest_acc_en>(), "copy_block: block exceeds Dest");
     detail::check_block_tiles<detail::copy_client<Format, Shape>>(ntiles);
     if constexpr (detail::copy_to_dest<Format, Shape>) {
-        tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
+        _llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();
     }
     for (std::uint32_t i = 0; i < ntiles; ++i) {
         detail::copy_one(src, start_itile + i, start_idst + i);
     }
     if constexpr (detail::copy_to_dest<Format, Shape>) {
-        tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
+        _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
     }
 }
 
