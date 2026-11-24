@@ -461,6 +461,11 @@ class QwenImagePipeline(PipelineAPIMixin):
             vision_image_sizes=[self._vision_size(s.width / s.height, s) for s in self._image_sizes.values()],
             max_images=self._max_images,
         )
+        # Paged encoders give their DRAM back before the transformers are built; the first request reloads them.
+        if self._text_encoder.offload:
+            self._text_encoder.encoder.deallocate_weights()
+        if self._text_encoder.vision is not None and (self._text_encoder.offload or self._text_encoder.offload_vision):
+            self._text_encoder.vision.deallocate_weights()
 
         logger.info("creating transformers...")
         self._transformers = [
