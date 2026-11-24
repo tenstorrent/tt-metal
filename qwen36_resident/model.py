@@ -141,6 +141,8 @@ TOP_K = 32  # sampling::kTopK: the candidates of on-device sampling, the largest
 # spreads K's outlier channels so 4-bit mantissas hold it: emulated NLL +0.28% at 8K, within noise at 32K)
 K_BFP4 = os.environ.get("RESIDENT_KV_K_BFP4", "0") == "1"
 K_DT = ttnn.bfloat4_b if K_BFP4 else ttnn.bfloat8_b
+# (S0-8 A/B: 0 = the decode-written K rows truncated by the packer, no writer hop — a timing probe, not for serving)
+K_RTN = os.environ.get("RESIDENT_KV_K_RTN", "1") == "1"
 KV_ROW = (HD // TILE) * TILE_BYTES[K_DT]  # one position tile of a K cache page (bf8; bfp4 with K_BFP4)
 # Strata S0 step 1 (RESIDENT_KV_V_BFP4, default off): the V caches / pool in bfp4 tiles, K stays bf8 (V tolerates 4-bit
 # mantissas: corpus NLL +0.13% at 8K, within noise at 32K; the pool holds ~34% more tokens per byte)
@@ -1527,7 +1529,7 @@ class ResidentModel:
                     [T(43, had_t), cb(44, prep_grid, Dt), cb(46, prep_grid, Dt)] if K_BFP4 else []
                 ),  # (S0-8: H32 / 16, the rotation's scratch)
                 *(
-                    [cb(45, tail_grid, Dt)] if K_BFP4 else []
+                    [cb(45, tail_grid, Dt)] if K_BFP4 and K_RTN else []
                 ),  # (S0-8: the tail's rotated k before the writer rounds it)
                 # (row groups: + the tail core's per-row rope tiles, attn_common.hpp kTailBatched)
                 cb(
@@ -1624,6 +1626,7 @@ class ResidentModel:
                 ("kv_v_tile", TILE_BYTES[V_DT]),  # (attn_common.hpp kVTile: the V cache's tile, S0)
                 ("kv_k_tile", TILE_BYTES[K_DT]),  # (attn_common.hpp kKvTile: the K cache's tile, S0-8)
                 ("kv_k_rot", int(K_BFP4)),  # (attn_common.hpp kKRot: q / k rotated by HAD after RoPE, S0-8)
+                ("kv_k_rtn", int(K_BFP4 and K_RTN)),  # (kKRtn: the tail writer rounds the decode-written K rows)
             ]
 
             def kernel(src, core_ranges, ct, rt, config, named=()):

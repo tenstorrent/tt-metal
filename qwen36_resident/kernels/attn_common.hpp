@@ -144,6 +144,7 @@ constexpr uint32_t kKvTile = get_named_compile_time_arg_val("kv_k_tile");
 // S0-8 (RESIDENT_KV_K_BFP4): q and k rotated by HAD after RoPE (norm_rope), HAD's 8 x 8 tiles resident on the leader
 // and the tail core(s)
 constexpr bool kKRot = get_named_compile_time_arg_val("kv_k_rot") != 0;
+constexpr bool kKRtn = get_named_compile_time_arg_val("kv_k_rtn") != 0;  // (the decode-written K rows rounded)
 // the V cache's tile: bf8 (1088 B), or bfp4 (576 B) with S0's RESIDENT_KV_V_BFP4 (named arg kv_v_tile)
 constexpr uint32_t kVTile = get_named_compile_time_arg_val("kv_v_tile");
 constexpr uint32_t kFaceRow = 32;          // bytes of one 16-element face row (bf16)

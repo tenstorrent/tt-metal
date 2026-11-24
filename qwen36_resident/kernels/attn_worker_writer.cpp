@@ -120,7 +120,7 @@ void kernel_main() {
     for (uint32_t i = 0; i < layers * n_act; i++) {
         const uint32_t l = i / n_act, u = act.row[i % n_act];
         const bool has_chunk = chunk_of_user[u];
-        if constexpr (kKRot) {
+        if constexpr (kKRtn) {
             // (S0-8: the passes whose compute produced new k rows — packed: a user's first pass; batched: the layer's
             // first pass, every active user's row; otherwise every pass, row 0 — copied into cb_knew, those rows
             // rounded to nearest on the bfp4 grid; compute waits for cb_knew before it places them)

@@ -211,7 +211,7 @@ FORCE_INLINE void online_finish() {
 }  // namespace
 
 // (S0-8: the rotated k rows go through the tail writer, which rounds them to nearest into cb_knew)
-constexpr uint32_t kKnewSrc = kKRot ? cb_knr : cb_knew;
+constexpr uint32_t kKnewSrc = kKRtn ? cb_knr : cb_knew;
 
 void kernel_main() {
     const uint32_t role = get_arg_val<uint32_t>(0);
