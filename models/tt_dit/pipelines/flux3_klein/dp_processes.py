@@ -100,13 +100,21 @@ def _answer(conn, pipeline) -> None:
         conn.close()  # a loop that dies (a request that does not unpickle) fails the parent's request instead of hanging it
 
 
-def open_groups(groups: int, group_shape: tuple[int, int] = GROUP_SHAPE, **pipeline_kwargs):
+def open_groups(
+    groups: int,
+    group_shape: tuple[int, int] = GROUP_SHAPE,
+    sizes: Sequence[int] | None = None,
+    **pipeline_kwargs,
+):
     """In a process: its mesh and one pipeline per group, built one after another (they share the weight cache).
-    Returns (mesh, pipelines); close each pipeline, then the mesh. Raises with nothing left open."""
+    Returns (mesh, pipelines); close each pipeline, then the mesh. Raises with nothing left open. Groups that serve
+    more than one size (`sizes`, every size by default) free the other sizes' CCL pairs and plans on a size switch
+    (free_other_sizes): a DP4 group holds one size's working set, not every size's (job 232721)."""
     import ttnn
 
-    from .pipeline_flux3_klein import Flux3KleinPipeline
+    from .pipeline_flux3_klein import SIZES, Flux3KleinPipeline
 
+    pipeline_kwargs.setdefault("free_other_sizes", len(set(SIZES if sizes is None else sizes)) > 1)
     mesh = open_group_mesh(process_shape(groups, group_shape))
     pipelines = []
     sp_axis, tp_axis = GROUP_AXES[group_shape]
@@ -142,7 +150,8 @@ def serve(
     import ttnn
 
     try:
-        mesh, pipelines = open_groups(len(conns), group_shape, **pipeline_kwargs)
+        sizes = None if isinstance(warmup, bool) else warmup
+        mesh, pipelines = open_groups(len(conns), group_shape, sizes, **pipeline_kwargs)
     except Exception as e:  # noqa: BLE001
         _send_error(conns, e)
         return

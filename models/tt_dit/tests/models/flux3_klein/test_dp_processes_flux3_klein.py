@@ -173,7 +173,13 @@ def test_serve_warms_every_group_before_ready_and_closes_the_mesh(monkeypatch, g
     meshes = ["sub0", "sub1"] if groups == 2 else ["mesh"]
     sp_axis, tp_axis = (1, 0) if group_shape == (2, 8) else (0, 1)
     axis_topologies = {1: ttnn.Topology.Linear} if group_shape == (4, 4) else {}
-    kw = {"sp_axis": sp_axis, "tp_axis": tp_axis, "axis_topologies": axis_topologies, "upsample": False}
+    kw = {
+        "sp_axis": sp_axis,
+        "tp_axis": tp_axis,
+        "axis_topologies": axis_topologies,
+        "upsample": False,
+        "free_other_sizes": warmup is True,  # every size, or one
+    }
     if group_shape == dp.LINE_GROUP_SHAPE:
         kw["topology"] = ttnn.Topology.Linear
     assert calls == [("create", m, kw) for m in meshes] + [("warmup", m, sizes) for m in meshes]
@@ -224,6 +230,27 @@ def test_open_groups_passes_the_servers_snapshots_through_create(monkeypatch, tm
     mesh, pipelines = dp.open_groups(1, snapshots={"distilled": tmp_path}, upsample=False)
     assert mesh == "mesh" and len(pipelines) == 1
     assert built[0][1]["snapshots"] == {"distilled": tmp_path} and built[0][1]["upsample"] is False
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected"),
+    [
+        ({}, True),
+        ({"sizes": (1024, 2048, 4096)}, True),
+        ({"sizes": (1024,)}, False),
+        ({"sizes": (2048, 2048)}, False),
+        ({"sizes": (1024, 4096), "free_other_sizes": False}, False),
+    ],
+)
+def test_open_groups_frees_other_sizes_only_when_serving_more_than_one(monkeypatch, kwargs, expected):
+    import ttnn
+
+    built = []
+    monkeypatch.setattr(dp, "open_group_mesh", lambda s: "mesh")
+    monkeypatch.setattr(pl.Flux3KleinPipeline, "create", classmethod(lambda cls, m, **kw: built.append(kw)))
+    monkeypatch.setattr(ttnn, "close_mesh_device", lambda m: None)
+    dp.open_groups(1, **kwargs)
+    assert built[0]["free_other_sizes"] is expected
 
 
 def _explode():
