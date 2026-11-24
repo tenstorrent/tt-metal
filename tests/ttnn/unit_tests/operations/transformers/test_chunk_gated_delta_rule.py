@@ -748,17 +748,13 @@ def test_gated_delta_attn_seq_invalid_inputs(device):
     with pytest.raises(RuntimeError, match="interleaved"):
         ttnn.transformer.gated_delta_attn_seq(**{**dev_inputs, "L_unit": sharded_l_unit})
 
-    # L1 output_mem_config must be rejected
+    # L1 memory_config must be rejected
     with pytest.raises(RuntimeError, match="output_mem_config"):
-        ttnn.transformer.gated_delta_attn_seq(**dev_inputs, output_mem_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.transformer.gated_delta_attn_seq(**dev_inputs, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     # Zero-volume num_chunks=0 and batch_heads=0 must be rejected cleanly without hanging
     for bh, nc, pattern in [(1, 0, "num_chunks"), (0, 1, "num_heads")]:
         z_inputs, _ = _gated_delta_attn_seq_inputs(batch_heads=bh, num_chunks=nc, with_initial_state=False, seed=0)
-        try:
-            z_dev = {name: dev(t) for name, t in z_inputs.items()}
-        except RuntimeError:
-            # from_torch rejects zero-volume tiled tensors on device before op launch
-            continue
+        z_dev = {name: dev(t) for name, t in z_inputs.items()}
         with pytest.raises(RuntimeError, match=pattern):
             ttnn.transformer.gated_delta_attn_seq(**z_dev)
