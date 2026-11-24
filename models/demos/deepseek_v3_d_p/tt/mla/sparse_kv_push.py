@@ -87,8 +87,8 @@ class SparseKvPushPlanner:
     Trace-safe: on the metadata path (PREFILL_USE_TRACE=1) nothing depends on a host value that changes per chunk or
     request. The plan reads the chunk start from metadata[1] on device, so the cache key holds that tensor's address,
     not its value (a layer that computes its own indices calls invalidate()); the push reads the cache slot from
-    metadata[0]. Buffers,
-    semaphores and sub-device managers are created on first use, which the warm pass does before any trace capture."""
+    metadata[0]. Buffers, semaphores and sub-device managers are created on first use, which the warm pass does before
+    any trace capture."""
 
     def __init__(self, mesh_device, links: int):
         self.mesh_device = mesh_device
@@ -239,7 +239,7 @@ class SparseKvPushPlanner:
         if slot == len(self._tables):
             self._tables.append(None)
         tables = self._tables[slot]
-        if tables is None or tables.shape[2] != gathered_rows or tables.shape[3] != table.shape[3]:
+        if tables is None or tables.shape[2] != gathered_rows:
             tables = self._tables[slot] = _replicated(
                 self.mesh_device,
                 torch.zeros(1, 1, gathered_rows, table.shape[3], dtype=torch.int32),
