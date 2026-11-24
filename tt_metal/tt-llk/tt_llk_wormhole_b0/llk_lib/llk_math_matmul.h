@@ -734,7 +734,7 @@ inline void matmul_configure_mop_throttled(
         (is_in0_16x32 && is_in1_32x16) ? 4
                                        : ((is_in0_16x32 || is_in1_32x16 || is_in0_32x16 || is_in1_16x32) ? (partial_face ? 4 : 8) : replay_buff_len_throttle);
 
-    TTI_REPLAY(ckernel::math::replay_buf_offset, replay_buf_len, 0, 1);
+    TT_REPLAY(ckernel::math::replay_buf_offset, replay_buf_len, 0, 1);
     if (!is_in1_32x16 && !is_in1_16x32 && !is_in0_32x16 && !is_in0_16x32)
     {
         run_throttled_sequence<THROTTLE_LEVEL, high_fidelity>(t_dim, reuse_a);
