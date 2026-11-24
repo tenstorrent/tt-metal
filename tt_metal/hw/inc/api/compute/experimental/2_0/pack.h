@@ -69,8 +69,7 @@ inline void pack_tile(LLKOperand<Format, Shape> out, std::uint32_t itile, std::u
 /**
  * Id-free block pack, Quasar: a pack of each tile of a ct_dim x rt_dim block, Dest tiles
  * ifrom_dst + i -> output tiles start_out_tile + i, i < ct_dim * rt_dim. The block must fit one Dest
- * section (static_assert). No tails: every block op between two inits must cover the same tile count; for leftover
- * tiles re-init, then run a second, shorter instantiation.
+ * section (static_assert). No tails: the block divides the full dim, so every block op covers the same tile count.
  *
  * | Param Type | Name                | Description                        | Type       | Valid Range                     | Required |
  * |------------|---------------------|------------------------------------|------------|---------------------------------|----------|
@@ -187,8 +186,8 @@ ALWI void pack_tile(LLKOperand<Format, Shape> out, std::uint32_t itile, std::uin
 /**
  * Id-free block pack of a ct_dim x rt_dim block (block/loop form of pack_tile; same block form as Quasar):
  * DST[ifrom_dst + i] -> output tile start_out_tile + i, i < ct_dim * rt_dim. Blackhole only. Sub-32-row
- * (partial-height) block-float tiles are not supported (compile-time rejected). No tails: for leftover tiles re-init,
- * then run a second, shorter instantiation.
+ * (partial-height) block-float tiles are not supported (compile-time rejected). No tails: the block divides the full
+ * dim, so every block op covers the same tile count.
  *
  * | Param Type | Name                | Description                                  | Type       | Valid Range | Required |
  * |------------|---------------------|----------------------------------------------|------------|-------------|----------|

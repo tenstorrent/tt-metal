@@ -8,11 +8,11 @@
 //
 // The copy path: copy_direct_to_dest_* (unpack-to-dest) for a Float32 input at 32-bit Dest, copy_src_to_dest_*
 // (FPU datacopy) otherwise.
-// Compile-time args: num_tiles, tiles_per_section (full sections use the <T, 1> block forms; a shorter tail re-inits
-// and runs a second, shorter instantiation), mode: 0 = one run, 6 = three runs of 3, 5, 3 sections, re-init between, 7
-// = two DFB pairs (in0 -> out0 then in1 -> out1, num_tiles / 2 each), 12 = early return by runtime arg skip: 1 = before
-// compute_kernel_hw_startup, 2 = right after it, 3 = after one copied + packed section, inside a second section after
-// its copy; 0 = one run.
+// Compile-time args: num_tiles (per compute thread), tiles_per_section (the most tiles per section; each run uses the
+// <B, 1> block forms with B the largest divisor of its tile count that fits, so the block divides the full dim), mode:
+// 0 = one run, 6 = three runs of 3, 5, 3 sections, re-init between, 7 = two DFB pairs (in0 -> out0 then in1 -> out1,
+// num_tiles / 2 each), 12 = early return by runtime arg skip: 1 = before compute_kernel_hw_startup, 2 = right after
+// it, 3 = after one copied + packed section, inside a second section after its copy; 0 = one run.
 // LTA (host define): in0 / out0 are resident L1 tensors read through LocalTensorAccessor, with no DFBs and no DM
 // kernels; one run of num_tiles / tiles_per_section full sections (mode is ignored).
 
@@ -69,18 +69,25 @@ void copy_section(Dfb& in, Dfb& out) {
     in.pop_front(N);
 }
 
+// No tails: the block divides the full dim. The largest divisor of NumTiles that fits one section (1 for a prime
+// above TPS).
+template <std::uint32_t NumTiles>
+constexpr std::uint32_t block() {
+    std::uint32_t b = TPS < NumTiles ? TPS : NumTiles;
+    while (NumTiles % b != 0) {
+        --b;
+    }
+    return b;
+}
+
 template <std::uint32_t NumTiles, typename In, typename Out, typename Dfb>
 void copy_sections(Dfb& in, Dfb& out) {
-    constexpr std::uint32_t tail = NumTiles % TPS;
+    constexpr std::uint32_t B = block<NumTiles>();
+    static_assert(NumTiles % B == 0);
     copy_init(in.template front<In>());
     ex::pack_init(out.template back<Out>());
-    for (std::uint32_t i = 0; i < NumTiles / TPS; ++i) {
-        copy_section<TPS, In, Out>(in, out);
-    }
-    if constexpr (tail != 0) {  // block ops take no tails: re-init, then a shorter instantiation
-        copy_init(in.template front<In>());
-        ex::pack_init(out.template back<Out>());
-        copy_section<tail, In, Out>(in, out);
+    for (std::uint32_t i = 0; i < NumTiles / B; ++i) {
+        copy_section<B, In, Out>(in, out);
     }
 }
 
@@ -91,6 +98,7 @@ void kernel_main() {
     const In0 in = LocalTensorAccessor<std::uint16_t>(tensor::in0).operand<In0>();
     const Out0 out = LocalTensorAccessor<std::uint16_t>(tensor::out0).operand<Out0>();
 
+    static_assert(get_arg(args::num_tiles) % TPS == 0);
     ckernel::compute_kernel_hw_startup(in, out);
     copy_init(in);
     ex::pack_init(out);

@@ -155,9 +155,8 @@ inline void copy_direct_to_dest_tile(LLKOperand<Format, Shape> src, std::uint32_
 // clang-format off
 /**
  * Id-free block copy, Quasar, Src path: a ct_dim x rt_dim block, source tiles start_itile + i -> Dest tiles
- * start_idst + i, through SrcA. The block must fit one Dest section (static_assert). No tails: every block op
- * between two inits must cover the same tile count; for leftover tiles re-init, then run a second, shorter
- * instantiation.
+ * start_idst + i, through SrcA. The block must fit one Dest section (static_assert). No tails: the block divides the
+ * full dim, so every block op covers the same tile count.
  *
  * | Param Type | Name                | Description                               | Type       | Valid Range                     | Required |
  * |------------|---------------------|-------------------------------------------|------------|---------------------------------|----------|
@@ -183,7 +182,7 @@ inline void copy_src_to_dest_block(
 /**
  * Id-free block copy, Quasar, direct path: a ct_dim x rt_dim block, source tiles start_itile + i unpacked straight
  * into Dest tiles start_idst + i, borrowing Dest once for the block. The block must fit one Dest section
- * (static_assert). No tails: for leftover tiles re-init, then run a second, shorter instantiation.
+ * (static_assert). No tails: the block divides the full dim, so every block op covers the same tile count.
  *
  * | Param Type | Name                | Description                               | Type       | Valid Range                     | Required |
  * |------------|---------------------|-------------------------------------------|------------|---------------------------------|----------|
@@ -393,7 +392,7 @@ ALWI void copy_direct_to_dest_tile(LLKOperand<Format, Shape> src, std::uint32_t 
 /**
  * Id-free block datacopy, Src path, of a ct_dim x rt_dim block: source tile start_in_tile_index + i lands in DST
  * slot start_dst_tile_index + i. Loop form of copy_src_to_dest_tile (same block form as Quasar). Requires
- * copy_src_to_dest_init. No tails: for leftover tiles re-init, then run a second, shorter instantiation.
+ * copy_src_to_dest_init. No tails: the block divides the full dim, so every block op covers the same tile count.
  *
  * | Param Type | Name                 | Description                                 | Type       | Valid Range | Required |
  * |------------|----------------------|---------------------------------------------|------------|-------------|----------|
@@ -421,7 +420,7 @@ ALWI void copy_src_to_dest_block(
 /**
  * Id-free block datacopy, direct path, of a ct_dim x rt_dim block: source tile start_in_tile_index + i is unpacked
  * straight into DST slot start_dst_tile_index + i. Loop form of copy_direct_to_dest_tile. Requires
- * copy_direct_to_dest_init. No tails: for leftover tiles re-init, then run a second, shorter instantiation.
+ * copy_direct_to_dest_init. No tails: the block divides the full dim, so every block op covers the same tile count.
  *
  * | Param Type | Name                 | Description                                 | Type       | Valid Range | Required |
  * |------------|----------------------|---------------------------------------------|------------|-------------|----------|

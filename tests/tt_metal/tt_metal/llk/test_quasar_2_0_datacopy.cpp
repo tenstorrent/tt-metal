@@ -74,7 +74,7 @@ TEST_P(Quasar2_0Datacopy, Run) {
         case 4:
             tps = cap < 8 ? cap : 8;
             n = 37;
-            break;  // full blocks + a runtime tail
+            break;  // 37 is prime: block 1
         case 5:
             tps = 2;
             n = 32;

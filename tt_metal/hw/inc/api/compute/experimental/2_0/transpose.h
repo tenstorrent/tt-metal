@@ -216,9 +216,9 @@ ALWI void transpose_direct_to_dest_tile(LLKOperand<Format, Shape> src, std::uint
 
 // clang-format off
 /**
- * Src path, ct_dim x rt_dim block: tile start_itile + i of `src` is transposed into DST slot start_idst + i. Loop
- * form of transpose_src_to_dest_tile. Requires transpose_src_to_dest_init and an acquired DST. No tails: for
- * leftover tiles re-init, then run a second, shorter instantiation.
+ * Src path, ct_dim x rt_dim block: tile start_itile + i of `src` is transposed into DST slot start_idst + i. Loop form
+ * of transpose_src_to_dest_tile. Requires transpose_src_to_dest_init and an acquired DST. No tails: the block divides
+ * the full dim, so every block op covers the same tile count.
  *
  * | Param Type | Name                | Description                                                       | Type       | Valid Range                          | Required |
  * |------------|---------------------|-------------------------------------------------------------------|------------|--------------------------------------|----------|
@@ -246,7 +246,7 @@ ALWI void transpose_src_to_dest_block(
 /**
  * Direct path, ct_dim x rt_dim block: tile start_itile + i of `src` is unpacked into DST slot start_idst + i and
  * transposed there. Loop form of transpose_direct_to_dest_tile. Requires transpose_direct_to_dest_init and an
- * acquired DST. No tails: for leftover tiles re-init, then run a second, shorter instantiation.
+ * acquired DST. No tails: the block divides the full dim, so every block op covers the same tile count.
  *
  * | Param Type | Name                | Description                                                       | Type       | Valid Range                          | Required |
  * |------------|---------------------|-------------------------------------------------------------------|------------|--------------------------------------|----------|
