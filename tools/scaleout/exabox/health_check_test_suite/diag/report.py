@@ -73,8 +73,7 @@ HSC_FEED = {"0x40": "A", "0x42": "B"}
 HSC_FAIL = re.compile(r"HSC FAIL tray ([1-4]) \([^)]*\) HSC (0x[0-9a-f]{2}): (.*)")
 # a tray's own power loss this run: its POWER DROP, its re-power failing at the C9 reset, or its HSC latched OFF
 POWER_LOST = re.compile(
-    r"^POWER DROP tray ([1-4])\b|^POWER FAIL tray ([1-4]) .*reset chain broken by its power loss"
-    r"|^HSC FAIL tray ([1-4]) .*: \S*\bOFF\b"
+    r"^POWER DROP tray ([1-4])\b|^POWER FAIL tray ([1-4]) .*reset chain broken by its power loss|^HSC FAIL tray ([1-4]) .*: \S*\bOFF\b"
 )
 HSC_TRIP = re.compile(
     r"^\s*(?:POWER DROP tray ([1-4])\b|HSC FAIL tray ([1-4])\b.*\b(?:OFF|IOUT_OC(?:_FAULT)?|over-current|VIN_UV_FAULT)\b)"
@@ -90,7 +89,6 @@ LANE, COL_SKEW, CONC = 0.9, 2.0, 0.8  # one lane parity's share, top column grou
 
 
 def tray_asic(b):
-    """(tray or None, ASIC) of a BDF '46:00.0' or '0000:46:00.0'."""
     return parse_bdf_physical("0000:" + b[-7:]) or (None, int(b[-6], 16))
 
 
@@ -104,7 +102,6 @@ def chans(s):
 
 
 def ports(b, chs):
-    """Faceplate QSFP-DD ports of chip b's ETH channels chs; [] when none of them is cabled to the faceplate."""
     a = tray_asic(b)[1]
     return sorted({p[1] for c in chs for p in [UBB_ETH_PORT_OF.get((a, c))] if p and p[0] == "QSFP_DD"})
 
@@ -118,7 +115,6 @@ def hit(u, l):
 
 
 def thru(lines, rx):
-    """The trays the lines name in rx's first non-empty group."""
     return {next(g for g in m.groups() if g) for m in map(rx.search, lines) if m}
 
 
@@ -126,7 +122,6 @@ def thru(lines, rx):
 
 
 def tray_lines(lines, u, drop_trays=None, stages=None):
-    """(fails, warns) of the lines counted for tray u; a load that died when another tray lost chips is not this tray's."""
     stages = stages or {}
     dstages = {stages.get(l) for l in lines if re.match(r"(POWER|CHIP) DROP tray ", l)}
     fails, warns = [], []
@@ -178,7 +173,6 @@ def stage_of(l, stages):
 
 
 def tend(b, t, chs):
-    """A link end as tray / QSFP-DD port / ASIC / BDF [ETH ch]; with no faceplate port, tray / ASIC / BDF [ETH ch]."""
     cs = chans(chs)
     q = ports(b, cs)
     return (f"tray {t} QSFP-DD port {' and '.join(map(str, q))} / " if q else f"tray {t} ") + (
@@ -191,13 +185,11 @@ def has_port(part):  # a link part with a faceplate QSFP-DD port at both ends: a
 
 
 def part_of(l, u):
-    """(kind, text): link, chips, tray or unnamed."""
     k = LINK.search(l)
     if k and u in (k.group(2), k.group(5)):
         return "link", f"{tend(k.group(1), k.group(2), k.group(3))} <-> {tend(k.group(4), k.group(5), k.group(6))}"
     m = re.match(
-        rf"ETH (?:FAIL|WARN) {XBDF} \(tray ([1-4])\) \w+: local ETH ports \[([0-9, ]+)\] (?:not up|down at pre)"
-        r" \(to ([^;]*?)\)(?:;.*)?$",
+        rf"ETH (?:FAIL|WARN) {XBDF} \(tray ([1-4])\) \w+: local ETH ports \[([0-9, ]+)\] (?:not up|down at pre) \(to ([^;]*?)\)(?:;.*)?$",
         l,
     )
     if m:
@@ -234,7 +226,6 @@ def part_of(l, u):
 
 
 def path_of(l, findings, stage):
-    """The capture the finding names, else the stage's own dir."""
     m = re.search(r"(?:snapshot|triage saved|saved|probe:?|triage) (/[^\s);,]+)", l) or re.search(r"\((/[^\s);,]+)", l)
     if m:
         return m.group(1)
@@ -264,7 +255,6 @@ def evidence(l, u=None):
 
 
 def ccl_source(l, lines=()):
-    """[(bdf, tray)] a CCL group finding's 'likely source' names, else members another FAIL line fails outside the CCL."""
     m = re.search(r"[;,] likely sources? (.*)$", l)
     if m:
         return list(dict.fromkeys(CHIP.findall(m.group(1))))
@@ -282,54 +272,38 @@ def ccl_source(l, lines=()):
 
 
 def power_lost(lines, u):
-    """Trays other than u that lost power, when the C9 glx_reset then failed with in-band IPMI not answering."""
     if not any(IPMI_DOWN.search(l) for l in lines):
         return []
     return sorted(t for t in thru(lines, POWER_LOST) if t != str(u))
 
 
-def cause(l, kind, u, findings, stage="", lines=()):
-    """(cause, next) in plain words."""
+def cause(
+    l, kind, u, findings, stage="", lines=()
+):  # (cause, next): each rule below gives them as "cause -> next: next"
+    r = rule(l, kind, u, findings, stage, lines)
+    return tuple(r.split(" -> next: ", 1)) if isinstance(r, str) else r
+
+
+def rule(l, kind, u, findings, stage, lines):
     s, warn = l.lower(), " WARN " in l
     rerun = f"rerun {RERUN}"
     cf = CONFIG_RE.search(l) if l.startswith("ETH ") else None
     if cf:
-        return (
-            f"CONFIG: retimer/ETH speed {cf.group(1)}, expected {cf.group(2)}: the in-box links' retimers are set to the "
-            "wrong speed (how most BH Galaxy come from the factory), so the link cannot come up; not a cable or "
-            "tray-board fault",
-            f"set the retimers to {cf.group(2)} and rerun, before any cabling or board step",
-        )
+        return f"CONFIG: retimer/ETH speed {cf.group(1)}, expected {cf.group(2)}: the in-box links' retimers are set to the wrong speed (how most BH Galaxy come from the factory), so the link cannot come up; not a cable or tray-board fault -> next: set the retimers to {cf.group(2)} and rerun, before any cabling or board step"
     if l.startswith("ETH INCOMPLETE ") and "start reset skipped; ETH not-active-at-open not judged" in l:
-        return (
-            "ETH core not active again at mesh open with no start reset before it: start reset skipped; ETH "
-            "not-active-at-open not judged, not checked, not a fault",
-            "none on this box; judged only by a run whose C2 start reset (tt-smi -glx_reset) ran",
-        )
+        return "ETH core not active again at mesh open with no start reset before it: start reset skipped; ETH not-active-at-open not judged, not checked, not a fault -> next: none on this box; judged only by a run whose C2 start reset (tt-smi -glx_reset) ran"
     if l.startswith("HANG PINPOINT") and "whole box" in l:
-        return (
-            "every chip stalled together (one mesh: launch counts move in lockstep), so no chip or tray stopped first: "
-            "not one tray's board; hardware or software not determined",
-            "repeat the stage on this host with tt-triage/exalens there to read the hung state (hold the chips)",
-        )
+        return "every chip stalled together (one mesh: launch counts move in lockstep), so no chip or tray stopped first: not one tray's board; hardware or software not determined -> next: repeat the stage on this host with tt-triage/exalens there to read the hung state (hold the chips)"
     if l.startswith("HANG PINPOINT"):
-        return (
-            "these chips stopped while the others kept going: chip/board or its links",
-            "read the hang capture of these chips; rerun the stage on this host",
-        )
+        return "these chips stopped while the others kept going: chip/board or its links -> next: read the hang capture of these chips; rerun the stage on this host"
     if kind == "tray" and l.startswith("POWER FAIL") and "reset chain broken by its power loss" in l:
         return (
-            f"tray {u} lost power and its re-power failed, so the reset chain broke there: the other trays' chips stay "
-            "on PCIe but do not open (ENODEV); their boards are not at fault",
+            f"tray {u} lost power and its re-power failed, so the reset chain broke there: the other trays' chips stay on PCIe but do not open (ENODEV); their boards are not at fault",
             POWER_NEXT.format(u=u),
         )
     if warn and "not opened: reset chain broken by tray" in l:
         t = re.search(r"broken by (tray [1-4](?: and tray [1-4])*) power loss", l).group(1)
-        return (
-            f"not opened after the reset because {t} lost power and broke the reset chain; this chip stays on PCIe "
-            "(ENODEV): not this tray's board",
-            f"fix {t} first (see its FAIL line), then reset and recheck this chip",
-        )
+        return f"not opened after the reset because {t} lost power and broke the reset chain; this chip stays on PCIe (ENODEV): not this tray's board -> next: fix {t} first (see its FAIL line), then reset and recheck this chip"
     hf = HSC_NEW.match(l)
     if hf and not warn:  # a power latch newly set during this run: a POWER cause naming its feed and HSC
         bs = hf.group(3).split("+") + [b for m in HSC_ADD.findall(l[hf.end() :]) for b in m.split("+")]
@@ -338,12 +312,7 @@ def cause(l, kind, u, findings, stage="", lines=()):
             a, t = hf.group(2).lower(), hf.group(1)
             f = HSC_FEED.get(a, f"at HSC {a}")
             uv = "an under-voltage latch" if any(b.startswith("VIN_UV") for b in pw) else "a power latch"
-            return (
-                f"POWER: tray {t} 12 V feed {f} / bus bar: HSC {a} {'+'.join(pw)} newly set during this run "
-                f"(clear at its start; {uv} from this run, not a pre-existing one)",
-                f"1. Check the bus bar and 12 V feed {f} of tray {t} (HSC {a}) -> 2. replace the bus bar if the "
-                f"latch sets again -> 3. replace tray {t} only if it persists",
-            )
+            return f"POWER: tray {t} 12 V feed {f} / bus bar: HSC {a} {'+'.join(pw)} newly set during this run (clear at its start; {uv} from this run, not a pre-existing one) -> next: 1. Check the bus bar and 12 V feed {f} of tray {t} (HSC {a}) -> 2. replace the bus bar if the latch sets again -> 3. replace tray {t} only if it persists"
     if (
         kind == "tray"
         and l.startswith("HSC FAIL")
@@ -352,23 +321,13 @@ def cause(l, kind, u, findings, stage="", lines=()):
     ):
         ha = re.search(r"\bHSC (0x[0-9a-fA-F]{2})\b", l)
         return (
-            f"POWER: 12 V feed of tray {u}{f' (HSC {ha.group(1)})' if ha else ''}: tray 12 V input lost or "
-            "under-voltage: HSC OFF/under-voltage latch newly set during the run (12 V-lost evidence)",
+            f"POWER: 12 V feed of tray {u}{f' (HSC {ha.group(1)})' if ha else ''}: tray 12 V input lost or under-voltage: HSC OFF/under-voltage latch newly set during the run (12 V-lost evidence)",
             POWER_NEXT.format(u=u),
         )
     if kind == "tray" and l.startswith("HSC WARN ") and "marginal 12 V feed" in l:
-        return (
-            f"marginal 12 V feed of tray {u}, no trip or latch this run: the feed sagged or came near its over-current "
-            "trip under load, as on boxes whose trays tripped later: a warning only, not a power fault yet",
-            f"check tray {u}'s feed: a low idle VIN points at the PSU output, a big drop from idle to loaded at the bus "
-            "bar or contacts; rerun the bus-bar stage",
-        )
+        return f"marginal 12 V feed of tray {u}, no trip or latch this run: the feed sagged or came near its over-current trip under load, as on boxes whose trays tripped later: a warning only, not a power fault yet -> next: check tray {u}'s feed: a low idle VIN points at the PSU output, a big drop from idle to loaded at the bus bar or contacts; rerun the bus-bar stage"
     if kind == "tray" and l.startswith("SEL WARN ") and "frb3" in s and "during the run" in s:
-        return (
-            "SEL FRB3 processor init failure during the run with no 12 V-lost evidence (no chip lost, no newly set "
-            "HSC OFF/under-voltage latch, no CPLD 12 V loss): a warning only, not a power fault",
-            f"none from this line; a lost chip or a newly set HSC latch on tray {u} would have its own line",
-        )
+        return f"SEL FRB3 processor init failure during the run with no 12 V-lost evidence (no chip lost, no newly set HSC OFF/under-voltage latch, no CPLD 12 V loss): a warning only, not a power fault -> next: none from this line; a lost chip or a newly set HSC latch on tray {u} would have its own line"
     if kind == "tray" and (l.startswith(("POWER DROP", "POWER FAIL")) or "frb3" in s or "tray drop" in s):
         if warn:
             return (
@@ -377,17 +336,12 @@ def cause(l, kind, u, findings, stage="", lines=()):
             )
         return "whole-tray power loss", POWER_NEXT.format(u=u)
     if l.startswith("FAIL MCE GUARD") and "kmd burst" in l:
-        return (
-            "chip stopped answering the kernel driver under load (a burst of kmd 'Failed to set initial power "
-            "state'; the MCE guard cut it): chip/board or its power, not determined",
-            f"read mce_guard/ and the capture; {rerun} on this host; same chip again: replace the board of tray {u}",
-        )
+        return f"chip stopped answering the kernel driver under load (a burst of kmd 'Failed to set initial power state'; the MCE guard cut it): chip/board or its power, not determined -> next: read mce_guard/ and the capture; {rerun} on this host; same chip again: replace the board of tray {u}"
     if not l.startswith("FAIL MCE GUARD") and re.search(
         r"Setting power state failed on device \d+: Input/output error|Failed to set initial power state", l
     ):
         return (
-            "PCIe fault: the chip did not take a power-state write over PCIe (UMD/kmd I/O error), not a compute "
-            "fault: its PCIe path (board, retimer or cable, or the host slot)",
+            "PCIe fault: the chip did not take a power-state write over PCIe (UMD/kmd I/O error), not a compute fault: its PCIe path (board, retimer or cable, or the host slot)",
             PCIE_NEXT,
         )
     if re.match(r"AER FAIL .*: correctable \+\d+ ", l) or re.match(
@@ -399,51 +353,32 @@ def cause(l, kind, u, findings, stage="", lines=()):
             PCIE_NEXT,
         )
     if l.startswith("FAIL MCE GUARD") and "hung for MMIO" in l:
-        return (
-            "chip hung for MMIO under load (config reads ffffffff or an ARC timeout; the MCE guard cut it): CHIP/BOARD",
-            f"read mce_guard/ and the capture; {rerun} on this host; same chip again: replace the board of tray {u}",
-        )
+        return f"chip hung for MMIO under load (config reads ffffffff or an ARC timeout; the MCE guard cut it): CHIP/BOARD -> next: read mce_guard/ and the capture; {rerun} on this host; same chip again: replace the board of tray {u}"
     if l.startswith("FAIL MCE GUARD") and "AER storm" in l:
-        return (
-            "PCIe path: an AER storm on its root port under load (the MCE guard cut the chip): slot, retimer or board",
-            f"read the AER/lspci capture; reseat tray {u}; if it repeats, replace the board of tray {u}",
-        )
+        return f"PCIe path: an AER storm on its root port under load (the MCE guard cut the chip): slot, retimer or board -> next: read the AER/lspci capture; reseat tray {u}; if it repeats, replace the board of tray {u}"
     hang = not warn and re.search(r"\b(hang|hung)\b(?![- ]in)", s)
     o = ONECHIP.search(l)
     if o:  # every failing pair has this chip at one end, the far-end chips pass their other links
         e = re.search(r"active ethernet core (\d+)-25", l)
         c = (
-            f"the chip itself, not the cables: its own ETH core {e.group(1)}-25 (channel {int(e.group(1)) - 20}) does "
-            "not come up, so "
+            f"the chip itself, not the cables: its own ETH core {e.group(1)}-25 (channel {int(e.group(1)) - 20}) does not come up, so "
             if e
             else "the chip or its ETH side, not the cables: "
         ) + "every failing link has it at one end and the far-end chips pass their other links"
         return (
             c,
-            f"reset and rerun C5; if it fails again, replace the board of tray {u} (chip {o.group(1)}); "
-            f"logs {path_of(l, findings, stage)}",
+            f"reset and rerun C5; if it fails again, replace the board of tray {u} (chip {o.group(1)}); logs {path_of(l, findings, stage)}",
         )
     if kind == "link" and not hang:  # a pair line of a chip that a one-chip line names: that chip, not this link
         k = LINK.search(l)
         for x in lines:
             o = ONECHIP.search(x)
             if o and k and o.group(1) in (k.group(1), k.group(4)):
-                return (
-                    f"one of the links of {o.group(1)} (tray {o.group(2)}), which fails all its C5 pairs: that chip, "
-                    "not this link",
-                    f"see the one-chip FAIL of {o.group(1)} (tray {o.group(2)})",
-                )
+                return f"one of the links of {o.group(1)} (tray {o.group(2)}), which fails all its C5 pairs: that chip, not this link -> next: see the one-chip FAIL of {o.group(1)} (tray {o.group(2)})"
     if "incomplete (test-infra)" in s:
-        return (
-            "test infrastructure: the pair could not start (out of processes/threads: the job's ulimit -u or cgroup "
-            "pids.max); not a chip or link fault",
-            "rerun with a higher process limit; this link was not tested",
-        )
+        return "test infrastructure: the pair could not start (out of processes/threads: the job's ulimit -u or cgroup pids.max); not a chip or link fault -> next: rerun with a higher process limit; this link was not tested"
     if warn and "still hidden" in s and "port_status mask" in s:
-        return (
-            "in-box ETH link hidden by the link-A repro's port_status mask, no reset after it: not a fault",
-            "undo: tt-smi -glx_reset (a reset of this host's chips, then the root-port rescan and recount)",
-        )
+        return "in-box ETH link hidden by the link-A repro's port_status mask, no reset after it: not a fault -> next: undo: tt-smi -glx_reset (a reset of this host's chips, then the root-port rescan and recount)"
     if warn and "reset marker slow to clear" in s:
         return (
             "chip slow to finish its warm reset (marker still set after 5 s)"
@@ -455,9 +390,7 @@ def cause(l, kind, u, findings, stage="", lines=()):
             f"watch it; a marker timeout (RESET FAIL) that repeats: tt-smi reset it again, then the board of tray {u}",
         )
     if kind == "link" and hang:
-        return "link pair hung: cable, connector or an end chip", (
-            f"reseat or replace the cable; triage {path_of(l, findings, stage)}"
-        )
+        return f"link pair hung: cable, connector or an end chip -> next: reseat or replace the cable; triage {path_of(l, findings, stage)}"
     if l.startswith("ETH INCOMPLETE "):
         w = re.search(r"; not checked: (.*)$", l)
         return (
@@ -465,26 +398,17 @@ def cause(l, kind, u, findings, stage="", lines=()):
             "none on this box; it is judged once C2's reset can run",
         )
     if "not checked" in s:
-        return (
-            "numeric not checked (the readback failed): cause not determined",
-            f"rerun the {stage or 'stage'}; read {path_of(l, findings, stage)}",
-        )
+        return f"numeric not checked (the readback failed): cause not determined -> next: rerun the {stage or 'stage'}; read {path_of(l, findings, stage)}"
     if hang and kind != "link" or kind == "unnamed":
         p = path_of(l, findings, stage)
         if kind == "unnamed":
-            return (
-                "hang or failure with no chip named",
-                f"read the hold capture {p}; rerun the stage alone to name the chip",
-            )
-        return "hang on the named chip(s): chip/board or its links, not determined", (
-            f"read the hold capture {p}; rerun the stage"
-        )
+            return f"hang or failure with no chip named -> next: read the hold capture {p}; rerun the stage alone to name the chip"
+        return f"hang on the named chip(s): chip/board or its links, not determined -> next: read the hold capture {p}; rerun the stage"
     if not warn and "down at pre" in s and "only that reset retrained it" in s:
         cab = has_port(part_of(l, u)[1])
         t4 = re.search(r"SMC uptime ([^)]*)\)", s)
         return (
-            "in-box ETH link down when the box was found (before our first reset) and retrained only by the start "
-            "reset (C2): the link was not up as left by the last user"
+            "in-box ETH link down when the box was found (before our first reset) and retrained only by the start reset (C2): the link was not up as left by the last user"
             + (f"; the trays were reset at different times (SMC uptime {t4.group(1)})" if t4 else ""),
             ("reseat or replace that QSFP-DD cable" if cab else f"the board of tray {u}")
             + "; reset every tray together (tt-smi -glx_reset) so both ends retrain, then rerun",
@@ -492,8 +416,7 @@ def cause(l, kind, u, findings, stage="", lines=()):
     if warn and "down at pre" in s and "recovered by" in s:
         cab = has_port(part_of(l, u)[1])
         return (
-            "in-box ETH link down before the run, back after the start reset (C2): left down by an earlier run or a "
-            "reset",
+            "in-box ETH link down before the run, back after the start reset (C2): left down by an earlier run or a reset",
             "none now; "
             + ("reseat or replace that QSFP-DD cable" if cab else f"this link has no cable: the board of tray {u}")
             + " if it goes down again later in a run",
@@ -502,41 +425,23 @@ def cause(l, kind, u, findings, stage="", lines=()):
         if warn:  # rc 143/137 is the pair job killed at its time limit, not a link fault
             rc = re.search(r"pair run failed, rc (\d+)", l)
             if rc and rc.group(1) in ("143", "137"):
-                return (
-                    f"not a link fault: the link pair's test job was killed at its time limit (rc {rc.group(1)}), so "
-                    "the link was not judged",
-                    "none for the hardware; rerun the link pair (C5) with a longer time limit",
-                )
+                return f"not a link fault: the link pair's test job was killed at its time limit (rc {rc.group(1)}), so the link was not judged -> next: none for the hardware; rerun the link pair (C5) with a longer time limit"
             return "link run failed without a hang or mismatch: cause not determined", "rerun the link pair (C5); " + (
                 "if it fails again with a hang or data mismatch, reseat or replace that QSFP-DD cable"
                 if kind == "link" and has_port(part_of(l, u)[1])
-                else "this link has no cable (in-box or on-board): if it fails again with a hang or data mismatch, "
-                "the tray board"
+                else "this link has no cable (in-box or on-board): if it fails again with a hang or data mismatch, the tray board"
             )
         q = bool(re.search(r"QSFP (ETH )?ports", l.split(";")[0]))
         nv = re.search(r"; no C2 verdict \((.*)\)$", l)
         to = re.search(r"local ETH ports \[[0-9, ]*\] not up \(to (" + XBDF + r" \(tray [1-4]\))", l)
         if nv and not q:
-            return (
-                f"in-box ETH link{' to ' + to.group(1) if to else ''} down before the run, not rechecked: {nv.group(1)}",
-                "rerun once C2's reset can run; if it stays down after a reset, reseat or replace the cable, then the "
-                f"board of tray {u}",
-            )
+            return f"in-box ETH link{' to ' + to.group(1) if to else ''} down before the run, not rechecked: {nv.group(1)} -> next: rerun once C2's reset can run; if it stays down after a reset, reseat or replace the cable, then the board of tray {u}"
         inbox = not q and kind == "link" and not has_port(part_of(l, u)[1])
         rt = RETIMER_RE.search(l)
         if inbox and rt:
-            return (
-                f"in-box link down or bad (no QSFP-DD port, no cable), chip side {rt.group(1)} with a training "
-                "timeout, retimer speed not readable: the retimer speed setting, the tray-to-tray connection or a tray "
-                "board",
-                f"check the retimer speed setting (expected {rt.group(1)}); if it is right, no cable to swap: reseat "
-                f"the trays at both ends; if it stays down after a reset, the board of tray {u}",
-            )
+            return f"in-box link down or bad (no QSFP-DD port, no cable), chip side {rt.group(1)} with a training timeout, retimer speed not readable: the retimer speed setting, the tray-to-tray connection or a tray board -> next: check the retimer speed setting (expected {rt.group(1)}); if it is right, no cable to swap: reseat the trays at both ends; if it stays down after a reset, the board of tray {u}"
         if inbox:
-            return (
-                "in-box link down or bad (no QSFP-DD port, no cable): the tray-to-tray connection or a tray board",
-                f"no cable to swap: reseat the trays at both ends; if it stays down after a reset, the board of tray {u}",
-            )
+            return f"in-box link down or bad (no QSFP-DD port, no cable): the tray-to-tray connection or a tray board -> next: no cable to swap: reseat the trays at both ends; if it stays down after a reset, the board of tray {u}"
         return (
             "link down or bad: QSFP-DD cable or connector" + (" (QSFP to another host)" if q else ""),
             "reseat or replace that QSFP-DD cable"
@@ -546,81 +451,43 @@ def cause(l, kind, u, findings, stage="", lines=()):
         if warn and l.startswith("ETH WARN") and pat in l:
             return c, n
     if warn and l.startswith("ETH WARN"):
-        return "ETH ports not up (warning)", "recheck after a reset; reseat or replace the cable if they stay down"
+        return (
+            "ETH ports not up (warning) -> next: recheck after a reset; reseat or replace the cable if they stay down"
+        )
     unopened = "(C9 end reset)" in l and "on PCIe with its tt-kmd node, but tt-umd cannot open it" in l
     dn = power_lost(lines, u) if l.startswith("RESET FAIL") and unopened else []
     if dn:
         t = " and ".join(f"tray {x}" for x in dn)
-        return (
-            f"POWER-DOWNSTREAM: of the power drop of {t}: the C9 glx_reset then failed box-wide (in-band IPMI not "
-            f"answering), so this chip stays on PCIe with its tt-kmd node but does not open: not this tray's board",
-            f"fix {t} first (see its POWER line), then reset and recheck this chip",
-        )
+        return f"POWER-DOWNSTREAM: of the power drop of {t}: the C9 glx_reset then failed box-wide (in-band IPMI not answering), so this chip stays on PCIe with its tt-kmd node but does not open: not this tray's board -> next: fix {t} first (see its POWER line), then reset and recheck this chip"
     if l.startswith("RESET FAIL") and "not recovered by tray re-power/glx_reset" in l and "cannot open it" in l:
-        return (
-            "chip lost after its warm reset and not recovered by its tray re-power or glx_reset: chip/board "
-            "(hardware), not a load or CCL fault",
-            f"power-cycle the box; if it stays unopenable, replace the board of tray {u}",
-        )
+        return f"chip lost after its warm reset and not recovered by its tray re-power or glx_reset: chip/board (hardware), not a load or CCL fault -> next: power-cycle the box; if it stays unopenable, replace the board of tray {u}"
     if (
         l.startswith("RESET FAIL")
         and "not recovered by tray re-power/glx_reset" in l
         and "tt-umd discovery fails on it" in l
     ):
-        return (
-            "chip lost after its warm reset and not recovered by its tray re-power or glx_reset: it is on PCIe and "
-            "opens, but tt-umd discovery fails on it: chip/board (hardware), not a load or CCL fault",
-            f"power-cycle the box; if tt-umd discovery still fails on it, replace the board of tray {u}",
-        )
+        return f"chip lost after its warm reset and not recovered by its tray re-power or glx_reset: it is on PCIe and opens, but tt-umd discovery fails on it: chip/board (hardware), not a load or CCL fault -> next: power-cycle the box; if tt-umd discovery still fails on it, replace the board of tray {u}"
     if re.search(r"no such device|missing after|not answering|unknownx|lost from pcie", s) or l.startswith("CHIP DROP"):
-        return (
-            "chip fell off PCIe: chip/board or its PCIe path (slot, retimer)",
-            f"read the AER/lspci capture; same chip again: replace the board of tray {u}; all of tray {u} at once: "
-            "bus bar first",
-        )
+        return f"chip fell off PCIe: chip/board or its PCIe path (slot, retimer) -> next: read the AER/lspci capture; same chip again: replace the board of tray {u}; all of tray {u} at once: bus bar first"
     if "failed on it" in s and l.startswith("RESET"):
-        return "chip did not take the warm reset: chip/board", (
-            f"tt-smi reset it again; if it repeats, replace the board of tray {u}"
-        )
+        return f"chip did not take the warm reset: chip/board -> next: tt-smi reset it again; if it repeats, replace the board of tray {u}"
     w = re.search(r"corrected AER peak (\d+)/min \(over ([0-9.]+)/min", l) if warn and "weak PCIe link" in l else None
     if w:
-        return (
-            f"weak PCIe link: {w.group(1)} corrected AER errors a minute under load on its root port (warn over "
-            f"{w.group(2)}/min): slot, retimer or board, an early sign of a chip that falls off PCIe",
-            f"read the stage's aer_rate.txt and the lspci capture; reseat tray {u}; if it repeats, replace the board "
-            f"of tray {u}",
-        )
+        return f"weak PCIe link: {w.group(1)} corrected AER errors a minute under load on its root port (warn over {w.group(2)}/min): slot, retimer or board, an early sign of a chip that falls off PCIe -> next: read the stage's aer_rate.txt and the lspci capture; reseat tray {u}; if it repeats, replace the board of tray {u}"
     w = re.match(
-        r"AER FAIL .*? correctable kernel AER events (during the run \(.*?\)|over 7 days|since repair .*?)"
-        r"(, last [^=]*?)? = ",
+        r"AER FAIL .*? correctable kernel AER events (during the run \(.*?\)|over 7 days|since repair .*?)(, last [^=]*?)? = ",
         l,
     )
     if w:
-        return (
-            f"correctable AER rate outlier {w.group(1)}{w.group(2) or ''} in the kernel journal"
-            f"{'' if w.group(1).startswith('during the run') else ', not only this run'}: "
-            "PCIe path (chip, slot, retimer or link)",
-            f"read the AER/lspci capture; reseat tray {u}; if it repeats, replace the board of tray {u}",
-        )
+        return f"correctable AER rate outlier {w.group(1)}{w.group(2) or ''} in the kernel journal{'' if w.group(1).startswith('during the run') else ', not only this run'}: PCIe path (chip, slot, retimer or link) -> next: read the AER/lspci capture; reseat tray {u}; if it repeats, replace the board of tray {u}"
     if "SETUP/SOFTWARE: fabric setup failed" in l:
-        return (
-            "test infrastructure: fabric setup failed (setup or software: fabric descriptors or the tt-metal tree), "
-            "not this tray's hardware",
-            f"fix the setup error the run's log names, then run {RERUN} again",
-        )
+        return f"test infrastructure: fabric setup failed (setup or software: fabric descriptors or the tt-metal tree), not this tray's hardware -> next: fix the setup error the run's log names, then run {RERUN} again"
     if re.match(r"(PCIE|AER) FAIL|PREFLIGHT FAIL .*PCIe", l):
-        return (
-            "PCIe path (link speed/width or uncorrectable errors): slot, retimer or board",
-            f"reseat tray {u}; if it repeats, replace the board of tray {u}",
-        )
+        return f"PCIe path (link speed/width or uncorrectable errors): slot, retimer or board -> next: reseat tray {u}; if it repeats, replace the board of tray {u}"
     if l.startswith("NUMERIC FAIL") and "CCL group fault" in l:
         src = ccl_source(l, lines)
         if not src:
-            return (
-                "CCL group fault: one bad result spread over the group's all-gather, source not isolated (no chip of "
-                "the group failed a check outside the CCL)",
-                "rerun the numeric pinpoint on every chip of the group; replace only the board of a chip that fails it",
-            )
+            return "CCL group fault: one bad result spread over the group's all-gather, source not isolated (no chip of the group failed a check outside the CCL) -> next: rerun the numeric pinpoint on every chip of the group; replace only the board of a chip that fails it"
         n = ", ".join(f"{b} (tray {t})" for b, t in src)
         ts = sorted({t for _, t in src})
         return (
@@ -632,32 +499,18 @@ def cause(l, kind, u, findings, stage="", lines=()):
     if re.match(r"(NUMERIC|CHUNK|VAE) FAIL|C4v? FAIL", l):
         return numeric_cause(l, u, s)
     if l.startswith("QUIET FAIL"):
-        return (
-            "chip stayed above idle clock in the quiet: cause not determined",
-            "read tt-smi telemetry of that chip; rerun",
-        )
+        return "chip stayed above idle clock in the quiet: cause not determined -> next: read tt-smi telemetry of that chip; rerun"
     if l.startswith("PREFLIGHT FAIL") and re.search(r"_ver 255\.255\.255\.255\b", l):
-        return (
-            "chip not answering over PCIe (all-Fs reads), not a firmware mismatch",
-            "glx_reset and recount; if it repeats after power cycles, the tray's PCIe path",
-        )
+        return "chip not answering over PCIe (all-Fs reads), not a firmware mismatch -> next: glx_reset and recount; if it repeats after power cycles, the tray's PCIe path"
     if l.startswith("PREFLIGHT FAIL") and "_ver" in s:
-        return "firmware version differs from the other chips", f"reflash tray {u} to the box's firmware bundle"
+        return f"firmware version differs from the other chips -> next: reflash tray {u} to the box's firmware bundle"
     if l.startswith("LOAD LOW WARN "):
-        return (
-            f"the stage's load stayed under 90% of tray {u}'s chips' own power limits for most of it: a clean result "
-            "there is not a clean pass, a weak tray may not have been loaded hard enough to drop",
-            "no fault proven; the load mix toward each chip's own limit is the tuning step",
-        )
+        return f"the stage's load stayed under 90% of tray {u}'s chips' own power limits for most of it: a clean result there is not a clean pass, a weak tray may not have been loaded hard enough to drop -> next: no fault proven; the load mix toward each chip's own limit is the tuning step"
     if l.startswith("LOAD UNREAD WARN "):
-        return (
-            f"tray {u}'s chip power or power limit was not read for enough of the load: whether it was loaded to its "
-            "limit is not known (neither a pass nor a failed check)",
-            f"read tray {u}'s hwmon power1_input and power1_max; rerun",
-        )
+        return f"tray {u}'s chip power or power limit was not read for enough of the load: whether it was loaded to its limit is not known (neither a pass nor a failed check) -> next: read tray {u}'s hwmon power1_input and power1_max; rerun"
     if warn:
-        return "warning only, no fault proven", "watch it in the next run"
-    return "cause not determined", f"{rerun} with its full log captures on this host; read {findings}"
+        return "warning only, no fault proven -> next: watch it in the next run"
+    return f"cause not determined -> next: {rerun} with its full log captures on this host; read {findings}"
 
 
 ETH_WARNS = (  # (text in an ETH WARN line, cause, next)
@@ -673,8 +526,7 @@ ETH_WARNS = (  # (text in an ETH WARN line, cause, next)
     ),
     (
         "dropped by our own reset on",
-        "inter-host QSFP port up after the C2 reset and dropped by our own later reset: test-side, not this host's "
-        "fault (warning)",
+        "inter-host QSFP port up after the C2 reset and dropped by our own later reset: test-side, not this host's fault (warning)",
         "none on this host",
     ),
     (
@@ -689,34 +541,28 @@ ETH_WARNS = (  # (text in an ETH WARN line, cause, next)
     ),
     (
         "far end down or resetting",
-        "inter-host QSFP port down on chips of several trays at once: far end down or resetting, not this host's "
-        "fault (warning)",
+        "inter-host QSFP port down on chips of several trays at once: far end down or resetting, not this host's fault (warning)",
         "none on this host; recheck once the far host is up",
     ),
     (
         "MAXUTIL not run: device open failed",
-        "ETH core of this chip not active at device open, so the bus-bar stage max-util did not run on any chip "
-        "(warning only; run INCOMPLETE): its ETH link, not a power or load fault",
+        "ETH core of this chip not active at device open, so the bus-bar stage max-util did not run on any chip (warning only; run INCOMPLETE): its ETH link, not a power or load fault",
         "rerun; if the same ETH core times out at device open again, check that chip's link as an ETH fault",
     ),
 )
 
 
 def numeric_cause(l, u, s):
-    """(cause, next) of a NUMERIC, CHUNK, VAE or C4 FAIL line: compute side, one bad read, a named core, else DRAM."""
     side = compute_side(l)
     if side:
-        return (
-            f"chip compute fault (or its power under load): chip/board; {side}, not a DRAM bank",
-            f"rerun the numeric pinpoint on this chip; if it repeats, replace the board of tray {u}",
-        )
+        return f"chip compute fault (or its power under load): chip/board; {side}, not a DRAM bank -> next: rerun the numeric pinpoint on this chip; if it repeats, replace the board of tray {u}"
     bd, cr = re.search(r"FAIL " + XBDF, l), column_read(l)
     if bd and cr:
         return (
-            f"chip read fault: one bad read of tile column {cr[0]} reached every core of core column {cr[1]} "
-            "(compute cores " + ", ".join(f"({cr[1]},{y})" for y in cr[2]) + "), not one compute core: chip/board",
-            f"rerun the numeric pinpoint on ASIC {bd.group(1)} with the DRAM readback split and the decoupled arm to "
-            f"tell its memory from its NoC; if it repeats, replace the tray {u} board",
+            f"chip read fault: one bad read of tile column {cr[0]} reached every core of core column {cr[1]} (compute cores "
+            + ", ".join(f"({cr[1]},{y})" for y in cr[2])
+            + "), not one compute core: chip/board",
+            f"rerun the numeric pinpoint on ASIC {bd.group(1)} with the DRAM readback split and the decoupled arm to tell its memory from its NoC; if it repeats, replace the tray {u} board",
         )
     cc = re.search(r"compute core \((\d+),(\d+)\)", l)
     if cc:
@@ -732,14 +578,10 @@ def numeric_cause(l, u, s):
             f"replace the tray {u} board ({a_}compute core ({cc.group(1)},{cc.group(2)}))",
         )
     d = "dram" in s.replace("in-dram matmul", "") or ("banks [" in s and " rw)" in s)
-    return (
-        f"chip {'DRAM' if d else 'compute'} fault{decoupled_bank(l) if d else ''}: chip/board",
-        f"rerun the numeric pinpoint on this chip; if it repeats, replace the board of tray {u}",
-    )
+    return f"chip {'DRAM' if d else 'compute'} fault{decoupled_bank(l) if d else ''}: chip/board -> next: rerun the numeric pinpoint on this chip; if it repeats, replace the board of tray {u}"
 
 
 def compute_side(l):
-    """The evidence phrase of a NUMERIC FAIL whose bad words sit on one lane parity or one output column group."""
     m = re.search(r"lanes even/odd (\d+)/(\d+)", l)
     if "columns decoupled from banks" in l:
         b = re.search(r"banks \[([\d, ]+)\]", l)
@@ -761,7 +603,6 @@ def compute_side(l):
 
 
 def decoupled_bank(l):
-    """' in GDDR bank N (...)' when the columns were decoupled from banks and one bank holds CONC of the bad words."""
     b = re.search(r"banks \[([\d, ]+)\]", l)
     v = chans(b.group(1)) if b and "columns decoupled from banks" in l else []
     if not v or not sum(v) or max(v) < CONC * sum(v):
@@ -778,7 +619,6 @@ def tile_cols(l):
 
 
 def column_read(l):
-    """(tile column, core x, cores) when one bad read reached every core of one core column, else None."""
     c = re.search(r"compute cores x,y,n (\[\[[\d, \[\]]*\]\])", l)
     g = re.search(r"of the (\d+)x(\d+) grid", l)
     tc = set(tile_cols(l))
@@ -792,7 +632,6 @@ def column_read(l):
 
 
 def result(lines, stages=None, drop_trays=None, known=None):
-    """The failed checks of the FAIL tray lines as one phrase for the RESULT line, '' when every tray passes."""
     stages, seen, out, trays = stages or {}, set(), [], []
     for u in "1234":
         if known and u == str(known):
@@ -826,13 +665,7 @@ def result(lines, stages=None, drop_trays=None, known=None):
     return "; ".join(num + ([f"{n} failed check{'s' * (n > 1)} on {', '.join(dict.fromkeys(trays))}"] if n else []))
 
 
-def lost_of(u, lines):
-    """BDFs the cut cause lines name as lost, by the repair rules."""
-    return list(dict.fromkeys(b for l in lines for b in loss_bdfs(u, l)))
-
-
 def untag(lines, stages):
-    """lines and stage keys without the after-fault mark, and {line: mark} (shown beside the stage)."""
     tags, out = {}, []
     for l in lines:
         m = AFTER.search(l)
@@ -847,7 +680,6 @@ def untag(lines, stages):
 
 
 def why(lines, u, stages=None, cap=10, findings="findings.txt", drop_trays=None, tags=None):
-    """'    part | stage | evidence | cause: C -> next: N' per finding of tray u, FAILs first, at most cap."""
     u, stages, tags = str(u), stages or {}, tags or {}
     fails, warns = tray_lines(lines, u, drop_trays, stages)
     fails.sort(key=lambda l: (not l.startswith(("POWER ", "HSC FAIL ")), not l.startswith("HANG PINPOINT")))
@@ -860,18 +692,14 @@ def why(lines, u, stages=None, cap=10, findings="findings.txt", drop_trays=None,
         c, n = cause(l, kind, u, findings, st, lines)
         st = f"{st}, {tg}" if tg else st
         o = ONECHIP.search(l)
+        ev = f"all {o[3]} failing {o[4]} pairs have this chip at one end ({o[5]})" if o else evidence(l, u)
+        out.append(f"    {part} | {st} | {ev} | cause: {c} -> next: {n}")
         if o:  # its links one per line under it
-            out.append(
-                f"    {part} | {st} | all {o.group(3)} failing {o.group(4)} pairs have this chip at one end "
-                f"({o.group(5)}) | cause: {c} -> next: {n}"
-            )
-            out += [f"      link {a} e{ca} <-> {b} e{cb}: {w}" for a, ca, b, cb, w, _ in ONELINK.findall(o.group(6))]
-            t = re.search(r"tt-metal errors on this chip in .*?(?= \(/[^)]*\)$|$)", o.group(6))
+            out += [f"      link {a} e{ca} <-> {b} e{cb}: {w}" for a, ca, b, cb, w, _ in ONELINK.findall(o[6])]
+            t = re.search(r"tt-metal errors on this chip in .*?(?= \(/[^)]*\)$|$)", o[6])
             out += [f"      {t.group(0).strip()}"] if t else []
-            continue
-        out.append(f"    {part} | {st} | {evidence(l, u)} | cause: {c} -> next: {n}")
     if len(out) > cap:
-        gone = lost_of(u, out[cap:])
+        gone = list(dict.fromkeys(b for l in out[cap:] for b in loss_bdfs(u, l)))
         out = out[:cap] + [
             f"    ... {len(out) - cap} more for tray {u} in {findings}"
             + (f"; lost chips: {' '.join(gone)}" if gone else "")
@@ -883,57 +711,35 @@ def tray_block(raw, raw_stages, findings="findings.txt", known=None, stopped="")
     """One 'FAIL|INCOMPLETE|PASS|KNOWN-DROP tray N (...)' line per tray, each finding's cause line under it."""
     lines, stages, tags = untag(raw, raw_stages)
     dt = sorted(thru(lines, re.compile(r"^(?:POWER|CHIP) DROP tray ([1-4])")))
-    dstages = {stages.get(l) for l in lines if re.match(r"(POWER|CHIP) DROP tray ", l)}
-    dead = [l for l in lines if DIED.search(l) and stages.get(l) in dstages | {None}]
+    dead = {stages.get(l) for l in lines if re.match(r"(POWER|CHIP) DROP tray ", l)} | {None}
     wb = next((l[16:156] for l in lines if l.startswith("HANG INCOMPLETE whole box")), "")
     out = []
     for u in "1234":
-        if known and u == str(known):
+        if u == str(known):
             out.append(f"KNOWN-DROP tray {u} (known dropped, not tested)")
             continue
-        own = [l for l in lines if l not in dead] if dt and u not in dt else lines
+        fails, warns = tray_lines(lines, u, dt, stages)
+        nf, nw, mine = len(fails), sum(" WARN " in l for l in warns), [l for l in lines if hit(u, l)]
+        ni = sum("INCOMPLETE (test-infra)" in l for l in mine)
+        nv = sum(bool(INC.match(l)) and "start reset skipped; ETH not-active-at-open not judged" in l for l in mine)
         nd = next(
             (
-                m.group(1)
-                for l in dead
-                if dt and u not in dt and hit(u, l)
+                m[1]
+                for l in mine
+                if u not in dt and DIED.search(l) and stages.get(l) in dead
                 for m in [re.search(r"CHUNK FAIL (chunk \d+/\d+) \(started [0-9:]+\): no chunk-end readback", l)]
                 if m
             ),
             "",
         )
-        nf = sum(
-            1
-            for l in own
-            if " WARN " not in l and not INC.match(l) and hit(u, PEER.sub("", l.split(", BMC after: ")[0]))
-        )
-        nw = sum(
-            1
-            for l in lines
-            if " WARN " in l and hit(u, re.sub(r" by tray [1-4](?: and tray [1-4])* power loss", "", PEER.sub("", l)))
-        )
-        ni = sum(1 for l in lines if "INCOMPLETE (test-infra)" in l and hit(u, l))
+        x = rf"^ETH INCOMPLETE (\S+) \(tray {u}\) [^:]*: external ETH ports \[([0-9, ]*)\] not up; not checked: ([^(]*)"
         xs = [
-            f"{m.group(2)} of {m.group(1)} not checked: {m.group(3)}".replace(", ", ",").rstrip()
-            for l in lines
-            for m in [
-                re.match(
-                    rf"^ETH INCOMPLETE (\S+) \(tray {u}\) [^:]*: external ETH ports \[([0-9, ]*)\] not up; not checked: "
-                    r"([^(]*)",
-                    l,
-                )
-            ]
+            f"{m[2]} of {m[1]} not checked: {m[3]}".replace(", ", ",").rstrip()
+            for m in map(re.compile(x).match, lines)
             if m
         ]
         xs = ";".join(dict.fromkeys(xs)).replace(";", "; ")
-        nv = sum(
-            1
-            for l in lines
-            if INC.match(l) and "start reset skipped; ETH not-active-at-open not judged" in l and hit(u, l)
-        )
-        if not xs and any(
-            INC.match(l) and "start reset skipped" in l and "not-active-at-open" not in l and hit(u, l) for l in lines
-        ):
+        if not xs and any(INC.match(l) and "start reset skipped" in l and "not-active-at-open" not in l for l in mine):
             xs = "inter-host ports not judged: start reset skipped"
         w = f", {nw} warn" if nw else ""
         if nf:
@@ -944,22 +750,22 @@ def tray_block(raw, raw_stages, findings="findings.txt", known=None, stopped="")
             )
         elif nd:
             out.append(
-                f"INCOMPLETE tray {u} (lost nothing; numeric not checked: the load of {nd} died when tray "
-                f"{' and tray '.join(dt)} lost chips{w})"
+                f"INCOMPLETE tray {u} (lost nothing; numeric not checked: the load of {nd} died when tray {' and tray '.join(dt)} lost chips{w})"
             )
         elif xs:
             out.append(f"INCOMPLETE tray {u} ({'' if xs.startswith('inter-host') else 'external ETH ports '}{xs}{w})")
         elif nv:
             out.append(
-                f"INCOMPLETE tray {u} ({nv} ETH core(s) not active again at mesh open: start reset skipped; ETH "
-                f"not-active-at-open not judged{w})"
+                f"INCOMPLETE tray {u} ({nv} ETH core(s) not active again at mesh open: start reset skipped; ETH not-active-at-open not judged{w})"
             )
-        elif stopped:
-            out.append(f"INCOMPLETE tray {u} ({stopped}{w})")
-        elif wb:
-            out.append(f"INCOMPLETE tray {u} (whole-box hang, no chip named, no hardware verdict: {wb}{w})")
         else:
-            out.append(f"PASS tray {u}" + (f" ({nw} warn)" if nw else ""))
+            out.append(
+                f"INCOMPLETE tray {u} ({stopped}{w})"
+                if stopped
+                else f"INCOMPLETE tray {u} (whole-box hang, no chip named, no hardware verdict: {wb}{w})"
+                if wb
+                else f"PASS tray {u}" + (f" ({nw} warn)" if nw else "")
+            )
         if nf + nw + nv or xs:
             out += why(lines, u, stages, 10, findings, dt, tags)
     return out
@@ -967,14 +773,12 @@ def tray_block(raw, raw_stages, findings="findings.txt", known=None, stopped="")
 
 # ── final verdict: fault families, then each fault (what | where | do) and the notes ────────────────────────────────
 
-STILL = " [still missing from an earlier drop]"
 RESET = {"c2": "start (C2)", "c9": "end (C9)"}
 CAP = 12  # faults printed; the rest are counted
 # family -> (what it means physically, the finding classes in it: the words before FAIL/WARN/HANG/DROP); others: other
 FAMILIES = {
     "power/feed": (
-        "a tray's 12 V supply sagged or tripped under load: the power bricks on the PDB, the bus bar, its contacts "
-        "or the tray's hot-swap controller",
+        "a tray's 12 V supply sagged or tripped under load: the power bricks on the PDB, the bus bar, its contacts or the tray's hot-swap controller",
         ("POWER", "POWER VIRUS", "PV", "PV HOST CRASH", "HSC", "PSU", "TDP"),
     ),
     "math": (
@@ -982,14 +786,12 @@ FAMILIES = {
         ("NUMERIC", "MAXUTIL", "L1", "CODE"),
     ),
     "link": (
-        "data between chips over Ethernet was lost, wrong or stalled: the QSFP-DD cable or in-box connection, or a "
-        "chip's Ethernet port",
+        "data between chips over Ethernet was lost, wrong or stalled: the QSFP-DD cable or in-box connection, or a chip's Ethernet port",
         ("ETH", "ETH LINK", "ETH FEC", "LINK", "LINKS", "LINK-A", "LINK-DATA", "PINPOINT", "PINPOINT LINK", "CCL")
         + ("FABRIC", "ABORT-FABRIC", "REPRO ABORT-FABRIC", "REPRO LINK-A", "H3SHAPE", "C4"),
     ),
     "PCIe": (
-        "a chip's PCIe connection to the host erred or dropped: the PCIe path from the MB module through the PDB "
-        "retimers, or the chip's tray board",
+        "a chip's PCIe connection to the host erred or dropped: the PCIe path from the MB module through the PDB retimers, or the chip's tray board",
         ("PCIE", "H3 PCIE", "AER", "CHIP", "POST-BOOT", "DROP", "C3", "RESET", "RESET UNATTRIBUTED"),
     ),
     "thermal": (
@@ -1013,7 +815,6 @@ def family(l):
 
 
 def end(b, chs, lone=False):
-    """A link end; a lone one with no faceplate port says so."""
     t, a = tray_asic(b)
     ps = ports(b, chs)
     ch = f" [ETH ch {ids(chs)}]" if chs else ""
@@ -1023,7 +824,6 @@ def end(b, chs, lone=False):
 
 
 def link_where(a, ca, b, cb):
-    """(where, kind) of the link a[ca] <-> b[cb]; kind: cable, inbox, onboard."""
     ta, tb = tray_asic(a)[0], tray_asic(b)[0]
     w = f"{end(a, ca)} <-> {end(b, cb)}"
     if ports(a, ca) and ports(b, cb):
@@ -1036,17 +836,10 @@ def link_where(a, ca, b, cb):
 def link_do(kind, a, b, ca=(), cb=()):
     ta, tb = tray_asic(a)[0], tray_asic(b)[0]
     if kind == "cable":
-        return (
-            f"reseat, then replace, the QSFP-DD cable from tray {ta} port {'/'.join(map(str, ports(a, ca)))} to tray "
-            f"{tb} port {'/'.join(map(str, ports(b, cb)))}; if it stays down with a good cable, the port on one of "
-            "the two trays"
-        )
+        return f"reseat, then replace, the QSFP-DD cable from tray {ta} port {'/'.join(map(str, ports(a, ca)))} to tray {tb} port {'/'.join(map(str, ports(b, cb)))}; if it stays down with a good cable, the port on one of the two trays"
     if kind == "onboard":
         return f"no cable to swap: the tray {ta} board (link between ASIC {tray_asic(a)[1]} and ASIC {tray_asic(b)[1]})"
-    return (
-        f"no cable to swap: reseat trays {ta} and {tb}; if it stays down, the tray-to-tray connection or one of the "
-        "two tray boards (swap a tray to see which end follows)"
-    )
+    return f"no cable to swap: reseat trays {ta} and {tb}; if it stays down, the tray-to-tray connection or one of the two tray boards (swap a tray to see which end follows)"
 
 
 def reset_words(labels):
@@ -1072,12 +865,11 @@ class V:
 
     def fault(self, key, what, where, do):  # a later line on the same part (the C9 recheck) replaces the earlier one
         where += f" [{self.tag}]" if self.tag else ""
-        if key in self.seen:
-            self.faults = [(k, f) if k != key else (k, (what, where, do)) for k, f in self.faults]
-            return
-        self.seen.add(key)
-        self.fam[key] = self.lfam
-        self.faults.append((key, (what, where, do)))
+        if key not in self.seen:
+            self.seen.add(key)
+            self.fam[key] = self.lfam
+            self.faults.append((key, None))
+        self.faults = [(k, (what, where, do) if k == key else f) for k, f in self.faults]
 
     def note(self, key, text):
         if key not in self.seen:
@@ -1086,7 +878,6 @@ class V:
 
 
 def marked(rest, tag):
-    """{(bdf, chan)} of the link ends a '; CONFIG: ...' or '; RETIMER: ...' marker lists."""
     i = rest.find("; " + tag)
     if i < 0:
         return set()
@@ -1094,178 +885,155 @@ def marked(rest, tag):
     return {(b, int(c)) for b, cs in re.findall(rf"({BDF}) \[ETH ch ([0-9,]+)\]", seg) for c in cs.split(",") if c}
 
 
-def eth(v, l):
-    m = re.match(
-        rf"^ETH (FAIL|WARN) ({BDF}) \(tray [1-4]\) (\w+): local ETH ports \[([0-9, ]*)\] (?:enabled but )?not up"
-        rf" \(to ((?:[^()]|\([^()]*\))*)\)(.*)$",
-        l,
-    )
-    if m:
-        a, lc, rest = m.group(2), chans(m.group(4)), m.group(6)
-        by = {}
-        for c, (b, pc) in zip(lc, re.findall(rf"({BDF}) \(tray [1-4]\) port (\d+)", m.group(5))):
-            by.setdefault(b, ([], []))
-            by[b][0].append(c)
-            by[b][1].append(int(pc))
-        st = resets(rest)
-        cf = re.search(r"; CONFIG: retimer/ETH speed (x\d+G(?: and x\d+G)?), expected (x\d+G)", rest)
-        rt = re.search(r"; RETIMER: chip side (x\d+G), retimer speed not readable", rest)
-        cfe, rte = marked(rest, "CONFIG:"), marked(rest, "RETIMER:")
-        for b, (ca, cb) in by.items():
-            hit_ = lambda ends: any((a, c) in ends for c in ca) or any((b, c) in ends for c in cb)  # noqa: E731
-            x, y = sorted([(a, tuple(ca)), (b, tuple(cb))])
-            where, kind = link_where(x[0], list(x[1]), y[0], list(y[1]))
-            do = link_do(kind, x[0], y[0], x[1], y[1])
-            if st is None:
-                w = re.search(r"\(C2 reset skipped: ([^:)]*)", rest)
-                v.note(
-                    ("eth", x, y),
-                    f"Ethernet link down before the run, not judged: the start (C2) reset was skipped"
-                    f"{' (' + w.group(1) + ')' if w else ''} | where: {where} | do: rerun {v.rerun} with the start reset",
-                )
-            elif m.group(1) != "FAIL":
-                pass
-            elif cf and hit_(cfe):
-                v.fault(
-                    ("eth", x, y),
-                    f"CONFIG: retimer/ETH speed {cf.group(1)}, expected {cf.group(2)}: Ethernet link down, {st}",
-                    where,
-                    f"set the retimers to {cf.group(2)} and rerun, before any cabling or board step",
-                )
-            elif rt and hit_(rte):
-                v.fault(
-                    ("eth", x, y),
-                    f"Ethernet link down, {st}; chip side {rt.group(1)} with a training timeout, retimer speed not "
-                    "readable",
-                    where,
-                    f"check the retimer speed setting (expected {rt.group(1)}) first, then " + do,
-                )
-            else:
-                v.fault(("eth", x, y), f"Ethernet link down, {st}", where, do)
-        return True
-    m = re.match(
-        rf"^ETH (FAIL|WARN) ({BDF}) \(tray [1-4]\) (\w+): (\d+) (QSFP cables?|wrap cables?) missing or bad: (.*?)"
-        rf"(?: \(layout ([\w-]+)\))?(;.*)?$",
-        l,
-    )
-    if m:
-        wrap = m.group(5).startswith("wrap")
+READERS = (
+    []
+)  # (pattern, reader): a finding line's reader is the first whose pattern matches; one returning False passes
 
-        def port(x):
-            p = [
-                k for (pt, k), ls in UBB_ETH_PORTS.items() if pt == "QSFP_DD" and k <= 6 and ls[0][0] == tray_asic(x)[1]
-            ]
-            return ("2" if wrap else "2 or 3") if len(p) > 1 else (str(p[0]) if p else "?")
 
-        for a, b, ta, tb in re.findall(rf"({BDF})<->({BDF}) \(tray ([1-4])<->([1-4])\)", m.group(6)):
+def reads(pattern):
+    return lambda f: READERS.append((re.compile(pattern), f)) or f
+
+
+@reads(
+    rf"^ETH (FAIL|WARN) ({BDF}) \(tray [1-4]\) (\w+): local ETH ports \[([0-9, ]*)\] (?:enabled but )?not up \(to ((?:[^()]|\([^()]*\))*)\)(.*)$"
+)
+def eth(v, m):
+    a, rest, by = m[2], m[6], {}
+    for c, (b, pc) in zip(chans(m[4]), re.findall(rf"({BDF}) \(tray [1-4]\) port (\d+)", m[5])):
+        by.setdefault(b, ([], []))[0].append(c)
+        by[b][1].append(int(pc))
+    st = resets(rest)
+    cf = re.search(r"; CONFIG: retimer/ETH speed (x\d+G(?: and x\d+G)?), expected (x\d+G)", rest)
+    rt = re.search(r"; RETIMER: chip side (x\d+G), retimer speed not readable", rest)
+    for b, (ca, cb) in by.items():
+        hit_ = lambda tag: any((a, c) in marked(rest, tag) for c in ca) or any((b, c) in marked(rest, tag) for c in cb)
+        x, y = sorted([(a, tuple(ca)), (b, tuple(cb))])
+        where, kind = link_where(x[0], list(x[1]), y[0], list(y[1]))
+        do = link_do(kind, x[0], y[0], x[1], y[1])
+        if st is None:
+            w = re.search(r"\(C2 reset skipped: ([^:)]*)", rest)
+            v.note(
+                ("eth", x, y),
+                f"Ethernet link down before the run, not judged: the start (C2) reset was skipped{' (' + w.group(1) + ')' if w else ''} | where: {where} | do: rerun {v.rerun} with the start reset",
+            )
+        elif m[1] != "FAIL":
+            pass
+        elif cf and hit_("CONFIG:"):
             v.fault(
-                ("cable", a, b),
-                f"{'wrap ' if wrap else ''}QSFP-DD cable missing or bad (cabling judged against layout "
-                f"{m.group(7) or '?'})",
-                f"tray {ta} QSFP-DD port {port(a)} / ASIC {tray_asic(a)[1]} / {a} <-> tray {tb} QSFP-DD port "
-                f"{port(b)} / ASIC {tray_asic(b)[1]} / {b}",
-                "check that cable is plugged in at both ends, then reseat or replace it (cabling, for the DC)",
+                ("eth", x, y),
+                f"CONFIG: retimer/ETH speed {cf.group(1)}, expected {cf.group(2)}: Ethernet link down, {st}",
+                where,
+                f"set the retimers to {cf.group(2)} and rerun, before any cabling or board step",
             )
-        return True
-    return eth_more(v, l)
-
-
-def eth_more(v, l):
-    """ETH lines naming one chip's ports down before the run, QSFP ports to another host, an ETH core not active."""
-    m = re.match(
-        rf"^ETH (FAIL|WARN) ({BDF}) \(tray [1-4]\)(?: \w+)?: enabled ETH ports \[([0-9, ]*)\] down before the run"
-        r" and still down after the (\w+) reset",
-        l,
-    )
-    if m:  # tt-smi ETH port numbers: ports 0-7 = ch 0-7, ports 10-13 = ch 8-11, ports 8 and 9 no channel
-        b, ps = m.group(2), tuple(chans(m.group(3)))
-        t = tray_asic(b)[0]
-        if m.group(1) == "FAIL":
-            k = ("ethboth", t, ps)
-            bs, rs = v.down.setdefault(k, ([], set()))
-            bs.append(b) if b not in bs else None
-            rs.add(m.group(4).lower())
-            smi = {p: p if p < 8 else p - 2 if 10 <= p <= 13 else None for p in ps}
-            cs = [c for c in smi.values() if c is not None]
-            lab = "; ".join(
-                x
-                for x in (
-                    f"ETH ch {ids(cs)}" if cs else "",
-                    "tt-smi ETH port " + ",".join(str(p) for p, c in smi.items() if c is None) + " (no channel)"
-                    if len(cs) < len(ps)
-                    else "",
-                )
-                if x
-            )
-            f = (
-                f"Ethernet ports down before the run, still down after the {reset_words(rs)}",
-                f"tray {t} "
-                + ", ".join(f"ASIC {tray_asic(x)[1]} / {x}" for x in bs)
-                + f" [{lab}]"
-                + ("" if any(ports(x, cs) for x in bs) else " (no QSFP-DD port)"),
-                f"glx_reset and retest; if they stay down, the tray {t} board",
-            )
-            if k in v.seen:
-                v.faults = [(kk, f if kk == k else ff) for kk, ff in v.faults]
-            else:
-                v.fault(k, *f)
-        return True
-    qsfp_do = "reseat, then replace, that QSFP-DD cable; if it stays down with a good cable, the port on tray {} or on the far host"
-    m = re.match(
-        rf"^ETH (FAIL|WARN) ({BDF}) \(tray [1-4]\)(?: \w+)?: inter-host QSFP ETH ports \[[0-9, ]*\] \(ch \[([0-9, ]*)\]\)"
-        r" down before the run and still down after the (\w+) reset",
-        l,
-    )
-    if m:
-        b, cs = m.group(2), chans(m.group(3))
-        if m.group(1) == "FAIL":
+        elif rt and hit_("RETIMER:"):
             v.fault(
-                ("qsfp", b, tuple(cs)),
-                f"QSFP-DD link to another host down before the run, still down after the {reset_words([m.group(4).lower()])}",
-                "QSFP-DD cable " + end(b, cs, True) + " <-> another host",
-                qsfp_do.format(tray_asic(b)[0]),
+                ("eth", x, y),
+                f"Ethernet link down, {st}; chip side {rt.group(1)} with a training timeout, retimer speed not readable",
+                where,
+                f"check the retimer speed setting (expected {rt.group(1)}) first, then " + do,
             )
-        return True
-    m = re.match(
-        rf"^ETH (FAIL|WARN) ({BDF}) \(tray [1-4]\)(?: \w+)?: QSFP ETH ports \[([0-9, ]*)\] not up"
-        rf"(?: \(to ([\w-]+) tray [1-4] ({BDF}) ports \[([0-9, ]*)\]\))?(.*)$",
-        l,
-    )
-    if m:
-        b, cs = m.group(2), chans(m.group(3))
-        far = f" <-> {m.group(4)} {end(m.group(5), chans(m.group(6)), True)}" if m.group(4) else " <-> another host"
-        if m.group(1) == "FAIL":
-            v.fault(
-                ("qsfp", b, tuple(cs)),
-                "QSFP-DD link to another host down"
-                + (" while the far end is up and idle" if "up and idle" in m.group(7) else ""),
-                "QSFP-DD cable " + end(b, cs, True) + far,
-                qsfp_do.format(tray_asic(b)[0]),
-            )
-        return True
-    m = re.match(
-        rf"^ETH (FAIL|WARN) ({BDF}) \(tray [1-4]\)(?: \w+)?: ETH core ([0-9-]+) \(channel (\d+)[^)]*\) not active"
-        r" again at mesh open(.*)$",
-        l,
-    )
-    if m:
-        b, c = m.group(2), int(m.group(4))
-        if m.group(1) == "FAIL":
-            v.fault(
-                ("ethcore", b, c),
-                f"Ethernet core {m.group(3)} not active again when the mesh opened",
-                end(b, [c], True),
-                f"glx_reset and retest; if it repeats, the tray {tray_asic(b)[0]} board carrying {b}",
-            )
-        return True
-    return False
+        else:
+            v.fault(("eth", x, y), f"Ethernet link down, {st}", where, do)
 
 
-def numeric(v, l):
-    m = re.match(rf"^NUMERIC (FAIL|WARN) ({BDF}) \(tray [1-4]\) chip (\d+) \[([^\]]*)\]: (.*)$", l)
-    if not m:
-        return False
-    b, idx, kind, t = m.group(2), m.group(3), m.group(4), m.group(5)
+@reads(
+    rf"^ETH (FAIL|WARN) ({BDF}) \(tray [1-4]\) (\w+): (\d+) (QSFP cables?|wrap cables?) missing or bad: (.*?)(?: \(layout ([\w-]+)\))?(;.*)?$"
+)
+def cable(v, m):
+    wrap = m[5].startswith("wrap")
+
+    def port(x):
+        p = [k for (pt, k), ls in UBB_ETH_PORTS.items() if pt == "QSFP_DD" and k <= 6 and ls[0][0] == tray_asic(x)[1]]
+        return ("2" if wrap else "2 or 3") if len(p) > 1 else (str(p[0]) if p else "?")
+
+    for a, b, ta, tb in re.findall(rf"({BDF})<->({BDF}) \(tray ([1-4])<->([1-4])\)", m[6]):
+        v.fault(
+            ("cable", a, b),
+            f"{'wrap ' if wrap else ''}QSFP-DD cable missing or bad (cabling judged against layout {m[7] or '?'})",
+            f"tray {ta} QSFP-DD port {port(a)} / ASIC {tray_asic(a)[1]} / {a} <-> tray {tb} QSFP-DD port {port(b)} / ASIC {tray_asic(b)[1]} / {b}",
+            "check that cable is plugged in at both ends, then reseat or replace it (cabling, for the DC)",
+        )
+
+
+@reads(
+    rf"^ETH (FAIL|WARN) ({BDF}) \(tray [1-4]\)(?: \w+)?: enabled ETH ports \[([0-9, ]*)\] down before the run and still down after the (\w+) reset"
+)
+def ethboth(v, m):  # tt-smi ETH port numbers: ports 0-7 = ch 0-7, ports 10-13 = ch 8-11, ports 8 and 9 no channel
+    b, ps = m[2], tuple(chans(m[3]))
+    t = tray_asic(b)[0]
+    if m[1] != "FAIL":
+        return
+    k = ("ethboth", t, ps)
+    bs, rs = v.down.setdefault(k, ([], set()))
+    bs.append(b) if b not in bs else None
+    rs.add(m[4].lower())
+    smi = {p: p if p < 8 else p - 2 if 10 <= p <= 13 else None for p in ps}
+    cs = [c for c in smi.values() if c is not None]
+    nc = ",".join(str(p) for p, c in smi.items() if c is None)
+    lab = "; ".join(
+        x for x in (f"ETH ch {ids(cs)}" if cs else "", f"tt-smi ETH port {nc} (no channel)" if nc else "") if x
+    )
+    v.fault(
+        k,
+        f"Ethernet ports down before the run, still down after the {reset_words(rs)}",
+        f"tray {t} "
+        + ", ".join(f"ASIC {tray_asic(x)[1]} / {x}" for x in bs)
+        + f" [{lab}]"
+        + ("" if any(ports(x, cs) for x in bs) else " (no QSFP-DD port)"),
+        f"glx_reset and retest; if they stay down, the tray {t} board",
+    )
+
+
+QSFP_DO = "reseat, then replace, that QSFP-DD cable; if it stays down with a good cable, the port on tray {} or on the far host"
+
+
+@reads(
+    rf"^ETH (FAIL|WARN) ({BDF}) \(tray [1-4]\)(?: \w+)?: inter-host QSFP ETH ports \[[0-9, ]*\] \(ch \[([0-9, ]*)\]\) down before the run and still down after the (\w+) reset"
+)
+def interhost(v, m):
+    b, cs = m[2], chans(m[3])
+    if m[1] == "FAIL":
+        v.fault(
+            ("qsfp", b, tuple(cs)),
+            f"QSFP-DD link to another host down before the run, still down after the {reset_words([m[4].lower()])}",
+            "QSFP-DD cable " + end(b, cs, True) + " <-> another host",
+            QSFP_DO.format(tray_asic(b)[0]),
+        )
+
+
+@reads(
+    rf"^ETH (FAIL|WARN) ({BDF}) \(tray [1-4]\)(?: \w+)?: QSFP ETH ports \[([0-9, ]*)\] not up(?: \(to ([\w-]+) tray [1-4] ({BDF}) ports \[([0-9, ]*)\]\))?(.*)$"
+)
+def qsfp(v, m):
+    b, cs = m[2], chans(m[3])
+    far = f" <-> {m[4]} {end(m[5], chans(m[6]), True)}" if m[4] else " <-> another host"
+    if m[1] == "FAIL":
+        v.fault(
+            ("qsfp", b, tuple(cs)),
+            "QSFP-DD link to another host down"
+            + (" while the far end is up and idle" if "up and idle" in m[7] else ""),
+            "QSFP-DD cable " + end(b, cs, True) + far,
+            QSFP_DO.format(tray_asic(b)[0]),
+        )
+
+
+@reads(
+    rf"^ETH (FAIL|WARN) ({BDF}) \(tray [1-4]\)(?: \w+)?: ETH core ([0-9-]+) \(channel (\d+)[^)]*\) not active again at mesh open(.*)$"
+)
+def ethcore(v, m):
+    b, c = m[2], int(m[4])
+    if m[1] == "FAIL":
+        v.fault(
+            ("ethcore", b, c),
+            f"Ethernet core {m[3]} not active again when the mesh opened",
+            end(b, [c], True),
+            f"glx_reset and retest; if it repeats, the tray {tray_asic(b)[0]} board carrying {b}",
+        )
+
+
+@reads(rf"^NUMERIC (FAIL|WARN) ({BDF}) \(tray [1-4]\) chip (\d+) \[([^\]]*)\]: (.*)$")
+def numeric(v, m):
+    b, idx, kind, t = m.group(2, 3, 4, 5)
     k = (
         re.search(r"(\d+/\d+) checked outputs mismatched", t)
         or re.search(r"(\d+ mismatching chunks of \d+)", t)
@@ -1280,20 +1048,19 @@ def numeric(v, l):
         what += f": {k.group(1).replace('mismatching chunks', 'chunks wrong')}" + (
             "" if "chunks" in k.group(1) else " outputs wrong"
         )
-    where = (
-        chip(b, idx) + (f", DRAM bank {','.join(banks)}" if banks else "") + (f" ({stage.group(1)})" if stage else "")
-    )
-    do = (
-        "hardware only if the same check on the same commit stays clean on clean hosts; then the "
-        f"tray {tray_asic(b)[0]} board carrying {b}"
-    ) + (f"; matches known issue {known.group(1)}" if known else "")
-    if m.group(1) == "FAIL":
-        v.fault(("num", b), what, where, do)
-    return True
+    if m[1] == "FAIL":
+        v.fault(
+            ("num", b),
+            what,
+            chip(b, idx)
+            + (f", DRAM bank {','.join(banks)}" if banks else "")
+            + (f" ({stage.group(1)})" if stage else ""),
+            f"hardware only if the same check on the same commit stays clean on clean hosts; then the tray {tray_asic(b)[0]} board carrying {b}"
+            + (f"; matches known issue {known.group(1)}" if known else ""),
+        )
 
 
 def fw_why(t, x, y, mj):
-    """(reason, next step) of a tray firmware mismatch; x 'unread', mj e.g. '12 of 32' or '' (majority)."""
     if x == "unread":
         return (
             f"tray {t}'s firmware version could not be read while the other chips run {y}",
@@ -1307,143 +1074,109 @@ def fw_why(t, x, y, mj):
     return f"tray {t} runs firmware {x} while the other chips run {y}", f"reflash tray {t} to {y}"
 
 
-def preflight(v, l):
-    m = re.match(
-        rf"^PREFLIGHT (FAIL|WARN) ({BDF}) \(tray ([1-4])\) chip \d+: tt_fw_bundle_ver ([\w.]+), (\d+ of \d+) chips"
-        r" ([\w.]+)( \(no majority\))?",
-        l,
-    )
-    if not m:
-        return False
-    t = int(m.group(3))
-    x, y, mj, bs = v.fw.get(t, (m.group(4), m.group(6), m.group(5) if m.group(7) else "", []))
-    v.fw[t] = (x, y, mj, bs + [m.group(2)])
-    k, (w, do) = ("fw", t), fw_why(t, x, y, mj)
-    f = (f"firmware mismatch: {w}", f"tray {t} ({len(v.fw[t][3])} chips)", f"{do}, then retest")
-    if k in v.seen:
-        v.faults = [(kk, f if kk == k else ff) for kk, ff in v.faults]
-    else:
-        v.fault(k, *f)
-    return True
+@reads(
+    rf"^PREFLIGHT (FAIL|WARN) ({BDF}) \(tray ([1-4])\) chip \d+: tt_fw_bundle_ver ([\w.]+), (\d+ of \d+) chips ([\w.]+)( \(no majority\))?"
+)
+def preflight(v, m):
+    t = int(m[3])
+    x, y, mj, bs = v.fw.get(t, (m[4], m[6], m[5] if m[7] else "", []))
+    v.fw[t] = (x, y, mj, bs + [m[2]])
+    w, do = fw_why(t, x, y, mj)
+    v.fault(("fw", t), f"firmware mismatch: {w}", f"tray {t} ({len(v.fw[t][3])} chips)", f"{do}, then retest")
 
 
-def chunk(v, l):
-    m = re.match(r"^CHUNK FAIL chunk (\d+/\d+)(?: \([^)]*\))?: no chunk-end readback, the load died or hung(.*)$", l)
-    if not m:
-        return False
-    tr = sorted(set(re.findall(r"tray ([1-4]):", m.group(2))))
+@reads(r"^CHUNK FAIL chunk (\d+/\d+)(?: \([^)]*\))?: no chunk-end readback, the load died or hung(.*)$")
+def chunk(v, m):
+    tr = sorted(set(re.findall(r"tray ([1-4]):", m[2])))
     v.fault(
-        ("chunk", m.group(1)),
-        f"the load died or hung (chunk {m.group(1)} gave no end readback; numeric not checked)",
+        ("chunk", m[1]),
+        f"the load died or hung (chunk {m[1]} gave no end readback; numeric not checked)",
         ("trays " + ", ".join(tr)) if tr else "the box",
         "see the cause line and the Repair recommendation",
     )
-    return True
 
 
-def aer(v, l):
-    m = re.match(rf"^AER (FAIL|WARN) ({BDF}) \(tray [1-4]\):? (.*)$", l)
-    if not m:
-        return False
-    b, t = m.group(2), m.group(3)
+@reads(rf"^AER (FAIL|WARN) ({BDF}) \(tray [1-4]\):? (.*)$")
+def aer(v, m):
+    b, t = m[2], m[3]
     n = re.search(r"(\d+) (correctable|uncorrectable)", t)
     if re.search(r"history before the run|not only this run|over \d+ days|before the run", t):
         v.note(
             ("aer", b),
-            f"old PCIe (AER) errors on {chip(b)} from the kernel log before this run"
-            f"{' (' + n.group(0) + ' events)' if n else ''}, none during this run: not a failure",
+            f"old PCIe (AER) errors on {chip(b)} from the kernel log before this run{' (' + n.group(0) + ' events)' if n else ''}, none during this run: not a failure",
         )
-    elif m.group(1) == "FAIL":
+    elif m[1] == "FAIL":
         v.fault(
             ("aer", b),
             f"PCIe errors during the run (AER{': ' + n.group(0) if n else ''})",
             chip(b),
             f"the PCIe path of {b} (slot, retimer, cable), then the tray {tray_asic(b)[0]} board",
         )
-    return True
 
 
-def pcie(v, l):
-    m = re.match(
-        rf"^PCIE (FAIL|WARN) ({BDF}) \(tray [1-4]\)(.*?)(?:, root port ([0-9a-f:.]+))?(?:, host [\w-]+)?: (.*)$", l
-    )
-    if not m or m.group(1) != "FAIL":
-        return bool(m)
-    b, t = m.group(2), m.group(5)
-    rp = f" (root port {m.group(4)})" if m.group(4) else ""
+@reads(rf"^PCIE (FAIL|WARN) ({BDF}) \(tray [1-4]\)(.*?)(?:, root port ([0-9a-f:.]+))?(?:, host [\w-]+)?: (.*)$")
+def pcie(v, m):
+    b, t = m[2], m[5]
     sp = re.search(r"root port link ([\w.]+ x\d+)", t)
+    if m[1] != "FAIL":
+        return
     if "off pcie" in t.lower():
         what = "chip off PCIe (config space reads ffff)" + (f", link at {sp.group(1)}" if sp else "")
-        do = (
-            "glx_reset and recount; if still missing, power cycle the box; then the tray "
-            f"{tray_asic(b)[0]} board or its PCIe slot"
-        )
+        do = f"glx_reset and recount; if still missing, power cycle the box; then the tray {tray_asic(b)[0]} board or its PCIe slot"
     else:
         what = "weak PCIe link" + (f" ({sp.group(1)})" if sp else f": {t[:80]}")
         do = f"the PCIe path of {b} (slot, retimer), then the tray {tray_asic(b)[0]} board"
-    v.fault(("pcie", b), what, chip(b) + rp, do)
-    return True
+    v.fault(("pcie", b), what, chip(b) + (f" (root port {m[4]})" if m[4] else ""), do)
 
 
-def workaround(v, l):
-    """A deliberate, recorded setting (a PCIe speed cap): a note, never a fault."""
-    m = re.match(rf"^WORKAROUND APPLIED: ({BDF}) ", l)
-    if m:
-        v.note(("workaround", m.group(1)), l)
-    return bool(m)
+@reads(rf"^WORKAROUND APPLIED: ({BDF}) ")
+def workaround(v, m):  # a deliberate, recorded setting (a PCIe speed cap): a note, never a fault
+    v.note(("workaround", m[1]), m.string)
 
 
-def drop(v, l):
-    """A chip or tray drop: a fault naming every chip it lists by tray, ASIC and BDF."""
-    still = l.endswith(STILL)
-    l = l[: -len(STILL)] if still else l
-    m = re.match(r"^(CHIP|POWER) DROP tray ([1-4]) \((\d+) chips lost(.*?)\) ((?:in|after|at) .*)$", l)
-    if not m:
-        return False
-    t, bs = m.group(2), list(dict.fromkeys(re.findall(BDF, re.sub(r"\(root port [^)]*\)", "", m.group(4)))))
-    ga = re.search(r"(\d+) chips of the tray missing before its glx_reset judged", m.group(4))
+@reads(
+    r"^(CHIP|POWER) DROP tray ([1-4]) \((\d+) chips lost(.*?)\) ((?:in|after|at) .*?)( \[still missing from an earlier drop\])?$"
+)
+def drop(v, m):
+    t, bs = m[2], list(dict.fromkeys(re.findall(BDF, re.sub(r"\(root port [^)]*\)", "", m[4]))))
+    ga = re.search(r"(\d+) chips of the tray missing before its glx_reset judged", m[4])
     v.fault(
-        ("drop", l[:120], tuple(bs), still),
-        f"{'chip' if m.group(1) == 'CHIP' else 'tray power'} drop: {m.group(3)} chips lost on tray {t} {m.group(5)[:120]}"
+        ("drop", m.string[: m.start(6) if m[6] else None][:120], tuple(bs), bool(m[6])),
+        f"{'chip' if m[1] == 'CHIP' else 'tray power'} drop: {m[3]} chips lost on tray {t} {m[5][:120]}"
         + (f"; {ga.group(1)} chips of the tray were missing in all when it was judged" if ga else ""),
         "; ".join(chip(b) for b in bs) or f"tray {t}",
         f"see the Repair recommendation line (tray {t})",
     )
-    return True
 
 
-def link(v, l):
-    m = re.match(
-        rf"^LINK (FAIL|HANG) ({BDF}) \(tray [1-4]\) e([0-9,]+) <-> ({BDF}) \(tray [1-4]\) e([0-9,]+): (.*)$", l
+@reads(rf"^LINK (FAIL|HANG) ({BDF}) \(tray [1-4]\) e([0-9,]+) <-> ({BDF}) \(tray [1-4]\) e([0-9,]+): (.*)$")
+def link(v, m):
+    x, y = sorted([(m[2], tuple(chans(m[3]))), (m[4], tuple(chans(m[5])))])
+    where, kind = link_where(x[0], list(x[1]), y[0], list(y[1]))
+    w = re.search(r"(\d+) words wrong", m[6])
+    what = (
+        "Ethernet link hung (no progress)"
+        if m[1] == "HANG"
+        else "wrong data over an Ethernet link" + (f" ({w.group(1)} words wrong)" if w else "")
     )
-    if m:
-        x, y = sorted([(m.group(2), tuple(chans(m.group(3)))), (m.group(4), tuple(chans(m.group(5))))])
-        where, kind = link_where(x[0], list(x[1]), y[0], list(y[1]))
-        w = re.search(r"(\d+) words wrong", m.group(6))
-        what = (
-            "Ethernet link hung (no progress)"
-            if m.group(1) == "HANG"
-            else "wrong data over an Ethernet link" + (f" ({w.group(1)} words wrong)" if w else "")
-        )
-        v.fault(("link", x, y), what, where, link_do(kind, x[0], y[0], x[1], y[1]))
-        return True
-    m = re.match(rf"^LINK FAIL one chip ({BDF}) \(tray [1-4]\) tt-smi (\d+): (.*)$", l)
-    if m:
-        b = m.group(1)
-        v.fault(
-            ("chip", b),
-            "every link test through this one chip failed",
-            chip(b, m.group(2)),
-            f"the tray {tray_asic(b)[0]} board carrying {b}",
-        )
-    return bool(m)
+    v.fault(("link", x, y), what, where, link_do(kind, x[0], y[0], x[1], y[1]))
 
 
-def thermal(v, l):
-    t = thermal_parse(l)
-    if not t:
+@reads(rf"^LINK FAIL one chip ({BDF}) \(tray [1-4]\) tt-smi (\d+): (.*)$")
+def onechip(v, m):
+    v.fault(
+        ("chip", m[1]),
+        "every link test through this one chip failed",
+        chip(m[1], m[2]),
+        f"the tray {tray_asic(m[1])[0]} board carrying {m[1]}",
+    )
+
+
+@reads(r"^THERMAL FAIL ")
+def thermal(v, m):
+    if not thermal_parse(m.string):
         return False
-    scope, n, sensor, rd, pb, part, step = t
+    scope, n, sensor, rd, pb, part, step = thermal_parse(m.string)
     ev = f"BMC sensor {sensor}" + (f" read {rd} C, above its upper critical limit" if rd else "")
     if pb:
         v.fault(
@@ -1459,39 +1192,32 @@ def thermal(v, l):
             f"{scope}, {ev} ({part})",
             f"{step}; the chips' own checks are listed separately",
         )
-    return True
 
 
-def downstream(v, l):
-    """A chip of another tray left on PCIe but unopenable after the C9 reset a tray's power drop broke: one fault."""
-    m = PDN_CHIP.match(l)
-    ts = [x for x in v.pdn if m and x != m.group(2)]
+@reads(PDN_CHIP.pattern)
+def downstream(v, m):  # a chip of another tray left unopenable after the C9 reset a tray's power drop broke: one fault
+    ts = [x for x in v.pdn if x != m[2]]
     if not ts:
         return False
-    v.pdn_chips.append(m.group(1))
+    v.pdn_chips.append(m[1])
     t, n = " and ".join(f"tray {x}" for x in ts), len(v.pdn_chips)
     trs = ", ".join(sorted({str(tray_asic(b)[0]) for b in v.pdn_chips}))
     v.lfam = "power/feed"
     v.fault(
         ("pdn",),
-        f"POWER-DOWNSTREAM of the power drop of {t}: {n} chip{'s' * (n > 1)} of tray {trs} stay on PCIe but do not "
-        "open after the end (C9) reset (in-band IPMI not answering); not their boards",
+        f"POWER-DOWNSTREAM of the power drop of {t}: {n} chip{'s' * (n > 1)} of tray {trs} stay on PCIe but do not open after the end (C9) reset (in-band IPMI not answering); not their boards",
         "; ".join(chip(b) for b in v.pdn_chips[:4]) + (f" and {n - 4} more" if n > 4 else ""),
         f"fix {t} first (see the Repair recommendation line), then reset and recheck these chips",
     )
-    return True
 
 
-def generic(v, l):
-    m = re.match(r"^((?:[A-Z][A-Z0-9-]*\s)+?)(FAIL|HANG)\b:?\s*(.*)$", l)
-    if not m:
-        return
-    t = m.group(3)
-    bs = list(dict.fromkeys(re.findall(BDF, t)))
-    tr = re.findall(r"tray ([1-4])", t)
+@reads(r"^((?:[A-Z][A-Z0-9-]*\s)+?)(FAIL|HANG)\b:?\s*(.*)$")
+def generic(v, m):
+    t = m[3]
+    bs, tr = list(dict.fromkeys(re.findall(BDF, t))), re.findall(r"tray ([1-4])", t)
     v.fault(
-        ("gen", l[:120]),
-        f"{m.group(1).strip()} {m.group(2).lower()}: {t[:160]}",
+        ("gen", m.string[:120]),
+        f"{m[1].strip()} {m[2].lower()}: {t[:160]}",
         "; ".join(chip(b) for b in bs[:4]) or (f"tray {tr[0]}" if tr else "the box"),
         "see the Repair recommendation line" + (f" (tray {tray_asic(bs[0])[0]})" if bs and tray_asic(bs[0])[0] else ""),
     )
@@ -1506,8 +1232,6 @@ def plain_reason(res):
 
 
 def families(v):
-    """'  Family <family>: N faults on K chips, trays ..: <what it means>' per family present."""
-
     def chips(w):
         return re.findall(BDF, re.sub(r"root port \S+", "", w))
 
@@ -1549,10 +1273,7 @@ def verdict(rc, vtext="", findings="", result="", commit="?", mode="", rerun="th
         g = AFTER.search(l)
         l, v.tag = (l[: g.start()], g.group(1)) if g else (l, "")
         v.lfam = family(l)
-        if not any(
-            f(v, l) for f in (eth, preflight, chunk, numeric, aer, pcie, workaround, drop, link, thermal, downstream)
-        ):
-            generic(v, l)
+        next((1 for p, f in READERS if (m := p.match(l)) and f(v, m) is not False), None)
     v.tag = ""
     fold(v)
     vt = (vtext or "").strip()
@@ -1560,8 +1281,7 @@ def verdict(rc, vtext="", findings="", result="", commit="?", mode="", rerun="th
     out = []
     if vt.startswith("NOT RUN") or rc in (6, 10):
         out.append(
-            f"Final verdict: NOT RUN: {vt[8:].strip(' ()') or f'exit {rc}'}: no hardware result; do: "
-            f"{'wait for the other user, then ' if rc == 10 else ''}rerun {rerun}"
+            f"Final verdict: NOT RUN: {vt[8:].strip(' ()') or f'exit {rc}'}: no hardware result; do: {'wait for the other user, then ' if rc == 10 else ''}rerun {rerun}"
         )
     elif vt.startswith("INCOMPLETE") or rc in (9, 129, 130, 143) or "INCOMPLETE" in (result or "")[:40]:
         fw = sorted(v.fw.items())
@@ -1602,8 +1322,6 @@ def verdict(rc, vtext="", findings="", result="", commit="?", mode="", rerun="th
 
 
 def fold(v):
-    """One fault per part: repeated drops of the same chips, a missing cable with its link-down line; a power brick
-    overheat goes first and the load and PCIe faults of that run come with it."""
     named, kept, times = {}, [], {}
     for k, (w, where, do) in v.faults:
         if k[0] == "drop" and k[2]:
@@ -1618,48 +1336,26 @@ def fold(v):
                     add = f"; the chips came back and dropped again: {what} (dropped {times[i]} times)"
                 kept[i] = (kept[i][0], (kept[i][1][0] + add, *kept[i][1][1:]))
                 continue
-            for b in new:
-                named[b] = len(kept)
-            if len(new) < len(k[2]):
-                where = "; ".join(chip(b) for b in new)
+            named.update(dict.fromkeys(new, len(kept)))
+            where = "; ".join(chip(b) for b in new) if len(new) < len(k[2]) else where
         kept.append((k, (w, where, do)))
     down = {frozenset((k[1][0], k[2][0])): w for k, (w, _, _) in kept if k[0] == "eth"}
     cab = {frozenset(k[1:3]) for k, _ in kept if k[0] == "cable"}
-    v.faults = [
-        (
-            k,
-            (
-                w.replace(
-                    "missing or bad",
-                    "missing or bad: " + down[frozenset(k[1:3])].replace("Ethernet link down", "link down"),
-                    1,
-                )
-                if k[0] == "cable" and frozenset(k[1:3]) in down
-                else w,
-                where,
-                do,
-            ),
-        )
-        for k, (w, where, do) in kept
-        if not (k[0] == "eth" and frozenset((k[1][0], k[2][0])) in cab)
-    ]
-    br = [f for f in v.faults if f[0][0] == "brick"]
-    if br:
-        n = br[0][0][1]
-        v.faults = br + [
-            (
-                k,
-                (
-                    w,
-                    where,
-                    f"comes with the power brick {n} overheat: fix brick {n} first and rerun; only if it repeats then, {do}"
-                    if k[0] in ("aer", "chunk", "gen", "pcie")
-                    else do,
-                ),
+    br = [k[1] for k, _ in kept if k[0] == "brick"][:1]
+    v.faults = []
+    for k, (w, where, do) in kept:
+        if k[0] == "eth" and frozenset((k[1][0], k[2][0])) in cab:
+            continue
+        if k[0] == "cable" and frozenset(k[1:3]) in down:
+            w = w.replace(
+                "missing or bad",
+                "missing or bad: " + down[frozenset(k[1:3])].replace("Ethernet link down", "link down"),
+                1,
             )
-            for k, (w, where, do) in v.faults
-            if k[0] != "brick"
-        ]
+        if br and k[0] in ("aer", "chunk", "gen", "pcie"):
+            do = f"comes with the power brick {br[0]} overheat: fix brick {br[0]} first and rerun; only if it repeats then, {do}"
+        v.faults.append((k, (w, where, do)))
+    v.faults.sort(key=lambda f: f[0][0] != "brick")
 
 
 # ── repair recommendation: the part or setting to fix first, per failing tray ───────────────────────────────────────
@@ -1675,8 +1371,7 @@ RULES = [
     (r"^POWER-DOWNSTREAM: of the power drop of tray [1-4]", "DOWNSTREAM"),
     (r"none in this run", None),
     (
-        r"whole-tray power loss|lost power and its re-power failed|bus-bar signature|^tray 12 V input lost or "
-        r"under-voltage|^POWER: 12 V feed of tray",
+        r"whole-tray power loss|lost power and its re-power failed|bus-bar signature|^tray 12 V input lost or under-voltage|^POWER: 12 V feed of tray",
         "POWER:{u}",
     ),
     (r"^POWER: tray [1-4] 12 V feed", "POWERFEED"),
@@ -1684,15 +1379,13 @@ RULES = [
     (r"^test infrastructure", "no hardware repair (software: test infrastructure on tray {u})"),
     (r"^firmware version differs", "no hardware repair (firmware: reflash tray {u})"),
     (
-        r"warning only|not a fault|not checked|leave the box|read no link map|ETH ports not up \(warning\)"
-        r"|down before the run|not a clean pass",
+        r"warning only|not a fault|not checked|leave the box|read no link map|ETH ports not up \(warning\)|down before the run|not a clean pass",
         None,
     ),
     (r"which fails all its C5 pairs: that chip", "the tray {t} board carrying {c} (all its links fail)"),
     (
         r"^in-box link down or bad.*retimer speed not readable",
-        "check the retimer speed setting (expected {x}) of link {p}, then the tray-to-tray connection, then the tray "
-        "boards",
+        "check the retimer speed setting (expected {x}) of link {p}, then the tray-to-tray connection, then the tray boards",
     ),
     (r"^in-box link down or bad", "the tray-to-tray connection of link {p}, then the tray boards"),
     (r"^link pair hung|^link down or bad", "the cable or port of link {p}"),
@@ -1700,9 +1393,7 @@ RULES = [
     (r"^CCL group fault: one bad result from the likely source", "NUMERIC:{s}"),
     (r"^chip compute fault|^chip DRAM fault|^chip read fault", "NUMERIC:{b}"),
     (
-        r"^these chips stopped while the others kept going|^chip fell off PCIe|^chip lost after its warm reset"
-        r"|^chip did not take the warm reset|^hang on the named chip\(s\)|^chip slow to finish its warm reset"
-        r"|^chip stopped answering the kernel driver under load|^chip hung for MMIO",
+        r"^these chips stopped while the others kept going|^chip fell off PCIe|^chip lost after its warm reset|^chip did not take the warm reset|^hang on the named chip\(s\)|^chip slow to finish its warm reset|^chip stopped answering the kernel driver under load|^chip hung for MMIO",
         LOSS[1],
     ),
 ]
@@ -1736,7 +1427,6 @@ SENSORS = [  # BMC temperature sensor -> (its part, the first step); first match
 
 
 def thermal_parse(line):
-    """(scope, trip count, sensor, reading, power brick or None, part, first step) of a THERMAL FAIL line, else None."""
     m = THERMAL.match(line)
     if not m:
         return None
@@ -1754,14 +1444,12 @@ def thermal_parse(line):
 
 
 def bdfs(text, u=None):
-    """Chip BDFs named in text, of tray u where the text ties them to a tray."""
     tied = re.findall(rf"({BDF}) \(tray ([1-4])\)", text)
     got = ([b for b, t in tied if u is None or t == u] or [b for b, _ in tied]) if tied else re.findall(BDF, text)
     return list(dict.fromkeys(got))
 
 
 def loss_bdfs(u, line):
-    """Chip BDFs of tray u that one cause line names as lost (a PCIe or board-loss repair), else []."""
     w = WHY.match(line)
     if not w or HSC_FAIL.search(line):
         return []
@@ -1771,7 +1459,6 @@ def loss_bdfs(u, line):
 
 
 def item(u, part, cause, nxt, commit, kind=None):
-    """The repair for one cause line, '' for none, None for unknown; kind (a list) gets the RULES template matched."""
     for pat, tpl in RULES:
         if not re.search(pat, cause):
             continue
@@ -1783,10 +1470,7 @@ def item(u, part, cause, nxt, commit, kind=None):
         b = " ".join(bs) if bs else f"a chip of tray {u}"
         if tpl == "CONFIG":
             m = re.search(r"expected (x\d+G)", cause)
-            return (
-                f"set the retimers of link {part} to {m.group(1) if m else 'x200G'} and rerun, before any cabling or "
-                "board step"
-            )
+            return f"set the retimers of link {part} to {m.group(1) if m else 'x200G'} and rerun, before any cabling or board step"
         if tpl == "POWERFEED":
             m = re.search(r"12 V feed (.+?) / bus bar: HSC (0x[0-9a-f]+) ([A-Z_+]+)", cause)
             src = (
@@ -1806,10 +1490,7 @@ def item(u, part, cause, nxt, commit, kind=None):
                     + (f", translated worker core ({wc.group(1)},{wc.group(2)})" if wc else "")
                     + " writes wrong values under matmul load"
                 )
-            return (
-                f"the tray {u} board carrying {b} (numeric fault), only if the same check with commit {commit} "
-                "on clean hosts shows no similar counts (similar counts there: test or CCL issue, not the box)"
-            )
+            return f"the tray {u} board carrying {b} (numeric fault), only if the same check with commit {commit} on clean hosts shows no similar counts (similar counts there: test or CCL issue, not the box)"
         m = re.search(rf"of ({BDF}) \(tray ([1-4])\)", cause)
         x = re.search(r"chip side (x\d+G)", cause)
         return tpl.format(
@@ -1819,7 +1500,6 @@ def item(u, part, cause, nxt, commit, kind=None):
 
 
 def tpl_family(tpl, cause):
-    """The fault family of a RULES template, None for a setting, software or firmware line or a hang."""
     if tpl == LOSS[0]:
         return "PCIe"
     if tpl == LOSS[1]:
@@ -1832,10 +1512,7 @@ def tpl_family(tpl, cause):
 
 
 def lead(r, fam, history):
-    """r led by the first action of its first item's family, with the fleet's fixed-of-tried count for it."""
     _, first, f = min(((r.find(i), i, g) for i, g in fam.items() if i in r), default=(0, "", None))
-    if f is None:
-        return r
     if f == "math":  # several bad chips on the first item's tray: the board
         t = re.findall(r"tray ([1-4])", first)[:1]
         bs = {
@@ -1846,7 +1523,7 @@ def lead(r, fam, history):
         }
         f = "math tray" if t and len(bs) > 1 else "math"
     k, n = history.get(f, (0, 0))
-    return f"{FIRST[f]} ({f'fixed {k} of {n} in fleet records' if n else 'no fleet records'}); {r}"
+    return f"{FIRST[f]} ({f'fixed {k} of {n} in fleet records' if n else 'no fleet records'}); {r}" if f else r
 
 
 def recommend(
@@ -1918,10 +1595,7 @@ def recommend(
             power.setdefault(t, set())
             continue
         bs = bdfs(fx[i + 1] if i + 1 < len(fx) and fx[i + 1].startswith("  why:") else "", t)
-        r = (
-            f"the tray {t} board carrying {' '.join(bs) if bs else 'its missing chips'} or its PCIe path, after the "
-            f"remote recovery steps ({m.group(2)})"
-        )
+        r = f"the tray {t} board carrying {' '.join(bs) if bs else 'its missing chips'} or its PCIe path, after the remote recovery steps ({m.group(2)})"
         if r not in items:
             items.append(r)
             fam[r] = "PCIe loss"
@@ -1972,22 +1646,12 @@ def recommend(
 
 
 def add_args(ap: argparse.ArgumentParser) -> None:
-    ap.add_argument(
-        "--repair-history",
-        type=Path,
-        help="Fleet repair records: '<family><TAB><fixed><TAB><tried>' per line, the count the repair line cites for "
-        "its first action. Without it the repair line says 'no fleet records'.",
-    )
+    ap.add_argument("--repair-history", type=Path, help="fleet repair counts, '<family><TAB><fixed><TAB><tried>' lines")
 
 
 def history(path) -> dict:
-    """{family: (fixed, tried)} of a repair history file."""
-    out = {}
-    for row in Path(path).read_text().splitlines() if path else []:
-        p = row.split("\t")
-        if len(p) == 3 and not row.startswith("#"):
-            out[p[0]] = (int(p[1]), int(p[2]))
-    return out
+    rows = [r.split("\t") for r in (Path(path).read_text().splitlines() if path else []) if not r.startswith("#")]
+    return {p[0]: (int(p[1]), int(p[2])) for p in rows if len(p) == 3}
 
 
 def lines(run_dir, args) -> list[str]:
@@ -1995,62 +1659,43 @@ def lines(run_dir, args) -> list[str]:
     The run's exit code and verdict come from args (rc, verdict), else from its report (args.output)."""
     d, a = Path(run_dir), vars(args)
     rd = lambda p: Path(p).read_text(errors="replace") if p and Path(p).is_file() else ""  # noqa: E731
-    rc, vt = a.get("rc"), a.get("verdict") or ""
+    rc, vt, mode, commit, rerun = (
+        a.get("rc"),
+        a.get("verdict") or "",
+        a.get("mode") or "",
+        a.get("commit") or "?",
+        a.get("rerun") or RERUN,
+    )
     if rc is None:
         st = json.loads(rd(a.get("output") or d / "diag_report.json") or "{}").get("overall_status", "")
         rc, vt = int(st == "FAIL"), vt or st
-    f = d / "findings.txt"
-    raw = rd(f).splitlines()
+    raw = rd(d / "findings.txt").splitlines()
     stages = {}
     for r in rd(d / "finding_stage.tsv").splitlines():
-        p, _, l = r.partition("\t")
-        stages.setdefault(l, p)
-    known, rerun, only = a.get("known_tray"), a.get("rerun") or "the health check", a.get("only")
-    if only == "result":
+        stages.setdefault(r.partition("\t")[2], r.partition("\t")[0])
+    if a.get("only") == "result":
         ls, st, _ = untag(raw, stages)
-        dt = sorted(thru(ls, re.compile(r"^(?:POWER|CHIP) DROP tray ([1-4])")))
-        return [result(ls, st, dt, known)]
-    if only == "final":  # the tray lines this run already printed, as it saved them
+        return [result(ls, st, sorted(thru(ls, re.compile(r"^(?:POWER|CHIP) DROP tray ([1-4])"))), a.get("known_tray"))]
+    if a.get("only") == "final":  # the tray lines this run already printed, as it saved them
         trays = rd(d / "trays.txt").splitlines()
     else:
-        trays = tray_block(raw, stages, str(f), known, a.get("stopped") or "") if f.is_file() else []
-    if only == "trays":
-        return trays
-    out = [] if only else trays
-    out += verdict(rc, vt, "\n".join(raw), a.get("result") or "", a.get("commit") or "?", a.get("mode") or "", rerun)
-    fam = {}
-    r = recommend(
-        rc,
-        vt,
-        "\n".join(trays),
-        "\n".join(raw),
-        a.get("mode") or "",
-        a.get("commit") or "?",
-        rd(a.get("fix")),
-        fam,
-        rerun,
-    )
+        f = d / "findings.txt"
+        trays = tray_block(raw, stages, str(f), a.get("known_tray"), a.get("stopped") or "") if f.is_file() else []
+        if a.get("only") == "trays":
+            return trays
+    fam, out = {}, [] if a.get("only") else trays
+    out += verdict(rc, vt, "\n".join(raw), a.get("result") or "", commit, mode, rerun)
+    r = recommend(rc, vt, "\n".join(trays), "\n".join(raw), mode, commit, rd(a.get("fix")), fam, rerun)
     return out + [f"Repair recommendation: {lead(r, fam, history(a.get('repair_history')))}"]
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("run_dir", type=Path)
-    ap.add_argument("--rc", type=int, help="the run's exit code (default: from its diag_report.json)")
-    ap.add_argument("--verdict", help="the run's verdict text: PASS, FAIL (...), INCOMPLETE (...), NOT RUN (...)")
-    ap.add_argument("--result", help="the run's RESULT line")
-    ap.add_argument("--mode", help="the run's mode, named in a rerun step")
-    ap.add_argument("--commit", help="the commit that ran, named in a numeric repair")
-    ap.add_argument("--fix", type=Path, help="a host link check's 'FIX tray N: **...**' lines")
-    ap.add_argument("--known-tray", help="a tray known to be dropped before the run: not tested")
-    ap.add_argument("--stopped", help="why the run stopped before judging the trays with no finding")
-    ap.add_argument("--rerun", help="the command a rerun step names (default: the health check)")
-    ap.add_argument(
-        "--only",
-        choices=("trays", "result", "final"),
-        help="only the tray lines, the RESULT phrase, or the verdict and repair lines (from the tray lines saved in "
-        "RUN_DIR/trays.txt)",
-    )
+    ap.add_argument("--rc", type=int)
+    for f in ("--verdict", "--result", "--mode", "--commit", "--fix", "--known-tray", "--stopped", "--rerun"):
+        ap.add_argument(f)
+    ap.add_argument("--only", choices=("trays", "result", "final"))
     add_args(ap)
     print("\n".join(lines((a := ap.parse_args(argv)).run_dir, a)))
     return 0
