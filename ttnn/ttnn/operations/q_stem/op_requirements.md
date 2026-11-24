@@ -50,7 +50,7 @@
   (1103 collected; 11 regression tests untagged: 8 pass, 3 RoPE xfail; `test_small_packet_size` fails only in the
   graded runner — an L1-profiling-plugin harness error, passes under `run_safe_pytest.sh`).
 
-### [ ] Refinement 1 — Numerical configurability + L1 latent (weights bfloat8_b, 16-bit DEST, input_buffer L1)
+### [x] Refinement 1 — Numerical configurability + L1 latent (weights bfloat8_b, 16-bit DEST, input_buffer L1)
 
 **Goal**: add `ttnn.bfloat8_b` to `SUPPORTED["q_b_proj_dtype"]` and `SUPPORTED["wkv_b1_dtype"]` (independently),
 `False` to `SUPPORTED["fp32_dest_acc_en"]`, and `ttnn.BufferType.L1` to `SUPPORTED["input_buffer"]`. Weight CBs

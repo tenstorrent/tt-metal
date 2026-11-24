@@ -1,0 +1,2 @@
+{"event":"tool_use","tool":"Skill","skill":"numeric-formats-metal","args":"","ts":"2026-11-24T18:12:45+00:00"}
+{"event":"test_run","result":"pass","detail":"R1 golden slice 36/36, unit 9/9, model-config precision 8/8; 16-bit DEST ratio drift matches stock ttnn.matmul","ts":"2026-11-24T18:19:16+00:00"}

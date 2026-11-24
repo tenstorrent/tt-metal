@@ -20,6 +20,7 @@ import ttnn
 from eval.metrics import default_tolerance
 from models.common.utility_functions import comp_allclose, comp_pcc
 from tests.ttnn.unit_tests.operations.q_stem.test_q_stem import (
+    _to_mesh,
     _DEVICE_PARAMS,
     _MESH_PARAM,
     CLUSTER_AXIS,
@@ -97,3 +98,58 @@ def test_q_stem_precision_baseline(mesh_device, dims):
         assert whole["rel_rms"] <= rms_max, f"dev{idx}: relative RMS {whole['rel_rms']} > {rms_max}"
         # scale-bug detector: the ratio must centre on 1.0
         assert abs(whole["ratio_med"] - 1.0) < 0.01, f"dev{idx}: got/true median ratio {whole['ratio_med']}"
+
+
+# Refinement 1: the model's numerical config — q_b_proj / wkv_b1 bfloat8_b, 16-bit DEST at HiFi2, latent in L1.
+# The K-blocked shape exercises cb_q_partial, whose format follows fp32_dest_acc_en (bf16 behind 16-bit DEST).
+MODEL_CFG_SHAPES = [
+    pytest.param((1, 640, 1536, 24, 128, 64, 512), id="kimi_k31_640"),
+    pytest.param((1, 128, 4096, 4, 128, 64, 512), id="deep_q_k_blocked"),
+]
+
+
+@pytest.mark.parametrize("device_params", _DEVICE_PARAMS, indirect=True)
+@pytest.mark.parametrize("mesh_device", _MESH_PARAM, indirect=True)
+@pytest.mark.parametrize("dims", MODEL_CFG_SHAPES)
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True], ids=["dest16", "dest32"])
+@pytest.mark.parametrize(
+    "qb_dtype,wkv_dtype",
+    [(ttnn.bfloat8_b, ttnn.bfloat16), (ttnn.bfloat8_b, ttnn.bfloat8_b)],
+    ids=["qb_bfp8", "qb_wkv_bfp8"],
+)
+def test_q_stem_model_config_precision(mesh_device, dims, fp32_dest_acc_en, qb_dtype, wkv_dtype):
+    B, S, Q, Hl, Dn, Dr, N = dims
+    G = tuple(mesh_device.shape)[CLUSTER_AXIS]
+    x, q_b, wkv, _, _, _ = _make_inputs(mesh_device, B, S, Q, Hl, Dn, Dr, N)
+    rows, cols = tuple(mesh_device.shape)
+    wkv_stacked = wkv.reshape(1, 1, *wkv.shape).expand(rows, cols, *wkv.shape).contiguous()
+    tx = _to_mesh(x, mesh_device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    tq = _to_mesh(q_b, mesh_device, dtype=qb_dtype)
+    tw = _to_mesh(wkv_stacked, mesh_device, dtype=wkv_dtype)
+    # The reference sees the weights as the device stores them (block-float rounding is the input, not op error).
+    q_b_dev = torch.stack([ttnn.to_torch(d).float() for d in _read_back(tq, mesh_device)]).reshape(q_b.shape)
+    wkv_dev = ttnn.to_torch(_read_back(tw, mesh_device)[0]).float().reshape(wkv.shape)
+    expected = reference(x, q_b_dev, wkv_dev, G)
+    cfg = ttnn.ComputeConfigDescriptor(
+        math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=fp32_dest_acc_en, math_approx_mode=False
+    )
+    out = q_stem(tx, tq, tw, cluster_axis=CLUSTER_AXIS, compute_kernel_config=cfg)
+    pcc_min, rms_max = default_tolerance(ttnn.bfloat16, fp32_dest_acc_en)
+    for idx, dev in enumerate(_read_back(out, mesh_device)):
+        r, c = divmod(idx, cols)
+        m = _metrics(ttnn.to_torch(dev).float(), expected[r, c])
+        print(
+            f"PRECISION-MODELCFG {dims} dest32={fp32_dest_acc_en} qb={qb_dtype} wkv={wkv_dtype} dev{idx} "
+            f"pcc={m['pcc']:.6f} rel_rms={m['rel_rms']:.4g} max_abs={m['max_abs']:.4g} "
+            f"ratio[p5,med,p95]=[{m['ratio_p5']:.4f},{m['ratio_med']:.4f},{m['ratio_p95']:.4f}]"
+        )
+        assert m["pcc"] >= pcc_min, f"dev{idx}: PCC {m['pcc']} < {pcc_min}"
+        assert m["rel_rms"] <= rms_max, f"dev{idx}: relative RMS {m['rel_rms']} > {rms_max}"
+        if fp32_dest_acc_en:
+            assert abs(m["ratio_med"] - 1.0) < 0.01, f"dev{idx}: got/true median ratio {m['ratio_med']}"
+        else:
+            # 16-bit DEST accumulation biases the median ratio above 1 with K (stock ttnn.matmul, same config:
+            # 1.019 at K=1536, 1.049 at K=4096 — probe_*.py). A scale bug is a TIGHT cluster off 1.0; this is a
+            # broad spread that must still straddle 1.0.
+            assert m["ratio_p5"] < 1.0 < m["ratio_p95"], f"dev{idx}: ratio band {m['ratio_p5']}..{m['ratio_p95']}"
+            assert abs(m["ratio_med"] - 1.0) < 0.06, f"dev{idx}: got/true median ratio {m['ratio_med']}"

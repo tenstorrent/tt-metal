@@ -58,3 +58,29 @@ init + fp32 pack overheads).
   perf-breakdown hook; `l1_ledger.md` totals re-evaluated from the predicate. `--dev` mode cannot open the fabric
   mesh on this board (ACTIVE_ETH kernel config overflow) — tests ran in default mode.
 - **Tests added**: test_q_stem_precision_baseline.py
+
+## Refinement 1 — Numerical configurability + L1 latent (weights bfloat8_b, 16-bit DEST, input_buffer L1)
+- Date: 2026-11-24
+- What was done: `SUPPORTED` widened — `q_b_proj_dtype` / `wkv_b1_dtype` += bfloat8_b (independently),
+  `fp32_dest_acc_en` += False, `input_buffer` += L1. No kernel change: the weight CBs already took the weight's
+  page format (`Geometry.qb_tile_bytes` / `wkv_tile_bytes`), the matmul helpers reconfigure unpack/pack formats
+  between stage 1 (x @ bfp8 q_b) and stage 3 (landing @ wkv), and the injector's `TensorAccessor` handles an L1
+  interleaved latent from its accessor args. The one descriptor change: `cb_q_partial` (stage-1 K-block partials)
+  now follows DEST width (`Geometry.partial_dtype`: Float32 under fp32 DEST, bf16 under 16-bit DEST) in both the
+  CB and `l1_terms`. `cb_q_slice` stays bf16 under both (exchanged payload). `custom_program_hash` already keyed on
+  weight dtypes, `fp32_dest_acc_en`, and the latent buffer type — nothing to add. DEST limit is derived
+  (`_dest_limit`: 8 tiles at 16-bit) so stage-3 `sbw3 = largest divisor of s3n <= 8` widens to 8 (s3n = 16 at
+  N=512) and stage-1 `sbw1` widens likewise. Grid fill / batching identical to Phase 0.
+  Reused: every CB, kernel, helper call and the existing format derivations. Added: `partial_dtype` (one field).
+- Accuracy achieved (HiFi2, bfp8 q_b, L1 latent, vs a reference on the device-rounded weights):
+  Kimi (1,640,1536) 16-bit DEST: PCC=0.99977, rel RMS=0.028; fp32 DEST: PCC=0.99999, rel RMS=0.0070.
+  K-blocked (1,128,4096) 16-bit DEST: PCC=0.99920, rel RMS=0.062; fp32 DEST: PCC=0.99999, rel RMS=0.0072.
+  wkv_b1 bfp8 changes nothing beyond the 4th digit.
+- Golden test progress: targeted slice 36/36 passing (16 new-axis combos x {1x1x128x64, Kimi 640x1536} +
+  1x1x2048x1536 L1-latent 16-bit-DEST x 4 weight-dtype combos); unit suite test_q_stem.py 9/9.
+- Issues encountered: under 16-bit DEST the median got/true ratio sits above 1 and grows with K (1.018 at K=1536,
+  1.046 at K=4096) with a broad p5..p95 band (0.80..1.29). Stock `ttnn.matmul` with the identical config shows
+  the same (1.019 / 1.049, rel RMS 0.028 / 0.062 — `probes/probe_003.py`), so it is the 16-bit DEST accumulation,
+  not an op scale bug. No EXCLUSIONS needed.
+- Tests added: `test_q_stem_model_config_precision` in test_q_stem_precision_baseline.py (bfp8 q_b ± bfp8 wkv,
+  HiFi2, 16-/32-bit DEST, L1 latent; Kimi + K-blocked shapes; ratio-band scale-bug check for 16-bit DEST).

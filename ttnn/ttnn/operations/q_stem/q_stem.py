@@ -45,14 +45,14 @@ INPUT_TAGGERS = {
 
 SUPPORTED = {
     "dtype": [ttnn.bfloat16],
-    "q_b_proj_dtype": [ttnn.bfloat16],
-    "wkv_b1_dtype": [ttnn.bfloat16],
+    "q_b_proj_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+    "wkv_b1_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
     "layout": [ttnn.TILE_LAYOUT],
     "output_layout": [ttnn.TILE_LAYOUT],
-    "fp32_dest_acc_en": [True],
+    "fp32_dest_acc_en": [True, False],
     "rope_mode": ["nope"],
     "alignment": ["tile_aligned"],
-    "input_buffer": [ttnn.BufferType.DRAM],
+    "input_buffer": [ttnn.BufferType.DRAM, ttnn.BufferType.L1],
     "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED],
     "cluster_axis": [1],
     "topology": [Topology.Ring],

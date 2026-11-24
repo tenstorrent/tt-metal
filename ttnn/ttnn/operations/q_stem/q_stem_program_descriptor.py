@@ -152,6 +152,9 @@ class Geometry:
         self.wkv_tile_bytes = ttnn.tile_size(wkv.dtype)
         self.x_tile_bytes = ttnn.tile_size(input_tensor.dtype)
         self.dest_limit = _dest_limit(fp32_dest_acc_en)
+        # Stage-1 K-block partials: the DEST width. A Float32 page behind 16-bit DEST carries no extra bits.
+        self.partial_dtype = ttnn.float32 if fp32_dest_acc_en else ttnn.bfloat16
+        self.partial_tile_bytes = ttnn.tile_size(self.partial_dtype)
 
         # stage-1 blocking
         self.m = _largest_divisor_leq(self.qrt, S1_BLOCK_M_TILES)  # s1_block_m_tiles (no ragged block)
@@ -411,7 +414,7 @@ def l1_terms(geo, wkv_depth):
         "cb_q_slice": q_slice,
         "cb_x_round": X_ROUND_DEPTH * geo.round_tiles * geo.x_tile_bytes,
         "cb_qb_slice": geo.Q_t * geo.cols_max * geo.qb_tile_bytes,
-        "cb_q_partial": geo.m * geo.cols_max * ttnn.tile_size(ttnn.float32) if geo.nkb > 1 else 0,
+        "cb_q_partial": geo.m * geo.cols_max * geo.partial_tile_bytes if geo.nkb > 1 else 0,
         "cb_wkv": wkv_s1,
         "cb_prefix_out+cb_rope_out": s3_out,
     }
@@ -553,7 +556,7 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
             _cb(CB_QB_SLICE, q_b.dtype, geo.qb_tile_bytes, geo.Q_t * geo.cols_max, s1_rect),
         ]
         if geo.nkb > 1:
-            cbs.append(_cb(CB_Q_PARTIAL, ttnn.float32, ttnn.tile_size(ttnn.float32), geo.m * geo.cols_max, s1_rect))
+            cbs.append(_cb(CB_Q_PARTIAL, geo.partial_dtype, geo.partial_tile_bytes, geo.m * geo.cols_max, s1_rect))
         cbs += [
             ttnn.cb_descriptor_from_sharded_tensor(CB_LANDING, scratch),
             *wkv_cbs,
