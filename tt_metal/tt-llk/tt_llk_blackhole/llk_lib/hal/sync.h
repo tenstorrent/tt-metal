@@ -11,6 +11,7 @@
 #include "llk_assert.h"
 #include "utils/helpers.h"
 #include "utils/validate.h"
+#include "utils/issue.h"
 
 namespace hal::sync
 {
@@ -254,14 +255,14 @@ inline constexpr __attribute__((always_inline)) std::uint32_t acquire_operation(
 template <Mutex M>
 inline __attribute__((always_inline)) void acquire()
 {
-    TTI_INSN((acquire_operation<M>()));
+    ::hal::detail::issue<(acquire_operation<M>())>();
 }
 
 /** @brief Acquire a runtime-selected mutex through the Tensix instruction buffer. */
 inline __attribute__((always_inline)) void acquire(const Mutex mutex)
 {
     LLK_ASSERT(detail::is_valid(mutex), "Blackhole mutex index must be 0 or in [2, 4]");
-    TT_ATGETM(hal::to_underlying(mutex));
+    HAL_TT_ATGETM(hal::to_underlying(mutex));
 }
 
 /** @brief Encode ATRELM without issuing it. */
@@ -283,14 +284,14 @@ inline constexpr __attribute__((always_inline)) std::uint32_t release_operation(
 template <Mutex M>
 inline __attribute__((always_inline)) void release()
 {
-    TTI_INSN((release_operation<M>()));
+    ::hal::detail::issue<(release_operation<M>())>();
 }
 
 /** @brief Release a runtime-selected mutex through the Tensix instruction buffer. */
 inline __attribute__((always_inline)) void release(const Mutex mutex)
 {
     LLK_ASSERT(detail::is_valid(mutex), "Blackhole mutex index must be 0 or in [2, 4]");
-    TT_ATRELM(hal::to_underlying(mutex));
+    HAL_TT_ATRELM(hal::to_underlying(mutex));
 }
 
 } // namespace mutex
@@ -327,13 +328,13 @@ inline constexpr __attribute__((always_inline)) std::uint32_t init_operation(
 template <std::uint32_t Initial, std::uint32_t Maximum, Semaphore First, Semaphore... Others>
 inline __attribute__((always_inline)) void init()
 {
-    TTI_INSN((init_operation<Initial, Maximum, First, Others...>()));
+    ::hal::detail::issue<(init_operation<Initial, Maximum, First, Others...>())>();
 }
 
 /** @brief Initialize a semaphore or braced list of semaphores through Tensix. */
 inline __attribute__((always_inline)) void init(const detail::SemaphoreSet semaphores, const std::uint32_t initial, const std::uint32_t maximum)
 {
-    TT_INSN(init_operation(semaphores, initial, maximum));
+    ::hal::detail::issue_buffered(init_operation(semaphores, initial, maximum));
 }
 
 /** @brief Encode SEMPOST for the selected semaphores without issuing it. */
@@ -353,13 +354,13 @@ inline constexpr __attribute__((always_inline)) std::uint32_t post_operation(con
 template <Semaphore First, Semaphore... Others>
 inline __attribute__((always_inline)) void post()
 {
-    TTI_INSN((post_operation<First, Others...>()));
+    ::hal::detail::issue<(post_operation<First, Others...>())>();
 }
 
 /** @brief Increment a semaphore or braced list of semaphores atomically through Tensix. */
 inline __attribute__((always_inline)) void post(const detail::SemaphoreSet semaphores)
 {
-    TT_INSN(post_operation(semaphores));
+    ::hal::detail::issue_buffered(post_operation(semaphores));
 }
 
 /** @brief Increment one compile-time-selected semaphore through the chosen access path. */
@@ -411,13 +412,13 @@ inline constexpr __attribute__((always_inline)) std::uint32_t get_operation(cons
 template <Semaphore First, Semaphore... Others>
 inline __attribute__((always_inline)) void get()
 {
-    TTI_INSN((get_operation<First, Others...>()));
+    ::hal::detail::issue<(get_operation<First, Others...>())>();
 }
 
 /** @brief Decrement a semaphore or braced list of semaphores atomically through Tensix. */
 inline __attribute__((always_inline)) void get(const detail::SemaphoreSet semaphores)
 {
-    TT_INSN(get_operation(semaphores));
+    ::hal::detail::issue_buffered(get_operation(semaphores));
 }
 
 /** @brief Decrement one compile-time-selected semaphore through the chosen access path. */
@@ -493,7 +494,7 @@ inline constexpr __attribute__((always_inline)) std::uint32_t stall_operation(co
 template <StallTarget Targets, StallCondition Conditions>
 inline __attribute__((always_inline)) void stall()
 {
-    TTI_INSN((stall_operation<Targets, Conditions>()));
+    ::hal::detail::issue<(stall_operation<Targets, Conditions>())>();
 }
 
 /** @brief Install a runtime STALLWAIT through the Tensix instruction buffer. */
@@ -501,7 +502,7 @@ inline __attribute__((always_inline)) void stall(const StallTarget targets, cons
 {
     LLK_ASSERT(detail::is_valid(targets), "STALLWAIT target mask must fit in nine bits");
     LLK_ASSERT(detail::is_valid(conditions), "Blackhole STALLWAIT condition mask must fit in 13 bits");
-    TT_STALLWAIT(hal::to_underlying(targets), hal::to_underlying(conditions));
+    HAL_TT_STALLWAIT(hal::to_underlying(targets), hal::to_underlying(conditions));
 }
 
 /** @brief Encode SEMWAIT for the selected semaphores without issuing it. */
@@ -526,13 +527,13 @@ inline constexpr __attribute__((always_inline)) std::uint32_t semaphore_operatio
 template <StallTarget Targets, SemaphoreCondition Conditions, Semaphore First, Semaphore... Others>
 inline __attribute__((always_inline)) void semaphore()
 {
-    TTI_INSN((semaphore_operation<Targets, Conditions, First, Others...>()));
+    ::hal::detail::issue<(semaphore_operation<Targets, Conditions, First, Others...>())>();
 }
 
 /** @brief Install SEMWAIT for a semaphore or braced list of semaphores through Tensix. */
 inline __attribute__((always_inline)) void semaphore(const StallTarget targets, const detail::SemaphoreSet semaphores, const SemaphoreCondition conditions)
 {
-    TT_INSN(semaphore_operation(targets, semaphores, conditions));
+    ::hal::detail::issue_buffered(semaphore_operation(targets, semaphores, conditions));
 }
 
 } // namespace wait

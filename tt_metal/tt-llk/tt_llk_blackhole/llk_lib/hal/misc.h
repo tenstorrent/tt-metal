@@ -8,6 +8,7 @@
 
 #include "ckernel.h"
 #include "utils/validate.h"
+#include "utils/issue.h"
 
 namespace hal::misc
 {
@@ -93,7 +94,7 @@ constexpr std::uint32_t flush_tdma_operation()
 template <FlushScope Scope = FlushScope::All>
 inline __attribute__((always_inline)) void flush_tdma()
 {
-    TTI_INSN((flush_tdma_operation<Scope>()));
+    ::hal::detail::issue<(flush_tdma_operation<Scope>())>();
 }
 
 /**
@@ -110,7 +111,7 @@ constexpr std::uint32_t reset_tdma_operation()
 /** @brief Soft-reset the TDMA engine (RSTDMA). */
 inline __attribute__((always_inline)) void reset_tdma()
 {
-    TTI_INSN(reset_tdma_operation());
+    ::hal::detail::issue<reset_tdma_operation()>();
 }
 
 /** @brief Encode RSTDMA without resetting the TDMA engine. */
@@ -136,7 +137,7 @@ constexpr std::uint32_t tbuf_command_operation()
 /** @brief Issue the reserved TBUFCMD instruction. */
 inline __attribute__((always_inline)) void tbuf_command()
 {
-    TTI_INSN(tbuf_command_operation());
+    ::hal::detail::issue<tbuf_command_operation()>();
 }
 
 /** @brief Encode TBUFCMD without issuing the reserved instruction. */
@@ -207,14 +208,14 @@ inline __attribute__((always_inline)) void run()
 {
     static_assert(detail::is_valid(Operation), "invalid descriptor");
     constexpr std::uint32_t operation = Operation.operation();
-    TTI_INSN(operation);
+    ::hal::detail::issue<operation>();
 }
 
 /** @brief Issue a runtime-selected descriptor. */
 template <typename Operation>
 inline __attribute__((always_inline)) void run(const Operation descriptor)
 {
-    TT_INSN(descriptor.operation());
+    ::hal::detail::issue_buffered(descriptor.operation());
 }
 
 } // namespace hal::misc

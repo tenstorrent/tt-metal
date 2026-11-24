@@ -13,6 +13,7 @@
 #include "sync.h"
 #include "utils/gpr.h"
 #include "utils/validate.h"
+#include "utils/issue.h"
 
 namespace hal::move
 {
@@ -1084,7 +1085,7 @@ template <auto Operation, std::size_t Fragment = 0u>
 inline __attribute__((always_inline)) void emit_matrix_transfer()
 {
     constexpr std::uint32_t instruction = encode(Operation, Fragment);
-    TTI_INSN(instruction);
+    ::hal::detail::issue<instruction>();
 
     if constexpr (Fragment + 1u < operation_count(Operation))
     {
@@ -1126,7 +1127,7 @@ template <auto Operation>
 inline __attribute__((always_inline)) void emit_scalar_transfer()
 {
     constexpr std::uint32_t instruction = encode(Operation);
-    TTI_INSN(instruction);
+    ::hal::detail::issue<instruction>();
 
     if constexpr (Operation.completion == Completion::Wait)
     {
@@ -1153,7 +1154,7 @@ inline __attribute__((always_inline)) void run_static(const Transfer<Gpr, SrcA>)
 {
     static_assert(detail::is_valid(Operation), "invalid GPR-to-SrcA transfer descriptor");
     constexpr std::uint32_t instruction = encode(Operation);
-    TTI_INSN(instruction);
+    ::hal::detail::issue<instruction>();
 }
 
 template <auto Operation>
@@ -1161,7 +1162,7 @@ inline __attribute__((always_inline)) void run_static(const Transfer<Gpr, SrcB>)
 {
     static_assert(detail::is_valid(Operation), "invalid GPR-to-SrcB transfer descriptor");
     constexpr std::uint32_t instruction = encode(Operation);
-    TTI_INSN(instruction);
+    ::hal::detail::issue<instruction>();
 }
 
 template <auto Operation>
@@ -1190,7 +1191,7 @@ inline __attribute__((always_inline)) void run_static(const Transfer<L1, L1>)
         hal::cfg::set<hal::cfg::Thcon[hal::cfg::Reg6].Transfer_direction, hal::cfg::Sec::S0, 3u>());
 
     constexpr std::uint32_t instruction = encode_xmov_launch();
-    TTI_INSN(instruction);
+    ::hal::detail::issue<instruction>();
 
     if constexpr (Operation.completion == Completion::Wait)
     {
@@ -1204,7 +1205,7 @@ inline __attribute__((always_inline)) void emit_runtime_matrix_transfer(
 {
     if (Fragment < count)
     {
-        TT_INSN(Fragment + 1u == count ? final_instruction : intermediate_instruction);
+        ::hal::detail::issue_buffered(Fragment + 1u == count ? final_instruction : intermediate_instruction);
 
         if constexpr (Fragment + 1u < MaxMatrixTransferInstructions)
         {
@@ -1244,7 +1245,7 @@ template <typename Operation>
 inline __attribute__((always_inline)) void run_runtime_scalar(const Operation transfer)
 {
     validate(transfer);
-    TT_INSN(encode(transfer));
+    ::hal::detail::issue_buffered(encode(transfer));
     if (transfer.completion == Completion::Wait)
     {
         hal::sync::wait::stall(hal::sync::StallTarget::All, hal::sync::StallCondition::ScalarIdle);
@@ -1264,13 +1265,13 @@ inline __attribute__((always_inline)) void run_runtime(const Transfer<Gpr, L1> t
 inline __attribute__((always_inline)) void run_runtime(const Transfer<Gpr, SrcA> transfer)
 {
     validate(transfer);
-    TT_INSN(encode(transfer));
+    ::hal::detail::issue_buffered(encode(transfer));
 }
 
 inline __attribute__((always_inline)) void run_runtime(const Transfer<Gpr, SrcB> transfer)
 {
     validate(transfer);
-    TT_INSN(encode(transfer));
+    ::hal::detail::issue_buffered(encode(transfer));
 }
 
 inline __attribute__((always_inline)) void run_runtime(const Transfer<Gpr, Mmio> transfer)
@@ -1291,7 +1292,7 @@ inline __attribute__((always_inline)) void run_runtime(const Transfer<L1, L1> tr
         hal::cfg::set<hal::cfg::Thcon[hal::cfg::Reg6].Destination_address, hal::cfg::Sec::S0>(transfer.destination.block),
         hal::cfg::set<hal::cfg::Thcon[hal::cfg::Reg6].Buffer_size, hal::cfg::Sec::S0>(transfer.size.value),
         hal::cfg::set<hal::cfg::Thcon[hal::cfg::Reg6].Transfer_direction, hal::cfg::Sec::S0, 3u>());
-    TT_INSN(encode_xmov_launch());
+    ::hal::detail::issue_buffered(encode_xmov_launch());
 
     if (transfer.completion == Completion::Wait)
     {
