@@ -552,7 +552,8 @@ class TtIndexerBase:
     def _fold_q_hadamard(self, wq_b: ttnn.Tensor) -> ttnn.Tensor:
         """wq_b [q_lora, H*D] with each head's D columns right-multiplied by the Hadamard, in wq_b's dtype."""
         k = wq_b.shape[-2]
-        h, d = self.index_args.index_n_heads, self.index_args.index_head_dim
+        d = self.index_args.index_head_dim
+        h = wq_b.shape[-1] // d  # this chip's heads (all of them unless the heads are sharded, TtIndexer2D)
         w = ttnn.reshape(ttnn.typecast(wq_b, ttnn.bfloat16), (1, k, h, d))
         folded = ttnn.matmul(
             w, self._index_hadamard, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi4_fp32_compute_kernel_config
@@ -679,6 +680,80 @@ class TtIndexerBase:
             None,
         )
 
+    # --- Projection stems. The TP-only layout below (wq_b replicated, wk / weights_proj K over TP) is GLM-5.3's /
+    # DeepSeek-V3.2's; TtIndexer2D (indexer_2d.py) overrides the three for weights sharded over both mesh axes. Each
+    # returns the tensor the shared RoPE / Hadamard / ring-score code consumes, in the same per-chip layout.
+    def _index_k_proj(self, hidden_states, seq_len):
+        """``hidden_states @ wk``, reduced: ``[1, 1, S/sp, D_idx]`` on every chip of the TP row (pre-LayerNorm)."""
+        if self.tp_factor > 1:
+            k = ttnn.experimental.matmul_reduce_scatter_prefill(
+                hidden_states,
+                self._idx_wk,
+                cluster_axis=self.tp_axis,
+                scatter_dim=-1,
+                topology=self.tp_ccl_topology,
+                num_links=self.ccl_num_links,
+            )
+            return self._tp_all_gather_k(k)
+        wk_cfg = self._resolve_mm_cfg("indexer.wk", seq_len)
+        return ttnn.linear(
+            hidden_states,
+            self._idx_wk,
+            compute_kernel_config=self.default_compute_kernel_config,
+            memory_config=wk_cfg["out_mem_config"] if wk_cfg is not None else ttnn.DRAM_MEMORY_CONFIG,
+            **({"program_config": wk_cfg["program_config"]} if wk_cfg is not None else {}),
+        )  # [1, 1, S/sp, D_idx]
+
+    def _index_q_heads(self, qr, sq_local, qr_tp_local):
+        """This chip's query rows with every index head: ``[1, H_idx, S/(sp*tp), D_idx]``, before RoPE. Selects the
+        indexer's query rows BEFORE the replicated Q projection; ``qr`` (the shared latent) stays alive for the MLA Q
+        stem. ``qr_tp_local``: the caller already reduced the q_a latent to these rows (ttMLA._q_a_latent_tp_rows)."""
+        tpsp = self.tp_factor > 1
+        qr_local = ttnn.mesh_partition(qr, dim=2, cluster_axis=self.tp_axis) if tpsp and not qr_tp_local else qr
+        wq_b_cfg = self._resolve_mm_cfg("indexer.wq_b", sq_local)
+        q = ttnn.linear(
+            qr_local,
+            self._idx_wq_b,
+            compute_kernel_config=self.default_compute_kernel_config,
+            memory_config=wq_b_cfg["out_mem_config"] if wq_b_cfg is not None else ttnn.DRAM_MEMORY_CONFIG,
+            **({"program_config": wq_b_cfg["program_config"]} if wq_b_cfg is not None else {}),
+            # Preserve the unquantized values through Hadamard, then materialize BFP8 once below. With the Hadamard
+            # folded into wq_b (NoPE), this is already the final query: emit BFP8 directly.
+            dtype=ttnn.bfloat8_b if getattr(self, "_q_hadamard_folded", False) else ttnn.bfloat16,
+        )  # [1,1,S/(sp*tp),H_idx*D_idx] — all heads, only this TP rank's query rows
+        if qr_local is not qr:
+            ttnn.deallocate(qr_local)
+        q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+            q,
+            num_heads=self.index_args.index_n_heads,
+            num_kv_heads=0,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return q
+
+    def _index_head_weights(self, hidden_states, seq_len):
+        """``hidden_states @ weights_proj`` (scale folded in), reduced, this chip's query rows: ``[1, 1, S/(sp*tp),
+        H_idx]``."""
+        if self.tp_factor > 1:
+            # Sum TP partials and scatter the sequence rows consumed by local scoring.
+            return ttnn.experimental.matmul_reduce_scatter_prefill(
+                hidden_states,
+                self._idx_wproj,
+                cluster_axis=self.tp_axis,
+                scatter_dim=-2,
+                topology=self.tp_ccl_topology,
+                num_links=self.ccl_num_links,
+            )
+        wproj_cfg = self._resolve_mm_cfg("indexer.weights_proj", seq_len)
+        return ttnn.linear(
+            hidden_states,
+            self._idx_wproj,
+            compute_kernel_config=self.default_compute_kernel_config,
+            memory_config=wproj_cfg["out_mem_config"] if wproj_cfg is not None else ttnn.DRAM_MEMORY_CONFIG,
+            **({"program_config": wproj_cfg["program_config"]} if wproj_cfg is not None else {}),
+        )
+
     def write_k(
         self,
         hidden_states,
@@ -702,25 +777,7 @@ class TtIndexerBase:
         ``actual_end`` (end of the chunk's real tokens) clamps the write to them, so a chunk padding past
         the cache end needs only its real tokens to fit. forward() reads back the same prefix
         (``valid_pos``)."""
-        if self.tp_factor > 1:
-            k = ttnn.experimental.matmul_reduce_scatter_prefill(
-                hidden_states,
-                self._idx_wk,
-                cluster_axis=self.tp_axis,
-                scatter_dim=-1,
-                topology=self.tp_ccl_topology,
-                num_links=self.ccl_num_links,
-            )
-            k = self._tp_all_gather_k(k)
-        else:
-            wk_cfg = self._resolve_mm_cfg("indexer.wk", seq_len)
-            k = ttnn.linear(
-                hidden_states,
-                self._idx_wk,
-                compute_kernel_config=self.default_compute_kernel_config,
-                memory_config=wk_cfg["out_mem_config"] if wk_cfg is not None else ttnn.DRAM_MEMORY_CONFIG,
-                **({"program_config": wk_cfg["program_config"]} if wk_cfg is not None else {}),
-            )  # [1, 1, S/sp, D_idx]
+        k = self._index_k_proj(hidden_states, seq_len)  # [1, 1, S/sp, D_idx], every chip of a TP row
         k = ttnn.layer_norm(
             k,
             weight=self._idx_knorm_w,
@@ -851,24 +908,8 @@ class TtIndexerBase:
         # Keep the original shared latent alive: the main MLA Q stem consumes it after this forward.
         # qr_tp_local: the caller already reduced the q_a latent to these rows (see ttMLA._q_a_latent_tp_rows).
         tpsp = self.tp_factor > 1
-        qr_local = ttnn.mesh_partition(qr, dim=2, cluster_axis=self.tp_axis) if tpsp and not qr_tp_local else qr
         sq_local = seq_len // self.tp_factor
-        wq_b_cfg = self._resolve_mm_cfg("indexer.wq_b", sq_local)
-        q = ttnn.linear(
-            qr_local,
-            self._idx_wq_b,
-            compute_kernel_config=self.default_compute_kernel_config,
-            memory_config=wq_b_cfg["out_mem_config"] if wq_b_cfg is not None else ttnn.DRAM_MEMORY_CONFIG,
-            **({"program_config": wq_b_cfg["program_config"]} if wq_b_cfg is not None else {}),
-            # Preserve the unquantized values through Hadamard, then materialize BFP8 once below. With the Hadamard
-            # folded into wq_b (NoPE), this is already the final query: emit BFP8 directly.
-            dtype=ttnn.bfloat8_b if getattr(self, "_q_hadamard_folded", False) else ttnn.bfloat16,
-        )  # [1,1,S/(sp*tp),H_idx*D_idx] — all heads, only this TP rank's query rows
-        if qr_local is not qr:
-            ttnn.deallocate(qr_local)
-        q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
-            q, num_heads=a.index_n_heads, num_kv_heads=0, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )  # [1,H_idx,S/(sp*tp),D_idx] — all heads resident
+        q = self._index_q_heads(qr, sq_local, qr_tp_local)  # [1,H_idx,S/(sp*tp),D_idx] — all heads resident
         # Reuse the SP-sharded tables. The op preserves their original slab stride and adds this TP
         # query window after deriving the rotated start, including metadata-driven trace replays.
         q_dev = self._bc_rope_pe(
@@ -889,25 +930,7 @@ class TtIndexerBase:
 
         # weights_proj: device stem -> reduce TP partials and scatter query rows. The static scale is
         # already folded into the persistent projection weight in _upload_weights().
-        if self.tp_factor > 1:
-            # Sum TP partials and scatter the sequence rows consumed by local scoring.
-            weights = ttnn.experimental.matmul_reduce_scatter_prefill(
-                hidden_states,
-                self._idx_wproj,
-                cluster_axis=self.tp_axis,
-                scatter_dim=-2,
-                topology=self.tp_ccl_topology,
-                num_links=self.ccl_num_links,
-            )
-        else:
-            wproj_cfg = self._resolve_mm_cfg("indexer.weights_proj", seq_len)
-            weights = ttnn.linear(
-                hidden_states,
-                self._idx_wproj,
-                compute_kernel_config=self.default_compute_kernel_config,
-                memory_config=wproj_cfg["out_mem_config"] if wproj_cfg is not None else ttnn.DRAM_MEMORY_CONFIG,
-                **({"program_config": wproj_cfg["program_config"]} if wproj_cfg is not None else {}),
-            )
+        weights = self._index_head_weights(hidden_states, seq_len)  # [1, 1, S/(sp*tp), H_idx]
         # Q and gate weights now have the same TP×SP query ownership. Scoring still uses the original
         # full-SP cache geometry below; only the input query count and its TP sub-offset are smaller.
         qc = (64 if sq_local % 64 == 0 else 32) if tpsp else 64

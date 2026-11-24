@@ -12,7 +12,9 @@ per chip) and TP 4 on axis 1 (hidden): #65884's 4x8 placement (hidden over its 4
 its axes named by the fabric; no logical (4, 8) view is opened.
 
 Layers 0 (full indexer) and 2 (shared), both fed the top-k: the golden layer-0 top-k at 4K, a sliding causal window at
-longer lengths (seeded random tokens, no golden). ttMLA2DTP does not build the DSA indexer yet (#65887). Input: the layer-0 sublayer input ``hn = input_layernorm(embed)``, as in
+longer lengths (seeded random tokens, no golden), so the attention math is checked apart from the top-k source; the
+full layers with their own 2D indexer (TtIndexer2D, #65887) are ``test_hy4_indexer_2d.py``. Input: the layer-0 sublayer
+input ``hn = input_layernorm(embed)``, as in
 ``test_hy4_attention.py`` (exact at layer 0, no iHC needed). Device weights come from the production Hy4 reader (RoPE
 frames reordered), the reference reads the raw HF tensors.
 
@@ -148,7 +150,8 @@ def test_hy4_attention_2d_tp_vs_hf(mesh_device, device_params, seq_len):
     config = hy4_hf_config(max_seq=seq_len)
     config.max_seq_len = seq_len
     setattr(config, MLA_2D_TP_FLAG, True)
-    # No TtIndexer on this layout yet (#65887): every layer is built as a shared layer and fed the top-k.
+    # Every layer built as a shared layer and fed the golden top-k: the attention alone (its indexer:
+    # test_hy4_indexer_2d.py).
     config.indexer_types = ["shared"] * len(config.indexer_types)
     dims = Hy4AttnDims.from_config(config)
     topology = per_axis_topology(device_params["fabric_config"])

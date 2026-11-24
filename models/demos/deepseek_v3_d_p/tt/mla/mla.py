@@ -39,6 +39,13 @@ from models.demos.deepseek_v3_d_p.utils.weight_cache_dump import weight_cache_du
 
 
 class ttMLA:
+    # The DSA indexer a full-indexer layer builds (ttMLA2DTP swaps in TtIndexer2D, its weights sharded over both axes).
+    INDEXER_CLASS = TtIndexer
+
+    def _indexer_extra_kwargs(self) -> dict:
+        """Constructor arguments ``INDEXER_CLASS`` takes beyond TtIndexer's."""
+        return {}
+
     MLA_WEIGHT_NAMES = [
         "q_a_layernorm",
         "kv_a_layernorm",
@@ -948,8 +955,9 @@ class ttMLA:
                 # TtIndexer warns (does not raise) if given neither host weights nor a complete cache —
                 # mirroring dense MLA's lenient placeholder load, but loudly. The layer still stays sparse
                 # (binds TtIndexer), so it never silently falls back to dense.
-                self._indexer = TtIndexer(
+                self._indexer = self.INDEXER_CLASS(
                     idx_host if idx_host else None,  # None → TtIndexer loads cache-only placeholders
+                    **self._indexer_extra_kwargs(),
                     config=config,
                     mesh_device=self.mesh_device,
                     sp_axis=self.sp_axis,

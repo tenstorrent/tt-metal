@@ -44,7 +44,7 @@ from models.demos.deepseek_v3_d_p.reference.hy4_config import (
     hy4_hf_config,
     load_hy4_config_json,
 )
-from models.demos.deepseek_v3_d_p.tt.hy4.layout import resolve_layout
+from models.demos.deepseek_v3_d_p.tt.hy4.layout import HY4_L1_SMALL_SIZE, resolve_layout
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3 import GLM53Adapter
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import mesh_cache_key
 
@@ -76,6 +76,8 @@ class Hy4Adapter(GLM53Adapter):
     # MTP: Hy4's layer is model.mtp_layers.0, read by hy4_checkpoint.load_hy4_mtp_state_dict (TtHy4Runtime); it has no
     # iHC and is seeded by norm(hc_head(streams)).
     supports_mtp = True
+    # More CCL programs than GLM-5.3 on the tp32 layout; see HY4_L1_SMALL_SIZE (tt/hy4/layout.py).
+    l1_small_size = HY4_L1_SMALL_SIZE
     # iHC: the residual a pipeline stage hands the next is the 4 packed fp32 streams.
     pipeline_activation_streams = Hy4Config.HC_MULT
     pipeline_activation_dtype = "float32"
@@ -193,9 +195,17 @@ class Hy4Adapter(GLM53Adapter):
         layout = self._resolve_layout(params.sp_factor, params.tp_factor, params.sp_axis)
         return Hy4TP32Config if layout is not None and layout.ffn_2d_tp else Hy4Config
 
+    def apply_layout_to_config(self, hf_config, params) -> None:
+        """The layout's model-config switches: ``mla_2d_tp`` on tp32 (ttMLA2DTP + TtIndexer2D, #65885 / #65887). A
+        test mesh with no layout keeps the config as it is."""
+        layout = self._resolve_layout(params.sp_factor, params.tp_factor, params.sp_axis)
+        if layout is not None:
+            layout.apply_to_config(hf_config)
+
     def build_runtime(self, *, mesh_device, hf_config, params):
         self._check_layout(params)
         self._check_pending_deltas(hf_config)
+        self.apply_layout_to_config(hf_config, params)
         # Shadows the class attribute for this adapter instance only; the runtime config reads it.
         self.model_config = self.model_config_for(params)
         return super().build_runtime(mesh_device=mesh_device, hf_config=hf_config, params=params)
