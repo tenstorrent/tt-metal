@@ -11,6 +11,7 @@
 #include "llk_math_eltwise_binary_sfpu_macros.h"
 #endif
 
+PACK_SFPU_API(9)
 namespace ckernel {
 
 #ifndef ARCH_QUASAR
@@ -24,6 +25,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void sfpu_add_bcast_row_init_pack() {
+    PACK_SFPU_CONTEXT();
     PACK((SFPU_BINARY_INIT_FN(unused, sfpu::_sfpu_binary_bcast_init_, (ckernel::BroadcastType::ROW))));
 }
 
