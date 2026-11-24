@@ -267,11 +267,15 @@ class SpecGenerator(Generator):
         return self.generate_rows_from(self.read_token(out), len(prompt_ids), max_new, on_pass, early_stop)
 
     def generate_rows_from(self, nxt, pos, max_new, on_pass=None, early_stop=None):
-        """generate_rows from the model's present state: nxt = the token at position pos (the last decode step's
-        argmax, which that step left in drafter.anchor). Returns ([nxt] + the new ids, stats)."""
+        """generate_rows from the model's present state (after decode steps, or a chunked prefill with the drafter
+        feed): nxt = the token at position pos. Returns ([nxt] + the new ids, stats)."""
         import time as _t
 
         m, d = self.model, self.drafter
+        # the anchor of the first draft: a decode step leaves its argmax there, a prefill does not
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(torch.tensor([[nxt]], dtype=torch.int32), dtype=ttnn.uint32), d.anchor
+        )
         kmax = max(self.verifies) - 1
         assert d.k >= kmax and (early_stop is None or d.top_probs)
         new, acc, rows, t_draft, t_ver = [nxt], [], [], 0.0, 0.0

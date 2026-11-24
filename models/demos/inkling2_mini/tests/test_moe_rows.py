@@ -85,6 +85,36 @@ def _case(device, op, R, overlap, tag):
     return bad
 
 
+def test_moe_rows_tile(device):
+    """TILE-layout weights (the cache the chunked prefill needs): FusedMoeExperts runs R rows one by one; every row
+    bit-equal to the 1-row call. Before, rows past 0 were not computed and a verify pass on a TILE cache gave
+    tokens that differ from plain decode."""
+    from models.demos.inkling2_mini.tt.fused.moe_expert import FusedMoeExperts
+    from models.demos.inkling2_mini.tt.moe import FUSED_PLACEMENT
+
+    g = torch.Generator().manual_seed(3)
+    gu = torch.cat(
+        [
+            torch.randn(N, H, I, generator=g, dtype=torch.bfloat16) * (3 / math.sqrt(H)),
+            torch.randn(N, H, I, generator=g, dtype=torch.bfloat16) * (8 / math.sqrt(H)),
+        ],
+        2,
+    )
+    dn = torch.randn(N, I, H, generator=g, dtype=torch.bfloat16) / math.sqrt(I)
+    bad = []
+    for name, (dg, dd) in DT.items():
+        dev_w = [
+            ttnn.from_torch(t.unsqueeze(0), dtype=dt, layout=ttnn.TILE_LAYOUT, device=device)
+            for t, dt in ((gu, dg), (dn, dd))
+        ]
+        op = FusedMoeExperts(device, *dev_w, sticks=False, **FUSED_PLACEMENT)
+        for R, overlap in ((2, 4), (3, 2), (3, 8)):
+            bad += _case(device, op, R, overlap, f"tile-{name}-R{R}-o{overlap}")
+        for t in dev_w:
+            ttnn.deallocate(t)
+    assert not bad, bad
+
+
 def test_moe_rows_ring(device):
     """PF layout with the prefetcher ring (tt/mk/expert_pipe.py): the multi-row step reads the marked union experts
     from the ring, pops every slab and writes the next guess (row 0's top experts); rows bit-equal to 1-row DRAM

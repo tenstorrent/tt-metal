@@ -263,6 +263,7 @@ class Inkling2MoE:
         """x [1,1,1,H] bf16, top-k weights / ids from route() -> [1,1,1,H] bf16 (sum of the 8 weighted experts)."""
         if self.fused is not None:
             return self.fused(x, weights, indices)
+        assert x.shape[-2] == 1, "the sparse_matmul expert path takes one row (multi-row verify needs fused=True)"
         mem = ttnn.L1_MEMORY_CONFIG
         down = self.expert_matmuls(x, indices)
         scale = ttnn.reshape(ttnn.permute(weights, (0, 3, 2, 1)), (1, TOP_K, 1, 1))

@@ -177,8 +177,29 @@ class FusedMoeExperts:
             cb(w, 64, (CB_SCR, ttnn.uint16, 64, tiny)),
         ]
 
+    def _call_rows(self, x, weights, indices):
+        """R rows (speculative verify on a TILE or stick cache): the 1-row step once per row, so every output row is
+        bit-equal to the 1-row call on that row. R expert steps: the union read of the bank step
+        (fused/moe_bank.py _call_rows, PF and bank caches) is not built for this layout."""
+        l1 = ttnn.L1_MEMORY_CONFIG
+        outs = []
+        for r in range(x.shape[-2]):
+            row = [
+                ttnn.slice(t, [0, 0, r, 0], [1, 1, r + 1, t.shape[-1]], memory_config=l1) for t in (x, weights, indices)
+            ]
+            outs.append(self(*row))
+            for t in row:
+                ttnn.deallocate(t)
+        y = ttnn.concat(outs, dim=2, memory_config=l1)
+        for t in outs:
+            ttnn.deallocate(t)
+        return y
+
     def __call__(self, x, weights, indices, debug=None):
-        """x [1,1,1,H] bf16 (L1), weights / indices from Inkling2MoE.route -> [1,1,1,H] bf16 L1."""
+        """x [1,1,1,H] bf16 (L1), weights / indices from Inkling2MoE.route -> [1,1,1,H] bf16 L1. More rows (x
+        [1,1,R,H], weights / indices [1,1,R,8]): row by row (_call_rows)."""
+        if x.shape[-2] > 1:
+            return self._call_rows(x, weights, indices)
         for t in (x, weights, indices):
             assert t.memory_config().buffer_type == ttnn.BufferType.L1, t.memory_config()
             assert t.layout == ttnn.TILE_LAYOUT
