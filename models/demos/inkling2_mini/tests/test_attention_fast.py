@@ -278,6 +278,49 @@ def test_far_bfp4_rows(device, monkeypatch):
     assert torch.equal(after[:, keep], before[:, keep])
 
 
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+def test_far_split_rows(device, monkeypatch):
+    """far keys and values in two caches (FAR_SPLIT opt-in, bfp8 rings): decode writes the ring's k row to the key
+    cache as it is and the host bfp4 rounding of the ring's v row to the value cache; the neighbouring rows keep
+    their values. The far call on the two caches gives finite output (its values: split_probe in the L3 report)."""
+    import models.demos.inkling2_mini.tt.attention_fast as AF
+
+    if not hasattr(ttnn.SDPAProgramConfig, "unit_v_tile_col"):
+        pytest.skip("this build has no sdpa unit_v_tile_col")
+    monkeypatch.setattr(AF, "FAR_SPLIT", True)
+    monkeypatch.setattr(AF.FA, "FAR_Q", (4, 0))
+    sd = ta.random_state_dict(True, seed=11)
+    p, steps = 3001, 3
+    inputs = ta.make_inputs(steps, True, seed=4)
+    runner = Runner(device, True, sd, 4096, ttnn.bfloat8_b)
+    xs = _xs(inputs, True)
+    runner.set_inputs(p, [x[0] for x in xs])
+    runner.capture()
+    pk, pv = seeded_prefix(p, seed=2)
+    runner.state.fill(pk, pv)
+    st = runner.state
+    assert st.v_full.dtype == ttnn.bfloat4_b and st.kv_full.shape[-1] == 128
+    before = [ttnn.to_torch(t).float()[0] for t in (st.kv_full, st.v_full)]
+    try:
+        for i in range(steps):
+            runner.set_inputs(p + i, [x[i] for x in xs])
+            out = runner.run()
+    finally:
+        runner.release()
+    assert torch.isfinite(out).all()
+    after = [ttnn.to_torch(t).float()[0] for t in (st.kv_full, st.v_full)]
+    bfp4 = lambda t: ttnn.to_torch(ttnn.from_torch(t, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT)).float()  # noqa
+    rows = list(range(p, p + steps))
+    slots = [r % 1024 for r in rows]
+    k = ttnn.to_torch(st.k_ring).float()[0][:, slots]
+    v = ttnn.to_torch(st.v_ring).float()[0][:, slots]
+    assert torch.equal(after[0][:, rows], k)
+    assert torch.equal(after[1][:, rows], bfp4(v.unsqueeze(0))[0])
+    keep = [r for r in range(p - 32, p + 32) if r not in rows]
+    for a, b in zip(after, before):
+        assert torch.equal(a[:, keep], b[:, keep])
+
+
 def _median_ms(device, trace, n=15):
     samples = []
     for _ in range(n):

@@ -846,6 +846,7 @@ class Inkling2Prefill:
             # shortcut: no prefill write for the bfp4 far cache opt-in (attention_fast FAR_DTYPE); port G3's FarFill4
             # when prefill must run with it
             assert st.kv_full.dtype == k_c.dtype, "prefill: bfp4 far cache (FAR_DTYPE) not supported"
+            assert st.v_full is None, "prefill: split far caches (FAR_SPLIT) not supported"
             row = [v_c, k_c] if FAR_UNIT else [v_c, _rows(self.c_mass[cdt], 0, t), k_c]
             ttnn.fill_cache(st.kv_full, ttnn.concat(row, dim=-1), 0, update_idx=s)
         if self.r3:

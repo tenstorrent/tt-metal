@@ -47,6 +47,9 @@ PREP_SLIM = os.environ.get("INKLING_PREP_SLIM", "1") == "1"
 # projection rows straight from L1, one wave): prep 7.2 -> 5.7 us per app. Traced, bit-equal: 4K 14.91 -> 14.86 ms,
 # 128K 20.24 -> 20.21.
 PREP_PRE = os.environ.get("INKLING_PREP_PRE", "1") == "1"
+# the far call's q per kv group: (tiles, first q tile). [zeros 160 | q 128] for the one-cache far call; attention_fast
+# sets (4, 0) when the far keys and values are two caches (FAR_SPLIT)
+FAR_Q = (9, 5)
 NEG = -1.0e9  # masked logit (attention.py)
 # Near combine SFPU rows: 4-row groups per face of the ops in attn_comb_compute.cpp (2 = rows 0..3, the 3 heads of a
 # kv group; 8 = whole faces). Same per-element ops on the rows the consumers read.
@@ -174,7 +177,7 @@ class AttnPrep:
         # global layers: q also, and the mask only, in kv-group layout [1, 8, 32, .] for AttnNear (rows 0..2 used)
         self.q_grp = zeros([1, N_KV, 32, HEAD_DIM]) if dyn else None
         # and the far call's q per kv group [1, 8, 3, 288]: zeros on the v / mass columns, q on the last 128
-        self.q_far = zeros([1, N_KV, GROUPS, 288]) if dyn else None
+        self.q_far = zeros([1, N_KV, GROUPS, FAR_Q[0] * 32]) if dyn else None
         self.mask = zeros([1, N_KV, 32, WINDOW] if dyn else [1, 1, N_HEADS, WINDOW])
         self.sink = zeros([N_HEADS, 32])
         # global layers: near softmax sink block [1, 8, 3, 32] fp32 (rows 3..31 stay zero)
@@ -204,10 +207,12 @@ class AttnPrep:
         dyn = int(self.dyn and not q)
         has_tau = int(self.dyn and q)
         # the far cache's mass block, where it is stored (288 columns; attention_fast FAR_UNIT stores 256)
-        far_tiles = state.kv_full.padded_shape[-1] // 32 if self.dyn else 0
+        # this kind's far cache: kv_full, or with keys and values apart (state.v_full) the values' own cache
+        full = (getattr(state, "v_full", None) if kind == "v" else None) or state.kv_full if self.dyn else None
+        far_tiles = full.padded_shape[-1] // 32 if self.dyn else 0
         mass = int(self.dyn and kind == "v" and far_tiles == 9)
         # bfp4 far cache (opt-in): the writer converts the bfp8 row
-        far4 = int(bool(self.dyn and not q) and state.kv_full.dtype == ttnn.bfloat4_b)
+        far4 = int(bool(self.dyn and not q) and full.dtype == ttnn.bfloat4_b)
         r_rt, w_rt = [], []
         for g, _ in enumerate(cores):
             r = [proj.buffer_address(), (self.q_taps if q else self.kv_taps[kind]).buffer_address()]
@@ -231,7 +236,7 @@ class AttnPrep:
                             qrow = rows[0] * GROUPS + i if getattr(rows[1], "far_shared", True) else i  # or per token
                             w += [rows[1].q_far.buffer_address(), 0, 0, 0, gq * 9 + 5, qrow]
                         else:
-                            w += [self.q_far.buffer_address(), 0, 0, 0, gq * 9 + 5, i]
+                            w += [self.q_far.buffer_address(), 0, 0, 0, gq * FAR_Q[0] + FAR_Q[1], i]
             else:
                 c0 = self.kv0 + (0 if kind == "k" else N_KV * HEAD_DIM) + g * HEAD_DIM
                 r += [c0 // 32, mode_rows[kind], g * TAPS]
@@ -245,7 +250,6 @@ class AttnPrep:
                     v_t0 = 0 if kind == "k" else N_KV * (HEAD_DIM // 32)
                     w = [g, ro.pending.buffer_address(), 1, HEAD_DIM // 32, v_t0, ro.slot[t].buffer_address()]
                 if self.dyn:
-                    full = state.kv_full
                     seq = full.padded_shape[-2] // 32
                     w += [full.buffer_address(), seq, far_tiles, far_tiles - 4 if kind == "k" else 0]
                     w += [positions.pos.buffer_address()]
@@ -279,7 +283,7 @@ class AttnPrep:
         else:
             out_dtype = state.k_ring.dtype
             assert out_dtype in (ttnn.bfloat16, ttnn.bfloat8_b), out_dtype
-            assert not self.dyn or state.kv_full.dtype in (out_dtype, ttnn.bfloat4_b), state.kv_full.dtype
+            assert not self.dyn or full.dtype in (out_dtype, ttnn.bfloat4_b), full.dtype
             assert not far4 or out_dtype == ttnn.bfloat8_b, "a bfp4 far cache needs bfp8 rings"
             assert not (far4 and chain is not None), "bfp4 far cache: one-token prep only"
             named_w = dict(ndst=1 + int(self.dyn), bfp8=int(out_dtype == ttnn.bfloat8_b), mass=mass, far4=far4)
@@ -412,6 +416,7 @@ class AttnPrep:
         io += [state.k_ring, state.v_ring] + (
             [state.kv_full, self.sink_blk, self.q_grp, self.q_far] if self.dyn else []
         )
+        io += [state.v_full] if getattr(state, "v_full", None) is not None else []
         io += [self.q]
         if rows is not None:
             io += rows[1].tensors(rows[0])

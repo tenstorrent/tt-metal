@@ -86,6 +86,17 @@ FAR_GRP = hasattr(ttnn.SDPAProgramConfig, "exact_exp_half_tile")
 # INKLING_FAR_KV=bfp4 turns it on (fits 512K on one p100a: 10,368 B / token instead of 19,584).
 FAR_DTYPE = ttnn.bfloat4_b if os.environ.get("INKLING_FAR_KV") == "bfp4" else None
 FAR_CHUNK_BFP4 = 256  # bfp4 far cache: 256 beats 128 at 120K (615 vs 720 us per global use)
+# opt-in, changes the output: INKLING_FAR_KV=k8v4 keeps the far keys and values in two caches, k in the cache dtype
+# (bfp8) and v in bfp4: 13,312 B / token instead of 17,408. `kv_full` [1, 8, max_ctx, 128] then holds k only and
+# `v_full` the values; the far call reads both (sdpa `unit_v_tile_col` writes the mass block), q is 128 wide.
+# Decode only, one token per step, bfp8 rings, fused path (as the bfp4 cache above).
+FAR_SPLIT = os.environ.get("INKLING_FAR_KV") == "k8v4"
+assert not FAR_SPLIT or hasattr(
+    ttnn.SDPAProgramConfig, "unit_v_tile_col"
+), "INKLING_FAR_KV=k8v4: build lacks the option"
+FAR_SPLIT_CHUNK = int(os.environ.get("INKLING_FAR_SPLIT_CHUNK", 128))
+if FAR_SPLIT:
+    FA.FAR_Q = (HEAD_DIM // 32, 0)  # the prep writes the far q as [1, 8, 3, 128]
 # local ring (1024 slots): 4 cores per kv head x 256-key chunks, 37.4 -> 31.7 us per call vs the default 13 cores x 128
 # (each of 13 cores got < 1 chunk; the tree reduction dominated)
 LOCAL_CHUNK = 256
@@ -160,8 +171,17 @@ class FastAttentionState(AttentionState):
         # the rings as [8, 1, 1024, 128] (same buffers): sdpa with the kv groups as the batch (multi-token verify)
         self.k_grp, self.v_grp = (ttnn.reshape(r, [N_KV, 1, WINDOW, HEAD_DIM]) for r in (self.k_ring, self.v_ring))
         assert self.k_grp.buffer_address() == self.k_ring.buffer_address()
-        self.kv_full = self.kv_grp = None
-        if is_global:
+        self.kv_full = self.kv_grp = self.v_full = self.v_grp = None
+        if is_global and FAR_SPLIT:  # keys and values apart (kv_full = the keys), values in bfp4
+            self.kv_full, self.v_full = (
+                ttnn.zeros([1, N_KV, max_ctx, HEAD_DIM], dtype=dt, layout=ttnn.TILE_LAYOUT, device=device)
+                for dt in (cache_dtype, ttnn.bfloat4_b)
+            )
+            self.kv_grp, self.v_grp = (
+                ttnn.reshape(t, [N_KV, 1, max_ctx, HEAD_DIM]) for t in (self.kv_full, self.v_full)
+            )
+            assert self.v_grp.buffer_address() == self.v_full.buffer_address()
+        elif is_global:
             self.kv_full = ttnn.zeros(
                 [1, N_KV, max_ctx, KV_MEM], dtype=FAR_DTYPE or cache_dtype, layout=ttnn.TILE_LAYOUT, device=device
             )
@@ -171,7 +191,7 @@ class FastAttentionState(AttentionState):
 
     def tensors(self):
         out = super().tensors()
-        return out if self.kv_full is None else out + [self.kv_full]
+        return out + [t for t in (self.kv_full, self.v_full) if t is not None]
 
     def fill(self, keys, values):
         """Load post-norm keys / values [P, 8, 128] of positions 0..P-1 (tests). Conv histories untouched."""
@@ -183,7 +203,12 @@ class FastAttentionState(AttentionState):
             ring = torch.zeros(N_KV, WINDOW, HEAD_DIM)
             ring[:, slots] = src[lo:].transpose(0, 1).float()
             dst.append((cache, ring))
-        if self.kv_full is not None:
+        if self.v_full is not None:
+            for cache, src in ((self.kv_full, keys), (self.v_full, values)):
+                full = torch.zeros(N_KV, cache.shape[-2], HEAD_DIM)
+                full[:, :p] = src.transpose(0, 1).float()
+                dst.append((cache, full))
+        elif self.kv_full is not None:
             full = torch.zeros(N_KV, self.kv_full.shape[-2], KV_MEM)
             full[:, :p, :HEAD_DIM] = values.transpose(0, 1).float()
             if not FAR_UNIT:
@@ -267,6 +292,8 @@ class Inkling2AttentionFast(Inkling2Attention):
         self.far_chunk = FAR_CHUNK_BFP4 if FAR_DTYPE == ttnn.bfloat4_b else FAR_CHUNK
         self.far_cfg = sdpa_cfg(self.far_chunk, **FAR_OPTS)
         self.far_grp_cfg = sdpa_cfg(self.far_chunk, **FAR_OPTS, exact_exp_half_tile=True) if FAR_GRP else None
+        if FAR_SPLIT:
+            self.far_grp_cfg = sdpa_cfg(FAR_SPLIT_CHUNK, unit_v_tile_col=True, exact_exp_half_tile=True)
         self.kv_full_shard = ttnn.create_sharded_memory_config(
             shape=(32, KV_MEM),
             core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
@@ -436,8 +463,9 @@ class Inkling2AttentionFast(Inkling2Attention):
             if FAR_GRP:
                 far_pos, valid = positions.far_grp
                 far = ttnn.transformer.flash_multi_latent_attention_decode(
-                    self.prep.q_far,  # [1, 8, 3, 288], written by the prep
+                    self.prep.q_far,  # [1, 8, 3, 288], written by the prep (FAR_SPLIT: [1, 8, 3, 128])
                     state.kv_grp,
+                    *([state.v_grp] if FAR_SPLIT else []),
                     head_dim_v=V_WIDTH,
                     is_causal=True,
                     cur_pos_tensor=far_pos,
@@ -447,6 +475,7 @@ class Inkling2AttentionFast(Inkling2Attention):
                     compute_kernel_config=self.hifi4,
                 )
                 return self._out_proj(self.out(far, proj, (o_near, r, valid)), post)
+            assert not FAR_SPLIT, "INKLING_FAR_KV=k8v4 needs the far call with the kv groups as the batch"
             far_pos, valid = positions.far
             far = ttnn.transformer.flash_multi_latent_attention_decode(
                 ttnn.concat([self.q_pad, q], dim=-1),  # [1,1,24,288], zeros meet the v / mass columns
