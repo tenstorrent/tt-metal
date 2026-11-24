@@ -11,8 +11,11 @@ import numpy as np
 import pytest
 import torch
 
+from models.common.multimedia_store.reader import FetchRequest, Missing
+from models.demos.common.prefill.media_stub import stub_media_key
 from models.demos.minimax_m3.multimodal import format as media_format
 from models.demos.minimax_m3.multimodal.media import IMAGE_END, IMAGE_START, M3Image, MiniMaxM3Media
+from models.demos.minimax_m3.multimodal.stub_reader import StubEmbeddingReader
 
 CONFIG = {
     "image_token_index": 200025,
@@ -70,7 +73,8 @@ def test_media_rejects_another_patch_geometry(expect_error, vision):
 
 
 def test_prepare_takes_read_only_and_flipped_images(monkeypatch):
-    """prepare takes a read-only image with no warning, and a flipped or channel-swapped view like its copy."""
+    """prepare takes a read-only image with no warning, and a flipped or channel-swapped view like its copy, also a
+    flipped one-row image, whose negative stride is on a length-1 axis."""
     from_numpy = torch.from_numpy
 
     def from_numpy_warns_every_time(array):  # torch itself warns about a read-only array once per process
@@ -86,7 +90,7 @@ def test_prepare_takes_read_only_and_flipped_images(monkeypatch):
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         assert np.array_equal(media.prepare("image", read_only).pixels, media.prepare("image", image).pixels)
-    for view in (image[::-1], image[:, ::-1], image[..., ::-1]):
+    for view in (image[::-1], image[:, ::-1], image[..., ::-1], rgb(1, 150)[::-1]):
         assert np.array_equal(media.prepare("image", view).pixels, media.prepare("image", view.copy()).pixels)
 
 
@@ -126,6 +130,41 @@ def test_format_rejects_bad_values(expect_error):
         media_format.Header.read(buf)
 
 
+def test_format_reads_any_view_in_bytes(expect_error):
+    stored = bytearray(media_format.stored_nbytes(6, 64))
+    media_format.Header("image").write(memoryview(stored))
+    rows = media_format.embeddings(memoryview(stored), 64)
+    rows[:] = np.arange(rows.size).reshape(rows.shape)
+    views = (
+        stored,
+        memoryview(stored).cast("H"),
+        memoryview(stored).cast("B", [2, len(stored) // 2]),
+        memoryview(np.frombuffer(stored, np.uint16).reshape(2, -1)),
+    )
+    for view in views:
+        assert media_format.Header.read(view) == media_format.Header("image")
+        got = media_format.embeddings(view, 64)
+        assert np.array_equal(got, rows) and np.shares_memory(got, rows)
+    with expect_error(ValueError, "of 14 B"):
+        media_format.Header.read(memoryview(stored).cast("H")[:7])
+    with expect_error(ValueError, f"{len(stored) - 2} B"):
+        media_format.embeddings(memoryview(stored).cast("H")[:-1], 64)
+
+
+def test_format_errors_hold_no_view(expect_error):
+    """A reader may close its shared memory while it still holds the error."""
+    stored = bytearray(media_format.stored_nbytes(1, 64) - 2)
+    stored[0] = len(media_format.KINDS)
+    view = memoryview(stored)
+    with expect_error(ValueError, "unknown media kind") as kind_error:
+        media_format.Header.read(view)
+    with expect_error(ValueError, "whole bf16 rows") as size_error:
+        media_format.embeddings(view, 64)
+    view.release()  # as SharedMemory.close does
+    stored.append(0)  # a bytearray cannot grow while any view of it is alive, such as one an error holds
+    assert kind_error.value.__traceback__ and size_error.value.__traceback__  # both errors were held until here
+
+
 def test_image_pickles_out_of_band():
     item = MiniMaxM3Media(CONFIG).prepare("image", rgb(672, 896))
     buffers = []
@@ -134,6 +173,24 @@ def test_image_pickles_out_of_band():
     back = pickle.loads(stream, buffers=buffers)
     assert (back.grid_h, back.grid_w) == (item.grid_h, item.grid_w)
     assert np.array_equal(back.pixels, item.pixels)
+
+
+def test_stub_reader_serves_stub_keys(expect_error):
+    reader = StubEmbeddingReader(64, max_bytes=3 * media_format.stored_nbytes(6, 64))
+    key = stub_media_key(6, 0)
+    value = reader.fetch(key)
+    assert media_format.embeddings(value, 64).shape == (6, 64)
+    assert bytes(value) == bytes(reader.fetch(key)) != bytes(reader.fetch(stub_media_key(6, 1)))
+    head, rest = reader.fetch_batch([FetchRequest(key, 0, 16), FetchRequest(key, 16)])
+    assert bytes(head) + bytes(rest) == bytes(value)
+    reader.fetch(stub_media_key(6, 2))
+    reader.fetch(stub_media_key(6, 3))
+    assert list(reader._values) == [key, stub_media_key(6, 2), stub_media_key(6, 3)], "least recently used goes first"
+    reader.fetch(stub_media_key(6, 4))
+    assert key not in reader._values and bytes(reader.fetch(key)) == bytes(value)
+    for key in (bytes(32), b"\0"):
+        with expect_error(Missing, key.hex()):
+            reader.fetch(key)
 
 
 def test_load_after_load(expect_error):

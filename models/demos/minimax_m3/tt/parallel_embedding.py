@@ -48,8 +48,10 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.common.prefill.media_splice import splice_media
 from models.demos.minimax_m3.tt.residual import use_sharded_residual
 from models.demos.minimax_m3.tt.weight_cache import CACHE_DUMP_MODE
+from models.demos.minimax_m3.utils.profiler_utils import COARSE, zone
 
 # Cache keys for the SHARDED embed table. Distinct from the old replicated "model.embed_tokens.weight",
 # and — critically — neither key is a prefix of the other: weight_cache_is_complete matches by startswith,
@@ -167,21 +169,26 @@ class TtParallelEmbedding(LightweightModule):
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=tuple(shard_dims)),
         )
 
-    def forward(self, tokens: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, tokens: ttnn.Tensor, media_fn=None) -> ttnn.Tensor:
         """tokens: SP-seq-sharded (replicated across TP) uint32 indices [1, 1, s_local] -> bf16
         [1, 1, s_local, emb_dim] full hidden replicated across the TP cols, or [1, 1, s_local,
-        emb_dim / tp] under a sharded residual — the M3 residual-stream contract either way."""
+        emb_dim / tp] under a sharded residual — the M3 residual-stream contract either way.
+
+        media_fn: called to get the MediaSpliceBuffers whose image rows replace the token embeddings at the image
+        positions (_splice). It is a callable, not a value, so the host fetch runs while the token lookup is
+        already executing on the device."""
         if not self.shard_vocab_on_sp:
             emb = ttnn.embedding(tokens, self.weight, layout=ttnn.TILE_LAYOUT, dtype=self.dtype)
             if len(emb.shape) == 3:
                 emb = ttnn.unsqueeze_to_4D(emb)
+            emb = self._splice(emb, media_fn)
             tp = self.mesh_device.shape[self.tp_axis]
             if tp > 1 and self.gather_emb:
                 emb = self.mesh_config.allgather(emb, self.ccl_manager, axis=self.tp_axis, dim=3)
             return emb
-        return self._forward_2d(tokens)
+        return self._forward_2d(tokens, media_fn)
 
-    def _forward_2d(self, tokens: ttnn.Tensor) -> ttnn.Tensor:
+    def _forward_2d(self, tokens: ttnn.Tensor, media_fn=None) -> ttnn.Tensor:
         sp = self.mesh_device.shape[self.sp_axis]
         tp = self.mesh_device.shape[self.tp_axis]
 
@@ -201,9 +208,15 @@ class TtParallelEmbedding(LightweightModule):
         local = ttnn.minimum(ttnn.maximum(local, 0.0), float(self.vocab_local + 1))  # clamp -> sentinels
         local_idx = ttnn.reshape(ttnn.typecast(local, ttnn.uint32), [1, 1, s_total])
 
-        emb = ttnn.embedding(local_idx, self.weight, layout=ttnn.TILE_LAYOUT, dtype=self.dtype)
+        with zone("token_embed", COARSE):
+            emb = ttnn.embedding(local_idx, self.weight, layout=ttnn.TILE_LAYOUT, dtype=self.dtype)
         if len(emb.shape) == 3:
             emb = ttnn.unsqueeze_to_4D(emb)  # [1,1,s_total,emb_dim/tp]
+
+        # 2b) Image rows, if any. Each is assigned to ONE SP row (plan_media_splice), so this row
+        #     supplies it and every other row contributes zero at that position — the reduce-scatter
+        #     below then sums it into place, exactly, with no new collective.
+        emb = self._splice(emb, media_fn)
 
         # 3) SP reduce-scatter on the seq dim: sum across vocab shards (each token resolved by exactly one
         #    SP row) AND scatter seq back to per-row shards -> [1,1,s_local,emb_dim/tp].
@@ -215,3 +228,12 @@ class TtParallelEmbedding(LightweightModule):
         if tp > 1 and self.gather_emb:
             emb = self.mesh_config.allgather(emb, self.ccl_manager, axis=self.tp_axis, dim=3)
         return emb
+
+    def _splice(self, emb: ttnn.Tensor, media_fn) -> ttnn.Tensor:
+        """emb with media_fn's image rows (splice_media). Called after the token lookup is enqueued, so the host's
+        fetch and upload overlap it."""
+        media = media_fn() if media_fn is not None else None
+        if media is None:
+            return emb
+        with zone("media_splice", COARSE):
+            return splice_media(emb, media)
