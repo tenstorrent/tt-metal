@@ -177,6 +177,21 @@ inline void emit_segments(const SegmentPlan plan, const std::uint32_t once, cons
     }
 }
 
+// plan_segments, then emit_segments when it fits. SPLIT (the consumer only) also replays a period of up to 2 x REPLAY_HANDSHAKES - burst whole.
+template <bool PRODUCE, bool SPLIT = false>
+__attribute__((always_inline)) inline bool segments(
+    const std::uint32_t once, const std::uint32_t burst, const std::uint32_t each, const std::uint32_t run, const std::uint32_t periods)
+{
+    static_assert(!SPLIT || !PRODUCE, "split replays the run's head before the burst, which only the consumer takes last");
+    const SegmentPlan plan = plan_segments(SPLIT, burst, run, periods);
+    if (!plan.fits)
+    {
+        return false;
+    }
+    emit_segments<PRODUCE>(plan, once, burst, each, run);
+    return true;
+}
+
 // count handshakes of one kind, 128 per MOP
 template <bool PRODUCE>
 inline void run(const std::uint32_t kind, std::uint32_t count)
@@ -230,36 +245,40 @@ template <bool PRODUCE>
 __attribute__((always_inline)) inline void matmul(
     const std::uint32_t loop_factor, const std::uint32_t rt_dim, const std::uint32_t kt_dim, const std::uint32_t ct_dim, const std::uint32_t num_blocks)
 {
-    const MatmulPlan plan = plan_matmul(PRODUCE, loop_factor, rt_dim, kt_dim, ct_dim, num_blocks);
-    if (plan.route == Route::NONE)
+    if (loop_factor == 0 || rt_dim == 0 || kt_dim == 0 || ct_dim == 0 || num_blocks == 0)
     {
         return; // like the loop mocks: no work
     }
     LLK_ASSERT(
         static_cast<std::uint64_t>(loop_factor) * num_blocks * kt_dim * ((std::min(ct_dim, rt_dim) + 1) / 2) <= 0xFFFFFFFFu,
         "the handshake counts fit 32 bits");
-    const std::uint32_t reuse  = ct_dim >= rt_dim ? SRC_B : SRC_A;
-    const std::uint32_t reload = ct_dim >= rt_dim ? SRC_A : SRC_B;
-    if (plan.route == Route::SEGMENTS)
+    const std::uint32_t reuse       = ct_dim >= rt_dim ? SRC_B : SRC_A;
+    const std::uint32_t reload      = ct_dim >= rt_dim ? SRC_A : SRC_B;
+    const std::uint32_t reuse_loop  = std::min(ct_dim, rt_dim);
+    const std::uint32_t reload_loop = std::max(ct_dim, rt_dim);
+    const std::uint32_t steps       = loop_factor * num_blocks * kt_dim;
+    const MatmulStep step           = matmul_step(PRODUCE, reuse_loop, reload_loop);
+    if (matmul_can_segment(reuse_loop) &&
+        segments<PRODUCE, !PRODUCE>(reuse, std::min(REUSE_BURST, reuse_loop), reload, reload_loop, steps * ((reuse_loop + 1) / 2)))
     {
-        return emit_segments<PRODUCE>(plan.seg, reuse, plan.seg_burst, reload, plan.reload_loop);
+        return;
     }
-    if (plan.route == Route::STREAM)
+    if (step.period <= ZMASK_BITS)
     {
-        return stream<PRODUCE>(reload, reuse, plan.pattern, plan.period, plan.steps);
+        return stream<PRODUCE>(reload, reuse, step.pattern, step.period, steps);
     }
     // a kt step longer than the zmask: one MOP per burst and one per reload run
     program<PRODUCE>(reload, reuse, 0);
-    for (std::uint32_t step = 0; step < plan.steps; step++)
+    for (std::uint32_t step = 0; step < steps; step++)
     {
-        for (std::uint32_t reuse_iter = 0; reuse_iter < plan.reuse_loop; reuse_iter += 2)
+        for (std::uint32_t reuse_iter = 0; reuse_iter < reuse_loop; reuse_iter += 2)
         {
-            const std::uint32_t burst = std::min(REUSE_BURST, plan.reuse_loop - reuse_iter);
+            const std::uint32_t burst = std::min(REUSE_BURST, reuse_loop - reuse_iter);
             if constexpr (PRODUCE)
             {
                 TT_MOP(0 /*mop_type*/, burst - 1 /*loop_count*/, (1u << burst) - 1 /*zmask_lo16*/);
             }
-            for (std::uint32_t left = plan.reload_loop; left != 0;)
+            for (std::uint32_t left = reload_loop; left != 0;)
             {
                 const std::uint32_t count = std::min(left, MOP_LOOP_MAX + 1);
                 TT_MOP(0 /*mop_type*/, count - 1 /*loop_count*/, 0 /*zmask_lo16*/);
@@ -288,14 +307,13 @@ inline void ab_then_b(const std::uint32_t paired, const std::uint32_t b_only, co
 template <bool PRODUCE>
 __attribute__((always_inline)) inline void srcb_reuse(const std::uint32_t a_count, std::uint32_t periods)
 {
-    const SrcbReusePlan plan = plan_srcb_reuse(PRODUCE, a_count, periods);
-    if (plan.route == Route::SEGMENTS)
+    if (segments<PRODUCE>(SRC_B, 1, SRC_A, a_count, periods))
     {
-        return emit_segments<PRODUCE>(plan.seg, SRC_B, 1, SRC_A, a_count);
+        return;
     }
-    if (plan.route == Route::STREAM)
+    if (a_count < ZMASK_BITS)
     {
-        return stream<PRODUCE>(SRC_A, SRC_B, plan.pattern, a_count + 1, periods);
+        return stream<PRODUCE>(SRC_A, SRC_B, srcb_reuse_pattern(PRODUCE, a_count), a_count + 1, periods);
     }
     program<PRODUCE>(SRC_A, SRC_B, 0);
     for (; periods != 0; periods--)
@@ -322,7 +340,7 @@ __attribute__((always_inline)) inline void srcb_reuse(const std::uint32_t a_coun
 // eltwise_binary_test.cpp's source mock as one stream: COL reuses a SrcB per face row, SCALAR per tile, NONE and ROW hand
 // over both sources per face. Wormhole isolate mocks only.
 template <bool PRODUCE, ckernel::BroadcastType BTYPE>
-inline void _perf_mock_binary_(const std::uint32_t tiles, const std::uint32_t num_faces_r, const std::uint32_t num_faces_c)
+__attribute__((always_inline)) inline void _perf_mock_binary_(const std::uint32_t tiles, const std::uint32_t num_faces_r, const std::uint32_t num_faces_c)
 {
 #if defined(ARCH_WORMHOLE)
     if constexpr (BTYPE == ckernel::BroadcastType::COL)
@@ -343,7 +361,7 @@ inline void _perf_mock_binary_(const std::uint32_t tiles, const std::uint32_t nu
 // periods x (one SrcB handshake and a_count SrcA ones), the producer giving B first and the consumer taking it back last.
 // Wormhole isolate mocks only.
 template <bool PRODUCE>
-inline void _perf_mock_srcb_reuse_(const std::uint32_t a_count, const std::uint32_t periods)
+__attribute__((always_inline)) inline void _perf_mock_srcb_reuse_(const std::uint32_t a_count, const std::uint32_t periods)
 {
 #if defined(ARCH_WORMHOLE)
     llk_perf_mock::srcb_reuse<PRODUCE>(a_count, periods);
@@ -505,7 +523,8 @@ inline void _perf_math_stream_ab_then_b(const std::uint32_t paired, const std::u
 }
 
 template <PerfRunType RUN_TYPE>
-inline void _perf_unpack_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt_dim, std::uint32_t kt_dim, std::uint32_t ct_dim, std::uint32_t num_blocks = 1)
+__attribute__((always_inline)) inline void _perf_unpack_matmul_mock(
+    std::uint32_t loop_factor, std::uint32_t rt_dim, std::uint32_t kt_dim, std::uint32_t ct_dim, std::uint32_t num_blocks = 1)
 {
 #if defined(ARCH_WORMHOLE)
     if constexpr (perf_mock_mop<RUN_TYPE>())
@@ -582,7 +601,8 @@ inline void _perf_unpack_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt
 }
 
 template <PerfRunType RUN_TYPE>
-inline void _perf_math_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt_dim, std::uint32_t kt_dim, std::uint32_t ct_dim, std::uint32_t num_blocks = 1)
+__attribute__((always_inline)) inline void _perf_math_matmul_mock(
+    std::uint32_t loop_factor, std::uint32_t rt_dim, std::uint32_t kt_dim, std::uint32_t ct_dim, std::uint32_t num_blocks = 1)
 {
 #if defined(ARCH_WORMHOLE)
     if constexpr (perf_mock_mop<RUN_TYPE>())

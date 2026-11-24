@@ -8,7 +8,7 @@
 #include <cstdint>
 
 // The Wormhole isolate mocks' MOP stream planning, free of hardware headers so a host test can tabulate it (perf.h emits it).
-// The planners are always_inline so a call with constant arguments folds into the emitted stream, as the old inline code did.
+// The planners are always_inline so a call with constant arguments folds into the emitted stream.
 namespace llk_perf_mock
 {
 constexpr std::uint32_t REPLAY_HANDSHAKES = 32 / 2;        // the replay buffer's 32 instructions, a STALLWAIT and a flip each
@@ -39,9 +39,10 @@ constexpr __attribute__((always_inline)) std::uint32_t mop_loops(const std::uint
 // buffer's handshakes, inner and outer the loop counts of a MOP and mops the MOPs pushed.
 struct SegmentPlan
 {
-    bool fits;
-    bool whole;
-    bool split;
+    // words, not bool: packed bools make GCC spill the plan to a stack word and reload it, even in a constant call
+    std::uint32_t fits;
+    std::uint32_t whole;
+    std::uint32_t split;
     std::uint32_t buffered;
     std::uint32_t inner;
     std::uint32_t outer;
@@ -96,6 +97,34 @@ struct MatmulPlan
     SegmentPlan seg;
 };
 
+// One kt step of the matmul scheme: its handshakes (period) and the reuse ones among them (bit j of pattern)
+struct MatmulStep
+{
+    std::uint32_t period;
+    std::uint32_t pattern;
+};
+
+constexpr __attribute__((always_inline)) MatmulStep matmul_step(const bool produce, const std::uint32_t reuse_loop, const std::uint32_t reload_loop)
+{
+    MatmulStep step {0, 0};
+    for (std::uint32_t reuse_iter = 0; reuse_iter < reuse_loop; reuse_iter += 2)
+    {
+        const std::uint32_t burst = std::min(REUSE_BURST, reuse_loop - reuse_iter);
+        if (step.period + burst + reload_loop <= ZMASK_BITS)
+        {
+            step.pattern |= ((1u << burst) - 1) << (produce ? step.period : step.period + reload_loop);
+        }
+        step.period += burst + reload_loop;
+    }
+    return step;
+}
+
+// An odd reuse count above 1 ends in a shorter burst than the replayed ones, so only 1 or an even count can use the replay buffer
+constexpr __attribute__((always_inline)) bool matmul_can_segment(const std::uint32_t reuse_loop)
+{
+    return reuse_loop == 1 || reuse_loop % 2 == 0;
+}
+
 constexpr __attribute__((always_inline)) MatmulPlan plan_matmul(
     const bool produce,
     const std::uint32_t loop_factor,
@@ -109,21 +138,15 @@ constexpr __attribute__((always_inline)) MatmulPlan plan_matmul(
     {
         return plan; // no work
     }
-    plan.reuse_loop  = std::min(ct_dim, rt_dim);
-    plan.reload_loop = std::max(ct_dim, rt_dim);
-    plan.steps       = loop_factor * num_blocks * kt_dim;
-    for (std::uint32_t reuse_iter = 0; reuse_iter < plan.reuse_loop; reuse_iter += 2)
-    {
-        const std::uint32_t burst = std::min(REUSE_BURST, plan.reuse_loop - reuse_iter);
-        if (plan.period + burst + plan.reload_loop <= ZMASK_BITS)
-        {
-            plan.pattern |= ((1u << burst) - 1) << (produce ? plan.period : plan.period + plan.reload_loop);
-        }
-        plan.period += burst + plan.reload_loop;
-    }
-    plan.seg_burst   = std::min(REUSE_BURST, plan.reuse_loop);
-    plan.seg_periods = plan.steps * ((plan.reuse_loop + 1) / 2);
-    if (plan.reuse_loop == 1 || plan.reuse_loop % 2 == 0) // an odd reuse count above 1 ends in a shorter burst than the replayed ones
+    plan.reuse_loop       = std::min(ct_dim, rt_dim);
+    plan.reload_loop      = std::max(ct_dim, rt_dim);
+    plan.steps            = loop_factor * num_blocks * kt_dim;
+    const MatmulStep step = matmul_step(produce, plan.reuse_loop, plan.reload_loop);
+    plan.period           = step.period;
+    plan.pattern          = step.pattern;
+    plan.seg_burst        = std::min(REUSE_BURST, plan.reuse_loop);
+    plan.seg_periods      = plan.steps * ((plan.reuse_loop + 1) / 2);
+    if (matmul_can_segment(plan.reuse_loop))
     {
         plan.seg = plan_segments(!produce, plan.seg_burst, plan.reload_loop, plan.seg_periods);
     }
@@ -147,6 +170,12 @@ struct SrcbReusePlan
     SegmentPlan seg;
 };
 
+// The stream's pattern for a_count < ZMASK_BITS: the SrcB handshake is first for the producer and last for the consumer
+constexpr __attribute__((always_inline)) std::uint32_t srcb_reuse_pattern(const bool produce, const std::uint32_t a_count)
+{
+    return produce ? 1u : 1u << a_count;
+}
+
 constexpr __attribute__((always_inline)) SrcbReusePlan plan_srcb_reuse(const bool produce, const std::uint32_t a_count, const std::uint32_t periods)
 {
     const SegmentPlan seg = plan_segments(false, 1, a_count, periods);
@@ -156,7 +185,7 @@ constexpr __attribute__((always_inline)) SrcbReusePlan plan_srcb_reuse(const boo
     }
     if (a_count < ZMASK_BITS)
     {
-        return {Route::STREAM, produce ? 1u : 1u << a_count, seg};
+        return {Route::STREAM, srcb_reuse_pattern(produce, a_count), seg};
     }
     return {Route::PER_MOP, 0, seg};
 }
