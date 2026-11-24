@@ -677,6 +677,9 @@ def _lookup_nearest_blocking(M: int, K: int, N: int, grid_x: int, grid_y: int, t
 # step, were chosen alone by their worst M. The step loses at most 7.0% (mean 4.9%) on a QuietBox 2
 # over image M up to 10,240, and at most 15.7% (mean 8.7%) on a T3000 over image M up to 5,120, the
 # same as with the op's M > N flip within the noise.
+# The VAE attention's qkv 512 -> 1536 and out 512 -> 512 keep the blocks get_matmul_config picks from
+# M = 256 up on both grids and pin the M > N layout; its rows per chip cross 512 and 1536 within
+# FLUX.2's size range on a BH Galaxy, and stay above them on a T3000 and a QuietBox 2.
 # Values are (M_block, K_block, N_block, subblock_h, subblock_w, transpose_core_grid); True is the
 # M > N layout. A BH Galaxy's matmul grid is clamped to 11x10 and would match the Blackhole entries,
 # which were measured on a QuietBox 2 only.
@@ -692,6 +695,8 @@ _ROW_INDEPENDENT_CONFIGS: dict[str, tuple[tuple[int, int], dict[tuple[int, int],
             (6144, 3072): (10, 4, 12, 1, 3, False),
             (128, 1536): (2, 2, 6, 2, 2, False),
             (3072, 128): (4, 8, 1, 4, 1, True),
+            (512, 1536): (8, 8, 8, 2, 2, True),
+            (512, 512): (8, 8, 8, 2, 2, True),
         },
     ),
     "wormhole": (
@@ -706,6 +711,8 @@ _ROW_INDEPENDENT_CONFIGS: dict[str, tuple[tuple[int, int], dict[tuple[int, int],
             # (64 KB L1_SMALL and the CCL semaphores).
             (128, 1536): (8, 4, 6, 2, 2, False),
             (3072, 128): (12, 8, 4, 1, 4, True),
+            (512, 1536): (8, 8, 8, 2, 2, True),
+            (512, 512): (8, 8, 8, 2, 2, True),
         },
     ),
 }

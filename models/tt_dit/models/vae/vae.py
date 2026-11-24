@@ -87,10 +87,13 @@ def _all_gather_tokens(ctx: VaeContext, x: ttnn.Tensor) -> ttnn.Tensor:
     if ctx.h_factor <= 1 and ctx.w_factor <= 1:
         return x
     assert ctx.ccl_manager is not None
+    # T follows the image size, and CCLManager's hyperparameters, whose worker count is compiled into
+    # the gather's kernels, change at T = 512, within FLUX.2's size range on a BH Galaxy.
+    gather = dict(dim=2, use_hyperparams=True, size_independent_hyperparams=True)
     if ctx.h_factor > 1:
-        x = ctx.ccl_manager.all_gather(x, dim=2, mesh_axis=ctx.h_mesh_axis, use_hyperparams=True)
+        x = ctx.ccl_manager.all_gather(x, mesh_axis=ctx.h_mesh_axis, **gather)
     if ctx.w_factor > 1:
-        x = ctx.ccl_manager.all_gather(x, dim=2, mesh_axis=ctx.w_mesh_axis, use_hyperparams=True)
+        x = ctx.ccl_manager.all_gather(x, mesh_axis=ctx.w_mesh_axis, **gather)
     return x
 
 
@@ -514,7 +517,14 @@ class VaeAttention(Module):
         if ctx.tp_axis is not None:
             assert ctx.ccl_manager is not None
 
-        linear_args = dict(mesh_axis=ctx.tp_axis, mesh_device=ctx.device, ccl_manager=ctx.ccl_manager)
+        # The token count follows the image size, so the projections take one matmul config for
+        # every row count where _ROW_INDEPENDENT_CONFIGS has their shape.
+        linear_args = dict(
+            mesh_axis=ctx.tp_axis,
+            mesh_device=ctx.device,
+            ccl_manager=ctx.ccl_manager,
+            row_independent_matmul_config=True,
+        )
 
         # The norm runs on the local spatial shard before the H+W all-gather, so a group norm takes
         # the fused distributed path like the other VAE norms.

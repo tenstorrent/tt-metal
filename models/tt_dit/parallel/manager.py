@@ -11,6 +11,10 @@ import ttnn
 from ..utils.tensor import local_device_to_torch, shape_tuple
 
 
+# get_ag_hyperparams gives inputs with at least this many rows (shape[2]) more workers per link.
+_AG_LARGE_ROWS = 513
+
+
 class CCLManager:
     """
     Manages parallelization of DiT model.
@@ -914,8 +918,13 @@ class CCLManager:
         use_hyperparams: bool,
         use_persistent_buffer: bool = False,
         num_workers_per_link: int | None = None,
+        size_independent_hyperparams: bool = False,
     ) -> ttnn.Tensor:
-        """`num_workers_per_link` pins the op's worker count (else it is picked from the output byte count)."""
+        """`num_workers_per_link` pins the op's worker count (else it is picked from the output byte count).
+
+        `size_independent_hyperparams` takes the hyperparameters of the larger inputs at every size
+        (see `get_ag_hyperparams`), for a gather whose input follows the image size: the worker count
+        is compiled into the kernels and the hyperparameters are in the program hash."""
         if mesh_axis is None or self._mesh_axis_sizes[mesh_axis] == 1:
             return tensor
 
@@ -930,7 +939,10 @@ class CCLManager:
             tensor = ttnn.reshape(tensor, list(shape))
             dim += 4 - rank
 
-        params = self.get_ag_hyperparams(shape) if use_hyperparams else {}
+        if size_independent_hyperparams:
+            params = self.get_ag_hyperparams((1, 1, _AG_LARGE_ROWS, 1))
+        else:
+            params = self.get_ag_hyperparams(shape) if use_hyperparams else {}
         if num_workers_per_link is not None:
             params["num_workers_per_link"] = num_workers_per_link
 
@@ -1015,7 +1027,7 @@ class CCLManager:
         return tensor
 
     def get_ag_hyperparams(self, shape):
-        if shape[2] > 512:
+        if shape[2] >= _AG_LARGE_ROWS:
             return {
                 "chunks_per_sync": 16,
                 "num_workers_per_link": 3,
