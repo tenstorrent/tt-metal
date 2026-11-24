@@ -402,7 +402,6 @@ foreach(ARCH IN LISTS ARCHS)
                 ${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt
                 ${PROJECT_SOURCE_DIR}/${HWSRC}
                 ${GPP_CMD}
-                ${CMAKE_CURRENT_SOURCE_DIR}/../sfpi-version
             COMMENT "Building ${ARCH} hw lib ${HWOBJ}"
             VERBATIM
         )
@@ -480,7 +479,6 @@ foreach(ARCH_CPU IN LISTS TLS_ARCH_CPUS)
                     ${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt
                     ${PROJECT_SOURCE_DIR}/${HWSRC}
                     ${GPP_CMD}
-                    ${CMAKE_CURRENT_SOURCE_DIR}/../sfpi-version
                 COMMENT "Building ${ARCH}:${CPU} hw lib ${HW_OBJ_FILE} from ${HWSRC}"
                 VERBATIM
             )
