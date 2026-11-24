@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import math
 import os
+from pathlib import Path
 
 import torch
 from ttnn.tools.trace_allocation_tracker import acknowledge_corruptible
@@ -64,6 +65,16 @@ def bank(device, w, cfg, out_dtype, cores_per_bank=6):
                       cores_per_bank=c, compute_kernel_config=cfg, out_cols=N, out_dtype=out_dtype)  # fmt: skip
 
 
+def mtp_root():
+    """The drafter weight cache (convert/mtp.py). It does not depend on the run mode: $INKLING_MTP_CACHE, else the
+    first of <decode cache>/mtp, <prefill cache>/mtp and the shared <cache dir>/mtp that holds a manifest."""
+    env = os.environ.get("INKLING_MTP_CACHE")
+    if env:
+        return Path(env)
+    cands = [r / "mtp" for r in (wcache.DEFAULT_ROOT, wcache.DEFAULT_TILE_ROOT, wcache.CACHE_DIR)]
+    return next((c for c in cands if (c / "manifest.json").is_file()), cands[-1])
+
+
 class DSparkDrafter:
     def __init__(self, model, root=None, max_ctx=None, k=BLOCK - 1, fast=True, unembed_dtype=None,ckpt="/work/models/Inkling-2-Mini"):  # fmt: skip
         """model: built Inkling2Model (shares embed, embed_norm, unembed, DecodePositions.pos).
@@ -74,14 +85,7 @@ class DSparkDrafter:
         self.model = model
         self.k = k
         self.max_ctx = max_ctx or model.max_ctx
-        # the drafter weights (convert/mtp.py) do not depend on the run mode: $INKLING_MTP_CACHE, else the mtp
-        # directory of the decode cache or of its prefill twin (the first with a manifest)
-        cands = [r / "mtp" for r in (wcache.DEFAULT_ROOT, wcache.DEFAULT_TILE_ROOT)]
-        root = (
-            root
-            or os.environ.get("INKLING_MTP_CACHE")
-            or next((c for c in cands if (c / "manifest.json").is_file()), cands[0])
-        )
+        root = root or mtp_root()
         dram = ttnn.DRAM_MEMORY_CONFIG
         host = wcache.load_global(root, None)
         self.ckc = ttnn.init_device_compute_kernel_config(

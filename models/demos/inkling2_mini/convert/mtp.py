@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Inkling-2-Mini DSpark drafter (`mtp.safetensors`) -> tt weight cache, §4 style, under ``<cache>/mtp/``.
+"""Inkling-2-Mini DSpark drafter (`mtp.safetensors`) -> tt weight cache, §4 style, under ``<cache dir>/mtp/``
+(one copy for every run mode; the drafter weights do not depend on the expert weights).
 
     python -m models.demos.inkling2_mini.convert.mtp [--ckpt DIR] [--out DIR]
 
@@ -23,6 +24,7 @@ import torch.nn.functional as F
 from safetensors import safe_open
 
 import ttnn
+from models.demos.inkling2_mini import modes
 from models.demos.inkling2_mini.convert.convert import DTYPES, LAYOUTS, VOCAB_REAL, VOCAB_TT, roundtrip_pcc, rows32
 
 HIDDEN, RANK, N_LAYERS = 2304, 256, 3
@@ -81,9 +83,8 @@ def tensors(ckpt: Path):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--ckpt", type=Path, default=Path(os.environ.get("INKLING_CKPT", "/work/models/Inkling-2-Mini")))
-    ap.add_argument(
-        "--out", type=Path, default=Path(os.environ.get("INKLING_CACHE", "/work/inkling-bringup/cache/v1")) / "mtp"
-    )
+    # one copy for every run mode (tt/mtp.mtp_root finds it there; $INKLING_MTP_CACHE points elsewhere)
+    ap.add_argument("--out", type=Path, default=Path(os.environ.get("INKLING_MTP_CACHE") or modes.CACHE_DIR / "mtp"))
     args = ap.parse_args(argv)
     entries = []
     for name, t, dtype, layout in tensors(args.ckpt):

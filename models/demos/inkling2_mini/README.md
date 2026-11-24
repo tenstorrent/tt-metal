@@ -58,7 +58,8 @@ defaults in both modes, with the loop gate messages stored bf16 (`INKLING_PF_GAT
 `tt/spec_generator.py` (`SpecGenerator.generate_rows`, `generate_rows_from`): a small drafter proposes 2 tokens, one
 verify pass checks them with the full model, and the accepted ones are kept. The tokens are the same as plain greedy
 decode. Nothing turns it on: the demo and the perf harness run the plain step. It needs the drafter
-weights (`python -m models.demos.inkling2_mini.convert.mtp`, or `$INKLING_MTP_CACHE`).
+weights: `python -m models.demos.inkling2_mini.convert.mtp` writes them once to `<cache dir>/mtp`, where both run
+modes find them (`$INKLING_MTP_CACHE` points elsewhere).
 
 Measured on one card, ms/token, 128 to 192 greedy tokens, plain = the default plain step in the same harness:
 
