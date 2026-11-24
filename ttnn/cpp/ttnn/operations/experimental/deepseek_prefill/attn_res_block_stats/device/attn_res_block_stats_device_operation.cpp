@@ -24,8 +24,7 @@ uint32_t num_candidates(const AttnResBlockStatsInputs& tensor_args) {
     return count;
 }
 
-// The semaphore is hashed by its cores, so a cache hit can carry one the program was not built
-// against. Peers count into it at the gather cores' address; built without one of them, or in
+// Peers count into the semaphore at the gather cores' address; built without one of them, or in
 // DRAM, nothing arrives where the core waits and the op hangs.
 void validate_semaphore(const AttnResBlockStatsParams& args, const AttnResBlockStatsInputs& tensor_args) {
     TT_FATAL(
@@ -141,6 +140,15 @@ Tensor AttnResBlockStatsDeviceOperation::create_output_tensors(
         return *tensor_args.gathered;
     }
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.queries.device());
+}
+
+// The semaphore's attributes hash only its cores, so its address is hashed too: the program bakes it into the
+// gather kernel's common args. A walk makes its semaphore once, so its calls still share one cached program.
+ttsl::hash::hash_t AttnResBlockStatsDeviceOperation::compute_program_hash(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const uint64_t semaphore_address = args.semaphore.has_value() ? args.semaphore->address() : 0;
+    return tt::tt_metal::operation::hash_operation<AttnResBlockStatsDeviceOperation>(
+        args, tensor_args, semaphore_address);
 }
 
 }  // namespace ttnn::experimental::prim

@@ -11,7 +11,7 @@
 #include <unordered_set>
 
 #include <tt_stl/assert.hpp>
-#include "core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include "core_descriptor.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "impl/context/metal_env_impl.hpp"

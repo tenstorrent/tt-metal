@@ -13,8 +13,8 @@
 
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -25,7 +25,8 @@ ttnn::device_operation::ProgramArtifacts ConcatProgramFactory::create_program_ar
     const ConcatParams& operation_attributes, const ConcatInputs& tensor_args, Tensor& tensor_return_value) {
     using namespace tt::constants;
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
+    using tt::tt_metal::experimental::AdvancedKernelRunArgs;
+    using tt::tt_metal::experimental::KernelAdvancedOptions;
 
     const uint32_t dim = operation_attributes.dim;
     const auto& sub_core_grids = operation_attributes.sub_core_grids;
@@ -62,9 +63,11 @@ ttnn::device_operation::ProgramArtifacts ConcatProgramFactory::create_program_ar
 
     uint32_t num_output_pages;
     uint32_t single_page_size;
-    const uint32_t common_align_len = std::max(
-        inputs[0].get().mesh_buffer().get_reference_buffer()->alignment(),
-        output.mesh_buffer().get_reference_buffer()->alignment());
+    // Max over every input's alignment (not just inputs[0]) so mixed L1/DRAM inputs don't overflow the DFB page.
+    uint32_t common_align_len = output.mesh_buffer().get_reference_buffer()->alignment();
+    for (const auto& in : inputs) {
+        common_align_len = std::max(common_align_len, in.get().mesh_buffer().get_reference_buffer()->alignment());
+    }
     if (rm_layout) {
         num_output_pages = output.physical_volume() / output.padded_shape()[-1];
         single_page_size = tt::align(output.element_size() * output.padded_shape()[-1], common_align_len);

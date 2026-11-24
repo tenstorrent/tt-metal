@@ -5,26 +5,16 @@
 #include "sfpi.h"
 
 namespace ckernel::sfpu::ttpoly::elu {
-using ::sfpi::as;
 using ::sfpi::DataLayout;
 using ::sfpi::vFloat;
-using ::sfpi::vInt;
-// The one-sided clamp compares in order on WH and takes the SFPI maximum on BH.
 template <bool Ordered, uint32_t BoundBits>
 __attribute__((always_inline)) inline vFloat dense_lower_clamp(vFloat input) {
     constexpr float bound = __builtin_bit_cast(float, BoundBits);
-    if constexpr (Ordered) {
-        v_if(input < bound) { input = bound; }
-        v_endif;
-        return input;
-    } else {
-        return sfpi::max(input, bound);
-    }
+    return sfpi::max(input, bound);
 }
 
 template <typename Config>
 struct dense_polynomial_transport {
-    // A constant a Config does not park (kParked false: none) loads as an immediate.
     template <uint32_t IDX>
     __attribute__((always_inline)) static inline vFloat lut_fetch() {
         return vFloat(Config::lut(IDX));
@@ -40,6 +30,7 @@ struct dense_polynomial_transport {
 
     // A segment from the smallest positive subnormal owns x > 0. A float compare reads a subnormal
     // x as 0, but TT-NN delivers subnormals to DEST unflushed, so the raw bits decide: -0 reads negative.
+    // Config::kPositiveSegment is false when no segment starts there.
     template <uint32_t SEG>
     static constexpr bool positive_segment() {
         return __builtin_bit_cast(uint32_t, Config::lut(SEG)) == 1u;
@@ -57,14 +48,7 @@ struct dense_polynomial_transport {
         if constexpr (SEG < Config::kSegments) {
             vFloat tmp1, tmp2;
             eval_seg_dual<SEG>(x1, x2, tmp1, tmp2);
-            if constexpr (positive_segment<SEG>()) {
-                vInt bits1 = as<vInt>(x1);
-                vInt bits2 = as<vInt>(x2);
-                v_if(bits1 >= 0 && bits1 != 0) { r1 = tmp1; }
-                v_endif;
-                v_if(bits2 >= 0 && bits2 != 0) { r2 = tmp2; }
-                v_endif;
-            } else {
+            {
                 vFloat b = lut_fetch<SEG>();
                 v_if(x1 >= b) { r1 = tmp1; }
                 v_endif;

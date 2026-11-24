@@ -1,0 +1,38 @@
+{
+  "media_proc_cfg": {
+    "in_patch_limit": 65536,
+    "patch_size": 14,
+    "image_mean": [
+      0.5,
+      0.5,
+      0.5
+    ],
+    "image_std": [
+      0.5,
+      0.5,
+      0.5
+    ],
+    "merge_kernel_size": 2,
+    "fixed_output_tokens": null,
+    "patch_limit_on_one_side": 512,
+    "in_patch_limit_each_frame": 16384,
+    "in_patch_limit_video": 655360,
+    "sample_fps": 8.0,
+    "max_num_frames_each_video": null,
+    "temporal_merge_kernel_size": 4,
+    "timestamp_mode": "hh:mm:ss.fff",
+    "transparent_bg_config": {
+      "pattern": "chessboard",
+      "chessboard_square_size": 8,
+      "chessboard_square_on_top_left": true,
+      "chessboard_white_value": 255,
+      "chessboard_gray_value": 180
+    },
+    "transparent_bg_fill_stage": "after_resize",
+    "config_type": "media_proc.processors.moonvit.MoonViTMediaProcessorConfig"
+  },
+  "auto_map": {
+    "AutoProcessor": "kimi_k3_processor.KimiK3Processor",
+    "AutoImageProcessor": "kimi_k3_vision_processing.KimiK3VisionProcessor"
+  }
+}

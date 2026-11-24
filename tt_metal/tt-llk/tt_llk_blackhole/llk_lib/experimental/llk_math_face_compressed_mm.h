@@ -48,19 +48,19 @@ constexpr std::uint32_t _llk_math_face_compressed_mm_replay_slot_ = ckernel::REP
 //   one_seq (ct_dim == 1) needs the I and C endings, nr for the MOP operands, and the six three-face
 //   midRevB fragments -- {n,N}{r,R}{n,N} less nrn and nrN, which the MOP issues directly. They pack as
 //   Nrn at 2, nRn at 4, nRN at 6, NrN at 8, NRN at 10, NRn at 12, and nr at 14.
-static constexpr auto _llk_math_face_compressed_mm_multi_seq_ =
+constexpr auto _llk_math_face_compressed_mm_multi_seq_ =
     ckernel::code_seq::make_sequence<_llk_math_face_compressed_mm_replay_base_, _llk_math_face_compressed_mm_replay_slot_>("niNinINIncNcnCNC");
-static constexpr auto _llk_math_face_compressed_mm_one_seq_ =
+constexpr auto _llk_math_face_compressed_mm_one_seq_ =
     ckernel::code_seq::make_sequence<_llk_math_face_compressed_mm_replay_base_, _llk_math_face_compressed_mm_replay_slot_>("ICNrnRnRNrNRNRnr");
 
-static constexpr auto _llk_math_face_compressed_mm_even_l1_table_ = ckernel::code_seq::make_table<_llk_math_face_compressed_mm_multi_seq_, 64>(
+constexpr auto _llk_math_face_compressed_mm_even_l1_table_ = ckernel::code_seq::make_table<_llk_math_face_compressed_mm_multi_seq_, 64>(
     [](const std::uint32_t m) -> std::uint32_t
     {
         const std::uint32_t faces123 = (m >> 2) & 0b111;
         return TT_OP_MOP(p_mop::MASK_LOOP, 2, faces123); // nnn case encoded in the mop
     });
 
-static constexpr auto _llk_math_face_compressed_mm_even_l2_table_ = ckernel::code_seq::make_table<_llk_math_face_compressed_mm_multi_seq_, 64>(
+constexpr auto _llk_math_face_compressed_mm_even_l2_table_ = ckernel::code_seq::make_table<_llk_math_face_compressed_mm_multi_seq_, 64>(
     [](const std::uint32_t m, auto /* find */, auto case_encode) -> std::uint32_t
     {
         const std::uint32_t hdr   = m & 0b11;
@@ -78,7 +78,7 @@ static constexpr auto _llk_math_face_compressed_mm_even_l2_table_ = ckernel::cod
         }
     });
 
-static constexpr auto _llk_math_face_compressed_mm_odd_l1_table_ = ckernel::code_seq::make_table<_llk_math_face_compressed_mm_multi_seq_, 64>(
+constexpr auto _llk_math_face_compressed_mm_odd_l1_table_ = ckernel::code_seq::make_table<_llk_math_face_compressed_mm_multi_seq_, 64>(
     [](const std::uint32_t m, auto /* find */, auto case_encode) -> std::uint32_t
     {
         const std::uint32_t hdr      = m & 0b11;
@@ -99,7 +99,7 @@ static constexpr auto _llk_math_face_compressed_mm_odd_l1_table_ = ckernel::code
         }
     });
 
-static constexpr auto _llk_math_face_compressed_mm_odd_l2_table_ = ckernel::code_seq::make_table<_llk_math_face_compressed_mm_multi_seq_, 64>(
+constexpr auto _llk_math_face_compressed_mm_odd_l2_table_ = ckernel::code_seq::make_table<_llk_math_face_compressed_mm_multi_seq_, 64>(
     [](const std::uint32_t m, auto /* find */, auto case_encode) -> std::uint32_t
     {
         const std::uint32_t hdr     = m & 0b11;
@@ -120,7 +120,7 @@ static constexpr auto _llk_math_face_compressed_mm_odd_l2_table_ = ckernel::code
         }
     });
 
-static constexpr auto _llk_math_face_compressed_mm_one_l1_table_ = ckernel::code_seq::make_table<_llk_math_face_compressed_mm_one_seq_, 64>(
+constexpr auto _llk_math_face_compressed_mm_one_l1_table_ = ckernel::code_seq::make_table<_llk_math_face_compressed_mm_one_seq_, 64>(
     [](const std::uint32_t m, auto /* find */, auto case_encode) -> std::uint32_t
     {
         const std::uint32_t faces123 = (m >> 2) & 0b111;
@@ -135,7 +135,7 @@ static constexpr auto _llk_math_face_compressed_mm_one_l1_table_ = ckernel::code
         }
     });
 
-static constexpr auto _llk_math_face_compressed_mm_one_l2_table_ = ckernel::code_seq::make_table<_llk_math_face_compressed_mm_one_seq_, 64>(
+constexpr auto _llk_math_face_compressed_mm_one_l2_table_ = ckernel::code_seq::make_table<_llk_math_face_compressed_mm_one_seq_, 64>(
     [](const std::uint32_t m, auto find) -> std::uint32_t
     {
         const std::uint32_t hdr   = m & 0b11;

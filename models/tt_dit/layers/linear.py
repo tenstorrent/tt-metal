@@ -368,11 +368,16 @@ class ColParallelLinear(Module):
         matmul_config=None,
         num_workers_per_link=None,
         transpose_core_grid: bool | None = None,
+        persistent_buffer_rows: int | None = None,
     ) -> ttnn.Tensor | list[ttnn.Tensor]:
         """
         Expects x to be replicated.
         Return output fractured on columns.
         If chunks is set, returns a list of tensors split along the output dimension.
+
+        `persistent_buffer_rows` sizes the persistent all-gather pair's rows above `x`'s, so every row count up
+        to it shares one pair (the dynamic-length path); it keeps the layer off the strided op, which sizes its
+        gather on the buffer.
 
         `addcmul_a` / `addcmul_b` fuse a gated residual into the matmul epilogue, returning
         `addcmul_a + addcmul_scalar * matmul_result * addcmul_b`. Both must already be at the
@@ -427,7 +432,13 @@ class ColParallelLinear(Module):
                 None if matmul_config is not None else get_fabric_agmm_config(M, K, N, (self.chunks or 1), full_grid)
             )
             has_unit_batch = len(x.padded_shape) <= 4 and all(d == 1 for d in list(x.padded_shape)[:-2])
-            if fabric_cfg is not None and self.chunks in (None, 1) and has_unit_batch and addcmul_a is None:
+            if (
+                fabric_cfg is not None
+                and self.chunks in (None, 1)
+                and has_unit_batch
+                and addcmul_a is None
+                and persistent_buffer_rows is None
+            ):
                 return self._forward_fabric_agmm(
                     x, weight, fabric_cfg, parallel_config, compute_kernel_config, dtype, use_persistent_buffer
                 )
@@ -456,7 +467,9 @@ class ColParallelLinear(Module):
 
             tp_mesh_axis = parallel_config.tensor_parallel.mesh_axis
             ag_persistent_buffer = (
-                self.ccl_manager.get_ag_ping_pong_buffer(x.shape, -1, tp_mesh_axis, dtype=x.get_dtype())
+                self.ccl_manager.get_ag_ping_pong_buffer(
+                    x.shape, -1, tp_mesh_axis, dtype=x.get_dtype(), rows=persistent_buffer_rows
+                )
                 if use_persistent_buffer
                 else None
             )
@@ -645,6 +658,7 @@ class RowParallelLinear(Module):
         dtype=None,
         gather_output: bool = False,
         reduce_scatter_dim: int = -1,
+        matmul_config=None,
     ) -> ttnn.Tensor:
         """
         Expects x to be column fractured.
@@ -652,6 +666,7 @@ class RowParallelLinear(Module):
         Return output fractured on columns.
 
         `reduce_scatter_dim` selects the reduce-scatter axis (default -1, hidden); -2 splits on the sequence dim.
+        `matmul_config` is a frozen `MinimalMatmulConfig` that bypasses the shape-keyed table.
         """
         if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
             unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight.data)
@@ -668,8 +683,9 @@ class RowParallelLinear(Module):
             K = weight.padded_shape[-2]
             M, N = x[0].padded_shape[-2], weight.padded_shape[-1]
 
-            core_grid = get_matmul_core_grid(self.mesh_device)
-            matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
+            if matmul_config is None:
+                core_grid = get_matmul_core_grid(self.mesh_device)
+                matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
             output = ttnn.experimental.minimal_matmul(
                 input_tensor=list(x),
                 weight_tensor=weight,
@@ -687,13 +703,17 @@ class RowParallelLinear(Module):
                 compute_kernel_config=compute_kernel_config or self.compute_config,
                 dtype=dtype,
                 default_block_size=default_block_size,
+                matmul_config=matmul_config,
             )
 
         if self._mesh_axis_size > 1:
             # Reduce over rows when replicating: N may be too narrow to scatter over the mesh axis.
             dim = -2 if gather_output else reduce_scatter_dim
             output = self.ccl_manager.reduce_scatter(
-                output, dim=dim, mesh_axis=self.mesh_axis, use_persistent_buffer=use_persistent_buffer
+                output,
+                dim=dim,
+                mesh_axis=self.mesh_axis,
+                use_persistent_buffer=use_persistent_buffer,
             )
             if gather_output:
                 output = self.ccl_manager.all_gather(
@@ -730,6 +750,9 @@ class RowParallelLinear(Module):
         extra CCL ops entirely.
 
         ``mmrs_config`` is a frozen ``FusedMMRSConfig`` that bypasses the shape-keyed table and rules.
+        The persistent reduce-scatter output pair is the returned activation, so it is keyed on ``x``'s rows;
+        a caller serving varying lengths passes ``use_persistent_buffer=False`` (the op then allocates its exact
+        output and uses the barrier semaphore) rather than pinning a pair per length.
         """
         if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
             unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight.data)
