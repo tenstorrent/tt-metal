@@ -246,9 +246,13 @@ def test_two_bank_index_list(mesh_device):
     )
     g = torch.Generator().manual_seed(7)
 
-    def random_set():
+    def random_set(start):
+        # Causal like the indexer's: the row at position p has at most p + 1 valid entries, then sentinels.
+        positions = rotated_chunk_positions(start, sp, index.chunk_local)
+        p = torch.tensor([positions[s][t * rows + r] for s in range(sp) for t in range(tp) for r in range(rows)])
         sets = torch.randint(0, RING_BASE, (sp, tp, rows, topk), generator=g)
         valid = torch.randint(1, topk + 1, (sp, tp, rows, 1), generator=g)
+        valid = torch.minimum(valid, (p + 1).view(sp, tp, rows, 1))
         sets[torch.arange(topk).view(1, 1, 1, -1).expand_as(sets) >= valid] = SENTINEL
         tt_sets = ttnn.from_torch(
             (sets - (sets >= 2**31).long() * 2**32).to(torch.int32),  # uint32 bits through int32
@@ -260,8 +264,8 @@ def test_two_bank_index_list(mesh_device):
         )
         return sets, tt_sets
 
-    topk_sets = [random_set(), random_set()]
     for start in INDEX_STARTS:
+        topk_sets = [random_set(start), random_set(start)]
         index.start_chunk(_scalar(mesh_device, start), _scalar(mesh_device, start + CHUNK))
         for k, (sets, tt_sets) in enumerate(topk_sets):
             got = ttnn.to_torch(

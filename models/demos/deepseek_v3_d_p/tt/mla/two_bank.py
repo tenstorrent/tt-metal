@@ -39,7 +39,10 @@ chunk layout (``rotated_chunk_positions``), so one captured trace serves every s
 its first sentinel, so sentinels must be one tail; that holds when every window slot is real (``p >= W - 1``) because
 bank A's own sentinels are already a tail. A row with ``p < W - 1`` has ``W - 1 - p`` leading window slots before
 position 0: a gather through ``perm = min(c + max(0, W - 1 - p), sentinel column)`` slides the row left by that many
-slots and fills the end with the sentinel column.
+slots and fills the end with the sentinel column. The top-k is causal (the indexer masks future keys to the
+sentinel, which top-k sorts last), so such a row has at most ``p + 1 <= W - 1`` valid top-k entries and every column
+from ``2W - 1`` on is a sentinel before and after the slide: only the first ``2W`` columns go through the gather, the
+rest are a copy.
 
 Window format (A2, ``loop_window_format``): ``scaled_fp8`` (default) or ``bf16``. The ring is part of the bank-A
 cache, so the window format is the cache format: a bf16 window means a bf16 cache, whose bank A must reach G2 as bf16
@@ -172,7 +175,9 @@ class TwoBankIndex:
         source = torch.zeros(sp, tp, query_rows, self.width + 1, dtype=torch.int64)
         source[..., -1] = -1  # 0xFFFFFFFF through int32
         self._source = per_chip(source, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
-        self._perm = None  # the current chunk's compacting permutation (start_chunk)
+        self._perm = None  # the current chunk's compacting permutation (start_chunk), its first compacted columns
+        # Columns the compaction can change (see the module docstring): the rest of a row is a copy.
+        self.compacted = min(self.width, 2 * self.window)
         self._joint = None  # (top-k buffer address, index list) held for the set's other pass-2 layers
 
     def ring_write_metadata(self, metadata) -> list[list[ttnn.Tensor]]:
@@ -240,7 +245,7 @@ class TwoBankIndex:
             self._joint = None
         if self._perm is not None:
             ttnn.deallocate(self._perm)
-        self._perm = to_rm_u32(perm, self.width)
+        self._perm = to_rm_u32(perm, self.compacted)
 
     def joint_for(self, topk_indices: ttnn.Tensor) -> tuple[ttnn.Tensor, bool]:
         """The chunk's index list for the top-k set in ``topk_indices`` and whether it was built now: the held one when
@@ -264,7 +269,13 @@ class TwoBankIndex:
         ttnn.experimental.slice_write(
             topk_indices, self._source, start=[0, 0, 0, self.window], end=[1, 1, rows, self.width], step=[1, 1, 1, 1]
         )
-        return ttnn.gather(self._source, -1, self._perm)
+        joint = ttnn.slice(self._source, [0, 0, 0, 0], [1, 1, rows, self.width])
+        compacted = ttnn.gather(self._source, -1, self._perm)
+        ttnn.experimental.slice_write(
+            compacted, joint, start=[0, 0, 0, 0], end=[1, 1, rows, self.compacted], step=[1, 1, 1, 1]
+        )
+        ttnn.deallocate(compacted)
+        return joint
 
 
 def _scalar_f32(t: ttnn.Tensor) -> ttnn.Tensor:
