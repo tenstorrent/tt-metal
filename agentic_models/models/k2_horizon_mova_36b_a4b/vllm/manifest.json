@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "model": "k2_horizon_mova_36b_a4b",
+  "phase": "vllm",
+  "entrypoint": "agentic_models.models.k2_horizon_mova_36b_a4b.vllm.model.entry",
+  "tests": [
+    "model/tests"
+  ],
+  "dependencies": {
+    "targets": [
+      "bh_qb2"
+    ]
+  },
+  "coverage": "full-model-serving",
+  "hf_model": "IFM/K2-Horizon-MoVA-36B-A4B",
+  "hf_revision": "e9ce717642b2074082875be233c02c729ba47960",
+  "validation": {
+    "status": "passed",
+    "deployment": "manual_qb2",
+    "date": "2026-11-24",
+    "host": "QB2 (P300x2, 1x4 mesh)",
+    "revisions": {
+      "tt_metal": "58afa8579450ba8afd6df45d05ad01b2860cd32b + patches.json",
+      "vllm_tt_plugin": "f6fe76b63366053b648a7152e087daa3a507d033 (GPQA run: plus vllm-tt-plugin#282)",
+      "vllm": "0.32.0"
+    },
+    "evals": {
+      "gpqa_diamond": {
+        "correct": 161,
+        "of": 198,
+        "score": 81.31,
+        "reference": 80.81,
+        "card": 80.8,
+        "seed": 42
+      }
+    },
+    "perf": {
+      "isl128_osl128_c1": {
+        "ttft_ms": 100.7,
+        "tpot_ms": 34.53
+      },
+      "isl128_osl1024_c32": {
+        "output_tok_s": 674.7
+      }
+    },
+    "source": "README.md"
+  }
+}

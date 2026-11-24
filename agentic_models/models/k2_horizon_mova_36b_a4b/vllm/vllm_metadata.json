@@ -1,0 +1,4 @@
+{
+  "arch": "K2HorizonMoVAQB2ForCausalLM",
+  "main_class": "agentic_models.models.k2_horizon_mova_36b_a4b.vllm.tt.generator_vllm:K2HorizonForCausalLM"
+}

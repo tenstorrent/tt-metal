@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "model": "gemma_4_12b_it",
+  "phase": "vllm",
+  "entrypoint": "agentic_models.models.gemma_4_12b_it.vllm.model.entry",
+  "tests": [
+    "model/tests"
+  ],
+  "dependencies": {
+    "targets": [
+      "bh_qb2"
+    ]
+  },
+  "coverage": "full-model-serving",
+  "hf_model": "google/gemma-4-12B-it",
+  "hf_revision": "707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7",
+  "validation": {
+    "status": "passed",
+    "deployment": "manual_qb2",
+    "date": "2026-11-23",
+    "host": "QB2 (P300x2, 1x4 mesh)",
+    "revisions": {
+      "tt_metal": "58afa8579450ba8afd6df45d05ad01b2860cd32b + patches.json",
+      "vllm_tt_plugin": "f6fe76b63366053b648a7152e087daa3a507d033",
+      "vllm": "0.32.0"
+    },
+    "evals": {
+      "gpqa_diamond": {"correct": 144, "of": 198, "threshold": 135, "gpu_reference": 147, "seed": 42}
+    },
+    "tti_spec_tests": {"passed": 22, "of": 22, "runs": 2},
+    "perf": {
+      "isl128_osl128_c1": {"ttft_ms": 35.6, "tpot_ms": 13.23},
+      "isl128_osl128_c32": {"output_tok_s": 1425.1},
+      "isl128_osl1024_c32": {"output_tok_s": 1773.4}
+    },
+    "source": "README.md"
+  }
+}
