@@ -83,11 +83,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
         dst_index, formats.math, formats.math);
 
-    // An execute that owns slot 6 between the seed and the draw: square's execute sets it to
-    // +4 per face call and restores the dest += 2 invariant at exit (its init leaves the slot
-    // at the hw_configure invariant). Covers the restore-on-exit contract: the draw below
-    // lands on every row only if the restore held. square_init loads the constants the bf16
-    // rounding reads, so a missed row keeps the exact squared sentinel (4.0).
+    // square's execute sets slot 6 to +4 and must restore dest += 2 on exit; the draw below fills every
+    // row only if it did. square_init loads the constants square's bf16 rounding reads.
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::square>();
     ckernel::sfpu::square_init();
     _llk_math_eltwise_unary_sfpu_params_(
