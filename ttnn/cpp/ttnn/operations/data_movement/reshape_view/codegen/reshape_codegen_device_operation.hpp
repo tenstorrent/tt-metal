@@ -22,8 +22,7 @@ struct ReshapeCodegenDeviceOperation {
     using program_factory_t = std::variant<
         ReshapeCodegenRMProgramFactory,
         ReshapeCodegenTileRowsProgramFactory,
-        ReshapeCodegenTileMappedProgramFactory,
-        ReshapeCodegenLcmProgramFactory>;
+        ReshapeCodegenTileMappedProgramFactory>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
@@ -36,6 +35,9 @@ struct ReshapeCodegenDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
     static spec_return_value_t compute_output_specs(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
+    static std::vector<tt::tt_metal::TensorTopology> compute_output_topologies(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
     static tensor_return_value_t create_output_tensors(
