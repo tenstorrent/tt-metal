@@ -8,6 +8,8 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
+#include <utility>
 
 #include "ckernel_include.h"
 #include "ckernel_ops.h"
@@ -130,6 +132,37 @@ inline void _bcast_cols_op_()
     hal::fpu::run<hal_port::eltwise_binary_custom::bcast_col_op<eltwise_binary_type, addr_mod>>();
 }
 
+namespace detail
+{
+// One face-row of the bcast-col walk: four ops, two per face. The last op picks ADDR_MOD_4 (rewind to the tile
+// start and step the fidelity phase) on the last face-row of a non-final phase, ADDR_MOD_6 otherwise.
+template <EltwiseBinaryType eltwise_binary_type, std::uint32_t num_phases, std::uint32_t num_face_rows, std::size_t step>
+inline void bcast_cols_face_row()
+{
+    constexpr std::size_t phase    = step / num_face_rows;
+    constexpr std::size_t face_row = step % num_face_rows;
+    constexpr bool rewind          = phase + 1 < num_phases && face_row + 1 == num_face_rows;
+
+    // Even face (F0 / F2): op then rewind srcB by one face (ADDR_MOD_5) so the odd face reads it.
+    _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_7>(); // srcB: 0 -> 8
+    _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_5>(); // srcB: 8 -> 0
+
+    // Odd face (F1 / F3): op then advance srcB +24 (ADDR_MOD_6) to the next face-row / tile,
+    // or, on the last face-row of a non-final fidelity phase, rewind to the tile start and
+    // step the phase (ADDR_MOD_4) so the next walk re-reads the same srcA/srcB block.
+    _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_7>();                       // srcB: 0 -> 8
+    _bcast_cols_op_<eltwise_binary_type, rewind ? ADDR_MOD_4 : ADDR_MOD_6>(); // srcB: 8 -> 32, or all -> 0, phase + 1
+}
+
+// One tile's ops for every fidelity phase and face-row, spelled out at compile time as a straight run of
+// num_phases * num_face_rows * 4 immediates (no RISC loop between pushes).
+template <EltwiseBinaryType eltwise_binary_type, std::uint32_t num_phases, std::uint32_t num_face_rows, std::size_t... Steps>
+inline void bcast_cols_tile(std::index_sequence<Steps...>)
+{
+    (bcast_cols_face_row<eltwise_binary_type, num_phases, num_face_rows, Steps>(), ...);
+}
+} // namespace detail
+
 /**
  * @brief Blocked bcast-col FPU scaffold shared by the SDPA SUB and indexer_score MUL paths.
  *
@@ -181,6 +214,7 @@ inline void _llk_math_bcast_cols_reuse_custom_(
 
     // Two faces make up one face-row; a full tile has two of them, a tiny tile one.
     const std::uint32_t num_face_rows = tensor_shape.num_faces_r_dim;
+    LLK_ASSERT(num_face_rows == 1 || num_face_rows == 2, "bcast-col custom: one or two face-rows per tile");
 
     namespace cfg = hal::cfg;
     namespace ebc = hal_port::eltwise_binary_custom;
@@ -205,43 +239,35 @@ inline void _llk_math_bcast_cols_reuse_custom_(
     // Per tile: walk srcA/dest across 4 faces while srcB reuses one face per pair (F0/F1 -> srcB face
     // 0, F2/F3 -> srcB face 2). Comments are dest/srcA counter values. ADDR_MOD_5 rewinds srcB -8 so
     // the pair's 2nd op rereads the same srcB face; ADDR_MOD_6 then jumps srcB +24 to the next pair.
-    for (std::uint32_t i = 0; i < ct_dim; i++)
+    // The face-row count is tested once per call, so each tile's ops go out as one straight run.
+    auto walk_tiles = [&](auto face_rows)
     {
-        // Position the dest write pointer at the start of this tile's 32x32 dest
-        // slot (stride 64 rows). The packer indexes tiles at the full 32x32 tile
-        // stride regardless of num_faces, so tiles must be written one-per-slot.
-        // The ADDR_MOD dest increments below only advance 32 rows for a 16x32 tiny
-        // tile (num_faces=2) and 64 rows for a full 32x32 tile (num_faces=4); the
-        // per-slot base + counter reset makes both land on the right slot.
-        hal_port::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + i);
-        hal_port::clear_dst_reg_addr();
-
-        for (std::uint32_t phase = 0; phase < num_phases; phase++)
+        constexpr std::uint32_t rows = decltype(face_rows)::value;
+        for (std::uint32_t i = 0; i < ct_dim; i++)
         {
-            for (std::uint32_t face_row = 0; face_row < num_face_rows; face_row++)
-            {
-                // Even face (F0 / F2): op then rewind srcB by one face (ADDR_MOD_5) so the odd face reads it.
-                _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_7>(); // srcB: 0 -> 8
-                _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_5>(); // srcB: 8 -> 0
+            // Position the dest write pointer at the start of this tile's 32x32 dest
+            // slot (stride 64 rows). The packer indexes tiles at the full 32x32 tile
+            // stride regardless of num_faces, so tiles must be written one-per-slot.
+            // The ADDR_MOD dest increments below only advance 32 rows for a 16x32 tiny
+            // tile (num_faces=2) and 64 rows for a full 32x32 tile (num_faces=4); the
+            // per-slot base + counter reset makes both land on the right slot.
+            hal_port::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + i);
+            hal_port::clear_dst_reg_addr();
 
-                // Odd face (F1 / F3): op then advance srcB +24 (ADDR_MOD_6) to the next face-row / tile,
-                // or, on the last face-row of a non-final fidelity phase, rewind to the tile start and
-                // step the phase (ADDR_MOD_4) so the next walk re-reads the same srcA/srcB block.
-                _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_7>(); // srcB: 0 -> 8
-                if (num_phases > 1 && phase + 1 < num_phases && face_row + 1 == num_face_rows)
-                {
-                    _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_4>(); // srcA/srcB/dest -> 0, phase + 1
-                }
-                else
-                {
-                    _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_6>(); // srcB: 8 -> 32 (next face-row)
-                }
-            }
+            detail::bcast_cols_tile<eltwise_binary_type, num_phases, rows>(std::make_index_sequence<num_phases * rows> {});
+
+            // Rewind srcB to 0 for the next srcA tile (CLR_A clears srcA's dvalid); srcA keeps advancing.
+            // SET_ABD_F also returns the fidelity phase to 0 after a HiFi walk (dest is re-based per tile).
+            hal::counters::rwc::set<ebc::CLR_A_SET_ABD_F>();
         }
-
-        // Rewind srcB to 0 for the next srcA tile (CLR_A clears srcA's dvalid); srcA keeps advancing.
-        // SET_ABD_F also returns the fidelity phase to 0 after a HiFi walk (dest is re-based per tile).
-        hal::counters::rwc::set<ebc::CLR_A_SET_ABD_F>();
+    };
+    if (num_face_rows == 1)
+    {
+        walk_tiles(std::integral_constant<std::uint32_t, 1> {});
+    }
+    else
+    {
+        walk_tiles(std::integral_constant<std::uint32_t, 2> {});
     }
 
     // Clear srcB dvalid on the way out.
