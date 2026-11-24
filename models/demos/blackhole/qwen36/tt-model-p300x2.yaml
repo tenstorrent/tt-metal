@@ -75,7 +75,9 @@ runtime:
   # structured output, logit_bias, bad_words, allowed_token_ids, min_tokens -- are decoded without speculation
   # instead of refused; every step stays an ordinary host-sampled decode while one is live), 615dfba (min_p /
   # logit_bias too: upstream's speculative-launch refusal lifted on such a plan, every builtin logits processor on host).
-  plugin: {repo: https://github.com/changh95/vllm-tt-plugin, ref: 615dfbadfa9f33f6f48bad180021456f29178683}
+  # Then 2d22bae (SpecPlan.verify_rows_sample: sampled requests speculate on a model whose verify rows draw with
+  # their parameters; inactive unless the model declares it).
+  plugin: {repo: https://github.com/changh95/vllm-tt-plugin, ref: 2d22baed85471131bc77cf5670c107b9404305da}
   extra_models_dir: qwen36_resident/vllm_models    # main_class qwen36_resident.generator_vllm:Qwen36ResidentForCausalLM
 
 serve:                         # common to every profile; a profile's env MERGES over this (it cannot unset a key)
