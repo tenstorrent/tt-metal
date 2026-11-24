@@ -57,9 +57,7 @@ def _bf16_quotient(tt_a, tt_b, input_a, input_b):
     bf16_quotient = raw_quotient.to(torch.bfloat16).float()
 
     plain = ttnn.to_torch(ttnn.divide(tt_a, tt_b, fast_and_approximate_mode=False)).float()
-    recip_underflow = (
-        (plain == 0) & (bf16_quotient != 0) & (input_b.abs() >= 2.0**126) & torch.isfinite(bf16_quotient)
-    )
+    recip_underflow = (plain == 0) & (bf16_quotient != 0) & (input_b.abs() >= 2.0**126) & torch.isfinite(bf16_quotient)
     # Sanity check on the correction itself, not just the final result: if the
     # device ever stopped underflowing here (or started underflowing
     # elsewhere), this golden would silently follow it and the test would
@@ -210,6 +208,28 @@ def test_divide_round_modes_narrowing_placement(device, rounding_mode, placement
             assert result.memory_config() == sharded
         golden = torch.div(input_a.float(), torch_rhs, rounding_mode=rounding_mode).bfloat16()
         assert_equal(golden.float(), ttnn.to_torch(result).float())
+
+
+@pytest.mark.parametrize("rounding_mode", ["trunc", "floor"])
+def test_divide_round_modes_bfloat8_b(device, rounding_mode):
+    """bfloat8_b inputs and output: the float32 quotient is rounded, then narrowed to bfloat8_b. The quotients stay
+    below 128 in magnitude, where bfloat8_b's step is at most 1, so every rounded quotient is exact in it.
+    """
+    torch.manual_seed(0)
+    input_a = torch.randint(-120, 121, (1, 1, 64, 64)).float() + torch.rand(1, 1, 64, 64).round(decimals=1)
+    input_b = (torch.rand(1, 1, 64, 64) * 7 + 1).round(decimals=1) * torch.where(torch.rand(1, 1, 64, 64) < 0.5, -1, 1)
+    tt_a = ttnn.from_torch(input_a, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_b = ttnn.from_torch(input_b, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    # What the device holds: the inputs quantized to bfloat8_b.
+    a, b = ttnn.to_torch(tt_a).float(), ttnn.to_torch(tt_b).float()
+
+    result = ttnn.divide(tt_a, tt_b, rounding_mode=rounding_mode)
+    assert result.dtype == ttnn.bfloat8_b
+    assert_equal(torch.div(a, b, rounding_mode=rounding_mode), ttnn.to_torch(result).float())
+
+    result = ttnn.divide(tt_a, 3.0, rounding_mode=rounding_mode)
+    assert result.dtype == ttnn.bfloat8_b
+    assert_equal(torch.div(a, 3.0, rounding_mode=rounding_mode), ttnn.to_torch(result).float())
 
 
 @pytest.mark.parametrize("rounding_mode", ["trunc", "floor"])
