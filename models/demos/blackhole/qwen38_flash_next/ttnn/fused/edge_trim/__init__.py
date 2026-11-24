@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""``edge_trim`` (QWEN38_EDGE_TRIM=1, default off): trims of the decode step outside the 48 layer blocks (embedding, PLE,
+"""``edge_trim`` (QWEN38_EDGE_TRIM, default on; 0 turns it off): trims of the decode step outside the 48 layer blocks (embedding, PLE,
 LM-head epilogue).  Options (``QWEN38_EDGE_TRIM_OPTS`` = comma list replacing the default set):
 
   candidate_row  the sampling candidate row from greedy_tail's scan (registry kernel ``candidate_row``, served at TP=8):

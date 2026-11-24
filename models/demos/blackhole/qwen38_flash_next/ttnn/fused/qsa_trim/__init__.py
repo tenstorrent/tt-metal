@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""``qsa_trim`` (QWEN38_QSA_TRIM=1, default off): glue cuts of the one-row QSA decode layer, each a program that already
+"""``qsa_trim`` (QWEN38_QSA_TRIM, default on; 0 turns it off): glue cuts of the one-row QSA decode layer, each a program that already
 exists for the verify tile (``qsa_rows``) used on the decode row, plus the new ones of this package.  Every cut is
 BITWISE against the program(s) it replaces (pure data movement, or the same arithmetic on the same operands):
 

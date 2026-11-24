@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""``mm_stream2`` (QWEN38_MM_STREAM2=1, default off): a decode DRAM-sharded linear (one live row) on many compute cores, each
+"""``mm_stream2`` (QWEN38_MM_STREAM2, default on): a decode DRAM-sharded linear (one live row) on many compute cores, each
 reading ONE contiguous byte range of a re-laid weight (x60).  This module: the placement and weight re-layout helpers shared
 by the read micro-benchmark, the builder and the matmul program."""
 

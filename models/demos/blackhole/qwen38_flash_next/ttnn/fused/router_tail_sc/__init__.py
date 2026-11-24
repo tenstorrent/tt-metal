@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""``router_tail_sc``: the router top-k with the sort on its own core ("sort core in parallel"), default off.
+"""``router_tail_sc``: the router top-k with the sort on its own core ("sort core in parallel"), default on.
 
-``QWEN38_ROUTER_SORTCORE=1`` and one live row (the decode body) select a two-core form of ``router_tail``'s lane
-program; every other case (flag unset, rows != 1) gets ``router_tail.program_parts`` unchanged.
+``QWEN38_ROUTER_SORTCORE`` (default 1) and one live row (the decode body) select a two-core form of ``router_tail``'s lane
+program; every other case (QWEN38_ROUTER_SORTCORE=0, rows != 1) gets ``router_tail.program_parts`` unchanged.
 
   core A  today's softmax (max, precise exp, sum, reciprocal, mul_bcast -> cb_probs), today's sum and division of the
           ten selected probabilities, today's writer.  Its reader gathers the ten probabilities by the sorted indices.
@@ -37,7 +37,7 @@ KERNELS = {
     "compute_sort": fp.kernel_source(NAME, "compute_rt_sort.cpp"),
     "writer": rt.KERNELS["writer"],  # today's writer, unchanged, on core A
 }
-FAST_ENV = "QWEN38_ROUTER_TAIL_FAST"  # 1: the shortened tail (kernels/*_rtf_*.cpp), default off
+FAST_ENV = "QWEN38_ROUTER_TAIL_FAST"  # default "1": the shortened tail (kernels/*_rtf_*.cpp); "0" the original tail (kernels/*_rt_*.cpp)
 FAST_OPTS_ENV = "QWEN38_ROUTER_TAIL_FAST_OPTS"  # study: comma list of FAST_OPTS to enable instead of the default set
 FAST_OPTS = ("row0", "nostart", "incr", "writer", "direct", "inline", "idxf", "notoken", "split")
 FAST_DEFAULT_OPTS = ("row0", "writer", "direct", "inline", "idxf", "notoken", "split")
@@ -66,7 +66,9 @@ ROWTRIM_ENV = (
     "QWEN38_RTF_ROWTRIM"  # default "1"; "0" off; "1": core A's division and typecast run ROWTRIM_ITERATIONS per face
 )
 ROWTRIM_ITERATIONS = 2  # rows 0..3 of faces 0 and 1 (both column parities); the wrappers run 8 in RC
-LANES_ENV = "QWEN38_ROUTER_SC_LANES"  # "1": rows 2..32 get one fast-form group per occupied sort pass (default "0")
+LANES_ENV = (
+    "QWEN38_ROUTER_SC_LANES"  # default "1": rows 2..32 get one fast-form group per occupied sort pass; "0" turns it off
+)
 LANES_RECTANGLE = (4, 6)  # the rectangle the lanes form asks the placement helper for: 4 groups x 6 cores
 LANES_NAME = "router_tail_sc"
 LANES_REQUIRED_OPTS = {"writer", "direct", "inline", "idxf", "notoken"}

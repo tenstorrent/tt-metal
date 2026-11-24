@@ -557,7 +557,7 @@ register(
 
 
 # ------------------------------------------------------------------------------------------------ the GR write folded in
-# QWEN38_RR_WRITE=1 (default off, needs the v2 reduce): the block output's reduce also produces the new residual
+# QWEN38_RR_WRITE (default on; 0 turns it off): the block output's reduce also produces the new residual
 # ``residual + bf16(block * injection_b)`` that gr_write would (kernels/transport3.cpp + compute3.cpp).  The reduce sites are
 # unchanged: GR.read / read_rows leave the matching (residual, injection) state in PENDING (gr.py), the first admitted reduce
 # after it takes it, and GR.write / write_rows hand back the program's new residual for that block output (WRITTEN) instead

@@ -530,7 +530,7 @@ class Qwen38TTNNGatedResidual:
             self._write_fused = fused_gr_write.gr_write
             self.write = functools.partial(fused_gr_write.write_fused, self)
             self.write_rows = functools.partial(fused_gr_write.write_rows_fused, self)
-        # QWEN38_RR_WRITE=1 (default off; with the v2 reduce): the row_reduce program also writes the new residual that
+        # QWEN38_RR_WRITE (default on; 0 turns it off): the row_reduce program also writes the new residual that
         # gr_write would.  read / read_rows leave their (residual, injection) state for the block's reduce
         # (row_reduce.PENDING); write / write_rows hand back the residual that program wrote for the block output, and run the
         # write program only when there is none.

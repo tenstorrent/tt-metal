@@ -2140,7 +2140,7 @@ class Qwen38TTNNMoE:
             observe("before-output-reduce-scatter")
             raise_deferred_phase_error()
             if fused.row_reduce.admits(temporaries["local_sum"], cluster_axis=_MOE_ALLREDUCE_TP_AXIS):
-                # QWEN38_ROW_REDUCE=1, bf16 rows <= 2: the row-packed reduce-scatter (bitwise the line reduce-scatter
+                # bf16 rows <= 2 (more with the unicast form): the row-packed reduce-scatter (bitwise the line reduce-scatter
                 # below); the local sum stays allocated (released with the layer's temporaries)
                 temporaries["output"] = fused.row_reduce.row_reduce(
                     temporaries["local_sum"], cluster_axis=_MOE_ALLREDUCE_TP_AXIS, memory_config=ttnn.DRAM_MEMORY_CONFIG

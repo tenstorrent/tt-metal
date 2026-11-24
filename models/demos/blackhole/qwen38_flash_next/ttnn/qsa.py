@@ -164,7 +164,7 @@ ALL_ONES_U32 = 0xFFFFFFFF
 
 
 def _row_reduce_call(partial, *, cluster_axis, memory_config):
-    """The fp32 output reduce-scatter: the row-packed ``fused.row_reduce`` program (QWEN38_ROW_REDUCE=1, one row) or the
+    """The fp32 output reduce-scatter: the row-packed ``fused.row_reduce`` program (one row, unless QWEN38_ROW_REDUCE=0) or the
     stock ``ttnn.reduce_scatter``."""
 
     from models.demos.blackhole.qwen38_flash_next.ttnn.fused.row_reduce import row_reduce_or_reduce_scatter

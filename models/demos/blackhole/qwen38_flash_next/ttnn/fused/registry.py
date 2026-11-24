@@ -216,7 +216,7 @@ TP8_KNOBS = {
 
 
 def edge_trim_names(environ: Mapping[str, str] = os.environ) -> frozenset[str]:
-    """The registry kernels ``QWEN38_EDGE_TRIM=1`` adds at TP=8 (default off): ``candidate_row`` (ttnn/fused/edge_trim)."""
+    """The registry kernels the edge trims add at TP=8: ``candidate_row`` (ttnn/fused/edge_trim), only when ``QWEN38_EDGE_TRIM_OPTS`` lists it."""
 
     from . import edge_trim
 
