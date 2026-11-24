@@ -196,14 +196,17 @@ def test_binary_comp_uint16_ops(input_shapes, mem_configs, ttnn_function, device
     assert torch.equal(output_tensor, golden_tensor)
 
 
-@pytest.mark.parametrize("input_dtype", (ttnn.float32, ttnn.bfloat16, ttnn.int32, ttnn.uint32))
+@pytest.mark.parametrize(
+    "input_dtype", (ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.int32, ttnn.uint32)
+)
 @pytest.mark.parametrize("op", ("add", "subtract", "multiply", "maximum", "gt", "ne", "logical_and"))
 def test_binary_uint8_output(device, input_dtype, op):
     torch.manual_seed(0)
     shape = (2, 3, 33, 65)
-    # Values and results stay within [0, 255] and are exact in bfloat16, so every dtype gives the same answer.
-    a = torch.randint(8, 16, shape)
-    b = torch.randint(0, 8, shape)
+    # Even values in [0, 14]: results stay within [0, 255], and every value is exact in bfloat16 and on the
+    # bfloat8_b / bfloat4_b grid of any block they share, so every dtype gives the same answer.
+    a = 2 * torch.randint(4, 8, shape)
+    b = 2 * torch.randint(0, 4, shape)
     ta = ttnn.from_torch(a, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     tb = ttnn.from_torch(b, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
@@ -212,3 +215,24 @@ def test_binary_uint8_output(device, input_dtype, op):
     assert result.dtype == ttnn.uint8
     expected = getattr(torch, op)(a, b).to(torch.uint8)
     assert torch.equal(ttnn.to_torch(result).to(torch.uint8), expected)
+
+
+def test_binary_uint8_output_after_explicit_typecast(device):
+    # A caller's TYPECAST(FLOAT32, UINT8) already produces the output dtype, so no second cast may follow it.
+    torch.manual_seed(0)
+    a = torch.randint(8, 16, (64, 64)).float()
+    b = torch.randint(0, 8, (64, 64)).float()
+    ta = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tb = ttnn.from_torch(b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    result = ttnn.add(
+        ta,
+        tb,
+        dtype=ttnn.uint8,
+        activations=[
+            ttnn.UnaryWithParam(ttnn.UnaryOpType.TYPECAST, ttnn.DataType.FLOAT32.value, ttnn.DataType.UINT8.value)
+        ],
+    )
+
+    assert result.dtype == ttnn.uint8
+    assert torch.equal(ttnn.to_torch(result).to(torch.uint8), (a + b).to(torch.uint8))

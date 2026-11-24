@@ -1141,11 +1141,19 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             (operation_attributes.binary_op_type == BinaryOpType::DIV && a_dtype == DataType::INT32 &&
              b_dtype == DataType::INT32);
 
-        if ((binary::utils::is_typecast(a_dtype, c_dtype) || uint8_out_typecast) and !is_quant_op and
-            !is_integer_division) {
+        // A caller's post activations may already cast (e.g. TYPECAST(FLOAT32, UINT8)): cast from the dtype the
+        // chain leaves, and not at all when that is already the output dtype.
+        DataType chain_dtype = a_dtype;
+        for (const auto& activation : post_activations) {
+            if (activation.type() == unary::UnaryOpType::TYPECAST) {
+                chain_dtype = unary::utils::typecast_target_dtype(activation).value_or(chain_dtype);
+            }
+        }
+        if (chain_dtype != c_dtype && (binary::utils::is_typecast(chain_dtype, c_dtype) || uint8_out_typecast) and
+            !is_quant_op and !is_integer_division) {
             post_activations.push_back({
                 unary::UnaryOpType::TYPECAST,
-                {static_cast<int>(a_dtype), static_cast<int>(c_dtype)},
+                {static_cast<int>(chain_dtype), static_cast<int>(c_dtype)},
             });
         }
 
