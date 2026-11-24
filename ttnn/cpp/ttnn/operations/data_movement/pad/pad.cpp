@@ -663,7 +663,8 @@ ttnn::Tensor pad_with_route(
     }
 
     // An empty input has no pages to read, so the output is all padding. The pad programs read input pages that do
-    // not exist in that case.
+    // not exist in that case. This runs ahead of the per-layout padding and route checks on purpose: those exist for
+    // how the programs move input data, and here no program runs.
     if (input_tensor.storage_type() == StorageType::DEVICE && input_tensor.logical_volume() == 0) {
         const auto output_shape = compute_padded_logical_shape(input_tensor.logical_shape(), working_padding);
         const auto& requested_config = memory_config_arg.value_or(input_tensor.memory_config());
@@ -688,8 +689,22 @@ ttnn::Tensor pad_with_route(
             output_tensor = ttnn::fill(output_tensor, value, std::nullopt, output_tensor);
         }
         if (requested_config.is_sharded()) {
-            // Without a memory_config, the output keeps the input's shard spec.
-            return ttnn::to_memory_config(output_tensor, requested_config, std::nullopt);
+            if (memory_config_arg.has_value()) {
+                return ttnn::to_memory_config(output_tensor, requested_config, std::nullopt);
+            }
+            // The input's shard spec was sized for the input, not the larger output, so without a memory_config the
+            // output is HEIGHT_SHARDED over the input's cores, as on the non-empty path, with tile-aligned shards.
+            const auto& padded = output_tensor.padded_shape();
+            const auto& grid = input_tensor.shard_spec()->grid;
+            const uint32_t height_alignment =
+                input_tensor.layout() == Layout::TILE ? input_tensor.tensor_spec().tile().get_height() : 1;
+            const uint32_t shard_height = tt::round_up(
+                tt::div_up(static_cast<uint32_t>(padded.volume() / padded[-1]), grid.num_cores()), height_alignment);
+            const MemoryConfig height_sharded{
+                TensorMemoryLayout::HEIGHT_SHARDED,
+                requested_config.buffer_type(),
+                ShardSpec(grid, {shard_height, padded[-1]}, ShardOrientation::ROW_MAJOR)};
+            return ttnn::to_memory_config(output_tensor, height_sharded, std::nullopt);
         }
         return output_tensor;
     }

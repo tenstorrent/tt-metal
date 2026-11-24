@@ -114,6 +114,21 @@ def test_pad_zero_volume_is_all_padding(device, layout, input_config, output_con
     assert torch.equal(ttnn.to_torch(out), torch.ones((1, 1, 32, 64), dtype=torch.bfloat16))
 
 
+@pytest.mark.parametrize(
+    "padding, output_shape",
+    [([(0, 0), (0, 0), (0, 32), (0, 32)], [1, 1, 32, 96]), ([(0, 0), (0, 0), (0, 64), (0, 0)], [1, 1, 64, 64])],
+    ids=["width", "height"],
+)
+def test_pad_zero_volume_sharded_grows_past_input_shard(device, padding, output_shape):
+    # The input's [32, 64] shard does not fit the output, so without a memory_config the output gets a HEIGHT_SHARDED
+    # spec of its own on the input's cores.
+    x = _to_device(device, _ints([1, 1, 0, 64]), TILE, HEIGHT_SHARDED)
+    out = ttnn.pad(x, padding, 1.0)
+    assert out.is_sharded()
+    assert out.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    assert torch.equal(ttnn.to_torch(out), torch.ones(output_shape, dtype=torch.bfloat16))
+
+
 # The zero-volume skip still runs each op's validation first.
 def test_embedding_zero_width_weight_still_validated(device, expect_error):
     idx = ttnn.from_torch(torch.zeros(1, 32, dtype=torch.int32), dtype=ttnn.uint32, layout=RM, device=device)
