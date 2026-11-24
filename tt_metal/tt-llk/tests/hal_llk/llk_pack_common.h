@@ -5,6 +5,8 @@
 // HAL port of tt_llk_blackhole/llk_lib/llk_pack_common.h and the pack helpers of common/inc/cpack_common.h.
 // Same Tensix instruction sequence and access kinds as production; every instruction and register access goes
 // through the HAL except the listed HAL-GAPs (tensix_sync, RISC regfile[] stores).
+// The ported cpack_common.h helpers live in namespace hal_port under their production names; the production
+// ckernel::packer versions stay visible for the production-copy headers in tests/hal_llk that call them.
 
 #pragma once
 
@@ -14,6 +16,8 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_globals.h"
+#include "ckernel_mutex_guard.h" // not used here: kept for production-copy headers that include llk_pack_common.h
+#include "ckernel_ops.h"
 #include "cpack_common.h" // types, constants and pure helpers only; no production instruction path is called
 #include "hal/cfg.h"
 #include "hal/counters/adc.h"
@@ -123,6 +127,20 @@ inline void reconfigure_packer_l1_acc()
     // Accumulating writes are bank atomics; with the fast tile end drain the lockstep packer ports can settle into a slow rate.
 #if !defined(TT_METAL_TTSIM) // ttsim does not model PACK_GLOBAL_CFG_CTL and aborts on any access to it
     cfg::write<cfg::Access::TensixCfgUnit, cfg::PackGlobalCfgCtl::pack_disable_fast_tile_end_drain, cfg::Sec::S0, pack_l1_acc ? 1 : 0>();
+#endif
+}
+
+// Production reconfigure_packer_l1_acc(pack_l1_acc) with a runtime value (_llk_pack_reconfig_l1_acc_).
+inline void reconfigure_packer_l1_acc(const std::uint32_t pack_l1_acc)
+{
+    constexpr auto R1 = cfg::Thcon[cfg::Reg1];
+
+    // Stall to avoid clobbering current packer configuration, then enable/disable L1 accumulation
+    sync::wait::stall<sync::StallTarget::Config, sync::StallCondition::PackerIdle>();
+    cfg::write<cfg::Access::TensixCfgUnit, R1.Pack_L1_Acc, cfg::Sec::S0>(pack_l1_acc);
+    // Accumulating writes are bank atomics; with the fast tile end drain the lockstep packer ports can settle into a slow rate.
+#if !defined(TT_METAL_TTSIM) // ttsim does not model PACK_GLOBAL_CFG_CTL and aborts on any access to it
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::PackGlobalCfgCtl::pack_disable_fast_tile_end_drain, cfg::Sec::S0>(pack_l1_acc ? 1 : 0);
 #endif
 }
 
@@ -303,6 +321,115 @@ inline void configure_pack(
     sync_regfile_write(p_gpr_pack::TILE_HEADER + 3);
 }
 
+/**
+ * Validates that the packer pack_reads_per_xy_plane counter matches the expected value (assert-only readback).
+ * Intended to be called from reconfig paths to assert the invariant: between non-reduce operations the counter is 1;
+ * the reduce layer owns transitions to FACE_R_DIM via `_llk_pack_reduce_mask_config_` and back to 1 via
+ * `_llk_pack_reduce_mask_clear_`.
+ *
+ * @param expected   Expected value of pack_reads_per_xy_plane
+ * @param nop_count  Number of nop operations to ensure configuration writes complete (default 10)
+ * @return true if the packer counter matches expected, false otherwise.
+ */
+inline __attribute__((noinline)) bool is_pack_reads_per_xy_plane(const std::uint32_t expected, const std::uint32_t nop_count = 10)
+{
+    // Ensure configuration writes complete before reading back
+    ckernel::tensix_sync(); // HAL-GAP: blocking RISC store to pc_buf has no HAL API
+    for (std::uint32_t i = 0; i < nop_count; i++)
+    {
+        asm volatile("nop");
+    }
+
+    static_assert(NUM_PACKERS == 1, "NUM_PACKERS must be 1");
+    return cfg::read<cfg::Access::MMIO, cfg::PackCounters::pack_reads_per_xy_plane, cfg::Sec::S0>() == expected;
+}
+
+template <bool is_fp32_dest_acc_en>
+__attribute__((noinline)) inline void reconfig_packer_data_format(
+    const std::uint32_t pack_src_format,
+    const std::uint32_t pack_dst_format,
+    const std::uint32_t tile_size,
+    const std::uint32_t tile_c_dim,
+    const std::uint32_t num_faces,
+    const bool partial_face)
+{
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    constexpr auto R1 = cfg::Thcon[cfg::Reg1];
+
+    const std::uint32_t pack_output_src_format = masked_data_format(pack_src_format);
+    const std::uint32_t pack_output_dst_format = masked_data_format(pack_dst_format);
+    // Gasket converts Float16_b -> Float16 before the packer, so hardware in_data_format must be Float16 for Fp8 output.
+    const std::uint32_t pack_hw_src_format =
+        ((pack_dst_format & 0x1F) == to_underlying(DataFormat::Fp8_e4m3)) ? to_underlying(DataFormat::Float16) : pack_output_src_format;
+
+    LLK_ASSERT(
+        is_packer_to_L1_conversion_supported(static_cast<DataFormat>(pack_output_src_format), static_cast<DataFormat>(pack_output_dst_format)),
+        "Unsupported packer to L1 conversion.");
+
+    // Configure packers: only word[2][15:0] (uncompress, out/in data format) changes
+    const std::uint32_t config_word2 =
+        place<R1.Disable_zero_compress>(1 /*uncompress*/) | place<R1.Out_data_format>(pack_output_dst_format) | place<R1.In_data_format>(pack_hw_src_format);
+    hal::scalar::set_low(hal::gpr<p_gpr_pack::TMP_LO>(), LOWER_HALFWORD(config_word2));
+    sync::wait::stall<sync::StallTarget::Config, sync::StallCondition::PackerIdle | sync::StallCondition::ScalarIdle>();
+    cfg::write<cfg::Access::TensixCfgUnit, R1.Disable_zero_compress, cfg::Sec::S0, cfg::GprTransferSize::Bits32, cfg::WrcfgCompletion::Deferred>(
+        hal::gpr<p_gpr_pack::TMP_LO>());
+
+    LLK_ASSERT(
+        is_pack_reads_per_xy_plane(1),
+        "reconfig_packer_data_format: pack_reads_per_xy_plane counter must be 1 before packer reconfig "
+        "(invariant violated; reduce mask should have been cleared via _llk_pack_reduce_mask_clear_). Please uncomment "
+        "DEVICE_PRINT #2111 for debugging.");
+
+    const bool is_32b_format = pack_src_format == to_underlying(DataFormat::Int32) || pack_src_format == to_underlying(DataFormat::UInt32) ||
+                               pack_src_format == to_underlying(DataFormat::Float32);
+    const bool is_int8_format = pack_src_format == to_underlying(DataFormat::Int8) || pack_src_format == to_underlying(DataFormat::UInt8);
+
+    const bool read_32b_data = is_32b_format || is_fp32_dest_acc_en;
+    const bool read_int8     = !(is_fp32_dest_acc_en || is_32b_format) && is_int8_format;
+    const bool read_unsigned = pack_dst_format == to_underlying(DataFormat::UInt8);
+    // Round to 10 bit mantissa from fp32 dest
+    const bool round_10b_mant = (is_fp32_dest_acc_en && (pack_src_format == to_underlying(DataFormat::Float16))) ||
+                                (!IS_A_FORMAT(pack_src_format) && (pack_dst_format & 0x1F) == to_underlying(DataFormat::Fp8_e4m3));
+
+    // Read_int8 is what makes an Int8/UInt8 pack read 16-bit Dest datums as 8-bit integers, so a
+    // reconfig onto or away from Int8/UInt8 must write it like the full configure does: the RMW
+    // covers every dest_rd_ctrl field (one grouped RMWCIB, as production's combined mask).
+    cfg::write<cfg::Access::TensixCfgUnit>(
+        cfg::set<cfg::PckDestRdCtrl::Read_32b_data, cfg::Sec::S0>(read_32b_data),
+        cfg::set<cfg::PckDestRdCtrl::Read_unsigned, cfg::Sec::S0>(read_unsigned),
+        cfg::set<cfg::PckDestRdCtrl::Read_int8, cfg::Sec::S0>(read_int8),
+        cfg::set<cfg::PckDestRdCtrl::Round_10b_mant, cfg::Sec::S0>(round_10b_mant));
+
+    if (IS_BFP_FORMAT(pack_output_dst_format))
+    {
+        cfg::write<cfg::Access::TensixCfgUnit, R1.Exp_section_size, cfg::Sec::S0>(partial_face ? 1 : num_faces);
+    }
+    else if ((pack_output_dst_format == to_underlying(DataFormat::Lf8)) || (pack_output_dst_format == to_underlying(DataFormat::Int8)))
+    {
+        cfg::write<cfg::Access::TensixCfgUnit, R1.Row_start_section_size, cfg::Sec::S0, cfg::GprTransferSize::Bits32, cfg::WrcfgCompletion::Deferred>(
+            hal::gpr<p_gpr::ZERO>());
+    }
+
+    const bool is_fp8_e4m3 = (pack_dst_format & 0x1F) == static_cast<DataFormatType>(DataFormat::Fp8_e4m3);
+    cfg::write<cfg::Access::TensixCfgUnit, R1.Pac_LF8_4b_exp, cfg::Sec::S0>(is_fp8_e4m3 ? 1 : 0);
+
+    hal::scalar::set_low(hal::gpr<p_gpr_pack::TILE_HEADER>(), LOWER_HALFWORD(tile_size));
+
+    reconfigure_exp_threshold<is_fp32_dest_acc_en>(pack_output_dst_format);
+
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::AluFormatSpecReg2::Dstacc, cfg::Sec::S0>(
+        is_fp8_e4m3 ? to_underlying(DataFormat::Float16) : pack_output_src_format);
+
+    // Set packer strides
+    set_packer_strides<PackMode::Default>(pack_output_src_format, tile_c_dim);
+
+    // Program the packer X (datum) counter. _llk_pack_init_ owns this counter ("inits own SETADCXX"),
+    // but reconfig also programs it here: a reconfig is not always followed by an init, and on Blackhole
+    // the value is a mode-independent constant (single row, FACE_C_DIM - 1), so it is safe to set here.
+    adc::set<adc::AddrCounter {.channel0 = {.x = 0}, .channel1 = {.x = FACE_C_DIM - 1}}.for_clients<adc::Client::Packers>()>(); // SETADCXX(PAC, FACE_C_DIM - 1,
+                                                                                                                                // 0)
+}
+
 inline std::uint8_t get_packer_dest_offset_index()
 {
     return (dest_offset_id ? p_gpr_pack::DEST_OFFSET_HI : p_gpr_pack::DEST_OFFSET_LO);
@@ -365,6 +492,8 @@ inline void program_packer_destination(const std::uint32_t addr)
     hal::nop::scalar(); // One NOP should be enough for WRCFG due to SETDMAREG above.
 }
 
+} // namespace hal_port
+
 /**
  * @brief Select which destination-register tile the packer reads from.
  *
@@ -378,11 +507,17 @@ inline void program_packer_destination(const std::uint32_t addr)
 template <bool mutex_ADC = false>
 inline void set_dst_write_addr(const std::uint32_t tile_index)
 {
-    AdcMutexGuard<mutex_ADC> guard;
-    adc::set(adc::AddrCounter {.channel0 = {.w = tile_index}}.for_clients<adc::Client::Packers>());
-}
+    namespace adc                  = hal::counters::adc;
+    constexpr std::uint8_t packers = adc::AddrCounter {}.for_clients<adc::Client::Packers>().clients;
 
-} // namespace hal_port
+    hal_port::AdcMutexGuard<mutex_ADC> guard;
+    // SETADC(PAC, CH_0, SET_W, tile_index), encoded with the SETADC encoder adc::set(AddrCounter) itself selects for a
+    // runtime singleton. The public runtime adc::set() plans over a four-field group, and inside a caller's unrolled
+    // tile loop (custom_mm CT_DIM == 7) that stopped GCC from hoisting the per-tile SETDMAREG words of
+    // program_packer_destination: it re-derived and spilled them every tile. Same instruction either way.
+    // HAL-GAP: no public runtime encoder for a single address counter; uses hal::counters::adc::detail::single.
+    TT_INSN(adc::detail::single(packers, true /*zw*/, 1 /*channel 0, W*/, tile_index));
+}
 
 /**
  * @brief Stall the packer until the math thread has produced data to pack.
@@ -520,4 +655,239 @@ inline void _llk_pack_dest_init_()
     _llk_init_packer_dest_offset_registers_<Dst>();
     hal_port::packer_addr_counter_init();
     pack_sync_tile_dst_ptr = 0;
+}
+
+namespace hal_port
+{
+// Whole-word descriptor for TILE_FACE_SET_MAPPING_0 (production writes all 32 bits with one cfg_reg_rmw_tensix).
+// HAL-GAP: hal::cfg has no whole-word (Raw) field for the face-set mapping words; built from the public Field type.
+inline constexpr cfg::Field TileFaceSetMapping0Word {
+    cfg::RegisterScope::State,
+    32,
+    cfg::TileFaceSetMapping[0][0].base,
+    cfg::TileFaceSetMapping[0][0].word,
+    0 /*shamt0*/,
+    32 /*width*/,
+    1 /*count*/,
+    0 /*sec_bits*/};
+static_assert(TileFaceSetMapping0Word.addr32(cfg::Sec::S0) == TILE_FACE_SET_MAPPING_0_face_set_mapping_0_ADDR32, "face-set mapping word address");
+} // namespace hal_port
+
+/**
+ * @brief Configure the packer relu mode and threshold.
+ *
+ * Writes the relu mode and threshold carried by the config to the STACC_RELU config register.
+ *
+ * @param relu_config: Relu configuration supplying the mode and threshold to apply.
+ */
+TT_ALWAYS_INLINE void _llk_pack_relu_config_(const ckernel::ReluConfig& relu_config)
+{
+    namespace cfg  = hal::cfg;
+    namespace sync = hal::sync;
+
+    const std::uint32_t mode = static_cast<std::uint32_t>(relu_config.get_mode());
+
+    // STACC_RELU shares this cfg word with ALU_ACC_CTRL_Zero_Flag_disabled_src/dst (bits 0-1, owned by the
+    // MATH/UNPACK threads). A whole-word WRCFG_32b would clobber those bits, so use a masked RMW under
+    // mutex::REG_RMW -- matching how configure_pack programs relu.
+    // Only the packer needs draining: RMWCIB takes the data as an immediate (no GPR), so there is no
+    // SETDMAREG->WRCFG producer to fence -- the THCON wait the old whole-word path used is no longer needed.
+    sync::wait::stall<sync::StallTarget::Config, sync::StallCondition::PackerIdle>();
+    sync::mutex::acquire<sync::Mutex::M0>(); // mutex::REG_RMW
+    // ApplyRelu and ReluThreshold share one CFG word: one grouped RMW, as production's combined mask.
+    cfg::write<cfg::Access::TensixCfgUnit>(
+        cfg::set<cfg::StaccRelu::ApplyRelu, cfg::Sec::S0>(mode), cfg::set<cfg::StaccRelu::ReluThreshold, cfg::Sec::S0>(relu_config.get_threshold()));
+    sync::mutex::release<sync::Mutex::M0>(); // mutex::REG_RMW
+}
+
+/**
+ * @brief Enable or disable packer L1 accumulation.
+ *
+ * @param enable: Non-zero to accumulate packed output into existing L1 data, zero to overwrite.
+ */
+inline void _llk_pack_reconfig_l1_acc_(const std::uint32_t enable)
+{
+    hal_port::reconfigure_packer_l1_acc(enable);
+}
+
+/**
+ * @brief Configure the packer face, row, and edge masks for a reduce output.
+ *
+ * Programs PCK_EDGE_OFFSET_SEC0/SEC1 masks and TILE_ROW_SET_MAPPING_1 so that only the reduced
+ * datums survive: for row reduce a single column per row, for col reduce only the first row, and for
+ * scalar reduce a single datum. Default tiled packing selects the row mask per face through
+ * TILE_FACE_SET_MAPPING_0; Blackhole has one packer, so the packer selectors cannot select faces.
+ *
+ * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
+ * @tparam pack_mode: Packing layout, values = <Default/Untilize>
+ * @param tensor_shape: Output face dimensions and face grid.
+ * @note Untilize retains its existing row-mask configuration; face selection below is for Default only.
+ * @note Pairs with @ref _llk_math_reduce_ on the math thread, whose reduced output these masks gate.
+ * @note Call @ref _llk_pack_reduce_mask_clear_ to restore the default pass-through masks.
+ */
+template <ReduceDim dim, PackMode pack_mode = PackMode::Default>
+inline void _llk_pack_reduce_mask_config_(const TensorShape& tensor_shape = DEFAULT_TENSOR_SHAPE)
+{
+    namespace cfg  = hal::cfg;
+    namespace sync = hal::sync;
+
+    // PCK_EDGE_OFFSET_SEC0: mask clears out all the datums in the row; the direct selector (used when face
+    // lookup is disabled, Untilize) selects TILE_ROW_SET_MAPPING_1 for packer 0 (tile_row_set_select_pack0 = 1).
+    constexpr std::uint32_t pack_edge_offset = hal_port::place<cfg::PckEdgeOffsetSec0::mask>(0x0) | hal_port::place<cfg::PckEdgeTileRowSetSelect::select>(1);
+
+    constexpr std::uint32_t edge_offset_sec1_mask = []
+    {
+        if constexpr (dim == ReduceDim::REDUCE_COL)
+        {
+            // PCK_EDGE_OFFSET_SEC1 mask will pass through all the datums in the row as they are
+            return 0xffffu;
+        }
+        else if constexpr (dim == ReduceDim::REDUCE_ROW || dim == ReduceDim::REDUCE_SCALAR)
+        {
+            // PCK_EDGE_OFFSET_SEC1 mask will clear out all the datums in the row except the first one
+            return 0x0001u;
+        }
+        else
+        {
+            return 0u;
+        }
+    }();
+
+    constexpr std::uint32_t row_set_mapping_1 = []
+    {
+        if constexpr (dim == ReduceDim::REDUCE_ROW)
+        {
+            // Untilize: each packer packs 1x32 row; Default: all rows use PCK_EDGE_OFFSET_SEC1 mask (1x16 rows)
+            return pack_mode == PackMode::Untilize ? 0x11111111u : 0x55555555u;
+        }
+        else if constexpr (dim == ReduceDim::REDUCE_COL)
+        {
+            // Untilize: each packer packs 1x32 row; Default: only the first row uses PCK_EDGE_OFFSET_SEC1 mask
+            return pack_mode == PackMode::Untilize ? 0x00000005u : 0x00000001u;
+        }
+        else if constexpr (dim == ReduceDim::REDUCE_SCALAR)
+        {
+            // TILE_ROW_SET_MAPPING_1 configuration sets only first row to use PCK_EDGE_OFFSET_SEC1 mask
+            return 0x00000001u;
+        }
+        else
+        {
+            return 0u;
+        }
+    }();
+
+    // Initialize TMP registers with values we need to write in CFG registers
+    hal::scalar::set_low<LOWER_HALFWORD(pack_edge_offset)>(hal::gpr<p_gpr_pack::TMP0>());
+    hal::scalar::set_high<UPPER_HALFWORD(pack_edge_offset)>(hal::gpr<p_gpr_pack::TMP0>());
+    hal::scalar::set_low<LOWER_HALFWORD(edge_offset_sec1_mask)>(hal::gpr<p_gpr_pack::TMP_LO>());
+    hal::scalar::set_low<LOWER_HALFWORD(row_set_mapping_1)>(hal::gpr<p_gpr_pack::TMP1>());
+    hal::scalar::set_high<UPPER_HALFWORD(row_set_mapping_1)>(hal::gpr<p_gpr_pack::TMP1>());
+
+    // Wait for packer to finish to avoid breaking its current configuration
+    sync::wait::stall<sync::StallTarget::Config, sync::StallCondition::PackerIdle>();
+
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::PackCounters::pack_reads_per_xy_plane, cfg::Sec::S0>(tensor_shape.face_r_dim);
+
+    // Configure packer
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::PckEdgeOffsetSec0::mask, cfg::Sec::S0, cfg::GprTransferSize::Bits32, cfg::WrcfgCompletion::Deferred>(
+        hal::gpr<p_gpr_pack::TMP0>());
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::PckEdgeOffsetSec1::mask, cfg::Sec::S0, cfg::GprTransferSize::Bits32, cfg::WrcfgCompletion::Deferred>(
+        hal::gpr<p_gpr_pack::TMP_LO>());
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::TileRowSetMapping[1][0], cfg::Sec::S0, cfg::GprTransferSize::Bits32, cfg::WrcfgCompletion::Deferred>(
+        hal::gpr<p_gpr_pack::TMP1>());
+
+    if constexpr (pack_mode == PackMode::Default)
+    {
+        // The constants repeat 2-bit row-table selectors across all 16 face-table entries:
+        // 0x55555555 = [1], 0x11111111 = [1,0], 0x05050505 = [1,1,0,0], 0x01010101 = [1,0,0,0].
+        // Row-table 1 applies the reduction mask; row-table 0 masks the entire face.
+        const std::uint32_t face_set_mapping = [&tensor_shape]
+        {
+            static_assert(dim == ReduceDim::REDUCE_ROW || dim == ReduceDim::REDUCE_COL || dim == ReduceDim::REDUCE_SCALAR, "Invalid reduction dimension");
+            if (tensor_shape.num_faces_r_dim == 1 && tensor_shape.num_faces_c_dim == 1)
+            {
+                return 0x55555555;
+            }
+            else if (tensor_shape.num_faces_r_dim == 1 && tensor_shape.num_faces_c_dim == 2)
+            {
+                return dim == ReduceDim::REDUCE_COL ? 0x55555555 : 0x11111111;
+            }
+            else if (tensor_shape.num_faces_r_dim == 2 && tensor_shape.num_faces_c_dim == 1)
+            {
+                return dim == ReduceDim::REDUCE_ROW ? 0x55555555 : 0x11111111;
+            }
+            else
+            {
+                LLK_ASSERT(tensor_shape.num_faces_r_dim == 2 && tensor_shape.num_faces_c_dim == 2, "Invalid tensor shape face grid");
+                if constexpr (dim == ReduceDim::REDUCE_ROW)
+                {
+                    return 0x11111111;
+                }
+                else if constexpr (dim == ReduceDim::REDUCE_COL)
+                {
+                    return 0x05050505;
+                }
+                else
+                {
+                    return 0x01010101;
+                }
+            }
+        }();
+        cfg::write<cfg::Access::TensixCfgUnit, cfg::TileRowSetMapping[0][0], cfg::Sec::S0, cfg::GprTransferSize::Bits32, cfg::WrcfgCompletion::Deferred>(
+            hal::gpr<p_gpr::ZERO>());
+        cfg::write<cfg::Access::TensixCfgUnit, hal_port::TileFaceSetMapping0Word, cfg::Sec::S0>(face_set_mapping);
+        // Select face table 0 for packer 0 and enable the face -> row -> column-mask lookup.
+        cfg::write<cfg::Access::TensixCfgUnit>(
+            cfg::set<cfg::PckEdgeTileFaceSetSelect::select, cfg::Sec::S0, 0>(), cfg::set<cfg::PckEdgeTileFaceSetSelect::enable, cfg::Sec::S0, 1>());
+    }
+    else
+    {
+        cfg::write<cfg::Access::TensixCfgUnit, cfg::PckEdgeTileFaceSetSelect::enable, cfg::Sec::S0, 0>();
+    }
+
+    hal::nop::thread();
+    hal::nop::thread();
+}
+
+/**
+ * @brief Restore the default packer edge masks and tile-row-set mapping after a reduce.
+ *
+ * Disables face selection, resets the edge-offset masks to pass-through, and points the active
+ * tile-row-set mappings back to PCK_EDGE_OFFSET_SEC0, undoing @ref _llk_pack_reduce_mask_config_.
+ *
+ * @note Pairs with @ref _llk_pack_reduce_mask_config_.
+ */
+inline void _llk_pack_reduce_mask_clear_()
+{
+    namespace cfg  = hal::cfg;
+    namespace sync = hal::sync;
+
+    // By default, all packers are set to use TILE_ROW_SET_MAPPING_0 and
+    // mask is configured to pass through all the datums
+    constexpr std::uint32_t pack_edge_offset = hal_port::place<cfg::PckEdgeOffsetSec0::mask>(0xffff);
+
+    // Initialize TMP registers with values we need to write in CFG registers
+    hal::scalar::set_low<LOWER_HALFWORD(pack_edge_offset)>(hal::gpr<p_gpr_pack::TMP0>());
+    hal::scalar::set_high<UPPER_HALFWORD(pack_edge_offset)>(hal::gpr<p_gpr_pack::TMP0>());
+
+    // Wait for packer to finish to avoid breaking its current configuration
+    sync::wait::stall<sync::StallTarget::Config, sync::StallCondition::PackerIdle>();
+
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::PackCounters::pack_reads_per_xy_plane, cfg::Sec::S0, 1>();
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::PckEdgeTileFaceSetSelect::enable, cfg::Sec::S0, 0>();
+
+    // Clear out packer configuration for reduce
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::PckEdgeOffsetSec0::mask, cfg::Sec::S0, cfg::GprTransferSize::Bits32, cfg::WrcfgCompletion::Deferred>(
+        hal::gpr<p_gpr_pack::TMP0>());
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::PckEdgeOffsetSec1::mask, cfg::Sec::S0, cfg::GprTransferSize::Bits32, cfg::WrcfgCompletion::Deferred>(
+        hal::gpr<p_gpr_pack::TMP0>());
+
+    // All mappings point to PCK_EDGE_OFFSET_SEC0_mask_ADDR32
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::TileRowSetMapping[0][0], cfg::Sec::S0, cfg::GprTransferSize::Bits32, cfg::WrcfgCompletion::Deferred>(
+        hal::gpr<p_gpr::ZERO>());
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::TileRowSetMapping[1][0], cfg::Sec::S0, cfg::GprTransferSize::Bits32, cfg::WrcfgCompletion::Deferred>(
+        hal::gpr<p_gpr::ZERO>());
+
+    hal::nop::thread();
+    hal::nop::thread();
 }
