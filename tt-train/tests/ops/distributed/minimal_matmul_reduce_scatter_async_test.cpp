@@ -405,15 +405,16 @@ TEST_F(MinimalMatmulReduceScatterAsyncTest, RowsNotMultipleOfBlocks) {
 TEST_F(MinimalMatmulReduceScatterAsyncTest, SenderOnEveryColumnOfTheSinkRow) {
     const ttnn::CoreCoord device_grid = ttml::autograd::ctx().get_device().compute_with_storage_grid_size();
     const ttnn::CoreCoord grid{4, device_grid.y};
-    for (const Shape& s : {Shape{1280, 256, 512}, Shape{512, 256, 1280}}) {
+    for (const Shape& s :
+         {Shape{1280, 256, 512}, Shape{512, 256, 1280}, Shape{1280, 1024, 512}, Shape{512, 1024, 1280}}) {
         for (const bool transpose_a : {false, true}) {
             const Problem p = make_problem(s, ring_size(), false, transpose_a);
             const DeviceInputs in = upload(p, false);
             const RunOptions opt{
                 .num_links = 2, .bidirectional = true, .block = Block{4, 4, 2, 2, 1}, .num_calls = 2, .grid = grid};
             SCOPED_TRACE(
-                testing::Message() << "M=" << s.M << " N=" << s.N << " transpose_a=" << transpose_a << " "
-                                   << describe(opt));
+                testing::Message() << "M=" << s.M << " K=" << s.K << " N=" << s.N << " transpose_a=" << transpose_a
+                                   << " " << describe(opt));
             run(p, in, opt);
         }
     }

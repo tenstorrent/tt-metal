@@ -173,6 +173,23 @@ TEST(MinimalMatmulReduceScatterSliceLayoutTest, ProducersSplitOverSenders) {
     }
 }
 
+TEST(MinimalMatmulReduceScatterSliceLayoutTest, StagesInL1WhenTheMatmulOutlastsTheSendersSweep) {
+    const SliceLayout alternating = make_slice_layout(512, 128, 8, 10, 12, 8, 8, 2);
+    ASSERT_EQ(alternating.M_blocks, 1U);
+    ASSERT_GT(alternating.N_blocks, 1U);
+    EXPECT_FALSE(alternating.stages_in_l1(16, 60));
+    EXPECT_TRUE(alternating.stages_in_l1(30, 60));
+
+    const SliceLayout paired = make_slice_layout(512, 128, 4, 10, 12, 8, 8, 2);
+    ASSERT_EQ(paired.M_blocks, 2U);
+    EXPECT_FALSE(paired.stages_in_l1(32, 60));
+    EXPECT_TRUE(paired.stages_in_l1(60, 60));
+
+    const SliceLayout one_way = make_slice_layout(512, 128, 8, 10, 12, 8, 8, 1);
+    EXPECT_FALSE(one_way.stages_in_l1(32, 60));
+    EXPECT_TRUE(one_way.stages_in_l1(60, 60));
+}
+
 TEST(MinimalMatmulReduceScatterSliceLayoutTest, RejectsRowsThatDoNotSplitOverTheRing) {
     EXPECT_ANY_THROW(make_slice_layout(10, 8, 4, 10, 11, 8, 8, 1));
 }

@@ -166,6 +166,7 @@ struct RingWriterArgs {
     uint32_t sender_noc_x[2] = {};
     uint32_t sender_noc_y[2] = {};
     uint32_t go_sem_addr[2] = {};
+    uint32_t taken_sem_addr[2] = {};
 };
 
 template <
@@ -173,6 +174,7 @@ template <
     uint32_t N_block_tiles,
     uint32_t ring_size,
     uint32_t slice_tiles,
+    bool stage_in_l1,
     typename OutAccessor,
     typename BufferAccessor>
 class RingWriter {
@@ -183,7 +185,12 @@ public:
         uint32_t tile_bytes,
         uint32_t N_tiles,
         const RingWriterArgs& args) :
-        out_(out), buffer_(buffer), tile_bytes_(tile_bytes), N_tiles_(N_tiles), args_(args) {
+        out_(out),
+        buffer_(buffer),
+        tile_bytes_(tile_bytes),
+        N_tiles_(N_tiles),
+        args_(args),
+        out_base_(CircularBuffer(kOutCb).get_read_ptr()) {
     }
 
     void at_k_block(uint32_t k_block) {
@@ -207,6 +214,7 @@ public:
 
     void end_block(uint32_t step, uint32_t dir, const BlockRegion& region, bool last) {
         if (last) {
+            release_held();
             write_block<M_block_tiles, N_block_tiles, true>(
                 out_, kOutCb, tile_bytes_, N_tiles_, own_first_row(), region);
             return;
@@ -221,9 +229,13 @@ public:
         Noc noc;
         noc.async_write_barrier();
         signal_ready();
+        release_held();
         for (uint32_t dir = 0; dir < 2; dir++) {
             if (consumed_[dir] > 0) {
                 noc_semaphore_inc(get_noc_addr(args_.landed_sem_addr[dir]), -consumed_[dir]);
+            }
+            if constexpr (stage_in_l1) {
+                noc_semaphore_set(taken_sem(dir), 0);
             }
         }
     }
@@ -239,14 +251,41 @@ private:
         bool pending = false;
     };
 
+    struct Held {
+        uint32_t dir = 0;
+        bool sent = false;
+        bool active = false;
+    };
+
     uint32_t own_first_row() const {
         return args_.ring_index * slice_tiles;
     }
 
+    volatile tt_l1_ptr uint32_t* taken_sem(uint32_t dir) const {
+        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args_.taken_sem_addr[dir]);
+    }
+
+    void release_held() {
+        if (!held_.active) {
+            return;
+        }
+        if (held_.sent) {
+            noc_semaphore_wait_min(taken_sem(held_.dir), ++taken_[held_.dir]);
+        }
+        CircularBuffer(kOutCb).pop_front(M_block_tiles * N_block_tiles);
+        held_.active = false;
+    }
+
     void write_deferred() {
+        release_held();
         if (deferred_.staged) {
-            write_block<M_block_tiles, N_block_tiles, false>(
-                buffer_, kOutCb, tile_bytes_, N_tiles_, 0, deferred_.region);
+            if constexpr (stage_in_l1) {
+                CircularBuffer(kOutCb).wait_front(M_block_tiles * N_block_tiles);
+                held_ = {.dir = deferred_.dir, .sent = !deferred_.region.empty(), .active = true};
+            } else {
+                write_block<M_block_tiles, N_block_tiles, false>(
+                    buffer_, kOutCb, tile_bytes_, N_tiles_, 0, deferred_.region);
+            }
             unsignalled_[deferred_.dir]++;
         } else {
             write_block<M_block_tiles, N_block_tiles, false>(
@@ -269,6 +308,12 @@ private:
                 auto* go = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args_.go_sem_addr[dir]);
                 noc_semaphore_wait_min(go, 1);
                 ready_addr_[dir] = *go;
+                if constexpr (stage_in_l1) {
+                    noc_inline_dw_write(
+                        get_noc_addr(
+                            args_.sender_noc_x[dir], args_.sender_noc_y[dir], ready_addr_[dir] + sizeof(uint32_t)),
+                        out_base_);
+                }
             }
             noc_semaphore_inc(
                 get_noc_addr(args_.sender_noc_x[dir], args_.sender_noc_y[dir], ready_addr_[dir]), unsignalled_[dir]);
@@ -281,7 +326,10 @@ private:
     uint32_t tile_bytes_;
     uint32_t N_tiles_;
     RingWriterArgs args_;
+    uint32_t out_base_;
     Deferred deferred_;
+    Held held_;
+    uint32_t taken_[2] = {};
     uint32_t consumed_[2] = {};
     uint32_t unsignalled_[2] = {};
     uint32_t ready_addr_[2] = {};

@@ -28,6 +28,7 @@ struct SliceLayout {
     mmrs::Span m_block(uint32_t mb) const;
     mmrs::Span n_block(uint32_t n_core, uint32_t nb) const;
     uint32_t blocks_per_step(uint32_t dir) const;
+    bool stages_in_l1(uint32_t K_tiles, uint32_t producers_per_sender) const;
 };
 
 SliceLayout make_slice_layout(

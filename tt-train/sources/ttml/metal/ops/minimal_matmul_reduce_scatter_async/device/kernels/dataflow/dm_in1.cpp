@@ -40,6 +40,9 @@ void kernel_main() {
     constexpr uint32_t in0_receiver_semaphore_id = get_compile_time_arg_val(23);
     constexpr uint32_t go_fwd_semaphore_id = get_compile_time_arg_val(24);
     constexpr uint32_t go_bwd_semaphore_id = get_compile_time_arg_val(25);
+    constexpr uint32_t taken_fwd_semaphore_id = get_compile_time_arg_val(27);
+    constexpr uint32_t taken_bwd_semaphore_id = get_compile_time_arg_val(28);
+    constexpr bool stage_in_l1 = get_compile_time_arg_val(29) == 1;
 
     uint32_t argidx = 0;
     const uint32_t in1_addr = get_arg_val<uint32_t>(argidx++);
@@ -67,10 +70,12 @@ void kernel_main() {
     }
     ring.go_sem_addr[0] = get_semaphore(go_fwd_semaphore_id);
     ring.go_sem_addr[1] = get_semaphore(go_bwd_semaphore_id);
+    ring.taken_sem_addr[0] = get_semaphore(taken_fwd_semaphore_id);
+    ring.taken_sem_addr[1] = get_semaphore(taken_bwd_semaphore_id);
     const uint32_t in0_upstream_noc_x = sink_in0 ? get_arg_val<uint32_t>(argidx++) : 0;
     const uint32_t in0_upstream_noc_y = sink_in0 ? get_arg_val<uint32_t>(argidx++) : 0;
 
-    constexpr auto in1_args = TensorAccessorArgs<27>();
+    constexpr auto in1_args = TensorAccessorArgs<30>();
     const auto in1_reader = TensorAccessor(in1_args, in1_addr);
     constexpr auto out_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
     const auto out_writer = TensorAccessor(out_args, out_addr, out_tile_size);
@@ -93,8 +98,15 @@ void kernel_main() {
 
     constexpr uint32_t full_N_tiles_bytes = N_block_tiles * in1_tile_size;
 
-    RingWriter<M_block_tiles, N_block_tiles, ring_size, slice_tiles, decltype(out_writer), decltype(buffer)> writer(
-        out_writer, buffer, out_tile_size, N_tiles, ring);
+    RingWriter<
+        M_block_tiles,
+        N_block_tiles,
+        ring_size,
+        slice_tiles,
+        stage_in_l1,
+        decltype(out_writer),
+        decltype(buffer)>
+        writer(out_writer, buffer, out_tile_size, N_tiles, ring);
 
     for (uint32_t step = 0; step < ring_size; step++) {
         for (uint32_t nb = 0; nb < N_blocks; nb++) {

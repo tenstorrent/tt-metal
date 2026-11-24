@@ -40,7 +40,7 @@ constexpr uint32_t kRtSenderLandedSemIdx = 1;
 constexpr uint32_t kMaxSendSlots = 16;
 constexpr uint32_t kSendSlotHeaderBytes = 192;
 constexpr uint32_t kSendSlotAlignBytes = 64;
-constexpr uint32_t kReadyStrideBytes = 16;
+constexpr uint32_t kReadyStrideBytes = 32;
 
 std::pair<std::vector<ttnn::CoreCoord>, uint32_t> build_core_order_for_axis(
     const ttnn::CoreCoord& core,
@@ -294,6 +294,9 @@ MinimalMatmulReduceScatterAsyncProgramFactory::create_at(
     auto in1_valid_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, VALID);
     const std::array<uint32_t, 2> go_semaphore_ids = {
         tt::tt_metal::CreateSemaphore(program, core_grid, 0), tt::tt_metal::CreateSemaphore(program, core_grid, 0)};
+    const std::array<uint32_t, 2> taken_semaphore_ids = {
+        tt::tt_metal::CreateSemaphore(program, core_grid, 0), tt::tt_metal::CreateSemaphore(program, core_grid, 0)};
+    const bool stage_in_l1 = layout.stages_in_l1(K_tiles, max_producers);
 
     const bool in0_is_output_writer = !transpose_core_grid;
     const bool in1_is_output_writer = transpose_core_grid;
@@ -336,6 +339,9 @@ MinimalMatmulReduceScatterAsyncProgramFactory::create_at(
             go_semaphore_ids[0],
             go_semaphore_ids[1],
             static_cast<uint32_t>(transpose_a),
+            taken_semaphore_ids[0],
+            taken_semaphore_ids[1],
+            static_cast<uint32_t>(stage_in_l1),
         };
         tt::tt_metal::TensorAccessorArgs(*own_input.buffer()).append_to(args);
         tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(args);
@@ -627,7 +633,12 @@ MinimalMatmulReduceScatterAsyncProgramFactory::create_at(
                 num_dirs,
                 dir,
                 ring_size,
-                go_semaphore_ids[dir]};
+                go_semaphore_ids[dir],
+                M_block_tiles,
+                N_block_tiles,
+                double_buffer_factor,
+                taken_semaphore_ids[dir],
+                static_cast<uint32_t>(stage_in_l1)};
             const auto& route = dir == mmrs::kForward ? forward_route : backward_route;
             send_ct.insert(send_ct.end(), route.begin(), route.end());
             tt::tt_metal::TensorAccessorArgs(*ring_buffer.buffer()).append_to(send_ct);

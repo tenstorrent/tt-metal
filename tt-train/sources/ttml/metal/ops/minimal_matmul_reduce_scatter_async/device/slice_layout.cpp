@@ -33,6 +33,11 @@ uint32_t SliceLayout::blocks_per_step(uint32_t dir) const {
     return mmrs::blocks_in_direction(N_blocks, num_dirs, dir) * M_blocks;
 }
 
+bool SliceLayout::stages_in_l1(uint32_t K_tiles, uint32_t producers_per_sender) const {
+    const uint32_t blocks_between_sends = num_dirs == 2 && M_blocks == 1 && N_blocks > 1 ? 2 : 1;
+    return K_tiles * blocks_between_sends >= producers_per_sender;
+}
+
 SliceLayout make_slice_layout(
     uint32_t M_tiles,
     uint32_t N_tiles,

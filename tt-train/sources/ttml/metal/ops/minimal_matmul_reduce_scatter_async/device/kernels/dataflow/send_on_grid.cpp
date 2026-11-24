@@ -16,10 +16,23 @@
 namespace {
 namespace fabric_api = tt::tt_fabric::linear::experimental;
 
-constexpr uint32_t kReadyStrideBytes = 16;
+constexpr uint32_t kReadyStrideBytes = 32;
+
+volatile tt_l1_ptr uint32_t* ready_word(uint32_t ready_base, uint32_t producer, uint32_t word) {
+    return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+        ready_base + (producer * kReadyStrideBytes) + (word * sizeof(uint32_t)));
+}
 
 volatile tt_l1_ptr uint32_t* ready_counter(uint32_t ready_base, uint32_t producer) {
-    return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready_base + (producer * kReadyStrideBytes));
+    return ready_word(ready_base, producer, 0);
+}
+
+volatile tt_l1_ptr uint32_t* out_base(uint32_t ready_base, uint32_t producer) {
+    return ready_word(ready_base, producer, 1);
+}
+
+volatile tt_l1_ptr uint32_t* taken_count(uint32_t ready_base, uint32_t producer) {
+    return ready_word(ready_base, producer, 4);
 }
 
 struct ProducerArgs {
@@ -65,6 +78,9 @@ public:
     const BlockRegion& region() const {
         return region_;
     }
+    uint32_t block() const {
+        return block_;
+    }
     void next_unit() {
         do {
             if (++p_ == num_producers_) {
@@ -83,10 +99,12 @@ private:
     static constexpr uint32_t kUnitsPerProducer = (ring_size - 1) * kBlocksPerStep;
 
     void load_block() {
+        const uint32_t step = j_ / kBlocksPerStep;
         const uint32_t within = j_ % kBlocksPerStep;
-        slice_ = mmrs::step_slice(j_ / kBlocksPerStep, ring_index_, ring_size, dir);
+        slice_ = mmrs::step_slice(step, ring_index_, ring_size, dir);
         nb_ = mmrs::nth_block_in_direction(within / M_blocks, num_dirs, dir);
         mb_ = within % M_blocks;
+        block_ = (step * N_blocks * M_blocks) + (nb_ * M_blocks) + mb_;
     }
 
     bool load_unit() {
@@ -102,6 +120,7 @@ private:
     uint32_t slice_ = 0;
     uint32_t nb_ = 0;
     uint32_t mb_ = 0;
+    uint32_t block_ = 0;
     BlockRegion region_;
     bool done_ = false;
 };
@@ -181,11 +200,17 @@ void kernel_main() {
     constexpr uint32_t dir = get_compile_time_arg_val(10);
     constexpr uint32_t ring_size = get_compile_time_arg_val(11);
     constexpr uint32_t go_semaphore_id = get_compile_time_arg_val(12);
+    constexpr uint32_t M_block_tiles = get_compile_time_arg_val(13);
+    constexpr uint32_t N_block_tiles = get_compile_time_arg_val(14);
+    constexpr uint32_t out_cb_blocks = get_compile_time_arg_val(15);
+    constexpr uint32_t taken_semaphore_id = get_compile_time_arg_val(16);
+    constexpr bool stage_in_l1 = get_compile_time_arg_val(17) == 1;
+    constexpr uint32_t block_bytes = M_block_tiles * N_block_tiles * tile_size;
     static_assert(slot_packets >= 2 && slot_packets % 2 == 0 && slot_packets <= 32);
     constexpr uint32_t packets_per_batch = slot_packets / 2;
     constexpr ccl_routing_utils::line_unicast_route_info_t route =
-        ccl_routing_utils::get_line_unicast_route_info_from_args<13>();
-    constexpr auto buffer_args = TensorAccessorArgs<13 + ccl_routing_utils::num_line_unicast_args>();
+        ccl_routing_utils::get_line_unicast_route_info_from_args<18>();
+    constexpr auto buffer_args = TensorAccessorArgs<18 + ccl_routing_utils::num_line_unicast_args>();
     static_assert(tiles_per_packet >= NOC_SCATTER_WRITE_MIN_CHUNKS && tiles_per_packet <= NOC_SCATTER_WRITE_MAX_CHUNKS);
     constexpr bool trailing_incs = tiles_per_packet > kFusedIncMaxTiles;
     auto next_slot = [](uint32_t slot) { return slot + 1 == slot_packets ? 0 : slot + 1; };
@@ -217,8 +242,11 @@ void kernel_main() {
 
     for (uint32_t p = 0; p < num_producers; p++) {
         *ready_counter(ready_base, p) = 0;
+        *out_base(ready_base, p) = 0;
+        *taken_count(ready_base, p) = 0;
     }
     const uint32_t go_sem_addr = get_semaphore(go_semaphore_id);
+    const uint32_t taken_sem_addr = get_semaphore(taken_semaphore_id);
     for (uint32_t p = 0; p < num_producers; p++) {
         noc_inline_dw_write(
             get_noc_addr(producers[p].noc_x, producers[p].noc_y, go_sem_addr), ready_base + (p * kReadyStrideBytes));
@@ -261,7 +289,9 @@ void kernel_main() {
     using Cursor = UnitCursor<ring_size, slice_tiles, m_piece, M_blocks, N_blocks, num_dirs, dir>;
     Cursor cursor(producers, num_producers, ring_index);
     std::array<uint64_t, trailing_incs ? slot_packets : 1> slot_trailing_inc{};
+    std::array<uint32_t, stage_in_l1 ? slot_packets : 1> slot_producer{};
     uint32_t trailing_slots = 0;
+    uint32_t taken_slots = 0;
     uint32_t odd_slots = 0;
     uint32_t read_slot = 0;
     uint32_t send_slot = 0;
@@ -270,6 +300,9 @@ void kernel_main() {
     uint32_t cols = 0;
     uint32_t page = 0;
     uint32_t row_step = 0;
+    uint32_t source = 0;
+    uint32_t source_x = 0;
+    uint32_t source_y = 0;
 
     auto read_batch = [&]() __attribute__((always_inline)) -> uint32_t {
         uint32_t issued = 0;
@@ -288,26 +321,57 @@ void kernel_main() {
                 row_left = cols;
                 page = (region.row0 * N_tiles) + region.col0;
                 row_step = N_tiles + 1 - cols;
+                if constexpr (stage_in_l1) {
+                    volatile tt_l1_ptr uint32_t* base = out_base(ready_base, cursor.producer());
+                    while (*base == 0) {
+                        invalidate_l1_cache();
+                    }
+                    source = *base + ((cursor.block() % out_cb_blocks) * block_bytes);
+                    source_x = cursor.producer_args().noc_x;
+                    source_y = cursor.producer_args().noc_y;
+                }
             }
             const Header header = slots.header(read_slot);
             auto& scatter = header->command_fields.unicast_scatter_write;
             const uint32_t count = tiles_left < tiles_per_packet ? tiles_left : tiles_per_packet;
             uint32_t l1 = slots.payload(read_slot);
-            for (uint32_t i = 0; i < count; ++i, l1 += tile_size) {
-                uint64_t source = 0;
-                if constexpr (banked) {
-                    scatter.noc_address[i] = neighbour_pages(page);
-                    source = local_pages(page);
-                } else {
-                    scatter.noc_address[i] = neighbour_address(page);
-                    source = local_address(page);
+            if constexpr (stage_in_l1) {
+                for (uint32_t i = 0; i < count;) {
+                    const uint32_t run = row_left < count - i ? row_left : count - i;
+                    noc_async_read(get_noc_addr(source_x, source_y, source), l1, run * tile_size);
+                    for (uint32_t t = 0; t < run; ++t, ++i, ++page) {
+                        if constexpr (banked) {
+                            scatter.noc_address[i] = neighbour_pages(page);
+                        } else {
+                            scatter.noc_address[i] = neighbour_address(page);
+                        }
+                    }
+                    l1 += run * tile_size;
+                    source += run * tile_size;
+                    row_left -= run;
+                    if (row_left == 0) {
+                        row_left = cols;
+                        page += row_step - 1;
+                        source += (N_block_tiles - cols) * tile_size;
+                    }
                 }
-                noc_async_read_one_packet(source, l1, tile_size);
-                if (--row_left == 0) {
-                    row_left = cols;
-                    page += row_step;
-                } else {
-                    ++page;
+            } else {
+                for (uint32_t i = 0; i < count; ++i, l1 += tile_size) {
+                    uint64_t tile = 0;
+                    if constexpr (banked) {
+                        scatter.noc_address[i] = neighbour_pages(page);
+                        tile = local_pages(page);
+                    } else {
+                        scatter.noc_address[i] = neighbour_address(page);
+                        tile = local_address(page);
+                    }
+                    noc_async_read_one_packet(tile, l1, tile_size);
+                    if (--row_left == 0) {
+                        row_left = cols;
+                        page += row_step;
+                    } else {
+                        ++page;
+                    }
                 }
             }
             tiles_left -= count;
@@ -316,6 +380,10 @@ void kernel_main() {
             if (tiles_left == 0) {
                 const auto& producer = cursor.producer_args();
                 landed_inc = safe_get_noc_addr(producer.noc_x, producer.noc_y, landed_sem_addr, edm_to_local_chip_noc);
+                if constexpr (stage_in_l1) {
+                    slot_producer[read_slot] = cursor.producer();
+                    taken_slots |= slot_bit;
+                }
                 cursor.next_unit();
             }
             if constexpr (trailing_incs) {
@@ -362,6 +430,24 @@ void kernel_main() {
             send_slot = next_slot(send_slot);
         }
         noc_async_read_barrier();
+        if constexpr (stage_in_l1) {
+            uint32_t slot = read_slot;
+            for (uint32_t n = in_flight; n > 0; --n) {
+                slot = slot == 0 ? slot_packets - 1 : slot - 1;
+                const uint32_t slot_bit = 1U << slot;
+                if ((taken_slots & slot_bit) == 0) {
+                    continue;
+                }
+                taken_slots &= ~slot_bit;
+                const uint32_t p = slot_producer[slot];
+                volatile tt_l1_ptr uint32_t* taken = taken_count(ready_base, p);
+                *taken = *taken + 1;
+                noc_async_write(
+                    reinterpret_cast<uint32_t>(taken),
+                    get_noc_addr(producers[p].noc_x, producers[p].noc_y, taken_sem_addr),
+                    sizeof(uint32_t));
+            }
+        }
         landed = in_flight;
     }
 
