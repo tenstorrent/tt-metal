@@ -117,10 +117,10 @@ void TensorPrefetcherManager::validate_dispatch_engine_pages(
         "Tensor prefetcher request has {} receivers; fast dispatch's prefetcher serves 1 to {}",
         target.total_receivers,
         fifo::kMaxReceivers);
-    // The stage slot each of this target's blocks lands in, exactly as the kernels size it.
-    const uint32_t stage_slot_bytes = fifo::stage_slot_bytes(
+    // The largest block each receiver's share of the stage ring takes, exactly as the kernels size the shares.
+    const uint32_t max_block_bytes = fifo::max_stage_block_bytes(fifo::stage_share_bytes(
         fifo_layout_.stage_ring_bytes(mesh_device_->impl().metal_context().dispatch_mem_map().unused_l1_size()),
-        target.total_receivers);
+        target.total_receivers));
     for (const auto& page : sender_pages) {
         const TensorPrefetcherRequestHeader& header = header_of(page);
         if (header.base.cmd_id != DRAM_PREFETCHER_CMD_PREFETCH) {
@@ -142,13 +142,12 @@ void TensorPrefetcherManager::validate_dispatch_engine_pages(
                 "Fast dispatch's Tensor prefetcher does not stream (tensor {} is streaming; #65545)",
                 e);
             TT_FATAL(
-                layout.page_bytes_per_recv <= stage_slot_bytes,
-                "Tensor {} has {} B blocks; the dispatch engine stages {} receivers' blocks in {} slots of {} B each",
+                layout.page_bytes_per_recv <= max_block_bytes,
+                "Tensor {} has {} B blocks; the dispatch engine stages blocks of at most {} B for {} receivers",
                 e,
                 layout.page_bytes_per_recv,
-                target.total_receivers,
-                fifo::kStageSlotsPerReceiver,
-                stage_slot_bytes);
+                max_block_bytes,
+                target.total_receivers);
         }
     }
 }
