@@ -9,7 +9,7 @@
 
 namespace sf {
 
-constexpr uint32_t CT_ACCESSORS = 27;  // first TensorAccessorArgs index
+constexpr uint32_t CT_ACCESSORS = 29;  // first TensorAccessorArgs index
 
 constexpr uint32_t B = get_compile_time_arg_val(0);         // padded batch rows (<= 32)
 constexpr uint32_t G = get_compile_time_arg_val(1);         // local KV groups this call attends
@@ -38,12 +38,15 @@ constexpr uint32_t STRIDE = get_compile_time_arg_val(23);  // the unit class str
 constexpr uint32_t STRIDE_INV = get_compile_time_arg_val(24);  // STRIDE^-1 mod NCORES (0 on one core)
 constexpr uint32_t SPLIT = get_compile_time_arg_val(25);       // K: a row's most units (0: the fixed NSUB unit)
 constexpr uint32_t NSUB_MIN = get_compile_time_arg_val(26);    // the fewest chunks of a position-derived unit
+constexpr uint32_t NCB = get_compile_time_arg_val(27);         // combine jobs (O blocks) per (row, group)
+constexpr uint32_t CT = get_compile_time_arg_val(28);          // O tiles of one combine job (NCB * CT == DHT)
 
 constexpr uint32_t CHUNK = SK * 32;
 // the divisors of the two unit rules, never a constant zero: the other rule's branch is still compiled (-Werror)
 constexpr uint32_t NSUB_DIV = NSUB > 0 ? NSUB : 1;
 constexpr uint32_t SPLIT_DIV = SPLIT > 0 ? SPLIT : 1;
 constexpr uint32_t BG = B * G;
+constexpr uint32_t JOBS = BG * NCB;
 constexpr uint32_t TILES_PER_SLOT = 2 + DHT;
 constexpr uint32_t NONE_POS = 0xFFFFFFFFu;  // cur_pos -1: a padding row
 
@@ -54,6 +57,7 @@ static_assert(SPLIT > 0 ? (NSUB == 0 && NSUB_MIN >= 1 && WINDOW == 0) : NSUB >= 
 static_assert(SPLIT == 0 || (NSLOTS <= SPLIT && MAXU <= SPLIT), "a row's units fit its K slots");
 static_assert(PAIRS == M * B * G, "the pair space is unit-major over (row, group)");
 static_assert(CAP_T == 0 || CAP_T % BLOCK_T == 0, "a bounded cache wraps on block boundaries");
+static_assert(CT >= 1 && NCB * CT == DHT, "the combine jobs of a (row, group) tile its O");
 
 // Phase-1 (partials) circular buffers
 constexpr uint32_t CB_Q = 0;
@@ -172,6 +176,24 @@ inline void for_each_unit(uint32_t core, const uint32_t* pos, F&& f) {
         for (; u <= hi; u += M) {
             f(b, bg - b * G, bg, u, r);
         }
+    }
+}
+
+// Walks this core's combine jobs in the one order the three kernels of phase 2 share: job j = (bg, blk) =
+// (j / NCB, j % NCB) on core j mod NCORES, ascending j, live rows only. A job merges O tiles
+// [blk * CT, (blk + 1) * CT) of its (row, group) and replays the row's statistics sequence (identical ops on
+// identical data), so the split of a row over jobs and cores never changes a tile's arithmetic.
+// f(b, g, bg, blk, row).
+template <typename F>
+inline void for_each_combine_job(uint32_t core, const uint32_t* pos, F&& f) {
+    for (uint32_t j = core; j < JOBS; j += NCORES) {
+        const uint32_t bg = j / NCB;
+        const uint32_t b = bg / G;
+        const Row r = row_of(pos[b]);
+        if (!r.live) {
+            continue;
+        }
+        f(b, bg - b * G, bg, j - bg * NCB, r);
     }
 }
 

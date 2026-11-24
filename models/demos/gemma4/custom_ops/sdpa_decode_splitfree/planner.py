@@ -38,9 +38,14 @@ Vocabulary (tokens are KV positions of one row's paged cache):
   live at once (``min(K, chunks of the page table)`` with the position's unit, all of them with a fixed unit;
   ``ceil((window-1)/C) + 1`` with a window). A slot is ``2 + DHt`` fp32 tiles: ``m``, ``l``, then ``O``'s
   ``DHt`` tiles.
-* combine: pair ``(b, g)`` on core ``(b*G + g) mod n_cores`` merges the live units in ascending ``u`` with the
-  stock correction step (``m' = max(m, m_u)``, ``l' = l*e^(m-m') + l_u*e^(m_u-m')``, ``O'`` likewise), then
-  normalises and writes the group's head rows in bf16.
+* combine: jobs ``(bg, blk)`` -- the row-group ``bg = b*G + g`` and the block ``blk < NCB = DHt / CT`` of ``CT``
+  O tiles -- on core ``(bg*NCB + blk) mod n_cores``, ``CT`` the smallest divisor of DHt whose ``B*G*NCB`` jobs
+  fit the grid (``choose_combine_tiles``: one O tile per job, 16 jobs per row, up to 8 rows on 13x10). A job
+  replays its row's statistics sequence (identical ops on identical data: identical bits on every job) and merges
+  its CT O tiles over the live units in ascending ``u`` with the stock correction step (``m' = max(m, m_u)``,
+  ``l' = l*e^(m-m') + l_u*e^(m_u-m')``, ``O'`` likewise), then normalises and writes the group's head rows of its
+  tiles in bf16. Every op of the merge is on a statistics tile or tile-local, so neither ``CT`` nor the job ->
+  core split changes a tile's arithmetic: a lone row's combine runs on 16 cores at once.
 """
 
 import dataclasses
@@ -55,6 +60,7 @@ UNIT_ENV = "GEMMA4_SDPA_SPLITFREE_UNIT"  # <tokens>: the legacy fixed unit (spli
 CHUNK_ENV = "GEMMA4_SDPA_SPLITFREE_CHUNK"
 READS_ENV = "GEMMA4_SDPA_SPLITFREE_READS"  # K/V tile reads a core keeps in flight (default 16)
 QK_FP32_ENV = "GEMMA4_SDPA_SPLITFREE_QK_FP32"  # "0": the scores CB in bf16 (the stock's im_df); default fp32
+COMBINE_TILES_ENV = "GEMMA4_SDPA_SPLITFREE_COMBINE_TILES"  # test knob: CT, the O tiles of a combine job
 DEFAULT_SPLIT = 32
 DEFAULT_MIN_CHUNKS = 1
 LEGACY_UNIT = 4096  # the fixed unit of SPLIT=0 (the op before the position-derived unit)
@@ -103,6 +109,18 @@ def nsub_of_chunks(n_chunks, split, nsub_min):
     return max(int(nsub_min), ceil_div(n_chunks, split))
 
 
+def choose_combine_tiles(bg_n, dht, n_cores):
+    """``CT``, the O tiles of one combine job: the smallest divisor of ``dht`` for which the ``bg_n * dht / CT``
+    jobs (rows x groups x blocks) fit ``n_cores`` -- one job per core, the most cores per row. A scheduling choice
+    only (it never changes a tile's arithmetic), so it may follow the batch: 1 for B <= 8, 2 for B = 16, 4 for
+    B = 32 at head_dim 512 on 13x10. ``dht`` itself when even one block per row-group does not fit."""
+    dht, bg_n, n_cores = int(dht), max(1, int(bg_n)), max(1, int(n_cores))
+    for ct in range(1, dht + 1):
+        if dht % ct == 0 and bg_n * (dht // ct) <= n_cores:
+            return ct
+    return dht
+
+
 def partial_cb_bytes(dht, sk, kv_tile_bytes, window, pos_stick, pt_stick, qk_tile_bytes=BF16_TILE_BYTES):
     """Phase-1 (partials) circular buffers of one core: q; K and V double-buffered over one chunk in the cache
     format; the causal mask (and the window mask); the zero tile; the scores (one chunk, ``qk_tile_bytes`` per
@@ -125,15 +143,12 @@ def partial_cb_bytes(dht, sk, kv_tile_bytes, window, pos_stick, pt_stick, qk_til
     )
 
 
-def combine_cb_bytes(dht, pos_stick):
-    """Phase-2 (combine) circular buffers of one core: the unit partial double-buffered (m, l, O), seven fp32
-    statistics, two fp32 accumulators, the bf16 output, the cur_pos stick."""
+def combine_cb_bytes(ct, pos_stick):
+    """Phase-2 (combine) circular buffers of one core for jobs of ``ct`` O tiles: the unit partial
+    double-buffered (m, l, the job's O tiles), seven fp32 statistics, two fp32 accumulators, the bf16 output,
+    the cur_pos stick."""
     return (
-        2 * (2 + dht) * F32_TILE_BYTES
-        + 7 * F32_TILE_BYTES
-        + 2 * dht * F32_TILE_BYTES
-        + dht * BF16_TILE_BYTES
-        + pos_stick
+        2 * (2 + ct) * F32_TILE_BYTES + 7 * F32_TILE_BYTES + 2 * ct * F32_TILE_BYTES + ct * BF16_TILE_BYTES + pos_stick
     )
 
 
@@ -159,6 +174,7 @@ class SplitfreePlan:
     kv_tile_bytes: int
     qk_tile_bytes: int  # the scores CB: 4096 (fp32) or 2048 (bf16)
     reads_in_flight: int
+    combine_tiles: int  # CT: the O tiles of one combine job (a divisor of DHt)
     partial_cb_bytes: int
     combine_cb_bytes: int
     budget_bytes: int
@@ -180,6 +196,15 @@ class SplitfreePlan:
     @property
     def pair_space(self):
         return self.modulus * self.batch * self.groups
+
+    @property
+    def ncb(self):
+        """NCB: the O blocks (combine jobs) of one (row, group)."""
+        return self.dht // self.combine_tiles
+
+    @property
+    def combine_jobs(self):
+        return self.batch * self.groups * self.ncb
 
     @property
     def tiles_per_slot(self):
@@ -277,8 +302,24 @@ class SplitfreePlan:
     def slot(self, b, g, u):
         return (b * self.groups + g) * self.n_slots + (u % self.n_slots)
 
-    def combine_core(self, b, g):
-        return (b * self.groups + g) % self.n_cores
+    def combine_core(self, b, g, blk=0):
+        """The core of combine job ``(b, g, blk)``: job ``(b*G + g) * NCB + blk`` mod ``n_cores``."""
+        return ((b * self.groups + g) * self.ncb + blk) % self.n_cores
+
+    def combine_jobs_of_core(self, core, cur_pos):
+        """The ``(b, g, blk)`` combine jobs of a core for the padded rows' ``cur_pos`` list, in the kernels' order
+        (jobs ``core, core + n_cores, ...``; padding rows skipped)."""
+        out = []
+        for j in range(core, self.combine_jobs, self.n_cores):
+            bg, blk = divmod(j, self.ncb)
+            b, g = divmod(bg, self.groups)
+            if self.row_range(cur_pos[b]) is not None:
+                out.append((b, g, blk))
+        return out
+
+    def combine_tiles_of(self, blk):
+        """The O tiles (columns of the head dim, in tiles) combine block ``blk`` merges and writes."""
+        return range(blk * self.combine_tiles, (blk + 1) * self.combine_tiles)
 
     def combine_order(self, b, g, cur_pos):
         """The unit partials the combine of ``(b, g)`` merges, ascending: ``[(u, slot), ...]``."""
@@ -293,7 +334,8 @@ class SplitfreePlan:
             f"B {self.batch} x G {self.groups} (x {self.heads_per_group} heads), head_dim {self.head_dim}, context "
             f"{self.max_context}, window {self.window or 'none'}: {unit}, "
             f"{self.max_units} units, {self.n_slots} slots, modulus {self.modulus}, {self.pair_space} pairs on "
-            f"{self.n_cores} cores ({self.grid[0]}x{self.grid[1]}); scratch {self.scratch_tiles} tiles = "
+            f"{self.n_cores} cores ({self.grid[0]}x{self.grid[1]}); combine {self.combine_jobs} jobs of "
+            f"{self.combine_tiles} O tiles; scratch {self.scratch_tiles} tiles = "
             f"{self.scratch_bytes:,} B; CBs partial {self.partial_cb_bytes:,} / combine {self.combine_cb_bytes:,} of "
             f"{self.budget_bytes:,} B" + ("" if self.fits else " (over the L1 budget)")
         )
@@ -377,6 +419,10 @@ def plan_splitfree(
     n_slots = max_units if not window else min(max_units, ceil_div(window - 1, chunk) + 1)
     modulus = min(n_cores, max_units)
     stride, stride_inv = unit_stride(batch * groups, n_cores)
+    ct = _env_int(env, COMBINE_TILES_ENV, 0)
+    if ct and dht % ct:
+        raise ValueError(f"{COMBINE_TILES_ENV}={ct} must divide the head dim in tiles {dht}")
+    ct = ct or choose_combine_tiles(batch * groups, dht, n_cores)
     return SplitfreePlan(
         split=split,
         nsub_min=nsub_min,
@@ -398,8 +444,9 @@ def plan_splitfree(
         kv_tile_bytes=kv_tile,
         qk_tile_bytes=qk_tile,
         reads_in_flight=reads,
+        combine_tiles=ct,
         partial_cb_bytes=pcb,
-        combine_cb_bytes=combine_cb_bytes(dht, pos_stick),
+        combine_cb_bytes=combine_cb_bytes(ct, pos_stick),
         budget_bytes=budget,
     )
 

@@ -320,7 +320,7 @@ def test_splitfree_chunks_and_masks_follow_cur_pos_like_the_stock():
     # the combine walks the live units ascending, each from its own slot
     assert plan.combine_order(0, 0, 8191) == [(0, 0), (1, 1)]
     assert plan.combine_order(3, 0, 4096) == [(0, 3 * 64), (1, 3 * 64 + 1)]
-    assert plan.combine_core(0, 0) == 0 and plan.combine_core(31, 0) == 31
+    assert plan.combine_core(0, 0) == 0 and plan.combine_core(0, 0, 15) == 15  # one O tile per job: 16 jobs
     # the position's unit (K = 32): one chunk per unit up to 32 chunks, then ceil(n_chunks / 32) chunks
     split = _plan((13, 10), 1)
     assert split.live_units(0) == range(0, 1) and split.nsub_of(0) == 1 and split.nsub_of(-1) is None
@@ -391,7 +391,15 @@ def test_splitfree_chunk_follows_the_l1_budget_not_the_batch():
         p.qk_tile_bytes == 4096 and p.partial_cb_bytes == sp.partial_cb_bytes(16, 8, 1088, 0, 128, 0, 4096) == 870_528
     )
     assert sp.partial_cb_bytes(16, 8, 1088, 0, 128, 0) == 852_096
-    assert p.combine_cb_bytes == sp.combine_cb_bytes(16, 128) == 340_096
+    # the combine: 32 rows x 16 O tiles over 130 cores -> jobs of 4 tiles; one job per row (CT = DHt) is 340 KB
+    assert p.combine_tiles == 4 and p.combine_cb_bytes == sp.combine_cb_bytes(4, 128) == 118_912
+    assert sp.combine_cb_bytes(16, 128) == 340_096
+    assert [sp.choose_combine_tiles(b, 16, 130) for b in (1, 8, 16, 32)] == [1, 1, 2, 4]
+    assert [sp.choose_combine_tiles(b, 16, 64) for b in (1, 4, 8, 16, 32)] == [1, 1, 2, 4, 8]
+    assert sp.choose_combine_tiles(2 * 32, 8, 130) == 4 and sp.choose_combine_tiles(3, 12, 8) == 6
+    assert _plan((13, 10), 1, env={sp.COMBINE_TILES_ENV: "16"}).combine_tiles == 16
+    with pytest.raises(ValueError, match="must divide"):  # allow-pytest.raises (pure)
+        _plan((13, 10), 1, env={sp.COMBINE_TILES_ENV: "3"})
     assert "chunk 256, unit max(1, ceil(chunks / 32)) chunks, 32 units, 32 slots" in p.describe()
     assert "chunk 256 x 16 = unit 4096, 64 units, 64 slots" in _plan((13, 10), 32, env=LEGACY).describe()
 

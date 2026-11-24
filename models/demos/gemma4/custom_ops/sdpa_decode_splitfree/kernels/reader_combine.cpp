@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
-// Phase 2 reader of sdpa_decode_splitfree: for every (row, group) pair of this core (pair bg on core bg mod
-// NCORES) the live units' partials in ascending unit order, each (m, l, O) from its scratch slot into the
-// double-buffered input CBs. cur_pos is read once into the compute's CB.
+// Phase 2 reader of sdpa_decode_splitfree: for every combine job (bg, blk) of this core (splitfree_common.hpp:
+// for_each_combine_job) the live units' partials in ascending unit order, each unit's m, l and the job's CT O tiles
+// (O tiles [blk * CT, (blk + 1) * CT) of the slot) into the double-buffered input CBs. cur_pos is read once into
+// the compute's CB.
 //
 // compile-time args: the sf:: prefix (CT_ACCESSORS args) + TensorAccessorArgs(cur_pos, scratch)
 // runtime args: [core, pos_addr, scratch_addr]
@@ -36,11 +37,7 @@ void kernel_main() {
     CircularBuffer cb_m(CB_IN_M);
     CircularBuffer cb_l(CB_IN_L);
     CircularBuffer cb_o(CB_IN_O);
-    for (uint32_t bg = core; bg < BG; bg += NCORES) {
-        const Row r = row_of(pos[bg / G]);
-        if (!r.live) {
-            continue;
-        }
+    for_each_combine_job(core, pos, [&](uint32_t /*b*/, uint32_t /*g*/, uint32_t bg, uint32_t blk, const Row& r) {
         const uint32_t lo = unit_lo(r);
         const uint32_t hi = unit_hi(r);
         for (uint32_t u = lo; u <= hi; ++u) {
@@ -49,16 +46,17 @@ void kernel_main() {
             noc.async_read(scratch, CoreLocalMem<uint32_t>(cb_m.get_write_ptr()), f32_tile, {.page_id = page0}, {});
             cb_l.reserve_back(1);
             noc.async_read(scratch, CoreLocalMem<uint32_t>(cb_l.get_write_ptr()), f32_tile, {.page_id = page0 + 1}, {});
-            cb_o.reserve_back(DHT);
+            cb_o.reserve_back(CT);
             uint32_t o_ptr = cb_o.get_write_ptr();
-            for (uint32_t c = 0; c < DHT; ++c) {
-                noc.async_read(scratch, CoreLocalMem<uint32_t>(o_ptr), f32_tile, {.page_id = page0 + 2 + c}, {});
+            for (uint32_t c = 0; c < CT; ++c) {
+                noc.async_read(
+                    scratch, CoreLocalMem<uint32_t>(o_ptr), f32_tile, {.page_id = page0 + 2 + blk * CT + c}, {});
                 o_ptr += f32_tile;
             }
             noc.async_read_barrier();
             cb_m.push_back(1);
             cb_l.push_back(1);
-            cb_o.push_back(DHT);
+            cb_o.push_back(CT);
         }
-    }
+    });
 }

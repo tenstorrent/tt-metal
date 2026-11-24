@@ -16,8 +16,11 @@ allocates once (``allocate_scratch``) and passes in:
    sub-chunks in ascending order, fp32 statistics and accumulator, masking the chunk that holds ``cur_pos`` (and
    the window start on a sliding layer) exactly as the stock kernels mask it, and writes the unit's (m, l, O) as
    fp32 tiles to its scratch slot.
-2. combine (``kernels/*_combine.cpp``): one core per (row, group) merges the live units' partials in ascending
-   unit order with the stock correction step, normalises once and writes the group's head rows in bf16.
+2. combine (``kernels/*_combine.cpp``): jobs (row, group, block of ``CT`` O tiles) on distinct cores (16 jobs per
+   row up to 8 rows on 13x10: ``planner.choose_combine_tiles``) merge the live units' partials in ascending unit
+   order with the stock correction step, normalise once and write the group's head rows of the job's tiles in
+   bf16. Every job of a row replays the row's statistics sequence and every O op is tile-local, so ``CT`` and
+   the job -> core split never change a tile's bits.
 
 Because every unit partial is computed by identical code on identical data in one fixed order, the unit
 boundaries follow the row's own position and the build constants (chunk, K, NSUB_MIN) alone, and the merge order
@@ -77,6 +80,12 @@ def _f32_bits(x):
 
 def _pow2(n):
     return n > 0 and (n & (n - 1)) == 0
+
+
+def _combine_granularity(ct):
+    """The dest tiles one combine block op takes at a time: the largest of 4 / 2 / 1 (fp32 half-sync dest) that
+    divides ``ct``."""
+    return next(g for g in (DST_TILES, 2, 1) if g <= ct and ct % g == 0)
 
 
 class SdpaDecodeSplitfree:
@@ -246,7 +255,7 @@ class SdpaDecodeSplitfree:
         except ValueError as e:
             return str(e)
         if not plan.fits:
-            return f"no chunk fits the per-core L1: {plan.describe()}"
+            return f"the circular buffers do not fit the per-core L1: {plan.describe()}"
         cap = cls.scratch_capacity(scratch)
         if plan.scratch_tiles > cap:
             return f"the scratch holds {cap} fp32 tiles, the call needs {plan.scratch_tiles}: {plan.describe()}"
@@ -340,14 +349,19 @@ class SdpaDecodeSplitfree:
             plan.stride_inv,
             plan.split,
             plan.nsub_min,
+            plan.ncb,
+            plan.combine_tiles,
         ]
-        assert len(prefix) == 27
+        assert len(prefix) == 29
+        CT = plan.combine_tiles
         defines = [
             ("EXP_APPROX_MODE", "0"),
             ("SUB_EXP_GRANULARITY", str(gran)),
             ("STATS_GRANULARITY", str(gran)),
             ("DHT_GRANULARITY", str(dht_gran)),
         ]
+        # the combine's O blocks are CT tiles: its dest granularity divides CT (never changes a tile's arithmetic)
+        defines2 = defines[:3] + [("DHT_GRANULARITY", str(_combine_granularity(CT)))]
         cores = row_major_cores(plan.grid, plan.n_cores)
         core_set = core_range_set(cores)
         kv_fmt = k_cache.dtype
@@ -376,14 +390,14 @@ class SdpaDecodeSplitfree:
             dst_full_sync_en=False,
         )
 
-        def kernel(name, ct, rt, config, with_defines=False):
+        def kernel(name, ct, rt, config, kernel_defines=None):
             return ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / name),
                 core_ranges=core_set,
                 compile_time_args=ct,
                 runtime_args=rt,
                 config=config,
-                **({"defines": defines} if with_defines else {}),
+                **({"defines": kernel_defines} if kernel_defines else {}),
             )
 
         # ── phase 1: the unit partials into the scratch ──
@@ -432,7 +446,7 @@ class SdpaDecodeSplitfree:
                 rt_args([cur_pos.buffer_address(), scratch.buffer_address()]),
                 ttnn.WriterConfigDescriptor(),
             ),
-            kernel("compute_partials.cpp", list(prefix), rt_args([]), compute_cfg, with_defines=True),
+            kernel("compute_partials.cpp", list(prefix), rt_args([]), compute_cfg, defines),
         ]
         ttnn.generic_op(
             [q, k_cache, v_cache, cur_pos, page_table, scratch],
@@ -447,12 +461,12 @@ class SdpaDecodeSplitfree:
         cbs2 = [
             cb(CB_IN_M, 2, F32_TILE, ttnn.float32),
             cb(CB_IN_L, 2, F32_TILE, ttnn.float32),
-            cb(CB_IN_O, 2 * DHt, F32_TILE, ttnn.float32),
+            cb(CB_IN_O, 2 * CT, F32_TILE, ttnn.float32),
             cb(CB_POS_C, 1, pos_stick, ttnn.int32),
             cb(CB_POS_D, 1, pos_stick, ttnn.int32),
-            cb(CB_OUT_FINAL, DHt, BF16_TILE, ttnn.bfloat16),
-            cb(CB_ACC, DHt, F32_TILE, ttnn.float32),
-            cb(CB_ACC_2, DHt, F32_TILE, ttnn.float32),
+            cb(CB_OUT_FINAL, CT, BF16_TILE, ttnn.bfloat16),
+            cb(CB_ACC, CT, F32_TILE, ttnn.float32),
+            cb(CB_ACC_2, CT, F32_TILE, ttnn.float32),
         ] + [
             cb(i, 1, F32_TILE, ttnn.float32)
             for i in (CB_PREV_SUM_2, CB_EMD_2, CB_CUR_MAX, CB_PREV_MAX, CB_CUR_SUM, CB_PREV_SUM, CB_EMD)
@@ -476,7 +490,7 @@ class SdpaDecodeSplitfree:
                 rt_args([cur_pos.buffer_address(), out.buffer_address()]),
                 ttnn.WriterConfigDescriptor(),
             ),
-            kernel("compute_combine.cpp", list(prefix), rt_args([]), compute_cfg, with_defines=True),
+            kernel("compute_combine.cpp", list(prefix), rt_args([]), compute_cfg, defines2),
         ]
         return ttnn.generic_op(
             [scratch, cur_pos, out], ttnn.ProgramDescriptor(kernels=kernels2, semaphores=[], cbs=cbs2)

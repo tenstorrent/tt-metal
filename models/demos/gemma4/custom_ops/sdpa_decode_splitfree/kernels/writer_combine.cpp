@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
-// Phase 2 writer of sdpa_decode_splitfree: per (row, group) pair of this core, the bf16 output tiles of row b
-// (pages b*DHt + c): whole tiles when the call attends one KV group, else the group's HPG head rows as
-// 32-byte face lines (the stock write_partial_tiles_to_memory), so the groups of one row write disjoint rows.
+// Phase 2 writer of sdpa_decode_splitfree: per combine job (bg, blk) of this core, the job's CT bf16 output tiles
+// of row b (pages b*DHt + blk*CT + c): whole tiles when the call attends one KV group, else the group's HPG head
+// rows as 32-byte face lines (the stock write_partial_tiles_to_memory), so the groups of one row write disjoint
+// rows and the jobs of one row disjoint tiles.
 //
 // compile-time args: the sf:: prefix (CT_ACCESSORS args) + TensorAccessorArgs(cur_pos, out)
 // runtime args: [core, pos_addr, out_addr]
@@ -36,17 +37,11 @@ void kernel_main() {
     }
 
     CircularBuffer cb_out(CB_OUT_FINAL);
-    for (uint32_t bg = core; bg < BG; bg += NCORES) {
-        const uint32_t b = bg / G;
-        const uint32_t g = bg - b * G;
-        const Row r = row_of(pos[b]);
-        if (!r.live) {
-            continue;
-        }
-        cb_out.wait_front(DHT);
+    for_each_combine_job(core, pos, [&](uint32_t b, uint32_t g, uint32_t /*bg*/, uint32_t blk, const Row& /*r*/) {
+        cb_out.wait_front(CT);
         const uint32_t l1 = cb_out.get_read_ptr();
-        for (uint32_t c = 0; c < DHT; ++c) {
-            const uint32_t page = b * DHT + c;
+        for (uint32_t c = 0; c < CT; ++c) {
+            const uint32_t page = b * DHT + blk * CT + c;
             if constexpr (G == 1) {
                 noc.async_write(CoreLocalMem<uint32_t>(l1 + c * out_tile), out, out_tile, {}, {.page_id = page});
             } else {
@@ -66,6 +61,6 @@ void kernel_main() {
             }
         }
         noc.async_write_barrier();
-        cb_out.pop_front(DHT);
-    }
+        cb_out.pop_front(CT);
+    });
 }
