@@ -124,8 +124,8 @@ void kernel_main() {
     constexpr uint32_t cb_sin = get_named_compile_time_arg_val("cb_sin");
     constexpr uint32_t cb_trans = get_named_compile_time_arg_val("cb_trans");
     constexpr auto mc = McastArgs<
-        get_named_compile_time_arg_val("mcast0_ct_offset"),
-        get_named_compile_time_arg_val("mcast0_rt_offset")>();
+        get_named_compile_time_arg_val(Q_STEM_X_FAMILY_ARG("_ct_offset")),
+        get_named_compile_time_arg_val(Q_STEM_X_FAMILY_ARG("_rt_offset"))>();
     constexpr auto mc1 = McastArgs<
         get_named_compile_time_arg_val("mcast1_ct_offset"),
         get_named_compile_time_arg_val("mcast1_rt_offset")>();
@@ -140,6 +140,7 @@ void kernel_main() {
     const uint32_t qb_addr = get_arg_val<uint32_t>(a++);
     const uint32_t c0 = get_arg_val<uint32_t>(a++);
     const uint32_t cols = get_arg_val<uint32_t>(a++);
+    const uint32_t k_off = get_arg_val<uint32_t>(a++);  // first K tile of my group's slice (K-split; else 0)
     const uint32_t wkv_addr = get_arg_val<uint32_t>(a++);
     const uint32_t my_pos = get_arg_val<uint32_t>(a++);
     [[maybe_unused]] const uint32_t cos_addr = get_arg_val<uint32_t>(a++);
@@ -195,7 +196,8 @@ void kernel_main() {
     // ---- stage 1 --------------------------------------------------------------------------------------------------
     uint32_t prefetched = 0;
     if constexpr (mc.active) {
-        // qb_slice_load_block: pages k * Cq_t + c0 + c, laid out [k][c] (in1 width = cols). Pushed one K-block
+        // qb_slice_load_block: pages (k_off + k) * Cq_t + c0 + c, k < Q_t (= the group's K slice), laid out [k][c]
+        // (in1 width = cols). Pushed one K-block
         // (s1_kb rows) at a time: the compute waits per K-block, so the first block's matmul overlaps the rest of
         // the slice read (the slice stays resident; reserved once).
         const auto qb = TensorAccessor(qb_args, qb_addr, qb_tile_bytes);
@@ -206,7 +208,7 @@ void kernel_main() {
         for (uint32_t k = 0; k < Q_t; ++k) {
             for (uint32_t c = 0; c < cols; ++c) {
 #ifndef ABLATE_QB_READ
-                noc_async_read(qb.get_noc_addr(k * Cq_t + c0 + c), l1, qb_tile_bytes);
+                noc_async_read(qb.get_noc_addr((k_off + k) * Cq_t + c0 + c), l1, qb_tile_bytes);
 #endif
                 l1 += qb_tile_bytes;
                 if (++n == qb_batch) {

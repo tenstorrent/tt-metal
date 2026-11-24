@@ -19,6 +19,7 @@
 #include "api/tensor/noc_traits.h"
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
+#include "ttnn/ttnn/operations/q_stem/kernels/q_stem_common.hpp"
 
 using namespace dataflow_kernel_lib;
 
@@ -27,15 +28,9 @@ void kernel_main() {
     constexpr uint32_t x_tile_bytes = get_compile_time_arg_val(1);
     constexpr uint32_t round_tiles = get_compile_time_arg_val(2);
     constexpr uint32_t num_rounds = get_compile_time_arg_val(3);
-#if Q_STEM_INJECTOR_IDX == 0
     constexpr auto mc = McastArgs<
-        get_named_compile_time_arg_val("mcast0_ct_offset"),
-        get_named_compile_time_arg_val("mcast0_rt_offset")>();
-#else
-    constexpr auto mc = McastArgs<
-        get_named_compile_time_arg_val("mcast1_ct_offset"),
-        get_named_compile_time_arg_val("mcast1_rt_offset")>();
-#endif
+        get_named_compile_time_arg_val(Q_STEM_X_FAMILY_ARG("_ct_offset")),
+        get_named_compile_time_arg_val(Q_STEM_X_FAMILY_ARG("_rt_offset"))>();
     constexpr uint32_t idx = get_compile_time_arg_val(4);  // this injector
     constexpr uint32_t num_injectors = get_compile_time_arg_val(5);
     constexpr uint32_t depth = get_compile_time_arg_val(6);      // x_round_depth (receivers' slots)

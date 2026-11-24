@@ -5,6 +5,15 @@
 
 #include <cstdint>
 
+// x multicast family of this kernel (host define Q_STEM_X_FAMILY: the rotating injector index, or the K group under
+// K-split): named args "mcast<F>_ct_offset" / "mcast<F>_rt_offset"
+#ifndef Q_STEM_X_FAMILY
+#define Q_STEM_X_FAMILY 0
+#endif
+#define Q_STEM_STR2(x) #x
+#define Q_STEM_STR(x) Q_STEM_STR2(x)
+#define Q_STEM_X_FAMILY_ARG(suffix) "mcast" Q_STEM_STR(Q_STEM_X_FAMILY) suffix
+
 namespace q_stem {
 
 // The stage-1 send order — the single device-side definition shared by the injector, the stage-1 writers and the

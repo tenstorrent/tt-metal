@@ -36,7 +36,8 @@ void kernel_main() {
     constexpr uint32_t cb_x_stage = get_compile_time_arg_val(12);
     constexpr uint32_t inj_idx = get_compile_time_arg_val(13);  // this injector owns global rounds r % NI == inj_idx
     constexpr uint32_t num_injectors = get_compile_time_arg_val(14);
-    constexpr auto x_args = TensorAccessorArgs<15>();
+    constexpr uint32_t k_off = get_compile_time_arg_val(15);  // K-split: first K tile of my group's slice
+    constexpr auto x_args = TensorAccessorArgs<16>();
     constexpr uint32_t round_tiles = m * s1_kb;
     // 32 x 32 tile of four 16 x 16 faces (f0 f1 / f2 f3), each face row-major: face row = 16 elements
     constexpr uint32_t face_bytes = x_tile_bytes / 4;
@@ -101,7 +102,7 @@ void kernel_main() {
                 const uint32_t ta = b * x_St + g0 / 32;
                 const uint32_t delta = g0 % 32;
                 if (delta == 0) {
-                    const uint32_t page0 = ta * Q_t + kb * s1_kb;
+                    const uint32_t page0 = ta * Q_t + k_off + kb * s1_kb;
                     for (uint32_t k = 0; k < s1_kb; ++k) {
 #ifndef ABLATE_X_READ
                         noc_async_read(x.get_noc_addr(page0 + k), off + k * x_tile_bytes, x_tile_bytes);
@@ -109,7 +110,7 @@ void kernel_main() {
                     }
                 } else {
                     const uint32_t tb = g0 / 32 + 1 < x_St ? ta + 1 : ta;
-                    realign(off, ta, tb, delta, kb * s1_kb);
+                    realign(off, ta, tb, delta, k_off + kb * s1_kb);
                 }
                 off += s1_kb * x_tile_bytes;
             }

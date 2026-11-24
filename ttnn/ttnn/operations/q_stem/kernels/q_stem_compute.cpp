@@ -5,6 +5,9 @@
 //   s1_matmul_block     (stage-1 cores) q block = x round(s) (m x Q_t, in s1_kb K-blocks) @ resident q_b slice
 //                       (Q_t x cols) -> cb_q_slice (m x cols, row-major), never popped here (the ports and the
 //                       local-delivery writer read it in place)
+//   kpart_combine_block (K-split, owners) q block = own partial (cb_q_kpart) + the partner groups' partials
+//                       (cb_q_recv1 [+ cb_q_recv2]) -> cb_q_slice: one fused eltwise chain (FPU add, + SFPU add for
+//                       a third group). Partners' matmul packs into cb_q_kpart, which their writer ships to the owner.
 //   prefix_matmul_block per landed row: nope (1 x Dn_t) @ wkv_b1[h] (Dn_t x s3n) -> cb_prefix_out, per N-block
 //   rope_block (NoPE)   copy of the row's Dr_t rope tiles -> cb_rope_out
 //   rope_block (RoPE)   rot = rope (Dr_t x 1 tiles) @ trans (1 tile, rotate_half_meta) -> cb_rope_tmp (matmul_block,
@@ -90,17 +93,24 @@ void kernel_main() {
     constexpr uint32_t cb_rope_tmp = get_named_compile_time_arg_val("cb_rope_tmp");
     constexpr uint32_t qrt = get_named_compile_time_arg_val("qrt");
     constexpr uint32_t sbh_rot = get_named_compile_time_arg_val("sbh_rot");  // rotation matmul subblock height
+    // K-split stage 1 (regime R6): ksplit K groups; Q_t above is this group's K slice
+    constexpr uint32_t ksplit = get_named_compile_time_arg_val("ksplit");
+    constexpr uint32_t cb_q_kpart = get_named_compile_time_arg_val("cb_q_kpart");
+    constexpr uint32_t cb_q_recv1 = get_named_compile_time_arg_val("cb_q_recv1");
+    constexpr uint32_t cb_q_recv2 = get_named_compile_time_arg_val("cb_q_recv2");
+    constexpr uint32_t cb_s1_out = ksplit > 1 ? cb_q_kpart : cb_q_slice;  // the matmul's output
 
     const uint32_t cols = get_arg_val<uint32_t>(0);
     const uint32_t sbw1 = get_arg_val<uint32_t>(1);
     const uint32_t hpc = get_arg_val<uint32_t>(2);
     const uint32_t n_r = get_arg_val<uint32_t>(3);
+    [[maybe_unused]] const uint32_t kgroup = get_arg_val<uint32_t>(4);  // K group (0: owner of q)
 
-    CircularBuffer x_buf(cb_x_round), qb_buf(cb_qb_slice), q_buf(cb_q_slice), q_partial_buf(cb_q_partial);
+    CircularBuffer x_buf(cb_x_round), qb_buf(cb_qb_slice), q_buf(cb_s1_out), q_partial_buf(cb_q_partial);
     CircularBuffer landing_buf(cb_landing), wkv_buf(cb_wkv), prefix_buf(cb_prefix_out);
 
     if (cols > 0) {
-        compute_kernel_hw_startup<SrcOrder::Reverse>(cb_x_round, cb_qb_slice, cb_q_slice);
+        compute_kernel_hw_startup<SrcOrder::Reverse>(cb_x_round, cb_qb_slice, cb_s1_out);
     } else {
         compute_kernel_hw_startup<SrcOrder::Reverse>(cb_landing, cb_wkv, cb_prefix_out);
     }
@@ -110,14 +120,32 @@ void kernel_main() {
         DeviceZoneScopedN("S1");
         // resident in1 (NoWaitNoPop below: the lifecycle is mine), waited per K-block (QbKBlockWait)
         const auto shape = MatmulBlockShape::of(m, cols / sbw1, 1, sbw1, s1_kb, nkb);
+        // kpart_combine_block: q block (m x cols) = sum of the K groups' partials, into cb_q_slice
+        auto kpart_combine_block = [&]() {
+            if constexpr (ksplit == 2) {
+                add<input(cb_q_kpart), input(cb_q_recv1), output(cb_q_slice)>(IterationShape::tiles(m * cols));
+            } else if constexpr (ksplit == 3) {
+                eltwise_chain(
+                    IterationShape::tiles(m * cols),
+                    BinaryFpu<BinaryFpuOp::Add, input(cb_q_kpart), input(cb_q_recv1), Dst::D0>{},
+                    CopyTile<input(cb_q_recv2), Dst::D1>{},
+                    AddBinary<Dst::D0, Dst::D1, Dst::D0>{},
+                    PackTile<output(cb_q_slice)>{});
+            }
+        };
         for (uint32_t j = 0; j < num_blocks; ++j) {
 #ifdef ABLATE_S1_COMPUTE
             for (uint32_t kb = 0; kb < nkb; ++kb) {
                 cb_wait_front(cb_x_round, m * s1_kb);
                 cb_pop_front(cb_x_round, m * s1_kb);
             }
-            cb_reserve_back(cb_q_slice, m * cols);
-            cb_push_back(cb_q_slice, m * cols);
+            cb_reserve_back(cb_s1_out, m * cols);
+            cb_push_back(cb_s1_out, m * cols);
+            if constexpr (ksplit > 1) {
+                if (kgroup == 0) {
+                    kpart_combine_block();
+                }
+            }
             continue;
 #endif
             matmul_block<
@@ -148,6 +176,11 @@ void kernel_main() {
                 {},
                 {},
                 QbKBlockOffset{s1_kb * cols});
+            if constexpr (ksplit > 1) {
+                if (kgroup == 0) {
+                    kpart_combine_block();
+                }
+            }
         }
         cb_pop_front(cb_qb_slice, Q_t * cols);
     }

@@ -30,11 +30,15 @@ Knobs (single source each; every dependent quantity derives from them):
   PORT_BATCH_SEGMENTS port staging batch: segments per pull-read barrier (port reader) and per flush (sender);
                      the staging CB holds 2 batches
   QB_READ_BATCH      q_b slice reads per barrier
+  S1_KSPLIT          stage-1 K groups (regime R6): q_b's K split over ks stacked W1 x R1 rects (one x injector each,
+                     its K slice only); group g>0 sends its partial q blocks to the owner (group 0) core with the same
+                     columns, which sums them (kpart_combine_block) before the hand-off. 1 -> no split
 """
 
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 from pathlib import Path
 
@@ -79,6 +83,8 @@ PORT_BATCH_SEGMENTS = 4
 FREE_WRITER_NOC = {"right": 0, "below": 1}
 S1_WRITER_NOC = 1  # the same for the stage-1 rect (its reader, incl. the x-multicast receive, on the other NoC)
 QB_READ_BATCH = 8  # q_b slice reads per barrier (dm shortlist tie; rank-1 batch 4 is lamp L10)
+# Regime R6 (Refinement 7): K groups of stage 1 (1, 2 or 3; clamped to a divisor of Q_t and to the compute rows).
+S1_KSPLIT = 1
 MAX_HEADERS = 12  # PacketHeaderPool: <= 12 headers per RISC (passed to the port sender: one source)
 HDRS_PER_DEST_CAP = 4
 
@@ -100,10 +106,17 @@ CB_COS = 12
 CB_SIN = 13
 CB_TRANS = 14
 CB_ROPE_TMP = 15
+# K-split stage 1 (S1_KSPLIT > 1), every stage-1 group: the core's own partial q block (matmul out); on an owner the
+# partner groups' partials land in cb_q_recv1 / cb_q_recv2 (written remotely, pushed by the owner's writer)
+CB_Q_KPART = 16
+CB_Q_RECV1 = 17
+CB_Q_RECV2 = 18
 
 # ---- program semaphore ids (port cores; declared on every core the program uses) -------------------------------------
 SEM_BLOCK_READY = 0
 SEM_X_CREDIT = 1  # injectors: cumulative slot credits from the stage-1 receivers
+SEM_KPART_READY = 2  # owners: partial blocks landed from partner group 1 (id 2) / group 2 (id 3), cumulative
+SEM_KPART_CREDIT = 4  # partners: recv slots the owner has freed for them, cumulative
 
 FWD, BWD = 0, 1
 
@@ -200,22 +213,30 @@ class Geometry:
         self.partial_dtype = ttnn.float32 if fp32_dest_acc_en else ttnn.bfloat16
         self.partial_tile_bytes = ttnn.tile_size(self.partial_dtype)
 
-        # stage-1 blocking
+        # grid: row 0 = ports + injector; compute rect rows 1 .. gy-1
+        self.gx, self.gy = int(grid.x), int(grid.y)
+        self.C = self.gx * (self.gy - 1)
+        # K groups (R6): each a W1 x R1 rect, stacked downwards from row 1; group g owns K tiles g*Q_ks .. +Q_ks
+        self.ks = _largest_divisor_leq(self.Q_t, min(S1_KSPLIT, 3, self.gy - 1))
+        self.Q_ks = self.Q_t // self.ks
+
+        # stage-1 blocking (per K group: the x rounds and the q_b slice cover the group's Q_ks K tiles)
         self.m = _largest_divisor_leq(self.qrt, S1_BLOCK_M_TILES)  # s1_block_m_tiles (no ragged block)
-        self.s1_kb = _largest_divisor_leq(self.Q_t, max(1, X_ROUND_TILES_CAP // self.m))
-        self.nkb = self.Q_t // self.s1_kb
+        self.s1_kb = _largest_divisor_leq(self.Q_ks, max(1, X_ROUND_TILES_CAP // self.m))
+        self.nkb = self.Q_ks // self.s1_kb
         self.round_tiles = self.m * self.s1_kb
         self.blocks_per_image = (self.qrt // self.m) * G
         self.num_blocks = B * self.blocks_per_image
 
-        # grid: row 0 = ports + injector; compute rect rows 1 .. gy-1
-        self.gx, self.gy = int(grid.x), int(grid.y)
-        self.C = self.gx * (self.gy - 1)
-        self.W1, self.R1 = _s1_rect(self.Cq_t, self.gx, self.gy - 1)
-        self.C1 = self.W1 * self.R1
+        self.W1, self.R1 = _s1_rect(self.Cq_t, self.gx, (self.gy - 1) // self.ks)
+        self.C1 = self.W1 * self.R1  # cores per K group (the owners hold q)
         self.cols_base, self.cols_extra = divmod(self.Cq_t, self.C1)
         assert self.cols_base >= 1
         self.cols_max = self.cols_base + (1 if self.cols_extra else 0)
+        # K-split partial-block CBs: whole blocks of m * cols tiles for both column counts (no block wraps the CB
+        # end), >= 2 blocks deep (the partner computes block j+1 while block j travels)
+        lcm = math.lcm(self.cols_base, self.cols_max)
+        self.kpart_tiles = self.m * lcm * -(-2 * self.cols_max // lcm)
 
         # stage 3
         assert S3_BLOCK_M_TILES == 1, "the landing row layout [nope | rope] per row needs s3_block_m_tiles = 1"
@@ -223,7 +244,7 @@ class Geometry:
         self.rows_per_head = B * self.qrt
         self.compute_core_list, self.heads_of = head_placement(self)
         self.hpc_max = max(len(hs) for hs in self.heads_of)
-        s1_set = {(c.x, c.y) for c in self.s1_cores()}
+        s1_set = {(c.x, c.y) for c in self.s1_all_cores()}
         # R1 wkv units a core holds at once: all its remote heads (consumed row-major) + up to WKV_DEPTH local heads,
         # max over destination chips; per core set (stage-1 rect / the rest), so each gets its own cb_wkv size. With
         # late remote rows (consumed after the local heads) a core holding both keeps every head resident (FIFO).
@@ -268,9 +289,12 @@ class Geometry:
         self.cs_tiles = self.qrt * self.Dr_t
         self.sbh_rot = _largest_divisor_leq(self.Dr_t, self.dest_limit)  # rotation matmul subblock (Dr_t x 1)
 
-    # stage-1 cores, row-major over the W1 x R1 rect anchored at (0, 1)
-    def s1_cores(self):
-        return [ttnn.CoreCoord(x, 1 + y) for y in range(self.R1) for x in range(self.W1)]
+    # stage-1 cores of K group g (0 = the owners, which hold q), row-major over the W1 x R1 rect at (0, 1 + g * R1)
+    def s1_cores(self, g=0):
+        return [ttnn.CoreCoord(x, 1 + g * self.R1 + y) for y in range(self.R1) for x in range(self.W1)]
+
+    def s1_all_cores(self):
+        return [c for g in range(self.ks) for c in self.s1_cores(g)]
 
     def s1_cols(self, i):
         cols = self.cols_base + (1 if i < self.cols_extra else 0)
@@ -371,9 +395,9 @@ def head_placement(geo):
     Returns (core_list, heads_of_core[k] = [h ...])."""
     import heapq
 
-    s1 = {(c.x, c.y): i for i, c in enumerate(geo.s1_cores())}
+    s1 = {(c.x, c.y): i for g in range(geo.ks) for i, c in enumerate(geo.s1_cores(g))}
     cores = geo.compute_cores()
-    col_cost = geo.num_blocks * geo.m * geo.Q_t
+    col_cost = geo.num_blocks * geo.m * geo.Q_ks
     head_cost = S3_COST_FACTOR * geo.rows_per_head * geo.Dn_t * geo.N_t
     free_start = FREE_CORE_START * geo.cols_max * col_cost
     heap = []
@@ -493,8 +517,9 @@ def l1_terms(geo, wkv_depth):
     stage1 = {
         "cb_q_slice": q_slice,
         "cb_x_round": X_ROUND_DEPTH * geo.round_tiles * geo.x_tile_bytes,
-        "cb_qb_slice": geo.Q_t * geo.cols_max * geo.qb_tile_bytes,
+        "cb_qb_slice": geo.Q_ks * geo.cols_max * geo.qb_tile_bytes,
         "cb_q_partial": geo.m * geo.cols_max * geo.partial_tile_bytes if geo.nkb > 1 else 0,
+        "cb_q_kpart/recv": geo.ks * geo.kpart_tiles * geo.partial_tile_bytes if geo.ks > 1 else 0,
         "cb_wkv": wkv_s1,
         "cb_prefix/rope_out(+_rm)": s3_out,
     }
@@ -544,7 +569,8 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
     geo = Geometry(x, q_b, wkv, G, grid, bool(compute_config.fp32_dest_acc_en), output_layout, rope)
     L = num_links
     ports = port_cores(geo.gx, L)
-    injectors = injector_cores(geo.gx, ports)
+    ks = geo.ks
+    injectors = injector_cores(geo.gx, ports, ks if ks > 1 else None)  # K-split: injector g feeds K group g
     ready_addr, arrive_addrs, scratch = _resources(mesh, geo, ports, injectors)
     landing_addr = int(scratch.buffer_address())
     payload = int(ttnn.get_tt_fabric_max_payload_size_bytes())
@@ -558,8 +584,10 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
         for h in hs:
             core_of_head[h] = k
     compute_rect = _rect(0, 1, geo.gx - 1, geo.gy - 1)
-    s1_rect = _rect(0, 1, geo.W1 - 1, geo.R1)
-    s1_set = {(c.x, c.y) for c in s1_cores}
+    s1_rect = _rect(0, 1, geo.W1 - 1, geo.R1)  # the owners (K group 0; every stage-1 core when ks == 1)
+    s1_all_rect = _rect(0, 1, geo.W1 - 1, geo.R1 * ks)  # every K group
+    group_rects = [_rect(0, 1 + g * geo.R1, geo.W1 - 1, (g + 1) * geo.R1) for g in range(ks)]
+    s1_set = {(c.x, c.y) for c in geo.s1_all_cores()}
     other_compute = [c for c in compute_cores if (c.x, c.y) not in s1_set]
     port_list = [ports[(d, l)] for l in range(L) for d in (FWD, BWD)]
     port_crs = _crs(port_list)
@@ -606,7 +634,7 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
         program = ttnn.ProgramDescriptor()
         if geo.wkv_resident:
             unit = geo.Dn_t * geo.N_t
-            wkv_cbs = [_cb(CB_WKV, wkv.dtype, geo.wkv_tile_bytes, geo.wkv_units_s1 * unit, s1_rect)]
+            wkv_cbs = [_cb(CB_WKV, wkv.dtype, geo.wkv_tile_bytes, geo.wkv_units_s1 * unit, s1_all_rect)]
             if other_compute:
                 wkv_cbs.append(
                     _cb(CB_WKV, wkv.dtype, geo.wkv_tile_bytes, geo.wkv_units_free * unit, _crs(other_compute))
@@ -638,6 +666,7 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
                 X_ROUND_DEPTH,
                 X_INJECTORS,
                 tuple(X_INJECTOR_NOCS),
+                S1_KSPLIT,
                 S1_COLS_PER_CORE,
                 QB_READ_BATCH,
                 S3_COST_FACTOR,
@@ -662,19 +691,25 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
         program.semaphores = [
             ttnn.SemaphoreDescriptor(id=SEM_BLOCK_READY, core_ranges=all_crs, initial_value=0),
             ttnn.SemaphoreDescriptor(id=SEM_X_CREDIT, core_ranges=all_crs, initial_value=0),
+            ttnn.SemaphoreDescriptor(id=SEM_KPART_READY, core_ranges=all_crs, initial_value=0),
+            ttnn.SemaphoreDescriptor(id=SEM_KPART_READY + 1, core_ranges=all_crs, initial_value=0),
+            ttnn.SemaphoreDescriptor(id=SEM_KPART_CREDIT, core_ranges=all_crs, initial_value=0),
         ]
 
         # ---------------- CBs (allocation order matters only for address identity of cb_q_slice / cb_x_round) ------
         bf16 = ttnn.bfloat16
         cbs = [
             _cb(CB_Q_SLICE, bf16, geo.tile_bytes, geo.num_blocks * geo.m * geo.cols_max, _merge(s1_rect, port_crs)),
-            _cb(CB_X_ROUND, x.dtype, geo.x_tile_bytes, X_ROUND_DEPTH * geo.round_tiles, _merge(s1_rect, inj_crs)),
+            _cb(CB_X_ROUND, x.dtype, geo.x_tile_bytes, X_ROUND_DEPTH * geo.round_tiles, _merge(s1_all_rect, inj_crs)),
             # m_non_aligned: per realigned x row tile, its two source tiles for every K tile of the round
             _cb(CB_X_STAGE, x.dtype, geo.x_tile_bytes, 2 * geo.s1_kb if not geo.aligned else 1, inj_crs),
-            _cb(CB_QB_SLICE, q_b.dtype, geo.qb_tile_bytes, geo.Q_t * geo.cols_max, s1_rect),
+            _cb(CB_QB_SLICE, q_b.dtype, geo.qb_tile_bytes, geo.Q_ks * geo.cols_max, s1_all_rect),
         ]
         if geo.nkb > 1:
-            cbs.append(_cb(CB_Q_PARTIAL, geo.partial_dtype, geo.partial_tile_bytes, geo.m * geo.cols_max, s1_rect))
+            cbs.append(_cb(CB_Q_PARTIAL, geo.partial_dtype, geo.partial_tile_bytes, geo.m * geo.cols_max, s1_all_rect))
+        if ks > 1:  # declared on every group: one address per CB, so a partner writes into its owner's slot directly
+            for cbi in (CB_Q_KPART, CB_Q_RECV1, CB_Q_RECV2)[:ks]:
+                cbs.append(_cb(cbi, geo.partial_dtype, geo.partial_tile_bytes, geo.kpart_tiles, s1_all_rect))
         cbs += [
             ttnn.cb_descriptor_from_sharded_tensor(CB_LANDING, scratch),
             *wkv_cbs,
@@ -697,7 +732,8 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
         program.cbs = cbs
 
         # ---------------- per-compute-core assignment ------------------------------------------------------------
-        s1_index = {(c.x, c.y): i for i, c in enumerate(s1_cores)}
+        s1_index = {(c.x, c.y): i for g in range(ks) for i, c in enumerate(geo.s1_cores(g))}
+        s1_group = {(c.x, c.y): g for g in range(ks) for c in geo.s1_cores(g)}
         port_args = []
         for l in range(L):
             for d in (FWD, BWD):
@@ -711,21 +747,23 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
         writer_rt_s1, writer_rt_other = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         for k, core in enumerate(compute_cores):
             i = s1_index.get((core.x, core.y))
+            g = s1_group.get((core.x, core.y), 0)  # K group (0: owner / no stage 1)
             c0, cols = geo.s1_cols(i) if i is not None else (0, 0)
             heads = consumption_order(heads_of[k], p, geo)
             hpc = len(heads)
             n_r = sum(1 for h in heads if h // geo.Hl != p)
             # reader
-            rargs = [int(q_b.buffer_address()), c0, cols, int(wkv.buffer_address()), p, cos_addr, sin_addr]
+            rargs = [int(q_b.buffer_address()), c0, cols, g * geo.Q_ks, int(wkv.buffer_address()), p, cos_addr]
+            rargs += [sin_addr]
             rargs += arrive_addrs
             rargs += [hpc] + [v for h in heads for v in (h, h // geo.Hl)]
             (reader_rt_s1 if i is not None else reader_rt_other)[core.x][core.y] = rargs
             # compute
             sbw1 = _largest_divisor_leq(cols, geo.dest_limit) if cols else 1
-            compute_rt[core.x][core.y] = [cols, sbw1, hpc, n_r]
+            compute_rt[core.x][core.y] = [cols, sbw1, hpc, n_r, g]
             # writer: local-delivery pieces of my columns (own quarter), port list, heads for the output
             pieces = []
-            if cols:
+            if cols and g == 0:
                 c = c0
                 while c < c0 + cols:
                     hl = c // geo.hw
@@ -736,7 +774,13 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
                     base, stride, _ = head_slot(h, p)  # local heads: contiguous rows, no jump
                     pieces += [c - c0, n, _pack(virt(dest_core)), base + cc, stride]
                     c += n
-            wargs = [p, cols, int(out.buffer_address()), landing_addr, arrive_addrs[p]]
+            wargs = [p, cols, int(out.buffer_address()), landing_addr, arrive_addrs[p], g]
+            # K-split peers: an owner's partners (groups 1 .. ks-1, same group-local index), a partner's owner
+            if i is not None and ks > 1:
+                peers = [geo.s1_cores(h)[i] for h in range(1, ks)] if g == 0 else [geo.s1_cores(0)[i]]
+                wargs += [_pack(virt(c)) for c in peers] + [0] * (ks - 1 - len(peers))
+            else:
+                wargs += [0] * (ks - 1)
             wargs += dirmap + rorder + port_args
             wargs += [len(pieces) // 5] + pieces
             wargs += [hpc, n_r] + heads
@@ -807,7 +851,7 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
             CB_WKV,
             geo.qb_tile_bytes,
             geo.wkv_tile_bytes,
-            geo.Q_t,
+            geo.Q_ks,  # the core's K slice of q_b (ks == 1: Q_t)
             geo.Cq_t,
             geo.round_tiles,
             geo.nkb,
@@ -823,16 +867,32 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
             # wkv capacity of the core set in units (R1: remote heads + local depth; R2: wkv_depth)
             return reader_ct + [wkv_units, QB_READ_BATCH, *geo_ct, geo.ts, *qb_ct, *wkv_ct, *cs_ct]
 
+        def _rt_subset(rt_all, cores):
+            rt = ttnn.RuntimeArgs()
+            for c in cores:
+                rt[c.x][c.y] = list(rt_all[c.x][c.y])
+            return rt
+
         reader_ct_s1 = reader_ct_for(geo.wkv_units_s1 if geo.wkv_resident else wkv_depth)
         reader_ct_other = reader_ct_for(geo.wkv_units_free if geo.wkv_resident else wkv_depth)
-        reader_s1 = ttnn.KernelDescriptor(
-            kernel_source=str(KERNEL_DIR / "q_stem_reader.cpp"),
-            core_ranges=s1_rect,
-            compile_time_args=reader_ct_s1,
-            named_compile_time_args=rope_named + x_named,
-            runtime_args=reader_rt_s1,
-            config=_dm("RISCV_1", ttnn.NOC.NOC_1 if S1_WRITER_NOC == 0 else ttnn.NOC.NOC_0),
-        )
+        # one stage-1 reader per K group: x rounds from that group's injector (its own Mcast family `mcast<g>`)
+        s1_readers = []
+        for g, grect in enumerate(group_rects):
+            named = list(x_named)
+            if ks > 1:
+                named = [(k, _pack(virt(injectors[g])) if k in ("x_inj0_xy", "x_inj1_xy") else v) for k, v in named]
+                named = [(k, 1 if k == "x_injectors" else v) for k, v in named]
+            s1_readers.append(
+                ttnn.KernelDescriptor(
+                    kernel_source=str(KERNEL_DIR / "q_stem_reader.cpp"),
+                    core_ranges=grect,
+                    compile_time_args=reader_ct_s1,
+                    named_compile_time_args=rope_named + named,
+                    defines=[("Q_STEM_X_FAMILY", str(g))],
+                    runtime_args=_rt_subset(reader_rt_s1, geo.s1_cores(g)),
+                    config=_dm("RISCV_1", ttnn.NOC.NOC_1 if S1_WRITER_NOC == 0 else ttnn.NOC.NOC_0),
+                )
+            )
         injector_ks = []  # per injector: (DRAM/L1 half, multicast half)
         for i, inj in enumerate(injectors):
             send_noc = X_INJECTOR_NOCS[i % len(X_INJECTOR_NOCS)]
@@ -852,8 +912,9 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
                     geo.Sq,
                     geo.x_St,
                     CB_X_STAGE,
-                    i,
-                    len(injectors),
+                    0 if ks > 1 else i,  # K-split: every injector sends all rounds of its group's K slice
+                    1 if ks > 1 else len(injectors),
+                    i * geo.Q_ks if ks > 1 else 0,  # first K tile of the slice
                     *x_ct,
                 ],
                 runtime_args=inj_rt,
@@ -867,13 +928,13 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
                     geo.x_tile_bytes,
                     geo.round_tiles,
                     geo.num_blocks * geo.nkb,
-                    i,
-                    len(injectors),
+                    0 if ks > 1 else i,
+                    1 if ks > 1 else len(injectors),
                     X_ROUND_DEPTH,
                     geo.C1,
                     SEM_X_CREDIT,
                 ],
-                defines=[("Q_STEM_INJECTOR_IDX", str(i))],
+                defines=[("Q_STEM_X_FAMILY", str(i))],
                 runtime_args=ttnn.RuntimeArgs(),
                 config=_dm("RISCV_1", noc_of(send_noc)),
             )
@@ -883,12 +944,6 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
         free_groups = {}
         for c in other_compute:
             free_groups.setdefault(FREE_WRITER_NOC["right" if c.x >= geo.W1 else "below"], []).append(c)
-
-        def _rt_subset(rt_all, cores):
-            rt = ttnn.RuntimeArgs()
-            for c in cores:
-                rt[c.x][c.y] = list(rt_all[c.x][c.y])
-            return rt
 
         for wnoc, cores in sorted(free_groups.items()):
             reader_other = ttnn.KernelDescriptor(
@@ -903,6 +958,16 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
             ttnn.attach_absent(reader_other, "mcast1")
             kernels_tail.append(reader_other)
 
+        ks_named = [
+            ("ksplit", ks),
+            ("cb_q_kpart", CB_Q_KPART),
+            ("cb_q_recv1", CB_Q_RECV1),
+            ("cb_q_recv2", CB_Q_RECV2),
+            ("kpart_tiles", geo.kpart_tiles),
+            ("kpart_tile_bytes", geo.partial_tile_bytes),
+            ("sem_kpart_ready", SEM_KPART_READY),
+            ("sem_kpart_credit", SEM_KPART_CREDIT),
+        ]
         compute_k = ttnn.KernelDescriptor(
             kernel_source=str(KERNEL_DIR / "q_stem_compute.cpp"),
             core_ranges=compute_rect,
@@ -915,7 +980,7 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
                 CB_WKV,
                 CB_PREFIX_OUT,
                 CB_ROPE_OUT,
-                geo.Q_t,
+                geo.Q_ks,
                 geo.s1_kb,
                 geo.nkb,
                 geo.m,
@@ -935,7 +1000,7 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
                 geo.ts,
             ],
             runtime_args=compute_rt,
-            named_compile_time_args=rope_named,
+            named_compile_time_args=rope_named + ks_named,
             config=compute_config,
         )
         writer_ct = [
@@ -963,8 +1028,9 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
         ]
         writer_k = ttnn.KernelDescriptor(
             kernel_source=str(KERNEL_DIR / "q_stem_writer.cpp"),
-            core_ranges=s1_rect,
+            core_ranges=s1_all_rect,
             compile_time_args=writer_ct,
+            named_compile_time_args=ks_named,
             runtime_args=writer_rt_s1,
             config=_dm("RISCV_0", ttnn.NOC.NOC_0 if S1_WRITER_NOC == 0 else ttnn.NOC.NOC_1),
         )
@@ -974,6 +1040,7 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
                     kernel_source=str(KERNEL_DIR / "q_stem_writer.cpp"),
                     core_ranges=_crs(cores),
                     compile_time_args=writer_ct,
+                    named_compile_time_args=ks_named,
                     runtime_args=_rt_subset(writer_rt_other, cores),
                     config=_dm("RISCV_0", ttnn.NOC.NOC_0 if wnoc == 0 else ttnn.NOC.NOC_1),
                 )
@@ -1013,18 +1080,20 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
         # one multicast family per injector; flow control is the receivers' slot credits (SEM_X_CREDIT), so no
         # helper handshake. Flag data-ready (linked multicast, no write barrier per round): safe because a receiver
         # credits an injector's next round only after it has seen (and cleared) that injector's previous flag
+        # (K-split: injector g -> group g's rect, family mcast<g>; else every injector -> the one stage-1 rect)
         for i, (inj, (_, send_k, send_noc)) in enumerate(zip(injectors, injector_ks)):
             cfg = ttnn.McastConfig()
             cfg.noc = ttnn.NOC.NOC_0 if send_noc == 0 else ttnn.NOC.NOC_1
             cfg.handshake = False
-            ttnn.Mcast2D(mesh, s1_rect, ttnn.Mcast2DFixedSenderConfig(inj), cfg).attach(
-                program, f"mcast{i}", [send_k, reader_s1]
+            ttnn.Mcast2D(mesh, group_rects[i] if ks > 1 else s1_rect, ttnn.Mcast2DFixedSenderConfig(inj), cfg).attach(
+                program, f"mcast{i}", [send_k, s1_readers[i] if ks > 1 else s1_readers[0]]
             )
-        if len(injectors) < 2:
-            ttnn.attach_absent(reader_s1, "mcast1")
+        for g, rk in enumerate(s1_readers):  # the reader's second family slot (rotating injectors) when unused
+            if g != 1 and (ks > 1 or len(injectors) < 2):
+                ttnn.attach_absent(rk, "mcast1")
         program.kernels = [
             *[k for rk, sk, _ in injector_ks for k in (rk, sk)],
-            reader_s1,
+            *s1_readers,
             *kernels_tail,
             compute_k,
             writer_k,
