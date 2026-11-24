@@ -6,12 +6,12 @@
 
 #include "extract_types.hpp"
 
-#include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/metal_v2_artifacts.hpp"
 
 namespace ttnn::operations::experimental::quasar::deepseek_prefill::extract {
 
 struct ExtractProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const ExtractParams& operation_attributes, const ExtractInputs& tensor_args, Tensor& tensor_return_value);
 };
 

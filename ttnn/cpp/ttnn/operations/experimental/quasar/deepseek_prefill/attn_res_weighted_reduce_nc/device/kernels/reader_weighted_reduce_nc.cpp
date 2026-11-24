@@ -4,39 +4,34 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     // compile-time args
-    constexpr uint32_t num_candidates = get_compile_time_arg_val(0);
-    constexpr uint32_t inner_tile_size = get_compile_time_arg_val(1);
-    constexpr uint32_t Wt = get_compile_time_arg_val(2);
-    constexpr uint32_t weight_inner_tile_size = get_compile_time_arg_val(3);
-    constexpr uint32_t weight_reduce_tile_size = get_compile_time_arg_val(4);
-    constexpr uint32_t num_sites = get_compile_time_arg_val(5);
-    constexpr uint32_t sites_per_group = get_compile_time_arg_val(6);
-    constexpr uint32_t num_groups = get_compile_time_arg_val(7);
-    constexpr auto input_args = TensorAccessorArgs<8>();
-    constexpr auto weight_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+    constexpr uint32_t num_candidates = get_arg(args::num_candidates);
+    constexpr uint32_t inner_tile_size = get_arg(args::inner_tile_size);
+    constexpr uint32_t Wt = get_arg(args::Wt);
+    constexpr uint32_t weight_inner_tile_size = get_arg(args::weight_inner_tile_size);
+    constexpr uint32_t weight_reduce_tile_size = get_arg(args::weight_reduce_tile_size);
+    constexpr uint32_t num_sites = get_arg(args::num_sites);
+    constexpr uint32_t sites_per_group = get_arg(args::sites_per_group);
+    constexpr uint32_t num_groups = get_arg(args::num_groups);
 
     // runtime args
-    const auto input_addr = get_arg_val<uint32_t>(0);
-    const auto weight_addr = get_arg_val<uint32_t>(1);
-    const auto num_positions = get_arg_val<uint32_t>(2);
-    const auto start_id = get_arg_val<uint32_t>(3);
+    const auto num_positions = get_arg(args::num_positions);
+    const auto start_id = get_arg(args::start_id);
 
-    constexpr uint32_t cb_id_in0 = 0;
-    constexpr uint32_t cb_id_in1 = 1;
-    constexpr uint32_t input_tile_bytes = get_tile_size(cb_id_in0);
-    constexpr uint32_t weight_tile_bytes = get_tile_size(cb_id_in1);
+    constexpr uint32_t input_tile_bytes = get_tile_size(dfb::in0);
+    constexpr uint32_t weight_tile_bytes = get_tile_size(dfb::in1);
 
     Noc noc;
-    CircularBuffer cb_in0_obj(cb_id_in0);
-    CircularBuffer cb_in1_obj(cb_id_in1);
+    DataflowBuffer dfb_in0(dfb::in0);
+    DataflowBuffer dfb_in1(dfb::in1);
 
-    auto input_accessor = TensorAccessor(input_args, input_addr);
-    auto weight_accessor = TensorAccessor(weight_args, weight_addr);
+    auto input_accessor = TensorAccessor(tensor::input);
+    auto weight_accessor = TensorAccessor(tensor::weight);
 
     // Sites outermost, positions innermost. The reverse order would hold one
     // position's candidates across every site and read the input exactly once,
@@ -60,14 +55,14 @@ void kernel_main() {
             if (i == start_id || i % Wt == 0) {
                 const uint32_t row = i / Wt;
 
-                cb_in1_obj.reserve_back(sites_in_group * num_candidates);
+                dfb_in1.reserve_back(sites_in_group * num_candidates);
                 uint32_t weight_write_offset = 0;
                 for (uint32_t s = 0; s < sites_in_group; ++s) {
                     uint32_t weight_tile_id = (first_site + s) * weight_reduce_tile_size + row;
                     for (uint32_t c = 0; c < num_candidates; ++c) {
                         noc.async_read(
                             weight_accessor,
-                            cb_in1_obj,
+                            dfb_in1,
                             weight_tile_bytes,
                             {.page_id = weight_tile_id},
                             {.offset_bytes = weight_write_offset});
@@ -76,18 +71,18 @@ void kernel_main() {
                     }
                 }
                 noc.async_read_barrier();
-                cb_in1_obj.push_back(sites_in_group * num_candidates);
+                dfb_in1.push_back(sites_in_group * num_candidates);
             }
 
-            // A whole reduction as one CB unit, so a candidate's position in the
+            // A whole reduction as one DFB unit, so a candidate's position in the
             // stream is its index and compute needs no separate mapping.
-            cb_in0_obj.reserve_back(num_candidates);
+            dfb_in0.reserve_back(num_candidates);
             uint32_t read_tile_id = i;
             uint32_t write_offset = 0;
             for (uint32_t c = 0; c < num_candidates; ++c) {
                 noc.async_read(
                     input_accessor,
-                    cb_in0_obj,
+                    dfb_in0,
                     input_tile_bytes,
                     {.page_id = read_tile_id},
                     {.offset_bytes = write_offset});
@@ -95,7 +90,7 @@ void kernel_main() {
                 read_tile_id += inner_tile_size;
             }
             noc.async_read_barrier();
-            cb_in0_obj.push_back(num_candidates);
+            dfb_in0.push_back(num_candidates);
         }
     }
 }

@@ -6,12 +6,12 @@
 
 #include "insert_types.hpp"
 
-#include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/metal_v2_artifacts.hpp"
 
 namespace ttnn::operations::experimental::quasar::deepseek_prefill::insert {
 
 struct InsertProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const InsertParams& operation_attributes, const InsertInputs& tensor_args, Tensor& tensor_return_value);
 };
 

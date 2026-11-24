@@ -4,14 +4,14 @@
 
 #pragma once
 
-#include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/metal_v2_artifacts.hpp"
 
 #include "attn_res_weighted_reduce_nc_device_operation_types.hpp"
 
 namespace ttnn::experimental::prim::qsr {
 
 struct AttnResWeightedReduceNCProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const AttnResWeightedReduceNCParams& operation_attributes,
         const AttnResWeightedReduceNCInputs& tensor_args,
         Tensor& tensor_return_value);

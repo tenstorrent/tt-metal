@@ -34,9 +34,22 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/scratchpad.h"
+#include "internal/local_mem/address_access.h"
 #include "api/tile_constants.h"
+#include "experimental/kernel_args.h"
 #include "ckernel.h"
+
+// L1 address the CPU accesses a scratchpad through: on Quasar DM the uncached alias, as DataflowBuffer pointers are,
+// since the CPU caches are not coherent with NoC writes to L1; on WH/BH the plain address.
+template <typename T>
+uint32_t cpu_l1_addr(const Scratchpad<T>& scratch) {
+    uintptr_t addr = local_mem::detail::AddressAccess::address(scratch.local_mem());
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    addr += MEM_L1_UNCACHED_BASE;
+#endif
+    return static_cast<uint32_t>(addr);
+}
 
 // The kernel is bound by scalar L1 accesses, not NOC traffic. Both helpers walk N columns at a time so
 // the running sums stay in registers while each row is still read contiguously.
@@ -78,52 +91,28 @@ FORCE_INLINE void emit_rows(const uint32_t* in, const uint32_t* base, uint32_t* 
 }
 
 void kernel_main() {
-    uint32_t src_addr = get_arg_val<uint32_t>(0);
-    uint32_t dst_offsets_addr = get_arg_val<uint32_t>(1);
-    uint32_t dst_totals_addr = get_arg_val<uint32_t>(2);
-    uint32_t dst_expert_region_addr = get_arg_val<uint32_t>(3);
-    uint32_t dst_all_offsets_addr = get_arg_val<uint32_t>(4);
-    uint32_t row_idx = get_arg_val<uint32_t>(5);
-
-    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_id_rows = get_compile_time_arg_val(2);
+    uint32_t row_idx = get_arg(args::row_idx);
 
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
-    CircularBuffer cb_out0(cb_id_out0);
-    CircularBuffer cb_rows(cb_id_rows);
-    constexpr uint32_t input_page_size = get_compile_time_arg_val(3);
-    constexpr uint32_t offsets_page_size = get_compile_time_arg_val(4);
-    constexpr uint32_t totals_page_size = get_compile_time_arg_val(5);
-    constexpr uint32_t expert_region_page_size = get_compile_time_arg_val(6);
-    constexpr uint32_t all_offsets_page_size = get_compile_time_arg_val(7);
-    constexpr uint32_t W = get_compile_time_arg_val(8);
-    constexpr uint32_t H = get_compile_time_arg_val(9);
-    constexpr uint32_t experts_per_chip = get_compile_time_arg_val(10);
+    Scratchpad<uint32_t> in0(scratch::in0);
+    Scratchpad<uint32_t> out0(scratch::out0);
+    Scratchpad<uint32_t> rows_scratch(scratch::rows);
+    constexpr uint32_t input_page_size = get_arg(args::input_page_size);
+    constexpr uint32_t offsets_page_size = get_arg(args::offsets_page_size);
+    constexpr uint32_t totals_page_size = get_arg(args::totals_page_size);
+    constexpr uint32_t expert_region_page_size = get_arg(args::expert_region_page_size);
+    constexpr uint32_t all_offsets_page_size = get_arg(args::all_offsets_page_size);
+    constexpr uint32_t W = get_arg(args::W);
+    constexpr uint32_t H = get_arg(args::H);
+    constexpr uint32_t experts_per_chip = get_arg(args::experts_per_chip);
 
-    constexpr uint32_t src_accessor_offset = 11;
-    constexpr auto src_args = TensorAccessorArgs<src_accessor_offset>();
-    const auto src_accessor = TensorAccessor(src_args, src_addr);
+    const auto src_accessor = TensorAccessor(tensor::src);
+    const auto dst_offsets_accessor = TensorAccessor(tensor::dst_offsets);
+    const auto dst_totals_accessor = TensorAccessor(tensor::dst_totals);
+    const auto dst_expert_region_accessor = TensorAccessor(tensor::dst_expert_region);
+    const auto dst_all_offsets_accessor = TensorAccessor(tensor::dst_all_offsets);
 
-    constexpr uint32_t dst_offsets_args_offset = src_args.next_compile_time_args_offset();
-    constexpr auto dst_offsets_args = TensorAccessorArgs<dst_offsets_args_offset>();
-    const auto dst_offsets_accessor = TensorAccessor(dst_offsets_args, dst_offsets_addr);
-
-    constexpr uint32_t dst_totals_args_offset = dst_offsets_args.next_compile_time_args_offset();
-    constexpr auto dst_totals_args = TensorAccessorArgs<dst_totals_args_offset>();
-    const auto dst_totals_accessor = TensorAccessor(dst_totals_args, dst_totals_addr);
-
-    constexpr uint32_t dst_expert_region_args_offset = dst_totals_args.next_compile_time_args_offset();
-    constexpr auto dst_expert_region_args = TensorAccessorArgs<dst_expert_region_args_offset>();
-    const auto dst_expert_region_accessor = TensorAccessor(dst_expert_region_args, dst_expert_region_addr);
-
-    constexpr uint32_t dst_all_offsets_args_offset = dst_expert_region_args.next_compile_time_args_offset();
-    constexpr auto dst_all_offsets_args = TensorAccessorArgs<dst_all_offsets_args_offset>();
-    const auto dst_all_offsets_accessor = TensorAccessor(dst_all_offsets_args, dst_all_offsets_addr);
-
-    // These CBs are plain L1 scratch, never pushed or popped: everything is staged and sent through
-    // the write pointer.
+    // These scratchpads are plain L1 scratch: everything is staged and sent from their base.
 
     constexpr uint32_t COLS = 8;
     constexpr uint32_t W_blocked = W / COLS * COLS;
@@ -132,15 +121,15 @@ void kernel_main() {
     constexpr uint32_t in_stride = input_page_size / sizeof(uint32_t);
     // Plain (non-volatile) L1 views: the input arrives by DMA and is made visible by invalidate_l1_cache after
     // the read barrier; outputs are fenced before the NoC reads them. Volatile accesses cost several cycles each.
-    const uint32_t* in = reinterpret_cast<const uint32_t*>(cb_in0.get_write_ptr());
+    const uint32_t* in = reinterpret_cast<const uint32_t*>(cpu_l1_addr(in0));
     for (uint32_t h = 0; h < H; h++) {
-        noc.async_read(src_accessor, cb_in0, input_page_size, {.page_id = h}, {.offset_bytes = h * input_page_size});
+        noc.async_read(src_accessor, in0, input_page_size, {.page_id = h}, {.offset_bytes = h * input_page_size});
     }
     noc.async_read_barrier();
     invalidate_l1_cache();
 
     // running_sum holds totals, then becomes the expert region offsets
-    uint32_t* running_sum = reinterpret_cast<uint32_t*>(cb_out0.get_write_ptr());
+    uint32_t* running_sum = reinterpret_cast<uint32_t*>(cpu_l1_addr(out0));
     for (uint32_t i0 = 0; i0 < W_blocked; i0 += COLS) {
         sum_columns<COLS, H, in_stride>(in, running_sum, i0);
     }
@@ -152,12 +141,7 @@ void kernel_main() {
     // A store can retire before it lands in L1 and the NoC command can race ahead of it: a blocking load of the
     // last word drains the stores first (same trick as masked_bincount).
     (void)ckernel::load_blocking(running_sum + (W - 1));
-    noc.async_write(
-        use<CircularBuffer::AddrSelector::WRITE_PTR>(cb_out0),
-        dst_totals_accessor,
-        totals_page_size,
-        {},
-        {.page_id = 0});
+    noc.async_write(out0, dst_totals_accessor, totals_page_size, {}, {.page_id = 0});
     noc.async_write_barrier();
 
     // 2. Compute exclusive prefix sum of tile-aligned totals, grouped by experts_per_chip
@@ -179,17 +163,12 @@ void kernel_main() {
     // 3. Write expert region offsets (shared component, before adding any local offset) to DRAM.
     //    running_sum is only read from here on, so this write shares the final barrier.
     (void)ckernel::load_blocking(running_sum + (W - 1));
-    noc.async_write(
-        use<CircularBuffer::AddrSelector::WRITE_PTR>(cb_out0),
-        dst_expert_region_accessor,
-        expert_region_page_size,
-        {},
-        {.page_id = 0});
+    noc.async_write(out0, dst_expert_region_accessor, expert_region_page_size, {}, {.page_id = 0});
 
     // 4. Row r is expert_region + (rows 0..r-1). `offsets` is written from row row_idx of the same
     //    buffer, so the two outputs cannot disagree.
     constexpr uint32_t row_stride = all_offsets_page_size / sizeof(uint32_t);
-    uint32_t* rows = reinterpret_cast<uint32_t*>(cb_rows.get_write_ptr());
+    uint32_t* rows = reinterpret_cast<uint32_t*>(cpu_l1_addr(rows_scratch));
     for (uint32_t i0 = 0; i0 < W_blocked; i0 += COLS) {
         emit_rows<COLS, H, in_stride, row_stride>(in, running_sum, rows, i0);
     }
@@ -199,14 +178,14 @@ void kernel_main() {
     (void)ckernel::load_blocking(rows + (H - 1) * row_stride + (W - 1));
     for (uint32_t r = 0; r < H; r++) {
         noc.async_write(
-            use<CircularBuffer::AddrSelector::WRITE_PTR>(cb_rows),
+            rows_scratch,
             dst_all_offsets_accessor,
             all_offsets_page_size,
             {.offset_bytes = r * all_offsets_page_size},
             {.page_id = r});
     }
     noc.async_write(
-        use<CircularBuffer::AddrSelector::WRITE_PTR>(cb_rows),
+        rows_scratch,
         dst_offsets_accessor,
         offsets_page_size,
         {.offset_bytes = row_idx * all_offsets_page_size},

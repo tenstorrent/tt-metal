@@ -11,13 +11,25 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operation.hpp"
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::experimental::prim::qsr {
 
-tt::tt_metal::WorkloadDescriptor OffsetCumsumProgramFactory::create_workload_descriptor(
+namespace {
+
+ttnn::device_operation::ProgramArtifacts create_program_artifacts_at(
+    const OffsetCumsumParams& operation_attributes,
+    const Tensor& input,
+    OffsetCumsumProgramFactory::tensor_return_value_t& tensor_return_value,
+    const ttnn::MeshCoordinate& coord);
+
+}  // namespace
+
+ttnn::device_operation::MeshWorkloadArtifacts OffsetCumsumProgramFactory::create_mesh_workload_artifacts(
     const OffsetCumsumParams& operation_attributes,
     const Tensor& input,
     tensor_return_value_t& tensor_return_value,
@@ -30,31 +42,42 @@ tt::tt_metal::WorkloadDescriptor OffsetCumsumProgramFactory::create_workload_des
         rows[coord[operation_attributes.cluster_axis]].merge(ttnn::MeshCoordinateRange(coord));
     }
 
-    tt::tt_metal::WorkloadDescriptor workload;
+    ttnn::device_operation::MeshWorkloadArtifacts artifacts;
     for (const auto& [row_idx, coordinates] : rows) {
         for (const auto& range : coordinates.ranges()) {
-            auto desc = create_descriptor(operation_attributes, input, tensor_return_value, range.start_coord());
-            workload.programs.push_back({range, std::move(desc)});
+            auto program =
+                create_program_artifacts_at(operation_attributes, input, tensor_return_value, range.start_coord());
+            artifacts.programs.push_back({
+                .range = range,
+                .spec = std::move(program.spec),
+                .run_params = std::move(program.run_params),
+            });
         }
     }
-    return workload;
+    return artifacts;
 }
 
-tt::tt_metal::ProgramDescriptor OffsetCumsumProgramFactory::create_descriptor(
+namespace {
+
+ttnn::device_operation::ProgramArtifacts create_program_artifacts_at(
     const OffsetCumsumParams& operation_attributes,
     const Tensor& input,
-    tensor_return_value_t& tensor_return_value,
-    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
-    TT_FATAL(
-        mesh_dispatch_coordinate.has_value(),
-        "OffsetCumsumProgramFactory::create_descriptor requires a mesh dispatch coordinate");
-    const ttnn::MeshCoordinate& coord = mesh_dispatch_coordinate.value();
+    OffsetCumsumProgramFactory::tensor_return_value_t& tensor_return_value,
+    const ttnn::MeshCoordinate& coord) {
+    using namespace tt::tt_metal;
+
+    const KernelSpecName READER{"reader"};
+    const ScratchpadSpecName IN0{"in0"};
+    const ScratchpadSpecName OUT0{"out0"};
+    const ScratchpadSpecName ROWS{"rows"};
+    const TensorParamName SRC{"src"};
+    const TensorParamName DST_OFFSETS{"dst_offsets"};
+    const TensorParamName DST_TOTALS{"dst_totals"};
+    const TensorParamName DST_EXPERT_REGION{"dst_expert_region"};
+    const TensorParamName DST_ALL_OFFSETS{"dst_all_offsets"};
+
     const uint32_t row_idx = coord[operation_attributes.cluster_axis];
     const uint32_t experts_per_chip = operation_attributes.experts_per_chip;
-
-    tt::tt_metal::ProgramDescriptor desc;
-
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(tt::tt_metal::DataType::UINT32);
 
     CoreCoord core = {0, 0};
     CoreRangeSet core_set = CoreRangeSet(std::vector{CoreRange(core, core)});
@@ -82,90 +105,104 @@ tt::tt_metal::ProgramDescriptor OffsetCumsumProgramFactory::create_descriptor(
     uint32_t expert_region_page_size = dst_expert_region_buffer->aligned_page_size();
     uint32_t all_offsets_page_size = dst_all_offsets_buffer->aligned_page_size();
 
-    // Holds all H input rows: the kernel reads the input once, behind a single barrier.
-    uint32_t cb_in0_index = tt::CBIndex::c_0;
-    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = H * input_page_size,
-        .core_ranges = core_set,
-        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(cb_in0_index),
-            .data_format = cb_data_format,
-            .page_size = input_page_size,
-        }}},
-    });
-
-    uint32_t cb_out0_index = tt::CBIndex::c_1;
-    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = offsets_page_size,
-        .core_ranges = core_set,
-        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(cb_out0_index),
-            .data_format = cb_data_format,
-            .page_size = offsets_page_size,
-        }}},
-    });
-
-    // Holds every all_offsets row, so all H row writes share one barrier. `offsets` is written from
-    // its own row of this buffer, which requires both outputs to have the same page size.
-    uint32_t cb_rows_index = tt::CBIndex::c_2;
+    // offsets reuses a row of the all_offsets staging buffer, which requires both outputs to have the same page size.
     TT_FATAL(
         all_offsets_page_size == offsets_page_size,
         "offset_cumsum: all_offsets page is {} B and offsets page is {} B; the staging buffer serves both",
         all_offsets_page_size,
         offsets_page_size);
-    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = H * all_offsets_page_size,
-        .core_ranges = core_set,
-        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(cb_rows_index),
-            .data_format = cb_data_format,
-            .page_size = all_offsets_page_size,
-        }}},
-    });
 
-    std::vector<uint32_t> compile_time_args = {
-        cb_in0_index,
-        cb_out0_index,
-        cb_rows_index,
-        input_page_size,
-        offsets_page_size,
-        totals_page_size,
-        expert_region_page_size,
-        all_offsets_page_size,
-        W,
-        H,
-        experts_per_chip,
+    // The kernel stages everything in these and never uses FIFO operations, so they are scratchpads.
+    Group<ScratchpadSpec> scratchpads = {
+        // Holds all H input rows: the kernel reads the input once, behind a single barrier.
+        ScratchpadSpec{.unique_id = IN0, .size_per_node = H * input_page_size},
+        ScratchpadSpec{.unique_id = OUT0, .size_per_node = offsets_page_size},
+        // Holds every all_offsets row, so all H row writes share one barrier. `offsets` is written from
+        // its own row of this buffer.
+        ScratchpadSpec{.unique_id = ROWS, .size_per_node = H * all_offsets_page_size},
     };
-    tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(dst_offsets_buffer).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(dst_totals_buffer).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(dst_expert_region_buffer).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(dst_all_offsets_buffer).append_to(compile_time_args);
 
-    tt::tt_metal::KernelDescriptor reader_kernel_desc;
-    reader_kernel_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/quasar/deepseek_prefill/offset_cumsum/device/kernels/"
-        "reader_offset_cumsum_interleaved.cpp";
-    reader_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
-    reader_kernel_desc.core_ranges = core_set;
-    reader_kernel_desc.compile_time_args = std::move(compile_time_args);
-    reader_kernel_desc.config = tt::tt_metal::ReaderConfigDescriptor{};
+    // row_idx is invariant for a given coord, baked into the cached program for that coord.
+    KernelSpec reader_spec{
+        .unique_id = READER,
+        .source = std::filesystem::path(
+            "ttnn/cpp/ttnn/operations/experimental/quasar/deepseek_prefill/offset_cumsum/device/kernels/"
+            "reader_offset_cumsum_interleaved.cpp"),
+        .scratchpad_bindings =
+            {
+                ScratchpadBinding{.scratchpad_spec_name = IN0, .accessor_name = "in0"},
+                ScratchpadBinding{.scratchpad_spec_name = OUT0, .accessor_name = "out0"},
+                ScratchpadBinding{.scratchpad_spec_name = ROWS, .accessor_name = "rows"},
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{.tensor_parameter_name = SRC, .accessor_name = "src"},
+                TensorBinding{.tensor_parameter_name = DST_OFFSETS, .accessor_name = "dst_offsets"},
+                TensorBinding{.tensor_parameter_name = DST_TOTALS, .accessor_name = "dst_totals"},
+                TensorBinding{.tensor_parameter_name = DST_EXPERT_REGION, .accessor_name = "dst_expert_region"},
+                TensorBinding{.tensor_parameter_name = DST_ALL_OFFSETS, .accessor_name = "dst_all_offsets"},
+            },
+        .compile_time_args =
+            {
+                {"input_page_size", input_page_size},
+                {"offsets_page_size", offsets_page_size},
+                {"totals_page_size", totals_page_size},
+                {"expert_region_page_size", expert_region_page_size},
+                {"all_offsets_page_size", all_offsets_page_size},
+                {"W", W},
+                {"H", H},
+                {"experts_per_chip", experts_per_chip},
+            },
+        .runtime_arg_schema = {.runtime_arg_names = {"row_idx"}},
+        .hw_config = ttnn::create_reader_datamovement_config(),
+    };
 
-    // Buffer* in the first five positions so the framework records BufferBindings
-    // for the cache-hit fast path; row_idx is plain uint32_t (no override needed —
-    // it is invariant for a given coord, baked into the cached program for that coord).
-    tt::tt_metal::KernelDescriptor::RTArgList reader_rt_args;
-    reader_rt_args.push_back(src_buffer);
-    reader_rt_args.push_back(dst_offsets_buffer);
-    reader_rt_args.push_back(dst_totals_buffer);
-    reader_rt_args.push_back(dst_expert_region_buffer);
-    reader_rt_args.push_back(dst_all_offsets_buffer);
-    reader_rt_args.push_back(row_idx);
-    reader_kernel_desc.emplace_runtime_args(core, reader_rt_args);
+    KernelRunArgs reader_run_args{
+        .kernel = READER,
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(core, {{"row_idx", row_idx}}),
+    };
 
-    desc.kernels.push_back(std::move(reader_kernel_desc));
+    const auto& dst_offsets = tensor_return_value.at(0);
+    const auto& dst_totals = tensor_return_value.at(1);
+    const auto& dst_expert_region = tensor_return_value.at(2);
+    const auto& dst_all_offsets = tensor_return_value.at(3);
 
-    return desc;
+    ProgramSpec spec{
+        .name = "offset_cumsum",
+        .kernels = {std::move(reader_spec)},
+        .scratchpads = std::move(scratchpads),
+        .tensor_parameters =
+            {
+                TensorParameter{.unique_id = SRC, .spec = input.mesh_tensor().tensor_spec()},
+                TensorParameter{.unique_id = DST_OFFSETS, .spec = dst_offsets.mesh_tensor().tensor_spec()},
+                TensorParameter{.unique_id = DST_TOTALS, .spec = dst_totals.mesh_tensor().tensor_spec()},
+                TensorParameter{.unique_id = DST_EXPERT_REGION, .spec = dst_expert_region.mesh_tensor().tensor_spec()},
+                TensorParameter{.unique_id = DST_ALL_OFFSETS, .spec = dst_all_offsets.mesh_tensor().tensor_spec()},
+            },
+        .work_units =
+            {
+                WorkUnitSpec{
+                    .name = "main",
+                    .kernels = {READER},
+                    .target_nodes = core_set,
+                },
+            },
+    };
+
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args.push_back(std::move(reader_run_args));
+    run_args.tensor_args.emplace(SRC, input.mesh_tensor());
+    run_args.tensor_args.emplace(DST_OFFSETS, dst_offsets.mesh_tensor());
+    run_args.tensor_args.emplace(DST_TOTALS, dst_totals.mesh_tensor());
+    run_args.tensor_args.emplace(DST_EXPERT_REGION, dst_expert_region.mesh_tensor());
+    run_args.tensor_args.emplace(DST_ALL_OFFSETS, dst_all_offsets.mesh_tensor());
+
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec),
+        .run_params = std::move(run_args),
+    };
 }
+
+}  // namespace
 
 }  // namespace ttnn::experimental::prim::qsr

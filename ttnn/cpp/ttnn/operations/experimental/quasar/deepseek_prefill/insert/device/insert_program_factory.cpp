@@ -8,14 +8,30 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::operations::experimental::quasar::deepseek_prefill::insert {
 
-tt::tt_metal::ProgramDescriptor InsertProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts InsertProgramFactory::create_program_artifacts(
     const InsertParams& operation_attributes, const InsertInputs& tensor_args, Tensor& tensor_return_value) {
-    tt::tt_metal::ProgramDescriptor desc;
+    using namespace tt::tt_metal;
+
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const DFBSpecName TILE{"tile"};
+    const ScratchpadSpecName COUNTS_SCRATCH_READER{"counts_scratch_reader"};
+    const ScratchpadSpecName START_SCRATCH{"start_scratch"};
+    const ScratchpadSpecName COUNTS_SCRATCH_WRITER{"counts_scratch_writer"};
+    const ScratchpadSpecName GLOBAL_EXPERT_IDX_SCRATCH_READER{"global_expert_idx_scratch_reader"};
+    const ScratchpadSpecName GLOBAL_EXPERT_IDX_SCRATCH_WRITER{"global_expert_idx_scratch_writer"};
+    const TensorParamName GLOBAL{"global"};
+    const TensorParamName LOCAL{"local"};
+    const TensorParamName START{"start"};
+    const TensorParamName COUNTS{"counts"};
+    const TensorParamName GLOBAL_EXPERT_IDX_TABLE{"global_expert_idx_table"};
 
     const auto& global_tensor = tensor_args.global_tensor;
     const auto& local_tensor = tensor_args.local_tensor;
@@ -23,9 +39,8 @@ tt::tt_metal::ProgramDescriptor InsertProgramFactory::create_descriptor(
     const auto& counts = tensor_args.counts;
     const auto& global_expert_idx_table = tensor_args.global_expert_idx_table;
     // tensor_return_value is the same handle as global_tensor (see
-    // create_output_tensors). We still use its buffer address in runtime args
-    // via the framework — here we go directly through global_tensor because
-    // it is the authoritative source.
+    // create_output_tensors), so global_tensor's binding covers it — here we go
+    // directly through global_tensor because it is the authoritative source.
     (void)tensor_return_value;
 
     constexpr uint32_t tile_width = tt::constants::TILE_WIDTH;
@@ -63,7 +78,6 @@ tt::tt_metal::ProgramDescriptor InsertProgramFactory::create_descriptor(
     const uint32_t start_page_size = start_buffer->aligned_page_size();
     const uint32_t counts_page_size = counts_buffer->aligned_page_size();
     const uint32_t global_expert_idx_table_page_size = global_expert_idx_table_buffer->aligned_page_size();
-    const tt::DataFormat idx_data_format = tt::tt_metal::datatype_to_dataformat_converter(start.dtype());
 
     // Multi-core implementation: every tensix core in the device's compute
     // grid participates. Cores are assigned a flat core_id in row-major order
@@ -81,108 +95,161 @@ tt::tt_metal::ProgramDescriptor InsertProgramFactory::create_descriptor(
     const CoreRange core_range{{0, 0}, {grid.x - 1, grid.y - 1}};
     const CoreRangeSet core_range_set{core_range};
 
-    constexpr uint32_t cb_tile = tt::CBIndex::c_0;
-    constexpr uint32_t cb_counts_scratch_reader = tt::CBIndex::c_1;
-    constexpr uint32_t cb_start_scratch_writer = tt::CBIndex::c_2;
-    constexpr uint32_t cb_counts_scratch_writer = tt::CBIndex::c_3;
-    constexpr uint32_t cb_global_expert_idx_scratch_reader = tt::CBIndex::c_4;
-    constexpr uint32_t cb_global_expert_idx_scratch_writer = tt::CBIndex::c_5;
-
-    auto add_cb = [&](uint32_t cb_idx, uint32_t total_size, uint32_t page_size, tt::DataFormat data_format) {
-        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-            .total_size = total_size,
-            .core_ranges = core_range_set,
-            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(cb_idx),
-                .data_format = data_format,
-                .page_size = page_size,
-            }}},
-        });
-    };
-
     // Deep tile pipeline — same rationale as in extract: decouple reader from
-    // writer jitter. Each tile is ~1 KB for bfp8_b so 32 slots is ~32 KB of L1.
+    // writer jitter. Each tile is ~1 KB for bfp8_b so 32 entries is ~32 KB of L1.
     constexpr uint32_t tile_buffering = 32;
-    add_cb(cb_tile, tile_buffering * single_tile_size, single_tile_size, tile_data_format);
-    add_cb(cb_counts_scratch_reader, counts_page_size, counts_page_size, idx_data_format);
-    add_cb(cb_start_scratch_writer, start_page_size, start_page_size, idx_data_format);
-    add_cb(cb_counts_scratch_writer, counts_page_size, counts_page_size, idx_data_format);
-
-    // Per-core scratch for the global_expert_idx_table (one page each for reader / writer).
-    add_cb(
-        cb_global_expert_idx_scratch_reader,
-        global_expert_idx_table_page_size,
-        global_expert_idx_table_page_size,
-        idx_data_format);
-    add_cb(
-        cb_global_expert_idx_scratch_writer,
-        global_expert_idx_table_page_size,
-        global_expert_idx_table_page_size,
-        idx_data_format);
-
-    // Reader compile-time args: CB ids, scalars, then TensorAccessorArgs for
-    // local/counts/global_expert_idx_table.
-    std::vector<uint32_t> reader_compile_time_args = {
-        cb_tile,
-        cb_counts_scratch_reader,
-        cb_global_expert_idx_scratch_reader,
-        operation_attributes.local_expert_id,
-        tiles_per_row,
-        local_num_tiles,
-        num_cores,
+    DataflowBufferSpec tile_dfb{
+        .unique_id = TILE,
+        .entry_size = single_tile_size,
+        .num_entries = tile_buffering,
+        .data_format_metadata = tile_data_format,
     };
-    tt::tt_metal::TensorAccessorArgs(local_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(counts_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(global_expert_idx_table_buffer).append_to(reader_compile_time_args);
 
-    // Writer compile-time args: CB ids, scalars, then TensorAccessorArgs for
-    // global/start/counts/global_expert_idx_table.
-    std::vector<uint32_t> writer_compile_time_args = {
-        cb_tile,
-        cb_start_scratch_writer,
-        cb_counts_scratch_writer,
-        cb_global_expert_idx_scratch_writer,
-        operation_attributes.local_expert_id,
-        tiles_per_row,
-        global_num_tiles,
-        num_cores,
+    // Per-core L1 scratch for the start / counts / global_expert_idx_table pages, one per kernel that reads them.
+    // Each is filled and read by a single DM kernel, so it is a scratchpad rather than a DFB.
+    Group<ScratchpadSpec> scratchpads = {
+        ScratchpadSpec{.unique_id = COUNTS_SCRATCH_READER, .size_per_node = counts_page_size},
+        ScratchpadSpec{.unique_id = START_SCRATCH, .size_per_node = start_page_size},
+        ScratchpadSpec{.unique_id = COUNTS_SCRATCH_WRITER, .size_per_node = counts_page_size},
+        ScratchpadSpec{
+            .unique_id = GLOBAL_EXPERT_IDX_SCRATCH_READER, .size_per_node = global_expert_idx_table_page_size},
+        ScratchpadSpec{
+            .unique_id = GLOBAL_EXPERT_IDX_SCRATCH_WRITER, .size_per_node = global_expert_idx_table_page_size},
     };
-    tt::tt_metal::TensorAccessorArgs(global_buffer).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(start_buffer).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(counts_buffer).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(global_expert_idx_table_buffer).append_to(writer_compile_time_args);
 
-    tt::tt_metal::KernelDescriptor reader_kernel_desc;
-    reader_kernel_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/quasar/deepseek_prefill/insert/device/kernels/dataflow/"
-        "reader_insert.cpp";
-    reader_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
-    reader_kernel_desc.core_ranges = core_range_set;
-    reader_kernel_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_kernel_desc.config = tt::tt_metal::ReaderConfigDescriptor{};
+    KernelSpec reader_spec{
+        .unique_id = READER,
+        .source = std::filesystem::path(
+            "ttnn/cpp/ttnn/operations/experimental/quasar/deepseek_prefill/insert/device/kernels/dataflow/"
+            "reader_insert.cpp"),
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = TILE,
+                    .accessor_name = "tile",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+            },
+        .scratchpad_bindings =
+            {
+                ScratchpadBinding{.scratchpad_spec_name = COUNTS_SCRATCH_READER, .accessor_name = "counts"},
+                ScratchpadBinding{
+                    .scratchpad_spec_name = GLOBAL_EXPERT_IDX_SCRATCH_READER,
+                    .accessor_name = "global_expert_idx",
+                },
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{.tensor_parameter_name = LOCAL, .accessor_name = "local"},
+                TensorBinding{.tensor_parameter_name = COUNTS, .accessor_name = "counts"},
+                TensorBinding{
+                    .tensor_parameter_name = GLOBAL_EXPERT_IDX_TABLE,
+                    .accessor_name = "global_expert_idx_table",
+                },
+            },
+        .compile_time_args =
+            {
+                {"local_expert_id", operation_attributes.local_expert_id},
+                {"tiles_per_row", tiles_per_row},
+                {"local_num_tiles", local_num_tiles},
+                {"num_cores", num_cores},
+            },
+        .runtime_arg_schema = {.runtime_arg_names = {"core_id"}},
+        .hw_config = ttnn::create_reader_datamovement_config(),
+    };
 
-    tt::tt_metal::KernelDescriptor writer_kernel_desc;
-    writer_kernel_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/quasar/deepseek_prefill/insert/device/kernels/dataflow/"
-        "writer_insert.cpp";
-    writer_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
-    writer_kernel_desc.core_ranges = core_range_set;
-    writer_kernel_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_kernel_desc.config = tt::tt_metal::WriterConfigDescriptor{};
+    KernelSpec writer_spec{
+        .unique_id = WRITER,
+        .source = std::filesystem::path(
+            "ttnn/cpp/ttnn/operations/experimental/quasar/deepseek_prefill/insert/device/kernels/dataflow/"
+            "writer_insert.cpp"),
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = TILE,
+                    .accessor_name = "tile",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+            },
+        .scratchpad_bindings =
+            {
+                ScratchpadBinding{.scratchpad_spec_name = START_SCRATCH, .accessor_name = "start"},
+                ScratchpadBinding{.scratchpad_spec_name = COUNTS_SCRATCH_WRITER, .accessor_name = "counts"},
+                ScratchpadBinding{
+                    .scratchpad_spec_name = GLOBAL_EXPERT_IDX_SCRATCH_WRITER,
+                    .accessor_name = "global_expert_idx",
+                },
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{.tensor_parameter_name = GLOBAL, .accessor_name = "global"},
+                TensorBinding{.tensor_parameter_name = START, .accessor_name = "start"},
+                TensorBinding{.tensor_parameter_name = COUNTS, .accessor_name = "counts"},
+                TensorBinding{
+                    .tensor_parameter_name = GLOBAL_EXPERT_IDX_TABLE,
+                    .accessor_name = "global_expert_idx_table",
+                },
+            },
+        .compile_time_args =
+            {
+                {"local_expert_id", operation_attributes.local_expert_id},
+                {"tiles_per_row", tiles_per_row},
+                {"global_num_tiles", global_num_tiles},
+                {"num_cores", num_cores},
+            },
+        .runtime_arg_schema = {.runtime_arg_names = {"core_id"}},
+        .hw_config = ttnn::create_writer_datamovement_config(),
+    };
 
-    // Per-core runtime args: buffer addresses + trailing core_id. The core_id
-    // selects which chunk of tile rows this core processes.
+    // Per-core runtime arg: core_id selects which chunk of tile rows this core processes.
+    KernelRunArgs reader_run_args{.kernel = READER};
+    KernelRunArgs writer_run_args{.kernel = WRITER};
     for (uint32_t core_id = 0; core_id < num_cores; ++core_id) {
         const auto& core = cores[core_id];
-        reader_kernel_desc.emplace_runtime_args(
-            core, {local_buffer, counts_buffer, global_expert_idx_table_buffer, core_id});
-        writer_kernel_desc.emplace_runtime_args(
-            core, {global_buffer, start_buffer, counts_buffer, global_expert_idx_table_buffer, core_id});
+        AddRuntimeArgsForNode(reader_run_args.runtime_arg_values, core, {{"core_id", core_id}});
+        AddRuntimeArgsForNode(writer_run_args.runtime_arg_values, core, {{"core_id", core_id}});
     }
 
-    desc.kernels.push_back(std::move(reader_kernel_desc));
-    desc.kernels.push_back(std::move(writer_kernel_desc));
-    return desc;
+    ProgramSpec spec{
+        .name = "insert",
+        .kernels = {std::move(reader_spec), std::move(writer_spec)},
+        .dataflow_buffers = {std::move(tile_dfb)},
+        .scratchpads = std::move(scratchpads),
+        .tensor_parameters =
+            {
+                TensorParameter{.unique_id = GLOBAL, .spec = global_tensor.mesh_tensor().tensor_spec()},
+                TensorParameter{.unique_id = LOCAL, .spec = local_tensor.mesh_tensor().tensor_spec()},
+                TensorParameter{.unique_id = START, .spec = start.mesh_tensor().tensor_spec()},
+                TensorParameter{.unique_id = COUNTS, .spec = counts.mesh_tensor().tensor_spec()},
+                TensorParameter{
+                    .unique_id = GLOBAL_EXPERT_IDX_TABLE,
+                    .spec = global_expert_idx_table.mesh_tensor().tensor_spec(),
+                },
+            },
+        .work_units =
+            {
+                WorkUnitSpec{
+                    .name = "main",
+                    .kernels = {READER, WRITER},
+                    .target_nodes = core_range_set,
+                },
+            },
+    };
+
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args.reserve(2);
+    run_args.kernel_run_args.push_back(std::move(reader_run_args));
+    run_args.kernel_run_args.push_back(std::move(writer_run_args));
+    run_args.tensor_args.emplace(GLOBAL, global_tensor.mesh_tensor());
+    run_args.tensor_args.emplace(LOCAL, local_tensor.mesh_tensor());
+    run_args.tensor_args.emplace(START, start.mesh_tensor());
+    run_args.tensor_args.emplace(COUNTS, counts.mesh_tensor());
+    run_args.tensor_args.emplace(GLOBAL_EXPERT_IDX_TABLE, global_expert_idx_table.mesh_tensor());
+
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec),
+        .run_params = std::move(run_args),
+    };
 }
 
 }  // namespace ttnn::operations::experimental::quasar::deepseek_prefill::insert

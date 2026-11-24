@@ -9,12 +9,9 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-
 #include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
-#include "ttnn/mesh_device_operation_adapter.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -60,34 +57,23 @@ struct RotaryEmbeddingIndexedDeviceOperation {
 
     // The op builds the mesh workload itself: one program per range with a whole-mesh chip table (fabric up),
     // else one per chip.
-    struct SharedVariables {
-        // Tensor addresses and (scalar path) kv_actual_global last applied to every program; kept on the first
-        // program only (see override_runtime_arguments).
-        std::vector<uint64_t> applied_run_args;
-    };
-
     struct MeshWorkloadFactory {
-        using shared_variables_t = SharedVariables;
-        using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
-
-        static cached_mesh_workload_t create_mesh_workload(
-            const operation_attributes_t& args,
-            const ttnn::MeshCoordinateRangeSet& tensor_coords,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& output);
-
-        static void override_runtime_arguments(
-            cached_mesh_workload_t& cached_workload,
+        static ttnn::device_operation::MeshWorkloadArtifacts create_mesh_workload_artifacts(
             const operation_attributes_t& args,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& output);
+            tensor_return_value_t& output,
+            const ttnn::MeshCoordinateRangeSet& tensor_coords);
+
+        static tt::tt_metal::ProgramRunArgs override_runtime_arguments(
+            const operation_attributes_t& args,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output,
+            const ttnn::MeshCoordinateRange& range);
 
     private:
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        // Build and compile the program, and set its initial run args. `chip_table`: whole-mesh table, or nullopt
-        // for `coord`'s own program.
-        static cached_program_t create_at(
+        // Build the program's spec and initial run args. `chip_table`: whole-mesh table, or nullopt for `coord`'s
+        // own program.
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts_at(
             const operation_attributes_t& args,
             const ttnn::MeshCoordinate& coord,
             const tensor_args_t& tensor_args,

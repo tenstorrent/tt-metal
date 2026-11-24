@@ -8,7 +8,7 @@
 //
 // The multiply and the add are the same instruction: `mul_bcast_cols_init` with
 // acc_to_dest turns every `mul_tiles_bcast_cols` into a MAC against its destination.
-// That is what buys the fusion: no intermediate CB, no second read of the input.
+// That is what buys the fusion: no intermediate DFB, no second read of the input.
 //
 // The accumulators start at zero without being cleared here. The whole of DEST
 // is zeroed once before `kernel_main`, and the packer zeroes the section it just
@@ -24,33 +24,30 @@
 // reads, so a [R, C, H, 1] tile needs no pre-pass to get into this form.
 
 #include "api/compute/bcast.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 using namespace ckernel;
 
 void kernel_main() {
     // compile-time args
-    constexpr uint32_t num_candidates = get_compile_time_arg_val(0);
-    constexpr uint32_t Wt = get_compile_time_arg_val(1);
-    constexpr uint32_t num_sites = get_compile_time_arg_val(2);
-    constexpr uint32_t sites_per_group = get_compile_time_arg_val(3);
-    constexpr uint32_t num_groups = get_compile_time_arg_val(4);
+    constexpr uint32_t num_candidates = get_arg(args::num_candidates);
+    constexpr uint32_t Wt = get_arg(args::Wt);
+    constexpr uint32_t num_sites = get_arg(args::num_sites);
+    constexpr uint32_t sites_per_group = get_arg(args::sites_per_group);
+    constexpr uint32_t num_groups = get_arg(args::num_groups);
 
     // runtime args
-    const uint32_t num_positions = get_arg_val<uint32_t>(0);
-    const uint32_t start_id = get_arg_val<uint32_t>(1);
+    const uint32_t num_positions = get_arg(args::num_positions);
+    const uint32_t start_id = get_arg(args::start_id);
 
-    constexpr auto cb_in0 = tt::CBIndex::c_0;
-    constexpr auto cb_in1 = tt::CBIndex::c_1;
-    constexpr auto cb_out0 = tt::CBIndex::c_16;
+    DataflowBuffer dfb_in0(dfb::in0);
+    DataflowBuffer dfb_in1(dfb::in1);
+    DataflowBuffer dfb_out0(dfb::out);
 
-    CircularBuffer cb_in0_obj(cb_in0);
-    CircularBuffer cb_in1_obj(cb_in1);
-    CircularBuffer cb_out0_obj(cb_out0);
-
-    compute_kernel_hw_startup(cb_in0, cb_in1, cb_out0);
-    mul_bcast_cols_init(cb_in0, cb_in1, true /*acc_to_dest*/);
-    reconfig_data_format(cb_in0, cb_in1);
+    compute_kernel_hw_startup(dfb::in0, dfb::in1, dfb::out);
+    mul_bcast_cols_init(dfb::in0, dfb::in1, true /*acc_to_dest*/);
+    reconfig_data_format(dfb::in0, dfb::in1);
 
     for (uint32_t group = 0; group < num_groups; ++group) {
         const uint32_t first_site = group * sites_per_group;
@@ -62,15 +59,15 @@ void kernel_main() {
         // The reader turns the set over on the same test — `i % Wt == 0` over the
         // global position index — so the two stay in step without a semaphore.
         uint32_t width_index = start_id % Wt;
-        cb_in1_obj.wait_front(weights_per_set);
+        dfb_in1.wait_front(weights_per_set);
 
         for (uint32_t i = 0; i < num_positions; ++i) {
             if (i != 0 && width_index == 0) {
-                cb_in1_obj.pop_front(weights_per_set);
-                cb_in1_obj.wait_front(weights_per_set);
+                dfb_in1.pop_front(weights_per_set);
+                dfb_in1.wait_front(weights_per_set);
             }
 
-            cb_in0_obj.wait_front(num_candidates);
+            dfb_in0.wait_front(num_candidates);
             tile_regs_acquire();
             for (uint32_t c = 0; c < num_candidates; ++c) {
                 // Candidate outermost: the unpacker holds one input tile while it
@@ -78,20 +75,20 @@ void kernel_main() {
                 // for. The weight set is laid out site-major, so a site's
                 // candidate c sits at s * num_candidates + c.
                 for (uint32_t s = 0; s < sites_in_group; ++s) {
-                    mul_tiles_bcast_cols(cb_in0, cb_in1, c, s * num_candidates + c, s);
+                    mul_tiles_bcast_cols(dfb::in0, dfb::in1, c, s * num_candidates + c, s);
                 }
             }
             tile_regs_commit();
-            cb_in0_obj.pop_front(num_candidates);
+            dfb_in0.pop_front(num_candidates);
 
-            cb_out0_obj.reserve_back(sites_in_group);
-            pack_reconfig_data_format(cb_out0);
+            dfb_out0.reserve_back(sites_in_group);
+            pack_reconfig_data_format(dfb::out);
             tile_regs_wait();
             for (uint32_t s = 0; s < sites_in_group; ++s) {
-                pack_tile(s, cb_out0);
+                pack_tile(s, dfb::out);
             }
             tile_regs_release();
-            cb_out0_obj.push_back(sites_in_group);
+            dfb_out0.push_back(sites_in_group);
 
             ++width_index;
             if (width_index == Wt) {
@@ -99,7 +96,7 @@ void kernel_main() {
             }
         }
 
-        // Leave the CB balanced: the last row's set was waited on but never turned over.
-        cb_in1_obj.pop_front(weights_per_set);
+        // Leave the DFB balanced: the last row's set was waited on but never turned over.
+        dfb_in1.pop_front(weights_per_set);
     }
 }

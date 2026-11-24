@@ -5,7 +5,7 @@
 // Reader kernel for the deepseek_prefill::insert op.
 // Reads counts[global_expert_id] from DRAM at runtime, then streams
 // ceil_tile(counts) * tiles_per_row tiles from the *front* of local_tensor
-// into the reader→writer CB.
+// into the reader→writer DFB.
 //
 // Reads are issued in batches so that multiple tiles are in flight on the NOC
 // at the same time (one barrier per batch instead of per tile).
@@ -21,68 +21,63 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/scratchpad.h"
+#include "internal/local_mem/address_access.h"
 #include "api/debug/assert.h"
+#include "experimental/kernel_args.h"
 
 constexpr uint32_t TILE_HEIGHT = 32;  // allow-redefined-helper: verbatim Quasar copy of the original op
-constexpr uint32_t READ_BATCH = 8;    // tiles per NOC barrier; must be <= CB depth.
+constexpr uint32_t READ_BATCH = 8;    // tiles per NOC barrier; must be <= DFB depth.
+
+// L1 address the CPU accesses a scratchpad through: on Quasar DM the uncached alias, as DataflowBuffer pointers are,
+// since the CPU caches are not coherent with NoC writes to L1; on WH/BH the plain address.
+template <typename T>
+uint32_t cpu_l1_addr(const Scratchpad<T>& scratch) {
+    uintptr_t addr = local_mem::detail::AddressAccess::address(scratch.local_mem());
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    addr += MEM_L1_UNCACHED_BASE;
+#endif
+    return static_cast<uint32_t>(addr);
+}
 
 void kernel_main() {
-    const uint32_t local_addr = get_arg_val<uint32_t>(0);
-    const uint32_t counts_addr = get_arg_val<uint32_t>(1);
-    const uint32_t global_expert_idx_table_addr = get_arg_val<uint32_t>(2);
     // core_id ∈ [0, num_cores). Core i reads the local tile-row range
     //   [ (N * i)     / num_cores,
     //     (N * (i+1)) / num_cores ).
-    const uint32_t core_id = get_arg_val<uint32_t>(3);
-
-    constexpr uint32_t cb_tile = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_counts_scratch = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_global_expert_idx_scratch = get_compile_time_arg_val(2);
+    const uint32_t core_id = get_arg(args::core_id);
 
     Noc noc;
-    CircularBuffer cb_tile_buf(cb_tile);
-    CircularBuffer cb_counts_scratch_buf(cb_counts_scratch);
-    CircularBuffer cb_global_expert_idx_scratch_buf(cb_global_expert_idx_scratch);
-    const uint32_t cb_tile_bytes = cb_tile_buf.get_tile_size();
+    DataflowBuffer dfb_tile(dfb::tile);
+    Scratchpad<uint32_t> counts_scratch(scratch::counts);
+    Scratchpad<uint32_t> global_expert_idx_scratch(scratch::global_expert_idx);
+    const uint32_t dfb_tile_bytes = dfb_tile.get_tile_size();
     // Index into global_expert_idx_table. The actual global_expert_id is looked
     // up at runtime via global_expert_idx_table[local_expert_id].
-    constexpr uint32_t local_expert_id = get_compile_time_arg_val(3);
-    constexpr uint32_t tiles_per_row = get_compile_time_arg_val(4);
-    constexpr uint32_t local_num_tiles = get_compile_time_arg_val(5);
-    constexpr uint32_t num_cores = get_compile_time_arg_val(6);
+    constexpr uint32_t local_expert_id = get_arg(args::local_expert_id);
+    constexpr uint32_t tiles_per_row = get_arg(args::tiles_per_row);
+    constexpr uint32_t local_num_tiles = get_arg(args::local_num_tiles);
+    constexpr uint32_t num_cores = get_arg(args::num_cores);
 
-    constexpr uint32_t local_accessor_offset = 7;
-    constexpr auto local_args = TensorAccessorArgs<local_accessor_offset>();
-    const auto local_accessor = TensorAccessor(local_args, local_addr, get_tile_size(cb_tile));
-
-    constexpr uint32_t counts_accessor_offset = local_args.next_compile_time_args_offset();
-    constexpr auto counts_args = TensorAccessorArgs<counts_accessor_offset>();
-    const auto counts_accessor = TensorAccessor(counts_args, counts_addr);
-
-    constexpr uint32_t global_expert_idx_accessor_offset = counts_args.next_compile_time_args_offset();
-    constexpr auto global_expert_idx_args = TensorAccessorArgs<global_expert_idx_accessor_offset>();
-    const auto global_expert_idx_accessor = TensorAccessor(global_expert_idx_args, global_expert_idx_table_addr);
+    const auto local_accessor = TensorAccessor(tensor::local);
+    const auto counts_accessor = TensorAccessor(tensor::counts);
+    const auto global_expert_idx_accessor = TensorAccessor(tensor::global_expert_idx_table);
 
     // Fetch counts and global_expert_idx_table (small, 1 page each) into L1 scratch.
     noc.async_read(
-        counts_accessor,
-        cb_counts_scratch_buf,
-        counts_accessor.get_aligned_page_size(),
-        {.page_id = 0},
-        {.offset_bytes = 0});
+        counts_accessor, counts_scratch, counts_accessor.get_aligned_page_size(), {.page_id = 0}, {.offset_bytes = 0});
     noc.async_read(
         global_expert_idx_accessor,
-        cb_global_expert_idx_scratch_buf,
+        global_expert_idx_scratch,
         global_expert_idx_accessor.get_aligned_page_size(),
         {.page_id = 0},
         {.offset_bytes = 0});
     noc.async_read_barrier();
 
     const volatile tt_l1_ptr uint32_t* counts_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_counts_scratch_buf.get_write_ptr());
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cpu_l1_addr(counts_scratch));
     const volatile tt_l1_ptr uint32_t* global_expert_idx_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_global_expert_idx_scratch_buf.get_write_ptr());
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cpu_l1_addr(global_expert_idx_scratch));
     // Look up the runtime global_expert_id from the table at local_expert_id.
     const uint32_t global_expert_id = global_expert_idx_ptr[local_expert_id];
     const uint32_t counts_value = counts_ptr[global_expert_id];
@@ -110,17 +105,17 @@ void kernel_main() {
         const uint32_t remaining = end_tile_idx - tile_idx;
         const uint32_t batch = remaining < READ_BATCH ? remaining : READ_BATCH;
 
-        cb_tile_buf.reserve_back(batch);
+        dfb_tile.reserve_back(batch);
         for (uint32_t i = 0; i < batch; ++i) {
             noc.async_read(
                 local_accessor,
-                cb_tile_buf,
-                cb_tile_bytes,
+                dfb_tile,
+                dfb_tile_bytes,
                 {.page_id = tile_idx + i},
-                {.offset_bytes = i * cb_tile_bytes});
+                {.offset_bytes = i * dfb_tile_bytes});
         }
         noc.async_read_barrier();
-        cb_tile_buf.push_back(batch);
+        dfb_tile.push_back(batch);
 
         tile_idx += batch;
     }

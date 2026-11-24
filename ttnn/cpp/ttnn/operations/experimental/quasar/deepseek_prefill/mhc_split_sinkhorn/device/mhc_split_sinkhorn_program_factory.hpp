@@ -5,23 +5,20 @@
 #pragma once
 
 #include <array>
-#include <optional>
 
 #include "mhc_split_sinkhorn_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/metal_v2_artifacts.hpp"
 
 namespace ttnn::experimental::prim::qsr {
 
 struct MhcSplitSinkhornProgramFactory {
     using tensor_return_value_t = std::array<Tensor, 3>;
 
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const MhcSplitSinkhornParams& operation_attributes,
         const MhcSplitSinkhornTensorArgs& tensor_args,
-        tensor_return_value_t& tensor_return_value,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
+        tensor_return_value_t& tensor_return_value);
 };
 
 }  // namespace ttnn::experimental::prim::qsr

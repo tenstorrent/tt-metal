@@ -1,12 +1,13 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
+#include "api/scratchpad.h"
 #include "api/tensor/tensor_accessor.h"
+#include "internal/local_mem/address_access.h"
+#include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/operations/experimental/quasar/deepseek_prefill/csa_compressor/device/kernels/csa_compressor_kernel_utils.hpp"
-#include "ttnn/cpp/ttnn/operations/experimental/quasar/deepseek_prefill/csa_compressor/device/kernels/csa_compressor_runtime_args.hpp"
 
 namespace {
 
@@ -20,46 +21,40 @@ constexpr uint32_t kScratchOutScore = 1;
 constexpr uint32_t kScratchKv = 2;
 constexpr uint32_t kScratchGate = 4;
 constexpr uint32_t kScratchBias = 6;
-constexpr uint32_t kScratchTiles = 7;
+
+// L1 address the CPU accesses a scratchpad through: on Quasar DM the uncached alias, as DataflowBuffer pointers are,
+// since the CPU caches are not coherent with NoC writes to L1; on WH/BH the plain address.
+template <typename T>
+uint32_t cpu_l1_addr(const Scratchpad<T>& scratch) {
+    uintptr_t addr = local_mem::detail::AddressAccess::address(scratch.local_mem());
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    addr += MEM_L1_UNCACHED_BASE;
+#endif
+    return static_cast<uint32_t>(addr);
+}
 
 }  // namespace
 
 void kernel_main() {
-    namespace rt = csa_compressor::runtime_args;
-    const uint32_t kv_addr = get_arg_val<uint32_t>(rt::index(rt::State::KvAddress));
-    const uint32_t gate_addr = get_arg_val<uint32_t>(rt::index(rt::State::GateAddress));
-    const uint32_t bias_addr = get_arg_val<uint32_t>(rt::index(rt::State::BiasAddress));
-    const uint32_t base_kv_addr = get_arg_val<uint32_t>(rt::index(rt::State::BaseKvAddress));
-    const uint32_t base_score_addr = get_arg_val<uint32_t>(rt::index(rt::State::BaseScoreAddress));
-    const uint32_t output_kv_addr = get_arg_val<uint32_t>(rt::index(rt::State::OutputKvAddress));
-    const uint32_t output_score_addr = get_arg_val<uint32_t>(rt::index(rt::State::OutputScoreAddress));
-    const uint32_t local_valid = get_arg_val<uint32_t>(rt::index(rt::State::LocalValid));
-    const uint32_t absolute_start = get_arg_val<uint32_t>(rt::index(rt::State::AbsoluteStart));
-    const uint32_t state_tiles = get_arg_val<uint32_t>(rt::index(rt::State::StateTiles));
-    const uint32_t first_state_tile = get_arg_val<uint32_t>(rt::index(rt::State::FirstStateTile));
+    const uint32_t local_valid = get_arg(args::local_valid);
+    const uint32_t absolute_start = get_arg(args::absolute_start);
+    const uint32_t state_tiles = get_arg(args::state_tiles);
+    const uint32_t first_state_tile = get_arg(args::first_state_tile);
 
-    constexpr uint32_t input_width_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t state_width_tiles = get_compile_time_arg_val(1);
-    constexpr auto kv_args = TensorAccessorArgs<2>();
-    constexpr auto gate_args = TensorAccessorArgs<kv_args.next_compile_time_args_offset()>();
-    constexpr auto bias_args = TensorAccessorArgs<gate_args.next_compile_time_args_offset()>();
-    constexpr auto base_kv_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
-    constexpr auto base_score_args = TensorAccessorArgs<base_kv_args.next_compile_time_args_offset()>();
-    constexpr auto output_kv_args = TensorAccessorArgs<base_score_args.next_compile_time_args_offset()>();
-    constexpr auto output_score_args = TensorAccessorArgs<output_kv_args.next_compile_time_args_offset()>();
+    constexpr uint32_t input_width_tiles = get_arg(args::input_width_tiles);
+    constexpr uint32_t state_width_tiles = get_arg(args::state_width_tiles);
 
-    const auto kv = TensorAccessor(kv_args, kv_addr);
-    const auto gate = TensorAccessor(gate_args, gate_addr);
-    const auto bias = TensorAccessor(bias_args, bias_addr);
-    const auto base_kv = TensorAccessor(base_kv_args, base_kv_addr);
-    const auto base_score = TensorAccessor(base_score_args, base_score_addr);
-    const auto output_kv = TensorAccessor(output_kv_args, output_kv_addr);
-    const auto output_score = TensorAccessor(output_score_args, output_score_addr);
+    const auto kv = TensorAccessor(tensor::kv);
+    const auto gate = TensorAccessor(tensor::gate);
+    const auto bias = TensorAccessor(tensor::bias);
+    const auto base_kv = TensorAccessor(tensor::base_kv);
+    const auto base_score = TensorAccessor(tensor::base_score);
+    const auto output_kv = TensorAccessor(tensor::output_kv);
+    const auto output_score = TensorAccessor(tensor::output_score);
 
-    constexpr uint32_t scratch_cb = tt::CBIndex::c_3;
-    CircularBuffer scratch(scratch_cb);
-    scratch.reserve_back(kScratchTiles);
-    volatile tt_l1_ptr uint16_t* memory = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scratch.get_write_ptr());
+    // The scratch slots above, filled and drained by this kernel alone.
+    Scratchpad<uint16_t> scratch(scratch::scratch);
+    volatile tt_l1_ptr uint16_t* memory = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cpu_l1_addr(scratch));
     Noc noc;
 
     // Rows 0-7 and 32-39 of the 64-row slab are live; every other row passes through from the base
@@ -157,18 +152,9 @@ void kernel_main() {
         }
 
         noc.async_write(
-            use<CircularBuffer::AddrSelector::WRITE_PTR>(scratch),
-            output_kv,
-            kTileBytes,
-            {.offset_bytes = kScratchOutKv * kTileBytes},
-            {.page_id = tile});
+            scratch, output_kv, kTileBytes, {.offset_bytes = kScratchOutKv * kTileBytes}, {.page_id = tile});
         noc.async_write(
-            use<CircularBuffer::AddrSelector::WRITE_PTR>(scratch),
-            output_score,
-            kTileBytes,
-            {.offset_bytes = kScratchOutScore * kTileBytes},
-            {.page_id = tile});
+            scratch, output_score, kTileBytes, {.offset_bytes = kScratchOutScore * kTileBytes}, {.page_id = tile});
         noc.async_write_barrier();
     }
-    scratch.push_back(kScratchTiles);
 }

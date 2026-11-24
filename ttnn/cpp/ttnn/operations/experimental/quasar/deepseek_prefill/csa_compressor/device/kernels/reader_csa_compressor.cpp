@@ -1,65 +1,62 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
+#include "api/scratchpad.h"
 #include "api/tensor/tensor_accessor.h"
+#include "internal/local_mem/address_access.h"
+#include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/operations/experimental/quasar/deepseek_prefill/csa_compressor/device/kernels/csa_compressor_kernel_utils.hpp"
-#include "ttnn/cpp/ttnn/operations/experimental/quasar/deepseek_prefill/csa_compressor/device/kernels/csa_compressor_runtime_args.hpp"
 
 namespace {
 
 using namespace csa_compressor::kernel_utils;
 
 // Scratch slots. One source tile of kv and gate at a time, plus the predecessor state pair that
-// window 0 reads. The position bias goes straight into its own CB for the compute kernel.
+// window 0 reads. The position bias goes straight into its own DFB for the compute kernel.
 constexpr uint32_t kScratchKv = 0;
 constexpr uint32_t kScratchGate = 1;
 constexpr uint32_t kScratchPredecessorKv = 2;
 constexpr uint32_t kScratchPredecessorScore = 3;
-constexpr uint32_t kScratchTiles = 4;
+
+// L1 address the CPU accesses a scratchpad through: on Quasar DM the uncached alias, as DataflowBuffer pointers are,
+// since the CPU caches are not coherent with NoC writes to L1; on WH/BH the plain address.
+template <typename T>
+uint32_t cpu_l1_addr(const Scratchpad<T>& scratch) {
+    uintptr_t addr = local_mem::detail::AddressAccess::address(scratch.local_mem());
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    addr += MEM_L1_UNCACHED_BASE;
+#endif
+    return static_cast<uint32_t>(addr);
+}
 
 }  // namespace
 
 void kernel_main() {
-    namespace rt = csa_compressor::runtime_args;
-    const uint32_t kv_addr = get_arg_val<uint32_t>(rt::index(rt::Reader::KvAddress));
-    const uint32_t gate_addr = get_arg_val<uint32_t>(rt::index(rt::Reader::GateAddress));
-    const uint32_t bias_addr = get_arg_val<uint32_t>(rt::index(rt::Reader::BiasAddress));
-    const uint32_t predecessor_kv_addr = get_arg_val<uint32_t>(rt::index(rt::Reader::PredecessorKvAddress));
-    const uint32_t predecessor_score_addr = get_arg_val<uint32_t>(rt::index(rt::Reader::PredecessorScoreAddress));
-    const uint32_t output_tiles = get_arg_val<uint32_t>(rt::index(rt::Reader::OutputTiles));
-    const uint32_t complete_windows = get_arg_val<uint32_t>(rt::index(rt::Reader::CompleteWindows));
-    const uint32_t absolute_start = get_arg_val<uint32_t>(rt::index(rt::Reader::AbsoluteStart));
-    const uint32_t first_output_tile = get_arg_val<uint32_t>(rt::index(rt::Reader::FirstOutputTile));
+    const uint32_t output_tiles = get_arg(args::output_tiles);
+    const uint32_t complete_windows = get_arg(args::complete_windows);
+    const uint32_t absolute_start = get_arg(args::absolute_start);
+    const uint32_t first_output_tile = get_arg(args::first_output_tile);
 
-    constexpr uint32_t candidate_kv_cb = get_compile_time_arg_val(0);
-    constexpr uint32_t candidate_score_cb = get_compile_time_arg_val(1);
-    constexpr uint32_t scratch_cb = get_compile_time_arg_val(2);
-    constexpr uint32_t input_width_tiles = get_compile_time_arg_val(3);
-    constexpr uint32_t output_width_tiles = get_compile_time_arg_val(4);
-    constexpr uint32_t ca_bias_cb = get_compile_time_arg_val(5);
-    constexpr uint32_t cb_bias_cb = get_compile_time_arg_val(6);
-    constexpr auto kv_args = TensorAccessorArgs<7>();
-    constexpr auto gate_args = TensorAccessorArgs<kv_args.next_compile_time_args_offset()>();
-    constexpr auto bias_args = TensorAccessorArgs<gate_args.next_compile_time_args_offset()>();
-    constexpr auto predecessor_kv_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
-    constexpr auto predecessor_score_args = TensorAccessorArgs<predecessor_kv_args.next_compile_time_args_offset()>();
+    constexpr uint32_t input_width_tiles = get_arg(args::input_width_tiles);
+    constexpr uint32_t output_width_tiles = get_arg(args::output_width_tiles);
 
-    const auto kv = TensorAccessor(kv_args, kv_addr);
-    const auto gate = TensorAccessor(gate_args, gate_addr);
-    const auto bias = TensorAccessor(bias_args, bias_addr);
-    const auto predecessor_kv = TensorAccessor(predecessor_kv_args, predecessor_kv_addr);
-    const auto predecessor_score = TensorAccessor(predecessor_score_args, predecessor_score_addr);
+    const auto kv = TensorAccessor(tensor::kv);
+    const auto gate = TensorAccessor(tensor::gate);
+    const auto bias = TensorAccessor(tensor::bias);
+    const auto predecessor_kv = TensorAccessor(tensor::predecessor_kv);
+    const auto predecessor_score = TensorAccessor(tensor::predecessor_score);
 
-    CircularBuffer candidate_kv(candidate_kv_cb);
-    CircularBuffer candidate_score(candidate_score_cb);
-    CircularBuffer ca_bias(ca_bias_cb);
-    CircularBuffer cb_bias(cb_bias_cb);
-    CircularBuffer scratch(scratch_cb);
-    scratch.reserve_back(kScratchTiles);
-    volatile tt_l1_ptr uint16_t* source = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scratch.get_write_ptr());
+    DataflowBuffer candidate_kv(dfb::candidate_kv);
+    DataflowBuffer candidate_score(dfb::candidate_score);
+    // ca_bias / cb_bias: the position bias of the Ca and Cb halves of the projection.
+    DataflowBuffer ca_bias(dfb::ca_bias);
+    DataflowBuffer cb_bias(dfb::cb_bias);
+    // The scratch slots above, filled and drained by this kernel alone.
+    Scratchpad<uint16_t> scratch(scratch::scratch);
+    volatile tt_l1_ptr uint16_t* source = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cpu_l1_addr(scratch));
     Noc noc;
 
     // Candidate tile c, row r holds candidate c of window (32 * output_tile_row + r), which turns the
@@ -184,5 +181,4 @@ void kernel_main() {
         ca_bias.push_back(1);
         cb_bias.push_back(1);
     }
-    scratch.push_back(kScratchTiles);
 }

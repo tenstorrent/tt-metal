@@ -9,10 +9,10 @@
 #include <vector>
 
 #include <tt_stl/reflection.hpp>
-#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::experimental::prim::qsr {
@@ -31,19 +31,13 @@ struct CsaStateInputs {
     const Tensor& base_score_state;
 };
 
+// One program per mesh coordinate: the chunk position comes from the coordinate along cluster_axis.
 struct CsaStatePreparationProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
-        const CsaRuntimeParams&,
-        const CsaStateInputs&,
-        std::array<Tensor, 2>&,
-        const std::optional<ttnn::MeshCoordinate>&);
+    static ttnn::device_operation::MeshWorkloadArtifacts create_mesh_workload_artifacts(
+        const CsaRuntimeParams&, const CsaStateInputs&, std::array<Tensor, 2>&, const ttnn::MeshCoordinateRangeSet&);
 
-    static void override_runtime_arguments(
-        tt::tt_metal::Program&,
-        const CsaRuntimeParams&,
-        const CsaStateInputs&,
-        std::array<Tensor, 2>&,
-        const std::optional<ttnn::MeshCoordinate>&);
+    static tt::tt_metal::ProgramRunArgs override_runtime_arguments(
+        const CsaRuntimeParams&, const CsaStateInputs&, std::array<Tensor, 2>&, const ttnn::MeshCoordinateRange&);
 };
 
 struct CsaStatePreparationDeviceOperation {
@@ -69,19 +63,16 @@ struct CsaCompressionInputs {
     const Tensor& predecessor_score_state;
 };
 
+// One program per mesh coordinate: the chunk position comes from the coordinate along cluster_axis.
 struct CsaCompressionProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::MeshWorkloadArtifacts create_mesh_workload_artifacts(
         const CsaRuntimeParams&,
         const CsaCompressionInputs&,
         std::array<Tensor, 3>&,
-        const std::optional<ttnn::MeshCoordinate>&);
+        const ttnn::MeshCoordinateRangeSet&);
 
-    static void override_runtime_arguments(
-        tt::tt_metal::Program&,
-        const CsaRuntimeParams&,
-        const CsaCompressionInputs&,
-        std::array<Tensor, 3>&,
-        const std::optional<ttnn::MeshCoordinate>&);
+    static tt::tt_metal::ProgramRunArgs override_runtime_arguments(
+        const CsaRuntimeParams&, const CsaCompressionInputs&, std::array<Tensor, 3>&, const ttnn::MeshCoordinateRange&);
 };
 
 struct CsaCompressionDeviceOperation {

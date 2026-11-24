@@ -7,24 +7,36 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 
 namespace ttnn::experimental::prim::qsr {
 
-tt::tt_metal::ProgramDescriptor MaskedBincountProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts MaskedBincountProgramFactory::create_program_artifacts(
     const MaskedBincountParams& operation_attributes,
     const MaskedBincountInputs& tensor_args,
     Tensor& tensor_return_value) {
+    using namespace tt::tt_metal;
+
+    const KernelSpecName BRISC{"brisc"};
+    const KernelSpecName NCRISC{"ncrisc"};
+    const ScratchpadSpecName IN_BRISC{"in_brisc"};
+    const ScratchpadSpecName OUT{"out"};
+    const ScratchpadSpecName IN_NCRISC{"in_ncrisc"};
+    const ScratchpadSpecName GATHER_TMP{"gather_tmp"};
+    const ScratchpadSpecName MASK_SCRATCH{"mask_scratch"};
+    const ScratchpadSpecName NCRISC_PARTIAL{"ncrisc_partial"};
+    const SemaphoreSpecName INIT_SEM{"init_sem"};
+    const SemaphoreSpecName DONE_SEM{"done_sem"};
+    const SemaphoreSpecName GATHER_SEM{"gather_sem"};
+    const TensorParamName SRC{"src"};
+    const TensorParamName DST{"dst"};
+    const TensorParamName MASK{"mask"};
+
     const auto& input = tensor_args.input_tensor;
     const auto& expert_mask = tensor_args.expert_mask;
 
-    tt::tt_metal::ProgramDescriptor desc;
-
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    tt::DataFormat output_cb_data_format =
-        tt::tt_metal::datatype_to_dataformat_converter(tt::tt_metal::DataType::UINT32);
     uint32_t n_routed_experts = operation_attributes.n_routed_experts;
 
     // Input is TILE + interleaved (no shard spec). Each core gets a contiguous range of the LOGICAL token rows; it
@@ -65,152 +77,116 @@ tt::tt_metal::ProgramDescriptor MaskedBincountProgramFactory::create_descriptor(
     const tt::tt_metal::distributed::MeshDevice* device = input.device();
     auto collector_noc = device->worker_core_from_logical_core(collector_core);
 
-    auto add_cb = [&](uint32_t cb_idx, uint32_t total_size, uint32_t page_size, tt::DataFormat data_format) {
-        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-            .total_size = total_size,
-            .core_ranges = all_cores,
-            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(cb_idx),
-                .data_format = data_format,
-                .page_size = page_size,
-            }}},
-        });
+    // --- Scratchpads ---
+    // All of this op's L1 buffers are raw scratch: the kernels address them directly and never use FIFO operations.
+    // The ones both RISCs of a core touch are multi-bound, synchronized by the kernels through init_sem / done_sem.
+    auto shared_scratchpad = [](const ScratchpadSpecName& name, uint32_t size) {
+        ScratchpadSpec spec{.unique_id = name, .size_per_node = size};
+        spec.advanced_options.allow_instance_multi_binding = true;
+        return spec;
     };
-
-    // --- Circular Buffers ---
-
-    // CB 0: BRISC input pages (per-shard)
-    uint32_t cb_in_brisc = tt::CBIndex::c_0;
-    add_cb(cb_in_brisc, max_tiles_brisc * input_page_size, input_page_size, input_cb_data_format);
-
-    // CB 1: local output histogram
-    uint32_t cb_out_index = tt::CBIndex::c_1;
-    add_cb(cb_out_index, output_page_size, output_page_size, output_cb_data_format);
-
-    // CB 2: NCRISC input pages (per-shard)
-    uint32_t cb_in_ncrisc = tt::CBIndex::c_2;
-    add_cb(cb_in_ncrisc, max_tiles_ncrisc * input_page_size, input_page_size, input_cb_data_format);
-
-    // CB 3: gather temp buffer (collector reads remote histograms here)
-    uint32_t cb_gather_tmp = tt::CBIndex::c_3;
-    add_cb(cb_gather_tmp, (num_cores - 1) * output_page_size, output_page_size, output_cb_data_format);
-
-    // CB 4: expert dispatch table (INT32, one value per expert; negative = absent, non-negative = present)
-    tt::DataFormat mask_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(tt::tt_metal::DataType::INT32);
-    uint32_t cb_mask = tt::CBIndex::c_4;
-    add_cb(cb_mask, mask_page_size, mask_page_size, mask_cb_data_format);
-
-    // CB 5: NCRISC's partial histogram, published for BRISC to add.
-    uint32_t cb_ncrisc_partial = tt::CBIndex::c_5;
-    add_cb(cb_ncrisc_partial, output_page_size, output_page_size, output_cb_data_format);
+    Group<ScratchpadSpec> scratchpads = {
+        // BRISC input pages (per-shard)
+        ScratchpadSpec{.unique_id = IN_BRISC, .size_per_node = max_tiles_brisc * input_page_size},
+        // local output histogram
+        shared_scratchpad(OUT, output_page_size),
+        // NCRISC input pages (per-shard)
+        ScratchpadSpec{.unique_id = IN_NCRISC, .size_per_node = max_tiles_ncrisc * input_page_size},
+        // gather temp buffer (collector reads remote histograms here)
+        shared_scratchpad(GATHER_TMP, (num_cores - 1) * output_page_size),
+        // expert dispatch table (INT32, one value per expert; negative = absent, non-negative = present)
+        shared_scratchpad(MASK_SCRATCH, mask_page_size),
+        // NCRISC's partial histogram, published for BRISC to add.
+        shared_scratchpad(NCRISC_PARTIAL, output_page_size),
+    };
 
     // --- Semaphores ---
-    auto add_semaphore = [&]() {
-        const uint32_t semaphore_id = static_cast<uint32_t>(desc.semaphores.size());
-        desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-            .id = semaphore_id,
-            .core_type = tt::CoreType::WORKER,
-            .core_ranges = all_cores,
-            .initial_value = 0,
-        });
-        return semaphore_id;
-    };
-    auto init_sem_idx = add_semaphore();
-    auto done_sem_idx = add_semaphore();
-    auto gather_sem_idx = add_semaphore();
-
-    // --- TensorAccessor args (shared by both kernels) ---
-    std::vector<uint32_t> accessor_args;
-    tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(accessor_args);
-    tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(accessor_args);
-    tt::tt_metal::TensorAccessorArgs(mask_buffer).append_to(accessor_args);
-
-    // --- BRISC compile-time args ---
-    std::vector<uint32_t> ct_args_brisc = {
-        cb_in_brisc,
-        cb_out_index,
-        input_page_size,
-        output_page_size,
-        h_brisc,
-        operation_attributes.num_experts_per_token,
-        n_routed_experts,
-        1,  // is_initializer
-        init_sem_idx,
-        done_sem_idx,
-        gather_sem_idx,
-        cb_gather_tmp,
-        (uint32_t)collector_noc.x,
-        (uint32_t)collector_noc.y,
-        num_cores,
-        cb_mask,
-        mask_page_size,
-        tile_h,
-        cb_ncrisc_partial,
-    };
-    ct_args_brisc.insert(ct_args_brisc.end(), accessor_args.begin(), accessor_args.end());
-
-    // --- NCRISC compile-time args ---
-    std::vector<uint32_t> ct_args_ncrisc = {
-        cb_in_ncrisc,
-        cb_out_index,
-        input_page_size,
-        output_page_size,
-        h_ncrisc,
-        operation_attributes.num_experts_per_token,
-        n_routed_experts,
-        0,  // is_initializer
-        init_sem_idx,
-        done_sem_idx,
-        gather_sem_idx,
-        cb_gather_tmp,
-        (uint32_t)collector_noc.x,
-        (uint32_t)collector_noc.y,
-        num_cores,
-        cb_mask,
-        mask_page_size,
-        tile_h,
-        cb_ncrisc_partial,
-    };
-    ct_args_ncrisc.insert(ct_args_ncrisc.end(), accessor_args.begin(), accessor_args.end());
-
-    // --- Create BRISC kernel (RISCV_0, NOC 0) ---
-    tt::tt_metal::KernelDescriptor brisc_kernel_desc;
-    brisc_kernel_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/quasar/deepseek_prefill/masked_bincount/device/kernels/"
-        "reader_masked_bincount.cpp";
-    brisc_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
-    brisc_kernel_desc.core_ranges = all_cores;
-    brisc_kernel_desc.compile_time_args = std::move(ct_args_brisc);
-    brisc_kernel_desc.config = tt::tt_metal::DataMovementConfigDescriptor{
-        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-        .noc = tt::tt_metal::NOC::RISCV_0_default,
+    Group<SemaphoreSpec> semaphores = {
+        SemaphoreSpec{.unique_id = INIT_SEM, .target_nodes = all_cores},
+        SemaphoreSpec{.unique_id = DONE_SEM, .target_nodes = all_cores},
+        SemaphoreSpec{.unique_id = GATHER_SEM, .target_nodes = all_cores},
     };
 
-    // --- Create NCRISC kernel (RISCV_1, NOC 1) ---
-    tt::tt_metal::KernelDescriptor ncrisc_kernel_desc;
-    ncrisc_kernel_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/quasar/deepseek_prefill/masked_bincount/device/kernels/"
-        "reader_masked_bincount.cpp";
-    ncrisc_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
-    ncrisc_kernel_desc.core_ranges = all_cores;
-    ncrisc_kernel_desc.compile_time_args = std::move(ct_args_ncrisc);
-    ncrisc_kernel_desc.config = tt::tt_metal::DataMovementConfigDescriptor{
-        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-        .noc = tt::tt_metal::NOC::RISCV_1_default,
+    // Both RISCs run the same source, so their specs bind the same names; only the input pages differ per RISC.
+    auto make_kernel_spec = [&](const KernelSpecName& name,
+                                const ScratchpadSpecName& in_scratchpad,
+                                uint32_t h_count,
+                                uint32_t is_initializer,
+                                DataMovementProcessor processor,
+                                NOC noc) {
+        return KernelSpec{
+            .unique_id = name,
+            .source = std::filesystem::path(
+                "ttnn/cpp/ttnn/operations/experimental/quasar/deepseek_prefill/masked_bincount/device/kernels/"
+                "reader_masked_bincount.cpp"),
+            .semaphore_bindings =
+                {
+                    SemaphoreBinding{.semaphore_spec_name = INIT_SEM, .accessor_name = "init"},
+                    SemaphoreBinding{.semaphore_spec_name = DONE_SEM, .accessor_name = "done"},
+                    SemaphoreBinding{.semaphore_spec_name = GATHER_SEM, .accessor_name = "gather"},
+                },
+            .scratchpad_bindings =
+                {
+                    ScratchpadBinding{.scratchpad_spec_name = in_scratchpad, .accessor_name = "in"},
+                    ScratchpadBinding{.scratchpad_spec_name = OUT, .accessor_name = "out"},
+                    ScratchpadBinding{.scratchpad_spec_name = GATHER_TMP, .accessor_name = "gather_tmp"},
+                    ScratchpadBinding{.scratchpad_spec_name = MASK_SCRATCH, .accessor_name = "mask"},
+                    ScratchpadBinding{.scratchpad_spec_name = NCRISC_PARTIAL, .accessor_name = "ncrisc_partial"},
+                },
+            .tensor_bindings =
+                {
+                    TensorBinding{.tensor_parameter_name = SRC, .accessor_name = "src"},
+                    TensorBinding{.tensor_parameter_name = DST, .accessor_name = "dst"},
+                    TensorBinding{.tensor_parameter_name = MASK, .accessor_name = "mask"},
+                },
+            .compile_time_args =
+                {
+                    {"input_page_size", input_page_size},
+                    {"output_page_size", output_page_size},
+                    {"h_count", h_count},
+                    {"num_experts_per_token", operation_attributes.num_experts_per_token},
+                    {"n_routed_experts", n_routed_experts},
+                    {"is_initializer", is_initializer},
+                    {"mask_page_size", mask_page_size},
+                    {"tile_h", tile_h},
+                },
+            .runtime_arg_schema =
+                {
+                    .runtime_arg_names = {"h_start", "num_receive", "parent_noc_x", "parent_noc_y"},
+                    .runtime_array_args = {{.name = "children_noc", .size = 2 * (num_cores - 1)}},
+                },
+            .hw_config =
+                DataMovementHardwareConfig{
+                    .config_1xx =
+                        DataMovementHardwareConfig::DataMovement1XXConfig{
+                            .processor = processor,
+                            .noc = noc,
+                        },
+                },
+        };
     };
+
+    // --- BRISC kernel (RISCV_0, NOC 0) ---
+    KernelSpec brisc_spec =
+        make_kernel_spec(BRISC, IN_BRISC, h_brisc, 1, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default);
+    // --- NCRISC kernel (RISCV_1, NOC 1) ---
+    KernelSpec ncrisc_spec =
+        make_kernel_spec(NCRISC, IN_NCRISC, h_ncrisc, 0, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default);
 
     // --- Per-core runtime args (tree reduction) ---
+    KernelRunArgs brisc_run_args{.kernel = BRISC};
+    KernelRunArgs ncrisc_run_args{.kernel = NCRISC};
     for (uint32_t i = 0; i < all_cores_vec.size(); i++) {
         uint32_t page_offset = i * shard_height;
 
         // Flat reduction: core 0 collects from every other core; the others signal core 0.
-        std::vector<uint32_t> children_noc;
+        std::vector<uint32_t> children_noc(2 * (num_cores - 1), 0);
         uint32_t num_receive = 0;
         if (i == 0) {
             for (uint32_t c = 1; c < num_cores; c++) {
                 auto child_noc = device->worker_core_from_logical_core(all_cores_vec[c]);
-                children_noc.push_back(child_noc.x);
-                children_noc.push_back(child_noc.y);
+                children_noc[2 * num_receive] = child_noc.x;
+                children_noc[2 * num_receive + 1] = child_noc.y;
                 num_receive++;
             }
         }
@@ -221,24 +197,63 @@ tt::tt_metal::ProgramDescriptor MaskedBincountProgramFactory::create_descriptor(
             parent_noc_y = collector_noc.y;
         }
 
-        // rt_args: [src, dst, mask, page_offset, num_receive, parent_noc_x, parent_noc_y, child0_x, child0_y, ...]
-        tt::tt_metal::KernelDescriptor::RTArgList rt_brisc;
-        rt_brisc.push_back(src_buffer);
-        rt_brisc.push_back(dst_buffer);
-        rt_brisc.push_back(mask_buffer);
-        rt_brisc.push_back(page_offset);
-        rt_brisc.push_back(num_receive);
-        rt_brisc.push_back(parent_noc_x);
-        rt_brisc.push_back(parent_noc_y);
-        rt_brisc.append(children_noc);
-        brisc_kernel_desc.emplace_runtime_args(all_cores_vec[i], rt_brisc);
-        ncrisc_kernel_desc.emplace_runtime_args(
-            all_cores_vec[i], {src_buffer, dst_buffer, mask_buffer, page_offset + h_brisc, 0u});
+        AddRuntimeArgsForNode(
+            brisc_run_args.runtime_arg_values,
+            all_cores_vec[i],
+            {
+                {"h_start", page_offset},
+                {"num_receive", num_receive},
+                {"parent_noc_x", parent_noc_x},
+                {"parent_noc_y", parent_noc_y},
+            });
+        brisc_run_args.runtime_array_arg_values["children_noc"][all_cores_vec[i]] = children_noc;
+        // NCRISC returns before the reduction phase, so it never reads the parent / children args.
+        AddRuntimeArgsForNode(
+            ncrisc_run_args.runtime_arg_values,
+            all_cores_vec[i],
+            {
+                {"h_start", page_offset + h_brisc},
+                {"num_receive", 0u},
+                {"parent_noc_x", 0xFFFFFFFFu},
+                {"parent_noc_y", 0xFFFFFFFFu},
+            });
+        ncrisc_run_args.runtime_array_arg_values["children_noc"][all_cores_vec[i]] =
+            std::vector<uint32_t>(2 * (num_cores - 1), 0);
     }
 
-    desc.kernels.push_back(std::move(brisc_kernel_desc));
-    desc.kernels.push_back(std::move(ncrisc_kernel_desc));
-    return desc;
+    ProgramSpec spec{
+        .name = "masked_bincount",
+        .kernels = {std::move(brisc_spec), std::move(ncrisc_spec)},
+        .semaphores = std::move(semaphores),
+        .scratchpads = std::move(scratchpads),
+        .tensor_parameters =
+            {
+                TensorParameter{.unique_id = SRC, .spec = input.mesh_tensor().tensor_spec()},
+                TensorParameter{.unique_id = DST, .spec = tensor_return_value.mesh_tensor().tensor_spec()},
+                TensorParameter{.unique_id = MASK, .spec = expert_mask.mesh_tensor().tensor_spec()},
+            },
+        .work_units =
+            {
+                WorkUnitSpec{
+                    .name = "main",
+                    .kernels = {BRISC, NCRISC},
+                    .target_nodes = all_cores,
+                },
+            },
+    };
+
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args.reserve(2);
+    run_args.kernel_run_args.push_back(std::move(brisc_run_args));
+    run_args.kernel_run_args.push_back(std::move(ncrisc_run_args));
+    run_args.tensor_args.emplace(SRC, input.mesh_tensor());
+    run_args.tensor_args.emplace(DST, tensor_return_value.mesh_tensor());
+    run_args.tensor_args.emplace(MASK, expert_mask.mesh_tensor());
+
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec),
+        .run_params = std::move(run_args),
+    };
 }
 
 }  // namespace ttnn::experimental::prim::qsr

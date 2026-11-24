@@ -19,82 +19,77 @@
 //
 // The same kernel source is compiled twice per core: once for BRISC
 // (is_initializer = true) and once for NCRISC (is_initializer = false). They
-// share a single output histogram buffer (cb_out) in L1 and cooperate through
+// share a single output histogram buffer (out) in L1 and cooperate through
 // semaphores to parallelise the work. The kernel runs in three phases:
 //
 // Phase 1 — Parallel page reads:
 //   Both RISCs read their assigned portion of the shard into separate
-//   input CBs (cb_in_brisc / cb_in_ncrisc). The shard's rows are split roughly
+//   input scratchpads (in_brisc / in_ncrisc). The shard's rows are split roughly
 //   in half: BRISC gets h_brisc rows starting at h_start, NCRISC gets h_ncrisc
 //   rows starting at h_start + h_brisc. All reads are issued together and
 //   overlap with phase-2 initialisation.
 //
 // Phase 2 — Local histogram counting:
-//   BRISC fetches the expert mask into cb_mask and signals NCRISC via init_sem. Each RISC counts its rows'
+//   BRISC fetches the expert mask into mask and signals NCRISC via init_sem. Each RISC counts its rows'
 //   picks that pass the bounds check (< n_routed_experts) and the mask check (mask[expert] >= 0) into its own
-//   RISC-local array (plain increments). NCRISC publishes its array to cb_ncrisc_partial and bumps done_sem;
-//   BRISC writes local + NCRISC partial into the core's output page (cb_out).
+//   RISC-local array (plain increments). NCRISC publishes its array to ncrisc_partial and bumps done_sem;
+//   BRISC writes local + NCRISC partial into the core's output page (out).
 //
 // Phase 3 — Flat reduction (BRISC only):
 //   Every core but the collector (core 0) signals the collector's gather_sem once its page is final. The
-//   collector waits for all of them, reads every other core's page at once into cb_gather_tmp, sums, and
+//   collector waits for all of them, reads every other core's page at once into gather_tmp, sums, and
 //   writes the histogram.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "api/scratchpad.h"
+#include "internal/local_mem/address_access.h"
+#include "experimental/kernel_args.h"
 #include "ckernel.h"
+
+// L1 address the CPU accesses a scratchpad through: on Quasar DM the uncached alias, as DataflowBuffer pointers are,
+// since the CPU caches are not coherent with NoC writes to L1; on WH/BH the plain address.
+template <typename T>
+uint32_t cpu_l1_addr(const Scratchpad<T>& scratch) {
+    uintptr_t addr = local_mem::detail::AddressAccess::address(scratch.local_mem());
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    addr += MEM_L1_UNCACHED_BASE;
+#endif
+    return static_cast<uint32_t>(addr);
+}
 
 void kernel_main() {
     Noc noc;
 
-    uint32_t src_addr = get_arg_val<uint32_t>(0);
-    uint32_t dst_addr = get_arg_val<uint32_t>(1);
-    uint32_t mask_addr = get_arg_val<uint32_t>(2);
-    uint32_t h_start = get_arg_val<uint32_t>(3);
+    uint32_t h_start = get_arg(args::h_start);
 
-    constexpr uint32_t cb_id_in = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_id_out = get_compile_time_arg_val(1);
-    constexpr uint32_t input_page_size = get_compile_time_arg_val(2);
-    constexpr uint32_t output_page_size = get_compile_time_arg_val(3);
-    constexpr uint32_t h_count = get_compile_time_arg_val(4);
-    constexpr uint32_t num_experts_per_token = get_compile_time_arg_val(5);
-    constexpr uint32_t n_routed_experts = get_compile_time_arg_val(6);
-    constexpr bool is_initializer = (bool)get_compile_time_arg_val(7);
-    constexpr uint32_t init_sem_idx = get_compile_time_arg_val(8);
-    constexpr uint32_t done_sem_idx = get_compile_time_arg_val(9);
-    constexpr uint32_t gather_sem_idx = get_compile_time_arg_val(10);
-    constexpr uint32_t cb_gather_tmp = get_compile_time_arg_val(11);
-    constexpr uint32_t cb_mask = get_compile_time_arg_val(15);
-    constexpr uint32_t mask_page_size = get_compile_time_arg_val(16);
-    constexpr uint32_t tile_h = get_compile_time_arg_val(17);
+    constexpr uint32_t input_page_size = get_arg(args::input_page_size);
+    constexpr uint32_t output_page_size = get_arg(args::output_page_size);
+    constexpr uint32_t h_count = get_arg(args::h_count);
+    constexpr uint32_t num_experts_per_token = get_arg(args::num_experts_per_token);
+    constexpr uint32_t n_routed_experts = get_arg(args::n_routed_experts);
+    constexpr bool is_initializer = (bool)get_arg(args::is_initializer);
+    constexpr uint32_t mask_page_size = get_arg(args::mask_page_size);
+    constexpr uint32_t tile_h = get_arg(args::tile_h);
+
+    const auto src_accessor = TensorAccessor(tensor::src);
+    const auto dst_accessor = TensorAccessor(tensor::dst);
+    const auto mask_accessor = TensorAccessor(tensor::mask);
+
+    Scratchpad<uint32_t> in(scratch::in);
+    Scratchpad<uint32_t> out(scratch::out);
+    Scratchpad<uint32_t> mask_scratch(scratch::mask);
+    Scratchpad<uint32_t> gather_tmp(scratch::gather_tmp);
     // L1 page where NCRISC publishes its partial histogram for BRISC (counts are kept RISC-local, not atomic).
-    constexpr uint32_t cb_ncrisc_partial = get_compile_time_arg_val(18);
+    Scratchpad<uint32_t> ncrisc_partial_scratch(scratch::ncrisc_partial);
 
-    constexpr uint32_t src_accessor_offset = 19;
-    constexpr auto src_args = TensorAccessorArgs<src_accessor_offset>();
-    const auto src_accessor = TensorAccessor(src_args, src_addr);
-
-    constexpr uint32_t dst_accessor_offset = src_args.next_compile_time_args_offset();
-    constexpr auto dst_args_ct = TensorAccessorArgs<dst_accessor_offset>();
-    const auto dst_accessor = TensorAccessor(dst_args_ct, dst_addr);
-
-    constexpr uint32_t mask_accessor_offset = dst_args_ct.next_compile_time_args_offset();
-    constexpr auto mask_args_ct = TensorAccessorArgs<mask_accessor_offset>();
-    const auto mask_accessor = TensorAccessor(mask_args_ct, mask_addr);
-
-    CircularBuffer cb_in(cb_id_in);
-    CircularBuffer cb_out(cb_id_out);
-    CircularBuffer cb_mask_obj(cb_mask);
-    CircularBuffer cb_gather_tmp_obj(cb_gather_tmp);
-
-    uint32_t in_base_addr = cb_in.get_write_ptr();
-    uint32_t out_addr = cb_out.get_write_ptr();
-    uint32_t mask_l1_addr = cb_mask_obj.get_write_ptr();
+    uint32_t in_base_addr = cpu_l1_addr(in);
+    uint32_t out_addr = cpu_l1_addr(out);
+    uint32_t mask_l1_addr = cpu_l1_addr(mask_scratch);
 
     // Phase 1: Read the TILE pages covering this RISC's global row range [h_start, h_start + h_count).
     // The input is TILE-interleaved; page_id indexes 32-row tiles (width is padded to a single tile).
@@ -117,7 +112,7 @@ void kernel_main() {
 
     // Phase 2: Local histogram counting. Each RISC counts into its own RISC-local array (plain increments, no
     // NoC atomics); NCRISC then publishes its array to an L1 page and BRISC adds it into the output page.
-    Semaphore<> init_sem(init_sem_idx);
+    Semaphore<> init_sem(sem::init);
 
     if constexpr (is_initializer) {
         noc.async_read(mask_accessor, CoreLocalMem<uint32_t>(mask_l1_addr), mask_page_size, {.page_id = 0}, {});
@@ -162,9 +157,9 @@ void kernel_main() {
         }
     }
 
-    Semaphore<> done_sem(done_sem_idx);
+    Semaphore<> done_sem(sem::done);
     volatile tt_l1_ptr uint32_t* ncrisc_partial =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CircularBuffer(cb_ncrisc_partial).get_write_ptr());
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cpu_l1_addr(ncrisc_partial_scratch));
     if constexpr (!is_initializer) {
         for (uint32_t i = 0; i < n_routed_experts; i++) {
             ncrisc_partial[i] = local_counts[i];
@@ -187,10 +182,10 @@ void kernel_main() {
 
     // Phase 3: flat reduction. The collector reads every other core's histogram at once and sums them; the other
     // cores only signal it.
-    uint32_t num_receive = get_arg_val<uint32_t>(4);
-    uint32_t parent_noc_x = get_arg_val<uint32_t>(5);
-    uint32_t parent_noc_y = get_arg_val<uint32_t>(6);
-    Semaphore<> gather_sem(gather_sem_idx);
+    uint32_t num_receive = get_arg(args::num_receive);
+    uint32_t parent_noc_x = get_arg(args::parent_noc_x);
+    uint32_t parent_noc_y = get_arg(args::parent_noc_y);
+    Semaphore<> gather_sem(sem::gather);
 
     if (parent_noc_x != 0xFFFFFFFF) {
         (void)ckernel::load_blocking(local_hist + (n_routed_experts - 1));
@@ -199,11 +194,11 @@ void kernel_main() {
         return;
     }
 
-    uint32_t tmp_addr = cb_gather_tmp_obj.get_write_ptr();
+    uint32_t tmp_addr = cpu_l1_addr(gather_tmp);
     gather_sem.wait_min(num_receive);
     for (uint32_t c = 0; c < num_receive; c++) {
-        uint32_t child_noc_x = get_arg_val<uint32_t>(7 + c * 2);
-        uint32_t child_noc_y = get_arg_val<uint32_t>(7 + c * 2 + 1);
+        uint32_t child_noc_x = get_arg(args::children_noc)[c * 2];
+        uint32_t child_noc_y = get_arg(args::children_noc)[c * 2 + 1];
         noc.async_read(
             UnicastEndpoint{},
             CoreLocalMem<uint32_t>(tmp_addr + c * output_page_size),

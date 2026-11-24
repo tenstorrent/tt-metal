@@ -8,11 +8,12 @@
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::experimental::prim::qsr {
 
@@ -27,10 +28,20 @@ constexpr auto kKernelDir =
 
 }  // namespace
 
-tt::tt_metal::ProgramDescriptor AttnResWeightedReduceNCProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts AttnResWeightedReduceNCProgramFactory::create_program_artifacts(
     const AttnResWeightedReduceNCParams& operation_attributes,
     const AttnResWeightedReduceNCInputs& tensor_args,
     Tensor& tensor_return_value) {
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE{"compute"};
+    const DFBSpecName IN0{"in0"};
+    const DFBSpecName IN1{"in1"};
+    const DFBSpecName OUT{"out"};
+    const TensorParamName INPUT{"input"};
+    const TensorParamName WEIGHT{"weight"};
+    const TensorParamName OUTPUT{"output"};
+
     auto* device = tensor_args.input.device();
 
     ////////////////////////////////////////////////////////////////////////////
@@ -83,48 +94,37 @@ tt::tt_metal::ProgramDescriptor AttnResWeightedReduceNCProgramFactory::create_de
     auto [num_cores_to_be_used, all_cores, core_group_1, core_group_2, num_tiles_group_1, num_tiles_group_2] =
         tt::tt_metal::split_work_to_cores(grid, inner_tile_size, /*row_wise=*/true);
 
-    ProgramDescriptor desc;
-
     ////////////////////////////////////////////////////////////////////////////
-    //                         CircularBuffer Setup
+    //                         DataflowBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    // No intermediate CB: the running sums live in DEST for the whole reduction,
+    // No intermediate DFB: the running sums live in DEST for the whole reduction,
     // which is what lets one pass over the input do the multiply and the add.
-    // A whole reduction's candidates are one CB unit, so the group loop can walk
+    // A whole reduction's candidates are one DFB unit, so the group loop can walk
     // them repeatedly without the reader re-fetching between sites.
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_candidates * 2 * input_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(CBIndex::c_0),
-            .data_format = input_data_format,
-            .page_size = input_tile_size,
-        }}},
-    });
+    DataflowBufferSpec in0_dfb{
+        .unique_id = IN0,
+        .entry_size = input_tile_size,
+        .num_entries = num_candidates * 2,
+        .data_format_metadata = input_data_format,
+    };
 
     // One group's weight sets, single-buffered. The set turns over once every Wt
     // output tiles, so a prefetch buffer would idle through nearly the whole row
-    // while doubling what is already the largest CB here: sites_per_group * C
+    // while doubling what is already the largest DFB here: sites_per_group * C
     // tiles, over a hundred kilobytes at the shape AttnRes asks for.
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = sites_per_group * num_candidates * weight_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(CBIndex::c_1),
-            .data_format = weight_data_format,
-            .page_size = weight_tile_size,
-        }}},
-    });
+    DataflowBufferSpec in1_dfb{
+        .unique_id = IN1,
+        .entry_size = weight_tile_size,
+        .num_entries = sites_per_group * num_candidates,
+        .data_format_metadata = weight_data_format,
+    };
 
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = sites_per_group * 2 * output_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(CBIndex::c_16),
-            .data_format = output_data_format,
-            .page_size = output_tile_size,
-        }}},
-    });
+    DataflowBufferSpec out_dfb{
+        .unique_id = OUT,
+        .entry_size = output_tile_size,
+        .num_entries = sites_per_group * 2,
+        .data_format_metadata = output_data_format,
+    };
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
@@ -132,52 +132,93 @@ tt::tt_metal::ProgramDescriptor AttnResWeightedReduceNCProgramFactory::create_de
     // Every stride is a compile-time arg. The reader divides by inner_tile_size
     // and by Wt once per output tile, and RISC-V has no divide instruction —
     // constants let the compiler emit multiply-shift instead of a libcall.
-    std::vector<uint32_t> reader_compile_time_args = {
-        num_candidates,
-        inner_tile_size,
-        Wt,
-        weight_inner_tile_size,
-        weight_reduce_tile_size,
-        num_sites,
-        sites_per_group,
-        num_groups};
-    TensorAccessorArgs(*tensor_args.input.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*tensor_args.weight.buffer()).append_to(reader_compile_time_args);
+    KernelSpec reader_spec{
+        .unique_id = READER,
+        .source = std::filesystem::path(std::string(kKernelDir) + "reader_weighted_reduce_nc.cpp"),
+        .dfb_bindings =
+            {
+                DFBBinding{.dfb_spec_name = IN0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::PRODUCER},
+                DFBBinding{.dfb_spec_name = IN1, .accessor_name = "in1", .endpoint_type = DFBEndpointType::PRODUCER},
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"},
+                TensorBinding{.tensor_parameter_name = WEIGHT, .accessor_name = "weight"},
+            },
+        .compile_time_args =
+            {
+                {"num_candidates", num_candidates},
+                {"inner_tile_size", inner_tile_size},
+                {"Wt", Wt},
+                {"weight_inner_tile_size", weight_inner_tile_size},
+                {"weight_reduce_tile_size", weight_reduce_tile_size},
+                {"num_sites", num_sites},
+                {"sites_per_group", sites_per_group},
+                {"num_groups", num_groups},
+            },
+        .runtime_arg_schema = {.runtime_arg_names = {"num_positions", "start_id"}},
+        .hw_config = ttnn::create_reader_datamovement_config(),
+    };
 
-    std::vector<uint32_t> writer_compile_time_args = {inner_tile_size, num_sites, sites_per_group, num_groups};
-    TensorAccessorArgs(*tensor_return_value.buffer()).append_to(writer_compile_time_args);
-
-    KernelDescriptor reader_kernel_desc;
-    reader_kernel_desc.kernel_source = std::string(kKernelDir) + "reader_weighted_reduce_nc.cpp";
-    reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_kernel_desc.core_ranges = all_cores;
-    reader_kernel_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_kernel_desc.config = ReaderConfigDescriptor{};
-
-    KernelDescriptor writer_kernel_desc;
-    writer_kernel_desc.kernel_source = std::string(kKernelDir) + "writer_weighted_reduce_nc.cpp";
-    writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_kernel_desc.core_ranges = all_cores;
-    writer_kernel_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_kernel_desc.config = WriterConfigDescriptor{};
+    KernelSpec writer_spec{
+        .unique_id = WRITER,
+        .source = std::filesystem::path(std::string(kKernelDir) + "writer_weighted_reduce_nc.cpp"),
+        .dfb_bindings =
+            {
+                DFBBinding{.dfb_spec_name = OUT, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER},
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"},
+            },
+        .compile_time_args =
+            {
+                {"inner_tile_size", inner_tile_size},
+                {"num_sites", num_sites},
+                {"sites_per_group", sites_per_group},
+                {"num_groups", num_groups},
+            },
+        .runtime_arg_schema = {.runtime_arg_names = {"num_positions", "start_id"}},
+        .hw_config = ttnn::create_writer_datamovement_config(),
+    };
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    // One descriptor over all cores, with the per-core tile count as a runtime
+    // One kernel over all cores, with the per-core tile count as a runtime
     // arg. fast_reduce_nc splits into two compute kernels to keep that count
     // compile-time; here the loop that matters — the MAC over candidates — is
     // already compile-time bounded, so the second kernel would buy nothing.
-    KernelDescriptor compute_kernel_desc;
-    compute_kernel_desc.kernel_source = std::string(kKernelDir) + "weighted_reduce_nc.cpp";
-    compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_kernel_desc.core_ranges = all_cores;
-    compute_kernel_desc.compile_time_args = {num_candidates, Wt, num_sites, sites_per_group, num_groups};
-    compute_kernel_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .dst_full_sync_en = dst_full_sync_en,
-        .math_approx_mode = math_approx_mode,
+    ComputeHardwareConfig compute_hw_config{
+        .fpu_math_fidelity = math_fidelity,
+        .sfpu_precision_mode = math_approx_mode ? Precision::Approximate : Precision::Precise,
+        .enable_32_bit_dest = fp32_dest_acc_en,
+        .double_buffer_dest = !dst_full_sync_en,
+    };
+    // A Float32 weight unpacked under fp32 accumulation needs an explicit mode; the legacy default was UnpackToSrc.
+    if (fp32_dest_acc_en && weight_data_format == tt::DataFormat::Float32) {
+        compute_hw_config.unpack_modes.emplace(IN1, UnpackMode::UnpackToSrc);
+    }
+    KernelSpec compute_spec{
+        .unique_id = COMPUTE,
+        .source = std::filesystem::path(std::string(kKernelDir) + "weighted_reduce_nc.cpp"),
+        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+        .dfb_bindings =
+            {
+                DFBBinding{.dfb_spec_name = IN0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::CONSUMER},
+                DFBBinding{.dfb_spec_name = IN1, .accessor_name = "in1", .endpoint_type = DFBEndpointType::CONSUMER},
+                DFBBinding{.dfb_spec_name = OUT, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER},
+            },
+        .compile_time_args =
+            {
+                {"num_candidates", num_candidates},
+                {"Wt", Wt},
+                {"num_sites", num_sites},
+                {"sites_per_group", sites_per_group},
+                {"num_groups", num_groups},
+            },
+        .runtime_arg_schema = {.runtime_arg_names = {"num_positions", "start_id"}},
+        .hw_config = std::move(compute_hw_config),
     };
 
     ////////////////////////////////////////////////////////////////////////////
@@ -190,10 +231,9 @@ tt::tt_metal::ProgramDescriptor AttnResWeightedReduceNCProgramFactory::create_de
     // set would be refetched per position — G times a pass over the weight.
     // Contiguous ranges give each core ~num_tiles/Wt distinct rows, so the
     // weights are read about once per group.
-    auto* const input_buffer = tensor_args.input.buffer();
-    auto* const weight_buffer = tensor_args.weight.buffer();
-    auto* const output_buffer = tensor_return_value.buffer();
-
+    KernelRunArgs reader_run_args{.kernel = READER};
+    KernelRunArgs writer_run_args{.kernel = WRITER};
+    KernelRunArgs compute_run_args{.kernel = COMPUTE};
     for (uint32_t i = 0, start_id = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core{i % num_cores_x, i / num_cores_x};
 
@@ -206,18 +246,49 @@ tt::tt_metal::ProgramDescriptor AttnResWeightedReduceNCProgramFactory::create_de
             TT_THROW("Core not in specified core ranges.");
         }
 
-        reader_kernel_desc.emplace_runtime_args(core, {input_buffer, weight_buffer, num_tiles_per_core, start_id});
-        writer_kernel_desc.emplace_runtime_args(core, {output_buffer, num_tiles_per_core, start_id});
-        compute_kernel_desc.emplace_runtime_args(core, {num_tiles_per_core, start_id});
+        AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values, core, {{"num_positions", num_tiles_per_core}, {"start_id", start_id}});
+        AddRuntimeArgsForNode(
+            writer_run_args.runtime_arg_values, core, {{"num_positions", num_tiles_per_core}, {"start_id", start_id}});
+        AddRuntimeArgsForNode(
+            compute_run_args.runtime_arg_values, core, {{"num_positions", num_tiles_per_core}, {"start_id", start_id}});
 
         start_id += num_tiles_per_core;
     }
 
-    desc.kernels.push_back(std::move(reader_kernel_desc));
-    desc.kernels.push_back(std::move(writer_kernel_desc));
-    desc.kernels.push_back(std::move(compute_kernel_desc));
+    ProgramSpec spec{
+        .name = "attn_res_weighted_reduce_nc",
+        .kernels = {std::move(reader_spec), std::move(writer_spec), std::move(compute_spec)},
+        .dataflow_buffers = {std::move(in0_dfb), std::move(in1_dfb), std::move(out_dfb)},
+        .tensor_parameters =
+            {
+                TensorParameter{.unique_id = INPUT, .spec = tensor_args.input.mesh_tensor().tensor_spec()},
+                TensorParameter{.unique_id = WEIGHT, .spec = tensor_args.weight.mesh_tensor().tensor_spec()},
+                TensorParameter{.unique_id = OUTPUT, .spec = tensor_return_value.mesh_tensor().tensor_spec()},
+            },
+        .work_units =
+            {
+                WorkUnitSpec{
+                    .name = "main",
+                    .kernels = {READER, WRITER, COMPUTE},
+                    .target_nodes = all_cores,
+                },
+            },
+    };
 
-    return desc;
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args.reserve(3);
+    run_args.kernel_run_args.push_back(std::move(reader_run_args));
+    run_args.kernel_run_args.push_back(std::move(writer_run_args));
+    run_args.kernel_run_args.push_back(std::move(compute_run_args));
+    run_args.tensor_args.emplace(INPUT, tensor_args.input.mesh_tensor());
+    run_args.tensor_args.emplace(WEIGHT, tensor_args.weight.mesh_tensor());
+    run_args.tensor_args.emplace(OUTPUT, tensor_return_value.mesh_tensor());
+
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec),
+        .run_params = std::move(run_args),
+    };
 }
 
 }  // namespace ttnn::experimental::prim::qsr
