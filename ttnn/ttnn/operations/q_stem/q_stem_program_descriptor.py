@@ -287,24 +287,37 @@ def consumption_order(heads, dest, geo):
 _RESOURCES = {}
 
 
+def _alloc_scratch(mesh, geo, tiles):
+    shard_h = tiles * 32
+    mc = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(_rect(0, 1, geo.gx - 1, geo.gy - 1), (shard_h, 32), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    return ttnn.allocate_tensor_on_device(ttnn.Shape([geo.C * shard_h, 32]), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh, mc)
+
+
 def _resources(mesh, geo, ports, injector):
+    """Per mesh (and core layout): G + 1 global semaphores (ready, arrive[0..G-1]) and ONE landing scratch (L1,
+    height-sharded over the compute rect), grown when a call needs more rows than it holds. Created outside any
+    trace on the first call (and after a mesh reopen); every call re-arms the counters, so they stay valid."""
     used = _merge(_rect(0, 1, geo.gx - 1, geo.gy - 1), _crs(list(ports.values()) + [injector]))
-    key = (id(mesh), geo.gx, geo.gy, tuple(sorted((c.x, c.y) for c in ports.values())), geo.G, geo.landing_tiles)
-    if key not in _RESOURCES:
-        sems = [ttnn.create_global_semaphore(mesh, used, 0) for _ in range(1 + geo.G)]  # ready, arrive[0..G-1]
-        compute = _rect(0, 1, geo.gx - 1, geo.gy - 1)
-        shard_h = geo.landing_tiles * 32
-        mc = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(compute, (shard_h, 32), ttnn.ShardOrientation.ROW_MAJOR),
-        )
-        scratch = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([geo.C * shard_h, 32]), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh, mc
-        )
+    key = (id(mesh), geo.gx, geo.gy, tuple(sorted((c.x, c.y) for c in ports.values())), geo.G)
+    entry = _RESOURCES.get(key)
+    if entry is not None and (entry["mesh"] is not mesh or not entry["scratch"].is_allocated()):
+        _RESOURCES.pop(key)
+        entry = None
+    if entry is None:
+        sems = [ttnn.create_global_semaphore(mesh, used, 0) for _ in range(1 + geo.G)]
+        scratch = _alloc_scratch(mesh, geo, geo.landing_tiles)
         ttnn.synchronize_device(mesh)  # every chip's counters are zero before any chip's first call
-        _RESOURCES[key] = (mesh, sems, scratch)
-    _, sems, scratch = _RESOURCES[key]
+        entry = dict(mesh=mesh, sems=sems, scratch=scratch, tiles=geo.landing_tiles)
+        _RESOURCES[key] = entry
+    elif entry["tiles"] < geo.landing_tiles:
+        ttnn.deallocate(entry["scratch"])
+        entry["scratch"] = _alloc_scratch(mesh, geo, geo.landing_tiles)
+        entry["tiles"] = geo.landing_tiles
+    sems, scratch = entry["sems"], entry["scratch"]
     ready_addr = int(ttnn.get_global_semaphore_address(sems[0]))
     arrive_addrs = [int(ttnn.get_global_semaphore_address(s)) for s in sems[1:]]
     return ready_addr, arrive_addrs, scratch
