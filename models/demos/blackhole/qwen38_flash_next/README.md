@@ -14,7 +14,7 @@ PLE table mapped from the checkpoint. The publication validation targets one req
 allocation (32,704 usable tokens). The standalone server also contains source MTP, vision and lane paths; coverage
 for each must be read separately. The vLLM adapter has one resident slot and no MTP.
 
-The historical measurements in `docs/` and proposal baselines under `tools/ci/` belong to the pinned source fork.
+The historical measurements in `docs/` belong to the pinned source fork.
 They are not performance or validation claims for this port. Ordinary greedy outputs can diverge from the CPU
 reference after a near-tie; the JSON acceptance record, independent numerical controls and task accuracy are
 separate gates. Never substitute a standalone MTP rate for vLLM throughput.

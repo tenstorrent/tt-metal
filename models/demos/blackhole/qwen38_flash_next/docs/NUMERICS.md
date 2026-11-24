@@ -428,7 +428,7 @@ device as they are.  The server itself adds no system prompt to a client's reque
 
 ## The pinned table: chunked prefill, 32k, 2026-09-25
 
-The pinned table (`tools/ci/baselines/A3-chunked-32k-divergence_index.json`), measured 2026-09-25 on two 4x p150 hosts
+The pinned table, measured 2026-09-25 on two 4x p150 hosts
 with identical device tokens record for record, with the chunked prefill, is the first index where each record leaves
 the CPU greedy stream; a start whose replay leaves earlier is a regression:
 
@@ -473,7 +473,7 @@ against 56, `math` 56 against 61, `summary` 1 against 75; `list` now agrees at 5
 each of the three earlier tokens the device's own 1-row logits hold the CPU's token and the MTP token within one bf16
 step (an exact tie on `summary` and `list`, which the 1-row loop breaks toward the lower id), the verify row landed one
 step the other way, and the CPU oracle rates the two 0.4-1.0 logits apart: near-ties, not a defect; under the fold the
-verify row is the 1-row step's (the pinned MTP table is `tools/ci/baselines/A3-mtp4-32k-divergence_index.json`).
+verify row is the 1-row step's.
 Before the gate fix the two paths differed on `code` (44 against 24) and `fact` (16 against 15) only.  Throughput
 on the 2026-09-16 body (14 fused kernels, two DRAM readers per bank; quiet host, the acceptance replay of the 12
 prompts, both tables as pinned): `--mtp 4` 39.0 tokens/s median over the prompts and 67.9 on `json` (4.80 tokens per
@@ -537,7 +537,7 @@ landed `A3-slab2048-32k` table 13/13 on both metrics: the fold touches no plain-
 | divergence index | none (96/96) | 2 | 32 | 12 | 15 | 56 | 61 | 9 | 13 | 24 | 19 | 6 | 75 |
 | stream bitwise the plain slab table | yes | yes | yes | no | yes | no | yes | no | no | no | yes | yes | yes |
 
-`tools/ci/baselines/A3-slab2048-mtp4-32k-*` were that replay's rows until `gr_recip_last` served by default; since
+The pinned slab2048 MTP tables were that replay's rows until `gr_recip_last` served by default; since
 2026-09-28 both MTP tables are the default set's replays (fold + rings2 + `gr_recip_last`, the paragraph below): the
 MTP stream leaves the reference where plain decode does on 11 of 12 study records and later on `math` (61 against
 plain decode's 56), the slab record `document` at index 33 with its own stream (the wrap and the fold-only form read
@@ -760,7 +760,7 @@ stream is the DEFAULT single-stream server's.  (Before the lanes form landed the
 every prompt -- the fold is COMPONENT class -- and matched a wrap referee on every pass; the fold-off rows are in the
 dev note.)
 
-**The pin table `A3-lanes4-mtp4-32k` (`tools/ci/baselines/`), the lanes' startup replay: the twelve records through the
+**The pin table `A3-lanes4-mtp4-32k`, the lanes' startup replay: the twelve records through the
 lane scheduler four at a time (each admitted into a lane while the others decode, queue waits 0-11 s), against the CPU
 records and the single-stream replay of the same process.**  12/12 streams equal the single-stream replay, `json`
 96/96; the same twelve streams at 128k (bitwise the 32k replay's: the lane arithmetic carries no context term);
@@ -1059,7 +1059,7 @@ describe the image in one sentence with thinking off):
 
 The class bound: every device token inside the CPU top-5 and no gap above 2.0 nats.
 
-The pins (`tools/ci/pins.json`, configuration `vision-chunked-32k`; `tools/ci/baselines/A3-vision-chunked-32k-*.json`)
+The pins (configuration `vision-chunked-32k`)
 are seeded from the served form with the device tower's features -- chunked prefill through the 32-row chunk trace, on
 which the 128-row form is bitwise -- per fixture: the divergence index (6, 2, 2, 11) under the text records' rule
 (`not_earlier`: it may not move earlier), the stream's token sha (`exact`, information: a changed stream past its index
@@ -1114,7 +1114,7 @@ the committed streams do not.  The text lanes' -0.0 rows are the add's identity,
 
 ## The teacher-forced table
 
-`tools/ci/baselines/A3-forced-32k-divergence_index.json` pins the startup replay with the teacher-forced prefill
+The `A3-forced-32k` pin table covers the startup replay with the teacher-forced prefill
 (`--prefill-mode teacher_forced`), measured 2026-09-06 on 4x p150 with the GDN gate fix:
 
 | json | chat | code | fact | list | math | multilingual | prose | refactor | sky | story | summary |
