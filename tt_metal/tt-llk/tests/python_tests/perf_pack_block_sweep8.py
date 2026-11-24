@@ -34,6 +34,8 @@ from helpers.test_variant_parameters import (
 )
 from helpers.tile_constants import get_tile_params
 
+pytestmark = pytest.mark.llk_sweep
+
 F = DataFormat
 BFP = [F.Bfp8_b, F.Bfp4_b, F.Bfp2_b, F.Bfp8, F.Bfp4, F.Bfp2]
 BLOCKS = 6

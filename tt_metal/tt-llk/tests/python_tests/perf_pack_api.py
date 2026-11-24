@@ -8,6 +8,8 @@ from helpers.perf.core import ALL_PERF_RUN_TYPES
 from test_pack import test_pack as run_pack
 from test_pack_api import PACK_API_SWEEP, pack_api_config
 
+pytestmark = pytest.mark.llk_sweep
+
 
 @pytest.mark.perf
 @skip_for_wormhole

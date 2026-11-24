@@ -37,6 +37,8 @@ from helpers.test_variant_parameters import (
 )
 from helpers.tile_constants import get_tile_params
 
+pytestmark = pytest.mark.llk_sweep
+
 F = DataFormat
 BLOCKS = 6
 ARMS = [
