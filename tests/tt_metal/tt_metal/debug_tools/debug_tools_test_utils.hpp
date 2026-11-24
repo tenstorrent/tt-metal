@@ -5,10 +5,20 @@
 #pragma once
 
 #include <tt-metalium/host_api.hpp>
+#include <impl/debug/dprint_server.hpp>
 #include "llrt.hpp"
+#include <fmt/format.h>
 
+#include <algorithm>
+#include <deque>
 #include <fstream>
+#include <map>
+#include <set>
+#include <sstream>
+#include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 // Helper function to open a file as an fstream, and check that it was opened properly.
 inline bool OpenFile(const std::string& file_name, std::fstream& file_stream, std::ios_base::openmode mode) {
@@ -33,6 +43,17 @@ inline void DumpFile(const std::string& file_name) {
     while (getline(log_file, line)) {
         log_info(tt::LogTest, "{}", line);
     }
+}
+
+// getline for the checks below: skips the lines that firmware printed, which the DPRINT server tags for
+// DevicePrintFixture, so that the checks see only what kernels printed. DumpFile shows every line.
+inline bool GetLineSkippingFirmware(std::istream& stream, std::string& line) {
+    while (std::getline(stream, line)) {
+        if (!line.starts_with(tt::tt_metal::DPrintServer::kFirmwareLineTag)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 std::string_view::size_type FloatingGlobEndsAt(std::string_view haystack, std::string_view needle, unsigned globs);
@@ -148,7 +169,7 @@ inline bool FileContainsAllStrings(
         }
 
         std::string line;
-        if (!getline(log_file, line)) {
+        if (!GetLineSkippingFirmware(log_file, line)) {
             break;
         }
 
@@ -193,7 +214,7 @@ inline bool FileContainsNoneOfStrings(const std::string& file_name, const std::v
     }
 
     std::string line;
-    while (getline(log_file, line)) {
+    while (GetLineSkippingFirmware(log_file, line)) {
         for (const auto& forbidden : must_not_contain) {
             if (StringContainsGlob(line, forbidden)) {
                 log_info(
@@ -231,7 +252,7 @@ inline bool FileContainsAllStringsInOrder(const std::string& file_name, const st
         }
 
         std::string line;
-        if (!getline(log_file, line)) {
+        if (!GetLineSkippingFirmware(log_file, line)) {
             break;
         }
 
@@ -279,7 +300,7 @@ inline bool DeleteLinesStartingWith(const std::string& file_name, const std::str
     log_file.close();
     return true;
 }
-// Checkes whether a given file matches a golden string.
+// Checks whether a given file matches a golden string, line by line. Golden lines may use the '*' and '?' globs.
 inline bool FilesMatchesString(const std::string& file_name, const std::string& expected) {
     // Open the input file.
     std::fstream file;
@@ -291,11 +312,38 @@ inline bool FilesMatchesString(const std::string& file_name, const std::string& 
     // Read the expected string into a stream
     std::istringstream expect_stream(expected);
 
-    // Go through line-by-line
+    // Go through line-by-line. Read both streams before checking either, so that a line left over in one of them
+    // is never consumed unchecked.
     std::string line_a, line_b;
     int line_num = 0;
-    while (getline(file, line_a) && getline(expect_stream, line_b)) {
+    for (;;) {
+        const bool has_line_a = GetLineSkippingFirmware(file, line_a);
+        const bool has_line_b = static_cast<bool>(getline(expect_stream, line_b));
+        if (!has_line_a && !has_line_b) {
+            // If no checks failed, then the file matches expected.
+            return true;
+        }
         line_num++;
+        if (!has_line_b) {
+            log_info(
+                tt::LogTest,
+                "Test Error: file {} has more than the {} expected line(s); line {} is:\n\t{}",
+                file_name,
+                line_num - 1,
+                line_num,
+                line_a);
+            return false;
+        }
+        if (!has_line_a) {
+            log_info(
+                tt::LogTest,
+                "Test Error: file {} has only {} line(s), fewer than expected; line {} should be:\n\t{}",
+                file_name,
+                line_num - 1,
+                line_num,
+                line_b);
+            return false;
+        }
         if (!StringMatchesGlob(line_a, line_b)) {
             log_info(
                 tt::LogTest,
@@ -307,17 +355,141 @@ inline bool FilesMatchesString(const std::string& file_name, const std::string& 
             return false;
         }
     }
+}
 
-    // Make sure that there's no lines left over in either stream
-    if (getline(file, line_a)) {
-        log_info(tt::LogTest, "Test Error: file {} has more lines than expected (>{}).", file_name, line_num);
-        return false;
+// Checks that the file holds exactly the expected lines, in order. Expected lines may use the '*' and '?' globs for
+// text that changes between runs, such as an address. On a mismatch, logs the whole file.
+inline bool FileMatchesLines(const std::string& file_name, const std::vector<std::string>& expected_lines) {
+    std::string expected;
+    for (const auto& line : expected_lines) {
+        expected.append(line).push_back('\n');
     }
-    if (getline(expect_stream, line_b)) {
-        log_info(tt::LogTest, "Test Error: file {} has less lines than expected ({}).", file_name, line_num);
-        return false;
+    if (FilesMatchesString(file_name, expected)) {
+        return true;
     }
+    DumpFile(file_name);
+    return false;
+}
 
-    // If no checks failed, then the file matches expected.
+// Splits a DPRINT line written with the prefix, "<device>:<x>-<y>:<RISC>: <text>", into the prefix without its
+// trailing ": " (for example "0:1-2:TR0") and the text. A line without the prefix comes back whole, with an empty
+// prefix.
+inline std::pair<std::string_view, std::string_view> SplitDevicePrintPrefix(std::string_view line) {
+    const auto is_number = [](std::string_view s) {
+        return !s.empty() && std::all_of(s.begin(), s.end(), [](char c) { return c >= '0' && c <= '9'; });
+    };
+    const auto separator = line.find(": ");
+    if (separator == std::string_view::npos) {
+        return {{}, line};
+    }
+    const std::string_view prefix = line.substr(0, separator);
+    const auto device_end = prefix.find(':');
+    const auto core_end = device_end == std::string_view::npos ? device_end : prefix.find(':', device_end + 1);
+    if (core_end == std::string_view::npos) {
+        return {{}, line};
+    }
+    const std::string_view device = prefix.substr(0, device_end);
+    const std::string_view core = prefix.substr(device_end + 1, core_end - device_end - 1);
+    const std::string_view risc = prefix.substr(core_end + 1);
+    const auto core_separator = core.find('-');
+    if (!is_number(device) || core_separator == std::string_view::npos || !is_number(core.substr(0, core_separator)) ||
+        !is_number(core.substr(core_separator + 1)) || risc.empty() || risc.find_first_of(": ") != risc.npos) {
+        return {{}, line};
+    }
+    return {prefix, line.substr(separator + 2)};
+}
+
+// The "<device>:<x>-<y>" part of a prefix returned by SplitDevicePrintPrefix, for example "0:1-2" for "0:1-2:TR0".
+inline std::string_view DevicePrintPrefixCore(std::string_view prefix) { return prefix.substr(0, prefix.rfind(':')); }
+
+// Groups the lines of a DPRINT log written with the prefix by that prefix, keeping each RISC's lines in order. Keys
+// are prefixes as returned by SplitDevicePrintPrefix; lines without the prefix go under the empty key.
+inline std::map<std::string, std::vector<std::string>> ReadLinesPerRisc(const std::string& file_name) {
+    std::map<std::string, std::vector<std::string>> lines_per_risc;
+    std::fstream file;
+    if (!OpenFile(file_name, file, std::fstream::in)) {
+        return lines_per_risc;
+    }
+    std::string line;
+    while (GetLineSkippingFirmware(file, line)) {
+        const auto [prefix, text] = SplitDevicePrintPrefix(line);
+        lines_per_risc[std::string(prefix)].emplace_back(text);
+    }
+    return lines_per_risc;
+}
+
+// Checks that `actual` holds exactly the `expected` lines, in order. Expected lines may use the '*' and '?' globs. On
+// a mismatch, logs the first difference, naming the lines `label` (for example "0:1-2:TR0 in <file>").
+inline bool LinesMatchGlobs(
+    std::string_view label, const std::vector<std::string>& actual, const std::vector<std::string>& expected) {
+    for (std::size_t i = 0; i < std::max(actual.size(), expected.size()); i++) {
+        if (i >= actual.size()) {
+            log_info(
+                tt::LogTest,
+                "Test Error: {} has {} line(s), expected {}; line {} should be:\n\t{}",
+                label,
+                actual.size(),
+                expected.size(),
+                i + 1,
+                expected[i]);
+            return false;
+        }
+        if (i >= expected.size()) {
+            log_info(
+                tt::LogTest,
+                "Test Error: {} has {} line(s), expected {}; line {} is:\n\t{}",
+                label,
+                actual.size(),
+                expected.size(),
+                i + 1,
+                actual[i]);
+            return false;
+        }
+        if (!StringMatchesGlob(actual[i], expected[i])) {
+            log_info(
+                tt::LogTest,
+                "Test Error: line {} of {} did not match expected:\n\t{}\n\t{}",
+                i + 1,
+                label,
+                actual[i],
+                expected[i]);
+            return false;
+        }
+    }
     return true;
+}
+
+// Checks a DPRINT log written with the prefix: each RISC printed exactly its expected lines, in order, and nothing
+// else was printed. Keys are prefixes such as "0:1-2:TR0"; expected lines may use the '*' and '?' globs. On a
+// mismatch, logs the whole file.
+inline bool FileMatchesLinesPerRisc(
+    const std::string& file_name, const std::map<std::string, std::vector<std::string>>& expected) {
+    const auto actual = ReadLinesPerRisc(file_name);
+    bool matches = true;
+    for (const auto& [prefix, lines] : actual) {
+        if (!expected.contains(prefix)) {
+            log_info(
+                tt::LogTest,
+                "Test Error: {} printed {} unexpected line(s) in {}; the first is:\n\t{}",
+                prefix.empty() ? std::string("a line without the prefix") : prefix,
+                lines.size(),
+                file_name,
+                lines.front());
+            matches = false;
+        }
+    }
+    const std::vector<std::string> no_lines;
+    for (const auto& [prefix, expected_lines] : expected) {
+        const auto it = actual.find(prefix);
+        if (!LinesMatchGlobs(
+                fmt::format("{} in {}", prefix, file_name),
+                it == actual.end() ? no_lines : it->second,
+                expected_lines)) {
+            matches = false;
+        }
+    }
+    if (!matches) {
+        DumpFile(file_name);
+    }
+    return matches;
 }

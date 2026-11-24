@@ -57,7 +57,7 @@ grid at float32: finite bfloat16 values and +0, no -0, inf or NaN.
 |                     | of s in ±[abs(s), 100]  |                        |                                       |
 | pow, scalar         | full grid               | listed exponents       | test_pow_scalar_exponent_underflow,   |
 |                     |                         |                        | test_pow_scalar_zero_base_negative_   |
-|                     |                         |                        | exponent (both xfail, #62383)         |
+|                     |                         |                        | exponent (xfail, #62383)              |
 | pow, tensor         | positive grid           | grid in [-20, 20]      | test_pow_tensor_exponent_nonpositive_ |
 |                     |                         |                        | base                                  |
 
@@ -607,8 +607,8 @@ def test_pow_scalar_exponent(device, exponent):
     |                           | x ** float32(0.3)                    |                        |
     | negative base, non-int y  | NaN                                  | NaN positions match    |
     | overflow                  | ±inf                                 | class and sign match   |
-    | float64 result < 2^-126   | 0, or NaN for some exponents         | not here: test_pow_    |
-    |                           | (#62383)                             | scalar_exponent_       |
+    | float64 result < 2^-126   | 0                                    | not here: test_pow_    |
+    |                           |                                      | scalar_exponent_       |
     |                           |                                      | underflow              |
     | 0 ** negative             | NaN instead of inf (#62383)          | not here               |
     """
@@ -631,27 +631,9 @@ def test_pow_scalar_exponent(device, exponent):
     )
 
 
-def _pow_underflow_xfail(exponent):
-    return pytest.param(
-        exponent,
-        marks=pytest.mark.xfail(
-            strict=True, reason="#62383: float32 unary pow returns NaN for some results below 2^-126"
-        ),
-    )
-
-
-@pytest.mark.parametrize(
-    "exponent",
-    [-3, -2, -1, -4, 2, 3, 1.5, -1.5] + [_pow_underflow_xfail(e) for e in (-5, 4, 5, -2.75, 2.5, 7.25)],
-)
+@pytest.mark.parametrize("exponent", [-3, -2, -1, -4, 2, 3, 1.5, -1.5, -5, 4, 5, -2.75, 2.5, 7.25])
 def test_pow_scalar_exponent_underflow(device, exponent):
-    """Bases whose float64 x ** y is below 2^-126 must give exactly 0.
-
-    | Exponent                       | Device                               |
-    |--------------------------------|--------------------------------------|
-    | -4..-1, 2, 3, ±1.5             | 0                                    |
-    | -5, 4, 5, -2.75, 2.5, 7.25     | NaN on part of the band (#62383)     |
-    """
+    """Bases whose float64 x ** y is below 2^-126 must give exactly 0."""
     input_a, reference, result = _pow_scalar_run(device, exponent)
     underflow = (reference.abs() < FLOAT32_TINY) & (input_a != 0)
     assert underflow.any(), "expected underflowing results in this sweep"

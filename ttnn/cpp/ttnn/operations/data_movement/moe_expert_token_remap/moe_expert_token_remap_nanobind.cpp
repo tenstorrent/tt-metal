@@ -21,27 +21,51 @@ namespace ttnn::operations::data_movement::detail {
 
 void bind_moe_expert_token_remap(nb::module_& mod) {
     const auto* doc = R"doc(
+        Remaps MoE routing weights from all experts to the experts of each device. A device's local experts are the
+        experts that `expert_mapping_tensor` places on it, in increasing index order. For each token, the first output
+        holds the `topk_tensor` weight of each local expert that the token selects in `expert_metadata_tensor`, and 0
+        for the other local experts. The second output flags, for each group of `reduction_size` consecutive tokens,
+        the local experts that a token of the group selects. Tokens are in ``(batch, seq)`` row-major order.
 
-Remap MoE CCL Metadata from global experts to local device experts
+        Args:
+            topk_tensor (ttnn.Tensor): the routing weights, of shape ``[1, batch, seq, experts]`` on each device: a weight for every expert, for each token.
+            expert_mapping_tensor (ttnn.Tensor): the placement of experts on devices, of shape ``[1, 1, experts, devices]``, where ``devices`` is the number of devices in the mesh. Element ``[0, 0, e, d]`` is 1 when expert ``e`` is on device ``d``, counting devices in row-major mesh order, and 0 otherwise. Each device must hold ``experts / devices`` experts, so on a single device every element is 1.
+            expert_metadata_tensor (ttnn.Tensor): the selected experts, of shape ``[1, batch, seq, k]`` on each device: the indices of the ``k`` experts that each token selects.
 
-Args:
-    topk_tensor (ttnn.Tensor): tensor of MoE topk scores, `[devices/devices, batch, seq, experts]`
-    expert_mapping_tensor (ttnn.Tensor): tensor that maps MoE experts to devices, `[1, 1, experts, devices]`
-    expert_metadata_tensor (ttnn.Tensor): tensor that maps tokens to global experts `[devices/devices, batch, seq, select_experts_k]``
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration of the outputs that are not preallocated. It must be interleaved. Defaults to `None`, which uses DRAM.
+            optional_output_mapping_tensor (ttnn.Tensor, optional): Preallocated tensor for the first output. It must have that output's shape, dtype and layout, and be interleaved. Defaults to `None`.
+            optional_output_reduced_tensor (ttnn.Tensor, optional): Preallocated tensor for the second output. It must have that output's shape, dtype and layout, and be interleaved. Defaults to `None`.
+            reduction_size (int, optional): The number of consecutive tokens in each group of the second output. Must be greater than 0 and divide ``batch * seq``. Defaults to `16`.
 
-Keyword Args:
-    memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-    output_mapping_tensor (ttnn.Tensor, optional): Preallocated output mapping tensor. Defaults to `None`.
-    output_reduced_tensor (ttnn.Tensor, optional): Preallocated output reduced tensor. Defaults to `None`.
-    reduction_size (int, optional): reduction chunk size. Must be positive, and must divide
-        `batch * seq` exactly - the writer emits one reduced page per chunk and does not flush a
-        partial trailing group.
+        Returns:
+            List[ttnn.Tensor]: two ROW_MAJOR tensors on each device. The first, of shape ``[1, batch, seq, experts / devices]`` with the dtype of `topk_tensor`, holds the weights of the local experts. The second, a UINT16 tensor of shape ``[1, 1, batch * seq / reduction_size, experts / devices]``, holds in row ``g`` a 1 for each local expert that a token of group ``g`` selects and 0 for the others.
 
-Returns:
-    Tuple:
-    ttnn.Tensor: Tensor that maps batch tokens to local experts, `[devices/devices, batch, seq, experts_per_device]`
-    ttnn.Tensor: Bool Tensor that reduces the mapping tensor by chunks of `reduction_size`, `[devices/devices, batch*seq/reduction_size, experts_per_device]`
+        Note:
+            Supported dtypes and layouts for `topk_tensor`:
 
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32, INT32, UINT32, UINT16
+                 - ROW_MAJOR
+
+            Supported dtypes and layouts for `expert_mapping_tensor` and `expert_metadata_tensor`:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - UINT16
+                 - ROW_MAJOR
+
+            A `topk_tensor` in DRAM needs ``experts`` times its element size to be a multiple of 64 bytes.
+
+        Memory Support:
+            - Interleaved: DRAM and L1
     )doc";
 
     ttnn::bind_function<"moe_expert_token_remap">(

@@ -162,7 +162,7 @@ ttsl::hash::hash_t AllGatherMinimalMatmulAsyncOp::compute_program_hash(
                                       : std::optional<BlockSizes>(default_block_sizes(M, K, N, fp32_dest_acc_en));
     // The factory sizes the output buffer to one row when each core has a single M block (agmm_single_m_block); the
     // row count is not in the hash.
-    const bool fabric_2d = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
+    const bool fabric_2d = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig(*act_tensor.device()));
     const bool transposed = resolve_transpose_core_grid(attributes, M, N, fabric_2d);
     const auto grid = attributes.config.has_value() ? attributes.config->compute_with_storage_grid_size
                                                     : act_tensor.device()->compute_with_storage_grid_size();
@@ -198,7 +198,7 @@ void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
     // Device/storage checks, repeated on every cache hit.
     validate_operands_on_device(tensor_args);
 
-    if (tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig())) {
+    if (tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig(*act_tensor.device()))) {
         TT_FATAL(
             !tensor_args.persistent_weight_buffer.has_value(),
             "all_gather_minimal_matmul_async: FSDP is not ported to Fabric2D");

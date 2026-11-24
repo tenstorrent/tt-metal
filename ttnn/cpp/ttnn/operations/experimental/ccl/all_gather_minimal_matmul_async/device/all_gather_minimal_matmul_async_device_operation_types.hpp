@@ -173,9 +173,13 @@ inline bool resolve_transpose_core_grid(
     const AllGatherMinimalMatmulAsyncParams& params, uint32_t M, uint32_t N, bool fabric_2d) {
     return params.transpose_core_grid.value_or(params.force_transpose || (M > N && !fabric_2d));
 }
-inline bool resolve_transpose_core_grid(const AllGatherMinimalMatmulAsyncParams& params, uint32_t M, uint32_t N) {
+inline bool resolve_transpose_core_grid(
+    const AllGatherMinimalMatmulAsyncParams& params,
+    uint32_t M,
+    uint32_t N,
+    const tt::tt_metal::distributed::MeshDevice& mesh_device) {
     return resolve_transpose_core_grid(
-        params, M, N, tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()));
+        params, M, N, tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig(mesh_device)));
 }
 
 // Per-chunk widths (elements): explicit `chunk_sizes`, else the uniform N/chunks split.

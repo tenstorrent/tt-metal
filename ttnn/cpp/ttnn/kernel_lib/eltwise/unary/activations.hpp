@@ -20,7 +20,11 @@ namespace compute_kernel_lib {
 // Simple unary activations.
 template <Dst Slot = Dst::D0>
 struct Relu;
-template <Dst Slot = Dst::D0>
+/// Sigmoid. `fast` selects the LLK's approximate mode. `SigmoidPrecision::Bf16` takes the BF16-accurate path
+/// (BF16-accurate exp and one reciprocal step) even with an FP32 DEST, for outputs that keep only BF16 precision; the
+/// default, `SigmoidPrecision::Dest`, follows the DEST format as `sigmoid_tile` does.
+enum class SigmoidPrecision : uint8_t { Dest, Bf16 };
+template <Dst Slot = Dst::D0, Approx fast = Approx::Exact, SigmoidPrecision Precision = SigmoidPrecision::Dest>
 struct Sigmoid;
 template <Dst Slot = Dst::D0>
 struct Tanh;

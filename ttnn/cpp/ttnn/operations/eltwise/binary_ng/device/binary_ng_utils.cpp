@@ -11,6 +11,7 @@
 #include <fmt/format.h>
 #include <enchantum/enchantum.hpp>
 #include <cstdint>
+#include <type_traits>
 
 namespace ttnn::operations::binary_ng {
 
@@ -429,6 +430,13 @@ OpConfig::OpConfig(
                 TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
             }
             break;
+        case BinaryOpType::SILU_GLU:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::SILU_GLU;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
+            break;
         default: TT_THROW("Unsupported binary op {}", binary_op_type);
     }
 }
@@ -610,6 +618,7 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case ISCLOSE: return {"isclose_binary_tile_init();", "isclose_binary_tile<(bool)ISCLOSE_EQUAL_NAN>"};
         case SITU_GLU: return {"situ_glu_tile_init();", "situ_glu_tile"};
         case GEGLU_TANH: return {"geglu_tanh_tile_init();", "geglu_tanh_tile"};
+        case SILU_GLU: return {"silu_glu_tile_init();", "silu_glu_tile"};
         default: TT_THROW("Unsupported sfpu binary op {}", sfpu_binary_op);
     }
 }
@@ -631,6 +640,7 @@ std::map<std::string, std::string> OpConfig::as_defines(DataType dtype) const {
     // kernels compile it only for the op that calls it.
     switch (std::get<SfpuBinaryOp>(binary_op)) {
         case SfpuBinaryOp::GEGLU_TANH: defines["SFPU_OP_GEGLU_TANH_INCLUDE"] = "1"; break;
+        case SfpuBinaryOp::SILU_GLU: defines["SFPU_OP_SILU_GLU_INCLUDE"] = "1"; break;
         default: break;
     }
     return defines;
@@ -782,7 +792,16 @@ std::uint32_t pack_scalar_runtime_arg(const unary::ScalarVariant scalar, const D
                 return static_cast<std::uint32_t>(v);
             }
             if (dtype == DataType::UINT16) {
-                auto val = static_cast<std::uint16_t>(static_cast<float>(v));
+                // Integer scalars convert modulo 2^16. Going through float would round values above 2^24 and make
+                // the narrowing conversion undefined for anything outside [0, 65535].
+                std::uint16_t val;
+                if constexpr (std::is_integral_v<decltype(v)>) {
+                    val = static_cast<std::uint16_t>(v);
+                } else {
+                    val = static_cast<std::uint16_t>(static_cast<float>(v));
+                }
+                // The low 16 bits are packed into both halves of the word
+                // e.g. 0x12345 -> 0x2345 -> 0x23452345; -1 -> 0xFFFF -> 0xFFFFFFFF; 0x1000001 -> 0x0001 -> 0x00010001
                 return (static_cast<std::uint32_t>(val) << 16) | val;
             }
             // There is no 8-bit packing. A caller with an 8-bit tensor must pass INT32.
