@@ -1585,9 +1585,17 @@ class TestConfig:
             )
 
             if TestConfig.WITH_COVERAGE:
-                compile_command = (  # coverage.o : coverage.cpp
-                    f"{TestConfig.GXX} {TestConfig.ARCH_NON_COMPUTE} {TestConfig.OPTIONS_ALL} {local_non_coverage} "
-                    f'-fno-strict-aliasing -c -o {shared_obj_dir / "coverage.o"} {TestConfig.RISCV_SOURCES / "coverage.cpp"}'
+                compile_command = TestConfig._argv(  # coverage.o : coverage.cpp
+                    [TestConfig.GXX],
+                    TestConfig.ARCH_NON_COMPUTE,
+                    TestConfig.OPTIONS_ALL,
+                    local_non_coverage,
+                    "-fno-strict-aliasing -c",
+                    [
+                        "-o",
+                        shared_obj_dir / "coverage.o",
+                        TestConfig.RISCV_SOURCES / "coverage.cpp",
+                    ],
                 )
                 logger.trace(compile_command)
                 run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR)
@@ -1597,12 +1605,22 @@ class TestConfig:
                 perf_cnt_flag = ""
                 if TestConfig.ENABLE_PERF_COUNTERS:
                     perf_cnt_flag = f"-DPERF_COUNTERS_COMPILED -DLLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP} "
-                compile_command = (  # brisc.elf : brisc.cpp
-                    f"{TestConfig.GXX} {TestConfig.ARCH_NON_COMPUTE} {TestConfig.OPTIONS_ALL} {TestConfig.OPTIONS_LINK} {local_non_coverage} "
-                    f'{"-DCOVERAGE " if TestConfig.WITH_COVERAGE else ""}'
-                    f"{perf_cnt_flag}"
-                    f'-T{local_memory_layout_ld} -T{TestConfig.LINKER_SCRIPTS / "brisc.ld"} -T{TestConfig.LINKER_SCRIPTS / "sections.ld"} '
-                    f'-o {shared_elf_dir / "brisc.elf"} {TestConfig.RISCV_SOURCES / "brisc.cpp"}'
+                compile_command = TestConfig._argv(  # brisc.elf : brisc.cpp
+                    [TestConfig.GXX],
+                    TestConfig.ARCH_NON_COMPUTE,
+                    TestConfig.OPTIONS_ALL,
+                    TestConfig.OPTIONS_LINK,
+                    local_non_coverage,
+                    "-DCOVERAGE" if TestConfig.WITH_COVERAGE else "",
+                    perf_cnt_flag,
+                    [
+                        f"-T{local_memory_layout_ld}",
+                        f'-T{TestConfig.LINKER_SCRIPTS / "brisc.ld"}',
+                        f'-T{TestConfig.LINKER_SCRIPTS / "sections.ld"}',
+                        "-o",
+                        shared_elf_dir / "brisc.elf",
+                        TestConfig.RISCV_SOURCES / "brisc.cpp",
+                    ],
                 )
                 logger.trace(compile_command)
                 run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR)
@@ -2662,7 +2680,7 @@ def process_coverage_run_artefacts() -> bool:
 
             if merged_stream:
                 run_shell_command(
-                    f"{TestConfig.GCOV_TOOL} merge-stream",
+                    [TestConfig.GCOV_TOOL, "merge-stream"],
                     TestConfig.TESTS_WORKING_DIR,
                     merged_stream,
                     text=False,
@@ -2670,12 +2688,18 @@ def process_coverage_run_artefacts() -> bool:
 
                 # Generate single .info file per variant
                 info_hash = sha256(str(variant).encode()).hexdigest()
-                command = (
-                    f"lcov --gcov-tool {TestConfig.GCOV} --capture "
-                    f"--directory {variant}/elf/ "
-                    f"--output-file {TestConfig.COVERAGE_INFO_DIR}/{info_hash}.info "
-                    "--rc lcov_branch_coverage=1"
-                )
+                command = [
+                    "lcov",
+                    "--gcov-tool",
+                    TestConfig.GCOV,
+                    "--capture",
+                    "--directory",
+                    f"{variant}/elf/",
+                    "--output-file",
+                    f"{TestConfig.COVERAGE_INFO_DIR}/{info_hash}.info",
+                    "--rc",
+                    "lcov_branch_coverage=1",
+                ]
                 run_shell_command(command, TestConfig.TESTS_WORKING_DIR)
 
     worker_num = 20
@@ -2720,7 +2744,15 @@ def process_coverage_run_artefacts() -> bool:
     def combine_files(index, info_files):
         merged_path = TestConfig.ARTEFACTS_DIR / f"merged_coverage_{index}.info"
         for info_file in info_files:
-            cmd = f"lcov -a {merged_path} -a {info_file} -o {merged_path}"
+            cmd = [
+                "lcov",
+                "-a",
+                str(merged_path),
+                "-a",
+                str(info_file),
+                "-o",
+                str(merged_path),
+            ]
             result = run_shell_command(cmd, TestConfig.ARTEFACTS_DIR)
 
             if result.returncode:
@@ -2741,7 +2773,15 @@ def process_coverage_run_artefacts() -> bool:
 
     for i in range(1, worker_num):
         info_file = TestConfig.ARTEFACTS_DIR / f"merged_coverage_{i}.info"
-        cmd = f"lcov -a {merged_path} -a {info_file} -o {merged_path}"
+        cmd = [
+            "lcov",
+            "-a",
+            str(merged_path),
+            "-a",
+            str(info_file),
+            "-o",
+            str(merged_path),
+        ]
         result = run_shell_command(cmd, TestConfig.ARTEFACTS_DIR)
 
         if result.returncode:
