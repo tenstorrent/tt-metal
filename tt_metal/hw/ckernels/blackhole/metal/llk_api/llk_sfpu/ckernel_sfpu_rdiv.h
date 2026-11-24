@@ -50,17 +50,16 @@ inline void calculate_rdiv(const uint value) {
                 // Note: +-1 residual correction guarantees exact integer quotients on the FP32-dest path.
                 // On non-FP32 paths, recip is rounded to bf16 (~2^-9 relative error) and can exceed +-1 for large quotients.
                 sfpi::vFloat r = val - q * in;
-                sfpi::vFloat rq = r * recip;  // sign only
 
                 if constexpr (rounding_mode == RoundingMode::Floor) {
                     // floor invariant: remainder shares the divisor's sign, |r| < |in|
-                    v_if (rq < 0.0f) { q = q - 1.0f; }
+                    v_if ((r < 0.0f) != (in < 0.0f)) { q = q - 1.0f; }
                     v_elseif (sfpi::abs(r) >= sfpi::abs(in)) { q = q + 1.0f; }
                     v_endif;
                 } else {
                     // trunc invariant: r has the dividend's sign (or is zero) and |r| < |in|
-                    v_if (r * val < 0.0f || sfpi::abs(r) >= sfpi::abs(in)) {
-                        v_if (rq >= 0.0f) { q = q + 1.0f; }
+                    v_if (((r < 0.0f) != (val < 0.0f)) || sfpi::abs(r) >= sfpi::abs(in)) {
+                        v_if ((r < 0.0f) == (in < 0.0f)) { q = q + 1.0f; }
                         v_else { q = q - 1.0f; }
                         v_endif;
                     }
