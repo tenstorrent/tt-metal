@@ -5,6 +5,7 @@
 #include "minimal_matmul_device_operation.hpp"
 #include "minimal_matmul_program_factory.hpp"
 
+#include <cstdlib>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/constants.hpp>
@@ -163,6 +164,29 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
     const auto& config = operation_attributes.config;
 
     validate_operands_on_device(tensor_args);
+
+    if (operation_attributes.llk2_compute) {
+        // What the LLK 2.0 kernel (tt_metal/tt-llk/llk2/kernels/minimal_matmul.cpp) does not do yet.
+        TT_FATAL(
+            act_tensor.device()->arch() == tt::ARCH::BLACKHOLE,
+            "TT_MINIMAL_MATMUL_LLK2: the LLK 2.0 minimal_matmul kernel is Blackhole-only");
+        TT_FATAL(has_bias, "TT_MINIMAL_MATMUL_LLK2: a matmul without a bias is not supported");
+        TT_FATAL(!operation_attributes.fuse_swiglu, "TT_MINIMAL_MATMUL_LLK2: fused SwiGLU is not supported");
+        TT_FATAL(
+            !operation_attributes.fused_activation.has_value() ||
+                operation_attributes.fused_activation->op_type == operations::unary::UnaryOpType::GELU_TANH,
+            "TT_MINIMAL_MATMUL_LLK2: the only fused activation supported is gelu_tanh");
+        if (operation_attributes.fused_ternary_scalar.has_value()) {
+            TT_FATAL(
+                *operation_attributes.fused_ternary_scalar == 1.0f,
+                "TT_MINIMAL_MATMUL_LLK2: fused addcmul needs a scalar of 1.0, got {}",
+                *operation_attributes.fused_ternary_scalar);
+            TT_FATAL(
+                tensor_args.fused_ternary_input_b.has_value() &&
+                    tensor_args.fused_ternary_input_b->logical_shape()[-2] == 1,
+                "TT_MINIMAL_MATMUL_LLK2: fused addcmul needs a broadcast (one-row) gate");
+        }
+    }
 
     // Layout requirements: all inputs must be TILE layout
     TT_FATAL(
@@ -446,6 +470,15 @@ MinimalMatmulDeviceOperation::tensor_return_value_t MinimalMatmulDeviceOperation
 
 namespace ttnn::prim {
 
+namespace {
+// LLK 2.0 switch for minimal_matmul: TT_MINIMAL_MATMUL_LLK2=1 (unset or 0 = the 1.0 kernel). Read at launch so the
+// value lands in MinimalMatmulParams and therefore in the program cache key.
+bool minimal_matmul_llk2_from_env() {
+    const char* value = std::getenv("TT_MINIMAL_MATMUL_LLK2");
+    return value != nullptr && std::strtoul(value, nullptr, 10) != 0;
+}
+}  // namespace
+
 std::vector<Tensor> minimal_matmul(
     const Tensor& input_tensor,
     const Tensor& weight_tensor,
@@ -483,7 +516,8 @@ std::vector<Tensor> minimal_matmul(
             .compute_kernel_config = kernel_config_val,
             .chunks = chunks,
             .dim = dim,
-            .fuse_swiglu = fuse_swiglu},
+            .fuse_swiglu = fuse_swiglu,
+            .llk2_compute = minimal_matmul_llk2_from_env()},
         OperationType::tensor_args_t{
             .input_tensor = input_tensor,
             .weight_tensor = weight_tensor,

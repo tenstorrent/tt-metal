@@ -38,6 +38,11 @@ struct MinimalMatmulParams {
     // Fused SwiGLU: the weight is a tile-pair-interleaved [gate|up] matrix of width 2N.
     // The op emits silu(gate) * up of width N (half the weight width) in a single matmul.
     bool fuse_swiglu = false;
+
+    // The LLK 2.0 compute kernel (tt_metal/tt-llk/llk2/kernels/minimal_matmul.cpp) instead of the 1.0 one, on
+    // Blackhole, for a matmul with a bias, optionally gelu_tanh or a broadcast addcmul (scalar 1.0). Set from
+    // TT_MINIMAL_MATMUL_LLK2 when the op is launched; part of the program hash (hashed with the other attributes).
+    bool llk2_compute = false;
 };
 
 struct MinimalMatmulInputs {

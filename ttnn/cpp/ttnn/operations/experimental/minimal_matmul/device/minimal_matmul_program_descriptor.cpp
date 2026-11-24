@@ -138,6 +138,8 @@ const DFBSpecName DFB_INTERMEDIATE{"intermediate"};
 const DFBSpecName DFB_IN2{"in2"};
 const DFBSpecName DFB_TERNARY_A{"ternary_a"};
 const DFBSpecName DFB_TERNARY_B{"ternary_b"};
+// LLK 2.0 kernel only (TT_MINIMAL_MATMUL_LLK2), with fused addcmul: b * bias, one tile row, made once per output block.
+const DFBSpecName DFB_SCALED_BIAS{"scaled_bias"};
 
 // Tensor parameter names (also the kernel-side tensor:: accessor names).
 const TensorParamName TP_IN0{"in0"};
@@ -537,6 +539,12 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
 
         push_dfb(DFB_TERNARY_B, ternary_c_tile_size, ternary_c_num_tiles, ternary_c_data_format);
     }
+    // TT_MINIMAL_MATMUL_LLK2: the LLK 2.0 kernel computes addcmul as (a + b * bias) + b * (x w) in Dest, with b * bias
+    // made once per output block into a buffer of its own (in the partials' format).
+    const bool llk2 = operation_attributes.llk2_compute;
+    if (llk2 && use_fused_ternary) {
+        push_dfb(DFB_SCALED_BIAS, intermediate_tile_size, N_block_tiles, intermediate_data_format);
+    }
 
     /**
      * Tensor parameters. One per distinct tensor the kernels access; the N outputs additionally get
@@ -855,7 +863,14 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
             "fused_act_dst_id",
             output_tensors[0].dtype());
     }
-    compute_defines.merge(compute_activation_defines);
+    if (llk2) {
+        // The LLK 2.0 kernel takes the activation as a named arg (llk2_activation); the Dest mode and the fidelity
+        // reach all three TRISCs as defines (MATH_FIDELITY exists only on math and pack).
+        compute_defines["LLK2_DEST_FP32"] = fp32_dest_acc_en ? "1" : "0";
+        compute_defines["LLK2_MATH_FIDELITY"] = std::to_string(static_cast<uint32_t>(math_fidelity));
+    } else {
+        compute_defines.merge(compute_activation_defines);
+    }
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device->arch(), num_cores, compute_defines, ttnn::get_throttle_level(compute_kernel_config));
 
@@ -881,6 +896,9 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
                 compute_unpack_modes.emplace(dfb, tt::tt_metal::UnpackMode::UnpackToSrc);
             }
         }
+        if (llk2 && use_fused_ternary && intermediate_data_format == tt::DataFormat::Float32) {
+            compute_unpack_modes.emplace(DFB_SCALED_BIAS, tt::tt_metal::UnpackMode::UnpackToSrc);
+        }
     }
 
     Group<DFBBinding> compute_dfb_bindings;
@@ -896,6 +914,10 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
     if (use_fused_ternary) {
         compute_dfb_bindings.push_back(consumer_of(DFB_TERNARY_A));
         compute_dfb_bindings.push_back(consumer_of(DFB_TERNARY_B));
+        if (llk2) {
+            compute_dfb_bindings.push_back(producer_of(DFB_SCALED_BIAS));
+            compute_dfb_bindings.push_back(consumer_of(DFB_SCALED_BIAS));
+        }
     }
 
     KernelSpec::RuntimeArgSchema compute_schema;
@@ -930,6 +952,26 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
         .runtime_arg_schema = compute_schema,
         .hw_config = compute_hw,
     });
+    if (llk2) {
+        // LLK 2.0 kernel (TT_MINIMAL_MATMUL_LLK2): the same DFBs, runtime args and block args as compute_metal2.cpp,
+        // plus each DFB's data format as the named arg <dfb>_format, the same on all three TRISCs (LLK 2.0 plans on
+        // every TRISC). DFBs the program does not have get a placeholder format; the kernel does not touch them.
+        auto& llk2_kernel = spec.kernels.back();
+        llk2_kernel.source = std::filesystem::path("tt_metal/tt-llk/llk2/kernels/minimal_matmul.cpp");
+        auto& cta = llk2_kernel.compile_time_args;
+        const auto format_arg = [&](const std::string& dfb, tt::DataFormat format) {
+            cta.insert({dfb + "_format", static_cast<uint32_t>(format)});
+        };
+        format_arg("in0", in0_data_format);
+        format_arg("in1", in1_data_format);
+        format_arg("out", output_data_format);
+        format_arg("intermediate", intermediate_data_format);
+        format_arg("in2", in2_data_format);
+        format_arg("ternary_a", ternary_a_data_format);
+        format_arg("ternary_b", ternary_c_data_format);
+        format_arg("scaled_bias", intermediate_data_format);
+        cta.insert({"llk2_activation", fused_activation.has_value() ? 1u : 0u});  // gelu_tanh (validated)
+    }
 
     /**
      * Work units. The sender/receiver core ranges partition the grid on each axis, so each node
