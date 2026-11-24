@@ -245,6 +245,38 @@ TEST_F(McastFixture, HandshakeSubsetOwnsDataAndVariesBySender) {
     EXPECT_EQ(rt.at(1).second.at(2), 2u);
 }
 
+TEST_F(McastFixture, RuntimeAckCountKeepsCompileTimeArgsAcrossHandshakeSets) {
+    const auto receivers = grid({0, 0}, {3, 0});
+    const auto make = [&](const CoreRangeSet& handshake, bool runtime_ack_count) {
+        return Mcast(
+            *device_,
+            McastConfig{.handshake_cores = handshake, .runtime_ack_count = runtime_ack_count},
+            receivers,
+            4,
+            McastFixedSenderConfig{});
+    };
+    const auto three = grid({0, 0}, {2, 0});
+    const auto four = grid({0, 0}, {3, 0});
+    const std::vector<std::vector<CoreCoord>> group{{{0, 0}, {1, 0}, {2, 0}, {3, 0}}};
+    const std::vector<std::vector<CoreCoord>> sender{{{0, 0}}};
+
+    // A uniform count is a compile-time constant by default, so the handshake set changes the CT args.
+    const auto ct_three = make(three, false);
+    const auto ct_four = make(four, false);
+    expect_pattern(ct_three, device_, group, sender, {{2}});
+    expect_pattern(ct_four, device_, group, sender, {{3}});
+    EXPECT_NE(emitted(ct_three).compile_time_args, emitted(ct_four).compile_time_args);
+
+    // With runtime_ack_count the count is a runtime word and the CT args are the same.
+    const auto rt_three = make(three, true);
+    const auto rt_four = make(four, true);
+    expect_pattern(rt_three, device_, group, sender, {{2}});
+    expect_pattern(rt_four, device_, group, sender, {{3}});
+    const auto rt_three_kernel = emitted(rt_three);
+    EXPECT_EQ(test::emitted_metadata(rt_three_kernel.compile_time_args, 0).mcast.ack_count, UINT32_MAX);
+    EXPECT_EQ(rt_three_kernel.compile_time_args, emitted(rt_four).compile_time_args);
+}
+
 TEST_F(McastFixture, DefaultEmptyAndDisabledHandshakes) {
     const auto receivers = grid({0, 0}, {1, 0});
     const CoreRangeSet empty;

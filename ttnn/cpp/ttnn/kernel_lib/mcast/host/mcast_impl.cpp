@@ -468,7 +468,8 @@ void McastImpl::prepare_arguments_() const {
         layout_.has_remote_receivers |= group.has_remote_receivers();
         const auto& state = group.prepared_state_();
         // Compare every sender turn across all groups; first_ack/first_remote persist between groups.
-        // Uniform counts become shared compile-time constants; differing counts use runtime arguments.
+        // Uniform counts become shared compile-time constants; differing counts use runtime arguments,
+        // as do all acknowledgment counts under McastConfig::runtime_ack_count.
         // The kernel uses the fanout constants only when multicast has one rectangle per group.
         for (size_t phase = 0; phase < group.num_senders(); ++phase) {
             const auto ack = state.acks[phase];
@@ -495,7 +496,7 @@ void McastImpl::prepare_arguments_() const {
         }
     }
     layout_.flags |= uint32_t(transfer_mode) << wire::TRANSFER_MODE_SHIFT;
-    layout_.ack_count = uniform_ack ? *first_ack : ACK_EQUALS_FANOUT;
+    layout_.ack_count = uniform_ack && !cfg_.runtime_ack_count ? *first_ack : ACK_EQUALS_FANOUT;
     layout_.uniform_remote_count = uniform_remote ? *first_remote : 0u;
     layout_.remote_count_known = uniform_remote;
     // A concrete CT mode is a per-rectangle specialization, never a whole-group inference.

@@ -782,10 +782,11 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
 
     // The height-sharded/default weights channel is one sender at (0,0) broadcasting to the full
     // rectangular grid. Some rectangle members are noop cores, so only active receivers acknowledge.
+    // The number of input cores follows the input size, so it goes in the runtime arguments.
     if (!block_sharded && !skip_weights_mcast) {
         weights_mcast.emplace(
             *device,
-            mcast::McastConfig{.noc = weights_noc, .handshake_cores = input_cores},
+            mcast::McastConfig{.noc = weights_noc, .handshake_cores = input_cores, .runtime_ack_count = true},
             all_cores,
             /*receiver_group_size=*/all_cores.num_cores(),
             mcast::McastFixedSenderConfig{});

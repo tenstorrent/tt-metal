@@ -102,6 +102,10 @@ struct McastConfig {
     std::optional<tt::tt_metal::CoreRangeSet> handshake_cores = std::nullopt;
     dataflow_kernel_lib::DataReadySignal data_ready = dataflow_kernel_lib::DataReadySignal::Flag;
     dataflow_kernel_lib::TransferMode irregular_receiver_set_mode = dataflow_kernel_lib::TransferMode::Multicast;
+    // Pass the acknowledgment count in the runtime arguments even when every sender has the same one.
+    // A uniform count is otherwise a compile-time constant, so a count that follows the problem size,
+    // such as the number of handshake cores, compiles a new kernel binary per count.
+    bool runtime_ack_count = false;
 };
 
 // One in-group sender per receiver group, optionally staggered across groups.
