@@ -63,6 +63,9 @@ def _host_bytes(snap):
     for k, v in snap.items():
         if k == "n_tokens":
             continue
+        if k == "kv_host":  # (the KV pieces: (first tile, tiles, K piece, V piece))
+            total += sum(_host_bytes({"k": hk, "v": hv}) for _, _, hk, hv in v)
+            continue
         if not hasattr(v, "volume"):  # (a fake's entries count 1)
             total += 1
             continue
@@ -438,9 +441,16 @@ class ResidentRowsAdapter:
         if m is None:
             return None
         key, q, nxt = m
-        if r is None:
+        fresh = r is None
+        if fresh:
             r = self._start_prompt(vslot)
-        self.engine.swap_restore(r, key, self._blocks_for(table_row, q))
+        try:
+            self.engine.swap_restore(r, key, self._blocks_for(table_row, q))
+        except RuntimeError as e:  # (device memory: the replay prefills as vLLM planned)
+            logger.warning(f"swap: restore into resident slot {r} failed ({str(e)[:160]}); prefilling the replay")
+            if fresh:
+                self.slots.release(int(vslot))
+            return None
         logger.info(f"swap: resident slot {r} resumed from host at {q} tokens (prompt {len(ids)}), no prefill")
         if len(ids) >= q + 1:
             # (q + 1: the usual first-token launch of the next token; more: tokens committed after the state was kept — a speculative step in flight at the preemption: each
@@ -530,7 +540,12 @@ class ResidentRowsAdapter:
             st["live"], st["h"] = True, h
             st["parts"] = snap.get("taps") if h else None
             if h:
-                model.restore_slot(r, model.snapshot_from_host(snap), table=blocks)
+                try:
+                    model.restore_slot(r, model.snapshot_from_host(snap), table=blocks)
+                except RuntimeError as e:  # (device memory: as a miss, from 0)
+                    logger.warning(f"prefix cache: restore at {h} tokens failed ({str(e)[:160]}); prefilling from 0")
+                    h, st["h"], st["parts"] = 0, 0, None
+            if h:
                 if h < upto:
                     pp.load_prefix(model, h, slot=r, block_table=blocks)
                     pp.run_from(torch.as_tensor(tokens[:upto]), h, chunk=c, drain=final)
@@ -550,8 +565,7 @@ class ResidentRowsAdapter:
                 # store the final span's start: drain there, hand off, snapshot, reload, on to the end
                 pp.run_span(torch.as_tensor(tokens[start:start]), start // c, start, drain=True, chunk=c)
                 pp.handoff(model, start, block_table=blocks, slot=r)
-                host = model.snapshot_to_host(model.snapshot_slot(r, n_tokens=start, table=blocks))
-                pc.insert(tokens, start, host, eng._entry_bytes(host, st.get("parts"), st["h"], start))
+                eng._store(tokens, start, r, blocks, st.get("parts"), st["h"])
                 if start < upto:
                     pp.load_prefix(model, start, slot=r, block_table=blocks)
                     pp.run_from(torch.as_tensor(tokens[:upto]), start, chunk=c)
@@ -847,6 +861,16 @@ class RowsEngine:
         if self.on_taps is not None:
             self.on_taps(r, lo, n, parts)
 
+    def _store(self, ids, H, r, blocks, parts, lo):
+        """a prefix-cache entry of slot r's state at H tokens (its KV staged piece by piece); a device allocation that
+        fails (memory) skips the entry — the request goes on uncached rather than the server dying (a 250K store on
+        batch-dflash2, ~45 MB free next to its two builds, crashed the engine before the pieces, 2026-11-24)"""
+        try:
+            host = self.model.snapshot_to_host(self.model.snapshot_slot(r, n_tokens=H, table=blocks))
+            self.prefix_cache.insert(ids, H, host, self._entry_bytes(host, parts, lo, H))
+        except RuntimeError as e:
+            logger.warning(f"prefix cache: no entry at {H} tokens ({str(e)[:160]})")
+
     def _entry_bytes(self, host, parts, lo, H):
         """(P2d) a prefix-cache entry's bytes, its window taps attached to it when the class keeps them"""
         nb = _host_bytes(host)
@@ -882,10 +906,15 @@ class RowsEngine:
         if h and H - h < PREFIX_CACHE_STEP:
             H = 0
         if h:
-            dev = model.snapshot_from_host(snap)
-            lap("restore: host -> device")
-            model.restore_slot(r, dev, table=blocks)
-            lap("restore: into the slot")
+            try:
+                dev = model.snapshot_from_host(snap)
+                lap("restore: host -> device")
+                model.restore_slot(r, dev, table=blocks)
+                lap("restore: into the slot")
+            except RuntimeError as e:  # (device memory: prefill it all instead, the slot is overwritten anyway)
+                logger.warning(f"prefix cache: restore at {h} tokens failed ({str(e)[:160]}); prefilling from 0")
+                h = h0 = 0
+                entry_parts = None
         if H > h and H < n:
             if h:  # (the cached prefix, then on to the new boundary)
                 pp.load_prefix(model, h, slot=r, block_table=blocks)
@@ -897,12 +926,9 @@ class RowsEngine:
             lap("prefill to the new boundary")
             pp.handoff(model, H, block_table=blocks, slot=r)
             lap("handoff at the boundary")
-            dev = model.snapshot_slot(r, n_tokens=H, table=blocks)
-            lap("snapshot: slot -> staging")
-            host = model.snapshot_to_host(dev)
-            lap("snapshot: device -> host")
-            pc.insert(ids, H, host, self._entry_bytes(host, entry_parts, h0, H))
-            h = H
+            self._store(ids, H, r, blocks, entry_parts, h0)
+            lap("snapshot: slot -> host")
+            h = H  # (the slot holds the boundary's state either way)
         if h:
             pp.load_prefix(model, h, slot=r, block_table=blocks)
             lap("load_prefix")
@@ -915,8 +941,7 @@ class RowsEngine:
         lap("handoff")
         self._taps(r, h0, n, entry_parts)
         if H and H == n and H > h:  # (a prompt of whole blocks: its handed-off state is the boundary's)
-            host = model.snapshot_to_host(model.snapshot_slot(r, n_tokens=H, table=blocks))
-            pc.insert(ids, H, host, self._entry_bytes(host, entry_parts, h0, H))
+            self._store(ids, H, r, blocks, entry_parts, h0)
 
     @property
     def can_batch(self):

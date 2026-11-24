@@ -129,6 +129,7 @@ class _L1Alias:
 HUB_MC_NOCS = int(os.environ.get("RESIDENT_HUB_MC_NOCS", "2"))  # NOCs the hub multicasts x over (mlp_hub.cpp mc_nocs)
 DM_OS_KERNELS = ("streamer_reader.cpp", "streamer_writer.cpp")  # (verify rows: -Os, see kernel())
 SNAP_COPY_CORES = int(os.environ.get("RESIDENT_SNAP_COPY_CORES", "8"))  # (slot snapshots: page-copy cores per chip)
+SNAP_PIECE_MB = float(os.environ.get("RESIDENT_SNAP_PIECE_MB", "32"))  # (slot snapshots: KV staging a chip at a time)
 TOK_PREV = 14  # token state word: the previous verify step's accepted drafts (chunked GDN; none: 0xFFFFFFFF)
 TOK_X0 = 64
 TOK_SLOT = 4  # token state word: the GDN state slot of row 0 (verify)
@@ -2282,6 +2283,28 @@ class ResidentModel:
             runs.append((int(table[t0 // tpb]) * tpb, t0, min(tpb, n_tiles - t0)))
         return runs
 
+    def _kv_piece_copies(self, table, t0, nt, staging, staging_v, save):
+        """page copies between the pools' pages of position tiles t0 .. t0 + nt - 1 (every attention copy) and one piece
+        of staging (page c * nt + t - t0): K's in `staging` (KV_ROW B pages), V's in `staging_v` (V_ROW B)"""
+        out, C, tpb = [], self._attn_copies, self.kv_tpb
+        runs, t = [], t0
+        while t < t0 + nt:  # (runs inside one block: a block's tiles are consecutive pages)
+            k = min(tpb - t % tpb, t0 + nt - t)
+            runs.append((int(table[t // tpb]) * tpb + t % tpb, t - t0, k))
+            t += k
+        for pool, stg, row in ((self.K_t, staging, KV_ROW), (self.V_t, staging_v, V_ROW)):
+            for c in range(C):
+                for page, i, cnt in runs:
+                    pp, sp = c * self.kv_copy_pages + page, c * nt + i
+                    out.append((pool, pp, stg, sp, cnt, row) if save else (stg, sp, pool, pp, cnt, row))
+        return out
+
+    def _kv_piece_tiles(self):
+        """position tiles per KV staging piece: at most SNAP_PIECE_MB of staging a chip at a time (a long prompt's whole
+        KV staged at once needs ~1.1 GB a chip at 250K; batch-dflash2 has ~45 MB free next to its two builds)"""
+        per_tile = self._attn_copies * (KV_ROW + V_ROW)
+        return max(1, int(SNAP_PIECE_MB * 1e6) // per_tile)
+
     def _kv_copies(self, table, n_tiles, staging, staging_v, save):
         """page copies between the pools' pages of the first n_tiles tiles (every attention copy) and the staging
         tensors: K's in `staging` (page c * n_tiles + t, KV_ROW B), V's in `staging_v` (V_ROW B pages: S0's format)"""
@@ -2318,13 +2341,21 @@ class ResidentModel:
         self._hist_row(s, hist, gather=True)
         snap = dict(state=state, hist=hist, n_tokens=0)
         if n_tokens:
+            # (the KV straight to host, piece by piece: kv_host [(first tile, tiles, K piece, V piece)] — a piece's
+            # staging is allocated, filled, read and freed before the next)
             assert self.kv_paged
             n_tiles = -(-n_tokens // TILE)
-            kv = ttnn.empty([self._attn_copies * n_tiles, KV_ROW // 4], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh, dram)
-            kvv = ttnn.empty([self._attn_copies * n_tiles, V_ROW // 4], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh, dram)
             tbl = self.block_tables[s] if table is None else table
-            self._page_copy(self._kv_copies(tbl, n_tiles, kv, kvv, save=True))
-            snap.update(kv=kv, kvv=kvv, n_tokens=n_tokens)
+            P, C, pieces = self._kv_piece_tiles(), self._attn_copies, []
+            for t0 in range(0, n_tiles, P):
+                nt = min(P, n_tiles - t0)
+                kv = ttnn.empty([C * nt, KV_ROW // 4], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh, dram)
+                kvv = ttnn.empty([C * nt, V_ROW // 4], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh, dram)
+                self._page_copy(self._kv_piece_copies(tbl, t0, nt, kv, kvv, save=True))
+                pieces.append((t0, nt, ttnn.from_device(kv), ttnn.from_device(kvv)))
+                ttnn.deallocate(kv)
+                ttnn.deallocate(kvv)
+            snap.update(kv_host=pieces, n_tokens=n_tokens)
         return snap
 
     def restore_slot(self, s, snap, table=None):
@@ -2343,9 +2374,17 @@ class ResidentModel:
         )
         self._hist_row(s, snap["hist"], gather=False)
         if snap.get("n_tokens"):
-            n_tiles = -(-snap["n_tokens"] // TILE)
             tbl = self.block_tables[s] if table is None else table
-            self._page_copy(self._kv_copies(tbl, n_tiles, snap["kv"], snap["kvv"], save=False))
+            if "kv_host" in snap:  # (piece by piece from host: a piece's staging uploaded, copied, freed)
+                for t0, nt, hk, hv in snap["kv_host"]:
+                    kv = ttnn.to_device(hk, self.mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                    kvv = ttnn.to_device(hv, self.mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                    self._page_copy(self._kv_piece_copies(tbl, t0, nt, kv, kvv, save=False))
+                    ttnn.deallocate(kv)
+                    ttnn.deallocate(kvv)
+            else:
+                n_tiles = -(-snap["n_tokens"] // TILE)
+                self._page_copy(self._kv_copies(tbl, n_tiles, snap["kv"], snap["kvv"], save=False))
 
     def _hist_one(self, gr, row, hslot, compact, cslot, cstride, gather):
         """one conv-history slot of one row of every (streamer, copy) row <-> compact slot cslot of a snapshot
@@ -2441,6 +2480,8 @@ class ResidentModel:
         """a snapshot's staging tensors to host memory (ttnn host tensors, one shard per chip), the device copies freed
         — the host tier of a prefix cache entry / a swapped-out user (Strata S1 / S3)"""
         out = {"n_tokens": snap.get("n_tokens", 0)}
+        if "kv_host" in snap:  # (already on host, in pieces)
+            out["kv_host"] = snap["kv_host"]
         for k in self.SNAP_TENSORS:
             if k in snap:
                 out[k] = ttnn.from_device(snap[k])
@@ -2450,6 +2491,8 @@ class ResidentModel:
     def snapshot_from_host(self, host):
         """a snapshot_to_host result back into device staging tensors (for restore_slot)"""
         snap = {"n_tokens": host.get("n_tokens", 0)}
+        if "kv_host" in host:  # (uploaded piece by piece by restore_slot)
+            snap["kv_host"] = host["kv_host"]
         for k in self.SNAP_TENSORS:
             if k in host:
                 snap[k] = ttnn.to_device(host[k], self.mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG)
