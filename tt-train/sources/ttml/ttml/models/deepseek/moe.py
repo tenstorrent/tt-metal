@@ -232,7 +232,7 @@ class MoE(AbstractModuleBase):
         )
 
         # On-device accumulator for token counts per expert [1, 1, 1, num_experts]
-        # Each forward adds to this; update_expert_bias reads and resets it. FP32: it holds integer counts exactly
+        # Each forward adds to this; update_expert_biases reads and resets it. FP32: it holds integer counts exactly
         # (BF16 does so only up to 256), and their average over the devices keeps its fraction through the update's
         # comparison with the mean.
         self._token_counts = Buffer(
@@ -452,7 +452,7 @@ class MoE(AbstractModuleBase):
 
         Returns the fraction of tokens for which each expert was selected,
         accumulated across all forward passes since the last
-        ``update_expert_bias`` (which resets ``_token_counts``). Shape:
+        ``update_expert_biases`` (which resets ``_token_counts``). Shape:
         ``(num_experts,)``, dtype ``float32``, values in ``[0, 1]``.
 
         Uses the self-normalising identity
@@ -465,16 +465,6 @@ class MoE(AbstractModuleBase):
         if total <= 0.0:
             return np.zeros_like(counts_np, dtype=np.float32)
         return (counts_np * float(self.n_activated) / total).astype(np.float32)
-
-    def update_expert_bias(self, coeff: float = 0.001) -> None:
-        """Auxiliary-loss-free load balancing (DeepSeek-V3 style).
-
-        Moves each expert's bias by ``coeff * sign(mean_count - expert_count)``, centred on zero, from the token counts
-        accumulated over the whole batch since the last update (see ``update_expert_biases``), and resets the counts.
-
-        Call between training steps (e.g., every N steps).
-        """
-        update_expert_biases([self], coeff)
 
     def _move_bias(self, counts_val: ttnn.Tensor, coeff: float) -> None:
         """The bias update from ``counts_val``, this layer's ``[1, 1, 1, E]`` counts over the whole batch, and the reset
@@ -502,7 +492,9 @@ class MoE(AbstractModuleBase):
 
 
 def update_expert_biases(layers: Iterable[MoE], coeff: float = 0.001) -> None:
-    """``MoE.update_expert_bias`` for every layer in ``layers``, with one synchronization of their counts.
+    """Auxiliary-loss-free load balancing (DeepSeek-V3 style) for every MoE layer in ``layers``: moves each expert's bias
+    by ``coeff * sign(mean_count - expert_count)``, centred on zero, from the token counts accumulated over the whole
+    batch since the last update, and resets the counts. Call between training steps (e.g., every N steps).
 
     A bias is replicated, so every device must make the same update, from the counts of the whole batch, while a
     device's ``_token_counts`` cover only the tokens it routed: every data-parallel axis ("dp" and "fsdp") gives each

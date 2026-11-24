@@ -4,7 +4,7 @@
 
 """DeepSeek's auxiliary-loss-free expert bias under data parallelism.
 
-``MoE.update_expert_bias`` moves each expert's routing bias by the sign of (mean count - its count), from the token
+``update_expert_biases`` moves each expert's routing bias by the sign of (mean count - its count), from the token
 counts the layer accumulated since the last update. Under data parallelism each device routes only its slice of the
 batch, so the update must use the counts of the whole batch: then every device makes the same move and the devices
 keep one bias.
@@ -72,7 +72,7 @@ def test_expert_bias_update_uses_the_counts_of_the_whole_batch(hsdp_mesh):
         assert not np.array_equal(counts[0], counts[other]), f"precondition: the {axis} neighbours routed alike"
 
     coeff = 0.001
-    layer.update_expert_bias(coeff)
+    update_expert_biases([layer], coeff)
 
     bias = assert_identical_across_devices(layer._expert_bias.tensor.get_value(), "the expert bias").reshape(-1)
     # The update from the counts of the whole batch. The counts and their average (quarters here) are exact in FP32,
@@ -107,7 +107,7 @@ def test_the_update_compares_averages_bf16_cannot_hold(hsdp_mesh):
     layer._token_counts.tensor.set_value(counts)
 
     coeff = 0.001
-    layer.update_expert_bias(coeff)
+    update_expert_biases([layer], coeff)
 
     bias = assert_identical_across_devices(layer._expert_bias.tensor.get_value(), "the expert bias").reshape(-1)
     whole = local.mean(axis=0).reshape(-1)  # 300.5, 299.5 and 300 around a mean of 300
