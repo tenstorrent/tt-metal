@@ -23,6 +23,13 @@ void enqueue_write_tensor(
     TT_FATAL(
         host_tensor.tensor_spec().page_config() == device_tensor.tensor_spec().page_config(),
         "Host tensor has different page config");
+    // The device buffer is laid out for the device tensor's padding, so host data with other padding would land at the
+    // wrong offsets.
+    TT_FATAL(
+        host_tensor.padded_shape() == device_tensor.padded_shape(),
+        "Host tensor has padded shape {}, but the device tensor has {}",
+        host_tensor.padded_shape(),
+        device_tensor.padded_shape());
 
     // Pure data write into the device tensor's existing buffer; spec/topology of the device tensor
     // are intentionally not modified by a partial host->device copy.
