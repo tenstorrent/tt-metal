@@ -11,6 +11,11 @@ on:
         required: false
         default: "not perf and not quasar and not accuracy"
         type: string
+      wheel_only:
+        description: "Build the harness wheel only, without running the tests"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   checks: write
@@ -20,6 +25,7 @@ permissions:
 jobs:
   llk-e2e-tests:
     name: "LLK e2e Tests"
+    if: ${{ !inputs.wheel_only }}
     uses: ./.github/workflows/llk-e2e-impl.yaml
     secrets: inherit
     with:
@@ -28,7 +34,7 @@ jobs:
 
   llk-e2e-summary:
     name: "LLK e2e summary"
-    if: always()
+    if: ${{ always() && !inputs.wheel_only }}
     needs:
       - llk-e2e-tests
     runs-on: ubuntu-slim
@@ -98,7 +104,7 @@ jobs:
   report-status:
     name: "Report status"
     runs-on: ubuntu-slim
-    if: always()
+    if: ${{ always() && !inputs.wheel_only }}
     needs: llk-e2e-summary
     steps:
       - name: Checkout repository
