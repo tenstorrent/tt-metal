@@ -392,6 +392,13 @@ class ModelArgs:
             return False
         if dense_moe and meta.get("dense_moe_decode_weights") != self.DENSE_MOE_DECODE_WEIGHTS_VERSION:
             return False
+        if dense_moe and not self._dense_moe_weights_cached(cache_path):
+            # A marker can vouch for weights the cache does not hold: it keeps the optional weight sets an earlier
+            # build of the same directory recorded, and a shared cache can be built by other code. Seen on CI's
+            # read-only QuietBox 2 cache (2026-11-24): the marker had the dense MoE set, the dense_decode_* files were
+            # missing, and the batched model failed in ttnn.as_tensor(None, ...). Without the files, load the HF
+            # weights so the build writes them.
+            return False
         routed_version = self._routed_prefill_weights_version()
         if routed_version and meta.get("routed_prefill_weights") != routed_version:
             # The routed prefill experts (experts/prefill_routed.py) cache their own weight layout; a cache built
@@ -399,6 +406,18 @@ class ModelArgs:
             return False
         # Belt-and-suspenders: the cache dir must still actually hold tensor files.
         return any(cache_path.glob("*.tensorbin"))
+
+    DENSE_MOE_CACHED_WEIGHTS = ("dense_decode_gate", "dense_decode_up", "dense_decode_down")
+
+    def _dense_moe_weights_cached(self, cache_path):
+        """Whether every layer's batched dense MoE weights (experts/weights.py load_dense_decode_expert_weights) have a
+        cache file: model.layers.<i>/mlp/experts/<name>_dtype_..._layout_TILE.tensorbin."""
+        for i in range(self.n_layers):
+            experts = cache_path / f"model.layers.{i}" / "mlp" / "experts"
+            for name in self.DENSE_MOE_CACHED_WEIGHTS:
+                if not any(experts.glob(f"{name}_dtype_*.tensorbin")):
+                    return False
+        return True
 
     def _routed_prefill_weights_version(self):
         """Routed prefill expert weight-cache version when this model builds them (env flag + mesh), else None."""
