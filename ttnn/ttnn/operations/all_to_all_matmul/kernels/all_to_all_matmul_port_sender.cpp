@@ -194,9 +194,14 @@ void kernel_main() {
         for (uint32_t c = 0; c < packets;) {
             const uint32_t room = batch_chunks - pos % batch_chunks;
             const uint32_t need = (packets - c) < room ? (packets - c) : room;
-            cb_wait_front(cb_port_chunks, need);
+            // port_prefetch: wait packet by packet (the reader may push a batch packet by packet); one flush + pop
+            // per batch as before.
             const uint32_t rp = get_read_ptr(cb_port_chunks);
             for (uint32_t i = 0; i < need; ++i) {
+                if (!cb_pages_available_at_front(cb_port_chunks, i + 1)) {
+                    A2AMM_ZONE("psd_cbwait");  // sender starved by the port reader
+                    cb_wait_front(cb_port_chunks, i + 1);
+                }
                 const uint32_t rec = entry_idx + (g0 + w.e) * ENTRY_WORDS;
                 const uint32_t e_tiles = get_arg_val<uint32_t>(rec) >> 16;
                 const uint32_t left_entry = e_tiles - w.off;

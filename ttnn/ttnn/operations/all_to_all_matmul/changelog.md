@@ -168,3 +168,92 @@ Whole op (harness, 5 experiments, `CCL_PERF_CASES=all`, all measured in this ses
 
 ### Helper bypasses — none
 No raw LLK. Compute still calls `matmul_block`, now with a runtime row range. The sender uses the fabric adapter's public `open_start()` / `open_finish()`.
+
+## Perf 2
+- Date: 2026-11-24. Focus: LOOSE_CASES[0] (Kimi K3.1 model config, unchanged from Perf 1; SUPPORTED). Roofline 32.3 us (DRAM), links 20.3 us, matmul 6.6 us.
+- Instrumentation: `perf_instrumentation.hpp` (`MaybeDeviceZoneScope`) still does not exist in this tree; `A2AMM_ZONE` stays the permanent instrumentation. New zones: `prd_barrier` (a port reader waiting on one packet's DRAM reads), `prd_resv` (the port reader a full ring ahead of the sender), `psd_cbwait` (the sender starved by the port reader; fires only on a real wait).
+
+### Measured breakdown (harness, 5 experiments, HEAD = Perf 1, us, fastest / slowest)
+| run | fastest | slowest |
+|---|---|---|
+| full | 53.56 | 60.27 |
+| nowrite | 51.57 | 56.38 |
+| nowrite,nocompute | 49.66 | 51.39 |
+| exchange alone (nowrite,nocompute,noweight) | 43.94 | 48.86 |
+| exchange alone, port reads stubbed | 43.12 | 44.04 |
+| nowrite,nocompute,noportread (exchange + weight reads, no port DRAM reads) | 48.84 | 50.36 |
+| noportread (full op without port DRAM reads) | 51.64 | 56.55 |
+| local alone (nosend,noportread) | 43.03 | 45.39 |
+| nosend,noportread,nowrite | 42.91 | 45.13 |
+| nosend,noportread,nowrite,nocompute (weight reads + floor) | 39.11 | 39.92 |
+| everything stubbed | 15.69 | 16.17 |
+
+Per part against its speed of light:
+- **Exchange (TRANSPORT).** Alone it takes 43.9 us. The busiest link carries 160 packets of 7232 B, and at the fabric's measured per-packet rate (~0.27 us per packet) that is about 43 us. The link-rate SOL is 20.3 us, but the case fixes `num_links = 2` and the packet size, so the exchange has no headroom at this packet size.
+- **Weight reads.** They add +5.7 us to the exchange. The cost is the same with the port DRAM reads stubbed (43.12 → 48.84), so it is NoC interference with the fabric path, not DRAM contention.
+- **Port DRAM reads.** They cost about 0 us on the exchange alone, but 1.9 us fastest / 3.7 us slowest in the full op.
+- **Compute and output writes.** Compute adds +1.9 us and the L1 output writes add +2.0 us.
+- **Overlap loss** = full − slowest part alone = 53.56 − max(43.94, 43.03) = 9.6 us. The exchange and the local work are balanced.
+
+Zones (one untraced call):
+- The light ports (12 entries per link) finish sending at 25–29 us and the heavy ports (24 per link) at 43–50 us. That is because each chip's far quarter rides one direction; every directed link still carries 2 quarters, so the links are balanced.
+- From the last landing to the end of the output write takes 2.7–5.3 us.
+
+Ranked:
+1. OVERLAP: local NoC traffic stretches the exchange (weight reads +5.7, writes +2.0, compute +1.9).
+2. OVERLAP: the port DRAM reads starve the sender under the weight reads' DRAM load (+1.9 / +3.7).
+3. The post-landing chain, which Perf 1 and Refinement 3 already worked.
+4. TRANSPORT data phase: at the per-packet floor.
+
+### Portfolio (cap 2) and verdicts
+- **landing_contention (OVERLAP, local traffic placement around the fabric path)**, `perf_experiments/landing_contention/` — **NULL.**
+  - Mechanism: the EDM router lands packets on NoC1 (`edm_to_local_chip_noc = 1`), the port senders reach the router on NoC1, and the weight reads also use NoC1.
+  - The stretch is concentrated on the 4 long ports of chips 1 and 2 (+4 to 7.6 us), and it scales with the weight bytes read: stubbing the weight reads on the east or west half of the grid removes part of it.
+  - Menu, focus case, fastest / slowest:
+    - all weight reads on NoC0: 81.6 / 89.6
+    - NoC0/NoC1 alternating by tile: 61.9 / 71.1
+    - NoC chosen per geometry: 62.8 / 70.7
+    - read-request VC 0 / VC 2: 53.24 / 60.26 and 53.24 / 59.87 (null)
+    - DRAM endpoint remap to row 0 / row 11: null
+    - landing-aware head placement: 52.72 / 61.62 (slowest +1.4)
+    - weight rate cap 6000 cycles: 54.24 / 58.86 (`compare`: regression); Phase 0 regression; GLM 53.66 → 52.12 (win, −2.9%)
+  - Nothing graduates. The rate cap would be a per-case knob that regresses the focus case, so it was not taken.
+- **port_prefetch (OVERLAP, data availability on the port side)**, `perf_experiments/port_prefetch/` — **WIN.**
+  - Zones at HEAD: the heavy ports' senders waited about 11 us per call in `cb_wait_front`. Their readers spent about 22 us at the per-batch read barrier, where the DRAM reads drained, and only about 0.6 us waiting for ring space. So the reader was limited by read throughput, not by ring depth.
+  - Fix: each packet's DRAM reads carry their own NoC transaction id. Up to `ceil(PORT_READ_INFLIGHT_BYTES = 40 KiB / packet bytes)` packets (1..15; 6 at 7232 B) stay outstanding, and each packet is pushed as soon as its own reads land. Before, there was one barrier per 12-packet batch.
+  - The sender now waits packet by packet and keeps one flush and pop per batch.
+  - The reader avoids deadlock by pushing its outstanding packets before reserving whenever the ring cannot hold them plus the next one.
+  - Menu, focus case, fastest / slowest:
+    - deeper ring (5 batches): 53.33 / 60.28 (null)
+    - ring 5 with 2 / 4 batches in flight: 55.08 / 60.17 and 61.35 / 67.33 (worse)
+    - per-packet window 2 / 3 / 4 / 6 / 8 / 12: 56.37 / 67.69, 51.91 / 58.36, 51.92 / 57.20, **51.89 / 57.44**, 52.08 / 57.40, 52.27 / 57.71
+  - Precision: unchanged. The change only moves bytes, and the exchange stays bit-exact.
+  - Domain: everywhere, no exceptions. The window is derived from bytes, so 14 KiB packets get a window of 3. The retile path stays correct: its staging barrier waits on every transaction id.
+  - Port-core L1 is unchanged (`cb_port_chunks` is still 2 batches).
+
+### What graduated
+- port_prefetch is the port reader's and sender's only path. The per-batch barrier and the batch-wide `cb_wait_front` are deleted. There is no guard and no carve-out.
+- The kernel has one new compile-time arg (`window`) and no new runtime args.
+
+Whole op (harness, 5 experiments, `CCL_PERF_CASES=all`, same session; fastest / slowest, us; JSONs in `perf/p2/{base,grad}/`):
+
+| case | before | after | `compare` |
+|---|---|---|---|
+| Kimi model (focus) | 53.54 / 60.47 | **52.16 / 56.96** | win (fastest −2.6%, slowest −5.8%) |
+| Kimi Phase 0 (interleaved send, DRAM out) | 87.28 / 90.55 | 87.19 / 90.42 | null (flat) |
+| DeepSeek model | 69.99 / 76.92 | 69.35 / 75.84 | win |
+| GLM model | 54.15 / 59.81 | 53.06 / 58.16 | win |
+
+- Not dispatch-bound.
+- The fastest-chip gain on the focus case (−1.38 us) is at the edge of the ~2–3% noise band, but it is far outside the run-to-run noise that `compare` reports (0.14 us). Most of the gain is on the slowest chip, because the heavy ports no longer stall.
+- No regression in the guard set: grouped and interleaved send paths, K = 128 and 192, 16 / 24 / 32 heads per chip, L1 and DRAM output. The golden suite covers retile, no-packing, B = 2, deep K, wide N and bf8b.
+- Golden `eval/golden_tests/all_to_all_matmul/`: 156/156 pass. Unit directory: 36/36 pass. The subagent also ran 72/72 GOLDEN-mode cells and 20 back-to-back calls on all 4 LOOSE cases.
+- Remaining headroom on the focus case: 52.2 us vs the 32.3 us roofline.
+  - The exchange sits at its per-packet floor (~43 us).
+  - The weight reads' NoC1 interference with the fabric path is still +5.7 us, with no lever found.
+  - Next to try: cheaper per-tile read issue on the heavy ports' readers, which now look issue / DRAM-throughput bound.
+
+### Helper bypasses — none
+- No raw LLK.
+- The port reader uses the public `noc_async_read_set_trid`, `noc_async_read_barrier_with_trid` and `cb_pages_reservable_at_back`; the sender uses `cb_pages_available_at_front`.
+- The landing_contention experiment wrote a command-buffer VC register directly, but it did not graduate.

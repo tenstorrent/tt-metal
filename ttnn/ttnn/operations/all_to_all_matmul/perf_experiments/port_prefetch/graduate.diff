@@ -1,0 +1,139 @@
+diff -ru a/ttnn/ttnn/operations/all_to_all_matmul/all_to_all_matmul_program_descriptor.py b/ttnn/ttnn/operations/all_to_all_matmul/all_to_all_matmul_program_descriptor.py
+--- a/ttnn/ttnn/operations/all_to_all_matmul/all_to_all_matmul_program_descriptor.py	2026-11-24 21:39:46.068818678 +0000
++++ b/ttnn/ttnn/operations/all_to_all_matmul/all_to_all_matmul_program_descriptor.py	2026-11-24 21:39:46.071584198 +0000
+@@ -62,6 +62,14 @@
+ # exchange-alone / whole op fastest chip): 8 packets 47.3 / 56.2, 12 packets 46.2 / 55.0-55.6 us. In bytes so the
+ # 14 KiB-payload cells get 6 packets (a smaller CB than the 8 x 14 KiB before).
+ PORT_BATCH_BYTES = 87 * 1024
++# Port reader DRAM reads in flight (port_prefetch, Perf 2): the reads of the next ceil(PORT_READ_INFLIGHT_BYTES / packet
++# bytes) packets (1..15, one NoC transaction id each) stay outstanding and each packet is pushed as soon as its own reads
++# land, instead of one barrier per batch (the reads drained at every barrier, and under the compute cores' weight reads
++# the heavy ports' senders waited ~11 us per call on the reader). Kimi model case, harness fastest / slowest chip:
++# per-batch barrier 53.5 / 60.4; 2 / 3 / 4 / 6 / 8 / 12 packets 56.4 / 51.9 / 51.9 / 51.9 / 52.1 / 52.3 (slowest
++# 67.7 / 58.4 / 57.2 / 57.4 / 57.4 / 57.7) us. A deeper cb_port_chunks (5 batches, or whole batches in flight) was null
++# or worse: the reader is throughput-bound, not ring-bound.
++PORT_READ_INFLIGHT_BYTES = 40 * 1024
+ # TRANSPORT (Refinement 4), port send schedule:
+ # - SEND_GROUPED_BY_DEST / SEND_RUN_ENTRIES: a port sends runs of SEND_RUN_ENTRIES consecutive entries per destination
+ #   chip, the destinations' runs alternating, nearest destination first (SEND_DEST_ORDER); else one entry per run (heads
+@@ -471,6 +479,7 @@
+     pack = bool(int(_xp.get("pack", PACK_ACROSS_ENTRIES))) and packet_tiles <= slot_tiles
+     dest_order = _xp.get("order", SEND_DEST_ORDER)
+     batch_chunks = int(_xp.get("batch", max(1, PORT_BATCH_BYTES // packet_bytes)))
++    port_window = int(_xp.get("pinfl", min(15, max(1, -(-PORT_READ_INFLIGHT_BYTES // packet_bytes)))))
+     tail_est = _xp.get("est", TAIL_SPLIT_ESTIMATE)
+     tail_pick = _xp.get("pick", TAIL_SPLIT_HELPER_PICK)
+     tail_max = (
+@@ -910,6 +919,7 @@
+             Mq,
+             CB_RETILE_STAGE,
+             int(pack),
++            port_window,
+         ]
+         port_reader_ct += in_ct
+         port_sender_ct = [CB_PORT_CHUNKS, in_tile, packet_tiles, batch_chunks, slot_tiles, MAX_PACKET_HEADERS]
+diff -ru a/ttnn/ttnn/operations/all_to_all_matmul/kernels/all_to_all_matmul_port_reader.cpp b/ttnn/ttnn/operations/all_to_all_matmul/kernels/all_to_all_matmul_port_reader.cpp
+--- a/ttnn/ttnn/operations/all_to_all_matmul/kernels/all_to_all_matmul_port_reader.cpp	2026-11-24 21:39:46.069749629 +0000
++++ b/ttnn/ttnn/operations/all_to_all_matmul/kernels/all_to_all_matmul_port_reader.cpp	2026-11-24 21:39:46.070194290 +0000
+@@ -11,7 +11,7 @@
+ // packet that straddles two entries simply holds the end of one and the start of the next.
+ // Regime R1' (Mq % 32 != 0, compile-time `retile`): per image the quarter's source tile rows are staged in
+ // cb_retile_stage (one DRAM barrier), then each destination tile is re-tiled into the packet page by core-local copies
+-// (all_to_all_matmul_retile.hpp); the batch's single barrier before the push covers them.
++// (all_to_all_matmul_retile.hpp), tagged with the packet's transaction id: its barrier before the push covers them.
+
+ #include <cstdint>
+
+@@ -40,7 +40,13 @@
+     constexpr uint32_t cb_retile_stage = get_compile_time_arg_val(10);
+     constexpr bool retile = (Mq % 32) != 0;
+     constexpr bool pack = get_compile_time_arg_val(11) != 0;
+-    constexpr auto in_args = TensorAccessorArgs<12>();
++    // Reads in flight: one packet = one read unit with its own NoC transaction id (1..window); up to `window` packets
++    // have their DRAM reads outstanding and the oldest is pushed as soon as its own reads land, so the reads stay
++    // queued at DRAM back to back instead of draining at a per-batch barrier (port_prefetch, Perf 2).
++    constexpr uint32_t window = get_compile_time_arg_val(12);
++    static_assert(window >= 1 && window <= 15, "port reader: 1..15 packets in flight (trids 1..15)");
++    constexpr uint32_t ring_pages = 2 * batch_chunks;  // cb_port_chunks
++    constexpr auto in_args = TensorAccessorArgs<13>();
+     constexpr uint32_t quarter_tiles = Mq_t * Kt;
+     constexpr uint32_t slot_tiles = B * quarter_tiles;
+     using Walk = a2amm_stream::Walk<slot_tiles, packet_tiles, pack>;
+@@ -66,7 +72,19 @@
+         r = 0;
+         base = (j * St + qr.t0) * Kt;
+     };
+-    uint32_t pos = 0;  // packets pushed so far
++    uint32_t pos = 0;  // packets whose reads are issued
++    const uint32_t ring_base = get_write_ptr(cb_port_chunks);  // nothing pushed yet: the ring's first page
++    // packets whose reads are outstanding (pushed oldest first): trid slot of the oldest, count
++    uint32_t oldest = 0, pend = 0;
++    auto retire_oldest = [&]() {
++        {
++            A2AMM_ZONE("prd_barrier");  // the oldest packet's DRAM reads
++            noc_async_read_barrier_with_trid(1 + oldest);
++        }
++        cb_push_back(cb_port_chunks, 1);
++        oldest = (oldest + 1) % window;
++        --pend;
++    };
+     for (uint32_t g0 = 0; g0 < n_entries;) {
+         // group: entries [g0, g1) to one destination chip
+         const uint32_t t_g = get_arg_val<uint32_t>(2 + g0) >> 16;
+@@ -82,9 +100,17 @@
+         for (uint32_t c = 0; c < packets;) {
+             const uint32_t room = batch_chunks - pos % batch_chunks;
+             const uint32_t need = (packets - c) < room ? (packets - c) : room;
+-            cb_reserve_back(cb_port_chunks, need);
+-            uint32_t dst = get_write_ptr(cb_port_chunks);
++            uint32_t dst = ring_base + (pos % ring_pages) * packet_bytes;  // a batch never wraps the ring
+             for (uint32_t i = 0; i < need; ++i) {
++                // the window is full, or the ring is (the sender may be waiting on an outstanding packet): push first
++                while (pend == window || (pend > 0 && !cb_pages_reservable_at_back(cb_port_chunks, pend + 1))) {
++                    retire_oldest();
++                }
++                {
++                    A2AMM_ZONE("prd_resv");  // reader a whole ring ahead of the sender
++                    cb_reserve_back(cb_port_chunks, pend + 1);  // every outstanding packet + this one
++                }
++                noc_async_read_set_trid(1 + (oldest + pend) % window);
+                 uint32_t n0, n1;
+                 w.next(ng, n0, n1);
+                 for (uint32_t tt = 0; tt < n0 + n1; ++tt) {
+@@ -112,12 +138,15 @@
+                 }
+                 w.advance(n0 + n1);
+                 dst += (packet_tiles - (n0 + n1)) * tile_bytes;  // a short packet still owns a whole page
++                ++pend;
+             }
+-            noc_async_read_barrier();
+-            cb_push_back(cb_port_chunks, need);
+             pos += need;
+             c += need;
+         }
+         g0 = g1;
+     }
++    while (pend > 0) {
++        retire_oldest();
++    }
++    noc_async_read_set_trid(0);  // leave the read command buffer untagged
+ }
+diff -ru a/ttnn/ttnn/operations/all_to_all_matmul/kernels/all_to_all_matmul_port_sender.cpp b/ttnn/ttnn/operations/all_to_all_matmul/kernels/all_to_all_matmul_port_sender.cpp
+--- a/ttnn/ttnn/operations/all_to_all_matmul/kernels/all_to_all_matmul_port_sender.cpp	2026-11-24 21:39:46.070646004 +0000
++++ b/ttnn/ttnn/operations/all_to_all_matmul/kernels/all_to_all_matmul_port_sender.cpp	2026-11-24 21:39:46.071089292 +0000
+@@ -194,9 +194,14 @@
+         for (uint32_t c = 0; c < packets;) {
+             const uint32_t room = batch_chunks - pos % batch_chunks;
+             const uint32_t need = (packets - c) < room ? (packets - c) : room;
+-            cb_wait_front(cb_port_chunks, need);
++            // port_prefetch: wait packet by packet (the reader may push a batch packet by packet); one flush + pop
++            // per batch as before.
+             const uint32_t rp = get_read_ptr(cb_port_chunks);
+             for (uint32_t i = 0; i < need; ++i) {
++                if (!cb_pages_available_at_front(cb_port_chunks, i + 1)) {
++                    A2AMM_ZONE("psd_cbwait");  // sender starved by the port reader
++                    cb_wait_front(cb_port_chunks, i + 1);
++                }
+                 const uint32_t rec = entry_idx + (g0 + w.e) * ENTRY_WORDS;
+                 const uint32_t e_tiles = get_arg_val<uint32_t>(rec) >> 16;
+                 const uint32_t left_entry = e_tiles - w.off;

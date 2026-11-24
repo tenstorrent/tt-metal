@@ -62,6 +62,14 @@ OUT_WRITE_CHUNK_BYTES = 0
 # exchange-alone / whole op fastest chip): 8 packets 47.3 / 56.2, 12 packets 46.2 / 55.0-55.6 us. In bytes so the
 # 14 KiB-payload cells get 6 packets (a smaller CB than the 8 x 14 KiB before).
 PORT_BATCH_BYTES = 87 * 1024
+# Port reader DRAM reads in flight (port_prefetch, Perf 2): the reads of the next ceil(PORT_READ_INFLIGHT_BYTES / packet
+# bytes) packets (1..15, one NoC transaction id each) stay outstanding and each packet is pushed as soon as its own reads
+# land, instead of one barrier per batch (the reads drained at every barrier, and under the compute cores' weight reads
+# the heavy ports' senders waited ~11 us per call on the reader). Kimi model case, harness fastest / slowest chip:
+# per-batch barrier 53.5 / 60.4; 2 / 3 / 4 / 6 / 8 / 12 packets 56.4 / 51.9 / 51.9 / 51.9 / 52.1 / 52.3 (slowest
+# 67.7 / 58.4 / 57.2 / 57.4 / 57.4 / 57.7) us. A deeper cb_port_chunks (5 batches, or whole batches in flight) was null
+# or worse: the reader is throughput-bound, not ring-bound.
+PORT_READ_INFLIGHT_BYTES = 40 * 1024
 # TRANSPORT (Refinement 4), port send schedule:
 # - SEND_GROUPED_BY_DEST / SEND_RUN_ENTRIES: a port sends runs of SEND_RUN_ENTRIES consecutive entries per destination
 #   chip, the destinations' runs alternating, nearest destination first (SEND_DEST_ORDER); else one entry per run (heads
@@ -471,6 +479,7 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
     pack = bool(int(_xp.get("pack", PACK_ACROSS_ENTRIES))) and packet_tiles <= slot_tiles
     dest_order = _xp.get("order", SEND_DEST_ORDER)
     batch_chunks = int(_xp.get("batch", max(1, PORT_BATCH_BYTES // packet_bytes)))
+    port_window = int(_xp.get("pinfl", min(15, max(1, -(-PORT_READ_INFLIGHT_BYTES // packet_bytes)))))
     tail_est = _xp.get("est", TAIL_SPLIT_ESTIMATE)
     tail_pick = _xp.get("pick", TAIL_SPLIT_HELPER_PICK)
     tail_max = (
@@ -910,6 +919,7 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
             Mq,
             CB_RETILE_STAGE,
             int(pack),
+            port_window,
         ]
         port_reader_ct += in_ct
         port_sender_ct = [CB_PORT_CHUNKS, in_tile, packet_tiles, batch_chunks, slot_tiles, MAX_PACKET_HEADERS]

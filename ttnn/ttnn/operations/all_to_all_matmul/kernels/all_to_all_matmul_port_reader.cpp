@@ -11,7 +11,7 @@
 // packet that straddles two entries simply holds the end of one and the start of the next.
 // Regime R1' (Mq % 32 != 0, compile-time `retile`): per image the quarter's source tile rows are staged in
 // cb_retile_stage (one DRAM barrier), then each destination tile is re-tiled into the packet page by core-local copies
-// (all_to_all_matmul_retile.hpp); the batch's single barrier before the push covers them.
+// (all_to_all_matmul_retile.hpp), tagged with the packet's transaction id: its barrier before the push covers them.
 
 #include <cstdint>
 
@@ -40,7 +40,13 @@ void kernel_main() {
     constexpr uint32_t cb_retile_stage = get_compile_time_arg_val(10);
     constexpr bool retile = (Mq % 32) != 0;
     constexpr bool pack = get_compile_time_arg_val(11) != 0;
-    constexpr auto in_args = TensorAccessorArgs<12>();
+    // Reads in flight: one packet = one read unit with its own NoC transaction id (1..window); up to `window` packets
+    // have their DRAM reads outstanding and the oldest is pushed as soon as its own reads land, so the reads stay
+    // queued at DRAM back to back instead of draining at a per-batch barrier (port_prefetch, Perf 2).
+    constexpr uint32_t window = get_compile_time_arg_val(12);
+    static_assert(window >= 1 && window <= 15, "port reader: 1..15 packets in flight (trids 1..15)");
+    constexpr uint32_t ring_pages = 2 * batch_chunks;  // cb_port_chunks
+    constexpr auto in_args = TensorAccessorArgs<13>();
     constexpr uint32_t quarter_tiles = Mq_t * Kt;
     constexpr uint32_t slot_tiles = B * quarter_tiles;
     using Walk = a2amm_stream::Walk<slot_tiles, packet_tiles, pack>;
@@ -66,7 +72,19 @@ void kernel_main() {
         r = 0;
         base = (j * St + qr.t0) * Kt;
     };
-    uint32_t pos = 0;  // packets pushed so far
+    uint32_t pos = 0;                                          // packets whose reads are issued
+    const uint32_t ring_base = get_write_ptr(cb_port_chunks);  // nothing pushed yet: the ring's first page
+    // packets whose reads are outstanding (pushed oldest first): trid slot of the oldest, count
+    uint32_t oldest = 0, pend = 0;
+    auto retire_oldest = [&]() {
+        {
+            A2AMM_ZONE("prd_barrier");  // the oldest packet's DRAM reads
+            noc_async_read_barrier_with_trid(1 + oldest);
+        }
+        cb_push_back(cb_port_chunks, 1);
+        oldest = (oldest + 1) % window;
+        --pend;
+    };
     for (uint32_t g0 = 0; g0 < n_entries;) {
         // group: entries [g0, g1) to one destination chip
         const uint32_t t_g = get_arg_val<uint32_t>(2 + g0) >> 16;
@@ -82,9 +100,17 @@ void kernel_main() {
         for (uint32_t c = 0; c < packets;) {
             const uint32_t room = batch_chunks - pos % batch_chunks;
             const uint32_t need = (packets - c) < room ? (packets - c) : room;
-            cb_reserve_back(cb_port_chunks, need);
-            uint32_t dst = get_write_ptr(cb_port_chunks);
+            uint32_t dst = ring_base + (pos % ring_pages) * packet_bytes;  // a batch never wraps the ring
             for (uint32_t i = 0; i < need; ++i) {
+                // the window is full, or the ring is (the sender may be waiting on an outstanding packet): push first
+                while (pend == window || (pend > 0 && !cb_pages_reservable_at_back(cb_port_chunks, pend + 1))) {
+                    retire_oldest();
+                }
+                {
+                    A2AMM_ZONE("prd_resv");                     // reader a whole ring ahead of the sender
+                    cb_reserve_back(cb_port_chunks, pend + 1);  // every outstanding packet + this one
+                }
+                noc_async_read_set_trid(1 + (oldest + pend) % window);
                 uint32_t n0, n1;
                 w.next(ng, n0, n1);
                 for (uint32_t tt = 0; tt < n0 + n1; ++tt) {
@@ -112,12 +138,15 @@ void kernel_main() {
                 }
                 w.advance(n0 + n1);
                 dst += (packet_tiles - (n0 + n1)) * tile_bytes;  // a short packet still owns a whole page
+                ++pend;
             }
-            noc_async_read_barrier();
-            cb_push_back(cb_port_chunks, need);
             pos += need;
             c += need;
         }
         g0 = g1;
     }
+    while (pend > 0) {
+        retire_oldest();
+    }
+    noc_async_read_set_trid(0);  // leave the read command buffer untagged
 }

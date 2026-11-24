@@ -1,0 +1,365 @@
+--- ttnn/ttnn/operations/all_to_all_matmul/all_to_all_matmul_program_descriptor.py	2026-11-24 20:45:36.085057580 +0000
++++ ttnn/ttnn/operations/all_to_all_matmul/all_to_all_matmul_program_descriptor.py	2026-11-24 21:55:53.868722018 +0000
+@@ -113,6 +113,21 @@
+ TAIL_MSPLIT_HEADS = 4
+ TAIL_MSPLIT_PIECES = 3
+ TAIL_MSPLIT_PREFETCH = 2
++# Weight-read NoC split (OVERLAP, landing_contention): (den, num) -> weight tile i of a block is read on the compute
++# writer's NoC when (i % den) < num; (0, 0) = every weight read on the reader's NoC (NoC1).
++WEIGHT_NOC_SPLIT = (0, 0)
++WEIGHT_NOC_GEO = "none"
++# Weight-read rate cap (OVERLAP, landing_contention): pre-landing weight chunks of a core start >= this many cycles
++# apart (0 = off).
++WEIGHT_CHUNK_GAP_CYCLES = 0
++WEIGHT_CAP_WINDOW_CYCLES = 40000
++# Head -> core placement: "split" = contiguous heads in row-major core order (split_work_to_cores); "landing" = the
++# assignment that minimises the landing writes' NoC1 row hops (_landing_place).
++HEAD_PLACEMENT = "split"
++# Weight reads' DRAM endpoint (0 = the accessor's, 1 = port 2 for every bank, 2 = port 0, 3 = port 2 for the row-1
++# banks only) and read-request VC (1 = NOC_UNICAST_WRITE_VC, the default).
++WEIGHT_DRAM_PORT = "off"
++WEIGHT_REQ_VC = 1
+ A_SLOT_BUDGET_BYTES = 384 * 1024  # predicate A_RESIDENT (regime R1; else R3, deferred)
+ MAX_HEADS_PER_CORE = 8  # global arrival semaphores per compute core
+ MAX_PACKET_HEADERS = 12  # packet header pool per data-movement RISC
+@@ -420,6 +435,59 @@
+     return out
+
+
++_LAND_GEO_CACHE = {}
++
++
++def _landing_place(mesh, chips, cluster_axis, num_links, cells, H, Hl):
++    """Head -> core map that shortens the router's landing writes (landing_contention experiment). The router writes a
++    landed packet into compute L1 on NoC1 (edm_to_local_chip_noc), which runs north along the receiving Ethernet
++    core's column, then WEST along the destination core's row; the compute cores' weight responses (NoC1: north along
++    the DRAM column, then west along the core's row) load the same row links. Cost of head h on core c = sum over the
++    chips that receive h of the westward row hops from the receiving Ethernet column to c's physical column (+0.05 x
++    the column hops as a tie-break). Same per-core head counts as _split_heads (min-cost assignment over capacity
++    copies). Returns [(core xy, [heads])] like _split_heads."""
++    import numpy as np
++    from scipy.optimize import linear_sum_assignment
++
++    _, _, (gx, gy) = _soc(mesh)
++    key = (id(mesh), cluster_axis, num_links, tuple(cells))
++    if key not in _LAND_GEO_CACHE:
++        ethx, physx = {}, {}
++        for coord, ch in chips.items():
++            eth_list, t2p = _chip_maps(mesh, coord)
++            for d, peer in ((FWD, ch["next"]), (BWD, ch["prev"])):
++                for l in range(num_links):
++                    ethx[(ch["p"], d, l)] = eth_list[_eth_channel(mesh, coord, peer, ch["links"][d][l])]
++            for c in cells:
++                v = mesh.worker_core_from_logical_core(ttnn.CoreCoord(*c))
++                physx[(ch["p"], c)] = (t2p.get(v.x, v.x), v.y)
++        _LAND_GEO_CACHE[key] = (mesh, ethx, physx)
++    _, ethx, physx = _LAND_GEO_CACHE[key]
++    pos = {ch["p"]: ch for ch in chips.values()}
++    G = len(pos)
++    cost = np.zeros((H, len(cells)))
++    for h in range(H):
++        s, j = h // Hl, h % Hl
++        for t in range(G):
++            if t == s:
++                continue
++            ex, ey = ethx[(t, 1 - pos[s]["route"][t], j % num_links)]
++            for ci, c in enumerate(cells):
++                cx, cy = physx[(t, c)]
++                cost[h, ci] += (ex - cx) % gx + 0.05 * ((ey - cy) % gy)
++    C = len(cells)
++    q, rem = divmod(H, C)
++    ncap = q + (1 if rem else 0)
++    cols = [ci for ci in range(C) for _ in range(ncap)]
++    big = 1e6
++    m = np.stack([cost[:, ci] - (big if k < q else 0.0) for ci in range(C) for k in range(ncap)], axis=1)
++    rows, cidx = linear_sum_assignment(m)
++    heads = {}
++    for h, k in zip(rows, cidx):
++        heads.setdefault(cells[cols[k]], []).append(int(h))
++    return [(c, sorted(heads[c])) for c in cells if c in heads]
++
++
+ def _hash(key):
+     return int.from_bytes(hashlib.sha1(key.encode()).digest()[:8], "little") >> 1
+
+@@ -486,6 +554,61 @@
+         rd_noc, wr_noc = wr_noc, rd_noc
+     assert rd_noc != wr_noc, "compute reader and writer share the NoC's transaction counters on one NoC"
+
++    # Weight-read NoC split (landing_contention experiment): tile i of a weight block goes on the writer's NoC when
++    # (i % wnoc_den) < wnoc_num (0 = off); "wgeo" picks whole slots by core geometry instead.
++    wnoc_den = int(_xp.get("wden", WEIGHT_NOC_SPLIT[0]))
++    wnoc_num = int(_xp.get("wnum", WEIGHT_NOC_SPLIT[1]))
++    wgeo = _xp.get("wgeo", WEIGHT_NOC_GEO)
++    wgap_cycles = int(_xp.get("wgap", WEIGHT_CHUNK_GAP_CYCLES))
++    wcap_window = int(_xp.get("wwin", WEIGHT_CAP_WINDOW_CYCLES))
++    # NoC1 coordinates are the mirror of the physical ones on Blackhole (DRAM not virtualised): physical row r -> y
++    # = grid_y - 1 - r. Row-1 endpoints (first channel of each DRAM column) -> the same channel's row-0 ("r0") or
++    # row-11 ("r11") endpoint.
++    _wport = _xp.get("wport", WEIGHT_DRAM_PORT)
++    if _wport == "off" or rd_noc != NOC1:
++        wdram_port = 0xFFFF
++    else:
++        _gy = _soc(mesh)[2][1]
++        wdram_port = (_gy - 1 - 1) | ((_gy - 1 - {"r0": 0, "r11": 11}[_wport]) << 8)
++    wreq_vc = int(_xp.get("wvc", WEIGHT_REQ_VC))
++
++    def wnoc_slot_other(coord, xy, h, wait):
++        if wgeo == "none":
++            return False
++        if wgeo == "local":  # heads whose rows are read from local DRAM (no landing on this core for this slot)
++            return not wait
++        v = mesh.worker_core_from_logical_core(ttnn.CoreCoord(*xy))
++        if wgeo == "east":  # cores east of the middle DRAM column
++            return v.x > 9
++        if wgeo == "west":
++            return v.x < 9
++        if wgeo == "even":
++            return (xy[0] + xy[1]) % 2 == 0
++        raise ValueError(wgeo)
++
++    _wskip = _xp.get("wskip", "")
++
++    def core_east(coord, xy):
++        t2p = _chip_maps(mesh, coord)[1]
++        v = mesh.worker_core_from_logical_core(ttnn.CoreCoord(*xy))
++        return t2p.get(v.x, v.x) > 9
++
++    def wskip_slot(coord, xy):
++        """Measurement hook: stub the weight reads of the cores in a physical region ("east"/"west" of x = 9, "rowsN-M")."""
++        if not _wskip:
++            return False
++        t2p = _chip_maps(mesh, coord)[1]
++        v = mesh.worker_core_from_logical_core(ttnn.CoreCoord(*xy))
++        px, py = t2p.get(v.x, v.x), v.y
++        if _wskip == "east":
++            return px > 9
++        if _wskip == "west":
++            return px < 9
++        if _wskip.startswith("rows"):
++            a, b = (int(v_) for v_ in _wskip[4:].split("-"))
++            return a <= py <= b
++        raise ValueError(_wskip)
++
+     def _dest_key(p, t, G_):
+         hops = min((t - p) % G_, (p - t) % G_)
+         return {"near": (hops, t), "far": (-hops, t), "legacy": ((t - p) % G_, t)}[dest_order]
+@@ -507,7 +630,10 @@
+     grid = mesh.compute_with_storage_grid_size()
+     port_cells = {xy for ch in chips.values() for xy in ch["ports"].values()}
+     compute_cells_list = [(x, y) for y in range(grid.y) for x in range(grid.x) if (x, y) not in port_cells]
+-    assign = _split_heads(compute_cells_list, H)  # [(core xy, [heads])], same on every chip
++    if _xp.get("place", HEAD_PLACEMENT) == "landing":
++        assign = _landing_place(mesh, chips, cluster_axis, L, compute_cells_list, H, Hl)
++    else:
++        assign = _split_heads(compute_cells_list, H)  # [(core xy, [heads])], same on every chip
+     core_of = {h: xy for xy, hs in assign for h in hs}
+     heads_of = {xy: hs for xy, hs in assign}
+
+@@ -758,7 +884,7 @@
+     for coord, ch in chips.items():
+         q = ch["p"]
+         program = ttnn.ProgramDescriptor()
+-        program.custom_program_hash = _hash(f"all_to_all_matmul|{cfg_key}|{coord}")
++        program.custom_program_hash = _hash(f"all_to_all_matmul|{KERNEL_DIR}|{cfg_key}|{coord}")
+
+         # ---- CBs ----
+         port_crs = _rects(set(ch["ports"].values()))
+@@ -808,6 +934,10 @@
+                 # paced weight start of a core's first slot (later slots follow the previous one's work)
+                 pace = int(w_pace * landing_share(coord, h)) if (not rd and nb0 == 0) else 0
+                 pre = max(1, min(weight_depth, ms_pre)) if piece >= 0 else w_prefetch
++                assert pace < (1 << 29)
++                pace |= int(core_east(coord, xy)) << 29
++                pace |= int(wnoc_slot_other(coord, xy, h, wait)) << 31  # weights of this slot on the other NoC
++                pace |= int(wskip_slot(coord, xy)) << 30  # measurement only: stub this slot's weight reads
+                 rd += [h | (int(wait) << 16) | (pre << 24), nbw] + fwd + [pace]
+                 cp += [nbw]
+                 wr += [h, nbw]
+@@ -816,7 +946,7 @@
+             compute_rt[xy[0]][xy[1]] = [n] + cp
+             writer_rt[xy[0]][xy[1]] = [n] + wr
+         reader_ct = [CB_A_LANDED, CB_WEIGHT, Kt, Nt, block_n, num_n_blocks, B, Mq_t, St, Hl, in_tile, w_tile]
+-        reader_ct += [Mq, CB_RETILE_STAGE, weight_chunk_tiles, w_prefetch]
++        reader_ct += [Mq, CB_RETILE_STAGE, weight_chunk_tiles, w_prefetch, wnoc_den, wnoc_num, wgap_cycles, wcap_window, wdram_port, wreq_vc]
+         reader_ct += in_ct + w_ct
+         compute_ct = [CB_A_LANDED, CB_WEIGHT, CB_OUT, block_m, Kt, block_n, num_n_blocks, sbh, sbw]
+         writer_ct = [CB_OUT, in_tile, block_m, Mq_t, Nt, block_n, num_n_blocks, sbh, H, out_chunk_tiles] + out_ct
+--- ttnn/ttnn/operations/all_to_all_matmul/kernels/all_to_all_matmul_reader.cpp	2026-11-24 20:45:36.640131824 +0000
++++ ttnn/ttnn/operations/all_to_all_matmul/kernels/all_to_all_matmul_reader.cpp	2026-11-24 21:55:53.868540731 +0000
+@@ -58,8 +58,38 @@
+     // Weight blocks of a slot read before its landing wait (<= cb_weight depth): the rest follow the landing.
+     constexpr uint32_t w_prefetch_blocks = get_compile_time_arg_val(15);
+     static_assert(w_prefetch_blocks >= 1, "w_prefetch_blocks >= 1");
++    // Weight-read NoC split (OVERLAP, landing_contention): the fabric router writes the landing rows into compute
++    // L1 on NoC1 (edm_to_local_chip_noc) and the port senders reach the router on NoC1, so weight responses on NoC1
++    // share the row links with the landing path. Weight tile i of a block goes on the OTHER NoC (the writer's) when
++    // (i % wnoc_den) < wnoc_num; wnoc_den = 0 keeps every weight read on this kernel's NoC. A slot whose pace word has
++    // bit 31 set reads all of its weights on the other NoC. Only READS go on the other NoC: the writer issues only
++    // writes there, so the two RISCs never share a transaction counter (read-response counter vs write counters).
++    constexpr uint32_t wnoc_den = get_compile_time_arg_val(16);
++    constexpr uint32_t wnoc_num = get_compile_time_arg_val(17);
++    // Weight-read rate cap (OVERLAP, landing_contention): the weight chunks a core reads while the exchange is still
++    // landing (every block of a local slot, the pre-landing blocks of a remote slot) start at least wgap_cycles apart
++    // (a schedule from the kernel start: a late chunk does not push the later ones back). The ~25 us weight burst at
++    // DRAM peak loads the NoC1 rows that the router's landing writes also cross; spread over the exchange, the same
++    // bytes load those rows less. Post-landing blocks of a remote slot (on the tail) are never capped. 0 = off.
++    // The cap holds only for chunks scheduled within the first wcap_window cycles of the kernel (cores with many
++    // pre-landing chunks, e.g. a local head + tail helper slots, would otherwise be stretched past the exchange).
++    constexpr uint32_t wgap_cycles = get_compile_time_arg_val(18);
++    constexpr uint32_t wcap_window = get_compile_time_arg_val(19);
++    // DRAM endpoint of the weight reads (OVERLAP, landing_contention). Every Blackhole DRAM channel has 3 NoC
++    // endpoints in one DRAM column; the NoC1 endpoint the bank table picks for the first channel of each column sits on
++    // physical row 1, the Ethernet row. NoC1 routes north then west, so read requests to those two channels run west
++    // along row 1, which the port senders' writes to their router and the routers' 2-hop forwarding also cross; with
++    // DRAM saturated by the weight reads, the requests back up there. wdram_ytrig / wdram_yalt (NoC1 coordinates, from
++    // the host; 0xFF = off): a weight read whose endpoint y is wdram_ytrig goes to the same channel's endpoint at
++    // wdram_yalt instead (same memory, another endpoint of the same DRAM tile).
++    constexpr uint32_t wdram_port = get_compile_time_arg_val(20);  // (ytrig | yalt << 8), 0xFFFF = off
++    constexpr uint32_t wdram_ytrig = wdram_port & 0xFF, wdram_yalt = (wdram_port >> 8) & 0xFF;
++    // Static VC of this RISC's read REQUESTS on its NoC (the port senders' writes use NOC_UNICAST_WRITE_VC = 1). In
++    // dedicated-NoC mode the read command buffer's VC is preset by firmware (noc_init), so it is set here and restored
++    // at the end.
++    constexpr uint32_t wreq_vc = get_compile_time_arg_val(21);
+     constexpr bool retile = (Mq % 32) != 0;
+-    constexpr auto in_args = TensorAccessorArgs<16>();
++    constexpr auto in_args = TensorAccessorArgs<22>();
+     constexpr auto w_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
+     constexpr uint32_t quarter_tiles = Mq_t * Kt;       // one batch's rows of one head quarter
+     constexpr uint32_t slot_tiles = B * quarter_tiles;  // = block_m * Kt
+@@ -79,7 +109,52 @@
+     const auto in = TensorAccessor(in_args, in_addr, in_tile_bytes);
+     const auto w = TensorAccessor(w_args, w_addr, w_tile_bytes);
+
+-    auto load_weight_block = [&](uint32_t h, uint32_t nb) {
++    auto set_rd_vc = [](uint32_t vc) {
++        NOC_CMD_BUF_WRITE_REG(
++            noc_index,
++            read_cmd_buf,
++            NOC_CTRL,
++            NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc));
++    };
++    if constexpr (wreq_vc != NOC_UNICAST_WRITE_VC) {
++        set_rd_vc(wreq_vc);
++    }
++    constexpr uint8_t other_noc = 1 - noc_index;
++    // This RISC's software read counter of the other NoC starts from the NIU's count (firmware inits only noc_index).
++    noc_reads_num_issued[other_noc] = NOC_STATUS_READ_REG(other_noc, NIU_MST_RD_RESP_RECEIVED);
++    bool slot_other = false;  // this slot's weights all on the other NoC (pace word bit 31)
++    bool slot_skip = false;   // measurement only: this slot's weight reads are stubbed (pace word bit 30)
++    bool core_east = false;   // this core sits east of the middle DRAM column (pace word bit 29)
++    auto wnoc_of = [&](uint32_t i) -> uint8_t {
++        if (slot_other) {
++            return other_noc;
++        }
++        if constexpr (wnoc_den > 0 && wnoc_den != 255) {
++            return (i % wnoc_den) < wnoc_num ? other_noc : noc_index;
++        }
++        return noc_index;
++    };
++    auto w_barrier = [&]() {
++        noc_async_read_barrier(noc_index);
++        if (slot_other || wnoc_den > 0) {
++            noc_async_read_barrier(other_noc);
++        }
++    };
++
++    volatile tt_reg_ptr uint32_t* wall_clock = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
++    const uint32_t cap_start = wall_clock[0];
++    uint32_t next_chunk_at = cap_start;
++    auto cap_rate = [&](bool capped) {
++        if constexpr (wgap_cycles > 0) {
++            if (capped && next_chunk_at - cap_start < wcap_window) {
++                while (static_cast<int32_t>(wall_clock[0] - next_chunk_at) < 0) {
++                }
++                next_chunk_at += wgap_cycles;
++            }
++        }
++    };
++
++    auto load_weight_block = [&](uint32_t h, uint32_t nb, bool capped) {
+         cb_reserve_back(cb_weight, weight_block_tiles);
+         const uint32_t wbase = get_write_ptr(cb_weight);
+         const uint32_t page0 = h * Kt * Nt + nb * block_n;
+@@ -88,12 +163,35 @@
+         uint32_t t = h % weight_block_tiles;
+         uint32_t k = t / block_n, n = t - k * block_n;
+         for (uint32_t i = 0; i < weight_block_tiles; ++i) {
++            if (i % weight_chunk_tiles == 0) {
++                cap_rate(capped);
++            }
+ #ifndef ABLATE_NOWEIGHT
+-            noc_async_read(w.get_noc_addr(page0 + k * Nt + n), wbase + (k * block_n + n) * w_tile_bytes, w_tile_bytes);
++            if (!slot_skip) {
++                const uint32_t page = page0 + k * Nt + n;
++                uint8_t wn = wnoc_of(i);
++                if constexpr (wnoc_den == 255) {
++                    // Nearest-direction NoC per (core, DRAM column): NoC0 runs east from the DRAM column, NoC1 runs
++                    // west from it, so the response never crosses the other DRAM column / the far half of the row.
++                    const uint32_t dram_x =
++                        static_cast<uint32_t>(w.get_noc_addr(page, 0, 0) >> NOC_ADDR_LOCAL_BITS) &
++                        ((1u << NOC_ADDR_NODE_ID_BITS) - 1);
++                    wn = ((dram_x != 0) == core_east) ? 0 : 1;
++                }
++                uint64_t src = w.get_noc_addr(page, 0, wn);
++                if constexpr (wdram_ytrig != 0xFF) {
++                    constexpr uint32_t y_shift = NOC_ADDR_LOCAL_BITS + NOC_ADDR_NODE_ID_BITS;
++                    constexpr uint64_t y_mask = static_cast<uint64_t>((1u << NOC_ADDR_NODE_ID_BITS) - 1) << y_shift;
++                    if (wn == 1 && ((src & y_mask) >> y_shift) == wdram_ytrig) {
++                        src = (src & ~y_mask) | (static_cast<uint64_t>(wdram_yalt) << y_shift);
++                    }
++                }
++                noc_async_read(src, wbase + (k * block_n + n) * w_tile_bytes, w_tile_bytes, wn, wreq_vc);
++            }
+ #endif
+             if constexpr (weight_chunk_tiles < weight_block_tiles) {
+                 if ((i + 1) % weight_chunk_tiles == 0) {
+-                    noc_async_read_barrier();
++                    w_barrier();
+                 }
+             }
+             if (++n == block_n) {
+@@ -103,7 +201,7 @@
+                 }
+             }
+         }
+-        noc_async_read_barrier();
++        w_barrier();
+         cb_push_back(cb_weight, weight_block_tiles);
+     };
+
+@@ -117,7 +215,11 @@
+         const uint32_t nb0 = nbw & 0xFF, nb1 = (nbw >> 8) & 0xFF;  // this core's n-blocks of the head
+         const bool forward = get_arg_val<uint32_t>(rec + 2) != 0;
+
+-        const uint32_t pace = get_arg_val<uint32_t>(rec + 7);
++        const uint32_t pace_word = get_arg_val<uint32_t>(rec + 7);
++        slot_other = (pace_word >> 31) != 0;
++        slot_skip = ((pace_word >> 30) & 1) != 0;
++        core_east = ((pace_word >> 29) & 1) != 0;
++        const uint32_t pace = pace_word & 0x1FFFFFFF;
+         if (pace != 0) {
+             riscv_wait(pace);  // paced weight start (spreads the cores' weight bursts over the exchange)
+         }
+@@ -126,7 +228,7 @@
+         {
+             A2AMM_ZONE("rd_w0");
+             for (uint32_t nb = nb0; nb < nb_pre; ++nb) {
+-                load_weight_block(h, nb);
++                load_weight_block(h, nb, true);
+             }
+         }
+
+@@ -176,8 +278,11 @@
+         }
+
+         for (uint32_t nb = nb_pre; nb < nb1; ++nb) {
+-            load_weight_block(h, nb);
++            load_weight_block(h, nb, !remote);
+         }
+     }
+     noc_async_atomic_barrier();
++    if constexpr (wreq_vc != NOC_UNICAST_WRITE_VC) {
++        set_rd_vc(NOC_UNICAST_WRITE_VC);
++    }
+ }
