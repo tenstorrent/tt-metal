@@ -60,10 +60,8 @@ PROMOTE_GATE = os.environ.get("RESIDENT_ADAPTIVE_PROMOTE_GATE", "1") == "1"
 PROMOTE_ACC = float(os.environ.get("RESIDENT_ADAPTIVE_PROMOTE_ACC", "2.7"))
 PROMOTE_OUT = float(os.environ.get("RESIDENT_ADAPTIVE_PROMOTE_OUT", "256"))
 REFILL_MS_FIXED, REFILL_MS_PER_TOKEN = 20.0, 0.13  # (defaults: tests/refill_batch.py, 2026-11-23)
-SPEC_MS_DEFAULT = lambda n: 30.0 + 2.9 * (n - 1)  # noqa: E731  (steady served verify steps, drafter included,
-# 2026-11-24 results/20261124-spec-breakdown: 30 / 38 / 48-53 ms at 1 / 4 / 8 users; the ~60 ms seen at 8 users
-# before were steps across arrivals' prefills and promotions' fills, now unsampled. Break-even acceptance at 1 / 4 / 8
-# users ~1.9 / 2.3 / 2.6 tokens a verify: natural text (~3) pays at 8, random-token prompts (~1.4-2.5) do not)
+SPEC_MS_DEFAULT = lambda n: 28.0 + 4.6 * (n - 1)  # noqa: E731  (served verify steps, rc-20261124j: 1 / 2 / 4 / 8
+# users ~29 / 35 / 41 / 60 ms; 52.5 at 8 users let the gate promote 8 users before any 8-user step was measured)
 # step times grow with the live users' total context (attention reads every row's KV): the estimates above are kept
 # per live count at no context (a measured step's time minus its context's share, these ms per context token) and the
 # decisions add the current context's share — a 250K request's ~44 ms verify steps kept as the 1-user estimate closed
@@ -267,8 +265,6 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
             h.append(int(tok))
 
     def _to_plain_all(self, acc_of=None):
-        if self.spec_of:
-            self._pay["skip"] = True  # (the moves' time is in this step: no step-time sample)
         for r, u in sorted(self.spec_of.items()):
             acc = (acc_of or {}).get(r, self.last_acc.get(r, 1))
             self.ae.move_to_plain(u, r, self.tables[r], acc)
@@ -413,7 +409,6 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         quick = {j for j, _, _, h in items if taps_usable(taps.get(j), len(h) - 1, window)}
         toks = sum(min(len(h) - 1, window) for j, _, _, h in items if j not in quick)
         self.ae.move_to_spec_many(items, taps=taps)  # (P2d fills, then one batched refill for the others)
-        self._pay["skip"] = True  # (the fills' device time outlasts the call: the next step gives no time sample)
         dt = time.perf_counter() - t0
         self._pay["excl"] += dt
         if toks:  # (the PP-pass refills' ms per token; the P2d fills' share taken out)
