@@ -93,11 +93,8 @@ FORCE_INLINE void follow_context_switch() {
     }
 }
 
-// The other ERISC's check within a round. The master's RETRAIN_INTENT waits for the other ERISC's ack, which it gives
-// in end_round, so with long rounds (512 passes on Blackhole compute routers) the master's channels stalled for up to
-// one of the other ERISC's rounds at every switch. The other ERISC checks every FOLLOW_POLL_PASSES passes and, on
-// RETRAIN_INTENT, ends its round early: end_round acks, and whatever the loop does after a switch runs as after any
-// switch. The check is one stream register read.
+// We need to check for context switch within the middle of our inner loop to avoid long stalls while erisc0 waits for
+// erisc1.
 constexpr size_t FOLLOW_POLL_PASSES = 32;
 constexpr bool follows_within_round = !is_context_switch_master && NUM_ACTIVE_ERISCS > 1;
 

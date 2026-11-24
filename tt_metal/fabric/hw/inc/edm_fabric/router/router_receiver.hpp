@@ -810,7 +810,7 @@ __attribute__((noinline)) void run(DownstreamConnections& downstreams) {
                     pass(loop_copy, credit_frame_due, states, credits, downstreams, my_chip);
                 }
                 if (context_switch_requested()) [[unlikely]] {
-                    break;  // end the round: end_round acks the switch
+                    break;
                 }
             }
         } else {
