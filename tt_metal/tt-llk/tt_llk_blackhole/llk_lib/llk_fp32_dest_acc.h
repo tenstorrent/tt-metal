@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// HAL port of tt_llk_blackhole/llk_lib/llk_fp32_dest_acc.h. Same Tensix instruction sequence as production.
+
 #pragma once
 
 #include <cstdint>
@@ -10,6 +12,7 @@
 #include "ckernel_defs.h"
 #include "ckernel_instr_params.h"
 #include "ckernel_ops.h"
+#include "hal/cfg.h"
 #include "llk_assert.h"
 
 using namespace ckernel;
@@ -43,35 +46,38 @@ inline void _llk_set_fp32_dest_acc_(const bool enable)
 {
     static_assert(IS_TRISC_THREAD<thread_id>, "_llk_set_fp32_dest_acc_ requires a TRISC thread");
 
-    tensix_sync();
+    tensix_sync(); // HAL-GAP: no public HAL API for the PC-buffer tensix_sync() RISC fence
     LLK_ASSERT_BLOCK(llk_assert_fp32_dest_acc_en = enable);
 
     if constexpr (thread_id == ThreadId::UnpackThreadId)
     {
-        mailbox_write(ThreadId::MathThreadId, fp32_dest_acc::UNPACK_READY);
+        mailbox_write(ThreadId::MathThreadId, fp32_dest_acc::UNPACK_READY); // HAL-GAP: no HAL API for the thread mailbox
         const std::uint32_t math_done = mailbox_read(ThreadId::MathThreadId);
         LLK_ASSERT(math_done == fp32_dest_acc::MATH_DONE, "Unexpected dest-acc message from math thread.");
     }
     else if constexpr (thread_id == ThreadId::PackThreadId)
     {
-        mailbox_write(ThreadId::MathThreadId, fp32_dest_acc::PACK_READY);
+        mailbox_write(ThreadId::MathThreadId, fp32_dest_acc::PACK_READY); // HAL-GAP: no HAL API for the thread mailbox
         const std::uint32_t math_done = mailbox_read(ThreadId::MathThreadId);
         LLK_ASSERT(math_done == fp32_dest_acc::MATH_DONE, "Unexpected dest-acc message from math thread.");
     }
     else
     {
+        // HAL-GAP: no HAL API for the thread mailbox (mailbox_read/mailbox_write below)
         const std::uint32_t unpack_ready = mailbox_read(ThreadId::UnpackThreadId);
         const std::uint32_t pack_ready   = mailbox_read(ThreadId::PackThreadId);
         LLK_ASSERT(unpack_ready == fp32_dest_acc::UNPACK_READY, "Unexpected dest-acc message from unpack thread.");
         LLK_ASSERT(pack_ready == fp32_dest_acc::PACK_READY, "Unexpected dest-acc message from pack thread.");
 
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(enable);
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(enable);
-        cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_RMW>(enable);
+        namespace cfg = hal::cfg;
+        // Fp32_enabled and SFPU_Fp32_enabled share ALU_ACC_CTRL byte 3 (production: two RMWs).
+        cfg::write<cfg::Access::TensixCfgUnit>(
+            cfg::set<cfg::AluAccCtrl::Fp32_enabled, cfg::Sec::S0>(enable), cfg::set<cfg::AluAccCtrl::SFPU_Fp32_enabled, cfg::Sec::S0>(enable));
+        cfg::write<cfg::Access::TensixCfgUnit, cfg::PckDestRdCtrl::Read_32b_data, cfg::Sec::S0>(enable);
 
         // The releases below are RISC stores, which the Wait Gate does not gate. Drain so the
         // config writes have retired before either thread is let go.
-        tensix_sync();
+        tensix_sync(); // HAL-GAP: no public HAL API for the PC-buffer tensix_sync() RISC fence
 
         mailbox_write(ThreadId::UnpackThreadId, fp32_dest_acc::MATH_DONE);
         mailbox_write(ThreadId::PackThreadId, fp32_dest_acc::MATH_DONE);

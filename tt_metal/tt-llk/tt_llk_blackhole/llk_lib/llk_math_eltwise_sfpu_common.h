@@ -2,33 +2,72 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// HAL port of tt_llk_blackhole/llk_lib/llk_math_eltwise_sfpu_common.h, ported except SFPU. Same Tensix instruction
+// sequence as production. Also holds the ADDR_MOD helper shared by the SFPU wrapper headers.
+
 #pragma once
 #include <cstdint>
 #include <utility>
 
 #include "ckernel_ops.h"
 #include "ckernel_sfpu.h"
+#include "hal/cfg.h"
+#include "hal/sync.h"
 #include "llk_assert.h"
 #include "llk_math_common.h"
 #include "llk_sfpu_types.h"
 
 using namespace ckernel;
 
+namespace hal_port
+{
+
+// addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = dest_incr}}.set(slot): three SETC16 words
+// (SrcA|SrcB, Dest|Fidelity, Bias), each fully specified.
+template <cfg::Sec S, std::uint32_t dest_incr>
+inline void set_sfpu_addr_mod()
+{
+    cfg::write<cfg::Access::TensixCfgUnit>(
+        cfg::set<cfg::AddrMod[cfg::SrcA].Incr, S, 0>(),
+        cfg::set<cfg::AddrMod[cfg::SrcA].CR, S, 0>(),
+        cfg::set<cfg::AddrMod[cfg::SrcA].Clear, S, 0>(),
+        cfg::set<cfg::AddrMod[cfg::SrcB].Incr, S, 0>(),
+        cfg::set<cfg::AddrMod[cfg::SrcB].CR, S, 0>(),
+        cfg::set<cfg::AddrMod[cfg::SrcB].Clear, S, 0>());
+    cfg::write<cfg::Access::TensixCfgUnit>(
+        cfg::set<cfg::AddrMod[cfg::Dest].Incr, S, dest_incr>(),
+        cfg::set<cfg::AddrMod[cfg::Dest].CR, S, 0>(),
+        cfg::set<cfg::AddrMod[cfg::Dest].Clear, S, 0>(),
+        cfg::set<cfg::AddrMod[cfg::Dest].CToCR, S, 0>(),
+        cfg::set<cfg::AddrMod[cfg::Fidelity].Incr, S, 0>(),
+        cfg::set<cfg::AddrMod[cfg::Fidelity].Clear, S, 0>());
+    cfg::write<cfg::Access::TensixCfgUnit>(cfg::set<cfg::AddrMod[cfg::Bias].Incr, S, 0>(), cfg::set<cfg::AddrMod[cfg::Bias].Clear, S, 0>());
+}
+
+// math::inc_dst_addr<8>(): TTI_SETRWC(CLR_NONE, CR_D, 8, 0, 0, SET_D).
+inline void inc_dst_addr_8()
+{
+    // HAL-GAP: rwc::set plans a lone Dest AdvanceAndReset as INCRWC; no way to request the SETRWC(CR_D, 8, SET_D) encoding
+    ckernel::math::inc_dst_addr<8>();
+}
+
+} // namespace hal_port
+
 inline void _llk_math_eltwise_sfpu_start_(const std::uint32_t dst_index)
 {
-    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
-    TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
+    hal_port::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
+    hal::sync::wait::stall<hal::sync::StallTarget::Sfpu, hal::sync::StallCondition::MathIdle>();
 }
 
 inline void _llk_math_eltwise_sfpu_done_()
 {
-    math::clear_dst_reg_addr();
+    hal_port::clear_dst_reg_addr();
 }
 
 inline void _llk_math_eltwise_sfpu_inc_dst_face_addr_()
 {
-    math::inc_dst_addr<8>();
-    math::inc_dst_addr<8>();
+    hal_port::inc_dst_addr_8();
+    hal_port::inc_dst_addr_8();
 }
 
 inline void _llk_math_eltwise_sfpu_uninit_()

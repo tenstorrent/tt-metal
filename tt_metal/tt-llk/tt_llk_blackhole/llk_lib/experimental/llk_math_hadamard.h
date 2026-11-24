@@ -30,6 +30,9 @@
 // capture x at full bf16 precision. See _configure_addrmod_ for the
 // fidelity-phase derivation.
 
+// HAL port of tt_llk_blackhole/llk_lib/experimental/llk_math_hadamard.h: ported except SFPU (the SFP* instructions and
+// the sfpu:: config helpers stay as production has them). Same instruction sequence and access kinds as production.
+
 #pragma once
 
 #include <cstdint>
@@ -38,9 +41,14 @@
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
 #include "cmath_common.h"
+#include "hal/cfg.h"
+#include "hal/fpu.h"
+#include "hal/move.h"
+#include "hal/sync.h"
 #include "llk_assert.h"
 #include "llk_defs.h"
 #include "llk_math_common.h"
+#include "llk_math_eltwise_binary.h" // hal_port::set_math_addr_mod / MathAddrMod
 #include "sfpu/ckernel_sfpu_load_config.h"
 
 using namespace ckernel;
@@ -69,38 +77,17 @@ using namespace ckernel;
 template <MathFidelity math_fidelity = MathFidelity::HiFi4>
 inline void _llk_math_hadamard_h128_configure_addrmod_()
 {
-    addr_mod_t {
-        .srca = {.incr = 0, .clr = 0, .cr = 0},
-        .srcb = {.incr = 0, .clr = 0, .cr = 0},
-        .dest = {.incr = 0, .clr = 0, .cr = 0},
-    }
-        .set(ADDR_MOD_7);
+    namespace cfg = hal::cfg;
+    using hal_port::MathAddrMod;
+    using hal_port::set_math_addr_mod;
+
+    set_math_addr_mod<cfg::Sec::S7, MathAddrMod {}>(); // ADDR_MOD_7
 
     if constexpr (is_high_fidelity(math_fidelity))
     {
-        addr_mod_t {
-            .srca     = {.incr = 0, .clr = 0, .cr = 0},
-            .srcb     = {.incr = 0, .clr = 0, .cr = 0},
-            .dest     = {.incr = 0, .clr = 0, .cr = 0},
-            .fidelity = {.incr = 1, .clr = 0},
-        }
-            .set(ADDR_MOD_0);
-
-        addr_mod_t {
-            .srca     = {.incr = 0, .clr = 0, .cr = 0},
-            .srcb     = {.incr = 0, .clr = 0, .cr = 0},
-            .dest     = {.incr = 0, .clr = 0, .cr = 0},
-            .fidelity = {.incr = 2, .clr = 0},
-        }
-            .set(ADDR_MOD_1);
-
-        addr_mod_t {
-            .srca     = {.incr = 0, .clr = 0, .cr = 0},
-            .srcb     = {.incr = 0, .clr = 0, .cr = 0},
-            .dest     = {.incr = 0, .clr = 0, .cr = 0},
-            .fidelity = {.incr = 0, .clr = 1},
-        }
-            .set(ADDR_MOD_2);
+        set_math_addr_mod<cfg::Sec::S0, MathAddrMod {.fid_incr = 1}>(); // ADDR_MOD_0
+        set_math_addr_mod<cfg::Sec::S1, MathAddrMod {.fid_incr = 2}>(); // ADDR_MOD_1
+        set_math_addr_mod<cfg::Sec::S2, MathAddrMod {.fid_clr = 1}>();  // ADDR_MOD_2
     }
 }
 
@@ -133,14 +120,19 @@ inline void _llk_math_hadamard_h128_init_()
 template <MathFidelity math_fidelity = MathFidelity::HiFi4, bool normalize = true>
 inline void _llk_math_hadamard_h128_(std::uint32_t dst_index)
 {
+    namespace fpu  = hal::fpu;
+    namespace move = hal::move;
+    namespace sync = hal::sync;
+    using fpu::MatrixMultiply;
+    using fpu::SourceRelease;
     constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
 
     // dst row 16 = face 1 (MM1 target), row 0 = face 0 (MM2 target).
 
     // Position dst and zero the rwc (incl. the fidelity phase — SET_ABD_F
     // covers F) so the body addresses dst starting at phase 0.
-    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
-    math::reset_counters(p_setrwc::SET_ABD_F);
+    hal_port::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
+    hal_port::reset_counters_abd_f(); // math::reset_counters(p_setrwc::SET_ABD_F)
 
     // MM1: dst.face1[0..7] = srcB * srcA = H_16 * X_pad = (H_16 X_pad)[0..7].
     // HiFi adds phase 1 (see _configure_addrmod_). The final MVMUL carries
@@ -148,28 +140,31 @@ inline void _llk_math_hadamard_h128_(std::uint32_t dst_index)
     // phase-2 unpack) for MM2. srcB is left valid (FPU keeps ownership).
     if constexpr (high_fidelity)
     {
-        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 16);
-        TTI_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_2, 16);
+        // TTI_MVMUL(CLR_NONE, 0, ADDR_MOD_0, 16); TTI_MVMUL(CLR_A, 0, ADDR_MOD_2, 16)
+        fpu::run<MatrixMultiply {.address_modifier = ADDR_MOD_0, .dest_row_offset = 16, .release = SourceRelease::None}>();
+        fpu::run<MatrixMultiply {.address_modifier = ADDR_MOD_2, .dest_row_offset = 16, .release = SourceRelease::SrcA}>();
     }
     else
     {
-        TTI_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_7, 16);
+        // TTI_MVMUL(CLR_A, 0, ADDR_MOD_7, 16)
+        fpu::run<MatrixMultiply {.address_modifier = ADDR_MOD_7, .dest_row_offset = 16, .release = SourceRelease::SrcA}>();
     }
 
     // Drain MM1's dst writeback before MOVD2B reads dst: MVMUL writes dst
     // on the FPU pipe, MOVD2B reads it on the MOV pipe, which doesn't
     // auto-track the hazard. Without it MOVD2B races ahead and reads
     // pre-MM1 dst (PCC failures that vanish when DPRINTs throttle math).
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH);
+    sync::wait::stall<sync::StallTarget::Math, sync::StallCondition::MathIdle>();
 
     // MOVD2B: dst.face1 rows 16..23 (= (H_16 X_pad)[0..7]) -> srcB rows 0..7,
     // overwriting H_16[0..7] in the FPU-owned srcB bank. srcB rows 8..15
     // keep H_16; MM2 reads only rows 0..7, so the residue is harmless.
-    TTI_MOVD2B(0, 0, ADDR_MOD_7, p_movd2b::MOV_4_ROWS, 16);
-    TTI_MOVD2B(0, 4, ADDR_MOD_7, p_movd2b::MOV_4_ROWS, 20);
+    // TTI_MOVD2B(0, 0, ADDR_MOD_7, MOV_4_ROWS, 16); TTI_MOVD2B(0, 4, ADDR_MOD_7, MOV_4_ROWS, 20)
+    move::run<move::Transfer<move::Dst, move::SrcB> {.source_row = 16, .destination_row = 0, .address_mode = ADDR_MOD_7, .number_of_rows = move::rows::Four}>();
+    move::run<move::Transfer<move::Dst, move::SrcB> {.source_row = 20, .destination_row = 4, .address_mode = ADDR_MOD_7, .number_of_rows = move::rows::Four}>();
 
     // Wait for MOVD2B to complete
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH);
+    sync::wait::stall<sync::StallTarget::Math, sync::StallCondition::MathIdle>();
 
     // MM2: dst.face0[0..7] = srcB * srcA = (H_16 X_pad)[0..7] * H_16
     //                = H_128 x reshape (8, 16). srcA = H_16 (bank 1),
@@ -180,19 +175,21 @@ inline void _llk_math_hadamard_h128_(std::uint32_t dst_index)
     // persist across invocations and the next unpack deadlocks.
     if constexpr (high_fidelity)
     {
-        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
-        TTI_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_2, 0);
+        // TTI_MVMUL(CLR_NONE, 0, ADDR_MOD_1, 0); TTI_MVMUL(CLR_AB, 0, ADDR_MOD_2, 0)
+        fpu::run<MatrixMultiply {.address_modifier = ADDR_MOD_1, .dest_row_offset = 0, .release = SourceRelease::None}>();
+        fpu::run<MatrixMultiply {.address_modifier = ADDR_MOD_2, .dest_row_offset = 0, .release = SourceRelease::Both}>();
     }
     else
     {
-        TTI_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_7, 0);
+        // TTI_MVMUL(CLR_AB, 0, ADDR_MOD_7, 0)
+        fpu::run<MatrixMultiply {.address_modifier = ADDR_MOD_7, .dest_row_offset = 0, .release = SourceRelease::Both}>();
     }
 
     // Normalize: dst[0..7] *= kH128NormScale (LREG12 = 1/sqrt(128)).
     if constexpr (normalize)
     {
         // FPU->SFPU dst hazard: drain MM2's writeback before SFPU reads dst.
-        TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
+        sync::wait::stall<sync::StallTarget::Sfpu, sync::StallCondition::MathIdle>();
 
         // FP16B mode converts bfloat16 <-> float32 on load/store;
         // SFPMUL(A, B, LCONST_0, D) computes D = A*B. Issuing all 4 loads

@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// HAL port of tt_llk_blackhole/llk_lib/experimental/llk_pack_fast_untilize.h. Same Tensix instruction sequence and
+// access kinds as production, expressed through the HAL, except the HAL-GAP marked below.
+//
 // BH Fast-Untilize Pack (tt-metal#42048 + #42049).
 //
 // Read math DEST layout (4 tiles, ct=4; 16-bit or native fp32 DEST) emitted by
@@ -61,30 +64,102 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
 
 #include "experimental/llk_fast_untilize_common.h"
+#include "hal/cfg.h"
+#include "hal/counters/adc.h"
+#include "hal/mop.h"
+#include "hal/nop.h"
+#include "hal/pack.h"
+#include "hal/scalar.h"
+#include "hal/sync.h"
 #include "llk_pack.h"
+#include "llk_pack_common.h"
+
+namespace hal_port
+{
+
+#ifndef HAL_PORT_ADC_SET_MASKED_DEFINED_
+#define HAL_PORT_ADC_SET_MASKED_DEFINED_
+
+// Issue a compile-time Set/AdvanceAndReset of one X/Y or Z/W group as the masked SETADCXY/SETADCZW (or ADDRCR*)
+// production uses. adc::set plans a lone selected counter as SETADC instead, a different instruction.
+// HAL-GAP: no public encoder forces the masked packed form for a single counter; uses hal::counters::adc::detail::packed.
+template <hal::counters::adc::AddrCounter D>
+inline __attribute__((always_inline)) void adc_set_masked()
+{
+    namespace adc = hal::counters::adc;
+    constexpr adc::detail::Group xy {{D.channel0.x, D.channel0.y, D.channel1.x, D.channel1.y}};
+    constexpr adc::detail::Group zw {{D.channel0.z, D.channel0.w, D.channel1.z, D.channel1.w}};
+    static_assert(adc::detail::is_valid(D), "address-counter descriptor requires valid clients, an action, and at least one field");
+    static_assert((xy.mask() == 0) != (zw.mask() == 0), "adc_set_masked takes counters of one group only");
+    constexpr bool is_zw         = zw.mask() != 0;
+    constexpr std::uint32_t word = adc::detail::packed(D.clients, is_zw, D.action, is_zw ? zw : xy);
+    TTI_INSN(word);
+}
+#endif
+
+namespace fast_untilize_pack
+{
+
+namespace cfg = hal::cfg;
+
+// One packer ADDR_MOD slot S (SETC16 of the whole addr_mod_pack_t word): every field of the 16-bit word supplied.
+template <cfg::Sec S, std::uint32_t y_src_incr, std::uint32_t y_dst_incr, std::uint32_t z_src_incr, std::uint32_t z_src_clr>
+inline void set_addr_mod_pack()
+{
+    cfg::write<cfg::Access::TensixCfgUnit>(
+        cfg::set<cfg::AddrMod[cfg::Src][cfg::Y].Incr, S, y_src_incr>(),
+        cfg::set<cfg::AddrMod[cfg::Src][cfg::Y].CR, S, 0>(),
+        cfg::set<cfg::AddrMod[cfg::Src][cfg::Y].Clear, S, 0>(),
+        cfg::set<cfg::AddrMod[cfg::Dest][cfg::Y].Incr, S, y_dst_incr>(),
+        cfg::set<cfg::AddrMod[cfg::Dest][cfg::Y].CR, S, 0>(),
+        cfg::set<cfg::AddrMod[cfg::Dest][cfg::Y].Clear, S, 0>(),
+        cfg::set<cfg::AddrMod[cfg::Src][cfg::Z].Incr, S, z_src_incr>(),
+        cfg::set<cfg::AddrMod[cfg::Src][cfg::Z].Clear, S, z_src_clr>(),
+        cfg::set<cfg::AddrMod[cfg::Dest][cfg::Z].Incr, S, 0>(),
+        cfg::set<cfg::AddrMod[cfg::Dest][cfg::Z].Clear, S, 0>());
+}
+
+inline constexpr auto Ch0 = cfg::Packer[0].AddrCtrl[cfg::PackerReg::Reg0];
+inline constexpr auto Ch1 = cfg::Packer[0].AddrCtrl[cfg::PackerReg::Reg1];
+static_assert(Ch0.Xstride.addr32(cfg::Sec::S0) == PCK0_ADDR_CTRL_XY_REG_0_Xstride_ADDR32, "packer ch0 X/Y-stride word");
+static_assert(Ch0.Zstride.addr32(cfg::Sec::S0) == PCK0_ADDR_CTRL_ZW_REG_0_Zstride_ADDR32, "packer ch0 Z/W-stride word");
+static_assert(Ch1.Xstride.addr32(cfg::Sec::S0) == PCK0_ADDR_CTRL_XY_REG_1_Xstride_ADDR32, "packer ch1 X/Y-stride word");
+static_assert(Ch0.Ystride.shamt(cfg::Sec::S0) == PCK0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT, "Y-stride shift");
+static_assert(Ch0.Zstride.shamt(cfg::Sec::S0) == PCK0_ADDR_CTRL_ZW_REG_0_Zstride_SHAMT, "Z-stride shift");
+static_assert(Ch0.Wstride.shamt(cfg::Sec::S0) == PCK0_ADDR_CTRL_ZW_REG_0_Wstride_SHAMT, "W-stride shift");
+static_assert(Ch1.Ystride.shamt(cfg::Sec::S0) == PCK0_ADDR_CTRL_XY_REG_1_Ystride_SHAMT, "ch1 Y-stride shift");
+
+} // namespace fast_untilize_pack
+} // namespace hal_port
 
 namespace ckernel
 {
 
 constexpr std::uint32_t FAST_UNTILIZE_MOP_LAST_OUTER_CFG_INDEX = 7;
+static_assert(
+    std::is_same_v<decltype(hal::mop::last_outer), const hal::mop::Field<FAST_UNTILIZE_MOP_LAST_OUTER_CFG_INDEX>>, "MopCfg word 7 is hal::mop::last_outer");
 
 template <bool is_strided_row>
 inline void _llk_pack_fast_untilize_configure_addrmod_()
 {
+    namespace fup = hal_port::fast_untilize_pack;
+    using hal::cfg::Sec;
+
     // ADDR_MOD_0: after PACR reading block A, advance z to read block A+1.
-    addr_mod_pack_t {.z_src = {.incr = 1}}.set(ADDR_MOD_0);
+    fup::set_addr_mod_pack<Sec::S0, 0 /*y_src_incr*/, 0 /*y_dst_incr*/, 1 /*z_src_incr*/, 0 /*z_src_clr*/>();
 
     // ADDR_MOD_1: after PACR reading block A+1, advance to next row in block A
     // (y+=1) and reset z to 0 (back to block A).
     if constexpr (is_strided_row)
     {
-        addr_mod_pack_t {.y_src = {.incr = 1}, .y_dst = {.incr = 1}, .z_src = {.clr = 1}}.set(ADDR_MOD_1);
+        fup::set_addr_mod_pack<Sec::S1, 1 /*y_src_incr*/, 1 /*y_dst_incr*/, 0 /*z_src_incr*/, 1 /*z_src_clr*/>();
     }
     else
     {
-        addr_mod_pack_t {.y_src = {.incr = 1}, .z_src = {.clr = 1}}.set(ADDR_MOD_1);
+        fup::set_addr_mod_pack<Sec::S1, 1 /*y_src_incr*/, 0 /*y_dst_incr*/, 0 /*z_src_incr*/, 1 /*z_src_clr*/>();
     }
 }
 
@@ -97,21 +172,17 @@ inline void _llk_pack_fast_untilize_configure_addrmod_()
 inline std::uint32_t _llk_pack_fast_untilize_row_pacr_(
     const std::uint32_t addr_mod, const std::uint32_t read_intf_sel, const std::uint32_t last, const std::uint32_t concat)
 {
-    return TT_OP_PACR(
-        p_pacr::CFG_CTXT_0,
-        p_pacr::NO_ROW_PAD_ZERO,
-        p_pacr::DST_ACCESS_STRIDED_MODE,
-        addr_mod,
-        p_pacr::ADDR_CNT_CTXT_0,
-        0,
-        read_intf_sel,
-        0,
-        concat,
-        p_pacr::NO_CTXT_CTRL,
-        0,
-        last);
+    // TT_OP_PACR(CFG_CTXT_0, NO_ROW_PAD_ZERO, DST_ACCESS_STRIDED_MODE, addr_mod, ADDR_CNT_CTXT_0, 0, read_intf_sel, 0,
+    //            concat, NO_CTXT_CTRL, 0, last)
+    return hal::pack::DataTransfer {
+        .address_modifier = static_cast<std::uint8_t>(addr_mod),
+        .interfaces       = static_cast<std::uint8_t>(read_intf_sel),
+        .dest_access      = hal::pack::DestAccess::Strided,
+        .concatenation    = concat ? hal::pack::Concatenation::Append : hal::pack::Concatenation::NewRow,
+        .boundary         = last ? hal::pack::TileBoundary::Last : hal::pack::TileBoundary::NotLast,
+    }
+        .get_operation();
 }
-
 inline std::uint32_t _llk_pack_fast_untilize_tail_read_intf_(const std::uint32_t unit_dim)
 {
     return unit_dim == 3 ? p_pacr::TWO_INTFS_ACTIVE : p_pacr::ALL_INTF_ACTIVE;
@@ -124,29 +195,34 @@ inline std::uint32_t _llk_pack_fast_untilize_last_outer_pacr_(const std::uint32_
 
 inline void _llk_pack_fast_untilize_mop_config_(const std::uint32_t unit_dim, const bool last)
 {
+    namespace mop = hal::mop;
+
     LLK_ASSERT(unit_dim >= 2 && unit_dim <= 4, "fast_untilize pack supports unit_dim 2, 3, or 4");
 
     constexpr std::uint32_t MOP_OUTER_LOOP = FAST_UNTILIZE_PHASE_ROWS;
     constexpr std::uint32_t MOP_INNER_LOOP = 1; // one PACR pair per strip row
 
+    // Explicit NOP end ops keep production's MOP_CFG stores (end_op0/end_op1 = NOP) unchanged. The last-inner op
+    // defaults to the inner loop's last op, as production's ckernel_template constructor sets it.
     if (unit_dim == 2)
     {
-        ckernel_template tmp(MOP_OUTER_LOOP, MOP_INNER_LOOP, _llk_pack_fast_untilize_last_outer_pacr_(unit_dim, false));
-        tmp.set_last_outer_loop_instr(_llk_pack_fast_untilize_last_outer_pacr_(unit_dim, last));
-        tmp.program();
+        mop::program(mop::loop(MOP_OUTER_LOOP, mop::loop(MOP_INNER_LOOP, _llk_pack_fast_untilize_last_outer_pacr_(unit_dim, false)), TT_OP_NOP, TT_OP_NOP)
+                         .patch(mop::last_outer, _llk_pack_fast_untilize_last_outer_pacr_(unit_dim, last)));
     }
     else
     {
         const std::uint32_t tail_intf = _llk_pack_fast_untilize_tail_read_intf_(unit_dim);
         // unit_dim=4 has no tail: both PACRs read all four interfaces. unit_dim=3
         // keeps the first full-width PACR and narrows only the second/tail PACR.
-        ckernel_template tmp(
-            MOP_OUTER_LOOP,
-            MOP_INNER_LOOP,
-            _llk_pack_fast_untilize_row_pacr_(ADDR_MOD_0, p_pacr::ALL_INTF_ACTIVE, 0, 0),
-            _llk_pack_fast_untilize_row_pacr_(ADDR_MOD_1, tail_intf, 0, 0));
-        tmp.set_last_outer_loop_instr(_llk_pack_fast_untilize_last_outer_pacr_(unit_dim, last));
-        tmp.program();
+        mop::program(mop::loop(
+                         MOP_OUTER_LOOP,
+                         mop::loop(
+                             MOP_INNER_LOOP,
+                             _llk_pack_fast_untilize_row_pacr_(ADDR_MOD_0, p_pacr::ALL_INTF_ACTIVE, 0, 0),
+                             _llk_pack_fast_untilize_row_pacr_(ADDR_MOD_1, tail_intf, 0, 0)),
+                         TT_OP_NOP,
+                         TT_OP_NOP)
+                         .patch(mop::last_outer, _llk_pack_fast_untilize_last_outer_pacr_(unit_dim, last)));
     }
 }
 
@@ -160,27 +236,29 @@ inline void _llk_pack_fast_untilize_mop_patch_last_(const std::uint32_t unit_dim
     // inner iteration of the last outer iteration. The MOP body is otherwise
     // unchanged between phase 1 and phase 2, so patch only the final PACR's
     // Last bit instead of rebuilding the whole template.
-    volatile std::uint32_t* mop_cfg = reinterpret_cast<volatile std::uint32_t*>(TENSIX_MOP_CFG_BASE);
-    ckernel::mop_sync();
-    mop_cfg[FAST_UNTILIZE_MOP_LAST_OUTER_CFG_INDEX] = last_outer_pacr;
+    hal::mop::update(hal::mop::last_outer, last_outer_pacr); // mop_sync(), then MopCfg[7] = last_outer_pacr
 }
 
 inline void _llk_pack_fast_untilize_reset_src_counters_()
 {
+    namespace adc = hal::counters::adc;
     // Source counters select the row within a block group and the block group
     // itself. Reset before each phase so phase selection is controlled only by
     // DEST target offset, not leftover PAC address-generator state.
-    TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b0011);
-    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);
+    adc::set<adc::AddrCounter {.channel0 = {.x = 0, .y = 0}}.for_clients<adc::Client::Packers>()>();               // SETADCXY(PAC, mask 0b0011)
+    adc::set<adc::AddrCounter {.channel0 = {.z = 0}, .channel1 = {.z = 0}}.for_clients<adc::Client::Packers>()>(); // SETADCZW(PAC, mask 0b0101)
 }
 
 inline void _llk_pack_fast_untilize_reset_output_row_counter_()
 {
-    TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b1000);
+    namespace adc = hal::counters::adc;
+    hal_port::adc_set_masked<adc::AddrCounter {.channel1 = {.y = 0}}.for_clients<adc::Client::Packers>()>(); // SETADCXY(PAC, mask 0b1000)
 }
 
 inline void _llk_pack_fast_untilize_strided_mop_config_(const std::uint32_t unit_dim, const std::uint32_t rows_per_run)
 {
+    namespace mop = hal::mop;
+
     LLK_ASSERT(unit_dim >= 2 && unit_dim <= 4, "fast_untilize strided pack supports unit_dim 2, 3, or 4");
 
     // One MOP run emits rows_per_run output rows. A phase is split into
@@ -189,46 +267,60 @@ inline void _llk_pack_fast_untilize_strided_mop_config_(const std::uint32_t unit
     const std::uint32_t MOP_OUTER_LOOP     = rows_per_run;
     constexpr std::uint32_t MOP_INNER_LOOP = 1;
 
+    // Explicit NOP end ops keep production's MOP_CFG stores (end_op0/end_op1 = NOP) unchanged.
     if (unit_dim == 2)
     {
-        ckernel_template tmp(MOP_OUTER_LOOP, MOP_INNER_LOOP, _llk_pack_fast_untilize_row_pacr_(ADDR_MOD_1, p_pacr::ALL_INTF_ACTIVE, 1, 0));
-        tmp.program();
+        mop::program(mop::loop(
+            MOP_OUTER_LOOP, mop::loop(MOP_INNER_LOOP, _llk_pack_fast_untilize_row_pacr_(ADDR_MOD_1, p_pacr::ALL_INTF_ACTIVE, 1, 0)), TT_OP_NOP, TT_OP_NOP));
     }
     else
     {
         const std::uint32_t tail_intf = _llk_pack_fast_untilize_tail_read_intf_(unit_dim);
-        ckernel_template tmp(
+        mop::program(mop::loop(
             MOP_OUTER_LOOP,
-            MOP_INNER_LOOP,
-            _llk_pack_fast_untilize_row_pacr_(ADDR_MOD_0, p_pacr::ALL_INTF_ACTIVE, 0, 1),
-            _llk_pack_fast_untilize_row_pacr_(ADDR_MOD_1, tail_intf, 1, 0));
-        tmp.program();
+            mop::loop(
+                MOP_INNER_LOOP,
+                _llk_pack_fast_untilize_row_pacr_(ADDR_MOD_0, p_pacr::ALL_INTF_ACTIVE, 0, 1),
+                _llk_pack_fast_untilize_row_pacr_(ADDR_MOD_1, tail_intf, 1, 0)),
+            TT_OP_NOP,
+            TT_OP_NOP));
     }
 }
 
 inline void _llk_pack_fast_untilize_program_output_row_stride_(const std::uint32_t output_row_stride_bytes)
 {
+    namespace cfg  = hal::cfg;
+    namespace sync = hal::sync;
+    namespace fup  = hal_port::fast_untilize_pack;
+
     // Wider rows close the pack stream after each chunk row. Program the PAC
     // output Y stride to one full row of the row-major tensor so the ch1 output
     // counter lands at the same column in the next output row. set_packer_strides
     // owns the zero baseline, so hw_configure and the uninit below clear it.
-    TT_SETDMAREG(0, LOWER_HALFWORD(output_row_stride_bytes << PCK0_ADDR_CTRL_XY_REG_1_Ystride_SHAMT), 0, LO_16(p_gpr_pack::TMP0));
-    TT_SETDMAREG(0, UPPER_HALFWORD(output_row_stride_bytes << PCK0_ADDR_CTRL_XY_REG_1_Ystride_SHAMT), 0, HI_16(p_gpr_pack::TMP0));
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
-    TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_1_Xstride_ADDR32);
-    TTI_NOP; // WRCFG needs a one-instruction bubble before a consuming PACR
+    hal::scalar::set_low(hal::gpr<p_gpr_pack::TMP0>(), LOWER_HALFWORD(output_row_stride_bytes << fup::Ch1.Ystride.shamt(cfg::Sec::S0)));
+    hal::scalar::set_high(hal::gpr<p_gpr_pack::TMP0>(), UPPER_HALFWORD(output_row_stride_bytes << fup::Ch1.Ystride.shamt(cfg::Sec::S0)));
+    sync::wait::stall<sync::StallTarget::Config, sync::StallCondition::ScalarIdle>();
+    cfg::write<cfg::Access::TensixCfgUnit, fup::Ch1.Xstride, cfg::Sec::S0, cfg::GprTransferSize::Bits32, cfg::WrcfgCompletion::Deferred>(
+        hal::gpr<p_gpr_pack::TMP0>());
+    hal::nop::thread(); // WRCFG needs a one-instruction bubble before a consuming PACR
 }
 
 template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim>
 inline void _llk_pack_fast_untilize_init_(const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format)
 {
+    namespace cfg  = hal::cfg;
+    namespace sync = hal::sync;
+    namespace adc  = hal::counters::adc;
+    namespace fup  = hal_port::fast_untilize_pack;
+
     static_assert(block_ct_dim >= 2 && block_ct_dim <= FAST_UNTILIZE_MAX_UNIT_DIM, "BH fast untilize supports block_ct_dim 2, 3, or 4");
 
-    TTI_SETDMAREG(0, 0x000, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 0));
-    TTI_SETDMAREG(0, DEST_REGISTER_HALF_SIZE, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 0));
-    select_packer_dest_registers<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE>();
+    hal::scalar::set_low<0x000>(hal::gpr<p_gpr_pack::DEST_OFFSET_LO + 0>());
+    hal::scalar::set_low<DEST_REGISTER_HALF_SIZE>(hal::gpr<p_gpr_pack::DEST_OFFSET_HI + 0>());
+    hal_port::select_packer_dest_registers<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE>();
 
-    TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
+    // TTI_SETADCXX(PAC, FACE_C_DIM - 1, 0x0)
+    adc::set<adc::AddrCounter {.channel0 = {.x = 0}, .channel1 = {.x = FACE_C_DIM - 1}}.for_clients<adc::Client::Packers>()>();
 
     // Strides for our row/block/phase advance scheme.
     const std::uint32_t bytes_per_datum = (pack_src_format & 0x3) == ckernel::to_underlying(DataFormat::Float32)   ? 4
@@ -241,17 +333,19 @@ inline void _llk_pack_fast_untilize_init_(const std::uint32_t pack_src_format, c
     // w_stride: retained for consistency with the pack address generator setup.
     const std::uint32_t w_stride = FAST_UNTILIZE_PHASE_PAIR_STRIDE_ROWS * y_stride;
 
-    TT_SETDMAREG(0, LOWER_HALFWORD(y_stride << PCK0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT), 0, LO_16(p_gpr_pack::TMP0));
-    TT_SETDMAREG(0, UPPER_HALFWORD(y_stride << PCK0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT), 0, HI_16(p_gpr_pack::TMP0));
-    TT_SETDMAREG(0, LOWER_HALFWORD(z_stride << PCK0_ADDR_CTRL_ZW_REG_0_Zstride_SHAMT), 0, LO_16(p_gpr_pack::TMP1));
-    TT_SETDMAREG(0, UPPER_HALFWORD(w_stride << PCK0_ADDR_CTRL_ZW_REG_0_Wstride_SHAMT), 0, HI_16(p_gpr_pack::TMP1));
+    hal::scalar::set_low(hal::gpr<p_gpr_pack::TMP0>(), LOWER_HALFWORD(y_stride << fup::Ch0.Ystride.shamt(cfg::Sec::S0)));
+    hal::scalar::set_high(hal::gpr<p_gpr_pack::TMP0>(), UPPER_HALFWORD(y_stride << fup::Ch0.Ystride.shamt(cfg::Sec::S0)));
+    hal::scalar::set_low(hal::gpr<p_gpr_pack::TMP1>(), LOWER_HALFWORD(z_stride << fup::Ch0.Zstride.shamt(cfg::Sec::S0)));
+    hal::scalar::set_high(hal::gpr<p_gpr_pack::TMP1>(), UPPER_HALFWORD(w_stride << fup::Ch0.Wstride.shamt(cfg::Sec::S0)));
     // Serialize the TMP GPR setup before WRCFG copies those stride values into
     // packer address-generator config. This is the same LLK SETDMAREG->WRCFG
     // barrier pattern used elsewhere; ISA documents WRCFG's GPR source and
     // STALLWAIT's Wait Gate blocking.
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
-    TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_0_Xstride_ADDR32);
-    TTI_WRCFG(p_gpr_pack::TMP1, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_0_Zstride_ADDR32);
+    sync::wait::stall<sync::StallTarget::Config, sync::StallCondition::ScalarIdle>();
+    cfg::write<cfg::Access::TensixCfgUnit, fup::Ch0.Xstride, cfg::Sec::S0, cfg::GprTransferSize::Bits32, cfg::WrcfgCompletion::Deferred>(
+        hal::gpr<p_gpr_pack::TMP0>());
+    cfg::write<cfg::Access::TensixCfgUnit, fup::Ch0.Zstride, cfg::Sec::S0, cfg::GprTransferSize::Bits32, cfg::WrcfgCompletion::Deferred>(
+        hal::gpr<p_gpr_pack::TMP1>());
 
     constexpr bool is_strided_row = full_ct_dim > block_ct_dim;
     _llk_pack_fast_untilize_configure_addrmod_<is_strided_row>();
@@ -271,10 +365,10 @@ inline void _llk_pack_fast_untilize_select_phase_()
     // not by changing the PAC source strides. The phase_offset values are named
     // in llk_fast_untilize_common.h because they are part of the shared
     // math/pack layout contract.
-    TTI_SETDMAREG(0, phase_offset, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 0));
-    TTI_SETDMAREG(0, DEST_REGISTER_HALF_SIZE + phase_offset, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 0));
+    hal::scalar::set_low<phase_offset>(hal::gpr<p_gpr_pack::DEST_OFFSET_LO + 0>());
+    hal::scalar::set_low<DEST_REGISTER_HALF_SIZE + phase_offset>(hal::gpr<p_gpr_pack::DEST_OFFSET_HI + 0>());
 
-    select_packer_dest_registers<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE>();
+    hal_port::select_packer_dest_registers<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE>();
 }
 
 template <bool reset_output_row_counter>
@@ -287,7 +381,7 @@ inline void _llk_pack_fast_untilize_restore_pack_counters_()
     {
         _llk_pack_fast_untilize_reset_output_row_counter_();
     }
-    set_dst_write_addr(0);
+    ::set_dst_write_addr<false>(0);
 }
 
 // One call processes one 2/3/4-tile chunk.
@@ -298,7 +392,7 @@ inline void _llk_pack_fast_untilize_block_(const std::uint32_t address, const st
     static_assert(block_ct_dim >= 2 && block_ct_dim <= FAST_UNTILIZE_MAX_UNIT_DIM, "BH fast untilize supports block_ct_dim 2, 3, or 4");
     LLK_ASSERT(unit_dim >= 2 && unit_dim <= block_ct_dim, "fast_untilize pack unit_dim must be in [2, block_ct_dim]");
 
-    program_packer_destination(address);
+    hal_port::program_packer_destination(address);
 
     // Phase 1 emits top strip rows and keeps the pack stream open.
     if (unit_dim != prev_unit_dim)
@@ -312,14 +406,14 @@ inline void _llk_pack_fast_untilize_block_(const std::uint32_t address, const st
     }
     _llk_pack_fast_untilize_select_phase_<FAST_UNTILIZE_PACK_TOP_STRIP_DEST_TARGET_OFFSET>();
     _llk_pack_fast_untilize_reset_src_counters_();
-    ckernel_template::run();
+    hal::mop::Runner<hal::mop::MopTemplate::Template1>::run();
 
     // Phase 2 emits bottom strip rows and closes the stream. Phase 1 already
     // programmed the MOP body; only the final PACR's Last bit changes.
     _llk_pack_fast_untilize_mop_patch_last_(unit_dim, true);
     _llk_pack_fast_untilize_select_phase_<FAST_UNTILIZE_PACK_BOTTOM_STRIP_DEST_TARGET_OFFSET>();
     _llk_pack_fast_untilize_reset_src_counters_();
-    ckernel_template::run();
+    hal::mop::Runner<hal::mop::MopTemplate::Template1>::run();
     _llk_pack_fast_untilize_restore_pack_counters_<false>();
 }
 
@@ -350,8 +444,8 @@ inline void _llk_pack_fast_untilize_emit_phase_(
     {
         const std::uint32_t out_row = phase_base_row + run * rows_per_run;
         _llk_pack_fast_untilize_reset_output_row_counter_();
-        program_packer_destination(address + out_row * output_row_stride_16B);
-        ckernel_template::run();
+        hal_port::program_packer_destination(address + out_row * output_row_stride_16B);
+        hal::mop::Runner<hal::mop::MopTemplate::Template1>::run();
     }
 }
 
@@ -395,12 +489,12 @@ inline void _llk_pack_fast_untilize_block_strided_(
     {
         // Single base; phase 1 leaves the stream open and phase 2 continues the
         // y_dst carry into output rows 16..31. Matches the original strided path.
-        program_packer_destination(address);
+        hal_port::program_packer_destination(address);
         _llk_pack_fast_untilize_select_phase_<FAST_UNTILIZE_PACK_TOP_STRIP_DEST_TARGET_OFFSET>();
-        ckernel_template::run();
+        hal::mop::Runner<hal::mop::MopTemplate::Template1>::run();
         _llk_pack_fast_untilize_select_phase_<FAST_UNTILIZE_PACK_BOTTOM_STRIP_DEST_TARGET_OFFSET>();
         _llk_pack_fast_untilize_reset_src_counters_();
-        ckernel_template::run();
+        hal::mop::Runner<hal::mop::MopTemplate::Template1>::run();
         _llk_pack_fast_untilize_restore_pack_counters_<true>();
         return;
     }
@@ -415,7 +509,7 @@ inline void _llk_pack_fast_untilize_block_strided_(
 inline void _llk_pack_fast_untilize_uninit_(const std::uint32_t pack_src_format)
 {
     // set_packer_strides also zeroes the channel-1 Y stride the strided path programs.
-    set_packer_strides<PackMode::Default>(pack_src_format, TILE_C_DIM);
+    hal_port::set_packer_strides<PackMode::Default>(pack_src_format, TILE_C_DIM);
     // init owns the X counter and sets it itself; strides are restored just above, so skip them in init.
     _llk_pack_init_<PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */, true /* skip_packer_strides */>(
         pack_src_format, FACE_R_DIM, TILE_C_DIM, FAST_UNTILIZE_NUM_FACES, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);

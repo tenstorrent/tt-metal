@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// HAL port of tt_llk_blackhole/llk_lib/llk_pack_rows.h. Differs from production: four rows per PACR (all four Dest read
+// interfaces, Y += 4) with a partial interface mask on the closing PACR, instead of one single-interface PACR per row.
+
 #pragma once
 
 #include <cstdint>
@@ -9,82 +12,60 @@
 #include "ckernel.h"
 #include "ckernel_globals.h"
 #include "ckernel_ops.h"
-#include "ckernel_template.h"
+#include "ckernel_template.h" // not used here: kept for production-copy headers that include llk_pack_rows.h
+#include "hal/counters/adc.h"
+#include "hal/mop.h"
+#include "hal/pack.h"
 #include "llk_assert.h"
 #include "llk_defs.h"
+#include "llk_pack.h" // hal_port::set_addr_mod_pack
 #include "llk_pack_common.h"
 
 /**
  * @brief Configures address modification modes for row packing.
  *
  * Address mods are applied automatically after each PACR instruction to update counters.
- * - ADDR_MOD_0: Increment Y by 1 (advance to next row in dest)
+ * - ADDR_MOD_0: Increment Y by 4 (each PACR reads four rows, one per Dest read interface)
  * - ADDR_MOD_1: Clear Y to 0 (reset for next tile)
  */
 inline void _llk_pack_rows_configure_addrmod_()
 {
-    ckernel::addr_mod_pack_t {
-        .y_src = {.incr = 1},
-    }
-        .set(ADDR_MOD_0);
-
-    ckernel::addr_mod_pack_t {
-        .y_src = {.incr = 0, .clr = 1, .cr = 0},
-    }
-        .set(ADDR_MOD_1);
+    using hal::cfg::Sec;
+    hal_port::set_addr_mod_pack<Sec::S0, 4 /*y_src_incr*/, 0 /*y_src_clr*/, 0 /*y_src_cr*/, 0 /*z_src_incr*/, 0 /*z_src_clr*/>();
+    hal_port::set_addr_mod_pack<Sec::S1, 0 /*y_src_incr*/, 1 /*y_src_clr*/, 0 /*y_src_cr*/, 0 /*z_src_incr*/, 0 /*z_src_clr*/>();
 }
 
 /**
  * @brief Configures the MOP template for packing rows.
  *
- * The MOP uses a single outer loop with num_rows inner iterations:
- * - Each inner iteration packs one row (16 datums) using ADDR_MOD_0 (Y += 1)
- * - The last outer loop iteration uses ADDR_MOD_1 with Last=1 to reset Y to 0 after num_rows rows
+ * The MOP uses a single outer loop with ceil(num_rows / 4) inner iterations:
+ * - Each inner iteration packs four rows (one per Dest read interface, 16 datums each) using ADDR_MOD_0 (Y += 4)
+ * - The last iteration uses ADDR_MOD_1 with Last=1 to reset Y to 0, and enables only the first
+ *   num_rows % 4 interfaces when num_rows is not a multiple of four (rows StartRow + k for mask bit k)
  *
  * @param num_rows: Number of rows to pack from the destination register.
  */
 inline void _llk_pack_rows_mop_config_(const std::uint32_t num_rows)
 {
-    constexpr std::uint32_t ZERO_OUTPUT_FLAG = p_pacr::P_ZERO_OUTPUT_DISABLED;
-    constexpr std::uint32_t MOP_OUTER_LOOP   = 1;
-    const std::uint32_t MOP_INNER_LOOP       = num_rows;
+    using namespace hal::mop;
+    using hal::pack::DataTransfer;
+    using hal::pack::TileBoundary;
 
-    ckernel::ckernel_template tmp(
-        MOP_OUTER_LOOP,
-        MOP_INNER_LOOP,
-        TT_OP_PACR(
-            p_pacr::CFG_CTXT_0,
-            p_pacr::NO_ROW_PAD_ZERO,
-            p_pacr::DST_ACCESS_NORMAL_MODE,
-            ADDR_MOD_0,
-            p_pacr::ADDR_CNT_CTXT_0,
-            ZERO_OUTPUT_FLAG,
-            p_pacr::SINGLE_INTF_ACTIVE,
-            0, // OvrdThreadId
-            0, // Concat
-            p_pacr::NO_CTXT_CTRL,
-            0, // Flush
-            0) // Last
-    );
+    constexpr std::uint32_t MOP_OUTER_LOOP = 1;
+    const std::uint32_t MOP_INNER_LOOP     = (num_rows + 3) / 4;
+    const std::uint32_t remainder          = num_rows % 4;
 
-    // Last outer loop instruction must have Last=1 to close the block
-    // and use ADDR_MOD_1 to reset Y counter
-    tmp.set_last_outer_loop_instr(TT_OP_PACR(
-        p_pacr::CFG_CTXT_0,
-        p_pacr::NO_ROW_PAD_ZERO,
-        p_pacr::DST_ACCESS_NORMAL_MODE,
-        ADDR_MOD_1,
-        p_pacr::ADDR_CNT_CTXT_0,
-        ZERO_OUTPUT_FLAG,
-        p_pacr::SINGLE_INTF_ACTIVE,
-        0, // OvrdThreadId
-        0, // Concat
-        p_pacr::NO_CTXT_CTRL,
-        0, // Flush
-        1) // Last
-    );
+    // Normal dest access, all four interfaces (four rows), ADDR_MOD_0 (Y += 4), zero output disabled.
+    constexpr std::uint32_t rows = DataTransfer {.address_modifier = ADDR_MOD_0, .interfaces = p_pacr::ALL_INTF_ACTIVE}.get_operation();
+    // Last outer loop instruction must have Last=1 to close the block and use ADDR_MOD_1 to reset Y counter.
+    // It reads the remaining 1-3 rows through interfaces 0..remainder-1, or all four when num_rows % 4 == 0.
+    const std::uint8_t last_interfaces = remainder == 0 ? p_pacr::ALL_INTF_ACTIVE : static_cast<std::uint8_t>((1u << remainder) - 1u);
+    const std::uint32_t last_rows =
+        DataTransfer {.address_modifier = ADDR_MOD_1, .interfaces = last_interfaces, .boundary = TileBoundary::Last}.get_operation();
 
-    tmp.program();
+    // Explicit NOP end ops keep production's MOP_CFG stores (end_op0/end_op1 = NOP) unchanged. Outer count is 1, so
+    // the last-inner op is never issued (production leaves it equal to the loop op).
+    program(loop(MOP_OUTER_LOOP, loop(MOP_INNER_LOOP, rows), TT_OP_NOP, TT_OP_NOP).patch(last_outer, last_rows));
 }
 
 /**
@@ -118,13 +99,14 @@ inline void _llk_pack_rows_init_(const std::uint32_t num_rows)
 
     // To ensure that Y_POS counter gets reset to 0 after the operation is completed,
     // we need to set pack_reads_per_xy_plane to 1. When Y_POS counter hits that value, it will reset.
-    cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(y_pos_counter_limit);
+    hal::cfg::write<hal::cfg::Access::TensixCfgUnit, hal::cfg::PackCounters::pack_reads_per_xy_plane, hal::cfg::Sec::S0, y_pos_counter_limit>();
 
-    // Set the packer X counter to pack the specified number of datums per row
-    TTI_SETADCXX(p_setadc::PAC, row_num_datums - 1, 0x0);
+    namespace adc = hal::counters::adc;
+    // Set the packer X counter to pack the specified number of datums per row: SETADCXX(PAC, row_num_datums - 1, 0)
+    adc::set<adc::AddrCounter {.channel0 = {.x = 0}, .channel1 = {.x = row_num_datums - 1}}.for_clients<adc::Client::Packers>()>();
 
-    // Reset Z/W counters
-    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b1111);
+    // Reset Z/W counters: SETADCZW(PAC, mask 0b1111)
+    adc::set<adc::AddrCounter {.channel0 = {.z = 0, .w = 0}, .channel1 = {.z = 0, .w = 0}}.for_clients<adc::Client::Packers>()>();
 }
 
 /**
@@ -146,21 +128,24 @@ inline void _llk_pack_rows_(const std::uint32_t tile_index, const std::uint32_t 
     // Set the tile index in dest to read from
     set_dst_write_addr(tile_index);
 
-    ckernel::packer::program_packer_destination(address);
+    hal_port::program_packer_destination(address);
 
-    ckernel::ckernel_template::run();
+    hal::mop::Runner<hal::mop::MopTemplate::Template1>::run();
 
-    // Reset Z counters after pack operation
-    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);
+    // Reset Z counters after pack operation: SETADCZW(PAC, mask 0b0101)
+    hal::counters::adc::set<hal::counters::adc::AddrCounter {.channel0 = {.z = 0}, .channel1 = {.z = 0}}.for_clients<hal::counters::adc::Client::Packers>()>();
 }
 
 /**
  * @brief Restore packer addrmods and counters to a safe default state.
  *
- * Resets the packer X counter to its default full-face value, undoing @ref _llk_pack_rows_init_.
+ * Restores ADDR_MOD_0 to Y += 1, the value the single-row production sequence leaves, undoing the Y += 4
+ * stride of @ref _llk_pack_rows_init_.
  *
  * @note Pairs with @ref _llk_pack_rows_init_.
  */
 inline void _llk_pack_rows_uninit_()
 {
+    using hal::cfg::Sec;
+    hal_port::set_addr_mod_pack<Sec::S0, 1 /*y_src_incr*/, 0 /*y_src_clr*/, 0 /*y_src_cr*/, 0 /*z_src_incr*/, 0 /*z_src_clr*/>();
 }

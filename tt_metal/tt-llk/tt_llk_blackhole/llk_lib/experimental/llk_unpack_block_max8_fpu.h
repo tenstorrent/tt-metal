@@ -2,11 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// HAL port of tt_llk_blackhole/llk_lib/experimental/llk_unpack_block_max8_fpu.h. Same instruction sequence as
+// production; the clear-source UNPACR_NOPs are HAL-GAPs.
+
 #pragma once
 
 #include "ckernel_defs.h"
 #include "ckernel_instr_params.h"
 #include "ckernel_ops.h"
+#include "hal/sync.h"
 
 namespace ckernel
 {
@@ -25,7 +29,11 @@ namespace ckernel
  */
 inline void _llk_unpack_block_max8_fpu_()
 {
-    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK);
+    namespace sync = hal::sync;
+    // TTI_STALLWAIT(STALL_UNPACK, UNPACK)
+    sync::wait::stall<sync::StallTarget::Unpack, sync::StallCondition::Unpacker0Idle | sync::StallCondition::Unpacker1Idle>();
+    // HAL-GAP: the clear-source + set-data-valid UNPACR_NOP flavor (CLR_SRC, SET_DVALID, WAIT_LIKE_UNPACR) has no HAL
+    // descriptor, so the production encodings are kept.
     TTI_UNPACR_NOP(
         SrcA,
         0 /*Stream_Id*/,

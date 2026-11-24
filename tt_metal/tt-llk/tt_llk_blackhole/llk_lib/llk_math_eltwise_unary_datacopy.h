@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// HAL port of tt_llk_blackhole/llk_lib/llk_math_eltwise_unary_datacopy.h. Same Tensix instruction sequence as production.
+
 #pragma once
 
 #include <cstdint>
@@ -9,10 +11,17 @@
 #include "ckernel_globals.h"
 #include "ckernel_include.h"
 #include "ckernel_ops.h"
-#include "ckernel_template.h"
 #include "cmath_common.h"
+#include "hal/cfg.h"
+#include "hal/counters/rwc.h"
+#include "hal/dst.h"
+#include "hal/fpu.h"
+#include "hal/mop.h"
+#include "hal/move.h"
+#include "hal/src.h"
 #include "llk_assert.h"
 #include "llk_math_common.h"
+#include "llk_math_eltwise_binary.h" // hal_port::set_math_addr_mod / MathAddrMod
 #include "tensor_shape.h"
 #include "tensor_shape_coverage_math.h"
 
@@ -20,6 +29,133 @@ using namespace ckernel;
 
 // local function declarations
 inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format);
+
+namespace hal_port
+{
+namespace datacopy
+{
+namespace move = hal::move;
+
+// The 32-bit broadcasts below issue MOVD2B/MOVB2D whose only runtime operand is the Dest row (dst_index * 64 + row).
+// The rest of the word is encoded at compile time and the row added at runtime, as production's TT_OP_MOV* + dst does:
+// the runtime move::Transfer path calls the non-inlined HAL encoder per instruction, which made GCC keep the whole
+// per-tile datacopy out of line. The static_asserts check that the Dest row is the low field of the HAL encoding.
+
+// MOVD2B(Lo32 ? DEST_32B_LOW : DEST_NORM, SrcBRow, ADDR_MOD_3, Rows == 4 ? MOV_4_ROWS : MOV_1_ROW, dest_row)
+template <bool Lo32, std::uint32_t SrcBRow, std::uint16_t Rows>
+constexpr std::uint32_t movd2b_operation(const std::uint32_t dest_row)
+{
+    return move::Transfer<move::Dst, move::SrcB> {
+        .source_row = dest_row, .destination_row = SrcBRow, .address_mode = ADDR_MOD_3, .number_of_rows = move::RowCount {Rows}, .source_32bit_low = Lo32}
+        .get_operation();
+}
+
+// MOVB2D(Lo32 ? DEST_32B_LOW : DEST_NORM, SrcBRow, ADDR_MOD_3, <Rows/Broadcast modifier>, dest_row):
+// Row/8 = MOV_8_ROW_BRCST, Scalar/8 = MOV_8_ROW_BRCST_D0_BRCST, Column0/4 = MOV_4_ROWS_D0_BRCST.
+template <bool Lo32, std::uint32_t SrcBRow, move::Broadcast B, std::uint16_t Rows>
+constexpr std::uint32_t movb2d_operation(const std::uint32_t dest_row)
+{
+    return move::Transfer<move::SrcB, move::Dst> {
+        .source_row            = SrcBRow,
+        .destination_row       = dest_row,
+        .address_mode          = ADDR_MOD_3,
+        .number_of_rows        = move::RowCount {Rows},
+        .broadcast             = B,
+        .destination_32bit_low = Lo32}
+        .get_operation();
+}
+
+// Dest rows the 32-bit broadcasts address: up to 15 tiles of 64 rows plus the in-tile row.
+inline constexpr std::uint32_t MAX_BROADCAST_DEST_ROW = 15 * 64 + 63;
+
+template <bool Lo32, std::uint32_t SrcBRow, std::uint16_t Rows>
+inline __attribute__((always_inline)) void movd2b(const std::uint32_t dest_row)
+{
+    constexpr std::uint32_t base = movd2b_operation<Lo32, SrcBRow, Rows>(0);
+    static_assert(
+        movd2b_operation<Lo32, SrcBRow, Rows>(1) == base + 1 &&
+        movd2b_operation<Lo32, SrcBRow, Rows>(MAX_BROADCAST_DEST_ROW + 1 - Rows) == base + MAX_BROADCAST_DEST_ROW + 1 - Rows);
+    LLK_ASSERT(dest_row + Rows <= MAX_BROADCAST_DEST_ROW + 1, "MOVD2B Dest row out of range");
+    TT_INSN(base + dest_row);
+}
+
+template <bool Lo32, std::uint32_t SrcBRow, move::Broadcast B, std::uint16_t Rows>
+inline __attribute__((always_inline)) void movb2d(const std::uint32_t dest_row)
+{
+    constexpr std::uint32_t base = movb2d_operation<Lo32, SrcBRow, B, Rows>(0);
+    static_assert(
+        movb2d_operation<Lo32, SrcBRow, B, Rows>(1) == base + 1 &&
+        movb2d_operation<Lo32, SrcBRow, B, Rows>(MAX_BROADCAST_DEST_ROW + 1 - Rows) == base + MAX_BROADCAST_DEST_ROW + 1 - Rows);
+    LLK_ASSERT(dest_row + Rows <= MAX_BROADCAST_DEST_ROW + 1, "MOVB2D Dest row out of range");
+    TT_INSN(base + dest_row);
+}
+
+// One hi16/lo16 pass of the ROW 32-bit broadcast: four MOVB2D(DEST_NORM) with SrcA=Tf32, then four
+// MOVB2D(DEST_32B_LOW) with Fp32_enabled=0 and SrcA=Float32 (BH HW bug: MOVB2D DEST_32B_LOW is ignored while Fp32
+// dest mode is on), then Fp32_enabled=1. R0..R3 are the dest rows each broadcast writes.
+template <move::Broadcast B, std::uint32_t R0, std::uint32_t R1, std::uint32_t R2, std::uint32_t R3>
+inline __attribute__((always_inline)) void broadcast_hi_lo_8rows(const std::uint32_t tile_base)
+{
+    // SrcA=Tf32: MOVB2D(DEST_NORM) writes hi16 of 32-bit dest
+    set_srca_format<DataFormat::Tf32>();
+
+    movb2d<false, p_movb2d::SRC_ROW16_OFFSET, B, 8>(tile_base + R0);
+    movb2d<false, p_movb2d::SRC_ROW16_OFFSET, B, 8>(tile_base + R1);
+    movb2d<false, p_movb2d::SRC_ROW16_OFFSET, B, 8>(tile_base + R2);
+    movb2d<false, p_movb2d::SRC_ROW16_OFFSET, B, 8>(tile_base + R3);
+
+    // BH HW bug: MOVB2D(DEST_32B_LOW) is ignored when Fp32 dest mode is active.
+    set_fp32_enabled<0>();
+    // SrcA=Float32 (non-Tf32): MOVB2D(DEST_32B_LOW) writes lo16 of 32-bit dest
+    set_srca_format<DataFormat::Float32>();
+
+    movb2d<true, p_movb2d::SRC_ZERO_OFFSET, B, 8>(tile_base + R0);
+    movb2d<true, p_movb2d::SRC_ZERO_OFFSET, B, 8>(tile_base + R1);
+    movb2d<true, p_movb2d::SRC_ZERO_OFFSET, B, 8>(tile_base + R2);
+    movb2d<true, p_movb2d::SRC_ZERO_OFFSET, B, 8>(tile_base + R3);
+
+    set_fp32_enabled<1>();
+}
+
+// TT_OP_SETRWC(CLR_AB, 0, 0, 0, 0, SET_AB)
+inline constexpr std::uint32_t SETRWC_CLR_AB_SET_AB =
+    rwc::MathCounter {.src_a = rwc::Set(0), .src_b = rwc::Set(0), .flip = rwc::Src::A | rwc::Src::B}.operation();
+// TT_OP_SETRWC(CLR_AB, 0, 0, 0, 0, 0)
+inline constexpr std::uint32_t SETRWC_CLR_AB = rwc::MathCounter {.flip = rwc::Src::A | rwc::Src::B}.operation();
+// TT_OP_SETRWC(CLR_B, CR_B, 0, 0, 0, SET_B)
+inline constexpr std::uint32_t SETRWC_CLR_B_CR_B = rwc::MathCounter {.src_b = rwc::AdvanceAndReset(0), .flip = rwc::Src::B}.operation();
+// HAL-GAP: MathCounter encodes a lone AdvanceAndReset (no flip) as INCRWC; nothing selects SETRWC(0, CR_B, 0, 0, 0, SET_B).
+inline constexpr std::uint32_t SETRWC_CR_B_SET_B = TT_OP_SETRWC(0, p_setrwc::CR_B, 0, 0, 0, p_setrwc::SET_B);
+
+// TT_OP_ELWADD(0, 0, broadcast, addr_mod, 0)
+inline std::uint32_t elwadd_copy(const hal::fpu::SrcBBroadcast broadcast, const std::uint8_t addr_mod)
+{
+    return hal::fpu::get_operation(hal::fpu::Elementwise {
+        .operation        = hal::fpu::ElementwiseOperation::Add,
+        .broadcast        = broadcast,
+        .dest_write       = hal::fpu::DestWriteMode::Overwrite,
+        .address_modifier = addr_mod,
+        .dest_row_offset  = 0,
+        .release          = hal::fpu::SourceRelease::None});
+}
+
+// TT_OP_MOVB2D(0, 0, addr_mod, <rows/broadcast>, 0)
+inline std::uint32_t movb2d_copy(const move::RowCount rows, const move::Broadcast broadcast, const std::uint8_t addr_mod)
+{
+    return move::Transfer<move::SrcB, move::Dst> {
+        .source_row = 0, .destination_row = 0, .address_mode = addr_mod, .number_of_rows = rows, .broadcast = broadcast}
+        .get_operation();
+}
+
+// TT_OP_MOVA2D(Lo32 ? DEST_32B_LOW : DEST_NORM, 0, ADDR_MOD_2, MOV_8_ROWS, 0)
+template <bool Lo32>
+inline constexpr std::uint32_t MOVA2D_8_ROWS =
+    move::Transfer<move::SrcA, move::Dst> {
+        .source_row = 0, .destination_row = 0, .address_mode = ADDR_MOD_2, .number_of_rows = move::rows::Eight, .destination_32bit_low = Lo32}
+        .get_operation();
+
+} // namespace datacopy
+} // namespace hal_port
 
 /**
  * @brief Copy a tile into the destination register, optionally broadcasting source B.
@@ -49,6 +185,13 @@ inline void _llk_math_eltwise_unary_datacopy_(
     const std::uint32_t dst_format,
     const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
+    namespace cfg = hal::cfg;
+    namespace rwc = hal::counters::rwc;
+    namespace dc  = hal_port::datacopy;
+    namespace dst = hal::dst;
+    using Mop     = hal::mop::Runner<hal::mop::MopTemplate::Template1>;
+    using Bcast   = hal::move::Broadcast;
+
     LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_eltwise_unary_datacopy_", tensor_shape);
     const std::uint32_t num_faces = tensor_shape.total_num_faces();
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
@@ -57,9 +200,9 @@ inline void _llk_math_eltwise_unary_datacopy_(
     // adjust it to offset in faces for 32bit data.
     if (unpack_to_dest && is_32bit_input(src_format, dst_format))
     {
-        math_unpack_to_dest_math_ready();
-        math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::DestReg>(dst_index);
-        math::math_unpack_to_dest_tile_ready();
+        hal_port::math_unpack_to_dest_math_ready();
+        hal_port::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::DestReg>(dst_index);
+        hal_port::math_unpack_to_dest_tile_ready();
 
         // Pin the math dest offset to the bank base: hardware adds it to the MOVD2B/MOVB2D immediates
         // (dst_index * 64 + row) of the broadcast sequences below, and a preceding op may have left another
@@ -69,7 +212,8 @@ inline void _llk_math_eltwise_unary_datacopy_(
         // index <= 15). So NONE skips the write, as on Wormhole, and keeps its per-tile cost unchanged.
         if constexpr (src_b_bcast_type != BroadcastType::NONE)
         {
-            TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::get_dest_buffer_base());
+            // TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, base)
+            cfg::write<cfg::Access::TensixCfgUnit, cfg::DestTargetRegCfgMath::Offset, cfg::Sec::S0>(ckernel::get_dest_buffer_base());
         }
 
         // Due to bug in Blackhole Tensix (more details in budabackend/#2730) when an event with side effect of clearing DEST zero flags
@@ -87,22 +231,27 @@ inline void _llk_math_eltwise_unary_datacopy_(
 #pragma GCC unroll 0
         for (std::uint32_t i = 0; i < num_faces; i++)
         {
-            // Clears zero flags in DEST for one face.
-            TT_ZEROACC(p_zeroacc::CLR_16, clear_fp32, 1 /*clear zero flags*/, ADDR_MOD_3, get_dest_index_in_faces(local_tile, i));
+            // Clears zero flags in DEST for one face: TT_ZEROACC(CLR_16, clear_fp32, 1, ADDR_MOD_3, face).
+            dst::run(dst::Zero {
+                .scope        = dst::ZeroScope::Face,
+                .index        = get_dest_index_in_faces(local_tile, i),
+                .flags        = dst::ZeroFlagAction::ClearFlags,
+                .width        = clear_fp32 ? dst::DestWidth::Bits32 : dst::DestWidth::Bits16,
+                .address_mode = ADDR_MOD_3});
         }
 
         if constexpr (src_b_bcast_type != BroadcastType::NONE)
         {
             // Disable implied SrcA format inference so manual SrcA format switches take effect.
-            TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 1);
-            cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Float32));
+            hal_port::set_disable_implied_srca_fmt<1>();
+            hal_port::set_srca_format<DataFormat::Float32>();
 
             // Disable zero flag to prevent mantissa flushing when exponent bits are 0.
-            cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+            cfg::write<cfg::Access::TensixCfgUnit, cfg::AluAccCtrl::Zero_Flag_disabled_src, cfg::Sec::S0, 1>();
 
             // UNPACK_TO_DEST covers only unpacker 0 and MOVD2B doesn't wait for SrcB valid, so wait for
             // _llk_unpack_A_'s SrcB handoff (unpacker 1) before the broadcasts below write the bank.
-            math::srcb_bank_wait();
+            hal_port::srcb_bank_wait();
         }
 
         if constexpr (src_b_bcast_type == BroadcastType::ROW)
@@ -122,54 +271,16 @@ inline void _llk_math_eltwise_unary_datacopy_(
             const std::uint32_t tile_base = dst_index * 64;
 
             // Source row 0 -> faces 0 (rows 0-15) and 2 (rows 32-47)
-            TT_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movd2b::MOV_1_ROW, tile_base + 0);   // hi16 to B
-            TT_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movd2b::MOV_1_ROW, tile_base + 0); // lo16 to B
-
-            // SrcA=Tf32: MOVB2D(DEST_NORM) writes hi16 of 32-bit dest
-            cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Tf32));
-
-            TT_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, tile_base + 0);  // face 0 rows 0-7
-            TT_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, tile_base + 8);  // face 0 rows 8-15
-            TT_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, tile_base + 32); // face 2 rows 0-7
-            TT_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, tile_base + 40); // face 2 rows 8-15
-
-            // BH HW bug: MOVB2D(DEST_32B_LOW) is ignored when Fp32 dest mode is active.
-            cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
-            // SrcA=Float32 (non-Tf32): MOVB2D(DEST_32B_LOW) writes lo16 of 32-bit dest
-            cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Float32));
-
-            TT_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, tile_base + 0);  // face 0 rows 0-7
-            TT_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, tile_base + 8);  // face 0 rows 8-15
-            TT_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, tile_base + 32); // face 2 rows 0-7
-            TT_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, tile_base + 40); // face 2 rows 8-15
-
-            cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
+            dc::movd2b<false, p_movd2b::SRC_ROW16_OFFSET, 1>(tile_base + 0); // hi16 to B
+            dc::movd2b<true, p_movd2b::SRC_ZERO_OFFSET, 1>(tile_base + 0);   // lo16 to B
+            dc::broadcast_hi_lo_8rows<Bcast::Row, 0, 8, 32, 40>(tile_base);
 
             // Source row 16 -> faces 1 (rows 16-31) and 3 (rows 48-63)
-            TT_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movd2b::MOV_1_ROW, tile_base + 16);   // hi16 to B
-            TT_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movd2b::MOV_1_ROW, tile_base + 16); // lo16 to B
+            dc::movd2b<false, p_movd2b::SRC_ROW16_OFFSET, 1>(tile_base + 16); // hi16 to B
+            dc::movd2b<true, p_movd2b::SRC_ZERO_OFFSET, 1>(tile_base + 16);   // lo16 to B
+            dc::broadcast_hi_lo_8rows<Bcast::Row, 16, 24, 48, 56>(tile_base);
 
-            // SrcA=Tf32: MOVB2D(DEST_NORM) writes hi16 of 32-bit dest
-            cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Tf32));
-
-            TT_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, tile_base + 16); // face 1 rows 0-7
-            TT_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, tile_base + 24); // face 1 rows 8-15
-            TT_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, tile_base + 48); // face 3 rows 0-7
-            TT_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, tile_base + 56); // face 3 rows 8-15
-
-            // BH HW bug: MOVB2D(DEST_32B_LOW) is ignored when Fp32 dest mode is active.
-            cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
-            // SrcA=Float32 (non-Tf32): MOVB2D(DEST_32B_LOW) writes lo16 of 32-bit dest
-            cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Float32));
-
-            TT_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, tile_base + 16); // face 1 rows 0-7
-            TT_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, tile_base + 24); // face 1 rows 8-15
-            TT_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, tile_base + 48); // face 3 rows 0-7
-            TT_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, tile_base + 56); // face 3 rows 8-15
-
-            cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
-
-            TTI_CLEARDVALID(0b10, 0);
+            hal::src<hal::SrcB>.release(); // TTI_CLEARDVALID(0b10, 0)
         }
         else if constexpr (src_b_bcast_type == BroadcastType::SCALAR)
         {
@@ -181,38 +292,38 @@ inline void _llk_math_eltwise_unary_datacopy_(
             const std::uint32_t tile_base = dst_index * 64;
 
             // Extract source scalar from dest row 0 into B register
-            TT_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movd2b::MOV_1_ROW, tile_base + 0);   // hi16 to B
-            TT_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movd2b::MOV_1_ROW, tile_base + 0); // lo16 to B
+            dc::movd2b<false, p_movd2b::SRC_ROW16_OFFSET, 1>(tile_base + 0); // hi16 to B
+            dc::movd2b<true, p_movd2b::SRC_ZERO_OFFSET, 1>(tile_base + 0);   // lo16 to B
 
             // SrcA=Tf32: MOVB2D(DEST_NORM) writes hi16 of 32-bit dest
-            cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Tf32));
+            hal_port::set_srca_format<DataFormat::Tf32>();
 
-            TT_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST_D0_BRCST, tile_base + 0);  // face 0 rows 0-7
-            TT_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST_D0_BRCST, tile_base + 8);  // face 0 rows 8-15
-            TT_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST_D0_BRCST, tile_base + 16); // face 1 rows 0-7
-            TT_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST_D0_BRCST, tile_base + 24); // face 1 rows 8-15
-            TT_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST_D0_BRCST, tile_base + 32); // face 2 rows 0-7
-            TT_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST_D0_BRCST, tile_base + 40); // face 2 rows 8-15
-            TT_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST_D0_BRCST, tile_base + 48); // face 3 rows 0-7
-            TT_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST_D0_BRCST, tile_base + 56); // face 3 rows 8-15
+            dc::movb2d<false, p_movb2d::SRC_ROW16_OFFSET, Bcast::Scalar, 8>(tile_base + 0);  // face 0 rows 0-7
+            dc::movb2d<false, p_movb2d::SRC_ROW16_OFFSET, Bcast::Scalar, 8>(tile_base + 8);  // face 0 rows 8-15
+            dc::movb2d<false, p_movb2d::SRC_ROW16_OFFSET, Bcast::Scalar, 8>(tile_base + 16); // face 1 rows 0-7
+            dc::movb2d<false, p_movb2d::SRC_ROW16_OFFSET, Bcast::Scalar, 8>(tile_base + 24); // face 1 rows 8-15
+            dc::movb2d<false, p_movb2d::SRC_ROW16_OFFSET, Bcast::Scalar, 8>(tile_base + 32); // face 2 rows 0-7
+            dc::movb2d<false, p_movb2d::SRC_ROW16_OFFSET, Bcast::Scalar, 8>(tile_base + 40); // face 2 rows 8-15
+            dc::movb2d<false, p_movb2d::SRC_ROW16_OFFSET, Bcast::Scalar, 8>(tile_base + 48); // face 3 rows 0-7
+            dc::movb2d<false, p_movb2d::SRC_ROW16_OFFSET, Bcast::Scalar, 8>(tile_base + 56); // face 3 rows 8-15
 
             // BH HW bug: MOVB2D(DEST_32B_LOW) is ignored when Fp32 dest mode is active.
-            cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
+            hal_port::set_fp32_enabled<0>();
             // SrcA=Float32 (non-Tf32): MOVB2D(DEST_32B_LOW) writes lo16 of 32-bit dest
-            cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Float32));
+            hal_port::set_srca_format<DataFormat::Float32>();
 
-            TT_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST_D0_BRCST, tile_base + 0);  // face 0 rows 0-7
-            TT_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST_D0_BRCST, tile_base + 8);  // face 0 rows 8-15
-            TT_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST_D0_BRCST, tile_base + 16); // face 1 rows 0-7
-            TT_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST_D0_BRCST, tile_base + 24); // face 1 rows 8-15
-            TT_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST_D0_BRCST, tile_base + 32); // face 2 rows 0-7
-            TT_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST_D0_BRCST, tile_base + 40); // face 2 rows 8-15
-            TT_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST_D0_BRCST, tile_base + 48); // face 3 rows 0-7
-            TT_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST_D0_BRCST, tile_base + 56); // face 3 rows 8-15
+            dc::movb2d<true, p_movb2d::SRC_ZERO_OFFSET, Bcast::Scalar, 8>(tile_base + 0);  // face 0 rows 0-7
+            dc::movb2d<true, p_movb2d::SRC_ZERO_OFFSET, Bcast::Scalar, 8>(tile_base + 8);  // face 0 rows 8-15
+            dc::movb2d<true, p_movb2d::SRC_ZERO_OFFSET, Bcast::Scalar, 8>(tile_base + 16); // face 1 rows 0-7
+            dc::movb2d<true, p_movb2d::SRC_ZERO_OFFSET, Bcast::Scalar, 8>(tile_base + 24); // face 1 rows 8-15
+            dc::movb2d<true, p_movb2d::SRC_ZERO_OFFSET, Bcast::Scalar, 8>(tile_base + 32); // face 2 rows 0-7
+            dc::movb2d<true, p_movb2d::SRC_ZERO_OFFSET, Bcast::Scalar, 8>(tile_base + 40); // face 2 rows 8-15
+            dc::movb2d<true, p_movb2d::SRC_ZERO_OFFSET, Bcast::Scalar, 8>(tile_base + 48); // face 3 rows 0-7
+            dc::movb2d<true, p_movb2d::SRC_ZERO_OFFSET, Bcast::Scalar, 8>(tile_base + 56); // face 3 rows 8-15
 
-            cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
+            hal_port::set_fp32_enabled<1>();
 
-            TTI_CLEARDVALID(0b10, 0);
+            hal::src<hal::SrcB>.release(); // TTI_CLEARDVALID(0b10, 0)
         }
         else if constexpr (src_b_bcast_type == BroadcastType::COL)
         {
@@ -231,54 +342,50 @@ inline void _llk_math_eltwise_unary_datacopy_(
                 const std::uint32_t face_base = tile_base + offset * 32;
 
                 // Extract all 16 source rows from dest into B register (4 rows at a time)
-                TT_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, face_base + 0);         // hi16 rows 0-3
-                TT_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET + 4, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, face_base + 4);     // hi16 rows 4-7
-                TT_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET + 8, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, face_base + 8);     // hi16 rows 8-11
-                TT_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET + 12, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, face_base + 12);   // hi16 rows 12-15
-                TT_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, face_base + 0);       // lo16 rows 0-3
-                TT_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ZERO_OFFSET + 4, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, face_base + 4);   // lo16 rows 4-7
-                TT_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ZERO_OFFSET + 8, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, face_base + 8);   // lo16 rows 8-11
-                TT_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ZERO_OFFSET + 12, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, face_base + 12); // lo16 rows 12-15
+                dc::movd2b<false, p_movd2b::SRC_ROW16_OFFSET, 4>(face_base + 0);       // hi16 rows 0-3
+                dc::movd2b<false, p_movd2b::SRC_ROW16_OFFSET + 4, 4>(face_base + 4);   // hi16 rows 4-7
+                dc::movd2b<false, p_movd2b::SRC_ROW16_OFFSET + 8, 4>(face_base + 8);   // hi16 rows 8-11
+                dc::movd2b<false, p_movd2b::SRC_ROW16_OFFSET + 12, 4>(face_base + 12); // hi16 rows 12-15
+                dc::movd2b<true, p_movd2b::SRC_ZERO_OFFSET, 4>(face_base + 0);         // lo16 rows 0-3
+                dc::movd2b<true, p_movd2b::SRC_ZERO_OFFSET + 4, 4>(face_base + 4);     // lo16 rows 4-7
+                dc::movd2b<true, p_movd2b::SRC_ZERO_OFFSET + 8, 4>(face_base + 8);     // lo16 rows 8-11
+                dc::movd2b<true, p_movd2b::SRC_ZERO_OFFSET + 12, 4>(face_base + 12);   // lo16 rows 12-15
 
                 // SrcA=Tf32: MOVB2D(DEST_NORM) writes hi16 of 32-bit dest
-                cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Tf32));
+                hal_port::set_srca_format<DataFormat::Tf32>();
 
-                TT_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 0);       // left face rows 0-3
-                TT_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 4);   // left face rows 4-7
-                TT_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 8);   // left face rows 8-11
-                TT_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 12); // left face rows 12-15
-                TT_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 16);      // right face rows 0-3
-                TT_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 20);  // right face rows 4-7
-                TT_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 24);  // right face rows 8-11
-                TT_MOVB2D(
-                    p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 28); // right face rows 12-15
+                dc::movb2d<false, p_movb2d::SRC_ROW16_OFFSET, Bcast::Column0, 4>(face_base + 0);       // left face rows 0-3
+                dc::movb2d<false, p_movb2d::SRC_ROW16_OFFSET + 4, Bcast::Column0, 4>(face_base + 4);   // left face rows 4-7
+                dc::movb2d<false, p_movb2d::SRC_ROW16_OFFSET + 8, Bcast::Column0, 4>(face_base + 8);   // left face rows 8-11
+                dc::movb2d<false, p_movb2d::SRC_ROW16_OFFSET + 12, Bcast::Column0, 4>(face_base + 12); // left face rows 12-15
+                dc::movb2d<false, p_movb2d::SRC_ROW16_OFFSET, Bcast::Column0, 4>(face_base + 16);      // right face rows 0-3
+                dc::movb2d<false, p_movb2d::SRC_ROW16_OFFSET + 4, Bcast::Column0, 4>(face_base + 20);  // right face rows 4-7
+                dc::movb2d<false, p_movb2d::SRC_ROW16_OFFSET + 8, Bcast::Column0, 4>(face_base + 24);  // right face rows 8-11
+                dc::movb2d<false, p_movb2d::SRC_ROW16_OFFSET + 12, Bcast::Column0, 4>(face_base + 28); // right face rows 12-15
 
                 // BH HW bug: MOVB2D(DEST_32B_LOW) is ignored when Fp32 dest mode is active.
-                cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
+                hal_port::set_fp32_enabled<0>();
                 // SrcA=Float32 (non-Tf32): MOVB2D(DEST_32B_LOW) writes lo16 of 32-bit dest
-                cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Float32));
+                hal_port::set_srca_format<DataFormat::Float32>();
 
-                TT_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 0);     // left face rows 0-3
-                TT_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET + 4, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 4); // left face rows 4-7
-                TT_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET + 8, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 8); // left face rows 8-11
-                TT_MOVB2D(
-                    p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET + 12, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 12);  // left face rows 12-15
-                TT_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 16); // right face rows 0-3
-                TT_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET + 4, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 20); // right face rows 4-7
-                TT_MOVB2D(
-                    p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET + 8, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 24); // right face rows 8-11
-                TT_MOVB2D(
-                    p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET + 12, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 28); // right face rows 12-15
+                dc::movb2d<true, p_movb2d::SRC_ZERO_OFFSET, Bcast::Column0, 4>(face_base + 0);       // left face rows 0-3
+                dc::movb2d<true, p_movb2d::SRC_ZERO_OFFSET + 4, Bcast::Column0, 4>(face_base + 4);   // left face rows 4-7
+                dc::movb2d<true, p_movb2d::SRC_ZERO_OFFSET + 8, Bcast::Column0, 4>(face_base + 8);   // left face rows 8-11
+                dc::movb2d<true, p_movb2d::SRC_ZERO_OFFSET + 12, Bcast::Column0, 4>(face_base + 12); // left face rows 12-15
+                dc::movb2d<true, p_movb2d::SRC_ZERO_OFFSET, Bcast::Column0, 4>(face_base + 16);      // right face rows 0-3
+                dc::movb2d<true, p_movb2d::SRC_ZERO_OFFSET + 4, Bcast::Column0, 4>(face_base + 20);  // right face rows 4-7
+                dc::movb2d<true, p_movb2d::SRC_ZERO_OFFSET + 8, Bcast::Column0, 4>(face_base + 24);  // right face rows 8-11
+                dc::movb2d<true, p_movb2d::SRC_ZERO_OFFSET + 12, Bcast::Column0, 4>(face_base + 28); // right face rows 12-15
 
-                cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
+                hal_port::set_fp32_enabled<1>();
             }
 
-            TTI_CLEARDVALID(0b10, 0);
+            hal::src<hal::SrcB>.release(); // TTI_CLEARDVALID(0b10, 0)
         }
 
         if constexpr (src_b_bcast_type != BroadcastType::NONE)
         {
-            TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 0);
+            hal_port::set_disable_implied_srca_fmt<0>();
 
             // The 32b path manipulated the flag directly above (tt-llk#449 Fp32_enabled dance); invalidate the
             // tracked state so the next op re-applies the Src zero-substitution flag.
@@ -287,7 +394,7 @@ inline void _llk_math_eltwise_unary_datacopy_(
     }
     else
     {
-        math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
+        hal_port::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 
         if constexpr (is_fp32_dest_acc_en && src_b_bcast_type != BroadcastType::NONE)
         {
@@ -296,29 +403,29 @@ inline void _llk_math_eltwise_unary_datacopy_(
             // avoiding BroadcastType::NONE mode as that path is used by SFPU
             if (dst_format == to_underlying(DataFormat::UInt16))
             {
-                TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 1);
-                cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
-                cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Tf32));
+                hal_port::set_disable_implied_srca_fmt<1>();
+                cfg::write<cfg::Access::TensixCfgUnit, cfg::AluAccCtrl::Zero_Flag_disabled_src, cfg::Sec::S0, 1>();
+                hal_port::set_srca_format<DataFormat::Tf32>();
             }
         }
 
         if constexpr (type == DataCopyType::A2D)
         {
-            ckernel_template::run();
+            Mop::run();
         }
         else if constexpr (type == DataCopyType::B2D)
         {
             if constexpr (src_b_bcast_type == BroadcastType::COL)
             {
                 // Mop for col broadcast only does 2 outerloops.  Needs to clear B manually and call twice
-                ckernel_template::run();
-                TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, 0);
-                ckernel_template::run();
-                TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, 0);
+                Mop::run();
+                rwc::set<rwc::MathCounter {.flip = rwc::Src::B}>(); // TTI_SETRWC(CLR_B, 0, 0, 0, 0, 0)
+                Mop::run();
+                rwc::set<rwc::MathCounter {.flip = rwc::Src::A | rwc::Src::B}>(); // TTI_SETRWC(CLR_AB, 0, 0, 0, 0, 0)
             }
             else
             {
-                ckernel_template::run();
+                Mop::run();
             }
         }
 
@@ -327,12 +434,12 @@ inline void _llk_math_eltwise_unary_datacopy_(
             // Undo format switching option
             if (dst_format == to_underlying(DataFormat::UInt16))
             {
-                TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 0);
+                hal_port::set_disable_implied_srca_fmt<0>();
                 math::_invalidate_src_zero_flag_state_();
             }
         }
 
-        math::clear_dst_reg_addr();
+        hal_port::clear_dst_reg_addr();
     }
 }
 
@@ -349,77 +456,41 @@ inline void _llk_math_eltwise_unary_datacopy_(
 template <DataCopyType type, BroadcastType bcast_type = BroadcastType::NONE>
 inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format)
 {
-    addr_mod_t {
-        .srca = {.incr = 0},
-        .srcb = {.incr = 0},
-        .dest = {.incr = 0},
-    }
-        .set(ADDR_MOD_3);
+    using hal_port::MathAddrMod;
+    using hal_port::set_math_addr_mod;
+    using Sec = hal::cfg::Sec;
+
+    set_math_addr_mod<Sec::S3, MathAddrMod {}>(); // ADDR_MOD_3: no increments
 
     // Use srcA for data movement
     if constexpr (type == DataCopyType::A2D) // Overrides BCAST_TYPE when type is A2D
     {
-        addr_mod_t {
-            .srca = {.incr = 1},
-            .srcb = {.incr = 0},
-            .dest = {.incr = 1},
-        }
-            .set(ADDR_MOD_0);
+        set_math_addr_mod<Sec::S0, MathAddrMod {.srca_incr = 1, .dest_incr = 1}>();
 
         // Just unpack into A and move to Dest
-        addr_mod_t {
-            .srca = {.incr = 8},
-            .srcb = {.incr = 0},
-            .dest = {.incr = 8},
-        }
-            .set(ADDR_MOD_2);
+        set_math_addr_mod<Sec::S2, MathAddrMod {.srca_incr = 8, .dest_incr = 8}>();
     }
     else
     {
         if constexpr (bcast_type == BroadcastType::ROW || bcast_type == BroadcastType::SCALAR)
         {
-            addr_mod_t {
-                .srca = {.incr = 0},
-                .srcb = {.incr = 0},
-                .dest = {.incr = 1},
-            }
-                .set(ADDR_MOD_0);
+            set_math_addr_mod<Sec::S0, MathAddrMod {.dest_incr = 1}>();
 
             // Just unpack into B and move to Dest
-            addr_mod_t {
-                .srca = {.incr = 0},
-                .srcb = {.incr = 0},
-                .dest = {.incr = 8},
-            }
-                .set(ADDR_MOD_2);
+            set_math_addr_mod<Sec::S2, MathAddrMod {.dest_incr = 8}>();
         }
         else
         {
-            addr_mod_t {
-                .srca = {.incr = 0},
-                .srcb = {.incr = 1},
-                .dest = {.incr = 1},
-            }
-                .set(ADDR_MOD_0);
+            set_math_addr_mod<Sec::S0, MathAddrMod {.srcb_incr = 1, .dest_incr = 1}>();
 
             // Just unpack into B and move to Dest
             if (dst_format == to_underlying(DataFormat::UInt16)) // UInt16 case needs to use MOVB2D, which is 4 rows per op
             {
-                addr_mod_t {
-                    .srca = {.incr = 0},
-                    .srcb = {.incr = 4},
-                    .dest = {.incr = 4},
-                }
-                    .set(ADDR_MOD_2);
+                set_math_addr_mod<Sec::S2, MathAddrMod {.srcb_incr = 4, .dest_incr = 4}>();
             }
             else
             {
-                addr_mod_t {
-                    .srca = {.incr = 0},
-                    .srcb = {.incr = 8},
-                    .dest = {.incr = 8},
-                }
-                    .set(ADDR_MOD_2);
+                set_math_addr_mod<Sec::S2, MathAddrMod {.srcb_incr = 8, .dest_incr = 8}>();
             }
         }
     }
@@ -445,6 +516,11 @@ template <DataCopyType type, bool is_fp32_dest_acc_en, BroadcastType bcast_type 
 inline void eltwise_unary_configure_mop(
     std::uint32_t rows_per_inst, std::uint32_t total_rows, const ckernel::TensorShape tensor_shape, const std::uint32_t dst_format)
 {
+    namespace mop  = hal::mop;
+    namespace move = hal::move;
+    namespace dc   = hal_port::datacopy;
+    using hal::fpu::SrcBBroadcast;
+
     LLK_VALIDATE_TENSOR_SHAPE_MATH("eltwise_unary_configure_mop", tensor_shape);
     const std::uint32_t num_faces = tensor_shape.total_num_faces();
 
@@ -456,32 +532,25 @@ inline void eltwise_unary_configure_mop(
         if (((is_fp32_dest_acc_en || is_int_fpu_en) && !(dst_format == to_underlying(DataFormat::UInt16))) || (dst_format == to_underlying(DataFormat::UInt8)))
         {
             // use elwadd to handle unpacking data into src A as fp16, but dest is in fp32 mode OR to handle uint8 datums
-            ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0));
-            tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB));
-            tmp.program();
+            mop::program(mop::loop(outerloop, mop::loop(innerloop, dc::elwadd_copy(SrcBBroadcast::None, ADDR_MOD_2)), dc::SETRWC_CLR_AB_SET_AB));
         }
         else if (is_fp32_dest_acc_en && (dst_format == to_underlying(DataFormat::UInt16)))
         {
             // Typecasting uint16 to 32bit data, need data to be written to lower 16 bits without modification
             // to be consumed by SFPU easily.
-            ckernel_template tmp(outerloop, innerloop, TT_OP_MOVA2D(p_mov::DEST_32B_LOW, 0, ADDR_MOD_2, p_mova2d::MOV_8_ROWS, 0));
-            tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB));
-            tmp.program();
+            mop::program(mop::loop(outerloop, mop::loop(innerloop, dc::MOVA2D_8_ROWS<true>), dc::SETRWC_CLR_AB_SET_AB));
         }
         else
         {
-            ckernel_template tmp(outerloop, innerloop, TT_OP_MOVA2D(p_mov::DEST_NORM, 0, ADDR_MOD_2, p_mova2d::MOV_8_ROWS, 0));
-            tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB));
-            tmp.program();
+            mop::program(mop::loop(outerloop, mop::loop(innerloop, dc::MOVA2D_8_ROWS<false>), dc::SETRWC_CLR_AB_SET_AB));
         }
     }
     else if constexpr (type == DataCopyType::B2D)
     {
-        std::uint32_t addr_mod  = (rows_per_inst == p_movb2d::MOV_1_ROW) ? ADDR_MOD_0 : ADDR_MOD_2;
-        std::uint32_t innerloop = (rows_per_inst == p_movb2d::MOV_1_ROW) ? total_rows : (total_rows >> 2);
+        const std::uint8_t addr_mod = (rows_per_inst == p_movb2d::MOV_1_ROW) ? ADDR_MOD_0 : ADDR_MOD_2;
+        std::uint32_t innerloop     = (rows_per_inst == p_movb2d::MOV_1_ROW) ? total_rows : (total_rows >> 2);
         // One outer iteration per face: end_op clears a SrcB DVALID each iteration.
         std::uint32_t outerloop = num_faces;
-        auto broadcast_type     = p_movb2d::MOV_1_ROW; // No broadcast;
 
         if constexpr (bcast_type == BroadcastType::COL)
         {
@@ -489,58 +558,50 @@ inline void eltwise_unary_configure_mop(
             // The mop only runs for 2 outer loops and mop is called twice for col broadcast
             outerloop = 2;
             // ELWADD with zeros will be used for non UInt16 case, since it moves 8 rows per cycle
-            broadcast_type = p_elwise::SRCB_BCAST_COL;
             if (dst_format == to_underlying(DataFormat::UInt16))
             {
-                innerloop      = 16 >> 2; // movb2d produces 4 rows per op
-                broadcast_type = p_movb2d::MOV_4_ROWS_D0_BRCST;
+                innerloop = 16 >> 2; // movb2d produces 4 rows per op
             }
         }
         else if constexpr (bcast_type == BroadcastType::ROW)
         {
-            innerloop      = (total_rows >> 3);
-            broadcast_type = p_movb2d::MOV_8_ROW_BRCST;
+            innerloop = (total_rows >> 3);
         }
         else if constexpr (bcast_type == BroadcastType::SCALAR)
         {
-            outerloop      = 1;
-            innerloop      = num_faces * (total_rows >> 3);
-            broadcast_type = p_elwise::SRCB_BCAST_ALL;
-            if (dst_format == to_underlying(DataFormat::UInt16))
-            {
-                broadcast_type = p_movb2d::MOV_8_ROW_BRCST_D0_BRCST;
-            }
+            outerloop = 1;
+            innerloop = num_faces * (total_rows >> 3);
         }
 
         // ELWADD moves 8 rows/cycle (vs MOVB2D's 4) but routes through the FPU, which interprets
         // UInt16 bit patterns as floats and flushes values with exp=0. UInt16 falls back to MOVB2D.
         if constexpr (bcast_type == BroadcastType::SCALAR)
         {
-            const std::uint32_t copy_op = (dst_format == to_underlying(DataFormat::UInt16)) ? TT_OP_MOVB2D(0, 0, addr_mod, broadcast_type, 0)
-                                                                                            : TT_OP_ELWADD(0, 0, broadcast_type, addr_mod, 0);
-            ckernel_template tmp(outerloop, innerloop, copy_op);
-            tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, 0));
-            tmp.program();
+            // UInt16: MOVB2D(MOV_8_ROW_BRCST_D0_BRCST); otherwise ELWADD(SRCB_BCAST_ALL)
+            const std::uint32_t copy_op = (dst_format == to_underlying(DataFormat::UInt16))
+                                              ? dc::movb2d_copy(move::rows::Eight, move::Broadcast::Scalar, addr_mod)
+                                              : dc::elwadd_copy(SrcBBroadcast::Scalar, addr_mod);
+            mop::program(mop::loop(outerloop, mop::loop(innerloop, copy_op), dc::SETRWC_CLR_AB));
         }
         else if constexpr (bcast_type == BroadcastType::COL)
         {
-            const std::uint32_t copy_op = (dst_format == to_underlying(DataFormat::UInt16)) ? TT_OP_MOVB2D(0, 0, addr_mod, broadcast_type, 0)
-                                                                                            : TT_OP_ELWADD(0, 0, broadcast_type, addr_mod, 0);
-            ckernel_template tmp(outerloop, innerloop, copy_op);
-            tmp.set_end_op(TT_OP_SETRWC(0, p_setrwc::CR_B, 0, 0, 0, p_setrwc::SET_B));
-            tmp.program();
+            // UInt16: MOVB2D(MOV_4_ROWS_D0_BRCST); otherwise ELWADD(SRCB_BCAST_COL)
+            const std::uint32_t copy_op = (dst_format == to_underlying(DataFormat::UInt16))
+                                              ? dc::movb2d_copy(move::rows::Four, move::Broadcast::Column0, addr_mod)
+                                              : dc::elwadd_copy(SrcBBroadcast::Column, addr_mod);
+            mop::program(mop::loop(outerloop, mop::loop(innerloop, copy_op), dc::SETRWC_CR_B_SET_B));
         }
         else if constexpr (bcast_type == BroadcastType::ROW)
         {
-            ckernel_template tmp(outerloop, innerloop, TT_OP_MOVB2D(0, 0, addr_mod, broadcast_type, 0));
-            tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_B, p_setrwc::CR_B, 0, 0, 0, p_setrwc::SET_B));
-            tmp.program();
+            // MOVB2D(MOV_8_ROW_BRCST)
+            mop::program(mop::loop(outerloop, mop::loop(innerloop, dc::movb2d_copy(move::rows::Eight, move::Broadcast::Row, addr_mod)), dc::SETRWC_CLR_B_CR_B));
         }
         else
         {
-            ckernel_template tmp(outerloop, innerloop, TT_OP_MOVB2D(0, 0, addr_mod, rows_per_inst, 0));
-            tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_B, p_setrwc::CR_B, 0, 0, 0, p_setrwc::SET_B));
-            tmp.program();
+            // MOVB2D(rows_per_inst): MOV_1_ROW or MOV_4_ROWS
+            LLK_ASSERT(rows_per_inst == p_movb2d::MOV_1_ROW || rows_per_inst == p_movb2d::MOV_4_ROWS, "B2D datacopy moves 1 or 4 rows per instruction");
+            const move::RowCount rows = (rows_per_inst == p_movb2d::MOV_4_ROWS) ? move::rows::Four : move::rows::One;
+            mop::program(mop::loop(outerloop, mop::loop(innerloop, dc::movb2d_copy(rows, move::Broadcast::None, addr_mod)), dc::SETRWC_CLR_B_CR_B));
         }
     }
 }
@@ -569,6 +630,8 @@ template <
 inline void _llk_math_eltwise_unary_datacopy_init_(
     const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE, const std::uint32_t dst_format = 255)
 {
+    namespace cfg = hal::cfg;
+
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Tilize,
         "Blackhole _llk_math_eltwise_unary_datacopy_init_ supports only PackMode::Default and PackMode::Tilize");
@@ -599,9 +662,11 @@ inline void _llk_math_eltwise_unary_datacopy_init_(
         eltwise_unary_configure_mop<type, false, src_b_bcast_type>(p_movb2d::MOV_4_ROWS, 16, tensor_shape, dst_format);
     }
 
-    TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
+    // TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0): both fields of the word
+    cfg::write<cfg::Access::TensixCfgUnit>(
+        cfg::set<cfg::ClrDvalid::SrcA_Disable, cfg::Sec::S0, 0>(), cfg::set<cfg::ClrDvalid::SrcB_Disable, cfg::Sec::S0, 0>());
 
-    math::reset_counters(p_setrwc::SET_ABD_F);
+    hal_port::reset_counters_abd_f();
 }
 
 /**

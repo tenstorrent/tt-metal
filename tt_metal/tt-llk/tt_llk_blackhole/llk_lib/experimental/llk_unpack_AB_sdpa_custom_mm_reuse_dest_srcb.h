@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// HAL port of tt_llk_blackhole/llk_lib/experimental/llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb.h. Same instruction
+// sequence and access kinds as production, expressed through the HAL, except the HAL-GAPs marked below.
+
 #pragma once
 
 #include <cstdint>
@@ -10,8 +13,16 @@
 #include "ckernel_defs.h"
 #include "ckernel_globals.h"
 #include "ckernel_ops.h"
-#include "ckernel_template.h"
 #include "cunpack_common.h"
+#include "hal/cfg.h"
+#include "hal/mop.h"
+#include "hal/nop.h"
+#include "hal/replay.h"
+#include "hal/sync.h"
+#include "hal/tensix_counters.h"
+#include "hal/unpack.h"
+#include "llk_assert.h"
+#include "llk_unpack_common.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
@@ -21,6 +32,18 @@ using namespace ckernel::unpacker;
 constexpr std::uint32_t SDPA_CUSTOM_MM_REUSE_BLOCK_LEN                = 3;
 constexpr std::uint32_t SDPA_CUSTOM_MM_REUSE_NUM_BLOCK_INCREMENT_BLKS = 9;
 constexpr std::uint32_t SDPA_CUSTOM_MM_REUSE_REPLAY_BUF_LEN           = (SDPA_CUSTOM_MM_REUSE_NUM_BLOCK_INCREMENT_BLKS + 1) * SDPA_CUSTOM_MM_REUSE_BLOCK_LEN;
+
+namespace hal_port
+{
+// TTI_SETADCZW(UNP_A | UNP_B, 0, 0, 0, 0, 0b1111) then TTI_SETADCXY(UNP_A | UNP_B, 0, 0, 0, 0, 0b1010): Z and W of both
+// channels, then Y of both channels, for both unpackers.
+inline void sdpa_custom_mm_reuse_reset_unpack_counters()
+{
+    namespace adc = hal::counters::adc;
+    adc::set<adc::AddrCounter {.channel0 = {.z = 0, .w = 0}, .channel1 = {.z = 0, .w = 0}}.for_clients<adc::Client::Unpacker0, adc::Client::Unpacker1>()>();
+    adc::set<adc::AddrCounter {.channel0 = {.y = 0}, .channel1 = {.y = 0}}.for_clients<adc::Client::Unpacker0, adc::Client::Unpacker1>()>();
+}
+} // namespace hal_port
 
 // SDPA_CUSTOM_MM_REUSE_DEST_SRCB
 // Custom matmul that reuses SrcB from dest and only unpacks SrcA.
@@ -58,20 +81,28 @@ inline void _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_mop_config_(const std:
     // This supports first_half up to 9 tiles and second_half up to 9 tiles = 18 max.
     // Practical limit is 16 due to dst size.
 
-    load_replay_buf(
-        0,
-        SDPA_CUSTOM_MM_REUSE_REPLAY_BUF_LEN,
+    // TTI_UNPACR_COMMON(SrcA, 0b00000000, 1)
+    static constexpr hal::unpack::DataTransfer unpack_srca {
+        .engine  = hal::unpack::Engine::Unpacker0,
+        .context = hal::unpack::ContextSelection::explicit_context(0, 0),
+        .handoff = hal::unpack::SourceHandoff::FlipAndSetDataValid,
+    };
+
+    // load_replay_buf(0, 30, ...): record only.
+    hal::replay::record<hal::replay::BufferRange {0, SDPA_CUSTOM_MM_REUSE_REPLAY_BUF_LEN}>(
         []
         {
             for (std::uint32_t i = 0; i < SDPA_CUSTOM_MM_REUSE_NUM_BLOCK_INCREMENT_BLKS; i++)
             {
-                TTI_UNPACR_COMMON(SrcA, 0b00000000, 1);
+                hal::unpack::run<unpack_srca>();
+                // HAL-GAP: no HAL API for CFGSHIFTMASK; production encoding kept.
                 TTI_CFGSHIFTMASK(1, 3, 32 - 1, 0, 0, THCON_SEC0_REG3_Base_address_ADDR32);
-                TTI_NOP;
+                hal::nop::thread();
             }
-            TTI_UNPACR_COMMON(SrcA, 0b00000000, 1);
+            hal::unpack::run<unpack_srca>();
+            // HAL-GAP: no HAL API for CFGSHIFTMASK; production encoding kept.
             TTI_CFGSHIFTMASK(1, 3, 32 - 1, 0, 1, THCON_SEC0_REG3_Base_address_ADDR32);
-            TTI_NOP;
+            hal::nop::thread();
         });
 
     // Mop covers two k-rows per iteration, allowing up to 256 kt_dim with 128 MOP iterations.
@@ -88,48 +119,54 @@ inline void _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_mop_config_(const std:
     //
     // nt_dim == 1: B-mode (A0 + B), both pointing to the inner_increment block
     // nt_dim >= 2: Halo-mode (A0, A1, A2, A3), alternating first_half/second_half
+    //
+    // The HAL writes only the MopCfg words the selected mode reads: B-mode leaves InsnA1-3 unwritten, halo mode leaves
+    // InsnB and SkipB unwritten. The skip words production does write hold 0, as here.
+    using namespace hal::mop;
+    if (nt_dim == 1)
+    {
+        // For nt_dim == 1: only inner_increment block is needed, use B-mode
+        // block_increment == inner_increment when nt_dim == 1 so either block works,
+        // but we use the inner_increment block (last 3 insns) for correctness
+        constexpr std::uint32_t single_tile = hal::replay::get_operation<hal::replay::BufferRange {
+            SDPA_CUSTOM_MM_REUSE_REPLAY_BUF_LEN - SDPA_CUSTOM_MM_REUSE_BLOCK_LEN, SDPA_CUSTOM_MM_REUSE_BLOCK_LEN}>();
+        // ckernel_unpack_template(unpackB = true, unpackHalo = false, A0 = single_tile, skipA = 0, B = single_tile, skipB = 0)
+        program(foreach_mask_bit(if_clear(single_tile, single_tile), otherwise(0, 0)));
+    }
+    else
+    {
+        const std::uint32_t first_half_iters  = (nt_dim + 1) >> 1;
+        const std::uint32_t second_half_iters = nt_dim >> 1;
 
-    const std::uint32_t first_half_iters  = (nt_dim + 1) >> 1;
-    const std::uint32_t second_half_iters = nt_dim >> 1;
+        const std::uint32_t first_half_len  = first_half_iters * SDPA_CUSTOM_MM_REUSE_BLOCK_LEN;
+        const std::uint32_t second_half_len = second_half_iters * SDPA_CUSTOM_MM_REUSE_BLOCK_LEN;
+        const std::uint32_t first_half      = hal::replay::get_operation(hal::replay::BufferRange {0, first_half_len});
+        const std::uint32_t second_half =
+            hal::replay::get_operation(hal::replay::BufferRange {SDPA_CUSTOM_MM_REUSE_REPLAY_BUF_LEN - second_half_len, second_half_len});
+        // ckernel_unpack_template(unpackB = false, unpackHalo = true, A0-3 = first/second/first/second, skipA = 0)
+        program(foreach_mask_bit(if_clear(first_half, second_half, first_half, second_half), otherwise(0)));
+    }
 
-    const std::uint32_t first_half_len  = first_half_iters * SDPA_CUSTOM_MM_REUSE_BLOCK_LEN;
-    const std::uint32_t second_half_len = second_half_iters * SDPA_CUSTOM_MM_REUSE_BLOCK_LEN;
-    const std::uint32_t first_half      = lltt::replay_insn(0, first_half_len);
-    const std::uint32_t second_half     = lltt::replay_insn(SDPA_CUSTOM_MM_REUSE_REPLAY_BUF_LEN - second_half_len, second_half_len);
-
-    // For nt_dim == 1: only inner_increment block is needed, use B-mode
-    // block_increment == inner_increment when nt_dim == 1 so either block works,
-    // but we use the inner_increment block (last 3 insns) for correctness
-    const std::uint32_t single_tile = lltt::replay_insn(SDPA_CUSTOM_MM_REUSE_REPLAY_BUF_LEN - SDPA_CUSTOM_MM_REUSE_BLOCK_LEN, SDPA_CUSTOM_MM_REUSE_BLOCK_LEN);
-
-    ckernel_unpack_template tmp = ckernel_unpack_template(
-        nt_dim == 1,                            // B-mode when single tile per k-row
-        nt_dim != 1,                            // Halo-mode when multiple tiles per k-row
-        nt_dim == 1 ? single_tile : first_half, // A0
-        second_half,                            // A1
-        nt_dim == 1 ? single_tile : first_half, // A2
-        second_half,                            // A3
-        0,                                      // Skip A (unused, zmask always 0)
-        single_tile,                            // B (used in B-mode for nt_dim==1)
-        0                                       // Skip B (unused)
-    );
-
-    tmp.program();
-    TTI_MOP_CFG(0);
+    // TTI_MOP_CFG(0): the high zmask bits, which runs of more than 16 iterations read.
+    Runner<MopTemplate::Template0>::configure_mask_high<0>();
 }
 
 __attribute__((always_inline)) inline void _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_init_(
     const std::uint32_t nt_dim = 1, const std::uint32_t unpA_face_r_dim = FACE_R_DIM, const std::uint32_t unpA_num_faces = 4)
 {
-    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
+    namespace cfg = hal::cfg;
+    namespace adc = hal::counters::adc;
 
+    // cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0)
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::Thcon[cfg::Reg2].Haloize_mode, cfg::Sec::S0, 0>();
+
+    // TT_SETADCXX(UNP_A, unpA_x_end, 0x0)
     const std::uint32_t unpA_x_end = unpA_num_faces * unpA_face_r_dim * FACE_C_DIM - 1;
-    TT_SETADCXX(p_setadc::UNP_A, unpA_x_end, 0x0);
+    adc::set(adc::AddrCounter {.channel0 = {.x = 0}, .channel1 = {.x = unpA_x_end}}.for_clients<adc::Client::Unpacker0>());
 
     _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_mop_config_(nt_dim);
 
-    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
-    TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
+    hal_port::sdpa_custom_mm_reuse_reset_unpack_counters();
 }
 
 // MOP over k-row pairs, plus a replay tail for the last k-row when kt_dim is odd.
@@ -145,7 +182,18 @@ inline void _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_(
     const std::uint32_t nt_dim       = 1,
     const std::uint32_t in1_k_stride = 1)
 {
-    volatile std::uint32_t* cfg = get_cfg_pointer();
+    namespace hcfg = hal::cfg;
+    namespace sync = hal::sync;
+
+    // Whole-word MMIO stores into the state-CFG bank, as production.
+    constexpr std::uint32_t base_a_cntx0 = hcfg::Unpacker[0].Cntx[0].Base.addr32(hcfg::Sec::S0);
+    constexpr std::uint32_t scratch_sec0 = hcfg::Scratch::val.addr32(hcfg::Sec::S0);
+    constexpr std::uint32_t scratch_sec1 = hcfg::Scratch::val.addr32(hcfg::Sec::S1);
+    static_assert(base_a_cntx0 == THCON_SEC0_REG3_Base_address_ADDR32, "unpacker 0 context-0 base word");
+    static_assert(scratch_sec0 == SCRATCH_SEC0_val_ADDR32 && scratch_sec1 == SCRATCH_SEC1_val_ADDR32, "scratch words");
+    static_assert(hcfg::Scratch::val.shamt(hcfg::Sec::S0) == 0 && hcfg::Scratch::val.width == 32 && hcfg::Unpacker[0].Cntx[0].Base.width == 32, "whole words");
+
+    volatile std::uint32_t tt_reg_ptr* cfg = hcfg::detail::state_cfg_bank();
 
     const std::uint32_t address_a       = base_address_a + tile_size_a * tile_index_a;
     const std::uint32_t block_increment = tile_size_a;
@@ -157,21 +205,23 @@ inline void _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_(
     //   inner_increment = (in1_k_stride - nt_dim + 1) * tile_size_a
     const std::uint32_t inner_increment = (in1_k_stride - nt_dim + 1) * tile_size_a;
 
-    wait_for_next_context(1);
-    reset_config_context();
+    hal_port::wait_for_next_context(1);
+    hal_port::reset_config_context();
 
-    cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_a;
-    cfg[SCRATCH_SEC0_val_ADDR32]             = block_increment;
-    cfg[SCRATCH_SEC1_val_ADDR32]             = inner_increment;
+    cfg[base_a_cntx0] = address_a;
+    cfg[scratch_sec0] = block_increment;
+    cfg[scratch_sec1] = inner_increment;
 
-    semaphore_post(semaphore::UNPACK_SYNC);
+    // Trisc::SEMPOST for context acquire (MMIO)
+    sync::semaphore::post<sync::Access::MMIO, hal_port::UNPACK_SYNC_SEM>();
 
-    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+    sync::wait::stall<sync::StallTarget::Unpack, sync::StallCondition::RiscvAccessProcessed>();
 
     const std::uint32_t kt_pairs = kt_dim / 2;
     if (kt_pairs > 0)
     {
-        TT_MOP(0, kt_pairs - 1, 0);
+        // TT_MOP(0, kt_pairs - 1, 0); the init wrote the high mask bits with MOP_CFG.
+        hal::mop::Runner<hal::mop::MopTemplate::Template0>::run<0, hal::mop::MaskHigh::Preset>(kt_pairs);
     }
     if (kt_dim % 2 != 0)
     {
@@ -182,18 +232,18 @@ inline void _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_(
         const std::uint32_t second_half_tiles = nt_dim == 1 ? 1 : nt_dim / 2;
         if (first_half_tiles > 0)
         {
-            lltt::replay(0, first_half_tiles * SDPA_CUSTOM_MM_REUSE_BLOCK_LEN);
+            hal::replay::run(hal::replay::BufferRange {0, first_half_tiles * SDPA_CUSTOM_MM_REUSE_BLOCK_LEN});
         }
         const std::uint32_t second_half_instruction_count = second_half_tiles * SDPA_CUSTOM_MM_REUSE_BLOCK_LEN;
-        lltt::replay(SDPA_CUSTOM_MM_REUSE_REPLAY_BUF_LEN - second_half_instruction_count, second_half_instruction_count);
+        hal::replay::run(hal::replay::BufferRange {SDPA_CUSTOM_MM_REUSE_REPLAY_BUF_LEN - second_half_instruction_count, second_half_instruction_count});
     }
 
-    t6_semaphore_get(semaphore::UNPACK_SYNC);
+    // T6::SEMGET for context release
+    sync::semaphore::get<hal_port::UNPACK_SYNC_SEM>();
 
     // Wait for all contexts to be free
-    wait_for_next_context(1);
-    reset_config_context();
+    hal_port::wait_for_next_context(1);
+    hal_port::reset_config_context();
 
-    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
-    TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
+    hal_port::sdpa_custom_mm_reuse_reset_unpack_counters();
 }

@@ -2,6 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// HAL port of tt_llk_blackhole/llk_lib/experimental/llk_unpack_AB_reduce_custom_runtime.h. Same instruction
+// sequence and access kinds as production, expressed through the HAL with the helpers of
+// llk_unpack_AB_reduce_custom.h (hal_port::reduce_block_max).
+
 #pragma once
 
 #include <cstdint>
@@ -12,6 +16,9 @@
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
 #include "cunpack_common.h"
+#include "experimental/llk_unpack_AB_reduce_custom.h"
+#include "hal/mop.h"
+#include "hal/sync.h"
 #include "llk_assert.h"
 #include "llk_unpack_common.h"
 #include "tensor_shape.h"
@@ -36,13 +43,8 @@ using namespace ckernel::unpacker;
 
 inline void _llk_unpack_AB_reduce_block_max_row_mop_config_runtime_(std::uint32_t block_ct_dim, bool respect_trigger = false)
 {
-    static constexpr std::uint32_t unpack_srca_op =
-        TT_OP_UNPACR(SrcA, 0b00000001 /* Z_ch0_inc and Z_ch1_inc */, 0, 0, 0, 1, 1 /* Set Dvalid */, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-
     const std::uint32_t outerloop = respect_trigger ? (block_ct_dim / 2) : block_ct_dim;
-    const std::uint32_t innerloop = 1;
-    ckernel_template tmp(outerloop, innerloop, unpack_srca_op);
-    tmp.program();
+    hal_port::reduce_block_max::program_mop(outerloop); // innerloop = 1
 }
 
 /**
@@ -65,37 +67,7 @@ inline void _llk_unpack_AB_reduce_block_max_row_mop_config_runtime_(std::uint32_
 template <bool is_fp32_dest_acc_en = false>
 inline void _llk_unpack_AB_reduce_block_max_row_init_runtime_(std::uint32_t block_ct_dim, bool respect_trigger, const ckernel::TensorShape tensor_shape)
 {
-    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
-
-    // REDUCE_ROW requires transpose itself; additionally, within_face_16x16_transpose flag could require transpose;
-    // if we have the flag set with REDUCE_ROW, we don't need to do anything
-    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(1);
-
-    TTI_SETADCXX(p_setadc::UNP_B, FACE_R_DIM * FACE_C_DIM - 1, 0x0);         // Unpack a single face of a scaler
-    TT_SETADCXX(p_setadc::UNP_A, tensor_shape.total_tensor_size() - 1, 0x0); // Unpack all faces of an operand
-
-    // save the following state that is going to be modified:
-    // tile x, y, and z dims for both unpackers
-    // CH1 Z stride for both unpackers
-    TTI_RDCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_0, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);
-    TTI_RDCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_1, THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1);
-
-    TTI_SETDMAREG(0, 1 * FACE_C_DIM * FACE_R_DIM, 0, LO_16(p_gpr_unpack::TMP0));
-    TTI_SETDMAREG(0, 1 * FACE_C_DIM * FACE_R_DIM, 0, HI_16(p_gpr_unpack::TMP0));
-    TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);
-    // y_dim = number of faces (4 for a 32x32 tile, 2 for a 16x32 tiny tile). Hardcoding 4 makes the
-    // unpacker stride a full 32x32 tile between block tiles, over-reading the next tile (out-of-bounds
-    // / wrong tile) for a genuine 16x32 operand.
-    if (tensor_shape.num_faces_r_dim == 1)
-    {
-        TTI_SETDMAREG(0, 2 /* y_dim: 2 faces (16x32 tiny tile) */, 0, LO_16(p_gpr_unpack::TMP0));
-    }
-    else
-    {
-        TTI_SETDMAREG(0, 4 /* y_dim: 4 faces (32x32 tile) */, 0, LO_16(p_gpr_unpack::TMP0));
-    }
-    TTI_SETDMAREG(0, 1 /* z_dim */, 0, HI_16(p_gpr_unpack::TMP0));
-    TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1);
+    hal_port::reduce_block_max::configure(tensor_shape);
 
     _llk_unpack_AB_reduce_block_max_row_mop_config_runtime_(block_ct_dim, respect_trigger); // Unpack operand and scaler
 }
@@ -117,53 +89,35 @@ inline void _llk_unpack_AB_reduce_block_max_row_init_runtime_(std::uint32_t bloc
 inline void _llk_unpack_AB_reduce_block_max_row_runtime_(
     const std::uint32_t address_a, const std::uint32_t address_b, bool respect_trigger = false, bool overlap_first_half = false)
 {
-    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111); // reset counters
+    namespace rbm = hal_port::reduce_block_max;
+    using Mop     = hal::mop::Runner<hal::mop::MopTemplate::Template1>;
 
-    // Program srcA and srcB base addresses
-    volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer(); // get pointer to registers for current state ID
-
-    // Wait for free context
-    wait_for_next_context(2);
-
-    // Validate and configure addresses
-    _llk_unpack_configure_addresses_(address_a, address_b, cfg);
-
-    // Trisc::SEMPOST for context acquire
-    semaphore_post(semaphore::UNPACK_SYNC);
-
-    // Stall unpacker until pending CFG writes from Trisc have completed
-    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
-
-    TTI_UNPACR(SrcB, 0b00000000 /* Z_ch0_inc and Z_ch1_inc */, 0, 0, 0, 1, 1 /* Set Dvalid */, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    rbm::begin(address_a, address_b);
 
     if (respect_trigger)
     {
         // Barrier for the split reduce. run()#1 reads cols [0,N/2), run()#2 reads [N/2,N)
         // (MOP outerloop = block_ct_dim/2; Z continues across the two run()s). Overlap path: run()#1
         // waits on the early first-half token so it overlaps the second-half pack; else on FPU_SFPU.
-        // run()#2 always FPU_SFPU. Literal branch — TTI_SEMWAIT encodes the sem index as immediate.
+        // run()#2 always FPU_SFPU. Literal branch — SEMWAIT encodes the sem index as immediate.
         if (overlap_first_half)
         {
-            t6_semaphore_wait_on_zero<p_stall::STALL_UNPACK>(semaphore::UNPACK_MATH_DONE);
+            rbm::wait_while_zero<rbm::UNPACK_MATH_DONE_SEM>();
         }
         else
         {
-            t6_semaphore_wait_on_zero<p_stall::STALL_UNPACK>(semaphore::FPU_SFPU);
+            rbm::wait_while_zero<rbm::FPU_SFPU_SEM>();
         }
-        ckernel::ckernel_template::run();
-        t6_semaphore_wait_on_zero<p_stall::STALL_UNPACK>(semaphore::FPU_SFPU);
-        ckernel::ckernel_template::run();
+        Mop::run();
+        rbm::wait_while_zero<rbm::FPU_SFPU_SEM>();
+        Mop::run();
     }
     else
     {
-        ckernel::ckernel_template::run();
+        Mop::run();
     }
 
-    // T6::SEMGET for context release
-    t6_semaphore_get(semaphore::UNPACK_SYNC);
-
-    // Switch unpacker config context
-    switch_config_context(unp_cfg_context);
+    rbm::end();
 }
 
 /**
@@ -183,17 +137,18 @@ inline void _llk_unpack_AB_reduce_block_max_row_runtime_(
  */
 inline void _llk_unpack_AB_reduce_block_max_row_uninit_runtime_(bool respect_trigger = false, bool overlap_first_half = false)
 {
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
-    TTI_WRCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_0, p_cfg::WRCFG_32b, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);
-    TTI_WRCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_1, p_cfg::WRCFG_32b, THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1);
+    namespace rbm = hal_port::reduce_block_max;
+
+    rbm::restore();
 
     if (respect_trigger)
     {
-        t6_semaphore_get(semaphore::FPU_SFPU);
+        // t6_semaphore_get(semaphore::FPU_SFPU)
+        hal::sync::semaphore::get<rbm::FPU_SFPU_SEM>();
         if (overlap_first_half)
         {
             // Balance the first-half-token post; conditional so the non-overlap path leaves it untouched.
-            t6_semaphore_get(semaphore::UNPACK_MATH_DONE);
+            hal::sync::semaphore::get<rbm::UNPACK_MATH_DONE_SEM>();
         }
     }
 }

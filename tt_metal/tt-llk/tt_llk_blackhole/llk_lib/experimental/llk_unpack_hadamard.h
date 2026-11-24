@@ -40,6 +40,9 @@
 // recomputes its srcB address each tile so it tolerates CB rotation, but
 // the preprogrammed context-1 srcA base does not.
 
+// HAL port of tt_llk_blackhole/llk_lib/experimental/llk_unpack_hadamard.h. Same instruction sequence and access
+// kinds as production, expressed through the HAL.
+
 #pragma once
 
 #include <cstdint>
@@ -48,6 +51,10 @@
 #include "ckernel_defs.h"
 #include "ckernel_ops.h"
 #include "cunpack_common.h"
+#include "hal/cfg.h"
+#include "hal/sync.h"
+#include "hal/tensix_counters.h"
+#include "hal/unpack.h"
 #include "llk_unpack_common.h"
 
 using namespace ckernel;
@@ -74,23 +81,31 @@ inline void _llk_unpack_hadamard_h128_init_(const std::uint32_t h16_address)
     // to 8 rows for the input read and restores it (see _llk_unpack_hadamard_h128_).
     constexpr std::uint32_t kFaceXEnd = FACE_R_DIM * FACE_C_DIM - 1;
 
+    namespace hcfg = hal::cfg;
+    namespace adc  = hal::counters::adc;
+
     // Hadamard never transposes faces; force the face-transpose (haloize)
     // mode off in case a prior datacopy left it on.
-    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
+    hcfg::write<hcfg::Access::TensixCfgUnit, hcfg::Thcon[hcfg::Reg2].Haloize_mode, hcfg::Sec::S0, 0>();
 
-    // Zero the z/w address counters for both unpackers.
-    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+    // Zero the z/w address counters for both unpackers: TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111)
+    adc::set<adc::AddrCounter {.channel0 = {.z = 0, .w = 0}, .channel1 = {.z = 0, .w = 0}}.for_clients<adc::Client::Unpacker0, adc::Client::Unpacker1>()>();
 
-    // Full single-face span for srcA (input/h16) and srcB (h16).
-    TT_SETADCXX(p_setadc::UNP_A, kFaceXEnd, 0x0);
-    TT_SETADCXX(p_setadc::UNP_B, kFaceXEnd, 0x0);
+    // Full single-face span for srcA (input/h16) and srcB (h16): SETADCXX(UNP_A / UNP_B, kFaceXEnd, 0x0).
+    // Compile-time span: production's TT_ form with a constexpr value.
+    constexpr adc::AddrCounter face_span {.channel0 = {.x = 0}, .channel1 = {.x = kFaceXEnd}};
+    adc::set<face_span.for_clients<adc::Client::Unpacker0>()>();
+    adc::set<face_span.for_clients<adc::Client::Unpacker1>()>();
 
     // ── Context-1 H_16 preprogram ─────────────────────────────────────
-    volatile std::uint32_t tt_reg_ptr *cfg         = get_cfg_pointer();
-    cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = h16_address;
+    // Whole-word MMIO store, as production.
+    constexpr std::uint32_t base_cntx1 = hcfg::Unpacker[0].Cntx[1].Base.addr32(hcfg::Sec::S0);
+    static_assert(base_cntx1 == THCON_SEC0_REG3_Base_cntx1_address_ADDR32, "unpacker A context-1 base word");
+    volatile std::uint32_t tt_reg_ptr *cfg = hcfg::detail::state_cfg_bank();
+    cfg[base_cntx1]                        = h16_address;
 
     // Start on context 0 so the first tile's phase-1 unpack runs there.
-    reset_config_context();
+    hal_port::reset_config_context();
 }
 
 // One tile's worth of unpack: phase 1 (h16 -> srcB, input -> srcA bank 0)
@@ -109,7 +124,11 @@ inline void _llk_unpack_hadamard_h128_(
     const std::uint32_t tile_size_a,
     const std::uint32_t tile_size_b)
 {
-    volatile std::uint32_t *cfg = get_cfg_pointer();
+    namespace sync   = hal::sync;
+    namespace adc    = hal::counters::adc;
+    namespace unpack = hal::unpack;
+
+    volatile std::uint32_t *cfg = hal::cfg::detail::state_cfg_bank();
 
     const std::uint32_t address_a = base_address_a + tile_size_a * tile_index_a; // h16
     const std::uint32_t address_b = base_address_b + tile_size_b * tile_index_b; // input
@@ -117,49 +136,57 @@ inline void _llk_unpack_hadamard_h128_(
     constexpr std::uint32_t kFaceXEnd  = FACE_R_DIM * FACE_C_DIM - 1; // full 16x16 face
     constexpr std::uint32_t kInputXEnd = HADAMARD_H128_INPUT_DATUMS - 1;
 
+    // UNPACR(Src, 0, 0, 0, 0, 1 /*OvrdThreadId*/, 1 /*Set Dvalid*/, RAREFYB_DISABLE, 0, 0 /*ContextIdInc*/, 0, 0, 1)
+    constexpr unpack::DataTransfer unpack_srcb {.engine = unpack::Engine::Unpacker1, .handoff = unpack::SourceHandoff::FlipAndSetDataValid};
+    constexpr unpack::DataTransfer unpack_srca {.engine = unpack::Engine::Unpacker0, .handoff = unpack::SourceHandoff::FlipAndSetDataValid};
+    // SETADCXX(UNP_A, x_end, 0x0)
+    constexpr auto srca_span = [](const std::uint32_t x_end) { return adc::AddrCounter {.channel0 = {.x = 0}, .channel1 = {.x = x_end}}; };
+
     // ── Phase 1 (context 0): h16 -> srcB, input -> srcA bank 0 ──────────
     // Context 1 permanently stores the base address of the 16x16
     // Hadamard matrix, while context 0 is reprogrammed for every input tile.
     // Wait until context 0 is free so tile N+1 cannot overwrite tile N's base
     // address configuration before tile N finishes using it.
-    wait_for_next_context(1);
+    hal_port::wait_for_next_context(1);
 
     // SEC0 (srcA) <- input, SEC1 (srcB) <- h16.
     _llk_unpack_configure_addresses_(address_b, address_a, cfg);
 
-    semaphore_post(semaphore::UNPACK_SYNC); // Trisc::SEMPOST for context acquire
+    sync::semaphore::post<sync::Access::MMIO, hal_port::UNPACK_SYNC_SEM>(); // Trisc::SEMPOST for context acquire
 
     // Stall unpacker until pending CFG writes from Trisc have completed.
-    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+    sync::wait::stall<sync::StallTarget::Unpack, sync::StallCondition::RiscvAccessProcessed>();
 
     // h16 -> srcB (full face, Set Dvalid).
-    TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /*Set ContextIdInc*/, 0, 0, 1);
+    unpack::run<unpack_srcb>();
 
     // Zero srcA bank 0 at the FULL span (ZEROSRC honors the X span, so this
     // must precede the narrow) -> rows 8..15 zero for MM1's 16-row reduction.
     // No Set Dvalid: the input UNPACR below sets it and hands the bank to FPU.
+    // HAL-GAP: hal::nop encodes only the pure-delay UNPACR_NOP; the zero-source flavor (UNP_ZEROSRC) has no HAL
+    // descriptor, so the production encoding is kept.
     TTI_UNPACR_NOP(SrcA, 0, 0, 0 /*no Set Dvalid*/, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
 
     // Narrow srcA to the top 8 rows (128 datums) for the input read.
-    TTI_SETADCXX(p_setadc::UNP_A, kInputXEnd, 0x0);
+    adc::set<srca_span(kInputXEnd).for_clients<adc::Client::Unpacker0>()>();
 
     // input -> srcA bank 0 (top 8 rows, Set Dvalid).
-    TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /*Set ContextIdInc*/, 0, 0, 1);
+    unpack::run<unpack_srca>();
 
     // Restore full face span: phase 2 streams the entire 16x16 H_16 into
     // srcA bank 1, and the next tile's zero-src needs the full span.
-    TTI_SETADCXX(p_setadc::UNP_A, kFaceXEnd, 0x0);
+    adc::set<srca_span(kFaceXEnd).for_clients<adc::Client::Unpacker0>()>();
 
-    t6_semaphore_get(semaphore::UNPACK_SYNC); // T6::SEMGET for context release
-    switch_config_context(unp_cfg_context);   // -> context 1
+    sync::semaphore::get<hal_port::UNPACK_SYNC_SEM>(); // T6::SEMGET for context release
+    hal_port::switch_config_context(unp_cfg_context);  // -> context 1
 
     // ── Phase 2 (context 1): stream H_16 into srcA bank 1 (overlaps MM1) ─
     // SEC0 context-1 srcA base was preprogrammed to H_16 by _init_, so no
     // per-tile CFG write is needed. Set Dvalid hands srcA bank 1 to the FPU
     // for MM2.
-    TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /*Set ContextIdInc*/, 0, 0, 1);
-    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK);
+    unpack::run<unpack_srca>();
+    sync::wait::stall<sync::StallTarget::Unpack, sync::StallCondition::Unpacker0Idle | sync::StallCondition::Unpacker1Idle>();
 
     // Re-pin phase 1 to context 0 for the next tile (one SETC16, no stall).
-    reset_config_context();
+    hal_port::reset_config_context();
 }

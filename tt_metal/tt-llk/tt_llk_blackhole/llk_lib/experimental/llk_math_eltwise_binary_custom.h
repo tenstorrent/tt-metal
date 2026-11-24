@@ -2,29 +2,81 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// HAL port of tt_llk_blackhole/llk_lib/experimental/llk_math_eltwise_binary_custom.h. Same instruction sequence and
+// access kinds as production, expressed through the HAL.
+
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
+#include <utility>
 
 #include "ckernel_include.h"
 #include "ckernel_ops.h"
 #include "cmath_common.h"
+#include "hal/cfg.h"
+#include "hal/fpu.h"
+#include "hal/move.h"
+#include "hal/tensix_counters.h"
 #include "llk_assert.h"
 #include "llk_math_common.h"
+#include "llk_math_eltwise_binary.h" // hal_port::set_math_addr_mod / MathAddrMod
 #include "tensor_shape.h"
 
 using namespace ckernel;
+
+namespace hal_port::eltwise_binary_custom
+{
+namespace rwc = hal::counters::rwc;
+
+// TT_OP_ELW{MUL,SUB}(CLR_NONE, dest_accum, SRCB_BCAST_COL, addr_mod, 0)
+template <EltwiseBinaryType eltwise_binary_type, std::uint8_t addr_mod, hal::fpu::DestWriteMode dest_write = hal::fpu::DestWriteMode::Overwrite>
+inline constexpr hal::fpu::Elementwise bcast_col_op {
+    .operation        = eltwise_binary_type == EltwiseBinaryType::ELWMUL ? hal::fpu::ElementwiseOperation::Multiply : hal::fpu::ElementwiseOperation::Subtract,
+    .broadcast        = hal::fpu::SrcBBroadcast::Column,
+    .dest_write       = dest_write,
+    .address_modifier = addr_mod,
+    .dest_row_offset  = 0,
+    .release          = hal::fpu::SourceRelease::None};
+
+// TTI_SETRWC(CLR_NONE, 0, 0, 0, 0, SET_AB)
+inline constexpr rwc::MathCounter SET_AB {.src_a = rwc::Set(0), .src_b = rwc::Set(0)};
+// TTI_SETRWC(CLR_A, 0, 0, 0, 0, SET_ABD_F)
+inline constexpr rwc::MathCounter CLR_A_SET_ABD_F {
+    .src_a = rwc::Set(0), .src_b = rwc::Set(0), .dest = rwc::Set(0), .flip = rwc::Src::A, .clear_fidelity = true};
+// TTI_SETRWC(CLR_B, 0, 0, 0, 0, SET_AB)
+inline constexpr rwc::MathCounter CLR_B_SET_AB {.src_a = rwc::Set(0), .src_b = rwc::Set(0), .flip = rwc::Src::B};
+// TTI_SETRWC(CLR_A, 0, 0, 0, 0, SET_ABD)
+inline constexpr rwc::MathCounter CLR_A_SET_ABD {.src_a = rwc::Set(0), .src_b = rwc::Set(0), .dest = rwc::Set(0), .flip = rwc::Src::A};
+// TTI_SETRWC(CLR_B, 0, 0, 0, 0, SET_ABD)
+inline constexpr rwc::MathCounter CLR_B_SET_ABD {.src_a = rwc::Set(0), .src_b = rwc::Set(0), .dest = rwc::Set(0), .flip = rwc::Src::B};
+
+// MOVB2D(0, src_row, ADDR_MOD_4, MOV_4_ROWS_D0_BRCST, dst_row). The rows are arguments of production's helper, so the
+// word is encoded at compile time with both rows 0 and the rows added, as production's TTI_MOVB2D macro does.
+inline constexpr hal::move::Transfer<hal::move::SrcB, hal::move::Dst> movb2d_col0_4rows(const std::uint32_t src_row, const std::uint32_t dst_row)
+{
+    return {
+        .source_row      = src_row,
+        .destination_row = dst_row,
+        .address_mode    = ADDR_MOD_4,
+        .number_of_rows  = hal::move::rows::Four,
+        .broadcast       = hal::move::Broadcast::Column0};
+}
+
+inline constexpr std::uint32_t MOVB2D_COL0_4ROWS_BASE = movb2d_col0_4rows(0, 0).get_operation();
+inline constexpr std::uint32_t MOVB2D_SRC_ROW_SHIFT   = 17;
+static_assert(movb2d_col0_4rows(1, 0).get_operation() == MOVB2D_COL0_4ROWS_BASE + (1u << MOVB2D_SRC_ROW_SHIFT), "SrcB row field");
+static_assert(movb2d_col0_4rows(60, 0).get_operation() == MOVB2D_COL0_4ROWS_BASE + (60u << MOVB2D_SRC_ROW_SHIFT), "SrcB row field");
+static_assert(movb2d_col0_4rows(0, 1).get_operation() == MOVB2D_COL0_4ROWS_BASE + 1, "Dest row field");
+static_assert(movb2d_col0_4rows(0, 60).get_operation() == MOVB2D_COL0_4ROWS_BASE + 60, "Dest row field");
+
+} // namespace hal_port::eltwise_binary_custom
 
 template <BroadcastType bcast_type>
 inline void eltwise_binary_configure_addrmod_custom()
 {
     constexpr std::uint32_t srcb_incr = (bcast_type == BroadcastType::NONE || bcast_type == BroadcastType::COL) ? 8 : 0;
-    addr_mod_t {
-        .srca = {.incr = 8},
-        .srcb = {.incr = srcb_incr},
-        .dest = {.incr = 8},
-    }
-        .set(ADDR_MOD_7);
+    hal_port::set_math_addr_mod<hal::cfg::Sec::S7, hal_port::MathAddrMod {.srca_incr = 8, .srcb_incr = srcb_incr, .dest_incr = 8}>(); // ADDR_MOD_7
 }
 
 /**
@@ -51,12 +103,14 @@ inline void _llk_math_eltwise_binary_init_custom_(const std::uint32_t num_faces)
 
     eltwise_binary_configure_addrmod_custom<src_b_bcast_type>();
 
-    TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
+    // TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0): both fields of the word
+    hal::cfg::write<hal::cfg::Access::TensixCfgUnit>(
+        hal::cfg::set<hal::cfg::ClrDvalid::SrcA_Disable, hal::cfg::Sec::S0, 0>(), hal::cfg::set<hal::cfg::ClrDvalid::SrcB_Disable, hal::cfg::Sec::S0, 0>());
 
-    math::reset_counters(p_setrwc::SET_ABD_F);
+    hal_port::reset_counters_abd_f(); // math::reset_counters(p_setrwc::SET_ABD_F)
 
     // A preceding datacopy leaves the Src zero flag at keep; the FPU op needs the operand-driven value.
-    math::_configure_default_zero_flag_state_();
+    hal_port::_configure_default_zero_flag_state_();
 }
 
 inline void _llk_math_eltwise_binary_uninit_custom_()
@@ -75,15 +129,39 @@ inline void _llk_math_eltwise_binary_uninit_custom_()
 template <EltwiseBinaryType eltwise_binary_type, std::uint8_t addr_mod>
 inline void _bcast_cols_op_()
 {
-    if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWMUL)
-    {
-        TTI_ELWMUL(p_setrwc::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, addr_mod, 0);
-    }
-    else
-    {
-        TTI_ELWSUB(p_setrwc::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, addr_mod, 0);
-    }
+    hal::fpu::run<hal_port::eltwise_binary_custom::bcast_col_op<eltwise_binary_type, addr_mod>>();
 }
+
+namespace detail
+{
+// One face-row of the bcast-col walk: four ops, two per face. The last op picks ADDR_MOD_4 (rewind to the tile
+// start and step the fidelity phase) on the last face-row of a non-final phase, ADDR_MOD_6 otherwise.
+template <EltwiseBinaryType eltwise_binary_type, std::uint32_t num_phases, std::uint32_t num_face_rows, std::size_t step>
+inline void bcast_cols_face_row()
+{
+    constexpr std::size_t phase    = step / num_face_rows;
+    constexpr std::size_t face_row = step % num_face_rows;
+    constexpr bool rewind          = phase + 1 < num_phases && face_row + 1 == num_face_rows;
+
+    // Even face (F0 / F2): op then rewind srcB by one face (ADDR_MOD_5) so the odd face reads it.
+    _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_7>(); // srcB: 0 -> 8
+    _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_5>(); // srcB: 8 -> 0
+
+    // Odd face (F1 / F3): op then advance srcB +24 (ADDR_MOD_6) to the next face-row / tile,
+    // or, on the last face-row of a non-final fidelity phase, rewind to the tile start and
+    // step the phase (ADDR_MOD_4) so the next walk re-reads the same srcA/srcB block.
+    _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_7>();                       // srcB: 0 -> 8
+    _bcast_cols_op_<eltwise_binary_type, rewind ? ADDR_MOD_4 : ADDR_MOD_6>(); // srcB: 8 -> 32, or all -> 0, phase + 1
+}
+
+// One tile's ops for every fidelity phase and face-row, spelled out at compile time as a straight run of
+// num_phases * num_face_rows * 4 immediates (no RISC loop between pushes).
+template <EltwiseBinaryType eltwise_binary_type, std::uint32_t num_phases, std::uint32_t num_face_rows, std::size_t... Steps>
+inline void bcast_cols_tile(std::index_sequence<Steps...>)
+{
+    (bcast_cols_face_row<eltwise_binary_type, num_phases, num_face_rows, Steps>(), ...);
+}
+} // namespace detail
 
 /**
  * @brief Blocked bcast-col FPU scaffold shared by the SDPA SUB and indexer_score MUL paths.
@@ -136,27 +214,16 @@ inline void _llk_math_bcast_cols_reuse_custom_(
 
     // Two faces make up one face-row; a full tile has two of them, a tiny tile one.
     const std::uint32_t num_face_rows = tensor_shape.num_faces_r_dim;
+    LLK_ASSERT(num_face_rows == 1 || num_face_rows == 2, "bcast-col custom: one or two face-rows per tile");
 
-    addr_mod_t {
-        .srca = {.incr = 8},
-        .srcb = {.incr = 8},
-        .dest = {.incr = 8},
-    }
-        .set(ADDR_MOD_7);
+    namespace cfg = hal::cfg;
+    namespace ebc = hal_port::eltwise_binary_custom;
+    using hal_port::MathAddrMod;
+    using hal_port::set_math_addr_mod;
 
-    addr_mod_t {
-        .srca = {.incr = 8},
-        .srcb = {.incr = 24},
-        .dest = {.incr = 8},
-    }
-        .set(ADDR_MOD_6);
-
-    addr_mod_t {
-        .srca = {.incr = 8},
-        .srcb = {.incr = 0x3F & -8}, // decrement srcB by 8
-        .dest = {.incr = 8},
-    }
-        .set(ADDR_MOD_5);
+    set_math_addr_mod<cfg::Sec::S7, MathAddrMod {.srca_incr = 8, .srcb_incr = 8, .dest_incr = 8}>();         // ADDR_MOD_7
+    set_math_addr_mod<cfg::Sec::S6, MathAddrMod {.srca_incr = 8, .srcb_incr = 24, .dest_incr = 8}>();        // ADDR_MOD_6
+    set_math_addr_mod<cfg::Sec::S5, MathAddrMod {.srca_incr = 8, .srcb_incr = 0x3F & -8, .dest_incr = 8}>(); // ADDR_MOD_5: decrement srcB by 8
 
     // Fidelity phases (ELWMUL only): one walk of the tile per phase. The number of phases is the
     // MathFidelity value (HiFi2 = 2 ... HiFi4 = 4); LoFi is a single walk.
@@ -164,64 +231,50 @@ inline void _llk_math_bcast_cols_reuse_custom_(
     if constexpr (num_phases > 1)
     {
         // Last op of a non-final phase: rewind srcA/srcB/dest to the tile start and step the fidelity phase.
-        addr_mod_t {
-            .srca     = {.incr = 0, .clr = 1},
-            .srcb     = {.incr = 0, .clr = 1},
-            .dest     = {.incr = 0, .clr = 1},
-            .fidelity = {.incr = 1},
-        }
-            .set(ADDR_MOD_4);
+        set_math_addr_mod<cfg::Sec::S4, MathAddrMod {.srca_clr = 1, .srcb_clr = 1, .dest_clr = 1, .fid_incr = 1}>(); // ADDR_MOD_4
     }
 
-    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_AB); // reset both src counters to 0
+    hal::counters::rwc::set<ebc::SET_AB>(); // reset both src counters to 0
 
     // Per tile: walk srcA/dest across 4 faces while srcB reuses one face per pair (F0/F1 -> srcB face
     // 0, F2/F3 -> srcB face 2). Comments are dest/srcA counter values. ADDR_MOD_5 rewinds srcB -8 so
     // the pair's 2nd op rereads the same srcB face; ADDR_MOD_6 then jumps srcB +24 to the next pair.
-    for (std::uint32_t i = 0; i < ct_dim; i++)
+    // The face-row count is tested once per call, so each tile's ops go out as one straight run.
+    auto walk_tiles = [&](auto face_rows)
     {
-        // Position the dest write pointer at the start of this tile's 32x32 dest
-        // slot (stride 64 rows). The packer indexes tiles at the full 32x32 tile
-        // stride regardless of num_faces, so tiles must be written one-per-slot.
-        // The ADDR_MOD dest increments below only advance 32 rows for a 16x32 tiny
-        // tile (num_faces=2) and 64 rows for a full 32x32 tile (num_faces=4); the
-        // per-slot base + counter reset makes both land on the right slot.
-        math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + i);
-        math::clear_dst_reg_addr();
-
-        for (std::uint32_t phase = 0; phase < num_phases; phase++)
+        constexpr std::uint32_t rows = decltype(face_rows)::value;
+        for (std::uint32_t i = 0; i < ct_dim; i++)
         {
-            for (std::uint32_t face_row = 0; face_row < num_face_rows; face_row++)
-            {
-                // Even face (F0 / F2): op then rewind srcB by one face (ADDR_MOD_5) so the odd face reads it.
-                _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_7>(); // srcB: 0 -> 8
-                _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_5>(); // srcB: 8 -> 0
+            // Position the dest write pointer at the start of this tile's 32x32 dest
+            // slot (stride 64 rows). The packer indexes tiles at the full 32x32 tile
+            // stride regardless of num_faces, so tiles must be written one-per-slot.
+            // The ADDR_MOD dest increments below only advance 32 rows for a 16x32 tiny
+            // tile (num_faces=2) and 64 rows for a full 32x32 tile (num_faces=4); the
+            // per-slot base + counter reset makes both land on the right slot.
+            hal_port::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + i);
+            hal_port::clear_dst_reg_addr();
 
-                // Odd face (F1 / F3): op then advance srcB +24 (ADDR_MOD_6) to the next face-row / tile,
-                // or, on the last face-row of a non-final fidelity phase, rewind to the tile start and
-                // step the phase (ADDR_MOD_4) so the next walk re-reads the same srcA/srcB block.
-                _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_7>(); // srcB: 0 -> 8
-                if (num_phases > 1 && phase + 1 < num_phases && face_row + 1 == num_face_rows)
-                {
-                    _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_4>(); // srcA/srcB/dest -> 0, phase + 1
-                }
-                else
-                {
-                    _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_6>(); // srcB: 8 -> 32 (next face-row)
-                }
-            }
+            detail::bcast_cols_tile<eltwise_binary_type, num_phases, rows>(std::make_index_sequence<num_phases * rows> {});
+
+            // Rewind srcB to 0 for the next srcA tile (CLR_A clears srcA's dvalid); srcA keeps advancing.
+            // SET_ABD_F also returns the fidelity phase to 0 after a HiFi walk (dest is re-based per tile).
+            hal::counters::rwc::set<ebc::CLR_A_SET_ABD_F>();
         }
-
-        // Rewind srcB to 0 for the next srcA tile (CLR_A clears srcA's dvalid); srcA keeps advancing.
-        // SET_ABD_F also returns the fidelity phase to 0 after a HiFi walk (dest is re-based per tile).
-        TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
+    };
+    if (num_face_rows == 1)
+    {
+        walk_tiles(std::integral_constant<std::uint32_t, 1> {});
+    }
+    else
+    {
+        walk_tiles(std::integral_constant<std::uint32_t, 2> {});
     }
 
     // Clear srcB dvalid on the way out.
-    TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_AB);
+    hal::counters::rwc::set<ebc::CLR_B_SET_AB>();
 
     // Restore the dest base offset so the next op starts from tile slot 0.
-    math::clear_dst_reg_addr();
+    hal_port::clear_dst_reg_addr();
 }
 
 /**
@@ -244,12 +297,17 @@ inline void _llk_math_sub_bcast_cols_reuse_custom_(
 /** @brief Initialises math state for cancellation-resistant column-broadcast subtraction. */
 inline void _llk_math_sub_bcast_cols_compensated_init_()
 {
-    addr_mod_t {.srca = {.incr = 8}, .srcb = {.incr = 8}, .dest = {.incr = 8}}.set(ADDR_MOD_3);
-    addr_mod_t {.srca = {.incr = 8}, .srcb = {.incr = 0x3F & -8}, .dest = {.incr = 8}}.set(ADDR_MOD_5);
-    addr_mod_t {.srca = {.incr = 8}, .srcb = {.incr = 24}, .dest = {.incr = 8}}.set(ADDR_MOD_6);
-    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_4);
-    TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
-    math::reset_counters(p_setrwc::SET_ABD_F);
+    namespace cfg = hal::cfg;
+    using hal_port::MathAddrMod;
+    using hal_port::set_math_addr_mod;
+    set_math_addr_mod<cfg::Sec::S3, MathAddrMod {.srca_incr = 8, .srcb_incr = 8, .dest_incr = 8}>();
+    set_math_addr_mod<cfg::Sec::S5, MathAddrMod {.srca_incr = 8, .srcb_incr = 0x3F & -8, .dest_incr = 8}>();
+    set_math_addr_mod<cfg::Sec::S6, MathAddrMod {.srca_incr = 8, .srcb_incr = 24, .dest_incr = 8}>();
+    set_math_addr_mod<cfg::Sec::S4, MathAddrMod {}>();
+    // TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0): both fields of the word
+    hal::cfg::write<hal::cfg::Access::TensixCfgUnit>(
+        hal::cfg::set<hal::cfg::ClrDvalid::SrcA_Disable, hal::cfg::Sec::S0, 0>(), hal::cfg::set<hal::cfg::ClrDvalid::SrcB_Disable, hal::cfg::Sec::S0, 0>());
+    hal_port::reset_counters_abd_f(); // math::reset_counters(p_setrwc::SET_ABD_F)
 }
 
 /**
@@ -261,10 +319,12 @@ inline void _compensated_move_broadcast_col_to_dest_(const std::uint32_t src_row
 {
     // Blackhole forces MOVB2D's effective SrcA format to TF32 when FP32 DEST accumulation is
     // enabled. The move therefore writes 32-bit DEST rows without relying on implied source formats.
-    TTI_MOVB2D(0, src_row + 0, ADDR_MOD_4, p_movb2d::MOV_4_ROWS_D0_BRCST, dst_row + 0);
-    TTI_MOVB2D(0, src_row + 4, ADDR_MOD_4, p_movb2d::MOV_4_ROWS_D0_BRCST, dst_row + 4);
-    TTI_MOVB2D(0, src_row + 8, ADDR_MOD_4, p_movb2d::MOV_4_ROWS_D0_BRCST, dst_row + 8);
-    TTI_MOVB2D(0, src_row + 12, ADDR_MOD_4, p_movb2d::MOV_4_ROWS_D0_BRCST, dst_row + 12);
+    namespace ebc = hal_port::eltwise_binary_custom;
+    LLK_ASSERT(src_row + 12 + 4 <= 64 && dst_row + 12 + 4 <= 1024, "MOVB2D row out of range");
+    TT_INSN(ebc::MOVB2D_COL0_4ROWS_BASE + ((src_row + 0) << ebc::MOVB2D_SRC_ROW_SHIFT) + (dst_row + 0));
+    TT_INSN(ebc::MOVB2D_COL0_4ROWS_BASE + ((src_row + 4) << ebc::MOVB2D_SRC_ROW_SHIFT) + (dst_row + 4));
+    TT_INSN(ebc::MOVB2D_COL0_4ROWS_BASE + ((src_row + 8) << ebc::MOVB2D_SRC_ROW_SHIFT) + (dst_row + 8));
+    TT_INSN(ebc::MOVB2D_COL0_4ROWS_BASE + ((src_row + 12) << ebc::MOVB2D_SRC_ROW_SHIFT) + (dst_row + 12));
 }
 
 /**
@@ -280,11 +340,14 @@ inline void _llk_math_sub_bcast_cols_compensated_(
 {
     LLK_ASSERT(tensor_shape.total_num_faces() == 4, "compensated column broadcast requires 32x32 tiles");
 
-    math::_configure_preserve_zero_flag_state_();
+    namespace ebc = hal_port::eltwise_binary_custom;
+    namespace rwc = hal::counters::rwc;
+    using hal::fpu::DestWriteMode;
+    hal_port::_configure_preserve_zero_flag_state_();
     for (std::uint32_t tile = 0; tile < ct_dim; ++tile)
     {
-        math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + tile);
-        math::clear_dst_reg_addr();
+        hal_port::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + tile);
+        hal_port::clear_dst_reg_addr();
 
         // Seed DEST with anchor - mean. The split statistic tile stores the
         // upper and lower row halves in faces 1 and 3 respectively.
@@ -302,16 +365,16 @@ inline void _llk_math_sub_bcast_cols_compensated_(
         // Accumulate x - anchor into the correction already in DEST.
         for (std::uint32_t face_row = 0; face_row < tensor_shape.num_faces_r_dim; ++face_row)
         {
-            TTI_ELWSUB(p_setrwc::CLR_NONE, 1, p_elwise::SRCB_BCAST_COL, ADDR_MOD_3, 0);
-            TTI_ELWSUB(p_setrwc::CLR_NONE, 1, p_elwise::SRCB_BCAST_COL, ADDR_MOD_5, 0);
-            TTI_ELWSUB(p_setrwc::CLR_NONE, 1, p_elwise::SRCB_BCAST_COL, ADDR_MOD_3, 0);
-            TTI_ELWSUB(p_setrwc::CLR_NONE, 1, p_elwise::SRCB_BCAST_COL, ADDR_MOD_6, 0);
+            hal::fpu::run<ebc::bcast_col_op<EltwiseBinaryType::ELWSUB, ADDR_MOD_3, DestWriteMode::Accumulate>>();
+            hal::fpu::run<ebc::bcast_col_op<EltwiseBinaryType::ELWSUB, ADDR_MOD_5, DestWriteMode::Accumulate>>();
+            hal::fpu::run<ebc::bcast_col_op<EltwiseBinaryType::ELWSUB, ADDR_MOD_3, DestWriteMode::Accumulate>>();
+            hal::fpu::run<ebc::bcast_col_op<EltwiseBinaryType::ELWSUB, ADDR_MOD_6, DestWriteMode::Accumulate>>();
         }
 
         // Publish SrcA for the next input tile while keeping the split mean resident.
-        TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD);
+        rwc::set<ebc::CLR_A_SET_ABD>();
     }
-    TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);
-    math::_configure_default_zero_flag_state_();
-    math::clear_dst_reg_addr();
+    rwc::set<ebc::CLR_B_SET_ABD>();
+    hal_port::_configure_default_zero_flag_state_();
+    hal_port::clear_dst_reg_addr();
 }

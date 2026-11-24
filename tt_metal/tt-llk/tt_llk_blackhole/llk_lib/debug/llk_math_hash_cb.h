@@ -38,6 +38,9 @@
 //   deterministic, input-sensitive fingerprint, independent of the SFPU lane <->
 //   tile-position permutation and of any fixed pack datum conversion.
 
+// HAL port of tt_llk_blackhole/llk_lib/debug/llk_math_hash_cb.h, ported except SFPU. Same Tensix instruction
+// sequence as production.
+
 #pragma once
 
 #include <cstdint>
@@ -46,8 +49,10 @@
 #include "ckernel_include.h"
 #include "ckernel_ops.h"
 #include "cmath_common.h"
+#include "hal/sync.h"
 #include "llk_defs.h"
 #include "llk_math_common.h"
+#include "llk_math_eltwise_sfpu_common.h" // hal_port::set_sfpu_addr_mod
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_load_config.h" // _init_sfpu_config_reg
 
@@ -82,13 +87,8 @@ constexpr int LREG_ZERO  = 3; // 0 constant, for clearing dest rows
 inline void _llk_math_hash_cb_init_()
 {
     sfpu::_init_sfpu_config_reg();
-    addr_mod_t {
-        .srca = {.incr = 0},
-        .srcb = {.incr = 0},
-        .dest = {.incr = DEST_ROW_STRIDE},
-    }
-        .set(ADDR_MOD_1);
-    math::reset_counters(p_setrwc::SET_ABD_F);
+    hal_port::set_sfpu_addr_mod<hal::cfg::Sec::S1 /*ADDR_MOD_1*/, DEST_ROW_STRIDE>();
+    hal_port::reset_counters_abd_f();
 
     // Load FNV23 init constant into LREG_H (broadcast across all 32 lanes).
     TTI_SFPLOADI(LREG_H, sfpi::SFPLOADI_MOD0_LOWER, FNV23_INIT & 0xFFFFu);
@@ -110,7 +110,7 @@ inline void _llk_math_hash_cb_init_()
  */
 inline void _llk_math_hash_cb_tile_(std::uint32_t /*dst_tile_idx*/)
 {
-    math::reset_counters(p_setrwc::SET_ABD_F);
+    hal_port::reset_counters_abd_f();
 
 #pragma GCC unroll 0
     for (int row = 0; row < DEST_ROWS; ++row)
@@ -144,7 +144,7 @@ inline void _llk_math_hash_cb_store_to_dest_()
     TTI_SFPLOADI(LREG_ZERO, sfpi::SFPLOADI_MOD0_UPPER, 0u);
 
     // Zero every row of the tile (ADDR_MOD_1 auto-advances the Dst row).
-    math::reset_counters(p_setrwc::SET_ABD_F);
+    hal_port::reset_counters_abd_f();
 #pragma GCC unroll 0
     for (int row = 0; row < DEST_ROWS; ++row)
     {
@@ -152,11 +152,11 @@ inline void _llk_math_hash_cb_store_to_dest_()
     }
 
     // Overwrite row 0 with the 32 per-lane accumulators.
-    math::reset_counters(p_setrwc::SET_ABD_F);
+    hal_port::reset_counters_abd_f();
     TTI_SFPSTORE(LREG_H, InstrModLoadStore::INT32, ADDR_MOD_1, 0);
 
     // Drain the SFPU pipeline so the packer sees the final dest contents.
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
+    hal::sync::wait::stall<hal::sync::StallTarget::Math, hal::sync::StallCondition::SfpuIdle>();
 }
 
 } // namespace ckernel::sfpu

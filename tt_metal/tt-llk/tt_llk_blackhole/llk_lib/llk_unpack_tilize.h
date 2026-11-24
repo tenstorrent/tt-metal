@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// HAL port of tt_llk_blackhole/llk_lib/llk_unpack_tilize.h. Same instruction sequence and access kinds as production,
+// expressed through the HAL.
+
 #pragma once
 
 #include <cstdint>
@@ -13,11 +16,78 @@
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
 #include "cunpack_common.h"
+#include "hal/cfg.h"
+#include "hal/mop.h"
+#include "hal/nop.h"
+#include "hal/replay.h"
+#include "hal/scalar.h"
+#include "hal/sync.h"
+#include "hal/tensix_counters.h"
+#include "hal/unpack.h"
 #include "llk_assert.h"
 #include "llk_unpack_common.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
+
+namespace hal_port::unpack_tilize
+{
+using hal::unpack::DataTransfer;
+using hal::unpack::Engine;
+using hal::unpack::SourceHandoff;
+
+// TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, RAREFYB_DISABLE, 0, 0, 0, 0, 1)
+inline constexpr DataTransfer unpack_srca_desc {
+    .engine = Engine::Unpacker0, .increments = {.channel0 = {.z = 1}}, .handoff = SourceHandoff::FlipAndSetDataValid};
+// TT_OP_UNPACR(SrcA, 0b00010001 /*Ch0.Z+=1, Ch1.Z+=1*/, 0, 0, 0, 1, 0 /*no Dvalid*/, RAREFYB_DISABLE, 0, 0, 0, 0, 1)
+inline constexpr DataTransfer unpack_srca_z11 {
+    .engine = Engine::Unpacker0, .increments = {.channel0 = {.z = 1}, .channel1 = {.z = 1}}, .handoff = SourceHandoff::Keep};
+// Same with Set Dvalid: flips the SrcA bank, handing the tile to math.
+inline constexpr DataTransfer unpack_srca_z11_dvalid {
+    .engine = Engine::Unpacker0, .increments = {.channel0 = {.z = 1}, .channel1 = {.z = 1}}, .handoff = SourceHandoff::FlipAndSetDataValid};
+// TT_OP_UNPACR(SrcA, 0b01000000 /*CH1_Y+=1*/, 0, 0, 0, 1, 0, RAREFYB_DISABLE, 0, 0, 0, 0, 1): one 1x16 row to SrcA
+inline constexpr DataTransfer unpack_srca_row {.engine = Engine::Unpacker0, .increments = {.channel1 = {.y = 1}}, .handoff = SourceHandoff::Keep};
+// TT_OP_UNPACR(SrcA, 0b0, 0, 0, 0, 1, 1 /*Set Dvalid*/, RAREFYB_DISABLE, 0, 0, 0, 0, 1): last SrcA row of a face
+inline constexpr DataTransfer unpack_srca_last_row {.engine = Engine::Unpacker0, .handoff = SourceHandoff::FlipAndSetDataValid};
+
+inline constexpr std::uint32_t unpack_srca         = hal::unpack::get_operation<unpack_srca_desc>();
+inline constexpr std::uint32_t unpack_srca_to_dest = hal::unpack::get_operation<unpack_srca_z11>();
+
+// HAL-GAP: hal::nop encodes only the pure-delay UNPACR_NOP; the zero-source + set-data-valid flavor
+// (UNP_ZEROSRC, SET_DVALID, WAIT_LIKE_UNPACR) has no HAL descriptor, so the production encoding is kept.
+inline constexpr std::uint32_t unpack_srcb_set_dvalid =
+    TT_OP_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+
+// HAL-GAP: CFGSHIFTMASK (Base_address += SCRATCH_SEC0_val) has no HAL API; production encodings are kept.
+inline constexpr std::uint32_t base_cntx0_add_scratch = TT_OP_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG3_Base_address_ADDR32);
+inline constexpr std::uint32_t base_cntx1_add_scratch = TT_OP_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
+
+// Write the unpack config word 0 (THCON_SEC0_REG2 word 0) through GPR TMP0:
+// TT_SETDMAREG x2, TTI_STALLWAIT(STALL_CFG, THCON), TTI_WRCFG(TMP0, WRCFG_32b, THCON_SEC0_REG2_Out_data_format_ADDR32).
+inline void write_unpack_config_word0(const std::uint32_t word)
+{
+    namespace cfg  = hal::cfg;
+    namespace sync = hal::sync;
+    static_assert(cfg::Thcon[cfg::Reg2].Out_data_format.addr32(cfg::Sec::S0) == THCON_SEC0_REG2_Out_data_format_ADDR32, "unpack config word 0");
+    hal::scalar::set(hal::gpr<p_gpr_unpack::TMP0>(), word);
+    sync::wait::stall<sync::StallTarget::Config, sync::StallCondition::ScalarIdle>();
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::Thcon[cfg::Reg2].Out_data_format, cfg::Sec::S0, cfg::GprTransferSize::Bits32, cfg::WrcfgCompletion::Deferred>(
+        hal::gpr<p_gpr_unpack::TMP0>());
+}
+
+// Write SCRATCH_SEC0_val (the CFGSHIFTMASK increment) through GPR TMP0, as write_unpack_config_word0.
+inline void write_scratch_sec0(const std::uint32_t value)
+{
+    namespace cfg  = hal::cfg;
+    namespace sync = hal::sync;
+    static_assert(cfg::Scratch::val.addr32(cfg::Sec::S0) == SCRATCH_SEC0_val_ADDR32, "SCRATCH_SEC0_val word");
+    hal::scalar::set(hal::gpr<p_gpr_unpack::TMP0>(), value);
+    sync::wait::stall<sync::StallTarget::Config, sync::StallCondition::ScalarIdle>();
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::Scratch::val, cfg::Sec::S0, cfg::GprTransferSize::Bits32, cfg::WrcfgCompletion::Deferred>(
+        hal::gpr<p_gpr_unpack::TMP0>());
+}
+
+} // namespace hal_port::unpack_tilize
 
 /**
  * @brief Program the unpacker MOP for the non-8-bit tilize path (Blackhole whole-tile workaround).
@@ -29,23 +99,13 @@ using namespace ckernel::unpacker;
  */
 inline void _llk_unpack_tilize_mop_config_(const bool unpack_to_dest = false)
 {
+    using namespace hal::mop;
+    using namespace hal_port::unpack_tilize;
     // SrcB SET_DVALID + UNP_ZEROSRC: math's ELWADD branch (FP32 dest-accumulate) reads SrcB,
     // so it must be both dvalid and zeroed. MOVA2D branch ignores it (harmless handshake).
-    static constexpr std::uint32_t unpack_srca =
-        TT_OP_UNPACR(SrcA, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-    static constexpr std::uint32_t unpack_srca_to_dest =
-        TT_OP_UNPACR(0, 0b00010001 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-    static constexpr std::uint32_t unpack_srcb_set_dvalid =
-        TT_OP_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
-
-    ckernel_template tmp(1 /*outerloop*/, 1 /*innerloop*/, unpack_to_dest ? unpack_srca_to_dest : unpack_srcb_set_dvalid);
-
-    if (!unpack_to_dest)
-    {
-        tmp.set_start_op(unpack_srca);
-    }
-
-    tmp.program();
+    // Unpack to dest: no start op (NOP), as production leaves it unset.
+    program(
+        loop(1 /*outerloop*/, unpack_to_dest ? TT_OP_NOP : unpack_srca, loop(1 /*innerloop*/, unpack_to_dest ? unpack_srca_to_dest : unpack_srcb_set_dvalid)));
 }
 
 /**
@@ -80,11 +140,20 @@ inline void _llk_unpack_tilize_init_(
 {
     LLK_ASSERT(face_r_dim == 1 || face_r_dim == 2 || face_r_dim == 4 || face_r_dim == 8 || face_r_dim == 16, "face_r_dim must be 1, 2, 4, 8, or 16 for tilize");
     LLK_ASSERT(num_faces == 2 || num_faces == 4, "num_faces must be 2 or 4 for tilize");
-    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
+    namespace cfg          = hal::cfg;
+    namespace adc          = hal::counters::adc;
+    constexpr auto TileDsc = cfg::Thcon[cfg::Reg0].TileDescriptor;
+    constexpr auto R5      = cfg::Thcon[cfg::Reg5];
+    constexpr auto Unp0Ch1 = cfg::Unpacker[0].AddrCtrl[cfg::UnpackerReg::Reg1];
+    static_assert(TileDsc.ZDim.addr32(cfg::Sec::S0) == THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, "Z-dim word");
+    static_assert(TileDsc.XDim.addr32(cfg::Sec::S0) == THCON_SEC0_REG0_TileDescriptor_ADDR32, "X-dim word");
+    static_assert(R5.Tile_x_dim_cntx0.addr32(cfg::Sec::S0) == THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32, "Tile_x_dim word");
+
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::Thcon[cfg::Reg2].Haloize_mode, cfg::Sec::S0, 0>();
 
     // Program Ch1.Z stride from unpack_dst_format's datum size, required by the
     // UNPACR AddrMode 0b00010001 used on the 8-bit tilize path.
-    cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_ZW_REG_1_Zstride_RMW>(canonical_unpA_z_stride(unpack_dst_format));
+    cfg::write<cfg::Access::TensixCfgUnit, Unp0Ch1.Zstride, cfg::Sec::S0>(canonical_unpA_z_stride(unpack_dst_format));
 
     // Clear Ch1.X and Ch1.Y start-counts once at init. Tilize's UNPACRs never
     // increment Ch1.X or Ch1.Y (AddrMode 0b00010001 sets only Ch0.Z++/Ch1.Z++),
@@ -92,11 +161,12 @@ inline void _llk_unpack_tilize_init_(
     // 0, Ch1.X/Y strides multiply out of the SrcA write address (SrcA_row =
     // Ch1.Z*Zstride + Ch1.Y*Ystride + Ch1.X*Xstride + Base) and need not be
     // programmed here.
-    TTI_SETADCXY(0b001, 0, 0, 0, 0, 0b1111);
+    // TTI_SETADCXY(0b001, 0, 0, 0, 0, 0b1111)
+    adc::set<adc::AddrCounter {.channel0 = {.x = 0, .y = 0}, .channel1 = {.x = 0, .y = 0}}.for_clients<adc::Client::Unpacker0>()>();
 
     // Z_dim = num_faces, the per-operand baseline. The non-8-bit branch below overwrites it with 1,
     // and that is the write the teardown reverts.
-    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 16, TILE_DESC_UPPER_HALFWORD_MASK>(num_faces);
+    cfg::write<cfg::Access::TensixCfgUnit, TileDsc.ZDim, cfg::Sec::S0>(num_faces);
 
     const std::uint32_t block_c_dim = ct_dim * (narrow_tile ? FACE_C_DIM : TILE_C_DIM);
 
@@ -112,8 +182,8 @@ inline void _llk_unpack_tilize_init_(
         is_unpacker_format_conversion_supported_dest(static_cast<DataFormat>(unpack_src_format), static_cast<DataFormat>(unpack_dst_format), unpack_to_dest),
         "Unsupported unpacker format conversion.");
 
-    // Set face dim
-    TT_SETADCXX(p_setadc::UNP_A, face_r_dim * FACE_C_DIM - 1, 0x0);
+    // Set face dim: TT_SETADCXX(p_setadc::UNP_A, face_r_dim * FACE_C_DIM - 1, 0x0)
+    adc::set(adc::AddrCounter {.channel0 = {.x = 0}, .channel1 = {.x = face_r_dim * FACE_C_DIM - 1}}.for_clients<adc::Client::Unpacker0>());
 
     const bool is_8bit_format        = IS_8BIT_FORMAT(unpack_src_format);
     const std::uint32_t shift_amount = (SCALE_DATUM_SIZE(unpack_src_format, block_c_dim)) >> 4;
@@ -125,10 +195,7 @@ inline void _llk_unpack_tilize_init_(
     config.f.tileize_mode    = 1;
     config.f.shift_amount    = shift_amount;
 
-    TT_SETDMAREG(0, LOWER_HALFWORD(config.val[0]), 0, LO_16(p_gpr_unpack::TMP0));
-    TT_SETDMAREG(0, UPPER_HALFWORD(config.val[0]), 0, HI_16(p_gpr_unpack::TMP0));
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
-    TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, THCON_SEC0_REG2_Out_data_format_ADDR32);
+    hal_port::unpack_tilize::write_unpack_config_word0(config.val[0]);
     if (is_8bit_format)
     {
         LLK_ASSERT(!narrow_tile, "8-bit tilize narrow_tile not supported");
@@ -136,7 +203,8 @@ inline void _llk_unpack_tilize_init_(
 
         // x_dim per context = FACE_C_DIM (1x16 face read). FACE_DIM_1x16 holds
         // FACE_C_DIM packed in both halfwords, so a 32b WRCFG programs both cntx0 and cntx1.
-        TTI_WRCFG(p_gpr_unpack::FACE_DIM_1x16, p_cfg::WRCFG_32b, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);
+        cfg::write<cfg::Access::TensixCfgUnit, R5.Tile_x_dim_cntx0, cfg::Sec::S0, cfg::GprTransferSize::Bits32, cfg::WrcfgCompletion::Deferred>(
+            hal::gpr<p_gpr_unpack::FACE_DIM_1x16>());
 
         // SCRATCH_SEC0_val is the increment CFGSHIFTMASK adds to Base_address between
         // top and bottom face pairs. Only used when num_faces==4 (top pair to bottom pair).
@@ -146,25 +214,23 @@ inline void _llk_unpack_tilize_init_(
         if (num_faces == 4)
         {
             const std::uint32_t base_address_increment = shift_amount * face_r_dim - 2;
-            TT_SETDMAREG(0, LOWER_HALFWORD(base_address_increment), 0, LO_16(p_gpr_unpack::TMP0));
-            TT_SETDMAREG(0, UPPER_HALFWORD(base_address_increment), 0, HI_16(p_gpr_unpack::TMP0));
-            TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
-            TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, SCRATCH_SEC0_val_ADDR32);
+            hal_port::unpack_tilize::write_scratch_sec0(base_address_increment);
         }
     }
     else
     {
         // Whole-tile unpacking (non-8-bit BH workaround): x_dim covers the entire tile, z_dim=1
         const std::uint32_t Tile_x_dim = face_r_dim * num_faces * FACE_C_DIM;
-        const std::uint32_t Tile_z_dim = 1;
-        cfg_reg_rmw_tensix<THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32, 0, 0xffffffff>(Tile_x_dim | (Tile_x_dim << 16));
+        constexpr std::uint32_t Tile_z_dim = 1;
+        cfg::write<cfg::Access::TensixCfgUnit>(
+            cfg::set<R5.Tile_x_dim_cntx0, cfg::Sec::S0>(Tile_x_dim), cfg::set<R5.Tile_x_dim_cntx1, cfg::Sec::S0>(Tile_x_dim));
         // Set x-dim to cover entire tile (face_r_dim * num_faces * FACE_C_DIM)
-        cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32, 0, TILE_DESC_UPPER_HALFWORD_MASK>(0 | (Tile_x_dim << 16));
+        cfg::write<cfg::Access::TensixCfgUnit, TileDsc.XDim, cfg::Sec::S0>(Tile_x_dim);
         // Set z-dim to 1 as X dim is set to cover the entire tile, so no need to iterate over faces.
-        cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 0, TILE_DESC_UPPER_HALFWORD_MASK>(0 | (Tile_z_dim << 16));
+        cfg::write<cfg::Access::TensixCfgUnit, TileDsc.ZDim, cfg::Sec::S0, Tile_z_dim>();
 
-        // Set x-end for Unpackers to (face_r_dim * num_faces * FACE_C_DIM - 1)
-        TT_SETADCXX(p_setadc::UNP0, Tile_x_dim - 1, 0x0);
+        // Set x-end for Unpackers to (face_r_dim * num_faces * FACE_C_DIM - 1): TT_SETADCXX(p_setadc::UNP0, Tile_x_dim - 1, 0x0)
+        adc::set(adc::AddrCounter {.channel0 = {.x = 0}, .channel1 = {.x = Tile_x_dim - 1}}.for_clients<adc::Client::Unpacker0>());
 
         _llk_unpack_tilize_mop_config_(unpack_to_dest);
     }
@@ -201,7 +267,18 @@ inline void _llk_unpack_tilize_(
     const bool narrow_tile                          = false)
 {
     LLK_ASSERT(num_faces == 2 || num_faces == 4, "num_faces must be 2 or 4 for tilize");
+    namespace hcfg = hal::cfg;
+    namespace sync = hal::sync;
+    namespace adc  = hal::counters::adc;
+    using namespace hal_port::unpack_tilize;
+    constexpr std::uint32_t base_cntx0 = hcfg::Unpacker[0].Cntx[0].Base.addr32(hcfg::Sec::S0);
+    constexpr std::uint32_t base_cntx1 = hcfg::Unpacker[0].Cntx[1].Base.addr32(hcfg::Sec::S0);
+    static_assert(base_cntx0 == THCON_SEC0_REG3_Base_address_ADDR32 && base_cntx1 == THCON_SEC0_REG3_Base_cntx1_address_ADDR32, "unpacker A base words");
+    // TTI_SETADCZW(0b001, 0, 0, 0, 0, 0b1111): Z/W counters on UNP_A for both channels
+    constexpr adc::AddrCounter clear_zw = adc::AddrCounter {.channel0 = {.z = 0, .w = 0}, .channel1 = {.z = 0, .w = 0}}.for_clients<adc::Client::Unpacker0>();
 
+    // Production's get_cfg_pointer (RISC pointer select only): its branch layout keeps the per-tile path as production's;
+    // hcfg::detail::state_cfg_bank() flips the branch and cost up to 4% on short tilize blocks.
     volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer(); // get pointer to registers for current state ID
 
     // In case of 32-bit numbers, we have to unpack into dest register
@@ -237,69 +314,69 @@ inline void _llk_unpack_tilize_(
         LLK_ASSERT(is_valid_L1_address(address), "L1 base_address must be in valid L1 memory region");
 
         // Clear Z/W counters on UNP_A for both channels (Ch0 for L1 read, Ch1 for SrcA write)
-        TTI_SETADCZW(0b001, 0, 0, 0, 0, 0b1111);
+        adc::set<clear_zw>();
 
         // Wait for a free context (up to 2 tiles in flight)
-        wait_for_next_context(2);
+        hal_port::wait_for_next_context(2);
 
         // Write top-face base address to the active context's REG3
         if (0 == unp_cfg_context)
         {
-            cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address;
+            cfg[base_cntx0] = address;
         }
         else
         {
-            cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address;
+            cfg[base_cntx1] = address;
         }
-        semaphore_post(semaphore::UNPACK_SYNC);
+        sync::semaphore::post<sync::Access::MMIO, hal_port::UNPACK_SYNC_SEM>();
 
         // Stall unpacker until pending CFG writes from Trisc have completed
-        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+        sync::wait::stall<sync::StallTarget::Unpack, sync::StallCondition::RiscvAccessProcessed>();
 
         if (num_faces == 4)
         {
             // Face 0: Ch0.Z=0, Ch1.Z=0 -> SrcA rows 0..15
-            TTI_UNPACR(SrcA, 0b00010001 /*Ch0.Z+=1, Ch1.Z+=1*/, 0, 0, 0, 1, 0 /*no Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+            hal::unpack::run<unpack_srca_z11>();
             // Face 1: Ch0.Z=1, Ch1.Z=1 -> SrcA rows 16..31
-            TTI_UNPACR(SrcA, 0b00010001 /*Ch0.Z+=1, Ch1.Z+=1*/, 0, 0, 0, 1, 0 /*no Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+            hal::unpack::run<unpack_srca_z11>();
 
             // Shift the active context's Base_address by SCRATCH_SEC0_val (= bot_face_offset - 2
             // in 16B words) so face 2/3 read correctly at Z=2/3 on the L1 side. CFGSHIFTMASK's
             // target is an instruction immediate, so we pick the variant at compile time per context.
             if (0 == unp_cfg_context)
             {
-                TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG3_Base_address_ADDR32);
+                TTI_INSN(base_cntx0_add_scratch); // HAL-GAP: CFGSHIFTMASK
             }
             else
             {
-                TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
+                TTI_INSN(base_cntx1_add_scratch); // HAL-GAP: CFGSHIFTMASK
             }
-            TTI_NOP;
+            hal::nop::thread();
 
             // Face 2: Ch0.Z=2, Ch1.Z=2 -> SrcA rows 32..47
-            TTI_UNPACR(SrcA, 0b00010001 /*Ch0.Z+=1, Ch1.Z+=1*/, 0, 0, 0, 1, 0 /*no Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+            hal::unpack::run<unpack_srca_z11>();
             // Face 3: Ch0.Z=3, Ch1.Z=3 -> SrcA rows 48..63. SetDvalid flips the SrcA bank,
             // handing the full 64-row tile to math.
-            TTI_UNPACR(SrcA, 0b00010001 /*Ch0.Z+=1, Ch1.Z+=1*/, 0, 0, 0, 1, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+            hal::unpack::run<unpack_srca_z11_dvalid>();
         }
         else // num_faces == 2: top face pair only, no CFGSHIFTMASK
         {
             // Face 0: Ch0.Z=0, Ch1.Z=0 -> SrcA rows 0..15
-            TTI_UNPACR(SrcA, 0b00010001 /*Ch0.Z+=1, Ch1.Z+=1*/, 0, 0, 0, 1, 0 /*no Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+            hal::unpack::run<unpack_srca_z11>();
             // Face 1: Ch0.Z=1, Ch1.Z=1 -> SrcA rows 16..31. SetDvalid flips the SrcA bank.
-            TTI_UNPACR(SrcA, 0b00010001 /*Ch0.Z+=1, Ch1.Z+=1*/, 0, 0, 0, 1, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+            hal::unpack::run<unpack_srca_z11_dvalid>();
         }
 
         // SrcB DVALID + UNP_ZEROSRC. Required so math's ELWADD branch (dest_acc=Yes,
         // is_int_fpu_en, or dst==UInt8) sees a zero SrcB; for the MOVA2D branch it's
         // a no-op handshake but kept uniform across formats.
-        TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+        TTI_INSN(unpack_srcb_set_dvalid); // HAL-GAP: zero-source + set-data-valid UNPACR_NOP
 
         // T6::SEMGET for context release
-        t6_semaphore_get(semaphore::UNPACK_SYNC);
+        sync::semaphore::get<hal_port::UNPACK_SYNC_SEM>();
 
         // Flip to the other context for the next tile
-        switch_config_context(unp_cfg_context);
+        hal_port::switch_config_context(unp_cfg_context);
     }
     else
     {
@@ -308,50 +385,50 @@ inline void _llk_unpack_tilize_(
         LLK_ASSERT(is_valid_L1_address(address), "L1 base_address must be in valid L1 memory region");
 
         // Clear z/w start counters
-        TTI_SETADCZW(0b001, 0, 0, 0, 0, 0b1111);
+        adc::set<clear_zw>();
 
         // Wait for free context
-        wait_for_next_context(2);
+        hal_port::wait_for_next_context(2);
 
         // Get tile address
         if (0 == unp_cfg_context)
         {
-            cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address;
+            cfg[base_cntx0] = address;
         }
         else
         {
-            cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address;
+            cfg[base_cntx1] = address;
         }
 
         // Trisc::SEMPOST for context acquire
-        semaphore_post(semaphore::UNPACK_SYNC);
+        sync::semaphore::post<sync::Access::MMIO, hal_port::UNPACK_SYNC_SEM>();
 
         if (unpack_to_dest)
         {
             // Unpack to dest
-            set_dst_write_addr(unp_cfg_context, unpack_src_format);
-            wait_for_dest_available();
+            hal_port::set_dst_write_addr(unp_cfg_context, unpack_src_format);
+            hal_port::wait_for_dest_available();
         }
 
         // Stall unpacker until pending CFG writes from Trisc have completed
-        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+        sync::wait::stall<sync::StallTarget::Unpack, sync::StallCondition::RiscvAccessProcessed>();
 
         // Run MOP
-        ckernel::ckernel_template::run();
+        hal::mop::Runner<hal::mop::MopTemplate::Template1>::run();
 
         if (unpack_to_dest)
         {
             // Pair with set_dst_write_addr above (both keyed on unpack_src_format), so the
             // canonical Z-stride restore matches the value programmed on entry.
-            unpack_to_dest_tile_done(unp_cfg_context, unpack_src_format);
+            hal_port::unpack_to_dest_tile_done(unp_cfg_context, unpack_src_format);
         }
 
         // T6::SEMGET for context release, after unpack_to_dest_tile_done's config writes so that
         // configure_unpack_AB's wait_for_idle also waits for them
-        t6_semaphore_get(semaphore::UNPACK_SYNC);
+        sync::semaphore::get<hal_port::UNPACK_SYNC_SEM>();
 
         // Switch unpacker config context
-        switch_config_context(unp_cfg_context);
+        hal_port::switch_config_context(unp_cfg_context);
     }
 }
 
@@ -370,28 +447,31 @@ inline void _llk_unpack_tilize_(
  */
 inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
+    namespace cfg                  = hal::cfg;
+    namespace sync                 = hal::sync;
+    constexpr auto TileDsc         = cfg::Thcon[cfg::Reg0].TileDescriptor;
+    constexpr auto R5              = cfg::Thcon[cfg::Reg5];
     const std::uint32_t num_faces  = tensor_shape.total_num_faces();
     const std::uint32_t face_r_dim = tensor_shape.face_r_dim;
 
-    TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
+    sync::wait::stall<sync::StallTarget::Thcon, sync::StallCondition::Unpacker0Idle | sync::StallCondition::Unpacker1Idle>();
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
     // X-dim is 0 because Tile_x_dim_cntx0 below is what the unpacker consumes for srcA.
-    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 16, TILE_DESC_UPPER_HALFWORD_MASK>(num_faces);
-    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32, 16, TILE_DESC_UPPER_HALFWORD_MASK>(CANONICAL_UNPA_TILE_X_DIM);
+    cfg::write<cfg::Access::TensixCfgUnit, TileDsc.ZDim, cfg::Sec::S0>(num_faces);
+    cfg::write<cfg::Access::TensixCfgUnit, TileDsc.XDim, cfg::Sec::S0, CANONICAL_UNPA_TILE_X_DIM>();
 
     // Zeroed config clears tileize_mode and haloize_mode along with the rest of word 0.
     unpack_config_u config = {0};
 
     config.f.out_data_format = unpack_dst_format;
     config.f.throttle_mode   = 2;
-    TT_SETDMAREG(0, LOWER_HALFWORD(config.val[0]), 0, LO_16(p_gpr_unpack::TMP0));
-    TT_SETDMAREG(0, UPPER_HALFWORD(config.val[0]), 0, HI_16(p_gpr_unpack::TMP0));
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
     // Load unpack config[0]
-    TTI_WRCFG(p_gpr_unpack::TMP0, 0, THCON_SEC0_REG2_Out_data_format_ADDR32);
-    cfg_reg_rmw_tensix<THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32, 0, 0xffffffff>(canonical_unpA_tile_x_dim_cntx(face_r_dim));
-    TTI_NOP;
+    hal_port::unpack_tilize::write_unpack_config_word0(config.val[0]);
+    // canonical_unpA_tile_x_dim_cntx(face_r_dim): the face size in both context halves of the word
+    const std::uint32_t face_dim = face_r_dim * FACE_C_DIM;
+    cfg::write<cfg::Access::TensixCfgUnit>(cfg::set<R5.Tile_x_dim_cntx0, cfg::Sec::S0>(face_dim), cfg::set<R5.Tile_x_dim_cntx1, cfg::Sec::S0>(face_dim));
+    hal::nop::thread();
 }
 
 /*************************************************************************
@@ -415,42 +495,37 @@ template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero
 inline void _llk_unpack_tilizeA_B_mop_config_(const std::uint32_t num_faces = 4)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    const std::uint32_t replay_buf_run_len  = 6;
-    const std::uint32_t replay_buf_half_len = replay_buf_run_len >> 1;
+    constexpr std::uint32_t replay_buf_run_len  = 6;
+    constexpr std::uint32_t replay_buf_half_len = replay_buf_run_len >> 1;
+
+    using namespace hal_port::unpack_tilize;
+    static_assert(replay_buf_run_len == 6 && replay_buf_half_len == 3, "replay ranges below assume a 6-instruction buffer");
+    constexpr hal::replay::BufferRange replay_all {0 /*start*/, replay_buf_run_len};
+    constexpr hal::replay::BufferRange replay_cntx0 {0 /*start*/, replay_buf_half_len};
+    constexpr hal::replay::BufferRange replay_cntx1 {replay_buf_half_len /*start*/, replay_buf_half_len};
 
     // Lambda function to set up replay buffer
-    load_replay_buf(
-        0,
-        replay_buf_run_len,
+    hal::replay::record<replay_all>(
         []
         {
             // Unpacks 1x16 row of datums to SrcA
-            TTI_UNPACR(SrcA, 0b01000000 /*CH1_Y+=1*/, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+            hal::unpack::run<unpack_srca_row>();
 
             // THCON_SEC0_REG3_Base_address_ADDR32 =  THCON_SEC0_REG3_Base_address_ADDR32 +  SCRATCH_SEC0_val_ADDR32
-            TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG3_Base_address_ADDR32);
-            TTI_NOP;
+            TTI_INSN(base_cntx0_add_scratch); // HAL-GAP: CFGSHIFTMASK
+            hal::nop::thread();
 
             // Unpacks 1x16 row of datums to SrcA
-            TTI_UNPACR(SrcA, 0b01000000 /*CH1_Y+=1*/, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+            hal::unpack::run<unpack_srca_row>();
 
             // THCON_SEC0_REG3_Base_cntx1_address_ADDR32 =  THCON_SEC0_REG3_Base_cntx1_address_ADDR32 +  SCRATCH_SEC0_val_ADDR32
-            TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
-            TTI_NOP;
+            TTI_INSN(base_cntx1_add_scratch); // HAL-GAP: CFGSHIFTMASK
+            hal::nop::thread();
         });
 
-    ckernel_unpack_template tmp = ckernel_unpack_template(
-        false,                                     // src B
-        false,                                     // halo - just used for 4 unpacks
-        lltt::replay_insn(0, replay_buf_half_len), // runs when context is 0
-        0,
-        0,
-        0,
-        lltt::replay_insn(replay_buf_half_len, replay_buf_half_len), // runs when context is 1
-        0,
-        0);
-
-    tmp.program();
+    // Template 0, no SrcB, no halo: A0 runs when context is 0 (mask bit clear), SkipA0 when context is 1 (mask bit set).
+    hal::mop::program(hal::mop::foreach_mask_bit(
+        hal::mop::if_clear(hal::replay::get_operation<replay_cntx0>()), hal::mop::otherwise(hal::replay::get_operation<replay_cntx1>())));
 }
 
 /**
@@ -484,23 +559,24 @@ inline void _llk_unpack_tilizeA_B_init_(
     // Sets the block_c_dim for unpack to use to increment the L1 address
     const std::uint32_t c_dim_size = SCALE_DATUM_SIZE(unpack_src_format, ct_dim * ((num_faces == 1) ? FACE_C_DIM : TILE_C_DIM)) >> 4;
 
+    namespace cfg = hal::cfg;
+
     // This sets the scratch register that CFGSHIFTMASK instruction uses to increment the L1 address
-    TT_SETDMAREG(0, LOWER_HALFWORD(c_dim_size), 0, LO_16(p_gpr_unpack::TMP0));
-    TT_SETDMAREG(0, UPPER_HALFWORD(c_dim_size), 0, HI_16(p_gpr_unpack::TMP0));
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
-    TTI_WRCFG(p_gpr_unpack::TMP0, 0, SCRATCH_SEC0_val_ADDR32);
-    TTI_NOP;
+    hal_port::unpack_tilize::write_scratch_sec0(c_dim_size);
+    hal::nop::thread();
 
     // Unpack 1 row of 1x16 at a time for SrcA
-    config_unpacker_x_end<p_setadc::UNP_A>(1);
-    config_unpacker_x_end<p_setadc::UNP_B>(unpB_face_r_dim);
+    hal_port::config_unpacker_x_end<p_setadc::UNP_A>(1);
+    hal_port::config_unpacker_x_end<p_setadc::UNP_B>(unpB_face_r_dim);
 
     // Set the SrcA Y stride to one 1x16 row of datums with canonical_unpA_y_stride, the same helper
     // configure_unpack_AB, the srcA reconfig and _llk_unpack_tilizeA_B_uninit_ use. A Tf32 SrcA (Float32 L1
     // operand under 32-bit dest) has 4-byte datums; SCALE_DATUM_SIZE has no Tf32 arm and would give a quarter-row stride.
     const std::uint32_t unpA_ch1_y_stride = canonical_unpA_y_stride(unpack_dst_format);
-    cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_RMW>(unpA_ch1_y_stride);
-    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
+    constexpr auto Unp0Ch1                = cfg::Unpacker[0].AddrCtrl[cfg::UnpackerReg::Reg1];
+    static_assert(Unp0Ch1.Ystride.addr32(cfg::Sec::S0) == UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32, "Unp0 ch1 Y-stride word");
+    cfg::write<cfg::Access::TensixCfgUnit, Unp0Ch1.Ystride, cfg::Sec::S0>(unpA_ch1_y_stride);
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::Thcon[cfg::Reg2].Haloize_mode, cfg::Sec::S0, 0>();
 
     _llk_unpack_tilizeA_B_mop_config_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(num_faces);
 }
@@ -543,10 +619,17 @@ inline void _llk_unpack_tilizeA_B_(
     const std::uint32_t block_c_dim = block_ct_dim * ((num_faces == 1) ? FACE_C_DIM : TILE_C_DIM) * face_r_dim;
     const bool run_r_dim_loop       = (face_r_dim > 1);
 
-    volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer(); // get pointer to registers for current state ID
+    namespace sync = hal::sync;
+    namespace adc  = hal::counters::adc;
+    using namespace hal_port::unpack_tilize;
+    // TTI_UNPACR(SrcB, reload_srcB ? 0b0 : 0b1, 0, 0, 0, 1, 1, RAREFYB_DISABLE, 0, 0, 0, 0, 1)
+    constexpr hal::unpack::DataTransfer unpack_srcb {
+        .engine = Engine::Unpacker1, .increments = {.channel0 = {.z = reload_srcB ? 0 : 1}}, .handoff = SourceHandoff::FlipAndSetDataValid};
 
-    // Clear z/w start counters for SrcA/B
-    TTI_SETADCZW(p_setadc::UNP_AB, 0, 0, 0, 0, 0b1111);
+    volatile std::uint32_t tt_reg_ptr* cfg = hal::cfg::detail::state_cfg_bank(); // get pointer to registers for current state ID
+
+    // Clear z/w start counters for SrcA/B: TTI_SETADCZW(p_setadc::UNP_AB, 0, 0, 0, 0, 0b1111)
+    adc::set<adc::AddrCounter {.channel0 = {.z = 0, .w = 0}, .channel1 = {.z = 0, .w = 0}}.for_clients<adc::Client::Unpacker0, adc::Client::Unpacker1>()>();
 
     for (std::uint32_t n = 0; n < num_faces; n++)
     {
@@ -560,8 +643,10 @@ inline void _llk_unpack_tilizeA_B_(
         address_face_a += (n >= 2) ? ((SCALE_DATUM_SIZE(unpA_src_format, block_c_dim)) >> 4) : 0;
 
         // Wait for free context
-        wait_for_next_context(2);
+        hal_port::wait_for_next_context(2);
 
+        // HAL-GAP: the clear-source UNPACR_NOP flavors (UNP_CLRSRC with NEGINF / ZERO, WAIT_LIKE_UNPACR) have no
+        // HAL descriptor, so the production encodings are kept.
         if constexpr (neginf_srcA)
         {
             TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, p_unpacr::UNP_CLRSRC_NEGINF, p_unpacr::UNP_CLRSRC);
@@ -575,32 +660,32 @@ inline void _llk_unpack_tilizeA_B_(
         _llk_unpack_configure_addresses_(address_face_a, address_b, cfg);
 
         // Trisc::SEMPOST for context acquire
-        semaphore_post(semaphore::UNPACK_SYNC);
+        sync::semaphore::post<sync::Access::MMIO, hal_port::UNPACK_SYNC_SEM>();
 
         // Stall unpacker until pending CFG writes from Trisc have completed
-        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+        sync::wait::stall<sync::StallTarget::Unpack, sync::StallCondition::RiscvAccessProcessed>();
 
-        // Reset Y counters for SrcA
-        TTI_SETADCXY(p_setadc::UNP_A, 0, 0, 0, 0, 0b1010);
+        // Reset Y counters for SrcA: TTI_SETADCXY(p_setadc::UNP_A, 0, 0, 0, 0, 0b1010)
+        adc::set<adc::AddrCounter {.channel0 = {.y = 0}, .channel1 = {.y = 0}}.for_clients<adc::Client::Unpacker0>()>();
         // Unpack SrcB 16x16 face & Set Data Valid
 
         // If reload_srcB, only first face needs to be loaded, otherwise CH0_Z+=1
-        TTI_UNPACR(SrcB, reload_srcB ? 0b0 : 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        hal::unpack::run<unpack_srcb>();
 
         // Unpacks face_r_dim-1 rows of 1x16 datums to SrcA
         if (run_r_dim_loop)
         {
-            ckernel_unpack_template::run(face_r_dim - 1, unp_cfg_context == 0 ? 0 : 0xffff);
+            hal::mop::Runner<hal::mop::MopTemplate::Template0>::run(face_r_dim - 1, unp_cfg_context == 0 ? 0 : 0xffff);
         }
 
         // Unpack last SrcA row of a 16x16 face and SetDvalid
-        TTI_UNPACR(SrcA, 0b0, 0, 0, 0, 1, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        hal::unpack::run<unpack_srca_last_row>();
 
         // T6::SEMGET for context release
-        t6_semaphore_get(semaphore::UNPACK_SYNC);
+        sync::semaphore::get<hal_port::UNPACK_SYNC_SEM>();
 
         // Switch unpacker config context
-        switch_config_context(unp_cfg_context);
+        hal_port::switch_config_context(unp_cfg_context);
     }
 }
 
@@ -619,21 +704,24 @@ inline void _llk_unpack_tilizeA_B_(
  */
 inline void _llk_unpack_tilizeA_B_uninit_(const std::uint32_t unpack_dst_format)
 {
-    TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
+    namespace cfg  = hal::cfg;
+    namespace sync = hal::sync;
+    namespace adc  = hal::counters::adc;
+    sync::wait::stall<sync::StallTarget::Thcon, sync::StallCondition::Unpacker0Idle | sync::StallCondition::Unpacker1Idle>();
 
-    // _llk_unpack_tilizeA_B uses y-stride and updates y counter
-    TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
+    // _llk_unpack_tilizeA_B uses y-stride and updates y counter: TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010)
+    adc::set<adc::AddrCounter {.channel0 = {.y = 0}, .channel1 = {.y = 0}}.for_clients<adc::Client::Unpacker0, adc::Client::Unpacker1>()>();
 
     unpack_config_u config = {0};
 
     config.f.out_data_format = unpack_dst_format;
     config.f.throttle_mode   = 2;
-    TT_SETDMAREG(0, LOWER_HALFWORD(config.val[0]), 0, LO_16(p_gpr_unpack::TMP0));
-    TT_SETDMAREG(0, UPPER_HALFWORD(config.val[0]), 0, HI_16(p_gpr_unpack::TMP0));
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
     // Load unpack config[0]
-    TTI_WRCFG(p_gpr_unpack::TMP0, 0, THCON_SEC0_REG2_Out_data_format_ADDR32);
-    cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32, UNP0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT, UNP0_ADDR_CTRL_XY_REG_1_Ystride_MASK>(
-        canonical_unpA_y_stride(unpack_dst_format));
-    TTI_NOP;
+    hal_port::unpack_tilize::write_unpack_config_word0(config.val[0]);
+    constexpr auto Unp0Ch1 = cfg::Unpacker[0].AddrCtrl[cfg::UnpackerReg::Reg1];
+    static_assert(Unp0Ch1.Ystride.addr32(cfg::Sec::S0) == UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32, "Unp0 ch1 Y-stride word");
+    static_assert(Unp0Ch1.Ystride.shamt(cfg::Sec::S0) == UNP0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT, "Y-stride shift");
+    static_assert(Unp0Ch1.Ystride.mask(cfg::Sec::S0) == UNP0_ADDR_CTRL_XY_REG_1_Ystride_MASK, "Y-stride mask");
+    cfg::write<cfg::Access::TensixCfgUnit, Unp0Ch1.Ystride, cfg::Sec::S0>(canonical_unpA_y_stride(unpack_dst_format));
+    hal::nop::thread();
 }

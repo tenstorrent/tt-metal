@@ -1,6 +1,9 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+
+// HAL port of tt_llk_blackhole/llk_lib/llk_unpack_AB_matmul.h. Same instruction sequence and access kinds as production,
+// expressed through the HAL.
 
 #pragma once
 
@@ -10,13 +13,126 @@
 #include "ckernel_defs.h"
 #include "ckernel_globals.h"
 #include "ckernel_ops.h"
-#include "ckernel_template.h"
-#include "cunpack_common.h"
+#include "cunpack_common.h" // constants and types only (p_gpr_unpack, ...)
+#include "hal/cfg.h"
+#include "hal/mop.h"
+#include "hal/nop.h"
+#include "hal/replay.h"
+#include "hal/scalar.h"
+#include "hal/sync.h"
+#include "hal/tensix_counters.h"
+#include "hal/unpack.h"
 #include "llk_assert.h"
 #include "llk_unpack_common.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
+
+namespace hal_port
+{
+
+// One whole-tile (or one half-face of a partial-face tile) UNPACR of a matmul operand, configuration context 0 with the
+// thread override: TT_OP_UNPACR(Src, addr_mode, 0, 0, 0, 1 /*OvrdThreadId*/, set_dvalid, RAREFYB_DISABLE, 0, 0, 0, 0, 1).
+constexpr hal::unpack::DataTransfer matmul_unpack(const hal::unpack::Engine engine, const std::uint8_t z_increment, const hal::unpack::SourceHandoff handoff)
+{
+    return {
+        .engine     = engine,
+        .increments = {.channel0 = {.z = z_increment}, .channel1 = {.z = z_increment}},
+        .handoff    = handoff,
+    };
+}
+
+template <hal::unpack::Engine E>
+struct MatmulUnpackOps
+{
+    // Whole tile: TT_OP_UNPACR(Src, 0, ..., 1 /*Set Dvalid*/, ...)
+    static constexpr std::uint32_t tile = hal::unpack::get_operation<matmul_unpack(E, 0, hal::unpack::SourceHandoff::FlipAndSetDataValid)>();
+    // Partial face, first half: TT_OP_UNPACR(Src, 0b00010001, ..., 0 /*Set Dvalid*/, ...)
+    static constexpr std::uint32_t face_keep = hal::unpack::get_operation<matmul_unpack(E, 1, hal::unpack::SourceHandoff::Keep)>();
+    // Partial face, second half: TT_OP_UNPACR(Src, 0b00010001, ..., 1 /*Set Dvalid*/, ...)
+    static constexpr std::uint32_t face_valid = hal::unpack::get_operation<matmul_unpack(E, 1, hal::unpack::SourceHandoff::FlipAndSetDataValid)>();
+};
+
+using MatmulUnpackA = MatmulUnpackOps<hal::unpack::Engine::Unpacker0>; // SrcA
+using MatmulUnpackB = MatmulUnpackOps<hal::unpack::Engine::Unpacker1>; // SrcB
+
+static_assert(MatmulUnpackA::tile == TT_OP_UNPACR(SrcA, 0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1));
+static_assert(MatmulUnpackA::face_keep == TT_OP_UNPACR(SrcA, 0b00010001, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1));
+static_assert(MatmulUnpackA::face_valid == TT_OP_UNPACR(SrcA, 0b00010001, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1));
+static_assert(MatmulUnpackB::tile == TT_OP_UNPACR(SrcB, 0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1));
+static_assert(MatmulUnpackB::face_keep == TT_OP_UNPACR(SrcB, 0b00010001, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1));
+static_assert(MatmulUnpackB::face_valid == TT_OP_UNPACR(SrcB, 0b00010001, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1));
+
+// TTI_SETADCZW(UNP_A or UNP_B, 0, 0, 0, 0, 0b0101): channel-0 and channel-1 Z of one unpacker back to 0.
+template <adc::Client C>
+inline constexpr adc::AddrCounter matmul_z_reset = adc::AddrCounter {.channel0 = {.z = 0}, .channel1 = {.z = 0}}.for_clients<C>();
+static_assert(matmul_z_reset<adc::Client::Unpacker0>.operation() == TT_OP_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b0101));
+static_assert(matmul_z_reset<adc::Client::Unpacker1>.operation() == TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0101));
+
+// One partial-face unpack: zero the bank, unpack two half faces (data valid on the second), rewind Z.
+template <hal::unpack::Engine E, adc::Client C>
+inline __attribute__((always_inline)) void matmul_unpack_partial_face()
+{
+    // HAL-GAP: hal::nop encodes only the pure-delay UNPACR_NOP; the zero-source flavor (UNP_ZEROSRC, WAIT_LIKE_UNPACR)
+    // has no HAL descriptor, so the production encoding is kept.
+    TTI_UNPACR_NOP(static_cast<std::uint32_t>(E), 0, 0, 0 /*Set Dvalid*/, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+    TTI_INSN(MatmulUnpackOps<E>::face_keep);
+    TTI_INSN(MatmulUnpackOps<E>::face_valid);
+    adc::set<matmul_z_reset<C>>();
+}
+
+// One replay-buffer step of the streamed operand: unpack, then (unless kernel broadcast pins the tile) advance the base
+// address of configuration context Cntx by the tile size held in GPR TileSizeGpr.
+template <hal::unpack::Engine E, adc::Client C, std::uint32_t Unpacker, std::uint32_t Cntx, std::uint32_t TileSizeGpr, bool KernelBroadcast>
+inline __attribute__((always_inline)) void matmul_unpack_and_advance(const bool partial_face)
+{
+    namespace cfg  = hal::cfg;
+    namespace sync = hal::sync;
+
+    if (partial_face)
+    {
+        matmul_unpack_partial_face<E, C>();
+    }
+    else
+    {
+        TTI_INSN(MatmulUnpackOps<E>::tile);
+    }
+    if constexpr (KernelBroadcast)
+    {
+        hal::nop::thread();
+        hal::nop::thread();
+        hal::nop::thread();
+        hal::nop::thread();
+    }
+    else
+    {
+        // TTI_RDCFG(TMP0, base); TTI_ADDDMAREG(0, TMP0, TMP0, tile size); TTI_STALLWAIT(STALL_CFG, THCON); TTI_WRCFG(TMP0, 0, base)
+        cfg::read<cfg::Access::TensixCfgUnit, cfg::Unpacker[Unpacker].Cntx[Cntx].Base, cfg::Sec::S0>(hal::gpr<p_gpr_unpack::TMP0>());
+        hal::scalar::add(hal::gpr<p_gpr_unpack::TMP0>(), hal::gpr<TileSizeGpr>(), hal::gpr<p_gpr_unpack::TMP0>());
+        sync::wait::stall<sync::StallTarget::Config, sync::StallCondition::ScalarIdle>();
+        cfg::write<
+            cfg::Access::TensixCfgUnit,
+            cfg::Unpacker[Unpacker].Cntx[Cntx].Base,
+            cfg::Sec::S0,
+            cfg::GprTransferSize::Bits32,
+            cfg::WrcfgCompletion::Deferred>(hal::gpr<p_gpr_unpack::TMP0>());
+    }
+    // Added to ensure WRCFG instruction has finished, since it takes 2 cycles.
+    hal::nop::thread();
+}
+
+static_assert(hal::cfg::Unpacker[0].Cntx[0].Base.addr32(hal::cfg::Sec::S0) == THCON_SEC0_REG3_Base_address_ADDR32);
+static_assert(hal::cfg::Unpacker[0].Cntx[1].Base.addr32(hal::cfg::Sec::S0) == THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
+static_assert(hal::cfg::Unpacker[1].Cntx[0].Base.addr32(hal::cfg::Sec::S0) == THCON_SEC1_REG3_Base_address_ADDR32);
+static_assert(hal::cfg::Unpacker[1].Cntx[1].Base.addr32(hal::cfg::Sec::S0) == THCON_SEC1_REG3_Base_cntx1_address_ADDR32);
+static_assert(
+    hal::scalar::Add(hal::gpr<p_gpr_unpack::TMP0>(), hal::gpr<p_gpr_unpack::TILE_SIZE_A>(), hal::gpr<p_gpr_unpack::TMP0>()).operation() ==
+    TT_OP_ADDDMAREG(0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP0, p_gpr_unpack::TILE_SIZE_A));
+static_assert(
+    hal::scalar::MultiplyLowU16(hal::gpr<p_gpr_unpack::TMP_LO>(), hal::gpr<p_gpr_unpack::KT_DIM>(), hal::gpr<p_gpr_unpack::TILE_SIZE_B>()).operation() ==
+    TT_OP_MULDMAREG(0, p_gpr_unpack::TMP_LO, p_gpr_unpack::TILE_SIZE_B, p_gpr_unpack::KT_DIM));
+
+} // namespace hal_port
 
 /**
  * @brief Set the SrcA address step used to stream matmul in1 columns.
@@ -29,7 +145,8 @@ inline void _llk_unpack_AB_matmul_set_in1_column_stride_(const std::uint32_t til
 {
     LLK_ASSERT(tile_size > 0 && tile_size <= 0xffff, "Matmul tile size must fit the SrcA address-step register");
     LLK_ASSERT(stride_tiles > 0 && stride_tiles <= 0xffff / tile_size, "Matmul column stride must fit the SrcA address-step register");
-    TT_SETDMAREG(0, LOWER_HALFWORD(tile_size * stride_tiles), 0, LO_16(p_gpr_unpack::TILE_SIZE_A));
+    // TT_SETDMAREG(0, LOWER_HALFWORD(tile_size * stride_tiles), 0, LO_16(TILE_SIZE_A))
+    hal::scalar::set_low(hal::gpr<p_gpr_unpack::TILE_SIZE_A>(), LOWER_HALFWORD(tile_size * stride_tiles));
 }
 
 /**
@@ -58,159 +175,63 @@ inline void _llk_unpack_AB_matmul_mop_config_(
     const std::uint32_t replay_buf_prog_len = (reuse_a && unpA_partial_face) ? 18 : ((!reuse_a && unpB_partial_face) ? 18 : 12);
     const std::uint32_t replay_buf_run_len  = replay_buf_prog_len / 2;
 
+    const hal::replay::BufferRange replay_range {0 /*start*/, replay_buf_prog_len};
     if (reuse_a)
     {
         static_assert(kernel_broadcast_b <= 1, "kernel_broadcast>1 on matmul input 1 is not supported with reuse enabled");
-        load_replay_buf(
-            0,
-            replay_buf_prog_len,
-            // Lambda function to set up replay buffer
+        // Stream in1 (SrcA): one step per configuration context, each advancing that context's base address.
+        hal::replay::record(
+            replay_range,
             [unpA_partial_face]
             {
-                if (unpA_partial_face)
-                {
-                    TTI_UNPACR_NOP(SrcA, 0, 0, 0 /*Set Dvalid*/, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
-                    TTI_UNPACR(
-                        SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-                    TTI_UNPACR(
-                        SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-                    TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
-                }
-                else
-                {
-                    TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-                }
-                if constexpr (kernel_broadcast_b == 1)
-                {
-                    TTI_NOP;
-                    TTI_NOP;
-                    TTI_NOP;
-                    TTI_NOP;
-                }
-                else
-                {
-                    TTI_RDCFG(p_gpr_unpack::TMP0, THCON_SEC0_REG3_Base_address_ADDR32);
-                    TTI_ADDDMAREG(0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP0, p_gpr_unpack::TILE_SIZE_A);
-                    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
-                    TTI_WRCFG(p_gpr_unpack::TMP0, 0, THCON_SEC0_REG3_Base_address_ADDR32);
-                }
-                // Added to ensure WRCFG instruction has finished, since it takes 2 cycles.
-                TTI_NOP;
-
-                if (unpA_partial_face)
-                {
-                    TTI_UNPACR_NOP(SrcA, 0, 0, 0 /*Set Dvalid*/, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
-                    TTI_UNPACR(
-                        SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-                    TTI_UNPACR(
-                        SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-                    TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
-                }
-                else
-                {
-                    TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-                }
-                if constexpr (kernel_broadcast_b == 1)
-                {
-                    TTI_NOP;
-                    TTI_NOP;
-                    TTI_NOP;
-                    TTI_NOP;
-                }
-                else
-                {
-                    TTI_RDCFG(p_gpr_unpack::TMP0, THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
-                    TTI_ADDDMAREG(0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP0, p_gpr_unpack::TILE_SIZE_A);
-                    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
-                    TTI_WRCFG(p_gpr_unpack::TMP0, 0, THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
-                }
-                // Added to ensure WRCFG instruction has finished, since it takes 2 cycles.
-                TTI_NOP;
+                hal_port::matmul_unpack_and_advance<
+                    hal::unpack::Engine::Unpacker0,
+                    hal_port::adc::Client::Unpacker0,
+                    0 /*Unpacker*/,
+                    0 /*Cntx*/,
+                    p_gpr_unpack::TILE_SIZE_A,
+                    kernel_broadcast_b == 1>(unpA_partial_face);
+                hal_port::matmul_unpack_and_advance<
+                    hal::unpack::Engine::Unpacker0,
+                    hal_port::adc::Client::Unpacker0,
+                    0 /*Unpacker*/,
+                    1 /*Cntx*/,
+                    p_gpr_unpack::TILE_SIZE_A,
+                    kernel_broadcast_b == 1>(unpA_partial_face);
             });
     }
     else
     {
         static_assert(kernel_broadcast_a <= 1, "kernel_broadcast>1 on matmul input 0 is not supported with reuse enabled");
-        load_replay_buf(
-            0,
-            replay_buf_prog_len,
-            // Lambda function to set up replay buffer
+        // Stream in0 (SrcB), stepping by the kt_dim-scaled tile size in TMP_LO (see _llk_unpack_AB_matmul_).
+        hal::replay::record(
+            replay_range,
             [unpB_partial_face]
             {
-                if (unpB_partial_face)
-                {
-                    TTI_UNPACR_NOP(SrcB, 0, 0, 0 /*Set Dvalid*/, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
-                    TTI_UNPACR(
-                        SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-                    TTI_UNPACR(
-                        SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-                    TTI_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
-                }
-                else
-                {
-                    TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-                }
-                if constexpr (kernel_broadcast_a == 1)
-                {
-                    TTI_NOP;
-                    TTI_NOP;
-                    TTI_NOP;
-                    TTI_NOP;
-                }
-                else
-                {
-                    TTI_RDCFG(p_gpr_unpack::TMP0, THCON_SEC1_REG3_Base_address_ADDR32);
-                    TTI_ADDDMAREG(0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP_LO);
-                    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
-                    TTI_WRCFG(p_gpr_unpack::TMP0, 0, THCON_SEC1_REG3_Base_address_ADDR32);
-                }
-                // Added to ensure WRCFG instruction has finished, since it takes 2 cycles.
-                TTI_NOP;
-
-                if (unpB_partial_face)
-                {
-                    TTI_UNPACR_NOP(SrcB, 0, 0, 0 /*Set Dvalid*/, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
-                    TTI_UNPACR(
-                        SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-                    TTI_UNPACR(
-                        SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-                    TTI_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
-                }
-                else
-                {
-                    TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-                }
-                if constexpr (kernel_broadcast_a == 1)
-                {
-                    TTI_NOP;
-                    TTI_NOP;
-                    TTI_NOP;
-                    TTI_NOP;
-                }
-                else
-                {
-                    TTI_RDCFG(p_gpr_unpack::TMP0, THCON_SEC1_REG3_Base_cntx1_address_ADDR32);
-                    TTI_ADDDMAREG(0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP_LO);
-                    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
-                    TTI_WRCFG(p_gpr_unpack::TMP0, 0, THCON_SEC1_REG3_Base_cntx1_address_ADDR32);
-                }
-                // Added to ensure WRCFG instruction has finished, since it takes 2 cycles.
-                TTI_NOP;
+                hal_port::matmul_unpack_and_advance<
+                    hal::unpack::Engine::Unpacker1,
+                    hal_port::adc::Client::Unpacker1,
+                    1 /*Unpacker*/,
+                    0 /*Cntx*/,
+                    p_gpr_unpack::TMP_LO,
+                    kernel_broadcast_a == 1>(unpB_partial_face);
+                hal_port::matmul_unpack_and_advance<
+                    hal::unpack::Engine::Unpacker1,
+                    hal_port::adc::Client::Unpacker1,
+                    1 /*Unpacker*/,
+                    1 /*Cntx*/,
+                    p_gpr_unpack::TMP_LO,
+                    kernel_broadcast_a == 1>(unpB_partial_face);
             });
     }
 
-    ckernel_unpack_template tmp = ckernel_unpack_template(
-        false,                                    // src B
-        false,                                    // halo - just used for 4 unpacks
-        lltt::replay_insn(0, replay_buf_run_len), // runs when context is 0
-        0,
-        0,
-        0,
-        lltt::replay_insn(replay_buf_run_len, replay_buf_run_len), // runs when context is 1
-        0,
-        0);
-
-    tmp.program();
+    // Template 0, A0 only (no B, no A1-A3): the context-0 half of the replay buffer when the mask bit is clear, the
+    // context-1 half when it is set. Production also stores 0 into the unused B, A1-A3 and SkipB slots; the HAL stores
+    // only the slots the flags enable.
+    using namespace hal::mop;
+    program(foreach_mask_bit(
+        if_clear(hal::replay::get_operation(hal::replay::BufferRange {0 /*start*/, replay_buf_run_len})),                     // runs when context is 0
+        otherwise(hal::replay::get_operation(hal::replay::BufferRange {replay_buf_run_len /*start*/, replay_buf_run_len})))); // runs when context is 1
 }
 
 /**
@@ -258,37 +279,43 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
     // on WH, the unpacker performs both transpose of faces as well as transpose each face.
     // the former is configured in mop, the latter is configured in cfg register in hw_configure
     // in large matmul, datacopy will disable the transpose of faces, so we need it turn it back on for matmul.
-    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(transpose);
+    namespace cfg = hal::cfg;
+    namespace adc = hal::counters::adc;
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::Thcon[cfg::Reg2].Haloize_mode, cfg::Sec::S0>(transpose);
 
-    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+    // TTI_SETADCZW(UNP_A | UNP_B, 0, 0, 0, 0, 0b1111): Z and W of both channels of both unpackers
+    adc::set<adc::AddrCounter {.channel0 = {.z = 0, .w = 0}, .channel1 = {.z = 0, .w = 0}}.for_clients<adc::Client::Unpacker0, adc::Client::Unpacker1>()>();
 
     if (unpA_partial_face)
     {
         // Do face by face unpacking. Need to program correct face dim
         // to compute address of the next face
-        config_unpacker_x_end<p_setadc::UNP_A>(unpA_face_r_dim);
+        hal_port::config_unpacker_x_end<p_setadc::UNP_A>(unpA_face_r_dim);
     }
     else
     {
         const std::uint32_t unpA_x_end = unpA_num_faces * unpA_face_r_dim * FACE_C_DIM - 1;
-        TT_SETADCXX(p_setadc::UNP_A, unpA_x_end, 0x0);
+        // TT_SETADCXX(UNP_A, unpA_x_end, 0x0): X start on channel 0, X end on channel 1
+        adc::set(adc::AddrCounter {.channel0 = {.x = 0}, .channel1 = {.x = unpA_x_end}}.for_clients<adc::Client::Unpacker0>());
     }
 
     if (unpB_partial_face)
     {
         // Do face by face unpacking. Need to program correct face dim
         // to compute address of the next face
-        config_unpacker_x_end<p_setadc::UNP_B>(unpB_face_r_dim);
+        hal_port::config_unpacker_x_end<p_setadc::UNP_B>(unpB_face_r_dim);
     }
     else
     {
         // Do full tile unpacking. No need to program face dim
         // as address counter pointing to the face is not incremented
         const std::uint32_t unpB_x_end = unpB_num_faces * unpB_face_r_dim * FACE_C_DIM - 1;
-        TT_SETADCXX(p_setadc::UNP_B, unpB_x_end, 0x0);
+        // TT_SETADCXX(UNP_B, unpB_x_end, 0x0)
+        adc::set(adc::AddrCounter {.channel0 = {.x = 0}, .channel1 = {.x = unpB_x_end}}.for_clients<adc::Client::Unpacker1>());
     }
 
-    TT_SETDMAREG(0, LOWER_HALFWORD(kt_dim), 0, LO_16(p_gpr_unpack::KT_DIM)); // store kt_dim to gpr for scaling tile size
+    // TT_SETDMAREG(0, LOWER_HALFWORD(kt_dim), 0, LO_16(KT_DIM)): store kt_dim to gpr for scaling tile size
+    hal::scalar::set_low(hal::gpr<p_gpr_unpack::KT_DIM>(), LOWER_HALFWORD(kt_dim));
 
     _llk_unpack_AB_matmul_mop_config_<kernel_broadcast_a, kernel_broadcast_b>(ct_dim, rt_dim, unpA_partial_face, unpB_partial_face);
 }
@@ -346,14 +373,18 @@ inline void _llk_unpack_AB_matmul_(
     // In0/InA -> srcB (supports partial face)
     // In1/InB -> srcA
 
-    volatile std::uint32_t *cfg = get_cfg_pointer(); // get pointer to registers for current state ID
+    namespace sync  = hal::sync;
+    using MopRunner = hal::mop::Runner<hal::mop::MopTemplate::Template0>;
+
+    volatile std::uint32_t tt_reg_ptr *cfg = hal::cfg::detail::state_cfg_bank(); // get pointer to registers for current state ID
 
     const bool reuse_a        = ct_dim >= rt_dim;
     const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
 
     if (!reuse_a)
     {
-        TTI_MULDMAREG(0, p_gpr_unpack::TMP_LO, p_gpr_unpack::TILE_SIZE_B, p_gpr_unpack::KT_DIM);
+        // TTI_MULDMAREG(0, TMP_LO, TILE_SIZE_B, KT_DIM): in0 step = tile size * kt_dim
+        hal::scalar::multiply_low_u16(hal::gpr<p_gpr_unpack::TMP_LO>(), hal::gpr<p_gpr_unpack::KT_DIM>(), hal::gpr<p_gpr_unpack::TILE_SIZE_B>());
     }
 
     for (std::uint32_t t = 0; t < t_dim; t++)
@@ -373,31 +404,26 @@ inline void _llk_unpack_AB_matmul_(
         std::uint32_t address_b = base_address_b + offset_address_b;
 
         // Wait for free context
-        wait_for_next_context(2);
+        hal_port::wait_for_next_context(2);
 
         // Validate and configure addresses (note: address_b goes to SEC0, address_a to SEC1 for matmul)
         _llk_unpack_configure_addresses_(address_b, address_a, cfg);
 
-        semaphore_post(semaphore::UNPACK_SYNC); // Trisc::SEMPOST for context acquire
+        sync::semaphore::post<sync::Access::MMIO, hal_port::UNPACK_SYNC_SEM>(); // Trisc::SEMPOST for context acquire
 
         // Stall unpacker until pending CFG writes from Trisc have completed
-        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+        sync::wait::stall<sync::StallTarget::Unpack, sync::StallCondition::RiscvAccessProcessed>();
 
         if (reuse_a)
         {
             if (unpB_partial_face)
             {
-                TTI_UNPACR_NOP(SrcB, 0, 0, 0 /*Set Dvalid*/, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
                 // Do face by face unpacking
-                TTI_UNPACR(
-                    SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-                TTI_UNPACR(
-                    SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-                TTI_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
+                hal_port::matmul_unpack_partial_face<hal::unpack::Engine::Unpacker1, hal_port::adc::Client::Unpacker1>();
             }
             else
             {
-                TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                TTI_INSN(hal_port::MatmulUnpackB::tile);
             }
         }
         else
@@ -405,25 +431,21 @@ inline void _llk_unpack_AB_matmul_(
             if (unpA_partial_face)
             {
                 // Do face by face unpacking
-                TTI_UNPACR_NOP(SrcA, 0, 0, 0 /*Set Dvalid*/, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
-                TTI_UNPACR(
-                    SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-                TTI_UNPACR(
-                    SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-                TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
+                hal_port::matmul_unpack_partial_face<hal::unpack::Engine::Unpacker0, hal_port::adc::Client::Unpacker0>();
             }
             else
             {
-                TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                TTI_INSN(hal_port::MatmulUnpackA::tile);
             }
         }
 
-        TT_MOP(0, (reuse_a ? ct_dim : rt_dim) - 1, unp_cfg_context == 0 ? 0 : 0xff); // Run the MOP
+        // Run the MOP: TT_MOP(0, count - 1, context ? 0xff : 0); no MOP_CFG, as production
+        MopRunner::run<hal::mop::MaskHigh::Preset>((reuse_a ? ct_dim : rt_dim), unp_cfg_context == 0 ? 0 : 0xff);
 
         // T6::SEMGET for context release
-        t6_semaphore_get(semaphore::UNPACK_SYNC);
+        sync::semaphore::get<hal_port::UNPACK_SYNC_SEM>();
 
         // Switch unpacker config context
-        switch_config_context(unp_cfg_context);
+        hal_port::switch_config_context(unp_cfg_context);
     }
 }

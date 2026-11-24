@@ -1,6 +1,9 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+
+// HAL port of tt_llk_blackhole/llk_lib/llk_pack.h: every function and pack mode (Default, Untilize, Tilize) with the
+// same Tensix instruction sequence and access kinds as production.
 
 #pragma once
 
@@ -9,13 +12,39 @@
 #include "ckernel.h"
 #include "ckernel_globals.h"
 #include "ckernel_ops.h"
-#include "ckernel_template.h"
+#include "ckernel_template.h" // not used here: kept so production-copy headers that include llk_pack.h still see it
+#include "hal/mop.h"
+#include "hal/pack.h"
+#include "hal/replay.h"
 #include "llk_assert.h"
 #include "llk_defs.h"
 #include "llk_pack_common.h"
 
 using namespace ckernel;
 using namespace ckernel::packer;
+
+namespace hal_port
+{
+
+// One packer ADDR_MOD slot S (thread CFG word, SETC16). Every field of the 16-bit word is supplied, as
+// addr_mod_pack_t::pack_val() does, so the immediate SETC16 carries the whole word.
+template <cfg::Sec S, std::uint32_t y_src_incr, std::uint32_t y_src_clr, std::uint32_t y_src_cr, std::uint32_t z_src_incr, std::uint32_t z_src_clr>
+inline void set_addr_mod_pack()
+{
+    cfg::write<cfg::Access::TensixCfgUnit>(
+        cfg::set<cfg::AddrMod[cfg::Src][cfg::Y].Incr, S, y_src_incr>(),
+        cfg::set<cfg::AddrMod[cfg::Src][cfg::Y].CR, S, y_src_cr>(),
+        cfg::set<cfg::AddrMod[cfg::Src][cfg::Y].Clear, S, y_src_clr>(),
+        cfg::set<cfg::AddrMod[cfg::Dest][cfg::Y].Incr, S, 0>(),
+        cfg::set<cfg::AddrMod[cfg::Dest][cfg::Y].CR, S, 0>(),
+        cfg::set<cfg::AddrMod[cfg::Dest][cfg::Y].Clear, S, 0>(),
+        cfg::set<cfg::AddrMod[cfg::Src][cfg::Z].Incr, S, z_src_incr>(),
+        cfg::set<cfg::AddrMod[cfg::Src][cfg::Z].Clear, S, z_src_clr>(),
+        cfg::set<cfg::AddrMod[cfg::Dest][cfg::Z].Incr, S, 0>(),
+        cfg::set<cfg::AddrMod[cfg::Dest][cfg::Z].Clear, S, 0>());
+}
+
+} // namespace hal_port
 
 /**
  * @brief Configure the packer address-modification (ADDR_MOD) slots for the selected pack mode.
@@ -30,47 +59,38 @@ using namespace ckernel::packer;
 template <PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_configure_addrmod_()
 {
+    using hal::cfg::Sec;
     if constexpr (pack_mode == PackMode::Untilize)
     {
         /*  Y src inc by 1 to give strided increments:
             Rows: 0, 16, 1, 17, 2, 18, ........ 15, 31
         */
-        addr_mod_pack_t {.y_src = {.incr = 1}, .z_src = {.incr = 0}}.set(ADDR_MOD_0);
+        hal_port::set_addr_mod_pack<Sec::S0, 1 /*y_src_incr*/, 0 /*y_src_clr*/, 0 /*y_src_cr*/, 0 /*z_src_incr*/, 0 /*z_src_clr*/>();
 
         /* Increment Faces by 2 to give next 2 faces:
             Rows: 32, 48, 33, 49, 34, 50........47, 63
         */
-        addr_mod_pack_t {.y_src = {.incr = 0, .clr = 1}, .z_src = {.incr = 1}}.set(ADDR_MOD_1);
+        hal_port::set_addr_mod_pack<Sec::S1, 0 /*y_src_incr*/, 1 /*y_src_clr*/, 0 /*y_src_cr*/, 1 /*z_src_incr*/, 0 /*z_src_clr*/>();
 
-        addr_mod_pack_t {.y_src = {.incr = 0, .clr = 1}, .z_src = {.incr = 0, .clr = 1}}.set(ADDR_MOD_2);
+        hal_port::set_addr_mod_pack<Sec::S2, 0 /*y_src_incr*/, 1 /*y_src_clr*/, 0 /*y_src_cr*/, 0 /*z_src_incr*/, 1 /*z_src_clr*/>();
     }
     else if constexpr (pack_mode == PackMode::Tilize)
     {
-        addr_mod_pack_t {.y_src = {.incr = 4}, .z_src = {.incr = 0}}.set(ADDR_MOD_0);
+        hal_port::set_addr_mod_pack<Sec::S0, 4 /*y_src_incr*/, 0 /*y_src_clr*/, 0 /*y_src_cr*/, 0 /*z_src_incr*/, 0 /*z_src_clr*/>();
 
-        addr_mod_pack_t {.y_src = {.incr = 0, .clr = 1}, .z_src = {.incr = 0}}.set(ADDR_MOD_1);
+        hal_port::set_addr_mod_pack<Sec::S1, 0 /*y_src_incr*/, 1 /*y_src_clr*/, 0 /*y_src_cr*/, 0 /*z_src_incr*/, 0 /*z_src_clr*/>();
 
         // Increment faces by 2 (jump 2 dest address 32)
-        addr_mod_pack_t {.y_src = {.incr = 0, .clr = 1}, .z_src = {.incr = 1}}.set(ADDR_MOD_2);
+        hal_port::set_addr_mod_pack<Sec::S2, 0 /*y_src_incr*/, 1 /*y_src_clr*/, 0 /*y_src_cr*/, 1 /*z_src_incr*/, 0 /*z_src_clr*/>();
     }
     else
     {
-        addr_mod_pack_t {
-            .y_src = {.incr = 4},
-        }
-            .set(ADDR_MOD_0);
-
-        addr_mod_pack_t {
-            .y_src = {.incr = 0, .clr = 1, .cr = 0},
-            .z_src = {.incr = 0, .clr = 1},
-        }
-            .set(ADDR_MOD_1);
-
-        addr_mod_pack_t {
-            .y_src = {.incr = 0, .clr = 1, .cr = 0},
-            .z_src = {.incr = 1, .clr = 0},
-        }
-            .set(ADDR_MOD_2);
+        // ADDR_MOD_0: Y src incr 4
+        hal_port::set_addr_mod_pack<Sec::S0, 4 /*y_src_incr*/, 0 /*y_src_clr*/, 0 /*y_src_cr*/, 0 /*z_src_incr*/, 0 /*z_src_clr*/>();
+        // ADDR_MOD_1: Y src clear, Z src clear
+        hal_port::set_addr_mod_pack<Sec::S1, 0 /*y_src_incr*/, 1 /*y_src_clr*/, 0 /*y_src_cr*/, 0 /*z_src_incr*/, 1 /*z_src_clr*/>();
+        // ADDR_MOD_2: Y src clear, Z src incr 1
+        hal_port::set_addr_mod_pack<Sec::S2, 0 /*y_src_incr*/, 1 /*y_src_clr*/, 0 /*y_src_cr*/, 1 /*z_src_incr*/, 0 /*z_src_clr*/>();
     }
 }
 
@@ -90,15 +110,20 @@ inline void _llk_pack_configure_addrmod_()
  */
 template <PackMode pack_mode = PackMode::Default, bool zero_output = false>
 inline void _llk_pack_mop_config_(
-    const std::uint32_t face_r_dim = FACE_R_DIM,
-    const std::uint32_t tile_c_dim = TILE_C_DIM,
-    const std::uint32_t num_faces  = 4,
-    const std::uint32_t num_tiles  = 1)
+    const std::uint32_t face_r_dim                  = FACE_R_DIM,
+    [[maybe_unused]] const std::uint32_t tile_c_dim = TILE_C_DIM,
+    const std::uint32_t num_faces                   = 4,
+    [[maybe_unused]] const std::uint32_t num_tiles  = 1)
 {
+    using namespace hal::mop;
+    using hal::pack::Concatenation;
+    using hal::pack::DataTransfer;
+    using hal::pack::DestAccess;
+    using hal::pack::TileBoundary;
+
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
-    constexpr std::uint32_t MEGAROW          = 1;
-    constexpr std::uint32_t ZERO_OUTPUT_FLAG = zero_output ? p_pacr::P_ZERO_OUTPUT_ENABLED : p_pacr::P_ZERO_OUTPUT_DISABLED;
+    constexpr hal::pack::DatumOverride ZERO_OUTPUT_FLAG = zero_output ? hal::pack::DatumOverride::Zero : hal::pack::DatumOverride::None;
 
     if constexpr (pack_mode == PackMode::Untilize)
     {
@@ -106,57 +131,34 @@ inline void _llk_pack_mop_config_(
         const std::uint32_t MOP_INNER_LOOP = face_r_dim;
         const std::uint32_t MOP_OUTER_LOOP = (tile_c_dim < TILE_C_DIM) ? num_faces : (num_faces >> 1);
 
-        ckernel::ckernel_template tmp(
-            MOP_OUTER_LOOP,
-            MOP_INNER_LOOP,
-            TT_OP_PACR(
-                p_pacr::CFG_CTXT_0,
-                p_pacr::NO_ROW_PAD_ZERO,
-                p_pacr::DST_ACCESS_STRIDED_MODE,
-                ADDR_MOD_0,
-                p_pacr::ADDR_CNT_CTXT_0,
-                ZERO_OUTPUT_FLAG,
-                PACK_INTF_SEL,
-                0,
-                MEGAROW,
-                p_pacr::NO_CTXT_CTRL,
-                0,
-                0));
+        DataTransfer transfer {
+            .address_modifier = ADDR_MOD_0,
+            .interfaces       = static_cast<std::uint8_t>(PACK_INTF_SEL),
+            .datum_override   = ZERO_OUTPUT_FLAG,
+            .dest_access      = DestAccess::Strided,
+            .concatenation    = Concatenation::Append, // MEGAROW
+        };
+        const std::uint32_t rows = transfer.get_operation();
 
-        tmp.set_last_inner_loop_instr(TT_OP_PACR(
-            p_pacr::CFG_CTXT_0,
-            p_pacr::NO_ROW_PAD_ZERO,
-            p_pacr::DST_ACCESS_STRIDED_MODE,
-            ADDR_MOD_1,
-            p_pacr::ADDR_CNT_CTXT_0,
-            ZERO_OUTPUT_FLAG,
-            PACK_INTF_SEL,
-            0,
-            MEGAROW,
-            p_pacr::NO_CTXT_CTRL,
-            0,
-            0));
-        tmp.set_last_outer_loop_instr(TT_OP_PACR(
-            p_pacr::CFG_CTXT_0,
-            p_pacr::NO_ROW_PAD_ZERO,
-            p_pacr::DST_ACCESS_STRIDED_MODE,
-            ADDR_MOD_2,
-            p_pacr::ADDR_CNT_CTXT_0,
-            ZERO_OUTPUT_FLAG,
-            PACK_INTF_SEL,
-            0,
-            0,
-            p_pacr::NO_CTXT_CTRL,
-            0,
-            1));
-        tmp.program();
+        transfer.address_modifier    = ADDR_MOD_1;
+        const std::uint32_t last_row = transfer.get_operation(); // last inner iteration
+
+        transfer.address_modifier     = ADDR_MOD_2;
+        transfer.concatenation        = Concatenation::NewRow;
+        transfer.boundary             = TileBoundary::Last;
+        const std::uint32_t last_face = transfer.get_operation(); // last outer iteration: close the tile
+
+        // Explicit NOP end ops keep production's MOP_CFG stores (end_op0/end_op1 = NOP) unchanged.
+        const auto config = loop(MOP_OUTER_LOOP, loop(MOP_INNER_LOOP, rows), TT_OP_NOP, TT_OP_NOP).patch(last_outer, last_face);
+        // The last-inner op is never issued with an outer count of 1 (HAL requires the patch to be skipped then).
+        program(MOP_OUTER_LOOP > 1 ? config.patch(last_inner, last_row) : config);
     }
     else if constexpr (pack_mode == PackMode::Tilize)
     {
-        const std::uint32_t PACK_INTF_SEL_0 = 0b0101;
-        const std::uint32_t PACK_INTF_SEL_1 = 0b1010;
-        const std::uint32_t MOP_INNER_LOOP  = 1;
-        const std::uint32_t MOP_OUTER_LOOP  = (num_faces > 1) ? (num_faces >> 1) : 1;
+        constexpr std::uint8_t PACK_INTF_SEL_0 = 0b0101;
+        constexpr std::uint8_t PACK_INTF_SEL_1 = 0b1010;
+        const std::uint32_t MOP_INNER_LOOP     = 1;
+        const std::uint32_t MOP_OUTER_LOOP     = (num_faces > 1) ? (num_faces >> 1) : 1;
 
         if (face_r_dim == 1)
         {
@@ -169,24 +171,17 @@ inline void _llk_pack_mop_config_(
             // (replay_buf_len = face_r_dim - 1 = 0 is an invalid replay length, and num_instrs_per_face
             // underflows).
             LLK_ASSERT(num_faces == 2, "Tilize with face_r_dim == 1 supports num_faces == 2 only");
-            ckernel::ckernel_template tmp(
-                MOP_OUTER_LOOP,
-                MOP_INNER_LOOP,
-                // Interfaces 0 and 1 read DEST rows 0 and 1 (face 0 and face 1); ADDR_MOD_2, close the tile.
-                TT_OP_PACR(
-                    p_pacr::CFG_CTXT_0,
-                    p_pacr::NO_ROW_PAD_ZERO,
-                    p_pacr::DST_ACCESS_NORMAL_MODE,
-                    ADDR_MOD_2,
-                    p_pacr::ADDR_CNT_CTXT_0,
-                    ZERO_OUTPUT_FLAG,
-                    p_pacr::TWO_INTFS_ACTIVE,
-                    0,
-                    0,
-                    p_pacr::NO_CTXT_CTRL,
-                    0,
-                    1));
-            tmp.program();
+            // Interfaces 0 and 1 read DEST rows 0 and 1 (face 0 and face 1); ADDR_MOD_2, close the tile.
+            constexpr std::uint32_t both_faces =
+                DataTransfer {
+                    .address_modifier = ADDR_MOD_2,
+                    .interfaces       = p_pacr::TWO_INTFS_ACTIVE,
+                    .datum_override   = ZERO_OUTPUT_FLAG,
+                    .boundary         = TileBoundary::Last,
+                }
+                    .get_operation();
+            // Explicit NOP end ops keep production's MOP_CFG stores (end_op0/end_op1 = NOP) unchanged.
+            program(loop(MOP_OUTER_LOOP, loop(MOP_INNER_LOOP, both_faces), TT_OP_NOP, TT_OP_NOP));
             return;
         }
 
@@ -194,12 +189,30 @@ inline void _llk_pack_mop_config_(
         LLK_ASSERT(face_r_dim == 2 || face_r_dim == 4 || face_r_dim == 8 || face_r_dim == 16, "face_r_dim must be 2, 4, 8, or 16 for tilize");
         const std::uint32_t replay_buf_len = face_r_dim - 1;
 
+        // Face 0 rows (mask rows 1010), face 1 rows (mask rows 0101): MEGAROW, ADDR_MOD_0; the last face-0 row uses ADDR_MOD_1.
+        constexpr DataTransfer face0_row {
+            .address_modifier = ADDR_MOD_0,
+            .interfaces       = PACK_INTF_SEL_0,
+            .datum_override   = ZERO_OUTPUT_FLAG,
+            .concatenation    = Concatenation::Append,
+        };
+        constexpr DataTransfer face0_last_row {
+            .address_modifier = ADDR_MOD_1,
+            .interfaces       = PACK_INTF_SEL_0,
+            .datum_override   = ZERO_OUTPUT_FLAG,
+            .concatenation    = Concatenation::Append,
+        };
+        constexpr DataTransfer face1_row {
+            .address_modifier = ADDR_MOD_0,
+            .interfaces       = PACK_INTF_SEL_1,
+            .datum_override   = ZERO_OUTPUT_FLAG,
+            .concatenation    = Concatenation::Append,
+        };
+
         // This replay buffer finishes 2 faces
-        load_replay_buf(
-            0,
-            replay_buf_len,
-            // Lambda function to set up replay buffer
-            [PACK_INTF_SEL_0, PACK_INTF_SEL_1, ZERO_OUTPUT_FLAG, MEGAROW, face_r_dim]
+        hal::replay::record(
+            hal::replay::BufferRange {0, replay_buf_len},
+            [face_r_dim]
             {
                 // Number of instructions per face (minus 1 for the last special instruction)
                 const std::uint32_t num_instrs_per_face = (face_r_dim >> 1) - 1;
@@ -208,93 +221,40 @@ inline void _llk_pack_mop_config_(
                 // First num_instrs_per_face instructions use ADDR_MOD_0
                 for (std::uint32_t i = 0; i < num_instrs_per_face; i++)
                 {
-                    TTI_PACR(
-                        p_pacr::CFG_CTXT_0,
-                        p_pacr::NO_ROW_PAD_ZERO,
-                        p_pacr::DST_ACCESS_NORMAL_MODE,
-                        ADDR_MOD_0,
-                        p_pacr::ADDR_CNT_CTXT_0,
-                        ZERO_OUTPUT_FLAG,
-                        PACK_INTF_SEL_0,
-                        0,
-                        MEGAROW,
-                        p_pacr::NO_CTXT_CTRL,
-                        0,
-                        0);
+                    hal::pack::run<face0_row>();
                 }
                 // Last instruction for Face 0 uses ADDR_MOD_1
-                TTI_PACR(
-                    p_pacr::CFG_CTXT_0,
-                    p_pacr::NO_ROW_PAD_ZERO,
-                    p_pacr::DST_ACCESS_NORMAL_MODE,
-                    ADDR_MOD_1,
-                    p_pacr::ADDR_CNT_CTXT_0,
-                    ZERO_OUTPUT_FLAG,
-                    PACK_INTF_SEL_0,
-                    0,
-                    MEGAROW,
-                    p_pacr::NO_CTXT_CTRL,
-                    0,
-                    0);
+                hal::pack::run<face0_last_row>();
 
                 // Face 1 -> mask rows 0101
                 // num_instrs_per_face instructions use ADDR_MOD_0
                 // The last instruction is handled separately outside the replay buffer
                 for (std::uint32_t i = 0; i < num_instrs_per_face; i++)
                 {
-                    TTI_PACR(
-                        p_pacr::CFG_CTXT_0,
-                        p_pacr::NO_ROW_PAD_ZERO,
-                        p_pacr::DST_ACCESS_NORMAL_MODE,
-                        ADDR_MOD_0,
-                        p_pacr::ADDR_CNT_CTXT_0,
-                        ZERO_OUTPUT_FLAG,
-                        PACK_INTF_SEL_1,
-                        0,
-                        MEGAROW,
-                        p_pacr::NO_CTXT_CTRL,
-                        0,
-                        0);
+                    hal::pack::run<face1_row>();
                 }
                 // Last PACR instruction of the half-tile must go separately in the MOP. This is to be able to override it, to ensure that for the second half
                 // the tile is closed correctly.
             });
 
-        ckernel::ckernel_template tmp(
-            MOP_OUTER_LOOP,
-            MOP_INNER_LOOP,
-            lltt::replay_insn(0, replay_buf_len),
-            TT_OP_PACR(
-                p_pacr::CFG_CTXT_0,
-                p_pacr::NO_ROW_PAD_ZERO,
-                p_pacr::DST_ACCESS_NORMAL_MODE,
-                ADDR_MOD_2,
-                p_pacr::ADDR_CNT_CTXT_0,
-                ZERO_OUTPUT_FLAG,
-                PACK_INTF_SEL_1,
-                0,
-                0,
-                p_pacr::NO_CTXT_CTRL,
-                0,
-                0) // don't close tile
-        );
+        // Last face-1 row of each half-tile: ADDR_MOD_2, don't close the tile ...
+        DataTransfer face1_last_row {
+            .address_modifier = ADDR_MOD_2,
+            .interfaces       = PACK_INTF_SEL_1,
+            .datum_override   = ZERO_OUTPUT_FLAG,
+        };
+        const std::uint32_t half_tile_end = face1_last_row.get_operation();
+        // ... close the tile only when it is actually done.
+        face1_last_row.boundary        = TileBoundary::Last;
+        const std::uint32_t tile_close = face1_last_row.get_operation();
 
-        // Close the tile only when it is actually done.
-        tmp.set_last_outer_loop_instr(TT_OP_PACR(
-            p_pacr::CFG_CTXT_0,
-            p_pacr::NO_ROW_PAD_ZERO,
-            p_pacr::DST_ACCESS_NORMAL_MODE,
-            ADDR_MOD_2,
-            p_pacr::ADDR_CNT_CTXT_0,
-            ZERO_OUTPUT_FLAG,
-            PACK_INTF_SEL_1,
-            0,
-            0,
-            p_pacr::NO_CTXT_CTRL,
-            0,
-            1));
-
-        tmp.program();
+        // Explicit NOP end ops keep production's MOP_CFG stores (end_op0/end_op1 = NOP) unchanged.
+        program(loop(
+                    MOP_OUTER_LOOP,
+                    loop(MOP_INNER_LOOP, hal::replay::get_operation(hal::replay::BufferRange {0, replay_buf_len}), half_tile_end),
+                    TT_OP_NOP,
+                    TT_OP_NOP)
+                    .patch(last_outer, tile_close));
     }
     else
     {
@@ -304,58 +264,23 @@ inline void _llk_pack_mop_config_(
         const std::uint32_t MOP_INNER_LOOP = (face_r_dim < 4) ? 1 : face_r_dim >> 2;
         const std::uint32_t MOP_OUTER_LOOP = num_faces * num_tiles;
 
-        ckernel::ckernel_template tmp(
-            MOP_OUTER_LOOP,
-            MOP_INNER_LOOP,
-            TT_OP_PACR(
-                p_pacr::CFG_CTXT_0,
-                p_pacr::NO_ROW_PAD_ZERO,
-                p_pacr::DST_ACCESS_NORMAL_MODE,
-                ADDR_MOD_0,
-                p_pacr::ADDR_CNT_CTXT_0,
-                ZERO_OUTPUT_FLAG,
-                PACK_INTF_SEL,
-                0,
-                0,
-                0,
-                0,
-                0));
-        tmp.set_last_inner_loop_instr(TT_OP_PACR(
-            p_pacr::CFG_CTXT_0,
-            p_pacr::NO_ROW_PAD_ZERO,
-            p_pacr::DST_ACCESS_NORMAL_MODE,
-            ADDR_MOD_2,
-            p_pacr::ADDR_CNT_CTXT_0,
-            ZERO_OUTPUT_FLAG,
-            PACK_INTF_SEL,
-            0,
-            0,
-            0,
-            0,
-            0));
-        tmp.set_last_outer_loop_instr(TT_OP_PACR(
-            p_pacr::CFG_CTXT_0,
-            p_pacr::NO_ROW_PAD_ZERO,
-            p_pacr::DST_ACCESS_NORMAL_MODE,
-            ADDR_MOD_1,
-            p_pacr::ADDR_CNT_CTXT_0,
-            ZERO_OUTPUT_FLAG,
-            PACK_INTF_SEL,
-            0,
-            0,
-            0,
-            0,
-            1));
+        DataTransfer transfer {
+            .address_modifier = ADDR_MOD_0,
+            .interfaces       = static_cast<std::uint8_t>(PACK_INTF_SEL),
+            .datum_override   = ZERO_OUTPUT_FLAG,
+        };
+        const std::uint32_t rows = transfer.get_operation();
 
-        // if (partial_face) {
-        //     tmp.set_start_op(TT_OP_PACR(p_pacr::CFG_CTXT_0, p_pacr::NO_ROW_PAD_ZERO, p_pacr::DST_ACCESS_NORMAL_MODE, ADDR_MOD_0, p_pacr::ADDR_CNT_CTXT_0,
-        //     ZERO_OUTPUT_FLAG, p_pacr::ALL_INTF_ACTIVE, 0, MEGAROW, 0, 0, 1)); // Don't close the tile, point to the next face
-        //     tmp.set_loop_op0(TT_OP_INCADCXY(p_setadc::PAC, 0, 0, 1, 0)); // Inc ch0_y+=1 (addr_mod_0 will increment by 15)
-        //     tmp.set_loop_op1(TT_OP_PACR(p_pacr::CFG_CTXT_0, p_pacr::NO_ROW_PAD_ZERO, p_pacr::DST_ACCESS_NORMAL_MODE, ADDR_MOD_1, p_pacr::ADDR_CNT_CTXT_0,
-        //     ZERO_OUTPUT_FLAG, p_pacr::ALL_INTF_ACTIVE, 0, MEGAROW, 0, 0, 1)); // Close the tile
-        // }
+        transfer.address_modifier     = ADDR_MOD_2;
+        const std::uint32_t last_row  = transfer.get_operation(); // last inner iteration
+        transfer.address_modifier     = ADDR_MOD_1;
+        transfer.boundary             = TileBoundary::Last;
+        const std::uint32_t last_face = transfer.get_operation(); // last outer iteration: close the tile
 
-        tmp.program();
+        // Explicit NOP end ops keep production's MOP_CFG stores (end_op0/end_op1 = NOP) unchanged.
+        const auto config = loop(MOP_OUTER_LOOP, loop(MOP_INNER_LOOP, rows), TT_OP_NOP, TT_OP_NOP).patch(last_outer, last_face);
+        // The last-inner op is never issued with an outer count of 1 (HAL requires the patch to be skipped then).
+        program(MOP_OUTER_LOOP > 1 ? config.patch(last_inner, last_row) : config);
     }
 }
 
@@ -404,14 +329,15 @@ inline void pack_init_apply(
     _llk_pack_mop_config_<pack_mode, zero_output>(face_r_dim, tile_c_dim, num_faces, num_tiles);
     if constexpr (!skip_packer_strides)
     {
-        set_packer_strides<pack_mode>(pack_src_format, tile_c_dim);
+        hal_port::set_packer_strides<pack_mode>(pack_src_format, tile_c_dim);
     }
 
     // Program the packer X (datum) counter. Per the "inits own SETADCXX" contract, every init sets its
     // own value; on Blackhole x_start/x_end must stay within a single row (0..FACE_C_DIM-1).
     {
-        T6MutexLockGuard<mutex_ADC> guard(mutex::THREAD2_ADC);
-        TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
+        hal_port::AdcMutexGuard<mutex_ADC> guard;
+        hal::counters::adc::set<hal::counters::adc::AddrCounter {.channel0 = {.x = 0}, .channel1 = {.x = FACE_C_DIM - 1}}
+                                    .for_clients<hal::counters::adc::Client::Packers>()>(); // SETADCXX(PAC, FACE_C_DIM - 1, 0)
     }
 }
 } // namespace llk_pack_internal_bh
@@ -425,7 +351,6 @@ inline void pack_init_apply(
  * @param pack_src_format: Source (dest register) data format.
  * @param pack_dst_format: Destination (L1) data format.
  * @param tile_size: Size of one output tile in bytes.
- * @param face_r_dim: Number of rows per face.
  * @param tile_c_dim: Tile column dimension (datums).
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
  * @param partial_face: True if packing a partial (sub-face-row) face.
@@ -441,7 +366,7 @@ inline void _llk_pack_reconfig_data_format_(
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
-    reconfig_packer_data_format<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, tile_c_dim, num_faces, partial_face);
+    hal_port::reconfig_packer_data_format<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, tile_c_dim, num_faces, partial_face);
 }
 
 /**
@@ -480,7 +405,8 @@ inline void _llk_pack_hw_configure_(
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
     LLK_ASSERT_BLOCK(llk_assert_fp32_dest_acc_en = is_fp32_dest_acc_en);
-    configure_pack<is_fp32_dest_acc_en, pack_mode>(pack_src_format, pack_dst_format, tile_size, face_r_dim, tile_c_dim, num_faces, partial_face, relu_config);
+    hal_port::configure_pack<is_fp32_dest_acc_en, pack_mode>(
+        pack_src_format, pack_dst_format, tile_size, face_r_dim, tile_c_dim, num_faces, partial_face, relu_config);
 }
 
 /**
@@ -508,8 +434,7 @@ inline void _llk_pack_hw_configure_(
  * @note Pair with @ref _llk_pack_uninit_ after the matching @ref _llk_pack_ execute calls.
  * @note mutex_ADC has to match the value given to @ref _llk_pack_ ; guarding only one of the two
  *       leaves unguarded SETADC issues. Supported for PackMode::Default only: the other modes embed ADC
- *       instructions in the MOP itself (e.g. the Tilize MOP's SETADCZW end op), which execute inside
- *       ckernel_template::run() where a scope guard cannot reach them.
+ *       instructions in the MOP itself, which execute inside the MOP run where a scope guard cannot reach them.
  */
 template <
     PackMode pack_mode       = PackMode::Default,
@@ -599,12 +524,13 @@ inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t addre
 
     set_dst_write_addr<mutex_ADC>(tile_index);
 
-    program_packer_destination(address);
+    hal_port::program_packer_destination(address);
 
-    ckernel::ckernel_template::run();
+    hal::mop::Runner<hal::mop::MopTemplate::Template1>::run();
 
     {
-        T6MutexLockGuard<mutex_ADC> guard(mutex::THREAD2_ADC);
-        TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101); // reset z counters
+        hal_port::AdcMutexGuard<mutex_ADC> guard;
+        hal::counters::adc::set<hal::counters::adc::AddrCounter {.channel0 = {.z = 0}, .channel1 = {.z = 0}}
+                                    .for_clients<hal::counters::adc::Client::Packers>()>(); // reset z counters: SETADCZW(PAC, mask 0b0101)
     }
 }

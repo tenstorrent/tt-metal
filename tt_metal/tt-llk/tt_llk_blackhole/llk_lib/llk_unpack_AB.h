@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// HAL port of tt_llk_blackhole/llk_lib/llk_unpack_AB.h. Same instruction sequence and access kinds as production,
+// expressed through the HAL.
+
 #pragma once
 
 #include <cstdint>
@@ -10,8 +13,11 @@
 #include "ckernel_defs.h"
 #include "ckernel_globals.h"
 #include "ckernel_ops.h"
-#include "ckernel_template.h"
-#include "cunpack_common.h"
+#include "hal/mop.h"
+#include "hal/replay.h"
+#include "hal/sync.h"
+#include "hal/tensix_counters.h"
+#include "hal/unpack.h"
 #include "llk_assert.h"
 #include "llk_defs.h"
 #include "llk_unpack_common.h"
@@ -20,6 +26,32 @@
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
+
+namespace hal_port
+{
+
+// One face from L1 into the next SrcA/SrcB bank, advancing channel-0 Z by z_increment, handing the bank to math:
+// TT_OP_UNPACR(Src, z_increment, 0, 0, 0, 1, 1, RAREFYB_DISABLE, 0, 0, 0, 0, 1).
+constexpr hal::unpack::DataTransfer unpack_face(const hal::unpack::Engine engine, const std::uint8_t z_increment)
+{
+    return {
+        .engine     = engine,
+        .increments = {.channel0 = {.z = z_increment}},
+        .handoff    = hal::unpack::SourceHandoff::FlipAndSetDataValid,
+    };
+}
+
+inline constexpr std::uint32_t unpack_srca = hal::unpack::get_operation<unpack_face(hal::unpack::Engine::Unpacker0, 1)>();
+inline constexpr std::uint32_t unpack_srcb = hal::unpack::get_operation<unpack_face(hal::unpack::Engine::Unpacker1, 1)>();
+// Z += 2 moves down a column of faces (transpose allows at most two face columns).
+inline constexpr std::uint32_t unpack_srca_transpose = hal::unpack::get_operation<unpack_face(hal::unpack::Engine::Unpacker0, 2)>();
+
+// TT_OP_SETADCZW(UNP_A, 0, 0, 0, 1, 0b0001): SrcA face (channel-0 Z) counter to 1, i.e. the top of the next column of faces.
+inline constexpr std::uint32_t setadc_srca_z1 = adc::AddrCounter {.channel0 = {.z = 1}}.for_clients<adc::Client::Unpacker0>().operation();
+// TT_OP_SETADCZW(UNP_B, 0, 0, 0, 0, 0b0001): SrcB face counter back to 0.
+inline constexpr std::uint32_t setadc_srcb_z0 = adc::AddrCounter {.channel0 = {.z = 0}}.for_clients<adc::Client::Unpacker1>().operation();
+
+} // namespace hal_port
 
 /**
  * @brief Rows per face that unpacker B reads.
@@ -65,6 +97,8 @@ inline std::uint32_t _llk_unpack_AB_srcb_face_r_dim_(const ckernel::TensorShape 
 template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const ckernel::TensorShape tensor_shape_a, const ckernel::TensorShape tensor_shape_b)
 {
+    using namespace hal::mop;
+
     const std::uint32_t num_faces_r_dim = tensor_shape_a.num_faces_r_dim;
     const std::uint32_t num_faces_c_dim = tensor_shape_a.num_faces_c_dim;
     // TODO: Remove this assert after testing >4 num_faces because there is no reason to limit this for non-broadcast versions
@@ -79,42 +113,34 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
             "num_faces_c_dim has to be either 1 or 2 with transpose due to stride limitations in UNPACR instruction");
     }
 
-    static constexpr std::uint32_t unpack_srca = TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-    static constexpr std::uint32_t unpack_srcb = TT_OP_UNPACR(SrcB, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-    // Z += 2 moves down a column of faces (transpose allows at most two face columns).
-    static constexpr std::uint32_t unpack_srca_transpose = TT_OP_UNPACR(SrcA, 0b10, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-
     const std::uint32_t outerloop = transpose_of_faces ? num_faces_c_dim : num_faces_r_dim;
     const std::uint32_t innerloop = transpose_of_faces ? num_faces_r_dim : num_faces_c_dim;
-    const std::uint32_t srca_op   = transpose_of_faces ? unpack_srca_transpose : unpack_srca;
+    const std::uint32_t srca_op   = transpose_of_faces ? hal_port::unpack_srca_transpose : hal_port::unpack_srca;
     // With transpose, move SrcA to the top of the next column of faces.
-    const std::uint32_t srca_next_column = transpose_of_faces ? TT_OP_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 1, 0b0001) : TT_OP_NOP;
+    const std::uint32_t srca_next_column = transpose_of_faces ? hal_port::setadc_srca_z1 : TT_OP_NOP;
 
     if constexpr (BType == BroadcastType::COL)
     {
         LLK_ASSERT(num_faces_c_dim >= num_faces_r_dim, "BroadcastType::COL does not support a 32x16 SrcA tile");
         LLK_ASSERT(tensor_shape_b.num_faces_r_dim >= num_faces_r_dim, "BroadcastType::COL needs a SrcB face for every row of SrcA faces");
         // After each row of A faces, move B to its next row of faces.
-        ckernel_template tmp(outerloop, innerloop, srca_op);
-        tmp.set_start_op(unpack_srcb);
-        tmp.set_end_ops(TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, tensor_shape_b.num_faces_c_dim, 0b0001), srca_next_column);
-        tmp.program();
+        // TT_OP_SETADCZW(UNP_B, 0, 0, 0, tensor_shape_b.num_faces_c_dim, 0b0001)
+        const std::uint32_t srcb_next_row = hal::counters::adc::AddrCounter {.channel0 = {.z = tensor_shape_b.num_faces_c_dim}}
+                                                .for_clients<hal::counters::adc::Client::Unpacker1>()
+                                                .operation();
+        program(loop(outerloop, hal_port::unpack_srcb, loop(innerloop, srca_op), srcb_next_row, srca_next_column));
     }
     else if constexpr (BType == BroadcastType::ROW)
     {
         LLK_ASSERT(num_faces_c_dim >= num_faces_r_dim, "BroadcastType::ROW does not support a 32x16 SrcA tile");
         LLK_ASSERT(tensor_shape_b.num_faces_c_dim >= num_faces_c_dim, "BroadcastType::ROW needs a SrcB face for every column of SrcA faces");
         // Re-read B's first row of faces for every row of A faces.
-        ckernel_template tmp(outerloop, innerloop, unpack_srcb, srca_op);
-        tmp.set_end_ops(TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0001), srca_next_column);
-        tmp.program();
+        program(loop(outerloop, loop(innerloop, hal_port::unpack_srcb, srca_op), hal_port::setadc_srcb_z0, srca_next_column));
     }
     else if constexpr (BType == BroadcastType::SCALAR)
     {
         LLK_ASSERT(!transpose_of_faces, "SrcA transpose is not supported with scalar broadcast");
-        ckernel_template tmp(1, tensor_shape_a.total_num_faces(), unpack_srca);
-        tmp.set_start_op(unpack_srcb);
-        tmp.program();
+        program(loop(1 /*count*/, hal_port::unpack_srcb, loop(tensor_shape_a.total_num_faces(), hal_port::unpack_srca)));
     }
     else // BType == BroadcastType::NONE
     {
@@ -123,6 +149,8 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
         {
             // The FPU reads at least MAX_FPU_ROWS rows per face. Zero the unpacker's own bank of both sources
             // before each face, so ELWADD and ELWSUB also see zeros in the rows past the face.
+            // HAL-GAP: hal::nop encodes only the pure-delay UNPACR_NOP; the clear-source flavor (CLR_SRC_0 / CLR_SRC,
+            // WAIT_LIKE_UNPACR) has no HAL descriptor, so the production encoding is kept.
             static constexpr std::uint32_t clear_srca = TT_OP_UNPACR_NOP(
                 SrcA,
                 0 /*Stream_Id*/,
@@ -143,24 +171,19 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
                 0 /*Bank_Clr_Ctrl*/,
                 p_unpacr_nop::CLR_SRC_0,
                 p_unpacr_nop::CLR_SRC);
-            constexpr std::uint32_t replay_buf_len = 4;
-            load_replay_buf(
-                0,
-                replay_buf_len,
+            constexpr hal::replay::BufferRange replay_range {0 /*start*/, 4 /*count*/};
+            hal::replay::record<replay_range>(
                 []
                 {
                     TTI_INSN(clear_srca);
-                    TTI_INSN(unpack_srca);
+                    TTI_INSN(hal_port::unpack_srca);
                     TTI_INSN(clear_srcb);
-                    TTI_INSN(unpack_srcb);
+                    TTI_INSN(hal_port::unpack_srcb);
                 });
-            ckernel_template tmp(num_faces_r_dim, num_faces_c_dim, lltt::replay_insn(0, replay_buf_len));
-            tmp.program();
+            program(loop(num_faces_r_dim, loop(num_faces_c_dim, hal::replay::get_operation<replay_range>())));
             return;
         }
-        ckernel_template tmp(outerloop, innerloop, srca_op, unpack_srcb);
-        tmp.set_end_op(srca_next_column);
-        tmp.program();
+        program(loop(outerloop, loop(innerloop, srca_op, hal_port::unpack_srcb), srca_next_column));
     }
 }
 
@@ -176,30 +199,40 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
  * @param transpose: Transpose mode for SrcA face order and/or within-face transpose, values = <None/IntraFace/InterFace/Both>
  * @note With no broadcast and no inter-face transpose, a face shorter than MAX_FPU_ROWS rows zeroes the unpacker's
  * own SrcA and SrcB banks before each face (see @ref _llk_unpack_AB_mop_config_).
- * @note B's datum count (x_end) can differ from A's. Each op's init sets the counts it uses, so
- * @ref _llk_unpack_AB_uninit_ is a no-op.
+ * @note B's datum count (x_end) can differ from A's. Each op's init sets the counts it uses;
+ * @ref _llk_unpack_AB_uninit_ only turns Auto TTSync off.
  * @ref _llk_unpack_AB_ is the matching execute call.
  * @ref _llk_math_eltwise_binary_init_ is the matching init on the math thread (consumes SrcA/SrcB).
  */
 template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape_a, const ckernel::TensorShape tensor_shape_b, const ckernel::Transpose transpose)
 {
+    namespace cfg = hal::cfg;
+
     // TODO: Remove this assert after testing >4 num_faces because there is no reason to limit this for non-broadcast versions
     LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_AB_init_", tensor_shape_a);
     LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_AB_init_", tensor_shape_b);
     const bool within_face_16x16_transpose = transpose == ckernel::Transpose::IntraFace || transpose == ckernel::Transpose::Both;
     const bool transpose_of_faces          = transpose == ckernel::Transpose::InterFace || transpose == ckernel::Transpose::Both;
-    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose); // transpose within the face
+    // _llk_unpack_AB_ uses config context 0 only, ordered by Auto TTSync (AutoTTSync.md): RISC stores to unpacker
+    // config are ordered against the UNPACR/MOP pushes around them, so context 0 is rewritten in place without the
+    // two-context semaphore handshake. Scoped to AB unpacking; _llk_unpack_AB_uninit_ turns it off again, and every
+    // kernel starts with it off. Free when already on (re-init inside a loop).
+    hal_port::reset_config_context();
+    hal_port::unpack_sync_mode<hal_port::UnpackSyncMode::AutoTTSync>();
+
+    // transpose within the face
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::Thcon[cfg::Reg2].Haloize_mode, cfg::Sec::S0>(within_face_16x16_transpose);
 
     const std::uint32_t srcb_face_r_dim = _llk_unpack_AB_srcb_face_r_dim_<BType>(tensor_shape_a, tensor_shape_b);
     if (srcb_face_r_dim == tensor_shape_a.face_r_dim)
     {
-        config_unpacker_x_end<p_setadc::UNP_AB>(tensor_shape_a.face_r_dim);
+        hal_port::config_unpacker_x_end<p_setadc::UNP_AB>(tensor_shape_a.face_r_dim);
     }
     else
     {
-        config_unpacker_x_end<p_setadc::UNP_A>(tensor_shape_a.face_r_dim);
-        config_unpacker_x_end<p_setadc::UNP_B>(srcb_face_r_dim);
+        hal_port::config_unpacker_x_end<p_setadc::UNP_A>(tensor_shape_a.face_r_dim);
+        hal_port::config_unpacker_x_end<p_setadc::UNP_B>(srcb_face_r_dim);
     }
 
     _llk_unpack_AB_mop_config_<BType>(transpose_of_faces, tensor_shape_a, tensor_shape_b);
@@ -255,22 +288,23 @@ inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const 
 }
 
 /**
- * @brief No-op teardown after AB (two-operand) unpacking.
+ * @brief Teardown after AB (two-operand) unpacking: turn the unpack thread's Auto TTSync off again.
  *
  * The SrcA/SrcB unpacker x-start/x-end (datum-count) state is transient and reprogrammed by each
- * operation's init (see tt-llk#1036), so there is nothing to restore here.
+ * operation's init (see tt-llk#1036). Auto TTSync, enabled by @ref _llk_unpack_AB_init_, is sticky per thread.
  *
  * @note Call @ref _llk_unpack_AB_init_ before this function.
  */
 inline void _llk_unpack_AB_uninit_()
 {
+    hal_port::unpack_sync_mode<hal_port::UnpackSyncMode::Handshake>();
 }
 
 /**
  * @brief Unpack two tiles from L1 memory into SrcA and SrcB registers
  *
  * Performs the actual unpacking operation by programming base addresses and running
- * the configured MOP. Handles context switching and synchronization with the unpacker.
+ * the configured MOP. Uses config context 0 only; Auto TTSync orders the base stores against the MOPs.
  *
  * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @param address_a: L1 memory address of source A tile
@@ -289,7 +323,8 @@ inline void _llk_unpack_AB_(
     [[maybe_unused]] const std::uint32_t bcast_row_idx = 0,
     [[maybe_unused]] const std::uint32_t srcb_format   = 0)
 {
-    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111); // reset counters
+    LLK_ASSERT(hal_port::unpack_sync_mode_state == hal_port::UnpackSyncMode::AutoTTSync, "_llk_unpack_AB_ needs Auto TTSync: call _llk_unpack_AB_init_ first");
+    volatile std::uint32_t tt_reg_ptr *cfg = hal::cfg::detail::state_cfg_bank(); // get pointer to registers for current state ID
 
     if constexpr (BType == BroadcastType::ROW)
     {
@@ -319,27 +354,16 @@ inline void _llk_unpack_AB_(
         }
     }
 
-    // Program srcA and srcB base addresses
-    volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer(); // get pointer to registers for current state ID
+    // Single config context with Auto TTSync (enabled by _llk_unpack_AB_init_): these base stores stall until the
+    // previous tile's MOP expansion has passed the Wait Gate, where its UNPACRs have taken their base addresses
+    // (MemoryOrdering.md), and the first UNPACR of this MOP waits until the stores have landed (AutoTTSync.md).
+    // This replaces the busy-context semaphore, the STALLWAIT on RISC CFG writes and the context flip.
+    _llk_unpack_configure_addresses_(address_a, address_b, cfg, 0 /*context*/);
 
-    // Wait for free context
-    wait_for_next_context(2);
-
-    // Validate and configure addresses
-    _llk_unpack_configure_addresses_(address_a, address_b, cfg);
-
-    // Trisc::SEMPOST for context acquire
-    semaphore_post(semaphore::UNPACK_SYNC);
-
-    // Stall unpacker until pending CFG writes from Trisc have completed
-    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+    // reset counters: Z and W of both unpackers, channels 0 and 1 (one SETADCZW, mask 0b1111), right before the MOP
+    hal::counters::adc::set<hal::counters::adc::AddrCounter {.channel0 = {.z = 0, .w = 0}, .channel1 = {.z = 0, .w = 0}}
+                                .for_clients<hal::counters::adc::Client::Unpacker0, hal::counters::adc::Client::Unpacker1>()>();
 
     // Run MOP
-    ckernel::ckernel_template::run();
-
-    // T6::SEMGET for context release
-    t6_semaphore_get(semaphore::UNPACK_SYNC);
-
-    // Switch unpacker config context
-    switch_config_context(unp_cfg_context);
+    hal::mop::Runner<hal::mop::MopTemplate::Template1>::run();
 }

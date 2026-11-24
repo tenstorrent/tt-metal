@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// HAL port of tt_llk_blackhole/llk_lib/experimental/llk_unpack_A_rmsnorm.h. Same instruction sequence and access
+// kinds as production, expressed through the HAL.
+
 #pragma once
 
 #include <cstdint>
@@ -12,6 +15,10 @@
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
 #include "cunpack_common.h"
+#include "hal/cfg.h"
+#include "hal/mop.h"
+#include "hal/replay.h"
+#include "hal/unpack.h"
 #include "llk_assert.h"
 #include "llk_unpack_A.h"
 
@@ -34,71 +41,46 @@ inline void _llk_unpack_A_rmsnorm_mop_config_(
         "Not supported configuration when unpacking to dest!");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
-    static constexpr std::uint32_t unpack_srca =
-        TT_OP_UNPACR(SrcA, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-    static constexpr std::uint32_t unpack_srca_to_dest = TT_OP_UNPACR(
-        SrcA,
-        0b00010001 /*Z inc*/,
-        0,
-        0,
-        0,
-        1 /* Set OvrdThreadId*/,
-        0 /*Set Dvalid*/,
-        p_unpacr::RAREFYB_DISABLE,
-        0,
-        0,
-        0,
-        0,
-        1); // ch0/ch1 z_inc
-    static constexpr std::uint32_t unpack_srca_to_dest_transpose_of_faces =
-        TT_OP_UNPACR(SrcA, 0b00010010, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // inc srcA ch1_z+=1, ch0_z+=2
-    static constexpr std::uint32_t unpack_srca_set_dvalid = TT_OP_UNPACR_NOP(SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
-    static constexpr std::uint32_t unpack_srcb =
-        TT_OP_UNPACR(SrcB, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-    static constexpr std::uint32_t unpack_srcb_inc_z_0 =
-        TT_OP_UNPACR(SrcB, 0b0 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    using namespace hal::mop;
+    using hal_port::unpack_A::srca_set_z_1;
+    using hal_port::unpack_A::unpack_srca;
+    using hal_port::unpack_A::unpack_srca_z2;
+
+    // Production also declares unpack_srca_to_dest(_transpose_of_faces), unpack_srca_set_dvalid, unpack_srcb(_inc_z_0),
+    // srcb_set_z_2 and srcb_clear_z; none reaches the MOP, so they are not ported.
+    // HAL-GAP: hal::nop encodes only the pure-delay UNPACR_NOP; the zero-source + set-data-valid flavor
+    // (UNP_ZEROSRC, SET_DVALID, Stall_Clr_Cntrl = 1) has no HAL descriptor, so the production encoding is kept.
     static constexpr std::uint32_t unpack_srcb_set_dvalid = TT_OP_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
-    static constexpr std::uint32_t srca_set_z_1           = TT_OP_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 1, 0b0001); // set srcA ch0_z = 1
-    static constexpr std::uint32_t srcb_set_z_2           = TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 2, 0b0001); // set srcB ch0_z = 2
-    static constexpr std::uint32_t srcb_clear_z           = TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0001); // set srcB ch0_z = 0
 
     if (num_faces == 1)
     {
         constexpr std::uint32_t outerloop = 1;
         constexpr std::uint32_t innerloop = num_tiles;
-        ckernel_template tmp(outerloop, innerloop, unpack_srca);
-        tmp.set_start_op(unpack_srcb_set_dvalid);
-        tmp.program();
+        program(loop(outerloop, unpack_srcb_set_dvalid, loop(innerloop, unpack_srca)));
     }
     else if (transpose_of_faces)
     {
         LLK_ASSERT(num_tiles == 1, "rmsnorm-style transpose path supports num_tiles==1 only");
         LLK_ASSERT(num_faces == 4, "rmsnorm-style transpose path supports num_faces==4 only");
-        constexpr std::uint32_t replay_buf_len = 5;
-        load_replay_buf(
-            0,
-            replay_buf_len,
+        constexpr hal::replay::BufferRange replay_range {0 /*start*/, 5 /*count*/};
+        hal::replay::record<replay_range>(
             []
             {
-                TTI_UNPACR(SrcA, 0b10, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // face 0 (z=0->2)
-                TTI_UNPACR(SrcA, 0b10, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // face 2 (z=2->4)
-                TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 1, 0b0001);                               // srcA ch0_z = 1
-                TTI_UNPACR(SrcA, 0b10, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // face 1 (z=1->3)
-                TTI_UNPACR(SrcA, 0b10, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // face 3 (z=3->5)
+                hal::unpack::run<unpack_srca_z2>(); // face 0 (z=0->2)
+                hal::unpack::run<unpack_srca_z2>(); // face 2 (z=2->4)
+                TTI_INSN(srca_set_z_1);             // srcA ch0_z = 1
+                hal::unpack::run<unpack_srca_z2>(); // face 1 (z=1->3)
+                hal::unpack::run<unpack_srca_z2>(); // face 3 (z=3->5)
             });
         constexpr std::uint32_t outerloop = 1;
         constexpr std::uint32_t innerloop = 1;
-        ckernel_template tmp(outerloop, innerloop, lltt::replay_insn(0, replay_buf_len));
-        tmp.set_start_op(unpack_srcb_set_dvalid);
-        tmp.program();
+        program(loop(outerloop, unpack_srcb_set_dvalid, loop(innerloop, hal::replay::get_operation<replay_range>())));
     }
     else
     {
         constexpr std::uint32_t outerloop = 1;
         const std::uint32_t innerloop     = num_tiles * num_faces / 2;
-        ckernel_template tmp(outerloop, innerloop, unpack_srca, unpack_srca);
-        tmp.set_start_op(unpack_srcb_set_dvalid);
-        tmp.program();
+        program(loop(outerloop, unpack_srcb_set_dvalid, loop(innerloop, unpack_srca, unpack_srca)));
     }
 }
 
@@ -116,6 +98,7 @@ inline void _llk_unpack_A_rmsnorm_mop_config_(
  *        num_faces == 4 only).
  * @param face_r_dim: Rows per face; sets the X span.
  * @param num_faces: Faces per tile (1, 2 or 4).
+ * @note Turns Auto TTSync on like @ref _llk_unpack_A_init_; @ref _llk_unpack_A_uninit_ turns it off again.
  * @note Pairs with @ref _llk_math_rmsnorm_bcast_scalar_dest_reuse_init_ on the math thread. The matching execute
  *       is the generic @ref _llk_unpack_A_ with the same <SCALAR, true, DEST_TO_SRCB> arguments; other arguments
  *       route the L1 address to unpacker B, which the static_assert here cannot see.
@@ -136,8 +119,12 @@ inline void _llk_unpack_A_rmsnorm_init_(
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
+    // Pairs with _llk_unpack_A_, so it asks for the same sync mode as _llk_unpack_A_init_.
+    const bool sync_mode_pushed = _llk_unpack_A_sync_mode_begin_<unpack_to_dest>();
+
     // Set transpose register to prevent state pollution
-    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose);
+    namespace cfg = hal::cfg;
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::Thcon[cfg::Reg2].Haloize_mode, cfg::Sec::S0>(within_face_16x16_transpose);
 
     // TODO NC: Find out why we need to disable src zero flags for uint16 dst format #960
     // bool disable_src_zero_flag_val = disable_src_zero_flag || (static_cast<uint>(unpack_dst_format) ==
@@ -153,8 +140,9 @@ inline void _llk_unpack_A_rmsnorm_init_(
     static_assert(
         _llk_unpack_A_address_on_unpacker_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(),
         "rmsnorm unpack: the X span is programmed on unpacker A, so the operand address must be routed there too");
-    config_unpacker_x_end<p_setadc::UNP_A>(face_r_dim);
+    hal_port::config_unpacker_x_end<p_setadc::UNP_A>(face_r_dim);
 
     _llk_unpack_A_rmsnorm_mop_config_<num_tiles, BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
         transpose_of_faces > 0, num_faces, unpack_src_format, unpack_dst_format);
+    hal_port::unpack_sync_mode_end(sync_mode_pushed);
 }
