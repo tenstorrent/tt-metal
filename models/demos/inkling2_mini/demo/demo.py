@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -104,8 +105,14 @@ def main():
         args.trace_mib = max(args.trace_mib, 1024)
     res = {"max_ctx": args.max_ctx, "trace_mib": args.trace_mib}
     t0 = time.time()
+    from models.demos.inkling2_mini.demo.startup import Startup  # progress lines on stderr
+
+    log = lambda s: print(f"[inkling-demo] {s}", file=sys.stderr, flush=True)  # noqa: E731
+    st = Startup(log, key=f"demo|{args.max_ctx}|{args.spec}|{args.fast}")
+    st.phase("open device")
     dev = open_device(trace_region_size=args.trace_mib << 20)
     try:
+        st.phase("weights")
         res["dram_free_open_gib"] = dram_free(dev)[0]
         res["cache"] = str(modes.roots(args.fast)[0])
         if args.spec:
@@ -123,9 +130,11 @@ def main():
         print(json.dumps(res), flush=True)
 
         if not args.skip_app_trace and not args.spec:  # (the tapped model's apps run inside a step only)
+            st.phase("one-app trace check")
             res.update(trace_one_app(model))
             print(json.dumps(res), flush=True)
 
+        st.phase("traces")  # warm-up steps (compiles every program), then the captures
         if args.spec:
             gen = SG.SpecGenerator(model, drafter, verify=[VerifyStep(model, r) for r in res["spec_rows"]])
             t1 = time.time()
@@ -135,6 +144,7 @@ def main():
             t1 = time.time()
             gen.capture()
         res["capture_s"] = round(time.time() - t1, 1)
+        st.done("model ready")
         tv = ttnn.get_memory_view(dev, ttnn.BufferType.TRACE)
         res["trace_used_mib"] = tv.num_banks * tv.total_bytes_allocated_per_bank / 2**20
         res["dram_free_after_trace_gib"] = dram_free(dev)[0]
