@@ -463,7 +463,7 @@ inline void horizontal_reduce_rotate_first() {
 // The manual column paths emit their once-per-tile cross-row reduce (emit_manual_col_reduce) inline.
 //
 // A row reduce replays what its init recorded, so it needs a fresh init_reduce after anything else records into the
-// SFPU half. The float / 16-bit row MAX/MIN also runs the init's LOADMACRO sequences 0-3, so the same holds after
+// SFPU half. The float / 16-bit row MAX/MIN also runs the init's LOADMACRO sequences 0-2, so the same holds after
 // anything that reprograms SFPLOADMACRO state (where, exp, unary / binary max_min, typecast, ...).
 constexpr std::uint32_t COL_SUM_INT_REPLAY_LEN = 6;     // 6 SFPIADD; [0, 3) doubles as the half reduce
 constexpr std::uint32_t COL_SUM_FLOAT_REPLAY_LEN = 9;   // 6 SFPADD full reduce + 3 SFPADD half reduce (A1 A3 | A2)
@@ -667,8 +667,8 @@ constexpr std::uint32_t MAX_MIN_MACRO_SWAP_LREG1 = 2;  // SFPSWAP(LREG1, [VD])
  * scheduled SFPSWAP(LREG1 / LREG5, [VD]) (macros 2 / 1) folds them in, and the fourth is plain-loaded into
  * LREG0 / LREG4 last and folded by the one issued SFPSWAP per half. A macro's SFPSWAP runs on the Simple sub-unit
  * the cycle after its SFPLOADMACRO, and the Simple and Round sub-units must be idle the cycle after that (tt-isa
- * SFPLOADMACRO.md), so every SFPLOADMACRO is followed by a load or a store. MAX/MIN over SFPSWAP's total order
- * does not depend on the pairing, so the result is bit-identical to the issued path.
+ * SFPLOADMACRO.md), so every SFPLOADMACRO is followed by a load, a store or an SFPNOP. MAX/MIN over SFPSWAP's total
+ * order does not depend on the pairing, so the result is bit-identical to the issued path.
  *
  * @tparam INSTRUCTION_MODE Load / store instruction mode (FP32, FP16B or LO16).
  * @tparam store_previous Store the previous group's LREG0 / LREG4 (at @p previous_first_row and 4 rows further)
@@ -783,6 +783,8 @@ inline void load_and_reduce_row_group_vertical(std::uint32_t first_row, std::uin
  * 3. Use vertical SFPSWAP to reduce LREG pairs down (steps 1-3: load_and_reduce_row_group_vertical)
  * 4. Use horizontal_reduce_max to consolidate 8 SFPU columns into column 0
  * 5. Store the per-row max into column 0 (with map_back, mapped back to the stored bits first)
+ * Float and 16-bit rows use load_and_reduce_row_group_loadmacro instead, which stores each group's results during the
+ * next group and the last group's after the loop.
  *
  * @tparam INSTRUCTION_MODE Load/store instruction mode (FP32, FP16B or UINT16; INT32 with a swap_order).
  * @tparam clear_high_bits Whether to mask the garbage high bits on load (true for UInt16 in a 32-bit dest).
@@ -1955,7 +1957,7 @@ inline void calculate_reduce_sum_avg(std::uint32_t block_ct_dim, std::uint32_t b
  *       (0x80000000 for uint32_to_swap_order). Another SFPU op's init between this and calculate_reduce breaks it,
  *       so call it again after anything else records into the SFPU half or writes those registers (a Prgm0/Prgm1
  *       write at calculate time included). The float / 16-bit MAX/MIN, row as well as column, run the init's
- *       LOADMACRO sequences 0-3 and templates, so an init that reprograms SFPLOADMACRO state in between breaks it too.
+ *       LOADMACRO sequences 0-2 and templates, so an init that reprograms SFPLOADMACRO state in between breaks it too.
  * @tparam pool_type The reduction operation, currently supported: (SUM, AVG, MAX)
  * @tparam format The data format, currently supported: (Int32, UInt32, UInt16, Float32, Float16_b)
  * @param block_ct_dim Block dimension (used for MAX reduction to specify number of columns, default is 1 for single
