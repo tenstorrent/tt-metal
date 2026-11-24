@@ -636,7 +636,30 @@ def pytest_ignore_collect(collection_path, config):
         and "quasar" in collection_path.parts
     ):
         return True
+    if _perf_run_skips_sweeps(config) and _is_sweep_module(collection_path):
+        return True
     return None
+
+
+_SWEEP_MODULE_MARK = re.compile(r"^pytestmark = .*\bllk_sweep\b", re.M)
+
+
+def _perf_run_skips_sweeps(config) -> bool:
+    return (
+        config.getoption("--perf-splits", None) is not None
+        and os.environ.get("LLK_SWEEP_ALL") != "1"
+        and not os.environ.get("LLK_SWEEP_STRIDE")
+    )
+
+
+def _is_sweep_module(path) -> bool:
+    # Read, not imported: the sweep modules' parametrization alone costs GBs per xdist worker.
+    if path.suffix != ".py" or not path.is_file():
+        return False
+    try:
+        return _SWEEP_MODULE_MARK.search(path.read_text()) is not None
+    except OSError:
+        return False
 
 
 def _statically_skipped(definition) -> bool:
