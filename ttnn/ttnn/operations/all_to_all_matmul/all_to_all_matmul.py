@@ -58,11 +58,11 @@ INPUT_TAGGERS = {
 
 SUPPORTED = {
     "dtype": [ttnn.bfloat16],
-    "weight_dtype": [ttnn.bfloat16],
+    "weight_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
     "layout": [ttnn.TILE_LAYOUT],
-    "fp32_dest_acc_en": [True],
+    "fp32_dest_acc_en": [True, False],
     "alignment": ["tile_aligned"],
-    "output_buffer": [ttnn.BufferType.DRAM],
+    "output_buffer": [ttnn.BufferType.DRAM, ttnn.BufferType.L1],
     "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED],
     "cluster_axis": [1],
     "topology": [Topology.Ring],

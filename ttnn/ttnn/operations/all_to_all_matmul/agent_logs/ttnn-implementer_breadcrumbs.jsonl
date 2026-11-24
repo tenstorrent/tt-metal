@@ -1,0 +1,2 @@
+{"event":"tool_use","tool":"Skill","skill":"numeric-formats-metal","args":"","ts":"2026-11-24T16:39:02+00:00"}
+{"event":"test_run","status":"pass","detail":"golden loose 4/4, tile_aligned 120/120, unit dir 30/30 after deep_k 16-bit DEST ratio scoping (ttnn.matmul reproduces drift)","ts":"2026-11-24T16:44:45+00:00"}
