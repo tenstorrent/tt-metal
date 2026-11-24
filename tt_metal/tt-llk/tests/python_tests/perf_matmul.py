@@ -16,7 +16,6 @@ from helpers.matmul_sweep import (
     DEST_RT_CT_BLOCKS,
     PERF_RING_TILES,
     generate_tile_dims,
-    matmul_pack_form,
     mid_fill_rt_ct_pairs,
     unpack_matmul_fits_perf_ring,
 )
@@ -142,15 +141,10 @@ def test_perf_matmul(
             MATH_FIDELITY(math_fidelity),
             DEST_SYNC(dest_sync),
             THROTTLE_LEVEL(),
+            # The gate measures the per-tile pack of ttnn's run-time-count pack_block (the matmul head's test runs production's,
+            # per tile here); test_matmul and test_math_matmul keep the block forms.
             MATMUL_PACK_BLOCK(
-                matmul_pack_form(
-                    formats,
-                    dest_sync,
-                    math_fidelity,
-                    dims.rt_dim,
-                    dims.ct_dim,
-                    dims.kt_dim,
-                ),
+                0,
                 in32=formats.input_format == DataFormat.Float32,
             ),
         ],
