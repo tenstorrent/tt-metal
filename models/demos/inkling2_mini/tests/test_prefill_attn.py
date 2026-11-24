@@ -50,6 +50,10 @@ def _pf(dev, max_ctx, st, r3):
     pf._sdpa_pc = {}
     pf.r3_chunks = (128, 128)
     pf.profile = False
+    # the fused programs __init__ sets up stay off here: plain ttnn ops for the rel bias, ring write and heads
+    pf._pfrel = pf._pfring = pf._pfsink = pf._pfgate = pf._pfheads = None
+    pf.fused_rel = False
+    pf._cap = pf._cur = pf._mem = None
     pf._consts()
     return pf
 
