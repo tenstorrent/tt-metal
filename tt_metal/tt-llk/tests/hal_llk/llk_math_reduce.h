@@ -109,25 +109,19 @@ template <PoolType type, ReduceDim dim, MathFidelity math_fidelity>
 inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape);
 
 /**
- * @brief Transpose the pooled row result through SrcB so a row reduction lands as a column in the destination register.
+ * @brief The Tensix part of the ROW MAX transpose: move the pooled row to SrcB, transpose it, add it into Dest.
  *
- * Only used for MAX pool (GMPOOL does column wise max of SrcA only).
+ * The Src zero-substitution flag must be keep (1) around it; the callers handle that.
  *
  * @tparam is_int_fpu_en: Cast int32 dest datums to int8 (via SFPU) before moving to SrcB.
  */
 template <bool is_int_fpu_en>
-inline void reduce_row_perform_transpose()
+inline void reduce_row_transpose_body()
 {
-    // The MOVD2B/ELWADD below read the Src zero substitution flag (FlushDenormals = !flag).
-    // A datum whose low byte is zero (e.g. bf16 0x4400 = 768.0) would be flushed to 0 mid-reduction,
-    // corrupting the sum. Disable the flag (via the math state tracker) around the transpose+add, then
-    // return it to the operand driven baseline. WH does the same in its fp32 transpose.
     namespace cfg  = hal::cfg;
     namespace move = hal::move;
     namespace rwc  = hal::counters::rwc;
     namespace sync = hal::sync;
-
-    hal_port::_configure_preserve_zero_flag_state_();
 
     if constexpr (is_int_fpu_en)
     {
@@ -171,9 +165,34 @@ inline void reduce_row_perform_transpose()
         .release          = hal::fpu::SourceRelease::None};
     hal::fpu::run<add_srcb>();
     hal::fpu::run<add_srcb>();
+}
 
+/**
+ * @brief Transpose the pooled row result through SrcB so a row reduction lands as a column in the destination register.
+ *
+ * Only used for MAX pool (GMPOOL does column wise max of SrcA only).
+ *
+ * @tparam is_int_fpu_en: Cast int32 dest datums to int8 (via SFPU) before moving to SrcB.
+ */
+template <bool is_int_fpu_en>
+inline void reduce_row_perform_transpose()
+{
+    // The MOVD2B/ELWADD below read the Src zero substitution flag (FlushDenormals = !flag).
+    // A datum whose low byte is zero (e.g. bf16 0x4400 = 768.0) would be flushed to 0 mid-reduction,
+    // corrupting the sum. Disable the flag (via the math state tracker) around the transpose+add, then
+    // return it to the operand driven baseline. WH does the same in its fp32 transpose.
+    hal_port::_configure_preserve_zero_flag_state_();
+    reduce_row_transpose_body<is_int_fpu_en>();
     // Restore the operand-driven baseline for the currently configured formats.
     hal_port::_configure_default_zero_flag_state_();
+}
+
+// Zero_Flag_disabled_src <- V as one immediate RMWCIB (the write _apply_src_zero_flag_ issues), without touching the
+// tracking variable.
+template <std::uint32_t V>
+inline void reduce_row_write_zero_flag()
+{
+    hal::cfg::write<hal::cfg::Access::TensixCfgUnit, hal::cfg::AluAccCtrl::Zero_Flag_disabled_src, hal::cfg::Sec::S0, V>();
 }
 
 /**
@@ -385,14 +404,52 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
 
         if constexpr (type == PoolType::MAX)
         {
-            reduce_row_pool_all_faces<type, high_fidelity>(tensor_shape.num_faces_c_dim);
-            reduce_row_perform_transpose<is_int_fpu_en>();
-
-            if (tensor_shape.num_faces_r_dim > 1)
+            if constexpr (is_int_fpu_en)
             {
-                reduce_row_advance_dest(is_narrow_tile);
                 reduce_row_pool_all_faces<type, high_fidelity>(tensor_shape.num_faces_c_dim);
                 reduce_row_perform_transpose<is_int_fpu_en>();
+
+                if (tensor_shape.num_faces_r_dim > 1)
+                {
+                    reduce_row_advance_dest(is_narrow_tile);
+                    reduce_row_pool_all_faces<type, high_fidelity>(tensor_shape.num_faces_c_dim);
+                    reduce_row_perform_transpose<is_int_fpu_en>();
+                }
+            }
+            else
+            {
+                // reduce_row_perform_transpose per face row, with its zero-flag bookkeeping done once: the same flag
+                // writes (keep before the first transpose unless the flag already holds keep; when the default is
+                // flush, flush after each transpose and keep before the second) as compile-time RMWCIBs, and the
+                // tracking variable stored once. Flag and tracking variable end at the default, as in production.
+                const bool default_keep = requires_disabled_src_zero_flag(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt);
+
+                reduce_row_pool_all_faces<type, high_fidelity>(tensor_shape.num_faces_c_dim);
+                if (math::src_zero_flag_hw != 1u)
+                {
+                    reduce_row_write_zero_flag<1>();
+                }
+                reduce_row_transpose_body<is_int_fpu_en>();
+                if (!default_keep)
+                {
+                    reduce_row_write_zero_flag<0>();
+                }
+
+                if (tensor_shape.num_faces_r_dim > 1)
+                {
+                    reduce_row_advance_dest(is_narrow_tile);
+                    reduce_row_pool_all_faces<type, high_fidelity>(tensor_shape.num_faces_c_dim);
+                    if (!default_keep)
+                    {
+                        reduce_row_write_zero_flag<1>();
+                    }
+                    reduce_row_transpose_body<is_int_fpu_en>();
+                    if (!default_keep)
+                    {
+                        reduce_row_write_zero_flag<0>();
+                    }
+                }
+                math::src_zero_flag_hw = default_keep ? 1u : 0u;
             }
             // TTI_SETRWC(CLR_AB, 0, 0, 0, 0, SET_BD)
             rwc::set<rwc::MathCounter {.src_b = rwc::Set(0), .dest = rwc::Set(0), .flip = rwc::Src::A | rwc::Src::B}>();
