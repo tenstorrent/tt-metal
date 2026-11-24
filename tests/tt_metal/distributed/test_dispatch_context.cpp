@@ -397,9 +397,6 @@ TEST_F(DispatchContextFixture, DispatchKernelsRunWhenWindowIsSmall) {
         DispatchCoreConfig{},
         /*l1_bank_remap=*/{},
         worker_l1_size);
-    if (!has_expected_dispatch_column(*mesh)) {
-        GTEST_SKIP() << "This test expects Blackhole dispatch cores (12,0) and (12,1).";
-    }
 
     constexpr uint32_t page_size = 4096;
     DeviceLocalBufferConfig dram{.page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
