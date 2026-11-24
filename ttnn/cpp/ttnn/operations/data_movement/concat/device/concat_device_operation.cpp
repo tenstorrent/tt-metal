@@ -12,6 +12,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/hal.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/common/hash_without_rows.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 using namespace tt::tt_metal;
@@ -129,6 +130,18 @@ ttsl::hash::hash_t ConcatDeviceOperation::compute_program_hash(
                 break;
             }
         }
+    }
+
+    if (std::holds_alternative<ttnn::prim::ConcatProgramFactory>(factory) &&
+        ttnn::prim::concat_program_is_row_free(operation_attributes, tensor_args)) {
+        // The program takes every row count at run time, so the inputs' rows stay out of the key.
+        std::vector<ttsl::hash::hash_t> input_hashes;
+        input_hashes.reserve(input_tensors.size());
+        for (const auto& input : input_tensors) {
+            input_hashes.push_back(ttnn::operations::common::hash_spec_without_rows(input));
+        }
+        return tt::tt_metal::operation::hash_operation<ConcatDeviceOperation>(
+            operation_attributes, input_hashes, factory.index(), input_alias_signature);
     }
 
     return tt::tt_metal::operation::hash_operation<ConcatDeviceOperation>(
