@@ -29,27 +29,24 @@ Set these in every shell you run commands from, on both hosts:
 export PREFILL_IP=<prefill host's IP>       # decode connects here
 export DECODE_IP=<decode host's IP>         # clients connect here
 export PREFILL_PORT=9041 DECODE_PORT=8000
-export REPO=<absolute checkout path; the same path on both hosts>
-
-# Fabric push only:
-export PREFILL_HOST=<prefill hostname, as ssh and MPI reach it>
-export DECODE_HOST=<decode hostname, as ssh and MPI reach it>
-export MPI_IFACE=<network interface MPI uses, on both hosts>
 ```
 
-For fabric push, also check:
+For fabric push, the prefill host starts both servers, reaching the decode host over ssh at `$DECODE_IP`. Check
+that on the prefill host, `ssh -o BatchMode=yes $DECODE_IP hostname` prints the decode hostname without asking
+for a password.
 
-* `ip -br addr show $MPI_IFACE` shows the interface up on both hosts.
-* On the prefill host, `ssh -o BatchMode=yes $DECODE_HOST hostname` prints the decode hostname without asking
-  for a password. Fabric push starts both servers from the prefill host over ssh.
+The launch script works out the rest from `$DECODE_IP`: the decode hostname, and the network interface MPI runs
+over (the one each host routes to the other through). To force an interface, also set
+`MPI_IFACE=<name>`, or `MPI_IFACE=<name>,<name>` if the two hosts name it differently.
 
 ## 2. Set up both hosts
 
-Do this on each host. Each host needs its own checkout and build, unless `$REPO` is on storage both hosts mount.
+Do this on each host. Clone to the same path on both hosts, because the fabric push launch starts the decode server
+at the path it was run from on the prefill host. The commands below use `~/tt-metal`.
 
 ```bash
-cd $REPO
-git checkout <the branch both hosts will run>
+git clone --branch ds_v4.1_flash --recurse-submodules https://github.com/tenstorrent/tt-metal.git ~/tt-metal
+cd ~/tt-metal
 sudo ./install_dependencies.sh     # first time only
 ./build_metal.sh                   # rerun after C++ changes; kernels/ files compile at runtime
 ./create_venv.sh                   # first time only
@@ -76,29 +73,12 @@ The checkpoint lands in the default Hugging Face cache, where both servers look 
    python models/experimental/deepseek_v41_flash/tools/fill_expert_cache.py --dspark --dtype bfloat8_b
    ```
 
-### Keep both hosts on the same commit
-
-Both hosts must run the same code. To pull the decode host's commits into the prefill host's checkout (the
-prefill working tree must be clean):
-
-```bash
-git fetch ssh://$DECODE_HOST$REPO <branch>:refs/remotes/decode/<branch>
-git merge --ff-only decode/<branch>
-```
-
-If each host has commits the other lacks, merge them instead, then rerun `./build_metal.sh` on any host whose
-C++ changed. Before every launch, confirm the two hashes match:
-
-```bash
-git rev-parse HEAD; ssh $DECODE_HOST "git -C $REPO rev-parse HEAD"
-```
-
 ## 3. Start the servers: pick one option
 
 Use **option A (fabric push)** if the Galaxies are cabled to each other. If its link test fails, or you need to
 start and stop the two servers separately, use **option B (TCP)**.
 
-Run all commands from `$REPO` with the venv active.
+Run all commands from the clone (`~/tt-metal`) with the venv active.
 
 ### Option A: fabric push
 
@@ -107,13 +87,17 @@ Run all commands from `$REPO` with the venv active.
 Run this before the first launch, and again after re-cabling, after `tt-smi -glx_reset`, or after a failed push.
 If either test fails or hangs, use option B.
 
-On the prefill host, set up the MPI arguments for the tests:
+On the prefill host, set up the MPI arguments for the tests. `IFACE` is the interface the prefill host routes to
+the decode host through. If the decode host names its side differently, append that name with a comma, as in the
+`MPI interface:` line the launch script prints.
 
 ```bash
 CFG=tests/tt_metal/distributed/config
-printf 'rank 0=%s slot=0\nrank 1=%s slot=0\n' $PREFILL_HOST $DECODE_HOST > /tmp/d_p.rankfile
-MPI="--host $PREFILL_HOST,$DECODE_HOST --map-by rankfile:file=/tmp/d_p.rankfile \
-  --mca btl self,tcp --mca btl_tcp_if_include $MPI_IFACE --bind-to none --tag-output"
+DECODE_HOST=$(ssh $DECODE_IP hostname)
+IFACE=$(ip -o route get $DECODE_IP | sed -n 's/.* dev \([^ ]*\).*/\1/p')
+printf 'rank 0=%s slot=0\nrank 1=%s slot=0\n' $(hostname) $DECODE_HOST > /tmp/d_p.rankfile
+MPI="--host $(hostname),$DECODE_HOST --map-by rankfile:file=/tmp/d_p.rankfile \
+  --mca btl self,tcp --mca btl_tcp_if_include $IFACE --bind-to none --tag-output"
 ```
 
 Rank 0 is the prefill host and rank 1 is the decode host. `tt-run` prefixes each output line with its rank, as
@@ -156,8 +140,12 @@ models/experimental/deepseek_v41_flash/demo/run_d_p_servers.sh --prefill-port $P
   --host 0.0.0.0 --port $DECODE_PORT --prefill-url $PREFILL_IP:$PREFILL_PORT --kv-transfer-mode fabric
 ```
 
-This one command starts both servers as a single `tt-run` job: prefill on this host, decode on `$DECODE_HOST`.
-Ctrl-C here stops both.
+This one command starts both servers as a single `tt-run` job: prefill on this host, decode on the host at
+`$DECODE_IP` (which must be exported). Ctrl-C here stops both. Before launching, it prints what it worked out:
+
+```
+prefill: <prefill hostname>, decode: <decode hostname> (<DECODE_IP>), MPI interface: <interface>
+```
 
 A cold start takes about 6.5 minutes: ~200 s loading weights, ~160 s compiling, ~22 s warming up. Watch for these
 log lines, in order:
@@ -241,10 +229,13 @@ TCP:
 
 | What you see | What to do |
 | --- | --- |
-| `tt-run` cannot reach the decode host | Set up passwordless ssh from the prefill host to `$DECODE_HOST` (section 1). |
+| `set DECODE_IP to the decode host's IP` | Export `DECODE_IP` in the shell you launch from (section 1). |
+| `ssh to DECODE_IP=... failed`, or `tt-run` cannot reach the decode host | Set up passwordless ssh from the prefill host to `$DECODE_IP` (section 1). |
+| `no interface between ...`, or the job hangs before any rank prints | Find the interface the hosts reach each other on (`ip -br addr`) and set `MPI_IFACE` (section 1). |
 | Fabric init times out, or a rank reports links down | Rerun test 2 in section 3, option A. If it still fails, use option B. |
 | `tt-smi` shows fewer than 32 chips after a hang | Run `tt-smi -glx_reset` on that host, then rerun the link test. |
-| Import error, or an op exists on one host but not the other | The checkouts differ, or one host was not rebuilt (section 2). |
+| Import error, or an op exists on one host but not the other | The clones are on different commits, or one host was not rebuilt (section 2). |
+| Decode rank fails with `No such file or directory` at launch | The decode host's clone is not at the same path as the prefill host's (section 2). |
 | `prefill server ... not listening yet; retrying` | Prefill is still loading. Decode gives up after `--prefill-wait` seconds. |
 | Decode cannot connect to the prefill server | From the decode host, run `nc -zv $PREFILL_IP $PREFILL_PORT`. If it fails, fix the IP or the network route. |
 | The first prefill start spends many minutes building Engram tables | Expected. They are saved to `/dev/shm/deepseek_v41_d_p_engram`, and later starts reuse them. |
