@@ -223,7 +223,10 @@ void KeraunosCoLaunchedWorkers::TearDown() {
     if (!devices_.empty()) {
         DoTearDownTestSuite();
     }
-    tt::tt_metal::MetalEnvAccessor(MetalContext::instance().get_env()).impl().set_fabric_program_extension({});
+    // A case that skips before its first MetalContext use has set no extension, and instance() would open a cluster.
+    if (MetalContext::instance_exists()) {
+        tt::tt_metal::MetalEnvAccessor(MetalContext::instance().get_env()).impl().set_fabric_program_extension({});
+    }
 }
 
 void KeraunosCoLaunchedWorkers::run_line_unicast(const NocLinks& noc_links, const AfterOpen& after_open) {
