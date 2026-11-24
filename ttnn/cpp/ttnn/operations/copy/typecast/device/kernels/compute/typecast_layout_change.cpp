@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Typecast fused with a layout change. Each block is one tile-row slice of block_width_tiles tiles.
-//   TILIZE_INPUT:  dfb::in (row-major) -> tilize -> dfb::mid -> typecast -> dfb::out (tiles)
-//   otherwise:     dfb::in (tiles) -> typecast -> dfb::mid -> untilize -> dfb::out (row-major)
+//   TILIZE_INPUT: tilize (row-major -> tiles), otherwise untilize (tiles -> row-major).
+//   CAST_FIRST:   dfb::in -> typecast -> dfb::mid -> layout op -> dfb::out
+//   otherwise:    dfb::in -> layout op -> dfb::mid -> typecast -> dfb::out
 // SAME_DTYPE skips the typecast: there is no dfb::mid and the layout op writes dfb::out directly.
 
 #include "api/compute/compute_kernel_hw_startup.h"
@@ -61,12 +62,24 @@ void kernel_main() {
     constexpr uint32_t out_data_format = get_arg(args::out_data_format);
     DataflowBuffer mid(dfb::mid);
 
-#ifdef TILIZE_INPUT
-    constexpr uint32_t cast_in_dfb = dfb::mid;
-    constexpr uint32_t cast_out_dfb = dfb::out;
-#else
+#ifdef CAST_FIRST
     constexpr uint32_t cast_in_dfb = dfb::in;
     constexpr uint32_t cast_out_dfb = dfb::mid;
+    constexpr uint32_t layout_in_dfb = dfb::mid;
+    constexpr uint32_t layout_out_dfb = dfb::out;
+    auto& cast_in = in;
+    auto& cast_out = mid;
+    auto& layout_in = mid;
+    auto& layout_out = out;
+#else
+    constexpr uint32_t layout_in_dfb = dfb::in;
+    constexpr uint32_t layout_out_dfb = dfb::mid;
+    constexpr uint32_t cast_in_dfb = dfb::mid;
+    constexpr uint32_t cast_out_dfb = dfb::out;
+    auto& layout_in = in;
+    auto& layout_out = mid;
+    auto& cast_in = mid;
+    auto& cast_out = out;
 #endif
     constexpr auto cast_input =
         ckl::input(cast_in_dfb, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Enabled);
@@ -75,37 +88,43 @@ void kernel_main() {
     using Cast = ckl::Typecast<in_data_format, out_data_format>;
     constexpr auto block = ckl::IterationShape::grid(1, block_width_tiles);
 
+    // Typecast is elementwise, so it may run on row-major chunks as well as on tiles.
+    const auto cast_step = [&] {
+        reconfig_data_format_srcb(cast_in_dfb);
+        ckl::unary<Cast, cast_input, cast_output>(block, cast_in, cast_out);
+    };
+    // The helpers reconfigure SrcA only; SrcB is kept on the same format so no stale operand format remains.
+    const auto layout_step = [&] {
+        reconfig_data_format_srcb(layout_in_dfb);
 #ifdef TILIZE_INPUT
-    compute_kernel_hw_startup(dfb::in, dfb::mid);
-    for (uint32_t b = 0; b < num_blocks; ++b) {
-        // The helpers reconfigure SrcA only; keep SrcB on the same format so no stale operand format remains.
-        reconfig_data_format_srcb(dfb::in);
         ckl::tilize<
             block_width_tiles,
-            dfb::in,
-            dfb::mid,
+            layout_in_dfb,
+            layout_out_dfb,
             TilizeMode::InitAndUninit,
             TilizeWait::WaitBlock,
             TilizeReconfig::UnpackAndPackReconfigure,
-            lossless>(in, mid, 1);
-        reconfig_data_format_srcb(dfb::mid);
-        ckl::unary<Cast, cast_input, cast_output>(block, mid, out);
-    }
+            lossless>(layout_in, layout_out, 1);
 #else
-    compute_kernel_hw_startup(dfb::in, dfb::mid);
-    for (uint32_t b = 0; b < num_blocks; ++b) {
-        // The helpers reconfigure SrcA only; keep SrcB on the same format so no stale operand format remains.
-        reconfig_data_format_srcb(dfb::in);
-        ckl::unary<Cast, cast_input, cast_output>(block, in, mid);
-        reconfig_data_format_srcb(dfb::mid);
         ckl::untilize<
             block_width_tiles,
-            dfb::mid,
-            dfb::out,
+            layout_in_dfb,
+            layout_out_dfb,
             UntilizeMode::InitAndUninit,
             UntilizeWait::WaitBlock,
-            UntilizeReconfig::UnpackAndPackReconfigure>(mid, out, 1);
-    }
+            UntilizeReconfig::UnpackAndPackReconfigure>(layout_in, layout_out, 1);
 #endif
+    };
+
+    compute_kernel_hw_startup(dfb::in, dfb::mid);
+    for (uint32_t b = 0; b < num_blocks; ++b) {
+#ifdef CAST_FIRST
+        cast_step();
+        layout_step();
+#else
+        layout_step();
+        cast_step();
+#endif
+    }
 #endif
 }

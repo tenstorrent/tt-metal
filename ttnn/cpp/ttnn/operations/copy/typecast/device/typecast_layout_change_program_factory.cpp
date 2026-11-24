@@ -123,8 +123,15 @@ ttnn::device_operation::ProgramArtifacts TypecastLayoutChangeProgramFactory::cre
 
     const auto input_format = cb_dataformat_for(input.dtype());
     const auto output_format = cb_dataformat_for(output.dtype());
-    // The tile-layout data in the middle has the row-major side's dtype after tilize, or before untilize.
-    const auto mid_format = tilize ? input_format : output_format;
+    const bool enable_32_bit_dest =
+        args.fp32_dest_acc_en || requires_32bit_dest(input.dtype()) || requires_32bit_dest(output.dtype());
+    // Typecast runs on the tile side by default. With 32-bit Dest, a UInt16 row-major side is cast on
+    // row-major chunks instead so tilize / untilize only see 32-bit or 8-bit formats; block-float stays tiled.
+    const auto& tile_side = tilize ? output : input;
+    const bool cast_on_row_major =
+        enable_32_bit_dest && row_major.dtype() == DataType::UINT16 && !is_block_float(tile_side.dtype());
+    const bool cast_first = tilize == cast_on_row_major;
+    const auto mid_format = cast_first ? output_format : input_format;
 
     const auto* device = input.device();
     auto [num_cores, all_cores, core_group_1, core_group_2, num_blocks_group_1, num_blocks_group_2] =
@@ -208,16 +215,14 @@ ttnn::device_operation::ProgramArtifacts TypecastLayoutChangeProgramFactory::cre
 
     // Typecast keeps its own unpack rules on the DFB it consumes; tilize / untilize take 32-bit
     // formats straight to Dest so integers and fp32 pass through unchanged.
-    const bool enable_32_bit_dest =
-        args.fp32_dest_acc_en || requires_32bit_dest(input.dtype()) || requires_32bit_dest(output.dtype());
-    const auto layout_dfb = same_dtype ? IN_DFB : (tilize ? IN_DFB : MID_DFB);
-    const auto layout_format = tilize ? input_format : (same_dtype ? input_format : mid_format);
+    const auto layout_dfb = (same_dtype || !cast_first) ? IN_DFB : MID_DFB;
+    const auto layout_format = same_dtype ? input_format : mid_format;
     ComputeHardwareConfig::ComputeUnpackModes unpack_modes;
     if (requires_unpack_to_dest(layout_format)) {
         unpack_modes.emplace(layout_dfb, UnpackMode::UnpackToDest);
     }
     if (!same_dtype) {
-        const auto cast_dfb = tilize ? MID_DFB : IN_DFB;
+        const auto cast_dfb = cast_first ? IN_DFB : MID_DFB;
         if (args.preserve_fp32_precision) {
             unpack_modes.emplace(cast_dfb, UnpackMode::UnpackToDest);
         } else if (input_format == tt::DataFormat::Float32) {
@@ -241,6 +246,8 @@ ttnn::device_operation::ProgramArtifacts TypecastLayoutChangeProgramFactory::cre
     }
     if (same_dtype) {
         compute_defines["SAME_DTYPE"] = "1";
+    } else if (cast_first) {
+        compute_defines["CAST_FIRST"] = "1";
     }
     const auto make_compute = [&](const KernelSpecName& id, uint32_t num_blocks) {
         std::vector<DFBBinding> bindings{
