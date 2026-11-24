@@ -122,10 +122,9 @@ REQUEST_LEN=""
 SC1_REQUEST_LEN=""
 # 1 for a perf-only leg: no golden, so no KV table, PCC or validators. Its runner publishes no KV table, so readiness is
 # READY_RANKS runner ranks logging that they entered the request loop; one producer process feeds rank 0 and drains
-# every rank's layer acks into CHUNK_RETIRE lines (stage_probe_producer.py), and the PCC gate is skipped.
+# every rank's layer acks into CHUNK_RETIRE lines (PREFILL_PRODUCER_DRAIN_ACKS), and the PCC gate is skipped.
 PERF_ONLY=0
 READY_RANKS=0
-PRODUCER_MODULE=models.demos.common.prefill.runners.prefill_producer
 
 case "${MODEL}" in
   gptoss120b)
@@ -219,7 +218,6 @@ case "${MODEL}" in
     MANIFEST="${MANIFEST_DIR}/glm54.json"
     PERF_ONLY=1
     READY_RANKS=4
-    PRODUCER_MODULE=models.demos.deepseek_v3_d_p.scripts.stage_probe.stage_probe_producer
     MTP_ENV=""
     for k in PREFILL_MTP_LEVELS PREFILL_MTP_DECODE_LEVELS TT_GLM53_MTP_TTNN_CACHE; do
       MTP_ENV+=" export ${k}=$(MANIFEST="${MANIFEST_DIR}/glm53_mtp_kv_share.json" manifest_env "${k}");"
@@ -227,8 +225,7 @@ case "${MODEL}" in
     # PREFILL_D2D_TIMING: per-chunk stage and D2D boundary stamps (the G1->G2 loop handoff), which the summary reports.
     # PREFILL_D2D_TIMING=0 in the leg's cmd turns it off, e.g. to rule it out of a failure.
     RUNNER_ENV="${MTP_ENV} export PREFILL_D2D_TIMING=${PREFILL_D2D_TIMING:-1};"
-    PRODUCER_ENV="${MTP_ENV} export PREFILL_PRODUCER_CHECK_PCC=0; \
-      export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/glm53-1020k-last5120;"
+    PRODUCER_ENV="${MTP_ENV} export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/glm53-1020k-last5120;"
     REQUEST_LEN=1044480
     # Slots: below the measured traced pipeline capacity of 35 (q171.3.5, G1 binding) for margin on this first
     # multi-rank run; a chunk's time does not depend on the slot count. glm54.json leaves slots to its callers.
@@ -671,8 +668,13 @@ if [ "${PP_RANKS}" -eq 0 ] || [ "${PP_4X4_HOSTS}" -ne 0 ]; then
 fi
 
 PRODUCER_PLACEMENT=(-np "${EXPECTED_RANKS}" --map-by slot)
-# A perf-only leg runs no validators: its one producer process lands on HOSTS' first host, runner rank 0's.
-[ "${PERF_ONLY}" = 1 ] && PRODUCER_PLACEMENT=(-np 1 --map-by slot)
+PRODUCER_CHECK_ENV="export PREFILL_PRODUCER_CHECK_PCC=1;"
+# A perf-only leg runs no validators: its one producer process lands on HOSTS' first host, runner rank 0's. It checks
+# no PCC but drains every rank's layer acks, which time its chunks, and fails unless all of them arrived.
+if [ "${PERF_ONLY}" = 1 ]; then
+  PRODUCER_PLACEMENT=(-np 1 --map-by slot)
+  PRODUCER_CHECK_ENV="export PREFILL_PRODUCER_CHECK_PCC=0; export PREFILL_PRODUCER_DRAIN_ACKS=1;"
+fi
 # Producer rank r must share a host with runner rank r, which --map-by slot over HOSTS gives only
 # when each host's ranks are contiguous -- as tt-run binds a host's two 4x4 meshes.
 if [ "${PP_4X4_HOSTS}" -ne 0 ] && [ "$(printf '%s\n' "${RANK_HOSTS}" | uniq | wc -l)" -ne "${PP_4X4_HOSTS}" ]; then
@@ -778,14 +780,14 @@ set +e
     export PREFILL_PRODUCER_WARMUP_CHUNKS=${WARMUP_CHUNKS}; \
     export PREFILL_MIGRATION_TABLE_PATH='${TABLE_PATH}'; \
     export PREFILL_PCC_SUMMARY_DIR='${PCC_DIR}'; \
-    export PREFILL_PRODUCER_CHECK_PCC=1; \
+    ${PRODUCER_CHECK_ENV} \
     export PREFILL_SEND_SHUTDOWN=1; \
     export PREFILL_STANDALONE_CHUNKED_PCC=${PCC_THRESHOLD}; \
     export PREFILL_H2D_CONNECT_TIMEOUT=120; \
     ${NUM_LAYERS_ENV} \
     ${PRODUCER_ENV} \
     export LOGURU_LEVEL=INFO; \
-    exec python3 -m ${PRODUCER_MODULE}" 2>&1 | tee "${PRODUCER_LOG}"
+    exec python3 -m models.demos.common.prefill.runners.prefill_producer" 2>&1 | tee "${PRODUCER_LOG}"
 PROD_RC=${PIPESTATUS[0]}
 set -e
 

@@ -162,6 +162,10 @@ elif args[:1] == ["-m"] and args[1].endswith("prefill_runner"):
     sys.exit(int(os.environ.get("TEST_RUNNER_RC", "0")))
 elif args[:1] == ["-m"] and args[1].endswith("prefill_producer"):
     record("producer")
+    if os.environ.get("PREFILL_PRODUCER_DRAIN_ACKS") == "1":
+        # A perf-only leg's producer: no verdicts, it only feeds and drains.
+        (root / "producer_done").touch()
+        sys.exit(0)
     if os.environ.get("TEST_RUNNER_CRASH") or os.environ.get("TEST_PRODUCER_HANG"):
         # Blocked on layer completions that never come; exits only when its launcher is killed.
         (root / "producer_started").touch()
@@ -194,10 +198,6 @@ elif args[:1] == ["-m"] and args[1].endswith("prefill_producer"):
                 verdict["per_cache"]["kvpe"] = float("nan")
         filename_rank = num_ranks if rank == last and mode == "wrong_rank" else rank
         (verdict_dir / ("rank%d.json" % filename_rank)).write_text(json.dumps(verdict))
-    (root / "producer_done").touch()
-elif args[:1] == ["-m"] and args[1].endswith("stage_probe_producer"):
-    # The perf-only feeder: no verdicts, it only feeds and drains.
-    record("producer")
     (root / "producer_done").touch()
 elif args and args[0].endswith("summarize_ci_run.py"):
     record("summary")
@@ -361,6 +361,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
             "PREFILL_PRODUCER_CHECK_PCC": "1",
         }.items():
             self.assertEqual(producer[key], value, key)
+        self.assertNotIn("PREFILL_PRODUCER_DRAIN_ACKS", producer)
         self.assertEqual(producer["TEST_MPI_HOST"], "worker:4")
         producer_mpi = [
             record for record in records if record["kind"] == "mpi" and "prefill_producer" in record["args"][-1]
@@ -847,13 +848,14 @@ class MultirankPccHarnessTests(unittest.TestCase):
             self.assertNotIn(key, runner, key)
         self.assertEqual(runner["PREFILL_D2D_TIMING"], "1")
         self.assertEqual(runner["PREFILL_NUM_USERS"], "32")
-        # One producer process on runner rank 0's host: it feeds and drains acks, no PCC, no validators.
-        producer_mpi = [r for r in records if r["kind"] == "mpi" and "stage_probe_producer" in r["args"][-1]]
+        # One stock producer process on runner rank 0's host: it feeds and drains acks, no PCC, no validators.
+        producer_mpi = [r for r in records if r["kind"] == "mpi" and "prefill_producer" in r["args"][-1]]
         self.assertEqual(len(producer_mpi), 1)
         self.assertEqual(producer_mpi[0]["args"][producer_mpi[0]["args"].index("-np") + 1], "1")
         producer = self.one_record(records, "producer")["env"]
         self.assertEqual(producer["TEST_MPI_HOST"], "worker0:1,worker1:1,worker2:1,worker3:1")
         self.assertEqual(producer["PREFILL_PRODUCER_CHECK_PCC"], "0")
+        self.assertEqual(producer["PREFILL_PRODUCER_DRAIN_ACKS"], "1")
         self.assertEqual(producer["PREFILL_PRODUCER_CHUNKS"], str(1044480 // 5120))
         self.assertEqual(producer["PREFILL_NUM_USERS"], "1")
         self.assertTrue(producer["PREFILL_TRACE_DIR"].endswith("golden_traces/glm53-1020k-last5120"))
