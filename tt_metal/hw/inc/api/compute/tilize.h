@@ -377,7 +377,8 @@ ALWI void fast_tilize_block(
             PACK((llk_pack_fast_tilize_row_chunk(0, ocb, chunk)));
 
             MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));
-            PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en>()));
+            // main's release order: the next half's offset ahead of the drain leaves the last tilize MOP running into the uninit
+            PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en, false, 4>()));
 
             tiles_done += chunk;
         }
