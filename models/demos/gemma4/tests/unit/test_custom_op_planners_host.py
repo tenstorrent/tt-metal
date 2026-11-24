@@ -7,6 +7,7 @@
 """
 
 import math
+import random
 
 import pytest
 
@@ -228,12 +229,16 @@ LEGACY = {sp.UNIT_ENV: "4096"}  # the fixed 4096-token unit of the op before the
 
 @pytest.mark.parametrize("grid", GRIDS, ids=["wh_8x8", "bh_13x10"])
 @pytest.mark.parametrize("batch", [1, 8, 32])
-@pytest.mark.parametrize("legacy", [False, True], ids=["split", "legacy"])
-def test_splitfree_mapping_covers_every_pair_once_and_balances(grid, batch, legacy):
+def test_splitfree_mapping_covers_every_pair_once_and_balances(grid, batch):
     """Every (row, group, unit) is assigned exactly once by a function of the geometry alone (never of cur_pos);
     a lone row at 256K and 32 rows at 256K land within two units per core of each other. The default K = 32
     splits a 256K row into 32 units of 32 chunks, the legacy fixed unit (``GEMMA4_SDPA_SPLITFREE_UNIT=4096``) into
     64 units of 16."""
+    for legacy in (False, True):
+        _check_mapping(grid, batch, legacy)
+
+
+def _check_mapping(grid, batch, legacy):
     plan = _plan(grid, batch, env=LEGACY if legacy else None)
     units = 64 if legacy else 32
     assert plan.fits and plan.chunk == 256 and plan.split == (0 if legacy else 32)
@@ -335,6 +340,10 @@ def test_splitfree_chunks_and_masks_follow_cur_pos_like_the_stock():
     two = _plan((13, 10), 1, env={sp.MIN_CHUNKS_ENV: "2"})
     assert two.live_units(4095) == range(0, 8) and two.unit_chunks(7, 4095) == range(14, 16)
     assert two.live_units(255) == range(0, 1) and two.unit_chunks(0, 255) == range(0, 1)
+    # the position's unit tiles every row whatever the batch and the grid, for K in {16, 32, 64}, NSUB_MIN in {1, 2}
+    for k in (16, 32, 64):
+        for nsub_min in (1, 2):
+            _check_position_unit(k, nsub_min)
 
 
 @pytest.mark.parametrize("grid", GRIDS, ids=["wh_8x8", "bh_13x10"])
@@ -414,6 +423,10 @@ def test_splitfree_chunk_follows_the_l1_budget_not_the_batch():
         _plan((13, 10), 1, env={sp.COMBINE_TILES_ENV: "3"})
     assert "chunk 256, unit max(1, ceil(chunks / 32)) chunks, 32 units, 32 slots" in p.describe()
     assert "chunk 256 x 16 = unit 4096, 64 units, 64 slots" in _plan((13, 10), 32, env=LEGACY).describe()
+    # the combine jobs cover every (row, group, O tile) once for every CT, one KV group at head_dim 512 and two at 256
+    for grid in SPLIT_GRIDS:
+        for groups, hpg, head_dim in ((1, 4, 512), (2, 2, 256)):
+            _check_combine_jobs(grid, groups, hpg, head_dim)
 
 
 def test_splitfree_scratch_sizes_of_the_galaxy_builds():
@@ -472,6 +485,90 @@ def test_splitfree_scratch_sizes_of_the_galaxy_builds():
     assert splitfree_layer_specs(hf, 48, 8, "1")[1] == [(1, 2, 512, None)]
     assert splitfree_layer_specs(hf, 12, 16, "2")[1] == [(1, 1, 256, 1024), (1, 1, 512, None)]  # kv replicated
     assert splitfree_layer_specs(hf, 48, 4, "0") == (set(), [])
+
+
+SPLIT_GRIDS = [(8, 8), (12, 10), (13, 10)]
+
+
+def _transition_positions(split, chunk=256, ctx=CTX_256K):
+    """``cur_pos`` at the unit-size transitions of ``K = split`` (the first and last position of ``n_chunks`` in
+    ``{K, K+1, 2K, 2K+1}``) and the edges (-1, 0, 255, 256, the last position)."""
+    out = {-1, 0, 255, 256, ctx - 1}
+    for n in (split, split + 1, 2 * split, 2 * split + 1):
+        out |= {(n - 1) * chunk, n * chunk - 1}
+    return sorted(p for p in out if p < ctx)
+
+
+def _check_position_unit(split, nsub_min):
+    """The position-derived unit for K = ``split`` and NSUB_MIN = ``nsub_min``, the 8x8 / 12x10 / 13x10 grids, B in
+    {1, 4, 8, 16, 32} and random ``cur_pos`` vectors (with -1, 0, 255, 256 and the ``n_chunks`` in {K, K+1, 2K,
+    2K+1} transitions): a row's units tile ``[0, n_chunks)`` contiguously and ascending, at most K of them, all of
+    ``nsub`` chunks but the last; a row's unit chunk lists are the same under every B and grid (a function of its
+    position alone); every live (b, g, u) is visited exactly once across the cores into a distinct slot inside the
+    scratch bound; a lone row's units land on distinct cores."""
+    rng = random.Random(1000 * split + nsub_min)
+    env = {sp.SPLIT_ENV: str(split), sp.MIN_CHUNKS_ENV: str(nsub_min)}
+    special = _transition_positions(split)
+    units_at = {}  # cur_pos -> its unit chunk lists, from the first plan that sees the position
+    for grid in SPLIT_GRIDS:
+        for batch in (1, 4, 8, 16, 32):
+            plan = _plan(grid, batch, env=env)
+            assert (plan.split, plan.nsub_min, plan.nsub, plan.n_slots) == (split, nsub_min, 0, split)
+            assert plan.modulus == min(plan.n_cores, split) and plan.scratch_tiles_bound == batch * split * 18
+            for trial in range(3):
+                pos = [rng.choice(special) if rng.random() < 0.5 else rng.randrange(-1, CTX_256K) for _ in range(batch)]
+                if trial == 0:
+                    pos[0] = CTX_256K - 1
+                for p in pos:
+                    units = [tuple(plan.unit_chunks(u, p)) for u in plan.live_units(p)]
+                    if p < 0:
+                        assert units == [] and plan.nsub_of(p) is None
+                        continue
+                    n_chunks = p // plan.chunk + 1
+                    nsub = plan.nsub_of(p)
+                    assert nsub == max(nsub_min, -(-n_chunks // split)) == sp.nsub_of_chunks(n_chunks, split, nsub_min)
+                    assert [c for chunks in units for c in chunks] == list(range(n_chunks))
+                    assert 1 <= len(units) <= split and all(len(c) == nsub for c in units[:-1])
+                    assert 1 <= len(units[-1]) <= nsub
+                    assert units_at.setdefault(p, units) == units, f"row at {p}: units differ on {grid}, B={batch}"
+                want = [(b, 0, u) for b in range(batch) for u in plan.live_units(pos[b])]
+                seen = [t for c in range(plan.n_cores) for t in plan.units_of_core(c, pos)]
+                assert len(seen) == len(set(seen)) and sorted(seen) == sorted(want)
+                slots = [plan.slot(b, g, u) for b, g, u in want]
+                assert len(set(slots)) == len(slots)
+                assert all(0 <= s < plan.scratch_tiles_bound // plan.tiles_per_slot for s in slots)
+            lone = [CTX_256K - 1] + [-1] * (batch - 1)
+            per_core = [len(plan.units_of_core(c, lone)) for c in range(plan.n_cores)]
+            assert max(per_core) == 1 and sum(per_core) == len(plan.live_units(CTX_256K - 1)) == split
+
+
+def _check_combine_jobs(grid, groups, hpg, head_dim):
+    """The combine jobs (row, group, block of CT O tiles) cover every (row, group, O tile) of the live rows exactly
+    once for every CT dividing DHt, on distinct cores whenever the jobs fit the grid; the default CT is the smallest
+    that fits (a lone row's 16 jobs on 16 cores at head_dim 512), never the batch's rows on one core."""
+    rng = random.Random(groups * 100 + head_dim)
+    dht = head_dim // 32
+    for batch in (1, 4, 8, 16, 32):
+        if batch * groups > grid[0] * grid[1]:
+            continue
+        pos = [rng.choice([-1, 0, 4095, 70000, CTX_256K - 1]) for _ in range(batch)]
+        pos[0] = CTX_256K - 1
+        live = [b for b in range(batch) if pos[b] >= 0]
+        for ct in [d for d in range(1, dht + 1) if dht % d == 0]:
+            plan = _plan(grid, batch, groups=groups, hpg=hpg, head_dim=head_dim, env={sp.COMBINE_TILES_ENV: str(ct)})
+            assert plan.combine_tiles == ct and plan.ncb * ct == dht
+            jobs = [(c, j) for c in range(plan.n_cores) for j in plan.combine_jobs_of_core(c, pos)]
+            tiles = [(b, g, t) for _c, (b, g, blk) in jobs for t in plan.combine_tiles_of(blk)]
+            assert sorted(tiles) == [(b, g, t) for b in live for g in range(groups) for t in range(dht)]
+            assert all(plan.combine_core(b, g, blk) == c for c, (b, g, blk) in jobs)
+            if plan.combine_jobs <= plan.n_cores:
+                assert len({c for c, _j in jobs}) == len(jobs)
+        plan = _plan(grid, batch, groups=groups, hpg=hpg, head_dim=head_dim)
+        ct = plan.combine_tiles
+        assert ct == sp.choose_combine_tiles(batch * groups, dht, plan.n_cores) and plan.combine_jobs <= plan.n_cores
+        assert ct == 1 or batch * groups * dht // (max(d for d in range(1, ct) if dht % d == 0)) > plan.n_cores
+    lone = _plan(grid, 1)
+    assert lone.combine_tiles == 1 and len({lone.combine_core(0, 0, blk) for blk in range(16)}) == 16
 
 
 def test_splitfree_golden_gathers_through_the_page_table():
