@@ -5937,3 +5937,20 @@ def test_matmul_program_config_rejects_nd_sharded_a_without_2d_shard_spec(device
     )
     with expect_error(RuntimeError, "Sharded input A needs a 2D shard spec"):
         ttnn.matmul(a, b, program_config=program_config)
+
+
+@pytest.mark.parametrize("first", ["plain", "transposed"])
+@pytest.mark.parametrize("operand", ["in0", "in1"])
+def test_matmul_transposed_tile_program_cache(device, first, operand):
+    # A transposed-tile operand and a plain one of the same shape compile different programs; neither call may
+    # reuse the other's cache entry.
+    torch.manual_seed(0)
+    a = torch.randn((1, 1, 64, 256), dtype=torch.bfloat16)
+    b = torch.randn((1, 1, 256, 512), dtype=torch.bfloat16)
+    tiles = {"plain": None, "transposed": ttnn.Tile((32, 32), transpose_tile=True)}
+    for name in (first, "transposed" if first == "plain" else "plain"):
+        a_tile, b_tile = (tiles[name], None) if operand == "in0" else (None, tiles[name])
+        a_t = ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, tile=a_tile)
+        b_t = ttnn.from_torch(b, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device, tile=b_tile)
+        output = ttnn.to_torch(ttnn.matmul(a_t, b_t))
+        assert_with_pcc(a.float() @ b.float(), output.float(), 0.999)

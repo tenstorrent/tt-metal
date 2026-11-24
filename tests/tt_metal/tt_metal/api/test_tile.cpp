@@ -169,6 +169,16 @@ TEST(TileConstructorTranspose, CustomFaceShapeRejectsHeightOtherThan16Or32) {
         ThrowsMessage<std::runtime_error>(HasSubstr("Tile height must equal 16 or 32 in transpose mode")));
 }
 
+// The transpose flags change the tile layout, so they take part in equality and in the attributes the program
+// cache hashes.
+TEST(TileConstructorTranspose, FlagsDistinguishOtherwiseEqualTiles) {
+    const Tile plain({32, 32});
+    const Tile transposed({32, 32}, /*transpose_tile=*/true);
+    EXPECT_NE(plain, transposed);
+    EXPECT_NE(plain.attribute_values(), transposed.attribute_values());
+    EXPECT_EQ(transposed, Tile({32, 32}, /*transpose_tile=*/true));
+}
+
 TEST(TileFromFaceGrid, DefaultFaceProduces32x32) { EXPECT_EQ(Tile::from_face_grid(2, 2), Tile()); }
 
 TEST(TileFromFaceGrid, CustomFaceMatchesEquivalentConstructor) {
