@@ -6,7 +6,6 @@
 
 #include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/observability/profiler/device_profiler.hpp>
-#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <tt-metalium/memory/cross_program/global_circular_buffer.hpp>  // for the RemoteCircularBuffer scoped-lock tests below
 #include <tt-metalium/execution/distributed.hpp>
 #include <tt-metalium/mesh/legacy/device.hpp>
@@ -18,18 +17,166 @@
 #include <tt-logger/tt-logger.hpp>
 #include "impl/context/metal_context.hpp"
 
-// Metal 2.0 host API (DFB tests)
+// Metal 2.0 host API
 #include <tt-metalium/workload/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include <algorithm>
+#include <string>
+#include <utility>
 #include <vector>
 
 #include "noc_debugging_fixture.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
+
+namespace {
+
+using NamedRuntimeArgs = std::vector<std::pair<std::string, uint32_t>>;
+
+// Builds a program running one kernel on core.
+Program make_scoped_lock_single_kernel_program(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    const NodeCoord& core,
+    const std::string& kernel_source,
+    const NamedRuntimeArgs& runtime_args) {
+    const KernelSpecName KERNEL{"kernel"};
+    KernelSpec kernel_spec{
+        .unique_id = KERNEL,
+        .source = kernel_source,
+        .num_threads = 1,
+        .hw_config = make_data_movement_config(DataMovementProcessor::RISCV_0, NOC::NOC_0),
+    };
+    ProgramRunArgs::KernelRunArgs kernel_run_args{.kernel = KERNEL};
+    for (const auto& [arg_name, arg_value] : runtime_args) {
+        kernel_spec.runtime_arg_schema.runtime_arg_names.push_back(arg_name);
+        kernel_run_args.runtime_arg_values[arg_name][core] = arg_value;
+    }
+    ProgramSpec spec{
+        .name = "scoped_lock_single_kernel",
+        .kernels = {kernel_spec},
+        .work_units = {WorkUnitSpec{.name = "main", .kernels = {KERNEL}, .target_nodes = core}},
+    };
+    Program program(*mesh_device, spec);
+
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args.push_back(std::move(kernel_run_args));
+    program.set_program_run_args(run_args);
+    return program;
+}
+
+struct LockerWriterResult {
+    CoreCoord locker_virtual_core;
+    CoreCoord writer_virtual_core;
+    std::vector<NOCDebugIssueType> locked_issues;  // write-to-locked issues reported on the writer core
+};
+
+struct LockerWriterKernel {
+    std::string source;
+    NamedRuntimeArgs runtime_args;
+    KernelSpec::CompilerOptions::Defines defines{};
+};
+
+// Runs locker on core (0,0) against writer on core (1,0) on the first device. The locker also gets the writer's NOC
+// coordinates as writer_noc_x/y, and the writer the locker's as target_noc_x/y. Each name in semaphore_names becomes
+// one semaphore over both cores, bound under that name in both kernels.
+LockerWriterResult run_locker_and_writer(
+    NOCDebuggingFixture* fixture,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    LockerWriterKernel locker,
+    LockerWriterKernel writer,
+    const std::vector<std::string>& semaphore_names) {
+    const NodeCoord locker_core{0, 0};
+    const NodeCoord writer_core{1, 0};
+    LockerWriterResult result{
+        .locker_virtual_core = mesh_device->worker_core_from_logical_core(locker_core),
+        .writer_virtual_core = mesh_device->worker_core_from_logical_core(writer_core),
+    };
+    locker.runtime_args.emplace_back("writer_noc_x", static_cast<uint32_t>(result.writer_virtual_core.x));
+    locker.runtime_args.emplace_back("writer_noc_y", static_cast<uint32_t>(result.writer_virtual_core.y));
+    writer.runtime_args.emplace_back("target_noc_x", static_cast<uint32_t>(result.locker_virtual_core.x));
+    writer.runtime_args.emplace_back("target_noc_y", static_cast<uint32_t>(result.locker_virtual_core.y));
+
+    ProgramSpec spec{.name = "scoped_lock_locker_and_writer"};
+    std::vector<SemaphoreBinding> semaphore_bindings;
+    for (const std::string& semaphore_name : semaphore_names) {
+        const SemaphoreSpecName semaphore_spec_name{"sem_" + semaphore_name};
+        spec.semaphores.push_back(
+            SemaphoreSpec{.unique_id = semaphore_spec_name, .target_nodes = NodeRange{locker_core, writer_core}});
+        semaphore_bindings.push_back({.semaphore_spec_name = semaphore_spec_name, .accessor_name = semaphore_name});
+    }
+
+    ProgramRunArgs run_args;
+    auto add_kernel = [&](const std::string& name, const LockerWriterKernel& kernel, const NodeCoord& core) {
+        const KernelSpecName kernel_name{name};
+        KernelSpec kernel_spec{
+            .unique_id = kernel_name,
+            .source = kernel.source,
+            .num_threads = 1,
+            .compiler_options = {.defines = kernel.defines},
+            .semaphore_bindings = semaphore_bindings,
+            .hw_config = make_data_movement_config(DataMovementProcessor::RISCV_0, NOC::NOC_0),
+        };
+        ProgramRunArgs::KernelRunArgs kernel_run_args{.kernel = kernel_name};
+        for (const auto& [arg_name, arg_value] : kernel.runtime_args) {
+            kernel_spec.runtime_arg_schema.runtime_arg_names.push_back(arg_name);
+            kernel_run_args.runtime_arg_values[arg_name][core] = arg_value;
+        }
+        spec.kernels.push_back(std::move(kernel_spec));
+        spec.work_units.push_back(WorkUnitSpec{.name = name + "_wu", .kernels = {kernel_name}, .target_nodes = core});
+        run_args.kernel_run_args.push_back(std::move(kernel_run_args));
+    };
+    add_kernel("locker", locker, locker_core);
+    add_kernel("writer", writer, writer_core);
+
+    Program program(*mesh_device, spec);
+    program.set_program_run_args(run_args);
+
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0));
+    workload.add_program(device_range, std::move(program));
+    fixture->RunProgram(mesh_device, workload);
+    ReadMeshDeviceProfilerResults(*mesh_device);
+
+    for (auto device_id : mesh_device->get_device_ids()) {
+        auto issues = fixture->get_write_to_locked_issues(device_id, result.writer_virtual_core, 0);
+        result.locked_issues.insert(result.locked_issues.end(), issues.begin(), issues.end());
+    }
+    return result;
+}
+
+// Runs scoped_lock_test_kernel.cpp, locking num_elements words at locker_buffer_addr, against a writer that NOC-writes
+// num_elements words from writer_buffer_addr into that region while it is locked. writer_source takes the args and
+// semaphores of scoped_lock_writer_kernel.cpp.
+LockerWriterResult run_locker_against_writer(
+    NOCDebuggingFixture* fixture,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    const std::string& writer_source,
+    const KernelSpec::CompilerOptions::Defines& writer_defines,
+    uint32_t locker_buffer_addr,
+    uint32_t writer_buffer_addr,
+    uint32_t num_elements) {
+    return run_locker_and_writer(
+        fixture,
+        mesh_device,
+        LockerWriterKernel{
+            .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_test_kernel.cpp",
+            .runtime_args = {{"l1_buffer_addr", locker_buffer_addr}, {"num_elements", num_elements}},
+        },
+        LockerWriterKernel{
+            .source = writer_source,
+            .runtime_args =
+                {{"local_buffer_addr", writer_buffer_addr},
+                 {"num_elements", num_elements},
+                 {"target_addr", locker_buffer_addr}},
+            .defines = writer_defines,
+        },
+        {"lock_state_changed", "written"});
+}
+
+}  // namespace
 
 // Test two cores: one locks and writes, another writes to the same region
 // Both kernels synchronize using semaphores at start and end to ensure
@@ -42,14 +189,6 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessIssue) {
             GTEST_SKIP() << "Test requires at least 2 cores in x dimension";
         }
 
-        const CoreCoord locker_core = {0, 0};
-        const CoreCoord writer_core = {1, 0};
-        Program program = CreateProgram(*mesh_device);
-        distributed::MeshWorkload workload;
-
-        auto zero_coord = distributed::MeshCoordinate(0, 0);
-        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-
         auto& mc = MetalContext::instance();
         uint32_t unreserved_addr =
             mc.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
@@ -59,72 +198,28 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessIssue) {
         uint32_t writer_buffer_addr = unreserved_addr + (alignment * 32);
         uint32_t num_elements = 8;
 
-        auto locker_virtual_core = mesh_device->worker_core_from_logical_core(locker_core);
-        auto writer_virtual_core = mesh_device->worker_core_from_logical_core(writer_core);
-
-        uint32_t locker_sem_id = CreateSemaphore(program, locker_core, 0);
-        uint32_t writer_sem_id = CreateSemaphore(program, writer_core, 0);
-
-        std::vector<uint32_t> locker_args = {
-            locker_buffer_addr,
-            num_elements,
-            locker_sem_id,
-            writer_sem_id,
-            writer_virtual_core.x,
-            writer_virtual_core.y};
-
-        KernelHandle locker_kernel = CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_test_kernel.cpp",
-            locker_core,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0});
-
-        SetRuntimeArgs(program, locker_kernel, locker_core, locker_args);
-
-        std::vector<uint32_t> writer_args = {
-            writer_buffer_addr,
-            num_elements,
-            locker_virtual_core.x,
-            locker_virtual_core.y,
-            locker_buffer_addr,
-            writer_sem_id,
-            locker_sem_id,
-            locker_virtual_core.x,
-            locker_virtual_core.y};
-
-        KernelHandle writer_kernel = CreateKernel(
-            program,
+        const LockerWriterResult result = run_locker_against_writer(
+            this,
+            mesh_device,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_writer_kernel.cpp",
-            writer_core,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0});
-
-        SetRuntimeArgs(program, writer_kernel, writer_core, writer_args);
-
-        workload.add_program(device_range, std::move(program));
-
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
-        distributed::Finish(mesh_device->mesh_command_queue());
-
-        ReadMeshDeviceProfilerResults(*mesh_device);
+            /*writer_defines=*/{},
+            locker_buffer_addr,
+            writer_buffer_addr,
+            num_elements);
 
         // Writer core (source of the NOC writes) should have been flagged for writing to a locked buffer
-        std::vector<NOCDebugIssueType> locked_issues;
-        for (auto device_id : mesh_device->get_device_ids()) {
-            auto issues = this->get_write_to_locked_issues(device_id, writer_virtual_core, 0);
-            locked_issues.insert(locked_issues.end(), issues.begin(), issues.end());
-        }
-        ASSERT_FALSE(locked_issues.empty())
+        ASSERT_FALSE(result.locked_issues.empty())
             << "Expected write-to-locked-buffer issue on writer core (1,0); NOC debug did not report the violation.";
 
         uint32_t expected_write_size = num_elements * sizeof(uint32_t);
-        for (const auto& issue : locked_issues) {
+        for (const auto& issue : result.locked_issues) {
             EXPECT_EQ(issue.base_type, NOCDebugIssueBaseType::WRITE_TO_LOCKED_CORE_LOCAL_MEM);
             EXPECT_EQ(issue.issue_address, locker_buffer_addr);
             EXPECT_EQ(issue.issue_size, expected_write_size);
-            EXPECT_EQ(issue.src_x, writer_virtual_core.x);
-            EXPECT_EQ(issue.src_y, writer_virtual_core.y);
-            EXPECT_EQ(issue.dst_x, locker_virtual_core.x);
-            EXPECT_EQ(issue.dst_y, locker_virtual_core.y);
+            EXPECT_EQ(issue.src_x, result.writer_virtual_core.x);
+            EXPECT_EQ(issue.src_y, result.writer_virtual_core.y);
+            EXPECT_EQ(issue.dst_x, result.locker_virtual_core.x);
+            EXPECT_EQ(issue.dst_y, result.locker_virtual_core.y);
         }
     }
 }
@@ -137,14 +232,6 @@ TEST_F(NOCDebuggingFixture, ScopedLockMultipleL1Issues) {
             GTEST_SKIP() << "Test requires at least 2 cores in x dimension";
         }
 
-        const CoreCoord locker_core = {0, 0};
-        const CoreCoord writer_core = {1, 0};
-        Program program = CreateProgram(*mesh_device);
-        distributed::MeshWorkload workload;
-
-        auto zero_coord = distributed::MeshCoordinate(0, 0);
-        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-
         auto& mc = MetalContext::instance();
         uint32_t unreserved_addr =
             mc.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
@@ -155,78 +242,42 @@ TEST_F(NOCDebuggingFixture, ScopedLockMultipleL1Issues) {
         uint32_t buffer_addr_b = unreserved_addr + (alignment * 16);
         uint32_t num_elements_b = 16;
         uint32_t writer_buffer_addr = unreserved_addr + (alignment * 48);
-
-        auto locker_virtual_core = mesh_device->worker_core_from_logical_core(locker_core);
-        auto writer_virtual_core = mesh_device->worker_core_from_logical_core(writer_core);
-
-        uint32_t locker_sem_id = CreateSemaphore(program, locker_core, 0);
-        uint32_t writer_sem_id = CreateSemaphore(program, writer_core, 0);
-
-        KernelHandle locker_kernel = CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_test_kernel_multi.cpp",
-            locker_core,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0});
-        KernelHandle writer_kernel = CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_writer_kernel_multi.cpp",
-            writer_core,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0});
-
-        SetRuntimeArgs(
-            program,
-            locker_kernel,
-            locker_core,
-            {buffer_addr_a,
-             num_elements_a,
-             buffer_addr_b,
-             num_elements_b,
-             locker_sem_id,
-             writer_sem_id,
-             writer_virtual_core.x,
-             writer_virtual_core.y});
-
         uint32_t write_size_a = num_elements_a * sizeof(uint32_t);
         uint32_t write_size_b = num_elements_b * sizeof(uint32_t);
-        SetRuntimeArgs(
-            program,
-            writer_kernel,
-            writer_core,
-            {writer_buffer_addr,
-             write_size_a,
-             write_size_b,
-             locker_virtual_core.x,
-             locker_virtual_core.y,
-             buffer_addr_a,
-             buffer_addr_b,
-             writer_sem_id,
-             locker_sem_id,
-             locker_virtual_core.x,
-             locker_virtual_core.y});
 
-        workload.add_program(device_range, std::move(program));
+        const LockerWriterResult result = run_locker_and_writer(
+            this,
+            mesh_device,
+            LockerWriterKernel{
+                .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_test_kernel_multi.cpp",
+                .runtime_args =
+                    {{"buffer_addr_a", buffer_addr_a},
+                     {"num_elements_a", num_elements_a},
+                     {"buffer_addr_b", buffer_addr_b},
+                     {"num_elements_b", num_elements_b}},
+            },
+            LockerWriterKernel{
+                .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_writer_kernel_multi.cpp",
+                .runtime_args =
+                    {{"local_buffer_addr", writer_buffer_addr},
+                     {"write_size_a", write_size_a},
+                     {"write_size_b", write_size_b},
+                     {"target_addr_a", buffer_addr_a},
+                     {"target_addr_b", buffer_addr_b}},
+            },
+            {"lock_state_changed", "written"});
 
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
-        distributed::Finish(mesh_device->mesh_command_queue());
-
-        ReadMeshDeviceProfilerResults(*mesh_device);
-
-        std::vector<NOCDebugIssueType> locked_issues;
-        for (auto device_id : mesh_device->get_device_ids()) {
-            auto issues = this->get_write_to_locked_issues(device_id, writer_virtual_core, 0);
-            locked_issues.insert(locked_issues.end(), issues.begin(), issues.end());
-        }
-        ASSERT_GE(locked_issues.size(), 2u)
+        ASSERT_GE(result.locked_issues.size(), 2u)
             << "Expected at least 2 write-to-locked-buffer issues (one per locked region)";
 
         bool found_issue_a = false;
         bool found_issue_b = false;
-        for (const auto& issue : locked_issues) {
+        for (const auto& issue : result.locked_issues) {
             EXPECT_EQ(issue.base_type, NOCDebugIssueBaseType::WRITE_TO_LOCKED_CORE_LOCAL_MEM);
-            EXPECT_EQ(issue.src_x, writer_virtual_core.x);
-            EXPECT_EQ(issue.src_y, writer_virtual_core.y);
-            EXPECT_EQ(issue.dst_x, locker_virtual_core.x);
-            EXPECT_EQ(issue.dst_y, locker_virtual_core.y);
+            EXPECT_EQ(issue.src_x, result.writer_virtual_core.x);
+            EXPECT_EQ(issue.src_y, result.writer_virtual_core.y);
+            EXPECT_EQ(issue.dst_x, result.locker_virtual_core.x);
+            EXPECT_EQ(issue.dst_y, result.locker_virtual_core.y);
 
             if (issue.issue_address == buffer_addr_a && issue.issue_size == write_size_a) {
                 found_issue_a = true;
@@ -251,14 +302,6 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessNoIssue) {
             GTEST_SKIP() << "Test requires at least 2 cores in x dimension";
         }
 
-        const CoreCoord locker_core = {0, 0};
-        const CoreCoord writer_core = {1, 0};
-        Program program = CreateProgram(*mesh_device);
-        distributed::MeshWorkload workload;
-
-        auto zero_coord = distributed::MeshCoordinate(0, 0);
-        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-
         auto& mc = MetalContext::instance();
         uint32_t unreserved_addr =
             mc.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
@@ -268,59 +311,27 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessNoIssue) {
         uint32_t writer_buffer_addr = unreserved_addr + (alignment * 32);
         uint32_t num_elements = 8;
 
-        auto locker_virtual_core = mesh_device->worker_core_from_logical_core(locker_core);
-        auto writer_virtual_core = mesh_device->worker_core_from_logical_core(writer_core);
-
-        uint32_t locker_sem_id = CreateSemaphore(program, locker_core, 0);
-        uint32_t writer_sem_id = CreateSemaphore(program, writer_core, 0);
-
-        std::vector<uint32_t> locker_args = {
-            locker_buffer_addr,
-            num_elements,
-            locker_sem_id,
-            writer_sem_id,
-            writer_virtual_core.x,
-            writer_virtual_core.y};
-
-        KernelHandle locker_kernel = CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_test_kernel_no_issue.cpp",
-            locker_core,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0});
-
-        SetRuntimeArgs(program, locker_kernel, locker_core, locker_args);
-
-        std::vector<uint32_t> writer_args = {
-            writer_buffer_addr,
-            num_elements,
-            locker_virtual_core.x,
-            locker_virtual_core.y,
-            locker_buffer_addr,
-            writer_sem_id,
-            locker_sem_id,
-            locker_virtual_core.x,
-            locker_virtual_core.y};
-
-        KernelHandle writer_kernel = CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_writer_kernel_no_issue.cpp",
-            writer_core,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0});
-
-        SetRuntimeArgs(program, writer_kernel, writer_core, writer_args);
-
-        workload.add_program(device_range, std::move(program));
-
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
-        distributed::Finish(mesh_device->mesh_command_queue());
-
-        ReadMeshDeviceProfilerResults(*mesh_device);
+        const LockerWriterResult result = run_locker_and_writer(
+            this,
+            mesh_device,
+            LockerWriterKernel{
+                .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_test_kernel_no_issue.cpp",
+                .runtime_args = {{"l1_buffer_addr", locker_buffer_addr}, {"num_elements", num_elements}},
+            },
+            LockerWriterKernel{
+                .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_writer_kernel_no_issue.cpp",
+                .runtime_args =
+                    {{"local_buffer_addr", writer_buffer_addr},
+                     {"num_elements", num_elements},
+                     {"target_addr", locker_buffer_addr}},
+            },
+            {"first_batch_written", "lock_state_changed"});
 
         // No write-to-locked issues should be reported (writes happen only when buffer is not locked)
         for (auto device_id : mesh_device->get_device_ids()) {
-            EXPECT_FALSE(this->has_write_to_locked_issue(device_id, writer_virtual_core, 0))
+            EXPECT_FALSE(this->has_write_to_locked_issue(device_id, result.writer_virtual_core, 0))
                 << "Unexpected write-to-locked-buffer issue on writer core; writes were outside lock scope.";
-            EXPECT_FALSE(this->has_write_to_locked_issue(device_id, locker_virtual_core, 0))
+            EXPECT_FALSE(this->has_write_to_locked_issue(device_id, result.locker_virtual_core, 0))
                 << "Unexpected write-to-locked-buffer issue on locker core.";
         }
     }
@@ -554,105 +565,29 @@ std::vector<NOCDebugIssueType> run_sub_range_lock(
     NOCDebuggingFixture* fixture,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const SubRangeLockSetup& setup,
-    uint32_t write_target_addr,
-    CoreCoord& writer_virtual_core_out) {
-    const NodeCoord locker_core{0, 0};
-    const NodeCoord writer_core{1, 0};
-
-    auto& mc = MetalContext::instance();
-    const uint32_t alignment = mc.hal().get_alignment(HalMemType::L1);
+    uint32_t write_target_addr) {
+    const uint32_t alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
     const uint32_t writer_buffer_addr = setup.region_base + (alignment * 32);
-
-    auto locker_vc = mesh_device->worker_core_from_logical_core(CoreCoord{locker_core.x, locker_core.y});
-    auto writer_vc = mesh_device->worker_core_from_logical_core(CoreCoord{writer_core.x, writer_core.y});
-    writer_virtual_core_out = writer_vc;
-
-    const KernelSpecName LOCKER{"locker"};
-    const KernelSpecName WRITER{"writer"};
-    const SemaphoreSpecName SEM_LOCKED{"sem_locked"};
-    const SemaphoreSpecName SEM_WRITTEN{"sem_written"};
-
-    SemaphoreSpec sem_locked{.unique_id = SEM_LOCKED, .target_nodes = NodeRange{locker_core, writer_core}};
-    SemaphoreSpec sem_written{.unique_id = SEM_WRITTEN, .target_nodes = NodeRange{locker_core, writer_core}};
-
-    const DataMovementHardwareConfig dm_rv0 = DataMovementHardwareConfig{
-        .config_1xx =
-            DataMovementHardwareConfig::DataMovement1XXConfig{
-                .processor = DataMovementProcessor::RISCV_0,
-                .noc = NOC::NOC_0,
-            },
-    };
-
-    KernelSpec locker_spec{
-        .unique_id = LOCKER,
-        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_xcore_locker.cpp",
-        .num_threads = 1,
-        .semaphore_bindings =
-            {{.semaphore_spec_name = SEM_LOCKED, .accessor_name = "locked"},
-             {.semaphore_spec_name = SEM_WRITTEN, .accessor_name = "written"}},
-        .runtime_arg_schema =
-            {.runtime_arg_names = {"region_base", "offset_elements", "num_elements", "writer_noc_x", "writer_noc_y"}},
-        .hw_config = dm_rv0,
-    };
-    KernelSpec writer_spec{
-        .unique_id = WRITER,
-        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_xcore_writer.cpp",
-        .num_threads = 1,
-        .semaphore_bindings =
-            {{.semaphore_spec_name = SEM_LOCKED, .accessor_name = "locked"},
-             {.semaphore_spec_name = SEM_WRITTEN, .accessor_name = "written"}},
-        .runtime_arg_schema =
-            {.runtime_arg_names =
-                 {"src_buffer_addr", "write_size", "target_noc_x", "target_noc_y", "inbox", "target_addr"}},
-        .hw_config = dm_rv0,
-    };
-
-    ProgramSpec spec{
-        .name = "scoped_lock_sub_range",
-        .kernels = {locker_spec, writer_spec},
-        .semaphores = {sem_locked, sem_written},
-        .work_units =
-            {WorkUnitSpec{.name = "locker_wu", .kernels = {LOCKER}, .target_nodes = locker_core},
-             WorkUnitSpec{.name = "writer_wu", .kernels = {WRITER}, .target_nodes = writer_core}},
-    };
-    Program program(*mesh_device, spec);
-
-    ProgramRunArgs run_args;
-    ProgramRunArgs::KernelRunArgs locker_params{};
-    locker_params.kernel = LOCKER;
-    locker_params.runtime_arg_values = MakeRuntimeArgsForSingleNode(
-        locker_core,
-        {{"region_base", setup.region_base},
-         {"offset_elements", setup.offset_elements},
-         {"num_elements", setup.num_elements},
-         {"writer_noc_x", static_cast<uint32_t>(writer_vc.x)},
-         {"writer_noc_y", static_cast<uint32_t>(writer_vc.y)}});
-    ProgramRunArgs::KernelRunArgs writer_params{};
-    writer_params.kernel = WRITER;
-    writer_params.runtime_arg_values = MakeRuntimeArgsForSingleNode(
-        writer_core,
-        {{"src_buffer_addr", writer_buffer_addr},
-         {"write_size", setup.extent_bytes},
-         {"target_noc_x", static_cast<uint32_t>(locker_vc.x)},
-         {"target_noc_y", static_cast<uint32_t>(locker_vc.y)},
-         {"inbox", 0u},  // 0 -> take target_addr directly; the host picks the address here
-         {"target_addr", write_target_addr}});
-    run_args.kernel_run_args = {locker_params, writer_params};
-    program.set_program_run_args(run_args);
-
-    distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0));
-    workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
-    distributed::Finish(mesh_device->mesh_command_queue());
-    ReadMeshDeviceProfilerResults(*mesh_device);
-
-    std::vector<NOCDebugIssueType> locked_issues;
-    for (auto device_id : mesh_device->get_device_ids()) {
-        auto issues = fixture->get_write_to_locked_issues(device_id, writer_vc, 0);
-        locked_issues.insert(locked_issues.end(), issues.begin(), issues.end());
-    }
-    return locked_issues;
+    return run_locker_and_writer(
+               fixture,
+               mesh_device,
+               LockerWriterKernel{
+                   .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_xcore_locker.cpp",
+                   .runtime_args =
+                       {{"region_base", setup.region_base},
+                        {"offset_elements", setup.offset_elements},
+                        {"num_elements", setup.num_elements}},
+               },
+               LockerWriterKernel{
+                   .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_xcore_writer.cpp",
+                   .runtime_args =
+                       {{"src_buffer_addr", writer_buffer_addr},
+                        {"write_size", setup.extent_bytes},
+                        {"inbox", 0u},  // 0 -> take target_addr directly; the host picks the address here
+                        {"target_addr", write_target_addr}},
+               },
+               {"locked", "written"})
+        .locked_issues;
 }
 
 }  // namespace
@@ -665,8 +600,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockSubRangeExtentIssue) {
             GTEST_SKIP() << "Test requires at least 2 cores in x dimension";
         }
         const auto setup = make_sub_range_setup();
-        CoreCoord writer_virtual_core;
-        auto locked_issues = run_sub_range_lock(this, mesh_device, setup, setup.locked_addr, writer_virtual_core);
+        auto locked_issues = run_sub_range_lock(this, mesh_device, setup, setup.locked_addr);
 
         ASSERT_FALSE(locked_issues.empty())
             << "Expected write-to-locked issue: the NOC write targeted the locked sub-range at base + offset.";
@@ -688,8 +622,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockSubRangeUnlockedHeadNoIssue) {
             GTEST_SKIP() << "Test requires at least 2 cores in x dimension";
         }
         const auto setup = make_sub_range_setup();
-        CoreCoord writer_virtual_core;
-        auto locked_issues = run_sub_range_lock(this, mesh_device, setup, setup.region_base, writer_virtual_core);
+        auto locked_issues = run_sub_range_lock(this, mesh_device, setup, setup.region_base);
 
         EXPECT_TRUE(locked_issues.empty())
             << "Write targeted [base, base + extent), which is OUTSIDE the locked sub-range "
@@ -702,8 +635,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockSelfWriteToOwnLockNoIssue) {
     for (auto& mesh_device : devices_) {
         log_info(tt::LogMetal, "Running on mesh device {}", mesh_device->id());
 
-        const CoreCoord core = {0, 0};
-        Program program = CreateProgram(*mesh_device);
+        const NodeCoord core = {0, 0};
         distributed::MeshWorkload workload;
 
         auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -722,17 +654,17 @@ TEST_F(NOCDebuggingFixture, ScopedLockSelfWriteToOwnLockNoIssue) {
 
         auto virtual_core = mesh_device->worker_core_from_logical_core(core);
 
-        KernelHandle kernel = CreateKernel(
-            program,
+        Program program = make_scoped_lock_single_kernel_program(
+            mesh_device,
+            core,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_self_write_kernel.cpp",
-            core,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0});
-
-        SetRuntimeArgs(
-            program,
-            kernel,
-            core,
-            {lock_addr, num_elements, src_buffer_addr, write_target_addr, write_size, virtual_core.x, virtual_core.y});
+            {{"lock_addr", lock_addr},
+             {"lock_num_elements", num_elements},
+             {"src_buffer_addr", src_buffer_addr},
+             {"write_target_addr", write_target_addr},
+             {"write_size", write_size},
+             {"self_noc_x", static_cast<uint32_t>(virtual_core.x)},
+             {"self_noc_y", static_cast<uint32_t>(virtual_core.y)}});
 
         workload.add_program(device_range, std::move(program));
 
@@ -752,8 +684,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockSelfWriteToUnlockedNoIssue) {
     for (auto& mesh_device : devices_) {
         log_info(tt::LogMetal, "Running on mesh device {}", mesh_device->id());
 
-        const CoreCoord core = {0, 0};
-        Program program = CreateProgram(*mesh_device);
+        const NodeCoord core = {0, 0};
         distributed::MeshWorkload workload;
 
         auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -772,17 +703,17 @@ TEST_F(NOCDebuggingFixture, ScopedLockSelfWriteToUnlockedNoIssue) {
 
         auto virtual_core = mesh_device->worker_core_from_logical_core(core);
 
-        KernelHandle kernel = CreateKernel(
-            program,
+        Program program = make_scoped_lock_single_kernel_program(
+            mesh_device,
+            core,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_self_write_kernel.cpp",
-            core,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0});
-
-        SetRuntimeArgs(
-            program,
-            kernel,
-            core,
-            {lock_addr, num_elements, src_buffer_addr, write_target_addr, write_size, virtual_core.x, virtual_core.y});
+            {{"lock_addr", lock_addr},
+             {"lock_num_elements", num_elements},
+             {"src_buffer_addr", src_buffer_addr},
+             {"write_target_addr", write_target_addr},
+             {"write_size", write_size},
+             {"self_noc_x", static_cast<uint32_t>(virtual_core.x)},
+             {"self_noc_y", static_cast<uint32_t>(virtual_core.y)}});
 
         workload.add_program(device_range, std::move(program));
 
@@ -802,8 +733,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockNoWritesNoIssue) {
     for (auto& mesh_device : devices_) {
         log_info(tt::LogMetal, "Running on mesh device {}", mesh_device->id());
 
-        const CoreCoord core = {0, 0};
-        Program program = CreateProgram(*mesh_device);
+        const NodeCoord core = {0, 0};
         distributed::MeshWorkload workload;
 
         auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -818,13 +748,11 @@ TEST_F(NOCDebuggingFixture, ScopedLockNoWritesNoIssue) {
 
         auto virtual_core = mesh_device->worker_core_from_logical_core(core);
 
-        KernelHandle kernel = CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_only_kernel.cpp",
+        Program program = make_scoped_lock_single_kernel_program(
+            mesh_device,
             core,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0});
-
-        SetRuntimeArgs(program, kernel, core, {lock_addr, num_elements});
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_only_kernel.cpp",
+            {{"lock_addr", lock_addr}, {"lock_num_elements", num_elements}});
 
         workload.add_program(device_range, std::move(program));
 
@@ -889,20 +817,8 @@ void run_dfb_scoped_lock_test(
 
     // The two DM kernels claim different NOCs, so the consumer takes whichever one the producer did not.
     const NOC consumer_noc = (producer_noc == NOC::NOC_0) ? NOC::NOC_1 : NOC::NOC_0;
-    const DataMovementHardwareConfig dm_producer_cfg = DataMovementHardwareConfig{
-        .config_1xx =
-            DataMovementHardwareConfig::DataMovement1XXConfig{
-                .processor = producer_processor,
-                .noc = producer_noc,
-            },
-    };
-    const DataMovementHardwareConfig dm_consumer_cfg = DataMovementHardwareConfig{
-        .config_1xx =
-            DataMovementHardwareConfig::DataMovement1XXConfig{
-                .processor = consumer_processor,
-                .noc = consumer_noc,
-            },
-    };
+    const DataMovementHardwareConfig dm_producer_cfg = make_data_movement_config(producer_processor, producer_noc);
+    const DataMovementHardwareConfig dm_consumer_cfg = make_data_movement_config(consumer_processor, consumer_noc);
 
     KernelSpec producer_spec{
         .unique_id = PRODUCER,
@@ -1053,13 +969,7 @@ void run_dfb_region_cleared_between_launches_test(
         .num_threads = 1,
         .runtime_arg_schema =
             {.runtime_arg_names = {"src_buffer_addr", "write_size", "self_noc_x", "self_noc_y", "target_addr"}},
-        .hw_config =
-            DataMovementHardwareConfig{
-                .config_1xx =
-                    DataMovementHardwareConfig::DataMovement1XXConfig{
-                        .processor = DataMovementProcessor::RISCV_0,
-                    },
-            },
+        .hw_config = make_data_movement_config(DataMovementProcessor::RISCV_0, NOC::NOC_0),
     };
     WorkUnitSpec writer_wu{.name = "main", .kernels = {WRITER}, .target_nodes = core};
     ProgramSpec writer_program_spec{.name = "dfb_free_l1_write", .kernels = {writer_spec}, .work_units = {writer_wu}};
@@ -1129,19 +1039,8 @@ void run_dfb_scoped_lock_xcore_test(
     SemaphoreSpec sem_locked{.unique_id = SEM_LOCKED, .target_nodes = NodeRange{locker_core, writer_core}};
     SemaphoreSpec sem_written{.unique_id = SEM_WRITTEN, .target_nodes = NodeRange{locker_core, writer_core}};
 
-    const DataMovementHardwareConfig dm_rv0 = DataMovementHardwareConfig{
-        .config_1xx =
-            DataMovementHardwareConfig::DataMovement1XXConfig{
-                .processor = DataMovementProcessor::RISCV_0,
-            },
-    };
-    const DataMovementHardwareConfig dm_rv1 = DataMovementHardwareConfig{
-        .config_1xx =
-            DataMovementHardwareConfig::DataMovement1XXConfig{
-                .processor = DataMovementProcessor::RISCV_1,
-                .noc = NOC::NOC_1,
-            },
-    };
+    const DataMovementHardwareConfig dm_rv0 = make_data_movement_config(DataMovementProcessor::RISCV_0, NOC::NOC_0);
+    const DataMovementHardwareConfig dm_rv1 = make_data_movement_config(DataMovementProcessor::RISCV_1, NOC::NOC_1);
 
     KernelSpec locker_spec{
         .unique_id = LOCKER,
@@ -1281,19 +1180,10 @@ void run_dfb_mcast_loopback_unlocked_test(
         .data_format_metadata = tt::DataFormat::Float16_b,
     };
 
-    const DataMovementHardwareConfig dm_producer_cfg = DataMovementHardwareConfig{
-        .config_1xx =
-            DataMovementHardwareConfig::DataMovement1XXConfig{
-                .processor = DataMovementProcessor::RISCV_0,
-            },
-    };
-    const DataMovementHardwareConfig dm_consumer_cfg = DataMovementHardwareConfig{
-        .config_1xx =
-            DataMovementHardwareConfig::DataMovement1XXConfig{
-                .processor = DataMovementProcessor::RISCV_1,
-                .noc = NOC::NOC_1,
-            },
-    };
+    const DataMovementHardwareConfig dm_producer_cfg =
+        make_data_movement_config(DataMovementProcessor::RISCV_0, NOC::NOC_0);
+    const DataMovementHardwareConfig dm_consumer_cfg =
+        make_data_movement_config(DataMovementProcessor::RISCV_1, NOC::NOC_1);
 
     KernelSpec producer_spec{
         .unique_id = PRODUCER,
@@ -1422,19 +1312,8 @@ void run_dfb_mcast_xcore_locked_test(
     SemaphoreSpec sem_locked{.unique_id = SEM_LOCKED, .target_nodes = NodeRange{locker_core, writer_core}};
     SemaphoreSpec sem_written{.unique_id = SEM_WRITTEN, .target_nodes = NodeRange{locker_core, writer_core}};
 
-    const DataMovementHardwareConfig dm_rv0 = DataMovementHardwareConfig{
-        .config_1xx =
-            DataMovementHardwareConfig::DataMovement1XXConfig{
-                .processor = DataMovementProcessor::RISCV_0,
-            },
-    };
-    const DataMovementHardwareConfig dm_rv1 = DataMovementHardwareConfig{
-        .config_1xx =
-            DataMovementHardwareConfig::DataMovement1XXConfig{
-                .processor = DataMovementProcessor::RISCV_1,
-                .noc = NOC::NOC_1,
-            },
-    };
+    const DataMovementHardwareConfig dm_rv0 = make_data_movement_config(DataMovementProcessor::RISCV_0, NOC::NOC_0);
+    const DataMovementHardwareConfig dm_rv1 = make_data_movement_config(DataMovementProcessor::RISCV_1, NOC::NOC_1);
 
     KernelSpec locker_spec{
         .unique_id = LOCKER,
@@ -1924,14 +1803,6 @@ void RunScopedLockStatefulWriteTest(
         GTEST_SKIP() << "Test requires at least 2 cores in x dimension";
     }
 
-    const CoreCoord locker_core = {0, 0};
-    const CoreCoord writer_core = {1, 0};
-    Program program = CreateProgram(*mesh_device);
-    distributed::MeshWorkload workload;
-
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-
     auto& mc = MetalContext::instance();
     uint32_t unreserved_addr =
         mc.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
@@ -1944,77 +1815,38 @@ void RunScopedLockStatefulWriteTest(
     uint32_t writer_buffer_addr = unreserved_addr;
     uint32_t num_elements = 8;
 
-    auto locker_virtual_core = mesh_device->worker_core_from_logical_core(locker_core);
-    auto writer_virtual_core = mesh_device->worker_core_from_logical_core(writer_core);
-
-    uint32_t locker_sem_id = CreateSemaphore(program, locker_core, 0);
-    uint32_t writer_sem_id = CreateSemaphore(program, writer_core, 0);
-
-    std::vector<uint32_t> locker_args = {
-        locker_buffer_addr, num_elements, locker_sem_id, writer_sem_id, writer_virtual_core.x, writer_virtual_core.y};
-
-    KernelHandle locker_kernel = CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_test_kernel.cpp",
-        locker_core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0});
-
-    SetRuntimeArgs(program, locker_kernel, locker_core, locker_args);
-
-    std::vector<uint32_t> writer_args = {
-        writer_buffer_addr,
-        num_elements,
-        locker_virtual_core.x,
-        locker_virtual_core.y,
-        locker_buffer_addr,
-        writer_sem_id,
-        locker_sem_id,
-        locker_virtual_core.x,
-        locker_virtual_core.y};
-
-    std::map<std::string, std::string> writer_defines;
+    KernelSpec::CompilerOptions::Defines writer_defines;
     if (use_trid) {
         writer_defines["USE_TRID"] = "1";
     }
 
-    KernelHandle writer_kernel = CreateKernel(
-        program,
+    const LockerWriterResult result = run_locker_against_writer(
+        fixture,
+        mesh_device,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_stateful_writer_kernel.cpp",
-        writer_core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0, .defines = writer_defines});
+        writer_defines,
+        locker_buffer_addr,
+        writer_buffer_addr,
+        num_elements);
 
-    SetRuntimeArgs(program, writer_kernel, writer_core, writer_args);
-
-    workload.add_program(device_range, std::move(program));
-
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
-    distributed::Finish(mesh_device->mesh_command_queue());
-
-    ReadMeshDeviceProfilerResults(*mesh_device);
-
-    std::vector<NOCDebugIssueType> locked_issues;
-    for (auto device_id : mesh_device->get_device_ids()) {
-        auto issues = fixture->get_write_to_locked_issues(device_id, writer_virtual_core, 0);
-        locked_issues.insert(locked_issues.end(), issues.begin(), issues.end());
-    }
-    ASSERT_FALSE(locked_issues.empty())
+    ASSERT_FALSE(result.locked_issues.empty())
         << "Expected a write-to-locked-buffer issue for a stateful write into the locked region. Either the "
            "set-state event was not captured or the destination was not reconstructed from it.";
 
     uint32_t expected_write_size = num_elements * sizeof(uint32_t);
-    for (const auto& issue : locked_issues) {
+    for (const auto& issue : result.locked_issues) {
         EXPECT_EQ(issue.base_type, NOCDebugIssueBaseType::WRITE_TO_LOCKED_CORE_LOCAL_MEM);
         // The address travels on the write event itself (the set-state only carries the base/coords).
         EXPECT_EQ(issue.issue_address, locker_buffer_addr)
             << "captured destination address does not match the address the kernel wrote to";
         // For the non-trid variant the size comes from the set-state; for the trid variant from the write event.
         EXPECT_EQ(issue.issue_size, expected_write_size);
-        EXPECT_EQ(issue.src_x, writer_virtual_core.x);
-        EXPECT_EQ(issue.src_y, writer_virtual_core.y);
+        EXPECT_EQ(issue.src_x, result.writer_virtual_core.x);
+        EXPECT_EQ(issue.src_y, result.writer_virtual_core.y);
         // The critical assertion: the destination core came from the set-state, not the (0,0) placeholder.
-        EXPECT_EQ(issue.dst_x, locker_virtual_core.x)
+        EXPECT_EQ(issue.dst_x, result.locker_virtual_core.x)
             << "destination core was not reconstructed from the set-state event";
-        EXPECT_EQ(issue.dst_y, locker_virtual_core.y)
+        EXPECT_EQ(issue.dst_y, result.locker_virtual_core.y)
             << "destination core was not reconstructed from the set-state event";
     }
 }
@@ -2085,14 +1917,6 @@ TEST_F(NOCDebuggingFixture, ScopedLockStatefulWriteLargeDestinationAddressRecord
             GTEST_SKIP() << "Test requires at least 2 cores in x dimension";
         }
 
-        const CoreCoord locker_core = {0, 0};
-        const CoreCoord writer_core = {1, 0};
-        Program program = CreateProgram(*mesh_device);
-        distributed::MeshWorkload workload;
-
-        auto zero_coord = distributed::MeshCoordinate(0, 0);
-        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-
         auto& mc = MetalContext::instance();
         uint32_t unreserved_addr =
             mc.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
@@ -2106,69 +1930,29 @@ TEST_F(NOCDebuggingFixture, ScopedLockStatefulWriteLargeDestinationAddressRecord
         uint32_t writer_buffer_addr = unreserved_addr;  // the source stays an ordinary L1 address
         uint32_t num_elements = 8;
 
-        auto locker_virtual_core = mesh_device->worker_core_from_logical_core(locker_core);
-        auto writer_virtual_core = mesh_device->worker_core_from_logical_core(writer_core);
-
-        uint32_t locker_sem_id = CreateSemaphore(program, locker_core, 0);
-        uint32_t writer_sem_id = CreateSemaphore(program, writer_core, 0);
-
         // The locker "locks" the large region. scoped_lock only records an event, so no memory is touched.
-        std::vector<uint32_t> locker_args = {
-            large_dst_addr, num_elements, locker_sem_id, writer_sem_id, writer_virtual_core.x, writer_virtual_core.y};
-
-        KernelHandle locker_kernel = CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_test_kernel.cpp",
-            locker_core,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0});
-
-        SetRuntimeArgs(program, locker_kernel, locker_core, locker_args);
-
-        std::vector<uint32_t> writer_args = {
-            writer_buffer_addr,
-            num_elements,
-            locker_virtual_core.x,
-            locker_virtual_core.y,
-            large_dst_addr,
-            writer_sem_id,
-            locker_sem_id,
-            locker_virtual_core.x,
-            locker_virtual_core.y};
-
-        KernelHandle writer_kernel = CreateKernel(
-            program,
+        const LockerWriterResult result = run_locker_against_writer(
+            this,
+            mesh_device,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_stateful_writer_kernel.cpp",
-            writer_core,
-            DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0, .defines = {{"USE_POSTED", "1"}}});
+            /*writer_defines=*/{{"USE_POSTED", "1"}},
+            large_dst_addr,
+            writer_buffer_addr,
+            num_elements);
 
-        SetRuntimeArgs(program, writer_kernel, writer_core, writer_args);
-
-        workload.add_program(device_range, std::move(program));
-
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
-        distributed::Finish(mesh_device->mesh_command_queue());
-
-        ReadMeshDeviceProfilerResults(*mesh_device);
-
-        std::vector<NOCDebugIssueType> locked_issues;
-        for (auto device_id : mesh_device->get_device_ids()) {
-            auto issues = this->get_write_to_locked_issues(device_id, writer_virtual_core, 0);
-            locked_issues.insert(locked_issues.end(), issues.begin(), issues.end());
-        }
         // Fails today: the recorded write address is truncated to its low 24 bits and the recorded lock address is
         // capped at 0xFFFFFF, so the two no longer overlap and no violation is reported at all.
-        ASSERT_FALSE(locked_issues.empty())
+        ASSERT_FALSE(result.locked_issues.empty())
             << "No write-to-locked issue reported for a large destination address. Expected while the event "
                "encoding truncates addresses to 24 bits; see the comment above this test.";
 
-        for (const auto& issue : locked_issues) {
+        for (const auto& issue : result.locked_issues) {
             // The assertion that matters: the address must survive the round trip to the host unchanged.
             EXPECT_EQ(issue.issue_address, large_dst_addr)
                 << "host recorded 0x" << std::hex << issue.issue_address << " but the kernel wrote to 0x"
                 << large_dst_addr << "; the destination address did not survive the event encoding";
-            EXPECT_EQ(issue.dst_x, locker_virtual_core.x);
-            EXPECT_EQ(issue.dst_y, locker_virtual_core.y);
+            EXPECT_EQ(issue.dst_x, result.locker_virtual_core.x);
+            EXPECT_EQ(issue.dst_y, result.locker_virtual_core.y);
         }
     }
 }

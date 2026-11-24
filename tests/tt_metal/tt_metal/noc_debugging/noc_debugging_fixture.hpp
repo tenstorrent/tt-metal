@@ -13,7 +13,14 @@
 #include <impl/context/metal_context.hpp>
 #include <impl/debug/noc_debugging.hpp>
 #include "llrt/get_platform_architecture.hpp"
+#include <tt-metalium/workload/specification/data_movement_hardware_config.hpp>
 namespace tt::tt_metal {
+
+inline DataMovementHardwareConfig make_data_movement_config(DataMovementProcessor processor, NOC noc) {
+    return DataMovementHardwareConfig{
+        .config_1xx = DataMovementHardwareConfig::DataMovement1XXConfig{.processor = processor, .noc = noc},
+    };
+}
 
 class NOCDebuggingFixture : public MeshDispatchFixture {
 public:
