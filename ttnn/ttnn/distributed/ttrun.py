@@ -454,6 +454,9 @@ class LaunchedJob:
                 try:
                     self._pidfds[pid] = os.pidfd_open(pid)
                 except ProcessLookupError:
+                    # Already exited and reaped: the kernel opens no pidfd (ESRCH), so it is skipped quietly. No
+                    # liveness check is made first, since the open is that check, atomically; a zombie never gets here
+                    # because _survivors leaves zombies out.
                     continue
                 except OSError as e:
                     self._unwatchable.add(pid)
