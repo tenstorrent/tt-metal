@@ -20,7 +20,6 @@ resize, never shrunk to fit. `tests/test_image_prep.py` checks the rest bit for 
 from __future__ import annotations
 
 import math
-import warnings
 from typing import NamedTuple
 
 import numpy as np
@@ -120,15 +119,11 @@ def pixels_to_patches(pixels: np.ndarray, config: MoonViTConfig) -> tuple[torch.
     grid_thws = torch.tensor([[1, h, w]], dtype=torch.int64)
     p = config.patch_size
 
-    # HF divides by 255 in float64, then casts to float32. Dividing in float32 gives the same value for all 256
-    # inputs (test_image_prep checks), and lets the normalization run in place on one permuted copy.
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", UserWarning)  # a read-only array: it is only read
-        image = torch.from_numpy(pixels)
-    x = torch.empty((h, w, 3, p, p), dtype=torch.float32)
-    x.copy_(image.view(h, p, w, p, 3).permute(0, 2, 4, 1, 3))
-    x.div_(255.0).sub_(IMAGE_MEAN).mul_(1.0 / IMAGE_STD)
-    return x.view(h * w, 3, p, p), grid_thws
+    x = (pixels / 255.0).astype(np.float32)
+    x -= IMAGE_MEAN
+    x *= 1.0 / IMAGE_STD
+    x = x.reshape(h, p, w, p, 3).transpose(0, 2, 4, 1, 3).reshape(-1, 3, p, p)
+    return torch.from_numpy(x), grid_thws
 
 
 def image_to_patches(image: Image.Image, config: MoonViTConfig) -> tuple[torch.Tensor, torch.Tensor]:

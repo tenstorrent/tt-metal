@@ -143,6 +143,13 @@ def test_host_fill_matches_prepare_host_inputs(config, fill_weight, h, w):
         assert torch.equal(from_values, want), f"patch_values_into, {dtype}"
     pos = host_fill.PosEmbedTable(fill_weight, config).window_rows(h, w)
     assert torch.equal(pos, expected["pos_emb"][:n])
+    # The checkpoint loads bf16: it must take the batched path too, with the same values.
+    bf16 = fill_weight.to(torch.bfloat16)
+    table = host_fill.PosEmbedTable(bf16, config)
+    want = host_prep.to_window_order(
+        host_prep.pos_embeds(bf16, h, w, config.pos_emb_interpolation_mode), h, w, config.merge_kernel_size
+    )
+    assert table.batch is not None and torch.equal(table.window_rows(h, w), want.float())
     cos, sin = host_fill.rope_window_rows(config, h, w)
     assert torch.equal(cos, expected["cos"][:n]) and torch.equal(sin, expected["sin"][:n])
 

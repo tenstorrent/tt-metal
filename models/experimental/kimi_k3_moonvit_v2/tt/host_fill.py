@@ -125,7 +125,9 @@ class PosEmbedTable:
         # takes its channels-last kernel, which runs on one thread. Here the channels are cut into chunks that form
         # a batch, (C / chunk, chunk, H, W), channels-last: the same kernel and the same per-element arithmetic, but
         # torch spreads the batch over its threads.
-        batched = weight.is_contiguous() and weight.dtype == torch.float32 and hidden % POS_EMB_CHUNK == 0
+        batched = (
+            weight.is_contiguous() and weight.dtype in (torch.float32, torch.bfloat16) and hidden % POS_EMB_CHUNK == 0
+        )
         self.batch = (
             weight.view(height, width, hidden // POS_EMB_CHUNK, POS_EMB_CHUNK)
             .permute(2, 3, 0, 1)

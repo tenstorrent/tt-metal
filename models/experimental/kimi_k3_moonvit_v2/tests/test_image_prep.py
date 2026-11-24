@@ -168,17 +168,6 @@ def test_image_to_patches_matches_hf(config, processor, size):
     assert pixel_values.dtype == hf_pixel_values.dtype and torch.equal(pixel_values, hf_pixel_values)
 
 
-def test_normalization_matches_hf_for_every_value(config):
-    """pixels_to_patches normalizes in float32 where HF divides in float64 and casts: the same for all 256 values."""
-    pixels = np.resize(np.arange(256, dtype=np.uint8), (56, 56, 3))  # every value, repeated
-    expected = (pixels / 255.0).astype(np.float32)
-    expected -= image_prep.IMAGE_MEAN
-    expected *= 1.0 / image_prep.IMAGE_STD
-    pixel_values, _ = image_prep.pixels_to_patches(pixels, config)
-    raster = pixel_values.reshape(4, 4, 3, 14, 14).permute(0, 3, 1, 4, 2).reshape(56, 56, 3)
-    assert torch.equal(raster, torch.from_numpy(expected))
-
-
 @pytest.mark.parametrize("size", SIZES, ids=[f"{w}x{h}" for w, h in SIZES])
 def test_resize_array_matches_resize_image(config, size):
     image = random_image(*size)
