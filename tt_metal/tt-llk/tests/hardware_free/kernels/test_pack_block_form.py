@@ -413,15 +413,24 @@ def test_fpu_op_inits_set_the_pack_math_context():
         r"custom_mm|compressed_mm|matmul_block_math_dynamic_throttle|matmul_block_init_llk|matmul_fe_runtime_tile_form"
     )
     missing = []
-    for path, name, body in _api_functions(
-        API.parent.parent.parent.parent.parent / "inc/api/compute"
-    ):
+    functions = list(
+        _api_functions(API.parent.parent.parent.parent.parent / "inc/api/compute")
+    )
+    # an API function that also calls one which marks the context (on every path the pack thread compiles) is marked
+    marks = {
+        flag: {n for _, n, b in functions if f"PACK_MATH_CONTEXT({flag});" in b}
+        for flag in ("true", "false")
+    }
+    for path, name, body in functions:
         inits = fpu.findall(body)
         if not inits or "uninit" in name or custom_mm.search(name):
             continue
-        matmul = any("matmul" in x for x in inits)
-        if f"PACK_MATH_CONTEXT({'true' if matmul else 'false'});" not in body:
-            missing.append(f"{path}:{name}")
+        flag = "true" if any("matmul" in x for x in inits) else "false"
+        if f"PACK_MATH_CONTEXT({flag});" in body or any(
+            re.search(rf"\b{re.escape(n)}\s*[<(]", body) for n in marks[flag] - {name}
+        ):
+            continue
+        missing.append(f"{path}:{name}")
     assert not missing, missing
 
 
