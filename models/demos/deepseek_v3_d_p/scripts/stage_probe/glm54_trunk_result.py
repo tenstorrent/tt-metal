@@ -5,7 +5,8 @@
     python glm54_trunk_result.py <trunk.json> <glm53_stage_ref.json> <run_dir> [<run_dir> ...]
 
 Adds to <trunk.json>, in place:
-  checks.<run>      every run's trunk_probe_runner lines: the pass-2 push-reuse verdict and the KVPE digests (finite)
+  checks.<run>      every run's trunk_probe_runner lines: the pass-2 push-reuse verdict, the MTP input verdict (MTP
+                    runs only), and the KVPE digests (finite)
   determinism       whether every run logged the same digest per chunk label (bit-identical KV across runs)
   repeat_spread     per stage and probe, the largest minus smallest period_ms over the runs' splits
   verdict           per probe: GLM-5.4 slowest stage period_ms (first run) vs the GLM-5.3 reference's slowest stage
@@ -20,7 +21,8 @@ import sys
 from pathlib import Path
 
 THRESHOLD = 1.54
-_REUSE = re.compile(r"TRUNK_ASSERT push_reuse (PASS|FAIL): (.*)$", re.M)
+_REUSE = re.compile(r"TRUNK_ASSERT push_reuse (PASS|FAIL|N/A): (.*)$", re.M)
+_MTP_INPUT = re.compile(r"TRUNK_ASSERT mtp_input (PASS|FAIL|N/A): (.*)$", re.M)
 _DIGEST = re.compile(r"TRUNK_KV_DIGEST chunk=(\w+) sha256=(\w+) finite=(\w+) nonzero_rows=(\d+) rows=(\d+)")
 _DIGEST_FAIL = re.compile(r"TRUNK_KV_DIGEST chunk=(\w+) failed: (.*)$", re.M)
 
@@ -28,6 +30,7 @@ _DIGEST_FAIL = re.compile(r"TRUNK_KV_DIGEST chunk=(\w+) failed: (.*)$", re.M)
 def run_checks(run_dir: Path) -> dict:
     text = (run_dir / "runner.log").read_text(errors="replace")
     reuse = _REUSE.search(text)
+    mtp_input = _MTP_INPUT.search(text)
     digests = {
         m.group(1): {
             "sha256": m.group(2),
@@ -40,6 +43,9 @@ def run_checks(run_dir: Path) -> dict:
     failed = {m.group(1): m.group(2).strip() for m in _DIGEST_FAIL.finditer(text)}
     return {
         "push_reuse": {"verdict": reuse.group(1), "detail": reuse.group(2).strip()} if reuse else "not logged",
+        "mtp_input": {"verdict": mtp_input.group(1), "detail": mtp_input.group(2).strip()}
+        if mtp_input
+        else "not logged",
         "kv_digest": digests,
         "kv_digest_failed": failed,
         "finite": bool(digests) and not failed and all(d["finite"] for d in digests.values()),

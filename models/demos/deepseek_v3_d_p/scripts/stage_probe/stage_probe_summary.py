@@ -11,7 +11,9 @@
 A stage is layers [first, last] of a run (default: all of the run's layers). For a GLM-5.4 run (command.txt
 probe_model=glm54) [first, last] are layer PASS positions of the 106-pass schedule (pass_schedule.py), and a chunk's
 acks are put in pass order from their ack ids (a loop pass-2 layer L acks as L + 78), so the whole trunk's stages are
-G0 0-25, G1 26-53, G2 54-81, G3 82-105. Every ack time is the producer's
+G0 0-25, G1 26-53, G2 54-81, G3 82-105. A run's MTP rows (ids 78.. past the model's layers, PREFILL_MTP_LEVELS on the
+last rank; decode levels included) follow its last pass as positions 106.. (e.g. G3 with MTP = 82-109 at 4 rows); a
+stage given without a last position runs to the run's last ack, MTP rows included. Every ack time is the producer's
 clock (time.perf_counter in one process) from the CHUNK_RETIRE lines; a chunk retires on its last ack. Per probe
 chunk d (the CI's probe chunks 0, 9, 19, 50, 101, 203 = 5k, 50k, 100k, 255k, 510k, 1020k tokens prefilled through
 that chunk) a stage reports:
@@ -77,8 +79,14 @@ def read_run(run_dir: Path) -> dict:
         if ack_ids is None:  # GLM-5.3: ascending id (older stage-alone runs ack under rank-local ids 0..)
             order = sorted(acks)
         else:
-            assert sorted(acks) == sorted(ack_ids), f"{run_dir}: chunk {m.group(2)} acks {sorted(acks)} != {ack_ids}"
-            order = ack_ids
+            # MTP rows: the ids right past the model's last layer (only a stage ending on it runs MTP), in id order
+            # after the last pass.
+            extra = sorted(set(acks) - set(ack_ids))
+            mtp_base = max(layer for layer, _ in passes) + 1
+            assert sorted(acks) == sorted(ack_ids + extra) and extra == list(
+                range(mtp_base, mtp_base + len(extra))
+            ), f"{run_dir}: chunk {m.group(2)} acks {sorted(acks)} != {ack_ids} + MTP rows {mtp_base}.."
+            order = ack_ids + extra
         # Absolute ms on the producer clock: first is the chunk's first ack, the layers are ms after it. In pass order.
         first_ms = float(m.group(4)) * 1000.0
         chunks.append({"start": int(m.group(2)), "acks": [first_ms + acks[i] for i in order]})
@@ -140,8 +148,9 @@ def composed(stages: dict) -> dict:
 
 
 def fit_layer_types(run: dict, first: int, last: int, chunk_ids) -> dict:
-    """Per layer type cost P[ffn] + Q[attn] (ms) from the ack deltas of positions [first, last]."""
+    """Per layer type cost P[ffn] + Q[attn] (ms) from the ack deltas of positions [first, last] (MTP rows excluded)."""
     passes = run["passes"]
+    last = min(last, run["first_layer"] + len(passes) - 1)
     rows, ys, gates = [], [], {}
     for c in (run["chunks"][i] for i in chunk_ids if i < len(run["chunks"])):
         for pos in range(first, last):

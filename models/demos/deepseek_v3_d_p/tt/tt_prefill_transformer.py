@@ -80,6 +80,28 @@ def rank_loads_embedding(is_first_rank: bool, is_last_rank: bool, mtp_levels: in
     return bool(is_first_rank or (mtp_levels and is_last_rank))
 
 
+def stage_pass2_layers(config, first_layer_idx: int, num_layers: int, loop_passes: Optional[tuple]) -> list:
+    """The GLM-5.4 loop layers this stage (layers [first_layer_idx, first_layer_idx + num_layers), ``loop_passes``)
+    runs in loop pass 2 (two-bank attention, A2-A6): all of its loop layers when it runs pass 2 (every pass, or G2),
+    else none."""
+    if not runs_later_loop_pass(loop_passes):
+        return []
+    return [i for i in loop_pass2_layers(config) if first_layer_idx <= i < first_layer_idx + num_layers]
+
+
+def stage_kv_cache_seq_len(
+    config, first_layer_idx: int, num_layers: int, loop_passes: Optional[tuple], max_seq_len, chunk_size: int
+):
+    """KVPE positions per cache slot of a stage: ``max_seq_len``, plus pass 2's window ring past every slot's pass-1
+    positions when the stage runs a loop layer in pass 2 (``pass2_kv_cache_seq_len``; the cache allocator sizes the
+    slots alike, ``kv_cache_slot_rows``). Every block that addresses the stage's KVPE cache is built with it, the MTP
+    block included: its slot past the trunk's has the same length."""
+    if stage_pass2_layers(config, first_layer_idx, num_layers, loop_passes):
+        assert max_seq_len is not None, "loop pass 2 runs chunked over a max_seq_len cache"
+        return pass2_kv_cache_seq_len(max_seq_len, chunk_size)
+    return max_seq_len
+
+
 class TtPrefillTransformer(LightweightModule):
     """
     Multi-layer prefill transformer for DeepSeek V3.
@@ -285,16 +307,11 @@ class TtPrefillTransformer(LightweightModule):
         # in a ring past each cache slot's pass-1 positions, so the KVPE cache holds kv_cache_seq_len positions per
         # slot; allocate it (and the index cache) with that (pass2_kv_cache_seq_len).
         self._model_config = model_config
-        self._pass2_layers = [
-            i
-            for i in loop_pass2_layers(config)
-            if runs_later_loop_pass(self._loop_passes) and first_layer_idx <= i < first_layer_idx + num_layers
-        ]
-        if self._pass2_layers:
-            assert is_chunked and max_seq_len is not None, "loop pass 2 runs chunked over a max_seq_len cache"
-            self.kv_cache_seq_len = pass2_kv_cache_seq_len(max_seq_len, seq_len)
-        else:
-            self.kv_cache_seq_len = max_seq_len
+        self._pass2_layers = stage_pass2_layers(config, first_layer_idx, num_layers, self._loop_passes)
+        assert not self._pass2_layers or is_chunked, "loop pass 2 runs chunked over a max_seq_len cache"
+        self.kv_cache_seq_len = stage_kv_cache_seq_len(
+            config, first_layer_idx, num_layers, self._loop_passes, max_seq_len, seq_len
+        )
 
         # --- Transformer layers ---
         # layer_idx is the GLOBAL index (drives weight cache keys + dense/MoE selection);
@@ -473,6 +490,11 @@ class TtPrefillTransformer(LightweightModule):
                     "slot short. Call enable_mtp_indexer_slot(config, layer_idx) before building the "
                     "predictor -- on a COPY, since config_only is lru_cached and this mutates."
                 )
+            mtp_rows = getattr(mtp_predictor.module.layer.mla, "max_seq_len", None)
+            assert not is_chunked or mtp_rows in (None, self.kv_cache_seq_len), (
+                f"the MTP block addresses {mtp_rows} positions per KVPE slot but the stage's slots hold "
+                f"{self.kv_cache_seq_len}; build the predictor with max_seq_len=stage_kv_cache_seq_len(...)"
+            )
             mtp_stride = getattr(mtp_predictor.module.layer.mla, "layer_num", None)
             assert mtp_stride in (None, self.num_kvpe_cache_layers), (
                 f"the MTP block strides users by {mtp_stride} but the trunk blocks stride by "
