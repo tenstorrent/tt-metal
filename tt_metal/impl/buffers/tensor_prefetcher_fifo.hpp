@@ -22,9 +22,16 @@ namespace tt::tt_metal::tensor_prefetcher_fifo {
 
 inline constexpr uint32_t kLineBytes = 64;
 
-// The most Tensor prefetcher kernels a dispatch engine runs: it has 8 data-movement cores, and the kernels of
-// the one CQ it serves take 3.
-inline constexpr uint32_t kMaxKernels = 5;
+// The most Tensor prefetcher kernels a dispatch engine runs, beside the command-queue kernels. Each has a read
+// pointer in the control block (fifo_rd_offset), so this sizes it: the reader and pusher in
+// tensor_prefetcher_kernels(), and room for two more kernels.
+inline constexpr uint32_t kMaxKernels = 4;
+
+// The NoC transaction ids the Tensor prefetcher kernels share (dispatch_noc_trids.hpp places them). Each kernel in
+// tensor_prefetcher_kernels() takes as many as it names, and together they fit in these: the reader and pusher take
+// 10, which leaves 2 for another kernel. Kept small: the command-queue kernels on the same dispatch engine take
+// theirs from the same ids.
+inline constexpr uint32_t kMaxTrids = 12;
 
 // Control block, one word per line.
 // Non-zero tells every kernel to exit. Written by the host when fast dispatch tears down.
@@ -80,8 +87,9 @@ static_assert(
 // Where a slot's request pages start.
 inline constexpr uint32_t kSlotPagesOffset = kSlotHeaderBytes + kSlotPlanBytes;
 
-// Per-receiver progress between the reader and the pusher: blocks staged by the reader, and blocks pushed
-// (so their stage slots are free again) by the pusher. One monotonic word per line, one writer each.
+// Per-receiver progress between the reader and the pusher, in bytes of the receiver's share of the stage ring:
+// bytes the reader has staged, and bytes the pusher has pushed (so the reader may stage into them again). One
+// monotonic word per line, one writer each.
 inline constexpr uint32_t kMaxReceivers = 32;
 
 // Sender config pages of the endpoints' pipes. A bank's one endpoint serves all of its receivers, so a page
@@ -94,16 +102,16 @@ inline constexpr uint32_t kSenderStatePageBytes =
     ((10 + 2 * kMaxReceivers) * 4 + kLineBytes - 1) / kLineBytes * kLineBytes + 2 * kMaxReceivers * 4 * 16;
 inline constexpr uint32_t kSenderStateBytesPerEndpoint = 2 * kSenderStatePageBytes;
 
-// The stage ring is split evenly between a request's receivers, kStageSlotsPerReceiver slots each, so the
-// reader can keep reading for every receiver whichever one the pusher is waiting on. One slot per receiver
-// is the minimum that cannot deadlock; the second overlaps a read with a push. Slot size depends on the
-// receiver count alone, not on the block size, so the reader stages the next tensor or request while the
-// pusher is still sending the last; it waits for the pusher to empty the ring only when the receiver count
-// changes.
-inline constexpr uint32_t kStageSlotsPerReceiver = 2;
-// The smallest stage ring the kernels are run with: both stage slots of every receiver a slot can name,
-// at 1 KiB per block.
-inline constexpr uint32_t kMinStageRingBytes = kMaxReceivers * kStageSlotsPerReceiver * 1024;
+// The stage ring is split evenly between a request's receivers. Each receiver's share holds its blocks back to back,
+// as many as fit, so the reader keeps reading for every receiver whichever one the pusher is waiting on, and
+// smaller blocks keep more reads in flight. A block that would run past the end of a share starts again at its
+// start, and the bytes it skips count as staged until the pusher has sent it. A share's size depends on the
+// receiver count alone, not on the block size, so the reader stages the next tensor or request while the pusher is
+// still sending the last; it waits for the pusher to empty the ring only when the receiver count changes. A block
+// takes at most half a share, so an empty share always has room for the next one, wherever the last one ended.
+//
+// The smallest stage ring the kernels are run with: a 2 KiB share for every receiver a slot can name.
+inline constexpr uint32_t kMinStageRingBytes = kMaxReceivers * 2 * 1024;
 
 enum SlotCommand : uint32_t {
     // Retired by every kernel with no other effect. Lets the host check that the FIFO is serviced.
@@ -155,13 +163,20 @@ struct RegionLayout {
 };
 static_assert(RegionLayout{kMaxLanes}.slot_bytes() % kLineBytes == 0, "FIFO slots must be whole cache lines");
 
-// Bytes of one stage slot when a ring of `ring_bytes` serves `num_receivers` receivers, whole cache lines.
-// A block must fit in one slot.
-constexpr uint32_t stage_slot_bytes(uint32_t ring_bytes, uint32_t num_receivers) {
-    return ring_bytes / (num_receivers * kStageSlotsPerReceiver) / kLineBytes * kLineBytes;
+// Bytes of each receiver's share of a stage ring of `ring_bytes` serving `num_receivers` receivers, whole cache lines.
+constexpr uint32_t stage_share_bytes(uint32_t ring_bytes, uint32_t num_receivers) {
+    return ring_bytes / num_receivers / kLineBytes * kLineBytes;
 }
-// The kernels run only where the ring holds kMinStageRingBytes, and the host caps a request at
-// kMaxReceivers, so no stage slot is smaller than this.
-static_assert(stage_slot_bytes(kMinStageRingBytes, kMaxReceivers) == 1024, "The smallest stage slot is 1 KiB");
+// The bytes a block of `block_bytes` takes in a share: whole cache lines, so every block starts on one.
+constexpr uint32_t stage_block_footprint(uint32_t block_bytes) {
+    return (block_bytes + kLineBytes - 1) / kLineBytes * kLineBytes;
+}
+// The largest block shares of `share_bytes` stage: its footprint is at most half a share.
+constexpr uint32_t max_stage_block_bytes(uint32_t share_bytes) { return share_bytes / 2 / kLineBytes * kLineBytes; }
+// The kernels run only where the ring holds kMinStageRingBytes, and the host caps a request at kMaxReceivers, so
+// every share stages blocks of this size.
+static_assert(
+    max_stage_block_bytes(stage_share_bytes(kMinStageRingBytes, kMaxReceivers)) == 1024,
+    "The smallest share stages 1 KiB blocks");
 
 }  // namespace tt::tt_metal::tensor_prefetcher_fifo

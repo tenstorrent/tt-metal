@@ -4,9 +4,8 @@
 
 #pragma once
 
-#include <cstdint>
-#include <ostream>
-#include <utility>
+// DEPRECATED-FORWARDING-HEADER: <tt-metalium/tensor/tensor_types.hpp> moved to <tt-metalium/memory/tensor/tensor_types.hpp>.
+// This header only forwards to the new location; it is deprecated, with a warning and a removal date, in a follow-up change.
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -115,3 +114,4 @@ template <>
 struct fmt::formatter<tt::tt_metal::DataType> : fmt::formatter<string_view> {
     auto format(tt::tt_metal::DataType dt, format_context& ctx) const -> format_context::iterator;
 };
+#include <tt-metalium/memory/tensor/tensor_types.hpp>  // IWYU pragma: export

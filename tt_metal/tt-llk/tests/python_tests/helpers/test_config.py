@@ -132,6 +132,8 @@ CODE_SHIFT_FLAG = "-Wl,--defsym=__llk_code_shift="
 
 class TestConfig:
 
+    CODE_SHIFT: ClassVar[int] = LLK_CODE_SHIFT
+
     # === STATIC VARIABLES ===
 
     # Architecture Selection
@@ -140,9 +142,7 @@ class TestConfig:
     ARCH_DEFINE: ClassVar[str]
     ARCH_LLK_ROOT: ClassVar[str]
     ARCH: ClassVar[str]
-    QUASAR_VECTOR_MARCH: ClassVar[str] = (
-        "-march=rv32im_zmmul_zaamo_zve32f_zvl128b_xtttensixqsr_xttzbkb"
-    )
+    QUASAR_VECTOR_MCPU: ClassVar[str] = "-mcpu=tt-qsr32-vector-tensix"
     CHIP_ARCH: ClassVar[ChipArchitecture]
     DATA_FORMAT_ENUM: ClassVar[dict]
 
@@ -1356,6 +1356,7 @@ class TestConfig:
         NON_COMPILATION_ARGUMENTS = [
             "run_configs",
             "variant_id",
+            "unshifted_variant_id",
             # runtime_arguments_struct stays in: build.h compiles the RuntimeParams layout in, so two
             # variants that order their runtimes differently need different ELFs.
             "runtime_format",
@@ -1451,11 +1452,17 @@ class TestConfig:
             if TestConfig.ENABLE_PERF_COUNTERS
             else []
         )
-        self.variant_id = sha256(
-            str(
-                " | ".join(temp_str + ["<<search-dirs>>"] + search_dirs + build_modes)
-            ).encode()
-        ).hexdigest()
+        parts = temp_str + ["<<search-dirs>>"] + search_dirs + build_modes
+        self.unshifted_variant_id = sha256(str(" | ".join(parts)).encode()).hexdigest()
+        self.variant_id = (
+            sha256(
+                str(
+                    " | ".join(parts + [f"<<code-shift>>{TestConfig.CODE_SHIFT}"])
+                ).encode()
+            ).hexdigest()
+            if TestConfig.CODE_SHIFT
+            else self.unshifted_variant_id
+        )
 
     def resolve_shared_compile_options(self) -> tuple[str, str, str]:
         """Flags for brisc/coverage. Process-wide ``INCLUDES`` only.
@@ -1835,7 +1842,9 @@ class TestConfig:
         head = compile_command[: compile_command.index("-x")]
         root = str(TestConfig.ARTEFACTS_DIR)
         key = [
-            token.replace(root, "<artefacts>")
+            token.replace(root, "<artefacts>").replace(
+                self.variant_id, self.unshifted_variant_id
+            )
             for token in head
             if not token.startswith(CODE_SHIFT_FLAG)
         ]
@@ -1919,7 +1928,7 @@ class TestConfig:
                 # Only TRISC0 has the vector unit on Quasar. The flag is after
                 # ARCH_COMPUTE so it overrides the march implied by -mcpu.
                 if self.requires_vector_ext and name == "unpack":
-                    optional_kernel_flags += f" {TestConfig.QUASAR_VECTOR_MARCH}"
+                    optional_kernel_flags += f" {TestConfig.QUASAR_VECTOR_MCPU}"
 
                 # Only counters on compiles counter code, with its L1 selection (mux group on tt-1xx, l1_client
                 # event on Quasar); counters off keeps each zone's rendezvous alone (counters.h).
@@ -1981,7 +1990,11 @@ class TestConfig:
                         f"-T{TestConfig.LINKER_SCRIPTS / name}.ld",
                         f"-T{TestConfig.LINKER_SCRIPTS / 'sections.ld'}",
                     ],
-                    ([f"{CODE_SHIFT_FLAG}{LLK_CODE_SHIFT}"] if LLK_CODE_SHIFT else []),
+                    (
+                        [f"{CODE_SHIFT_FLAG}{TestConfig.CODE_SHIFT}"]
+                        if TestConfig.CODE_SHIFT
+                        else []
+                    ),
                     # -lgcc pulls in libgcc soft-float/integer helpers (e.g. __mulsf3)
                     # that -nostdlib drops; only referenced helpers are linked.
                     ["-x", "c++", "-", "-lc", "-lgcc", "-o"],
@@ -2348,10 +2361,11 @@ class TestConfig:
             TestConfig.TENSIX_LOCATION,
         )
 
-        logger.debug(
-            "ELF directory: {}",
-            TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf",
-        )
+        elf_dir = TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"
+        logger.debug("ELF directory: {}", elf_dir)
+
+        if TestConfig.BUILD_MODE == BuildMode.CONSUME and not elf_dir.is_dir():
+            pytest.skip("no ELFs: the compile session did not reach this test")
 
         if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
             pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
