@@ -52,6 +52,9 @@ struct SDPAProgramConfig {
     // With const_k_tile_col: that tile column is not stored. K is 32 columns narrower than Q and the reader writes
     // the column itself, every row [1, 0 x 31]. The output is the same as with those rows stored in K.
     bool unit_k_tile_col = false;
+    // Flash MLA decode with its own V tensor (non-paged K and V, which may differ in dtype): V's last tile column is
+    // not stored. V is 32 columns narrower than head_dim_v and the reader writes the column, every row [1, 0 x 31].
+    bool unit_v_tile_col = false;
 };
 
 // Paired geometry for an HMA-shared paged K/V cache (chunked prefill SDPA and

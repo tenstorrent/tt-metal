@@ -427,9 +427,15 @@ void kernel_main() {
             uint32_t k_start_tile_id = k_batch_offset + k_head_offset + k_chunk_offset;
 
             // V has its own layout when it's an independent tensor (width = vDHt, not DHt)
-            const uint32_t v_batch_offset = ((cur_batch / q_heads_parallel_factor) % Bkv) * num_kv_heads * St * vDHt;
-            const uint32_t v_head_offset = cur_head * St * vDHt;
-            const uint32_t v_chunk_offset = k_chunk_start * Sk_chunk_t_dynamic * vDHt;
+#ifdef SDPA_DECODE_V_UNIT_COL
+            constexpr uint32_t v_mem_cols = vDHt - 1;  // tile columns of the V tensor: the reader writes the last
+#else
+            constexpr uint32_t v_mem_cols = vDHt;
+#endif
+            const uint32_t v_batch_offset =
+                ((cur_batch / q_heads_parallel_factor) % Bkv) * num_kv_heads * St * v_mem_cols;
+            const uint32_t v_head_offset = cur_head * St * v_mem_cols;
+            const uint32_t v_chunk_offset = k_chunk_start * Sk_chunk_t_dynamic * v_mem_cols;
             uint32_t v_start_tile_id = v_batch_offset + v_head_offset + v_chunk_offset;
 
             read_kv_mask_chunks<

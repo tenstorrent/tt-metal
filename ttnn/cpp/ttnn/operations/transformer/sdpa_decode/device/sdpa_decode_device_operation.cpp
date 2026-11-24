@@ -63,7 +63,11 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
             "unit_k_tile_col needs flash MLA decode (V read from K) and const_k_tile_col");
         k_shape[3] += tt::constants::TILE_WIDTH;  // the column the reader writes
     }
-    const auto v_shape = input_tensors.size() > 2 ? input_tensors.at(2).padded_shape() : k_shape;
+    auto v_shape = input_tensors.size() > 2 ? input_tensors.at(2).padded_shape() : k_shape;
+    if (operation_attributes.program_config.has_value() && operation_attributes.program_config->unit_v_tile_col) {
+        TT_FATAL(use_mla && tensor_args.v.has_value(), "unit_v_tile_col needs flash MLA decode with a V tensor");
+        v_shape[3] += tt::constants::TILE_WIDTH;  // the column the reader writes
+    }
 
     // When using multi-latent attention, the V tensor is the same as K tensor, but of smaller head dimension.
     // If V tensor is not provided, we assume that V is subset of K in the hidden dimension. Hence we use K shape for V.
@@ -84,8 +88,11 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
             "Head dimension of Q must be equal to head dim of K, got {} and {}",
             q_shape[3],
             k_shape[3]);
+        // with unit_v_tile_col V has its own tensor and one column more than it stores: it may be wider than Q
+        const bool v_unit =
+            operation_attributes.program_config.has_value() && operation_attributes.program_config->unit_v_tile_col;
         TT_FATAL(
-            operation_attributes.head_dim_v.value() <= q_shape[3],
+            v_unit || operation_attributes.head_dim_v.value() <= q_shape[3],
             "Head dimension of V must be less than or equal to head dim of Q, got {} and {}",
             operation_attributes.head_dim_v.value(),
             q_shape[3]);

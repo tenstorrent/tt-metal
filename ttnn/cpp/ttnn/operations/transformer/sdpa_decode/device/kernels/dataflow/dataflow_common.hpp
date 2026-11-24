@@ -881,22 +881,7 @@ void read_v(
     cb_v.push_back(v_chunk_tiles);
 }
 
-#ifdef SDPA_DECODE_TWO_NOC
-#ifndef SDPA_DECODE_K_GROUP
-#define SDPA_DECODE_K_GROUP 2  // K tiles per transaction-id group
-#endif
-#ifndef SDPA_DECODE_K_WINDOW
-#define SDPA_DECODE_K_WINDOW 4  // groups in flight per NOC (<= 14)
-#endif
-// K stream for non-paged K, no mask, V read from K's L1 buffer (flash MLA decode). K tiles alternate between the two
-// NOCs by row. Each NOC keeps a rolling window of up to SDPA_DECODE_K_WINDOW groups of SDPA_DECODE_K_GROUP reads in
-// flight, each group tagged with its own transaction id (1..WINDOW), so the stream does not drain at every barrier
-// inside a chunk. K tile column `const_col` (if < DHt) holds the same bytes for every key, so it is read only while
-// each K buffer slot is filled for the first time. Same tiles in the same L1 slots as read_kv_mask_chunks: the output
-// is unchanged.
-// SDPA_DECODE_K_UNIT_COL: the tensor does not hold column `const_col` (it is DHt - 1 tile columns wide); the reader
-// writes its tiles, every row [1, 0 x 31], where it would have read them. The L1 chunks are the same.
-#ifdef SDPA_DECODE_K_UNIT_COL
+#if defined(SDPA_DECODE_K_UNIT_COL) || defined(SDPA_DECODE_V_UNIT_COL)
 // a tile with rows [1, 0 x 31] as the host packer writes it: bf16 (2048 bytes), bfp8 (1088) or bfp4 (576)
 FORCE_INLINE void fill_unit_col_tile(uint32_t addr, uint32_t tile_bytes) {
     volatile tt_l1_ptr uint32_t* w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
@@ -920,6 +905,22 @@ FORCE_INLINE void fill_unit_col_tile(uint32_t addr, uint32_t tile_bytes) {
     }
 }
 #endif
+
+#ifdef SDPA_DECODE_TWO_NOC
+#ifndef SDPA_DECODE_K_GROUP
+#define SDPA_DECODE_K_GROUP 2  // K tiles per transaction-id group
+#endif
+#ifndef SDPA_DECODE_K_WINDOW
+#define SDPA_DECODE_K_WINDOW 4  // groups in flight per NOC (<= 14)
+#endif
+// K stream for non-paged K, no mask, V read from K's L1 buffer (flash MLA decode). K tiles alternate between the two
+// NOCs by row. Each NOC keeps a rolling window of up to SDPA_DECODE_K_WINDOW groups of SDPA_DECODE_K_GROUP reads in
+// flight, each group tagged with its own transaction id (1..WINDOW), so the stream does not drain at every barrier
+// inside a chunk. K tile column `const_col` (if < DHt) holds the same bytes for every key, so it is read only while
+// each K buffer slot is filled for the first time. Same tiles in the same L1 slots as read_kv_mask_chunks: the output
+// is unchanged.
+// SDPA_DECODE_K_UNIT_COL: the tensor does not hold column `const_col` (it is DHt - 1 tile columns wide); the reader
+// writes its tiles, every row [1, 0 x 31], where it would have read them. The L1 chunks are the same.
 template <uint32_t DHt, uint32_t vDHt, uint32_t cb_k_in, uint32_t cb_v_in, uint32_t const_col, typename KReaderType>
 void read_k_chunks_two_noc(
     uint32_t k_chunk_start,
@@ -1278,8 +1279,23 @@ void read_kv_mask_chunks(
             uint32_t v_write_ptr = cb_v.get_write_ptr();
             barrier_count = 0;
             uint32_t v_tile_id = v_start_tile_id;
+#ifdef SDPA_DECODE_V_UNIT_COL
+            // SDPA_DECODE_V_UNIT_COL: the tensor does not hold V's last tile column (it is vDHt - 1 tile columns
+            // wide); the reader writes its tiles, every row [1, 0 x 31], while each V buffer slot is first filled.
+            const uint32_t v_pages = get_local_cb_interface(cb_v_in).fifo_num_pages;
+            const bool fill_unit = v_pages % v_chunk_tiles != 0 || (k_chunk - k_chunk_start) < v_pages / v_chunk_tiles;
+#endif
             for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
                 for (uint32_t col = 0; col < vDHt; ++col) {
+#ifdef SDPA_DECODE_V_UNIT_COL
+                    if (col == vDHt - 1) {
+                        if (fill_unit) {
+                            fill_unit_col_tile(v_write_ptr, v_tile_bytes);
+                        }
+                        v_write_ptr += v_tile_bytes;
+                        continue;
+                    }
+#endif
                     noc.async_read(
                         v_reader, CoreLocalMem<uint32_t>(v_write_ptr), v_tile_bytes, {.page_id = v_tile_id}, {});
                     if (++barrier_count == barrier_threshold) {
@@ -1303,7 +1319,11 @@ void read_kv_mask_chunks(
         // Update the starting tile id for next iteration
         k_start_tile_id += k_chunk_tiles;
         if constexpr (!reuse_k) {
+#ifdef SDPA_DECODE_V_UNIT_COL
+            v_start_tile_id += Sk_chunk_t * (vDHt - 1);
+#else
             v_start_tile_id += v_chunk_tiles;
+#endif
         }
     }
 }

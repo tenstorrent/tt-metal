@@ -217,10 +217,13 @@ ttnn::Tensor flash_multi_latent_attention_decode(
     }
 
     if (input_tensor_v.has_value()) {
+        // unit_v_tile_col: V's last tile column is written by the reader, not stored
+        const uint32_t v_unit_cols =
+            (program_config.has_value() && program_config->unit_v_tile_col) ? tt::constants::TILE_WIDTH : 0;
         TT_FATAL(
-            input_tensor_v.value().padded_shape()[-1] == head_dim_v,
+            input_tensor_v.value().padded_shape()[-1] + v_unit_cols == head_dim_v,
             "Head dimension of the V tensor must be equal to head_dim_v parameter value, got {} and {}",
-            input_tensor_v.value().padded_shape()[-1],
+            input_tensor_v.value().padded_shape()[-1] + v_unit_cols,
             head_dim_v);
     }
     // get chunk size and then pass to sdpa decode as an attribute for prgm cache
@@ -281,10 +284,13 @@ ttnn::Tensor paged_flash_multi_latent_attention_decode(
     }
 
     if (input_tensor_v.has_value()) {
+        // unit_v_tile_col: V's last tile column is written by the reader, not stored
+        const uint32_t v_unit_cols =
+            (program_config.has_value() && program_config->unit_v_tile_col) ? tt::constants::TILE_WIDTH : 0;
         TT_FATAL(
-            input_tensor_v.value().padded_shape()[-1] == head_dim_v,
+            input_tensor_v.value().padded_shape()[-1] + v_unit_cols == head_dim_v,
             "Head dimension of the V tensor must be equal to head_dim_v parameter value, got {} and {}",
-            input_tensor_v.value().padded_shape()[-1],
+            input_tensor_v.value().padded_shape()[-1] + v_unit_cols,
             head_dim_v);
     }
 
