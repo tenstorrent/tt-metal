@@ -160,17 +160,26 @@ Tensor invoke_impl(
     const std::optional<Tensor>& output,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     validate_where_scalar_for_integer_tensor(scalar_false, t_true.dtype());
+    if (output.has_value() && is_floating_point(t_true.dtype()) && !is_floating_point(output->dtype())) {
+        // As for TTT: select in floating point, then convert into the caller's buffer. The select runs in FLOAT32
+        // so a scalar the value dtype cannot hold (257 in BFLOAT16) still reaches the conversion unchanged.
+        const Tensor values =
+            t_true.dtype() == DataType::FLOAT32
+                ? t_true
+                : ttnn::typecast(t_true, DataType::FLOAT32, std::nullopt, std::nullopt, sub_core_grids);
+        const Tensor values_condition =
+            predicate.dtype() == DataType::FLOAT32
+                ? predicate
+                : ttnn::typecast(predicate, DataType::FLOAT32, std::nullopt, std::nullopt, sub_core_grids);
+        auto selected = operations::binary::where_operation_with_scalar<operations::binary::BinaryOpType::WHERE_TTS>(
+            values_condition, values, scalar_false, output->memory_config(), std::nullopt, sub_core_grids);
+        return ttnn::typecast(selected, output->dtype(), output->memory_config(), output, sub_core_grids);
+    }
+
     Tensor condition = predicate;
     bool typecast_needed = ternary_utils::typecast_predicate(predicate, t_true);
     if (typecast_needed) {
         condition = ttnn::typecast(predicate, t_true.dtype(), std::nullopt, std::nullopt, sub_core_grids);
-    }
-
-    if (output.has_value() && is_floating_point(t_true.dtype()) && !is_floating_point(output->dtype())) {
-        // As for TTT: select in the value tensor's floating-point dtype, then convert into the caller's buffer.
-        auto selected = operations::binary::where_operation_with_scalar<operations::binary::BinaryOpType::WHERE_TTS>(
-            condition, t_true, scalar_false, output->memory_config(), std::nullopt, sub_core_grids);
-        return ttnn::typecast(selected, output->dtype(), output->memory_config(), output, sub_core_grids);
     }
     return operations::binary::where_operation_with_scalar<operations::binary::BinaryOpType::WHERE_TTS>(
         condition,
@@ -190,17 +199,26 @@ Tensor invoke_impl(
     const std::optional<Tensor>& output,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     validate_where_scalar_for_integer_tensor(scalar_true, t_false.dtype());
+    if (output.has_value() && is_floating_point(t_false.dtype()) && !is_floating_point(output->dtype())) {
+        // As for TTT: select in floating point, then convert into the caller's buffer. The select runs in FLOAT32
+        // so a scalar the value dtype cannot hold (257 in BFLOAT16) still reaches the conversion unchanged.
+        const Tensor values =
+            t_false.dtype() == DataType::FLOAT32
+                ? t_false
+                : ttnn::typecast(t_false, DataType::FLOAT32, std::nullopt, std::nullopt, sub_core_grids);
+        const Tensor values_condition =
+            predicate.dtype() == DataType::FLOAT32
+                ? predicate
+                : ttnn::typecast(predicate, DataType::FLOAT32, std::nullopt, std::nullopt, sub_core_grids);
+        auto selected = operations::binary::where_operation_with_scalar<operations::binary::BinaryOpType::WHERE_TST>(
+            values_condition, values, scalar_true, output->memory_config(), std::nullopt, sub_core_grids);
+        return ttnn::typecast(selected, output->dtype(), output->memory_config(), output, sub_core_grids);
+    }
+
     Tensor condition = predicate;
     bool typecast_needed = ternary_utils::typecast_predicate(predicate, t_false);
     if (typecast_needed) {
         condition = ttnn::typecast(predicate, t_false.dtype(), std::nullopt, std::nullopt, sub_core_grids);
-    }
-
-    if (output.has_value() && is_floating_point(t_false.dtype()) && !is_floating_point(output->dtype())) {
-        // As for TTT: select in the value tensor's floating-point dtype, then convert into the caller's buffer.
-        auto selected = operations::binary::where_operation_with_scalar<operations::binary::BinaryOpType::WHERE_TST>(
-            condition, t_false, scalar_true, output->memory_config(), std::nullopt, sub_core_grids);
-        return ttnn::typecast(selected, output->dtype(), output->memory_config(), output, sub_core_grids);
     }
     return operations::binary::where_operation_with_scalar<operations::binary::BinaryOpType::WHERE_TST>(
         condition,

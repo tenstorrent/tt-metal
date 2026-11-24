@@ -65,14 +65,14 @@ def test_where_float_values_integer_output(
 @pytest.mark.parametrize("output_dtype", [ttnn.int32, ttnn.uint16])
 @pytest.mark.parametrize("broadcast", ["none", "row", "column"])
 @pytest.mark.parametrize("variant", ["TTS", "TST"])
-@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
+# 257 is not a bfloat16 value: the select has to keep it exact for the integer output.
+@pytest.mark.parametrize("scalar", [3.5, 257.0])
 def test_where_scalar_float_values_integer_output(
-    device, predicate_dtype, value_dtype, output_dtype, broadcast, variant, memory_config
+    device, predicate_dtype, value_dtype, output_dtype, broadcast, variant, scalar
 ):
     if device.arch() == ttnn.device.Arch.QUASAR and (predicate_dtype == ttnn.uint16 or output_dtype == ttnn.uint16):
         pytest.skip("UINT16 typecast is not supported on Quasar")
-    if predicate_dtype == ttnn.float32 and value_dtype == ttnn.bfloat16:
-        pytest.skip("a float32 predicate with a bfloat16 tensor is not a supported where dtype pair")
+    memory_config = ttnn.DRAM_MEMORY_CONFIG if variant == "TTS" else ttnn.L1_MEMORY_CONFIG
     z = torch.arange(1024).reshape(32, 32)
     predicate = (z % 3 != 0).to(torch.int32)
     a = (z % 7 + 15).float() + 0.5
@@ -80,10 +80,8 @@ def test_where_scalar_float_values_integer_output(
         a = a[:1, :]
     elif broadcast == "column":
         a = a[:, :1]
-    scalar = 3.5
     p = ttnn.from_torch(predicate, dtype=predicate_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     x = ttnn.from_torch(a, dtype=value_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    args = (x, scalar) if variant == "TTS" else (scalar, x)
     expected = (
         torch.where(predicate.bool(), a, scalar) if variant == "TTS" else torch.where(predicate.bool(), scalar, a)
     )
@@ -94,11 +92,15 @@ def test_where_scalar_float_values_integer_output(
         device=device,
         memory_config=memory_config,
     )
-    float_out = ttnn.from_torch(torch.zeros((32, 32)), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
 
-    control = ttnn.where(p, *args, output_tensor=float_out)
+    # The FLOAT32 control selects from FLOAT32 copies, so it holds the scalar exactly whatever the value dtype.
+    p32 = ttnn.from_torch(predicate.float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    x32 = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    float_out = ttnn.from_torch(torch.zeros((32, 32)), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    control = ttnn.where(p32, *((x32, scalar) if variant == "TTS" else (scalar, x32)), output_tensor=float_out)
     assert torch.equal(ttnn.to_torch(control).float(), expected)
-    result = ttnn.where(p, *args, output_tensor=out)
+
+    result = ttnn.where(p, *((x, scalar) if variant == "TTS" else (scalar, x)), output_tensor=out)
     assert result.buffer_address() == out.buffer_address()
     converted = ttnn.to_torch(ttnn.typecast(control, output_dtype)).to(torch.int32)
     if output_dtype == ttnn.int32:
