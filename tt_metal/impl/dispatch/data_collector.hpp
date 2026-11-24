@@ -119,6 +119,9 @@ private:
     };
 
     MetalEnvImpl& env_;
+    // Guards the three maps below. Programs are built on several threads at once (fabric bring-up compiles each
+    // device's router programs in its own task), and each build records its kernel groups here.
+    mutable std::mutex dispatch_data_mutex_;
     std::map<uint64_t, std::vector<DispatchData>> program_id_to_dispatch_data;
     std::map<uint64_t, std::map<HalProgrammableCoreType, std::vector<KernelGroupData>>> program_id_to_kernel_groups;
     std::map<uint64_t, int> program_id_to_call_count;
