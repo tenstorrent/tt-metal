@@ -6,8 +6,10 @@ from __future__ import annotations
 
 import hashlib
 import math
+import queue
+import threading
 import time
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
@@ -102,7 +104,7 @@ class Flux3KleinResult:
     cached_steps: int = 0
 
 
-@dataclass
+@dataclass(eq=False)
 class _Prepared:
     request: Flux3KleinRequest
     canvases: list[Image.Image]
@@ -113,6 +115,8 @@ class _Prepared:
     text_rows: int
     tokens: tuple[torch.Tensor, torch.Tensor, int]
     timings: dict[str, float]
+    rope: tuple[torch.Tensor, torch.Tensor] | None = None
+    text: tuple[ttnn.Tensor, torch.Tensor, int] | None = None
 
 
 def make_noise(seed: int, h: int, w: int) -> torch.Tensor:
@@ -222,8 +226,10 @@ class Flux3KleinPipeline:
         axis_topologies: dict[int, ttnn.Topology] | None = None,
         num_links: int = 2,
         upsample: bool = False,
+        text_batch: int = 1,
     ) -> None:
-        """With ``upsample``, the prompt upsampler shares the first chip of ``mesh_device``, which must be opened
+        """``text_batch`` > 1 lets `serve` encode up to that many queued prompts at once, one per sequence-parallel row.
+        With ``upsample``, the prompt upsampler shares the first chip of ``mesh_device``, which must be opened
         with upsampler_flux3_klein.SHARED_MESH_PARAMS, and every prompt is rewritten before it is encoded."""
         self._upsampler_ranges = reserve_upsampler_ranges(mesh_device) if upsample else None
         self._device = mesh_device
@@ -298,6 +304,9 @@ class Flux3KleinPipeline:
         self._last_layout = None
         self._mask_cache: dict[tuple[int, int], ttnn.Tensor] = {}
         self._upsampler = Flux3KleinSharedUpsampler(mesh_device) if upsample else None
+        if not 0 < text_batch <= mesh_shape[sp_axis]:
+            raise ValueError(f"text_batch {text_batch} must be 1 to the {mesh_shape[sp_axis]} sequence-parallel rows")
+        self._text_batch = text_batch
 
     @classmethod
     def create(cls, mesh_device: ttnn.MeshDevice, *, models: tuple[str, ...] = ("distilled",), **kwargs):
@@ -329,6 +338,14 @@ class Flux3KleinPipeline:
                     )
                     for text_rows in TEXT_BUCKETS_BY_LAYOUT.get((size, bucket or 0), TEXT_BUCKETS):
                         self._generate(request, text_rows)
+        if self._text_batch > 1:
+            tokens = self._prompt_encoder.tokenize(WARMUP_PROMPT, TEXT_BUCKETS[0])
+            rope = self._prompt_encoder.rope_rows(tokens[1])
+            batch = self._text_batch
+            for text in self._prompt_encoder.encode_rows(
+                [tokens] * batch, [rope] * batch, self._sp_axis, self._ccl_managers[0]
+            ):
+                ttnn.deallocate(text[0])
 
     def validate_request(self, request: Flux3KleinRequest) -> None:
         if request.model not in self._transformers:
@@ -351,20 +368,25 @@ class Flux3KleinPipeline:
         return self._result(*self._run(self._prepare(request, text_rows)))
 
     def serve(self, receive: Callable[[], Flux3KleinRequest | None], emit: Callable[[object], None]) -> None:
-        """Answers requests in order until `receive` returns None; `emit` gets each result or exception. The next request
-        is received and prepared (references, tokens, noise) on a helper thread while this one runs, and each image is
-        built and emitted on another, so the device does not wait for the host between queued requests."""
+        """Answers requests in order until `receive` returns None; `emit` gets each result or exception. Requests are
+        received and prepared (references, tokens, noise) on a helper thread while one runs, and each image is built and
+        emitted on another, so the device does not wait for the host between queued requests. With `text_batch` > 1 the
+        prepared requests of the shortest text bucket are encoded up to that many at once, one per sequence-parallel row."""
         if self._upsampler is not None:
             raise ValueError("serve needs the upsampler off: it runs on this pipeline's device")
+        prepared: queue.SimpleQueue = queue.SimpleQueue()
+        failed = []
 
-        def prepare() -> _Prepared | Exception | None:
-            request = receive()
-            if request is None:
-                return None
+        def receive_all() -> None:
             try:
-                return self._prepare(request, None)
-            except Exception as e:  # noqa: BLE001
-                return e
+                while (request := receive()) is not None:
+                    try:
+                        prepared.put(self._prepare(request, None))
+                    except Exception as e:  # noqa: BLE001
+                        prepared.put(e)
+            except BaseException as e:  # noqa: BLE001
+                failed.append(e)  # a request that does not arrive ends the loop, as in generate's loop
+            prepared.put(None)
 
         def answer(run: tuple) -> None:
             try:
@@ -373,19 +395,51 @@ class Flux3KleinPipeline:
                 result = e
             emit(result)
 
-        with ThreadPoolExecutor(1, thread_name_prefix="flux3_klein_ahead") as ahead, ThreadPoolExecutor(
-            1, thread_name_prefix="flux3_klein_emit"
-        ) as out:
-            pending = ahead.submit(prepare)
-            while (prepared := pending.result()) is not None:
-                pending = ahead.submit(prepare)
-                if isinstance(prepared, Exception):
-                    out.submit(emit, prepared)
+        ready, done = deque(), False
+        # a daemon: if this loop raises, the caller closes the connection while the receiver may still wait on it
+        threading.Thread(target=receive_all, name="flux3_klein_ahead", daemon=True).start()
+        with ThreadPoolExecutor(1, thread_name_prefix="flux3_klein_emit") as out:
+            while ready or not done:
+                if not ready:
+                    while not done and (not ready or len(ready) < self._text_batch):
+                        try:
+                            item = prepared.get(block=not ready)
+                        except queue.Empty:
+                            break
+                        done = item is None
+                        if not done:
+                            ready.append(item)
+                    ready = self._encode_rows(ready)
+                    continue
+                item = ready.popleft()
+                if isinstance(item, Exception):
+                    out.submit(emit, item)
                     continue
                 try:
-                    out.submit(answer, self._run(prepared))
+                    out.submit(answer, self._run(item))
                 except Exception as e:  # noqa: BLE001
                     out.submit(emit, e)
+        if failed:
+            raise failed[0]
+
+    def _encode_rows(self, items: deque) -> deque:
+        """Encodes the batchable prompts among `items` together (`Flux3KleinPromptEncoder.encode_rows`); a failed batch
+        becomes each of its requests' answer."""
+        batch = [p for p in items if isinstance(p, _Prepared) and p.rope is not None]
+        if len(batch) < 2:
+            return items
+        t0 = time.time()
+        try:
+            texts = self._prompt_encoder.encode_rows(
+                [p.tokens for p in batch], [p.rope for p in batch], self._sp_axis, self._ccl_managers[0]
+            )
+        except Exception as e:  # noqa: BLE001
+            return deque(e if any(p is b for b in batch) else p for p in items)
+        share = (time.time() - t0) / len(batch)
+        for p, text in zip(batch, texts):
+            p.text = text
+            p.timings["encode"] += share
+        return items
 
     def _prepare(self, request: Flux3KleinRequest, text_rows: int | None) -> _Prepared:
         """The host-only part of a request: its references, prompt tokens and noise (the noise on the pre-step thread)."""
@@ -414,8 +468,10 @@ class Flux3KleinPipeline:
         t0 = time.time()
         text_rows = text_rows or self._text_rows(prompt, size, ref_bucket)
         tokens = self._prompt_encoder.tokenize(prompt, text_rows)
+        batched = self._text_batch > 1 and text_rows == TEXT_BUCKETS[0] and size != max(SIZES)
+        rope = self._prompt_encoder.rope_rows(tokens[1]) if batched else None
         timings["encode"] = time.time() - t0
-        return _Prepared(request, canvases, ref_bucket, prompt, seed, latent_job, text_rows, tokens, timings)
+        return _Prepared(request, canvases, ref_bucket, prompt, seed, latent_job, text_rows, tokens, timings, rope)
 
     def _run(self, prepared: _Prepared) -> tuple[_Prepared, torch.Tensor, int]:
         """The device part of a prepared request: its image as `[size, size * 3]` uint8 rows on the host."""
@@ -433,7 +489,7 @@ class Flux3KleinPipeline:
 
         t0 = time.time()
         self._claim_pairs((request.model, size, ref_bucket, prepared.text_rows), free_others=size == max(SIZES))
-        text = self._prompt_encoder.encode(prepared.prompt, prepared.text_rows, tokens=prepared.tokens)
+        text = prepared.text or self._prompt_encoder.encode(prepared.prompt, prepared.text_rows, tokens=prepared.tokens)
         timings["encode"] += time.time() - t0
 
         t0 = time.time()
