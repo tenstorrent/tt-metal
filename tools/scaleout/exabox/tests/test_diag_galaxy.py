@@ -196,15 +196,20 @@ class TestResets(unittest.TestCase):
         c = phase.checks[-1]
         self.assertEqual((c.name, c.details), ("end_fabric", "not run: reset cannot run: not root"))
 
-    def test_the_end_fabric_open_runs_the_noc_check_with_its_budget(self):
-        phase, steps = resets.Phase(name="post_test_reset"), []
-        phase.add(resets.Check(name="post_test_reset_ok", status=PASS))
-        ran = lambda step, *a, **k: steps.append(step) or resets.Check(name="end_fabric", status=PASS)  # noqa: E731
-        args = argparse.Namespace(noc_wall_s=10.0)
-        with mock.patch.object(resets.events, "args", args), mock.patch.object(resets, "run_step", ran):
-            resets.run_end(None, phase, Path("/nonexistent"), True, 0, None)
-        want = (("--noc-wall-s", "10"), 60 + resets.END_DBI_S + 15)
-        self.assertEqual((steps[0].argv[-2:], steps[0].seconds), want)
+    def test_the_end_fabric_open_runs_the_dram_and_noc_checks_with_their_budget(self):
+        for dbi, want in (
+            (None, ("10", "--noc-wall-s", "10", 60 + 10 + 15)),
+            (0.0, ("0", "--noc-wall-s", "10", 75)),
+            (25.0, ("25", "--noc-wall-s", "10", 60 + 25 + 15)),
+        ):
+            phase, steps = resets.Phase(name="post_test_reset"), []
+            phase.add(resets.Check(name="post_test_reset_ok", status=PASS))
+            ran = lambda step, *a, **k: steps.append(step) or resets.Check(name="end_fabric", status=PASS)  # noqa: E731
+            args = argparse.Namespace(noc_wall_s=10.0, **({} if dbi is None else {"dbi_wall_s": dbi}))
+            with mock.patch.object(resets.events, "args", args), mock.patch.object(resets, "run_step", ran):
+                resets.run_end(None, phase, Path("/nonexistent"), True, 0, None)
+            with self.subTest(dbi=dbi):
+                self.assertEqual((*steps[0].argv[-3:], steps[0].seconds), want)
 
     def test_the_end_pcie_step_runs_after_the_open_and_its_warn_lines_warn(self):
         args = argparse.Namespace(noc_wall_s=0, pcie_mb=32, pcie_s=240, pcie_floor_gbs=0.25, pcie_warn_frac=0.5)

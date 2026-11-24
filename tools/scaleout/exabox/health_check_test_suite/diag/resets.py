@@ -42,6 +42,9 @@ def add_args(ap) -> None:
         "--end-delay-s", type=int, default=END_DELAY_S, help="s from the post-test reset to the end fabric open"
     )
     ap.add_argument("--known-dropped-tray", type=int, choices=range(1, 5), help="a tray known to be down: not counted")
+    ap.add_argument(
+        "--dbi-wall-s", type=float, default=END_DBI_S, help="the end open's DRAM byte/DBI check, wall cap s; 0 off"
+    )
     ap.add_argument("--noc-wall-s", type=float, default=0, help="the end open's NOC data check, wall cap s; 0 off")
     ap.add_argument("--pcie-mb", type=int, default=0, help="the end PCIe step's MB per chip each way; 0 off")
     ap.add_argument("--pcie-s", type=int, default=240, help="the end PCIe step's cap, s")
@@ -381,10 +384,11 @@ def run_end(tt_smi_path: str | None, phase: Phase, out: Path, dry_run: bool, del
         time.sleep(delay_s)
     before = {} if dry_run else read_aer()
     t0 = time.time()
+    dbi = getattr(events.args, "dbi_wall_s", END_DBI_S)
     noc = getattr(events.args, "noc_wall_s", 0)  # the NOC data check after the DRAM one: noc.txt beside rows.jsonl
     argv = ("fabric_open.py", "--rows", "{out}/rows.jsonl", "--beat", "{out}/beat", "--label", "open", "--dbi-wall-s")
-    argv += (str(END_DBI_S), *(("--noc-wall-s", f"{noc:g}") if noc else ()))
-    budget = 60 + END_DBI_S + (int(noc) + 5 if noc else 0)
+    argv += (f"{dbi:g}", *(("--noc-wall-s", f"{noc:g}") if noc else ()))
+    budget = 60 + int(dbi) + (int(noc) + 5 if noc else 0)
     step = Step("fabric", "fabric open and close after the reset", argv, budget)
     opened = run_step(step, out, dry_run, test="end")
     phase.add(opened)
