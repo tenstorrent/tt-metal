@@ -15,9 +15,10 @@
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
 namespace ckernel::sfpu {
 // BF16 recipes. dest tile 0: the own maxima m_a, tile 1: the received m_b (column 0 is read). Tile 0 <- c_a =
-// exp(scale * (m_a - m)), tile 1 <- c_b = exp(scale * (m_b - m)), m = max(m_a, m_b): both states rescaled to the common
-// maximum; keep_max: tile 2 <- m (the merged state's maxima, when another state merges after it).
-template <uint32_t scale_bits, bool keep_max>
+// exp(scale * (m_a - m)), tile 1 <- c_b = exp(scale * (m_b - m)), tile 2 <- m = max(m_a, m_b): both states rescaled to
+// the common maximum, which becomes the merged state's maxima when another state merges after it. One exp in the code
+// (a two-pass loop): the merge runs once per call and its code shares the kernel config buffer with the recipe step.
+template <uint32_t scale_bits>
 inline void calculate_recipe_merge_corrections() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
     constexpr float scale = __builtin_bit_cast(float, scale_bits);
@@ -27,10 +28,11 @@ inline void calculate_recipe_merge_corrections() {
         sfpi::vFloat m = a;
         v_if(b > a) { m = b; }
         v_endif;
-        sfpi::dst_reg[0] = _sfpu_exp_fp32_accurate_((a - m) * scale);
-        sfpi::dst_reg[32] = _sfpu_exp_fp32_accurate_((b - m) * scale);
-        if constexpr (keep_max) {
-            sfpi::dst_reg[64] = m;
+        sfpi::dst_reg[64] = m;
+#pragma GCC unroll 1
+        for (int k = 0; k < 2; ++k) {
+            sfpi::vFloat x = sfpi::dst_reg[32 * k];
+            sfpi::dst_reg[32 * k] = _sfpu_exp_fp32_accurate_((x - m) * scale);
         }
         sfpi::dst_reg++;
     }
@@ -136,40 +138,73 @@ ALWI void discard(R) {
     CircularBuffer(R::sum).pop_front(q_tiles);
 }
 
-// O tiles [j, j + w) of row r: the own state's (CB 9 plane 0, in place) and the received one's, rescaled by c_a / c_b
-// and summed.
-template <uint32_t vd_tiles, uint32_t exp_max_diff, uint32_t w, typename R>
-ALWI void merge_o_tiles_bf16(uint32_t a_out, uint32_t r, uint32_t j) {
-    constexpr uint32_t o_stride = sdpa_out_stride;
-    tile_regs_acquire();
-    sdpa_stream_reconfig_srca(a_out);
-    copy_init(a_out);
-    for (uint32_t t = 0; t < w; ++t) {
-        copy_tile(a_out, r * vd_tiles * o_stride + j + t, t);
+// The BF16 merge's steps out of line, one copy each (the merge runs once per call; its code shares the kernel config
+// buffer with the recipe step). Tiles [first, first + n) of `cb` into dest tiles [dst, dst + n), the unpacker set up
+// for the state format of `cb`.
+inline __attribute__((noinline)) void merge_copy_tiles(uint32_t cb, uint32_t first, uint32_t n, uint32_t dst) {
+    sdpa_stream_reconfig_srca(cb);
+    copy_init(cb);
+    for (uint32_t t = 0; t < n; ++t) {
+        copy_tile(cb, first + t, dst + t);
     }
-    for (uint32_t t = 0; t < w; ++t) {
-        copy_tile(R::out, r * vd_tiles + j + t, w + t);  // FP32, as CB 9
-    }
-    sdpa_stream_reconfig_srca(exp_max_diff);
-    unary_bcast_init<BroadcastType::COL>(exp_max_diff);
-    unary_bcast<BroadcastType::COL>(exp_max_diff, r, 2 * w);
-    unary_bcast<BroadcastType::COL>(R::corr, r, 2 * w + 1);  // the state format, as exp_max_diff
-    unary_bcast_uninit<BroadcastType::COL>(exp_max_diff);
+}
+// Row r's corrections, column-broadcast: c_a (CB a_cb) into dest tile dst, c_b (CB b_cb, the same format) into dst + 1.
+inline __attribute__((noinline)) void merge_bcast_corrections(uint32_t a_cb, uint32_t b_cb, uint32_t r, uint32_t dst) {
+    sdpa_stream_reconfig_srca(a_cb);
+    unary_bcast_init<BroadcastType::COL>(a_cb);
+    unary_bcast<BroadcastType::COL>(a_cb, r, dst);
+    unary_bcast<BroadcastType::COL>(b_cb, r, dst + 1);
+    unary_bcast_uninit<BroadcastType::COL>(a_cb);
+}
+// w tiles of state (dest [0, w)) and received state (dest [w, 2w)) with their corrections (dest 2w, 2w + 1):
+// state = state * c_a + received * c_b, packed back to `cb` at tile `index` (absolute: the state's rows).
+template <uint32_t w>
+ALWI void merge_tiles_sfpu() {
+    PACK((SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_recipe_merge, (w), 0, VectorMode::None)));
+}
+inline __attribute__((noinline)) void merge_finish_tiles(uint32_t w, uint32_t cb, uint32_t index) {
     tile_regs_commit();
     tile_regs_wait();
-    PACK((SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_recipe_merge, (w), 0, VectorMode::None)));
+    if (w == 1) {
+        merge_tiles_sfpu<1>();
+    } else if (w == 2) {
+        merge_tiles_sfpu<2>();
+    } else {
+        merge_tiles_sfpu<3>();
+    }
     PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
     for (uint32_t t = 0; t < w; ++t) {
-        pack_tile<true>(t, a_out, r * vd_tiles * o_stride + j + t);
+        pack_tile<true>(t, cb, index + t);
     }
     tile_regs_release();
+}
+// w (<= 3) tiles of the own state (CB a_cb from tile a_index) merged in place with the received ones (CB b_cb from
+// b_index), row r's corrections in exp_max_diff (c_a) and corr_cb (c_b).
+inline __attribute__((noinline)) void merge_state_tiles(
+    uint32_t w,
+    uint32_t a_cb,
+    uint32_t a_index,
+    uint32_t b_cb,
+    uint32_t b_index,
+    uint32_t exp_max_diff,
+    uint32_t corr_cb,
+    uint32_t r) {
+    tile_regs_acquire();
+    merge_copy_tiles(a_cb, a_index, w, 0);
+    for (uint32_t t = 0; t < w; ++t) {
+        copy_tile(b_cb, b_index + t, w + t);  // the own state's format: the unpacker stays set up
+    }
+    merge_bcast_corrections(exp_max_diff, corr_cb, r, 2 * w);
+    merge_finish_tiles(w, a_cb, a_index);
 }
 
 // BF16 recipes: the own state after its last chunk (O in CB 9's rows, plane 0, and l in CB 13 at their bases, popped;
 // the maxima pushed in state.prev.max) merged in place with the received state. keep_max: the merged maxima replace
 // the own ones (another received state merges next); otherwise they are left stale (the normalization follows).
-template <uint32_t q_tiles, uint32_t vd_tiles, uint32_t scale_fp32, uint32_t exp_max_diff, typename R>
+// O tiles merge up to max_w per dest pass (3: 3 + 3 + 2 of the 16-bit dest's 8 tiles).
+template <uint32_t q_tiles, uint32_t vd_tiles, uint32_t scale_fp32, uint32_t exp_max_diff, typename R, uint32_t max_w = 3>
 void merge_bf16(const RecipeAccumulatorState& state, bool keep_max) {
+    static_assert(max_w >= 1 && max_w <= 3);
     constexpr uint32_t o_stride = sdpa_out_stride;  // numerator CB tiles per Q row, over vd
     const uint32_t n_out = state.cur.out, n_sum = state.cur.sum, a_max = state.prev.max;
     CircularBuffer(R::out).wait_front(q_tiles * vd_tiles);
@@ -183,27 +218,12 @@ void merge_bf16(const RecipeAccumulatorState& state, bool keep_max) {
     configure_single_tile_pack(exp_max_diff);
     for (uint32_t r = 0; r < q_tiles; ++r) {
         tile_regs_acquire();
-        copy_state_tile(a_max, r, 0);
+        merge_copy_tiles(a_max, r, 1, 0);
         copy_tile(R::max, r, 1);  // the state format, as the maxima
         tile_regs_commit();
         tile_regs_wait();
-        if (keep_max) {
-            PACK((SFPU_UNARY_CALL(
-                DST_SYNC_MODE,
-                DST_ACCUM_MODE,
-                calculate_recipe_merge_corrections,
-                (scale_fp32, true),
-                0,
-                VectorMode::None)));
-        } else {
-            PACK((SFPU_UNARY_CALL(
-                DST_SYNC_MODE,
-                DST_ACCUM_MODE,
-                calculate_recipe_merge_corrections,
-                (scale_fp32, false),
-                0,
-                VectorMode::None)));
-        }
+        PACK((SFPU_UNARY_CALL(
+            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_recipe_merge_corrections, (scale_fp32), 0, VectorMode::None)));
         PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
         pack_tile<true>(0, exp_max_diff, r);
         pack_tile<true>(1, R::corr, r);  // the state format, as exp_max_diff
@@ -217,41 +237,18 @@ void merge_bf16(const RecipeAccumulatorState& state, bool keep_max) {
     CircularBuffer(R::corr).push_back(q_tiles);
     CircularBuffer(exp_max_diff).wait_front(q_tiles);
     CircularBuffer(R::corr).wait_front(q_tiles);
-    // l = l_a * c_a + l_b * c_b, O = O_a * c_a + O_b * c_b: up to three O tiles per dest pass (3 + 3 + 2 of the
-    // 16-bit dest's 8 tiles).
+    // l = l_a * c_a + l_b * c_b, O = O_a * c_a + O_b * c_b.
     pack_reconfig_data_format(n_sum);
     configure_single_tile_pack(n_sum);
     for (uint32_t r = 0; r < q_tiles; ++r) {
-        tile_regs_acquire();
-        sdpa_stream_reconfig_srca(n_sum);
-        copy_init(n_sum);
-        copy_tile(n_sum, r, 0);
-        copy_tile(R::sum, r, 1);  // FP32, as CB 13
-        sdpa_stream_reconfig_srca(exp_max_diff);
-        unary_bcast_init<BroadcastType::COL>(exp_max_diff);
-        unary_bcast<BroadcastType::COL>(exp_max_diff, r, 2);
-        unary_bcast<BroadcastType::COL>(R::corr, r, 3);
-        unary_bcast_uninit<BroadcastType::COL>(exp_max_diff);
-        tile_regs_commit();
-        tile_regs_wait();
-        PACK((SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_recipe_merge, (1), 0, VectorMode::None)));
-        PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
-        pack_tile<true>(0, n_sum, r);
-        tile_regs_release();
+        merge_state_tiles(1, n_sum, r, R::sum, r, exp_max_diff, R::corr, r);
     }
     pack_reconfig_data_format(n_out);
     configure_single_tile_pack(n_out);
     for (uint32_t r = 0; r < q_tiles; ++r) {
-        uint32_t j = 0;
-        if constexpr (vd_tiles >= 3) {
-            for (; j + 3 <= vd_tiles; j += 3) {
-                merge_o_tiles_bf16<vd_tiles, exp_max_diff, 3, R>(n_out, r, j);
-            }
-        }
-        if constexpr (vd_tiles % 3 == 2) {
-            merge_o_tiles_bf16<vd_tiles, exp_max_diff, 2, R>(n_out, r, j);
-        } else if constexpr (vd_tiles % 3 == 1) {
-            merge_o_tiles_bf16<vd_tiles, exp_max_diff, 1, R>(n_out, r, j);
+        for (uint32_t j = 0; j < vd_tiles; j += max_w) {
+            const uint32_t w = vd_tiles - j < max_w ? vd_tiles - j : max_w;
+            merge_state_tiles(w, n_out, r * vd_tiles * o_stride + j, R::out, r * vd_tiles + j, exp_max_diff, R::corr, r);
         }
     }
     CircularBuffer(exp_max_diff).pop_front(q_tiles);
