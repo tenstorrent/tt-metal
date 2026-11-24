@@ -23,6 +23,8 @@ void kernel_main() {
     constexpr uint32_t m = get_compile_time_arg_val(7);
     constexpr uint32_t G = get_compile_time_arg_val(8);
     constexpr uint32_t hw = get_compile_time_arg_val(9);
+    constexpr uint32_t batch = get_compile_time_arg_val(10);  // segments per read barrier
+    constexpr uint32_t cap = 2 * batch;                       // cb_port_stage depth in segments (host: 2 batches)
 
     size_t a = 0;
     const uint32_t p = get_arg_val<uint32_t>(a++);
@@ -51,17 +53,30 @@ void kernel_main() {
     const uint32_t big = cols_extra * (cols_base + 1);  // columns owned by the cores with one extra column
 
     uint32_t mine = 0;
+    uint32_t slot = 0;  // cb_port_stage write position in segments (mod cap): a batch never wraps past the CB end
     q_stem::for_each_block(B, qrt, m, G, p, rorder, [&](uint32_t j, uint32_t, uint32_t d, uint32_t) {
         if (d == p || dirmap[d] != my_dir) {
             return;
         }
         ++mine;
         noc_semaphore_wait_min(block_ready, mine * C1);
+        uint32_t pending = 0;  // segments read into the reserved batch, not yet pushed
+        uint32_t limit = 0;    // segments in the reserved batch (<= batch, up to the CB end)
+        uint32_t l1 = 0;
+        auto flush = [&]() {
+            noc_async_read_barrier();
+            cb_push_back(cb_port_stage, pending * hw);
+            slot = (slot + pending) % cap;
+            pending = 0;
+        };
         for (uint32_t i = 0; i < m; ++i) {
             for (uint32_t e = 0; e < n_heads; ++e) {
                 const uint32_t hl = get_arg_val<uint32_t>(heads_idx + e);
-                cb_reserve_back(cb_port_stage, hw);
-                uint32_t l1 = get_write_ptr(cb_port_stage);
+                if (pending == 0) {
+                    limit = cap - slot < batch ? cap - slot : batch;
+                    cb_reserve_back(cb_port_stage, limit * hw);
+                    l1 = get_write_ptr(cb_port_stage);
+                }
                 uint32_t c = hl * hw;
                 const uint32_t c_end = c + hw;
                 while (c < c_end) {
@@ -82,9 +97,13 @@ void kernel_main() {
                     l1 += run * tile_bytes;
                     c += run;
                 }
-                noc_async_read_barrier();
-                cb_push_back(cb_port_stage, hw);
+                if (++pending == limit) {
+                    flush();
+                }
             }
+        }
+        if (pending > 0) {
+            flush();
         }
     });
 }

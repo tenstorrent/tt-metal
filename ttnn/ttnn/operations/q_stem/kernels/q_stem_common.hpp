@@ -35,6 +35,38 @@ inline void for_each_block(
     }
 }
 
+// Stage-3 consumption order of a core's rows = its landing layout (host twin: landing_slot / Geometry.ts).
+// Row c (0 .. hpc * rows - 1) -> (head u in consumption order, row t). Remote heads u < n_r, local heads after:
+//   remote rows t < ts, row-major across the remote heads (they land with the same row profile)
+//   then the local heads, head-major (the own quarter lands when stage 1 ends)
+//   then the late remote rows t >= ts, row-major (they land last, behind the busiest fabric link)
+// With no local head (or no remote head) the split vanishes: ts = rows.
+struct RowOrder {
+    uint32_t n_r, hpc, rows, ts;
+    RowOrder(uint32_t n_r_, uint32_t hpc_, uint32_t rows_, uint32_t ts_) :
+        n_r(n_r_), hpc(hpc_), rows(rows_), ts(n_r_ < hpc_ ? ts_ : rows_) {}
+    uint32_t total() const { return hpc * rows; }
+    uint32_t first_local() const { return n_r * ts; }
+    void at(uint32_t c, uint32_t& u, uint32_t& t) const {
+        const uint32_t a = n_r * ts;
+        const uint32_t l = (hpc - n_r) * rows;
+        if (c < a) {
+            t = c / n_r;
+            u = c - t * n_r;
+        } else if (c < a + l) {
+            const uint32_t k = c - a;
+            const uint32_t lh = k / rows;
+            u = n_r + lh;
+            t = k - lh * rows;
+        } else {
+            const uint32_t k = c - a - l;
+            const uint32_t tt = k / n_r;
+            u = k - tt * n_r;
+            t = ts + tt;
+        }
+    }
+};
+
 inline uint32_t unpack_x(uint32_t v) { return v >> 16; }
 inline uint32_t unpack_y(uint32_t v) { return v & 0xFFFF; }
 

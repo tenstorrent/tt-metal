@@ -1148,6 +1148,58 @@
    },
    "calculator": "5c96a38e1499653a",
    "measurements": []
+  },
+  {
+   "id": "ebc04138",
+   "utc": "2026-11-24T19:12:56.254188+00:00",
+   "phase": "Refinement 3",
+   "label": "port pull barrier spacing",
+   "schedule": {
+    "op": "q_stem",
+    "case": "PERF FOCUS Kimi: busiest port pull, 10 blocks x 12 head-rows x 12 KB from stage-1 L1",
+    "groups": [
+     {
+      "name": "port_pull_seg_barrier",
+      "family": "l1_read",
+      "cores": 1,
+      "bytes": 4096,
+      "pages_per_core": 360,
+      "batch": 3,
+      "noc": 0
+     },
+     {
+      "name": "port_pull_batch4",
+      "family": "l1_read",
+      "cores": 1,
+      "bytes": 4096,
+      "pages_per_core": 360,
+      "batch": 12,
+      "noc": 0
+     }
+    ]
+   },
+   "result": {
+    "op": "q_stem",
+    "case": "PERF FOCUS Kimi: busiest port pull, 10 blocks x 12 head-rows x 12 KB from stage-1 L1",
+    "aiclk_mhz": 1350,
+    "groups": [
+     {
+      "name": "port_pull_seg_barrier",
+      "family": "l1_read",
+      "status": "refused",
+      "reason": "reads from other cores' L1 (sharded, halo, all-to-all, reshard) are not modelled"
+     },
+     {
+      "name": "port_pull_batch4",
+      "family": "l1_read",
+      "status": "refused",
+      "reason": "reads from other cores' L1 (sharded, halo, all-to-all, reshard) are not modelled"
+     }
+    ],
+    "note": "pass_ns: one pass over the group's pages, first-request latency included (compare with a single-pass measurement). steady_ns_per_pass: per pass once repeated. Every estimate ranks schedules; none is a target."
+   },
+   "calculator": "5c96a38e1499653a",
+   "measurements": []
   }
  ]
 }

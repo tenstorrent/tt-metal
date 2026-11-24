@@ -17,12 +17,16 @@ Knobs (single source each; every dependent quantity derives from them):
   X_ROUND_DEPTH      cb_x_round depth (rounds)
   S3_BLOCK_M_TILES   stage-3 row block (1: the landing row layout interleaves nope / rope per row)
   S3_BLOCK_N_CAP     stage-3 N block cap in the streamed-wkv regime (R2)
+  S3_LATE_REMOTE_ROWS stage-3 consumption order: remote rows < ts, local heads, remote rows >= ts (ts = rows - late)
   WKV_RESIDENT_BYTES wkv_b1 residency budget (R1 vs R2)
   WKV_DEPTH          cb_wkv depth (units: heads in R1, N-blocks in R2)
+  RM_FULL_STICK      ROW_MAJOR out in R1: one untilized row block [prefix | rope] and one write per output stick
   OUT_DEPTH          output staging depth (row blocks): cb_prefix_out / cb_rope_out (TILE out) or
                      cb_prefix_rm / cb_rope_rm (ROW_MAJOR out; the tiled CBs then only feed the in-kernel untilize
                      and hold one block)
-  PORT_BATCH_SEGMENTS port staging batch (segments per flush); the staging CB holds 2 batches
+  FREE_WRITER_NOC    NoC of the stage-3-only cores' output writer (reader on the other NoC)
+  PORT_BATCH_SEGMENTS port staging batch: segments per pull-read barrier (port reader) and per flush (sender);
+                     the staging CB holds 2 batches
   QB_READ_BATCH      q_b slice reads per barrier
 """
 
@@ -48,10 +52,25 @@ X_ROUND_TILES_CAP = 64
 X_ROUND_DEPTH = 3
 S3_BLOCK_M_TILES = 1
 S3_BLOCK_N_CAP = 16
+# Remote rows consumed AFTER the local heads (the last S3_LATE_REMOTE_ROWS rows of every remote head). The own quarter
+# lands when stage 1 ends; the last remote rows land later still (they queue behind the fabric on the busiest link),
+# so consuming local heads first hides their stage-3 rows + output writes behind that last landing. 0 -> local heads
+# last (every remote row first). Clamped to rows_per_head - 1; dropped when it would push R1 out of residency.
+S3_LATE_REMOTE_ROWS = 0
 WKV_RESIDENT_BYTES = 512 * 1024  # per core: every remote head's weights resident (row-major consumption)
 WKV_DEPTH = 2
 OUT_DEPTH = 2
+# ROW_MAJOR out, one N-block per row (R1): the rope tiles are packed behind the prefix into one row-wide tiled block,
+# untilized once, and each output stick ((N + Dr) * 2 B, the whole page) leaves in ONE NoC write instead of one per
+# segment (prefix | rope): half the writes per row, and no 128 B rope writes. False -> the segment path.
+RM_FULL_STICK = True
 PORT_BATCH_SEGMENTS = 4
+# NoC of the output writer on the cores outside the stage-1 rect (their reader takes the other NoC), per region:
+# "right" = the columns right of the stage-1 rect, "below" = the rows under it. Their output writes run while stage
+# 1 + the stage-1 cores' tail keep NoC1 busy (hand-offs, port feeds, the stage-1 cores' own output writes): on NoC1
+# a far-east free core's writes starved for tens of us (measured). 1 everywhere -> the default reader/writer split.
+FREE_WRITER_NOC = {"right": 0, "below": 1}
+S1_WRITER_NOC = 1  # the same for the stage-1 rect (its reader, incl. the x-multicast receive, on the other NoC)
 QB_READ_BATCH = 8  # q_b slice reads per barrier (dm shortlist tie; rank-1 batch 4 is lamp L10)
 MAX_HEADERS = 12  # PacketHeaderPool: <= 12 headers per RISC (passed to the port sender: one source)
 HDRS_PER_DEST_CAP = 4
@@ -185,19 +204,30 @@ class Geometry:
         self.hpc_max = max(len(hs) for hs in self.heads_of)
         s1_set = {(c.x, c.y) for c in self.s1_cores()}
         # R1 wkv units a core holds at once: all its remote heads (consumed row-major) + up to WKV_DEPTH local heads,
-        # max over destination chips; per core set (stage-1 rect / the rest), so each gets its own cb_wkv size.
-        self.wkv_units_s1, self.wkv_units_free = 1, 1
-        for k, hs in enumerate(self.heads_of):
-            c = self.compute_core_list[k]
-            for dest in range(G):
-                n_l = sum(1 for h in hs if h // self.Hl == dest)
-                need = len(hs) - n_l + min(WKV_DEPTH, n_l)
-                if (c.x, c.y) in s1_set:
-                    self.wkv_units_s1 = max(self.wkv_units_s1, need)
-                else:
-                    self.wkv_units_free = max(self.wkv_units_free, need)
+        # max over destination chips; per core set (stage-1 rect / the rest), so each gets its own cb_wkv size. With
+        # late remote rows (consumed after the local heads) a core holding both keeps every head resident (FIFO).
         wkv_head_bytes = self.Dn_t * self.N_t * self.wkv_tile_bytes
-        self.wkv_resident = max(self.wkv_units_s1, self.wkv_units_free) * wkv_head_bytes <= WKV_RESIDENT_BYTES
+
+        def wkv_units(late):
+            s1u, freeu = 1, 1
+            for k, hs in enumerate(self.heads_of):
+                c = self.compute_core_list[k]
+                for dest in range(G):
+                    n_l = sum(1 for h in hs if h // self.Hl == dest)
+                    n_r = len(hs) - n_l
+                    need = len(hs) if (late and n_l and n_r) else n_r + min(WKV_DEPTH, n_l)
+                    if (c.x, c.y) in s1_set:
+                        s1u = max(s1u, need)
+                    else:
+                        freeu = max(freeu, need)
+            return s1u, freeu, max(s1u, freeu) * wkv_head_bytes <= WKV_RESIDENT_BYTES
+
+        self.late = min(S3_LATE_REMOTE_ROWS, self.rows_per_head - 1)
+        self.wkv_units_s1, self.wkv_units_free, self.wkv_resident = wkv_units(self.late)
+        if self.late and not self.wkv_resident and wkv_units(0)[2]:
+            self.late = 0  # late rows would push R1 out of residency: keep R1
+            self.wkv_units_s1, self.wkv_units_free, self.wkv_resident = wkv_units(0)
+        self.ts = self.rows_per_head - self.late  # remote rows >= ts are consumed after the local heads
         self.s3n = self.N_t if self.wkv_resident else _largest_divisor_leq(self.N_t, S3_BLOCK_N_CAP)
         self.n_nb = self.N_t // self.s3n
         self.wkv_unit_tiles = self.Dn_t * self.s3n
@@ -209,6 +239,9 @@ class Geometry:
         self.out_rm = output_layout == ttnn.ROW_MAJOR_LAYOUT
         self.out_tile_depth = 1 if self.out_rm else OUT_DEPTH
         self.out_page_bytes = self.out_w_tiles * (self.tile_bytes // 32) if self.out_rm else self.tile_bytes
+        # full-stick row block (RM_FULL_STICK): the rope tiles join the prefix in cb_prefix_out -> cb_prefix_rm
+        self.full_stick = self.out_rm and self.n_nb == 1 and RM_FULL_STICK
+        self.out_blk_tiles = self.s3n + self.Dr_t if self.full_stick else self.s3n  # cb_prefix_out/_rm block
 
     # stage-1 cores, row-major over the W1 x R1 rect anchored at (0, 1)
     def s1_cores(self):
@@ -330,15 +363,18 @@ def head_placement(geo):
 
 
 def landing_slot(heads, h, dest, geo):
-    """(base, stride) in tiles of head h's rows in its core's landing shard on chip `dest`: row t at base + t * stride.
-    Remote heads are consumed row-major across heads (row t of every remote head, then row t + 1: all remote heads
-    land with the same row profile), the local heads head-major after them."""
+    """(base, stride, jump) in tiles of head h's rows in its core's landing shard on chip `dest`: row t at
+    base + t * stride + (jump if t >= geo.ts else 0). The landing layout IS the consumption order (device twin:
+    q_stem_common.hpp row_of): remote rows t < ts row-major across the remote heads (all remote heads land with the
+    same row profile), then the local heads head-major, then the late remote rows t >= ts row-major."""
     order = consumption_order(heads, dest, geo)
     n_r = sum(1 for hh in order if hh // geo.Hl != dest)
+    n_l = len(order) - n_r
+    ts = geo.ts if n_l else geo.rows_per_head
     idx = order.index(h)
     if idx < n_r:
-        return idx * geo.hw, n_r * geo.hw
-    return (n_r * geo.rows_per_head + (idx - n_r) * geo.rows_per_head) * geo.hw, geo.hw
+        return idx * geo.hw, n_r * geo.hw, n_l * geo.rows_per_head * geo.hw
+    return (n_r * ts + (idx - n_r) * geo.rows_per_head) * geo.hw, geo.hw, 0
 
 
 def consumption_order(heads, dest, geo):
@@ -546,10 +582,14 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
                 X_ROUND_DEPTH,
                 S3_BLOCK_M_TILES,
                 S3_BLOCK_N_CAP,
+                S3_LATE_REMOTE_ROWS,
                 WKV_RESIDENT_BYTES,
                 WKV_DEPTH,
                 OUT_DEPTH,
+                RM_FULL_STICK,
                 PORT_BATCH_SEGMENTS,
+                tuple(sorted(FREE_WRITER_NOC.items())),
+                S1_WRITER_NOC,
                 os.environ.get("QSTEM_ABLATE", ""),
                 tuple(sorted(route.items())),
                 geo.gx,
@@ -571,15 +611,15 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
         cbs += [
             ttnn.cb_descriptor_from_sharded_tensor(CB_LANDING, scratch),
             *wkv_cbs,
-            _cb(CB_PREFIX_OUT, bf16, geo.tile_bytes, geo.out_tile_depth * geo.s3m * geo.s3n, compute_rect),
-            _cb(CB_ROPE_OUT, bf16, geo.tile_bytes, geo.out_tile_depth * geo.s3m * geo.Dr_t, compute_rect),
+            _cb(CB_PREFIX_OUT, bf16, geo.tile_bytes, geo.out_tile_depth * geo.s3m * geo.out_blk_tiles, compute_rect),
             _cb(CB_PORT_STAGE, bf16, geo.tile_bytes, 2 * PORT_BATCH_SEGMENTS * geo.hw, port_crs),
         ]
+        if not geo.full_stick:  # full stick: the rope tiles live in cb_prefix_out / cb_prefix_rm
+            cbs.append(_cb(CB_ROPE_OUT, bf16, geo.tile_bytes, geo.out_tile_depth * geo.s3m * geo.Dr_t, compute_rect))
         if geo.out_rm:  # untilized stick blocks (tile-sized pages: 32 sticks of block-width * 64 B)
-            cbs += [
-                _cb(CB_PREFIX_RM, bf16, geo.tile_bytes, OUT_DEPTH * geo.s3m * geo.s3n, compute_rect),
-                _cb(CB_ROPE_RM, bf16, geo.tile_bytes, OUT_DEPTH * geo.s3m * geo.Dr_t, compute_rect),
-            ]
+            cbs.append(_cb(CB_PREFIX_RM, bf16, geo.tile_bytes, OUT_DEPTH * geo.s3m * geo.out_blk_tiles, compute_rect))
+            if not geo.full_stick:
+                cbs.append(_cb(CB_ROPE_RM, bf16, geo.tile_bytes, OUT_DEPTH * geo.s3m * geo.Dr_t, compute_rect))
         program.cbs = cbs
 
         # ---------------- per-compute-core assignment ------------------------------------------------------------
@@ -594,7 +634,7 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
 
         reader_rt_s1, reader_rt_other = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         compute_rt = ttnn.RuntimeArgs()
-        writer_rt = ttnn.RuntimeArgs()
+        writer_rt_s1, writer_rt_other = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         for k, core in enumerate(compute_cores):
             i = s1_index.get((core.x, core.y))
             c0, cols = geo.s1_cols(i) if i is not None else (0, 0)
@@ -619,14 +659,14 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
                     n = min(c0 + cols, (hl + 1) * geo.hw) - c
                     h = p * geo.Hl + hl
                     dest_core = compute_cores[core_of_head[h]]
-                    base, stride = head_slot(h, p)
+                    base, stride, _ = head_slot(h, p)  # local heads: contiguous rows, no jump
                     pieces += [c - c0, n, _pack(virt(dest_core)), base + cc, stride]
                     c += n
             wargs = [p, cols, int(out.buffer_address()), landing_addr, arrive_addrs[p]]
             wargs += dirmap + rorder + port_args
             wargs += [len(pieces) // 5] + pieces
             wargs += [hpc, n_r] + heads
-            writer_rt[core.x][core.y] = wargs
+            (writer_rt_s1 if i is not None else writer_rt_other)[core.x][core.y] = wargs
 
         # ---------------- ports ---------------------------------------------------------------------------------
         core_table = [_pack(virt(c)) for c in s1_cores]
@@ -670,7 +710,7 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
                     inc = group * geo.hw if last_of_group else 0
                     sargs += [_pack(virt(compute_cores[k])), inc]
                     for t in range(G):
-                        sargs += list(head_slot(h, t)) if t != p else [0, 0]
+                        sargs += list(head_slot(h, t)) if t != p else [0, 0, 0]
                 sargs += [len(ready_targets)]
                 for s, sdir in ready_targets:
                     rc = virt(ports[(sdir, l)])
@@ -707,7 +747,7 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
 
         def reader_ct_for(wkv_units):
             # wkv capacity of the core set in units (R1: remote heads + local depth; R2: wkv_depth)
-            return reader_ct + [wkv_units, QB_READ_BATCH, *geo_ct, *qb_ct, *wkv_ct]
+            return reader_ct + [wkv_units, QB_READ_BATCH, *geo_ct, geo.ts, *qb_ct, *wkv_ct]
 
         reader_ct_s1 = reader_ct_for(geo.wkv_units_s1 if geo.wkv_resident else wkv_depth)
         reader_ct_other = reader_ct_for(geo.wkv_units_free if geo.wkv_resident else wkv_depth)
@@ -716,7 +756,7 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
             core_ranges=s1_rect,
             compile_time_args=reader_ct_s1,
             runtime_args=reader_rt_s1,
-            config=_dm("RISCV_1", ttnn.NOC.NOC_0),
+            config=_dm("RISCV_1", ttnn.NOC.NOC_1 if S1_WRITER_NOC == 0 else ttnn.NOC.NOC_0),
         )
         inj_rt = ttnn.RuntimeArgs()
         inj_rt[injector.x][injector.y] = [int(x.buffer_address()), p] + rorder
@@ -735,13 +775,24 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
             config=_dm("RISCV_1", ttnn.NOC.NOC_0),
         )
         kernels_tail = []
-        if other_compute:
+        # stage-3-only cores, grouped by their writer NoC (FREE_WRITER_NOC per region); one reader/writer pair each
+        free_groups = {}
+        for c in other_compute:
+            free_groups.setdefault(FREE_WRITER_NOC["right" if c.x >= geo.W1 else "below"], []).append(c)
+
+        def _rt_subset(rt_all, cores):
+            rt = ttnn.RuntimeArgs()
+            for c in cores:
+                rt[c.x][c.y] = list(rt_all[c.x][c.y])
+            return rt
+
+        for wnoc, cores in sorted(free_groups.items()):
             reader_other = ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "q_stem_reader.cpp"),
-                core_ranges=_crs(other_compute),
+                core_ranges=_crs(cores),
                 compile_time_args=reader_ct_other,
-                runtime_args=reader_rt_other,
-                config=_dm("RISCV_1", ttnn.NOC.NOC_0),
+                runtime_args=_rt_subset(reader_rt_other, cores),
+                config=_dm("RISCV_1", ttnn.NOC.NOC_1 if wnoc == 0 else ttnn.NOC.NOC_0),
             )
             ttnn.attach_absent(reader_other, "mcast")
             kernels_tail.append(reader_other)
@@ -774,40 +825,63 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
                 int(geo.out_rm),
                 CB_PREFIX_RM,
                 CB_ROPE_RM,
+                int(geo.full_stick),
+                geo.ts,
             ],
             runtime_args=compute_rt,
             config=compute_config,
         )
+        writer_ct = [
+            CB_Q_SLICE,
+            CB_PREFIX_OUT,
+            CB_ROPE_OUT,
+            geo.tile_bytes,
+            geo.num_blocks,
+            geo.H,
+            geo.N_t,
+            geo.Dr_t,
+            geo.s3n,
+            geo.n_nb,
+            2 * L,
+            SEM_BLOCK_READY,
+            *geo_ct,
+            int(geo.out_rm),
+            geo.out_page_bytes,
+            CB_PREFIX_RM,
+            CB_ROPE_RM,
+            int(geo.full_stick),
+            geo.ts,
+            *out_ct,
+        ]
         writer_k = ttnn.KernelDescriptor(
             kernel_source=str(KERNEL_DIR / "q_stem_writer.cpp"),
-            core_ranges=compute_rect,
-            compile_time_args=[
-                CB_Q_SLICE,
-                CB_PREFIX_OUT,
-                CB_ROPE_OUT,
-                geo.tile_bytes,
-                geo.num_blocks,
-                geo.H,
-                geo.N_t,
-                geo.Dr_t,
-                geo.s3n,
-                geo.n_nb,
-                2 * L,
-                SEM_BLOCK_READY,
-                *geo_ct,
-                int(geo.out_rm),
-                geo.out_page_bytes,
-                CB_PREFIX_RM,
-                CB_ROPE_RM,
-                *out_ct,
-            ],
-            runtime_args=writer_rt,
-            config=_dm("RISCV_0", ttnn.NOC.NOC_1),
+            core_ranges=s1_rect,
+            compile_time_args=writer_ct,
+            runtime_args=writer_rt_s1,
+            config=_dm("RISCV_0", ttnn.NOC.NOC_0 if S1_WRITER_NOC == 0 else ttnn.NOC.NOC_1),
         )
+        for wnoc, cores in sorted(free_groups.items()):
+            kernels_tail.append(
+                ttnn.KernelDescriptor(
+                    kernel_source=str(KERNEL_DIR / "q_stem_writer.cpp"),
+                    core_ranges=_crs(cores),
+                    compile_time_args=writer_ct,
+                    runtime_args=_rt_subset(writer_rt_other, cores),
+                    config=_dm("RISCV_0", ttnn.NOC.NOC_0 if wnoc == 0 else ttnn.NOC.NOC_1),
+                )
+            )
         port_reader_k = ttnn.KernelDescriptor(
             kernel_source=str(KERNEL_DIR / "q_stem_port_reader.cpp"),
             core_ranges=port_crs,
-            compile_time_args=[CB_PORT_STAGE, CB_Q_SLICE, geo.tile_bytes, geo.C1, SEM_BLOCK_READY, *geo_ct],
+            compile_time_args=[
+                CB_PORT_STAGE,
+                CB_Q_SLICE,
+                geo.tile_bytes,
+                geo.C1,
+                SEM_BLOCK_READY,
+                *geo_ct,
+                PORT_BATCH_SEGMENTS,
+            ],
             runtime_args=port_reader_rt,
             config=_dm("RISCV_1", ttnn.NOC.NOC_0),
         )
@@ -822,6 +896,7 @@ def create_mesh_program_descriptor(x, q_b, wkv, out, compute_config, cluster_axi
                 hdr_per_dest,
                 *geo_ct,
                 MAX_HEADERS,
+                geo.ts,
             ],
             runtime_args=port_sender_rt,
             config=_dm("RISCV_0", ttnn.NOC.NOC_1),

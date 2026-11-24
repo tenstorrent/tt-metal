@@ -51,7 +51,8 @@ void kernel_main() {
     constexpr uint32_t hw = get_compile_time_arg_val(9);
     constexpr uint32_t seg_bytes = hw * tile_bytes;
     constexpr uint32_t max_headers = get_compile_time_arg_val(10);  // PacketHeaderPool cap (host MAX_HEADERS)
-    constexpr uint32_t head_words = 2 + 2 * G;  // dest core, inc value, (slot base, row stride) per destination
+    constexpr uint32_t ts = get_compile_time_arg_val(11);           // rows >= ts land after the local heads (+ jump)
+    constexpr uint32_t head_words = 2 + 3 * G;  // dest core, inc value, (slot base, row stride, jump) per destination
 
     size_t a = 0;
     const uint32_t p = get_arg_val<uint32_t>(a++);
@@ -154,8 +155,9 @@ void kernel_main() {
                     const uint32_t t = heads_idx + e * head_words;
                     const uint32_t dc = get_arg_val<uint32_t>(t);
                     const uint32_t inc = get_arg_val<uint32_t>(t + 1);
-                    const uint32_t slot =
-                        get_arg_val<uint32_t>(t + 2 + 2 * d) + row * get_arg_val<uint32_t>(t + 3 + 2 * d);
+                    const uint32_t slot = get_arg_val<uint32_t>(t + 2 + 3 * d) +
+                                          row * get_arg_val<uint32_t>(t + 3 + 3 * d) +
+                                          (row >= ts ? get_arg_val<uint32_t>(t + 4 + 3 * d) : 0);
                     const uint32_t dx = q_stem::unpack_x(dc), dy = q_stem::unpack_y(dc);
                     const uint64_t arrive_noc = get_noc_addr(dx, dy, arrive_p_addr, 0);
                     cb_wait_front(cb_port_stage, hw * (unflushed + 1));

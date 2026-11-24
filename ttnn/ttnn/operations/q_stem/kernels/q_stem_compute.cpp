@@ -9,7 +9,9 @@
 //   rope_block (NoPE)   copy of the row's Dr_t rope tiles -> cb_rope_out
 //   untilize_row_block  (ROW_MAJOR output only) cb_prefix_out N-block -> cb_prefix_rm, cb_rope_out -> cb_rope_rm:
 //                       32 sticks per block for the writer. A separate block op after the producers, so a rotated
-//                       rope (RoPE) slots in front of it unchanged.
+//                       rope (RoPE) slots in front of it unchanged. full_stick (one N-block per row): the rope
+//                       tiles are packed behind the prefix into cb_prefix_out and the whole [prefix | rope] row
+//                       block is untilized once -> 32 complete output sticks.
 // All through kernel_lib helpers (matmul_block, eltwise copy, untilize).
 
 #include <cstdint>
@@ -21,6 +23,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+#include "ttnn/ttnn/operations/q_stem/kernels/q_stem_common.hpp"
 
 using namespace compute_kernel_lib;
 
@@ -62,6 +65,11 @@ void kernel_main() {
     constexpr bool out_rm = get_compile_time_arg_val(21) != 0;
     constexpr uint32_t cb_prefix_rm = get_compile_time_arg_val(22);
     constexpr uint32_t cb_rope_rm = get_compile_time_arg_val(23);
+    // full stick (ROW_MAJOR, n_nb == 1): the rope tiles are packed behind the prefix in cb_prefix_out and the row
+    // block [prefix | rope] is untilized once into cb_prefix_rm (one write per output stick in the writer)
+    constexpr bool full_stick = get_compile_time_arg_val(24) != 0;
+    constexpr uint32_t cb_rope_dst = full_stick ? cb_prefix_out : cb_rope_out;
+    constexpr uint32_t ts = get_compile_time_arg_val(25);  // stage-3 consumption order (q_stem::RowOrder)
     constexpr bool k_blocked = nkb > 1;
 
     const uint32_t cols = get_arg_val<uint32_t>(0);
@@ -126,8 +134,10 @@ void kernel_main() {
     }
 
     // ---- stage 3 ----------------------------------------------------------------------------------------------------
-    // Consumption order = landing order: the n_r remote heads row-major across heads (R1: all their weights resident,
-    // head u at in1 offset u * Dn_t * N_t), then the local heads head-major.
+    // Consumption order = landing order (q_stem::RowOrder): remote rows t < ts row-major across the n_r remote heads,
+    // the local heads head-major, then the late remote rows. R1: every remote head's weights resident (head u at in1
+    // offset u * Dn_t * N_t); with late rows (a core holding both kinds) the local heads stack behind them (local k at
+    // (n_r + k) * head tiles) and everything is popped at the end, else each local head is popped after its rows.
     const auto shape3 = MatmulBlockShape::of(1, s3n / sbw3, 1, sbw3, Dn_t, 1);
     constexpr uint32_t head_tiles = Dn_t * N_t;
     DeviceZoneScopedN("S3");
@@ -141,7 +151,7 @@ void kernel_main() {
             cb_wait_front(cb_landing, Dn_t);
             cb_reserve_back(cb_prefix_out, s3n);
             cb_push_back(cb_prefix_out, s3n);
-            if constexpr (out_rm) {
+            if constexpr (out_rm && !full_stick) {
                 untilize<s3n, cb_prefix_out, cb_prefix_rm>(1);
             }
             continue;
@@ -185,7 +195,7 @@ void kernel_main() {
                     InputPolicy::WaitAndRetainOnLastBlock,
                     InputPolicy::WaitAndPopPerKBlock>(landing_buf, wkv_buf, prefix_buf, prefix_buf, shape3);
             }
-            if constexpr (out_rm) {
+            if constexpr (out_rm && !full_stick) {
                 untilize<s3n, cb_prefix_out, cb_prefix_rm>(1);  // untilize_row_block (prefix N-block)
             }
         }
@@ -193,37 +203,53 @@ void kernel_main() {
 #ifdef ABLATE_S3
         cb_wait_front(cb_landing, Dr_t);
         cb_pop_front(cb_landing, Dr_t);
-        cb_reserve_back(cb_rope_out, Dr_t);
-        cb_push_back(cb_rope_out, Dr_t);
+        cb_reserve_back(cb_rope_dst, Dr_t);
+        cb_push_back(cb_rope_dst, Dr_t);
 #else
-        copy<input(cb_landing), output(cb_rope_out)>(IterationShape::tiles(Dr_t));
+        copy<input(cb_landing), output(cb_rope_dst)>(IterationShape::tiles(Dr_t));
 #endif
-        if constexpr (out_rm) {
+        if constexpr (full_stick) {
+            untilize<s3n + Dr_t, cb_prefix_out, cb_prefix_rm>(1);  // untilize_row_block ([prefix | rope])
+        } else if constexpr (out_rm) {
             untilize<Dr_t, cb_rope_out, cb_rope_rm>(1);  // untilize_row_block (rope)
         }
     };
-    if (n_r > 0) {
-        if constexpr (wkv_resident) {
-            cb_wait_front(cb_wkv, n_r * head_tiles);
-        }
-        for (uint32_t t = 0; t < rows_per_head; ++t) {
-            for (uint32_t u = 0; u < n_r; ++u) {
-                row_block(u * head_tiles);
+    const q_stem::RowOrder order(n_r, hpc, rows_per_head, ts);
+    // late remote rows after the local heads (a core holding both): no early pops (host sizes cb_wkv for every head)
+    const bool stack_local = n_r > 0 && order.ts < rows_per_head;
+    for (uint32_t c = 0; c < order.total(); ++c) {
+        uint32_t u, t;
+        order.at(c, u, t);
+        if (u < n_r) {
+            if constexpr (wkv_resident) {
+                if (c == 0) {
+                    cb_wait_front(cb_wkv, n_r * head_tiles);
+                }
+            }
+            row_block(u * head_tiles);
+            if constexpr (wkv_resident) {
+                if (!stack_local && c + 1 == order.first_local()) {
+                    cb_pop_front(cb_wkv, n_r * head_tiles);  // last remote row
+                }
+            }
+        } else {
+            const uint32_t below = stack_local ? u : 0;  // heads resident in front of this one
+            if constexpr (wkv_resident) {
+                if (t == 0) {
+                    cb_wait_front(cb_wkv, (below + 1) * head_tiles);
+                }
+            }
+            row_block(below * head_tiles);
+            if constexpr (wkv_resident) {
+                if (!stack_local && t + 1 == rows_per_head) {
+                    cb_pop_front(cb_wkv, head_tiles);
+                }
             }
         }
-        if constexpr (wkv_resident) {
-            cb_pop_front(cb_wkv, n_r * head_tiles);
-        }
     }
-    for (uint32_t u = n_r; u < hpc; ++u) {
-        if constexpr (wkv_resident) {
-            cb_wait_front(cb_wkv, head_tiles);
-        }
-        for (uint32_t t = 0; t < rows_per_head; ++t) {
-            row_block(0);
-        }
-        if constexpr (wkv_resident) {
-            cb_pop_front(cb_wkv, head_tiles);
+    if constexpr (wkv_resident) {
+        if (stack_local) {
+            cb_pop_front(cb_wkv, hpc * head_tiles);
         }
     }
 }

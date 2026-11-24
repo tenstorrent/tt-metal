@@ -12,7 +12,8 @@
 //                       TILE:      one page per tile
 //                       ROW_MAJOR: the compute untilized each block into 32 sticks (cb_prefix_rm / cb_rope_rm);
 //                                  each output row's stick is written as segments (prefix N-block(s) | rope) at
-//                                  their byte offsets inside the (N + Dr) * 2 B output page
+//                                  their byte offsets inside the (N + Dr) * 2 B output page; full_stick (one
+//                                  N-block per row): one [prefix | rope] block, each stick = one whole-page write
 
 #include <cstdint>
 
@@ -41,7 +42,9 @@ void kernel_main() {
     constexpr uint32_t out_page_bytes = get_compile_time_arg_val(18);  // tile (TILE) or (N + Dr) * 2 B stick (RM)
     constexpr uint32_t cb_prefix_rm = get_compile_time_arg_val(19);
     constexpr uint32_t cb_rope_rm = get_compile_time_arg_val(20);
-    constexpr auto out_args = TensorAccessorArgs<21>();
+    constexpr bool full_stick = get_compile_time_arg_val(21) != 0;  // RM: one [prefix | rope] block per row
+    constexpr uint32_t ts = get_compile_time_arg_val(22);           // stage-3 consumption order (q_stem::RowOrder)
+    constexpr auto out_args = TensorAccessorArgs<23>();
     constexpr uint32_t stick_tile_bytes = tile_bytes / 32;  // one tile-width of one row-major stick (bf16: 64 B)
     constexpr uint32_t out_w = N_t + Dr_t;
     constexpr uint32_t rows_per_head = B * qrt;
@@ -150,6 +153,10 @@ void kernel_main() {
         const uint32_t row_tile = (b * H + h) * qrt + r;  // output tile row (32 output rows)
         if constexpr (out_rm) {
             const uint32_t stick0 = row_tile * 32;
+            if constexpr (full_stick) {  // 32 whole output pages, one write each
+                store_sticks(cb_prefix_rm, out_w, stick0, 0);
+                return;
+            }
             for (uint32_t nb = 0; nb < n_nb; ++nb) {
                 store_sticks(cb_prefix_rm, s3n, stick0, nb * s3n * stick_tile_bytes);
             }
@@ -162,15 +169,11 @@ void kernel_main() {
             store_tiles(cb_rope_out, Dr_t, page0 + N_t);
         }
     };
-    for (uint32_t t = 0; t < rows_per_head; ++t) {
-        for (uint32_t u = 0; u < n_r; ++u) {
-            store_row(u, t);
-        }
-    }
-    for (uint32_t u = n_r; u < hpc; ++u) {
-        for (uint32_t t = 0; t < rows_per_head; ++t) {
-            store_row(u, t);
-        }
+    const q_stem::RowOrder order(n_r, hpc, rows_per_head, ts);
+    for (uint32_t c = 0; c < order.total(); ++c) {
+        uint32_t u, t;
+        order.at(c, u, t);
+        store_row(u, t);
     }
     noc_async_write_barrier();
 }

@@ -22,6 +22,7 @@
 #include "api/tensor/noc_traits.h"
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
+#include "ttnn/ttnn/operations/q_stem/kernels/q_stem_common.hpp"
 
 using namespace dataflow_kernel_lib;
 
@@ -66,7 +67,8 @@ void kernel_main() {
     constexpr uint32_t qrt = get_compile_time_arg_val(19);
     constexpr uint32_t G = get_compile_time_arg_val(21);
     constexpr uint32_t hw = get_compile_time_arg_val(22);
-    constexpr auto qb_args = TensorAccessorArgs<23>();
+    constexpr uint32_t ts = get_compile_time_arg_val(23);  // stage-3 consumption order (q_stem::RowOrder)
+    constexpr auto qb_args = TensorAccessorArgs<24>();
     constexpr auto wkv_args = TensorAccessorArgs<qb_args.next_compile_time_args_offset()>();
     constexpr auto mc = McastArgs<
         get_named_compile_time_arg_val("mcast_ct_offset"),
@@ -97,9 +99,11 @@ void kernel_main() {
     for (uint32_t u = 0; u < hpc; ++u) {
         nh[src_of(u)]++;
     }
-    // Consumption order (host: consumption_order / landing_slot): the n_r remote heads first, row-major across them
-    // (they all land with the same row profile), then the local heads head-major.
+    // Consumption order (host: consumption_order / landing_slot; device: q_stem::RowOrder): remote rows t < ts
+    // row-major across the n_r remote heads (they all land with the same row profile), the local heads head-major,
+    // then the late remote rows.
     const uint32_t n_r = hpc - nh[my_pos];
+    const q_stem::RowOrder order(n_r, hpc, rows_per_head, ts);
 
     const auto wkv = TensorAccessor(wkv_args, wkv_addr, wkv_tile_bytes);
     const uint32_t total_units = wkv_resident ? hpc : hpc * rows_per_head * n_nb;
@@ -110,12 +114,8 @@ void kernel_main() {
             u = idx;  // one unit per head, in consumption order
             nb = 0;
         } else {  // one unit per (row, head, N-block), in consumption order
-            const uint32_t a_units = n_r * rows_per_head * n_nb;
-            if (idx < a_units) {
-                u = (idx % (n_r * n_nb)) / n_nb;
-            } else {
-                u = n_r + (idx - a_units) / (rows_per_head * n_nb);
-            }
+            uint32_t t;
+            order.at(idx / n_nb, u, t);
             nb = idx % n_nb;
         }
         const uint32_t kt = w / s3n;
@@ -196,41 +196,39 @@ void kernel_main() {
             load_next_unit();
         }
     };
-    // Phase A: remote heads, row-major. R1: every remote head's weights resident before the first row (a core outside
-    // the stage-1 rect loads them once that row has landed); R2: the row's N-block units right after its credit.
-    for (uint32_t t = 0; t < rows_per_head; ++t) {
-        for (uint32_t u = 0; u < n_r; ++u) {
+    // Rows in consumption order. Remote row (u, t): wait the row's arrival threshold (one in-order stream per source).
+    // R1: every remote head's weights resident before the first remote row (a core outside the stage-1 rect loads
+    // them once that row has landed), a local head's weights before its first row; R2: the row's N-block units right
+    // after its credit. The own quarter comes from many stage-1 writers in any order, so wait for all of it once,
+    // before the first local row.
+    for (uint32_t c = 0; c < order.total(); ++c) {
+        uint32_t u, t;
+        order.at(c, u, t);
+        if (u < n_r) {
             const uint32_t src = src_of(u);
             noc_semaphore_wait_min(
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrive_addr[src]), (t + 1) * nh[src] * hw);
             if constexpr (wkv_resident) {
-                if (t == 0 && u == 0) {
+                if (c == 0) {
                     ensure_units(n_r);
                 }
             }
-            cb_reserve_back(cb_landing, hw);
-            cb_push_back(cb_landing, hw);  // credits only: the row is already in my landing shard
-            if constexpr (!wkv_resident) {
-                ensure_units(((t * n_r) + u + 1) * n_nb);
+        } else {
+            if (c == order.first_local()) {
+                noc_semaphore_wait_min(
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrive_addr[my_pos]),
+                    nh[my_pos] * rows_per_head * hw);
+            }
+            if constexpr (wkv_resident) {
+                if (t == 0) {
+                    ensure_units(u + 1);
+                }
             }
         }
-    }
-    // Phase B: local heads, head-major; the own quarter comes from many stage-1 writers in any order, so wait for
-    // all of it once.
-    if (n_r < hpc) {
-        noc_semaphore_wait_min(
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrive_addr[my_pos]), nh[my_pos] * rows_per_head * hw);
-    }
-    for (uint32_t u = n_r; u < hpc; ++u) {
-        if constexpr (wkv_resident) {
-            ensure_units(u + 1);
-        }
-        for (uint32_t t = 0; t < rows_per_head; ++t) {
-            cb_reserve_back(cb_landing, hw);
-            cb_push_back(cb_landing, hw);
-            if constexpr (!wkv_resident) {
-                ensure_units(n_r * rows_per_head * n_nb + ((u - n_r) * rows_per_head + t + 1) * n_nb);
-            }
+        cb_reserve_back(cb_landing, hw);
+        cb_push_back(cb_landing, hw);  // credits only: the row is already in my landing shard
+        if constexpr (!wkv_resident) {
+            ensure_units((c + 1) * n_nb);
         }
     }
 

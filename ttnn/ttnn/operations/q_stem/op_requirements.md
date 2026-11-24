@@ -109,7 +109,7 @@ ROW_MAJOR DRAM output. The output tensor is allocated ROW_MAJOR.
 (`test_op_loose[1x1x640x1536-…-fp32_dest_acc_en=False-input_buffer=L1-…-output_layout=ROW_MAJOR-q_b_proj_dtype=BFLOAT8_B-rope_mode=nope-…]`).
 Verifier categories clean.
 
-### [ ] Refinement 3 — OVERLAP: hide the stage-3 tail of the PERF FOCUS behind stage 1
+### [x] Refinement 3 — OVERLAP: hide the stage-3 tail of the PERF FOCUS behind stage 1
 
 **Type**: perf
 
@@ -141,6 +141,16 @@ verdict *win*: fastest lower beyond noise, slowest not higher). Its soft precisi
 suite is green, and there is no regression across the config-spanning guard set: one representative per kernel
 path × layout × placement — R1 and R2 wkv regimes, the K-blocked stage 1, TILE and ROW_MAJOR out, DRAM and L1
 latent, plus the Phase-0 Kimi loose case.
+
+**Outcome**: PERF FOCUS fastest chip 167.4 → 147.7 µs, slowest 177.2 → 161.3 (`ccl_perf compare`: win). Levers that
+landed: the stage-3-only cores right of the stage-1 rect write output on NoC0 (their NoC1 writes starved ~45 µs per
+row block behind stage 1 traffic; −9.5 µs all-NoC0, −4.4 more with the region split), and whole-stick ROW_MAJOR
+writes (−4.3 µs). Port-pull batching was measured flat and kept. Late remote rows (`S3_LATE_REMOTE_ROWS`) and the
+stage-1 NoC swap were parked at their defaults after measuring worse. Still binding: stage 1 itself (ends ~100–130 µs),
+the stage-1 cores' one-head tail on NoC1 (~30 µs), and the busiest fabric link. The link is the antipodal quarter
+routed one way and lands the last remote rows ~30 µs after stage 1 (SEND_PAYLOAD ablation now −15 µs), so a
+TRANSPORT lever is now in play. Next OVERLAP lever: interleave landed rows into the stage-1 loop (L2). It was not
+built: it restructures all three compute-core kernels, and the transport tail would bound its gain.
 
 ### [ ] Refinement 4 — Rows per device that are not whole tiles (m_non_aligned)
 

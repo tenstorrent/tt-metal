@@ -113,3 +113,55 @@ init + fp32 pack overheads).
   16-bit DEST + L1 latent). Unit suite test_q_stem.py 9/9 (TILE path regression).
 - Issues encountered: None.
 - Tests added: none (the golden ROW_MAJOR cells cover the path; the TILE unit suite is the regression net).
+
+## Refinement 3 — OVERLAP: hide the stage-3 tail of the PERF FOCUS behind stage 1
+- Date: 2026-11-24
+- **Breakdown re-taken on the PERF FOCUS** (`perf_measure.py` protocol; ablations via the new
+  `tests/ttnn/unit_tests/operations/q_stem/perf_ablate.py`, same protocol with the golden check skipped under
+  `QSTEM_ABLATE`; 3 experiments, fastest chip): full **167.5**; OUT_WRITE stubbed 130.4 (−37); S3,OUT_WRITE,WKV_READ
+  120.6 (−47); S3 compute alone 164.9 (−2.6); SEND_PAYLOAD 152.7 (−15, **the exchange is no longer fully hidden in
+  this config**). Per-core timeline (`zone_probe.py` + `zone_summary.py`, device zones, 1 call): stage 1 ends
+  ~99–107 µs, the call ~165–170; the cores *outside* the stage-1 rect finished last.
+- **Calculator / prediction (written before measuring)**: the op model does not express stage 3 and `estimate.py`
+  refuses the port pull (`l1_read`, recorded in `dm_estimates.json`, phase "Refinement 3"). Hand estimate from the
+  zones: the busiest port moves 24 packets per block → ~5.6 µs/block at ~235 ns/packet (fabric_all_gather report)
+  vs ~8.5 µs measured, so batching its pull barrier should move the last landing ~130 → ~95–100 µs. **Device: flat**
+  (the fabric link, not the pull, binds the busiest port — PSB per block stayed ~8–9 µs). Prediction wrong; recorded.
+- What was done (all knobs, single source in `q_stem_program_descriptor.py`):
+  1. `RM_FULL_STICK` (default True; ROW_MAJOR + one N-block per row): the rope copy packs behind the prefix in
+     `cb_prefix_out`, one `untilize<s3n + Dr_t>` per row, and the writer writes each 1152 B output stick in ONE NoC
+     write (was 1024 B + 128 B segments). Measured 167.4 → 164.1 (5 exp); off vs on in the final tree 158.7 vs 154.4.
+  2. Port pull batching: the port reader issues up to `PORT_BATCH_SEGMENTS` segments of reads per barrier (the knob
+     already sized `cb_port_stage` to 2 batches but only the sender used it); batches never wrap past the CB end.
+     Measured neutral (batch 1: 154.0 vs 4: 154.4) — the busiest fabric link binds the port. Kept (correct, live).
+  3. `FREE_WRITER_NOC` per region: the stage-3-only cores' output writer moves to NoC0 (reader to NoC1) for the
+     columns right of the stage-1 rect; the rows below stay on NoC1. Zones showed a far-east free core's 32 stick
+     writes + flush taking ~45 µs while stage 1 / the stage-1 cores' tail held NoC1 (compute back-pressured, its
+     rows long landed). all-NoC1 163.9 / all-NoC0 152.1 / right-0 + below-1 **147.7** / right-1 + below-0 153.6.
+  4. `S3_LATE_REMOTE_ROWS` (shared `q_stem::RowOrder` consumption order = landing layout, host twin
+     `landing_slot` with a per-row jump): consume the last k remote rows after the local heads. **Parked at 0**
+     (byte-identical order): k=1 measured 154.4 vs 151.9 at k=0, k=2 worse. The reader / compute / writer loops now
+     all walk `RowOrder` (one definition instead of three hand-written two-phase loops).
+  5. `S1_WRITER_NOC` (stage-1 rect writer on NoC0, reader + x-multicast receive on NoC1): correct, 227.7 µs —
+     parked at 1 (default).
+  Placement knobs re-swept on this config: `S3_COST_FACTOR` 2.0 / 2.5 / 3.5 tie (151.8–151.9), 1.3 158.7 (slowest
+  217.9), `FREE_CORE_START` 0.6 168.0, `S1_COLS_PER_CORE` 3 165.6 — kept at 2.5 / 0.35 / 2.
+- **Result** (`perf_measure.py`, 5 experiments; `agent_logs/perf_r3_focus.json`): fastest chip **167.43 → 147.66 µs**
+  (−19.8, noise 0.38), slowest 177.22 → 161.28 (−15.9); `ccl_perf compare` verdict **win**. Spread 13.6 µs; not
+  dispatch-bound (max gap 0.58 µs).
+- Measurement pitfall found: with ~8 temporary per-row/per-block zones on every RISC, the harness reported 133.9 µs
+  for a tree that measures 154.4 without them; no single zone set reproduced it — the per-RISC marker buffer
+  overflows over 500 traced calls and the duration markers go bad. Headline numbers here are zone-free.
+- Accuracy achieved: unchanged paths are exact copies (full-stick untilize + whole-page writes); every golden cell
+  run passes `check_output` at its tolerance, incl. the PERF FOCUS (HiFi2 / bfp8 q_b / 16-bit DEST / L1 / RM).
+- Golden test progress: targeted slice 30/30 (every tile-aligned shape × {RM + bfp8 + 16-bit DEST + L1,
+  TILE + bf16 + fp32 + DRAM} incl. R2 streamed wkv N=4096 and K-blocked Q=4096, + the 4 loose cases);
+  test_regression.py 8 passed / 3 xfailed (unchanged); unit test_q_stem.py 9/9.
+- Issues encountered: `estimate.py` refuses L1→L1 reads (the port pull). The S3_LATE_REMOTE_ROWS > 0 path was
+  checked against golden on the PERF FOCUS only (it is parked at 0).
+- Remaining headroom (finding, not a queue item): stage 1 still ends ~100–130 µs per chip and the stage-1 cores'
+  one-head tail runs ~30 µs past it on NoC1; the busiest fabric link (the antipodal quarter routed one way) lands
+  the last remote rows ~25–35 µs after stage 1 — that is TRANSPORT (R4 relay / direction balance of the antipodal
+  quarter) and now visible in the SEND_PAYLOAD ablation (−15 µs). Next OVERLAP lever: interleave landed stage-3
+  rows into the stage-1 loop on the stage-1 cores (L2), not built here.
+- Tests added: `perf_ablate.py`, `zone_probe.py`, `zone_summary.py` (tools, no `test_` prefix → not collected).
