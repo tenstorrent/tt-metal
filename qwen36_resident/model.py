@@ -1523,6 +1523,9 @@ class ResidentModel:
                 cb(13, prep_grid, Dt),
                 cb(14, prep_grid, 2),
                 *([T(43, had_t), cb(44, prep_grid, Dt)] if K_BFP4 else []),  # (S0-8: HAD, norm_rope's pre-rotation)
+                *(
+                    [cb(45, tail_grid, Dt)] if K_BFP4 else []
+                ),  # (S0-8: the tail's rotated k before the writer rounds it)
                 # (row groups: + the tail core's per-row rope tiles, attn_common.hpp kTailBatched)
                 cb(
                     17,

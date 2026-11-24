@@ -120,6 +120,34 @@ void kernel_main() {
     for (uint32_t i = 0; i < layers * n_act; i++) {
         const uint32_t l = i / n_act, u = act.row[i % n_act];
         const bool has_chunk = chunk_of_user[u];
+        if constexpr (kKRot) {
+            // (S0-8: the passes whose compute produced new k rows — packed: a user's first pass; batched: the layer's
+            // first pass, every active user's row; otherwise every pass, row 0 — copied into cb_knew, those rows
+            // rounded to nearest on the bfp4 grid; compute waits for cb_knew before it places them)
+            const bool makes_k = role >= 2 && (packed ? u % kPPU == 0 : (kTailBatched ? i % n_act == 0 : true));
+            if (makes_k) {
+                cb_wait_front(cb_knr, Dt);
+                cb_reserve_back(cb_knew, Dt);
+                const uint32_t from = get_read_ptr(cb_knr), to = get_write_ptr(cb_knew);
+                noc_async_read(get_noc_addr(my_x[noc_index], my_y[noc_index], from), to, Dt * kTile);
+                noc_async_read_barrier();
+                for (uint32_t d = 0; d < Dt; d++) {
+                    if constexpr (packed) {
+                        for (uint32_t r = 0; r < kVR; r++) {
+                            rtn_bfp4_tile_row(to + d * kTile, r);
+                        }
+                    } else if constexpr (kTailBatched) {
+                        for (uint32_t a = 0; a < n_act; a++) {
+                            rtn_bfp4_tile_row(to + d * kTile, act.row[a]);
+                        }
+                    } else {
+                        rtn_bfp4_tile_row(to + d * kTile, 0);
+                    }
+                }
+                cb_push_back(cb_knew, Dt);
+                cb_pop_front(cb_knr, Dt);
+            }
+        }
         // the row max: face 0's rows, then (more than 16 rows) face 2's at 512 in the slot
         if (has_chunk) {
             cb_wait_front(cb_m, 1);

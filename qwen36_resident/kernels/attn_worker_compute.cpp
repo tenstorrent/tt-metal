@@ -210,6 +210,9 @@ FORCE_INLINE void online_finish() {
 }
 }  // namespace
 
+// (S0-8: the rotated k rows go through the tail writer, which rounds them to nearest into cb_knew)
+constexpr uint32_t kKnewSrc = kKRot ? cb_knr : cb_knew;
+
 void kernel_main() {
     const uint32_t role = get_arg_val<uint32_t>(0);
     const uint32_t children = get_arg_val<uint32_t>(1);
@@ -269,7 +272,7 @@ void kernel_main() {
             const uint32_t u = act.row[i % n_act], gr = u / kPPU, n_tail = n_of[u];  // (gr: the pass's user)
             if (u % kPPU == 0) {
                 cb_wait_front(cb_kw, Dt);
-                norm_rope(cb_kraw, cb_kw, 0, cb_knew, cb_knew, kRopeK + 3 * gr);
+                norm_rope(cb_kraw, cb_kw, 0, kKnewSrc, kKnewSrc, kRopeK + 3 * gr);
                 cb_pop_front(cb_kw, Dt);
                 update_tail_rows(n_tail, 4 * gr);
                 cb_wait_front(cb_tailk, tail_pages(n_tail) * Dt);
@@ -297,7 +300,7 @@ void kernel_main() {
             // every active user's new k row of the layer at once (row u = user u, per-row rope), then its placement
             if (ka == 0) {
                 cb_wait_front(cb_kw, Dt);
-                norm_rope(cb_kraw, cb_kw, 0, cb_knew, cb_knew, kRopeRows);
+                norm_rope(cb_kraw, cb_kw, 0, kKnewSrc, kKnewSrc, kRopeRows);
                 cb_pop_front(cb_kw, Dt);
                 cb_wait_front(cb_knew, Dt);
                 cb_wait_front(cb_vraw, Dt);
@@ -321,7 +324,7 @@ void kernel_main() {
             update_tail_user(2 * u);
         } else {
             cb_wait_front(cb_kw, Dt);
-            norm_rope(cb_kraw, cb_kw, 0, cb_knew, cb_knew, 3 * u);
+            norm_rope(cb_kraw, cb_kw, 0, kKnewSrc, kKnewSrc, 3 * u);
             cb_pop_front(cb_kw, Dt);
             update_tail(2 * u);
         }
