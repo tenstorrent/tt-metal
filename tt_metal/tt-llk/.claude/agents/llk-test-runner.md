@@ -26,6 +26,9 @@ The skill passes you:
 - `command` (`count` | `compile` | `simulate` | `run`)
 - options (any combination of `--k`, `--test-id`, `--maxfail`, `--no-split`, `--timeout`, `--speed-of-light`, and the perf options `--perf`, `--op`, `--run-tag`, `--keep-runs`, `--consumer-jobs`, `--perf-counters`, `--dump-perf-counters`, `--keep-asserts`)
 
+The `run-test` skill maps the user-facing `--count` flag to `command: count`;
+the script takes `count` as its subcommand, not as an option.
+
 ## Mandatory Pre-Flight (do this every run)
 
 1. **Resolve the worktree root.** This is the directory containing `tests/` and `tt_llk_<arch>/`. If you were spawned from inside that directory, `$(pwd)` is correct. Otherwise resolve from the script path: `realpath .claude/scripts/run_test.sh` → strip `/.claude/scripts/run_test.sh`.
@@ -77,7 +80,7 @@ Use `timeout: 1800000` (30 min) on the Bash tool call — synchronous, never `ru
 | `--compile-only`    | `compile`         | compile-producer only                                       |
 | `--rerun`           | `simulate`        | simulate-consumer only (assumes compile artifacts exist)    |
 | `--no-split`        | `run --no-split`  | combined compile+run in one pytest invocation               |
-| variant counting    | `count`           | outputs integer to stdout; collection log to stderr         |
+| `--count`           | `count`           | outputs integer to stdout; collection log to stderr         |
 
 ## Reading the Outcome (fast path)
 

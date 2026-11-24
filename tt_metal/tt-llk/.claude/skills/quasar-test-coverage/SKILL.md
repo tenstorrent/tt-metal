@@ -8,6 +8,11 @@ user_invocable: true
 
 ## Goal
 
+Read `test-development` first and use `functional-test` for the Python/C++
+authoring contract, goldens, new-function workflow, and functional/perf
+decision. This skill owns only the Quasar sweep choices and the kernel
+blocking needed to make those variants meaningful.
+
 Spend variants where they change hardware behavior. A Quasar sweep that
 multiplies out every dimension, format and fidelity adds runtime to the
 Quasar ttsim PR-gate and sanity shards but tests no more of the pipeline. It also routinely
@@ -154,32 +159,19 @@ same check.
 
 ## Verify
 
-Count the total number of variants before and after, without a device. Run
-from `tests/python_tests/`; `tail -1` keeps only pytest's summary line. Either
-of two modes skips device init in `pytest_configure`:
+Count the selected functional variants before and after through `run-test`;
+its count command uses collection-only mode without opening a device:
 
-- **Compile-producer mode** — the total is the second number:
+```text
+/run-test test_[op]_quasar.py --arch quasar --count
+```
 
-  ```bash
-  CHIP_ARCH=quasar pytest --collect-only -q --compile-producer quasar/test_[op]_quasar.py | tail -1
-  # 4791/18672 tests collected (13881 deselected)
-  ```
+The integer is the compile-producer-selected total used for build and PR-gate
+sizing, not an unfiltered simulator-suite grand total.
 
-- **Simulator mode** — needs both the `--run-simulator` flag and
-  `TT_METAL_SIMULATOR`; without the variable, `pytest_configure` exits with an
-  error. For an emulator path, `pytest_configure` only constructs the
-  `SimulationServer` and never starts or connects to it, so the path only has to
-  be set, not exist, and no device or running emulator is needed:
-
-  ```bash
-  TT_METAL_SIMULATOR=<emulator build dir> CHIP_ARCH=quasar \
-    pytest --collect-only -q --run-simulator quasar/test_[op]_quasar.py | tail -1
-  # 18672 tests collected
-  ```
-
-Plain `pytest --collect-only`, with neither flag, takes the silicon path and
-calls `init_ttexalens()` in `pytest_configure`, so it fails on a machine
-without a device.
+Count compares the whole functional module. A perf count can add `--perf` and
+`--op`; `--k` and `--test-id` do not narrow count. Do not invoke raw
+`pytest --collect-only`; the runner owns the environment and no-device mode.
 
 State the before/after counts in the PR description.
 
