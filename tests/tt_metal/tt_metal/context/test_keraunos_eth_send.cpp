@@ -12,10 +12,8 @@
 // Run (after bringup_mmk.py has brought the loopback up in packet mode):
 //   export TT_METAL_EMU_SERVER=<host>:<port>
 //   export TT_METAL_EMU_SOC_DESC=$TT_METAL_HOME/tt_metal/third_party/umd/descriptors/soc_descs/mmk.yaml
-//   export TT_METAL_SLOW_DISPATCH_MODE=1 KERAUNOS_ETH_LOOPBACK=1
+//   export TT_METAL_SLOW_DISPATCH_MODE=1 TT_KERAUNOS_ETH_LOOPBACK=1
 //   ./build/test/tt_metal/unit_tests_context --gtest_filter='KeraunosEthSend/Ordering.Run/*'
-// Optional: KERAUNOS_E6_ITERATIONS (1000), KERAUNOS_E6_PAYLOAD_BYTES (4096), KERAUNOS_ETH_TXQ (0),
-// KERAUNOS_ETH_POLLS (per device wait, 2000000), KERAUNOS_ETH_HOST_TIMEOUT_S (1800).
 // A host timeout means a kernel is stuck in an unbounded wait (a send's queue-space spin): the test prints the result
 // blocks and exits the process, and the emulator job needs a reset before the next run.
 
@@ -60,12 +58,28 @@ constexpr const char* kReceiverKernel = "tests/tt_metal/tt_metal/test_kernels/mi
 // The loopback's ends.
 constexpr uint32_t kSenderHsio = 0;
 constexpr uint32_t kReceiverHsio = 1;
-#define skip_unless_keraunos_loopback()                                                              \
-    do {                                                                                             \
-        skip_unless_ethernet_package();                                                              \
-        if (std::getenv("KERAUNOS_ETH_LOOPBACK") == nullptr) {                                       \
-            GTEST_SKIP() << "Set KERAUNOS_ETH_LOOPBACK=1 once bringup_mmk.py has the loopback up.";  \
-        }                                                                                            \
+constexpr uint32_t kIterations = 1000;
+constexpr uint32_t kPayloadBytes = 4096;
+static_assert(
+    kPayloadBytes > 0 && kPayloadBytes % 16 == 0 && kPayloadBytes <= kMaxPayloadBytes,
+    "the payload is a non-zero multiple of 16 bytes that fits the receiver's block");
+constexpr uint32_t kTxq = 0;
+constexpr uint32_t kPolls = 2'000'000;  // per device wait
+constexpr std::chrono::seconds kHostTimeout{1800};
+
+// TT_KERAUNOS_ETH_LOOPBACK=1: bringup_mmk.py has the loopback up. Unset or 0 skips the suite; any other value throws.
+bool keraunos_loopback_up() {
+    const auto value = tt::parse_env<std::string>("TT_KERAUNOS_ETH_LOOPBACK", "0");
+    TT_FATAL(value == "0" || value == "1", "TT_KERAUNOS_ETH_LOOPBACK must be 0 or 1, got '{}'", value);
+    return value == "1";
+}
+
+#define skip_unless_keraunos_loopback()                                                                \
+    do {                                                                                               \
+        skip_unless_ethernet_package();                                                                \
+        if (!keraunos_loopback_up()) {                                                                 \
+            GTEST_SKIP() << "Set TT_KERAUNOS_ETH_LOOPBACK=1 once bringup_mmk.py has the loopback up."; \
+        }                                                                                              \
     } while (0)
 
 struct OrderingVariant {
@@ -138,8 +152,7 @@ protected:
         workload.add_program(distributed::MeshCoordinateRange(mesh_->shape()), std::move(program));
         distributed::EnqueueMeshWorkload(mesh_->mesh_command_queue(), workload, /*blocking=*/false);
 
-        const auto deadline = std::chrono::steady_clock::now() +
-                              std::chrono::seconds(tt::parse_env<uint32_t>("KERAUNOS_ETH_HOST_TIMEOUT_S", 1800));
+        const auto deadline = std::chrono::steady_clock::now() + kHostTimeout;
         for (const keraunos_test::Hsio& core : watched) {
             for (uint32_t status = read_words(core, at(kResultOffset), 1)[0]; status == kStatusRunning || status == 0;
                  status = read_words(core, at(kResultOffset), 1)[0]) {
@@ -171,13 +184,6 @@ TEST_P(Ordering, Run) {
     }
 
     const uint32_t base = base_;
-    const uint32_t iterations = tt::parse_env<uint32_t>("KERAUNOS_E6_ITERATIONS", 1000);
-    const uint32_t payload_bytes = tt::parse_env<uint32_t>("KERAUNOS_E6_PAYLOAD_BYTES", 4096);
-    const uint32_t txq = tt::parse_env<uint32_t>("KERAUNOS_ETH_TXQ", 0);
-    const uint32_t polls = tt::parse_env<uint32_t>("KERAUNOS_ETH_POLLS", 2'000'000);
-    ASSERT_TRUE(payload_bytes > 0 && payload_bytes % 16 == 0 && payload_bytes <= kMaxPayloadBytes)
-        << "KERAUNOS_E6_PAYLOAD_BYTES " << payload_bytes << " must be a non-zero multiple of 16 up to "
-        << kMaxPayloadBytes;
 
     const std::vector<uint32_t> zero_result(kResultSize / sizeof(uint32_t), 0);
     write_eth_link(*tx, *rx);
@@ -186,7 +192,7 @@ TEST_P(Ordering, Run) {
     write_words(*tx, at(kAckOffset), {0});
     write_words(*rx, at(kResultOffset), zero_result);
     write_words(*rx, at(kCreditOffset), {0, 0, 0, 0});
-    write_words(*rx, at(kPayloadOffset), std::vector<uint32_t>(payload_bytes / sizeof(uint32_t), kCanary));
+    write_words(*rx, at(kPayloadOffset), std::vector<uint32_t>(kPayloadBytes / sizeof(uint32_t), kCanary));
 
     const uint64_t ack_global = global_addr(*tx, at(kAckOffset));
 
@@ -198,15 +204,15 @@ TEST_P(Ordering, Run) {
         EthernetConfig{.eth_mode = Eth::IDLE, .noc = NOC::NOC_0, .defines = variant.defines});
     const KernelHandle receiver = CreateKernel(
         program, kReceiverKernel, rx->logical, EthernetConfig{.eth_mode = Eth::IDLE, .noc = NOC::NOC_0});
-    SetRuntimeArgs(program, sender, tx->logical, {base, iterations, payload_bytes, txq, polls});
+    SetRuntimeArgs(program, sender, tx->logical, {base, kIterations, kPayloadBytes, kTxq, kPolls});
     SetRuntimeArgs(
         program,
         receiver,
         rx->logical,
         {base,
-         iterations,
-         payload_bytes,
-         polls,
+         kIterations,
+         kPayloadBytes,
+         kPolls,
          static_cast<uint32_t>(ack_global),
          static_cast<uint32_t>(ack_global >> 32)});
 
@@ -224,17 +230,17 @@ TEST_P(Ordering, Run) {
     // Every credit found its payload in place, none skipped, all iterations through.
     EXPECT_EQ(tx_result.status, kStatusDone) << trace;
     EXPECT_EQ(rx_result.status, kStatusDone) << trace;
-    EXPECT_EQ(rx_result.iterations_seen, iterations) << trace;
+    EXPECT_EQ(rx_result.iterations_seen, kIterations) << trace;
     EXPECT_EQ(rx_result.mismatch_count, 0u) << trace;
     EXPECT_EQ(rx_result.credit_skips, 0u) << trace;
     EXPECT_EQ(tx_result.idma_outstanding_at_end, 0u) << trace;
-    EXPECT_EQ(read_words(*rx, at(kCreditOffset), 1)[0], iterations) << trace;
-    const auto payload = read_words(*rx, at(kPayloadOffset), payload_bytes / sizeof(uint32_t));
+    EXPECT_EQ(read_words(*rx, at(kCreditOffset), 1)[0], kIterations) << trace;
+    const auto payload = read_words(*rx, at(kPayloadOffset), kPayloadBytes / sizeof(uint32_t));
     uint32_t payload_errors = 0;
     for (uint32_t j = 0; j < payload.size(); j++) {
-        payload_errors += payload[j] != payload_word(iterations, j);
+        payload_errors += payload[j] != payload_word(kIterations, j);
     }
-    EXPECT_EQ(payload_errors, 0u) << "final payload words not iteration " << iterations << "'s pattern";
+    EXPECT_EQ(payload_errors, 0u) << "final payload words not iteration " << kIterations << "'s pattern";
 }
 
 INSTANTIATE_TEST_SUITE_P(
