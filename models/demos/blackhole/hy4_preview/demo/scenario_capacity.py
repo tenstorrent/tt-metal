@@ -47,6 +47,15 @@ def _busy(ctx, rows, n=600, seed=70):
 
 def _free_all(ctx):
     S.release_all(ctx.eng)
+    c = _cap(ctx.eng)
+    if (
+        c is not None
+    ):  # hy4fix: scenarios run back to back on ONE engine on the device: drop the entries of the previous scenario (stats stay cumulative: the gates use deltas)
+        c.store.entries.clear()
+    for r in range(
+        len(getattr(ctx.eng, "ret", []))
+    ):  # and the retained chains (release keeps them for the prefix cache): the scenario starts from nothing retained
+        ctx.eng.ret[r] = None
 
 
 def _stat(eng, k):

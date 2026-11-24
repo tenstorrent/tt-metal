@@ -244,6 +244,31 @@ def chunked_pf(
                     len(dec[r]) > 4 and S.common_prefix_equal(ref2[r], dec[r]),
                     f"{len(dec[r])} tokens",
                 )
+        if (
+            "c3x" in cases
+        ):  # hy4fix: diagnosis of c3:row_reusable_md5 (deterministic FAIL, tokens equal): is it the abort, the m=1 / n=4 drive, or the decoders?
+            for var in ("noabort_n4m1", "abort_then_mono", "abort_then_n4m2", "abort_then_n4m1"):
+                tag = f"L{L}_c3x_{var}"
+                S.release_all(eng)
+                f, _, _, _ = S.prefill(ctx, short)
+                dec = {r: [f[r]] for r in range(3)}
+                if var.startswith("abort"):
+                    h = eng.prefill_begin({3: L3})
+                    _drive(ctx, [h], 2, 2, dec, [0, 1, 2], max_groups=2)
+                    eng.prefill_abort(h)
+                    for _ in range(8):
+                        _round(eng, dec, [0, 1, 2])
+                if var == "abort_then_mono":
+                    _, md, _, _ = S.prefill(ctx, {3: L3})
+                    got = md.get(3)
+                else:
+                    n_, m_ = (4, 1) if var.endswith("n4m1") else (4, 2)
+                    h = eng.prefill_begin({3: L3})
+                    _drive(ctx, [h], n_, m_, dec, [0, 1, 2])
+                    eng.prefill_end(h)
+                    got = eng.prefill_md5(h).get(3)
+                ctx.gate(s, f"{tag}:md5_equals_mono", got == mm.get(3), f"{got} vs {mm.get(3)}")
+                eng.release(3)
         if "c3" in cases:
             tag = f"L{L}_c3"
             S.release_all(eng)

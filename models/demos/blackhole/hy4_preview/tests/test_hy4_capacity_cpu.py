@@ -638,3 +638,16 @@ def test_tailpark_only_never_touches_host_payloads():
     st = e.cap.store
     assert st.stats["host_xfer_bytes"] == 0 and st.stats["demoted_host"] == 0
     assert not [x for x in st.entries.values() if x.tier == "host"]
+
+
+def test_demo_scenarios_pass_back_to_back_on_one_engine():
+    """the device demo runs the scenarios in sequence on ONE engine (stale entries / cumulative stats of the previous scenario): hy4fix demo2 had 5 false FAILs from that."""
+    from models.demos.blackhole.hy4_preview.demo import scenarios as S
+
+    eng = FakeCapEngine(pages=520, tail=True, host=False, min_spill=8192)
+    eng.max_seq_len = 520 * 512
+    ctx = S.Ctx(eng, log=lambda s: None)
+    for name in ("tailpark", "tail_invalidate", "tail_neighbours", "tail_error", "tailpark", "tail_error"):
+        S.SCENARIOS[name](ctx)
+    bad = [g for g in ctx.gates if g[2] == "FAIL"]
+    assert ctx.gates and not bad, bad

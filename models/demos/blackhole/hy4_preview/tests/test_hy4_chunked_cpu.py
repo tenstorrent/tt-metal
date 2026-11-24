@@ -636,3 +636,11 @@ def test_demo_scenario_skips_when_flag_off_or_api_absent(monkeypatch):
     monkeypatch.delenv("HY4_CHUNKED_PF", raising=False)
     ctx = _scenario(FakeEng())
     assert ctx.gates and all(g[2] == "SKIP" for g in ctx.gates)
+
+
+def test_demo_c3x_diagnosis_cases_run_on_the_fake(monkeypatch):
+    """hy4fix c3x cases (no abort / abort then mono / abort then chunked, md5 vs mono) run and PASS on a correct engine."""
+    monkeypatch.setenv("HY4_CHUNKED_PF", "1")
+    ctx = _scenario(FakeEng(pfx=True), cases=("c0", "c3x"))
+    x = [g for g in ctx.gates if "c3x" in g[1]]
+    assert len(x) == 4 and all(g[2] == "PASS" for g in x), x

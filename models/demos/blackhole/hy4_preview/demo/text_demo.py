@@ -128,6 +128,8 @@ def main():
             kw = {}
             if n == "long" and os.environ.get("DEMO_LONG"):
                 kw["lens"] = tuple(int(x) for x in os.environ["DEMO_LONG"].split(","))
+            if n == "chunked_pf" and os.environ.get("DEMO_CHUNKED_CASES"):
+                kw["cases"] = tuple(os.environ["DEMO_CHUNKED_CASES"].split(","))
             t0 = time.time()
             try:
                 fn(ctx, **kw)
