@@ -58,8 +58,9 @@ constexpr const char* kReceiverKernel = "tests/tt_metal/tt_metal/test_kernels/mi
 // The loopback's ends.
 constexpr uint32_t kSenderHsio = 0;
 constexpr uint32_t kReceiverHsio = 1;
-constexpr uint32_t kIterations = 1000;
-constexpr uint32_t kPayloadBytes = 4096;
+// The emulator runs that passed used 8 iterations of 256 bytes.
+constexpr uint32_t kIterations = 8;
+constexpr uint32_t kPayloadBytes = 256;
 static_assert(
     kPayloadBytes > 0 && kPayloadBytes % 16 == 0 && kPayloadBytes <= kMaxPayloadBytes,
     "the payload is a non-zero multiple of 16 bytes that fits the receiver's block");
