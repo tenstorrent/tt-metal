@@ -327,7 +327,8 @@ void bind_generic_operation_compilation(nb::module_& mod) {
 
         The descriptor's runtime arguments, and the buffers its CBs name, are applied to the compiled program as a
         program cache hit applies them. The program is then enqueued with ``ttnn.generic_op``'s bookkeeping
-        (profiler, inspector, graph capture).
+        (profiler, inspector, graph capture). It cannot run while a trace is being captured, since the trace would
+        not keep the compiled program's kernel binaries alive.
 
         Args:
             compiled_program (ttnn.experimental.CompiledProgram): The program, from ``compile_generic_op``.
@@ -346,8 +347,8 @@ void bind_generic_operation_compilation(nb::module_& mod) {
         Raises:
             RuntimeError: If the descriptor or tensors have a different program cache key than the compiled ones,
                 if the kernel configuration does not fit the KERNEL_CONFIG window or the kernel binaries do not fit
-                the kernel config buffer, or if a kernel config buffer is given while a CommandListBuilder records on
-                this thread.
+                the kernel config buffer, if a kernel config buffer is given while a CommandListBuilder records on
+                this thread, or if a trace is being captured on the command queue.
         )doc";
     ttnn::bind_function<"run_compiled_program", "ttnn.experimental.">(
         mod,

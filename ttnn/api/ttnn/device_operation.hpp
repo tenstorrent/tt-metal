@@ -801,6 +801,13 @@ typename device_operation_t::tensor_return_value_t launch_operation(
             operation_name,
             compiled->program.mesh_device_id(),
             mesh_device->id());
+        // A trace replays the program's kernel binaries from its workload. The program cache keeps the workloads that
+        // `launch` traces alive, but nothing keeps a CompiledProgram's alive for the trace.
+        const auto cq_id = ttnn::core::get_current_command_queue_id_for_thread();
+        TT_FATAL(
+            !ttnn::core::current_mesh_command_queue(*mesh_device, cq_id).trace_id().has_value(),
+            "Device operation \"{}\" cannot run a compiled program while a trace is being captured",
+            operation_name);
     }
 
     // TODO: #37267 - Remove this short-circuit once we have a better way to handle inactive MeshDevices.
