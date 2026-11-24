@@ -12,6 +12,8 @@
 // DFB pairs (in0 -> out0 then in1 -> out1, num_tiles / 2 each), 12 = early return by runtime arg skip: 1 = before
 // compute_kernel_hw_startup, 2 = right after it, 3 = after one copied + packed section, inside a second section after
 // its copy; 0 = one run.
+// LTA (host define): in0 / out0 are resident L1 tensors read through LocalTensorAccessor, with no DFBs and no DM
+// kernels; one run of num_tiles / tiles_per_section full sections (mode is ignored).
 
 #include <cstdint>
 
@@ -22,6 +24,7 @@
 #include "api/compute/experimental/2_0/tile_move_copy.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/llk_operand_from_tokens.h"
+#include "api/tensor/local_tensor_accessor.h"
 #include "experimental/kernel_args.h"
 
 namespace ex = ckernel::experimental;
@@ -60,6 +63,26 @@ void copy_sections(Dfb& in, Dfb& out, std::uint32_t num_tiles) {
     }
 }
 
+#ifdef LTA
+void kernel_main() {
+    using In0 = LLKOperandFrom<tensor::in0>;
+    using Out0 = LLKOperandFrom<tensor::out0>;
+    const In0 in = LocalTensorAccessor<std::uint16_t>(tensor::in0).operand<In0>();
+    const Out0 out = LocalTensorAccessor<std::uint16_t>(tensor::out0).operand<Out0>();
+
+    ckernel::compute_kernel_hw_startup(in, out);
+    ex::copy_init(in);
+    ex::pack_init(out);
+    for (std::uint32_t i = 0; i < get_arg(args::num_tiles); i += TPS) {
+        ckernel::tile_regs_acquire();
+        ex::copy_block<TPS, 1>(in, i);
+        ckernel::tile_regs_commit();
+        ckernel::tile_regs_wait();
+        ex::pack_block<TPS, 1>(out, 0, i);
+        ckernel::tile_regs_release();
+    }
+}
+#else
 void kernel_main() {
     using In0 = LLKOperandFrom<dfb::in0>;
     using Out0 = LLKOperandFrom<dfb::out0>;
@@ -105,3 +128,4 @@ void kernel_main() {
         copy_sections<In0, Out0>(in0, out0, num_tiles);
     }
 }
+#endif

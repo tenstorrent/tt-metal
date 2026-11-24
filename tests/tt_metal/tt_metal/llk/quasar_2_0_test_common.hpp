@@ -6,6 +6,8 @@
 // fed by one DRAM reader per input DFB and drained by one DRAM writer per output DFB, all 1 producer x 1 consumer,
 // Float16_b 32x32 tiles (Float32 with ProgramIo::fp32_l1). Outputs are pre-filled with a sentinel so a skipped section
 // shows as a wrong tile.
+// ProgramIo::lta: no DM kernels and no DFBs; every input and output is a resident L1 tensor (one shard on the node)
+// bound to the compute kernel as tensor::in<i> / tensor::out<i>, read through LocalTensorAccessor::operand<>().
 
 #pragma once
 
@@ -26,7 +28,10 @@
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
 #include "impl/program/program_impl.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal::quasar_2_0 {
 
@@ -77,6 +82,7 @@ struct ProgramIo {
     bool full_sync = false;
     bool fp32_l1 = false;  // every DFB Float32 (needs fp32_dest); Tiles hold (lo, hi) 16-bit halves per element
     std::uint32_t fp32_in_mask = 0;  // input DFBs (bit i = in<i>) that are Float32 even without fp32_l1
+    bool lta = false;  // operands are resident L1 tensors (LocalTensorAccessor), not DFBs fed by DM kernels
 };
 
 // Builds and runs one program, returns one tile stream per output DFB.
@@ -102,13 +108,30 @@ inline std::vector<Tiles> run_program(distributed::MeshDevice& mesh_device, cons
         return v;
     };
 
+    // lta: one single-shard L1 tensor per operand on `node`. Reserved up front: tensor_args hold references.
+    std::vector<TensorParameter> tensor_params;
+    std::vector<MeshTensor> tensors;
+    tensors.reserve(io.inputs.size() + io.out_tiles.size());
+    auto make_tensor = [&](const std::string& name, std::uint32_t tiles, bool f32) -> MeshTensor& {
+        const MemoryConfig mem{
+            TensorMemoryLayout::HEIGHT_SHARDED,
+            BufferType::L1,
+            ShardSpec{CoreRangeSet(CoreRange({0, 0}, {0, 0})), {32 * tiles, 32}, ShardOrientation::ROW_MAJOR}};
+        tensor_params.push_back(
+            {.unique_id = TensorParamName{name},
+             .spec = TensorSpec(
+                 Shape{32 * tiles, 32},
+                 TensorLayout(f32 ? DataType::FLOAT32 : DataType::BFLOAT16, PageConfig(Layout::TILE), mem))});
+        return tensors.emplace_back(MeshTensor::allocate_on_device(mesh_device, tensor_params.back().spec));
+    };
+
     std::vector<KernelSpec> kernels;
     std::vector<DataflowBufferSpec> dfbs;
     std::vector<KernelSpecName> names;
     ComputeHardwareConfig hw{.enable_32_bit_dest = io.fp32_dest, .double_buffer_dest = !io.full_sync};
     for (std::size_t i = 0; i < io.inputs.size(); ++i) {
         // A Float32 DFB at a 32-bit Dest must name its unpack mode; the 2.0 copy unpacks it to Dest (COPY<Src>).
-        if (in_fp32(i)) {
+        if (in_fp32(i) && !io.lta) {
             hw.unpack_modes[DFBSpecName{"in" + std::to_string(i)}] = UnpackMode::UnpackToDest;
         }
     }
@@ -127,6 +150,9 @@ inline std::vector<Tiles> run_program(distributed::MeshDevice& mesh_device, cons
     // The kernel references only the DFB tokens it is bound to.
     compute.compiler_options.defines["NUM_IN"] = std::to_string(io.inputs.size());
     compute.compiler_options.defines["NUM_OUT"] = std::to_string(io.out_tiles.size());
+    if (io.lta) {
+        compute.compiler_options.defines["LTA"] = "1";
+    }
     auto dfb_spec = [&](const std::string& name, std::uint32_t depth, bool f32) {
         return DataflowBufferSpec{
             .unique_id = DFBSpecName{name},
@@ -142,6 +168,12 @@ inline std::vector<Tiles> run_program(distributed::MeshDevice& mesh_device, cons
         const std::string dfb = "in" + std::to_string(i);
         const bool f32 = in_fp32(i);
         const std::uint32_t tiles = io.inputs[i].size() / tile_halves(f32);
+        if (io.lta) {
+            const MeshTensor& t = make_tensor(dfb, tiles, f32);
+            slow_dispatch::WriteToBuffer(t.mesh_buffer(), pack32(io.inputs[i]));
+            compute.tensor_bindings.push_back({.tensor_parameter_name = TensorParamName{dfb}, .accessor_name = dfb});
+            continue;
+        }
         dfbs.push_back(dfb_spec(dfb, io.in_depth[i], f32));
         compute.dfb_bindings.push_back(ConsumerOf(DFBSpecName{dfb}, dfb));
         const KernelSpecName name{"reader" + std::to_string(i)};
@@ -169,6 +201,13 @@ inline std::vector<Tiles> run_program(distributed::MeshDevice& mesh_device, cons
     }
     for (std::size_t i = 0; i < io.out_tiles.size(); ++i) {
         const std::string dfb = "out" + std::to_string(i);
+        if (io.lta) {
+            const MeshTensor& t = make_tensor(dfb, io.out_tiles[i], io.fp32_l1);
+            slow_dispatch::WriteToBuffer(
+                t.mesh_buffer(), pack32(Tiles(io.out_tiles[i] * tile_halves(io.fp32_l1), SENTINEL)));
+            compute.tensor_bindings.push_back({.tensor_parameter_name = TensorParamName{dfb}, .accessor_name = dfb});
+            continue;
+        }
         dfbs.push_back(dfb_spec(dfb, io.out_depth[i], io.fp32_l1));
         compute.dfb_bindings.push_back(ProducerOf(DFBSpecName{dfb}, dfb));
         const KernelSpecName name{"writer" + std::to_string(i)};
@@ -208,16 +247,24 @@ inline std::vector<Tiles> run_program(distributed::MeshDevice& mesh_device, cons
         .name = "quasar_2_0_op",
         .kernels = kernels,
         .dataflow_buffers = dfbs,
+        .tensor_parameters = tensor_params,
         .work_units = {WorkUnitSpec{.name = "main", .kernels = names, .target_nodes = node}},
     };
     Program program(mesh_device, spec);
+    for (std::size_t i = 0; i < tensors.size(); ++i) {
+        params.tensor_args.emplace(tensor_params[i].unique_id, ProgramRunArgs::TensorArgument{tensors[i]});
+    }
     program.set_program_run_args(params);
     LaunchProgram(mesh_device, std::move(program));
 
     std::vector<Tiles> outs;
-    for (auto& buf : out_bufs) {
+    for (std::size_t o = 0; o < io.out_tiles.size(); ++o) {
         std::vector<std::uint32_t> raw;
-        distributed::EnqueueReadMeshBuffer(cq, raw, buf, /*blocking=*/true);
+        if (io.lta) {
+            slow_dispatch::ReadFromBuffer(tensors[io.inputs.size() + o].mesh_buffer(), raw);
+        } else {
+            distributed::EnqueueReadMeshBuffer(cq, raw, out_bufs[o], /*blocking=*/true);
+        }
         Tiles t(raw.size() * 2);
         for (std::size_t i = 0; i < raw.size(); ++i) {
             t[2 * i] = raw[i] & 0xFFFF;

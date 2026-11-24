@@ -6,6 +6,8 @@
 // Dest, with Float16_b L1 (FPU datacopy at either Dest width) and, at 32-bit Dest, Float32 L1 (fp32in:
 // unpack-to-dest, all 32 bits). Checked bit-exact against the input; outputs start as a sentinel. Test names:
 // <S>_<sync>_<dest>, e.g. S3_full_fp32, S3_half_fp32in.
+// _lta: S2 with in/out as resident L1 tensors read through LocalTensorAccessor (no DFBs, no DM kernels), per L1
+// format; the Dest sync is the same as the DFB runs, so SyncHalf only.
 
 #include "quasar_2_0_test_common.hpp"
 
@@ -19,6 +21,7 @@ struct CopyCase {
     bool full_sync;
     bool fp32;
     bool fp32_in = false;  // Float32 L1 in and out (fp32 Dest only)
+    bool lta = false;      // operands via LocalTensorAccessor instead of DFBs
 };
 
 std::string copy_case_name(const ::testing::TestParamInfo<CopyCase>& info) {
@@ -26,7 +29,8 @@ std::string copy_case_name(const ::testing::TestParamInfo<CopyCase>& info) {
     return "S" + std::to_string(c.s) + (c.full_sync ? "_full" : "_half") +
            (c.fp32_in ? "_fp32in"
             : c.fp32  ? "_fp32"
-                      : "_fp16b");
+                      : "_fp16b") +
+           (c.lta ? "_lta" : "");
 }
 
 std::vector<CopyCase> copy_cases() {
@@ -44,6 +48,9 @@ std::vector<CopyCase> copy_cases() {
             }
         }
     }
+    cases.push_back({2, false, false, false, true});
+    cases.push_back({2, false, true, false, true});
+    cases.push_back({2, false, true, true, true});
     return cases;
 }
 
@@ -104,6 +111,7 @@ TEST_P(Quasar2_0Datacopy, Run) {
         io.fp32_dest = c.fp32;
         io.full_sync = c.full_sync;
         io.fp32_l1 = c.fp32_in;
+        io.lta = c.lta;
         const std::uint32_t halves = c.fp32_in ? 2 : 1;  // uint16 halves per element
         io.ct_args = {{"num_tiles", n}, {"tiles_per_section", tps}, {"mode", mode}};
         io.rt_args = {{"skip", skip}};
