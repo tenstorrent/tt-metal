@@ -17,6 +17,7 @@ on:
           - deepseek-v3-tg
           - sdxl
           - resnet50
+          - wan-2.2-t2v
       sku:
         description: "Select SKU to test"
         required: false

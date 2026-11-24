@@ -13,6 +13,30 @@
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
+- name: CI-ONLY Wan2.2 block op profile, 1.0 vs LLK 2.0 (Ivan compiler)
+  # CI EXPERIMENT BRANCH ONLY (not for merge, pmilenkovic/llk2-wan22-ci-prof-ivan): device time per op of one 14B 480p
+  # transformer block on the 2x2 mesh, with the LLK 2.0 switches off and on. The golden is computed once on the CPU and
+  # reused by the second run.
+  cmd: |
+    unset HF_HUB_OFFLINE
+    export NO_PROMPT=1 TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE TT_DIT_TEST_GOLDEN_CACHE_DIR=/tmp/wan-golden
+    export TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000 TRACY_NO_SYS_TRACE=1
+    T="models/tt_dit/tests/models/wan2_2/test_transformer_wan.py::test_wan_transformer_block"
+    S=models/tt_dit/tests/models/wan2_2/ci_op_profile_summary.py
+    export TT_SDPA_LLK2=0 TT_RING_SDPA_LLK2=0 TT_MINIMAL_MATMUL_LLK2=0
+    python -m tracy -r -v -o generated/profiler/wan-llk1 -m pytest --timeout 5400 "$T" -k "2x2sp0tp1nl2_line_is_fsdp0 and 14b-480p" || exit $?
+    python "$S" generated/profiler/wan-llk1 llk1 || exit $?
+    export TT_SDPA_LLK2=1 TT_RING_SDPA_LLK2=1 TT_MINIMAL_MATMUL_LLK2=1
+    python -m tracy -r -v -o generated/profiler/wan-llk2 -m pytest --timeout 5400 "$T" -k "2x2sp0tp1nl2_line_is_fsdp0 and 14b-480p" || exit $?
+    python "$S" generated/profiler/wan-llk2 llk2 || exit $?
+  model: wan-2.2-t2v
+  skus:
+    bh_quietbox_2:
+      timeout: 150
+  owner_id: "" # CI experiment: no owner, and this branch's impl workflow has no Slack report
+  team: ttnn
+  budget_type: device_perf
+
 - name: Llama 3.1-8B device perf tests
   cmd: |
     export TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000
