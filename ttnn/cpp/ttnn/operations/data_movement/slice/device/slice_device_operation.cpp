@@ -7,6 +7,7 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/operations/common/hash_without_rows.hpp"
 
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm_sharded.hpp"
@@ -459,6 +460,24 @@ ttsl::hash::hash_t SliceDeviceOperation::compute_program_hash(
     // specs and slice params so any two invocations with different core-grid sizes get distinct
     // keys. Same pattern as concat fix in PR #45144 (issue #47602).
     auto factory = select_program_factory(operation_attributes, tensor_args);
+    if (std::holds_alternative<SliceTileProgramFactory>(factory) &&
+        slice_tile_program_is_row_free(operation_attributes, tensor_args)) {
+        // The program takes every row count and row bound at run time, so they stay out of the key.
+        auto start = operation_attributes.slice_start;
+        auto end = operation_attributes.slice_end;
+        start[-2] = 0;
+        end[-2] = 0;
+        using ttnn::operations::common::hash_spec_without_rows;
+        return tt::tt_metal::operation::hash_operation<SliceDeviceOperation>(
+            start,
+            end,
+            operation_attributes.step,
+            operation_attributes.output_mem_config,
+            operation_attributes.output_mem_config_inherited,
+            factory.index(),
+            hash_spec_without_rows(tensor_args.input),
+            hash_spec_without_rows(compute_output_specs(operation_attributes, tensor_args)));
+    }
     auto hash = tt::tt_metal::operation::hash_operation<SliceDeviceOperation>(
         operation_attributes.slice_start,
         operation_attributes.slice_end,
