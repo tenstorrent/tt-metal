@@ -389,7 +389,7 @@ inline void perform_reduce_col_sum_avg() {
         if constexpr (is_integer_mode) {
             lltt::replay(0, 3);  // Reuse first 3 positions of sequential integer buffer (A1,A2,A3)
         } else {
-            // Half reduce A1, A3 | A2 (recorded without its NOP): A2 reads A3's LREG0, and the SFPSTORE (SUM) or
+            // Half reduce A1, A3 | A2: A2 reads A3's LREG0, and the SFPSTORE (SUM) or
             // SFPMUL (AVG) reads A2's, so each needs one slot in between. LREG4-7 are dead after the transpose,
             // so both slots take the next face pair's first lower loads instead of NOPs (NOPs on the last pair).
             lltt::replay(COL_SUM_FLOAT_HALF_START, COL_SUM_FLOAT_A2_SLOT - COL_SUM_FLOAT_HALF_START);  // A1, A3
