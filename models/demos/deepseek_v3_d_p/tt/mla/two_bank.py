@@ -33,7 +33,7 @@ chunks, per user slot and per layer, is the ring itself: it is part of the slot.
 Attention is the GLM-5.3 shared-layer path, the sparse KV push of one natural index list per query row,
 ``[window ids | pass-1 top-k]`` (``W + top-k`` wide). The window ids are ``ring_id(min(p - W + 1 + j, end - 1))``:
 the clamp only touches padding rows (p >= end), which then read rows their own chunk wrote rather than ring rows
-an earlier chunk or request left, so their (unused) outputs do not depend on history. ``index_list``
+an earlier chunk or request left, so their (unused) outputs do not depend on history. ``start_chunk``
 computes them on device from the chunk start (metadata[1]), together with each query row's position p in the rotated
 chunk layout (``rotated_chunk_positions``), so one captured trace serves every start. ``sparse_sdpa`` stops a row at
 its first sentinel, so sentinels must be one tail; that holds when every window slot is real (``p >= W - 1``) because
@@ -162,7 +162,7 @@ class TwoBankIndex:
         )
         r_idx = torch.arange(query_rows).view(1, 1, query_rows, 1)
         shape = (sp, tp, query_rows, self.width)
-        # fp32 is exact for every value here (< 2**24); see index_list.
+        # fp32 is exact for every value here (< 2**24); see start_chunk.
         self._shard_base = per_chip((s_idx * self.chunk_local).expand(shape), ttnn.float32, ttnn.TILE_LAYOUT)
         self._shard_row = per_chip((t_idx * query_rows + r_idx).expand(shape), ttnn.float32, ttnn.TILE_LAYOUT)
         self._column = per_chip(
@@ -189,16 +189,11 @@ class TwoBankIndex:
             [metadata[0], _scalar_u32(second), _scalar_u32(ttnn.minimum(ttnn.add(second, length), ring_end))],
         ]
 
-    def index_list(self, topk_indices: ttnn.Tensor, chunk_start: ttnn.Tensor, chunk_end: ttnn.Tensor) -> ttnn.Tensor:
-        """This chunk's natural index list ``[1, 1, query_rows, W + top-k]`` uint32 for one top-k set: ``start_chunk``
-        then ``joint_list``. A new tensor."""
-        self.start_chunk(chunk_start, chunk_end)
-        return self.joint_list(topk_indices)
-
     def start_chunk(self, chunk_start: ttnn.Tensor, chunk_end: ttnn.Tensor) -> None:
         """The chunk's window part of every index list, shared by all pass-2 layers and top-k sets of the chunk (it
         depends only on the start and end): the window ring ids (written into the gather source) and the compacting
-        permutation. Index lists of the chunk (``joint_list``) are valid only after this call for the chunk.
+        permutation. Index lists of the chunk (``joint_list``) are valid only after this call for the chunk, and the
+        held one (``joint_for``) is dropped here.
 
         An index list is ``[1, 1, query_rows, W + top-k]`` uint32: ring ids of each query row's window, then its
         pass-1 top-k, compacted for rows before position W - 1. ``chunk_start`` is the chunk's start as a
@@ -240,17 +235,20 @@ class TwoBankIndex:
             to_rm_u32(ids, W), self._source, start=[0, 0, 0, 0], end=[1, 1, rows, W], step=[1, 1, 1, 1]
         )
         # Held until the next chunk's call: every joint_list of this chunk gathers through it.
+        if self._joint is not None:
+            ttnn.deallocate(self._joint[1])
+            self._joint = None
         if self._perm is not None:
             ttnn.deallocate(self._perm)
         self._perm = to_rm_u32(perm, self.width)
 
-    def joint_for(self, topk_indices: ttnn.Tensor, rebuild: bool) -> tuple[ttnn.Tensor, bool]:
+    def joint_for(self, topk_indices: ttnn.Tensor) -> tuple[ttnn.Tensor, bool]:
         """The chunk's index list for the top-k set in ``topk_indices`` and whether it was built now: the held one when
-        it was built from this set (same buffer) this chunk, else ``joint_list`` (held, the previous one freed).
-        ``rebuild`` forces a new one; the chunk's first pass-2 layer passes it, as the set's buffer is the same across
-        chunks while its contents change. The loop's top-k sets are distinct live buffers within a chunk."""
+        it was built from this set (same buffer) since ``start_chunk``, else ``joint_list`` (held, the previous one
+        freed). The loop's top-k sets are distinct live buffers within a chunk; a set's buffer is the same across
+        chunks while its contents change, which is why ``start_chunk`` drops the held list."""
         source = topk_indices.buffer_address()
-        if rebuild or self._joint is None or self._joint[0] != source:
+        if self._joint is None or self._joint[0] != source:
             if self._joint is not None:
                 ttnn.deallocate(self._joint[1])
             self._joint = (source, self.joint_list(topk_indices))

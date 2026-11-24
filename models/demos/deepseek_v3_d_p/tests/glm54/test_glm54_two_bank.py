@@ -229,7 +229,8 @@ def _scalar(mesh_device, value: int) -> ttnn.Tensor:
 def test_two_bank_index_list(mesh_device):
     """The device index list (ring ids of each query row's window from the chunk start on device, rotated layout,
     compaction) equals the host expectation from rotated_chunk_positions and ring_id, row for row, over aligned,
-    mid-block, boundary-chip and late starts; the top-k keeps its own sentinel tails."""
+    mid-block, boundary-chip and late starts; the top-k keeps its own sentinel tails. Two top-k sets per start, both
+    after one start_chunk: the window part and the permutation persist across a chunk's sets."""
     config = _config("scaled_fp8")
     sp, tp = tuple(mesh_device.shape)
     rows, topk = CHUNK // (sp * tp), config.index_topk
@@ -244,30 +245,37 @@ def test_two_bank_index_list(mesh_device):
         tp_sequence_sharded=True,
     )
     g = torch.Generator().manual_seed(7)
-    sets = torch.randint(0, RING_BASE, (sp, tp, rows, topk), generator=g)
-    valid = torch.randint(1, topk + 1, (sp, tp, rows, 1), generator=g)
-    sets[torch.arange(topk).view(1, 1, 1, -1).expand_as(sets) >= valid] = SENTINEL
-    tt_sets = ttnn.from_torch(
-        (sets - (sets >= 2**31).long() * 2**32).to(torch.int32),  # uint32 bits through int32
-        device=mesh_device,
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(sp, tp), dims=(0, 1)),
-    )
+
+    def random_set():
+        sets = torch.randint(0, RING_BASE, (sp, tp, rows, topk), generator=g)
+        valid = torch.randint(1, topk + 1, (sp, tp, rows, 1), generator=g)
+        sets[torch.arange(topk).view(1, 1, 1, -1).expand_as(sets) >= valid] = SENTINEL
+        tt_sets = ttnn.from_torch(
+            (sets - (sets >= 2**31).long() * 2**32).to(torch.int32),  # uint32 bits through int32
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(sp, tp), dims=(0, 1)),
+        )
+        return sets, tt_sets
+
+    topk_sets = [random_set(), random_set()]
     for start in INDEX_STARTS:
-        got = ttnn.to_torch(
-            index.index_list(tt_sets, _scalar(mesh_device, start), _scalar(mesh_device, start + CHUNK)),
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=(sp, tp)),
-        )
-        got = got.to(torch.int64) & 0xFFFFFFFF
-        expect = expected_index_list(index, start, sets, rows, sp, tp)
-        bad = (got != expect).any(-1).nonzero()
-        assert not len(bad), (
-            f"start {start}: {len(bad)} rows differ, first {bad[0].tolist()}: "
-            f"{got[tuple(bad[0])][:140].tolist()} vs {expect[tuple(bad[0])][:140].tolist()}"
-        )
-        logger.info(f"index list at start {start}: all {sp * tp * rows} rows match")
+        index.start_chunk(_scalar(mesh_device, start), _scalar(mesh_device, start + CHUNK))
+        for k, (sets, tt_sets) in enumerate(topk_sets):
+            got = ttnn.to_torch(
+                index.joint_list(tt_sets),
+                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=(sp, tp)),
+            )
+            got = got.to(torch.int64) & 0xFFFFFFFF
+            expect = expected_index_list(index, start, sets, rows, sp, tp)
+            bad = (got != expect).any(-1).nonzero()
+            assert not len(bad), (
+                f"start {start}, set {k}: {len(bad)} rows differ, first {bad[0].tolist()}: "
+                f"{got[tuple(bad[0])][:140].tolist()} vs {expect[tuple(bad[0])][:140].tolist()}"
+            )
+        logger.info(f"index list at start {start}: all {sp * tp * rows} rows of {len(topk_sets)} sets match")
 
 
 class _Stage:
