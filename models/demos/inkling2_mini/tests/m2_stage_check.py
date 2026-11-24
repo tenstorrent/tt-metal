@@ -91,7 +91,7 @@ try:
         ttnn.generic_op([x, x], busy_prog(bcore))
         ym = ttnn.to_torch(merged()).float()
         res["bit_equal_merged"] = bool(torch.equal(ym, ref))
-        if os.environ.get("M2_EAGER_ONLY"):  # mockwarm: compile every program, no traces
+        if os.environ.get("M2_EAGER_ONLY"):  # mock device: compile every program, no traces
             print("M2STAGE", json.dumps(res), flush=True)
             ttnn.deallocate(st.stage)
             continue

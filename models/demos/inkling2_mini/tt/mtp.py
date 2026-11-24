@@ -84,13 +84,14 @@ def mtp_root():
 
 
 class DSparkDrafter:
-    def __init__(self, model, root=None, max_ctx=None, k=BLOCK - 1, fast=True, unembed_dtype=None,ckpt="/work/models/Inkling-2-Mini", ring=None):  # fmt: skip
+    def __init__(self, model, root=None, max_ctx=None, k=BLOCK - 1, fast=True, unembed_dtype=None, ckpt=None, ring=None):  # fmt: skip
         """model: built Inkling2Model (shares embed, embed_norm, unembed, DecodePositions.pos).
         max_ctx: the positions the drafter covers (default: the model's): drafts at p < max_ctx, commits below
         max_ctx + KV_PAD. ring: the local layers' caches as rings (RING above); None = when that saves memory.
         k: draft tokens per pass (markov steps). fast=False: E9's ttnn.linear matmuls (A/B only).
         unembed_dtype: None = the decode head's unembed; ttnn.bfloat4_b = a drafter-only 4-bit copy (+0.25 GB).
-        ckpt: source checkpoint for markov_head.hidden_out (the per-step head input, see draft())."""
+        ckpt: source checkpoint for markov_head.hidden_out (the per-step head input, see draft());
+        default $INKLING_CKPT."""
         dev = self.device = model.device
         self.model = model
         self.k = k
@@ -141,6 +142,9 @@ class DSparkDrafter:
         # one decode-head pass (bank unembed + fused softcap / mask / argmax) per draft token, no vocab-wide tile ops
         from safetensors import safe_open
 
+        ckpt = ckpt or os.environ.get("INKLING_CKPT")
+        if ckpt is None:
+            raise ValueError("the drafter reads <checkpoint>/mtp.safetensors: set INKLING_CKPT or pass ckpt")
         with safe_open(f"{ckpt}/mtp.safetensors", "pt") as f:
             ho_w = f.get_tensor("markov_head.hidden_out.weight").float()  # [H, R]
             ho_b = f.get_tensor("markov_head.hidden_out.bias").float()

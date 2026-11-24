@@ -71,7 +71,7 @@ try:
                     F._TWIN.pop(id(f._last), None)
                     f._last = None
 
-    if os.environ.get("M2_EAGER_ONLY"):  # mockwarm: compile every program of an eager step per variant, no traces
+    if os.environ.get("M2_EAGER_ONLY"):  # mock device: compile every program of an eager step per variant, no traces
         import models.demos.inkling2_mini.tt.mk.moe_norm as MN
 
         for v in VARIANTS:

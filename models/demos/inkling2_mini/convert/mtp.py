@@ -82,10 +82,12 @@ def tensors(ckpt: Path):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--ckpt", type=Path, default=Path(os.environ.get("INKLING_CKPT", "/work/models/Inkling-2-Mini")))
+    ap.add_argument("--ckpt", type=Path, default=os.environ.get("INKLING_CKPT"), help="checkpoint dir")
     # one copy for every run mode (tt/mtp.mtp_root finds it there; $INKLING_MTP_CACHE points elsewhere)
     ap.add_argument("--out", type=Path, default=Path(os.environ.get("INKLING_MTP_CACHE") or modes.CACHE_DIR / "mtp"))
     args = ap.parse_args(argv)
+    if args.ckpt is None:
+        ap.error("give --ckpt or set INKLING_CKPT")
     entries = []
     for name, t, dtype, layout in tensors(args.ckpt):
         if t.dim() == 2:

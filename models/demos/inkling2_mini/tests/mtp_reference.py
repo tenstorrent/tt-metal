@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from pathlib import Path
 
 import torch
@@ -20,8 +21,8 @@ V = 200058
 
 
 class Reference:
-    def __init__(self, ckpt="/work/models/Inkling-2-Mini"):
-        ckpt = Path(ckpt)
+    def __init__(self, ckpt=None):
+        ckpt = Path(ckpt or os.environ["INKLING_CKPT"])
         mc = json.loads((ckpt / "config.json").read_text())["mtp_config"]
         self.H, self.NH, self.NKV, self.D = (
             mc["hidden_size"],

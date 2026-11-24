@@ -2,21 +2,25 @@
 # SPDX-License-Identifier: Apache-2.0
 """DSpark drafter on card vs the torch reference, and greedy speculative decode == plain greedy.
 
-Needs the v1 weight cache + ``<cache>/mtp`` (python -m models.demos.inkling2_mini.convert.mtp) and the checkpoint's
-mtp.safetensors. Run under the card lock: ``flock /tmp/tt-card.lock pytest -q -s .../tests/test_mtp.py``.
+Needs the weight cache + ``<cache dir>/mtp`` (python -m models.demos.inkling2_mini.convert.mtp), the checkpoint's
+mtp.safetensors (``$INKLING_CKPT``) and the golden prompts (``$INKLING_GOLDEN``); skips without them.
 """
 
-from pathlib import Path
+import os
 
 import pytest
 import torch
 
 import ttnn
+from models.demos.inkling2_mini.demo.golden_check import GOLDEN
 from models.demos.inkling2_mini.tests.mtp_reference import Reference
 from models.demos.inkling2_mini.tt.generator import Generator
 from models.demos.inkling2_mini.tt.spec_generator import SpecGenerator, build
 
-GOLDEN = Path("/work/inkling-bringup/golden")
+pytestmark = pytest.mark.skipif(
+    GOLDEN is None or not (GOLDEN / "chat").exists() or not os.environ.get("INKLING_CKPT"),
+    reason="golden prompts or checkpoint missing (set INKLING_GOLDEN and INKLING_CKPT)",
+)
 
 
 @pytest.fixture(scope="module")

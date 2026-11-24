@@ -9,7 +9,7 @@
 # usage: python models/demos/inkling2_mini/tests/m3_model_ab.py <out.jsonl> '<variant json>' ...
 # "experts": {tt/mk/expert_overlap.ExpertOverlap kwargs} (guessed experts streamed ahead; needs a PF-layout cache).
 # "hold": KB (L1 probe): one extra lock-step L1 tensor of that many KB per core on the expert step's worker cores.
-# M3_EAGER_ONLY=1 (mockwarm): two eager steps per variant, no traces, no numbers.
+# M3_EAGER_ONLY=1 (mock device): two eager steps per variant, no traces, no numbers.
 import json
 import os
 import statistics

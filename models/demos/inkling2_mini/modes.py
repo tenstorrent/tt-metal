@@ -6,6 +6,7 @@
 - fast: own3-l8, layers 0-19 experts 4-bit (~1.5 ms/token faster decode at 4K, KL .0096).
 
 Pick one with ``$INKLING_MODE`` (``default`` or ``fast``) or ``--fast`` in the demo.
+The caches are sub-directories of ``$INKLING_CACHE_DIR`` (default ``model_cache/inkling2_mini``).
 ``$INKLING_CACHE`` / ``$INKLING_TILE_CACHE`` still override the decode / prefill cache of either mode.
 """
 
@@ -14,7 +15,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-CACHE_DIR = Path("/work/inkling-bringup/cache")
+CACHE_DIR = Path(os.environ.get("INKLING_CACHE_DIR") or "model_cache/inkling2_mini")
 # mode: (decode cache, PF expert layout; prefill cache, TILE layout)
 CACHES = {"default": ("own3-def8-pf", "own3-def8-tile"), "fast": ("own3-l8-pf", "own3-l8-tile")}
 
