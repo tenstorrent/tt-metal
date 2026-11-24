@@ -153,6 +153,10 @@ serve_profiles:
       # its state (GDN states, conv history, KV) kept in host RAM and restored when it resumes, instead of re-prefilling
       # its whole history (~1 s at 9K, ~64 s at 250K); LRU within the budget
       RESIDENT_SWAP_GB: "64"
+      # sampled speculation: the verify rows draw with each request's parameters (temperature / top-k / top-p / seed
+      # at their positions), so sampled requests the device can sample speculate too (plugin 2d22bae's
+      # verify_rows_sample); penalized requests decode without speculation
+      RESIDENT_SPEC_SAMPLE: "1"
     additional_config:
       tt:
         sample_on_device_mode: decode_only   # the plain geometry's hub sampling (and a verify's sampled column 0)
