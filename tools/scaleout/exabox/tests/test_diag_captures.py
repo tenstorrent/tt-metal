@@ -179,6 +179,12 @@ class TestHscJudge(unittest.TestCase):
             "HSC feed margin not judged: bus-bar load 60%, under 80% of the planned load; the peak WARNs above are the plain peak WARNs",
             said,
         )
+        for a in (0x40, 0x42):
+            self.f.set(1, a, 0xA6, "00 04")  # 64 A: no peak WARN
+        self.f.run("stage-start")
+        with mock.patch.object(captures, "log") as lg:
+            self.f.run("stage-end", load_pct=60)
+        self.assertFalse([c for c in lg.call_args_list if "feed margin not judged" in c.args[0]])
 
     def test_bus_bar_vin_floor_is_the_marginal_12_v_feed(self):
         self.f.run("stage-start")
@@ -274,6 +280,9 @@ class TestBricks(unittest.TestCase):
         )
         self.assertIsNone({r[0]: r[5] for r in rows}["U1"])
         self.assertEqual(Path(f"{f.ipmi}.n").read_text(), "xxxx")  # one try per brick: a timeout holds the lock
+        with mock.patch.object(hsc.subprocess, "run", side_effect=PermissionError):
+            self.assertIsNone(bmc.raw(0x06, 0x52, 0x09, 0xEC, 0x00, 0x05))
+        self.assertEqual(bmc.failed, "PermissionError")  # the error class, not 'no route'
         self.assertEqual(bmc.raw(0x06, 0x52, 0x09, 0xEC, 0x00, 0x05), [])  # a write's empty answer is a good one
         f.ipmi.write_text("#!/bin/sh\nexit 1\n")
         self.assertEqual((bmc.raw(0x06, 0x52, 0x09, 0xEC, 0x01), bmc.failed), (None, "ipmitool rc 1"))
@@ -305,11 +314,16 @@ class TestBricks(unittest.TestCase):
         with mock.patch.object(captures, "PCI", f.pci), mock.patch.object(
             captures, "BRICK_LOAD_S", 0.3
         ), mock.patch.object(hsc.Bmc, "raw", slow), mock.patch.object(captures.signal, "signal"):
-            captures.poll(d, os.getpgrp(), a)
+            captures.poll(d, os.getpgrp(), a, "busbar")
         self.assertLess(time.time() - t0, 2.0)  # the stop is seen between reads, not after a cadence sleep
         rows = [r.split("\t") for r in (d / "brick.tsv").read_text().splitlines()]
-        self.assertTrue(rows and all(r[1] == "under load" for r in rows), rows[:2])
-        self.assertTrue(captures._brick_load(d, "busbar", t0).startswith("bricks under load during busbar: "))
+        self.assertTrue(rows and all(r[1] == "during busbar" for r in rows), rows[:2])
+        line = captures._brick_load(d, "busbar", t0)
+        self.assertTrue(line.startswith("bricks during busbar: "), line)
+        self.assertIsNone(captures._brick_load(d, "C9", t0))  # a pass is its own stage's
+        rows = (("U8", 1.2), ("U2", 1.1))
+        (d / "brick.tsv").write_text("".join(f"{time.time():.0f}\tduring busbar\t{n}\t{v}\t1.0\n" for n, v in rows))
+        self.assertTrue(captures._brick_load(d, "busbar", t0).endswith("min Vout U2 1.100 V, U8 1.200 V"))  # by brick name
         mux = [c.split()[-1] for c in f.calls if c.startswith("raw 0x06 0x52 0x09 0xec 0x00")]
         self.assertEqual(mux[-1], "0x05")  # restored, also when the stop came mid-pass
 

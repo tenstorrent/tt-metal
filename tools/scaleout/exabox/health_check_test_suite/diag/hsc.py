@@ -74,7 +74,7 @@ class Bmc:
 
     def __init__(self, ipmitool: str | None = None, lock: str | None = None):
         self.lock, self.cmd, self.why, self._listed = lock or f"/tmp/hc-bmc-{os.getuid()}.lock", [], "", {}
-        self.failed = ""  # why the last raw call failed: 'ipmitool rc N' (124: it timed out)
+        self.failed = ""  # why the last raw call failed: 'ipmitool rc N' (124: it timed out), or the OSError class
         if ipmitool:
             self.cmd = shlex.split(ipmitool)
             self.why = "" if shutil.which(self.cmd[0]) else f"{self.cmd[0]} not found"
@@ -134,7 +134,9 @@ class Bmc:
             return b
         except subprocess.TimeoutExpired:
             self.failed = "ipmitool rc 124"
-        except (OSError, ValueError):
+        except OSError as e:
+            self.failed = type(e).__name__
+        except ValueError:
             pass
         return None
 

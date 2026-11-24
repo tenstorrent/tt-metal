@@ -245,6 +245,7 @@ def _judge(step: str, before: dict, after: dict, peaks: dict, samples: dict, st:
             elif r > SAG_INFO_MOHM:
                 info.append(f"HSC sag information {line}, over {SAG_INFO_MOHM} mOhm: information only, not a warn")
     pk = {k: r["READ_IOUT_PEAK"] * IOUT_LSB for k, r in peaks.items() if r.get("READ_IOUT_PEAK") is not None}
+    n_before = len(out)
     for k, p in pk.items():
         w, f = (_plaus(lims.get(k, {}).get(n)) for n in ("IOUT_OC_WARN_LIMIT", "IOUT_OC_FAULT_LIMIT"))
         if w and p >= w:
@@ -266,7 +267,7 @@ def _judge(step: str, before: dict, after: dict, peaks: dict, samples: dict, st:
             out.append(
                 f"HSC WARN {_where(k)}: IOUT peak {p:.1f} A during {step}, {(p / m - 1) * 100:.0f}% above the median {m:.1f} A of the other {len(others)} feeds; WARN only, not a finding"
             )
-    if bb and low and pk:
+    if bb and low and len(out) > n_before:  # a peak WARN fired
         info.append(
             f"HSC feed margin not judged: bus-bar load {args.load_pct:.0f}%, under {LOAD_JUDGED_PCT}% of the planned load; the peak WARNs above are the plain peak WARNs"
         )
@@ -341,17 +342,17 @@ def _brick_rows(d: Path, when: str, rows) -> None:
 
 
 def _brick_load(d: Path, step: str, t0: float) -> str | None:
-    """The poller's brick passes under load since *t0*: the lowest Vout per brick and of the 54 V rail."""
+    """The poller's brick passes during *step* since *t0*: the lowest Vout per brick and of the 54 V rail."""
     lo: dict[str, float] = {}
     n = set()
     for r in (r.split("\t") for r in _lines(d / "brick.tsv")):
-        if len(r) > 3 and r[1] == "under load" and float(r[0]) >= t0:
+        if len(r) > 3 and r[1] == f"during {step}" and float(r[0]) >= t0:
             n.add(r[0])
             with suppress(ValueError):
                 lo[r[2]] = min(lo.get(r[2], 99.0), float(r[3]))
     if n:
-        v = ", ".join(f"{k} {x:.3f} V" for k, x in lo.items()) or "none read"
-        return f"bricks under load during {step}: {len(n)} pass(es), every {BRICK_LOAD_S} s; min Vout {v}"
+        v = ", ".join(f"{k} {x:.3f} V" for k, x in sorted(lo.items())) or "none read"
+        return f"bricks during {step}: {len(n)} pass(es), every {BRICK_LOAD_S} s; min Vout {v}"
     return None
 
 
@@ -520,7 +521,7 @@ def _aer_rate(d: Path, t0: float, step: str) -> list[str]:
     ]
 
 
-def poll(d: Path, watch: int, args) -> None:
+def poll(d: Path, watch: int, args, step: str) -> None:
     """Until stage-end's stop file, or the caller's process group *watch* is gone: each HSC's VIN (IOUT every other
     sweep) to vin.tsv; every POWER_S the BMC power sensors and each tray's VR power-good byte to power.tsv, each chip's
     power and current to chips.tsv, a newly hung chip to hung.tsv; every AER_S the AER rate to aer_min.tsv."""
@@ -561,7 +562,7 @@ def poll(d: Path, watch: int, args) -> None:
         if bricks and time.time() >= nxt_brick:
             rows, notes, fails = hsc.brick_pass(bmc, modes, load=True, stop=stop.exists)
             nxt_brick = time.time() + BRICK_LOAD_S
-            _brick_rows(d, "under load", rows)
+            _brick_rows(d, f"during {step}", rows)
             for n in notes + fails:
                 log(n)
         time.sleep(0.05)
@@ -642,9 +643,10 @@ def vcore_lines(d: Path) -> list[str]:
     return out
 
 
-def _poll_start(st: dict, d: Path, args, mode: str = "poll") -> None:
+def _poll_start(st: dict, d: Path, args, mode: str = "poll", step: str = "") -> None:
     (d / f"{mode}.stop").unlink(missing_ok=True)
-    argv = [sys.executable, "-m", "diag.captures", mode, str(d), "--watch-pgid", str(os.getpgrp())]
+    argv = [sys.executable, "-m", "diag.captures", mode, str(d), *([step] if mode == "poll" else [])]
+    argv += ["--watch-pgid", str(os.getpgrp())]
     argv += ["--vcore-s", str(args.vcore_s)] if mode == "vcore" else []
     argv += [x for k, v in (("--ipmitool", args.ipmitool), ("--i2c-lock", args.i2c_lock)) if v for x in (k, v)]
     argv += ["--hang-guard"] if args.hang_guard else []
@@ -778,7 +780,7 @@ def _stage_start(bmc: Bmc, st: dict, d: Path, step: str, status: str, args) -> l
     st["dropped"] = []
     st["stage"] = {"t0": time.time(), "before": before, "last": before, "since": "the stage's before read", "pset": {}}
     st["stage"].update(chips=chips(), aer=aer.read_aer(PCI))
-    _poll_start(st, d, args)
+    _poll_start(st, d, args, step=step)
     return []
 
 
@@ -895,14 +897,16 @@ def sample(args) -> None:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="python3 -m diag.captures", description=__doc__.split("\n\n")[0])
     ap.add_argument("event", choices=[*EVENTS, "sample", "poll", "vcore"])
-    ap.add_argument("args", nargs="*", help="STEP STATUS OUTDIR for an event; DIR for poll and vcore")
+    ap.add_argument("args", nargs="*", help="STEP STATUS OUTDIR for an event; DIR STEP for poll; DIR for vcore")
     ap.add_argument("--watch-pgid", type=int, default=0, help=argparse.SUPPRESS)
     add_args(ap)
     a = ap.parse_args(argv)
     if a.event == "sample":
         sample(a)
-    elif a.event in ("poll", "vcore") and len(a.args) == 1:
-        (poll if a.event == "poll" else vcore)(Path(a.args[0]), a.watch_pgid, a)
+    elif a.event == "poll" and len(a.args) == 2:
+        poll(Path(a.args[0]), a.watch_pgid, a, a.args[1])
+    elif a.event == "vcore" and len(a.args) == 1:
+        vcore(Path(a.args[0]), a.watch_pgid, a)
     elif len(a.args) == 3:
         for ln in run(a.event, *a.args, a):
             print(ln, flush=True)
