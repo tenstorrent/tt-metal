@@ -24,6 +24,7 @@ import json
 import re
 import signal
 import socket
+import subprocess
 import sys
 import time
 from dataclasses import asdict, replace
@@ -234,6 +235,12 @@ def recount_after_tests(snapshot: Callable[[], dict]) -> Check:
     return pcie_enum_check(snap.get("device_info") or [], name)
 
 
+def _hear(stage: str, out: Path, dry_run: bool) -> None:
+    """The caller's --hook hears a stage start (reset, links, end; the bus-bar stage says so itself)."""
+    if events.hook and not dry_run:
+        subprocess.run([events.hook, "stage-start", stage, "-", str(out)], check=False)
+
+
 def _run_galaxy_load(
     tests: Sequence[str],
     phase: Phase,
@@ -257,6 +264,7 @@ def _run_galaxy_load(
         _guarded(phase, "busbar", FAIL, lambda: run_busbar(phase, out, mode, dry_run, tuple(steps), **overrides))
     fault = link_fault_before or any(link_fault(c) for c in phase.checks[held:] if c.name != "busbar")
     if "links" in tests:
+        _hear("links", out, dry_run)
         _guarded(phase, "links", FAIL, lambda: run_links(phase, out, fault, sweep_reset, dry_run, **links_kw))
 
 
@@ -452,6 +460,7 @@ def run_diag(
     elif not plan.resets:
         reset_phase.add(Check(name="reset_loop", status=SKIP, details=f"no pre-test resets for tier '{tier}'"))
     else:
+        _hear("reset", logs_dir, dry_run)
 
         def _resets() -> None:
             reset_loop(
@@ -545,6 +554,7 @@ def run_diag(
     if post_test_plan:
         post_reset_phase = Phase(name="post_test_reset")
         t0 = time.time()
+        _hear("end", logs_dir, dry_run)
         aer_reset(lambda: run_post_test_reset(tt_smi_path, post_test_plan, post_reset_phase, dry_run, reset_gate))
         if end_seq:
             end = lambda: run_end(tt_smi_path, post_reset_phase, logs_dir / "end", dry_run, end_delay_s, reset_gate)

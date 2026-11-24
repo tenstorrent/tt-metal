@@ -1014,6 +1014,14 @@ class TestLinks(unittest.TestCase):
             (bb["status"], bb["details"]), (SKIP, "known drop: tray 3 is down and the load needs the 4x8 mesh")
         )
 
+    def test_the_hook_hears_each_stage_start(self):
+        import diag_runner
+
+        heard = []
+        with mock.patch.object(diag_runner, "_hear", lambda stage, out, dry: heard.append(stage)):
+            self._run_load("weekly", stage_order="reset,busbar,links,end")
+        self.assertEqual(heard, ["reset", "links", "end"])
+
     def test_skip_tests_skips_the_load(self):
         got = self._run_load(skip_tests=True)
         self.assertEqual(got["order"], [])
