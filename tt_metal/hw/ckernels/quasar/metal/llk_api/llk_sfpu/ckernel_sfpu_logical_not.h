@@ -30,9 +30,6 @@ inline void calculate_logical_not() {
         sfpi::vUInt,
         std::conditional_t<INSTRUCTION_MODE == InstrModLoadStore::INT32, sfpi::vInt, sfpi::vFloat>>;
 
-    // The default is stored first and the taken arm stored under the predicate: two
-    // SFPSTOREs instead of two SFPMOVs and a store. The integer 1 is loaded once here
-    // rather than once per row (the float 1.0 is a constant register either way).
     const vType zero = 0;
     const vType one = 1;
 #pragma GCC unroll 0
