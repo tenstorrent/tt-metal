@@ -12,6 +12,7 @@
 #include "ckernel_helper.h"
 #if defined(ARCH_QUASAR)
 #include "ckernel_trisc_common.h"
+#include "llk_dest_borrow.h"
 #endif
 
 // C-runtime related linker symbols
@@ -173,6 +174,7 @@ TT_ALWAYS_INLINE void device_setup()
     dvalid_cfg[PACK_DEST_DVALID_CTRL_wait_mask_ADDR32]      = 0;
     TTI_SEMINIT(1, 0, 0, ckernel::trisc::semaphore::t6_sem(ckernel::trisc::semaphore::PACK_UNPACK_L1));
     TTI_SEMINIT(2, 0, 0, ckernel::trisc::semaphore::t6_sem(ckernel::trisc::semaphore::MATH_PACK));
+    _llk_dest_borrow_init_();
 #endif
 
 // Enable CC stack

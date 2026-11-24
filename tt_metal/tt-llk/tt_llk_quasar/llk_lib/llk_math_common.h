@@ -252,10 +252,6 @@ inline void _llk_math_pack_sync_init_()
     _set_dest_section_base_<TRISC_ID>(_get_dest_buffer_base_());
 
     constexpr std::uint32_t num_sem = (DST == DstSync::SyncFull) ? 1 : 2;
-    _llk_sync_init_(semaphore::MATH_UNPACK, 1, 0);
-    _llk_sync_init_(semaphore::MATH_SFPU, 1, 0);
-    _llk_sync_init_(semaphore::PACK_UNPACK, 1, 0);
-    _llk_sync_init_(semaphore::PACK_SFPU, 1, 0);
     TTI_SEMINIT(num_sem, 0, 0, p_stall::SEMAPHORE_1);
 }
 
