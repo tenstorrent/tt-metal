@@ -174,16 +174,16 @@ class FastAttentionState(AttentionState):
         # the rings as [8, 1, 1024, 128] (same buffers): sdpa with the kv groups as the batch (multi-token verify)
         self.k_grp, self.v_grp = (ttnn.reshape(r, [N_KV, 1, WINDOW, HEAD_DIM]) for r in (self.k_ring, self.v_ring))
         assert self.k_grp.buffer_address() == self.k_ring.buffer_address()
-        self.kv_full = self.kv_grp = self.v_full = self.v_grp = None
+        self.kv_full = self.kv_grp = self.v_full = self.v_far_grp = None  # v_grp is the ring view above
         if is_global and FAR_SPLIT:  # keys and values apart (kv_full = the keys), values in bfp4
             self.kv_full, self.v_full = (
                 ttnn.zeros([1, N_KV, max_ctx, HEAD_DIM], dtype=dt, layout=ttnn.TILE_LAYOUT, device=device)
                 for dt in (cache_dtype, ttnn.bfloat4_b)
             )
-            self.kv_grp, self.v_grp = (
+            self.kv_grp, self.v_far_grp = (
                 ttnn.reshape(t, [N_KV, 1, max_ctx, HEAD_DIM]) for t in (self.kv_full, self.v_full)
             )
-            assert self.v_grp.buffer_address() == self.v_full.buffer_address()
+            assert self.v_far_grp.buffer_address() == self.v_full.buffer_address()
         elif is_global:
             self.kv_full = ttnn.zeros(
                 [1, N_KV, max_ctx, KV_MEM], dtype=FAR_DTYPE or cache_dtype, layout=ttnn.TILE_LAYOUT, device=device
@@ -468,7 +468,7 @@ class Inkling2AttentionFast(Inkling2Attention):
                 far = ttnn.transformer.flash_multi_latent_attention_decode(
                     self.prep.q_far,  # [1, 8, 3, 288], written by the prep (FAR_SPLIT: [1, 8, 3, 128])
                     state.kv_grp,
-                    *([state.v_grp] if FAR_SPLIT else []),
+                    *([state.v_far_grp] if FAR_SPLIT else []),
                     head_dim_v=V_WIDTH,
                     is_causal=True,
                     cur_pos_tensor=far_pos,
