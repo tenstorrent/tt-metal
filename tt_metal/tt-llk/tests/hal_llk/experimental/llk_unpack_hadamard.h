@@ -178,7 +178,7 @@ inline void _llk_unpack_hadamard_h128_(
     adc::set<srca_span(kFaceXEnd).for_clients<adc::Client::Unpacker0>()>();
 
     sync::semaphore::get<hal_port::UNPACK_SYNC_SEM>(); // T6::SEMGET for context release
-    hal_port::switch_config_context(unp_cfg_context);  // -> context 1
+    hal_port::switch_config_context_branched(unp_cfg_context); // -> context 1
 
     // ── Phase 2 (context 1): stream H_16 into srcA bank 1 (overlaps MM1) ─
     // SEC0 context-1 srcA base was preprogrammed to H_16 by _init_, so no

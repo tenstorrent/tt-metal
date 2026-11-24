@@ -376,7 +376,7 @@ inline void _llk_unpack_tilize_(
         sync::semaphore::get<hal_port::UNPACK_SYNC_SEM>();
 
         // Flip to the other context for the next tile
-        hal_port::switch_config_context(unp_cfg_context);
+        hal_port::switch_config_context_branched(unp_cfg_context);
     }
     else
     {
@@ -428,7 +428,7 @@ inline void _llk_unpack_tilize_(
         sync::semaphore::get<hal_port::UNPACK_SYNC_SEM>();
 
         // Switch unpacker config context
-        hal_port::switch_config_context(unp_cfg_context);
+        hal_port::switch_config_context_branched(unp_cfg_context);
     }
 }
 
