@@ -39,14 +39,14 @@ TILE_ELEMS = 1024
 
 @dataclasses.dataclass
 class RECONFIG_LIVE(TemplateParameter):
-    steps: str = "R"
+    rl_steps: str = "R"
 
     def convert_to_cpp(self) -> str:
-        chars = ", ".join(f"'{c}'" for c in self.steps)
+        chars = ", ".join(f"'{c}'" for c in self.rl_steps)
         return (
-            f"constexpr int RL_NSTEPS = {len(self.steps)};\n"
+            f"constexpr int RL_NSTEPS = {len(self.rl_steps)};\n"
             f"constexpr char RL_STEPS[] = {{{chars}}};\n"
-            f"constexpr std::uint32_t RL_NR = {self.steps.count('R')};"
+            f"constexpr std::uint32_t RL_NR = {self.rl_steps.count('R')};"
         )
 
 

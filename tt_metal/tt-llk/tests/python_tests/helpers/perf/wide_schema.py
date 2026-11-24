@@ -172,7 +172,6 @@ DB_SCHEMA = [
     Column("api_sfpu", "bool", True, "configuration"),
     Column("api_dst", "int64", True, "configuration"),
     Column("api_partial_face", "bool", True, "configuration"),
-    Column("tiny_pack_mode", "int64", True, "configuration"),
     Column("pool_type", "string", True, "configuration"),
     Column("preserve_src_zero_flag", "bool", True, "configuration"),
     Column("r_dimm", "int64", True, "configuration"),
