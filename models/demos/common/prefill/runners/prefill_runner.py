@@ -219,6 +219,8 @@ assert (
 ), f"PREFILL_MEDIA_MAX_REFS={MEDIA_MAX_REFS}: model {ADAPTER.name!r} does not take media refs"
 assert not (MEDIA_MAX_REFS and USE_TRACE), "PREFILL_MEDIA_MAX_REFS>0 does not support PREFILL_USE_TRACE=1 yet"
 assert not (MEDIA_MAX_REFS and MTP_LEVELS), "PREFILL_MEDIA_MAX_REFS>0 does not support PREFILL_MTP_LEVELS>0"
+# The H2D metadata is its own socket transfer to a fixed L1 address, not part of the token page; it only has to fit
+# one page. The service refuses a larger one at construction, and this check names PREFILL_MEDIA_MAX_REFS first.
 _H2D_PAGE_BYTES = (
     int(make_h2d_spec(GLOBAL_MESH_SHAPE, FORWARD_TOKENS_BUDGET, MTP_LEVELS, SP_AXIS, FORWARD_CHUNKS).shape[-1])
     * TOKEN_ID_BYTES
@@ -598,6 +600,8 @@ def _ack_metadata(runtime, sockets, meta: dict, d2h_service) -> ttnn.Tensor:
     if not (MEDIA_MAX_REFS and d2h_service is not None and runtime.config.is_first_rank):
         return sockets.metadata
     words = torch.tensor(forward_metadata_words(meta["chunks"], FORWARD_CHUNKS), dtype=torch.int32).reshape(1, 1, 1, -1)
+    # Refilling in place is safe: _socket_next's blocking metadata read already waited for the previous forward,
+    # whose D2H ack read this record.
     if sockets.ack_record is not None and sockets.ack_record.is_allocated():
         _fill_record(sockets.ack_record, words)
     else:
