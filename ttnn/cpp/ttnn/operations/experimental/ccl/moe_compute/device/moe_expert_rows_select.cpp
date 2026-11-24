@@ -385,6 +385,12 @@ namespace {
 std::optional<MoEExpertRowsParams> choose_path(
     const MoEComputeParams& args, const MoEComputeInputs& tensor_args, ForcedKernel forced, uint32_t budget) {
     auto* mesh_device = tensor_args.tilize_input_tensor.device();
+    // The packed (token, k) local output exists only on the ring path. A call forced to expert_rows on SingleCluster
+    // takes the ring too, instead of failing.
+    if (args.path == MoEComputePath::SingleCluster) {
+        log_debug(tt::LogOp, "moe_compute: ring kernel (SingleCluster)");
+        return std::nullopt;
+    }
     if (forced == ForcedKernel::Ring) {
         return ring_with_reason(forced, "TT_METAL_MOE_COMPUTE_KERNEL=ring");
     }
