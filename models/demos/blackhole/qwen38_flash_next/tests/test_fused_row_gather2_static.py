@@ -41,7 +41,7 @@ def test_switch_modes(monkeypatch):
     monkeypatch.setenv("QWEN38_ROW_GATHER", "0")
     assert not rg.enabled_by_env() and not rg.admits(_hidden())
     assert rg.enabled_by_env({})  # on by default (x38 A/B)
-    for value, enabled in (("1", True), ("v1", True), ("0", False), ("", False)):
+    for value, enabled in (("1", True), ("0", False), ("", False)):
         assert rg.enabled_by_env({"QWEN38_ROW_GATHER": value}) is enabled
     assert "row_gather" in fused.enabled_names({"QWEN38_ROW_GATHER": "1"}) or fused.registry.TP_SIZE == 4
     assert "row_gather" in fused.enabled_names({}) or fused.registry.TP_SIZE == 4

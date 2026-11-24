@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Device test of the block-input all-gather: stock ``ttnn.all_gather`` vs ``row_gather`` (the earlier packed program) vs
-``row_gather2`` (the dense-unpack version), bit for bit and traced time, on the model's calls.
+"""Device test of the block-input all-gather: stock ``ttnn.all_gather`` vs ``row_gather2`` (the dense-unpack version), bit for bit and
+traced time, on the model's calls.
 
 The model's call (gdn.py / qsa.py ``_all_gather_hidden``): the GR read's hidden shard ``[1, 1, rows, 320]`` bf16 TILE in
 DRAM (``fp.allocate`` default) -> ``ttnn.all_gather(dim=3, cluster_axis=1, memory_config=<the in-projection's 8-core L1
@@ -22,7 +22,6 @@ import ttnn
 from models.demos.blackhole.qwen38_flash_next.demo import text_demo as demo
 from models.demos.blackhole.qwen38_flash_next.demo.text_demo import device_params  # noqa: F401
 from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import MESH_SHAPE
-from models.demos.blackhole.qwen38_flash_next.ttnn.fused import row_gather as rg
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused import row_reduce as rr
 
 TP = MESH_SHAPE[1]
@@ -39,21 +38,7 @@ if PAYLOAD:
 CASES = [(1, 8), (2, 8), (1, 5), (2, 5)]  # (rows, consumer storage cores: 8 = gdn / qsa, 5 = moe)
 
 
-def _v1(x, cfg):
-    """The earlier barrier + unpack program (QWEN38_ROW_GATHER=v1)."""
-
-    previous = os.environ.get(rg.ENV)
-    os.environ[rg.ENV] = "v1"
-    try:
-        return rg.row_gather(x, cluster_axis=1, memory_config=cfg)
-    finally:
-        if previous is None:
-            del os.environ[rg.ENV]
-        else:
-            os.environ[rg.ENV] = previous
-
-
-CANDIDATES = [("row_gather", _v1)]
+CANDIDATES = []
 try:
     from models.demos.blackhole.qwen38_flash_next.ttnn.fused import row_gather2 as rg2
 

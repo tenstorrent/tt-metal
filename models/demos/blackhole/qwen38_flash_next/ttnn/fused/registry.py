@@ -231,7 +231,7 @@ def enabled_names(environ: Mapping[str, str] = os.environ) -> frozenset[str]:
     edge = edge_trim_names(environ)  # QWEN38_EDGE_TRIM=1: kernels served at TP=8 that are not in TP8_READY yet
     defaults = default_names() if TP_SIZE == 4 else default_names() | TP8_DEFAULT_ON
     names = (defaults | _names(environ, ENV) | edge) - _names(environ, OFF_ENV)
-    if environ.get("QWEN38_ROW_GATHER", "1") in ("1", "v1"):  # the row_gather program's own switch (default on)
+    if environ.get("QWEN38_ROW_GATHER", "1") == "1":  # the row_gather program's own switch (default on)
         names = names | {"row_gather"}
     if TP_SIZE == 4:
         return names
