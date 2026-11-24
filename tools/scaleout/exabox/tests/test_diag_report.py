@@ -14,6 +14,7 @@ from pathlib import Path
 
 SUITE_DIR = Path(__file__).resolve().parent.parent / "health_check_test_suite"
 sys.path.insert(0, str(SUITE_DIR))
+sys.path.append(str(SUITE_DIR / "galaxy"))
 
 from diag import report  # noqa: E402
 
@@ -62,6 +63,22 @@ def test_whole_tray_power_loss(tmp_path):
         "Repair recommendation: replace the bus bar set (fixed 3 of 11 in fleet records); bus bar set / tray 12 V feed A of "
         "tray 4 (HSC 0x40 VIN_UV_WARN+OFF newly set during this run), then tray 4 board if it persists"
     )
+
+
+def test_pcie_bandwidth_line_gives_a_pcie_cause(tmp_path):  # pcie_lines' own line, through the report
+    from quiet_clock import pcie_lines
+
+    def row(b, h):
+        return dict(chip=f"{b} (tray 2, ASIC 1, device id 0)", mb=32, h2d_gbs=h, d2h_gbs=20, bad="")
+
+    rs = [row("41:00.0", 0.1), *(row(f"4{i}:00.0", 20) for i in (2, 3, 4))]
+    line = pcie_lines(rs, 0.25, 0.5, "h", sysfs="/nonexistent")[0]
+    out = run(tmp_path, [line], rc=8, verdict="FAIL (exit 8)")
+    assert out[1] == "FAIL tray 2 (1 finding)" and "cause: PCIe path (PCIE/LINK)" in out[2], out
+    assert "Final verdict: FAIL: 1 fault: low PCIe bandwidth or wrong read back" in out, out
+    assert any(
+        x.startswith("  Fault 1: low PCIe bandwidth") and "where: tray 2 ASIC 1 / 41:00.0" in x for x in out
+    ), out
 
 
 def test_inbox_link_hang(tmp_path):

@@ -26,6 +26,7 @@ from .model import FAIL, PASS, SKIP, WARN, Check, Phase
 from .naming import blamed
 from .snapshot import resolve_tt_smi, take_snapshot
 from .snapshot_checks import pcie_enum_check, validate_snapshot
+from quiet_clock import PCIE_FLOOR_GBS, PCIE_WARN_FRAC  # noqa: E402  busbar.py put galaxy/ on sys.path
 
 # The tt-smi flags a tier's reset plan may name.
 RESET_FLAGS = ("-glx_reset",)
@@ -44,9 +45,11 @@ def add_args(ap) -> None:
     ap.add_argument("--noc-wall-s", type=float, default=0, help="the end open's NOC data check, wall cap s; 0 off")
     ap.add_argument("--pcie-mb", type=int, default=0, help="the end PCIe step's MB per chip each way; 0 off")
     ap.add_argument("--pcie-s", type=int, default=240, help="the end PCIe step's cap, s")
-    ap.add_argument("--pcie-floor-gbs", type=float, default=0.25, help="the end PCIe step: FAIL under this GB/s")
     ap.add_argument(
-        "--pcie-warn-frac", type=float, default=0.5, help="the end PCIe step: WARN under this of the median"
+        "--pcie-floor-gbs", type=float, default=PCIE_FLOOR_GBS, help="the end PCIe step: FAIL under this GB/s"
+    )
+    ap.add_argument(
+        "--pcie-warn-frac", type=float, default=PCIE_WARN_FRAC, help="the end PCIe step: WARN under this of the median"
     )
 
 

@@ -24,14 +24,14 @@ sys.path.append(os.path.dirname(os.path.realpath(__file__)))
 import socket
 import time
 
-from quiet_clock import bdf_label, pci_id_bdf, pcie_lines
+from quiet_clock import PCIE_FLOOR_GBS, PCIE_WARN_FRAC, bdf_label, pci_id_bdf, pcie_lines
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--rows", required=True)
 ap.add_argument("--beat", required=True)
 ap.add_argument("--mb", type=int, default=64, help="MB written and read back per chip")
-ap.add_argument("--floor-gbs", type=float, default=0.25, help="FAIL under this GB/s either way")
-ap.add_argument("--warn-frac", type=float, default=0.5, help="WARN under this fraction of the box median")
+ap.add_argument("--floor-gbs", type=float, default=PCIE_FLOOR_GBS, help="FAIL under this GB/s either way")
+ap.add_argument("--warn-frac", type=float, default=PCIE_WARN_FRAC, help="WARN under this fraction of the box median")
 a = ap.parse_args()
 rows = open(a.rows, "a")
 

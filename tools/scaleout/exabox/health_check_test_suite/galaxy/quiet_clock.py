@@ -243,6 +243,10 @@ def bdf_label(bdf, did, extra=""):
     return f"{bdf[5:]} (tray {tray_of(bdf)}, ASIC {int(bdf.split(':')[-2], 16) & 0x0F}, device id {did}{extra})"
 
 
+PCIE_FLOOR_GBS = 0.25  # pcie_lines: FAIL under this GB/s either way
+PCIE_WARN_FRAC = 0.5  # pcie_lines: WARN under this fraction of the box median
+
+
 def pcie_lines(rs, floor, frac, host, sysfs="/sys"):
     """pcie_bw.py's 'pcie' rows -> a 'PCIE FAIL|WARN <BDF> (tray T) ASIC A, host H: PCIe bandwidth ...' line per chip
     below the bar (FAIL: either direction under *floor* GB/s, a wrong read back or a failed transfer; WARN: under *frac*
