@@ -4,7 +4,7 @@
 // NCORES) the live units' partials in ascending unit order, each (m, l, O) from its scratch slot into the
 // double-buffered input CBs. cur_pos is read once into the compute's CB.
 //
-// compile-time args: the sf:: prefix (24) + TensorAccessorArgs(cur_pos, scratch)
+// compile-time args: the sf:: prefix (CT_ACCESSORS args) + TensorAccessorArgs(cur_pos, scratch)
 // runtime args: [core, pos_addr, scratch_addr]
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"

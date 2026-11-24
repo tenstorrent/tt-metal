@@ -191,9 +191,8 @@ def test_splitfree_gqa_and_window(mesh_device, device_params, H_q, H_kv, window,
 @pytest.mark.parametrize("mesh_device, device_params", SINGLE_CHIP, indirect=True)
 def test_splitfree_row_bits_independent_of_batch_and_grid(mesh_device, device_params, reset_seeds, monkeypatch):
     """(b) row 0's output bits are identical between the B=1 run and the B=8 / B=32 runs that carry the same row
-    (other rows random and live), and between the device grid and a forced 8x8 grid at the device grid's unit
-    (the unit is derived from the grid -- ``planner.derive_unit`` -- so the forced grid pins it through
-    ``GEMMA4_SDPA_SPLITFREE_UNIT``: the core mapping changes, the bits do not)."""
+    (other rows random and live), and between the device grid and a forced 8x8 grid (the unit follows the row's
+    position, never the grid: the core mapping changes, the bits do not)."""
     S = int(os.environ.get(CACHE_ENV, "131072"))
     case = _Case(mesh_device, S, H_q=4, H_kv=1, D=512)
     q0 = torch.randn(4, 512, dtype=torch.bfloat16)
@@ -214,14 +213,13 @@ def test_splitfree_row_bits_independent_of_batch_and_grid(mesh_device, device_pa
         bits[B] = _to_rows(out, B, 4).view(torch.int16).clone()[0]
         out.deallocate(True)
     monkeypatch.setenv("GEMMA4_TEST_GRID", "8x8")
-    monkeypatch.setenv("GEMMA4_SDPA_SPLITFREE_UNIT", str(device_plan.unit))
     tt_q, tt_pos, tt_tab = case.inputs(1, torch.tensor([S - 1]), table0.unsqueeze(0), q0.unsqueeze(0))
     forced = SdpaDecodeSplitfree.plan(mesh_device, tt_q, case.k_cache, tt_pos, tt_tab)
-    assert forced.n_cores == 64 and forced.unit == device_plan.unit and forced.chunk == device_plan.chunk
+    assert forced.n_cores == 64 and forced.chunk == device_plan.chunk
+    assert forced.unit_chunks(0, S - 1) == device_plan.unit_chunks(0, S - 1)
     out = case.run(tt_q, tt_pos, tt_tab)
     bits["8x8"] = _to_rows(out, 1, 4).view(torch.int16).clone()[0]
     monkeypatch.delenv("GEMMA4_TEST_GRID")
-    monkeypatch.delenv("GEMMA4_SDPA_SPLITFREE_UNIT")
     ref = case.golden(q0.unsqueeze(0), torch.tensor([S - 1]), table0.unsqueeze(0))[0, 0]
     assert _pcc(bits[1].view(torch.bfloat16), ref) > PCC_MIN
     for key in (8, 32, "8x8"):
@@ -329,10 +327,12 @@ def test_splitfree_partials_vs_torch(mesh_device, device_params, reset_seeds):
         tile = lambda t: scratch[(page0 + t) * 32 : (page0 + t) * 32 + 4]  # the 4 head rows of page t
         m_dev, l_dev = tile(0)[:, 0], tile(1)[:, 0]
         O_dev = torch.cat([tile(2 + c) for c in range(16)], dim=1)
-        su = s[:, u * plan.unit : (u + 1) * plan.unit]
+        chunks = plan.unit_chunks(u, S - 1)
+        lo, hi = chunks.start * plan.chunk, chunks.stop * plan.chunk
+        su = s[:, lo:hi]
         m_ref = su.amax(1)
         p = torch.exp(su - m_ref[:, None])
-        O_ref = p @ V[u * plan.unit : (u + 1) * plan.unit]
+        O_ref = p @ V[lo:hi]
         dm.append(m_dev - m_ref)
         lr.append(l_dev / p.sum(1))
         opcc.append(_pcc(O_dev, O_ref))

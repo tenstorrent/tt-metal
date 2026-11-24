@@ -6,9 +6,12 @@ batch or the cores the row gets (tt-metal#59300), while a lone row still spreads
 Two ``ttnn.generic_op`` programs per call (the trace captures both), sharing a persistent fp32 scratch the model
 allocates once (``allocate_scratch``) and passes in:
 
-1. partials (``kernels/*_partials.cpp``): every (row, KV group, unit) of fixed ``unit`` tokens is assigned to a
-   core by the planner's static mapping (``planner.py``: core ``(u mod M + row*G + group) mod n_cores``, so a
-   row's units sit on consecutive cores whatever the padded batch; independent of ``cur_pos``). A core walks its units in a fixed order; per live unit it runs the stock flash-decode recurrence
+1. partials (``kernels/*_partials.cpp``): a row of ``n_chunks`` chunks splits into at most ``K`` units of
+   ``max(NSUB_MIN, ceil(n_chunks / K))`` chunks, decided on device from the row's own ``cur_pos`` (``planner.py``:
+   ``GEMMA4_SDPA_SPLITFREE_SPLIT`` = K, default 32; one chunk per unit on a sliding layer). Every (row, KV group,
+   unit) is assigned to a core by the planner's static mapping (core ``((u mod M) * stride + row*G + group) mod
+   n_cores``, so a row's units sit on distinct cores whatever the padded batch; the mapping never reads
+   ``cur_pos``). A core walks its units in a fixed order; per live unit it runs the stock flash-decode recurrence
    (``sdpa_flash_decode.cpp``'s chunk body on ``compute_common.hpp``) over the unit's fixed ``chunk``-token
    sub-chunks in ascending order, fp32 statistics and accumulator, masking the chunk that holds ``cur_pos`` (and
    the window start on a sliding layer) exactly as the stock kernels mask it, and writes the unit's (m, l, O) as
@@ -16,16 +19,14 @@ allocates once (``allocate_scratch``) and passes in:
 2. combine (``kernels/*_combine.cpp``): one core per (row, group) merges the live units' partials in ascending
    unit order with the stock correction step, normalises once and writes the group's head rows in bf16.
 
-Because every unit partial is computed by identical code on identical data in one fixed order, and the merge
-order is fixed by the unit indices, the result cannot depend on which core computed what or on the padded batch.
-The chunk is the largest of ``planner.CHUNK_LADDER`` that fits the arch's L1 (head dim and cache format decide
-it, never the batch or the grid); the unit is 4096 tokens (one chunk on a sliding layer): a lone 256K row runs
-64 units on 64 cores of any grid. ``GEMMA4_SDPA_SPLITFREE_UNIT=grid`` derives the unit from the grid instead
-(``planner.derive_unit``: one unit per core for a lone row at the full context, 2048 tokens on 13x10) -- measured
-slower on a 12x10 P150 (256K lone row 1.58 vs 1.31 ms, 128K 1.11 vs 1.05) because the combine merges a row's
-partials serially (~13 us each); it becomes the default once the combine is a tree. Unit and chunk are build
-constants, so every decode graph of one build shares them and a row's bits are the same in every graph (a
-different unit, e.g. ``=grid`` on another grid, is different bits).
+Because every unit partial is computed by identical code on identical data in one fixed order, the unit
+boundaries follow the row's own position and the build constants (chunk, K, NSUB_MIN) alone, and the merge order
+is fixed by the unit indices, the result cannot depend on which core computed what or on the padded batch. The
+chunk is the largest of ``planner.CHUNK_LADDER`` that fits the arch's L1 (head dim and cache format decide it,
+never the batch or the grid). With K = 32 a lone 4K row runs 17 one-chunk units on 17 cores and a 256K row 32
+units of 8192 tokens; the row's bits change with its position where its unit grows (``n_chunks = K*m + 1``), the
+same in every decode graph. ``GEMMA4_SDPA_SPLITFREE_UNIT=<tokens>`` (or ``SPLIT=0``: 4096) keeps the earlier
+fixed unit for A/B and the bit gate.
 
 Contract (the stock ``paged_scaled_dot_product_attention_decode`` call of ``tt/attention/decode.py``):
 ``q [1, B <= 32, Hq <= 32, D]`` bf16 TILE interleaved (DRAM or L1), ``k / v [blocks, nkv, block, D]`` bf16 or
@@ -337,8 +338,10 @@ class SdpaDecodeSplitfree:
             plan.pair_space,
             plan.stride,
             plan.stride_inv,
+            plan.split,
+            plan.nsub_min,
         ]
-        assert len(prefix) == 25
+        assert len(prefix) == 27
         defines = [
             ("EXP_APPROX_MODE", "0"),
             ("SUB_EXP_GRANULARITY", str(gran)),

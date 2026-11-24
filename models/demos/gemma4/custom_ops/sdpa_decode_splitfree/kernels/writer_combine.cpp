@@ -4,7 +4,7 @@
 // (pages b*DHt + c): whole tiles when the call attends one KV group, else the group's HPG head rows as
 // 32-byte face lines (the stock write_partial_tiles_to_memory), so the groups of one row write disjoint rows.
 //
-// compile-time args: the sf:: prefix (24) + TensorAccessorArgs(cur_pos, out)
+// compile-time args: the sf:: prefix (CT_ACCESSORS args) + TensorAccessorArgs(cur_pos, out)
 // runtime args: [core, pos_addr, out_addr]
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"

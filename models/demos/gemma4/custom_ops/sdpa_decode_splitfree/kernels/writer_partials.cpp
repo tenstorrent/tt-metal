@@ -5,7 +5,7 @@
 // each a one-block CB the compute pops), then the unit's (O, m, l) fp32 tiles to the scratch slot
 // (b*G + g) * NSLOTS + u % NSLOTS: pages slot*(2+DHt) + {0: m, 1: l, 2..: O}.
 //
-// compile-time args: the sf:: prefix (24) + TensorAccessorArgs(cur_pos, scratch)
+// compile-time args: the sf:: prefix (CT_ACCESSORS args) + TensorAccessorArgs(cur_pos, scratch)
 // runtime args: [core, pos_addr, scratch_addr]
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"

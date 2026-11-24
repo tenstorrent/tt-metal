@@ -9,15 +9,15 @@
 
 namespace sf {
 
-constexpr uint32_t CT_ACCESSORS = 25;  // first TensorAccessorArgs index
+constexpr uint32_t CT_ACCESSORS = 27;  // first TensorAccessorArgs index
 
 constexpr uint32_t B = get_compile_time_arg_val(0);         // padded batch rows (<= 32)
 constexpr uint32_t G = get_compile_time_arg_val(1);         // local KV groups this call attends
 constexpr uint32_t HPG = get_compile_time_arg_val(2);       // Q heads (tile rows) per group
 constexpr uint32_t DHT = get_compile_time_arg_val(3);       // head dim in tiles
 constexpr uint32_t SK = get_compile_time_arg_val(4);        // chunk in tiles
-constexpr uint32_t NSUB = get_compile_time_arg_val(5);      // chunks per unit
-constexpr uint32_t MAXU = get_compile_time_arg_val(6);      // unit indices the page table reaches
+constexpr uint32_t NSUB = get_compile_time_arg_val(5);      // chunks per unit of the fixed unit (0: SPLIT decides)
+constexpr uint32_t MAXU = get_compile_time_arg_val(6);      // the most units of one row the page table reaches
 constexpr uint32_t NSLOTS = get_compile_time_arg_val(7);    // scratch slots per (row, group)
 constexpr uint32_t M = get_compile_time_arg_val(8);         // unit modulus of the pair space
 constexpr uint32_t NCORES = get_compile_time_arg_val(9);    // cores of the program
@@ -36,16 +36,22 @@ constexpr uint32_t OUT_SUB_W = get_compile_time_arg_val(21);
 constexpr uint32_t PAIRS = get_compile_time_arg_val(22);   // M * B * G
 constexpr uint32_t STRIDE = get_compile_time_arg_val(23);  // the unit class stride over the cores (coprime with NCORES)
 constexpr uint32_t STRIDE_INV = get_compile_time_arg_val(24);  // STRIDE^-1 mod NCORES (0 on one core)
+constexpr uint32_t SPLIT = get_compile_time_arg_val(25);       // K: a row's most units (0: the fixed NSUB unit)
+constexpr uint32_t NSUB_MIN = get_compile_time_arg_val(26);    // the fewest chunks of a position-derived unit
 
 constexpr uint32_t CHUNK = SK * 32;
-constexpr uint32_t UNIT = CHUNK * NSUB;
+// the divisors of the two unit rules, never a constant zero: the other rule's branch is still compiled (-Werror)
+constexpr uint32_t NSUB_DIV = NSUB > 0 ? NSUB : 1;
+constexpr uint32_t SPLIT_DIV = SPLIT > 0 ? SPLIT : 1;
 constexpr uint32_t BG = B * G;
 constexpr uint32_t TILES_PER_SLOT = 2 + DHT;
 constexpr uint32_t NONE_POS = 0xFFFFFFFFu;  // cur_pos -1: a padding row
 
 static_assert(B >= 1 && B <= 32, "padded rows fill one Q tile");
 static_assert(G >= 1 && HPG >= 1 && G * HPG <= 32, "the local Q heads fill one Q tile");
-static_assert(NSUB >= 1 && SK >= 1 && DHT >= 1 && NSLOTS >= 1 && M >= 1 && NCORES >= 1, "geometry");
+static_assert(SK >= 1 && DHT >= 1 && NSLOTS >= 1 && M >= 1 && NCORES >= 1, "geometry");
+static_assert(SPLIT > 0 ? (NSUB == 0 && NSUB_MIN >= 1 && WINDOW == 0) : NSUB >= 1, "one unit rule per layer");
+static_assert(SPLIT == 0 || (NSLOTS <= SPLIT && MAXU <= SPLIT), "a row's units fit its K slots");
 static_assert(PAIRS == M * B * G, "the pair space is unit-major over (row, group)");
 static_assert(CAP_T == 0 || CAP_T % BLOCK_T == 0, "a bounded cache wraps on block boundaries");
 
@@ -87,16 +93,24 @@ struct Row {
     uint32_t first_chunk;   // the first chunk the row attends (the window start's chunk, else 0)
     uint32_t tail_chunk;    // the chunk holding cur_pos
     uint32_t window_start;  // the first attended position (0 without a window)
+    uint32_t nsub;          // chunks per unit of this row
     bool live;
 };
 
+// The row at cur_pos. Its unit: the fixed NSUB, or (SPLIT > 0) max(NSUB_MIN, ceil(n_chunks / SPLIT)) chunks from
+// the row's own chunk count n_chunks = tail + 1, so a row has at most SPLIT units (tail / nsub < SPLIT) and its
+// unit boundaries follow cur_pos and the build constants alone -- never the batch, the grid or the core.
 inline Row row_of(uint32_t cur_pos) {
-    Row r{0, 0, 0, false};
+    Row r{0, 0, 0, NSUB, false};
     if (cur_pos == NONE_POS) {
         return r;
     }
     r.live = true;
     r.tail_chunk = cur_pos / CHUNK;
+    if constexpr (SPLIT > 0) {
+        const uint32_t need = r.tail_chunk / SPLIT_DIV + 1;  // ceil((tail + 1) / SPLIT)
+        r.nsub = need > NSUB_MIN ? need : NSUB_MIN;
+    }
     if constexpr (WINDOW > 0) {
         r.window_start = (cur_pos + 1 > WINDOW) ? (cur_pos + 1 - WINDOW) : 0;
         r.first_chunk = r.window_start / CHUNK;
@@ -104,14 +118,26 @@ inline Row row_of(uint32_t cur_pos) {
     return r;
 }
 
-inline uint32_t unit_lo(const Row& r) { return r.first_chunk / NSUB; }
-inline uint32_t unit_hi(const Row& r) { return r.tail_chunk / NSUB; }
+inline uint32_t unit_lo(const Row& r) {
+    if constexpr (SPLIT > 0) {
+        return 0;  // no window: every row starts at chunk 0
+    } else {
+        return r.first_chunk / NSUB_DIV;
+    }
+}
+inline uint32_t unit_hi(const Row& r) {
+    if constexpr (SPLIT > 0) {
+        return r.tail_chunk / r.nsub;  // the one runtime divide of a row
+    } else {
+        return r.tail_chunk / NSUB_DIV;
+    }
+}
 inline uint32_t chunk_lo(const Row& r, uint32_t u) {
-    const uint32_t c = u * NSUB;
+    const uint32_t c = u * r.nsub;
     return c > r.first_chunk ? c : r.first_chunk;
 }
 inline uint32_t chunk_hi(const Row& r, uint32_t u) {
-    const uint32_t c = (u + 1) * NSUB - 1;
+    const uint32_t c = (u + 1) * r.nsub - 1;
     return c < r.tail_chunk ? c : r.tail_chunk;
 }
 inline uint32_t slot_of(uint32_t bg, uint32_t u) { return bg * NSLOTS + (u % NSLOTS); }

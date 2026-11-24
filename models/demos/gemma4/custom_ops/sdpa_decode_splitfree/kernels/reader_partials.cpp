@@ -4,7 +4,7 @@
 // the row's page-table row, the row's Q tile row, then per live chunk the transposed K chunk and the V chunk
 // of the unit's KV group through the double-buffered K / V rings. cur_pos is read once into the compute's CB.
 //
-// compile-time args: the sf:: prefix (24) + TensorAccessorArgs(q, k, v, cur_pos, page_table)
+// compile-time args: the sf:: prefix (CT_ACCESSORS args) + TensorAccessorArgs(q, k, v, cur_pos, page_table)
 // runtime args: [core, q_addr, k_addr, v_addr, pos_addr, page_table_addr]
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"

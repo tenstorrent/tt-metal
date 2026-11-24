@@ -6,7 +6,7 @@
 // scale), l' = l a + l_u a_u; then O' = O a + O_u a_u), every value fp32; then O / l once, packed to bf16.
 // The order is fixed by the unit indices, so the result does not depend on the batch, the cores or the grid.
 //
-// compile-time args: the sf:: prefix (24); defines EXP_APPROX_MODE, DHT_GRANULARITY, STATS_GRANULARITY,
+// compile-time args: the sf:: prefix (CT_ACCESSORS args); defines EXP_APPROX_MODE, DHT_GRANULARITY, STATS_GRANULARITY,
 // SUB_EXP_GRANULARITY. runtime args: [core]
 #define LLK_ZEROFLAG_OUTLINE 1
 
