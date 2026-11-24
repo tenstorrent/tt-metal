@@ -73,14 +73,21 @@ def _move(job, src, dst):
         (ROOT / src / f"{job['id']}.json").unlink(missing_ok=True)
 
 
-def _claim(stage):
-    """Atomically take the highest-priority, oldest job in `stage`."""
+def _claim(stage, dst, **fields):
+    """Atomically take the highest-priority, oldest job in `stage` and move it to `dst`.
+    The move happens under the same lock as the pick, so two workers can never take the same job.
+    """
     with LOCK:
         jobs = [j for j in (_read(p) for p in (ROOT / stage).glob("*.json")) if j]
         if not jobs:
             return None
         jobs.sort(key=lambda j: (-j.get("priority", 0), j["t_submit"]))
-        return jobs[0]
+        job = jobs[0]
+        job.update(fields, stage=dst)
+        job[f"t_{dst}"] = time.time()
+        _write(ROOT / dst / f"{job['id']}.json", job)
+        (ROOT / stage / f"{job['id']}.json").unlink(missing_ok=True)
+        return job
 
 
 def _base_cmd(job, command):
@@ -136,12 +143,10 @@ def _summarize(log_text):
 
 def _compile_worker(slot, jobs_per_compile):
     while True:
-        job = _claim("pending")
+        job = _claim("pending", "compiling", compile_slot=slot)
         if not job:
             time.sleep(2)
             continue
-        _move(job, "pending", "compiling")
-        job["compile_slot"] = slot
         log = ROOT / "logs" / f"{job['id']}.compile.log"
         cmd = _base_cmd(job, "compile") + ["--jobs", str(jobs_per_compile)]
         with open(log, "w") as f:
@@ -171,12 +176,10 @@ def _compile_worker(slot, jobs_per_compile):
 
 def _chip_worker(chip):
     while True:
-        job = _claim("compiled")
+        job = _claim("compiled", "running", chip=chip)
         if not job:
             time.sleep(1)
             continue
-        job["chip"] = chip
-        _move(job, "compiled", "running")
         log = ROOT / "logs" / f"{job['id']}.run.log"
         env = _env(job)
         env["TT_VISIBLE_DEVICES"] = str(chip)
