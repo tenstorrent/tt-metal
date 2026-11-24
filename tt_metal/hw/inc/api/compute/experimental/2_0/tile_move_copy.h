@@ -38,12 +38,12 @@ inline void copy_init(LLKOperand<Format, Shape> src) {
     copy_check<direct, Format>();
     static_assert(is_legal_tile_shape(Shape), "copy init: illegal tile shape.");
     static_assert(is_fp32_dest_acc_en == DST_ACCUM_MODE, "copy init: Dest mode is kernel-wide (DST_ACCUM_MODE)");
-    constexpr LLKMemDescriptor D = LLKOperand<Format, Shape>::descriptor;
     if constexpr (direct) {
-        UNPACK((llk_2_0::unpack_to_dest_init<D>(src.l1_address)));  // no math side: the unpacker writes all 32 bits
+        // no math side: the unpacker writes all 32 bits
+        UNPACK((llk_2_0::unpack_to_dest_init<LLKOperand<Format, Shape>::descriptor>(src.l1_address)));
     } else {
-        UNPACK((llk_2_0::unpack_A_init<D, is_fp32_dest_acc_en>(src.l1_address)));
-        MATH((llk_2_0::math_datacopy_init<D, is_fp32_dest_acc_en>()));
+        UNPACK((llk_2_0::unpack_A_init<LLKOperand<Format, Shape>::descriptor, is_fp32_dest_acc_en>(src.l1_address)));
+        MATH((llk_2_0::math_datacopy_init<LLKOperand<Format, Shape>::descriptor, is_fp32_dest_acc_en>()));
     }
 }
 
