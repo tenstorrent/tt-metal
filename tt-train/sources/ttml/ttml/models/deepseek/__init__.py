@@ -186,9 +186,9 @@ class DeepSeek(AbstractModuleBase):
             bias = np.zeros((1, 1, 1, self.padded_vocab_size), dtype=np.float32)
             bias[..., self.config.vocab_size :] = -1e4
             mapper = ttml.mesh().axis_mapper("tp", tdim=3)
-            self._tp_vocab_pad_bias = ttml.autograd.Tensor.from_numpy(
-                bias, ttnn.Layout.TILE, dtype, mapper
-            ).get_value(ttml.autograd.PreferredPrecision.NATIVE)
+            self._tp_vocab_pad_bias = ttml.autograd.Tensor.from_numpy(bias, ttnn.Layout.TILE, dtype, mapper).get_value(
+                ttml.autograd.PreferredPrecision.NATIVE
+            )
         return ttml.autograd.create_tensor(self._tp_vocab_pad_bias, requires_grad=False)
 
     def get_moe_layers(self):
