@@ -212,6 +212,15 @@ int main(int argc, char* argv[]) {
         my_relative_x_ = my_logical_x_ - launch_msg->kernel_config.sub_device_origin_x;
         my_relative_y_ = my_logical_y_ - launch_msg->kernel_config.sub_device_origin_y;
 
+#if defined(ARCH_BLACKHOLE)
+        // Auto TTSync settings live in this thread's ThreadConfig, which no soft reset clears, so a kernel that turned
+        // them on (HAL unpack does) leaves them on for the next one. Start every kernel with them off, and point the
+        // hardware cfg state bank and the software cfg_state_id at bank 0 together.
+        reset_cfg_state_id();
+        TTI_SETC16(CFG_STATE_ID_StateID_ADDR32, 0);
+        TTI_SETC16(TENSIX_TRISC_SYNC_TrackGlobalCfg_ADDR32, 0);
+#endif
+
         WAYPOINT("R");
         int index =
             static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::MATH0) + thread_id;
