@@ -108,7 +108,7 @@ class Ordering : public keraunos_test::KeraunosCceTest, public ::testing::WithPa
 protected:
     // Opening the device costs minutes on the emulator: not without the loopback.
     static void SetUpTestSuite() {
-        if (std::getenv("KERAUNOS_ETH_LOOPBACK") != nullptr) {
+        if (keraunos_loopback_up()) {
             KeraunosCceTest::SetUpTestSuite();
         }
     }
