@@ -5,8 +5,6 @@
 
 from pathlib import Path
 
-import pytest
-
 from models.demos.deepseek_v3_d_p.tt.mistral_large_4.experts import cache_complete
 from models.demos.deepseek_v3_d_p.tt.mistral_large_4.hooks import experts_cache_dir
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.mistral_large_4 import (
@@ -36,8 +34,8 @@ def test_empty_root_means_no_cache(monkeypatch):
     assert experts_cache_dir(_Spec(None), 0) is None
 
 
-def test_sp_on_axis_1_refused():
-    with pytest.raises(ValueError):
+def test_sp_on_axis_1_refused(expect_error):
+    with expect_error(ValueError, "SP on mesh axis 0"):
         weight_cache_dir("/cache", (4, 8), sp_axis=1)
 
 
