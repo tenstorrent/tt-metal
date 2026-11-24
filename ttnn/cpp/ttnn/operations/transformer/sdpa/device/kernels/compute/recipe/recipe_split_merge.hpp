@@ -141,7 +141,7 @@ ALWI void discard(R) {
 // The BF16 merge's steps out of line, one copy each (the merge runs once per call; its code shares the kernel config
 // buffer with the recipe step). Tiles [first, first + n) of `cb` into dest tiles [dst, dst + n), the unpacker set up
 // for the state format of `cb`.
-inline __attribute__((noinline)) void merge_copy_tiles(uint32_t cb, uint32_t first, uint32_t n, uint32_t dst) {
+inline __attribute__((noinline, optimize("Os"))) void merge_copy_tiles(uint32_t cb, uint32_t first, uint32_t n, uint32_t dst) {
     sdpa_stream_reconfig_srca(cb);
     copy_init(cb);
     for (uint32_t t = 0; t < n; ++t) {
@@ -149,7 +149,7 @@ inline __attribute__((noinline)) void merge_copy_tiles(uint32_t cb, uint32_t fir
     }
 }
 // Row r's corrections, column-broadcast: c_a (CB a_cb) into dest tile dst, c_b (CB b_cb, the same format) into dst + 1.
-inline __attribute__((noinline)) void merge_bcast_corrections(uint32_t a_cb, uint32_t b_cb, uint32_t r, uint32_t dst) {
+inline __attribute__((noinline, optimize("Os"))) void merge_bcast_corrections(uint32_t a_cb, uint32_t b_cb, uint32_t r, uint32_t dst) {
     sdpa_stream_reconfig_srca(a_cb);
     unary_bcast_init<BroadcastType::COL>(a_cb);
     unary_bcast<BroadcastType::COL>(a_cb, r, dst);
@@ -162,12 +162,13 @@ template <uint32_t w>
 ALWI void merge_tiles_sfpu() {
     PACK((SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_recipe_merge, (w), 0, VectorMode::None)));
 }
-inline __attribute__((noinline)) void merge_finish_tiles(uint32_t w, uint32_t cb, uint32_t index) {
+template <uint32_t max_w>
+__attribute__((noinline, optimize("Os"))) void merge_finish_tiles(uint32_t w, uint32_t cb, uint32_t index) {
     tile_regs_commit();
     tile_regs_wait();
-    if (w == 1) {
+    if (max_w == 1 || w == 1) {
         merge_tiles_sfpu<1>();
-    } else if (w == 2) {
+    } else if (max_w == 2 || w == 2) {
         merge_tiles_sfpu<2>();
     } else {
         merge_tiles_sfpu<3>();
@@ -178,9 +179,10 @@ inline __attribute__((noinline)) void merge_finish_tiles(uint32_t w, uint32_t cb
     }
     tile_regs_release();
 }
-// w (<= 3) tiles of the own state (CB a_cb from tile a_index) merged in place with the received ones (CB b_cb from
-// b_index), row r's corrections in exp_max_diff (c_a) and corr_cb (c_b).
-inline __attribute__((noinline)) void merge_state_tiles(
+// w (<= max_w <= 3) tiles of the own state (CB a_cb from tile a_index) merged in place with the received ones (CB b_cb
+// from b_index), row r's corrections in exp_max_diff (c_a) and corr_cb (c_b).
+template <uint32_t max_w>
+__attribute__((noinline, optimize("Os"))) void merge_state_tiles(
     uint32_t w,
     uint32_t a_cb,
     uint32_t a_index,
@@ -195,7 +197,7 @@ inline __attribute__((noinline)) void merge_state_tiles(
         copy_tile(b_cb, b_index + t, w + t);  // the own state's format: the unpacker stays set up
     }
     merge_bcast_corrections(exp_max_diff, corr_cb, r, 2 * w);
-    merge_finish_tiles(w, a_cb, a_index);
+    merge_finish_tiles<max_w>(w, a_cb, a_index);
 }
 
 // BF16 recipes: the own state after its last chunk (O in CB 9's rows, plane 0, and l in CB 13 at their bases, popped;
@@ -241,14 +243,15 @@ void merge_bf16(const RecipeAccumulatorState& state, bool keep_max) {
     pack_reconfig_data_format(n_sum);
     configure_single_tile_pack(n_sum);
     for (uint32_t r = 0; r < q_tiles; ++r) {
-        merge_state_tiles(1, n_sum, r, R::sum, r, exp_max_diff, R::corr, r);
+        merge_state_tiles<max_w>(1, n_sum, r, R::sum, r, exp_max_diff, R::corr, r);
     }
     pack_reconfig_data_format(n_out);
     configure_single_tile_pack(n_out);
     for (uint32_t r = 0; r < q_tiles; ++r) {
         for (uint32_t j = 0; j < vd_tiles; j += max_w) {
             const uint32_t w = vd_tiles - j < max_w ? vd_tiles - j : max_w;
-            merge_state_tiles(w, n_out, r * vd_tiles * o_stride + j, R::out, r * vd_tiles + j, exp_max_diff, R::corr, r);
+            merge_state_tiles<max_w>(
+                w, n_out, r * vd_tiles * o_stride + j, R::out, r * vd_tiles + j, exp_max_diff, R::corr, r);
         }
     }
     CircularBuffer(exp_max_diff).pop_front(q_tiles);

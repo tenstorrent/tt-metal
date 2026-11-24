@@ -44,7 +44,9 @@ __attribute__((noinline, optimize("Os"))) void recipe_ring_ksplit_merge_and_norm
         if (ring_joint::sliding_ksplit_range(plan_k_chunks, band, ksplit_count).empty()) {
             recipe_merge::discard<Sq_chunk_t, vDHt>(RecipeRingKSplitReceived{});
         } else {
-            recipe_merge::merge_bf16<Sq_chunk_t, vDHt, scale_fp32, exp_max_diff, RecipeRingKSplitReceived>(
+            // Two O tiles per dest pass: one SFPU merge width fewer than sparse SDPA's three (kernel config buffer;
+            // the merge runs once per call).
+            recipe_merge::merge_bf16<Sq_chunk_t, vDHt, scale_fp32, exp_max_diff, RecipeRingKSplitReceived, 2>(
                 state, band != last_live);
         }
     }
