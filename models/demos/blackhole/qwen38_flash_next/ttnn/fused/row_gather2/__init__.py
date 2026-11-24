@@ -259,13 +259,6 @@ def row_gather(hidden, *, cluster_axis=1, memory_config=None, live_rows=None):
     while frame.f_back is not None and frame.f_code.co_name in ("row_gather", "row_gather_or_all_gather", "__call__"):
         frame = frame.f_back
     CALLS[frame.f_code.co_name] = CALLS.get(frame.f_code.co_name, 0) + 1
-    from .. import (
-        row_gather3,
-    )  # the GR gate program may already have gathered this block's input (QWEN38_GATE_GATHER=1)
-
-    handed = row_gather3.take_gathered(hidden, memory_config)
-    if handed is not None:
-        return handed
     mesh = hidden.device()
     rows, tiles = shape[2], _tiles(hidden)
     state = prepare(mesh, tiles)

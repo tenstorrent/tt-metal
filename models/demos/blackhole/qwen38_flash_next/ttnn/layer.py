@@ -374,19 +374,6 @@ class Qwen38TTNNDecoderLayer:
         self.attention_gr = attention_gr
         self.mlp = mlp
         self.mlp_gr = mlp_gr
-        from models.demos.blackhole.qwen38_flash_next.ttnn import fused as _fused_gg
-
-        if (
-            _fused_gg.row_gather3.enabled_by_env()
-        ):  # QWEN38_GATE_GATHER=1: the consumers' gather layouts for the GR gate programs
-            for gr_module, consumer, names in (
-                (attention_gr, attention, ("in_proj_act_memory_config", "hidden_act_memory_config")),
-                (mlp_gr, mlp, ("hidden_gather_memory_config",)),
-            ):
-                for name in names:
-                    if getattr(consumer, name, None) is not None:
-                        gr_module.gather_memory_config = getattr(consumer, name)
-                        break
         self.expert_streamer = expert_streamer
         self.ple = ple
         # QWEN38_FUSED=ple: the fused PLE body with the layer's output permute + residual add folded into its conv program.

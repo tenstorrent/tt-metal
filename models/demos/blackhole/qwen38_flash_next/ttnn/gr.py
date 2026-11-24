@@ -530,25 +530,6 @@ class Qwen38TTNNGatedResidual:
             self._write_fused = fused_gr_write.gr_write
             self.write = functools.partial(fused_gr_write.write_fused, self)
             self.write_rows = functools.partial(fused_gr_write.write_rows_fused, self)
-        # QWEN38_GATE_GATHER=1 (default off): the gate program of this read also gathers the block input for the consumer whose
-        # layout the layer put in ``gather_memory_config`` (ttnn/fused/row_gather3); read / read_rows pass it to the gate dispatch.
-        self.gather_memory_config = None
-        if fused_kernels.row_gather3.enabled_by_env():
-            gate_gather = fused_kernels.row_gather3
-            gate_gather.prepare(mesh_device, LOCAL_HIDDEN_SIZE // 32)
-
-            def _with_gather_context(inner):
-                def read(*args, **kwargs):
-                    gate_gather.set_context(self.gather_memory_config)
-                    try:
-                        return inner(*args, **kwargs)
-                    finally:
-                        gate_gather.CONTEXT["memory_config"] = None
-
-                return read
-
-            self.read = _with_gather_context(self.read)
-            self.read_rows = _with_gather_context(self.read_rows)
         # QWEN38_RR_WRITE=1 (default off; with the v2 reduce): the row_reduce program also writes the new residual that
         # gr_write would.  read / read_rows leave their (residual, injection) state for the block's reduce
         # (row_reduce.PENDING); write / write_rows hand back the residual that program wrote for the block output, and run the

@@ -126,15 +126,6 @@ def low_rank_gate3(gathered_partials, normalized, up, *, matmul: str = "chain", 
     if len(shape) != 4 or shape[:2] != (TP_SIZE, 1) or shape[3] != PARTIAL_WIDTH or gathered_partials.dtype != FP32:
         raise ValueError(f"GR gathered partials must be fp32 [{TP_SIZE}, 1, rows, {PARTIAL_WIDTH}], got {shape}")
     rows = shape[2]
-    from .. import row_gather3  # QWEN38_GATE_GATHER=1: this program with the block-input gather folded in (row_gather3)
-
-    gather_config = row_gather3.take_context()
-    if (
-        gather_config is not None
-        and out_rows in (None, rows)
-        and row_gather3.admits(gathered_partials, rows, gather_config)
-    ):
-        return row_gather3.gate_gather(gathered_partials, normalized, up, gather_config, matmul=matmul)
     _expect(normalized, (1, 1, rows, FLAT_WIDTH), BF16, "GR normalized row")
     _expect(up, (1, 1, PARTIAL_WIDTH, FLAT_WIDTH), BF16, "GR up")
     mesh = gathered_partials.device()
