@@ -31,8 +31,13 @@
 //                  even number of them (dummy_kv_chunks_for_phase_alignment): drained here
 //   the ring id    advanced once per iteration, active or not (RingSDPAOpIndexer: the compute side waits on nothing)
 //
+// The sequence's length can come from a tensor (logical_n as a ttnn.Tensor: one program, and one trace, for several
+// lengths): the reader then reads it and sends what follows from it in a page of words (cb_kv_pad_derived, the 1.0
+// kernel's): the key tiles, the active iterations and the last key tile's column. The run-time args hold the
+// placeholder's (the padded length), and the writer stamps the live column into the partial key tile's mask.
+//
 // What the 1.0 kernel does on this path that this one does not: causal, balanced and zigzag, joint Q/K/V, chunked,
-// a sliding window, sinks, KV-pad rotation, a logical length from a tensor, a dynamic local length, latent V, the K
+// a sliding window, sinks, KV-pad rotation, a joint length from a tensor, a dynamic local length, latent V, the K
 // split and segmented accumulation, rotated or padded Q slots, grouped KV sources, a 32-bit Dest. The host (the
 // LLK 2.0 branch of ring_joint_sdpa_program_factory.cpp, TT_RING_SDPA_LLK2) refuses them.
 
@@ -43,6 +48,7 @@
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_rank_mapping.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/chunked_prefill_utils.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/fused_op_indexer.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_derived_slots.hpp"
 
 namespace
 {
@@ -53,6 +59,7 @@ constexpr std::uint32_t rank_mapping       = get_named_compile_time_arg_val("ran
 constexpr auto snake_orientation           = static_cast<ttnn::ccl::snake_ring::Orientation>(get_named_compile_time_arg_val("snake_orientation"));
 constexpr std::uint32_t mesh_rows          = get_named_compile_time_arg_val("mesh_rows");
 constexpr std::uint32_t mesh_cols          = get_named_compile_time_arg_val("mesh_cols");
+constexpr bool length_from_tensor          = get_named_compile_time_arg_val("logical_n_from_tensor") != 0;
 // Run-time args: the 1.0 kernel's.
 constexpr int q_start_arg          = 0; // this core's Q chunks: [q_start, q_end) of all heads' Q chunks
 constexpr int q_end_arg            = 1;
@@ -71,14 +78,22 @@ static_assert(
     "a statistic's staging buffers hold the tensor its A/B buffers hold");
 
 constexpr const auto& signal_spec = words_spec<8, LLK2_CB_FORMAT("cb_signal")>; // one 16-byte page, its words unread
+// The reader's page of what follows from a length tensor: a 64-byte page of 32-bit words.
+constexpr const auto& derived_spec = words_spec<16, LLK2_CB_FORMAT("cb_kv_pad_derived")>;
+namespace derived                  = ttnn::operations::transformer::sdpa::ring_joint;
+static_assert(derived::kDerivedSlotCount <= 16, "the derived words fit their page");
+// With a length tensor the last key tile may or may not be whole: the host keeps the partial key tile's mask step
+// (k_partial_col non-zero), and the live column decides.
+static_assert(!length_from_tensor || partial_key_cols != 0, "a length tensor keeps the partial key tile's mask step");
 
 /// The K chunks of share ring_id that a Q chunk meets, in an iteration the flags describe.
-inline RingKRange share_range(std::uint32_t ring_id, std::uint32_t logical_nt, std::uint32_t phase, bool restored, bool continues, bool staged)
+inline RingKRange share_range(
+    std::uint32_t ring_id, std::uint32_t logical_nt, bool last_tile_partial, std::uint32_t phase, bool restored, bool continues, bool staged)
 {
     const std::int32_t within  = static_cast<std::int32_t>(logical_nt) - static_cast<std::int32_t>(ring_id * kv_local_padded_Nt);
     const std::uint32_t tiles  = within <= 0 ? 0 : (static_cast<std::uint32_t>(within) < kv_local_padded_Nt ? within : kv_local_padded_Nt);
     const std::uint32_t chunks = (tiles + Sk_chunk_t - 1) / Sk_chunk_t;
-    const bool partial_key     = partial_key_cols != 0 && within > 0 && static_cast<std::uint32_t>(within) <= kv_local_padded_Nt;
+    const bool partial_key     = last_tile_partial && within > 0 && static_cast<std::uint32_t>(within) <= kv_local_padded_Nt;
     return RingKRange {chunks, chunks == 0 ? 0 : tiles - (chunks - 1) * Sk_chunk_t, phase, restored, continues, staged, partial_key};
 }
 
@@ -132,8 +147,18 @@ void kernel_main()
     const std::uint32_t q_start           = get_arg_val<std::uint32_t>(q_start_arg);
     const std::uint32_t q_chunks          = get_arg_val<std::uint32_t>(q_end_arg) - q_start;
     const std::uint32_t ring_size         = get_arg_val<std::uint32_t>(ring_size_arg);
-    const std::uint32_t logical_nt        = get_arg_val<std::uint32_t>(logical_nt_arg);
-    const std::uint32_t active_ring_iters = get_arg_val<std::uint32_t>(active_ring_iter_arg);
+    std::uint32_t logical_nt              = get_arg_val<std::uint32_t>(logical_nt_arg);
+    std::uint32_t active_ring_iters       = get_arg_val<std::uint32_t>(active_ring_iter_arg);
+    bool last_tile_partial                = partial_key_cols != 0;
+    if constexpr (length_from_tensor)
+    {
+        DataflowBuffer derived_in(get_named_compile_time_arg_val("cb_kv_pad_derived"));
+        const auto words  = wait_front<derived_spec>(derived_in);
+        logical_nt        = read_value(words, derived::kDerivedLogicalNt);
+        active_ring_iters = read_value(words, derived::kDerivedActiveRingIterMask);
+        last_tile_partial = read_value(words, derived::kDerivedGlobalNPartialCol) != 0;
+        release(words); // pops the page, as the 1.0 kernel does
+    }
     RingSDPAOpIndexer ring_ids(
         ring_size, get_arg_val<std::uint32_t>(ring_index_arg), get_arg_val<std::uint32_t>(forward_writes_arg), get_arg_val<std::uint32_t>(backward_writes_arg));
     // Pushed once by the writer and never popped (as 1.0): the reduce's scaler, and the mask tiles it makes.
@@ -154,7 +179,7 @@ void kernel_main()
         const bool restored    = seen_active;
         const bool continues   = !is_last_active_ring_iter(active_ring_iters, ring_iter);
         seen_active            = true;
-        const RingKRange range = share_range(ring_id, logical_nt, staged ? 0 : phase, restored, continues, staged);
+        const RingKRange range = share_range(ring_id, logical_nt, last_tile_partial, staged ? 0 : phase, restored, continues, staged);
         LLK_ASSERT(range.end_chunk > 0, "an active iteration has keys");
 
         for (std::uint32_t q_chunk = 0; q_chunk < q_chunks; ++q_chunk)

@@ -24,6 +24,8 @@ B, NH, N_LOCAL, D = 1, 20, 16384, 128
 LOGICAL_N = int(os.environ.get("RING_LOCAL_LOGICAL_N", N_LOCAL - 8))  # 16376: 24 valid rows in the last key tile
 Q_CHUNK, K_CHUNK = int(os.environ.get("RING_LOCAL_Q_CHUNK", 128)), int(os.environ.get("RING_LOCAL_K_CHUNK", 512))
 RUNS = int(os.environ.get("RING_LOCAL_RUNS", 5))
+# 1: logical_n as a device tensor, as the Wan2.2 pipeline passes it (one trace for several lengths).
+LENGTH_TENSOR = os.environ.get("RING_LOCAL_LENGTH_TENSOR", "0") == "1"
 ACC_HEADS = (0, NH - 1)
 
 
@@ -75,6 +77,11 @@ def test_ring_joint_sdpa_llk2_local(ring1, monkeypatch):
 
     tq, tk, tv = dev(Q), dev(K), dev(V)
     pk, pv = dev(torch.zeros(B, NH, N_LOCAL, D)), dev(torch.zeros(B, NH, N_LOCAL, D))
+    logical_n = (
+        ttnn.from_torch(torch.tensor([LOGICAL_N]), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh)
+        if LENGTH_TENSOR
+        else LOGICAL_N
+    )
     ttnn.synchronize_device(mesh)
     program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=(grid.x - 1, grid.y),  # the last column is the CCL column, as in Wan
@@ -102,7 +109,7 @@ def test_ring_joint_sdpa_llk2_local(ring1, monkeypatch):
             persistent_output_buffer_k=pk,
             persistent_output_buffer_v=pv,
             joint_strategy="rear",
-            logical_n=LOGICAL_N,
+            logical_n=logical_n,
             program_config=program_config,
             compute_kernel_config=compute_config,
             dim=2,
@@ -135,7 +142,7 @@ def test_ring_joint_sdpa_llk2_local(ring1, monkeypatch):
         medians[k] = statistics.median(durations)
         _out(
             f"LLK2_RING_PERF {k} median_ns={medians[k]:.0f} runs={RUNS} min_ns={min(durations):.0f} "
-            f"q{Q_CHUNK}/k{K_CHUNK} logical_n={LOGICAL_N}"
+            f"q{Q_CHUNK}/k{K_CHUNK} logical_n={LOGICAL_N}{' (tensor)' if LENGTH_TENSOR else ''}"
         )
     if "llk1" in medians and "llk2" in medians:
         _out(f"LLK2_RING_PERF ratio llk2/llk1={medians['llk2'] / medians['llk1']:.4f}")
