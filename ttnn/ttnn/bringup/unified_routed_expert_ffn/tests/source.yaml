@@ -1,0 +1,7 @@
+# The source op's own tests, run in place against this fork (python -m bringup_fw.testing.fork_source).
+# Best-effort selection: see FORK_OP.md (the bring-up method), "Carry the source op's tests".
+upstream_sha: 4deb30807d45a6b7f0d853850e76e5247676e989
+swap:
+  ttnn.experimental.deepseek_prefill.unified_routed_expert_moe: ttnn.bringup.unified_routed_expert_moe
+  # ttnn.RoutedExpertActivation: ttnn.bringup.RoutedExpertActivation   (enum: check where the source's tests take it from)
+tests: []

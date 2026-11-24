@@ -13,6 +13,9 @@ namespace nb = nanobind;
 namespace ttnn::operations::bringup {
 void bind_sdpa(nb::module_& mod);
 }
+namespace ttnn::operations::bringup::detail {
+void bind_unified_routed_expert_ffn(nb::module_& mod);
+}
 // END FORKED OPS (fork_op.py)
 
 namespace ttnn::bringup {
@@ -20,6 +23,7 @@ namespace ttnn::bringup {
 void py_module([[maybe_unused]] nb::module_& mod) {  // unused until the first fork registers
     // BEGIN FORKED OPS (fork_op.py)
     ::ttnn::operations::bringup::bind_sdpa(mod);
+    ::ttnn::operations::bringup::detail::bind_unified_routed_expert_ffn(mod);
     // END FORKED OPS (fork_op.py)
 }
 
