@@ -79,7 +79,7 @@ extern "C" __attribute__((noinline, used)) void reference_run_template0_wide_mas
 // A runtime count may exceed 16, so MOP_CFG is written even for a 16-bit mask.
 extern "C" __attribute__((noinline, used)) void run_template0_runtime_count(const std::uint32_t count)
 {
-    Template0Runner::run<0x5>(count);
+    Template0Runner::run_with_runtime_count<0x5>(count);
 }
 
 extern "C" __attribute__((noinline, used)) void reference_run_template0_runtime_count(const std::uint32_t count)
@@ -88,15 +88,27 @@ extern "C" __attribute__((noinline, used)) void reference_run_template0_runtime_
     TT_MOP(0 /*mop_type*/, count - 1, 0x5 /*zmask_lo16_or_loop_count*/);
 }
 
+// A run of at most 16 iterations reads only the low mask bits, so no MOP_CFG is issued.
 extern "C" __attribute__((noinline, used)) void run_template0_runtime_mask(const std::uint32_t mask)
 {
-    Template0Runner::run_with_runtime_mask<4>(mask);
+    Template0Runner::run_with_runtime_mask<16>(mask);
 }
 
 extern "C" __attribute__((noinline, used)) void reference_run_template0_runtime_mask(const std::uint32_t mask)
 {
+    TT_MOP(0 /*mop_type*/, 15 /*loop_count*/, mask & 0xffff);
+}
+
+// A run of 17 iterations reads the high mask bits, so MOP_CFG writes them first.
+extern "C" __attribute__((noinline, used)) void run_template0_runtime_mask_long(const std::uint32_t mask)
+{
+    Template0Runner::run_with_runtime_mask<17>(mask);
+}
+
+extern "C" __attribute__((noinline, used)) void reference_run_template0_runtime_mask_long(const std::uint32_t mask)
+{
     TT_MOP_CFG(mask >> 16);
-    TT_MOP(0 /*mop_type*/, 3 /*loop_count*/, mask & 0xffff);
+    TT_MOP(0 /*mop_type*/, 16 /*loop_count*/, mask & 0xffff);
 }
 
 extern "C" __attribute__((noinline, used)) void run_template0_runtime(const std::uint32_t count, const std::uint32_t mask)
@@ -137,7 +149,7 @@ extern "C" __attribute__((noinline, used)) void reference_run_template0_runtime_
 
 extern "C" __attribute__((noinline, used)) void run_template0_runtime_count_preset(const std::uint32_t count)
 {
-    Template0Runner::run<0x12345, mop::MaskHigh::Preset>(count);
+    Template0Runner::run_with_runtime_count<0x12345, mop::MaskHigh::Preset>(count);
 }
 
 extern "C" __attribute__((noinline, used)) void reference_run_template0_runtime_count_preset(const std::uint32_t count)
