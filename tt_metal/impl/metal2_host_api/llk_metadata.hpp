@@ -16,6 +16,8 @@ namespace tt::tt_metal {
 struct LLKMetadata {
     DataFormat format;
     Tile tile;
+    // Tensor bindings only: KernelSpec::TensorBinding::thread_split_pages (0 = no split).
+    uint32_t thread_split_pages = 0;
 };
 
 // Returns the C++ initializer for the device-side binding_details::LLKMetadata
@@ -24,7 +26,7 @@ struct LLKMetadata {
 //                                  .num_faces_r_dim = 2u, .num_faces_c_dim = 2u}
 // `format` is host_data_format_to_hw(metadata.format, arch): the Quasar hardware code on
 // Quasar, and the raw host DataFormat value on Wormhole and Blackhole. The face fields are
-// derived from `metadata.tile`.
+// derived from `metadata.tile`. `.thread_split_pages = Nu` is appended only when it is nonzero.
 // The JIT's kernel bindings header and the emulator's both embed this string verbatim.
 std::string serialize_llk_metadata(const LLKMetadata& metadata, tt::ARCH arch);
 

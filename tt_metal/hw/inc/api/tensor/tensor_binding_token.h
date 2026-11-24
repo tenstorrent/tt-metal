@@ -51,6 +51,9 @@ struct TensorBindingToken {
     // or construct an operand with LLKOperandFrom<token>.
     explicit constexpr TensorBindingToken(binding_details::LLKMetadata llk) noexcept : llk_metadata_(llk) {}
 
+    // Host KernelSpec::TensorBinding::thread_split_pages (0 = no split). See LocalTensorAccessor::thread_pages().
+    constexpr uint32_t thread_split_pages() const noexcept { return llk_metadata_.thread_split_pages; }
+
 private:
     template <uint32_t Cta, uint32_t Addr>
     friend constexpr DataFormat get_dataformat(const TensorBindingToken<Cta, Addr>& token);
@@ -131,6 +134,9 @@ struct PerNodeTensorBindingToken {
     static constexpr uint32_t addr_rta_offset = ADDR_RTA_OFFSET;  // in bytes
 
     explicit constexpr PerNodeTensorBindingToken(binding_details::LLKMetadata llk) noexcept : llk_metadata_(llk) {}
+
+    // Host KernelSpec::TensorBinding::thread_split_pages (0 = no split). See LocalTensorAccessor::thread_pages().
+    constexpr uint32_t thread_split_pages() const noexcept { return llk_metadata_.thread_split_pages; }
 
 private:
     template <uint32_t Cta, uint32_t Addr>

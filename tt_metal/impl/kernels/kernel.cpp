@@ -790,6 +790,7 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(static_cast<uint64_t>(handle.is_per_node));
         hasher.update(static_cast<uint64_t>(handle.addr_rta_offset));
         hash_llk_fields(handle.llk_metadata);
+        hasher.update(static_cast<uint64_t>(handle.llk_metadata.thread_split_pages));
     }
     // Scratchpad binding handles: like tensor bindings, stored in order and emitted by genfiles in
     // the same order. Hash accessor_name + size_bytes + addr_crta_word — the accessor's compile-time

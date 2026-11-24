@@ -170,7 +170,7 @@ static_assert(reflect::size<m2::ArrayArgDecl>() == 2);
 static_assert(reflect::size<m2::DFBBinding>() == 5);
 static_assert(reflect::size<m2::SemaphoreBinding>() == 2);
 static_assert(reflect::size<m2::ScratchpadBinding>() == 2);
-static_assert(reflect::size<m2::TensorBinding>() == 2);
+static_assert(reflect::size<m2::TensorBinding>() == 3);  // thread_split_pages is experimental and C++ only
 static_assert(reflect::size<m2::KernelSpec>() == 14, "advanced_options and global_semaphore_bindings are C++ only");
 static_assert(reflect::size<m2::WorkUnitSpec>() == 3);
 static_assert(reflect::size<m2::ProgramSpec>() == 9, "advanced_options and global_semaphore_parameters are C++ only");

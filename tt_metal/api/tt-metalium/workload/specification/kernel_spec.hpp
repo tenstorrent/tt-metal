@@ -184,6 +184,12 @@ struct KernelSpec {
     struct TensorBinding {
         TensorParamName tensor_parameter_name;  // identify the TensorParameter within the ProgramSpec
         std::string accessor_name;              // tensor accessor name (used in the kernel source code)
+
+        // Experimental. Splits this node's local L1 region among the kernel's threads (Quasar: num_threads > 1).
+        // 0 = no split. N > 0: the region's N pages are dealt in contiguous runs, thread t of T getting N / T pages,
+        // plus one if t < N % T. The kernel reads its run with LocalTensorAccessor::thread_pages().
+        // N must equal the node's region in pages (checked on every enqueue). L1 tensors only.
+        uint32_t thread_split_pages = 0;
     };
     Group<TensorBinding> tensor_bindings;
 

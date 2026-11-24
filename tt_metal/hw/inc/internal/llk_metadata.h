@@ -40,6 +40,10 @@ struct LLKMetadata {
     uint8_t face_c_dim = 16;
     uint8_t num_faces_r_dim = 2;
     uint8_t num_faces_c_dim = 2;
+
+    // Tensor bindings only: KernelSpec::TensorBinding::thread_split_pages (0 = no split).
+    // Not LLK metadata; carried here because this is the struct headergen bakes onto the token.
+    uint32_t thread_split_pages = 0;
 };
 
 // Deliberately non-constexpr: a missing format fails constant evaluation even when ASSERT is disabled.

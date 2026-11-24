@@ -11,6 +11,7 @@
 #include "api/core_local_mem.h"
 #include "api/dataflow/buf_rw_note.h"
 #include "api/debug/assert.h"
+#include "api/kernel_thread_globals.h"
 #include "api/tensor/tensor_accessor_args.h"
 #include "api/tensor/tensor_binding_token.h"
 
@@ -57,10 +58,11 @@ public:
     //
     template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
     [[nodiscard]] explicit LocalTensorAccessor(
-        tensor_accessor::TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>) noexcept :
+        tensor_accessor::TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET> token) noexcept :
         // The region's L1 base address is stored in the CRTA at the token-supplied offset.
         // Delegates to the legacy constructor, which takes a raw L1 base address.
         LocalTensorAccessor(get_common_arg_val<uint32_t>(ADDR_CRTA_OFFSET / sizeof(uint32_t))) {
+        split_pages_ = token.thread_split_pages();
         // LocalTensorAccessor is legal only for tensors stored in L1 (SRAM) node-local memory.
         // Hard error if TensorBindingToken represents a DRAM tensor.
         static_assert(
@@ -79,8 +81,9 @@ public:
     // Construct from a Metal 2.0 per-node binding token.
     template <uint32_t CTA_OFFSET, uint32_t ADDR_RTA_OFFSET>
     [[nodiscard]] explicit LocalTensorAccessor(
-        tensor_accessor::PerNodeTensorBindingToken<CTA_OFFSET, ADDR_RTA_OFFSET>) noexcept :
+        tensor_accessor::PerNodeTensorBindingToken<CTA_OFFSET, ADDR_RTA_OFFSET> token) noexcept :
         LocalTensorAccessor(get_arg_val<uint32_t>(ADDR_RTA_OFFSET / sizeof(uint32_t))) {
+        split_pages_ = token.thread_split_pages();
         static_assert(
             !tensor_accessor::PerNodeTensorBindingToken<CTA_OFFSET, ADDR_RTA_OFFSET>::args_t::is_dram,
             "LocalTensorAccessor requires an L1-resident tensor, but this binding token is for a DRAM "
@@ -116,6 +119,28 @@ public:
      */
     [[nodiscard]] T& operator[](uint32_t index) const { return mem_[index]; }
 
+    // A run of pages of the local region: pages [first, first + count).
+    struct PageRun {
+        uint32_t first;
+        uint32_t count;
+    };
+
+    /** @brief This thread's share of the local region (experimental).
+     *
+     * Valid only when the host set KernelSpec::TensorBinding::thread_split_pages = N > 0, which the host checks
+     * equals the region's size in pages. The N pages are dealt in contiguous runs over the kernel's threads:
+     * thread t of T (get_my_thread_id() / get_num_threads()) gets N / T pages, plus one if t < N % T.
+     * A single-thread kernel (and every Wormhole / Blackhole kernel) gets the whole region {0, N}.
+     */
+    [[nodiscard]] PageRun thread_pages() const noexcept {
+        ASSERT(split_pages_ != 0);  // host did not set thread_split_pages for this binding
+        const uint32_t threads = get_num_threads();
+        const uint32_t t = get_my_thread_id();
+        const uint32_t q = split_pages_ / threads;
+        const uint32_t r = split_pages_ % threads;
+        return PageRun{t * q + (t < r ? t : r), q + (t < r ? 1u : 0u)};
+    }
+
 #if defined(COMPILE_FOR_TRISC)
     // Returns the LLKOperand pointing to the base address of the local tensor accessor
     // Functionalities meant to be used with LLKOperand for LLK 2.0
@@ -148,6 +173,7 @@ public:
 
 private:
     CoreLocalMem<T> mem_;
+    uint32_t split_pages_ = 0;  // host thread_split_pages; 0 for the legacy and null-token constructors
 };
 
 // A LocalTensorAccessor names this node's L1 region of a tensor, so it can be either endpoint of a NoC transaction (DM

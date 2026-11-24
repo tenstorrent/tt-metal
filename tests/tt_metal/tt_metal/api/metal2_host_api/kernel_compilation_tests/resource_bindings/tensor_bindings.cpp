@@ -245,5 +245,39 @@ void kernel_main() {
     EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
+// KernelSpec::TensorBinding::thread_split_pages reaches the token (only for the binding that sets it) and
+// LocalTensorAccessor::thread_pages() compiles.
+TEST_F(ProgramSpecTestGen1, CPU_TensorBindingThreadSplitPagesJITSmoke) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "tensor_binding_thread_split_pages";
+
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+    dm_kernel.source = KernelSpec::SourceCode{R"(
+#include "api/tensor/local_tensor_accessor.h"
+static_assert(tensor::split.thread_split_pages() == 4);
+static_assert(tensor::whole.thread_split_pages() == 0);
+void kernel_main() {
+    LocalTensorAccessor<uint32_t> split(tensor::split);
+    const auto run = split.thread_pages();
+    (void)run;
+}
+)"};
+
+    spec.kernels = {dm_kernel};
+    spec.tensor_parameters = {
+        MakeMinimalTensorParameter("t0", BufferType::L1),
+        MakeMinimalTensorParameter("t1", BufferType::L1),
+    };
+    BindTensorParameterToKernel(spec.kernels[0], "t0", "split");
+    BindTensorParameterToKernel(spec.kernels[0], "t1", "whole");
+    spec.kernels[0].tensor_bindings[0].thread_split_pages = 4;
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    Program program(*mesh_device_, spec);
+    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::experimental

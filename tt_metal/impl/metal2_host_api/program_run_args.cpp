@@ -914,6 +914,7 @@ void PatchPerNodeBindingRtas(
             experimental::per_core_allocation::is_per_core_allocation(*buffer),
             "Tensor argument for per-node TensorParameter '{}' is backed by a Buffer that is not per-node allocated.",
             handle.tensor_parameter_name);
+        CheckThreadSplitPages(handle, buffer);
         const auto& node_addresses = experimental::per_core_allocation::get_per_core_addresses(*buffer);
         const uint32_t word = handle.addr_rta_offset / sizeof(uint32_t);
         for (const CoreCoord& node : kernel.logical_cores()) {
