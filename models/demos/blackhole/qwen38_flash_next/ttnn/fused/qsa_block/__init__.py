@@ -32,21 +32,35 @@ from ..registry import BITWISE, FusedKernel, register
 NAME = "qsa_block"
 RMS_NORM = fp.kernel_source(NAME, "rms_norm_compute.cpp")
 ROPE = fp.kernel_source(NAME, "rope_compute.cpp")
+
+
+def _q1_source(file: str) -> str:
+    relative = f"{fp.KERNEL_ROOT}/{NAME}/kernels_q1/{file}"
+    if not (fp.REPO_ROOT / relative).is_file():
+        raise FileNotFoundError(f"fused kernel source {relative} is absent under {fp.REPO_ROOT}")
+    return relative
+
+
+# index_tail's reader_norm / writer_norm / writer_rope and main_tail's staging reader / writer read only their own lane's
+# position (tile `lane` of kv_row_hit and the block-start row) instead of all `rows` hit tiles (kernels_q1/own_position.h).
 INDEX_TAIL = {
-    role: fp.kernel_source(NAME, f"index_tail_{role}.cpp")
+    role: _q1_source(f"index_tail_{role}.cpp")
+    if role in ("reader_norm", "writer_norm", "writer_rope")
+    else fp.kernel_source(NAME, f"index_tail_{role}.cpp")
     for role in ("reader_norm", "compute_norm", "writer_norm", "reader_rope", "compute_rope", "writer_rope")
 }
 POST_ATTENTION_READER = fp.kernel_source(NAME, "post_attention_reader.cpp")
 POST_ATTENTION_COMPUTE = fp.kernel_source(NAME, "post_attention_compute.cpp")
 WIDEN_COMPUTE = fp.kernel_source(NAME, "widen_compute.cpp")
-SELECTION_ROW = fp.kernel_source(NAME, "selection_row.cpp")
 SELECTION_ROW_SPREAD = fp.kernel_source(NAME, "selection_row_spread.cpp")
 LANE_SCORE_ROWS = fp.kernel_source(NAME, "lane_score_rows.cpp")
 LANE_SCORE_ROWS_CHUNK_BYTES = 32768  # lane_score_rows row copy chunk: CB 0 holds one chunk
 LANE_COLUMNS = 8  # lane u's core sits in column u % 8 of its core row: up to 32 lanes on 4 core rows
 SCORE_MERGE = {role: fp.kernel_source(NAME, f"score_merge_{role}.cpp") for role in ("reader", "compute", "writer")}
 MAIN_TAIL = {
-    role: fp.kernel_source(NAME, f"main_tail_{role}.cpp")
+    role: _q1_source(f"main_tail_{role}.cpp")
+    if role in ("reader_staging", "writer_staging")
+    else fp.kernel_source(NAME, f"main_tail_{role}.cpp")
     for role in (
         "reader_norm",
         "compute_norm",
@@ -67,42 +81,10 @@ MAIN_TAIL = {
 MT_ROW_ENV = "QWEN38_QSA_MT_ROW"
 MAIN_TAIL_ROW = {role: fp.kernel_source(NAME, f"main_tail_{role}_staging_row.cpp") for role in ("reader", "writer")}
 
-# QWEN38_QSA_OWNPOS (default "0"): index_tail's reader_norm / writer_norm / writer_rope and main_tail's staging reader /
-# writer read only their own lane's position (tile `lane` of kv_row_hit and the block-start row) instead of all `rows`
-# hit tiles (kernels_q1/own_position.h); the copies in kernels_q1 differ from kernels/ in that call only.
-# QWEN38_QSA_SELROW2 (default "0"): selection_row's per-core row loop runs on both data-movement RISCs, each on half of
-# the core's columns (kernels_q1/selection_row_2r.cpp), same core grid and same outputs.  The default-on kernels in
-# kernels/ are not edited; flags off build the same programs as before.
-OWNPOS_ENV = "QWEN38_QSA_OWNPOS"
-SELROW2_ENV = "QWEN38_QSA_SELROW2"
-
-
-def _q1_source(file: str) -> str:
-    relative = f"{fp.KERNEL_ROOT}/{NAME}/kernels_q1/{file}"
-    if not (fp.REPO_ROOT / relative).is_file():
-        raise FileNotFoundError(f"fused kernel source {relative} is absent under {fp.REPO_ROOT}")
-    return relative
-
-
-INDEX_TAIL_OWNPOS = {
-    role: _q1_source(f"index_tail_{role}.cpp") for role in ("reader_norm", "writer_norm", "writer_rope")
-}
-MAIN_TAIL_OWNPOS = {role: _q1_source(f"main_tail_{role}.cpp") for role in ("reader_staging", "writer_staging")}
+# selection_row's per-core row loop (rows > 1) runs on both data-movement RISCs, each on half of the core's columns
+# (kernels_q1/selection_row_2r.cpp); rows == 1 takes the spread form.
 SELECTION_ROW_2R = _q1_source("selection_row_2r.cpp")
 SELROW2_HALF_COLS = 128  # local columns [0, 128) on the reader RISC, [128, cols) on the writer RISC (kernel constant)
-
-
-def ownpos_enabled(environ=None) -> bool:
-    """True when ``QWEN38_QSA_OWNPOS`` is "1" in ``environ`` (default ``os.environ``; default off)."""
-
-    return (os.environ if environ is None else environ).get(OWNPOS_ENV, "1") == "1"
-
-
-def selrow2_enabled(environ=None) -> bool:
-    """True when ``QWEN38_QSA_SELROW2`` is "1" in ``environ`` (default ``os.environ``; default off)."""
-
-    return (os.environ if environ is None else environ).get(SELROW2_ENV, "1") == "1"
-
 
 QSA_VERIFY_LIVE_ENV = "QWEN38_QSA_VERIFY_LIVE"
 QSA_LIVE_DEFINE = ("QSA_LIVE", "1")
@@ -534,10 +516,9 @@ def index_tail(
     acc = fp.accessor_args
     xy = lambda c: coords[(c.x, c.y)]
     lanes = range(rows)  # pair u: lane_first = u, lane_count = 1, do_query = (u == 0)
-    it_src = {**INDEX_TAIL, **(INDEX_TAIL_OWNPOS if ownpos_enabled() else {})}
     kernels = [
         fp.reader_kernel(
-            it_src["reader_norm"],
+            INDEX_TAIL["reader_norm"],
             norm_set,
             [
                 eps_bits,
@@ -575,7 +556,7 @@ def index_tail(
             INDEX_TAIL["compute_norm"], norm_set, [], [(norm_cores[u], [1, int(u == 0)]) for u in lanes], fp32_dest=True
         ),
         fp.writer_kernel(
-            it_src["writer_norm"],
+            INDEX_TAIL["writer_norm"],
             norm_set,
             [
                 *acc(out),
@@ -637,7 +618,7 @@ def index_tail(
             fp32_dest=False,
         ),
         fp.writer_kernel(
-            it_src["writer_rope"],
+            INDEX_TAIL["writer_rope"],
             rope_set,
             [*acc(out), *acc(compressed_cache), *acc(block_start), *acc(row_hit), *(acc(page_table) if paged else ())],
             [
@@ -1027,12 +1008,10 @@ def main_tail(
         ),
     ]
 
-    ownpos = ownpos_enabled()
-
     def staging_kernels():  # the decode stage's three kernels; their tensors are None under a KV stage
         return [
             fp.reader_kernel(
-                MAIN_TAIL_OWNPOS["reader_staging"] if ownpos else MAIN_TAIL["reader_staging"],
+                MAIN_TAIL["reader_staging"],
                 staging_set,
                 [*acc(staging), *acc(v_ws), *acc(block_start), *acc(row_hit)],
                 [
@@ -1056,7 +1035,7 @@ def main_tail(
                 MAIN_TAIL["compute_staging"], staging_set, [], [(core, [1]) for core in staging_cores], fp32_dest=True
             ),
             fp.writer_kernel(
-                MAIN_TAIL_OWNPOS["writer_staging"] if ownpos else MAIN_TAIL["writer_staging"],
+                MAIN_TAIL["writer_staging"],
                 staging_set,
                 [*acc(staging), *acc(kv_cache), *acc(block_start), *acc(row_hit), *(acc(page_table) if paged else ())],
                 [
@@ -1562,7 +1541,6 @@ def selection_row(
     )
     if live:
         defines = [QSA_LIVE_DEFINE]
-    selrow2 = selrow2_enabled() and not spread
     if spread:
         n_cores = sel_spread_cores()
         segments = sel_spread_segments(n_cores)
@@ -1587,8 +1565,8 @@ def selection_row(
             for make, half in ((fp.reader_kernel, 0), (fp.writer_kernel, 1))
         ]
         cbs = [fp.cb_descriptor(0, ttnn.uint32, 2 * stride, 1, cores)]
-    elif selrow2:
-        # QWEN38_QSA_SELROW2: the same grid and runtime args; the reader RISC takes local columns [0, 128), the writer RISC
+    else:
+        # rows > 1: the same grid and runtime args as the one-RISC form; the reader RISC takes local columns [0, 128), the writer RISC
         # [128, cols), each in its own L1 region of `region` bytes (the one-RISC layout, 64-aligned) in CB 0
         region = (max(256 + 1024 + 128 + 3 * 1152, cb_bytes_paged(page_table, page_size, rows)) + 63) // 64 * 64
         row_args = [
@@ -1610,24 +1588,6 @@ def selection_row(
             for make, half in ((fp.reader_kernel, 0), (fp.writer_kernel, 1))
         ]
         cbs = [fp.cb_descriptor(0, ttnn.uint32, 2 * region, 1, cores)]
-    else:
-        kernels = [
-            fp.reader_kernel(
-                SELECTION_ROW,
-                cores,
-                compile_args,
-                [
-                    (
-                        ttnn.CoreCoord(i, g),
-                        [*addresses, rows, i, offset_rows, g, row_groups, *paged_args, *([live_rows] if live else [])],
-                    )
-                    for g in range(row_groups)
-                    for i in range(SELECTION_SLICES)
-                ],
-                defines=defines,
-            )
-        ]
-        cbs = [fp.cb_descriptor(0, ttnn.uint32, cb_bytes, 1, cores)]
     meta = fp.program_meta(  # the block ids, offsets and sentinel rows, the rows' keep / fill rows in, the row out
         "qsa_selection_row",
         "selection_row",

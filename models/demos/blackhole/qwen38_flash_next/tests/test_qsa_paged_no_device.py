@@ -14,7 +14,7 @@ from models.demos.blackhole.qwen38_flash_next.tests import qsa_paged_reference a
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused import qsa_block
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused.kv_page_scatter import kv_page_scatter
 
-KERNELS = Path(qsa_block.__file__).parent / "kernels"
+KERNELS = Path(qsa_block.__file__).parent / "kernels_q1"
 SCATTER_KERNEL = Path(kv_page_scatter.__code__.co_filename).parent / "kernels" / "scatter_rows.cpp"
 
 
@@ -85,7 +85,7 @@ def test_scatter_reference_copies_whole_groups(rows, page_size):
 
 
 def test_paged_flag_is_compile_time_and_the_unpaged_program_is_untouched():
-    selection = (KERNELS / "selection_row.cpp").read_text()
+    selection = (KERNELS / "selection_row_2r.cpp").read_text()
     writer = (KERNELS / "main_tail_writer_staging.cpp").read_text()
     for source in (selection, writer):
         assert source.count("#ifdef PAGED") >= 1
@@ -106,5 +106,5 @@ def test_page_arguments_are_validated(expect_error):
     for bad in (0, 16, 48, 100):
         with expect_error(ValueError, "power of two"):
             qsa_block.page_shift(bad)
-    assert "pt_l1[v >> shift] * bs + (v & (bs - 1))" in (KERNELS / "selection_row.cpp").read_text()
+    assert "pt_l1[v >> shift] * bs + (v & (bs - 1))" in (KERNELS / "selection_row_2r.cpp").read_text()
     assert "table[t0 >> shift] * bs + (t0 & (bs - 1))" in SCATTER_KERNEL.read_text()

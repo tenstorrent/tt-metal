@@ -1,28 +1,20 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""QWEN38_QSA_OWNPOS and QWEN38_QSA_SELROW2 without a device: both off by default; with the flags off the programs of
-index_tail, main_tail and selection_row (rows 1, 8, 32; paged / unpaged / live) are what the builders made before the
-flags (kernels in kernels/, same defines, runtime args, core ranges, CBs); with the flags on exactly the named kernels
-change.  The programs are built on fake tensors (``fp.run_program`` captures the descriptor)."""
+"""The own-position kernels of index_tail / main_tail and the two-RISC selection row without a device: the programs of
+index_tail, main_tail and selection_row (rows 1, 8, 32; paged / unpaged / live) use the kernels in kernels_q1/ for the
+lane-position reads and the row loop.  The programs are built on fake tensors (``fp.run_program`` captures the
+descriptor)."""
 
 from __future__ import annotations
 
-import importlib.util
 import os
-from pathlib import Path
 from types import SimpleNamespace
-
-import pytest
 
 import ttnn
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused import program as fp
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused import qsa_block
 
-PKG = "models.demos.blackhole.qwen38_flash_next.ttnn.fused"
-# the upstream builder the flags extend (9bb1f0f698c, with the paged index_tail, spread and one-row staging forms)
-# set Q1_ORIG_INIT to a copy of the upstream qsa_block/__init__.py; the comparison tests skip without it
-ORIG = Path(os.environ["Q1_ORIG_INIT"]) if os.environ.get("Q1_ORIG_INIT") else None
 KERNELS_Q1 = fp.REPO_ROOT / fp.KERNEL_ROOT / "qsa_block" / "kernels_q1"
 BF16, U32, I32 = ttnn.bfloat16, ttnn.uint32, ttnn.int32
 TILE, RM = ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT
@@ -55,23 +47,6 @@ class Fake:
 
 def _mesh():
     return SimpleNamespace(compute_with_storage_grid_size=lambda: SimpleNamespace(x=11, y=10), id=1)
-
-
-def _load_orig(monkeypatch):
-    if ORIG is None or not ORIG.is_file():
-        return None
-    name = f"{PKG}.qsa_block.orig_q1"
-    spec = importlib.util.spec_from_file_location(name, ORIG, submodule_search_locations=None)
-    module = importlib.util.module_from_spec(spec)
-    import sys
-
-    from models.demos.blackhole.qwen38_flash_next.ttnn.fused import registry
-
-    monkeypatch.setattr(registry, "register", lambda *a, **k: None)  # the copy must not register its kernels twice
-
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
 
 
 def _capture(module, monkeypatch):
@@ -175,9 +150,7 @@ def _sel_args(mesh, rows, paged):
     return args, kwargs
 
 
-def _programs(module, monkeypatch, flags):
-    for name, value in flags.items():
-        monkeypatch.setenv(name, value)
+def _programs(module, monkeypatch):
     captured = _capture(module, monkeypatch)
     Fake._next = 0x1000  # the same addresses in every build
     mesh = _mesh()
@@ -199,99 +172,41 @@ def _programs(module, monkeypatch, flags):
     return out
 
 
-FLAGS_OFF = {qsa_block.OWNPOS_ENV: "0", qsa_block.SELROW2_ENV: "0"}
-FLAGS_ON = {qsa_block.OWNPOS_ENV: "1", qsa_block.SELROW2_ENV: "1"}
-
-
-def test_flags_default_on():
-    assert qsa_block.OWNPOS_ENV == "QWEN38_QSA_OWNPOS" and qsa_block.SELROW2_ENV == "QWEN38_QSA_SELROW2"
-    for enabled in (qsa_block.ownpos_enabled, qsa_block.selrow2_enabled):
-        assert enabled({}) and not enabled({"QWEN38_QSA_OWNPOS": "0", "QWEN38_QSA_SELROW2": "0"})
-    assert not qsa_block.ownpos_enabled({qsa_block.OWNPOS_ENV: "0"}) and qsa_block.ownpos_enabled(
-        {qsa_block.SELROW2_ENV: "0"}
-    )
-    assert not qsa_block.selrow2_enabled({qsa_block.SELROW2_ENV: "0"}) and qsa_block.selrow2_enabled(
-        {qsa_block.OWNPOS_ENV: "0"}
-    )
-
-
-def test_flags_off_programs_use_the_original_kernels(monkeypatch):
-    programs = _programs(qsa_block, monkeypatch, FLAGS_OFF)
+def test_programs_use_the_q1_kernels(monkeypatch):
+    programs = _programs(qsa_block, monkeypatch)
     for key, (kernels, _) in programs.items():
-        assert all("/kernels/" in k[0] and "kernels_q1" not in k[0] for k in kernels), key
-    assert len(programs[("selection_row", 8, False)][0]) == 1
-    assert len(programs[("selection_row", 32, "live")][0]) == 1
-
-
-def test_flags_off_programs_equal_the_pre_flag_builders(monkeypatch):
-    orig = _load_orig(monkeypatch)
-    if orig is None:
-        pytest.skip("Q1_ORIG_INIT is unset or absent")
-    assert not hasattr(orig, "ownpos_enabled")
-    assert _programs(orig, monkeypatch, {}) == _programs(qsa_block, monkeypatch, FLAGS_OFF)
-
-
-def _same_but_sources(a, b):
-    ka, ca = a
-    kb, cb = b
-    assert ca == cb and len(ka) == len(kb)
-    return [i for i, (x, y) in enumerate(zip(ka, kb)) if x != y], [(x[1:], y[1:]) for x, y in zip(ka, kb)]
-
-
-def test_ownpos_on_swaps_only_the_lane_position_kernels(monkeypatch):
-    off = _programs(qsa_block, monkeypatch, FLAGS_OFF)
-    on = _programs(qsa_block, monkeypatch, {**FLAGS_OFF, qsa_block.OWNPOS_ENV: "1"})
-    for key in off:
+        sources = sorted(os.path.basename(k[0]) for k in kernels if "kernels_q1" in k[0])
         name = key[0]
-        if name == "selection_row":
-            assert off[key] == on[key], key
-            continue
-        changed = [i for i, (x, y) in enumerate(zip(off[key][0], on[key][0])) if x != y]
-        assert off[key][1] == on[key][1] and len(off[key][0]) == len(on[key][0])
-        for i in changed:  # only the source differs
-            assert off[key][0][i][1:] == on[key][0][i][1:], key
-            assert "kernels_q1" in on[key][0][i][0] and "kernels_q1" not in off[key][0][i][0]
-        swapped = sorted(os.path.basename(on[key][0][i][0]) for i in changed)
         if name == "index_tail":
-            assert swapped == [
-                "index_tail_reader_norm.cpp",
-                "index_tail_writer_norm.cpp",
-                "index_tail_writer_rope.cpp",
-            ], key
+            assert {"index_tail_reader_norm.cpp", "index_tail_writer_norm.cpp", "index_tail_writer_rope.cpp"} <= set(
+                sources
+            ), key
+        elif name == "main_tail" and key[1] == 1:
+            assert sources == [], key  # the one-row staging kernels are main_tail's own
+        elif name == "main_tail":
+            assert {"main_tail_reader_staging.cpp", "main_tail_writer_staging.cpp"} <= set(sources), key
         elif key[1] == 1:
-            # the one-row staging kernels (rows == 1, paged or not since upstream's paged staging row) are the ones main_tail already uses: unchanged
-            assert swapped == [], key
+            assert sources == [], key  # selection_row rows == 1: the spread form
         else:
-            assert swapped == ["main_tail_reader_staging.cpp", "main_tail_writer_staging.cpp"], key
+            assert sources == ["selection_row_2r.cpp"] * 2, key
 
 
-def test_selrow2_on_splits_the_row_loop_over_both_risc(monkeypatch):
-    off = _programs(qsa_block, monkeypatch, FLAGS_OFF)
-    on = _programs(qsa_block, monkeypatch, {**FLAGS_OFF, qsa_block.SELROW2_ENV: "1"})
-    for key in off:
-        if key[0] != "selection_row":
-            assert off[key] == on[key], key
+def test_selection_row_splits_the_row_loop_over_both_risc(monkeypatch):
+    programs = _programs(qsa_block, monkeypatch)
+    for key, (kernels, cbs) in programs.items():
+        if key[0] != "selection_row" or key[1] == 1:
             continue
-        if key[1] == 1:  # the spread form (rows == 1, paged or not since upstream) keeps its own kernels
-            assert off[key] == on[key], key
-            continue
-        (k_off,), (k_on, k_on2) = off[key][0], on[key][0]
+        k_on, k_on2 = kernels
         assert k_on[0] == k_on2[0] and k_on[0].endswith("kernels_q1/selection_row_2r.cpp")
-        assert k_on[1:3] == k_off[1:3] and k_on[4] == k_off[4] == k_on2[4]  # cores, compile args, runtime args
+        assert k_on[1:3] == k_on2[1:3] and k_on[4] == k_on2[4]  # cores, compile args, runtime args
         assert k_on[5] == "ReaderConfigDescriptor" and k_on2[5] == "WriterConfigDescriptor"
-        halves = {dict(k[3])["SEL2_HALF"] for k in (k_on, k_on2)}
-        assert halves == {"0", "1"}
-        extra = set(k_on[3]) - set(k_off[3])
-        assert {n for n, _ in extra} == {"SEL2_HALF", "SEL2_STRIDE"} and set(k_off[3]) <= set(k_on[3])
+        assert {dict(k[3])["SEL2_HALF"] for k in (k_on, k_on2)} == {"0", "1"}
         stride = int(dict(k_on[3])["SEL2_STRIDE"])
         assert stride % 64 == 0 and stride >= 256 + 1024 + 128 + 3 * 1152
-        assert on[key][1][0][0] == 2 * stride and on[key][1][0][1] == off[key][1][0][1]
+        assert cbs[0][0] == 2 * stride
 
 
-def test_kernel_copies_differ_only_in_the_position_call():
-    import re
-
-    base = fp.REPO_ROOT / fp.KERNEL_ROOT / "qsa_block" / "kernels"
+def test_kernel_copies_include_the_own_position_header():
     for name in (
         "index_tail_reader_norm",
         "index_tail_writer_norm",
@@ -299,25 +214,16 @@ def test_kernel_copies_differ_only_in_the_position_call():
         "main_tail_reader_staging",
         "main_tail_writer_staging",
     ):
-        old = (base / f"{name}.cpp").read_text()
         new = (KERNELS_Q1 / f"{name}.cpp").read_text()
-        norm = lambda s: re.sub(r"\s+", "", s.replace('"positions.h"', "").replace('"own_position.h"', ""))
-        assert "read_positions" in old and "read_own_position" in new and "read_positions" not in new
-        strip = lambda s: re.sub(
-            r"(tile_rows::read_positions\(.*?\);)|(for\(uint32_ti=0;i<lane_count;\+\+i\)\{//QWEN.*?\}\n?)",
-            "",
-            s,
-            flags=re.S,
-        )
+        assert "read_own_position" in new and "read_positions" not in new
         assert new.count("read_own_position(") == 1
         assert new.count('#include "own_position.h"') == 1 and '"positions.h"' not in new
 
 
-def test_own_position_header_matches_read_positions_scan():
+def test_own_position_header_reads_only_its_lane():
     import re
 
     header = (KERNELS_Q1 / "own_position.h").read_text()
-    old = (fp.REPO_ROOT / fp.KERNEL_ROOT / "qsa_block/kernels/positions.h").read_text()
     code = lambda s: re.sub(r"\s+", "", re.sub(r"//[^\n]*", "", s))
     for piece in (
         "if(e[0]==0x3F80){row=r;}",
@@ -325,6 +231,6 @@ def test_own_position_header_matches_read_positions_scan():
         "chunk_offset(r,0)",
         "noc_async_read_page(0,block_start,scratch);",
     ):
-        assert piece in code(header) and piece in code(old), piece
+        assert piece in code(header), piece
     assert "noc_async_read_page(lane,hit,scratch+128);" in code(header)
     assert "starts[lane]+row" in code(header) and "positions[lane]=p;" in code(header)

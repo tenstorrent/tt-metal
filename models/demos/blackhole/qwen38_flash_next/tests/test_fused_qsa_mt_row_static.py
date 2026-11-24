@@ -51,8 +51,12 @@ def test_dispatch_in_main_tail():
 
 
 def test_default_kernels_are_untouched_by_the_flag():
-    for name in ("main_tail_reader_staging.cpp", "main_tail_compute_staging.cpp", "main_tail_writer_staging.cpp"):
-        assert "CB_ROW" not in (KERNELS / name).read_text()
+    for path in (
+        KERNELS.parent / "kernels_q1" / "main_tail_reader_staging.cpp",
+        KERNELS / "main_tail_compute_staging.cpp",
+        KERNELS.parent / "kernels_q1" / "main_tail_writer_staging.cpp",
+    ):
+        assert "CB_ROW" not in path.read_text()
     assert "CB_ROW = 30" in (KERNELS / "main_tail_cbs.h").read_text()
 
 

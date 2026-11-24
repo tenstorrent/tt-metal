@@ -23,6 +23,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.fused import qsa_block
 
 TILE = ttnn.TILE_SIZE
 KERNELS = fp.REPO_ROOT / fp.KERNEL_ROOT / "qsa_block" / "kernels"
+KERNELS_Q1 = fp.REPO_ROOT / fp.KERNEL_ROOT / "qsa_block" / "kernels_q1"
 
 
 def _mesh(banks: int = 8):
@@ -270,7 +271,7 @@ def test_the_tail_programs_take_the_windows_first_tiles_and_the_readers_offset_t
     assert '_window(qg_ws,qg_first,QG_WIDTH,"qg")' in post
     assert "[(c,[attention.buffer_address(),qg_ws.buffer_address(),rows,h,qg_first])" in post
     # the readers add the first tile to the page index; everything after the read is untouched
-    index_reader = (KERNELS / "index_tail_reader_norm.cpp").read_text()
+    index_reader = (KERNELS_Q1 / "index_tail_reader_norm.cpp").read_text()
     assert "const uint32_t q_first = get_arg_val<uint32_t>(8);" in index_reader
     assert "const uint32_t raw_first = get_arg_val<uint32_t>(9);" in index_reader
     assert "noc_async_read_page(q_first + c, q, x_l1 + c * TILE_BYTES);" in index_reader
@@ -278,7 +279,7 @@ def test_the_tail_programs_take_the_windows_first_tiles_and_the_readers_offset_t
     norm_reader = (KERNELS / "main_tail_reader_norm.cpp").read_text()
     assert "const uint32_t first = get_arg_val<uint32_t>(2);" in norm_reader
     assert "noc_async_read_page(first + c, x, get_write_ptr(CB_X) + c * TILE_BYTES);" in norm_reader
-    staging_reader = (KERNELS / "main_tail_reader_staging.cpp").read_text()
+    staging_reader = (KERNELS_Q1 / "main_tail_reader_staging.cpp").read_text()
     assert "const uint32_t v_first = get_arg_val<uint32_t>(5);" in staging_reader
     assert "noc_async_read_page(v_first + c, v, pack_l1 + c * TILE_BYTES);" in staging_reader
     post_reader = (KERNELS / "post_attention_reader.cpp").read_text()
