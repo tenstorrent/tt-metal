@@ -119,6 +119,7 @@ so per-test setup is bounded to copying a few handles.
 | `LLKQuasarMeshDeviceSingleCardFixture` | Quasar-only test. Auto-`GTEST_SKIP` on other archs. | yes (Quasar HW) | yes (Quasar HW) |
 | `LLKMeshDeviceFixtureSlowDispatchOnly` | The test is only correct under SD (e.g. uses async write/read patterns broken under FD). | skip | yes |
 | `UnitMeshCQFixture` *(from `tests/tt_metal/tt_metal/common/`)* | The test is only meaningful under FD (uses host command-queue APIs directly). | yes | skip |
+| `LLKBlackholePackUntilizeAssertFixture` / `LLKWormholePackUntilizeAssertFixture` *(in `test_untilize_tilize.cpp`)* | Single-architecture (aliases of `LLKPackUntilizeAssertFixture<Arch>`; auto-`GTEST_SKIP` elsewhere); the test observes a device-side `LLK_ASSERT` through the watcher, either expecting it to trip (reject cases) or expecting a clean watcher after completion (accept cases). Opens its own device per test with the watcher and LLK asserts enabled (no suite-shared device). | yes (that arch's HW) | yes (that arch's HW) |
 
 > **When in doubt, start with `LLKMeshDeviceFixture`.** Only switch to a more
 > restrictive fixture if you discover the test legitimately can't run under one
