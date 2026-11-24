@@ -10,8 +10,13 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from ....experimental.lora.h3_adapter_loader import _collect_pairs, _file_alpha, _register_fused, _scale_of
-from ....pipelines.minimax_h3.pipeline_minimax_h3_turbo import _round_bf16_stochastic
+from ....experimental.lora.h3_adapter_loader import (
+    _collect_pairs,
+    _file_alpha,
+    _register_fused,
+    _scale_of,
+    round_bf16_stochastic,
+)
 
 NUM_HEADS = 4
 HEAD_DIM = 8
@@ -143,23 +148,23 @@ def test_stochastic_round_keeps_sub_ulp_delta_on_average(sign):
     weight = torch.full((1 << 20,), sign, dtype=torch.bfloat16)
     merged = weight.float() + sign * 1e-4
     assert torch.equal(merged.to(torch.bfloat16), weight)
-    rounded = _round_bf16_stochastic(merged, torch.Generator().manual_seed(0)).float()
+    rounded = round_bf16_stochastic(merged, torch.Generator().manual_seed(0)).float()
     assert abs(rounded.mean().item() - sign * (1.0 + 1e-4)) < 2e-5
 
 
 def test_stochastic_round_is_exact_on_bf16_and_seeded():
     generator = torch.Generator().manual_seed(1)
     weight = torch.randn(4096, generator=generator).to(torch.bfloat16)
-    assert torch.equal(_round_bf16_stochastic(weight.float(), torch.Generator().manual_seed(0)), weight)
+    assert torch.equal(round_bf16_stochastic(weight.float(), torch.Generator().manual_seed(0)), weight)
     merged = weight.float() + 1e-3 * torch.randn(4096, generator=generator)
-    first = _round_bf16_stochastic(merged, torch.Generator().manual_seed(0))
-    assert torch.equal(first, _round_bf16_stochastic(merged, torch.Generator().manual_seed(0)))
+    first = round_bf16_stochastic(merged, torch.Generator().manual_seed(0))
+    assert torch.equal(first, round_bf16_stochastic(merged, torch.Generator().manual_seed(0)))
 
 
 def test_stochastic_round_keeps_signed_zeros_infinities_and_nan():
     special = torch.tensor([0.0, -0.0, float("inf"), float("-inf")]).repeat(1 << 12)
-    rounded = _round_bf16_stochastic(special, torch.Generator().manual_seed(0)).float()
+    rounded = round_bf16_stochastic(special, torch.Generator().manual_seed(0)).float()
     assert torch.equal(rounded, special)
     assert torch.equal(torch.signbit(rounded), torch.signbit(special))
     nan = torch.full((1 << 12,), float("nan"))
-    assert _round_bf16_stochastic(nan, torch.Generator().manual_seed(0)).isnan().all()
+    assert round_bf16_stochastic(nan, torch.Generator().manual_seed(0)).isnan().all()

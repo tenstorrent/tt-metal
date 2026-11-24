@@ -76,6 +76,14 @@ from ...encoders.qwen3vl.model_qwen3vl import (
 )
 from ...encoders.qwen3vl.vision_qwen3vl import pad_patches_for_sp
 from ...encoders.vision import vision_cu_seqlens
+from ...experimental.lora.h3_adapter_loader import (
+    file_digest,
+    h3_side_rank,
+    h3_side_tensors,
+    is_side_target,
+    iter_h3_host_deltas,
+    round_bf16_stochastic,
+)
 from ...layers.audio_ops import weights_variant
 from ...layers.module import Module
 from ...models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
@@ -690,6 +698,8 @@ class MiniMaxH3Pipeline:
         encoder_dynamic_length: bool | None = None,
         agmm_mode: AgmmMode | str | None = None,
         precompute_adaln_modulation: bool = True,
+        lora_side_path: str | os.PathLike | None = None,
+        lora_side_strength: float = 1.0,
     ) -> None:
         """`dynamic_length` serves every packed length up to `max_sequence_length` with one program set per
         length class (eager only). It is the 4x8 presets' default on both architectures; `_resolve_denoise_path` has
@@ -697,6 +707,10 @@ class MiniMaxH3Pipeline:
         `agmm_mode` (`accurate` / `balanced`; kwarg > MINIMAX_H3_AGMM_MODE > `balanced`) picks that path's
         all-gather matmul pins. `precompute_adaln_modulation` projects every step's adaLN tables once at the start of a
         denoise instead of once a step; `trace_denoise` configs always project once a step.
+
+        `lora_side_path` runs that LoRA adapter unmerged over the base checkpoint at `lora_side_strength` (a multiplier
+        on the file's `alpha / rank`): the DiT blocks' q/k/v, to_out, ff1 and ff2 as a side branch `W x + B (A x)`,
+        every other target merged on host (see `_apply_side_adapter`). None (default) loads the checkpoint as is.
 
         `encoder_dynamic_length` does the same for the prompt encoder; None turns it on with `dynamic_length` where
         the mesh preset enables it (the Blackhole 4x8 and 4x32), for t2va/fl2va only.
@@ -743,6 +757,16 @@ class MiniMaxH3Pipeline:
         source = f" (from {_DYNAMIC_LENGTH_ENV})" if path.dynamic_from_env else ""
         fsdp = "on" if self.dit_fsdp else "off"
         self._host_log(f"denoise path: {path.name}{source}; dit_fsdp: {fsdp} ({fsdp_source})")
+        self.lora_side_path = None if lora_side_path is None else Path(lora_side_path)
+        self.lora_side_strength = float(lora_side_strength)
+        self.lora_side_rank = self._lora_side_digest = None
+        if self.lora_side_path is not None:
+            if self.lora_side_strength <= 0:
+                raise ValueError(f"lora_side_strength must be positive, got {self.lora_side_strength}")
+            if self.dit_fsdp:
+                raise ValueError("the LoRA side branch needs dit_fsdp off")
+            self.lora_side_rank = h3_side_rank(str(self.lora_side_path))
+            self._lora_side_digest = file_digest(self.lora_side_path)
         vae_mode = residency.vae_residency_mode if vae_residency_mode is None else vae_residency_mode
         _check_vae_residency_mode(vae_mode)
         self.vae_residency_mode = vae_mode if coresident else "keep"
@@ -1011,6 +1035,8 @@ class MiniMaxH3Pipeline:
         encoder_dynamic_length: bool | None = None,
         agmm_mode: AgmmMode | str | None = None,
         precompute_adaln_modulation: bool = True,
+        lora_side_path: str | os.PathLike | None = None,
+        lora_side_strength: float = 1.0,
         **subclass_kwargs,
     ) -> "MiniMaxH3Pipeline":
         """`task="t2va"` serves both t2va and fl2va; `task="ref2va"` loads `transformer_ref/`.
@@ -1026,7 +1052,8 @@ class MiniMaxH3Pipeline:
         (MINIMAX_H3_DIT_FSDP=0|1 > kwarg > preset) is on by default for dynamic-length ref2va, see `_resolve_dit_fsdp`.
         `agmm_mode` (`accurate` / `balanced`; kwarg > MINIMAX_H3_AGMM_MODE > `balanced`) picks the dynamic-length
         path's all-gather matmul pins. `precompute_adaln_modulation` (default on) projects the adaLN tables once a
-        denoise instead of once a step; `trace_denoise` configs always project once a step.
+        denoise instead of once a step; `trace_denoise` configs always project once a step. `lora_side_path` /
+        `lora_side_strength` run a LoRA adapter unmerged over the base checkpoint (see `__init__`).
         """
         transformer_subfolder = "transformer_ref" if task == "ref2va" else "transformer"
         weights_dir = resolve_weights_dir(
@@ -1065,6 +1092,8 @@ class MiniMaxH3Pipeline:
             encoder_dynamic_length=encoder_dynamic_length,
             agmm_mode=agmm_mode,
             precompute_adaln_modulation=precompute_adaln_modulation,
+            lora_side_path=lora_side_path,
+            lora_side_strength=lora_side_strength,
             **subclass_kwargs,
         )
 
@@ -1089,7 +1118,37 @@ class MiniMaxH3Pipeline:
             if not single.is_file():
                 raise FileNotFoundError(f"no safetensors (sharded or single) under {directory}")
             state.update(load_file(str(single)))
+        if self.lora_side_path is not None and subfolder == self.transformer_subfolder:
+            self._apply_side_adapter(state)
         return state
+
+    def _apply_side_adapter(self, state: dict[str, torch.Tensor]) -> None:
+        """The blocks' q/k/v/out/ff targets go in as `lora_A` / `lora_B` tensors next to their weights (the blocks run
+        them as a side branch); every other target is merged here in float32 and rounded to bfloat16 stochastically,
+        as the Turbo pipeline merges."""
+        path, strength = str(self.lora_side_path), self.lora_side_strength
+        side = h3_side_tensors(path, scale=strength)
+        missing = [key for key in side if key.rsplit(".", 2)[0] + ".weight" not in state]
+        if missing:
+            raise KeyError(f"side adapter targets {missing[:3]} are not in the {self.transformer_subfolder} checkpoint")
+        state.update(side)
+        generator = torch.Generator().manual_seed(0)
+        merged = 0
+        for key, delta in iter_h3_host_deltas(path, ("",), scale=strength, keep=lambda base: not is_side_target(base)):
+            weight = state.get(key)
+            if weight is None:
+                raise KeyError(f"side adapter target {key} is not in the {self.transformer_subfolder} checkpoint")
+            if weight.shape != delta.shape:
+                raise ValueError(f"side adapter target {key}: delta {tuple(delta.shape)} != {tuple(weight.shape)}")
+            if weight.dtype == torch.bfloat16:
+                state[key] = round_bf16_stochastic(weight.float() + delta, generator)
+            else:
+                state[key] = weight + delta.to(weight.dtype)
+            merged += 1
+        self._host_log(
+            f"side adapter {self.lora_side_path.name}: {len(side) // 2} side-branch targets (rank "
+            f"{self.lora_side_rank}), {merged} merged on host, strength {strength:g}"
+        )
 
     # ------------------------------------------------------------------ residency
 
@@ -1627,7 +1686,10 @@ class MiniMaxH3Pipeline:
     # ------------------------------------------------------------------ denoiser
 
     def _dit_weight_mode(self) -> str:
-        return "resident_adaln_fsdp" if self.dit_fsdp else "resident_adaln"
+        mode = "resident_adaln_fsdp" if self.dit_fsdp else "resident_adaln"
+        if self.lora_side_path is not None:
+            mode += f"_lora_side_{self.lora_side_path.stem}_{self._lora_side_digest[:12]}_x{self.lora_side_strength!r}"
+        return mode
 
     def _build_transformer(self) -> MiniMaxH3Transformer3DModel:
         config = {k: v for k, v in self.transformer_config.items() if k not in ("rope_freq_dim", "rope_theta")}
@@ -1647,6 +1709,7 @@ class MiniMaxH3Pipeline:
             kv_gather_capacity=self.kv_gather_capacity,
             dynamic_length=self.dynamic_length,
             agmm_mode=self.agmm_mode,
+            lora_rank=self.lora_side_rank,
         )
 
     @property

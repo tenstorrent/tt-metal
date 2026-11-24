@@ -22,6 +22,7 @@ from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
 from .agmm_config import AgmmMode, agmm_kwargs, agmm_pins
 from .length_classes import LENGTH_CLASSES, length_class
+from .lora_side import LowRankDown, agmm_side_kwargs, augment_col_weight, col_suffix_cols, rank_columns
 
 # Ring SDPA chunk pair of the dynamic-length path per device compute grid and length class, one program each.
 # Blackhole 4x8, measured per block: (320, 384) is 5 % faster at 4736 rows/device, (256, 512) 5 % faster at 13664.
@@ -119,10 +120,14 @@ class MiniMaxH3Attention(Module):
         dynamic_length: bool = False,
         norm_row_capacity: int | None = None,
         agmm_mode: AgmmMode | str | None = None,
+        lora_rank: int | None = None,
     ) -> None:
         """`dynamic_length` freezes every length-keyed choice at construction (one program per op for every
         length); `norm_row_capacity` (per-device rows) sizes the fused QK norms' program on that path, and
-        `agmm_mode` picks its all-gather matmul pins (`resolve_agmm_mode`)."""
+        `agmm_mode` picks its all-gather matmul pins (`resolve_agmm_mode`).
+
+        `lora_rank`: q/k/v and to_out carry an unmerged LoRA of this rank as a side branch (see `lora_side`); the
+        state dict then holds `to_{q,k,v,out.0}.lora_{A,B}.weight` next to each weight."""
         super().__init__()
 
         self.kv_gather_capacity = kv_gather_capacity
@@ -160,11 +165,22 @@ class MiniMaxH3Attention(Module):
 
         fsdp_mesh_axis = self.sp_mesh_axis if is_fsdp else None
 
+        self.lora_rank = lora_rank
+        self._qkv_side_cols = self._out_side_cols = 0
+        if lora_rank is not None:
+            if is_fsdp or not is_sequence_parallel:
+                raise ValueError("the LoRA side branch needs the sequence-parallel DiT attention without FSDP")
+            self._qkv_side_cols = col_suffix_cols(hidden_size // tp_factor, 3 * lora_rank, tp_factor)
+            self._out_side_cols = col_suffix_cols(self.inner_dim // tp_factor, lora_rank, tp_factor)
+            down_kwargs = dict(mesh_device=mesh_device, mesh_axis=self.tp_mesh_axis, ccl_manager=ccl_manager)
+            self.to_qkv_down = LowRankDown(hidden_size, tp_factor * self._qkv_side_cols, reduce=True, **down_kwargs)
+            self.to_out_down = LowRankDown(self.inner_dim, tp_factor * self._out_side_cols, reduce=True, **down_kwargs)
+
         # Fused QKV: one matmul, output split into three. The state dict is rearranged in
         # `_prepare_torch_state` so that column-parallel fracturing hands each device the same
         # 14 heads of q, k and v.
         self.to_qkv = ColParallelLinear(
-            hidden_size,
+            hidden_size + tp_factor * self._qkv_side_cols,
             3 * self.inner_dim,
             chunks=3,
             bias=False,
@@ -174,7 +190,7 @@ class MiniMaxH3Attention(Module):
             ccl_manager=ccl_manager,
         )
         self.to_out = ColParallelLinear(
-            self.inner_dim,
+            self.inner_dim + tp_factor * self._out_side_cols,
             hidden_size,
             bias=False,
             mesh_device=mesh_device,
@@ -296,6 +312,8 @@ class MiniMaxH3Attention(Module):
         q_state = pop_substate(state, "to_q")
         k_state = pop_substate(state, "to_k")
         v_state = pop_substate(state, "to_v")
+        if self.lora_rank is not None:
+            self._augment_lora_state(state, [q_state, k_state, v_state])
 
         # Relayout Q and K into the interleaved rotary channel order the fused RoPE consumes. Shared
         # between Q and K and absent from V, so Q.K is unchanged (see `rope_channel_permutation`).
@@ -315,6 +333,32 @@ class MiniMaxH3Attention(Module):
             sub = pop_substate(state, name)
             if "weight" in sub:
                 state[f"{name}.weight"] = sub["weight"][perm].repeat(self.num_heads)
+
+    def _augment_lora_state(self, state: dict[str, torch.Tensor], qkv_states: list[dict[str, torch.Tensor]]) -> None:
+        """Stack each projection's B beside its weight in the side-branch input layout and move the A's to the
+        down projections (see `lora_side`)."""
+        tp = self.parallel_config.tensor_parallel.factor
+        width = tp * self._qkv_side_cols
+        a_list = []
+        for position, sub in enumerate(qkv_states):
+            a, b = sub.pop("lora_A.weight"), sub.pop("lora_B.weight")
+            a_list.append(a)
+            if "weight" in sub:
+                sub["weight"] = augment_col_weight(sub["weight"], rank_columns(b, position * a.shape[0], width), tp)
+        state["to_qkv_down.weight"] = torch.cat(a_list)
+        a, b = state.pop("to_out.lora_A.weight"), state.pop("to_out.lora_B.weight")
+        state["to_out_down.weight"] = a
+        if "to_out.weight" in state:
+            width = tp * self._out_side_cols
+            state["to_out.weight"] = augment_col_weight(state["to_out.weight"], rank_columns(b, 0, width), tp)
+
+    def _lora_side_input(self, down: LowRankDown, x: ttnn.Tensor) -> ttnn.Tensor:
+        """`[x_d, u_d]`: the K-fractured input with this device's slice of `A x` appended."""
+        # On the dynamic-length path the reduce-scatter allocates its output per call rather than pinning a pair per
+        # length, as ff2 does.
+        persistent = self.use_persistent_ccl_buffers and not self.dynamic_length
+        u = down(x, dtype=x.dtype, use_persistent_buffer=persistent)
+        return ttnn.concat([x, u], dim=-1)
 
     # ------------------------------------------------------------------ helpers
 
@@ -555,6 +599,8 @@ class MiniMaxH3Attention(Module):
         # which is the same condition WanAttention uses.
         # Swept block sizes fit the fused op's CBs; the unfused matmul overruns L1 with them at long seq.
         matmul_parallel_config = self.parallel_config if self.use_fused_agmm else None
+        if self.lora_rank is not None:
+            spatial_1BND = self._lora_side_input(self.to_qkv_down, spatial_1BND)
         if not self.use_fused_agmm and tp_factor > 1:
             spatial_1BND = self.ccl_manager.all_gather(
                 spatial_1BND,
@@ -673,6 +719,8 @@ class MiniMaxH3Attention(Module):
         # Each device holds canonical heads [d * n_local, (d+1) * n_local), so gathering on TP
         # rebuilds the full inner_dim in canonical order for to_out -- fused into the matmul when
         # use_fused_agmm.
+        if self.lora_rank is not None:
+            spatial_1BND = self._lora_side_input(self.to_out_down, spatial_1BND)
         if not self.use_fused_agmm and tp_factor > 1:
             spatial_1BND = self.ccl_manager.all_gather(
                 spatial_1BND,
@@ -704,7 +752,10 @@ class MiniMaxH3Attention(Module):
         long sequence lengths."""
         if not self.use_fused_agmm:
             return {"compute_kernel_config": self.mm_compute_kernel_config}
-        return agmm_kwargs(pins, k, n, x.padded_shape[-2], self.mm_compute_kernel_config)
+        kwargs = agmm_kwargs(pins, k, n, x.padded_shape[-2], self.mm_compute_kernel_config)
+        if self.lora_rank is not None:
+            kwargs = agmm_side_kwargs(kwargs, x.padded_shape[-1] // ttnn.TILE_SIZE)
+        return kwargs
 
     def _ring_sdpa_program_config(self, seq_local: int) -> ttnn.SDPAProgramConfig:
         """The per-device length's class pin on the dynamic-length path, else the length-keyed table."""
