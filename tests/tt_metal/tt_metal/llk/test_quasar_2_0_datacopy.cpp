@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Quasar 2.0 compute API datacopy over the Dest-sync cases S1-S9 (Phase 1 matrix) x SyncHalf/SyncFull x 16/32-bit
-// Dest, with Float16_b L1 (FPU datacopy at either Dest width) and, at 32-bit Dest, Float32 L1 (fp32in:
-// unpack-to-dest, all 32 bits). Checked bit-exact against the input; outputs start as a sentinel. Test names:
-// <S>_<sync>_<dest>, e.g. S3_full_fp32, S3_half_fp32in.
+// Quasar 2.0 compute API datacopy over the Dest-sync cases S1-S8 (Phase 1 matrix; S9, S1 under LLK asserts, is a
+// build flag, not a case) x SyncHalf/SyncFull x 16/32-bit Dest, with Float16_b L1 (FPU datacopy at either Dest
+// width) and, at 32-bit Dest, Float32 L1 (fp32in: unpack-to-dest, all 32 bits). Checked bit-exact against the input;
+// outputs start as a sentinel. Test names: <S>_<sync>_<dest>, e.g. S3_full_fp32, S3_half_fp32in.
 // _lta: S2 with in/out as resident L1 tensors read through LocalTensorAccessor (no DFBs, no DM kernels), per L1
 // format; the Dest sync is the same as the DFB runs, so SyncHalf only.
 
@@ -17,7 +17,7 @@ namespace {
 using namespace quasar_2_0;
 
 struct CopyCase {
-    std::uint32_t s;  // sync case S1..S9; S12-S14 early returns
+    std::uint32_t s;  // sync case S1..S8; S12-S14 early returns
     bool full_sync;
     bool fp32;
     bool fp32_in = false;  // Float32 L1 in and out (fp32 Dest only)
@@ -37,7 +37,7 @@ std::vector<CopyCase> copy_cases() {
     std::vector<CopyCase> cases;
     for (bool full : {false, true}) {
         for (bool fp32 : {false, true}) {
-            for (std::uint32_t s = 1; s <= 9; ++s) {
+            for (std::uint32_t s = 1; s <= 8; ++s) {
                 cases.push_back({s, full, fp32});
                 if (fp32) {
                     cases.push_back({s, full, true, true});
@@ -96,7 +96,7 @@ TEST_P(Quasar2_0Datacopy, Run) {
             n = 8;
             mode = 12;
             break;       // an early return, then a checked run
-        default: break;  // S1, S8 (S1 twice), S9 (S1 under LLK asserts)
+        default: break;  // S1, S8 (S1 twice)
     }
     // Skip per run (datacopy_2_0_quasar.cpp mode 12): S12 returns before compute_kernel_hw_startup, S13 right after it,
     // S14 with Dest left unpacked; the next run is checked. A run with skip != 0 is not checked. Two programs per test:
