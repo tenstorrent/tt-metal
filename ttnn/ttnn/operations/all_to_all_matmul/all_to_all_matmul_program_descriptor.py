@@ -18,6 +18,8 @@ Per chip p of a group (ring of G chips along cluster_axis):
                              wait for the arrival counter, re-arm it), then the remaining weight blocks.
     compute (TRISC)          matmul_block per (slot, n-block): A slot retained across n-blocks, popped after.
     writer  (RISCV_0, NoC0)  output row groups to the output pages.
+  tail split (OVERLAP): up to TAIL_SPLIT_MAX_HEADS of a chip's last-landing remote heads are halved over N; the
+                             primary's reader forwards the landed rows to a helper core's extra slot (+ arrival inc).
 
 Blocking knobs (op_design.md "Blocking Model"), each defined once here: BLOCK_HEADS, WEIGHT_BLOCK_BYTES (-> block_n),
 WEIGHT_DEPTH, WEIGHT_READ_CHUNK_BYTES, OUT_DEPTH, PORT_BATCH_CHUNKS, A_SLOT_BUDGET_BYTES; block_m = B * Mq_t and block_k = Kt (R1).
@@ -45,6 +47,15 @@ WEIGHT_DEPTH = 2  # weight blocks in cb_weight
 WEIGHT_READ_CHUNK_BYTES = 16 * 1024
 OUT_DEPTH = 2  # output row groups in cb_out
 PORT_BATCH_CHUNKS = 8  # packets per DRAM-read barrier / per sender flush on the port cores (8 beat 4 at 7232 B)
+# Tail split (OVERLAP, Refinement 3): the last-landing remote heads are multiplied half by their own core and half by a
+# helper (an idle compute core, or a core whose heads are all local on that chip and so finish before the exchange
+# does; idle cores are used first). The primary forwards the landed rows to the helper over the NoC. None = one split
+# head per available helper, 0 = off (one core per head, the Phase 0 schedule), n = at most n split heads per chip.
+# Harness, fastest chip, split heads 0 / 4 / 8 / 16 / all: Kimi model 64.1 / - / 60.5 / 60.3 / 60.5; Kimi Phase 0 (DRAM out,
+# HiFi4) 91.0 / 87.2 / 87.6 / 92.0 / 91.5; DeepSeek 81.0 / - / 77.0 / 77.2 / 77.3; GLM 65.0 / - / 60.1 / 60.2 / 62.2.
+# Only the last few landings are on the tail; past ~8 the extra helpers are local-head cores that finish their own
+# head late (HiFi4) and become the new tail.
+TAIL_SPLIT_MAX_HEADS = 8
 A_SLOT_BUDGET_BYTES = 384 * 1024  # predicate A_RESIDENT (regime R1; else R3, deferred)
 MAX_HEADS_PER_CORE = 8  # global arrival semaphores per compute core
 MAX_PACKET_HEADERS = 12  # packet header pool per data-movement RISC
@@ -388,46 +399,113 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
     packet_bytes = packet_tiles * in_tile
     assert BLOCK_HEADS == 1, "block_heads > 1 is a knob-turn not yet wired"
 
+    # ---- per chip: who sends what (entries), readies ----
+    L = num_links
+    sends = {}  # (coord, d, l) -> [(j, t_pos)]
+    for coord, ch in chips.items():
+        p, G_, grp = ch["p"], ch["G"], ch["grp"]
+        for d in (FWD, BWD):
+            dests = sorted((t for t, dd in ch["route"].items() if dd == d), key=lambda t: ((t - p) % G_, t))
+            for l in range(L):
+                sends[(coord, d, l)] = [(j, t) for j in range(l, Hl, L) for t in dests]
+
     # ---- cores ----
     grid = mesh.compute_with_storage_grid_size()
     port_cells = {xy for ch in chips.values() for xy in ch["ports"].values()}
     compute_cells_list = [(x, y) for y in range(grid.y) for x in range(grid.x) if (x, y) not in port_cells]
     assign = _split_heads(compute_cells_list, H)  # [(core xy, [heads])], same on every chip
-    heads_per_core_max = max(len(hs) for _, hs in assign)
-    if heads_per_core_max > MAX_HEADS_PER_CORE:
-        raise RuntimeError(f"all_to_all_matmul: {heads_per_core_max} heads per core > {MAX_HEADS_PER_CORE}")
-    # cb_weight depth: WEIGHT_DEPTH is the knob, but a core never holds more weight blocks than it processes per call
-    # (Kimi: 1 head x 1 n-block -> one 128 KiB block; a second buffer would never be live).
-    weight_depth = min(WEIGHT_DEPTH, heads_per_core_max * num_n_blocks)
-    weight_chunk_tiles = max(1, WEIGHT_READ_CHUNK_BYTES // w_tile)
-    cap_tiles = heads_per_core_max * slot_tiles
-    if cap_tiles * in_tile > A_SLOT_BUDGET_BYTES:
-        raise RuntimeError(
-            f"all_to_all_matmul: A_RESIDENT fails ({cap_tiles * in_tile} B of landed rows per core > "
-            f"{A_SLOT_BUDGET_BYTES}): regime R3 (DRAM landing) is not built"
-        )
-    res = _resources(mesh, set(compute_cells_list), port_cells, cap_tiles, heads_per_core_max, input_tensor.dtype)
-    landing_addr = int(res.scratch.buffer_address())
-    slot_bytes = slot_tiles * in_tile
-    arrival_addrs = [int(ttnn.get_global_semaphore_address(s)) for s in res.arrival[:heads_per_core_max]]
-    ready_addr = int(ttnn.get_global_semaphore_address(res.ready))
     core_of = {h: xy for xy, hs in assign for h in hs}
     heads_of = {xy: hs for xy, hs in assign}
-    active_cells = [xy for xy, _ in assign]
-    active_crs = _rects(active_cells)
-    virt = lambda xy: mesh.worker_core_from_logical_core(ttnn.CoreCoord(*xy))
 
     def slot_order(q, hs):
         local = [h for h in hs if h // Hl == q]
         remote = sorted((h for h in hs if h // Hl != q), key=lambda h: (h % Hl, h // Hl))
         return local + remote
 
-    # slot index of head h on its core, as seen on chip position q
+    # slot index of head h on its core, as seen on chip position q (the sender's landing address; helper slots of the
+    # tail split come after a core's own slots, so they never move these)
     slot_of = {}
     for q in range(G):
         for xy, hs in assign:
             for s, h in enumerate(slot_order(q, hs)):
                 slot_of[(q, h)] = s
+
+    # ---- tail split plan (per chip): late-landing remote head -> helper core ----
+    def tail_plan(coord):
+        ch = chips[coord]
+        q, grp = ch["p"], ch["grp"]
+        est = []  # (entries sent before this head's entry on its source port, slots of its core, h)
+        for xy, hs in assign:
+            for h in hs:
+                p = h // Hl
+                if p == q:
+                    continue
+                j, src = h % Hl, grp[h // Hl]
+                idx = sends[(src, chips[src]["route"][q], j % L)].index((j, q))
+                est.append((idx, len(hs), h))
+        est.sort(reverse=True)
+        idle = [xy for xy in compute_cells_list if xy not in heads_of]
+        # a local-head helper gets one slot more than its heads: only where that still fits A_RESIDENT and the counters
+        fits = lambda hs: (len(hs) + 1) * slot_tiles * in_tile <= A_SLOT_BUDGET_BYTES and len(hs) < MAX_HEADS_PER_CORE
+        local_only = sorted(
+            (xy for xy, hs in assign if all(h // Hl == q for h in hs) and fits(hs)), key=lambda xy: len(heads_of[xy])
+        )
+        helpers = idle + local_only
+        n = len(helpers) if TAIL_SPLIT_MAX_HEADS is None else min(len(helpers), TAIL_SPLIT_MAX_HEADS)
+        return {h: helpers[i] for i, (_, _, h) in enumerate(est[:n])}
+
+    split_of = {coord: tail_plan(coord) for coord in chips}  # {coord: {h: helper xy}}
+    tail_split = any(split_of.values())
+    if tail_split and num_n_blocks == 1:
+        if block_n % 2:
+            tail_split = False  # nothing to halve
+        else:
+            block_n //= 2
+            num_n_blocks = 2
+            sbh, sbw = _subblock(block_m, block_n, bool(compute_kernel_config.fp32_dest_acc_en))
+    if not tail_split:
+        split_of = {coord: {} for coord in chips}
+    nb_split = num_n_blocks // 2  # the primary keeps n-blocks [0, nb_split), the helper [nb_split, num_n_blocks)
+
+    # slots per (coord, core): [(h, wait, nb0, nb1, helper xy or None)]
+    slots = {}
+    for coord, ch in chips.items():
+        q, sp = ch["p"], split_of[coord]
+        for xy in compute_cells_list:
+            own = [
+                (h, h // Hl != q, 0, nb_split if h in sp else num_n_blocks, sp.get(h))
+                for h in slot_order(q, heads_of.get(xy, []))
+            ]
+            own += [(h, True, nb_split, num_n_blocks, None) for h, hx in sp.items() if hx == xy]
+            if own:
+                slots[(coord, xy)] = own
+    helper_slot = {
+        (coord, h): next(i for i, e in enumerate(slots[(coord, hx)]) if e[0] == h and e[2] == nb_split)
+        for coord, sp in split_of.items()
+        for h, hx in sp.items()
+    }
+    slots_per_core_max = max(len(v) for v in slots.values())
+    if slots_per_core_max > MAX_HEADS_PER_CORE:
+        raise RuntimeError(f"all_to_all_matmul: {slots_per_core_max} head slots per core > {MAX_HEADS_PER_CORE}")
+    # cb_weight depth: WEIGHT_DEPTH is the knob, but a core never holds more weight blocks than it processes per call
+    # (Kimi: 1 head x 1 n-block -> one 128 KiB block; a second buffer would never be live).
+    weight_depth = min(WEIGHT_DEPTH, max(sum(e[3] - e[2] for e in v) for v in slots.values()))
+    weight_chunk_tiles = max(1, WEIGHT_READ_CHUNK_BYTES // w_tile)
+    cap_tiles = slots_per_core_max * slot_tiles
+    if cap_tiles * in_tile > A_SLOT_BUDGET_BYTES:
+        raise RuntimeError(
+            f"all_to_all_matmul: A_RESIDENT fails ({cap_tiles * in_tile} B of landed rows per core > "
+            f"{A_SLOT_BUDGET_BYTES}): regime R3 (DRAM landing) is not built"
+        )
+    res = _resources(mesh, set(compute_cells_list), port_cells, cap_tiles, slots_per_core_max, input_tensor.dtype)
+    landing_addr = int(res.scratch.buffer_address())
+    slot_bytes = slot_tiles * in_tile
+    arrival_addrs = [int(ttnn.get_global_semaphore_address(s)) for s in res.arrival[:slots_per_core_max]]
+    ready_addr = int(ttnn.get_global_semaphore_address(res.ready))
+    # kernels + compute CBs: the cores holding heads, plus every compute core when the tail split may use idle ones
+    active_cells = list(compute_cells_list) if tail_split else [xy for xy, _ in assign]
+    active_crs = _rects(active_cells)
+    virt = lambda xy: mesh.worker_core_from_logical_core(ttnn.CoreCoord(*xy))
 
     output = ttnn.allocate_tensor_on_device(
         ttnn.Shape([B, H, Mq, N]), input_tensor.dtype, ttnn.TILE_LAYOUT, mesh, memory_config
@@ -442,15 +520,6 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
     compute_cfg.fp32_dest_acc_en = bool(compute_kernel_config.fp32_dest_acc_en)
     compute_cfg.math_approx_mode = bool(compute_kernel_config.math_approx_mode)
 
-    # ---- per chip: who sends what (entries), readies ----
-    L = num_links
-    sends = {}  # (coord, d, l) -> [(j, t_pos)]
-    for coord, ch in chips.items():
-        p, G_, grp = ch["p"], ch["G"], ch["grp"]
-        for d in (FWD, BWD):
-            dests = sorted((t for t, dd in ch["route"].items() if dd == d), key=lambda t: ((t - p) % G_, t))
-            for l in range(L):
-                sends[(coord, d, l)] = [(j, t) for j in range(l, Hl, L) for t in dests]
     ready_out = {k: [] for k in sends}  # (coord, d, l) -> [(target coord, target port (d, l))]
     ready_wait = {}
     for (coord, d, l), ents in sends.items():
@@ -481,6 +550,7 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
             sbw,
             res.cap_tiles,
             landing_addr,
+            tuple(sorted((str(c), sorted(sp.items())) for c, sp in split_of.items())),
             sorted(port_cells),
         )
     )
@@ -532,11 +602,20 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
         # ---- compute cores ----
         reader_rt, compute_rt, writer_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         for xy in active_cells:
-            order = slot_order(q, heads_of[xy])
-            words = [h | ((1 if h // Hl != q else 0) << 16) for h in order]
-            reader_rt[xy[0]][xy[1]] = [len(order)] + words
-            compute_rt[xy[0]][xy[1]] = [len(order)]
-            writer_rt[xy[0]][xy[1]] = [len(order)] + order
+            rd, cp, wr = [], [], []
+            for h, wait, nb0, nb1, hx in slots.get((coord, xy), []):
+                nbw = nb0 | (nb1 << 16)
+                fwd = [0, 0, 0, 0, 0]
+                if hx is not None:
+                    hv, hs_ = virt(hx), helper_slot[(coord, h)]
+                    fwd = [1, hv.x, hv.y, landing_addr + hs_ * slot_bytes, arrival_addrs[hs_]]
+                rd += [h | (int(wait) << 16), nbw] + fwd
+                cp += [nbw]
+                wr += [h, nbw]
+            n = len(cp)
+            reader_rt[xy[0]][xy[1]] = [n] + rd
+            compute_rt[xy[0]][xy[1]] = [n] + cp
+            writer_rt[xy[0]][xy[1]] = [n] + wr
         reader_ct = [CB_A_LANDED, CB_WEIGHT, Kt, Nt, block_n, num_n_blocks, B, Mq_t, St, Hl, in_tile, w_tile]
         reader_ct += [Mq, CB_RETILE_STAGE, weight_chunk_tiles]
         reader_ct += in_ct + w_ct

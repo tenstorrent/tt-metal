@@ -3,8 +3,9 @@
 
 // all_to_all_matmul compute-core reader (RISCV_1 / NoC1: keeps NoC0 free for the port readers).
 //
-// Per head slot of this core, in slot order (local-source heads first, then remote heads by source-local index j):
-//   load_weight_block(slot, 0)   Kt x block_n weight tiles -> cb_weight (issued before the slot lands: the dominant
+// Per head slot of this core, in slot order (local-source heads first, then remote heads by source-local index j, then
+// helper slots of the tail split):
+//   load_weight_block(slot, nb0) Kt x block_n weight tiles -> cb_weight (issued before the slot lands: the dominant
 //                                DRAM read fills the fabric wait), weight_chunk_tiles reads in flight at a time
 //   land_block(slot)             cb_a_landed is backed on the persistent landing scratch (zero-copy): slot s sits at
 //                                base + s * slot_bytes, where the remote port writes it.
@@ -12,7 +13,9 @@
 //                                remote head: wait for the slot's arrival counter (fused inc on the entry's last
 //                                             packet), re-arm it (-1)
 //                                then push the slot (compute retains it across the head's n-blocks)
-//   load_weight_block(slot, nb)  the head's remaining n-blocks
+//   forward (tail split)         a late-landing head's rows are copied to a helper core's slot (+ arrival inc), which
+//                                multiplies the head's other n-blocks: this core keeps [nb0, nb1) of the head
+//   load_weight_block(slot, nb)  the head's remaining n-blocks of [nb0, nb1)
 //
 // Regime R1' (Mq % 32 != 0): the local quarter is re-tiled per image through cb_retile_stage
 // (all_to_all_matmul_retile.hpp), exactly as the port reader does for the remote quarters.
@@ -37,7 +40,7 @@ void kernel_main() {
     constexpr uint32_t Kt = get_compile_time_arg_val(2);
     constexpr uint32_t Nt = get_compile_time_arg_val(3);
     constexpr uint32_t block_n = get_compile_time_arg_val(4);
-    constexpr uint32_t num_n_blocks = get_compile_time_arg_val(5);
+    [[maybe_unused]] constexpr uint32_t num_n_blocks = get_compile_time_arg_val(5);
     constexpr uint32_t B = get_compile_time_arg_val(6);
     constexpr uint32_t Mq_t = get_compile_time_arg_val(7);
     constexpr uint32_t St = get_compile_time_arg_val(8);
@@ -62,6 +65,8 @@ void kernel_main() {
     const uint32_t w_addr = get_common_arg_val<uint32_t>(1);
     const uint32_t my_q = get_common_arg_val<uint32_t>(2);  // this chip's position in its group
     constexpr uint32_t arrival_base = 3;                    // arrival counter address of slot s
+    // Per slot: (h | wait << 16), (nb0 | nb1 << 16), forward, helper x, helper y, helper slot addr, helper arrival addr
+    constexpr uint32_t SLOT_WORDS = 7;
 
     const uint32_t n_slots = get_arg_val<uint32_t>(0);
 
@@ -97,16 +102,21 @@ void kernel_main() {
     };
 
     for (uint32_t s = 0; s < n_slots; ++s) {
-        const uint32_t word = get_arg_val<uint32_t>(1 + s);
+        const uint32_t rec = 1 + s * SLOT_WORDS;
+        const uint32_t word = get_arg_val<uint32_t>(rec);
         const uint32_t h = word & 0xFFFF;
-        const bool remote = (word >> 16) != 0;
+        const bool remote = (word >> 16) != 0;  // remote head, or a helper slot (rows forwarded by the primary)
+        const uint32_t nbw = get_arg_val<uint32_t>(rec + 1);
+        const uint32_t nb0 = nbw & 0xFFFF, nb1 = nbw >> 16;  // this core's n-blocks of the head
+        const bool forward = get_arg_val<uint32_t>(rec + 2) != 0;
 
         {
             A2AMM_ZONE("rd_w0");
-            load_weight_block(h, 0);
+            load_weight_block(h, nb0);
         }
 
         cb_reserve_back(cb_a_landed, slot_tiles);
+        const uint32_t slot_l1 = get_write_ptr(cb_a_landed);
         if (remote) {
             A2AMM_ZONE("rd_wait_remote");
             volatile tt_l1_ptr uint32_t* arrived =
@@ -139,8 +149,20 @@ void kernel_main() {
         }
         cb_push_back(cb_a_landed, slot_tiles);
 
-        for (uint32_t nb = 1; nb < num_n_blocks; ++nb) {
+        if (forward) {
+            // Tail split (OVERLAP): the helper core multiplies the head's other n-blocks. Copy the landed rows into
+            // its helper slot (core-local NoC), then increment that slot's arrival counter. Read-only on this slot
+            // while compute unpacks it; nothing rewrites the slot before the program ends.
+            A2AMM_ZONE("rd_forward");
+            const uint32_t fx = get_arg_val<uint32_t>(rec + 3), fy = get_arg_val<uint32_t>(rec + 4);
+            noc_async_write(slot_l1, get_noc_addr(fx, fy, get_arg_val<uint32_t>(rec + 5)), slot_tiles * in_tile_bytes);
+            noc_async_write_barrier();
+            noc_semaphore_inc(get_noc_addr(fx, fy, get_arg_val<uint32_t>(rec + 6)), 1);
+        }
+
+        for (uint32_t nb = nb0 + 1; nb < nb1; ++nb) {
             load_weight_block(h, nb);
         }
     }
+    noc_async_atomic_barrier();
 }

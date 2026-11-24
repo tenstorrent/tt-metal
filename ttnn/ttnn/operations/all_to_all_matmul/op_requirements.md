@@ -70,7 +70,7 @@ Cells that fail out of the box go to `EXCLUSIONS` only if they are structural. A
 
 **Done when**: every `alignment=m_non_aligned` golden cell over the SUPPORTED dtype / weight_dtype / DEST / output-buffer values passes, with all prior cells and the regression suite still green.
 
-### [ ] Refinement 3 — OVERLAP: hide the local work behind the exchange on the perf-flagged case
+### [x] Refinement 3 — OVERLAP: hide the local work behind the exchange on the perf-flagged case
 
 **Type**: perf
 
@@ -88,6 +88,8 @@ Candidate levers (the implementer picks and measures):
 See `ttnn/ttnn/operations/examples/master.md`: `noc_placement` (NoC selection under contention), `double_buffer`, `fabric_all_gather` / `fabric_reduce_scatter` (arrival counters, chunked landing). No SUPPORTED change.
 
 **Done when**: on `LOOSE_CASES[0]` the harness-measured fastest-chip mean improves beyond noise (`eval.ccl_perf compare` verdict win) and the slowest chip does not regress beyond noise. Record the exchange-alone ablation alongside, so the exposed local time per call is reported. The soft precision gate still holds, the golden suite is green, and there is no regression across the guard set: the other three `LOOSE_CASES` (DeepSeek 2-heads-per-core, GLM K=192, Kimi Phase 0 DRAM-out / fp32 DEST) plus one multi-n-block shape and one `m_non_aligned` shape.
+
+**Outcome**: LOOSE_CASES[0] harness fastest / slowest chip 81.2 / 84.6 → **60.5 / 64.6 us** (`compare` win). Guard set also wins: Kimi Phase 0 94.5 / 103.5 → 87.7 / 91.7, DeepSeek 99.5 / 104.3 → 77.1 / 83.3, GLM 79.1 / 83.8 → 59.9 / 64.7 us; not dispatch-bound. Two levers: (1) weight-read throttle `WEIGHT_READ_CHUNK_BYTES` = 16 KiB (one barrier per chunk). The whole 128 KiB block in flight on 96 cores stretched the exchange from 49.3 to 68.9 us. It was NoC contention, not DRAM: the `noportread` ablation was still 77 us, and moving the weight reads to NoC0 gave 93.5 us. 81.2 → 64.1 us. (2) Tail split `TAIL_SPLIT_MAX_HEADS` = 8: the latest-landing remote heads (estimated from the sender order) are halved over N with an idle core or a core whose heads are all local; the primary forwards the landed rows over the NoC and increments the helper's arrival counter. 64.1 → 60.5 us. More than ~8 split heads regresses Phase 0 (HiFi4): the local-head helpers become the new tail. Exposed local time per call, now: full 60.5 vs exchange-alone ablation 50.5 us = **~10 us** (was 31.5 us). Of it, the compute tail is ~5 us (`nocompute` 55.4), the output write ~4 us (`nowrite` 56.6) and the weight reads ~1 us (`noweight` 59.6). Next, untried: a writer-side twin of the throttle (bound the L1-output writes in flight; the writer on NoC1 measured worse, 66.0 vs 64.1 us); a 4-way split of the last one or two landings; per-row-tile landing increments (≤ ~1.5 us by the entry's landing span). The exchange itself (50 us, 2.5x the links roofline) now dominates: that is Refinement 4 (TRANSPORT).
 
 ### [ ] Refinement 4 — TRANSPORT: shrink the exchange itself on the perf-flagged case
 

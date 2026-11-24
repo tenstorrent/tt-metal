@@ -3,10 +3,11 @@
 
 // all_to_all_matmul compute (TRISC0/1/2).
 //
-// Per head slot: for each n-block, matmul_block(A slot [block_m x Kt], weight block [Kt x block_n]) -> cb_out in
-// TileRowMajor row groups of out_subblock_h x block_n. One K-block (R1): the K-sum stays in DEST, so cb_out is also
-// the interm placeholder. A is retained across the head's n-blocks (WaitAndRetainOnLastBlock) and popped after the
-// last one (release_slot); the weight block is waited and popped per call.
+// Per head slot: for each of its n-blocks [nb0, nb1) (all of them, or one half under the tail split), matmul_block(A
+// slot [block_m x Kt], weight block [Kt x block_n]) -> cb_out in TileRowMajor row groups of out_subblock_h x block_n.
+// One K-block (R1): the K-sum stays in DEST, so cb_out is also the interm placeholder. A is retained across the head's
+// n-blocks (WaitAndRetainOnLastBlock) and popped after the last one (release_slot); the weight block is waited and
+// popped per call.
 
 #include <cstdint>
 
@@ -30,7 +31,7 @@ void kernel_main() {
     constexpr uint32_t block_m = get_compile_time_arg_val(3);
     constexpr uint32_t Kt = get_compile_time_arg_val(4);
     constexpr uint32_t block_n = get_compile_time_arg_val(5);
-    constexpr uint32_t num_n_blocks = get_compile_time_arg_val(6);
+    [[maybe_unused]] constexpr uint32_t num_n_blocks = get_compile_time_arg_val(6);
     constexpr uint32_t out_subblock_h = get_compile_time_arg_val(7);
     constexpr uint32_t out_subblock_w = get_compile_time_arg_val(8);
     constexpr uint32_t slot_tiles = block_m * Kt;
@@ -45,7 +46,8 @@ void kernel_main() {
 
     for (uint32_t s = 0; s < n_slots; ++s) {
         A2AMM_ZONE("cmp_head");
-        for (uint32_t nb = 0; nb < num_n_blocks; ++nb) {
+        const uint32_t nbw = get_arg_val<uint32_t>(1 + s);  // this core's n-blocks [nb0, nb1) of the slot's head
+        for (uint32_t nb = nbw & 0xFFFF; nb < (nbw >> 16); ++nb) {
 #ifdef ABLATE_NOCOMPUTE
             cb_wait_front(cb_a_landed, slot_tiles);
             cb_wait_front(cb_weight, Kt * block_n);
