@@ -2113,7 +2113,7 @@ void py_module(nb::module_& mod) {
         mod,
         "k",
         "k value",
-        R"doc(Performs polygamma function on :attr:`input_tensor`, :attr:`decimals`. it is supported for range 1 to 10 only)doc");
+        R"doc(Performs polygamma function on :attr:`input_tensor` of order :attr:`k`. It is supported for range 1 to 10 only)doc");
 
     // unary composite with float imported into ttnn
     bind_unary_operation_with_float_parameter_default<"hardshrink", &ttnn::hardshrink>(
@@ -2161,6 +2161,7 @@ void py_module(nb::module_& mod) {
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): Sub-core grids for the operation. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
