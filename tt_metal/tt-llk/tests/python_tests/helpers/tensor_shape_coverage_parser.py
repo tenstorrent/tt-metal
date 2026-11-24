@@ -111,6 +111,12 @@ UNPACK_FUNCTIONS = (
     "_llk_unpack_AB_matmul_init_",
     "_llk_unpack_AB_matmul_mop_config_",
     "_llk_unpack_AB_matmul_",
+    "_llk_unpack_tilize_init_",
+    "_llk_unpack_tilize_mop_config_",
+    "_llk_unpack_tilize_",
+    "_llk_unpack_tilize_uninit_",
+    # The tilizeA_B LLKs emit no TensorShape probe (no validate on that path; ttnn pool runs
+    # untested production shapes), so they are absent until the validate comes back.
 )
 
 # Predicate name used when seeding from a checked-in TRISC header.
