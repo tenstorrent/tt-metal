@@ -197,7 +197,6 @@ public:
     }
 
     // ============ Inter-domain ============
-    // This host's perimeter ports for the current launch (inter-domain fabrics only), set by the build session.
     void set_inter_domain_ports(std::vector<experimental::InterDomainPort> ports) {
         inter_domain_ports_ = std::move(ports);
     }

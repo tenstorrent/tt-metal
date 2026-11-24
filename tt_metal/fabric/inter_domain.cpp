@@ -57,8 +57,7 @@ InterDomainRouterControl read_control(const InterDomainPort& port) {
 
 void write_and_flush(const tt::Cluster& cluster, const void* data, uint32_t size, tt_cxy_pair core, uint64_t addr) {
     cluster.write_core(data, size, core, addr);
-    uint32_t readback = 0;
-    cluster.read_core(&readback, sizeof(readback), core, addr);
+    cluster.l1_barrier(core.chip, {tt::tt_metal::CoreCoord(core.x, core.y)});
 }
 
 void write_word(const InterDomainPort& port, size_t offset, uint32_t value) {

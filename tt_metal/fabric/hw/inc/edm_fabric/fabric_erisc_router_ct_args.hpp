@@ -1029,7 +1029,6 @@ static_assert(
     "super_speedy_mode requires receiver credit amortization to be enabled");
 
 //-------------------------------- Inter-domain --------------------------------//
-// Only perimeter routers get these args, so every other router's arg map is unchanged.
 constexpr bool is_inter_domain_router =
     has_named_ct_arg("INTER_DOMAIN_ROUTER") && NAMED_CT_ARG("INTER_DOMAIN_ROUTER") != 0;
 constexpr uint32_t inter_domain_ctrl_addr = is_inter_domain_router ? NAMED_CT_ARG("INTER_DOMAIN_CTRL_ADDR") : 0;
