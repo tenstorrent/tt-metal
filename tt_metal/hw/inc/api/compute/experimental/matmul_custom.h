@@ -93,12 +93,7 @@ ALWI void matmul_block_no_mop(
     uint32_t ct_dim,
     uint32_t rt_dim,
     uint32_t kt_dim) {
-#ifdef ARCH_BLACKHOLE
-    UNPACK((llk_unpack_AB_matmul_custom<MATH_FIDELITY>(
-        in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
-#else
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
-#endif
     // Pass the operand cb ids so the math execute can re-derive the tile geometry and replay the
     // geometry-correct length (16x32 tiny tiles use a shorter replay than full 32x32 tiles).
     MATH((llk_math_matmul_no_mop<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, idst, ct_dim, rt_dim)));
@@ -153,12 +148,7 @@ ALWI void matmul_block_no_mop_fidelity(
     uint32_t ct_dim,
     uint32_t rt_dim,
     uint32_t kt_dim) {
-#ifdef ARCH_BLACKHOLE
-    UNPACK((llk_unpack_AB_matmul_custom<math_fidelity>(
-        in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
-#else
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
-#endif
     MATH((llk_math_matmul_no_mop<math_fidelity, MM_THROTTLE>(in0_cb_id, in1_cb_id, idst, ct_dim, rt_dim)));
 }
 
