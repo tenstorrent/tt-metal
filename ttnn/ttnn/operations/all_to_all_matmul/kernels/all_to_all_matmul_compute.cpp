@@ -41,18 +41,22 @@ void kernel_main() {
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_a_landed, cb_weight, cb_out);
     CircularBuffer a_buf(cb_a_landed), w_buf(cb_weight), out_buf(cb_out);
-    constexpr auto shape =
+    // Tail M-split: a slot may hold only rows [m0, m1) of its head (at the slot's front); the A slot is still released
+    // whole (the reader pushes slot_tiles per slot).
+    MatmulBlockShape shape =
         MatmulBlockShape::of(block_m / out_subblock_h, block_n / out_subblock_w, out_subblock_h, out_subblock_w, Kt, 1);
 
     for (uint32_t s = 0; s < n_slots; ++s) {
         A2AMM_ZONE("cmp_head");
-        const uint32_t nbw = get_arg_val<uint32_t>(1 + s);  // this core's n-blocks [nb0, nb1) of the slot's head
-        for (uint32_t nb = nbw & 0xFFFF; nb < (nbw >> 16); ++nb) {
+        // this core's n-blocks [nb0, nb1) and rows [m0, m1) of the slot's head, 8 bits each
+        const uint32_t nbw = get_arg_val<uint32_t>(1 + s);
+        shape.in0_num_subblocks = ((nbw >> 24) - ((nbw >> 16) & 0xFF)) / out_subblock_h;
+        for (uint32_t nb = nbw & 0xFF; nb < ((nbw >> 8) & 0xFF); ++nb) {
 #ifdef ABLATE_NOCOMPUTE
             cb_wait_front(cb_a_landed, slot_tiles);
             cb_wait_front(cb_weight, Kt * block_n);
             cb_pop_front(cb_weight, Kt * block_n);
-            for (uint32_t rg = 0; rg < block_m / out_subblock_h; ++rg) {
+            for (uint32_t rg = 0; rg < shape.in0_num_subblocks; ++rg) {
                 cb_reserve_back(cb_out, out_subblock_h * block_n);
                 cb_push_back(cb_out, out_subblock_h * block_n);
             }

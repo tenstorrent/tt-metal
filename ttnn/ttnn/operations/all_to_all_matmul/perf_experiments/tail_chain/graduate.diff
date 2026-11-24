@@ -1,0 +1,431 @@
+--- a/ttnn/ttnn/operations/all_to_all_matmul/all_to_all_matmul_program_descriptor.py
++++ b/ttnn/ttnn/operations/all_to_all_matmul/all_to_all_matmul_program_descriptor.py
+@@ -93,12 +93,26 @@
+ # Only the last few landings are on the tail; past ~8 the extra helpers are local-head cores that finish their own
+ # head late (HiFi4) and become the new tail.
+ TAIL_SPLIT_MAX_HEADS = 8
++# Grouped send path (local ratio <= SEND_RUN_MAX_LOCAL_RATIO): with the M-split taking the latest heads, more N-split
++# heads help (tail_chain experiment, Kimi model case: 8 -> 12 with 4 M-split heads, 55.7 -> 54.4 us fastest). On the
++# interleaved path (Kimi Phase 0, ratio 8.2, HiFi4) every extra helper slot on a local-head core costs (12 split heads:
++# 87.6 -> 91.2 us), so that path keeps TAIL_SPLIT_MAX_HEADS and no M-split.
++TAIL_SPLIT_MAX_HEADS_GROUPED = 12
+ # Landing-order estimate for the tail split: "share" = (index + 1) / entries of the source port (ports carry different
+ # entry counts, 12 or 24 at Kimi, and all finish together), "index" = raw index in the port's send list (Refinement 3).
+ TAIL_SPLIT_ESTIMATE = "share"
+ # Helper choice for a split head: "pool" = idle cores first, then local-only cores (Refinement 3); "nearest" = the free
+ # helper closest to the primary core (shortest forward path).
+ TAIL_SPLIT_HELPER_PICK = "pool"
++# Tail M-split (OVERLAP, tail_chain experiment): the TAIL_MSPLIT_HEADS latest-landing remote heads of a chip are cut by
++# output rows into TAIL_MSPLIT_PIECES pieces. The SOURCE port delivers each piece's rows straight into its core's slot
++# (primary = piece 0, helpers = the rest) with its own arrival increment: no forward hop, and the earlier pieces start
++# their matmul while the entry's later rows are still on the link. Needs packing (a piece is a sub-entry of the packet
++# stream) and piece tiles >= packet tiles. Piece slots read all their weight n-blocks before the landing wait
++# (TAIL_MSPLIT_PREFETCH, capped at the cb_weight depth). 0 = off.
++TAIL_MSPLIT_HEADS = 4
++TAIL_MSPLIT_PIECES = 3
++TAIL_MSPLIT_PREFETCH = 2
+ A_SLOT_BUDGET_BYTES = 384 * 1024  # predicate A_RESIDENT (regime R1; else R3, deferred)
+ MAX_HEADS_PER_CORE = 8  # global arrival semaphores per compute core
+ MAX_PACKET_HEADERS = 12  # packet header pool per data-movement RISC
+@@ -457,9 +471,12 @@
+     pack = bool(int(_xp.get("pack", PACK_ACROSS_ENTRIES))) and packet_tiles <= slot_tiles
+     dest_order = _xp.get("order", SEND_DEST_ORDER)
+     batch_chunks = int(_xp.get("batch", max(1, PORT_BATCH_BYTES // packet_bytes)))
+-    tail_max = int(_xp["tail"]) if "tail" in _xp else TAIL_SPLIT_MAX_HEADS
+     tail_est = _xp.get("est", TAIL_SPLIT_ESTIMATE)
+     tail_pick = _xp.get("pick", TAIL_SPLIT_HELPER_PICK)
++    tail_max = int(_xp["tail"]) if "tail" in _xp else (TAIL_SPLIT_MAX_HEADS_GROUPED if grouped else TAIL_SPLIT_MAX_HEADS)
++    ms_heads = int(_xp.get("ms", TAIL_MSPLIT_HEADS if grouped else 0))
++    ms_pieces = int(_xp.get("mp", TAIL_MSPLIT_PIECES))
++    ms_pre = int(_xp.get("mpre", TAIL_MSPLIT_PREFETCH))
+     rd_noc, wr_noc = COMPUTE_READER_NOC, (
+         COMPUTE_WRITER_NOC_L1_OUT if memory_config.buffer_type == ttnn.BufferType.L1 else COMPUTE_WRITER_NOC
+     )
+@@ -539,9 +556,19 @@
+             (xy for xy, hs in assign if all(h // Hl == q for h in hs) and fits(hs)), key=lambda xy: len(heads_of[xy])
+         )
+         helpers = idle + local_only
++        # M-split first: the ms latest heads, (pieces - 1) helpers each (pool order)
++        mplan = {}
++        if m_rows:
++            for _, _, h in est[:ms_heads]:
++                need = len(m_rows) - 1
++                if len(helpers) < need:
++                    break
++                mplan[h] = [None] + helpers[:need]  # piece 0 stays on the primary core
++                helpers = helpers[need:]
++        est = [e for e in est if e[2] not in mplan]
+         n = len(helpers) if tail_max is None else min(len(helpers), tail_max)
+         if tail_pick == "pool":
+-            return {h: helpers[i] for i, (_, _, h) in enumerate(est[:n])}
++            return {h: helpers[i] for i, (_, _, h) in enumerate(est[:n])}, mplan
+         # "nearest": latest-landing head first, each to the free helper with the shortest forward path
+         free, plan = list(helpers), {}
+         for _, _, h in est[:n]:
+@@ -549,10 +576,31 @@
+             hx = min(free, key=lambda c: (abs(c[0] - px) + abs(c[1] - py), helpers.index(c)))
+             free.remove(hx)
+             plan[h] = hx
+-        return plan
++        return plan, mplan
+
+-    split_of = {coord: tail_plan(coord) for coord in chips}  # {coord: {h: helper xy}}
+-    tail_split = any(split_of.values())
++    # M-split row pieces (rows of block_m, multiples of the subblock height, each >= one packet): computed after the
++    # final block_n below; the plan only needs the piece count, so fix it from block_m here.
++    def _m_rows(pieces, sb_h):
++        if ms_heads <= 0 or pieces < 2 or not pack:
++            return []
++        units = block_m // sb_h
++        pieces = min(pieces, units)
++        rows, u0 = [], 0
++        for i in range(pieces):
++            u1 = u0 + units // pieces + (1 if i < units % pieces else 0)
++            rows.append((u0 * sb_h, u1 * sb_h))
++            u0 = u1
++        if any((r1 - r0) * Kt < packet_tiles for r0, r1 in rows):
++            return []
++        return rows
++
++    # the subblock height under the halved block_n the split forces (same rule as below)
++    _bn_split = block_n // 2 if (num_n_blocks == 1 and block_n % 2 == 0) else block_n
++    m_rows = _m_rows(ms_pieces, _subblock(block_m, _bn_split, bool(compute_kernel_config.fp32_dest_acc_en))[0])
++    _plans = {coord: tail_plan(coord) for coord in chips}
++    split_of = {coord: v[0] for coord, v in _plans.items()}  # {coord: {h: helper xy}}
++    msplit_of = {coord: v[1] for coord, v in _plans.items()}  # {coord: {h: [None, helper xy, ...]}}
++    tail_split = any(split_of.values()) or any(msplit_of.values())
+     if tail_split and num_n_blocks == 1:
+         if block_n % 2:
+             tail_split = False  # nothing to halve
+@@ -562,28 +610,49 @@
+             sbh, sbw = _subblock(block_m, block_n, bool(compute_kernel_config.fp32_dest_acc_en))
+     if not tail_split:
+         split_of = {coord: {} for coord in chips}
++        msplit_of = {coord: {} for coord in chips}
++    assert not any(msplit_of.values()) or sbh == _subblock(block_m, _bn_split, bool(compute_kernel_config.fp32_dest_acc_en))[0]
+     if "sb" in _xp:  # measurement hook: out_subblock_h x out_subblock_w ("hxw"), must tile the block
+         sbh, sbw = (int(v) for v in _xp["sb"].split("x"))
+         assert block_m % sbh == 0 and block_n % sbw == 0
++        assert not any(msplit_of.values()) or all(r % sbh == 0 for rr in m_rows for r in rr)
+     nb_split = num_n_blocks // 2  # the primary keeps n-blocks [0, nb_split), the helper [nb_split, num_n_blocks)
+
+-    # slots per (coord, core): [(h, wait, nb0, nb1, helper xy or None)]
++    # slots per (coord, core): [(h, wait, nb0, nb1, helper xy or None, m0, m1, piece)]  piece = M-split piece index or -1
+     slots = {}
+     for coord, ch in chips.items():
+-        q, sp = ch["p"], split_of[coord]
++        q, sp, mp = ch["p"], split_of[coord], msplit_of[coord]
+         for xy in compute_cells_list:
+-            own = [
+-                (h, h // Hl != q, 0, nb_split if h in sp else num_n_blocks, sp.get(h))
+-                for h in slot_order(q, heads_of.get(xy, []))
++            own = []
++            for h in slot_order(q, heads_of.get(xy, [])):
++                if h in mp:
++                    own.append((h, True, 0, num_n_blocks, None, m_rows[0][0], m_rows[0][1], 0))
++                else:
++                    own.append((h, h // Hl != q, 0, nb_split if h in sp else num_n_blocks, sp.get(h), 0, block_m, -1))
++            own += [(h, True, nb_split, num_n_blocks, None, 0, block_m, -1) for h, hx in sp.items() if hx == xy]
++            own += [
++                (h, True, 0, num_n_blocks, None, m_rows[i][0], m_rows[i][1], i)
++                for h, hxs in mp.items()
++                for i, hx in enumerate(hxs)
++                if i > 0 and hx == xy
+             ]
+-            own += [(h, True, nb_split, num_n_blocks, None) for h, hx in sp.items() if hx == xy]
+             if own:
+                 slots[(coord, xy)] = own
+     helper_slot = {
+-        (coord, h): next(i for i, e in enumerate(slots[(coord, hx)]) if e[0] == h and e[2] == nb_split)
++        (coord, h): next(i for i, e in enumerate(slots[(coord, hx)]) if e[0] == h and e[2] == nb_split and e[7] < 0)
+         for coord, sp in split_of.items()
+         for h, hx in sp.items()
+     }
++    # (destination coord, h) -> [(core xy, slot index, tiles)] per piece, in stream order
++    pieces_of = {}
++    for coord, mp in msplit_of.items():
++        for h, hxs in mp.items():
++            lst = []
++            for i, hx in enumerate(hxs):
++                xy = core_of[h] if hx is None else hx
++                si = next(k for k, e in enumerate(slots[(coord, xy)]) if e[0] == h and e[7] == i)
++                lst.append((xy, si, (m_rows[i][1] - m_rows[i][0]) * Kt))
++            pieces_of[(coord, h)] = lst
+     slots_per_core_max = max(len(v) for v in slots.values())
+     if slots_per_core_max > MAX_HEADS_PER_CORE:
+         raise RuntimeError(f"all_to_all_matmul: {slots_per_core_max} head slots per core > {MAX_HEADS_PER_CORE}")
+@@ -669,6 +738,8 @@
+             res.cap_tiles,
+             landing_addr,
+             tuple(sorted((str(c), sorted(sp.items())) for c, sp in split_of.items())),
++            tuple(sorted((str(c), sorted((h, str(v)) for h, v in mp.items())) for c, mp in msplit_of.items())),
++            tuple(m_rows),
+             sorted(port_cells),
+         )
+     )
+@@ -721,15 +792,18 @@
+         reader_rt, compute_rt, writer_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+         for xy in active_cells:
+             rd, cp, wr = [], [], []
+-            for h, wait, nb0, nb1, hx in slots.get((coord, xy), []):
+-                nbw = nb0 | (nb1 << 16)
++            for h, wait, nb0, nb1, hx, m0, m1, piece in slots.get((coord, xy), []):
++                # nbw packs this core's n-blocks [nb0, nb1) and rows [m0, m1) of the head (tail M-split), 8 bits each
++                assert max(nb0, nb1, m0, m1) < 256
++                nbw = nb0 | (nb1 << 8) | (m0 << 16) | (m1 << 24)
+                 fwd = [0, 0, 0, 0, 0]
+                 if hx is not None:
+                     hv, hs_ = virt(hx), helper_slot[(coord, h)]
+                     fwd = [1, hv.x, hv.y, landing_addr + hs_ * slot_bytes, arrival_addrs[hs_]]
+                 # paced weight start of a core's first slot (later slots follow the previous one's work)
+                 pace = int(w_pace * landing_share(coord, h)) if (not rd and nb0 == 0) else 0
+-                rd += [h | (int(wait) << 16), nbw] + fwd + [pace]
++                pre = max(1, min(weight_depth, ms_pre)) if piece >= 0 else w_prefetch
++                rd += [h | (int(wait) << 16) | (pre << 24), nbw] + fwd + [pace]
+                 cp += [nbw]
+                 wr += [h, nbw]
+             n = len(cp)
+@@ -796,11 +870,20 @@
+                 rc = virt(chips[tc]["ports"][(td, tl)])
+                 args += [dest_coords.index(tc), rc.x, rc.y, ready_addrs[g]]
+             args += [len(ents)]
++            subs = []
+             for j, t in ents:
+                 h = q * Hl + j
+-                cv = virt(core_of[h])
+-                s = slot_of[(t, h)]
+-                args += [dest_coords.index(ch["grp"][t]), cv.x, cv.y, landing_addr + s * slot_bytes, arrival_addrs[s]]
++                di = dest_coords.index(ch["grp"][t])
++                pcs = pieces_of.get((ch["grp"][t], h))
++                if pcs is None:
++                    s = slot_of[(t, h)]
++                    pcs = [(core_of[h], s, slot_tiles)]
++                for pxy, s, nt in pcs:
++                    cv = virt(pxy)
++                    subs.append([di | (nt << 16), cv.x, cv.y, landing_addr + s * slot_bytes, arrival_addrs[s]])
++            args[-1] = len(subs)
++            for sub in subs:
++                args += sub
+             if has_conn:
+                 peer = ch["next"] if d == FWD else ch["prev"]
+                 args += list(
+--- a/ttnn/ttnn/operations/all_to_all_matmul/kernels/all_to_all_matmul_reader.cpp
++++ b/ttnn/ttnn/operations/all_to_all_matmul/kernels/all_to_all_matmul_reader.cpp
+@@ -70,7 +70,8 @@
+     const uint32_t my_q = get_common_arg_val<uint32_t>(2);  // this chip's position in its group
+     constexpr uint32_t arrival_base = 3;                    // arrival counter address of slot s
+     // Per slot: (h | wait << 16), (nb0 | nb1 << 16), forward, helper x, helper y, helper slot addr, helper arrival
+-    // addr, weight pace (cycles to wait before the slot's first weight read; 0 = none)
++    // addr, weight pace (cycles to wait before the slot's first weight read; 0 = none), weight blocks read before the
++    // landing wait (tail M-split piece slots read all of theirs; else w_prefetch_blocks)
+     constexpr uint32_t SLOT_WORDS = 8;
+
+     const uint32_t n_slots = get_arg_val<uint32_t>(0);
+@@ -110,16 +111,17 @@
+         const uint32_t rec = 1 + s * SLOT_WORDS;
+         const uint32_t word = get_arg_val<uint32_t>(rec);
+         const uint32_t h = word & 0xFFFF;
+-        const bool remote = (word >> 16) != 0;  // remote head, or a helper slot (rows forwarded by the primary)
++        const bool remote = ((word >> 16) & 0xFF) != 0;  // remote head, or a helper slot (rows forwarded by the primary)
+         const uint32_t nbw = get_arg_val<uint32_t>(rec + 1);
+-        const uint32_t nb0 = nbw & 0xFFFF, nb1 = nbw >> 16;  // this core's n-blocks of the head
++        const uint32_t nb0 = nbw & 0xFF, nb1 = (nbw >> 8) & 0xFF;  // this core's n-blocks of the head
+         const bool forward = get_arg_val<uint32_t>(rec + 2) != 0;
+
+         const uint32_t pace = get_arg_val<uint32_t>(rec + 7);
+         if (pace != 0) {
+             riscv_wait(pace);  // paced weight start (spreads the cores' weight bursts over the exchange)
+         }
+-        const uint32_t nb_pre = (nb1 - nb0 < w_prefetch_blocks) ? nb1 : nb0 + w_prefetch_blocks;
++        const uint32_t pre = word >> 24;
++        const uint32_t nb_pre = (nb1 - nb0 < pre) ? nb1 : nb0 + pre;
+         {
+             A2AMM_ZONE("rd_w0");
+             for (uint32_t nb = nb0; nb < nb_pre; ++nb) {
+--- a/ttnn/ttnn/operations/all_to_all_matmul/kernels/all_to_all_matmul_compute.cpp
++++ b/ttnn/ttnn/operations/all_to_all_matmul/kernels/all_to_all_matmul_compute.cpp
+@@ -41,18 +41,22 @@
+
+     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_a_landed, cb_weight, cb_out);
+     CircularBuffer a_buf(cb_a_landed), w_buf(cb_weight), out_buf(cb_out);
+-    constexpr auto shape =
++    // Tail M-split: a slot may hold only rows [m0, m1) of its head (at the slot's front); the A slot is still released
++    // whole (the reader pushes slot_tiles per slot).
++    MatmulBlockShape shape =
+         MatmulBlockShape::of(block_m / out_subblock_h, block_n / out_subblock_w, out_subblock_h, out_subblock_w, Kt, 1);
+
+     for (uint32_t s = 0; s < n_slots; ++s) {
+         A2AMM_ZONE("cmp_head");
+-        const uint32_t nbw = get_arg_val<uint32_t>(1 + s);  // this core's n-blocks [nb0, nb1) of the slot's head
+-        for (uint32_t nb = nbw & 0xFFFF; nb < (nbw >> 16); ++nb) {
++        // this core's n-blocks [nb0, nb1) and rows [m0, m1) of the slot's head, 8 bits each
++        const uint32_t nbw = get_arg_val<uint32_t>(1 + s);
++        shape.in0_num_subblocks = ((nbw >> 24) - ((nbw >> 16) & 0xFF)) / out_subblock_h;
++        for (uint32_t nb = nbw & 0xFF; nb < ((nbw >> 8) & 0xFF); ++nb) {
+ #ifdef ABLATE_NOCOMPUTE
+             cb_wait_front(cb_a_landed, slot_tiles);
+             cb_wait_front(cb_weight, Kt * block_n);
+             cb_pop_front(cb_weight, Kt * block_n);
+-            for (uint32_t rg = 0; rg < block_m / out_subblock_h; ++rg) {
++            for (uint32_t rg = 0; rg < shape.in0_num_subblocks; ++rg) {
+                 cb_reserve_back(cb_out, out_subblock_h * block_n);
+                 cb_push_back(cb_out, out_subblock_h * block_n);
+             }
+--- a/ttnn/ttnn/operations/all_to_all_matmul/kernels/all_to_all_matmul_writer.cpp
++++ b/ttnn/ttnn/operations/all_to_all_matmul/kernels/all_to_all_matmul_writer.cpp
+@@ -34,7 +34,7 @@
+     constexpr uint32_t out_chunk_tiles = get_compile_time_arg_val(9);
+     constexpr auto out_args = TensorAccessorArgs<10>();
+     constexpr uint32_t row_group_tiles = out_subblock_h * block_n;
+-    constexpr uint32_t num_row_groups = block_m / out_subblock_h;
++    [[maybe_unused]] constexpr uint32_t num_row_groups = block_m / out_subblock_h;
+
+     const uint32_t out_addr = get_common_arg_val<uint32_t>(0);
+     const uint32_t n_slots = get_arg_val<uint32_t>(0);
+@@ -43,14 +43,17 @@
+
+     for (uint32_t s = 0; s < n_slots; ++s) {
+         const uint32_t h = get_arg_val<uint32_t>(1 + 2 * s);
+-        const uint32_t nbw = get_arg_val<uint32_t>(2 + 2 * s);  // this core's n-blocks [nb0, nb1) of head h
++        // this core's n-blocks [nb0, nb1) and rows [m0, m1) of head h (tail M-split), 8 bits each
++        const uint32_t nbw = get_arg_val<uint32_t>(2 + 2 * s);
++        const uint32_t m0 = (nbw >> 16) & 0xFF;
++        const uint32_t n_rg = ((nbw >> 24) - m0) / out_subblock_h;
+         A2AMM_ZONE("wr_head");
+-        for (uint32_t nb = nbw & 0xFFFF; nb < (nbw >> 16); ++nb) {
+-            for (uint32_t rg = 0; rg < num_row_groups; ++rg) {
++        for (uint32_t nb = nbw & 0xFF; nb < ((nbw >> 8) & 0xFF); ++nb) {
++            for (uint32_t rg = 0; rg < n_rg; ++rg) {
+                 cb_wait_front(cb_out, row_group_tiles);
+                 uint32_t rp = get_read_ptr(cb_out);
+                 for (uint32_t r = 0; r < out_subblock_h; ++r) {
+-                    const uint32_t m = rg * out_subblock_h + r;
++                    const uint32_t m = m0 + rg * out_subblock_h + r;
+                     const uint32_t b = m / Mq_t;
+                     const uint32_t mt = m - b * Mq_t;
+                     const uint32_t page = ((b * H + h) * Mq_t + mt) * Nt + nb * block_n;
+--- a/ttnn/ttnn/operations/all_to_all_matmul/kernels/all_to_all_matmul_port_sender.cpp
++++ b/ttnn/ttnn/operations/all_to_all_matmul/kernels/all_to_all_matmul_port_sender.cpp
+@@ -11,7 +11,9 @@
+ //                 them nearest destination first). Before a group's first packet the port waits for that destination's
+ //                 ready only (fence_per_dest; else every ready up front), so a 1-hop group starts after a 1-hop round
+ //                 trip and the 2-hop ready is awaited behind it. Then re-arm (-1).
+-//   packets       cut by all_to_all_matmul_stream.hpp (the reader cuts the same): from cb_port_chunks straight into the
++//   packets       cut like all_to_all_matmul_stream.hpp (the reader's walk), over sub-entries: an entry, or one tail
++//                 M-split piece of it (a row range delivered to its own core and arrival counter; tiles in word 0's
++//                 high half). Packing makes the group one tile stream either way. From cb_port_chunks straight into the
+ //                 destination compute core's landing slot (same L1 address on every chip); route by destination node
+ //                 (fabric_set_unicast_route: the routing table's own route, 1 or 2 hops). A packet that ends an entry
+ //                 is fused with an increment of that slot's arrival counter; a packed packet that straddles two entries
+@@ -47,7 +49,7 @@
+ #endif
+ }
+ constexpr uint32_t READY_WORDS = 4;  // destination index, target port x, y, ready counter address
+-constexpr uint32_t ENTRY_WORDS = 5;
++constexpr uint32_t ENTRY_WORDS = 5;  // word 0: destination index | tiles of the sub-entry << 16
+ constexpr uint32_t DEST_WORDS =
+     3;  // chip id, mesh id, ready counter address  // destination index, core x, y, slot address, arrival address
+ }  // namespace
+@@ -62,7 +64,7 @@
+     constexpr bool pack = get_compile_time_arg_val(6) != 0;
+     constexpr bool fence_per_dest = get_compile_time_arg_val(7) != 0;
+     static_assert(max_headers >= 1 && max_headers <= 12, "packet header pool: <= 12 headers per RISC");
+-    using Walk = a2amm_stream::Walk<slot_tiles, packet_tiles, pack>;
++    static_assert(!pack || packet_tiles <= slot_tiles, "packing needs packet_tiles <= slot_tiles");
+     constexpr uint32_t packet_bytes = packet_tiles * tile_bytes;
+
+     size_t a = 0;
+@@ -145,30 +147,59 @@
+     uint32_t pos = 0;
+     for (uint32_t g0 = 0; g0 < n_entries;) {
+         // group: entries [g0, g1) to one destination chip
+-        const uint32_t d = get_arg_val<uint32_t>(entry_idx + g0 * ENTRY_WORDS);
++        const uint32_t d = get_arg_val<uint32_t>(entry_idx + g0 * ENTRY_WORDS) & 0xFFFF;
+         uint32_t g1 = g0 + 1;
+-        while (g1 < n_entries && get_arg_val<uint32_t>(entry_idx + g1 * ENTRY_WORDS) == d) {
++        while (g1 < n_entries && (get_arg_val<uint32_t>(entry_idx + g1 * ENTRY_WORDS) & 0xFFFF) == d) {
+             ++g1;
+         }
+         if constexpr (fence_per_dest) {
+             wait_ready(d);
+         }
+-        const uint32_t ng = g1 - g0;
+-        const uint32_t packets = Walk::group_packets(ng);
+-        Walk w;
++        // Sub-entries: an entry, or a tail M-split piece of one (rows of the same entry delivered to another core,
++        // own arrival counter). The tile stream of the group is the reader's (packing); without packing every
++        // sub-entry is a whole entry (host rule), so the per-entry cut matches the reader's too.
++        auto tiles_of = [&](uint32_t e) { return get_arg_val<uint32_t>(entry_idx + e * ENTRY_WORDS) >> 16; };
++        uint32_t group_tiles = 0, packets = 0;
++        for (uint32_t e = g0; e < g1; ++e) {
++            group_tiles += tiles_of(e);
++            packets += (tiles_of(e) + packet_tiles - 1) / packet_tiles;
++        }
++        if constexpr (pack) {
++            packets = (group_tiles + packet_tiles - 1) / packet_tiles;
++        }
++        struct {
++            uint32_t e = 0, off = 0;
++        } w;
++        uint32_t left_group = group_tiles;
+         for (uint32_t c = 0; c < packets;) {
+             const uint32_t room = batch_chunks - pos % batch_chunks;
+             const uint32_t need = (packets - c) < room ? (packets - c) : room;
+             cb_wait_front(cb_port_chunks, need);
+             const uint32_t rp = get_read_ptr(cb_port_chunks);
+             for (uint32_t i = 0; i < need; ++i) {
+-                uint32_t n0, n1;
+-                w.next(ng, n0, n1);
+                 const uint32_t rec = entry_idx + (g0 + w.e) * ENTRY_WORDS;
++                const uint32_t e_tiles = get_arg_val<uint32_t>(rec) >> 16;
++                const uint32_t left_entry = e_tiles - w.off;
++                uint32_t n = packet_tiles;
++                if constexpr (pack) {
++                    n = left_group < n ? left_group : n;
++                } else {
++                    n = left_entry < n ? left_entry : n;
++                }
++                const uint32_t n0 = left_entry < n ? left_entry : n;
++                const uint32_t n1 = n - n0;
++                left_group -= n;
+                 const uint32_t x = get_arg_val<uint32_t>(rec + 1);
+                 const uint32_t y = get_arg_val<uint32_t>(rec + 2);
+                 const uint64_t dst = get_noc_addr(x, y, get_arg_val<uint32_t>(rec + 3) + w.off * tile_bytes);
+-                const bool ends_entry = w.off + n0 == slot_tiles;
++                const bool ends_entry = w.off + n0 == e_tiles;
++                auto advance = [&]() {
++                    w.off += n0 + n1;
++                    if (w.off >= e_tiles) {
++                        w.off -= e_tiles;
++                        ++w.e;
++                    }
++                };
+                 const uint32_t bytes = (n0 + n1) * tile_bytes;
+                 if (used[d] == hdrs_per_dest) {
+                     flushed();
+@@ -177,14 +208,14 @@
+ #ifdef ABLATE_NOSEND
+                 // ablation: no payload crosses the fabric; only the entry's arrival increment (header-only)
+                 if (!ends_entry) {
+-                    w.advance(n0 + n1);
++                    advance();
+                     continue;
+                 }
+                 hdr->to_noc_unicast_atomic_inc(
+                     NocUnicastAtomicIncCommandHeader{get_noc_addr(x, y, get_arg_val<uint32_t>(rec + 4)), 1, true});
+                 conn.wait_for_empty_write_slot();
+                 conn.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(hdr), sizeof(PACKET_HEADER_TYPE));
+-                w.advance(n0 + n1);
++                advance();
+                 continue;
+ #endif
+                 if (ends_entry) {
+@@ -208,7 +239,7 @@
+                 }
+                 conn.wait_for_empty_write_slot();
+                 conn.send_current_slot_non_blocking(rp + i * packet_bytes, bytes, reinterpret_cast<uint32_t>(hdr));
+-                w.advance(n0 + n1);
++                advance();
+             }
+             flushed();
+             cb_pop_front(cb_port_chunks, need);

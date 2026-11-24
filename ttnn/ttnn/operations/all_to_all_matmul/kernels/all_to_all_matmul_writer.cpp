@@ -34,7 +34,7 @@ void kernel_main() {
     constexpr uint32_t out_chunk_tiles = get_compile_time_arg_val(9);
     constexpr auto out_args = TensorAccessorArgs<10>();
     constexpr uint32_t row_group_tiles = out_subblock_h * block_n;
-    constexpr uint32_t num_row_groups = block_m / out_subblock_h;
+    [[maybe_unused]] constexpr uint32_t num_row_groups = block_m / out_subblock_h;
 
     const uint32_t out_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t n_slots = get_arg_val<uint32_t>(0);
@@ -43,14 +43,17 @@ void kernel_main() {
 
     for (uint32_t s = 0; s < n_slots; ++s) {
         const uint32_t h = get_arg_val<uint32_t>(1 + 2 * s);
-        const uint32_t nbw = get_arg_val<uint32_t>(2 + 2 * s);  // this core's n-blocks [nb0, nb1) of head h
+        // this core's n-blocks [nb0, nb1) and rows [m0, m1) of head h (tail M-split), 8 bits each
+        const uint32_t nbw = get_arg_val<uint32_t>(2 + 2 * s);
+        const uint32_t m0 = (nbw >> 16) & 0xFF;
+        const uint32_t n_rg = ((nbw >> 24) - m0) / out_subblock_h;
         A2AMM_ZONE("wr_head");
-        for (uint32_t nb = nbw & 0xFFFF; nb < (nbw >> 16); ++nb) {
-            for (uint32_t rg = 0; rg < num_row_groups; ++rg) {
+        for (uint32_t nb = nbw & 0xFF; nb < ((nbw >> 8) & 0xFF); ++nb) {
+            for (uint32_t rg = 0; rg < n_rg; ++rg) {
                 cb_wait_front(cb_out, row_group_tiles);
                 uint32_t rp = get_read_ptr(cb_out);
                 for (uint32_t r = 0; r < out_subblock_h; ++r) {
-                    const uint32_t m = rg * out_subblock_h + r;
+                    const uint32_t m = m0 + rg * out_subblock_h + r;
                     const uint32_t b = m / Mq_t;
                     const uint32_t mt = m - b * Mq_t;
                     const uint32_t page = ((b * H + h) * Mq_t + mt) * Nt + nb * block_n;

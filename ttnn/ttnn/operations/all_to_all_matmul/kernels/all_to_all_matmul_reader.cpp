@@ -70,7 +70,8 @@ void kernel_main() {
     const uint32_t my_q = get_common_arg_val<uint32_t>(2);  // this chip's position in its group
     constexpr uint32_t arrival_base = 3;                    // arrival counter address of slot s
     // Per slot: (h | wait << 16), (nb0 | nb1 << 16), forward, helper x, helper y, helper slot addr, helper arrival
-    // addr, weight pace (cycles to wait before the slot's first weight read; 0 = none)
+    // addr, weight pace (cycles to wait before the slot's first weight read; 0 = none), weight blocks read before the
+    // landing wait (tail M-split piece slots read all of theirs; else w_prefetch_blocks)
     constexpr uint32_t SLOT_WORDS = 8;
 
     const uint32_t n_slots = get_arg_val<uint32_t>(0);
@@ -110,16 +111,18 @@ void kernel_main() {
         const uint32_t rec = 1 + s * SLOT_WORDS;
         const uint32_t word = get_arg_val<uint32_t>(rec);
         const uint32_t h = word & 0xFFFF;
-        const bool remote = (word >> 16) != 0;  // remote head, or a helper slot (rows forwarded by the primary)
+        const bool remote =
+            ((word >> 16) & 0xFF) != 0;  // remote head, or a helper slot (rows forwarded by the primary)
         const uint32_t nbw = get_arg_val<uint32_t>(rec + 1);
-        const uint32_t nb0 = nbw & 0xFFFF, nb1 = nbw >> 16;  // this core's n-blocks of the head
+        const uint32_t nb0 = nbw & 0xFF, nb1 = (nbw >> 8) & 0xFF;  // this core's n-blocks of the head
         const bool forward = get_arg_val<uint32_t>(rec + 2) != 0;
 
         const uint32_t pace = get_arg_val<uint32_t>(rec + 7);
         if (pace != 0) {
             riscv_wait(pace);  // paced weight start (spreads the cores' weight bursts over the exchange)
         }
-        const uint32_t nb_pre = (nb1 - nb0 < w_prefetch_blocks) ? nb1 : nb0 + w_prefetch_blocks;
+        const uint32_t pre = word >> 24;
+        const uint32_t nb_pre = (nb1 - nb0 < pre) ? nb1 : nb0 + pre;
         {
             A2AMM_ZONE("rd_w0");
             for (uint32_t nb = nb0; nb < nb_pre; ++nb) {

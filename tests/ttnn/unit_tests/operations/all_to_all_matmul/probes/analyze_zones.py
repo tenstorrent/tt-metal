@@ -23,7 +23,19 @@ for dev in sorted({k[0] for k in by}):
         elif typ == "ZONE_END" and starts.get(k):
             s = starts[k].pop()
             z[name].append(((x, y, risc), (s - t0) / 1350, (t - t0) / 1350))
-    for name in ["psd_fence", "psd_send", "prd_all", "rd_w0", "rd_local_a", "rd_wait_remote", "cmp_head", "wr_head"]:
+    for name in [
+        "psd_hdr_setup",
+        "psd_open",
+        "psd_fence",
+        "psd_wait_ready",
+        "psd_send",
+        "prd_all",
+        "rd_w0",
+        "rd_local_a",
+        "rd_wait_remote",
+        "cmp_head",
+        "wr_head",
+    ]:
         L = z.get(name, [])
         if not L:
             continue

@@ -88,3 +88,83 @@
 - Golden test progress: targeted slice 20/20 (4 LOOSE_CASES, (1,24,160,128) bf8b R1' x 4, (1,8,48,64) R1' x 8, N=8192 L1 x 4).
 - Issues encountered: no lever beat the noise; the remaining headroom is cross-chip (see the Outcome line). Untried next: per-row-tile arrival increments (sender-side OVERLAP), which shorten every remote head's post-landing path whatever the landing order.
 - Tests added: none (defaults byte-identical). Probes 042-053 (variant sweeps via `r3_variants.py`).
+
+## Perf 1
+- Date: 2026-11-24. Focus: LOOSE_CASES[0] (Kimi K3.1 model config: input (1,24,640,128) bf16, weight (1,96,128,512) bf16, HiFi2, 16-bit DEST, L1 output; 1x4 ring, FABRIC_2D_TORUS_XY, 2 links, 7232 B packets). Roofline 32.3 us (DRAM), links 20.3 us, matmul 6.6 us. The cell is SUPPORTED.
+- Instrumentation: `ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp` (`MaybeDeviceZoneScope`) does not exist in this tree. The op's existing equivalent, `A2AMM_ZONE(name)` (compiled out unless `A2AMM_ABLATE=zones`), stays as the permanent instrumentation. Added zones: `psd_hdr_setup`, `psd_open` and `psd_wait_ready` (the ready wait, zoned apart from the send). Added ablation stub `nosend`: the sender sends only each entry's arrival increment, as a header-only packet with no payload.
+
+### Measured breakdown (harness, 5 experiments, fastest chip, us)
+| run (cumulative peel) | fastest | slowest | average |
+|---|---|---|---|
+| full | 55.81 | 61.20 | 58.64 |
+| nowrite | 54.43 | 58.66 | 56.72 |
+| nowrite,nocompute | 50.53 | 52.30 | 51.49 |
+| exchange alone (nowrite,nocompute,noweight) | 45.91 | 48.22 | 47.06 |
+| exchange alone, port DRAM reads also stubbed | 45.74 | 47.18 | 46.46 |
+| local alone (nosend,noportread) | 41.07 | 43.78 | 42.42 |
+| nosend,noportread,nowrite | 40.42 | 42.83 | 41.80 |
+| nosend,noportread,nowrite,nocompute (weight reads + floor) | 35.96 | 36.74 | 36.41 |
+| everything stubbed | 17.95 | 18.29 | 18.12 |
+The 17.95 us all-stubbed floor is inflated by the `nosend` stub itself: each header-only increment blocks until it is flushed.
+
+Per-part speed of light:
+- Exchange: 0.98 MB on the busiest link. At the link rate that is 20.3 us. At the measured per-packet rate for 7232 B packets it is ~44 us (from the `fabric_all_gather` fit, 0.17 us + bytes / 72 GB/s per packet = 0.273 us; this op's send phase runs at 0.25 us per packet).
+- Weight reads: 12.6 MB / DRAM peak = 24.6 us.
+- Matmul: 6.6 us.
+
+Overlap loss = full − slowest part alone = 55.8 − 45.9 = 9.9 us.
+
+Zones (one untraced call, every chip and port):
+- **Sender startup.** `psd_hdr_setup` takes 4.3 us on every port: `fabric_set_unicast_route` costs ~0.33 us per L1 header, and there are 12 headers. `conn.open()` adds 0.4 us and the fence 0.3 us. So no ready and no data packet leaves any chip before ~5 us.
+- **Post-exchange chain.** The last remote slots land at 46–54 us and the last output write ends at 56–59 us: 5–8 us after the last landing.
+
+Ranked bottlenecks:
+1. TRANSPORT start latency, 4.3 us on the exchange's critical path.
+2. OVERLAP: the post-exchange chain (5–8 us), plus the weight reads' contention with the exchange (+4.6 us).
+3. The TRANSPORT data phase. It is already at the example's per-packet rate for this payload size, which the case fixes, so it has no headroom here.
+
+### Portfolio (cap 2) and verdicts
+- **sender_startup (TRANSPORT, handshake cost)**, `perf_experiments/sender_startup/`. Route each destination once into a stack image, store only the route words into that destination's L1 headers, and overlap `open_start()` / `open_finish()` with the setup.
+  - Effect on the sender: header setup 4.28 → 1.79 us, readies leave at 2.35 instead of 4.9 us, data starts at 2.70 instead of 5.17 us.
+  - Focus case alone: fastest −1.0 us (−1.8%), slowest +0.7 us, average flat. That is inside the noise band, so on its own this idea is NULL on the focus case. The saving turns into skew between chips: the ring period is set elsewhere.
+  - Other cases, stacked on the tail-chain change (same session): GLM fastest 55.79 → 53.57, DeepSeek 71.63 → 70.03, Kimi Phase 0 87.64 → 87.30.
+  - Domain: applies everywhere, no exceptions. 148/148 golden cells pass on the experiment's copy.
+  - Menu of other variants: `sslazy` (headers built on first use) lowered the fastest chip as much, but `compare` rejected it twice because the slowest chip rose 1.1–1.45 us. Copying L1 to L1, or splitting the open alone, gained less.
+- **tail_chain (OVERLAP, post-exchange chain)**, `perf_experiments/tail_chain/`. Tail M-split: the 4 remote heads per chip estimated to land last are cut by output rows into 3 pieces (2, 2 and 1 tile-rows).
+  - The source port sends each piece's rows straight into its own core's slot, with its own arrival counter. There is no forward hop, and the first pieces start their matmul while later rows are still in flight.
+  - Piece slots prefetch both weight n-blocks.
+  - With the M-split in place, the N-halving tail split can cover 12 heads on the grouped path instead of 8.
+  - Focus case alone: 55.61 / 61.80 → 54.30 / 60.35 (fastest / slowest), average 58.93 → 57.40. That is −2.4% on the fastest chip, at the edge of the band. GLM: −5.7% fastest.
+  - Zones: the chain after the last landing shrank by ~1 us per chip. What is left is whole heads that land later than estimated (the landing order varies per call).
+  - Menu (fastest / slowest / average): M8 P3 N8 55.03 / 60.62 / 57.90; M4 P3 N8 55.08 / 60.09 / 57.66; M4 P3 N12 54.30 / 60.35 / 57.40 (chosen). Variants with more pieces or no N-split were worse.
+  - Precision: identical. The split only divides output rows, and fidelity, DEST width and dtypes are unchanged.
+
+### What graduated: both, combined
+The two changes touch different stages (sender startup vs. the tail plan and the slot record), so they do not conflict. Together they are faster than either alone.
+
+The sender startup change is now the only sender path, everywhere; the old 12× L1 routing loop and `conn.open()` are deleted.
+
+The tail M-split and the grouped path's 12-head N-split are the default. They are carved out of one path only: the interleaved send path, which is the existing `SEND_RUN_MAX_LOCAL_RATIO` gate (local ratio > 6, Kimi Phase 0). The carve-out was earned by a measured regression: on Phase 0, ungated, the change gave 87.59 / 91.35 → 92.82 / 98.57. The cause is extra helper slots on local-head cores under HiFi4 (12 N-split heads alone: 91.21; 4 M-split heads alone: 88.30). Gated, Phase 0 is within noise.
+
+The host also skips the M-split where it cannot be expressed: without packing, when a piece would be smaller than one packet, and when the tail split would be off anyway.
+
+Whole op (harness, 5 experiments, `CCL_PERF_CASES=all`, all measured in this session; fastest / slowest / average, us):
+| case | baseline | tail_chain only | graduated (both) | `compare` vs baseline |
+|---|---|---|---|---|
+| Kimi model (focus) | 55.79 / 61.27 / 58.63 | 54.41 / 59.96 / 57.20 | **53.45 / 60.49 / 57.07** | win (−4.2% fastest) |
+| Kimi Phase 0 | 87.67 / 91.41 / 89.42 | 87.64 / 91.47 / 89.45 | 87.30 / 90.49 / 88.79 | win (−0.4%: flat) |
+| DeepSeek model | 72.38 / 80.58 / 76.61 | 71.63 / 77.98 / 74.96 | 70.03 / 76.70 / 73.55 | win (−3.2%) |
+| GLM model | 58.78 / 63.98 / 61.55 | 55.79 / 60.61 / 58.37 | 53.57 / 60.75 / 57.28 | win (−8.9%) |
+
+- No case is DISPATCH-BOUND. JSONs are under `perf/p1/{base,B,AB}/`, and the ablations under `perf/p1/abl/`.
+- No regression on any case. The guard set covers one representative per path: the grouped and interleaved send paths, K = 128 and K = 192, and 24 and 32 heads per chip. The golden suite covers the rest: m_non_aligned (retile), Nt = 1 (no split possible), B = 2, deep K, wide N, bf8b weight, and DRAM and L1 output.
+- Golden: `eval/golden_tests/all_to_all_matmul/` 156/156 pass. Unit directory 36/36 pass. The tail_chain subagent also ran 20 back-to-back calls and a stress variant (every head split, 5 pieces).
+- Lesson from tail_chain: adding per-core runtime arguments made back-to-back calls hang. The new fields are now packed into the existing words, so each kernel keeps its argument count. Test any future change to the runtime arguments back-to-back.
+- Remaining headroom on the focus case: 53.45 us vs a 32.3 us roofline.
+  - The data phase sits at the per-packet rate for 7232 B packets (~41 us for the busiest link's 160 packets).
+  - Whole heads that land later than the static estimate still cost 7.8 us of matmul after landing.
+  - The weight reads still contend with the exchange (+4.6 us).
+  - Not tried yet: a dynamic tail, where the piece and helper assignment follows the actual landing order.
+
+### Helper bypasses — none
+No raw LLK. Compute still calls `matmul_block`, now with a runtime row range. The sender uses the fabric adapter's public `open_start()` / `open_finish()`.

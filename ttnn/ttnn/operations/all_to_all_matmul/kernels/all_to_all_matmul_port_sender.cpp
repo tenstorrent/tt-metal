@@ -11,7 +11,9 @@
 //                 them nearest destination first). Before a group's first packet the port waits for that destination's
 //                 ready only (fence_per_dest; else every ready up front), so a 1-hop group starts after a 1-hop round
 //                 trip and the 2-hop ready is awaited behind it. Then re-arm (-1).
-//   packets       cut by all_to_all_matmul_stream.hpp (the reader cuts the same): from cb_port_chunks straight into the
+//   packets       cut like all_to_all_matmul_stream.hpp (the reader's walk), over sub-entries: an entry, or one tail
+//                 M-split piece of it (a row range delivered to its own core and arrival counter; tiles in word 0's
+//                 high half). Packing makes the group one tile stream either way. From cb_port_chunks straight into the
 //                 destination compute core's landing slot (same L1 address on every chip); route by destination node
 //                 (fabric_set_unicast_route: the routing table's own route, 1 or 2 hops). A packet that ends an entry
 //                 is fused with an increment of that slot's arrival counter; a packed packet that straddles two entries
@@ -47,7 +49,7 @@ inline void route_to(volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr, uint16_t chip_i
 #endif
 }
 constexpr uint32_t READY_WORDS = 4;  // destination index, target port x, y, ready counter address
-constexpr uint32_t ENTRY_WORDS = 5;
+constexpr uint32_t ENTRY_WORDS = 5;  // word 0: destination index | tiles of the sub-entry << 16
 constexpr uint32_t DEST_WORDS =
     3;  // chip id, mesh id, ready counter address  // destination index, core x, y, slot address, arrival address
 }  // namespace
@@ -62,7 +64,7 @@ void kernel_main() {
     constexpr bool pack = get_compile_time_arg_val(6) != 0;
     constexpr bool fence_per_dest = get_compile_time_arg_val(7) != 0;
     static_assert(max_headers >= 1 && max_headers <= 12, "packet header pool: <= 12 headers per RISC");
-    using Walk = a2amm_stream::Walk<slot_tiles, packet_tiles, pack>;
+    static_assert(!pack || packet_tiles <= slot_tiles, "packing needs packet_tiles <= slot_tiles");
     constexpr uint32_t packet_bytes = packet_tiles * tile_bytes;
 
     size_t a = 0;
@@ -84,15 +86,41 @@ void kernel_main() {
     auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a);  // appended last
     volatile tt_l1_ptr PACKET_HEADER_TYPE* hdrs[max_headers];
     ASSERT(n_dest * hdrs_per_dest <= max_headers);
-    for (uint32_t d = 0; d < n_dest; ++d) {
-        const uint16_t chip = static_cast<uint16_t>(get_arg_val<uint32_t>(dest_idx + DEST_WORDS * d));
-        const uint16_t mesh = static_cast<uint16_t>(get_arg_val<uint32_t>(dest_idx + DEST_WORDS * d + 1));
-        for (uint32_t i = 0; i < hdrs_per_dest; ++i) {
-            hdrs[d * hdrs_per_dest + i] = PacketHeaderPool::allocate_header();
-            route_to(hdrs[d * hdrs_per_dest + i], chip, mesh);
+    // Connection handshake in flight while the headers are built; open_finish() waits for its reads.
+    conn.open_start();
+    {
+        A2AMM_ZONE("psd_hdr_setup");
+        // One route per destination, built in BRISC local memory (stack) and stored word by word into that
+        // destination's L1 headers: fabric_set_unicast_route straight on an L1 header costs ~0.33 us (byte-wise
+        // volatile stores, bit-field read-modify-writes) and there are up to 12 headers. Only [routing_fields, end) is
+        // stored: that is everything the route writes; the command fields before it are rewritten by to_noc_* for
+        // every packet.
+        constexpr uint32_t HDR_WORDS = (sizeof(PACKET_HEADER_TYPE) + 3) / 4;
+        alignas(16) uint32_t img[HDR_WORDS];
+        volatile tt_l1_ptr PACKET_HEADER_TYPE* img_hdr = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(img);
+        // offsetof is rejected on the (non-standard-layout) header type: take the member's address
+        const uint32_t route_off = static_cast<uint32_t>(
+            reinterpret_cast<uintptr_t>(&img_hdr->routing_fields) - reinterpret_cast<uintptr_t>(img));
+        ASSERT(route_off % 4 == 0);
+        const uint32_t w0 = route_off / 4;
+        for (uint32_t d = 0; d < n_dest; ++d) {
+            const uint16_t chip = static_cast<uint16_t>(get_arg_val<uint32_t>(dest_idx + DEST_WORDS * d));
+            const uint16_t mesh = static_cast<uint16_t>(get_arg_val<uint32_t>(dest_idx + DEST_WORDS * d + 1));
+            route_to(img_hdr, chip, mesh);
+            for (uint32_t i = 0; i < hdrs_per_dest; ++i) {
+                volatile tt_l1_ptr PACKET_HEADER_TYPE* h = PacketHeaderPool::allocate_header();
+                hdrs[d * hdrs_per_dest + i] = h;
+                volatile tt_l1_ptr uint32_t* hw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(h);
+                for (uint32_t w = w0; w < HDR_WORDS; ++w) {
+                    hw[w] = img[w];
+                }
+            }
         }
     }
-    conn.open();
+    {
+        A2AMM_ZONE("psd_open");
+        conn.open_finish();
+    }
 
     // ---- ready fence: send every ready; the waits are per destination group (below) ----
     uint32_t awaited = 0;  // bit d: destination d's ready consumed
@@ -102,6 +130,7 @@ void kernel_main() {
             return;
         }
         awaited |= 1u << d;
+        A2AMM_ZONE("psd_wait_ready");
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr), 1);
         noc_semaphore_inc(get_noc_addr(addr), 0u - 1u);
     };
@@ -138,35 +167,78 @@ void kernel_main() {
     uint32_t pos = 0;
     for (uint32_t g0 = 0; g0 < n_entries;) {
         // group: entries [g0, g1) to one destination chip
-        const uint32_t d = get_arg_val<uint32_t>(entry_idx + g0 * ENTRY_WORDS);
+        const uint32_t d = get_arg_val<uint32_t>(entry_idx + g0 * ENTRY_WORDS) & 0xFFFF;
         uint32_t g1 = g0 + 1;
-        while (g1 < n_entries && get_arg_val<uint32_t>(entry_idx + g1 * ENTRY_WORDS) == d) {
+        while (g1 < n_entries && (get_arg_val<uint32_t>(entry_idx + g1 * ENTRY_WORDS) & 0xFFFF) == d) {
             ++g1;
         }
         if constexpr (fence_per_dest) {
             wait_ready(d);
         }
-        const uint32_t ng = g1 - g0;
-        const uint32_t packets = Walk::group_packets(ng);
-        Walk w;
+        // Sub-entries: an entry, or a tail M-split piece of one (rows of the same entry delivered to another core,
+        // own arrival counter). The tile stream of the group is the reader's (packing); without packing every
+        // sub-entry is a whole entry (host rule), so the per-entry cut matches the reader's too.
+        auto tiles_of = [&](uint32_t e) { return get_arg_val<uint32_t>(entry_idx + e * ENTRY_WORDS) >> 16; };
+        uint32_t group_tiles = 0, packets = 0;
+        for (uint32_t e = g0; e < g1; ++e) {
+            group_tiles += tiles_of(e);
+            packets += (tiles_of(e) + packet_tiles - 1) / packet_tiles;
+        }
+        if constexpr (pack) {
+            packets = (group_tiles + packet_tiles - 1) / packet_tiles;
+        }
+        struct {
+            uint32_t e = 0, off = 0;
+        } w;
+        uint32_t left_group = group_tiles;
         for (uint32_t c = 0; c < packets;) {
             const uint32_t room = batch_chunks - pos % batch_chunks;
             const uint32_t need = (packets - c) < room ? (packets - c) : room;
             cb_wait_front(cb_port_chunks, need);
             const uint32_t rp = get_read_ptr(cb_port_chunks);
             for (uint32_t i = 0; i < need; ++i) {
-                uint32_t n0, n1;
-                w.next(ng, n0, n1);
                 const uint32_t rec = entry_idx + (g0 + w.e) * ENTRY_WORDS;
+                const uint32_t e_tiles = get_arg_val<uint32_t>(rec) >> 16;
+                const uint32_t left_entry = e_tiles - w.off;
+                uint32_t n = packet_tiles;
+                if constexpr (pack) {
+                    n = left_group < n ? left_group : n;
+                } else {
+                    n = left_entry < n ? left_entry : n;
+                }
+                const uint32_t n0 = left_entry < n ? left_entry : n;
+                const uint32_t n1 = n - n0;
+                left_group -= n;
                 const uint32_t x = get_arg_val<uint32_t>(rec + 1);
                 const uint32_t y = get_arg_val<uint32_t>(rec + 2);
                 const uint64_t dst = get_noc_addr(x, y, get_arg_val<uint32_t>(rec + 3) + w.off * tile_bytes);
-                const bool ends_entry = w.off + n0 == slot_tiles;
+                const bool ends_entry = w.off + n0 == e_tiles;
+                auto advance = [&]() {
+                    w.off += n0 + n1;
+                    if (w.off >= e_tiles) {
+                        w.off -= e_tiles;
+                        ++w.e;
+                    }
+                };
                 const uint32_t bytes = (n0 + n1) * tile_bytes;
                 if (used[d] == hdrs_per_dest) {
                     flushed();
                 }
                 volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[d * hdrs_per_dest + used[d]++];
+#ifdef ABLATE_NOSEND
+                // ablation: no payload crosses the fabric; only the entry's arrival increment (header-only)
+                if (!ends_entry) {
+                    advance();
+                    continue;
+                }
+                hdr->to_noc_unicast_atomic_inc(
+                    NocUnicastAtomicIncCommandHeader{get_noc_addr(x, y, get_arg_val<uint32_t>(rec + 4)), 1, true});
+                conn.wait_for_empty_write_slot();
+                conn.send_payload_flush_blocking_from_address(
+                    reinterpret_cast<uint32_t>(hdr), sizeof(PACKET_HEADER_TYPE));
+                advance();
+                continue;
+#endif
                 if (ends_entry) {
                     const uint64_t arrival_noc = get_noc_addr(x, y, get_arg_val<uint32_t>(rec + 4));
                     if (n1 > 0) {
@@ -188,7 +260,7 @@ void kernel_main() {
                 }
                 conn.wait_for_empty_write_slot();
                 conn.send_current_slot_non_blocking(rp + i * packet_bytes, bytes, reinterpret_cast<uint32_t>(hdr));
-                w.advance(n0 + n1);
+                advance();
             }
             flushed();
             cb_pop_front(cb_port_chunks, need);

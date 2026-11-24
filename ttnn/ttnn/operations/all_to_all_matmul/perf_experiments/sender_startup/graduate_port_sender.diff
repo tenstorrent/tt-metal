@@ -1,0 +1,52 @@
+--- ttnn/ttnn/operations/all_to_all_matmul/kernels/all_to_all_matmul_port_sender.cpp	2026-11-24 19:26:10.660474048 +0000
++++ ttnn/ttnn/operations/all_to_all_matmul/perf_experiments/sender_startup/kernels_grad/all_to_all_matmul_port_sender.cpp	2026-11-24 20:25:56.591833405 +0000
+@@ -84,20 +84,40 @@
+     auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a);  // appended last
+     volatile tt_l1_ptr PACKET_HEADER_TYPE* hdrs[max_headers];
+     ASSERT(n_dest * hdrs_per_dest <= max_headers);
++    // Connection handshake in flight while the headers are built; open_finish() waits for its reads.
++    conn.open_start();
+     {
+-    A2AMM_ZONE("psd_hdr_setup");
+-    for (uint32_t d = 0; d < n_dest; ++d) {
+-        const uint16_t chip = static_cast<uint16_t>(get_arg_val<uint32_t>(dest_idx + DEST_WORDS * d));
+-        const uint16_t mesh = static_cast<uint16_t>(get_arg_val<uint32_t>(dest_idx + DEST_WORDS * d + 1));
+-        for (uint32_t i = 0; i < hdrs_per_dest; ++i) {
+-            hdrs[d * hdrs_per_dest + i] = PacketHeaderPool::allocate_header();
+-            route_to(hdrs[d * hdrs_per_dest + i], chip, mesh);
++        A2AMM_ZONE("psd_hdr_setup");
++        // One route per destination, built in BRISC local memory (stack) and stored word by word into that
++        // destination's L1 headers: fabric_set_unicast_route straight on an L1 header costs ~0.33 us (byte-wise
++        // volatile stores, bit-field read-modify-writes) and there are up to 12 headers. Only [routing_fields, end) is
++        // stored: that is everything the route writes; the command fields before it are rewritten by to_noc_* for
++        // every packet.
++        constexpr uint32_t HDR_WORDS = (sizeof(PACKET_HEADER_TYPE) + 3) / 4;
++        alignas(16) uint32_t img[HDR_WORDS];
++        volatile tt_l1_ptr PACKET_HEADER_TYPE* img_hdr = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(img);
++        // offsetof is rejected on the (non-standard-layout) header type: take the member's address
++        const uint32_t route_off = static_cast<uint32_t>(
++            reinterpret_cast<uintptr_t>(&img_hdr->routing_fields) - reinterpret_cast<uintptr_t>(img));
++        ASSERT(route_off % 4 == 0);
++        const uint32_t w0 = route_off / 4;
++        for (uint32_t d = 0; d < n_dest; ++d) {
++            const uint16_t chip = static_cast<uint16_t>(get_arg_val<uint32_t>(dest_idx + DEST_WORDS * d));
++            const uint16_t mesh = static_cast<uint16_t>(get_arg_val<uint32_t>(dest_idx + DEST_WORDS * d + 1));
++            route_to(img_hdr, chip, mesh);
++            for (uint32_t i = 0; i < hdrs_per_dest; ++i) {
++                volatile tt_l1_ptr PACKET_HEADER_TYPE* h = PacketHeaderPool::allocate_header();
++                hdrs[d * hdrs_per_dest + i] = h;
++                volatile tt_l1_ptr uint32_t* hw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(h);
++                for (uint32_t w = w0; w < HDR_WORDS; ++w) {
++                    hw[w] = img[w];
++                }
++            }
+         }
+     }
+-    }
+     {
+         A2AMM_ZONE("psd_open");
+-        conn.open();
++        conn.open_finish();
+     }
+
+     // ---- ready fence: send every ready; the waits are per destination group (below) ----

@@ -93,12 +93,26 @@ PACK_ACROSS_ENTRIES = True
 # Only the last few landings are on the tail; past ~8 the extra helpers are local-head cores that finish their own
 # head late (HiFi4) and become the new tail.
 TAIL_SPLIT_MAX_HEADS = 8
+# Grouped send path (local ratio <= SEND_RUN_MAX_LOCAL_RATIO): with the M-split taking the latest heads, more N-split
+# heads help (tail_chain experiment, Kimi model case: 8 -> 12 with 4 M-split heads, 55.7 -> 54.4 us fastest). On the
+# interleaved path (Kimi Phase 0, ratio 8.2, HiFi4) every extra helper slot on a local-head core costs (12 split heads:
+# 87.6 -> 91.2 us), so that path keeps TAIL_SPLIT_MAX_HEADS and no M-split.
+TAIL_SPLIT_MAX_HEADS_GROUPED = 12
 # Landing-order estimate for the tail split: "share" = (index + 1) / entries of the source port (ports carry different
 # entry counts, 12 or 24 at Kimi, and all finish together), "index" = raw index in the port's send list (Refinement 3).
 TAIL_SPLIT_ESTIMATE = "share"
 # Helper choice for a split head: "pool" = idle cores first, then local-only cores (Refinement 3); "nearest" = the free
 # helper closest to the primary core (shortest forward path).
 TAIL_SPLIT_HELPER_PICK = "pool"
+# Tail M-split (OVERLAP, tail_chain experiment): the TAIL_MSPLIT_HEADS latest-landing remote heads of a chip are cut by
+# output rows into TAIL_MSPLIT_PIECES pieces. The SOURCE port delivers each piece's rows straight into its core's slot
+# (primary = piece 0, helpers = the rest) with its own arrival increment: no forward hop, and the earlier pieces start
+# their matmul while the entry's later rows are still on the link. Needs packing (a piece is a sub-entry of the packet
+# stream) and piece tiles >= packet tiles. Piece slots read all their weight n-blocks before the landing wait
+# (TAIL_MSPLIT_PREFETCH, capped at the cb_weight depth). 0 = off.
+TAIL_MSPLIT_HEADS = 4
+TAIL_MSPLIT_PIECES = 3
+TAIL_MSPLIT_PREFETCH = 2
 A_SLOT_BUDGET_BYTES = 384 * 1024  # predicate A_RESIDENT (regime R1; else R3, deferred)
 MAX_HEADS_PER_CORE = 8  # global arrival semaphores per compute core
 MAX_PACKET_HEADERS = 12  # packet header pool per data-movement RISC
@@ -457,9 +471,14 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
     pack = bool(int(_xp.get("pack", PACK_ACROSS_ENTRIES))) and packet_tiles <= slot_tiles
     dest_order = _xp.get("order", SEND_DEST_ORDER)
     batch_chunks = int(_xp.get("batch", max(1, PORT_BATCH_BYTES // packet_bytes)))
-    tail_max = int(_xp["tail"]) if "tail" in _xp else TAIL_SPLIT_MAX_HEADS
     tail_est = _xp.get("est", TAIL_SPLIT_ESTIMATE)
     tail_pick = _xp.get("pick", TAIL_SPLIT_HELPER_PICK)
+    tail_max = (
+        int(_xp["tail"]) if "tail" in _xp else (TAIL_SPLIT_MAX_HEADS_GROUPED if grouped else TAIL_SPLIT_MAX_HEADS)
+    )
+    ms_heads = int(_xp.get("ms", TAIL_MSPLIT_HEADS if grouped else 0))
+    ms_pieces = int(_xp.get("mp", TAIL_MSPLIT_PIECES))
+    ms_pre = int(_xp.get("mpre", TAIL_MSPLIT_PREFETCH))
     rd_noc, wr_noc = COMPUTE_READER_NOC, (
         COMPUTE_WRITER_NOC_L1_OUT if memory_config.buffer_type == ttnn.BufferType.L1 else COMPUTE_WRITER_NOC
     )
@@ -539,9 +558,19 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
             (xy for xy, hs in assign if all(h // Hl == q for h in hs) and fits(hs)), key=lambda xy: len(heads_of[xy])
         )
         helpers = idle + local_only
+        # M-split first: the ms latest heads, (pieces - 1) helpers each (pool order)
+        mplan = {}
+        if m_rows:
+            for _, _, h in est[:ms_heads]:
+                need = len(m_rows) - 1
+                if len(helpers) < need:
+                    break
+                mplan[h] = [None] + helpers[:need]  # piece 0 stays on the primary core
+                helpers = helpers[need:]
+        est = [e for e in est if e[2] not in mplan]
         n = len(helpers) if tail_max is None else min(len(helpers), tail_max)
         if tail_pick == "pool":
-            return {h: helpers[i] for i, (_, _, h) in enumerate(est[:n])}
+            return {h: helpers[i] for i, (_, _, h) in enumerate(est[:n])}, mplan
         # "nearest": latest-landing head first, each to the free helper with the shortest forward path
         free, plan = list(helpers), {}
         for _, _, h in est[:n]:
@@ -549,10 +578,31 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
             hx = min(free, key=lambda c: (abs(c[0] - px) + abs(c[1] - py), helpers.index(c)))
             free.remove(hx)
             plan[h] = hx
-        return plan
+        return plan, mplan
 
-    split_of = {coord: tail_plan(coord) for coord in chips}  # {coord: {h: helper xy}}
-    tail_split = any(split_of.values())
+    # M-split row pieces (rows of block_m, multiples of the subblock height, each >= one packet): computed after the
+    # final block_n below; the plan only needs the piece count, so fix it from block_m here.
+    def _m_rows(pieces, sb_h):
+        if ms_heads <= 0 or pieces < 2 or not pack:
+            return []
+        units = block_m // sb_h
+        pieces = min(pieces, units)
+        rows, u0 = [], 0
+        for i in range(pieces):
+            u1 = u0 + units // pieces + (1 if i < units % pieces else 0)
+            rows.append((u0 * sb_h, u1 * sb_h))
+            u0 = u1
+        if any((r1 - r0) * Kt < packet_tiles for r0, r1 in rows):
+            return []
+        return rows
+
+    # the subblock height under the halved block_n the split forces (same rule as below)
+    _bn_split = block_n // 2 if (num_n_blocks == 1 and block_n % 2 == 0) else block_n
+    m_rows = _m_rows(ms_pieces, _subblock(block_m, _bn_split, bool(compute_kernel_config.fp32_dest_acc_en))[0])
+    _plans = {coord: tail_plan(coord) for coord in chips}
+    split_of = {coord: v[0] for coord, v in _plans.items()}  # {coord: {h: helper xy}}
+    msplit_of = {coord: v[1] for coord, v in _plans.items()}  # {coord: {h: [None, helper xy, ...]}}
+    tail_split = any(split_of.values()) or any(msplit_of.values())
     if tail_split and num_n_blocks == 1:
         if block_n % 2:
             tail_split = False  # nothing to halve
@@ -562,28 +612,52 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
             sbh, sbw = _subblock(block_m, block_n, bool(compute_kernel_config.fp32_dest_acc_en))
     if not tail_split:
         split_of = {coord: {} for coord in chips}
+        msplit_of = {coord: {} for coord in chips}
+    assert (
+        not any(msplit_of.values())
+        or sbh == _subblock(block_m, _bn_split, bool(compute_kernel_config.fp32_dest_acc_en))[0]
+    )
     if "sb" in _xp:  # measurement hook: out_subblock_h x out_subblock_w ("hxw"), must tile the block
         sbh, sbw = (int(v) for v in _xp["sb"].split("x"))
         assert block_m % sbh == 0 and block_n % sbw == 0
+        assert not any(msplit_of.values()) or all(r % sbh == 0 for rr in m_rows for r in rr)
     nb_split = num_n_blocks // 2  # the primary keeps n-blocks [0, nb_split), the helper [nb_split, num_n_blocks)
 
-    # slots per (coord, core): [(h, wait, nb0, nb1, helper xy or None)]
+    # slots per (coord, core): [(h, wait, nb0, nb1, helper xy or None, m0, m1, piece)]  piece = M-split piece index or -1
     slots = {}
     for coord, ch in chips.items():
-        q, sp = ch["p"], split_of[coord]
+        q, sp, mp = ch["p"], split_of[coord], msplit_of[coord]
         for xy in compute_cells_list:
-            own = [
-                (h, h // Hl != q, 0, nb_split if h in sp else num_n_blocks, sp.get(h))
-                for h in slot_order(q, heads_of.get(xy, []))
+            own = []
+            for h in slot_order(q, heads_of.get(xy, [])):
+                if h in mp:
+                    own.append((h, True, 0, num_n_blocks, None, m_rows[0][0], m_rows[0][1], 0))
+                else:
+                    own.append((h, h // Hl != q, 0, nb_split if h in sp else num_n_blocks, sp.get(h), 0, block_m, -1))
+            own += [(h, True, nb_split, num_n_blocks, None, 0, block_m, -1) for h, hx in sp.items() if hx == xy]
+            own += [
+                (h, True, 0, num_n_blocks, None, m_rows[i][0], m_rows[i][1], i)
+                for h, hxs in mp.items()
+                for i, hx in enumerate(hxs)
+                if i > 0 and hx == xy
             ]
-            own += [(h, True, nb_split, num_n_blocks, None) for h, hx in sp.items() if hx == xy]
             if own:
                 slots[(coord, xy)] = own
     helper_slot = {
-        (coord, h): next(i for i, e in enumerate(slots[(coord, hx)]) if e[0] == h and e[2] == nb_split)
+        (coord, h): next(i for i, e in enumerate(slots[(coord, hx)]) if e[0] == h and e[2] == nb_split and e[7] < 0)
         for coord, sp in split_of.items()
         for h, hx in sp.items()
     }
+    # (destination coord, h) -> [(core xy, slot index, tiles)] per piece, in stream order
+    pieces_of = {}
+    for coord, mp in msplit_of.items():
+        for h, hxs in mp.items():
+            lst = []
+            for i, hx in enumerate(hxs):
+                xy = core_of[h] if hx is None else hx
+                si = next(k for k, e in enumerate(slots[(coord, xy)]) if e[0] == h and e[7] == i)
+                lst.append((xy, si, (m_rows[i][1] - m_rows[i][0]) * Kt))
+            pieces_of[(coord, h)] = lst
     slots_per_core_max = max(len(v) for v in slots.values())
     if slots_per_core_max > MAX_HEADS_PER_CORE:
         raise RuntimeError(f"all_to_all_matmul: {slots_per_core_max} head slots per core > {MAX_HEADS_PER_CORE}")
@@ -669,11 +743,13 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
             res.cap_tiles,
             landing_addr,
             tuple(sorted((str(c), sorted(sp.items())) for c, sp in split_of.items())),
+            tuple(sorted((str(c), sorted((h, str(v)) for h, v in mp.items())) for c, mp in msplit_of.items())),
+            tuple(m_rows),
             sorted(port_cells),
         )
     )
 
-    # Measurement hook (off by default): A2AMM_ABLATE=nowrite,noweight,nocompute,noportread,zones compiles the named
+    # Measurement hook (off by default): A2AMM_ABLATE=nowrite,noweight,nocompute,noportread,nosend,zones compiles the named
     # payload stubs / device zones into the kernels (ablation profiling; never set in production).
     _abl = [a for a in os.environ.get("A2AMM_ABLATE", "").split(",") if a]
     _defs = [("ABLATE_" + a.upper(), "1") for a in _abl]
@@ -721,15 +797,18 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
         reader_rt, compute_rt, writer_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         for xy in active_cells:
             rd, cp, wr = [], [], []
-            for h, wait, nb0, nb1, hx in slots.get((coord, xy), []):
-                nbw = nb0 | (nb1 << 16)
+            for h, wait, nb0, nb1, hx, m0, m1, piece in slots.get((coord, xy), []):
+                # nbw packs this core's n-blocks [nb0, nb1) and rows [m0, m1) of the head (tail M-split), 8 bits each
+                assert max(nb0, nb1, m0, m1) < 256
+                nbw = nb0 | (nb1 << 8) | (m0 << 16) | (m1 << 24)
                 fwd = [0, 0, 0, 0, 0]
                 if hx is not None:
                     hv, hs_ = virt(hx), helper_slot[(coord, h)]
                     fwd = [1, hv.x, hv.y, landing_addr + hs_ * slot_bytes, arrival_addrs[hs_]]
                 # paced weight start of a core's first slot (later slots follow the previous one's work)
                 pace = int(w_pace * landing_share(coord, h)) if (not rd and nb0 == 0) else 0
-                rd += [h | (int(wait) << 16), nbw] + fwd + [pace]
+                pre = max(1, min(weight_depth, ms_pre)) if piece >= 0 else w_prefetch
+                rd += [h | (int(wait) << 16) | (pre << 24), nbw] + fwd + [pace]
                 cp += [nbw]
                 wr += [h, nbw]
             n = len(cp)
@@ -796,11 +875,20 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
                 rc = virt(chips[tc]["ports"][(td, tl)])
                 args += [dest_coords.index(tc), rc.x, rc.y, ready_addrs[g]]
             args += [len(ents)]
+            subs = []
             for j, t in ents:
                 h = q * Hl + j
-                cv = virt(core_of[h])
-                s = slot_of[(t, h)]
-                args += [dest_coords.index(ch["grp"][t]), cv.x, cv.y, landing_addr + s * slot_bytes, arrival_addrs[s]]
+                di = dest_coords.index(ch["grp"][t])
+                pcs = pieces_of.get((ch["grp"][t], h))
+                if pcs is None:
+                    s = slot_of[(t, h)]
+                    pcs = [(core_of[h], s, slot_tiles)]
+                for pxy, s, nt in pcs:
+                    cv = virt(pxy)
+                    subs.append([di | (nt << 16), cv.x, cv.y, landing_addr + s * slot_bytes, arrival_addrs[s]])
+            args[-1] = len(subs)
+            for sub in subs:
+                args += sub
             if has_conn:
                 peer = ch["next"] if d == FWD else ch["prev"]
                 args += list(
