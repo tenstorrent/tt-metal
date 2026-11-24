@@ -32,8 +32,8 @@ class TappedModel(Inkling2Model):
 
     drafter: DSparkDrafter | None = None
     tapping = True  # False: plain Inkling2Model.step (A/B checks in one process)
-    # True: the step only stashes its taps (slot = its conv phase) and the step of the last slot commits the group
-    # in one pass (DSparkDrafter.stash_commit): a third of the per-step commit's small programs. For runs of plain
+    # True: the step only stashes its taps (slot = pos % STASH) and the step of the last slot commits the group
+    # in one pass (DSparkDrafter.stash_commit): an eighth of the per-step commit's small programs. For runs of plain
     # steps (a prompt feed, text the drafter does not predict): a draft needs every position before it committed,
     # so a group cut short is committed by stash_commit(n) first (SpecGenerator.ftrace).
     stash = False
@@ -43,8 +43,22 @@ class TappedModel(Inkling2Model):
             return super()._app(L, p, h, stack, n_sealed, msgs, row_out=row_out)
         if (L, p) in TAP_LP:  # h is a module buffer that later loop passes overwrite
             j = TAP_LP.index((L, p))
-            self._taps[(L, p)] = self.drafter.stash_put(self.phase, j, h) if self.stash else ttnn.clone(h)
-        return super()._app(L, p, h, stack, n_sealed, msgs, row_out=row_out or (L, p) in PRE_TAP_LP)
+            self._taps[(L, p)] = self.drafter.stash_put(self.slot, j, h) if self.stash else ttnn.clone(h)
+        res = super()._app(L, p, h, stack, n_sealed, msgs, row_out=row_out or (L, p) in PRE_TAP_LP)
+        self._release()  # the app before this one: its expert output was read by this app's first program
+        self._expert = getattr(self.layers[L].moe.fused, "release_last", None) if self.free_rows else None
+        return res
+
+    # Each expert step's output row (L1, kept alive for its twin) is freed once its consumer has run. An L1 buffer
+    # takes its bytes from the circular buffers of every core, and the 24 layers keep one row each (48 KB): room
+    # the expert prefetch ring needs beside the drafter's and the verify pass's programs (SpecGenerator).
+    free_rows = True
+    _expert = None
+
+    def _release(self):
+        if self._expert is not None:
+            self._expert()
+            self._expert = None
 
     def _rms(self, row, w):
         y = super()._rms(row, w)
@@ -57,13 +71,13 @@ class TappedModel(Inkling2Model):
             return super().step(force=force, collect=collect)
         self._taps = {}
         res = super().step(force=force, collect=collect)
+        self._release()
         if self.stash:
             d = self.drafter
-            d.stash_put(self.phase, len(TAP_LP), self._taps["final"])
-            if self.phase == STASH - 1:
+            d.stash_put(self.slot, len(TAP_LP), self._taps["final"])
+            if self.slot == STASH - 1:
                 d.stash_commit(STASH)
-            ttnn.copy(ttnn.reshape(res["token"], [1, 1]), d.anchor)
-            self._taps = {}
+            self._taps = {}  # (no anchor copy: the stash steps' caller writes the next draft's anchor itself)
             return res
         rows = [self._taps[k] for k in TAP_LP] + [self._taps["final"]]
         feats = ttnn.pad(ttnn.concat(rows, dim=2), [(0, 0), (0, 0), (0, 28), (0, 0)], 0.0)
@@ -75,8 +89,11 @@ class TappedModel(Inkling2Model):
         self._taps = {}
         return res
 
+    slot = 0  # stash slot of the step: pos % STASH
+
     def set_inputs(self, token, pos):
         super().set_inputs(token, pos)
+        self.slot = pos % STASH
         if self.tapping:
             self.drafter.set_commit_pos(pos)
 
@@ -137,6 +154,15 @@ class SpecGenerator(Generator):
         ttnn.copy(ttnn.reshape(tok, [1, 1]), self.drafter.anchor)
 
     def capture_rows(self, p_shared, p_split=None, before_capture=None):
+        try:
+            self._capture_rows(p_shared, before_capture)
+        except Exception:
+            if self.experts is not None:  # a queued prefetch request would hang the device close
+                self.experts.abort(self.model)
+                self.experts = None
+            raise
+
+    def _capture_rows(self, p_shared, before_capture=None):
         """Plain traces (Generator.capture), the draft trace, and per verify step (row count R) and conv phase the
         verify pass (far call shared or per token) and the commit of n = 1 .. R accepted rows. p_shared: a position
         >= 1024 whose pass shares the far chunk; the chunk-crossing position of each R is found from it (p_split:
@@ -160,6 +186,17 @@ class SpecGenerator(Generator):
             from models.demos.inkling2_mini.tt.mk.overlap import install
 
             self.overlap = m.overlap = install(m)
+            if self.use_experts:
+                # guessed-expert prefetch, as Generator.capture (the verify pass keeps the ring protocol). Its
+                # 240 KB L1 ring fits beside the drafter's and the verify pass's programs because the expert
+                # output rows are freed after use (TappedModel.free_rows, from the first step on: the staging
+                # tensor then sits 48 KB higher) and the multi-row expert step holds one gate_up column, not two
+                from models.demos.inkling2_mini.tt.mk.expert_overlap import ExpertOverlap
+
+                assert m.free_rows, "the expert ring needs TappedModel.free_rows from the first step on"
+                for lay in m.layers:
+                    lay.moe.fused.mr_cols = 1
+                self.experts = ExpertOverlap(m)
             self.router_stage = router_stage.install(m)
             m.step()
             m.step()

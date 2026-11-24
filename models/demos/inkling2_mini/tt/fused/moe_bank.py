@@ -184,14 +184,14 @@ def row_placement(device, per_bank):
 
 
 class BankMoeExperts:
-    def __init__(
-        self, device, w_gate_up, w_down, sbk=18, nbuf=3, bfp8_fidelity=ttnn.MathFidelity.HiFi2, x_mcast=True,
-        noc1_banks=NOC1_BANKS, dense_out=None,
-    ):  # fmt: skip
+    def __init__(self, device, w_gate_up, w_down, sbk=18, nbuf=3, bfp8_fidelity=ttnn.MathFidelity.HiFi2, x_mcast=True, noc1_banks=NOC1_BANKS, dense_out=None,):  # fmt: skip
         """``w_gate_up`` / ``w_down``: bank-layout DRAM tensors (``bank_weights`` or the bank cache), BFP4 or BFP8
         (each its own). Placement and flags: module doc. x_mcast: the collector reads x once and multicasts it
         (otherwise every gate_up core reads it). noc1_banks: banks whose workers read on NOC1 (writer on NOC0)."""
         self.pf = isinstance(w_gate_up, tuple)  # PF layout (pf_weights): (main, extra) per tensor
+        # gate_up columns the multi-row step's cb_w holds: 2 = the next column's read is in flight while compute
+        # works on one; 1 = 78 KB less L1 (BFP8), for a process whose L1 also holds the expert prefetch ring
+        self.mr_cols = 2
         self.ring = None  # set_ring
         if self.pf:
             (w_gate_up, self.gu_x), (w_down, self.dn_x) = w_gate_up, w_down
@@ -315,7 +315,7 @@ class BankMoeExperts:
             cores = [c for c, *_ in self.workers_info if ((c[0], c[1]) in flip) == sel]
             if not cores:
                 continue
-            pick = lambda args: [(k, v) for k, v in args if ((k.x, k.y) in flip) == sel]  # noqa: E731
+            pick = lambda args: [(k, v) for k, v in args if ((k.x, k.y) in flip) == sel]
             kernels += [
                 ttnn.KernelDescriptor(
                     kernel_source=f"{KDIR}/moe_bank_mr_reader.cpp", core_ranges=_range_set(cores),
@@ -375,6 +375,22 @@ class BankMoeExperts:
             self._last_rows = y
         return y
 
+    def release_last(self):
+        """As release_rows, for the 1-row step's output."""
+        if self._last is not None:
+            F._TWIN.pop(id(self._last), None)
+            ttnn.deallocate(self._last)
+            self._last = None
+
+    def release_rows(self):
+        """Free the last multi-row output (an L1 row tensor, kept alive for its twin) once its consumer has run:
+        an L1 buffer lowers the room for circular buffers on every core, and 24 layers keep one each."""
+        last = getattr(self, "_last_rows", None)
+        if last is not None:
+            F._TWIN.pop(id(last), None)
+            ttnn.deallocate(last)
+            self._last_rows = None
+
     def _cbs_rows(self, R):
         tiny = ttnn.TileDescriptor(ttnn.Tile([1, 32]))
         bf = ttnn.bfloat16
@@ -389,7 +405,7 @@ class BankMoeExperts:
         w = self.workers
         return [
             cb(_range_set([c for c, *_ in self.workers_info] + [self.collector]), R * KT_GU * 64, (CB_X, bf, 64, tiny)),
-            cb(w, 2 * KT_GU * gtile, (CB_W, self.w_gate_up.dtype, gtile, t32)),  # two whole columns
+            cb(w, self.mr_cols * KT_GU * gtile, (CB_W, self.w_gate_up.dtype, gtile, t32)),  # whole columns
             cb(w, HID_TILES * dtile, (CB_WD, self.w_down.dtype, dtile, t32)),  # 8 down slots
             cb(w, R * TOP_K * 64, (12, bf, 64, tiny)),  # A out, 8 R tiles
             cb(w, R * 2048, (CB_G32, bf, 2048, t32)),

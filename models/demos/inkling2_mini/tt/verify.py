@@ -201,6 +201,9 @@ class VerifyStep:
         out = F.per_row(dev, R, lambda r: lay.conv_mlp.conv_add(
             yy, conv_m, (self.phase + r) % FusedShortConv.PHASES, resid[r], ttnn.bfloat16, row_out=True, x_row=r,
             slot=pend_m[r]))  # fmt: skip
+        release = getattr(lay.moe.fused, "release_rows", None)
+        if release is not None:  # yy is consumed: its L1 does not stay through the other 47 applications
+            release()
         return list(out), n_sealed
 
     def step(self):

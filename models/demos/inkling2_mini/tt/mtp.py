@@ -41,7 +41,7 @@ HIDDEN, NH, NKV, D, RANK = 2304, 24, 8, 128, 256
 GROUPS = NH // NKV
 BLOCK, WINDOW, THETA, EPS, NEG, SOFTCAP = 8, 1024, 1.0e6, 1e-6, -1.0e9, 30.0
 N_LAYERS, LOCAL = 3, (0, 2)
-STASH = 4  # positions per stash group (the decode step's conv phases: one traced step per slot)
+STASH = 8  # positions per stash group (one traced step per slot; 16 measured the same)
 TAP_APPS = (5, 23, 41)  # + final norm output (visit 48)
 
 
@@ -170,12 +170,9 @@ class DSparkDrafter:
         # stash[r] = the 4 feats rows of position p0 + r (allocated by the first eager stash step)
         self.stash = [[None] * (len(TAP_APPS) + 1) for _ in range(STASH)]
         self.stash_pos = ttnn.from_torch(torch.zeros(1, dtype=torch.int32), dtype=ttnn.int32, device=dev)  # p0
-        self.stash_ids = {
-            n: ttnn.from_torch(
-                torch.zeros(1, n, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev
-            )
-            for n in range(1, STASH + 1)
-        }  # fmt: skip  positions p0 .. p0 + n - 1 (commit_rows RoPE rows)
+        self.stash_ids = ttnn.from_torch(
+            torch.zeros(1, STASH, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev
+        )  # positions p0 .. p0 + STASH - 1 (commit_rows RoPE rows)
         self._f_rnn_rows = {}  # rows -> commit_rows f_rnn buffer
         # p + 7, once per kv group (the flash-decode batch)
         self.cur_pos = ttnn.from_torch(torch.zeros(NKV, dtype=torch.int32), dtype=ttnn.int32, device=dev)
@@ -280,8 +277,9 @@ class DSparkDrafter:
             runtime_args=[(c, a) for c, a in zip(self.kv_cores, rt)],
             config=ttnn.ReaderConfigDescriptor(),
         )
-        fmt = ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.bfloat16, page_size=4096 + 128)
-        cb = ttnn.CBDescriptor(total_size=4096 + 128, core_ranges=crs, format_descriptors=[fmt])
+        size = max(4096, n * 512) + 128  # the kernel stages 64 B of pos + n rows x 4 tiles x 2 pieces of 64 B
+        fmt = ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.bfloat16, page_size=size)
+        cb = ttnn.CBDescriptor(total_size=size, core_ranges=crs, format_descriptors=[fmt])
         ttnn.generic_op([k, v, pos, kc, vc], ttnn.ProgramDescriptor(kernels=[kern], cbs=[cb], semaphores=[]))
 
     # ------------------------------------------------------------ host inputs
@@ -374,9 +372,10 @@ class DSparkDrafter:
         ttnn.copy_host_to_device_tensor(
             ttnn.from_torch(torch.tensor([p0], dtype=torch.int32), dtype=ttnn.int32), self.stash_pos
         )
-        for n, t in self.stash_ids.items():
-            ids = torch.arange(p0, p0 + n, dtype=torch.int32).view(1, n)
-            ttnn.copy_host_to_device_tensor(ttnn.from_torch(ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT), t)
+        ids = torch.arange(p0, p0 + STASH, dtype=torch.int32).view(1, STASH)
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT), self.stash_ids
+        )
 
     def stash_put(self, r, j, row):
         """feats row j ([1, 1, 1, C]) of the group's position r. Returns the stash buffer."""
@@ -386,9 +385,11 @@ class DSparkDrafter:
         return self.stash[r][j]
 
     def stash_commit(self, n):
-        """commit() of the group's first n positions in one pass (commit_rows), f_rnn = the last one's."""
-        feats = ttnn.concat([x for r in range(n) for x in self.stash[r]], dim=2)
-        self.commit_rows(feats, self.stash_pos, self.stash_ids[n])
+        """commit() of the group's first n positions in one pass (commit_rows), f_rnn = the last one's. The pass
+        always takes the whole group (one set of programs for every n): the slots past n hold older rows, which
+        land at positions >= p0 + n that their own commit rewrites before any draft reads them."""
+        feats = ttnn.concat([x for r in range(STASH) for x in self.stash[r]], dim=2)
+        self.commit_rows(feats, self.stash_pos, self.stash_ids)
         ttnn.copy(ttnn.slice(self.f_rnn_rows, [0, 0, n - 1, 0], [1, 1, n, HIDDEN]), self.f_rnn)
 
     def commit_chunk(self, taps, s, n=None):
