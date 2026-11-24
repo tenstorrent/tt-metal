@@ -150,7 +150,7 @@ def _run_slice_write(mesh, out_shape, num_slices, dtype, layout, in_mem_fn):
         r1 = min(r0 + step, h)
         part = x[:, r0:r1]
         tt_part = U.to_tt(part, mesh, dtype=dtype, layout=layout)
-        tt_part = ttnn.to_memory_config(tt_part, in_mem_fn(r1 - r0))
+        tt_part = U.op("to_memory_config")(tt_part, in_mem_fn(r1 - r0))
         expected[:, r0:r1] = U.seen(tt_part, part, mesh)  # bfloat8_b: what the device holds
         U.op("slice_write", experimental=True)(tt_part, tt_out, [0, r0, 0, 0], [n, r1, w, c], [1, 1, 1, 1])
     U.assert_lossless(expected, tt_out, mesh_device=mesh)

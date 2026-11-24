@@ -13,7 +13,7 @@
 #include "rtoptions.hpp"
 #include "dev_mem_map.h"
 #include "eth_fw_api.h"
-#include "hal_types.hpp"
+#include "llrt/hal_types.hpp"
 #include "hostdev/l1_ecc_halt_constants.h"
 #include "llrt/hal.hpp"
 #include "noc/noc_overlay_parameters.h"

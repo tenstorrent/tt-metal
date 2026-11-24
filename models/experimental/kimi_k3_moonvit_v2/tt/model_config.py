@@ -27,11 +27,19 @@ if TYPE_CHECKING:
 
 # The processor's `in_patch_limit` (`preprocessor_config.json`).
 IN_PATCH_LIMIT = 65536
+# The largest grid the processor can produce for any image size: 510x132, from a 1889x7377 image.
+# `in_patch_limit` is not a hard cap on it: the processor applies the limit to the image's whole
+# patches before the resize, which rounds them down, and pads to 28 px after it.
+MAX_PROCESSOR_PATCHES = 67320
 # The layout the model targets: the padded sequence, RING_MAX_PATCHES rows, split over a ring of
-# RING_SIZE chips. The padded length is the processor's patch limit. One device without the split
-# runs at most one ring chip's share of it, ONE_DEVICE_MAX_PATCHES rows (`resolve_parallel`).
+# RING_SIZE chips. The padded length is MAX_PROCESSOR_PATCHES rounded up to what `resolve_parallel`
+# accepts (a multiple of RING_SIZE * merge area * 32), so every image the processor makes fits. One
+# device without the split runs at most one ring chip's share of it, ONE_DEVICE_MAX_PATCHES rows.
 RING_SIZE = 4
-RING_MAX_PATCHES = IN_PATCH_LIMIT
+# Default `MoonViTConfig.merge_kernel_size`, defined here so the row multiple can use it.
+MERGE_KERNEL_SIZE = (2, 2)
+_ROW_MULTIPLE = RING_SIZE * MERGE_KERNEL_SIZE[0] * MERGE_KERNEL_SIZE[1] * 32
+RING_MAX_PATCHES = -(-MAX_PROCESSOR_PATCHES // _ROW_MULTIPLE) * _ROW_MULTIPLE  # 67,584
 ONE_DEVICE_MAX_PATCHES = RING_MAX_PATCHES // RING_SIZE
 
 
@@ -56,10 +64,10 @@ class MoonViTConfig:
     max_side_patches: int = 512
     in_patch_limit: int = IN_PATCH_LIMIT
     # Device row count: every image is padded to `max_patches` rows, and ring attention masks the
-    # padding. Images whose grid exceeds it are rejected, never shrunk to fit.
+    # padding. The default holds every grid the processor makes; a grid over it is rejected.
     max_patches: int = RING_MAX_PATCHES
     # Patch merger (`sd2_tpool`): each 2x2 window of patches becomes one token.
-    merge_kernel_size: tuple[int, int] = (2, 2)
+    merge_kernel_size: tuple[int, int] = MERGE_KERNEL_SIZE
     # Projector (`patchmergerv2`): merged token -> language-model width, then RMSNorm.
     text_hidden_size: int = 7168
     projector_norm_eps: float = 1e-5

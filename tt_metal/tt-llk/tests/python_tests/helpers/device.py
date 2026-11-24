@@ -268,21 +268,24 @@ _CLOCK_KEEPALIVE_READS = (
 
 def recover_tensix_core(location: str = "0,0", device_id=0):
     """After a hang: a math op stuck waiting for SrcA/SrcB survives the TRISC soft reset (#64272), so satisfy the wait
-    from thread 0, then clear the flags and reset the pipeline units. Wormhole and Blackhole only.
+    from thread 0, then clear the flags and reset the pipeline units.
     """
-    if get_chip_architecture() == ChipArchitecture.QUASAR:
-        return
     store = get_register_store(location, device_id)
-    debug_tensix = TensixDebug(
-        OnChipCoordinate.create(location, device=check_context().devices[device_id])
-    )
+    debug_tensix = None
+    if get_chip_architecture() != ChipArchitecture.QUASAR:
+        debug_tensix = TensixDebug(
+            OnChipCoordinate.create(location, device=check_context().devices[device_id])
+        )
     held = store.read_register("RISCV_DEBUG_REG_SOFT_RESET_0") | get_soft_reset_mask(
         ALL_CORES
     )
     store.write_register("RISCV_DEBUG_REG_SOFT_RESET_0", held)
-    ops = debug_tensix.device.instructions
-    debug_tensix.inject_instruction(ops.TT_OP_SETDVALID(_SRCA_SRCB), 0)  # thread 0
-    debug_tensix.inject_instruction(ops.TT_OP_CLEARDVALID(_SRCA_SRCB, 0), 0)  # thread 0
+    if debug_tensix is not None:
+        ops = debug_tensix.device.instructions
+        debug_tensix.inject_instruction(ops.TT_OP_SETDVALID(_SRCA_SRCB), 0)  # thread 0
+        debug_tensix.inject_instruction(
+            ops.TT_OP_CLEARDVALID(_SRCA_SRCB, 0), 0
+        )  # thread 0
     # Unit clocks are gated when idle: reads keep them running while the wait drains and the reset is asserted.
     for _ in range(_CLOCK_KEEPALIVE_READS):
         store.read_register("RISCV_DEBUG_REG_SOFT_RESET_0")

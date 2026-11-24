@@ -62,7 +62,7 @@ RUN --mount=type=bind,target=/ctx \
       | tar -C /out/tt-metal -xf - \
     && test -x /out/tt-metal/build/tools/scaleout/run_cluster_validation \
     && test -d /out/tt-metal/runtime/sfpi \
-    && test -d /out/tt-metal/tt_metal/third_party/umd/tests \
+    && test -d /out/tt-metal/tt_metal/third_party/umd/descriptors \
     && chmod -R a+rwX /out/tt-metal
 
 #############################################################
@@ -158,13 +158,12 @@ RUN --mount=from=uv,source=/uv,target=/usr/local/bin/uv \
 
 COPY --from=tree --link --chown=1001:1001 /out/tt-metal /home/user/tt-metal
 
-# UMD api_tests embed UMD_TESTS_ROOT_PATH=/work/tt_metal/third_party/umd/tests at compile time.
-# The metal build runs at /work, but this image keeps sources under /home/user/tt-metal.
+# UMD api_tests locate their YAML descriptors relative to the working directory unless
+# UMD_DESCRIPTORS_PATH is set; this image keeps sources under /home/user/tt-metal.
 # COPY creates the destination directory itself 0755, whatever the source's mode, so it and
 # /home/user are opened up here, for cross-user MPI runs that write generated/ at the root.
-RUN mkdir -p /work/tt_metal/third_party/umd \
-    && ln -sfn /home/user/tt-metal/tt_metal/third_party/umd/tests /work/tt_metal/third_party/umd/tests \
-    && chmod 0777 /home/user /home/user/tt-metal
+ENV UMD_DESCRIPTORS_PATH=/home/user/tt-metal/tt_metal/third_party/umd/descriptors
+RUN chmod 0777 /home/user /home/user/tt-metal
 
 ENV PYTHONPATH=/home/user/tt-metal
 ENV LD_LIBRARY_PATH=/home/user/tt-metal/build/lib

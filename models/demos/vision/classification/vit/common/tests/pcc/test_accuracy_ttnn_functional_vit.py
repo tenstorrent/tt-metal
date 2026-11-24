@@ -13,7 +13,12 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.vision.classification.vit.common.common import load_torch_model
-from models.demos.vision.classification.vit.common.tests.vit_helper_funcs import get_batch, get_data_loader
+from models.demos.vision.classification.vit.common.tests.vit_helper_funcs import (
+    IMAGE_DIR_ENV,
+    get_batch,
+    get_data_loader,
+    image_dir,
+)
 from models.demos.vision.classification.vit.common.tt import ttnn_functional_vit
 
 
@@ -48,6 +53,8 @@ def test_accuracy(
     functional_vit,
     model_location_generator,
 ):
+    if image_dir() is None:
+        pytest.skip(f"Set {IMAGE_DIR_ENV} to a labelled image folder to measure the accuracy")
     model = load_torch_model(model_location_generator)
     config = model.config
 
@@ -93,7 +100,7 @@ def test_accuracy(
     iterations = 50
     imagenet_label_dict = get_imagenet_label_dict()
 
-    data_loader = get_data_loader("ImageNet_data", batch_size, iterations)
+    data_loader = get_data_loader(batch_size, iterations)
     correct = 0
     for iter in range(iterations):
         predictions = []

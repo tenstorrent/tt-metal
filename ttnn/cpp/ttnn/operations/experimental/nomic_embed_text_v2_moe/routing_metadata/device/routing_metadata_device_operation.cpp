@@ -53,31 +53,56 @@ void check_input(const Tensor& tensor, std::string_view name, DataType dtype) {
 
 RoutingMetadataLayout RoutingMetadataDeviceOperation::compute_layout(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    const auto& indices = tensor_args.indices;
-    const auto& values = tensor_args.values;
-    check_input(indices, "indices", DataType::UINT32);
-    check_input(values, "values", DataType::FLOAT32);
+    const auto& [indices, values, scores] = tensor_args;
+    const bool select = scores.has_value();
+    TT_FATAL(
+        select != indices.has_value() && indices.has_value() == values.has_value(),
+        "routing_metadata: takes indices with values, or scores, not both");
+    TT_FATAL(select == (attributes.top_k > 0), "routing_metadata: top_k goes with scores, and only with scores");
+    const Tensor& input = select ? *scores : *indices;
+    if (select) {
+        check_input(input, "scores", DataType::FLOAT32);
+    } else {
+        check_input(input, "indices", DataType::UINT32);
+        check_input(*values, "values", DataType::FLOAT32);
+    }
 
-    const auto& shape = indices.logical_shape();
+    const auto& shape = input.logical_shape();
     TT_FATAL(
         shape.rank() == 4 && shape[0] == 1 && shape[1] == 1,
-        "routing_metadata: indices must be 1 x 1 x tokens x top_k, got {}",
+        "routing_metadata: {} must be 1 x 1 x tokens x {}, got {}",
+        select ? "scores" : "indices",
+        select ? "columns" : "top_k",
         shape);
-    TT_FATAL(values.device() == indices.device(), "routing_metadata: values must be on the device of indices");
-    TT_FATAL(
-        values.logical_shape() == shape,
-        "routing_metadata: values must have the shape of indices {}, got {}",
-        shape,
-        values.logical_shape());
+    if (!select) {
+        TT_FATAL(values->device() == input.device(), "routing_metadata: values must be on the device of indices");
+        TT_FATAL(
+            values->logical_shape() == shape,
+            "routing_metadata: values must have the shape of indices {}, got {}",
+            shape,
+            values->logical_shape());
+    }
 
     const uint32_t total_tokens = shape[2];
-    const uint32_t top_k = shape[3];
+    const uint32_t top_k = select ? attributes.top_k : shape[3];
     TT_FATAL(top_k >= 1 && top_k <= kMaxTopK, "routing_metadata: top_k must be 1 to {}, got {}", kMaxTopK, top_k);
     TT_FATAL(
         attributes.num_experts >= 1 && attributes.num_experts <= kMaxExperts,
         "routing_metadata: num_experts must be 1 to {}, got {}",
         kMaxExperts,
         attributes.num_experts);
+    if (select) {
+        TT_FATAL(
+            shape[3] >= attributes.num_experts,
+            "routing_metadata: scores must have a column for each of the {} experts, got {}",
+            attributes.num_experts,
+            shape[3]);
+        TT_FATAL(
+            top_k <= attributes.num_experts,
+            "routing_metadata: top_k {} is above the {} experts to select from",
+            top_k,
+            attributes.num_experts);
+    }
     TT_FATAL(
         attributes.token_start % kBlockRows == 0,
         "routing_metadata: token_start must be a multiple of {}, got {}",
@@ -104,6 +129,9 @@ RoutingMetadataLayout RoutingMetadataDeviceOperation::compute_layout(
 
     const uint32_t num_blocks = tt::div_up(top_k * attributes.num_tokens, kBlockRows) + attributes.num_experts - 1;
     return RoutingMetadataLayout{
+        .select = select,
+        .score_groups = select ? tt::div_up(attributes.num_experts, tt::constants::FACE_WIDTH) : 0,
+        .score_tiles_per_row = select ? tt::div_up(shape[3], tt::constants::TILE_WIDTH) : 0,
         .top_k = top_k,
         .num_blocks = num_blocks,
         .gathered_rows = num_blocks * kBlockRows,
@@ -144,7 +172,7 @@ RoutingMetadataDeviceOperation::tensor_return_value_t RoutingMetadataDeviceOpera
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto [gather_index, combine_index, combine_weights, expert_counts] =
         compute_output_specs(attributes, tensor_args);
-    auto* device = tensor_args.indices.device();
+    auto* device = (tensor_args.scores.has_value() ? tensor_args.scores : tensor_args.indices)->device();
     return {
         create_device_tensor(gather_index, device),
         create_device_tensor(combine_index, device),
@@ -158,12 +186,18 @@ RoutingMetadataDeviceOperation::tensor_return_value_t RoutingMetadataDeviceOpera
 namespace ttnn::prim {
 
 std::tuple<Tensor, Tensor, Tensor, Tensor> routing_metadata(
-    const Tensor& indices, const Tensor& values, uint32_t num_experts, uint32_t token_start, uint32_t num_tokens) {
+    const std::optional<Tensor>& indices,
+    const std::optional<Tensor>& values,
+    const std::optional<Tensor>& scores,
+    uint32_t num_experts,
+    uint32_t top_k,
+    uint32_t token_start,
+    uint32_t num_tokens) {
     using Operation = ttnn::experimental::nomic_embed_text_v2_moe::RoutingMetadataDeviceOperation;
     return ttnn::device_operation::launch<Operation>(
         Operation::operation_attributes_t{
-            .num_experts = num_experts, .token_start = token_start, .num_tokens = num_tokens},
-        Operation::tensor_args_t{.indices = indices, .values = values});
+            .num_experts = num_experts, .top_k = top_k, .token_start = token_start, .num_tokens = num_tokens},
+        Operation::tensor_args_t{.indices = indices, .values = values, .scores = scores});
 }
 
 }  // namespace ttnn::prim
