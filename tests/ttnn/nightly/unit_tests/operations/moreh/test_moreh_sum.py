@@ -123,7 +123,7 @@ def get_backward_tensors(
 
 
 def moreh_sum(input_shape, dim, keepdim, use_provide_output, compute_kernel_options, device, dtype=ttnn.bfloat16):
-    (tt_input, tt_output, _, _, torch_input) = get_tensors(input_shape, dim, device, keepdim=keepdim, npu_dtype=dtype)
+    tt_input, tt_output, _, _, torch_input = get_tensors(input_shape, dim, device, keepdim=keepdim, npu_dtype=dtype)
     torch_output = torch.sum(torch_input, dim, keepdim)
 
     if not use_provide_output:
@@ -292,7 +292,7 @@ def test_moreh_sum_fp32_dest_acc(input_shape, dim, compute_kernel_options, devic
 
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
 
-    (tt_input, tt_output, _, torch_output_shape, torch_input) = get_tensors(
+    tt_input, tt_output, _, torch_output_shape, torch_input = get_tensors(
         input_shape, dim, device, use_randint=False, keepdim=True
     )
     torch_input = torch_input.float()
@@ -322,10 +322,10 @@ def moreh_sum_backward(
 
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
 
-    (tt_input, _, tt_output_shape, torch_output_shape, torch_input) = get_tensors(
+    tt_input, _, tt_output_shape, torch_output_shape, torch_input = get_tensors(
         input_shape, dim, device, keepdim=keepdim, npu_dtype=dtype
     )
-    (tt_output_grad, tt_input_grad, torch_output_grad) = get_backward_tensors(
+    tt_output_grad, tt_input_grad, torch_output_grad = get_backward_tensors(
         tt_output_shape, torch_output_shape, input_shape, device, npu_dtype=dtype
     )
 
@@ -474,10 +474,10 @@ def test_moreh_sum_backward_fp32_dest_acc(input_shape, dim, compute_kernel_optio
 
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
 
-    (tt_input, _, tt_output_shape, torch_output_shape, torch_input) = get_tensors(
+    tt_input, _, tt_output_shape, torch_output_shape, torch_input = get_tensors(
         input_shape, dim, device, use_randint=False
     )
-    (tt_output_grad, tt_input_grad, torch_output_grad) = get_backward_tensors(
+    tt_output_grad, tt_input_grad, torch_output_grad = get_backward_tensors(
         tt_output_shape, torch_output_shape, input_shape, device, use_randint=False
     )
 
@@ -541,7 +541,7 @@ def test_moreh_sum_integer(input_shape, dim, data_type, device):
     torch.manual_seed(3072)
 
     compute_kernel_config = get_compute_kernel_options(True)
-    (tt_input, tt_output, tt_output_shape, _, torch_input) = get_tensors(
+    tt_input, tt_output, tt_output_shape, _, torch_input = get_tensors(
         input_shape, dim, device, use_randint=True, keepdim=True, npu_dtype=data_type, cpu_dtype=torch.int64
     )
 
@@ -580,7 +580,7 @@ def test_moreh_sum_large_integer_magnitude(input_shape, dim, device):
     torch.manual_seed(3072)
 
     compute_kernel_config = get_compute_kernel_options(True)
-    (tt_input, tt_output, tt_output_shape, _, torch_input) = get_tensors(
+    tt_input, tt_output, tt_output_shape, _, torch_input = get_tensors(
         input_shape,
         dim,
         device,
@@ -648,3 +648,21 @@ def test_moreh_sum_empty_dims(device, input_shape, dim, dtype, use_provide_outpu
     result = ttnn.operations.moreh.sum(tt_input, dim=dim, keepdim=True, output=tt_output)
     assert list(result.shape) == list(torch_output.shape)
     assert torch.equal(ttnn.to_torch(result).to(torch_dtype), torch_output)
+
+
+@pytest.mark.parametrize(
+    "output_shape, output_dtype, message",
+    [
+        ([1, 1, 32, 1], ttnn.int32, "must match the input dtype"),
+        ([1, 1, 64, 1], ttnn.bfloat16, "must equal output dimension"),
+    ],
+    ids=["wrong_dtype", "wrong_shape"],
+)
+def test_moreh_sum_empty_input_still_validated(device, output_shape, output_dtype, message, expect_error):
+    # An empty input skips the program, but a provided output must still be checked.
+    tt_input = ttnn.from_torch(
+        torch.ones([1, 1, 32, 0], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    tt_output = ttnn.from_torch(torch.zeros(output_shape), dtype=output_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, message):
+        ttnn.operations.moreh.sum(tt_input, dim=3, keepdim=True, output=tt_output)
