@@ -19,7 +19,6 @@
 #include <tt-metalium/mesh_device.hpp>
 
 #include "fabric_fixture.hpp"
-#include "impl/buffers/dram_sender_topology.hpp"
 #include "impl/context/metal_context.hpp"
 #include "llrt/hal.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
@@ -38,7 +37,6 @@ using tt::tt_fabric::host_rdma::WriteRequest;
 constexpr uint32_t kCounterOffset = 0;
 constexpr uint32_t kDataOffset = 64;
 constexpr uint32_t kSrcOffset = 768 * 1024;
-constexpr uint32_t kServiceDramBank = 0;
 
 template <tt_fabric::FabricConfig CONFIG>
 class HostRdmaFixture : public BaseFabricFixture {
@@ -89,19 +87,34 @@ protected:
         tt::tt_metal::CoreCoord core;
     };
 
+    // The first DRAM core metal takes on `chip` whose NIU is in stream mode on the NoC the fabric routers credit the
+    // service on. Under TT_METAL_DRAM_KERNEL_SEATS, metal takes only the seats that names.
+    tt::tt_metal::CoreCoord service_core(const Chip& chip) {
+        auto& context = tt::tt_metal::MetalContext::instance();
+        const auto& soc_desc = context.get_cluster().get_soc_desc(chip.chip);
+        const auto& router_config =
+            context.get_control_plane().get_fabric_context().get_builder_context().get_fabric_router_config();
+        const uint32_t credit_noc = router_config.requires_forced_assignment_to_noc1() ? 1 : 0;
+        for (const tt::tt_metal::CoreCoord& logical : soc_desc.get_metal_dram_cores(tt::CoordSystem::LOGICAL)) {
+            const uint8_t noc2axi_nius =
+                soc_desc.get_dram_endpoint_noc_mask(soc_desc.get_physical_dram_core_from_logical(logical));
+            if (((noc2axi_nius >> credit_noc) & 1u) == 0) {
+                return logical;
+            }
+        }
+        TT_THROW("Chip {} has no DRAM core for the host_rdma service on NOC{}", chip.chip, credit_noc);
+    }
+
     tt::tt_fabric::host_rdma::HostRdmaService& service(const Chip& chip) {
         auto it = services_.find(chip.chip);
         if (it == services_.end()) {
-            // A DRAM core that serves no DRAM view: both of its NIUs are in stream mode, so it suits either NoC the
-            // fabric routers credit the service on.
-            const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(chip.chip);
-            const tt::tt_metal::CoreCoord service_core =
-                tt::tt_metal::pick_unused_dram_logical_core(soc_desc, kServiceDramBank, chip.chip);
             it = services_
                      .emplace(
                          chip.chip,
                          tt::tt_fabric::host_rdma::HostRdmaService::create(
-                             devices_map_.at(chip.chip), service_core, tt::tt_fabric::host_rdma::ServiceCore::Dram))
+                             devices_map_.at(chip.chip),
+                             service_core(chip),
+                             tt::tt_fabric::host_rdma::ServiceCore::Dram))
                      .first;
         }
         return *it->second;
