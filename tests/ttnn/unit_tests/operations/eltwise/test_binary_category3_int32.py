@@ -48,7 +48,7 @@ converts both operands to float32 (rounding |x| > 2^24, as torch does) and
 divides with one residual correction step, so the golden is torch.div on the
 int32 tensors: float32(a) / float32(b). The rounding modes, remainder and
 fmod are integer kernels and exact, as is torch.floor_divide; INT32_MIN / -1
-is undefined under trunc and floor and is not checked.
+wraps to INT32_MIN.
 
 The int32 divide kernel loads its operands in sign-magnitude form, where
 INT32_MIN (0x80000000) is -0, so INT32_MIN / b gives 0 and a / INT32_MIN
@@ -255,18 +255,15 @@ def test_int32_integer_division_ops(device, ttnn_op, mode):
 
     | Input range | Check | Reason                                          |
     |-------------|-------|-------------------------------------------------|
-    | b ≠ 0       | exact | integer kernels; INT32_MIN / -1 is undefined    |
-    |             |       | under trunc and floor and is not checked        |
+    | b ≠ 0       | exact | integer kernels; INT32_MIN / -1 wraps to        |
+    |             |       | INT32_MIN under trunc and floor                 |
     """
     input_a, input_b = int32_pairwise_inputs()
     input_b = _nonzero(input_b)
 
     result = _run_int_division(device, ttnn_op, mode, input_a, input_b)
     assert result.dtype == torch.int32, f"expected an int32 result, got {result.dtype}"
-    valid = torch.ones_like(input_a, dtype=torch.bool)
-    if mode in ("trunc", "floor"):
-        valid &= ~((input_a == INT32_MIN) & (input_b == -1))
-    assert_equal(_int_division_golden(mode, input_a, input_b)[valid], result[valid])
+    assert_equal(_int_division_golden(mode, input_a, input_b), result)
 
 
 @pytest.mark.parametrize("scalar", DIVISOR_SCALARS)
@@ -276,18 +273,13 @@ def test_int32_integer_division_ops_scalar(device, ttnn_op, mode, scalar):
 
     | Input range | Check | Reason                                          |
     |-------------|-------|-------------------------------------------------|
-    | full grid   | exact | the scalar is packed as an int32; INT32_MIN /   |
-    |             |       | -1 is undefined under trunc and floor and is    |
-    |             |       | not checked                                     |
+    | full grid   | exact | the scalar is packed as an int32                |
     """
     input_a = scalar_rows(generate_int32_binary_grid())
 
     result = _run_int_division(device, ttnn_op, mode, input_a, scalar)
     assert result.dtype == torch.int32, f"expected an int32 result, got {result.dtype}"
-    valid = torch.ones_like(input_a, dtype=torch.bool)
-    if mode in ("trunc", "floor") and scalar == -1:
-        valid &= input_a != INT32_MIN
-    assert_equal(_int_division_golden(mode, input_a, scalar)[valid], result[valid])
+    assert_equal(_int_division_golden(mode, input_a, scalar), result)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
