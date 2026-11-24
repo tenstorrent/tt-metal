@@ -185,9 +185,11 @@ def build_sparse_perf_case(
     if full_indexer_layers:
         full_layer_indices = [i for i, mode in enumerate(config.indexer_types) if mode == "full"]
         assert len(full_layer_indices) == full_indexer_layers
-        # GLM-5.3: the last full layer starts a two-layer stage; its index-K cache holds the stage's one full layer.
-        mla_layer_idx = first_layer_idx = full_layer_indices[-1]
-        mla_layer_num = 2
+        # GLM-5.3: the last full layer in a stage from the previous full layer to its successor, so the ring score reads
+        # a real index-K slot (1 of 2) and the layer pushes its successor's prefix.
+        first_layer_idx, mla_layer_idx = full_layer_indices[-2:]
+        cache_layer_idx = mla_layer_idx - first_layer_idx
+        mla_layer_num, index_cache_layers = cache_layer_idx + 2, 2
     # Kimi-K3.1: the last DSA layer's slot of a 24-slot cache.
     if variant.name == "kimi_k3_1" and has_indexer:
         mla_layer_ids = variant.model_config.mla_layer_ids()
@@ -270,7 +272,7 @@ def build_sparse_perf_case(
     ttnn.deallocate(kvpe_cache.storage)
     del case, mla, kvpe_cache, index_kv_cache
     gc.collect()
-    # The shared layer after the full layer, in a stage of three, so it has a shared successor to push for.
+    # The shared layer after the full layer, in the same stage extended by one layer, so it has a shared successor.
     assert config.indexer_types[mla_layer_idx + 1 : mla_layer_idx + 3] == ["shared"] * 2
     shared = ttMLA(
         config,
@@ -283,8 +285,8 @@ def build_sparse_perf_case(
         tp_axis=tp_axis,
         is_chunked=True,
         active_seq_len=chunk,
-        layer_num=3,
-        first_layer_idx=mla_layer_idx,
+        layer_num=mla_layer_num + 1,
+        first_layer_idx=first_layer_idx,
         has_indexer=True,
         sparse_kv_cache_format=kv_cache_format,
     )
@@ -295,7 +297,7 @@ def build_sparse_perf_case(
         seq_len=total,
         mesh_shape=list(mesh_device.shape),
         sp_axis=sp_axis,
-        num_kvpe_cache_layers=3,
+        num_kvpe_cache_layers=mla_layer_num + 1,
         tp_axis=kv_tp_axis,
     )
     return SparsePerfCase(
@@ -304,7 +306,7 @@ def build_sparse_perf_case(
         rope,
         shared_kvpe_cache,
         None,
-        1,
+        cache_layer_idx + 1,
         tuple(shard_dims),
         indexer_indices=indices,
         prefix_entry=prefix_entry,
