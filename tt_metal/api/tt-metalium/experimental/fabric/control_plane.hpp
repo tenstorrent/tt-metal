@@ -383,8 +383,9 @@ public:
     // this rank confirmed with the hardware rather than only inferred from the descriptors.
     const std::vector<experimental::LinkInfo>& get_locally_unhealthy_links() const;
 
-    // Recompute the comparison against the current live descriptor. No-op without a factory descriptor.
-    // Invalidates every reference handed out by the accessors above.
+    // Rediscover the cluster's ethernet links and recompute the comparison against what is live now.
+    // No-op without a factory descriptor. Collective: every rank calls it. Invalidates every reference
+    // handed out by the accessors above.
     void refresh_connectivity_diff();
 
     // Exit fabric nodes on `src_mesh_id` with inter-mesh connectivity to `dst_mesh_id` (as assigned during intermesh

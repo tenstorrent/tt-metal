@@ -1284,6 +1284,13 @@ void ControlPlane::refresh_connectivity_diff() {
     // re-diffing the descriptor captured at init could never see either. The rediscovered view gets
     // its own member rather than replacing physical_system_descriptor_, which the topology mapper
     // (and the mapping built on it) still references.
+    //
+    // Discovery reads ethernet connections from the cluster descriptor, which only a refresh of the
+    // cluster rebuilds; without it this diffs the topology the process started with. UMD can only
+    // refresh silicon, and a mock's cabling cannot change.
+    if (this->cluster_.get().get_target_device_type() == tt::TargetDevice::Silicon) {
+        const_cast<tt::Cluster&>(this->cluster_.get()).rediscover_ethernet_links();
+    }
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     this->refreshed_live_descriptor_ =
         std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(tt::tt_metal::run_physical_system_discovery(
