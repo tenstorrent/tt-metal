@@ -5,8 +5,10 @@
 #include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_unified_plan.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/utilities/matmul_utilities.hpp"
+#include "ttnn/prefetcher_pipe.hpp"
 #include "ttnn/types.hpp"
 #include <ranges>
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/math.hpp>
 
 namespace ttnn::operations::experimental::quasar::matmul {
@@ -1001,6 +1003,18 @@ MatmulProgramConfig get_program_config(
     const MatmulUnifiedProgramConfig* requested =
         attributes.program_config.has_value() ? std::get_if<MatmulUnifiedProgramConfig>(&*attributes.program_config)
                                               : nullptr;
+    // Prefetcher pipes place the matmul on their receivers, the only cores they deliver B to. The op fixes the K chunk
+    // once C is allocated (see ttnn::prim::qsr::matmul).
+    if (!attributes.prefetcher_pipes.empty() && (requested != nullptr || !attributes.program_config.has_value())) {
+        const ttnn::PrefetcherPipeRefList pipes = ttnn::prefetcher_pipe_refs(attributes.prefetcher_pipes);
+        MatmulUnifiedProgramConfig config =
+            requested != nullptr ? *requested
+                                 : MatmulUnifiedProgramConfig{.fused_activation = attributes.user_fused_activation};
+        if (config.cores.num_cores() == 0) {
+            config.cores = tt::tt_metal::experimental::GetPrefetcherPipeReceiverCores(pipes).merge_ranges();
+        }
+        return config;
+    }
     if (requested != nullptr && requested->cores.num_cores() == 0) {
         std::optional<MatmulUnifiedProgramConfig> chosen = ttnn::prim::qsr::choose_unified_placement(
             input_tensor_a, input_tensor_b, bias_single_tile_size, attributes, *requested);

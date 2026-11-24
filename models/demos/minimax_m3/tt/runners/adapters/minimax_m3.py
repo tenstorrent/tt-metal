@@ -114,6 +114,11 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
         self.model_config = model_dims(text_config)
         logger.info(f"[minimax_m3] model variant {self.variant.name}")
 
+    @property
+    def hf_model_path(self) -> str:
+        """The dir ``_model_path`` resolves, for the variant selected at construction."""
+        return checkpoint_dir_env() or self.variant.weights_dir
+
     # high_bw_all_gather (MSA cache read) parks its semaphores in L1_SMALL; 0 makes it fall back to general
     # L1 with a warning and an L1-fragmentation risk. Same value as tt/ccl.py L1_SMALL_SIZE (kept literal so
     # importing the adapter stays cheap).

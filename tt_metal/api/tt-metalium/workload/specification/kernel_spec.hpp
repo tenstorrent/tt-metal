@@ -24,7 +24,7 @@
 #include <tt-metalium/workload/utils/table.hpp>
 #include <tt-metalium/workload/specification/tensor_parameter.hpp>
 #include <tt_stl/strong_type.hpp>
-#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/workload/specification/kernel_hardware_types.hpp>
 
 namespace tt::tt_metal {
 

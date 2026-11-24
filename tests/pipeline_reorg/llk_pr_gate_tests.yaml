@@ -120,6 +120,35 @@
   env:
     PYTEST_MARKERS: "not perf and not nightly and not quasar and not accuracy"
 
+# The SFPU ULP PR check (tt_metal/tt-llk/tests/run_sfpu_ulp_pr_check.sh, which documents the
+# environment it reads). Needs the card: it sweeps the ULP cells a change to an SFPU kernel or
+# a budget table can move, and exits at once for any other change and outside pull_request and
+# merge_group runs (so on sanity too, which is why it charges pr_gate only). Worst case, every
+# cell: two whole-sweep builds on the card host and the sweep, about 6 min.
+- name: llk_sfpu_ulp_pr_check wormhole
+  split_group: 3
+  team: llk
+  budget_type: pr_gate
+  coverage: false
+  cmd: ./tests/run_sfpu_ulp_pr_check.sh --junitxml=pytest-report-wormhole-3.xml
+  skus:
+    wh_n150_civ2:
+      timeout: 10
+  owner_id: U09UC143684 # Nemanja Divnic
+  workdir: tt_metal/tt-llk
+
+- name: llk_sfpu_ulp_pr_check blackhole
+  split_group: 4
+  team: llk
+  budget_type: pr_gate
+  coverage: false
+  cmd: ./tests/run_sfpu_ulp_pr_check.sh --junitxml=pytest-report-blackhole-4.xml
+  skus:
+    bh_p150b_civ2_viommu:
+      timeout: 10
+  owner_id: U09UC143684 # Nemanja Divnic
+  workdir: tt_metal/tt-llk
+
 - name: llk_smoke_quasar group 1/2
   split_group: 1
   team: llk

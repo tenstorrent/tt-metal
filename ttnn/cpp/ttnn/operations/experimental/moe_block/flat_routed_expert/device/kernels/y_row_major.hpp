@@ -225,6 +225,11 @@ struct RowMajorYWriter {
     // Retire the oldest issued row tile once its writes are flushed (frees its pages); returns the number of
     // sub-blocks completed by it (0 or 1).
     uint32_t retire(const ExpertSchedule& schedule) {
+        // (the write command buffer drained first: a transaction id's outstanding count only covers requests the NIU
+        // has taken - the last row's writes can still sit in the command buffer and the id read "done" before they
+        // land, publishing a landed count (or freeing pages) for a row the combine would then read partly written)
+        while (!noc_cmd_buf_ready(y_noc, write_cmd_buf)) {
+        }
         if constexpr (hands_off) {
             const uint32_t unit = handoff.units_retired % in_flight;
             if (handoff.units_retired == handoff.units_issued ||

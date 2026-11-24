@@ -347,26 +347,21 @@ FORCE_INLINE void fill_tile_with_first_row_bfp8(uint32_t l1_write_ptr) {
 // Reads the very first row of the CB and fills the entire tile with the same row.
 // Tile is assumed to have 16-bit elements.
 FORCE_INLINE void fill_tile_with_first_row_bfloat16(uint32_t l1_write_ptr) {
-    // Here we have to account for the fact that a tile consists of 4 16x16 faces.
-    // So we have to fill faces 0 and 2 with the first row of face 0, and faces 1 and 3
-    // with the first row of face 1.
-    auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_ptr);
-    uint32_t row_offset = 8;  // start at second row since first row is source
-    uint32_t num_rows = 15;
-
-    // iterate over face pairs (0,1) and (2,3)
-    for (uint32_t k = 0, face_offset = 0; k < 2; ++k, face_offset += 256) {
-        for (uint32_t row = 0; row < num_rows; ++row) {
-            uint32_t dst_offset = face_offset + row_offset;
-            for (uint32_t col = 0; col < 8; ++col) {
-                ptr[dst_offset + col] = ptr[col];              // left face
-                ptr[dst_offset + col + 128] = ptr[col + 128];  // right face
-            }
-            row_offset += 8;
-        }
-        row_offset = 0;
-        num_rows = 16;
+    // Same construction as fill_tile_with_first_row below, at 16-bit width: replicate the row with
+    // local NoC copies rather than 496 volatile loads and 496 stores. A face is 512 B of 16
+    // contiguous 32 B rows, so doubling the valid region fills one in four transfers. Faces 0 and 1
+    // hold the source row; once both are full, faces 2 and 3 are one 1 KB copy of them.
+    constexpr uint32_t kFaceBytes = 512;
+    constexpr uint32_t kRowBytes = 32;
+    const uint32_t f0 = l1_write_ptr;
+    const uint32_t f1 = f0 + kFaceBytes;
+    for (uint32_t n = kRowBytes; n < kFaceBytes; n <<= 1) {
+        noc_async_read(get_noc_addr(f0), f0 + n, n);
+        noc_async_read(get_noc_addr(f1), f1 + n, n);
+        noc_async_read_barrier();
     }
+    noc_async_read(get_noc_addr(f0), f0 + 2 * kFaceBytes, 2 * kFaceBytes);
+    noc_async_read_barrier();
 }
 
 // Reads the very first row of the CB and fills the entire tile with the same row.

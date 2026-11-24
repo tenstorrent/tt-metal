@@ -219,7 +219,9 @@ const m2::DFBSpecName DFB_WEIGHTS{"weights"};                  // weights reader
 const m2::DFBSpecName DFB_BIAS{"bias"};                        // weights writer -> compute (optional)
 const m2::DFBSpecName DFB_MATMUL_PARTIALS{"matmul_partials"};  // compute self-loop (borrows OUTPUT when aliased)
 const m2::DFBSpecName DFB_OUT{"out"};                          // compute packer -> OUTPUT (degenerate DM consumer)
-const m2::DFBSpecName DFB_READER_INDICES{"reader_indices"};    // fresh L1 DMA landing (DRAM-config path only)
+// Fresh L1 landing for the reader-indices slice (DRAM-config path only). A scratchpad, not a DFB: only the
+// act reader fills and reads it, and a DM kernel cannot self-loop a DFB on Quasar.
+const m2::ScratchpadSpecName SCRATCH_READER_INDICES{"reader_indices"};
 const m2::DFBSpecName DFB_IN_SCALAR{"in_scalar"};              // reduce scalar srcB (unpack-tilize probe only)
 
 const m2::TensorParamName TP_INPUT{"input"};
@@ -1606,11 +1608,13 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // TensorAccessor) in the reader — no borrowed self-loop DFB.
 
     // READER_INDICES: L1-resident indices are read by address via tensor::reader_indices. Only the
-    // DRAM-config path needs a fresh L1 landing DFB (the reader DMAs the slice into it, then reads it);
-    // that path is not exercised by resnet.
+    // DRAM-config path needs a fresh L1 landing scratchpad (the reader DMAs the slice into it, then reads it).
     if (!reader_indices_globally_allocated) {
-        auto dfb = make_dfb(DFB_READER_INDICES, Conv2dCb::READER_INDICES);
-        spec.dataflow_buffers.push_back(std::move(dfb));
+        const CBInfo& info = cb(Conv2dCb::READER_INDICES);
+        spec.scratchpads.push_back(m2::ScratchpadSpec{
+            .unique_id = SCRATCH_READER_INDICES,
+            .size_per_node = info.page_size * info.num_pages,
+        });
     }
 
     const tt::tt_metal::NOC writer_mcast_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
@@ -1695,21 +1699,16 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         m2::TensorBinding{.tensor_parameter_name = TP_READER_INDICES, .accessor_name = "reader_indices"});
 
     // The depthwise reader has no CONFIG_TENSOR_IN_DRAM path (its indices are always L1-resident); only
-    // the height-/block-sharded readers DMA the config slice into the fresh READER_INDICES DFB.
+    // the height-/block-sharded readers DMA the config slice into the private reader_indices scratchpad.
     TT_FATAL(
         !(config_tensors_in_dram && is_conv_1d_depthwise_conv),
         "conv2d Metal 2.0 sharded factory: config_tensors_in_dram is not supported for the 1D depthwise path.");
+    std::vector<m2::ScratchpadBinding> reader_scratchpad_bindings;
     if (!reader_indices_globally_allocated) {
-        // DRAM-config: the reader DMAs the indices slice from tensor::reader_indices into this fresh L1
-        // DFB and then reads it (a self-loop on the reader; this path is not exercised by resnet).
-        reader_dfb_bindings.push_back(m2::DFBBinding{
-            .dfb_spec_name = DFB_READER_INDICES,
-            .accessor_name = "reader_indices",
-            .endpoint_type = m2::DFBEndpointType::PRODUCER});
-        reader_dfb_bindings.push_back(m2::DFBBinding{
-            .dfb_spec_name = DFB_READER_INDICES,
-            .accessor_name = "reader_indices",
-            .endpoint_type = m2::DFBEndpointType::CONSUMER});
+        // DRAM-config: the reader DMAs the indices slice from tensor::reader_indices into this private L1
+        // scratchpad and then reads it.
+        reader_scratchpad_bindings.push_back(m2::ScratchpadBinding{
+            .scratchpad_spec_name = SCRATCH_READER_INDICES, .accessor_name = "reader_indices_scratch"});
     }
 
     m2::DataMovementHardwareConfig reader_hw;
@@ -1737,6 +1736,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         .source = std::filesystem::path(reader_kernel),
         .dfb_bindings = std::move(reader_dfb_bindings),
         .semaphore_bindings = std::move(reader_sem_bindings),
+        .scratchpad_bindings = std::move(reader_scratchpad_bindings),
         .tensor_bindings = std::move(reader_tensor_bindings),
         .hw_config = std::move(reader_hw),
     };
