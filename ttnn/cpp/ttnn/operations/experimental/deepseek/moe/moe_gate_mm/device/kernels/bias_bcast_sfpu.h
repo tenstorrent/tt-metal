@@ -98,7 +98,7 @@ inline void _add_bias_() {
 
     // Now do this 3 more times, to complete first two faces (16 rows)
     for (uint32_t i = 0; i < 3; ++i) {
-        lltt::replay(0, 15);
+        TTI_REPLAY(0, 15, 0, 0);
     }
 
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
@@ -129,7 +129,7 @@ inline void _add_bias_() {
 
     // Now do this 3 more times, to complete lower two faces (16 rows)
     for (uint32_t i = 0; i < 3; ++i) {
-        lltt::replay(15, 15);
+        TTI_REPLAY(15, 15, 0, 0);
     }
 }
 

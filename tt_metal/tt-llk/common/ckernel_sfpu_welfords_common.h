@@ -203,7 +203,7 @@ sfpi_inline void _program_welfords_replay_buffer_()
 template <std::uint32_t input_lreg>
 sfpi_inline void _execute_welfords_row_replay_buffer_()
 {
-    lltt::replay(WELFORD_INSTR_PER_ROW * input_lreg, WELFORD_INSTR_PER_ROW);
+    TTI_REPLAY(WELFORD_INSTR_PER_ROW * input_lreg, WELFORD_INSTR_PER_ROW, 0, 0);
 }
 
 /**

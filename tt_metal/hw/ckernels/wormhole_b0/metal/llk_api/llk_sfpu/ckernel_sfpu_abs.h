@@ -67,7 +67,7 @@ inline void calculate_abs_int32() {
     TTI_SFPABS(0 /*imm12_math*/, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPABS_MOD1_INT);
     TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_2, 0 /*dest_reg_addr*/);
     for (int d = 1; d < ITERATIONS; d++) {
-        lltt::replay(replay_start, replay_len);
+        TTI_REPLAY(replay_start, replay_len, 0, 0);
     }
 }
 }  // namespace sfpu

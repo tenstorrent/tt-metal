@@ -200,7 +200,7 @@ sfpi_inline void _compute_ema_math_() {
         lltt::record<lltt::Exec>(EMA_MATH_REPLAY_SLOT, EMA_MATH_REPLAY_LEN);
         _compute_ema_math_body_();
     } else {
-        lltt::replay(EMA_MATH_REPLAY_SLOT, EMA_MATH_REPLAY_LEN);
+        TTI_REPLAY(EMA_MATH_REPLAY_SLOT, EMA_MATH_REPLAY_LEN, 0, 0);
     }
 
     // Update EMA_old for next iteration: LREG4 = LREG3. Inline, not recorded.

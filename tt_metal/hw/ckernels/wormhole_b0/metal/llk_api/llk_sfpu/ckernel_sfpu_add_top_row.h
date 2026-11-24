@@ -68,7 +68,7 @@ inline void calculate_add_top_row(const uint tile_idx_0 = 0, const uint tile_idx
     TT_SFPLOAD(p_sfpu::LREG7, INSTRUCTION_MODE, ADDR_MOD_3, tile_offset_1 + 16 + 2);  // face 3, rows 0-3, odd columns
 
     // Call replay buffer (integer: index 0, 4 instructions; float: index 4, 8 instructions)
-    lltt::replay(REPLAY_BUFFER_INDEX, REPLAY_BUFFER_COUNT);
+    TTI_REPLAY(REPLAY_BUFFER_INDEX, REPLAY_BUFFER_COUNT, 0, 0);
 
     TT_SFPSTORE(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_3, tile_offset_dst);
     TT_SFPSTORE(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_3, tile_offset_dst + 2);

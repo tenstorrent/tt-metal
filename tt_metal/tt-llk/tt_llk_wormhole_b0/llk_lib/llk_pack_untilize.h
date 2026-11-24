@@ -266,7 +266,7 @@ inline void _llk_pack_untilize_(
             TTI_ADDRCRXY(p_setadc::PAC, 0, 0, 1, 0, 0b0010); // Read new row in the tile
             if constexpr (block_ct_dim != full_ct_dim)
             {
-                lltt::replay(ckernel::packer::replay_buf_offset, 10); // update row address
+                TTI_REPLAY(ckernel::packer::replay_buf_offset, 10, 0, 0); // update row address
             }
         }
     }

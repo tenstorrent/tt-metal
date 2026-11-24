@@ -285,7 +285,7 @@ inline void perform_reduce_col_sum_avg() {
         }
 
         // Step 1: Tree-reduce across registers (LREG0-3→LREG0, LREG4-7→LREG4) without transpose.
-        lltt::replay(0, 6);
+        TTI_REPLAY(0, 6, 0, 0);
 
         // Step 2: Cross-face addition — all 4 positions carry meaningful partial sums.
         if constexpr (is_integer_mode) {
@@ -302,9 +302,9 @@ inline void perform_reduce_col_sum_avg() {
 
         // Step 4: Final tree-reduce across LREG0-3 only (LREG4-7 no longer needed).
         if constexpr (is_integer_mode) {
-            lltt::replay(0, 3);  // Reuse first 3 positions of sequential integer buffer (A1,A2,A3)
+            TTI_REPLAY(0, 3, 0, 0);  // Reuse first 3 positions of sequential integer buffer (A1,A2,A3)
         } else {
-            lltt::replay(6, 4);  // Half reduce with NOP for 2-cycle SFPADD latency
+            TTI_REPLAY(6, 4, 0, 0);  // Half reduce with NOP for 2-cycle SFPADD latency
             // The half reduce ends with an SFPADD producing LREG0; its next consumer (SFPSTORE for SUM, the
             // SFPMUL for AVG) needs one cycle. LREG4-7 are dead after the transpose, so that slot takes the
             // next face pair's first lower load instead of a NOP (a NOP on the last face pair).
@@ -492,21 +492,21 @@ inline void record_horizontal_reduce_stage() {
 template <HorizontalFold fold>
 inline void horizontal_stage_ror1() {
     constexpr std::uint32_t start = horizontal_stage_replay_start<fold>();
-    lltt::replay(start, HORIZONTAL_ROTATE_LEN);
-    lltt::replay(start + 2 * HORIZONTAL_ROTATE_LEN, horizontal_fold_len<fold>());
+    TTI_REPLAY(start, HORIZONTAL_ROTATE_LEN, 0, 0);
+    TTI_REPLAY(start + 2 * HORIZONTAL_ROTATE_LEN, horizontal_fold_len<fold>(), 0, 0);
 }
 
 template <HorizontalFold fold>
 inline void horizontal_stage_ror2() {
-    lltt::replay(horizontal_stage_replay_start<fold>(), horizontal_stage_replay_len<fold>());
+    TTI_REPLAY(horizontal_stage_replay_start<fold>(), horizontal_stage_replay_len<fold>(), 0, 0);
 }
 
 template <HorizontalFold fold>
 inline void horizontal_stage_ror4() {
     constexpr std::uint32_t start = horizontal_stage_replay_start<fold>();
-    lltt::replay(start, 2 * HORIZONTAL_ROTATE_LEN);
-    lltt::replay(start + HORIZONTAL_ROTATE_LEN, HORIZONTAL_ROTATE_LEN);
-    lltt::replay(start + HORIZONTAL_ROTATE_LEN, HORIZONTAL_ROTATE_LEN + horizontal_fold_len<fold>());
+    TTI_REPLAY(start, 2 * HORIZONTAL_ROTATE_LEN, 0, 0);
+    TTI_REPLAY(start + HORIZONTAL_ROTATE_LEN, HORIZONTAL_ROTATE_LEN, 0, 0);
+    TTI_REPLAY(start + HORIZONTAL_ROTATE_LEN, HORIZONTAL_ROTATE_LEN + horizontal_fold_len<fold>(), 0, 0);
 }
 
 /**
@@ -725,7 +725,7 @@ inline void perform_reduce_row_sum_tile(
                 tile_row_offset + face_pair_base + ROWS_PER_FACE + row_offset_second + 2);
 
             // Replay the full tree-reduce buffer (both int and float use 6 instructions)
-            lltt::replay(0, 6);
+            TTI_REPLAY(0, 6, 0, 0);
 
             // Horizontal reduction: consolidate all 8 SFPU columns into column 0 (interleaved for latency hiding)
             horizontal_reduce<is_integer_mode>();
@@ -1438,7 +1438,7 @@ inline void calculate_reduce_max_min_uint16() {
             // Masked load straight into LREG4-7, where the recorded swap buffer reduces them.
             load_face_data<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG4>(FACE_ADDRS[j][i], COLUMN_OFFSETS[i]);
 
-            lltt::replay(0, 3);  // compare-and-swap reduce LREG4-7 -> LREG4
+            TTI_REPLAY(0, 3, 0, 0);  // compare-and-swap reduce LREG4-7 -> LREG4
 
             TT_SFPMOV(0, p_sfpu::LREG4, PARTIAL_LREG[i], 0);
         }
@@ -1451,7 +1451,7 @@ inline void calculate_reduce_max_min_uint16() {
 
         // Transpose so the 4 partial results of each column sit in one register, reduce, transpose back.
         TTI_SFPTRANSP(0, 0, 0, 0);
-        lltt::replay(0, 3);
+        TTI_REPLAY(0, 3, 0, 0);
         TTI_SFPTRANSP(0, 0, 0, 0);
 
         // Swap to combine the two vertically adjacent faces (even and odd columns).
@@ -1537,7 +1537,7 @@ inline void calculate_reduce_max_min_int32_col() {
         for (std::uint32_t i = 0; i < NUM_FACES; i++) {
             load_face_data<INSTRUCTION_MODE, false, p_sfpu::LREG4>(FACE_ADDRS[j][i], COLUMN_OFFSETS[i]);
 
-            lltt::replay(0, REPLAY_LEN);  // signed compare-and-swap reduce LREG4-7 -> LREG4
+            TTI_REPLAY(0, REPLAY_LEN, 0, 0);  // signed compare-and-swap reduce LREG4-7 -> LREG4
 
             TT_SFPMOV(0, p_sfpu::LREG4, PARTIAL_LREG[i], 0);
         }
@@ -1550,7 +1550,7 @@ inline void calculate_reduce_max_min_int32_col() {
 
         // Transpose so the 4 partial results of each column sit in one register, reduce, transpose back.
         TTI_SFPTRANSP(0, 0, 0, 0);
-        lltt::replay(0, REPLAY_LEN);
+        TTI_REPLAY(0, REPLAY_LEN, 0, 0);
         TTI_SFPTRANSP(0, 0, 0, 0);
 
         // Signed compare-and-swap to combine the two vertically adjacent faces (even and odd columns).
@@ -1630,26 +1630,26 @@ inline void calculate_reduce_max_min(
         TTI_SFPLOAD(p_sfpu::LREG7, INSTRUCTION_MODE, ADDR_MOD_3, 18);
 
         // First tile processing (F0, F1, F2, F3)
-        lltt::replay(0, replay_buffer_offset);
-        lltt::replay(0, replay_buffer_offset);
-        lltt::replay(0, replay_buffer_next_face);
+        TTI_REPLAY(0, replay_buffer_offset, 0, 0);
+        TTI_REPLAY(0, replay_buffer_offset, 0, 0);
+        TTI_REPLAY(0, replay_buffer_next_face, 0, 0);
 
-        lltt::replay(0, replay_buffer_offset);
-        lltt::replay(0, replay_buffer_offset);
-        lltt::replay(0, replay_buffer_offset);
-        lltt::replay(0, replay_buffer_next_face + 1);
+        TTI_REPLAY(0, replay_buffer_offset, 0, 0);
+        TTI_REPLAY(0, replay_buffer_offset, 0, 0);
+        TTI_REPLAY(0, replay_buffer_offset, 0, 0);
+        TTI_REPLAY(0, replay_buffer_next_face + 1, 0, 0);
 
         // Remaining tiles
         for (std::uint32_t i = 0; i < block_rt_dim - 1; i++) {
-            lltt::replay(0, replay_buffer_offset);
-            lltt::replay(0, replay_buffer_offset);
-            lltt::replay(0, replay_buffer_offset);
-            lltt::replay(0, replay_buffer_next_face);
+            TTI_REPLAY(0, replay_buffer_offset, 0, 0);
+            TTI_REPLAY(0, replay_buffer_offset, 0, 0);
+            TTI_REPLAY(0, replay_buffer_offset, 0, 0);
+            TTI_REPLAY(0, replay_buffer_next_face, 0, 0);
 
-            lltt::replay(0, replay_buffer_offset);
-            lltt::replay(0, replay_buffer_offset);
-            lltt::replay(0, replay_buffer_offset);
-            lltt::replay(0, replay_buffer_next_face + 1);
+            TTI_REPLAY(0, replay_buffer_offset, 0, 0);
+            TTI_REPLAY(0, replay_buffer_offset, 0, 0);
+            TTI_REPLAY(0, replay_buffer_offset, 0, 0);
+            TTI_REPLAY(0, replay_buffer_next_face + 1, 0, 0);
         }
 
         // Reset dest RWC counter

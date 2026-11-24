@@ -54,7 +54,7 @@ inline void calculate_abs_int32() {
     const sfpi::vInt v = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
     sfpi::dst_reg[0].mode<sfpi::DataLayout::M32>(ADDR_MOD_6) = sfpi::abs(v);
     for (int d = 0; d < ITERATIONS; d++) {
-        lltt::replay(ABS_INT32_REPLAY_SLOT, ABS_INT32_REPLAY_LEN);
+        TTI_REPLAY(ABS_INT32_REPLAY_SLOT, ABS_INT32_REPLAY_LEN, 0, 0, 0, 0);
     }
 }
 

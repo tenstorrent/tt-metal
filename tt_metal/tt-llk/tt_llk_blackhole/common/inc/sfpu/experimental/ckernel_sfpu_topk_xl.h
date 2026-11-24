@@ -58,7 +58,7 @@
 // Replay buffer + MOP expander
 // ----------------------------
 // The math thread can record a window of up to 32 instructions into the
-// "replay buffer" and re-issue any contiguous sub-range with `lltt::replay`.
+// "replay buffer" and re-issue any contiguous sub-range with `TTI_REPLAY`.
 // On top of that, the MOP expander can fire a 5-slot template per
 // `TTI_MOP` issue, where each slot can itself be a REPLAY(start, len).
 // Small loop bodies replay directly; the merge inner loop and the length-2048
@@ -833,9 +833,9 @@ inline void sort_32_rows(const bool ascending, const bool dir)
     }
     else
     {
-        lltt::replay(0, w32_slot);
+        TTI_REPLAY(0, w32_slot, 0, 0);
     }
-    lltt::replay(w16_slot, w16_half);
+    TTI_REPLAY(w16_slot, w16_half, 0, 0);
     window_sort<WindowSize::THIRTY_TWO, Stride::SIXTEEN, Stride::SIXTEEN>(dir);
     load_replay_buf<Exec>(
         w32_slot,
@@ -845,7 +845,7 @@ inline void sort_32_rows(const bool ascending, const bool dir)
             window_sort<WindowSize::THIRTY_TWO, Stride::EIGHT, Stride::FOUR>(dir);
             TTI_SFPTRANSP(0, 0, 0, 0);
         });
-    lltt::replay(w32_slot, w32_half);
+    TTI_REPLAY(w32_slot, w32_half, 0, 0);
     store16_rows_x2<16, detail::DstAdvance::TWO_FACES>();
 }
 
@@ -905,7 +905,7 @@ inline void window_sort_replay_loop(const int iterations, const bool dir, Load l
         }
         for (int i = first_replay; i < iterations; i++)
         {
-            lltt::replay(0 /*start*/, whole);
+            TTI_REPLAY(0 /*start*/, whole, 0, 0);
         }
     }
     else
@@ -926,13 +926,13 @@ inline void window_sort_replay_loop(const int iterations, const bool dir, Load l
                     window_sort<WINDOW, FROM, Stride::FOUR, Transposes::BOTH, FUSED>(dir);
                     TTI_SFPTRANSP(0, 0, 0, 0);
                 });
-            lltt::replay(half_slot, half);
+            TTI_REPLAY(half_slot, half, 0, 0);
             load_replay_buf<Exec>(first, STORE_LEN, [&] { store(); });
         }
         for (int i = first_replay; i < iterations; i++)
         {
-            lltt::replay(0 /*start*/, first);
-            lltt::replay(half_slot, half + STORE_LEN);
+            TTI_REPLAY(0 /*start*/, first, 0, 0);
+            TTI_REPLAY(half_slot, half + STORE_LEN, 0, 0);
         }
     }
 }
@@ -1704,11 +1704,11 @@ inline void unfused_step_groups(const int groups, const bool dir)
             }
             else if (b < bodies_per_group - 1)
             {
-                lltt::replay(0 /*start*/, body_len);
+                TTI_REPLAY(0 /*start*/, body_len, 0, 0);
             }
             else
             {
-                lltt::replay(0 /*start*/, body_len - 1);
+                TTI_REPLAY(0 /*start*/, body_len - 1, 0, 0);
                 TTI_SFPSTORE(
                     p_sfpu::LREG7, InstrModLoadStore::INT32, detail::dst_advance_addr_mod<group_offset + HALF_FACE_INC>(), indices_offset + group_offset + 4);
             }
@@ -1813,7 +1813,7 @@ inline void transpose_faces_from_dst()
     load_replay_buf<Exec>(0, transpose_face_body_len, [] { transpose_dest_face_32b<0, ADDR_MOD_5>(); });
     for (std::uint32_t face = 1; face < N; face++)
     {
-        lltt::replay(0, transpose_face_body_len);
+        TTI_REPLAY(0, transpose_face_body_len, 0, 0);
     }
 }
 
@@ -2068,7 +2068,7 @@ inline void canonical_big_block_with_replay_body(bool dir)
         topk_xl_fused_macro::record_step_group_pipelined<64, 16>(dir);
         for (int i = 1; i < row_scale_factor; i++)
         {
-            lltt::replay(0, topk_xl_fused_macro::pipelined_group_len);
+            TTI_REPLAY(0, topk_xl_fused_macro::pipelined_group_len, 0, 0);
         }
 #else
         window_sort_rows<
@@ -2331,7 +2331,7 @@ inline bool local_sort_head(const std::uint32_t tile_offset, const bool ascendin
             topk_xl_fused_macro::record_step_group_pipelined<2, 16>(dir);
             for (int i = 1; i < 2 * row_scale_factor; i++)
             {
-                lltt::replay(0 /*start*/, topk_xl_fused_macro::pipelined_group_len);
+                TTI_REPLAY(0 /*start*/, topk_xl_fused_macro::pipelined_group_len, 0, 0);
             }
         }
         else
@@ -2797,7 +2797,7 @@ inline void _topk_xl_rebuild_(const std::uint32_t dst_index, const bool ascendin
                 topk_xl_unfused_macro::record_ce_full<indices_offset, 64, 8>(dir);
                 for (int i = 1; i < 8; i++)
                 {
-                    lltt::replay(0 /*start*/, 16 /*len*/);
+                    TTIREPLAY(0 /*start*/, 16 /*len*/, 0, 0);
                 }
 #else
                 window_sort_rows<
@@ -2987,7 +2987,7 @@ inline void add_lsb_indices_column_major(LoadId load_id)
 
     for (int i = 1; i < 4; i++)
     {
-        lltt::replay(0, 16);
+        TTI_REPLAY(0, 16, 0, 0);
     }
 
     // Outer loop over the remaining face-pairs. We hoist the
@@ -3011,7 +3011,7 @@ inline void add_lsb_indices_column_major(LoadId load_id)
 
         for (int i = 0; i < 4; i++)
         {
-            lltt::replay(0, 16);
+            TTI_REPLAY(0, 16, 0, 0);
         }
     }
 }
@@ -3048,7 +3048,7 @@ inline void _topk_xl_add_lsb_indices_()
 
         for (int i = 1; i < 4; i++)
         {
-            lltt::replay(0, 16);
+            TTI_REPLAY(0, 16, 0, 0);
         }
 
         // Outer loop over the remaining face-pairs, same shape as the
@@ -3065,7 +3065,7 @@ inline void _topk_xl_add_lsb_indices_()
 
             for (int i = 0; i < 4; i++)
             {
-                lltt::replay(0, 16);
+                TTI_REPLAY(0, 16, 0, 0);
             }
         }
         return;
@@ -3146,7 +3146,7 @@ inline void _topk_xl_remove_msb_values_()
             });
         for (int i = 1; i < row_scale_factor * 16; i++)
         {
-            lltt::replay(0, 3);
+            TTI_REPLAY(0, 3, 0, 0);
         }
     }
     else
@@ -3463,7 +3463,7 @@ inline void _topk_xl_separate_indices_()
 
     for (int i = 1; i < row_scale_factor * 16; i++)
     {
-        lltt::replay(0, 9);
+        TTI_REPLAY(0, 9, 0, 0);
     }
 }
 
@@ -3572,9 +3572,9 @@ inline void _topk_xl_split_column_pairs_(const std::uint32_t tile_offset, const 
         load_replay_buf<Exec>(stores_at, 8, [] { store16_rows_x2<2, detail::DstAdvance::ONE_FACE>(); });
         for (int i = 1; i < n_iters; i++)
         {
-            lltt::replay(0, topk_xl_fused_macro::column_pair_len16_loads_len);
+            TTI_REPLAY(0, topk_xl_fused_macro::column_pair_len16_loads_len, 0, 0);
             window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::FOUR, detail::Stride::ONE>(dir);
-            lltt::replay(stores_at, 8);
+            TTI_REPLAY(stores_at, 8, 0, 0);
         }
         // Put the step-group configuration back for the later step groups.
         loadmacro_program_templates<detail::Stride::SIXTEEN, detail::WindowSize::THIRTY_TWO, detail::Order::DESCENDING, detail::Fused::Yes>();
@@ -3592,9 +3592,9 @@ inline void _topk_xl_split_column_pairs_(const std::uint32_t tile_offset, const 
         load_replay_buf<Exec>(stores_at, 8, [] { store16_rows_x2<2, detail::DstAdvance::ONE_FACE>(); });
         for (int i = 1; i < n_iters; i++)
         {
-            lltt::replay(0, topk_xl_fused_macro::column_pair_len8_loads_len);
+            TTI_REPLAY(0, topk_xl_fused_macro::column_pair_len8_loads_len, 0, 0);
             window_sort<detail::WindowSize::EIGHT, detail::Stride::TWO, detail::Stride::ONE>(dir);
-            lltt::replay(stores_at, 8);
+            TTI_REPLAY(stores_at, 8, 0, 0);
         }
         // Put the step-group configuration back for the later step groups.
         loadmacro_program_templates<detail::Stride::SIXTEEN, detail::WindowSize::THIRTY_TWO, detail::Order::DESCENDING, detail::Fused::Yes>();

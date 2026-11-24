@@ -50,7 +50,7 @@ inline void _calculate_where_(
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        lltt::replay(0 /*start*/, replay_len);
+        TTI_REPLAY(0 /*start*/, replay_len, 0, 0);
     }
 #else
     if (dst_index_out == dst_index_in0) {
@@ -70,7 +70,7 @@ inline void _calculate_where_(
 
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
-            lltt::replay(0, 3);
+            TTI_REPLAY(0, 3, 0, 0);
         }
     } else {
         // We use macros 1 and 2 to schedule the following, which achieves 4 cycles per input row of 32 values:
@@ -93,7 +93,7 @@ inline void _calculate_where_(
 
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
-            lltt::replay(0, 4);
+            TTI_REPLAY(0, 4, 0, 0);
         }
     }
 #endif

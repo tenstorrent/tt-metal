@@ -324,10 +324,10 @@ inline void _llk_math_custom_mm_(
         // Run the full replay ct_dim - 1 times as it has the full finalization sequence for cases where SrcB is reused
         for (std::uint32_t i = 0; i < ct_dim - 1; i++)
         {
-            lltt::replay(ckernel::math::replay_buf_offset, replay_buf_len);
+            TTI_REPLAY(ckernel::math::replay_buf_offset, replay_buf_len, 0, 0);
         }
         // Run the full replay - the last ELWADD as it differs on the last ct_dim iteration and is issued directly after
-        lltt::replay(ckernel::math::replay_buf_offset, replay_buf_len - 1);
+        TTI_REPLAY(ckernel::math::replay_buf_offset, replay_buf_len - 1, 0, 0);
         TTI_ELWADD(3, 1, p_elwise::SRCB_NO_BCAST, ADDR_MOD_3, 0);
     }
     else

@@ -81,7 +81,7 @@ inline void calculate_tiled_prod() {
     }
 #pragma GCC unroll TILED_PROD_REPLAYS
     for (int i = 0; i < TILED_PROD_REPLAYS; i++) {
-        lltt::replay(TILED_PROD_REPLAY_SLOT, TILED_PROD_REPLAY_LEN);
+        TTI_REPLAY(TILED_PROD_REPLAY_SLOT, TILED_PROD_REPLAY_LEN, 0, 0, 0, 0);
     }
     v = dst_reg[1];
     dst_reg[0].mode(ADDR_MOD_6) = result;

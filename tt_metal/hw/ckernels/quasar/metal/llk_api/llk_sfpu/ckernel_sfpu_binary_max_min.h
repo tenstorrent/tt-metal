@@ -110,7 +110,7 @@ inline void calculate_binary_max_min(
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        lltt::replay(0, BINARY_MAX_MIN_REPLAY_LEN);
+        TTI_REPLAY(0, BINARY_MAX_MIN_REPLAY_LEN, 0, 0, 0, 0);
     }
 }
 

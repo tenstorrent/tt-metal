@@ -95,7 +95,7 @@ inline void calculate_tanh() {
     }
 #pragma GCC unroll 8
     for (int d = 1; d < ITERATIONS; d++) {
-        lltt::replay(TANH_REPLAY_START, TANH_REPLAY_LEN);
+        TTI_REPLAY(TANH_REPLAY_START, TANH_REPLAY_LEN, 0, 0, 0, 0);
     }
     sfpi::dst_reg[0].mode(ADDR_MOD_6) = sfpi::vFloat(sfpi::l_reg[TANH_RESULT_LREG]);
 }

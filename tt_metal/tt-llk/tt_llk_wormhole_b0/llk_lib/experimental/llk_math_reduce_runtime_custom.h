@@ -294,7 +294,7 @@ inline void _llk_math_reduce_block_max_row_runtime_(const std::uint32_t dst_inde
             cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_RMW>(to_underlying(DataFormat::Tf32));
 
             // Replay the 13 instructions (slots 2-14): hi/lo transpose of the single face-row + CLR_B.
-            lltt::replay(2, 13);
+            TTI_REPLAY(2, 13, 0, 0);
 
             cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(0);
             math::_configure_src_zero_flag_(false);
@@ -302,7 +302,7 @@ inline void _llk_math_reduce_block_max_row_runtime_(const std::uint32_t dst_inde
         else
         {
             // Replay the 7 instructions (slots 2-8) to transpose the single reduced face-row + CLR_B.
-            lltt::replay(2, 7);
+            TTI_REPLAY(2, 7, 0, 0);
         }
         return;
     }
@@ -315,7 +315,7 @@ inline void _llk_math_reduce_block_max_row_runtime_(const std::uint32_t dst_inde
     }
 
     // Replay the 13 instructions to transpose the reduced results
-    lltt::replay(2, 13);
+    TTI_REPLAY(2, 13, 0, 0);
 
     if constexpr (is_fp32_dest_acc_en)
     {
