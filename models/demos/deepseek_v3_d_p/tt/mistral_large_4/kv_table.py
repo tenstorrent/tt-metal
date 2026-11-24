@@ -32,10 +32,7 @@ import torch
 import ttnn
 
 RECORD_TOKENS = 32
-KV, INDEX = (
-    "00",
-    "01",
-)  # zero-padded positional names: the decode ring's table (blaze build_kv_table) names its configs this way
+KV, INDEX = "00", "01"  # zero-padded positional names, as the decode ring's table has them
 CONFIGS = (KV, INDEX)  # in id order
 KINDS = {KV: "kvpe", INDEX: "index"}
 _TILE_BYTES = {"BFLOAT8_B": 1088, "BFLOAT16": 2048}
