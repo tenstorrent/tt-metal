@@ -1216,23 +1216,28 @@ class MATMUL_PACK_BLOCK(TemplateParameter):
     """Output pack form of the matmul kernels (see matmul_pack_form), picked from columns the test already reports, so
     it adds no column: 0 per tile, 1 one block run, 2 the closed block."""
 
-    def __init__(self, pack_block: int = 0):
+    def __init__(self, pack_block: int = 0, in32: bool = False):
         self.matmul_pack_block = int(pack_block)
+        # A Float32 input operand: the compile-time CB format trait a ttnn kernel's pack reads (llk_pack_in32_api).
+        self.in32 = bool(in32)
 
     def __repr__(self) -> str:
-        return f"MATMUL_PACK_BLOCK({self.matmul_pack_block})"
+        return f"MATMUL_PACK_BLOCK({self.matmul_pack_block}{', in32' if self.in32 else ''})"
 
     def __eq__(self, other) -> bool:
         return (
             isinstance(other, MATMUL_PACK_BLOCK)
             and other.matmul_pack_block == self.matmul_pack_block
+            and other.in32 == self.in32
         )
 
     def __hash__(self) -> int:
-        return hash(self.matmul_pack_block)
+        return hash((self.matmul_pack_block, self.in32))
 
     def convert_to_cpp(self) -> str:
-        return f"#define MATMUL_PACK_FORM {self.matmul_pack_block}"
+        return f"#define MATMUL_PACK_FORM {self.matmul_pack_block}" + (
+            "\n#define MATMUL_PACK_IN32 1" if self.in32 else ""
+        )
 
 
 @dataclass

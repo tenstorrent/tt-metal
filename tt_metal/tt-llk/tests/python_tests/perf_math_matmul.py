@@ -248,7 +248,8 @@ def test_perf_math_matmul(
                     matmul_config.tile_dimensions.in0_tile_r_dim,
                     matmul_config.tile_dimensions.in1_tile_c_dim,
                     throttle,
-                )
+                ),
+                in32=formats.input_format == DataFormat.Float32,
             ),
             MATMUL_ROW_MOP(row_mop),
         ],

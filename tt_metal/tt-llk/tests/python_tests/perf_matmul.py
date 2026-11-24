@@ -150,7 +150,8 @@ def test_perf_matmul(
                     dims.rt_dim,
                     dims.ct_dim,
                     dims.kt_dim,
-                )
+                ),
+                in32=formats.input_format == DataFormat.Float32,
             ),
         ],
         runtimes=[

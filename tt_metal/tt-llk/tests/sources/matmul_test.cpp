@@ -210,6 +210,31 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
 
+#ifdef ARCH_BLACKHOLE
+// The pack traits a ttnn matmul kernel gets from compute/matmul.h, pack_math_context.h and its CB formats: a matmul kernel,
+// LoFi from its fidelity, a 32-bit operand (MATMUL_PACK_IN32, from python's formats).
+namespace ckernel::packer
+{
+template <>
+struct llk_pack_matmul_api<1>
+{
+    static constexpr bool value = true;
+};
+template <>
+struct llk_pack_lofi_api<1>
+{
+    static constexpr bool value = MATH_FIDELITY == ckernel::MathFidelity::LoFi;
+};
+#ifdef MATMUL_PACK_IN32
+template <>
+struct llk_pack_in32_api<1>
+{
+    static constexpr bool value = true;
+};
+#endif
+} // namespace ckernel::packer
+#endif
+
 #ifndef MATMUL_PACK_FORM
 #define MATMUL_PACK_FORM 0
 #endif
