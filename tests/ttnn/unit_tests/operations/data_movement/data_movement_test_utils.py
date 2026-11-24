@@ -69,3 +69,22 @@ def assert_exact(expected, actual, signed_zeros=True):
         f"{len(differ)} of {same.numel()} values differ; at {differ[0]}: "
         f"{actual[tuple(differ[0])].item()} != {expected[tuple(differ[0])].item()}"
     )
+
+
+# Fraction bits that each block float holds for values that share one exponent.
+_BLOCK_FLOAT_FRACTION_BITS = {ttnn.bfloat8_b: 6, ttnn.bfloat4_b: 2}
+
+
+def convertible_input(shape, *dtypes, seed=0):
+    """Values that each of ``dtypes`` holds exactly, with no NaN, so a dtype change between them keeps every value.
+
+    With a block float, the values are +-(1 + k / 2**bits): they share one exponent and fit the block float's fraction
+    bits. Otherwise they are BFLOAT16 ``full_range_input`` values without NaN, which FLOAT32 also holds.
+    """
+    bits = [_BLOCK_FLOAT_FRACTION_BITS[dtype] for dtype in dtypes if dtype in _BLOCK_FLOAT_FRACTION_BITS]
+    if not bits:
+        assert set(dtypes) <= {ttnn.bfloat16, ttnn.float32}, f"no convertible input for {dtypes}"
+        return full_range_input(shape, ttnn.bfloat16, seed=seed, nan=False).float()
+    torch.manual_seed(seed)
+    magnitude = 1 + torch.randint(0, 2 ** min(bits), shape) / 2 ** min(bits)
+    return torch.where(torch.randint(0, 2, shape, dtype=torch.bool), -magnitude, magnitude)

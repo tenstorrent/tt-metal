@@ -22,11 +22,16 @@ from tests.ttnn.utils_for_testing import (
 from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
     check_readable,
     docstring_blackhole_dtype_layout_params,
+    docstring_dtype_conversion_params,
     docstring_dtype_layout_params,
     docstring_interleaved_buffer_type_params,
     interleaved_memory_config,
 )
-from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import assert_exact, full_range_input
+from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import (
+    assert_exact,
+    convertible_input,
+    full_range_input,
+)
 
 pytestmark = pytest.mark.use_module_device
 
@@ -2887,3 +2892,41 @@ def test_copy_docstring_blackhole_inputs(dtype, layout, input_buffer_type, outpu
     assert output.layout == layout
     assert output.memory_config() == interleaved_memory_config(output_buffer_type)
     assert_exact(expected, ttnn.to_torch(ttnn.typecast(input_b, ttnn.bfloat16)))
+
+
+@pytest.mark.parametrize(
+    "input_dtype, output_dtype", docstring_dtype_conversion_params(ttnn.copy, "`input_a`", "`input_b`")
+)
+def test_copy_docstring_dtype_conversions(input_dtype, output_dtype, device):
+    """Copies between each pair of dtypes the ttnn.copy docstring lists for an ``input_b`` of another dtype, in TILE
+    layout, with values that both dtypes hold exactly and no NaN. Zeros are compared by value."""
+    check_readable(input_dtype, output_dtype)
+    shape = (2, 3, 50, 70)
+    input_a = ttnn.from_torch(
+        convertible_input(shape, input_dtype, output_dtype), dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    expected = ttnn.to_torch(input_a)
+    # Every value of input_b differs from input_a's, so the test sees each one overwritten.
+    other_values = torch.where(expected == 1, 2, 1).to(torch.float32)
+    input_b = ttnn.from_torch(other_values, dtype=output_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.copy(input_a, input_b)
+
+    assert output.buffer_address() == input_b.buffer_address()
+    assert output.dtype == output_dtype
+    assert_exact(expected, ttnn.to_torch(input_b), signed_zeros=False)
+
+
+@pytest.mark.parametrize("input_dtype, output_dtype", docstring_dtype_conversion_params(ttnn.assign, "input", "output"))
+def test_assign_docstring_dtype_conversions(input_dtype, output_dtype, device):
+    """Assigns into each output dtype the ttnn.assign docstring lists for an input of another dtype, in TILE layout,
+    with values that both dtypes hold exactly and no NaN. Zeros are compared by value."""
+    check_readable(input_dtype, output_dtype)
+    shape = (2, 3, 50, 70)
+    input_tensor = ttnn.from_torch(
+        convertible_input(shape, input_dtype, output_dtype), dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    output = ttnn.assign(input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=output_dtype)
+
+    assert output.dtype == output_dtype
+    assert output.layout == ttnn.TILE_LAYOUT
+    assert_exact(ttnn.to_torch(input_tensor), ttnn.to_torch(output), signed_zeros=False)
