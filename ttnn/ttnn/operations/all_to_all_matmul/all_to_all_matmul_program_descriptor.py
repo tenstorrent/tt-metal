@@ -20,7 +20,7 @@ Per chip p of a group (ring of G chips along cluster_axis):
     writer  (RISCV_0, NoC0)  output row groups to the output pages.
 
 Blocking knobs (op_design.md "Blocking Model"), each defined once here: BLOCK_HEADS, WEIGHT_BLOCK_BYTES (-> block_n),
-WEIGHT_DEPTH, OUT_DEPTH, PORT_BATCH_CHUNKS, A_SLOT_BUDGET_BYTES; block_m = B * Mq_t and block_k = Kt (R1).
+WEIGHT_DEPTH, WEIGHT_READ_CHUNK_BYTES, OUT_DEPTH, PORT_BATCH_CHUNKS, A_SLOT_BUDGET_BYTES; block_m = B * Mq_t and block_k = Kt (R1).
 """
 
 from __future__ import annotations
@@ -38,6 +38,11 @@ KERNEL_DIR = Path(__file__).parent / "kernels"
 BLOCK_HEADS = 1  # heads per compute block: a head shares no operand with another head (op_design.md, Axes)
 WEIGHT_BLOCK_BYTES = 256 * 1024  # bytes of one weight block (Kt x block_n tiles) -> block_n
 WEIGHT_DEPTH = 2  # weight blocks in cb_weight
+# Weight bytes in flight per compute core (one read barrier per chunk). OVERLAP (Refinement 3): the whole 128 KiB block
+# in flight on 96 cores stretched the fabric exchange from 49 to 69 us on Kimi; harness, Kimi model case, fastest chip:
+# whole block 80.8, 64 KiB 76.4, 32 KiB 64.1, 16 KiB 64.2, 8 KiB 64.3, 2 KiB 63.6 us. 16 KiB sits mid-plateau whether
+# the limit is bytes or reads in flight (bf16: 8 tiles, bfp8: 15 tiles). >= the block size disables the throttle.
+WEIGHT_READ_CHUNK_BYTES = 16 * 1024
 OUT_DEPTH = 2  # output row groups in cb_out
 PORT_BATCH_CHUNKS = 8  # packets per DRAM-read barrier / per sender flush on the port cores (8 beat 4 at 7232 B)
 A_SLOT_BUDGET_BYTES = 384 * 1024  # predicate A_RESIDENT (regime R1; else R3, deferred)
@@ -394,6 +399,7 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
     # cb_weight depth: WEIGHT_DEPTH is the knob, but a core never holds more weight blocks than it processes per call
     # (Kimi: 1 head x 1 n-block -> one 128 KiB block; a second buffer would never be live).
     weight_depth = min(WEIGHT_DEPTH, heads_per_core_max * num_n_blocks)
+    weight_chunk_tiles = max(1, WEIGHT_READ_CHUNK_BYTES // w_tile)
     cap_tiles = heads_per_core_max * slot_tiles
     if cap_tiles * in_tile > A_SLOT_BUDGET_BYTES:
         raise RuntimeError(
@@ -532,7 +538,7 @@ def run(input_tensor, weight, *, cluster_axis, num_links, memory_config, compute
             compute_rt[xy[0]][xy[1]] = [len(order)]
             writer_rt[xy[0]][xy[1]] = [len(order)] + order
         reader_ct = [CB_A_LANDED, CB_WEIGHT, Kt, Nt, block_n, num_n_blocks, B, Mq_t, St, Hl, in_tile, w_tile]
-        reader_ct += [Mq, CB_RETILE_STAGE]
+        reader_ct += [Mq, CB_RETILE_STAGE, weight_chunk_tiles]
         reader_ct += in_ct + w_ct
         compute_ct = [CB_A_LANDED, CB_WEIGHT, CB_OUT, block_m, Kt, block_n, num_n_blocks, sbh, sbw]
         writer_ct = [CB_OUT, in_tile, block_m, Mq_t, Nt, block_n, num_n_blocks, sbh, H] + out_ct

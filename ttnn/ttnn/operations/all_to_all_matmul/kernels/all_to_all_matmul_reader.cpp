@@ -5,7 +5,7 @@
 //
 // Per head slot of this core, in slot order (local-source heads first, then remote heads by source-local index j):
 //   load_weight_block(slot, 0)   Kt x block_n weight tiles -> cb_weight (issued before the slot lands: the dominant
-//                                DRAM read fills the fabric wait)
+//                                DRAM read fills the fabric wait), weight_chunk_tiles reads in flight at a time
 //   land_block(slot)             cb_a_landed is backed on the persistent landing scratch (zero-copy): slot s sits at
 //                                base + s * slot_bytes, where the remote port writes it.
 //                                local head:  read the own quarter of the head's rows (all batches, all K) from DRAM
@@ -46,8 +46,13 @@ void kernel_main() {
     constexpr uint32_t w_tile_bytes = get_compile_time_arg_val(11);
     constexpr uint32_t Mq = get_compile_time_arg_val(12);  // rows per device
     constexpr uint32_t cb_retile_stage = get_compile_time_arg_val(13);
+    // Weight reads in flight per core (OVERLAP, Refinement 3): one barrier per weight_chunk_tiles reads. 96 cores
+    // each flooding the NoC with a whole 128 KiB block stretched the fabric exchange by ~20 us (Kimi); a few tiles in
+    // flight per core keep DRAM busy without starving the landing / port traffic.
+    constexpr uint32_t weight_chunk_tiles = get_compile_time_arg_val(14);
+    static_assert(weight_chunk_tiles >= 1, "weight_chunk_tiles >= 1");
     constexpr bool retile = (Mq % 32) != 0;
-    constexpr auto in_args = TensorAccessorArgs<14>();
+    constexpr auto in_args = TensorAccessorArgs<15>();
     constexpr auto w_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
     constexpr uint32_t quarter_tiles = Mq_t * Kt;       // one batch's rows of one head quarter
     constexpr uint32_t slot_tiles = B * quarter_tiles;  // = block_m * Kt
@@ -75,6 +80,11 @@ void kernel_main() {
 #ifndef ABLATE_NOWEIGHT
             noc_async_read(w.get_noc_addr(page0 + k * Nt + n), wbase + (k * block_n + n) * w_tile_bytes, w_tile_bytes);
 #endif
+            if constexpr (weight_chunk_tiles < weight_block_tiles) {
+                if ((i + 1) % weight_chunk_tiles == 0) {
+                    noc_async_read_barrier();
+                }
+            }
             if (++n == block_n) {
                 n = 0;
                 if (++k == Kt) {
