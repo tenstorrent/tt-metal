@@ -395,6 +395,20 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
             "Input activations are not supported for 8-bit subtract (including subalpha)");
     }
 
+    // These pairs have no conversion into a UINT8 output yet, so the packer would write DEST's raw bits.
+    const auto output_dtype =
+        output_tensor.has_value() ? output_tensor->dtype() : attributes.dtype.value_or(input_tensor_a.dtype());
+    if (output_dtype == DataType::UINT8) {
+        TT_FATAL(
+            input_tensor_a.dtype() != DataType::UINT16,
+            "A UINT8 output is not supported for UINT16 inputs of binary operation {}",
+            attributes.binary_op_type);
+        TT_FATAL(
+            !(attributes.binary_op_type == BinaryOpType::DIV && input_tensor_a.dtype() == DataType::INT32 &&
+              input_tensor_b.has_value() && input_tensor_b->dtype() == DataType::INT32),
+            "A UINT8 output is not supported for INT32 integer division");
+    }
+
     BinaryNgDeviceOperation::validate_on_program_cache_hit(attributes, tensor_args);
 
     auto validate_activations = [](const auto& activations, DataType dtype) {

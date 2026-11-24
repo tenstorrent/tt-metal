@@ -236,3 +236,35 @@ def test_binary_uint8_output_after_explicit_typecast(device):
 
     assert result.dtype == ttnn.uint8
     assert torch.equal(ttnn.to_torch(result).to(torch.uint8), (a + b).to(torch.uint8))
+
+
+@pytest.mark.parametrize("input_dtype", (ttnn.int32, ttnn.uint32))
+@pytest.mark.parametrize("op", ("subtract", "add", "multiply"))
+def test_binary_uint8_output_wraps(device, input_dtype, op):
+    # Results outside [0, 255] keep their low byte, as torch's conversion to uint8 does: subtract goes below zero
+    # (a < b), add and multiply go past 255 (100 * 100).
+    torch.manual_seed(0)
+    shape = (2, 64, 64)
+    a = torch.randint(0, 200, shape)
+    b = torch.randint(0, 200, shape)
+    if op == "subtract":
+        a, b = torch.minimum(a, b), torch.maximum(a, b) + 1
+    a[0, 0, 0], b[0, 0, 0] = (5, 9) if op == "subtract" else (100, 100)
+    ta = ttnn.from_torch(a, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tb = ttnn.from_torch(b, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    result = getattr(ttnn, op)(ta, tb, dtype=ttnn.uint8)
+
+    expected = (getattr(torch, op)(a, b) % 256).to(torch.uint8)
+    assert torch.equal(ttnn.to_torch(result).to(torch.uint8), expected)
+
+
+def test_binary_uint8_output_rejects_unconverted_inputs(device, expect_error):
+    a = torch.randint(1, 50, (32, 32))
+    ta = ttnn.from_torch(a, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "A UINT8 output is not supported for UINT16 inputs"):
+        ttnn.add(ta, ta, dtype=ttnn.uint8)
+    ti = ttnn.from_torch(a, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    # ttnn.divide rejects it before the device op, which rejects it too for direct callers.
+    with expect_error(RuntimeError, "Incorrect output_dtype value for Integer Division"):
+        ttnn.divide(ti, ti, dtype=ttnn.uint8)
