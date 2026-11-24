@@ -27,6 +27,8 @@ void kernel_main() {
     constexpr int idx0 = 0;
     constexpr int dst0 = 0;
     constexpr int dst1 = 1;
+    // sfpu_add_int takes the operand tile as a distance from the destination tile, not an absolute index.
+    constexpr int add_operand_dst_offset = dst1 - dst0;
 
     if (do_mask_h) {
         dfb_mask_h_obj.wait_front(onetile);
@@ -73,7 +75,7 @@ void kernel_main() {
 
                     copy_tile_to_dst(dfb_intermed0_obj, idx0, dst1);
                     sfpu_sum_int_init();
-                    sfpu_add_int(dst0, dst1);
+                    sfpu_add_int(dst0, add_operand_dst_offset);
                     tile_regs_commit();
 
                     tile_regs_wait();

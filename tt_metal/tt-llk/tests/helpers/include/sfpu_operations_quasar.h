@@ -1817,7 +1817,7 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
     {
         // add_int reads the tile it is pointed at and the one after it (dst_reg[32]) and writes
         // in place, whatever its dst_offset argument says, so it fits the binary harness only
-        // with in1 = in0 + 1 and out = in0 (the compute API's sfpu_add_int(dst0, dst1) contract).
+        // with in1 = in0 + 1 and out = in0 (the compute API's sfpu_add_int(idst, dst_offset == 1) contract).
         LLK_ASSERT(src1_tile == src0_tile + 1 && dst_tile == src0_tile, "INT_SUM_ADD needs in1 = in0 + 1 and out = in0");
         SFPU_UNARY_CALL(
             DST_SYNC, is_fp32_dest_acc_en, add_int, (APPROXIMATION_MODE, ITERATIONS), src0_tile, VectorMode::RC, src1_tile - src0_tile /* dst_offset */);

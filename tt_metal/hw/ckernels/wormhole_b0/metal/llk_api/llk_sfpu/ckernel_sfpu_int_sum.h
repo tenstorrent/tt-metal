@@ -90,7 +90,7 @@ inline void sum_int_init() {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void add_int(const uint dst_offset) {
-    // A Dest tile is 64 rows and sfpi's dst_reg[] steps two rows per index, so one tile is 32 entries.
+    // SFPI's dst_reg[] index steps the Dest address by SFP_DESTREG_STRIDE (2) rows, so a 64-row tile spans 32 indices.
     constexpr uint dst_tile_size_sfpi = 32;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {

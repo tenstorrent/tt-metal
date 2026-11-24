@@ -81,6 +81,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // its bound on the operand tile (SFPU_UNARY_CALL only checks the destination index).
     constexpr std::uint32_t dst_index = INT_SUM_DST_INDEX;
     llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(sfpu::sum_int_init<APPROX_MODE>);
+    // Copy of the assert in sfpu_add_int (tt_metal/hw/inc/api/compute/eltwise_unary/sfpu_int_sum.h), which the
+    // harness cannot include. test_sfpu_int_sum_add_operand_out_of_bounds_asserts (python_tests/
+    // test_sfpu_int_sum_add.py) checks that it fires. Keep the two in step.
     LLK_ASSERT(
         (static_cast<std::uint64_t>(dst_index) + INT_SUM_DST_OFFSET < get_dest_max_tiles_rt<DST_SYNC, DstTileShape::Tile32x32>()),
         "sfpu_add_int operand tile idst + dst_offset exceeds max dest tiles");

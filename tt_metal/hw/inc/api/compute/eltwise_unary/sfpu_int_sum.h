@@ -48,6 +48,9 @@ ALWI void sfpu_add_int(uint32_t idst, uint32_t dst_offset) {
          trisc::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, trisc::DstTileShape::Tile32x32>()),
         "sfpu_add_int operand tile idst + 1 exceeds max dest tiles"));
 #else
+    // Covered by test_sfpu_int_sum_add_operand_out_of_bounds_asserts (tt_metal/tt-llk/tests/python_tests/
+    // test_sfpu_int_sum_add.py), which exercises a copy of this assert in tests/sources/sfpu_int_sum_add_test.cpp.
+    // Keep the two in step.
     MATH(LLK_ASSERT(
         (static_cast<std::uint64_t>(idst) + dst_offset <
          get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()),
