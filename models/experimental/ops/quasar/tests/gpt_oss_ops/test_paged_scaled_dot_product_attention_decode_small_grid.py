@@ -26,8 +26,8 @@
 # The captured Q tensor is height-sharded on the single core (0, 0), which exists on
 # any device, so the Q shard grid needs no change.
 #
-# Each variant SKIPS (rather than FATALs) when the device compute grid is smaller
-# than the variant's grid rectangle, so the file is safe to run on any device.
+# graph_case.run_case skips a variant when the device compute grid is smaller than the
+# variant's grid rectangle, so the file is safe to run on any device.
 # ---------------------------------------------------------------------------
 """Small-grid (2x1) variants of ``paged_scaled_dot_product_attention_decode``, as the gpt-oss model runs it."""
 
@@ -58,8 +58,4 @@ CASES = [_case_with_grid(c, _SMALL_GRID) for c in _CAPTURED_CASES]
 @G.with_default_mesh()
 @pytest.mark.parametrize("case", CASES, ids=[c["id"] for c in CASES])
 def test_paged_scaled_dot_product_attention_decode_small_grid(ttnn_mesh_device, reset_seeds, case):
-    grid_x, grid_y = case["kwargs"]["program_config"]["fields"]["compute_with_storage_grid_size"]
-    dev = ttnn_mesh_device.compute_with_storage_grid_size()
-    if dev.x < grid_x or dev.y < grid_y:
-        pytest.skip(f"case needs a {grid_x}x{grid_y} grid rectangle; device compute grid is {dev.x}x{dev.y}")
     G.run_case(_OP, case, ttnn_mesh_device)

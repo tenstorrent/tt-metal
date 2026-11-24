@@ -1293,19 +1293,25 @@ def test_model(mesh_device, device_params, batch_size, seq_len, mode, num_layers
 
     logger.info(f"Running {mode} test with batch_size={batch_size}, seq_len={seq_len}, num_layers={num_layers}")
 
-    # Run the forward test
-    passing, output = run_model_forward_test(
-        mesh_device=mesh_device,
-        config=config,
-        state_dict_meta=state_dict_meta,
-        reference_model=reference_model_hf,
-        mesh_config=mesh_config,
-        batch_size=batch_size,
-        seq_len=seq_len,
-        is_decode=is_decode,
-        pcc_threshold=0.95 if num_layers == 1 else 0.85,
-        tensor_cache_path=tensor_cache_path,
-    )
+    # Run the forward test. The golden outputs that it installs for GPT_OSS_PCC_LOG are removed afterwards, so
+    # that a later test in the same session does not compare against them.
+    from models.experimental.ops.quasar.gpt_oss.utils import pcc_log
+
+    try:
+        passing, output = run_model_forward_test(
+            mesh_device=mesh_device,
+            config=config,
+            state_dict_meta=state_dict_meta,
+            reference_model=reference_model_hf,
+            mesh_config=mesh_config,
+            batch_size=batch_size,
+            seq_len=seq_len,
+            is_decode=is_decode,
+            pcc_threshold=0.95 if num_layers == 1 else 0.85,
+            tensor_cache_path=tensor_cache_path,
+        )
+    finally:
+        pcc_log.set_golden_intermediates({})
 
     if passing:
         logger.info(f"✓ Model {mode} test passed. PCC: {output}")

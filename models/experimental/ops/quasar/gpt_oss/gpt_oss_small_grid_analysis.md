@@ -43,7 +43,7 @@ The 11 cases that do not pass on 2 cores are in 5 test files:
 | `test_scaled_dot_product_attention[00_...]` and `[01_...]` | "Provided grid must not contain more cores than the device. Got 32 cores, expected at most 2 cores." | The captured program config asks for an 8x4 grid. |
 | `test_sparse_matmul[00_...]`, `[01_...]`, `[02_...]` and `[03_...]` | "Multicast kernel is placed outside the worker grid" (00, 02); "Out of Memory ... 5898240 B L1 buffer across 2 banks" (01); "No core coordinate found" (03) | The captured program configs ask for (3, 4) and (5, 6) grids; case 01 also keeps a 5.9 MB output in SRAM. |
 
-The same 2 cases are skipped as on 8x4. Their captured SRAM shard grids are larger than the device.
+The same 2 cases are skipped as on 8x4. Their captured SRAM shard grids are larger than the device. These two cases, `test_add[03_32x2880_bf16_ws-l1]` and `test_linear[00_32x4096_bf16_ws-l1]`, got companions on 2026-11-23 (next section).
 
 ## The `_small_grid.py` companion tests
 
@@ -55,11 +55,13 @@ Each companion is a manual file next to the generated test file, in the style of
 | [test_nlp_concat_heads_decode_small_grid.py](../tests/gpt_oss_ops/test_nlp_concat_heads_decode_small_grid.py#L4-L34) | Two tests. The op itself with 2 heads, which fit 2 cores; the values are compared with the torch reference. And the captured 64-head case through `merge_heads_on_device`, the head merge that the model runs on a device with fewer cores than heads, with the expected output placement changed to interleaved DRAM. | 2 passed, 20 s | 2 passed, 18 s |
 | [test_paged_scaled_dot_product_attention_decode_small_grid.py](../tests/gpt_oss_ops/test_paged_scaled_dot_product_attention_decode_small_grid.py#L4-L31) | Both cases with a 2x1 grid in the program config, the grid that the model passes on a 2x1 device ([attention/config.py:101-108](tt/attention/config.py#L101-L108)). | 2 passed, 68 s | 2 passed, 53 s |
 | [test_scaled_dot_product_attention_small_grid.py](../tests/gpt_oss_ops/test_scaled_dot_product_attention_small_grid.py#L4-L26) | Both cases with a 2x1 grid, as the model passes for prefill ([attention/config.py:110-120](tt/attention/config.py#L110-L120)). | 2 passed, 191 s | 2 passed, 185 s |
-| [test_sparse_matmul_small_grid.py](../tests/gpt_oss_ops/test_sparse_matmul_small_grid.py#L4-L51) | All 4 cases with the grid that the model's `fit_core_grid` picks for the device, and `per_core_N` (output width per core, in tiles) to match; case 01 with its output in DRAM. On a 1- or 2-core grid, every variant is marked `xfail` and does not run, because of L (next sections). | 4 xfailed, 6 s | 2 passed (01 and 03, on the model's (5, 3) grid), 2 skipped (00 and 02 need no change on 8x4), 10 min |
+| [test_linear_small_grid.py](../tests/gpt_oss_ops/test_linear_small_grid.py#L4-L21) | Case 00 with its input interleaved in DRAM, where the model's head merge puts the merged heads on a device with fewer cores than heads; everything else as captured, and the op picks the grid of its width-sharded output. Run on ttsim on 2026-11-23. | 1 passed, 18 s (ttsim) | 1 passed, 15 s (ttsim) |
+| [test_add_small_grid.py](../tests/gpt_oss_ops/test_add_small_grid.py#L4-L21) | Case 03 with its input width-sharded over the first row of cores, the layout that `ttnn.experimental.quasar.linear` gives the projection output on Quasar. Run on ttsim on 2026-11-23. | 1 passed, 9 s (ttsim) | 1 passed, 7 s (ttsim) |
+| [test_sparse_matmul_small_grid.py](../tests/gpt_oss_ops/test_sparse_matmul_small_grid.py#L4-L40) | All 4 cases with the grid that the model's `fit_core_grid` picks for the device, and `per_core_N` (output width per core, in tiles) to match; case 01 with its output in DRAM (since 2026-11-23, where the model's `down_output_memory_config` puts it: in DRAM on 2 cores, in SRAM on 8x4). On 2026-11-12, every variant on a 1- or 2-core grid was marked `xfail` and did not run, because of L (next sections). | 4 xfailed, 6 s | 2 passed (01 and 03, on the model's (5, 3) grid), 2 skipped (00 and 02 need no change on 8x4), 10 min |
 
 The scaled dot product attention (SDPA) companion and the paged SDPA decode companion check only the output shape, type, placement and that the values are finite: the suite has no torch reference for these ops, as for the generated files. The `sparse_matmul` companion has the same limit.
 
-The five companion files were written on 2026-11-12 and, as of that date, had not run in CI.
+Five companion files were written on 2026-11-12, and the companions of `test_linear` and `test_add` on 2026-11-23. As of 2026-11-23, none had run in CI.
 
 ## L on small grids: cause and fix
 
@@ -101,13 +103,13 @@ Cases 00, 02 and 03 on (2, 1) and case 00 on (1, 1) were not run with the fix. T
 
 tt-metal issue #66114 tracks the problem, with a repro test that needs only files on `main`. The issue gives the repro test, to be saved as `models/experimental/ops/quasar/tests/gpt_oss_ops/test_sparse_matmul_repro.py`.
 
-Until the fix is on `main`, the model excludes the (6, 3) grid for its expert matmuls (`excluded_grids` in `tt/mlp.py`), and the `sparse_matmul` companion marks 1- and 2-core grids `xfail`. Both can be removed once the fix is on `main`.
+The fix merged on `main` as #66243 on 2026-11-18. After that, the exclusion of the (6, 3) grid was removed from the model's expert matmuls (`tt/mlp.py`), and the `xfail` on 1- and 2-core grids from the `sparse_matmul` companion. On 2026-11-19, all 4 companion cases passed on the 2x1 grid on ttsim ([gpt_oss_ttsim_results.md](gpt_oss_ttsim_results.md)).
 
 ## The decode down projection on 2 cores
 
-The decode down projection keeps its input in SRAM: its input comes from the gate and up projections, whose outputs are placed in SRAM ([experts/decode.py:102](tt/experts/decode.py#L102-L102) and [experts/decode.py:128](tt/experts/decode.py#L128-L128)). Input and output are each [1, 32, 1, 2880]. Tile layout pads the dimension of size 1 to 32 rows, so each tensor is 5.9 MB in bfloat16, which is 2.95 MB per core on 2 cores. Together they need 5.9 MB per core, and the SRAM bank of each core holds 3.86 MB. In `bfloat8_b`, which the model asks for, the two would just fit, but Quasar has no block float formats, and the model uses bfloat16 instead.
+The decode down projection keeps its input in SRAM: its input comes from the gate and up projections, whose outputs are placed in SRAM ([experts/decode.py:105](tt/experts/decode.py#L105-L105) and [experts/decode.py:131](tt/experts/decode.py#L131-L131)). Input and output are each [1, 32, 1, 2880]. Tile layout pads the dimension of size 1 to 32 rows, so each tensor is 5.9 MB in bfloat16, which is 2.95 MB per core on 2 cores. Together they need 5.9 MB per core, and the SRAM bank of each core holds 3.86 MB. In `bfloat8_b`, which the model asks for, the two would just fit, but Quasar has no block float formats, and the model uses bfloat16 instead.
 
-The model puts this output in DRAM when input and output together need more than half of each core's SRAM bank, and keeps it in SRAM otherwise ([experts/decode.py:14-28](tt/experts/decode.py#L14-L28)). On 8x4, the two need about 370 KB per bank, so the output stays in SRAM. On 2 cores, the output goes to DRAM, as the companion test does for case 01.
+The model puts this output in DRAM when input and output together need more than half of each core's SRAM bank, and keeps it in SRAM otherwise ([experts/decode.py:14-31](tt/experts/decode.py#L14-L31)). On 8x4, the two need about 370 KB per bank, so the output stays in SRAM. On 2 cores, the output goes to DRAM, as the companion test does for case 01.
 
 ## The gpt-oss demo on 2 cores
 
@@ -136,9 +138,9 @@ Each of the two captured `lm_head` matmul calls takes 31 to 39 min on a 2-core g
 
 ## Summary
 
-On a 2-core grid, 106 of the 119 cases pass. With the 5 companion files, every failing case has a small-grid form that passes, except `sparse_matmul`, which stops the simulator on 1- and 2-core grids because of L. L comes from the sparse_matmul factory, which leaves implicit sync on for kernels that use explicit sync; at kernel exit, the firmware then adds tiles to a counter that already holds all of them. With implicit sync turned off, as in the other matmul factories, the 3 tested cases pass (case 01 on (2, 1) and (1, 1), case 03 on (6, 3); #66114). With that fix and the DRAM output for the decode down projection, the gpt-oss demo (2 layers) passes on 2 cores.
+On 2026-11-12, on a 2-core grid, 106 of the 119 cases passed. With the 5 companion files, every failing case had a small-grid form that passed, except `sparse_matmul`, which stopped the simulator on 1- and 2-core grids because of L. L came from the sparse_matmul factory, which left implicit sync on for kernels that use explicit sync; at kernel exit, the firmware then added tiles to a counter that already held all of them. With implicit sync turned off, as in the other matmul factories, the 3 tested cases passed (case 01 on (2, 1) and (1, 1), case 03 on (6, 3)). That fix merged on `main` as #66243 on 2026-11-18 (issue #66114). With it and the DRAM output for the decode down projection, the gpt-oss demo (2 layers) passed on 2 cores on 2026-11-18.
 
 Next steps:
-1. Fix L on `main` (#66114). Then remove the (6, 3) exclusion from `tt/mlp.py` and the `xfail` from the `sparse_matmul` companion, and run cases 00, 02 and 03 on (2, 1) and case 00 on (1, 1).
+1. Run `sparse_matmul` case 00 on (1, 1) with the fix (#66243). The other cases ran with the fix on (2, 1) or (1, 1) on 2026-11-19 (ttsim) or earlier (craq-sim).
 2. Get the DRAM output for the decode down projection reviewed and merged.
 3. Skip the generated `lm_head` cases on small grids, or give them a longer timeout.

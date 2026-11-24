@@ -18,29 +18,21 @@
 # ProgramConfig._build_matmul_config (gpt_oss/tt/experts/config.py) replaces a grid
 # that does not fit with fit_core_grid() and sets per_core_N = ceil(Nt / num_cores).
 # Each variant here applies the same rule to the captured case at run time, with the
-# grid of the device under test and the grid that mlp.py excludes. On a 2x1 device
+# grid of the device under test. On a 2x1 device
 # every projection gets (2, 1) and per_core_N = 45 (Nt = 2880 / 32 = 90). All other
 # program config fields (in0_block_w, subblocks, mcast_in0, ...) stay as captured,
 # because the model computes them without the grid.
 #
-# Case 01 (decode down projection) has one more change. Its input A and its output are
-# both [1, 32, 1, 2880] in L1, which is 32 tile rows of 90 tiles each. As bfloat16 (the
+# Case 01 (decode down projection) can have one more change. Its input A and its output
+# are both [1, 32, 1, 2880], which is 32 tile rows of 90 tiles each. As bfloat16 (the
 # suite runs the captured bfloat8_b as bfloat16, because Quasar has no block-float
-# formats) each tensor is 5.9 MB. On 2 cores the SRAM is split into 2 banks of 3.86 MB:
-# input A takes 2.95 MB of each bank, so the output (another 2.95 MB per bank) does not
-# fit ("Out of Memory: Not enough space to allocate 5898240 B L1 buffer across 2
-# banks"). The variant keeps input A in L1 as captured and moves the output to
-# interleaved DRAM, the placement the model's prefill down projection uses
-# (gpt_oss/tt/experts/prefill.py). The circular buffers of this op are a few blocks of
-# in0_block_w tiles each, so they fit next to input A.
+# formats) each tensor is 5.9 MB, which does not fit in the SRAM of 2 cores next to
+# input A. The model places this output with down_output_memory_config
+# (gpt_oss/tt/experts/decode.py): in SRAM as captured where it fits, in interleaved DRAM
+# where it does not. The variant uses the same rule and keeps input A in SRAM as captured.
 #
 # On a device on which a case needs no change (cases 00 and 02 on the 8x4 grid, where
 # (3, 4) fits), the variant skips, because the generated test runs that exact call.
-#
-# On Quasar, sparse_matmul must run its in0 and in1 kernels without DFB implicit sync.
-# With implicit sync on, the firmware adds tiles to a full tile counter at kernel exit, and
-# on grids such as (2, 1), (1, 1) and (6, 3) craq-sim stops with "UndefinedBehavior:
-# qsr_tile_counter_check_error" (tenstorrent/tt-metal#66114).
 #
 # The suite has no golden reference for sparse_matmul (see GOLDEN in graph_case.py),
 # so the checks are the same as in the generated test: output shape, dtype, placement
@@ -53,21 +45,31 @@ import math
 
 import pytest
 
+import torch
+
 import ttnn
 from models.experimental.ops.quasar.gpt_oss.tt.experts.config import fit_core_grid
+from models.experimental.ops.quasar.gpt_oss.tt.experts.decode import down_output_memory_config
 from models.experimental.ops.quasar.gpt_oss.utils.general_utils import get_compute_grid_size
 from models.experimental.ops.quasar.tests.gpt_oss_ops import graph_case as G
 from models.experimental.ops.quasar.tests.gpt_oss_ops.test_sparse_matmul import CASES as _CAPTURED
 
 _OP = ttnn.sparse_matmul
 
-# The grids that mlp.py passes as excluded_grids to GPTOSSProgramConfig.
-_EXCLUDED_GRIDS = ((6, 3),)
-
-# Captured case ids whose output moves from L1 to DRAM (see the header).
-_DRAM_OUTPUT_IDS = {"01_32x1x2880_bf8_int-l1"}
+# Captured case ids of the decode down projection, whose output placement follows the model's rule (see the header).
+_DECODE_DOWN_IDS = {"01_32x1x2880_bf8_int-l1"}
 
 _DRAM_MEM = {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None}
+
+
+def _output_in_dram(case, mesh_device):
+    """Whether the model's down_output_memory_config puts the output of this case in DRAM on this device."""
+    in_spec = case["args"][0]
+    down_input = ttnn.from_torch(
+        torch.zeros(in_spec["shape"]), dtype=G.DTYPE[in_spec["dtype"]], layout=G.LAYOUT[in_spec["layout"]]
+    )
+    output_width = case["args"][1]["shape"][-1]
+    return down_output_memory_config(down_input, output_width, mesh_device) == ttnn.DRAM_MEMORY_CONFIG
 
 
 def _fit_case(base, mesh_device):
@@ -76,20 +78,16 @@ def _fit_case(base, mesh_device):
     fields = case["kwargs"]["program_config"]["fields"]
     grid = get_compute_grid_size(mesh_device)
     num_tiles_n = math.ceil(case["args"][1]["shape"][-1] / 32)
-    core_x, core_y = fit_core_grid(
-        tuple(fields["compute_with_storage_grid_size"]), num_tiles_n, (grid.x, grid.y), _EXCLUDED_GRIDS
-    )
+    core_x, core_y = fit_core_grid(tuple(fields["compute_with_storage_grid_size"]), num_tiles_n, (grid.x, grid.y))
     fields["compute_with_storage_grid_size"] = [core_x, core_y]
     fields["per_core_N"] = math.ceil(num_tiles_n / (core_x * core_y))
-    if base["id"] in _DRAM_OUTPUT_IDS:
+    if base["id"] in _DECODE_DOWN_IDS and _output_in_dram(case, mesh_device):
         case["kwargs"]["memory_config"] = {**_DRAM_MEM, "k": "mem"}
         case["outs"][0]["mem"] = dict(_DRAM_MEM)
     return case
 
 
-CASES = [
-    pytest.param(c, id=f"{c['id']}-fit_grid" + ("-dram_out" if c["id"] in _DRAM_OUTPUT_IDS else "")) for c in _CAPTURED
-]
+CASES = [pytest.param(c, id=f"{c['id']}-fit_grid") for c in _CAPTURED]
 
 
 @G.with_default_mesh()

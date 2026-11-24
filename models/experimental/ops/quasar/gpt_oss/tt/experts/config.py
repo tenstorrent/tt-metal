@@ -16,14 +16,12 @@ def fit_core_grid(
     cores: tuple[int, int],
     num_tiles_n: int,
     max_grid: tuple[int, int],
-    excluded_grids: tuple[tuple[int, int], ...] = (),
 ) -> tuple[int, int]:
     """Core grid for a 1D multicast matmul with num_tiles_n output tile columns, inside max_grid.
 
-    A grid that fits in max_grid is returned unchanged. Otherwise the result is the rectangle inside max_grid,
-    other than excluded_grids, with the most cores, at most as many as cores has, on which every core gets
-    output columns: each core takes ceil(num_tiles_n / num_cores) columns, and the 1D multicast factories
-    reject a grid with idle cores.
+    A grid that fits in max_grid is returned unchanged. Otherwise the result is the rectangle inside max_grid
+    with the most cores, at most as many as cores has, on which every core gets output columns: each core
+    takes ceil(num_tiles_n / num_cores) columns, and the sparse_matmul factory rejects a grid with idle cores.
     """
     core_x, core_y = cores
     max_x, max_y = max_grid
@@ -33,7 +31,7 @@ def fit_core_grid(
     for y in range(1, max_y + 1):
         for x in range(1, max_x + 1):
             num_cores = x * y
-            if num_cores > core_x * core_y or num_cores <= best[0] * best[1] or (x, y) in excluded_grids:
+            if num_cores > core_x * core_y or num_cores <= best[0] * best[1]:
                 continue
             per_core_n = math.ceil(num_tiles_n / num_cores)
             if math.ceil(num_tiles_n / per_core_n) == num_cores:
@@ -101,10 +99,8 @@ class ProgramConfig:
     base_down_split_size: int = 1024
 
     # Compute grid (x, y) of the device. A core grid above that does not fit in it is replaced with
-    # fit_core_grid when the program config is built, never with one of excluded_grids. None keeps the core
-    # grids as they are.
+    # fit_core_grid when the program config is built. None keeps the core grids as they are.
     max_grid: tuple[int, int] | None = None
-    excluded_grids: tuple[tuple[int, int], ...] = ()
 
     def __post_init__(self):
         """Validate configuration on creation"""
@@ -168,7 +164,7 @@ class ProgramConfig:
         """
         Nt = int(math.ceil(n / 32))
         if self.max_grid is not None:
-            cores = fit_core_grid(cores, Nt, self.max_grid, self.excluded_grids)
+            cores = fit_core_grid(cores, Nt, self.max_grid)
         core_x, core_y = cores
         num_cores = core_x * core_y
         # Ceiling division: per_core_N = ceil(Nt / num_cores). The kernel then

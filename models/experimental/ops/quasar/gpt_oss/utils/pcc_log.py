@@ -4,12 +4,12 @@
 """Per-step PCC / fingerprint logging for gpt-oss bring-up, the gpt-oss analog of resnet's
 RESNET_PCC_LOG and llama's LLAMA_PCC_LOG.
 
-Entirely env-gated (zero overhead when off). Three cooperating pieces:
+Entirely env-gated: when off, each call costs one environment lookup. Three cooperating pieces:
 
   * ``log_op(name, tensor)``: called inline at each step of the model. When ``GPT_OSS_PCC_LOG=1`` it reads
     the device tensor back, logs a ``[PCCLOG]`` fingerprint, and, if a golden with the same NAME was
-    registered, a ``[GOLDENPCC]`` line with the exact device-vs-golden PCC. Returns the tensor untouched,
-    so call sites read ``x = log_op("name", x)``.
+    registered, a ``[GOLDENPCC]`` line with the exact device-vs-golden PCC. Returns the tensor untouched, so a
+    call site can use the call as a statement or inside an expression.
   * ``capture_golden_intermediates(hf_model)``: registers forward hooks on a Hugging Face
     ``GptOssForCausalLM`` that record the reference output of each step under the SAME names that the
     device model logs. ``set_golden_intermediates(dict)`` installs the captured dict before the device run.
@@ -112,29 +112,28 @@ def _pcc(dev, gold):
     g = g[finite]
     if d.numel() < 2:
         return 0.0, finite_frac
-    d = d - d.mean()
-    g = g - g.mean()
-    denom = d.norm() * g.norm()
+    d_centered = d - d.mean()
+    g_centered = g - g.mean()
+    denom = d_centered.norm() * g_centered.norm()
     if float(denom) == 0.0:
-        # Both constant (e.g. all-zero) -> perfectly correlated iff equal.
-        return (1.0 if torch.allclose(dev.reshape(-1)[:1], gold.reshape(-1)[:1]) else 0.0), finite_frac
-    pcc = float((d * g).sum() / denom)
+        # At least one side is constant (e.g. all-zero): correlation is undefined, so count it as 1 only if the
+        # two sides are equal.
+        return (1.0 if torch.allclose(d, g) else 0.0), finite_frac
+    pcc = float((d_centered * g_centered).sum() / denom)
     return pcc, finite_frac
 
 
 def _readback(t, mesh_device=None):
-    """Best-effort device->torch readback that tolerates a mesh device."""
+    """Device->torch readback of a tensor on a single-device mesh.
+
+    On a mesh of several devices, each device holds a part of the tensor, split along a dimension that depends
+    on the step, so a fixed composer would put the parts together wrongly; such a readback raises instead.
+    """
     import ttnn
 
-    try:
-        num = mesh_device.get_num_devices() if mesh_device is not None else 1
-    except Exception:
-        num = 1
-    if num > 1:
-        try:
-            return ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)).float()
-        except Exception:
-            pass
+    device = mesh_device if mesh_device is not None else t.device()
+    if device is not None and device.get_num_devices() > 1:
+        raise NotImplementedError("per-step logging supports a single-device mesh only")
     return ttnn.to_torch(t).float()
 
 

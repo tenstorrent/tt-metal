@@ -22,6 +22,13 @@ Both demos ran `text_demo.py::test_gpt_oss_demo[quasar-1x1-prefill_128]` with th
 | Decode, first token (includes kernel compiles) | 494 s | 508 s |
 | Decode, next 2 tokens | 413 s per token | 429 s per token |
 
+On 2026-11-23, both demos ran again with the same settings, after a review of the branch changed the model:
+- The expert down projections ran on (6, 3) on 8x4; the runs of 2026-11-19 used (5, 3).
+- The decode down projection takes its size check from the packed buffer size, which also covers the block float formats.
+- `merge_heads_on_device` is in `utils/merge_heads.py` (it was in `conftest.py`), and it rejects an input whose heads dimension is not `num_heads`.
+
+Both passed with every op on the device: 8x4 in 2 h 5 min, 2x1 in 2 h 35 min. The step times are within 2.5 min of the table above (the largest difference is the 2x1 warmup prefill: 67 min against 69 min). The logs are `demo_full.log` and `demo_2x1.log` in `/localdev/fplavec/temp/gpt_oss_ops_runs/20261123_run15_demo_ttsim/`.
+
 ## Setup
 
 - Branch `fplavec/gpt_oss_quasar_bringup_2` at `20a35a0ea79`, on `main` `840db3161d0`, with PR #63905 (head `e5f7dfff689`) applied on top. #63905 widens the implicit-sync descriptor counts of the Quasar DFBs (dataflow buffers) to 16 bits; without it, untilize fails (problem I).
@@ -233,8 +240,8 @@ The suite harness skips a case that cannot run on the device as captured. Two ru
 
 | Skipped case | 8x4 | 2x1 | Why | Covered by |
 |---|---|---|---|---|
-| `test_add[03_32x2880_bf16_ws-l1]` | yes | yes | captured SRAM shard grid needs core column 10 | nothing |
-| `test_linear[00_32x4096_bf16_ws-l1]` | yes | yes | captured SRAM shard grid needs core column 10 | nothing |
+| `test_add[03_32x2880_bf16_ws-l1]` | yes | yes | captured SRAM shard grid needs core column 10 | [test_add_small_grid.py](../tests/gpt_oss_ops/test_add_small_grid.py#L4-L21) |
+| `test_linear[00_32x4096_bf16_ws-l1]` | yes | yes | captured SRAM shard grid needs core column 10 | [test_linear_small_grid.py](../tests/gpt_oss_ops/test_linear_small_grid.py#L4-L21) |
 | `test_nlp_concat_heads_decode[00_...]` | yes | yes | 64 heads, more than the cores of either grid | `test_nlp_concat_heads_decode_small_grid.py` |
 | `test_sparse_matmul[01_...]`, `[03_...]` | yes | yes | captured compute grid 5x6 | `test_sparse_matmul_small_grid.py` |
 | `test_sparse_matmul[00_...]`, `[02_...]` | no | yes | captured compute grid 3x4 | `test_sparse_matmul_small_grid.py` |
@@ -242,7 +249,10 @@ The suite harness skips a case that cannot run on the device as captured. Two ru
 | `test_paged_scaled_dot_product_attention_decode[00_...]`, `[01_...]` | no | yes | captured compute grid 8x4 | `test_paged_scaled_dot_product_attention_decode_small_grid.py` |
 | `test_sparse_matmul_small_grid[00_...]`, `[02_...]` | yes | no | the captured call fits the 8x4 grid | `test_sparse_matmul.py` |
 
-The companions run each skipped call in the form that the model uses on that grid, and they pass. The two shard-grid cases run on no Quasar grid.
+The companions run each skipped call in the form that the model uses on that grid, and they pass. The companions of `test_add[03]` and `test_linear[00]` were written on 2026-11-23, after the runs in this report, so the op suite counts in the "Results" section do not include them. They ran on their own on 2026-11-23, with the ttsim version and settings in the "Setup" section, and both passed on both grids, with the values checked against the suite's torch references (logs in `/localdev/fplavec/temp/gpt_oss_ops_runs/20261123_linear_add_small_grid/`):
+
+- `test_linear_small_grid` runs `test_linear[00]` with its input interleaved in DRAM, where the model's head merge puts the merged heads on Quasar.
+- `test_add_small_grid` runs `test_add[03]` with its input width-sharded over the first row of cores, which is where `ttnn.experimental.quasar.linear` puts the projection output on Quasar (shards of 384 columns on 8 cores on 8x4, with the last shard half full; 2 cores of 1440 columns on 2x1).
 
 ## ttsim compared with craq-sim
 
@@ -250,5 +260,5 @@ ttsim ran the op suite faster than craq-sim: 60 min against 2 h 37 min on 8x4, a
 
 ## Open problems
 
-- `test_add[03_...]` and `test_linear[00_...]` run on no Quasar grid, and no companion test covers them.
+- The suite's `emulator` marker, which selects the cases for a 2-core device (`pytest -m emulator`), does not select `test_add_small_grid` or the 4 cases of `test_sparse_matmul_small_grid`, although they run on 2 cores. The marker rule in the suite's `conftest.py` reads the captured case that a test receives as its parameter, and these two tests change the case only inside the test.
 - #63905 is not on `main`.

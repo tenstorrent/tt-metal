@@ -24,7 +24,7 @@
 #     (0,0),(1,0) => [[0,0,1,0]] on any grid with at least 2 columns.
 #
 #   * test_merge_heads_on_device runs the captured 64-head case unchanged through
-#     merge_heads_on_device from models/experimental/ops/quasar/gpt_oss/conftest.py.
+#     merge_heads_on_device from models/experimental/ops/quasar/gpt_oss/utils/merge_heads.py.
 #     That is what the gpt-oss model runs in place of nlp_concat_heads_decode on a
 #     device with fewer cores than heads (the quasar_ops fixture in that conftest).
 #     merge_heads_on_device returns its output interleaved in DRAM, not width-
@@ -39,7 +39,7 @@ import copy
 import pytest
 
 import ttnn
-from models.experimental.ops.quasar.gpt_oss.conftest import merge_heads_on_device
+from models.experimental.ops.quasar.gpt_oss.utils.merge_heads import merge_heads_on_device
 from models.experimental.ops.quasar.tests.gpt_oss_ops import graph_case as G
 from models.experimental.ops.quasar.tests.gpt_oss_ops.test_nlp_concat_heads_decode import CASES as CAPTURED_CASES
 
@@ -98,10 +98,6 @@ MERGE_CASES = [_merge_case(c) for c in CAPTURED_CASES]
 @G.with_default_mesh()
 @pytest.mark.parametrize("case", CASES, ids=[c["id"] for c in CASES])
 def test_nlp_concat_heads_decode_small_grid(ttnn_mesh_device, reset_seeds, case):
-    num_heads = case["kwargs"]["num_heads"]["v"]
-    dev = ttnn_mesh_device.compute_with_storage_grid_size()
-    if dev.x * dev.y < num_heads:
-        pytest.skip(f"case needs {num_heads} compute cores (one per head); device compute grid is {dev.x}x{dev.y}")
     G.run_case(_OP, case, ttnn_mesh_device)
 
 

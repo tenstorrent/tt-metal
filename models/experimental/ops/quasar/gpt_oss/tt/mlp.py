@@ -140,11 +140,9 @@ class MLP:
             )
 
             # Use GPT-OSS specific program config. Its core grids assume a device with at least 6 core rows, so
-            # each grid is fitted to the device's compute grid. On an 8x4 grid, the down projections would get
-            # (6, 3), but on (6, 3) the 128-row prefill down projection stops the craq-sim simulator with a tile
-            # counter error ("occupancy exceeds capacity"), so (6, 3) is excluded and they get (5, 3).
+            # each grid is fitted to the device's compute grid.
             grid = get_compute_grid_size(mesh_device)
-            program_config = GPTOSSProgramConfig(max_grid=(grid.x, grid.y), excluded_grids=((6, 3),))
+            program_config = GPTOSSProgramConfig(max_grid=(grid.x, grid.y))
 
             # Create experts with new modular implementation
             self.experts = Experts(
