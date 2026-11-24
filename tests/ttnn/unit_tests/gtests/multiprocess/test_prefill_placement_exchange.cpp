@@ -55,11 +55,11 @@ protected:
     // Every rank's copy of `mine`, concatenated in rank order. Without a context, just `mine`.
     std::vector<uint32_t> gather_over_ranks(std::vector<uint32_t> mine) const {
         const auto context = mesh_distributed_context(*mesh_device_);
-        if (context == nullptr) {
+        if (!context.has_value()) {
             return mine;
         }
-        std::vector<uint32_t> all(mine.size() * *context->size());
-        context->all_gather(
+        std::vector<uint32_t> all(mine.size() * *context->get().size());
+        context->get().all_gather(
             ttsl::as_writable_bytes(ttsl::Span<uint32_t>(mine)), ttsl::as_writable_bytes(ttsl::Span<uint32_t>(all)));
         return all;
     }
@@ -144,7 +144,7 @@ TEST_F(RingRing4x4Fixture, ExchangeIsCachedPerConfig) {
 // rank waits in the all-reduce and the test times out instead of failing.
 TEST_F(RingRing4x4Fixture, LocalRecordFailureOnOneRankThrowsOnEveryRank) {
     const auto context = mesh_distributed_context(*mesh_device_);
-    const bool is_failing_rank = context == nullptr || *context->rank() == 0;
+    const bool is_failing_rank = !context.has_value() || *context->get().rank() == 0;
     EXPECT_THROW(
         exchange_chip_records(
             *mesh_device_,
@@ -159,7 +159,7 @@ TEST_F(RingRing4x4Fixture, LocalRecordFailureOnOneRankThrowsOnEveryRank) {
 
 TEST_F(RingRing4x4Fixture, ExchangeRecoversAfterAFailedExchange) {
     const auto context = mesh_distributed_context(*mesh_device_);
-    const bool is_failing_rank = context == nullptr || *context->rank() == 0;
+    const bool is_failing_rank = !context.has_value() || *context->get().rank() == 0;
     const auto compute = [&is_failing_rank](const MeshCoordinate&) -> std::vector<uint32_t> {
         TT_FATAL(!is_failing_rank, "injected local_record failure");
         return {3};

@@ -54,13 +54,13 @@ std::string cache_signature(const ttnn::MeshDevice& mesh, uint32_t words_per_chi
 
 }  // namespace
 
-std::shared_ptr<DistributedContext> mesh_distributed_context(const ttnn::MeshDevice& mesh) {
+MeshContext mesh_distributed_context(const ttnn::MeshDevice& mesh) {
     return mesh.coowner_context();
 }
 
 ChipRecords exchange_chip_records(
     const ttnn::MeshDevice& mesh,
-    const std::shared_ptr<DistributedContext>& context,
+    const MeshContext& context,
     uint32_t words_per_chip,
     const std::function<std::vector<uint32_t>(const ttnn::MeshCoordinate&)>& local_record,
     const std::string& config_key) {
@@ -103,8 +103,8 @@ ChipRecords exchange_chip_records(
     }
 
     std::vector<uint32_t> all = mine;
-    if (context != nullptr) {
-        context->all_reduce(
+    if (context.has_value()) {
+        context->get().all_reduce(
             std::span<uint32_t>(mine), std::span<uint32_t>(all), tt::tt_metal::distributed::multihost::ReduceOp::SUM);
     }
 

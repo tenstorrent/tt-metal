@@ -9,6 +9,7 @@
 #include <tt_stl/span.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -244,9 +245,10 @@ public:
     std::vector<IDevice*> get_devices() const;
     tt_fabric::FabricNodeId get_fabric_node_id(const MeshCoordinate& coord) const;
 
-    // Sub-context over the ranks driving this mesh's devices, or null when this rank drives all of them. Created on
-    // first use, collectively across the co-owners.
-    const std::shared_ptr<multihost::DistributedContext>& coowner_context() const;
+    // Sub-context over the ranks driving this mesh's devices, or nullopt when this rank drives all of them. Created on
+    // first use, collectively across the co-owners. The mesh owns the context: the reference is valid only while the
+    // mesh is alive, and ownership is not shared with the caller.
+    std::optional<std::reference_wrapper<const multihost::DistributedContext>> coowner_context() const;
 
     DeviceIds get_device_ids() const;
 

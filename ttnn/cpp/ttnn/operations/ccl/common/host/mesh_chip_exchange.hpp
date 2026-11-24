@@ -6,7 +6,7 @@
 
 #include <cstdint>
 #include <functional>
-#include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -21,12 +21,15 @@ namespace ttnn::operations::ccl::common {
 // One record of uint32 words per mesh coordinate, indexed by the coordinate's linear index in the mesh shape.
 using ChipRecords = std::vector<std::vector<uint32_t>>;
 
+// A co-owner context borrowed from a mesh; empty when the mesh has no co-owners.
+using MeshContext = std::optional<std::reference_wrapper<const tt::tt_metal::distributed::multihost::DistributedContext>>;
+
 // Computes a record for every coordinate of `mesh`, including those on other hosts.
 //
 // Mesh workloads are SPMD: every rank builds programs for every global coordinate, but a rank can only read the
 // physical layout (harvesting, translated NOC coordinates) of the chips it owns. `local_record` is called on the
 // owning rank only, with `words_per_chip` words each; the ranks then sum their records over `context`, so every
-// rank returns the same full set. A mesh whose coordinates are all local (or a null/one-rank `context`) makes no
+// rank returns the same full set. A mesh whose coordinates are all local (or an empty `context`) makes no
 // collective call.
 //
 // Every rank of the mesh must call this with the same arguments in the same order, like any collective.
@@ -40,14 +43,14 @@ using ChipRecords = std::vector<std::vector<uint32_t>>;
 // `config_key` must name every other input the records depend on.
 ChipRecords exchange_chip_records(
     const ttnn::MeshDevice& mesh,
-    const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>& context,
+    const MeshContext& context,
     uint32_t words_per_chip,
     const std::function<std::vector<uint32_t>(const ttnn::MeshCoordinate&)>& local_record,
     const std::string& config_key = {});
 
-// The context spanning the ranks that co-own `mesh`. Null when this rank drives every device of the mesh.
-std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> mesh_distributed_context(
-    const ttnn::MeshDevice& mesh);
+// The context spanning the ranks that co-own `mesh`, borrowed from the mesh. Empty when this rank drives every device
+// of the mesh.
+MeshContext mesh_distributed_context(const ttnn::MeshDevice& mesh);
 
 // Appends words to a record, for records that mix coordinates, indices and flags.
 class RecordWriter {
