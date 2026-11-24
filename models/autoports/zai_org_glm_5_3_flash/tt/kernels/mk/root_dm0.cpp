@@ -42,7 +42,7 @@ void kernel_main() {
         }
         ph1::phase_main();
         mk::cb_rewind_range(0, 2);   // GATHER, MSG
-        mk::cb_rewind_range(14, mhc::ROOT_CBS);  // RED .. DBG (.. MSS with MHC_MS1; root only)
+        mk::cb_rewind_range(14, mhc::ROOT_CBS);  // RED .. DBG (root only)
         ph7::phase_main();
     }  // layer
 }

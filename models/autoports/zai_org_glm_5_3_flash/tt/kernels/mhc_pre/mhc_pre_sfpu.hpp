@@ -172,5 +172,37 @@ sfpi_inline void mhc_probe_planes(std::integer_sequence<int, Ps...>) {
 
 inline void mhc_plane_probe() { mhc_probe_planes(std::make_integer_sequence<int, 32>{}); }
 
+// MHC_MS1, the combined round-1 tile (mhc_pre_common.hpp), assembled and split in DST by the SFPU. A tile is 32
+// planes: faces 0 / 1 (rows 0..15) are planes 0..15, faces 2 / 3 (rows 16..31) planes 16..31, so plane i + 16 holds
+// row r + 16 exactly where plane i holds row r. SFPLOAD / SFPSTORE of the fp32 words: exact. S_OFF is the S tile's
+// offset from the call's DST index, inside the acquired DST half (4 fp32 tiles under SyncHalf).
+// K core: faces 2 / 3 of the M tile (the call's DST index) <- faces 0 / 1 of the S tile (S_OFF tiles after it)
+template <int S_OFF, int... Ps>
+sfpi_inline void mhc_ms1_merge_planes(std::integer_sequence<int, Ps...>) {
+    ((sfpi::dst_reg[16 + Ps] = sfpi::vFloat(sfpi::dst_reg[32 * S_OFF + Ps])), ...);
+}
+
+template <int S_OFF>
+inline void mhc_ms1_merge() {
+    static_assert(S_OFF >= 1 && S_OFF < 4, "the S tile lies after the M tile in the acquired DST half");
+    mhc_ms1_merge_planes<S_OFF>(std::make_integer_sequence<int, 16>{});
+}
+
+// root: faces 0 / 1 of the S tile (S_OFF tiles after the call's DST index) <- faces 2 / 3 of the combined total (the
+// call's DST index); faces 2 / 3 of both <- 0 (rows >= 16 are read by no consumer; zero keeps the row-wise 1/rms(x)
+// and z there finite)
+template <int S_OFF, int... Ps>
+sfpi_inline void mhc_ms1_split_planes(std::integer_sequence<int, Ps...>) {
+    ((sfpi::dst_reg[32 * S_OFF + Ps] = sfpi::vFloat(sfpi::dst_reg[16 + Ps])), ...);
+    ((sfpi::dst_reg[32 * S_OFF + 16 + Ps] = 0.0f), ...);
+    ((sfpi::dst_reg[16 + Ps] = 0.0f), ...);
+}
+
+template <int S_OFF>
+inline void mhc_ms1_split() {
+    static_assert(S_OFF >= 1 && S_OFF < 4, "the S tile lies after the total in the acquired DST half");
+    mhc_ms1_split_planes<S_OFF>(std::make_integer_sequence<int, 16>{});
+}
+
 }  // namespace ckernel::sfpu
 #endif  // TRISC_MATH

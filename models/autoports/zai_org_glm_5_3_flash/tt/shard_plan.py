@@ -1034,6 +1034,185 @@ def pf_kth(keys, rank: int) -> int:
     return 0 if len(keys) < rank else sorted(keys, reverse=True)[rank - 1]
 
 
+def shard_mfast(pair: int, r8: bool = True, agk: bool = True, prefilter: bool = True) -> bool:
+    """rev 77 GLM53_DSA_SHARD_MFAST (a galaxy default, tt/galaxy_defaults.py; 0 elsewhere): the global merge's helper compute in fewer
+    instructions with the same integers (dsa_shard.hpp MFAST, the kernels' MLA_DSA_SHARD_MFAST): no pack copy of the AGK
+    key pages, pf_kth_fast (the running top PF_RANK in registers: pf_kth_regs), pf_keep from the pages, r8_hist_lean
+    (direct coarse counts, the fine bins cleared after each round's pull instead of a 512-B zero per round). Needs R8, AGK
+    and PREFILTER (the kernels #error without them); the pair / the 2x4 never take it"""
+    on = pair > 2 and _flag("GLM53_DSA_SHARD_MFAST")
+    if on and not (r8 and agk and prefilter):
+        raise ValueError(
+            "GLM53_DSA_SHARD_MFAST=1 needs GLM53_DSA_SHARD_R8=1, GLM53_DSA_SHARD_AGK=1 and GLM53_DSA_SHARD_PREFILTER=1"
+        )
+    return on
+
+
+def shard_msplit(pair: int, mfast: bool = True) -> bool:
+    """rev 81 GLM53_DSA_SHARD_MSPLIT (default 0; on in tt/galaxy_defaults.py): the merge helper's pre-filter pass split
+    over the helper core's two data-movement RISCs (dsa_shard.hpp MSPLIT, the kernels' MLA_DSA_SHARD_MSPLIT = CB_AKEY's
+    index): the NCRISC (att_dsa_shard_dm1.cpp merge_help) takes lists [0, KPH / 2), the BRISC (att_dsa_shard_dm0.cpp)
+    the rest -- the PF_RANK-th largest keys and the survivors >= L, moved after the NCRISC's (msplit_helper_pass): the
+    same integers and survivor array. Needs MFAST (the kernels #error without it); which builds take it: msplit_build;
+    the pair / the 2x4 never take it"""
+    on = pair > 2 and _flag("GLM53_DSA_SHARD_MSPLIT")
+    if on and not mfast:
+        raise ValueError("GLM53_DSA_SHARD_MSPLIT=1 needs GLM53_DSA_SHARD_MFAST=1")
+    return on
+
+
+MSPLIT_REV = 81  # tt/mk_mla.py MLA_REV_MSPLIT (the knob-on builds' MLA_REV)
+MSPLIT_KPH = (2, 4)  # dsa_shard.hpp MSPLIT: an even KPH whose block maxima fit the staging pages (KPH 8 would not)
+
+
+def msplit_build(shard) -> bool:
+    """rev 81: whether a shard build (tt/tp_dsa_shard.py's stream dict: "msplit" = shard_msplit, "kph") takes MSPLIT --
+    the knob on at KPH 2 / 4. KPH 1 (t = 1: one list per helper, nothing to split) keeps rev 77's helpers; any other KPH
+    raises here instead of at the JIT (dsa_shard.hpp's static_asserts)"""
+    if not (shard or {}).get("msplit"):
+        return False
+    kph = int(shard.get("kph", 1))
+    if kph == 1:
+        return False
+    if kph not in MSPLIT_KPH:
+        raise ValueError(
+            f"GLM53_DSA_SHARD_MSPLIT=1 supports KPH {MSPLIT_KPH} (this build: KPH {kph}); set GLM53_DSA_SHARD_MSPLIT=0"
+        )
+    return True
+
+
+def msplit_defines(shard, akey_cb: int) -> list:
+    """the kernel define of an MSPLIT build (msplit_build): MLA_DSA_SHARD_MSPLIT = CB_AKEY's index (att_dsa_shard_dm0.cpp
+    waits on that CB's pages), else none"""
+    return [("MLA_DSA_SHARD_MSPLIT", str(int(akey_cb)))] if msplit_build(shard) else []
+
+
+def msplit_helper_pass(lists: list, l: int, stale: int = 0, mutate: str | None = None) -> dict:
+    """dsa_shard.hpp MSPLIT, the kernels' flow on one KPH >= 2 helper (att_dsa_shard_dm1.cpp merge_help + the helper
+    core's BRISC, att_dsa_shard_dm0.cpp), step by step on the flat key array (AGK: list i at i x CAND_MAX, zero filled
+    past its count) with the block maxima area seeded with `stale` (the staging pages hold an earlier token's words):
+      the bound pass (pf_kth_bm) over each list writes bmax[i][b] for EVERY full block of 4 -- the blocks its test skips
+      and lists below PF_RANK keys included -- and returns the PF_RANK-th largest key (0 below PF_RANK keys); the
+      report's bound = the min over both RISCs' lists;
+      the keep pass (pf_keep_bm) reads those maxima: a block whose recorded max < l is skipped unread, the others and the
+      tail key by key; the NCRISC compacts its lists [0, MS_N) in place from 0, the BRISC its lists [MS_N, KPH) in place
+      from MS_N x CAND_MAX and writes each list's count word; the NCRISC copies the BRISC's survivors forward after its
+      own (its m <= MS_N x CAND_MAX) and takes the counts from the words.
+    mutate (the regressions this flow must expose): "bmax_after_test" -- a block's max recorded only when its test does
+    not skip it (a skipped block keeps the stale word); "no_move" -- the BRISC's survivors not moved down.
+    -> dict(keys=the array's first m words, lens=the per-list survivor counts, kmin=the bound)"""
+    cm = CAND_MAX
+    kph = len(lists)
+    assert kph >= 2 and kph % 2 == 0 and all(len(v) <= cm for v in lists), kph
+    ms_n = kph // 2
+    arr = [0] * (kph * cm)
+    for i, v in enumerate(lists):
+        arr[i * cm : i * cm + len(v)] = [int(k) for k in v]
+    bmax = [[int(stale)] * (cm // 4) for _ in range(kph)]
+    lens = [len(v) for v in lists]
+
+    def kth_bm(i):
+        t = [0] * 16  # ascending: t[0] = the running 16th largest (pf_kth_bm's registers)
+
+        def take(k):
+            t[:] = sorted(t[1:] + [k])  # == the min / max merge for k > t[0]
+
+        base, n, b = i * cm, lens[i], 0
+        while n - b * 4 >= 4:
+            blk = arr[base + 4 * b : base + 4 * b + 4]
+            mx = max(blk)
+            if mutate != "bmax_after_test":
+                bmax[i][b] = mx
+            if mx > t[0]:
+                if mutate == "bmax_after_test":
+                    bmax[i][b] = mx
+                for k in blk:
+                    if k > t[0]:
+                        take(k)
+            b += 1
+        for k in arr[base + 4 * b : base + n]:
+            if k > t[0]:
+                take(k)
+        return 0 if n < 16 else t[0]
+
+    def keep_bm(dst, m, i):
+        src, n, b = i * cm, lens[i], 0
+        while n - b * 4 >= 4:
+            if bmax[i][b] >= l:
+                blk = arr[src + 4 * b : src + 4 * b + 4]  # (loaded before any of it is written: in place)
+                for k in blk:
+                    if k >= l:
+                        arr[dst + m] = k
+                        m += 1
+            b += 1
+        for k in list(arr[src + 4 * b : src + n]):
+            if k >= l:
+                arr[dst + m] = k
+                m += 1
+        return m
+
+    kmin = min(min(kth_bm(i) for i in range(ms_n)), min(kth_bm(i) for i in range(ms_n, kph)))
+    m, out = 0, []
+    for i in range(ms_n):  # the NCRISC, from 0
+        m0, m = m, keep_bm(0, m, i)
+        out.append(m - m0)
+    words, mb = [], 0
+    for i in range(ms_n, kph):  # the BRISC, from list MS_N's base; one count word per list
+        m0, mb = mb, keep_bm(ms_n * cm, mb, i)
+        words.append(mb - m0)
+    if mutate != "no_move":
+        for e in range(sum(words)):  # the forward move (m <= MS_N x CAND_MAX: the write never passes the read)
+            arr[m + e] = arr[ms_n * cm + e]
+    m += sum(words)
+    return dict(keys=arr[:m], lens=out + words, kmin=kmin)
+
+
+def pf_kth_regs(keys, rank: int = 16) -> int:
+    """dsa_shard.hpp pf_kth_fast, step by step: rank slots t (ascending) start at 0; a key k > t[0] makes slot p
+    min(t[p + 1], max(t[p], k)) and the last slot max(t[-1], k); the scan skips a block of 4 keys whose max <= t[0], the
+    rest one by one -> t[0] (0 below rank keys). == pf_kth for keys >= 0 (tests/test_shard_plan_8x4.py)"""
+    keys = [int(k) for k in keys]
+    if len(keys) < rank:
+        return 0
+    t = [0] * rank
+
+    def take(k):
+        for p in range(rank - 1):
+            t[p] = min(t[p + 1], max(t[p], k))
+        t[rank - 1] = max(t[rank - 1], k)
+
+    i = 0
+    while len(keys) - i >= 4:
+        if max(keys[i : i + 4]) > t[0]:
+            for k in keys[i : i + 4]:
+                if k > t[0]:
+                    take(k)
+        i += 4
+    for k in keys[i:]:
+        if k > t[0]:
+            take(k)
+    return t[0]
+
+
+def pf_keep(arr: list, m: int, base: int, n: int, l: int) -> int:
+    """dsa_shard.hpp pf_keep on a word array (in place: arr[base ..] -> arr[m ..], m <= base): the keys >= l of
+    arr[base, base + n) appended at arr[m ..) in order, each block of 4 read before it is written -> the new m"""
+    i = 0
+    while n - i >= 4:
+        blk = arr[base + i : base + i + 4]
+        if max(blk) >= l:
+            for k in blk:
+                if k >= l:
+                    arr[m] = k
+                    m += 1
+        i += 4
+    for k in arr[base + i : base + n]:
+        if k >= l:
+            arr[m] = k
+            m += 1
+    return m
+
+
 def local_all_pools(n_closed: int, c: int, C: int) -> int:
     """dsa_shard.hpp local_all_pools: the valid pools of chunk core c of C at n_closed closed local pools (pool tiles
     c, c + C, .. < ceil(n_closed / 32), each min(32, n_closed - its first pool) columns)"""

@@ -133,7 +133,8 @@ class MkMoE:
         roles, mhc_cbs, mhc_sems = mhc.parts(s1, hn, post, comb, None, coef, t=t, x_mode=rm["s1_x"],
                                              xout_mode=_mhc.XOUT_NONE, pc_mode=rm["pc"],
                                              signal=(SEM_HN, rd.noc_coords()),
-                                             defer=(invh, SEM_INVH_M, rd.noc_coords()) if defer else None)  # fmt: skip
+                                             defer=(invh, SEM_INVH_M, rd.noc_coords()) if defer else None,
+                                             rms_early=_mhc.rms_early_on())  # fmt: skip
         logits, gu, y2 = rd.outputs(t)
         # the shared expert's intermediate, persistent per TILE ROW count (not per t): every t <= 32 is the same one tile
         # row, so a server's widths (32, 8, 16, narrow 1..4) share ONE buffer per layer instead of each width's first

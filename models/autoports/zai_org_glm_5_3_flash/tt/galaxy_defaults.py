@@ -64,6 +64,19 @@ KNOBS = {
     # 45-layer step at 1 M 31.73 -> 29.83 ms (8 rows) / 36.07 -> 34.16 ms (16 rows); ids identical at 32 K x 4 spec and
     # the 1 M warm turn (B attached == B_cold); served 1 M x 2 / 4 / 8 decode +4.3 / +6.4 / +7.1 %, 1-user text unchanged
     "GLM53_DSA_SHARD_RS1_SPLIT": "1",
+    # GLM53_DSA_SHARD_MFAST (rev 77, on R8 + AGK + PREFILTER): the merge helpers' compute in fewer instructions with the
+    # same integers (no pack copy of the key pages, the PF_RANK-th largest key in registers, the round histograms without
+    # the per-round zero): plain step B 16 x 16 live 32 K 27,625.6 -> 27,179.1 us, 1 M 30,940.7 -> 30,120.9 us; CI pins
+    # 32 K x 4 / 1 M x 1 ids identical, 16 identical rows 1 class; served AgentX c8 (glm53_flash_1m): device spec step median 29.65 -> 28.63 ms, total tok/s unchanged
+    # (26,913 / 26,963, one run each); an explicit R8 / AGK / PREFILTER = 0 drops the default
+    "GLM53_DSA_SHARD_MFAST": "1",
+    # GLM53_DSA_SHARD_MSPLIT (rev 81, on MFAST; KPH 2 / 4 builds): the merge helpers' pre-filter pass on both data-movement
+    # RISCs of the helper core (its BRISC, idle from its pre-sweep to the first CB_ASEL page, takes half of the lists; the
+    # same integers and survivor array): plain step B 16 x 16 live 32 K 27,105 -> 26,740 us (A / B / A), 1 M 30,048 ->
+    # 29,565 us; CI pins 32 K x 4 / 1 M x 1 ids identical, 16 identical rows 1 class, 1 M x 1 spec ids identical with the
+    # split engaged (B 4 build, KPH 2), served gate hash unchanged; an explicit MFAST = 0 (or R8 / AGK / PREFILTER = 0)
+    # drops it
+    "GLM53_DSA_SHARD_MSPLIT": "1",
     # GLM53_DSA_SHARD_COMB (rev 65): the fold combine on the lane roots -- each RS round's slices combined in one pass
     # (FOLD1 / FOLD2 matmuls, kernels/mla/att_c.cpp fold1 / fold2). Correct but not bitwise: the FPU rounds the matmul
     # operands to tf32 -- the O partials once instead of once per pairwise chain step, but also the softmax
@@ -93,6 +106,12 @@ KNOBS = {
     # the routed-expert phase reads x one tile face at a time instead of one 32-B row (kernels/mkx/xa.cpp; the same bytes
     # at the same addresses): 4 K x 16 40.8 -> 38.0 ms, 32 K x 4 22.8 -> 22.0 ms with ids and text identical
     "GLM53_MKX_XROWS_COAL": "1",
+    # GLM53_MKX_EARLY (kernels/mkx/xa.cpp / xc.cpp MKX_EARLY, the sparse_kda stacks' folded shared expert): the routed
+    # compute waits for y2 at its last group, xa reads y2 after the first routing-weight tiles and issues x's rows before
+    # shared down's hand-off wait -- the same tiles and sums: plain step B 16 x 16 live 32 K 26,743 -> 26,434 us (A / B /
+    # A), 1 M 29,570 -> 29,260 us; CI pins 32 K x 4 / 1 M x 1 ids identical, 16 identical rows 1 class, served gate hash
+    # unchanged; an explicit 0 keeps every kernel the knob-off one
+    "GLM53_MKX_EARLY": "1",
     # the TP prefill mixes the mHC streams with one program per sublayer on the flat residual (prefill_tp._layer_fused_mhc;
     # exact fp32 like the composite chain, only the summation order differs): TTFT 1 M x 1 344.7 -> 332.1 s, 32 K x 4
     # 35.7 -> 34.1 s, ISL 128 x 16 7.56 -> 7.01 s, decode unchanged, 16 identical prompts still agree; the ids move at a
@@ -116,12 +135,23 @@ KNOBS = {
     # B 16 x 1 M build take narrow widths; det3 4 K x 16 digest a18df85fa319 knob off = on, 32.2 ms per step both
     "GLM53_DSA_POOL_BORROW": "1",
     # the mHC deferral (stack_model.set_knobs GLM53_STACK_DEFER: sparse_kda deferred 1/rms(h) in DRAM + hn first, sparse_dsa
-    # hn first; GLM53_MK_MOE_DEFER_INV the sparse_dsa MoE's deferral) and the one-tile round 1 at t <= 2
-    # (GLM53_MHC_MS1, capped by GLM53_MHC_MS1_TMAX): chain_mhc_1 2026-11-13, e2e 32 K x 4 47.5 -> 48.9, 4 K x 1 53.6 ->
-    # 55.9 tok/s/u; sparse_kda attn site 33.1 -> 21.1 us at B 1; the ids move only along existing near-tie sequences
+    # hn first; GLM53_MK_MOE_DEFER_INV the sparse_dsa MoE's deferral) and the one-tile round 1 at every t <= 16
+    # (GLM53_MHC_MS1; GLM53_MHC_MS1_TMAX caps it, default 16). Deferral + MS1 at t <= 2, chain_mhc_1 2026-11-13:
+    # e2e 32 K x 4 47.5 -> 48.9, 4 K x 1 53.6 -> 55.9 tok/s/u; sparse_kda attn site 33.1 -> 21.1 us at B 1; the ids move
+    # only along existing near-tie sequences. MS1 at t <= 16 (the tile assembled in DST), chain_ms1t 2026-11-25: plain
+    # traced probe B 16 (t 16) -0.23 ms per step at 32 K and 1 M
     "GLM53_STACK_DEFER": "1",
     "GLM53_MK_MOE_DEFER_INV": "1",
     "GLM53_MHC_MS1": "1",
+    # GLM53_MHC_PRE_SPLIT (stack_model.set_knobs, on the dense_kda / sparse_kda / sparse_dsa kinds): the mhc_pre root sends
+    # the pre message from a page holding only the 4 pre planes, before it relays out the other 20 for the Sinkhorn -- the
+    # same SFPU code on the same z, the 20-plane relayout off the hn path; an explicit 0 keeps every kind off
+    "GLM53_MHC_PRE_SPLIT": "1",
+    # GLM53_MHC_RMS_EARLY (mhc_pre.rms_early_on, read by the sparse_dsa programs MkMla / MkMoE): their mhc_pre roots write
+    # the compact coefficient tile, then send 1/rms(h) (round 2), then the post / comb tiles -- the readers' first pack
+    # waits only for the coefficient tile; mhc_post reads coef ungated, so coef still lands before the 1/rms(h)
+    # signal; an explicit 0 keeps the knob-off kernels
+    "GLM53_MHC_RMS_EARLY": "1",
     "GLM53_EP_KEEP_PERMUTED": "1",  # the permuted gate_up copies stay under GLM53_FUSED_EXPERTS_CACHE
     "GLM53_DSA_POOL": "1",  # the sparse_dsa layers' intermediates from one AllocPool (stack_model._dsa_pools)
     "GLM53_MOE_SHARE_M": "1",  # one shared-expert intermediate per stack (mk_moe.MkMoE)
@@ -168,6 +198,13 @@ def apply(mesh_shape, seq: int, isl: int | None = None) -> dict:
         want.pop("GLM53_DSA_SHARD_AGB")  # AGB rides on AGK: an explicit AGK=0 drops the AGB default with it
     if os.environ.get("GLM53_DSA_SHARD_RSB", want["GLM53_DSA_SHARD_RSB"]) != "1":
         want.pop("GLM53_DSA_SHARD_RSNP")  # RSNP rides on RSB: an explicit RSB=0 drops the RSNP default with it
+    if any(
+        os.environ.get(k, want[k]) != "1"
+        for k in ("GLM53_DSA_SHARD_R8", "GLM53_DSA_SHARD_AGK", "GLM53_DSA_SHARD_PREFILTER")
+    ):
+        want.pop("GLM53_DSA_SHARD_MFAST")  # MFAST rides on R8 + AGK + PREFILTER: an explicit 0 on any drops it
+    if "GLM53_DSA_SHARD_MFAST" not in want or os.environ.get("GLM53_DSA_SHARD_MFAST", "1") != "1":
+        want.pop("GLM53_DSA_SHARD_MSPLIT")  # MSPLIT rides on MFAST: an explicit 0 on MFAST (or under it) drops it
     if os.environ.get("GLM53_MLA_ATT_OBF16") == "1":
         want.pop("GLM53_DSA_SHARD_COMB")  # COMB needs fp32 O partials: an explicit OBF16=1 drops the COMB default
     want["GLM53_MODEL_TRACE_MB"] = str(trace_mb(int(seq)))

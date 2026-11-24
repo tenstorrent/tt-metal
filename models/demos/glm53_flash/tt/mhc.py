@@ -143,7 +143,8 @@ assert MHC_PRE_SINKHORN in ("llk", "fused", "dst"), MHC_PRE_SINKHORN  # dst: in 
 # stream tiles are projected by 4 single-column non-leader cores (12x10: critical path 10 -> 7 cost units; 13x10 / 8x8
 # unchanged by construction). Same partial sums, grouped differently: bit-level agreement is not guaranteed (fp32 adds
 # in a different order), PCC-level is.
-MHC_PRE_SPLIT = os.environ.get("GLM53_MHC_PRE_SPLIT", "extras")
+# (GLM53_MHC_PRE_SPLIT is the persistent stack's knob, autoports tt/mhc_pre.py: another program, values 0 / 1)
+MHC_PRE_SPLIT = os.environ.get("GLM53_MESH_MHC_PRE_SPLIT", "extras")
 assert MHC_PRE_SPLIT in ("cols", "extras"), MHC_PRE_SPLIT
 # the fused pre-block's projection operands: 3 = x as hi + lo + lo2 bf16 parts (12 FPU passes per column), 1 = bf16(x)
 # alone (4 passes, one split pass): the FPU rounds its operands either way (custom_ops/mhc_pre_block/README.md,

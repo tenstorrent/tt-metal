@@ -27,6 +27,38 @@
 
 using namespace mkx;
 
+#if defined(MKX_XROWS)
+// x's decode rows 0 .. MKX_XROWS - 1 of every K tile into CB_X's zero-filled tiles from xl1: rows 0..15 sit in faces
+// 0 / 1 (bf16 face = 16 x 16 x 2 B = 512 B, face 1 at +512). Issued only: the caller's read barrier retires them.
+template <uint32_t KT_GU, typename XAcc>
+FORCE_INLINE void xrows_read(const XAcc& x, uint32_t xl1, uint32_t xpage) {
+#if defined(MKX_XROWS_COAL)
+    // GLM53_MKX_XROWS_COAL=1: a face's rows are contiguous 32-B rows, so rows 0..T-1 of face 0 are bytes [0, 32 T)
+    // of the tile and those of face 1 [512, 512 + 32 T): ONE read per face (T = 16: both faces = the tile's first
+    // 1 KB, one read). The same bytes land at the same L1 offsets as the per-row reads of the #else branch (2 T
+    // reads of 32 B per tile = 4,096 issues per reader at T = 16, ~18 ns each: ~75 us of the expert phase).
+    constexpr uint32_t XROW_BYTES = MKX_XROWS * 32;
+    for (uint32_t k = 0; k < KT_GU; ++k) {
+        const uint32_t dst = xl1 + k * xpage;
+        if constexpr (MKX_XROWS == 16) {
+            noc_async_read(x.get_noc_addr(k, 0), dst, 2 * XROW_BYTES);
+        } else {
+            noc_async_read(x.get_noc_addr(k, 0), dst, XROW_BYTES);
+            noc_async_read(x.get_noc_addr(k, 512), dst + 512, XROW_BYTES);
+        }
+    }
+#else
+    for (uint32_t k = 0; k < KT_GU; ++k) {
+        const uint32_t dst = xl1 + k * xpage;
+        for (uint32_t r = 0; r < MKX_XROWS; ++r) {
+            noc_async_read(x.get_noc_addr(k, r * 32), dst + r * 32, 32);
+            noc_async_read(x.get_noc_addr(k, 512 + r * 32), dst + 512 + r * 32, 32);
+        }
+    }
+#endif
+}
+#endif
+
 #if defined(MKX_XROWS) && defined(MKX_XROWS_PRE)
 // megakernel composite (mk/reader_moe_a.cpp): the x tiles' zero fill (a local DMA of the hardware zeros, 256 KB = 512
 // reads, ~10+ us issue-bound) is issued at PROGRAM START, while this RISC waits for mhc_pre's output anyway; CB_X's L1
@@ -46,6 +78,22 @@ FORCE_INLINE void xrows_prologue() {
         noc_async_read(zeros, xl1 + off, MEM_ZEROS_SIZE);
     }
 }
+#if defined(MKX_EARLY) && defined(MKX_XROWS_COAL)
+// MKX_EARLY_XROWS (GLM53_MKX_EARLY with the coalesced row reads, megakernel composites): xrows_early() issues the
+// expert phase's row reads into CB_X's base before the hand-off wait of the reader phase ahead of the experts
+// (mk/reader_moe_a.cpp MK_BEFORE_WAIT_HOOK); the expert phase's read barrier retires them and pushes CB_X
+#define MKX_EARLY_XROWS 1
+FORCE_INLINE void xrows_early() {
+    constexpr uint32_t KT_GU = get_compile_time_arg_val(PH_CT0 + 0);
+    constexpr auto x_args = TensorAccessorArgs<PH_CT0 + 3>();
+    const auto x = TensorAccessor(x_args, get_arg_val<uint32_t>(ph_rt0 + 0));
+    mk::cb_rewind(CB_X);
+    const uint32_t xl1 = get_write_ptr(CB_X), xpage = get_tile_size(CB_X);
+    noc_async_read_barrier();  // the prologue's zeros land before the row reads into the same tiles
+    xrows_read<KT_GU>(x, xl1, xpage);
+    MK_MARK();  // (megakernel probe) the hook's row reads issued
+}
+#endif
 #endif
 
 void kernel_main() {
@@ -112,10 +160,15 @@ void kernel_main() {
 #if defined(MKX_XROWS)
     // decode rows only (MKX_XROWS = T <= 16): every reader used to pull all KT_GU full tiles of x (32x the bytes at
     // T = 1, all readers on the same L1 pages: most of the B=1 'routing list' interval); now the tiles are zeroed by a
-    // local DMA of the hardware zeros and only the T valid rows are read: rows 0..15 sit in faces 0 / 1 (bf16 face =
-    // 16 x 16 x 2 B = 512 B, face 1 at +512), one 32-B face row per face per row (L1 source: 16-B aligned)
+    // local DMA of the hardware zeros and only the T valid rows are read (xrows_read; L1 source: 16-B aligned)
     {
         static_assert(MKX_XROWS >= 1 && MKX_XROWS <= 16, "MKX_XROWS: decode rows 0..15 (faces 0 / 1)");
+#if defined(MKX_EARLY_XROWS)
+        // GLM53_MKX_EARLY: xrows_early() issued these rows before the previous phase's hand-off wait (the barrier below
+        // retires them)
+        (void)xl1;
+        (void)xpage;
+#else
 #if !defined(MKX_XROWS_PRE)
         // standalone program: the zero fill here (in a megakernel composite it is the prologue: xrows_prologue())
         const uint64_t zeros = get_noc_addr(MEM_ZEROS_BASE);
@@ -124,30 +177,8 @@ void kernel_main() {
         }
 #endif
         noc_async_read_barrier();  // the zeros land before the row reads into the same tiles
-#if defined(MKX_XROWS_COAL)
-        // GLM53_MKX_XROWS_COAL=1: a face's rows are contiguous 32-B rows, so rows 0..T-1 of face 0 are bytes [0, 32 T)
-        // of the tile and those of face 1 [512, 512 + 32 T): ONE read per face (T = 16: both faces = the tile's first
-        // 1 KB, one read). The same bytes land at the same L1 offsets as the per-row reads of the #else branch (2 T
-        // reads of 32 B per tile = 4,096 issues per reader at T = 16, ~18 ns each: ~75 us of the expert phase).
-        constexpr uint32_t XROW_BYTES = MKX_XROWS * 32;
-        for (uint32_t k = 0; k < KT_GU; ++k) {
-            const uint32_t dst = xl1 + k * xpage;
-            if constexpr (MKX_XROWS == 16) {
-                noc_async_read(x.get_noc_addr(k, 0), dst, 2 * XROW_BYTES);
-            } else {
-                noc_async_read(x.get_noc_addr(k, 0), dst, XROW_BYTES);
-                noc_async_read(x.get_noc_addr(k, 512), dst + 512, XROW_BYTES);
-            }
-        }
-#else
-        for (uint32_t k = 0; k < KT_GU; ++k) {
-            const uint32_t dst = xl1 + k * xpage;
-            for (uint32_t r = 0; r < MKX_XROWS; ++r) {
-                noc_async_read(x.get_noc_addr(k, r * 32), dst + r * 32, 32);
-                noc_async_read(x.get_noc_addr(k, 512 + r * 32), dst + 512 + r * 32, 32);
-            }
-        }
-#endif
+        xrows_read<KT_GU>(x, xl1, xpage);
+#endif  // MKX_EARLY_XROWS
         noc_async_read_barrier();
         cb_push_back(CB_X, KT_GU);
     }
@@ -170,7 +201,26 @@ void kernel_main() {
     noc_async_read_barrier();
     cb_push_back(CB_X, KT_GU);
 #endif
-#if defined(MKX_Y2_INIT)
+#if defined(MKX_EARLY) && !(defined(MKX_XSL) && defined(MKX_Y2_INIT))
+#error "MKX_EARLY: the batched expert TP (MKX_XSL) with the folded shared expert (MKX_Y2_INIT) only"
+#endif
+#if defined(MKX_EARLY)
+    // GLM53_MKX_EARLY: y2 is read only by xc's add_y2 at the last group (n == 0: y2 is the output), so its all-reader
+    // hand-off and read follow the first two groups' routing-weight tiles (below)
+    auto read_y2 = [&]() {
+        mk::wait_handoff(MKX_Y2_SEM, NREAD);
+        const auto y2 = TensorAccessor(y2_args, get_arg_val<uint32_t>(ph_rt0 + MKX_Y2_RT));
+        cb_reserve_back(CB_Y2, 2 * nsh);
+        const uint32_t l1 = get_write_ptr(CB_Y2), page = get_tile_size(CB_Y2);
+        for (uint32_t s = 0; s < nsh; ++s) {
+            noc_async_read_page(2 * shard[s], y2, l1 + (2 * s) * page);
+            noc_async_read_page(2 * shard[s] + 1, y2, l1 + (2 * s + 1) * page);
+        }
+        noc_async_read_barrier();
+        cb_push_back(CB_Y2, 2 * nsh);
+    };
+#endif
+#if defined(MKX_Y2_INIT) && !defined(MKX_EARLY)
     mk::wait_handoff(MKX_Y2_SEM, NREAD);
     {
         const auto y2 = TensorAccessor(y2_args, get_arg_val<uint32_t>(ph_rt0 + MKX_Y2_RT));
@@ -272,6 +322,11 @@ void kernel_main() {
     if (npos > 0) {
         push_rs(0);
     }
+#if defined(MKX_EARLY)
+    if (npos == 0) {
+        read_y2();  // no local expert: y2 is this chip's output (the compute waits for it at once)
+    }
+#endif
 #else
     const uint32_t npos = n;
 #endif
@@ -283,6 +338,11 @@ void kernel_main() {
         if (pos + 1 < npos) {
             push_rs(pos + 1);
         }
+#if defined(MKX_EARLY)
+        if (pos == 0) {
+            read_y2();  // groups 0 / 1's weights are out; the compute needs y2 at the last group
+        }
+#endif
 #else
         // routing weight tile of this expert
         cb_reserve_back(CB_RS, 1);

@@ -8,7 +8,7 @@ B = 4 and 32 valid rows), and compares them to the bar the knob's numerics allow
 | knob (env / constructor) | path | bar vs the default |
 |---|---|---|
 | ``GLM53_MHC_POST_SPLIT=extras`` (``post_split``) | post-mix v2 streams + the delegated (position, stream) extras | bit-identical (every output tile is computed by exactly one core with the same operands) |
-| ``GLM53_MHC_PRE_SPLIT=extras`` (``pre_split``) | fused pre-block, the two-column cores' second columns projected as extra stream tiles elsewhere | hn PCC >= 0.9999, rel rms < 1e-4; post / comb lanes rel < 1e-4 (same fp32 terms, summed in a different grouping) |
+| ``GLM53_MESH_MHC_PRE_SPLIT=extras`` (``pre_split``) | fused pre-block, the two-column cores' second columns projected as extra stream tiles elsewhere | hn PCC >= 0.9999, rel rms < 1e-4; post / comb lanes rel < 1e-4 (same fp32 terms, summed in a different grouping) |
 | ``GLM53_MHC_PRE_SINKHORN=fused`` (``pre_sinkhorn``) | fused pre-block, one dest pass per Sinkhorn normalisation | post / comb lanes rel < 2e-3, hn PCC >= 0.9999 (fp32 SFPU products instead of 19-bit FPU operands: a rounding change -> the logits gate below) |
 | ``GLM53_MHC_KSUM=fast`` (``ksum_mode``) | composite decode pre-block (fused pre-block OFF), fast_reduce_nc K-sums | mixes rel < 2e-3 vs the exact chains (the 19-bit SrcA rounding of the partials, ~5e-4 modelled); coefficients rel < 2e-3 |
 | ``GLM53_MHC_PREFILL_NORM`` | the per-call norm mode (``forward(prefill=True)``) | ``single`` inside a prefill scope == ``norm_mode="single"`` bit for bit; outside == ``sharded`` |
@@ -23,9 +23,9 @@ replays; the device-time split needs tracy), and the (2,4) block / e2e commands 
       TT_MESH_GRAPH_DESC_PATH=$W/tt_metal/fabric/mesh_graph_descriptors/p150_x8_mesh_graph_descriptor.textproto \\
       pytest models/demos/glm53_flash/tests/test_mhc_roofline_mesh.py -s
     # the block decoder test and the e2e chain with a knob (same env), e.g. the fused Sinkhorn + both splits:
-    GLM53_MHC_PRE_BLOCK=1 GLM53_MHC_PRE_SINKHORN=fused GLM53_MHC_PRE_SPLIT=extras GLM53_MHC_POST_SPLIT=extras \\
+    GLM53_MHC_PRE_BLOCK=1 GLM53_MHC_PRE_SINKHORN=fused GLM53_MESH_MHC_PRE_SPLIT=extras GLM53_MHC_POST_SPLIT=extras \\
       pytest models/demos/glm53_flash/tests/test_mesh_decoder.py -s            # layers 0/3/4 vs HF
-    GLM53_MHC_PRE_BLOCK=1 GLM53_MHC_PRE_SINKHORN=fused GLM53_MHC_PRE_SPLIT=extras GLM53_MHC_POST_SPLIT=extras \\
+    GLM53_MHC_PRE_BLOCK=1 GLM53_MHC_PRE_SINKHORN=fused GLM53_MESH_MHC_PRE_SPLIT=extras GLM53_MHC_POST_SPLIT=extras \\
       GLM53_MODEL_LAYERS=0-21 GLM53_MODEL_B=4 GLM53_MODEL_S=16 GLM53_MODEL_PCC_BAR=0.5 GLM53_MODEL_TRACE_MB=512 \\
       GLM53_MOE_LAYOUT=ep pytest models/demos/glm53_flash/tests/test_mesh_model.py -s -k chain   # vs the same without
     # the logits gate for the rounding changes (fused Sinkhorn, fast K-sums), 8x4:

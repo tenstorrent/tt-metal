@@ -286,6 +286,63 @@ void kernel_main() {
 #else
     constexpr bool all_dense = false;
 #endif
+#if defined(MLA_DSA_SHARD_MSPLIT)
+    // ---- rev 81 MSPLIT (kernels/mla/dsa_shard.hpp): a merge helper's lists [MS_N, KPH) of every sparse lane token,
+    // before the passes (att_dsa_shard_dm1.cpp merge_help takes [0, MS_N)). This RISC idles from its pre-sweep to lane
+    // token 0's CB_ASEL page; it now finishes the split work of EVERY lane token before pass 0, so token 0's K gathers
+    // no longer overlap the later tokens' merges -- the trade measured as a net gain on the 16-live KPH 4 probe A / B /
+    // A (plain step -365 us at 32 K, -483 us at 1 M: the merges shorten more than token 0's gathers wait). Per token:
+    // wait for merge_help's go (one page of CB_AKEY: the key pages are in L1), the min PF_RANK-th largest key of the
+    // lists -> MS_W_KMIN, MS_W_KDONE = j + 1; wait for L (a second page), the survivors >= L in place from list MS_N's
+    // base, their counts -> MS_W_LEN + i, MS_W_SDONE = j + 1. merge_help runs for exactly these tokens (a helper, a
+    // sparse token, not an all-dense window launch)
+    if (!all_dense && g == 0 && c < mlashard::NHELP) {
+        constexpr uint32_t CB_MS = MLA_DSA_SHARD_MSPLIT;  // CB_AKEY (merge_help's scratch)
+        const uint32_t kbase = get_local_cb_interface(CB_MS).fifo_limit - get_local_cb_interface(CB_MS).fifo_size;
+        const uint32_t mstg = mlashard::merge_mstg(kbase);
+        volatile tt_l1_ptr uint32_t* xw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mstg);
+        volatile tt_l1_ptr uint32_t* bmx = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mstg + mlashard::MS_BMAX_OFF);
+        volatile tt_l1_ptr uint32_t* mkeys =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mstg + mlashard::MSTG_PAGES * mlashard::TB);
+        for (uint32_t t = t0; t < t_rows; t += mlaatt::LANES) {
+            const uint32_t p = pos_of(t);
+            if (!mladsa::sparse(p)) {
+                continue;
+            }
+            const uint32_t j = mlashard::lane_tok(t);
+            uint32_t n[mlashard::KPH - mlashard::MS_N];
+            for (uint32_t i = mlashard::MS_N; i < mlashard::KPH; ++i) {
+                n[i - mlashard::MS_N] = mlashard::agk_count(p, c * mlashard::KPH + i, nchips);
+            }
+            cb_wait_front(CB_MS, 1);  // go
+            cb_pop_front(CB_MS, 1);
+            invalidate_l1_cache();
+            uint32_t kmin = 0xFFFFFFFFu;
+            for (uint32_t i = mlashard::MS_N; i < mlashard::KPH; ++i) {
+                const uint32_t kq = mlashard::pf_kth_bm(
+                    mkeys + i * mlashard::CAND_MAX, n[i - mlashard::MS_N], bmx + i * mlashard::MS_BLOCKS);
+                kmin = kq < kmin ? kq : kmin;
+            }
+            xw[mlashard::MS_W_KMIN] = kmin;
+            invalidate_l1_cache();  // (a fence: the bound before its flag)
+            xw[mlashard::MS_W_KDONE] = j + 1;
+            cb_wait_front(CB_MS, 1);  // L
+            cb_pop_front(CB_MS, 1);
+            invalidate_l1_cache();
+            const uint32_t l = xw[mlashard::MS_W_L];
+            volatile tt_l1_ptr uint32_t* db = mkeys + mlashard::MS_N * mlashard::CAND_MAX;
+            uint32_t m = 0;
+            for (uint32_t i = mlashard::MS_N; i < mlashard::KPH; ++i) {
+                const uint32_t m0 = m;
+                m = mlashard::pf_keep_bm(
+                    db, m, mkeys + i * mlashard::CAND_MAX, n[i - mlashard::MS_N], l, bmx + i * mlashard::MS_BLOCKS);
+                xw[mlashard::MS_W_LEN + i - mlashard::MS_N] = m - m0;
+            }
+            invalidate_l1_cache();  // (a fence: the survivors and counts before their flag)
+            xw[mlashard::MS_W_SDONE] = j + 1;
+        }
+    }
+#endif
     // ---- the two split-K passes
     const uint64_t zeros = get_noc_addr(MEM_ZEROS_BASE);
     for (uint32_t pass = all_dense ? 1 : 0; pass < 2; ++pass) {

@@ -43,6 +43,10 @@
 
 using namespace mkx;
 
+#if defined(MKX_EARLY) && !(defined(MKX_XSL) && defined(MKX_Y2_INIT))
+#error "MKX_EARLY: the batched expert TP (MKX_XSL) with the folded shared expert (MKX_Y2_INIT) only"
+#endif
+
 void kernel_main() {
     constexpr uint32_t KT_GU = get_compile_time_arg_val(PH_CT0 + 0);
     constexpr uint32_t KT_DN = get_compile_time_arg_val(PH_CT0 + 1);
@@ -76,8 +80,13 @@ void kernel_main() {
     // y2 (another phase's output tiles of this reader's shards) joins the routed sum at its LAST step, in the fp32 DST
     // (one bf16 rounding of routed + y2, like the chain's fp32 add); with no local expert y2 is the output
     constexpr bool Y2 = true;
+#if !defined(MKX_EARLY)
     cb_wait_front(CB_Y2, 2 * nsh);
+#endif
     if (n == 0) {
+#if defined(MKX_EARLY)
+        cb_wait_front(CB_Y2, 2 * nsh);  // GLM53_MKX_EARLY: n > 0 waits at the last group (the only add_y2)
+#endif
         const uint32_t dst_cb = CB_Y;
         copy_init(CB_Y2);
         reconfig_data_format_srca(CB_Y2);
@@ -285,6 +294,11 @@ void kernel_main() {
             // straight to DST like CB_MM: exact copies), one bf16 rounding at the last group
             const bool first = pos == 0, last = pos + 1 == npos;
             const uint32_t nq = n - GS * pos < GS ? n - GS * pos : GS;
+#if defined(MKX_EARLY)
+            if (last) {
+                cb_wait_front(CB_Y2, 2 * nsh);  // GLM53_MKX_EARLY: y2 is read by add_y2 at the last group only
+            }
+#endif
 #if defined(MKX_XSL_SEED)
             // the running sum SEEDS DST and this group's K accumulates on top of it: a row's non-zero products form ONE
             // sequential fp32 chain in union order whatever the grouping. S + G (below) re-associates a row's sum at

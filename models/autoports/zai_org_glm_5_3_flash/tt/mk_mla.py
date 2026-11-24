@@ -80,13 +80,32 @@ MLA_REV = 75  # 75: the 8x4 global merge's exact pre-filter (GLM53_DSA_SHARD_PRE
 # 76 (GLM53_DSA_SHARD_RS1_SPLIT=1, opt-in, the 8x4): the column scatter RS1 over BOTH links -- a second scatter lane
 # (rs1a, link 0, opened after AG1's waiter closed link 0) sends the blocks of source p for destination q with p + q odd,
 # the rs1 lane (link 1) the rest; the roots signal both lanes and wait for both waiters (att_dsa_shard_dm1.cpp
-# MLA_DSA_SHARD_RS1_SPLIT), the waiters take one parity of sources (fs_send.cpp FS_SRC_STRIDE). Only the knob-on
-# builds carry 76 (mla_rev): with the knob off every define, argument and CB is rev 75's
+# MLA_DSA_SHARD_RS1_SPLIT), the waiters take one parity of sources (fs_send.cpp FS_SRC_STRIDE). An RS1_SPLIT build
+# without MFAST carries 76, one with MFAST 77 (mla_rev): with the knob off every define, argument and CB is rev 75's
 MLA_REV_RS1_SPLIT = 76
+# 77 (GLM53_DSA_SHARD_MFAST=1, a galaxy default, the 8x4 with R8 + AGK + PREFILTER): the global merge's helper compute with the same
+# integers in fewer instructions (kernels/mla/dsa_shard.hpp MFAST: no pack copy of the key pages, the PF_RANK-th largest
+# key in registers, the round histograms without the per-round fine-area zero / coarse sum). Only the knob-on builds
+# carry 77: with the knob off every define and instruction is rev 75 / 76's
+MLA_REV_MFAST = 77
+# 81 (GLM53_DSA_SHARD_MSPLIT=1, a galaxy default on MFAST, KPH 2 / 4 builds: tt/shard_plan.py msplit_build): the merge
+# helper's pre-filter pass split over the helper core's two data-movement RISCs -- the BRISC (att_dsa_shard_dm0.cpp)
+# takes half of the helper's lists, synchronized through CB_AKEY pages and exchange words (kernels/mla/dsa_shard.hpp
+# MSPLIT); the same integers and survivor array. Only the knob-on builds carry 81 (the define's value = CB_AKEY's index
+# for the BRISC): with the knob off every define and instruction is rev 77's
+MLA_REV_MSPLIT = 81
 
 
 def mla_rev(shard=None) -> int:
-    """the MLA_REV define of a build: MLA_REV_RS1_SPLIT for a GLM53_DSA_SHARD_RS1_SPLIT shard build, else MLA_REV"""
+    """the MLA_REV define of a build: MLA_REV_MSPLIT for a GLM53_DSA_SHARD_MSPLIT shard build, MLA_REV_MFAST for a
+    GLM53_DSA_SHARD_MFAST one, MLA_REV_RS1_SPLIT for a GLM53_DSA_SHARD_RS1_SPLIT one, else MLA_REV"""
+    from models.autoports.zai_org_glm_5_3_flash.tt import shard_plan as SP
+
+    if SP.msplit_build(shard):  # rev 81 (KPH 2 / 4 only; KPH 1 builds keep the rev below)
+        assert SP.MSPLIT_REV == MLA_REV_MSPLIT
+        return MLA_REV_MSPLIT
+    if shard and shard.get("mfast"):
+        return MLA_REV_MFAST
     return MLA_REV_RS1_SPLIT if shard and shard.get("rs1_split") else MLA_REV
 
 
@@ -99,6 +118,7 @@ POST_CB0_ONE = 21  # mhc_post's CBs on the owners of the one-program half (mhc_p
 # (index core -> owners, I3 readers -> owners, coordinator -> owners), index-core semaphores (I1 readers -> index core,
 # group-0 owners -> coordinator); the mailbox / histogram layout of dsa_common.hpp
 DCB = dict(AQI=53, AWS=54, APK=55, ASR=56, ASC=57, ASEL=58, AKEY=59)
+AKEY_PAGES = 1  # CB_AKEY: one page (the owners' scratch; rev 81 MSPLIT's go / L pushes rely on it)
 SEM_SEL, SEM_IXR, SEM_QI = 4, 5, 6
 SEM_IX, SEM_H = 4, 5
 DSA_TOPK, DSA_KPOOL, DSA_DENSE_MAX = 512, 4, 2051
@@ -191,11 +211,21 @@ def _shard_line_defs(shard) -> list:
     sel2 = bool((shard or {}).get("sel2"))
     prefilter = bool((shard or {}).get("prefilter"))  # rev 75: dsa_shard.hpp PREFILTER
     rs1s = bool((shard or {}).get("rs1_split"))  # rev 76: dsa_shard.hpp RS1 SPLIT (att_dsa_shard_dm1.cpp)
+    mfast = bool((shard or {}).get("mfast"))  # rev 77: dsa_shard.hpp MFAST (att_dsa_shard_dm1.cpp merge_help)
+    # rev 81: dsa_shard.hpp MSPLIT (merge_help + the helper core's BRISC, att_dsa_shard_dm0.cpp), at KPH 2 / 4 only (a
+    # KPH 1 build -- t = 1 -- keeps rev 77's helpers: one list each, nothing to split; tt/shard_plan.py msplit_build)
+    from models.autoports.zai_org_glm_5_3_flash.tt import shard_plan as SP
+
+    msplit = SP.msplit_build(shard)
     assert pair > 2 or not (comb or early or agk or r8 or local_all or rmarks or sel2 or prefilter), (
         "rev 65 COMB / RS1 early, rev 68 AGK, rev 70 R8, rev 72 LOCAL_ALL / ROUND_MARKS, rev 73 SEL2, rev 75 PREFILTER: the 8x4",
         pair,
     )
     assert pair > 2 or not rs1s, ("rev 76 RS1 split: the 8x4", pair)
+    assert not mfast or (pair > 2 and r8 and agk and prefilter), ("rev 77 MFAST: the 8x4 with R8, AGK, PREFILTER", pair)
+    assert not msplit or (mfast and kph in SP.MSPLIT_KPH), ("rev 81 MSPLIT: MFAST at KPH 2 / 4", mfast, kph)
+    # (the BRISC's go / L pages: one push per page of a ONE-page CB_AKEY -- the wr pointer wraps to the scratch base)
+    assert not msplit or AKEY_PAGES == 1, AKEY_PAGES
     if pair > 2:  # rev 65: MLA_DSA_SHARD_COMB / MLA_DSA_SHARD_RS1_EARLY (tt/tp_dsa_shard.py's stream dict, default off)
         return (
             [("MLA_DSA_SHARD_LINE", str(line)), ("MLA_DSA_SHARD_PAIR", str(pair))]
@@ -209,6 +239,9 @@ def _shard_line_defs(shard) -> list:
             + ([("MLA_DSA_SHARD_SEL2", "1")] if sel2 else [])  # rev 73: dsa_shard.hpp SEL2 (needs R8)
             + ([("MLA_DSA_SHARD_PREFILTER", "1")] if prefilter else [])  # rev 75: dsa_shard.hpp PREFILTER
             + ([("MLA_DSA_SHARD_RS1_SPLIT", "1")] if rs1s else [])  # rev 76: dsa_shard.hpp RS1 SPLIT
+            + ([("MLA_DSA_SHARD_MFAST", "1")] if mfast else [])  # rev 77: dsa_shard.hpp MFAST
+            # rev 81: dsa_shard.hpp MSPLIT, the value = CB_AKEY's index (the BRISC's go / L pages)
+            + SP.msplit_defines(shard, DCB["AKEY"])
         )
     assert line in (1, 4), line
     return [("MLA_DSA_SHARD_LINE", str(line))] if line > 1 else []
@@ -982,7 +1015,8 @@ class MkMlaA(_MlaBase):
         pa = self.probe.buffer_address() if self.probe is not None else None
         desc = mhc.descriptor(x, hn, post, comb, x_out, coef, t=t, x_mode=_mhc.X_FLAT, xout_mode=_mhc.XOUT_STACKED,
                               pc_mode=_mhc.PC_STACKED, signal=(SEM_HN, rd.noc_coords()),
-                              mk_probe=(pa, 0) if pa is not None else None)  # fmt: skip
+                              mk_probe=(pa, 0) if pa is not None else None,
+                              rms_early=_mhc.rms_early_on())  # fmt: skip
         r_kernels, r_cbs = rd.parts([hn, qk, q], [qk, q, q_lat_l1], t=t,
                                     mk_probe=(pa, 65) if pa is not None else None)  # fmt: skip
         # latent core
@@ -1503,7 +1537,8 @@ class MkMla(_MlaBase):
                                              xout_mode=_mhc.XOUT_NONE if stack else rm["xout"],
                                              pc_mode=rm["pc"],
                                              signal=(SEM_HN, rd.noc_coords()), defer=defer,
-                                             mk_probe=(pa, 0) if pa is not None else None)  # fmt: skip
+                                             mk_probe=(pa, 0) if pa is not None else None,
+                                             rms_early=_mhc.rms_early_on())  # fmt: skip
         proles, post_cbs, post_io = self.post.parts(a, x_out if x_out is not None else x, coef, s1, t=t,
                                                     x_mode=rm["post_x"], out_mode=rm["s1_out"], wait=(SEM_A, n_r),
                                                     packed=rm["stacked"])  # fmt: skip
@@ -2111,7 +2146,9 @@ class MkMla(_MlaBase):
                      (list(pct), {xy: [int(v) for v in prt[xy]] for xy in mine})]  # fmt: skip
             ct, rt, bases = concat_args(parts, mine)
             defs = list(mrole["defines"]) + [d for d in pdefs if d not in mrole["defines"]]
-            rev_now = mla_rev(getattr(self, "_shard_now", None))  # (76 only on a GLM53_DSA_SHARD_RS1_SPLIT build)
+            rev_now = mla_rev(
+                getattr(self, "_shard_now", None)
+            )  # (77 with MFAST, else 76 with RS1_SPLIT, else MLA_REV)
             defs += [("MK_PA_CT", str(bases[1][0])), ("MK_PA_RT", str(bases[1][1])), ("MK_PP_CT", str(bases[2][0])),
                      ("MK_PP_RT", str(bases[2][1])), ("MLA_REV", str(rev_now)), ("MLA_SRC", "0x" + mla_src()[:8])]  # fmt: skip
             if self.dsa is not None:
@@ -2501,7 +2538,7 @@ def attention_cbs(cores, acb: dict, page_table, dsa_keys: int = 0, dsa_cand: boo
             cb(DCB["AQI"], BF16, 2048, 4), cb(DCB["AWS"], FP32, 4096, 1), cb(DCB["APK"], BF16, 2048, 8 * dsa_sb),
             cb(DCB["ASR"], FP32, 4096, dsa_sb), cb(DCB["ASC"], FP32, 4096, 2 * dsa_sb),
             cb(DCB["ASEL"], ttnn.uint32, asel, max(1, shard_t)),
-            cb(DCB["AKEY"], ttnn.uint32, _akey_bytes(dsa_keys, dsa_cand, shard_t, shard_tl, shard_kph), 1)]
+            cb(DCB["AKEY"], ttnn.uint32, _akey_bytes(dsa_keys, dsa_cand, shard_t, shard_tl, shard_kph), AKEY_PAGES)]
            if dsa_keys else [])  # fmt: skip
 
 

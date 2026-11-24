@@ -32,7 +32,8 @@ partials (unicast, write barrier before every semaphore increment) and the messa
 grid spans a harvested / DRAM column on the p300 dies).
 
 L1 per core (see doc/ttnn/07a-fused-streaming-layer/l1_ledger.md): every core 64.5 KB (gather + mailbox, uniform
-addresses for the remote writes), K cores +108 KB, root +40 KB.
+addresses for the remote writes), K cores +108 KB, root +40 KB; with MHC_MS1 (one round-1 tile) every core 32.5 KB,
+K cores +100 KB.
 
 Numerics vs the op chain: the matmul reads x in the FPU's tf32 like today's 512-batch matmul; every other stage is
 exact fp32 SFPU arithmetic (today: tf32 FPU rms_norm, tf32 fast_reduce_nc sums, tf32 collapse matmul). PCC-gated
@@ -64,19 +65,56 @@ ROOT = (8, 0)
 # mirrors mhc_pre_common.hpp
 CB = dict(
     GATHER=0, MSG=1, X=2, X32=3, FN=4, W=5, PART=6, PRE=7, H=8, S2=9, INV=10, OUT=11, XSTK=12, GSUM=13,
-    RED=14, PLANE=15, COEF=16, SB=17, INVR=18, SCR=19, DBG=20, MSC=21, MSS=22,
+    RED=14, PLANE=15, COEF=16, SB=17, INVR=18, SCR=19, DBG=20,
 )  # fmt: skip
 # GLM53_MHC_MS1=1 (mhc_pre_common.hpp MHC_MS1): round 1 gathers one combined (M | S) tile per partial at t <= 16
 MS1_T_MAX = 16
 
 
+_RMS_EARLY_LOGGED: list = []
+
+
+def rms_early_on() -> bool:
+    """GLM53_MHC_RMS_EARLY=1 (a galaxy default, tt/galaxy_defaults.py; unset = off on other meshes; read by the sparse_dsa
+    programs, mk_mla.py / mk_moe.py): their mhc_pre root writes
+    the compact coefficient tile, then runs round 2 (1/rms(h) -> the readers), then the post / comb tiles -- the
+    readers' first pack waits only for the coefficient tile. One "active" line per process"""
+    on = os.environ.get("GLM53_MHC_RMS_EARLY", "0") == "1"
+    if on and not _RMS_EARLY_LOGGED:
+        _RMS_EARLY_LOGGED.append(True)
+        print("GLM53_MHC_RMS_EARLY active (sparse_dsa mhc_pre roots: coefficient tile, then 1/rms(h), then post / comb)",
+              flush=True)  # fmt: skip
+    return on
+
+
+def rms_early_defines(rms_early: bool, extra: list) -> list:
+    """the root sync role's MHC_RMS_EARLY define (none off). A cp build (MHC_COEF_PLANE: the KDA stacks at t > 4) writes
+    its one coefficient page before round 2 already and its callers never pass the knob: rms_early there is refused
+    (ValueError), not dropped while rms_early_on reports it active. Ordering invariant (sync.cpp): mhc_post reads coef
+    without a hand-off from the root, so the coefficient tile must land before the root's 1/rms(h) signal; post / comb
+    are read only on the host"""
+    if not rms_early:
+        return []
+    if ("MHC_COEF_PLANE", "1") in extra:
+        raise ValueError("GLM53_MHC_RMS_EARLY: a cp build (MHC_COEF_PLANE) writes its coefficient page before round 2 "
+                         "already; only the sparse_dsa programs (no cp) take the knob")  # fmt: skip
+    return [("MHC_RMS_EARLY", "1")]
+
+
+_MS1_LOGGED: list = []
+
+
 def ms1_on(t: int, debug: bool = False) -> bool:
-    """the combined round-1 tile (GLM53_MHC_MS1=1): rows 0..t-1 hold M, rows 16..16+t-1 hold S -> t <= 16; the debug
-    taps read the separate (M, S) totals, so a debug build keeps the pair. GLM53_MHC_MS1_TMAX (default 2) caps the
-    program widths that take it (2026-11-13 chain_mhc_1, 8x4: e2e 4 K x 1 (t 1) 53.6 -> 54.3 tok/s/u, 32 K x 4 (t 4)
-    47.5 -> 47.3, the B 16 probe (t 16) +186 us per 8 layers -- the S-row copy outweighs the halved hop past t 2)"""
-    tmax = min(MS1_T_MAX, int(os.environ.get("GLM53_MHC_MS1_TMAX", "2")))
-    return os.environ.get("GLM53_MHC_MS1") == "1" and t <= tmax and not debug
+    """the combined round-1 tile (GLM53_MHC_MS1=1): rows 0..15 hold M, rows 16 + t hold S's rows t -> t <= 16; the
+    compute moves S's faces into M's tile in DST (K cores) and back (root); the face move's cost does not depend on
+    t. The debug taps read the separate (M, S) totals, so a debug build keeps the pair. GLM53_MHC_MS1_TMAX (default
+    16 = every width that fits) caps the program widths that take it. One "active" line per process"""
+    tmax = min(MS1_T_MAX, int(os.environ.get("GLM53_MHC_MS1_TMAX", str(MS1_T_MAX))))
+    on = os.environ.get("GLM53_MHC_MS1") == "1" and t <= tmax and not debug
+    if on and not _MS1_LOGGED:
+        _MS1_LOGGED.append(True)
+        print(f"GLM53_MHC_MS1 active (the combined round-1 tile at t <= {tmax})", flush=True)
+    return on
 
 
 SEMAPHORES = 4
@@ -302,11 +340,8 @@ class MhcPre:
     def _cbs(self, hn_dtype, ms1: bool = False):
         t32, t16 = 4096, 2048
         hn_page = t32 if hn_dtype == FP32 else t16
-        # MHC_MS1: every round's gather holds 8 one-tile slots (round 1 combined, round 2 S2) and a group sum is one
-        # tile -> CB_GATHER 64 -> 32 KB on every core, CB_GSUM 8 -> 4 KB on the K cores; the root's split pages after
-        ms1_cbs = []
-        if ms1:
-            ms1_cbs = [self._cb(CB["MSC"], FP32, t32, 1, self.root), self._cb(CB["MSS"], FP32, t32, 1, self.root)]
+        # MHC_MS1: every round's gather holds 8 one-tile slots (round 1 combined, round 2 S2), a partial and a group sum
+        # are one tile -> CB_GATHER 64 -> 32 KB on every core, CB_PART and CB_GSUM 8 -> 4 KB on the K cores
         return [
             # remote-written: defined on every core (a CB has ONE address across its core set; the senders resolve the
             # receivers' address with their own get_write_ptr)
@@ -316,7 +351,7 @@ class MhcPre:
             self._cb(CB["X"], FP32, t32, 8, self.kcores, alias=CB["X32"]),
             self._cb(CB["FN"], self.fn_dtype, t16 if self.fn_dtype == BF16 else t32, 8, self.kcores),
             self._cb(CB["W"], FP32, t32, 2, self.kcores),
-            self._cb(CB["PART"], FP32, t32, 2, self.kcores),
+            self._cb(CB["PART"], FP32, t32, 1 if ms1 else 2, self.kcores),
             self._cb(CB["PRE"], FP32, t32, 4, self.kcores),
             self._cb(CB["H"], FP32, t32, 2, self.kcores),
             self._cb(CB["S2"], FP32, t32, 1, self.kcores),
@@ -333,7 +368,7 @@ class MhcPre:
             self._cb(CB["INVR"], FP32, t32, 1, self.root),
             self._cb(CB["SCR"], FP32, t32, 1, self.root),
             self._cb(CB["DBG"], FP32, t32, 2, self.root),
-        ] + ms1_cbs
+        ]
 
     @staticmethod
     def _rt(per_core: dict):
@@ -360,14 +395,12 @@ class MhcPre:
     def _pre_split() -> bool:
         return os.environ.get("GLM53_MHC_PRE_SPLIT") == "1" and os.environ.get("GLM53_MHC_PRE_EARLY") == "1"
 
-    def _compute_config(self, ms1_root: bool = False):
+    def _compute_config(self):
         cfg = ttnn.ComputeConfigDescriptor(
             math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True
         )
         modes = [ttnn.UnpackToDestMode.Default] * 64
-        # MHC_MS1: the root reloads M / S from its split pages (exact fp32); the root role only -- the owners' merged
-        # configs (mk_layer / mk_sparse / mk_moe / mk_mla) keep their own modes at these indices
-        for cb in FP32_COPY_CBS + ((CB["MSC"], CB["MSS"]) if ms1_root else ()):
+        for cb in FP32_COPY_CBS:
             # GLM53_MHC_FPU_COLLAPSE=1: CB_PRE holds diag(pre_s), a matmul operand (through SrcB, not copied)
             if cb == CB["PRE"] and os.environ.get("GLM53_MHC_FPU_COLLAPSE") == "1":
                 continue
@@ -386,7 +419,7 @@ class MhcPre:
             self._collect = None
 
     def descriptor(self, x, hn, post, comb, x_out, coef, *, t, x_mode, xout_mode, pc_mode, debug=False, probe=False,
-                   signal=None, mk_probe=None, defer=None, coef_plane=False):  # fmt: skip
+                   signal=None, mk_probe=None, defer=None, coef_plane=False, rms_early=False):  # fmt: skip
         """The ProgramDescriptor of one call (addresses of the given tensors as runtime args). signal = (semaphore id,
         [(x, y) NoC coordinates]) (megakernel): every K core increments that semaphore on each listed core once its hn
         tiles are written."""
@@ -503,7 +536,8 @@ class MhcPre:
         if defer is not None:  # sync.cpp root MHC_DEFER_INV: invh accessor (CT), invh address + the readers (RT)
             root_sync_ct = root_sync_ct + self._acc(defer[0])
             root_rt = root_rt + [defer[0].buffer_address(), len(defer[2])] + [v for xy in defer[2] for v in xy]
-        root_defines = [("MHC_ROOT", "1")] + extra
+        # rms_early (the sparse_dsa callers' GLM53_MHC_RMS_EARLY): the root sync role only (rms_early_defines)
+        root_defines = [("MHC_ROOT", "1")] + extra + rms_early_defines(rms_early, extra)
         if mk_probe is not None:  # root's NCRISC -> slot + 64
             root_defines += [("MK_PROBE_ARG", str(len(root_rt))), ("MK_PROBE_CB", "31")]
             root_rt = root_rt + [mk_probe[0], mk_probe[1] + GRID_X * GRID_Y]
@@ -522,9 +556,7 @@ class MhcPre:
             self._kernel(
                 "compute.cpp", self.leaders, compute_ct, {}, [("MHC_K", "1"), ("MHC_LEADER", "1")] + extra, cc
             ),
-            self._kernel(
-                "compute.cpp", self.root, compute_ct, {}, [("MHC_ROOT", "1")] + extra, self._compute_config(ms1)
-            ),
+            self._kernel("compute.cpp", self.root, compute_ct, {}, [("MHC_ROOT", "1")] + extra, cc),
         ]
         sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=self.all, initial_value=0) for i in range(SEMAPHORES)]
         return ttnn.ProgramDescriptor(

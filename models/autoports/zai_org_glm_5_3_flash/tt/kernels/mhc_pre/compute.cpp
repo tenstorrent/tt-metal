@@ -7,6 +7,7 @@
 // K core (8 x tiles = its 2 column tiles of the 4 streams, index s * 2 + j):
 //   1. M = sum_j x_j @ fn_j  (FPU, fp32 DST, HiFi4)        -> CB_PART[0]   (rows = tokens, cols = the 24 mixes)
 //      S = sum_j x_j * x_j   (SFPU, exact fp32)            -> CB_PART[1]   (per-column partial sums of x^2)
+//      MHC_MS1: S's rows 0..15 -> rows 16..31 of M's tile in DST (mhc_ms1_merge), CB_PART[0] only
 //   2. (leader) sum the 8 (M, S) partials of its column    -> CB_GSUM
 //   3. h_j = sum_s x_{s,j} * pre_s (column broadcast)       -> CB_H[j];  S2 = sum_j h_j * h_j -> CB_S2
 //   4. (leader) sum the 8 S2 partials                       -> CB_GSUM[0]
@@ -101,7 +102,7 @@ FORCE_INLINE void k_phase1() {
     cb_x.wait_front(X_TILES);
     cb_x32.wait_front(X_TILES);
     cb_fn.wait_front(X_TILES);
-    cb_part.reserve_back(2);
+    cb_part.reserve_back(R1_TILES);
 
     tile_regs_acquire();
     // M = sum_j x_j @ fn_j into dst 0 (fp32 accumulation over the core's 8 K tiles); the unpackers were configured
@@ -121,12 +122,20 @@ FORCE_INLINE void k_phase1() {
         square_dst(1);
         add_dst(2, 1);
     }
+#if defined(MHC_MS1)
+    // the combined round-1 tile: S's rows 0..15 -> rows 16..31 of M's tile (faces 0 / 1 of dst 2 -> faces 2 / 3 of
+    // dst 0), one page per partial
+    MATH((SFPU_UNARY_INIT(unused)));
+    MATH((SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, mhc_ms1_merge, (2), 0, VectorMode::RC_custom)));
+#endif
     tile_regs_commit();
     tile_regs_wait();
     pack_to(0, CB_PART);
+#if !defined(MHC_MS1)
     pack_to(2, CB_PART);
+#endif
     tile_regs_release();
-    cb_part.push_back(2);
+    cb_part.push_back(R1_TILES);
     cb_fn.pop_front(X_TILES);
 }
 
@@ -306,25 +315,15 @@ FORCE_INLINE void leader_round2() {
 FORCE_INLINE void root_round1() {
     CircularBuffer cb_g(CB_GATHER), cb_red(CB_RED), cb_sb(CB_SB);
 #if defined(MHC_MS1)
-    // the 8 combined group tiles -> their total (CB_MSC); the sync RISC splits S's rows out of it into CB_MSS; then M
-    // (CB_MSC rows < T) and S reload exactly (fp32 pack / UnpackToDestFp32) into the DST slots of the pair's sums
-    CircularBuffer cb_msc(CB_MSC), cb_mss(CB_MSS);
+    // the 8 combined group tiles -> their total in dst 0, then S's rows 16..31 -> rows 0..15 of dst 1 (mhc_ms1_split):
+    // M and S in the DST slots of the pair's sums; rows 16..31 of both zeroed
     cb_g.wait_front(N_GROUPS);
-    cb_msc.reserve_back(1);
-    tile_regs_acquire();
-    sum_tiles(CB_GATHER, 0, 1, N_GROUPS, 0, 2);
-    tile_regs_commit();
-    tile_regs_wait();
-    pack_to(0, CB_MSC);
-    tile_regs_release();
-    cb_msc.push_back(1);
-    cb_g.pop_front(N_GROUPS);
     cb_sb.wait_front(2);
-    cb_mss.wait_front(1);
     cb_red.reserve_back(1);
     tile_regs_acquire();
-    load(CB_MSC, 0, 0);  // M
-    load(CB_MSS, 0, 1);  // S
+    sum_tiles(CB_GATHER, 0, 1, N_GROUPS, 0, 2);
+    MATH((SFPU_UNARY_INIT(unused)));
+    MATH((SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, mhc_ms1_split, (1), 0, VectorMode::RC_custom)));
 #else
     cb_g.wait_front(2 * N_GROUPS);
     cb_sb.wait_front(2);
@@ -362,12 +361,7 @@ FORCE_INLINE void root_round1() {
     pack_to(0, CB_RED);
     tile_regs_release();
     cb_red.push_back(1);
-#if defined(MHC_MS1)
-    cb_msc.pop_front(1);
-    cb_mss.pop_front(1);
-#else
-    cb_g.pop_front(2 * N_GROUPS);
-#endif
+    cb_g.pop_front(R1_TILES * N_GROUPS);
     cb_sb.pop_front(2);
 }
 

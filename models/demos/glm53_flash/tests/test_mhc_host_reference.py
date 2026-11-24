@@ -135,9 +135,10 @@ def test_consts_layout_contract():
 @pytest.mark.parametrize("T", [1, 4, 8, 16])
 def test_mhc_pre_ms1_combined_round1_is_bitwise(T):
     """tt/mhc_pre.py GLM53_MHC_MS1 (kernels/mhc_pre MHC_MS1): round 1 gathers ONE fp32 tile per partial -- M in rows
-    0..T-1, S's rows t at rows 16 + t -- instead of the (M, S) pair. The K core's sync RISC writes S's rows into the M
-    page, leaders / root sum the combined pages in slot order, the root splits S back out. Emulated on the tiles' face-
-    major memory (tile_off), with garbage in the rows nothing reads: rows < T of M / S equal the pair's sums bitwise."""
+    0..15, S's rows t at rows 16 + t -- instead of the (M, S) pair. The K core's compute moves S's faces 0 / 1 into faces
+    2 / 3 of the M tile in DST (mhc_pre_sfpu.hpp mhc_ms1_merge), leaders / root sum the combined pages in slot order, the
+    root's compute moves faces 2 / 3 back and zeroes them (mhc_ms1_split). Emulated on the tiles' face-major memory
+    (tile_off), with garbage in the rows nothing reads: rows < T of M / S equal the pair's sums bitwise."""
 
     def tile_off(r, c):  # kernels/mhc_pre/mhc_pre_common.hpp tile_off
         return (((r >> 4) << 1) + (c >> 4)) * 256 + (r & 15) * 16 + (c & 15)
@@ -170,20 +171,28 @@ def test_mhc_pre_ms1_combined_round1_is_bitwise(T):
     # the pair: leaders sum their 8 members' M and S, the root sums the 8 group sums
     m_tot = chain_sum([chain_sum(m_parts[group * q : group * q + group]) for q in range(k_cores // group)])
     s_tot = chain_sum([chain_sum(s_parts[group * q : group * q + group]) for q in range(k_cores // group)])
-    # MS1: combine on the K core, the same two-level sums, split on the root
+    # MS1: combine on the K core (faces 2 / 3 of M <- faces 0 / 1 of S: elements 512.. <- ..512), the same two-level
+    # sums, split on the root (faces 0 / 1 of S <- faces 2 / 3 of the total, faces 2 / 3 of both <- 0)
     comb = []
     for m, s in zip(m_parts, s_parts):
         cmem = m.clone()
-        for t in range(T):
-            for c in range(32):
-                cmem[tile_off(16 + t, c)] = s[tile_off(t, c)]
+        cmem[512:] = s[:512]
         comb.append(cmem)
     c_tot = chain_sum([chain_sum(comb[group * q : group * q + group]) for q in range(k_cores // group)])
-    s_split = torch.zeros(1024)
-    for t in range(T):
-        for c in range(32):
-            s_split[tile_off(t, c)] = c_tot[tile_off(16 + t, c)]
-    assert torch.equal(rows(c_tot, 0, T).view(torch.int32), rows(m_tot, 0, T).view(torch.int32))
+    s_split, m_split = torch.zeros(1024), c_tot.clone()
+    s_split[:512] = c_tot[512:]
+    m_split[512:] = 0.0
+    assert torch.equal(rows(m_split, 0, T).view(torch.int32), rows(m_tot, 0, T).view(torch.int32))
     assert torch.equal(rows(s_split, 0, T).view(torch.int32), rows(s_tot, 0, T).view(torch.int32))
+    # the face move is the row move of the layout: S's row r < 16 sits at row 16 + r of the combined tile
+    assert all(tile_off(16 + r, c) == tile_off(r, c) + 512 for r in range(16) for c in range(32))
+
+    def plane_off(p, t):  # kernels/mhc_pre/mhc_pre_common.hpp plane_off: the SFPU's view of a DST tile
+        return (p >> 3) * 256 + (((p & 7) >> 1) * 4 + (t >> 3)) * 16 + 2 * (t & 7) + (p & 1)
+
+    # the kernels move DST planes (mhc_ms1_merge / mhc_ms1_split: plane p + 16 <-> plane p, p < 16): planes 0..15 are
+    # exactly elements 0..511 (faces 0 / 1), and plane p + 16 is plane p's elements + 512 -- the element move above
+    assert sorted(plane_off(p, t) for p in range(16) for t in range(32)) == list(range(512))
+    assert all(plane_off(p + 16, t) == plane_off(p, t) + 512 for p in range(16) for t in range(32))
     # S rows t < T live in faces 2 / 3 only: no row of M below 16 is overwritten
     assert all(tile_off(16 + t, c) >= 512 for t in range(T) for c in range(32))

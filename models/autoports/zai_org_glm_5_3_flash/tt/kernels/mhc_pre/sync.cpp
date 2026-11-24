@@ -4,14 +4,19 @@
 
 // Fused mHC "pre" — sync kernel (NCRISC, NoC1): core-to-core partials, messages and the root's re-layouts.
 //
-// Round 1  K core   CB_PART (M, S) -> leader CB_GATHER slot y (8 KB) + leader SEM_G1
-//          leader   SEM_G1 == 8 -> push CB_GATHER (16); CB_GSUM -> root slot x + root SEM_G1
+// Round 1  K core   CB_PART (M, S) -> leader CB_GATHER slot y (8 KB; MHC_MS1: the combined tile, 4 KB) + leader SEM_G1
+//          leader   SEM_G1 == 8 -> push CB_GATHER (16; MHC_MS1: 8); CB_GSUM -> root slot x + root SEM_G1
 //          root     SEM_G1 == 8 -> push; CB_RED (z) -> CB_PLANE (plane layout); CB_COEF -> mailbox (pre, 4 x 32
 //                   fp32) to the 8 leaders + their SEM_M1; post / comb output tiles
 //          leader   SEM_M1 -> mailbox relayed to its 7 members + their SEM_M1
 //          K core   SEM_M1 -> CB_PRE (pre_s in column 0 of tile s, rows = tokens)
 // Round 2  same path with CB_S2 / one-tile slots / SEM_G2, the root's CB_INVR -> mailbox (1/rms(h), 32 fp32) ->
 //          SEM_M2 -> CB_INV.
+// Root order after the Sinkhorn: post / comb tiles, the coefficient tile, round 2 (1/rms(h): the invh tile + the
+// readers' MK_INVH_SEM, the mailbox). MHC_RMS_EARLY: the coefficient tile, round 2, then the post / comb tiles --
+// mhc_post's input is the coefficient tile, which it reads without a hand-off from this root (it is ordered by round
+// 2's signals: every phase after the readers' first pack waits for 1/rms(h)), so it lands before them; the post / comb
+// tiles are read only on the host (keep= outputs, after the program).
 // Every data write is completed (write barrier) before the semaphore increment that publishes it. A core waits on
 // its own semaphores only; the mailbox is read by this RISC after its semaphore, so the L1 cache is invalidated
 // first. CB_PRE / CB_INV are reserved (and zeroed) at the start, long before their message can arrive.
@@ -92,14 +97,13 @@ void kernel_main() {
     const uint32_t T = get_arg_val<uint32_t>(ph_rt0 + 0);
     const uint32_t gather_l1 = get_write_ptr(CB_GATHER);
     const uint32_t msg_l1 = get_write_ptr(CB_MSG);
-    // round-1 tiles per partial / group sum: the (M, S) pair, or with MHC_MS1 (T <= 16) one combined tile
-#if defined(MHC_MS1)
-    constexpr uint32_t R1_TILES = 1;
-#if defined(DEBUG_TAPS)
-#error "MHC_MS1: the root's M / S debug taps read the separate pair (mhc_pre.py keeps MS1 off with debug)"
+#if defined(MHC_RMS_EARLY) && defined(MHC_COEF_PLANE)
+#error "MHC_RMS_EARLY: a cp build writes its one coefficient page before round 2 already (no define there)"
 #endif
-#else
-    constexpr uint32_t R1_TILES = 2;
+    // round-1 tiles per partial / group sum (mhc_pre_common.hpp R1_TILES): the (M, S) pair, or with MHC_MS1 (T <= 16)
+    // one combined tile, assembled and split by the compute in DST
+#if defined(MHC_MS1) && defined(DEBUG_TAPS)
+#error "MHC_MS1: the root's M / S debug taps read the separate pair (mhc_pre.py keeps MS1 off with debug)"
 #endif
 
 #if defined(MHC_K)
@@ -130,31 +134,17 @@ void kernel_main() {
     cb_reserve_back(CB_GATHER, R1_TILES * GROUP);
 #endif
 
-    // ---- round 1: (M, S) partial -> leader slot
-    cb_wait_front(CB_PART, 2);
+    // ---- round 1: (M, S) partial (MHC_MS1: the combined tile) -> leader slot
+#if defined(MHC_MS1)
+    ASSERT(T <= MS1_T_MAX);  // the compute's face move holds S's rows t < 16 only (mhc_pre.py ms1_on caps the width)
+#endif
+    cb_wait_front(CB_PART, R1_TILES);
     MHC_SMARK();  // s0: this core's (M, S) partial ready
 #if defined(DEBUG_TAPS)
     if (tap_core) {
         tap(dbg, TAP_K0_M, get_read_ptr(CB_PART));
         tap(dbg, TAP_K0_S, get_read_ptr(CB_PART) + FP32_TILE_BYTES);
     }
-#endif
-#if defined(MHC_MS1)
-    // S's rows t < T -> rows 16 + t of the M page (M's rows >= T <= 16 are never read): packer-written data read by
-    // this RISC (invalidate first), then the fence lands every store before the NoC reads the page
-    // S rows MS1_S_ROW + t stay inside the tile, above M's T rows (the host builds MS1 at T <= 16; a watcher check)
-    ASSERT(T <= MS1_S_ROW);
-    invalidate_l1_cache();
-    {
-        volatile tt_l1_ptr uint32_t* m = words(get_read_ptr(CB_PART));
-        volatile tt_l1_ptr uint32_t* s = m + TILE_ELEMS;
-        for (uint32_t t = 0; t < T; ++t) {
-            for (uint32_t c = 0; c < TILE; ++c) {
-                m[tile_off(MS1_S_ROW + t, c)] = s[tile_off(t, c)];
-            }
-        }
-    }
-    invalidate_l1_cache();
 #endif
     send(
         get_read_ptr(CB_PART),
@@ -163,7 +153,7 @@ void kernel_main() {
         leader_y,
         gather_l1 + slot * R1_TILES * FP32_TILE_BYTES,
         SEM_G1);
-    cb_pop_front(CB_PART, 2);
+    cb_pop_front(CB_PART, R1_TILES);
 
 #if defined(MHC_LEADER)
     noc_semaphore_wait(sem_ptr(SEM_G1), GROUP);
@@ -309,32 +299,14 @@ void kernel_main() {
 #endif
 
     // ---- round 1: group partials
+#if defined(MHC_MS1)
+    ASSERT(T <= MS1_T_MAX);  // (as on the K cores: the compute's split moves S's rows t < 16 only)
+#endif
     cb_reserve_back(CB_GATHER, R1_TILES * N_GROUPS);
     noc_semaphore_wait(sem_ptr(SEM_G1), N_GROUPS);
     MHC_SMARK();                            // root: the 8 group sums gathered
     noc_semaphore_set(sem_ptr(SEM_G1), 0);  // reset for a later instance in the same program
     cb_push_back(CB_GATHER, R1_TILES * N_GROUPS);
-#if defined(MHC_MS1)
-    // the compute's combined total (CB_MSC: M rows < T, S rows 16 + t) -> S rows t of a zeroed CB_MSS page. This RISC
-    // only reads CB_MSC (never pops it: the compute reloads M from it, then pops both pages)
-    ASSERT(T <= MS1_S_ROW);  // (as the round-1 pack above: S rows MS1_S_ROW + t of CB_MSC inside the tile)
-    cb_wait_front(CB_MSC, 1);
-    cb_reserve_back(CB_MSS, 1);
-    {
-        const uint32_t mss_l1 = get_write_ptr(CB_MSS);
-        zero_l1(mss_l1, FP32_TILE_BYTES);
-        invalidate_l1_cache();  // packer-written CB_MSC
-        volatile tt_l1_ptr uint32_t* c = words(get_read_ptr(CB_MSC));
-        volatile tt_l1_ptr uint32_t* o = words(mss_l1);
-        for (uint32_t t = 0; t < T; ++t) {
-            for (uint32_t k = 0; k < TILE; ++k) {
-                o[tile_off(t, k)] = c[tile_off(MS1_S_ROW + t, k)];
-            }
-        }
-        invalidate_l1_cache();  // the stores land before the push (Blackhole: a fence)
-    }
-    cb_push_back(CB_MSS, 1);
-#endif
 
     // z (rows = tokens, cols = the 24 mixes) -> plane layout (plane v, lane t); unused lanes / planes zero
     cb_wait_front(CB_RED, 1);
@@ -382,7 +354,7 @@ void kernel_main() {
 #if defined(MHC_PRE_SPLIT)
     // 7a (B=32 probe: z -> pre planes 14.9 us, the 24 x T element relayout on this RISC): page 0 = the 4 pre planes
     // only (4 T elements), the pre message goes out from its coefficient page, THEN page 1 = every plane (the Sinkhorn
-    // input; post / comb are needed only by mhc_post, much later)
+    // input; mhc_post's input, the coefficient tile, is needed much later)
     relayout(0, N_STREAMS);
 #else
     relayout(0, N_MIX);
@@ -481,6 +453,25 @@ void kernel_main() {
         cb_reserve_back(CB_SCR, 1);
         const uint32_t scr = get_write_ptr(CB_SCR);
         volatile tt_l1_ptr uint32_t* o = words(scr);
+#if defined(MHC_RMS_EARLY)
+        // GLM53_MHC_RMS_EARLY: the compact coefficient tile, then round 2 (1/rms(h) to the readers), then the post /
+        // comb tiles. ORDERING INVARIANT (what keeps it race-free): mhc_post reads coef without a hand-off from this
+        // root -- it is ordered only because every phase after the readers' first pack waits for this root's 1/rms(h)
+        // signal -- so the coefficient tile must land (write barrier) BEFORE the round-2 fragment signals 1/rms(h).
+        // post / comb have no device consumer (host keep= outputs only, read after the program): they go last
+        zero_l1(scr, FP32_TILE_BYTES);
+        for (uint32_t t = 0; t < T; ++t) {
+            for (uint32_t v = 0; v < N_MIX - N_STREAMS; ++v) {
+                o[tile_off(t, v)] = coef[plane_off(N_STREAMS + v, t)];
+            }
+        }
+        noc_async_write_page(0, coef_out, scr);
+        noc_async_write_barrier();
+        {
+#include "mhc_pre_round2.inc"
+        }
+        MK_MARK();  // 4: 1/rms(h) out (MHC_RMS_EARLY: before the post / comb tiles)
+#endif
         if constexpr (PC_MODE == 0) {
             // post [T, 1, 4, 1]: tile t, column 0 rows i; comb [T, 1, 4, 4]: tile t rows j, cols k
             for (uint32_t t = 0; t < T; ++t) {
@@ -518,6 +509,7 @@ void kernel_main() {
             noc_async_write_page(0, comb, scr);
             noc_async_write_barrier();
         }
+#if !defined(MHC_RMS_EARLY)
         // compact coefficients for the fused post-mix (mhc_post): row t = post_0..3 | comb_0..15 (C[i][j] at 4i + j)
         zero_l1(scr, FP32_TILE_BYTES);
         for (uint32_t t = 0; t < T; ++t) {
@@ -527,64 +519,15 @@ void kernel_main() {
         }
         noc_async_write_page(0, coef_out, scr);
         noc_async_write_barrier();
+#endif
 #endif  // MHC_COEF_PLANE
     }
     cb_pop_front(CB_COEF, 1);
 
-    // ---- round 2: group S2 partials -> 1/rms(h) -> mailbox -> leaders
-    cb_reserve_back(CB_GATHER, N_GROUPS);
-    noc_semaphore_wait(sem_ptr(SEM_G2), N_GROUPS);
-    noc_semaphore_set(sem_ptr(SEM_G2), 0);  // reset for a later instance in the same program
-    cb_push_back(CB_GATHER, N_GROUPS);
-    cb_wait_front(CB_INVR, 1);
-    MK_MARK();  // 3: round-2 (1/rms(h)) ready
-    invalidate_l1_cache();
-#if defined(MHC_DEFER_INV)
-    // the readers scale their hn-matmul outputs by it: the tile (row t, column 0 = 1/rms(h)(t)) -> invh, then +1 on
-    // every reader's MK_INVH_SEM
-    noc_async_write_page(0, invh_out, get_read_ptr(CB_INVR));
-    noc_async_write_barrier();
-    for (uint32_t r = 0; r < n_invh; ++r) {
-        noc_semaphore_inc(
-            get_noc_addr(
-                get_arg_val<uint32_t>(ph_rt0 + INVH_ARGS + 2 + 2 * r),
-                get_arg_val<uint32_t>(ph_rt0 + INVH_ARGS + 3 + 2 * r),
-                get_semaphore(MK_INVH_SEM)),
-            1);
-    }
-    noc_async_atomic_barrier();
-#endif
-    {
-        volatile tt_l1_ptr uint32_t* inv = words(get_read_ptr(CB_INVR));
-#if defined(DEBUG_TAPS)
-        tap(dbg, TAP_INVR, get_read_ptr(CB_INVR));
-#endif
-        volatile tt_l1_ptr uint32_t* msg = words(msg_l1);
-        for (uint32_t t = 0; t < TILE; ++t) {
-            msg[t] = t < T ? inv[tile_off(t, 0)] : 0u;
-        }
-        for (uint32_t g = 0; g < N_GROUPS; ++g) {
-            noc_async_write(
-                msg_l1,
-                get_noc_addr(
-                    get_arg_val<uint32_t>(ph_rt0 + LEADER_ARGS + 2 * g),
-                    get_arg_val<uint32_t>(ph_rt0 + LEADER_ARGS + 2 * g + 1),
-                    msg_l1),
-                TILE * 4);
-        }
-        noc_async_write_barrier();
-        for (uint32_t g = 0; g < N_GROUPS; ++g) {
-            noc_semaphore_inc(
-                get_noc_addr(
-                    get_arg_val<uint32_t>(ph_rt0 + LEADER_ARGS + 2 * g),
-                    get_arg_val<uint32_t>(ph_rt0 + LEADER_ARGS + 2 * g + 1),
-                    get_semaphore(SEM_M2)),
-                1);
-        }
-        noc_async_atomic_barrier();
-    }
-    cb_pop_front(CB_INVR, 1);
+#if !defined(MHC_RMS_EARLY)
+#include "mhc_pre_round2.inc"  // ---- round 2: group S2 partials -> 1/rms(h) -> mailbox -> leaders
     MK_MARK();  // 4: end
+#endif
 #if defined(MK_PROBE_ARG)
     MK_FLUSH(get_write_ptr(MK_PROBE_CB) + 64);
 #endif

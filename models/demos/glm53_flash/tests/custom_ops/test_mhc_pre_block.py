@@ -48,7 +48,7 @@ def _build(mesh_device, which="ffn", exact=False):
         exact=exact,
         # the served program variants under test: unset = the op's own defaults (llk Sinkhorn, cols split, 3 parts)
         sinkhorn=os.environ.get("GLM53_MHC_PRE_SINKHORN", "llk"),
-        split=os.environ.get("GLM53_MHC_PRE_SPLIT", "cols"),
+        split=os.environ.get("GLM53_MESH_MHC_PRE_SPLIT", "cols"),
         x_parts=int(os.environ.get("GLM53_MHC_PRE_XPARTS", "3")),
     )
     return op, kcfg, (fn, base, scale)

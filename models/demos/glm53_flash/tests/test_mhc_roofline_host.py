@@ -602,7 +602,7 @@ def test_knob_defaults_are_todays_path():
     for knob in (
         "GLM53_MHC_KSUM",
         "GLM53_MHC_PRE_SINKHORN",
-        "GLM53_MHC_PRE_SPLIT",
+        "GLM53_MESH_MHC_PRE_SPLIT",
         "GLM53_MHC_POST_SPLIT",
         "GLM53_MHC_POST_PREFETCH",
         "GLM53_MHC_LAYOUT",

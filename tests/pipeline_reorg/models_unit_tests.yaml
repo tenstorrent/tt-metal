@@ -2439,9 +2439,10 @@
 - name: GLM-5.3-Flash host suites
   cmd: |
     # CPU-only (no device, no weights): the serving adapter's placement / prefix cache / spec-decode contracts, the
-    # packed decode inputs, the KDA chronology, the dispatch budget and the allocation policy. One pytest session per
-    # file (--noconftest): every suite asserts that ttnn was never imported. The Galaxy device coverage is in the
-    # bh_galaxy and bh_sc1 entries of the e2e, device-perf, sweep and vLLM model test files.
+    # packed decode inputs, the KDA chronology, the dispatch budget, the allocation policy and the routed-expert
+    # kernels' hand-off models. One pytest session per file (--noconftest): every suite asserts that ttnn was never
+    # imported. The Galaxy device coverage is in the bh_galaxy and bh_sc1 entries of the e2e, device-perf, sweep and vLLM
+    # model test files.
     pytest --timeout 300 --noconftest models/demos/glm53_flash/tests/test_alloc_policy_host.py
     pytest --timeout 300 --noconftest models/demos/glm53_flash/tests/test_decode_packed_inputs_host.py
     pytest --timeout 300 --noconftest models/demos/glm53_flash/tests/test_dispatch_pass_budget_host.py
@@ -2452,6 +2453,7 @@
     pytest --timeout 300 --noconftest models/demos/glm53_flash/tests/test_mesh_prefill_scope_host.py
     pytest --timeout 300 --noconftest models/demos/glm53_flash/tests/test_mhc_norm_select_host.py
     pytest --timeout 300 --noconftest models/demos/glm53_flash/tests/test_mhc_roofline_host.py
+    pytest --timeout 300 --noconftest models/demos/glm53_flash/tests/test_mkx_xrows_coal_host.py
     pytest --timeout 300 --noconftest models/demos/glm53_flash/tests/test_prefill_linear_rowblock_host.py
     pytest --timeout 300 --noconftest models/demos/glm53_flash/tests/test_regions_decode_host.py
     pytest --timeout 300 --noconftest models/demos/glm53_flash/tests/test_roofline_host.py

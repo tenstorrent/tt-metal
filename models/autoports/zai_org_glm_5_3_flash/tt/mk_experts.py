@@ -67,6 +67,27 @@ def xcoal(xdefs: list) -> bool:
     return os.environ.get("GLM53_MKX_XROWS_COAL", "0") == "1" and any(k == "MKX_XROWS" for k, _ in xdefs)
 
 
+EARLY_LOGGED: list = []  # the GLM53_MKX_EARLY line, once per process
+
+
+def early_defines(y2: bool, xsl: bool) -> list:
+    """GLM53_MKX_EARLY (xa.cpp / xc.cpp MKX_EARLY; off unless set, a galaxy default on the 8x4): with the folded shared
+    expert (fold_y2, MKX_Y2_INIT) y2 is read only by xc's add_y2 at the last group (n == 0: y2 is the output), so xc
+    waits for it there, xa reads it after the first two groups' routing-weight tiles, and (MKX_EARLY_XROWS: the
+    coalesced row reads in a megakernel composite) x's decode rows are issued before the hand-off wait of the reader phase
+    ahead of the experts. Same tiles, same accumulation order (bitwise). -> [("MKX_EARLY", "1")] or [] (off, or no y2:
+    the sparse_dsa MoE keeps y / y2 apart and runs its experts before shared down). Refused: a value other than 0 / 1,
+    y2 without the batched expert TP (MKX_XSL: the plain-EP / XTP down paths wait for y2 at their start)."""
+    v = os.environ.get("GLM53_MKX_EARLY", "0")
+    if v not in ("0", "1"):
+        raise ValueError(f"GLM53_MKX_EARLY={v!r}: 0 or 1")
+    if v == "0" or not y2:
+        return []
+    if not xsl:
+        raise ValueError("GLM53_MKX_EARLY=1 needs the batched expert TP (MKX_XSL) with y2 (fold_y2)")
+    return [("MKX_EARLY", "1")]
+
+
 def raw_sync() -> bool:
     """GLM53_MKX_RAW_SYNC (default on; =0 = the knob-off binaries): xw / xa get MKX_RAW_SYNC -- in a stack program
     (MK_LAYERS > 1) xa clears MKX_SEM_LIST after its last access to xw's scratch and the list page, and the next layer's
@@ -286,12 +307,22 @@ class ReaderExperts:
             adefs.append(("MKX_SIGNAL_SEM", str(signal[0])))
             atail = [len(signal[1])] + [v for xy in signal[1] for v in xy]
         cdefs, a_ct_y2, y2_rt = list(defs), [], []
+        edefs = early_defines(y2 is not None, self.xsl is not None)
+        if edefs and not EARLY_LOGGED:
+            EARLY_LOGGED.append(True)
+            print(
+                f"GLM53_MKX_EARLY active (MKX_EARLY: y2 waited at the last group, read after the first routing "
+                f"weights; t {t})",
+                flush=True,
+            )
         if y2 is not None:
             assert y2.dtype == BF16 and tuple(y2.shape)[-1] == self.h_tiles * TILE, (y2.dtype, tuple(y2.shape))
             adefs += [("MKX_Y2_INIT", "1"), ("MKX_Y2_SEM", str(y2_sem)),
                       ("MKX_Y2_RT", str(7 + 2 * len(self.noc) + len(atail)))]  # fmt: skip
             cdefs.append(("MKX_Y2_INIT", "1"))
             a_ct_y2, y2_rt = acc(y2), [y2.buffer_address()]
+            adefs += edefs  # (after MKX_Y2_INIT; [] when off: no define)
+            cdefs += edefs
         # xinv (MKX_XINV, the sparse layer's deferred FFN 1/rms(h)): its [1,1,32,32] fp32 tile; xa reads it into CB_XINV
         # (accessor after y2's, address at MKX_XINV_RT), xc scales gate | up per row before SwiGLU
         a_ct_xinv, xinv_rt = [], []

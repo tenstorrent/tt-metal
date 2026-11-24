@@ -173,6 +173,11 @@ FORCE_INLINE void move_phase() {
     constexpr auto y_args = TensorAccessorArgs<YOFF>();
     const auto x = TensorAccessor(x_args, get_arg_val<uint32_t>(ph_rt0 + 3 * P + 0));
     const auto y = TensorAccessor(y_args, get_arg_val<uint32_t>(ph_rt0 + 3 * P + 1));
+#if defined(MK_BEFORE_WAIT_PHASE)
+    if constexpr (P == MK_BEFORE_WAIT_PHASE) {  // a composite's hook before this phase's hand-off wait
+        MK_BEFORE_WAIT_HOOK();
+    }
+#endif
 #if defined(MK_KSPLIT)
     const uint32_t n0_arg = get_arg_val<uint32_t>(ph_rt0 + 3 * P + 2);  // (koff << 16) | n0 (Stage 14 K-split phases)
     const uint32_t n0 = n0_arg == 0xFFFFFFFFu ? n0_arg : (n0_arg & 0xFFFFu);

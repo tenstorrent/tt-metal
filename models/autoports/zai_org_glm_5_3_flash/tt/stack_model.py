@@ -196,10 +196,34 @@ def l1_report(mesh, tag: str, root=None) -> list:
     return rows
 
 
+# GLM53_MHC_PRE_SPLIT (mhc_pre.py MHC_PRE_SPLIT; a galaxy default, tt/galaxy_defaults.py): a per-kind knob (KNOB_KEYS), so
+# set_knobs pops it before every kind -- the launch's value is read once per process, before the first pop; "1" puts it
+# on every TP kind whose mhc_pre sends pre early (dense_kda, sparse_kda, sparse_dsa: GLM53_MHC_PRE_EARLY), "0" or unset
+# keeps them off. GLM53_STACK_KNOB_SET still overrides it per kind
+_PRE_SPLIT_LAUNCH: list = []  # (host tests clear it to start a new "process")
+_PRE_SPLIT_LOGGED: set = set()
+_KIND_NAMES = {False: DENSE_KDA, True: SPARSE_KDA, "dsa": SPARSE_DSA}
+
+
+def pre_split_launch():
+    """the launch's GLM53_MHC_PRE_SPLIT ("1" / "0" / None), latched at the first call (set_knobs makes it before its first
+    pop of the per-kind keys): read ONCE per process -- a later change of the environment is ignored. Any other value
+    (e.g. the mesh model's "cols" / "extras", now GLM53_MESH_MHC_PRE_SPLIT) keeps every kind off, with one warning"""
+    if not _PRE_SPLIT_LAUNCH:
+        v = os.environ.get("GLM53_MHC_PRE_SPLIT")
+        if v not in (None, "0", "1"):
+            print(f"WARNING: GLM53_MHC_PRE_SPLIT={v!r} is not 0 / 1: the stack's mhc_pre split stays off (the mesh model's "
+                  f"pre-block split is GLM53_MESH_MHC_PRE_SPLIT)", flush=True)  # fmt: skip
+        _PRE_SPLIT_LAUNCH.append(v)
+    return _PRE_SPLIT_LAUNCH[0]
+
+
 def set_knobs(sparse, tp: int = 1, t: int = 1):
     """the knob env of a layer kind (False dense_kda, True sparse_kda, "dsa" sparse_dsa): set before a kind's layers are
-    constructed AND before its programs are first built (both read the env)"""
+    constructed AND before its programs are first built (both read the env). GLM53_MHC_PRE_SPLIT comes from the launch's
+    value, read once per process (pre_split_launch): a later change of the environment is ignored"""
     key = sparse if sparse == "dsa" else bool(sparse)
+    pre_split = pre_split_launch()  # (before the pop below)
     for k in KNOB_KEYS:
         os.environ.pop(k, None)
     # default s7a283 (Stage 14 ring item: the sparse_kda 3-layer vtp8 stack 304 vs 361 us/layer in-program under "s14")
@@ -231,13 +255,19 @@ def set_knobs(sparse, tp: int = 1, t: int = 1):
     # sparse_kda layers (both invh tiles in DRAM: in L1 they sit below the 45-layer stack's floor) + hn first, and hn
     # first on the sparse_dsa kind (its MoE deferral is GLM53_MK_MOE_DEFER_INV; mhc_pre takes HN_FIRST only with a
     # deferral). The dense layers already defer (KNOBS_TP). sparse_kda attn site 30.6 -> 21.1 us at B 1; e2e 32 K x 4
-    # 47.3 -> 48.9, 4 K x 1 54.3 -> 55.9 tok/s/u (with MS1); the ids move along existing near-tie sequences only.
+    # 47.3 -> 48.9, 4 K x 1 54.3 -> 55.9 tok/s/u (with the 11-13 MS1 at t <= 2); the ids move along existing near-tie
+    # sequences only.
     # Applied before GLM53_STACK_KNOB_SET, so an A/B entry still overrides it per kind
     if tp > 1 and os.environ.get("GLM53_STACK_DEFER", "0") == "1":
         if key is True:
             os.environ.update({"GLM53_MK_SPARSE_DEFER_INV": "dram", "GLM53_MHC_HN_FIRST": "1"})
         elif key == "dsa":
             os.environ["GLM53_MHC_HN_FIRST"] = "1"
+    # GLM53_MHC_PRE_SPLIT=1 (the launch's value, see pre_split_launch): the root sends the pre message from a page holding
+    # only the 4 pre planes, before it relays out the other 20 for the Sinkhorn (off the hn path) -- the same per-lane SFPU
+    # code on the same z, so the same bits. Applied before GLM53_STACK_KNOB_SET (an A/B entry overrides it)
+    if tp > 1 and pre_split == "1" and os.environ.get("GLM53_MHC_PRE_EARLY") == "1":
+        os.environ["GLM53_MHC_PRE_SPLIT"] = "1"
     # GLM53_STACK_KNOB_SET="d:K=V;s:K=V;a:K=V" (dense_kda / sparse_kda / sparse_dsa; K=- drops K; ";" or ","
     # between items when no value holds a comma): overrides (A/B)
     spec = os.environ.get("GLM53_STACK_KNOB_SET", "")
@@ -249,6 +279,11 @@ def set_knobs(sparse, tp: int = 1, t: int = 1):
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
+    if os.environ.get("GLM53_MHC_PRE_SPLIT") == "1" and os.environ.get("GLM53_MHC_PRE_EARLY") == "1":
+        if key not in _PRE_SPLIT_LOGGED:  # once per kind and process
+            _PRE_SPLIT_LOGGED.add(key)
+            print(f"GLM53_MHC_PRE_SPLIT active ({_KIND_NAMES[key]}: the mhc_pre root sends pre from the 4 pre planes "
+                  f"before the 20-plane relayout)", flush=True)  # fmt: skip
 
 
 def _narrow_knobs(sparse, tp: int, t: int):

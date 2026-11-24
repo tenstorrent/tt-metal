@@ -33,20 +33,20 @@ constexpr uint32_t MSG_FLOATS = 128;  // mailbox: 4 planes x 32 tokens (round 1)
 
 // circular buffers (uniform indices on every core; the first two are defined on every core so that their L1
 // addresses are equal everywhere: remote cores write into them)
-constexpr uint32_t CB_GATHER = 0;  // fp32 16 pages: round 1 = 8 x (M, S) partials, round 2 = 8 S2 partials
+constexpr uint32_t CB_GATHER = 0;  // fp32 16 pages (MHC_MS1: 8): round 1 = 8 x (M, S) partials, round 2 = 8 S2 partials
 constexpr uint32_t CB_MSG = 1;     // 512 B mailbox (root -> leaders -> members)
 constexpr uint32_t CB_X = 2;       // fp32 8 pages, x tiles (matmul operand: default unpack)
 constexpr uint32_t CB_X32 = 3;     // alias of CB_X (same allocation) for exact fp32 copy_tile
 constexpr uint32_t CB_FN = 4;      // bf16 8 pages, fn^T tiles [32 K rows x 32 values]
 constexpr uint32_t CB_W = 5;       // fp32 2 pages, norm weight tiles (row 0)
-constexpr uint32_t CB_PART = 6;    // fp32 2 pages, (M, S) partial of this core
+constexpr uint32_t CB_PART = 6;    // fp32 R1_TILES pages: this core's (M, S) partial, or (MHC_MS1) the combined tile
 constexpr uint32_t CB_PRE = 7;     // fp32 4 pages, pre_s in column 0 (rows = tokens), expanded from the mailbox
 constexpr uint32_t CB_H = 8;       // fp32 2 pages, collapsed h tiles (compute scratch)
 constexpr uint32_t CB_S2 = 9;      // fp32 1 page, sum_c h^2 partial
 constexpr uint32_t CB_INV = 10;    // fp32 1 page, 1/rms(h) in column 0
 constexpr uint32_t CB_OUT = 11;    // bf16 (or fp32) 2 pages, hn tiles
 constexpr uint32_t CB_XSTK = 12;   // fp32 1 page, stacked output tile assembly (stream RISC)
-constexpr uint32_t CB_GSUM = 13;   // fp32 2 pages, group sums (leaders; round 2 uses page 0)
+constexpr uint32_t CB_GSUM = 13;   // fp32 R1_TILES pages, group sums (leaders; round 2 uses page 0)
 constexpr uint32_t CB_RED = 14;    // fp32 1 page, root: coefficient logits z [tokens x 24]
 constexpr uint32_t CB_PLANE = 15;  // fp32 1 page, root: z in the plane layout
 constexpr uint32_t CB_COEF = 16;   // fp32 1 page, root: pre | post | comb in the plane layout
@@ -55,19 +55,18 @@ constexpr uint32_t CB_INVR = 18;   // fp32 1 page, root: 1/rms(h) column
 constexpr uint32_t CB_SCR = 19;    // fp32 pages, root: output tile assembly
 constexpr uint32_t CB_DBG = 20;    // fp32 2 pages, debug taps packed by the root compute
 // MHC_MS1 (GLM53_MHC_MS1, T <= 16): round 1 moves ONE fp32 tile per partial instead of the (M, S) pair -- M in rows
-// 0..T-1 (faces 0 / 1), S's rows t < T at rows 16 + t (faces 2 / 3). Every sum of round 1 is elementwise in slot
-// order, so M's and S's elements take exactly the adds they take as separate tiles (bitwise). The K core's sync RISC
-// writes S's rows into the M page (16 + T <= 32: M's rows >= T are never read), the leaders sum 8 pages instead of 16,
-// and the root sums 8 combined group pages into CB_MSC, its sync RISC copies rows 16 + t back to rows t of a zeroed
-// CB_MSS page, and the root compute reloads both (exact fp32 pack / unpack) for 1/rms(x) and z as before.
+// 0..15 (faces 0 / 1), S's rows t at rows 16 + t (faces 2 / 3). Every sum of round 1 is elementwise in slot order, so
+// M's and S's elements take exactly the adds they take as separate tiles (bitwise). The K core's compute moves S's
+// faces 0 / 1 into faces 2 / 3 of the M tile in DST before the pack (mhc_pre_sfpu.hpp mhc_ms1_merge; M's rows >= 16
+// are never read), the leaders sum 8 pages instead of 16, and the root compute sums the 8 combined group pages and
+// splits S back out in DST (mhc_ms1_split) for 1/rms(x) and z as before.
 #if defined(MHC_MS1)
-constexpr uint32_t CB_MSC = 21;     // fp32 1 page, root: the combined round-1 total (M rows < 16, S rows 16 + t)
-constexpr uint32_t CB_MSS = 22;     // fp32 1 page, root: S split out of CB_MSC (rows t < T; zero elsewhere)
-constexpr uint32_t ROOT_CBS = 9;    // root-only CBs RED .. MSS (the stack's per-phase rewind range from CB_RED)
-constexpr uint32_t MS1_S_ROW = 16;  // first row of S in a combined tile
+constexpr uint32_t R1_TILES = 1;    // round-1 tiles per partial / group sum
+constexpr uint32_t MS1_T_MAX = 16;  // widths the combined tile holds (S's rows t at rows 16 + t; mhc_pre.py MS1_T_MAX)
 #else
-constexpr uint32_t ROOT_CBS = 7;  // root-only CBs RED .. DBG (the stack's per-phase rewind range from CB_RED)
+constexpr uint32_t R1_TILES = 2;  // the (M, S) pair
 #endif
+constexpr uint32_t ROOT_CBS = 7;  // root-only CBs RED .. DBG (the stack's per-phase rewind range from CB_RED)
 
 // semaphores
 constexpr uint32_t SEM_G1 = 0;  // round-1 partials arrived (leader: 8 cores, root: 8 groups)
