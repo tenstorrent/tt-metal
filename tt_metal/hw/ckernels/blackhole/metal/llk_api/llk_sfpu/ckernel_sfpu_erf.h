@@ -52,8 +52,22 @@ constexpr std::array<float, ERF_LUT_SIZE> ERF_LUT = {
 
 #endif
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+}  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_erf_bf16.h"
+
+namespace ckernel::sfpu {
+
+// Whether BF16 DEST runs the generated erf kernel as one call over the whole tile.
+inline constexpr bool erf_bf16_whole_tile = true;
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = true>
 inline void calculate_erf() {
+    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
+        if (bf16_dest_erf()) {
+            calculate_erf_bf16<ITERATIONS>();
+            return;
+        }
+    }
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
         // Clamp |x| to 10.0 before evaluation (erf is odd, rational is exact at boundary)

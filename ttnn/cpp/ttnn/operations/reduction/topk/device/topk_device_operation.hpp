@@ -9,6 +9,7 @@
 #include "ttnn/operations/reduction/topk/device/topk_device_operation_types.hpp"
 
 #include "ttnn/metal_v2_artifacts.hpp"
+#include "ttnn/command_list_params.hpp"
 
 #include <tt-metalium/program_descriptors.hpp>
 
@@ -28,6 +29,11 @@ struct TopKDeviceOperation {
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
+        static ttnn::command_list::CmdListBindings map_cmd_list_parameters(
+            const operation_attributes_t&,
+            const tensor_args_t&,
+            const tt::tt_metal::ProgramSpec&,
+            const tt::tt_metal::ProgramRunArgs&);
     };
 
     struct TopKMultiCoreProgramFactory {
