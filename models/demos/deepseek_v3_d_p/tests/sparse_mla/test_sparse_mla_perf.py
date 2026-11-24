@@ -60,18 +60,20 @@ MODES = ("untraced", "traced")
 # process per model). Traced is the mean of the runs; untraced is the fastest run. LoudBox, Galaxy and Galaxy 4x4: CI
 # hosts; Galaxy and Galaxy 4x4 then scaled by the q-in-L1 change's measured speedup (3 interleaved runs each of main and
 # the change on one Galaxy; ratios under 1% left unapplied), LoudBox by Galaxy's (same 160 q rows per chip, not
-# measured). Galaxy 4x4 subtorus: the GLM rows are the means of three runs on three 14 kW Galaxies (the GLM chunked
-# perf leg's runners), except the shared layer's long untraced row, the median (one of the three hosts read 11% slower);
-# the K3.1 row has no CI leg (measured on a subtorus-cabled Galaxy, 3
-# runs, unscaled).
+# measured). Then re-centred on CI runs after that change: each value is the mean over runs of that run's measurement
+# (fastest untraced sample, traced replay). Galaxy 8x4 K3.1 warm and GLM-5.3: 2-3 runs; Galaxy 4x4 K3.1 warm and
+# LoudBox K3.1: 1 run; deltas under 1% left as is. Galaxy 4x4 subtorus: the GLM rows are the means of three runs on
+# three 14 kW Galaxies (the GLM chunked perf leg's runners), except the shared layer's long untraced row, the median
+# (one of the three hosts read 11% slower); the K3.1 row has no CI leg (measured on a subtorus-cabled Galaxy, 3 runs,
+# unscaled).
 _TARGETS_MS = {
     "Galaxy": {
-        "kimi_k3_1": (2.88, 2.54, 6.47, 6.18),
-        "glm_5_3": (2.91, 2.44, 6.46, 6.01),
-        "glm_5_3-no_indexer": (2.34, 2.00, 2.39, 2.07),
+        "kimi_k3_1": (2.93, 2.63, 6.47, 6.18),
+        "glm_5_3": (2.80, 2.35, 6.27, 5.84),
+        "glm_5_3-no_indexer": (2.29, 1.97, 2.34, 2.04),
     },
     "Galaxy 4x4": {
-        "kimi_k3_1": (3.25, 3.00, 7.21, 6.98),
+        "kimi_k3_1": (3.21, 3.05, 7.21, 6.98),
         "glm_5_3": (2.91, 2.69, 6.81, 6.53),
         "glm_5_3-no_indexer": (2.29, 2.23, 4.72, 4.56),
     },
@@ -81,7 +83,7 @@ _TARGETS_MS = {
         "glm_5_3-no_indexer": (2.00, 1.86, 2.08, 1.95),
     },
     "LoudBox": {
-        "kimi_k3_1": (2.57, 2.38, 3.82, 3.71),
+        "kimi_k3_1": (2.65, 2.51, 3.87, 3.71),
         "glm_5_3": (2.36, 2.20, 3.62, 3.46),
         "glm_5_3-no_indexer": (1.97, 1.92, 2.71, 2.67),
     },

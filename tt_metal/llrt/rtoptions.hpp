@@ -95,6 +95,7 @@ struct TargetSelection {
     std::string file_name;  // File name to write output to.
     bool one_file_per_risc = false;
     bool prepend_device_core_risc{};
+    bool tag_firmware{};  // Start each line that firmware printed with "[FW] ".
 };
 
 struct WatcherSettings {
@@ -388,6 +389,9 @@ class RunTimeOptions {
     // Enable fabric VC2 (neighbour exchange, single-hop)
     bool enable_fabric_vc2 = false;
 
+    // Add a host_rdma sender channel to every fabric router's VC0 (host-initiated RDMA)
+    bool enable_fabric_host_rdma = false;
+
     // EXPERIMENTAL: Enable VC1 inter-mesh pass-through routing (A->B->C). Not deadlock-safe.
     bool enable_fabric_mesh_pass_through = false;
 
@@ -677,6 +681,10 @@ public:
     }
     void set_feature_prepend_device_core_risc(RunTimeDebugFeatures feature, bool prepend_device_core_risc) {
         feature_targets[feature].prepend_device_core_risc = prepend_device_core_risc;
+    }
+    bool get_feature_tag_firmware(RunTimeDebugFeatures feature) const { return feature_targets[feature].tag_firmware; }
+    void set_feature_tag_firmware(RunTimeDebugFeatures feature, bool tag_firmware) {
+        feature_targets[feature].tag_firmware = tag_firmware;
     }
     TargetSelection get_feature_targets(RunTimeDebugFeatures feature) const { return feature_targets[feature]; }
     void set_feature_targets(RunTimeDebugFeatures feature, const TargetSelection& targets) {
@@ -974,6 +982,10 @@ public:
     bool get_enable_fabric_vc2() const { return enable_fabric_vc2; }
     void set_enable_fabric_vc2(bool enable) { enable_fabric_vc2 = enable; }
 
+    // Fabric host_rdma sender channel enable
+    bool get_enable_fabric_host_rdma() const { return enable_fabric_host_rdma; }
+    void set_enable_fabric_host_rdma(bool enable) { enable_fabric_host_rdma = enable; }
+
     // EXPERIMENTAL: Fabric VC1 inter-mesh pass-through enable (A->B->C). Not deadlock-safe.
     bool get_enable_fabric_mesh_pass_through() const { return enable_fabric_mesh_pass_through; }
     void set_enable_fabric_mesh_pass_through(bool enable) { enable_fabric_mesh_pass_through = enable; }
@@ -1130,6 +1142,7 @@ private:
     void ParseFeatureFileName(RunTimeDebugFeatures feature, const std::string& env_var);
     void ParseFeatureOneFilePerRisc(RunTimeDebugFeatures feature, const std::string& env_var);
     void ParseFeaturePrependDeviceCoreRisc(RunTimeDebugFeatures feature, const std::string& env_var);
+    void ParseFeatureTagFirmware(RunTimeDebugFeatures feature, const std::string& env_var);
     void ParseFabricTelemetryEnv(const char* value);
     void HandleEnvVar(
         EnvVarID id, const char* value);  // Handle single env var (value usually non-null, see cpp for details)

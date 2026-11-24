@@ -286,6 +286,11 @@ void init_unary_sfpu_operation_quasar()
     {
         init_signbit();
     }
+    else if constexpr (is_isinf_isnan_op(OPERATION))
+    {
+        // What SFPU_UNARY_INIT(<op>) expands to in the Compute API's *_tile_init, so the bare init's dispatch to isinf_isnan_init is what runs.
+        ::ckernel::llk_math_eltwise_unary_sfpu_init<OPERATION>();
+    }
     else if constexpr (OPERATION == SfpuType::typecast)
     {
         init_typecast();
@@ -530,7 +535,8 @@ void init_unary_sfpu_operation_quasar()
     }
     else if constexpr (OPERATION == SfpuType::tiled_prod)
     {
-        tiled_prod_init();
+        // The Compute API's tiled_prod_tile_init expression, so the bare init's dispatch to tiled_prod_init is what runs.
+        SFPU_UNARY_INIT(tiled_prod);
     }
     else if constexpr (OPERATION == SfpuType::alt_complex_rotate90)
     {

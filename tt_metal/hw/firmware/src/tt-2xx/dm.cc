@@ -380,6 +380,14 @@ extern "C" uint32_t _start1() {
         tensor_prefetcher_signal_table_init(MEM_BANK_TO_NOC_SCRATCH);
         thread_sync_init();
 
+        // Reset all remapper pairs, in case they are in some invalid sticky state left from previous
+        // program runs.
+        for (uint32_t pair = 0; pair < REMAP_NUM_PAIRS; pair++) {
+            WRITE_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(pair), 0u);
+        }
+        // The writes are posted, read back the last one so every clear has fully completed.
+        (void)READ_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(REMAP_NUM_PAIRS - 1));
+
         // Initialize wait for trisc FW
         for (uint32_t i = MaxDMProcessorsPerCoreType; i < MaxNumKernels; i++) {
             mailboxes->fw_shared_globals_ready[i] = SHARED_GLOBALS_READY_WAIT;
