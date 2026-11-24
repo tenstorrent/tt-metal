@@ -17,6 +17,20 @@ HERE = Path(__file__).resolve().parent
 HEADER = HERE.parent.parent / "tt_llk_blackhole" / "llk_lib" / "llk_matmul_forms.h"
 SWEEP = HERE / "helpers" / "matmul_sweep.py"
 PROD = HERE / "helpers" / "matmul_prod_keys.py"
+# DataFormat and MathFidelity values (tensix_types.h, llk_defs.h) of the packed C++ cells
+FMT = {
+    "Float32": 0,
+    "Float16": 1,
+    "Bfp8": 2,
+    "Float16_b": 5,
+    "Bfp8_b": 6,
+    "Bfp4_b": 7,
+    "Int32": 8,
+    "Int8": 14,
+    "Bfp2_b": 15,
+    "UInt8": 30,
+}
+FID = {"LoFi": 0, "HiFi2": 2, "HiFi3": 3, "HiFi4": 4}
 SHORT = {
     "Float16_b": "F16b",
     "Bfp8_b": "B8",
@@ -121,25 +135,26 @@ def reinit_block():
 
 def blocks():
     per_tile, main = cells()
+    # packed cells of llk_matmul_forms.h, hex digits per field (layout above each table there)
     cpp_pt = "".join(
-        "    {MathFidelity::%s, %d, DataFormat::%s, DataFormat::%s, DataFormat::%s, %d, %d, %d, %s},\n"
-        % (k[0], k[7], k[1], k[2], k[3], k[4], k[5], k[6], "true" if k[8] else "false")
+        "    0x%x%x'%02x'%02x'%02x'%x%x'%02x'%x,\n"
+        % (FID[k[0]], k[7], FMT[k[1]], FMT[k[2]], FMT[k[3]], k[4], k[5], k[6], k[8])
         for k in per_tile
     )
     cpp_main = "".join(
-        "    {MathFidelity::%s, %s, %s, DataFormat::%s, DataFormat::%s, DataFormat::%s, %d, %d, %d, %d, %s, %d},\n"
+        "    0x%x%x'%x%x'%02x'%02x'%02x'%x%x'%02x'%x%x,\n"
         % (
-            k[0],
-            "false" if k[9] else "true",
-            "true" if acc else "false",
-            k[1],
-            k[2],
-            k[3],
+            FID[k[0]],
+            k[8],
+            0 if k[9] else 1,
+            acc,
+            FMT[k[1]],
+            FMT[k[2]],
+            FMT[k[3]],
             k[4],
             k[5],
             k[6],
             k[7],
-            "true" if k[8] else "false",
             nb,
         )
         for k, acc, nb in main
