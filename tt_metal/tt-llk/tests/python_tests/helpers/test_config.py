@@ -1837,7 +1837,13 @@ class TestConfig:
     def _compile_kernel_part(self, name, compile_command, source):
         cache = os.environ.get("LLK_OBJ_CACHE")
         if not cache:
-            run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR, source)
+            if (
+                TestConfig.BUILD_MODE == BuildMode.PRODUCE
+                and self.coverage_build == CoverageBuild.No
+            ):
+                self._compile_kernel_part_once(compile_command, source)
+            else:
+                run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR, source)
             return
         head = compile_command[: compile_command.index("-x")]
         root = str(TestConfig.ARTEFACTS_DIR)
@@ -1863,6 +1869,40 @@ class TestConfig:
             head + [str(obj), "-lc", "-lgcc", "-o", compile_command[-1]],
             TestConfig.TESTS_WORKING_DIR,
         )
+
+    def _compile_kernel_part_once(self, compile_command, source):
+        # build.h holds every parameter of the variant, but a TRISC reads only some of them, so
+        # variants often compile a TRISC the same way. Key on the preprocessed unit and build it once.
+        variant_dir = str(TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id)
+        command = [
+            compile_command[0],
+            f"-ffile-prefix-map={variant_dir}=build",
+            *compile_command[1:],
+        ]
+        cwd = TestConfig.TESTS_WORKING_DIR
+        head = command[: command.index("-x")]
+        unit = subprocess.run(
+            head + ["-E", "-x", "c++", "-"],
+            cwd=cwd,
+            input=source,
+            capture_output=True,
+            text=True,
+        )
+        if unit.returncode:
+            run_shell_command(command, cwd, source)
+            return
+        key = json.dumps([token.replace(variant_dir, "") for token in command[:-1]])
+        digest = sha256(
+            (key + unit.stdout.replace(variant_dir, "")).encode()
+        ).hexdigest()
+        built = TestConfig.ARTEFACTS_DIR / "trisc" / f"{digest}.elf"
+        with FileLock(TestConfig.SYNC_DIR / f"trisc-{digest}.lock"):
+            if built.exists():
+                shutil.copyfile(built, command[-1])
+                return
+            run_shell_command(command, cwd, source)
+            built.parent.mkdir(exist_ok=True)
+            shutil.copyfile(command[-1], built)
 
     def build_elfs(self):
 
