@@ -69,7 +69,7 @@ std::vector<uint32_t> get_allowed_cpus() {
     }
 }
 
-// Package and core id of a CPU from sysfs; {-1, -1} if unknown, so a node with no topology keeps its order.
+// Package and core id of a CPU from sysfs; -1 where unknown.
 std::pair<long, long> core_of_cpu(uint32_t cpu) {
     const auto read = [cpu](const char* name) {
         std::ifstream file("/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/topology/" + name);
@@ -170,7 +170,11 @@ uint32_t pick_cpu(
 void order_by_core(std::vector<uint32_t>& cpus, const std::function<std::pair<long, long>(uint32_t)>& core_of) {
     std::unordered_map<uint32_t, std::pair<long, long>> core;
     for (const uint32_t cpu : cpus) {
-        core.emplace(cpu, core_of(cpu));
+        const auto [package, core_id] = core_of(cpu);
+        if (package < 0 || core_id < 0) {
+            return;
+        }
+        core.emplace(cpu, std::pair{package, core_id});
     }
     std::stable_sort(cpus.begin(), cpus.end(), [&](uint32_t a, uint32_t b) { return core.at(a) < core.at(b); });
 }

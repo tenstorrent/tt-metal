@@ -22,7 +22,7 @@ uint32_t pick_cpu(
     size_t& next);
 
 // Orders CPUs core by core, a core's hardware threads together (core_of: package, then core id), so that picks in
-// that order fill whole cores. CPUs of one core keep their order.
+// that order fill whole cores. CPUs of one core keep their order; if any CPU's core is unknown (-1), all do.
 void order_by_core(std::vector<uint32_t>& cpus, const std::function<std::pair<long, long>(uint32_t)>& core_of);
 
 }  // namespace tt::tt_metal::thread_binding

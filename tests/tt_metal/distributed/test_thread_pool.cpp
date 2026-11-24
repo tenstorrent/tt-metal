@@ -203,6 +203,10 @@ TEST(ThreadPoolTest, PickCpuFillsWholeCores) {
     ExplicitTopology placement{.node_cpus = {cpus}};
     EXPECT_EQ(placement.place({0, 0, 0, 0}), (std::vector<uint32_t>{0, 4, 1, 5}));
     EXPECT_EQ(placement.place({0, 0}), (std::vector<uint32_t>{2, 6}));
+    std::vector<uint32_t> unknown = {0, 1, 2, 3};
+    thread_binding::order_by_core(
+        unknown, [](uint32_t cpu) { return std::pair<long, long>{0, cpu == 2 ? -1 : 3 - static_cast<long>(cpu)}; });
+    EXPECT_EQ(unknown, (std::vector<uint32_t>{0, 1, 2, 3}));
 }
 
 TEST(ThreadPoolTest, ParallelForOneWorkerRunsOnCaller) {
