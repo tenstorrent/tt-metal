@@ -49,7 +49,8 @@ class Conv2d(Module):
     # whole tile columns as keep each within this area, and into at least two (unless the output is
     # one tile wide; a slice is at least one tile wide). The conv then takes the sliced path at
     # every size, so the slicing kernels, which compile per channel count, compile at the first size.
-    # Without it, conv2d picks the slicing per call and leaves a conv that fits L1 unsliced.
+    # Without it, conv2d picks the slicing per call and leaves a conv that fits L1 unsliced. For a
+    # height-sharded conv the area also counts halo rows, see _width_slices.
     dram_slice_area: int | None = None
 
     # Mesh shape -> (input height, input width, in channels, out channels) -> number of DRAM width
@@ -516,7 +517,15 @@ class Conv2d(Module):
         out_w = (w + left + right - self.kernel_size[1]) // self.stride[1] + 1
         tiles = -(-out_w // ttnn.TILE_SIZE)
         # A slice holds its columns of every image in the batch.
-        tiles_per_slice = max(1, self.dram_slice_area // (b * out_h * ttnn.TILE_SIZE))
+        rows = b * out_h
+        if self.shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+            # Each core of a height-sharded conv gets its share plus kernel_height - 1 input rows of
+            # halo, each as wide as the slice, and holds its input shard until the halo op is done, so
+            # its peak is about twice its share plus the halo. Per pixel of share that is half a halo
+            # row per core, and a wide, short slice needs more L1 than its area says.
+            grid = self.mesh_device.compute_with_storage_grid_size()
+            rows += (self.kernel_size[0] - 1) * grid.x * grid.y // 2
+        tiles_per_slice = max(1, self.dram_slice_area // (rows * ttnn.TILE_SIZE))
         return min(tiles, max(2, -(-tiles // tiles_per_slice)))
 
     def forward(

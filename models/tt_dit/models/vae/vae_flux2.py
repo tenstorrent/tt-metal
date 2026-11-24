@@ -121,12 +121,16 @@ class Flux2VaeDecoder(Module):
         # slicing kernels then compile at the first size instead of at the first larger one. The
         # other convs that get sliced share their slicing kernels with convs already sliced at
         # 1024x1024. The areas are from a T3K (2x4) from 1024x1024 to 2048x2048. The largest slice
-        # conv2d picked for conv_out covered 256x512 pixels, at 90% of the free L1. For the other two
-        # it covered 192x192 once, but 128x296 did not fit in one call, so their limit is the next
-        # largest, 128x256, at 87%.
+        # conv2d picked for conv_out was 512 rows by 256 columns, at 90% of the free L1; with the halo
+        # counted on 64 cores (see Conv2d._width_slices) that is (512 + 64) * 256. On one chip, of
+        # conv_out slices (height x width) 512x256, 128x704, 176x576 and 160x640 fit, and 128x1024
+        # (the same 131,072 pixels as 512x256) and 176x704 did not, which this cap reproduces. It is
+        # not scaled by the core count, so on Blackhole's 110 cores it slices more than it needs. For
+        # the other two it covered 192x192 once, but 128x296 did not fit in one call, so their limit
+        # is the next largest, 128x256, at 87%.
         configure_conv2d(self.up_blocks[1].upsampler, dram_slice_area=128 * 256)
         configure_conv2d(self.up_blocks[2].resnets[0].conv1, dram_slice_area=128 * 256)
-        configure_conv2d(self.conv_out, dram_slice_area=256 * 512)
+        configure_conv2d(self.conv_out, dram_slice_area=(512 + 64) * 256)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         # remove encoder state
