@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "api/compute/experimental/2_0/internal/no_call_site_macros.h"
+
 #include <cstdint>
 
 #include "api/compute/common_globals.h"
@@ -123,9 +125,7 @@ ALWI void reconfig_data_format_srcb(LLKOperand<Format, Shape> /*new_b*/) {
  */
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
-// The name in parentheses: Blackhole's pack_reconfig_data_format macro (reconfig_data_format.h) would take this
-// parameter's comma as a second argument.
-ALWI void(pack_reconfig_data_format)(LLKOperand<Format, Shape> /*new_out*/) {
+ALWI void pack_reconfig_data_format(LLKOperand<Format, Shape> /*new_out*/) {
     static_assert(is_legal_tile_shape(Shape), "pack_reconfig_data_format: illegal output tile shape.");
     PACK((llk_pack_reconfig_data_format<LLKOperand<Format, Shape>::descriptor, is_fp32_dest_acc_en>()));
 }
