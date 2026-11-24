@@ -77,9 +77,10 @@ std::vector<BernoulliCoreWork> bernoulli_core_layout(const BernoulliWorkSplit& w
     return layout;
 }
 
-// Per-core seed; shared so the miss-build and the hit-patch produce identical values.
-uint32_t bernoulli_seed_for_core(const BernoulliDeviceOperation::operation_attributes_t& attrs, uint32_t i) {
-    return attrs.seed != 0 ? attrs.seed + i : get_random_seed();
+// Seed of the stream every core draws from: each value is a function of the seed and its tile and position, so
+// the cores share it. Seed 0 asks for a fresh random seed on every dispatch.
+uint32_t bernoulli_stream_seed(const BernoulliDeviceOperation::operation_attributes_t& attrs) {
+    return attrs.seed != 0 ? attrs.seed : get_random_seed();
 }
 }  // namespace
 
@@ -198,17 +199,15 @@ ProgramDescriptor BernoulliDeviceOperation::BernoulliProgramFactory::create_desc
 
     // ---- Runtime args per core ----
 
+    const uint32_t seed = bernoulli_stream_seed(operation_attributes);
     const auto layout = bernoulli_core_layout(ws);
-    for (uint32_t i = 0; i < layout.size(); ++i) {
-        const auto& [core, units_per_core, tile_offset] = layout[i];
-
+    for (const auto& [core, units_per_core, tile_offset] : layout) {
         // Register input/output addresses as Buffer* bindings for the cache-miss build; both are
         // re-applied on every cache hit via override_runtime_arguments().
         reader_desc.emplace_runtime_args(core, {input.buffer(), tile_offset, units_per_core});
 
         // seed is DYNAMIC (excluded from compute_program_hash): baked here for the cache-miss
         // build, re-applied on every cache hit via override_runtime_arguments().
-        const uint32_t seed = bernoulli_seed_for_core(operation_attributes, i);
         compute_desc.runtime_args.emplace_back(
             core, KernelDescriptor::CoreRuntimeArgs{seed, tile_offset, units_per_core});
 
@@ -240,11 +239,9 @@ void BernoulliDeviceOperation::BernoulliProgramFactory::override_runtime_argumen
     const uint32_t in_addr = tensor_args.input.mesh_buffer().address();
     const uint32_t out_addr = output.mesh_buffer().address();
 
+    const uint32_t seed = bernoulli_stream_seed(operation_attributes);
     const auto layout = bernoulli_core_layout(ws);
-    for (uint32_t i = 0; i < layout.size(); ++i) {
-        const auto& [core, units_per_core, tile_offset] = layout[i];
-        const uint32_t seed = bernoulli_seed_for_core(operation_attributes, i);
-
+    for (const auto& [core, units_per_core, tile_offset] : layout) {
         auto& reader_args = tt::tt_metal::GetRuntimeArgs(program, reader_kernel_idx, core);
         reader_args[0] = in_addr;
         reader_args[1] = tile_offset;

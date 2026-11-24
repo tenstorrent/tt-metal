@@ -4,10 +4,12 @@
 
 import math
 
+import numpy as np
 import pytest
 import torch
 import ttnn
 
+from tests.ttnn.unit_tests.operations.eltwise.keyed_rand_reference import reference_uniform
 
 DEFAULT_SHAPE = (32, 32)
 SHAPES = [tuple([32] * i) for i in range(6)]
@@ -329,9 +331,8 @@ def test_rand_rejects_invalid_range(device, expect_error, low, high, error):
 def test_rand_all_ones_seed_does_not_lock_prng(device):
     data = ttnn.to_torch(ttnn.rand((32, 32), device=device, dtype=ttnn.float32, seed=0xFFFFFFFF)).float()
 
-    # A single tile runs on one core, so other cores cannot mask an XNOR LFSR
-    # left in the all-ones lock state. A locked state can produce at most one
-    # constant value per lane, independent of how lanes map into tile rows.
+    # A single tile runs on one core, so other cores cannot mask a seed that
+    # collapses the generator to one constant value per lane.
     assert torch.unique(data).numel() > 32
 
 
@@ -339,9 +340,8 @@ def test_rand_decorrelates_neighboring_core_seeds(device):
     """Neighboring host seeds must not collapse to the same per-core RNG stream."""
     output = ttnn.to_torch(ttnn.rand((64, 32), device=device, dtype=ttnn.float32, seed=0xFFFFFFFE)).reshape(2, 32, 32)
 
-    # Two tiles run on two cores with host seeds 0xFFFFFFFE and 0xFFFFFFFF.
-    # rand_init remaps the all-ones lock state, so omitting the work-range
-    # stream ID would make both cores start from the same effective seed.
+    # Two tiles run on two cores; each value is keyed by its tile index, so the
+    # cores must not emit the same tile.
     assert not torch.equal(output[0], output[1]), "neighboring cores emitted duplicate random tiles"
 
 
@@ -353,6 +353,27 @@ def test_rand_fp32_uses_both_mantissa_parities(device):
     # SFPCAST's round-to-nearest-even conversion uses the discarded source
     # bits, so both mantissa parities should occur evenly in [0.5, 1).
     assert 0.45 < odd_mantissa_fraction < 0.55
+
+
+def test_rand_matches_host_reference(device):
+    """Every value is a function of the seed and the element's flat tile index and position."""
+    seed = 1234
+    rows, cols = 3, 5
+    data = ttnn.to_torch(ttnn.rand((rows * 32, cols * 32), device=device, dtype=ttnn.float32, seed=seed)).float()
+
+    # [0, 1) is generated as [0, largest float below 1], so the unit draw is scaled by that endpoint.
+    unit = reference_uniform(seed, range(rows * cols)).astype(np.float64)
+    expected = torch.from_numpy((unit * np.float64(np.nextafter(np.float32(1), np.float32(0)))).astype(np.float32))
+    expected = expected.reshape(rows, cols, 32, 32).permute(0, 2, 1, 3).reshape(rows * 32, cols * 32)
+    assert torch.equal(data, expected)
+
+
+@pytest.mark.parametrize("dtype", SUPPORTED_DTYPES)
+def test_rand_does_not_depend_on_work_split(device, dtype):
+    """A tile's values must not change with the number of tiles each core is given."""
+    small = ttnn.to_torch(ttnn.rand((7 * 32, 32), device=device, dtype=dtype, seed=TEST_SEED)).float()
+    large = ttnn.to_torch(ttnn.rand((300 * 32, 32), device=device, dtype=dtype, seed=TEST_SEED)).float()
+    assert torch.equal(small, large[: 7 * 32])
 
 
 @pytest.mark.parametrize(
@@ -697,16 +718,12 @@ def test_rand_mesh_replicate(mesh_device):
 )
 def test_rand_mesh_shard_matches_single_device(mesh_device):
     """
-    Verify that each shard of a multi-device sharded ttnn.rand matches a
-    replicated ttnn.rand run with the equivalent per-device seed.
+    Verify that the shards of a multi-device sharded ttnn.rand are the slices of one
+    single-device ttnn.rand of the full shape with the same seed.
 
-    The kernel seeds core `i` on device at linear index `d` as:
-        core_seed = user_seed + i + d * num_active_cores
-    where num_active_cores = min(compute_grid_total, num_tiles).
-
-    For each device d we run a replicated (no mesh_mapper) ttnn.rand with
-    seed = user_seed + d * num_active_cores, then compare device d's copy
-    against the corresponding shard from the sharded run.
+    Each value is a function of the seed and its tile's index in the stream, and the
+    device at linear shard index `d` numbers its tiles from d * tiles_per_shard. Sharding
+    along dim 0 gives each device a contiguous run of the full tensor's tiles.
     """
     num_devices = mesh_device.get_num_devices()
     if num_devices < 2:
@@ -730,23 +747,14 @@ def test_rand_mesh_shard_matches_single_device(mesh_device):
     )
     shards = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(sharded_tensor)]
 
-    # num_active_cores mirrors split_work_to_cores: min(grid_total, num_tiles)
-    TILE_HW = 32 * 32
-    grid = mesh_device.compute_with_storage_grid_size()
-    num_tiles = (per_device_rows * cols) // TILE_HW
-    num_active_cores = min(grid.x * grid.y, num_tiles)
+    # Replicated rand of the full shape: every device holds the same data.
+    reference_tensor = ttnn.rand(full_shape, mesh_device, dtype=dtype, seed=seed)
+    reference = ttnn.to_torch(ttnn.get_device_tensors(reference_tensor)[0]).float()
 
     for d in range(num_devices):
-        device_seed = seed + d * num_active_cores
-
-        # Replicated rand — every device gets the same data; pick device d's copy
-        reference_tensor = ttnn.rand(shard_shape, mesh_device, dtype=dtype, seed=device_seed)
-        reference = ttnn.to_torch(ttnn.get_device_tensors(reference_tensor)[d]).float()
-
         assert tuple(shards[d].shape) == shard_shape, f"Shard {d}: expected {shard_shape}, got {tuple(shards[d].shape)}"
-        assert torch.equal(shards[d], reference), (
-            f"Shard {d} does not match replicated rand with seed={device_seed} " f"(offset {d * num_active_cores})"
-        )
+        expected = reference[d * per_device_rows : (d + 1) * per_device_rows]
+        assert torch.equal(shards[d], expected), f"Shard {d} does not match rows of the full-shape rand"
 
 
 @pytest.mark.parametrize(

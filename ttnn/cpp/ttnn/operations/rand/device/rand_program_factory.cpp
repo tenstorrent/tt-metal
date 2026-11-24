@@ -30,8 +30,8 @@ auto get_random_seed() -> std::uint32_t { return distribution(rng); }
 constexpr const char* WRITER_KERNEL_PATH = "ttnn/cpp/ttnn/operations/uniform/device/kernels/writer_uniform.cpp";
 constexpr const char* COMPUTE_KERNEL_PATH = "ttnn/cpp/ttnn/operations/uniform/device/kernels/compute_uniform.cpp";
 
-// Work split + per-device seed offset, shared by create_descriptor (cache miss) and
-// override_runtime_arguments (cache hit) so both derive the identical core list and seed offset.
+// Work split + per-device tile offset, shared by create_descriptor (cache miss) and
+// override_runtime_arguments (cache hit) so both derive the identical core list and tile offset.
 struct RandWorkSplit {
     std::uint32_t num_cores = 0;
     CoreRangeSet all_cores;
@@ -40,7 +40,8 @@ struct RandWorkSplit {
     std::uint32_t units_per_core_group_1 = 0;
     std::uint32_t units_per_core_group_2 = 0;
     std::vector<CoreCoord> cores;
-    std::uint32_t device_seed_offset = 0;
+    // Index of this device's first tile in the stream: each shard of a sharded output draws its own tiles.
+    std::uint32_t device_tile_offset = 0;
 };
 
 RandWorkSplit compute_rand_work_split(
@@ -67,7 +68,7 @@ RandWorkSplit compute_rand_work_split(
         distribution_shape = std::addressof(attrs.tensor_topology->distribution_shape());
     }
 
-    std::uint32_t device_seed_offset = 0;
+    std::uint32_t device_tile_offset = 0;
     const auto& shard_mask = attrs.mesh_dim_is_sharded;
     if (!shard_mask.empty()) {
         size_t shard_linear_idx = 0;
@@ -78,7 +79,7 @@ RandWorkSplit compute_rand_work_split(
                 shard_stride *= (*distribution_shape)[i];
             }
         }
-        device_seed_offset = static_cast<std::uint32_t>(shard_linear_idx) * static_cast<std::uint32_t>(cores.size());
+        device_tile_offset = static_cast<std::uint32_t>(shard_linear_idx) * units_to_divide;
     }
     return {
         num_cores,
@@ -88,13 +89,13 @@ RandWorkSplit compute_rand_work_split(
         units_per_core_group_1,
         units_per_core_group_2,
         std::move(cores),
-        device_seed_offset};
+        device_tile_offset};
 }
 
-// Per-core seed; shared so the miss-build and the hit-patch produce identical values.
-std::uint32_t rand_seed_for_core(
-    const RandDeviceOperation::operation_attributes_t& attrs, int i, std::uint32_t device_seed_offset) {
-    return attrs.seed != 0 ? attrs.seed + i + device_seed_offset : get_random_seed();
+// Seed of the stream every core draws from: each value is a function of the seed and its tile and position, so
+// the cores share it. Seed 0 asks for a fresh random seed on every dispatch.
+std::uint32_t rand_stream_seed(const RandDeviceOperation::operation_attributes_t& attrs) {
+    return attrs.seed != 0 ? attrs.seed : get_random_seed();
 }
 
 // Per-core work assignment. Single-sourced so the cache-miss build (create_descriptor) and the
@@ -193,16 +194,15 @@ ProgramDescriptor RandDeviceOperation::RandProgramFactory::create_descriptor(
     const std::uint32_t lower_bound_bits = std::bit_cast<std::uint32_t>(operation_attributes.lower_bound);
     const std::uint32_t upper_bound_bits = std::bit_cast<std::uint32_t>(operation_attributes.upper_bound);
 
+    const std::uint32_t seed = rand_stream_seed(operation_attributes);
     const auto layout = rand_core_layout(ws);
-    for (int i = 0; i < static_cast<int>(layout.size()); ++i) {
-        const auto& [core, units_per_core, tile_offset] = layout[i];
-        const std::uint32_t seed = rand_seed_for_core(operation_attributes, i, ws.device_seed_offset);
-
+    for (const auto& [core, units_per_core, tile_offset] : layout) {
         // seed/range bounds are DYNAMIC (omitted from the cache key / attribute_names): baked here for the
         // cache-miss build, and re-applied on every cache hit via override_runtime_arguments().
         compute_desc.runtime_args.emplace_back(
             core,
-            KernelDescriptor::CoreRuntimeArgs{seed, lower_bound_bits, upper_bound_bits, tile_offset, units_per_core});
+            KernelDescriptor::CoreRuntimeArgs{
+                seed, lower_bound_bits, upper_bound_bits, ws.device_tile_offset + tile_offset, units_per_core});
 
         // Register the output address as a Buffer* binding so rand takes the fast cache-hit path
         // (real program caching) with the address correctly re-patched each dispatch.
@@ -232,16 +232,14 @@ void RandDeviceOperation::RandProgramFactory::override_runtime_arguments(
     const std::uint32_t upper_bound_bits = std::bit_cast<std::uint32_t>(operation_attributes.upper_bound);
     const std::uint32_t out_addr = output.mesh_buffer().address();
 
+    const std::uint32_t seed = rand_stream_seed(operation_attributes);
     const auto layout = rand_core_layout(ws);
-    for (int i = 0; i < static_cast<int>(layout.size()); ++i) {
-        const auto& [core, units_per_core, tile_offset] = layout[i];
-        const std::uint32_t seed = rand_seed_for_core(operation_attributes, i, ws.device_seed_offset);
-
+    for (const auto& [core, units_per_core, tile_offset] : layout) {
         auto& compute_args = tt::tt_metal::GetRuntimeArgs(program, compute_kernel_idx, core);
         compute_args[0] = seed;
         compute_args[1] = lower_bound_bits;
         compute_args[2] = upper_bound_bits;
-        compute_args[3] = tile_offset;
+        compute_args[3] = ws.device_tile_offset + tile_offset;
         compute_args[4] = units_per_core;
 
         auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, writer_kernel_idx, core);

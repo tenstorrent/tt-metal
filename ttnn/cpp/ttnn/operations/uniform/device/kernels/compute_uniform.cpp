@@ -6,7 +6,7 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/generators/rand.hpp"  // RandTile (owns rand_tile_init via init())
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/generators/rand.hpp"
 
 void kernel_main() {
     using namespace compute_kernel_lib;
@@ -35,7 +35,7 @@ void kernel_main() {
 
     eltwise_chain(
         IterationShape::tiles(num_tiles),
-        RandTile<Dst::D0>{f2u_lower_bound.u, f2u_scale.u, seed, start_id},
+        RandKeyedTile<Dst::D0>{f2u_lower_bound.u, f2u_scale.u, seed, start_id},
         PackTile<output(output_dfb_id, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Disabled)>{
             output_dfb});
 }

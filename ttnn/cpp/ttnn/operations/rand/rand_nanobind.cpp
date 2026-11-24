@@ -40,7 +40,9 @@ void bind_rand_operation(nb::module_& mod) {
             low (float, optional): The lower bound of the range (inclusive). Defaults to 0.0.
             high (float, optional): The upper bound of the range (exclusive). Defaults to 1.0.
             seed (int, optional): An optional seed to initialize the random number generator
-                                for reproducible results. Defaults to 0.
+                                for reproducible results. Each value is a function of the seed and the element's
+                                position, so a seed reproduces the same tensor whatever the core grid. 0 draws a
+                                fresh random seed. Defaults to 0.
             mesh_mapper (ttnn.MeshMapperConfig, optional): Distribution strategy for multi-device tensors.
                 Use ``ttnn.MeshMapperConfig([ttnn.PlacementShard(dim)])`` to shard across mesh devices along the
                 given tensor dimension, or ``ttnn.MeshMapperConfig([ttnn.PlacementReplicate()])`` to replicate.

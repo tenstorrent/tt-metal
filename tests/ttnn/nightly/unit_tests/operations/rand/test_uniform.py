@@ -273,3 +273,12 @@ def test_uniform_respects_flush_to_zero_range_ending_at_zero(device, dtype):
 def test_uniform_with_compute_kernel_options(shape, seed, rand_range, dtype, device, compute_kernel_options):
     torch.manual_seed(seed)
     run_uniform(shape, rand_range, dtype, device, seed=seed, compute_kernel_options=compute_kernel_options)
+
+
+def test_uniform_does_not_depend_on_work_split(device):
+    """A tile's values must not change with the number of tiles each core is given."""
+    small = _zeros(device, (7 * 32, 32), ttnn.float32)
+    large = _zeros(device, (300 * 32, 32), ttnn.float32)
+    ttnn.uniform(small, 0.0, 1.0, seed=TEST_SEED)
+    ttnn.uniform(large, 0.0, 1.0, seed=TEST_SEED)
+    assert torch.equal(ttnn.to_torch(small), ttnn.to_torch(large)[: 7 * 32])

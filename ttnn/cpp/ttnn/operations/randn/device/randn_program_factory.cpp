@@ -44,6 +44,14 @@ CoreCoord randn_core(uint32_t i, const CoreCoord& grid) { return {i / grid.y, i 
 
 auto get_random_seed(std::mt19937& rng) -> uint32_t { return distribution(rng); }
 
+namespace {
+// Seed of the stream every core draws from: each value is a function of the seed and its tile and position, so
+// the cores share it. Without a seed, every dispatch draws a fresh one.
+uint32_t randn_stream_seed(const RandnDeviceOperation::operation_attributes_t& attrs) {
+    return attrs.seed.has_value() ? *attrs.seed : get_random_seed(default_rng);
+}
+}  // namespace
+
 ttnn::device_operation::ProgramArtifacts RandnDeviceOperation::ProgramFactory::create_program_artifacts(
     const operation_attributes_t& operation_attributes,
     [[maybe_unused]] const tensor_args_t& tensor_args,
@@ -127,12 +135,11 @@ ttnn::device_operation::ProgramArtifacts RandnDeviceOperation::ProgramFactory::c
                     .endpoint_type = DFBEndpointType::PRODUCER,
                 },
             },
-        .runtime_arg_schema = {.runtime_arg_names = {"seed", "num_tiles"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"seed", "start_id", "num_tiles"}},
         .hw_config = compute_hw_config,
     };
 
-    std::mt19937 seeded_rng(operation_attributes.seed.value_or(0));
-    std::mt19937& rng = operation_attributes.seed.has_value() ? seeded_rng : default_rng;
+    const uint32_t seed = randn_stream_seed(operation_attributes);
 
     KernelRunArgs writer_run_args{.kernel = WRITER};
     KernelRunArgs compute_run_args{.kernel = COMPUTE};
@@ -148,11 +155,12 @@ ttnn::device_operation::ProgramArtifacts RandnDeviceOperation::ProgramFactory::c
             TT_THROW("Core not in specified core ranges");
         }
 
-        // The per-core seed is hash-excluded (see compute_program_hash): baked here for the cache-miss
-        // build and redrawn on every cache hit by override_runtime_arguments.
-        uint32_t seed = get_random_seed(rng);
+        // The seed is hash-excluded (see compute_program_hash): baked here for the cache-miss build and
+        // re-applied on every cache hit by override_runtime_arguments.
         AddRuntimeArgsForNode(
-            compute_run_args.runtime_arg_values, core, {{"seed", seed}, {"num_tiles", units_per_core}});
+            compute_run_args.runtime_arg_values,
+            core,
+            {{"seed", seed}, {"start_id", tile_offset}, {"num_tiles", units_per_core}});
 
         AddRuntimeArgsForNode(
             writer_run_args.runtime_arg_values, core, {{"start_id", tile_offset}, {"num_tiles", units_per_core}});
@@ -193,19 +201,18 @@ ProgramRunArgs RandnDeviceOperation::ProgramFactory::override_runtime_arguments(
     [[maybe_unused]] const tensor_args_t& tensor_args,
     tensor_return_value_t& output,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // Only the per-core seeds (hash-excluded) and the output address change between hits; tile
+    // Only the seed (hash-excluded) and the output address change between hits; tile
     // offsets and counts derive from the hashed shape and are left as built. On this concept the
     // framework refreshes nothing on our behalf, so the output tensor binding is re-supplied here.
     const auto grid = output.device()->compute_with_storage_grid_size();
     const uint32_t num_cores = randn_num_cores(output.physical_volume() / constants::TILE_HW, grid);
 
-    std::mt19937 seeded_rng(operation_attributes.seed.value_or(0));
-    std::mt19937& rng = operation_attributes.seed.has_value() ? seeded_rng : default_rng;
+    const uint32_t seed = randn_stream_seed(operation_attributes);
 
     KernelRunArgs compute_run_args{.kernel = COMPUTE};
     for (uint32_t i = 0; i < num_cores; i++) {
         const CoreCoord core = randn_core(i, grid);
-        AddRuntimeArgsForNode(compute_run_args.runtime_arg_values, core, {{"seed", get_random_seed(rng)}});
+        AddRuntimeArgsForNode(compute_run_args.runtime_arg_values, core, {{"seed", seed}});
     }
 
     ProgramRunArgs params;

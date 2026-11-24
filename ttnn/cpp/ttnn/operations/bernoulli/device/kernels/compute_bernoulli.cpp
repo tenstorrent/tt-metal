@@ -19,7 +19,7 @@ void kernel_main() {
     const uint32_t start_id = get_arg_val<uint32_t>(1);
     const uint32_t num_tiles = get_arg_val<uint32_t>(2);
 
-    // rand_tile's internal interval is inclusive. Use the largest FP32 value
+    // rand_keyed_tile's interval is inclusive. Use the largest FP32 value
     // below 1.0 so that Bernoulli's `random < probability` comparison still
     // produces one for every draw when probability is exactly 1.0.
     constexpr std::uint32_t rand_from = 0;
@@ -27,7 +27,7 @@ void kernel_main() {
 
     eltwise_chain(
         IterationShape::tiles(num_tiles),
-        RandTile<Dst::D0>{rand_from, rand_scale, seed, start_id},
+        RandKeyedTile<Dst::D0>{rand_from, rand_scale, seed, start_id},
         PackTile<output(intermed_dfb_id, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Disabled)>{
             intermed_dfb});
 }

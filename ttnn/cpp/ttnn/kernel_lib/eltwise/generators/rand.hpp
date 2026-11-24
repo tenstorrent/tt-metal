@@ -5,7 +5,7 @@
 
 /**
  * @file rand.hpp
- * @brief Rand chain element — RandTile.
+ * @brief Rand chain elements — RandTile and RandKeyedTile.
  */
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
@@ -14,6 +14,9 @@ namespace compute_kernel_lib {
 
 template <Dst DstSlot>
 struct RandTile;
+
+template <Dst DstSlot>
+struct RandKeyedTile;
 
 }  // namespace compute_kernel_lib
 
