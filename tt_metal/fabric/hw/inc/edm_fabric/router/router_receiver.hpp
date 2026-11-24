@@ -822,27 +822,4 @@ __attribute__((noinline)) void run(DownstreamConnections& downstreams) {
     }
 }
 
-// ---------------------------------------------------------------------------------------------------------------------
-// Inter-domain: the receiver's part of each step
-// ---------------------------------------------------------------------------------------------------------------------
-
-FORCE_INLINE void drain() {
-    while (!sync_requested(Phase::DRAINED)) {
-        for_each_index<NUM_RECEIVER_CHANNELS>([](auto rx) {
-            constexpr uint32_t stream = to_receiver_packets_sent_streams[decltype(rx)::value];
-            const uint32_t n = read_stream_count<stream>();
-            if (n != 0) {
-                inter_domain_control()->drained_packets += n;
-                increment_local_update_ptr_val<stream>(-static_cast<int32_t>(n));
-            }
-        });
-    }
-}
-
-__attribute__((noinline, cold)) void reset_link() {
-    zero_credit_counters(local_receiver_ack_counters_base_address);
-    zero_credit_counters(local_receiver_completion_counters_base_address);
-    init_channel_streams();
-}
-
 }  // namespace fabric_router::receiver

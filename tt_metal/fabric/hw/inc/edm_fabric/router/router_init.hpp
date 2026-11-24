@@ -71,22 +71,6 @@ __attribute__((noinline)) void sync_erisc(Phase phase) {
     }
 }
 
-FORCE_INLINE bool sync_requested(Phase phase) {
-    return (read_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>() & 0x1FFF) ==
-           (0x0A00 | static_cast<uint32_t>(phase));
-}
-
-template <Phase PHASE>
-FORCE_INLINE bool finish_step(bool outcome, InterDomainState s) {
-    if constexpr (!is_teardown_master) {
-        while (!sync_requested(PHASE)) {
-        }
-        outcome = inter_domain_control()->state == s;
-    }
-    sync_erisc(PHASE);
-    return outcome;
-}
-
 FORCE_INLINE void postcode(tt::tt_fabric::EDMStatus status) {
     if constexpr (!has_vc1) {
         POSTCODE(status);
