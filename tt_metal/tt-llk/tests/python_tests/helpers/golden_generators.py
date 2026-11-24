@@ -6065,6 +6065,28 @@ class TopKXLGolden:
         return indices
 
 
+def topk_xl_sort_position(dest_offset: int, K: int) -> int:
+    """
+    Position of a Dest word in the sequence the TopK-XL bitonic network sorts, 0 .. K-1.
+
+    `dest_offset` indexes 32x32 tiles in packed order, faces in raster order. The sort's
+    order is a bit permutation of that (tile, row, column): from the most significant
+    field down, column bits [3:0], tile, row bit [4], column bit [4], row bits [3:0].
+    K=512 uses one tile and rows 0 .. 15, dropping the two middle fields.
+    """
+    tile, within_tile = divmod(dest_offset, 1024)
+    face, within_face = divmod(within_tile, 256)
+    row = (face // 2) * 16 + within_face // 16
+    column = (face % 2) * 16 + within_face % 16
+    return (
+        (K // 16) * (column % 16)
+        + 64 * tile
+        + 32 * (row // 16)
+        + 16 * (column // 16)
+        + row % 16
+    )
+
+
 @register_golden
 class TopKXLSortedListGolden:
     """Dest image of a K-element list that a TopK-XL sort leaves sorted (K = 512/1024/2048).
@@ -6099,19 +6121,12 @@ class TopKXLSortedListGolden:
 
     def rank_at(self, offset: int, K: int):
         """Rank of the list held by Dest word `offset`, or None for a word the list does not use."""
-        tile, within_tile = divmod(offset, self.TILE)
-        face, within_face = divmod(within_tile, self.FACE * self.FACE)
-        row = (face // 2) * self.FACE + within_face // self.FACE
-        column = (face % 2) * self.FACE + within_face % self.FACE
-        if K == 512 and row >= self.FACE:
-            return None
-        return (
-            (K // self.FACE) * (column % self.FACE)
-            + 64 * tile
-            + 32 * (row // self.FACE)
-            + self.FACE * (column // self.FACE)
-            + row % self.FACE
-        )
+        if (
+            K == 512
+            and (offset % (self.FACE * self.FACE * 4)) >= 2 * self.FACE * self.FACE
+        ):
+            return None  # faces 2 and 3: rows 16 .. 31
+        return topk_xl_sort_position(offset, K)
 
     def __call__(self, words, K, ascending, fill=0):
         assert K in (512, 1024, 2048), f"K must be 512, 1024 or 2048, got {K}"

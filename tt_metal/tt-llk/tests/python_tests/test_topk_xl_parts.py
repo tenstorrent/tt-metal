@@ -36,6 +36,7 @@ ROW = 2048
 ELEMENTS_PER_TILE = 1024
 FORMATS = InputOutputFormat(DataFormat.Float16_b, DataFormat.UInt32)
 BF16_NEG_INF = 0xFF800000  # what the copy writes into a tile's unused lanes
+BF16_NEG_ZERO = 0x8000
 CORE_ID_SHIFT = 11
 
 
@@ -43,7 +44,9 @@ def _row_hi16(mode: str, seed: int) -> torch.Tensor:
     """The row's 2048 bf16 bit patterns.
 
     distinct: 1024 values >= 1.0 and 1024 values <= -1.0, shuffled, so the value alone orders the row.
-    ties:     nine values, negatives among them, so the index bits order most of the row.
+    ties:     eleven values, negatives, +0.0 and -0.0 among them, so the index bits order most of the
+              row. A zero with its stamped index is an fp32 denormal Dest word, so a move that
+              flushed denormals would lose the index.
     """
     gen = torch.Generator().manual_seed(seed)
     if mode == "distinct":
@@ -54,7 +57,8 @@ def _row_hi16(mode: str, seed: int) -> torch.Tensor:
     if mode == "ties":
         palette = (
             torch.tensor(
-                [-4.0, -2.0, -1.5, -0.5, 0.25, 1.0, 1.5, 3.0, 8.0], dtype=torch.bfloat16
+                [-4.0, -2.0, -1.5, -0.5, -0.0, 0.0, 0.25, 1.0, 1.5, 3.0, 8.0],
+                dtype=torch.bfloat16,
             )
             .view(torch.int16)
             .to(torch.int64)
@@ -78,7 +82,11 @@ def _run(
     run_types=None,
     loop_factor=1,
 ):
-    """Build and run one variant. Returns (packed words, the row's fused words in row order)."""
+    """Build and run one variant.
+
+    Returns (packed words, the row's fused words in row order). A perf run (is_perf) records its
+    measurements in perf_report and returns (None, None).
+    """
     part_len = ROW // parts
     hi16 = _row_hi16(mode, seed=parts)
     values = (hi16 << 16).to(torch.int32).view(torch.float32)
@@ -127,7 +135,9 @@ def _run(
     )
     if is_perf:
         return None, None
-    words = (hi16 << 16) | (core_id << CORE_ID_SHIFT) | torch.arange(ROW)
+    # The copy into Dest is an ELWADD with a zero SrcB, and -0.0 + 0.0 is +0.0: a -0.0 input is stamped as +0.0.
+    dest_hi16 = torch.where(hi16 == BF16_NEG_ZERO, 0, hi16)
+    words = (dest_hi16 << 16) | (core_id << CORE_ID_SHIFT) | torch.arange(ROW)
     result = torch.tensor(outcome.result, dtype=format_dict[FORMATS.output_format])
     return result.to(torch.int64) & 0xFFFFFFFF, words
 
@@ -170,11 +180,10 @@ def _check_parts(result, words, parts, half0_ascending, quarter0_ascending):
         )
 
 
-@parametrize(parts=[2, 4])
-def test_topk_xl_parts_local_sort(parts):
+@parametrize(parts=[2, 4], mode=["distinct", "ties"])
+def test_topk_xl_parts_local_sort(parts, mode):
     """The out-of-line local sort and the based index stamp: each part sorted alone, in both directions."""
-    (parts,) = parts
-    result, words = _run(parts, combine=False, core_id=5)
+    result, words = _run(parts, combine=False, mode=mode, core_id=5)
     _check_parts(result, words, parts, half0_ascending=True, quarter0_ascending=True)
 
 
@@ -198,7 +207,9 @@ def test_topk_xl_parts_combine(parts, ascending, half0_ascending, quarter0_ascen
 
 @parametrize(parts=[2, 4], ascending=[False, True])
 def test_topk_xl_parts_combine_ties(parts, ascending):
-    """Nine distinct values over 2048 elements: the index bits, with core id 31 above them, order equal values."""
+    """Eleven values, +0.0 and -0.0 among them, over 2048 elements: the index bits, with core id 31 above
+    them, order equal values, and the denormal-shaped zero words keep their index through every move.
+    """
     result, words = _run(
         parts, combine=True, mode="ties", core_id=31, ascending=ascending
     )

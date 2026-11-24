@@ -90,16 +90,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
             {
-                _perf_unpack_stream_set_valid<true, true, PERF_RUN_TYPE>(TOPK_XL_PARTS + SRC_RELEASES);
+                _perf_unpack_stream_set_valid<true /*set_a*/, true /*set_b*/, PERF_RUN_TYPE>(TOPK_XL_PARTS + SRC_RELEASES);
             }
             else
             {
-                TT_SETADCXX(p_setadc::UNP_A, PART_ELEMENTS - 1, 0x0);
+                TT_SETADCXX(p_setadc::UNP_A, PART_ELEMENTS - 1, 0x0 /*x_start*/);
                 for (std::uint32_t p = 0; p < TOPK_XL_PARTS; p++)
                 {
                     ckernel::_llk_unpack_topk_xl_copy_(L1_ADDRESS(buffer_A[p]), src_format, dst_format, PART_ELEMENTS);
                 }
-                TTI_SETADCXX(p_setadc::UNP_A, FACE_R_DIM * FACE_C_DIM - 1, 0x0);
+                TTI_SETADCXX(p_setadc::UNP_A, FACE_R_DIM * FACE_C_DIM - 1, 0x0 /*x_start*/);
                 for (std::uint32_t i = 0; i < SRC_RELEASES; i++)
                 {
                     _llk_unpack_set_srcb_dummy_valid_();
@@ -158,8 +158,11 @@ __attribute__((noinline)) void copy_stamp_sort(std::uint32_t math_format)
         stamp_part<3>();
     }
 
+    // The stamp init leaves ADDR_MOD_6 at +4 and ADDR_MOD_4 at +16. The local sorts and combines store through
+    // ADDR_MOD_6 expecting the +32 that _topk_xl_init_ sets and do not reprogram it, so it must run again after the
+    // stamp and before any of them.
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
-    sfpu::_topk_xl_init_<PART_ELEMENTS, true>();
+    sfpu::_topk_xl_init_<PART_ELEMENTS, true /*fused*/>();
     for (std::uint32_t p = 0; p < TOPK_XL_PARTS; p++)
     {
         const std::uint32_t tile = FIRST_PART_TILE + p;

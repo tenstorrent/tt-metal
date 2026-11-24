@@ -15,7 +15,11 @@ Output: per row, slot0's value tiles, then slot0's index tiles, as uint32.
 import torch
 from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.golden_generators import TopKXLGolden, get_golden_generator
+from helpers.golden_generators import (
+    TopKXLGolden,
+    get_golden_generator,
+    topk_xl_sort_position,
+)
 from helpers.llk_params import (
     DestAccumulation,
     DestSync,
@@ -92,26 +96,8 @@ def _index_to_chunk_offset(raw: int, K: int, row_major: bool = False) -> int:
 
 
 def _sort_position(dest_offset: int, K: int) -> int:
-    """
-    Position of a Dest word in the sequence the bitonic network sorts, 0 .. K-1.
-
-    `dest_offset` indexes a slot's Dest region in packed order, which is also the L1
-    order the copy reads, so an element's starting offset is its chunk offset. The
-    sort's order is a bit permutation of that (tile, row, column): from the most
-    significant field down, column bits [3:0], tile, row bit [4], column bit [4], row
-    bits [3:0]. K=512 uses one tile and rows 0 .. 15, dropping the two middle fields.
-    """
-    tile, within_tile = divmod(dest_offset, ELEMENTS_PER_TILE)
-    face, within_face = divmod(within_tile, ELEMENTS_PER_FACE)
-    row = (face // 2) * FACE_DIM + within_face // FACE_DIM
-    column = (face % 2) * FACE_DIM + within_face % FACE_DIM
-    return (
-        (K // FACE_DIM) * (column % FACE_DIM)
-        + 64 * tile
-        + 32 * (row // FACE_DIM)
-        + FACE_DIM * (column // FACE_DIM)
-        + row % FACE_DIM
-    )
+    """Position of a Dest word in the sequence the bitonic network sorts, 0 .. K-1."""
+    return topk_xl_sort_position(dest_offset, K)
 
 
 def _bitcast_float32(words: torch.Tensor) -> torch.Tensor:
