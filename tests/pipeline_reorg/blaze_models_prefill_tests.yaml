@@ -1021,6 +1021,57 @@
   sp_config: sc1
 
 
+# ===== GLM-5.4-744B ====================================================================================
+
+# GLM-5.4's device tests on one 8x4 Galaxy (tier-1 random weights, so no checkpoint): the damp gates, the two-bank
+# pass-2 attention with its window ring, the looped stack (accuracy teacher-forced per step, then determinism and
+# trace replay over chunks of two slots), the four-stage placement chained in process, and the G1 -> G2 loop
+# handoff over D2D. Plus the synthetic gates' beta range on GLM-5.3 activations, which reads the GLM-5.3 golden
+# trace on Weka (read only; it skips without it). Its host tests run in the LB leg of ops_unit_tests.yaml, and the
+# SC4 perf leg is the GLM-5.4 entry of the disaggregated prefill section.
+# Measured on bh-glx-120-b06u02 at this leg's environment (CI=true, torus_xy profile), one pytest process, warm JIT:
+# 18 passed in 1169 s (19.5 min; two-bank 8.1, loop 5.5, stage 4.9, damp gate + handoff 1.0 min of it). The 40 min
+# bound covers a cold JIT; it is the shield team's first bh_sc1 leg (120 min budget, none used before).
+- name: "(GLM-5.4-744B) damp gate, two-bank attention, loop, stage placement and loop handoff accuracy 5k"
+  fabric_profile: torus_xy
+  cmd: |
+    export MESH_DEVICE=TG
+    timeout -k 2m 40m mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest \
+          "models/demos/deepseek_v3_d_p/tests/glm54/test_glm54_damp_gate.py::test_glm54_damp_gate_matches_reference[blackhole-torus-xy-8x4-scalar]" \
+          "models/demos/deepseek_v3_d_p/tests/glm54/test_glm54_damp_gate.py::test_glm54_damp_gate_matches_reference[blackhole-torus-xy-8x4-per_channel]" \
+          "models/demos/deepseek_v3_d_p/tests/glm54/test_glm54_two_bank.py::test_two_bank_index_list[blackhole-8x4-torus-xy]" \
+          "models/demos/deepseek_v3_d_p/tests/glm54/test_glm54_two_bank.py::test_two_bank_device[blackhole-8x4-torus-xy-scaled_fp8-two_slots]" \
+          "models/demos/deepseek_v3_d_p/tests/glm54/test_glm54_two_bank.py::test_two_bank_device[blackhole-8x4-torus-xy-scaled_fp8-short]" \
+          "models/demos/deepseek_v3_d_p/tests/glm54/test_glm54_two_bank.py::test_two_bank_device[blackhole-8x4-torus-xy-bf16-two_slots]" \
+          "models/demos/deepseek_v3_d_p/tests/glm54/test_glm54_two_bank.py::test_two_bank_device[blackhole-8x4-torus-xy-bf16-short]" \
+          "models/demos/deepseek_v3_d_p/tests/glm54/test_glm54_two_bank.py::test_two_bank_traced[blackhole-8x4-torus-xy-scaled_fp8]" \
+          "models/demos/deepseek_v3_d_p/tests/glm54/test_glm54_two_bank.py::test_two_bank_traced[blackhole-8x4-torus-xy-bf16]" \
+          "models/demos/deepseek_v3_d_p/tests/glm54/test_glm54_two_bank.py::test_two_bank_push_reuses_dense_buffer[blackhole-8x4-torus-xy]" \
+          "models/demos/deepseek_v3_d_p/tests/glm54/test_glm54_two_bank.py::test_two_bank_presend_matches_inline_push[blackhole-8x4-torus-xy-own_buffer]" \
+          "models/demos/deepseek_v3_d_p/tests/glm54/test_glm54_two_bank.py::test_two_bank_presend_matches_inline_push[blackhole-8x4-torus-xy-dense_buffer]" \
+          "models/demos/deepseek_v3_d_p/tests/glm54/test_glm54_loop_device.py::test_glm54_loop_on_device[blackhole-torus-xy-8x4]" \
+          "models/demos/deepseek_v3_d_p/tests/glm54/test_glm54_loop_device.py::test_glm54_loop_chunks_on_device[blackhole-torus-xy-8x4]" \
+          "models/demos/deepseek_v3_d_p/tests/glm54/test_glm54_stage_device.py::test_glm54_stages_on_device[blackhole-torus-xy-8x4]" \
+          "models/demos/deepseek_v3_d_p/tests/test_glm54_loop_handoff.py::test_glm54_loop_handoff[blackhole-fabric2d-8x4-eager]" \
+          "models/demos/deepseek_v3_d_p/tests/test_glm54_loop_handoff.py::test_glm54_loop_handoff[blackhole-fabric2d-8x4-traced]" \
+          "models/demos/deepseek_v3_d_p/tests/glm54/test_glm54_weights.py::test_gate_beta_on_glm53_activations" \
+          -vvv --tb=short
+    '
+  test_type: glm54_components_suite
+  test_tags: [glm_5_4, mla, block, transformer, determinism]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 45
+      tier: 2
+      release_ready: false
+  owner_id: U0AC4LTJH1P # Jaksa Jovicic
+  team: shield
+  budget_type: demo
+  sp_config: sc1
+
 # ===== DeepSeek-V4 =====================================================================================
 
 # DeepSeek-V4 suites: one job per SKU, one section per test, run serially on one allocation.

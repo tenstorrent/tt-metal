@@ -12,7 +12,6 @@ Equivalent to the reference Transformer class (models/demos/deepseek_v3/referenc
 but targeting the TT prefill path with SP+TP parallelism.
 """
 
-import copy
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -27,10 +26,11 @@ from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.runners.pass_schedule import loop_ack_id
 from models.demos.deepseek_v3_d_p.reference.glm_5_4.schedule import (
     LoopStep,
+    loop_count,
     loop_schedule,
     runs_later_loop_pass,
     runs_only_later_loop_passes,
-    stage_indexer_types,
+    stage_config,
 )
 from models.demos.deepseek_v3_d_p.tt.glm54.damp_gate import TtDampGate
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
@@ -243,9 +243,7 @@ class TtPrefillTransformer(LightweightModule):
         # indexer and takes pass 1's top-k sets instead (A5), so its blocks see the stage's full/shared map.
         self._loop_passes = None if loop_passes is None else tuple(loop_passes)
         model_config = config  # the model's own full/shared map: pass 1's top-k sets are numbered by it
-        if runs_only_later_loop_passes(self._loop_passes):
-            config = copy.copy(config)
-            config.indexer_types = stage_indexer_types(config, self._loop_passes)
+        config = stage_config(config, self._loop_passes)
         self.mesh_device = mesh_device
         self.seq_len = seq_len
         # Chunks per packed forward (forward(..., chunks=...)); seq_len stays the per-chunk size.
@@ -372,7 +370,7 @@ class TtPrefillTransformer(LightweightModule):
         # GLM-5.4 loop: the order the blocks run in, and one damp gate per loop pass (see _build_schedule).
         self.steps, self.loop_gates = self._build_schedule(config, state_dict, num_links, tp_topology, tp_axis)
         self._num_model_layers = config.num_hidden_layers
-        self._loop_count = getattr(config, "loop_count", 0) or 0
+        self._loop_count = loop_count(config)
         # The loop's pass-1 top-k sets (A5), one persistent set per full loop layer in layer order, numbered by the
         # model's own indexer map (pass1_index_set). Pass 1 fills them as each full layer makes its top-k (its output
         # can alias scratch the next full layer reuses); pass 2 injects them into every layer of that reuse group;
@@ -528,8 +526,8 @@ class TtPrefillTransformer(LightweightModule):
         """
         first, end = self.first_layer_idx, self.first_layer_idx + self.num_layers
         plain = [LoopStep("layer", 0, i) for i in range(first, end)]
-        loop_count = getattr(config, "loop_count", None)
-        holds_loop = loop_count is not None and not (config.loop_last_layer < first or config.loop_first_layer >= end)
+        count = loop_count(config)
+        holds_loop = count > 0 and not (config.loop_last_layer < first or config.loop_first_layer >= end)
         if not holds_loop:
             if self._loop_passes:
                 raise ValueError(f"layers {first}..{end - 1} hold no loop layer to run passes {self._loop_passes} of")
@@ -540,24 +538,24 @@ class TtPrefillTransformer(LightweightModule):
                 f"layers {first}..{end - 1} hold part of the loop {loop_first}..{loop_last}; an instance runs the "
                 "whole loop or none of it"
             )
-        passes = tuple(range(1, loop_count + 1)) if self._loop_passes is None else self._loop_passes
-        if not passes or list(passes) != list(range(passes[0], passes[0] + len(passes))) or passes[-1] > loop_count:
-            raise ValueError(f"loop passes {passes} are not a contiguous run of 1..{loop_count}")
+        passes = tuple(range(1, count + 1)) if self._loop_passes is None else self._loop_passes
+        if not passes or list(passes) != list(range(passes[0], passes[0] + len(passes))) or passes[-1] > count:
+            raise ValueError(f"loop passes {passes} are not a contiguous run of 1..{count}")
         if first < loop_first and passes[0] != 1:
             raise ValueError(f"prelude layers {first}..{loop_first - 1} must precede loop pass 1, not {passes}")
-        if end - 1 > loop_last and passes[-1] != loop_count:
-            raise ValueError(f"coda layers {loop_last + 1}..{end - 1} must follow loop pass {loop_count}, not {passes}")
+        if end - 1 > loop_last and passes[-1] != count:
+            raise ValueError(f"coda layers {loop_last + 1}..{end - 1} must follow loop pass {count}, not {passes}")
         if self.kv_only_last_layer and loop_last == end - 1:
             raise ValueError("a kv-only last layer cannot be a loop layer: its pass-1 output feeds pass 2")
         gate_weights = state_dict.get("loop_gates")
-        if gate_weights is None or len(gate_weights) != loop_count:
+        if gate_weights is None or len(gate_weights) != count:
             raise ValueError(
-                f"the loop runs {loop_count} passes, so state_dict['loop_gates'] needs {loop_count} gate weight "
+                f"the loop runs {count} passes, so state_dict['loop_gates'] needs {count} gate weight "
                 f"dicts, got {None if gate_weights is None else len(gate_weights)}"
             )
         steps = [
             s
-            for s in loop_schedule(config.num_hidden_layers, loop_first, loop_last, loop_count)
+            for s in loop_schedule(config.num_hidden_layers, loop_first, loop_last, count)
             if (s.loop_pass in passes if s.loop_pass else first <= s.layer < end)
         ]
         gates = {
@@ -572,7 +570,7 @@ class TtPrefillTransformer(LightweightModule):
             for k in passes
         }
         logger.info(
-            f"GLM-5.4 loop: layers {loop_first}..{loop_last} x{loop_count}, this instance runs passes {passes}, "
+            f"GLM-5.4 loop: layers {loop_first}..{loop_last} x{count}, this instance runs passes {passes}, "
             f"gate widths {[g.width for g in gates.values()]}"
         )
         return steps, gates

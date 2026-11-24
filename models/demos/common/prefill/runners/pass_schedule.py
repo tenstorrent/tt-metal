@@ -6,8 +6,8 @@
 A plain model runs every layer once, so the runner splits its layers over the pipeline ranks. A looped model
 (GLM-5.4: layers 26..53 run twice with shared weights) runs some layers more than once, so the runner splits its
 passes instead: GLM-5.4's 78 layers are 106 positions (26 prelude, 2 x 28 loop, 24 coda), and its four stages are
-the position ranges [0, 26), [26, 54), [54, 82), [82, 106). ``PREFILL_NUM_LAYERS``, ``PREFILL_PP_LAYER_OFFSET`` and
-``PREFILL_PP_LAYER_COUNTS`` then count positions.
+the position ranges [0, 26), [26, 54), [54, 82), [82, 106). ``PREFILL_NUM_LAYERS`` and ``PREFILL_PP_LAYER_COUNTS``
+then count positions.
 
 Contracts kept here, because the runner, the producer and the runtime must agree on them:
 

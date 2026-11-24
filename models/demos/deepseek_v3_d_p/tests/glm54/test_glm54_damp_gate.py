@@ -19,6 +19,7 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.glm_5_4 import damp_gate_reference
 from models.demos.deepseek_v3_d_p.reference.glm_5_4.synthetic_gates import GLM54_SYNTHETIC_SEED, synthetic_gates
+from models.demos.deepseek_v3_d_p.reference.glm_5_4.tests.helpers import pcc
 from models.demos.deepseek_v3_d_p.reference.glm_5_4_config import glm_5_4_hf_config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.measure.trace import TracedStep
@@ -31,10 +32,6 @@ GATE_PCC = 0.999
 BETA_MAX_ABS_ERR = 0.01
 SEQ = 1024  # 128 rows per SP chip
 INPUT_SEED = 7
-
-
-def _pcc(a, b):
-    return float(torch.corrcoef(torch.stack([a.detach().flatten().double(), b.detach().flatten().double()]))[0, 1])
 
 
 def _inputs(hidden):
@@ -125,9 +122,9 @@ def test_glm54_damp_gate_matches_reference(mesh_device, device_params, width):
     def verdict(out_ref, beta_ref):
         """(scores, beta max abs error, failures) of the device against one reference result."""
         scores = {
-            "beta": _pcc(beta_dev, beta_ref),
-            "x_k": _pcc(out_dev, out_ref),
-            "update": _pcc(out_dev - x.float(), out_ref - x.float()),
+            "beta": pcc(beta_dev, beta_ref),
+            "x_k": pcc(out_dev, out_ref),
+            "update": pcc(out_dev - x.float(), out_ref - x.float()),
         }
         err = float((beta_dev - beta_ref).abs().max())
         failures = [f"{k} PCC {v:.6f} < {GATE_PCC}" for k, v in scores.items() if v < GATE_PCC]

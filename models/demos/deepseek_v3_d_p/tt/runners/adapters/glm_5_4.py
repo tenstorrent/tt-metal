@@ -3,7 +3,7 @@
 
 """GLM-5.4 prefill adapter: GLM-5.3 with layers 27-54 (0-indexed 26-53) run twice (``reference/glm_5_4_config.py``).
 
-* Weights: GLM-5.4's are not published, so every shared tensor is GLM-5.3's (tier 2, ``tests/glm54_weights.py``):
+* Weights: GLM-5.4's are not published, so every shared tensor is GLM-5.3's (tier 2; tier 1 is the tests' random set):
   the checkpoint and TTNN cache paths are GLM-5.3's, and the cache directory is named ``glm_5_3`` so no GLM-5.4
   directory is ever created (user decision: no GLM-5.4 cache on Weka before the weights are released). An incomplete
   cache is an error here, never a rebuild into GLM-5.3's cache. The damp gates are synthetic host bf16 weights
@@ -71,16 +71,15 @@ class GLM54Adapter(GLM53Adapter):
     def allocate_kv_cache(self, *, mesh_device, hf_config, params) -> MlaKvCaches:
         """GLM-5.3's caches, sized for the stage: a stage running the loop only in passes >= 2 (G2) has no indexer,
         so no index cache; its KVPE cache holds the loop layers' pass-1 KV copy (bank A), never migrated."""
-        from models.demos.deepseek_v3_d_p.reference.glm_5_4.schedule import (
-            runs_only_later_loop_passes,
-            stage_indexer_types,
-        )
+        from models.demos.deepseek_v3_d_p.reference.glm_5_4.schedule import runs_only_later_loop_passes, stage_config
 
-        if not runs_only_later_loop_passes(params.loop_passes):
-            return super().allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
-        assert not (params.mtp_levels and params.is_last_rank), "MTP runs after the coda, not on a loop pass-2 stage"
-        stage_config = _with_indexer_types(hf_config, stage_indexer_types(hf_config, params.loop_passes))
-        return super().allocate_kv_cache(mesh_device=mesh_device, hf_config=stage_config, params=params)
+        if runs_only_later_loop_passes(params.loop_passes):
+            assert not (
+                params.mtp_levels and params.is_last_rank
+            ), "MTP runs after the coda, not on a loop pass-2 stage"
+        return super().allocate_kv_cache(
+            mesh_device=mesh_device, hf_config=stage_config(hf_config, params.loop_passes), params=params
+        )
 
     def kv_cache_slot_rows(self, hf_config, params) -> tuple[int, bool]:
         """The stage's slot length as its blocks address it (``stage_kv_cache_seq_len``, the model's own function): a
@@ -100,11 +99,3 @@ class GLM54Adapter(GLM53Adapter):
         if rows == params.max_seq_len:
             return super().kv_cache_slot_rows(hf_config, params)
         return rows, False
-
-
-def _with_indexer_types(hf_config, indexer_types: list):
-    import copy
-
-    config = copy.copy(hf_config)
-    config.indexer_types = indexer_types
-    return config

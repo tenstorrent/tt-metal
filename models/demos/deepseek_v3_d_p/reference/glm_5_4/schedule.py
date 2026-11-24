@@ -4,6 +4,7 @@
 """GLM-5.4 execution order (torch-free): the CPU reference stack and the device transformer both run it, and the
 runner places its passes on pipeline stages (``pass_schedule``)."""
 
+import copy
 from dataclasses import dataclass
 
 
@@ -31,6 +32,12 @@ def loop_schedule(num_layers: int, loop_first_layer: int, loop_last_layer: int, 
     return steps
 
 
+def loop_count(config) -> int:
+    """How many times ``config`` runs its loop layers: ``config.loop_count``, or 0 for a model without a loop (GLM-5.3
+    and every other model). The one reading of the field the model, the cache allocator and the runner share."""
+    return getattr(config, "loop_count", None) or 0
+
+
 # --- Stage placement (pipeline ranks over the 106-pass schedule) ---
 
 
@@ -38,7 +45,7 @@ def pass_schedule(config):
     """The pipeline positions of ``config``: one per layer pass (``PassSchedule``), the loop's passes in order."""
     from models.demos.common.prefill.runners.pass_schedule import PassSchedule
 
-    steps = loop_schedule(config.num_hidden_layers, config.loop_first_layer, config.loop_last_layer, config.loop_count)
+    steps = loop_schedule(config.num_hidden_layers, config.loop_first_layer, config.loop_last_layer, loop_count(config))
     return PassSchedule(
         passes=tuple((s.layer, s.loop_pass) for s in steps if s.kind == "layer"), num_layers=config.num_hidden_layers
     )
@@ -66,3 +73,13 @@ def stage_indexer_types(config, loop_passes: tuple) -> list:
         for layer in range(config.loop_first_layer, config.loop_last_layer + 1):
             types[layer] = "shared"
     return types
+
+
+def stage_config(config, loop_passes):
+    """The config a stage builds its blocks and caches with: ``config`` itself, except on a stage running the loop
+    only in passes >= 2 (G2), which gets a shallow copy with its stage map (``stage_indexer_types``)."""
+    if not runs_only_later_loop_passes(loop_passes):
+        return config
+    staged = copy.copy(config)
+    staged.indexer_types = stage_indexer_types(config, loop_passes)
+    return staged

@@ -42,6 +42,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.glm_5_4 import damp_gate_reference
 from models.demos.deepseek_v3_d_p.reference.glm_5_4.schedule import pass_schedule, stage_indexer_types
+from models.demos.deepseek_v3_d_p.reference.glm_5_4.tests.helpers import pcc
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import moe_fabric_payload, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.glm54_weights import (
     GLM54ReducedConfig,
@@ -72,10 +73,6 @@ ACKS = {"U": [0, 1, 2, 5, 6, 3], "G0": [0], "G1": [1, 2], "G2": [5, 6], "G3": [3
 
 def _stage(msg: str, t0: float) -> None:
     logger.info(f"[{time.perf_counter() - t0:7.1f}s] {msg}")
-
-
-def _pcc(a, b) -> float:
-    return torch.corrcoef(torch.stack([a.flatten().double(), b.flatten().double()]))[0, 1].item()
 
 
 def _raw(t: ttnn.Tensor) -> list[torch.Tensor]:
@@ -348,7 +345,7 @@ def test_glm54_stages_on_device(mesh_device, device_params, num_links):
                 continue
             for w, must_pass in ((weights.gates[own], True), (weights.gates[other], False)):
                 ref, _ = damp_gate_reference(x_prev, h, **{k: v.float() for k, v in w.items()}, eps=config.rms_norm_eps)
-                scores = (_pcc(x_k, ref), _pcc(x_k - x_prev, ref - x_prev))
+                scores = (pcc(x_k, ref), pcc(x_k - x_prev, ref - x_prev))
                 ok = min(scores) >= GATE_PCC
                 label = f"gate-{1 + (w is weights.gates[1])} weights"
                 logger.info(f"chunk {c} stage gate {k} vs reference with {label}: x_k / update PCC {scores}")
@@ -464,11 +461,11 @@ def test_glm54_stages_on_device(mesh_device, device_params, num_links):
         for name in ("G0", "G1", "G2"):
             got, want = (_token_rows(mesh_device, d)[:n_valid] for d in (traced[f"{name}.{c}.0"], first[f"{name}.{c}"]))
             bad = int((~torch.isfinite(got)).sum()), int((~torch.isfinite(want)).sum())
-            pcc = _pcc(got, want)
-            logger.info(f"traced vs eager {name} chunk {c}: PCC {pcc} over {n_valid} rows, non-finite {bad}")
-            if bad != (0, 0) or not pcc >= TRACED_VS_EAGER_PCC:
+            score = pcc(got, want)
+            logger.info(f"traced vs eager {name} chunk {c}: PCC {score} over {n_valid} rows, non-finite {bad}")
+            if bad != (0, 0) or not score >= TRACED_VS_EAGER_PCC:
                 failures.append(
-                    f"traced {name} chunk {c} vs eager: PCC {pcc} (bar {TRACED_VS_EAGER_PCC}), non-finite {bad}"
+                    f"traced {name} chunk {c} vs eager: PCC {score} (bar {TRACED_VS_EAGER_PCC}), non-finite {bad}"
                 )
         for name in ("G0", "G1", "G2"):
             if not _same(traced[f"{name}.{c}.0"], traced[f"{name}.{c}.1"]):
