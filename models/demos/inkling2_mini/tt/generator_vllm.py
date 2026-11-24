@@ -21,9 +21,14 @@ What the plugin's calls do here:
 - decode_forward: one traced step on the token vLLM hands in, at the position after the last one.
 - The KV caches are the model's own (position-addressed, sized by ``--max-model-len``); vLLM's block tables are
   not used. ``get_max_tokens_all_users`` gives vLLM a pool of one context.
-- Sampling is vLLM's host sampler on the step's logits (one fp32 row, read through a small tail trace). With
-  ``"sample_on_device_mode": "all"`` (or ``"decode_only"``) in the tt config, greedy steps return the head's
-  on-device argmax instead (4 bytes); steps with a temperature, a penalty or logprobs still sample on the host.
+- Sampling without ``sample_on_device_mode`` in the tt config: vLLM's host sampler on the step's logits (one fp32
+  row, read through a small tail trace). It sorts the 200K vocabulary for every token of a request with top-k or
+  top-p, about 13 ms a token on the host this was measured on.
+- With ``"sample_on_device_mode": "all"`` (or ``"decode_only"``) the adapter returns the token itself, through the
+  plugin's device-sampling interface: a greedy step returns the head's on-device argmax (4 bytes to read); a
+  sampled step is drawn here, on the host, from the same logits row, with the request's temperature, top-k, top-p
+  and seed and no sort (`_sample`). Penalties, logprobs, min_p, logit_bias and structured output stay with vLLM's
+  host sampler (the plugin routes them there).
 
 Weights: the run mode's decode cache (modes.py; ``$INKLING_MODE``, ``$INKLING_CACHE``). The tt config's
 ``"optimizations": "performance"`` picks fast mode.
@@ -45,10 +50,9 @@ class Inkling2ForCausalLM:
         "supports_prefix_caching": False,
         "supports_chunked_prefill": False,
         "supports_async_decode": False,
-        # greedy steps only: the argmax the head computes anyway. A sampled row has no device sampler
-        # (max_device_top_k 0 sends it to the host), and neither has a penalty.
+        # with "sample_on_device_mode" the adapter returns tokens: the head's argmax for a greedy row, its own
+        # draw from the logits row for a sampled one (see the module docstring). No penalties there.
         "supports_sample_on_device": True,
-        "max_device_top_k": 0,
         "supports_device_penalties": False,
     }
 
@@ -80,6 +84,7 @@ class Inkling2ForCausalLM:
         self._out = None  # output dict of the last step run
         self._pos_ready = None  # position whose inputs are already written
         self._t = [0, 0.0, 0.0, None]  # decode steps of the request, s inside them, s between them, last exit
+        self._rng, self._seeded = torch.Generator(), False  # the adapter's sampler: one stream per request
 
     # ------------------------------------------------------------ what vLLM's model registry looks for
     def embed_input_ids(self, input_ids):
@@ -207,23 +212,63 @@ class Inkling2ForCausalLM:
         if self._pos_ready is not None:
             m.positions.update(self._pos_ready)
 
-    def _output(self, sampling_params):
-        """The last step's result as vLLM wants it: the argmax [1, 1] when the plugin picked device sampling
-        (greedy rows only), else fp32 logits [1, 1, vocab] for the host sampler."""
-        if sampling_params is not None:
-            if any(float(t) != 0.0 for t in sampling_params.temperature):
-                raise ValueError("device sampling is the argmax: a sampled request samples on the host")
-            return ttnn.to_torch(self._out["token"]).reshape(1, 1).to(torch.int32)
+    def _logits(self):
+        """fp32 logits [vocab of the model] of the last step."""
         if self.tail is None:
-            lg = ttnn.to_torch(self._out["logits"]).float().reshape(-1)
-        else:
-            ttnn.execute_trace(self.device, self.tail, cq_id=0, blocking=False)
-            lg = torch.cat([ttnn.to_torch(t).float().reshape(-1) for t in self.rows])
-        if self.vocab == self.vocab_real:
-            return lg[: self.vocab].reshape(1, 1, -1)
-        out = torch.full((1, 1, self.vocab), float("-inf"))  # the config's padded vocabulary
-        out[0, 0, : self.vocab_real] = lg[: self.vocab_real]
-        return out
+            return ttnn.to_torch(self._out["logits"]).float().reshape(-1)[: self.vocab_real]
+        ttnn.execute_trace(self.device, self.tail, cq_id=0, blocking=False)
+        return torch.cat([ttnn.to_torch(t).float().reshape(-1) for t in self.rows])[: self.vocab_real]
+
+    NUCLEUS_K = 1024  # top-p candidates looked at first
+
+    @classmethod
+    def _candidates(cls, lg, t, top_k, top_p):
+        """(probabilities, token ids or None = all, in order) of softmax(lg / t) cut to the top_k logits and then
+        to the top_p nucleus, as vLLM's sampler cuts them, without sorting the vocabulary: the nucleus is a prefix
+        of the sorted probabilities, so the NUCLEUS_K largest hold it (everything is sorted only when they do not:
+        a flat distribution). The probabilities are not renormalized."""
+        x, idx = lg / t, None
+        if 0 < top_k < x.numel():
+            x, idx = torch.topk(x, top_k)  # sorted, descending
+        p = torch.softmax(x, dim=-1)
+        if top_p < 1.0:
+            if idx is None:
+                p, idx = torch.topk(p, min(cls.NUCLEUS_K, p.numel()))
+                if float(p.sum()) < top_p:
+                    p, idx = torch.sort(torch.softmax(x, dim=-1), descending=True)
+            keep = int((torch.cumsum(p, 0) - p < top_p).sum())  # >= 1: the top token always stays
+            p, idx = p[:keep], idx[:keep]
+        return p, idx
+
+    def _sample(self, lg, t, top_k, top_p):
+        """One draw from `_candidates`, by inverse CDF (torch.multinomial is slow over 200K entries)."""
+        p, idx = self._candidates(lg, t, top_k, top_p)
+        c = torch.cumsum(p, 0)
+        i = min(int(torch.searchsorted(c, torch.rand(1, generator=self._rng) * c[-1])), p.numel() - 1)
+        return int(idx[i]) if idx is not None else i
+
+    def _output(self, sampling_params):
+        """The last step's result as vLLM wants it: fp32 logits [1, 1, vocab] for its host sampler, or, when the
+        plugin picked device sampling, the token [1, 1]: the head's argmax (greedy), else the adapter's draw."""
+        if sampling_params is None:
+            lg = self._logits()
+            if self.vocab == self.vocab_real:
+                return lg.reshape(1, 1, -1)
+            out = torch.full((1, 1, self.vocab), float("-inf"))  # the config's padded vocabulary
+            out[0, 0, : self.vocab_real] = lg
+            return out
+        t = float(sampling_params.temperature[0])
+        if t < 1e-5:
+            return ttnn.to_torch(self._out["token"]).reshape(1, 1).to(torch.int32)
+        if not self._seeded:  # the request's first draw: its seed, or a fresh one
+            seed = sampling_params.seed[0] if isinstance(sampling_params.seed, (list, tuple)) else sampling_params.seed
+            if seed is None:
+                self._rng.seed()
+            else:
+                self._rng.manual_seed(int(seed))
+            self._seeded = True
+        token = self._sample(self._logits(), t, int(sampling_params.top_k[0]), float(sampling_params.top_p[0]))
+        return torch.tensor([[token]], dtype=torch.int32)
 
     # ------------------------------------------------------------ the plugin's calls
     def prefill_forward(
@@ -243,7 +288,7 @@ class Inkling2ForCausalLM:
         if not (0 < k <= n and ids[:k] == fed):  # not the conversation on the card: a new sequence
             self.model.reset()
             k = 0
-        t0 = time.perf_counter()
+        t0, self._seeded = time.perf_counter(), False
         for i in range(k, n):
             self._step(ids[i], i)
         out = self._output(sampling_params)
