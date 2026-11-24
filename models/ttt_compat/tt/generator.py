@@ -837,7 +837,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
 
         # Persistent trace inputs: these outlive the capture and are refreshed in place on every replay.
         # Allocated before the compile pass so that the compile pass can run over them directly.
-        prepared["device_inputs"] = copy_host_to_device(host_inputs, mesh_device=mesh_device)
+        # Since _prefill_forward_trace rewrites them before every replay, another live trace (e.g. another
+        # model's on the same device) replaying over them is harmless: acknowledge them to the tracker.
+        with trace_allocation_tracker.corruptible_allocation_scope(mesh_device):
+            prepared["device_inputs"] = copy_host_to_device(host_inputs, mesh_device=mesh_device)
 
         # Compile run, over the *persistent* inputs -- the exact buffers the capture will bind to, so every
         # program it needs is cached against the specs it will actually see. Compiling over a separate
