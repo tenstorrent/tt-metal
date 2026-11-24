@@ -432,6 +432,14 @@ struct llk_pack_in0_only32
     static constexpr bool value = false;
 };
 
+// Specialized from the kernel's CB formats (llk_pack_common_api.h): in0 or in1 is 32 bit, which the unpackers read at twice the
+// bytes of a 16-bit operand.
+template <int api>
+struct llk_pack_in32_api
+{
+    static constexpr bool value = false;
+};
+
 // Only a kernel with a matmul API reaches the matmul contexts; dep, a template parameter of the caller, delays the lookup.
 template <std::uint32_t dep>
 constexpr bool llk_pack_matmul_kernel()
@@ -448,12 +456,13 @@ constexpr bool llk_pack_matmul_pack_bound()
            !llk_pack_norm_api<dep * 0 + 1>::value;
 }
 
-// A matmul kernel other than a norm one, whose unpackers bound it: at half sync with fp32 DEST or at LoFi an earlier pack start
-// costs them L1 grants.
+// A matmul kernel other than a norm one, whose unpackers bound it: at half sync with fp32 DEST, at LoFi or with a 32-bit operand
+// an earlier pack start costs them L1 grants.
 template <std::uint32_t dep>
 constexpr bool llk_pack_late_start(const bool is_fp32_dest_acc_en)
 {
-    return (is_fp32_dest_acc_en || llk_pack_lofi_api<dep * 0 + 1>::value) && llk_pack_matmul_kernel<dep>() && !llk_pack_norm_api<dep * 0 + 1>::value;
+    return (is_fp32_dest_acc_en || llk_pack_lofi_api<dep * 0 + 1>::value || llk_pack_in32_api<dep * 0 + 1>::value) && llk_pack_matmul_kernel<dep>() &&
+           !llk_pack_norm_api<dep * 0 + 1>::value;
 }
 
 // Specialized by the headers of the pack-thread SFPU inits (compute_kernel_api.h, seven eltwise_unary headers and
