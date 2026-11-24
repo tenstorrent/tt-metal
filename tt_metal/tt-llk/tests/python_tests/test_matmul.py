@@ -597,7 +597,7 @@ def test_matmul_dyn_switch(
 
 
 # Three output blocks of the same matmul on the real buffers, each packed to the next result tiles, on every config whose pack form is a block form: the
-# second and the third block take the W base programming and the W advance of llk_pack_block (matmul_pack_production.h), which one pass never reaches.
+# second and the third block take the W base programming and the W advance of llk_pack_block, which one pass never reaches.
 @pytest.mark.nightly  # exhaustive sweep, too long for the smoke run
 @skip_for_wormhole
 @parametrize(
