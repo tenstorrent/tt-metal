@@ -185,7 +185,9 @@ jobs:
           else
             set -- llk-perf-gate.yaml main schedule
           fi
-          .github/scripts/llk-fetch-test-durations.sh "$1" "$2" "$3" split-durations
+          # Trial: this branch's own durations (stored by its code) once a run of it stored them.
+          .github/scripts/llk-fetch-test-durations.sh merge-gate.yaml "$GITHUB_REF_NAME" workflow_dispatch split-durations
+          ls split-durations/*.json || .github/scripts/llk-fetch-test-durations.sh "$1" "$2" "$3" split-durations
       # The legs read the outcome of this upload, so an artifact fault here
       # falls back to the tables instead of skipping every leg.
       - name: Upload test durations for the legs
