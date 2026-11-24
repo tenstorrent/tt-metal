@@ -17,6 +17,7 @@
 #include "../utils/helpers.h"
 #include "../utils/validate.h"
 #include "ckernel.h"
+#include "../utils/issue.h"
 
 /** @brief Address counters for unpackers and packers on the issuing Tensix thread. */
 namespace hal::counters::adc
@@ -300,6 +301,25 @@ inline __attribute__((always_inline)) constexpr bool is_valid(const AddrCounter&
 }
 
 /**
+ * @brief Confine a run-time value to its instruction field for a compiler that tracks Tensix state.
+ *
+ * The encoders add fields into the word, so an unmasked run-time value could reach the opcode bits as far as the
+ * compiler can tell, and the issue path (utils/issue.h) could not name the instruction to it. A valid value is
+ * unchanged; without such a compiler nothing is masked, so the emitted code is the same as before.
+ *
+ * @param value: Field value, already validated.
+ * @param max: Largest value the field holds; one less than a power of two.
+ */
+inline __attribute__((always_inline)) constexpr std::uint32_t field(const std::uint32_t value, [[maybe_unused]] const std::uint32_t max)
+{
+#if HAL_COMPILER_VISIBLE_ISSUE
+    return value & max;
+#else
+    return value;
+#endif
+}
+
+/**
  * @brief Encode a full-width assignment to one counter with SETADC.
  *
  * @param clients: Destination client bitmask.
@@ -317,7 +337,7 @@ inline __attribute__((always_inline)) constexpr std::uint32_t single(
     const auto value_max = dimension == hal::to_underlying(Dimension::X) ? SingleXCounterValueMax : SingleYZWCounterValueMax;
     hal::detail::require(
         value <= value_max && TT_SETADC_VALID(clients, channel, dimension, value), "SETADC value must be in [0, 65535] for X or [0, 8191] for Y/Z/W");
-    return TT_OP_SETADC(clients, channel, dimension, value);
+    return TT_OP_SETADC(clients, channel, dimension, field(value, value_max));
 }
 
 /**
@@ -333,7 +353,7 @@ inline __attribute__((always_inline)) constexpr std::uint32_t xx(const std::uint
     // SETADCXX takes Channel1 first, then Channel0.
     hal::detail::require(
         group.value(2) <= DualXCounterValueMax && TT_SETADCXX_VALID(clients, group.value(2), group.value(0)), "SETADCXX X values must be in [0, 1023]");
-    return TT_OP_SETADCXX(clients, group.value(2), group.value(0));
+    return TT_OP_SETADCXX(clients, field(group.value(2), DualXCounterValueMax), field(group.value(0), DualXCounterValueMax));
 }
 
 /**
@@ -349,13 +369,15 @@ inline __attribute__((always_inline)) constexpr std::uint32_t xx(const std::uint
  */
 inline __attribute__((always_inline)) constexpr std::uint32_t packed(const std::uint8_t clients, const bool zw, const Action action, const Group& group)
 {
-    const auto a    = group.value(0);
-    const auto b    = group.value(1);
-    const auto c    = group.value(2);
-    const auto d    = group.value(3);
     const auto mask = group.mask();
     // All counter values are three bits. Higher bits of the final slot encode a thread override.
-    hal::detail::require(d <= PackedCounterValueMax && TT_SETADCXY_VALID(clients, d, c, b, a, mask), "packed address-counter values must be in [0, 7]");
+    hal::detail::require(
+        group.value(3) <= PackedCounterValueMax && TT_SETADCXY_VALID(clients, group.value(3), group.value(2), group.value(1), group.value(0), mask),
+        "packed address-counter values must be in [0, 7]");
+    const auto a = field(group.value(0), PackedCounterValueMax);
+    const auto b = field(group.value(1), PackedCounterValueMax);
+    const auto c = field(group.value(2), PackedCounterValueMax);
+    const auto d = field(group.value(3), PackedCounterValueMax);
     if (action == Action::Set)
     {
         return zw ? TT_OP_SETADCZW(clients, d, c, b, a, mask) : TT_OP_SETADCXY(clients, d, c, b, a, mask);
@@ -381,13 +403,10 @@ inline __attribute__((always_inline)) constexpr std::uint32_t set_group(const st
 {
     if (single_bit(group.mask()))
     {
-        for (std::size_t i = 0; i < 4; ++i)
-        {
-            if (group.is_selected(i))
-            {
-                return single(clients, zw, i, group.value(i));
-            }
-        }
+        // No loop: with run-time values the instruction must be known as soon as the selection folds, before loops
+        // are unrolled, for the issue path to name it to a compiler that tracks Tensix state (utils/issue.h).
+        const std::size_t index = group.is_selected(0) ? 0 : group.is_selected(1) ? 1 : group.is_selected(2) ? 2 : 3;
+        return single(clients, zw, index, group.value(index));
     }
     return packed(clients, zw, Action::Set, group);
 }
@@ -527,7 +546,7 @@ constexpr Sequence plan(const AddrCounter& descriptor)
 template <std::uint32_t Word>
 inline __attribute__((always_inline)) void emit()
 {
-    TTI_INSN(Word);
+    ::hal::detail::issue<Word>();
 }
 
 /**
@@ -557,7 +576,7 @@ inline __attribute__((always_inline)) void emit_runtime(const std::uint8_t clien
 {
     if (group.mask() != EmptyCounterMask)
     {
-        TT_INSN(runtime_operation(clients, ZW, action, group));
+        ::hal::detail::issue_buffered(runtime_operation(clients, ZW, action, group));
     }
 }
 

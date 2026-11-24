@@ -10,6 +10,7 @@
 #include "ckernel.h"
 #include "llk_assert.h"
 #include "utils/validate.h"
+#include "utils/issue.h"
 
 namespace hal::mop
 {
@@ -433,7 +434,7 @@ inline __attribute__((always_inline)) void program(const cfg<detail::Template0Pl
     const std::uint32_t skip_a0 = config.skip_a0;
     const std::uint32_t skip_b  = config.skip_b;
 
-    ckernel::mop_sync();
+    ::hal::detail::mop_sync();
 
     mop_cfg[1] = flags;
     if constexpr (HasB)
@@ -482,7 +483,7 @@ inline __attribute__((always_inline)) void program(const cfg<detail::Template1Pl
     const std::uint32_t last_outer_op = config.last_outer_op;
     const std::uint32_t last_inner_op = config.last_inner_op;
 
-    ckernel::mop_sync();
+    ::hal::detail::mop_sync();
 
     mop_cfg[0] = outer_count;
     mop_cfg[1] = inner_count;
@@ -530,7 +531,7 @@ inline __attribute__((always_inline)) void update(const Update<Words>... updates
     (hal::detail::require(!detail::is_count_word(Words) || detail::is_valid_count(updates.value), "Template 1 MOP loop count must fit in 10 bits"), ...);
     (hal::detail::require(Words != detail::OUTER_COUNT_WORD || updates.value != 0, "Template 1 MOP configuration issues nothing"), ...);
 
-    ckernel::mop_sync();
+    ::hal::detail::mop_sync();
 
     ((mop_cfg[Words] = updates.value), ...);
 }
@@ -622,7 +623,7 @@ public:
     template <std::uint32_t Mask>
     inline __attribute__((always_inline)) static void configure_mask_high()
     {
-        TTI_MOP_CFG(Mask >> MASK_LO_WIDTH);
+        HAL_TTI_MOP_CFG(Mask >> MASK_LO_WIDTH);
     }
 
     /**
@@ -632,7 +633,7 @@ public:
      */
     inline __attribute__((always_inline)) static void configure_mask_high(const std::uint32_t mask)
     {
-        TT_MOP_CFG(mask >> MASK_LO_WIDTH);
+        HAL_TT_MOP_CFG(mask >> MASK_LO_WIDTH);
     }
 
     /**
@@ -652,7 +653,7 @@ public:
         {
             configure_mask_high<Mask>();
         }
-        TTI_MOP(0 /*mop_type*/, Count - 1, Mask & MASK_LO);
+        HAL_TTI_MOP(0 /*mop_type*/, Count - 1, Mask & MASK_LO);
     }
 
     /**
@@ -672,7 +673,7 @@ public:
         {
             configure_mask_high<Mask>();
         }
-        TT_MOP(0 /*mop_type*/, count - 1, Mask & MASK_LO);
+        HAL_TT_MOP(0 /*mop_type*/, count - 1, Mask & MASK_LO);
     }
 
     /**
@@ -693,7 +694,7 @@ public:
         {
             configure_mask_high(mask);
         }
-        TT_MOP(0 /*mop_type*/, Count - 1, mask & MASK_LO);
+        HAL_TT_MOP(0 /*mop_type*/, Count - 1, mask & MASK_LO);
     }
 
     /**
@@ -713,7 +714,7 @@ public:
         {
             configure_mask_high(mask);
         }
-        TT_MOP(0 /*mop_type*/, count - 1, mask & MASK_LO);
+        HAL_TT_MOP(0 /*mop_type*/, count - 1, mask & MASK_LO);
     }
 };
 
@@ -730,7 +731,7 @@ struct Runner<MopTemplate::Template1>
      */
     inline __attribute__((always_inline)) static void run()
     {
-        TTI_MOP(1 /*mop_type*/, 0 /*loop_count*/, 0 /*zmask_lo16_or_loop_count*/);
+        HAL_TTI_MOP(1 /*mop_type*/, 0 /*loop_count*/, 0 /*zmask_lo16_or_loop_count*/);
     }
 
     /** @brief Encode @ref run as a MOP instruction. */

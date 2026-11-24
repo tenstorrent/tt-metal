@@ -8,6 +8,7 @@
 
 #include "ckernel.h"
 #include "utils/validate.h"
+#include "utils/issue.h"
 
 namespace hal::fpu
 {
@@ -417,7 +418,7 @@ template <Elementwise Operation>
 inline __attribute__((always_inline)) void run()
 {
     constexpr std::uint32_t operation = get_operation<Operation>();
-    TTI_INSN(operation);
+    ::hal::detail::issue<operation>();
 }
 
 /**
@@ -428,7 +429,7 @@ inline __attribute__((always_inline)) void run()
  */
 inline __attribute__((always_inline)) void run(const Elementwise operation)
 {
-    TT_INSN(get_operation(operation));
+    ::hal::detail::issue_buffered(get_operation(operation));
 }
 
 /**
@@ -466,7 +467,7 @@ template <DotProduct Operation>
 inline __attribute__((always_inline)) void run()
 {
     constexpr std::uint32_t operation = get_operation<Operation>();
-    TTI_INSN(operation);
+    ::hal::detail::issue<operation>();
 }
 
 /**
@@ -477,7 +478,7 @@ inline __attribute__((always_inline)) void run()
  */
 inline __attribute__((always_inline)) void run(const DotProduct operation)
 {
-    TT_INSN(get_operation(operation));
+    ::hal::detail::issue_buffered(get_operation(operation));
 }
 
 /**
@@ -516,7 +517,7 @@ template <MatrixMultiply Operation>
 inline __attribute__((always_inline)) void run()
 {
     constexpr std::uint32_t operation = get_operation<Operation>();
-    TTI_INSN(operation);
+    ::hal::detail::issue<operation>();
 }
 
 /**
@@ -527,7 +528,7 @@ inline __attribute__((always_inline)) void run()
  */
 inline __attribute__((always_inline)) void run(const MatrixMultiply operation)
 {
-    TT_INSN(get_operation(operation));
+    ::hal::detail::issue_buffered(get_operation(operation));
 }
 
 /**
@@ -566,7 +567,7 @@ template <Pool Operation>
 inline __attribute__((always_inline)) void run()
 {
     constexpr std::uint32_t operation = get_operation<Operation>();
-    TTI_INSN(operation);
+    ::hal::detail::issue<operation>();
 }
 
 /**
@@ -577,7 +578,7 @@ inline __attribute__((always_inline)) void run()
  */
 inline __attribute__((always_inline)) void run(const Pool operation)
 {
-    TT_INSN(get_operation(operation));
+    ::hal::detail::issue_buffered(get_operation(operation));
 }
 
 } // namespace hal::fpu

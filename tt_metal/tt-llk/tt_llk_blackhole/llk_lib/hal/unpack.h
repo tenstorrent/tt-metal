@@ -8,6 +8,7 @@
 
 #include "ckernel.h"
 #include "utils/validate.h"
+#include "utils/issue.h"
 
 namespace hal::unpack
 {
@@ -396,7 +397,7 @@ template <DataTransfer Operation>
 inline __attribute__((always_inline)) void run()
 {
     constexpr std::uint32_t operation = get_operation<Operation>();
-    TTI_INSN(operation);
+    ::hal::detail::issue<operation>();
 }
 
 /**
@@ -407,7 +408,7 @@ inline __attribute__((always_inline)) void run()
  */
 inline __attribute__((always_inline)) void run(const DataTransfer operation)
 {
-    TT_INSN(get_operation(operation));
+    ::hal::detail::issue_buffered(get_operation(operation));
 }
 
 /**
@@ -443,7 +444,7 @@ template <ContextCounterIncrement Operation>
 inline __attribute__((always_inline)) void run()
 {
     constexpr std::uint32_t operation = get_operation<Operation>();
-    TTI_INSN(operation);
+    ::hal::detail::issue<operation>();
 }
 
 /**
@@ -454,7 +455,7 @@ inline __attribute__((always_inline)) void run()
  */
 inline __attribute__((always_inline)) void run(const ContextCounterIncrement operation)
 {
-    TT_INSN(get_operation(operation));
+    ::hal::detail::issue_buffered(get_operation(operation));
 }
 
 /**
@@ -490,7 +491,7 @@ template <RowStartCacheFlush Operation>
 inline __attribute__((always_inline)) void run()
 {
     constexpr std::uint32_t operation = get_operation<Operation>();
-    TTI_INSN(operation);
+    ::hal::detail::issue<operation>();
 }
 
 /**
@@ -501,7 +502,7 @@ inline __attribute__((always_inline)) void run()
  */
 inline __attribute__((always_inline)) void run(const RowStartCacheFlush operation)
 {
-    TT_INSN(get_operation(operation));
+    ::hal::detail::issue_buffered(get_operation(operation));
 }
 
 } // namespace hal::unpack

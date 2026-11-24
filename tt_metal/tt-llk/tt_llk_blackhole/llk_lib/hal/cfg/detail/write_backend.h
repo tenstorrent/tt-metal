@@ -16,6 +16,7 @@
 #include "state_bank.h"
 #include "write_operands.h"
 #include "write_plan.h"
+#include "../../utils/issue.h"
 
 namespace hal::cfg::detail
 {
@@ -35,7 +36,7 @@ inline __attribute__((always_inline)) void write_thread_word(const std::uint32_t
 {
     LLK_ASSERT(section < F.count, "section index out of range for this register");
     LLK_ASSERT(value <= ThreadCfgWordMask, "prepacked thread CFG value exceeds 16 bits");
-    TTI_SETC16(F.addr32(static_cast<Sec>(section)), value & ThreadCfgWordMask);
+    HAL_TTI_SETC16(F.addr32(static_cast<Sec>(section)), value & ThreadCfgWordMask);
 }
 
 /**
@@ -74,44 +75,44 @@ inline __attribute__((always_inline)) void rmw_write_word(const std::uint32_t va
     {
         if constexpr ((RuntimeMask & 0x000000ffu) != 0u)
         {
-            TT_RMWCIB0((Mask >> 0) & 0xffu, (write_data >> 0) & 0xffu, Addr);
+            HAL_TT_RMWCIB0((Mask >> 0) & 0xffu, (write_data >> 0) & 0xffu, Addr);
         }
         else
         {
-            TTI_RMWCIB0((Mask >> 0) & 0xffu, (ConstantData >> 0) & 0xffu, Addr);
+            HAL_TTI_RMWCIB0((Mask >> 0) & 0xffu, (ConstantData >> 0) & 0xffu, Addr);
         }
     }
     if constexpr ((Mask & 0x0000ff00u) != 0u)
     {
         if constexpr ((RuntimeMask & 0x0000ff00u) != 0u)
         {
-            TT_RMWCIB1((Mask >> 8) & 0xffu, (write_data >> 8) & 0xffu, Addr);
+            HAL_TT_RMWCIB1((Mask >> 8) & 0xffu, (write_data >> 8) & 0xffu, Addr);
         }
         else
         {
-            TTI_RMWCIB1((Mask >> 8) & 0xffu, (ConstantData >> 8) & 0xffu, Addr);
+            HAL_TTI_RMWCIB1((Mask >> 8) & 0xffu, (ConstantData >> 8) & 0xffu, Addr);
         }
     }
     if constexpr ((Mask & 0x00ff0000u) != 0u)
     {
         if constexpr ((RuntimeMask & 0x00ff0000u) != 0u)
         {
-            TT_RMWCIB2((Mask >> 16) & 0xffu, (write_data >> 16) & 0xffu, Addr);
+            HAL_TT_RMWCIB2((Mask >> 16) & 0xffu, (write_data >> 16) & 0xffu, Addr);
         }
         else
         {
-            TTI_RMWCIB2((Mask >> 16) & 0xffu, (ConstantData >> 16) & 0xffu, Addr);
+            HAL_TTI_RMWCIB2((Mask >> 16) & 0xffu, (ConstantData >> 16) & 0xffu, Addr);
         }
     }
     if constexpr ((Mask & 0xff000000u) != 0u)
     {
         if constexpr ((RuntimeMask & 0xff000000u) != 0u)
         {
-            TT_RMWCIB3((Mask >> 24) & 0xffu, (write_data >> 24) & 0xffu, Addr);
+            HAL_TT_RMWCIB3((Mask >> 24) & 0xffu, (write_data >> 24) & 0xffu, Addr);
         }
         else
         {
-            TTI_RMWCIB3((Mask >> 24) & 0xffu, (ConstantData >> 24) & 0xffu, Addr);
+            HAL_TTI_RMWCIB3((Mask >> 24) & 0xffu, (ConstantData >> 24) & 0xffu, Addr);
         }
     }
 }
@@ -133,19 +134,19 @@ inline __attribute__((always_inline)) void rmw_write_word()
 
     if constexpr ((Mask & 0x000000ffu) != 0u)
     {
-        TTI_RMWCIB0((Mask >> 0) & 0xffu, (Data >> 0) & 0xffu, Addr);
+        HAL_TTI_RMWCIB0((Mask >> 0) & 0xffu, (Data >> 0) & 0xffu, Addr);
     }
     if constexpr ((Mask & 0x0000ff00u) != 0u)
     {
-        TTI_RMWCIB1((Mask >> 8) & 0xffu, (Data >> 8) & 0xffu, Addr);
+        HAL_TTI_RMWCIB1((Mask >> 8) & 0xffu, (Data >> 8) & 0xffu, Addr);
     }
     if constexpr ((Mask & 0x00ff0000u) != 0u)
     {
-        TTI_RMWCIB2((Mask >> 16) & 0xffu, (Data >> 16) & 0xffu, Addr);
+        HAL_TTI_RMWCIB2((Mask >> 16) & 0xffu, (Data >> 16) & 0xffu, Addr);
     }
     if constexpr ((Mask & 0xff000000u) != 0u)
     {
-        TTI_RMWCIB3((Mask >> 24) & 0xffu, (Data >> 24) & 0xffu, Addr);
+        HAL_TTI_RMWCIB3((Mask >> 24) & 0xffu, (Data >> 24) & 0xffu, Addr);
     }
 }
 
@@ -175,20 +176,20 @@ inline __attribute__((always_inline)) void write_word(const std::uint32_t value,
         const std::uint32_t data = (value << Shamt) & Mask;
         if constexpr (Mask == 0xffffffffu)
         {
-            cfg[Addr] = data;
+            ::hal::detail::cfg_store(cfg, Addr, data);
         }
         else
         {
             // Not atomic against the other RISCs sharing the word.
             const std::uint32_t old_value = cfg[Addr];
-            cfg[Addr]                     = (old_value & ~Mask) | data;
+            ::hal::detail::cfg_store(cfg, Addr, (old_value & ~Mask) | data);
         }
     }
     else if constexpr (Scope == RegisterScope::Thread)
     {
         // SETC16 replaces the complete thread word. Bits absent from Mask are
         // written as zero, matching the existing single-field API.
-        TT_SETC16(Addr, ((value << Shamt) & Mask) & ThreadCfgWordMask);
+        HAL_TT_SETC16(Addr, ((value << Shamt) & Mask) & ThreadCfgWordMask);
     }
     else
     {
@@ -211,7 +212,7 @@ inline __attribute__((always_inline)) void write_word()
 {
     if constexpr (Scope == RegisterScope::Thread)
     {
-        TTI_SETC16(Addr, Data & ThreadCfgWordMask);
+        HAL_TTI_SETC16(Addr, Data & ThreadCfgWordMask);
     }
     else
     {
@@ -247,7 +248,7 @@ inline __attribute__((always_inline)) void write_array_mmio(volatile std::uint32
 
     for (std::uint32_t i = 0; i < Count; ++i)
     {
-        cfg[addr + i] = values[i];
+        ::hal::detail::cfg_store(cfg, addr + i, values[i]);
     }
 }
 
@@ -290,7 +291,7 @@ inline __attribute__((always_inline)) void write_gpr(const GprWrite<F, S, GprInd
             {
                 LLK_ASSERT((transfer.source.index & 0x3u) == 0u, "128-bit WRCFG source GPR must be four-word aligned");
             }
-            TT_WRCFG(transfer.source.index, wr128b, F.addr32(S));
+            HAL_TT_WRCFG(transfer.source.index, wr128b, F.addr32(S));
         }
         else
         {
@@ -299,11 +300,11 @@ inline __attribute__((always_inline)) void write_gpr(const GprWrite<F, S, GprInd
             {
                 static_assert((GprIndex & 0x3u) == 0u, "128-bit WRCFG source GPR must be four-word aligned");
             }
-            TTI_WRCFG(GprIndex, wr128b, F.addr32(S));
+            HAL_TTI_WRCFG(GprIndex, wr128b, F.addr32(S));
         }
         if constexpr (Completion == WrcfgCompletion::Wait)
         {
-            TTI_NOP;
+            HAL_TTI_NOP;
         }
     }
 }
