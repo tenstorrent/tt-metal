@@ -9,7 +9,6 @@ set(UNIT_TESTS_FABRIC_SRC
     common/channel_trimming_test_utils.cpp
     fabric_router/test_routing_tables.cpp
     keraunos/co_launched_line.cpp
-    keraunos/test_keraunos_co_launched_workers.cpp
     keraunos/vcluster/test_vcluster_line.cpp
     fabric_router/test_pipeline_builder.cpp
     fabric_router/test_mesh_graph_descriptor.cpp
@@ -65,6 +64,7 @@ if(TT_UMD_BUILD_GRENDEL_JTAG)
     list(
         APPEND
         UNIT_TESTS_FABRIC_SRC
+        keraunos/test_keraunos_co_launched_workers.cpp
         keraunos/test_keraunos_eth_semaphore.cpp
         keraunos/vcluster/manifest.cpp
         keraunos/vcluster/descriptors.cpp
