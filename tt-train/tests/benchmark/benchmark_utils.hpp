@@ -61,6 +61,15 @@ inline double average(const std::vector<double>& values) {
     return std::accumulate(values.begin(), values.end(), 0.0) / static_cast<double>(values.size());
 }
 
+inline double median(std::vector<double> values) {
+    if (values.empty()) {
+        return 0.0;
+    }
+    std::sort(values.begin(), values.end());
+    const size_t mid = values.size() / 2U;
+    return values.size() % 2U == 1U ? values[mid] : 0.5 * (values[mid - 1U] + values[mid]);
+}
+
 // Wall-clock per call with no device sync, so for device ops this is enqueue time; use
 // time_device_avg_us for device work.
 template <typename Fn>

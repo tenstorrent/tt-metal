@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string_view>
 #include <tt_stl/assert.hpp>
 
 namespace ttml::core::distributed {
@@ -41,6 +42,16 @@ inline void validate_cp_sequence_length(CpSharding sharding, uint32_t seq_len, u
             return;
     }
     TT_THROW("Unknown CP sharding {}", static_cast<int>(sharding));
+}
+
+inline CpSharding read_cp_sharding(std::string_view name) {
+    if (name == "contiguous") {
+        return CpSharding::Contiguous;
+    }
+    if (name == "zigzag") {
+        return CpSharding::ZigZag;
+    }
+    TT_THROW("Unknown CP sharding '{}'. Supported: contiguous, zigzag", name);
 }
 
 }  // namespace ttml::core::distributed

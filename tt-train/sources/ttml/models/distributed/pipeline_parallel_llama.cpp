@@ -50,6 +50,15 @@ void PipelineParallelConfig::verify() const {
     }
 }
 
+void reject_unsupported_cp_sharding(core::distributed::CpSharding sharding) {
+    switch (sharding) {
+        case core::distributed::CpSharding::Contiguous: return;
+        case core::distributed::CpSharding::ZigZag:
+            throw std::logic_error("Zig-zag CP sharding is not supported with pipeline parallelism");
+    }
+    throw std::logic_error("Unknown CP sharding");
+}
+
 PipelineParallelConfig read_config(const YAML::Node& config) {
     PipelineParallelConfig pipeline_parallel_config;
     pipeline_parallel_config.num_blocks = config["num_blocks"].as<uint32_t>();
@@ -82,6 +91,9 @@ PipelineParallelLlama::PipelineParallelLlama(
     fmt::print("    Positional embedding type: RoPE\n");
     fmt::print("    Runner type: {}\n", runner_type == RunnerType::Default ? "Default" : "Memory efficient");
     fmt::print("    Theta: {}\n", theta);
+    if (autograd::ctx().is_parallelism_context_initialized()) {
+        reject_unsupported_cp_sharding(autograd::ctx().get_parallelism_context().get_cp_config().sharding);
+    }
 
     fmt::println("  Pipeline parallel configuration:");
     fmt::println("    Num blocks: {}", pipeline_parallel_config.num_blocks);

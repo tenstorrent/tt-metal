@@ -208,6 +208,15 @@ target_link_libraries(
         TTNN::TTNN
 )
 tt_reuse_precompile_headers(swiglu_packed_benchmark ttml_pch)
+
+add_executable(ring_attention_benchmark benchmark/ring_attention_benchmark.cpp)
+target_link_libraries(
+    ring_attention_benchmark
+    PUBLIC
+        ttml
+        TTNN::TTNN
+)
+tt_reuse_precompile_headers(ring_attention_benchmark ttml_pch)
 ############################################################################################################################
 # Benchmark tests (using Google Benchmark)
 # Only available when building via tt-metal (Build from tt-train would require adding new dependency)

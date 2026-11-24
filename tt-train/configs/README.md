@@ -106,6 +106,7 @@ Device mesh and distributed training configuration.
 | `enable_ddp` | bool | false | Enable Distributed Data Parallelism |
 | `enable_tp` | bool | false | Enable Tensor Parallelism |
 | `enable_cp` | bool | false | Enable Context Parallelism (C++ `nano_gpt` runner only) |
+| `cp_sharding` | string | contiguous | CP sequence split: `contiguous` or `zigzag` (balances causal ring attention; needs `enable_cp`) |
 
 ### Constraints
 - DDP and TP can be combined on a 2D mesh (e.g. `mesh_shape: [4, 8]` with `enable_ddp: true` and `enable_tp: true`)

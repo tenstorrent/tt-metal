@@ -20,15 +20,13 @@
 #include "metal/ops/ring_sdpa_fw/ring_sdpa_fw.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/distributed/comm_ops.hpp"
+#include "ops/distributed/ring_attention_utils.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/creation/creation.hpp"
+#include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/copy/copy.hpp"
-#include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/eltwise/ternary/ternary.hpp"
-#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
-#include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
@@ -38,93 +36,383 @@ namespace ttml::ops::distributed {
 
 namespace {
 
-// Pads a (B, H, S, 1) FP32 logsumexp tensor into the (B, H, S, 32) intermediates layout
-// the SDPA kernels expect: lse in column 0, the remaining 31 columns are ignored padding.
-ttnn::Tensor pad_lse_to_intermediates_layout(const ttnn::Tensor& lse) {
-    const ttsl::SmallVector<ttnn::operations::data_movement::PadSpecDim> padding = {
-        {0, 0},  // batch
-        {0, 0},  // heads
-        {0, 0},  // seq_len
-        {0, 31}  // width: pad 31 zeros on the right (1 -> 32)
-    };
-    return ttnn::pad(lse, padding, 0.0F, false, std::nullopt);
+constexpr auto kZigZagFwDirection = ttml::metal::ops::ring_sdpa_fw::RingDirection::Backward;
+constexpr auto kZigZagBwDirection = ttml::metal::ops::ring_sdpa_bw::RingDirection::Backward;
+
+struct RingSpec {
+    uint32_t ring_size = 0U;
+    uint32_t cp_axis = 0U;
+};
+
+// FP32 running output and logsumexp of each sequence half.
+struct ZigZagForwardAccum {
+    SeqHalves output;
+    SeqHalves lse;
+};
+
+struct ZigZagForwardBuffers {
+    ttnn::Tensor no_contrib_intermediates;
+    ttnn::Tensor cross_output;
+    ttnn::Tensor cross_intermediates;
+    std::array<ttnn::Tensor, 2> chunk_output;
+    std::array<ttnn::Tensor, 2> chunk_intermediates;
+};
+
+ZigZagForwardAccum zigzag_forward_step0(
+    const ttnn::Tensor& query, const ttnn::Tensor& key, const ttnn::Tensor& value, const RingSpec& ring) {
+    const uint32_t seq_len = query.logical_shape()[2];
+    const uint32_t half = seq_len / 2U;
+    ttnn::Tensor output = ttnn::empty_like(query);
+    ttnn::Tensor intermediates = make_intermediates(query, seq_len);
+    ttml::metal::ring_sdpa_fw(
+        {{.query = query, .key = key, .value = value, .output = output, .intermediates = intermediates}},
+        ring.ring_size,
+        ring.cp_axis,
+        /*step=*/0U,
+        ttml::metal::AttentionMaskType::Causal,
+        kZigZagFwDirection);
+    return {
+        .output = split_seq(ttnn::typecast(output, ttnn::DataType::FLOAT32)),
+        .lse = {
+            slice_seq(intermediates, 0U, half, /*width=*/1U), slice_seq(intermediates, half, seq_len, /*width=*/1U)}};
+}
+
+ZigZagForwardBuffers make_zigzag_forward_buffers(const ttnn::Tensor& query, const ttnn::Tensor& q_half) {
+    const uint32_t half = q_half.logical_shape()[2];
+    // Chunk outputs must be finite where a rank does not write them: the merge multiplies them by exp(-inf) = 0.
+    ZigZagForwardBuffers buffers{
+        .no_contrib_intermediates = make_no_contrib_intermediates(query, half),
+        .cross_output = ttnn::empty_like(q_half),
+        .cross_intermediates = make_intermediates(query, half),
+        .chunk_output = {ttnn::zeros_like(q_half), ttnn::zeros_like(q_half)},
+        .chunk_intermediates = {make_intermediates(query, half), make_intermediates(query, half)}};
+    ttnn::copy(buffers.no_contrib_intermediates, buffers.chunk_intermediates[0]);
+    return buffers;
+}
+
+void zigzag_forward_step(
+    const SeqHalves& q,
+    const SeqHalves& k,
+    const SeqHalves& v,
+    uint32_t step,
+    const RingSpec& ring,
+    ZigZagForwardBuffers& buffers,
+    ZigZagForwardAccum& accum) {
+    using ttml::metal::AttentionMaskType;
+    ttml::metal::ring_sdpa_fw(
+        {{.query = q.second,
+          .key = k.first,
+          .value = v.first,
+          .output = buffers.cross_output,
+          .intermediates = buffers.cross_intermediates}},
+        ring.ring_size,
+        ring.cp_axis,
+        step,
+        AttentionMaskType::None,
+        kZigZagFwDirection);
+
+    // A rank computes chunk 1 for its first steps, then chunk 0. Reset chunk 1's lse to -inf every step so the
+    // merge ignores it after the switch; chunk 0 starts at -inf and is written at every step after the switch.
+    ttnn::copy(buffers.no_contrib_intermediates, buffers.chunk_intermediates[1]);
+    ttml::metal::ring_sdpa_fw(
+        {{.query = q.first,
+          .key = k.first,
+          .value = v.first,
+          .output = buffers.chunk_output[0],
+          .intermediates = buffers.chunk_intermediates[0]},
+         {.query = q.second,
+          .key = k.second,
+          .value = v.second,
+          .output = buffers.chunk_output[1],
+          .intermediates = buffers.chunk_intermediates[1]}},
+        ring.ring_size,
+        ring.cp_axis,
+        step,
+        AttentionMaskType::Causal,
+        kZigZagFwDirection,
+        ttml::metal::ops::RingLoadBalancing::ZigZag);
+
+    online_softmax_merge(accum.output.second, accum.lse.second, buffers.cross_output, buffers.cross_intermediates);
+    online_softmax_merge(accum.output.first, accum.lse.first, buffers.chunk_output[0], buffers.chunk_intermediates[0]);
+    online_softmax_merge(
+        accum.output.second, accum.lse.second, buffers.chunk_output[1], buffers.chunk_intermediates[1]);
+}
+
+// What the zig-zag backward keeps from the forward.
+struct ZigZagSaved {
+    autograd::TensorPtr query;
+    autograd::TensorPtr key;
+    autograd::TensorPtr value;
+    autograd::TensorPtr out;
+    SeqHalves lse;
+    SeqHalves k_current;
+    SeqHalves v_current;
+    std::vector<SeqHalves> k_steps;
+    std::vector<SeqHalves> v_steps;
+    RingSpec ring;
+};
+
+struct ZigZagBackwardInputs {
+    SeqHalves query;
+    SeqHalves attn_output;
+    SeqHalves grad_output;
+    SeqHalves intermediates;
+};
+
+struct ZigZagGradBuffers {
+    ttnn::Tensor zero_Q_half;
+    ttnn::Tensor zero_K_half;
+    ttnn::Tensor zero_V_half;
+    ttnn::Tensor grad_Q_cross;
+    ttnn::Tensor grad_K_cross;
+    ttnn::Tensor grad_V_cross;
+    std::array<ttnn::Tensor, 2> grad_Q_chunk;
+    std::array<ttnn::Tensor, 2> grad_K_chunk;
+    std::array<ttnn::Tensor, 2> grad_V_chunk;
+};
+
+// FP32 running grads of each sequence half.
+struct ZigZagGradAccum {
+    SeqHalves query;
+    SeqHalves key;
+    SeqHalves value;
+};
+
+ZigZagGradBuffers make_zigzag_grad_buffers(
+    const ttnn::Tensor& q_half, const ttnn::Tensor& key, const ttnn::Tensor& value) {
+    const uint32_t half = q_half.logical_shape()[2];
+    const ttnn::Tensor zero_Q = ttnn::zeros_like(q_half);
+    const ttnn::Tensor zero_K = ttnn::zeros_like(slice_seq(key, 0U, half));
+    const ttnn::Tensor zero_V = ttnn::zeros_like(slice_seq(value, 0U, half));
+    return {
+        .zero_Q_half = zero_Q,
+        .zero_K_half = zero_K,
+        .zero_V_half = zero_V,
+        .grad_Q_cross = ttnn::empty_like(zero_Q),
+        .grad_K_cross = ttnn::empty_like(zero_K),
+        .grad_V_cross = ttnn::empty_like(zero_V),
+        .grad_Q_chunk = {ttnn::zeros_like(zero_Q), ttnn::zeros_like(zero_Q)},
+        .grad_K_chunk = {ttnn::zeros_like(zero_K), ttnn::zeros_like(zero_K)},
+        .grad_V_chunk = {ttnn::zeros_like(zero_V), ttnn::zeros_like(zero_V)}};
+}
+
+ZigZagGradAccum make_zigzag_grad_accum(const ZigZagGradBuffers& buffers) {
+    return {
+        .query =
+            {ttnn::zeros_like(buffers.zero_Q_half, ttnn::DataType::FLOAT32),
+             ttnn::zeros_like(buffers.zero_Q_half, ttnn::DataType::FLOAT32)},
+        .key =
+            {ttnn::zeros_like(buffers.zero_K_half, ttnn::DataType::FLOAT32),
+             ttnn::zeros_like(buffers.zero_K_half, ttnn::DataType::FLOAT32)},
+        .value = {
+            ttnn::zeros_like(buffers.zero_V_half, ttnn::DataType::FLOAT32),
+            ttnn::zeros_like(buffers.zero_V_half, ttnn::DataType::FLOAT32)}};
+}
+
+void zigzag_backward_step(
+    const ZigZagBackwardInputs& in,
+    const SeqHalves& k,
+    const SeqHalves& v,
+    uint32_t step,
+    const RingSpec& ring,
+    ZigZagGradBuffers& buffers) {
+    using ttml::metal::AttentionMaskType;
+    ttml::metal::ring_sdpa_bw(
+        {{.grad_output = in.grad_output.second,
+          .attn_output = in.attn_output.second,
+          .query = in.query.second,
+          .key = k.first,
+          .value = v.first,
+          .intermediates = in.intermediates.second,
+          .grad_query = buffers.grad_Q_cross,
+          .grad_key = buffers.grad_K_cross,
+          .grad_value = buffers.grad_V_cross}},
+        ring.ring_size,
+        ring.cp_axis,
+        step,
+        AttentionMaskType::None,
+        kZigZagBwDirection);
+
+    // Steps run backwards here, so a rank computes chunk 0 first, then chunk 1. Both chunks' grads are summed,
+    // so zero chunk 0 every step: after the switch it would add its last grads again.
+    ttnn::copy(buffers.zero_Q_half, buffers.grad_Q_chunk[0]);
+    ttnn::copy(buffers.zero_K_half, buffers.grad_K_chunk[0]);
+    ttnn::copy(buffers.zero_V_half, buffers.grad_V_chunk[0]);
+    ttml::metal::ring_sdpa_bw(
+        {{.grad_output = in.grad_output.first,
+          .attn_output = in.attn_output.first,
+          .query = in.query.first,
+          .key = k.first,
+          .value = v.first,
+          .intermediates = in.intermediates.first,
+          .grad_query = buffers.grad_Q_chunk[0],
+          .grad_key = buffers.grad_K_chunk[0],
+          .grad_value = buffers.grad_V_chunk[0]},
+         {.grad_output = in.grad_output.second,
+          .attn_output = in.attn_output.second,
+          .query = in.query.second,
+          .key = k.second,
+          .value = v.second,
+          .intermediates = in.intermediates.second,
+          .grad_query = buffers.grad_Q_chunk[1],
+          .grad_key = buffers.grad_K_chunk[1],
+          .grad_value = buffers.grad_V_chunk[1]}},
+        ring.ring_size,
+        ring.cp_axis,
+        step,
+        AttentionMaskType::Causal,
+        kZigZagBwDirection,
+        ttml::metal::ops::RingLoadBalancing::ZigZag);
+}
+
+// The cross block's grads go to Q's second half and K/V's first half; chunk c's grads go to half c of Q, K and V.
+void accumulate_zigzag_grads(const ZigZagGradBuffers& buffers, ZigZagGradAccum& accum) {
+    constexpr auto kFp32 = ttnn::DataType::FLOAT32;
+    accum.query.first = ttnn::add(accum.query.first, ttnn::typecast(buffers.grad_Q_chunk[0], kFp32));
+    accum.query.second = ttnn::add(
+        accum.query.second,
+        ttnn::add(ttnn::typecast(buffers.grad_Q_cross, kFp32), ttnn::typecast(buffers.grad_Q_chunk[1], kFp32)));
+    accum.key.first = ttnn::add(
+        accum.key.first,
+        ttnn::add(ttnn::typecast(buffers.grad_K_cross, kFp32), ttnn::typecast(buffers.grad_K_chunk[0], kFp32)));
+    accum.key.second = ttnn::add(accum.key.second, ttnn::typecast(buffers.grad_K_chunk[1], kFp32));
+    accum.value.first = ttnn::add(
+        accum.value.first,
+        ttnn::add(ttnn::typecast(buffers.grad_V_cross, kFp32), ttnn::typecast(buffers.grad_V_chunk[0], kFp32)));
+    accum.value.second = ttnn::add(accum.value.second, ttnn::typecast(buffers.grad_V_chunk[1], kFp32));
+}
+
+// Step 0 is one causal call over the full local sequence; its grads join the ring steps' and go to the inputs.
+void finish_zigzag_backward(
+    const ZigZagSaved& saved, const ZigZagGradAccum& accum, const ttnn::Tensor& global_intermediates) {
+    constexpr auto kFp32 = ttnn::DataType::FLOAT32;
+    const ttnn::Tensor& query = saved.query->get_value();
+    const ttnn::Tensor& key = saved.key->get_value();
+    const ttnn::Tensor& value = saved.value->get_value();
+    const ttnn::Tensor grad_Q_step0 = ttnn::empty_like(query);
+    const ttnn::Tensor grad_K_step0 = ttnn::empty_like(key);
+    const ttnn::Tensor grad_V_step0 = ttnn::empty_like(value);
+    ttml::metal::ring_sdpa_bw(
+        {{.grad_output = saved.out->get_grad(),
+          .attn_output = saved.out->get_value(),
+          .query = query,
+          .key = key,
+          .value = value,
+          .intermediates = global_intermediates,
+          .grad_query = grad_Q_step0,
+          .grad_key = grad_K_step0,
+          .grad_value = grad_V_step0}},
+        saved.ring.ring_size,
+        saved.ring.cp_axis,
+        /*step=*/0U,
+        ttml::metal::AttentionMaskType::Causal,
+        kZigZagBwDirection);
+    const ttnn::Tensor grad_Q = ttnn::add(
+        ttnn::concat(std::vector<ttnn::Tensor>{accum.query.first, accum.query.second}, /*dim=*/2),
+        ttnn::typecast(grad_Q_step0, kFp32));
+    const ttnn::Tensor grad_K = ttnn::add(
+        ttnn::concat(std::vector<ttnn::Tensor>{accum.key.first, accum.key.second}, /*dim=*/2),
+        ttnn::typecast(grad_K_step0, kFp32));
+    const ttnn::Tensor grad_V = ttnn::add(
+        ttnn::concat(std::vector<ttnn::Tensor>{accum.value.first, accum.value.second}, /*dim=*/2),
+        ttnn::typecast(grad_V_step0, kFp32));
+
+    saved.query->add_grad(ttnn::typecast(grad_Q, query.dtype()));
+    saved.key->add_grad(ttnn::typecast(grad_K, key.dtype()));
+    saved.value->add_grad(ttnn::typecast(grad_V, value.dtype()));
+}
+
+void zigzag_backward(ZigZagSaved& saved) {
+    using ttnn_fixed::distributed::RingShiftDirection;
+    const ttnn::Tensor global_intermediates = pad_lse_to_intermediates_layout(
+        ttnn::concat(std::vector<ttnn::Tensor>{saved.lse.first, saved.lse.second}, /*dim=*/2));
+    const ZigZagBackwardInputs in{
+        .query = split_seq(saved.query->get_value()),
+        .attn_output = split_seq(saved.out->get_value()),
+        .grad_output = split_seq(saved.out->get_grad()),
+        .intermediates = split_seq(global_intermediates)};
+    ZigZagGradBuffers buffers =
+        make_zigzag_grad_buffers(in.query.first, saved.key->get_value(), saved.value->get_value());
+    ZigZagGradAccum accum = make_zigzag_grad_accum(buffers);
+
+    const uint32_t cp_axis = saved.ring.cp_axis;
+    for (uint32_t step = saved.ring.ring_size - 1U; step >= 1U; --step) {
+        const SeqHalves& k = saved.k_steps.empty() ? saved.k_current : saved.k_steps[step];
+        const SeqHalves& v = saved.v_steps.empty() ? saved.v_current : saved.v_steps[step];
+        zigzag_backward_step(in, k, v, step, saved.ring, buffers);
+        accumulate_zigzag_grads(buffers, accum);
+
+        if (saved.k_steps.empty() && step > 1U) {
+            saved.k_current = ring_shift_halves(saved.k_current, cp_axis, RingShiftDirection::Forward);
+            saved.v_current = ring_shift_halves(saved.v_current, cp_axis, RingShiftDirection::Forward);
+        }
+        accum.key = ring_shift_halves(accum.key, cp_axis, RingShiftDirection::Forward);
+        accum.value = ring_shift_halves(accum.value, cp_axis, RingShiftDirection::Forward);
+    }
+    finish_zigzag_backward(saved, accum, global_intermediates);
+}
+
+autograd::TensorPtr ring_attention_sdpa_zigzag(
+    const autograd::TensorPtr& query,
+    const autograd::TensorPtr& key,
+    const autograd::TensorPtr& value,
+    const uint32_t ring_size,
+    const uint32_t cp_axis_value,
+    const bool reuse_forward_kv) {
+    using ttnn_fixed::distributed::RingShiftDirection;
+    const auto& query_tensor = query->get_value();
+    const uint32_t seq_len_local = query_tensor.logical_shape()[2];
+    TT_FATAL(
+        seq_len_local % (2U * tt::constants::TILE_HEIGHT) == 0U,
+        "Zig-zag ring attention splits the local sequence ({} tokens) into two halves, so it must be a multiple of "
+        "{}",
+        seq_len_local,
+        2U * tt::constants::TILE_HEIGHT);
+    const RingSpec ring{.ring_size = ring_size, .cp_axis = cp_axis_value};
+
+    const SeqHalves q_halves = split_seq(query_tensor);
+    ZigZagForwardAccum accum = zigzag_forward_step0(query_tensor, key->get_value(), value->get_value(), ring);
+    ZigZagForwardBuffers buffers = make_zigzag_forward_buffers(query_tensor, q_halves.first);
+
+    std::vector<SeqHalves> k_steps(reuse_forward_kv ? ring_size : 0U);
+    std::vector<SeqHalves> v_steps(reuse_forward_kv ? ring_size : 0U);
+    SeqHalves k_current = split_seq(key->get_value());
+    SeqHalves v_current = split_seq(value->get_value());
+    for (uint32_t step = 1U; step < ring_size; ++step) {
+        k_current = ring_shift_halves(k_current, cp_axis_value, RingShiftDirection::Backward);
+        v_current = ring_shift_halves(v_current, cp_axis_value, RingShiftDirection::Backward);
+        if (reuse_forward_kv) {
+            k_steps[step] = k_current;
+            v_steps[step] = v_current;
+        }
+        zigzag_forward_step(q_halves, k_current, v_current, step, ring, buffers, accum);
+    }
+
+    auto out = autograd::create_tensor(ttnn::typecast(
+        ttnn::concat(std::vector<ttnn::Tensor>{accum.output.first, accum.output.second}, /*dim=*/2),
+        query_tensor.dtype()));
+    if (reuse_forward_kv) {
+        // The backward reads k_steps / v_steps; do not hold a second reference to the last step's K/V.
+        k_current = SeqHalves{ttnn::Tensor(), ttnn::Tensor()};
+        v_current = SeqHalves{ttnn::Tensor(), ttnn::Tensor()};
+    }
+
+    autograd::GradFunction grad_fn = [saved = ZigZagSaved{
+                                          .query = query,
+                                          .key = key,
+                                          .value = value,
+                                          .out = out,
+                                          .lse = std::move(accum.lse),
+                                          .k_current = std::move(k_current),
+                                          .v_current = std::move(v_current),
+                                          .k_steps = std::move(k_steps),
+                                          .v_steps = std::move(v_steps),
+                                          .ring = ring}]() mutable { zigzag_backward(saved); };
+    out->set_node(autograd::add_backward_node(std::move(grad_fn), out, query, key, value));
+    return out;
 }
 
 }  // namespace
-
-namespace detail {
-
-// Merges one ring step's attention result into the running result (online softmax).
-// O_i, l_i: this step's normalized output and logsumexp; O, L: the running ones.
-//   L' = logaddexp(L, l_i)
-//   w  = exp(l_i - L')            this step's share of the softmax mass, in [0, 1]
-//   O' = O + w * (O_i - O)        a lerp, since the usual weight on O, exp(L - L'), is 1 - w
-//
-// A logsumexp of -inf means no contribution: the first merge (L = -inf) gives O' = O_i, and a
-// step the causal schedule skips (l_i = -inf) leaves O and L unchanged. Both -inf would make the
-// row NaN (w = exp(-inf - (-inf))); the ring caller never passes that, since every device
-// computes its diagonal block at step 0.
-// O_i must be finite even on skipped steps (0 * inf = NaN). In the ring caller, step 0 writes
-// every row of the reused output buffer on every device, so a skipped step re-merges an
-// earlier finite output with weight 0.
-void online_softmax_merge(
-    ttnn::Tensor& output_accum,
-    ttnn::Tensor& running_lse,
-    const ttnn::Tensor& step_output,
-    const ttnn::Tensor& step_intermediates) {
-    TT_FATAL(
-        output_accum.dtype() == ttnn::DataType::FLOAT32 && running_lse.dtype() == ttnn::DataType::FLOAT32 &&
-            step_intermediates.dtype() == ttnn::DataType::FLOAT32,
-        "online_softmax_merge: output_accum, running_lse and step_intermediates must be FLOAT32, got {}, {}, {}",
-        output_accum.dtype(),
-        running_lse.dtype(),
-        step_intermediates.dtype());
-    TT_FATAL(
-        step_output.dtype() == ttnn::DataType::BFLOAT16,
-        "online_softmax_merge: step_output must be BFLOAT16, got {}",
-        step_output.dtype());
-    TT_FATAL(
-        step_intermediates.logical_shape()[-1] == 32U,
-        "online_softmax_merge: step_intermediates must be (B, H, S, 32), got {}",
-        step_intermediates.logical_shape());
-
-    // 1. lse of this step: column 0 of the (B, H, S, 32) FP32 intermediates, as a (B, H, S, 1)
-    //    view of the same tiles. Columns 1..31 become tile padding. No copy and no dispatch: this
-    //    is the tensor ttnn::slice would return, without slice's copy of every tile.
-    const auto [batch, heads, seq_len, width] = step_intermediates.logical_shape().to_array_4D();
-    const ttnn::Tensor lse_chunk = ttnn::experimental::view(
-        step_intermediates, ttnn::Shape{batch, heads, seq_len, 1U}, step_intermediates.padded_shape());
-
-    // 2. L' = logaddexp(L, l_i). A single fused SFPU kernel evaluating the stable form
-    //    max(a, b) + log1p(exp(-|a - b|)) (no overflow for large lse), with
-    //    logaddexp(-inf, x) = x.
-    ttnn::Tensor new_lse = ttnn::logaddexp(running_lse, lse_chunk);
-
-    // 3. w = exp(l_i - L'): subtract with exp fused as a post-activation (one kernel; 0.0f
-    //    selects the accurate exp, ttnn::exp's default).
-    using EltwiseUnary = ttnn::operations::unary::EltwiseUnaryWithParam;
-    const EltwiseUnary exp_act{ttnn::operations::unary::UnaryOpType::EXP, 0.0F};
-    const ttnn::Tensor new_weight = ttnn::subtract(
-        lse_chunk,
-        new_lse,
-        /*output_dtype=*/std::nullopt,
-        /*memory_config=*/std::nullopt,
-        /*output=*/std::nullopt,
-        /*post_activations=*/ttsl::Span<const EltwiseUnary>(&exp_act, 1));
-
-    // 4. O' = O + w * (O_i - O). The ternary lerp kernel broadcasts the (B, H, S, 1) weight
-    //    along the head dim and takes the bf16 step output as is: every operand is unpacked
-    //    into an FP32 Dest (bf16 -> FP32 is exact) and the output takes the accumulator's FP32
-    //    dtype, so the whole combine stays FP32 without a separate typecast. The FP32
-    //    accumulator matters: backward consumes the saved O in u = rowsum(dO * O).
-    //    lerp is not overflow-safe: it forms O_i - O, which overflows FP32 once |O| and |O_i|
-    //    approach FLT_MAX/2, even with both finite (NaN at w = 0). Tracked in
-    //    https://github.com/tenstorrent/tt-metal/issues/65873.
-    output_accum = ttnn::lerp(output_accum, step_output, new_weight);
-    running_lse = std::move(new_lse);
-}
-
-}  // namespace detail
 
 autograd::TensorPtr ring_attention_sdpa(
     const autograd::TensorPtr& query,
@@ -132,7 +420,8 @@ autograd::TensorPtr ring_attention_sdpa(
     const autograd::TensorPtr& value,
     const std::optional<autograd::TensorPtr>& mask,
     const ttml::metal::AttentionMaskType mask_type,
-    const std::optional<bool> reuse_forward_kv_requested) {
+    const std::optional<bool> reuse_forward_kv_requested,
+    const std::optional<core::distributed::CpSharding> cp_sharding) {
     if (!autograd::ctx().is_parallelism_context_initialized() ||
         !autograd::ctx().get_parallelism_context().is_cp_enabled()) {
         return ttml::ops::scaled_dot_product_attention(query, key, value, mask);
@@ -153,6 +442,15 @@ autograd::TensorPtr ring_attention_sdpa(
     TT_FATAL(
         mask_type != ttml::metal::AttentionMaskType::Arbitrary,
         "Arbitrary attention mask is not supported in CP mode, use None or Causal");
+
+    switch (cp_sharding.value_or(pctx.get_cp_config().sharding)) {
+        case core::distributed::CpSharding::Contiguous: break;
+        case core::distributed::CpSharding::ZigZag:
+            TT_FATAL(
+                mask_type == ttml::metal::AttentionMaskType::Causal,
+                "Zig-zag CP sharding balances causal attention; use contiguous CP sharding without a causal mask");
+            return ring_attention_sdpa_zigzag(query, key, value, ring_size, cp_axis_value, reuse_forward_kv);
+    }
 
     auto [batch_num, heads, seq_len_local, dim] = query_tensor.logical_shape().to_array_4D();
     // Initialize current K and V (will be ring-shifted each step)
@@ -192,22 +490,8 @@ autograd::TensorPtr ring_attention_sdpa(
         std::ref(*mesh_device));
 
     ttnn::Tensor output_tensor = ttnn::empty_like(query_tensor);
-    ttnn::Tensor intermediate_tensor = ttnn::empty(
-        ttnn::Shape{batch_num, heads, seq_len_local, 32U},
-        ttnn::DataType::FLOAT32,
-        ttnn::Layout::TILE,
-        mesh_device,
-        ttnn::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM));
-
-    // "no contribution" intermediate: logsumexp = -inf (col 0), rest zeros
-    // exp(-inf) = 0, so this chunk contributes nothing to the combined softmax
-    ttnn::Tensor col0_neg_inf = ttnn::full(
-        ttnn::Shape{batch_num, heads, seq_len_local, 1U},
-        -std::numeric_limits<float>::infinity(),
-        ttnn::DataType::FLOAT32,
-        ttnn::Layout::TILE,
-        std::ref(*mesh_device));
-    ttnn::Tensor no_contrib_intermediate = pad_lse_to_intermediates_layout(col0_neg_inf);
+    ttnn::Tensor intermediate_tensor = make_intermediates(query_tensor, seq_len_local);
+    ttnn::Tensor no_contrib_intermediate = make_no_contrib_intermediates(query_tensor, seq_len_local);
 
     for (uint32_t step = 0; step < ring_size; ++step) {
         // For causal masking, initialize intermediate_tensor to "no contribution" values
@@ -228,8 +512,9 @@ autograd::TensorPtr ring_attention_sdpa(
             mask_type,
             ttml::metal::ops::ring_sdpa_fw::RingDirection::Backward);
 
-        // Fold this step's partial result into the FP32 accumulator and the running lse.
-        detail::online_softmax_merge(output_accum, global_lse, output_tensor, intermediate_tensor);
+        // Fold this step's partial result into the FP32 accumulator and the running lse. Step 0 writes every row of
+        // output_tensor on every device, so a step a device skips re-merges a finite output with weight 0.
+        online_softmax_merge(output_accum, global_lse, output_tensor, intermediate_tensor);
 
         if (step < ring_size - 1) {
             if (reuse_forward_kv) {
