@@ -1,17 +1,24 @@
 # SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Our own GPTQ calibration of the routed experts to BFP4, in the cache's baked domain (opt-in, host / CPU only).
+"""Our own GPTQ calibration of the routed experts to BFP4 / BFP8, in the cache's baked domain (opt-in).
 
 Three steps; the result is ``codes:DIR`` (``L{nn}.pt``) for ``convert.variant --experts-from`` (convert/gptq_codes.py):
 
-1. corpus   python -m models.demos.inkling2_mini.convert.gptq_calib corpus --out calib/ids.pt --chat chat.jsonl \\
-                --code-root CODE_DIR --prose-root DOCS_DIR
-   Token sequences (chat-template rendered): ultrachat conversations, repo source files and docs as user
-   messages. None of the golden / gate prompts are used.
+1. corpus   (host) python -m models.demos.inkling2_mini.convert.gptq_calib corpus --out calib/ids.pt \\
+                --chat chat:12:chat.jsonl --ask "code:6:CODE_DIR:.py,.cpp,.hpp:Explain what this code does." \\
+                --text book:BOOK.txt@0.2
+   Token sequences of ``--seq`` tokens (2048), in command-line order. ``--chat KIND:N:FILE``: N sequences of whole
+   conversations (jsonl, one message list per line) through the chat template. ``--ask KIND:N:ROOT:EXTS:QUESTION``:
+   the same with each file under ROOT as one user message (QUESTION, then the file's first 12000 characters).
+   ``--text KIND:FILE[,FILE...][@FRAC]``: one sequence of raw text, from FRAC (0..1) of the joined files. KIND
+   names the domain (chat, code, book, ...) for ``weights``. Use none of the golden / gate prompts.
+   ``weights --ids IDS... --share chat=.35,code=.26,... --out w.json`` writes the ``solve --weights`` map that gives
+   each kind that share of the Hessians.
 2. capture  (card) prefill each sequence on the tt model with ``Inkling2Prefill.moe_tap`` set: writes per
    application and sequence the MoE input x (bf16 [n, H], after mlp_norm) and the routed expert ids [n, 8].
-3. solve    python -m models.demos.inkling2_mini.convert.gptq_calib solve --ckpt CKPT --capture calib/ --out codes/
+3. solve    (host, CPU only) python -m models.demos.inkling2_mini.convert.gptq_calib solve --ckpt CKPT \\
+                --capture calib/ --out codes/
    Per layer (all its applications: the loop layers 6-17 see three), per expert: H = X^T X of the routed inputs,
    GPTQ of W_gate_up [2I, H] (act order, lazy blocks of 128, damp 0.01), then h = softcapped SwiGLU of the
    quantized gate_up, H_down = h^T h and GPTQ of W_down [H, I] (damp 1.0). Experts with < 16 routed tokens are
@@ -37,53 +44,86 @@ SEQ = 2048
 
 
 # ---------------------------------------------------------------- 1. corpus
+SKIP = ("inkling", "third_party", ".git/", "build_", "python_env", "generated")  # --ask leaves these paths out
+
+
 def corpus(args):
     from transformers import AutoTokenizer
 
     tok = AutoTokenizer.from_pretrained(args.tokenizer)
-    chat = [json.loads(l) for l in open(args.chat)]
-    seqs, kinds = [], []
+    enc = lambda s: tok(s, add_special_tokens=False)["input_ids"]  # noqa: E731
+    seq, seqs = args.seq, []  # (ids, kind, source names)
 
-    def pack(msgs_iter, n, kind):
-        cur = []
-        for msgs in msgs_iter:
-            cur += tok(tok.apply_chat_template(msgs, tokenize=False), add_special_tokens=False)["input_ids"]
-            while len(cur) >= SEQ:
-                seqs.append(cur[:SEQ])
-                kinds.append(kind)
-                cur = []  # next sequence starts at a conversation start
-                if kinds.count(kind) == n:
+    def pack(convs, n, kind):
+        """n sequences of whole conversations (name, messages); each one starts at a conversation start."""
+        cur, src = [], []
+        for name, msgs in convs:
+            cur += enc(tok.apply_chat_template(msgs, tokenize=False))
+            src.append(name)
+            if len(cur) >= seq:
+                seqs.append((cur[:seq], kind, ",".join(src)))
+                cur, src = [], []
+                n -= 1
+                if n == 0:
                     return
+        raise SystemExit(f"{kind}: the source ends {n} sequences of {seq} tokens short")
 
-    def files(root, exts, skip):
-        for p in sorted(Path(root).rglob("*")):
-            if p.suffix in exts and p.is_file() and not any(s in str(p) for s in skip) and p.stat().st_size > 4000:
-                yield p
-
-    def as_user(paths, ask):
-        for p in paths:
-            text = p.read_text(errors="ignore")[:12000]
-            yield [{"role": "user", "content": f"{ask}\n\n{text}"}]
-
-    pack(iter(chat), args.n_chat, "chat")
-    skip = ("inkling", "third_party", "/.git/", "build_", "python_env", "generated")
-    pack(
-        as_user(files(args.code_root, {".py", ".cpp", ".hpp"}, skip), "Explain what this code does."),
-        args.n_code,
-        "code",
-    )
-    pack(as_user(files(args.prose_root, {".md"}, skip), "Summarize this document."), args.n_prose, "prose")
-    ids = torch.tensor(seqs, dtype=torch.int32)
+    for how, spec in getattr(args, "sources", None) or ():
+        if how == "chat":
+            kind, n, path = spec.split(":", 2)
+            with open(path) as f:
+                pack([(f"{Path(path).name} {i}", json.loads(line)) for i, line in enumerate(f)], int(n), kind)
+        elif how == "ask":
+            kind, n, root, exts, ask = spec.split(":", 4)
+            files = [
+                p
+                for p in sorted(Path(root).rglob("*"))
+                if p.suffix in exts.split(",") and p.is_file() and p.stat().st_size > 4000
+                if not any(s in str(p.relative_to(root)) for s in SKIP)
+            ]
+            text = lambda p: p.read_text(errors="ignore")[:12000]  # noqa: E731
+            pack(((p.name, [{"role": "user", "content": f"{ask}\n\n{text(p)}"}]) for p in files), int(n), kind)
+        else:  # text
+            kind, rest = spec.split(":", 1)
+            names, _, frac = rest.partition("@")
+            text = "\n\n".join(Path(f).read_text(errors="ignore") for f in names.split(","))
+            ids = enc(text[int(len(text) * float(frac or 0)) :])
+            if len(ids) < seq:
+                raise SystemExit(f"{kind}: {rest} gives {len(ids)} tokens, a sequence takes {seq}")
+            seqs.append((ids[:seq], kind, rest))
+    if not seqs:
+        raise SystemExit("corpus: give --chat, --ask or --text sources")
+    kinds = [k for _, k, _ in seqs]
+    ids = torch.tensor([s for s, _, _ in seqs], dtype=torch.int32)
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
-    torch.save({"ids": ids, "kinds": kinds}, args.out)
-    print(
-        f"{args.out}: {ids.shape[0]} x {SEQ} tokens ({', '.join(f'{k} {kinds.count(k)}' for k in dict.fromkeys(kinds))})"
-    )
+    torch.save({"ids": ids, "kinds": kinds, "src": [s for _, _, s in seqs], "first": args.first}, args.out)
+    count = ", ".join(f"{k} {kinds.count(k)}" for k in dict.fromkeys(kinds))
+    print(f"{args.out}: {ids.shape[0]} x {seq} tokens ({count})")
+
+
+def weights(args):
+    """``solve --weights`` map {sequence: weight}: every kind gets its --share of the Hessians' rows; the mean
+    weight over all tokens is 1."""
+    share = {k: float(v) for k, v in (p.split("=") for p in args.share.split(","))}
+    kind, ntok = {}, {}
+    for f in args.ids:
+        d = torch.load(f)
+        for i, k in enumerate(d["kinds"]):
+            kind[d.get("first", 0) + i] = k
+            ntok[k] = ntok.get(k, 0) + d["ids"].shape[1]
+    if missing := sorted(set(ntok) - set(share)):
+        raise SystemExit(f"--share names no {missing}")
+    total, norm = sum(ntok.values()), sum(share[k] for k in ntok)
+    w = {s: round(share[k] / norm * total / ntok[k], 4) for s, k in sorted(kind.items())}
+    Path(args.out).write_text(json.dumps(w, indent=0))
+    per_kind = dict(sorted({kind[s]: x for s, x in w.items()}.items()))
+    print(f"{args.out}: {len(w)} sequences, {total} tokens, weights {per_kind}")
 
 
 # ---------------------------------------------------------------- 2. capture (card)
 def capture(args):
     import ttnn
+    from models.demos.inkling2_mini.convert import cache as wcache
     from models.demos.inkling2_mini.tt.model import Inkling2Model
     from models.demos.inkling2_mini.tt.prefill_model import Inkling2Prefill
 
@@ -92,8 +132,9 @@ def capture(args):
     out.mkdir(parents=True, exist_ok=True)
     dev = ttnn.open_device(device_id=0, trace_region_size=256 << 20, l1_small_size=32768)
     try:
-        model = Inkling2Model(dev, max_ctx=d["ids"].shape[1], log=lambda s: None)
-        pf = Inkling2Prefill(model)
+        root = args.cache or wcache.DEFAULT_TILE_ROOT  # the chunked prefill reads the experts as tiles
+        model = Inkling2Model(dev, max_ctx=d["ids"].shape[1], root=root, log=lambda s: None)
+        pf = Inkling2Prefill(model, root=root)
         seq = {"i": 0}
 
         def tap(app, s, x, ids):
@@ -319,21 +360,30 @@ def solve(args):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
+
+    class Source(argparse.Action):  # --chat / --ask / --text in command-line order
+        def __call__(self, parser, ns, value, opt=None):
+            ns.sources = (getattr(ns, "sources", None) or []) + [(opt[2:], value)]
+
     c = sub.add_parser("corpus")
     c.add_argument("--out", required=True)
     c.add_argument("--tokenizer", default=os.environ.get("INKLING_CKPT"))
-    c.add_argument("--chat", required=True, help="jsonl, one message list per line")
-    c.add_argument("--code-root", required=True)
-    c.add_argument("--prose-root", required=True)
-    c.add_argument("--n-chat", type=int, default=12)
-    c.add_argument("--n-code", type=int, default=6)
-    c.add_argument("--n-prose", type=int, default=6)
+    c.add_argument("--chat", action=Source, metavar="KIND:N:FILE", help="jsonl, one message list per line")
+    c.add_argument("--ask", action=Source, metavar="KIND:N:ROOT:EXTS:QUESTION", help="files as user messages")
+    c.add_argument("--text", action=Source, metavar="KIND:FILE[,FILE...][@FRAC]", help="one raw-text sequence")
+    c.add_argument("--seq", type=int, default=SEQ, help="tokens per sequence")
+    c.add_argument("--first", type=int, default=0, help="number of this file's first sequence (capture names)")
+    w = sub.add_parser("weights")
+    w.add_argument("--ids", nargs="+", required=True, help="the corpus files of one calibration set")
+    w.add_argument("--share", required=True, help="KIND=FRACTION,...: each kind's share of the Hessians")
+    w.add_argument("--out", required=True)
     p = sub.add_parser("capture")
     p.add_argument("--ids", required=True)
     p.add_argument("--out", required=True)
     p.add_argument("--first", type=int, default=0)
     p.add_argument("--n", type=int, default=1000)
     p.add_argument("--chunk", type=int, default=None)
+    p.add_argument("--cache", type=Path, help="tile-layout cache to capture on (default: $INKLING_TILE_CACHE)")
     s = sub.add_parser("solve")
     s.add_argument("--ckpt", default=os.environ.get("INKLING_CKPT"))
     s.add_argument("--capture", required=True)
@@ -348,7 +398,7 @@ def main(argv=None):
     s.add_argument("--dn8", default="", help="layers whose down is solved on the BFP8 grid (q8 codes)")
     s.add_argument("--threads", type=int, default=int(os.environ.get("OMP_NUM_THREADS", "40")))
     args = ap.parse_args(argv)
-    {"corpus": corpus, "capture": capture, "solve": solve}[args.cmd](args)
+    {"corpus": corpus, "weights": weights, "capture": capture, "solve": solve}[args.cmd](args)
 
 
 if __name__ == "__main__":
