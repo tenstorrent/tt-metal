@@ -55,25 +55,6 @@ uint32_t per_device_seed(
                             : device->id());
 }
 
-uint32_t fmix32(uint32_t h) {
-    h ^= h >> 16;
-    h *= 0x85EBCA6Bu;
-    h ^= h >> 13;
-    h *= 0xC2B2AE35u;
-    h ^= h >> 16;
-    return h;
-}
-
-// Every core's SFPU PRNG starts from its own seed, so cores sharing a seed would emit identical masks.
-// Hashed rather than strided: Quasar's init_prng_seed seeds lane i with seed + i * 0x9E3779B9, so a linear
-// per-core stride would make one core's lanes shifted copies of another's. All-ones is the XNOR-LFSR lock-up
-// state and dropout_init passes the seed to init_prng_seed unfiltered.
-// Shared by the cache-miss build and override_runtime_arguments, which must agree bit-for-bit.
-uint32_t per_core_seed(uint32_t seed, uint32_t tile_offset) {
-    const uint32_t core_seed = fmix32(seed ^ fmix32(tile_offset + 0x632BE5ABu));
-    return core_seed == 0xFFFFFFFFu ? 0xFFFFFFFEu : core_seed;
-}
-
 }  // namespace
 
 using namespace tt::constants;
@@ -203,7 +184,7 @@ inline tt::tt_metal::KernelSpec create_compute_kernel(
                 },
             },
         .compile_time_args = std::move(compile_time_args),
-        .runtime_arg_schema = {.runtime_arg_names = {"seed"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"seed", "start_tile"}},
         .hw_config =
             ComputeHardwareConfig{
                 .fpu_math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
@@ -278,13 +259,19 @@ inline void assign_per_core_runtime_args(DropoutKernelRunArgs& run_args, const D
     using namespace tt::tt_metal;
 
     for_each_dropout_core(split, [&](const DropoutCoreWork& work) {
-        // Compute kernel: (seed)
-        const uint32_t core_seed = per_core_seed(seed, work.tile_offset);
+        // Compute kernel: (seed, start_tile). Every core keys the same stream, so a tile's mask depends only on
+        // the seed and the tile's index, not on the work split.
         if (work.in_group_1) {
-            AddRuntimeArgsForNode(run_args.compute_group_1.runtime_arg_values, work.core, {{"seed", core_seed}});
+            AddRuntimeArgsForNode(
+                run_args.compute_group_1.runtime_arg_values,
+                work.core,
+                {{"seed", seed}, {"start_tile", work.tile_offset}});
         } else {
             TT_FATAL(run_args.compute_group_2.has_value(), "Core group 2 descriptor should be present");
-            AddRuntimeArgsForNode(run_args.compute_group_2->runtime_arg_values, work.core, {{"seed", core_seed}});
+            AddRuntimeArgsForNode(
+                run_args.compute_group_2->runtime_arg_values,
+                work.core,
+                {{"seed", seed}, {"start_tile", work.tile_offset}});
         }
 
         // Reader kernel: (number_of_tiles, offset_in_tiles).  src/dst reach the kernels as the input /
@@ -309,15 +296,16 @@ inline void assign_per_core_runtime_args(DropoutKernelRunArgs& run_args, const D
     });
 }
 
-// The compute kernels' per-core seeds for `seed`: the run args in which the devices of a mesh differ.
-tt::tt_metal::ProgramRunArgs per_core_seed_run_args(const DropoutCoreSplit& split, uint32_t seed) {
+// The compute kernels' run args for `seed`: the run args in which the devices of a mesh differ.
+tt::tt_metal::ProgramRunArgs compute_seed_run_args(const DropoutCoreSplit& split, uint32_t seed) {
     using namespace tt::tt_metal;
 
     KernelRunArgs compute_group_1{.kernel = kComputeGroup1};
     KernelRunArgs compute_group_2{.kernel = kComputeGroup2};
     for_each_dropout_core(split, [&](const DropoutCoreWork& work) {
         auto& compute = work.in_group_1 ? compute_group_1 : compute_group_2;
-        AddRuntimeArgsForNode(compute.runtime_arg_values, work.core, {{"seed", per_core_seed(seed, work.tile_offset)}});
+        AddRuntimeArgsForNode(
+            compute.runtime_arg_values, work.core, {{"seed", seed}, {"start_tile", work.tile_offset}});
     });
     ProgramRunArgs run_args;
     run_args.kernel_run_args.push_back(std::move(compute_group_1));
@@ -327,14 +315,14 @@ tt::tt_metal::ProgramRunArgs per_core_seed_run_args(const DropoutCoreSplit& spli
     return run_args;
 }
 
-// Every device of `range` with its per-core seeds.
+// Every device of `range` with its seed.
 std::vector<ttnn::device_operation::DeviceRunArgs> per_device_seed_run_args(
     const DropoutParams& args, const Tensor& input, const ttnn::MeshCoordinateRange& range) {
     const DropoutCoreSplit split = dropout_core_split(input);
     std::vector<ttnn::device_operation::DeviceRunArgs> per_device;
     for (const auto& coord : range) {
         per_device.push_back(
-            {.device = coord, .values = per_core_seed_run_args(split, per_device_seed(args, coord, input))});
+            {.device = coord, .values = compute_seed_run_args(split, per_device_seed(args, coord, input))});
     }
     return per_device;
 }
@@ -550,7 +538,7 @@ tt::tt_metal::ProgramRunArgs DropoutProgramFactory::override_runtime_arguments(
         TT_FATAL(work.in_group_1 || has_compute_group_2, "Core group 2 kernel should be present");
         auto& compute_run_args = work.in_group_1 ? compute_group_1_run_args : compute_group_2_run_args;
         AddRuntimeArgsForNode(
-            compute_run_args.runtime_arg_values, work.core, {{"seed", per_core_seed(seed, work.tile_offset)}});
+            compute_run_args.runtime_arg_values, work.core, {{"seed", seed}, {"start_tile", work.tile_offset}});
     });
 
     run_args.kernel_run_args = {

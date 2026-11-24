@@ -6,7 +6,7 @@
 /**
  * @file scalar.hpp
  * @brief Scalar-parameter SFPU op structs — Threshold, Clamp, AddUnary, SubUnary, MulUnary,
- *        DivUnary, RsubUnary, RdivUnary, Dropout.
+ *        DivUnary, RsubUnary, RdivUnary, Dropout, DropoutKeyed.
  */
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
@@ -40,6 +40,10 @@ struct RsubUnary;
 // Dropout — runtime probability + scale_factor.
 template <Dst Slot = Dst::D0>
 struct Dropout;
+
+// DropoutKeyed — runtime probability + scale_factor, keyed by seed and tile index.
+template <Dst Slot = Dst::D0>
+struct DropoutKeyed;
 
 // RdivUnary — own header with its own init.
 template <Dst Slot = Dst::D0>

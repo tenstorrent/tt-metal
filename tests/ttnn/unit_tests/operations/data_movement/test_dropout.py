@@ -8,6 +8,8 @@ import pytest
 import ttnn
 import numpy as np
 
+from tests.ttnn.unit_tests.operations.eltwise.keyed_rand_reference import reference_draw31
+
 
 def test_dopout(device):
     t = torch.ones(
@@ -188,8 +190,84 @@ def test_dropout_mask_differs_across_cores(device, use_per_device_seed):
     device.disable_and_clear_program_cache()
 
 
+def dropout_reference_mask(seed, probability, tiles_h, tiles_w):
+    """The mask of a [tiles_h * 32, tiles_w * 32] tensor: tiles are indexed in row-major tile order."""
+    draw31 = reference_draw31(seed, range(tiles_h * tiles_w))
+    dropped = draw31 < int(np.float64(2**31 - 1) * probability)
+    return torch.from_numpy(dropped.reshape(tiles_h, tiles_w, 32, 32).transpose(0, 2, 1, 3).reshape(tiles_h * 32, -1))
+
+
+@pytest.mark.parametrize("seed", [0, 1234, 0xFFFFFFFF])
+@pytest.mark.parametrize("probability", [0.1, 0.5])
+def test_dropout_mask_matches_host_reference(device, seed, probability):
+    """The mask of each element is a function of the seed and its position alone, reproducible on the host."""
+    tiles_h, tiles_w = 3, 5
+    t = torch.ones((1, 1, tiles_h * 32, tiles_w * 32))
+    tensor = ttnn.from_torch(t, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    scale = 1.0 / (1.0 - probability)
+    out = ttnn.to_torch(
+        ttnn.experimental.dropout(tensor, probability=probability, scale=scale, seed=seed, use_per_device_seed=False)
+    ).float()[0, 0]
+    expected_mask = dropout_reference_mask(seed, probability, tiles_h, tiles_w)
+    assert torch.equal(out == 0, expected_mask)
+    kept = out[~expected_mask]
+    assert torch.allclose(kept, torch.full_like(kept, scale), rtol=1e-2, atol=0)
+
+
+def test_dropout_mask_does_not_depend_on_work_split(device):
+    """A tile's mask depends on its index, not on how many tiles each core gets: the leading tiles of a large
+    tensor, split over every core several tiles at a time, draw the masks of a small tensor's one tile per core."""
+    grid = device.compute_with_storage_grid_size()
+    small_tiles = 8
+    large_tiles = grid.x * grid.y * 3 + 5
+
+    def masks(num_tiles):
+        t = torch.ones((1, 1, num_tiles * 32, 32))
+        tensor = ttnn.from_torch(t, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        out = ttnn.experimental.dropout(tensor, probability=0.3, scale=2.0, seed=77, use_per_device_seed=False)
+        return ttnn.to_torch(out).float()[0, 0] == 0
+
+    assert torch.equal(masks(large_tiles)[: small_tiles * 32], masks(small_tiles))
+
+
+def test_dropout_rebuilds_the_mask_for_another_tensor(device):
+    """tt-train's dropout backward re-runs dropout on the gradient with the forward seed. The gradient has other
+    values and may live in another memory config; the mask must be the same."""
+    shape = (2, 3, 64, 96)
+    forward = ttnn.from_torch(torch.ones(shape), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    gradient = ttnn.from_torch(
+        torch.rand(shape) + 0.5,
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    kwargs = dict(probability=0.25, scale=1.0 / 0.75, seed=2024, use_per_device_seed=False)
+    forward_mask = ttnn.to_torch(ttnn.experimental.dropout(forward, **kwargs)) == 0
+    backward_mask = ttnn.to_torch(ttnn.experimental.dropout(gradient, **kwargs)) == 0
+    assert torch.equal(forward_mask, backward_mask)
+
+
+def test_dropout_drops_vertical_neighbours_independently(device):
+    """With p = 0.1, an element below a dropped element is dropped with probability p, as for independent draws.
+    The per-lane SFPU PRNG this replaced gave 0.49."""
+    num_tiles = 64
+    t = torch.ones((1, 1, num_tiles * 32, 32))
+    tensor = ttnn.from_torch(t, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    out = ttnn.experimental.dropout(tensor, probability=0.1, scale=1.0, seed=5, use_per_device_seed=False)
+    dropped = (ttnn.to_torch(out).float()[0, 0] == 0).reshape(num_tiles, 32, 32)
+    above, below = dropped[:, :-1, :], dropped[:, 1:, :]
+    assert abs(below[above].float().mean().item() - 0.1) < 0.02
+    two_down, two_left = dropped[:, 2:, 1:], dropped[:, :-2, :-1]
+    assert abs(two_down[two_left].float().mean().item() - 0.1) < 0.02
+
+
 # 1 tile: one core. grid + 3 tiles: every core, in two compute groups with separate compute kernels.
-@pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4"), pytest.param((8, 4), id="8x4")], indirect=True)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [pytest.param((1, 2), id="1x2"), pytest.param((2, 4), id="2x4"), pytest.param((8, 4), id="8x4")],
+    indirect=True,
+)
 @pytest.mark.parametrize("tiles", ["one", "two_groups"])
 def test_dropout_per_device_seed_on_mesh(mesh_device, tiles):
     """use_per_device_seed on a mesh: each device draws the mask of use_per_device_seed=False with seed + its device
