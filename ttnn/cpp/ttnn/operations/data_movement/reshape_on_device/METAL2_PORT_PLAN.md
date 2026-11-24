@@ -3,7 +3,7 @@
 Port plan for `ttnn/cpp/ttnn/operations/data_movement/reshape_on_device`, ported from `ProgramDescriptor` factories to Metal 2.0.
 Written during the inventory and planning steps; committed alongside the port for review.
 
-Line numbers in the Legacy Inventory are those of the legacy files at `4571c481b8f` (the commit before the port). They can be checked with `git show 4571c481b8f:<path>`.
+Line numbers in the Legacy Inventory are those of the legacy files on `origin/main`, checked at `650b9d420d6`. They can be checked with `git show 650b9d420d6:<path>`.
 
 ## Legacy Inventory
 

@@ -113,6 +113,9 @@ ttnn::device_operation::ProgramArtifacts ReshapeRMProgramFactory::create_program
                 .runtime_arg_names =
                     {"num_sticks_per_core_read", "num_read_per_barrier", "num_sticks_per_dfb_push", "start_id"},
             },
+        // The implicit-sync opt-out is left at its default. On Quasar this reader may need it, because it writes
+        // sticks at running offsets into the DFB between one reserve_back and one push_back. Each stick is part of
+        // an entry or spans several entries, depending on the old and new stick sizes. The Quasar uplift decides.
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
@@ -139,6 +142,8 @@ ttnn::device_operation::ProgramArtifacts ReshapeRMProgramFactory::create_program
                 .runtime_arg_names =
                     {"num_sticks_per_core_read", "num_read_per_barrier", "num_sticks_per_dfb_push", "start_id"},
             },
+        // The implicit-sync opt-out is left at its default here too. This writer issues one NoC write per DFB entry
+        // between one wait_front and one pop_front. The Quasar uplift decides whether it needs the opt-out.
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
