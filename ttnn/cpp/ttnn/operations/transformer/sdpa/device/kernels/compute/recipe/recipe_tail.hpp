@@ -140,6 +140,9 @@ static uint32_t recipe_ring_fresh_groups;
 static uint8_t recipe_ring_psum_w[32];
 // The fused chunk's K tiles are all full (no partial block tile): a subblock whose blocks a group keeps runs whole.
 static bool recipe_ring_full_tiles;
+// Ring kernels without block mask rows: the fused chunk's K tiles before the first one masked whole by key padding
+// (set per chunk; a file static, not a fused-chunk local, so other builds' closures stay as they were).
+static uint32_t recipe_ring_kt_live;
 
 // Block mask rows: a fused-chunk group whose QK runs (neither skipped nor fresh), and a check unit with one (a unit
 // with none issues no check and reads no verdict). Free functions, not lambdas: a fused-chunk lambda calling a local

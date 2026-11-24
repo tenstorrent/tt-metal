@@ -85,6 +85,15 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         }
     }
 
+    // Key padding (ring kernels without block mask rows): K tiles at or past the chunk's valid keys are masked whole,
+    // so their P is exactly zero. QK subblocks starting there are not run and PV stops at the last valid tile (the
+    // result is the same bits; the masked subblocks' P tiles are never read).
+    constexpr bool tail_clip = recipe::ring && !row_masks;
+    if constexpr (tail_clip) {
+        const uint32_t live = (recipe_ring_mask.valid_rows + tt::constants::TILE_WIDTH - 1) / tt::constants::TILE_WIDTH;
+        recipe_ring_kt_live = live == 0 || live > KT ? KT : live;
+    }
+
     // Runtime unpack-A / pack format tracking: the chunk interleaves broadcasts, matmuls, reduces and folds.
     uint32_t srca = cb_qkt_im;  // step entry state
     uint32_t pack_cb = cb_qkt_im;
@@ -197,6 +206,11 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         const uint32_t row0 = H * g;
         uint32_t col0 = kb * sbw;
         uint32_t w = kb_w(kb);
+        if constexpr (tail_clip) {
+            if (col0 >= recipe_ring_kt_live) {
+                return;  // all keys masked: P is zero, and nothing reads it
+            }
+        }
         // Row sums: the group's first subblock packs them, the others L1-accumulate.
         bool psum_acc = kb > 0;
         [[maybe_unused]] uint32_t span_end = 0;
@@ -468,6 +482,24 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         }
     };
 
+    // Key padding: PV over the piece's tiles before the first masked-whole one (tail_clip). With none, only the waits a
+    // PV would do (V, and the group's scores before the chunk pops them). First pieces always hold a valid tile.
+    [[maybe_unused]] auto pv_piece_live =
+        [&](uint32_t g, uint32_t k0, uint32_t k_len, uint32_t plane, bool accumulate) SDPA_FUSED_STEP {
+            const uint32_t end = k0 + k_len < recipe_ring_kt_live ? k0 + k_len : recipe_ring_kt_live;
+            if (end > k0) {
+                pv_piece(g, k0, end - k0, plane, accumulate);
+                return;
+            }
+            if (!v_ready) {
+                if constexpr (!v_in_k) {
+                    CircularBuffer(cb_v_in).wait_front(KT * vDHt);
+                }
+                v_ready = true;
+            }
+            CircularBuffer(cb_qkt_im).wait_front((H * g + rows(g)) * KT);
+        };
+
     // Block mask: PV over the piece's runs of valid K tiles only (the others' P is zero), accumulating onto O. With no
     // valid tile, only the waits a PV would do (V, and the group's scores before the chunk pops them).
     [[maybe_unused]] auto pv_piece_kept = [&](uint32_t g, uint32_t k0, uint32_t k_len) SDPA_FUSED_STEP {
@@ -595,7 +627,11 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         srca = cb_qkt_im;
         pack_to_unpack_barrier();
         for (uint32_t piece = 0; piece < n_pieces; ++piece) {
-            pv_piece(g, piece_k0(piece), piece_k0(piece + 1) - piece_k0(piece), vDHt, piece > 0);
+            if constexpr (tail_clip) {
+                pv_piece_live(g, piece_k0(piece), piece_k0(piece + 1) - piece_k0(piece), vDHt, piece > 0);
+            } else {
+                pv_piece(g, piece_k0(piece), piece_k0(piece + 1) - piece_k0(piece), vDHt, piece > 0);
+            }
         }
         pack_to_unpack_barrier();
         const uint32_t read_base = is_last_iter ? 0 : row0;
@@ -764,6 +800,8 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
             if (do_pv) {
                 if constexpr (recipe::ring && recipe::ring_mask == 3) {
                     pv_piece_kept(pg, piece_k0(piece), piece_k0(piece + 1) - piece_k0(piece));
+                } else if constexpr (tail_clip) {
+                    pv_piece_live(pg, piece_k0(piece), piece_k0(piece + 1) - piece_k0(piece), 0, true);
                 } else {
                     pv_piece(pg, piece_k0(piece), piece_k0(piece + 1) - piece_k0(piece), 0, true);
                 }
