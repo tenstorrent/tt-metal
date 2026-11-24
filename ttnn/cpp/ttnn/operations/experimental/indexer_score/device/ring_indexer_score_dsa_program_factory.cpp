@@ -202,13 +202,7 @@ ProgramDescriptor build_ring_program_descriptor(
     }
     // Only the largest lane count is needed on the host; kernels reconstruct physical starts.
     const indexer_ring_schedule::Geometry schedule_geometry{
-        ring_size,
-        units_per_shard,
-        sll_t,
-        KC,
-        num_blocks,
-        cols_used,
-        ring_schedule::rotation_enabled(fused.topology, ring_size)};
+        ring_size, units_per_shard, sll_t, KC, num_blocks, cols_used};
     uint32_t max_bands = 0;
     for (uint32_t lane = 0; lane < num_blocks * cols_used; ++lane) {
         max_bands = std::max(max_bands, indexer_ring_schedule::band_count(schedule_geometry, lane));
@@ -500,8 +494,7 @@ ProgramDescriptor build_ring_program_descriptor(
         {"schedule_max_bands", max_bands},
         {"schedule_ring_size", ring_size},
         {"schedule_units", units_per_shard},
-        {"schedule_cols", cols_used},
-        {"schedule_rotate", ring_schedule::rotation_enabled(fused.topology, ring_size) ? 1u : 0u}};
+        {"schedule_cols", cols_used}};
     reader_kernel.named_compile_time_args = schedule_args;
     writer_kernel.named_compile_time_args = schedule_args;
     compute_kernel.named_compile_time_args = schedule_args;
