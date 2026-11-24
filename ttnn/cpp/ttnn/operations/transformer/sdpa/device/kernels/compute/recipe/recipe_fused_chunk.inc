@@ -90,7 +90,8 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
     // result is the same bits; the masked subblocks' P tiles are never read).
     constexpr bool tail_clip = recipe::ring && !row_masks;
     if constexpr (tail_clip) {
-        const uint32_t live = (recipe_ring_mask.valid_rows + tt::constants::TILE_WIDTH - 1) / tt::constants::TILE_WIDTH;
+        constexpr uint32_t tile_keys = 32;  // keys per K tile (recipe_valid_k_columns)
+        const uint32_t live = (recipe_ring_mask.valid_rows + tile_keys - 1) / tile_keys;
         recipe_ring_kt_live = live == 0 || live > KT ? KT : live;
     }
 
