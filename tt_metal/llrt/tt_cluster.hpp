@@ -378,7 +378,7 @@ public:
     }
 
     /// Returns true on a Mock target that builds no firmware and links no kernels: Quasar, unless
-    /// TT_METAL_QUASAR_MOCK_JIT is set.
+    /// TT_METAL_QUASAR_MOCK_JIT=1.
     bool mock_skips_kernel_jit() const {
         return this->target_type_ == tt::TargetDevice::Mock && this->arch_ == tt::ARCH::QUASAR &&
                !this->rtoptions_.get_quasar_mock_jit();
