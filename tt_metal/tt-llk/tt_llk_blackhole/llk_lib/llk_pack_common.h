@@ -104,11 +104,14 @@ inline void _llk_pack_dest_section_done_()
 {
     constexpr bool offset_nops = (words & 1) == 0;
     constexpr bool by_branch   = (words & 2) != 0;
+    // words bit 2: main's release whatever the kernel's traits (fast tilize, whose uninit waits on the last tilize MOP).
+    constexpr bool main_order  = (words & 4) != 0;
     // The packer takes the DEST offset when it accepts a PACR, so the next half's offset goes ahead of the drain wait, except with
     // fp32 DEST and an unpack to DEST, or an unpack-bound matmul (llk_pack_late_start), where the earlier pack start contends
-    // with the unpackers for L1; a pack-bound matmul takes it there too.
+    // with the unpackers for L1; a pack-bound matmul takes it there too. Kernels whose math waits on the release keep main's order
+    // (pack_main_release).
     constexpr bool pack_bound   = ckernel::packer::llk_pack_matmul_pack_bound<static_cast<std::uint32_t>(Dst)>();
-    constexpr bool offset_first = Dst == DstSync::SyncHalf && !pack_size_mode<Dst> &&
+    constexpr bool offset_first = Dst == DstSync::SyncHalf && !pack_size_mode<Dst> && !main_order && !ckernel::packer::llk_pack_main_release<static_cast<std::uint32_t>(Dst)>() &&
                                   (pack_bound || !((is_fp32_dest_acc_en && pack_reconfig_u2d<Dst>) ||
                                                    ckernel::packer::llk_pack_late_start<static_cast<std::uint32_t>(Dst)>(is_fp32_dest_acc_en) ||
                                                    ckernel::packer::llk_pack_copy<static_cast<std::uint32_t>(Dst)>(is_fp32_dest_acc_en)));

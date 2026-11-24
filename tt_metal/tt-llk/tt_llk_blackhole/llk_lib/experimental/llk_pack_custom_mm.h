@@ -15,6 +15,8 @@ namespace ckernel::packer
 {
 template <>
 inline constexpr bool pack_strides_writer<3> = true;
+template <>
+inline constexpr bool pack_main_release<1> = true;
 } // namespace ckernel::packer
 
 namespace ckernel
