@@ -21,7 +21,11 @@ from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
     docstring_interleaved_buffer_type_params,
     interleaved_memory_config,
 )
-from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import assert_exact, full_range_input
+from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import (
+    assert_exact,
+    block_shards,
+    full_range_input,
+)
 import ttnn
 
 torch.manual_seed(0)
@@ -2393,3 +2397,43 @@ def test_pad_rm_single_core_width_sharded_subaligned_input(device):
     )
 
     assert_tensors_equal(torch.nn.functional.pad(x, (0, 8)), ttnn.to_torch(output))
+
+
+# ROW_MAJOR block shards one row high on two or more shard columns: pad stages them through interleaved memory (#67023).
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+@pytest.mark.parametrize("shard_cols", [2, 4])
+@pytest.mark.parametrize("rows", [2, 3, 4])
+@pytest.mark.parametrize("shard_h", [1, 2], ids=["one_row_shard", "two_row_shard"])
+def test_pad_rm_into_block_shard_rows(device, shard_h, rows, shard_cols, dtype):
+    out_rows = rows * shard_h
+    x = full_range_input([1, 1, out_rows - 1, 16 * shard_cols], dtype)
+    t = ttnn.from_torch(x, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    output = ttnn.pad(
+        t,
+        padding=((0, 0), (0, 0), (0, 1), (0, 0)),
+        value=7.0,
+        memory_config=block_shards((shard_h, 16), rows, shard_cols),
+    )
+
+    assert_exact(torch.nn.functional.pad(x, (0, 0, 0, 1), value=7.0), ttnn.to_torch(output))
+
+
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+@pytest.mark.parametrize("shard_cols", [2, 4])
+@pytest.mark.parametrize("rows", [2, 3, 4])
+@pytest.mark.parametrize("shard_h", [1, 2], ids=["one_row_shard", "two_row_shard"])
+def test_pad_rm_from_block_shard_rows(device, shard_h, rows, shard_cols, dtype):
+    in_rows = rows * shard_h
+    x = full_range_input([1, 1, in_rows, 16 * shard_cols], dtype)
+    t = ttnn.from_torch(
+        x,
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=block_shards((shard_h, 16), rows, shard_cols),
+    )
+
+    output = ttnn.pad(t, padding=((0, 0), (0, 0), (0, 2), (0, 0)), value=7.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    assert_exact(torch.nn.functional.pad(x, (0, 0, 0, 2), value=7.0), ttnn.to_torch(output))

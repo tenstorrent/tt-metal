@@ -520,6 +520,16 @@ bool has_subaligned_shard_row(const tt::tt_metal::MemoryConfig& memory_config, u
 // shard as wide as the row, which `noc_async_*_sharded` move in one transfer.
 bool has_subaligned_split_row(const tt::tt_metal::TensorSpec& spec);
 
+// True for a ROW_MAJOR tensor whose rows each span several pages when the buffer folds the shard's outer
+// dims into the row's pages, e.g. a BLOCK/WIDTH shard one row high on two or more shard columns. The folded
+// page grid no longer says how many pages a row has, so `noc_async_*_sharded` place every row after the first
+// at the wrong pages (#67023).
+bool has_folded_split_row(const tt::tt_metal::TensorSpec& spec);
+
+// True when `noc_async_*_sharded` can't move this tensor's rows correctly: has_subaligned_split_row or
+// has_folded_split_row.
+bool needs_interleaved_row_staging(const tt::tt_metal::TensorSpec& spec);
+
 namespace detail {
 
 // False when no ROW_MAJOR tensor with this config has rows that span several pages. An ND shard spec can be
@@ -549,11 +559,11 @@ concept ShardRowLaunchFn =
         Tensor>;
 
 // Launches a device operation whose kernels move ROW_MAJOR rows with `noc_async_{read,write}_sharded` so that
-// it never gets a tensor with a sub-aligned split row (has_subaligned_split_row). Those helpers move a full
-// aligned page per shard row, so for such a tensor they drop or misplace part of every row (#58402 item 17).
-// Such an input is copied to interleaved memory of its buffer type first. Such an output is written to
-// interleaved memory of its buffer type, then copied into the memory config the operation would have given it,
-// or into `preallocated_output`.
+// it never gets a tensor whose rows those helpers can't move (needs_interleaved_row_staging). They move a full
+// aligned page per shard row, so for a sub-aligned split row they drop or misplace part of every row (#58402
+// item 17), and on a folded page grid they misplace every row after the first (#67023). Such an input is copied
+// to interleaved memory of its buffer type first. Such an output is written to interleaved memory of its buffer
+// type, then copied into the memory config the operation would have given it, or into `preallocated_output`.
 // - `output_memory_config`: the output config the operation was given. Only used to skip the check cheaply.
 // - `compute_output_spec()`: the spec the operation gives its output for `input` when there is no
 //   `preallocated_output`.
@@ -572,7 +582,7 @@ Tensor launch_with_aligned_shard_rows(
         // Some operations' compute_output_specs ignore a preallocated output, which is what they write to.
         const tt::tt_metal::TensorSpec output_spec =
             preallocated_output.has_value() ? preallocated_output->tensor_spec() : compute_output_spec();
-        if (has_subaligned_split_row(input.tensor_spec()) || has_subaligned_split_row(output_spec)) {
+        if (needs_interleaved_row_staging(input.tensor_spec()) || needs_interleaved_row_staging(output_spec)) {
             return detail::launch_through_interleaved(input, output_spec, preallocated_output, launch);
         }
     }
@@ -583,8 +593,8 @@ Tensor launch_with_aligned_shard_rows(
     // build, so an operation that breaks this fails instead of returning wrong values.
     Tensor output = launch(input, std::nullopt);
     TT_FATAL(
-        input.layout() != tt::tt_metal::Layout::ROW_MAJOR || !has_subaligned_split_row(output.tensor_spec()),
-        "An operation launched without staging produced a row-major output with sub-aligned split rows");
+        input.layout() != tt::tt_metal::Layout::ROW_MAJOR || !needs_interleaved_row_staging(output.tensor_spec()),
+        "An operation launched without staging produced a row-major output with sub-aligned or folded split rows");
     return output;
 }
 

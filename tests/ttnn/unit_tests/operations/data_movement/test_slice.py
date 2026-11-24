@@ -16,7 +16,11 @@ from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
     docstring_interleaved_buffer_type_params,
     interleaved_memory_config,
 )
-from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import assert_exact, full_range_input
+from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import (
+    assert_exact,
+    block_shards,
+    full_range_input,
+)
 from tests.ttnn.unit_tests.operations.data_movement.test_slice_write import offset_increment_tensor
 from tests.ttnn.unit_tests.operations.test_utils import round_up
 import math
@@ -3050,3 +3054,94 @@ def test_quasar_slice_nd_sharded_full_range_small_tile(device):
     output = ttnn.experimental.quasar.slice(tt_input, [0, 0, 0, 0], [1, 1, 64, 32], [1, 1, 1, 1])
 
     assert_equal(torch_input, ttnn.to_torch(output))
+
+
+# ROW_MAJOR BLOCK/WIDTH shards one row high on two or more shard columns: the buffer folds their page grid, which the
+# native sharded-row kernels can't index, so slice stages them through interleaved memory.
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+@pytest.mark.parametrize("shard_cols", [2, 4])
+@pytest.mark.parametrize("dim", [0, 2])
+def test_split_rm_two_row_block_shard_into_one_row_shards(device, dim, shard_cols, dtype):
+    # The outputs inherit the input's sharding, rescaled to (1, 16) shards.
+    x = full_range_input([2, 1, 2, 16 * shard_cols], dtype)
+    t = ttnn.from_torch(x, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    t = ttnn.to_memory_config(t, block_shards((2, 16), 2, shard_cols))
+
+    outputs = ttnn.split(t, 1, dim)
+
+    for expected, output in zip(torch.split(x, 1, dim), outputs):
+        assert_exact(expected, ttnn.to_torch(output))
+
+
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+@pytest.mark.parametrize("shard_cols", [2, 4])
+@pytest.mark.parametrize("rows", [2, 3, 4])
+@pytest.mark.parametrize("shard_h", [1, 2], ids=["one_row_shard", "two_row_shard"])
+def test_slice_rm_into_block_shard_rows(device, shard_h, rows, shard_cols, dtype):
+    out_rows = rows * shard_h
+    x = full_range_input([1, 1, 2 * out_rows, 16 * shard_cols], dtype)
+    t = ttnn.from_torch(x, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    output = ttnn.slice(
+        t,
+        [0, 0, 1, 0],
+        [1, 1, 1 + out_rows, 16 * shard_cols],
+        [1, 1, 1, 1],
+        memory_config=block_shards((shard_h, 16), rows, shard_cols),
+    )
+
+    assert_exact(x[:, :, 1 : 1 + out_rows, :], ttnn.to_torch(output))
+
+
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+@pytest.mark.parametrize("shard_cols", [2, 4])
+@pytest.mark.parametrize("rows", [2, 3, 4])
+@pytest.mark.parametrize("shard_h", [1, 2], ids=["one_row_shard", "two_row_shard"])
+def test_slice_rm_from_block_shard_rows(device, shard_h, rows, shard_cols, dtype):
+    in_rows = rows * shard_h
+    x = full_range_input([1, 1, in_rows, 16 * shard_cols], dtype)
+    t = ttnn.from_torch(
+        x,
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=block_shards((shard_h, 16), rows, shard_cols),
+    )
+
+    output = ttnn.slice(
+        t, [0, 0, 0, 16], [1, 1, in_rows, 16 * shard_cols], [1, 1, 1, 1], memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    assert_exact(x[:, :, :, 16:], ttnn.to_torch(output))
+
+
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+@pytest.mark.parametrize("shard_cols", [2, 4])
+def test_slice_rm_into_width_shard_of_one_row(device, shard_cols, dtype):
+    # A single row folds harmlessly: there is no second row to misplace.
+    x = full_range_input([1, 1, 3, 16 * shard_cols], dtype)
+    t = ttnn.from_torch(x, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    config = ttnn.create_sharded_memory_config(
+        (1, 16),
+        core_grid=ttnn.CoreGrid(y=1, x=shard_cols),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    output = ttnn.slice(t, [0, 0, 1, 0], [1, 1, 2, 16 * shard_cols], [1, 1, 1, 1], memory_config=config)
+
+    assert_exact(x[:, :, 1:2, :], ttnn.to_torch(output))
+
+
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+@pytest.mark.parametrize("rows", [2, 3, 4])
+def test_slice_rm_into_one_row_block_shard_on_one_shard_column(device, rows, dtype):
+    # The shard covers the whole row, so each row is one page.
+    x = full_range_input([1, 1, 2 * rows, 32], dtype)
+    t = ttnn.from_torch(x, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    output = ttnn.slice(
+        t, [0, 0, 1, 0], [1, 1, 1 + rows, 32], [1, 1, 1, 1], memory_config=block_shards((1, 32), rows, 1)
+    )
+
+    assert_exact(x[:, :, 1 : 1 + rows, :], ttnn.to_torch(output))

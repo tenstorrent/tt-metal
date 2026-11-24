@@ -1038,6 +1038,38 @@ bool has_subaligned_split_row(const tt::tt_metal::TensorSpec& spec) {
     return spec.compute_page_size_bytes() % alignment != 0;
 }
 
+bool has_folded_split_row(const tt::tt_metal::TensorSpec& spec) {
+    const auto& memory_config = spec.memory_config();
+    if (spec.layout() != tt::tt_metal::Layout::ROW_MAJOR || !detail::may_split_rows(memory_config)) {
+        return false;
+    }
+    uint32_t shard_width = 0;
+    if (memory_config.shard_spec().has_value()) {
+        shard_width = memory_config.shard_spec()->shape[1];
+    } else if (memory_config.nd_shard_spec().has_value()) {
+        shard_width = memory_config.nd_shard_spec()->shard_shape[-1];
+    } else {
+        return false;
+    }
+    const uint32_t row_width = spec.padded_shape()[-1];
+    if (shard_width == 0 || shard_width >= row_width) {
+        return false;
+    }
+    const auto sharding_args = spec.compute_buffer_sharding_args();
+    const auto& distribution_spec = sharding_args.buffer_distribution_spec();
+    if (!distribution_spec.has_value()) {
+        return false;
+    }
+    // The buffer squeezes its page grid; when a one-page-high shard dim is merged into the row's pages, the
+    // innermost dim no longer holds one row's pages and the kernels can't recover the row-to-page stride.
+    const uint32_t pages_per_row = tt::div_up(row_width, shard_width);
+    return distribution_spec->tensor_shape_in_pages()[-1] != pages_per_row;
+}
+
+bool needs_interleaved_row_staging(const tt::tt_metal::TensorSpec& spec) {
+    return has_subaligned_split_row(spec) || has_folded_split_row(spec);
+}
+
 namespace detail {
 
 Tensor launch_through_interleaved(
@@ -1048,15 +1080,15 @@ Tensor launch_through_interleaved(
     const auto interleaved = [](const tt::tt_metal::MemoryConfig& memory_config) {
         return tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, memory_config.buffer_type());
     };
-    const Tensor moved_input = has_subaligned_split_row(input.tensor_spec())
+    const Tensor moved_input = needs_interleaved_row_staging(input.tensor_spec())
                                    ? ttnn::to_memory_config(input, interleaved(input.memory_config()))
                                    : input;
     const auto& output_memory_config = output_spec.memory_config();
-    if (!has_subaligned_split_row(output_spec) && preallocated_output.has_value()) {
-        // Only the input was sub-aligned: write straight into the preallocated output.
+    if (!needs_interleaved_row_staging(output_spec) && preallocated_output.has_value()) {
+        // Only the input needed staging: write straight into the preallocated output.
         return launch(moved_input, std::nullopt);
     }
-    if (!has_subaligned_split_row(output_spec)) {
+    if (!needs_interleaved_row_staging(output_spec)) {
         // The output config was derived from the input before it moved; the moved input would derive another.
         Tensor output = launch(moved_input, output_memory_config);
         if (is_functionally_same_memory_config(output.memory_config(), output_memory_config)) {
