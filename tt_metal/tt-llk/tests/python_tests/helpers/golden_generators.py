@@ -4399,6 +4399,7 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 MathOperation.SfpuGegluTanh: self._geglu_tanh,
                 MathOperation.SfpuIntSumAdd: self._int_sum_add,
                 MathOperation.SfpuClampedSiluGlu: self._clamped_silu_glu,
+                MathOperation.SfpuSiluGlu: self._silu_glu,
                 MathOperation.SfpuSituGlu: self._situ_glu,
             }
         )
@@ -4969,6 +4970,17 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         gate = torch.tensor(sfpu_min(float(t1), limit), dtype=torch.float32)
         up = sfpu_max(sfpu_min(float(t2), limit), -limit)
         return float(gate * torch.sigmoid(gate) * up)
+
+    def _silu_glu(self, t1, t2):
+        # The exact product of the leaves in float64,
+        # each at its input as the SFPU reads it (a subnormal as 0).
+        a, b = (
+            torch.tensor(
+                0.0 if abs(float(t)) < 2.0**-126 else float(t), dtype=torch.float64
+            )
+            for t in (t1, t2)
+        )
+        return float((a / (1 + torch.exp(-a))) * (b))
 
     def _situ_glu(self, t1, t2):
         # calculate_situ_glu: softcap(gate, beta_gate) * sigmoid(gate) * softcap(up, beta_up), gate
