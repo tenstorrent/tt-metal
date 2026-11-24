@@ -102,6 +102,14 @@ std::vector<CoreCoord> dram_sender_logical_cores(
         "Could not resolve the NOC1 worker-endpoint subchannel for DRAM bank_id={} on device {}", bank_id, device_id);
 }
 
+CoreCoord dram_seat_logical_core(
+    const metal_SocDescriptor& soc_desc, uint32_t bank_id, uint32_t noc, ChipId device_id) {
+    TT_FATAL(noc < 2, "DRAM seat {}:{} on device {} names NoC {}, not 0 or 1", bank_id, noc, device_id, noc);
+    constexpr uint32_t free_core = 0;
+    constexpr uint32_t noc1_endpoint_core = 1;
+    return dram_sender_logical_cores(soc_desc, bank_id, device_id).at(noc == 0 ? noc1_endpoint_core : free_core);
+}
+
 std::vector<std::pair<CoreCoord, CoreRangeSet>> build_dram_sender_mapping(
     const distributed::MeshDevice* mesh_device,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,

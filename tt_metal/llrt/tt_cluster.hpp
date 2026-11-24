@@ -117,6 +117,9 @@ public:
     ARCH arch() const { return this->arch_; }
 
     const metal_SocDescriptor& get_soc_desc(ChipId chip) const;
+    // Narrows the DRAM cores Metal takes on `chip` (metal_SocDescriptor::restrict_metal_dram_cores). Call before
+    // anything reads get_metal_dram_cores.
+    void restrict_metal_dram_cores(ChipId chip, const std::vector<tt::tt_metal::CoreCoord>& translated_cores);
     tt::tt_metal::CoreCoord get_virtual_coordinate_from_logical_coordinates(
         ChipId chip_id, tt::tt_metal::CoreCoord logical_coord, const CoreType& core_type) const;
     tt::tt_metal::CoreCoord get_virtual_coordinate_from_physical_coordinates(

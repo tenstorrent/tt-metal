@@ -19,6 +19,7 @@
 #include "device/device_manager.hpp"
 #include "firmware_capability.hpp"
 #include "get_platform_architecture.hpp"
+#include "impl/buffers/dram_sender_topology.hpp"
 #include "impl/drisc_service/seat_lock.hpp"
 #include "impl/profiler/profiler_state_manager.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
@@ -166,6 +167,21 @@ std::optional<std::string> hold_dram_core_seats(
     return std::nullopt;
 }
 
+// Narrows the DRAM cores metal takes, on every chip, to the seats TT_METAL_DRAM_KERNEL_SEATS names. Throws when a seat
+// names a bank the chip does not have.
+void reserve_dram_kernel_seats(Cluster& cluster, const std::vector<std::pair<uint32_t, uint32_t>>& seats) {
+    for (const ChipId chip : cluster.all_chip_ids()) {
+        const metal_SocDescriptor& soc_desc = cluster.get_soc_desc(chip);
+        std::vector<CoreCoord> reserved;
+        reserved.reserve(seats.size());
+        for (const auto& [bank, noc] : seats) {
+            reserved.push_back(
+                soc_desc.get_physical_dram_core_from_logical(dram_seat_logical_core(soc_desc, bank, noc, chip)));
+        }
+        cluster.restrict_metal_dram_cores(chip, reserved);
+    }
+}
+
 // The qsr.s1 emulator model only routes device NoC traffic through the boot-programmed
 // address-translation tables, so tt-metal defaults it to the grendel_qsr1 ATT map.
 // Set the qsr.s1 ATT default from the simulator path alone. Only called when the user did not set
@@ -221,9 +237,25 @@ void MetalEnvImpl::initialize_base_objects() {
     // a throwaway TopologyDiscovery via get_cluster_type_from_cluster_desc().
     const bool is_base_routing_fw_enabled = cluster_->is_base_routing_fw_enabled();
     bool enable_dram_cores = should_enable_blackhole_dram_programmable_cores(*this->cluster_, *this->rtoptions_);
+    const bool dram_kernel_seats_named = !this->rtoptions_->get_dram_kernel_seats().empty();
+    if (dram_kernel_seats_named) {
+        TT_FATAL(
+            platform_arch == tt::ARCH::BLACKHOLE && cluster_->get_target_device_type() == tt::TargetDevice::Silicon,
+            "TT_METAL_DRAM_KERNEL_SEATS names DRAM cores of Blackhole silicon");
+        TT_FATAL(
+            enable_dram_cores,
+            "TT_METAL_DRAM_KERNEL_SEATS needs the DRAM programmable cores, which are off: the firmware is older than "
+            "19.12.0.0, or TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=0");
+        reserve_dram_kernel_seats(*this->cluster_, this->rtoptions_->get_dram_kernel_seats());
+    }
     if (enable_dram_cores && platform_arch == tt::ARCH::BLACKHOLE &&
         cluster_->get_target_device_type() == tt::TargetDevice::Silicon) {
         if (const auto busy = hold_dram_core_seats(*this->cluster_, this->dram_core_seat_locks_)) {
+            TT_FATAL(
+                !dram_kernel_seats_named,
+                "TT_METAL_DRAM_KERNEL_SEATS names the seat of {}, which another process (a DRISC service client or "
+                "metal) holds",
+                *busy);
             TT_FATAL(
                 !this->rtoptions_->get_blackhole_dram_programmable_cores_override().has_value(),
                 "TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1, but another process (a DRISC service client or "

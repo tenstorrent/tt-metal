@@ -367,6 +367,10 @@ class RunTimeOptions {
     //   false   = force disable (TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=0)
     std::optional<bool> blackhole_dram_programmable_cores_override;
 
+    // The only Blackhole DRAM cores metal takes for its kernels, as (bank, noc) seats (TT_METAL_DRAM_KERNEL_SEATS).
+    // Empty: metal takes every DRAM core it can program.
+    std::vector<std::pair<uint32_t, uint32_t>> dram_kernel_seats;
+
     // Log kernels compilation commands
     bool log_kernels_compilation_commands = false;
 
@@ -919,6 +923,8 @@ public:
     std::optional<bool> get_blackhole_dram_programmable_cores_override() const {
         return blackhole_dram_programmable_cores_override;
     }
+
+    const std::vector<std::pair<uint32_t, uint32_t>>& get_dram_kernel_seats() const { return dram_kernel_seats; }
 
     bool is_custom_fabric_mesh_graph_desc_path_specified() const { return is_custom_fabric_mesh_graph_desc_path_set; }
     std::string get_custom_fabric_mesh_graph_desc_path() const { return custom_fabric_mesh_graph_desc_path; }

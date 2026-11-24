@@ -94,6 +94,13 @@ std::vector<tt::tt_metal::CoreCoord> metal_SocDescriptor::get_metal_dram_cores(t
         if (exclude_noc0_endpoints && is_noc0_dram_endpoint({translated.x, translated.y})) {
             continue;
         }
+        if (reserved_metal_dram_cores_.has_value() &&
+            std::find(
+                reserved_metal_dram_cores_->begin(),
+                reserved_metal_dram_cores_->end(),
+                tt::tt_metal::CoreCoord{translated.x, translated.y}) == reserved_metal_dram_cores_->end()) {
+            continue;
+        }
         // UMD's LOGICAL DRAM coord is {channel, raw subchannel}, but Metal's logical DRAM space is
         // {dram_view, index into dram_bank_endpoint_coords}, which orders the NOC0 worker endpoint
         // first rather than by subchannel id. Handing back the UMD coord would make a caller that
@@ -107,6 +114,18 @@ std::vector<tt::tt_metal::CoreCoord> metal_SocDescriptor::get_metal_dram_cores(t
         }
     }
     return dram_cores;
+}
+
+void metal_SocDescriptor::restrict_metal_dram_cores(const std::vector<tt::tt_metal::CoreCoord>& translated_cores) {
+    reserved_metal_dram_cores_.reset();
+    const std::vector<tt::tt_metal::CoreCoord> programmable = get_metal_dram_cores(tt::CoordSystem::TRANSLATED);
+    for (const tt::tt_metal::CoreCoord& core : translated_cores) {
+        TT_FATAL(
+            std::find(programmable.begin(), programmable.end(), core) != programmable.end(),
+            "DRAM core {} is not one Metal can run kernels on",
+            core.str());
+    }
+    reserved_metal_dram_cores_ = translated_cores;
 }
 
 tt::tt_metal::CoreCoord metal_SocDescriptor::get_logical_dram_core_from_translated(

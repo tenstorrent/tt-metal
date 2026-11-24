@@ -82,6 +82,11 @@ CoreCoord pick_unused_dram_logical_core(const metal_SocDescriptor& soc_desc, uin
 std::vector<CoreCoord> dram_sender_logical_cores(
     const metal_SocDescriptor& soc_desc, uint32_t bank_id, ChipId device_id);
 
+// The logical DRAM core of seat `bank_id`:`noc`, as the DRISC service names a bank's two seats: the NoC0 seat is the
+// bank's NOC1-endpoint core and the NoC1 seat its free core, each the core whose NIU for that NoC is in stream mode.
+// Throws when `noc` is not 0 or 1, or whatever dram_sender_logical_cores throws.
+CoreCoord dram_seat_logical_core(const metal_SocDescriptor& soc_desc, uint32_t bank_id, uint32_t noc, ChipId device_id);
+
 // How many DRISC sender cores drive one DRAM bank. TwoPerBank splits a bank's receivers across
 // both of its senders; OnePerBank is what a shard feeding more than one receiver requires.
 enum class DramSenderSplit : uint8_t { OnePerBank, TwoPerBank };

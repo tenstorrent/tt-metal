@@ -130,6 +130,7 @@ enum class EnvVarID {
     TT_METAL_SIMULATOR_DRAM_UNCAPPED,                   // Quasar emulator: address all the DRAM the descriptor declares
     TT_METAL_QUASAR_NOC_API_VERSION,                    // Quasar NOC API version
     TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES,  // Override Blackhole DRAM programmable cores
+    TT_METAL_DRAM_KERNEL_SEATS,                         // The only Blackhole DRAM cores metal takes, as bank:noc seats
     TT_METAL_MEASURE_DFB_INIT_TIME,  // Temporary DFB init rdcycle instrumentation (deprecate once device profiler
                                      // covers this).
     TT_METAL_TDP_LIMIT_WATTS,        // Firmware throttler TDP limit [W] (Blackhole)
@@ -1028,6 +1029,52 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES:
             this->blackhole_dram_programmable_cores_override = is_env_enabled(value);
             break;
+
+        // TT_METAL_DRAM_KERNEL_SEATS
+        // The only Blackhole DRAM cores metal takes for its kernels, on every chip, as a comma-separated list of
+        // bank:noc seats (a bank's NoC0 seat is its NOC1-endpoint core, its NoC1 seat its free core). Every other
+        // DRAM core is left untouched, for the DRISC service.
+        // Default: unset (metal takes every DRAM core it can program)
+        // Usage: export TT_METAL_DRAM_KERNEL_SEATS=3:1,7:0
+        case EnvVarID::TT_METAL_DRAM_KERNEL_SEATS: {
+            const auto parse_number = [&](std::string_view text, std::string_view seat) {
+                TT_FATAL(
+                    !text.empty() &&
+                        std::all_of(text.begin(), text.end(), [](unsigned char c) { return std::isdigit(c) != 0; }) &&
+                        text.size() <= 4,
+                    "TT_METAL_DRAM_KERNEL_SEATS: '{}' is not a bank:noc seat (in '{}')",
+                    seat,
+                    value);
+                return static_cast<uint32_t>(std::stoul(std::string(text)));
+            };
+            std::string_view rest(value);
+            while (true) {
+                const size_t comma = rest.find(',');
+                const std::string_view seat = rest.substr(0, comma);
+                const size_t colon = seat.find(':');
+                TT_FATAL(
+                    colon != std::string_view::npos,
+                    "TT_METAL_DRAM_KERNEL_SEATS: '{}' is not a bank:noc seat (in '{}')",
+                    seat,
+                    value);
+                const uint32_t bank = parse_number(seat.substr(0, colon), seat);
+                const uint32_t noc = parse_number(seat.substr(colon + 1), seat);
+                TT_FATAL(noc < 2, "TT_METAL_DRAM_KERNEL_SEATS: seat '{}' names NoC {}, not 0 or 1", seat, noc);
+                const std::pair<uint32_t, uint32_t> parsed{bank, noc};
+                TT_FATAL(
+                    std::find(this->dram_kernel_seats.begin(), this->dram_kernel_seats.end(), parsed) ==
+                        this->dram_kernel_seats.end(),
+                    "TT_METAL_DRAM_KERNEL_SEATS: seat '{}' is listed twice (in '{}')",
+                    seat,
+                    value);
+                this->dram_kernel_seats.push_back(parsed);
+                if (comma == std::string_view::npos) {
+                    break;
+                }
+                rest.remove_prefix(comma + 1);
+            }
+            break;
+        }
 
         // TT_METAL_MEASURE_DFB_INIT_TIME
         // Enables rdcycle-based DFB init timing slots in device firmware (Quasar only).
