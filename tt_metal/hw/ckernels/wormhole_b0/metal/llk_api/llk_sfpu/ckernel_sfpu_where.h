@@ -8,7 +8,6 @@
 #include <cstdint>
 
 #include "llk_defs.h"
-#include "lltt.h"
 #include "sfpi.h"
 
 namespace ckernel::sfpu {

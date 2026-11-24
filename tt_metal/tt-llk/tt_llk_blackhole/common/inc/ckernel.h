@@ -22,7 +22,6 @@
 // This header is included on non-trisc builds, for reasons
 // unknown. lltt is only available on trisc
 #if defined(COMPILE_FOR_TRISC)
-#include "lltt.h"
 #endif
 
 #define UNROLL_LOOP(factor) GCC unroll factor

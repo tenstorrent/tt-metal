@@ -13,7 +13,6 @@
 #include "cmath_common.h"
 #include "llk_assert.h"
 #include "llk_math_common.h"
-#include "lltt.h"
 #include "tensor_shape.h"
 
 using namespace ckernel;

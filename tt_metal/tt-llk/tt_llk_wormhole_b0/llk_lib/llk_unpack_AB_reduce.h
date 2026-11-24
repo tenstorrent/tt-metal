@@ -23,7 +23,6 @@
 #include "cunpack_common.h"
 #include "llk_assert.h"
 #include "llk_unpack_common.h"
-#include "lltt.h"
 #include "tensor_shape.h"
 #include "tensor_shape_coverage_unpack.h"
 

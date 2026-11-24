@@ -10,7 +10,6 @@
 #include <type_traits>
 
 #include "ckernel.h"
-#include "lltt.h"
 
 // Code sequences: driving an execution unit from a table instead of from branches.
 //

@@ -17,7 +17,6 @@
 #include "ckernel_sfpu_polyval.h"
 // clang-format on
 #include "ckernel_sfpu_recip.h"
-#include "lltt.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 
 namespace ckernel {

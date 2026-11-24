@@ -7,7 +7,6 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "lltt.h"
 
 using namespace sfpi;
 

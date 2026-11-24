@@ -7,7 +7,6 @@
 #include "ckernel.h"
 #include "ckernel_addrmod.h"
 #include "ckernel_instr_params.h"
-#include "lltt.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
 

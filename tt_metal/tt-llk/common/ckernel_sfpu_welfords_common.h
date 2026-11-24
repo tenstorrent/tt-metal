@@ -26,7 +26,6 @@
 #include "api/numeric/bfloat16.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "lltt.h"
 #include "sfpi.h"
 
 /**
