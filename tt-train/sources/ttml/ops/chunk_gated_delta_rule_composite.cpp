@@ -253,23 +253,23 @@ ChunkGatedDeltaRuleCompositeResult chunk_gated_delta_rule_fw_composite(
         ttsl::SmallVector<uint32_t>{BH, NC, 1U, 1U},
         ttsl::SmallVector<uint32_t>{1U, 1U, 1U, 1U});  // exp(gc_last), [BH, NC, 1, 1]
 
-    // The only sequential part: the state S [BH, 1, K, V] across the chunks.
+    // The only sequential part: the state S [BH, 1, K, V] across the chunks.  The output does not feed the
+    // recurrence, so it is two batched matmuls on the collected states and corrected values after the loop.
     Tensor state = initial_state.has_value() ? ttnn::reshape(*initial_state, ttnn::Shape{BH, 1U, K, V})
                                              : core::zeros(ttnn::Shape{BH, 1U, K, V}, device, kF32);
-    std::vector<Tensor> h_parts, v_new_parts, out_parts;
+    std::vector<Tensor> h_parts, v_new_parts;
+    h_parts.reserve(NC);
+    v_new_parts.reserve(NC);
     for (uint32_t i = 0; i < NC; ++i) {
-        if (save_for_backward) {
-            h_parts.push_back(state);
-        }
-        const auto v_new = ttnn::add(chunk_at(u, i), mm(chunk_at(neg_w, i), state));  // [BH, 1, C, V]
-        out_parts.push_back(ttnn::add(mm(chunk_at(q_decay, i), state), mm(chunk_at(intra, i), v_new)));
-        state = ttnn::add(ttnn::multiply(state, chunk_at(decay_last, i)), mm(chunk_at(k_dec_t, i), v_new));
-        if (save_for_backward) {
-            v_new_parts.push_back(v_new);
-        }
+        h_parts.push_back(state);
+        v_new_parts.push_back(ttnn::add(chunk_at(u, i), mm(chunk_at(neg_w, i), state)));  // [BH, 1, C, V]
+        state = ttnn::add(ttnn::multiply(state, chunk_at(decay_last, i)), mm(chunk_at(k_dec_t, i), v_new_parts.back()));
     }
+    auto h = concat_or_single(h_parts, /*dim=*/1);          // [BH, NC, K, V]
+    auto v_new = concat_or_single(v_new_parts, /*dim=*/1);  // [BH, NC, C, V]
 
-    auto out = ttnn::multiply(concat_or_single(out_parts, /*dim=*/2), q_scale);  // [BH, 1, T, V]
+    auto out = ttnn::multiply(ttnn::add(mm(q_decay, h), mm(intra, v_new)), q_scale);
+    out = ttnn::reshape(out, ttnn::Shape{BH, 1U, T, V});
     if (!output_head_major) {
         // [BH, 1, T, V] -> [B, 1, T, HV*V]
         auto o = ttnn::reshape(ttnn::to_layout(out, ttnn::Layout::ROW_MAJOR), ttnn::Shape{B, HV, T, V});
@@ -288,9 +288,9 @@ ChunkGatedDeltaRuleCompositeResult chunk_gated_delta_rule_fw_composite(
         .a = std::nullopt,
     };
     if (save_for_backward) {
-        result.h = concat_or_single(h_parts, /*dim=*/1);             // [BH, NC, K, V]
-        result.v_new = concat_or_single(v_new_parts, /*dim=*/2);     // [BH, 1, T, V]
-        result.a = ttnn::reshape(t_inv, ttnn::Shape{BH, 1U, T, C});  // [BH, 1, T, C]
+        result.h = std::move(h);
+        result.v_new = ttnn::reshape(v_new, ttnn::Shape{BH, 1U, T, V});
+        result.a = ttnn::reshape(t_inv, ttnn::Shape{BH, 1U, T, C});
     }
     return result;
 }
