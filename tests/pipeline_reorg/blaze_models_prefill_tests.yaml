@@ -2404,13 +2404,12 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
-    echo "===== [1/2] (GLM-5.3-744B) prefill KV accuracy 1M tail@5k + perf 1M@5k, one chunk per forward ====="
-    bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1 || exit $?
-    echo "===== [2/2] (GLM-5.3-744B) packed prefill KV accuracy 1M tail@5k + perf 1M@5k, two chunks per forward ====="
+    # HACK (CI-only branch, do not merge): only the packed leg, selected alone by the glm_packed_only box.
+    echo "===== (GLM-5.3-744B) packed prefill KV accuracy 1M tail@5k + perf 1M@5k, two chunks per forward ====="
     bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1 --variant packed || exit $?
-    echo "===== both runs passed ====="
+    echo "===== packed run passed ====="
   test_type: prefill_runner_kv_pcc
-  test_tags: [glm_5_3, runner, kv_cache, glm53_trace, glm_packed]
+  test_tags: [glm_packed_only]
   test_group: disagg_prefill
   skus:
     bh_sc1_high_power:
