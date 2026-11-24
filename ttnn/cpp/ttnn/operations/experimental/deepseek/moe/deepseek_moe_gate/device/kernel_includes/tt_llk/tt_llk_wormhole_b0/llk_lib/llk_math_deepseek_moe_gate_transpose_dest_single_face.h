@@ -42,7 +42,7 @@ inline void deepseek_moe_gate_transpose_dest_single_face_step0_configure_mop() {
     static_assert(!is_32bit, "32-bit is not supported for single face transpose");
     // For 16-bit data, simple single-pass transpose
     // Load replay buffer with the transpose sequence for one 16x16 face (face 0: rows 0-15)
-    lltt::record<lltt::NoExec>(ckernel::math::replay_buf_offset, 16);
+    TTI_REPLAY(ckernel::math::replay_buf_offset, 16, 0, 1);
     // Move 8 rows from DEST to SrcB interleaved (1 row at a time)
     TTI_MOVD2B(0, 16, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 0);
     TTI_MOVD2B(0, 18, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 1);
@@ -76,7 +76,7 @@ inline void deepseek_moe_gate_transpose_dest_single_face_step1_configure_mop() {
     static_assert(!is_32bit, "32-bit is not supported for single face transpose");
     // For 16-bit data, simple single-pass transpose
     // Load replay buffer with the transpose sequence for one 16x16 face (face 0: rows 0-15)
-    lltt::record<lltt::NoExec>(ckernel::math::replay_buf_offset, 11);
+    TTI_REPLAY(ckernel::math::replay_buf_offset, 11, 0, 1);
     // Move 4 rows from DEST to SrcB (4 rows at a time)
     // This will place the first 2 rows in the first 2 columns, and the last 2 rows in the last 2 columns
     TTI_MOVD2B(0, 16, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, 0);
@@ -102,7 +102,7 @@ inline void deepseek_moe_gate_transpose_dest_single_face_step1_configure_mop() {
 template <std::uint32_t num_tiles = 1, bool is_32bit>
 inline void deepseek_moe_gate_transpose_dest_single_face_step2_configure_mop() {
     static_assert(!is_32bit, "32-bit is not supported for single face transpose");
-    lltt::record<lltt::NoExec>(ckernel::math::replay_buf_offset, 4);
+    TTI_REPLAY(ckernel::math::replay_buf_offset, 4, 0, 1);
     // Move 8 rows from DEST to SrcB (4 rows at a time)
     TTI_MOVD2B(0, 16, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, 0);
     TTI_MOVD2B(0, 20, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, 4);

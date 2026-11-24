@@ -78,7 +78,7 @@ inline void calculate_cumsum(const bool first) {
 template <bool APPROXIMATION_MODE /*unused*/>
 inline void cumsum_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
-    lltt::record(0, 2 * cumsum_step);
+    TTI_REPLAY(0, 2 * cumsum_step, 0, 1);
     // FIXME: These should all be TT_SFP...
     TTI_SFPADD(10, 7, 0, 0, 0);
     TTI_SFPNOP;

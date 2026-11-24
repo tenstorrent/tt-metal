@@ -98,13 +98,13 @@ inline void _calculate_lcm_gcd_sfp_rows_() {
  * @note Re-run after any op that records into replay slots [0, 28).
  */
 inline void calculate_lcm_init() {
-    lltt::record(LCM_GCD_REPLAY_SLOT, LCM_GCD_REPLAY_LEN);
+    TTI_REPLAY(LCM_GCD_REPLAY_SLOT, LCM_GCD_REPLAY_LEN, 0, 0, 0, 1);
 
     // LREG2 and LREG0 trade roles so -a is back in LREG2 after two steps.
     _calculate_lcm_gcd_step_<p_sfpu::LREG2, p_sfpu::LREG0>();
     _calculate_lcm_gcd_step_<p_sfpu::LREG0, p_sfpu::LREG2>();
 
-    lltt::record(LCM_TAIL_REPLAY_SLOT, LCM_TAIL_REPLAY_LEN);
+    TTI_REPLAY(LCM_TAIL_REPLAY_SLOT, LCM_TAIL_REPLAY_LEN, 0, 0, 0, 1);
 
     TTI_SFPENCC(0 /* imm12 */, LCM_ENCC_MOD_RESET);  // wake retired lanes; lreg1 = g
 

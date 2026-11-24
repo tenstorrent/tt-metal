@@ -74,7 +74,7 @@ inline void _top2_calculate_top2_() {
 
     //-------------------------------------------------------------------------
     // Group 0
-    lltt::record<lltt::Exec>(0, 14);
+    TTI_REPLAY(0, 14, 1, 1);
 
     TTI_SFPTRANSP(0, 0, 0, 0);
     // Load 4 tile rows into LREG4-7
@@ -107,7 +107,7 @@ inline void _top2_calculate_top2_() {
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
 
-    lltt::record<lltt::Exec>(14, 6);
+    TTI_REPLAY(14, 6, 1, 1);
 
     // Group 4
     TTI_SFPTRANSP(0, 0, 0, 0);

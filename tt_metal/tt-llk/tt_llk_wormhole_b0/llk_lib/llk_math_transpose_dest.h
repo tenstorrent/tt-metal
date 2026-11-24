@@ -279,7 +279,7 @@ inline void transpose_dest_configure_mop()
 {
     if constexpr (is_32bit)
     {
-        lltt::record<lltt::NoExec>(ckernel::math::replay_buf_offset, 16);
+        TTI_REPLAY(ckernel::math::replay_buf_offset, 16, 0, 1);
 
         TTI_MOVD2B(p_mov::DEST_32B_LOW, 16, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 0);
         TTI_MOVD2B(p_mov::DEST_32B_LOW, 20, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 4);
@@ -313,7 +313,7 @@ inline void transpose_dest_configure_mop()
     }
     else
     {
-        lltt::record(16, 15);
+        TTI_REPLAY(16, 15, 0, 1);
 
         // ABCD
         TTI_MOVB2A(0, ADDR_MOD_1, p_movb2a::MOV_4_ROWS, 16);

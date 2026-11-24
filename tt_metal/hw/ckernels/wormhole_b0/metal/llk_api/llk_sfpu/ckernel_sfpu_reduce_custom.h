@@ -54,7 +54,7 @@ inline void _init_reduce_max_col_subblock_4x2_() {
 
     // ***********************************************************
     // Record replay buffer
-    lltt::record<lltt::NoExec>(0, 8);
+    TTI_REPLAY(0, 8, 0, 1);
 
     TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::FP16B, ADDR_MOD_3, 0);
     TTI_SFPSWAP(0 /*unused*/, p_sfpu::LREG4 /*lreg_src_c*/, p_sfpu::LREG2 /*lreg_dest*/, 1 /*instr_mod1*/);

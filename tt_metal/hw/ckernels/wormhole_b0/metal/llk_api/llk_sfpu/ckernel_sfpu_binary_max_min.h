@@ -107,7 +107,7 @@ inline void calculate_binary_max_min_int32(
     constexpr int b1 = p_sfpu::LREG3;
     constexpr int c = p_sfpu::LREG7;
 
-    lltt::record<lltt::NoExec>(0, 10);
+    TTI_REPLAY(0, 10, 0, 1);
 
     // first iteration, with a0, b0, c
     TT_SFPLOADMACRO((0 << 2) | (a0 & 3), InstrModLoadStore::INT32, ADDR_MOD_3, offset0 | (a0 >> 2));

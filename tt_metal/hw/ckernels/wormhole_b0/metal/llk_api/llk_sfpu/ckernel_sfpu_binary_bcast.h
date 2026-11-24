@@ -213,7 +213,7 @@ inline void _build_lane_mask_col0_() {
 // No SFPNOP after step 1: SFPAND is a single-cycle op whose result the next
 // instruction reads directly (only the SFPMAD-class ops need the slot).
 inline void _record_broadcast_replay_() {
-    lltt::record(REPLAY_SLOT_BROADCAST, REPLAY_LEN_BROADCAST);
+    TTI_REPLAY(REPLAY_SLOT_BROADCAST, REPLAY_LEN_BROADCAST, 0, 1);
 
     // (1) Mask: zero out SFPU cols 1..7 bitwise, so an Inf or NaN in a
     //     discarded column cannot reach col 0.

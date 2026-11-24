@@ -133,7 +133,7 @@ public:
 
         // The only arch-divergent code in this file: Blackhole disables instruction gathering around the
         // record window via ckernel::load_replay_buf; Wormhole has no gathering and records directly.
-        lltt::record(m_replay_base, CodeLen);
+        TTI_REPLAY(m_replay_base, CodeLen, 0, 1);
         emit_all();
     }
 

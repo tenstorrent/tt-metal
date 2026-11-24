@@ -12,7 +12,7 @@
 namespace ckernel::sfpu {
 
 // Replay slot and length shared by mac_init() (which records) and calculate_mac()
-// (which replays).  lltt::record() captures exactly `length` instructions, so the two
+// (which replays).  TTI_REPLAY(, 0, 1) captures exactly `length` instructions, so the two
 // must agree: an under-count leaves the tail of the body out of the buffer, an
 // over-count swallows whatever the caller emits next - here that would be the
 // STALL_SFPU/MATH TTI_STALLWAIT from _llk_math_eltwise_ternary_sfpu_start_, which is

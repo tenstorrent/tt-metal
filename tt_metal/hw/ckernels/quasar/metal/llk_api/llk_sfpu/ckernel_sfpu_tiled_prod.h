@@ -72,7 +72,7 @@ inline void calculate_tiled_prod() {
     vFloat v = dst_reg[0];
     vFloat result = vConstFloatPrgm0 * v;
     asm volatile("" ::: "memory");
-    lltt::record<lltt::NoExec>(TILED_PROD_REPLAY_SLOT, TILED_PROD_REPLAY_LEN);
+    TTI_REPLAY(TILED_PROD_REPLAY_SLOT, TILED_PROD_REPLAY_LEN, 0, 0, 0, 1);
 #pragma GCC unroll TILED_PROD_ELEMENTS_PER_REPLAY
     for (int k = 0; k < TILED_PROD_ELEMENTS_PER_REPLAY; k++) {
         v = dst_reg[1];

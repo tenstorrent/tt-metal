@@ -13,7 +13,7 @@
 namespace ckernel::sfpu {
 
 // Replay slot and length shared by mac_init() (which records) and calculate_mac()
-// (which replays).  lltt::record() captures exactly `length` instructions, so the two
+// (which replays).  TTI_REPLAY(, 0, 1) captures exactly `length` instructions, so the two
 // must agree: an under-count leaves the tail of the body out of the buffer, an
 // over-count swallows whatever the caller emits next.
 //
@@ -67,7 +67,7 @@ inline void mac_init() {
     // with the auto-advancing mod set above.
     constexpr sfpi::DataLayout dst_fmt = is_fp32_dest_acc_en ? sfpi::DataLayout::F32 : sfpi::DataLayout::FSrcB;
 
-    lltt::record<lltt::NoExec>(MAC_REPLAY_SLOT, mac_replay_len<is_fp32_dest_acc_en>);
+    TTI_REPLAY(MAC_REPLAY_SLOT, mac_replay_len<is_fp32_dest_acc_en>, 0, 1);
     sfpi::vFloat a0 = sfpi::dst_reg[0].mode<dst_fmt>();
     sfpi::vFloat b0 = sfpi::dst_reg[32].mode<dst_fmt>();
     sfpi::vFloat c0 = sfpi::dst_reg[64].mode<dst_fmt>();

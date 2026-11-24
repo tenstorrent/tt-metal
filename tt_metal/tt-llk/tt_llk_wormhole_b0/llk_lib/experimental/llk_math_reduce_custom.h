@@ -118,7 +118,7 @@ inline void _llk_math_reduce_block_max_row_mop_config_(const ckernel::TensorShap
         {
             // FP32 path records the same 15-instruction layout as num_faces=4 (2 GMPOOLs + hi/lo
             // transpose + CLR_B). Only the execute-side replay differs (single face-row, done below).
-            lltt::record(0, 15);
+            TTI_REPLAY(0, 15, 0, 1);
 
             TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_1, p_gpool::INDEX_DIS, 0);
             TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_1, p_gpool::INDEX_DIS, 0);
@@ -148,7 +148,7 @@ inline void _llk_math_reduce_block_max_row_mop_config_(const ckernel::TensorShap
         else
         {
             // Non-FP32 single face-row: 2 GMPOOLs + one transpose block (6 instrs) + CLR_B = 9 instructions.
-            lltt::record(0, 9);
+            TTI_REPLAY(0, 9, 0, 1);
 
             TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_1, p_gpool::INDEX_DIS, 0);
             TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_1, p_gpool::INDEX_DIS, 0);
@@ -187,7 +187,7 @@ inline void _llk_math_reduce_block_max_row_mop_config_(const ckernel::TensorShap
 
     // See _llk_math_reduce_max_row_ for a full algorithm explanation
     // Put the following 15 instructions in a REPLAY buffer
-    lltt::record(0, 15);
+    TTI_REPLAY(0, 15, 0, 1);
 
     // Two GMPOOLs to pool F0 and F1 (or F2 and F3) together
     TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_1, p_gpool::INDEX_DIS, 0);

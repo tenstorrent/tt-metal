@@ -50,7 +50,7 @@ inline void calculate_abs_int32() {
     // body is recorded without executing and then replayed once per row: one RISC issue per row.
     // The store advances Dest by one sfpi row (SFP_ROWS Dest counter rows) through ADDR_MOD_6, in
     // place of a TTINCRWC, which would be a fourth instruction in the window.
-    lltt::record<lltt::NoExec>(ABS_INT32_REPLAY_SLOT, ABS_INT32_REPLAY_LEN);
+    TTI_REPLAY(ABS_INT32_REPLAY_SLOT, ABS_INT32_REPLAY_LEN, 0, 0, 0, 1);
     const sfpi::vInt v = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
     sfpi::dst_reg[0].mode<sfpi::DataLayout::M32>(ADDR_MOD_6) = sfpi::abs(v);
     for (int d = 0; d < ITERATIONS; d++) {

@@ -100,7 +100,7 @@ inline void generalized_moe_gate_eltwise_binary_configure_mop(const std::uint32_
     {
         // Record (without executing) the 5 instructions that move a whole face from DEST to SRCA, then
         // replay them as the mop's start op. The count below must match the 5 instructions recorded here.
-        lltt::record<lltt::NoExec>(ckernel::math::replay_buf_offset, 5);
+        TTI_REPLAY(ckernel::math::replay_buf_offset, 5, 0, 1);
         TTI_STALLWAIT(
             p_stall::STALL_MATH,
             p_stall::WAIT_SFPU | p_stall::MATH | p_stall::SRCA_VLD); // MOVD2A for a whole face assumes unpacker will set a dummy
