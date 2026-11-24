@@ -13,9 +13,8 @@
 // Helper function for _sfpu_binary_power_
 // This function is based on _float32_to_int32_, but expects a positive input, which simplifies the code
 // and makes it faster.
-// Written as a default plus two nested predicates rather than a v_if / v_elseif / v_else ladder: the
-// ladder needs PUSHC/POPC and two COMPC, this form compiles to plain SETCC-predicated moves
-// (18 -> 12 SFPU instructions per call). The three regions and their expressions are unchanged:
+// A default plus two nested v_if (no v_elseif / v_else) compiles to plain SETCC-predicated moves,
+// without the CC-stack PUSHC/POPC and COMPC a three-way ladder needs. Regions:
 // exp < 0 -> 0; exp > 30 (including inf/NaN) -> INT32_MAX; otherwise man << (exp - 23).
 sfpi_inline sfpi::vInt _float_to_int32_positive_(sfpi::vFloat in) {
     sfpi::vInt exp = exexp(in);  // extract exponent
@@ -26,7 +25,7 @@ sfpi_inline sfpi::vInt _float_to_int32_positive_(sfpi::vFloat in) {
         v_if(exp < 31) {
             // extract mantissa
             result = exman(in, sfpi::MantissaMode::ImplicitOne);
-            // shift the mantissa by (23-exponent) to the right
+            // shift by (exp - 23): left if positive, right if negative
             sfpi::vInt shift = exp - 23;  // 23 is number of mantissa bits in float32
             result = sfpi::shft(result, shift, sfpi::ShiftMode::Logical);
         }
