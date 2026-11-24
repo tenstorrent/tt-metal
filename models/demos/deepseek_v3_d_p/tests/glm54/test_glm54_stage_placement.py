@@ -19,9 +19,11 @@ from models.demos.common.prefill.runners.pass_schedule import PassSchedule, Rank
 from models.demos.common.prefill.runners.runner_utils import compute_layer_split
 from models.demos.deepseek_v3_d_p.reference.glm_5_4 import LoopStep
 from models.demos.deepseek_v3_d_p.reference.glm_5_4.schedule import (
+    loop_count,
     pass_schedule,
     runs_later_loop_pass,
     runs_only_later_loop_passes,
+    stage_config,
     stage_indexer_types,
 )
 from models.demos.deepseek_v3_d_p.reference.glm_5_4_config import glm_5_4_hf_config
@@ -265,6 +267,21 @@ def test_stage_loop_predicates():
         True,
         False,
     ]
+
+
+def test_loop_count_and_stage_config():
+    """One reading of the loop count (0 without a loop) and one stage config: the model's own except on G2, which
+    gets a copy with its stage map and leaves the model's config untouched."""
+    from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import glm_5_3_hf_config
+
+    config = glm_5_4_hf_config()
+    assert loop_count(config) == 2 and loop_count(glm_5_3_hf_config()) == 0
+    model_map = list(config.indexer_types)
+    for passes in (None, (), (1,), (1, 2)):
+        assert stage_config(config, passes) is config
+    g2 = stage_config(config, (2,))
+    assert g2 is not config and g2.indexer_types == stage_indexer_types(config, (2,))
+    assert config.indexer_types == model_map
 
 
 def test_completion_readers_accept_every_ack_id(schedule):

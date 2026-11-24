@@ -54,6 +54,7 @@ from __future__ import annotations
 import torch
 
 import ttnn
+from models.demos.deepseek_v3_d_p.reference.glm_5_4.schedule import loop_count
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import indexer_layer_is_reused
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
 
@@ -79,7 +80,7 @@ def ring_rows(chunk_global: int) -> int:
 
 def loop_pass2_layers(config) -> range:
     """The layers that run loop pass 2 (GLM-5.4 loop layers when the loop runs at least twice), else empty."""
-    if getattr(config, "loop_count", 1) < 2:
+    if loop_count(config) < 2:
         return range(0)
     return range(config.loop_first_layer, config.loop_last_layer + 1)
 

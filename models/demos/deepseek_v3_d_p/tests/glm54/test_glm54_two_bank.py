@@ -22,7 +22,6 @@ chunked vs single-shot. ``test_two_bank_traced`` replays one captured pass-2 for
 schedule bit-identically to eager; ``test_two_bank_index_list`` checks the device index list row for row.
 """
 
-import copy
 import random
 
 import pytest
@@ -34,7 +33,7 @@ from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.chunk_layout import rotated_chunk_positions
 from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import SparseMLAReference
 from models.demos.deepseek_v3_d_p.reference.glm_5_4 import LoopPass2MLAReference
-from models.demos.deepseek_v3_d_p.reference.glm_5_4.schedule import stage_indexer_types
+from models.demos.deepseek_v3_d_p.reference.glm_5_4.schedule import stage_config, stage_indexer_types
 from models.demos.deepseek_v3_d_p.reference.glm_5_4.synthetic_gates import GLM54_SYNTHETIC_SEED
 from models.demos.deepseek_v3_d_p.reference.glm_5_4.tests.helpers import pcc
 from models.demos.deepseek_v3_d_p.reference.glm_5_4_config import glm_5_4_hf_config
@@ -100,9 +99,7 @@ def _config(window_format: str, capacity: int = CAPACITY):
 
 
 def _pass2_config(config):
-    c = copy.deepcopy(config)
-    c.indexer_types = stage_indexer_types(config, (2,))  # G2's map: the loop layers shared
-    return c
+    return stage_config(config, (2,))  # G2's map: the loop layers shared
 
 
 def _prompt(slot: int, layer: int, loop_pass: int, length: int) -> torch.Tensor:
