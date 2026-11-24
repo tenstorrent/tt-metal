@@ -165,7 +165,7 @@ constexpr std::uint32_t matmul_max_row_tiles = 8;
 constexpr std::uint32_t matmul_max_row_tiles = get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>();
 #endif
 #if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS) && defined(MATMUL_PACK_KEYS)
-// the cells the harness unpacks per row (llk_matmul_forms.h matmul_unhoist_cell)
+// the cells that unpack per row, matmul_block's rule (matmul.h llk_matmul_unhoist_cell)
 constexpr bool matmul_unhoist_k = ckernel::matmul_unhoist_cell(
     MATH_FIDELITY,
     dest_sync == ckernel::DstSync::SyncHalf,
