@@ -124,10 +124,6 @@ struct FlatRoutedExpertPlan {
     // (positions of that bank before j)) blocks: each core's positions in the bank(s) nearest it
     std::vector<uint32_t> down_bank_pattern, down_weight_slot;
     uint32_t down_weight_slot_count = 0;  // (regions a bank: the w_d tensor's height in regions)
-    // per down core: NOC0 hops from each of its pattern's banks' anchors to it, the most (logged / for the tests)
-    std::vector<uint32_t> down_bank_hops;
-    // per gate/up core (gate_up_cores order): NOC0 hops from its weight slot's bank anchor (logged / for the tests)
-    std::vector<uint32_t> gate_up_bank_hops;
 
     // ---- role cores (logical)
     // each DRAM bank's anchor: its optimal worker core (gate/up cores are placed by their NOC0 hops from it)

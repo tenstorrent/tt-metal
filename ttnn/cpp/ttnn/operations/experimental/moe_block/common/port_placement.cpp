@@ -66,11 +66,11 @@ private:
 };
 
 // A chip's ports on the allowed cores, each near its Ethernet core and the ports spread over the core columns. A port
-// sends its rows to its Ethernet core on NOC1, north first: ports in one column share that column's top links. So the
-// ports go heaviest first - a port's load is the destination chips the fabric's first hop sends its way - each to the
-// free core with the fewest NOC1 hops to its Ethernet core plus kColumnLoadHops for every unit of load already placed
-// in the core's column (a port counts its load + 1). Placing each port on its nearest free core alone put the GLM-5.3
-// 4x4 torus combine's eight ports two and four to a column (experts + combine 1637 -> 1557 us spread).
+// sends its rows to its Ethernet core on NOC1, which routes north first: ports in one column share that column's
+// links. So the ports go heaviest first - a port's load is the destination chips the fabric's first hop sends its way -
+// each to the free core with the fewest NOC1 hops to its Ethernet core plus kColumnLoadHops for every unit of load
+// already placed in the core's column (a port counts its load + 1). Nearest alone stacks ports in the few columns next
+// to the Ethernet cores the flat expert leaves free.
 constexpr uint32_t kColumnLoadHops = 2;
 
 PortCores place_spread(

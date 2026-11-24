@@ -46,15 +46,15 @@ position k % 8; most cores have all 8 positions in one bank, the rest split over
 which `down_weight_reader.cpp` decodes and `flat_weight_regions` packs. The weights' layout therefore follows the plan -
 the chip's DRAM endpoints (firmware) and harvesting place the banks' anchors - so a cache of laid-out weights is keyed
 on the plan's packing fields (`down_bank_patterns`, `down_weight_slots`, `down_weight_slot_count`), not on the layout
-options. Rotating every core over all banks (the earlier layout) averaged 12 NOC0 hops a down byte; the nearest banks
-1.4 (flat -2..-10%).
+options. The down reads' rate is set by their NOC0 distance to the bank: rotating every core over all banks averages
+about 12 hops a block, the nearest banks under 2.
 
 ## x forwarding
 
 Every gate/up core receives all of x for its sub-block's rows (at M 320 about ten times its weight bytes), forwarded
 hop by hop along its rectangle's snake by the predecessor's NCRISC (`gate_up_x_forwarder.cpp`), 6 pieces in flight
 (transaction ids 1..6; the weight reads on the same RISC use 8..15). One hop's bandwidth is its bytes in flight over
-the NoC latency: 3 in flight capped K3 / M3 at M 320 (6: -14 / -18%); no L1 - the pieces land in the successor's x ring.
+the NoC latency, so the depth sets the x rate; no L1 - the pieces land in the successor's x ring.
 
 ## Roles and kernels (`device/kernels`)
 

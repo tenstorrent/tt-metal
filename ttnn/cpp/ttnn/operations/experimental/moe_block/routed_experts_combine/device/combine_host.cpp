@@ -264,15 +264,14 @@ std::tuple<uint32_t, bool, uint32_t, uint32_t, uint32_t, uint32_t> combine_choic
 
 CreditPolicy credit_policy(
     uint32_t N, uint32_t landing_slots_per_source, bool shared_landing, std::optional<uint32_t> batch) {
-    // With > 16 chips (a Galaxy) idle snapshots batched, 8 rows or 6 us old: the snapshots' own traffic counts there
-    // (GLM-5.3 at its Galaxy D 2, 31 sources emulated: accumulators on the ports 836 -> 762 us). The rings on 16 chips
-    // (a Galaxy's 4x4 sub-torus) return every 4 rows: with the ports spread over the core columns (port_placement.cpp)
-    // the batch of 8 held the sources back - 4x4 torus GLM-5.3 chunk 10240 D 3 experts + combine 1557 -> 1500 us (zipf
-    // 2492 -> 2497; a 75 W Galaxy 1555 -> 1479, zipf 2566 -> 2551), 2 and 3 no better. (The shared landing there stays
-    // at 1: 4x4 chunk 7680 D 1 ~4 % slower at 8, chunk 5120 D 3 ~2-3 % faster at 2-8.) With fewer, a batch is never
-    // more than half a source's slots - a source with D slots waited for 8 consumed rows, or the age (2x4 GLM-5.3-Flash
-    // 1280 rings experts + combine 723 -> 532 us at D 2, 1307 -> 888 at D 1, 515 at D 8 either way); shared: a grant is
-    // on its source's critical path - every snapshot at once (688 -> 546 us at D 2, 1172 -> 800 at D 1).
+    // A source gets its credits back (and idle snapshots go out) every b consumed rows:
+    // - > 16 chips (a Galaxy): 8, or 6 us old - with 31 sources the snapshots' own traffic counts;
+    // - 16 chips (a Galaxy's 4x4 sub-torus), landing rings: 4 - with the ports spread over the core columns
+    //   (port_placement.cpp) the rows drain fast enough that a batch of 8 holds the sources back;
+    // - a shared landing: 1 - a grant is on its source's critical path;
+    // - fewer chips: at most half a source's landing slots, else a source with D slots waits for 8 consumed rows (or
+    //   the age).
+    // A config's credit_batch wins.
     CreditPolicy p;
     const uint32_t b = batch                        ? std::max<uint32_t>(1, *batch)
                        : N > 16                     ? 8u
