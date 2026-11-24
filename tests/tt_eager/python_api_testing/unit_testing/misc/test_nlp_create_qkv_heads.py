@@ -828,6 +828,22 @@ def test_sharded_nlp_create_qkv_heads_kv_tied_with_program_cache(device):
     assert device.num_program_cache_entries() == 1
 
 
+def test_nlp_create_qkv_heads_rejects_wrong_size_output_tensors(device, expect_error):
+    x = ttnn.from_torch(torch.randn(1, 1, 64, 1536), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    outputs = [
+        ttnn.from_torch(torch.zeros(1, 1, 32, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        for _ in range(3)
+    ]
+    neighbour = ttnn.from_torch(
+        torch.full((1, 1, 64, 64), 768.0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, "Preallocated Q output shape"):
+        ttnn.experimental.nlp_create_qkv_heads(
+            x, num_heads=8, num_kv_heads=8, transpose_k_heads=False, output_tensors=outputs
+        )
+    assert torch.equal(ttnn.to_torch(neighbour), torch.full((1, 1, 64, 64), 768.0, dtype=torch.bfloat16))
+
+
 def run_nlp_create_qkv_heads_subtile_head_dim_test(
     batch,
     seq_len,

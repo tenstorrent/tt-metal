@@ -111,6 +111,23 @@ def test_nlp_create_qkv_heads_boltz_program_cache(device):
     assert device.num_program_cache_entries() == 2
 
 
+@pytest.mark.parametrize("small_output", [0, 1, 2], ids=["q", "k", "v"])
+def test_nlp_create_qkv_heads_boltz_rejects_wrong_size_output_tensors(small_output, device, expect_error):
+    batch, seq_len, n_heads, head_dim = 1, 128, 4, 32
+    to_dev = lambda t: ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    x = to_dev(torch.randn(batch, seq_len, seq_len, n_heads * head_dim * 3))
+    outputs = [
+        to_dev(torch.zeros(n_heads // 2 if i == small_output else n_heads, seq_len, seq_len, head_dim))
+        for i in range(3)
+    ]
+    neighbour = to_dev(torch.full((1, 1, 128, 128), 768.0))
+    with expect_error(RuntimeError, "output shape"):
+        ttnn.experimental.nlp_create_qkv_heads_boltz(
+            x, num_heads=n_heads, num_kv_heads=n_heads, transpose_k_heads=False, output_tensors=outputs
+        )
+    assert torch.equal(ttnn.to_torch(neighbour), torch.full((1, 1, 128, 128), 768.0, dtype=torch.bfloat16))
+
+
 @pytest.mark.timeout(120)
 def test_nlp_create_qkv_heads_boltz_transpose_k_float32(device):
     """The K transpose of a FLOAT32 input must keep more than bfloat16 precision."""

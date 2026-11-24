@@ -12,6 +12,19 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
+namespace {
+Shape output_shape(
+    const AttnMatmulDeviceOperation::operation_attributes_t& args,
+    const AttnMatmulDeviceOperation::tensor_args_t& tensor_args) {
+    const auto& ashape = tensor_args.input_tensor_a.padded_shape();
+    uint32_t N = tensor_args.input_tensor_b.padded_shape()[3];
+    if (args.transpose_hw.value_or(false)) {
+        N = args.num_tokens.value();
+    }
+    return Shape({1, ashape[1], ashape[2], N});
+}
+}  // namespace
+
 void AttnMatmulDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     // input_a: [q_len, q_heads, batch, head_dim]
@@ -78,6 +91,15 @@ void AttnMatmulDeviceOperation::validate_on_program_cache_miss(
         (args.compute_with_storage_grid_size.x <= device_compute_with_storage_grid_size.x &&
          args.compute_with_storage_grid_size.y <= device_compute_with_storage_grid_size.y),
         "Unsupported grid shape");
+
+    if (tensor_args.preallocated_output.has_value()) {
+        const auto expected_shape = output_shape(args, tensor_args);
+        TT_FATAL(
+            tensor_args.preallocated_output->padded_shape() == expected_shape,
+            "Preallocated output shape {} must be {}",
+            tensor_args.preallocated_output->padded_shape(),
+            expected_shape);
+    }
 }
 
 AttnMatmulDeviceOperation::spec_return_value_t AttnMatmulDeviceOperation::compute_output_specs(
@@ -86,18 +108,9 @@ AttnMatmulDeviceOperation::spec_return_value_t AttnMatmulDeviceOperation::comput
     // input_b: [batch, kv_heads, head_dim, kv_len]
     // intermediate: [q_heads, batch, batch, kv_len]
     // output: [q_len, q_heads, batch, kv_len]
-    const auto& input_tensor_a = tensor_args.input_tensor_a;
-    const auto& input_tensor_b = tensor_args.input_tensor_b;
-    const auto& ashape = input_tensor_a.padded_shape();
-    const auto& bshape = input_tensor_b.padded_shape();
-
-    uint32_t N = bshape[3];
-    if (args.transpose_hw.value_or(false)) {
-        N = args.num_tokens.value();
-    }
-    Shape shape({1, ashape[1], ashape[2], N});
     return tt::tt_metal::TensorSpec(
-        shape, TensorLayout(args.output_dtype, PageConfig(Layout::TILE), args.output_mem_config));
+        output_shape(args, tensor_args),
+        TensorLayout(args.output_dtype, PageConfig(Layout::TILE), args.output_mem_config));
 }
 
 AttnMatmulDeviceOperation::tensor_return_value_t AttnMatmulDeviceOperation::create_output_tensors(

@@ -1003,3 +1003,16 @@ def test_attn_matmul_compute_grid_shorter_than_device(device):
     golden = (input_tensor_a.transpose(0, 2) @ input_tensor_b).transpose(0, 2)
     assert_numeric_metrics(golden, sub_grid_output, pcc_threshold=0.999, check_allclose=False, check_frobenius=False)
     assert torch.equal(sub_grid_output, full_grid_output)
+
+
+@pytest.mark.use_module_device
+def test_attn_matmul_rejects_wrong_size_preallocated_output(device, expect_error):
+    q = ttnn.from_torch(torch.randn(1, 16, 32, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    k_t = ttnn.from_torch(torch.randn(32, 1, 64, 128), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.from_torch(torch.zeros(1, 1, 32, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    neighbour = ttnn.from_torch(
+        torch.full((1, 1, 64, 64), 768.0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, "Preallocated output shape"):
+        ttnn.experimental.attn_matmul(q, k_t, compute_with_storage_grid_size=ttnn.CoreCoord(8, 8), output_tensor=output)
+    assert torch.equal(ttnn.to_torch(neighbour), torch.full((1, 1, 64, 64), 768.0, dtype=torch.bfloat16))

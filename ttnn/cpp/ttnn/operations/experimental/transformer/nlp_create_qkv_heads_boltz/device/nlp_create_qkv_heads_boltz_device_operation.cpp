@@ -5,6 +5,9 @@
 #include "nlp_create_qkv_heads_boltz_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
+#include <array>
+#include <utility>
+
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/device_operation.hpp"
 
@@ -146,6 +149,28 @@ void NlpCreateHeadsBoltzDeviceOperation::validate_on_program_cache_miss(
                 "Number of KV heads ({}) must be divisible by KV tensor number of cores ({})",
                 operation_attributes.num_kv_heads,
                 input_tensor_kv.shard_spec().value().num_cores());
+        }
+    }
+
+    if (tensor_args.optional_output_tensors.size() == 3) {
+        // The output shapes do not depend on the memory config. Build the expected specs with an interleaved one so a
+        // sharded config that only fits the caller's own outputs cannot fail here.
+        auto expected_attributes = operation_attributes;
+        expected_attributes.output_mem_config = tt::tt_metal::MemoryConfig{};
+        auto args_without_outputs = tensor_args;
+        args_without_outputs.optional_output_tensors.clear();
+        const auto [q_spec, k_spec, v_spec] = compute_output_specs(expected_attributes, args_without_outputs);
+        const std::array<std::pair<const char*, ttnn::Shape>, 3> expected{
+            {{"Q", q_spec.logical_shape()}, {"K", k_spec.logical_shape()}, {"V", v_spec.logical_shape()}}};
+        for (size_t i = 0; i < expected.size(); ++i) {
+            const auto& output = tensor_args.optional_output_tensors.at(i);
+            TT_FATAL(output.has_value(), "Preallocated {} output is missing", expected[i].first);
+            TT_FATAL(
+                output->logical_shape() == expected[i].second,
+                "Preallocated {} output shape {} must be {}",
+                expected[i].first,
+                output->logical_shape(),
+                expected[i].second);
         }
     }
 }

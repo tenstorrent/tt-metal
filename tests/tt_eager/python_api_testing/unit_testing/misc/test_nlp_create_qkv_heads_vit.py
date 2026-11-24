@@ -118,3 +118,18 @@ def test_nlp_create_qkv_heads_vit_with_program_cache(device):
         tt_dummy_tensor = ttnn.Tensor(py_dummy_tensor, dtype).to(ttnn.TILE_LAYOUT).to(device, mem_config)
 
     assert device.num_program_cache_entries() == 2
+
+
+@pytest.mark.parametrize("small_output", [0, 1, 2], ids=["q", "k", "v"])
+def test_nlp_create_qkv_heads_vit_rejects_wrong_size_output_tensors(small_output, device, expect_error):
+    batch, seq_len, num_heads, head_dim = 1, 1024, 12, 64
+    to_dev = lambda t: ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    x = to_dev(torch.randn(batch, 1, seq_len, 2304))
+    outputs = [
+        to_dev(torch.zeros(batch, num_heads // 2 if i == small_output else num_heads, seq_len, head_dim))
+        for i in range(3)
+    ]
+    neighbour = to_dev(torch.full((1, 1, 128, 128), 768.0))
+    with expect_error(RuntimeError, "Preallocated output"):
+        ttnn.experimental.nlp_create_qkv_heads_vit(x, output_tensors=outputs)
+    assert torch.equal(ttnn.to_torch(neighbour), torch.full((1, 1, 128, 128), 768.0, dtype=torch.bfloat16))
