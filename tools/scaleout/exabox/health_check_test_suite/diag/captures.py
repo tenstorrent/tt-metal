@@ -31,6 +31,7 @@ LOAD_JUDGED_PCT = 80  # under this share of the planned load a clean HSC proves 
 VIN_MIN_V = 11.0  # a loaded VIN under this: WARN
 SAG_MOHM, SAG_INFO_MOHM = 13.0, 11.0  # 12 V sag (idle VIN - VIN) / IOUT: WARN over, said over
 SAG_MIN_A, IDLE_MAX_A = 40, 30  # sag samples at or above; idle VIN from samples at or below
+FEED_GAP_V = 0.25  # a feed's loaded VIN median this far under the other feeds' median: the weakest feed, WARN
 PEAK_PCT = 20  # a feed's peak this far over the median of the others: WARN
 OC_LIMIT_A = (50, 1000)  # a plausible IOUT_OC limit; outside: not read
 POWER_S = 2  # power poll period
@@ -38,6 +39,7 @@ AER_S = 60  # corrected AER rate poll period
 RESET_MASK_S = 40  # VR power-good falls this near a reset are the reset's
 COLLAPSE_W, HOLD_W = 50, 600  # one tray at or under COLLAPSE_W while every other holds HOLD_W: its 12 V collapsed
 CPLD_DUMP_MAX = 4
+VCORE_HIGH_MV = 30  # a chip's mean core voltage this far over the box median of chip means: said
 PCI = Path("/sys/bus/pci/devices")
 ALL_BDFS = [expected_bdf(t, a) for t in HSC_BUS for a in range(1, 9)]
 
@@ -52,6 +54,9 @@ def add_args(ap: argparse.ArgumentParser) -> None:
     g.add_argument("--site-data", help="site rows: 'brick_mux <host|*> <why>'")
     g.add_argument("--load-pct", type=float, default=100.0, help="share of the planned load the stage reached")
     g.add_argument("--hang-guard", action="store_true", help="take a hung chip off PCIe (root only)")
+    g.add_argument(
+        "--vcore-s", type=float, default=0.1, help="core voltage sample period in the heavy step (0.1 s least)"
+    )
     g.add_argument("--cpld-dump", help="the vendor CPLD dump script (default: cpld-dump.sh on PATH)")
     g.add_argument("--ipmitool", help="the ipmitool command as is (default ipmitool, or sudo -n ipmitool)")
 
@@ -184,7 +189,7 @@ def _vin_rows(d: Path, t0: float) -> dict[str, list[tuple[float, float | None]]]
 
 
 def _judge(step: str, before: dict, after: dict, peaks: dict, samples: dict, st: dict, args, pset: dict) -> list[str]:
-    out, info, named, sag, fails = [], [], set(st.setdefault("named", [])), {}, {}
+    out, info, named, sag, fails, loaded = [], [], set(st.setdefault("named", [])), {}, {}, {}
     lims = st["run"].get("regs", {})
     for k, a in after.items():
         b = before.get(k) or {}
@@ -220,6 +225,9 @@ def _judge(step: str, before: dict, after: dict, peaks: dict, samples: dict, st:
         idle = [v for v, i in s if i is not None and 2 < i <= IDLE_MAX_A]
         ref = None if b.get("READ_VIN") is None else b["READ_VIN"] * VIN_LSB
         ref = statistics.median(idle) if len(idle) >= 3 else ref
+        load = [v for v, i in s if i is not None and i >= SAG_MIN_A]
+        if load and ref is not None and not ((sw0 or 0) | (sw1 or 0)) & 0x40:  # an HSC that read OFF gives no number
+            loaded[k] = statistics.median(load)
         if rs := [((ref - v) / i * 1000, v, i) for v, i in s if ref is not None and i is not None and i >= SAG_MIN_A]:
             r, v, i = max(rs)
             sag[k] = r
@@ -241,6 +249,19 @@ def _judge(step: str, before: dict, after: dict, peaks: dict, samples: dict, st:
             out.append(
                 f"HSC WARN {_where(k)}: IOUT peak {p:.1f} A during {step}, {(p / m - 1) * 100:.0f}% above the median {m:.1f} A of the other {len(others)} feeds; WARN only, not a finding"
             )
+    gaps = {
+        k: statistics.median([x for j, x in loaded.items() if j != k]) - v for k, v in loaded.items() if len(loaded) > 1
+    }
+    if gaps and gaps[(k := max(gaps, key=gaps.get))] >= FEED_GAP_V - 1e-9:
+        out.append(
+            f"HSC WARN {_where(k)}: weakest feed during {step}: VIN median {loaded[k]:.2f} V at IOUT >= {SAG_MIN_A} A, {gaps[k]:.2f} V under {loaded[k] + gaps[k]:.2f} V, the median of the other {len(loaded) - 1} feed(s) (WARN at >= {FEED_GAP_V:.2f} V); WARN only, not a finding"
+        )
+    if sag:
+        info.append(
+            f"HSC sag after {step}: R max mOhm at IOUT >= {SAG_MIN_A} A "
+            + " ".join(f"t{k.replace(':', '/')} {r:.1f}" for k, r in sag.items())
+            + f" (WARN over {SAG_MOHM:.1f}, information over {SAG_INFO_MOHM:.1f})"
+        )
     st["named"] = sorted(named)
     uvl = [k for k, a in after.items() if (a["STATUS_INPUT"] or 0) & 0x30]
     judged = "UV latched: " + (", ".join(uvl) or "none")
@@ -489,22 +510,95 @@ def poll(d: Path, watch: int, args) -> None:
         f.close()
 
 
-def _poll_start(st: dict, d: Path, args) -> None:
-    (d / "poll.stop").unlink(missing_ok=True)
-    argv = [sys.executable, "-m", "diag.captures", "poll", str(d), "--watch-pgid", str(os.getpgrp())]
+def vcore(d: Path, watch: int, args) -> None:
+    """Until the heavy step's end: each chip's core voltage (hwmon in0_input, mV) every --vcore-s (0.1 s at least) and
+    its AICLK (tt_aiclk) every 10th sample to vcore.tsv. Read-only sysfs, no device open; a hung chip is not read again.
+    """
+    paths = {
+        b: [next(g, None) for g in ((PCI / b).glob("hwmon/hwmon*/in0_input"), (PCI / b).glob("tenstorrent/*/tt_aiclk"))]
+        for b in chips()
+    }
+    stop, n = d / "vcore.stop", 0
+    with open(d / "vcore.tsv", "w") as f:
+        while not stop.exists() and _alive(watch, group=True):
+            for b, (mv, clk) in list(paths.items()):
+                if n % 10 == 0 and hung(b):
+                    del paths[b]
+                    continue
+                with suppress(OSError, ValueError, AttributeError):
+                    aiclk = clk.read_text().strip() if clk and n % 10 == 0 else ""
+                    f.write(f"{time.time():.1f}\t{b}\t{int(mv.read_text())}\t{aiclk}\n")
+            n += 1
+            f.flush()
+            time.sleep(max(args.vcore_s, 0.1))
+
+
+def vcore_lines(d: Path) -> list[str]:
+    """The heavy step's core voltage: chips with a NUMERIC FAIL or WARN one line each, the others one summary line; one
+    line per tray (mean [min-max] mV @ median AICLK MHz), one box line, and VCORE HIGH for a chip VCORE_HIGH_MV over the
+    box median. Report only."""
+    mv: dict[str, list[int]] = {}
+    clk: dict[str, list[int]] = {}
+    for r in (ln.split("\t") for ln in _lines(d / "vcore.tsv")):
+        mv.setdefault(r[1], []).append(int(r[2]))
+        if r[3].isdigit() and 0 < int(r[3]) < 5000:
+            clk.setdefault(r[1], []).append(int(r[3]))
+    if not mv:
+        return ["NUMERIC VCORE: no samples (numeric verify: heavy chunk)"]
+    bdf = r"\b([0-9a-f]{2}:[0-9a-f]{2}\.[0-7])\b"
+    hits = {
+        b
+        for ln in _lines(d.parent / "findings.txt")
+        if re.match(r"NUMERIC (FAIL|WARN) ", ln)
+        for b in re.findall(bdf, ln)
+    }
+    out = [
+        f"NUMERIC VCORE {b[5:]} (tray {_tray(b)}): min {min(v)} mV, mean {statistics.mean(v):.0f} mV over {len(v)} samples, numeric hit (numeric verify: heavy chunk)"
+        for b, v in sorted(mv.items())
+        if b[5:] in hits
+    ]
+    if clean := {b: v for b, v in mv.items() if b[5:] not in hits}:
+        x = [y for v in clean.values() for y in v]
+        out.append(
+            f"NUMERIC VCORE {len(clean)} chips with no numeric hit: min {min(x)} mV, mean {statistics.mean(x):.0f} mV (numeric verify: heavy chunk)"
+        )
+    means = {b: round(statistics.mean(v)) for b, v in mv.items()}
+    ck = {b: round(statistics.median(clk[b])) for b in mv if b in clk}
+    for t in sorted({_tray(b) for b in mv}, key=str):
+        cells = ", ".join(
+            f"{b[5:]} {means[b]} [{min(mv[b])}-{max(mv[b])}] @{ck.get(b, '-')}" for b in sorted(mv) if _tray(b) == t
+        )
+        out.append(f"VCORE tray {t} under load (heavy chunk; mean [min-max] mV @ AICLK MHz): {cells}")
+    med = statistics.median(means.values())
+    mck = f"{statistics.median(ck.values()):.0f} MHz" if ck else "not read"
+    out.append(
+        f"VCORE box under load: {len(means)} chips, median of chip means {med:.0f} mV (range {min(means.values())}-{max(means.values())}), median AICLK {mck}"
+    )
+    out += [
+        f"VCORE HIGH {b[5:]} (tray {_tray(b)}): mean {m} mV under load, {m - med:.0f} mV over the box median {med:.0f} mV (flag at +{VCORE_HIGH_MV} mV), AICLK {ck.get(b, 'not read')}; report only"
+        for b, m in sorted(means.items(), key=lambda x: (-x[1], x[0]))
+        if len(means) >= 3 and m - med >= VCORE_HIGH_MV
+    ]
+    return out
+
+
+def _poll_start(st: dict, d: Path, args, mode: str = "poll") -> None:
+    (d / f"{mode}.stop").unlink(missing_ok=True)
+    argv = [sys.executable, "-m", "diag.captures", mode, str(d), "--watch-pgid", str(os.getpgrp())]
+    argv += ["--vcore-s", str(args.vcore_s)] if mode == "vcore" else []
     argv += [x for k, v in (("--ipmitool", args.ipmitool), ("--i2c-lock", args.i2c_lock)) if v for x in (k, v)]
     argv += ["--hang-guard"] if args.hang_guard else []
-    with open(d / "poll.err", "a") as err:
+    with open(d / f"{mode}.err", "a") as err:
         p = subprocess.Popen(
             argv, cwd=SUITE_DIR, start_new_session=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=err
         )
-    st["poll_pid"] = p.pid
+    st[f"{mode}_pid"] = p.pid
 
 
-def _poll_stop(st: dict, d: Path) -> None:
-    if not (pid := st.pop("poll_pid", None)):
+def _poll_stop(st: dict, d: Path, mode: str = "poll") -> None:
+    if not (pid := st.pop(f"{mode}_pid", None)):
         return
-    (d / "poll.stop").touch()
+    (d / f"{mode}.stop").touch()
     for _ in range(150):  # one HSC sweep at most
         if not _alive(pid):
             return
@@ -575,12 +669,12 @@ def _power_lines(d: Path, s: dict, step: str, st: dict) -> list[str]:
 
 
 def load_line(d: Path, t0: float, step: str) -> str:
-    """The power poll since *t0* as one 'LOAD <step>: ...' line (also in load.txt): the HSC sum's mean and peak, each
-    tray's mean, the outlet air's peak and the hottest chip's peak power; "" with no poll row."""
+    """The power poll since *t0* as one 'LOAD <step>: ...' line (also in load.txt): the four trays' sum (Power_UBB0-3)
+    mean and peak, each tray's mean, the outlet air's peak and the hottest chip's peak power; "" with no poll row."""
     num = lambda v: float(v) if v.replace(".", "", 1).isdigit() else None  # noqa: E731
     rows = [[num(x) for x in r[1:16]] for r in _power_rows(d, t0, []) if len(r) >= 16]
     col = lambda i: [r[i] for r in rows if r[i] is not None]  # noqa: E731
-    if not (hsc_w := col(4)):
+    if not (trays_w := [sum(r[:4]) for r in rows if None not in r[:4]]):
         return ""
     trays = "/".join(f"{statistics.mean(c):.0f}" if (c := col(i)) else "-" for i in range(4))
     air = f"; outlet air peak {max(c):.0f} C" if (c := col(14)) else ""
@@ -593,7 +687,7 @@ def load_line(d: Path, t0: float, step: str) -> str:
     top = max(peak, key=peak.get) if peak else None
     chip = f"; peak chip {peak[top]:.0f} W ({top}, tray {_tray(top)})" if top else ""
     line = (
-        f"LOAD {step}: HSC sum mean {statistics.mean(hsc_w) / 1000:.2f} kW, peak {max(hsc_w) / 1000:.2f} kW; "
+        f"LOAD {step}: tray sum mean {statistics.mean(trays_w) / 1000:.2f} kW, peak {max(trays_w) / 1000:.2f} kW; "
         f"tray 1/2/3/4 mean {trays} W{air}{chip}"
     )
     with open(d / "load.txt", "a") as f:
@@ -628,6 +722,10 @@ def _stage_start(bmc: Bmc, st: dict, d: Path, step: str, status: str, args) -> l
 
 
 def _after(bmc: Bmc, st: dict, d: Path, step: str, status: str, args) -> list[str]:
+    if "vcore_pid" in st:  # before any capture: the sampler never reads a hung chip
+        _poll_stop(st, d, "vcore")
+        for ln in vcore_lines(d):
+            log(ln)
     if (s := st.get("stage")) and bmc.cmd:
         t0 = (s.get("part") or [step, s["t0"]])[1]
         got, set_now = [], []
@@ -702,6 +800,8 @@ def run(event: str, step: str, status: str, outdir, args) -> list[str]:
     out = [] if "run" in st else _run_start(bmc, st, args)
     if event == "before" and "stage" in st:
         st["stage"]["part"] = [step, time.time()]
+    if event == "before" and step == "heavy":  # the heavy step's core voltage, read through it only
+        _poll_start(st, d, args, "vcore")
     elif fn := dict(zip(EVENTS, (_stage_start, None, _after, _stage_end, _reset))).get(event):
         out += fn(bmc, st, d, step, status, args)
     (d / "state.json").write_text(json.dumps(st))
@@ -729,15 +829,15 @@ def sample(args) -> None:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="python3 -m diag.captures", description=__doc__.split("\n\n")[0])
-    ap.add_argument("event", choices=[*EVENTS, "sample", "poll"])
-    ap.add_argument("args", nargs="*", help="STEP STATUS OUTDIR for an event; DIR for poll")
+    ap.add_argument("event", choices=[*EVENTS, "sample", "poll", "vcore"])
+    ap.add_argument("args", nargs="*", help="STEP STATUS OUTDIR for an event; DIR for poll and vcore")
     ap.add_argument("--watch-pgid", type=int, default=0, help=argparse.SUPPRESS)
     add_args(ap)
     a = ap.parse_args(argv)
     if a.event == "sample":
         sample(a)
-    elif a.event == "poll" and len(a.args) == 1:
-        poll(Path(a.args[0]), a.watch_pgid, a)
+    elif a.event in ("poll", "vcore") and len(a.args) == 1:
+        (poll if a.event == "poll" else vcore)(Path(a.args[0]), a.watch_pgid, a)
     elif len(a.args) == 3:
         for ln in run(a.event, *a.args, a):
             print(ln, flush=True)

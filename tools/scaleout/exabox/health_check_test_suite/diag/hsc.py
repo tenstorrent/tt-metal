@@ -43,7 +43,7 @@ INPUT_BITS = {0x10: "VIN_UV_FAULT", 0x20: "VIN_UV_WARN"}
 FLAG_ORDER = (*WORD_BITS.values(), *INPUT_BITS.values())
 CML = 0x02  # STATUS_WORD's communication-fault bit: not power
 
-# BMC sensor number -> scale: Power_UBB0-3 (trays 1-4), the HSC sum, Power_PSU0-3 (W); inlet and outlet air (C).
+# BMC sensor number -> scale: Power_UBB0-3 (trays 1-4), an HSC power sensor, Power_PSU0-3 (W); inlet and outlet air (C).
 SENSORS = dict(zip((0x35, 0x36, 0x37, 0x38, 0x60), (10, 10, 10, 10, 2)))
 SENSORS |= dict(zip((0x31, 0x32, 0x33, 0x34, 0x1E, 0x1F, 0x3E), (20, 20, 20, 20, 1, 1, 1)))
 

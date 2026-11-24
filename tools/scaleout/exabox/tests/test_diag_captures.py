@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -95,6 +96,30 @@ class TestHscJudge(unittest.TestCase):
                 self.f.set(t, a, 0x88, "80 01")  # 12.0 V
                 self.f.set(t, a, 0x4A, "db 00")  # warn limit 219 A
                 self.f.set(t, a, 0x46, "e4 00")  # trip 228 A
+
+    def test_weakest_feed_warns_and_the_sag_line_lists_every_feed(self):
+        self.f.run("stage-start")
+        now, rows = time.time() + 1, []
+        for t in hsc.HSC_BUS:
+            for a in hsc.HSC_ADDRS:
+                loaded = 382 if (t, a) == (4, 0x40) else 390  # 11.94 V against 12.19 V
+                rows += [f"{now:.0f}\t{t}\t{a:#04x}\t390\t160"] * 3 + [f"{now:.0f}\t{t}\t{a:#04x}\t{loaded}\t720"] * 3
+        (self.f.d / "out" / "captures" / "vin.tsv").write_text("\n".join(rows) + "\n")
+        with mock.patch.object(captures, "log") as log:
+            out = self.f.run("stage-end")
+        self.assertEqual(
+            out,
+            [
+                "HSC WARN tray 4 (81:00.0-88:00.0) HSC 0x40: weakest feed during busbar: VIN median 11.94 V at IOUT >= 40 A, "
+                "0.25 V under 12.19 V, the median of the other 7 feed(s) (WARN at >= 0.25 V); WARN only, not a finding"
+            ],
+        )
+        said = [c.args[0] for c in log.call_args_list]
+        self.assertIn(
+            "HSC sag after busbar: R max mOhm at IOUT >= 40 A t1/0x40 0.0 t1/0x42 0.0 t2/0x40 0.0 t2/0x42 0.0 "
+            "t3/0x40 0.0 t3/0x42 0.0 t4/0x40 5.6 t4/0x42 0.0 (WARN over 13.0, information over 11.0)",
+            said,
+        )
 
     def test_new_latch_fails_once_naming_the_feed_and_a_stage_end_alone_judges_against_the_run_start(self):
         self.f.run("stage-start")
@@ -216,11 +241,54 @@ class TestEvidence(unittest.TestCase):
         (d / "chips.tsv").write_text("101\t0000:41:00.0\t180.5\t200.0\n103\t0000:01:00.0\t90.0\t95.0\n")
         self.assertEqual(
             captures.load_line(d, 0, "mix"),
-            "LOAD mix: HSC sum mean 2.00 kW, peak 2.40 kW; tray 1/2/3/4 mean 500/510/520/530 W; outlet air peak 47 C; "
+            "LOAD mix: tray sum mean 2.06 kW, peak 2.46 kW; tray 1/2/3/4 mean 500/510/520/530 W; outlet air peak 47 C; "
             "peak chip 180 W (0000:41:00.0, tray 2)",
         )
         self.assertEqual((d / "load.txt").read_text().count("LOAD mix"), 1)
         self.assertEqual(captures.load_line(d, 200, "mix"), "")
+
+
+class TestVcore(unittest.TestCase):
+    def test_sampler_reads_each_chip_until_its_stop(self):
+        f = Fake(self)
+        f.chip("0000:01:00.0")
+        h = f.pci / "0000:01:00.0" / "hwmon" / "hwmon3"
+        h.mkdir(parents=True)
+        (h / "in0_input").write_text("790\n")
+        c = f.pci / "0000:01:00.0" / "tenstorrent" / "tenstorrent!0"
+        c.mkdir(parents=True)
+        (c / "tt_aiclk").write_text("1350\n")
+        threading.Timer(0.35, (f.d / "vcore.stop").touch).start()
+        with mock.patch.object(captures, "PCI", f.pci):
+            captures.vcore(f.d, os.getpgrp(), _args(vcore_s=0.01))  # under the 0.1 s floor: 0.1 s
+        rows = (f.d / "vcore.tsv").read_text().splitlines()
+        self.assertTrue(2 <= len(rows) <= 5, rows)
+        self.assertEqual(rows[0].split("\t")[1:], ["0000:01:00.0", "790", "1350"])
+        self.assertEqual(rows[1].split("\t")[3], "")  # AICLK every 10th sample
+
+    def test_report_lines(self):
+        d = Path(tempfile.mkdtemp()) / "captures"
+        d.mkdir()
+        rows = [
+            f"1.0\t0000:{b}:00.0\t{v}\t1350"
+            for b, vs in (("01", (700, 800)), ("02", (780, 790)), ("81", (820, 840)))
+            for v in vs
+        ]
+        (d / "vcore.tsv").write_text("\n".join(rows) + "\n")
+        (d.parent / "findings.txt").write_text("NUMERIC FAIL 02:00.0 (tray 1): bad\n")
+        self.assertEqual(
+            captures.vcore_lines(d),
+            [
+                "NUMERIC VCORE 02:00.0 (tray 1): min 780 mV, mean 785 mV over 2 samples, numeric hit (numeric verify: heavy chunk)",
+                "NUMERIC VCORE 2 chips with no numeric hit: min 700 mV, mean 790 mV (numeric verify: heavy chunk)",
+                "VCORE tray 1 under load (heavy chunk; mean [min-max] mV @ AICLK MHz): 01:00.0 750 [700-800] @1350, "
+                "02:00.0 785 [780-790] @1350",
+                "VCORE tray 4 under load (heavy chunk; mean [min-max] mV @ AICLK MHz): 81:00.0 830 [820-840] @1350",
+                "VCORE box under load: 3 chips, median of chip means 785 mV (range 750-830), median AICLK 1350 MHz",
+                "VCORE HIGH 81:00.0 (tray 4): mean 830 mV under load, 45 mV over the box median 785 mV (flag at +30 mV), "
+                "AICLK 1350; report only",
+            ],
+        )
 
 
 class TestAerRate(unittest.TestCase):
