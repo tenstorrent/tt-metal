@@ -75,6 +75,8 @@ elseif(NOT "${SFPI_hash}" STREQUAL "")
         "${SFPI_BASE}/sfpi"
     )
     FetchContent_MakeAvailable(sfpi)
+    # Date stamp the compiler to now, not when the archive was created.
+    file(TOUCH_NOCREATE "${SFPI_BASE}/sfpi/compiler/bin/riscv-tt-elf-g++")
 else()
     message(STATUS "No downloadable SFPI tarball for ${SFPI_arch} ${SFPI_dist}")
     if(EXISTS "${SFPI_BASE}/${SFPI_filename}")
