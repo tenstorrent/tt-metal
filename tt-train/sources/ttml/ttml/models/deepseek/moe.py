@@ -234,7 +234,7 @@ class MoE(AbstractModuleBase):
         )
         # Both buffers are replicated: one bias and one count per expert on every device. A ttnn op on them takes the
         # topology of its other operand (the counts are summed from the routing activations, which are sharded over
-        # the batch), so update_expert_bias writes them back with this one.
+        # the batch), so prepare_routing_weights stores the counts with this one.
         self._buffer_topology = self._expert_bias.tensor.get_value().tensor_topology()
 
         # Local expert-id vector [E] consumed by moe_group / moe_ungroup. It is
@@ -285,6 +285,7 @@ class MoE(AbstractModuleBase):
         mask_bs_flat = ttnn.reshape(expert_mask_all, [1, 1, B * S, self.num_experts])
         batch_counts = ttnn.sum(mask_bs_flat, dim=-2, keepdim=True)
         new_counts = ttnn.add(self._token_counts.tensor.get_value(), batch_counts)
+        new_counts.update_tensor_topology(self._buffer_topology)
         self._token_counts.tensor.set_value(new_counts)
 
         scores_for_routing = self.gather_topk_weights(routing_weights, topk_indices_u32) if gather_topk else None
@@ -467,9 +468,6 @@ class MoE(AbstractModuleBase):
         unchanged. The average gives the update the same signs as the sum.
         """
         counts = self._token_counts.tensor.get_value()
-        # Each device's own counts under the buffer's replicated topology, as a replicated parameter's gradient is
-        # before it is averaged, rather than the routing activations' topology they were summed from.
-        counts.update_tensor_topology(self._buffer_topology)
         mesh = ttml.maybe_mesh()
         axes = [] if mesh is None else [mesh.axis_index(name) for name in mesh.axis_names if mesh.axis_size(name) > 1]
         if not axes:
@@ -501,10 +499,8 @@ class MoE(AbstractModuleBase):
 
         # Update bias
         new_bias = ttnn.add(self._expert_bias.tensor.get_value(), delta)
-        new_bias.update_tensor_topology(self._buffer_topology)
         self._expert_bias.tensor.set_value(new_bias)
 
         # Reset token counts
         zeros = ttnn.zeros_like(self._token_counts.tensor.get_value())
-        zeros.update_tensor_topology(self._buffer_topology)
         self._token_counts.tensor.set_value(zeros)
