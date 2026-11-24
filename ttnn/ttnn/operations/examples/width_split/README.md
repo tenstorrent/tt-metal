@@ -354,3 +354,40 @@ table in [`report.md`](report.md). WH B0 n150 row: 20 passes of `test_width_spli
 
 Reproduce:
 `scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_width_split.py::test_width_split_regimes`
+
+## ROW_MAJOR without a combine — tilize: small pieces pay when tile-rows are few
+
+`rm_split.py` (`width_split_rm`): the op has nothing to combine across tile-columns — tilize, interleaved DRAM
+`Layout::ROW_MAJOR` bf16 in, interleaved DRAM `Layout::TILE` out — so a width split costs only more, smaller stick
+transfers. k = 1 is the row split (whole tile-rows per Tensix core); k > 1 cuts every tile-row into k column groups
+of Wt / k tiles on their own Tensix cores (32 reads of 2W / k bytes per tile-row each). Same three kernels for every
+k. A second knob, `trim`, runs the tilize helper with `NoReconfigure` + `InitOnly` (no data-format reconfig after
+`compute_kernel_hw_startup`, no trailing uninit) to measure the helper's per-launch fixed cost.
+
+### Measured (BH p150b, 13×10 grid, bf16, median of 3, per-launch latency)
+Full table: [`report_rm_no_combine_bh_p150b.md`](report_rm_no_combine_bh_p150b.md) (2026-11-24, `bh-50`).
+
+| R_t (tile-rows) | W (stick bytes) | k = 1 ns | best k | best ns | speedup | piece |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 64 (128 B) | 1 799 | 2 | 1 733 | 1.04× | 64 B |
+| 1 | 256 (512 B) | 2 190 | 8 | 1 790 | **1.22×** | 64 B |
+| 1 | 512 (1 KB) | 2 589 | 8 | 1 899 | 1.36× | 128 B |
+| 1 | 2 048 (4 KB) | 4 746 | 16 | 2 203 | **2.15×** | 256 B |
+| 1 | 8 192 (16 KB) | 12 493 | 32 | 4 287 | **2.91×** | 512 B |
+| 2 | 1 024 (2 KB) | 3 499 | 8 | 2 201 | 1.59× | 256 B |
+| 4 | 256 (512 B) | 2 218 | 4 | 2 004 | 1.11× | 128 B |
+| 4 | 2 048 (4 KB) | 4 917 | 8 | 4 294 | 1.15× | 512 B |
+| 16 | 128 (256 B) | 2 246 | 1 | — | k = 2 **0.82×** | — |
+| 16 | 2 048 (4 KB) | 11 964 | 1 | — | k = 2 0.97× | — |
+| 64 | 256 (512 B) | 7 716 | 1 | — | k = 2 **0.65×** | — |
+
+`trim` (NoReconfigure + InitOnly) at k = 1 and at the best k: 0.97–1.04× on every cell — no measurable per-launch
+cost in the helper's reconfig / uninit here.
+
+### When it helps / when it does not (ROW_MAJOR, no combine)
+- **Helps:** few tile-rows (R_t ≤ 2–4 on 130 Tensix cores) — split down to **64–512 B pieces**; the best k grows with
+  the stick (k = 8 at 512 B sticks, 16 at 4 KB, 32 at 16 KB). The reduce case's "keep pieces ≥ ~512 B" does **not**
+  carry over: that floor came from its combine, which grows with k.
+- **Does not help:** tile-rows already spread over a good part of the grid (R_t ≥ 16 here): the k-fold transfer count
+  costs more than the idle Tensix cores it fills (R_t = 64, 512 B sticks, k = 2: 0.65×).
+- **Not a lever here:** the tilize helper's default reconfig / uninit (`trim`), at any k.

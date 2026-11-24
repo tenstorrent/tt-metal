@@ -56,7 +56,9 @@ from ttnn.operations.examples.row_major_flat_tiles import (
     PIECE_ORDERS,
     VARIANTS,
     cb_bytes,
+    flat_mode,
     flat_tiles_applicable,
+    l1_sharded_memory_config,
     resolve_reduce_algo,
     row_major_flat_tiles,
     work_split,
@@ -65,15 +67,19 @@ from ttnn.operations.examples.row_major_flat_tiles import (
 BASELINE, LEVER = VARIANTS
 
 
-def _make_input(device, h, w, seed=0):
+def _make_input(device, h, w, seed=0, sticks_per_core=None):
+    """DRAM interleaved input, or HEIGHT_SHARDED L1 with S = sticks_per_core sticks per Tensix core."""
     torch.manual_seed(seed)
     torch_input = torch.randn((h, w), dtype=torch.float32).to(torch.bfloat16)
+    memory_config = (
+        ttnn.DRAM_MEMORY_CONFIG if sticks_per_core is None else l1_sharded_memory_config(device, h, w, sticks_per_core)
+    )
     tt_input = ttnn.from_torch(
         torch_input,
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=memory_config,
     )
     return tt_input, torch_input
 
@@ -179,6 +185,31 @@ def test_row_major_flat_tiles_reduce_knobs(device, w):
     _check(tt_input, torch_input, "reduce", LEVER, rows_per_block_override=2)
 
 
+# (H, W, S sticks per Tensix core): l1_sharded reduce, every flat mode, partial tile-rows (S % 32) and units
+_L1_CORRECTNESS = [
+    (32, 4096, 1),  # whole, 1 stick per Tensix core (31 zero rows in the baseline's tile-row)
+    (64, 1024, 32),  # whole, one full tile-row per Tensix core
+    (96, 8192, 3),  # whole, S % 32 != 0
+    (256, 8, 128),  # narrow, 1 flat tile per Tensix core (a partial unit)
+    (2048, 8, 1024),  # narrow, 8 flat tiles = 1 whole unit
+    (4096, 16, 2048),  # narrow, 32 flat tiles = 2 units
+    (384, 16, 192),  # narrow, 3 flat tiles (partial unit)
+    (64, 544, 8),  # padded, 1 flat tile per stick
+    (32, 96, 1),  # padded, 1 stick per Tensix core
+    (64, 1056, 2),  # padded, 2 flat tiles per stick
+]
+
+
+@pytest.mark.parametrize("cfg", _L1_CORRECTNESS, ids=[f"{h}x{w}_s{s}" for h, w, s in _L1_CORRECTNESS])
+def test_row_major_flat_tiles_l1_correctness(device, cfg):
+    """l1_sharded reduce: both variants match torch, and a second in-kernel repeat gives the same answer."""
+    h, w, s = cfg
+    tt_input, torch_input = _make_input(device, h, w, sticks_per_core=s)
+    for variant in VARIANTS:
+        _check(tt_input, torch_input, "reduce", variant)
+        _check(tt_input, torch_input, "reduce", variant, kernel_iters=2)
+
+
 @pytest.mark.parametrize("w", [1056, 1536, 3072 + 32])
 def test_row_major_flat_tiles_refuses_partial_flat_rows(device, w, expect_error):
     """flat_tiles refuses a per-row reduction whose W is not a multiple of 1024, and says why."""
@@ -244,9 +275,9 @@ def _git_sha():
         return "unknown"
 
 
-def _measure_cell(device, case, h, w, entries, trials, kernel_iters):
+def _measure_cell(device, case, h, w, entries, trials, kernel_iters, sticks_per_core=None):
     """entries: [(label, variant, kwargs)]; correctness-gate each, then interleaved device kernel ns (median)."""
-    tt_input, torch_input = _make_input(device, h, w)
+    tt_input, torch_input = _make_input(device, h, w, sticks_per_core=sticks_per_core)
     for _, variant, kw in entries:
         _check(tt_input, torch_input, case, variant, kernel_iters=kernel_iters, **kw)
     runners = {
@@ -327,6 +358,83 @@ def test_row_major_flat_tiles_device_perf(device):
     report = "\n".join(lines) + "\n"
     logger.info("\n" + report)
     path = os.environ.get("RMFT_REPORT", "")
+    if path:
+        Path(path).write_text(report)
+        logger.info(f"report written to {path}")
+
+
+# l1_sharded reduce sweep: (H, W, S sticks per Tensix core) -> H / S Tensix cores (<= 64: fits WH B0 and BH)
+_L1_SWEEP = [
+    # whole (W % 1024 == 0): few sticks per Tensix core -> the baseline's tile-row is mostly zero rows
+    (32, 4096, 1),
+    (64, 8192, 1),
+    (256, 4096, 4),
+    (512, 2048, 8),
+    (2048, 2048, 32),
+    (8192, 1024, 128),
+    # narrow (W divides 16): the baseline's tiles are mostly zero columns; S_j / E_j built per launch
+    (8192, 8, 128),
+    (32768, 8, 512),
+    (65536, 8, 1024),
+    (4096, 16, 64),
+    (8192, 16, 128),
+    (32768, 16, 512),
+    (131072, 16, 2048),
+    # padded (any other W): ceil(W / 1024) flat tiles per stick, zero tail
+    (64, 544, 1),
+    (256, 544, 4),
+    (512, 544, 8),
+    (1024, 544, 16),
+    (2048, 544, 32),
+    (64, 1056, 1),
+    (512, 1056, 8),
+    (2048, 1056, 32),
+    (64, 96, 1),
+    (512, 96, 8),
+    (2048, 96, 32),
+]
+
+
+def _l1_cells():
+    value = os.environ.get("RMFT_L1_CELLS")
+    if not value:
+        return _L1_SWEEP
+    return [tuple(int(x) for x in cell.split(":")) for cell in value.split(",")]
+
+
+@sweep_gate("RMFT_SWEEPS")
+def test_row_major_flat_tiles_l1_device_perf(device):
+    """l1_sharded reduce: correctness-gate both variants per cell, then device kernel ns (median); never fails on perf.
+
+    Skipped unless RMFT_SWEEPS=1 or EXAMPLES_SWEEPS=1; RMFT_L1_CELLS="H:W:S,..." replaces the cells. Logged; written
+    to RMFT_L1_REPORT when it names a file."""
+    trials = int(os.environ.get("RMFT_TRIALS", "3"))
+    x, y = grid_xy(device)
+    freq = chip_freq_mhz()
+    lines = [
+        "# row_major_flat_tiles — l1_sharded reduce (x - mean_row), tilize_untilize vs flat_tiles",
+        "",
+        f"box={socket.gethostname()}  arch={arch_label(device)}  grid={x}x{y}  "
+        f"clock={f'{freq:.0f}' if freq else 'unknown'} MHz  N={trials} (median)  kernel-iters=1 (per-launch latency)  "
+        f"date={datetime.date.today().isoformat()}  sha={_git_sha()}",
+        "",
+        "HEIGHT_SHARDED L1 ROW_MAJOR bf16 [H, W] in and out, S sticks per Tensix core, H / S Tensix cores. "
+        "Baseline: stage each shard into 32-stick tile-rows (zero rows past S, zero columns past W), tilize, "
+        "REDUCE_ROW mean, subtract, untilize, copy back. Lever: flat tiles in the mode W picks.",
+        "",
+        "| H | W | S | Tensix cores | flat mode | tilize_untilize ns | flat_tiles ns | speedup |",
+        "|---:|---:|---:|---:|---|---:|---:|---:|",
+    ]
+    for h, w, s in _l1_cells():
+        entries = [(v, v, {}) for v in VARIANTS]
+        med = _measure_cell(device, "reduce", h, w, entries, trials, 1, sticks_per_core=s)
+        base, lever = med[BASELINE], med[LEVER]
+        lines.append(
+            f"| {h} | {w} | {s} | {h // s} | {flat_mode(w)} | {base:.0f} | {lever:.0f} | {base / lever:.2f}x |"
+        )
+    report = "\n".join(lines) + "\n"
+    logger.info("\n" + report)
+    path = os.environ.get("RMFT_L1_REPORT", "")
     if path:
         Path(path).write_text(report)
         logger.info(f"report written to {path}")

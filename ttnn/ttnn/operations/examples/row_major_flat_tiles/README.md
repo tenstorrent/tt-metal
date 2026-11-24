@@ -2,7 +2,7 @@
 
 **Problem type:** compute-bound: format conversion the math does not need  ·  **Concept(s):** (1) flat tiles: 1024 contiguous row-major elements in a CB page, used as a 32×32 tile with no tilize / untilize; (2) a per-row reduction over whole flat tiles (W a multiple of 1024): DEST accumulate + whole-tile scalar reduce + scalar broadcast
 **First profiled on:** `bgd-lab-22-special-adamjanovic-for-reservation-169096` · WH B0 n150, 8×8 = 64 Tensix cores · 1000 MHz · 2026-11-19 · `9dc2b92132c` (+ this example, uncommitted) ([`report_wh_n150.md`](report_wh_n150.md))
-**Blackhole:** not measured.
+**Blackhole:** the `l1_sharded` reduce case (below) is measured on BH p150b (`bh-50-special-adamjanovic-for-reservation-177924`, 13×10 grid, 2026-11-24, [`report_l1_bh_p150b.md`](report_l1_bh_p150b.md)); the interleaved DRAM cases are not measured on BH.
 
 > Reading order: [`../master.md`](../master.md) → **this file** → run the CLI, and read the code only if you need to.
 
@@ -114,10 +114,9 @@ row_major_flat_tiles   box=bgd-lab-22  arch=WH_B0  clock=1000MHz   N=3   kernel-
   block's Wf transfers per stick queue on one bank: [8192, 8192] 1 618 730 ns vs 1 386 175 ns `interleaved`
   (baseline 1 388 305), [2048, 4096] 196 504 vs 176 448 (baseline 189 822). A different block shape than the
   baseline's needs its own transfer order — measure it.
-- **Not reproduced: 20–30×.** The isolated mechanism tops out at 1.85× on WH B0 here; a speedup can only reach
-  time / (time − tilize-and-untilize share). A 20–30× gain in an op means its baseline spent ≥ 95% of the time in
-  something the lever also removed (e.g. tilizing whole tile-rows that are mostly padding); this example does
-  not model that and cannot attribute it.
+- **20–30× is a padding effect, not this conversion.** On interleaved DRAM the isolated mechanism tops out at
+  1.85× (WH B0). A much larger gain means the baseline also tilized rows or columns that hold no data: the
+  L1-sharded section below measures exactly that (16–24× at one stick per Tensix core, BH p150b).
 
 ## When it helps / when it does not
 Measured by `test_row_major_flat_tiles_regimes` (interleaved A/B, median of 7 trials per variant, 3 runs,
@@ -152,10 +151,69 @@ Reduce ablation (sweep, N = 3, ns):
 | [2048, 4096] | 4 | 189 822 | 186 930 | 196 504 | **176 448** | 176 676 |
 | [8192, 8192] | 8 | 1 388 305 | 1 382 325 | 1 618 730 | **1 386 175** | 1 402 990 |
 
-Not covered: L1-sharded inputs (the reader would copy local stick pieces instead of DRAM ones; the compute side
-is unchanged), fp32, W not a multiple of 32, and Blackhole.
+Not covered on interleaved DRAM: fp32, W not a multiple of 32, and Blackhole. L1-sharded inputs: next section.
+
+## L1-sharded reduce — the regimes where the baseline is mostly padding (BH p150b)
+
+**Situation.** The input is `TensorMemoryLayout::HEIGHT_SHARDED` in L1, S sticks of W elements per Tensix core, and
+each Tensix core normalizes its own shard (`y = x - mean_row(x)`; any per-row reduce + apply has the same structure).
+A tilize path must stage the shard into 32-stick tile-rows: with **S < 32** most of a tile-row is zero rows, and
+with **W < 32** most of every tile is zero columns. Every padded row or column is tilized, reduced, subtracted and
+untilized like real data. A flat-tile path works on the S × W elements the shard actually holds.
+
+**The three flat modes** (`flat_mode(W)`; the baseline is the same for all: copy the shard's sticks into the staging
+tile-row, tilize, REDUCE_ROW mean, subtract, untilize, copy back):
+
+| Mode | W | What `flat_tiles` does | Extra cost |
+|---|---|---|---|
+| `whole` | W % 1024 == 0 | The CBs **are** the shards (`cb_descriptor_from_sharded_tensor`, page = one flat tile): no copy, no staging. Per stick: sum its W / 1024 flat tiles, collapse to one scalar, subtract. | 32 reduce outputs per tile-row instead of 1 |
+| `narrow` | divides 16 (8 or 16; a stick must be a multiple of 16 B) | The shard is S·W contiguous elements = S·W / 1024 flat tiles, read in place, each holding 1024 / W sticks. In a flat tile every stick lies in one row of the 32×32 tile, so `mean = Σ_j x_j @ S_j` (a 0/1 matrix with entries 1/W) puts the means of W flat tiles' 1024 sticks into one tile, and `x_j − mean @ E_j` (E_j = the 0/1 transpose) applies them. Needs S·W % 1024 == 0. | builds the 2W constant tiles S_j / E_j in L1 every launch (~5–10 µs at W = 8 / 16 here) |
+| `padded` | anything else | Each stick is copied into ceil(W / 1024) flat-tile slots whose tail stays zero (zero-filled once; the same slots always hold the same position). No tilize, no 32-row padding. | (1024 · ceil(W / 1024)) / W times the elements per stick |
+
+**Measured** (BH p150b, 13×10 grid, H / S Tensix cores, median of 3, per-launch latency; full table
+[`report_l1_bh_p150b.md`](report_l1_bh_p150b.md)):
+
+| Regime | [H, W], S sticks per Tensix core | Tensix cores | tilize_untilize ns | flat_tiles ns | Speedup |
+|---|---|---:|---:|---:|---|
+| helps: 1 stick per Tensix core, `whole` | [32, 4096], S = 1 | 32 | 18 705 | 1 173 | **15.95×** |
+| helps | [64, 8192], S = 1 | 64 | 32 982 | 1 349 | **24.45×** |
+| helps | [256, 4096], S = 4 | 64 | 18 978 | 2 549 | **7.45×** |
+| helps | [512, 2048], S = 8 | 64 | 12 133 | 2 973 | **4.08×** |
+| full tile-row: only the conversion is saved | [2048, 2048], S = 32 | 64 | 13 424 | 9 200 | 1.46× |
+| | [8192, 1024], S = 128 | 64 | 21 644 | 19 385 | 1.12× |
+| helps: narrow sticks, many per Tensix core | [65536, 8], S = 1024 | 64 | 35 472 | 7 721 | **4.59×** |
+| | [32768, 8], S = 512 | 64 | 18 576 | 7 087 | 2.62× |
+| | [131072, 16], S = 2048 | 64 | 69 141 | 16 364 | **4.23×** |
+| does not help: narrow, few sticks (the S_j / E_j build dominates) | [8192, 8], S = 128 | 64 | 6 057 | 6 649 | **0.91×** |
+| | [8192, 16], S = 128 | 64 | 6 016 | 11 625 | **0.52×** |
+| helps: `padded`, 1 stick per Tensix core | [64, 544], S = 1 | 64 | 5 247 | 1 324 | **3.96×** |
+| | [64, 1056], S = 1 | 64 | 7 618 | 1 584 | **4.81×** |
+| crossover | [1024, 544], S = 16 | 64 | 5 702 | 5 762 | 0.99× |
+| does not help: `padded`, a full tile-row | [2048, 544], S = 32 | 64 | 6 212 | 10 481 | **0.59×** |
+| | [2048, 96], S = 32 | 64 | 3 161 | 10 467 | **0.30×** |
+
+**Reading of the result:**
+- **The win is the padding, not the conversion.** At S = 32 (no zero rows) the `whole` mode saves only the
+  tilize / untilize (1.12–1.46×, the same size as the DRAM cases above). At S = 1 the baseline does 32× the work
+  the shard needs and the lever gains 16–24×.
+- **`padded` trades row padding for column padding.** A stick of W = 544 in a 1024-element flat tile wastes 47%;
+  the baseline's tile-row wastes (32 − S) / 32. The crossover is near S = 16 at W = 544 and S ≈ 4–8 at W = 96.
+- **`narrow` has a fixed cost per launch** (2W constant tiles built by the reader: one NoC zero-fill plus 32
+  stores per tile) and then wins by 32 / W-fold less work per stick; it pays from ~150 sticks per Tensix core at
+  W = 8 and ~300 at W = 16 here. The same per-core step serves a `WIDTH_SHARDED` / `BLOCK_SHARDED` shard whose
+  width divides 16, before the cross-core combine (see `tensix_all_reduce*` for the combine).
+- **Zero-filling L1 with RISC-V word stores is slow**: a first version of this example zeroed its staging CBs that
+  way and both variants were 3–5× slower (a 128 KB fill took tens of µs). `Noc::async_write_zeros` +
+  `write_zeros_l1_barrier` (a NoC loopback) is what the numbers above use.
 
 ## Run the predefined sweep (regenerates `report_wh_n150.md`)
+L1-sharded sweep (regenerates `report_l1_bh_p150b.md`; `RMFT_L1_CELLS="H:W:S,..."` replaces the cells):
+```bash
+RMFT_SWEEPS=1 RMFT_TRIALS=3 RMFT_L1_REPORT=ttnn/ttnn/operations/examples/row_major_flat_tiles/report_l1_bh_p150b.md \
+    scripts/run_safe_pytest.sh --run-all \
+    tests/ttnn/unit_tests/operations/examples/test_row_major_flat_tiles.py::test_row_major_flat_tiles_l1_device_perf
+```
+Interleaved DRAM sweep:
 The sweep is opt-in (`RMFT_SWEEPS=1`; the CLI sets it) and writes a report only to the path in `RMFT_REPORT`:
 ```bash
 RMFT_SWEEPS=1 RMFT_TRIALS=3 RMFT_REPORT=ttnn/ttnn/operations/examples/row_major_flat_tiles/report_wh_n150.md \
@@ -171,3 +229,8 @@ COL broadcast, untilize) vs `_REDUCE_FLAT_COMPUTE` (`reduce_mean` / `reduce` RED
 `InputTileMapping::Col` over `grid(RB, Wf)`); `_READER` / `_WRITER` mode 0 (32 stick pieces) vs mode 1 (RB whole
 sticks, one 2 KB transfer per flat tile, `order`); `flat_tiles_applicable()`, `resolve_reduce_algo()`,
 `rows_per_block()`, `cb_tiles()`.
+
+L1-sharded: `_create_l1_program_descriptor()`; `_L1_READER` / `_L1_WRITER` mode 0 (stage into a zeroed tile-row),
+mode 1 (the CB is the shard, `_tile_page_cb`), mode 2 (padded flat-tile slots); `_REDUCE_NARROW_COMPUTE`
+(`matmul_tiles` with the S_j / E_j tiles the reader builds, then `sub_tiles`); `flat_mode()`,
+`l1_sharded_memory_config()`, `narrow_matrices()` (the S_j / E_j layout, host side).
