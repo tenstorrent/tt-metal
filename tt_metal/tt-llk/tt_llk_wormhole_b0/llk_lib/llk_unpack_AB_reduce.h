@@ -143,7 +143,7 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape tensor_
     const bool clear_scaler       = swap_operands && _llk_unpack_AB_reduce_scaler_row_only_(tensor_shape_scaler);
 
     const std::uint32_t replay_len = (clear_data ? 1 : 0) + (clear_scaler ? 1 : 0) + 2;
-    TTI_REPLAY(0, replay_len, 0, 1);
+    TT_REPLAY(0, replay_len, 0, 1);
     if (clear_data)
     {
         TTI_UNPACR_NOP(data_unpacker, data_clear_val);
