@@ -160,6 +160,8 @@ namespace experimental {
  *
  * Sub-32-row (partial-height) block-float tiles are not supported (compile-time rejected).
  *
+ * | Param Type | Name | Description | Type | Valid Range | Required |
+ * |------------|------|-------------|------|-------------|----------|
  * | Template | is_fp32_dest_acc_en | fp32 dest-accumulate mode                         | bool        |  | False |
  * | Template | Format              | Output buffer L1 data format (deduced from LLKOperand) | DataFormat  |  | True |
  * | Template | Shape               | Output tile geometry (deduced from LLKOperand)         | TensorShape |  | True |
@@ -183,6 +185,8 @@ ALWI void pack_init(LLKOperand<Format, Shape> /*out*/) {
  * Uses out-of-order (absolute) addressing and does not auto-advance an internal fifo pointer like legacy
  * pack_tile does. Sub-32-row (partial-height) block-float tiles are not supported (compile-time rejected).
  *
+ * | Param Type | Name | Description | Type | Valid Range | Required |
+ * |------------|------|-------------|------|-------------|----------|
  * | Template | is_fp32_dest_acc_en | fp32 dest-accumulate mode                          | bool        |         | False |
  * | Template | Format    | Output buffer L1 data format (deduced from LLKOperand) | DataFormat  |         | True |
  * | Template | Shape     | Output tile geometry (deduced from LLKOperand)         | TensorShape |         | True |
@@ -235,6 +239,30 @@ ALWI void pack_block(
     for (std::uint32_t i = 0; i < ntiles; ++i) {
         experimental::pack_tile<is_fp32_dest_acc_en>(out, start_out_tile + i, ifrom_dst + i);
     }
+}
+
+// clang-format off
+/**
+ * Id-free block pack of a ct_dim x rt_dim block: pack_block with ntiles = ct_dim * rt_dim (same block form as
+ * Quasar).
+ *
+ * | Param Type | Name                | Description                                  | Type       | Valid Range | Required |
+ * |------------|---------------------|----------------------------------------------|------------|-------------|----------|
+ * | Template   | ct_dim / rt_dim     | Block columns / rows (tiles)                 | uint32_t   | ct_dim * rt_dim <= acquired DST size | True |
+ * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                    | bool       |             | False    |
+ * | Function   | out                 | Output operand                               | LLKOperand | N/A         | True     |
+ * | Function   | ifrom_dst           | First DST tile                               | uint32_t   | N/A         | True     |
+ * | Function   | start_out_tile      | First output tile within out                 | uint32_t   | N/A         | False    |
+ */
+// clang-format on
+template <
+    std::uint32_t ct_dim,
+    std::uint32_t rt_dim,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    DataFormat Format,
+    TensorShape Shape>
+ALWI void pack_block(LLKOperand<Format, Shape> out, std::uint32_t ifrom_dst, std::uint32_t start_out_tile = 0) {
+    pack_block<is_fp32_dest_acc_en>(out, ifrom_dst, ct_dim * rt_dim, start_out_tile);
 }
 
 }  // namespace experimental
