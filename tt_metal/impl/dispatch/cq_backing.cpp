@@ -420,9 +420,9 @@ class HugepageCqBacking final : public DeviceCqBacking {
 public:
     HugepageCqBacking(MetalEnvImpl& env, MetalContext& ctx, ChipId device_id, uint8_t num_hw_cqs) :
         DeviceCqBacking(env, ctx, device_id, num_hw_cqs, env.get_cluster().get_assigned_channel_for_device(device_id)),
-        mmio_device_id_(env.get_cluster().get_associated_mmio_device(device_id)) {
-        char* hugepage_start = static_cast<char*>(env_.get_cluster().host_dma_address(0, mmio_device_id_, channel_));
-        hugepage_start += (channel_ >> 2) * DispatchSettings::MAX_DEV_CHANNEL_SIZE;
+        mmio_device_id_(env.get_cluster().get_associated_mmio_device(device_id)),
+        hugepage_base_(static_cast<char*>(env.get_cluster().host_dma_address(0, mmio_device_id_, channel_))) {
+        char* hugepage_start = hugepage_base_ + (channel_ >> 2) * DispatchSettings::MAX_DEV_CHANNEL_SIZE;
 
         // TODO(abhullar): Remove env var and expose sizing at the API level
         uint32_t cq_size_B = 0;
@@ -459,16 +459,12 @@ public:
 
 protected:
     void write_host_cq_word(uint8_t cq_id, uint32_t host_cq_addr, uint32_t value) const override {
-        env_.get_cluster().write_sysmem(
-            &value,
-            sizeof(uint32_t),
-            host_cq_addr + get_relative_cq_offset(cq_id, cq_size()),
-            mmio_device_id_,
-            channel_);
+        std::memcpy(hugepage_base_ + host_cq_addr + get_relative_cq_offset(cq_id, cq_size()), &value, sizeof(value));
     }
 
 private:
     const ChipId mmio_device_id_;
+    char* const hugepage_base_;
 };
 
 class DramCqBacking final : public DeviceCqBacking {
