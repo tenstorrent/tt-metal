@@ -60,12 +60,12 @@ on:
         default: ""
         type: string
       stage2-baseline-ref:
-        description: "Merge gate: after stage 1, each leg re-measures its regressions against the merge baseline at this ref (blank = off)"
+        description: "Merge gate: read the merge baseline for this ref once, for the gate and its stage 2 (blank = off)"
         required: false
         default: ""
         type: string
       stage2-thresholds:
-        description: 'With stage2-baseline-ref: {"<arch>": {"threshold": ..., "min_cycles": ..., "module_thresholds": ...}}; only these arches run stage 2'
+        description: 'With stage2-baseline-ref: {"<arch>": {...}}; the baseline is read for these arches'
         required: false
         default: "{}"
         type: string
@@ -365,7 +365,7 @@ jobs:
       options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
     steps:
       - name: Record the job start
-        if: ${{ inputs.shadow-compile-runner != '' || inputs.stage2-baseline-ref != '' }}
+        if: ${{ inputs.shadow-compile-runner != '' }}
         run: echo "JOB_START_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
       - name: Checkout code
         uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@7586e1e528b173057dbaa828c9ae1fa945fd2a9f # cachew checkout
@@ -543,51 +543,6 @@ jobs:
             ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}-*-run.xml
           include_passed: true
           annotate_only: true
-
-      # Stage 2 runs in the leg's spare time, after the official upload, so it adds no board job.
-      - name: "Stage 2: download the merge baseline"
-        id: stage2-baseline
-        if: ${{ success() && inputs.stage2-baseline-ref != '' && fromJSON(inputs.stage2-thresholds)[env.CHIP_ARCH] }}
-        continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: llk-perf-stage2-baseline${{ inputs.artifact-suffix }}
-          path: ${{ runner.temp }}/stage2-baseline
-      - name: "Stage 2: re-measure this leg's regressions at 5 code positions"
-        if: ${{ steps.stage2-baseline.outcome == 'success' }}
-        continue-on-error: true
-        shell: bash
-        working-directory: ${{ env.LLK_PATH }}
-        env:
-          TIMEOUT_MINUTES: ${{ matrix.test-group.timeout }}
-          LLK_PERF_RUN_TYPES: ${{ inputs.perf-run-types }}
-          THRESHOLD: ${{ fromJSON(inputs.stage2-thresholds)[env.CHIP_ARCH].threshold }}
-          MODULE_THRESHOLDS: ${{ fromJSON(inputs.stage2-thresholds)[env.CHIP_ARCH].module_thresholds }}
-          MIN_CYCLES: ${{ fromJSON(inputs.stage2-thresholds)[env.CHIP_ARCH].min_cycles }}
-        run: |
-          # JOB_START_EPOCH is stamped after container init (up to ~3 min on a cold pull); 2 more stay for the uploads.
-          export LLK_STAGE2_DEADLINE=$(( JOB_START_EPOCH + (TIMEOUT_MINUTES - 5) * 60 ))
-          # The container runs as another user than the checkout's owner; stage 2 fetches the base with git.
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          # The script stops measuring at the deadline. This limit also covers its other steps (git fetch, compare),
-          # with 30 s past the deadline to write the result, so stage 2 cannot run the leg into its timeout.
-          LEFT=$(( LLK_STAGE2_DEADLINE + 30 - $(date +%s) ))
-          if (( LEFT < 60 )); then
-            echo "::warning::No time left for stage 2 in this leg."
-            exit 0
-          fi
-          LLK_STAGE2_BASE_REF="${{ inputs.stage2-baseline-ref }}" timeout -k 10 "$LEFT" \
-            tests/run_llk_perf_merge_stage2.sh "$RUNNER_TEMP/stage2-baseline/$CHIP_ARCH" "$RUNNER_TEMP/stage2" \
-            || echo "::warning::Stage 2 did not finish in this leg (exit $?); the gate report counts this leg as missing."
-      - name: "Stage 2: upload the result"
-        if: ${{ !cancelled() && steps.stage2-baseline.outcome == 'success' }}
-        continue-on-error: true
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        with:
-          name: llk-perf-stage2-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}${{ inputs.artifact-suffix }}
-          # One search path: with two, upload-artifact uploaded only one of the files in the leg container.
-          path: ${{ runner.temp }}/stage2/stage2.*
-          if-no-files-found: ignore
 
       # Shadow steps: after the official upload, report-only, llk-shadow-* artifacts only.
       - name: "Shadow: check the time left"
