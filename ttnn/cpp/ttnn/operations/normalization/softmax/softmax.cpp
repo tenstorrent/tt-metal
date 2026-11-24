@@ -13,6 +13,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/normalization/whole_padding_tiles.hpp"
 
 constexpr float DEFAULT_SCALE_VALUE = 1.0f;
 
@@ -49,7 +50,11 @@ Tensor softmax(
 
     // Operation
     auto output_tensor = prim::softmax(
-        input_tensor, static_cast<int8_t>(dim_calculated), mem_config, compute_kernel_config, numeric_stable);
+        operations::normalization::detail::on_default_tile_grid(input_tensor),
+        static_cast<int8_t>(dim_calculated),
+        mem_config,
+        compute_kernel_config,
+        numeric_stable);
 
     return output_tensor.reshape(input_shape);
 }
@@ -78,11 +83,12 @@ Tensor scale_mask_softmax(
     }
 
     // Operation
-    auto input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
+    using operations::normalization::detail::on_default_tile_grid;
+    auto input_tensor_4D = ttnn::unsqueeze_to_4D(on_default_tile_grid(input_tensor));
     auto output_tensor = prim::scale_mask_softmax(
         input_tensor_4D,
         scale,
-        mask,
+        mask.has_value() ? std::optional<const Tensor>(on_default_tile_grid(*mask)) : std::nullopt,
         memory_config.value_or(input_tensor.memory_config()),
         is_causal_mask,
         compute_kernel_config,
