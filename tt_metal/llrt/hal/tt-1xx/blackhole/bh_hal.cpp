@@ -254,11 +254,6 @@ public:
         if (!hal_.get_supports_rvv(params.core_type, params.processor_class, params.processor_id)) {
             return {};
         }
-        // -march is the exact ISA string -mcpu=tt-bh-tensix resolves to (per
-        // `riscv-tt-elf-g++ -mcpu=tt-bh-tensix -v`), plus _zve32f. Passed after -mcpu (recipe
-        // cflags are appended after common_flags), so it overrides the arch while keeping the
-        // tt-bh-tensix tuning.
-        //
         // -fno-lto: emit a plain (non-LTO) object for this TU. With -flto the RVV builtins are
         // streamed as GIMPLE and re-expanded by the link-stage LTRANS units, which do not carry
         // the vector -march, breaking code generation at link time (observed with sfpi 7.70.0).
@@ -269,7 +264,7 @@ public:
         //
         // -Wno-error=array-bounds: RVV intrinsic loads/stores through casted L1 pointers trip
         // -Warray-bounds false positives at -O3 under -Werror.
-        return "-march=rv32im_zmmul_zaamo_zba_zbb_xtttensixbh_zve32f -fno-lto "
+        return "-mcpu=tt-bh-vector-tensix -fno-lto "
                "-fno-tree-vectorize -fno-tree-slp-vectorize -Wno-error=array-bounds ";
     }
 
