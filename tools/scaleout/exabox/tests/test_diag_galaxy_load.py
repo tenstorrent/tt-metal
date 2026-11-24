@@ -1003,6 +1003,17 @@ class TestLinks(unittest.TestCase):
         self.assertEqual([(c["name"], c["status"]) for c in snap["checks"]], [("snapshot_capture", SKIP)])
         self.assertNotEqual(snap["status"], FAIL)
 
+    def test_a_known_dropped_tray_skips_the_bus_bar_load_not_the_links(self):
+        import diag_runner
+
+        with mock.patch.object(diag_runner, "KNOWN_DROPPED", {3}):
+            got = self._run_load("weekly", stage_order="busbar,links")
+        self.assertEqual(got["order"], ["links"])
+        bb = next(c for c in got["report"]["phases"]["tests"]["checks"] if c["name"] == "busbar")
+        self.assertEqual(
+            (bb["status"], bb["details"]), (SKIP, "known drop: tray 3 is down and the load needs the 4x8 mesh")
+        )
+
     def test_skip_tests_skips_the_load(self):
         got = self._run_load(skip_tests=True)
         self.assertEqual(got["order"], [])

@@ -122,6 +122,22 @@ class TestResets(unittest.TestCase):
         out, checks = self._reset([], gate="sh -c 'echo serving; exit 1'")
         self.assertEqual((out, checks["reset_1"].details), (None, "reset cannot run: reset gate: serving"))
 
+    def test_a_known_dropped_tray_is_not_missing(self):
+        with mock.patch.object(resets, "KNOWN_DROPPED", {2}), mock.patch("diag.snapshot_checks.KNOWN_DROPPED", {2}):
+            out, checks = self._reset([[b for b in all_bdfs() if not b.startswith("0000:4")]])
+        self.assertEqual((checks["recount_1"].status, sorted(checks)), (PASS, ["recount_1", "reset_1"]))
+        self.assertIn("tray 2: known drop", checks["recount_1"].details)
+
+    def test_firmware_not_ready_gets_a_second_round_then_fails(self):
+        node = Path(resets.SYS, "bus/pci/devices/0000:01:00.0/tenstorrent/tenstorrent!0")
+        node.mkdir(parents=True)
+        (node / "tt_fw_bundle_ver").write_text("0.0.0.0\n")
+        out, checks = self._reset([all_bdfs()])
+        self.assertEqual(checks["reset_1_round2"].status, PASS)
+        self.assertEqual(
+            checks["ready_recount_1"].details, "0000:01:00.0 firmware not ready (tt_fw_bundle_ver 0.0.0.0)"
+        )
+
     def test_all_back_needs_no_rescan(self):
         out, checks = self._reset([all_bdfs()])
         self.assertEqual((len(out), checks["reset_1"].status, checks["recount_1"].status), (32, PASS, PASS))

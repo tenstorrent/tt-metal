@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import shlex
 import subprocess
+import sys
 import time
 from collections import Counter
 from contextlib import suppress
@@ -19,7 +20,7 @@ from .aer import aer_check, aer_new, read_aer
 from . import events
 from .busbar import Step, run_step
 from .common import emit_result, emit_running, log, print_phase_summary, root_cmd, run, write_command_log
-from .galaxy import EXPECTED_CHIP_COUNT, TRAY_TO_UBB_NIBBLE, expected_bdf
+from .galaxy import EXPECTED_CHIP_COUNT, KNOWN_DROPPED, TRAY_TO_UBB_NIBBLE, expected_bdf, parse_bdf_physical
 from .model import FAIL, PASS, SKIP, WARN, Check, Phase
 from .snapshot import resolve_tt_smi, take_snapshot
 from .snapshot_checks import pcie_enum_check, validate_snapshot
@@ -37,6 +38,7 @@ def add_args(ap) -> None:
     ap.add_argument(
         "--end-delay-s", type=int, default=END_DELAY_S, help="s from the post-test reset to the end fabric open"
     )
+    ap.add_argument("--known-dropped-tray", type=int, choices=range(1, 5), help="a tray known to be down: not counted")
 
 
 def pcie_bdfs() -> list[str] | None:
@@ -89,6 +91,33 @@ def rescan(missing: Sequence[str]) -> tuple[dict[str, str], list[str]]:
     return back, whys
 
 
+OPEN = """import sys, tt_umd
+for n in sys.argv[1:]:
+    try:
+        tt_umd.PCIDevice(int(n))
+    except Exception as e:
+        print(n, " ".join(str(e).split())[:160])
+print("done")"""
+
+
+def unready(bdfs: Sequence[str]) -> dict[str, str]:
+    """Why each chip is not back after a reset: missing from PCIe (a known-dropped tray's are not), on PCIe with its
+    firmware not ready (tt_fw_bundle_ver 0.0.0.0), or not opening in tt-umd (not checked when tt-umd cannot run)."""
+    out = {b: "missing from PCIe" for b in ALL_BDFS if b not in bdfs and parse_bdf_physical(b)[0] not in KNOWN_DROPPED}
+    nodes = {}
+    for b in bdfs:
+        for node in (SYS / "bus/pci/devices" / b / "tenstorrent").glob("tenstorrent!*"):
+            nodes[node.name.rsplit("!", 1)[1]] = b
+            with suppress(OSError):
+                if (node / "tt_fw_bundle_ver").read_text().strip() == "0.0.0.0":
+                    out[b] = "firmware not ready (tt_fw_bundle_ver 0.0.0.0)"
+    with suppress(OSError, subprocess.TimeoutExpired):
+        cp = subprocess.run([sys.executable, "-c", OPEN, *nodes], capture_output=True, text=True, timeout=120)
+        for n, _, why in (ln.partition(" ") for ln in cp.stdout.splitlines() if ln != "done"):
+            out.setdefault(nodes.get(n, n), f"on PCIe, tt-umd cannot open it: {why}")
+    return out
+
+
 def _gate(cmd: str | None) -> str:  # why the reset gate refuses a reset now, or ""
     if not cmd:
         return ""
@@ -131,7 +160,9 @@ def glx_reset(
     if dry_run:
         return list(ALL_BDFS)
     bdfs = pcie_bdfs()
-    missing = [b for b in ALL_BDFS if bdfs is not None and b not in bdfs]
+    missing = [
+        b for b in ALL_BDFS if bdfs is not None and b not in bdfs and parse_bdf_physical(b)[0] not in KNOWN_DROPPED
+    ]
     if missing:
         back, whys = rescan(missing)
         bdfs = pcie_bdfs() if back else bdfs
@@ -139,6 +170,13 @@ def glx_reset(
             said = "; ".join([*(f"{b} back only after a rescan of root port {rp}" for b, rp in back.items()), *whys])
             data = {"back": back, "not_rescanned": whys}
             phase.add(Check(name=f"rescan_{name}", status=WARN if back else SKIP, details=said, data=data, ip="pcie"))
+    bad = {} if bdfs is None else unready(bdfs)
+    if bad and not name.endswith("_round2"):  # a second re-power round for chips missing, not ready or not opening
+        log(f"{name}: {len(bad)} chip(s) not back: a second tt-smi -glx_reset")
+        return glx_reset(tt_smi, phase, f"{name}_round2", recount, dry_run, logs_dir, gate)
+    if bad.keys() - {b for b, why in bad.items() if why == "missing from PCIe"}:
+        said = "; ".join(f"{b} {why}" for b, why in bad.items() if why != "missing from PCIe")
+        phase.add(Check(name=f"ready_{recount}", status=FAIL, details=said, data={"unready": bad}, ip="pcie"))
     phase.add(recount_check(recount, bdfs))
     return bdfs
 

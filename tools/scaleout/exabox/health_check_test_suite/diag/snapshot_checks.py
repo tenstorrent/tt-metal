@@ -17,6 +17,7 @@ from .galaxy import (
     ETH_EXAMAX_BY_ASIC,
     ETH_INTERNAL_BY_ASIC,
     EXPECTED_CHIP_COUNT,
+    KNOWN_DROPPED,
     TRAY_TO_UBB_NIBBLE,
     UBB_NIBBLE_TO_TRAY,
     expected_bdf,
@@ -67,14 +68,16 @@ def pcie_enum_check(devs: list[dict], name: str = "pcie_enum_count") -> Check:
     slots that did not show up (set diff against the full 32-BDF Galaxy 6U topology)."""
     n = len(devs)
     actual_bdfs = sorted((d.get("board_info") or {}).get("bus_id", "") for d in devs)
-    all_expected_bdfs = sorted(expected_bdf(t, a) for t in range(1, 5) for a in range(1, 9))
+    all_expected_bdfs = sorted(expected_bdf(t, a) for t in range(1, 5) if t not in KNOWN_DROPPED for a in range(1, 9))
     missing_bdfs_enum = sorted(set(all_expected_bdfs) - set(actual_bdfs))
-    enum_details = f"{n}/{EXPECTED_CHIP_COUNT} chips enumerated"
+    enum_details = f"{n}/{EXPECTED_CHIP_COUNT} chips enumerated" + "".join(
+        f"; tray {t}: known drop" for t in KNOWN_DROPPED
+    )
     if missing_bdfs_enum:
         enum_details += "; missing: " + ", ".join(format_bdf(b) for b in missing_bdfs_enum)
     return Check(
         name=name,
-        status=PASS if n == EXPECTED_CHIP_COUNT else FAIL,
+        status=PASS if (not missing_bdfs_enum if KNOWN_DROPPED else n == EXPECTED_CHIP_COUNT) else FAIL,
         details=enum_details,
         data={
             "actual": n,

@@ -39,6 +39,7 @@ if _SUITE_DIR not in sys.path:
     sys.path.insert(0, _SUITE_DIR)
 
 from diag.common import default_tt_metal_path, log, print_phase_line, print_phase_summary  # noqa: E402
+from diag.galaxy import KNOWN_DROPPED  # noqa: E402
 from diag.aer import AerWindow  # noqa: E402
 from diag import captures  # noqa: E402
 from diag.device_tests import run_tests  # noqa: E402
@@ -249,7 +250,10 @@ def _run_galaxy_load(
     sweeps after a hang or CCL failure in either (busbar.link_fault; never a numeric fault alone). One that raises is
     its own FAIL and does not stop the other."""
     held = len(phase.checks)
-    if "busbar" in tests:
+    if "busbar" in tests and KNOWN_DROPPED:
+        why = f"known drop: tray {', '.join(map(str, sorted(KNOWN_DROPPED)))} is down and the load needs the 4x8 mesh"
+        phase.add(Check(name="busbar", status=SKIP, details=why, ip="other"))
+    elif "busbar" in tests:
         _guarded(phase, "busbar", FAIL, lambda: run_busbar(phase, out, mode, dry_run, tuple(steps), **overrides))
     fault = link_fault_before or any(link_fault(c) for c in phase.checks[held:] if c.name != "busbar")
     if "links" in tests:
@@ -730,6 +734,7 @@ def main() -> int:
         except ValueError as e:
             ap.error(str(e))
     events.setup(args)
+    KNOWN_DROPPED.update([args.known_dropped_tray] if args.known_dropped_tray else [])
     rc, _report = run_diag(
         tier=args.tier,
         dry_run=args.dry_run,
