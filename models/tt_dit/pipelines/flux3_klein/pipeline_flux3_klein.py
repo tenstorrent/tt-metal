@@ -211,9 +211,12 @@ class Flux3KleinPipeline:
         axis_topologies: dict[int, ttnn.Topology] | None = None,
         num_links: int = 2,
         upsample: bool = False,
+        free_other_sizes: bool = False,
     ) -> None:
         """With ``upsample``, the prompt upsampler shares the first chip of ``mesh_device``, which must be opened
-        with upsampler_flux3_klein.SHARED_MESH_PARAMS, and every prompt is rewritten before it is encoded."""
+        with upsampler_flux3_klein.SHARED_MESH_PARAMS, and every prompt is rewritten before it is encoded. With
+        ``free_other_sizes``, a request of another size than the last one frees the CCL pairs and plans only other sizes
+        used (rebuilt on their next request), so a DP4 group holds one size's working set, not every size's."""
         self._upsampler_ranges = reserve_upsampler_ranges(mesh_device) if upsample else None
         self._device = mesh_device
         self._sp_axis = sp_axis
@@ -286,6 +289,7 @@ class Flux3KleinPipeline:
         self._pair_users: dict[tuple, set] = {}
         self._last_layout = None
         self._pair_freeing_size = PAIR_FREEING_FROM_SIZE.get(tuple(mesh_device.shape))
+        self._free_other_sizes = free_other_sizes
         self._mask_cache: dict[tuple[int, int], ttnn.Tensor] = {}
         self._upsampler = Flux3KleinSharedUpsampler(mesh_device) if upsample else None
 
@@ -377,8 +381,15 @@ class Flux3KleinPipeline:
 
         t0 = time.time()
         text_rows = text_rows or self._text_rows(prompt, size, ref_bucket)
-        if self._pair_freeing_size:
-            self._claim_pairs((request.model, size, ref_bucket, text_rows), free_others=size >= self._pair_freeing_size)
+        switched = self._free_other_sizes and self._last_layout is not None and self._last_layout[1] != size
+        if self._pair_freeing_size or self._free_other_sizes:
+            self._claim_pairs(
+                (request.model, size, ref_bucket, text_rows),
+                free_others=size >= (self._pair_freeing_size or math.inf),
+                free_other_sizes=switched,
+            )
+        if switched:
+            self._free_other_plans(math.prod(latent_shape(size, size)))
         text = self._prompt_encoder.encode(prompt, text_rows)
         timings["encode"] = time.time() - t0
 
@@ -427,23 +438,27 @@ class Flux3KleinPipeline:
         logger.info(f"FLUX 3 Klein {request.model} {size}x{size} refs {len(request.images)}: {timings}")
         return Flux3KleinResult(image=image, prompt=prompt, seed=seed, timings=timings, cached_steps=cached_steps)
 
-    def _claim_pairs(self, layout: tuple, free_others: bool) -> None:
+    def _claim_pairs(self, layout: tuple, free_others: bool, free_other_sizes: bool = False) -> None:
         """Credits the CCL ping-pong pairs (keyed by shape, never evicted) the previous request used to its layout and,
-        with `free_others`, frees the allocated pairs only other layouts of its size have used, as _free_other_plans does
-        for plans: a DP4 group warmed on every 4096 layout otherwise runs out of DRAM on them. Pairs of a shape the
+        with `free_others`, frees the allocated pairs only other layouts of its size have used, as _free_other_plans
+        does for plans: a DP4 group warmed on every 4096 layout otherwise runs out of DRAM on them. Pairs of a shape the
         layouts share stay once each has used them; pairs another size used stay too (freed, they would be re-created
-        mid-render on its next request)."""
+        mid-render on its next request), unless `free_other_sizes` frees every pair no layout of this size used."""
         for index, ccl in enumerate(self._ccl_managers):
             for key in ccl.take_used_ping_pong_keys():
                 self._pair_users.setdefault((index, key), set()).add(self._last_layout)
         self._last_layout = layout
-        if not free_others:
+        if not free_others and not free_other_sizes:
             return
         live = [ccl.ping_pong_keys() for ccl in self._ccl_managers]
         stale = [
             (i, key)
             for (i, key), users in self._pair_users.items()
-            if layout not in users and key in live[i] and all(user is None or user[1] == layout[1] for user in users)
+            if key in live[i]
+            and (
+                (free_others and layout not in users and all(user is None or user[1] == layout[1] for user in users))
+                or (free_other_sizes and all(user is None or user[1] != layout[1] for user in users))
+            )
         ]
         if stale:
             ttnn.synchronize_device(self._device)
@@ -468,12 +483,12 @@ class Flux3KleinPipeline:
         )
         return noise, x_host
 
-    def _free_other_plans(self, image_rows: int, cond_rows: int) -> None:
-        """Frees the cached plans of every other layout: at the largest size, the reference encoder and the denoise need
-        their DRAM (a TP2 group holds twice the DiT weights)."""
+    def _free_other_plans(self, image_rows: int, cond_rows: int | None = None) -> None:
+        """Frees the cached plans of every other layout (every other size without `cond_rows`): at the largest size, the
+        reference encoder and the denoise need their DRAM (a TP2 group holds twice the DiT weights)."""
         for key in list(self._plan_cache):
             lengths = dict(key[3])
-            if (lengths["image"], lengths["image_cond"]) != (image_rows, cond_rows):
+            if lengths["image"] != image_rows or cond_rows is not None and lengths["image_cond"] != cond_rows:
                 self._plan_cache.pop(key).deallocate()
 
     def _upload_rows(self, rows: torch.Tensor | ttnn.Tensor, sp_factor: int) -> ttnn.Tensor:
