@@ -575,33 +575,47 @@ def test_clone_dram_sharded(
     including uneven last shards.
     """
     torch.manual_seed(0)
-    if input_dtype == "uint32":
-        # torch has no uint32; non-negative int32 values are the same bits.
-        torch_input = torch.randint(0, 2**31 - 1, shape, dtype=torch.int32)
-        ttnn_in_dtype = ttnn.uint32
-    elif input_dtype == "bfloat8_b":
-        torch_input = torch.randn(shape, dtype=torch.float32)
-        ttnn_in_dtype = ttnn.bfloat8_b
-    else:
-        torch_input = torch.randn(shape, dtype=get_lib_dtype(torch, input_dtype))
-        ttnn_in_dtype = get_lib_dtype(ttnn, input_dtype)
-    ttnn_input = ttnn.from_torch(
-        torch_input,
-        device=device,
-        dtype=ttnn_in_dtype,
-        layout=ttnn.TILE_LAYOUT if tilized else ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=_two_shard_memory_config(shard_layout, input_buffer_type, shard_shape),
-    )
-    ttnn_output = ttnn.clone(
-        ttnn_input,
-        dtype=get_lib_dtype(ttnn, output_dtype),
-        memory_config=_two_shard_memory_config(shard_layout, output_buffer_type, shard_shape),
-    )
-    if input_dtype == "bfloat8_b":
-        # Block-float quantizes on upload, so compare against what the input tensor holds.
-        expected = ttnn.to_torch(ttnn_input)
-    elif input_dtype == "uint32":
-        expected = torch_input
-    else:
-        expected = torch_input.to(get_lib_dtype(torch, output_dtype or input_dtype))
-    assert torch.equal(ttnn.to_torch(ttnn_output).to(expected.dtype), expected)
+    out_memory_config = _two_shard_memory_config(shard_layout, output_buffer_type, shard_shape)
+
+    def run_once():
+        if input_dtype == "uint32":
+            # torch has no uint32; non-negative int32 values are the same bits.
+            torch_input = torch.randint(0, 2**31 - 1, shape, dtype=torch.int32)
+            ttnn_in_dtype = ttnn.uint32
+        elif input_dtype == "bfloat8_b":
+            torch_input = torch.randn(shape, dtype=torch.float32)
+            ttnn_in_dtype = ttnn.bfloat8_b
+        else:
+            torch_input = torch.randn(shape, dtype=get_lib_dtype(torch, input_dtype))
+            ttnn_in_dtype = get_lib_dtype(ttnn, input_dtype)
+        ttnn_input = ttnn.from_torch(
+            torch_input,
+            device=device,
+            dtype=ttnn_in_dtype,
+            layout=ttnn.TILE_LAYOUT if tilized else ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=_two_shard_memory_config(shard_layout, input_buffer_type, shard_shape),
+        )
+        with device.cache_entries_counter.measure():
+            ttnn_output = ttnn.clone(
+                ttnn_input, dtype=get_lib_dtype(ttnn, output_dtype), memory_config=out_memory_config
+            )
+        if input_dtype == "bfloat8_b":
+            # Block-float quantizes on upload, so compare against what the input tensor holds.
+            expected = ttnn.to_torch(ttnn_input)
+        elif input_dtype == "uint32":
+            expected = torch_input
+        else:
+            expected = torch_input.to(get_lib_dtype(torch, output_dtype or input_dtype))
+        assert torch.equal(ttnn.to_torch(ttnn_output).to(expected.dtype), expected)
+
+    for i in range(2):
+        run_once()
+        # Allocate a dummy tensor so the second iteration's buffers land at different addresses.
+        torch_dummy = torch.randn([32, 32])
+        ttnn_dummy = ttnn.from_torch(torch_dummy, device=device)
+        if i == 0:
+            first_count = device.cache_entries_counter.total
+        else:
+            assert device.cache_entries_counter.total == first_count
+    logger.info(f"cache_entries_counter.total={device.cache_entries_counter.total}")
+    assert device.cache_entries_counter.total > 0
