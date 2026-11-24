@@ -175,30 +175,33 @@ card:
     [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) on a P300x2 (4 Blackhole chips) with vLLM, on the
     resident decode engine: one persistent program per chip per decode step. Profiles: 1 to 32 users in one decode
     launch with [DFlash2](https://huggingface.co/incoai/Qwen3.8-27B-DFlash2) speculative decoding for up to 8 greedy
-    users when it pays, a shared KV pool and prefix caching / preemption swap in host memory (the default); and one
-    user with lossless DFlash2 speculative decoding (up to 256K context).
+    or sampled users when it pays, a shared KV pool and prefix caching / preemption swap in host memory (the default);
+    and one user with lossless DFlash2 speculative decoding (up to 256K context).
   quickstart: |
     ### At a glance
     - Weights: [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) @ `1d4bf0f`; drafter
       [incoai/Qwen3.8-27B-DFlash2](https://huggingface.co/incoai/Qwen3.8-27B-DFlash2) @ `dedf8df`
     - Hardware: P300x2 (QuietBox 2), one (1, 4) Blackhole mesh
-    - Profiles: `batch` (default, 1-32 users, DFlash2 for up to 8 greedy users when it pays), `single-user`
+    - Profiles: `batch` (default, 1-32 users, DFlash2 for up to 8 greedy or sampled users when it pays), `single-user`
     - `single-user` is **greedy only**: every request is decoded greedily (the server logs one warning for a request with
       temperature > 0). Speculation is lossless against the model's own greedy output; tokens can differ from plain
       decoding at bf16 near-ties.
     - DFlash2 helps most on short and medium prompts. On long, hard-to-predict text the gain shrinks to about 1.3x over
       plain decoding; it stayed faster at every length measured (32K to 250K).
-    - New in this release (2026-11-24, second): `batch` now speculates — the `batch-dflash2` profile of the morning's
-      release replaces the plain `batch` (one user on natural text: ~96 t/s/u vs 61; sampled requests and more users
-      decode as before); its KV pool stores V in 4-bit block floats (1,792,000 tokens, +27%); a request preempted when
-      the pool runs out resumes from host RAM instead of re-prefilling; and requests with logprobs, structured output,
-      logit_bias, min_p, bad_words, allowed_token_ids or min_tokens are served (decoded without speculation).
+    - New in this release (2026-11-24, third): `batch` speculates for sampled requests too (temperature > 0 with the
+      device's top-k: one user on natural chat at T 0.7 gets ~87 t/s/u vs 61, two ~81 vs 59, four ~61 vs 56); a
+      request with its own seed decodes without speculation, so the same seed gives the same text.
+    - Earlier today: `batch` became the speculating engine (the `batch-dflash2` profile replaced the plain `batch`), its
+      KV pool stores V in 4-bit block floats (1,792,000 tokens, +27%), a request preempted when the pool runs out
+      resumes from host RAM instead of re-prefilling, and requests with logprobs, structured output, logit_bias,
+      min_p, bad_words, allowed_token_ids or min_tokens are served (decoded without speculation).
 
     ### Which profile
     - One user, greedy (temperature 0): `single-user`.
-    - Anything else (sampling, 2 to 32 users, logprobs, structured output): `batch`. Its greedy requests speculate while
-      at most 8 users are live and every live request is greedy (one user on natural text gets about 96 t/s/u, four
-      about 66; sampled requests and more users get the plain decode: 60 t/s/u for one user, 22 at 32).
+    - Anything else (sampling, 2 to 32 users, logprobs, structured output): `batch`. Its greedy and sampled requests
+      speculate while a few users are live (one user on natural text gets about 92-96 t/s/u greedy, 87 sampled at
+      T 0.7; four about 63 / 61); more users, penalized or seeded requests get the plain decode (60 t/s/u for one user,
+      22 at 32).
     - If the time to the first token matters more than decode speed: `batch` with the TTFT-first option below.
 
     ### Get the drafter (both profiles)
@@ -251,28 +254,31 @@ card:
     ### Speculative decoding on `batch`
     Two builds of the model run in one process with shared weights and one KV pool: the 32-row plain decode and a
     speculating build of 8 users x 4 verify rows (3 DFlash2 drafts per verify). Every prompt prefills on the plain
-    side (chunks, prefill gangs, prefix cache). A greedy request (temperature 0, no penalties, nothing that needs the
-    logits) moves into the speculating build after its first decode step when that pays: the move fills the drafter's
+    side (chunks, prefill gangs, prefix cache). A greedy or sampled request (no penalties, no seed, nothing that needs
+    the logits; a sampled one with top_k within 32 — the model's default sampling has 20) moves into the speculating
+    build after its first decode step when that pays (expected acceptance per kind of request, learned from finished
+    requests: sampled drafts are accepted less, so 3-4 sampled users stay plain unless their text is predictable): the move fills the drafter's
     2,048-token window from the taps its prefill kept (~20 ms; a prefix-cache entry keeps them too), or — after a
     prefill of several prompts in one pass, or a long stretch of plain steps — re-runs the window (~0.35 s at 2K+
     tokens) while every live user waits, which is skipped when too few tokens are expected to be left or too many
     users would wait. The server measures both kinds of step and goes back to plain steps for everyone when
     speculation stops paying (6-8 users or more by its step-time model, low draft acceptance) and while any live
-    request is sampled, penalized, or asks for logprobs, structured output, logit_bias, min_p, bad_words,
-    allowed_token_ids or min_tokens — those are served on plain host-sampled steps, as on a server that does not
-    speculate. Greedy output can differ from a non-speculating decode at bf16 near-ties (the speculating and plain
+    request is penalized, seeded, or asks for logprobs, structured output, logit_bias, min_p, bad_words,
+    allowed_token_ids or min_tokens — those are served on plain steps, as on a server that does not speculate. A
+    sampled request's verify rows each draw with its own temperature / top-k / top-p at their positions, and a draft is
+    accepted while the draw equals it, which keeps the sampled distribution (lossless for any draft). Greedy output can differ from a non-speculating decode at bf16 near-ties (the speculating and plain
     builds sum in different orders; 4-bit V adds some): in the check below, 2 of 8 256-token answers at 8 users matched
     the 1-user answers exactly and the others took an equally fluent different word after 86-424 characters.
 
-    Served, natural-text prompts, greedy, 256 tokens (2026-11-24, two runs of this build; the plain decode of the
-    morning's `batch` for comparison):
+    Served, natural-text prompts, 256 tokens (2026-11-24, this build; greedy, and sampled at T 0.7 / top-p 0.95 /
+    top-k 20; the plain decode for comparison):
 
-    | users | `batch` t/s/u | plain decode t/s/u |
-    |---|---|---|
-    | 1 | 96 | 61 |
-    | 2 | 84-85 | 59 |
-    | 4 | 66-68 | 56 |
-    | 8 | 51 | 51 |
+    | users | `batch` greedy t/s/u | `batch` sampled t/s/u | plain decode t/s/u |
+    |---|---|---|---|
+    | 1 | 92 | 87 | 61 |
+    | 2 | 82 | 81 | 59 |
+    | 4 | 63 | 61 | 56 |
+    | 8 | 51 | 51 | 51 |
 
     ### Prefill and decode on `batch`, and the TTFT-first option
     A step on this engine either prefills or decodes, never both, so prefill time that runs while a user decodes is a
@@ -292,27 +298,29 @@ card:
     | `single-user` | 1 | 128 / 128 | 124.0 | 142.1 | 0.14 s |
     | `single-user` | 1 | 8192 / 128 | 73.5 | 175.2 | 1.02 s |
     | `single-user` | 1 | 32768 / 128 | 29.8 | 209.0 | 3.69 s |
-    | `batch` | 1 | 128 / 128 | 54.6 | 60.5 | 0.25 s |
-    | `batch` | 8 | 128 / 128 | 315.0 | 50.1 | 0.71 s |
-    | `batch` | 16 | 128 / 128 | 443.7 | 36.0 | 1.09 s |
+    | `batch` | 1 | 128 / 128 | 52.6 | 58.1 | 0.25 s |
+    | `batch` | 8 | 128 / 128 | 314.5 | 50.1 | 0.72 s |
+    | `batch` | 16 | 128 / 128 | 443.2 | 36.0 | 1.09 s |
     | `batch` | 32 | 128 / 128 | 535.7 | 21.9 | 1.84 s |
-    | `batch` | 32 | 128 / 1024 | 661.1 | 21.4 | 1.86 s |
-    | `batch` | 32 | 2048 / 128 | 286.7 | 20.9 | 8.21 s |
-    | `batch` | 32 | 8192 / 1024 | 403.0 | 18.2 | 24.96 s |
-    | `batch` | 1 | 32768 / 128 | 18.8 | 57.6 | 4.59 s |
-    | `batch` | 1 | 250000 / 128 | 2.1 | 43.2 | 58.53 s |
-    | `batch`, greedy | 1 | 128 / 128 | 62.0 | 69.7 | 0.24 s |
-    | `batch`, greedy | 2 | 128 / 128 | 102.1 | 62.6 | 0.36 s |
-    | `batch`, greedy | 4 | 128 / 128 | 148.6 | 41.9 | 0.35 s |
-    | `batch`, greedy | 8 | 128 / 128 | 313.3 | 50.1 | 0.73 s |
-    | `batch`, greedy | 8 | 2048 / 128 | 194.5 | 48.4 | 2.64 s |
-    | `batch`, greedy | 1 | 8192 / 128 | 43.0 | 90.3 | 1.57 s |
-    | `batch`, greedy | 1 | 32768 / 128 | 20.9 | 85.1 | 4.62 s |
-    | `batch`, greedy | 1 | 250000 / 128 | 2.1 | 53.4 | 58.41 s |
+    | `batch` | 32 | 128 / 1024 | 661.3 | 21.4 | 1.81 s |
+    | `batch` | 32 | 2048 / 128 | 286.2 | 20.9 | 8.24 s |
+    | `batch` | 32 | 8192 / 1024 | 403.0 | 18.2 | 25.00 s |
+    | `batch` | 1 | 32768 / 128 | 21.2 | 89.2 | 4.60 s |
+    | `batch` | 1 | 250000 / 128 | 2.1 | 39.1 | 58.77 s |
+    | `batch`, greedy | 1 | 128 / 128 | 61.0 | 68.6 | 0.25 s |
+    | `batch`, greedy | 2 | 128 / 128 | 96.9 | 59.0 | 0.37 s |
+    | `batch`, greedy | 4 | 128 / 128 | 161.8 | 46.3 | 0.41 s |
+    | `batch`, greedy | 8 | 128 / 128 | 311.5 | 50.1 | 0.75 s |
+    | `batch`, greedy | 8 | 2048 / 128 | 194.1 | 48.4 | 2.65 s |
+    | `batch`, greedy | 1 | 8192 / 128 | 42.9 | 89.4 | 1.56 s |
+    | `batch`, greedy | 1 | 32768 / 128 | 21.1 | 86.7 | 4.61 s |
+    | `batch`, greedy | 1 | 250000 / 128 | 2.1 | 38.7 | 58.67 s |
 
-    `batch` rows use the model's default sampling (temperature > 0), so they run the plain decode; the greedy rows
-    speculate where it pays. Both use random-token prompts, on which drafts are accepted less than on natural text (see
-    the table above), and the greedy rows vary run to run with how much of each request ends up speculating.
+    `batch` rows use the model's default sampling (temperature > 0), which now speculates where it pays too; the
+    greedy rows run greedy. Both use random-token prompts, on which drafts are accepted much less than on natural text
+    (see the table above): such requests are probed and then decoded plainly, which costs a few percent (1-user 128-token
+    rows 58 vs 60.5 t/s/u plain; the 250K rows ~39 vs 43), and the long-context rows vary run to run with how much of
+    each request ends up speculating.
 
   performance: |
     | profile | ISL | OSL | concurrency | N | TTFT (ms) | prefill tok/s/u | decode tok/s/u | E2EL (s) |
@@ -321,21 +329,21 @@ card:
     | `single-user` | 8,192 | 128 | 1 | 2 | 1,015 | 8,070 | 175.2 | 1.7 |
     | `single-user` | 32,768 | 128 | 1 | 1 | 3,685 | 8,891 | 209.0 | 4.3 |
     | `single-user` | 131,072 | 128 | 1 | 1 | 21,710 | 6,037 | 93.9 | 23.1 |
-    | `batch` | 128 | 128 | 1 | 4 | 246 | 520 | 60.5 | 2.3 |
-    | `batch` | 128 | 128 | 8 | 32 | 714 | 179 | 50.1 | 3.2 |
-    | `batch` | 128 | 128 | 16 | 64 | 1,091 | 117 | 36.0 | 4.6 |
-    | `batch` | 128 | 128 | 32 | 128 | 1,840 | 70 | 21.9 | 7.6 |
-    | `batch` | 128 | 1,024 | 32 | 64 | 1,865 | 69 | 21.4 | 49.6 |
-    | `batch` | 2,048 | 128 | 32 | 64 | 8,206 | 250 | 20.9 | 14.3 |
-    | `batch` | 8,192 | 1,024 | 32 | 64 | 24,960 | 328 | 18.2 | 81.3 |
-    | `batch` | 32,768 | 128 | 1 | 1 | 4,589 | 7,140 | 57.6 | 6.8 |
-    | `batch` | 250,000 | 128 | 1 | 1 | 58,532 | 4,271 | 43.2 | 61.5 |
-    | `batch`, greedy | 128 | 128 | 1 | 4 | 242 | 529 | 69.7 | 2.1 |
-    | `batch`, greedy | 128 | 128 | 4 | 16 | 354 | 362 | 41.9 | 3.4 |
-    | `batch`, greedy | 128 | 128 | 8 | 32 | 731 | 175 | 50.1 | 3.3 |
-    | `batch`, greedy | 2,048 | 128 | 8 | 16 | 2,641 | 776 | 48.4 | 5.3 |
-    | `batch`, greedy | 8,192 | 128 | 1 | 2 | 1,571 | 5,214 | 90.3 | 3.0 |
-    | `batch`, greedy | 32,768 | 128 | 1 | 1 | 4,619 | 7,093 | 85.1 | 6.1 |
+    | `batch` | 128 | 128 | 1 | 4 | 246 | 519 | 58.1 | 2.4 |
+    | `batch` | 128 | 128 | 8 | 32 | 722 | 177 | 50.1 | 3.3 |
+    | `batch` | 128 | 128 | 16 | 64 | 1,092 | 117 | 36.0 | 4.6 |
+    | `batch` | 128 | 128 | 32 | 128 | 1,841 | 70 | 21.9 | 7.6 |
+    | `batch` | 128 | 1,024 | 32 | 64 | 1,815 | 71 | 21.4 | 49.6 |
+    | `batch` | 2,048 | 128 | 32 | 64 | 8,238 | 249 | 20.9 | 14.3 |
+    | `batch` | 8,192 | 1,024 | 32 | 64 | 24,995 | 328 | 18.2 | 81.3 |
+    | `batch` | 32,768 | 128 | 1 | 1 | 4,602 | 7,120 | 89.2 | 6.0 |
+    | `batch` | 250,000 | 128 | 1 | 1 | 58,765 | 4,254 | 39.1 | 62.0 |
+    | `batch`, greedy | 128 | 128 | 1 | 4 | 248 | 517 | 68.6 | 2.1 |
+    | `batch`, greedy | 128 | 128 | 4 | 16 | 414 | 309 | 46.3 | 3.2 |
+    | `batch`, greedy | 128 | 128 | 8 | 32 | 750 | 171 | 50.1 | 3.3 |
+    | `batch`, greedy | 2,048 | 128 | 8 | 16 | 2,649 | 773 | 48.4 | 5.3 |
+    | `batch`, greedy | 8,192 | 128 | 1 | 2 | 1,560 | 5,250 | 89.4 | 3.0 |
+    | `batch`, greedy | 32,768 | 128 | 1 | 1 | 4,606 | 7,114 | 86.7 | 6.1 |
 
     Means of `vllm bench serve` runs (random prompts, ignore_eos; `single-user` greedy) on a P300x2 with chip clocks
     logged: `single-user` 2026-11-20 (median 1350 MHz), `batch` 2026-11-24 (median 1350 MHz, at most 68 °C; prefix
@@ -347,15 +355,18 @@ card:
     Prefix caching (`batch`, on by default: `RESIDENT_PREFIX_CACHE_GB`, 32 GB of host RAM; 0 turns it off): a prompt's
     state at its last 1,024-token boundary is kept in host memory (for the speculating build also the drafter's taps),
     and a later prompt that starts with it restores it instead of prefilling it. A 3-turn chat over a 12,021-token
-    document (greedy, served, 2026-11-24): TTFT 2.00 / 0.74 / 0.70 s vs 1.42 / 1.38 / 1.37 s without the cache
+    document (greedy, served, 2026-11-24): TTFT 1.98 / 0.70 / 0.72 s vs 1.42 / 1.38 / 1.37 s without the cache
     (2026-11-22); the answers are identical. Storing a long prompt that misses the cache costs its first request about
     +0.9 s at 32K tokens (the 32K TTFT above).
   limitations: |
     - `single-user` decodes every request greedily (temperature and sampling parameters are ignored, with one
       logged warning).
-    - `batch` speculates for at most 8 greedy users at a time, and only while every live request is greedy without
-      penalties, logprobs, structured output, logit_bias, min_p or token filters; one such request makes every live
-      user decode plainly until it finishes (its output is exact; the speed gain pauses).
+    - `batch` speculates for at most 8 users at a time, and only while no live request has penalties, its own seed,
+      logprobs, structured output, logit_bias, min_p, token filters, or a top_k past 32; one such request makes every
+      live user decode plainly until it finishes (its output is exact; the speed gain pauses).
+    - `batch`: hard-to-predict text (random tokens, some code) is probed and then decoded plainly, which costs a few
+      percent on such requests; the server remembers the acceptance it saw, per kind of request (greedy, sampled), so a
+      run of them stops probing.
     - `batch`: a request with presence / frequency / repetition penalties or logprobs sends the whole decode step to
       host sampling for every user in it: a 16-user step goes from 27.9 to about 62 ms (one penalized request) or 68 ms
       (one logprobs request).
