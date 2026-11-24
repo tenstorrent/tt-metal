@@ -165,8 +165,9 @@ jobs:
             *) echo "::error::Could not read the package (HTTP $status): $(cat package.json)"; exit 1 ;;
           esac
           # A release is never replaced: suites pin a version and must keep getting the same bytes for it.
-          status=$(curl -sS -o manifest.json -w '%{http_code}' \
-            -H "Authorization: Bearer $(printf %s "$GH_TOKEN" | base64 -w0)" \
+          token=$(curl -fsS -u "$GITHUB_ACTOR:$GH_TOKEN" \
+            "https://ghcr.io/token?service=ghcr.io&scope=repository:${GITHUB_REPOSITORY}/tt-llk-harness:pull" | jq -r .token)
+          status=$(curl -sS -o manifest.json -w '%{http_code}' -H "Authorization: Bearer $token" \
             -H "Accept: application/vnd.oci.image.manifest.v1+json" \
             "https://ghcr.io/v2/${GITHUB_REPOSITORY}/tt-llk-harness/manifests/${VERSION}")
           case "$status" in
