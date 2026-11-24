@@ -11,7 +11,7 @@ from typing import Dict
 import numpy as np
 import pytest
 import torch
-from conftest import skip_for_quasar, skip_for_wormhole
+from conftest import skip_for_quasar, skip_for_wormhole, wormhole_only
 from helpers.chip_architecture import ChipArchitecture
 from helpers.constraints import skip_if_32bit_input_without_dest_acc
 from helpers.data_format_inference import effective_dest_acc, unpacks_to_dest
@@ -1184,6 +1184,83 @@ def test_eltwise_binary_sfpu_float_comparison(formats, dest_acc, mathop, **run_k
     sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B, **run_kwargs)
 
 
+# Float32 bit patterns paired all-against-all: signed zeros, the smallest, a middle and the
+# largest subnormal, the extreme normals, infinities, and NaNs of both signs with distinct
+# payloads (quiet, all-ones mantissa, signalling).
+_FP32_COMPARE_SPECIAL_BITS = (
+    0x00000000,
+    0x80000000,
+    0x00000001,
+    0x80000001,
+    0x00400000,
+    0x80400000,
+    0x007FFFFF,
+    0x807FFFFF,
+    0x00800000,
+    0x80800000,
+    0x3F800000,
+    0xBF800000,
+    0x7F7FFFFF,
+    0xFF7FFFFF,
+    0x7F800000,
+    0xFF800000,
+    0x7FC00000,
+    0xFFC00000,
+    0x7FFFFFFF,
+    0xFFFFFFFF,
+    0x7F800001,
+)
+_FP32_COMPARE_REFERENCE = {
+    MathOperation.SfpuElwEq: torch.eq,
+    MathOperation.SfpuElwNe: torch.ne,
+    MathOperation.SfpuElwLt: torch.lt,
+    MathOperation.SfpuElwGt: torch.gt,
+    MathOperation.SfpuElwLe: torch.le,
+    MathOperation.SfpuElwGe: torch.ge,
+}
+
+
+def _fp32_from_bits(words):
+    return torch.tensor(
+        [w - (1 << 32) if w >= 1 << 31 else w for w in words], dtype=torch.int32
+    ).view(torch.float32)
+
+
+# Wormhole only: the expected verdicts model Wormhole's SFPU, which reads a subnormal as zero.
+@wormhole_only
+@parametrize(mathop=list(_FP32_COMPARE_REFERENCE), dest_acc=[DestAccumulation.Yes])
+def test_eltwise_binary_sfpu_float_comparison_specials(mathop, dest_acc):
+    # Float32 into a 32-bit Dest delivers subnormals and NaN payloads to the SFPU. Expected:
+    # operands flushed to zero when subnormal, then IEEE comparison (any NaN is unordered).
+    pairs = [
+        (float(a), float(b))
+        for a, b in itertools.product(
+            _fp32_from_bits(_FP32_COMPARE_SPECIAL_BITS), repeat=2
+        )
+    ]
+    src = _build_paired_tile_override(pairs, torch.float32)
+    res, _ = sfpu_binary(
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+        dest_acc,
+        mathop,
+        src_A_override=src,
+        input_dimensions=_EXACT_DIMS,
+        check_contract=False,
+    )
+    a, b = src[:_ELEMENTS_PER_TILE], src[_ELEMENTS_PER_TILE:]
+    tiny = torch.finfo(torch.float32).tiny
+    a, b = (torch.where(x.abs() < tiny, torch.zeros_like(x), x) for x in (a, b))
+    expected = _FP32_COMPARE_REFERENCE[mathop](a, b).to(torch.float32)
+    got = res[:_ELEMENTS_PER_TILE].to(torch.float32)
+    bad = (got != expected).nonzero().flatten().tolist()
+    bits = fp32_bits_as_int32(src)
+    assert not bad, f"{mathop.name}: {len(bad)} lanes differ, first " + ", ".join(
+        f"(0x{int(bits[i]) & 0xFFFFFFFF:08x}, "
+        f"0x{int(bits[_ELEMENTS_PER_TILE + i]) & 0xFFFFFFFF:08x}) -> {float(got[i])}"
+        for i in bad[:8]
+    )
+
+
 @parametrize(**ISCLOSE_SWEEP)
 def test_eltwise_binary_sfpu_isclose(formats, dest_acc, mathop, **run_kwargs):
     # isclose(a, b) = |a - b| <= atol + rtol*|b|, a = tile0, b = tile1. torch default
@@ -2320,6 +2397,32 @@ def test_eltwise_binary_sfpu_int_shift_edge_cases(
         mathop,
         src_A_override=_build_shift_edge_case_src(mathop),
         twos_complement=True,
+    )
+
+
+@parametrize(**EQ_NE_INT_SWEEP)
+def test_eltwise_binary_sfpu_eq_ne_int_edge_cases(formats, dest_acc, mathop):
+    # Every pair of the shift edge values plus INT32_MIN + 1, so a ^ b covers zero, the sign
+    # bit alone (0 / INT32_MIN, 1 / INT32_MIN + 1, -1 / INT32_MAX) and the int32 extremes.
+    values = _SHIFT_EDGE_VALUES + [_INT32_MIN + 1]
+    pairs = list(itertools.product(values, repeat=2))
+    src = _build_paired_tile_override(pairs, torch.int32)
+    res, _ = sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        src_A_override=src,
+        input_dimensions=_EXACT_DIMS,
+        twos_complement=True,
+        check_contract=False,
+    )
+    a, b = src[:_ELEMENTS_PER_TILE], src[_ELEMENTS_PER_TILE:]
+    equal = a == b
+    expected = (equal if mathop == MathOperation.SfpuEqInt else ~equal).to(torch.int32)
+    got = res[:_ELEMENTS_PER_TILE].to(torch.int32)
+    bad = (got != expected).nonzero().flatten().tolist()
+    assert not bad, f"{mathop.name}: {len(bad)} lanes differ, first " + ", ".join(
+        f"({int(a[i])}, {int(b[i])}) -> {int(got[i])}" for i in bad[:8]
     )
 
 
