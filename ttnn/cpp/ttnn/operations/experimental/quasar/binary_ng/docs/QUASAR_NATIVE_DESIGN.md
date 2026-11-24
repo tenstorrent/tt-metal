@@ -825,7 +825,7 @@ counts must be derived in-kernel from `get_my_thread_id()`.
 
 ### 3.5 Behavior compared with production `binary_ng` (WH and BH)
 
-*Current behavior, 2026-11-03.* "Production" is `ttnn/cpp/ttnn/operations/eltwise/binary_ng`, which runs
+*Current behavior, 2026-11-12.* "Production" is `ttnn/cpp/ttnn/operations/eltwise/binary_ng`, which runs
 on WH and BH. "Native" is this factory. To *borrow* an operand is to use its own L1 buffer as its circular
 buffer (production) or its DFB (native), so that the operand does not move over the NoC. A Quasar cluster is
 what metal addresses as one core. Where §3.2 gives other gate conditions, this section is current.
@@ -836,11 +836,11 @@ gate admits the op, and any other op raises an error. This section covers neithe
 | | Production | Native |
 |---|---|---|
 | Ops | every binary op | ADD, SUB, MUL, DIV, MAXIMUM and MINIMUM; in bf16, DIV out of fast and approximate mode |
-| Dtypes | every supported dtype, and mixes | a, b and the output in one format, bf16 or fp32 |
+| Dtypes | every supported dtype, and mixes | a, b and the output in one format, bf16 or fp32; or a and b in one MX format with that format or bf16 out; or bf16 a and b with an MX out |
 | Layout | TILE and ROW_MAJOR | TILE, 32×32 tiles |
 | Broadcast | every subtile and outer-dim broadcast | outer-dim broadcast in every dim through −6; ROW, COL, SCALAR, mixed and VALUE in bf16 and fp32 (in fp32 the reader expands ROW, COL and SCALAR) |
-| Operand b | a tensor or a scalar | a tensor, or a scalar in bf16 or fp32; for MAXIMUM and MINIMUM a tensor only, because the op sends their scalar to the unary clamp |
-| Activations | on a, on b and on the result | the same |
+| Operand b | a tensor or a scalar | a tensor, or a scalar in bf16 or fp32; for MAXIMUM and MINIMUM a tensor only, because the op sends their scalar to the unary clamp; with an MX operand or output, a tensor only |
+| Activations | on a, on b and on the result | the same, except none with an MX operand or output |
 | Where-ops, quantization | yes | no |
 | Placements | interleaved (L1, DRAM), 2D shards, and ND shards (moved, never borrowed) | interleaved (L1, DRAM) and 2D shards (L1, DRAM), in any mix; no ND shards (F18) |
 | Selection | always | on Quasar, unless `TTNN_QSR_NATIVE=0` |
@@ -957,11 +957,15 @@ things: a 32-bit DST does not mean fp32 tensors, and an fp32 operand does not re
 |---|---|---|---|---|---|
 | bf16 | bf16 | bf16 | 16-bit | FPU kernel, at most 8 tiles | SFPU kernel, at most 4 tiles |
 | fp32 | fp32 | fp32 | 32-bit | SFPU kernel, at most 2 tiles | SFPU kernel, at most 2 tiles |
+| MX, one format | the same | that MX format or bf16 | 16-bit | FPU kernel, at most 8 tiles | SFPU kernel, at most 4 tiles |
+| bf16 | bf16 | an MX format | 16-bit | FPU kernel, at most 8 tiles | SFPU kernel, at most 4 tiles |
 | bf16 | fp32, or the reverse | bf16 or fp32 | 32-bit | **FPU kernel, at most 4 tiles** | SFPU kernel, at most 2 tiles |
 | bf16 | bf16 | fp32 | 32-bit | **FPU kernel, at most 4 tiles** | SFPU kernel, at most 2 tiles |
 
-The first two rows are the native slice. The gate admits a, b and the output in one format, bf16 or fp32, so a
-native program has a 16-bit DST for bf16 and a 32-bit DST for fp32, and runs the rule's batch for its DST mode and
+The first four rows are the native slice. The gate admits a, b and the output in one format, bf16 or fp32, and two
+MX conversions: a and b in one MX format with that format or bf16 out, and bf16 a and b with an MX out. The
+unpacker and the packer convert MX through Float16_b, so an MX program has the 16-bit DST of bf16. A native
+program has a 16-bit DST for bf16 and MX and a 32-bit DST for fp32, and runs the rule's batch for its DST mode and
 its ring stride. The
 last two rows are the two cases where the FPU kernel meets a 32-bit DST. Both are mixed data formats (F17): the
 operands differ, or the output differs from the operands. An fp32 pair takes the SFPU kernel with any output format, because the routing
@@ -1262,7 +1266,12 @@ so `-0.0`/NaN cannot alias.
 `math_approx_mode=false`, `fp32_dest_acc_en=false`, `double_buffer_dest`, per-DFB `unpack_modes`, and the
 three DFB `data_format`/`tile_format` values must match the fallback exactly.
 
-**The bf16 oracle does not cover F6** (MX) **or F17** (a 32-bit DST with bf16 operands): each measures its own.
+**The bf16 oracle does not cover F17** (a 32-bit DST with bf16 operands), which measures its own. **F6** (MX)
+composes its oracle from the device's operands in three parts: a reference decode of each MX operand, the
+kernel's bf16 model of this section, and a reference encode of an MX output. The reference codec is written from
+the format's spec and shares no code with ttnn's codec (`mx_reference_codec.py`; the tests are
+`test_binary_ng_mx.py` and `binary_ng_mx_test_utils.py`). The compare is exact: 0 differing elements, and zero
+signs do not count.
 F5 measured its own for fp32, below. F2 measured
 each kernel's rounding on craq-sim, with the device's operands (0 of 32768 elements differ for each rule, and
 the other rule differs on 27% to 47% of them): `subtract`, and `multiply` in fast and approximate mode, run
@@ -1278,8 +1287,7 @@ the smaller exponent to the other's with 7 bits below the bf16 ULP, rounds it ha
 sum to nearest even. About 1 element in 80,000 of a random `add` or `subtract` is then 1 ULP from torch's single
 rounding. `_fpu_add_bf16` in `binary_ng_quasar_test_utils.py` is this model: it matches ttsim on 21M elements, with
 no element different. The oracle is the model alone, and `_FPU_ADD_ROUNDINGS` holds only it. A craq-sim older than
-`b05091aa`, such as `b9d8e2f4`, rounds once. It fails the FPU add and subtract cases of the native module, and the
-failure message says why.
+`b05091aa`, such as `b9d8e2f4`, rounds once. The owner retired craq-sim on 2026-11-13.
 
 F7 measured the activations the same way: 32 cases, two ops by four activations by four placements, and 0 elements
 differ in each case. SQUARE runs on the SFPU wherever it is, and truncates its fp32 result to bf16, as the SFPU
@@ -1531,9 +1539,9 @@ measurement with a written-down prediction, and never put an unmeasured multipli
 
 ### 7.5 The pre/post software gate — one emulator campaign at the end
 
-**Development runs on craq-sim. Emulator use is deliberately minimized: one campaign after phase 1 is
-functionally complete, not per-milestone.** What the design must therefore guarantee is not a schedule but
-a *capability*:
+**Development runs on ttsim (craq-sim until 2026-11-13). Emulator use is deliberately minimized: one
+campaign after phase 1 is functionally complete, not per-milestone.** What the design must therefore
+guarantee is not a schedule but a *capability*:
 
 > **A software gate that selects the pre-native path or the native path at runtime, in one build, on any
 > platform — so a single emulator campaign can measure both arms back to back.**
@@ -1579,7 +1587,7 @@ What that capability imposes — each of these is easy to lose by accident:
 3. **Nothing platform-specific in the harness.** `debug/bench_binary_ng_shapes.py` and
    `debug/prof_summary.py` must not hardcode `/workspaces/sim/libttsim.so`; platform comes from the
    environment. The runtime already abstracts it — `rtoptions().is_simulator_or_emulated()` covers both,
-   `TT_METAL_SIMULATOR` selects craq-sim, `TT_METAL_EMULE_MODE=1` (+ `TT_METAL_MOCK_CLUSTER_DESC_PATH`)
+   `TT_METAL_SIMULATOR` selects the simulator library (ttsim), `TT_METAL_EMULE_MODE=1` (+ `TT_METAL_MOCK_CLUSTER_DESC_PATH`)
    selects the emulated backend — and the quasar test lists already carry per-platform variants.
 4. **The gated metric stays portable.** The per-cluster kernel span (§2.1) comes from the device profiler,
    which works on both. Do not let a craq-sim-only counter become load-bearing: `TTSIM_PERF_TRACE` is a
@@ -1682,10 +1690,10 @@ conflate them.
 | 2.4 | F10 | **Tensor-scalar — DONE** | **Done** in bf16 and fp32: the scalar is VALUE, which the reader fills from the packed scalar into one full tile per Neo inside `scoped_write_lock`; the writer stays output-only. The plan as written: Writer fills `in1` once. Same fence dependency as F8. |
 | 2.5 | F14 | **Per-operand reader allocation** (independent `R_in0` / `R_in1`) | **EMULATOR-ONLY EXPERIMENT — do not sweep this on craq-sim.** Today one `R` feeds both input DFBs, so every reader core reads both operands. There is **no roofline gain**: per-core read count is `T/2` either way, so `165/R` cannot move. The whole case is below that level, and craq-sim models a NoC read as a host `memcpy` — no banks, no rows, no contention — so it would return a confident ~0% and retire the idea for the wrong reason. Per §4.2's rule this is a **floor, not a ceiling**, like `implicit_sync` and ring depth. **Leading hypothesis (mechanism named, magnitude unmeasured): tile-split systematically pairs same-bank DRAM accesses.** With interleaved allocation page `p` maps to bank `p mod N`, and the loop reads `in0[k], in1[k]` — same page index, same bank, different buffers, therefore different rows, so a precharge+activate per tile. Operand-split walks `in0[k], in0[k+2], ...` across distinct banks. Caveat: `R` cores issue concurrently, so the controller may already see an interleaved stream and wash the per-core pattern out. Secondary: each core currently alternates between two `TensorAccessor`s, doubling the cached address-translation working set. **Proportional allocation is the more solid motivation, and it does not need broadcast** — F4 (mixed layouts) is the first point operand costs diverge: a sharded `in0` costs zero NoC while an interleaved `in1` does not, and tile-split forces every core to do one of each. F13 and F10 sharpen it further. **Binding design constraint is the STRIDED ratio rule, not the barrier**: each operand needs `max(p,C) % min(p,C) == 0`, so at `C=4` only `p in {1,2,4}` — 2+2, 4+2, 4+1 legal, **3+1 illegal**, i.e. the naive allocation for a 3:1 traffic ratio is the one that fails. **Nothing at LLK or DFB level prevents any of this:** STRIDED mode exists for `producers != consumers` and one DFB already admits multiple producer KernelSpecs (`:1130`); all three blockers are host/firmware software — `NUM_KERNEL_BARRIERS = 2` (whose header comment names the fix: key the barrier per kernel-group) and deriving a DFB's producer count from its kernel's `num_threads`. The per-node producer/consumer census is **not** a blocker: it is scoped per DFB (§3.3.1-B), so two reader kernels owning one input DFB each pass it. `wait_threads()` returns immediately for `participants <= 1`, so an asymmetric multi-thread + single-thread split never contends for a barrier slot at all — **4+1+1 and 2+1+2 are reachable today; only the symmetric 2+2 needs the barrier change**, and §3.3.1-B enumerates the space and assesses that change as plumbing rather than design. |
 | 2.6 | F15 | **In-flight concurrency** (`implicit_sync`, ring depth, DFB batching) | **BATCHING PULLED FORWARD 2026-09-10 and measured on craq-sim — research §5.0.8-§5.0.11.** `1,1,1` n=1 -> n=8 is **1.81x** throughput (176.00 -> 97.39 cyc/tile), bit-exact, all three stages batched. So the emulator-only reasoning was right for `implicit_sync` and ring depth but **wrong for batching**: batching removes issue overhead, which craq-sim does count, rather than hiding latency it does not model. Three findings that shape the plan. **(a) The two knobs ship together or not at all** — compute must not pop more than the reader pushes, so compute-only batching is a diagnostic arm, not a configuration. Dataflow batching works at every clean `(R,C,W)`: a role owning K tile counters batches within each counter, striding by `K*T`, and rotates between them (STATUS week of 2026-09-17 slide 3, research §5.0.13; 260 runs bit-exact). On 09-17, compute batching was correct only at ring stride 1, until tt-metal#56194 landed. (2026-10-09: main fixed the pack half, #56194. #62954 then fixed the unpack half, #61774, so every compute batch is exact now, §4.3. The rest of this cell is the record of 09-17.) **(b) The deliverable is `4,4,2` n=8: 26.56 cyc/tile measured against n=1's 44.00, 1.66x, writer-bound, blocked only by #56194.** At n=1 `4,4,2`'s three roofs sit within 7% of each other; batching compresses the compute chain and hands the roofline to the writer. **(c) `4,4,2` n=1 remains the default and the best correct configuration until the fix lands.** What stands in the way is SILENT DATA CORRUPTION rather than a block — above stride 1 the compute half writes `1 - ceil(n/S)/n` of each batch to the wrong L1 offset and returns wrong data with no error; the factory `TT_FATAL` is the only reason that reads as a refusal. `2,2,2` n=8 is an engine-constrained option: **48.70** cyc/tile projected against `4,4,2` n=1's measured **44.12**, i.e. **90% of the throughput on 60% of the engines** (4 DM + 2 Neo vs 6 DM + 4 Neo). Firm projection: a measured n=8 aggregate divided by an exactly-validated factor of 2. The bug is in the metal LLK pack path — `get_output_tile_index` adds +1 entry per tile where `dfb_slot_cursor_offset_units` divides by `stride_size_tiles`, so at stride > 1 consecutive tiles collapse onto one offset (**tt-metal#56194**; `hw/ckernels/quasar/metal/llk_api/llk_pack_tile_api.h:58-74`, and `cb_api.h:146` does it right on the unpack side). Batching still cannot substitute for threading at equal n — `1,1,1` fully batched (97.39) loses to `2,2,2` unbatched (88.25). **And N is a narrow knob regardless of any of this: N>1 requires the two operand shapes to be EQUAL and the operands L1-sharded.** Any broadcast forces N=1 — subtile because compute indexes inside the tile, outer-dim because only the *interleaved* reader duplicates tiles through zeroed strides while N>1 is gated on sharding, and the sharded reader pushes just its own shard (`reader_interleaved_no_bcast.cpp`, `#if SRC_SHARDED`). **Watch which way the implication runs:** the `no_bcast` kernel is selected on `SubtileBroadcastType::NONE`, the broader condition — `shapes equal` ⊂ `subtile NONE`, so it serves equal shapes, but NONE does not imply equal shapes since an outer-dim broadcast passes it. What narrows NONE to equal shapes in production's gate is the sharding half: `is_native_L1_sharding` admits all-three-sharded only when `a.logical_shape() == b->logical_shape()` (`binary_ng_utils.cpp:806`). Add DRAM-interleaved (never implemented on WH/BH; the Quasar-native knobs are the first to batch it) and the paying case on WH/BH is one of three: L1-sharded with equal shapes, where the reader just pushes resident tiles so the gain is entirely compute-side. **Our kernels support neither broadcast kind yet** — outer-dim is 2.1 / F13, subtile is 2.2 / F8 — so every batching measurement is on dense shapes, and F13 does not interact with the batch knob (it restores the interleaved path, where N is 1 either way). **N=1 is the norm; N>1 is the exception.** Treat the Quasar experiment as instrumentation for the cost model first (it is what pinned `C` as a delivery roof). **That said, the interleaved row is a cheap opportunity worth taking while the code is fresh:** no architecture has ever implemented DRAM-interleaved no-broadcast N>1, the factory already ports the sharded policy (`:578-581`), and extending it is one branch plus `entries_per_thread = 2N` over kernels already measured bit-exact, gated so the default `4,4,2` n=1 is untouched. It buys speed at `4,4,2` only after #56194 lands. `implicit_sync` and ring depth remain **EMULATOR-ONLY** on the original §7.4 grounds: measured <= **1.10x** / **1.02x** there, both **floors, not ceilings**, real size unknown. **They are one lever, not three** (§7.6): ring `capacity`, batch `n` and removing the wait are facets of *how many tile transfers are in flight at once*, coupled by `capacity >= 2n`. Sweep as a single axis against thread counts. **Known negative, do not re-run: batching the WRITER is actively harmful** — `wait_front(n)` delays `pop_front` and starves compute of ring slots, degrading monotonically to 1.02x at `n=8`. That measurement is descriptor-factory and single-threaded, so it is a prior rather than a native-path result, but the mechanism is DFB semantics and both native dataflow-only arms agree with it (`1,1,1` 0.0%; `2,2,2` a net loss). Treat it as a standing caution for any future batching work, not as a measured native-path result. The native factory currently runs explicit sync (`disable_dfb_implicit_sync_for_all=true`), so `implicit_sync` is off and turning it on is the experiment. |
-| **3.0** | — | **Milestone 3 — reached 2026-10-31 with F8 and F9 in fp32** | Broadcast-complete. What remains is the long tail: a different physical layout, the op families with their own kernels, a format that does not exist in TTNN yet, tensors in mixed data formats, and ND shards. |
+| **3.0** | — | **Milestone 3 — reached 2026-10-31 with F8 and F9 in fp32** | Broadcast-complete. What remains is the long tail: a different physical layout, the op families with their own kernels, the MX formats (the slice of this op is done since 2026-11-12, row 3.3), tensors in mixed data formats, and ND shards. |
 | 3.1 | F11 | **Row-major** | Quasar needs explicit 16-byte RM shard-width alignment. |
 | 3.2 | F12 | **where / quantization / int32** | Own kernel families; int32 blocked on the DFB-compute bug. |
-| 3.3 | F6 | **MX formats** | Quasar replaces all BFP with MX; the ResNet slice that ships as bf8 is MXINT8 here. Bigger than a dtype widening — see §8.1. Deprioritized 2026-08-22: it needs a new TTNN `DataType` plus IDMA gasket support, so it is the one item whose cost is dominated by work **outside this op**. F17 comes after it since 2026-10-15 (dchen). |
+| 3.3 | F6 | **MX formats — the binary_ng slice DONE 2026-11-12** | The native gate admits a and b in one MX format with that format or bf16 out, and bf16 a and b with an MX out, for the six ops on both kernels, at every placement and beside an outer-dim broadcast. One predicate, `is_mx()`, covers the eight MX formats. The unpacker and the packer convert MX through Float16_b, so the DST is 16-bit and the rule's batch is the one of bf16 (§3.6). Out of the slice: a scalar, a subtile broadcast, an activation, fp32 at either end, two MX formats, MX beside bf16, and an MX output in another format than the input's. No kernel change. The oracle is in §6.1. Quasar replaces all BFP with MX; the ResNet slice that ships as bf8 is MXINT8 here. Deprioritized 2026-08-22, when TTNN had no MX `DataType`. F17 comes after it since 2026-10-15 (dchen). |
 | 3.4 | F17 | **Mixed data formats** | The operands in different data formats (bf16 with fp32), or the output in a data format other than the operands' (bf16 into fp32, fp32 into bf16). Each gives a 32-bit DST, and every case where the FPU kernel meets a 32-bit DST is one of them (§3.6): add, subtract, and multiply in fast and approximate mode run it at most 4 tiles per batch; multiply and divide by default run the SFPU kernel at most 2. The gate admits them, and the rule takes the batch from the DST mode and the kernel, never from a data format. It needs F5's 32-bit DST and `UnpackToDest`. The §6.1 oracles were measured in a 16-bit DST, so this item measures its own. In production an 8-tile FPU batch with mixed fp32 and bf16 operands gave a wrong tile 4 in each batch, which set its bound of 4; the Metal 2.0 factory still takes 8 (§3.5, not run). Today a mixed pair does not run on Quasar: the Metal 2.0 gate requires one input format, so the op raises an error. A bf16 operand beside an fp32 operand of the SFPU kernel also meets the kernel-wide `UnpackToDestEn` (§3.6.1). Added 2026-10-15 (dchen). |
 | 3.5 | F18 | **ND shards** | An operand or the output in the `ND_SHARDED` layout. TTNN uses that layout only when no 2D strategy can express the shards: more shards than banks (round-robin, several per bank), a block across several dims, or 2D blocks on a core set that is not a rectangle. Production moves ND shards over the NoC and never borrows them (since #60507). The native gate rejects them (`is_2d_shard_layout`), and so does the Metal 2.0 gate, so today the op raises an error on Quasar. Scope: the gate admits L1 and DRAM ND operands as moved operands, the borrow decision never borrows an ND operand, and the worker grid maps an ND grid to its sub-device as production does. TensorAccessor already reads the ND distribution spec. Borrowing waits for a model that needs it: when a, b and the output share one ND spec, the local pages of each cluster line up, as in untilize's identical-spec factory. No Quasar model sends an ND tensor to a binary op today. Added 2026-10-19 (dchen). |
 
@@ -1708,11 +1716,11 @@ test, which also violates the `[24,32)` BFD partition), there is a known HW bug 
 production-ready; then the hardening pass (strict gate, CI wiring, knobs into the hash). The env-var default
 flipped on 2026-10-20: the native factory runs on Quasar unless `TTNN_QSR_NATIVE=0`.
 
-### 8.1 Notes for the MX-format phase (F6; read only when it is actually scheduled)
+### 8.1 Notes on MX formats (F6)
 
-- **Prerequisite v1 missed entirely: there is no MX `DataType` in TTNN.** `tensor_types.hpp` ends at
-  `INT8 = 9`, so a TTNN tensor cannot hold MX. F6 needs a new `DataType`, a
-  `datatype_to_dataformat_converter` arm, a tile-size arm and a host pack path — not just format plumbing.
+- **TTNN holds MX tensors since 2026-10-28.** `tensor_types.hpp` has the eight MX `DataType`s, `MXFP8_E4M3`
+  to `MXINT2`, with their `datatype_to_dataformat_converter` arms, tile sizes and host pack paths. `is_mx()` is
+  their predicate.
 - **Host MX packing does exist** (`mxint.hpp`, `mxfp4/6/8.hpp`, `impl/data_format/mx_tile_pack.hpp`). Only the **IDMA gaskets** lack it, so MX cannot be
   staged or converted through the dispatch engine.
 - **Host and device `DataFormat` disagree numerically, and the device reuses the BFP encodings:** host
@@ -1723,13 +1731,18 @@ flipped on 2026-10-20: the native factory runs on Quasar unless `TTNN_QSR_NATIVE
 - **An MX tile is a two-region object** `[scales padded to L1 alignment][packed elements]`. That breaks more
   than `entry_size`: `base_entry_idx = (base − tc_slots[0].base_addr) / entry_size` and the BFD x/y/z address
   generator both assume a homogeneous tile, and `llk_unpack_program_bfd` takes a single `TensorShape` + base
-  + format. The "multi-TC not handled" TODO there is benign for phase 1 and F3 but **not** for MX.
+  + format. On ttsim the native factory moves the three MX tile sizes (1,056, 544 and 288 B) exactly at the
+  rule's thread counts, on five placements (DRAM and L1 interleaved, an uneven L1 height shard, a DRAM width
+  shard, and a mix), with full batches. Other knob settings were not run.
 - **Carve-out to encode:** `enable_2x_src_register` must stay **false** for eltwise — Mxfp4-only, and valid
   only for the matmul family (MVMUL/MVMULDI) and the GAPOOL column reduce; other instructions "produce
   garbage math results". Silent wrong answer, not a hang. It defaults to false.
-- `is_block_float()` is a `DataType` predicate over BFLOAT8_B/BFLOAT4_B — **vacuously false** on Quasar and
-  therefore harmless today. It needs an arm only once MX `DataType`s exist.
-- MX is two's-complement with an E8M0 block scale — a genuinely different encoding, not a rename.
+- `is_block_float()` stays a BFP-only predicate (BFLOAT8_B, BFLOAT4_B) on purpose: BFP and MX share "TILE only,
+  packed on the host", but not the encoding or the packer. `is_mx()` is the separate MX predicate, and the native
+  gate uses it.
+- MX is a different encoding from BFP, not a rename: one E8M0 scale per block of 32 values. An MX float element
+  is sign-magnitude. An MXINT element is two's complement, except that its code -2^w (0x80 in mxint8) decodes to
+  -0, by the RTL reading of tt-regen-spec 4.2.
 
 ## 9. Prerequisites, deferred, and open
 

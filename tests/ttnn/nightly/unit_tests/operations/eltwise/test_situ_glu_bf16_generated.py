@@ -256,9 +256,12 @@ def test_situ_glu_sfpu_generated_bf16_sweep(device, swept, fp32_dest, slots):
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="situ_glu SFPU op is implemented for Blackhole only")
+@pytest.mark.parametrize("fp32_dest", [False, True], ids=["bf16_dst", "fp32_dst"])
 @pytest.mark.parametrize("slots", _GENERATED_SLOTS, ids=lambda s: "dst%d_%d_%d" % s)
-def test_situ_glu_sfpu_generated_specials(device, slots):
+def test_situ_glu_sfpu_generated_specials(device, fp32_dest, slots):
     """NaN gives NaN (stored as +inf); the other classes as torch, or as the stock path where the two differ."""
+    if fp32_dest and max(slots) >= 4:
+        pytest.skip("FP32 DEST holds 4 tiles in half sync")
     names = list(_GENERATED_CLASSES)
     pairs = [(a, b) for a in names for b in names if (a, b) in _GENERATED_SPECIAL_RESULTS]
     first = torch.tensor([_GENERATED_CLASSES[a] for a, _ in pairs], dtype=torch.float32).to(torch.bfloat16)
@@ -270,7 +273,7 @@ def test_situ_glu_sfpu_generated_specials(device, slots):
         second_t,
         ttnn.bfloat16,
         TILE_ELEMS * 2,
-        False,
+        fp32_dest,
         dst_gate=slots[0],
         dst_up=slots[1],
         dst_out=slots[2],
@@ -285,8 +288,13 @@ def test_situ_glu_sfpu_generated_specials(device, slots):
             return "-0" if torch.signbit(v) else "+0"
         return "finite"
 
+    def read(name, value):
+        # With FP32 DEST, TT-NN's copy_tile hands the SFPU a NaN input as the infinity of its sign.
+        return ("-inf" if torch.signbit(value) else "+inf") if fp32_dest and name == "nan" else name
+
     # The BF16 pack stores a NaN as +inf, and the SFPU a subnormal result as +0.
     stored = {"nan": "+inf", "subnormal": "+0"}
     got = {pair: kind(actual[i]) for i, pair in enumerate(pairs)}
-    want = {pair: stored.get(_GENERATED_SPECIAL_RESULTS[pair], _GENERATED_SPECIAL_RESULTS[pair]) for pair in pairs}
+    results = [_GENERATED_SPECIAL_RESULTS[(read(a, first[i]), read(b, second[i]))] for i, (a, b) in enumerate(pairs)]
+    want = {pair: stored.get(result, result) for pair, result in zip(pairs, results)}
     assert got == want

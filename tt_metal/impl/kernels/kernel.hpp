@@ -20,9 +20,9 @@
 #include "api/tt-metalium/experimental/offline_kernel_compile.hpp"
 #include <tt-metalium/workload/specification/scratchpad_spec.hpp>
 #include "impl/context/metal_context.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include "impl/metal2_host_api/sram_arena_support.hpp"
-#include "core_coord.hpp"
-#include "hal_types.hpp"
 #include "jit_build/jit_build_settings.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel_source.hpp"
@@ -144,7 +144,7 @@ using SemaphoreBindingHandleMap = std::unordered_map<std::string, SemaphoreBindi
 
 // Metal 2.0: per-kernel resolved TensorBinding.
 // Carries the offsets the kernel-side codegen needs to emit a token, plus the program-level
-// TensorParameter name so SetProgramRunArgs can fill the binding's base-address slot
+// TensorParameter name so Program::set_program_run_args can fill the binding's base-address slot
 // (and any runtime accessor fields) from the corresponding TensorArgument at enqueue time.
 struct TensorBindingHandle {
     std::string accessor_name;          // user-facing identifier (kernel symbol in `tensor::`)
@@ -177,7 +177,7 @@ struct TensorBindingHandle {
 //  - The base address is allocated at Program-compile time or supplied through an SRAMArena
 //    argument, and is passed to the kernel as an implicit CRTA.
 //  - Since the address is persistent across enqueues, we store it on the Kernel object rather
-//    than rely on the statefulness of the CRTA buffer. (The invariant of SetProgramRunArgs is that
+//    than rely on the statefulness of the CRTA buffer. (The invariant of Program::set_program_run_args is that
 //    the CRTA and RTA buffers are completely overwritten when it's called.)
 //  - It is possible for DFB size overrides to be applied between enqueues. If this happens, the
 //    allocated scratchpad addresses will update between enqueues as well.
@@ -206,6 +206,14 @@ struct ScratchpadBindingHandle {
     // Resolved reservation nodes, excluded from the kernel hash.
     // Invariant: Placement is non-empty and fixed for the Program's lifetime.
     CoreRangeSet placement;
+};
+
+// Metal 2.0: per-kernel resolved GlobalSemaphore binding. The address is a run argument: Program::set_program_run_args
+// writes the bound GlobalSemaphore's address into the word at addr_crta_word.
+struct GlobalSemaphoreBindingHandle {
+    std::string accessor_name;                    // user-facing identifier (kernel symbol in `global_sem::`)
+    std::string global_semaphore_parameter_name;  // refers back to the program-level GlobalSemaphoreParameter
+    uint32_t addr_crta_word = 0;                  // word index of the address slot within the kernel's CRTA buffer
 };
 
 // Metal 2.0: per-kernel resolved PrefetcherPipe accessor (KernelAdvancedOptions::PrefetcherPipeBinding).
@@ -383,6 +391,16 @@ public:
     void set_scratchpad_binding_handles(std::vector<ScratchpadBindingHandle> handles) {
         scratchpad_binding_handles_ = std::move(handles);
     }
+    // GlobalSemaphore binding handles are set post-construction (before compile: they are part of
+    // the kernel cache key and of kernel_bindings_generated.h).
+    void process_global_semaphore_binding_handles(
+        std::function<void(const std::string& accessor_name, uint32_t addr_crta_word)>) const override;
+    const std::vector<GlobalSemaphoreBindingHandle>& global_semaphore_binding_handles() const {
+        return global_semaphore_binding_handles_;
+    }
+    void set_global_semaphore_binding_handles(std::vector<GlobalSemaphoreBindingHandle> handles) {
+        global_semaphore_binding_handles_ = std::move(handles);
+    }
     // PrefetcherPipe binding handles are set post-construction (before compile: they are part of
     // the kernel cache key and of kernel_bindings_generated.h).
     void process_prefetcher_pipe_binding_handles(
@@ -466,9 +484,9 @@ public:
 
     // Resolve query_buf_rw's raw slots to bound objects (TensorParameter name + bound buffer address).
     // Non-const: reads the kernel's CRTA (where the runtime wrote the bound addresses), so the addresses are those
-    // of the last SetProgramRunArgs / UpdateTensorArgs -- call after the final run-args update for the enqueue being
-    // analyzed, and after the binary is compiled. A slot that can't be resolved marks the result opaque.
-    // `program` is the one this kernel belongs to: it holds the address each borrowed-memory DFB is bound to.
+    // of the last Program::set_program_run_args / Program::update_tensor_args -- call after the final run-args update
+    // for the enqueue being analyzed, and after the binary is compiled. A slot that can't be resolved marks the result
+    // opaque. `program` is the one this kernel belongs to: it holds the address each borrowed-memory DFB is bound to.
     ResolvedBufRw resolve_buf_rw(const IDevice& device, const detail::ProgramImpl& program);
 
     void set_precompiled_config(experimental::PrecompiledKernelConfig config);
@@ -524,6 +542,8 @@ protected:
     std::vector<ScratchpadBindingHandle> scratchpad_binding_handles_;
     // Metal 2.0: tensor binding sequences (set post-construction, like scratchpads).
     std::vector<TensorBindingSequenceHandle> tensor_binding_sequences_;
+    // Metal 2.0: GlobalSemaphore bindings (set post-construction, like scratchpads).
+    std::vector<GlobalSemaphoreBindingHandle> global_semaphore_binding_handles_;
     // Metal 2.0: PrefetcherPipe accessors -> program slot (set post-construction, like scratchpads).
     std::vector<PrefetcherPipeBindingHandle> prefetcher_pipe_binding_handles_;
     // Metal 2.0: number of user CTA-vararg words at the start of compile_time_args_.

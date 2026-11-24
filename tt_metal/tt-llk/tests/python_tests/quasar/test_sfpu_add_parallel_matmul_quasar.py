@@ -33,6 +33,7 @@ from helpers.llk_params import (
 )
 from helpers.matmul_sweep import generate_tile_dims
 from helpers.param_config import (
+    flat_axes,
     generate_parallel_matmul_dest_depth_profiles,
     generate_quasar_srcs_format_dest_acc_combinations,
     input_output_formats,
@@ -67,7 +68,7 @@ from helpers.test_variant_parameters import (
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
 
-# (ADD_INPUT_DIMENSIONS, MATMUL_A_DIMENSIONS, MATMUL_B_DIMENSIONS)
+# (add_input_dimensions, input_A_dimensions, input_B_dimensions)
 DIMENSION_PROFILES = (
     ([32, 32], [32, 32], [32, 32]),
     ([32, 256], [64, 64], [64, 128]),
@@ -105,12 +106,12 @@ def _sample_perf_combinations(combinations: list[tuple]) -> list[tuple]:
 
 
 def _matmul_output_fits_dest(
-    MATMUL_A_DIMENSIONS: list[int],
-    MATMUL_B_DIMENSIONS: list[int],
+    input_A_dimensions: list[int],
+    input_B_dimensions: list[int],
     dest_acc: DestAccumulation,
     dest_sync: DestSync,
 ) -> bool:
-    matmul_dims = generate_tile_dims((MATMUL_A_DIMENSIONS, MATMUL_B_DIMENSIONS))
+    matmul_dims = generate_tile_dims((input_A_dimensions, input_B_dimensions))
     max_tiles = max_dest_tiles(dest_acc, dest_sync)
     return matmul_dims.output_tile_cnt <= max_tiles
 
@@ -137,23 +138,32 @@ def generate_parallel_matmul_add_combinations(
                     dest_acc, dest_sync
                 )
             for (
-                ADD_INPUT_DIMENSIONS,
-                MATMUL_A_DIMENSIONS,
-                MATMUL_B_DIMENSIONS,
+                add_input_dimensions,
+                input_A_dimensions,
+                input_B_dimensions,
             ) in profiles:
                 combinations.append(
                     (
                         fmt,
                         dest_acc,
                         dest_sync,
-                        runtime(ADD_INPUT_DIMENSIONS),
-                        runtime(MATMUL_A_DIMENSIONS),
-                        runtime(MATMUL_B_DIMENSIONS),
+                        runtime(add_input_dimensions),
+                        runtime(input_A_dimensions),
+                        runtime(input_B_dimensions),
                     )
                 )
     return _sample_perf_combinations(combinations) if is_perf else combinations
 
 
+# Column names of the tuples ``generate_parallel_matmul_add_combinations`` returns.
+PARALLEL_MATMUL_ADD_FLAT_NAMES = (
+    "formats",
+    "dest_acc",
+    "dest_sync",
+    "add_input_dimensions",
+    "input_A_dimensions",
+    "input_B_dimensions",
+)
 PARALLEL_MATMUL_ADD_COMBINATIONS = generate_parallel_matmul_add_combinations(
     SFPU_ADD_FORMATS
 )
@@ -161,30 +171,26 @@ PARALLEL_MATMUL_ADD_COMBINATIONS = generate_parallel_matmul_add_combinations(
 
 @pytest.mark.quasar
 @parametrize(
-    format_dest_acc_sync=PARALLEL_MATMUL_ADD_COMBINATIONS,
+    **flat_axes(PARALLEL_MATMUL_ADD_FLAT_NAMES, PARALLEL_MATMUL_ADD_COMBINATIONS),
 )
 def test_sfpu_add_parallel_matmul_quasar(
-    format_dest_acc_sync,
+    formats,
+    dest_acc,
+    dest_sync,
+    add_input_dimensions,
+    input_A_dimensions,
+    input_B_dimensions,
     run_types=(PerfRunType.L1_TO_L1,),
     loop_factor=1,
     is_perf=False,
     perf_report=None,
 ):
-    (
-        formats,
-        dest_acc,
-        dest_sync,
-        ADD_INPUT_DIMENSIONS,
-        MATMUL_A_DIMENSIONS,
-        MATMUL_B_DIMENSIONS,
-    ) = format_dest_acc_sync[0]
-
     matmul_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
-        input_dimensions_A=MATMUL_A_DIMENSIONS,
+        input_dimensions_A=input_A_dimensions,
         stimuli_format_B=formats.input_format,
-        input_dimensions_B=MATMUL_B_DIMENSIONS,
+        input_dimensions_B=input_B_dimensions,
         spec_A=matmul_spec,
         spec_B=matmul_spec,
         output_format=formats.output_format,
@@ -192,9 +198,9 @@ def test_sfpu_add_parallel_matmul_quasar(
 
     src_add_in0, tile_cnt_add, src_add_in1, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
-        input_dimensions_A=ADD_INPUT_DIMENSIONS,
+        input_dimensions_A=add_input_dimensions,
         stimuli_format_B=formats.input_format,
-        input_dimensions_B=ADD_INPUT_DIMENSIONS,
+        input_dimensions_B=add_input_dimensions,
         output_format=formats.output_format,
     )
 
@@ -222,13 +228,13 @@ def test_sfpu_add_parallel_matmul_quasar(
     )
 
     tilized_A = tilize_block(
-        src_A, dimensions=MATMUL_A_DIMENSIONS, stimuli_format=formats.input_format
+        src_A, dimensions=input_A_dimensions, stimuli_format=formats.input_format
     )
     tilized_B = tilize_block(
-        src_B, dimensions=MATMUL_B_DIMENSIONS, stimuli_format=formats.input_format
+        src_B, dimensions=input_B_dimensions, stimuli_format=formats.input_format
     )
 
-    matmul_dims = generate_tile_dims((MATMUL_A_DIMENSIONS, MATMUL_B_DIMENSIONS))
+    matmul_dims = generate_tile_dims((input_A_dimensions, input_B_dimensions))
 
     torch_format = format_dict[formats.output_format]
 
@@ -256,12 +262,12 @@ def test_sfpu_add_parallel_matmul_quasar(
             src_A_golden = untilize_block(
                 tilized_A_golden,
                 stimuli_format=formats.input_format,
-                dimensions=MATMUL_A_DIMENSIONS,
+                dimensions=input_A_dimensions,
             )
             src_B_golden = untilize_block(
                 tilized_B_golden,
                 stimuli_format=formats.input_format,
-                dimensions=MATMUL_B_DIMENSIONS,
+                dimensions=input_B_dimensions,
             )
 
         generate_matmul_golden = get_golden_generator(MatmulGolden)
@@ -270,8 +276,8 @@ def test_sfpu_add_parallel_matmul_quasar(
             src_B_golden,
             formats.output_format,
             MathFidelity.LoFi,
-            input_A_dimensions=MATMUL_A_DIMENSIONS,
-            input_B_dimensions=MATMUL_B_DIMENSIONS,
+            input_A_dimensions=input_A_dimensions,
+            input_B_dimensions=input_B_dimensions,
             tilize=True,
             input_A_format=formats.input_format,
             input_B_format=formats.input_format,
@@ -286,7 +292,7 @@ def test_sfpu_add_parallel_matmul_quasar(
             tile_cnt_add,  # src2_idx: first tile of B
             0,  # dst_idx: write result starting at tile 0
             tile_cnt_add * 32,  # num_iterations: 32 rows per tile
-            [ADD_INPUT_DIMENSIONS[0] * 2, ADD_INPUT_DIMENSIONS[1]],
+            [add_input_dimensions[0] * 2, add_input_dimensions[1]],
             formats.output_format,
             skip_tilize=True,
             input_format=formats.input_format,

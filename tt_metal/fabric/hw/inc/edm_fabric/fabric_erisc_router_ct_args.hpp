@@ -348,10 +348,19 @@ constexpr std::array<size_t, MAX_NUM_SENDER_CHANNELS> sender_connection_info_add
     local_sender_channel_7_connection_info_addr,
     local_sender_channel_8_connection_info_addr,
     local_sender_channel_9_connection_info_addr};
-// Each VC's worker channel's connection semaphore (0 where the VC has no worker: VC1 never does), at a compile-time
-// address: the router reads it every pass. A forwarding channel's semaphore is used only at init, from its runtime arg.
-constexpr std::array<size_t, MAX_NUM_VCS> worker_connection_semaphore_addrs = {
-    NAMED_CT_ARG("VC0_WORKER_CONNECTION_SEMAPHORE_ADDR"), 0, NAMED_CT_ARG("VC2_WORKER_CONNECTION_SEMAPHORE_ADDR")};
+// Each worker channel's connection semaphore (0 for any other channel), at a compile-time address: the router reads it
+// every pass.
+constexpr std::array<size_t, MAX_NUM_SENDER_CHANNELS> worker_connection_semaphore_addrs = {
+    NAMED_CT_ARG("SENDER_CH_0_WORKER_CONNECTION_SEMAPHORE_ADDR"),
+    NAMED_CT_ARG("SENDER_CH_1_WORKER_CONNECTION_SEMAPHORE_ADDR"),
+    NAMED_CT_ARG("SENDER_CH_2_WORKER_CONNECTION_SEMAPHORE_ADDR"),
+    NAMED_CT_ARG("SENDER_CH_3_WORKER_CONNECTION_SEMAPHORE_ADDR"),
+    NAMED_CT_ARG("SENDER_CH_4_WORKER_CONNECTION_SEMAPHORE_ADDR"),
+    NAMED_CT_ARG("SENDER_CH_5_WORKER_CONNECTION_SEMAPHORE_ADDR"),
+    NAMED_CT_ARG("SENDER_CH_6_WORKER_CONNECTION_SEMAPHORE_ADDR"),
+    NAMED_CT_ARG("SENDER_CH_7_WORKER_CONNECTION_SEMAPHORE_ADDR"),
+    NAMED_CT_ARG("SENDER_CH_8_WORKER_CONNECTION_SEMAPHORE_ADDR"),
+    NAMED_CT_ARG("SENDER_CH_9_WORKER_CONNECTION_SEMAPHORE_ADDR")};
 
 // ============================================================================
 // Status pointers
@@ -918,12 +927,6 @@ constexpr size_t get_channel_num_slots() {
     return Allocs::template Entry<entry_idx>::num_slots;
 }
 
-template <typename Allocs, auto& ChannelToEntryIndex, size_t ChannelIdx>
-constexpr size_t get_channel_remote_num_slots() {
-    constexpr size_t entry_idx = ChannelToEntryIndex[ChannelIdx];
-    return Allocs::template Entry<entry_idx>::remote_num_slots;
-}
-
 // Build arrays by inspecting each channel's allocation entry
 template <typename Allocs, auto& ChannelToEntryIndex, size_t NumChannels, size_t... Indices>
 constexpr std::array<size_t, NumChannels> build_num_slots_array_impl(std::index_sequence<Indices...>) {
@@ -933,17 +936,6 @@ constexpr std::array<size_t, NumChannels> build_num_slots_array_impl(std::index_
 template <typename Allocs, auto& ChannelToEntryIndex, size_t NumChannels>
 constexpr std::array<size_t, NumChannels> build_num_slots_array() {
     return build_num_slots_array_impl<Allocs, ChannelToEntryIndex, NumChannels>(
-        std::make_index_sequence<NumChannels>{});
-}
-
-template <typename Allocs, auto& ChannelToEntryIndex, size_t NumChannels, size_t... Indices>
-constexpr std::array<size_t, NumChannels> build_remote_num_slots_array_impl(std::index_sequence<Indices...>) {
-    return {get_channel_remote_num_slots<Allocs, ChannelToEntryIndex, Indices>()...};
-}
-
-template <typename Allocs, auto& ChannelToEntryIndex, size_t NumChannels>
-constexpr std::array<size_t, NumChannels> build_remote_num_slots_array() {
-    return build_remote_num_slots_array_impl<Allocs, ChannelToEntryIndex, NumChannels>(
         std::make_index_sequence<NumChannels>{});
 }
 

@@ -242,6 +242,7 @@ _UNREGISTERED_BINARY_OPS = frozenset(
         MathOperation.SfpuRemainderUint32,
         MathOperation.SfpuRsubInt32,
         MathOperation.SfpuCopyDest,
+        MathOperation.SfpuSiluGlu,
         MathOperation.SfpuSituGlu,
     }
 )
@@ -1124,6 +1125,28 @@ def test_eltwise_binary_sfpu_float_extended(formats, dest_acc, mathop, **run_kwa
     )
 
 
+# -0.0 dividends, the extended sweep only feeds remainder positive values
+_REMAINDER_SIGNED_ZERO_PAIRS = [
+    (a, b) for a in (-0.0, 0.0) for b in (2.0, 3.0, 0.5, 7.25, -2.0, -3.0, -0.5)
+] + [(a, b) for a in (5.5, -5.5) for b in (2.0, -2.0)]
+
+
+# Float32 with a 32-bit Dest is the pipeline that delivers -0.0 to the SFPU intact.
+@parametrize(
+    formats=input_output_formats([DataFormat.Float32]),
+    dest_acc=[DestAccumulation.Yes],
+)
+def test_eltwise_binary_sfpu_remainder_signed_zero(formats, dest_acc):
+    sfpu_binary(
+        formats,
+        dest_acc,
+        MathOperation.SfpuBinaryRemainder,
+        src_A_override=_build_paired_tile_override(
+            _REMAINDER_SIGNED_ZERO_PAIRS, torch.float32
+        ),
+    )
+
+
 @parametrize(**MASK_SWEEP)
 def test_eltwise_binary_sfpu_mask(formats, dest_acc, mathop, **run_kwargs):
     # float mask: data at tile0, mask at tile1. Output is data where mask != 0, else 0
@@ -1206,6 +1229,31 @@ def test_eltwise_binary_sfpu_isclose_nan(formats, dest_acc, mathop):
 
     spec_A, spec_B = _isclose_nan_stimuli_specs()
     sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
+
+
+SILU_GLU_SWEEP = dict(
+    formats=input_output_formats([DataFormat.Float16_b]),
+    mathop=[MathOperation.SfpuSiluGlu],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+
+
+@skip_for_quasar
+@skip_for_wormhole
+@parametrize(**SILU_GLU_SWEEP)
+def test_eltwise_binary_sfpu_silu_glu(formats, dest_acc, mathop, **run_kwargs):
+    # silu_glu(gate, up) with gate = tile0 and up = tile1; Blackhole has the only kernel.
+    # Both signs, past each clamp and below where the logistic factor underflows.
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-110.0, high=16.0
+        ),
+        spec_B=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-16.0, high=16.0),
+        **run_kwargs,
+    )
 
 
 SITU_GLU_SWEEP = dict(
@@ -2440,6 +2488,13 @@ _INT_DRIVEN_BINARY_OPS = frozenset(
     }
 )
 
+# Cat-B ops with a Blackhole kernel only.
+_BLACKHOLE_ONLY_EDGE_OPS = frozenset(
+    {
+        MathOperation.SfpuSituGlu,
+    }
+)
+
 # Derived rather than listed: an op joins this sweep by gaining either a registered
 # singularity or a cat-B entry in sfpu_domains. The cat-B half matters for the float ops with
 # no pole -- add, sub, mul, max, min and the comparisons are smooth everywhere, so
@@ -2486,6 +2541,11 @@ def test_eltwise_binary_sfpu_edges(formats, dest_acc, mathop, edge_class):
     why a single tensor holding every pole cannot report which behaviour changed.
     """
     skip_if_32bit_input_without_dest_acc(formats, dest_acc)
+    if (
+        mathop in _BLACKHOLE_ONLY_EDGE_OPS
+        and TestConfig.CHIP_ARCH != ChipArchitecture.BLACKHOLE
+    ):
+        pytest.skip(reason=f"{mathop.name} has a Blackhole kernel only")
 
     # Cat B. Two independent gates, both must pass: BINARY_SPECIALS_READY_OPS says the golden
     # defines an answer for a non-finite operand, specials_safe() says the pipeline delivers one

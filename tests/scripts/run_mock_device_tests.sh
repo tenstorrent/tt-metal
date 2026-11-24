@@ -8,7 +8,7 @@ set -e
 # Check if cluster descriptor is provided
 if [ -z "$1" ]; then
     echo "Usage: $0 <cluster_descriptor.yaml>"
-    echo "Example: $0 tt_metal/third_party/umd/tests/cluster_descriptor_examples/blackhole_P100.yaml"
+    echo "Example: $0 tt_metal/third_party/umd/descriptors/cluster_descriptor_examples/blackhole_P100.yaml"
     exit 1
 fi
 

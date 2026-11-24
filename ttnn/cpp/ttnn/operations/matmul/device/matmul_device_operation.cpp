@@ -47,6 +47,10 @@ void validate_matmul_operand_basics(
         "Operands to matmul need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.device() == input_tensor_b.device(), "Operands to matmul need to be on the same device!");
     TT_FATAL(
+        !input_tensor_a.is_sharded() || input_tensor_a.shard_spec().has_value(),
+        "Sharded input A needs a 2D shard spec, and its ND shard spec does not flatten to a height-, width- or "
+        "block-sharded layout. Pass an interleaved A, or omit program_config so that matmul moves A to DRAM.");
+    TT_FATAL(
         (input_tensor_a.layout() == Layout::TILE && input_tensor_b.layout() == Layout::TILE),
         "Inputs to matmul must be tilized");
     TT_FATAL(
@@ -303,7 +307,7 @@ void validate_matmul_optional_tensors(
 
 // Batch Compatibility: checks bcast -> B must be single-batch; non-bcast -> A and B must
 // match rank + batch dims, unless A's batch is 1 and reused across B (the Mcast1D
-// in0-reuse exception).
+// in0-reuse exception) or the config's readers broadcast a size-1 dim.
 void validate_matmul_batch_compatibility(
     const MatmulParams& attributes,
     const Tensor& input_tensor_a,
@@ -354,14 +358,18 @@ void validate_matmul_batch_compatibility(
             return !input_tensor_a.is_sharded() && !input_tensor_b.is_sharded();
         };
 
+        const bool batch_broadcast = operations::matmul::utilities::supports_batch_broadcast(
+            chosen_program_config, input_tensor_a, input_tensor_b, attributes.output_mem_config);
         for (auto i = 0; i < a_shape.rank() - 2; i++) {
+            const bool broadcastable = a_shape[i] == 1 || b_shape[i] == 1;
             TT_FATAL(
-                a_shape[i] == b_shape[i] || (a_shape[i] == 1 && in0_reuse()),
+                a_shape[i] == b_shape[i] || (a_shape[i] == 1 && in0_reuse()) || (broadcastable && batch_broadcast),
                 "bmm (non-bcast matmul) expects input tensors of shapes "
                 "BCMK*BCKN=BCMN or batch dimension {} mismatch: a={} vs b={} (dimension mismatch only allowed "
                 "when all batch dimensions of a are size 1 and using MatmulMultiCoreReuseMultiCast1DProgramConfig "
                 "with fuse_batch=false, fused_activation=none, mcast_in0=false, and non-sharded inputs for in0 "
-                "reuse optimization)",
+                "reuse optimization, or for a size-1 dim with non-sharded inputs and output and a config other "
+                "than a fused batch, gather_in0 or DRAM-sharded)",
                 i,
                 a_shape[i],
                 b_shape[i]);
@@ -2085,7 +2093,9 @@ void validate_matmul_reuse_config(
     const operations::matmul::MatmulMultiCoreReuseProgramConfig& program_config) {
     const auto config_name = ttsl::get_type_name(program_config);
     const auto M = operations::matmul::utilities::get_M_dim(a_shape_padded, in0_tile, /*fuse_batch=*/false);
-    const auto total_M = operations::matmul::utilities::get_M_dim(a_shape_padded, in0_tile, /*fuse_batch=*/true);
+    // Broadcast batch dims are read in place, so the work spans the output's batches.
+    const auto output_batch_size = operations::matmul::utilities::get_output_batch_size(a_shape_padded, b_shape_padded);
+    const auto total_M = M * output_batch_size;
     const auto N = operations::matmul::utilities::get_N_dim(b_shape_padded, in1_tile);
     const auto K = operations::matmul::utilities::get_K_dim(a_shape_padded, /*tile=*/std::nullopt);
     uint32_t per_core_M = program_config.per_core_M;
@@ -2178,7 +2188,7 @@ void validate_matmul_reuse_config(
     const auto batch_size_b = get_batch_size(b_shape_padded);
     bool broadcast_batch = batch_size_a > 1 and batch_size_b == 1;
     TT_FATAL(!broadcast_batch, "{}: Batch broadcasting is not supported for the chosen program config", config_name);
-    if (batch_size_a > 1 && batch_size_b > 1) {
+    if (output_batch_size > 1 && batch_size_b > 1) {
         TT_FATAL(
             M % program_config.out_subblock_h == 0,
             "{}: out_subblock_h ({}) needs to divide M ({}) evenly and does not. "

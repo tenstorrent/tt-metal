@@ -11,7 +11,7 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -35,17 +35,15 @@ using test_helpers::ProgramSpecHWTest;
 
 namespace sp_test = tt::tt_metal::test_helpers;
 using ScratchpadOverrideSlowTest = sp_test::ScratchpadPlacementFixture<ProgramSpecHWTest>;
-using tt::tt_metal::experimental::MakeMeshWorkloadFromSpec;
-using tt::tt_metal::experimental::SetProgramRunArgs;
 
 TEST_F(ScratchpadOverrideSlowTest, ScratchpadPlacementOverrideGuardedAccess) {
     // Kernels write only on selected nodes and leave memory on the excluded node untouched.
     distributed::MeshDevice& fixture_device = this->fixture_device();
     auto spec = sp_test::MakeGuardedScratchpadSpecForTest();
-    auto workload = MakeMeshWorkloadFromSpec(fixture_device, spec);
+    distributed::MeshWorkload workload(fixture_device, spec);
     Program& program = workload.get_programs().begin()->second;
     sp_test::InitializeScratchpadReportsForTest(fixture_device, program);
-    SetProgramRunArgs(program, sp_test::MakeGuardedScratchpadArgsForTest(0xC0DE0000u));
+    program.set_program_run_args(sp_test::MakeGuardedScratchpadArgsForTest(0xC0DE0000u));
     sp_test::EnqueueScratchpadOverrideForTest(fixture_device, workload, false);
     EXPECT_EQ(
         sp_test::ReadScratchpadResultsForTest(fixture_device, program),
@@ -55,12 +53,12 @@ TEST_F(ScratchpadOverrideSlowTest, ScratchpadPlacementOverrideGuardedAccess) {
 TEST_F(ScratchpadOverrideSlowTest, ScratchpadPlacementOverrideRepeatedEnqueue) {
     // Repeated enqueue supplies each new pattern to both scratchpad bindings.
     distributed::MeshDevice& fixture_device = this->fixture_device();
-    auto workload = MakeMeshWorkloadFromSpec(fixture_device, sp_test::MakeGuardedScratchpadSpecForTest());
+    distributed::MeshWorkload workload(fixture_device, sp_test::MakeGuardedScratchpadSpecForTest());
     Program& program = workload.get_programs().begin()->second;
     sp_test::InitializeScratchpadReportsForTest(fixture_device, program);
-    SetProgramRunArgs(program, sp_test::MakeGuardedScratchpadArgsForTest(0x100u));
+    program.set_program_run_args(sp_test::MakeGuardedScratchpadArgsForTest(0x100u));
     sp_test::EnqueueScratchpadOverrideForTest(fixture_device, workload, false);
-    SetProgramRunArgs(program, sp_test::MakeGuardedScratchpadArgsForTest(0x200u));
+    program.set_program_run_args(sp_test::MakeGuardedScratchpadArgsForTest(0x200u));
     sp_test::EnqueueScratchpadOverrideForTest(fixture_device, workload, false);
     EXPECT_EQ(
         sp_test::ReadScratchpadResultsForTest(fixture_device, program),
@@ -127,14 +125,14 @@ TEST_F(ProgramSpecHWTest, ScratchpadWriteReadback) {
         .target_nodes = node,
     }};
 
-    Program program = MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
         .kernel = KernelSpecName{"scratch_kernel"},
         .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"report_addr", kReportAddr}}),
     }};
-    SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 
     // Pre-zero the report location so a kernel that never wrote it would be caught (the readback base
     // address would be 0, which is not a valid scratchpad L1 address → the pattern check fails).
@@ -169,7 +167,7 @@ TEST_F(ProgramSpecHWTest, ScratchpadWriteReadback) {
 
 // A scratchpad's framework-allocated L1 base address rides a common-runtime-arg (CRTA) word, patched
 // in by ProgramImpl::allocate_scratchpads. Scratchpads stack on top of the DFB allocators, so when a
-// DFB size override (SetProgramRunArgs's dfb_run_overrides) re-lays-out the L1 region between
+// DFB size override (Program::set_program_run_args's dfb_run_overrides) re-lays-out the L1 region between
 // enqueues, the scratchpad's base address MOVES — and the moved address must be re-patched into the
 // CRTA before the next dispatch, or the kernel reads a stale base that now points into the grown DFB.
 //
@@ -184,9 +182,9 @@ TEST_F(ProgramSpecHWTest, ScratchpadWriteReadback) {
 // that entry to DRAM. Both on node {0,0}, so the DFB lives on the producer's core and the scratchpad
 // stacks above it. The producer has no named args — its only per-enqueue state is the
 // framework-supplied scratchpad CRTA — so it is omitted from kernel_run_args (the binding-only second
-// pass in SetProgramRunArgs installs its CRTA).
+// pass in Program::set_program_run_args installs its CRTA).
 //
-// Sequence (slow dispatch): launch with the small DFB → base_A; SetProgramRunArgs again with a
+// Sequence (slow dispatch): launch with the small DFB → base_A; Program::set_program_run_args again with a
 // dfb_run_overrides that GROWS the DFB → launch → base_B. The grown DFB pushes the stacked scratchpad
 // up, so a correctly re-delivered base satisfies base_B != base_A, and the pattern must still land at
 // base_B (the scratchpad is real, writable L1 at its new home). With the latch reset removed,
@@ -272,7 +270,7 @@ void kernel_main() {
 
     distributed::MeshCoordinateRange device_range(mesh_device->shape());
     distributed::MeshWorkload workload;
-    workload.add_program(device_range, MakeProgramFromSpec(*mesh_device, spec));
+    workload.add_program(device_range, Program(*mesh_device, spec));
     Program& program = workload.get_programs().at(device_range);
 
     std::vector<uint32_t> expected_pattern(kNumElems);
@@ -290,7 +288,7 @@ void kernel_main() {
                 MakeRuntimeArgsForSingleNode(node, {{"dst_addr", output_buffer->address()}, {"bank_id", 0u}}),
         }};
         params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"stage"}, .num_entries = dfb_num_entries});
-        SetProgramRunArgs(program, params);
+        program.set_program_run_args(params);
 
         distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/true);
 

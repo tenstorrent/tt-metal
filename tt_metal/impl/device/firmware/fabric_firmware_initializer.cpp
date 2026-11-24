@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <exception>
 #include <optional>
 #include <string_view>
 
@@ -319,6 +320,8 @@ void FabricFirmwareInitializer::init(
         if (has_flag(fabric_manager, tt_fabric::FabricManagerMode::INIT_FABRIC) ||
             has_flag(fabric_manager, tt_fabric::FabricManagerMode::TERMINATE_FABRIC)) {
             compile_fabric_only();
+        } else {
+            build_fabric_programs(/*parallel=*/false, {}, /*compile=*/false);
         }
         return;
     }
@@ -342,14 +345,16 @@ void FabricFirmwareInitializer::init(
         log_info(tt::LogMetal, "Initializing Fabric");
 #if defined(TT_UMD_BUILD_SIMULATION)
         if (rtoptions_.get_simulator_enabled()) {
-            for (auto* dev : devices_) {
-                const auto fabric_node_id = control_plane_.get_fabric_node_id_from_physical_chip_id(dev->id());
-                cluster_.get_driver()->register_sim_fabric_node_id(
-                    dev->id(), uint32_t(fabric_node_id.mesh_id.get()), uint32_t(fabric_node_id.chip_id));
-                for (const auto& [eth_chan, direction] :
-                     control_plane_.get_active_fabric_eth_channels(fabric_node_id)) {
-                    cluster_.get_driver()->register_sim_fabric_endpoint_direction(
-                        dev->id(), uint32_t(eth_chan), uint32_t(direction));
+            if (!control_plane_.fabric_uses_flat_addressing()) {
+                for (auto* dev : devices_) {
+                    const auto fabric_node_id = control_plane_.get_fabric_node_id_from_physical_chip_id(dev->id());
+                    cluster_.get_driver()->register_sim_fabric_node_id(
+                        dev->id(), uint32_t(fabric_node_id.mesh_id.get()), uint32_t(fabric_node_id.chip_id));
+                    for (const auto& [eth_chan, direction] :
+                         control_plane_.get_active_fabric_eth_channels(fabric_node_id)) {
+                        cluster_.get_driver()->register_sim_fabric_endpoint_direction(
+                            dev->id(), uint32_t(eth_chan), uint32_t(direction));
+                    }
                 }
             }
         }
@@ -361,6 +366,8 @@ void FabricFirmwareInitializer::init(
         log_info(tt::LogMetal, "Compiling fabric to setup fabric context for fabric termination");
         build_fabric_programs(/*parallel=*/false);
     } else {
+        // The fabric manager launched the routers; build them again, uncompiled, for their channel layouts.
+        build_fabric_programs(/*parallel=*/false, {}, /*compile=*/false);
         log_info(tt::LogMetal, "Fabric initialized through Fabric Manager");
     }
 }
@@ -369,6 +376,12 @@ void FabricFirmwareInitializer::configure() {
     // Mock/Emule: no router ever runs, so the sync below would spin to its timeout and throw.
     if (descriptor_->is_mock_device() || skip_fabric_fw_for_emule(cluster_)) {
         log_info(tt::LogMetal, "Skipping fabric configure (router sync) for mock/emule devices");
+        initialized_.test_and_set();
+        return;
+    }
+
+    if (control_plane_.fabric_uses_flat_addressing()) {
+        // No ERISC routers to sync.
         initialized_.test_and_set();
         return;
     }
@@ -400,50 +413,53 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
         return;
     }
 
-    const auto& fabric_context = control_plane_.get_fabric_context();
-    const auto& builder_ctx = fabric_context.get_builder_context();
-    auto [termination_signal_address, signal] = builder_ctx.get_fabric_router_termination_address_and_signal();
-    std::vector<uint32_t> termination_signal(1, signal);
+    if (!control_plane_.fabric_uses_flat_addressing()) {
+        const auto& fabric_context = control_plane_.get_fabric_context();
+        const auto& builder_ctx = fabric_context.get_builder_context();
+        auto [termination_signal_address, signal] = builder_ctx.get_fabric_router_termination_address_and_signal();
+        std::vector<uint32_t> termination_signal(1, signal);
 
-    // Terminate fabric tensix mux cores if enabled
-    // TODO: issue #26855, move the termination process to device
-    if (descriptor_->fabric_tensix_config() != tt::tt_fabric::FabricTensixConfig::DISABLED) {
-        const auto& tensix_config = builder_ctx.get_tensix_config();
+        // Terminate fabric tensix mux cores if enabled
+        // TODO: issue #26855, move the termination process to device
+        if (descriptor_->fabric_tensix_config() != tt::tt_fabric::FabricTensixConfig::DISABLED) {
+            const auto& tensix_config = builder_ctx.get_tensix_config();
 
+            for (auto* dev : devices_) {
+                if (builder_ctx.get_num_fabric_initialized_routers(dev->id()) == 0) {
+                    continue;
+                }
+
+                const auto fabric_node_id = control_plane_.get_fabric_node_id_from_physical_chip_id(dev->id());
+                const auto& active_fabric_eth_channels = control_plane_.get_active_fabric_eth_channels(fabric_node_id);
+
+                for (const auto& [eth_chan_id, direction] : active_fabric_eth_channels) {
+                    auto core_id = tensix_config.get_core_id_for_channel(dev->id(), eth_chan_id);
+                    auto [tensix_termination_address, tensix_signal] =
+                        tensix_config.get_termination_address_and_signal(core_id);
+                    std::vector<uint32_t> tensix_termination_signal(1, tensix_signal);
+                    auto mux_core = tensix_config.get_core_for_channel(dev->id(), eth_chan_id);
+
+                    detail::WriteToDeviceL1(
+                        dev, mux_core, tensix_termination_address, tensix_termination_signal, CoreType::WORKER);
+                }
+
+                cluster_.l1_barrier(dev->id());
+            }
+        }
+
+        // Terminate fabric routers via master router on each device
         for (auto* dev : devices_) {
             if (builder_ctx.get_num_fabric_initialized_routers(dev->id()) == 0) {
                 continue;
             }
 
-            const auto fabric_node_id = control_plane_.get_fabric_node_id_from_physical_chip_id(dev->id());
-            const auto& active_fabric_eth_channels = control_plane_.get_active_fabric_eth_channels(fabric_node_id);
-
-            for (const auto& [eth_chan_id, direction] : active_fabric_eth_channels) {
-                auto core_id = tensix_config.get_core_id_for_channel(dev->id(), eth_chan_id);
-                auto [tensix_termination_address, tensix_signal] =
-                    tensix_config.get_termination_address_and_signal(core_id);
-                std::vector<uint32_t> tensix_termination_signal(1, tensix_signal);
-                auto mux_core = tensix_config.get_core_for_channel(dev->id(), eth_chan_id);
-
-                detail::WriteToDeviceL1(
-                    dev, mux_core, tensix_termination_address, tensix_termination_signal, CoreType::WORKER);
-            }
-
-            cluster_.l1_barrier(dev->id());
-        }
-    }
-
-    // Terminate fabric routers via master router on each device
-    for (auto* dev : devices_) {
-        if (builder_ctx.get_num_fabric_initialized_routers(dev->id()) == 0) {
-            continue;
+            auto master_router_logical_core = cluster_.get_soc_desc(dev->id()).get_eth_core_for_channel(
+                builder_ctx.get_fabric_master_router_chan(dev->id()), CoordSystem::LOGICAL);
+            detail::WriteToDeviceL1(
+                dev, master_router_logical_core, termination_signal_address, termination_signal, CoreType::ETH);
         }
 
-        auto master_router_logical_core = cluster_.get_soc_desc(dev->id()).get_eth_core_for_channel(
-            builder_ctx.get_fabric_master_router_chan(dev->id()), CoordSystem::LOGICAL);
-        detail::WriteToDeviceL1(
-            dev, master_router_logical_core, termination_signal_address, termination_signal, CoreType::ETH);
-    }
+    }  // !fabric_uses_flat_addressing()
 
     reset_state(init_done);
 }
@@ -501,29 +517,51 @@ void FabricFirmwareInitializer::for_each_device(
     }
 }
 
-void FabricFirmwareInitializer::build_fabric_programs(bool parallel, const std::function<void(size_t)>& on_compiled) {
+void FabricFirmwareInitializer::build_fabric_programs(
+    bool parallel, const std::function<void(size_t)>& on_compiled, bool compile) {
     // Each task writes only its own slot, and the vector is not resized while tasks are running.
     fabric_programs_.clear();
     fabric_programs_.resize(devices_.size());
-    // One session per launch, created on this thread before the per-device builds that read it.
-    build_session_ = tt::tt_fabric::begin_fabric_build_session(descriptor_->env_impl());
-    for_each_device(parallel, [this](size_t i) { fabric_programs_[i] = compile_fabric(devices_[i]); }, on_compiled);
+    // Every device's routers exist, and have published their channel layouts, before any router kernel is created.
+    std::vector<std::optional<tt::tt_fabric::FabricDeviceBuild>> builds(devices_.size());
+    std::exception_ptr phase1_error;
+    try {
+        // One session per launch, created on this thread before the per-device builds that read it.
+        build_session_ = tt::tt_fabric::begin_fabric_build_session(descriptor_->env_impl());
+        if (!build_session_) {
+            return;
+        }
+        for_each_device(parallel, [this, &builds](size_t i) { builds[i] = build_fabric(devices_[i]); });
+    } catch (...) {
+        // the other ranks are on their way to the exchange: fail there, with them
+        phase1_error = std::current_exception();
+    }
+    tt::tt_fabric::exchange_fabric_router_channel_layouts(descriptor_->env_impl(), phase1_error);
+    if (!compile) {
+        return;
+    }
+    for_each_device(
+        parallel,
+        [this, &builds](size_t i) { fabric_programs_[i] = compile_fabric(devices_[i], std::move(builds[i])); },
+        on_compiled);
 }
 
-std::unique_ptr<Program> FabricFirmwareInitializer::compile_fabric(Device* dev) const {
-    if (!build_session_) {
-        return nullptr;
-    }
-    auto fabric_program = tt::tt_fabric::create_and_compile_fabric_program(
+std::optional<tt::tt_fabric::FabricDeviceBuild> FabricFirmwareInitializer::build_fabric(Device* dev) const {
+    return tt::tt_fabric::build_fabric_routers(
         descriptor_->env_impl(),
         descriptor_->metal_context().get_dispatch_core_manager().get_dispatch_core_config(),
         dev,
         *build_session_);
-    if (!fabric_program) {
+}
+
+std::unique_ptr<Program> FabricFirmwareInitializer::compile_fabric(
+    Device* dev, std::optional<tt::tt_fabric::FabricDeviceBuild> build) const {
+    if (!build) {
         // Compile failure mostly comes from Nebula (TG)
         log_trace(tt::LogMetal, "Did not build fabric on Device {}", dev->id());
-        return fabric_program;
+        return nullptr;
     }
+    auto fabric_program = tt::tt_fabric::compile_fabric_program(descriptor_->env_impl(), dev, std::move(*build));
     fabric_program->impl().finalize_offsets(dev);
     return fabric_program;
 }
@@ -579,16 +617,17 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
 
 void FabricFirmwareInitializer::compile_fabric_only() {
     // ERISC debug builds run from L1 and may exceed the fabric router's L1 budget.
-    // Skipping only leaves the cache cold.
-    if (!rtoptions_.get_erisc_iram_enabled()) {
+    // Skipping only leaves the cache cold. The routers are still built, so this rank reaches the layout exchange.
+    const bool compile = rtoptions_.get_erisc_iram_enabled();
+    if (compile) {
+        log_info(tt::LogMetal, "Compiling fabric on mock devices (no router programming or sync)");
+    } else {
         log_info(tt::LogMetal, "Skipping mock fabric compile: erisc IRAM disabled by debug tooling");
-        return;
     }
-    log_info(tt::LogMetal, "Compiling fabric on mock devices (no router programming or sync)");
 
     // Serial on purpose: the shared tensix mux config mutates state from a const getter, which
     // races when devices compile in parallel.
-    build_fabric_programs(/*parallel=*/false);
+    build_fabric_programs(/*parallel=*/false, {}, compile);
 }
 
 void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms) const {

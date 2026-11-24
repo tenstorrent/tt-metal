@@ -82,6 +82,7 @@ bank_noc_xy_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used)
 bank_noc_xy_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
 int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
 int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
+uint32_t tensor_prefetcher_signal_noc_xy[NUM_DRAM_BANKS] __attribute__((used));
 
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(UNCACHED_MEM_MAILBOX_BASE);
 tt_l1_ptr subordinate_map_t* const subordinate_sync = (subordinate_map_t*)mailboxes->subordinate_sync.map;
@@ -370,14 +371,22 @@ extern "C" uint32_t _start1() {
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
 
     device_setup();
-    // NoC command-buffer state is private to each DM and persists across kernel launches.
     overlay_cmd_buff_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     if (hartid > 0) {
         signal_subordinate_completion();
     } else {  // This is DM0
         risc_init();
         noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
+        tensor_prefetcher_signal_table_init(MEM_BANK_TO_NOC_SCRATCH);
         thread_sync_init();
+
+        // Reset all remapper pairs, in case they are in some invalid sticky state left from previous
+        // program runs.
+        for (uint32_t pair = 0; pair < REMAP_NUM_PAIRS; pair++) {
+            WRITE_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(pair), 0u);
+        }
+        // The writes are posted, read back the last one so every clear has fully completed.
+        (void)READ_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(REMAP_NUM_PAIRS - 1));
 
         // Initialize wait for trisc FW
         for (uint32_t i = MaxDMProcessorsPerCoreType; i < MaxNumKernels; i++) {
@@ -397,6 +406,10 @@ extern "C" uint32_t _start1() {
 
         DeviceProfilerInit();
         while (1) {
+            // The next launch does not rewrite these fields, and the previous completion atomic may still be
+            // outstanding.
+            while (!ncrisc_noc_nonposted_atomics_flushed(noc_index));
+            overlay_cmd_buff_restore_launch_state(MEM_NOC_ATOMIC_RET_VAL_ADDR);
             WAYPOINT("GW");
             uint8_t go_message_signal = RUN_MSG_DONE;
             // kernel_configs.preload is last in the launch message. so other data is
@@ -560,6 +573,9 @@ extern "C" uint32_t _start1() {
             }
             asm("nop; nop; nop; nop; nop");
         }
+        // The next read, write, and atomic leave these fields as the previous kernel set them.
+        while (!ncrisc_noc_nonposted_atomics_flushed(noc_index));
+        overlay_cmd_buff_restore_launch_state(MEM_NOC_ATOMIC_RET_VAL_ADDR);
         uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
         launch_msg_t* launch_msg = &(mailboxes->launch[launch_msg_rd_ptr]);
 

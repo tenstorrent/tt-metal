@@ -10,6 +10,7 @@
 #include "ttnn/operations/eltwise/binary/common/binary_op_dtype_policy.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 #include "binary_ng_utils.hpp"
+#include "ttnn/operations/eltwise/unary/device/unary_device_operation.hpp"
 #include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include <cmath>
@@ -24,10 +25,7 @@ namespace utils {
 // only benefit is rounding the bfloat16 result to nearest even. Reject the flag when the result is
 // not bfloat16 rather than silently accepting a request we cannot honour.
 void validate_fast_and_approximate_mode(
-    BinaryOpType binary_op_type,
-    const std::optional<bool>& fast_and_approximate_mode,
-    DataType output_dtype,
-    tt::ARCH arch) {
+    BinaryOpType binary_op_type, const std::optional<bool>& fast_and_approximate_mode, DataType output_dtype) {
     using enum BinaryOpType;
     const bool accurate_mode_requested = fast_and_approximate_mode.has_value() && !*fast_and_approximate_mode;
     if (!accurate_mode_requested) {
@@ -43,11 +41,6 @@ void validate_fast_and_approximate_mode(
         "other output dtypes; leave the flag unset (or pass true) for those.",
         binary_op_type,
         output_dtype);
-    TT_FATAL(
-        !(binary_op_type == RSUB && arch == tt::ARCH::QUASAR),
-        "fast_and_approximate_mode=false is not supported for RSUB on Quasar. "
-        "The RSUB SFPU kernel is not available on this architecture. "
-        "Use ttnn.subtract with swapped operands, or leave fast_and_approximate_mode unset (or pass true).");
 }
 
 bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_approximate_mode = false) {
@@ -55,9 +48,11 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
     using enum DataType;
     switch (val) {
         case ADD:
-        case SUB:
         case RSUB:
             return !fast_and_approximate_mode || (a == b && (a == FLOAT32 || a == INT32 || a == UINT32 || a == UINT16));
+        case SUB:
+            return !fast_and_approximate_mode ||
+                   (a == b && (a == FLOAT32 || a == INT32 || a == UINT32 || a == UINT16 || a == UINT8 || a == INT8));
         case LOGICAL_AND:
         case LOGICAL_OR:
         case LOGICAL_XOR:
@@ -109,6 +104,7 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         case ISCLOSE:
         // Fused SFPU kernel only: there is no FPU form, so every float dtype routes here.
         case SITU_GLU: return true;
+        case SILU_GLU:
         case GEGLU_TANH: return a == b && (a == BFLOAT16 || a == BFLOAT8_B);
         default: return false;
     }
@@ -383,7 +379,33 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
             dtype_b);
     }
 
+    const bool is_8bit_sub = attributes.binary_op_type == BinaryOpType::SUB &&
+                             (input_tensor_a.dtype() == DataType::UINT8 || input_tensor_a.dtype() == DataType::INT8);
+    if (is_8bit_sub) {
+        TT_FATAL(input_tensor_a.device()->arch() != tt::ARCH::QUASAR, "8-bit subtract is not supported on Quasar");
+        const auto output_dtype =
+            output_tensor.has_value() ? output_tensor->dtype() : attributes.dtype.value_or(input_tensor_a.dtype());
+        TT_FATAL(
+            output_dtype == input_tensor_a.dtype(),
+            "Output dtype {} must match the input dtype {} for 8-bit subtract",
+            output_dtype,
+            input_tensor_a.dtype());
+        TT_FATAL(
+            attributes.lhs_activations.empty() && attributes.rhs_activations.empty(),
+            "Input activations are not supported for 8-bit subtract (including subalpha)");
+    }
+
     BinaryNgDeviceOperation::validate_on_program_cache_hit(attributes, tensor_args);
+
+    auto validate_activations = [](const auto& activations, DataType dtype) {
+        unary::validate_integer_input_dtype({activations.begin(), activations.end()}, dtype);
+    };
+    validate_activations(attributes.lhs_activations, input_tensor_a.dtype());
+    if (input_tensor_b.has_value()) {
+        validate_activations(attributes.rhs_activations, input_tensor_b->dtype());
+    }
+    validate_activations(
+        attributes.post_activations, is_8bit_sub ? DataType::INT32 : attributes.dtype.value_or(input_tensor_a.dtype()));
 
     if (attributes.dtype.has_value() && output_tensor.has_value()) {
         TT_FATAL(
@@ -699,8 +721,7 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
     ttnn::operations::binary_ng::utils::validate_fast_and_approximate_mode(
         binary_op_type,
         fast_and_approximate_mode,
-        output_tensor ? output_tensor->dtype() : output_dtype.value_or(dtype_a),
-        input_tensor_a.device()->arch());
+        output_tensor ? output_tensor->dtype() : output_dtype.value_or(dtype_a));
     bool is_sfpu_op = (ttnn::operations::binary_ng::utils::is_binary_sfpu_op(
         binary_op_type, dtype_a, dtype_b, fast_and_approximate_mode.value_or(false)));
     bool is_quant_op = ttnn::operations::binary::utils::is_quant_op(binary_op_type);
@@ -881,8 +902,7 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
     ttnn::operations::binary_ng::utils::validate_fast_and_approximate_mode(
         binary_op_type,
         fast_and_approximate_mode,
-        output_tensor ? output_tensor->dtype() : output_dtype.value_or(dtype_a),
-        input_tensor_a.device()->arch());
+        output_tensor ? output_tensor->dtype() : output_dtype.value_or(dtype_a));
     bool is_sfpu_op = (ttnn::operations::binary_ng::utils::is_binary_sfpu_op(
         binary_op_type, dtype_a, dtype_a, fast_and_approximate_mode.value_or(false)));
     bool is_quant_op = ttnn::operations::binary::utils::is_quant_op(binary_op_type);

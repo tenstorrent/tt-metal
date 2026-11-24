@@ -10,7 +10,7 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
@@ -54,7 +54,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_MultiBindingFlagOnGen2Fails) {
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("only supported on Gen1")));
 }
 
@@ -80,7 +80,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaDFBWithBorrowedTensorFails) {
     spec.dataflow_buffers[0].advanced_options.allocation_override =
         SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}};
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        [&] { Program(fixture_device, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("sets both borrowed_from and allocation_override")));
 }
@@ -102,7 +102,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementRejectsEmpty) {
     auto spec = test_helpers::MakeDFBPlacementSpec(tt::ARCH::QUASAR);
     spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet{};
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        [&] { Program(fixture_device, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("override_placement")));
 }
 
@@ -113,7 +113,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementRejectsOutOfBounds) {
     const CoreCoord outside = fixture_device.compute_with_storage_grid_size();
     spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange(outside));
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        [&] { Program(fixture_device, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("out of bounds")));
 }
 
@@ -123,7 +123,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementRejectsPrefetcherRelay) {
     auto spec = test_helpers::MakeFullPipeSpec();
     spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(test_helpers::pipe_receiver_nodes);
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        [&] { Program(fixture_device, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("override_placement")));
 }
 
@@ -137,7 +137,7 @@ ProgramSpec MakeQuasarSubsetPlacementSpecForTest() {
 
 TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementAcceptsSubsetOnGen2) {
     // A placement override on a strict subset of the endpoint nodes is accepted on Gen2.
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, MakeQuasarSubsetPlacementSpecForTest()));
+    EXPECT_NO_THROW(Program(*mesh_device_, MakeQuasarSubsetPlacementSpecForTest()));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementPreservesGen2MultiBindingRestriction) {
@@ -147,7 +147,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementPreservesGen2MultiBindingRestricti
     auto spec = MakeQuasarSubsetPlacementSpecForTest();
     spec.dataflow_buffers[0].advanced_options.allow_instance_multi_binding = true;
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        [&] { Program(fixture_device, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("allow_instance_multi_binding")));
 }
 
