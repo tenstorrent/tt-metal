@@ -40,6 +40,7 @@ SEARCH_DIR_STATE = (
     "EXTRA_INCLUDE_APPEND",
     "EXTRA_SRC_INCLUDE_PREPEND",
     "EXTRA_SRC_INCLUDE_APPEND",
+    "EXTRA_LINKER_SCRIPT_DIRS",
 )
 
 DRIVER = "sources/eltwise_unary_datacopy_test.cpp"
@@ -185,6 +186,21 @@ def test_registered_search_dirs_change_the_variant_id(isolated_search_dirs, in_t
         ids.append(variant_id())
 
     assert len(set(ids)) == len(ids), f"variant ids collided: {ids}"
+
+
+def test_a_helpers_tree_replaces_the_linker_scripts_it_has(
+    isolated_search_dirs, tmp_path
+):
+    """A suite with its own memory map supplies it this way; the rest stay the harness's."""
+    (tmp_path / "ld").mkdir()
+    (tmp_path / "ld" / "brisc.ld").touch()
+    TestConfig.add_helpers_tree(tmp_path)
+
+    assert TestConfig.linker_script("brisc.ld") == tmp_path / "ld" / "brisc.ld"
+    assert (
+        TestConfig.linker_script("sections.ld")
+        == TestConfig.LINKER_SCRIPTS / "sections.ld"
+    )
 
 
 @_IN_TREE_REGIMES

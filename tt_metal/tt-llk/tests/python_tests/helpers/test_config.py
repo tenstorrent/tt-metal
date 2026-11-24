@@ -188,6 +188,8 @@ class TestConfig:
     EXTRA_INCLUDE_APPEND: ClassVar[List[str]] = []
     # Extra -I dirs for #include <foo.cpp> (tests/helpers/src style).
     EXTRA_SRC_INCLUDE_PREPEND: ClassVar[List[str]] = []
+    # ``<tree>/ld`` of the trees from add_helpers_tree(), first wins; see linker_script().
+    EXTRA_LINKER_SCRIPT_DIRS: ClassVar[List[Path]] = []
     EXTRA_SRC_INCLUDE_APPEND: ClassVar[List[str]] = []
     # Truncated sha256 in _safe_artefact_key — on-disk name only, not a variant id.
     ARTEFACT_KEY_HASH_CHARS: ClassVar[int] = 12
@@ -899,20 +901,38 @@ class TestConfig:
 
     @staticmethod
     def add_helpers_tree(*trees, prepend: bool = True) -> None:
-        """Add a ``tests/helpers``-layout tree: ``<tree>/include`` + ``<tree>/src``.
+        """Add a ``tests/helpers``-layout tree: ``<tree>/include`` + ``<tree>/src`` + ``<tree>/ld``.
 
         Shorthand for ``add_include_dirs(<tree>/include)`` plus
-        ``add_src_include_dirs(<tree>/src)``. For one variant only, pass
-        ``helpers_trees=[...]`` to the constructor.
+        ``add_src_include_dirs(<tree>/src)``; with ``prepend`` (the default) a
+        linker script the tree has under ``ld/`` also replaces the harness's of
+        that name. For one variant only, pass ``helpers_trees=[...]`` to the
+        constructor (headers and sources only).
         """
         includes = []
         sources = []
+        linker_scripts = []
         for tree in trees:
             tree = Path(tree)
             includes.append(tree / "include")
             sources.append(tree / "src")
+            linker_scripts.append(tree / "ld")
         TestConfig.add_include_dirs(*includes, prepend=prepend)
         TestConfig.add_src_include_dirs(*sources, prepend=prepend)
+        if prepend:
+            TestConfig.EXTRA_LINKER_SCRIPT_DIRS = linker_scripts + [
+                directory
+                for directory in TestConfig.EXTRA_LINKER_SCRIPT_DIRS
+                if directory not in linker_scripts
+            ]
+
+    @staticmethod
+    def linker_script(name: str) -> Path:
+        """``name`` from the first add_helpers_tree() tree that has it under ``ld/``, else the harness's own."""
+        for directory in TestConfig.EXTRA_LINKER_SCRIPT_DIRS:
+            if (directory / name).is_file():
+                return directory / name
+        return TestConfig.LINKER_SCRIPTS / name
 
     @staticmethod
     def setup_build(
@@ -1510,8 +1530,8 @@ class TestConfig:
                 NON_COVERAGE_OPTIONS_COMPILE,
             )
 
-        MEMORY_LAYOUT_LD_SCRIPT = (
-            f"{TestConfig.LINKER_SCRIPTS}/memory.{TestConfig.ARCH.value}.ld"
+        MEMORY_LAYOUT_LD_SCRIPT = str(
+            TestConfig.linker_script(f"memory.{TestConfig.ARCH.value}.ld")
         )
         include_flags = " ".join(shlex.quote(flag) for flag in include_tokens)
         OPTIONS_COMPILE = f"{include_flags} {TestConfig.INITIAL_OPTIONS_COMPILE} "
@@ -1532,8 +1552,8 @@ class TestConfig:
             OPTIONS_COMPILE += (
                 "-fprofile-arcs -ftest-coverage -fprofile-info-section -DCOVERAGE "
             )
-            MEMORY_LAYOUT_LD_SCRIPT = (
-                f"{TestConfig.LINKER_SCRIPTS}/memory.{TestConfig.ARCH.value}.debug.ld"
+            MEMORY_LAYOUT_LD_SCRIPT = str(
+                TestConfig.linker_script(f"memory.{TestConfig.ARCH.value}.debug.ld")
             )
 
         if self.profiler_build == ProfilerBuild.Yes:
@@ -1623,8 +1643,8 @@ class TestConfig:
                     perf_cnt_flag,
                     [
                         f"-T{local_memory_layout_ld}",
-                        f'-T{TestConfig.LINKER_SCRIPTS / "brisc.ld"}',
-                        f'-T{TestConfig.LINKER_SCRIPTS / "sections.ld"}',
+                        f'-T{TestConfig.linker_script("brisc.ld")}',
+                        f'-T{TestConfig.linker_script("sections.ld")}',
                         "-o",
                         shared_elf_dir / "brisc.elf",
                         TestConfig.RISCV_SOURCES / "brisc.cpp",
@@ -2013,8 +2033,8 @@ class TestConfig:
                     coverage_args,
                     [
                         f"-T{local_memory_layout_ld}",
-                        f"-T{TestConfig.LINKER_SCRIPTS / name}.ld",
-                        f"-T{TestConfig.LINKER_SCRIPTS / 'sections.ld'}",
+                        f"-T{TestConfig.linker_script(f'{name}.ld')}",
+                        f"-T{TestConfig.linker_script('sections.ld')}",
                     ],
                     (
                         [f"{CODE_SHIFT_FLAG}{TestConfig.CODE_SHIFT}"]

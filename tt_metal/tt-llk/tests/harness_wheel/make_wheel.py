@@ -52,7 +52,6 @@ import time
 import zipfile
 from email.message import Message
 from email.policy import compat32
-from enum import Enum
 from pathlib import Path, PurePosixPath
 from typing import NamedTuple
 
@@ -106,35 +105,21 @@ RUNTIME_REQUIREMENTS = (
 _ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 
 
-class _Git(Enum):
-    """The git commands the builder runs: fixed argument lists, each run in a directory."""
-
-    TRACKED_FILES = ("git", "ls-files", "-z")
-    COMMIT = ("git", "rev-parse", "HEAD")
-    COMMIT_TIME = ("git", "log", "-1", "--format=%ct")
-    TRACKED_CHANGES = ("git", "status", "--porcelain", "--untracked-files=no", ".")
-
-    def run(self, directory: Path) -> str:
-        # Run from a git hook, these variables point at the hook's index and work tree.
-        env = {
-            name: value
-            for name, value in os.environ.items()
-            if name not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
-        }
-        return subprocess.run(
-            self.value,
-            cwd=directory,
-            check=True,
-            stdout=subprocess.PIPE,
-            text=True,
-            env=env,
-        ).stdout
+def _in(directory: Path) -> dict:
+    """``subprocess.run`` options for a git command, each a literal argument list, run in ``directory``."""
+    # Run from a git hook, these variables point at the hook's index and work tree.
+    env = {
+        name: value
+        for name, value in os.environ.items()
+        if name not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
+    }
+    return dict(cwd=directory, check=True, stdout=subprocess.PIPE, text=True, env=env)
 
 
 def _files_under(source: Path) -> list[Path]:
     """The files of a directory that git tracks, sorted, as paths relative to it."""
     # -z: one NUL-terminated name per file, exactly as stored, with no quoting to undo.
-    listed = _Git.TRACKED_FILES.run(source)
+    listed = subprocess.run(["git", "ls-files", "-z"], **_in(source)).stdout
     return sorted(
         Path(name) for name in listed.split("\0") if (source / name).is_file()
     )
@@ -202,11 +187,18 @@ class Version(NamedTuple):
 
 def default_version(llk_root: Path = LLK_ROOT) -> Version:
     """The version of the commit ``llk_root`` is at."""
+    here = _in(llk_root)
+    committed = subprocess.run(["git", "log", "-1", "--format=%ct"], **here).stdout
+    commit = subprocess.run(["git", "rev-parse", "HEAD"], **here).stdout
+    # Changes to tracked files under llk_root; untracked files are not in the wheel.
+    changes = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=no", "."], **here
+    ).stdout
     return Version(
         api=api_version(llk_root),
-        committed=int(_Git.COMMIT_TIME.run(llk_root)),
-        commit=int(_Git.COMMIT.run(llk_root), 16),
-        dirty=bool(_Git.TRACKED_CHANGES.run(llk_root)),
+        committed=int(committed),
+        commit=int(commit, 16),
+        dirty=bool(changes),
     )
 
 
