@@ -62,12 +62,6 @@ PROMOTE_OUT = float(os.environ.get("RESIDENT_ADAPTIVE_PROMOTE_OUT", "256"))
 REFILL_MS_FIXED, REFILL_MS_PER_TOKEN = 20.0, 0.13  # (defaults: tests/refill_batch.py, 2026-11-23)
 SPEC_MS_DEFAULT = lambda n: 28.0 + 4.6 * (n - 1)  # noqa: E731  (served verify steps, rc-20261124j: 1 / 2 / 4 / 8
 # users ~29 / 35 / 41 / 60 ms; 52.5 at 8 users let the gate promote 8 users before any 8-user step was measured)
-# promotions wait until no request has started for PROMOTE_SETTLE propose calls: users arriving together (8 at once)
-# were promoted one by one while the live count was still small (each promotion paid at 1-4 users) and ended up 8
-# speculating, which does not pay (~60 ms verify steps vs ~20 ms plain at ~3 tokens a verify): the probe, its moves
-# back and mixed steps cost natural c8 41.7 vs 50.7 tok/s per user (rc-20261124j). (P2d promotions cost ~20 ms a user:
-# waiting a few steps costs a single user ~1%)
-PROMOTE_SETTLE = int(os.environ.get("RESIDENT_ADAPTIVE_PROMOTE_SETTLE", "4"))
 # step times grow with the live users' total context (attention reads every row's KV): the estimates above are kept
 # per live count at no context (a measured step's time minus its context's share, these ms per context token) and the
 # decisions add the current context's share — a 250K request's ~44 ms verify steps kept as the 1-user estimate closed
@@ -175,8 +169,6 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         # the history, so it waits for a propose with no step in flight (a step the runner does not overlap: after a
         # prefill / layout change, any speculative step)
         self._calls = [0, 0]
-        # (PROMOTE_SETTLE: the live set at the last propose, propose calls since a request started)
-        self._seen_live, self._settle = set(), 0
         # (the acceptance-aware policy's measurements: EMAs of tokens per spec user-step and of step times per kind)
         self._pay = self._new_pay()
         self.prompt_len = {}  # slot -> its prompt's length (generated tokens = history - prompt)
@@ -357,22 +349,31 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         pay["last_t"], pay["excl"] = now, 0.0
         n, ctx = max(1, pay["n"]), pay.get("ctx", 0)
         if dt_ms is not None and dt_ms < 5000:  # (an idle gap is no step)
+            # (the time at no context: the estimates' unit; a sample under 1 / OUTLIER of the default model is no
+            # device step — the fake engine's microseconds — and is skipped like a high outlier)
             if pay["kind"] == "verify" and spec_accepts:
-                x = max(1.0, dt_ms - SPEC_CTX_MS * ctx)  # (the time at no context: the estimates' unit)
-                _store(pay["spec_ms"], n, robust_ema(pay["spec_ms"].get(n), x, SPEC_MS_DEFAULT(n)))
+                x = dt_ms - SPEC_CTX_MS * ctx
+                if x >= SPEC_MS_DEFAULT(n) / OUTLIER:
+                    _store(pay["spec_ms"], n, robust_ema(pay["spec_ms"].get(n), x, SPEC_MS_DEFAULT(n)))
                 pay["acc"] = ema(pay["acc"], sum(spec_accepts) / len(spec_accepts))
                 pay["verifies"] += 1
             elif pay["kind"] == "plain":
-                x = max(1.0, dt_ms - PLAIN_CTX_MS * ctx)
-                _store(pay["plain_ms"], n, robust_ema(pay["plain_ms"].get(n), x, PLAIN_MS_DEFAULT(n)))
-        if pay["verifies"] < PAY_MIN or pay["acc"] is None or n not in pay["spec_ms"]:
-            return True
-        return pay["acc"] / self._step_ms("verify", n, ctx) >= PAY_MARGIN / self._step_ms("plain", n, ctx)
+                x = dt_ms - PLAIN_CTX_MS * ctx
+                if x >= PLAIN_MS_DEFAULT(n) / OUTLIER:
+                    _store(pay["plain_ms"], n, robust_ema(pay["plain_ms"].get(n), x, PLAIN_MS_DEFAULT(n)))
+        # (before PAY_MIN verify steps: the acceptance at least PROMOTE_ACC — a probe; an unmeasured live count: the
+        # default model's step time — users arriving together were promoted one by one at 1-4 live users and the
+        # 8-user probe ran its PAY_MIN verify steps at ~60 ms before PLAIN: natural c8 41.7 vs 50.7 tok/s per user plain,
+        # rc-20261124j; now the live count that does not pay goes PLAIN at once)
+        probing = pay["verifies"] < PAY_MIN or pay["acc"] is None
+        pay["acc_used"] = max(pay["acc"] or 0.0, PROMOTE_ACC) if probing else pay["acc"]
+        return pay["acc_used"] / self._step_ms("verify", n, ctx) >= PAY_MARGIN / self._step_ms("plain", n, ctx)
 
     def _pay_line(self):
         pay, n, ctx = self._pay, max(1, self._pay["n"]), self._pay.get("ctx", 0)
         return (
-            f"{n} users, {ctx} context tokens: {pay['acc']:.2f} tokens per {self._step_ms('verify', n, ctx):.1f} ms "
+            f"{n} users, {ctx} context tokens: {pay.get('acc_used') or 0:.2f} tokens per "
+            f"{self._step_ms('verify', n, ctx):.1f} ms "
             f"speculating vs 1 per {self._step_ms('plain', n, ctx):.1f} ms plain"
         )
 
@@ -679,10 +680,7 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
                 logger.info(f"adaptive: {live} live users for {self.low_calls} steps -> SPEC")
                 self.mode, self.low_calls = "SPEC", 0
         self._calls[1] += 1
-        started = bool(self.live - self._seen_live)
-        self._seen_live = set(self.live)
-        self._settle = 0 if started else self._settle + 1
-        if self.mode == "SPEC" and self._calls[0] == self._calls[1] and self._settle >= PROMOTE_SETTLE:
+        if self.mode == "SPEC" and self._calls[0] == self._calls[1]:
             self._promote()  # (known-greedy plain users into the spec build: state moves + drafter refill; drafts below)
         ids = torch.zeros(B, K, dtype=torch.int32)
         valid = torch.zeros(B, dtype=torch.int32)

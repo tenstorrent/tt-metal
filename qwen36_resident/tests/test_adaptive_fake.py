@@ -113,7 +113,6 @@ class FakeAE:
 def make(monkeypatch, gate=False):
     monkeypatch.setattr(F, "ROWS", B)
     monkeypatch.setattr(A, "PROMOTE_GATE", gate)  # (fake steps take microseconds: the gate has its own tests)
-    monkeypatch.setattr(A, "PROMOTE_SETTLE", 0)  # (promotions at once: the settle wait has its own test)
     pf = F.FakeModel(B, sample=True)
     pf.launch_rows = B
     pf.row_order = lambda: list(range(B))
@@ -128,7 +127,6 @@ def make(monkeypatch, gate=False):
     m.spec_of, m.history, m.last_acc, m.mode, m.low_calls = {}, {}, {}, "SPEC", 0
     m.sampled, m._t, m._plain_stale, m.greedy_ok, m._calls = set(), {}, False, set(), [0, 0]
     m._pay, m.prompt_len, m.taps_of = m._new_pay(), {}, {}
-    m._seen_live, m._settle = set(), 0
     m.engine = A._PlainRowsEngine(plain, pp, torch.eye(V), V, V, B, CHUNK_UNIT, None)
     return m, pf
 
@@ -260,6 +258,9 @@ class Runner:
 
 def test_adaptive_ramp(monkeypatch):
     monkeypatch.setattr(A, "PLAIN_HOLD", 4)
+    monkeypatch.setattr(
+        A, "PAY_MIN", 10**6
+    )  # (the fake drafts' acceptance would not pay: the pay policy's own tests)
     m, pf = make(monkeypatch)
     run = Runner(m)
     prompts = {r: [(r * 17 + i * 5) % V for i in range(30 + 3 * r)] for r in range(10)}
@@ -287,28 +288,6 @@ def test_adaptive_ramp(monkeypatch):
     kinds_moves = [mv[0] for mv in m.ae.moves]
     assert kinds_moves.count("to_plain") == 4 and kinds_moves.count("to_spec") == 4 + 3, m.ae.moves
     assert sum(len(q["tokens"]) - len(q["prompt"]) for q in run.req.values()) > 3 * 20
-
-
-def test_promotions_wait_for_arrivals_to_settle(monkeypatch):
-    """users arriving together are promoted once no request has started for PROMOTE_SETTLE propose calls — promoted
-    one by one while the live count was small, 8 users arriving at once all ended up speculating (rc-20261124j natural
-    c8 41.7 vs 50.7 tok/s per user plain)"""
-    m, pf = make(monkeypatch)
-    monkeypatch.setattr(A, "PROMOTE_SETTLE", 3)
-    run = Runner(m)
-    prompts = {r: [(r * 17 + i * 5) % V for i in range(30 + 3 * r)] for r in range(4)}
-    run.arrive([0, 1], [prompts[0], prompts[1]])
-    for _ in range(2):
-        run.step()
-    assert not m.spec_of, "still settling"
-    run.arrive([2, 3], [prompts[2], prompts[3]])
-    for _ in range(2):
-        run.step()
-    assert not m.spec_of, "a start restarts the wait"
-    for _ in range(6):
-        run.step()
-    run.check()
-    assert m.mode == "SPEC" and len(m.spec_of) == 4, (m.mode, m.spec_of)
 
 
 def test_sampled_request_joins_spec(monkeypatch):
@@ -392,6 +371,16 @@ def test_pay_policy(monkeypatch, acc, expect):
         m._pay["kind"], m._pay["n"] = "verify", 8
         pays = m._measure([acc] * 8)
     assert pays is expect, (m._pay, pays)
+
+
+@pytest.mark.parametrize("n,expect", [(1, True), (4, True), (8, False)])
+def test_pay_policy_decides_an_unmeasured_live_count_at_once(monkeypatch, n, expect):
+    """before any verify step at a live count, the default step-time model with the acceptance at least PROMOTE_ACC
+    decides: 1-4 users speculate (a probe), 8 do not — 8 users arriving together were promoted one by one and the
+    8-user probe's PAY_MIN ~60 ms verify steps ran before PLAIN (rc-20261124j natural c8 41.7 vs 50.7 tok/s per user)"""
+    m = _gate_case(monkeypatch, n, 200, 1)
+    m._pay["kind"], m._pay["n"], m._pay["ctx"] = "plain", n, 200 * n
+    assert m._measure([]) is expect, m._pay_line()
 
 
 def test_pay_policy_excludes_prefills(monkeypatch):
