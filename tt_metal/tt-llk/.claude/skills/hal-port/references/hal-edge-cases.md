@@ -11,7 +11,10 @@ Each item: what happened, how it showed up, where to look, what to do. Measured 
    production passes* (`hal/dst.h`).
 2. **Auto TTSync is sticky per thread and breaks code that still uses the two-context semaphore handshake.**
    Enabling it in the shared `_llk_unpack_hw_configure_` hung `test_sdpa_custom_mm_mask_extent_restore`. Enable it
-   only in the init of the op that relies on it (`_llk_unpack_AB_init_`) and disable it in that op's uninit. Before
+   only in the init of the op that relies on it (`_llk_unpack_AB_init_`) and disable it in that op's uninit. The SDPA
+   unpack ops (`_llk_unpack_AB_sdpa_custom_mm_` and its reuse-dest variant) still post and get `UNPACK_SYNC` and wait
+   for a free context per call, so sdpa_custom_mm hung while Auto TTSync was on globally; that is why it is scoped to the
+   AB init and the SDPA ports leave it off. Before
    relying on Auto TTSync, issue a SETC16 of `CFG_STATE_ID` (Blackhole erratum, SETC16.md: until then it tracks the
    wrong config bank; without it 1910/5704 eltwise tests failed).
 3. **Mixing production and HAL headers in one thread breaks the build.** Production headers include their siblings
