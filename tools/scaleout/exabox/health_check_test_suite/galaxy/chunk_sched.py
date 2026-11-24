@@ -1627,12 +1627,13 @@ def rw_lines(r, n):
 GDDR = "ABCDEFGH"
 
 
-def dbi_lines(r, n):
+def dbi_lines(r, n, at=None, name="G3b"):
     """A "dbi" row (chunk_load.py --dbi-wall-s): G3b, the DRAM byte/DBI pattern check right after G3.
     One NUMERIC FAIL per chip with a bad byte, with "DRAM" and its worst bank (GDDR controller A-H) in it, the byte offset
     in the 32-byte burst, the XOR of the flipped bits and the patterns; then one summary line. A check that raised is a
-    NUMERIC WARN, never a pass. Returns (lines, trays that failed)."""
-    at = f"after chunk {r['k'] + 1}/{n}"
+    NUMERIC WARN, never a pass. at/name: another run of the same check (fabric_open.py's after the C9 reset). Returns (lines,
+    trays that failed)."""
+    at = at or f"after chunk {r['k'] + 1}/{n}"
     cs_ = r.get("chips") or {}
     order = lambda kv: (kv[1].get("tray") is None, kv[1].get("tray") or 0, str(kv[1].get("pci")))  # noqa: E731
     out, bad = [], set()
@@ -1647,7 +1648,7 @@ def dbi_lines(r, n):
         pats = ", ".join(f"{p} {v}" for p, v in sorted((c.get("pats") or {}).items(), key=lambda kv: -kv[1])[:4])
         ft = f" ({hms(c['first_t'])})" if c.get("first_t") else ""
         out.append(
-            f"NUMERIC FAIL {short(c.get('pci') or '?')} (tray {c.get('tray') or '?'}) chip {c.get('dev')} [dbi]: G3b "
+            f"NUMERIC FAIL {short(c.get('pci') or '?')} (tray {c.get('tray') or '?'}) chip {c.get('dev')} [dbi]: {name} "
             f"DRAM byte/DBI pattern readback {at}: {c['bad_passes']}/{c.get('passes', 0)} passes mismatched, first in "
             f"pass {c.get('first_pass')}{ft}, {c.get('bad', 0)} bytes, "
             + (f"worst DRAM bank {wb} (GDDR {GDDR[wb] if wb < len(GDDR) else wb}) " if wb is not None else "")
@@ -1660,16 +1661,18 @@ def dbi_lines(r, n):
             bad.add(c.get("tray"))
             fa = c.get("first_addr")
             out.append(
-                f"NUMERIC FAIL {short(c.get('pci') or '?')} (tray {c.get('tray') or '?'}) chip {c.get('dev')} [dbi]: G3b "
+                f"NUMERIC FAIL {short(c.get('pci') or '?')} (tray {c.get('tray') or '?'}) chip {c.get('dev')} [dbi]: {name} "
                 f"DRAM 1 GB window {wd.get('window')} readback {at}: {c['bad']} bytes, first at DRAM bank "
                 f"{c.get('first_bank')} offset {'?' if fa is None else hex(fa)}, banks {c.get('per_bank')}, "
                 f"flipped bits 0x{int(c.get('xor', 0)):02x}"
             )
     nbad = len(out)
     if wd.get("error"):
-        out.append(f"NUMERIC WARN G3b DRAM 1 GB window {wd.get('window')} {at} not checked: {str(wd['error'])[:200]}")
+        out.append(
+            f"NUMERIC WARN {name} DRAM 1 GB window {wd.get('window')} {at} not checked: {str(wd['error'])[:200]}"
+        )
     if r.get("error"):
-        out.append(f"NUMERIC WARN G3b DRAM byte/DBI pattern readback {at} not checked: {str(r['error'])[:200]}")
+        out.append(f"NUMERIC WARN {name} DRAM byte/DBI pattern readback {at} not checked: {str(r['error'])[:200]}")
     else:
         cp = (
             f"{r.get('hops', 0)} device copies per pass"
@@ -1677,7 +1680,7 @@ def dbi_lines(r, n):
             else f"host write and readback only (ttnn.clone: {str(r.get('copy_error'))[:120]})"
         )
         out.append(
-            f"NUMERIC G3b {at}: {hms(r['start'])}-{hms(r['end'])}, {r.get('passes', 0)} passes of {r.get('patterns', 0)} "
+            f"NUMERIC {name} {at}: {hms(r['start'])}-{hms(r['end'])}, {r.get('passes', 0)} passes of {r.get('patterns', 0)} "
             f"byte/DBI patterns, {r.get('mb', 0):g} MB per chip on {len(cs_)} chips, {cp}, {r.get('wall_s', 0):g} s; "
             + (f"{nbad} chip(s) mismatched" if nbad else "every chip matched" if r.get("passes") else "no pass ran")
             + (

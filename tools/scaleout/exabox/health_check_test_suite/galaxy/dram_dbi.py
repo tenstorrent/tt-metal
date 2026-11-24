@@ -232,7 +232,8 @@ def dbi_check(ttnn, torch, mesh, chips, wall_s, nb=8, hops=HOPS, beat=None, say=
     passes, bad_passes, bad (words), first_pass, first_t, per_bank, per_byte (32-byte burst offset), xor, pats)}).
     copy is 'clone' while ttnn.clone runs, else 'host' (a host write and readback only) with copy_error. window: full
     mode's window index (None: no window); the passes then stop WIN_S s early and the result carries window=dict(...
-    window_check's, or error)."""
+    window_check's, or error). A pass that raises ends the passes: the result keeps what the earlier ones found, with error.
+    """
     D = ttnn.DRAM_MEMORY_CONFIG
     names, table = patterns(torch)
     row_bank = torch.arange(ROWS) % nb
@@ -252,64 +253,75 @@ def dbi_check(ttnn, torch, mesh, chips, wall_s, nb=8, hops=HOPS, beat=None, say=
     t0 = time.monotonic()
     k, copy, cerr, last = 0, "clone", None, 0.0
     loop_s = wall_s - WIN_S if window is not None else wall_s
-    while time.monotonic() - t0 + last < loop_s or k == 0:
-        p0 = time.monotonic()
-        gold, pat = pass_data(torch, table, nb, k)
-        x = ttnn.from_torch(
-            gold.view(torch.int32).view(ROWS, ROW_B // 4),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh,
-            memory_config=D,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
-        )
-        try:
-            for _ in range(hops if copy == "clone" else 0):
-                try:
-                    y = ttnn.clone(x, memory_config=D)
-                except Exception as e:  # noqa: BLE001  the host round trip still checks every page, say so
-                    copy, cerr = "host", f"{type(e).__name__}: {str(e)[:200]}"
-                    if say:
-                        say(f"ttnn.clone failed ({cerr}): host write and readback only")
-                    break
+    err = None
+    try:
+        while time.monotonic() - t0 + last < loop_s or k == 0:
+            p0 = time.monotonic()
+            gold, pat = pass_data(torch, table, nb, k)
+            x = ttnn.from_torch(
+                gold.view(torch.int32).view(ROWS, ROW_B // 4),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh,
+                memory_config=D,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+            )
+            try:
+                for _ in range(hops if copy == "clone" else 0):
+                    try:
+                        y = ttnn.clone(x, memory_config=D)
+                    except Exception as e:  # noqa: BLE001  the host round trip still checks every page, say so
+                        copy, cerr = "host", f"{type(e).__name__}: {str(e)[:200]}"
+                        if say:
+                            say(f"ttnn.clone failed ({cerr}): host write and readback only")
+                        break
+                    ttnn.deallocate(x)
+                    x = y
+                ttnn.synchronize_device(mesh)
+                got = [
+                    ttnn.to_torch(d).contiguous().view(torch.uint8).reshape(ROWS, ROW_B)
+                    for d in ttnn.get_device_tensors(x.cpu())
+                ]
+            finally:
                 ttnn.deallocate(x)
-                x = y
-            ttnn.synchronize_device(mesh)
-            got = [
-                ttnn.to_torch(d).contiguous().view(torch.uint8).reshape(ROWS, ROW_B)
-                for d in ttnn.get_device_tensors(x.cpu())
-            ]
-        finally:
-            ttnn.deallocate(x)
-        got = inject(got, chips, k)  # TRAY_INJECT: test-only flip of one chip's host copy, before the compare
-        for i, g in enumerate(got):
-            s = st.setdefault(i, new())
-            s["passes"] += 1
-            d = g != gold
-            if not bool(d.any()):
-                continue
-            r, c = torch.nonzero(d, as_tuple=True)
-            s["bad_passes"] += 1
-            s["bad"] += int(r.numel())
-            if s["first_pass"] is None:
-                s["first_pass"], s["first_t"] = k, round(time.time(), 1)
-            s["per_bank"] = [u + v for u, v in zip(s["per_bank"], torch.bincount(row_bank[r], minlength=nb).tolist())]
-            s["per_byte"] = [u + v for u, v in zip(s["per_byte"], torch.bincount(byte_off[c], minlength=32).tolist())]
-            xb = torch.bitwise_xor(g[r, c], gold[r, c])
-            for bit in range(8):
-                if bool((torch.bitwise_and(xb, 1 << bit) != 0).any()):
-                    s["xor"] |= 1 << bit
-            for pi, n in zip(*torch.unique(pat[r], return_counts=True)):
-                s["pats"][names[int(pi)]] = s["pats"].get(names[int(pi)], 0) + int(n)
-            if say:
-                ch = chips.get(i, {})
-                say(f"BAD mesh{i} {ch.get('pci')} tray {ch.get('tray') or '?'}: {int(r.numel())} bytes in pass {k}")
-        k += 1
-        last = time.monotonic() - p0
-        if beat:
-            beat(f"dbi pass {k}")
+            got = inject(got, chips, k)  # TRAY_INJECT: test-only flip of one chip's host copy, before the compare
+            for i, g in enumerate(got):
+                s = st.setdefault(i, new())
+                s["passes"] += 1
+                d = g != gold
+                if not bool(d.any()):
+                    continue
+                r, c = torch.nonzero(d, as_tuple=True)
+                s["bad_passes"] += 1
+                s["bad"] += int(r.numel())
+                if s["first_pass"] is None:
+                    s["first_pass"], s["first_t"] = k, round(time.time(), 1)
+                s["per_bank"] = [
+                    u + v for u, v in zip(s["per_bank"], torch.bincount(row_bank[r], minlength=nb).tolist())
+                ]
+                s["per_byte"] = [
+                    u + v for u, v in zip(s["per_byte"], torch.bincount(byte_off[c], minlength=32).tolist())
+                ]
+                xb = torch.bitwise_xor(g[r, c], gold[r, c])
+                for bit in range(8):
+                    if bool((torch.bitwise_and(xb, 1 << bit) != 0).any()):
+                        s["xor"] |= 1 << bit
+                for pi, n in zip(*torch.unique(pat[r], return_counts=True)):
+                    s["pats"][names[int(pi)]] = s["pats"].get(names[int(pi)], 0) + int(n)
+                if say:
+                    ch = chips.get(i, {})
+                    say(f"BAD mesh{i} {ch.get('pci')} tray {ch.get('tray') or '?'}: {int(r.numel())} bytes in pass {k}")
+            k += 1
+            last = time.monotonic() - p0
+            if beat:
+                beat(f"dbi pass {k}")
+    # a pass that raised keeps what the earlier passes found: their FAIL lines, then the WARN
+    except Exception as e:  # noqa: BLE001
+        err = f"{type(e).__name__}: {str(e)[:300]}"
+        if say:
+            say(f"pass {k} raised: {err}")
     win = None
-    if window is not None:
+    if window is not None and err is None:
         if beat:
             beat("dbi window")
         try:
@@ -330,4 +342,5 @@ def dbi_check(ttnn, torch, mesh, chips, wall_s, nb=8, hops=HOPS, beat=None, say=
         wall_s=round(el, 1),
         banks=nb,
         chips={str(i): dict(chips.get(i, {}), **s) for i, s in st.items()},
+        **({"error": err} if err else {}),
     )

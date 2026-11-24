@@ -10,8 +10,13 @@ per row, the Galaxy's 8x4 device_topology), any other count (--known-dropped-tra
 The CCL is all_gather_async (global semaphores, Linear, cluster_axis, 2 links) on axis 1 (rows of 8) then axis 0 (columns of 4);
 every chip holds one tile of its own index and must read back every index of its row / column. The links phase (diag/links.py)
 runs it after its delay and reads the PCIe tree after it.
---beat holds 'open', 'launch 0' (the open), 'done 0', 'launch 1'/'done 1' (axis 1), 'launch 2'/'done 2' (axis 0), 'close'
-for fl_watch (this process never returns while a chip hangs).
+--beat holds 'open', 'launch 0' (the open), 'done 0', 'launch 1'/'done 1' (axis 1), 'launch 2'/'done 2' (axis 0),
+'dbi pass N', 'close' for fl_watch (this process never returns while a chip hangs).
+--dbi-wall-s S > 0: after the CCL, on the same open mesh, the DRAM byte/DBI pattern check
+(dram_dbi.dbi_check, G3b's check: every chip's DRAM banks written, copied on the device and read back) for S s, so DRAM
+is checked right after the C9 reset too, as the Deployment Test does after each reset; its row has event "dbi", its
+finding lines (chunk_sched.dbi_lines: NUMERIC FAIL per chip by BDF, tray and worst DRAM bank, NUMERIC WARN when it
+raised, one summary line) go to --dbi-out.
 Exit 0 opened, gathered and closed, 1 anything failed: the row's error reads 'MESH 4x8 <stage>: <first error line>'."""
 import argparse
 import json
@@ -22,7 +27,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.realpath(__file__)))
 import time
 
-from chunk_sched import tray_of
+from chunk_sched import dbi_lines, tray_of
 from numeric_check import umd_map_from_stdout
 from quiet_clock import kmd_pci
 
@@ -35,6 +40,10 @@ ap.add_argument(
     default="",
     help="run.sh's map.txt ('<BDF> <device id>' rows): names a chip reading wrong data by BDF when sysfs does not",
 )
+ap.add_argument(
+    "--dbi-wall-s", type=float, default=0, help="DRAM byte/DBI pattern check after the CCL, wall cap s; 0 off"
+)
+ap.add_argument("--dbi-out", default="", help="--dbi-wall-s's finding lines, one per line (default: beside --rows)")
 a = ap.parse_args()
 rows = open(a.rows, "a")
 
@@ -47,17 +56,25 @@ def row(**kw):
     print(json.dumps(kw), flush=True)
 
 
-def chip_name(m, i, r, c):
-    """'chip i (mesh rR cC)' plus, when the chip's PCI address reads, '<BDF> (tray T, ASIC A, device id D)': the mesh's metal id
-    -> PCIe id D (UMD's 'Opening local chip ids/PCIe ids' line, as chunk_load does), then D -> BDF by sysfs, else by --map.
-    """
+def chip_id(m, i):
+    """(device id D, BDF or ''): the mesh's metal id -> PCIe id D (UMD's 'Opening local chip ids/PCIe ids' line, as
+    chunk_load does), then D -> BDF by sysfs, else by --map. Raises when the mesh's ids do not read."""
+    mid = list(m.get_device_ids())[i]  # row-major in the mesh, as get_device_tensors
+    umd = umd_map_from_stdout()
+    did = umd.get(mid, mid) if umd else mid
     try:
-        mid = list(m.get_device_ids())[i]  # row-major in the mesh, as get_device_tensors
-        umd = umd_map_from_stdout()
-        did = umd.get(mid, mid) if umd else mid
         bdf = kmd_pci().get(did) or next(
             (w[0] for w in (l.split() for l in open(a.map)) if len(w) == 2 and w[1] == str(did)), ""
         )
+    except OSError:
+        bdf = ""
+    return did, bdf
+
+
+def chip_name(m, i, r, c):
+    """'chip i (mesh rR cC)' plus, when the chip's PCI address reads, '<BDF> (tray T, ASIC A, device id D)'."""
+    try:
+        did, bdf = chip_id(m, i)
     except Exception:  # noqa: BLE001
         return f"chip {i} (mesh r{r} c{c})"
     if not bdf:
@@ -71,6 +88,43 @@ def beat(s):
     with open(a.beat + ".tmp", "w") as f:
         f.write(f"{s} {time.time():.0f}\n")
     os.replace(a.beat + ".tmp", a.beat)
+
+
+def dbi_check():
+    """--dbi-wall-s: G3b's DRAM byte/DBI pattern check on the open mesh, after the C9 reset. Its own error is a NUMERIC WARN
+    line and the "dbi" row's error, never the open's: the mesh still closes and the open's verdict stands."""
+    t1 = time.time()
+    beat("dbi pass 0")
+    say = lambda s: print(f"{time.strftime('%F %T')} C9 DRAM {s}", flush=True)  # noqa: E731
+    try:
+        import dram_dbi as dd
+        import torch
+
+        chips = {}
+        for i in range(R * C):
+            did, bdf = chip_id(m, i)
+            chips[i] = dict(pci=bdf or None, tray=tray_of(bdf) if bdf else None, dev=did)
+        g = m.dram_grid_size()  # MeshDevice has no get_devices() in Python
+        nb = int(g.x * g.y)
+        say(
+            f"DRAM byte/DBI patterns on {len(chips)} chips after the C9 reset: {dd.ROWS * dd.ROW_B >> 20} MB per chip, "
+            f"{dd.HOPS} copies on the device per pass, wall cap {a.dbi_wall_s:g} s, banks {nb}"
+        )
+        gb = dd.dbi_check(ttnn, torch, m, chips, a.dbi_wall_s, nb, beat=beat, say=say)
+    except Exception as e:  # noqa: BLE001
+        gb = dict(error=f"{type(e).__name__}: {str(e)[:300]}", chips={})
+        say(f"error: {gb['error']}")
+    r = dict(gb, start=round(t1, 3), end=round(time.time(), 3))
+    row(event="dbi", **r)
+    try:
+        lines, _ = dbi_lines(r, 0, at="after the end reset's glx_reset", name="C9")
+        out = a.dbi_out or os.path.join(os.path.dirname(os.path.abspath(a.rows)), "dbi.txt")
+        with open(out, "w") as f:
+            f.write("".join(ln + "\n" for ln in lines))
+        for ln in lines:
+            print(ln, flush=True)
+    except Exception as e:  # noqa: BLE001
+        say(f"WARNING: findings not written: {type(e).__name__}: {str(e)[:300]}")
 
 
 beat("open")
@@ -173,6 +227,9 @@ try:
                 raise RuntimeError(f"{len(bad)} of {n} chips read wrong data: {names}; first {bad[0][1]}")
             ccl[f"axis{ax}_s"] = round(time.time() - t1, 1)
         ttnn.deallocate(x)
+    if a.dbi_wall_s > 0:
+        stage = "dbi"
+        dbi_check()
     stage = "close_mesh_device"
     ttnn.close_mesh_device(m)
     m = None
