@@ -43,33 +43,32 @@ inline void calculate_rdiv(const uint value) {
                 q = _floor_body_(result);
             }
 
-            
-                v_if (e_in != 0 && e_in < 253 && e_res != 255) {
-                    // Fix one-integer errors from the reciprocal product landing just below an integer.
-                    // Avoid the Newton residual step here; the discrete remainder invariant is enough
-                    // for the exact-divisible floor/trunc bug and keeps the rounded path smaller.
-                    // Note: +-1 residual correction guarantees exact integer quotients on the FP32-dest path.
-                    // On non-FP32 paths, recip is rounded to bf16 (~2^-9 relative error) and can exceed +-1 for large quotients.
-                    sfpi::vFloat r = val - q * in;
-                    sfpi::vFloat rq = r * recip;  // sign only
+            v_if (e_in != 0 && e_in < 253 && e_res != 255) {
+                // Fix one-integer errors from the reciprocal product landing just below an integer.
+                // Avoid the Newton residual step here; the discrete remainder invariant is enough
+                // for the exact-divisible floor/trunc bug and keeps the rounded path smaller.
+                // Note: +-1 residual correction guarantees exact integer quotients on the FP32-dest path.
+                // On non-FP32 paths, recip is rounded to bf16 (~2^-9 relative error) and can exceed +-1 for large quotients.
+                sfpi::vFloat r = val - q * in;
 
-                    if constexpr (rounding_mode == RoundingMode::Floor) {
-                        // floor invariant: remainder shares the divisor's sign, |r| < |in|
-                        v_if (rq < 0.0f) { q = q - 1.0f; }
-                        v_elseif (sfpi::abs(r) >= sfpi::abs(in)) { q = q + 1.0f; }
+                if constexpr (rounding_mode == RoundingMode::Floor) {
+                    // floor invariant: remainder shares divisor's sign (or is zero), |r| < |in|
+                    v_if ((r < 0.0f) != (in < 0.0f)) { q = q - 1.0f; }
+                    v_elseif (sfpi::abs(r) >= sfpi::abs(in)) { q = q + 1.0f; }
+                    v_endif;
+                } else {
+                    // trunc invariant: remainder shares dividend's sign (or is zero), |r| < |in|
+                    v_if (((r < 0.0f) != (val < 0.0f)) || sfpi::abs(r) >= sfpi::abs(in)) {
+                        v_if ((r < 0.0f) == (in < 0.0f)) { q = q + 1.0f; }
+                        v_else { q = q - 1.0f; }
                         v_endif;
-                    } else {
-                        // trunc invariant: r has the dividend's sign (or is zero) and |r| < |in|
-                        v_if (r * val < 0.0f || sfpi::abs(r) >= sfpi::abs(in)) {
-                            v_if (rq >= 0.0f) { q = q + 1.0f; }
-                            v_else { q = q - 1.0f; }
-                            v_endif;
-                        }
-                        v_endif;
-                    }   
-                v_endif;
-                result = q;
+                    }
+                    v_endif;
+                }
             }
+            v_endif;
+            result = q;
+        }
 
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
