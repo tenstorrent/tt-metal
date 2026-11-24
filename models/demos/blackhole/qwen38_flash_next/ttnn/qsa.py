@@ -446,22 +446,6 @@ def _idx_rowwrite_kwargs(consumed_rows: int, lane_rows: int = 0) -> dict:
     return kwargs
 
 
-def _sparse_sdpa_key_splits(device, rows: int) -> int:
-    """key_splits for a decode sparse_sdpa call over ``rows`` query tokens: N cores share each token's selected keys
-    (the op combines the partials on device).  1 (today's one core per token) unless QWEN38_SDPA_KSPLIT=1;
-    then N = QWEN38_SDPA_KSPLIT_N (default 8), the SAME for every ``rows`` so a lane's output does not depend on the
-    batch (the op runs the S*N units in turns when they exceed the grid).  N <= 1 means no split; N is clamped to
-    [1, min(64, grid cores)].  Prefill and the generic call never use it."""
-
-    del rows  # batch invariance: N must not depend on the row count
-    # main's sparse_sdpa has its own split-K and no key_splits kwarg
-    if os.environ.get("QWEN38_SDPA_KSPLIT", "0") != "1":
-        return 1
-    n = int(os.environ.get("QWEN38_SDPA_KSPLIT_N", "8"))
-    grid = device.compute_with_storage_grid_size()
-    return max(1, min(n, 64, grid.x * grid.y))
-
-
 def _deallocate(*tensors) -> None:
     seen: set[tuple[str, int]] = set()
     for tensor in tensors:
@@ -5820,14 +5804,6 @@ class Qwen38TTNNQSA:
         _retag_tensor(sparse_query, reference=state.packed_kv_cache, shard_dim=1)
         return sparse_query, qg_ws
 
-    @staticmethod
-    def _sparse_sdpa_ksplit_kwargs(device, rows: int) -> dict:
-        """sparse_sdpa kwargs for a decode call (QWEN38_SDPA_KSPLIT=1 adds key_splits; empty otherwise, so the op
-        call is exactly today's)."""
-
-        n = _sparse_sdpa_key_splits(device, rows)
-        return {"key_splits": n} if n > 1 else {}
-
     def _sparse_value_attention_fused(
         self, sparse_query, qg_ws, sparse_indices, state, *, qg_first: int = 0, rows: int = 1
     ):
@@ -5845,7 +5821,6 @@ class Qwen38TTNNQSA:
             scale=HEAD_DIM**-0.5,
             k_chunk_size=ttnn.TILE_SIZE,
             compute_kernel_config=self.compute_config,
-            **self._sparse_sdpa_ksplit_kwargs(state.packed_kv_cache.device(), rows),
         )
         _deallocate(sparse_query)
         if self._trim_post_attention and self._trim_post_attention.admits(sparse_output, qg_ws, qg_first):
@@ -7158,7 +7133,6 @@ class Qwen38TTNNQSA:
             scale=HEAD_DIM**-0.5,
             k_chunk_size=ttnn.TILE_SIZE,
             compute_kernel_config=self.compute_config,
-            **self._sparse_sdpa_ksplit_kwargs(state.packed_kv_cache.device(), rows),
         )
         _deallocate(sparse_query)
         if qg_ws is not None:
