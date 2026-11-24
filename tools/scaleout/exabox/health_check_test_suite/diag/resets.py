@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Sequence
 
 from .aer import aer_check, aer_new, read_aer
+from . import events
 from .busbar import Step, run_step
 from .common import emit_result, emit_running, log, print_phase_summary, root_cmd, run, write_command_log
 from .galaxy import EXPECTED_CHIP_COUNT, TRAY_TO_UBB_NIBBLE, expected_bdf
@@ -131,6 +132,8 @@ def glx_reset(
         log(f"{name}: reset cannot run: {why}")
         phase.add(Check(name=name, status=SKIP, details=f"reset cannot run: {why}", ip="other"))
         return None
+    # before it: the HSC latches, each tray with chips missing dumped, the AER errors (diag/captures.py reset)
+    events.capture("reset", name, stage={"reset_loop": "C2", "recover": "busbar"}.get(phase.name, "C9"))
     emit_running(name)
     t0 = time.time()
     cp = run(cmd, dry_run=dry_run, capture_output=True, text=True)

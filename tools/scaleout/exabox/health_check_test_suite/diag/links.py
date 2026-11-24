@@ -2,15 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""The links test of the galaxy load (tiers.py LOAD_TESTS): the pair link test, the sweep on a fault and the fabric
-open/close.
+"""The links test of the galaxy load (tiers.py LOAD_TESTS): the pair link test and the sweep on a fault, inside the
+hardware captures' stage (diag/captures.py). The fabric open and close is the end sequence's (diag/resets.py run_end).
 
 pair    every chip-to-chip Ethernet link UMD discovers, tested as a 2-chip all-gather of each linked pair (data
         checked bit for bit); pairs run in rounds, no chip in two pairs of a round
 sweep   after a link/CCL failure or a hang (in the pair test, a bus-bar step or, with --link-fault, the caller's own
         earlier call; not a numeric fault): the hook's before event (a non-zero rc skips it), glx_reset, then the pair
         test again, --pair-s per pair, no new round past --sweep-s in total, then the hook's after event
-fabric  one whole-box fabric open and close
 """
 from __future__ import annotations
 
@@ -23,7 +22,7 @@ import time
 from pathlib import Path
 
 from . import events
-from .busbar import GALAXY_DIR, SETUP_S, Step, run_step
+from .busbar import GALAXY_DIR, SETUP_S
 from .common import emit_result, emit_running, log, start_group, stop_group
 from .model import FAIL, PASS, SKIP, Check, Phase
 from .naming import chip, link_end
@@ -236,22 +235,6 @@ def pair_test(
     return bool(failed)
 
 
-def fabric_open(phase: Phase, out: Path, dry_run: bool = False) -> None:
-    phase.add(
-        run_step(
-            Step(
-                "fabric",
-                "whole-box fabric open and close",
-                ("fabric_open.py", "--rows", "{out}/rows.jsonl", "--beat", "{out}/beat", "--label", "open"),
-                60,
-            ),
-            out,
-            dry_run,
-            test="links",
-        )
-    )
-
-
 def _discover(phase: Phase, check: str, dry_run: bool) -> dict | None:
     """discover(), or None after adding a FAIL *check* that says why."""
     if dry_run:
@@ -268,9 +251,10 @@ def run_links(
 ) -> None:
     """Pair test; on a failed or hung pair here, or *fault* (a bus-bar hang or CCL failure: busbar.link_fault), the hook's
     before event, *reset* (the glx_reset; "" when it ran clean or was skipped on purpose, else why not) and the sweep
-    (*pair_s* per pair, *sweep_s* in total), which is skipped with the hook's rc or that reason; then the fabric
-    open/close. The sweep tests the links discovered after the reset, which can bring back a tray that dropped under
-    the load."""
+    (*pair_s* per pair, *sweep_s* in total), which is skipped with the hook's rc or that reason. The sweep tests the
+    links discovered after the reset, which can bring back a tray that dropped under the load."""
+    held = len(phase.checks)
+    events.capture("stage-start", "links")
     disc = _discover(phase, "links_pair", dry_run)
     if disc is not None:
         fault |= pair_test(phase, out / "links", "pair", pair_s, disc, dry_run)
@@ -284,4 +268,4 @@ def run_links(
             elif (disc := _discover(phase, "links_sweep", dry_run)) is not None:
                 pair_test(phase, out / "links", "sweep", pair_s, disc, dry_run, cap_s=sweep_s)
             events.emit("after", "sweep", phase.checks[-1].status, sd)
-    fabric_open(phase, out / "links", dry_run)
+    events.capture("stage-end", "links", FAIL if any(c.status == FAIL for c in phase.checks[held:]) else PASS)

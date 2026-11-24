@@ -165,8 +165,8 @@ from the counters as the reset left them.
   10 s per pair, with no new round of pairs started after 300 s in total (a round
   under way finishes) (`links_sweep`); pairs the cap does not reach are SKIP,
   never PASS. Under `--skip-reset` the sweep runs with no reset
-  first, on the unit as it is. Then one whole-box fabric open and close
-  (`links_fabric`).
+  first, on the unit as it is. The fabric open and close is the end sequence's
+  (`end_fabric`).
 
 Each program runs in a process group of its own, so that a hung one is stopped
 with everything it started. The suite stops those groups on its way out too:
@@ -726,6 +726,13 @@ whose baked-in suite predates the phase has the `--skip-sys-triage` and
 `PYTHONPATH=<suite dir> python3 -m diag.captures <event> <step> <status> <outdir> [flags]`, and
 `python3 -m diag.captures sample` prints one HSC sweep for a telemetry stream.
 
+In the galaxy load each event of `diag/events.py` runs them (one state per run, in `--output`'s directory), the
+links test as its own stage, every `glx_reset` first takes the `reset` read and the end sequence is followed by the
+final HSC and brick read. After a bus-bar part that hung, failed a CCL or left a chip off PCIe the recovery
+`glx_reset`, root-port rescan and recount runs before the next part. A tray's VR power-good fall stops the running
+part and holds the later ones; each part and stage logs a `LOAD` line from the poll. The finding lines, and every
+FAIL or WARN check of a phase that gates, go to `findings.txt` and `finding_stage.tsv` for the run report.
+
 - **HSC**: the run-start latches, limits and peaks (one pre-existing WARN); per stage a new under-voltage, OFF or
   over-current latch is a FAIL naming the tray and HSC (and the step that set it), a loaded VIN under 11 V, a 12 V sag
   over 13 mOhm and a peak at the HSC's own warn limit WARN. Under 80% of the planned load (`--load-pct`) a clean HSC
@@ -819,7 +826,6 @@ The detected rev is also recorded at the top of the JSON report as `detected_boa
 | `busbar_<step>` (`qb`, `mix`, `step`, `heavy`, `code`) | The step's program exits 0, prints no `<NAME> FAIL` line, and exits within its planned length plus 300 s | **FAIL** with the first FAIL line, or the exit code or hang and the last line of the log. **SKIP** on a dry run. |
 | `links_pair` | Every linked chip pair passes a 2-chip all-gather, data checked bit for bit | **FAIL** naming the pairs and channels; each link end, by tray, ASIC, port and BDF, in `link_ends` |
 | `links_sweep` | After a pair failure or hang, or a bus-bar hang or CCL failure (or `--link-fault`): the hook's `before sweep` event (a non-zero rc skips it), a `tt-smi -glx_reset` (none under `--skip-reset`), then the pair test again at 10 s per pair, no new round started after 300 s in total, on the links UMD finds after the reset | **FAIL** as `links_pair`, or when UMD discovery after the reset fails. **SKIP** when the reset failed, or when the cap left pairs not reached (listed in `not_reached`). |
-| `links_fabric` | One whole-box fabric open and close | **FAIL** on a non-zero exit, a FAIL line or a hang |
 
 ### GDDR
 | Check | Rule | On fail |
@@ -1024,8 +1030,8 @@ tools/scaleout/exabox/health_check_test_suite/
 │   ├── device_tests.py     # phase 3: deployment gtests (TESTS) and pytests (PYTESTS)
 │   ├── hsc.py              # phase 3: tray HSC input-voltage flags, read before and after the tests
 │   ├── busbar.py           # phase 3: the galaxy load's bus-bar test (LOAD_TESTS), its plan and steps
-│   ├── links.py            # phase 3: the galaxy load's links test: pair test, sweep, fabric open/close
-│   ├── events.py           # phase 3: the galaxy load's event points and the caller's --hook
+│   ├── links.py            # phase 3: the galaxy load's links test: pair test, sweep
+│   ├── events.py           # phase 3: the galaxy load's event points: captures, recovery, findings, --hook
 │   ├── aer.py              # phase 9: PCIe AER errors over the run (pcie_aer_delta)
 │   ├── external.py         # ingesting checks written by external tools
 │   ├── triage.py           # phase 5: kmd_triage tools (TRIAGE_TOOLS)

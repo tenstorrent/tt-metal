@@ -246,6 +246,26 @@ class TestEvidence(unittest.TestCase):
         self.assertEqual(len(out), 1)
         self.assertTrue(out[0].startswith("12V FAIL tray 2 (41:00.0-48:00.0): vr_pg 7f from"), out)
         self.assertEqual(captures._power_lines(d, {"t0": 0}, "busbar", {"resets": [105]}), [])  # near a reset
+        self.assertEqual(captures.vr_pg_fell(d, 0), {2: ("102", "7f")})  # what stops a running part
+        (d / "state.json").write_text(json.dumps({"resets": [105]}))
+        self.assertEqual(captures.vr_pg_fell(d, 0), {})
+
+    def test_load_line_from_the_power_poll(self):
+        d = Path(tempfile.mkdtemp())
+        psu_air = "900 900 900 900 25 41"
+        rows = [
+            f"100 400 410 420 430 1600 ff ff ff ff {psu_air}",
+            f"102 600 610 620 630 2400 ff ff ff ff {psu_air[:-2]}47",
+        ]
+        (d / "power.tsv").write_text("\n".join(rows) + "\n")
+        (d / "chips.tsv").write_text("101\t0000:41:00.0\t180.5\t200.0\n103\t0000:01:00.0\t90.0\t95.0\n")
+        self.assertEqual(
+            captures.load_line(d, 0, "mix"),
+            "LOAD mix: HSC sum mean 2.00 kW, peak 2.40 kW; tray 1/2/3/4 mean 500/510/520/530 W; outlet air peak 47 C; "
+            "peak chip 180 W (0000:41:00.0, tray 2)",
+        )
+        self.assertEqual((d / "load.txt").read_text().count("LOAD mix"), 1)
+        self.assertEqual(captures.load_line(d, 200, "mix"), "")
 
 
 class TestAerRate(unittest.TestCase):

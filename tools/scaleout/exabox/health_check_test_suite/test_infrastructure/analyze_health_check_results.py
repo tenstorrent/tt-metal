@@ -55,7 +55,6 @@ CHECK_CATEGORY = {
     "eth_link_up": "eth",
     "links_pair": "eth",
     "links_sweep": "eth",
-    "links_fabric": "eth",
     "hsc_input_status": "board",
     "pcie_enum_count_after_tests": "pcie",
 }
@@ -100,7 +99,6 @@ DETAIL_RICH = {
     "eth_status_cabling",
     "links_pair",
     "links_sweep",
-    "links_fabric",
     "busbar_qb",
     "busbar_mix",
     "busbar_step",

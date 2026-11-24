@@ -639,28 +639,49 @@ def _poll_stop(st: dict, d: Path) -> None:
         pass
 
 
-def _power_lines(d: Path, s: dict, step: str, st: dict) -> list[str]:
-    """VR power-good falls (a tray CPLD byte not ff on two polls in a row) and 12 V collapses (one tray at or under
-    COLLAPSE_W while every other holds HOLD_W) during the stage, away from resets; each chip's peak power and current.
-    """
-    out, t0, resets = [], s["t0"], st.get("resets", [])
+def _power_rows(d: Path, t0: float, resets) -> list[list[str]]:
+    """The power poll's rows since *t0*, away from resets."""
     try:
         rows = [r.split() for r in (d / "power.tsv").read_text().splitlines()]
     except OSError:
         rows = []
-    rows = [
+    return [
         r
         for r in rows
         if len(r) >= 10 and float(r[0]) >= t0 and all(abs(float(r[0]) - x) > RESET_MASK_S for x in resets)
     ]
+
+
+def vr_pg_fell(d: Path, t0: float, rows=None) -> dict[int, tuple[str, str]]:
+    """Each tray whose VR power-good byte (its CPLD) read not ff on two polls in a row since *t0*, away from resets:
+    the first such poll's (time, byte)."""
+    if rows is None:
+        try:
+            resets = json.loads((d / "state.json").read_text()).get("resets", [])
+        except (OSError, ValueError):
+            resets = []
+        rows = _power_rows(d, t0, resets)
+    out = {}
     for t in HSC_BUS:
-        run, fell = [], None
+        run = []
         for r in rows:
             v = r[5 + t].lower()
             run = [] if v == "ff" else run + [(r[0], v)] if len(v) == 2 else run
-            if len(run) >= 2 and not fell:
-                fell = run[0]
-        if fell:
+            if len(run) >= 2:
+                out[t] = run[0]
+                break
+    return out
+
+
+def _power_lines(d: Path, s: dict, step: str, st: dict) -> list[str]:
+    """VR power-good falls (vr_pg_fell) and 12 V collapses (one tray at or under COLLAPSE_W while every other holds
+    HOLD_W) during the stage, away from resets; each chip's peak power and current.
+    """
+    out, t0 = [], s["t0"]
+    rows = _power_rows(d, t0, st.get("resets", []))
+    pg = vr_pg_fell(d, t0, rows)
+    for t in HSC_BUS:
+        if fell := pg.get(t):
             out.append(
                 f"12V FAIL tray {t} ({tray_bdfs(t)}): vr_pg {fell[1]} from {_hhmm(float(fell[0]))} during {step} (not ff on two polls in a row)"
             )
@@ -694,6 +715,35 @@ def _power_lines(d: Path, s: dict, step: str, st: dict) -> list[str]:
             f"peak per chip during {step}: {peak[bw][0]:.1f} W ({bw}, tray {_tray(bw)}), {peak[ba][1]:.1f} A ({ba}, tray {_tray(ba)}); per chip in {f}"
         )
     return out
+
+
+def load_line(d: Path, t0: float, step: str) -> str:
+    """The power poll since *t0* as one 'LOAD <step>: ...' line (also in load.txt): the HSC sum's mean and peak, each
+    tray's mean, the outlet air's peak and the hottest chip's peak power; "" with no poll row."""
+    num = lambda v: float(v) if v.replace(".", "", 1).isdigit() else None  # noqa: E731
+    rows = [[num(x) for x in r[1:16]] for r in _power_rows(d, t0, []) if len(r) >= 16]
+    col = lambda i: [r[i] for r in rows if r[i] is not None]  # noqa: E731
+    if not (hsc_w := col(4)):
+        return ""
+    trays = "/".join(f"{statistics.mean(c):.0f}" if (c := col(i)) else "-" for i in range(4))
+    air = f"; outlet air peak {max(c):.0f} C" if (c := col(14)) else ""
+    peak: dict[str, float] = {}
+    try:
+        for ln in (d / "chips.tsv").read_text().splitlines():
+            ts, b, w, _ = ln.split("\t")
+            if float(ts) >= t0:
+                peak[b] = max(peak.get(b, 0.0), float(w))
+    except (OSError, ValueError):
+        pass
+    top = max(peak, key=peak.get) if peak else None
+    chip = f"; peak chip {peak[top]:.0f} W ({top}, tray {_tray(top)})" if top else ""
+    line = (
+        f"LOAD {step}: HSC sum mean {statistics.mean(hsc_w) / 1000:.2f} kW, peak {max(hsc_w) / 1000:.2f} kW; "
+        f"tray 1/2/3/4 mean {trays} W{air}{chip}"
+    )
+    with open(d / "load.txt", "a") as f:
+        f.write(line + "\n")
+    return line
 
 
 # ── events ───────────────────────────────────────────────────────────────────
@@ -756,6 +806,8 @@ def _after(bmc: Bmc, st: dict, d: Path, step: str, status: str, args) -> list[st
             f"HSC read after {step} ({_hhmm(t0)}-{_hhmm(time.time())}), no clear: set since {s['since']}: {', '.join(got) or 'none'}; power bits set now: {', '.join(set_now) or 'none'}"
         )
         s["since"] = step
+    if s and (ln := load_line(d, (s.get("part") or [step, s["t0"]])[1], step)):
+        log(ln)
     _drops(bmc, st, d, step, status, args)
     _guard(st, d, step, status, args)
     return []
@@ -770,11 +822,13 @@ def _stage_end(bmc: Bmc, st: dict, d: Path, step: str, status: str, args) -> lis
         before = s["before"] if s else st["run"].get("cleared") or st["run"]["regs"]  # no stage-start: the whole run
         out += _judge(step, before, after, peaks, _vin_rows(d, s["t0"]) if s else {}, st, args, s["pset"] if s else {})
     if s:
+        if ln := load_line(d, s["t0"], step):
+            log(ln)
         out += _power_lines(d, s, step, st) + _aer_rate(d, s["t0"], step)
         out += aer.aer_lines(s["aer"], now := aer.read_aer(PCI), (time.time() - s["t0"]) / 3600, f"during {step}")
         st["aer_last"] = now
-        if args.brick_mux:
-            _bricks(bmc, d, f"after {step}", args)
+    if args.brick_mux:
+        _bricks(bmc, d, f"after {step}", args)
     return out
 
 

@@ -10,6 +10,7 @@ tests, each at its own length."""
 
 from __future__ import annotations
 
+import argparse
 import contextlib
 import io
 import json
@@ -30,7 +31,7 @@ sys.path.insert(0, str(SUITE_DIR))
 import tiers  # noqa: E402
 from diag import busbar, events, links  # noqa: E402
 from diag.aer import aer_check, aer_new  # noqa: E402
-from diag.model import FAIL, PASS, SKIP, Check, Phase  # noqa: E402
+from diag.model import FAIL, PASS, SKIP, WARN, Check, Phase  # noqa: E402
 from diag.naming import chip, link_end  # noqa: E402
 
 
@@ -340,7 +341,9 @@ class TestRunStep(unittest.TestCase):
             self.assertEqual(calls, ["qb", "mix", "step", "heavy", "code"])
             self.assertEqual(any(map(busbar.link_fault, phase.checks)), want)
             self.assertEqual(phase.checks[0].data.get("link_fault", False), want)  # the report says so for a caller
-            self.assertEqual((written["status"], written.get("link_fault", False)), (FAIL, want))  # and the hook's after
+            self.assertEqual(
+                (written["status"], written.get("link_fault", False)), (FAIL, want)
+            )  # and the hook's after
 
     def test_run_busbar_runs_only_the_steps_named(self):
         calls = []
@@ -450,8 +453,114 @@ class TestRunStep(unittest.TestCase):
     def test_emit_with_no_hook_or_in_a_dry_run(self):
         with mock.patch.object(events, "hook", None):
             self.assertEqual(events.emit("before", "qb", "-", Path("/nonexistent")), 0)
-        with mock.patch.object(events, "hook", "/nonexistent/hook"), mock.patch.object(events, "dry_run", True):
+        dry = argparse.Namespace(dry_run=True, output=Path("/nonexistent/r.json"))
+        with mock.patch.object(events, "hook", "/nonexistent/hook"), mock.patch.object(events, "args", dry):
             self.assertEqual(events.emit("before", "qb", "-", Path("/nonexistent")), 0)
+
+    def test_emit_runs_the_captures_and_after_a_lost_part_the_recovery(self):
+        with tempfile.TemporaryDirectory() as d:
+            sd = Path(d) / "busbar" / "mix"
+            sd.mkdir(parents=True)
+            (sd / "check.json").write_text(json.dumps({"status": FAIL, "hung": True}))
+            a = argparse.Namespace(dry_run=False, output=Path(d) / "diag_report.json")
+            with mock.patch.object(events, "args", a), mock.patch.object(events, "hook", None), mock.patch(
+                "diag.captures.run", return_value=["HSC FAIL tray 2 (41:00.0-48:00.0) HSC 0x40: OFF set during mix"]
+            ) as cap, mock.patch("diag.resets.recover", return_value=["FAIL recount_recover: 31/32"]) as rec:
+                events.emit("after", "mix", PASS, sd)
+                rec.assert_not_called()  # a part that passed: no reset
+                events.emit("after", "mix", FAIL, sd)
+            self.assertEqual(cap.call_args.args[:4], ("after", "mix", FAIL, Path(d).resolve()))
+            rec.assert_called_once_with(a, sd)
+            self.assertEqual(
+                (Path(d) / "finding_stage.tsv").read_text().splitlines()[-2:],
+                [
+                    "busbar\tHSC FAIL tray 2 (41:00.0-48:00.0) HSC 0x40: OFF set during mix",
+                    "busbar\tFAIL recount_recover: 31/32",
+                ],
+            )
+
+    def test_every_fail_or_warn_check_is_a_finding_line(self):
+        ends = [
+            {
+                "a": {"bdf": "0000:01:00.0", "tray": 1, "channel": 4},
+                "b": {"bdf": "0000:02:00.0", "tray": 1, "channel": 6},
+            }
+        ]
+        report = {
+            "phases": {
+                "tests": {
+                    "checks": [
+                        {
+                            "name": "links_pair",
+                            "status": FAIL,
+                            "details": "x",
+                            "data": {"failed": [{"why": "hung", "ends": ends}]},
+                        },
+                        {
+                            "name": "busbar_mix",
+                            "status": FAIL,
+                            "details": "x",
+                            "data": {"fails": ["NUMERIC FAIL 01:00.0 (tray 1) chip 0"]},
+                        },
+                        {"name": "busbar_qb", "status": PASS, "details": "", "data": {}},
+                    ]
+                },
+                "triage": {
+                    "checks": [
+                        {
+                            "name": "aer_x",
+                            "status": WARN,
+                            "details": "3 errors",
+                            "data": {},
+                            "bdf": ["0000:41:00.0"],
+                            "tray": [2],
+                        }
+                    ]
+                },
+                "qsfp": {"gates": False, "checks": [{"name": "q", "status": FAIL, "details": "", "data": {}}]},
+            }
+        }
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(
+            events, "args", argparse.Namespace(dry_run=False, output=Path(d) / "r.json")
+        ):
+            events.check_findings(report)
+            got = (Path(d) / "finding_stage.tsv").read_text().splitlines()
+        self.assertEqual(
+            got,
+            [
+                "C5\tLINK HANG 0000:01:00.0 (tray 1) e4 <-> 0000:02:00.0 (tray 1) e6: hung",
+                "busbar\tNUMERIC FAIL 01:00.0 (tray 1) chip 0",
+                "end\tAER-X WARN 0000:41:00.0 (tray 2): 3 errors",
+            ],
+        )
+
+    def test_a_vr_pg_fall_stops_the_running_part_and_holds_the_rest(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "prog.py").write_text("import time; time.sleep(60)")
+            with mock.patch.object(busbar, "GALAXY_DIR", Path(d)), mock.patch.object(
+                busbar, "PG_POLL_S", 0.1
+            ), mock.patch.object(events, "vr_pg", return_value="vr_pg 00 on tray 2"):
+                t0 = time.time()
+                c = busbar.run_step(busbar.Step("mix", "test", ("prog.py",), 30), Path(d))
+            self.assertLess(time.time() - t0, 10)
+        self.assertEqual((c.status, c.data["vr_pg"], c.data["hung"]), (FAIL, "vr_pg 00 on tray 2", False))
+        self.assertTrue(c.details.startswith("stopped: vr_pg 00 on tray 2"))
+        ph = Phase(name="t")
+        cut = Check(name="busbar_qb", status=FAIL, details="stopped", data={"vr_pg": "vr_pg 00 on tray 2"})
+        with mock.patch.object(busbar, "run_step", return_value=cut), mock.patch.object(
+            busbar, "quiet", return_value=None
+        ):
+            busbar.run_busbar(ph, Path("/tmp/nonexistent"), "smoke", order="qb,mix")
+        self.assertEqual([(c.name, c.status) for c in ph.checks], [("busbar_qb", FAIL), ("busbar_mix", SKIP)])
+        self.assertEqual(ph.checks[1].details, "not run: vr_pg 00 on tray 2 in an earlier part")
+        ph, ok = Phase(name="t"), Check(name="busbar_qb", status=PASS, details="qb")
+        with mock.patch.object(busbar, "run_step", return_value=ok), mock.patch.object(
+            busbar, "quiet", return_value=None
+        ), mock.patch.object(events, "gone", return_value=["0000:41:00.0"]):
+            busbar.run_busbar(ph, Path("/tmp/nonexistent"), "smoke", order="qb,mix")
+        self.assertEqual(
+            ph.checks[1].details, "not run: chips still off PCIe after the recovery: 0000:41:00.0 in an earlier part"
+        )
 
     def test_quiet_names_the_stuck_chips(self):
         with tempfile.TemporaryDirectory() as d:
@@ -538,7 +647,7 @@ class TestLinks(unittest.TestCase):
 
         with mock.patch.object(links, "discover", return_value={"bdfs": {}, "links": {}}), mock.patch.object(
             links, "pair_test", side_effect=fake_pair_test
-        ) as pt, mock.patch.object(links, "fabric_open"), mock.patch.object(events, "hook", hook):
+        ) as pt, mock.patch.object(events, "hook", hook):
             links.run_links(phase, Path("/tmp"), fault, reset, **kw)
         return phase, pt
 
@@ -593,7 +702,7 @@ class TestLinks(unittest.TestCase):
 
         with mock.patch.object(links, "discover", side_effect=[before, after]), mock.patch.object(
             links, "pair_test", fake_pair_test
-        ), mock.patch.object(links, "fabric_open"):
+        ):
             links.run_links(Phase(name="links"), Path("/tmp"), True, lambda: "")
         # the sweep: PAIR_S per pair like the pair test, SWEEP_S for the whole sweep
         self.assertEqual(tested, [("pair", links.PAIR_S, None, before), ("sweep", links.PAIR_S, links.SWEEP_S, after)])
@@ -602,7 +711,7 @@ class TestLinks(unittest.TestCase):
         phase = Phase(name="links")
         with mock.patch.object(
             links, "discover", side_effect=[{"bdfs": {}, "links": {}}, RuntimeError("no chips")]
-        ), mock.patch.object(links, "pair_test", return_value=False) as pt, mock.patch.object(links, "fabric_open"):
+        ), mock.patch.object(links, "pair_test", return_value=False) as pt:
             links.run_links(phase, Path("/tmp"), True, lambda: "")
         self.assertEqual(pt.call_count, 1)
         sweep = [c for c in phase.checks if c.name == "links_sweep"]
@@ -790,7 +899,7 @@ class TestLinks(unittest.TestCase):
             diag_runner, "run_diag", return_value=(0, {})
         ) as run, mock.patch.object(events, "setup") as setup:
             self.assertEqual(diag_runner.main(), 0)
-        setup.assert_called_once_with("/x/hook", True)
+        self.assertEqual((setup.call_args.args[0].hook, setup.call_args.args[0].dry_run), ("/x/hook", True))
         kw = run.call_args.kwargs
         self.assertEqual(
             (kw["load_mode"], kw["link_fault_before"], kw["pair_s"], kw["sweep_s"]), ("full", True, 5, 120)

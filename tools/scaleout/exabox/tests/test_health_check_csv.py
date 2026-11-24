@@ -58,8 +58,8 @@ class TestTestsPhaseRows(unittest.TestCase):
         tests.add(Check(name="deployment_binary_present", status=FAIL, details="none found"))
         tests.add(_step("qb", "print('ok')"))
         tests.add(_step("mix", f"print('NUMERIC FAIL {'x' * 150} 0000:41:00.0')"))
-        tests.add(_step("fabric", "print('ok')", test="links"))
         tests.add(Check(name="links_pair", status=PASS, ip="eth", details="96 linked pairs, 5 rounds"))
+        tests.add(Check(name="links_sweep", status=PASS, ip="eth", details="96 linked pairs, 5 rounds"))
         clean = {(t, a): (0, 0) for t in hsc.HSC_BUS for a in hsc.HSC_ADDRS}
         hsc.judge_hsc(clean, clean, tests)
         tests.add(pcie_enum_check([{"board_info": {"bus_id": b}} for b in BDFS[1:]], "pcie_enum_count_after_tests"))
@@ -82,7 +82,7 @@ class TestTestsPhaseRows(unittest.TestCase):
         self.assertEqual(self.rows["pcie_enum_count_after_tests"]["executed"], 1)
 
     def test_links_checks_are_eth(self):
-        self.assertEqual({self.rows[n]["category"] for n in ("links_pair", "links_fabric")}, {"eth"})
+        self.assertEqual({self.rows[n]["category"] for n in ("links_pair", "links_sweep")}, {"eth"})
 
     def test_a_failed_step_keeps_the_chip_it_names(self):
         self.assertIn("0000:41:00.0", self.rows["busbar_mix"]["details_short"])

@@ -566,6 +566,7 @@ def run_diag(
                     lambda: run_end(tt_smi_path, post_reset_phase, logs_dir / "end", dry_run, end_delay_s, reset_gate)
                 ),
             )
+            events.capture("stage-end", "end")  # the final HSC read, judged against the run's start, and the bricks
         if end_seq and live:
             sel_after, why = read_sel()
             post_reset_phase.add(new_check(sel_before, sel_after, sel_why or why))
@@ -704,6 +705,7 @@ def run_diag(
     # be skipped — don't lose a completed run's report to a missing parent dir.
     output.parent.mkdir(parents=True, exist_ok=True)
     name_chips(report)
+    events.check_findings(report)
     output.write_text(json.dumps(report, indent=2))
     log(f"wrote report: {output} (overall={report['overall_status']})")
 
@@ -748,7 +750,7 @@ def main() -> int:
             busbar_plan(args.load_mode or tier.load_mode, **overrides)
         except ValueError as e:
             ap.error(str(e))
-    events.setup(args.hook, args.dry_run)
+    events.setup(args)
     rc, _report = run_diag(
         tier=args.tier,
         dry_run=args.dry_run,

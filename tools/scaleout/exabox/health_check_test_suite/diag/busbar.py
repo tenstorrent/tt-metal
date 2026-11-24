@@ -65,6 +65,7 @@ OVERRIDES = {
 }
 SMOKE_S = 2
 SETUP_S = 300  # mesh open, upload and close on top of a part's planned length; past both it counts as hung
+PG_POLL_S = 2  # a running part's check for a VR power-good fall (the captures' power poll period)
 FAIL_LINE = re.compile(r"\b[A-Z][A-Z0-9]* FAIL\b")  # NUMERIC FAIL, QUIET FAIL, G3 FAIL, ...
 OP_NAME = re.compile(r"[A-Za-z0-9_]+")
 # an error line from a CCL op: the active Ethernet-core timeout, a critical line naming an ERISC, or a traceback, RuntimeError
@@ -322,7 +323,7 @@ def readback_lines(step: Step, d: Path) -> list[str]:
 
 def run_step(step: Step, out: Path, dry_run: bool = False, test: str = "busbar") -> Check:
     """Run one step's program in its own process group as the check ``<test>_<step>``; FAIL on a non-zero exit, a
-    '<X> FAIL' line or a hang."""
+    '<X> FAIL' line, a hang or a tray's VR power-good fall while it runs, which stops it (events.vr_pg)."""
     name, d = f"{test}_{step.name}", out / step.name
     argv = [sys.executable, str(GALAXY_DIR / step.argv[0]), *(a.format(out=d) for a in step.argv[1:])]
     if dry_run:
@@ -337,20 +338,24 @@ def run_step(step: Step, out: Path, dry_run: bool = False, test: str = "busbar")
     d.mkdir(parents=True, exist_ok=True)
     log_path = d / f"{name}.log"
     emit_running(name)
-    t0, rc, limit = time.time(), None, step.seconds + SETUP_S
+    t0, rc, limit, cut = time.time(), None, step.seconds + SETUP_S, ""
     with open(log_path, "w") as f:
         # An argv list, no shell: a galaxy/ program and plan()'s args, every override checked by _overrides().
         p = start_group(argv, cwd=GALAXY_DIR, env={**os.environ, **dict(step.env)}, stdout=f, stderr=subprocess.STDOUT)
         try:
-            rc = p.wait(timeout=limit)
-        except subprocess.TimeoutExpired:
-            pass
+            while rc is None and time.time() - t0 < limit and not (cut := events.vr_pg(t0)):
+                try:
+                    rc = p.wait(timeout=PG_POLL_S)
+                except subprocess.TimeoutExpired:
+                    pass
         finally:
             stop_group(p)
     dt = time.time() - t0
     text = log_path.read_text(errors="replace").splitlines()
     bad = [ln.strip() for ln in text + (readback_lines(step, d) if test == "busbar" else []) if FAIL_LINE.search(ln)]
-    why = (f"hung: no exit in {limit} s" if rc is None else f"rc {rc}" if rc else "") or (bad[0] if bad else "")
+    why = (f"stopped: {cut}" if cut else f"hung: no exit in {limit} s" if rc is None else f"rc {rc}" if rc else "") or (
+        bad[0] if bad else ""
+    )
     emit_result(name, FAIL if why else PASS, suffix=f"({dt:.1f}s)")
     if not why:
         return Check(
@@ -366,7 +371,8 @@ def run_step(step: Step, out: Path, dry_run: bool = False, test: str = "busbar")
         details=f"{why}: {(bad or [last])[0][:200]}",
         data={
             "rc": rc,
-            "hung": rc is None,
+            "hung": rc is None and not cut,
+            **({"vr_pg": cut} if cut else {}),
             "fails": bad[:20],
             "seconds": round(dt),
             "log": str(log_path),
@@ -445,7 +451,7 @@ def run_busbar(
 ) -> None:
     """The bus-bar steps (see plan) named in *steps*, in --order, into *phase*, with the quiet's clock check before each
     and the hook events (diag/events.py) around them. A check that is a link fault (link_fault) says so in its data."""
-    d, held = out / "busbar", len(phase.checks)
+    d, held, pg = out / "busbar", len(phase.checks), ""
     # the quiet's clock check runs for the stage; one part run alone (busbar_heavy as a caller's own step) keeps its caller's quiet
     clocks = events.hook is not None or len(steps) > 1
     events.emit("stage-start", "busbar", "-", d)
@@ -454,6 +460,9 @@ def run_busbar(
             continue
         log(f"busbar {step.line()}")
         name, sd = f"busbar_{step.name}", d / step.name
+        if pg:  # no more load after a tray's power-good fell or with chips gone
+            phase.add(Check(name=name, status=SKIP, details=f"not run: {pg} in an earlier part"))
+            continue
         if rc := events.emit("before", step.name, "-", sd):
             phase.add(Check(name=name, status=SKIP, details=f"held back by the hook (rc {rc})"))
             continue
@@ -473,7 +482,10 @@ def run_busbar(
         if link_fault(c):
             c.data["link_fault"] = True
         phase.add(c)
+        pg = c.data.get("vr_pg", "")
         if sd.is_dir():  # the hook's after event reads the part's check here
             (sd / "check.json").write_text(json.dumps({"status": c.status, "details": c.details, **c.data}))
         events.emit("after", step.name, c.status, sd)
+        if not pg and (g := events.gone()):  # its recovery left chips off PCIe: the full mesh cannot open
+            pg = f"chips still off PCIe after the recovery: {', '.join(g)}"
     events.emit("stage-end", "busbar", FAIL if any(c.status == FAIL for c in phase.checks[held:]) else PASS, d)
