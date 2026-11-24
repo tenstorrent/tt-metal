@@ -200,3 +200,17 @@ No CB added, resized or removed. On the LN fast paths some existing CBs go idle 
 - `cb_ln_sq` — idle in local stats when `cw == 1` and the member has no W tail.
 Shares with / why not: the idle CBs could be dropped from the allocation on these paths (an L1 saving, no perf
 effect); not done to keep one CB layout per program variant. Data-movement budget unchanged (compute-only change).
+
+## As built — Refinement 5 (L1 INTERLEAVED output)
+- No CB added, resized or removed. The new L1 tenant is the **output tensor itself** (`ttnn.L1_MEMORY_CONFIG`): its
+  pages round-robin over the 110 L1 banks (one per Tensix core on this Blackhole part), allocated top-down, while the
+  op's static CBs grow upward from the L1 base (111 616 B). Shares with / why not: nothing — it is the caller's output,
+  live across the call and after it.
+- `cb_stage` is now live for an aligned L1 interleaved output too: the row-major walk (shard_w = 1, see op_design.md
+  Refinement 5) puts it under the existing `stage_on` rule (row lanes), same size formula as above.
+- Fit guard (`_check_l1_interleaved_fit`): CB region end = L1 base + Σ CBs (64 B aligned) must stay below the
+  output's bank address, else `UnsupportedAxisValue` with the numbers. Measured headroom: 640×384 bf16 RMS — CBs end at
+  380 800 B, output at 1 168 128 B (787 KB free); 2048×1280 fp32 LN + γ + β (the largest golden shape) — CBs end at
+  810 880 B, output at 1 187 840 B (377 KB free). Every golden INPUTS shape fits (fp32 and bf16), so no EXCLUSIONS entry.
+- Data-movement budget: the output write moves from DRAM to L1 (same bytes, 1 crossing per output page per chip); the
+  R_U staging scratch stays in DRAM.

@@ -453,3 +453,45 @@ Not tested (cap): LN chain compression, Perf 1's deferred fabric mcast relay, in
 
 ### Helper bypasses — none
 Nothing graduated, so no raw LLK or helper bypass was added.
+
+## Refinement 5 — L1 INTERLEAVED output (the real call of the MLA q_a norm)
+- Date: 2026-11-24
+- What was done:
+  - `SUPPORTED["output_placement"]` gains `"l1_interleaved"`. `validate()` accepts an interleaved output in DRAM or L1
+    (`memory_config=ttnn.L1_MEMORY_CONFIG` or a preallocated L1 interleaved `output_tensor`). An interleaved INPUT
+    must still be in DRAM.
+  - Host: `nb` is the destination's bank count (`_num_banks`): 110 L1 banks for an L1 interleaved output, and the
+    DRAM count for DRAM, R_U staging and sharded outputs, which stay byte-identical. The kernels were already generic
+    (`dst.get_noc_addr`; `fast_banks` turns off above 16 banks). The compute kernel, the exchange protocol and every
+    kernel file are unchanged.
+  - Lever: an aligned L1 interleaved output walks row-major (the sharded walk with `shard_w = 1`: lanes are tile-rows,
+    each run one page) instead of bank-major over 110 banks. This removes the ports' per-bank modulo walk and turns
+    the own-entry staging back on. Knob `L1I_BANK_WALK_MAX_NB` = 16.
+  - L1 fit guard `_check_l1_interleaved_fit`: if the static CB region would reach the output's L1 address, the call
+    is refused with `UnsupportedAxisValue` and the numbers, instead of a CB clash throw. Every golden INPUTS shape fits
+    (worst case 2048×1280 fp32 LN + γ + β: 377 KB free), so no EXCLUSIONS entry.
+- Perf, eval harness (`CCL_PERF_CASES=0,2`, 5 experiments), 640×384 RMS, ring, 2 links, fastest chip:
+  - DRAM output: 28.36 µs.
+  - L1 output, bank-major walk: 58.27 µs.
+  - L1 output, row-major walk: **35.88 µs**. Slowest chip 36.33 µs. Not dispatch-bound.
+  - The L1 call is **+26% (7.5 µs) slower than DRAM**. This is TRANSPORT packet fill. An L1 interleaved run is one
+    2 KiB page, and a fabric scatter packet holds at most 4 chunks (`NOC_SCATTER_WRITE_MAX_CHUNKS`), so bulk packets
+    are 8 KiB instead of 14 KiB (7-page DRAM bank runs).
+  - Next lever, not done: land contiguous chunks in a receiver-side staging buffer and scatter locally, or pair
+    same-bank pages across rows (P, P + 110).
+- Accuracy achieved:
+  - 640×384 RMS bf16: min PCC = 0.999971, max relative RMS = 0.0043.
+  - 640×32 LN + γ + β bf16: min PCC = 0.999997, max relative RMS = 0.0019.
+  - Measured per device, L1 output.
+- Golden test progress:
+  - Gate tier, every `output_placement=l1_interleaved` cell: 86/86 pass, plus 4 xfails from existing EXCLUSIONS
+    (fp32 × 16-bit DEST, bf8b × w_non_aligned).
+  - All 3 loose cases pass, including the real call. Sharded and R_U DRAM regression slice: 27/27 pass.
+- Issues encountered: `test_all_gather_rms_norm_sharded_numeric.py::...640x1536-HEIGHT_SHARDED-rms_norm-FLOAT32-fp32dest1`
+  fails with a CB clash (program.cpp:2535). It fails the same way with this refinement's changes stashed, so it was
+  already failing; not touched here.
+- Tests added:
+  - `test_all_gather_rms_norm.py`: `test_l1_interleaved_output` (8 cases: RMS / LN + γ + β, bf16 / fp32 DEST, 640×384,
+    640×32, 640×512, fp32 128×384, non-aligned 17×50 and 100×512), `test_l1_interleaved_preallocated_output`, and
+    `test_l1_interleaved_input_refused`.
+  - `test_all_gather_rms_norm_l1_fit_debug.py`: the largest golden shapes, fp32 / bf16 LN, with an L1 output.

@@ -137,6 +137,9 @@ OWN_BANDS_MAX = 16  # persistent band counters (global semaphores) per port core
 # counter on every port; the port reads each own packet with <= 2 L1 reads instead of DRAM bank runs after the own
 # write. cb_stage is capped by STAGE_L1_BUDGET per core: past it, a lane's walk tail goes the DRAM read-back way.
 STAGE_L1_BUDGET = 128 * 1024
+# Interleaved destinations with more banks than this (L1 interleaved: ~one per core) walk row-major, one page per run,
+# instead of bank-major (Refinement 5). AGRN_L1I_BANK_WALK_MAX_NB=1000 forces the bank-major walk (perf A/B).
+L1I_BANK_WALK_MAX_NB = 16
 STAGE_MAX_LANES = 4
 STAGE_MAX_NB = 16
 STAGE_CT = 7 + STAGE_MAX_LANES + STAGE_MAX_NB + 5  # agrn_worker_args.hpp stage block
@@ -527,6 +530,35 @@ def _datum_bytes(dtype):
     return {ttnn.float32: 4, ttnn.bfloat16: 2, ttnn.bfloat8_b: 1}[dtype]
 
 
+def _num_banks(mesh_device, t):
+    """Interleaved bank count of t's buffer type (the page -> bank round-robin modulus). A sharded destination walks its
+    shard cores (shard_w), not banks: it keeps the DRAM count it always had."""
+    mc = t.memory_config()
+    if mc.is_sharded() or mc.buffer_type == ttnn.BufferType.DRAM:
+        dram = mesh_device.dram_grid_size()
+        return dram.x * dram.y
+    return int(ttnn.get_memory_view(mesh_device, mc.buffer_type).num_banks)
+
+
+def _check_l1_interleaved_fit(mesh_device, cbs, output_tensor):
+    """L1 INTERLEAVED output (Refinement 5): the output pages share every core's L1 with this program's static CBs
+    (allocated upward from the L1 base; the output sits at the same bank offset on every core). Refuse a call whose CB
+    region would reach the output with the numbers, instead of the program's 'circular buffers clash with L1 buffers'
+    throw. Every CB here is static (an interleaved input: no shard-backed CB). Each CB is placed DRAM-aligned."""
+    align = 64
+    base = int(ttnn.get_allocator_base_address(mesh_device, ttnn.BufferType.L1))
+    cb_end = base + sum(-(-int(c.total_size) // align) * align for c in cbs)
+    out_lo = int(output_tensor.buffer_address())
+    if cb_end > out_lo:
+        from ttnn.operations._op_contract import UnsupportedAxisValue
+
+        raise UnsupportedAxisValue(
+            f"all_gather_rms_norm: L1 interleaved output does not fit next to the op's circular buffers: CB region "
+            f"[{base}, {cb_end}) ({cb_end - base} B per core) reaches the output at L1 address {out_lo} "
+            f"(shape {list(output_tensor.shape)} {output_tensor.dtype}); use a DRAM output for this shape"
+        )
+
+
 def _cb(index, num_pages, page_size, dtype, core_ranges):
     return ttnn.CBDescriptor(
         total_size=int(num_pages * page_size),
@@ -644,8 +676,10 @@ def create_mesh_program_descriptor(
     # destination of the slices: final output pages (aligned) or the slot-contiguous staging scratch (R_U)
     staging = staging_buffer(mesh_device, geo, out_dtype) if is_ru else None
     dst_tensor = staging if is_ru else output_tensor
-    dram = mesh_device.dram_grid_size()
-    nb = dram.x * dram.y
+    # banks of the destination buffer: the DRAM banks (DRAM output / R_U staging) or, for an L1 INTERLEAVED output
+    # (Refinement 5), the L1 banks (~one per worker core). Every walk / address path is generic in nb; > 16 banks turns
+    # off the per-bank precomputed addresses (fast_banks) and the own-entry staging (stage_on), both bank-table sized.
+    nb = _num_banks(mesh_device, dst_tensor)
     run_pages = max(1, ttnn.get_tt_fabric_max_payload_size_bytes() // out_page)
     batch_chunks = _knob("BATCH_CHUNKS", BATCH_CHUNKS)
     inc_every = _knob("INC_EVERY", INC_EVERY)
@@ -656,6 +690,7 @@ def create_mesh_program_descriptor(
     payload_bytes = run_pages * out_page
     stats_payload = ttnn.get_tt_fabric_max_payload_size_bytes()
     out_sharded = output_tensor.memory_config().is_sharded()
+    out_l1_interleaved = not out_sharded and output_tensor.memory_config().buffer_type == ttnn.BufferType.L1
     # HEIGHT in -> HEIGHT out, one tile-row per shard on the same cores: the own slice of a worker's output shard is
     # Wlt contiguous pages, so cb_out_block IS that slice (normalize packs into its final place — no block, no own
     # write; the ports pull it from there)
@@ -678,6 +713,12 @@ def create_mesh_program_descriptor(
         out_ss = output_tensor.memory_config().shard_spec
         shard_w = int(out_ss.shape[1]) // TILE
         walk = Walk(nb, geo.R, geo.Wlt, geo.Wt, geo.Wlt, run_pages, scatter_runs, shard_w, split_runs)
+    elif nb > _knob("L1I_BANK_WALK_MAX_NB", L1I_BANK_WALK_MAX_NB):
+        # L1 INTERLEAVED output (Refinement 5): ~one bank per core, so a bank holds ~1 page of a slot row and every
+        # bank-major run is one page anyway. Walk it row-major instead (the sharded walk with 1-tile "shards": lanes
+        # are tile-rows, each run one page addressed by dst.get_noc_addr) — no per-bank modulo walk over ~110 banks on
+        # the ports, and the own-entry staging (row lanes) stays on.
+        walk = Walk(nb, geo.R, geo.Wlt, geo.Wt, geo.Wlt, run_pages, scatter_runs, 1, split_runs)
     else:
         walk = Walk(nb, geo.R, geo.Wlt, geo.Wt, geo.Wlt, run_pages, scatter_runs, 0, split_runs)
     balance = ring and G % 2 == 0 and G >= 4 and geo.R * geo.Wlt >= BALANCE_MIN_TILES
@@ -1054,6 +1095,8 @@ def create_mesh_program_descriptor(
                 _cb(CB_FINAL_TABLE, geo.R * nfinal, RECORD_BYTES, ttnn.float32, full),
                 _cb(CB_FINAL_INV, row_chunk, T32, ttnn.float32, full),
             ]
+        if out_l1_interleaved:
+            _check_l1_interleaved_fit(mesh_device, cbs, output_tensor)
         program.cbs = cbs
 
         # ---- worker kernels (common runtime args only) ----

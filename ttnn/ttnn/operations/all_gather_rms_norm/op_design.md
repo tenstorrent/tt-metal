@@ -578,3 +578,21 @@ cost is element count, not arithmetic.
   tail.
 - Path gates: fp32 DEST only (the exact SFPU sums need it; 16-bit DEST keeps the old chain), `gather_tiles > 1` and
   pre_combine keep the old combine, `cw > 1` / W-tail members keep the old local stats.
+
+## Refinement 5 — L1 INTERLEAVED output as built
+- **Bank count from the destination.** `nb` = the destination's interleaved bank count (`_num_banks`): DRAM banks for
+  a DRAM output and the R_U staging scratch; 110 L1 banks for `ttnn.L1_MEMORY_CONFIG`; a sharded output keeps the DRAM
+  count it always had (it walks shard columns). Every kernel address path was already generic (`dst.get_noc_addr`);
+  `nb > 16` turns off the per-bank precomputed addresses (`fast_banks`).
+- **Row-major walk for L1 interleaved (aligned).** With ~one bank per core a bank holds ~1 page of a slot row, so the
+  bank-major walk degenerates to one-page runs while still paying a per-bank, per-row modulo walk over 110 banks on
+  both port kernels, and its `nb <= 16` table cap turned the own-entry staging off. The aligned L1 interleaved output
+  walks row-major instead: the sharded walk with `shard_w = 1` (lanes = tile-rows, every run one page). Same packet
+  count (60 vs 62 per 640×384 slot), staging back on. Measured (fastest chip, eval harness, 5 experiments): bank walk
+  58.27 µs → row walk 35.88 µs; the DRAM call of the same shape is 28.36 µs. Knob `L1I_BANK_WALK_MAX_NB` (16; env
+  `AGRN_L1I_BANK_WALK_MAX_NB=1000` forces the bank walk). The non-aligned (R_U) path is unchanged: its slices go to
+  the DRAM staging scratch, and the assembly writes the L1 output pages per page.
+- **Remaining gap vs DRAM (+26%) is TRANSPORT packet fill.** A packet carries at most `NOC_SCATTER_WRITE_MAX_CHUNKS`
+  = 4 runs, and an L1 interleaved run is one 2 KiB page, so bulk packets are 8 KiB instead of the 14 KiB DRAM bank runs
+  (7 pages). Next lever: a destination-side relay (land contiguous 7-page chunks in a receiver staging buffer and
+  scatter locally over the NoC), or runs that pair pages of one bank across rows (P, P + 110). Not done here.

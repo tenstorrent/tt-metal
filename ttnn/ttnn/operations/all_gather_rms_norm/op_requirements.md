@@ -199,7 +199,7 @@ pre-existing CB OOM (fails identically on the R3 kernels; host CB plan unchanged
 column-chunked T and a γ / β-streaming normalize for wide sharded LN rows — outside this refinement's scope.
 
 
-### [ ] Refinement 5 — L1 INTERLEAVED output (the real call of the MLA q_a norm)
+### [x] Refinement 5 — L1 INTERLEAVED output (the real call of the MLA q_a norm)
 
 **Type**: feature (contract)
 
@@ -236,6 +236,15 @@ shapes must fit.
   test that passes a preallocated `output_tensor` in L1 interleaved, and one that checks an interleaved L1 INPUT is still refused;
 - report, with `eval.ccl_perf` (`CCL_PERF_CASES=<the l1 loose case index>`), the fastest-chip time of the L1 interleaved call next
   to the DRAM call of the same shape. Not a gate; say whether the L1 call is slower than DRAM and by how much, and why.
+
+**Outcome**:
+- Landed. Every gate-tier `l1_interleaved` cell passes (86, plus 4 EXCLUSION xfails), the real-call loose case
+  passes, and all golden shapes fit L1, so there is no EXCLUSIONS entry.
+- Fastest chip, 640×384: L1 output 35.88 µs vs DRAM 28.36 µs, so **L1 is 26% slower**. The first version (bank-major
+  walk over 110 L1 banks) took 58.27 µs. The row-major walk brought it down.
+- The remaining gap is TRANSPORT packet fill: one-page runs × 4 scatter chunks give 8 KiB packets vs 14 KiB for DRAM.
+- Next: a receiver-side contiguous landing area plus a local scatter. Not done here because it changes the exchange
+  protocol, which is out of this refinement's scope.
 
 **Verifier notes**: filed by hand, not by the verifier: a contract gap found when the generated op was checked against the model's real
 call sites (not a golden failure). Local to the output path: the compute kernel and the exchange protocol should not change.

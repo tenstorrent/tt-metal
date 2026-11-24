@@ -99,8 +99,8 @@ SUPPORTED = {
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
     ],
     # Where the output lands. "l1_interleaved" (ttnn.L1_MEMORY_CONFIG, the MLA q_a norm's real call at 640 tokens per
-    # chip) is a refinement candidate: not in the list yet.
-    "output_placement": ["dram_interleaved", "l1_sharded"],
+    # chip, Refinement 5): pages round-robin over the L1 banks, same walk as DRAM with nb = the L1 bank count.
+    "output_placement": ["dram_interleaved", "l1_interleaved", "l1_sharded"],
     "cluster_axis": [0, 1],
     "topology": [Topology.Linear, Topology.Ring],
     "num_links": [1, 2],
@@ -246,8 +246,10 @@ def validate(
     out_mc = output_tensor.memory_config() if output_tensor is not None else memory_config
     if out_mc is not None:
         if out_mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED:
-            if out_mc.buffer_type != ttnn.BufferType.DRAM:
-                raise UnsupportedAxisValue(f"all_gather_rms_norm: interleaved output must be in DRAM, got {out_mc}")
+            if out_mc.buffer_type not in (ttnn.BufferType.DRAM, ttnn.BufferType.L1):
+                raise UnsupportedAxisValue(
+                    f"all_gather_rms_norm: interleaved output must be in DRAM or L1, got {out_mc}"
+                )
         elif out_mc.memory_layout not in _sharded or out_mc.buffer_type != ttnn.BufferType.L1:
             raise UnsupportedAxisValue(f"all_gather_rms_norm: output memory config {out_mc} is not supported")
         elif out_mc.shard_spec is None:

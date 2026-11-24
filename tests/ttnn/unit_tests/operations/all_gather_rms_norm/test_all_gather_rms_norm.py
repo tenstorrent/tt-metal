@@ -110,6 +110,8 @@ def _run_case(
     num_links,
     offset=0.0,
     output_tensor=None,
+    memory_config=None,
+    fp32_dest_acc_en=True,
 ):
     G = tuple(mesh_device.shape)[cluster_axis]
     out_shape = gathered_shape(shape, G)
@@ -127,6 +129,14 @@ def _run_case(
         kwargs["norm_type"] = "layer_norm"
     if output_tensor is not None:
         kwargs["output_tensor"] = output_tensor
+    if memory_config is not None:
+        kwargs["memory_config"] = memory_config
+    if not fp32_dest_acc_en:
+        cfg = ttnn.ComputeConfigDescriptor()
+        cfg.math_fidelity = ttnn.MathFidelity.HiFi4
+        cfg.fp32_dest_acc_en = False
+        cfg.math_approx_mode = False
+        kwargs["compute_kernel_config"] = cfg
     expected = pytorch_all_gather_rms_norm(x, gamma, cluster_axis, EPS, norm_type=norm_type, beta=beta)
     tx = create_ttnn_input_tensor(x, mesh_device, dtype=dtype, layout=ttnn.TILE_LAYOUT)
     out = all_gather_rms_norm(
@@ -138,7 +148,13 @@ def _run_case(
         **kwargs,
     )
     check_output(
-        out, expected, shape=out_shape, dtype=dtype, fp32_dest_acc_en=True, expected_layout=ttnn.TILE_LAYOUT, group=G
+        out,
+        expected,
+        shape=out_shape,
+        dtype=dtype,
+        fp32_dest_acc_en=fp32_dest_acc_en,
+        expected_layout=ttnn.TILE_LAYOUT,
+        group=G,
     )
     return out
 
@@ -280,3 +296,95 @@ def test_output_tensor_reuse_and_determinism(mesh_device):
         else:
             for a, b in zip(first, now):
                 assert torch.equal(a, b), "output differs between identical calls"
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Refinement 5: L1 INTERLEAVED output (ttnn.L1_MEMORY_CONFIG) — the MLA q_a norm's real call. Input stays DRAM.
+# ---------------------------------------------------------------------------------------------------------------------
+
+# (shape, norm_type, gamma_layout or None, with_beta, topology, num_links, dtype, fp32_dest_acc_en)
+CASES_L1_OUT = [
+    ((1, 1, 640, 384), "rms_norm", RM, False, R, 2, ttnn.bfloat16, True),  # the real call
+    ((1, 1, 640, 384), "rms_norm", RM, False, R, 2, ttnn.bfloat16, False),
+    ((1, 1, 640, 32), "layer_norm", RM, True, R, 2, ttnn.bfloat16, True),
+    ((1, 1, 640, 32), "layer_norm", RM, True, R, 2, ttnn.bfloat16, False),
+    ((1, 1, 640, 512), "rms_norm", TL, False, L, 1, ttnn.bfloat16, True),
+    ((1, 1, 128, 384), "layer_norm", TL, True, R, 2, ttnn.float32, True),
+    # non-aligned (R_U: slot-contiguous DRAM staging, then the assembly writes the L1 output pages)
+    ((1, 1, 17, 50), "rms_norm", RM, False, R, 1, ttnn.bfloat16, True),
+    ((1, 1, 100, 512), "layer_norm", TL, True, L, 2, ttnn.bfloat16, True),
+]
+
+
+def _l1_case_id(c):
+    return _case_id(c[:7]) + ("-fp32acc" if c[7] else "-bf16acc")
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+@pytest.mark.parametrize("mesh_device", [pytest.param((1, 4), id="1x4")], indirect=True)
+@pytest.mark.parametrize("case", CASES_L1_OUT, ids=[_l1_case_id(c) for c in CASES_L1_OUT])
+def test_l1_interleaved_output(mesh_device, case):
+    shape, norm_type, gamma_layout, with_beta, topology, num_links, dtype, fp32_acc = case
+    _skip_if_unrunnable(mesh_device, 1, topology)
+    out = _run_case(
+        mesh_device,
+        shape,
+        cluster_axis=1,
+        dtype=dtype,
+        norm_type=norm_type,
+        gamma_layout=gamma_layout,
+        with_beta=with_beta,
+        topology=topology,
+        num_links=num_links,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        fp32_dest_acc_en=fp32_acc,
+    )
+    mc = out.memory_config()
+    assert mc.buffer_type == ttnn.BufferType.L1 and mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+@pytest.mark.parametrize("mesh_device", [pytest.param((1, 4), id="1x4")], indirect=True)
+def test_l1_interleaved_preallocated_output(mesh_device):
+    """A preallocated L1 interleaved output_tensor: written in place, returned, repeatable."""
+    topology = ttnn.Topology.Ring if _ring_ok(tuple(mesh_device.shape), 1) else ttnn.Topology.Linear
+    _skip_if_unrunnable(mesh_device, 1, topology)
+    shape = (1, 1, 640, 384)
+    out_shape = gathered_shape(shape, tuple(mesh_device.shape)[1])
+    buf = create_ttnn_input_tensor(
+        replicate(torch.full(out_shape, 7.0), mesh_device),
+        mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    for _ in range(2):
+        out = _run_case(
+            mesh_device,
+            shape,
+            cluster_axis=1,
+            dtype=ttnn.bfloat16,
+            norm_type="rms_norm",
+            gamma_layout=RM,
+            with_beta=False,
+            topology=topology,
+            num_links=2,
+            output_tensor=buf,
+        )
+        for dev_out, dev_buf in zip(ttnn.get_device_tensors(out), ttnn.get_device_tensors(buf)):
+            assert dev_out.buffer_address() == dev_buf.buffer_address(), "op must return the provided output_tensor"
+        assert out.memory_config().buffer_type == ttnn.BufferType.L1
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+@pytest.mark.parametrize("mesh_device", [pytest.param((1, 4), id="1x4")], indirect=True)
+def test_l1_interleaved_input_refused(mesh_device, expect_error):
+    """The input stays DRAM interleaved: an L1 interleaved INPUT is refused at validate()."""
+    from ttnn.operations._op_contract import UnsupportedAxisValue
+
+    x = torch.randn((1, 4, 1, 1, 64, 128), dtype=torch.bfloat16)
+    tx_l1 = create_ttnn_input_tensor(
+        x, mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    with expect_error(UnsupportedAxisValue, "interleaved input must be in DRAM"):
+        all_gather_rms_norm(tx_l1, cluster_axis=1, epsilon=EPS, memory_config=ttnn.L1_MEMORY_CONFIG)
