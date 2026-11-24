@@ -81,6 +81,14 @@ constexpr bool addcmul = false;
 #define LLK2_MM_GELU_THREAD Thread::Pack
 #endif
 
+// The bias (and activation) epilogue in the last K block: its matmul adds into partials + bias in Dest, and the result is
+// packed to the output; the K blocks before it accumulate in the partials. Not for addcmul (b multiplies the matmul's
+// result), nor with one K block (no partials to start from).
+#ifndef LLK2_MM_FUSE_LAST_K
+#define LLK2_MM_FUSE_LAST_K 1
+#endif
+constexpr bool fuse_last_k = LLK2_MM_FUSE_LAST_K && !addcmul && K_blocks > 1;
+
 constexpr std::uint32_t tile = default_tile_dim;
 
 // The blocks along a tile row, for the matmul and the epilogue: the largest divisor of N_block_tiles that fits a Dest
@@ -215,7 +223,7 @@ void kernel_main()
             const bool keep_in0        = n_block + 1 < N_blocks_per_core; // the next N block reads the last K block's in0
 
             const auto slot = reserve_back<partials_spec>(intermediate);
-            for (std::uint32_t k = 0; k < K_blocks; ++k)
+            for (std::uint32_t k = 0; k < K_blocks - (fuse_last_k ? 1 : 0); ++k)
             {
                 const auto x = peek_front<x_spec>(in0);
                 const auto w = wait_front<w_spec>(in1);
@@ -227,6 +235,43 @@ void kernel_main()
                 }
             }
             release(slot);
+
+            if constexpr (fuse_last_k)
+            {
+                // The last K block, with the epilogue: y = (partials + bias) + x w, the bias add first, into the Dest
+                // section the matmul then adds into. The activation of a section on the pack thread runs while math
+                // works on the next one.
+                const auto x        = peek_front<x_spec>(in0);
+                const auto w        = wait_front<w_spec>(in1);
+                const auto partials = wait_front<partials_spec>(intermediate);
+                const auto bias     = wait_front<bias_spec>(in2);
+                for (std::uint32_t m = 0; m < M_block_tiles; ++m)
+                {
+                    const auto o_row = reserve_back<out_row_spec>(out);
+                    if (m < m_rows)
+                    {
+                        for_row_blocks(
+                            n_cols,
+                            [&](std::uint32_t c0, auto n) __attribute__((always_inline))
+                            {
+                                const auto acc = add<plus_row>(cols_of(row(partials, m), c0, n), cols_of(bias, c0, n), reserve_back<RowRing>());
+                                const auto y   = matmul(row(x, m), cols_of(w, c0, n), acc);
+                                const auto z   = activation(y);
+                                pack(z, cols_of(o_row, c0, n));
+                                release(z);
+                            });
+                    }
+                    release(o_row);
+                }
+                release(bias);
+                release(partials);
+                release(w);
+                if (!keep_in0)
+                {
+                    pop_front<x_spec>(in0);
+                }
+                continue;
+            }
 
             const auto partials = wait_front<partials_spec>(intermediate);
             const auto bias     = wait_front<bias_spec>(in2);
