@@ -145,10 +145,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats.unpack_B_src,
             formats.unpack_A_dst,
             formats.unpack_B_dst,
-            tensor_shape.face_r_dim,
-            tensor_shape_b.face_r_dim,
-            tensor_shape.total_num_faces(),
-            tensor_shape_b.total_num_faces(),
+            tensor_shape,
+            tensor_shape_b,
             TILE_SIZE_UNPACK_A,
             TILE_SIZE_UNPACK_B);
 

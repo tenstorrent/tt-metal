@@ -83,10 +83,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats_array[0].unpack_B_src,
         formats_array[0].unpack_A_dst,
         formats_array[0].unpack_B_dst,
-        g0_face_r_dim,
-        g0_face_r_dim,
-        g0_num_faces,
-        g0_num_faces);
+        ckernel::make_tensor_shape_from_legacy(g0_face_r_dim, g0_num_faces),
+        ckernel::make_tensor_shape_from_legacy(g0_face_r_dim, g0_num_faces));
     _llk_unpack_tilize_init_wrapper_(
         formats_array[0].unpack_A_src, formats_array[0].unpack_A_dst, 1 /* ct_dim */, g0_face_r_dim, false /* narrow_tile */, g0_tilize_nf);
     _llk_unpack_tilize_wrapper_(
@@ -114,7 +112,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // Z-dim from g1_num_faces). Same format both runs, so this is purely the
         // geometry/stride retarget (no data-format change).
         _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::FACE_ROW_MAJOR, false>(
-            formats_array[1].unpack_A_src, formats_array[1].unpack_A_dst, g1_tile_size, g1_face_r_dim, g1_num_faces);
+            formats_array[1].unpack_A_src, formats_array[1].unpack_A_dst, g1_tile_size, ckernel::make_tensor_shape_from_legacy(g1_face_r_dim, g1_num_faces));
     }
 
     // ---- Read back the SrcA baseline and compare against the canonical G1 state ----

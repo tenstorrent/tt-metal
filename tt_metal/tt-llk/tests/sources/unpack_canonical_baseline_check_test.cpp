@@ -54,7 +54,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // Program the canonical SrcA baseline for this (dst_format, face_r_dim, num_faces).
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, face_r_dim, face_r_dim, num_faces, num_faces);
+        formats.unpack_A_src,
+        formats.unpack_B_src,
+        formats.unpack_A_dst,
+        formats.unpack_B_dst,
+        ckernel::make_tensor_shape_from_legacy(face_r_dim, num_faces),
+        ckernel::make_tensor_shape_from_legacy(face_r_dim, num_faces));
 
     // Drain config writes before reading them back (mirrors are_unpackers_AB_configured_correctly).
     tensix_sync();

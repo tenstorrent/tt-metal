@@ -42,10 +42,8 @@ ALWI void max_util_unpack(
         (uint32_t)DataFormat::Float16_b,
         (uint32_t)DataFormat::Float16_b,
         (uint32_t)DataFormat::Float16_b,
-        face_r_dim,
-        face_r_dim,
-        num_faces_A,
-        num_faces_B,
+        ckernel::make_tensor_shape_from_legacy(face_r_dim, num_faces_A),
+        ckernel::make_tensor_shape_from_legacy(face_r_dim, num_faces_B),
         128 /* tile size for float16_b >> 4 */,
         128 /* tile size for float16_b >> 4 */);
 

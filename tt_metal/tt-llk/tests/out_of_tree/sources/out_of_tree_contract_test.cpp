@@ -68,16 +68,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+    const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces);
     if constexpr (!tilize_en)
     {
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, params.num_faces, params.num_faces);
+            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, tensor_shape, tensor_shape);
         _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-            0 /* transpose_of_faces */,
-            0 /* within_face_16x16_transpose */,
-            ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces),
-            formats.unpack_A_src,
-            formats.unpack_A_dst);
+            0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, tensor_shape, formats.unpack_A_src, formats.unpack_A_dst);
 
         const std::uint32_t num_tiles = params.NUM_BLOCKS * params.NUM_TILES_IN_BLOCK;
 
@@ -90,7 +87,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     else
     {
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, params.num_faces, params.num_faces);
+            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, tensor_shape, tensor_shape);
         _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, BLOCK_CT_DIM, FACE_R_DIM, false /* narrow_tile */);
 
         for (std::uint32_t i = 0; i < BLOCK_RT_DIM; i++)

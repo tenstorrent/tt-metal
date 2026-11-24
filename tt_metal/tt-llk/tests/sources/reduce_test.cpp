@@ -67,10 +67,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 formats.unpack_A_src,
                 formats.unpack_B_dst,
                 formats.unpack_A_dst,
-                scaler_shape.face_r_dim,
-                tensor_shape.face_r_dim,
-                scaler_shape.total_num_faces(),
-                tensor_shape.total_num_faces(),
+                scaler_shape,
+                tensor_shape,
                 TILE_SIZE_UNPACK_B,
                 TILE_SIZE_UNPACK_A);
         }
@@ -81,10 +79,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 formats.unpack_B_src,
                 formats.unpack_A_dst,
                 formats.unpack_B_dst,
-                tensor_shape.face_r_dim,
-                scaler_shape.face_r_dim,
-                tensor_shape.total_num_faces(),
-                scaler_shape.total_num_faces(),
+                tensor_shape,
+                scaler_shape,
                 TILE_SIZE_UNPACK_A,
                 TILE_SIZE_UNPACK_B);
         }

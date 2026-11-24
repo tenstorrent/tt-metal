@@ -71,10 +71,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats_array[run].unpack_B_src,
         formats_array[run].unpack_A_dst,
         formats_array[run].unpack_B_dst,
-        pol_face_r_dim,
-        pol_face_r_dim,
-        pol_num_faces,
-        pol_num_faces);
+        ckernel::make_tensor_shape_from_legacy(pol_face_r_dim, pol_num_faces),
+        ckernel::make_tensor_shape_from_legacy(pol_face_r_dim, pol_num_faces));
     _llk_unpack_tilize_init_wrapper_(
         formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst, pol_ct_dim, pol_face_r_dim, false /* narrow_tile */, pol_tilize_nf);
     _llk_unpack_tilize_wrapper_(
@@ -116,10 +114,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats_array[run].unpack_B_src,
             formats_array[run].unpack_A_dst,
             formats_array[run].unpack_B_dst,
-            FACE_R_DIM,
-            FACE_R_DIM,
-            mm_num_faces,
-            mm_num_faces,
+            ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, mm_num_faces),
+            ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, mm_num_faces),
             tile_size,
             tile_size);
     }

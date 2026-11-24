@@ -134,10 +134,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats.unpack_B_src,
             formats.unpack_A_dst,
             formats.unpack_B_dst,
-            FACE_R_DIM,
-            FACE_R_DIM,
-            num_faces /* unpA_num_faces */,
-            num_faces /* unpB_num_faces */);
+            ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces),
+            ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces));
 
         // The op refills SrcA from DEST, so unpack only configures the two seed datacopies.
         _llk_unpack_A_init_<BroadcastType::NONE>(
