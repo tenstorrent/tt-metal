@@ -258,15 +258,15 @@ card:
     below, 3 of 8 256-token answers matched `batch` exactly and the others took an equally fluent different word after
     50-230 tokens.
 
-    Served, natural-text prompts, greedy, 256 tokens (2026-11-24; 8 users arriving together start speculating as they
-    come in and all go back to plain steps once 6-8 are live, which costs them ~8% against `batch`):
+    Served, natural-text prompts, greedy, 256 tokens (2026-11-24, three runs of the same build; at 8 users the server
+    runs plain steps, as `batch` does):
 
     | users | `batch-dflash2` t/s/u | `batch` t/s/u |
     |---|---|---|
-    | 1 | 97 | 61 |
-    | 2 | 86 | 59 |
-    | 4 | 67 | 56 |
-    | 8 | 46 | 51 |
+    | 1 | 96-98 | 61 |
+    | 2 | 86-89 | 59 |
+    | 4 | 67-70 | 56 |
+    | 8 | 51 | 51 |
 
     ### Prefill and decode on `batch`, and the TTFT-first option
     A step on this engine either prefills or decodes, never both, so prefill time that runs while a user decodes is a
@@ -294,13 +294,13 @@ card:
     | `batch` | 32 | 2048 / 128 | 291.9 | 20.9 | 7.96 s |
     | `batch` | 32 | 8192 / 1024 | 399.0 | 17.8 | 24.52 s |
     | `batch` | 1 | 32768 / 128 | 18.8 | 57.6 | 4.59 s |
-    | `batch-dflash2`, greedy | 1 | 128 / 128 | 66.8 | 76.1 | 0.25 s |
-    | `batch-dflash2`, greedy | 2 | 128 / 128 | 107.4 | 67.0 | 0.36 s |
-    | `batch-dflash2`, greedy | 4 | 128 / 128 | 166.9 | 49.1 | 0.42 s |
-    | `batch-dflash2`, greedy | 8 | 128 / 128 | 247.1 | 36.9 | 0.55 s |
-    | `batch-dflash2`, greedy | 8 | 2048 / 128 | 197.1 | 48.4 | 2.57 s |
-    | `batch-dflash2`, greedy | 1 | 8192 / 128 | 41.9 | 85.0 | 1.56 s |
-    | `batch-dflash2`, greedy | 1 | 32768 / 128 | 17.6 | 49.6 | 4.69 s |
+    | `batch-dflash2`, greedy | 1 | 128 / 128 | 65.9 | 74.9 | 0.24 s |
+    | `batch-dflash2`, greedy | 2 | 128 / 128 | 107.0 | 66.9 | 0.37 s |
+    | `batch-dflash2`, greedy | 4 | 128 / 128 | 160.9 | 47.8 | 0.46 s |
+    | `batch-dflash2`, greedy | 8 | 128 / 128 | 313.6 | 50.1 | 0.73 s |
+    | `batch-dflash2`, greedy | 8 | 2048 / 128 | 194.7 | 48.4 | 2.63 s |
+    | `batch-dflash2`, greedy | 1 | 8192 / 128 | 37.0 | 68.4 | 1.60 s |
+    | `batch-dflash2`, greedy | 1 | 32768 / 128 | 17.7 | 51.2 | 4.73 s |
 
     `batch-dflash2` with the default sampling runs as `batch` (within 2% in every row above). Its greedy rows use
     random-token prompts, on which drafts are accepted less than on natural text (see the table above).
@@ -325,11 +325,11 @@ card:
     | `batch-dflash2` | 128 | 128 | 32 | 128 | 1,799 | 71 | 21.9 | 7.6 |
     | `batch-dflash2` | 2,048 | 128 | 32 | 64 | 8,104 | 253 | 20.9 | 14.2 |
     | `batch-dflash2` | 8,192 | 1,024 | 32 | 64 | 24,788 | 330 | 17.8 | 82.3 |
-    | `batch-dflash2`, greedy | 128 | 128 | 1 | 4 | 247 | 517 | 76.1 | 1.9 |
-    | `batch-dflash2`, greedy | 128 | 128 | 4 | 16 | 416 | 308 | 49.1 | 3.0 |
-    | `batch-dflash2`, greedy | 128 | 128 | 8 | 32 | 546 | 235 | 36.9 | 4.0 |
-    | `batch-dflash2`, greedy | 2,048 | 128 | 8 | 16 | 2,570 | 797 | 48.4 | 5.2 |
-    | `batch-dflash2`, greedy | 8,192 | 128 | 1 | 2 | 1,559 | 5,256 | 85.0 | 3.1 |
+    | `batch-dflash2`, greedy | 128 | 128 | 1 | 4 | 245 | 523 | 74.9 | 1.9 |
+    | `batch-dflash2`, greedy | 128 | 128 | 4 | 16 | 458 | 280 | 47.8 | 3.1 |
+    | `batch-dflash2`, greedy | 128 | 128 | 8 | 32 | 729 | 176 | 50.1 | 3.3 |
+    | `batch-dflash2`, greedy | 2,048 | 128 | 8 | 16 | 2,635 | 777 | 48.4 | 5.3 |
+    | `batch-dflash2`, greedy | 8,192 | 128 | 1 | 2 | 1,598 | 5,126 | 68.4 | 3.5 |
 
     Means of `vllm bench serve` runs (random prompts, ignore_eos, the model's default sampling; `single-user` greedy) on
     a P300x2 with chip clocks logged: `single-user` 2026-11-20 (median 1350 MHz), `batch` and `batch-dflash2` 2026-11-23
