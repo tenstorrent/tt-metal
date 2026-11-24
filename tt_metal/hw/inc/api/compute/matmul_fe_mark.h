@@ -25,10 +25,16 @@ struct tag {
     friend auto used(tag);
 };
 #pragma GCC diagnostic pop
+// A probe that ran before a later mark keeps its earlier result, as on GCC 15; GCC 16 reports that as an error.
+#pragma GCC diagnostic push
+#if __GNUC__ >= 16
+#pragma GCC diagnostic ignored "-Wsfinae-incomplete"
+#endif
 template <int N>
 struct set {
     friend auto used(tag<N>) { return true; }
 };
+#pragma GCC diagnostic pop
 template <int N = 0, typename = decltype(used(tag<N>{}))>
 constexpr bool is_used(int) {
     return true;
