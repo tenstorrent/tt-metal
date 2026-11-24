@@ -11,7 +11,7 @@
 #include "api/dataflow/circular_buffer.h"
 
 // Id-free (2.0) transpose kernel: per tile, unpack+transpose c_0 directly into DST (via
-// experimental::transpose_init / experimental::transpose_tile), pack -> c_16. IDENTICAL to
+// experimental::transpose_src_to_dest_init / _tile), pack -> c_16. IDENTICAL to
 // transpose_legacy.cpp except the transpose init/op calls take an LLKOperand instead of a CB id. pack_tile
 // stays the legacy CB-id API so the differential isolates transpose_init/transpose_tile. Output must be
 // bit-for-bit identical to the legacy kernel.
@@ -26,14 +26,14 @@ void kernel_main() {
     using SrcOp = experimental::LLKOperand<static_cast<DataFormat>(in_desc.format), in_desc.shape>;
 
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
-    experimental::transpose_init(SrcOp(in_cb.read_address()));
+    experimental::transpose_src_to_dest_init(SrcOp(in_cb.read_address()));
 
     for (std::uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         tile_regs_acquire();
         cb0.wait_front(1);
         cb16.reserve_back(1);
 
-        experimental::transpose_tile(SrcOp(in_cb.read_address()), 0, 0);
+        experimental::transpose_src_to_dest_tile(SrcOp(in_cb.read_address()), 0, 0);
 
         tile_regs_commit();
         tile_regs_wait();
