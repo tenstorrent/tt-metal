@@ -322,9 +322,11 @@ class TestRunStep(unittest.TestCase):
 
         for data, want in (({}, False), ({"hung": True}, True)):  # a plain failure is no link fault, a hang is
             calls.clear()
+            phase = Phase(name="busbar")
             with mock.patch.object(busbar, "run_step", fake):
-                self.assertEqual(busbar.run_busbar(Phase(name="busbar"), Path("/tmp"), "smoke"), want)
+                busbar.run_busbar(phase, Path("/tmp"), "smoke")
             self.assertEqual(calls, ["qb", "mix", "step", "heavy", "code"])
+            self.assertEqual(any(map(busbar.link_fault, phase.checks)), want)
 
     def test_run_busbar_runs_only_the_steps_named(self):
         calls = []
@@ -334,7 +336,7 @@ class TestRunStep(unittest.TestCase):
             return busbar.Check(name=step.name, status=PASS)
 
         with mock.patch.object(busbar, "run_step", fake):
-            self.assertFalse(busbar.run_busbar(Phase(name="busbar"), Path("/tmp"), "smoke", steps=("heavy",)))
+            busbar.run_busbar(Phase(name="busbar"), Path("/tmp"), "smoke", steps=("heavy",))
         self.assertEqual(calls, ["heavy"])
 
 
@@ -808,6 +810,7 @@ class TestLinks(unittest.TestCase):
         failed, c, _ = self._pair_test(lambda t: 0, cap_s=0)
         self.assertFalse(failed)
         self.assertEqual((c.status, len(c.data["not_reached"])), (SKIP, sum(len(r) for r in rounds)))
+        self.assertEqual(c.data["cap_s"], 0)
         self.assertIn("not reached in the 0 s cap", c.details)
         failed, c, _ = self._pair_test(lambda t: 0)  # no cap: every round runs
         self.assertEqual((failed, c.status, c.data["not_reached"]), (False, PASS, []))
@@ -854,19 +857,32 @@ class TestLinks(unittest.TestCase):
         self.assertFalse(fault("x | warning | fabric RuntimeError retried"))  # a warning line never counts
 
     def test_link_fault_reads_the_verify_rows_but_not_a_numeric_fault_spread_by_the_all_gather(self):
-        def fault(*chips):
+        def fault(*chips, later=()):
             with tempfile.TemporaryDirectory() as d:
                 (Path(d) / "step.log").write_text("fine")
-                row = {"event": "verify", "chips": {str(i): {"bad_parts": b} for i, b in enumerate(chips)}}
-                (Path(d) / "rows.jsonl").write_text(json.dumps(row) + "\n")
+                rows = [
+                    {"event": "verify", "chips": {str(i): {"bad_parts": b} for i, b in enumerate(c)}}
+                    for c in (chips, later)
+                    if c
+                ]
+                (Path(d) / "rows.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
                 return busbar.link_fault(
                     Check(name="b", status=FAIL, ip="eth", data={"log": str(Path(d) / "step.log")})
                 )
 
         self.assertTrue(fault(["h3"], [], []))  # a CCL mismatch alone
-        self.assertTrue(fault(["heavy", "h3"], ["h3"]))  # the chip with its own fault also has the h3 mismatch
+        self.assertFalse(fault(["heavy", "h3"], ["h3"]))  # the chip with its own fault also has h3: numeric, not CCL
+        self.assertFalse(fault(["heavy", "h3"], []))
+        self.assertTrue(fault(["h3"], ["h3-ref"]))  # CCL parts only, no chip-local fault anywhere
         self.assertFalse(fault(["heavy"], ["h3"], ["h3-ref"]))  # h3-only beside a local fault: its spread
         self.assertFalse(fault(["heavy"], []))
+        self.assertFalse(
+            fault(["h3"], [], later=([], ["heavy"]))
+        )  # a chip-local fault in a later chunk spreads the earlier h3 too
+        self.assertFalse(
+            fault(["h3"], later=(["heavy"],))
+        )  # the same chip's h3 in one chunk, its own fault in the next
+        self.assertTrue(fault(["h3"], later=(["h3-ref"],)))
 
     def test_tests_filter_runs_only_the_named_tests(self):
         got = self._run_load("weekly", tests="links")
