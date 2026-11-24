@@ -23,6 +23,7 @@ Nothing here changes what the runner computes or when; every check only observes
   MTP wrote its KV there. The cache starts zero-filled and two runs feed identical tokens, so equal digests across
   runs mean bit-identical KV; the last chunk's layer-77 rows depend on every pass of every chunk.
   ``TRUNK_DIGEST_SLOT_RANGES`` (e.g. ``0-53,54-76,77-77``) adds a digest per stage-slot range (``chunk=<c>s<lo>_<hi>``).
+  ``TRUNK_KV_DUMP_DIR`` also saves those rows per cache slot as logical bf16 (``_kv_dump``), to compare runs by PCC.
 * MTP wiring (q171.2.10), with MTP on. Every forward records the blocks it runs, the trunk norm's input and output, and
   the tensor MTP is seeded with. ``TRUNK_ASSERT mtp_input PASS|FAIL`` (logged with the checks above) needs, in every
   forward that ran MTP: MTP ran once, after every pass-schedule step of the stage (``model.steps``, in order: 106 on
@@ -146,7 +147,7 @@ def _digest_rows(runtime, kv, start: int, first: int, count: int) -> tuple:
         finite = all(bool(torch.isfinite(t).all()) for t in (latent, scales, rope))
     else:
         finite = bool(torch.isfinite(flat.view(torch.bfloat16).float()).all())
-    return digest, finite, int(flat.any(dim=-1).sum()), int(flat.shape[0])
+    return digest, finite, int(flat.any(dim=-1).sum()), int(flat.shape[0]), flat
 
 
 def _mtp_slots() -> int:
@@ -190,10 +191,41 @@ def _kv_digest(runtime) -> None:
         reads += [(f"chunk=ring{j}", max_seq + j * chunk, ring_slots[0], len(ring_slots)) for j in range(RING_CHUNKS)]
     for label, start, first, count in reads:
         try:
-            digest, finite, nonzero, n = _digest_rows(runtime, kv, start, first, count)
+            digest, finite, nonzero, n, _ = _digest_rows(runtime, kv, start, first, count)
             logger.info(f"TRUNK_KV_DIGEST {label} sha256={digest} finite={finite} nonzero_rows={nonzero} rows={n}")
         except Exception as exc:  # report, never fail the timing run
             logger.error(f"TRUNK_KV_DIGEST {label} failed: {type(exc).__name__}: {exc}")
+    dump_dir = os.environ.get("TRUNK_KV_DUMP_DIR")
+    if dump_dir:
+        _kv_dump(runtime, kv, dump_dir, chunks, trunk_slots, ring_slots)
+
+
+def _kv_dump(runtime, kv, dump_dir: str, chunks: list, trunk_slots: int, ring_slots: list) -> None:
+    """``TRUNK_KV_DUMP_DIR``: user 0's logical (bf16) KVPE rows per cache slot, for each digest chunk of every trunk
+    slot and each ring chunk of every ring slot, saved as ``<dir>/chunk<c>.pt`` / ``ring<j>.pt`` = {slot: rows}, so two
+    runs can be compared layer by layer (``TRUNK_KV_DUMP`` lines)."""
+    import torch
+
+    from models.demos.deepseek_v3_d_p.tt.mla.two_bank import RING_CHUNKS
+    from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
+
+    os.makedirs(dump_dir, exist_ok=True)
+    chunk, max_seq = runtime.config.chunk_size, runtime.config.max_seq_len
+    reads = [(f"chunk{c}", c * chunk, range(trunk_slots)) for c in chunks]
+    reads += [(f"ring{j}", max_seq + j * chunk, ring_slots) for j in range(RING_CHUNKS if ring_slots else 0)]
+    for label, start, slots in reads:
+        try:
+            out = {}
+            for slot in slots:
+                flat = _digest_rows(runtime, kv, start, slot, 1)[4]
+                if kv.format == MlaKvCacheFormat.SCALED_FP8:
+                    flat = flat.view(torch.float8_e4m3fn)
+                out[slot] = kv.unpack_host(flat).to(torch.bfloat16)
+            path = os.path.join(dump_dir, f"{label}.pt")
+            torch.save(out, path)
+            logger.info(f"TRUNK_KV_DUMP {label} slots={len(out)} -> {path}")
+        except Exception as exc:  # report, never fail the timing run
+            logger.error(f"TRUNK_KV_DUMP {label} failed: {type(exc).__name__}: {exc}")
 
 
 def _first(out):
