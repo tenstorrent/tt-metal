@@ -177,7 +177,6 @@ def test_row_reduce_is_bitwise_the_stock_reduce_scatter(mesh_device, dtype, rows
         "rows": rows,
         "l1_sharded": sharded,
         "fabric_payload": int(ttnn.get_tt_fabric_max_payload_size_bytes()),
-        "l1_direct": rr.L1_DIRECT,
     }
 
     partial = _to_mesh(mesh, x, dtype, sharded)
@@ -227,16 +226,11 @@ def test_row_reduce_is_bitwise_the_stock_reduce_scatter(mesh_device, dtype, rows
         report["moe_helper_vs_stock_scatter"] = _mismatches(via_helper, stock, dtype)
         report["moe_helper_vs_host_forward"] = _mismatches(via_helper, _host(x, dtype, False), dtype)
 
-    for mirror in (0, 1):
-        rr.MIRROR = mirror
-        fused = _from_mesh(mesh, rr.row_reduce(partial), rows)
-        report[f"row_reduce_mirror{mirror}_vs_stock"] = _mismatches(fused, stock, dtype)
-        report[f"row_reduce_mirror{mirror}_vs_host_forward"] = _mismatches(fused, _host(x, dtype, False), dtype)
-        if dtype == "bf16":
-            report[f"row_reduce_mirror{mirror}_vs_moe_helper"] = _mismatches(fused, via_helper, dtype)
-    best = min((0, 1), key=lambda m: report[f"row_reduce_mirror{m}_vs_stock"])
-    rr.MIRROR = int(os.environ.get("QWEN38_ROW_REDUCE_MIRROR", "0"))
-    report["best_mirror"] = best
+    fused = _from_mesh(mesh, rr.row_reduce(partial), rows)
+    report["row_reduce_vs_stock"] = _mismatches(fused, stock, dtype)
+    report["row_reduce_vs_host_forward"] = _mismatches(fused, _host(x, dtype, False), dtype)
+    if dtype == "bf16":
+        report["row_reduce_vs_moe_helper"] = _mismatches(fused, via_helper, dtype)
 
     # repeated calls: the barrier / semaphore protocol over many back-to-back launches with the default direction
     again = [_from_mesh(mesh, rr.row_reduce(partial), rows) for _ in range(8)]
@@ -253,5 +247,5 @@ def test_row_reduce_is_bitwise_the_stock_reduce_scatter(mesh_device, dtype, rows
     if RESULTS:
         with open(RESULTS, "a") as f:
             f.write(json.dumps(report) + "\n")
-    assert report[f"row_reduce_mirror{rr.MIRROR}_vs_stock"] == 0, report
+    assert report["row_reduce_vs_stock"] == 0, report
     assert report["repeat_mismatches_vs_stock"] == 0, report

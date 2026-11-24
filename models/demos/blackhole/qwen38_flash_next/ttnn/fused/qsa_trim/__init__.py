@@ -62,7 +62,6 @@ def reduce_w2n_admits(partial, *, cluster_axis=1) -> bool:
         padded = tuple(int(v) for v in partial.padded_shape)
         return (
             rr.enabled_by_env()
-            and rr.version() == 2
             and cluster_axis == gr_fold.TP_AXIS
             and len(shape) == 4
             and shape[:2] == (1, 1)
@@ -143,7 +142,7 @@ def reduce_w2n(partial, *, reference):
     ]
 
     def compute(rank):
-        logical = TP_SIZE - 1 - rank if rr.MIRROR else rank
+        logical = rank
         return [
             fp.compute_kernel(
                 RR_COMPUTE,

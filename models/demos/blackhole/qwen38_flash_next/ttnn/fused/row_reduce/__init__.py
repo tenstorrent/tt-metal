@@ -5,14 +5,14 @@
 
 Stands in for ``ttnn.reduce_scatter(x, dim=3, cluster_axis=<line>, memory_config=DRAM, topology=Linear)`` (GDN, QSA) and
 for the line ``reduce_scatter_minimal_async`` of ``tt_all_reduce`` (MoE) of a local partial ``[1, 1, rows, W]`` TILE
-tensor (``rows`` 1..8 valid rows (QWEN38_ROW_REDUCE_ROWS_MAX caps it) of one padded tile row, bf16 or fp32; v2 only: rows above 2 (bf16) / 1 (fp32) run the
+tensor (``rows`` 1..8 valid rows (QWEN38_ROW_REDUCE_ROWS_MAX caps it) of one padded tile row, bf16 or fp32; rows above 2 (bf16) / 1 (fp32) run the
 unicast slice mode of ``kernels/transport4*.cpp``, each sender sending a receiver only that receiver's slice) -> ``[1, 1, rows, W / TP_SIZE]``,
 device d holding the columns ``[W / TP_SIZE * d, W / TP_SIZE * (d + 1))`` of the sum, in a DRAM interleaved TILE tensor.
 Every device sends the valid rows of its whole partial as ONE packet per direction on the line (the packed row mode of
 ``row_gather``, ``gr_fold/kernels/transport_phase.h``'s transport) into the peers' L1; each device then sums its own
 slice from the TP_SIZE partials in the summation tree of the stock line reduce-scatter (``kernels/compute.cpp``), one
 rounding per add in the stock op's precision.  Tolerance class BITWISE for the rows < ``rows`` (the other rows of the
-output tiles are not meaningful).  ``QWEN38_ROW_REDUCE=1`` switches the program on (default off: ``admits`` is False
+output tiles are not meaningful).  ``QWEN38_ROW_REDUCE=0`` switches the program off (default on: ``admits`` is False
 and a caller of ``resolve_admitted`` takes the stock op); a partial outside the contract takes the stock op too.
 The first call per mesh creates the transport's global semaphores: make it eagerly, before any trace capture.
 """
@@ -33,7 +33,6 @@ from ..registry import BITWISE, FusedKernel, register
 NAME = "row_reduce"
 ENV = "QWEN38_ROW_REDUCE"
 PHASE = "rowreduce"
-TRANSPORT_KERNEL = fp.kernel_source(NAME, "transport.cpp")
 COMPUTE_KERNEL = fp.kernel_source(NAME, "compute.cpp")
 CB_IN, PACK_CB, CB_FS, CB_BS, CB_F, CB_B, CB_G, CB_OUT = range(8)
 LINKS = 1
@@ -45,13 +44,8 @@ SPLIT_ENV = "QWEN38_ROW_REDUCE_SPLIT"  # two links: "1" (default) each link carr
 ROWS_MAX = {ttnn.bfloat16: 8, ttnn.float32: 8}  # the v2 program: rows above ROWS_PACKED use the unicast slice mode
 ROWS_ENV = "QWEN38_ROW_REDUCE_ROWS_MAX"  # default 8: admits caps the live rows at this value; 2 (or less) = the packed program's rows
 ROWS_PACKED = {ttnn.bfloat16: 2, ttnn.float32: 1}  # the limits of v1, the packed multicast of v2 and the RR_WRITE fold
-READ_ALIGN = 64  # the DRAM read alignment of Blackhole: transport.cpp reads each chunk into a 64 B aligned scratch
-# MIRROR flips which neighbour direction is the "forward" chain of the tree (the stock op's order, established by
-# tests/test_fused_row_reduce_device.py); QWEN38_ROW_REDUCE_MIRROR=1 selects the flipped tree for that test.
-# QWEN38_ROW_REDUCE_L1_DIRECT=1 (default off): a partial in L1 is read straight into the staging slot (16 B alignment), no
-# bounce of a 32 B chunk through the aligned scratch
-L1_DIRECT = os.environ.get("QWEN38_ROW_REDUCE_L1_DIRECT", "0") == "1"
-MIRROR = int(os.environ.get("QWEN38_ROW_REDUCE_MIRROR", "0"))
+READ_ALIGN = 64  # the DRAM read alignment of Blackhole: the transports read each chunk into a 64 B aligned scratch
+MIRROR = 0  # the kernels' compile arg that flips the tree's forward chain (always off: the stock op's order)
 _SEMAPHORES: dict[int, bool] = {}
 CALLS: dict[
     str, int
@@ -93,14 +87,6 @@ def _payload() -> int:
 
 def enabled_by_env(environ=None) -> bool:
     return (os.environ if environ is None else environ).get(ENV, "1") != "0"  # default on since x33 A/B (-0.6 ms)
-
-
-def version(environ=None) -> int:
-    """QWEN38_ROW_REDUCE: 2 = the barrier-free program (``kernels/transport2.cpp``), anything else enabled = v1."""
-
-    return (
-        1 if (os.environ if environ is None else environ).get(ENV, "2") == "1" else 2
-    )  # default v2 (x41 A/B -0.35 ms)
 
 
 TRANSPORT2_KERNEL = fp.kernel_source(NAME, "transport2.cpp")
@@ -254,7 +240,7 @@ def _row_reduce_v2(partial, out, rows, tiles, out_tiles, chunk, mesh):
     ]
 
     def compute(rank):
-        logical = TP_SIZE - 1 - rank if MIRROR else rank
+        logical = rank
         return [
             fp.compute_kernel(
                 COMPUTE_KERNEL,
@@ -385,7 +371,7 @@ def _row_reduce_unicast(partial, out, rows, tiles, out_tiles, chunk, mesh):
     ]
 
     def compute(rank):
-        logical = TP_SIZE - 1 - rank if MIRROR else rank
+        logical = rank
         return [
             fp.compute_kernel(
                 COMPUTE_KERNEL,
@@ -456,15 +442,10 @@ def admits(partial, *, cluster_axis=1, memory_config=None) -> bool:
         # DRAM partial on v2's 64 B read pitch, does not fit) -> the stock op
         _rows, _tiles, out_tiles, chunk, packed, _slot, _scratch = _geometry(partial)
         tile_bytes = fp.TILE_BYTES[partial.dtype]
-        if (
-            _rows > ROWS_PACKED[partial.dtype]
-        ):  # v2's unicast slice mode only (v1 and the packed program stay at today's rows)
-            if version() != 2 or not _unicast_fits(_tiles, out_tiles, _pitch(chunk, partial), tile_bytes):
+        if _rows > ROWS_PACKED[partial.dtype]:  # the unicast slice mode only (the packed program stays at today's rows)
+            if not _unicast_fits(_tiles, out_tiles, _pitch(chunk, partial), tile_bytes):
                 return False
-        elif version() == 2:
-            if out_tiles * 2 * _pitch(chunk, partial) > tile_bytes:
-                return False
-        elif out_tiles * packed > tile_bytes:
+        elif out_tiles * 2 * _pitch(chunk, partial) > tile_bytes:
             return False
         gr_fold.line(partial.device())
         return _payload() >= 16
@@ -505,11 +486,12 @@ def composed(partial, *, cluster_axis=1, memory_config=None):
 
 
 def prepare(mesh) -> None:
-    """Create the program's global semaphores (before any trace capture); v2: also its persistent landing buffer."""
+    """Create the program's global semaphores (before any trace capture) and its persistent landing buffer."""
 
-    _semaphores(mesh)
-    if version() == 2:
-        prepare2(mesh, 80)
+    _semaphores(
+        mesh
+    )  # the (barrier, data) pair of PHASE: no program reads it now; kept so the default's semaphore addresses stay put
+    prepare2(mesh, 80)
 
 
 def _semaphores(mesh) -> None:
@@ -539,97 +521,17 @@ def row_reduce(partial, *, cluster_axis=1, memory_config=None):
     caller = frame.f_code.co_name
     CALLS[caller] = CALLS.get(caller, 0) + 1
     mesh = partial.device()
-    rows, tiles, out_tiles, chunk, packed, slot, scratch = _geometry(partial)
-    tile_bytes = fp.TILE_BYTES[partial.dtype]
+    rows, tiles, out_tiles, chunk, _packed, _slot, _scratch = _geometry(partial)
     out = fp.allocate((1, 1, rows, shape[3] // TP_SIZE), partial.dtype, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG)
-    if version() == 2:
-        state = PENDING["state"]
-        if state is not None and _write_admits(partial, state):
-            PENDING["state"] = None
-            new_residual = _row_reduce_write(partial, out, rows, tiles, out_tiles, chunk, mesh, state)
-            WRITTEN[id(out)] = (out, state, new_residual)
-            return out
-        if rows > ROWS_PACKED[partial.dtype]:
-            return _row_reduce_unicast(partial, out, rows, tiles, out_tiles, chunk, mesh)
-        return _row_reduce_v2(partial, out, rows, tiles, out_tiles, chunk, mesh)
-    _semaphores(mesh)
-    transports = gr_fold.TRANSPORT["partials"][:LINKS]
-    cores = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in transports])
-    payload = _payload()
-    l1_input = int(L1_DIRECT and fp.in_l1(partial))
-    spec = gr_fold.Transport(
-        out,
-        partial,
-        CB_IN,
-        tiles,
-        gr_fold.SOURCE_TENSOR,
-        PHASE,
-        transports,
-        page_strides=(1, tiles),
-        rows=rows,
-        pack_cb=PACK_CB,
-        kernel=TRANSPORT_KERNEL,
-        extra_args=(
-            rows,
-            PACK_CB,
-            slot,
-            CB_FS,
-            CB_BS,
-            CB_F,
-            CB_B,
-            CB_G,
-            CB_OUT,
-            out_tiles,
-            MIRROR,
-            tiles * packed,
-            payload,
-            l1_input,
-        ),
-    )
-    dtype = partial.dtype
-    cbs = [
-        fp.cb_descriptor(CB_IN, dtype, tile_bytes, TP_SIZE, cores),
-        fp.cb_descriptor(PACK_CB, dtype, (TP_SIZE + 2) * slot + 2 * scratch, 1, cores),
-        fp.cb_descriptor(CB_FS, dtype, tile_bytes, 2, cores),
-        fp.cb_descriptor(CB_BS, dtype, tile_bytes, 2, cores),
-        fp.cb_descriptor(CB_F, dtype, tile_bytes, 2, cores),
-        fp.cb_descriptor(CB_B, dtype, tile_bytes, 2, cores),
-        fp.cb_descriptor(CB_G, dtype, tile_bytes, 2, cores),
-        fp.cb_descriptor(CB_OUT, dtype, tile_bytes, 1, cores),
-    ]
-    semaphores = [
-        fp.semaphore_descriptor(sem, cores) for sem in (gr_fold.SEM_GO, gr_fold.SEM_SCRATCH, gr_fold.SEM_DONE)
-    ]
-
-    def compute(rank):
-        logical = TP_SIZE - 1 - rank if MIRROR else rank
-        return [
-            fp.compute_kernel(
-                COMPUTE_KERNEL,
-                cores,
-                [CB_IN, CB_FS, CB_BS, CB_F, CB_B, CB_G, CB_OUT, 1, TP_SIZE],
-                [(transports[0], [logical])],
-                fp32_dest=dtype == ttnn.float32,
-            )
-        ]
-
-    meta = fp.program_meta(
-        NAME,
-        "row_reduce",
-        rows,
-        reads=(partial,),
-        writes=(out,),
-        l1_bytes=2 * tiles * packed + (TP_SIZE - 1) * tiles * packed,
-        flops=(TP_SIZE - 1) * out_tiles * fp.TILE * fp.TILE,
-        cores=LINKS,
-        outputs=((out, 3),),
-    )
-    fp.run_program(
-        [partial, out],
-        gr_fold.transport_mesh_program(mesh, [spec], semaphores=semaphores, cbs=cbs, kernels=compute, links=LINKS),
-        meta=meta,
-    )
-    return fp.stamp_topology(out, partial, 3)
+    state = PENDING["state"]
+    if state is not None and _write_admits(partial, state):
+        PENDING["state"] = None
+        new_residual = _row_reduce_write(partial, out, rows, tiles, out_tiles, chunk, mesh, state)
+        WRITTEN[id(out)] = (out, state, new_residual)
+        return out
+    if rows > ROWS_PACKED[partial.dtype]:
+        return _row_reduce_unicast(partial, out, rows, tiles, out_tiles, chunk, mesh)
+    return _row_reduce_v2(partial, out, rows, tiles, out_tiles, chunk, mesh)
 
 
 def row_reduce_or_reduce_scatter(partial, *, cluster_axis=1, memory_config=None):
@@ -667,9 +569,7 @@ WRITE_CALLS = {"fused": 0, "program": 0}
 
 
 def write_enabled(environ=None) -> bool:
-    return (os.environ if environ is None else environ).get(RR_WRITE_ENV, "1") == "1" and version(
-        environ
-    ) == 2  # default on (x50 -0.39 ms)
+    return (os.environ if environ is None else environ).get(RR_WRITE_ENV, "1") == "1"  # default on (x50 -0.39 ms)
 
 
 def set_pending(state) -> None:
@@ -809,7 +709,7 @@ def _row_reduce_write(partial, out, rows, tiles, out_tiles, chunk, mesh, state):
     addresses = [residual.buffer_address(), injection.buffer_address(), new_residual.buffer_address()]
 
     def compute(rank):
-        logical = TP_SIZE - 1 - rank if MIRROR else rank
+        logical = rank
         args = [
             CB_IN,
             CB_FS,

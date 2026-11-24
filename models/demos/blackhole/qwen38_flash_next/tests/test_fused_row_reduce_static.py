@@ -19,7 +19,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn import fused
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused import program as fp
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused import row_reduce as rr
 
-TRANSPORT = (fp.REPO_ROOT / rr.TRANSPORT_KERNEL).read_text()
+TRANSPORT4 = (fp.REPO_ROOT / rr.TRANSPORT4_KERNEL).read_text()
 COMPUTE = (fp.REPO_ROOT / rr.COMPUTE_KERNEL).read_text()
 MODULE = inspect.getsource(rr)
 
@@ -33,6 +33,7 @@ def _partial(shape=(1, 1, 1, 2560), dtype=ttnn.bfloat16, ring=8, layout=ttnn.TIL
 @pytest.fixture
 def on(monkeypatch):
     monkeypatch.setenv(rr.ENV, "1")
+    monkeypatch.setenv(rr.ROWS_ENV, "2")  # the packed program's rows (bf16 2, fp32 1)
     monkeypatch.setattr(rr.gr_fold, "line", lambda mesh: None)
     monkeypatch.setattr(rr.ttnn, "get_tt_fabric_max_payload_size_bytes", lambda: 4352, raising=False)
     monkeypatch.setattr(rr, "TP_SIZE", 8)
@@ -106,24 +107,7 @@ def test_the_dense_tile_of_a_slice_fits_the_tile_page(dtype, rows):
     assert out_tiles * packed <= fp.TILE_BYTES[dtype]
 
 
-def test_transport_compile_args_match_the_builder():
-    ids = [int(i) for i in re.findall(r"get_compile_time_arg_val\((\d+)\)", TRANSPORT)]
-    base = int(re.search(r"ACCESSOR_BASE = (\d+);", TRANSPORT).group(1))
-    extra = (
-        re.search(r"def row_reduce\(partial.*?extra_args=\(([^)]*)\)", MODULE, re.S).group(1).split(",")
-    )  # v1's builder
-    extra = [e for e in extra if e.strip()]
-    assert base == 11 + len(extra) == max(ids) + 1  # arg 23 is the last scalar; the accessors follow
-    # the transport spec's own words: 0 CB_IN (scratch cb), 1 tiles, 2 go, 3 ring, then the extras from 11
-    assert [
-        get for get in re.findall(r"constexpr uint32_t (\w+) = get_compile_time_arg_val\((?:0|1|2|3|11)\);", TRANSPORT)
-    ] == [
-        "CB_IN",
-        "TILES",
-        "SEM_GO",
-        "RING",
-        "ROWS",
-    ]
+def test_compute_compile_args_match_the_builder():
     compute_ids = sorted({int(i) for i in re.findall(r"get_compile_time_arg_val\((\d+)\)", COMPUTE)})
     assert compute_ids == list(range(9))
     assert "[CB_IN, CB_FS, CB_BS, CB_F, CB_B, CB_G, CB_OUT, 1, TP_SIZE]" in MODULE
@@ -134,7 +118,7 @@ def test_cbs_are_distinct():
 
 
 def test_zones_follow_the_fused_conventions():
-    for text in (TRANSPORT, COMPUTE):
+    for text in (COMPUTE,):
         assert '#include "../../kernels/zones.h"' in text and "DeviceZoneScopedN" not in text
         lines = text.split("\n")
         for i, line in enumerate(lines):
@@ -142,21 +126,19 @@ def test_zones_follow_the_fused_conventions():
                 assert re.fullmatch(r'FUSED_ZONE\("fz_rr_[a-z0-9_]+"\);', line.strip()), line
                 previous = next(l for l in reversed(lines[:i]) if l.strip())
                 assert re.sub(r"//.*", "", previous).rstrip().endswith("{"), (i + 1, previous)
-    names = re.findall(r'FUSED_ZONE\("([^"]+)"\)', TRANSPORT + COMPUTE)
-    assert len(names) == len(set(names)) == 7  # v1: transport (6) + compute (1); v2 is checked below
+    names = re.findall(r'FUSED_ZONE\("([^"]+)"\)', COMPUTE)
+    assert len(names) == len(set(names)) == 1  # the transports' zones are checked below
 
 
 # ------------------------------------------------------------------------------ the tree: a model of the two kernels
 
 
-def _kernels_tree(rank: int, ring: int, mirror: bool):
-    """The sum of device ``rank``'s slice as the kernels build it: the feed's push order (transport.cpp) consumed by the
+def _kernels_tree(rank: int, ring: int):
+    """The sum of device ``rank``'s slice as the kernels build it: the feed's push order (transport4.cpp) consumed by the
     compute kernel's add order (compute.cpp), with strings for the partials."""
 
-    L = ring - 1 - rank if mirror else rank
-    p = lambda s: (
-        f"p{ring - 1 - s}" if mirror else f"p{s}"
-    )  # logical source s is physical device ring-1-s when mirrored
+    L = rank
+    p = lambda s: f"p{s}"
     fs = [p(0)]  # CB_FS: p_0 (the own term for L == 0)
     bs = [p(ring - 1)] if L < ring - 1 else []
     cin = [p(s) for s in range(1, L + 1)] + ([p(s) for s in range(ring - 2, L, -1)] if L < ring - 1 else [])
@@ -197,19 +179,14 @@ def _stock_tree(d: int, ring: int):
 @pytest.mark.parametrize("ring", [4, 8])
 def test_kernel_order_is_the_stock_tree(ring):
     for d in range(ring):
-        assert _kernels_tree(d, ring, mirror=False) == _stock_tree(d, ring), d
-    # the mirror flips the line: device d takes the tree of device ring-1-d over the reversed partials
-    for d in range(ring):
-        flipped = _stock_tree(ring - 1 - d, ring)
-        flipped = re.sub(r"p(\d+)", lambda m: f"p{ring - 1 - int(m.group(1))}", flipped)
-        assert _kernels_tree(d, ring, mirror=True) == flipped, d
+        assert _kernels_tree(d, ring) == _stock_tree(d, ring), d
 
 
 def test_the_kernels_implement_the_modelled_order():
     # the pins of the model: the feed's order and the compute's per-add operand pairs
-    flat = re.sub(r"\s+", "", TRANSPORT)  # whitespace-agnostic: clang-format wraps these loop headers
-    assert "for(uint32_ts=1;s<=L;++s,at+=tile_bytes)" in flat  # p_1 .. p_{L-1}, then the own term p_L
-    assert "for(uint32_ts=RING-2;s>L&&L<RING-1;--s,at+=tile_bytes)" in flat  # p_{R-2} .. p_{L+1}
+    flat = re.sub(r"\s+", "", TRANSPORT4)  # whitespace-agnostic: clang-format wraps these loop headers
+    assert "for(uint32_ts=1;s<=L;++s" in flat  # p_1 .. p_{L-1}, then the own term p_L
+    assert "for(uint32_ts=RING-2;s>L&&L<RING-1;--s" in flat  # p_{R-2} .. p_{L+1}
     assert "fill(cfs.get_write_ptr(),0);" in flat and "fill(cbs.get_write_ptr(),RING-1);" in flat
     assert "add_pop(CB_IN, acc, CB_F);" in COMPUTE and "add_pop(CB_IN, acc, CB_B);" in COMPUTE
     assert (
@@ -234,7 +211,6 @@ def test_v2_transport_layout_and_parity_pins():
     extra = MODULE.split("def _row_reduce_v2", 1)[1].split("extra_args=(", 1)[1].split("\n        ),", 1)[0]
     extra = re.sub(LINK_ARGS, "", extra)  # the two-link kernel's extra scalars (transport2l.cpp)
     assert base == 11 + len([e for e in re.sub(r"\s+", " ", extra).split(",") if e.strip()]) == max(ids) + 1
-    assert rr.version({}) == 2 and rr.version({rr.ENV: "1"}) == 1 and rr.version({rr.ENV: "2"}) == 2  # v2 default
     assert rr.enabled_by_env({rr.ENV: "2"}) and not rr.enabled_by_env({rr.ENV: "0"})
     assert text.index("const uint32_t parity = *counter & 1;") < text.index(
         "noc_semaphore_wait_min(data, (RING - 1) * PACKETS);"
@@ -284,10 +260,8 @@ def test_rr_write_kernels_layout_and_hooks():
 
 
 def test_rr_write_switch_and_handoff():
-    assert rr.write_enabled({}) and not rr.write_enabled({rr.RR_WRITE_ENV: "1", rr.ENV: "1"})  # default on; needs v2
-    assert rr.write_enabled({rr.RR_WRITE_ENV: "1", rr.ENV: "2"}) and not rr.write_enabled(
-        {rr.RR_WRITE_ENV: "0", rr.ENV: "2"}
-    )
+    assert rr.write_enabled({})  # default on
+    assert rr.write_enabled({rr.RR_WRITE_ENV: "1"}) and not rr.write_enabled({rr.RR_WRITE_ENV: "0"})
     state, block = object(), object()
     rr.WRITTEN[id(block)] = (block, state, "new")
     assert rr.take_written(block, object()) is None  # another state: not handed over
@@ -356,9 +330,7 @@ def test_unicast_pitch_and_dense_pins(on2):
         assert rr._dense_tiles(out_tiles, pitch, fp.TILE_BYTES[dtype]) == dense, (dtype, rows, l1)
 
 
-def test_v1_and_the_fold_stay_at_the_packed_rows(on):
-    bf16, fp32 = ttnn.bfloat16, ttnn.float32  # ``on`` = QWEN38_ROW_REDUCE=1 (v1)
-    assert not rr.admits(_partial((1, 1, 3, 2560), bf16)) and not rr.admits(_partial((1, 1, 2, 2560), fp32))
+def test_the_fold_stays_at_the_packed_rows():
     assert "rows <= ROWS_PACKED[partial.dtype]" in inspect.getsource(rr._write_admits)
 
 

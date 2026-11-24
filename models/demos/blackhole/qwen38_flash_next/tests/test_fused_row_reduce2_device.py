@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Device test of row_reduce v2 (``QWEN38_ROW_REDUCE=2``, barrier-free) against the stock reduce-scatter and v1.
+"""Device test of row_reduce v2 (``QWEN38_ROW_REDUCE=2``, barrier-free) against the stock reduce-scatter.
 
 Per case (bf16 rows 1 and 2, DRAM and L1 width-sharded; fp32 row 1): v2 == stock on rows < rows bit for bit, 8 repeated
-calls, a trace of 5 calls kept alive and replayed 7 times (parity carried across replays), traced time of stock / v1 / v2.
+calls, a trace of 5 calls kept alive and replayed 7 times (parity carried across replays), traced time of stock / v2.
 Plus one trace that interleaves all the cases (the one landing buffer, counter and semaphore pair serve every shape).
 Run (env of run_timing.sh):  flock -w 10800 the group's device lock timeout 1800 python -m pytest <this file> -s ...
 """
@@ -57,9 +57,7 @@ def test_row_reduce_v2(mesh_device):
         os.environ[rr.ENV] = "1"
         stock = _host(mesh, rr.composed(partial), rows)
         report = {"dtype": dtype, "rows": rows, "l1_sharded": sharded, "fabric_payload": rr._payload()}
-        v1 = _host(mesh, _call(1, partial), rows)
         v2 = _host(mesh, _call(2, partial), rows)
-        report["v1_vs_stock"] = base._mismatches(v1, stock, dtype)
         report["v2_vs_stock"] = base._mismatches(v2, stock, dtype)
         report["v2_repeat_mismatch"] = sum(
             base._mismatches(_host(mesh, _call(2, partial), rows), stock, dtype) for _ in range(8)
@@ -76,7 +74,6 @@ def test_row_reduce_v2(mesh_device):
         report["v2_trace_replay_mismatch"] = bad
         report["us_slope_and_mean12"] = {
             "stock": base._traced_us(mesh, lambda: rr.composed(partial)),
-            "v1": base._traced_us(mesh, lambda: _call(1, partial)),
             "v2": base._traced_us(mesh, lambda: _call(2, partial)),
         }
         # QWEN38_ROW_REDUCE_LINKS: 1 vs 2 links, both bitwise vs the stock op, slope per link count
