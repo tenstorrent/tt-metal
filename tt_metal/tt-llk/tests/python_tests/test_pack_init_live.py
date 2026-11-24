@@ -52,6 +52,8 @@ from helpers.unpack import unpack_res_tiles
 from helpers.utils import passed_test, result_tensor
 from ttexalens.tt_exalens_lib import read_from_device, write_to_device
 
+pytestmark = pytest.mark.llk_sweep
+
 F16B, F32, B8 = DataFormat.Float16_b, DataFormat.Float32, DataFormat.Bfp8_b
 BLOCKS = 6
 PAGE = {F32: 4096, B8: 1088, F16B: 2048}

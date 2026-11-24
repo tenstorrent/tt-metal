@@ -64,6 +64,7 @@ from helpers.test_variant_parameters import (
 )
 from helpers.unpack import unpack_res_tiles
 from helpers.utils import passed_test, result_tensor
+from llk_pack_space import llk_accepts, pack_src_of
 from ttexalens.tt_exalens_lib import read_from_device, write_to_device
 
 PACK_BLOCK_MIN_TILES = 2
@@ -442,7 +443,8 @@ PACK_BLOCK_PERF_SWEEP = dict(
 )
 
 
-@pytest.mark.nightly  # exhaustive sweep, too long for the smoke run
+@pytest.mark.nightly
+@pytest.mark.llk_sweep  # study sweep: LLK_SWEEP_ALL=1 or LLK_SWEEP_STRIDE=n runs it
 @skip_for_wormhole
 @parametrize(**PACK_BLOCK_SWEEP)
 def test_pack_block(
@@ -464,7 +466,8 @@ def test_pack_block(
     )
 
 
-@pytest.mark.nightly  # exhaustive sweep, too long for the smoke run
+@pytest.mark.nightly
+@pytest.mark.llk_sweep  # study sweep: LLK_SWEEP_ALL=1 or LLK_SWEEP_STRIDE=n runs it
 @skip_for_wormhole
 @parametrize(**PACK_BLOCK_SWEEP)
 def test_pack_block_w(
@@ -487,7 +490,8 @@ def test_pack_block_w(
     )
 
 
-@pytest.mark.nightly  # exhaustive sweep, too long for the smoke run
+@pytest.mark.nightly
+@pytest.mark.llk_sweep  # study sweep: LLK_SWEEP_ALL=1 or LLK_SWEEP_STRIDE=n runs it
 @skip_for_wormhole
 @parametrize(**PACK_BLOCK_SWEEP)
 def test_pack_block_plain(
@@ -575,7 +579,8 @@ def test_pack_block_closed_w_far(
     )
 
 
-@pytest.mark.nightly  # exhaustive sweep, too long for the smoke run
+@pytest.mark.nightly
+@pytest.mark.llk_sweep  # study sweep: LLK_SWEEP_ALL=1 or LLK_SWEEP_STRIDE=n runs it
 @skip_for_wormhole
 @parametrize(
     formats=PACK_FORMATS,
@@ -665,6 +670,12 @@ PACK_BLOCK_OTHER_FORMATS = [
 ]
 
 
+def _skip_unsupported_conversion(formats, dest_acc):
+    # the pack's hw configure asserts on these (is_packer_to_L1_conversion_supported), and the trapped core wedges the card
+    if not llk_accepts(pack_src_of(formats, dest_acc), formats.output_format):
+        pytest.skip("The packer does not convert this input to this output format.")
+
+
 # The golden does not model these conversions: the per-tile pack fails them the same way.
 PACK_BLOCK_GOLDEN_GAPS = {
     (DataFormat.Float16_b, DataFormat.Int8, DestAccumulation.No),
@@ -680,7 +691,8 @@ PACK_BLOCK_GOLDEN_GAPS = {
 }
 
 
-@pytest.mark.nightly  # exhaustive sweep, too long for the smoke run
+@pytest.mark.nightly
+@pytest.mark.llk_sweep  # study sweep: LLK_SWEEP_ALL=1 or LLK_SWEEP_STRIDE=n runs it
 @skip_for_wormhole
 @parametrize(
     formats=PACK_BLOCK_OTHER_FORMATS,
@@ -705,6 +717,7 @@ def test_pack_block_other_formats(
     allow_int32_mix,
 ):
     """Plain output formats beyond Float16_b, Float32 and Int32: blocks of 2 to 4 tiles in the default W offset forms (2), the W offset forms (3) and the plain blocks (5)."""
+    _skip_unsupported_conversion(formats, dest_acc)
     if (
         formats.input_format,
         formats.output_format,
@@ -727,7 +740,8 @@ def test_pack_block_other_formats(
 _EQUIV_PER_TILE = {}
 
 
-@pytest.mark.nightly  # exhaustive sweep, too long for the smoke run
+@pytest.mark.nightly
+@pytest.mark.llk_sweep  # study sweep: LLK_SWEEP_ALL=1 or LLK_SWEEP_STRIDE=n runs it
 @skip_for_wormhole
 @parametrize(
     formats=PACK_BLOCK_OTHER_FORMATS,
@@ -752,6 +766,7 @@ def test_pack_block_equivalence(
     allow_int32_mix,
 ):
     """The default W offset (2), W offset (3) and plain (5) block forms write the same L1 bytes as the per-tile packs (0), for the formats the golden cannot judge too."""
+    _skip_unsupported_conversion(formats, dest_acc)
     if (
         formats.output_format in (DataFormat.Int8, DataFormat.UInt8)
         and dest_acc == DestAccumulation.No

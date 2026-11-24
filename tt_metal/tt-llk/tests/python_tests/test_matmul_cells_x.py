@@ -22,6 +22,8 @@ from helpers.matmul_sweep import matmul_pack_form
 from helpers.test_variant_parameters import TemplateParameter
 from test_matmul_cells import _main_llk_fails
 
+pytestmark = pytest.mark.llk_sweep
+
 _g._F.update({k: v for k, v in _x._F.items() if k not in _g._F})
 _BYTES = {
     "F32": 4096,

@@ -11,6 +11,8 @@ from helpers.param_config import parametrize
 from llk_pack_space import hw_undefined_reason, llkx_accs, llkx_formats
 from test_pack import test_pack as run_pack
 
+pytestmark = pytest.mark.llk_sweep
+
 
 @pytest.mark.nightly  # exhaustive sweep, too long for the smoke run
 @skip_for_wormhole

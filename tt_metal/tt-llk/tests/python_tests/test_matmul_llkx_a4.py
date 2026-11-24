@@ -15,6 +15,8 @@ from helpers.bfp_format_utils import bfp2a_to_float16, bfp4a_to_float16
 from helpers.format_config import DataFormat
 from helpers.llk_params import MathFidelity
 
+pytestmark = pytest.mark.llk_sweep
+
 _l._g._F.update({k: v for k, v in _a4._F.items() if k not in _l._g._F})
 _QUANT = {DataFormat.Bfp4: bfp4a_to_float16, DataFormat.Bfp2: bfp2a_to_float16}
 _prev = _t.get_golden_generator
