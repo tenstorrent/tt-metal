@@ -62,7 +62,7 @@ inline void calculate_abs_int32() {
     // the replay block, costing +30% cyc/tile.
     // The row body is recorded (and executed) once and replayed for the remaining rows: one RISC issue
     // per row. The store advances dest by one sfpi row (two dest counter steps) through ADDR_MOD_6.
-    lltt::record<lltt::Exec>(replay_start, replay_len);
+    TTI_REPLAY(replay_start, replay_len, 1, 1);
     TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_3, 0 /*dest_reg_addr*/);
     TTI_SFPABS(0 /*imm12_math*/, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPABS_MOD1_INT);
     TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_2, 0 /*dest_reg_addr*/);

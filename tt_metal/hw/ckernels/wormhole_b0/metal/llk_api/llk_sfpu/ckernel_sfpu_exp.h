@@ -1030,7 +1030,7 @@ inline __attribute__((always_inline)) void exp_init() {
         //   SHFT2 uses: LREG2, LREG3, LREG0, LREG1, LREG2, ...
         // ===================================================================
 
-        lltt::record(0, 32);
+        TTI_REPLAY(0, 32, 0, 1);
 
         // 16 pairs of LM + SHFT2 (LREG pattern repeats every 4 pairs)
         // Pairs 0-1: dummy SHFT2s, Pairs 2-15: real SHFT2s for elements 0-13

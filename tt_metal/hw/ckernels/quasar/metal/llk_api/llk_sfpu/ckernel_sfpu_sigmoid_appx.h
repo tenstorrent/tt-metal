@@ -39,7 +39,7 @@ inline void calculate_sigmoid_appx() {
     }
     // Body for passes r, r+1 (r even): load r+2, store r, lut r+2, addi r+1; then the same one pass
     // on. The two passes still unstored put each load two passes ahead of the counter.
-    lltt::record(SIGMOID_APPX_REPLAY_START, SIGMOID_APPX_REPLAY_LEN);
+    TTI_REPLAY(SIGMOID_APPX_REPLAY_START, SIGMOID_APPX_REPLAY_LEN, 0, 0, 0, 1);
     {
         sfpi::vFloat even = sfpi::l_reg[SIGMOID_APPX_EVEN_LREG];
         sfpi::vFloat odd = sfpi::l_reg[SIGMOID_APPX_ODD_LREG];

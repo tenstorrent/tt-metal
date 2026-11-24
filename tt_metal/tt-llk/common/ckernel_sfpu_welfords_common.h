@@ -184,7 +184,7 @@ sfpi_inline void _program_welfords_replay_buffer_()
             _compute_welfords_row_<ckernel::p_sfpu::LREG3>();
         });
 #else
-    lltt::record(0, WELFORD_INSTR_PER_ROW * 4);
+    TTI_REPLAY(0, WELFORD_INSTR_PER_ROW * 4, 0, 1);
 
     _compute_welfords_row_<ckernel::p_sfpu::LREG0>();
     _compute_welfords_row_<ckernel::p_sfpu::LREG1>();

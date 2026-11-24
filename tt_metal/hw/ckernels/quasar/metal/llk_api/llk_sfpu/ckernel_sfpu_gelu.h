@@ -51,7 +51,7 @@ inline void calculate_gelu_appx() {
         sfpi::l_reg[GELU_APPX_HALF_LREG] = half;
     }
     // Body for pass r: load pass r+1, store pass r (Dest += SFP_ROWS), lut pass r+1, mad pass r+1.
-    lltt::record(GELU_APPX_REPLAY_START, GELU_APPX_REPLAY_LEN);
+    TTI_REPLAY(GELU_APPX_REPLAY_START, GELU_APPX_REPLAY_LEN, 0, 0, 0, 1);
     {
         sfpi::vFloat half = sfpi::l_reg[GELU_APPX_HALF_LREG];
         sfpi::vFloat result = sfpi::l_reg[GELU_APPX_RESULT_LREG];
