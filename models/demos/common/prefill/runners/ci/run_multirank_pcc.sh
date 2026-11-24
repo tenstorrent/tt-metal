@@ -122,10 +122,9 @@ REQUEST_LEN=""
 SC1_REQUEST_LEN=""
 # 1 for a perf-only leg: no golden, so no KV table, PCC or validators. Its runner publishes no KV table, so readiness is
 # READY_RANKS runner ranks logging that they entered the request loop; one producer process feeds rank 0 and drains
-# every rank's layer acks into CHUNK_RETIRE lines (stage_probe_producer.py), and the PCC gate is skipped.
+# every rank's layer acks into CHUNK_RETIRE lines (PREFILL_PRODUCER_DRAIN_ACKS), and the PCC gate is skipped.
 PERF_ONLY=0
 READY_RANKS=0
-PRODUCER_MODULE=models.demos.common.prefill.runners.prefill_producer
 
 case "${MODEL}" in
   gptoss120b)
@@ -211,15 +210,14 @@ case "${MODEL}" in
     # GLM-5.4 (GLM-5.3 with layers 27-54 run twice) on its production placement: four 8x4 stages, one per galaxy, over
     # the adapter's 106 layer passes. The runner's default split is that placement: G0 = passes 0-25 (L1-26), G1 =
     # 26-53 (loop pass 1 + gate 1), G2 = 54-81 (loop pass 2 + gate 2, sent G1's loop handoff), G3 = 82-105 (L55-78),
-    # with MTP on G3 at GLM-5.3's production MTP settings (glm53_mtp_kv_share.json, as run_glm54_trunk.sh reads them).
+    # with MTP on G3 at GLM-5.3's production MTP settings (glm53_mtp_kv_share.json).
     # Tier-2 weights: the adapter reads GLM-5.3's checkpoint and TTNN cache and never builds or writes a cache
     # (builds_missing_weight_cache=False), with seeded synthetic loop gates. Perf only: GLM-5.4 has no golden, and a
-    # looped model builds no KV chunk table. The prompt is the GLM-5.3 CI golden's 1M tokens, as the trunk probes use.
+    # looped model builds no KV chunk table. The prompt is the GLM-5.3 CI golden's 1M tokens.
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/glm54_prefill_runner_kv}"
     MANIFEST="${MANIFEST_DIR}/glm54.json"
     PERF_ONLY=1
     READY_RANKS=4
-    PRODUCER_MODULE=models.demos.deepseek_v3_d_p.scripts.stage_probe.stage_probe_producer
     MTP_ENV=""
     for k in PREFILL_MTP_LEVELS PREFILL_MTP_DECODE_LEVELS TT_GLM53_MTP_TTNN_CACHE; do
       MTP_ENV+=" export ${k}=$(MANIFEST="${MANIFEST_DIR}/glm53_mtp_kv_share.json" manifest_env "${k}");"
@@ -227,8 +225,7 @@ case "${MODEL}" in
     # PREFILL_D2D_TIMING: per-chunk stage and D2D boundary stamps (the G1->G2 loop handoff), which the summary reports.
     # PREFILL_D2D_TIMING=0 in the leg's cmd turns it off, e.g. to rule it out of a failure.
     RUNNER_ENV="${MTP_ENV} export PREFILL_D2D_TIMING=${PREFILL_D2D_TIMING:-1};"
-    PRODUCER_ENV="${MTP_ENV} export PREFILL_PRODUCER_CHECK_PCC=0; \
-      export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/glm53-1020k-last5120;"
+    PRODUCER_ENV="${MTP_ENV} export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/glm53-1020k-last5120;"
     REQUEST_LEN=1044480
     # Slots: below the measured traced pipeline capacity of 35 (q171.3.5, G1 binding) for margin on this first
     # multi-rank run; a chunk's time does not depend on the slot count. glm54.json leaves slots to its callers.
@@ -236,8 +233,10 @@ case "${MODEL}" in
     export PREFILL_NUM_USERS
     # No glm54 baseline yet: demand a measurement, so a leg that measured nothing cannot pass green.
     REQUIRE_TPS="${PREFILL_REQUIRE_TPS:-1}"
-    # Four galaxies bring up 106 traced layer passes; stays below the leg's 90 min job timeout.
-    TABLE_WAIT_DEFAULT=2700
+    # Four galaxies bring up 106 traced layer passes: all 4 ranks entered the request loop 235 s after launch in run
+    # 45418316719 (d20054ac6ca), and 900 s is 3.8x that. The leg's 50 min timeout leaves room after it for the request
+    # and the stall watchdog (blaze_models_prefill_tests.yaml).
+    TABLE_WAIT_DEFAULT=900
     ;;
   kimi_k3)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/kimi_k3_prefill_runner_kv}"
@@ -558,6 +557,9 @@ else
   RUNNER_PLACEMENT=""
 fi
 
+# TTRUN_CWD outlives runs, so only a rankfile newer than this mark is this launch's (readiness, below).
+LAUNCH_MARK="${MR_DIR}/runner_launched"
+touch "${LAUNCH_MARK}"
 cd "${TTRUN_CWD}"
 setsid python3 "${TTRUN_PY}" \
   --skip-executable-check \
@@ -620,15 +622,28 @@ TABLE_WAIT_SECS="${TABLE_WAIT_SECS:-${TABLE_WAIT_DEFAULT}}"
 # A perf-only leg's runner publishes no table: it is ready once every rank has entered its request loop.
 READY_WHAT="publishing the KV table"
 [ "${PERF_ONLY}" = 1 ] && READY_WHAT="all ${READY_RANKS} ranks entered the request loop"
-ranks_ready() {
-  # Count distinct ranks, not files: --output-filename writes rank.N/{stdout,stderr} on some OpenMPI builds and flat
-  # runner.<job>@1.N.out files on the SC4 runners (run 45402728033 counted 0/4 by file name while all 4 ranks served).
-  { find "${RANKLOGS}" -type f -path "${RANKLOGS}/runner*" -exec grep -h -o -E "\[pp rank [0-9]+\] setup complete, entering request loop" {} + 2>/dev/null || true; } \
-    | sort -u | wc -l
+# Perf-only readiness reads the rank logs as the summary does: by content over every file under RANKLOGS, since the
+# --output-filename layout differs between OpenMPI builds (run 45402728033 matched no file by name and counted 0/4
+# while all 4 ranks served). The rank logs start only once tt-run launches the ranks: with --force-rediscovery its
+# Phase 1 first runs its own discovery mpirun (18 s in run 45418316719, output on tt-run's stdout, not in RANKLOGS)
+# and writes its rankfile. So the grace runs from that rankfile; with a given --rank-binding there is no Phase 1 and it
+# runs from the launch. A live runner with no rank log READY_LOG_GRACE_SECS after the ranks launched has its logs
+# somewhere else, and readiness could never be seen.
+READY_LOG_GRACE_SECS=120
+READY_LOG_FILES=0
+READY_RANK_COUNT=0
+RANKS_LAUNCHED_AT=""
+ranks_launched() {
+  [ "${TTRUN_ARGS[0]}" != --force-rediscovery ] \
+    || [ -n "$(find "${TTRUN_CWD}/generated/ttrun" -name rankfile -newer "${LAUNCH_MARK}" 2>/dev/null | head -1)" ]
 }
 runner_ready() {
   if [ "${PERF_ONLY}" = 1 ]; then
-    [ "$(ranks_ready)" -ge "${READY_RANKS}" ]
+    read -r READY_LOG_FILES READY_RANK_COUNT < <(
+      python3 "${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/summarize_ci_run.py" \
+        --ranklogs "${RANKLOGS}" --ready-ranks 2>/dev/null || echo "0 0"
+    )
+    [ "${READY_RANK_COUNT}" -ge "${READY_RANKS}" ]
   else
     [ -f "${TABLE_PATH}" ]
   fi
@@ -641,13 +656,26 @@ while [ "${WAITED}" -lt "${TABLE_WAIT_SECS}" ]; do
     [ -f "${CRASH_FLAG}" ] && echo "a rank crashed: $(tr '\n' ' ' < "${CRASH_FLAG}")"
     wait "${RUNNER_PID}"; exit 1;
   }
+  if [ "${PERF_ONLY}" = 1 ]; then
+    [ -z "${RANKS_LAUNCHED_AT}" ] && ranks_launched && RANKS_LAUNCHED_AT=${WAITED}
+    if [ -n "${RANKS_LAUNCHED_AT}" ] && [ $((WAITED - RANKS_LAUNCHED_AT)) -ge "${READY_LOG_GRACE_SECS}" ] \
+      && [ "${READY_LOG_FILES}" -eq 0 ]; then
+      echo "runner alive for ${WAITED}s, $((WAITED - RANKS_LAUNCHED_AT))s since tt-run launched the ranks, but no rank" \
+        "log under ${RANKLOGS}: their logs land elsewhere, so cannot see ${READY_WHAT}"
+      exit 1
+    fi
+  fi
   sleep 5
   WAITED=$((WAITED + 5))
   if [ $((WAITED % 60)) -eq 0 ]; then
-    echo "[$(date -u +%FT%TZ)] waiting ${WAITED}s for the runner: ${READY_WHAT}$([ "${PERF_ONLY}" = 1 ] && echo " ($(ranks_ready)/${READY_RANKS} ready)")"
+    echo "[$(date -u +%FT%TZ)] waiting ${WAITED}s for the runner: ${READY_WHAT}$([ "${PERF_ONLY}" = 1 ] && echo " (${READY_RANK_COUNT}/${READY_RANKS} ready)")"
   fi
 done
-runner_ready || { echo "runner not ready within ${TABLE_WAIT_SECS}s: ${READY_WHAT}"; exit 1; }
+runner_ready || {
+  echo "runner not ready within ${TABLE_WAIT_SECS}s: ${READY_WHAT}"
+  [ "${PERF_ONLY}" = 1 ] && [ -z "${RANKS_LAUNCHED_AT}" ] && echo "tt-run never wrote its rankfile: Phase 1 discovery did not finish"
+  exit 1
+}
 echo "[$(date -u +%FT%TZ)] runner ready after ~${WAITED}s"
 
 # A PP binding already fixed the rank count and host; only discovery has to parse them back out.
@@ -671,8 +699,13 @@ if [ "${PP_RANKS}" -eq 0 ] || [ "${PP_4X4_HOSTS}" -ne 0 ]; then
 fi
 
 PRODUCER_PLACEMENT=(-np "${EXPECTED_RANKS}" --map-by slot)
-# A perf-only leg runs no validators: its one producer process lands on HOSTS' first host, runner rank 0's.
-[ "${PERF_ONLY}" = 1 ] && PRODUCER_PLACEMENT=(-np 1 --map-by slot)
+PRODUCER_CHECK_ENV="export PREFILL_PRODUCER_CHECK_PCC=1;"
+# A perf-only leg runs no validators: its one producer process lands on HOSTS' first host, runner rank 0's. It checks
+# no PCC but drains every rank's layer acks, which time its chunks, and fails unless all of them arrived.
+if [ "${PERF_ONLY}" = 1 ]; then
+  PRODUCER_PLACEMENT=(-np 1 --map-by slot)
+  PRODUCER_CHECK_ENV="export PREFILL_PRODUCER_CHECK_PCC=0; export PREFILL_PRODUCER_DRAIN_ACKS=1;"
+fi
 # Producer rank r must share a host with runner rank r, which --map-by slot over HOSTS gives only
 # when each host's ranks are contiguous -- as tt-run binds a host's two 4x4 meshes.
 if [ "${PP_4X4_HOSTS}" -ne 0 ] && [ "$(printf '%s\n' "${RANK_HOSTS}" | uniq | wc -l)" -ne "${PP_4X4_HOSTS}" ]; then
@@ -778,14 +811,14 @@ set +e
     export PREFILL_PRODUCER_WARMUP_CHUNKS=${WARMUP_CHUNKS}; \
     export PREFILL_MIGRATION_TABLE_PATH='${TABLE_PATH}'; \
     export PREFILL_PCC_SUMMARY_DIR='${PCC_DIR}'; \
-    export PREFILL_PRODUCER_CHECK_PCC=1; \
+    ${PRODUCER_CHECK_ENV} \
     export PREFILL_SEND_SHUTDOWN=1; \
     export PREFILL_STANDALONE_CHUNKED_PCC=${PCC_THRESHOLD}; \
     export PREFILL_H2D_CONNECT_TIMEOUT=120; \
     ${NUM_LAYERS_ENV} \
     ${PRODUCER_ENV} \
     export LOGURU_LEVEL=INFO; \
-    exec python3 -m ${PRODUCER_MODULE}" 2>&1 | tee "${PRODUCER_LOG}"
+    exec python3 -m models.demos.common.prefill.runners.prefill_producer" 2>&1 | tee "${PRODUCER_LOG}"
 PROD_RC=${PIPESTATUS[0]}
 set -e
 

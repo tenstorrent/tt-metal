@@ -514,6 +514,9 @@ class ProducerConfig:
     seed: int
     verify: bool
     pcc_threshold: float
+    # A single producer without verification (a perf-only leg) still drains every rank's layer acks, which time its
+    # chunks (CHUNK_RETIRE lines), and fails unless one ack per layer per chunk arrived.
+    drain_acks: bool = False
     interleave: str = "random"
     slot_lengths: dict = None
     multi_turn_prob: float = 0.0
@@ -550,6 +553,7 @@ def _config_from_env() -> ProducerConfig:
         mid_chunk_end_prob=float(os.environ.get("PREFILL_PRODUCER_MID_END_PROB", "0.0")),
         seed=int(os.environ.get("PREFILL_PRODUCER_SEED", "1234")),
         verify=os.environ.get("PREFILL_PRODUCER_CHECK_PCC", "0") == "1",
+        drain_acks=os.environ.get("PREFILL_PRODUCER_DRAIN_ACKS", "0") == "1",
         pcc_threshold=float(os.environ.get("PREFILL_STANDALONE_CHUNKED_PCC", "0.93")),
         interleave=interleave,
         multi_turn_prob=float(os.environ.get("PREFILL_PRODUCER_MULTI_TURN_PROB", "0.0")),
@@ -1873,7 +1877,8 @@ def main() -> None:
     logger.info(
         f"[producer] service_id={service_id!r} users={cfg.num_users} chunks=[{cfg.chunks_min},{cfg.chunks_max}] "
         f"max_requests={cfg.max_requests} duration={cfg.duration_s}s p_gap={cfg.p_gap} p_burst={cfg.p_burst} "
-        f"mid_end={cfg.mid_chunk_end_prob} interleave={cfg.interleave} verify={cfg.verify} seed={cfg.seed}"
+        f"mid_end={cfg.mid_chunk_end_prob} interleave={cfg.interleave} verify={cfg.verify} drain_acks={cfg.drain_acks} "
+        f"seed={cfg.seed}"
     )
 
     service = ttnn.H2DStreamService.connect(service_id, timeout_ms=timeout_s * 1000)
@@ -1882,16 +1887,18 @@ def main() -> None:
 
     kv_table = _read_kv_chunk_table(timeout_s) if cfg.verify else None
 
-    # Without verification the completions are left to whatever consumer owns the channel.
-    completion_channel = connect_layer_completion_channel(timeout_s) if cfg.verify else None
-    if cfg.verify and completion_channel is None:
+    # Without verification or PREFILL_PRODUCER_DRAIN_ACKS the completions are left to whatever consumer owns the
+    # channel.
+    consume_acks = cfg.verify or cfg.drain_acks
+    completion_channel = connect_layer_completion_channel(timeout_s) if consume_acks else None
+    if consume_acks and completion_channel is None:
         logger.error(
-            "[producer] CHECK_PCC=1 but LayerAck channel missing — UMD read would race the runner's "
-            "prefill (H2D push return ≠ layers done). The master rank always owns this channel, so "
-            "either the runner is not up yet or it died before wiring acks."
+            "[producer] CHECK_PCC=1 or DRAIN_ACKS=1 but LayerAck channel missing — the UMD read would race the "
+            "runner's prefill (H2D push return ≠ layers done), and no chunk can be timed. The master rank always owns "
+            "this channel, so either the runner is not up yet or it died before wiring acks."
         )
         sys.exit(1)
-    if not cfg.verify:
+    if not consume_acks:
         logger.info(
             "[producer] CHECK_PCC off — skipping the KV table read and not consuming the completion "
             "channel (pure token feeder; the real consumer owns it). Some consumer must be attached, or "
@@ -1979,7 +1986,9 @@ def main() -> None:
     elif cfg.verify:
         logger.error("[producer] PREFILL_PRODUCER_CHECK_PCC=1 but no KV chunk table available; skipping PCC.")
         verify_ok = False
-    if cfg.verify and ADAPTER.verify_layer_completions and received_completions != expected_completions:
+    if (cfg.drain_acks or (cfg.verify and ADAPTER.verify_layer_completions)) and (
+        received_completions != expected_completions
+    ):
         logger.error(f"[producer] layer completions: received {received_completions}/{expected_completions}")
         verify_ok = False
 
@@ -1999,7 +2008,7 @@ def main() -> None:
     else:
         logger.info("[producer] exiting (the runner keeps its sync-op loop running).")
 
-    if cfg.verify and not verify_ok:
+    if not verify_ok:
         sys.exit(1)
 
 
