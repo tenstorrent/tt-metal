@@ -44,6 +44,14 @@ class Conv2d(Module):
     # input channels are not whole tiles (see forward).
     shard_layout: ttnn.TensorMemoryLayout | None = None
 
+    # The largest output area, in pixels over the whole batch, that one DRAM width slice may cover, or
+    # None. When set, an input size missing from the slice table is cut into as few width slices of
+    # whole tile columns as keep each within this area, and into at least two (unless the output is
+    # one tile wide; a slice is at least one tile wide). The conv then takes the sliced path at
+    # every size, so the slicing kernels, which compile per channel count, compile at the first size.
+    # Without it, conv2d picks the slicing per call and leaves a conv that fits L1 unsliced.
+    dram_slice_area: int | None = None
+
     # Mesh shape -> (input height, input width, in channels, out channels) -> number of DRAM width
     # slices; 1 runs the conv on the whole input in L1. A shape missing here gets no slice config,
     # so ttnn picks the slicing from the L1 free at call time. Models can extend the table for their
@@ -498,6 +506,19 @@ class Conv2d(Module):
         self._release_prepared()
         super().deallocate_weights()
 
+    def _width_slices(self, b: int, h: int, w: int) -> int:
+        """The number of DRAM width slices dram_slice_area gives b images of height h and width w."""
+        if len(self.padding) == 4:
+            top, bottom, left, right = self.padding
+        else:
+            (top, left), (bottom, right) = self.padding, self.padding
+        out_h = (h + top + bottom - self.kernel_size[0]) // self.stride[0] + 1
+        out_w = (w + left + right - self.kernel_size[1]) // self.stride[1] + 1
+        tiles = -(-out_w // ttnn.TILE_SIZE)
+        # A slice holds its columns of every image in the batch.
+        tiles_per_slice = max(1, self.dram_slice_area // (b * out_h * ttnn.TILE_SIZE))
+        return min(tiles, max(2, -(-tiles // tiles_per_slice)))
+
     def forward(
         self, x: ttnn.Tensor, /, *, use_persistent_buffer: bool = True, flat_output: bool = False
     ) -> ttnn.Tensor:
@@ -547,6 +568,9 @@ class Conv2d(Module):
 
         slice_params = self.slice_params.get(tuple(self.mesh_device.shape), self.slice_default)
         num_slices = slice_params.get((h, w, self.in_channels, self.out_channels))
+        area_sliced = num_slices is None and self.dram_slice_area is not None
+        if area_sliced:
+            num_slices = self._width_slices(b, h, w)
         slice_config = (
             ttnn.Conv2dSliceConfig(num_slices=num_slices, slice_type=ttnn.Conv2dDRAMSliceWidth)
             if num_slices is not None
@@ -574,7 +598,11 @@ class Conv2d(Module):
         size_free = (
             self.shard_layout is not None and not x.is_sharded() and not may_fold and in_channels % ttnn.TILE_SIZE == 0
         )
-        prepared_key = (num_slices,) if size_free else (b, h, w, num_slices)
+        # The slice count dram_slice_area gives follows the size, so it stays out of the key, as the
+        # count conv2d picks itself does. With a fixed scheme and an interleaved input the count only
+        # sets how many cores share the rows, which the prepared weights do not depend on.
+        key_slices = None if area_sliced else num_slices
+        prepared_key = (key_slices,) if size_free else (b, h, w, key_slices)
         prepared_weight, prepared_bias = self._prepared.get(prepared_key, (None, None))
         if prepared_weight is None:
             base_kwargs = {
@@ -665,12 +693,13 @@ def configure_conv2d(
     slice_params: dict[tuple[int, ...], dict[tuple[int, int, int, int], int]] | None = None,
     config_tensors_in_dram: bool | None = None,
     shard_layout: ttnn.TensorMemoryLayout | None = None,
+    dram_slice_area: int | None = None,
 ) -> None:
     """Configure every Conv2d in ``module``'s tree.
 
     ``slice_params`` (same layout as ``Conv2d.slice_params``) is added on top of the shared table for
-    each mesh shape it names, for these instances only. ``config_tensors_in_dram`` and
-    ``shard_layout`` override the class defaults for them.
+    each mesh shape it names, for these instances only. ``config_tensors_in_dram``, ``shard_layout``
+    and ``dram_slice_area`` override the class defaults for them.
     """
     if isinstance(module, Conv2d):
         if slice_params is not None:
@@ -683,10 +712,14 @@ def configure_conv2d(
         if shard_layout is not None and shard_layout != module.shard_layout:
             module._release_prepared()
             module.shard_layout = shard_layout
+        if dram_slice_area is not None and dram_slice_area != module.dram_slice_area:
+            module._release_prepared()
+            module.dram_slice_area = dram_slice_area
     for _, child in module.named_children():
         configure_conv2d(
             child,
             slice_params=slice_params,
             config_tensors_in_dram=config_tensors_in_dram,
             shard_layout=shard_layout,
+            dram_slice_area=dram_slice_area,
         )

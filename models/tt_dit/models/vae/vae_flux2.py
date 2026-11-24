@@ -116,6 +116,17 @@ class Flux2VaeDecoder(Module):
         # the decode from 512x512 up).
         configure_conv2d(self, shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED)
         configure_conv2d(self.conv_out, shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED)
+        # Always DRAM-slice the convs that conv2d leaves unsliced at 1024x1024 but slices at larger
+        # sizes: the two with 512 input channels at the second-largest level, and conv_out. Their
+        # slicing kernels then compile at the first size instead of at the first larger one. The
+        # other convs that get sliced share their slicing kernels with convs already sliced at
+        # 1024x1024. The areas are from a T3K (2x4) from 1024x1024 to 2048x2048. The largest slice
+        # conv2d picked for conv_out covered 256x512 pixels, at 90% of the free L1. For the other two
+        # it covered 192x192 once, but 128x296 did not fit in one call, so their limit is the next
+        # largest, 128x256, at 87%.
+        configure_conv2d(self.up_blocks[1].upsampler, dram_slice_area=128 * 256)
+        configure_conv2d(self.up_blocks[2].resnets[0].conv1, dram_slice_area=128 * 256)
+        configure_conv2d(self.conv_out, dram_slice_area=256 * 512)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         # remove encoder state
