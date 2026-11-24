@@ -28,7 +28,7 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
         ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
     ),
 )
-@pytest.mark.parametrize("out_dtype", (ttnn.uint32, ttnn.uint16))
+@pytest.mark.parametrize("out_dtype", (ttnn.uint32, ttnn.uint16, ttnn.uint8))
 @pytest.mark.parametrize(
     "ttnn_function",
     (ttnn.lt, ttnn.gt, ttnn.eq, ttnn.le, ttnn.ge, ttnn.ne, ttnn.logical_and, ttnn.logical_or, ttnn.logical_xor),
@@ -71,7 +71,7 @@ def test_binary_comp_ops(input_shapes, out_dtype, mem_configs, ttnn_function, de
         ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
     ),
 )
-@pytest.mark.parametrize("out_dtype", (ttnn.uint32, ttnn.uint16))
+@pytest.mark.parametrize("out_dtype", (ttnn.uint32, ttnn.uint16, ttnn.uint8))
 @pytest.mark.parametrize(
     "ttnn_function",
     (ttnn.lt, ttnn.gt, ttnn.eq, ttnn.le, ttnn.ge, ttnn.ne, ttnn.logical_and, ttnn.logical_or, ttnn.logical_xor),
@@ -118,7 +118,7 @@ def test_binary_comp_opt_out(input_shapes, out_dtype, mem_configs, ttnn_function
     "scalar",
     (2.3, 15.6, 55.4, 72.5, 120.6),
 )
-@pytest.mark.parametrize("out_dtype", (ttnn.uint32, ttnn.uint16))
+@pytest.mark.parametrize("out_dtype", (ttnn.uint32, ttnn.uint16, ttnn.uint8))
 @pytest.mark.parametrize(
     "ttnn_function",
     (
@@ -194,3 +194,21 @@ def test_binary_comp_uint16_ops(input_shapes, mem_configs, ttnn_function, device
 
     output_tensor = ttnn.to_torch(output_tensor).to(golden_tensor.dtype)
     assert torch.equal(output_tensor, golden_tensor)
+
+
+@pytest.mark.parametrize("input_dtype", (ttnn.float32, ttnn.bfloat16, ttnn.int32, ttnn.uint32))
+@pytest.mark.parametrize("op", ("add", "subtract", "multiply", "maximum", "gt", "ne", "logical_and"))
+def test_binary_uint8_output(device, input_dtype, op):
+    torch.manual_seed(0)
+    shape = (2, 3, 33, 65)
+    # Values and results stay within [0, 255] and are exact in bfloat16, so every dtype gives the same answer.
+    a = torch.randint(8, 16, shape)
+    b = torch.randint(0, 8, shape)
+    ta = ttnn.from_torch(a, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tb = ttnn.from_torch(b, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    result = getattr(ttnn, op)(ta, tb, dtype=ttnn.uint8)
+
+    assert result.dtype == ttnn.uint8
+    expected = getattr(torch, op)(a, b).to(torch.uint8)
+    assert torch.equal(ttnn.to_torch(result).to(torch.uint8), expected)
