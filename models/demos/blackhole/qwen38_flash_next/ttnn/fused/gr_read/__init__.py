@@ -63,15 +63,10 @@ NORM = fp.kernel_source(NAME, "norm_compute.cpp")
 DOWN = fp.kernel_source(NAME, "down_compute.cpp")
 LOWRANK = fp.kernel_source(NAME, "lowrank_compute.cpp")
 GATE = fp.kernel_source(NAME, "gate_compute.cpp")
-LOWRANK2 = fp.kernel_source(NAME, "lowrank_compute2.cpp")  # QWEN38_GR_GATE_V2=1
-GATE2 = fp.kernel_source(NAME, "gate_compute2.cpp")
-MCAST_WRITER2 = fp.kernel_source(NAME, "mcast_writer_v2.cpp")
-MCAST_READER2 = fp.kernel_source(NAME, "mcast_reader_v2.cpp")
 MCAST_WRITER = fp.kernel_source(NAME, "mcast_writer.cpp")
 MCAST_READER = fp.kernel_source(NAME, "mcast_reader.cpp")
 NOC_PROBE = fp.kernel_source(NAME, "noc_probe.cpp")
 _NOC_MAPS: dict[int, dict[tuple[int, int], tuple[int, int]]] = {}
-GATE_V2_ENV = "QWEN38_GR_GATE_V2"  # default unset/"0": today's low_rank_gate program; "1": 12 one-tile low-rank cores, per-sender start
 MERGED_ENV = "QWEN38_FUSED_GR_READ_MERGED"  # default "1": normalize+down and low_rank+gate as one program each (5 programs per read); "0": the split forms (7)
 NONE_CB = 0xFF
 MATMUL_ENV = "QWEN38_FUSED_GR_READ_MATMUL"
@@ -551,16 +546,12 @@ def noc_map(mesh) -> dict[tuple[int, int], tuple[int, int]]:
     return _NOC_MAPS[key]
 
 
-def _rectangle(mesh, width: int, height: int, *, rows_above: int, wrap: bool = False):
+def _rectangle(mesh, width: int, height: int, *, rows_above: int):
     """Consumers on the logical rectangle [0, width) x [0, height) and producers on row ``height`` (x < rows_above)."""
 
     grid = mesh.compute_with_storage_grid_size()
-    if wrap:  # the producers fill row ``height`` first and continue on the next rows when the grid is narrower
-        per_row = grid.x
-        fits = grid.x >= width and grid.y >= height + -(-rows_above // per_row)
-    else:
-        per_row = rows_above
-        fits = grid.x >= max(width, rows_above) and grid.y >= height + 1
+    per_row = rows_above
+    fits = grid.x >= max(width, rows_above) and grid.y >= height + 1
     if not fits:
         raise RuntimeError(
             f"compute grid {grid.x}x{grid.y} cannot hold {width}x{height} consumers and {rows_above} producers"
@@ -589,20 +580,17 @@ def _mcast_writer(
     tiles_tensor=None,
     extra=None,
     sem=0,
-    sem_bits=None,
     source=None,
     defines=(),
 ):
-    """runtime: per core -> (dst tile offset, rect, (first, stride) for the tiles tensor, (count, first, stride, batch) extra).
-    ``sem_bits`` (selects the v2 writer): per core, the semaphore increment (that sender's own bit) as runtime arg 13.
-    """
+    """runtime: per core -> (dst tile offset, rect, (first, stride) for the tiles tensor, (count, first, stride, batch) extra)."""
 
     extra_tensor, extra_cb = extra if extra is not None else (tiles_tensor, NONE_CB)
     accessor_tensor = tiles_tensor if tiles_tensor is not None else extra_tensor
     compile_args = [src_cb, dst_cb, tiles, 1 if tiles_tensor is not None else 0, extra_cb, sem]
     compile_args += fp.accessor_args(accessor_tensor) + fp.accessor_args(extra_tensor)
     args = []
-    for index, (core, (offset, rect, tiles_args, extra_args)) in enumerate(runtime):
+    for core, (offset, rect, tiles_args, extra_args) in runtime:
         first, stride = tiles_args
         count, efirst, estride, batch = extra_args
         args.append(
@@ -619,13 +607,10 @@ def _mcast_writer(
                     efirst,
                     estride,
                     batch,
-                    *([] if sem_bits is None else [sem_bits[index]]),
                 ],
             )
         )
-    return fp.writer_kernel(
-        source or (MCAST_WRITER if sem_bits is None else MCAST_WRITER2), cores, compile_args, args, defines=defines
-    )
+    return fp.writer_kernel(source or MCAST_WRITER, cores, compile_args, args, defines=defines)
 
 
 def _mcast_reader(
@@ -638,7 +623,6 @@ def _mcast_reader(
     senders,
     zero_cb=NONE_CB,
     sem=0,
-    per_sender=False,
     source=None,
     defines=(),
 ):
@@ -657,7 +641,7 @@ def _mcast_reader(
     for slot in range(2):
         compile_args += fp.accessor_args(streams[min(slot, len(streams) - 1)][0])
     return fp.reader_kernel(
-        source or (MCAST_READER2 if per_sender else MCAST_READER),
+        source or MCAST_READER,
         cores,
         compile_args,
         [(core, [a for args in stream_args for a in args]) for core, stream_args in runtime],
@@ -762,17 +746,6 @@ def normalize_down(
     return normalized, partial
 
 
-def gate_v2_enabled(environ=None) -> bool:
-    """QWEN38_GR_GATE_V2=1 selects the v2 low_rank_gate program (default: today's)."""
-
-    import os
-
-    value = (environ if environ is not None else os.environ).get(GATE_V2_ENV, "0")
-    if value not in ("0", "1"):
-        raise ValueError(f"{GATE_V2_ENV} must be 0 or 1, got {value!r}")
-    return value == "1"
-
-
 def low_rank_gate(gathered_partials, normalized, up, *, matmul: str = "chain", out_rows: int | None = None):
     """Stages 3a+3b as one program: the four row cores multicast the low-rank row into the gate cores' CB
     while those cores prefetch their weight columns and normalized tiles; the injection tile comes from row core 3."""
@@ -794,14 +767,13 @@ def low_rank_gate(gathered_partials, normalized, up, *, matmul: str = "chain", o
     mesh = gathered_partials.device()
     block = fp.allocate((1, 1, rows, LOCAL_HIDDEN), BF16, ttnn.TILE_LAYOUT, mesh)
     injection = fp.allocate((1, 1, rows, BRANCHES), BF16, ttnn.TILE_LAYOUT, mesh)
-    v2 = gate_v2_enabled()
-    t = 1 if v2 else LOW_RANK_TILES_PER_CORE
+    t = LOW_RANK_TILES_PER_CORE
     n_producers = PARTIAL_TILES // t
     inject_core, inject_local = divmod(INJECT_TILE, t)
     n_tiles = _tiles_wide(up)
     # 5 wide (5 x 4 at TP4, 5 x 2 at TP8), not 10 wide: the harvested p150's contiguous virtual column span is 7 wide (x 0..6 -> 1..7, then a gap),
     # and a multicast needs one NoC rectangle; the consumers' order (x-major) is all the runtime args depend on.
-    workers, producers, rect = _rectangle(mesh, GATE_WIDTH, GATE_HEIGHT, rows_above=n_producers, wrap=v2)
+    workers, producers, rect = _rectangle(mesh, GATE_WIDTH, GATE_HEIGHT, rows_above=n_producers)
     plain = [c for i, c in enumerate(producers) if i != inject_core]
     inject = [producers[inject_core]]
     w_set, p_set, all_set = _core_set(workers), _core_set(producers), _core_set(workers + producers)
@@ -832,8 +804,8 @@ def low_rank_gate(gathered_partials, normalized, up, *, matmul: str = "chain", o
         ],
     )
     computes = [
-        fp.compute_kernel(LOWRANK2 if v2 else LOWRANK, plain_set, [t, TP_SIZE, t, 16, 17], fp32_dest=True),
-        fp.compute_kernel(LOWRANK2 if v2 else LOWRANK, inject_set, [t, TP_SIZE, inject_local, 16, 17], fp32_dest=True),
+        fp.compute_kernel(LOWRANK, plain_set, [t, TP_SIZE, t, 16, 17], fp32_dest=True),
+        fp.compute_kernel(LOWRANK, inject_set, [t, TP_SIZE, inject_local, 16, 17], fp32_dest=True),
     ]
     senders = [
         _mcast_writer(
@@ -843,7 +815,6 @@ def low_rank_gate(gathered_partials, normalized, up, *, matmul: str = "chain", o
             dst_cb=8,
             tiles=t,
             extra=(injection, NONE_CB),
-            sem_bits=[1 << c for c in range(n_producers) if c != inject_core] if v2 else None,
         ),
         _mcast_writer(
             inject_set,
@@ -852,7 +823,6 @@ def low_rank_gate(gathered_partials, normalized, up, *, matmul: str = "chain", o
             dst_cb=8,
             tiles=t,
             extra=(injection, 17),
-            sem_bits=[1 << inject_core] if v2 else None,
         ),
     ]
     receiver = _mcast_reader(
@@ -872,10 +842,9 @@ def low_rank_gate(gathered_partials, normalized, up, *, matmul: str = "chain", o
         recv_tiles=PARTIAL_TILES,
         senders=n_producers,
         zero_cb=11,
-        per_sender=v2,
     )
     gate_k = fp.compute_kernel(
-        GATE2 if v2 else GATE,
+        GATE,
         w_set,
         [PARTIAL_TILES, BRANCHES, 8, 9, 10, 11, 12, 13, 14, 18, UP_SPILL if matmul == "chain" else 0, 15],
         fp32_dest=True,

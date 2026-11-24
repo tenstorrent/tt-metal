@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""The GR gate program v3 (``QWEN38_GR_GATE_V3=1``, default off): ``gr_read.low_rank_gate`` with
+"""The GR gate program v3 (``QWEN38_GR_GATE_V3=1``, default on): ``gr_read.low_rank_gate`` with
   * the low-rank cores' 24 gathered partial tiles read in ONE batch (one DRAM read barrier instead of three);
   * the SFPU stages (silu, the injection sigmoid, the gate sigmoid, the gate multiply) on rows 0..15 only (VectorMode::R);
 decode rows <= 16 only (anything else runs ``gr_read.low_rank_gate``).  Bit-identical valid rows.
@@ -144,14 +144,13 @@ def low_rank_gate3(gathered_partials, normalized, up, *, matmul: str = "chain", 
     out = out_rows if live else rows
     block = fp.allocate((1, 1, out, LOCAL_HIDDEN), BF16, ttnn.TILE_LAYOUT, mesh)
     injection = fp.allocate((1, 1, out, BRANCHES), BF16, ttnn.TILE_LAYOUT, mesh)
-    v2 = False
     t = LOW_RANK_TILES_PER_CORE
     n_producers = PARTIAL_TILES // t
     inject_core, inject_local = divmod(INJECT_TILE, t)
     n_tiles = _tiles_wide(up)
     # 5 wide (5 x 4 at TP4, 5 x 2 at TP8), not 10 wide: the harvested p150's contiguous virtual column span is 7 wide (x 0..6 -> 1..7, then a gap),
     # and a multicast needs one NoC rectangle; the consumers' order (x-major) is all the runtime args depend on.
-    workers, producers, rect = _rectangle(mesh, GATE_WIDTH, GATE_HEIGHT, rows_above=n_producers, wrap=v2)
+    workers, producers, rect = _rectangle(mesh, GATE_WIDTH, GATE_HEIGHT, rows_above=n_producers)
     plain = [c for i, c in enumerate(producers) if i != inject_core]
     inject = [producers[inject_core]]
     w_set, p_set, all_set = _core_set(workers), _core_set(producers), _core_set(workers + producers)

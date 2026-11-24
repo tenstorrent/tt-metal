@@ -139,7 +139,7 @@ def gate_gather(gathered_partials, normalized, up, memory_config, *, matmul: str
     n_producers = g3.PARTIAL_TILES // t
     inject_core, inject_local = divmod(g3.INJECT_TILE, t)
     n_tiles = g3._tiles_wide(up)
-    workers, producers, rect = g3._rectangle(mesh, g3.GATE_WIDTH, g3.GATE_HEIGHT, rows_above=n_producers, wrap=False)
+    workers, producers, rect = g3._rectangle(mesh, g3.GATE_WIDTH, g3.GATE_HEIGHT, rows_above=n_producers)
     transports = gr_fold.TRANSPORT["partials"][:1]
     if any((w.x, w.y) == (transports[0].x, transports[0].y) for w in workers + producers):
         raise RuntimeError("the gather transport core is inside the gate's cores")
