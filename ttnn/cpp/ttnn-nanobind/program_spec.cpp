@@ -10,6 +10,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -1177,6 +1178,71 @@ void bind_mesh_programs(nb::module_& mod) {
 }
 
 }  // namespace
+
+namespace {
+
+// The tensors of a run args object made in Python, as its _tensor_args attribute holds them, or None for run args made
+// in C++, which Python cannot have given tensors.
+nb::object tensor_owners(nb::handle python_object) {
+    return python_object.is_valid() ? nb::getattr(python_object, TENSOR_ARGS_ATTRIBUTE, nb::none()) : nb::none();
+}
+
+// Calls visit for each entry of one of those dicts. ProgramRunArgs and MeshProgramRunArgs write the dicts themselves,
+// from str keys and ttnn.Tensor values, so an entry of another type means the dict was edited in place; set_again says
+// how to fix it. Such an edit that keeps the types goes unseen.
+void for_each_entry(
+    nb::handle owners,
+    const char* set_again,
+    const std::function<void(std::string_view name, const ttnn::Tensor& tensor)>& visit) {
+    TT_FATAL(nb::isinstance<nb::dict>(owners), "generic_op: the tensors that {}", set_again);
+    for (const auto& [key, value] : nb::borrow<nb::dict>(owners)) {
+        TT_FATAL(
+            nb::isinstance<nb::str>(key) && nb::isinstance<ttnn::Tensor>(value),
+            "generic_op: the tensors that {}",
+            set_again);
+        // Length-aware: a name may hold a NUL character. The str object keeps the UTF-8 text.
+        Py_ssize_t size = 0;
+        const char* text = PyUnicode_AsUTF8AndSize(key.ptr(), &size);
+        if (text == nullptr) {
+            throw nb::python_error();
+        }
+        visit(std::string_view(text, static_cast<std::size_t>(size)), nb::cast<const ttnn::Tensor&>(value));
+    }
+}
+
+constexpr const char* SET_TENSOR_ARGS_AGAIN = "a ProgramRunArgs keeps were edited in place; set its tensor_args again";
+constexpr const char* SET_PROGRAMS_AGAIN = "a MeshProgramRunArgs keeps were edited in place; set its programs again";
+
+}  // namespace
+
+void for_each_python_tensor_arg(
+    const m2::ProgramRunArgs& run_args,
+    const std::function<void(std::string_view name, const ttnn::Tensor& tensor)>& visit) {
+    const nb::object owners = tensor_owners(nb::find(run_args));
+    if (!owners.is_none()) {
+        for_each_entry(owners, SET_TENSOR_ARGS_AGAIN, visit);
+    }
+}
+
+void for_each_python_tensor_arg(
+    const ttnn::experimental::MeshProgramRunArgs& run_args,
+    const std::function<void(std::size_t program, std::string_view name, const ttnn::Tensor& tensor)>& visit) {
+    const nb::object owners = tensor_owners(nb::find(run_args));
+    if (owners.is_none()) {
+        return;
+    }
+    TT_FATAL(
+        nb::isinstance<nb::list>(owners) && nb::len(owners) == run_args.programs.size(),
+        "generic_op: the tensors that {}",
+        SET_PROGRAMS_AGAIN);
+    std::size_t program = 0;
+    for (const nb::handle program_owners : nb::borrow<nb::list>(owners)) {
+        for_each_entry(program_owners, SET_PROGRAMS_AGAIN, [&](std::string_view name, const ttnn::Tensor& tensor) {
+            visit(program, name, tensor);
+        });
+        ++program;
+    }
+}
 
 void py_module_types(nb::module_& mod) {
     bind_enums(mod);

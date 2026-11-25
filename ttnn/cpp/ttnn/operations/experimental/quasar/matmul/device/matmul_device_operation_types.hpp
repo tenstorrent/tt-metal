@@ -42,7 +42,7 @@ struct MatmulParams {
     // attributes so the op stays on the DEFAULT reflection-hash + canonical-key path.
     //
     // A custom compute_program_hash would return only a 64-bit value and, per
-    // mesh_device_operation_adapter.hpp::compute_mesh_workload_canonical_key, OPT THE OP OUT of
+    // mesh_device_operation_adapter.hpp::compute_mesh_workload_cache_key, OPT THE OP OUT of
     // attribute-level canonical-key collision resolution (the canonical key degrades to the
     // op-identity prefix) -- re-exposing exactly the #45821 hash-fold collision. Listing the
     // attributes here instead keeps the exact, collision-free canonical key.

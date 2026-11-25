@@ -185,6 +185,13 @@ inline void _llk_pack_untilize_init_(const std::uint8_t buf_desc_id, const Tenso
  *        y * num_faces_r_dim * face_r_dim * FULL_CT_DIM + x.
  * @param tensor_shape: Contains all the information of the tensor shape: num faces, face row/col dim, etc.
  * @note Call @ref _llk_pack_untilize_init_ with the same tensor_shape before this function.
+ * @note The strided path keeps TILE_SEL on the index instructions: it issues PACR_STRIDE, not PACR_UNTILIZE (which is unsupported
+ *       in Dest Strided Read Mode), so the ISA rule that Untilize/Tilize use the Face Idx as Z counter does not apply.
+ * @note The strided path takes dest_idx relative to the current dest bank and adds no dest_register_offset term, unlike the
+ *       PACR_UNTILIZE path: PACR_STRIDE reads Dest relative to THCON_PACKER0_REG0_SRC_ADDR_OFFSET, which
+ *       @ref _llk_pack_dest_semaphore_section_done_ moves per SyncHalf bank, while PACR_UNTILIZE ignores it. The ISA does
+ *       not document this; tests/python_tests/quasar/test_pack_untilize_semaphore_sync_quasar.py establishes it for
+ *       1x32, 2x32 and 8x32 tiles.
  */
 inline void _llk_pack_untilize_(const std::uint32_t dest_idx, const std::uint32_t l1_tile_idx, const TensorShape& tensor_shape)
 {

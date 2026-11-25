@@ -45,6 +45,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank, num_f
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions, rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_fabric_payload_size
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import (
     MTPDeviceEmbedSource,
     MTPSplitChipLookahead,
@@ -117,9 +118,11 @@ def _assert_level_pcc(expected, actual, pcc: float, k: int, what: str):
 _MESH_PARAMS = [
     pytest.param(
         (8, 4),
+        # (the MTP layer's MoE is GLM-5.3's, the MoE block - tt/moe_impl.py: a fabric payload of one combine row)
         torus_xy_device_params(
-            fabric_payload_size=GLM53Config.FABRIC_PAYLOAD_SIZE,
+            fabric_payload_size=moe_block_fabric_payload_size(GLM53Config, GLM53Config.FABRIC_PAYLOAD_SIZE),
             worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
+            l1_small_size=GLM53Config.L1_SMALL_SIZE,
         ),
         2,
         0,

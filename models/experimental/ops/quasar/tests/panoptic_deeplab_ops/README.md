@@ -16,8 +16,11 @@ you. This file covers what is specific to Panoptic-DeepLab.
 
 The model was captured on a 20-core Blackhole grid (5x4, `TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3"`),
 so run the suite on that grid. Conv, pool and upsample choose their own shard grid from
-the device. On a larger grid their outputs are sharded differently from the capture, and
-the placement check reports that difference.
+the device. On a larger grid their outputs are sharded differently from the capture. For
+pool and upsample the placement check reports that difference. For conv2d it checks only
+the shard orientation and, for height-sharded outputs, the shard width, unless the call
+fixes the grid (an already-sharded input, or `override_sharding_config`); then the full
+placement is checked.
 
 ```bash
 # whole suite (one file per pytest invocation is fine too)

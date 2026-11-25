@@ -493,9 +493,7 @@ ProgramCacheLookup look_up_program_cache(
     }
     // The cache key is the 64-bit hash plus an exact canonical encoding; a hash collision is
     // resolved by std::unordered_map's own operator== on the canonical part (issue #45821).
-    lookup.key.hash =
-        mesh_device_operation_t::compute_mesh_workload_hash(mesh_device, operation_attributes, tensor_args);
-    lookup.key.canonical = mesh_device_operation_t::compute_mesh_workload_canonical_key(
+    lookup.key = mesh_device_operation_t::compute_mesh_workload_cache_key(
         mesh_device,
         ttsl::get_type_name<typename mesh_device_operation_t::device_operation_t>(),
         operation_attributes,
@@ -554,6 +552,7 @@ void launch_operation_with_adapter(
     // Skip if operation should be skipped
     if constexpr (HasSkipLaunch<mesh_device_operation_t>) {
         if (mesh_device_operation_t::skip_launch(operation_attributes, tensor_args, tensor_return_value)) {
+            mesh_device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
             return;
         }
     }
@@ -607,6 +606,7 @@ void prepare_operation_with_adapter(
     ttnn::MeshDevice* mesh_device) {
     if constexpr (HasSkipLaunch<mesh_device_operation_t>) {
         if (mesh_device_operation_t::skip_launch(operation_attributes, tensor_args, tensor_return_value)) {
+            mesh_device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
             return;
         }
     }

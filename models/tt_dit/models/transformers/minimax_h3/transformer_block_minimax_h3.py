@@ -85,10 +85,12 @@ class MiniMaxH3TransformerBlock(Module):
         dynamic_length: bool = False,
         norm_row_capacity: int | None = None,
         agmm_mode: AgmmMode | str | None = None,
+        ff1_output_dtype: ttnn.DataType | None = None,
     ) -> None:
         """`dynamic_length` freezes the ff1 / ff2 blockings and the one-hot gathers' blocking at construction, so
         no per-block program depends on the length; `norm_row_capacity` (per-device rows) sizes the fused norms, and
-        `agmm_mode` picks the all-gather matmul pins (`resolve_agmm_mode`)."""
+        `agmm_mode` picks the all-gather matmul pins (`resolve_agmm_mode`). `ff1_output_dtype` is the dtype of the
+        feed-forward's ff1 -> ff2 intermediate (None: bfloat16)."""
         super().__init__()
 
         self.use_persistent_ccl_buffers = use_persistent_ccl_buffers
@@ -191,6 +193,7 @@ class MiniMaxH3TransformerBlock(Module):
             ccl_manager=ccl_manager,
             ff1_compute_kernel_config=ff1_compute_kernel_config,
             ff2_compute_kernel_config=self.mm_compute_kernel_config,
+            ff1_output_dtype=ff1_output_dtype,
         )
         self.adaln_proj = ColParallelLinear(
             time_embed_dim,
