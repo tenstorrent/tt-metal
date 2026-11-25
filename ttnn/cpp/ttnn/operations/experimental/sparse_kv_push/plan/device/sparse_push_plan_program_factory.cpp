@@ -70,13 +70,11 @@ tt::tt_metal::ProgramDescriptor SparsePushPlanProgramFactory::create_descriptor(
     const auto shape = packet_shape(device, attrs.page_bytes);
     const uint32_t num_devices = device->shape().mesh_size();  // every chip owns a share of the cache
 
-    // The whole worker grid, one multicast rectangle.
-    const auto grid = device->compute_with_storage_grid_size();
-    const std::vector<tt::tt_metal::CoreCoord> core_list =
-        tt::tt_metal::grid_to_cores(plan_cores(device), grid.x, grid.y, true);
+    // One rectangle of cores (the whole grid by default), one multicast rectangle.
+    const auto core_range = plan_core_range(device, attrs.core_range);
+    const tt::tt_metal::CoreRangeSet all_cores(core_range);
+    const std::vector<tt::tt_metal::CoreCoord> core_list = corerange_to_cores(all_cores, std::nullopt, true);
     const uint32_t cores = core_list.size();
-    const tt::tt_metal::CoreRangeSet all_cores(
-        tt::tt_metal::CoreRange(tt::tt_metal::CoreCoord(0, 0), tt::tt_metal::CoreCoord(grid.x - 1, grid.y - 1)));
     const uint32_t total_idx = rows * topk;
     const uint32_t per_core = tt::round_up(tt::div_up(total_idx, cores), kPlanIdxAlign);
     const uint32_t chunks = layout.bitmap_words / kChunkWords;
@@ -209,8 +207,8 @@ void SparsePushPlanProgramFactory::override_runtime_arguments(
     std::vector<Tensor>& outputs,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     auto* device = args.indices.device();
-    const auto grid = device->compute_with_storage_grid_size();
-    const auto core_list = tt::tt_metal::grid_to_cores(plan_cores(device), grid.x, grid.y, true);
+    const auto core_list =
+        corerange_to_cores(tt::tt_metal::CoreRangeSet(plan_core_range(device, attrs.core_range)), std::nullopt, true);
     const auto source = split_source(attrs, args);
     const uint32_t split = source == ::sparse_push_plan::kSplitTensor ? args.chunk_start_tensor->buffer()->address()
                                                                       : attrs.chunk_start.value_or(0);

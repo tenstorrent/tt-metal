@@ -77,7 +77,7 @@ void SparsePushPlanDeviceOperation::validate_on_program_cache_miss(
         "sparse push plan max_rows {} must be a multiple of {} (its reduce chunk)",
         attrs.max_rows,
         kChunkRows);
-    const uint32_t chunks = attrs.max_rows / kChunkRows, cores = plan_cores(idx.device());
+    const uint32_t chunks = attrs.max_rows / kChunkRows, cores = plan_core_range(idx.device(), attrs.core_range).size();
     TT_FATAL(
         tt::div_up(chunks, cores) <= ::sparse_push_plan::kMaxChunksPerCore,
         "sparse push plan: {} chunks over {} cores exceed {} reduce chunks per core",
@@ -106,7 +106,7 @@ ttsl::hash::hash_t SparsePushPlanDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& args) {
     // A host chunk start is a runtime arg: only whether there is one, and in which form, shapes the program.
     return tt::tt_metal::operation::hash_operation<SparsePushPlanDeviceOperation>(
-        attrs.stripe_chunk, attrs.max_rows, attrs.page_bytes, attrs.chunk_start.has_value(), args);
+        attrs.stripe_chunk, attrs.max_rows, attrs.page_bytes, attrs.chunk_start.has_value(), attrs.core_range, args);
 }
 
 SparsePushPlanDeviceOperation::spec_return_value_t SparsePushPlanDeviceOperation::compute_output_specs(
@@ -144,11 +144,16 @@ std::vector<Tensor> sparse_push_plan(
     uint32_t max_rows,
     uint32_t page_bytes,
     std::optional<uint32_t> chunk_start,
-    const std::optional<Tensor>& chunk_start_tensor) {
+    const std::optional<Tensor>& chunk_start_tensor,
+    const std::optional<tt::tt_metal::CoreRange>& core_range) {
     using Op = ttnn::operations::experimental::sparse_kv_push::SparsePushPlanDeviceOperation;
     return ttnn::device_operation::launch<Op>(
         Op::operation_attributes_t{
-            .stripe_chunk = stripe_chunk, .max_rows = max_rows, .page_bytes = page_bytes, .chunk_start = chunk_start},
+            .stripe_chunk = stripe_chunk,
+            .max_rows = max_rows,
+            .page_bytes = page_bytes,
+            .chunk_start = chunk_start,
+            .core_range = core_range},
         Op::tensor_args_t{.indices = indices, .chunk_start_tensor = chunk_start_tensor});
 }
 

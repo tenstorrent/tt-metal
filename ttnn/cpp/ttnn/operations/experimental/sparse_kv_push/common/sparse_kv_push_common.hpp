@@ -57,6 +57,9 @@ void validate_stripe_chunk(uint32_t stripe_chunk, uint32_t max_rows);
 constexpr uint32_t kPlanIdxAlign = 16;
 
 // The plan spans the whole worker grid.
+// The plan's cores: core_range, or the whole worker grid.
+tt::tt_metal::CoreRange plan_core_range(
+    tt::tt_metal::distributed::MeshDevice* mesh_device, const std::optional<tt::tt_metal::CoreRange>& core_range);
 uint32_t plan_cores(tt::tt_metal::distributed::MeshDevice* mesh_device);
 
 // The plan reduces the bitmap in kChunkRows-row chunks, at most kMaxChunksPerCore of them on each core.

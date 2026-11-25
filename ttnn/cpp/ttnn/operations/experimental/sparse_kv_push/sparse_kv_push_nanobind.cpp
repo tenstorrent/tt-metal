@@ -125,6 +125,8 @@ void bind_experimental_sparse_kv_push_operations(nb::module_& mod) {
                     serves every chunk, but a trace replays the captured value, so use ``chunk_start_tensor`` there.
                 chunk_start_tensor: Trace-safe form of ``chunk_start``: a 1-element uint32 DRAM tensor holding the
                     row, read on device. Mutually exclusive with ``chunk_start``.
+                core_range: Optional rectangle of worker cores to run on, e.g. a sub-device's grid; the whole grid
+                    by default. It needs at least max_rows / 16384 cores.
 
             Returns:
                 List[ttnn.Tensor]: ``[table, compact_indices]``: the plan table (uint32 [1, 1, pages, 1024]) to
@@ -137,7 +139,8 @@ void bind_experimental_sparse_kv_push_operations(nb::module_& mod) {
         nb::arg("max_rows"),
         nb::arg("page_bytes"),
         nb::arg("chunk_start") = nb::none(),
-        nb::arg("chunk_start_tensor") = nb::none());
+        nb::arg("chunk_start_tensor") = nb::none(),
+        nb::arg("core_range") = nb::none());
 
     ttnn::bind_function<"sparse_kv_push", "ttnn.experimental.">(
         mod,

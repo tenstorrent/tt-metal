@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <optional>
 
+#include <tt-metalium/core_coord.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::experimental::sparse_kv_push {
@@ -17,6 +18,8 @@ struct SparsePushPlanParams {
     uint32_t page_bytes = 0;  // the push's cache row page; sets the packet shape the compact slots follow
     // The chunk start row from the host: a runtime arg, not hashed. Rows of blocks before it are the prefix part.
     std::optional<uint32_t> chunk_start;
+    // The cores the plan runs on (one rectangle); the whole worker grid if unset.
+    std::optional<tt::tt_metal::CoreRange> core_range;
 };
 
 struct SparsePushPlanInputs {

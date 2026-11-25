@@ -37,6 +37,17 @@ PacketShape packet_shape(tt::tt_metal::distributed::MeshDevice* mesh_device, uin
         .pages_per_packet = max_payload / page_bytes, .banks = static_cast<uint32_t>(mesh_device->num_dram_channels())};
 }
 
+tt::tt_metal::CoreRange plan_core_range(
+    tt::tt_metal::distributed::MeshDevice* mesh_device, const std::optional<tt::tt_metal::CoreRange>& core_range) {
+    const auto grid = mesh_device->compute_with_storage_grid_size();
+    const tt::tt_metal::CoreRange whole(tt::tt_metal::CoreCoord(0, 0), tt::tt_metal::CoreCoord(grid.x - 1, grid.y - 1));
+    if (!core_range.has_value()) {
+        return whole;
+    }
+    TT_FATAL(whole.contains(*core_range), "sparse push plan core_range {} is outside the {} grid", *core_range, whole);
+    return *core_range;
+}
+
 uint32_t plan_cores(tt::tt_metal::distributed::MeshDevice* mesh_device) {
     const auto grid = mesh_device->compute_with_storage_grid_size();
     return grid.x * grid.y;

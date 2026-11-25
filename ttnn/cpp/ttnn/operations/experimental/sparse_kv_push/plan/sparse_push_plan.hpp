@@ -8,6 +8,7 @@
 #include <optional>
 #include <vector>
 
+#include <tt-metalium/core_coord.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::experimental::sparse_kv_push {
@@ -20,7 +21,8 @@ std::vector<Tensor> sparse_push_plan(
     uint32_t max_rows,
     uint32_t page_bytes,
     std::optional<uint32_t> chunk_start = std::nullopt,
-    const std::optional<Tensor>& chunk_start_tensor = std::nullopt);
+    const std::optional<Tensor>& chunk_start_tensor = std::nullopt,
+    const std::optional<tt::tt_metal::CoreRange>& core_range = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::sparse_kv_push
 
