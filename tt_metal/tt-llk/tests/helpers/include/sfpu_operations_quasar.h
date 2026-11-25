@@ -350,7 +350,12 @@ void init_unary_sfpu_operation_quasar()
     }
     else if constexpr (OPERATION == SfpuType::hardshrink)
     {
-        hardshrink_init();
+        // The Compute API's hardshrink_tile_init / threshold_tile_init expressions, so the bare init's dispatch is what runs.
+        SFPU_UNARY_INIT(hardshrink);
+    }
+    else if constexpr (OPERATION == SfpuType::threshold)
+    {
+        SFPU_UNARY_INIT(threshold);
     }
     else if constexpr (OPERATION == SfpuType::hardtanh)
     {
@@ -1106,7 +1111,14 @@ void call_unary_sfpu_operation_quasar(
     else if constexpr (OPERATION == SfpuType::hardshrink)
     {
         SFPU_UNARY_CALL_TINY_TILE(
-            DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, calculate_hardshrink, (APPROX, ITERATIONS), dst_index, vector_mode, 0x3f000000u /* lambda = 0.5f */);
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            TILE_SHAPE,
+            calculate_hardshrink,
+            (APPROX, ITERATIONS, is_fp32_dest_acc_en),
+            dst_index,
+            vector_mode,
+            0x3f000000u /* lambda = 0.5f */);
     }
     else if constexpr (OPERATION == SfpuType::hardtanh)
     {

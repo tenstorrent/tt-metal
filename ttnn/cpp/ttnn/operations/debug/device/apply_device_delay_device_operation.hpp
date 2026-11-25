@@ -13,11 +13,11 @@
 #include <ttnn/types.hpp>
 #include <ttnn/device_operation.hpp>
 #include <ttnn/distributed/types.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/sub_device.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/mesh/sub_device.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 
 namespace ttnn::operations::debug {
 

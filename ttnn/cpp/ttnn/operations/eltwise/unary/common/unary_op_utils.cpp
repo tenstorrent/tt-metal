@@ -12,7 +12,7 @@
 #include <variant>
 #include <tt_stl/assert.hpp>
 #include "ttnn/tensor/types.hpp"
-#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 
 using namespace tt::tt_metal;

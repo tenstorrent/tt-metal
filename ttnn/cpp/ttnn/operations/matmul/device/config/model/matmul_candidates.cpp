@@ -14,7 +14,7 @@
 #include <tuple>
 #include <utility>
 
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <tt_stl/assert.hpp>
 
 // Ported from the default-config selector proposed in #58143: its candidate enumeration (K depths, output blocks,

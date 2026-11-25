@@ -4,8 +4,8 @@
 
 #include "dit_fused_distributed_groupnorm_device_operation.hpp"
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 
 #include "ttnn/device.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"

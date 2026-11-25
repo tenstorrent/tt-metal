@@ -241,6 +241,8 @@ class Tracer:
         kwargs = _tree_map(_verify_value, kwargs, path_label="kwargs")
         self._args = _tree_map(self._tensor_to_device, args, path_label="args")
         self._kwargs = _tree_map(self._tensor_to_device, kwargs, path_label="kwargs")
+        _tree_map(_force_copy_compile, self._args, path_label="args")
+        _tree_map(_force_copy_compile, self._kwargs, path_label="kwargs")
 
         if self._prep_run:
             if self._clone_prep_inputs:
@@ -431,6 +433,13 @@ def _is_tracer_valid_value(value: Any) -> bool:
     if isinstance(value, dict):
         return all(isinstance(k, _TRACER_VALID_INPUT_TYPES) and _is_tracer_valid_value(v) for k, v in value.items())
     return False
+
+
+def _force_copy_compile(value: Any, *, path_label: str) -> None:
+    """Compile the copy that replay uses to refresh a device input; capture itself never runs it."""
+    del path_label
+    if isinstance(value, ttnn.Tensor):
+        ttnn.copy(value, value)
 
 
 def _clone_tensor(value: Any, *, path_label: str) -> Any:

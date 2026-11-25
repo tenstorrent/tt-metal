@@ -18,8 +18,8 @@
 
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/experimental/tensor_prefetcher.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 
 namespace {
 

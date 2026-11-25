@@ -8,12 +8,12 @@
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 

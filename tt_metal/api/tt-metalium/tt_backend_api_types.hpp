@@ -4,7 +4,12 @@
 
 #pragma once
 
-// DEPRECATED-FORWARDING-HEADER: <tt-metalium/tt_backend_api_types.hpp> moved to <tt-metalium/data_formats/data_format.hpp>.
-// This header only forwards to the new location; it is deprecated, with a warning and a removal date, in a follow-up change.
+// DEPRECATED-FORWARDING-HEADER: <tt-metalium/tt_backend_api_types.hpp> moved to
+// <tt-metalium/data_formats/data_format.hpp>. This forwarding header will be removed after 2027-03-05.
+#ifndef TT_METALIUM_SUPPRESS_DEPRECATED_HEADER_WARNINGS
+// NOLINTNEXTLINE(clang-diagnostic-#warnings,clang-diagnostic-#pragma-messages)
+#warning \
+    "<tt-metalium/tt_backend_api_types.hpp> is deprecated and will be removed after 2027-03-05; include <tt-metalium/data_formats/data_format.hpp> instead (define TT_METALIUM_SUPPRESS_DEPRECATED_HEADER_WARNINGS to silence this message)"
+#endif
 
 #include <tt-metalium/data_formats/data_format.hpp>  // IWYU pragma: export

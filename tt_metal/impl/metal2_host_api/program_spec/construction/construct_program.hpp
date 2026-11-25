@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include "impl/metal2_host_api/program_spec/collection/collect_metadata.hpp"

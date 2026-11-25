@@ -171,7 +171,9 @@ void apply_score_func(uint32_t cb_in_scores_id, uint32_t cb_activated_scores_id,
         reconfig_data_format_srca(cb_in_scores_id);
         // copy tile from scores cb to destination register 0
         copy_init(cb_in_scores_id);
+        tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
         copy_tile(cb_in_scores_id, 0, 0);
+        tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
         activate_tile<score_func>(0);
         tile_regs_commit();
         cb_in_scores.pop_front(1);
@@ -214,10 +216,14 @@ void apply_score_func_add_bias(
         // Reconfigure the unpacker for the input (a prior top-k iteration may have left it on UInt16).
         reconfig_data_format_srca(cb_in_scores_id);
         copy_init(cb_in_scores_id);
+        tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
         copy_tile(cb_in_scores_id, 0, dst_score);
+        tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
         reconfig_data_format_srca(cb_in_scores_id, cb_in_bias_id);
         copy_init(cb_in_bias_id);
+        tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
         copy_tile(cb_in_bias_id, 0, dst_key);
+        tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
         activate_add_bias_tile<score_func>(dst_score, dst_key);
         tile_regs_commit();
         cb_in_scores.pop_front(1);
@@ -330,9 +336,13 @@ void sum_top_experts_per_group(
     tile_regs_acquire();
     reconfig_data_format_srca(cb_top_experts_per_group_id);
     copy_init(cb_top_experts_per_group_id);
+    tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
     copy_tile(cb_top_experts_per_group_id, 0, dst_sum);
+    tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
     for (uint32_t i = 1; i < summed_experts_per_group; i++) {
+        tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
         copy_tile(cb_top_experts_per_group_id, i, dst_summand);
+        tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
         add_binary_tile_init();
         add_binary_tile(dst_sum, dst_summand, dst_sum);
     }
@@ -369,10 +379,14 @@ void topk_group_scores(
 
     // copy scores tiles to dest reg 0 and index tiles to dest reg 2
     copy_init(cb_group_summed_scores_id);
+    tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
     copy_tile(cb_group_summed_scores_id, 0, 0);
+    tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
     reconfig_data_format_srca(cb_group_summed_scores_id, cb_group_index_template_id);
     copy_init(cb_group_index_template_id);
+    tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
     copy_tile(cb_group_index_template_id, 0, 2);
+    tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
 
     // llk_topk_sort -> inplace
     if constexpr (rank_tag) {
@@ -453,8 +467,10 @@ void topk(
     reconfig_data_format_srca(cb_winning_group_indices_id);
     if constexpr (indices_pretransposed) {
         copy_init(cb_winning_group_indices_id);
+        tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
         copy_tile(cb_winning_group_indices_id, 0, 2);
         copy_tile(cb_winning_group_indices_id, 1, 3);
+        tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
     } else {
         transpose_init(cb_winning_group_indices_id);
         transpose_tile(cb_winning_group_indices_id, 0, 2);
@@ -480,7 +496,9 @@ void topk(
         reconfig_data_format_srca(cb_winning_group_indices_id);
         if constexpr (indices_pretransposed) {
             copy_init(cb_winning_group_indices_id);
+            tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
             copy_tile(cb_winning_group_indices_id, j, 3);
+            tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
         } else {
             transpose_init(cb_winning_group_indices_id);
             transpose_tile(cb_winning_group_indices_id, j, 3);
