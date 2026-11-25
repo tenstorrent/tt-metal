@@ -984,8 +984,12 @@ void Cluster::write_core(
         if (pinned_base != nullptr && src >= pinned_base &&
             src + sz_in_bytes <= pinned_base + pinned_src->get_size()) {
             // The DMA engine reads the caller's pinned pages directly; the call returns once the transfer is done.
-            pinned_src->dma_write_to_device(
-                static_cast<size_t>(src - pinned_base), sz_in_bytes, {core_coord.x, core_coord.y}, addr);
+            this->driver_->get_chip(chip_id)->get_tt_device()->dma_write_zero_copy(
+                pinned_src->get_iova(static_cast<size_t>(src - pinned_base)),
+                addr,
+                sz_in_bytes,
+                tt_xy_pair{core_coord.x, core_coord.y},
+                tt::umd::get_selected_noc_id());
         } else {
             this->driver_->dma_write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
         }
