@@ -268,6 +268,7 @@ DB_SCHEMA = [
     Column("out_shift", "int64", True, "configuration"),
     Column("sparse_k_iterations", "int64", True, "configuration"),
     Column("within_bank_mask", "int64", True, "configuration"),
+    Column("logit_softcap_polynomial", "bool", True, "configuration"),
     Column("b2d_base", "int64", True, "configuration"),
     Column("d2b_dst", "int64", True, "configuration"),
     Column("do_extra_scale", "bool", True, "configuration"),
