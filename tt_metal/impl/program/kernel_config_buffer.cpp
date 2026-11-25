@@ -141,7 +141,7 @@ std::unordered_map<CoreCoord, uint32_t> get_required_buffer_sizes(IDevice& devic
 
 // Allocates the shards for `program` on `device`: one per-core-allocated Buffer per shard size, each core in the one of
 // its size.
-std::vector<KernelConfigBufferImpl::Shards> allocate_shards(IDevice& device, Program& program) {
+std::vector<KernelConfigBufferImpl::Shards> allocate_shards(IDevice& device, Program& program, bool bottom_up) {
     std::map<uint32_t, std::vector<CoreRange>> cores_by_size;
     for (const auto& [core, buffer_size] : get_required_buffer_sizes(device, program)) {
         cores_by_size[buffer_size].emplace_back(core);
@@ -158,7 +158,12 @@ std::vector<KernelConfigBufferImpl::Shards> allocate_shards(IDevice& device, Pro
             TensorMemoryLayout::HEIGHT_SHARDED);
         per_core_allocation::set_per_core_allocation(sharding_args, true);
         auto buffer = BufferImpl::create(
-            &device, static_cast<DeviceAddr>(buffer_size) * num_cores, buffer_size, BufferType::L1, sharding_args);
+            &device,
+            static_cast<DeviceAddr>(buffer_size) * num_cores,
+            buffer_size,
+            BufferType::L1,
+            sharding_args,
+            bottom_up);
         sizes += fmt::format(" {} B x {} cores;", buffer_size, num_cores);
         shards.push_back({.cores = cores, .size = buffer_size, .buffer = std::move(buffer)});
     }
@@ -168,7 +173,8 @@ std::vector<KernelConfigBufferImpl::Shards> allocate_shards(IDevice& device, Pro
 
 }  // namespace
 
-KernelConfigBuffer CreateKernelConfigBuffer(distributed::MeshDevice& device, distributed::MeshWorkload& workload) {
+KernelConfigBuffer CreateKernelConfigBuffer(
+    distributed::MeshDevice& device, distributed::MeshWorkload& workload, bool bottom_up) {
     TT_FATAL(
         !MetalContext::instance(device.impl().get_context_id()).rtoptions().get_fast_dispatch(),
         "A kernel config buffer can only be allocated in slow dispatch mode: fast dispatch places kernel binaries in "
@@ -183,7 +189,7 @@ KernelConfigBuffer CreateKernelConfigBuffer(distributed::MeshDevice& device, dis
             if (!device.impl().is_local(coord)) {
                 continue;
             }
-            auto device_shards = allocate_shards(*device.impl().get_device(coord), program);
+            auto device_shards = allocate_shards(*device.impl().get_device(coord), program, bottom_up);
             std::move(device_shards.begin(), device_shards.end(), std::back_inserter(shards));
         }
     }

@@ -17,8 +17,8 @@ namespace ttnn::compiled_program {
 namespace {
 
 tt::tt_metal::experimental::KernelConfigBuffer create_kernel_config_buffer(
-    ttnn::MeshDevice& mesh_device, ttnn::device_operation::CompiledProgram& compiled) {
-    return ttnn::device_operation::create_kernel_config_buffer(mesh_device, compiled);
+    ttnn::MeshDevice& mesh_device, ttnn::device_operation::CompiledProgram& compiled, bool bottom_up) {
+    return ttnn::device_operation::create_kernel_config_buffer(mesh_device, compiled, bottom_up);
 }
 
 }  // namespace
@@ -58,12 +58,18 @@ void py_module(nb::module_& mod) {
         Args:
             device (ttnn.MeshDevice): The device ``compiled_program`` was compiled for.
             compiled_program (ttnn.experimental.CompiledProgram): The program to size the buffer for.
+            bottom_up (bool): Allocate it from the bottom of L1 instead of the top. Defaults to False.
 
         Returns:
             KernelConfigBuffer: The buffer.
         )doc";
     ttnn::bind_function<"create_kernel_config_buffer", "ttnn.experimental.">(
-        mod, doc, &create_kernel_config_buffer, nb::arg("device"), nb::arg("compiled_program"));
+        mod,
+        doc,
+        &create_kernel_config_buffer,
+        nb::arg("device"),
+        nb::arg("compiled_program"),
+        nb::arg("bottom_up") = false);
 }
 
 }  // namespace ttnn::compiled_program

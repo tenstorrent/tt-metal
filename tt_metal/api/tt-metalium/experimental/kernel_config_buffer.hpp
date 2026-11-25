@@ -69,10 +69,11 @@ private:
 // outgrow the KERNEL_CONFIG window: launching them from it fails.
 //
 // Each core of each device gets a shard sized for its kernel group's binaries in that device's program, at its own
-// address.
+// address. `bottom_up` allocates the shards from the bottom of L1 instead of the top.
 //
 // Requires slow dispatch and the device opened with TT_METAL_ALLOCATOR_MODE_HYBRID=1.
-KernelConfigBuffer CreateKernelConfigBuffer(distributed::MeshDevice& device, distributed::MeshWorkload& workload);
+KernelConfigBuffer CreateKernelConfigBuffer(
+    distributed::MeshDevice& device, distributed::MeshWorkload& workload, bool bottom_up = false);
 
 // distributed::EnqueueMeshWorkload, with the workload's Tensix kernel binaries written to and run from
 // `buffer`, each core's at its own address. `buffer` must have a shard on each Tensix core of each device's

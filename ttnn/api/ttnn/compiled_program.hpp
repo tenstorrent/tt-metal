@@ -69,17 +69,17 @@ private:
 
 // A kernel config buffer on `mesh_device` for `compiled` (experimental::CreateKernelConfigBuffer), for
 // device_operation::run to run its Tensix kernel binaries from instead of the KERNEL_CONFIG window. `mesh_device` must
-// be the MeshDevice `compiled` was compiled for. Needs slow dispatch and the device opened with
-// TT_METAL_ALLOCATOR_MODE_HYBRID=1.
+// be the MeshDevice `compiled` was compiled for. `bottom_up` allocates it from the bottom of L1 instead of the top.
+// Needs slow dispatch and the device opened with TT_METAL_ALLOCATOR_MODE_HYBRID=1.
 inline tt::tt_metal::experimental::KernelConfigBuffer create_kernel_config_buffer(
-    ttnn::MeshDevice& mesh_device, CompiledProgram& compiled) {
+    ttnn::MeshDevice& mesh_device, CompiledProgram& compiled, bool bottom_up = false) {
     TT_FATAL(
         mesh_device.id() == compiled.mesh_device_id(),
         "\"{}\" was compiled for MeshDevice {}, not MeshDevice {}",
         compiled.operation_name(),
         compiled.mesh_device_id(),
         mesh_device.id());
-    return tt::tt_metal::experimental::CreateKernelConfigBuffer(mesh_device, compiled.workload());
+    return tt::tt_metal::experimental::CreateKernelConfigBuffer(mesh_device, compiled.workload(), bottom_up);
 }
 
 }  // namespace ttnn::device_operation

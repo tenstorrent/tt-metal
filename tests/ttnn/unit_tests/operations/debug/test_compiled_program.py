@@ -127,12 +127,13 @@ def test_run_rejects_a_different_program(device, expect_error):
 
 
 @needs_kernel_config_buffer
-def test_run_from_kernel_config_buffer(device):
+@pytest.mark.parametrize("bottom_up", [False, True])
+def test_run_from_kernel_config_buffer(device, bottom_up):
     data, input_tensor, output_tensor = make_io(device)
     io_tensors = [input_tensor, output_tensor]
     descriptor = copy_descriptor(input_tensor, output_tensor, plain_cb())
     compiled = ttnn.experimental.compile_generic_op(io_tensors, descriptor)
-    buffer = ttnn.experimental.create_kernel_config_buffer(device, compiled)
+    buffer = ttnn.experimental.create_kernel_config_buffer(device, compiled, bottom_up=bottom_up)
     assert buffer.max_size > 0
 
     ttnn.experimental.run_compiled_program(compiled, io_tensors, descriptor, kernel_config_buffer=buffer)
