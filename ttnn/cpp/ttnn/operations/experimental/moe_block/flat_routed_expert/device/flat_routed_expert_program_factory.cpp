@@ -196,10 +196,17 @@ FlatProgramHandles add_flat_routed_expert_program(
     // along the snake (down a column, wrapping inside the rectangle, one column over, on down), each piece once its
     // successor has freed the block's slot. One snake a rectangle (2: the relay writes every block twice - GLM-5.3 M
     // 1024 238.7 vs 205.5 us / expert, multicast 211.5), 4 cut-through pieces, the forwarder on the gate/up NCRISC
-    // (gate_up_x_forwarder.cpp) on NOC0 with 3 pieces in flight, the receiver (gate_up_core_reader.cpp, BRISC) on NOC1.
+    // (gate_up_x_forwarder.cpp) on NOC0 with 3 or 6 pieces in flight (below), the receiver (gate_up_core_reader.cpp,
+    // BRISC) on NOC1.
     const auto aligned = [&](uint32_t n) { return x_bytes % n == 0 && (x_bytes / n) % 16 == 0; };
     const uint32_t x_pieces = aligned(4) ? 4 : (aligned(2) ? 2 : 1);
-    constexpr uint32_t X_FWD_DEPTH = 3;
+    // The forwarder keeps X_FWD_DEPTH pieces in flight while it forwards an expert of at least X_FWD_DEEP_ROW_TILES row
+    // tiles, X_FWD_SHALLOW below. Against 3 everywhere (P150): GLM-5.3 4x4 10240 uniform -5.1% / zipf -2.7%, 8x4 10240
+    // -3.1%, DSV4.1-Flash 8x4 5120 hot -12.1% / 10240 -6.3%, K3 8x4 5120 hot -2.8%; no case +0.3% or more. 6 everywhere
+    // slowed the short experts (GLM-5.3-Flash +2.2%, M3 +1.9%; and GLM-5.3 8x4 5120 - 5 row tiles an expert - in the
+    // MoE block on a Galaxy, b26a0166954); a threshold of 5 row tiles, too (M3 +1.8%); 8 missed DSV4.1-Flash 10240.
+    // 8 pieces in flight: worse everywhere (the weight reads' transaction ids start at 8).
+    constexpr uint32_t X_FWD_DEPTH = 6, X_FWD_SHALLOW = 3, X_FWD_DEEP_ROW_TILES = 6;
     log_info(
         tt::LogOp,
         "flat_routed_expert: x read once (helpers), unicast snakes (snakes 1 pieces {} {} forwarder depth {})",
@@ -319,6 +326,10 @@ FlatProgramHandles add_flat_routed_expert_program(
     options["x_ring_blocks"] = p.x_ring_blocks;
     options["y_row_major"] = cfg.y_row_major ? 1 : 0;
     // (MEASUREMENT ONLY: the kernels' wait probes, kernels/zz_probes.hpp)
+    // (MEASUREMENT ONLY: FLAT_GU_K_STEPS=0 - the gate/up matmul a matmul_block a K step, the A/B of matmul_block_k)
+    options["gate_up_k_steps"] = std::getenv("FLAT_GU_K_STEPS") == nullptr || std::getenv("FLAT_GU_K_STEPS")[0] != '0';
+    options["gate_up_skip_activation"] =
+        std::getenv("FLAT_GU_SKIP_ACT") != nullptr && std::getenv("FLAT_GU_SKIP_ACT")[0] == '1';  // (MEASUREMENT ONLY)
     options["zz_flat_probes"] = std::getenv("FLAT_ZZ_PROBES") != nullptr && std::getenv("FLAT_ZZ_PROBES")[0] == '1';
     options["y_row_major_rows"] = 0;  // (the down kernels': their column width's)
     options["down_core_count"] = ND;
@@ -556,7 +567,7 @@ FlatProgramHandles add_flat_routed_expert_program(
         // 1e4..2e5 launches, any chip), a hardware hang the NoC probe test reproduces from the traffic alone
         // (tests/ttnn/unit_tests/operations/noc_hang_probe, op_skeleton). The receivers count their grants
         // locally; the x forwarder (NCRISC) on NOC0 reads their consumed count / end marker (options x_consumed_sem /
-        // x_end_sem), one successor, X_FWD_DEPTH pieces in flight
+        // x_end_sem), one successor, X_FWD_SHALLOW / X_FWD_DEPTH pieces in flight
         const Options gu_reader_options = with_added(options, {{"x_cb", 0}, {"weight_cb", 1}, {"h_local_cb", 3}});
         TT_FATAL(
             x_bytes % x_pieces == 0 && (x_bytes / x_pieces) % 16 == 0,
@@ -570,13 +581,18 @@ FlatProgramHandles add_flat_routed_expert_program(
                p.gate_up_cores,
                DataMovementProcessor::RISCV_0,
                NOC::NOC_1,
-               with_added(gu_reader_options, {{"x_forward_depth", X_FWD_DEPTH}, {"x_fwd_brisc", x_noc1 ? 1u : 0u}}));
+               with_added(gu_reader_options, {{"x_forward_depth", X_FWD_SHALLOW}, {"x_fwd_brisc", x_noc1 ? 1u : 0u}}));
         const KernelHandle k_x_forwarder =
             dm("gate_up_x_forwarder.cpp",
                p.gate_up_cores,
                DataMovementProcessor::RISCV_1,
                NOC::NOC_0,
-               with_added(options, {{"x_forward_depth", X_FWD_DEPTH}, {"x_fwd_brisc", x_noc1 ? 1u : 0u}}));
+               with_added(
+                   options,
+                   {{"x_forward_depth", X_FWD_DEPTH},
+                    {"x_forward_depth_shallow", X_FWD_SHALLOW},
+                    {"x_forward_deep_row_tiles", X_FWD_DEEP_ROW_TILES},
+                    {"x_fwd_brisc", x_noc1 ? 1u : 0u}}));
         TT_FATAL(
             !p.half_width_gate_up || cfg.activation <= 3,
             "flat_routed_expert: half-width gate / up tiles take SiLU / SwiGLU-OAI / SiTU / clamped SiLU GLU only");

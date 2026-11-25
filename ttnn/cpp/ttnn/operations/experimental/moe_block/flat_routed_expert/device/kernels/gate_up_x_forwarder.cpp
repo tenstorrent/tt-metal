@@ -19,7 +19,8 @@
 // the block's slot (SFREE here), then bumps the successor's XARR after the write is acknowledged; and reports
 // min(consumed (XCONS, published by gate_up_core_reader), forwarded) blocks upstream - the predecessor's SFREE, or on a
 // chain head the relay's word. It ends once gate_up_core_reader has published its last count (XEND = blocks + 1) and
-// every block is forwarded and reported. Named CT args: x_forward_depth (DEPTH: pieces in flight); flat_options:
+// every block is forwarded and reported. Named CT args: x_forward_depth (DEPTH: pieces in flight at most),
+// x_forward_depth_shallow, x_forward_deep_row_tiles (below); flat_options:
 // X_SLOTS = x_ring_blocks, X_BYTES = MT x x_block_k_tiles x x_tile_bytes, X_PIECES = x_chain_pieces, XARR_SEM =
 // x_arrived_sem, SFREE_SEM = x_slot_free_sem, XCONS_SEM = x_consumed_sem, XEND_SEM = x_end_sem, NB (x blocks a
 // sub-block) = super_blocks_per_sub_block x super_block_tiles / x_block_k_tiles, MT = row_tiles_per_sub_block
@@ -42,7 +43,12 @@ void kernel_main() {
     constexpr uint32_t xp = flat_options::x_chain_pieces, xarr_id = flat_options::x_arrived_sem;
     constexpr uint32_t sfree_id = flat_options::x_slot_free_sem, xcons_id = flat_options::x_consumed_sem;
     constexpr uint32_t xend_id = flat_options::x_end_sem;
+    // DEPTH: the transaction ids (pieces in flight at most); pieces in flight while forwarding an expert of fewer
+    // than DEEP_ROWS row tiles: SHALLOW (the deep forwarding slows short experts' weight reads beside it)
     constexpr uint32_t depth = get_named_compile_time_arg_val("x_forward_depth");
+    constexpr uint32_t shallow = get_named_compile_time_arg_val("x_forward_depth_shallow");
+    constexpr uint32_t deep_rows = get_named_compile_time_arg_val("x_forward_deep_row_tiles");
+    static_assert(shallow >= 1 && shallow <= depth);
     // (MEASUREMENT ONLY, FLAT_X_NOC1: the receiver (BRISC, NOC1) forwards x and publishes min(consumed, forwarded) as
     // XCONS; this RISC only reports it upstream and reads the weights)
     constexpr bool x_fwd_brisc = get_named_compile_time_arg_val("x_fwd_brisc") != 0;
@@ -89,11 +95,14 @@ void kernel_main() {
     // written. The entries (sub-blocks | last one's row tiles << 16) follow the loads list in the mailbox.
     const volatile tt_l1_ptr uint32_t* xe = mailbox + 1 + mailbox[0];
     const uint32_t n_ent = xe[0];
-    uint32_t ca = 0, cs = 0, cv_end = nb, cnp = xp;  // the block cursor's entry / sub-block, its end block, its pieces
+    // the block cursor's entry / sub-block, its end block, its pieces, the pieces in flight for its expert
+    uint32_t ca = 0, cs = 0, cv_end = nb, cnp = xp, cdepth = shallow;
     auto set_np = [&]() {
         const uint32_t subs = ca < n_ent ? (xe[1 + ca] & 0xFFFF) : 1u;
-        const uint32_t lr = ca < n_ent && cs + 1 == subs ? (xe[1 + ca] >> 16) : mt;
+        const uint32_t last = ca < n_ent ? (xe[1 + ca] >> 16) : mt;
+        const uint32_t lr = cs + 1 == subs ? last : mt;
         cnp = (lr * xp + mt - 1) / mt;
+        cdepth = (subs - 1) * mt + last >= deep_rows ? depth : shallow;
     };
     set_np();
     while (true) {
@@ -103,7 +112,7 @@ void kernel_main() {
         }
         if (!x_fwd_brisc && sxy) {
             const uint32_t arrived = *xarr;
-            while (iss < arrived && iss - fwd < depth && (iss / xp < x_slots || *sfree >= iss / xp + 1 - x_slots)) {
+            while (iss < arrived && iss - fwd < cdepth && (iss / xp < x_slots || *sfree >= iss / xp + 1 - x_slots)) {
                 while (iss / xp >= cv_end) {  // (the cursor onto the block's sub-block)
                     cv_end += nb;
                     if (ca < n_ent && ++cs == (xe[1 + ca] & 0xFFFF)) {
