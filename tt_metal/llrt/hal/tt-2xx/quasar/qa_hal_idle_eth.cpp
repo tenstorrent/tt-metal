@@ -48,6 +48,11 @@ HalCoreInfoType create_eth_mem_map(HalProgrammableCoreType core_type, bool progr
     static_assert(sizeof(KeraunosNocChannels) <= MEM_IERISC_NOC_CHANNELS_SIZE);
     static_assert(MEM_IERISC_PACKET_HEADER_POOL_SIZE == MEM_PACKET_HEADER_POOL_SIZE);
     static_assert(MEM_IERISC_KERNEL_BASE + MEM_IERISC_KERNEL_SIZE * MEM_IERISC_LOCAL_HARTS <= MEM_IERISC_L1_SIZE);
+    // The addresses the idle-Ethernet firmware and kernels are linked at; every router region sits above them.
+    static_assert(MEM_IERISC_SPA_ROUTES_BASE == 0x27c80 && MEM_IERISC_SPA_ROUTES_SIZE == 0x80);
+    static_assert(MEM_IERISC_KERNEL_CONFIG_BASE == 0x27d00 && MEM_IERISC_KERNEL_CONFIG_SIZE == 0x800);
+    static_assert(MEM_IERISC_KERNEL_BASE == 0x28500 && MEM_IERISC_KERNEL_SIZE == MEM_DM_KERNEL_SIZE);
+    static_assert(MEM_IERISC_ROUTING_TABLE_BASE == 0x88500);
 
     std::uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
 
@@ -64,9 +69,8 @@ HalCoreInfoType create_eth_mem_map(HalProgrammableCoreType core_type, bool progr
         GET_IERISC_MAILBOX_ADDRESS_HOST(dprint_buf);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::PROFILER)] = GET_IERISC_MAILBOX_ADDRESS_HOST(profiler);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] = MEM_IERISC_KERNEL_CONFIG_BASE;
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)] = tt::align(
-        linked ? MEM_IERISC_ROUTER_UNRESERVED_BASE : MEM_IERISC_ROUTING_TABLE_BASE + MEM_IERISC_ROUTING_TABLE_SIZE,
-        max_alignment);
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)] =
+        tt::align(MEM_IERISC_ROUTER_UNRESERVED_BASE, max_alignment);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::CORE_INFO)] = GET_IERISC_MAILBOX_ADDRESS_HOST(core_info);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG)] = GET_IERISC_MAILBOX_ADDRESS_HOST(go_messages);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG_INDEX)] =

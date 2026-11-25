@@ -9,7 +9,7 @@
 
 // The Ethernet channels of a Keraunos chip, for a CCE (a Quasar Ethernet core) that resolves NOC addresses itself
 // (tt-2xx/quasar/cce_noc.h). The host writes it at MEM_IERISC_NOC_CHANNELS_BASE of every such core before launch,
-// beside KeraunosSpaRoutes (hostdev/keraunos_spa_routes.h), which holds the addresses.
+// with KeraunosSpaRoutes (hostdev/keraunos_spa_routes.h), which holds the addresses.
 //
 // A NOC coordinate names an Ethernet core in one of two forms. A core's own coordinate is (KERAUNOS_NOC_CCE0_X +
 // eth_cce, hsio tile), and cores says which of those are cores of the chip. An Ethernet channel's coordinate is
