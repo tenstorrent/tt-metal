@@ -23,7 +23,7 @@
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include "tt_metal/llrt/hal.hpp"
 #include <umd/device/coordinates/grendel_noc_address_resolver.hpp>
-#include <umd/device/soc_arch_descriptor.hpp>
+#include <tt-umd/soc_arch_descriptor.hpp>
 #include "tt_metal/llrt/rtoptions.hpp"
 #include "tt_metal/common/tt_backend_api_types.hpp"
 #include <tt-logger/tt-logger.hpp>
