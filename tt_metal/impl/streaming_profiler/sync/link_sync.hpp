@@ -53,12 +53,12 @@ uint32_t router_l1_limit(const tt_fabric::FabricContext& fabric, uint32_t router
 std::unordered_map<std::string, uint32_t> compile_args(
     kernel_profiler::LinkSyncRole role, uint32_t link_l1, bool sync_check);
 // Adds the link-sync compile-time args (LINK_SYNC_ROLE, LINK_SYNC_L1_ADDR, LINK_SYNC_CHECK) to a Blackhole fabric
-// router's kernel when the streaming profiler is on, which is when the router compiles its clock sync port. Only
-// ERISC0's router on a link the profiler syncs gets a transmitter or receiver role. Every other router gets None, and
-// its hook compiles to nothing.
+// router's kernel when the streaming profiler is on, which is when the router compiles its clock sync port. On a link
+// the profiler syncs, the ERISC that services the router's receiver channels gets a transmitter or receiver role:
+// ERISC 1 of two, the only ERISC otherwise. Every other router gets None, and its hook compiles to nothing.
 void add_router_compile_args(
     const tt_fabric::FabricContext& fabric,
-    uint32_t risc_id,
+    bool services_receiver_channels,
     const tt_fabric::FabricNodeId& node,
     const CoreCoord& eth_logical,
     std::unordered_map<std::string, uint32_t>& named_args);

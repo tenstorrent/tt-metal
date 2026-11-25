@@ -107,7 +107,7 @@ std::unordered_map<std::string, uint32_t> compile_args(
 
 void add_router_compile_args(
     const tt_fabric::FabricContext& fabric,
-    uint32_t risc_id,
+    bool services_receiver_channels,
     const tt_fabric::FabricNodeId& node,
     const CoreCoord& eth_logical,
     std::unordered_map<std::string, uint32_t>& named_args) {
@@ -117,7 +117,7 @@ void add_router_compile_args(
         return;
     }
     auto role = kernel_profiler::LinkSyncRole::None;
-    if (risc_id == 0 && can_capture(hal, rtoptions)) {
+    if (services_receiver_channels && can_capture(hal, rtoptions)) {
         const tt_fabric::ControlPlane& control_plane = fabric.get_control_plane();
         role = role_of(
             fabric.get_cluster(),

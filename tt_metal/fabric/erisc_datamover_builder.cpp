@@ -1526,8 +1526,10 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     get_telemetry_compile_time_args(risc_id, named_args);
 
     if (this->fabric_context_.get_rtoptions().get_streaming_profiler_enabled()) {
+        const bool is_receiver_risc =
+            should_risc_service_receiver_channels(config.arch, config.num_riscv_cores, risc_id);
         tt::tt_metal::streaming_profiler::link_sync::add_router_compile_args(
-            this->fabric_context_, risc_id, this->local_fabric_node_id, this->my_eth_core_logical, named_args);
+            this->fabric_context_, is_receiver_risc, this->local_fabric_node_id, this->my_eth_core_logical, named_args);
     }
 
     // Addresses are emitted unconditionally because the regions are now always reserved, so the

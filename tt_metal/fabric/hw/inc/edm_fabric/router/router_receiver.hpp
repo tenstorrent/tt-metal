@@ -817,6 +817,9 @@ __attribute__((noinline)) void run(DownstreamConnections& downstreams) {
                     break;
                 }
             }
+#if defined(PROFILE_STREAMING) && defined(ARCH_BLACKHOLE)
+            link_sync::RouterHook::poll();  // the streaming profiler's clock sync port (link_sync.hpp)
+#endif
         }
         end_round(round, true);
         if constexpr (telemetry::any_option) {
