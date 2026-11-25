@@ -4,8 +4,8 @@
 
 #pragma once
 
-// Id-free (2.0) Quasar LLK API: copy (FPU datacopy and unpack-to-dest), tilize, eltwise binary and broadcast,
-// matmul, pack, pack untilize.
+// Id-free (2.0) Quasar LLK API: copy (FPU datacopy and unpack-to-dest), tilize, reduce, eltwise binary and
+// broadcast, matmul, pack, pack untilize.
 // New functions only -- the legacy DFB-id LLK API (llk_*_api.h) is untouched. Every function takes the operand's
 // LLKMemDescriptor (L1 format + tile shape) as an NTTP and, where the op reads/writes L1, a buffer-descriptor base
 // (16B units) at init and L1 tile indices relative to it at execute. No DFB id, no host format tables.
@@ -33,6 +33,7 @@
 #include "llk_unpack_binary_operands.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_matmul.h"
+#include "llk_unpack_reduce.h"
 #include "llk_unpack_unary_operand.h"
 #include "llk_unpack_unary_broadcast_operands.h"
 #include "llk_unpack_unary_operand_to_dest.h"
@@ -44,6 +45,7 @@
 #include "llk_math_eltwise_binary_broadcast.h"
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "llk_math_matmul.h"
+#include "llk_math_reduce.h"
 #include "llk_math_unary_broadcast.h"
 #endif
 #ifdef TRISC_PACK
@@ -263,6 +265,34 @@ inline void unpack_tilize(const std::uint32_t bd_base, const std::uint32_t l1_ro
     tdma_guard_note_bd(bd_base);
     _llk_unpack_tilize_<p_unpacr::UNP_A>(l1_row, block_ct_dim, D.shape);
 }
+
+/**
+ * @brief Init for reduce: data (Unp0 descriptor at `bd_data`) and scaler (Unp1 descriptor at `bd_scaler`), SrcA/SrcB
+ * formats, reduce MOP. Row SUM/AVG swaps the operands (data -> SrcB, scaler -> SrcA, see reduce_swaps_operands).
+ * @tparam DD, DS: Data / scaler descriptors.
+ */
+template <PoolType POOL, ReduceDim DIM, LLKMemDescriptor DD, LLKMemDescriptor DS>
+LLK_2_0_NOINLINE void unpack_reduce_init(const std::uint32_t bd_data, const std::uint32_t bd_scaler) {
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(DD.shape, bd_data, static_cast<std::uint32_t>(DD.format));
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP1>(
+        DS.shape, bd_scaler, static_cast<std::uint32_t>(DS.format));
+    constexpr bool swap = reduce_swaps_operands<POOL, DIM>();
+    _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
+        swap ? DS.format : DD.format, swap ? DD.format : DS.format);
+    _llk_unpack_reduce_init_<POOL, DIM>(ckernel::trisc::BFD_ID_UNP0, ckernel::trisc::BFD_ID_UNP1, DD.shape);
+}
+
+/** @brief Unpack data tile `tile_data` and scaler tile `tile_scaler` (indices relative to the init's bases). */
+template <PoolType POOL, ReduceDim DIM, LLKMemDescriptor DD>
+inline void unpack_reduce(
+    const std::uint32_t bd_data,
+    const std::uint32_t bd_scaler,
+    const std::uint32_t tile_data,
+    const std::uint32_t tile_scaler) {
+    tdma_guard_note_bd(bd_data);
+    tdma_guard_note_bd(bd_scaler);
+    _llk_unpack_reduce_<POOL, DIM>(tile_data, tile_scaler, DD.shape);
+}
 #endif
 
 #ifdef TRISC_MATH
@@ -360,6 +390,37 @@ inline void math_matmul_tile(const std::uint32_t dst_index) { _llk_math_matmul_t
 inline void math_matmul_block(const std::uint32_t ct_dim, const std::uint32_t rt_dim) {
     _llk_math_matmul_block_(ct_dim, rt_dim);
 }
+
+/**
+ * @brief Init for reduce (ALU formats + fidelity + MOP). An operand the reduce copies back from Dest (scalar, row MAX)
+ * takes its Dest-derived ALU format.
+ * @tparam DD, DS: Data / scaler descriptors.
+ */
+template <
+    PoolType POOL,
+    ReduceDim DIM,
+    LLKMemDescriptor DD,
+    LLKMemDescriptor DS,
+    bool EN_32BIT_DEST,
+    ckernel::MathFidelity FIDELITY>
+LLK_2_0_NOINLINE void math_reduce_init() {
+    constexpr bool swap = reduce_swaps_operands<POOL, DIM>();
+    constexpr DataFormat srca = swap ? DS.format : DD.format;
+    constexpr DataFormat srcb = swap ? DD.format : DS.format;
+    if constexpr (reduce_moves_dest_to_src<POOL, DIM>()) {
+        math_alu_formats<EN_32BIT_DEST>(
+            ckernel::math::dest_src_format<EN_32BIT_DEST>(srca), ckernel::math::dest_src_format<EN_32BIT_DEST>(srcb));
+    } else {
+        math_alu_formats<EN_32BIT_DEST>(srca, srcb);
+    }
+    _llk_math_reduce_init_<POOL, DIM, EN_32BIT_DEST, FIDELITY>(srca, srcb, DD.shape);
+}
+
+/** @brief Reduce the SrcA/SrcB tile into Dest tile `dst_index` (tile shape `shape`). */
+template <PoolType POOL, ReduceDim DIM>
+inline void math_reduce(const std::uint32_t dst_index, const ckernel::TensorShape& shape) {
+    _llk_math_reduce_<POOL, DIM>(dst_index, shape);
+}
 #endif
 
 #ifdef TRISC_PACK
@@ -369,24 +430,40 @@ constexpr DataFormat pack_src_format() {
     return EN_32BIT_DEST ? DataFormat::Float32 : D.format;
 }
 
+/** @brief Pack0 edge-mask state, kept in pack-thread local memory: Default = pass-through, Reduce = reduce mask. */
+enum class PackerMode : std::uint8_t { Default, Reduce };
+inline thread_local PackerMode packer_mode = PackerMode::Default;
+
 /**
- * @brief Kernel-wide pack setup: packer input format and Dest bank 0 (llk_pack_dest_init).
+ * @brief Kernel-wide pack setup: packer input format, Dest bank 0 (llk_pack_dest_init) and the pass-through edge
+ * mask. The mask outlives the program, so a kernel launched after a reduce kernel starts from it; programming it
+ * here makes @ref packer_mode == Default true at kernel start.
  */
 template <LLKMemDescriptor D, bool EN_32BIT_DEST>
 inline void pack_hw_configure() {
     _llk_pack_hw_configure_<p_pacr::PACK0, EN_32BIT_DEST>(
         pack_src_format<D, EN_32BIT_DEST>(), ckernel::ReluConfig::none());
     _llk_pack_dest_init_<p_pacr::PACK0, DST_SYNC_MODE>();
+    _llk_pack_reduce_mask_clear_();
+}
+
+/** @brief Restore the pass-through Pack0 edge mask if a reduce init left its mask programmed. */
+inline void pack_mode_reset() {
+    if (packer_mode == PackerMode::Reduce) {
+        _llk_pack_reduce_mask_clear_();
+        packer_mode = PackerMode::Default;
+    }
 }
 
 /**
  * @brief Init for packing one tile: Pack0 descriptor at `bd_base`, packer input format, ReLU (zero) or none, L1
- * accumulation off, one-tile MOP.
+ * accumulation off, one-tile MOP, and the pass-through edge mask if a reduce init left its mask programmed.
  * @tparam RELU: true = packer ReLU (max(x, 0)), false = none.
  * @param bd_base: Buffer-descriptor base (16B units); tile indices of @ref pack are relative to it.
  */
 template <LLKMemDescriptor D, bool EN_32BIT_DEST, bool RELU = false>
 LLK_2_0_NOINLINE void pack_init(const std::uint32_t bd_base) {
+    pack_mode_reset();
     ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(D.shape, bd_base, static_cast<std::uint32_t>(D.format));
     constexpr std::uint8_t bfd = ckernel::trisc::BFD_ID_PACK0;
     _llk_pack_hw_configure_<p_pacr::PACK0, EN_32BIT_DEST>(
@@ -404,13 +481,14 @@ inline void pack(const std::uint32_t bd_base, const std::uint32_t dst_index, con
 
 /**
  * @brief Init for pack untilize: Pack0 descriptor at `bd_base`, packer input format, no ReLU, L1 accumulation off,
- * untilize strides and MOP for BLOCK_CT Dest tiles into a row-major buffer whose rows are FULL_CT tiles wide. 32x32
- * tiles only.
+ * untilize strides and MOP for BLOCK_CT Dest tiles into a row-major buffer whose rows are FULL_CT tiles wide, and the
+ * pass-through edge mask if a reduce init left its mask programmed. 32x32 tiles only.
  * @tparam D: Output descriptor.
  * @param bd_base: Buffer-descriptor base (16B units); rows of @ref pack_untilize are relative to it.
  */
 template <LLKMemDescriptor D, bool EN_32BIT_DEST, std::uint32_t BLOCK_CT, std::uint32_t FULL_CT>
 LLK_2_0_NOINLINE void pack_untilize_init(const std::uint32_t bd_base) {
+    pack_mode_reset();
     ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(D.shape, bd_base, static_cast<std::uint32_t>(D.format));
     constexpr std::uint8_t bfd = ckernel::trisc::BFD_ID_PACK0;
     _llk_pack_hw_configure_<p_pacr::PACK0, EN_32BIT_DEST>(
@@ -431,6 +509,17 @@ inline void pack_untilize(const std::uint32_t bd_base, const std::uint32_t dst_i
 
 /** @brief Packer L1 accumulation on/off (the one runtime reconfig of the 2.0 API). */
 inline void pack_set_l1_acc(const bool enable) { _llk_pack_set_l1_acc_<p_pacr::PACK0>(enable); }
+
+/**
+ * @brief Reduce edge mask on Pack0: keep only the reduced row/column of output shape D.shape, zero the rest.
+ * Sets @ref packer_mode to Reduce; the next @ref pack_init or @ref pack_untilize_init restores the pass-through mask.
+ */
+template <ReduceDim DIM, LLKMemDescriptor D>
+LLK_2_0_NOINLINE void pack_reduce_mask_config() {
+    // Always reprogram: the mask depends on DIM and D.shape, so skipping when already Reduce would keep a stale mask.
+    _llk_pack_reduce_mask_config_<DIM>(D.shape);
+    packer_mode = PackerMode::Reduce;
+}
 #endif
 
 #undef LLK_2_0_NOINLINE
