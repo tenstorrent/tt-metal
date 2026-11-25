@@ -10,10 +10,11 @@
 // LLKMemDescriptor (L1 format + tile shape) as an NTTP and, where the op reads/writes L1, a buffer-descriptor base
 // (16B units) at init and L1 tile indices relative to it at execute. No DFB id, no host format tables.
 //
-// Init functions are noinline (one copy per descriptor set) and program ALL state their op reads: buffer descriptor
-// (fixed id per TDMA engine, ckernel_buf_desc.h), register formats, MOP. So no reconfig and no uninit:
-// on Quasar every op is re-initialised before it runs anyway. Execute functions and the once-per-kernel hw_configure
-// setups (24-52 B) are plain inline.
+// Unpack and pack init functions are noinline (one copy per descriptor set; pack firmware is tight). Math inits are
+// plain inline: on the math thread a noinline call blocks constant folding and costs more than it saves.
+// Init functions program ALL state their op reads: buffer descriptor (fixed id per TDMA engine, ckernel_buf_desc.h),
+// register formats, MOP. So no reconfig and no uninit: on Quasar every op is re-initialised before it runs anyway.
+// Execute functions and the once-per-kernel hw_configure setups (24-52 B) are plain inline.
 //
 // Src register formats come from the L1 format via src_format (the host table's rule, on device): 16-bit floats as
 // is, MX block floats expand to Float16_b, Float32 narrows to Tf32 (32-bit Dest) or Float16_b. FPU operands (binary,
@@ -342,7 +343,7 @@ inline void math_alu_formats(const DataFormat srca, const DataFormat srcb) {
 
 /** @brief Init for SrcA -> Dest datacopy of one tile of shape D.shape (ALU formats + MOP). */
 template <LLKMemDescriptor D, bool EN_32BIT_DEST>
-LLK_2_0_NOINLINE void math_datacopy_init() {
+inline void math_datacopy_init() {
     math_alu_formats<EN_32BIT_DEST>(D.format, D.format);
     _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, EN_32BIT_DEST>(
         D.shape.total_num_faces() * D.shape.face_r_dim /*num_rows_per_matrix*/, 1 /*num_matrices*/);
@@ -363,7 +364,7 @@ template <
     bool EN_32BIT_DEST,
     ckernel::MathFidelity FIDELITY,
     BroadcastType BCAST = BroadcastType::NONE>
-LLK_2_0_NOINLINE void math_binary_init(const bool acc_to_dest) {
+inline void math_binary_init(const bool acc_to_dest) {
     constexpr ckernel::MathFidelity fidelity =
         TYPE == EltwiseBinaryType::ELWMUL ? FIDELITY : ckernel::MathFidelity::LoFi;
     constexpr DataFormat srca = src_format(DA.format, EN_32BIT_DEST), srcb = src_format(DB.format, EN_32BIT_DEST);
@@ -387,7 +388,7 @@ inline void math_binary(const std::uint32_t dst_index) {
 
 /** @brief Init for the broadcast SrcB -> Dest copy of one 32x32 tile (ALU formats + MOP). */
 template <LLKMemDescriptor D, BroadcastType BCAST, bool EN_32BIT_DEST>
-LLK_2_0_NOINLINE void math_unary_bcast_init() {
+inline void math_unary_bcast_init() {
     math_alu_formats<EN_32BIT_DEST>(src_format(D.format, EN_32BIT_DEST), src_format(D.format, EN_32BIT_DEST));
     _llk_math_eltwise_unary_broadcast_init_<BCAST, EN_32BIT_DEST, false /*unpack_to_dest*/>(D.shape);
 }
@@ -401,7 +402,7 @@ inline void math_unary_bcast(const std::uint32_t dst_index) {
  * @brief Init for matmul Dest += SrcB(in0) x SrcA(in1) over a [rt_dim, ct_dim] block (ALU formats + MOP).
  */
 template <LLKMemDescriptor D0, LLKMemDescriptor D1, bool EN_32BIT_DEST, ckernel::MathFidelity FIDELITY>
-LLK_2_0_NOINLINE void math_matmul_init(const std::uint32_t ct_dim, const std::uint32_t rt_dim) {
+inline void math_matmul_init(const std::uint32_t ct_dim, const std::uint32_t rt_dim) {
     constexpr DataFormat srca = src_format(D1.format, EN_32BIT_DEST), srcb = src_format(D0.format, EN_32BIT_DEST);
     math_alu_formats<EN_32BIT_DEST>(srca, srcb);
     _llk_math_matmul_init_<FIDELITY>(srca, srcb, ct_dim, rt_dim, D0.shape, D1.shape);
@@ -427,7 +428,7 @@ template <
     LLKMemDescriptor DS,
     bool EN_32BIT_DEST,
     ckernel::MathFidelity FIDELITY>
-LLK_2_0_NOINLINE void math_reduce_init() {
+inline void math_reduce_init() {
     constexpr bool swap = reduce_swaps_operands<POOL, DIM>();
     constexpr DataFormat srca = swap ? DS.format : DD.format;
     constexpr DataFormat srcb = swap ? DD.format : DS.format;
