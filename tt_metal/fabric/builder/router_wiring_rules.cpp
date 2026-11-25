@@ -350,7 +350,8 @@ RouterVcShape router_vc_shape(
         }
 
         if (requires_vc2) {
-            vc2_senders = vc_config->vc2_forwards ? vc0_senders : 1;
+            // forwarding: VC0's producers without its worker
+            vc2_senders = vc_config->vc2_forwards ? vc0_senders - 1 : 1;
         } else {
             vc2_senders = 0;
         }

@@ -62,6 +62,7 @@ set(FABRIC_SOURCES
     fabric_vc2_connection.cpp
     host_rdma/host_rdma.cpp
     inter_domain.cpp
+    inter_domain_mesh.cpp
     fabric_init.cpp
     fabric_host_utils.cpp
     fabric_switch_manager.cpp

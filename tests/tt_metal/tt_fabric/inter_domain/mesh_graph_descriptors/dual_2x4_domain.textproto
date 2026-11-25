@@ -1,0 +1,40 @@
+# An inter-domain domain of two 2x4 meshes (half a Blackhole Galaxy), one process each, mesh 0's last row cabled to
+# mesh 1's first. VC2 spans all 16 chips as one 4x4 mesh.
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 2, 4 ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 4 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 0 } }
+    channels { count: 2 }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 5 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 1 } }
+    channels { count: 2 }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 6 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 2 } }
+    channels { count: 2 }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 7 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 3 } }
+    channels { count: 2 }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

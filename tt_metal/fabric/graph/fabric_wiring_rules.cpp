@@ -38,7 +38,12 @@ public:
     }
 
     // stock skips the VC2 receiver on the inter-mesh Z router, so it gets no VC2 at all here
-    bool carries(const Port& port, uint32_t vc) const override { return vc != 2 || !is_z_boundary(port); }
+    bool carries(const Port& port, uint32_t vc) const override {
+        if (vc == 2 && options_.vc_config.vc2_forwards) {
+            return port.capability == EdgeCapability::INTERDOMAIN || vc2_direction(port).has_value();
+        }
+        return vc != 2 || !is_z_boundary(port);
+    }
 
     bool has_worker(const Port&, uint32_t vc) const override {
         return vc == 0 || (vc == 2 && !options_.vc_config.vc2_forwards);
@@ -61,7 +66,10 @@ public:
             return vc != 1 && from_perimeter != to_perimeter && (vc == 0 ? to_perimeter : from_perimeter);
         }
         if (vc2_forwards) {
-            vc = 0;
+            // dimension order over the domain: on, or from its Y axis onto its X axis
+            const auto from = vc2_direction(in);
+            const auto to = vc2_direction(out);
+            return from && to && (*to == get_opposite_direction(*from) || (is_y(*from) && !is_y(*to)));
         }
         const auto turns = turn_set_for_router(
             options_.topology, *in.direction, chips_.at(in.node), axis_of(in.node.mesh_id), &options_.vc_config);
@@ -76,6 +84,13 @@ public:
     }
 
 private:
+    static bool is_y(RoutingDirection d) { return d == RoutingDirection::N || d == RoutingDirection::S; }
+
+    std::optional<RoutingDirection> vc2_direction(const Port& port) const {
+        const auto it = options_.vc2_directions.find({port.node, *port.direction});
+        return it == options_.vc2_directions.end() ? std::nullopt : std::optional(it->second);
+    }
+
     ExpressAxis axis_of(MeshId mesh) const {
         const auto it = options_.express_axis.find(mesh);
         return it == options_.express_axis.end() ? ExpressAxis::NONE : it->second;

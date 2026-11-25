@@ -10,6 +10,7 @@
 #include <memory>
 #include <map>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
+#include "tt_metal/fabric/inter_domain_mesh.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
 #include "tt_metal/fabric/packet_header_types.hpp"
 
@@ -121,6 +122,12 @@ public:
     // Returns empty map if routing mode is undefined.
     std::map<std::string, std::string> get_fabric_kernel_defines(const ControlPlane& control_plane) const;
 
+    // inter-domain only
+    const InterDomainMesh& get_inter_domain_mesh() const {
+        TT_FATAL(inter_domain_mesh_.has_value(), "no inter-domain mesh: inter-domain is off");
+        return *inter_domain_mesh_;
+    }
+
     // ============ Builder Context Access ============
     // For build-time operations (config selection, per-device state, router addresses)
     // Lazy initialization on first access
@@ -185,6 +192,8 @@ private:
     uint32_t routing_2d_buffer_size_ = 0;      // Valid only in 2D mode
 
     uint16_t routing_mode_ = 0;  // ROUTING_MODE_UNDEFINED by default
+
+    std::optional<InterDomainMesh> inter_domain_mesh_;
 
     // Builder context (lazy init on first access)
     mutable std::once_flag builder_context_init_flag_;

@@ -129,11 +129,14 @@ GraphFabricBuildSession::GraphFabricBuildSession(FabricContext& fabric_context) 
         }
         fabric_context.get_builder_context().set_inter_domain_ports(std::move(api_ports));
     }
-    const WiringOptions options{
+    WiringOptions options{
         .topology = topology,
         .vc_config = fabric_context.get_builder_context().get_intermesh_vc_config(),
         .express_axis = express_axis,
         .wrap_around_meshes = wrap_around_meshes};
+    if (options.vc_config.vc2_forwards) {
+        options.vc2_directions = vc2_directions(ports, fabric_context.get_inter_domain_mesh());
+    }
     const auto rules = stock_wiring_rules(ports, options);
     auto logical = lower_to_logical(ports, *rules);
     validate(logical, *rules, ValidationLimits{});

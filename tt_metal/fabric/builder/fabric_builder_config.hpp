@@ -39,6 +39,7 @@ struct FabricEriscDatamoverOptions {
     FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED;
     eth_chan_directions direction = eth_chan_directions::EAST;  // only used by 2D to get the correct router direction
     tt::ARCH arch = tt::ARCH::Invalid;                          // selects the per-arch buffer slot tables
+    bool vc2_forwards = false;                                  // VC2's senders forward, none is a worker
 };
 
 namespace builder_config {

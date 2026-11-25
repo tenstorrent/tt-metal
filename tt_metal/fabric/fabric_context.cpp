@@ -75,6 +75,10 @@ uint32_t FabricContext::get_max_2d_action_map_bytes_from_topology(const ControlP
         const auto shape = control_plane.get_physical_mesh_shape(mesh_id, MeshScope::GLOBAL);
         max_bytes = std::max(max_bytes, static_cast<uint32_t>(shape[0]) + static_cast<uint32_t>(shape[1]));
     }
+    if (inter_domain_mesh_) {
+        const auto shape = inter_domain_mesh_->shape();
+        max_bytes = std::max(max_bytes, static_cast<uint32_t>(shape[0]) + static_cast<uint32_t>(shape[1]));
+    }
     return max_bytes;
 }
 
@@ -212,6 +216,10 @@ FabricContext::FabricContext(
 
     // Step 4: Compute and validate routing mode (depends on: topology_)
     this->compute_routing_mode();
+
+    if (rtoptions_.get_fabric_inter_domain() && this->is_2D_routing_enabled_) {
+        this->inter_domain_mesh_ = make_inter_domain_mesh(control_plane.get_mesh_graph());
+    }
 
     // Step 5: Compute packet specifications (depends on: routing flags)
     this->compute_packet_specifications(control_plane, hal, cluster.arch());
