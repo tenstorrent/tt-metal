@@ -1843,9 +1843,7 @@ class TPGatedDeltaNet:
             # shift-register as below -- the conv sum's active rows [0:B] are exact and the downstream
             # q/k/v slices take [0:B]. This keeps the op COUNT identical to the baseline path (just a
             # single pad), vs a per-row slice/concat that added ~4*K ops/layer and erased the width win.
-            qkv_p = ttnn.pad(qkv, [(0, 0), (0, Bmax - B), (0, 0)], value=0.0, memory_config=_L1)
-            ttnn.deallocate(qkv)
-            qkv = qkv_p
+            qkv = _replace(qkv, ttnn.pad(qkv, [(0, 0), (0, Bmax - B), (0, 0)], value=0.0, memory_config=_L1))
         for j in range(self.K - 1):
             ttnn.copy(st[j + 1], st[j])
         ttnn.copy(qkv, st[self.K - 1])
