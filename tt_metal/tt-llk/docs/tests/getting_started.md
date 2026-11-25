@@ -610,9 +610,9 @@ The steps below are the whole setup on a machine that has no tt-metal checkout. 
    ```bash
    gh auth refresh -s read:packages          # once: lets the token of the GitHub CLI read packages
    gh auth token | oras login ghcr.io -u "$(gh api user -q .login)" --password-stdin
-   oras pull ghcr.io/tenstorrent/tt-metal/tt-llk-harness:1.1.0
+   oras pull ghcr.io/tenstorrent/tt-metal/tt-llk-harness:0.0.1
    ```
-   This leaves `tt_llk_harness-1.1.0-py3-none-any.whl` and `requirements.txt`. A suite names the version it was written against; `latest` is for trying the newest. In a workflow of another repository, the job needs `packages: read`, logs in with its own `GITHUB_TOKEN`, and the package has to list that repository under "Manage Actions access" in its settings.
+   This leaves `tt_llk_harness-0.0.1-py3-none-any.whl` and `requirements.txt`. A suite names the version it was written against; `latest` is for trying the newest. In a workflow of another repository, the job needs `packages: read`, logs in with its own `GITHUB_TOKEN`, and the package has to list that repository under "Manage Actions access" in its settings.
 
 2. Install it into the suite's environment:
    ```bash
@@ -638,15 +638,12 @@ To build a wheel from a checkout instead, run `tests/harness_wheel/make_wheel.py
 
 #### Versions
 
-The harness has one version, `MAJOR.MINOR.PATCH`, in `tests/python_tests/tt_llk_harness/VERSION`. It is `tt_llk_harness.__version__`, and its first two numbers are `HARNESS_API_VERSION`, the version `require_version` checks.
+There are two numbers, and they move apart.
 
-| Raise | When |
-| --- | --- |
-| MAJOR | a name leaves `__all__` or changes meaning, after its deprecation period |
-| MINOR | `__all__` gains a name, or the harness gains something a suite can rely on from outside (an option of the plugin, a variable such as `LLK_SFPI_ROOT`) |
-| PATCH | any other release: fixes, goldens, parameters, the helper tree, with nothing new to rely on |
+- The **wheel version**, `MAJOR.MINOR.PATCH`, is in `tests/python_tests/tt_llk_harness/VERSION` and is `tt_llk_harness.__version__`. It names a release: it is what a suite pins when it downloads, and raising it is what publishes. The first release is `0.0.1`.
+- The **API version**, `HARNESS_API_VERSION` in `tt_llk_harness/__init__.py`, is what `require_version` checks. It moves only when `__all__` does, as described under [The supported surface](#the-supported-surface), and `tests/out_of_tree/` pins the exported surface per API version. It was 1.0 before there was a wheel, which is why it is not the wheel's number.
 
-`tests/out_of_tree/` pins the exported surface per MAJOR.MINOR, so the first two cannot be skipped: a surface that changed fails there until the version has moved.
+A release that changes the API version says so in its pull request; a suite pins the wheel version and keeps `require_version(MAJOR, MINOR)` in its conftest.
 
 #### Releasing the harness
 
@@ -655,9 +652,16 @@ A release is a pull request that raises the number in `VERSION`. When it merges,
 - Not every change to the harness is a release. `helpers` changes with the LLKs most days; raise the version when a suite outside this repository needs what changed.
 - A version is published once. The workflow refuses a number that is not greater than the one before it, and refuses to replace a version the package already has, so a suite that pins a version keeps getting the same bytes.
 - What gates a release is the pull request's own checks and the verification above, not the nightly e2e tests on silicon.
-- A manual run of the workflow builds and verifies the wheel of the branch it is run on, and publishes nothing.
 
-Two things are set up once, by an organisation admin. The `llk-harness-release` environment, which the publish job names, should allow deployments from `main` only; required reviewers there make every release wait for an approval. And after the first release, the package's settings decide its visibility (private) and who may read it: teams, and the repositories whose workflows download it. The publish job fails if it finds the package public.
+The workflow can also be run by hand (Actions, **LLK harness release**, "Run workflow", or `gh workflow run llk-harness-release.yaml --ref <branch> [-f publish=true]`):
+
+| Run | What it does |
+| --- | --- |
+| any branch, `publish` off (the default) | builds and verifies the wheel of that branch, and publishes nothing |
+| `main`, `publish` on | the release of the number `VERSION` has on `main`, exactly as the merge would have made it. This is how a release that failed after the merge is run again once the cause is fixed: no version number is spent. A number that is published already is still refused. |
+| another branch, `publish` on | a development build, for trying a wheel, or the publish path itself, before a merge. Its version is `X.Y.Z+<commit time>.g<commit>` and its tag is that with `-` for the `+` (a tag cannot hold one): `oras pull ghcr.io/tenstorrent/tt-metal/tt-llk-harness:0.0.1-202611251200.g0123456789ab`. It never moves `latest` and never takes a release's tag. |
+
+Two things are set up once, by an organisation admin. The `llk-harness-release` environment, which the publish job names, decides which branches may publish: with deployments from `main` only, development builds from other branches are refused there; required reviewers make every publish wait for an approval. And the package's settings decide its visibility (private) and who may read it: teams, and the repositories whose workflows download it. The publish job refuses to push to a package it finds public, and fails if it finds it public after the push.
 
 #### What the wheel holds
 

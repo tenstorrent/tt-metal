@@ -123,7 +123,6 @@ def test_the_builder_and_the_harness_report_one_version():
 
     number = build_wheel.default_version().number
     assert ".".join(map(str, number)) == tt_llk_harness.__version__
-    assert number[:2] == tt_llk_harness.HARNESS_API_VERSION
 
 
 def test_a_release_is_not_built_from_a_tree_with_changes(monkeypatch):

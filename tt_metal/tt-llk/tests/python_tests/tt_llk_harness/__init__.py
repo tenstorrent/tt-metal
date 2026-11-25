@@ -122,15 +122,16 @@ from helpers.utils import passed_test
 #: list programmatically does not hardcode an implementation module path.
 PYTEST_PLUGIN = "tt_llk_harness.plugin"
 
-#: Version of the harness, ``MAJOR.MINOR.PATCH``, read from the ``VERSION`` file
-#: beside this module. A change of that file on main publishes a release.
+#: Version of the wheel, ``MAJOR.MINOR.PATCH``, read from the ``VERSION`` file
+#: beside this module. A change of that file on main publishes a release. It
+#: names a release and says nothing about the interface: that is
+#: ``HARNESS_API_VERSION``.
 __version__ = Path(__file__).with_name("VERSION").read_text().strip()
 
-#: Version of *this interface*, not of tt-llk: MAJOR.MINOR of ``__version__``.
+#: Version of *this interface*, not of tt-llk and not of the wheel.
 #: Bumped when the contract changes: minor for additions, major for a breaking
-#: change that has completed its deprecation period. PATCH is every other
-#: release and promises nothing new. See :func:`require_version`.
-HARNESS_API_VERSION = tuple(int(number) for number in __version__.split(".")[:2])
+#: change that has completed its deprecation period. See :func:`require_version`.
+HARNESS_API_VERSION = (1, 1)
 
 
 def require_version(major: int, minor: int = 0) -> None:
