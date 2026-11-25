@@ -501,7 +501,7 @@
 // The Ethernet link of this CCE, written by the host before launch: EthLink (hostdev/eth_link.h).
 #define MEM_IERISC_FABRIC_ETH_LINK_SIZE 16
 #define MEM_IERISC_FABRIC_ETH_LINK_BASE (MEM_IERISC_PACKET_HEADER_POOL_BASE + MEM_IERISC_PACKET_HEADER_POOL_SIZE)
-// The router's 8-byte staging word of each TX queue for a single-word send on a NOC link (eth_cce_send.h send_dword).
+// The 8-byte staging word of each TX queue for a single-word send on a NOC link (eth_cce_send.h send_dword).
 // Written only through the uncached alias, so no cached line covers it.
 #define MEM_IERISC_FABRIC_NOC_DWORD_STAGE_SIZE 32
 #define MEM_IERISC_FABRIC_NOC_DWORD_STAGE_BASE (MEM_IERISC_FABRIC_ETH_LINK_BASE + MEM_IERISC_FABRIC_ETH_LINK_SIZE)
