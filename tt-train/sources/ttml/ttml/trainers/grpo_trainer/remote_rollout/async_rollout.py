@@ -51,13 +51,8 @@ class AsyncRolloutClient:
 class AsyncRolloutServer:
     """Rollout-rank end of ttt_remote_async: generates and scores rollouts in a loop, without requests from the trainer.
 
-    Unlike MPIRolloutServer, which generates only the prompts the trainer sends and installs weights only when
-    asked, this server cycles ``rollout_batch_source`` itself, wrapping around at the end. It pushes each
-    ScoredRolloutBatch to the RolloutQueue; it drops a batch that waits 0.5 s on a full queue. Weights arrive in the
-    background on the ThreadedWeightBridge while a batch generates. The newest received weights are installed into
-    ``rollout_batch_source.sampler`` before each batch, so every batch is generated with one weight version, which
-    it carries. The server waits only for the first weights, and stops once the trainer closes the bridge. The
-    caller owns ``rollout_batch_source.sampler`` and closes it.
+    It drops a batch that waits 0.5 s on a full RolloutQueue. The caller owns ``rollout_batch_source.sampler`` and
+    closes it.
     """
 
     def __init__(
