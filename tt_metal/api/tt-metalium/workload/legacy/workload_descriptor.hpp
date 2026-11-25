@@ -4,9 +4,9 @@
 
 #pragma once
 
-#include <tt-metalium/global_semaphore.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/memory/cross_program/global_semaphore.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 
 #include <memory>
 #include <vector>

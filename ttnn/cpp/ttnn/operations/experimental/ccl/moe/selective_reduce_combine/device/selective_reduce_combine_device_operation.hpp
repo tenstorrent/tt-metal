@@ -10,7 +10,7 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/types.hpp"
-#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/mesh/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "selective_reduce_combine_device_operation_types.hpp"

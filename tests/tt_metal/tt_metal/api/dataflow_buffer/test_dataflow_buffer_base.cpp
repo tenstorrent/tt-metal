@@ -273,6 +273,35 @@ TEST_F(UnitMeshFixture, DMTest1xDFB2Bx2B_blk4_entry2048) {
     run_single_dfb_program_2_0(this->device(), params);
 }
 
+// Implicit sync with NoC transactions larger than one overlay packet (8 KiB on Quasar). The tiles-to-process
+// counter behind the implicit-sync ISR counts one per packet, so the host programs the threshold in packets.
+#define DFB_MULTI_PACKET_TEST(suffix, p_type, c_type, num_p, num_c, pattern, blk, entry_bytes, entries) \
+    TEST_F(UnitMeshFixture, suffix) {                                                                   \
+        M2SingleDFBParams params{                                                                       \
+            .producer_type = M2PorCType::p_type,                                                        \
+            .consumer_type = M2PorCType::c_type,                                                        \
+            .num_producers = (num_p),                                                                   \
+            .num_consumers = (num_c),                                                                   \
+            .pap = DFBAccessPattern::pattern,                                                           \
+            .cap = DFBAccessPattern::pattern,                                                           \
+            .implicit_sync = true,                                                                      \
+            .entry_size = (entry_bytes),                                                                \
+            .num_entries = (entries),                                                                   \
+            .block_size = (blk),                                                                        \
+        };                                                                                              \
+        run_single_dfb_program_2_0(this->device(), params);                                             \
+    }
+
+// STRIDED: one entry per transaction. 12 KiB = 2 packets, the second partial; 16 KiB = 2 full packets.
+DFB_MULTI_PACKET_TEST(DMTest1xDFB1Sx1S_entry12K_impl, DM, DM, 1, 1, STRIDED, 0, 12288, 16)
+DFB_MULTI_PACKET_TEST(DMTest1xDFB2Sx2S_entry16K_impl, DM, DM, 2, 2, STRIDED, 0, 16384, 16)
+DFB_MULTI_PACKET_TEST(DMTensixTest1xDFB1Sx1S_entry16K_impl, DM, TENSIX, 1, 1, STRIDED, 0, 16384, 16)
+DFB_MULTI_PACKET_TEST(TensixDMTest1xDFB1Sx1S_entry16K_impl, TENSIX, DM, 1, 1, STRIDED, 0, 16384, 16)
+// BLOCKED: one block per transaction. 4 x 4 KiB = 16 KiB = 2 packets per transaction (4 if counted per
+// entry); 4 x 32 KiB = 128 KiB = 16 packets, past the 64 KiB NoC max burst.
+DFB_MULTI_PACKET_TEST(DMTest1xDFB1Bx1B_blk4_entry4K_impl, DM, DM, 1, 1, BLOCKED, 4, 4096, 16)
+DFB_MULTI_PACKET_TEST(DMTest1xDFB1Bx1B_blk4_entry32K_impl, DM, DM, 1, 1, BLOCKED, 4, 32768, 16)
+
 // BLOCKED -> BLOCKED, Tensix -> DM, explicit sync.
 // The host prefills the ring; the Tensix producer only posts credits.
 DFB_BLOCKED_TEST(TensixDMTest1xDFB1Bx1B_blk4, TENSIX, DM, 1, 1, 4, 16, false)

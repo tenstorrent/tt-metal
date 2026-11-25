@@ -5,8 +5,8 @@
 #pragma once
 
 #include <cstdint>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
@@ -15,7 +15,7 @@
 
 #include "ttnn/operation.hpp"
 #include "ttnn/mesh_device_operation_adapter.hpp"
-#include <tt-metalium/workload_descriptor.hpp>
+#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
 
 #include <optional>
 #include <vector>

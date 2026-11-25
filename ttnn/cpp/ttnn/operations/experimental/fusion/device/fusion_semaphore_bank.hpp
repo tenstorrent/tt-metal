@@ -12,9 +12,9 @@
 
 #include <tt_stl/assert.hpp>
 
-#include "tt-metalium/buffer.hpp"
+#include "tt-metalium/memory/buffer/buffer.hpp"
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 

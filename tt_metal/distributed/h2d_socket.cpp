@@ -7,7 +7,7 @@
 #include <internal/mesh_device.hpp>
 #include <internal/service/service_core_manager.hpp>
 #include <internal/l1_ecc_halt.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include <tt-metalium/experimental/sockets/named_shm.hpp>
 #include "tt_metal/distributed/hd_socket_connector_state.hpp"
@@ -17,6 +17,7 @@
 #include <tt-umd/driver_atomics.hpp>
 #include "tt_metal/impl/buffers/h2d_socket_internal.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/debug/inspector/inspector.hpp"
 #include "impl/context/metal_env_impl.hpp"
 #include "impl/dispatch/host_transfer_stats.hpp"
 #include "distributed/mesh_device_impl.hpp"
@@ -26,7 +27,7 @@
 #ifdef TT_METAL_USE_EMULE
 #include "emulated_program_runner.hpp"  // emule::pump_device
 #endif
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include <tt-umd/io_window/io_window.hpp>
@@ -443,6 +444,8 @@ H2DSocketImpl::H2DSocketImpl(
         reinterpret_cast<HDSocketConnectorState*>(static_cast<uint8_t*>(shm_->ptr()) + connector_state_offset_);
     connector_state_->version = kHDSocketConnectorStateVersion;
     connector_state_->clean_shutdown = 1;
+    Inspector::host_socket_created(
+        config_buffer_.get(), recv_core_, /*is_sender=*/false, fifo_size_, aligned_data_buf_start_);
 }
 
 H2DSocketImpl::H2DSocketImpl(

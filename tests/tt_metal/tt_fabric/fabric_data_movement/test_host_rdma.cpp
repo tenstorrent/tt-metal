@@ -16,7 +16,7 @@
 
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 
 #include "fabric_fixture.hpp"
 #include "impl/buffers/dram_sender_topology.hpp"

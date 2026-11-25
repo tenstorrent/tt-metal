@@ -5,7 +5,7 @@
 #include "ring_sdpa_fw_program_factory.hpp"
 
 #include <optional>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 
 #include "metal/common/program_utils.hpp"
 #include "metal/ops/common/ring_sdpa_utils.hpp"
