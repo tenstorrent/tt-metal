@@ -12,7 +12,7 @@ described in [`TESTS_AND_PORT.md`](TESTS_AND_PORT.md).
 
 ```
 PYTHONPATH=$PWD ./python_env/bin/python -m pytest models/experimental/glm53_flash/tests/ -q
-→ 247 passed, 7 xfailed
+→ 254 passed, 2 skipped, 7 xfailed
 ```
 
 Six xfails are KDA **prefill**, blocked by a hardware limit: `prepare_chunk_recurrence` needs 33

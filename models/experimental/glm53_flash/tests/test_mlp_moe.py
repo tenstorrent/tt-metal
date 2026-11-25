@@ -42,6 +42,11 @@ def from_device(t: ttnn.Tensor) -> torch.Tensor:
     return ttnn.to_torch(t).float()
 
 
+def bf4_round(t: torch.Tensor) -> torch.Tensor:
+    """The values a bfloat4_b TILE tensor holds for ``t`` (shared exponents over 16-wide blocks of the last dim)."""
+    return ttnn.to_torch(ttnn.from_torch(t, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT)).float()
+
+
 # ---------------------------------------------------------------------------------------------
 # SwiGLU MLP (dense FFN of layers 0-2, and the MoE shared expert)
 # ---------------------------------------------------------------------------------------------
@@ -159,9 +164,10 @@ def test_moe_matches_reference(device, tokens):
     x = torch.randn(1, 1, tokens, HIDDEN) * 0.5
     w_router = torch.randn(HIDDEN, n_experts) * 0.02
     bias = torch.randn(n_experts) * 0.1
-    # experts: [E, HIDDEN, 2I] = [gate | up], [E, I, HIDDEN]
-    ex_gu = torch.randn(n_experts, HIDDEN, 2 * intermediate) * 0.02
-    ex_down = torch.randn(n_experts, intermediate, HIDDEN) * 0.02
+    # experts: [E, HIDDEN, 2I] = [gate | up], [E, I, HIDDEN], stored as bfloat4_b. Rounded to their bf4 values up
+    # front so the reference uses exactly what the device holds and the test grades the MoE, not the 4-bit storage.
+    ex_gu = bf4_round(torch.randn(n_experts, HIDDEN, 2 * intermediate) * 0.02)
+    ex_down = bf4_round(torch.randn(n_experts, intermediate, HIDDEN) * 0.02)
     sh_gate = torch.randn(HIDDEN, intermediate) * 0.02
     sh_up = torch.randn(HIDDEN, intermediate) * 0.02
     sh_down = torch.randn(intermediate, HIDDEN) * 0.02
@@ -186,6 +192,7 @@ def test_moe_matches_reference(device, tokens):
         hidden=HIDDEN,
         limit=limit,
     )
+    assert moe.gate_up.dtype == ttnn.bfloat4_b and moe.down.dtype == ttnn.bfloat4_b
     out = moe(to_device(x, device), decode=(tokens == 1))
     ttnn.synchronize_device(device)
 
@@ -205,4 +212,4 @@ def test_moe_matches_reference(device, tokens):
     ref = acc + s_act @ sh_down
 
     got = from_device(out).reshape(tokens, HIDDEN)
-    assert pcc(got, ref) > 0.95, f"PCC {pcc(got, ref):.5f}"
+    assert pcc(got, ref) > 0.99, f"PCC {pcc(got, ref):.5f}"

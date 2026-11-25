@@ -18,7 +18,10 @@ import torch
 
 import ttnn
 from models.experimental.glm53_flash.tests.test_kda_block import (
+    EXPERT_DTYPE,
     HC,
+    assert_bf4_experts,
+    bf4_round_experts,
     bf16_round,
     init_like_checkpoint,
     pcc,
@@ -53,7 +56,7 @@ def cfg():
 def hf_model(cfg):
     """(HF text model, lm_head) with checkpoint-like weights."""
     torch.manual_seed(0)
-    model = init_like_checkpoint(transformers_glm.Glm5NextTextModel(cfg), seed=3)
+    model = bf4_round_experts(init_like_checkpoint(transformers_glm.Glm5NextTextModel(cfg), seed=3))
     lm_head = torch.nn.Linear(cfg.hidden_size, cfg.vocab_size, bias=False)
     lm_head.weight.data.copy_(bf16_round(torch.randn(cfg.vocab_size, cfg.hidden_size) / cfg.hidden_size**0.5))
     return model, lm_head.float().eval()
@@ -175,9 +178,12 @@ def test_two_layer_model_decode_matches_hf(device, cfg, hf_model, users):
     sd = model.state_dict()
     emb = GLMEmbedding(cfg, sd["embed_tokens.weight"], device)
     blocks = [
-        GLMKDADecoderLayer(cfg, i, _strip_prefix(sd, f"layers.{i}"), device, expert_dtype=ttnn.bfloat8_b)
+        GLMKDADecoderLayer(cfg, i, _strip_prefix(sd, f"layers.{i}"), device, expert_dtype=EXPERT_DTYPE)
         for i in range(cfg.num_hidden_layers)
     ]
+    for i, blk in enumerate(blocks):
+        if cfg.mlp_layer_types[i] == "sparse":
+            assert_bf4_experts(blk.mlp.moe)
     head = GLMHead(cfg, head_weights(model, lm_head), device)
     states = [blk.allocate_state(users) for blk in blocks]
 

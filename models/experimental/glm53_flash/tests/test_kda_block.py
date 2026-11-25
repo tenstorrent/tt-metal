@@ -96,6 +96,30 @@ def bf16_round(t: torch.Tensor) -> torch.Tensor:
     return t.bfloat16().float()
 
 
+EXPERT_DTYPE = ttnn.bfloat4_b  # routed experts as deployed (precision.WEIGHT_DTYPES["routed_expert"])
+
+
+def bf4_round_experts(module: torch.nn.Module) -> torch.nn.Module:
+    """Make every routed-expert tensor of an HF layer / model exactly bfloat4_b-representable in the device layout
+    (``[E, in, out]``, 16-wide shared-exponent blocks along ``out``), the way ``init_like_checkpoint`` makes weights
+    bf16-representable: the device then holds the reference's exact values, so the test grades the module rather
+    than the 4-bit storage (whose own cost is pinned by ``test_functional_decoder::test_bf4_expert_storage_budget``)."""
+    with torch.no_grad():
+        for name, w in module.named_parameters():
+            if name.endswith(("experts.gate_up_proj", "experts.down_proj")):
+                for e in range(w.shape[0]):  # one expert at a time: full-size stacks are ~20 GB in fp32
+                    t = w[e].detach().float().t().contiguous()
+                    q = ttnn.to_torch(ttnn.from_torch(t, dtype=EXPERT_DTYPE, layout=ttnn.TILE_LAYOUT)).float()
+                    w[e].copy_(q.t())
+    return module
+
+
+def assert_bf4_experts(moe) -> None:
+    """``moe`` is a ``tt.moe.MoE``: both routed-expert weight stacks must be on device as bfloat4_b."""
+    assert moe.gate_up.dtype == EXPERT_DTYPE, f"gate_up is {moe.gate_up.dtype}"
+    assert moe.down.dtype == EXPERT_DTYPE, f"down is {moe.down.dtype}"
+
+
 def to_dev(t: torch.Tensor, device, dtype=ttnn.bfloat16) -> ttnn.Tensor:
     return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=DRAM)
 
@@ -116,20 +140,20 @@ def dense_ref(cfg):
 
 @pytest.fixture(scope="module")
 def moe_ref(cfg):
-    return hf_layer(cfg, MOE_LAYER, seed=1)
+    return bf4_round_experts(hf_layer(cfg, MOE_LAYER, seed=1))
 
 
 # Built once per module on the module-scoped device that `device` hands every test here (use_module_device).
 @pytest.fixture(scope="module")
 def dense_block(_device_module_impl, cfg, dense_ref):
-    return GLMKDADecoderLayer(
-        cfg, DENSE_LAYER, dense_ref.state_dict(), _device_module_impl, expert_dtype=ttnn.bfloat8_b
-    )
+    return GLMKDADecoderLayer(cfg, DENSE_LAYER, dense_ref.state_dict(), _device_module_impl, expert_dtype=EXPERT_DTYPE)
 
 
 @pytest.fixture(scope="module")
 def moe_block(_device_module_impl, cfg, moe_ref):
-    return GLMKDADecoderLayer(cfg, MOE_LAYER, moe_ref.state_dict(), _device_module_impl, expert_dtype=ttnn.bfloat8_b)
+    block = GLMKDADecoderLayer(cfg, MOE_LAYER, moe_ref.state_dict(), _device_module_impl, expert_dtype=EXPERT_DTYPE)
+    assert_bf4_experts(block.mlp.moe)
+    return block
 
 
 # ---------------------------------------------------------------------------------------------
@@ -192,7 +216,8 @@ def test_dense_mlp_matches_hf(device, cfg, dense_ref, tokens):
 def test_moe_matches_hf(device, cfg, moe_ref, tokens):
     torch.manual_seed(13)
     x = bf16_round(torch.randn(1, 1, tokens, HIDDEN))
-    moe = GLMMoE(cfg, _strip_prefix(moe_ref.state_dict(), "mlp"), device, expert_dtype=ttnn.bfloat8_b)
+    moe = GLMMoE(cfg, _strip_prefix(moe_ref.state_dict(), "mlp"), device, expert_dtype=EXPERT_DTYPE)
+    assert_bf4_experts(moe.moe)
     got = to_host(moe(to_dev(x, device), decode=(tokens == 1)))
     with torch.no_grad():
         ref = moe_ref.mlp(x)

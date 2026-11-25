@@ -20,7 +20,13 @@ import torch
 
 import ttnn
 from models.experimental.glm53_flash.tests.test_kda import PREP_BLOCKER
-from models.experimental.glm53_flash.tests.test_kda_block import bf16_round, init_like_checkpoint, pcc
+from models.experimental.glm53_flash.tests.test_kda_block import (
+    assert_bf4_experts,
+    bf4_round_experts,
+    bf16_round,
+    init_like_checkpoint,
+    pcc,
+)
 from models.experimental.glm53_flash.tt.config import Glm5NextTextConfig as TtConfig
 from models.experimental.glm53_flash.tt.functional_decoder import (
     HC_WIDTH,
@@ -125,21 +131,6 @@ def check_rows(got: torch.Tensor, ref: torch.Tensor, inp: torch.Tensor, what: st
 # ---------------------------------------------------------------------------------------------
 
 
-def bf4_round_experts(layer):
-    """Make the routed experts exactly bfloat4_b-representable in the device layout (``[E, in, out]``, 16-wide
-    blocks along ``out``), the way ``init_like_checkpoint`` makes weights bf16-representable. Routed experts live on
-    device as bfloat4_b, and on random Gaussian weights that storage alone costs ~0.02 PCC at D = 4096
-    (``test_bf4_expert_storage_budget``); grading against the representable weights isolates the layer logic."""
-    if not hasattr(layer.mlp, "experts"):
-        return layer
-    with torch.no_grad():
-        for w in (layer.mlp.experts.gate_up_proj, layer.mlp.experts.down_proj):
-            t = w.detach().float().transpose(1, 2).contiguous()
-            q = ttnn.to_torch(ttnn.from_torch(t, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT)).float()
-            w.copy_(q.transpose(1, 2))
-    return layer
-
-
 def hf_layer(idx: int, *, bf4_experts: bool = True):
     ref = init_like_checkpoint(transformers_glm.Glm5NextTextDecoderLayer(hf_config(), idx), seed=idx)
     return bf4_round_experts(ref) if bf4_experts else ref
@@ -154,6 +145,8 @@ def layers(_device_module_impl):
         dec = FunctionalDecoder.from_state_dict(
             ref.state_dict(), hf_config=tcfg, layer_idx=idx, mesh_device=_device_module_impl
         )
+        if dec.layer.spec.mlp == "moe":
+            assert_bf4_experts(dec.layer.mlp)
         out[idx] = (ref, dec)
     return out
 

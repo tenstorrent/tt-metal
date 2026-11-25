@@ -9,7 +9,7 @@ installed at `models/experimental/glm53_flash/`.
 ```
 PYTHONPATH=$PWD ./python_env/bin/python -m pytest \
     models/experimental/glm53_flash/tests/ -q
-→ 247 passed, 7 xfailed   (~85 s)
+→ 254 passed, 2 skipped, 7 xfailed   (~4 min; test_full_layer.py is ~3 min of it)
 ```
 
 | test file | module(s) | tests | status |
@@ -27,6 +27,26 @@ PYTHONPATH=$PWD ./python_env/bin/python -m pytest \
 | `test_sampling.py` | `sampling` | 69 | pass (host) |
 | `test_host_modules.py` | `generator` planning, `prefix_cache` | 38 | pass (host) |
 | `test_tokenizer_chat.py` | `tokenizer_chat` | 24 | pass (host, needs the snapshot) |
+| `test_full_layer.py` | real layers 0 / 3 / 4, real weights, real prompts | 7 pass / 2 skip | KDA prefill skipped (blocker); needs the checkpoint |
+
+## Full layers on real weights (`test_full_layer.py`)
+
+Nothing scaled down: `FunctionalDecoder.from_state_dict` on the checkpoint's fp8-dequantized weights
+(`reference/hf_layer_reference.py::build_layer`) with the checkpoint config — 288 experts top-8
+(bfloat4_b), shared expert, 64×128 KDA, 64-head MLA, dense I = 12288. Inputs are the real residual
+streams: two chat prompts embedded and run through HF layers 0…4 on the host (fp32 math), so layer
+L's input is HF layer L−1's output. Decode for both users batched; MLA also prefill 20 + decode 4.
+
+| layer | vs HF with bf4-rounded experts (implementation) | vs exact HF (deployment) |
+|---|---|---|
+| 0 `kda_dense` | output PCC median 0.99991, min 0.99986 | same (no experts) |
+| 3 `mla_moe` | 0.999987, min 0.99994 | 0.9979, min 0.9944 |
+| 4 `kda_moe` | 0.999999, min 0.99997 | 0.99990, min 0.9969 |
+
+Layer 3's deployment gap is entirely the 4-bit expert storage: HF's own MoE with bf4-rounded
+experts scores the same 0.996 against the exact one, the device MoE matches that bf4 HF MoE at
+0.99999, the device MLA alone matches HF at 0.99987, and HF's DSA mask at this length is exactly
+causal (dense-exact holds). HF's bf16 path and bf8 projection rounding each cost < 1e-4.
 
 The module tests from the first round grade against a torch reference written from the formula in
 each module's own docstring, so a failure points at one module rather than at "the model is wrong".
@@ -54,9 +74,12 @@ checkpoint's chat template).
 
 Findings from these (tests encode the behaviour; no source changed):
 
-- **bf4 routed experts cost ~0.02 PCC at D = 4096 on random weights.** The MoE layers grade against
-  HF experts rounded to bfloat4_b (exact to 0.99996 then); `test_bf4_expert_storage_budget` keeps
-  the unrounded comparison (> 0.98) so the storage cost stays visible.
+- **bf4 routed experts cost ~0.02 PCC at D = 4096 on random weights.** Every MoE test
+  (`test_mlp_moe`, `test_kda_block`, `test_terminal`, `test_functional_decoder`) loads the routed
+  experts as **bfloat4_b**, as deployed, asserts that dtype on the device tensors, and grades against
+  reference experts rounded to their bf4 values (`test_kda_block.py::bf4_round_experts`; exact to
+  0.99996 then). `test_bf4_expert_storage_budget` keeps the unrounded comparison (> 0.98) so the
+  storage cost stays visible.
 - **Router near-ties flip experts.** A token whose 2nd/3rd corrected router scores differ by 0.002
   picks the other expert under bf16 inputs (PCC 0.86 on that token, 0.9997 on the rest). Prefill
   checks skip tokens within `ROUTER_TIE_MARGIN` of a tie.
