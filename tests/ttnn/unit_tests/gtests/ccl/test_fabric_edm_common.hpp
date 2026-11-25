@@ -5,11 +5,12 @@
 #pragma once
 
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/sub_device_types.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include "tt-metalium/kernel_types.hpp"
+#include <tt-metalium/mesh/sub_device_types.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/discovery/cluster.hpp>
+#include "tt-metalium/workload/legacy/kernel_types.hpp"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "tt_metal/test_utils/df/df.hpp"
@@ -27,11 +28,11 @@
 #include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/mesh_device_view.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/mesh/mesh_device_view.hpp>
 #include "ttnn/operations/experimental/reshape/view.hpp"
-#include <tt-metalium/system_mesh.hpp>
-#include <tt-metalium/tile.hpp>
+#include <tt-metalium/discovery/system_mesh.hpp>
+#include <tt-metalium/data_formats/tile.hpp>
 
 #include <tt-umd/types/arch.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>

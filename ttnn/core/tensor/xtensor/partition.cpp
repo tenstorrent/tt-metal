@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/reflection.hpp>
-#include <tt-metalium/float8.hpp>
+#include <tt-metalium/data_formats/float8.hpp>
 #include "tensor/xtensor/partition.hpp"
 
 #include <type_traits>

@@ -83,11 +83,11 @@ def test_moreh_abs_pow_int32_input_rejected(p, device, expect_error):
 
 
 @pytest.mark.merge_gate
-def test_moreh_abs_pow_int32_output_rejected(device, expect_error):
-    torch_input = torch.rand((32, 32)).to(torch.bfloat16)
-    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_output = ttnn.from_torch(
-        torch.zeros((32, 32), dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device
+def test_moreh_abs_pow_rejects_other_output_dtype(device, expect_error):
+    # Every buffer, including the output, uses the input's data format.
+    x = ttnn.from_torch(torch.randn(1, 1, 64, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.from_torch(
+        torch.zeros(1, 1, 64, 64, dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device
     )
-    with expect_error(RuntimeError, "moreh_abs_pow output only supports specific data types"):
-        ttnn.moreh_abs_pow(tt_input, 2.0, output=tt_output)
+    with expect_error(RuntimeError, "must match the input dtype"):
+        ttnn.moreh_abs_pow(x, 2.0, output=out)

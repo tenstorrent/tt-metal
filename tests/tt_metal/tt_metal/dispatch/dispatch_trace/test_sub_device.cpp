@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/mesh/sub_device.hpp>
 #include <array>
 #include <cstdint>
 #include <exception>
@@ -14,11 +14,12 @@
 #include "command_queue_fixture.hpp"
 #include "dispatch_test_utils.hpp"
 #include "gtest/gtest.h"
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/observability/profiler/device_profiler.hpp>
 #include <tt_stl/span.hpp>
 #include "sub_device_test_utils.hpp"
-#include <tt-metalium/sub_device_types.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 
 namespace tt::tt_metal {
 

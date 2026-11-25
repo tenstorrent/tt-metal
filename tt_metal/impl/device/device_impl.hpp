@@ -9,19 +9,19 @@
 #include <optional>
 #include <unordered_set>
 
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include <hostdevcommon/common_values.hpp>
 #include <hostdevcommon/dispatch_telemetry_types.hpp>
-#include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/context/context_types.hpp"
 #include "impl/dispatch/hardware_command_queue.hpp"
-#include <tt-metalium/sub_device_types.hpp>
-#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
+#include <tt-metalium/mesh/sub_device.hpp>
 #include "impl/trace/trace_buffer.hpp"
 #include <tt_stl/span.hpp>
-#include <tt-metalium/program_cache.hpp>
+#include <tt-metalium/utils/program_cache.hpp>
 #include <tt-metalium/experimental/device.hpp>
 
 namespace tt::tt_metal {

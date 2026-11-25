@@ -28,6 +28,12 @@ void validate_tensors(
     const auto& output = tensor_args.output;
 
     check_tensor(input, "moreh_abs_pow", "input", {DataType::BFLOAT16});
+    // The program uses the input's data format for every buffer, including the output.
+    TT_FATAL(
+        !output.has_value() || output->dtype() == input.dtype(),
+        "moreh_abs_pow output dtype ({}) must match the input dtype ({})",
+        output.has_value() ? output->dtype() : input.dtype(),
+        input.dtype());
     check_tensor(output, "moreh_abs_pow", "output", {DataType::BFLOAT16});
 }
 

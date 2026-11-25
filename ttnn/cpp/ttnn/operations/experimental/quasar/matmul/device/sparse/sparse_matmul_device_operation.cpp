@@ -10,7 +10,7 @@
 #include "ttnn/operations/experimental/quasar/matmul/device/matmul_device_operation.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_program_config_types.hpp"
 
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 
 namespace {
 

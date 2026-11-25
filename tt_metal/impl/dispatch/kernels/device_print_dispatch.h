@@ -5,6 +5,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/device_print.h"
@@ -71,6 +72,8 @@ class DevicePrintDispatch {
         std::max(NocL1ToDramAlignment, static_cast<uint32_t>(sizeof(uint32_t) * 2));
     static_assert((NocL1ToL1Alignment & (NocL1ToL1Alignment - 1)) == 0, "NocL1ToL1Alignment must be power of 2");
     static_assert((NocL1ToDramAlignment & (NocL1ToDramAlignment - 1)) == 0, "NocL1ToDramAlignment must be power of 2");
+    using DramRWHeader = device_print_dispatch::DramRWHeader;
+    static_assert(sizeof(DramRWHeader) <= NocL1ToDramAlignment, "DRAM rw cell must fit in one DRAM alignment unit");
     using NocCmdBufGuardWithInit = device_print_dispatch::NocCmdBufGuardWithInit<NocCmdBufGuard>;
 
 public:
@@ -115,7 +118,7 @@ public:
             l1_dram_aligned_rw_pointers_start + dram_aligned_rw_pointers_entry_size * dram_aligned_locations_end;
         l1_dram_rw_pointers = dram_align(
             l1_rw_pointers_buffer_start + rw_pointers_entry_size * (noc_locations_count - dram_aligned_locations_end));
-        l1_device_print_buffer_start = dram_align(l1_dram_rw_pointers + sizeof(uint32_t));
+        l1_device_print_buffer_start = dram_align(l1_dram_rw_pointers + sizeof(DramRWHeader));
 
         // Check if buffer is large enough to hold necessary data and turn off feature in DRAM if needed.
         uintptr_t min_buffer_end = l1_device_print_buffer_start;
@@ -132,31 +135,29 @@ public:
             // device_print buffer. Disable dispatching to DRAM and fallback to host only reading buffers.
             enabled = false;
 
-            // Write disabled magic plus diagnostics: word[0]=magic, word[1]=0 (rpos),
-            // word[2]=provided L1 cache size, word[3]=minimum L1 cache size that would
-            // have made the aggregator usable. Host reads these to produce an actionable
-            // warning. The leading 32-byte (DRAM-aligned) slot in DRAM has plenty of
-            // room for these four words. They are staged at the start of the cache, because
-            // the layout above may extend past its end; the location table they overwrite
-            // there is not needed once the aggregator is disabled.
+            // Write disabled magic plus the provided and minimum L1 cache sizes, which the host reports in an
+            // actionable warning. They are staged at the start of the cache, because the layout above may extend
+            // past its end; the location table they overwrite there is not needed once the aggregator is disabled.
             uintptr_t l1_diagnostics = dram_align(l1_cache_buffer_address);
-            volatile tt_l1_ptr uint32_t* dram_rw_pointers = local_l1_ptr<uint32_t>(l1_diagnostics);
-            dram_rw_pointers[0] = DEBUG_PRINT_SERVER_DISABLED_MAGIC;
-            dram_rw_pointers[1] = 0;
-            dram_rw_pointers[2] = l1_cache_buffer_size;
-            dram_rw_pointers[3] = static_cast<uint32_t>(min_buffer_end - l1_cache_buffer_address);
+            volatile tt_l1_ptr DramRWHeader* header = local_l1_ptr<DramRWHeader>(l1_diagnostics);
+            header->wpos = DEBUG_PRINT_SERVER_DISABLED_MAGIC;
+            header->rpos = 0;
+            header->provided_size = l1_cache_buffer_size;
+            header->required_size = static_cast<uint32_t>(min_buffer_end - l1_cache_buffer_address);
             noc_wwrite_with_state<DM_DEDICATED_NOC, NCRISC_WR_CMD_BUF, CQ_NOC_SNDL>(
-                NOC_INDEX, noc_local(l1_diagnostics), dram_noc_xy, dram_rw_pointers_addr, 4 * sizeof(uint32_t));
+                NOC_INDEX, noc_local(l1_diagnostics), dram_noc_xy, dram_rw_pointers_addr, sizeof(DramRWHeader));
             noc_async_write_barrier();
         } else {
             // Clear STARTING_MAGIC the host wrote at attach time so it can distinguish
             // "kernel hasn't booted yet" (STARTING_MAGIC) from "kernel is alive but has
             // produced no payload yet" (write_pointer == 0).
-            volatile tt_l1_ptr uint32_t* dram_rw_pointers = local_l1_ptr<uint32_t>(l1_dram_rw_pointers);
-            dram_rw_pointers[0] = 0;
-            dram_rw_pointers[1] = 0;
+            volatile tt_l1_ptr DramRWHeader* header = dram_rw_header();
+            header->wpos = 0;
+            header->rpos = 0;
+            header->pass_count = 0;
+            header->finished_flag = 0;
             noc_wwrite_with_state<DM_DEDICATED_NOC, NCRISC_WR_CMD_BUF, CQ_NOC_SNDL>(
-                NOC_INDEX, noc_local(l1_dram_rw_pointers), dram_noc_xy, dram_rw_pointers_addr, 2 * sizeof(uint32_t));
+                NOC_INDEX, noc_local(l1_dram_rw_pointers), dram_noc_xy, dram_rw_pointers_addr, sizeof(DramRWHeader));
             noc_async_write_barrier();
         }
 
@@ -190,15 +191,8 @@ public:
 
         // Mark the DRAM rw-pointer cell as "finished" so the host knows
         // it can stop polling DRAM and fall back to per-L1 polling.
-        volatile tt_l1_ptr uint32_t* dram_rw_pointers = local_l1_ptr<uint32_t>(l1_dram_rw_pointers);
-        dram_rw_pointers[4] = 1;
-        noc_wwrite_with_state<DM_DEDICATED_NOC, NCRISC_WR_CMD_BUF, CQ_NOC_SNDL>(
-            NOC_INDEX,
-            noc_local(l1_dram_rw_pointers + 4 * sizeof(uint32_t)),
-            dram_noc_xy,
-            dram_rw_pointers_addr + 4 * sizeof(uint32_t),
-            sizeof(uint32_t));
-        noc_async_write_barrier();
+        dram_rw_header()->finished_flag = 1;
+        write_dram_rw_field(offsetof(DramRWHeader, finished_flag));
     }
 
     void execute(bool force_stall = false) {
@@ -237,6 +231,10 @@ public:
             check_for_host_reset();
 
             process_noc_locations();
+
+            // Count finished full passes so the host can wait on device progress instead of wall time.
+            dram_rw_header()->pass_count = dram_rw_header()->pass_count + 1;
+            write_dram_rw_field(offsetof(DramRWHeader, pass_count));
 
             // Update timestamp for next full dispatch
             next_full_dispatch_timestamp = get_timestamp() + cycles_for_full_dispatch;
@@ -322,14 +320,16 @@ private:
     }
 
     void check_for_host_reset() {
-        volatile tt_l1_ptr uint32_t* dram_rw_pointers = local_l1_ptr<uint32_t>(l1_dram_rw_pointers);
+        volatile tt_l1_ptr DramRWHeader* header = dram_rw_header();
         noc_read_with_state<DM_DEDICATED_NOC, NCRISC_RD_CMD_BUF, CQ_NOC_SNDL>(
             NOC_INDEX, dram_noc_xy, dram_rw_pointers_addr, noc_local(l1_dram_rw_pointers), sizeof(uint32_t));
         noc_async_read_barrier();
-        if (dram_rw_pointers[0] == DEBUG_PRINT_SERVER_STARTING_MAGIC) {
+        if (header->wpos == DEBUG_PRINT_SERVER_STARTING_MAGIC) {
             dram_read_pointer = 0;
             dram_write_pointer = 0;
-            dram_rw_pointers[0] = 0;
+            header->wpos = 0;
+            // The host zeroed the pass count with the magic; restart from it.
+            header->pass_count = 0;
             noc_wwrite_with_state<DM_DEDICATED_NOC, NCRISC_WR_CMD_BUF, CQ_NOC_SNDL>(
                 NOC_INDEX, noc_local(l1_dram_rw_pointers), dram_noc_xy, dram_rw_pointers_addr, sizeof(uint32_t));
             noc_async_write_barrier();
@@ -516,8 +516,8 @@ private:
 
         buffer_size = static_cast<uint32_t>(dram_align(buffer_size));
 
-        // Pointer to DRAM read/write pointers in our local L1.
-        volatile tt_l1_ptr uint32_t* dram_rw_pointers = local_l1_ptr<uint32_t>(l1_dram_rw_pointers);
+        // DRAM read/write pointers in our local L1.
+        volatile tt_l1_ptr DramRWHeader* header = dram_rw_header();
 
         if (buffer_size > 0) {
             // The write pointer must never be advanced to equal the read pointer. Both this producer and
@@ -544,11 +544,11 @@ private:
                 noc_read_with_state<DM_DEDICATED_NOC, NCRISC_RD_CMD_BUF, CQ_NOC_SNDL>(
                     NOC_INDEX,
                     dram_noc_xy,
-                    dram_rw_pointers_addr + sizeof(uint32_t),
-                    noc_local(l1_dram_rw_pointers + sizeof(uint32_t)),
+                    dram_rw_pointers_addr + offsetof(DramRWHeader, rpos),
+                    noc_local(l1_dram_rw_pointers + offsetof(DramRWHeader, rpos)),
                     sizeof(uint32_t));
                 noc_async_read_barrier();
-                dram_read_pointer = dram_rw_pointers[1];
+                dram_read_pointer = header->rpos;
             }
 
             // Write the message, splitting across the ring-end boundary if needed. The space check
@@ -572,9 +572,20 @@ private:
         noc_async_write_barrier();
 
         // Update write pointer in DRAM.
-        dram_rw_pointers[0] = dram_write_pointer;
+        header->wpos = dram_write_pointer;
+        write_dram_rw_field(offsetof(DramRWHeader, wpos));
+    }
+
+    volatile tt_l1_ptr DramRWHeader* dram_rw_header() const { return local_l1_ptr<DramRWHeader>(l1_dram_rw_pointers); }
+
+    // Copy the 32-bit field at `offset` of the local rw-pointer cell to the DRAM rw-pointer cell.
+    void write_dram_rw_field(uint32_t offset) {
         noc_wwrite_with_state<DM_DEDICATED_NOC, NCRISC_WR_CMD_BUF, CQ_NOC_SNDL>(
-            NOC_INDEX, noc_local(l1_dram_rw_pointers), dram_noc_xy, dram_rw_pointers_addr, sizeof(uint32_t));
+            NOC_INDEX,
+            noc_local(l1_dram_rw_pointers + offset),
+            dram_noc_xy,
+            dram_rw_pointers_addr + offset,
+            sizeof(uint32_t));
         noc_async_write_barrier();
     }
 

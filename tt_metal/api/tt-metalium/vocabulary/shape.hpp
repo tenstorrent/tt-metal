@@ -16,7 +16,7 @@
 #include <fmt/core.h>
 #include <fmt/format.h>
 
-#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/vocabulary/shape_base.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/span.hpp>
 

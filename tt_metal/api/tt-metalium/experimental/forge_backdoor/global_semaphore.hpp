@@ -7,9 +7,9 @@
 #include <cstdint>
 #include <optional>
 
-#include <tt-metalium/global_semaphore.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/memory/cross_program/global_semaphore.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 
 namespace tt::tt_metal::experimental {
 // clang-format off

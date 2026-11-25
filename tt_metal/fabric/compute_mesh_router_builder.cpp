@@ -21,9 +21,9 @@
 #include "llrt/rtoptions.hpp"
 #include "llrt/tt_cluster.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
-#include "tt_metal.hpp"
+#include "tt-metalium/execution/slow_dispatch.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
@@ -910,8 +910,8 @@ void ComputeMeshRouterBuilder::apply_link_settings(
     uint32_t num_links,
     Topology topology,
     bool is_galaxy) {
-    erisc_builder_->config.edm_noc_vc = noc_vc;
-    peer.erisc_builder_->config.edm_noc_vc = noc_vc;
+    erisc_builder_->config.set_edm_noc_vcs(noc_vc);
+    peer.erisc_builder_->config.set_edm_noc_vcs(noc_vc);
     core_placement::CorePlacementContext cctx{
         .topology = topology,
         .is_galaxy = is_galaxy,
