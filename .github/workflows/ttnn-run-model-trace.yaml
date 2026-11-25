@@ -603,8 +603,7 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
     env:
       PYTHONPATH: ${{ github.workspace }}
     outputs:
@@ -723,52 +722,29 @@ jobs:
           path: leg_status
           merge-multiple: true
 
-      - name: Create manifest PR
+      # The manifest pull request is opened by ttnn-model-trace-manifest-pr.yaml,
+      # which runs from main when this run has completed (workflow_run), with a
+      # short-lived token from OSPO. This job only hands over the updated registry
+      # and the facts for the pull request text, as the artifact
+      # manifest-pr-request (fixed file names). Nothing here pushes a branch or
+      # opens a pull request, so this job needs no write permission and no token.
+      - name: Prepare manifest PR request
+        id: manifest-request
         if: steps.load.outcome == 'success' && steps.load.outputs.trace_run_id != ''
         env:
-          GH_TOKEN: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
           TRACE_UID: ${{ steps.homogenize.outputs.trace_uid }}
           TRACE_RUN_ID: ${{ steps.load.outputs.trace_run_id }}
-          RUN_ID: ${{ github.run_id }}
-          # Branch off main so the manifest-PR branch tip contains no .github/workflows
-          # changes relative to main. Otherwise GitHub's workflow-scope check rejects
-          # the push since CODEOWNERS_GROUP_ANALYSIS_PAT lacks the 'workflows' scope.
-          BASE_REF: main
-          TT_METAL_SHA: ${{ github.sha }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           MASTER_JSON: model_tracer/traced_operations/ttnn_operations_master.json
           LEG_STATUS_DIR: leg_status
+          REQUEST_DIR: manifest-pr-request
         run: |
           if ! git diff --quiet model_tracer/trace_selection_registry.yaml 2>/dev/null; then
-            # Snapshot the loader-updated registry before we change branches.
-            cp model_tracer/trace_selection_registry.yaml /tmp/registry_updated.yaml
+            mkdir -p "$REQUEST_DIR"
+            cp model_tracer/trace_selection_registry.yaml "$REQUEST_DIR/trace_selection_registry.yaml"
 
-            # Fetch the target base (main) and branch from it so the push only
-            # contains the registry delta, not the feature branch's workflow edits.
-            git fetch --depth=1 origin "$BASE_REF"
-            BRANCH_NAME="trace/auto-manifest-${RUN_ID}"
-            git checkout -B "$BRANCH_NAME" "origin/$BASE_REF"
-
-            # Reapply the loader's registry update on top of main.
-            cp /tmp/registry_updated.yaml model_tracer/trace_selection_registry.yaml
-
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add model_tracer/trace_selection_registry.yaml
-
-            if git diff --cached --quiet; then
-              echo "::notice::Registry on main already matches loader output; skipping PR."
-              exit 0
-            fi
-
-            MODEL_COUNT=$(python3 -c "import json; print(len(json.load(open('$MASTER_JSON'))['metadata'].get('models', [])))")
-            git commit -m "Add draft trace entry for ${MODEL_COUNT} model(s) (trace_run_id=${TRACE_RUN_ID})"
-            git push origin "$BRANCH_NAME"
-
-            # Compile PR body stats from the homogenized JSON + per-leg sidecars.
-            PR_BODY=$(MASTER_JSON="$MASTER_JSON" LEG_STATUS_DIR="$LEG_STATUS_DIR" \
-              TRACE_UID="$TRACE_UID" TRACE_RUN_ID="$TRACE_RUN_ID" \
-              TT_METAL_SHA="$TT_METAL_SHA" RUN_URL="$RUN_URL" python3 - <<'PY'
+            # Facts for the pull request title and body, from the homogenized JSON
+            # and the per-leg sidecars. The receiving workflow checks every value.
+            python3 - <<'PY'
           import json
           import os
           from pathlib import Path
@@ -777,8 +753,6 @@ jobs:
               data = json.load(f)
           ops = data.get("operations", {})
           meta = data.get("metadata", {})
-          config_count = sum(len(op.get("configurations", [])) for op in ops.values())
-          models = meta.get("models", [])
 
           machine_info = {}
           for op_data in ops.values():
@@ -794,13 +768,8 @@ jobs:
                       break
               if machine_info:
                   break
-          hw = (
-              f"{machine_info.get('board_type', '?')} / "
-              f"{machine_info.get('device_series', '?')} "
-              f"(x{machine_info.get('card_count', '?')})"
-          )
 
-          leg_rows = []
+          legs = []
           status_dir = Path(os.environ["LEG_STATUS_DIR"])
           if status_dir.is_dir():
               for p in sorted(status_dir.glob("*.json")):
@@ -808,77 +777,50 @@ jobs:
                       rec = json.loads(p.read_text())
                   except Exception:
                       continue
-                  icon = "✅" if rec.get("outcome") == "success" else "❌"
-                  hf = rec.get("hf_model") or ""
-                  leg_rows.append(
-                      f"| {icon} | `{rec.get('slug')}` | `{rec.get('test_path')}` | "
-                      f"`{hf}` | {rec.get('stats', {}).get('unique_operations') or '-'} | "
-                      f"{rec.get('stats', {}).get('total_configurations') or '-'} |"
+                  stats = rec.get("stats", {}) or {}
+                  legs.append(
+                      {
+                          "slug": rec.get("slug"),
+                          "test_path": rec.get("test_path"),
+                          "hf_model": rec.get("hf_model") or "",
+                          "outcome": rec.get("outcome"),
+                          "unique_operations": stats.get("unique_operations"),
+                          "total_configurations": stats.get("total_configurations"),
+                      }
                   )
 
-          lines = [
-              "## New Trace Entry (homogenized batch)",
-              "",
-              "| Field | Value |",
-              "|---|---|",
-              f"| trace_run_id | `{os.environ['TRACE_RUN_ID']}` |",
-              f"| Trace UID | `{os.environ['TRACE_UID']}` |",
-              f"| Hardware | {hw} |",
-              f"| Models in batch | {len(models)} |",
-              f"| Total configurations | {config_count} |",
-              f"| tt-metal SHA | `{os.environ['TT_METAL_SHA']}` |",
-              f"| Workflow run | {os.environ['RUN_URL']} |",
-              "",
-              "### Per-leg outcomes",
-              "",
-              "| Status | Slug | test_path | HF_MODEL | Unique ops | Total configs |",
-              "|---|---|---|---|---|---|",
-          ]
-          lines.extend(leg_rows or ["| — | (no leg sidecars found) | | | | |"])
-          lines.extend([
-              "",
-              "## Promotion checklist",
-              "- [ ] Review trace stats above and in the workflow job summary",
-              "- [ ] Change registry status from `draft` to `active`",
-              "- [ ] Add the batch's `model_name`s to the appropriate `targets` group",
-          ])
-          print("\n".join(lines))
+          request = {
+              "version": 1,
+              "trace_run_id": os.environ["TRACE_RUN_ID"],
+              "trace_uid": os.environ["TRACE_UID"],
+              "model_count": len(meta.get("models", [])),
+              "config_count": sum(len(op.get("configurations", [])) for op in ops.values()),
+              "hardware": {
+                  "board_type": machine_info.get("board_type"),
+                  "device_series": machine_info.get("device_series"),
+                  "card_count": machine_info.get("card_count"),
+              },
+              "legs": legs,
+          }
+          out = Path(os.environ["REQUEST_DIR"]) / "request.json"
+          out.write_text(json.dumps(request, indent=2) + "\n")
+          print(f"Wrote {out}")
           PY
-            )
 
-            MACHINE_INFO=$(python3 - <<'PY'
-          import json
-          import os
-
-          with open(os.environ["MASTER_JSON"]) as f:
-              data = json.load(f)
-
-          for op_data in data.get("operations", {}).values():
-              for cfg in op_data.get("configurations", []):
-                  for exc in cfg.get("executions", []):
-                      mi = exc.get("machine_info", {})
-                      if isinstance(mi, list):
-                          mi = mi[0]
-                      if mi:
-                          print(
-                              f"{mi.get('board_type', '?')} / {mi.get('device_series', '?')} "
-                              f"(x{mi.get('card_count', '?')})"
-                          )
-                          raise SystemExit(0)
-          print("unknown")
-          PY
-            )
-
-            gh pr create \
-              --base "$BASE_REF" \
-              --head "$BRANCH_NAME" \
-              --title "Add trace: ${MODEL_COUNT} models on ${MACHINE_INFO} (trace_run_id=${TRACE_RUN_ID})" \
-              --body "$PR_BODY"
-
-            echo "::notice::Manifest PR created on branch $BRANCH_NAME"
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Manifest PR request prepared; ttnn-model-trace-manifest-pr.yaml opens the PR after this run completes"
           else
             echo "::notice::No changes to trace_selection_registry.yaml — skipping PR"
           fi
+
+      - name: Upload manifest PR request
+        if: steps.manifest-request.outputs.ready == 'true'
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: manifest-pr-request
+          path: manifest-pr-request/
+          if-no-files-found: error
+          retention-days: 3
 
   trigger-validation:
     name: Trigger validation
