@@ -18,13 +18,13 @@
 
 // Not used here, but leaked to programming examples
 #include <hostdevcommon/kernel_structs.h>  // IWYU pragma: keep
-#include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/sub_device_types.hpp>
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 
 // UMD: re-exports tt::ARCH
 #include <tt-umd/types/arch.hpp>
-#include <tt-metalium/device_types.hpp>
+#include <tt-metalium/vocabulary/device_types.hpp>
 // UMD: re-exports CoreType (used in IDevice::virtual_core_from_logical_core parameter).
 #include <tt-umd/types/core_coordinates.hpp>
 

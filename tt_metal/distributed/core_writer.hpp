@@ -8,7 +8,7 @@
 #include <memory>
 #include <string_view>
 
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>  // ChipId
 
 namespace tt {

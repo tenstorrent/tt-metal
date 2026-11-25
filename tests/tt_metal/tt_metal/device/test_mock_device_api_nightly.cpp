@@ -5,7 +5,7 @@
 #include <gtest/gtest.h>
 #include <cstdlib>
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <tt-umd/types/arch.hpp>
 
 #include "impl/context/metal_context.hpp"

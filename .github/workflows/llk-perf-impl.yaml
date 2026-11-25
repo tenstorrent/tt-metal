@@ -269,6 +269,7 @@ jobs:
           LLK_PERF_DEBUG_SYMBOLS: ${{ inputs.debug-symbols }}
           TT_LLK_DISABLE_ASSERTS: "1"
           LLK_PERF_RUN_TYPES: ${{ inputs.perf-run-types }}
+          PIPELINE: ${{ inputs.pipeline }}
           LLK_PERF_PHASE: compile
           LLK_PERF_COMPILE_WORKERS: ${{ inputs.shadow-compile-workers }}
           MATRIX_CMD: ${{ matrix.test-group.cmd }}
@@ -286,6 +287,7 @@ jobs:
           LLK_PERF_DEBUG_SYMBOLS: ${{ inputs.debug-symbols }}
           TT_LLK_DISABLE_ASSERTS: "1"
           LLK_PERF_RUN_TYPES: ${{ inputs.perf-run-types }}
+          PIPELINE: ${{ inputs.pipeline }}
           MATRIX_CMD: ${{ matrix.test-group.cmd }}
         run: |
           python3 tests/llk_perf_offload.py pack --cmd "$MATRIX_CMD" \
@@ -439,6 +441,7 @@ jobs:
           LLK_PERF_DEBUG_SYMBOLS: ${{ inputs.debug-symbols }}
           TT_LLK_DISABLE_ASSERTS: "1"
           LLK_PERF_RUN_TYPES: ${{ inputs.perf-run-types }}
+          PIPELINE: ${{ inputs.pipeline }}
           MATRIX_CMD: ${{ matrix.test-group.cmd }}
         run: |
           python3 tests/llk_perf_offload.py unpack --cmd "$MATRIX_CMD" \
@@ -638,6 +641,7 @@ jobs:
           LLK_PERF_DEBUG_SYMBOLS: ${{ inputs.debug-symbols }}
           TT_LLK_DISABLE_ASSERTS: "1"
           LLK_PERF_RUN_TYPES: ${{ inputs.perf-run-types }}
+          PIPELINE: ${{ inputs.pipeline }}
           MATRIX_CMD: ${{ matrix.test-group.cmd }}
         run: |
           python3 tests/llk_perf_offload.py unpack --cmd "$MATRIX_CMD" \

@@ -6,9 +6,9 @@
 
 #include <stdint.h>
 #include <random>
-#include <tt-metalium/bfloat8.hpp>
-#include <tt-metalium/bfloat4.hpp>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/bfloat8.hpp>
+#include <tt-metalium/data_formats/bfloat4.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include "impl/data_format/blockfloat_common.hpp"
 #include <vector>
 #include <tt_stl/assert.hpp>

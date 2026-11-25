@@ -8,7 +8,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include "erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
 #include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
@@ -16,9 +16,9 @@
 #include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/code_profiling_types.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_trimming_types.hpp"
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -40,7 +40,7 @@
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/llrt/hal.hpp"
 
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
@@ -562,7 +562,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
                 FabricEriscDatamoverConfig::BLACKHOLE_SINGLE_ERISC_MODE_SENDER_ACK_NOC;
         }
     }
-    this->edm_noc_vc = FabricEriscDatamoverConfig::DEFAULT_NOC_VC;
+    this->set_edm_noc_vcs(FabricEriscDatamoverConfig::DEFAULT_NOC_VC);
 }
 
 void get_runtime_args_for_edm_termination_infos(
@@ -1520,7 +1520,8 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         named_args[fmt::format("RX_CH_{}_LOCAL_WRITE_CMD_BUF_ID", i)] =
             (i < num_receiver_channels) ? static_cast<uint32_t>(config.receiver_channel_local_write_cmd_buf_ids[i]) : 0;
     }
-    named_args["EDM_NOC_VC"] = config.edm_noc_vc;
+    named_args["EDM_NOC_VC_FORWARD"] = config.edm_noc_vc_forward;
+    named_args["EDM_NOC_VC_LOCAL_WRITE"] = config.edm_noc_vc_local_write;
 
     // --- Telemetry ---
     get_telemetry_compile_time_args(risc_id, named_args);

@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include <tt-metalium/device_types.hpp>
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/vocabulary/device_types.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"

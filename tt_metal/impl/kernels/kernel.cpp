@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/core_coord.hpp>
-#include <device.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
-#include <kernel_types.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
 #include <internal/kernel_build_options.hpp>
 #include <enchantum/enchantum.hpp>
 #include <algorithm>
@@ -19,8 +19,8 @@
 #include <utility>
 
 #include <tt_stl/assert.hpp>
-#include "base_types.hpp"
-#include <tt-metalium/hal_types.hpp>
+#include "tt-metalium/workload/specification/compute_modes.hpp"
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include "jit_build/build.hpp"
 #include "jit_build/jit_build_options.hpp"
 #include "llrt.hpp"

@@ -8,8 +8,8 @@
 #include <optional>
 
 #include <hostdevcommon/kernel_structs.h>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/workload_descriptor.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
 
 #include "rms_allgather_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"

@@ -17,7 +17,7 @@ using namespace tt::tt_metal::quasar::dispatch;
 #include "llrt/hal_types.hpp"
 #include "llrt/hal.hpp"
 #include "noc/noc_parameters.h"
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 #include <tt_stl/assert.hpp>
 #include <enchantum/enchantum.hpp>
