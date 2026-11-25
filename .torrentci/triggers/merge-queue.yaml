@@ -1,0 +1,19 @@
+---
+# Runs the Shadow PR Gate on every merge-queue entry. Its checks are not
+# required.
+triggers:
+  - id: shadow-pr-gate-merge-queue
+    kind: automatic
+    events: [push]
+    # Queue entries are gh-readonly-queue/main/pr-<n>-<sha>.
+    pattern: refs/heads/gh-readonly-queue/main/*
+    concurrency:
+      group: ref
+      supersede: never
+    # Stop when the entry leaves the queue (tenstorrent/torrentci#3276).
+    on-ref-retired: cancel
+    # Lower priority than pull request work (100).
+    priority: 160
+    targets:
+      jobs: []
+      dashboards: [shadow-pr-gate]

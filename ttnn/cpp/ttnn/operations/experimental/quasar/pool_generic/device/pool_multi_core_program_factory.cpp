@@ -589,10 +589,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         return_indices,
         in_h,
         in_w,
-        output_layout,
-        // Symmetric lanes: one multi-threaded reader (not split readers) so STRIDED pairs reader
-        // thread i with compute thread i. MPWI keeps its asymmetric reader0/reader1 structure.
-        /*single_reader_stream=*/!return_indices);
+        output_layout);
     // Host-side record of the lane count programmed (TT_LOGGER_LEVEL=Debug), observable without a
     // kernel probe.
     log_debug(
@@ -674,8 +671,8 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     const bool is_output_tiled = output_layout == Layout::TILE;
     const bool is_output_block_format = is_block_float(output_tensors[0].dtype());
     const bool zero_pages = is_output_tiled && is_output_block_format;
-    const bool indexes_32_bit = return_indices && params.index_format == tt::DataFormat::UInt32;
-
+    const bool indexes_32_bit = return_indices && params.index_nbytes == 4;
+    const bool indexes_int32 = return_indices && params.index_format == tt::DataFormat::Int32;
     // MPWI index increments (host computation, unchanged).
     uint32_t right_inc = 0, down_left_wrap_inc = 0, up_left_wrap_inc = 0;
     uint32_t intra_kernel_right_inc = 0, intra_kernel_down_left_wrap_inc = 0;
@@ -971,6 +968,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         reader_cta["intra_kernel_right_inc"] = intra_kernel_right_inc;
         reader_cta["intra_kernel_down_left_wrap_inc"] = intra_kernel_down_left_wrap_inc;
         reader_cta["indexes_32_bit"] = static_cast<uint32_t>(indexes_32_bit);
+        reader_cta["indexes_int32"] = static_cast<uint32_t>(indexes_int32);
     }
 
     // -----------------------------------------------------------------------
@@ -1064,7 +1062,8 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
                     .endpoint_type = DFBEndpointType::PRODUCER});
             } else {
                 // reader1 (writer face): consumes the compute-produced pack tmps, and is the
-                // producer-only writer into the borrowed output / output-index (self-loop).
+                // producer-only writer into the borrowed output / output-index (compute carries the
+                // census consumers; Gen2 forbids DM self-loops).
                 b.push_back(DFBBinding{
                     .dfb_spec_name = DFB_PACK_TMP,
                     .accessor_name = "pack_tmp_cb",
@@ -1076,15 +1075,9 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
                 b.push_back(DFBBinding{
                     .dfb_spec_name = DFB_OUT, .accessor_name = "out_cb", .endpoint_type = DFBEndpointType::PRODUCER});
                 b.push_back(DFBBinding{
-                    .dfb_spec_name = DFB_OUT, .accessor_name = "out_cb", .endpoint_type = DFBEndpointType::CONSUMER});
-                b.push_back(DFBBinding{
                     .dfb_spec_name = DFB_OUT_IDX,
                     .accessor_name = "out_idx_cb",
                     .endpoint_type = DFBEndpointType::PRODUCER});
-                b.push_back(DFBBinding{
-                    .dfb_spec_name = DFB_OUT_IDX,
-                    .accessor_name = "out_idx_cb",
-                    .endpoint_type = DFBEndpointType::CONSUMER});
             }
         } else {
             // pool2d: the reader produces the input + scalar streams (compute consumes them).
@@ -1223,7 +1216,6 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         compute_cta["pad_l"] = setup.pad_l;
         compute_cta["kernel_h"] = kernel_h;
         compute_cta["kernel_w"] = kernel_w;
-        compute_cta["indexes_32_bit"] = static_cast<uint32_t>(indexes_32_bit);
     }
 
     Group<DFBBinding> compute_bindings;
@@ -1261,7 +1253,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         // result stays resident (the DFB is borrowed from OUTPUT_TENSOR and sized to the
         // full output shard, so the producer never wraps), so there is no real consumer.
         // Self-loop the compute as producer+consumer to satisfy the SPSC completeness
-        // check (mirrors the mpwi writer-face self-loop on DFB_OUT). The compute kernel pops
+        // check. The compute kernel pops
         // each block after pushing it so the DFB is left balanced (the data stays resident).
         compute_bindings.push_back(DFBBinding{
             .dfb_spec_name = DFB_OUT,
@@ -1346,6 +1338,13 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
             .accessor_name = "pack_idx_tmp_cb",
             .endpoint_type = DFBEndpointType::PRODUCER,
             .access_pattern = DFBAccessPattern::STRIDED});
+        // Census partners for reader1's producer-only borrowed outputs (never constructed).
+        compute_bindings.push_back(DFBBinding{
+            .dfb_spec_name = DFB_OUT, .accessor_name = "census_out", .endpoint_type = DFBEndpointType::CONSUMER});
+        compute_bindings.push_back(DFBBinding{
+            .dfb_spec_name = DFB_OUT_IDX,
+            .accessor_name = "census_out_idx",
+            .endpoint_type = DFBEndpointType::CONSUMER});
         // compute_tmp_idx: self-loop accumulator on compute.
         compute_bindings.push_back(DFBBinding{
             .dfb_spec_name = DFB_COMPUTE_TMP_IDX,
@@ -1385,6 +1384,19 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         .math_approx_mode = false,
         .fp32_dest_acc_en = get_fp32_dest_acc_en(device_compute_kernel_config),
         .dst_full_sync_en = get_dst_full_sync_en(device_compute_kernel_config)});
+    // Int32 index tiles cannot pass through SrcA on Quasar; unpack them straight to Dest.
+    if (indexes_int32) {
+        for (const auto& dfb :
+             {DFB_IN_IDX,
+              DFB_RIGHT_INC,
+              DFB_DOWN_LEFT,
+              DFB_UP_LEFT,
+              DFB_INTRA_RIGHT,
+              DFB_INTRA_DOWN_LEFT,
+              DFB_COMPUTE_TMP_IDX}) {
+            compute_hw.unpack_modes.emplace(dfb, UnpackMode::UnpackToDest);
+        }
+    }
 
     KernelSpec compute{
         .unique_id = COMPUTE_KERNEL,

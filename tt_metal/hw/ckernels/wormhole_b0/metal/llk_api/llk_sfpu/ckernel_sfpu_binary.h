@@ -186,11 +186,14 @@ inline void calculate_sfpu_binary(
         rne_bias = kBf16RneBias;
         rne_mask = kBf16RneMask;
     }
-    // NEXTAFTER: the +inf bit pattern its NaN classifier compares both magnitudes against, held
-    // in an LREG across the loop for the same reason. Loaded only for NEXTAFTER; unassigned otherwise.
+    // NEXTAFTER: the +inf bit pattern its NaN classifier compares both magnitudes against, and
+    // the smallest step away from zero (one ULP of the entry point's format), held in LREGs across
+    // the loop for the same reason. Loaded only for NEXTAFTER; unassigned otherwise.
     sfpi::vInt inf_bits;
+    sfpi::vFloat tiny;
     if constexpr (BINOP == BinaryOp::NEXTAFTER || BINOP == BinaryOp::NEXTAFTER_BF16) {
         inf_bits = 0x7F800000;
+        tiny = sfpi::as<sfpi::vFloat>(sfpi::vInt((BINOP == BinaryOp::NEXTAFTER_BF16) ? 0x10000 : 1));
     }
     // SFPU microcode
 #pragma GCC unroll UNROLL
@@ -251,10 +254,10 @@ inline void calculate_sfpu_binary(
             // written symmetrically, and the asymmetry is load-bearing: sfpi lowers `in0 < 0.0f`
             // to an SFPSETCC on in0's bits, but `in0 <= 0.0f` has no SETCC mode and goes through
             // an SFPMAD negation, which flushes a denormal in0 to zero. The nested test below
-            // keeps that flush-based arm for the in0 > in1 side, so a denormal in0 steps exactly
-            // as it always has (bit-identical on silicon, every edge class); a bits-only sign flip
-            // for both sides would be cheaper still but sends (+denormal, negative) lanes the
-            // other way. The in0 < in1 side needs only the sign bit, so it is one arm plus a flip.
+            // uses that flush-based arm on the in0 > in1 side, so a positive denormal in0 with
+            // in1 < in0 steps one ULP away from in1 (the largest denormal lands on +FLT_MIN); a
+            // sign-bit test there would step it toward zero instead. The in0 < in1 side needs only
+            // the sign bit, so it is one arm plus a flip.
             v_if(in0 < in1) { step = kUlpStep; }
             v_endif;
             v_if(in0 < 0.0f) { step = -step; }
@@ -276,7 +279,6 @@ inline void calculate_sfpu_binary(
             // the sign first is what brings -0.0 into the guard.
             sfpi::vFloat mag_a = sfpi::setsgn(in0, 0);
             sfpi::vFloat mag_b = sfpi::setsgn(in1, 0);
-            sfpi::vFloat tiny = sfpi::as<sfpi::vFloat>(sfpi::vInt(kUlpStep));
             v_if(mag_a == 0.0f) {
                 // The smallest step toward in1 carries in1's sign, except that a positive in1 the
                 // direction compares flush to zero (+0, +denormal) keeps in0. For a zero in0 those
