@@ -7,6 +7,7 @@ from .all_gather_rms_norm import (
     PROPERTIES,
     SUPPORTED,
     all_gather_rms_norm,
+    all_gather_rms_norm_scratch_tensor,
     default_compute_kernel_config,
     validate,
 )

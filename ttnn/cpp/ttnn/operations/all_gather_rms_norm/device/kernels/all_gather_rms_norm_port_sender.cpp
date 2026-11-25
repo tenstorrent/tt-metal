@@ -64,24 +64,26 @@ void kernel_main() {
     constexpr uint32_t num_headers = group;
     static_assert(num_headers >= 1 && num_headers <= 12, "packet header pool: <= 12 headers per RISC");
 
-    size_t a = 0;
-    const uint32_t dst_addr = get_arg_val<uint32_t>(a++);
-    const uint32_t first_bank = get_arg_val<uint32_t>(a++);
-    const uint32_t bank_stride = get_arg_val<uint32_t>(a++);
-    const uint32_t arrival_addr = get_arg_val<uint32_t>(a++);  // downstream port's counter: same address
-    const uint32_t ready_addr = get_arg_val<uint32_t>(a++);
-    const uint32_t send_ready = get_arg_val<uint32_t>(a++);
-    const uint32_t ready_xy = get_arg_val<uint32_t>(a++);
-    const uint32_t peer_xy = get_arg_val<uint32_t>(a++);
-    const uint16_t dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(a++));
-    const uint16_t dst_chip_id = static_cast<uint16_t>(get_arg_val<uint32_t>(a++));
-    const bool has_conn = get_arg_val<uint32_t>(a++) != 0;
-    const bool is_hub = get_arg_val<uint32_t>(a++) != 0;
-    const uint32_t slot_bytes = get_arg_val<uint32_t>(a++);
-    const uint32_t stats_arrived_addr = get_arg_val<uint32_t>(a++);
-    const uint32_t stats_expect_in = get_arg_val<uint32_t>(a++);
-    const uint32_t n_active = get_arg_val<uint32_t>(a++);
-    const uint32_t n_stats = get_arg_val<uint32_t>(a++);
+    using namespace agrn_args;
+    const uint32_t dst_addr = get_common_arg_val<uint32_t>(port_sender_common::DST_ADDR);
+    const uint32_t bank_stride = get_common_arg_val<uint32_t>(port_sender_common::BANK_STRIDE);
+    // downstream port's counter: same address
+    const uint32_t arrival_addr = get_common_arg_val<uint32_t>(port_sender_common::ARRIVAL_ADDR);
+    const uint32_t ready_addr = get_common_arg_val<uint32_t>(port_sender_common::READY_ADDR);
+    const uint32_t slot_bytes = get_common_arg_val<uint32_t>(port_sender_common::SLOT_BYTES);
+    const uint32_t stats_arrived_addr = get_common_arg_val<uint32_t>(port_sender_common::STATS_ARRIVED_ADDR);
+    const uint32_t n_active = get_common_arg_val<uint32_t>(port_sender_common::N_ACTIVE);
+    const uint32_t first_bank = get_arg_val<uint32_t>(port_sender_rt::FIRST_BANK);
+    const uint32_t send_ready = get_arg_val<uint32_t>(port_sender_rt::SEND_READY);
+    const uint32_t ready_xy = get_arg_val<uint32_t>(port_sender_rt::READY_XY);
+    const uint32_t peer_xy = get_arg_val<uint32_t>(port_sender_rt::PEER_XY);
+    const uint16_t dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(port_sender_rt::DST_MESH_ID));
+    const uint16_t dst_chip_id = static_cast<uint16_t>(get_arg_val<uint32_t>(port_sender_rt::DST_CHIP_ID));
+    const bool has_conn = get_arg_val<uint32_t>(port_sender_rt::HAS_CONN) != 0;
+    const bool is_hub = get_arg_val<uint32_t>(port_sender_rt::IS_HUB) != 0;
+    const uint32_t stats_expect_in = get_arg_val<uint32_t>(port_sender_rt::STATS_EXPECT_IN);
+    const uint32_t n_stats = get_arg_val<uint32_t>(port_sender_rt::N_STATS);
+    size_t a = port_sender_rt::STATS;
     const uint32_t stats_idx = a;
     a += n_stats;
     const uint32_t n_entries_args = get_arg_val<uint32_t>(a++);

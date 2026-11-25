@@ -15,6 +15,7 @@
 #include <cstdint>
 
 #include "agrn_common.hpp"
+#include "all_gather_rms_norm_args.hpp"
 
 namespace agrn_port {
 

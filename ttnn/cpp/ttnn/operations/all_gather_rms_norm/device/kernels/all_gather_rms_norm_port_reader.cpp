@@ -27,19 +27,20 @@ constexpr bool own_from_dst = own_from_dst_ct != 0;
 void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<PORT_CT_ARGS>();
 
-    size_t a = 0;
-    const uint32_t dst_addr = get_arg_val<uint32_t>(a++);
-    const uint32_t first_bank = get_arg_val<uint32_t>(a++);
-    const uint32_t bank_stride = get_arg_val<uint32_t>(a++);
-    const uint32_t arrival_addr = get_arg_val<uint32_t>(a++);
+    using namespace agrn_args;
+    const uint32_t dst_addr = get_common_arg_val<uint32_t>(port_reader_common::DST_ADDR);
+    const uint32_t bank_stride = get_common_arg_val<uint32_t>(port_reader_common::BANK_STRIDE);
+    const uint32_t arrival_addr = get_common_arg_val<uint32_t>(port_reader_common::ARRIVAL_ADDR);
+    const uint32_t n_active = get_common_arg_val<uint32_t>(port_reader_common::N_ACTIVE);
+    const uint32_t notify_landed = get_common_arg_val<uint32_t>(port_reader_common::NOTIFY_LANDED);
+    const uint32_t first_bank = get_arg_val<uint32_t>(port_reader_rt::FIRST_BANK);
 #if defined(AGRN_ABL_NO_BULK)
-    const uint32_t expect_in = 0 * get_arg_val<uint32_t>(a++);  // ablation: bulk stubbed
+    const uint32_t expect_in = 0 * get_arg_val<uint32_t>(port_reader_rt::EXPECT_IN);  // ablation: bulk stubbed
 #else
-    const uint32_t expect_in = get_arg_val<uint32_t>(a++);
+    const uint32_t expect_in = get_arg_val<uint32_t>(port_reader_rt::EXPECT_IN);
 #endif
-    const uint32_t n_active = get_arg_val<uint32_t>(a++);
-    const uint32_t notify_landed = get_arg_val<uint32_t>(a++);
-    const uint32_t n_entries_args = get_arg_val<uint32_t>(a++);
+    const uint32_t n_entries_args = get_arg_val<uint32_t>(port_reader_rt::N_ENTRIES);
+    size_t a = port_reader_rt::ENTRIES;
 #if defined(AGRN_ABL_NO_BULK)
     const uint32_t n_entries = 0;  // ablation: bulk stubbed (output garbage; perf ablation only)
 #else

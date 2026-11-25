@@ -1,7 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""all_gather_rms_norm — fused all-gather + RMSNorm / LayerNorm over Fabric 2D, ONE generic_op per call.
+"""all_gather_rms_norm — fused all-gather + RMSNorm / LayerNorm over Fabric 2D.
+
+The operation is the native C++ ttnn.all_gather_rms_norm (ttnn/cpp/ttnn/operations/all_gather_rms_norm), which
+checks this support contract and refuses inputs outside it with the same exceptions.
 
 Every device of a cluster_axis group holds its (..., M, W_local) slice; every member returns the full normalized
 (..., M, G * W_local) row. Scheme (op_design.md): stats-first, gather-normalized — per-row partial stats go around
@@ -13,20 +16,10 @@ Registry model: INPUT_TAGGERS / SUPPORTED / EXCLUSIONS / validate() below, then 
 
 from __future__ import annotations
 
-from typing import Optional
-
 import ttnn
 
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 from ttnn.operations.ccl import Topology
-
-from .all_gather_rms_norm_program_descriptor import (
-    build_plan,
-    create_mesh_program_descriptor,
-    derive_geometry,
-    shard_cores,
-    usable_links,
-)
 
 
 # ---------------------------------------------------------------------------
@@ -266,81 +259,12 @@ def validate(
                 f"got {got} {output_tensor.dtype} {output_tensor.layout}"
             )
 
-    # Live-fabric requests (caller errors).
-    mesh = input_tensor.device()
-    ring = topology == Topology.Ring and G > 2
-    links = usable_links(mesh, cluster_axis, ring)
-    if not links:
-        raise ValueError(
-            f"all_gather_rms_norm: {topology} along cluster_axis {cluster_axis} needs a link on every hop "
-            f"(fabric {ttnn.get_fabric_config()})"
-        )
-    if num_links is not None and (num_links < 1 or num_links > links):
-        raise ValueError(f"all_gather_rms_norm: num_links={num_links}, usable links per hop: {links}")
-    return links
+    # The live-fabric checks (a link on every hop, num_links within the usable links) are made by the C++ op.
 
 
 # ---------------------------------------------------------------------------
-# Public entry point
+# Public entry point: the registered C++ operation
 # ---------------------------------------------------------------------------
 
-
-def all_gather_rms_norm(
-    input_tensor: ttnn.Tensor,
-    *,
-    cluster_axis: int,
-    gamma: Optional[ttnn.Tensor] = None,
-    beta: Optional[ttnn.Tensor] = None,
-    norm_type: str = "rms_norm",
-    epsilon: float = 1e-6,
-    topology=Topology.Linear,
-    num_links: Optional[int] = None,
-    compute_kernel_config: Optional[ttnn.ComputeConfigDescriptor] = None,
-    memory_config: Optional[ttnn.MemoryConfig] = None,
-    output_tensor: Optional[ttnn.Tensor] = None,
-) -> ttnn.Tensor:
-    links = validate(
-        input_tensor,
-        cluster_axis=cluster_axis,
-        gamma=gamma,
-        beta=beta,
-        norm_type=norm_type,
-        epsilon=epsilon,
-        topology=topology,
-        num_links=num_links,
-        compute_kernel_config=compute_kernel_config,
-        memory_config=memory_config,
-        output_tensor=output_tensor,
-    )
-    if compute_kernel_config is None:
-        compute_kernel_config = default_compute_kernel_config()
-    if num_links is None:
-        num_links = min(links, 2)
-    mesh = input_tensor.device()
-    G = tuple(mesh.shape)[cluster_axis]
-    geo = derive_geometry(input_tensor.shape, G)
-    # sharded input: its shard cores are the workers, the port cores go elsewhere
-    plan = build_plan(mesh, cluster_axis, topology, num_links, shard_cores(input_tensor))
-    if output_tensor is None:
-        out_shape = [int(s) for s in input_tensor.shape][:-1] + [geo.W]
-        output_tensor = ttnn.allocate_tensor_on_device(
-            ttnn.Shape(out_shape),
-            input_tensor.dtype,
-            ttnn.TILE_LAYOUT,
-            mesh,
-            memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG,
-        )
-    desc, _persistent = create_mesh_program_descriptor(
-        mesh,
-        plan,
-        geo,
-        input_tensor,
-        output_tensor,
-        gamma,
-        beta,
-        is_ln=norm_type == "layer_norm",
-        epsilon=float(epsilon),
-        compute_kernel_config=compute_kernel_config,
-    )
-    io = [input_tensor] + [t for t in (gamma, beta) if t is not None] + [output_tensor]
-    return ttnn.generic_op(io, desc)
+all_gather_rms_norm = ttnn.all_gather_rms_norm
+all_gather_rms_norm_scratch_tensor = ttnn.all_gather_rms_norm_scratch_tensor
