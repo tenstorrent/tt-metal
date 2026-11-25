@@ -16,6 +16,7 @@
 #include <tt-metalium/execution/slow_dispatch.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 
+#include "impl/buffers/buffer_impl.hpp"
 #include "impl/context/context_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/emulation/host_sanitizers.hpp"
@@ -116,6 +117,12 @@ void WriteToDeviceSharded(
     cluster.l1_barrier(device->id(), written_l1_cores);
 }
 
+// Index in the root buffer of a view's first page. A view of an interleaved buffer keeps the root buffer's address, so
+// its page i is root page first_root_page + i, in the bank that root page uses.
+size_t first_root_page(const Buffer& buffer) {
+    return buffer.impl().root_buffer_region().offset / buffer.page_size();
+}
+
 DeviceAddr CalculateAddressDeviceInterleavedContiguous(const Buffer& buffer, uint64_t bank_index, uint64_t page_index) {
     DeviceAddr addr = 0;
     if (buffer.is_dram()) {
@@ -147,7 +154,8 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, ttsl::Span<const u
 
     auto* device = buffer.device();
     size_t num_banks = device->allocator()->get_num_banks(buffer.buffer_type());
-    size_t bank_index = 0;
+    const size_t root_page_start = first_root_page(buffer);
+    size_t bank_index = root_page_start % num_banks;
     size_t data_index = 0;
 
     const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
@@ -158,7 +166,8 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, ttsl::Span<const u
     TT_ASSERT(buffer.aligned_page_size() >= page_size);  // Check that we don't write to the end of the buffer
     std::set<CoreCoord> written_l1_cores;
     for (size_t page_index = 0; page_index < num_pages; page_index++) {
-        const DeviceAddr address = CalculateAddressDeviceInterleavedContiguous(buffer, bank_index, page_index);
+        const DeviceAddr address =
+            CalculateAddressDeviceInterleavedContiguous(buffer, bank_index, root_page_start + page_index);
         auto write_chunk = [&](size_t offset, size_t size_in_bytes) {
             if (size_in_bytes == 0) {
                 return;
@@ -219,7 +228,8 @@ void ReadFromDeviceInterleavedContiguous(const Buffer& buffer, uint8_t* host_buf
     size_t num_banks = device->allocator()->get_num_banks(buffer.buffer_type());
 
     size_t host_idx = 0;
-    size_t bank_index = 0;
+    const size_t root_page_start = first_root_page(buffer);
+    size_t bank_index = root_page_start % num_banks;
 
     const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
     const auto& cluster = metal_ctx.get_cluster();
@@ -227,7 +237,8 @@ void ReadFromDeviceInterleavedContiguous(const Buffer& buffer, uint8_t* host_buf
 
     std::vector<uint8_t> page(aligned_page_size);
     for (size_t page_index = 0; page_index < num_pages; page_index++) {
-        const DeviceAddr address = CalculateAddressDeviceInterleavedContiguous(buffer, bank_index, page_index);
+        const DeviceAddr address =
+            CalculateAddressDeviceInterleavedContiguous(buffer, bank_index, root_page_start + page_index);
         switch (buffer.buffer_type()) {
             case BufferType::DRAM:
             case BufferType::TRACE: {
