@@ -5,6 +5,7 @@
 // The host-side CQ rings of a mock device with two hardware CQs: each CQ has its own memory and wraps within it.
 
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <thread>
@@ -31,6 +32,12 @@ constexpr uint32_t kChunksPerLap = kMockIssueQueueSize / kChunkSize;
 class MockTwoCqRingsTest : public ::testing::Test {
 protected:
     void SetUp() override {
+        // Only in a mock-mode process (the CPU_ leg sets TT_METAL_MOCK_CLUSTER_DESC_PATH). In a process that also opens
+        // silicon, a mock context created first registers MetalContext's exit teardown before UMD's statics exist, and
+        // TT_VISIBLE_DEVICES filters the one-chip mock descriptor.
+        if (std::getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH") == nullptr) {
+            GTEST_SKIP() << "Needs a mock-mode process (TT_METAL_MOCK_CLUSTER_DESC_PATH)";
+        }
         env_ = std::make_unique<MetalEnv>(MetalEnvDescriptor{
             .mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1)});
         mesh_device_ = distributed::MeshDevice::open_mesh_device(
