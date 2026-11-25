@@ -38,7 +38,7 @@ Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes, 
 | `cb_group_stats` (20) | 2 | 2 | `{n: streams → 1, ht: streams → none, wt: streams → none, g: spans → G_core, i: streams → none}` | Float32 | writer | compute | mcast landing → expand | **Not shared.** It is a remote-written landing zone (the root sets the write time), and the remote-address invariant requires capacity = quantum = 2. |
 | `cb_affine_staging` (21) | 1 page of `align_up((HAS_GAMMA + HAS_BETA)·W·64, 64)` B (iff any affine) | 1 | `{n: streams → none, ht: streams → none, wt: spans → W (64 B per tile), g: streams → none, i: streams → none}` | raw bytes (dataflow-only payload) | reader | reader | load (affine) | **Not shared.** It is the copy source for (13)/(14) and is concurrent with them. It is ≤ 5 KB, with a non-tile page size. |
 | `cb_output_rm` (1) | sharded RM only: **the output shard** (zero-copy, `cb_descriptor_from_sharded_tensor`; 2 KB views over `sh·sw·2` B) | the whole shard | `{n: streams → 1, ht: spans → rows_core (B chunks of h), wt: spans → the shard width, g: streams → none, i: streams → none}` | Float16_b (output ABI) | compute (untilize) | writer (credit drain only, no NoC) | pass 2 | **Not static CB space** — borrowed from the output tensor. Pass 2 untilizes each normalized chunk straight into the shard rows it came from. |
-| `cb_pilot_rows` (22) | `W` | `W` (row 0 of each tile: the shift `k` of the lane's group; rows 1..31 zero) | `{n: streams → 1 per block, ht: streams → none, wt: spans → W, g: spans → G_core (one k per group), i: streams → none}` | Float16_b (`k` is a data sample, exactly bf16) | reader | compute | pass 1 (pass-1 chain srcB, `BroadcastDim::Row`) | **Not shared.** Live through every pass-1 chunk, concurrent with the input ring, the x·(x−k) intermediate and both accumulators. |
+| `cb_pilot_rows` (22) | `m·W`, `m = pilot_repeat(W, h)` (largest divisor of `h` ≤ `ceil(4/W)`; 1 for `W ≥ 4`) | `m·W` (row 0 of each tile: the shift `k` of the lane's group; rows 1..31 zero; the `W` tiles repeated `m` times so the pass-1 chain walks `m` tile rows as one row of `m·W` tiles) | `{n: streams → 1 per block, ht: spans → m (replicated), wt: spans → W, g: spans → G_core (one k per group), i: streams → none}` | Float16_b (`k` is a data sample, exactly bf16) | reader | compute | pass 1 (pass-1 chain srcB, `BroadcastDim::Row`) | **Not shared.** Live through every pass-1 chunk, concurrent with the input ring, the x·(x−k) intermediate and both accumulators. |
 | `cb_sum_seed` (23) | `W` pages of 4 KB | `W` (row 0: `−n·k` per lane, exact; rows 1..31 zero) | same as (22) | Float32 + `UnpackToDestFp32` (the seed must be exact: `n·k` exceeds bf16) | reader | compute | chunk 0 of pass 1 (the Σx reduce reloads it in place of the accumulator) | **Not shared.** Produced in chunk 0's read shadow, while every other pass-1 buffer is live; it is consumed within the first chunk, so an alias with the x·(x−k) intermediate would need the reduce to pop it before that chunk's chain packs — not true (chain packs first). |
 | `cb_group_shift` (24) | 1 page of 4 KB | 1 (lane g = `k_g`, rows replicated) | `{n: streams → 1, ht: streams → none, wt: streams → none, g: spans → G_core, i: streams → none}` | Float32 + `UnpackToDestFp32` | reader | compute (root finalize) | block start → finalize (root); allocated on every core (uniform CB layout) | **Not shared.** Written by the reader at chunk 0 and read at the finalize, so it spans pass 1 and the combine. 4 KB. |
 
@@ -54,6 +54,7 @@ Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes, 
 | R1: accumulators alias the chan CBs (groups E, C) | the publish copy is an in-place lockstep hand-off (tile i read, tile i packed) | `−8 KB·W` (pays for the R1 additions) |
 | R1: compute split by role (`IS_ROOT` CT arg) | the root-only combine/finalize is not in the member binary; keeps the RM root binary inside the kernel-config ring under `--dev` | none |
 | R1: two-op per-chunk chains blocked over the DEST window (`CHAIN_BLOCK = DEST_AUTO_LIMIT`, `PerBlockSize` pack) | one FPU init per element per window instead of per tile | none (`cb_x_squared` / `cb_output_tiles` capacity `T ≥` the window) |
+| R1: pilot rows replicated `m = pilot_repeat(W, h)` times (pass 1); `W = 1` pass 2 walks the chunk as `tiles(rows)` with `Scalar` a / b′ | the chain's DEST window only spans one walk row, so at `W < 4` it never filled (flux1 1M×64 at W = 1: 912 → 869 µs) | `+2 KB·(m−1)·W` (≤ 6 KB, only at `W < 4`) |
 
 ### Symbol table
 
@@ -81,11 +82,11 @@ F = 2 KB · [ RM·D_RM·T
              + STREAM·(TILE·D_IN + RM·1)·T
              + K_alloc·T
              + 1 + R
-             + W·(2 + HAS_GAMMA + HAS_BETA) ]
+             + W·(1 + m + HAS_GAMMA + HAS_BETA) ]
   + 4 KB · [ T + 3·W + 2·R + 7 ]
   + align_up((HAS_GAMMA + HAS_BETA)·W·64, 64) B
 ```
-(Refinement 1: `W·(1 + …)` → `W·(2 + …)` adds the pilot rows (22); `4·W` → `3·W` is groups E and C (the
+(Refinement 1: `W·(1 + …)` → `W·(1 + m + …)` adds the pilot rows (22), `m = pilot_repeat(W, h)` copies; `4·W` → `3·W` is groups E and C (the
 accumulators now alias the chan CBs: −2W) plus the seed (23: +W); `6` → `7` adds the group-shift tile (24).
 `footprint_bytes()` in the descriptor is the executable form.)
 
@@ -126,21 +127,22 @@ What each term scales with:
 | `R` terms | `cpi` |
 | everything else | constant |
 
-Worked examples (BH, `L1_budget` = 1 460 288 B; verifier-measured plans, γ+β, TILE):
+Worked examples (BH, `L1_budget` = 1 460 288 B, P = 110; recomputed at Refinement 1 from the descriptor's
+`_choose_gx` / `footprint_bytes()`, γ+β, TILE):
 
 | Case | Parameters | `K` / `B_max` | `ρ` (non-resident fraction) | Footprint | Regime |
 |------|------------|---------------|-----------------------------|-----------|--------|
-| `vae_dram_1048576x128` | gx = 2, W = 2, h = 16, T = 32, cpi = 55, R = 2 | 16 / 38 | 0.58 | 1 403 136 B | `dram_partial_resident` |
-| `vae_dram_262144x256` | gx = 2, W = 4, h = 8, T = 32, cpi = 55 | 16 / 19 | 0.16 | 1 448 448 B | partial |
-| `vae_dram_262144x512` | gx = 2, W = 8, h = 4, T = 32, cpi = 55 | 14 / 38 | 0.63 | 1 408 000 B | partial |
-| `vae_dram_1048576x256` | gx = 2, W = 4, h = 8, T = 32, cpi = 55 | 16 / 75 | 0.79 | 1 448 448 B | partial |
-| `flux1_dram_1048576x64` | gx = 2, W = 1, h = 32, T = 32, cpi = 55 | 17 / 19 | 0.11 | 1 446 016 B | partial |
-| `mochi_dram_8x407040x128` | gx = 1, W = 4, h = 8, T = 32, cpi = 13 (104 cores) | 16 / 123 | 0.87 | 1 438 208 B | partial |
-| `vae_dram_65536x512` | gx = 2, W = 8, h = 4, T = 32, cpi = 55 | 10 / 10 | 0 | 1 014 784 B | `dram_resident` |
-| `refiner_dram_16384x1152` | gx = 4, W = 9, h = 3, T = 27, cpi = 27 | 7 / 7 | 0 | 738 432 B | `dram_resident` |
-| `flux1_dram_16384x256` | gx = 4, W = 2, h = 16, T = 32, cpi = 27 | 2 / 2 | 0 | 344 320 B | `dram_resident` |
+| `vae_dram_1048576x128` | gx = 2, W = 2, h = 16, T = 32, cpi = 55, R = 2, m = 2 | 16 / 38 | 0.58 | 1 407 360 B | `dram_partial_resident` |
+| `vae_dram_262144x256` | gx = 2, W = 4, h = 8, T = 32, cpi = 55, m = 1 | 16 / 19 | 0.16 | 1 444 480 B | partial |
+| `vae_dram_262144x512` | gx = 2, W = 8, h = 4, T = 32, cpi = 55, m = 1 | 14 / 38 | 0.63 | 1 395 840 B | partial |
+| `vae_dram_1048576x256` | gx = 2, W = 4, h = 8, T = 32, cpi = 55, m = 1 | 16 / 75 | 0.79 | 1 444 480 B | partial |
+| `flux1_dram_1048576x64` | gx = 2, W = 1, h = 32, T = 32, cpi = 55, m = 4 | 17 / 19 | 0.11 | 1 454 336 B | partial |
+| `mochi_dram_8x407040x128` | gx = 1, W = 4, h = 8, T = 32, cpi = 13 (104 cores), m = 1 | 16 / 123 | 0.87 | 1 434 240 B | partial |
+| `vae_dram_65536x512` | gx = 2, W = 8, h = 4, T = 32, cpi = 55, m = 1 | 10 / 10 | 0 | 1 002 624 B | `dram_resident` |
+| `refiner_dram_16384x1152` | gx = 4, W = 9, h = 3, T = 27, cpi = 27, m = 1 | 7 / 7 | 0 | 724 224 B | `dram_resident` |
+| `flux1_dram_16384x256` | gx = 4, W = 2, h = 10, T = 20, cpi = 27, m = 2 | 2 / 2 | 0 | 250 240 B | `dram_resident` |
 
-`F_fixed` for `vae_dram_1048576x128` is 354 560 B. Of that, 256 KB is the two `T`-scaled terms: the TILE stream depth
+`F_fixed` for `vae_dram_1048576x128` is 358 784 B. Of that, 256 KB is the two `T`-scaled terms: the TILE stream depth
 `D_IN·T` (128 KB) and group B `4 KB·T` (128 KB). Those two terms are the residency lever for the streaming rows: one
 resident chunk is `2 KB·T` = 64 KB.
 

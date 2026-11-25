@@ -66,7 +66,7 @@
 - **Compute config**: fixed HiFi3 + `fp32_dest_acc_en`.
 - **Golden baseline**: 399 `supported_pass`, 0 `supported_fail` / `xpass_drift` / `xfail_wrong_mode`. That is 434 / 47 152 collected cells passing; the rest are xfail_expected 4365 and invalid_skipped 42 345. All 9 DRAM PERF FOCUS cases pass at `PERF_TOLERANCE` and are 1.96×–25× faster than native (see `changelog.md`).
 
-### [ ] Refinement 1 — L1 BLOCK_SHARDED input, out of place (even shards, ROW_MAJOR + TILE, bf16), plus the variance precision fix
+### [x] Refinement 1 — L1 BLOCK_SHARDED input, out of place (even shards, ROW_MAJOR + TILE, bf16), plus the variance precision fix
 
 **Goal**:
 - Add `ttnn.TensorMemoryLayout.BLOCK_SHARDED` to `SUPPORTED["memory_layout"]` and `"even"` to `SUPPORTED["shard_fit"]`, keeping `in_place = False`.
@@ -119,6 +119,13 @@
 - The precision baseline's `offset_mean10` passes without its xfail mark.
 - DRAM cells stay green, and the 9 DRAM perf cases do not regress.
 - `verify_supported` has no loud category.
+
+**Outcome**: Done (2026-11-25).
+- Native zero-copy BLOCK_SHARDED (even, out of place) for TILE and RM. 114/114 cells pass in `--dev` and plain mode, as do the 4 R1 regression tests and the 3 sharded TILE loose cases (1.61× / 2.96× / 2.55× faster than native).
+- Shifted-moment variance fix: `offset_mean10` RMS 0.0273 → 0.0077, xfail removed.
+- 9 DRAM perf cases: −3.1%…+0.9% of Phase 0 (flux1 1M×64 +0.9%, inside noise). `verify_supported` is clean.
+- Finding: the non-contract `mid_*` DRAM bench shapes (~50–120 µs, latency-bound) carry the fixed pilot / seed / shift cost, +2.9…+10.6%.
+- Details are in `changelog.md`.
 
 ### [ ] Refinement 2 — in_place=True on block-sharded input (both layouts), including the 16384x640 / 16384x960 L1 fit
 
