@@ -1048,7 +1048,14 @@ def pytest_addoption(parser):
         action="store",
         type=int,
         default=None,
-        help="Iterations to run at each --didt-vf-sweep clock (default 1000)",
+        help="Iterations to run at each --didt-vf-sweep clock and VDD offset (default 1000)",
+    )
+    parser.addoption(
+        "--enable-vdd-offsets",
+        action="store_true",
+        default=False,
+        help="With --didt-vf-sweep: at every clock run the firmware's VCORE, then VDD forced to that VCORE +25 mV "
+        "and +50 mV through ARC (without it, only the firmware's VCORE)",
     )
     parser.addoption(
         "--grid-size",

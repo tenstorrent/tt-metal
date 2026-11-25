@@ -22,7 +22,7 @@ class OpParameter:
 class OpTestBase:
     # VF sweep settings for tests that do not pass them to the constructor. tests/didt/conftest.py fills these from
     # --didt-vf-sweep / --sweep-iterations for each test, so every didt test gets the sweep without signature changes.
-    vf_sweep_defaults = {"freqs": None, "sweep_iterations": None}
+    vf_sweep_defaults = {"freqs": None, "sweep_iterations": None, "vdd_offsets": None}
 
     def __init__(
         self,
@@ -39,6 +39,7 @@ class OpTestBase:
         sync_every_iteration=True,
         vf_sweep_freqs=None,
         sweep_iterations=None,
+        vdd_offsets=None,
     ):
         self.mesh_device = mesh_device
         # This will be removed once we rebase onto new main with the new open_mesh_device API
@@ -62,23 +63,25 @@ class OpTestBase:
         self.determinism_check_interval = determinism_check_interval
         self.sync_every_iteration = sync_every_iteration
 
-        # VF sweep: run sweep_iterations iterations at each forced AICLK in vf_sweep_freqs, in that order.
+        # VF sweep: for each forced AICLK in vf_sweep_freqs (in that order), run sweep_iterations iterations at each
+        # VDD offset in vdd_offsets (mV over the VCORE the firmware picks for that clock; 0 = firmware voltage).
         if vf_sweep_freqs is None:
             vf_sweep_freqs = OpTestBase.vf_sweep_defaults["freqs"]
         if sweep_iterations is None:
             sweep_iterations = OpTestBase.vf_sweep_defaults["sweep_iterations"]
+        if vdd_offsets is None:
+            vdd_offsets = OpTestBase.vf_sweep_defaults["vdd_offsets"]
         self.vf_sweep_freqs = list(vf_sweep_freqs) if vf_sweep_freqs else None
         self.sweep_iterations = sweep_iterations
+        self.vdd_offsets = list(vdd_offsets) if vdd_offsets else [0]
         if self.vf_sweep_freqs:
             if not self.sweep_iterations or self.sweep_iterations <= 0:
                 raise ValueError("VF sweep needs a positive sweep_iterations (--sweep-iterations)")
-            self.loop_count = len(self.vf_sweep_freqs) * self.sweep_iterations
-            # Telemetry is read at every determinism check; without checks (hang/stress tests) about 20x per clock.
-            self.vf_sample_interval = (
-                self.determinism_check_interval
-                if self.determinism_check_enabled
-                else max(1, self.sweep_iterations // 20)
-            )
+            if any(o < 0 or o > 100 for o in self.vdd_offsets):
+                raise ValueError(f"VDD offsets must be 0-100 mV, got {self.vdd_offsets}")
+            # One step per (clock, offset), offsets in the order given within each clock.
+            self.vf_steps = [(mhz, off) for mhz in self.vf_sweep_freqs for off in self.vdd_offsets]
+            self.loop_count = len(self.vf_steps) * self.sweep_iterations
 
         # Weights and activations tensors are needed for subclasses to run the operation
         self.activations = None
@@ -143,27 +146,48 @@ class OpTestBase:
 
             clock = AiclkController(self.device_ids)
             logger.info(
-                f"VF sweep: AICLK {self.vf_sweep_freqs} MHz, {self.sweep_iterations} iterations each "
-                f"({self.loop_count} in total), determinism check every {self.determinism_check_interval}"
+                f"VF sweep: AICLK {self.vf_sweep_freqs} MHz x VDD offsets {self.vdd_offsets} mV, "
+                f"{self.sweep_iterations} iterations each ({self.loop_count} in total), "
+                f"determinism check every {self.determinism_check_interval}"
             )
         try:
             self._run_op_test(clock)
         finally:
             if clock is not None:
                 clock.release()
-                logger.info(f"VF sweep: released the forced AICLK on devices {list(self.device_ids)}")
+                logger.info(f"VF sweep: released the forced AICLK and VDD on devices {list(self.device_ids)}")
 
     def _set_sweep_clock(self, clock, mhz, label):
-        """Drain the devices, force AICLK and wait until every device reports it."""
+        """Drain the devices, hand VDD back to the firmware, force AICLK, wait until every device reports it and
+        return {device_id: VCORE mV} (the firmware's voltage for that clock).
+
+        This readback is the only telemetry read of a sweep clock; nothing is read during the iterations.
+        """
         for device_idx in self.device_ids:
             ttnn.device.synchronize_device(self.get_device(device_idx))
+        if clock.vdd_forced:
+            clock.release_vdd()  # lower or raise the clock on the firmware's own V/F curve
         readings = clock.set_clock(mhz)
         aiclk = sorted({r[0] for r in readings.values()})
-        vcore = [r[1] for r in readings.values()]
+        vcore = {device_idx: r[1] for device_idx, r in readings.items()}
         logger.info(
             f"VF sweep: {label}: AICLK forced to {mhz} MHz, telemetry AICLK {aiclk} MHz on all "
-            f"{len(readings)} devices, VCORE (idle) {min(vcore)}-{max(vcore)} mV"
+            f"{len(readings)} devices, VCORE {min(vcore.values())}-{max(vcore.values())} mV"
         )
+        return vcore
+
+    def _set_sweep_vdd(self, clock, base_vcore, offset_mv, label):
+        """Drain the devices and force each one's VDD to its firmware VCORE + offset_mv; return the readback."""
+        for device_idx in self.device_ids:
+            ttnn.device.synchronize_device(self.get_device(device_idx))
+        targets = {d: v + offset_mv for d, v in base_vcore.items()}
+        readback = clock.set_vdd(targets)
+        logger.info(
+            f"VF sweep: {label}: VDD forced to firmware VCORE +{offset_mv} mV "
+            f"(targets {min(targets.values())}-{max(targets.values())} mV), "
+            f"VCORE readback {min(readback.values())}-{max(readback.values())} mV"
+        )
+        return readback
 
     def _run_op_test(self, clock):
         num_devices = len(self.device_ids)
@@ -223,43 +247,38 @@ class OpTestBase:
             out = [None] * num_devices
             self.activations = self.convert_activations_to_memory_config(a_t[0])
 
-            sweep_steps = []  # one record per VF sweep clock
+            sweep_steps = []  # one record per VF sweep (clock, VDD offset)
+            base_vcore = None  # firmware VCORE per device at the current clock
             logger.debug("Starting iterations")
             for i in range(self.loop_count):
                 if clock is not None and i % self.sweep_iterations == 0:
                     step_idx = i // self.sweep_iterations
-                    mhz = self.vf_sweep_freqs[step_idx]
-                    self._set_sweep_clock(
-                        clock,
-                        mhz,
-                        f"step {step_idx + 1}/{len(self.vf_sweep_freqs)} "
-                        f"(iterations {i}-{i + self.sweep_iterations - 1})",
+                    mhz, offset = self.vf_steps[step_idx]
+                    label = (
+                        f"step {step_idx + 1}/{len(self.vf_steps)} " f"(iterations {i}-{i + self.sweep_iterations - 1})"
                     )
+                    if step_idx == 0 or self.vf_steps[step_idx - 1][0] != mhz:
+                        base_vcore = self._set_sweep_clock(clock, mhz, label)
+                    if offset:
+                        vcore = self._set_sweep_vdd(clock, base_vcore, offset, label)
+                    else:
+                        if clock.vdd_forced:
+                            for device_idx in self.device_ids:
+                                ttnn.device.synchronize_device(self.get_device(device_idx))
+                            clock.release_vdd()
+                        vcore = base_vcore
                     step = {
                         "mhz": mhz,
+                        "offset": offset,
                         "checks": 0,
-                        "samples": 0,
                         "nd": [0] * num_devices,
-                        "clock_off": [0] * num_devices,
-                        "vcore": [[] for _ in range(num_devices)],
+                        "vcore": [vcore[device_idx] for device_idx in self.device_ids],
                     }
                     sweep_steps.append(step)
 
                 out = self.run_device_operation()
 
                 check_iteration = self.determinism_check_enabled and i % self.determinism_check_interval == 0
-                if clock is not None and i % self.vf_sample_interval == 0:
-                    # Read while the op is still running, so AICLK and VCORE are taken under load.
-                    step["samples"] += 1
-                    readings = clock.read()
-                    for output_id, device_idx in enumerate(self.device_ids):
-                        aiclk, vcore = readings[device_idx]
-                        step["vcore"][output_id].append(vcore)
-                        if abs(aiclk - step["mhz"]) > clock.tolerance_mhz:
-                            step["clock_off"][output_id] += 1
-                            logger.warning(
-                                f"VF sweep: device {device_idx} AICLK {aiclk} MHz while forced to {step['mhz']} MHz"
-                            )
 
                 if self.sync_every_iteration or check_iteration or i == self.loop_count - 1:
                     for device_idx in self.device_ids:
@@ -271,7 +290,9 @@ class OpTestBase:
                 if check_iteration:
                     outputs = list(pool.map(ttnn.to_torch, ttnn.get_device_tensors(out.cpu())))
                     matches = list(pool.map(torch.equal, reference_out[current_act_tensor], outputs))
-                    at_clock = f" (VF sweep AICLK {step['mhz']} MHz)" if clock is not None else ""
+                    at_clock = (
+                        f" (VF sweep AICLK {step['mhz']} MHz, VDD +{step['offset']} mV)" if clock is not None else ""
+                    )
                     if clock is not None:
                         step["checks"] += 1
 
@@ -318,33 +339,80 @@ class OpTestBase:
         assert catch_nd_on_fail
 
     def _log_sweep_summary(self, sweep_steps):
-        """One line per clock: checks, which devices failed and how often, clock held, VCORE under load."""
+        """One line per (clock, VDD offset): checks, which devices failed and how often, VCORE readback."""
         lines = [
-            "VF sweep summary (AICLK/VCORE read under load "
-            + (
-                "at each determinism check):"
-                if self.determinism_check_enabled
-                else "about 20 times per clock; no determinism checks):"
-            )
+            "VF sweep summary (VCORE read back once per step, right after the clock/VDD was set, devices idle; "
+            "+0 = firmware voltage):"
         ]
         for step in sweep_steps:
-            failing = [f"dev {self.device_ids[o]}: {n}/{step['checks']}" for o, n in enumerate(step["nd"]) if n > 0]
-            off = sum(step["clock_off"])
-            samples = step["samples"] * len(self.device_ids)
-            vcore = sorted(v for per_dev in step["vcore"] for v in per_dev)
-            vcore_txt = f"{vcore[0]}/{vcore[len(vcore) // 2]}/{vcore[-1]} mV" if vcore else "n/a"
+            failing = [
+                f"dev {self.device_ids[o]}: {n}/{step['checks']} (VCORE {step['vcore'][o]} mV)"
+                for o, n in enumerate(step["nd"])
+                if n > 0
+            ]
+            vcore = sorted(step["vcore"])
             lines.append(
-                f"  AICLK {step['mhz']:>5} MHz | checks {step['checks']:>4} | "
+                f"  AICLK {step['mhz']:>5} MHz VDD +{step['offset']:>3} mV | checks {step['checks']:>4} | "
                 + (f"ND {', '.join(failing) if failing else 'none'} | " if self.determinism_check_enabled else "")
-                + f"clock held {samples - off}/{samples} samples | VCORE min/median/max {vcore_txt}"
+                + f"VCORE min/median/max {vcore[0]}/{vcore[len(vcore) // 2]}/{vcore[-1]} mV"
             )
-            for o, n in enumerate(step["nd"]):
-                if n > 0 and step["vcore"][o]:
-                    v = sorted(step["vcore"][o])
-                    lines.append(
-                        f"      dev {self.device_ids[o]} VCORE min/median/max {v[0]}/{v[len(v) // 2]}/{v[-1]} mV"
-                    )
+        if self.determinism_check_enabled:
+            lines += self._sweep_result_lines(sweep_steps)
         logger.info("\n".join(lines))
+
+    def _sweep_result_lines(self, sweep_steps):
+        """Pass/fail grid (clock x VDD offset) over all devices, then the same grid per failing device with its VCORE.
+
+        A point PASSES when every determinism check at it was bit-exact on every device.
+        """
+        clocks = list(dict.fromkeys(step["mhz"] for step in sweep_steps))
+        offsets = list(dict.fromkeys(step["offset"] for step in sweep_steps))
+        at = {(step["mhz"], step["offset"]): step for step in sweep_steps}
+
+        def cell(step, o=None):
+            nd = step["nd"] if o is None else [step["nd"][o]]
+            failed = sum(nd)
+            if o is not None:
+                text = f"{'FAIL' if failed else 'PASS'} {failed}/{step['checks']} @{step['vcore'][o]}mV"
+            elif failed:
+                text = "FAIL " + ",".join(f"d{self.device_ids[i]}:{n}" for i, n in enumerate(step["nd"]) if n)
+            else:
+                text = "PASS"
+            return text
+
+        def grid(title, o=None):
+            rows = [
+                [f"{mhz} MHz"] + [cell(at[(mhz, off)], o) if (mhz, off) in at else "-" for off in offsets]
+                for mhz in clocks
+            ]
+            header = ["AICLK \\ VDD"] + [f"+{off} mV" for off in offsets]
+            widths = [max(len(r[c]) for r in rows + [header]) for c in range(len(header))]
+            fmt = lambda r: "    " + " | ".join(v.ljust(w) for v, w in zip(r, widths))
+            return [title, fmt(header)] + [fmt(r) for r in rows]
+
+        failing = [o for o in range(len(self.device_ids)) if any(step["nd"][o] for step in sweep_steps)]
+        lines = ["", *grid("VF sweep result, all devices (PASS = every check bit-exact on every device):")]
+        if not failing:
+            lines.append(f"  every clock and VDD combination PASSED on all {len(self.device_ids)} devices")
+        for o in failing:
+            lines += ["", *grid(f"Device {self.device_ids[o]} (failed checks/checks @ VCORE readback):", o)]
+            for mhz in clocks:
+                ran = [off for off in offsets if (mhz, off) in at]
+                ok = [at[(mhz, off)]["nd"][o] == 0 for off in ran]
+                # lowest offset from which every higher offset also passed
+                k = next((k for k in range(len(ok)) if all(ok[k:])), None)
+                if k is None:
+                    verdict = f"fails at +{ran[-1]} mV" + (
+                        " (passed at " + ", ".join(f"+{off}" for off, good in zip(ran, ok) if good) + " mV)"
+                        if any(ok)
+                        else ", every VDD offset failed"
+                    )
+                elif k == 0 and ran[0] == 0:
+                    verdict = "passes at the firmware voltage"
+                else:
+                    verdict = f"passes from +{ran[k]} mV"
+                lines.append(f"    {mhz} MHz: {verdict}")
+        return lines
 
 
 def get_mesh_grid_size(mesh_device):
