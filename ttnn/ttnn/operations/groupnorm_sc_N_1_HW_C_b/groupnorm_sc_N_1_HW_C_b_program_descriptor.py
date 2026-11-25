@@ -41,6 +41,8 @@ KERNEL_DIR = Path(__file__).parent / "kernels"
 CHUNK_TILES_TARGET = 32  # streaming quantum target (tiles per chunk)
 D_IN = 2  # TILE input stream depth (chunks)
 D_RM = 2  # RM stick CB depth (chunks)
+# DEST window of the compute's two-op per-chunk chains (fp32 DEST, half sync: the device DEST_AUTO_LIMIT).
+CHAIN_BLOCK_TILES = 4
 D_OUT = 2  # output CB depth (chunks); group B total = max(4 KB*T, D_OUT*T*2 KB)
 MAX_GROUP_LANES = 32  # group lanes in one tile row
 
@@ -130,6 +132,13 @@ def input_ring_pages(*, T, K_alloc, stream, is_rm):
     return K_alloc * T + int(stream) * (1 if is_rm else D_IN) * T
 
 
+def pilot_repeat(W, h):
+    """Copies of the W pilot tiles: the pass-1 shift chain walks m tile rows as one row of m*W tiles, so its
+    DEST window (CHAIN_BLOCK_TILES) also fills on narrow slices (W < 4). m divides h, so a ragged chunk's
+    rounded-up walk stays inside the chunk's nominal T pages."""
+    return _largest_divisor_at_most(h, _ceil_div(CHAIN_BLOCK_TILES, W))
+
+
 def group_b_bytes(T):
     """Alias group B (x^2 Float32 pass-1 intermediate / D_OUT-deep bf16 output ring): one allocation."""
     return max(F32_TILE_BYTES * T, D_OUT * T * BF16_TILE_BYTES)
@@ -154,7 +163,7 @@ def footprint_bytes(*, W, T, R, K_alloc, stream, is_rm, has_gamma, has_beta, map
         + (0 if tile_shard else input_ring_pages(T=T, K_alloc=K_alloc, stream=stream, is_rm=is_rm))
         + 1  # reduce scaler
         + R  # ones tiles
-        + W * (2 + hg + hb)  # map, pilot rows, gamma rows, beta rows
+        + W * (1 + pilot_repeat(W, T // W) + hg + hb)  # map, pilot rows (m copies), gamma rows, beta rows
     )
     # Sharded TILE: x^2 alone (its group-B partner, the output tiles, is the output shard).
     group_b = F32_TILE_BYTES * T if tile_shard else group_b_bytes(T)
@@ -670,7 +679,7 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
         )
     )
     cbs.append(_cb(W * BF16_TILE_BYTES, cores, [(CB_GROUP_MAP, bf16, BF16_TILE_BYTES)]))
-    cbs.append(_cb(W * BF16_TILE_BYTES, cores, [(CB_PILOT_ROWS, bf16, BF16_TILE_BYTES)]))
+    cbs.append(_cb(pilot_repeat(W, h) * W * BF16_TILE_BYTES, cores, [(CB_PILOT_ROWS, bf16, BF16_TILE_BYTES)]))
     cbs.append(_cb(W * F32_TILE_BYTES, cores, [(CB_SUM_SEED, f32, F32_TILE_BYTES)]))
     cbs.append(_cb(F32_TILE_BYTES, cores, [(CB_GROUP_SHIFT, f32, F32_TILE_BYTES)]))
     if hg:
@@ -701,6 +710,7 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
 
     reader_ct = [W, h, int(is_rm), hg, hb, R, plan.Cg, plan.Wt, plan.Ht, plan.gx, in_page_bytes, map_period]
     reader_ct.append(int(sharded))
+    reader_ct.append(pilot_repeat(W, h))
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct.extend(
         (ttnn.TensorAccessorArgs(gamma) if gamma is not None else ttnn.TensorAccessorArgs()).get_compile_time_args()
@@ -716,7 +726,7 @@ def create_program_descriptor(plan, input_tensor, output_tensor, *, gamma=None, 
     # block loop on it, emitting the whole per-block body twice; the root binary must fit the kernel-config ring
     # (also under the watcher / assert build).
     def compute_ct(is_root):
-        return [W, h, int(is_rm), hg, hb, R, exp_sbw, out_cb_pages, int(sharded), int(is_root)]
+        return [W, h, int(is_rm), hg, hb, R, exp_sbw, out_cb_pages, int(sharded), int(is_root), pilot_repeat(W, h)]
 
     # The writer is built once per role (IS_ROOT is compile-time): each binary carries only its own mcast pipe
     # (sender on unit roots, receiver elsewhere) and only the root's gather-wait / zero-fill code.

@@ -92,6 +92,10 @@ constexpr bool UNTILIZE_OUT = SHARDED && IS_RM;
 // One binary per role (the unit root combines and finalizes). Compile-time so the block loop is not unswitched on
 // it (two copies of the whole per-block body would not fit the kernel-config ring under the watcher build).
 constexpr bool IS_ROOT = get_compile_time_arg_val(9) != 0;
+// m copies of the W pilot tiles (host pilot_repeat, m | CHUNK_HT): pass 1's shift chain walks m tile rows as one
+// row of m*W tiles, so its DEST window fills on narrow slices too (the window only spans one walk row).
+constexpr uint32_t PILOT_REPEAT = get_compile_time_arg_val(10);
+constexpr uint32_t PILOT_TILES = PILOT_REPEAT * W;
 constexpr uint32_t T = CHUNK_HT * W;
 // Tiles per DEST window of the two-op per-chunk chains (pass-1 x*(x - k), pass-2 a*x - b'): each element runs
 // over the whole window, so its FPU init is paid once per window, not per tile. The chain clamps it to DEST.
@@ -153,8 +157,11 @@ ALWI void accumulate_chunk(uint32_t j, uint32_t rows_valid) {
     // x*(x - k) -> cb_x_squared (Float32), the sequential intermediate of the second reduce. x - k (fp32 DEST)
     // re-enters the FPU through the bf16 srcB the pilot left: exact whenever k/2 <= x <= 2k (Sterbenz), the
     // offset-heavy regime the shift exists for; elsewhere |x - k| ~ std and its rounding is ordinary noise.
+    // Walk ceil(rows_valid/m) rows of m*W tiles (m | CHUNK_HT keeps a ragged chunk's rounded-up walk inside its
+    // nominal T pages; the extra tiles are pad, never reduced).
+    const uint32_t walk_rows = (rows_valid + PILOT_REPEAT - 1) / PILOT_REPEAT;
     eltwise_chain(
-        IterationShape::grid(rows_valid, W).block_size(CHAIN_BLOCK),
+        IterationShape::grid(walk_rows, PILOT_TILES).block_size(CHAIN_BLOCK),
         BinaryFpu<
             BinaryFpuOp::Sub,
             input(x_cb, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block),
@@ -165,7 +172,7 @@ ALWI void accumulate_chunk(uint32_t j, uint32_t rows_valid) {
             input(x_cb, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block),
             DestReuseType::DEST_TO_SRCB>{x_dfb},
         PackTile<output(cb_x_squared, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>{xsq_dfb});
-    push_pad(cb_x_squared, T - rows_valid * W);
+    push_pad(cb_x_squared, T - walk_rows * PILOT_TILES);
     cb_wait_front(cb_x_squared, T);
 
     const auto shape = ReduceInputBlockShape::of(rows_valid, W);
@@ -227,16 +234,20 @@ ALWI void normalize_chunk(uint32_t rows_valid) {
     DataflowBuffer bprime_dfb(cb_bprime);
     DataflowBuffer out_dfb(cb_output_tiles);
 
+    // A one-tile slice (W = 1) reads a / b' tile 0 for every x tile: walk the chunk as one row (Scalar mapping) so
+    // the DEST window spans tile rows; otherwise the window is bounded by the W-tile walk row (Row mapping).
+    constexpr InputTileMapping CHAN_MAP = W == 1 ? InputTileMapping::Scalar : InputTileMapping::Row;
+    IterationShape shape = W == 1 ? IterationShape::tiles(rows_valid) : IterationShape::grid(rows_valid, W);
     cb_wait_front(x_cb, T);
     eltwise_chain(
-        IterationShape::grid(rows_valid, W).block_size(CHAIN_BLOCK),
+        shape.block_size(CHAIN_BLOCK),
         BinaryFpu<
             BinaryFpuOp::Mul,
-            input(cb_chan_scale, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Row),
+            input(cb_chan_scale, WaitPolicy::Upfront, PopPolicy::None, CHAN_MAP),
             input(x_cb, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block)>{scale_dfb, x_dfb},
         DestReuseBinary<
             BinaryFpuOp::Sub,
-            input(cb_bprime, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Row),
+            input(cb_bprime, WaitPolicy::Upfront, PopPolicy::None, CHAN_MAP),
             DestReuseType::DEST_TO_SRCA>{bprime_dfb},
         PackTile<output(cb_output_tiles, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>{out_dfb});
     push_pad(cb_output_tiles, T - rows_valid * W);
@@ -314,7 +325,7 @@ void kernel_main() {
                 skip_chunk(cb_input_keep);  // streamed head chunk: not held for pass 2
             }
         }
-        cb_pop_front(cb_pilot_rows, W);
+        cb_pop_front(cb_pilot_rows, PILOT_TILES);
         publish_channel_moments();
 
         // ---------------- collapse_to_group_partials ----------------

@@ -89,7 +89,10 @@ void kernel_main() {
     constexpr uint32_t IN_PAGE_BYTES = get_compile_time_arg_val(10);
     constexpr uint32_t P = get_compile_time_arg_val(11);  // MAP_PERIOD: channels per slice
     constexpr bool SHARDED = get_compile_time_arg_val(12) != 0;
-    constexpr auto in_args = TensorAccessorArgs<13>();
+    // Pilot rows are emitted PILOT_REPEAT times (m copies of the W tiles): compute's pass-1 chain walks m tile
+    // rows as one row of m*W tiles so its DEST window fills on narrow slices.
+    constexpr uint32_t PILOT_TILES = get_compile_time_arg_val(13) * W;
+    constexpr auto in_args = TensorAccessorArgs<14>();
     constexpr auto gamma_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
 
@@ -277,7 +280,7 @@ void kernel_main() {
             }
 
             if (step == 0) {
-                cb_reserve_back(cb_pilot_rows, W);
+                cb_reserve_back(cb_pilot_rows, PILOT_TILES);
                 cb_reserve_back(cb_sum_seed, W);
                 if (is_root) {
                     cb_reserve_back(cb_group_shift, 1);
@@ -292,7 +295,7 @@ void kernel_main() {
                     DataflowBuffer seed_dfb(cb_sum_seed);
                     cb_reserve_back(cb_group_map, W);
                     noc.async_write_zeros(map_dfb, W * BF16_TILE_BYTES);
-                    noc.async_write_zeros(pilot_dfb, W * BF16_TILE_BYTES);
+                    noc.async_write_zeros(pilot_dfb, PILOT_TILES * BF16_TILE_BYTES);
                     noc.async_write_zeros(seed_dfb, W * F32_TILE_BYTES);
                     noc.write_zeros_l1_barrier();
                     volatile tt_l1_ptr uint16_t* map =
@@ -339,7 +342,9 @@ void kernel_main() {
                 uint32_t seed = neg_n_times_bf16(k16, rows_core);
                 for (uint32_t v = 0; v < W * 32; ++v) {
                     const uint32_t off = (v >> 5) * 1024 + row0_lane(v & 31);
-                    pv[off] = k16;
+                    for (uint32_t c = 0; c < PILOT_TILES; c += W) {
+                        pv[off + c * 1024] = k16;  // the copy for pilot tile (c + v/32): 1024 halfwords per tile
+                    }
                     dv[off] = seed;
                     if (++in_period == P) {
                         in_period = in_group = g0 = 0;
@@ -352,7 +357,7 @@ void kernel_main() {
                     k16 = stage(g0);
                     seed = neg_n_times_bf16(k16, rows_core);
                 }
-                cb_push_back(cb_pilot_rows, W);
+                cb_push_back(cb_pilot_rows, PILOT_TILES);
                 cb_push_back(cb_sum_seed, W);
             }
 
