@@ -84,3 +84,48 @@ def test_page_by_page_regions_equal_one_region(device):
     )
     ttnn.copy_device_to_host_regions(src, np.ascontiguousarray(regions))
     np.testing.assert_array_equal(host, whole[bb : 4 * bb])
+
+
+def _device_bytes(tensor, mesh_device):
+    # Each device's buffer bytes through the ordinary tensor.cpu() read, in row-major mesh order (the shard index).
+    shards = tensor.cpu().host_buffer()
+    rows, cols = tuple(mesh_device.shape)
+    coords = [ttnn.MeshCoordinate(r, c) for r in range(rows) for c in range(cols)]
+    return [np.frombuffer(np.from_dlpack(shards.get_shard(c)).tobytes(), dtype=np.uint8) for c in coords]
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 2), (2, 4)], ids=["1x2", "2x4"], indirect=True)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+def test_regions_address_one_device_of_a_mesh(mesh_device, dtype, expect_error):
+    n, bb = mesh_device.get_num_devices(), _block_bytes(dtype)
+    torch.manual_seed(4)
+    data = torch.randn(n * NUM_BLOCKS, HEADS, BLOCK_SIZE, HEAD_DIM, dtype=torch.bfloat16)
+    cache = ttnn.from_torch(
+        data,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=0),
+    )
+    before = _device_bytes(cache, mesh_device)
+    assert len({b.tobytes() for b in before}) == n, "precondition: every device holds different bytes"
+
+    # Block 2 of device 1 and block 4 of the last device to host.
+    host = np.zeros(2 * bb, dtype=np.uint8)
+    ttnn.copy_device_to_host_regions(
+        cache, [(1, 2 * bb, bb, host.ctypes.data), (n - 1, 4 * bb, bb, host.ctypes.data + bb)]
+    )
+    np.testing.assert_array_equal(host[:bb], before[1][2 * bb : 3 * bb])
+    np.testing.assert_array_equal(host[bb:], before[n - 1][4 * bb : 5 * bb])
+
+    # Device 1's block 2 into block 0 of the last device; no other device changes.
+    ttnn.copy_host_to_device_regions(cache, [(n - 1, 0, bb, host.ctypes.data)])
+    after = _device_bytes(cache, mesh_device)
+    expected = [b.copy() for b in before]
+    expected[n - 1][:bb] = before[1][2 * bb : 3 * bb]
+    for device in range(n):
+        np.testing.assert_array_equal(after[device], expected[device], err_msg=f"device {device}")
+
+    with expect_error(RuntimeError, "out of range"):
+        ttnn.copy_device_to_host_regions(cache, [(n, 0, bb, host.ctypes.data)])
