@@ -784,6 +784,9 @@ void Hal::initialize_qa(
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;
     this->eth_fw_is_cooperative_ = false;
     this->eth_base_firmware_ = false;
+    // Active Ethernet processor i is hart i of the CCE.
+    this->active_eth_physical_eriscs_.resize(MEM_IERISC_LOCAL_HARTS);
+    std::iota(this->active_eth_physical_eriscs_.begin(), this->active_eth_physical_eriscs_.end(), 0);
     this->virtualized_core_types_ = {
         dev_msgs::AddressableCoreType::TENSIX,
         dev_msgs::AddressableCoreType::ETH,

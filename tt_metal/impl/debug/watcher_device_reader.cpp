@@ -60,15 +60,18 @@ const char* get_riscv_name(const Hal& hal, HalProgrammableCoreType core_type, ui
                 num_processors - 1);
             return hal.get_processor_class_name(core_type, processor_index, false).c_str();
         }
-        case HalProgrammableCoreType::ACTIVE_ETH: {
-            static const char* const names[] = {"erisc", "subordinate_erisc"};
-            TT_FATAL(
-                processor_index < 2,
-                "Watcher data corrupted, unexpected processor index {} on core {}",
-                processor_index,
-                core_type);
-            return names[processor_index];
-        }
+        case HalProgrammableCoreType::ACTIVE_ETH:
+            if (hal.has_eth_base_firmware()) {
+                static const char* const names[] = {"erisc", "subordinate_erisc"};
+                TT_FATAL(
+                    processor_index < 2,
+                    "Watcher data corrupted, unexpected processor index {} on core {}",
+                    processor_index,
+                    core_type);
+                return names[processor_index];
+            }
+            // Without base firmware an active Ethernet core is a Keraunos CCE: its harts are named as an idle core's.
+            [[fallthrough]];
         case HalProgrammableCoreType::IDLE_ETH: {
             if (hal.get_arch() == tt::ARCH::QUASAR) {
                 // A Keraunos CCE runs eight harts.
@@ -699,9 +702,11 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
     // initializes semaphore 31, so touching it would fault. CCE cores (Mimir DRISC, Keraunos idle-eth) have no
     // such register and keep the head in the mailbox.
     uint32_t ring_buf_head = 0;
+    // An active Ethernet core without base firmware is a Keraunos CCE too.
     if (hal.get_arch() == tt::ARCH::QUASAR && !rtoptions.watcher_ring_buffer_disabled() &&
         programmable_core_type != HalProgrammableCoreType::DRAM &&
-        programmable_core_type != HalProgrammableCoreType::IDLE_ETH) {
+        programmable_core_type != HalProgrammableCoreType::IDLE_ETH &&
+        !(programmable_core_type == HalProgrammableCoreType::ACTIVE_ETH && !hal.has_eth_base_firmware())) {
         uint64_t head_addr = (programmable_core_type == HalProgrammableCoreType::DISPATCH)
                                  ? hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::RING_BUF_HEAD)
                                  : watcher_ring_buf_sem_peek_addr;
@@ -1159,8 +1164,10 @@ void WatcherDeviceReader::Core::DumpMpscRingBuffer(bool to_stdout) const {
     uint32_t mask = capacity - 1;  // capacity is a power of two
     // Quasar keeps head outside the mailbox, snapshotted alongside it, except on CCE cores (Mimir DRISC,
     // Keraunos idle-eth), which keep it in the mailbox as Blackhole does.
+    // An active Ethernet core without base firmware is a Keraunos CCE too.
     uint32_t head = (hal.get_arch() == tt::ARCH::QUASAR && programmable_core_type_ != HalProgrammableCoreType::DRAM &&
-                     programmable_core_type_ != HalProgrammableCoreType::IDLE_ETH)
+                     programmable_core_type_ != HalProgrammableCoreType::IDLE_ETH &&
+                     !(programmable_core_type_ == HalProgrammableCoreType::ACTIVE_ETH && !hal.has_eth_base_firmware()))
                         ? ring_buf_head_
                         : rb->head;
 

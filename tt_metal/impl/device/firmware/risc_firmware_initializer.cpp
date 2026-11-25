@@ -166,23 +166,20 @@ std::optional<uint32_t> dram_channel_for_translated_core(const metal_SocDescript
     return std::nullopt;
 }
 
-// The Ethernet-link slot (HalL1MemAddrType::ETH_LINK) of linked Quasar Ethernet core `logical_eth` on `chip`. When the
-// cluster's link table has no peer for the core, the valid word stays 0 and a warning is logged. Fatal when the peer
-// has no keraunos.cores entry.
+// The Ethernet-link slot (HalL1MemAddrType::ETH_LINK) of linked Quasar Ethernet core `logical_eth` on `chip`. Fatal
+// when the cluster's link table has no peer for the core, or the peer has no keraunos.cores entry.
 EthLink quasar_eth_link_slot(const Cluster& cluster, ChipId chip, const CoreCoord& logical_eth) {
     const auto& soc = cluster.get_soc_desc(chip);
     const uint32_t chan = soc.logical_eth_core_to_chan_map.at(logical_eth);
     EthLink slot{};
     const auto& connections = cluster.get_ethernet_connections();
     const auto chip_links = connections.find(chip);
-    if (chip_links == connections.end() || !chip_links->second.contains(chan)) {
-        log_warning(
-            tt::LogMetal,
-            "Chip {} Ethernet channel {} has no link peer in this cluster; its Ethernet-link slot is left invalid",
-            chip,
-            chan);
-        return slot;
-    }
+    TT_FATAL(
+        chip_links != connections.end() && chip_links->second.contains(chan),
+        "Chip {} Ethernet core {} (channel {}) is active, but the cluster's link table lists no peer for it",
+        chip,
+        logical_eth.str(),
+        chan);
     const auto& [peer_chip, peer_chan] = chip_links->second.at(chan);
     slot.peer_tile = cluster.get_soc_desc(peer_chip).get_keraunos_core_for_channel(peer_chan).hsio;
     slot.valid = ETH_LINK_VALID;
@@ -1577,7 +1574,8 @@ void RiscFirmwareInitializer::initialize_firmware(
                     }
                 }
             }
-            if (quasar_ethernet && !cluster_.get_soc_desc(device_id).get_arch_descriptor().get_keraunos().cores.empty()) {
+            if (quasar_ethernet &&
+                !cluster_.get_soc_desc(device_id).get_arch_descriptor().get_keraunos().cores.empty()) {
                 // A CCE resolves NOC addresses with KeraunosNocChannels and KeraunosSpaRoutes. An idle core has its
                 // routes from the block above; a linked core takes them here, at the same CCE-relative address.
                 const auto& soc_k = cluster_.get_soc_desc(device_id);
