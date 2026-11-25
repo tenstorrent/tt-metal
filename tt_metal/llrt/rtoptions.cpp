@@ -286,7 +286,7 @@ enum class EnvVarID {
     // ========================================
     // SHM TRACKING
     // ========================================
-    TT_METAL_SHM_TRACKING_DISABLED,  // Disable shared memory tracking for tt-smi
+    TT_METAL_SHM_TRACKING_DISABLED,  // Shared memory tracking for memory monitor tools (0 enables it)
     TT_METAL_SHM_VERBOSE,            // Enable verbose logging for SHM tracking
 };
 
@@ -2091,10 +2091,13 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE: break;
 
         // TT_METAL_SHM_TRACKING_DISABLED
-        // Disable shared memory tracking for tt-smi.
-        // Default: 0 (SHM tracking enabled)
-        // Usage: export TT_METAL_SHM_TRACKING_DISABLED=1
-        case EnvVarID::TT_METAL_SHM_TRACKING_DISABLED: this->shm_tracking_disabled = is_env_enabled(value); break;
+        // Write per-device allocation stats to /dev/shm/tt_device_<chip_unique_id>_memory for memory monitor tools.
+        // Only the exact value 0 enables tracking.
+        // Default: 1 (SHM tracking disabled)
+        // Usage: export TT_METAL_SHM_TRACKING_DISABLED=0
+        case EnvVarID::TT_METAL_SHM_TRACKING_DISABLED:
+            this->shm_tracking_disabled = std::string_view(value) != "0";
+            break;
 
         // TT_METAL_SHM_VERBOSE
         // Enable verbose logging for SHM tracking.
