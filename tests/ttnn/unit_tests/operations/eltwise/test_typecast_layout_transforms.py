@@ -134,7 +134,7 @@ def test_typecast_memory_config_change(device, input_dtype, output_dtype, layout
 
 
 @pytest.mark.parametrize("output_memory", ["dram", "l1", "height", "width", "block"])
-@pytest.mark.parametrize("input_memory", ["dram", "height", "block"])
+@pytest.mark.parametrize("input_memory", ["dram", "l1", "height", "block"])
 @pytest.mark.parametrize("input_layout, output_layout", [(TILE, RM), (RM, TILE)], ids=["tile_to_rm", "rm_to_tile"])
 @pytest.mark.parametrize(
     "input_dtype, output_dtype",
@@ -198,3 +198,101 @@ def test_typecast_layout_change_rejects_sub_core_grids(device, expect_error):
     sub_core_grids = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
     with expect_error(RuntimeError, "sub_core_grids"):
         ttnn.typecast(input_tensor, ttnn.int32, sub_core_grids=sub_core_grids, output_layout=RM)
+
+
+LAYOUT_DIRECTIONS = [(TILE, RM), (RM, TILE)]
+LAYOUT_DIRECTION_IDS = ["tile_to_rm", "rm_to_tile"]
+
+
+# More blocks than cores (uneven split, several blocks per core) and several blocks per tile row,
+# including a last block that ends inside the last tile.
+@pytest.mark.parametrize(
+    "shape",
+    [(1, 1, 32 * 150, 64), (1, 1, 45, 288), (1, 1, 45, 293), (1, 2, 32, 1280)],
+    ids=["many_blocks", "3_blocks_per_row", "partial_last_block", "8_tile_blocks"],
+)
+@pytest.mark.parametrize("input_layout, output_layout", LAYOUT_DIRECTIONS, ids=LAYOUT_DIRECTION_IDS)
+@pytest.mark.parametrize(
+    "input_dtype, output_dtype",
+    [(ttnn.bfloat16, ttnn.float32), (ttnn.uint16, ttnn.int32), (ttnn.int32, ttnn.uint16), (ttnn.float32, ttnn.uint8)],
+    ids=str,
+)
+def test_typecast_layout_change_block_split(device, input_dtype, output_dtype, input_layout, output_layout, shape):
+    values = _values(shape)
+    input_tensor = _to_device(values, input_dtype, input_layout, device, ttnn.DRAM_MEMORY_CONFIG)
+    output = ttnn.typecast(input_tensor, output_dtype, output_layout=output_layout)
+    _check(output, values, output_dtype, output_layout, ttnn.DRAM_MEMORY_CONFIG)
+
+
+@pytest.mark.parametrize(
+    "shape", [(64,), (1, 64), (1, 1, 1, 64), (2, 1, 1, 3, 70)], ids=["rank1", "rank2", "one_row", "rank5"]
+)
+@pytest.mark.parametrize("input_layout, output_layout", LAYOUT_DIRECTIONS, ids=LAYOUT_DIRECTION_IDS)
+def test_typecast_layout_change_small_shapes(device, input_layout, output_layout, shape):
+    values = _values(shape)
+    input_tensor = _to_device(values, ttnn.bfloat16, input_layout, device, ttnn.DRAM_MEMORY_CONFIG)
+    output = ttnn.typecast(input_tensor, ttnn.float32, output_layout=output_layout)
+    _check(output, values, ttnn.float32, output_layout, ttnn.DRAM_MEMORY_CONFIG)
+
+
+def _bfp8_exact_values(shape):
+    # Multiples of 4 below 256 are exact in bfloat8_b, so casts to integers must be exact too.
+    return _values(shape) // 4 * 4
+
+
+@pytest.mark.parametrize("shape", [(1, 1, 32, 64), (1, 2, 45, 70)], ids=["aligned", "unaligned"])
+@pytest.mark.parametrize("output_dtype", [ttnn.int32, ttnn.uint32, ttnn.uint16, ttnn.uint8], ids=str)
+def test_typecast_bfp8_tile_to_int_rm(device, output_dtype, shape):
+    values = _bfp8_exact_values(shape)
+    input_tensor = _to_device(values, ttnn.bfloat8_b, TILE, device, ttnn.DRAM_MEMORY_CONFIG)
+    assert torch.equal(ttnn.to_torch(input_tensor).to(torch.int64), values.to(torch.int64))
+    output = ttnn.typecast(input_tensor, output_dtype, output_layout=RM)
+    _check(output, values, output_dtype, RM)
+
+
+@pytest.mark.parametrize("shape", [(1, 1, 32, 64), (1, 2, 45, 70)], ids=["aligned", "unaligned"])
+@pytest.mark.parametrize("input_dtype", [ttnn.int32, ttnn.uint32, ttnn.uint16, ttnn.uint8], ids=str)
+def test_typecast_int_rm_to_bfp8_tile(device, input_dtype, shape):
+    values = _bfp8_exact_values(shape)
+    input_tensor = _to_device(values, input_dtype, RM, device, ttnn.DRAM_MEMORY_CONFIG)
+    output = ttnn.typecast(input_tensor, ttnn.bfloat8_b, output_layout=TILE)
+    assert output.layout == TILE and output.dtype == ttnn.bfloat8_b
+    assert torch.equal(ttnn.to_torch(output).to(torch.int64), values.to(torch.int64))
+
+
+@pytest.mark.parametrize("input_layout, output_layout", LAYOUT_DIRECTIONS, ids=LAYOUT_DIRECTION_IDS)
+def test_typecast_layout_change_program_cache_entries(device, input_layout, output_layout):
+    shape = (1, 1, 64, 96)
+    entries = device.num_program_cache_entries()
+    for seed in range(2):
+        values = _values(shape, seed)
+        input_tensor = _to_device(values, ttnn.bfloat16, input_layout, device, ttnn.DRAM_MEMORY_CONFIG)
+        output = ttnn.typecast(input_tensor, ttnn.float32, output_layout=output_layout)
+        _check(output, values, ttnn.float32, output_layout)
+        if seed == 0:
+            assert device.num_program_cache_entries() > entries
+            entries = device.num_program_cache_entries()
+        else:
+            assert device.num_program_cache_entries() == entries, "same-shape call must hit the program cache"
+    # Same shape and dtypes without a layout change is a different program.
+    same_layout = ttnn.typecast(_to_device(_values(shape), ttnn.bfloat16, input_layout, device, None), ttnn.float32)
+    assert same_layout.layout == input_layout
+    assert device.num_program_cache_entries() > entries
+
+
+# A non-32x32 tile cannot use the one-pass path and must still give the right values.
+@pytest.mark.xfail(strict=True, reason="tile-to-tile typecast sizes pages as 32x32 tiles, ignoring the tile shape")
+def test_typecast_tiny_tile_to_rm(device):
+    values = _values((1, 1, 32, 64))
+    input_tensor = ttnn.from_torch(
+        values.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=TILE, device=device, tile=ttnn.Tile((16, 32))
+    )
+    output = ttnn.typecast(input_tensor, ttnn.float32, output_layout=RM)
+    _check(output, values, ttnn.float32, RM)
+
+
+def test_typecast_output_layout_and_output_tensor_mismatch_rejected(device, expect_error):
+    input_tensor = _to_device(_values((1, 1, 32, 32)), ttnn.float32, TILE, device, ttnn.DRAM_MEMORY_CONFIG)
+    output_tensor = _to_device(_values((1, 1, 32, 32)), ttnn.int32, TILE, device, ttnn.DRAM_MEMORY_CONFIG)
+    with expect_error(RuntimeError, "layout should match"):
+        ttnn.typecast(input_tensor, ttnn.int32, output_tensor=output_tensor, output_layout=RM)

@@ -27,10 +27,10 @@ void bind_global_typecast(nb::module_& mod) {
             dtype (ttnn.DataType): data type to cast the tensor elements to.
 
         Keyword Args:
-            memory_config (Optional[ttnn.MemoryConfig]): Memory configuration of the output. Defaults to the input memory configuration. May differ from it (interleaved, sharded, DRAM, L1).
+            memory_config (Optional[ttnn.MemoryConfig]): Memory configuration of the output. Defaults to the input memory configuration. May differ from it (interleaved, sharded, DRAM, L1). Ignored for host tensors.
             output_tensor (Optional[ttnn.Tensor]): Preallocated tensor to store the output.
             sub_core_grids (Optional[ttnn.CoreRangeSet]): Cores to run the operation on.
-            output_layout (Optional[ttnn.Layout]): Layout of the output. Defaults to the input layout.
+            output_layout (Optional[ttnn.Layout]): Layout of the output. Defaults to the input layout, or to the layout of output_tensor when given; the two must match.
 
         Returns:
             ttnn.Tensor: The tensor with the given data type, layout and memory configuration.

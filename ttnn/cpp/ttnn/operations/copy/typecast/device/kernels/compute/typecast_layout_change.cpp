@@ -89,11 +89,11 @@ void kernel_main() {
     constexpr auto block = ckl::IterationShape::grid(1, block_width_tiles);
 
     // Typecast is elementwise, so it may run on row-major chunks as well as on tiles.
+    // The helpers reconfigure SrcA only; each step sets SrcB to the same format so no stale format remains.
     const auto cast_step = [&] {
         reconfig_data_format_srcb(cast_in_dfb);
         ckl::unary<Cast, cast_input, cast_output>(block, cast_in, cast_out);
     };
-    // The helpers reconfigure SrcA only; SrcB is kept on the same format so no stale operand format remains.
     const auto layout_step = [&] {
         reconfig_data_format_srcb(layout_in_dfb);
 #ifdef TILIZE_INPUT

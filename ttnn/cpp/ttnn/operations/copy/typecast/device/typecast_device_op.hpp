@@ -40,6 +40,10 @@ struct TypecastDeviceOperation {
     static bool skip_launch(const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
 };
 
+// Row-major pages are copied one-to-one, so both sides must hold the same number of elements per page.
+bool row_major_page_elements_match(
+    const tt::tt_metal::TensorSpec& input_spec, const tt::tt_metal::TensorSpec& output_spec);
+
 Tensor typecast(
     const Tensor& input,
     DataType output_dtype,

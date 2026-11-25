@@ -25,7 +25,8 @@ void kernel_main() {
     constexpr uint32_t tile_rows_per_batch = get_arg(args::tile_rows_per_batch);
     constexpr uint32_t blocks_per_tile_row = get_arg(args::blocks_per_tile_row);
     constexpr uint32_t tile_height = 32;
-    constexpr uint32_t block_row_bytes = block_width_tiles * 32 * element_size;
+    constexpr uint32_t tile_width = 32;
+    constexpr uint32_t block_row_bytes = block_width_tiles * tile_width * element_size;
     constexpr uint32_t row_bytes = width * element_size;
 
     Noc noc;

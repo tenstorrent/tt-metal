@@ -72,7 +72,6 @@ Tensor typecast_on_device(
         output_layout);
 }
 
-// Row-major pages are copied one-to-one, so the device op needs equal elements per page on both sides.
 bool row_major_pages_match(
     const Tensor& input_tensor, const DataType& output_dtype, const MemoryConfig& memory_config) {
     if (input_tensor.layout() != Layout::ROW_MAJOR) {
@@ -80,10 +79,7 @@ bool row_major_pages_match(
     }
     const auto output_spec = TensorSpec(
         input_tensor.logical_shape(), tt::tt_metal::TensorLayout(output_dtype, Layout::ROW_MAJOR, memory_config));
-    const auto input_page_elements = input_tensor.tensor_spec().compute_page_size_bytes() / input_tensor.element_size();
-    const auto output_page_elements = output_spec.compute_page_size_bytes() /
-                                      tt::datum_size(tt::tt_metal::datatype_to_dataformat_converter(output_dtype));
-    return input_page_elements == output_page_elements;
+    return ttnn::prim::row_major_page_elements_match(input_tensor.tensor_spec(), output_spec);
 }
 
 Tensor typecast_device(
@@ -109,7 +105,7 @@ Tensor typecast_device(
     return ttnn::to_memory_config(interleaved, output_memory_config, std::nullopt, optional_output_tensor);
 }
 
-// Device tilize takes no 8-bit integers; they are widened first, which keeps every value.
+// Padded device tilize takes no 8-bit integers; they are widened first, which keeps every value.
 DataType tilizable_dtype(DataType dtype) {
     if (dtype == DataType::UINT8) {
         return DataType::UINT16;

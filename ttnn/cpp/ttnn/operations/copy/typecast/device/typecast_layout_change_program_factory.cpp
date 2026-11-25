@@ -21,6 +21,7 @@ using namespace tt::tt_metal;
 // Named rather than anonymous: unity builds merge this file with the other typecast factories.
 namespace layout_change {
 
+// Bounds L1 use: the IN and OUT DFBs each hold two blocks.
 constexpr uint32_t kMaxBlockWidthTiles = 8;
 
 constexpr const char* kComputeSource =
@@ -52,6 +53,28 @@ uint32_t select_block_width_tiles(uint32_t num_width_tiles, uint32_t row_major_e
 
 uint32_t buffer_alignment(const MemoryConfig& memory_config) {
     return memory_config.buffer_type() == BufferType::DRAM ? hal::get_dram_alignment() : hal::get_l1_alignment();
+}
+
+// Tile pages are read as dense 32x32 tiles, numbered over the tile-padded logical shape.
+bool has_default_tile_padding(const TensorSpec& spec) {
+    const auto& tile = spec.tile();
+    if (tile.get_height() != tt::constants::TILE_HEIGHT || tile.get_width() != tt::constants::TILE_WIDTH) {
+        return false;
+    }
+    const auto& logical = spec.logical_shape();
+    const auto& padded = spec.padded_shape();
+    if (padded.rank() != logical.rank()) {
+        return false;
+    }
+    const auto rank = logical.rank();
+    for (size_t i = 0; i < rank; ++i) {
+        const bool tiled_dim = i + 2 >= rank;
+        const uint32_t expected = tiled_dim ? tt::round_up(logical[i], tt::constants::TILE_WIDTH) : logical[i];
+        if (padded[i] != expected) {
+            return false;
+        }
+    }
+    return true;
 }
 
 struct BlockGeometry {
@@ -96,6 +119,9 @@ bool can_fuse_typecast_layout_change(
     }
     const bool tilize = input.layout() == Layout::ROW_MAJOR;
     const auto& row_major_spec = tilize ? input.tensor_spec() : output_spec;
+    if (!layout_change::has_default_tile_padding(tilize ? output_spec : input.tensor_spec())) {
+        return false;
+    }
     // Sticks are addressed as one page per logical row.
     if (row_major_spec.padded_shape() != row_major_spec.logical_shape() ||
         row_major_spec.compute_page_size_bytes() !=
@@ -126,10 +152,9 @@ ttnn::device_operation::ProgramArtifacts TypecastLayoutChangeProgramFactory::cre
     const bool enable_32_bit_dest =
         args.fp32_dest_acc_en || requires_32bit_dest(input.dtype()) || requires_32bit_dest(output.dtype());
     // Typecast runs on the tile side by default. With 32-bit Dest, a UInt16 row-major side is cast on
-    // row-major chunks instead so tilize / untilize only see 32-bit or 8-bit formats; block-float stays tiled.
-    const auto& tile_side = tilize ? output : input;
-    const bool cast_on_row_major =
-        enable_32_bit_dest && row_major.dtype() == DataType::UINT16 && !is_block_float(tile_side.dtype());
+    // row-major chunks instead so tilize / untilize only see 32-bit or 8-bit formats. The tile side is
+    // then never block-float: UInt16 <-> block-float does not enable 32-bit Dest.
+    const bool cast_on_row_major = enable_32_bit_dest && row_major.dtype() == DataType::UINT16;
     const bool cast_first = tilize == cast_on_row_major;
     const auto mid_format = cast_first ? output_format : input_format;
 
@@ -148,6 +173,7 @@ ttnn::device_operation::ProgramArtifacts TypecastLayoutChangeProgramFactory::cre
     const KernelSpecName COMPUTE_GROUP_1{"compute_group_1"};
     const KernelSpecName COMPUTE_GROUP_2{"compute_group_2"};
 
+    // Double-buffered so data movement overlaps compute.
     constexpr uint32_t num_buffered_blocks = 2;
     std::vector<DataflowBufferSpec> dataflow_buffers{
         DataflowBufferSpec{

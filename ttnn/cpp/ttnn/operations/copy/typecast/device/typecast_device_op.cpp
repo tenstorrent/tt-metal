@@ -12,6 +12,13 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
+bool row_major_page_elements_match(const TensorSpec& input_spec, const TensorSpec& output_spec) {
+    const auto elements_per_page = [](const TensorSpec& spec) {
+        return spec.compute_page_size_bytes() / tt::datum_size(cb_dataformat_for(spec.data_type()));
+    };
+    return elements_per_page(input_spec) == elements_per_page(output_spec);
+}
+
 namespace {
 bool can_use_sharded_optimized_factory(const TypecastParams& args, const TypecastInputs& tensor_args) {
     const auto& input = tensor_args.input;
@@ -167,17 +174,12 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
     }
 
     if (input_tensor.layout() == Layout::ROW_MAJOR) {
-        // Pages are copied one-to-one, so each output page must hold as many elements as an input page.
-        const auto input_page_elements =
-            input_tensor.tensor_spec().compute_page_size_bytes() / input_tensor.element_size();
         const auto output_spec = compute_output_specs(args, tensor_args);
-        const auto output_page_elements =
-            output_spec.compute_page_size_bytes() / tt::datum_size(cb_dataformat_for(args.output_dtype));
         TT_FATAL(
-            input_page_elements == output_page_elements,
-            "Typecast ROW_MAJOR requires matching page widths, got input {} and output {} elements per page",
-            input_page_elements,
-            output_page_elements);
+            row_major_page_elements_match(input_tensor.tensor_spec(), output_spec),
+            "Typecast ROW_MAJOR requires matching page widths, got input {} B and output {} B pages",
+            input_tensor.tensor_spec().compute_page_size_bytes(),
+            output_spec.compute_page_size_bytes());
     }
 
     if (input_tensor.is_sharded()) {

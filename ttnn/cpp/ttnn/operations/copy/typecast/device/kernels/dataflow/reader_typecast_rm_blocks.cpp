@@ -14,15 +14,7 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
-
-namespace {
-void zero_fill(uint32_t addr, uint32_t num_bytes) {
-    auto* ptr = reinterpret_cast<volatile uint8_t*>(addr);
-    for (uint32_t i = 0; i < num_bytes; ++i) {
-        ptr[i] = 0;
-    }
-}
-}  // namespace
+#include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 
 void kernel_main() {
     const uint32_t start_block = get_arg(args::start_block);
@@ -35,7 +27,8 @@ void kernel_main() {
     constexpr uint32_t tile_rows_per_batch = get_arg(args::tile_rows_per_batch);
     constexpr uint32_t blocks_per_tile_row = get_arg(args::blocks_per_tile_row);
     constexpr uint32_t tile_height = 32;
-    constexpr uint32_t block_row_bytes = block_width_tiles * 32 * element_size;
+    constexpr uint32_t tile_width = 32;
+    constexpr uint32_t block_row_bytes = block_width_tiles * tile_width * element_size;
     constexpr uint32_t row_bytes = width * element_size;
 
     Noc noc;
@@ -55,7 +48,7 @@ void kernel_main() {
         for (uint32_t i = 0; i < tile_height; ++i) {
             const uint32_t dst = base + i * block_row_bytes;
             if (first_h + i < height) {
-                zero_fill(dst + valid_bytes, block_row_bytes - valid_bytes);
+                dataflow_kernel_lib::fill_l1_range<element_size>(dst + valid_bytes, block_row_bytes - valid_bytes, 0);
                 noc.async_read(
                     s,
                     CoreLocalMem<uint32_t>(dst),
@@ -63,7 +56,7 @@ void kernel_main() {
                     {.page_id = first_page + first_h + i, .offset_bytes = offset_bytes},
                     {});
             } else {
-                zero_fill(dst, block_row_bytes);
+                dataflow_kernel_lib::fill_l1_range<element_size>(dst, block_row_bytes, 0);
             }
         }
         noc.async_read_barrier();
