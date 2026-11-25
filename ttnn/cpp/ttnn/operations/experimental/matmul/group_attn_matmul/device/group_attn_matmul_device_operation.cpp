@@ -23,6 +23,10 @@ void GroupAttnMatmulDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         (input_tensor_a.layout() == Layout::TILE && input_tensor_b.layout() == Layout::TILE),
         "Inputs to matmul must be tilized");
+    TT_FATAL(
+        !tensor_args.preallocated_output.has_value() || tensor_args.preallocated_output->layout() == Layout::TILE,
+        "group_attn_matmul writes output tiles, so a preallocated output needs TILE layout; got {}",
+        tensor_args.preallocated_output->layout());
 
     // TODO: Uplift to support BFLOAT8_B and mixed precision
     TT_FATAL(
@@ -101,19 +105,28 @@ void GroupAttnMatmulDeviceOperation::validate_on_program_cache_miss(
             "Output memory config layout must be HEIGHT_SHARDED but got {}",
             operation_attributes.output_mem_config.memory_layout());
 
-        // If user passes in output_mem_config with shard_spec, assert that it is the same as the one calculated in
-        // GroupAttnMatmulDeviceOperation::create_output_tensors
+        // A sharded output holds one Q head per core; with a sharded Q it must sit on Q's cores, in Q's order.
         if (operation_attributes.output_mem_config.shard_spec().has_value()) {
             const ttnn::Shape output_shape = compute_output_specs(operation_attributes, tensor_args).padded_shape();
             const uint32_t num_cores = output_shape[1];
-            CoreRangeSet all_cores = num_cores_to_corerangeset(
-                num_cores, operation_attributes.compute_with_storage_grid_size, operation_attributes.row_major);
+            const auto all_cores = input_tensor_a.is_sharded()
+                                       ? input_tensor_a.shard_spec()->grid
+                                       : operation_attributes.output_mem_config.shard_spec()->grid;
+            TT_FATAL(all_cores.num_cores() == num_cores, "Output must have one shard per Q head");
 
             auto shard_shape = operation_attributes.output_mem_config.shard_spec().value().shape;
-            TT_FATAL(
-                operation_attributes.output_mem_config.shard_spec().value().grid == all_cores,
-                "Shard spec in output mem config must match shard spec calculated in "
-                "GroupAttnMatmulDeviceOperation::create_output_tensors!");
+            if (input_tensor_a.is_sharded()) {
+                const auto& out_spec = *operation_attributes.output_mem_config.shard_spec();
+                const auto& a_spec = *input_tensor_a.shard_spec();
+                TT_FATAL(
+                    corerange_to_cores(
+                        out_spec.grid, std::nullopt, out_spec.orientation == ShardOrientation::ROW_MAJOR) ==
+                        corerange_to_cores(
+                            a_spec.grid, std::nullopt, a_spec.orientation == ShardOrientation::ROW_MAJOR),
+                    "Output shard grid {} must hold the sharded Q input's cores {} in the same order",
+                    out_spec.grid,
+                    a_spec.grid);
+            }
             TT_FATAL(
                 operation_attributes.output_mem_config.shard_spec().value().orientation == shard_orientation,
                 "Any sharded memory configs must have the same shard orientation as one another!");
@@ -178,8 +191,13 @@ GroupAttnMatmulDeviceOperation::spec_return_value_t GroupAttnMatmulDeviceOperati
         auto output_mem_config = operation_attributes.output_mem_config;
         if (!operation_attributes.output_mem_config.shard_spec().has_value()) {
             const uint32_t num_cores = output_shape[1];
-            CoreRangeSet all_cores = num_cores_to_corerangeset(
-                num_cores, operation_attributes.compute_with_storage_grid_size, operation_attributes.row_major);
+            const auto all_cores = input_tensor_a.is_sharded()
+                                       ? input_tensor_a.shard_spec()->grid
+                                       : num_cores_to_corerangeset(
+                                             num_cores,
+                                             operation_attributes.compute_with_storage_grid_size,
+                                             operation_attributes.row_major);
+            TT_FATAL(all_cores.num_cores() == num_cores, "Output must have one shard per Q head");
 
             ShardOrientation shard_orientation =
                 operation_attributes.row_major ? ShardOrientation::ROW_MAJOR : ShardOrientation::COL_MAJOR;

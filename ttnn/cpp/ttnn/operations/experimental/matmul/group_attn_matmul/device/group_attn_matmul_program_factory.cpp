@@ -4,6 +4,7 @@
 
 #include "group_attn_matmul_program_factory.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <algorithm>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
@@ -76,12 +77,6 @@ ttnn::device_operation::ProgramArtifacts GroupAttnMatmulProgramFactory::create_p
 
     TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
 
-    // Kernels, DFBs and semaphores span the whole device compute grid; the per-core flags below
-    // steer the cores that have no work.
-    CoreCoord device_compute_with_storage_grid = device->compute_with_storage_grid_size();
-    CoreRangeSet all_device_cores{
-        CoreRange({0, 0}, {device_compute_with_storage_grid.x - 1, device_compute_with_storage_grid.y - 1})};
-
     // ---- Shape-derived quantities ----
     const bool transpose_hw_bool = operation_attributes.transpose_hw.value_or(false);
     const uint32_t num_tokens_val = operation_attributes.num_tokens.value_or(0);
@@ -114,53 +109,36 @@ ttnn::device_operation::ProgramArtifacts GroupAttnMatmulProgramFactory::create_p
         fp32_dest_acc_en and in0_data_format == tt::DataFormat::Float32 ? 128u : 64u;
     const uint32_t bfloat16_row_bytes = ONE_ROW_BFLOAT16_BYTES * out_block_w;
 
-    // ---- Work distribution ----
-    uint32_t num_active_cores = std::max(Q_HEADS, TILE_HEIGHT);
-    auto
-        [num_cores,
-         all_cores,
-         core_group_1,
-         core_group_2,
-         num_output_blocks_per_core_group_1,
-         num_output_blocks_per_core_group_2] =
-            tt::tt_metal::split_work_to_cores(
-                operation_attributes.compute_with_storage_grid_size, num_active_cores, operation_attributes.row_major);
-    TT_FATAL(
-        num_output_blocks_per_core_group_1 == 1 and num_output_blocks_per_core_group_2 == 0,
-        "Group attention matmul only supports one q_heads per core. Increase compute grid size to at least have as "
-        "many cores as q_heads!");
-
-    // ---- Mcast topology (first 32 cores are senders) ----
-    CoreRangeSet mcast_receiver_cores = num_cores_to_corerangeset(
-        Q_HEADS, operation_attributes.compute_with_storage_grid_size, operation_attributes.row_major);
-    CoreRange mcast_receiver_cores_bounding_box = mcast_receiver_cores.bounding_box();
-    uint32_t mcast_num_dests = mcast_receiver_cores.num_cores();
-    uint32_t mcast_num_cores = mcast_receiver_cores_bounding_box.size();
-    CoreCoord top_left_core = mcast_receiver_cores_bounding_box.start_coord;
-    CoreCoord bottom_right_core = mcast_receiver_cores_bounding_box.end_coord;
-    CoreCoord top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-    CoreCoord bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
-
-    CoreCoord mcast_sender_grid =
-        ((CoreRangeSet)num_cores_to_corerangeset(
-             TILE_HEIGHT, operation_attributes.compute_with_storage_grid_size, operation_attributes.row_major))
-            .bounding_box()
-            .grid_size();
-    // The sender NOC coordinate tables ride as runtime varargs, x entries first then y entries; the
-    // reader indexes them by the two named counts.
-    const uint32_t in1_mcast_sender_num_x = mcast_sender_grid.x;
-    const uint32_t in1_mcast_sender_num_y = mcast_sender_grid.y;
+    // Sharded operands are resident on their own grids. Senders (users) and receivers
+    // (Q heads) need not share an origin or a rectangle.
+    const auto mcast_receiver_cores =
+        a.is_sharded() ? a.shard_spec()->grid
+        : output.is_sharded()
+            ? output.shard_spec()->grid
+            : num_cores_to_corerangeset(
+                  Q_HEADS, operation_attributes.compute_with_storage_grid_size, operation_attributes.row_major);
+    const auto mcast_sender_cores =
+        b.is_sharded()
+            ? b.shard_spec()->grid
+            : num_cores_to_corerangeset(
+                  TILE_HEIGHT, operation_attributes.compute_with_storage_grid_size, operation_attributes.row_major);
+    const auto receivers = corerange_to_cores(mcast_receiver_cores, std::nullopt, operation_attributes.row_major);
+    const auto senders = corerange_to_cores(mcast_sender_cores, std::nullopt, operation_attributes.row_major);
+    const auto receiver_bbox = mcast_receiver_cores.bounding_box();
+    // Every core inside a multicast rectangle participates, including any no-op Q slots.
+    const auto all_device_cores = CoreRangeSet(receiver_bbox).merge(mcast_sender_cores);
+    const auto top_left_core_physical = device->worker_core_from_logical_core(receiver_bbox.start_coord);
+    const auto bottom_right_core_physical = device->worker_core_from_logical_core(receiver_bbox.end_coord);
+    const uint32_t mcast_num_cores = receiver_bbox.size();
     std::vector<uint32_t> in1_mcast_sender_noc_varargs;
-    in1_mcast_sender_noc_varargs.reserve(in1_mcast_sender_num_x + in1_mcast_sender_num_y);
-    for (uint32_t core_idx_x = 0; core_idx_x < in1_mcast_sender_num_x; ++core_idx_x) {
-        in1_mcast_sender_noc_varargs.push_back(device->worker_core_from_logical_core({core_idx_x, 0}).x);
-    }
-    for (uint32_t core_idx_y = 0; core_idx_y < in1_mcast_sender_num_y; ++core_idx_y) {
-        in1_mcast_sender_noc_varargs.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
+    in1_mcast_sender_noc_varargs.reserve(2 * TILE_HEIGHT);
+    for (const auto& core : senders) {
+        const auto physical = device->worker_core_from_logical_core(core);
+        in1_mcast_sender_noc_varargs.push_back(physical.x);
+        in1_mcast_sender_noc_varargs.push_back(physical.y);
     }
 
-    // ---- Semaphores (on every device core: receivers increment the sender's, senders multicast
-    // the receiver's, so both live at one address on every node) ----
+    // Both semaphores have one address across the participating sender and receiver cores.
     SemaphoreSpec in1_mcast_sender_sem{
         .unique_id = IN1_MCAST_SENDER_SEM,
         .target_nodes = all_device_cores,
@@ -264,10 +242,8 @@ ttnn::device_operation::ProgramArtifacts GroupAttnMatmulProgramFactory::create_p
         writer_defines.emplace("OUT_SHARDED", "1");
     }
 
-    // All three kernels run on every device core, as before; the flags steer the cores without work.
-    // On the mcast-only cores (q_heads..31 when q_heads < 32) compute and writer return at once and
-    // the reader both pushes and pops in1 to keep its write pointer in step with the mcast grid; it
-    // stays in1's producer there (the kernel-side FIFO ops do not depend on the binding's role on WH/BH).
+    // Sender and receiver cores run the reader. Cores without Q work return from compute and writer;
+    // the reader still advances their in1 FIFO to stay in step with the multicast grid.
     KernelSpec reader{
         .unique_id = READER,
         .source =
@@ -297,14 +273,12 @@ ttnn::device_operation::ProgramArtifacts GroupAttnMatmulProgramFactory::create_p
         .compile_time_args =
             {
                 {"transpose_hw", static_cast<uint32_t>(transpose_hw_bool)},
-                {"row_major", static_cast<uint32_t>(operation_attributes.row_major)},
                 {"out_subblock_w", operation_attributes.out_subblock_w},
             },
         .runtime_arg_schema =
             {
                 .runtime_arg_names =
-                    {"has_work_for_mcast_kv_heads",
-                     "has_work_for_q_heads",
+                    {"has_work_for_q_heads",
                      "Mt",
                      "Nt",
                      "num_kv_heads",
@@ -326,16 +300,13 @@ ttnn::device_operation::ProgramArtifacts GroupAttnMatmulProgramFactory::create_p
                      "in1_mcast_dest_noc_start_y",
                      "in1_mcast_dest_noc_end_x",
                      "in1_mcast_dest_noc_end_y",
-                     "in1_mcast_num_dests",
                      "in1_mcast_num_cores",
-                     "in1_mcast_grid_size",
+                     "in1_sender_in_receiver_grid",
                      "in1_mcast_sender_size_bytes",
-                     "in1_mcast_sender_id",
-                     "in1_mcast_sender_num_x",
-                     "in1_mcast_sender_num_y"},
+                     "in1_mcast_sender_id"},
             },
         .hw_config = reader_hw_config,
-        .advanced_options = {.num_runtime_varargs = in1_mcast_sender_num_x + in1_mcast_sender_num_y},
+        .advanced_options = {.num_runtime_varargs = 2 * TILE_HEIGHT},
     };
     if (in1_is_sharded) {
         reader.dfb_bindings.push_back(DFBBinding{
@@ -496,45 +467,34 @@ ttnn::device_operation::ProgramArtifacts GroupAttnMatmulProgramFactory::create_p
     uint32_t bfloat16_Nt_bytes = ONE_ROW_BFLOAT16_BYTES * Nt;
     uint32_t bfloat16_last_row_bytes_read = ONE_ROW_BFLOAT16_BYTES * out_last_subblock_w;
 
-    CoreRange all_cores_bounding_box = all_cores.bounding_box();
-    std::vector<CoreCoord> cores = grid_to_cores_with_noop(
-        all_cores_bounding_box.end_coord.x,
-        all_cores_bounding_box.end_coord.y,
-        device_compute_with_storage_grid.x,
-        device_compute_with_storage_grid.y,
-        operation_attributes.row_major);
-    uint32_t g1_numcores = core_group_1.num_cores();
+    const auto cores = corerange_to_cores(all_device_cores, std::nullopt, operation_attributes.row_major);
 
     KernelRunArgs reader_run_args{.kernel = READER};
     KernelRunArgs writer_run_args{.kernel = WRITER};
     KernelRunArgs compute_run_args{.kernel = COMPUTE};
 
-    uint32_t num_blocks_written = 0;
-    for (uint32_t i = 0; i < cores.size(); ++i) {
-        const CoreCoord& core = cores[i];
-        const uint32_t num_output_blocks_per_core =
-            i < num_cores ? (i < g1_numcores ? num_output_blocks_per_core_group_1 : num_output_blocks_per_core_group_2)
-                          : 0;
-
-        const uint32_t kv_heads_id = KV_HEADS == 0 ? 0u : i / std::max<uint32_t>(Q_HEADS / KV_HEADS, 1u);
-        const uint32_t has_work_for_q_heads = i < Q_HEADS;
-        const uint32_t has_work_for_mcast_kv_heads = i < num_active_cores;
-        const uint32_t mcast_num_cores_for_core = mcast_num_cores - static_cast<uint32_t>(i < mcast_num_cores);
-        const uint32_t in1_mcast_num_dests =
-            Q_HEADS < TILE_HEIGHT ? std::min(mcast_num_cores_for_core, num_active_cores - 1) : mcast_num_dests - 1;
+    for (const auto& core : cores) {
+        const auto receiver = std::find(receivers.begin(), receivers.end(), core);
+        const auto sender = std::find(senders.begin(), senders.end(), core);
+        const uint32_t q_head = receiver != receivers.end() ? std::distance(receivers.begin(), receiver) : 0;
+        // A core that sends no K/V row gets senders.size(), which matches no tile row.
+        const uint32_t sender_id = std::distance(senders.begin(), sender);
+        const uint32_t has_work_for_q_heads = receiver != receivers.end();
+        const uint32_t kv_heads_id = has_work_for_q_heads ? q_head / (Q_HEADS / KV_HEADS) : 0;
+        const bool in_receiver_grid = receiver_bbox.contains(core);
+        const uint32_t mcast_num_cores_for_core = mcast_num_cores - static_cast<uint32_t>(in_receiver_grid);
 
         AddRuntimeArgsForNode(
             reader_run_args.runtime_arg_values,
             core,
             {
-                {"has_work_for_mcast_kv_heads", has_work_for_mcast_kv_heads},
                 {"has_work_for_q_heads", has_work_for_q_heads},
                 {"Mt", Mt},
                 {"Nt", Nt},
                 {"num_kv_heads", KV_HEADS},
                 {"in1_CKtNt", in1_CKtNt},
                 {"in1_CKtNt_mul_32", in1_CKtNt * TILE_HEIGHT},
-                {"blocks", num_output_blocks_per_core},
+                {"blocks", 1u},
                 {"in1_start_id", 0u},
 
                 {"in0_block_w", in0_block_w},
@@ -557,13 +517,10 @@ ttnn::device_operation::ProgramArtifacts GroupAttnMatmulProgramFactory::create_p
                  static_cast<uint32_t>(reader_noc_is_NOC_0 ? bottom_right_core_physical.x : top_left_core_physical.x)},
                 {"in1_mcast_dest_noc_end_y",
                  static_cast<uint32_t>(reader_noc_is_NOC_0 ? bottom_right_core_physical.y : top_left_core_physical.y)},
-                {"in1_mcast_num_dests", in1_mcast_num_dests},
                 {"in1_mcast_num_cores", mcast_num_cores_for_core},
-                {"in1_mcast_grid_size", mcast_num_cores},
+                {"in1_sender_in_receiver_grid", static_cast<uint32_t>(in_receiver_grid)},
                 {"in1_mcast_sender_size_bytes", in1_block_num_tiles * in1_single_tile_size},
-                {"in1_mcast_sender_id", i},
-                {"in1_mcast_sender_num_x", in1_mcast_sender_num_x},
-                {"in1_mcast_sender_num_y", in1_mcast_sender_num_y},
+                {"in1_mcast_sender_id", sender_id},
             });
         reader_run_args.advanced_options.runtime_varargs[core] = in1_mcast_sender_noc_varargs;
 
@@ -576,9 +533,9 @@ ttnn::device_operation::ProgramArtifacts GroupAttnMatmulProgramFactory::create_p
                 {"Kt", Kt},
                 {"Nt", Nt},
                 {"MtKt", MtKt},
-                {"blocks", num_output_blocks_per_core},
-                {"in0_start_id", num_blocks_written * MtKt},
-                {"out_start_id", num_blocks_written * MtNt},
+                {"blocks", 1u},
+                {"in0_start_id", q_head * MtKt},
+                {"out_start_id", q_head * MtNt},
 
                 {"in0_block_w", in0_block_w},
                 {"in1_num_subblocks", in1_num_subblocks},
@@ -595,7 +552,7 @@ ttnn::device_operation::ProgramArtifacts GroupAttnMatmulProgramFactory::create_p
             core,
             {
                 {"has_work_for_q_heads", has_work_for_q_heads},
-                {"batch", num_output_blocks_per_core},
+                {"batch", 1u},
                 {"Mt", Mt},
                 {"num_kv_heads_skip", kv_heads_id * in1_block_num_tiles_per_kv_heads},
                 {"num_kv_heads_remaining", (KV_HEADS - kv_heads_id) * in1_block_num_tiles_per_kv_heads},
@@ -611,8 +568,6 @@ ttnn::device_operation::ProgramArtifacts GroupAttnMatmulProgramFactory::create_p
                 {"in0_subblock_num_tiles", in0_subblock_num_tiles},
                 {"in1_per_core_w", in1_per_core_w},
             });
-
-        num_blocks_written += num_output_blocks_per_core;
     }
 
     Group<DataflowBufferSpec> dataflow_buffers;

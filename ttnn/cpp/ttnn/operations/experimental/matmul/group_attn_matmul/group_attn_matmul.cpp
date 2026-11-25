@@ -18,7 +18,8 @@ ttnn::Tensor group_attn_matmul(
     std::optional<const DataType> output_dtype,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<Tensor> optional_output_tensor) {
-    auto mem_config = memory_config.value_or(input_tensor_a.memory_config());
+    auto mem_config = optional_output_tensor.has_value() ? optional_output_tensor->memory_config()
+                                                         : memory_config.value_or(input_tensor_a.memory_config());
     bool row_major = false;
     // GroupAttnMatmul::validate will check that any sharded memory configs have same orientation
     if (input_tensor_a.is_sharded()) {
