@@ -4,7 +4,7 @@
 
 #include "binary_ng_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 #include <tt_stl/assert.hpp>
 
 #include <fmt/core.h>

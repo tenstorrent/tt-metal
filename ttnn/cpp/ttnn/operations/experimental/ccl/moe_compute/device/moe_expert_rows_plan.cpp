@@ -8,8 +8,8 @@
 #include <array>
 #include <set>
 
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/utils/math.hpp>
 
 #include "kernels/moe_ring_common.h"
 #include "moe_compute_program_factory.hpp"

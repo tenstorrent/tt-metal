@@ -8,7 +8,7 @@
 #include <cstdint>
 #include <iterator>
 #include <limits>
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 
 #include <vector>
 #include <optional>

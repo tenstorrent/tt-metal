@@ -367,10 +367,19 @@ class SFPU_BINOP_MODE(TemplateParameter):
     Emits ``constexpr int SFPU_BINOP_MODE = <n>;`` consumed by
     ``sfpu_binop_scalar_{test,perf}.cpp``, matching the BINOP_MODE enum in
     ``ckernel_sfpu_binop_with_unary.h`` (ADD=0, SUB=1, MUL=2, DIV=3, RSUB=4).
+    ``quasar/sfpu_binop_scalar_quasar_test.cpp`` also takes 5 and 6 for the int32 kernels.
     """
 
     # Maps MathOperation.cpp_enum_value -> the kernel's BINOP_MODE integer.
-    _MODE = {"ADD": 0, "SUB": 1, "MUL": 2, "DIV": 3, "RSUB": 4}
+    _MODE = {
+        "ADD": 0,
+        "SUB": 1,
+        "MUL": 2,
+        "DIV": 3,
+        "RSUB": 4,
+        "add_int32": 5,
+        "sub_int32": 6,
+    }
 
     binop_mathop: MathOperation = None
 
@@ -1444,6 +1453,7 @@ class GENERALIZED_MOE_GATE(TemplateParameter):
     do_extra_scale: bool = False
     extra_scale: int = 0x3F800000
     output_tiles: int = 3
+    sanitize_output: bool = True
 
     def convert_to_cpp(self) -> str:
         lines: list[str] = [
@@ -1479,6 +1489,7 @@ class GENERALIZED_MOE_GATE(TemplateParameter):
             f"constexpr bool GMG_DO_EXTRA_SCALE = {str(self.do_extra_scale).lower()};",
             f"constexpr std::uint32_t GMG_EXTRA_SCALE = {self.extra_scale};",
             f"constexpr std::uint32_t GMG_OUTPUT_TILES = {self.output_tiles};",
+            f"constexpr bool GMG_SANITIZE_OUTPUT = {str(self.sanitize_output).lower()};",
         ]
         return "\n".join(lines)
 

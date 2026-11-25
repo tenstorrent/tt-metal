@@ -9,7 +9,7 @@
 #include "ttnn/types.hpp"
 #include <ranges>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 
 namespace ttnn::operations::experimental::quasar::matmul {
 

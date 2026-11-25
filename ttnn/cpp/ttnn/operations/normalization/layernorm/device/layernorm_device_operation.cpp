@@ -9,8 +9,8 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/normalization/shard_spec_validation.hpp"
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 using uint32_t = std::uint32_t;
 using namespace tt::tt_metal;

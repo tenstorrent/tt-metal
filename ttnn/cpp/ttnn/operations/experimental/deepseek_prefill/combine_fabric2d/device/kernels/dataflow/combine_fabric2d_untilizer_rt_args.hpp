@@ -17,9 +17,9 @@
 #include "combine_fabric2d_kernel_interface.hpp"
 
 #ifndef KERNEL_BUILD
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #endif
 
 namespace cmbf2d {

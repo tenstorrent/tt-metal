@@ -4,10 +4,10 @@
 
 #pragma once
 
-#include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/workload/program.hpp>
 
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>

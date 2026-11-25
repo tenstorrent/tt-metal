@@ -7,8 +7,8 @@
 #include <memory>
 #include <optional>
 
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
 
 namespace tt::tt_metal::experimental {
 class PinnedMemory;

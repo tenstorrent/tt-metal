@@ -7,8 +7,8 @@
 #include <tuple>
 #include <vector>
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/memory/cross_program/global_semaphore.hpp>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"

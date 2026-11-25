@@ -4,7 +4,7 @@
 
 #include "roll_device_operation.hpp"
 
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/workload/specification/tensor_spec_relaxations.hpp>
 
 #include "ttnn/device_operation.hpp"

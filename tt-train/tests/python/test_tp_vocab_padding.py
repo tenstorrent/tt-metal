@@ -159,8 +159,8 @@ def _deepseek_tp_config(vocab):
 
 @pytest.mark.parametrize("vocab", [64, 96, 100, 129280])
 def test_deepseek_padded_vocab_gives_tile_aligned_shards(tp_mesh, vocab):
-    """``ttml.models.deepseek`` padded with ``lcm(32, tp_size)`` too, and there it is live: its TP LM head gathers its
-    output, so the backward partitions the logits' gradient back over TP, rank by rank (see the end-to-end test below).
+    """``ttml.models.deepseek`` padded with ``lcm(32, tp_size)`` too, and there it is live: its TP LM head keeps the
+    logits vocab-sharded, so each rank's share must be whole tiles (see the end-to-end test below).
     129280 is DeepSeek-V3's vocab."""
     _assert_shards_tile_aligned(DeepSeek(_deepseek_tp_config(vocab)).padded_vocab_size, vocab, tp_mesh.axis_size("tp"))
 
@@ -252,9 +252,8 @@ def test_every_rank_reads_its_own_vocab_rows(tp_mesh):
 def test_deepseek_tp_trains_with_a_vocab_lcm_padding_misaligns(tp_mesh):
     """Forward and backward of a TP DeepSeek with the 96-token vocab.
 
-    The LM head gathers its vocab-sharded logits, and its backward partitions their gradient back over TP, which needs
-    every rank's share to be whole tiles. Under ``lcm(32, tp_size)`` the vocab stayed at 96, 48 columns a rank, and the
-    backward failed.
+    The LM head keeps its logits vocab-sharded, which needs every rank's share to be whole tiles. Under
+    ``lcm(32, tp_size)`` the vocab stayed at 96, 48 columns a rank.
     """
     model = DeepSeek(_deepseek_tp_config(MISALIGNED_VOCAB))
     seq = 32
@@ -262,11 +261,13 @@ def test_deepseek_tp_trains_with_a_vocab_lcm_padding_misaligns(tp_mesh):
     ids = rng.integers(0, MISALIGNED_VOCAB, (1, 1, 1, seq)).astype(np.uint32)
     targets = rng.integers(0, MISALIGNED_VOCAB, (1, seq)).astype(np.uint32)
     logits = model(ttml.autograd.Tensor.from_numpy(ids, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32))
-    assert list(logits.get_value().shape)[-1] == MISALIGNED_VOCAB, "the padding is sliced off the logits"
-    loss = ttml.ops.loss.cross_entropy_loss(
+    shard_width = ttnn.get_device_tensors(logits.get_value())[0].shape[-1]
+    assert shard_width == model.padded_vocab_size // tp_mesh.axis_size("tp"), "the logits are not vocab-sharded"
+    loss = ttml.ops.distributed.vocab_parallel_cross_entropy_loss(
         logits,
         ttml.autograd.Tensor.from_numpy(targets, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32),
-        ttml.ops.ReduceType.MEAN,
+        cluster_axis=tp_mesh.axis_index("tp"),
+        reduce=ttml.ops.ReduceType.MEAN,
     )
     loss.backward(False)
     ttml.autograd.AutoContext.get_instance().reset_graph()
