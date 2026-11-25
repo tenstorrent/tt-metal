@@ -50,11 +50,6 @@ ttnn::Tensor synchronize_tensor(
 ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements_per_axis(
     const ttnn::Tensor& value);
 
-// The same reading of the label `config` gives a tensor on a mesh of `mesh_shape`, for a tensor not yet mapped (a lazy
-// parameter).
-ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements_per_axis(
-    const tt::tt_metal::distributed::MeshMapperConfig& config, const tt::tt_metal::distributed::MeshShape& mesh_shape);
-
 // Whether `value` is sharded on mesh axis `axis`, as placements_per_axis reads it.
 bool is_sharded_on_axis(const ttnn::Tensor& value, uint32_t axis);
 

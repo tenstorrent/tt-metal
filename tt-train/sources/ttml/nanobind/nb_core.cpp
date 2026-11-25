@@ -306,14 +306,6 @@ void py_module(nb::module_& m) {
             nb::arg("tensor"),
             nb::arg("cluster_axis") = nb::none(),
             "Raw all_reduce without autograd tracking. Returns a new ttnn::Tensor.");
-        py_distributed.def(
-            "mesh_partition",
-            &ttml::ttnn_fixed::distributed::mesh_partition,
-            nb::arg("tensor"),
-            nb::arg("dim"),
-            nb::arg("cluster_axis") = nb::none(),
-            "Raw mesh_partition (each device keeps its own slice of `dim` along `cluster_axis`, no collective). "
-            "Returns a new ttnn::Tensor.");
 
         py_distributed.def(
             "placements_per_axis",
@@ -322,15 +314,6 @@ void py_module(nb::module_& m) {
             },
             nb::arg("tensor"),
             "`tensor`'s placement on each mesh axis.");
-        py_distributed.def(
-            "placements_per_axis",
-            [](const tt::tt_metal::distributed::MeshMapperConfig& config) {
-                return placements_list(
-                    ttml::core::distributed::placements_per_axis(config, ttml::autograd::ctx().get_device().shape()));
-            },
-            nb::arg("config"),
-            "The placement on each axis of the current mesh that a mapper with `config` gives a tensor, read as the "
-            "tensor's label would be.");
         py_distributed.def(
             "is_sharded_on_axis",
             &ttml::core::distributed::is_sharded_on_axis,
