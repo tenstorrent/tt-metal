@@ -459,12 +459,13 @@ void device_module(nb::module_& m_device) {
         "Mark the start (True) and end (False) of a pass of dry runs, device opens between them included.");
     m_device.def(
         "FinishQueuedBuilds",
-        [] {
+        [](bool drop_queued) {
             nb::gil_scoped_release release;
-            return tt::tt_metal::experimental::dry_run::finish_queued_builds();
+            return tt::tt_metal::experimental::dry_run::finish_queued_builds(drop_queued);
         },
-        "Drop the kernel builds a dry run queued that have not started and wait for the running ones. Returns how "
-        "many kernels the queued builds built.");
+        nb::arg("drop_queued") = true,
+        "Wait for the running kernel builds a dry run queued; the ones that have not started are dropped, or run as "
+        "well with drop_queued=False. Returns how many kernels the queued builds built.");
 
     m_device.def("ClearKernelCache", &tt::tt_metal::experimental::ClearKernelCache, R"doc(
         Clear the in-memory kernel compilation hash lookup cache.

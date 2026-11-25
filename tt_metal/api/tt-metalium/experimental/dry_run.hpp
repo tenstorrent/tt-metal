@@ -36,12 +36,12 @@ struct Scope {
 };
 
 /**
- * End the queued kernel builds: the ones that have not started are dropped, the running ones are waited for. Call it
- * when nothing that follows needs the kernels. Returns how many kernels queued builds have built in this process.
- * A failed build is dropped as well: the program that needs the kernel builds it again when it compiles, and reports
- * the failure then.
+ * End the queued kernel builds: the running ones are waited for, and the ones that have not started are dropped, or
+ * with drop_queued false run and waited for as well. Dropping is for when nothing that follows needs the kernels.
+ * Returns how many kernels queued builds have built in this process. A failed build is dropped as well: the program
+ * that needs the kernel builds it again when it compiles, and reports the failure then.
  */
-size_t finish_queued_builds();
+size_t finish_queued_builds(bool drop_queued = true);
 
 /**
  * Mark the stretch of a process in which dry runs happen, device opens and closes between them included. A fabric

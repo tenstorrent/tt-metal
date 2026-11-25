@@ -26,7 +26,7 @@ void end() {
 
 bool active() { return depth.load(std::memory_order_acquire) > 0; }
 
-size_t finish_queued_builds() { return wait_for_ahead_builds(/*drop_queued=*/true); }
+size_t finish_queued_builds(bool drop_queued) { return wait_for_ahead_builds(drop_queued); }
 
 void set_pass(bool in_dry_pass) { pass.store(in_dry_pass, std::memory_order_release); }
 

@@ -3474,24 +3474,39 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
             if (endpoints.empty()) {
                 return;
             }
-            auto coordinator = std::make_shared<RemoteCompileCoordinator>(
-                std::move(endpoints), device_context_id, device->build_id(), build_env.build_key());
-            size_t submitted = 0;
+            // What the server needs is prepared here, while the device is open. The coordinator itself lives on the
+            // worker that runs the queued build: its RPC sessions belong to the thread that creates them.
+            // A kernel is prepared once per process: its generated files must not be rewritten while the server reads
+            // them for an earlier queued build.
+            static std::mutex prepared_mutex;
+            static std::unordered_set<size_t> prepared;
+            std::vector<KernelCompileDescriptor> descriptors;
             for (auto& kernels : kernels_) {
                 for (auto& [id, kernel] : kernels) {
                     auto [build_options, kernel_hash] = prep_kernel(kernel);
                     if (!remote_kernel_cached(device, kernel)) {
-                        coordinator->submit(kernel_hash, [&]() {
-                            generate_kernel_source_files(device, build_options, kernel);
-                            return build_kernel_descriptor(device, kernel, build_options, kernel_hash);
-                        });
-                        submitted++;
+                        {
+                            const std::lock_guard<std::mutex> lock(prepared_mutex);
+                            if (!prepared.insert(kernel_hash).second) {
+                                continue;
+                            }
+                        }
+                        generate_kernel_source_files(device, build_options, kernel);
+                        descriptors.push_back(build_kernel_descriptor(device, kernel, build_options, kernel_hash));
                     }
                 }
             }
-            queue_ahead_build([coordinator, submitted] {
-                coordinator->finish();
-                return submitted;
+            queue_ahead_build([endpoints = std::move(endpoints),
+                               device_context_id,
+                               build_id = device->build_id(),
+                               build_key = build_env.build_key(),
+                               descriptors = std::move(descriptors)] {
+                RemoteCompileCoordinator coordinator(endpoints, device_context_id, build_id, build_key);
+                for (const auto& descriptor : descriptors) {
+                    coordinator.submit(descriptor.kernel_hash, [&] { return descriptor; });
+                }
+                coordinator.finish();
+                return descriptors.size();
             });
             return;
         }
