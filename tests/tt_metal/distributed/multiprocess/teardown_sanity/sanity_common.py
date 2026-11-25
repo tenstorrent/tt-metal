@@ -296,6 +296,41 @@ def ttrun_mpi_cmd(mpi_extra: str = "", np: int = 3, mpi_prefix: str | None = Non
     ]
 
 
+TT_RUN_RANK = ROOT / "build/tools/scaleout/tt-run-rank"
+ULFM_DETECTOR = "--mca mpi_ft_detector true --mca mpi_ft_detector_period 0.2 --mca mpi_ft_detector_timeout 1"
+
+
+def launcher_cmd(launcher: str, env: dict, np=3, wrapper_args=(), ttrun_extra=(), mpi_extra="") -> list:
+    """The probe under tt-run, or under ``mpirun --mca mpi_ft_enable 1 ... tt-run-rank -- <probe>`` (no tt-run)."""
+    if launcher == "tt-run":
+        return ttrun_mpi_cmd(mpi_extra, ttrun_extra=ttrun_extra)
+    if not os.access(TT_RUN_RANK, os.X_OK):
+        pytest.skip("tt-run-rank is not built")
+    cmd = [mpirun_path(), "--mca", "mpi_ft_enable", "1", "--mca", "btl", "self,tcp", "-np", str(np), "--oversubscribe"]
+    cmd += ["--bind-to", "none", "--allow-run-as-root", "--tag-output", *mpi_extra.split()]
+    for v in sorted({*env, "PROBE_PIDDIR"}):
+        cmd += ["-x", v] if v.startswith(("PROBE_", "TT_RUN_RANK_")) else []
+    return cmd + [str(TT_RUN_RANK), *wrapper_args, "--", mpi_probe_path()]
+
+
+STOP_LINE = re.compile(
+    r"\[rank (\d+)\] (.*?) \(on (\S+), pid (\d+)\); (stopping the job|the job goes on) \(exit (\d+)\)"
+)
+
+
+def stop_lines(r: "Result") -> list:
+    """(rank, reason, what follows, code) of each wrapper stop line."""
+    return [(int(m[1]), m[2], m[5], int(m[6])) for m in STOP_LINE.finditer(r.log)]
+
+
+def marked(r: "Result", marker: str) -> set:
+    return {int(m[1]) for m in re.finditer(rf"\[probe r=(\d+) [^\]]*\] {re.escape(marker)}", r.log)}
+
+
+def forced(r: "Result") -> set:
+    return {int(m[1]) for m in re.finditer(r"\[rank (\d+)\] did not exit within its stop grace", r.log)}
+
+
 def run_case(
     name: str,
     env_over: dict,

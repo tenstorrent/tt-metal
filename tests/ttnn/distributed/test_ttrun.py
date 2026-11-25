@@ -4,6 +4,7 @@
 """Unit tests for ttrun command-line utility."""
 
 import os
+import re
 import shlex
 import shutil
 import sys
@@ -1583,7 +1584,7 @@ class TestJobOwnership:
 
         # Every rank exits after the stop (143 for the ones told to stop), but the job's code is the stopping rank's
         # and tt-run names it, even when prterun reports another rank first.
-        line = f"[1,1]<stderr>: [tt-stop] rank 1 on nodeB (pid 4242): {reason}; stopping the job (exit {code})"
+        line = f"[1,1]<stderr>: [rank 1] {reason} (on nodeB, pid 4242); stopping the job (exit {code})"
         script = f"echo {shlex.quote(line)} >&2; sleep 0.3; echo {shlex.quote(self._BANNER_EXIT_CODE)} >&2; exit 143"
         text, rc = self._logged_rc(lambda: run_launcher(["bash", "-c", script], cwd=Path.cwd()))
         assert rc == code, text
@@ -1597,10 +1598,12 @@ class TestJobOwnership:
         # Across hosts the survivor's MPI can report the dead peer before the dead rank's wrapper line arrives. A stop
         # whose reason is a failed peer is a symptom: the dead rank's own line replaces it, whatever the order.
         first = (
-            "[1,0]<stderr>: [tt-stop] rank 0 on nodeA (pid 11): Python exception RuntimeError: MPI_Test failed: "
-            "MPI_ERR_PROC_FAILED: Process Failure (closing the mesh); stopping the job (exit 1)"
+            "[1,0]<stderr>: [rank 0] Python exception RuntimeError: MPI_Test failed: MPI_ERR_PROC_FAILED: Process "
+            "Failure (closing the mesh) (on nodeA, pid 11); stopping the job (exit 1)"
         )
-        second = "[1,1]<stderr>: [tt-stop] rank 1 on nodeB (pid 22): was killed by signal 11 (SIGSEGV); stopping the job (exit 139)"
+        second = (
+            "[1,1]<stderr>: [rank 1] was killed by signal 11 (SIGSEGV) (on nodeB, pid 22); stopping the job (exit 139)"
+        )
         script = f"echo {shlex.quote(first)} >&2; sleep 0.3; echo {shlex.quote(second)} >&2; exit 1"
         text, rc = self._logged_rc(lambda: run_launcher(["bash", "-c", script], cwd=Path.cwd()))
         assert rc == 139, text
@@ -1614,7 +1617,7 @@ class TestJobOwnership:
         # A rank stopped the job but another rank never exits (stuck in a device wait): the stop grace applies as
         # for a stop at tt-run, then tt-run forces through the launcher. The code is still the stopping rank's.
         monkeypatch.setenv("TT_RUN_STOP_GRACE_S", "1")
-        line = "[1,0]<stderr>: [tt-stop] rank 0 on nodeA (pid 11): sys.exit(5); stopping the job (exit 5)"
+        line = "[1,0]<stderr>: [rank 0] sys.exit(5) (on nodeA, pid 11); stopping the job (exit 5)"
         script = f"echo {shlex.quote(line)} >&2; trap 'exit 143' INT TERM; while :; do sleep 0.1; done"
         t0 = time.time()
         text, rc = self._logged_rc(lambda: m.run_launcher(["bash", "-c", script], cwd=Path.cwd()))
@@ -1689,7 +1692,7 @@ class TestJobOwnership:
         n = len(config.rank_bindings)
         assert cmd.count(str(wrapper)) == n, cmd
         i = cmd.index(str(wrapper))
-        assert cmd[i : i + 4] == [str(wrapper), "--", "python3", "train.py"], cmd
+        assert cmd[i : i + 6] == [str(wrapper), "--stop-grace", "118", "--", "python3", "train.py"], cmd
         assert str(wrapper) not in build_mpi_command(config, ["python3", "train.py"], debug_gdbserver=True)
         monkeypatch.setattr(ttrun_module, "find_tt_run_rank_executable", lambda: None)
         assert str(wrapper) not in build_mpi_command(config, ["python3", "train.py"])
@@ -1961,10 +1964,10 @@ class TestJobOwnership:
 
         # One byte that is not UTF-8 on the launcher's stderr must not stop the pump: it keeps draining (300 KB more,
         # past any pipe buffer; a stopped drain blocks the launcher and `timeout` ends it with 124) and still reads a
-        # rank's [tt-stop] line after it.
+        # rank's stop line after it.
         script = (
             "printf 'bad \\377 byte\\n' >&2; head -c 300000 /dev/zero | tr '\\0' x >&2; echo >&2; "
-            "printf '[tt-stop] rank 1 on h1 (pid 5): was killed by signal 9 (SIGKILL); stopping the job (exit 137)\\n' >&2; "
+            "printf '[rank 1] was killed by signal 9 (SIGKILL) (on h1, pid 5); stopping the job (exit 137)\\n' >&2; "
             "exit 137"
         )
         text, rc = self._logged_rc(lambda: run_launcher(["timeout", "20", "bash", "-c", script], cwd=Path.cwd()))
@@ -2412,38 +2415,91 @@ class TestJobOwnership:
         assert "a leak" not in text and "job end: outcome=clean exit=0" in text, text
         assert rec.read_text().strip() == "cont", text
 
-    @pytest.mark.parametrize("context", [True, False], ids=["tt_metal_rank", "plain_program"])
-    def test_rank_wrapper_names_a_quiet_exit_even_with_a_stop_pending(self, context, tmp_path):
+    @pytest.mark.parametrize("stop", [True, False], ids=["after_a_stop", "no_stop"])
+    def test_rank_wrapper_exit_rules(self, stop, tmp_path):
         import signal
         import subprocess
         import time
 
-        # A tt-metal rank (its context up: "context" written to the wrapper) that exits non-zero without saying it
-        # stopped the job (os._exit(1) skips every hook) failed on its own, even when a peer saw it die first and the
-        # stop reached its wrapper before the wrapper saw the exit: the wrapper names it. A plain program's non-zero
-        # exit after a stop is taken as the stop's.
+        # A non-zero exit after a stop reached the rank is the stop's; with no stop it is a failure, named.
         wrapper = find_built_tt_run_rank()
         if wrapper is None:
             if os.environ.get("CI"):
                 pytest.fail("tt-run-rank is not built: the wrapper's tests cannot run")
             pytest.skip("tt-run-rank is not built")
         ready = tmp_path / "ready"
-        say = 'echo context >&"$TT_RUN_RANK_FD"; ' if context else ""
-        program = f'{say}trap "" TERM; touch {ready}; sleep 0.5; exit 1'
-        p = subprocess.Popen([wrapper, "--", "bash", "-c", program], stderr=subprocess.PIPE, text=True)
+        p = subprocess.Popen(
+            [wrapper, "--", "bash", "-c", f'trap "" TERM; touch {ready}; sleep 0.5; exit 1'],
+            stderr=subprocess.PIPE,
+            text=True,
+        )
         try:
             end = time.time() + 30
             while not ready.exists():
                 assert time.time() < end and p.poll() is None, "the program never started"
                 time.sleep(0.02)
-            p.send_signal(signal.SIGTERM)  # the job's stop, before the wrapper sees the exit
+            if stop:
+                p.send_signal(signal.SIGTERM)
             _, err = p.communicate(timeout=30)
         finally:
             if p.poll() is None:
                 p.kill()
-        named = "[tt-stop] rank" in err and "exited with code 1 without stopping the job" in err
-        assert named == context, err
+        named = re.search(r"\[rank \S+\] exited with code 1 \(on \S+, pid \d+\); stopping the job \(exit 1\)", err)
+        assert bool(named) != stop, err
         assert p.returncode == 1, err
+
+    def test_rank_wrapper_reports_a_failed_word_at_once(self, tmp_path):
+        import subprocess
+        import time
+
+        # "failed <code> <reason>" on TT_RUN_RANK_FD is reported while the program still runs, with its reason.
+        wrapper = find_built_tt_run_rank()
+        if wrapper is None:
+            pytest.skip("tt-run-rank is not built")
+        program = 'echo "failed 3 RuntimeError: boom" >&"$TT_RUN_RANK_FD"; sleep 2; exit 3'
+        t0 = time.monotonic()
+        p = subprocess.Popen([wrapper, "--", "bash", "-c", program], stderr=subprocess.PIPE, text=True)
+        line = p.stderr.readline()
+        took = time.monotonic() - t0
+        p.communicate(timeout=30)
+        assert re.match(r"\[rank \S+\] RuntimeError: boom \(on \S+, pid \d+\); stopping the job \(exit 3\)", line), line
+        assert took < 1.5, f"reported only at the exit ({took:.1f} s)"
+        assert p.returncode == 3
+
+    def test_rank_wrapper_forces_a_rank_past_its_stop_grace(self, tmp_path):
+        import signal
+        import subprocess
+        import time
+
+        wrapper = find_built_tt_run_rank()
+        if wrapper is None:
+            pytest.skip("tt-run-rank is not built")
+        ready = tmp_path / "ready"
+        p = subprocess.Popen(
+            [wrapper, "--stop-grace", "1", "--", "bash", "-c", f'trap "" TERM; touch {ready}; sleep 30'],
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        end = time.time() + 30
+        while not ready.exists():
+            assert time.time() < end, "the program never started"
+            time.sleep(0.02)
+        p.send_signal(signal.SIGTERM)
+        _, err = p.communicate(timeout=30)
+        assert "did not exit within its stop grace of 1 s: forced (SIGKILL)" in err and "tt-smi -r" in err, err
+        assert p.returncode == 137, err
+
+    def test_the_wrapper_gets_a_grace_below_tt_runs_and_the_notify_mode(self, monkeypatch):
+        from ttnn.distributed import ttrun as m
+
+        monkeypatch.setenv("TT_RUN_STOP_GRACE_S", "5")
+        monkeypatch.setattr(m, "ON_PEER_EXIT", "notify")
+        assert m.rank_wrapper_prefix("w") == ["w", "--stop-grace", "3", "--on-peer-exit", "notify", "--"]
+        assert m.rank_wrapper_prefix(None) == []
+        args = m.peer_failure_mca_args([], "w")
+        assert m.has_mca_param(args, "mpi_ft_enable") and m.has_mca_param(args, "mpi_ft_detector"), args
+        monkeypatch.setattr(m, "ON_PEER_EXIT", "stop")
+        assert not m.has_mca_param(m.peer_failure_mca_args([], "w"), "mpi_ft_detector")
 
     def test_phase1_ranks_run_in_the_wrapper_like_phase2(self, tmp_path, monkeypatch):
         from ttnn.distributed import ttrun as m
@@ -2459,7 +2515,7 @@ class TestJobOwnership:
         for cmd, ranks in ((mock, 2), (hosts, 1)):  # one app context per mock rank; one -np for the hosts
             assert cmd.count(str(wrapper)) == ranks, cmd
             i = cmd.index(str(wrapper))
-            assert cmd[i : i + 3] == [str(wrapper), "--", str(exe.resolve())], cmd
+            assert cmd[i : i + 5] == [str(wrapper), "--stop-grace", "118", "--", str(exe.resolve())], cmd
             assert m.has_mca_param(cmd, "mpi_ft_enable"), cmd
         monkeypatch.setattr(m, "find_tt_run_rank_executable", lambda: None)  # not built: unwrapped, no mpi_ft_enable
         bare = m.build_generate_rank_bindings_mpi_cmd(exe, mgd, ["h1", "h2"], tmp_path)
@@ -2619,7 +2675,10 @@ class TestJobOwnership:
                 mgd, None, tmp_path, factory_system_descriptor=fsd, offline=True, job_timeout=30.0
             )
         assert seen["direct"] is True and seen["job_timeout"] == 30.0, seen
-        assert seen["cmd"][:3] == [str(wrapper), "--", str(exe.resolve())] and "--offline" in seen["cmd"], seen["cmd"]
+        assert (
+            seen["cmd"][:5] == [str(wrapper), "--stop-grace", "118", "--", str(exe.resolve())]
+            and "--offline" in seen["cmd"]
+        ), seen["cmd"]
         config = m.TTRunConfig(
             rank_bindings=[m.RankBinding(rank=0, mesh_id=0)],
             mesh_graph_desc_path=mgd,

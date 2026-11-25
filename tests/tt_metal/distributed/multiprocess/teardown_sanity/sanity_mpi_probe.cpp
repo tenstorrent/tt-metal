@@ -20,7 +20,11 @@
 //                         | revoke_shrink | abort | exit_nofinalize
 //   PROBE_SECOND_BARRIER  1 -> survivors try a second collective after an error
 //   PROBE_PIDDIR          directory to write rank_<r>.pid into (external per-rank signals)
-//   PROBE_STOP_DELAY_MS   all_hang: how long a rank takes to exit after it caught the stop (a mesh close; default 0)
+//   PROBE_STOP_DELAY_MS   all_hang, job: how long a rank takes to close after the stop (PROBE_STOP_DELAY_MS_<r>: one
+//   rank) PROBE_ENDING          job: the victim's sigkill | segfault | exit1 | exit3 | raise (a "failed" word, then
+//   exit 1)
+//                         | hang (never joins the barrier)
+//   PROBE_IGNORE_STOP     job: the rank that never closes
 #include <mpi.h>
 #if __has_include(<mpi-ext.h>)
 #include <mpi-ext.h>
@@ -30,7 +34,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <chrono>
+#include <string>
 #include <thread>
+#include <fcntl.h>
 #include <unistd.h>  // getpid / getppid / _exit: POSIX, no C++ header equivalent
 
 static int g_rank = -1;
@@ -99,6 +105,84 @@ static const char* env_or(const char* k, const char* d) {
     return (v && *v) ? v : d;
 }
 
+static volatile sig_atomic_t g_peer_exited = 0;
+static void on_peer_exit_signal(int) { g_peer_exited = 1; }
+
+// Print the lines tt-run-rank wrote on TT_RUN_RANK_EVENTS_FD ("exit <rank> <code> <signal> <reason>").
+static void print_events() {
+    const char* fd = getenv("TT_RUN_RANK_EVENTS_FD");
+    if (fd == nullptr || *fd == '\0') {
+        return;
+    }
+    fcntl(atoi(fd), F_SETFL, O_NONBLOCK);
+    static std::string got;
+    char buf[512];
+    for (ssize_t n; (n = read(atoi(fd), buf, sizeof buf)) > 0;) {
+        got.append(buf, static_cast<size_t>(n));
+    }
+    for (size_t nl; (nl = got.find('\n')) != std::string::npos; got.erase(0, nl + 1)) {
+        mark("event: %s", got.substr(0, nl).c_str());
+    }
+}
+
+// "job": ranks wait in a polled barrier. On a stop they close and exit 128 + the signal; on SIGUSR1 they work on and
+// finish with 0. With no ending the barrier completes.
+static int job_rank(MPI_Comm comm, int is_victim, long delay_ms) {
+    std::signal(SIGINT, on_terminate_signal);
+    std::signal(SIGTERM, on_terminate_signal);
+    std::signal(SIGUSR1, on_peer_exit_signal);
+    const char* ending = env_or("PROBE_ENDING", "none");
+    char key[64];
+    snprintf(key, sizeof key, "PROBE_STOP_DELAY_MS_%d", g_rank);
+    const long stop_delay = atol(env_or(key, env_or("PROBE_STOP_DELAY_MS", "0")));
+    const int join = !(is_victim && !strcmp(ending, "hang"));  // hang: the victim never joins, so no one finishes
+    if (is_victim && strcmp(ending, "none") != 0 && join) {
+        sleep_ms(delay_ms);
+        mark("victim acting: %s", ending);
+        if (!strcmp(ending, "raise")) {
+            const char line[] = "failed 1 RuntimeError: injected failure at after_open\n";
+            (void)!write(atoi(env_or("TT_RUN_RANK_FD", "-1")), line, sizeof line - 1);
+            sleep_ms(atol(env_or("PROBE_RAISE_CLOSE_MS", "0")));
+            mark("close_done");
+            _exit(1);
+        }
+        if (!strncmp(ending, "exit", 4)) {
+            _exit(atoi(ending + 4));  // exit1, exit3
+        }
+        raise(!strcmp(ending, "segfault") ? SIGSEGV : SIGKILL);
+    }
+    MPI_Request req;
+    if (join) {
+        MPI_Ibarrier(comm, &req);
+    }
+    for (int done = 0, failed = !join;; sleep_ms(100)) {
+        if (!done && !failed && MPI_Test(&req, &done, MPI_STATUS_IGNORE) != MPI_SUCCESS) {
+            failed = 1;
+            done = 0;
+        }
+        if (done) {
+            mark("close_done");
+            return 0;
+        }
+        if (g_peer_exited) {
+            mark("got signal %d; going on", SIGUSR1);
+            print_events();
+            sleep_ms(atol(env_or("PROBE_WORK_MS", "2000")));
+            mark("work_done");
+            mark("close_done");
+            return 0;  // MPI_Finalize without the dead peer (ULFM)
+        }
+        if (g_caught_signal && atoi(env_or("PROBE_IGNORE_STOP", "-1")) != g_rank) {
+            mark("caught signal %d; exiting gracefully", (int)g_caught_signal);
+            print_events();
+            sleep_ms(stop_delay);
+            mark("close_done");
+            fflush(nullptr);
+            _exit(128 + g_caught_signal);
+        }
+    }
+}
+
 int main(int argc, char** argv) {
     g_t0 = now_s();
     const char* scenario = env_or("PROBE_SCENARIO", "clean");
@@ -156,6 +240,9 @@ int main(int argc, char** argv) {
     }
 
     const int is_victim = (g_rank == victim);
+    if (!strcmp(scenario, "job")) {
+        return job_rank(comm, is_victim, delay_ms);
+    }
     if (!strcmp(scenario, "all_hang")) {
         // Catch the stop ONLY in this scenario, so a rank can prove it RECEIVED the signal (and which one) rather
         // than being killed outright. Every other scenario keeps the default disposition (SIGTERM ends the rank).

@@ -63,10 +63,10 @@ def closed(r, ranks=(0, 1)) -> None:
 
 
 def stopped_by(r, rank: int, reason: str, code: int) -> None:
-    """Rank ``rank`` stopped the job for ``reason``: it printed the [tt-stop] line, every other rank was sent SIGTERM
+    """Rank ``rank`` stopped the job for ``reason``: its wrapper printed the stop line, every other rank was sent SIGTERM
     and exited within the grace (nothing forced), and tt-run names the rank and returns its code."""
-    m = re.search(rf"\[tt-stop\] rank {rank} on \S+ \(pid \d+\): (.*?); stopping the job \(exit {code}\)", r.log)
-    assert m, f"no [tt-stop] line from rank {rank} with exit {code}\n{r.log[-3000:]}"
+    m = re.search(rf"\[rank {rank}\] (.*?) \(on \S+, pid \d+\); stopping the job \(exit {code}\)", r.log)
+    assert m, f"no stop line from rank {rank} with exit {code}\n{r.log[-3000:]}"
     assert reason in m.group(1), f"rank {rank} stopped the job for {m.group(1)!r}, expected {reason!r}"
     assert r.exit == code, f"tt-run returned {r.exit}, expected the stopping rank's {code}: {r}"
     assert "the other ranks were sent SIGTERM and exited" in r.log, r.log[-3000:]
