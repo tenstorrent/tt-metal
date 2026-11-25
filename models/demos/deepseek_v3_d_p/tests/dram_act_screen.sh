@@ -20,7 +20,7 @@ Options
   -n, --boots N         number of boots (default 1)
   -c, --ctrl N          DRAM controller for cafull and random (default 3)
   -s, --seconds S       seconds per target (default 120)
-  -p, --steps LIST      comma list of all8,cafull,random (default all three)
+  -p, --steps LIST      comma list of all8,cafull,random,v2fast,v2full,writes,caforms,wmis (default all8,cafull,random)
       --random-always   run random on every boot (default: only on a boot where an earlier step hit)
       --no-reset        skip the reset before the first boot (board was just reset)
   -o, --out DIR         output directory (default <repo>/repro_logs/act_screen/<start time>)
@@ -34,6 +34,18 @@ Steps (about 2.3 h per boot, plus 50 min when random runs)
           orig_bank3  same row in bank 3; same failing banks, but a stronger load (hits ~20x more often)
           caN_up/dn   19 rows where row bit R(N+4) drives ACT pin CA N against opposite-toggling neighbours
   random  one controller, 15 random read/write/barrier mixes, seed printed so a hit can be replayed. ~50 min.
+  v2fast  controller 3, orig_bank3 under sdpa16 then sdpa, in ~60 s launches that stop at the target time. ~5 min.
+  v2full  v2fast, then orig_bank3 sdpa16 on controllers 7,1,6,0,2,4,5. ~19 min.
+          -s sets seconds per target here too; ACT_V2 (ctrl:target/form,...) overrides the plan, where target is
+          any cafull name (orig, orig_bank3, caN_up, caN_dn) and form is sdpa or sdpa16.
+  writes  one controller, pingpong, hammer and storm on row 0x200 with a third of the RISCs rewriting the same
+          addresses, so reads and writes share the rows. ~9 min.
+  caforms one controller, the 21 cafull targets under pingpong, hammer and storm, reads only and then with a third
+          of the RISCs writing (126 targets, ~4.3 h at -s 120; ACT_CA_PINS=5 keeps orig, orig_bank3 and the
+          CA5 pair, ~25 min). ACT_CA_FORMS overrides the forms (pingpong,hammer,storm,sdpa,sdpa16).
+  wmis    one controller, write misdirect: every cafull target with R9 set, moved up by R12 or R14 so its 64 MB
+          partner is in the buffer. Two of three RISCs write the target (one ACT per write), the rest read every
+          single-bit partner; a write landing on a partner reads back as alias bit k there. ~13 min.
 
 How a target works
   Write   each chip's DRAM buffer is filled with a per-address hash pattern (address, controller and launch seed
@@ -70,6 +82,8 @@ Examples
 EOF
 }
 
+V2FAST=3:orig_bank3/sdpa16,3:orig_bank3/sdpa
+V2FULL=$V2FAST,7:orig_bank3/sdpa16,1:orig_bank3/sdpa16,6:orig_bank3/sdpa16,0:orig_bank3/sdpa16,2:orig_bank3/sdpa16,4:orig_bank3/sdpa16,5:orig_bank3/sdpa16
 NB=1 CTRL=3 SECS=120 STEPS=all8,cafull,random RANDOM_ALWAYS=0 RESET_FIRST=1 OUT="" DRY=0
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -88,7 +102,7 @@ done
 [[ $NB =~ ^[1-9][0-9]*$ ]] || { echo "-n needs a positive boot count, got $NB" >&2; exit 2; }
 OUT=${OUT:-$REPO/repro_logs/act_screen/$(date +%Y%m%d_%H%M%S)}
 for s in ${STEPS//,/ }; do
-  [[ $s =~ ^(all8|cafull|random)$ ]] || { echo "unknown step $s (see --help)" >&2; exit 2; }
+  [[ $s =~ ^(all8|cafull|random|v2fast|v2full|writes|caforms|wmis)$ ]] || { echo "unknown step $s (see --help)" >&2; exit 2; }
 done
 has_step() { [[ ,$STEPS, == *,$1,* ]]; }
 
@@ -135,6 +149,7 @@ do_reset() {  # do_reset <boot>
     return
   fi
   say "${B}reset${N} ($RESET_MODE) ..."
+  local k0; k0=$(kernel_log | wc -l)
   board_reset > "$log" 2>&1
   r=$?
   n=$(ls /dev/tenstorrent 2>/dev/null | grep -cE '^[0-9]+$')  # skips by-id/
@@ -146,7 +161,11 @@ do_reset() {  # do_reset <boot>
     exit 1
   fi
   say "${G}reset ok${N}, 32 chips"
+  # GDDR training and EDC failures are reported at boot by the driver, not by this screen.
+  kernel_log | tail -n +$((k0 + 1)) | grep -iE "gddr|dram|training|edc" | tail -5 | sed "s/^/         kernel: /"
 }
+
+kernel_log() { sudo -n /usr/bin/dmesg -T 2>/dev/null || dmesg -T 2>/dev/null; }
 
 PID=""
 trap 'say "${Y}interrupted${N}"; [[ -n $PID ]] && kill $PID 2>/dev/null; summary; exit 130' INT TERM
@@ -224,10 +243,17 @@ for ((i = 1; i <= NB; i++)); do
   say "${B}=== boot $i/$NB ===${N}"
   if [[ $i -gt 1 || $RESET_FIRST -eq 1 ]]; then do_reset "$i"; fi
   res="" bad=0
-  for step in all8 cafull; do
+  for step in all8 cafull v2fast v2full writes caforms wmis; do
     has_step $step || continue
-    if [[ $step == all8 ]]; then run_step all8 "$i" all sdpa_long,sdpa16_long 1800
-    else run_step cafull "$i" "$CTRL" ca_full_long 14400; fi
+    case $step in
+      all8) run_step all8 "$i" all sdpa_long,sdpa16_long 1800 ;;
+      cafull) run_step cafull "$i" "$CTRL" ca_full_long 14400 ;;
+      v2fast) ACT_V2=${ACT_V2:-$V2FAST} run_step v2fast "$i" 3 v2 $((2 * SECS + 900)) ;;
+      v2full) ACT_V2=${ACT_V2:-$V2FULL} run_step v2full "$i" 3 v2 $((9 * SECS + 900)) ;;
+      writes) run_step writes "$i" "$CTRL" pingpong_w_long,hammer_w_long,storm_w_long $((6 * SECS + 900)) ;;
+      caforms) ACT_CA_FORMS=${ACT_CA_FORMS:-pingpong,hammer,storm} run_step caforms "$i" "$CTRL" ca_full_long,ca_full_w_long $((2 * 21 * 3 * 2 * SECS + 1800)) ;;
+      wmis) run_step wmis "$i" "$CTRL" wmis_long $((6 * 2 * SECS + 900)) ;;
+    esac
     res+=" $step:$STEP_RESULT"
     [[ $STEP_HITS -gt 0 ]] && bad=1
     [[ $STEP_RESULT == fail ]] && break
