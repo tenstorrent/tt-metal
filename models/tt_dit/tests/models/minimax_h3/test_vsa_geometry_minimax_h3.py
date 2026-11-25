@@ -13,10 +13,12 @@ the same numbers.
 import pytest
 import torch
 
+from ....pipelines.minimax_h3.packing import MiniMaxH3PackedSequence
 from ....pipelines.minimax_h3.vsa_geometry import (
     VSA_TILE_TOKENS,
     build_vsa_geometry,
     chop_prefix_segments,
+    prefix_segments_from_layout,
     video_tile_valid_counts,
     vsa_min_padded_len,
 )
@@ -236,3 +238,42 @@ def test_row_source_replicates_tile_metadata():
         rows = permuted[geometry.block_of_row == block]
         if count:
             assert torch.equal(rows[count:], rows[0].expand_as(rows[count:]))
+
+
+def _synthetic_layout(runs, video_grid, trailing_rows=0):
+    """`runs` of (tag, rows) before the video; tag 1 rows are condition video. `trailing_rows` follow the video."""
+    tags, condition_video, row = [], [], 0
+    for tag, rows in runs:
+        tags += [tag] * rows
+        if tag == 1:
+            condition_video += range(row, row + rows)
+        row += rows
+    video_rows = video_grid[0] * video_grid[1] * video_grid[2]
+    tags += [1] * video_rows + [0] * trailing_rows
+    sequence_length = row + video_rows + trailing_rows
+    empty = torch.empty(0, dtype=torch.long)
+    return MiniMaxH3PackedSequence(
+        sequence_length=sequence_length,
+        position_ids=torch.zeros(sequence_length, 3, dtype=torch.long),
+        token_tags=torch.tensor(tags),
+        video_indices=torch.tensor(condition_video + list(range(row, row + video_rows))),
+        audio_indices=empty,
+        text_indices=empty,
+        num_condition_video_rows=len(condition_video),
+        num_condition_audio_rows=0,
+    )
+
+
+# text | reference 1 (audio, video) | reference 2 (audio, video) | target audio
+_PREFIX_RUNS = ((0, 5), (2, 3), (1, 4), (2, 3), (1, 4), (2, 6))
+
+
+def test_prefix_segments_from_layout():
+    layout = _synthetic_layout(_PREFIX_RUNS, (2, 2, 2))
+    assert prefix_segments_from_layout(layout, (2, 2, 2)) == (5, 3, 4, 3, 4, 6)
+
+
+def test_prefix_segments_from_layout_rejects_non_trailing_video(expect_error):
+    layout = _synthetic_layout(_PREFIX_RUNS, (2, 2, 2), trailing_rows=3)
+    with expect_error(ValueError, "is not the trailing"):
+        prefix_segments_from_layout(layout, (2, 2, 2))

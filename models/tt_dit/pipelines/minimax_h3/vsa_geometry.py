@@ -45,6 +45,7 @@ from dataclasses import dataclass
 import torch
 
 from ...utils.torch_threads import cap_torch_threads_to_half_the_cpus
+from .packing import MiniMaxH3PackedSequence
 
 VSA_TILE_SHAPE = (4, 4, 4)
 # math.prod(VSA_TILE_SHAPE); also the fine-stage block size.
@@ -202,6 +203,21 @@ class MiniMaxH3VSAGeometry:
         weights = torch.zeros(self.n_blocks, self.padded_len, dtype=torch.float64)
         weights[block[rows], rows] = 1.0 / self.valid_counts[block[rows]].to(torch.float64)
         return weights.to(dtype)
+
+
+def prefix_segments_from_layout(layout: MiniMaxH3PackedSequence, video_grid: tuple[int, int, int]) -> tuple[int, ...]:
+    """The 1D prefix segments before the generated video: one per run of a single modality in `layout.token_tags`.
+
+    The generated video must be the trailing `t*h*w` rows of the layout.
+    """
+    video_start = layout.sequence_length - video_grid[0] * video_grid[1] * video_grid[2]
+    target = layout.video_indices[layout.num_condition_video_rows :]
+    if video_start < 0 or not torch.equal(target, torch.arange(video_start, layout.sequence_length)):
+        raise ValueError(
+            f"the generated video {video_grid} is not the trailing {video_grid[0] * video_grid[1] * video_grid[2]} rows"
+        )
+    _, runs = torch.unique_consecutive(layout.token_tags[:video_start], return_counts=True)
+    return tuple(int(run) for run in runs)
 
 
 def vsa_min_padded_len(prefix_segments: tuple[int, ...], video_grid: tuple[int, int, int], sp_factor: int) -> int:

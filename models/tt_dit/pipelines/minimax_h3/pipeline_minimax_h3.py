@@ -148,7 +148,7 @@ from .policy import (
 )
 from .references import encode_references, prepare_references, reference_condition_shapes, split_condition_blocks
 from .scheduler import MiniMaxH3Scheduler
-from .vsa_geometry import MiniMaxH3VSAGeometry, build_vsa_geometry, vsa_min_padded_len
+from .vsa_geometry import MiniMaxH3VSAGeometry, build_vsa_geometry, prefix_segments_from_layout, vsa_min_padded_len
 from .weights_minimax_h3 import resolve_weights_dir
 
 # ImageNet statistics; the video VAE emits normalized RGB and the pipeline reverts it. Imported from
@@ -1865,12 +1865,7 @@ class MiniMaxH3Pipeline:
         so a chunk never mixes a reference's audio with its frames. The rung is the smallest that holds the tiles in
         whole 64-row blocks.
         """
-        video_start = layout.sequence_length - grid[0] * grid[1] * grid[2]
-        target = layout.video_indices[layout.num_condition_video_rows :]
-        if video_start < 0 or not torch.equal(target, torch.arange(video_start, layout.sequence_length)):
-            raise ValueError(f"the generated video {grid} is not the trailing {grid[0] * grid[1] * grid[2]} rows")
-        _, runs = torch.unique_consecutive(layout.token_tags[:video_start], return_counts=True)
-        segments = tuple(int(run) for run in runs)
+        segments = prefix_segments_from_layout(layout, grid)
         min_len = vsa_min_padded_len(segments, grid, self.sp_factor)
         rung = self._select_bucket(min_len) if self.bucket_denoise else self._padded_length(min_len)
         geometry = build_vsa_geometry(segments, grid, sp_factor=self.sp_factor, padded_len=rung)
