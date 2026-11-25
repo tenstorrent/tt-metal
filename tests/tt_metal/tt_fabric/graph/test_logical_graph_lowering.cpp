@@ -16,6 +16,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <tuple>
 
 #include <tt-metalium/cluster.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
@@ -948,11 +949,172 @@ TEST(FabricGraphInterDomain, PerimeterRouterShape) {
     EXPECT_TRUE(g.routers[*g.find_router("m0.c0.E.p0")].peer.has_value());
 }
 
-TEST(FabricGraphInterDomain, DeadLinkNoRouter) {
-    const auto [ports, g, rules] =
-        lower_with_perimeter({unused(0, 8, 7), unused(0, 9, 7, /*in_domain=*/false, /*trained=*/false)});
-    EXPECT_TRUE(g.find_router("m0.c0.N.p0").has_value());
+// ---------------------------------------------------------------- routing plane mismatch, scenario 1 (#65596)
+// More planes in the domain than live links to the peer domain: the down link's router stays and relays.
+
+UnusedLink down(uint32_t chip, chan_id_t chan, uint64_t peer) {
+    return unused(chip, chan, peer, /*in_domain=*/false, /*trained=*/false);
+}
+
+// chip 0's N side: one link per channel from 8, down where `up` is false
+std::vector<UnusedLink> chip0_north(const std::vector<bool>& up) {
+    std::vector<UnusedLink> links;
+    for (size_t i = 0; i < up.size(); ++i) {
+        const auto chan = static_cast<chan_id_t>(8 + i);
+        links.push_back(up[i] ? unused(0, chan, 7) : down(0, chan, 7));
+    }
+    return links;
+}
+
+using RelayKey = std::tuple<FabricNodeId, RoutingDirection, uint32_t>;
+RelayKey chip0_n(uint32_t plane) { return {FabricNodeId(MeshId{0}, 0), RoutingDirection::N, plane}; }
+
+std::map<RelayKey, uint32_t> relays_of(const std::vector<bool>& up) {
+    MeshGraph mesh_graph(kP300, metal_mgd("p300_mesh_graph_descriptor.textproto").string());
+    return relay_planes(
+        perimeter_ports(chip0_north(up), ports_from_mesh_graph(mesh_graph, {}), mesh_graph, Topology::Mesh));
+}
+
+TEST(FabricGraphRelay, DownPlanesRelayIntoLiveOnesInOrder) {
+    EXPECT_EQ(relays_of({true, false}), (std::map<RelayKey, uint32_t>{{chip0_n(1), 0}}));
+    EXPECT_EQ(relays_of({false, true}), (std::map<RelayKey, uint32_t>{{chip0_n(0), 1}}));
+    EXPECT_EQ(relays_of({false, true, false, true}), (std::map<RelayKey, uint32_t>{{chip0_n(0), 1}, {chip0_n(2), 3}}));
+    EXPECT_TRUE(relays_of({true, true, true, true}).empty());
+}
+
+TEST(FabricGraphRelay, MoreDownPlanesThanLiveChainToALiveOne) {
+    // one live link takes one relay; the others relay into the down routers before them
+    EXPECT_EQ(
+        relays_of({true, false, false, false}),
+        (std::map<RelayKey, uint32_t>{{chip0_n(1), 0}, {chip0_n(2), 1}, {chip0_n(3), 2}}));
+    EXPECT_EQ(
+        relays_of({false, false, true, false}),
+        (std::map<RelayKey, uint32_t>{{chip0_n(0), 2}, {chip0_n(1), 0}, {chip0_n(3), 1}}));
+}
+
+TEST(FabricGraphRelay, SideWithNoLiveLinkHasNoRouters) {
+    EXPECT_TRUE(relays_of({false, false}).empty());
+    const auto [ports, g, rules] = lower_with_perimeter(chip0_north({false, false}));
+    EXPECT_FALSE(g.find_router("m0.c0.N.p0").has_value());
     EXPECT_FALSE(g.find_router("m0.c0.N.p1").has_value());
+}
+
+// The relay edges out of `router`: (its sender, the relay sender it feeds)
+std::vector<std::pair<ChannelIndex, ChannelIndex>> relays_from(const LogicalGraph& g, const std::string& router) {
+    const auto r = *g.find_router(router);
+    std::vector<std::pair<ChannelIndex, ChannelIndex>> out;
+    for (const auto& e : g.edges) {
+        if (g.channels[e.from].router == r && g.channels[e.from].kind == ChannelKind::Sender &&
+            e.transport == Transport::Noc) {
+            out.emplace_back(e.from, e.to);
+        }
+    }
+    return out;
+}
+
+// Whether any sender of `router` has a link edge
+bool sends_on_its_link(const LogicalGraph& g, const std::string& router) {
+    const auto r = *g.find_router(router);
+    return std::any_of(g.edges.begin(), g.edges.end(), [&](const LogicalEdge& e) {
+        return g.channels[e.from].router == r && e.transport != Transport::Noc;
+    });
+}
+
+TEST(FabricGraphRelay, DownLinkRouterRelaysEverySender) {
+    const auto [ports, g, rules] = lower_with_perimeter({unused(0, 8, 7), down(0, 9, 7)});
+    const auto live = *g.find_router("m0.c0.N.p0");
+    const auto relaying = g.find_router("m0.c0.N.p1");
+    ASSERT_TRUE(relaying.has_value()) << "the down link's router stays";
+    EXPECT_EQ(g.routers[*relaying].port.relay_plane, std::optional<uint32_t>{0});
+    EXPECT_FALSE(g.routers[live].port.relay_plane.has_value());
+    // its plane still lands here: the domain's turns into it are the live router's
+    EXPECT_EQ(forwarding(g, "m0.c0.N.p1"), (Names{"E"}));
+    EXPECT_FALSE(sends_on_its_link(g, "m0.c0.N.p1"));
+    EXPECT_TRUE(sends_on_its_link(g, "m0.c0.N.p0"));
+    const auto relays = relays_from(g, "m0.c0.N.p1");
+    EXPECT_EQ(relays.size(), g.channels_of(*relaying, ChannelKind::Sender).size());
+    for (const auto& [from, to] : relays) {
+        const auto& relay = g.channels[to];
+        EXPECT_EQ(relay.router, live);
+        EXPECT_EQ(relay.vc, 0u);
+        EXPECT_FALSE(relay.injection);
+        EXPECT_TRUE(is_relay_sender(g, relay));
+    }
+    // the live router sends its relay sender over its link, with the rest
+    EXPECT_EQ(forwarding(g, "m0.c0.N.p0"), (Names{"E", "N"}));
+    EXPECT_TRUE(relays_from(g, "m0.c0.N.p0").empty());
+}
+
+TEST(FabricGraphRelay, ChainEndsAtTheLiveLink) {
+    const auto [ports, g, rules] = lower_with_perimeter(chip0_north({true, false, false}));
+    const auto p0 = *g.find_router("m0.c0.N.p0");
+    const auto p1 = *g.find_router("m0.c0.N.p1");
+    for (const auto& [from, to] : relays_from(g, "m0.c0.N.p2")) {
+        EXPECT_EQ(g.channels[to].router, p1);
+    }
+    // p1 relays its own senders and the relay sender p2 feeds
+    const auto p1_relays = relays_from(g, "m0.c0.N.p1");
+    EXPECT_EQ(p1_relays.size(), g.channels_of(p1, ChannelKind::Sender).size());
+    bool relays_its_relay_sender = false;
+    for (const auto& [from, to] : p1_relays) {
+        EXPECT_EQ(g.channels[to].router, p0);
+        relays_its_relay_sender |= is_relay_sender(g, g.channels[from]);
+    }
+    EXPECT_TRUE(relays_its_relay_sender);
+}
+
+TEST(FabricGraphRelay, RelaySenderTakesTheSlotPastTheWidestVc0) {
+    const auto cg = lower_to_channels(lower_with_perimeter({unused(0, 8, 7), down(0, 9, 7)}).graph, Topology::Mesh);
+    EXPECT_EQ(index_of(cg, "m0.c0.N.p0", 0, "N"), builder_config::inter_domain_relay_sender_channel);
+    EXPECT_EQ(
+        cg.sender_counts[*cg.logical.find_router("m0.c0.N.p0")][0],
+        builder_config::num_sender_channels_2d_vc0_inter_domain);
+    EXPECT_EQ(index_of(cg, "m0.c0.N.p1", 0, "worker"), 0u);
+}
+
+TEST(FabricGraphRelay, ValidationRejectsARelayOffItsSide) {
+    auto [ports, g, rules] = lower_with_perimeter({unused(0, 8, 7), down(0, 9, 7), unused(1, 8, 9)});
+    EXPECT_TRUE(find_problems(g, *rules, ValidationLimits{}).empty());
+    // point one relay edge at chip 1's router instead
+    const auto other = *g.find_router("m0.c1.N.p0");
+    const auto worker = g.channels_of(other, ChannelKind::Sender).front();
+    for (auto& e : g.edges) {
+        if (g.channels[e.from].kind == ChannelKind::Sender && e.transport == Transport::Noc) {
+            e.to = worker;
+            break;
+        }
+    }
+    EXPECT_FALSE(find_problems(g, *rules, ValidationLimits{}).empty());
+}
+
+TEST(FabricGraphRelay, ValidationRejectsALiveRouterThatRelays) {
+    auto [ports, g, rules] = lower_with_perimeter({unused(0, 8, 7), down(0, 9, 7)});
+    g.routers[*g.find_router("m0.c0.N.p1")].port.relay_plane.reset();
+    EXPECT_FALSE(find_problems(g, *rules, ValidationLimits{}).empty());
+}
+
+TEST(FabricGraphRelay, ValidationRejectsARelayCycle) {
+    auto [ports, g, rules] = lower_with_perimeter(chip0_north({true, false, false}));
+    EXPECT_TRUE(find_problems(g, *rules, ValidationLimits{}).empty());
+    // p1 relays into p2 and p2 into p1: no live link at the end
+    g.routers[*g.find_router("m0.c0.N.p1")].port.relay_plane = 2;
+    const auto problems = find_problems(g, *rules, ValidationLimits{});
+    EXPECT_TRUE(std::any_of(problems.begin(), problems.end(), [](const std::string& p) {
+        return p.find("does not end at a live link") != std::string::npos;
+    }));
+}
+
+TEST(FabricGraphRelay, ValidationRejectsADownRouterOnItsLink) {
+    auto [ports, g, rules] = lower_with_perimeter({unused(0, 8, 7), down(0, 9, 7)});
+    const auto p1 = *g.find_router("m0.c0.N.p1");
+    for (auto& e : g.edges) {
+        if (g.channels[e.from].router == p1 && g.channels[e.from].kind == ChannelKind::Sender) {
+            e.to = *g.receiver(p1, 2);
+            e.transport = Transport::Dynamic;
+            break;
+        }
+    }
+    EXPECT_FALSE(find_problems(g, *rules, ValidationLimits{}).empty());
 }
 
 TEST(FabricGraphInterDomain, DeadFirstPlaneLeavesPairingsAlone) {

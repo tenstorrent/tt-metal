@@ -7,6 +7,8 @@
 #include "logical_graph_lowering.hpp"
 
 #include <map>
+#include <set>
+#include <tuple>
 #include <utility>
 
 #include <tt_stl/assert.hpp>
@@ -23,11 +25,46 @@ std::vector<std::string> find_problems(
 
     std::vector<std::vector<const LogicalEdge*>> link_out(g.channels.size());
     std::vector<bool> noc_fed(g.channels.size(), false);
+    std::vector<size_t> relays_out(g.channels.size(), 0);
+    std::map<ChannelIndex, std::set<RouterIndex>> relayed_by;  // relay sender -> the routers relaying into it
     for (const auto& e : g.edges) {
         if (e.transport == Transport::Noc) {
             noc_fed[e.to] = true;
+            if (g.channels[e.from].kind == ChannelKind::Sender) {
+                ++relays_out[e.from];
+                relayed_by[e.to].insert(g.channels[e.from].router);
+            }
         } else {
             link_out[e.from].push_back(&e);
+        }
+    }
+    // every relay chain ends at a router whose link is up
+    {
+        std::map<std::tuple<FabricNodeId, PortDirection, uint32_t>, RouterIndex> by_key;
+        for (RouterIndex r = 0; r < g.routers.size(); ++r) {
+            const auto& p = g.routers[r].port;
+            by_key.emplace(std::tuple{p.node, p.direction, p.plane}, r);
+        }
+        for (RouterIndex r = 0; r < g.routers.size(); ++r) {
+            RouterIndex at = r;
+            size_t hops = 0;
+            while (g.routers[at].port.relay_plane && hops <= g.routers.size()) {
+                const auto& p = g.routers[at].port;
+                const auto it = by_key.find({p.node, p.direction, *p.relay_plane});
+                if (it == by_key.end()) {
+                    break;
+                }
+                at = it->second;
+                ++hops;
+            }
+            if (g.routers[at].port.relay_plane) {
+                problems.push_back(g.routers[r].id + ": relay chain does not end at a live link");
+            }
+        }
+    }
+    for (const auto& [relay, routers] : relayed_by) {
+        if (routers.size() != 1) {
+            problems.push_back(where(relay) + ": relayed into by " + std::to_string(routers.size()) + " routers");
         }
     }
 
@@ -41,6 +78,21 @@ std::vector<std::string> find_problems(
             continue;
         }
         ++senders;
+        if (!ch.injection && !noc_fed[c]) {
+            problems.push_back(where(c) + ": forwarding sender with no inbound noc edge");
+        }
+        if (router.port.relay_plane) {
+            if (!link_out[c].empty()) {
+                problems.push_back(where(c) + ": relaying sender with a link edge");
+            }
+            if (relays_out[c] != 1) {
+                problems.push_back(where(c) + ": expected one relay edge, found " + std::to_string(relays_out[c]));
+            }
+            continue;
+        }
+        if (relays_out[c] != 0) {
+            problems.push_back(where(c) + ": relay edge from a router whose link is up");
+        }
         const bool perimeter = router.port.capability == EdgeCapability::INTERDOMAIN;
         const Transport link = perimeter ? Transport::Dynamic : Transport::Eth;
         size_t links = 0;
@@ -61,9 +113,6 @@ std::vector<std::string> find_problems(
         if (links != 1) {
             problems.push_back(where(c) + ": expected one link edge, found " + std::to_string(links));
         }
-        if (!ch.injection && !noc_fed[c]) {
-            problems.push_back(where(c) + ": forwarding sender with no inbound noc edge");
-        }
     }
 
     for (const auto& e : g.edges) {
@@ -75,6 +124,16 @@ std::vector<std::string> find_problems(
         const auto& up = g.routers[from.router].port;
         const auto& down = g.routers[to.router].port;
         const std::string what = where(e.from) + " -> " + where(e.to);
+        if (from.kind == ChannelKind::Sender && up.relay_plane) {
+            // a relay: from a down perimeter router into the relay sender of its side's router on its relay plane
+            if (down.capability != EdgeCapability::INTERDOMAIN || up.node != down.node ||
+                up.direction != down.direction || down.plane != *up.relay_plane || to.kind != ChannelKind::Sender ||
+                to.vc != 0 || to.injection || !is_relay_sender(g, to)) {
+                problems.push_back(
+                    what + ": relay edge that does not reach its side's relay sender on its relay plane");
+            }
+            continue;
+        }
         if (from.kind != ChannelKind::Receiver || to.kind != ChannelKind::Sender) {
             problems.push_back(what + ": noc edge must run receiver -> sender");
         } else if (to.injection || to.from != up.direction) {

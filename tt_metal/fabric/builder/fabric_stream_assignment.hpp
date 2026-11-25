@@ -74,7 +74,7 @@ struct StreamRegAssignments {
 // good as this mirror. Keep the two sides in step; the kernel header names this file as its
 // counterpart.
 constexpr uint32_t num_receiver_pkts_sent_names = 3;            // TO_RECEIVER_{0,1,2}_PKTS_SENT_ID
-constexpr uint32_t num_pkts_acked_names = 5;                    // TO_SENDER_{0..4}_PKTS_ACKED_ID
+constexpr uint32_t num_pkts_acked_names = 6;                    // TO_SENDER_{0..5}_PKTS_ACKED_ID
 constexpr uint32_t num_pkts_completed_names = 9;                // TO_SENDER_{0..8}_PKTS_COMPLETED_ID
 constexpr uint32_t num_downstream_free_slots_names_per_vc = 4;  // VC{0,1}_..._EDGE_{1..4}
 // Sender free slots: builder_config::num_max_sender_channels is already the kernel's extent.

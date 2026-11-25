@@ -21,6 +21,11 @@ std::string channel_name(const LogicalChannel& channel) {
     return channel.from ? std::string(enchantum::to_string(**channel.from)) : "worker";
 }
 
+bool is_relay_sender(const LogicalGraph& graph, const LogicalChannel& channel) {
+    return channel.kind == ChannelKind::Sender && channel.from.has_value() &&
+           *channel.from == graph.routers.at(channel.router).port.direction;
+}
+
 std::optional<RouterIndex> LogicalGraph::find_router(std::string_view id) const {
     for (RouterIndex r = 0; r < routers.size(); ++r) {
         if (routers[r].id == id) {

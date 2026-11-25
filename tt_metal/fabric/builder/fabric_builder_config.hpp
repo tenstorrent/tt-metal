@@ -59,6 +59,11 @@ static constexpr std::size_t num_sender_channels_2d_mesh = 4;
 // Wider family counts are derived from the wiring rules. Express and Z-boundary families both
 // reach 5 VC0 / 4 VC1 senders through different wiring.
 
+// An inter-domain router's relay sender (VC0), which takes what a same-side router whose link is down relays: past
+// the widest VC0 (the worker and four directions), so an inter-domain fabric's VC0 is one wider.
+static constexpr std::size_t inter_domain_relay_sender_channel = 5;
+static constexpr std::size_t num_sender_channels_2d_vc0_inter_domain = inter_domain_relay_sender_channel + 1;
+
 // VC2: 1 sender channel (worker-type, neighbour exchange) + 1 receiver (non-Z only)
 static constexpr std::size_t num_sender_channels_vc2 = 1;
 static constexpr std::size_t num_receiver_channels_vc2 = 1;

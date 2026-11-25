@@ -10,6 +10,8 @@
 #include "tt_metal/fabric/channel_trimming_import.hpp"
 #include "tt_metal/fabric/channel_trimming_io.hpp"
 #include "tt_metal/fabric/channel_trimming_report.hpp"
+#include "tt_metal/fabric/graph/fabric_graph_inputs.hpp"
+#include "tt_metal/fabric/graph/graph_fabric_build_session.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "tt_metal/llrt/hal.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
@@ -154,6 +156,16 @@ void FabricBuilderContext::compute_max_channel_counts() {
             max_receiver_channels_per_vc_[vc] =
                 std::max(max_receiver_channels_per_vc_[vc], static_cast<std::size_t>(shape.receiver_counts[vc]));
         }
+    }
+
+    // An inter-domain router whose side has a link down takes the down router's relay on one more VC0 sender. Only
+    // where some router relays: the fabric's VC0 width sizes every router's VC0 slots. Not with VC1: the sender names
+    // would run out (the graph builder rejects a relay there).
+    if (fabric_context_.get_rtoptions().get_fabric_inter_domain() && !intermesh_vc_config_.requires_vc1 &&
+        is_2D_topology(fabric_context_.get_fabric_topology()) &&
+        !graph::relay_planes(graph::fabric_perimeter(fabric_context_, intermesh_vc_config_.vc2_forwards)).empty()) {
+        max_sender_channels_per_vc_[0] =
+            std::max(max_sender_channels_per_vc_[0], builder_config::num_sender_channels_2d_vc0_inter_domain);
     }
 }
 

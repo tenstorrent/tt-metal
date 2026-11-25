@@ -91,6 +91,12 @@ public:
     void connect_to_downstream_channel(ComputeMeshRouterBuilder& downstream, uint32_t vc, uint32_t channel);
 
     /**
+     * This inter-domain router's link is down: relay everything it sends into `target`'s VC0 sender
+     * channel `channel` (a same-side router on another plane) over the NoC.
+     */
+    void connect_inter_domain_relay(ComputeMeshRouterBuilder& target, uint32_t channel);
+
+    /**
      * Settings two routers on one chip share for their link pairing: the NoC VC both use, and the
      * core placement for link `link_idx` of `num_links`.
      */

@@ -30,6 +30,8 @@ struct Port {
     uint32_t plane = 0;
     FabricNodeId peer{MeshId{0}, 0};
     EdgeCapability capability = EdgeCapability::INTRAMESH_CARDINAL;
+    // perimeter port whose link is down: its router relays all it sends to this side's router on relay_plane
+    std::optional<uint32_t> relay_plane;
 };
 
 struct Vc {
@@ -102,7 +104,11 @@ struct LogicalGraph {
 // "m<mesh>.c<chip>.<direction>.p<plane>"
 std::string router_id(const FabricNodeId& node, PortDirection direction, uint32_t plane);
 
-// "rx", "worker", or the direction its traffic came in on
+// "rx", "worker", or the direction its traffic came in on (a relay sender: its own)
 std::string channel_name(const LogicalChannel& channel);
+
+// A perimeter router's relay sender: it takes what a same-side router on another plane relays, so its traffic comes
+// in from the router's own side.
+bool is_relay_sender(const LogicalGraph& graph, const LogicalChannel& channel);
 
 }  // namespace tt::tt_fabric::graph

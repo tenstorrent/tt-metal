@@ -5,6 +5,7 @@
 #include "graph_fabric_builder.hpp"
 
 #include <algorithm>
+#include <set>
 
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/assert.hpp>
@@ -194,12 +195,20 @@ void GraphFabricBuilder::connect_routers() {
         on_chip_.size(),
         routers_.size());
     const auto& g = graph_.logical;
+    std::set<RouterIndex> relaying;  // one relay connection per router, whatever its senders
     for (const auto& e : g.edges) {
         const RouterIndex up = g.channels[e.from].router;
         const RouterIndex down = g.channels[e.to].router;
-        if (e.transport == Transport::Noc && g.routers[up].port.node == local_node_) {
-            builder_of(up).connect_to_downstream_channel(builder_of(down), g.channels[e.to].vc, graph_.index_in_vc[e.to]);
+        if (e.transport != Transport::Noc || g.routers[up].port.node != local_node_) {
+            continue;
         }
+        if (g.channels[e.from].kind == ChannelKind::Sender) {
+            if (relaying.insert(up).second) {
+                builder_of(up).connect_inter_domain_relay(builder_of(down), graph_.index_in_vc[e.to]);
+            }
+            continue;
+        }
+        builder_of(up).connect_to_downstream_channel(builder_of(down), g.channels[e.to].vc, graph_.index_in_vc[e.to]);
     }
     for (const auto& link : graph_.links) {
         if (g.routers[link.a].port.node == local_node_) {

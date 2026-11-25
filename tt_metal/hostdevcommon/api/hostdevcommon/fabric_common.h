@@ -1135,6 +1135,8 @@ enum class InterDomainState : std::uint32_t {
     SERVICE_TRAFFIC = 5,
     DISCONNECT = 6,
     WAIT_PEER_MARKER = 7,
+    // the link is down: the router relays all it sends through a same-side router on another plane, for its lifetime
+    RELAY = 8,
 };
 
 struct InterDomainRouterControl {

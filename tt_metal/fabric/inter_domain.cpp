@@ -143,7 +143,13 @@ void connect_inter_domain(
         "inter-domain: {} eth channel {} has no router ({}), can't connect over it",
         port.node,
         port.eth_chan,
-        port.link_trained ? "Z isn't supported yet" : "the link never trained");
+        port.link_trained ? "Z isn't supported yet"
+                          : "its link is down, with no live link on its side to relay through");
+    TT_FATAL(
+        port.link_trained,
+        "inter-domain: {} eth channel {}'s link is down: its router relays through another plane's, connect that one",
+        port.node,
+        port.eth_chan);
     TT_FATAL(
         peer.layout_fingerprint == layout_fingerprint(port),
         "inter-domain: {} eth channel {}: domain {}'s router L1 layout differs from this one's",
@@ -188,6 +194,11 @@ void connect_inter_domain(
 }
 
 void disconnect_inter_domain(const InterDomainPort& port, bool force, std::chrono::milliseconds timeout) {
+    TT_FATAL(
+        port.has_router && port.link_trained,
+        "inter-domain: {} eth channel {} has no connectable router (its link is down or it has none)",
+        port.node,
+        port.eth_chan);
     auto drained = [](const InterDomainRouterControl& c) {
         return c.command == InterDomainCommand::NONE && c.state == InterDomainState::DRAIN;
     };

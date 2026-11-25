@@ -175,6 +175,7 @@ and `router/router_receiver.hpp`.
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/router/router_inter_domain.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/router/router_inter_domain_relay.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/router/router_single_erisc.hpp"
@@ -221,6 +222,10 @@ void kernel_main() {
     if constexpr (is_sender_role) {
         sender::set_up_channels(args.connection_semaphores);
     }
+    [[maybe_unused]] relay::Target relay_target;
+    if constexpr (is_inter_domain_relay && is_sender_role) {
+        relay::init(relay_target, args.inter_domain_relay);
+    }
     finish_phase<Phase::SETUP_DONE>();
 
     // Phase: handshakes.
@@ -233,6 +238,9 @@ void kernel_main() {
     // Phase: downstream connections, then the forwards' command buffers.
     if constexpr (is_receiver_role) {
         receiver::open_connections(args);
+    }
+    if constexpr (is_inter_domain_relay && is_sender_role) {
+        relay::open(args.inter_domain_relay);
     }
     finish_phase<Phase::DOWNSTREAMS_OPEN>();
     if constexpr (is_receiver_role) {
@@ -252,7 +260,17 @@ void kernel_main() {
         router_state()->state = RouterState::INITIALIZING;
     }
 
-    if constexpr (is_inter_domain_router) {
+    if constexpr (is_inter_domain_relay) {
+        // its link is down: it relays for its lifetime and never connects
+        if constexpr (is_teardown_master) {
+            set_inter_domain_state(InterDomainState::RELAY);
+        }
+        if constexpr (is_sender_role) {
+            relay::run(relay_target);
+        } else {
+            relay::run_idle();
+        }
+    } else if constexpr (is_inter_domain_router) {
         run_inter_domain(args, [&] { run_loop(downstreams); });
     } else {
         run_loop(downstreams);

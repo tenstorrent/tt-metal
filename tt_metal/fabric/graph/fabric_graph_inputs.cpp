@@ -239,19 +239,52 @@ std::vector<PerimeterPort> perimeter_ports(
     return out;
 }
 
+std::map<std::tuple<FabricNodeId, RoutingDirection, uint32_t>, uint32_t> relay_planes(
+    const std::vector<PerimeterPort>& perimeter) {
+    std::map<std::pair<FabricNodeId, RoutingDirection>, std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> sides;
+    for (const auto& p : perimeter) {
+        auto& [live, dead] = sides[{p.node, *p.direction}];
+        (p.link_trained ? live : dead).push_back(p.plane);
+    }
+    std::map<std::tuple<FabricNodeId, RoutingDirection, uint32_t>, uint32_t> relays;
+    for (auto& [side, planes] : sides) {
+        auto& [live, dead] = planes;
+        if (live.empty()) {
+            continue;
+        }
+        std::sort(live.begin(), live.end());
+        std::sort(dead.begin(), dead.end());
+        // one relay into each router: the first dead planes into the live ones, the rest down the chain
+        for (size_t k = 0; k < dead.size(); ++k) {
+            relays[{side.first, side.second, dead[k]}] = k < live.size() ? live[k] : dead[k - live.size()];
+        }
+    }
+    return relays;
+}
+
 std::vector<Port> ports_from_perimeter(const std::vector<PerimeterPort>& perimeter) {
+    const auto relays = relay_planes(perimeter);
     std::vector<Port> ports;
     for (const auto& p : perimeter) {
-        // no router on a dead link yet, so its plane is a gap (#65596)
-        if (!p.link_trained || *p.direction == RoutingDirection::Z) {
+        if (*p.direction == RoutingDirection::Z) {
             continue;
+        }
+        std::optional<uint32_t> relay_plane;
+        if (!p.link_trained) {
+            const auto it = relays.find({p.node, *p.direction, p.plane});
+            if (it == relays.end()) {
+                // no live link on this side to relay through, so its plane is a gap
+                continue;
+            }
+            relay_plane = it->second;
         }
         ports.push_back(Port{
             .node = p.node,
             .direction = p.direction,
             .plane = p.plane,
             .peer = p.node,
-            .capability = EdgeCapability::INTERDOMAIN});
+            .capability = EdgeCapability::INTERDOMAIN,
+            .relay_plane = relay_plane});
     }
     return ports;
 }

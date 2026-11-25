@@ -43,6 +43,10 @@ uint32_t stock_channel_index(const LogicalGraph& g, ChannelIndex c, Topology top
     if (ch.injection) {
         return get_worker_connected_sender_channel();
     }
+    if (is_relay_sender(g, ch)) {
+        TT_FATAL(ch.vc == 0, "fabric graph: relay sender on vc{}", ch.vc);
+        return builder_config::inter_domain_relay_sender_channel;
+    }
     return builder::get_downstream_sender_channel_for_vc(
         is_2D_topology(topology),
         ch.vc,
@@ -145,9 +149,13 @@ void mark_ring_entries(ChannelGraph& cg, const WiringOptions& options, const Rin
         };
         for (ChannelIndex c : g.channels_of(r, ChannelKind::Sender)) {
             const auto& ch = g.channels[c];
-            cg.enters_ring[c] = enters_ring(
-                ch.vc,
-                ch.injection ? std::nullopt : std::optional{builder::routing_direction_to_eth_direction(**ch.from)});
+            // a relay comes off a perimeter router, never a ring
+            cg.enters_ring[c] =
+                !is_relay_sender(g, ch) &&
+                enters_ring(
+                    ch.vc,
+                    ch.injection ? std::nullopt
+                                 : std::optional{builder::routing_direction_to_eth_direction(**ch.from)});
         }
         // a legacy slot takes the producer stock names for it
         const builder::RouterProducerSlots stock_slots(facing, counts_of(cg, r));

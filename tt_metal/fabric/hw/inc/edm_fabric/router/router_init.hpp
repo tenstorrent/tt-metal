@@ -239,6 +239,18 @@ struct VcDownstreamArgs {
     std::array<uint32_t, N> location_info;
 };
 
+// An inter-domain router whose link is down: the relay sender it relays into (erisc_datamover_builder.cpp, after the
+// UDM block): its first slot, its router's NoC coordinate, connection handshake word and location-info block, and the
+// word on this router that is the connection's teardown word (never closed: the relay lasts the router's lifetime).
+struct InterDomainRelayArgs {
+    uint32_t first_slot_addr;
+    uint32_t noc_x;
+    uint32_t noc_y;
+    uint32_t registration;
+    uint32_t location_info;
+    uint32_t teardown_word;
+};
+
 struct RuntimeArgs {
     std::array<size_t, MAX_NUM_SENDER_CHANNELS> connection_semaphores;
     std::array<size_t, MAX_NUM_SENDER_CHANNELS> producer_cursors;
@@ -247,6 +259,7 @@ struct RuntimeArgs {
     VcDownstreamArgs<NUM_DOWNSTREAM_SENDERS_VC2> vc2_args;
     std::array<size_t, MAX_NUM_SENDER_CHANNELS> teardown_sems;
     [[no_unique_address]] std::conditional_t<udm_mode, RelayArgs, NoRelayArgs> relay;
+    InterDomainRelayArgs inter_domain_relay{};  // read on a relaying router only
 
     DownstreamArgs vc0() const { return of(vc0_args, 0); }
     DownstreamArgs vc1() const { return of(vc1_args, NUM_DOWNSTREAM_SENDERS_VC0); }
@@ -329,6 +342,18 @@ __attribute__((noinline)) void read_runtime_args(RuntimeArgs& a) {
         v = get_arg_val<uint32_t>(i++);
     }
     read_relay_args(a.relay, i);
+    if constexpr (is_inter_domain_relay) {
+        if constexpr (!udm_mode) {
+            i++;  // the UDM block's "no relay" flag, which only a UDM router reads
+        }
+        auto& r = a.inter_domain_relay;
+        r.first_slot_addr = get_arg_val<uint32_t>(i++);
+        r.noc_x = get_arg_val<uint32_t>(i++);
+        r.noc_y = get_arg_val<uint32_t>(i++);
+        r.registration = get_arg_val<uint32_t>(i++);
+        r.location_info = get_arg_val<uint32_t>(i++);
+        r.teardown_word = get_arg_val<uint32_t>(i++);
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------------------

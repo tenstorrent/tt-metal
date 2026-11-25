@@ -6,6 +6,7 @@
 
 #include <map>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
@@ -49,6 +50,13 @@ std::vector<PerimeterPort> perimeter_ports(
     const MeshGraph& mesh_graph,
     Topology topology);
 
+// Each down perimeter link's relay plane, (node, direction, plane) -> plane: on each side, the down planes in order
+// relay into the live ones in order, and once each live one takes a relay, into the down ones that relay before them
+// (a chain that ends at a live link). A side with no live link has none.
+std::map<std::tuple<FabricNodeId, RoutingDirection, uint32_t>, uint32_t> relay_planes(
+    const std::vector<PerimeterPort>& perimeter);
+
+// A port for each perimeter link, live or relaying (Z excluded).
 std::vector<Port> ports_from_perimeter(const std::vector<PerimeterPort>& perimeter);
 
 // A port the control plane does not know, and its eth channel.
