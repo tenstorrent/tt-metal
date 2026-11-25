@@ -23,6 +23,8 @@ Select it with ``PREFILL_MODEL=kimi_k3_1``.
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import Callable
 
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
@@ -50,11 +52,25 @@ class KimiK31Adapter(KimiK3Adapter):
 
     # Kimi-K3-DSpark was trained against K3, not K3.1.
     supports_dflash = False
-    # K3's packed forward has no indexer path (the DSA layers' index cache and top-k), so K3.1 runs one chunk per
-    # forward.
-    supports_packed_forward = False
+    # Packed forwards (K3's supports_packed_forward, inherited). Each DSA layer runs its own indexer per chunk
+    # (index-key write and top-k against that chunk's slot and prefix) inside TtKimiK3Block.forward_packed. No
+    # top-k crosses a layer or a pipeline boundary (passes_indexer_indices is False), so PP4 needs no
+    # supports_packed_forward_indexer_indices.
+    # Traced, with each chunk's layers acked over D2H: driven through the runner on two pipeline ranks by
+    # kimi_k3_1_packed.json (run_multirank_pcc.sh kimi_k3_1 sc1 --variant packed).
+    supports_packed_forward_trace = True
+    supports_packed_forward_d2h_acks = True
     # The DSA layers' sparse-MLA CCLs need more than K3's L1_SMALL (see KimiK31Config.L1_SMALL_SIZE).
     l1_small_size = KimiK31Config.L1_SMALL_SIZE
+
+    def moe_block_checkpoint(self) -> Path:
+        """$KIMI_K31_HF_MODEL (env_var), else the prefill runner's $PREFILL_HF_MODEL, else hf_model_default."""
+        return Path(os.environ.get(self.env_var) or os.environ.get("PREFILL_HF_MODEL") or self.hf_model_default)
+
+    def moe_block_routed_cache(self, mesh_shape: tuple, sp_axis: int = 0):
+        """None: K3.1's callers give its TtMoe cache as cache_path."""
+        return None
+
     dflash_model_default = ""
     dflash_golden_default = ""
 

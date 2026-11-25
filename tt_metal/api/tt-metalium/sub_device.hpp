@@ -1,39 +1,15 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <memory>
+// DEPRECATED-FORWARDING-HEADER: <tt-metalium/sub_device.hpp> moved to <tt-metalium/mesh/sub_device.hpp>.
+// This forwarding header will be removed after 2027-03-05.
+#ifndef TT_METALIUM_SUPPRESS_DEPRECATED_HEADER_WARNINGS
+// NOLINTNEXTLINE(clang-diagnostic-#warnings,clang-diagnostic-#pragma-messages)
+#warning \
+    "<tt-metalium/sub_device.hpp> is deprecated and will be removed after 2027-03-05; include <tt-metalium/mesh/sub_device.hpp> instead (define TT_METALIUM_SUPPRESS_DEPRECATED_HEADER_WARNINGS to silence this message)"
+#endif
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt_stl/span.hpp>
-
-namespace tt::tt_metal {
-
-// Forward declaration
-class SubDeviceImpl;
-
-// TODO(river): Revisit this class and either remove it or bring sub-device APIs over
-
-class SubDevice {
-public:
-    explicit SubDevice(ttsl::Span<const CoreRangeSet> cores);
-    // Internal constructor (internal use only)
-    SubDevice(SubDeviceImpl&& impl);
-
-    // Special member functions
-    SubDevice(const SubDevice& other);
-    SubDevice& operator=(const SubDevice& other);
-    SubDevice(SubDevice&& other) noexcept;
-    SubDevice& operator=(SubDevice&& other) noexcept;
-    ~SubDevice();
-
-    SubDeviceImpl* impl();
-    const SubDeviceImpl* impl() const;
-
-private:
-    std::unique_ptr<SubDeviceImpl> pimpl_;
-};
-
-}  // namespace tt::tt_metal
+#include <tt-metalium/mesh/sub_device.hpp>  // IWYU pragma: export

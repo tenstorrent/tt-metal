@@ -11,17 +11,17 @@
 #include <future>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
 #include "blockfloat_common.hpp"
 #include "bfp_tile_encode.hpp"
 #include "common/executor.hpp"
-#include "constants.hpp"
-#include <tt-metalium/hal_types.hpp>
+#include "tt-metalium/data_formats/tile_constants.hpp"
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include "impl/context/metal_context.hpp"
-#include "math.hpp"
-#include "tile.hpp"
+#include "tt-metalium/utils/math.hpp"
+#include "tt-metalium/data_formats/tile.hpp"
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 
 namespace {
 

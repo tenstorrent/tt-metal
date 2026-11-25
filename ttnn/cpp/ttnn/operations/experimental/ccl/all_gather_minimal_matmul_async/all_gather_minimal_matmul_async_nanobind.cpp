@@ -15,7 +15,7 @@
 #include "all_gather_minimal_matmul_async.hpp"
 #include "ttnn-nanobind/decorators.hpp"
 #include "ttnn/types.hpp"
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 
 namespace ttnn::operations::experimental::ccl {
 

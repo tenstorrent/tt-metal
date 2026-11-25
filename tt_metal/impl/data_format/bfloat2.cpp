@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cmath>
-#include <tt-metalium/bfloat2.hpp>
-#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/data_formats/bfloat2.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
 #include <tt_stl/span.hpp>
 #include <array>
 #include <vector>
@@ -12,13 +12,13 @@
 
 #include <tt_stl/assert.hpp>
 #include "blockfloat_common.hpp"
-#include "constants.hpp"
-#include <tt-metalium/hal_types.hpp>
+#include "tt-metalium/data_formats/tile_constants.hpp"
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include "impl/context/metal_context.hpp"
-#include "math.hpp"
-#include "tile.hpp"
+#include "tt-metalium/utils/math.hpp"
+#include "tt-metalium/data_formats/tile.hpp"
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 
 template <typename T>
 std::vector<uint32_t> pack_as_bfp2_tiles(

@@ -203,8 +203,16 @@ class TT_CCL:
         # ready/data_valid pair for MLA's TP high_bw_all_gather calls; see get_mla_high_bw_gather_semaphores.
         self.mla_high_bw_gather_semaphores = None
 
-    def get_fused_rmsnorm_resources(self, x, weight, cluster_axis, num_links):
-        resources = self._fused_rmsnorm_entry(x, weight, cluster_axis, num_links)
+    def get_fused_rmsnorm_resources(self, x, weight, cluster_axis, num_links, memo=None):
+        """The next (semaphores, stats) pair for this input. A caller that always passes the same axis and links can
+        pass a memo ([None, None, None], kept by the caller): its entry is then reused while x's spec and the weight
+        object are unchanged, which skips building the lookup key (~5 us) on every call."""
+        if memo is not None and memo[2] is weight and x.spec == memo[0]:
+            resources = memo[1]
+        else:
+            resources = self._fused_rmsnorm_entry(x, weight, cluster_axis, num_links)
+            if memo is not None:
+                memo[0], memo[1], memo[2] = x.spec, resources, weight
         index = resources["next"]
         resources["next"] = 1 - index
         return resources["pairs"][index]
@@ -841,25 +849,51 @@ def get_num_links(mesh_device: ttnn.MeshDevice, cluster_axis: int | None = None)
     return min(device_links)
 
 
+def _fabric_wraps_axis(fabric_config, cluster_axis: int) -> bool:
+    """Whether `fabric_config` closes mesh axis `cluster_axis` into a ring (axis 0 is Y, axis 1 is X)."""
+    wrapped = {
+        ttnn.FabricConfig.FABRIC_2D_TORUS_X: (1,),
+        ttnn.FabricConfig.FABRIC_2D_TORUS_Y: (0,),
+        ttnn.FabricConfig.FABRIC_2D_TORUS_XY: (0, 1),
+    }
+    return cluster_axis in wrapped.get(fabric_config, ())
+
+
 def _live_links_on_axis(mesh_device: ttnn.MeshDevice, cluster_axis: int) -> int | None:
     """The fewest fabric links any hop along `cluster_axis` forwards on, or None where the
-    fabric is not up to ask."""
+    fabric is not up to ask. On an axis the fabric wraps, the last-to-first hop counts when
+    the two chips are physical neighbours (a submesh of a longer ring has no such hop). A hop
+    with no live link counts as 0."""
     shape = tuple(mesh_device.shape)
     if len(shape) != 2 or shape[cluster_axis] < 2:
         return None
+    wrapped = shape[cluster_axis] > 2 and _fabric_wraps_axis(ttnn.get_fabric_config(mesh_device), cluster_axis)
     try:
         fewest = None
         for row in range(shape[0]):
             for col in range(shape[1]):
                 src = [row, col]
-                if src[cluster_axis] + 1 == shape[cluster_axis]:
-                    continue
                 dst = list(src)
                 dst[cluster_axis] += 1
+                if dst[cluster_axis] == shape[cluster_axis]:
+                    if not wrapped:
+                        continue
+                    dst[cluster_axis] = 0
+                    # Across a physical wrap the first hop keeps the direction of the line's own forward hop.
+                    after_dst = list(dst)
+                    after_dst[cluster_axis] = 1
+                    src_node, dst_node, after_node = (
+                        mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(coord)) for coord in (src, dst, after_dst)
+                    )
+                    wrap_direction = ttnn.get_eth_forwarding_direction(mesh_device, src_node, dst_node)
+                    if wrap_direction is None or wrap_direction != ttnn.get_eth_forwarding_direction(
+                        mesh_device, dst_node, after_node
+                    ):
+                        continue
                 src_node = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(src))
                 dst_node = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(dst))
                 count = len(ttnn.get_forwarding_link_indices(mesh_device, src_node, dst_node))
                 fewest = count if fewest is None else min(fewest, count)
-        return fewest or None
+        return fewest
     except RuntimeError:
         return None
