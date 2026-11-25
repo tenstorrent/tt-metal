@@ -13,6 +13,7 @@
 #include "api/debug/waypoint.h"
 #include "ckernel_buf_desc.h"
 #include "llk_defs.h"
+#include "llk_compute_api_claim.h"
 #include "llk_io.h"
 #include "llk_operands.h"
 #include "llk_sync.h"
@@ -37,6 +38,7 @@
  */
 template <std::uint8_t E, ckernel::trisc::L1AccessMode MODE = ckernel::trisc::L1AccessMode::Continuous>
 inline void llk_unpack_program_bfd(const std::uint32_t operand_id) {
+    LLK_COMPUTE_API_CLAIM(legacy, 2_0);
     LLK_REINIT_GUARD_NOTE_PROGRAMMED(E, operand_id);
     // TODO: multi-TC not handled — only tc_slots[0]'s L1 base is programmed. When a DFB is mapped
     // across multiple TCs this must program one descriptor per active tc_slot (same gap in

@@ -7,6 +7,7 @@
 #ifdef ARCH_QUASAR
 
 #include "api/compute/common.h"                        // ALWI, UNPACK/MATH/PACK, DST_ACCUM_MODE
+#include "llk_compute_api_claim.h"                     // LLK_COMPUTE_API_CLAIM
 #include "api/compute/experimental/2_0/llk_operand.h"  // LLKOperand
 #include "experimental/2_0/llk_2_0.h"                  // id-free Quasar LLK API
 
@@ -52,6 +53,7 @@ ALWI void compute_kernel_hw_startup(
             experimental::is_legal_tile_shape(SO),
         "compute_kernel_hw_startup: illegal tile shape.");
     static_assert(is_fp32_dest_acc_en == DST_ACCUM_MODE, "compute_kernel_hw_startup: Dest mode is DST_ACCUM_MODE");
+    LLK_COMPUTE_API_CLAIM(2_0, legacy);
     UNPACK((llk_2_0::unpack_hw_configure<
             experimental::LLKOperand<FA, SA>::descriptor,
             experimental::LLKOperand<FB, SB>::descriptor>()));

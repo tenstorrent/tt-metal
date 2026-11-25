@@ -10,6 +10,7 @@
 #include "llk_pack_common.h"
 #include "llk_sync.h"
 #include "llk_defs.h"
+#include "llk_compute_api_claim.h"
 #include "api/dataflow/dataflow_buffer.h"
 
 namespace llk_pack_detail {
@@ -32,6 +33,7 @@ inline constexpr bool always_false_v = false;
  */
 template <ckernel::trisc::L1AccessMode MODE = ckernel::trisc::L1AccessMode::Continuous>
 inline void llk_pack_program_bfd(const std::uint32_t output_id) {
+    LLK_COMPUTE_API_CLAIM(legacy, 2_0);
     LLK_REINIT_GUARD_NOTE_PROGRAMMED(ckernel::trisc::BFD_ID_PACK0, output_id);
     // TODO: multi-TC not handled — only tc_slots[0]'s L1 base is programmed. When a DFB is mapped
     // across multiple TCs this must program one descriptor per active tc_slot (same gap in
