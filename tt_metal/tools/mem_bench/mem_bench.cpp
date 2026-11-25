@@ -284,10 +284,13 @@ TestResult mem_bench_copy_active_kernel_different_page(benchmark::State& state) 
     return results;
 }
 
-// Common Multi MMIO device test.
+// Common Multi MMIO device test. Each device runs either reader or writer kernels (not both).
+// Fails the benchmark if any device moved no data, and reports the slowest device as min_dev_bw / min_dev_id.
 TestResult mem_bench_multi_mmio_devices(
     benchmark::State& state, std::map<ChipId, std::shared_ptr<distributed::MeshDevice>>& devices, const Context& ctx) {
     TestResult results;
+    std::map<int, double> device_bytes;  // device : bytes read + written over all iterations
+    std::map<int, double> device_time;   // device : core time over all iterations
 
     // One thread to wait for program on each device
 
@@ -297,10 +300,11 @@ TestResult mem_bench_multi_mmio_devices(
         for (const auto& [device_id, device] : devices) {
             Program& pgm = programs.emplace(device_id, CreateProgram(*device)).first->second;
             auto device_hugepage_size = get_hugepage_size(device_id);
+            const bool is_writer = ctx.number_writer_kernels > 0;
+            const uint32_t num_kernels = is_writer ? ctx.number_writer_kernels : ctx.number_reader_kernels;
             configured_core_ranges.insert(
                 {device_id,
-                 configure_kernels(device.get(), pgm, ctx, 0, ctx.number_reader_kernels, false, device_hugepage_size)
-                     .value()});
+                 configure_kernels(device.get(), pgm, ctx, 0, num_kernels, is_writer, device_hugepage_size).value()});
         }
 
         std::vector<distributed::MeshWorkload> workloads;
@@ -320,7 +324,11 @@ TestResult mem_bench_multi_mmio_devices(
 
         // Read counters from each core
         for (auto& [device_id, core_range] : configured_core_ranges) {
+            const double bytes_before = results.total_cores_bytes_rd + results.total_cores_bytes_wr;
+            const double time_before = results.total_cores_time;
             read_inc_data_from_cores(ctx, devices.at(device_id).get(), core_range, results);
+            device_bytes[device_id] += results.total_cores_bytes_rd + results.total_cores_bytes_wr - bytes_before;
+            device_time[device_id] += results.total_cores_time - time_before;
         }
 
         // This test does not report host bw
@@ -330,6 +338,26 @@ TestResult mem_bench_multi_mmio_devices(
     state.SetBytesProcessed(0);
     report_device_bw(state, results);
     state.counters["num_mmio_devices"] = devices.size();
+
+    std::string idle_devices;
+    double min_bw = -1;
+    int min_device_id = -1;
+    for (const auto& [device_id, bytes] : device_bytes) {
+        if (bytes == 0) {
+            idle_devices += (idle_devices.empty() ? "" : ",") + std::to_string(device_id);
+            continue;
+        }
+        const double bw = bytes / device_time[device_id];
+        if (min_bw < 0 || bw < min_bw) {
+            min_bw = bw;
+            min_device_id = device_id;
+        }
+    }
+    state.counters["min_dev_bw"] = min_bw;
+    state.counters["min_dev_id"] = min_device_id;
+    if (!idle_devices.empty()) {
+        state.SkipWithError("No data moved over PCIe on device(s): " + idle_devices);
+    }
 
     return results;
 }
@@ -369,6 +397,30 @@ TestResult mem_bench_multi_mmio_devices_reading_different_node(benchmark::State&
         false,                                  // Enable host copy
         0,                                      // Iterations is managed by the benchmark framework
     };
+
+    return mem_bench_multi_mmio_devices(state, devices, ctx);
+}
+
+// Every MMIO device (all NUMA nodes) reading or writing the host at the same time, e.g. to check every chip's
+// PCIe link in one run. Honors --device-id.
+TestResult mem_bench_all_mmio_devices(benchmark::State& state) {
+    auto device_ids = g_user_device_id.has_value() ? get_device_ids_for_single_device(g_user_device_id)
+                                                   : get_mmio_device_ids(get_number_of_mmio_devices(), -1);
+    auto devices = distributed::MeshDevice::create_unit_meshes(device_ids);
+
+    Context ctx{
+        devices,
+        static_cast<uint32_t>(state.range(0)),  // Total size
+        static_cast<uint32_t>(state.range(1)),  // Page size
+        0,                                      // Threads
+        static_cast<int>(state.range(2)),       // Readers on each device
+        static_cast<int>(state.range(3)),       // Writers on each device
+        false,                                  // Enable host copy
+        0,                                      // Iterations is managed by the benchmark framework
+    };
+    if (ctx.number_reader_kernels && ctx.number_writer_kernels) {
+        TT_THROW("Cannot have both readers and writers in mem_bench_all_mmio_devices.");
+    }
 
     return mem_bench_multi_mmio_devices(state, devices, ctx);
 }
@@ -521,6 +573,25 @@ void register_full_benchmark_suite() {
             {32_KB},
             {1, 2},
         });
+    // Every MMIO device reading / writing the host at once (all NUMA nodes)
+    ::benchmark::RegisterBenchmark("All MMIO Devices Reading Host", mem_bench_all_mmio_devices)
+        ->Apply(global_bench_args)
+        ->ArgNames({"size", "page_size", "readers", "writers"})
+        ->ArgsProduct({
+            {1_GB},
+            {32_KB},
+            {1},
+            {0},
+        });
+    ::benchmark::RegisterBenchmark("All MMIO Devices Writing Host", mem_bench_all_mmio_devices)
+        ->Apply(global_bench_args)
+        ->ArgNames({"size", "page_size", "readers", "writers"})
+        ->ArgsProduct({
+            {1_GB},
+            {32_KB},
+            {0},
+            {1},
+        });
 }
 
 void print_help() {
@@ -532,6 +603,7 @@ void print_help() {
     std::cout << "          bytes_per_second: Aggregate Host copy to hugepage bandwidth. 0 if not measured.\n";
     std::cout << "          dev_bw: Average single device core PCIe r/w bandwidth. 0 if not measured.\n";
     std::cout << "          kernel_0: Single core PCIe r/w bandwidth. 0 if not measured.\n";
+    std::cout << "          min_dev_bw, min_dev_id: Slowest device in the multi device tests.\n";
 }
 
 bool has_flag(const std::vector<std::string>& input_args, const std::string& flag) {

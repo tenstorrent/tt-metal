@@ -43,4 +43,9 @@ benchmark [--benchmark_list_tests={true|false}]
 Counters
           bytes_per_second: Aggregate Host copy to hugepage bandwidth. 0 if not measured.
           dev_bw: Average device core PCIe pull bandwidth. 0 if not measured.
+          min_dev_bw, min_dev_id: Slowest device in the multi device tests.
 ```
+
+`--full` also includes `All MMIO Devices Reading Host` and `All MMIO Devices Writing Host`, which run on every
+MMIO device (all NUMA nodes) at once and fail if any device moves no data. The deployment test runner uses them
+to check every chip's PCIe link.
