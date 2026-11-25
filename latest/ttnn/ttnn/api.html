@@ -689,6 +689,7 @@
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#generic">Generic</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.generic_op.html">ttnn.generic_op</a></li>
+<li class="toctree-l4"><a class="reference internal" href="api/ttnn.experimental.generic_op.html">ttnn.experimental.generic_op</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#kv-cache">KV Cache</a><ul>
@@ -827,6 +828,7 @@
 <li class="toctree-l1"><a class="reference internal" href="onboarding.html">Onboarding New Functionality</a></li>
 <li class="toctree-l1"><a class="reference internal" href="converting_torch_model_to_ttnn.html">Converting PyTorch Model to TT-NN</a></li>
 <li class="toctree-l1"><a class="reference internal" href="adding_new_ttnn_operation.html">Adding New TT-NN Operation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="generic_op_program_spec.html">Running your own kernels with generic_op and a ProgramSpec</a></li>
 <li class="toctree-l1"><a class="reference internal" href="profiling_ttnn_operations.html">Profiling TT-NN Operations</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../tools/index.html">Tools</a></li>
 </ul>
@@ -2600,6 +2602,10 @@ use <code class="docutils literal notranslate"><span class="pre">align_shape_to_
 <div class="tt-api-card docutils container">
 <p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.generic_op.html#ttnn.generic_op" title="ttnn.generic_op"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.generic_op</span></code></a></p>
 <p class="tt-api-card-desc">Executes a custom operation with user-defined kernels on the device.</p>
+</div>
+<div class="tt-api-card docutils container">
+<p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.experimental.generic_op.html#ttnn.experimental.generic_op" title="ttnn.experimental.generic_op"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.experimental.generic_op</span></code></a></p>
+<p class="tt-api-card-desc">Runs a Metal 2.0 program, given as a ttnn.experimental.ProgramSpec (everything fixed about the program) and a ttnn.experimental.ProgramRunArgs (the values of this call), with named arguments and tensors bound by name.</p>
 </div>
 </div>
 </section>

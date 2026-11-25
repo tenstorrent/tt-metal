@@ -27,7 +27,7 @@
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="ttnn.kv_cache.fill_cache_for_user_" href="ttnn.kv_cache.fill_cache_for_user_.html" />
+    <link rel="next" title="ttnn.experimental.generic_op" href="ttnn.experimental.generic_op.html" />
     <link rel="prev" title="ttnn.rotate" href="ttnn.rotate.html" />
  <link rel="stylesheet" href="https://docs.tenstorrent.com/_static/tt_theme.css">
 
@@ -256,6 +256,7 @@
 <li class="toctree-l3"><a class="reference internal" href="../api.html#vision">Vision</a></li>
 <li class="toctree-l3 current"><a class="reference internal" href="../api.html#generic">Generic</a><ul class="current">
 <li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.generic_op</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.experimental.generic_op.html">ttnn.experimental.generic_op</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#kv-cache">KV Cache</a></li>
@@ -271,6 +272,7 @@
 <li class="toctree-l1"><a class="reference internal" href="../onboarding.html">Onboarding New Functionality</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../converting_torch_model_to_ttnn.html">Converting PyTorch Model to TT-NN</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../adding_new_ttnn_operation.html">Adding New TT-NN Operation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../generic_op_program_spec.html">Running your own kernels with generic_op and a ProgramSpec</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../profiling_ttnn_operations.html">Profiling TT-NN Operations</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../tools/index.html">Tools</a></li>
 </ul>
@@ -392,7 +394,9 @@ same way if the program changes how its data is placed.</p>
 </div>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
-<p>Refer to tests/ttnn/unit_tests/operations/debug/test_generic_op.py for usage examples</p>
+<p>Refer to tests/ttnn/unit_tests/operations/debug/test_generic_op.py for usage examples. For the Metal 2.0
+ProgramSpec form, see ttnn.experimental.generic_op and the TT-NN guide “Running your own kernels with
+generic_op and a ProgramSpec”.</p>
 </div>
 </dd>
 </dl>
@@ -405,7 +409,7 @@ same way if the program changes how its data is placed.</p>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
         <a href="ttnn.rotate.html" class="btn btn-neutral float-left" title="ttnn.rotate" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="ttnn.kv_cache.fill_cache_for_user_.html" class="btn btn-neutral float-right" title="ttnn.kv_cache.fill_cache_for_user_" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="ttnn.experimental.generic_op.html" class="btn btn-neutral float-right" title="ttnn.experimental.generic_op" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>

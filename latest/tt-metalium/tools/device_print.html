@@ -240,13 +240,22 @@
 <li class="toctree-l2"><a class="reference internal" href="checkpoint.html">Debug Checkpoints</a></li>
 <li class="toctree-l2 current"><a class="current reference internal" href="#">Device Debug Print</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="#overview">Overview</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#enabling">Enabling</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#enabling">Enabling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#writing-a-print">Writing a print</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#format-strings">Format strings</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#what-gets-printed">What gets printed</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="#strings">Strings</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#type-names">Type names</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#enums">Enums</a></li>
-<li class="toctree-l4"><a class="reference internal" href="#circular-buffers">Circular Buffers</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#circular-buffers-and-tiles">Circular buffers and tiles</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#typed-arrays">Typed arrays</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#call-stacks">Call stacks</a></li>
 </ul>
 </li>
+<li class="toctree-l3"><a class="reference internal" href="#output">Output</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#compile-time-checks">Compile-time checks</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#limits">Limits</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#best-practices">Best practices</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="watcher.html">Watcher</a></li>
@@ -322,90 +331,310 @@
 <section id="overview">
 <h2>Overview<a class="headerlink" href="#overview" title="Permalink to this heading"></a>
 </h2>
-<p>The device can optionally print to the host terminal or a log file.  This feature can be useful for printing variables,
-addresses, and Circular Buffer data from kernels running on the device. Device-side prints are controlled through API
-calls; the host-side is controlled through environment variables.</p>
+<p>Device debug print (DPRINT) lets kernels and firmware print formatted text from the device. The host writes the
+text to the terminal or to a log file. Format strings use the syntax of fmtlib and C++20 <code class="docutils literal notranslate"><span class="pre">std::format</span></code>, and the
+compiler checks every print against its arguments.</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/debug/dprint.h"</span>
+
+<span class="kt">void</span><span class="w"> </span><span class="nf">kernel_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">n</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>
+<span class="w">    </span><span class="n">DPRINT</span><span class="p">(</span><span class="s">"n = {0}, hex = {0:#x}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="n">n</span><span class="p">);</span><span class="w">  </span><span class="c1">// prints: n = 42, hex = 0x2a</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>How it works: the compiler stores each print’s format string in the kernel binary, in a section that is never
+loaded onto the device. When the print runs, the device sends the host only an identifier for the print and the
+values of its arguments, and the host looks up the format string and writes the text. This has a few consequences:</p>
+<ul class="simple">
+<li><p>A print is cheap: a few instructions in the kernel, no device memory for its text, and only the argument values
+sent to the host.</p></li>
+<li><p>The host can’t read device memory, so a runtime <code class="docutils literal notranslate"><span class="pre">const</span> <span class="pre">char*</span></code> prints as an address. Use <code class="docutils literal notranslate"><span class="pre">CTSTR("...")</span></code> for
+fixed text (see <a class="reference internal" href="#strings">Strings</a>).</p></li>
+<li><p>Text appears while the kernel is still running, so DPRINT helps with debugging hangs.</p></li>
+</ul>
 </section>
 <section id="enabling">
 <h2>Enabling<a class="headerlink" href="#enabling" title="Permalink to this heading"></a>
 </h2>
-<p>Device debug printing can be enabled and configured using the environment variables shown below.  The first
-environment variable, <code class="docutils literal notranslate"><span class="pre">TT_METAL_DPRINT_CORES</span></code> specifies which cores the host-side will read print data from, and
-whether this environment variable is defined determines whether printing is enabled during kernel compilation.
-Note that the core coordinates are logical coordinates, so worker cores and ethernet cores both start at (0, 0).</p>
+<p>DPRINT is off by default, and every print compiles to nothing. Selecting cores to print from turns it on for all
+kernels and firmware built in that run. Core coordinates are logical, so worker cores and Ethernet cores both
+start at (0,0).</p>
 <div class="highlight-default notranslate">
-<div class="highlight"><pre><span></span><span class="n">export</span> <span class="n">TT_METAL_DPRINT_CORES</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span>                    <span class="c1"># required, x,y OR (x1,y1),(x2,y2),(x3,y3) OR (x1,y1)-(x2,y2) OR all OR worker OR dispatch</span>
-<span class="n">export</span> <span class="n">TT_METAL_DPRINT_ETH_CORES</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span>                <span class="c1"># optional, x,y OR (x1,y1),(x2,y2),(x3,y3) OR (x1,y1)-(x2,y2) OR all OR worker OR dispatch</span>
-<span class="n">export</span> <span class="n">TT_METAL_DPRINT_CHIPS</span><span class="o">=</span><span class="mi">0</span>                      <span class="c1"># optional, comma separated list of chips OR all. Default is all. Mutually exclusive with TT_METAL_DPRINT_NODES and TT_METAL_DPRINT_MESH_COORDS.</span>
-<span class="n">export</span> <span class="n">TT_METAL_DPRINT_NODES</span><span class="o">=</span><span class="s2">"(M0,D0),(M0,D1)"</span>      <span class="c1"># optional, comma separated list of `FabricNodeId` nodes (unique node identifiers in format (Mn,Dn), where M is mesh ID and D is device ID) OR all. Default is all. Mutually exclusive with TT_METAL_DPRINT_CHIPS and TT_METAL_DPRINT_MESH_COORDS.</span>
-<span class="n">export</span> <span class="n">TT_METAL_DPRINT_MESH_COORDS</span><span class="o">=</span><span class="s2">"(0,0),(1,3)"</span>    <span class="c1"># optional, comma separated list of (row,col) coordinates in the global system mesh OR all. Default is all. Mutually exclusive with TT_METAL_DPRINT_CHIPS and TT_METAL_DPRINT_NODES.</span>
-<span class="n">export</span> <span class="n">TT_METAL_DPRINT_RISCVS</span><span class="o">=</span><span class="n">BR</span>                    <span class="c1"># optional, default is all RISCs. Use a subset of BR,NC,TR0,TR1,TR2,TR*,ER0,ER1,ER*</span>
-<span class="n">export</span> <span class="n">TT_METAL_DPRINT_FILE</span><span class="o">=</span><span class="n">log</span><span class="o">.</span><span class="n">txt</span>                 <span class="c1"># optional, default is to print to the screen</span>
-<span class="n">export</span> <span class="n">TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC</span><span class="o">=</span><span class="mi">0</span>   <span class="c1"># optional, enabled by default. Prepends prints with &lt;device id&gt;:(&lt;core x&gt;, &lt;core y&gt;):&lt;RISC&gt;:.</span>
-<span class="n">export</span> <span class="n">TT_METAL_DPRINT_ONE_FILE_PER_RISC</span><span class="o">=</span><span class="mi">1</span>          <span class="c1"># optional, splits DPRINT data on a per-RISC basis into files under $TT_METAL_HOME/generated/dprint/. Overrides TT_METAL_DPRINT_FILE and disables TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC.</span>
+<div class="highlight"><pre><span></span><span class="n">export</span> <span class="n">TT_METAL_DPRINT_CORES</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span>                    <span class="c1"># Tensix cores: x,y OR (x1,y1),(x2,y2),(x3,y3) OR (x1,y1)-(x2,y2) OR all OR worker OR dispatch</span>
+<span class="n">export</span> <span class="n">TT_METAL_DPRINT_ETH_CORES</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span>                <span class="c1"># Ethernet cores, same syntax</span>
+<span class="n">export</span> <span class="n">TT_METAL_DPRINT_DRAM_CORES</span><span class="o">=</span><span class="nb">all</span>               <span class="c1"># Blackhole DRAM cores, same syntax</span>
+<span class="n">export</span> <span class="n">TT_METAL_DPRINT_DISPATCH_CORES</span><span class="o">=</span><span class="nb">all</span>           <span class="c1"># Quasar dispatch-engine cores, same syntax</span>
+<span class="n">export</span> <span class="n">TT_METAL_DPRINT_CHIPS</span><span class="o">=</span><span class="mi">0</span>                      <span class="c1"># optional: comma separated chip ids OR all (default)</span>
+<span class="n">export</span> <span class="n">TT_METAL_DPRINT_NODES</span><span class="o">=</span><span class="s2">"(M0,D0),(M0,D1)"</span>      <span class="c1"># optional: FabricNodeId list (Mn = mesh id, Dn = device id) OR all (default)</span>
+<span class="n">export</span> <span class="n">TT_METAL_DPRINT_MESH_COORDS</span><span class="o">=</span><span class="s2">"(0,0),(1,3)"</span>    <span class="c1"># optional: (row,col) in the global system mesh OR all (default)</span>
+<span class="n">export</span> <span class="n">TT_METAL_DPRINT_RISCVS</span><span class="o">=</span><span class="n">BR</span><span class="o">+</span><span class="n">TR0</span>                <span class="c1"># optional: any of BR,NC,TR0,TR1,TR2,TR*,ER0,ER1,ER*,DR; default all</span>
+<span class="n">export</span> <span class="n">TT_METAL_DPRINT_FILE</span><span class="o">=</span><span class="n">log</span><span class="o">.</span><span class="n">txt</span>                 <span class="c1"># optional: write to this file instead of stdout</span>
+<span class="n">export</span> <span class="n">TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC</span><span class="o">=</span><span class="mi">0</span>   <span class="c1"># optional: on by default; starts each line with &lt;device&gt;:&lt;x&gt;-&lt;y&gt;:&lt;RISC&gt;:</span>
+<span class="n">export</span> <span class="n">TT_METAL_DPRINT_ONE_FILE_PER_RISC</span><span class="o">=</span><span class="mi">1</span>          <span class="c1"># optional: one file per RISC (see Output); ignores TT_METAL_DPRINT_FILE, turns the prefix off</span>
+<span class="n">export</span> <span class="n">TT_METAL_DPRINT_TAG_FIRMWARE</span><span class="o">=</span><span class="mi">1</span>               <span class="c1"># optional: off by default; starts each line that firmware printed with [FW]</span>
 </pre></div>
 </div>
-<p>To generate device debug prints on the device, include the <code class="docutils literal notranslate"><span class="pre">api/debug/dprint.h</span></code> header and use the APIs defined there.
-An example with the different features available is shown below:</p>
-<div class="admonition important">
-<p class="admonition-title">Important</p>
-<p>Each <code class="docutils literal notranslate"><span class="pre">DPRINT</span></code> line <strong>must end with</strong> <code class="docutils literal notranslate"><span class="pre">\n</span></code>. The host-side print server flushes its per-RISC
-intermediate buffer <strong>only when it sees a newline</strong>; messages without one are buffered until a later
-print supplies a <code class="docutils literal notranslate"><span class="pre">\n</span></code>, and any tail still buffered at device detach is dropped (it is <strong>not</strong> flushed
-on device close). If your prints never appear, the most common cause is a missing <code class="docutils literal notranslate"><span class="pre">\n</span></code>.</p>
-<p>Examples:
-1.    <code class="docutils literal notranslate"><span class="pre">DPRINT("hit</span> <span class="pre">checkpoint</span> <span class="pre">{}\n",</span> <span class="pre">id);</span></code> // This will be printed
-2.    <code class="docutils literal notranslate"><span class="pre">DPRINT("hit</span> <span class="pre">checkpoint</span> <span class="pre">{}",</span> <span class="pre">id);</span></code>  // This may never be printed</p>
-</div>
-<div class="highlight-c++ notranslate">
-<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/debug/dprint.h"</span><span class="w">  </span><span class="c1">// required in all kernels using DPRINT</span>
-
-<span class="k">enum</span><span class="w"> </span><span class="nc">TestEnum</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">VAL0</span><span class="p">,</span><span class="w"> </span><span class="n">VAL1</span><span class="p">,</span><span class="w"> </span><span class="n">VAL2</span><span class="w"> </span><span class="p">};</span>
-
-<span class="kt">void</span><span class="w"> </span><span class="nf">kernel_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="c1">// Supported scalar types: bool (prints false/true), char, all fixed-width integer types</span>
-<span class="w">    </span><span class="c1">// (uint8_t-uint64_t, int8_t-int64_t), float, and double.</span>
-<span class="w">    </span><span class="n">DPRINT</span><span class="p">(</span><span class="s">"Test string {} {} {}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="sc">'a'</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mf">0.123456f</span><span class="p">);</span>
-<span class="w">    </span><span class="c1">// bool prints as false or true</span>
-<span class="w">    </span><span class="kt">bool</span><span class="w"> </span><span class="n">flag</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span>
-<span class="w">    </span><span class="n">DPRINT</span><span class="p">(</span><span class="s">"Bool value: {}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="n">flag</span><span class="p">);</span><span class="w">  </span><span class="c1">// prints: Bool value: true</span>
-<span class="w">    </span><span class="c1">// BF16 type printing is supported via provided type</span>
-<span class="w">    </span><span class="n">bf16_t</span><span class="w"> </span><span class="n">my_bf16_val</span><span class="p">(</span><span class="mh">0x3dfb</span><span class="p">);</span><span class="w"> </span><span class="c1">// Equivalent to 0.122559</span>
-<span class="w">    </span><span class="n">DPRINT</span><span class="p">(</span><span class="s">"BF16 value: {}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="n">my_bf16_val</span><span class="p">);</span>
-
-<span class="w">    </span><span class="c1">// DPRINT supports formatting options that are supported by fmtlib:</span>
-<span class="w">    </span><span class="n">DPRINT</span><span class="p">(</span><span class="s">"{:.5f}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="mf">0.123456f</span><span class="p">);</span>
-<span class="w">    </span><span class="n">DPRINT</span><span class="p">(</span><span class="s">"{:&gt;10}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="mi">123</span><span class="p">);</span><span class="w"> </span><span class="c1">// right align in a field of width 10</span>
-<span class="w">    </span><span class="n">DPRINT</span><span class="p">(</span><span class="s">"{:&lt;10}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="mi">123</span><span class="p">);</span><span class="w"> </span><span class="c1">// left align in a field of width 10</span>
-<span class="w">    </span><span class="n">DPRINT</span><span class="p">(</span><span class="s">"{0:x} {0} {0:o} {0:b}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="mi">15</span><span class="p">);</span><span class="w"> </span><span class="c1">// single argument print in hexadecimal, decimal, octal, and binary</span>
-
-<span class="w">    </span><span class="c1">// The following prints only occur on a particular RISCV core:</span>
-<span class="w">    </span><span class="n">DPRINT_MATH</span><span class="p">(</span><span class="s">"this is the math kernel</span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
-<span class="w">    </span><span class="n">DPRINT_PACK</span><span class="p">(</span><span class="s">"this is the pack kernel</span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
-<span class="w">    </span><span class="n">DPRINT_UNPACK</span><span class="p">(</span><span class="s">"this is the unpack kernel</span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
-<span class="w">    </span><span class="n">DPRINT_DATA0</span><span class="p">(</span><span class="s">"this is the data movement kernel on noc 0</span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
-<span class="w">    </span><span class="n">DPRINT_DATA1</span><span class="p">(</span><span class="s">"this is the data movement kernel on noc 1</span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
-<span class="p">}</span>
-</pre></div>
-</div>
+<ul class="simple">
+<li><p>Each core list selects cores of its own type, and setting any of them turns DPRINT on. <code class="docutils literal notranslate"><span class="pre">all</span></code> selects every
+core of that type, <code class="docutils literal notranslate"><span class="pre">worker</span></code> every core that doesn’t run fast-dispatch kernels, and <code class="docutils literal notranslate"><span class="pre">dispatch</span></code> the cores that
+do. When dispatch cores are selected, the dispatch kernels’ own prints appear too.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">TT_METAL_DPRINT_CHIPS</span></code>, <code class="docutils literal notranslate"><span class="pre">TT_METAL_DPRINT_NODES</span></code> and <code class="docutils literal notranslate"><span class="pre">TT_METAL_DPRINT_MESH_COORDS</span></code> are mutually exclusive.</p></li>
+<li><p>In <code class="docutils literal notranslate"><span class="pre">TT_METAL_DPRINT_RISCVS</span></code>, <code class="docutils literal notranslate"><span class="pre">DR</span></code> (Blackhole DRAM cores) is accepted only where DRAM cores are programmable.
+An Ethernet RISC whose lines show <code class="docutils literal notranslate"><span class="pre">ER</span></code> (see <a class="reference internal" href="#output">Output</a>) is selected with <code class="docutils literal notranslate"><span class="pre">ER0</span></code> or <code class="docutils literal notranslate"><span class="pre">ER*</span></code>.</p></li>
+<li><p>Turning DPRINT on or off recompiles kernels. Cores, chips and RISCs that aren’t selected print nothing and never
+wait on printing.</p></li>
+<li><p>DPRINT can’t be enabled together with the device profiler, the streaming profiler, the NOC debug dump or NOC
+transfer recording.</p></li>
+</ul>
+</section>
+<section id="writing-a-print">
+<h2>Writing a print<a class="headerlink" href="#writing-a-print" title="Permalink to this heading"></a>
+</h2>
+<p>Include <code class="docutils literal notranslate"><span class="pre">api/debug/dprint.h</span></code>; the standard dataflow and compute kernel headers also include it.
+<code class="docutils literal notranslate"><span class="pre">api/debug/device_print.h</span></code> provides the same API, but only under the <code class="docutils literal notranslate"><span class="pre">DEVICE_PRINT</span></code> names.</p>
+<p><code class="docutils literal notranslate"><span class="pre">DPRINT(format,</span> <span class="pre">args...)</span></code> prints from whichever RISC runs it, and <code class="docutils literal notranslate"><span class="pre">DEVICE_PRINT</span></code> is the same macro under a
+longer name. These variants print only from the RISCs they name, and compile to nothing (without evaluating their
+arguments) on the others:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">DPRINT_UNPACK</span></code>, <code class="docutils literal notranslate"><span class="pre">DPRINT_MATH</span></code> and <code class="docutils literal notranslate"><span class="pre">DPRINT_PACK</span></code> print from the unpack, math or pack TRISC of a compute
+kernel. A plain <code class="docutils literal notranslate"><span class="pre">DPRINT</span></code> in a compute kernel prints from all three.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">DPRINT_DATA0</span></code> and <code class="docutils literal notranslate"><span class="pre">DPRINT_DATA1</span></code> print from a data-movement RISC whose NOC index is 0 or 1, and never from
+compute, Ethernet or DRAM RISCs.</p></li>
+<li><p>Each has a <code class="docutils literal notranslate"><span class="pre">DEVICE_PRINT_</span></code> spelling as well, for example <code class="docutils literal notranslate"><span class="pre">DEVICE_PRINT_MATH</span></code>.</p></li>
+</ul>
+<p><code class="docutils literal notranslate"><span class="pre">DPRINT_FORCE_NOINLINE</span></code> (<code class="docutils literal notranslate"><span class="pre">DEVICE_PRINT_FORCE_NOINLINE</span></code>) marks a function of yours that prints: while DPRINT is on,
+the compiler keeps exactly one copy of it; while DPRINT is off, the compiler decides as usual (see <a class="reference internal" href="#limits">Limits</a>).</p>
+<p>A print is one statement, written with a trailing <code class="docutils literal notranslate"><span class="pre">;</span></code>. Use it wherever a statement can stand: in unbraced <code class="docutils literal notranslate"><span class="pre">if</span></code>
+and <code class="docutils literal notranslate"><span class="pre">else</span></code> branches, <code class="docutils literal notranslate"><span class="pre">case</span></code> labels, loops, lambdas, function and class templates, member functions,
+<code class="docutils literal notranslate"><span class="pre">if</span> <span class="pre">constexpr</span></code> branches and inline functions in headers. A print isn’t an expression, so it can’t be an operand
+of <code class="docutils literal notranslate"><span class="pre">,</span></code> or <code class="docutils literal notranslate"><span class="pre">?:</span></code>.</p>
+<p>Arguments:</p>
+<ul class="simple">
+<li><p>Each argument is evaluated once when DPRINT is on, and not at all when it is off, so don’t put side effects such
+as <code class="docutils literal notranslate"><span class="pre">i++</span></code> in an argument.</p></li>
+<li><p>Arguments are evaluated where the print stands, before the print takes its core’s print buffer. On Blackhole a
+RISC sees L1 that other RISCs, cores or the NOC wrote only after a fence or a cache invalidation, so call
+<code class="docutils literal notranslate"><span class="pre">invalidate_l1_cache()</span></code> before printing such memory. The elements of a <code class="docutils literal notranslate"><span class="pre">dp_typed_array_t</span></code> are read later, after
+the print has taken the buffer and invalidated the cache.</p></li>
+<li><p>Arguments are copied, so bitfields, fields of packed structs and values read through <code class="docutils literal notranslate"><span class="pre">volatile</span></code> pointers can be
+printed directly.</p></li>
+<li><p>A print may carry up to 128 bytes of arguments on any core, for example 32 values of 4 bytes. <a class="reference internal" href="#limits">Limits</a> gives the
+largest prints.</p></li>
+</ul>
+<p>Lines:</p>
+<ul class="simple">
+<li><p>End each line with <code class="docutils literal notranslate"><span class="pre">\n</span></code>. The host writes a line only when its <code class="docutils literal notranslate"><span class="pre">\n</span></code> arrives, so one print can write several
+lines and several prints can build one line. A RISC’s kernel and its firmware build their lines apart. Text without
+a <code class="docutils literal notranslate"><span class="pre">\n</span></code> isn’t written yet: the RISC’s next print continues the same line, even a print from a later kernel, and if
+none comes, the text is lost when the device closes.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">\r</span></code> ends a line but holds it back. Lines ending in <code class="docutils literal notranslate"><span class="pre">\r</span></code> are written together with the next line from the same
+kernel or firmware that ends in <code class="docutils literal notranslate"><span class="pre">\n</span></code>, so a multi-line block isn’t interleaved with other output. In the output
+each <code class="docutils literal notranslate"><span class="pre">\r</span></code> becomes a line break, and every line of the block gets the prefix.</p></li>
+</ul>
+</section>
+<section id="format-strings">
+<h2>Format strings<a class="headerlink" href="#format-strings" title="Permalink to this heading"></a>
+</h2>
+<p>The format must be a string literal. Adjacent literals, literals built by macros or by <code class="docutils literal notranslate"><span class="pre">#</span></code> stringizing, UTF-8
+text and escapes such as <code class="docutils literal notranslate"><span class="pre">\t</span></code> are fine. The syntax is fmtlib’s:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">{}</span></code> prints the next argument and <code class="docutils literal notranslate"><span class="pre">{N}</span></code> prints argument N. Don’t mix the two in one format. With <code class="docutils literal notranslate"><span class="pre">{N}</span></code> an
+argument can be printed several times, and every argument must be used. Each argument is sent to the host once,
+however many times it is printed.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">{{</span></code> and <code class="docutils literal notranslate"><span class="pre">}}</span></code> print braces.</p></li>
+<li><p>A spec follows a colon: <code class="docutils literal notranslate"><span class="pre">[[fill]align][sign][#][0][width][.precision][L][type]</span></code>, for example <code class="docutils literal notranslate"><span class="pre">{:#010x}</span></code>,
+<code class="docutils literal notranslate"><span class="pre">{:&gt;8}</span></code> or <code class="docutils literal notranslate"><span class="pre">{:.3f}</span></code>. The type is one of <code class="docutils literal notranslate"><span class="pre">a</span> <span class="pre">A</span> <span class="pre">b</span> <span class="pre">B</span> <span class="pre">c</span> <span class="pre">d</span> <span class="pre">e</span> <span class="pre">E</span> <span class="pre">f</span> <span class="pre">F</span> <span class="pre">g</span> <span class="pre">G</span> <span class="pre">o</span> <span class="pre">p</span> <span class="pre">s</span> <span class="pre">x</span> <span class="pre">X</span> <span class="pre">?</span></code>.</p></li>
+<li><p>The spec must suit the argument’s type, as in fmtlib: <code class="docutils literal notranslate"><span class="pre">{:.2f}</span></code> on an integer and <code class="docutils literal notranslate"><span class="pre">{:x}</span></code> on a float don’t
+compile. On enums, strings and type names, specs follow fmtlib’s rules for strings.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">{:#}</span></code> on an enum prints the qualified name (see <a class="reference internal" href="#enums">Enums</a>).</p></li>
+<li><p>Named arguments, dynamic width or precision (<code class="docutils literal notranslate"><span class="pre">{:{}}</span></code>) and chrono specs aren’t supported.</p></li>
+</ul>
+</section>
+<section id="what-gets-printed">
+<h2>What gets printed<a class="headerlink" href="#what-gets-printed" title="Permalink to this heading"></a>
+</h2>
+<p>Plain values are <code class="docutils literal notranslate"><span class="pre">bool</span></code>, <code class="docutils literal notranslate"><span class="pre">char</span></code>, integers of 8 to 64 bits, <code class="docutils literal notranslate"><span class="pre">float</span></code> and <code class="docutils literal notranslate"><span class="pre">double</span></code>. They print exactly as
+<code class="docutils literal notranslate"><span class="pre">fmt::format</span></code> prints them for the same format and a value of the same type, with the type’s size on the device:
+<code class="docutils literal notranslate"><span class="pre">long</span></code> and <code class="docutils literal notranslate"><span class="pre">unsigned</span> <span class="pre">long</span></code> are 32 bits, except on Quasar’s 64-bit data-movement RISCs. Each “Prints” entry
+below is one output line, without its <code class="docutils literal notranslate"><span class="pre">\n</span></code>:</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Call</p></th>
+<th class="head"><p>Prints</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p><code class="docutils literal notranslate"><span class="pre">DPRINT("Hello</span> <span class="pre">world!\n");</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">Hello</span> <span class="pre">world!</span></code></p></td>
+</tr>
+<tr class="row-odd">
+<td><p><code class="docutils literal notranslate"><span class="pre">DPRINT("x</span> <span class="pre">=</span> <span class="pre">{}\n",</span> <span class="pre">42u);</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">x</span> <span class="pre">=</span> <span class="pre">42</span></code></p></td>
+</tr>
+<tr class="row-even">
+<td><p><code class="docutils literal notranslate"><span class="pre">DPRINT("{}</span> <span class="pre">{}</span> <span class="pre">{}</span> <span class="pre">{}\n",</span> <span class="pre">int8_t(-8),</span> <span class="pre">uint8_t(8),</span> <span class="pre">int16_t(-16),</span> <span class="pre">uint16_t(65535));</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">-8</span> <span class="pre">8</span> <span class="pre">-16</span> <span class="pre">65535</span></code></p></td>
+</tr>
+<tr class="row-odd">
+<td><p><code class="docutils literal notranslate"><span class="pre">DPRINT("{}</span> <span class="pre">{}</span> <span class="pre">{}\n",</span> <span class="pre">int32_t(INT32_MIN),</span> <span class="pre">uint32_t(UINT32_MAX),</span> <span class="pre">uint64_t(UINT64_MAX));</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">-2147483648</span> <span class="pre">4294967295</span> <span class="pre">18446744073709551615</span></code></p></td>
+</tr>
+<tr class="row-even">
+<td><p><code class="docutils literal notranslate"><span class="pre">DPRINT("{:#x}</span> <span class="pre">{:x}</span> <span class="pre">{:X}\n",</span> <span class="pre">255u,</span> <span class="pre">255u,</span> <span class="pre">255u);</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">0xff</span> <span class="pre">ff</span> <span class="pre">FF</span></code></p></td>
+</tr>
+<tr class="row-odd">
+<td><p><code class="docutils literal notranslate"><span class="pre">DPRINT("{:08x}</span> <span class="pre">{:#010x}\n",</span> <span class="pre">0xabcu,</span> <span class="pre">0xbeefu);</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">00000abc</span> <span class="pre">0x0000beef</span></code></p></td>
+</tr>
+<tr class="row-even">
+<td><p><code class="docutils literal notranslate"><span class="pre">DPRINT("{:x}\n",</span> <span class="pre">int32_t(-1));</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">-1</span></code> (cast to an unsigned type to get <code class="docutils literal notranslate"><span class="pre">ffffffff</span></code>)</p></td>
+</tr>
+<tr class="row-odd">
+<td><p><code class="docutils literal notranslate"><span class="pre">DPRINT("{0:x}</span> <span class="pre">{0}</span> <span class="pre">{0:o}</span> <span class="pre">{0:b}\n",</span> <span class="pre">15);</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">f</span> <span class="pre">15</span> <span class="pre">17</span> <span class="pre">1111</span></code></p></td>
+</tr>
+<tr class="row-even">
+<td><p><code class="docutils literal notranslate"><span class="pre">DPRINT("{1}</span> <span class="pre">{0}\n",</span> <span class="pre">1,</span> <span class="pre">2);</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">2</span> <span class="pre">1</span></code></p></td>
+</tr>
+<tr class="row-odd">
+<td><p><code class="docutils literal notranslate"><span class="pre">DPRINT("[{:&gt;8}]</span> <span class="pre">[{:&lt;8}]</span> <span class="pre">[{:^8}]</span> <span class="pre">[{:*^9}]\n",</span> <span class="pre">123,</span> <span class="pre">123,</span> <span class="pre">123,</span> <span class="pre">7);</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">[</span>     <span class="pre">123]</span> <span class="pre">[123</span>     <span class="pre">]</span> <span class="pre">[</span>  <span class="pre">123</span>   <span class="pre">]</span> <span class="pre">[****7****]</span></code></p></td>
+</tr>
+<tr class="row-even">
+<td><p><code class="docutils literal notranslate"><span class="pre">DPRINT("{:+}</span> <span class="pre">[{:</span> <span class="pre">}]</span> <span class="pre">{:+}\n",</span> <span class="pre">5,</span> <span class="pre">5,</span> <span class="pre">-5);</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">+5</span> <span class="pre">[</span> <span class="pre">5]</span> <span class="pre">-5</span></code></p></td>
+</tr>
+<tr class="row-odd">
+<td><p><code class="docutils literal notranslate"><span class="pre">DPRINT("{:.3f}</span> <span class="pre">[{:8.2f}]</span> <span class="pre">{:e}\n",</span> <span class="pre">3.14159f,</span> <span class="pre">3.14159f,</span> <span class="pre">1234.5);</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">3.142</span> <span class="pre">[</span>    <span class="pre">3.14]</span> <span class="pre">1.234500e+03</span></code></p></td>
+</tr>
+<tr class="row-even">
+<td><p><code class="docutils literal notranslate"><span class="pre">DPRINT("{}</span> <span class="pre">{}\n",</span> <span class="pre">0.1f,</span> <span class="pre">6.28);</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">0.1</span> <span class="pre">6.28</span></code></p></td>
+</tr>
+<tr class="row-odd">
+<td><p><code class="docutils literal notranslate"><span class="pre">DPRINT("{}</span> <span class="pre">{}</span> <span class="pre">{}\n",</span> <span class="pre">__builtin_nanf(""),</span> <span class="pre">__builtin_inff(),</span> <span class="pre">-0.0f);</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">nan</span> <span class="pre">inf</span> <span class="pre">-0</span></code></p></td>
+</tr>
+<tr class="row-even">
+<td><p><code class="docutils literal notranslate"><span class="pre">DPRINT("{}</span> <span class="pre">{}\n",</span> <span class="pre">true,</span> <span class="pre">false);</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">true</span> <span class="pre">false</span></code></p></td>
+</tr>
+<tr class="row-odd">
+<td><p><code class="docutils literal notranslate"><span class="pre">DPRINT("[{:5}][{:&lt;5}][{:&gt;5}]\n",</span> <span class="pre">true,</span> <span class="pre">false,</span> <span class="pre">true);</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">[true</span> <span class="pre">][false][</span> <span class="pre">true]</span></code></p></td>
+</tr>
+<tr class="row-even">
+<td><p><code class="docutils literal notranslate"><span class="pre">DPRINT("{}\n",</span> <span class="pre">'a');</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">a</span></code></p></td>
+</tr>
+<tr class="row-odd">
+<td><p><code class="docutils literal notranslate"><span class="pre">DPRINT("{:c}\n",</span> <span class="pre">uint32_t(65));</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">A</span></code></p></td>
+</tr>
+<tr class="row-even">
+<td><p><code class="docutils literal notranslate"><span class="pre">DPRINT("{{}}</span> <span class="pre">{{{}}}\n",</span> <span class="pre">1);</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">{}</span> <span class="pre">{1}</span></code></p></td>
+</tr>
+</tbody>
+</table>
+<p><code class="docutils literal notranslate"><span class="pre">int8_t</span></code> and <code class="docutils literal notranslate"><span class="pre">uint8_t</span></code> print as numbers, following fmtlib’s rule for <code class="docutils literal notranslate"><span class="pre">signed</span> <span class="pre">char</span></code> and <code class="docutils literal notranslate"><span class="pre">unsigned</span> <span class="pre">char</span></code>.
+Only plain <code class="docutils literal notranslate"><span class="pre">char</span></code> prints as a character.</p>
+<p>DPRINT also prints these types:</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Prints</p></th>
+<th class="head"><p>Example</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p><code class="docutils literal notranslate"><span class="pre">bf16_t(bits)</span></code></p></td>
+<td><p>the float whose upper 16 bits are <code class="docutils literal notranslate"><span class="pre">bits</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">bf16_t(0x3dfb)</span></code> prints <code class="docutils literal notranslate"><span class="pre">0.122558594</span></code></p></td>
+</tr>
+<tr class="row-odd">
+<td><p><code class="docutils literal notranslate"><span class="pre">bf8_t(exponent,</span> <span class="pre">mantissa)</span></code>, <code class="docutils literal notranslate"><span class="pre">bf4_t(exponent,</span> <span class="pre">mantissa)</span></code></p></td>
+<td><p>a block-float element, as a float</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">bf4_t(128,</span> <span class="pre">1)</span></code> prints <code class="docutils literal notranslate"><span class="pre">0.5</span></code>; <code class="docutils literal notranslate"><span class="pre">bf8_t(130,</span> <span class="pre">3)</span></code> prints <code class="docutils literal notranslate"><span class="pre">0.375</span></code></p></td>
+</tr>
+<tr class="row-even">
+<td><p><code class="docutils literal notranslate"><span class="pre">CTSTR("text")</span></code></p></td>
+<td><p>the text (see <a class="reference internal" href="#strings">Strings</a>)</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">DPRINT("[{:&gt;6}]\n",</span> <span class="pre">CTSTR("ab"))</span></code> prints <code class="docutils literal notranslate"><span class="pre">[</span>    <span class="pre">ab]</span></code></p></td>
+</tr>
+<tr class="row-odd">
+<td><p><code class="docutils literal notranslate"><span class="pre">dp_type_name_t&lt;T&gt;()</span></code></p></td>
+<td><p>the fully qualified name of <code class="docutils literal notranslate"><span class="pre">T</span></code> (see <a class="reference internal" href="#type-names">Type names</a>)</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">dp_type_name_t&lt;int&gt;()</span></code> prints <code class="docutils literal notranslate"><span class="pre">int</span></code></p></td>
+</tr>
+<tr class="row-even">
+<td><p>an enum</p></td>
+<td><p>the enumerator’s name (see <a class="reference internal" href="#enums">Enums</a>)</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">Color::Green</span></code> prints <code class="docutils literal notranslate"><span class="pre">Green</span></code></p></td>
+</tr>
+<tr class="row-odd">
+<td><p>a pointer</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">0x</span></code> followed by the address in hex; any spec is ignored</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">reinterpret_cast&lt;void*&gt;(0x1234)</span></code> prints <code class="docutils literal notranslate"><span class="pre">0x1234</span></code></p></td>
+</tr>
+<tr class="row-even">
+<td><p><code class="docutils literal notranslate"><span class="pre">TSLICE(...)</span></code>, <code class="docutils literal notranslate"><span class="pre">TileSlice&lt;N&gt;(...)</span></code>, <code class="docutils literal notranslate"><span class="pre">tile_slice_from_l1&lt;N&gt;(...)</span></code></p></td>
+<td><p>elements sampled from a tile (see <a class="reference internal" href="#circular-buffers-and-tiles">Circular buffers and tiles</a>)</p></td>
+<td></td>
+</tr>
+<tr class="row-odd">
+<td><p><code class="docutils literal notranslate"><span class="pre">dp_typed_array_t&lt;N&gt;(format,</span> <span class="pre">words)</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">N</span></code> 32-bit words decoded as the given <code class="docutils literal notranslate"><span class="pre">DataFormat</span></code> (see <a class="reference internal" href="#typed-arrays">Typed arrays</a>)</p></td>
+<td></td>
+</tr>
+<tr class="row-even">
+<td><p><code class="docutils literal notranslate"><span class="pre">dp_top_callstack_t(...)</span></code></p></td>
+<td><p>the call stack at the print (see <a class="reference internal" href="#call-stacks">Call stacks</a>)</p></td>
+<td></td>
+</tr>
+</tbody>
+</table>
 <section id="strings">
 <h3>Strings<a class="headerlink" href="#strings" title="Permalink to this heading"></a>
 </h3>
-<p>Runtime <code class="docutils literal notranslate"><span class="pre">const</span> <span class="pre">char*</span></code> pointers are printed as hex addresses since the host cannot read device memory.
-To print the actual string content, use <code class="docutils literal notranslate"><span class="pre">CTSTR()</span></code> which stores the string in the ELF at compile time
-so the host can resolve it:</p>
+<p>The host can’t read device memory, so a runtime <code class="docutils literal notranslate"><span class="pre">const</span> <span class="pre">char*</span></code> prints as its address. To print fixed text, wrap
+the literal in <code class="docutils literal notranslate"><span class="pre">CTSTR()</span></code>: the text is stored in the kernel binary, never on the device, and the spec applies to
+it.</p>
 <div class="highlight-c++ notranslate">
 <div class="highlight"><pre><span></span><span class="k">const</span><span class="w"> </span><span class="kt">char</span><span class="o">*</span><span class="w"> </span><span class="n">s</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">"Hello world!"</span><span class="p">;</span>
-<span class="n">DPRINT</span><span class="p">(</span><span class="s">"Pointer: {}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="n">s</span><span class="p">);</span><span class="w">               </span><span class="c1">// prints: Pointer: 0x12345678</span>
-<span class="n">DPRINT</span><span class="p">(</span><span class="s">"String: {}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="n">CTSTR</span><span class="p">(</span><span class="s">"Hello!"</span><span class="p">));</span><span class="w">  </span><span class="c1">// prints: String: Hello!</span>
+<span class="n">DPRINT</span><span class="p">(</span><span class="s">"Pointer: {}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="n">s</span><span class="p">);</span><span class="w">                   </span><span class="c1">// prints: Pointer: 0x&lt;address&gt;</span>
+<span class="n">DPRINT</span><span class="p">(</span><span class="s">"String: {}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="n">CTSTR</span><span class="p">(</span><span class="s">"Hello!"</span><span class="p">));</span><span class="w">      </span><span class="c1">// prints: String: Hello!</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">CTSTR(literal)</span></code> produces a value of type <code class="docutils literal notranslate"><span class="pre">ct_string</span></code>, which can be stored in a variable, passed to and returned
+from functions, and printed later:</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="n">ct_string</span><span class="w"> </span><span class="nf">state_name</span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">state</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">switch</span><span class="w"> </span><span class="p">(</span><span class="n">state</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">case</span><span class="w"> </span><span class="mi">0</span><span class="p">:</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="n">CTSTR</span><span class="p">(</span><span class="s">"idle"</span><span class="p">);</span>
+<span class="w">        </span><span class="k">case</span><span class="w"> </span><span class="mi">1</span><span class="p">:</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="n">CTSTR</span><span class="p">(</span><span class="s">"busy"</span><span class="p">);</span>
+<span class="w">        </span><span class="k">default</span><span class="o">:</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="n">CTSTR</span><span class="p">(</span><span class="s">"unknown"</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="n">DPRINT</span><span class="p">(</span><span class="s">"state: {}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="n">state_name</span><span class="p">(</span><span class="n">state</span><span class="p">));</span>
 </pre></div>
 </div>
 </section>
 <section id="type-names">
 <h3>Type names<a class="headerlink" href="#type-names" title="Permalink to this heading"></a>
 </h3>
-<p><code class="docutils literal notranslate"><span class="pre">dp_type_name_t&lt;T&gt;()</span></code> prints the fully-qualified name of <code class="docutils literal notranslate"><span class="pre">T</span></code>. The name is resolved at compile time
-and stored in the ELF like <code class="docutils literal notranslate"><span class="pre">CTSTR()</span></code>, so the argument costs one pointer in the print buffer:</p>
+<p><code class="docutils literal notranslate"><span class="pre">dp_type_name_t&lt;T&gt;()</span></code> prints the fully qualified name of <code class="docutils literal notranslate"><span class="pre">T</span></code>. The name is worked out at compile time and stored
+in the kernel binary, like a <code class="docutils literal notranslate"><span class="pre">CTSTR</span></code>.</p>
 <div class="highlight-c++ notranslate">
 <div class="highlight"><pre><span></span><span class="k">namespace</span><span class="w"> </span><span class="nn">ns</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">MyStruct</span><span class="w"> </span><span class="p">{};</span><span class="w"> </span><span class="p">}</span>
 
@@ -418,30 +647,37 @@ and stored in the ELF like <code class="docutils literal notranslate"><span clas
 <section id="enums">
 <h3>Enums<a class="headerlink" href="#enums" title="Permalink to this heading"></a>
 </h3>
-<p>Enum types are supported natively. When DWARF debug info is present in the ELF, enum values are
-printed as their symbolic names. Use <code class="docutils literal notranslate"><span class="pre">{:#}</span></code> to include the fully-qualified type name:</p>
+<p>An enum prints as the name of its enumerator. <code class="docutils literal notranslate"><span class="pre">{:#}</span></code> adds the fully qualified type name, and fill, align and width
+apply to the printed name. The names come from the kernel’s debug information, which is on by default; without it,
+or for a value that has no name, DPRINT prints <code class="docutils literal notranslate"><span class="pre">(Type)value</span></code>. The examples declare their enums at global scope.</p>
 <div class="highlight-c++ notranslate">
 <div class="highlight"><pre><span></span><span class="k">enum</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">Color</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="kt">uint8_t</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">Red</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">Green</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="n">Blue</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="p">};</span>
-<span class="n">DPRINT</span><span class="p">(</span><span class="s">"Color: {}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="n">Color</span><span class="o">::</span><span class="n">Green</span><span class="p">);</span><span class="w">    </span><span class="c1">// prints: Color: Green</span>
-<span class="n">DPRINT</span><span class="p">(</span><span class="s">"Color: {:#}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="n">Color</span><span class="o">::</span><span class="n">Blue</span><span class="p">);</span><span class="w">   </span><span class="c1">// prints: Color: Color::Blue</span>
+<span class="n">DPRINT</span><span class="p">(</span><span class="s">"Color: {}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="n">Color</span><span class="o">::</span><span class="n">Green</span><span class="p">);</span><span class="w">              </span><span class="c1">// prints: Color: Green</span>
+<span class="n">DPRINT</span><span class="p">(</span><span class="s">"Color: {:#}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="n">Color</span><span class="o">::</span><span class="n">Blue</span><span class="p">);</span><span class="w">             </span><span class="c1">// prints: Color: Color::Blue</span>
+<span class="n">DPRINT</span><span class="p">(</span><span class="s">"[{:&gt;10}]</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="n">Color</span><span class="o">::</span><span class="n">Green</span><span class="p">);</span><span class="w">               </span><span class="c1">// prints: [     Green]</span>
+<span class="n">DPRINT</span><span class="p">(</span><span class="s">"Color: {}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="k">static_cast</span><span class="o">&lt;</span><span class="n">Color</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">7</span><span class="p">));</span><span class="w">     </span><span class="c1">// prints: Color: (Color)7</span>
 </pre></div>
 </div>
-<p>Flag enums (with <code class="docutils literal notranslate"><span class="pre">operator|</span></code>) are detected at compile time and printed with <code class="docutils literal notranslate"><span class="pre">|</span></code> separators:</p>
+<p>An enum with an <code class="docutils literal notranslate"><span class="pre">operator|</span></code> that returns the enum type is printed as flags, joined with <code class="docutils literal notranslate"><span class="pre">|</span></code>:</p>
 <div class="highlight-c++ notranslate">
-<div class="highlight"><pre><span></span><span class="k">enum</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">Flags</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">A</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="n">B</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="n">C</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span><span class="w"> </span><span class="p">};</span>
-<span class="k">constexpr</span><span class="w"> </span><span class="n">Flags</span><span class="w"> </span><span class="k">operator</span><span class="o">|</span><span class="p">(</span><span class="n">Flags</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">Flags</span><span class="w"> </span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="k">static_cast</span><span class="o">&lt;</span><span class="n">Flags</span><span class="o">&gt;</span><span class="p">(</span><span class="k">static_cast</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="n">a</span><span class="p">)</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="k">static_cast</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="n">b</span><span class="p">));</span>
+<div class="highlight"><pre><span></span><span class="k">enum</span><span class="w"> </span><span class="k">class</span><span class="w"> </span><span class="nc">Bits</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">A</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="n">B</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="n">C</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span><span class="w"> </span><span class="p">};</span>
+<span class="k">constexpr</span><span class="w"> </span><span class="n">Bits</span><span class="w"> </span><span class="k">operator</span><span class="o">|</span><span class="p">(</span><span class="n">Bits</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">Bits</span><span class="w"> </span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="k">static_cast</span><span class="o">&lt;</span><span class="n">Bits</span><span class="o">&gt;</span><span class="p">(</span><span class="k">static_cast</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="n">a</span><span class="p">)</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="k">static_cast</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="n">b</span><span class="p">));</span>
 <span class="p">}</span>
-<span class="n">DPRINT</span><span class="p">(</span><span class="s">"Flags: {}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="n">Flags</span><span class="o">::</span><span class="n">A</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">Flags</span><span class="o">::</span><span class="n">C</span><span class="p">);</span><span class="w">    </span><span class="c1">// prints: Flags: A | C</span>
-<span class="n">DPRINT</span><span class="p">(</span><span class="s">"Flags: {:#}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="n">Flags</span><span class="o">::</span><span class="n">A</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">Flags</span><span class="o">::</span><span class="n">C</span><span class="p">);</span><span class="w">  </span><span class="c1">// prints: Flags: Flags::A | Flags::C</span>
+<span class="n">DPRINT</span><span class="p">(</span><span class="s">"Bits: {}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="n">Bits</span><span class="o">::</span><span class="n">A</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">Bits</span><span class="o">::</span><span class="n">C</span><span class="p">);</span><span class="w">    </span><span class="c1">// prints: Bits: A | C</span>
+<span class="n">DPRINT</span><span class="p">(</span><span class="s">"Bits: {:#}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="n">Bits</span><span class="o">::</span><span class="n">A</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">Bits</span><span class="o">::</span><span class="n">C</span><span class="p">);</span><span class="w">  </span><span class="c1">// prints: Bits: Bits::A | Bits::C</span>
 </pre></div>
 </div>
-<p>If no DWARF debug info is available, enum values are printed as <code class="docutils literal notranslate"><span class="pre">(TypeName)integer</span></code>.</p>
+<p>Type names are always fully qualified: inside namespace <code class="docutils literal notranslate"><span class="pre">ns</span></code>, the examples print <code class="docutils literal notranslate"><span class="pre">ns::Color::Blue</span></code> and
+<code class="docutils literal notranslate"><span class="pre">(ns::Color)7</span></code>.</p>
 </section>
-<section id="circular-buffers">
-<h3>Circular Buffers<a class="headerlink" href="#circular-buffers" title="Permalink to this heading"></a>
+<section id="circular-buffers-and-tiles">
+<h3>Circular buffers and tiles<a class="headerlink" href="#circular-buffers-and-tiles" title="Permalink to this heading"></a>
 </h3>
-<p>Data from Circular Buffers can be printed using the <code class="docutils literal notranslate"><span class="pre">TileSlice</span></code> object. It can be constructed as described below, and fed directly to a <code class="docutils literal notranslate"><span class="pre">DPRINT</span></code> call.</p>
+<p><code class="docutils literal notranslate"><span class="pre">TileSlice</span></code> samples elements of a tile in a circular buffer (CB) and prints them row by row, each element
+formatted with the spec. <code class="docutils literal notranslate"><span class="pre">TSLICE</span></code> is <code class="docutils literal notranslate"><span class="pre">TileSlice&lt;64&gt;</span></code>, which carries up to 64 bytes of tile data; use
+<code class="docutils literal notranslate"><span class="pre">TileSlice&lt;N&gt;</span></code> with a larger <code class="docutils literal notranslate"><span class="pre">N</span></code> (a multiple of 4, below 256) for bigger slices. A slice with more data than
+fits is printed truncated, with a note saying so.</p>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd">
@@ -452,91 +688,266 @@ printed as their symbolic names. Use <code class="docutils literal notranslate">
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>cb_id</p></td>
-<td><p>uint8_t</p></td>
-<td><p>Id of the Circular Buffer to print data from.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">cb_id</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">uint8_t</span></code></p></td>
+<td><p>Circular buffer to print from.</p></td>
 </tr>
 <tr class="row-odd">
-<td><p>tile_idx</p></td>
-<td><p>int</p></td>
-<td><p>Index of tile inside the CB to print data from.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">tile_idx</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">int</span></code></p></td>
+<td><p>Index of the tile inside the CB, relative to the read or write pointer.</p></td>
 </tr>
 <tr class="row-even">
-<td><p>slice_range</p></td>
-<td><p>SliceRange</p></td>
-<td><p>A struct to describe starting index, ending index, and stride for data to print within the CB. Fields are <code class="docutils literal notranslate"><span class="pre">h0</span></code>, <code class="docutils literal notranslate"><span class="pre">h1</span></code>, <code class="docutils literal notranslate"><span class="pre">hs</span></code>, <code class="docutils literal notranslate"><span class="pre">w0</span></code>, <code class="docutils literal notranslate"><span class="pre">w1</span></code>,
-<code class="docutils literal notranslate"><span class="pre">ws</span></code>, all <code class="docutils literal notranslate"><span class="pre">uint8_t</span></code>.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">slice_range</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">SliceRange</span></code></p></td>
+<td><p>Rows and columns to sample, like a numpy slice <code class="docutils literal notranslate"><span class="pre">[h0:h1:hs,</span> <span class="pre">w0:w1:ws]</span></code>. The fields are <code class="docutils literal notranslate"><span class="pre">h0</span></code>, <code class="docutils literal notranslate"><span class="pre">h1</span></code>,
+<code class="docutils literal notranslate"><span class="pre">hs</span></code>, <code class="docutils literal notranslate"><span class="pre">w0</span></code>, <code class="docutils literal notranslate"><span class="pre">w1</span></code> and <code class="docutils literal notranslate"><span class="pre">ws</span></code>, all <code class="docutils literal notranslate"><span class="pre">uint8_t</span></code>. Ready-made ranges: <code class="docutils literal notranslate"><span class="pre">SliceRange::hw0_32_16()</span></code>,
+<code class="docutils literal notranslate"><span class="pre">hw0_32_8()</span></code>, <code class="docutils literal notranslate"><span class="pre">hw0_32_4()</span></code>, <code class="docutils literal notranslate"><span class="pre">h0_w0_32()</span></code> (row 0), <code class="docutils literal notranslate"><span class="pre">h0_32_w0()</span></code> (column 0), <code class="docutils literal notranslate"><span class="pre">h0_32_w1()</span></code> (column 1)
+and <code class="docutils literal notranslate"><span class="pre">hw041()</span></code> (the top-left 4x4).</p></td>
 </tr>
 <tr class="row-odd">
-<td><p>cb_type</p></td>
-<td><p>dprint_tslice_cb_t</p></td>
-<td><p>Only used for Data Movement RISCs, specify <code class="docutils literal notranslate"><span class="pre">TSLICE_INPUT_CB</span></code> or <code class="docutils literal notranslate"><span class="pre">TSLICE_OUTPUT_CB</span></code> depending on if the CB to print from is input or output.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">cb_type</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">dprint_tslice_cb_t</span></code></p></td>
+<td><p>BRISC and NCRISC only, and required there: <code class="docutils literal notranslate"><span class="pre">TSLICE_INPUT_CB</span></code> or <code class="docutils literal notranslate"><span class="pre">TSLICE_OUTPUT_CB</span></code>, which picks the CB’s
+data format.</p></td>
 </tr>
 <tr class="row-even">
-<td><p>ptr_type</p></td>
-<td><p>dprint_tslice_ptr_t</p></td>
-<td><p>Only used for Data Movement RISCs, specify <code class="docutils literal notranslate"><span class="pre">TSLICE_RD_PTR</span></code> to read from the front of the CB, or <code class="docutils literal notranslate"><span class="pre">TSLICE_WR_PTR</span></code> to read from the back of the CB.
-UNPACK RISC only reads from the front of the CB, PACK RISC only reads from the back of the CB.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">ptr_type</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">dprint_tslice_ptr_t</span></code></p></td>
+<td><p>BRISC and NCRISC only: <code class="docutils literal notranslate"><span class="pre">TSLICE_RD_PTR</span></code> reads from the front of the CB and <code class="docutils literal notranslate"><span class="pre">TSLICE_WR_PTR</span></code> from the back.
+The default is <code class="docutils literal notranslate"><span class="pre">TSLICE_RD_PTR</span></code> on BRISC and <code class="docutils literal notranslate"><span class="pre">TSLICE_WR_PTR</span></code> on NCRISC. The unpack TRISC always reads
+from the front and the pack TRISC from the back.</p></td>
 </tr>
 <tr class="row-odd">
-<td><p>endl_rows</p></td>
-<td><p>bool</p></td>
-<td><p>Whether to add a newline between printed rows, default <code class="docutils literal notranslate"><span class="pre">true</span></code>.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">endl_rows</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">bool</span></code></p></td>
+<td><p>Start a new line after each row. Default <code class="docutils literal notranslate"><span class="pre">true</span></code>.</p></td>
 </tr>
 <tr class="row-even">
-<td><p>print_untilized</p></td>
-<td><p>bool</p></td>
-<td><p>Whether to untilize the CB data while printing it (always done for block float formats), default <code class="docutils literal notranslate"><span class="pre">true</span></code>.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">print_untilized</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">bool</span></code></p></td>
+<td><p>Untilize the data while printing it. Default <code class="docutils literal notranslate"><span class="pre">true</span></code>; pass <code class="docutils literal notranslate"><span class="pre">false</span></code> when the CB holds data that isn’t
+tilized.</p></td>
 </tr>
 </tbody>
 </table>
-<p>An example of how to print data from a CB (in this case, <code class="docutils literal notranslate"><span class="pre">CBIndex::c_25</span></code>) is shown below.  Note that sampling happens relative
-to the current CB read or write pointer. This means that for printing a tile read from the front of the CB, the
-<code class="docutils literal notranslate"><span class="pre">DPRINT</span></code> call has to occur between the <code class="docutils literal notranslate"><span class="pre">cb_wait_front</span></code> and <code class="docutils literal notranslate"><span class="pre">cb_pop_front</span></code> calls. For printing a tile from the
-back of the CB, the <code class="docutils literal notranslate"><span class="pre">DPRINT</span></code> call has to occur between the <code class="docutils literal notranslate"><span class="pre">cb_reserve_back</span></code> and <code class="docutils literal notranslate"><span class="pre">cb_push_back</span></code> calls. Currently supported data
-formats for printing from CBs are <code class="docutils literal notranslate"><span class="pre">DataFormat::Float32</span></code>, <code class="docutils literal notranslate"><span class="pre">DataFormat::Float16_b</span></code>, <code class="docutils literal notranslate"><span class="pre">DataFormat::Bfp8_b</span></code>, <code class="docutils literal notranslate"><span class="pre">DataFormat::Bfp4_b</span></code>,
-<code class="docutils literal notranslate"><span class="pre">DataFormat::Int8</span></code>, <code class="docutils literal notranslate"><span class="pre">DataFormat::UInt8</span></code>, <code class="docutils literal notranslate"><span class="pre">DataFormat::UInt16</span></code>, <code class="docutils literal notranslate"><span class="pre">DataFormat::Int32</span></code>, and <code class="docutils literal notranslate"><span class="pre">DataFormat::UInt32</span></code>.</p>
+<p>The arguments are positional, in the order of the table; on other RISCs, leave out <code class="docutils literal notranslate"><span class="pre">cb_type</span></code> and <code class="docutils literal notranslate"><span class="pre">ptr_type</span></code>.
+On BRISC and NCRISC the fourth argument is always <code class="docutils literal notranslate"><span class="pre">cb_type</span></code>, so <code class="docutils literal notranslate"><span class="pre">TileSlice&lt;128&gt;(cb_id,</span> <span class="pre">0,</span> <span class="pre">sr,</span> <span class="pre">false)</span></code> from the
+compute example below means <code class="docutils literal notranslate"><span class="pre">TSLICE_OUTPUT_CB</span></code> there, not <code class="docutils literal notranslate"><span class="pre">endl_rows=false</span></code>.</p>
+<p><code class="docutils literal notranslate"><span class="pre">TileSlice</span></code> reads CBs only on BRISC, NCRISC and the unpack and pack TRISCs. On any other RISC, such as the math
+TRISC or an Ethernet, DRAM or Quasar data-movement RISC, a warning is printed instead of the data. A warning also
+replaces the data when the tile’s address is outside the L1 range that circular buffers can occupy. The supported
+data formats are <code class="docutils literal notranslate"><span class="pre">Float32</span></code>, <code class="docutils literal notranslate"><span class="pre">Float16_b</span></code>, <code class="docutils literal notranslate"><span class="pre">Bfp8_b</span></code>, <code class="docutils literal notranslate"><span class="pre">Bfp4_b</span></code>, <code class="docutils literal notranslate"><span class="pre">Int8</span></code>, <code class="docutils literal notranslate"><span class="pre">UInt8</span></code>, <code class="docutils literal notranslate"><span class="pre">UInt16</span></code>, <code class="docutils literal notranslate"><span class="pre">Int32</span></code>
+and <code class="docutils literal notranslate"><span class="pre">UInt32</span></code>; any other format prints a warning.</p>
+<p>A tile’s data format is known only at run time, so the host checks the spec against it then. When the spec doesn’t
+suit the elements, such as <code class="docutils literal notranslate"><span class="pre">{:x}</span></code> on a <code class="docutils literal notranslate"><span class="pre">Float16_b</span></code> tile, the elements print as <code class="docutils literal notranslate"><span class="pre">{}</span></code> would, and a warning line
+comes before the print’s text: <code class="docutils literal notranslate"><span class="pre">Warning:</span> <span class="pre">invalid</span> <span class="pre">format</span> <span class="pre">specifier</span> <span class="pre">{:x}</span> <span class="pre">for</span> <span class="pre">Float16_b</span> <span class="pre">data,</span> <span class="pre">printed</span> <span class="pre">with</span> <span class="pre">{}</span></code>. A spec
+that suits no number, such as <code class="docutils literal notranslate"><span class="pre">{:s}</span></code>, doesn’t compile. The same holds for <code class="docutils literal notranslate"><span class="pre">dp_typed_array_t</span></code>.</p>
+<p>Sampling happens relative to the CB’s current read or write pointer. To print a tile from the front of a CB, print
+between <code class="docutils literal notranslate"><span class="pre">cb_wait_front</span></code> and <code class="docutils literal notranslate"><span class="pre">cb_pop_front</span></code>. To print a tile from the back, print between <code class="docutils literal notranslate"><span class="pre">cb_reserve_back</span></code>
+and <code class="docutils literal notranslate"><span class="pre">cb_push_back</span></code>.</p>
 <div class="highlight-c++ notranslate">
-<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/debug/dprint.h"</span><span class="w">  </span><span class="c1">// required in all kernels using DPRINT</span>
+<div class="highlight"><pre><span></span><span class="c1">// Data-movement kernel:</span>
+<span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">cb_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_0</span><span class="p">;</span>
+<span class="n">cb_wait_front</span><span class="p">(</span><span class="n">cb_id</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="n">DPRINT</span><span class="p">(</span><span class="s">"Tile:</span><span class="se">\n</span><span class="s">{}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="n">TSLICE</span><span class="p">(</span><span class="n">cb_id</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">SliceRange</span><span class="o">::</span><span class="n">hw0_32_8</span><span class="p">(),</span><span class="w"> </span><span class="n">TSLICE_INPUT_CB</span><span class="p">,</span><span class="w"> </span><span class="n">TSLICE_RD_PTR</span><span class="p">));</span>
+<span class="n">cb_pop_front</span><span class="p">(</span><span class="n">cb_id</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
 
-<span class="kt">void</span><span class="w"> </span><span class="nf">kernel_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="c1">// Assuming the tile we want to print from CBIndex::c_25 is from the front the CB, print must happen after</span>
-<span class="w">    </span><span class="c1">// this call. If the tile is from the back of the CB, then print must happen after cb_reserve_back().</span>
-<span class="w">    </span><span class="n">cb_wait_front</span><span class="p">(</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_25</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
-<span class="w">    </span><span class="p">...</span>
+<span class="c1">// Compute kernel: the unpack TRISC reads from the front of the CB.</span>
+<span class="n">DPRINT_UNPACK</span><span class="p">(</span><span class="s">"Tile:</span><span class="se">\n</span><span class="s">{}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="n">TSLICE</span><span class="p">(</span><span class="n">cb_id</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">SliceRange</span><span class="o">::</span><span class="n">hw0_32_8</span><span class="p">()));</span>
 
-<span class="w">    </span><span class="c1">// Extract a numpy slice `[0:32:16, 0:32:16]` from tile `0` from `CBIndex::c_25` and print it.</span>
-<span class="w">    </span><span class="n">DPRINT</span><span class="p">(</span><span class="s">"{}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="n">TSLICE</span><span class="p">(</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_25</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">SliceRange</span><span class="o">::</span><span class="n">hw0_32_16</span><span class="p">()));</span>
-<span class="w">    </span><span class="c1">// Note that since the MATH core does not have access to CBs, so this is an invalid print:</span>
-<span class="w">    </span><span class="n">DPRINT_MATH</span><span class="p">(</span><span class="s">"{}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="n">TSLICE</span><span class="p">(</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_25</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">SliceRange</span><span class="o">::</span><span class="n">hw0_32_16</span><span class="p">()));</span><span class="w"> </span><span class="c1">// Invalid</span>
-
-<span class="w">    </span><span class="c1">// Print a full tile</span>
-<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int32_t</span><span class="w"> </span><span class="n">r</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">r</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">32</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">r</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="n">SliceRange</span><span class="w"> </span><span class="n">sr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SliceRange</span><span class="p">{.</span><span class="n">h0</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">r</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">h1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">r</span><span class="o">+</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">hs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">w0</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">w1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">32</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">ws</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">};</span>
-<span class="w">        </span><span class="c1">// On data movement RISCs, tiles can be printed from either the CB read or write pointers. Also need to specify whether</span>
-<span class="w">        </span><span class="c1">// the CB is input or output.</span>
-<span class="w">        </span><span class="n">DPRINT_DATA0</span><span class="p">(</span><span class="s">"{} --READ--cin1-- {}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="n">uint</span><span class="p">)</span><span class="n">r</span><span class="p">,</span><span class="w"> </span><span class="n">TileSlice</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">sr</span><span class="p">,</span><span class="w"> </span><span class="n">TSLICE_INPUT_CB</span><span class="p">,</span><span class="w"> </span><span class="n">TSLICE_RD_PTR</span><span class="p">,</span><span class="w"> </span><span class="nb">true</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">));</span>
-<span class="w">        </span><span class="n">DPRINT_DATA1</span><span class="p">(</span><span class="s">"{} --READ--cin1-- {}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="n">uint</span><span class="p">)</span><span class="n">r</span><span class="p">,</span><span class="w"> </span><span class="n">TileSlice</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">sr</span><span class="p">,</span><span class="w"> </span><span class="n">TSLICE_OUTPUT_CB</span><span class="p">,</span><span class="w"> </span><span class="n">TSLICE_WR_PTR</span><span class="p">,</span><span class="w"> </span><span class="nb">true</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">));</span>
-<span class="w">        </span><span class="c1">// Unpacker RISC only has rd_ptr and only input CBs, so no extra args</span>
-<span class="w">        </span><span class="n">DPRINT_UNPACK</span><span class="p">(</span><span class="s">"{} --READ--cin1-- {}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="n">uint</span><span class="p">)</span><span class="n">r</span><span class="p">,</span><span class="w"> </span><span class="n">TileSlice</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">sr</span><span class="p">,</span><span class="w"> </span><span class="nb">true</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">));</span>
-<span class="w">        </span><span class="c1">// Packer RISC only has wr_ptr</span>
-<span class="w">        </span><span class="n">DPRINT_PACK</span><span class="p">(</span><span class="s">"{} --READ--cin1-- {}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="n">uint</span><span class="p">)</span><span class="n">r</span><span class="p">,</span><span class="w"> </span><span class="n">TileSlice</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">sr</span><span class="p">,</span><span class="w"> </span><span class="nb">true</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">));</span>
-<span class="w">    </span><span class="p">}</span>
-
-<span class="w">    </span><span class="p">...</span>
-<span class="w">    </span><span class="n">cb_pop_front</span><span class="p">(</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_25</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="c1">// Print a whole tile, one row per print.</span>
+<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">uint8_t</span><span class="w"> </span><span class="n">r</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">r</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">32</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">r</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">SliceRange</span><span class="w"> </span><span class="n">sr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SliceRange</span><span class="p">{.</span><span class="n">h0</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">r</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">h1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="kt">uint8_t</span><span class="p">)(</span><span class="n">r</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">),</span><span class="w"> </span><span class="p">.</span><span class="n">hs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">w0</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">w1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">32</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">ws</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">};</span>
+<span class="w">    </span><span class="n">DPRINT_UNPACK</span><span class="p">(</span><span class="s">"{}: {}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="n">r</span><span class="p">,</span><span class="w"> </span><span class="n">TileSlice</span><span class="o">&lt;</span><span class="mi">128</span><span class="o">&gt;</span><span class="p">(</span><span class="n">cb_id</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">sr</span><span class="p">,</span><span class="w"> </span><span class="cm">/*endl_rows=*/</span><span class="nb">false</span><span class="p">));</span>
 <span class="p">}</span>
 </pre></div>
 </div>
-<div class="admonition note">
-<p class="admonition-title">Note</p>
-<p>The host-side <code class="docutils literal notranslate"><span class="pre">DPRINT</span></code> server splits each per-RISC stream on the newline character <code class="docutils literal notranslate"><span class="pre">\n</span></code>.
-Anything written without a trailing <code class="docutils literal notranslate"><span class="pre">\n</span></code> is held in an intermediate buffer until a later print
-provides one. If a kernel never emits a final <code class="docutils literal notranslate"><span class="pre">\n</span></code>, the trailing partial line is <strong>not</strong> flushed
-when the device is closed and will be lost. Always terminate <code class="docutils literal notranslate"><span class="pre">DPRINT</span></code> format strings with
-<code class="docutils literal notranslate"><span class="pre">\n</span></code>.</p>
+<p><code class="docutils literal notranslate"><span class="pre">tile_slice_from_l1&lt;N&gt;(l1_addr,</span> <span class="pre">format,</span> <span class="pre">slice_range)</span></code> reads a tile straight from an L1 address and always
+untilizes it. Optional trailing arguments are, in order, <code class="docutils literal notranslate"><span class="pre">tile_dim_r</span></code>, <code class="docutils literal notranslate"><span class="pre">tile_dim_c</span></code>, <code class="docutils literal notranslate"><span class="pre">face_dim_r</span></code>,
+<code class="docutils literal notranslate"><span class="pre">face_dim_c</span></code> and <code class="docutils literal notranslate"><span class="pre">num_faces</span></code>, which default to a 32x32 tile of four 16x16 faces, and <code class="docutils literal notranslate"><span class="pre">endl_rows</span></code>, which
+defaults to <code class="docutils literal notranslate"><span class="pre">true</span></code>.</p>
+</section>
+<section id="typed-arrays">
+<h3>Typed arrays<a class="headerlink" href="#typed-arrays" title="Permalink to this heading"></a>
+</h3>
+<p><code class="docutils literal notranslate"><span class="pre">dp_typed_array_t&lt;N&gt;(format,</span> <span class="pre">words)</span></code> prints <code class="docutils literal notranslate"><span class="pre">N</span></code> 32-bit words as values of the given <code class="docutils literal notranslate"><span class="pre">DataFormat</span></code>, each value
+followed by a space and formatted with the spec. A word holds one <code class="docutils literal notranslate"><span class="pre">Float32</span></code>, <code class="docutils literal notranslate"><span class="pre">Tf32</span></code>, <code class="docutils literal notranslate"><span class="pre">Int32</span></code> or <code class="docutils literal notranslate"><span class="pre">UInt32</span></code>
+value; two <code class="docutils literal notranslate"><span class="pre">UInt16</span></code>, <code class="docutils literal notranslate"><span class="pre">Float16</span></code>, <code class="docutils literal notranslate"><span class="pre">Float16_b</span></code>, <code class="docutils literal notranslate"><span class="pre">Lf8</span></code> or block-float (<code class="docutils literal notranslate"><span class="pre">Bfp8</span></code>, <code class="docutils literal notranslate"><span class="pre">Bfp4</span></code>, <code class="docutils literal notranslate"><span class="pre">Bfp2</span></code> and their
+<code class="docutils literal notranslate"><span class="pre">_b</span></code> forms) values; or four <code class="docutils literal notranslate"><span class="pre">Int8</span></code> or <code class="docutils literal notranslate"><span class="pre">UInt8</span></code> values. Values that share a word print low bits first. Other
+formats aren’t supported and print a warning. Integers and <code class="docutils literal notranslate"><span class="pre">Float32</span></code> are read as stored in memory. The other
+float formats must be in the DEST register’s field order (sign, mantissa, exponent), which is how the DEST register
+dumps in <code class="docutils literal notranslate"><span class="pre">api/debug/dprint_tensix.h</span></code> send them; ordinary <code class="docutils literal notranslate"><span class="pre">bfloat16</span></code> words in memory don’t print as their values.</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">words</span><span class="p">[</span><span class="mi">4</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="mh">0x3F800000</span><span class="p">,</span><span class="w"> </span><span class="mh">0x40000000</span><span class="p">,</span><span class="w"> </span><span class="mh">0x40400000</span><span class="p">,</span><span class="w"> </span><span class="mh">0x40800000</span><span class="p">};</span>
+<span class="n">DPRINT</span><span class="p">(</span><span class="s">"[{}]</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="n">dp_typed_array_t</span><span class="o">&lt;</span><span class="mi">4</span><span class="o">&gt;</span><span class="p">(</span><span class="k">static_cast</span><span class="o">&lt;</span><span class="kt">uint16_t</span><span class="o">&gt;</span><span class="p">(</span><span class="n">DataFormat</span><span class="o">::</span><span class="n">Float32</span><span class="p">),</span><span class="w"> </span><span class="n">words</span><span class="p">));</span><span class="w">  </span><span class="c1">// prints: [1 2 3 4 ]</span>
+</pre></div>
 </div>
 </section>
+<section id="call-stacks">
+<h3>Call stacks<a class="headerlink" href="#call-stacks" title="Permalink to this heading"></a>
+</h3>
+<p><code class="docutils literal notranslate"><span class="pre">dp_top_callstack_t::current(skip_frames)</span></code> captures the current position, and the host prints the call stack
+there, resolved from debug information, as a tree of lines: each frame’s function, then its file and line,
+innermost frame first. A last leaf of <code class="docutils literal notranslate"><span class="pre">...</span></code> means the rest of the stack couldn’t be resolved.
+<code class="docutils literal notranslate"><span class="pre">dp_top_callstack_t(pc,</span> <span class="pre">ra,</span> <span class="pre">skip_frames)</span></code> does the same for a given program counter and return address. The LLK
+sanitizer uses this in its reports.</p>
+</section>
+</section>
+<section id="output">
+<h2>Output<a class="headerlink" href="#output" title="Permalink to this heading"></a>
+</h2>
+<ul class="simple">
+<li><p>Each RISC’s text is kept apart, and so are its kernel’s and its firmware’s: lines from different RISCs, or from a
+RISC’s kernel and firmware, never mix within a line, but the order of lines from different RISCs is not defined.</p></li>
+<li><p>With the prefix on (the default), each line starts with <code class="docutils literal notranslate"><span class="pre">&lt;device&gt;:&lt;x&gt;-&lt;y&gt;:&lt;RISC&gt;:</span></code> and a space, in logical
+core coordinates. For example, <code class="docutils literal notranslate"><span class="pre">DPRINT("Hello\n")</span></code> on TRISC0 of core (1,2) on device 0 prints
+<code class="docutils literal notranslate"><span class="pre">0:1-2:TR0:</span> <span class="pre">Hello</span></code>. The RISC names are <code class="docutils literal notranslate"><span class="pre">BR</span></code>, <code class="docutils literal notranslate"><span class="pre">NC</span></code>, <code class="docutils literal notranslate"><span class="pre">TR0</span></code>-<code class="docutils literal notranslate"><span class="pre">TR2</span></code> and <code class="docutils literal notranslate"><span class="pre">DR</span></code>. An Ethernet RISC is <code class="docutils literal notranslate"><span class="pre">ER</span></code>
+on a core that runs one ERISC (Wormhole, and Blackhole active Ethernet cores in single-ERISC mode), and
+<code class="docutils literal notranslate"><span class="pre">ER0</span></code>/<code class="docutils literal notranslate"><span class="pre">ER1</span></code> on a core that runs two. On Quasar the names are <code class="docutils literal notranslate"><span class="pre">DM0</span></code>-<code class="docutils literal notranslate"><span class="pre">DM7</span></code> and <code class="docutils literal notranslate"><span class="pre">N0TR0</span></code>-<code class="docutils literal notranslate"><span class="pre">N3TR3</span></code> on Tensix
+cores, and <code class="docutils literal notranslate"><span class="pre">DE-DM0</span></code>-<code class="docutils literal notranslate"><span class="pre">DE-DM7</span></code> on dispatch-engine cores.</p></li>
+<li><p>With <code class="docutils literal notranslate"><span class="pre">TT_METAL_DPRINT_TAG_FIRMWARE=1</span></code>, each line that firmware printed starts with <code class="docutils literal notranslate"><span class="pre">[FW]</span></code> and a space, ahead
+of the prefix: <code class="docutils literal notranslate"><span class="pre">[FW]</span> <span class="pre">0:1-2:DM0:</span> <span class="pre">&lt;text&gt;</span></code>.</p></li>
+<li><p>With <code class="docutils literal notranslate"><span class="pre">TT_METAL_DPRINT_ONE_FILE_PER_RISC</span></code>, each RISC writes
+<code class="docutils literal notranslate"><span class="pre">generated/dprint/device-&lt;id&gt;_&lt;core</span> <span class="pre">type&gt;-core-&lt;x&gt;-&lt;y&gt;_&lt;RISC&gt;.txt</span></code> under <code class="docutils literal notranslate"><span class="pre">TT_METAL_LOGS_PATH</span></code> (the current
+directory if that isn’t set). The core type is <code class="docutils literal notranslate"><span class="pre">worker</span></code>, <code class="docutils literal notranslate"><span class="pre">ethernet</span></code>, <code class="docutils literal notranslate"><span class="pre">DRAM</span></code> or <code class="docutils literal notranslate"><span class="pre">dispatch</span></code>. The RISC name
+is the long one: <code class="docutils literal notranslate"><span class="pre">BRISC</span></code>, <code class="docutils literal notranslate"><span class="pre">NCRISC</span></code>, <code class="docutils literal notranslate"><span class="pre">TRISC0</span></code>-<code class="docutils literal notranslate"><span class="pre">TRISC2</span></code>, <code class="docutils literal notranslate"><span class="pre">ERISC</span></code> or <code class="docutils literal notranslate"><span class="pre">ERISC0</span></code>/<code class="docutils literal notranslate"><span class="pre">ERISC1</span></code>, <code class="docutils literal notranslate"><span class="pre">DRISC</span></code>, and
+on Quasar <code class="docutils literal notranslate"><span class="pre">DM0</span></code>-<code class="docutils literal notranslate"><span class="pre">DM7</span></code>, <code class="docutils literal notranslate"><span class="pre">Neo0TRISC0</span></code>-<code class="docutils literal notranslate"><span class="pre">Neo3TRISC3</span></code> and <code class="docutils literal notranslate"><span class="pre">DE-DM0</span></code>-<code class="docutils literal notranslate"><span class="pre">DE-DM7</span></code>. For example,
+<code class="docutils literal notranslate"><span class="pre">device-0_worker-core-1-2_TRISC0.txt</span></code>.</p></li>
+<li><p>Text is written shortly after the device prints it, even while the kernel is still running or is hung.</p></li>
+<li><p>Fast and slow dispatch print the same text.</p></li>
+</ul>
+</section>
+<section id="compile-time-checks">
+<h2>Compile-time checks<a class="headerlink" href="#compile-time-checks" title="Permalink to this heading"></a>
+</h2>
+<p>A mistake in a print is a compile error that points at the print. The messages contain these phrases:</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Mistake</p></th>
+<th class="head"><p>Example</p></th>
+<th class="head"><p>The message contains</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>malformed braces or spec, or an unsupported feature</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">DPRINT("{n</span> <span class="pre">=</span> <span class="pre">{0}}}\n",</span> <span class="pre">42);</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">Invalid</span> <span class="pre">format</span> <span class="pre">string</span></code></p></td>
+</tr>
+<tr class="row-odd">
+<td><p>mixing <code class="docutils literal notranslate"><span class="pre">{}</span></code> and <code class="docutils literal notranslate"><span class="pre">{N}</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">DPRINT("{}</span> <span class="pre">{0}\n",</span> <span class="pre">42);</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">Cannot</span> <span class="pre">mix</span> <span class="pre">indexed</span> <span class="pre">({0})</span> <span class="pre">and</span> <span class="pre">non-indexed</span> <span class="pre">({})</span> <span class="pre">placeholders</span></code></p></td>
+</tr>
+<tr class="row-even">
+<td><p>an index with no argument</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">DPRINT("{1}\n",</span> <span class="pre">42);</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">Placeholder</span> <span class="pre">index</span> <span class="pre">exceeds</span> <span class="pre">number</span> <span class="pre">of</span> <span class="pre">arguments</span></code></p></td>
+</tr>
+<tr class="row-odd">
+<td><p>with <code class="docutils literal notranslate"><span class="pre">{N}</span></code>, an argument that’s never printed</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">DPRINT("{0}</span> <span class="pre">{0}\n",</span> <span class="pre">42,</span> <span class="pre">5);</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">All</span> <span class="pre">arguments</span> <span class="pre">must</span> <span class="pre">be</span> <span class="pre">referenced</span></code></p></td>
+</tr>
+<tr class="row-even">
+<td><p>with <code class="docutils literal notranslate"><span class="pre">{}</span></code>, a different number of placeholders and arguments</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">DPRINT("{}</span> <span class="pre">{}\n",</span> <span class="pre">42);</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">Number</span> <span class="pre">of</span> <span class="pre">{}</span> <span class="pre">placeholders</span> <span class="pre">must</span> <span class="pre">match</span> <span class="pre">number</span> <span class="pre">of</span> <span class="pre">arguments</span></code></p></td>
+</tr>
+<tr class="row-odd">
+<td><p>an argument type DPRINT can’t print</p></td>
+<td><p>a struct</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">No</span> <span class="pre">serialization</span> <span class="pre">defined</span> <span class="pre">for</span> <span class="pre">this</span> <span class="pre">type</span></code></p></td>
+</tr>
+<tr class="row-even">
+<td><p>a spec that doesn’t suit the argument</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">DPRINT("{:.2f}\n",</span> <span class="pre">5u);</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">invalid</span> <span class="pre">format</span> <span class="pre">specifier</span></code></p></td>
+</tr>
+<tr class="row-odd">
+<td><p>a print too big for its print buffer</p></td>
+<td><p>a large <code class="docutils literal notranslate"><span class="pre">dp_typed_array_t</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">does</span> <span class="pre">not</span> <span class="pre">fit</span> <span class="pre">in</span> <span class="pre">the</span> <span class="pre">print</span> <span class="pre">buffer</span></code></p></td>
+</tr>
+<tr class="row-even">
+<td><p>more than 64 arguments in one print (a <code class="docutils literal notranslate"><span class="pre">dp_typed_array_t</span></code> or a <code class="docutils literal notranslate"><span class="pre">TileSlice</span></code> is one)</p></td>
+<td><p>65 values</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">has</span> <span class="pre">more</span> <span class="pre">than</span> <span class="pre">64</span> <span class="pre">arguments</span></code></p></td>
+</tr>
+<tr class="row-odd">
+<td><p>more than 256 bytes of values in one print (<code class="docutils literal notranslate"><span class="pre">dp_typed_array_t</span></code> and <code class="docutils literal notranslate"><span class="pre">TileSlice</span></code> arguments don’t count)</p></td>
+<td><p>33 values of 8 bytes</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">take</span> <span class="pre">more</span> <span class="pre">than</span> <span class="pre">256</span> <span class="pre">bytes</span></code></p></td>
+</tr>
+<tr class="row-even">
+<td><p>a format that isn’t a string literal</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">DPRINT(format_ptr,</span> <span class="pre">1);</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">format</span> <span class="pre">must</span> <span class="pre">be</span> <span class="pre">a</span> <span class="pre">string</span> <span class="pre">literal</span></code></p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="limits">
+<h2>Limits<a class="headerlink" href="#limits" title="Permalink to this heading"></a>
+</h2>
+<p>Size:</p>
+<ul class="simple">
+<li><p>A print carries its arguments in one message of its RISC’s print buffer: a 4-byte header and the arguments, padded
+to 4 bytes. Every RISC’s buffer takes 128 bytes of arguments; a print that doesn’t fit its RISC’s buffer fails to
+compile with <code class="docutils literal notranslate"><span class="pre">does</span> <span class="pre">not</span> <span class="pre">fit</span> <span class="pre">in</span> <span class="pre">the</span> <span class="pre">print</span> <span class="pre">buffer</span></code>.</p></li>
+<li><p>A print takes at most 64 arguments, and its values other than <code class="docutils literal notranslate"><span class="pre">dp_typed_array_t</span></code> and <code class="docutils literal notranslate"><span class="pre">TileSlice</span></code> arguments take
+at most 256 bytes, for example 64 values of 4 bytes or 32 of 8 bytes. Split a bigger print into several prints, or
+print an array as a <code class="docutils literal notranslate"><span class="pre">dp_typed_array_t</span></code>.</p></li>
+<li><p>A value takes its type’s size: <code class="docutils literal notranslate"><span class="pre">bool</span></code> and <code class="docutils literal notranslate"><span class="pre">char</span></code> 1 byte; <code class="docutils literal notranslate"><span class="pre">bf16_t</span></code>, <code class="docutils literal notranslate"><span class="pre">bf8_t</span></code> and <code class="docutils literal notranslate"><span class="pre">bf4_t</span></code> 2 bytes; an enum
+its underlying type’s size; a pointer, a <code class="docutils literal notranslate"><span class="pre">CTSTR</span></code> and a type name a pointer’s size (4 bytes, 8 on Quasar’s
+data-movement RISCs); a <code class="docutils literal notranslate"><span class="pre">dp_top_callstack_t</span></code> three pointers. Values smaller than 4 bytes share 4-byte words, so
+a print’s size is the sum of its values’ sizes, rounded up to 4.</p></li>
+</ul>
+<p>Stack and code size:</p>
+<ul class="simple">
+<li><p>A print evaluates its arguments where it stands, and the function that contains it keeps their values, in
+registers or on its stack, until the print has copied them. A function with wide prints therefore needs more stack,
+also while it calls other functions, and deep call chains or recursion through such functions add it up. If a
+kernel runs out of stack, or a function’s stack frame goes over a compile-time limit, split the print, print fewer
+values per print, or move the print into a function of its own marked <code class="docutils literal notranslate"><span class="pre">DPRINT_FORCE_NOINLINE</span></code>.</p></li>
+<li><p>The compiler can copy a function that prints into each of its callers, typically a function declared <code class="docutils literal notranslate"><span class="pre">inline</span></code>, a
+lambda or a member function, and every copy carries the function’s prints. If a kernel grows too large while DPRINT
+is on, mark such functions with <code class="docutils literal notranslate"><span class="pre">DPRINT_FORCE_NOINLINE</span></code> (<code class="docutils literal notranslate"><span class="pre">DEVICE_PRINT_FORCE_NOINLINE</span></code>): while DPRINT is on,
+the compiler keeps exactly one copy of the function, neither copied into its callers nor specialized per constant
+argument; while DPRINT is off, the macro is empty and the compiler decides as usual.</p></li>
+</ul>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="n">DPRINT_FORCE_NOINLINE</span><span class="w"> </span><span class="kr">inline</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="n">print_cb_state</span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">cb_id</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">DPRINT</span><span class="p">(</span><span class="s">"cb {}: rd {} wr {}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="n">cb_id</span><span class="p">,</span><span class="w"> </span><span class="n">get_local_cb_interface</span><span class="p">(</span><span class="n">cb_id</span><span class="p">).</span><span class="n">fifo_rd_ptr</span><span class="p">,</span>
+<span class="w">           </span><span class="n">get_local_cb_interface</span><span class="p">(</span><span class="n">cb_id</span><span class="p">).</span><span class="n">fifo_wr_ptr</span><span class="p">);</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+<section id="best-practices">
+<h2>Best practices<a class="headerlink" href="#best-practices" title="Permalink to this heading"></a>
+</h2>
+<ul class="simple">
+<li><p><strong>Print a value several ways with one argument.</strong> <code class="docutils literal notranslate"><span class="pre">DPRINT("{0}</span> <span class="pre">=</span> <span class="pre">{0:#x}\n",</span> <span class="pre">v)</span></code> sends <code class="docutils literal notranslate"><span class="pre">v</span></code> to the host once;
+<code class="docutils literal notranslate"><span class="pre">DPRINT("{}</span> <span class="pre">=</span> <span class="pre">{:#x}\n",</span> <span class="pre">v,</span> <span class="pre">v)</span></code> sends it twice.</p></li>
+<li><p><strong>Put fixed text in the format string.</strong> It stays in the kernel binary on the host and costs nothing on the
+device, however long it is.</p></li>
+<li><p><strong>Combine related values into one print.</strong> Each print costs a few instructions in the kernel and a small header in
+the print buffer, so one print with four values is cheaper than four prints with one value each.</p></li>
+<li><p><strong>Use</strong> <code class="docutils literal notranslate"><span class="pre">CTSTR</span></code> <strong>for fixed strings.</strong> A runtime <code class="docutils literal notranslate"><span class="pre">const</span> <span class="pre">char*</span></code> prints only its address.</p></li>
+<li><p><strong>Use an unsigned type for hex.</strong> <code class="docutils literal notranslate"><span class="pre">{:x}</span></code> on a negative signed value prints a minus sign: <code class="docutils literal notranslate"><span class="pre">int32_t(-1)</span></code> prints
+<code class="docutils literal notranslate"><span class="pre">-1</span></code>, not <code class="docutils literal notranslate"><span class="pre">ffffffff</span></code>.</p></li>
+<li><p><strong>End every line with</strong> <code class="docutils literal notranslate"><span class="pre">\n</span></code>. A line without one isn’t written until a later kernel print on that RISC ends it,
+and is lost if the device closes first.</p></li>
+<li><p><strong>Keep arguments free of side effects.</strong> They aren’t evaluated when DPRINT is off.</p></li>
+<li><p><strong>Print only what you need, and only from where you need it.</strong> Narrow <code class="docutils literal notranslate"><span class="pre">TT_METAL_DPRINT_CORES</span></code> and
+<code class="docutils literal notranslate"><span class="pre">TT_METAL_DPRINT_RISCVS</span></code>, and use the thread variants (<code class="docutils literal notranslate"><span class="pre">DPRINT_MATH</span></code> and so on) in compute kernels. When a
+core’s print buffer is full, the printing RISC waits for the host, which changes the kernel’s timing.</p></li>
+<li><p><strong>Avoid prints in hot loops when timing matters,</strong> for the same reason. Turn DPRINT off before measuring
+performance; with it off, prints compile to nothing.</p></li>
+</ul>
 </section>
 </section>
 

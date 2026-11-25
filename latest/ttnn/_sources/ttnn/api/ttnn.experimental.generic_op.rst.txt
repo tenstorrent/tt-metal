@@ -1,0 +1,8 @@
+﻿ttnn.experimental.generic\_op
+=============================
+
+.. currentmodule:: ttnn.experimental
+
+.. _ttnn.experimental.generic_op:
+
+.. autooperation:: ttnn.experimental.generic_op
