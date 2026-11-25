@@ -21,13 +21,13 @@ namespace experimental {
 /**
  * Paired init for unary_bcast_src_to_dest_tile, Quasar (SrcB path; Quasar has no unpack-to-Dest broadcast). Unpack TRISC programs an Unp1 buffer descriptor at src's base and the
  * unpack-to-SrcB broadcast MOP; math TRISC programs the SrcB -> Dest broadcast datacopy. Re-init when another op
- * ran in between (Quasar rule). No uninit. Float16_b / Float16, full 32x32 tiles, ROW / COL / SCALAR.
+ * ran in between (Quasar rule). No uninit. Float16_b, Float16, Float32, MxFp8R, MxFp8P, MxInt8; full 32x32 tiles, ROW / COL / SCALAR.
  *
  * | Param Type | Name                | Description                              | Type          | Valid Range        | Required |
  * |------------|---------------------|------------------------------------------|---------------|--------------------|----------|
  * | Template   | bcast_type          | Broadcast mode (ROW / COL / SCALAR)      | BroadcastType | not NONE           | True     |
  * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                | bool          | DST_ACCUM_MODE     | False    |
- * | Function   | src                 | Source operand (e.g. DataflowBuffer::front) | LLKOperand | N/A                | True     |
+ * | Function   | src                 | Source operand (e.g. DataflowBuffer::front) | LLKOperand | Float16_b, Float16, Float32, MxFp8R, MxFp8P, MxInt8 | True     |
  */
 // clang-format on
 template <BroadcastType bcast_type, bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
@@ -36,9 +36,9 @@ inline void unary_bcast_src_to_dest_init(LLKOperand<Format, Shape> src) {
         bcast_type != BroadcastType::NONE,
         "unary_bcast_src_to_dest_init (Quasar 2.0): use copy_src_to_dest_init for NONE.");
     static_assert(
-        llk_2_0::is_supported_format(Format),
-        "unary_bcast_src_to_dest_init (Quasar 2.0): Float16_b / Float16 only (no unary_bcast_direct_to_dest on "
-        "Quasar).");
+        llk_2_0::is_fpu_operand_format(Format),
+        "unary_bcast_src_to_dest_init (Quasar 2.0): Float16_b / Float16 / Float32 / MxFp8R / MxFp8P / MxInt8 only "
+        "(no unary_bcast_direct_to_dest on Quasar).");
     static_assert(
         Shape.face_r_dim == MAX_FACE_R_DIM && Shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM &&
             Shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM,
@@ -74,13 +74,13 @@ inline void unary_bcast_src_to_dest_tile(LLKOperand<Format, Shape> src, std::uin
 /**
  * Paired init for any_tiles_bcast, Quasar. Like add/sub/mul_init, but operand B is broadcast per tBcastDim. Both
  * operands are needed: the init programs both buffer descriptors. Re-init when another op ran in between (Quasar
- * rule). No uninit. Float16_b / Float16; ROW / COL / SCALAR.
+ * rule). No uninit. Float16_b, Float16, Float32, MxFp8R, MxFp8P, MxInt8; ROW / COL / SCALAR.
  *
  * | Param Type | Name      | Description                                   | Type              | Valid Range | Required |
  * |------------|-----------|-----------------------------------------------|-------------------|-------------|----------|
  * | Template   | tBcastOp  | The binary op (ELWADD / ELWSUB / ELWMUL)      | EltwiseBinaryType | N/A         | True     |
  * | Template   | tBcastDim | The broadcast dim (ROW / COL / SCALAR)        | BroadcastType     | not NONE    | True     |
- * | Function   | a / b     | Input operands (A -> SrcA, broadcast B -> SrcB) | LLKOperand      | N/A         | True     |
+ * | Function   | a / b     | Input operands (A -> SrcA, broadcast B -> SrcB) | LLKOperand      | Float16_b, Float16, Float32, MxFp8R, MxFp8P, MxInt8 | True     |
  */
 // clang-format on
 template <

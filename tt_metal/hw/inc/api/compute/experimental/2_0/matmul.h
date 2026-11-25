@@ -23,12 +23,11 @@ namespace experimental {
  * Init for matmul_block, Quasar: C[rt_dim, ct_dim] += in0[rt_dim, kt_dim] x in1[kt_dim, ct_dim]. Unpack TRISC
  * programs Unp1 (in0 -> SrcB) and Unp0 (in1 -> SrcA) buffer descriptors at the operands' bases, their formats and
  * the matmul unpack MOP (with in1 transpose when set); math TRISC programs the ALU formats and the matmul MOP at the
- * kernel's math fidelity. Re-init when another op ran in between or the block shape changes. No uninit. Only
- * 16-bit float operands.
+ * kernel's math fidelity. Re-init when another op ran in between or the block shape changes. No uninit.
  *
  * | Param Type | Name      | Description                                    | Type       | Valid Range                     | Required |
  * |------------|-----------|------------------------------------------------|------------|---------------------------------|----------|
- * | Function   | in0 / in1 | Input operands (in0 -> SrcB, in1 -> SrcA)      | LLKOperand | N/A                             | True     |
+ * | Function   | in0 / in1 | Input operands (in0 -> SrcB, in1 -> SrcA)      | LLKOperand | Float16_b, Float16, Float32, MxFp8R, MxFp8P, MxInt8 | True     |
  * | Template   | ct_dim    | Output block columns (tiles)                   | uint32_t   | ct_dim * rt_dim <= section size | False    |
  * | Template   | rt_dim    | Output block rows (tiles)                      | uint32_t   | ct_dim * rt_dim <= section size | False    |
  * | Template   | kt_dim    | Inner dim (in0 columns, in1 rows) in tiles     | uint32_t   | >= 1                            | False    |
@@ -45,17 +44,23 @@ template <
     TensorShape S1>
 ALWI void matmul_block_init(LLKOperand<F0, S0> in0, LLKOperand<F1, S1> in1, std::uint32_t transpose = 0) {
     static_assert(
-        llk_2_0::is_supported_format(F0) && llk_2_0::is_supported_format(F1),
-        "matmul_block_init: Float16_b / Float16 only.");
+        llk_2_0::is_fpu_operand_format(F0) && llk_2_0::is_fpu_operand_format(F1),
+        "matmul_block_init: Float16_b / Float16 / Float32 / MxFp8R / MxFp8P / MxInt8 only.");
     static_assert(is_legal_tile_shape(S0) && is_legal_tile_shape(S1), "matmul_block_init: illegal tile shape.");
     static_assert(
         ct_dim * rt_dim <= detail::dest_section_tiles<DST_ACCUM_MODE>(), "matmul_block_init: block exceeds Dest");
     if (transpose) {
-        UNPACK((llk_2_0::unpack_matmul_init<LLKOperand<F0, S0>::descriptor, LLKOperand<F1, S1>::descriptor, true>(
-            in0.l1_address, in1.l1_address, ct_dim, rt_dim, kt_dim)));
+        UNPACK((llk_2_0::unpack_matmul_init<
+                LLKOperand<F0, S0>::descriptor,
+                LLKOperand<F1, S1>::descriptor,
+                DST_ACCUM_MODE,
+                true>(in0.l1_address, in1.l1_address, ct_dim, rt_dim, kt_dim)));
     } else {
-        UNPACK((llk_2_0::unpack_matmul_init<LLKOperand<F0, S0>::descriptor, LLKOperand<F1, S1>::descriptor, false>(
-            in0.l1_address, in1.l1_address, ct_dim, rt_dim, kt_dim)));
+        UNPACK((llk_2_0::unpack_matmul_init<
+                LLKOperand<F0, S0>::descriptor,
+                LLKOperand<F1, S1>::descriptor,
+                DST_ACCUM_MODE,
+                false>(in0.l1_address, in1.l1_address, ct_dim, rt_dim, kt_dim)));
     }
     MATH((llk_2_0::math_matmul_init<
           LLKOperand<F0, S0>::descriptor,
@@ -67,11 +72,11 @@ ALWI void matmul_block_init(LLKOperand<F0, S0> in0, LLKOperand<F1, S1> in1, std:
 // clang-format off
 /**
  * Init for matmul_tiles: matmul_block_init<1, 1, 1>(in0, in1, transpose). Re-init when another op ran in between.
- * No uninit. Only 16-bit float operands.
+ * No uninit.
  *
  * | Param Type | Name      | Description                                    | Type       | Valid Range | Required |
  * |------------|-----------|------------------------------------------------|------------|-------------|----------|
- * | Function   | in0 / in1 | Input operands (in0 -> SrcB, in1 -> SrcA)      | LLKOperand | N/A         | True     |
+ * | Function   | in0 / in1 | Input operands (in0 -> SrcB, in1 -> SrcA)      | LLKOperand | Float16_b, Float16, Float32, MxFp8R, MxFp8P, MxInt8 | True     |
  * | Function   | transpose | Transpose each in1 tile (e.g. Q x K^T)         | uint32_t   | 0, 1        | False    |
  */
 // clang-format on
