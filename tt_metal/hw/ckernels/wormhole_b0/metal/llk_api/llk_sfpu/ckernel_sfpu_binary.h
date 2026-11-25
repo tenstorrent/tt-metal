@@ -245,10 +245,10 @@ inline void calculate_sfpu_binary(
             // written symmetrically, and the asymmetry is load-bearing: sfpi lowers `in0 < 0.0f`
             // to an SFPSETCC on in0's bits, but `in0 <= 0.0f` has no SETCC mode and goes through
             // an SFPMAD negation, which flushes a denormal in0 to zero. The nested test below
-            // keeps that flush-based arm for the in0 > in1 side, so a denormal in0 steps exactly
-            // as it always has (bit-identical on silicon, every edge class); a bits-only sign flip
-            // for both sides would be cheaper still but sends (+denormal, negative) lanes the
-            // other way. The in0 < in1 side needs only the sign bit, so it is one arm plus a flip.
+            // uses that flush-based arm on the in0 > in1 side, so a positive denormal in0 with
+            // in1 < in0 steps one ULP away from in1 (the largest denormal lands on +FLT_MIN); a
+            // sign-bit test there would step it toward zero instead. The in0 < in1 side needs only
+            // the sign bit, so it is one arm plus a flip.
             v_if(in0 < in1) { step = kUlpStep; }
             v_endif;
             v_if(in0 < 0.0f) { step = -step; }

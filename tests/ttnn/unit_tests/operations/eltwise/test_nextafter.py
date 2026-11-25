@@ -225,3 +225,67 @@ def test_nextafter_exhaustive_bfloat16(device, toward):
     assert in_scope.sum() == 65023, f"expected 65023 normal patterns in scope, got {in_scope.sum()}"
 
     assert_with_ulp(expected_result=expected[in_scope], actual_result=actual[in_scope], ulp_threshold=0)
+
+
+def _from_bits(patterns):
+    """float32 tensor from unsigned 32-bit patterns."""
+    p = torch.tensor(patterns, dtype=torch.int64)
+    return torch.where(p >= 2**31, p - 2**32, p).to(torch.int32).view(torch.float32)
+
+
+# (in0, in1, result) bit patterns as Wormhole returns them, not the IEEE answers: the SFPU flushes
+# denormals, and the direction arm for in0 > in1 tests `in0 <= 0` through a flushing compare, so a
+# positive denormal in0 stepping toward a negative in1 lands on +FLT_MIN. A sign-bit-only direction
+# test sends those lanes to +0 instead.
+_DENORMAL_EDGES = {
+    ttnn.float32: [
+        (0x007FFFFF, 0xBF800000, 0x00800000),
+        (0x007FFFFF, 0x80800000, 0x00800000),
+        (0x007FFFFF, 0x3F800000, 0x00800000),
+        (0x807FFFFF, 0xBF800000, 0x80800000),
+        (0x807FFFFF, 0x3F800000, 0x80000000),
+        (0x00000001, 0xBF800000, 0x00000000),
+        (0x00000000, 0x007FFFFF, 0x00000000),
+        (0x00000000, 0x807FFFFF, 0x80000000),
+        (0x80000000, 0x007FFFFF, 0x80000000),
+        (0x80000000, 0x807FFFFF, 0x80000000),
+        (0x00000000, 0x80000001, 0x80000000),
+        (0x80000000, 0x00000001, 0x80000000),
+    ],
+    # bfloat16 patterns widened to float32. A bfloat16 tile drops the sign of zero, so zero
+    # results are compared by magnitude only.
+    ttnn.bfloat16: [
+        (0x007F0000, 0xBF800000, 0x00800000),
+        (0x007F0000, 0x80800000, 0x00800000),
+        (0x007F0000, 0x3F800000, 0x00800000),
+        (0x807F0000, 0xBF800000, 0x80800000),
+        (0x807F0000, 0x3F800000, 0x00000000),
+        (0x00010000, 0xBF800000, 0x00000000),
+        (0x00000000, 0x007F0000, 0x00000000),
+        (0x00000000, 0x807F0000, 0x00000000),
+    ],
+}
+
+
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+def test_nextafter_denormal_edges(device, dtype):
+    """Pins the Wormhole results for denormal and zero operands, which the other tests filter out."""
+    in0, in1, expected = (list(col) for col in zip(*_DENORMAL_EDGES[dtype]))
+    n = len(in0)
+    torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
+    a = torch.cat([_from_bits(in0), torch.ones(1024 - n)]).reshape(1, 1, 32, 32).to(torch_dtype)
+    b = torch.cat([_from_bits(in1), torch.ones(1024 - n)]).reshape(1, 1, 32, 32).to(torch_dtype)
+
+    ttnn_a = ttnn.from_torch(a, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_b = ttnn.from_torch(b, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(ttnn.nextafter(ttnn_a, ttnn_b)).float().reshape(-1)[:n]
+    expected = _from_bits(expected)
+
+    if dtype == ttnn.bfloat16:
+        actual, expected = torch.where(actual == 0, 0.0, actual), torch.where(expected == 0, 0.0, expected)
+    mismatch = actual.view(torch.int32) != expected.view(torch.int32)
+    assert not mismatch.any(), [
+        (f"{x:08x}", f"{y:08x}", f"{int(r) & 0xFFFFFFFF:08x}")
+        for x, y, r, m in zip(in0, in1, actual.view(torch.int32), mismatch)
+        if m
+    ]
