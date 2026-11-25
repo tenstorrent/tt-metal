@@ -222,10 +222,7 @@ skus:
   # self-hosted device runners only execute tests that actually need silicon.
   # No merge_queue_sku: GitHub-hosted capacity is not a contended prio pool
   # (same as the sim_* ubuntu-latest SKUs below).
-  #
-  # Back on ubuntu-latest (26.04). This SKU runs the sanitizer test binaries, so
-  # it depends on the container options set for it in smoke.yaml; without those
-  # TSan aborts at startup on a 26.04 host. See the comment there.
+  # Runs sanitizer binaries: relies on its seccomp option in smoke.yaml.
   github_hosted_cpu:
     runs_on:
       - ubuntu-latest
