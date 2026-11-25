@@ -71,6 +71,10 @@ inline void _llk_unpack_reduce_init_(
         type != PoolType::MIN,
         "The FPU reduce has no MIN: the hardware provides GMPOOL (max) and GAPOOL (average) only. "
         "Use the SFPU reduce instead (ckernel_sfpu_reduce.h::calculate_reduce).");
+    static_assert(
+        type != PoolType::PROD,
+        "The FPU reduce has no PROD: GAPOOL/GMPOOL have no product variant. "
+        "Use the SFPU reduce instead (ckernel_sfpu_reduce.h::calculate_reduce with REDUCE_SCALAR).");
 
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
