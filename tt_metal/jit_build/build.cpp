@@ -30,6 +30,8 @@
 #include <string_view>
 #include <unordered_map>
 #include <vector>
+#include <unordered_set>
+#include <utility>
 
 #include "hostdev/observability_event_descriptor.h"
 
