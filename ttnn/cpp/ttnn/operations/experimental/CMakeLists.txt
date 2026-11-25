@@ -62,6 +62,9 @@ add_subdirectory(deepseek/moe/deepseek_moe_gate)
 add_subdirectory(deepseek/moe/generalized_moe_gate)
 add_subdirectory(deepseek/moe/moe_gate_mm)
 add_subdirectory(deepseek_moe_post_combine_tilize)
+add_subdirectory(nomic_embed_text_v2_moe/routed_combine)
+add_subdirectory(nomic_embed_text_v2_moe/grouped_matmul)
+add_subdirectory(nomic_embed_text_v2_moe/routing_metadata)
 add_subdirectory(dropout)
 add_subdirectory(fft)
 add_subdirectory(fused_msda)
@@ -109,6 +112,9 @@ target_link_libraries(
         TTNN::Ops::Experimental::DeepSeek::MoE::GeneralizedMoeGate
         TTNN::Ops::Experimental::DeepSeek::MoE::MoEGateMM
         TTNN::Ops::Experimental::DeepseekMoEPostCombineTilize
+        TTNN::Ops::Experimental::NomicEmbedTextV2Moe::RoutedCombine
+        TTNN::Ops::Experimental::NomicEmbedTextV2Moe::GroupedMatmul
+        TTNN::Ops::Experimental::NomicEmbedTextV2Moe::RoutingMetadata
         TTNN::Ops::Experimental::Dropout
         TTNN::Ops::Experimental::FFT
         TTNN::Ops::Experimental::FusedMSDA
@@ -161,6 +167,9 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeek::MoE::GeneralizedMoeGate>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeek::MoE::MoEGateMM>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepseekMoEPostCombineTilize>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::NomicEmbedTextV2Moe::RoutedCombine>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::NomicEmbedTextV2Moe::GroupedMatmul>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::NomicEmbedTextV2Moe::RoutingMetadata>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Dropout>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::FFT>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::FusedMSDA>
