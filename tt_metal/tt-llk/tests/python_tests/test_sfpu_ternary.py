@@ -47,12 +47,12 @@ from helpers.test_variant_parameters import (
     DEST_SYNC,
     ITERATIONS,
     LOOP_FACTOR,
+    MATH_OP,
     NUM_BLOCKS,
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
     PERF_RUN_TYPE,
     SFPU_CLOBBER_LREGS,
-    SFPU_TERNARY_OP,
     SFPU_TERNARY_SCALAR,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
@@ -101,7 +101,7 @@ def _sfpu_ternary_compile_params(
     mathop, approx_mode, tile_count, loop_factor, faces_to_generate
 ):
     return [
-        SFPU_TERNARY_OP(mathop),
+        MATH_OP(mathop=mathop),
         SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
         APPROX_MODE(approx_mode),
         ITERATIONS(_SFPU_ITERATIONS),
@@ -147,7 +147,7 @@ def _run_sfpu_ternary(
     if is_perf:
         # Literal list: the perf schema gate reads templates= and runtimes= lists.
         templates = [
-            SFPU_TERNARY_OP(mathop),
+            MATH_OP(mathop=mathop),
             SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
             APPROX_MODE(approx_mode),
             ITERATIONS(_SFPU_ITERATIONS),

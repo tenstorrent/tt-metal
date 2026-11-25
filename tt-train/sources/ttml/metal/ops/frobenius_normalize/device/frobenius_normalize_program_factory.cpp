@@ -8,8 +8,8 @@
 #include <cstdint>
 #include <enchantum/enchantum.hpp>
 #include <optional>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 
 #include "frobenius_normalize_device_operation.hpp"
 #include "frobenius_normalize_device_operation_types.hpp"

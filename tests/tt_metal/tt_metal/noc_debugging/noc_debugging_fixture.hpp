@@ -7,9 +7,9 @@
 #include <cstdlib>
 #include <string>
 #include <gtest/gtest.h>
-#include "profiler_state_manager.hpp"
+#include "impl/profiler/profiler_state_manager.hpp"
 #include "tt_metal/tt_metal/common/mesh_dispatch_fixture.hpp"
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <impl/context/metal_context.hpp>
 #include <impl/debug/noc_debugging.hpp>
 namespace tt::tt_metal {

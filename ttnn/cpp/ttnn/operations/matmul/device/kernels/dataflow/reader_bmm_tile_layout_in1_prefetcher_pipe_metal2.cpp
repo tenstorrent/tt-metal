@@ -16,6 +16,10 @@
 #include "experimental/kernel_args.h"
 #include "ttnn/operations/matmul/device/kernels/dataflow/prefetcher_pipe_in1_window.hpp"
 
+#ifdef ARCH_QUASAR
+#error "PrefetcherPipe weight delivery into this matmul has not been brought up on Quasar"
+#endif
+
 void kernel_main() {
     constexpr auto in1_block_num_tiles = get_arg(args::in1_block_num_tiles);
     constexpr auto num_blocks = get_arg(args::num_blocks);

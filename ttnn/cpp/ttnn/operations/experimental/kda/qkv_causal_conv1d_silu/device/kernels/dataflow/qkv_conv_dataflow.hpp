@@ -142,8 +142,8 @@ inline SlabCarry read_slab_carry(Noc& noc, uint32_t slot) {
 }
 
 // This rank's chronology over [actual_start, actual_end), or the full capacity without actual_end.
-template <uint32_t has_actual_end, uint32_t sp_rank, uint32_t sp_size, uint32_t local_rows>
-inline kda_chronology::Topology read_chronology(Noc& noc, uint32_t slot) {
+template <uint32_t has_actual_end, uint32_t sp_size, uint32_t local_rows>
+inline kda_chronology::Topology read_chronology(Noc& noc, uint32_t slot, uint32_t sp_rank) {
     const uint32_t start = read_word(noc, TensorAccessor(tensor::actual_start), slot);
     if constexpr (has_actual_end) {
         const uint32_t end = read_word(noc, TensorAccessor(*tensor::get_token_if_present<"actual_end">()), slot);

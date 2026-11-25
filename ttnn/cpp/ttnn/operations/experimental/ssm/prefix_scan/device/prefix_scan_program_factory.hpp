@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 
 #include "prefix_scan_device_operation_types.hpp"
 #include "ttnn/tensor/tensor.hpp"

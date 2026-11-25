@@ -547,3 +547,23 @@ def test_sdpa_decode_broadcast_mask_batch(device, b, nh, nkv, s, d, dtype, grid_
         grid_size=grid_size,
         mask_dtype=mask_dtype,
     )
+
+
+@pytest.mark.parametrize("d", [384], ids=["d384"])
+def test_sdpa_decode_head_dim_not_divisible_by_dst_size(device, d, reset_seeds):
+    # head_dim / 32 = 12 tiles is not a multiple of the 8-tile half-sync dest, exercising the output subblock split.
+    run_test_sdpa_decode_single_iter(
+        device,
+        1,
+        8,
+        1,
+        2048,
+        d,
+        ttnn.bfloat8_b,
+        (8, 4),
+        ttnn.bfloat16,
+        cur_pos_tensor=False,
+        sharded_in=False,
+        sharded_out=False,
+        override_k_chunk_size=128,
+    )

@@ -156,12 +156,49 @@ union alu_config_u
     alu_config_t f;
 };
 
-// List of possible data format config states
-enum class DataFormatConfigSet : std::uint8_t
+// Which ALU format config type is programmed. With the SrcA/SrcB formats, the whole input to
+// _build_alu_words_.
+enum class AluCfgType : std::uint8_t
 {
-    UNCONFIGURED         = 0,
-    DEFAULT              = 1,
-    MOV_OPS_EXPLICIT_FMT = 2
+    // Nothing known about the ALU registers: never requested, so no request matches it; cached words unusable.
+    // Must stay 0, it is the zero-init value.
+    UNCONFIGURED            = 0,
+    DEFAULT                 = 1,
+    MOV_OPS_EXPLICIT_FORMAT = 2
+};
+
+/**
+ * @brief One ALU format configuration, the whole input to @ref _build_alu_words_.
+ *
+ * The same type describes what a caller requests and what is currently programmed.
+ *
+ * @note EN_32BIT_DEST is deliberately absent: callers pass it explicitly as a compile-time parameter.
+ */
+struct AluCfgState
+{
+    AluCfgType type;
+    DataFormat srca_format;
+    DataFormat srcb_format;
+};
+
+inline constexpr bool operator==(const AluCfgState& lhs, const AluCfgState& rhs)
+{
+    return (lhs.type == rhs.type) && (lhs.srca_format == rhs.srca_format) && (lhs.srcb_format == rhs.srcb_format);
+}
+
+/**
+ * @brief ALU_FORMAT_SPEC words 0..2 as this TRISC last programmed them.
+ *
+ * `programmed` is the configuration that was asked for, `words` the values stored for it. Hardware is
+ * never read back, so both hold only what this TRISC wrote: ALU_FORMAT_SPEC is shared, and a second
+ * thread programming it would leave this copy stale.
+ *
+ * @note `programmed.type == UNCONFIGURED` invalidates both.
+ */
+struct AluCfgTracker
+{
+    AluCfgState programmed;
+    alu_config_u words;
 };
 
 // /**
@@ -248,8 +285,10 @@ inline void _set_dst_write_addr_(const std::uint32_t tile_index)
 
 /**
  * @brief Computes the tile-shape index (a log2-style shift exponent derived from
- *        the number of rows per tile) and stores it in GPR TEMP0 for later reuse
- *        by @ref _set_dst_write_addr_by_gpr_ and the reduce MOP instruction stream.
+ *        the number of rows per tile) and records it in TRISC local memory
+ *        (ckernel::trisc::dest_tile_shape_idx) for the per-tile Dest addressing.
+ *        It is also written to the TILE_SHAPE_IDX GPR; the LLK does not read the
+ *        GPR back (a RISC-V read of it stalls the math thread).
  *
  *        This is the "compute once" half of the pair that splits
  *        @ref _set_dst_write_addr_by_rows_ so the shift amount is calculated a
@@ -264,12 +303,13 @@ inline void _set_tile_shape_idx_gpr_(const std::uint32_t num_rows_per_tile)
         (num_rows_per_tile == 64)
             ? 6
             : ((num_rows_per_tile == 32) ? 5 : ((num_rows_per_tile == 16) ? 4 : ((num_rows_per_tile == 8) ? 3 : ((num_rows_per_tile == 4) ? 2 : 1))));
+    ckernel::trisc::dest_tile_shape_idx          = tile_shape_idx;
     ckernel::regfile[p_gpr_math::TILE_SHAPE_IDX] = tile_shape_idx;
 }
 
 /**
  * @brief Sets the destination register base address depending on the tile index,
- *        using the tile-shape index previously stored in GPR TEMP0 by
+ *        using the tile-shape index previously recorded by
  *        @ref _set_tile_shape_idx_gpr_ as the left-shift amount that converts
  *        tile_index into a dest offset.
  *
@@ -283,57 +323,91 @@ inline void _set_tile_shape_idx_gpr_(const std::uint32_t num_rows_per_tile)
  */
 inline void _set_dst_write_addr_by_rows_(const std::uint32_t tile_index)
 {
-    const std::uint32_t tile_shape_idx = ckernel::regfile[p_gpr_math::TILE_SHAPE_IDX];
+    const std::uint32_t tile_shape_idx = ckernel::trisc::dest_tile_shape_idx;
     const std::uint32_t dst_index      = (tile_index << tile_shape_idx) + ckernel::trisc::_get_dest_buffer_base_();
     ckernel::trisc::_set_dest_section_base_<TRISC_ID>(dst_index);
 }
 
-inline void move_d2a_fixed_face(const std::uint8_t addrmod)
+/**
+ * @brief Check whether a face holds the FPU row group that starts at a given dest row.
+ *
+ * @param row: First dest row of the FPU row group, relative to the face.
+ * @param face_dest_rows: Dest rows one face occupies, including the sparse 8-row minimum of short faces.
+ * @return True when the row group lies inside the face; every face spans at least MAX_FPU_ROWS dest rows.
+ */
+constexpr bool face_row_group_present(const std::uint32_t row, const std::uint32_t face_dest_rows)
 {
-    // MOVD2A src is relative to dest_section_base + dest_counter.
-    // The FPU moves ELTWISE_MATH_ROWS rows per MOV (8 on Quasar, 4 on 4row_arch), so we emit
-    // 16 / ELTWISE_MATH_ROWS MOVs to cover all 16 rows of a face — 4row_arch needs twice as many
-    // as Quasar. The dest counter handles face progression.
-    // NOTE: For different tile dimensions we need different amounts of MOV* instructions; see separate issue.
+    return row < MAX_FPU_ROWS || row < face_dest_rows;
+}
+
+/**
+ * @brief Copy one face of the reused dest register into SrcA ahead of an FPU pass over the face.
+ *
+ * @param addrmod: Address-mod slot the MOVD2A issues.
+ * @param face_dest_rows: Dest rows one face occupies, including the sparse 8-row minimum of short faces.
+ * @note MOVD2A dst is the dest row relative to dest_section_base + dest_counter and src the SrcA row; the dest
+ *       counter handles face progression, so each MOV copies one FPU row group of the face into the matching
+ *       SrcA rows.
+ */
+inline void move_d2a_fixed_face(const std::uint8_t addrmod, const std::uint32_t face_dest_rows)
+{
     static_assert(ELTWISE_MATH_ROWS == 8 || ELTWISE_MATH_ROWS == 4, "move_d2a_fixed_face supports MATH_ROWS of 8 (Quasar) or 4 (4row_arch)");
     // MATH drains the preceding math instructions so their source-bank release has landed before
     // SRCA_VLD tests the bank that MOVD2A will write.
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::MATH, p_stall::SRCA_VLD);
 #pragma GCC unroll 4
-    for (const auto row : fpu_row_offsets<ckernel::FACE_R_DIM>())
+    for (const auto row : fpu_row_offsets<MAX_FACE_R_DIM>())
     {
-        TTI_MOVD2A(0, row, addrmod, FPU_MOV_ROWS, row);
+        if (face_row_group_present(row, face_dest_rows))
+        {
+            TTI_MOVD2A(p_mov::DEST_NORM, row, addrmod, FPU_MOV_ROWS, row);
+        }
     }
 }
 
-inline void move_d2b_fixed_face(const std::uint8_t addrmod)
+/**
+ * @brief Copy one face of the reused dest register into SrcB ahead of an FPU pass over the face.
+ *
+ * @param addrmod: Address-mod slot the MOVD2B issues.
+ * @param face_dest_rows: Dest rows one face occupies, including the sparse 8-row minimum of short faces.
+ * @note MOVD2B dst is the dest row relative to dest_section_base + dest_counter and src the SrcB row; the dest
+ *       counter handles face progression, so each MOV copies one FPU row group of the face into the matching
+ *       SrcB rows.
+ */
+inline void move_d2b_fixed_face(const std::uint8_t addrmod, const std::uint32_t face_dest_rows)
 {
-    // MOVD2B src is relative to dest_section_base + dest_counter.
-    // The FPU moves ELTWISE_MATH_ROWS rows per MOV (8 on Quasar, 4 on 4row_arch), so we emit
-    // 16 / ELTWISE_MATH_ROWS MOVs to cover all 16 rows of a face — 4row_arch needs twice as many
-    // as Quasar. The dest counter handles face progression.
-    // NOTE: For different tile dimensions we need different amounts of MOV* instructions; see separate issue.
     static_assert(ELTWISE_MATH_ROWS == 8 || ELTWISE_MATH_ROWS == 4, "move_d2b_fixed_face supports MATH_ROWS of 8 (Quasar) or 4 (4row_arch)");
     // MATH drains the preceding math instructions so their source-bank release has landed before
     // SRCB_VLD tests the bank that MOVD2B will write.
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::MATH, p_stall::SRCB_VLD);
 #pragma GCC unroll 4
-    for (const auto row : fpu_row_offsets<ckernel::FACE_R_DIM>())
+    for (const auto row : fpu_row_offsets<MAX_FACE_R_DIM>())
     {
-        TTI_MOVD2B(0, row, addrmod, FPU_MOV_ROWS, 0, row);
+        if (face_row_group_present(row, face_dest_rows))
+        {
+            TTI_MOVD2B(p_mov::DEST_NORM, row, addrmod, FPU_MOV_ROWS, p_movd2b::TRANSPOSE_OFF, row);
+        }
     }
 }
 
+/**
+ * @brief Copy one face of the reused dest register into the source register the binary op reads next.
+ *
+ * @tparam binary_reuse_dest: Which source register dest reuses, values = <DEST_TO_SRCA/DEST_TO_SRCB>.
+ * @param face_dest_rows: Dest rows one face occupies, including the sparse 8-row minimum of short faces.
+ * @note Call @ref _llk_math_eltwise_binary_init_ with the same reuse type and tile shape before this function;
+ *       it programs the ADDR_MOD_3 slot the moves issue.
+ */
 template <EltwiseBinaryReuseDestType binary_reuse_dest>
-inline void eltwise_binary_reuse_dest_as_src()
+inline void eltwise_binary_reuse_dest_as_src(const std::uint32_t face_dest_rows)
 {
     if constexpr (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA)
     {
-        move_d2a_fixed_face(ADDR_MOD_3);
+        move_d2a_fixed_face(ADDR_MOD_3, face_dest_rows);
     }
     else if constexpr (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB)
     {
-        move_d2b_fixed_face(ADDR_MOD_3);
+        move_d2b_fixed_face(ADDR_MOD_3, face_dest_rows);
     }
 }
 

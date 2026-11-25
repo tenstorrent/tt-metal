@@ -37,13 +37,6 @@ pytestmark = [
 
 
 @pytest.fixture(scope="module")
-def dp_tp_mesh(fresh_device_mesh):
-    """``[2, 2]`` with axes ``("dp", "tp")``."""
-    with fresh_device_mesh((2, 2), ("dp", "tp"), what="DP x TP placements tests", require_mgd=True) as mesh:
-        yield mesh
-
-
-@pytest.fixture(scope="module")
 def hsdp_mesh(fresh_device_mesh):
     """``[2, 2]`` with axes ``("dp", "fsdp")``."""
     with fresh_device_mesh((2, 2), ("dp", "fsdp"), what="HSDP placements tests", require_mgd=True) as mesh:

@@ -11,7 +11,7 @@
 #include <mutex>
 #include <optional>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
 
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"

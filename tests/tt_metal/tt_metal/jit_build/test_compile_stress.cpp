@@ -30,6 +30,8 @@
 //                                             across clients              (default 0)
 //   TT_METAL_COMPILE_STRESS_CLIENT_ID       informational client tag      (default 0)
 //   TT_METAL_COMPILE_STRESS_OUTPUT          if set, path for JSON result
+//   TT_PERF_OUTPUT                          if set, path for the tests/perf
+//                                             contract result (compile_ms)
 //   TT_METAL_COMPILE_STRESS_T_ZERO_NS       harness-internal rendezvous;
 //                                             unix-epoch ns to sleep until
 //                                             after warmup                (default unset)
@@ -60,14 +62,15 @@
 #include <fmt/format.h>
 #include <tt_stl/span.hpp>
 
-#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include "impl/program/program_impl.hpp"
 #include "common/env_lib.hpp"
 #include "common/tt_backend_api_types.hpp"
 #include "impl/context/metal_context.hpp"
+#include "perf/perf_contract.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -385,6 +388,14 @@ TEST_F(CompileStressFixture, DISABLED_TensixCompileStress) {
         };
         write_result_json(output_path, result);
         log_info(LogTest, "Wrote stress result JSON to {}", output_path);
+    }
+
+    const std::string perf_output_path = tt::parse_env<std::string>("TT_PERF_OUTPUT", "");
+    if (!perf_output_path.empty()) {
+        tt::perf::write_result(
+            perf_output_path,
+            {{"compile_ms", {"ms", tt::perf::Better::Lower, tt::perf::Aggregate::Min}}},
+            {{fmt::format("compile/num_kernels:{}", target_num_kernels), {{"compile_ms", total_elapsed_ms}}}});
     }
 
     ASSERT_EQ(static_cast<uint32_t>(programs.size()), num_programs);

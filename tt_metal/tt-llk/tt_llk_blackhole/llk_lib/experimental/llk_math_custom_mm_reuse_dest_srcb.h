@@ -172,7 +172,7 @@ inline void _llk_math_custom_mm_reuse_dest_srcb_(
         TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_index + dest_buffer_base);
         for (std::uint32_t j = 0; j < nt_dim; j++)
         {
-            lltt::replay(CUSTOM_MM_REUSE_REPLAY_OFFSET, CUSTOM_MM_REUSE_REPLAY_LEN);
+            TTI_REPLAY(CUSTOM_MM_REUSE_REPLAY_OFFSET, CUSTOM_MM_REUSE_REPLAY_LEN, 0, 0);
         }
     }
 

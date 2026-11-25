@@ -5,7 +5,7 @@
 """Python classes for the Metal 2.0 ProgramSpec and ProgramRunArgs types (ttnn.experimental).
 
 Each class binds the C++ struct with the same name and fields. These tests need no device, apart from
-the ones that bind tensors.
+the ones that bind tensors or GlobalSemaphores.
 """
 
 import pathlib
@@ -20,10 +20,12 @@ E = ttnn.experimental
 
 TENSOR_SPEC = ttnn.TensorSpec(ttnn.Shape([1, 1, 32, 32]), ttnn.bfloat16, ttnn.TILE_LAYOUT)
 
-# Every class and the fields Python binds. A field Metal adds to one of these types fails the ttnn build
+# Every class and the fields Python binds. A field added to one of these types fails the ttnn build
 # (program_spec.cpp counts each type's fields) until it is bound here or noted as C++ only, except for
 # DFBAdvancedOptions, which Python binds only in part.
 FIELDS = {
+    E.MeshProgramSpec: {"programs"},
+    E.MeshProgramRunArgs: {"programs"},
     E.TensorSpecRelaxations: {
         "match_padded_shape_only",
         "dynamic_tensor_shape",
@@ -32,6 +34,7 @@ FIELDS = {
         "match_page_size",
     },
     E.TensorParameter: {"unique_id", "spec", "relaxations"},
+    E.GlobalSemaphoreParameter: {"unique_id"},
     E.DFBAdvancedOptions: {"alias_with"},
     E.DataflowBufferSpec: {
         "unique_id",
@@ -76,6 +79,7 @@ FIELDS = {
     E.SemaphoreBinding: {"semaphore_spec_name", "accessor_name"},
     E.ScratchpadBinding: {"scratchpad_spec_name", "accessor_name"},
     E.TensorBinding: {"tensor_parameter_name", "accessor_name"},
+    E.GlobalSemaphoreBinding: {"global_semaphore_parameter_name", "accessor_name"},
     E.KernelSpec: {
         "unique_id",
         "source",
@@ -85,6 +89,7 @@ FIELDS = {
         "semaphore_bindings",
         "scratchpad_bindings",
         "tensor_bindings",
+        "global_semaphore_bindings",
         "compile_time_args",
         "compile_time_array_args",
         "runtime_arg_schema",
@@ -98,6 +103,7 @@ FIELDS = {
         "semaphores",
         "scratchpads",
         "tensor_parameters",
+        "global_semaphore_parameters",
         "work_units",
     },
     E.KernelRunArgs: {
@@ -108,7 +114,7 @@ FIELDS = {
         "common_runtime_array_arg_values",
     },
     E.DFBRunOverrides: {"dfb", "entry_size", "num_entries"},
-    E.ProgramRunArgs: {"kernel_run_args", "tensor_args", "dfb_run_overrides"},
+    E.ProgramRunArgs: {"kernel_run_args", "tensor_args", "global_semaphore_args", "dfb_run_overrides"},
 }
 
 
@@ -139,6 +145,7 @@ def test_metal_aliases_name_the_nested_classes():
     assert E.TensorBinding is E.KernelSpec.TensorBinding
     assert E.SemaphoreBinding is E.KernelSpec.SemaphoreBinding
     assert E.ScratchpadBinding is E.KernelSpec.ScratchpadBinding
+    assert E.GlobalSemaphoreBinding is E.KernelSpec.GlobalSemaphoreBinding
     assert E.ArrayArgDecl is E.KernelSpec.RuntimeArgSchema.ArrayArgDecl
     assert E.DFBEndpointType is E.DFBBinding.EndpointType
     assert E.DFBAccessPattern is E.DFBBinding.AccessPattern
@@ -151,7 +158,7 @@ def test_defaults_are_the_header_defaults():
     assert kernel.num_threads == 1
     assert kernel.compiler_options.opt_level == E.KernelBuildOptLevel.O2
     assert kernel.dfb_bindings == [] and kernel.compile_time_args == {} and kernel.compile_time_array_args == {}
-    assert kernel.runtime_arg_schema.runtime_array_args == []
+    assert kernel.runtime_arg_schema.runtime_array_args == [] and kernel.global_semaphore_bindings == []
 
     compute = E.ComputeHardwareConfig()
     assert compute.fpu_math_fidelity == ttnn.MathFidelity.HiFi4
@@ -176,6 +183,8 @@ def test_defaults_are_the_header_defaults():
     assert not (relaxations.match_padded_shape_only or relaxations.dynamic_tensor_shape)
     assert E.WorkUnitSpec(name="unit", target_nodes=ttnn.CoreCoord(0, 0)).kernels == []
     assert E.ProgramSpec(name="program").kernels == []
+    assert E.ProgramSpec(name="program").global_semaphore_parameters == []
+    assert E.ProgramRunArgs().global_semaphore_args == {}
 
 
 def test_constructors_take_keywords_and_need_the_required_fields(expect_error):
@@ -200,6 +209,8 @@ def test_constructors_take_keywords_and_need_the_required_fields(expect_error):
         lambda: E.SemaphoreSpec(unique_id="sem"),
         lambda: E.WorkUnitSpec(name="unit"),
         lambda: E.TensorParameter(unique_id="input"),
+        lambda: E.GlobalSemaphoreParameter(),
+        lambda: E.GlobalSemaphoreBinding(accessor_name="sem"),
         lambda: E.KernelRunArgs(),
         lambda: E.DFBRunOverrides(num_entries=2),
         lambda: E.KernelSpec.SourceCode(),
@@ -399,6 +410,7 @@ def test_each_field_reads_back_what_it_was_given():
         (E.SemaphoreBinding, "semaphore_spec_name"),
         (E.ScratchpadBinding, "scratchpad_spec_name"),
         (E.TensorBinding, "tensor_parameter_name"),
+        (E.GlobalSemaphoreBinding, "global_semaphore_parameter_name"),
     ):
         binding = binding_type(**{name_field: "spec", "accessor_name": "accessor"})
         assert (getattr(binding, name_field), binding.accessor_name) == ("spec", "accessor")
@@ -454,11 +466,16 @@ def test_each_field_reads_back_what_it_was_given():
         dfb_bindings=[E.producer_of("in", "dfb_in")],
         semaphore_bindings=[E.SemaphoreBinding(semaphore_spec_name="sem", accessor_name="sem_in")],
         tensor_bindings=[E.TensorBinding(tensor_parameter_name="input", accessor_name="src")],
+        global_semaphore_bindings=[
+            E.GlobalSemaphoreBinding(global_semaphore_parameter_name="counter", accessor_name="count")
+        ],
     )
     assert kernel.num_threads == 2
     assert [(b.dfb_spec_name, b.accessor_name) for b in kernel.dfb_bindings] == [("in", "dfb_in")]
     assert [(b.semaphore_spec_name, b.accessor_name) for b in kernel.semaphore_bindings] == [("sem", "sem_in")]
     assert [(b.tensor_parameter_name, b.accessor_name) for b in kernel.tensor_bindings] == [("input", "src")]
+    bindings = [(b.global_semaphore_parameter_name, b.accessor_name) for b in kernel.global_semaphore_bindings]
+    assert bindings == [("counter", "count")]
     unit_nodes, sem_nodes = ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 0)
     spec = E.ProgramSpec(
         name="program",
@@ -467,6 +484,7 @@ def test_each_field_reads_back_what_it_was_given():
         semaphores=[E.SemaphoreSpec(unique_id="sem", target_nodes=sem_nodes)],
         scratchpads=[scratchpad],
         tensor_parameters=[E.TensorParameter(unique_id="input", spec=TENSOR_SPEC)],
+        global_semaphore_parameters=[E.GlobalSemaphoreParameter(unique_id="counter")],
         work_units=[E.WorkUnitSpec(name="unit", kernels=["reader"], target_nodes=unit_nodes)],
     )
     assert spec.name == "program"
@@ -475,6 +493,7 @@ def test_each_field_reads_back_what_it_was_given():
     assert [(s.unique_id, s.target_nodes) for s in spec.semaphores] == [("sem", sem_nodes)]
     assert [s.unique_id for s in spec.scratchpads] == ["scratch"]
     assert [p.unique_id for p in spec.tensor_parameters] == ["input"]
+    assert [p.unique_id for p in spec.global_semaphore_parameters] == ["counter"]
     assert [(w.name, w.kernels, w.target_nodes) for w in spec.work_units] == [("unit", ["reader"], unit_nodes)]
     run_args = E.ProgramRunArgs(kernel_run_args=[kernel_run_args], dfb_run_overrides=[overrides])
     assert [k.kernel for k in run_args.kernel_run_args] == ["reader"]
@@ -558,7 +577,7 @@ def test_reader_and_writer_configs():
     assert writer.config_2xx.disable_dfb_implicit_sync_for_all
 
 
-def test_program_spec_from_the_design_example():
+def test_program_spec_of_an_exp_program():
     kernels = ["reader", "writer", "compute"]
     spec = E.ProgramSpec(
         name="exp",
@@ -617,11 +636,13 @@ def test_run_args_reject_unknown_attributes(expect_error):
         run_args.dfb_run_override = None
     run_args.dfb_run_overrides = [E.DFBRunOverrides(dfb="in", num_entries=4)]
     assert run_args.dfb_run_overrides[0].num_entries == 4
-    # The attribute that keeps the tensors alive, and the instance dict that holds it, cannot be assigned or deleted.
-    with expect_error(AttributeError, "'ProgramRunArgs' object attribute '_tensor_args' is read-only"):
-        run_args._tensor_args = {}
-    with expect_error(AttributeError, "'ProgramRunArgs' object attribute '_tensor_args' is read-only"):
-        del run_args._tensor_args
+    # The attributes that keep the tensors and GlobalSemaphores alive, and the instance dict that holds them, cannot be
+    # assigned or deleted.
+    for attribute in ("_tensor_args", "_global_semaphore_args"):
+        with expect_error(AttributeError, f"'ProgramRunArgs' object attribute '{attribute}' is read-only"):
+            setattr(run_args, attribute, {})
+        with expect_error(AttributeError, f"'ProgramRunArgs' object attribute '{attribute}' is read-only"):
+            delattr(run_args, attribute)
     with expect_error(AttributeError, "'ProgramRunArgs' object attribute '__dict__' is read-only"):
         run_args.__dict__ = {}
     with expect_error(AttributeError, "'ProgramRunArgs' object attribute '__dict__' is read-only"):
@@ -636,10 +657,11 @@ def test_run_args_reject_unknown_attributes(expect_error):
     assert subclass_run_args.step == 1
     del subclass_run_args.step
     assert not hasattr(subclass_run_args, "step")
-    with expect_error(AttributeError, "'StepRunArgs' object attribute '_tensor_args' is read-only"):
-        subclass_run_args._tensor_args = {}
-    with expect_error(AttributeError, "'StepRunArgs' object attribute '_tensor_args' is read-only"):
-        del subclass_run_args._tensor_args
+    for attribute in ("_tensor_args", "_global_semaphore_args"):
+        with expect_error(AttributeError, f"'StepRunArgs' object attribute '{attribute}' is read-only"):
+            setattr(subclass_run_args, attribute, {})
+        with expect_error(AttributeError, f"'StepRunArgs' object attribute '{attribute}' is read-only"):
+            delattr(subclass_run_args, attribute)
 
 
 def test_tensor_args_hold_the_tensors(device, expect_error):
@@ -702,3 +724,89 @@ def test_a_subclass_setattr_cannot_drop_the_tensors(device):
     run_args = RunArgsIgnoringPrivateWrites(tensor_args={"input": tensor})
     run_args.tensor_args = {"output": tensor}
     assert list(run_args.tensor_args) == ["output"]
+
+
+def global_semaphore(device):
+    node = ttnn.CoreCoord(0, 0)
+    return ttnn.create_global_semaphore(device, ttnn.CoreRangeSet([ttnn.CoreRange(node, node)]), 0)
+
+
+def test_global_semaphore_args_hold_the_semaphores(device, expect_error):
+    semaphore = global_semaphore(device)
+    references = sys.getrefcount(semaphore)
+    run_args = E.ProgramRunArgs(global_semaphore_args={"counter": semaphore})
+    # The run args hold the semaphore, so the C++ object never refers to a freed one.
+    assert sys.getrefcount(semaphore) == references + 1
+    assert run_args.global_semaphore_args["counter"] is semaphore
+
+    run_args.global_semaphore_args["other"] = semaphore
+    assert list(run_args.global_semaphore_args) == ["counter"]
+
+    run_args.global_semaphore_args = {"other": semaphore}
+    assert list(run_args.global_semaphore_args) == ["other"]
+
+    # A rejected assignment leaves the run args as they were.
+    message = "global_semaphore_args\\['counter'\\] must be a global semaphore, such as ttnn.create_global_semaphore"
+    with expect_error(TypeError, message):
+        run_args.global_semaphore_args = {"counter": None}
+    with expect_error(TypeError, "global_semaphore_args keys must be GlobalSemaphore parameter names"):
+        run_args.global_semaphore_args = {0: semaphore}
+    assert list(run_args.global_semaphore_args) == ["other"]
+    assert run_args.global_semaphore_args["other"] is semaphore
+
+
+@pytest.mark.parametrize("dict_type", [DictWithFailingCopy, DictCopyingNothing], ids=lambda cls: cls.__name__)
+def test_global_semaphore_args_from_a_dict_subclass_hold_the_semaphores(device, dict_type):
+    semaphore = global_semaphore(device)
+    run_args = E.ProgramRunArgs(global_semaphore_args=dict_type(counter=semaphore))
+    assert run_args.global_semaphore_args["counter"] is semaphore
+
+    run_args.global_semaphore_args = dict_type(other=semaphore)
+    assert list(run_args.global_semaphore_args) == ["other"]
+    assert run_args.global_semaphore_args["other"] is semaphore
+
+
+def test_a_subclass_setattr_cannot_drop_the_global_semaphores(device):
+    class RunArgsIgnoringWrites(E.ProgramRunArgs):
+        def __setattr__(self, name, value):
+            pass
+
+    class RunArgsIgnoringPrivateWrites(E.ProgramRunArgs):
+        def __setattr__(self, name, value):
+            if not name.startswith("_"):
+                super().__setattr__(name, value)
+
+    semaphore = global_semaphore(device)
+    run_args = RunArgsIgnoringWrites(global_semaphore_args={"counter": semaphore})
+    assert run_args.global_semaphore_args["counter"] is semaphore
+
+    # An assignment to global_semaphore_args reaches the setter, which stores the semaphores' owners itself.
+    run_args = RunArgsIgnoringPrivateWrites(global_semaphore_args={"counter": semaphore})
+    run_args.global_semaphore_args = {"other": semaphore}
+    assert list(run_args.global_semaphore_args) == ["other"]
+
+
+class RunArgsWithOwnerProperties(E.ProgramRunArgs):
+    _tensor_args = property(lambda self: {}, lambda self, value: None)
+    _global_semaphore_args = property(lambda self: {}, lambda self, value: None)
+
+
+class RunArgsHidingOwners(E.ProgramRunArgs):
+    def __getattribute__(self, name):
+        return {} if name in ("_tensor_args", "_global_semaphore_args") else super().__getattribute__(name)
+
+
+@pytest.mark.parametrize(
+    "run_args_type", [RunArgsWithOwnerProperties, RunArgsHidingOwners], ids=lambda cls: cls.__name__
+)
+def test_a_subclass_cannot_drop_or_hide_the_owners(device, run_args_type):
+    # The run args keep their owners in the instance dict themselves, so a subclass's property or __getattribute__ for
+    # the private names can neither drop them nor hide them from the run args.
+    tensor = ttnn.from_torch(torch.zeros(1, 1, 32, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    semaphore = global_semaphore(device)
+    tensor_references, semaphore_references = sys.getrefcount(tensor), sys.getrefcount(semaphore)
+    run_args = run_args_type(tensor_args={"input": tensor}, global_semaphore_args={"counter": semaphore})
+    assert sys.getrefcount(tensor) == tensor_references + 1
+    assert sys.getrefcount(semaphore) == semaphore_references + 1
+    assert run_args.tensor_args["input"] is tensor
+    assert run_args.global_semaphore_args["counter"] is semaphore

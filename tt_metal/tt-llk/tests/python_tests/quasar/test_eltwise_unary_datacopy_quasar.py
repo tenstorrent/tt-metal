@@ -18,6 +18,7 @@ from helpers.llk_params import (
 )
 from helpers.param_config import (
     calculate_edgecase_dest_indices,
+    flat_axes,
     generate_dest_depth_input_dimensions,
     generate_perf_input_dimensions,
     generate_reduced_input_dimensions,
@@ -148,6 +149,16 @@ DATACOPY_FORMATS = input_output_formats(
         DataFormat.Float16_b,
     ]
 ) + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
+# Column names of the tuples ``generate_eltwise_unary_datacopy_combinations`` returns.
+DATACOPY_FLAT_NAMES = (
+    "formats",
+    "dest_acc",
+    "data_copy_type",
+    "input_dimensions",
+    "dest_sync",
+    "dest_index",
+    "tile_dimensions",
+)
 ALL_DATACOPY_COMBINATIONS = generate_eltwise_unary_datacopy_combinations(
     DATACOPY_FORMATS
 )
@@ -184,28 +195,24 @@ DATACOPY_DEST_DEPTH_COMBINATIONS = generate_eltwise_unary_datacopy_combinations(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices=ALL_DATACOPY_COMBINATIONS,
+    **flat_axes(DATACOPY_FLAT_NAMES, ALL_DATACOPY_COMBINATIONS),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
 def test_eltwise_unary_datacopy_quasar(
-    formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices,
+    formats,
+    dest_acc,
+    data_copy_type,
+    input_dimensions,
+    dest_sync,
+    dest_index,
+    tile_dimensions,
     run_types,
     loop_factor,
     *,
     is_perf=False,
     perf_report=None,
 ):
-    (
-        formats,
-        dest_acc,
-        data_copy_type,
-        input_dimensions,
-        dest_sync_mode,
-        dest_index,
-        tile_dimensions,
-    ) = formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices
-
     tile_shape = construct_tile_shape(tile_dimensions)
 
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
@@ -219,7 +226,7 @@ def test_eltwise_unary_datacopy_quasar(
     num_faces = tile_shape.total_num_faces()
 
     num_blocks, tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        dest_sync_mode,
+        dest_sync,
         dest_acc,
         formats,
         input_dimensions,
@@ -252,7 +259,7 @@ def test_eltwise_unary_datacopy_quasar(
                 if data_copy_type == DataCopyType.B2D
                 else UnpackerEngine.UnpA
             ),
-            DEST_SYNC(dest_sync_mode),
+            DEST_SYNC(dest_sync),
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A),
@@ -308,14 +315,25 @@ def test_eltwise_unary_datacopy_quasar(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices=DATACOPY_FLOAT32_COMBINATIONS,
+    **flat_axes(DATACOPY_FLAT_NAMES, DATACOPY_FLOAT32_COMBINATIONS),
 )
 def test_eltwise_unary_datacopy_float32_quasar(
-    formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices,
+    formats,
+    dest_acc,
+    data_copy_type,
+    input_dimensions,
+    dest_sync,
+    dest_index,
+    tile_dimensions,
 ):
-    # A lone parametrize argument arrives wrapped in a 1-tuple.
     test_eltwise_unary_datacopy_quasar(
-        formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices[0],
+        formats,
+        dest_acc,
+        data_copy_type,
+        input_dimensions,
+        dest_sync,
+        dest_index,
+        tile_dimensions,
         [PerfRunType.L1_TO_L1],
         1,
     )
@@ -323,14 +341,25 @@ def test_eltwise_unary_datacopy_float32_quasar(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices=DATACOPY_INT_COMBINATIONS,
+    **flat_axes(DATACOPY_FLAT_NAMES, DATACOPY_INT_COMBINATIONS),
 )
 def test_eltwise_unary_datacopy_int_quasar(
-    formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices,
+    formats,
+    dest_acc,
+    data_copy_type,
+    input_dimensions,
+    dest_sync,
+    dest_index,
+    tile_dimensions,
 ):
-    # A lone parametrize argument arrives wrapped in a 1-tuple.
     test_eltwise_unary_datacopy_quasar(
-        formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices[0],
+        formats,
+        dest_acc,
+        data_copy_type,
+        input_dimensions,
+        dest_sync,
+        dest_index,
+        tile_dimensions,
         [PerfRunType.L1_TO_L1],
         1,
     )
@@ -338,14 +367,25 @@ def test_eltwise_unary_datacopy_int_quasar(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices=DATACOPY_DEST_DEPTH_COMBINATIONS,
+    **flat_axes(DATACOPY_FLAT_NAMES, DATACOPY_DEST_DEPTH_COMBINATIONS),
 )
 def test_eltwise_unary_datacopy_dest_depth_quasar(
-    formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices,
+    formats,
+    dest_acc,
+    data_copy_type,
+    input_dimensions,
+    dest_sync,
+    dest_index,
+    tile_dimensions,
 ):
-    # A lone parametrize argument arrives wrapped in a 1-tuple.
     test_eltwise_unary_datacopy_quasar(
-        formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices[0],
+        formats,
+        dest_acc,
+        data_copy_type,
+        input_dimensions,
+        dest_sync,
+        dest_index,
+        tile_dimensions,
         [PerfRunType.L1_TO_L1],
         1,
     )

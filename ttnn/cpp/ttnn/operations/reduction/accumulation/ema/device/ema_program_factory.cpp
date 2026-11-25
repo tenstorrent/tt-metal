@@ -9,8 +9,8 @@
 
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 
 #include <bit>
 #include <utility>
@@ -263,6 +263,18 @@ ttnn::device_operation::ProgramArtifacts EmaDeviceOperation::EmaProgramFactory::
     };
 
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+}
+
+ttnn::command_list::CmdListBindings EmaDeviceOperation::EmaProgramFactory::map_cmd_list_parameters(
+    const EmaDeviceOperation::operation_attributes_t&,
+    const EmaDeviceOperation::tensor_args_t&,
+    const tt::tt_metal::ProgramSpec& spec,
+    const tt::tt_metal::ProgramRunArgs& run_params) {
+    ttnn::command_list::CmdListBinder binder{spec, run_params};
+    binder.tensor(/*invoke_name=*/"input_tensor", /*program_spec_param_name=*/tt::tt_metal::TensorParamName{"input"});
+    binder.tensor(/*invoke_name=*/"out", /*program_spec_param_name=*/tt::tt_metal::TensorParamName{"output"});
+    // alpha is a compile-time argument, so it is part of the program hash and cannot be a CmdListParam.
+    return binder.finish();
 }
 
 }  // namespace ttnn::prim

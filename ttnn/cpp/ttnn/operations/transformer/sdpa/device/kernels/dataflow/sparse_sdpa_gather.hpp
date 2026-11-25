@@ -8,6 +8,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <type_traits>
 #include "api/tile_constants.h"
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/sparse_sdpa_common.hpp"
 
@@ -28,7 +29,13 @@ FORCE_INLINE uint32_t tile_col0_offset(uint32_t row) {
     return face_row_group * face_columns * tt::constants::FACE_HW + face_row * tt::constants::FACE_WIDTH;
 }
 
-template <uint32_t ScaleBlocks>
+// Scale broadcast tiles: FP32 for the two-pass dequant; FP16 bits (scale * 2^FUSED_DEQUANT_EXP_OFFSET, see
+// sparse_sdpa_common.hpp) when compute fuses tilize x scale (the FUSED_DEQUANT compile-time arg).
+template <bool FusedDequant>
+using scale_elem_t = std::conditional_t<FusedDequant, uint16_t, uint32_t>;
+
+// Copy the per-block scales of packed rows [row_begin, row_end) into column 0 of the scale broadcast tiles.
+template <uint32_t ScaleBlocks, bool FusedDequant>
 FORCE_INLINE void scatter_packed_scales(
     uint32_t packed_l1,
     uint32_t scale_tiles_l1,
@@ -37,21 +44,29 @@ FORCE_INLINE void scatter_packed_scales(
     uint32_t packed_row_bytes,
     uint32_t latent_row_bytes) {
     volatile tt_l1_ptr uint32_t* packed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(packed_l1);
-    volatile tt_l1_ptr uint32_t* scale_tiles = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scale_tiles_l1);
+    volatile tt_l1_ptr scale_elem_t<FusedDequant>* scale_tiles =
+        reinterpret_cast<volatile tt_l1_ptr scale_elem_t<FusedDequant>*>(scale_tiles_l1);
     const uint32_t packed_row_words = packed_row_bytes / sizeof(uint32_t);
     const uint32_t latent_row_words = latent_row_bytes / sizeof(uint32_t);
     for (uint32_t row = row_begin; row < row_end; ++row) {
         const uint32_t tile_row_offset = tile_col0_offset(row);
         volatile tt_l1_ptr uint32_t* row_scales = packed + row * packed_row_words + latent_row_words;
         for (uint32_t block = 0; block < ScaleBlocks; ++block) {
-            scale_tiles[block * tt::constants::TILE_HW + tile_row_offset] = row_scales[block];
+            const uint32_t element = block * tt::constants::TILE_HW + tile_row_offset;
+            if constexpr (FusedDequant) {
+                scale_tiles[element] = fused_dequant_fp16_scale(row_scales[block]);
+            } else {
+                scale_tiles[element] = row_scales[block];
+            }
         }
     }
 }
 
-template <uint32_t ScaleBlocks>
+// Zero column 0 of the scale broadcast tiles for rows [row_begin, row_end) (the padded slab suffix).
+template <uint32_t ScaleBlocks, bool FusedDequant>
 FORCE_INLINE void clear_scale_rows(uint32_t scale_tiles_l1, uint32_t row_begin, uint32_t row_end) {
-    volatile tt_l1_ptr uint32_t* scale_tiles = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scale_tiles_l1);
+    volatile tt_l1_ptr scale_elem_t<FusedDequant>* scale_tiles =
+        reinterpret_cast<volatile tt_l1_ptr scale_elem_t<FusedDequant>*>(scale_tiles_l1);
     for (uint32_t row = row_begin; row < row_end; ++row) {
         const uint32_t tile_row_offset = tile_col0_offset(row);
         for (uint32_t block = 0; block < ScaleBlocks; ++block) {

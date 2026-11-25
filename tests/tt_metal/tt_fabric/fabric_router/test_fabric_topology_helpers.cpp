@@ -4,7 +4,7 @@
 
 #include <gtest/gtest.h>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
-#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
 #include "impl/context/metal_context.hpp"

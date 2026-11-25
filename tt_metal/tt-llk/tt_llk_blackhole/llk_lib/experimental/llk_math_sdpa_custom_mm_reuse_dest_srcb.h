@@ -147,7 +147,7 @@ inline void _llk_math_sdpa_custom_mm_reuse_dest_srcb_(
             {
                 for (std::uint32_t g = 0; g < output_granularity; g++)
                 {
-                    lltt::replay(ckernel::math::replay_buf_offset, 4);
+                    TTI_REPLAY(ckernel::math::replay_buf_offset, 4, 0, 0);
                 }
                 t6_semaphore_post<p_stall::MATH>(semaphore::FPU_SFPU);
             }
@@ -156,7 +156,7 @@ inline void _llk_math_sdpa_custom_mm_reuse_dest_srcb_(
         {
             for (std::uint32_t j = 0; j < nt_dim; j++)
             {
-                lltt::replay(ckernel::math::replay_buf_offset, 4);
+                TTI_REPLAY(ckernel::math::replay_buf_offset, 4, 0, 0);
             }
         }
     }

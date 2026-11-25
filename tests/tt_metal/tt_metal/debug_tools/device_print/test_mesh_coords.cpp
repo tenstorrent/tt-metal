@@ -10,13 +10,13 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/mesh_config.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/system_mesh.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/mesh/mesh_config.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/discovery/system_mesh.hpp>
 #include <internal/mesh_device.hpp>
 
 #include "debug_tools_fixture.hpp"
@@ -103,8 +103,7 @@ distributed::MeshWorkload BuildMeshCoordWorkload(const std::shared_ptr<distribut
             .work_units = {WorkUnitSpec{.name = "main", .kernels = {kKernel}, .target_nodes = kNode}},
         };
 
-        workload.add_program(
-            distributed::MeshCoordinateRange(coord, coord), experimental::MakeProgramFromSpec(*mesh_device, spec));
+        workload.add_program(distributed::MeshCoordinateRange(coord, coord), Program(*mesh_device, spec));
     }
     return workload;
 }

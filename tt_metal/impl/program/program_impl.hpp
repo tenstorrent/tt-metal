@@ -6,24 +6,24 @@
 
 #include "program_command_sequence.hpp"
 
-#include "tt-metalium/buffer.hpp"
-#include "tt-metalium/circular_buffer.hpp"
-#include "tt-metalium/circular_buffer_constants.h"
-#include "tt-metalium/circular_buffer_config.hpp"
+#include "tt-metalium/memory/buffer/buffer.hpp"
+#include "tt-metalium/workload/legacy/circular_buffer.hpp"
+#include "tt-metalium/workload/legacy/circular_buffer_constants.h"
+#include "tt-metalium/workload/legacy/circular_buffer_config.hpp"
 #include <tt_stl/assert.hpp>
 #include <tt_stl/optional_reference.hpp>
-#include "tt-metalium/core_coord.hpp"
-#include "tt-metalium/hal_types.hpp"     // HalProgrammableCoreType
-#include "tt-metalium/kernel_types.hpp"  // KernelHandle
-#include "tt-metalium/program.hpp"       // KernelGroup
-#include "tt-metalium/mesh_workload.hpp"
+#include "tt-metalium/vocabulary/core_coord.hpp"
+#include "tt-metalium/vocabulary/hal_types.hpp"          // HalProgrammableCoreType
+#include "tt-metalium/workload/legacy/kernel_types.hpp"  // KernelHandle
+#include "tt-metalium/workload/program.hpp"              // KernelGroup
+#include "tt-metalium/workload/mesh_workload.hpp"
 #include "hostdev/remote_dfb_constants.h"  // REMOTE_DFB_OFFSET_NONE
 #include "program_device_map.hpp"          // ProgramTransferInfo
 #include "program_allocation_support.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include "impl/metal2_host_api/sram_arena_support.hpp"
-#include "tt-metalium/sub_device_types.hpp"
-#include "tt-metalium/tensor/spec/tensor_spec.hpp"                               // Metal 2.0 TensorParameter registry
+#include "tt-metalium/mesh/sub_device_types.hpp"
+#include "tt-metalium/memory/tensor/spec/tensor_spec.hpp"                  // Metal 2.0 TensorParameter registry
 #include "tt-metalium/workload/specification/tensor_spec_relaxations.hpp"  // Metal 2.0 TensorParameter relaxations
 #include "tt-metalium/experimental/sram_arena/sram_arena_properties.hpp"
 #include "tt-metalium/experimental/metal2_host_api/sram_arena_parameter.hpp"
@@ -251,6 +251,7 @@ public:
     ProgramId get_id() const;
     std::size_t num_kernels() const;
     std::span<const std::shared_ptr<CircularBufferImpl>> circular_buffers() const;
+    void check_circular_buffers_bound();
     const std::vector<Semaphore>& semaphores() const;
     const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& dataflow_buffers()
         const;
@@ -484,7 +485,7 @@ public:
 
     // Binding a live pipe to a reserved slot on `cores` (a subset of the slot's cores whose sender /
     // receiver split matches the pipe's) is split in two so a batch of bindings can be checked in
-    // full before any of it lands (a rejected SetProgramRunArgs must leave the program untouched):
+    // full before any of it lands (a rejected Program::set_program_run_args must leave the program untouched):
     //   check_prefetcher_pipe_slot_bind validates the pipe against the slot geometry and credit
     //     lanes, the sticky per-core binding and the relay ring agreement. No mutation.
     //     `preflight` accumulates what earlier checks in the same batch would commit (ring address
@@ -567,7 +568,7 @@ public:
             bool sender_role = false;
         };
         std::vector<SlotCores> slots;
-        // identity() of the pipe SetProgramRunArgs bound, 0 until one is. Same-pipe checks compare
+        // identity() of the pipe Program::set_program_run_args bound, 0 until one is. Same-pipe checks compare
         // this, not the address: a destroyed pipe's address can be reused by a new pipe, but its
         // identity never is. The bound pipe may be destroyed while the program lives on; a later bind
         // may replace it only with a pipe of the same bound_pipe_key.
@@ -663,7 +664,7 @@ public:
 
     void generate_dispatch_commands(distributed::MeshDevice* mesh_device, bool use_prefetcher_cache);
 
-    // Dispatches detail::collect_kernel_meta, device is nullable
+    // Backs experimental::collect_kernel_meta
     std::vector<detail::KernelMeta> collect_kernel_meta(IDevice* device) const;
 
     // Metal 2.0: Mark this Program as created from ProgramSpec
@@ -707,6 +708,12 @@ public:
     // name is unknown; the caller validates known-ness separately).
     TensorSpecRelaxations get_tensor_parameter_relaxations(const std::string& name) const;
     std::vector<std::string> get_registered_tensor_parameter_names() const;
+    // Metal 2.0: GlobalSemaphoreParameters, with the mesh the program was built for (a bound
+    // GlobalSemaphore must live on it).
+    void register_global_semaphore_parameter(const std::string& name, const distributed::MeshDevice& device);
+    // Returns nullptr if name is not registered (caller validates).
+    const distributed::MeshDevice* get_global_semaphore_parameter_device(const std::string& name) const;
+    std::vector<std::string> get_registered_global_semaphore_parameter_names() const;
     // Footprint of the tensor most recently bound to a registered parameter. The setter ignores unregistered names;
     // the getter returns nullptr if no tensor has been bound.
     void set_bound_tensor_footprint(const std::string& name, const BoundTensorFootprint& footprint);
@@ -738,8 +745,8 @@ public:
 
         // Precomputed name -> slot-index maps mirroring the *_names vectors above (slot = the arg's
         // position within its dispatch-buffer section). Built once at Program construction so the
-        // hot UpdateProgramRunArgs path does O(1) lookups instead of rebuilding a map per call —
-        // that path is not bypassable via skip_validation, so per-call construction would be pure
+        // hot Program::update_program_run_args path does O(1) lookups instead of rebuilding a map per call —
+        // that path is not bypassable via ValidationMode::SKIP, so per-call construction would be pure
         // host overhead on the inner re-enqueue loop.
         std::unordered_map<std::string, size_t> runtime_arg_name_to_slot;
         std::unordered_map<std::string, size_t> common_runtime_arg_name_to_slot;
@@ -769,14 +776,29 @@ public:
     std::vector<std::string> get_registered_kernel_names() const;
 
     // Metal 2.0: Pre-size RTA/CRTA host buffers from the registered schema + CRTA layout so
-    // finalize_offsets can compute dispatch sizes before SetProgramRunArgs fills values.
+    // finalize_offsets can compute dispatch sizes before Program::set_program_run_args fills values.
     void reserve_runtime_arg_buffers();
+
+    // Metal 2.0: a run of a kernel's runtime args words on one core whose values differ per device of the MeshDevice
+    // that the Program was built on (for example the args of a fabric connection).
+    struct DeviceSpecificRuntimeArgs {
+        KernelHandle kernel = 0;
+        CoreCoord core;
+        uint32_t first_word = 0;
+        uint32_t num_words = 0;
+        std::vector<uint32_t> values_in_range_order;  // [device index in the range][num_words]
+    };
+    // Metal 2.0: the runs of runtime args words whose values on some device of `range` differ from the Program's own
+    // runtime args, with the values of each device of `range`.
+    // precondition: the Program was built to run on each device of `range`.
+    std::vector<DeviceSpecificRuntimeArgs> device_specific_runtime_args(
+        const distributed::MeshCoordinateRange& range) const;
 
     bool program_run_args_initialized() const { return program_run_args_initialized_; }
     void mark_program_run_args_initialized() { program_run_args_initialized_ = true; }
 
-    // Metal 2.0 per-device run args (experimental::UpdateProgramRunArgsForDevice). A program-level set of the run args
-    // drops every per-device value, and an update drops those of the args it lists. The MeshWorkload holds the
+    // Metal 2.0 per-device run args (MeshWorkload::update_program_run_args_for_device). A program-level set of the run
+    // args drops every per-device value, and an update drops those of the args it lists. The MeshWorkload holds the
     // per-device values, so the program only records the drops; the workload applies them before its next per-device
     // set and at enqueue. Nothing is recorded until the workload tracks a per-device arg of this program, so programs
     // without per-device args pay one empty() check per set or update.
@@ -800,8 +822,10 @@ public:
     struct PerDeviceRunArgDrops {
         PerDeviceRunArgKeys tracked;  // the args the workload holds per-device values of
         std::unordered_map<KernelHandle, uint32_t> tracked_per_kernel;  // number of tracked args per kernel
-        bool drop_all = false;        // SetProgramRunArgs since the workload last applied the drops
-        PerDeviceRunArgKeys pending;  // tracked args UpdateProgramRunArgs set since then (empty when drop_all)
+        // Program::set_program_run_args since the workload last applied the drops
+        bool drop_all = false;
+        // tracked args Program::update_program_run_args set since then (empty when drop_all)
+        PerDeviceRunArgKeys pending;
         bool any_pending() const { return drop_all || !pending.empty(); }
         // The workload entry that holds per-device args of the program (see MeshWorkloadImpl): the drops are its.
         uint64_t owner = 0;
@@ -927,6 +951,7 @@ private:
         };
         std::unordered_map<std::string, RegisteredTensorParameter> tensor_parameter_layouts;
         std::unordered_map<std::string, RegisteredSRAMArenaParameter> sram_arena_parameters;
+        std::unordered_map<std::string, const distributed::MeshDevice*> global_semaphore_parameters;
 
         std::vector<DFBStorageBinding> dfb_storage_bindings;
     };
@@ -951,6 +976,8 @@ private:
     // invalidate_*_allocation hooks and the CB/DFB creation paths set this back to true. Recorded
     // per device, since the layout steps also register the program against the device.
     bool compile_and_allocate_needed_{true};
+    // Set once a check finds every CB bound.
+    bool circular_buffers_bound_{false};
     const IDevice* compile_and_allocate_device_{nullptr};
     // For lockstep allocation, a single live L1 frontier check covers every static CB and DFB
     // region validated during layout. Service-core claims only add checks for CB regions that sit
