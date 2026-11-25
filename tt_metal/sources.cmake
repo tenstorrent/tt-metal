@@ -214,7 +214,7 @@ set(TT_METAL_PUBLIC_API
     api/internal/disaggregation/kv_chunk_address_table.hpp
     api/internal/disaggregation/kv_chunk_table_cache.hpp
     api/internal/fabric.hpp
-    api/internal/inter_domain.hpp
+    api/internal/fabric/inter_domain.hpp
     api/internal/graph_function_abort.hpp
     api/internal/l1_ecc_halt.hpp
     api/tt-metalium/workload/legacy/kernel_types.hpp

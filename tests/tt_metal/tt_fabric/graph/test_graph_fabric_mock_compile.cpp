@@ -22,7 +22,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
 
-#include <internal/inter_domain.hpp>
+#include <internal/fabric/inter_domain.hpp>
 
 #include "impl/context/metal_context.hpp"
 #include "llrt/tt_cluster.hpp"

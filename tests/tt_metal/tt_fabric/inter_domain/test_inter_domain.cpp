@@ -28,7 +28,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <internal/inter_domain.hpp>
+#include <internal/fabric/inter_domain.hpp>
 
 #include <internal/cluster.hpp>
 

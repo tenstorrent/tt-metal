@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <internal/inter_domain.hpp>
+#include <internal/fabric/inter_domain.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>  // ChipId
 #include "erisc_datamover_builder.hpp"

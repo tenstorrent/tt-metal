@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <internal/inter_domain.hpp>
+#include <internal/fabric/inter_domain.hpp>
 
 #include <thread>
 
