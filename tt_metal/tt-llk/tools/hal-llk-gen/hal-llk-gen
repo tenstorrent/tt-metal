@@ -1,0 +1,574 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+#
+# hal-llk-gen: HAL LLK generation experiments from the command line (see README.md, or `hal-llk-gen help`).
+set -uo pipefail
+
+TOOL_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
+SELF=$TOOL_DIR/hal-llk-gen
+ALL_STAGES="harness postcheck perf static dyn"
+CONFIG_VARS=(BASE_COMMIT HAL_COMMIT DOCS_COMMIT DOCS_DIR DOCS_INVALID DOCS_REMOVE FETCH_REMOTE FETCH_REFS PROMPT PROMPT_MD5
+  TESTS EXPECT_PASSED PERF_TEST PERF_K MODEL CLAUDE_VERSION TIMEOUT MAX_TURNS MAX_BUDGET REPO WORK VENV CLAUDE_DIR ELFRAY
+  SIBLING_ROOTS EXTRA_DENY STAGES PERF_REPS DYN_KERNELS DYN_REFERENCE STRICT_VERSIONS KEEP_WS_COPY)
+
+usage() {
+  cat <<'EOF'
+hal-llk-gen: run HAL LLK generation experiments (a Claude Code agent writes the LLKs of a test on top of HAL,
+then independent checks, cycle measurements and static code counts), with logs and a summary per run.
+
+Usage: hal-llk-gen <command> [options]
+
+Commands
+  check                       check machine, tools, commits and isolation; starts nothing
+  dry-run [NAME]              harness setup + original test, no agent (~20 min); default NAME dry-<time>
+  run NAME [NAME ...]         full runs, one after another: harness, postcheck, perf, static (+ dyn)
+  continue NAME               run more stages on an existing run (with --stages, e.g. "perf static")
+  trivial [NAME]              test validity check: original LLKs with empty bodies must fail (no agent)
+  follow NAME                 attach to a running batch: progress until it ends, then the summary
+  status [NAME]               all runs (or one run's progress)
+  stop NAME [--now]           no further stage starts (--now: also kill the running stage and the agent)
+  summary NAME                print the summary of a run (and rewrite summary.{txt,md,json})
+  compare NAME ... | --all    table over runs
+  profiles                    list the run profiles
+  selftest                    offline tests of this tool (no card, no agent)
+
+Options
+  --profile P       run profile from profiles/ (default run8)
+  --stages "S ..."  stages for run/continue (default "harness postcheck perf static"; add "dyn" for the
+                    dynamic analysis)
+  --repeat N        run NAME-1 ... NAME-N (one NAME)
+  --detach          start in the background and return (default: follow the progress in this terminal;
+                    Ctrl-C only detaches, the run continues)
+
+Settings come from the profile, then the optional local.env next to this script (machine paths), then the
+environment (e.g. WORK=/path PERF_REPS=5 hal-llk-gen run 9a). Main ones: WORK (output root), VENV, CLAUDE_DIR,
+ELFRAY, REPO, PERF_REPS, DYN_KERNELS, STRICT_VERSIONS=1. Without local.env: WORK is
+/proj_sw/user_dev/$USER/hal-llk-gen-work (or ~/hal-llk-gen-work), the venv is the active one or else
+$WORK/venv (made by the first check or run), claude comes from PATH, elfray from PATH if present.
+
+Examples
+  hal-llk-gen check
+  hal-llk-gen run 9a                          # one run, run-8 configuration, summary at the end
+  hal-llk-gen run 9 --repeat 3 --detach       # 9-1, 9-2, 9-3 one after another, in the background
+  hal-llk-gen run 9b --profile hal-test-gen --stages "harness postcheck perf static dyn"
+  hal-llk-gen compare 9-1 9-2 9-3
+EOF
+}
+
+now() { date -u +%FT%TZ; }
+die() { echo "hal-llk-gen: $*" >&2; exit 2; }
+WARNINGS=()
+warn() { echo "  warning: $*"; WARNINGS+=("$*"); }
+has_stage() { [[ " $STAGES " == *" $1 "* ]]; }
+md5of() { md5sum < "$1" | cut -d' ' -f1; }
+
+# ------------------------------------------------------------------- configuration ---
+load_config() {
+  local v
+  declare -gA OVR=()
+  for v in "${CONFIG_VARS[@]}"; do [[ -n "${!v+x}" ]] && OVR[$v]=${!v}; done
+  PROFILE=${OPT_PROFILE:-${PROFILE:-run8}}
+  local pf=$TOOL_DIR/profiles/$PROFILE.env
+  [[ -f $pf ]] || die "unknown profile '$PROFILE' (see: hal-llk-gen profiles)"
+  LOCAL_ENV=${HAL_LLK_GEN_ENV:-$TOOL_DIR/local.env}
+  set -a
+  # shellcheck disable=SC1090
+  source "$pf"
+  # shellcheck disable=SC1090
+  [[ -f $LOCAL_ENV ]] && source "$LOCAL_ENV"
+  set +a
+  for v in "${!OVR[@]}"; do printf -v "$v" '%s' "${OVR[$v]}"; export "${v?}"; done
+  [[ -n "${OPT_STAGES:-}" ]] && STAGES=$OPT_STAGES
+  REPO=${REPO:-$(git -C "$TOOL_DIR" rev-parse --show-toplevel 2>/dev/null || true)}
+  if [[ -z "${WORK:-}" ]]; then
+    if [[ -d /proj_sw/user_dev/$USER ]]; then WORK=/proj_sw/user_dev/$USER/hal-llk-gen-work; else WORK=$HOME/hal-llk-gen-work; fi
+  fi
+  # local.env is optional: without VENV the active venv is used, else $WORK/venv (made by ensure_venv)
+  if [[ -n "${VENV:-}" ]]; then VENV_SOURCE="VENV setting"
+  elif [[ -n "${VIRTUAL_ENV:-}" ]]; then VENV=$VIRTUAL_ENV; VENV_SOURCE="active venv"
+  else VENV=$WORK/venv; VENV_SOURCE=default; fi
+  ELFRAY=${ELFRAY:-$(command -v elfray 2> /dev/null || true)}
+  STAGES=${STAGES:-harness postcheck perf static}
+  PERF_REPS=${PERF_REPS:-3}
+  DYN_KERNELS=${DYN_KERNELS:-original hal}
+  FETCH_REMOTE=${FETCH_REMOTE:-origin}
+  STRICT_VERSIONS=${STRICT_VERSIONS:-0}
+  KEEP_WS_COPY=${KEEP_WS_COPY:-0}
+  RUNS_ROOT=$WORK/hal-runs
+  RESULTS_ROOT=$WORK/hal-results
+  STATES=$WORK/runs
+  BATCHES=$WORK/batches
+  DYN_ROOT=$WORK/dynamic-analysis
+  PROMPT_FILE=$TOOL_DIR/harness/prompts/${PROMPT:-}
+  export PROFILE REPO WORK STAGES PERF_REPS DYN_KERNELS FETCH_REMOTE STRICT_VERSIONS KEEP_WS_COPY PROMPT_FILE
+  for v in "${CONFIG_VARS[@]}"; do [[ -n "${!v+x}" ]] && export "${v?}"; done
+}
+
+activate() {  # venv, claude, PATH (also in the background process)
+  # shellcheck disable=SC1091
+  source "$VENV/bin/activate" || die "cannot activate the venv $VENV"
+  [[ -n "${CLAUDE_DIR:-}" ]] && export PATH=$CLAUDE_DIR:$PATH
+  export PATH=$PATH:$HOME/.local/bin DISABLE_AUTOUPDATER=1
+}
+
+ensure_venv() {  # the default venv $WORK/venv is made once, from the tt-llk test requirements of this checkout
+  local ready=$VENV/.hal-llk-gen-ready req=$REPO/tt_metal/tt-llk/tests/requirements.txt log=$WORK/venv-setup.log
+  if [[ $VENV_SOURCE != default ]]; then
+    [[ -f $VENV/bin/activate ]] || die "$VENV ($VENV_SOURCE) is not a Python venv (no bin/activate)"
+    return 0
+  fi
+  [[ -f $ready ]] && return 0
+  [[ -f $req ]] || die "no venv: activate one with pytest, or set VENV (local.env or environment); $req not found"
+  mkdir -p "$WORK" || die "cannot create WORK=$WORK"
+  exec 8> "$WORK/.venv-setup.lock"
+  flock 8   # several runs started at once on one WORK: one makes the venv, the others wait for it
+  if [[ ! -f $ready ]]; then
+    echo "  no venv set or active: creating $VENV from $req (once, a few minutes; log $log)"
+    if { rm -rf "$VENV" && python3 -m venv "$VENV" && "$VENV/bin/python" -m pip install -q --upgrade pip &&
+      "$VENV/bin/python" -m pip install -q -r "$req"; } > "$log" 2>&1; then
+      touch "$ready"
+    else
+      rm -rf "$VENV"
+      die "creating $VENV failed, see $log (or activate a venv / set VENV)"
+    fi
+  fi
+  exec 8>&-
+}
+
+needs_card() { has_stage harness || has_stage postcheck || has_stage perf || has_stage dyn; }
+
+# ---------------------------------------------------------------------------- checks ---
+checks() {  # <dry: 0|1> <mode: B|TRIVIAL>
+  local dry=$1 mode=$2 c
+  echo "== checks ($(now))"
+  ensure_venv
+  activate
+  for c in git python3 pytest tt-smi md5sum setsid timeout tar flock; do
+    command -v $c > /dev/null || die "'$c' is not in PATH (venv $VENV)"
+  done
+  if has_stage harness && [[ $dry == 0 && $mode == B ]]; then
+    command -v claude > /dev/null || die "claude is not in PATH or ~/.local/bin (install Claude Code, or set CLAUDE_DIR)"
+  fi
+  if has_stage perf; then python3 -c "import pandas" 2> /dev/null || die "pandas is missing in the venv (needed by the perf stage)"; fi
+  if has_stage dyn; then python3 -c "import ttexalens" 2> /dev/null || die "tt-exalens is missing in the venv (needed by the dyn stage)"; fi
+  for c in $STAGES; do [[ " $ALL_STAGES " == *" $c "* ]] || die "unknown stage '$c' (stages: $ALL_STAGES)"; done
+
+  if needs_card; then
+    local nb busy
+    nb=$(ls /dev/tenstorrent 2> /dev/null | wc -l)
+    [[ $nb == 1 ]] || die "this machine sees $nb Tenstorrent devices; run inside a container / reservation with exactly one board (tt-smi -r resets every board it sees)"
+    busy=$(ps -u "$USER" -o args= | grep -E "[p]ytest|[c]laude -p|[r]un_hal_gen.sh|[t]t-smi" | grep -v "hal-llk-gen check" | wc -l)
+    [[ $busy == 0 ]] || die "$busy pytest / claude -p / harness / tt-smi processes of $USER are already running here"
+  fi
+
+  local v=""
+  if command -v claude > /dev/null; then v=$(claude --version 2> /dev/null | awk '{print $1}'); fi
+  if has_stage harness && [[ $mode == B ]]; then
+    if [[ -n "${CLAUDE_VERSION:-}" && "$v" != "$CLAUDE_VERSION" ]]; then
+      [[ $STRICT_VERSIONS == 1 && $dry == 0 ]] && die "Claude Code $v, the profile expects $CLAUDE_VERSION"
+      warn "Claude Code ${v:-missing}, the profile expects $CLAUDE_VERSION (STRICT_VERSIONS=1 makes this a stop)"
+    fi
+    if [[ $dry == 0 ]]; then
+      timeout 30 claude auth status < /dev/null 2> /dev/null | grep -q '"loggedIn": true' || die "claude is not logged in (claude auth login)"
+    fi
+    [[ -f $PROMPT_FILE ]] || die "prompt $PROMPT_FILE does not exist"
+    if [[ -n "${PROMPT_MD5:-}" ]]; then
+      [[ $(md5of "$PROMPT_FILE") == "$PROMPT_MD5" ]] || die "$PROMPT_FILE does not have the md5 of profile $PROFILE ($PROMPT_MD5)"
+    fi
+  fi
+
+  if has_stage harness; then
+    [[ -n "$REPO" ]] && git -C "$REPO" rev-parse --git-dir > /dev/null 2>&1 || die "REPO is not set and $TOOL_DIR is not in a git checkout"
+    local missing=() r
+    for c in $BASE_COMMIT $HAL_COMMIT ${DOCS_COMMIT:-}; do git -C "$REPO" cat-file -e "$c^{commit}" 2> /dev/null || missing+=("$c"); done
+    if (( ${#missing[@]} )) && [[ -n "${FETCH_REFS:-}" ]]; then
+      echo "  fetching $FETCH_REFS from $FETCH_REMOTE (missing: ${missing[*]})"
+      for r in $FETCH_REFS; do  # one by one: a branch that is missing on the remote does not stop the others
+        git -C "$REPO" fetch -q "$FETCH_REMOTE" "+refs/heads/$r:refs/remotes/$FETCH_REMOTE/$r" 2> /dev/null ||
+          warn "could not fetch branch $r from $FETCH_REMOTE"
+      done
+      missing=()
+      for c in $BASE_COMMIT $HAL_COMMIT ${DOCS_COMMIT:-}; do git -C "$REPO" cat-file -e "$c^{commit}" 2> /dev/null || missing+=("$c"); done
+    fi
+    (( ${#missing[@]} == 0 )) || die "commits missing in $REPO: ${missing[*]} (not in FETCH_REFS of profile $PROFILE on $FETCH_REMOTE; fetch the branches that hold them)"
+
+    # Isolation: the harness denies the agent REPO, RESULTS_ROOT, the other runs, $WORK/{runs,batches,dynamic-analysis},
+    # this tool and EXTRA_DENY, so the run's own folder must not be inside any of those.
+    local rw rr rt; rw=$(realpath -m "$WORK"); rr=$(realpath "$REPO"); rt=$(realpath "$TOOL_DIR")
+    [[ $rw == "$rr" || $rw == "$rr"/* ]] && die "WORK ($WORK) is inside REPO; the agent could not read its own workspace"
+    [[ $rw == "$rt" || $rw == "$rt"/* ]] && die "WORK ($WORK) is inside $TOOL_DIR"
+    local h; for h in $(find "$HOME" -maxdepth 4 -type d -path '*/tt_metal/tt-llk' 2> /dev/null); do
+      [[ $(realpath "$h") == "$rr"/* ]] || warn "tt-metal checkout in \$HOME the agent could read: ${h%/tt_metal/tt-llk}"
+    done
+  fi
+  if has_stage static || has_stage postcheck; then
+    if [[ -n "${ELFRAY:-}" ]]; then [[ -x "$ELFRAY" ]] || die "ELFRAY=$ELFRAY is not an executable"
+    else warn "elfray not found (set ELFRAY): no TTI/TT counts (code size and cycles are still measured)"; fi
+  fi
+  mkdir -p "$WORK" || die "cannot create WORK=$WORK"
+  local free_gb; free_gb=$(( $(df -Pk "$WORK" | awk 'NR==2 {print $4}') / 1048576 ))
+  (( free_gb >= 5 )) || warn "only $free_gb GB free in $WORK (a run needs about 2 GB)"
+
+  echo "  profile:   $PROFILE - ${PROFILE_DESCRIPTION:-}"
+  echo "  commits:   base ${BASE_COMMIT:0:11}  HAL ${HAL_COMMIT:0:11}  docs ${DOCS_COMMIT:0:11}"
+  echo "  prompt:    ${PROMPT:-} (md5 ${PROMPT_MD5:-not pinned})   tests: $TESTS"
+  echo "  agent:     ${MODEL:-}, Claude Code ${v:-not found} ($(command -v claude 2> /dev/null || echo -)), limits ${TIMEOUT:-} / ${MAX_TURNS:-} turns / \$${MAX_BUDGET:-none}"
+  echo "  repo:      $REPO"
+  echo "  work:      $WORK"
+  echo "  settings:  profiles/$PROFILE.env$([[ -f $LOCAL_ENV ]] && echo " + $LOCAL_ENV" || echo " (no local.env: defaults)")"
+  echo "  venv:      ${VIRTUAL_ENV:-none} ($VENV_SOURCE)   elfray: ${ELFRAY:-not found}"
+  echo "  board:     $(ls /dev/tenstorrent 2> /dev/null | tr '\n' ' ')"
+  echo "  stages:    $STAGES$([[ $dry == 1 ]] && echo ' (dry run: no agent)')"
+  echo "  checks OK$( (( ${#WARNINGS[@]} )) && echo " (${#WARNINGS[@]} warnings)")"
+}
+
+# --------------------------------------------------------- background batch process ---
+P_STATE="" P_BATCH=""
+progress() {  # <stage> <message>
+  local line; line=$(printf '%s  %-10s %-9s %s' "$(now)" "$P_NAME" "$1" "$2")
+  echo "$line" >> "$P_STATE/progress.log"
+  echo "$line" >> "$P_BATCH/progress.log"
+}
+stage_record() { printf '%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$(now)" >> "$P_STATE/stages.tsv"; }
+stopped() { [[ -e $P_STATE/STOP || -e $P_BATCH/STOP ]]; }
+
+write_run_env() {
+  local v
+  {
+    echo "# hal-llk-gen run $P_NAME, $(now), host $(hostname)"
+    echo "PROFILE=$PROFILE"
+    echo "REFERENCE_SERIES=${REFERENCE_SERIES:-}"
+    for v in "${CONFIG_VARS[@]}" PROMPT_FILE MODE DRY_RUN; do [[ -n "${!v+x}" ]] && printf '%s="%s"\n' "$v" "${!v}"; done
+    echo "TOOL_COMMIT=$(git -C "$TOOL_DIR" rev-parse HEAD 2> /dev/null || echo none)"
+    echo "TOOL_DIRTY=$(git -C "$TOOL_DIR" status --porcelain -- . 2> /dev/null | grep -c . || true)"
+    echo "TOOL_MD5=$(cd "$TOOL_DIR" && find hal-llk-gen harness stages python profiles -type f \( -name '*.sh' -o -name '*.py' -o -name '*.md' -o -name '*.json' -o -name '*.env' -o -name hal-llk-gen \) | sort | xargs md5sum | md5sum | cut -d' ' -f1)"
+  } > "$P_STATE/run.env"
+}
+
+heartbeat() {  # progress line every HEARTBEAT_SEC while the agent runs (minutes, transcript size only)
+  local rd t0 ev
+  while sleep "${HEARTBEAT_SEC:-900}"; do
+    [[ -f $P_STATE/.agent_start && ! -f $P_STATE/.agent_end ]] || continue
+    rd=$(cat "$P_STATE/run_dir.txt" 2> /dev/null) || continue
+    t0=$(cat "$P_STATE/.agent_start")
+    ev=$(wc -l < "$rd/logs/transcript.jsonl" 2> /dev/null || echo 0)
+    progress agent "running for $(( ($(date +%s) - t0) / 60 )) min ($ev transcript events)"
+  done
+}
+
+stage_harness() {
+  local log=$P_STATE/harness.log start rc run_dir cec tline hb
+  start=$(now)
+  progress harness "started (log $log)"
+  heartbeat & hb=$!
+  (
+    cd "$TOOL_DIR/harness" || exit 1
+    MODE=$MODE DRY_RUN=$DRY_RUN RUN_TAG=$P_NAME REPO=$REPO RUNS_ROOT=$RUNS_ROOT RESULTS_ROOT=$RESULTS_ROOT \
+      EXTRA_DENY="$STATES $BATCHES $DYN_ROOT $TOOL_DIR ${EXTRA_DENY:-}" PROMPT_FILE=$PROMPT_FILE ELFRAY=${ELFRAY:-} \
+      exec bash ./run_hal_gen.sh
+  ) < /dev/null 2>&1 | tee "$log" | while IFS= read -r tline; do
+    [[ $tline == "[harness "* ]] || continue
+    progress harness "${tline#*] }"
+    case "$tline" in
+      *"] Run: "*)
+        run_dir=${tline##*] Run: }; run_dir=${run_dir%% *}; echo "$run_dir" > "$P_STATE/run_dir.txt"
+        ln -sfn "$run_dir" "$P_STATE/harness_run" ;;
+      *"] 8/9 "*) date +%s > "$P_STATE/.agent_start" ;;
+      *"] 9/9 "*) touch "$P_STATE/.agent_end" ;;
+    esac
+  done
+  rc=${PIPESTATUS[0]}
+  kill "$hb" 2> /dev/null; wait "$hb" 2> /dev/null
+  rm -f "$P_STATE/.agent_start" "$P_STATE/.agent_end"
+  run_dir=$(cat "$P_STATE/run_dir.txt" 2> /dev/null)
+  if [[ -z $run_dir ]]; then
+    stage_record harness failed "$rc" "$start"; progress harness "failed before the run dir was made (exit $rc), see $log"; return 1
+  fi
+  if [[ $DRY_RUN == 1 ]]; then
+    stage_record harness "dry-run" "$rc" "$start"
+    progress harness "dry run ended (exit $rc): $(grep -m1 -E 'passed|failed' "$run_dir"/logs/baseline_*.txt 2> /dev/null | tail -1 | sed 's/^.*\.txt://')"
+    return 1
+  fi
+  if [[ ! -f $run_dir/logs/SUMMARY.txt ]]; then
+    stage_record harness failed "$rc" "$start"; progress harness "failed (exit $rc), no SUMMARY.txt; see $log"; return 1
+  fi
+  if [[ $MODE == TRIVIAL ]]; then
+    stage_record harness ok "$rc" "$start"; progress harness "$(grep -m1 '^Result:' "$run_dir/logs/SUMMARY.txt")"; return 1
+  fi
+  cec=$(grep -oP '^claude_exit_code=\K.*' "$run_dir/logs/run_meta.txt")
+  progress harness "done (exit $rc): agent exit $cec, $(grep -oP '^Claude duration:\s*\K.*' "$run_dir/logs/SUMMARY.txt"), HAL tests: $(grep -oP '^HAL tests:\s*\K.*' "$run_dir/logs/SUMMARY.txt")"
+  if [[ $cec != 0 ]]; then
+    stage_record harness "agent-exit-$cec" "$rc" "$start"; progress harness "the agent did not end normally: later stages skipped"; return 1
+  fi
+  stage_record harness ok "$rc" "$start"
+}
+
+make_ws_copy() {  # hard-link copy of the run's workspace; files that are replaced are removed first, never written in place
+  local run_dir; run_dir=$(cat "$P_STATE/run_dir.txt")
+  CW=$P_STATE/ws_copy
+  if [[ ! -d $CW ]]; then cp -al "$run_dir/ws" "$CW" || return 1; fi
+  rm -rf "$CW/tt_metal/tt-llk/tests/.pytest_cache" "$CW/tt_metal/tt-llk/perf_data"
+  rm -f "$CW"/tt_metal/tt-llk/tests/*.log   # test_run*.log: the framework rewrites these in place every session
+}
+
+run_stage() {  # <stage> <command...>: runs, records, reports
+  local st=$1 start rc; shift
+  start=$(now)
+  progress "$st" "started"
+  "$@" > "$P_STATE/$st.log" 2>&1
+  rc=$?
+  stage_record "$st" "$([[ $rc == 0 ]] && echo ok || echo failed)" "$rc" "$start"
+  progress "$st" "$([[ $rc == 0 ]] && echo done || echo "FAILED (exit $rc)"): $(tail -1 "$P_STATE/$st.log")"
+  return $rc
+}
+
+one_run() {  # <name> <new|continue>
+  P_NAME=$1; P_STATE=$STATES/$1
+  mkdir -p "$P_STATE"
+  echo "$P_BATCH" > "$P_STATE/batch.txt"
+  [[ $2 == new ]] && write_run_env
+  progress run "start: profile $PROFILE, stages: $STAGES"
+  local ok=1 run_dir
+  if has_stage harness; then
+    stopped && { progress run "STOP file: nothing started"; return; }
+    stage_harness || ok=0
+  fi
+  run_dir=$(cat "$P_STATE/run_dir.txt" 2> /dev/null)
+  if [[ $ok == 1 && -n $run_dir && -d $run_dir/ws ]]; then
+    if has_stage postcheck && ! stopped; then
+      run_stage postcheck bash "$TOOL_DIR/stages/postcheck.sh" "$run_dir" "$P_STATE/postcheck" "$TESTS"
+    fi
+    if { has_stage perf || has_stage static || has_stage dyn; } && ! stopped; then
+      make_ws_copy || progress run "could not make the workspace copy"
+      if has_stage perf && ! stopped; then
+        if [[ -n "${PERF_TEST:-}" ]]; then
+          run_stage perf bash "$TOOL_DIR/stages/perf.sh" "$CW" "$P_STATE/perf" "$PERF_REPS" "$PERF_TEST" "${PERF_K:-}"
+        else progress perf "skipped: the profile sets no PERF_TEST"; fi
+      fi
+      has_stage static && ! stopped && run_stage static bash "$TOOL_DIR/stages/static.sh" "$CW" "$P_STATE/static" "$TESTS"
+      has_stage dyn && ! stopped && run_stage dyn bash "$TOOL_DIR/stages/dyn.sh" "$CW" "$DYN_ROOT/$P_NAME" "$P_STATE/dyn_status.txt" "$TESTS" "$DYN_KERNELS"
+      [[ $KEEP_WS_COPY == 1 ]] || rm -rf "$P_STATE/ws_copy"
+    fi
+    stopped && progress run "STOP file: remaining stages not started"
+  fi
+  python3 "$TOOL_DIR/python/run_summary.py" run "$P_STATE" --json "$P_STATE/summary.json" --md "$P_STATE/summary.md" > "$P_STATE/summary.txt" 2>&1
+  progress run "end: $(grep -m1 '^Result:' "$P_STATE/summary.txt" | sed 's/^Result:\s*//')"
+}
+
+batch_main() {  # __batch <batch dir> <new|continue> <names...>
+  P_BATCH=$1; local how=$2; shift 2
+  activate
+  echo "$$" > "$P_BATCH/pid"
+  hostname > "$P_BATCH/host"
+  local n
+  for n in "$@"; do
+    [[ -e $P_BATCH/STOP ]] && break
+    one_run "$n" "$how"
+  done
+  if (( $# > 1 )); then
+    python3 "$TOOL_DIR/python/run_summary.py" compare "${@/#/$STATES/}" --md "$P_BATCH/compare.md" > "$P_BATCH/compare.txt" 2>&1
+  fi
+  echo "$(now)  BATCH END" >> "$P_BATCH/progress.log"
+}
+
+# -------------------------------------------------------------- foreground helpers ---
+follow_batch() {  # <batch dir> <names...>
+  local b=$1; shift
+  local f=$b/progress.log pos=0 size
+  echo "following $f  (Ctrl-C detaches; the runs continue)"
+  # shellcheck disable=SC2064
+  trap "echo; echo 'detached. Follow again: $SELF follow $1   status: $SELF status   stop: $SELF stop $1'; exit 0" INT
+  touch "$f"
+  while :; do
+    size=$(stat -c %s "$f")
+    if (( size > pos )); then
+      tail -c +$((pos + 1)) "$f" | head -c $((size - pos))
+      pos=$size
+    fi
+    grep -q 'BATCH END$' "$f" && break
+    batch_alive "$b"
+    case $? in
+      1) sleep 2; grep -q 'BATCH END$' "$f" && continue
+         echo "the batch process is gone without 'BATCH END'; see $b/console.log"; break ;;
+      2) (( pos == 0 )) && echo "(started on $(cat "$b/host"); waiting for 'BATCH END' only)" ;;
+    esac
+    sleep 5
+  done
+  trap - INT
+  local n
+  for n in "$@"; do echo; cat "$STATES/$n/summary.txt" 2> /dev/null; done
+  [[ -f $b/compare.txt ]] && { echo; cat "$b/compare.txt"; }
+}
+
+start_batch() {  # <new|continue> <names...>
+  local how=$1; shift
+  local b=$BATCHES/$(date +%Y%m%d_%H%M%S)_$1
+  mkdir -p "$b" "$STATES" "$RUNS_ROOT" "$RESULTS_ROOT"
+  hostname > "$b/host"
+  printf '%s\n' "$@" > "$b/names.txt"
+  printf '%s\n' "${WARNINGS[@]+"${WARNINGS[@]}"}" > "$b/warnings.txt"
+  __HLG_CHILD=1 setsid nohup bash "$SELF" __batch "$b" "$how" "$@" > "$b/console.log" 2>&1 < /dev/null &
+  echo "$!" > "$b/pid"
+  echo "started in the background (pid $!), runs: $*"
+  echo "  progress: $b/progress.log"
+  echo "  runs:     $(printf "$STATES/%s " "$@")"
+  if [[ ${OPT_DETACH:-0} == 1 ]]; then
+    echo "  follow:   $SELF follow $1"
+    return 0
+  fi
+  follow_batch "$b" "$@"
+}
+
+latest_batch_of() { cat "$STATES/$1/batch.txt" 2> /dev/null; }
+# 0 = running, 1 = not running, 2 = started on another host or container (its pid means nothing here)
+batch_alive() {
+  local p h
+  h=$(cat "$1/host" 2> /dev/null)
+  [[ -n $h && $h != "$(hostname)" ]] && return 2
+  p=$(cat "$1/pid" 2> /dev/null) && kill -0 "$p" 2> /dev/null
+}
+run_state() {  # <name> -> finished | running | stopped | "running? (on <host>)"
+  local s=$STATES/$1 b
+  tail -1 "$s/progress.log" 2> /dev/null | grep -qE ' run +end:' && { echo finished; return; }
+  b=$(latest_batch_of "$1")
+  batch_alive "$b"
+  case $? in
+    0) echo running ;;
+    2) echo "running? (other host)" ;;
+    *) echo stopped ;;
+  esac
+}
+
+cmd_status() {
+  if [[ -n "${1:-}" ]]; then
+    local s=$STATES/$1; [[ -d $s ]] || die "no run '$1' in $STATES"
+    echo "run $1: $(run_state "$1"), started on $(cat "$(latest_batch_of "$1")/host" 2> /dev/null || echo '?')"
+    tail -n 25 "$s/progress.log" 2> /dev/null
+    return
+  fi
+  [[ -d $STATES ]] || { echo "no runs in $WORK"; return; }
+  printf '%-16s %-13s %-22s %-40s %s\n' RUN PROFILE STATE "LAST EVENT" RESULT
+  local s n st last res
+  for s in "$STATES"/*/; do
+    [[ -d $s ]] || continue
+    n=$(basename "$s")
+    st=$(run_state "$n")
+    last=$(tail -1 "$s/progress.log" 2> /dev/null | cut -c1-20,33-60)
+    res=$(grep -m1 '^Result:' "$s/summary.txt" 2> /dev/null | sed 's/^Result:\s*//' | cut -c1-40)
+    printf '%-16s %-13s %-22s %-40s %s\n' "$n" "$(grep -oP '^PROFILE=\K.*' "$s/run.env" 2> /dev/null | tr -d '"')" "$st" "$last" "${res:--}"
+  done
+}
+
+cmd_stop() {
+  local n=${1:-}; [[ -n $n ]] || die "usage: hal-llk-gen stop NAME [--now]"
+  [[ -d $STATES/$n ]] || die "no run '$n'"
+  touch "$STATES/$n/STOP"
+  echo "STOP file written: no further stage of $n starts."
+  if [[ ${2:-} == --now ]]; then
+    local b p; b=$(latest_batch_of "$n"); p=$(cat "$b/pid" 2> /dev/null)
+    batch_alive "$b"
+    [[ $? == 2 ]] && die "the batch of $n was started on $(cat "$b/host"); run 'stop $n --now' there"
+    if [[ -n $p ]] && kill -0 "$p" 2> /dev/null; then
+      touch "$b/STOP"
+      pkill -TERM -s "$p" && echo "sent TERM to every process of the batch (session $p), including the agent and pytest."
+    else
+      echo "the batch of $n is not running."
+    fi
+  fi
+}
+
+check_names() {
+  local n
+  for n in "$@"; do
+    [[ $n =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || die "bad run name '$n' (letters, digits, '.', '_' or '-')"
+  done
+}
+
+# ------------------------------------------------------------------------------ main ---
+if [[ "${1:-}" == __batch ]]; then
+  shift
+  load_config
+  b=$1; how=$2; shift 2
+  batch_main "$b" "$how" "$@"
+  exit 0
+fi
+
+CMD=${1:-help}; shift || true
+ARGS=(); OPT_PROFILE=""; OPT_STAGES=""; OPT_DETACH=0; OPT_REPEAT=""; OPT_NOW=""; OPT_ALL=0
+while (( $# )); do
+  case "$1" in
+    --profile) OPT_PROFILE=${2:?--profile needs a value}; shift 2 ;;
+    --stages) OPT_STAGES=${2:?--stages needs a value}; shift 2 ;;
+    --repeat) OPT_REPEAT=${2:?--repeat needs a value}; shift 2 ;;
+    --detach) OPT_DETACH=1; shift ;;
+    --now) OPT_NOW=--now; shift ;;
+    --all) OPT_ALL=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    --*) die "unknown option $1" ;;
+    *) ARGS+=("$1"); shift ;;
+  esac
+done
+
+case "$CMD" in
+  help|-h|--help) usage ;;
+  profiles)
+    for f in "$TOOL_DIR"/profiles/*.env; do
+      printf '  %-14s %s\n' "$(basename "$f" .env)" "$(grep -oP '^PROFILE_DESCRIPTION="\K[^"]*' "$f")"
+    done ;;
+  check)
+    load_config; MODE=B; DRY_RUN=0; checks 0 B ;;
+  dry-run)
+    load_config; STAGES=harness; MODE=B; DRY_RUN=1; export MODE DRY_RUN
+    name=${ARGS[0]:-dry-$(date +%Y%m%d-%H%M%S)}; check_names "$name"
+    [[ -e $STATES/$name ]] && die "run '$name' exists in $STATES"
+    checks 1 B || exit 2
+    start_batch new "$name" ;;
+  trivial)
+    load_config; STAGES=harness; MODE=TRIVIAL; DRY_RUN=0; export MODE DRY_RUN
+    name=${ARGS[0]:-trivial-$(date +%Y%m%d-%H%M%S)}; check_names "$name"
+    [[ -e $STATES/$name ]] && die "run '$name' exists in $STATES"
+    checks 0 TRIVIAL || exit 2
+    start_batch new "$name" ;;
+  run)
+    load_config; MODE=B; DRY_RUN=0; export MODE DRY_RUN
+    (( ${#ARGS[@]} )) || die "usage: hal-llk-gen run NAME [NAME ...] [--repeat N] [--profile P] [--stages \"...\"]"
+    names=("${ARGS[@]}")
+    if [[ -n $OPT_REPEAT ]]; then
+      [[ $OPT_REPEAT =~ ^[1-9][0-9]*$ && ${#ARGS[@]} == 1 ]] || die "--repeat N needs one NAME and N >= 1"
+      names=(); for i in $(seq 1 "$OPT_REPEAT"); do names+=("${ARGS[0]}-$i"); done
+    fi
+    check_names "${names[@]}"
+    for n in "${names[@]}"; do [[ -e $STATES/$n ]] && die "run '$n' exists in $STATES (pick another name, or: hal-llk-gen continue $n --stages ...)"; done
+    has_stage harness || die "run needs the harness stage; for later stages on an existing run use: hal-llk-gen continue NAME --stages \"...\""
+    checks 0 B || exit 2
+    start_batch new "${names[@]}" ;;
+  continue)
+    load_config; MODE=B; DRY_RUN=0; export MODE DRY_RUN
+    (( ${#ARGS[@]} == 1 )) || die "usage: hal-llk-gen continue NAME --stages \"postcheck perf static dyn\""
+    [[ -n $OPT_STAGES ]] || die "continue needs --stages"
+    has_stage harness && die "continue cannot run the harness stage again; start a new run"
+    [[ -f $STATES/${ARGS[0]}/run_dir.txt ]] || die "run '${ARGS[0]}' has no harness run (run_dir.txt)"
+    case $(run_state "${ARGS[0]}") in running*) die "run '${ARGS[0]}' may still be running ($(run_state "${ARGS[0]}"))" ;; esac
+    rm -f "$STATES/${ARGS[0]}/STOP"
+    checks 0 B || exit 2
+    start_batch continue "${ARGS[0]}" ;;
+  follow)
+    load_config; n=${ARGS[0]:?usage: hal-llk-gen follow NAME}
+    b=$(latest_batch_of "$n"); [[ -n $b ]] || die "no run '$n'"
+    mapfile -t names < "$b/names.txt"
+    follow_batch "$b" "${names[@]}" ;;
+  status) load_config; cmd_status "${ARGS[0]:-}" ;;
+  stop) load_config; cmd_stop "${ARGS[0]:-}" "$OPT_NOW" ;;
+  summary)
+    load_config; n=${ARGS[0]:?usage: hal-llk-gen summary NAME}; s=$STATES/$n
+    [[ -d $s ]] || die "no run '$n' in $STATES"
+    python3 "$TOOL_DIR/python/run_summary.py" run "$s" --json "$s/summary.json" --md "$s/summary.md" | tee "$s/summary.txt" ;;
+  compare)
+    load_config
+    if [[ $OPT_ALL == 1 ]]; then mapfile -t ARGS < <(ls "$STATES"); fi
+    (( ${#ARGS[@]} )) || die "usage: hal-llk-gen compare NAME ... | --all"
+    python3 "$TOOL_DIR/python/run_summary.py" compare "${ARGS[@]/#/$STATES/}" ;;
+  selftest) exec bash "$TOOL_DIR/tests/selftest.sh" ;;
+  *) usage; die "unknown command '$CMD'" ;;
+esac
