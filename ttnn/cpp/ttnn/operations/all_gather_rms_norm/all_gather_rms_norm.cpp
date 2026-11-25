@@ -50,11 +50,8 @@ void check_weight(const char* name, const Tensor& w, uint32_t W) {
 std::optional<uint32_t> usable_links_cached(MeshDevice& mesh, uint32_t cluster_axis, bool ring) {
     using Key = std::tuple<int, std::vector<uint32_t>, uint32_t, bool>;
     static ttsl::Indestructible<std::map<Key, std::optional<uint32_t>>> cache;
-    std::vector<uint32_t> dims;
     const auto& shape = mesh.shape();
-    for (size_t i = 0; i < shape.dims(); ++i) {
-        dims.push_back(shape[i]);
-    }
+    std::vector<uint32_t> dims(shape.cbegin(), shape.cend());
     Key key{static_cast<int>(mesh.id()), std::move(dims), cluster_axis, ring};
     auto& map = cache.get();
     auto it = map.find(key);
@@ -70,9 +67,9 @@ bool shares_memory(const Tensor& a, const Tensor& b) {
     if (ba->buffer_type() != bb->buffer_type()) {
         return false;
     }
-    const uint64_t a0 = ba->address();
+    const uint64_t a0 = ba->address();  // smuggled-rta-ok: aliasing check of the call's tensors, never a kernel arg
     const uint64_t a1 = a0 + ba->aligned_size_per_bank();
-    const uint64_t b0 = bb->address();
+    const uint64_t b0 = bb->address();  // smuggled-rta-ok: aliasing check of the call's tensors, never a kernel arg
     const uint64_t b1 = b0 + bb->aligned_size_per_bank();
     return a0 < b1 && b0 < a1;
 }
@@ -91,13 +88,13 @@ std::optional<Tensor> all_gather_rms_norm_scratch_tensor(const Tensor& input_ten
 
 Tensor all_gather_rms_norm(
     const Tensor& input_tensor,
-    uint32_t cluster_axis,
+    int32_t cluster_axis,
     const std::optional<Tensor>& gamma,
     const std::optional<Tensor>& beta,
     const std::string& norm_type,
     double epsilon,
     tt::tt_fabric::Topology topology,
-    std::optional<uint32_t> num_links,
+    std::optional<int32_t> num_links,
     const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output_tensor,
@@ -117,19 +114,21 @@ Tensor all_gather_rms_norm(
     if (beta.has_value() && !is_ln) {
         throw std::invalid_argument("all_gather_rms_norm: beta is only valid with norm_type='layer_norm'");
     }
-    if (cluster_axis > 1) {
+    // a Python int: a negative axis is refused here (ValueError), as the Python's `cluster_axis not in (0, 1)`
+    if (cluster_axis < 0 || cluster_axis > 1) {
         throw std::invalid_argument(
             fmt::format("all_gather_rms_norm: cluster_axis must be 0 or 1, got {}", cluster_axis));
     }
+    const auto axis = static_cast<uint32_t>(cluster_axis);
     if (!(epsilon >= 0.0) || std::isinf(epsilon)) {
         throw std::invalid_argument(
             fmt::format("all_gather_rms_norm: epsilon must be finite and >= 0, got {}", epsilon));
     }
     MeshDevice* mesh = input_tensor.device();
     TT_FATAL(mesh != nullptr, "all_gather_rms_norm: input_tensor must be on a mesh device");
-    const uint32_t G = mesh->shape()[cluster_axis];
+    const uint32_t G = mesh->shape()[axis];
     if (G < 2) {
-        throw std::invalid_argument(fmt::format("all_gather_rms_norm: cluster_axis {} has size {}", cluster_axis, G));
+        throw std::invalid_argument(fmt::format("all_gather_rms_norm: cluster_axis {} has size {}", axis, G));
     }
     const uint32_t W = G * shape[-1];
     if (gamma.has_value()) {
@@ -143,11 +142,11 @@ Tensor all_gather_rms_norm(
     }
 
     agrn::AllGatherRmsNormParams params{
-        .cluster_axis = cluster_axis,
+        .cluster_axis = axis,
         .is_layer_norm = is_ln,
         .epsilon = epsilon,
         .topology = topology,
-        .num_links = num_links.has_value() ? *num_links : 1u,
+        .num_links = 1,  // resolved below, after the SUPPORTED check
         .math_fidelity = compute_kernel_config.has_value() ? compute_kernel_config->math_fidelity
                                                            : tt::tt_metal::MathFidelity::HiFi4,
         .fp32_dest_acc_en = compute_kernel_config.has_value() ? compute_kernel_config->fp32_dest_acc_en : true,
@@ -158,11 +157,12 @@ Tensor all_gather_rms_norm(
     const agrn::AllGatherRmsNormInputs inputs{
         .input = input_tensor, .gamma = gamma, .beta = beta, .output = output_tensor, .scratch = scratch_tensor};
     // SUPPORTED (num_links=None is resolved below), EXCLUSIONS, placement
-    if (!num_links.has_value()) {
-        params.num_links = 1;  // passes the axis check; resolved against the fabric below
-    } else if (*num_links < 1 || *num_links > 2) {
-        throw agrn::UnsupportedAxisValue(
-            fmt::format("all_gather_rms_norm: num_links={} not in SUPPORTED [1, 2]", *num_links));
+    if (num_links.has_value()) {
+        if (*num_links < 1 || *num_links > 2) {
+            throw agrn::UnsupportedAxisValue(
+                fmt::format("all_gather_rms_norm: num_links={} not in SUPPORTED [1, 2]", *num_links));
+        }
+        params.num_links = static_cast<uint32_t>(*num_links);
     }
     agrn::check_support(params, inputs);
     if (output_tensor.has_value()) {
@@ -183,18 +183,20 @@ Tensor all_gather_rms_norm(
 
     // ---- live fabric ----
     const bool ring = topology == tt::tt_fabric::Topology::Ring && G > 2;
-    const std::optional<uint32_t> links = usable_links_cached(*mesh, cluster_axis, ring);
+    const std::optional<uint32_t> links = usable_links_cached(*mesh, axis, ring);
     if (!links.has_value() || *links == 0) {
         throw std::invalid_argument(fmt::format(
             "all_gather_rms_norm: topology {} along cluster_axis {} needs a link on every hop",
             static_cast<int>(topology),
-            cluster_axis));
+            axis));
     }
-    if (num_links.has_value() && *num_links > *links) {
+    if (num_links.has_value() && params.num_links > *links) {
         throw std::invalid_argument(
             fmt::format("all_gather_rms_norm: num_links={}, usable links per hop: {}", *num_links, *links));
     }
-    params.num_links = num_links.has_value() ? *num_links : std::min(*links, kDefaultMaxLinks);
+    if (!num_links.has_value()) {
+        params.num_links = std::min(*links, kDefaultMaxLinks);
+    }
 
     // persistent per-mesh semaphores first, before this call allocates any L1 tensor
     const auto& mesh_plan = agrn::mesh_plan_of(params, input_tensor);

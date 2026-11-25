@@ -30,13 +30,13 @@ namespace ttnn {
 //   scratch_tensor         caller-held R_U staging (W_local % 32 != 0); see all_gather_rms_norm_scratch_tensor
 Tensor all_gather_rms_norm(
     const Tensor& input_tensor,
-    uint32_t cluster_axis,
+    int32_t cluster_axis,
     const std::optional<Tensor>& gamma = std::nullopt,
     const std::optional<Tensor>& beta = std::nullopt,
     const std::string& norm_type = "rms_norm",
     double epsilon = 1e-6,
     tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Linear,
-    std::optional<uint32_t> num_links = std::nullopt,
+    std::optional<int32_t> num_links = std::nullopt,
     const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& output_tensor = std::nullopt,

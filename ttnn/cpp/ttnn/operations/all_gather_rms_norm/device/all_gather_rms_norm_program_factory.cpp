@@ -434,6 +434,7 @@ ProgramDescriptor AllGatherRmsNormProgramFactory::create_descriptor(
 
     // ---- worker common runtime args ----
     std::vector<uint32_t> inv_n;
+    inv_n.reserve(k);
     for (uint32_t m = 0; m < k; ++m) {
         const uint32_t w_tiles = split.member_width(m, geo.Wlt);
         const uint32_t tail =
@@ -442,6 +443,7 @@ ProgramDescriptor AllGatherRmsNormProgramFactory::create_descriptor(
         inv_n.push_back(agrn_f32_bits(1.0 / static_cast<double>(std::max(1u, n))));
     }
     std::vector<uint32_t> tail_args;
+    tail_args.reserve((2 * port_list.size()) + inv_n.size() + 1 + own_bands);
     for (const auto& c : port_list) {
         tail_args.push_back(static_cast<uint32_t>((c.y * gx) + c.x));
     }
