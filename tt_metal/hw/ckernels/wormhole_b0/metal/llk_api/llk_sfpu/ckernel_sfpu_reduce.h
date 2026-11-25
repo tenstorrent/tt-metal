@@ -362,7 +362,7 @@ inline void perform_reduce_col_sum_avg() {
         }
 
         // Step 3: Transpose to rearrange the 4 partial sums for final reduction
-        TTI_SFPTRANSP(0, 0, 0, 0);
+        TTI_SFPTRANSP(0 /*imm12_math*/, 0 /*lreg_c*/, 0 /*lreg_dest*/, 0 /*instr_mod1*/);
 
         // Step 4: Final tree-reduce across LREG0-3 only (LREG4-7 no longer needed).
         if constexpr (is_integer_mode) {
@@ -443,14 +443,15 @@ inline void horizontal_reduce_rotate_first() {
 //   MAX / MIN, UInt16 in a 32-bit Dest         manual swaps [0, 3)    none (column only)
 //   MAX / MIN, Int32 / UInt32                  2 maps + swaps [0, 9)  butterfly stage [9, 16)
 //
+// The manual column paths emit their once-per-tile cross-row reduce (emit_manual_col_reduce) inline.
+//
 // A row reduce replays what its init recorded, so it needs a fresh init_reduce after anything else records into the
 // SFPU half.
 constexpr std::uint32_t COL_SUM_INT_REPLAY_LEN = 6;     // 6 SFPIADD; [0, 3) doubles as the half reduce
 constexpr std::uint32_t COL_SUM_FLOAT_REPLAY_LEN = 10;  // 6 SFPADD full reduce + 4-slot half reduce
 constexpr std::uint32_t COL_MAX_MANUAL_REPLAY_LEN = 3;  // 3 SFPSWAP: LREG4-7 -> LREG4
 // Int32 / UInt32: map LREG6 and LREG7 into SFPSWAP's order, then the same 3-SFPSWAP chain at the window's tail.
-constexpr std::uint32_t COL_MAX_INT32_CHAIN_START = 2 * INT32_SWAP_ORDER_LEN;
-constexpr std::uint32_t COL_MAX_INT32_REPLAY_LEN = COL_MAX_INT32_CHAIN_START + COL_MAX_MANUAL_REPLAY_LEN;
+constexpr std::uint32_t COL_MAX_INT32_REPLAY_LEN = 2 * INT32_SWAP_ORDER_LEN + COL_MAX_MANUAL_REPLAY_LEN;
 
 // The LOADMACRO column MAX/MIN window: two more SFPAND when masking UInt16 high bits.
 template <bool clear_high_bits>
@@ -1250,7 +1251,7 @@ inline void init_reduce_max_min_int32_uint32() {
     }
 
     // Two of the four per-face maps live in the window, so the column path issues 6 fewer instructions per face.
-    // The transposed pass replays only the chain at [COL_MAX_INT32_CHAIN_START, COL_MAX_INT32_REPLAY_LEN).
+    // The transposed pass (emit_manual_col_reduce) is emitted inline.
     lltt::record(0, COL_MAX_INT32_REPLAY_LEN);
     to_swap_order<swap_order, p_sfpu::LREG6>();
     to_swap_order<swap_order, p_sfpu::LREG7>();
@@ -1400,6 +1401,65 @@ inline void init_reduce_sum_avg() {
 // ============================================================================
 
 /**
+ * @brief The column register of the manual column MAX/MIN paths for face pair @p j (faces 0/2 or 1/3) and its even
+ *        or @p odd columns. It collects that pair's partial (reduce_upper_face_in_place, fold_lower_face_partial),
+ *        and row 0 of the same register holds the stored result after emit_manual_col_reduce.
+ */
+constexpr std::uint32_t manual_col_lreg(std::uint32_t j, std::uint32_t odd) { return p_sfpu::LREG0 + 2 * j + odd; }
+
+/**
+ * @brief Reduce the upper face of a face pair's columns straight into its column register @p lreg: load the 4 row
+ *        groups into LREG lreg..lreg+3, map them, and run the 3-swap chain inline down to @p lreg (no LREG4-7 pass,
+ *        no SFPMOV). The column registers are filled in order, LREG0 first, so lreg+1..lreg+3 are still free.
+ */
+template <std::uint32_t lreg, InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits, SwapOrder swap_order>
+inline void reduce_upper_face_in_place(std::uint32_t face_addr, std::uint32_t column_offset) {
+    static_assert(lreg + 3 <= p_sfpu::LREG7, "the upper face needs 4 consecutive LREGs");
+    load_face_data<INSTRUCTION_MODE, clear_high_bits, lreg>(face_addr, column_offset);
+    to_swap_order<swap_order, lreg>();
+    to_swap_order<swap_order, lreg + 1>();
+    to_swap_order<swap_order, lreg + 2>();
+    to_swap_order<swap_order, lreg + 3>();
+    TTI_SFPSWAP(0 /*imm12_math*/, lreg + 3, lreg + 2, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+    TTI_SFPSWAP(0 /*imm12_math*/, lreg + 2, lreg + 1, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+    TTI_SFPSWAP(0 /*imm12_math*/, lreg + 1, lreg, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+}
+
+/**
+ * @brief Fold the lower-face partial that the recorded chain left in LREG4 into its column register @p lreg (the
+ *        upper face of the same columns) with one SFPSWAP, which keeps the result in its VD like the chain.
+ */
+inline void fold_lower_face_partial(std::uint32_t lreg) {
+    TT_SFPSWAP(0 /*imm12_math*/, p_sfpu::LREG4, lreg, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+}
+
+/**
+ * @brief The cross-row reduce of the manual column MAX/MIN paths, once per tile, in place on LREG0-3.
+ *        In: the four column partials (4 row groups each) in LREG0-3. SFPTRANSP transposes LREG0-3 on their own (and
+ *        LREG4-7, dead here), so row group r of every partial lands in LREG r; the 3-swap chain reduces them into
+ *        LREG0, and the second SFPTRANSP returns partial k's result to row 0 of LREG k. The swaps read the direction at
+ *        issue time.
+ * @tparam swap_order The map of mapped partials (Int32 / UInt32), undone once on LREG0 while it holds all four
+ *         results; NONE for the formats SFPSWAP orders directly.
+ */
+template <SwapOrder swap_order>
+inline void emit_manual_col_reduce() {
+    TTI_SFPTRANSP(0 /*imm12_math*/, 0 /*lreg_c*/, 0 /*lreg_dest*/, 0 /*instr_mod1*/);
+    TTI_SFPSWAP(0 /*imm12_math*/, p_sfpu::LREG3, p_sfpu::LREG2, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+    TTI_SFPSWAP(0 /*imm12_math*/, p_sfpu::LREG2, p_sfpu::LREG1, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+    TTI_SFPSWAP(0 /*imm12_math*/, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+    if constexpr (swap_order != SwapOrder::NONE) {
+        from_swap_order<swap_order, p_sfpu::LREG0>();
+        // LREG1-3 become rows 1-3 of the stored rows, which a following reduce of the same tile reads (e.g. multidim
+        // ColRowCol), so they must not stay mapped: fill them with the results.
+        TTI_SFPMOV(0 /*imm12_math*/, p_sfpu::LREG0, p_sfpu::LREG1, 0 /*instr_mod1*/);
+        TTI_SFPMOV(0 /*imm12_math*/, p_sfpu::LREG0, p_sfpu::LREG2, 0 /*instr_mod1*/);
+        TTI_SFPMOV(0 /*imm12_math*/, p_sfpu::LREG0, p_sfpu::LREG3, 0 /*instr_mod1*/);
+    }
+    TTI_SFPTRANSP(0 /*imm12_math*/, 0 /*lreg_c*/, 0 /*lreg_dest*/, 0 /*instr_mod1*/);
+}
+
+/**
  * @brief Column-wise MAX/MIN reduction for UInt16 data in a 32-bit (fp32) dest, single 32x32 tile.
  *
  * The UInt16 datum lives in the low 16 bits of a 32-bit dest word with arbitrary garbage in the high
@@ -1409,9 +1469,11 @@ inline void init_reduce_sum_avg() {
  * comparison and produces wrong minima/maxima for any non-constant input.
  *
  * Instead we use the same manual load/mask/swap structure as the Int32 path. Masked UInt16 values are
- * always non-negative, so a plain integer SFPSWAP orders them correctly (no sign-magnitude cast needed);
- * we move LREG0-3 -> LREG4-7 to feed the recorded swap buffer. Final, packer-visible results are written
- * with SFPSTORE mode 9 (SFPSTORE_MOD0_FMT_LO16) so the packer reads the low bits.
+ * always non-negative, so a plain integer SFPSWAP orders them correctly (no sign-magnitude cast needed).
+ * Each face is reduced to 4 rows and collected in LREG0-3, one register per column group: the upper face straight
+ * into it, the lower face by the recorded LREG4-7 swap buffer and one fold swap. One cross-row reduce then runs in
+ * place on LREG0-3 for the whole tile. Final, packer-visible results are written with SFPSTORE mode 9
+ * (SFPSTORE_MOD0_FMT_LO16) so the packer reads the low bits.
  *
  * Reuses init_reduce_max_min_int32()'s 3-swap replay buffer; the swap direction is set on entry. Only a single
  * 32x32 tile is processed per call, matching the column-reduce driver which invokes the kernel per tile.
@@ -1445,54 +1507,41 @@ inline void calculate_reduce_max_min_uint16() {
         {16, 16, 48, 48}  // j=1: Face 1 and Face 3
     };
 
-    // The intermediate stores below land in non-row-0 dest slots that we reload, so they use the
-    // plain (full 32-bit) instruction mode. Only the final row-0 stores are packer-visible and use
-    // mode 9 (SFPSTORE_MOD0_FMT_LO16) when the OUTPUT is UInt16 in a 32-bit dest (pack_low16), so the
-    // packer reads the low 16 bits of the dest word.
+    // The row-0 result stores are packer-visible: mode 9 (SFPSTORE_MOD0_FMT_LO16) when the OUTPUT is UInt16 in a
+    // 32-bit dest (pack_low16), so the packer reads the low 16 bits of the dest word, else the plain mode.
     constexpr std::uint32_t STORE_MODE =
         pack_low16 ? 9u /* SFPSTORE_MOD0_FMT_LO16 */ : static_cast<std::uint32_t>(INSTRUCTION_MODE);
 
-    // Where each per-face partial (left in LREG4 by the reduce) is parked so it survives the remaining
-    // face loads (which clobber LREG4-7). The order matches the LREG0-3 layout the transpose expects:
-    // face i=0 (top even) -> LREG0, i=1 (top odd) -> LREG2, i=2 (bottom even) -> LREG1, i=3 (bottom odd) -> LREG3.
-    constexpr std::uint32_t PARTIAL_LREG[4] = {p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LREG3};
+    // Reduce each face within itself; the max/min of its 16 rows is left in the top 4 rows, collected in its column
+    // register in LREG0-3 without a dest round-trip (a masked value stays masked through the swaps). The four upper
+    // faces (f0, f1) go straight into their column registers, in register order.
+    reduce_upper_face_in_place<manual_col_lreg(0, 0), INSTRUCTION_MODE, clear_high_bits, SwapOrder::NONE>(
+        FACE_ADDRS[0][0], COLUMN_OFFSETS[0]);
+    reduce_upper_face_in_place<manual_col_lreg(0, 1), INSTRUCTION_MODE, clear_high_bits, SwapOrder::NONE>(
+        FACE_ADDRS[0][1], COLUMN_OFFSETS[1]);
+    reduce_upper_face_in_place<manual_col_lreg(1, 0), INSTRUCTION_MODE, clear_high_bits, SwapOrder::NONE>(
+        FACE_ADDRS[1][0], COLUMN_OFFSETS[0]);
+    reduce_upper_face_in_place<manual_col_lreg(1, 1), INSTRUCTION_MODE, clear_high_bits, SwapOrder::NONE>(
+        FACE_ADDRS[1][1], COLUMN_OFFSETS[1]);
 
+    // The lower faces (f2, f3): masked load into LREG4-7, the recorded swap buffer, then fold into the column register.
     for (std::uint32_t j = 0; j < 2; j++) {
-        std::uint32_t top_face_addr = FACE_ADDRS[j][0];  // face 0 & 1 row-0 dst index
-
-        // Reduce each of the four vertically adjacent faces (f0,f2 then f1,f3) within itself; the
-        // max/min of its 16 rows is left in the top 4 rows. The masked face loads and the reduce replay
-        // only touch LREG4-7, so each partial can be parked in LREG0-3 (via PARTIAL_LREG[i]) and survive
-        // the remaining faces without a dest round-trip (a masked value stays masked through the swaps).
-        for (std::uint32_t i = 0; i < NUM_FACES; i++) {
-            // Masked load straight into LREG4-7, where the recorded swap buffer reduces them.
+        for (std::uint32_t i = 2; i < NUM_FACES; i++) {
             load_face_data<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG4>(FACE_ADDRS[j][i], COLUMN_OFFSETS[i]);
 
             lltt::replay(0, 3);  // compare-and-swap reduce LREG4-7 -> LREG4
 
-            TT_SFPMOV(0, p_sfpu::LREG4, PARTIAL_LREG[i], 0);
+            fold_lower_face_partial(manual_col_lreg(j, i & 1));
         }
+    }
 
-        // Move the four partials (now in LREG0-3) into LREG4-7 for the transpose + cross-row reduction.
-        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
-        TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG5, 0);
-        TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG6, 0);
-        TTI_SFPMOV(0, p_sfpu::LREG3, p_sfpu::LREG7, 0);
+    // Reduce the 4 row groups of all four column partials at once, in place on LREG0-3.
+    emit_manual_col_reduce<SwapOrder::NONE>();
 
-        // Transpose so the 4 partial results of each column sit in one register, reduce, transpose back.
-        TTI_SFPTRANSP(0, 0, 0, 0);
-        lltt::replay(0, 3);
-        TTI_SFPTRANSP(0, 0, 0, 0);
-
-        // Swap to combine the two vertically adjacent faces (even and odd columns).
-        TTI_SFPSWAP(0, p_sfpu::LREG7, p_sfpu::LREG6, 1);  // odd columns of face pair
-        TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG4, 1);  // even columns of face pair
-
-        TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);
-        TTI_SFPMOV(0, p_sfpu::LREG6, p_sfpu::LREG1, 0);
-
-        TT_SFPSTORE(p_sfpu::LREG0, STORE_MODE, ADDR_MOD_3, top_face_addr);
-        TT_SFPSTORE(p_sfpu::LREG1, STORE_MODE, ADDR_MOD_3, top_face_addr + ODD_COLUMNS);
+    for (std::uint32_t j = 0; j < 2; j++) {
+        std::uint32_t top_face_addr = FACE_ADDRS[j][0];  // face 0 & 1 row-0 dst index
+        TT_SFPSTORE(manual_col_lreg(j, 0), STORE_MODE, ADDR_MOD_3, top_face_addr);
+        TT_SFPSTORE(manual_col_lreg(j, 1), STORE_MODE, ADDR_MOD_3, top_face_addr + ODD_COLUMNS);
     }
 }
 
@@ -1501,9 +1550,10 @@ inline void calculate_reduce_max_min_uint16() {
  *        range (including INT32_MIN and bit-31-set UInt32).
  *
  * Same manual load/reduce/transpose structure as calculate_reduce_max_min_uint16, but the operands are
- * loaded with plain INT32 (bits preserved) and each loaded face is mapped with to_swap_order (LREG4/5 inline,
- * LREG6/7 in the replayed window), so the recorded 3-swap chain (init_reduce_max_min_int32_uint32) and the final
- * face-pair swaps are plain SFPSWAPs; the two stored results are mapped back with from_swap_order.
+ * loaded with plain INT32 (bits preserved) and each loaded face is mapped with to_swap_order (lower faces: LREG4/5
+ * inline, LREG6/7 in the replayed window), so the recorded 3-swap chain (init_reduce_max_min_int32_uint32), the face
+ * folds (fold_lower_face_partial) and the cross-row reduce (emit_manual_col_reduce) are plain SFPSWAPs; the stored
+ * results are mapped back with from_swap_order.
  *
  * Int32 / UInt32 MAX/MIN only supports a single tile (block_rt_dim == 1), which matches this single-tile kernel.
  *
@@ -1532,53 +1582,41 @@ inline void calculate_reduce_max_min_int32_uint32_col() {
         {16, 16, 48, 48}  // j=1: Face 1 and Face 3
     };
 
-    // Where each per-face partial (left in LREG4 by the reduce) is parked so it survives the remaining
-    // face loads (which clobber LREG4-7). The order matches the LREG0-3 layout the transpose expects:
-    // face i=0 (top even) -> LREG0, i=1 (top odd) -> LREG2, i=2 (bottom even) -> LREG1, i=3 (bottom odd) -> LREG3.
-    constexpr std::uint32_t PARTIAL_LREG[4] = {p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LREG3};
+    // Reduce each face within itself; the max/min of its 16 rows is left in the top 4 rows, collected in its column
+    // register in LREG0-3 without a dest round-trip. Every loaded row group is mapped once; the collected partials
+    // stay mapped through emit_manual_col_reduce. The four upper faces (f0, f1) go straight into their column
+    // registers, in register order.
+    reduce_upper_face_in_place<manual_col_lreg(0, 0), INSTRUCTION_MODE, false, swap_order>(
+        FACE_ADDRS[0][0], COLUMN_OFFSETS[0]);
+    reduce_upper_face_in_place<manual_col_lreg(0, 1), INSTRUCTION_MODE, false, swap_order>(
+        FACE_ADDRS[0][1], COLUMN_OFFSETS[1]);
+    reduce_upper_face_in_place<manual_col_lreg(1, 0), INSTRUCTION_MODE, false, swap_order>(
+        FACE_ADDRS[1][0], COLUMN_OFFSETS[0]);
+    reduce_upper_face_in_place<manual_col_lreg(1, 1), INSTRUCTION_MODE, false, swap_order>(
+        FACE_ADDRS[1][1], COLUMN_OFFSETS[1]);
 
+    // The lower faces (f2, f3): load into LREG4-7 (LREG6/7 mapped inside the window), the recorded window, then fold
+    // into the column register.
     for (std::uint32_t j = 0; j < 2; j++) {
-        std::uint32_t top_face_addr = FACE_ADDRS[j][0];  // face 0 & 1 row-0 dst index
-
-        // Reduce each of the four vertically adjacent faces (f0,f2 then f1,f3) within itself; the
-        // max/min of its 16 rows is left in the top 4 rows. The face loads and the reduce replay only
-        // touch LREG4-7, so each partial can be parked in LREG0-3 (via PARTIAL_LREG[i]) and survive the
-        // remaining faces without a dest round-trip.
-        for (std::uint32_t i = 0; i < NUM_FACES; i++) {
+        for (std::uint32_t i = 2; i < NUM_FACES; i++) {
             load_face_data<INSTRUCTION_MODE, false, p_sfpu::LREG4>(FACE_ADDRS[j][i], COLUMN_OFFSETS[i]);
-            // Map once per loaded row group (LREG6/7 inside the window); the parked partial stays mapped through
-            // the second replay.
             to_swap_order<swap_order, p_sfpu::LREG4>();
             to_swap_order<swap_order, p_sfpu::LREG5>();
 
             lltt::replay(0, COL_MAX_INT32_REPLAY_LEN);  // map LREG6/7, plain SFPSWAP reduce LREG4-7 -> LREG4
 
-            TT_SFPMOV(0, p_sfpu::LREG4, PARTIAL_LREG[i], 0);
+            fold_lower_face_partial(manual_col_lreg(j, i & 1));
         }
+    }
 
-        // Move the four partials (now in LREG0-3) into LREG4-7 for the transpose + cross-row reduction.
-        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
-        TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG5, 0);
-        TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG6, 0);
-        TTI_SFPMOV(0, p_sfpu::LREG3, p_sfpu::LREG7, 0);
+    // Reduce the 4 row groups of all four (mapped) column partials at once, in place on LREG0-3, and map the results
+    // back to the stored Int32 / UInt32 bits; inline: this init's window maps instead.
+    emit_manual_col_reduce<swap_order>();
 
-        // Transpose so the 4 partial results of each column sit in one register, reduce, transpose back.
-        TTI_SFPTRANSP(0, 0, 0, 0);
-        lltt::replay(COL_MAX_INT32_CHAIN_START, COL_MAX_MANUAL_REPLAY_LEN);  // the chain only: already mapped
-        TTI_SFPTRANSP(0, 0, 0, 0);
-
-        // The partials are still mapped, so plain swaps combine the two vertically adjacent faces.
-        TTI_SFPSWAP(0 /*imm12_math*/, p_sfpu::LREG7, p_sfpu::LREG6, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);  // odd columns
-        TTI_SFPSWAP(0 /*imm12_math*/, p_sfpu::LREG5, p_sfpu::LREG4, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);  // even columns
-
-        TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);
-        TTI_SFPMOV(0, p_sfpu::LREG6, p_sfpu::LREG1, 0);
-        // Map the two results back to the stored Int32 / UInt32 bits.
-        from_swap_order<swap_order, p_sfpu::LREG0>();
-        from_swap_order<swap_order, p_sfpu::LREG1>();
-
-        TT_SFPSTORE(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_3, top_face_addr);
-        TT_SFPSTORE(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_3, top_face_addr + ODD_COLUMNS);
+    for (std::uint32_t j = 0; j < 2; j++) {
+        std::uint32_t top_face_addr = FACE_ADDRS[j][0];  // face 0 & 1 row-0 dst index
+        TT_SFPSTORE(manual_col_lreg(j, 0), INSTRUCTION_MODE, ADDR_MOD_3, top_face_addr);
+        TT_SFPSTORE(manual_col_lreg(j, 1), INSTRUCTION_MODE, ADDR_MOD_3, top_face_addr + ODD_COLUMNS);
     }
 }
 
@@ -1673,11 +1711,11 @@ inline void calculate_reduce_max_min(
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
         // Finalize: Sort and store maximum/minimum values to row 0
-        TTI_SFPTRANSP(0, 0, 0, 0);
+        TTI_SFPTRANSP(0 /*imm12_math*/, 0 /*lreg_c*/, 0 /*lreg_dest*/, 0 /*instr_mod1*/);
         TTI_SFPSWAP(0, p_sfpu::LREG6, p_sfpu::LREG7, 1);
         TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG6, 1);
         TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG5, 1);
-        TTI_SFPTRANSP(0, 0, 0, 0);
+        TTI_SFPTRANSP(0 /*imm12_math*/, 0 /*lreg_c*/, 0 /*lreg_dest*/, 0 /*instr_mod1*/);
 
         // Store results to first row.
         // For UInt16 OUTPUT in a 32-bit dest the reduced value lives in the low 16 bits of the LREG, but
