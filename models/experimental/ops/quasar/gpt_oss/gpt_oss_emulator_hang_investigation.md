@@ -342,8 +342,9 @@ Changes that the passing run depends on, all local and uncommitted:
 
 - a descriptor copy with 2 DRAM channels of 3 GiB (`/proj_sw/user_dev/fplavec/emu-quasar-2x3_2ch3g/`) and
   `TT_METAL_SIMULATOR_DRAM_UNCAPPED=1`;
-- the prefill sparsity mask and its repeat in L1 (`tt/experts/__init__.py`, `tt/experts/prefill.py`, marked TEMP);
-- the program cache off (`no_program_cache` plugin, `DEMO_NO_PROGRAM_CACHE=1`);
-- the compile-only prefill skipped (`DEMO_SKIP_COMPILE_PREFILL=1`, `demo/text_demo.py`, marked TEMP), to save
-  emulator time;
-- watcher and LLK asserts off; the binary_ng TEN-4746 fix stashed (`stash@{0}`), as it only matters with LLK asserts on.
+- the prefill sparsity mask and its repeat in L1 (`tt/experts/__init__.py`, `tt/experts/prefill.py`; now kept, see `gpt_oss_emulator_reproduce.md`);
+- the program cache off (`no_program_cache` plugin, `DEMO_NO_PROGRAM_CACHE=1`; now read by the demo itself, see `gpt_oss_emulator_reproduce.md`);
+- the compile-only prefill skipped (`DEMO_SKIP_COMPILE_PREFILL=1`, `demo/text_demo.py`), to save emulator time;
+- watcher and LLK asserts off; the binary_ng TEN-4746 fix not applied (kept as
+  `/localdev/fplavec/temp/gpt_oss_ops_runs/patches_20261124/binary_ng_hold_dfb_ten4746.patch`), as it only matters
+  with LLK asserts on.
