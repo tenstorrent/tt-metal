@@ -11,9 +11,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from huggingface_hub import hf_hub_download
-
-from models.experimental.pyannote.reference.wespeaker import _pickle_module
+from models.experimental.pyannote.reference.wespeaker import _pickle_module, _weights_path
 
 HF_REPO_ID = "pyannote/segmentation-3.0"
 SAMPLE_RATE = 16000
@@ -100,7 +98,7 @@ def to_multilabel(log_probs: torch.Tensor) -> torch.Tensor:
 
 def load_segmentation() -> PyanNet:
     """PyanNet with the pyannote/segmentation-3.0 weights, in eval mode."""
-    path = hf_hub_download(HF_REPO_ID, "pytorch_model.bin")
+    path = _weights_path(HF_REPO_ID)
     state = torch.load(path, map_location="cpu", weights_only=False, pickle_module=_pickle_module)["state_dict"]
     renamed = {}
     for key, value in state.items():

@@ -13,7 +13,7 @@ import types
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from huggingface_hub import hf_hub_download
+from huggingface_hub import hf_hub_download, try_to_load_from_cache
 
 HF_REPO_ID = "pyannote/wespeaker-voxceleb-resnet34-LM"
 SAMPLE_RATE = 16000
@@ -150,9 +150,16 @@ class _Unpickler(pickle.Unpickler):
 _pickle_module = types.SimpleNamespace(Unpickler=_Unpickler, load=pickle.load, __name__="pickle")
 
 
+def _weights_path(repo_id: str) -> str:
+    """The checkpoint from the local HF cache, else from the hub. A cached gated checkpoint then loads
+    with a token that cannot read the repo, or offline."""
+    path = try_to_load_from_cache(repo_id, "pytorch_model.bin")
+    return path if isinstance(path, str) else hf_hub_download(repo_id, "pytorch_model.bin")
+
+
 def load_wespeaker() -> ResNet34:
     """ResNet34 with the pyannote/wespeaker-voxceleb-resnet34-LM weights, in eval mode."""
-    path = hf_hub_download(HF_REPO_ID, "pytorch_model.bin")
+    path = _weights_path(HF_REPO_ID)
     state = torch.load(path, map_location="cpu", weights_only=False, pickle_module=_pickle_module)["state_dict"]
     model = ResNet34()
     model.load_state_dict({k.removeprefix("resnet."): v for k, v in state.items() if k.startswith("resnet.")})
