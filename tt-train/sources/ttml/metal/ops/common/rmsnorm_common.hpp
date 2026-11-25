@@ -8,8 +8,8 @@
 #include <cstdint>
 #include <optional>
 #include <string_view>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include <vector>
 
 #include "metal/common/program_utils.hpp"

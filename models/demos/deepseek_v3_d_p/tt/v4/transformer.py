@@ -81,6 +81,7 @@ class TtV4Transformer(LightweightModule):
         tp_shard_kv: Optional[bool] = None,
         # Chunks per packed forward (TtPrefillRuntime forward_tokens_budget); V4 runs one chunk per forward.
         forward_chunks: int = 1,
+        moe_impl: Optional[str] = None,
         **block_kwargs,
     ):
         """``state_dict`` is ``{"embed_weight", "norm_weight", "hc_head": (fn, base, scale), "layers"}``,
@@ -96,6 +97,9 @@ class TtV4Transformer(LightweightModule):
         DRAM grows linearly with it: at 55k on 8x4, about 20 MiB per CSA layer and 0.7 MiB per HCA layer,
         per slot, per chip.
         """
+        # (the runtime's MoE choice, tt/moe_impl.py: DeepSeek-V4 runs TtMoe only - the MoE block is GLM-5.3's and
+        # Kimi-K3's)
+        assert moe_impl in (None, "ttmoe"), f"DeepSeek-V4 runs TtMoe only, not moe_impl={moe_impl!r}"
         super().__init__()
         if mtp_predictor is not None:
             raise ValueError("DeepSeek-V4 prefill has no MTP predictor; got a non-None mtp_predictor")
@@ -114,7 +118,7 @@ class TtV4Transformer(LightweightModule):
         if forward_chunks != 1:
             raise NotImplementedError(f"DeepSeek-V4 has no packed forward; got forward_chunks={forward_chunks}")
 
-        topology = topology if topology is not None else per_axis_topology()
+        topology = topology if topology is not None else per_axis_topology(mesh_device=mesh_device)
         tp_topology = topology[1] if isinstance(topology, tuple) else topology
         self.mesh_device = mesh_device
         self.config = config
@@ -265,6 +269,7 @@ class TtV4Transformer(LightweightModule):
         provided_levels: int = 0,
         mtp_geometry=None,
         chunks: Optional[list] = None,
+        mtp_unions: Optional[list] = None,
     ):
         """Run one chunk through this rank's layers.
 

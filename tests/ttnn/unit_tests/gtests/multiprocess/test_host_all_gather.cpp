@@ -6,9 +6,9 @@
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 
-#include <tt-metalium/system_mesh.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/distributed_host_buffer.hpp>
+#include <tt-metalium/discovery/system_mesh.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/memory/buffer/distributed_host_buffer.hpp>
 #include <ttnn/tensor/tensor.hpp>
 #include <ttnn/tensor/layout/tensor_layout.hpp>
 #include <ttnn/distributed/distributed_tensor.hpp>

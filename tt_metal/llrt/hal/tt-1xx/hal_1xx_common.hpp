@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <optional>
 
-#include "hal.hpp"
+#include "llrt/hal.hpp"
 
 namespace tt::tt_metal::hal_1xx {
 

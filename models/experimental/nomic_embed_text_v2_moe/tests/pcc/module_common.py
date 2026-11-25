@@ -28,10 +28,12 @@ from models.experimental.nomic_embed_text_v2_moe.tt.router import Routing
 # multiple of 32, and S is the batch's longest tokenized sequence, so that is the common case.
 TOKEN_SHAPES = [(1, 128), (2, 512), (2, 37)]
 
-# Past 32 tile rows of M = B * S the dense projections run through minimal_matmul, which no
-# TOKEN_SHAPES entry reaches. 4x512 folds to 64: M is below N for QKV and fc1 and above it for
-# out_proj and fc2, so both orientations run, and the QKV, out_proj and fc1 outputs go to L1.
-DENSE_SHAPES = [*TOKEN_SHAPES, (4, 512)]
+# From 32 tile rows of M = B * S (2x512 here) the dense projections run on the port's own matmuls: QKV while M <= N
+# and fc1 on grouped_matmul_w1 with one expert, the others on pirotski_matmul. 4x512 folds to 64: M is below N for
+# QKV and above it for out_proj and fc2, so both run, and the QKV, out_proj and fc1 outputs go to L1.
+# 16x512 is the largest chunk a forward runs (tt/chunking.py), 8192 tokens, where SDPA's key chunk
+# is smaller than its rule's so the heads fit L1.
+DENSE_SHAPES = [*TOKEN_SHAPES, (4, 512), (16, 512)]
 
 # A wrong layout or convention does not lose precision, it decorrelates. Anything under this is
 # the wrong tensor, not a less precise one.
@@ -131,16 +133,22 @@ def injected_routing(tokens: int, experts: int, top_k: int, device) -> tuple[Rou
     routing flip would otherwise show up as an expert error.
     """
     values, indices = routing_selection(tokens, experts, top_k)
-    return device_selection(values, indices, device), selection_as_dense(values, indices, experts)
+    return device_selection(values, indices, experts, device), selection_as_dense(values, indices, experts)
 
 
-def device_selection(values: torch.Tensor, indices: torch.Tensor, device) -> Routing:
-    """A (T, K) selection on the device, as TtNomicRouter.forward returns it."""
-    shape = (1, 1, *values.shape)
-    return Routing(
-        values=to_device(values.reshape(shape), device, dtype=ttnn.float32),
-        indices=to_device(indices.reshape(shape).to(torch.int32), device, dtype=ttnn.uint32),
-    )
+def device_selection(values: torch.Tensor, indices: torch.Tensor, experts: int, device) -> Routing:
+    """A (T, K) selection on the device as the router's (T, E) scores, from which routing_metadata selects
+    exactly it: the chosen experts' weights, which must be descending and above 0, and zeros elsewhere."""
+    scores = torch.zeros(values.shape[0], experts).scatter_(-1, indices, values)
+    return Routing(scores=to_device(scores.reshape(1, 1, *scores.shape), device, dtype=ttnn.float32))
+
+
+def selection_of(routing: Routing, top_k: int, num_experts: int) -> tuple[torch.Tensor, torch.Tensor]:
+    """The (T, K) weights and experts routing_metadata selects from routing's scores: each token's
+    top_k of the experts' columns, largest first and a tie to the lower expert."""
+    scores = ttnn.to_torch(routing.scores).float().reshape(-1, routing.scores.shape[-1])
+    values, indices = torch.sort(scores[:, :num_experts], dim=-1, descending=True, stable=True)
+    return values[:, :top_k], indices[:, :top_k]
 
 
 def bias_scale(got: torch.Tensor, without_bias: torch.Tensor, bias: torch.Tensor) -> torch.Tensor:

@@ -94,7 +94,7 @@ inline tt::ARCH get_physical_architecture() {
  *
  * Example usage:
  * @code
- * #include "tt_backend_api_types.hpp"
+ * #include "tt-metalium/data_formats/data_format.hpp"
  *
  * tt::ARCH arch = tt::tt_metal::get_platform_architecture();
  * if (arch == tt::ARCH::Invalid) {

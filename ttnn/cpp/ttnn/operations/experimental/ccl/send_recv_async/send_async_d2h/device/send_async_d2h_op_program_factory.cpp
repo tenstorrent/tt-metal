@@ -9,10 +9,10 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 
 using namespace tt::constants;
 

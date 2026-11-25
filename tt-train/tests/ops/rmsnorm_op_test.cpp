@@ -14,7 +14,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-umd-workload/cluster.hpp>
 #include <utility>
 #include <vector>

@@ -7,13 +7,13 @@
 #include <algorithm>
 #include <atomic>
 
-#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 
@@ -149,7 +149,7 @@ MoEBlockResources::MoEBlockResources(
     dims_(dims),
     config_(config),
     dtypes_(dtypes),
-    fabric_config_(tt::tt_fabric::GetFabricConfig()),
+    fabric_config_(tt::tt_fabric::GetFabricConfig(mesh_device)),
     max_payload_bytes_(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes()) {
     dims_.check();
     config_.check();

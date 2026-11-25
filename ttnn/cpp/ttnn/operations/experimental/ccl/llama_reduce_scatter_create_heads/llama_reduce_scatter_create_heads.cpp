@@ -5,7 +5,7 @@
 #include "llama_reduce_scatter_create_heads.hpp"
 #include "device/llama_reduce_scatter_create_heads_device_op.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
-#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/mesh/sub_device.hpp>
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
 namespace ttnn::experimental {
