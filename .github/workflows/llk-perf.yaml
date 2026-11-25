@@ -9,6 +9,11 @@ on:
         required: false
         default: tt-ubuntu-2204-xlarge-stable
         type: string
+      script:
+        description: "smoke_trial script"
+        required: false
+        default: equiv.sh
+        type: string
       legs:
         description: "JSON list of legs [arch, group, n]"
         required: false
@@ -64,7 +69,7 @@ jobs:
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           nproc; free -g
-          OUT="$RUNNER_TEMP/out/${ARCH}-${GROUP}" DURATIONS="$RUNNER_TEMP/split-durations/$ARCH.json" bash smoke_trial/equiv.sh
+          OUT="$RUNNER_TEMP/out/${ARCH}-${GROUP}" DURATIONS="$RUNNER_TEMP/split-durations/$ARCH.json" bash smoke_trial/${{ inputs.script }}
       - name: Upload results
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
