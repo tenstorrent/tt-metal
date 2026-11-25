@@ -25,6 +25,9 @@
 #include "api/circular_buffer_constants.h"
 #include "api/kernel_thread_globals.h"
 #include "ckernel_buf_desc.h"  // ckernel::trisc::BD_TABLE_NUM_ENTRIES
+#if defined(UCK_CHLKC_UNPACK)
+#include "llk_dest_borrow.h"  // _llk_dest_borrow_init_
+#endif
 #if defined(UCK_CHLKC_MATH)
 #include "cmath_common.h"    // ckernel::math::AluCfgTracker (definition of alu_cfg below)
 #endif
@@ -309,6 +312,9 @@ extern "C" std::uint32_t _start1() {
         WRITE_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(first_pair + i), 0u);
     }
     (void)READ_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(first_pair + num_pairs - 1));  // pairs cleared before signaling
+    _llk_dest_borrow_init_();
+    _llk_sync_init_(ckernel::trisc::semaphore::MATH_PACK, 2 /*max*/, 0 /*init*/);
+    tensix_sync();
     asm volatile("fence" ::: "memory");
 #endif
     *trisc_run = RUN_SYNC_MSG_DONE;
