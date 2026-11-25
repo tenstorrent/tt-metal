@@ -99,18 +99,22 @@ def test_request_id_counts_forwards(loop):
     ]
 
 
-def test_first_rank_decodes_media_refs_and_acks_only_the_chunks(monkeypatch):
-    """The request loop decodes each forward's refs from its H2D metadata bytes and passes them to prefill_forward. The
-    ack holds only the forward's chunk records, in one record built on the first forward and refilled after."""
+@pytest.mark.parametrize("forward_chunks", [1, F])
+def test_first_rank_decodes_media_refs_and_acks_only_the_chunks(monkeypatch, forward_chunks):
+    """The request loop decodes each forward's refs from its H2D metadata bytes and passes them to prefill_forward, or
+    to prefill_chunk at one chunk per forward. The ack holds only the forward's chunk records, in one record built on
+    the first forward and refilled after."""
     _configure(monkeypatch, supports_packed_forward=True)
+    monkeypatch.setattr(runner, "FORWARD_CHUNKS", forward_chunks)
     monkeypatch.setattr(runner, "MEDIA_MAX_REFS", 2)
-    monkeypatch.setattr(runner, "CHUNK_METADATA_SIZE_BYTES", metadata_size_bytes(F))
+    monkeypatch.setattr(runner, "CHUNK_METADATA_SIZE_BYTES", metadata_size_bytes(forward_chunks))
     monkeypatch.setattr(runner.ttnn, "get_device_tensors", lambda raw: [raw])
     monkeypatch.setattr(runner.ttnn, "to_torch", lambda raw: torch.frombuffer(bytearray(raw), dtype=torch.uint8))
-    forwards = [pad_chunks(f, F) for f in FORWARDS[:2]]
+    sources = FORWARDS[:2] if forward_chunks > 1 else [FORWARDS[0][:1], FORWARDS[1]]
+    forwards = [pad_chunks(f, forward_chunks) for f in sources]
     refs = [[MediaRef(0, 100, 150, bytes(32))], [MediaRef(0, 10, 20, bytes(range(32)))]]
-    raws = [pack_forward_metadata(chunks, F, r, 2) for chunks, r in zip(forwards, refs)]
-    raws = iter(raws + [sentinel_metadata(SHUTDOWN_WORD, F, 2)])
+    raws = [pack_forward_metadata(chunks, forward_chunks, r, 2) for chunks, r in zip(forwards, refs)]
+    raws = iter(raws + [sentinel_metadata(SHUTDOWN_WORD, forward_chunks, 2)])
     monkeypatch.setattr(runner, "_h2d_drain_op", lambda service, sockets, n_mtp: (_Tensor(), next(raws)))
     record, acks = _Tensor(), []
 
@@ -123,7 +127,10 @@ def test_first_rank_decodes_media_refs_and_acks_only_the_chunks(monkeypatch):
 
     class MediaRuntime(_PackedRuntime):
         def prefill_forward(self, inp, kv, chunks, request_id=0, d2h_service=None, *, metadata_msg=None, **kw):
-            self.calls.append((kw.get("media_refs"), metadata_msg))
+            self.calls.append(("prefill_forward", kw.get("media_refs"), metadata_msg))
+
+        def prefill_chunk(self, inp, kv, *, metadata_msg=None, **kw):
+            self.calls.append(("prefill_chunk", kw.get("media_refs"), metadata_msg))
 
     runtime = MediaRuntime()
     runner.run_request_loop(
@@ -137,8 +144,11 @@ def test_first_rank_decodes_media_refs_and_acks_only_the_chunks(monkeypatch):
         d2h_service=object(),
         sockets=runner.SocketBuffers(metadata=None),
     )
-    assert runtime.calls == [(refs[0], record), (refs[1], record)]
-    assert acks == [forward_metadata_words(chunks, F) for chunks in forwards]
+    entry = "prefill_forward" if forward_chunks > 1 else "prefill_chunk"
+    assert runtime.calls == [(entry, refs[0], record), (entry, refs[1], record)]
+    # One chunk per forward acks a single 12 B chunk record.
+    assert acks == [forward_metadata_words(chunks, forward_chunks) for chunks in forwards]
+    assert forward_chunks > 1 or all(len(words) == 3 for words in acks)
 
 
 @pytest.mark.parametrize("forward_chunks", [1, F])

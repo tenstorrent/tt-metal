@@ -314,6 +314,7 @@ def test_media_config_needs_max_refs(monkeypatch, expect_error):
         "SP_FACTOR",
         "CHUNK_SIZE",
         "FORWARD_CHUNKS",
+        "MAX_SEQ_LEN",
         "H2D_METADATA_SIZE_BYTES",
         "MEDIA",
         "MEDIA_MAX_REFS",
