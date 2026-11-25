@@ -4,8 +4,6 @@
 
 #include <gtest/gtest.h>
 
-#include <cassert>
-#include <numeric>
 #include <string>
 #include <vector>
 
@@ -15,8 +13,8 @@
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/ops/silu_bw/silu_bw.hpp"
-#include "ops/losses.hpp"
 #include "ops/unary_ops.hpp"
+#include "test_utils/bf16_ulp.hpp"
 #include "test_utils/program_cache.hpp"
 #include "test_utils/random_data.hpp"
 
@@ -32,111 +30,68 @@ protected:
 };
 
 // ============================================================================
-// Section 1: SiLU Kernel vs Reference Implementation
+// Section 1: ops::silu vs a float64 reference
 // ============================================================================
-// These tests validate the SiLU kernel implementation against
-// a reference implementation using basic operations: silu(x) = x * sigmoid(x)
-//
-// Test methodology:
-// 1. Create test tensor `x` of shape [B,N,S,C] with x.requires_grad = True
-// 2. Compute SiLU using both kernel and reference implementations
-// 3. Compare forward and backward results for numerical correctness
+// Like the other activation tests, the backward is seeded with ones (result->backward()), so the input
+// gradient is silu'(x) itself and is compared element by element against float64 on the bf16 values the
+// device read:
+//     silu(x)  = x * s(x)
+//     silu'(x) = s(x) * (1 + x * s(-x)),  s(x) = 1 / (1 + exp(-x))
+// s(-x) is computed directly rather than as 1 - s(x), which loses precision for large x.
 // ============================================================================
 
 namespace {
 
-/**
- * Reference implementation of SiLU forward pass using xt library
- * SiLU(x) = x * sigmoid(x)
- *
- * @param x Input tensor
- * @return SiLU activation result
- */
-xt::xarray<float> silu_forward_reference(const xt::xarray<float>& x) {
-    auto sigmoid_x = 1.0f / (1.0f + xt::exp(-x));
-    return x * sigmoid_x;
+xt::xarray<double> sigmoid_reference(const xt::xarray<double>& x) {
+    return 1.0 / (1.0 + xt::exp(-x));
 }
 
-/**
- * Reference implementation of SiLU backward pass using xt library
- * SiLU'(x) = sigmoid(x) * (1 + x * (1 - sigmoid(x)))
- *
- * @param x Input tensor (original input to SiLU)
- * @param grad Gradient from upstream
- * @return Gradient with respect to input
- */
+xt::xarray<double> silu_reference(const xt::xarray<double>& x) {
+    return x * sigmoid_reference(x);
+}
+
+xt::xarray<double> silu_grad_reference(const xt::xarray<double>& x) {
+    return sigmoid_reference(x) * (1.0 + x * sigmoid_reference(-x));
+}
+
+// Reference implementation of the SiLU backward pass: dL/dx = dL/dout * silu'(x).
 xt::xarray<float> silu_backward_reference(const xt::xarray<float>& x, const xt::xarray<float>& grad) {
-    auto sigmoid_x = 1.0f / (1.0f + xt::exp(-x));
-    auto silu_grad = sigmoid_x * (1.0f + x * (1.0f - sigmoid_x));
-    return grad * silu_grad;
+    const xt::xarray<double> x64 = xt::cast<double>(x);
+    return xt::cast<float>(xt::cast<double>(grad) * silu_grad_reference(x64));
 }
 
-/**
- * Helper function to compute precision metrics between two tensors
- * Returns a struct with various precision metrics
- */
-struct PrecisionMetrics {
-    float rmse;
-    bool allclose_strict;
-    bool allclose_loose;
-};
-
-PrecisionMetrics compute_precision_metrics(const xt::xarray<float>& reference, const xt::xarray<float>& test) {
-    PrecisionMetrics metrics;
-
-    auto abs_diff = xt::abs(reference - test);
-    metrics.rmse = xt::sqrt(xt::mean(xt::square(abs_diff)))();
-    metrics.allclose_strict = xt::allclose(reference, test, 1e-4f, 1e-3f);  // Moderate precision
-    metrics.allclose_loose = xt::allclose(reference, test, 1e-3f, 3e-2f);   // Same as CompareKernelVsReference
-
-    return metrics;
-}
+// ttnn::silu is within 0.89 bf16 ULP of the exact result. ttnn::silu_bw (BF16 SFPU kernel) is correctly
+// rounded except where the exact value lies within float32 error of a rounding tie (0.5002 ULP observed at
+// silu'(x) = 0.198731), so with a gradient of ones the input gradient is within 0.51 ULP.
+constexpr double kSiluMaxUlp = 1.0;
+constexpr double kSiluGradMaxUlp = 0.51;
+// metal::silu_bw on Blackhole with a gradient of ones over [-8, 8] (Section 3): 1.63 ULP at the largest
+// |silu'|, p99 3.38 ULP.
+constexpr double kMetalSiluBwMaxUlp = 2.5;
+constexpr double kMetalSiluBwMaxUlpP99 = 5.0;
 
 void CompareKernelVsReference(const xt::xarray<float>& input_data) {
     using namespace ttml;
 
-    // Create input tensors for kernel and reference implementations
-    auto input_kernel = autograd::create_tensor(
+    auto input = autograd::create_tensor(
         core::from_xtensor(input_data, &autograd::ctx().get_device()), /* requires_grad */ true);
-    auto input_reference = autograd::create_tensor(
-        core::from_xtensor(input_data, &autograd::ctx().get_device()), /* requires_grad */ true);
+    const xt::xarray<double> input_stored = xt::cast<double>(core::to_xtensor(input->get_value()));
 
-    // Forward pass - kernel implementation
-    auto result_kernel = ops::silu(input_kernel);
-    auto result_kernel_xtensor = core::to_xtensor(result_kernel->get_value());
+    auto result = ops::silu(input);
+    test_utils::expect_each_within_bf16_ulp(
+        core::to_xtensor(result->get_value()), silu_reference(input_stored), "silu forward", kSiluMaxUlp);
 
-    // Forward pass - reference implementation
-    auto result_reference = ops::silu(input_reference, /*use_composite_bw=*/true);
-    auto result_reference_xtensor = core::to_xtensor(result_reference->get_value());
-
-    // Compare forward results
-    // NOTE: This comparison does not much make sense for SiLU, because there is no forward SiLU composite if I am not
-    // mistaken, but we still do it for consistency.
-    EXPECT_TRUE(xt::allclose(result_kernel_xtensor, result_reference_xtensor, 1.0e-3F, 3e-2F));
-
-    // Backward pass - create target and compute gradients
-    auto target_kernel = autograd::create_tensor(core::zeros_like(result_kernel->get_value()));
-    auto target_reference = autograd::create_tensor(core::zeros_like(result_reference->get_value()));
-
-    auto mse_kernel = ops::mse_loss(result_kernel, target_kernel);
-    auto mse_reference = ops::mse_loss(result_reference, target_reference);
-
-    mse_kernel->backward();
-    mse_reference->backward();
-
-    // Compare backward results
-    auto input_grad_kernel = core::to_xtensor(input_kernel->get_grad());
-    auto input_grad_reference = core::to_xtensor(input_reference->get_grad());
-
-    EXPECT_TRUE(xt::allclose(input_grad_kernel, input_grad_reference, 1.0e-3F, 3e-2F));
+    result->backward();
+    test_utils::expect_each_within_bf16_ulp(
+        core::to_xtensor(input->get_grad()), silu_grad_reference(input_stored), "silu backward", kSiluGradMaxUlp);
 }
 
 /**
- * Helper function to compare kernel vs reference implementations of SiLU
+ * Helper function to compare ops::silu against the float64 reference
  *
  * This function tests both forward and backward passes to ensure:
- * 1. Forward pass: kernel and reference produce identical results
- * 2. Backward pass: gradients computed by both implementations match
+ * 1. Forward pass: within kSiluMaxUlp of silu(x) in every element
+ * 2. Backward pass (gradient of ones): within kSiluGradMaxUlp of silu'(x) in every element
  * 3. All outputs and gradients are finite (no NaN/Inf values)
  *
  * @param shape Input tensor shape [B, N, S, C] where:
@@ -165,10 +120,10 @@ static void CompareKernelVsReferenceWithShape(const std::vector<uint32_t>& shape
 }  // namespace
 
 // ============================================================================
-// Section 2: SiLU Kernel vs Reference Implementation - Comprehensive Tests
+// Section 2: ops::silu vs the float64 reference across shapes
 // ============================================================================
-// These tests systematically compare the SiLU kernel implementation against
-// the reference implementation across different scenarios:
+// These tests systematically compare ops::silu against the float64
+// reference across different scenarios:
 //
 // - Block size patterns: Wt % block_size = 0, 1, 2, 3 (where block_size = 4)
 // - Memory patterns: small tensors vs large tensors
@@ -250,95 +205,37 @@ TEST_F(SiLUOpTest, SiLU_Compare_SmallModel_Unaligned) {
 }
 
 // ============================================================================
-// Section 3: Backward Pass Precision Comparison Test
+// Section 3: both backward paths of ops::silu vs the float64 reference
 // ============================================================================
-// This test compares the precision of kernel vs composite implementations
-// against a reference xt implementation for backward pass only to determine
-// which is more accurate for gradient computation
+// use_composite_bw = true (the default) backpropagates with ttnn::silu_bw, which is correctly rounded.
+// false runs ttml::metal::silu_bw, which rounds sigmoid and each of four later steps to bf16; it is close
+// overall but loses most significant bits where silu'(x) crosses zero (x ~ -1.28), so it is bounded by
+// its error at the largest |silu'| and its p99 instead of element by element.
 // ============================================================================
 
-TEST_F(SiLUOpTest, SiLU_Precision_Comparison) {
+TEST_F(SiLUOpTest, SiLU_Backward_BothPaths_vs_Reference) {
     using namespace ttml;
 
-    // Single test shape: nanollama-like
-    std::vector<uint32_t> shape = {2, 1, 64, 512};
+    // nanollama-like shape; [-8, 8] covers the zero of silu' and both saturation tails.
+    const std::vector<uint32_t> shape = {2, 1, 64, 512};
+    const auto input_data = test_utils::make_uniform_xarray<float>(shape, -8.0F, 8.0F, 7U);
 
-    // Test range: moderate range that covers typical activation values
-    const float min_val = -2.0f;
-    const float max_val = 2.0f;
-
-    // Reduced number of runs for faster testing
-    const int num_runs = 3;
-
-    // Collect metrics across all runs
-    std::vector<float> kernel_rmse_values(num_runs);
-    std::vector<float> composite_rmse_values(num_runs);
-
-    auto& rng = autograd::ctx().get_generator();
-    for (int run = 0; run < num_runs; ++run) {
-        // Generate test data with different seed for each run
-        xt::xarray<float> input_data = xt::empty<float>(shape);
-        core::parallel_generate<float>(
-            input_data,
-            [min_val, max_val]() { return std::uniform_real_distribution<float>(min_val, max_val); },
-            /* seed */ rng());
-
-        // Create input tensors
-        auto input_kernel = autograd::create_tensor(
+    for (const bool use_composite_bw : {true, false}) {
+        const std::string label = use_composite_bw ? "ttnn::silu_bw" : "metal::silu_bw";
+        auto input = autograd::create_tensor(
             core::from_xtensor(input_data, &autograd::ctx().get_device()), /* requires_grad */ true);
-        auto input_composite = autograd::create_tensor(
-            core::from_xtensor(input_data, &autograd::ctx().get_device()), /* requires_grad */ true);
+        const xt::xarray<double> expected = silu_grad_reference(xt::cast<double>(core::to_xtensor(input->get_value())));
 
-        // Forward pass - kernel implementation
-        auto result_kernel = ops::silu(input_kernel, /*use_composite_bw=*/false);
-
-        // Forward pass - composite implementation
-        auto result_composite = ops::silu(input_composite, /*use_composite_bw=*/true);
-
-        // Backward pass - create target and compute gradients (same as CompareKernelVsReference)
-        auto target_kernel = autograd::create_tensor(core::zeros_like(result_kernel->get_value()));
-        auto target_composite = autograd::create_tensor(core::zeros_like(result_composite->get_value()));
-
-        auto mse_kernel = ops::mse_loss(result_kernel, target_kernel);
-        auto mse_composite = ops::mse_loss(result_composite, target_composite);
-
-        mse_kernel->backward();
-        mse_composite->backward();
-
-        // Get computed gradients
-        auto input_grad_kernel = core::to_xtensor(input_kernel->get_grad());
-        auto input_grad_composite = core::to_xtensor(input_composite->get_grad());
-
-        // Reference backward pass - compute what the gradient should be
-        auto result_ref = silu_forward_reference(input_data);
-        auto total_elements = static_cast<float>(input_data.size());
-        auto mse_grad = (2.0f / total_elements) * result_ref;
-        auto grad_reference = silu_backward_reference(input_data, mse_grad);
-
-        // Compare backward precision
-        auto backward_metrics_kernel = compute_precision_metrics(grad_reference, input_grad_kernel);
-        auto backward_metrics_composite = compute_precision_metrics(grad_reference, input_grad_composite);
-
-        // Collect metrics for consolidation
-        kernel_rmse_values[run] = backward_metrics_kernel.rmse;
-        composite_rmse_values[run] = backward_metrics_composite.rmse;
-
-        // Sanity check - both should be reasonably close to reference
-        EXPECT_TRUE(backward_metrics_kernel.allclose_loose) << "Kernel backward pass too inaccurate";
-        EXPECT_TRUE(backward_metrics_composite.allclose_loose) << "Composite backward pass too inaccurate";
+        auto result = ops::silu(input, use_composite_bw);
+        result->backward();
+        const auto grad = core::to_xtensor(input->get_grad());
+        if (use_composite_bw) {
+            test_utils::expect_each_within_bf16_ulp(grad, expected, label, kSiluGradMaxUlp);
+        } else {
+            test_utils::expect_within_bf16_ulp(grad, expected, label, kMetalSiluBwMaxUlp, kMetalSiluBwMaxUlpP99);
+        }
+        autograd::ctx().reset_graph();
     }
-
-    // Compute consolidated statistics (no output)
-    auto compute_mean = [](const std::vector<float>& values) {
-        return std::accumulate(values.begin(), values.end(), 0.0f) / values.size();
-    };
-
-    float kernel_mean_rmse = compute_mean(kernel_rmse_values);
-    float composite_mean_rmse = compute_mean(composite_rmse_values);
-
-    // Silent validation - just ensure both implementations work reasonably
-    EXPECT_LT(kernel_mean_rmse, 1e-5f) << "Kernel implementation has poor precision";
-    EXPECT_LT(composite_mean_rmse, 1e-5f) << "Composite implementation has poor precision";
 }
 
 // ============================================================================

@@ -66,4 +66,25 @@ inline void expect_within_bf16_ulp(
     EXPECT_LE(ulp_p99, max_ulp_p99) << label << ": p99 error " << ulp_p99 << " bf16 ULP";
 }
 
+// The largest |got - expected| over the elements, each in ULP at its own element. A correctly rounded bf16
+// result is within 0.5.
+inline void expect_each_within_bf16_ulp(
+    const xt::xarray<float>& got, const xt::xarray<double>& expected, const std::string& label, double max_ulp) {
+    ASSERT_EQ(got.shape(), expected.shape()) << label;
+    ASSERT_TRUE(xt::all(xt::isfinite(got))) << label << ": non-finite output";
+
+    double worst_ulp = 0.0;
+    size_t worst = 0;
+    for (size_t i = 0; i < expected.size(); ++i) {
+        const double ulp =
+            std::abs(static_cast<double>(got.data()[i]) - expected.data()[i]) / bf16_spacing(expected.data()[i]);
+        if (ulp > worst_ulp) {
+            worst_ulp = ulp;
+            worst = i;
+        }
+    }
+    EXPECT_LE(worst_ulp, max_ulp) << label << ": " << worst_ulp << " bf16 ULP at element " << worst << " (got "
+                                  << got.data()[worst] << ", expected " << expected.data()[worst] << ")";
+}
+
 }  // namespace ttml::test_utils
