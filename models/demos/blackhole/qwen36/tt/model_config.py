@@ -17,6 +17,9 @@ from models.tt_transformers.tt.model_config import ModelArgs
 # l1_small_size the GDN prefill depthwise ttnn.conv1d requires.
 GDN_CONV1D_L1_SMALL_SIZE = 24576
 
+# Cap of the K block (in0_block_w) of the 1D decode MLP gate and up matmuls.
+MLP_DECODE_IBW_ENV = "QWEN36_MLP_DECODE_IBW"
+
 
 class Qwen36ModelArgs(ModelArgs):
     """ModelArgs for the Qwen3.5 / 3.6 family on Blackhole (9B / 27B / 35B-A3B; dense + MoE)."""
@@ -268,6 +271,9 @@ class Qwen36ModelArgs(ModelArgs):
         self.mlp_1d_decode = True
         # gate/up: num_cores=44 -> 11x4 on BH, the fastest measured config (wide1d_11x4c, 42.8us vs
         # 43.9us for the old 8x4=forced1d_32c). On WH (decode_grid_w=8) this falls back to 8x6.
+        # K blocks of up to 16 tiles (QWEN36_MLP_DECODE_IBW; 160 K tiles at dim 5120): about 3 us faster per matmul
+        # than 8 in the single-chip trace microbench, +1.6% tok/s/user at B=32, same outputs. Larger blocks are slower.
+        self.mlp_decode_in0_block_w = int(os.environ.get(MLP_DECODE_IBW_ENV, "16"))
         self.mlp_w1_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
             M,
             self.dim,
@@ -275,9 +281,15 @@ class Qwen36ModelArgs(ModelArgs):
             num_cores=44,
             fused_activation=ttnn.UnaryOpType.SILU,
             grid_w=self.decode_grid_w,
+            max_in0_block_w=self.mlp_decode_in0_block_w,
         )
         self.mlp_w3_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
-            M, self.dim, self.hidden_dim // tp, num_cores=44, grid_w=self.decode_grid_w
+            M,
+            self.dim,
+            self.hidden_dim // tp,
+            num_cores=44,
+            grid_w=self.decode_grid_w,
+            max_in0_block_w=self.mlp_decode_in0_block_w,
         )
         # down: num_cores=33 -> 11x3 on BH, the fastest measured config (wide1d_11x3c, ~63us, +28% vs
         # the old 8x2). On WH (decode_grid_w=8) this falls back to 8x5.
