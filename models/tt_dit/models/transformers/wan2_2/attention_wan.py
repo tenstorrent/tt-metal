@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
@@ -135,6 +137,9 @@ class WanAttention(Module):
             ),
             self.default_sdpa_chunk_size,
         )
+        # CI EXPERIMENT BRANCH ONLY (not for merge): WAN_RING_SDPA_CHUNK="<q>,<k>" overrides the ring SDPA chunk sizes.
+        if os.environ.get("WAN_RING_SDPA_CHUNK"):
+            ring_sdpa_chunk_size = tuple(int(v) for v in os.environ["WAN_RING_SDPA_CHUNK"].split(","))
 
         self.ring_sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.sdpa_worker_grid,

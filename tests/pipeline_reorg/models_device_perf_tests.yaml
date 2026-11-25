@@ -25,12 +25,21 @@
     S=models/tt_dit/tests/models/wan2_2/ci_op_profile_summary.py
     K="2x2sp0tp1nl2_line_is_fsdp0 and 14b-480p"
     # tracy joins its arguments and runs them through a shell: the pytest command is one -m string with -k quoted inside.
+    # Four passes on the same machine: ring SDPA chunk q128/k512 (Wan's QB2 setting) and q256/k512, each with 1.0 and 2.0.
+    export WAN_RING_SDPA_CHUNK=128,512
     export TT_SDPA_LLK2=0 TT_RING_SDPA_LLK2=0 TT_MINIMAL_MATMUL_LLK2=0
-    python -m tracy -r -v -o generated/profiler/wan-llk1 -m "pytest --timeout 5400 $T -k \"$K\"" || exit $?
-    python "$S" generated/profiler/wan-llk1 llk1 || exit $?
+    python -m tracy -r -v -o generated/profiler/wan-q128-llk1 -m "pytest --timeout 5400 $T -k \"$K\"" || exit $?
+    python "$S" generated/profiler/wan-q128-llk1 q128-llk1 || exit $?
     export TT_SDPA_LLK2=1 TT_RING_SDPA_LLK2=1 TT_MINIMAL_MATMUL_LLK2=1
-    python -m tracy -r -v -o generated/profiler/wan-llk2 -m "pytest --timeout 5400 $T -k \"$K\"" || exit $?
-    python "$S" generated/profiler/wan-llk2 llk2 || exit $?
+    python -m tracy -r -v -o generated/profiler/wan-q128-llk2 -m "pytest --timeout 5400 $T -k \"$K\"" || exit $?
+    python "$S" generated/profiler/wan-q128-llk2 q128-llk2 || exit $?
+    export WAN_RING_SDPA_CHUNK=256,512
+    export TT_SDPA_LLK2=0 TT_RING_SDPA_LLK2=0 TT_MINIMAL_MATMUL_LLK2=0
+    python -m tracy -r -v -o generated/profiler/wan-q256-llk1 -m "pytest --timeout 5400 $T -k \"$K\"" || exit $?
+    python "$S" generated/profiler/wan-q256-llk1 q256-llk1 || exit $?
+    export TT_SDPA_LLK2=1 TT_RING_SDPA_LLK2=1 TT_MINIMAL_MATMUL_LLK2=1
+    python -m tracy -r -v -o generated/profiler/wan-q256-llk2 -m "pytest --timeout 5400 $T -k \"$K\"" || exit $?
+    python "$S" generated/profiler/wan-q256-llk2 q256-llk2 || exit $?
   model: wan-2.2-t2v
   skus:
     bh_quietbox_2:
