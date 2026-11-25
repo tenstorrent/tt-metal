@@ -158,6 +158,7 @@ void ChunkGdnDeviceOperation::validate_on_program_cache_miss(
             !attrs.v_flat && !attrs.qk_flat && !attrs.qk_norm,
             "chunk_gdn: the mono program takes head-major q/k/v only (no flat inputs, no in-kernel qk-norm)");
         TT_FATAL(attrs.head_offset == 0, "chunk_gdn: the mono program computes every head (head_offset must be 0)");
+        TT_FATAL(!attrs.exact_state, "chunk_gdn: exact_state is not available on the mono program (fused or phased)");
         TT_FATAL(
             attrs.BH <= grid.x * grid.y,
             "chunk_gdn: the mono program needs one core per head: BH={} exceeds the {}x{} grid",
@@ -865,7 +866,8 @@ std::vector<Tensor> chunk_gdn(
     uint32_t num_heads,
     uint32_t head_offset,
     const std::optional<Tensor>& o_out,
-    const std::optional<Tensor>& final_state_out) {
+    const std::optional<Tensor>& final_state_out,
+    bool exact_state) {
     const auto& q_shape = q.logical_shape();  // [BH,NC,C,K] head-major, or flat [B,T,Hk*K] when qk_flat
     const auto& v_shape = v.logical_shape();  // [BH,NC,C,V] head-major, or flat [B,T,HV*V] when v_flat
     // Dim derivation identical to chunk_gdn_prep (both factories consume prep's inputs; the flat forms
@@ -896,6 +898,7 @@ std::vector<Tensor> chunk_gdn(
         .output_final_state = output_final_state,
         .output_mem_config = output_mem_config,
         .compute_kernel_config = compute_kernel_config,
+        .exact_state = exact_state,
     };
     if (const auto* fused_cfg = std::get_if<ttnn::transformer::ChunkGdnFusedProgramConfig>(&program_config)) {
         attrs.impl = ChunkGdnImpl::Fused;

@@ -332,6 +332,9 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     compute_ct.push_back(f32_bits(1e-6f));
     compute.compile_time_args = compute_ct;
     compute.defines = gdn_prep_defines(attrs.tinv, false /*hoist_reconfig*/);
+    if (attrs.exact_state) {
+        compute.defines.emplace_back("GDN_EXACT_DL", "1");  // exact dl column hand-off (exact-state scan)
+    }
     compute.config = gdn_compute_config(attrs.compute_kernel_config);
     compute.runtime_args.reserve(n_used);
 
@@ -462,6 +465,12 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     add_cb(pcb::scan_vnew, cv);
     add_cb(pcb::ointer, cv);
     add_cb(pcb::eye, 1);  // the reader-written identity tile (scan_step's I @ v_beta)
+    if (attrs.exact_state) {
+        // FPU-read views of the state (exact-state scan: S/s2/s3 are read only by exact DST copies)
+        add_cb(tt::CBIndex::c_9, kv);
+        add_cb(tt::CBIndex::c_10, kv);
+        add_cb(tt::CBIndex::c_12, kv);
+    }
 
     CoreRangeSet sender_set, receiver_set;
     if (do_mcast) {
@@ -559,6 +568,11 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     compute.core_ranges = cores;
     compute.compile_time_args = ct_args;
     compute.config = gdn_compute_config(attrs.compute_kernel_config);
+    if (attrs.exact_state) {
+        compute.defines.emplace_back("GDN_EXACT_DL", "1");
+        compute.config =
+            gdn_exact_state_compute_config(attrs.compute_kernel_config, {pcb::S, pcb::s2, pcb::s3, pcb::dl});
+    }
     compute.runtime_args.reserve(n_used);
 
     auto* vb_buf = in.v_beta.buffer();

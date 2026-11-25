@@ -109,6 +109,10 @@ struct ChunkGdnParams {
     bool output_final_state = false;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
+    // Opt-in exact-state scan (default off: the programs are exactly the default ones): the state and the dl column
+    // reach the fp32 DST by UnpackToDestFp32 copies and are scaled on the SFPU (GDN_EXACT_DL kernels, three extra
+    // FPU-read state CBs). Hashed like every field here. Fused only; Mono rejects it.
+    bool exact_state = false;
 };
 
 // rows = heads in the tensors (params.rows); the program computes BH of them from head_offset. On a flat path
@@ -311,6 +315,7 @@ std::vector<Tensor> chunk_gdn(
     uint32_t num_heads = 0,
     uint32_t head_offset = 0,
     const std::optional<Tensor>& o_out = std::nullopt,
-    const std::optional<Tensor>& final_state_out = std::nullopt);
+    const std::optional<Tensor>& final_state_out = std::nullopt,
+    bool exact_state = false);
 
 }  // namespace ttnn::prim

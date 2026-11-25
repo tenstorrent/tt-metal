@@ -72,6 +72,11 @@ namespace ttnn::transformer {
  * separately, so without it the op assumes K == V (H = flat q width / V). With it, H = num_key_heads and
  * K = flat q width / H (must divide), which lets K != V. For rank-4 q/k it is optional and, if given,
  * must equal q's head count (it is redundant there).
+ *
+ * exact_state (default false): opt-in exact-state scan on the fused and phased paths (not mono): the fp32 state and
+ * the chunk decay dl reach the DST by exact UnpackToDestFp32 copies and dl * S is formed on the SFPU, instead of the
+ * (dl*I) @ S matmul that rounds S and dl through the TF32 source registers every chunk. With false the programs are
+ * exactly the default ones.
  */
 std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     const ttnn::Tensor& q,
@@ -93,6 +98,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     const std::optional<ttnn::Tensor>& tril = std::nullopt,
     const std::optional<ttnn::Tensor>& ones = std::nullopt,
     const std::optional<ttnn::Tensor>& masks = std::nullopt,
-    std::optional<uint32_t> num_key_heads = std::nullopt);
+    std::optional<uint32_t> num_key_heads = std::nullopt,
+    bool exact_state = false);
 
 }  // namespace ttnn::transformer

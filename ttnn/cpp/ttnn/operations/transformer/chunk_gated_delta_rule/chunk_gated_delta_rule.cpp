@@ -137,7 +137,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     const std::optional<ttnn::Tensor>& tril,
     const std::optional<ttnn::Tensor>& ones,
     const std::optional<ttnn::Tensor>& masks,
-    std::optional<uint32_t> num_key_heads) {
+    std::optional<uint32_t> num_key_heads,
+    bool exact_state) {
     TT_FATAL(!use_qk_l2norm, "chunk_gated_delta_rule: use_qk_l2norm not yet supported; pre-normalize q/k on host");
     ttnn::prim::validate_gdn_chunk_size(chunk_size);
 
@@ -352,7 +353,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
             flat_qk,
             H,
             phased_cfg->prep_serial,
-            wy_inverse);
+            wy_inverse,
+            exact_state);
         // prep = {v_beta, nkd, q_decay, intra, k_dec_t, dl, t_inv}
         auto scan = ttnn::prim::chunk_gdn_scan(
             prep[0],
@@ -368,7 +370,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
             out_mem,
             kernel_cfg,
             phased_cfg->use_mcast,
-            phased_cfg->scan_serial);
+            phased_cfg->scan_serial,
+            exact_state);
         o_c = scan[0];
         final_state = scan[1];
         // DEBUG: QWEN_GDN_DUMP=<idx> routes prep[idx] out through the o path (idx 2 = q_decay,
@@ -445,7 +448,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
                 num_heads,
                 head_offset,
                 o_out,
-                final_state_out);
+                final_state_out,
+                exact_state);
         };
         if (waves.size() == 1) {
             auto results = launch(0, 0, std::nullopt, std::nullopt);

@@ -39,6 +39,10 @@ static_assert(
         cb_kdec_t == gdn_handoff::kCbKdecT && cb_dl == gdn_handoff::kCbDl,
     "scan input CB indices drifted from ../dataflow/chunk_gdn_handoff.hpp");
 constexpr uint32_t cb_s3 = 31;
+#ifdef GDN_EXACT_DL
+// FPU-read views of the state (the exact state CBs 8/21/31 are unpacked straight to DST for the SFPU update)
+constexpr uint32_t cb_vS = 9, cb_v2 = 10, cb_v3 = 12;
+#endif
 
 constexpr GdnScanCbs CBS{
     .dl = cb_dl,
@@ -64,15 +68,47 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_nkd, cb_vbeta, cb_out);
 
     WAIT(cb_eye, 1);  // the reader's identity tile (never popped)
+#ifdef GDN_EXACT_DL
+    constexpr uint32_t kv = Kt * Vt;
+#endif
 
     for (uint32_t c = 0; c < NC; c++) {
         // State uses three single-producer CBs:
         //   cb_S      : reader-produced initial state, consumed only by chunk 0.
         //   cb_s2/cb_s3: compute-only ping-pong for chunk outputs.
         const uint32_t cur_S = (c == 0) ? cb_S : ((c & 1u) ? cb_s2 : cb_s3);
+#ifdef GDN_EXACT_DL
+        const uint32_t cur_view = (c == 0) ? cb_vS : ((c & 1u) ? cb_v2 : cb_v3);
+#endif
         const uint32_t nxt_S = (c & 1u) ? cb_s3 : cb_s2;
+#ifdef GDN_EXACT_DL
+        const uint32_t nxt_view = (c & 1u) ? cb_v3 : cb_v2;
+#endif
         const bool last = (c == NC - 1);
         const uint32_t dst = last ? cb_final : nxt_S;
+#ifdef GDN_EXACT_DL
+        const uint32_t dst_view = last ? cb_final : nxt_view;  // == dst: no view for the final state
+        if (c == 0) {
+            // view copy of the reader's initial state (exact DST copy, packed for the FPU reads)
+            WAIT(cb_S, kv);
+            CircularBuffer(cb_vS).reserve_back(kv);
+            for (uint32_t t0 = 0; t0 < kv; t0 += kDstTiles) {
+                const uint32_t nb = (kv - t0 < kDstTiles) ? (kv - t0) : kDstTiles;
+                tile_regs_acquire();
+                copy_init(cb_S);
+                for (uint32_t j = 0; j < nb; j++) {
+                    copy_tile(cb_S, t0 + j, j);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t j = 0; j < nb; j++) {
+                    pack_tile<true>(j, cb_vS, t0 + j);
+                }
+                tile_regs_release();
+            }
+            CircularBuffer(cb_vS).push_back(kv);
+        }
+#endif
 
 #if defined(PROFILE_KERNEL)
         {
@@ -90,7 +126,11 @@ void kernel_main() {
 #endif
         {
             DeviceZoneScopedN("scan_step");
+#ifdef GDN_EXACT_DL
+            scan_step<Ct, Kt, Vt>(CBS, cur_S, cur_view, dst, dst_view);
+#else
             scan_step<Ct, Kt, Vt>(CBS, cur_S, dst);
+#endif
         }
     }
 }

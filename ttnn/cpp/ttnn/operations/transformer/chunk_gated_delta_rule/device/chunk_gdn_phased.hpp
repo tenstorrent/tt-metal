@@ -55,6 +55,9 @@ struct ChunkGdnPrepParams {
     GdnTinv tinv = GdnTinv::HORNER;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
+    // Opt-in (default off): dl is handed off as the exact fp32 column packed from DST (GDN_EXACT_DL) instead of
+    // the dl*I tile. Pair it with chunk_gdn_scan(exact_state=true). Hashed.
+    bool exact_state = false;
 };
 
 struct ChunkGdnPrepInputs {
@@ -110,7 +113,8 @@ std::vector<Tensor> chunk_gdn_prep(
     bool qk_flat = false,
     uint32_t Hk = 0,
     bool prep_serial = false,
-    ttnn::transformer::ChunkGdnWyInverse wy_inverse = ttnn::transformer::ChunkGdnWyInverse::AUTO);
+    ttnn::transformer::ChunkGdnWyInverse wy_inverse = ttnn::transformer::ChunkGdnWyInverse::AUTO,
+    bool exact_state = false);
 
 // ---------------------------------------------------------------------------
 // SCAN
@@ -127,6 +131,8 @@ struct ChunkGdnScanParams {
     bool force_serial = false;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
+    // Opt-in (default off): the exact-state scan (GDN_EXACT_DL), fed by chunk_gdn_prep(exact_state=true). Hashed.
+    bool exact_state = false;
 };
 
 struct ChunkGdnScanInputs {
@@ -175,6 +181,7 @@ std::vector<Tensor> chunk_gdn_scan(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     bool use_mcast = true,
-    bool force_serial = false);
+    bool force_serial = false,
+    bool exact_state = false);
 
 }  // namespace ttnn::prim

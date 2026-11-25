@@ -252,6 +252,12 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     add_cb(rcv_set, fcb::final_s, kvl);
     add_cb(rcv_set, fcb::eye, 1);  // the reader-written identity tile (scan_step's I @ v_beta)
     add_cb(rcv_set, fcb::s3, kvl);
+    if (attrs.exact_state) {
+        // FPU-read views of the state (exact-state scan: S/s2/s3 are read only by exact DST copies)
+        add_cb(rcv_set, tt::CBIndex::c_9, kvl);
+        add_cb(rcv_set, tt::CBIndex::c_10, kvl);
+        add_cb(rcv_set, tt::CBIndex::c_12, kvl);
+    }
 
     // Handshake semaphores, declared on the UNION so each id resolves to the same L1 address on
     // producer and receiver. Ids reach both kernels as trailing compile-time args.
@@ -356,6 +362,9 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
         .defines = gdn_prep_defines(attrs.tinv, true /*hoist_reconfig*/),
         .config = gdn_compute_config(attrs.compute_kernel_config),
     };
+    if (attrs.exact_state) {
+        prep_compute.defines.emplace_back("GDN_EXACT_DL", "1");  // exact dl hand-off (fp32 column from DST)
+    }
     prep_compute.runtime_args.reserve(P);
 
     // The fused writer runs on the WriterConfigDescriptor's RISC/NoC (BRISC / NOC_1 on Blackhole).
@@ -404,6 +413,11 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
         .compile_time_args = ct_scan,
         .config = gdn_compute_config(attrs.compute_kernel_config),
     };
+    if (attrs.exact_state) {
+        scan_compute.defines.emplace_back("GDN_EXACT_DL", "1");
+        scan_compute.config =
+            gdn_exact_state_compute_config(attrs.compute_kernel_config, {fcb::S, fcb::s2, fcb::s3, fcb::dl});
+    }
     scan_compute.runtime_args.reserve(R);
 
     KernelDescriptor scan_writer{

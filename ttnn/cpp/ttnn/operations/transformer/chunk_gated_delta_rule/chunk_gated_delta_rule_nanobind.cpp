@@ -54,7 +54,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule_lau
     const std::optional<ttnn::Tensor>& tril,
     const std::optional<ttnn::Tensor>& ones,
     const std::optional<ttnn::Tensor>& masks,
-    std::optional<uint32_t> num_key_heads) {
+    std::optional<uint32_t> num_key_heads,
+    bool exact_state) {
     return ttnn::transformer::chunk_gated_delta_rule(
         q,
         k,
@@ -75,7 +76,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule_lau
         tril,
         ones,
         masks,
-        num_key_heads);
+        num_key_heads,
+        exact_state);
 }
 
 std::vector<ttnn::Tensor> chunk_gdn_prep_launch(
@@ -98,7 +100,8 @@ std::vector<ttnn::Tensor> chunk_gdn_prep_launch(
     bool qk_flat,
     uint32_t Hk,
     bool prep_serial,
-    ttnn::transformer::ChunkGdnWyInverse wy_inverse) {
+    ttnn::transformer::ChunkGdnWyInverse wy_inverse,
+    bool exact_state) {
     return ttnn::prim::chunk_gdn_prep(
         q,
         k,
@@ -119,7 +122,8 @@ std::vector<ttnn::Tensor> chunk_gdn_prep_launch(
         qk_flat,
         Hk,
         prep_serial,
-        wy_inverse);
+        wy_inverse,
+        exact_state);
 }
 
 std::vector<ttnn::Tensor> chunk_gdn_scan_launch(
@@ -136,7 +140,8 @@ std::vector<ttnn::Tensor> chunk_gdn_scan_launch(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     bool use_mcast,
-    bool force_serial) {
+    bool force_serial,
+    bool exact_state) {
     return ttnn::prim::chunk_gdn_scan(
         v_beta,
         nkd,
@@ -151,7 +156,8 @@ std::vector<ttnn::Tensor> chunk_gdn_scan_launch(
         memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG),
         gdn_default_compute_kernel_config(v_beta.device()->arch(), compute_kernel_config),
         use_mcast,
-        force_serial);
+        force_serial,
+        exact_state);
 }
 
 std::vector<ttnn::Tensor> chunk_gdn_fused_launch(
@@ -180,7 +186,8 @@ std::vector<ttnn::Tensor> chunk_gdn_fused_launch(
     uint32_t num_heads,
     uint32_t head_offset,
     const std::optional<ttnn::Tensor>& o_out,
-    const std::optional<ttnn::Tensor>& final_state_out) {
+    const std::optional<ttnn::Tensor>& final_state_out,
+    bool exact_state) {
     return ttnn::prim::chunk_gdn(
         q,
         k,
@@ -207,7 +214,8 @@ std::vector<ttnn::Tensor> chunk_gdn_fused_launch(
         num_heads,
         head_offset,
         o_out,
-        final_state_out);
+        final_state_out,
+        exact_state);
 }
 
 std::string py_bool(bool b) { return b ? "True" : "False"; }
@@ -629,6 +637,10 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 flat path run with K != V: H = num_key_heads, K = flat q width / H (must divide). Without
                 it the flat path assumes K == V. For rank-4 q/k it is redundant and, if given, must
                 equal q's head count.
+            exact_state (bool): default False. Opt-in exact-state scan (fused and phased paths; mono rejects
+                it): the fp32 state and the chunk decay reach the DST by exact copies and the decay is applied on
+                the SFPU instead of a (dl*I) @ S matmul through the TF32 source registers. False runs exactly the
+                default programs.
 
         Returns:
             tuple[ttnn.Tensor, Optional[ttnn.Tensor]]:
@@ -661,7 +673,8 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("tril") = nb::none(),
         nb::arg("ones") = nb::none(),
         nb::arg("masks") = nb::none(),
-        nb::arg("num_key_heads") = nb::none());
+        nb::arg("num_key_heads") = nb::none(),
+        nb::arg("exact_state") = false);
 
     const auto* prep_doc =
         R"doc(
@@ -697,6 +710,8 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 (one per head) instead of the whole grid. Measurement only.
             wy_inverse (ttnn.ChunkGdnWyInverse): default AUTO — the WY-inverse method, as on the
                 public op (HORNER / FORWARD_SUBSTITUTION / AUTO).
+            exact_state (bool): default False — hand dl off as the exact fp32 column (feed
+                chunk_gdn_scan(exact_state=True)), as the public op's exact_state.
 
         Returns:
             list[ttnn.Tensor]: the 7 fp32 per-chunk DRAM intermediates the scan consumes —
@@ -732,6 +747,7 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("Hk") = 0,
         nb::arg("prep_serial") = false,
         nb::arg("wy_inverse") = ttnn::transformer::ChunkGdnWyInverse::AUTO,
+        nb::arg("exact_state") = false,
         nb::call_guard<nb::gil_scoped_release>(),
         prep_doc);
 
@@ -767,6 +783,8 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
             use_mcast (bool) / force_serial (bool): ChunkGdnPhasedProgramConfig.use_mcast /
                 scan_serial — the shared-input multicast (default True) and the one-core-per-head
                 NV=1 layout (default False; measurement only).
+            exact_state (bool): default False — the exact-state scan, fed by
+                chunk_gdn_prep(exact_state=True), as the public op's exact_state.
 
         Returns:
             list[ttnn.Tensor]: [o [BH, NC, C, V] fp32, final_state [BH, K, V] fp32]
@@ -791,6 +809,7 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("use_mcast") = true,
         nb::arg("force_serial") = false,
+        nb::arg("exact_state") = false,
         nb::call_guard<nb::gil_scoped_release>(),
         scan_doc);
 
@@ -805,6 +824,8 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         Computes heads [head_offset, head_offset + num_heads) of those rows (num_heads 0 = all rows). With
         o_out / final_state_out (the full [rows, ...] fp32 outputs) it writes its head range into them; without,
         it returns compact [num_heads, ...] outputs holding that range at rows 0..num_heads-1.
+
+        exact_state (default False) selects the exact-state scan, as on the public op.
 
         Returns [o [num_heads or rows, NC, C, V] fp32, final_state [.., K, V] fp32] (or the preallocated pair).
         )doc";
@@ -838,6 +859,7 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("head_offset") = 0,
         nb::arg("o_out") = nb::none(),
         nb::arg("final_state_out") = nb::none(),
+        nb::arg("exact_state") = false,
         nb::call_guard<nb::gil_scoped_release>(),
         fused_doc);
 }

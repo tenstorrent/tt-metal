@@ -4,6 +4,7 @@
 #pragma once
 
 #include <tt-metalium/base_types.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -34,6 +35,21 @@ inline tt::tt_metal::ComputeConfigDescriptor gdn_compute_config(const DeviceComp
         .fp32_dest_acc_en = cfg.fp32_dest_acc_en,
         .dst_full_sync_en = cfg.dst_full_sync_en,
         .math_approx_mode = cfg.math_approx_mode};
+}
+
+// exact_state=True only (the default programs use gdn_compute_config above, unchanged): the scan's state CBs and
+// its dl column are unpacked straight to the fp32 DEST (UnpackToDestFp32), so the carried state never passes
+// through the TF32 source registers. The kernels take this path under GDN_EXACT_DL.
+inline tt::tt_metal::ComputeConfigDescriptor gdn_exact_state_compute_config(
+    const DeviceComputeKernelConfig& cfg, std::initializer_list<uint32_t> unpack_fp32_cbs) {
+    using tt::tt_metal::UnpackToDestMode;
+    auto config = gdn_compute_config(cfg);
+    std::vector<UnpackToDestMode> unpack_modes(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    for (uint32_t idx : unpack_fp32_cbs) {
+        unpack_modes[idx] = UnpackToDestMode::UnpackToDestFp32;  // exact fp32 copies to DST (state, dl)
+    }
+    config.unpack_to_dest_mode = unpack_modes;
+    return config;
 }
 
 // The chunk sizes every chunk_gated_delta_rule program (mono, phased, fused) accepts: one or two tile rows per
