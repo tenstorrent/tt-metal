@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <set>
+#include <tuple>
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -70,6 +71,34 @@ void check_link_peers(const PhysicalGraph& graph, const ControlPlane& control_pl
 
 }  // namespace
 
+std::vector<PerimeterPort> fabric_perimeter(const FabricContext& fabric_context, bool vc2_forwards) {
+    const auto& rtoptions = fabric_context.get_rtoptions();
+    const auto& control_plane = fabric_context.get_control_plane();
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    // the mesh graph's ports and, where VC2 forwards, the domain's VC2-only links are not perimeter
+    auto taken = ports_from_mesh_graph(mesh_graph, express_axes(control_plane));
+    if (vc2_forwards) {
+        for (const auto& p : ports_from_domain_links(fabric_context.get_inter_domain_mesh().vc2_links, taken, mesh_graph)) {
+            taken.push_back(p.port);
+        }
+    }
+    auto perimeter = perimeter_ports(
+        unused_links(
+            control_plane,
+            fabric_context.get_cluster(),
+            rtoptions.has_factory_system_descriptor_path() ? rtoptions.get_factory_system_descriptor_path() : ""),
+        taken,
+        mesh_graph,
+        fabric_context.get_fabric_topology());
+    const auto& down_planes = rtoptions.get_fabric_inter_domain_down_planes();
+    for (auto& p : perimeter) {
+        if (down_planes.contains(p.plane)) {
+            p.link_trained = false;
+        }
+    }
+    return perimeter;
+}
+
 GraphFabricBuildSession::GraphFabricBuildSession(FabricContext& fabric_context) {
     const auto& rtoptions = fabric_context.get_rtoptions();
     const bool inter_domain = rtoptions.get_fabric_inter_domain();
@@ -96,23 +125,25 @@ GraphFabricBuildSession::GraphFabricBuildSession(FabricContext& fabric_context) 
     auto ports = with_live_planes(mgd_ports, control_plane);
     std::vector<ChannelPort> domain_ports;
     if (inter_domain) {
-        auto taken = mgd_ports;
-        if (fabric_context.get_builder_context().get_intermesh_vc_config().vc2_forwards) {
+        const bool vc2_forwards = fabric_context.get_builder_context().get_intermesh_vc_config().vc2_forwards;
+        if (vc2_forwards) {
             domain_ports = ports_from_domain_links(
                 fabric_context.get_inter_domain_mesh().vc2_links, mgd_ports, control_plane.get_mesh_graph());
             for (const auto& p : domain_ports) {
                 ports.push_back(p.port);
-                taken.push_back(p.port);
             }
         }
-        perimeter_ = perimeter_ports(
-            unused_links(
-                control_plane,
-                fabric_context.get_cluster(),
-                rtoptions.has_factory_system_descriptor_path() ? rtoptions.get_factory_system_descriptor_path() : ""),
-            taken,
-            control_plane.get_mesh_graph(),
-            topology);
+        perimeter_ = fabric_perimeter(fabric_context, vc2_forwards);
+        for (const auto& p : perimeter_) {
+            if (p.link_trained && rtoptions.get_fabric_inter_domain_down_planes().contains(p.plane)) {
+                log_warning(
+                    tt::LogFabric,
+                    "fabric graph: perimeter link {} chan {} plane {} taken down",
+                    p.node,
+                    p.eth_chan,
+                    p.plane);
+            }
+        }
         const auto down =
             std::count_if(perimeter_.begin(), perimeter_.end(), [](const auto& p) { return !p.link_trained; });
         log_info(
@@ -128,6 +159,15 @@ GraphFabricBuildSession::GraphFabricBuildSession(FabricContext& fabric_context) 
             }
         }
         const auto open_ports = ports_from_perimeter(perimeter_);
+        std::set<std::tuple<FabricNodeId, RoutingDirection, uint32_t>> routed;
+        for (const auto& p : open_ports) {
+            routed.emplace(p.node, *p.direction, p.plane);
+            TT_FATAL(
+                !p.relay_plane || !fabric_context.get_builder_context().get_intermesh_vc_config().requires_vc1,
+                "fabric graph: {} plane {} is down and would relay, which a fabric with VC1 can't (#67139)",
+                p.node,
+                p.plane);
+        }
         ports.insert(ports.end(), open_ports.begin(), open_ports.end());
         std::vector<internal::InterDomainPort> api_ports;
         api_ports.reserve(perimeter_.size());
@@ -138,7 +178,7 @@ GraphFabricBuildSession::GraphFabricBuildSession(FabricContext& fabric_context) 
                 .direction = *p.direction,
                 .plane = p.plane,
                 .link_trained = p.link_trained,
-                .has_router = p.link_trained && *p.direction != RoutingDirection::Z,
+                .has_router = routed.contains({p.node, *p.direction, p.plane}),
                 .peer_asic = p.peer_asic,
                 .peer_chan = p.peer_chan});
         }

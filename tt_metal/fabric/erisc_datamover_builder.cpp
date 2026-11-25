@@ -1375,6 +1375,21 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         named_args["INTER_DOMAIN_ROUTER"] = 1;
         named_args["INTER_DOMAIN_CTRL_ADDR"] = static_cast<uint32_t>(config.inter_domain_ctrl_address);
     }
+    if (inter_domain_relay_) {
+        named_args["INTER_DOMAIN_RELAY"] = 1;
+        named_args["INTER_DOMAIN_RELAY_NUM_SLOTS"] = inter_domain_relay_->num_slots;
+        named_args["INTER_DOMAIN_RELAY_SENDER_POSITION"] =
+            stream_assignment.sender_flat_base(0) + inter_domain_relay_->vc_relative_channel;
+        // its copy of the target's free slots, which the target credits: a VC0 downstream register, which this router
+        // never forwards on (a perimeter router has no VC0 receiver)
+        TT_FATAL(
+            receiver_channel_to_downstream_adapter->get_downstream_edm_mask_for_vc(0) == 0,
+            "inter-domain router {} chan {} relays but forwards on VC0",
+            local_fabric_node_id,
+            my_eth_channel);
+        named_args["INTER_DOMAIN_RELAY_CREDIT_STREAM_ID"] =
+            stream_assignment.id(StreamRole::DOWNSTREAM_FREE_SLOTS, 0, 0);
+    }
     named_args["CHANNEL_BUFFER_SIZE"] = static_cast<uint32_t>(this->channel_buffer_size);
     named_args["FABRIC_TENSIX_EXTENSION_MUX_MODE"] = this->has_tensix_extension;
     named_args["ENABLE_FIRST_LEVEL_ACK_VC0"] = final_enable_first_level_ack_vc0 ? 1 : 0;
@@ -1853,6 +1868,18 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
     // Pack relay connection args at the end (UDM mode only)
     receiver_channel_to_downstream_adapter->pack_adaptor_to_relay_rt_args(rt_args);
 
+    // An inter-domain router whose link is down: where it relays (router_inter_domain_relay.hpp, RelayArgs). Its
+    // connection's teardown word is the UDM relay's buffer-index word, which a non-UDM router does not use.
+    if (inter_domain_relay_) {
+        TT_FATAL(!udm_mode, "inter-domain relay under UDM");
+        rt_args.push_back(inter_domain_relay_->first_slot_addr);
+        rt_args.push_back(inter_domain_relay_->noc_x);
+        rt_args.push_back(inter_domain_relay_->noc_y);
+        rt_args.push_back(inter_domain_relay_->registration_addr);
+        rt_args.push_back(inter_domain_relay_->location_info_addr);
+        rt_args.push_back(static_cast<uint32_t>(config.tensix_relay_connection_buffer_index_id));
+    }
+
     return rt_args;
 }
 
@@ -2013,6 +2040,27 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_
 SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_channel(uint32_t channel_id) const {
     // For VC0, absolute == VC-relative
     return build_connection_to_fabric_channel(0, channel_id, channel_id);  // Default to VC0
+}
+
+void FabricEriscDatamoverBuilder::setup_inter_domain_relay(
+    FabricEriscDatamoverBuilder& target, uint32_t absolute_channel_id, uint32_t vc_relative_channel_id) {
+    TT_FATAL(
+        inter_domain_, "fabric router {} chan {} relays but is not inter-domain", local_fabric_node_id, my_eth_channel);
+    TT_FATAL(
+        !inter_domain_relay_.has_value(),
+        "inter-domain router {} chan {} relays into two routers",
+        local_fabric_node_id,
+        my_eth_channel);
+    // marks the target channel as having a static producer (it waits for this router to connect)
+    const auto spec = target.build_connection_to_fabric_channel(0, absolute_channel_id, vc_relative_channel_id);
+    inter_domain_relay_ = InterDomainRelay{
+        .noc_x = static_cast<uint32_t>(target.get_noc_x()),
+        .noc_y = static_cast<uint32_t>(target.get_noc_y()),
+        .first_slot_addr = static_cast<uint32_t>(spec.edm_buffer_base_addr),
+        .num_slots = static_cast<uint32_t>(spec.num_buffers_per_channel),
+        .registration_addr = static_cast<uint32_t>(spec.edm_connection_handshake_addr),
+        .location_info_addr = static_cast<uint32_t>(spec.edm_worker_location_info_addr),
+        .vc_relative_channel = vc_relative_channel_id};
 }
 
 void FabricEriscDatamoverBuilder::setup_downstream_vc_connection(

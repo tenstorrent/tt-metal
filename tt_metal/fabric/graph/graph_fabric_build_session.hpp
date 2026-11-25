@@ -12,6 +12,11 @@
 
 namespace tt::tt_fabric::graph {
 
+// The fabric's inter-domain perimeter ports (unused links leaving the domain), with the planes
+// TT_METAL_FABRIC_INTER_DOMAIN_DOWN_PLANES takes down marked untrained. Where VC2 forwards, the domain's VC2-only
+// links are not perimeter.
+std::vector<PerimeterPort> fabric_perimeter(const FabricContext& fabric_context, bool vc2_forwards);
+
 // Builds and checks the fabric graph once per launch, then builds each chip from it.
 // Tensix mux/UDM fabrics aren't covered by the graph yet and get the stock builder.
 class GraphFabricBuildSession : public FabricBuildSession {

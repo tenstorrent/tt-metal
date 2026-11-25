@@ -50,6 +50,8 @@ constexpr uint32_t to_sender_3_pkts_acked_id = NAMED_CT_ARG("TO_SENDER_3_PKTS_AC
 // A five-wide VC0 needs a fifth first-level-ack stream. Set to the sentinel when no such sender
 // exists, or when VC0 carries its credits in L1 counters.
 constexpr uint32_t to_sender_4_pkts_acked_id = NAMED_CT_ARG("TO_SENDER_4_PKTS_ACKED_ID");
+// An inter-domain fabric's VC0 is six wide (its relay sender, builder_config::inter_domain_relay_sender_channel).
+constexpr uint32_t to_sender_5_pkts_acked_id = NAMED_CT_ARG("TO_SENDER_5_PKTS_ACKED_ID");
 constexpr uint32_t to_sender_0_pkts_completed_id = NAMED_CT_ARG("TO_SENDER_0_PKTS_COMPLETED_ID");
 constexpr uint32_t to_sender_1_pkts_completed_id = NAMED_CT_ARG("TO_SENDER_1_PKTS_COMPLETED_ID");
 constexpr uint32_t to_sender_2_pkts_completed_id = NAMED_CT_ARG("TO_SENDER_2_PKTS_COMPLETED_ID");
@@ -928,7 +930,8 @@ constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_acked_
                                                       // VC0 fifth sender when present; otherwise the sentinel.
                                                       // VC1 never has first level acks.
                                                       to_sender_4_pkts_acked_id,
-                                                      tt::tt_fabric::k_unused_stream_id,
+                                                      // VC0 sixth sender (inter-domain relay) when present
+                                                      to_sender_5_pkts_acked_id,
                                                       tt::tt_fabric::k_unused_stream_id,
                                                       tt::tt_fabric::k_unused_stream_id,
                                                       // Z-router extra + VC2 (no first level acks)
@@ -1060,3 +1063,10 @@ constexpr bool is_inter_domain_router =
     has_named_ct_arg("INTER_DOMAIN_ROUTER") && NAMED_CT_ARG("INTER_DOMAIN_ROUTER") != 0;
 constexpr uint32_t inter_domain_ctrl_addr = is_inter_domain_router ? NAMED_CT_ARG("INTER_DOMAIN_CTRL_ADDR") : 0;
 static_assert(!is_inter_domain_router || NUM_ACTIVE_ERISCS == 2, "inter-domain routers run on two ERISCs");
+// An inter-domain router whose link is down relays all it sends into the relay sender channel (VC0, at fabric position
+// INTER_DOMAIN_RELAY_SENDER_POSITION) of a same-side router on another plane (router_inter_domain_relay.hpp).
+constexpr bool is_inter_domain_relay = NAMED_CT_ARG_OR("INTER_DOMAIN_RELAY", 0) != 0;
+constexpr uint32_t inter_domain_relay_num_slots = NAMED_CT_ARG_OR("INTER_DOMAIN_RELAY_NUM_SLOTS", 0);
+constexpr uint32_t inter_domain_relay_sender_position = NAMED_CT_ARG_OR("INTER_DOMAIN_RELAY_SENDER_POSITION", 0);
+constexpr uint32_t inter_domain_relay_credit_stream = NAMED_CT_ARG_OR("INTER_DOMAIN_RELAY_CREDIT_STREAM_ID", 0);
+static_assert(!is_inter_domain_relay || is_inter_domain_router, "only an inter-domain router relays");

@@ -616,6 +616,23 @@ private:
     // it is optional for other topologies and usually hurts performance in those other cases due to added CPU overheads
     bool enable_first_level_ack = false;
 
+    // An inter-domain router whose link is down relays everything it would send over the NoC into the relay sender
+    // (VC0) of a same-side router on another plane. Where that sender is, as the kernel's relay loop takes it.
+    struct InterDomainRelay {
+        uint32_t noc_x = 0;
+        uint32_t noc_y = 0;
+        uint32_t first_slot_addr = 0;
+        uint32_t num_slots = 0;
+        uint32_t registration_addr = 0;
+        uint32_t location_info_addr = 0;
+        uint32_t vc_relative_channel = 0;
+    };
+    std::optional<InterDomainRelay> inter_domain_relay_;
+
+    // This router relays into `target`'s VC0 sender channel (absolute and VC-relative index).
+    void setup_inter_domain_relay(
+        FabricEriscDatamoverBuilder& target, uint32_t absolute_channel_id, uint32_t vc_relative_channel_id);
+
     // Shared helper for setting up VC connections
     // upstream_vc_idx: VC of this router's receiver channel
     // downstream_vc_idx: VC of downstream router's sender channel

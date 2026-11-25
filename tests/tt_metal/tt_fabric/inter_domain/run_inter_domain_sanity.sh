@@ -5,6 +5,7 @@
 #   2 chips:            run_inter_domain_sanity.sh 0 1
 #   4 chips, one mesh:  run_inter_domain_sanity.sh 0,1 2,3 tt_metal/fabric/mesh_graph_descriptors/p300_mesh_graph_descriptor.textproto
 #   4 chips, 2 meshes:  run_inter_domain_sanity.sh 0:2 1:3 tests/tt_metal/tt_fabric/inter_domain/mesh_graph_descriptors/dual_1x1_domain.textproto
+#   relaying routers (routing plane mismatch): TT_METAL_FABRIC_INTER_DOMAIN_DOWN_PLANES=2,3 TEST=RelayingPlanes
 set -u
 : "${TT_METAL_HOME:?}"
 A=$1
@@ -34,7 +35,7 @@ side() {  # devices id peer
     done
     timeout "${TIMEOUT:-600}" "$MPIRUN" --allow-run-as-root --oversubscribe --tag-output -x TT_METAL_HOME -x TT_METAL_RUNTIME_ROOT \
         -x TT_METAL_FABRIC_GRAPH_BUILDER -x TT_METAL_FABRIC_INTER_DOMAIN -x TT_INTER_DOMAIN_DIR -x TT_MESH_GRAPH_DESC_PATH \
-        -x TT_INTER_DOMAIN_ID -x TT_INTER_DOMAIN_PEER_ID -x TT_METAL_CACHE -x TT_INTER_DOMAIN_ROUNDS -x TT_METAL_FABRIC_TELEMETRY -x TT_METAL_OPERATION_TIMEOUT_SECONDS "${apps[@]}" \
+        -x TT_INTER_DOMAIN_ID -x TT_INTER_DOMAIN_PEER_ID -x TT_METAL_CACHE -x TT_INTER_DOMAIN_ROUNDS -x TT_METAL_FABRIC_TELEMETRY -x TT_METAL_OPERATION_TIMEOUT_SECONDS -x TT_METAL_FABRIC_INTER_DOMAIN_DOWN_PLANES "${apps[@]}" \
         > "$DIR/d$2.log" 2>&1
 }
 side "$A" 1 2 &

@@ -39,6 +39,7 @@ public:
             add_turns(vc.id);
         }
         fold_1d_corners();
+        add_relays();
         for (const auto& vc : g_.vcs) {
             add_eth_edges(vc.id);
         }
@@ -140,8 +141,45 @@ private:
         }
     }
 
+    // A perimeter router whose link is down sends nothing on it: every sender it has, on any VC, relays over the NoC
+    // into one more VC0 sender on its side's router on relay_plane (that router's relay sender). Each router takes at
+    // most one relay.
+    void add_relays() {
+        std::map<RouterIndex, ChannelIndex> relay_to;  // relaying router -> the relay sender it feeds
+        for (RouterIndex r = 0; r < g_.routers.size(); ++r) {
+            const auto& p = g_.routers[r].port;
+            if (!p.relay_plane) {
+                continue;
+            }
+            TT_FATAL(
+                p.capability == EdgeCapability::INTERDOMAIN,
+                "fabric graph: {} relays off the perimeter",
+                g_.routers[r].id);
+            const auto it = by_key_.find(RouterKey{p.node, p.direction, *p.relay_plane});
+            TT_FATAL(
+                it != by_key_.end() && it->second != r,
+                "fabric graph: {} relays to plane {}, which has no other router on its side",
+                g_.routers[r].id,
+                *p.relay_plane);
+            const RouterIndex target = it->second;
+            auto [slot, fresh] = forwarding_.try_emplace({target, 0, p.direction}, 0);
+            TT_FATAL(fresh, "fabric graph: {} takes relays from two routers", g_.routers[target].id);
+            slot->second = add_channel(
+                LogicalChannel{.router = target, .vc = 0, .kind = ChannelKind::Sender, .from = p.direction});
+            relay_to.emplace(r, slot->second);
+        }
+        for (const auto& [r, relay] : relay_to) {
+            for (ChannelIndex c : g_.channels_of(r, ChannelKind::Sender)) {
+                g_.edges.push_back(LogicalEdge{.from = c, .to = relay, .transport = Transport::Noc});
+            }
+        }
+    }
+
     void add_eth_edges(uint32_t vc) {
         for (RouterIndex r = 0; r < g_.routers.size(); ++r) {
+            if (g_.routers[r].port.relay_plane) {
+                continue;  // relays instead
+            }
             const auto peer = g_.routers[r].peer;
             // a perimeter router's senders reach the peer's VC2 receiver, known at connect: its own stands in
             const bool perimeter = g_.routers[r].port.capability == EdgeCapability::INTERDOMAIN;

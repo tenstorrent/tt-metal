@@ -16,6 +16,7 @@
 #include <string>
 #include <thread>
 
+#include <enchantum/enchantum.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -34,7 +35,10 @@
 #include "impl/context/metal_context.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "tt_metal/fabric/builder/router_wiring_rules.hpp"
+#include "tt_metal/fabric/erisc_datamover_builder.hpp"
+#include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"
 
 namespace tt::tt_fabric::inter_domain_test {
 namespace {
@@ -199,7 +203,7 @@ void run(bool all_at_once) {
     Side me;
     std::vector<InterDomainPort> ports;
     for (const auto& port : get_inter_domain_ports(*mesh)) {
-        if (port.has_router) {
+        if (port.has_router && port.link_trained) {  // a router whose link is down relays and never connects
             ports.push_back(port);
         }
     }
@@ -504,6 +508,385 @@ void run(bool all_at_once) {
 TEST(InterDomain, Sanity) { run(/*all_at_once=*/false); }
 
 TEST(InterDomain, AllAtOnce) { run(/*all_at_once=*/true); }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Routing plane mismatch, scenario 1 (#65596): the domain routes on more planes than it has live links to the peer.
+// TT_METAL_FABRIC_INTER_DOMAIN_DOWN_PLANES (the same on both sides) takes those planes' links down: their routers stay
+// and relay into a live link's router on the same side. Every routed port, live or relaying, carries a worker's
+// traffic (into the port's router) and traffic from another chip of the domain on the port's plane (through the
+// domain's router on that plane, into the port's router); every byte must land at the peer domain.
+// ---------------------------------------------------------------------------------------------------------------------
+
+constexpr uint32_t kRelayPackets = 32;  // more than a channel has slots: every ring wraps
+constexpr uint32_t kRelayBytes = kRelayPackets * kPacketSize;
+constexpr uint32_t kRelaySrcOffset = 4096;
+constexpr uint32_t kRelayDstOffset = kRelaySrcOffset + kRelayBytes;
+constexpr uint32_t kRelayMaxSlots = 16;
+
+struct RoutedPort {
+    uint64_t asic = 0;
+    uint32_t chan = 0;
+    uint64_t peer_asic = 0;
+    uint32_t peer_chan = 0;
+    uint32_t plane = 0;
+    bool live = true;
+    InterDomainMetadata md;
+};
+
+// One stream a side sends: to its peer's chip `to`, into slot `slot` there.
+struct Stream {
+    uint64_t to = 0;
+    uint32_t slot = 0;
+};
+
+// A router's init postcode (EDMStatus) and inter-domain state, for a router that has not settled.
+void log_router(const InterDomainPort& port) {
+    auto& context = MetalContext::instance();
+    const auto& control_plane = context.get_control_plane();
+    const auto& config = control_plane.get_fabric_context().get_builder_context().get_fabric_router_config();
+    const ChipId chip = control_plane.get_physical_chip_id_from_fabric_node_id(port.node);
+    const tt_cxy_pair core(chip, context.get_cluster().get_virtual_eth_core_from_channel(chip, port.eth_chan));
+    uint32_t status = 0;
+    context.get_cluster().read_core(&status, sizeof(status), core, config.edm_status_address);
+    std::string semaphores;
+    for (size_t ch = 0; ch < builder_config::num_max_sender_channels; ++ch) {
+        uint32_t value = 0;
+        context.get_cluster().read_core(
+            &value, sizeof(value), core, config.sender_channels_connection_semaphore_address[ch]);
+        semaphores += " " + std::to_string(value);
+    }
+    log_warning(
+        tt::LogTest,
+        "{} chan {} plane {} ({}): state {}, edm status {:#x}, sender connection semaphores{}",
+        port.node,
+        int(port.eth_chan),
+        port.plane,
+        port.link_trained ? "live" : "relaying",
+        enchantum::to_string(get_inter_domain_state(port)),
+        status,
+        semaphores);
+}
+
+// Waits for every routed port's router to settle: DRAIN where its link is up, RELAY where it relays.
+bool wait_settled(const std::vector<InterDomainPort>& ports) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    auto settled = [](const InterDomainPort& p) {
+        return get_inter_domain_state(p) == (p.link_trained ? InterDomainState::DRAIN : InterDomainState::RELAY);
+    };
+    while (!std::all_of(ports.begin(), ports.end(), settled)) {
+        if (std::chrono::steady_clock::now() > deadline) {
+            for (const auto& p : ports) {
+                log_router(p);
+            }
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return true;
+}
+
+uint32_t relay_pattern(uint32_t domain, uint32_t slot, uint32_t round, uint32_t i) {
+    return (domain << 24) ^ (slot << 16) ^ (round << 12) ^ (i * 0x9E3779B9u);
+}
+
+TEST(InterDomain, RelayingPlanes) {
+    const auto domain = env_u32("TT_INTER_DOMAIN_ID");
+    const auto peer_domain = env_u32("TT_INTER_DOMAIN_PEER_ID");
+    const char* dir_env = std::getenv("TT_INTER_DOMAIN_DIR");
+    if (!domain || !peer_domain || dir_env == nullptr) {
+        GTEST_SKIP() << "needs a peer process: see run_inter_domain_sanity.sh";
+    }
+    if (MetalContext::instance().rtoptions().get_fabric_inter_domain_down_planes().empty()) {
+        GTEST_SKIP() << "needs TT_METAL_FABRIC_INTER_DOMAIN_DOWN_PLANES";
+    }
+    const fs::path dir(dir_env);
+    auto mine = [&](const std::string& what) { return dir / ("d" + std::to_string(*domain) + "." + what); };
+    auto theirs = [&](const std::string& what) { return dir / ("d" + std::to_string(*peer_domain) + "." + what); };
+
+    SetFabricConfig(FabricConfig::FABRIC_2D);
+    auto mesh =
+        distributed::MeshDevice::create(distributed::MeshDeviceConfig(distributed::SystemMesh::instance().shape()));
+    std::map<uint64_t, distributed::MeshCoordinate> coord_of;
+    std::map<uint64_t, IDevice*> device_of;
+    std::map<uint64_t, tt::tt_fabric::FabricNodeId> node_of;
+    for (const auto& coord : distributed::MeshCoordinateRange(mesh->shape())) {
+        const auto node = mesh->get_fabric_node_id(coord);
+        const uint64_t asic = *tt::tt_metal::internal::get_chip_unique_id_from_fabric_node_id(*mesh, node);
+        coord_of.emplace(asic, coord);
+        device_of[asic] = mesh->get_view().impl().get_device(coord);
+        node_of.emplace(asic, node);
+    }
+
+    // routed ports, in (asic, chan) order: a stream's slot is its port's index
+    std::vector<InterDomainPort> ports;
+    std::vector<RoutedPort> mine_routed;
+    for (const auto& port : get_inter_domain_ports(*mesh)) {
+        if (port.has_router) {
+            ports.push_back(port);
+        }
+    }
+    std::sort(ports.begin(), ports.end(), [](const auto& a, const auto& b) {
+        return std::pair{get_inter_domain_port_asic(a), a.eth_chan} <
+               std::pair{get_inter_domain_port_asic(b), b.eth_chan};
+    });
+    ASSERT_LE(ports.size() * 2, kRelayMaxSlots);
+    ASSERT_TRUE(wait_settled(ports)) << "a router did not reach DRAIN (live) or RELAY (relaying)";
+    size_t relaying = 0;
+    for (const auto& port : ports) {
+        mine_routed.push_back(RoutedPort{
+            .asic = get_inter_domain_port_asic(port),
+            .chan = port.eth_chan,
+            .peer_asic = port.peer_asic,
+            .peer_chan = port.peer_chan,
+            .plane = port.plane,
+            .live = port.link_trained,
+            .md = get_inter_domain_metadata(port, *domain)});
+        EXPECT_EQ(get_inter_domain_state(port), port.link_trained ? InterDomainState::DRAIN : InterDomainState::RELAY)
+            << port.node << " chan " << int(port.eth_chan);
+        relaying += !port.link_trained;
+    }
+    ASSERT_GT(relaying, 0u) << "no relaying router: is a plane down?";
+    log_info(tt::LogTest, "domain {}: {} routed ports, {} relaying", *domain, ports.size(), relaying);
+
+    std::map<uint64_t, RxInfo> rx;
+    for (const auto& [asic, dev] : device_of) {
+        const uint32_t base = dev->allocator()->get_base_allocator_addr(HalMemType::L1);
+        const auto core = dev->worker_core_from_logical_core(kCore);
+        const auto& node = node_of.at(asic);
+        rx[asic] = RxInfo{
+            static_cast<uint32_t>(core.x),
+            static_cast<uint32_t>(core.y),
+            base + kRelayDstOffset,
+            *node.mesh_id,
+            node.chip_id};
+    }
+    {
+        std::ostringstream o;
+        for (const auto& p : mine_routed) {
+            o << "port " << p.asic << " " << p.chan << " " << p.peer_asic << " " << p.peer_chan << " " << p.plane << " "
+              << p.live << " " << p.md.domain_id << " " << p.md.vc2_receiver_channel_addr << " "
+              << p.md.vc2_receiver_channel_slots << " " << p.md.max_packet_size_bytes << " " << p.md.layout_fingerprint
+              << "\n";
+        }
+        for (const auto& [asic, r] : rx) {
+            o << "rx " << asic << " " << r.x << " " << r.y << " " << r.addr << " " << r.mesh << " " << r.chip << "\n";
+        }
+        write_file(mine("relay.meta"), o.str());
+    }
+    wait_file(theirs("relay.meta"));
+    std::vector<RoutedPort> peer_routed;
+    std::map<uint64_t, RxInfo> peer_rx;
+    {
+        std::ifstream in(theirs("relay.meta"));
+        std::string kind;
+        while (in >> kind) {
+            if (kind == "port") {
+                RoutedPort p;
+                in >> p.asic >> p.chan >> p.peer_asic >> p.peer_chan >> p.plane >> p.live >> p.md.domain_id >>
+                    p.md.vc2_receiver_channel_addr >> p.md.vc2_receiver_channel_slots >> p.md.max_packet_size_bytes >>
+                    p.md.layout_fingerprint;
+                peer_routed.push_back(p);
+            } else {
+                uint64_t asic = 0;
+                RxInfo r;
+                in >> asic >> r.x >> r.y >> r.addr >> r.mesh >> r.chip;
+                peer_rx[asic] = r;
+            }
+        }
+    }
+
+    // every live link, matched to its far end; both ends must agree it is live
+    std::vector<std::pair<InterDomainPort, RoutedPort>> cables;
+    for (size_t i = 0; i < ports.size(); ++i) {
+        const auto& p = mine_routed[i];
+        for (const auto& q : peer_routed) {
+            if (q.asic == p.peer_asic && q.chan == p.peer_chan && q.peer_asic == p.asic && q.peer_chan == p.chan) {
+                ASSERT_EQ(q.live, p.live) << "the two ends of chan " << p.chan << " disagree on whether it is down";
+                if (p.live) {
+                    cables.emplace_back(ports[i], q);
+                }
+            }
+        }
+    }
+    ASSERT_FALSE(cables.empty());
+
+    const auto& control_plane = MetalContext::instance().get_control_plane();
+    const uint32_t rounds = env_u32("TT_INTER_DOMAIN_ROUNDS").value_or(2);
+    for (uint32_t round = 0; round < rounds; ++round) {
+        auto step = [&](const std::string& what) {
+            log_info(tt::LogTest, "domain {} round {}: {}", *domain, round, what);
+            write_file(mine(std::to_string(round) + ".relay." + what), "");
+            wait_file(theirs(std::to_string(round) + ".relay." + what));
+        };
+        for (const auto& [asic, dev] : device_of) {
+            std::vector<uint32_t> zeros(kRelayMaxSlots * kRelayBytes / 4, 0);
+            tt::tt_metal::detail::WriteToDeviceL1(dev, kCore, rx.at(asic).addr, zeros);
+        }
+        step("ready");
+        for (const auto& [port, q] : cables) {
+            connect_inter_domain(port, *domain, q.md);
+            EXPECT_EQ(get_inter_domain_state(port), InterDomainState::SERVICE_TRAFFIC);
+        }
+        step("connected");
+
+        // per port: slot 2i from a worker on its chip, slot 2i+1 from another chip of the domain on its plane
+        std::map<uint64_t, Program> programs;
+        std::vector<Stream> streams;
+        for (size_t i = 0; i < ports.size(); ++i) {
+            const auto port = ports[i];
+            if (!peer_rx.contains(port.peer_asic)) {
+                continue;  // its side leads to a chip in neither domain
+            }
+            const uint64_t exit_asic = mine_routed[i].asic;
+            const auto exit = node_of.at(exit_asic);
+            const auto& to = peer_rx.at(port.peer_asic);
+            auto add = [&](uint64_t asic,
+                           uint32_t slot,
+                           std::optional<FabricNodeId> behind,  // over VC0 to this exit chip first, then out the cable
+                           uint32_t out_cable,
+                           const std::function<void(Program&, const CoreCoord&, std::vector<uint32_t>&)>& connect) {
+                IDevice* dev = device_of.at(asic);
+                const CoreCoord core{static_cast<uint32_t>(slot % 8), 1 + static_cast<uint32_t>(slot / 8)};
+                const uint32_t base = dev->allocator()->get_base_allocator_addr(HalMemType::L1);
+                std::vector<uint32_t> data(kRelayBytes / 4);
+                for (uint32_t w = 0; w < data.size(); ++w) {
+                    data[w] = relay_pattern(*domain, slot, round, w);
+                }
+                tt::tt_metal::detail::WriteToDeviceL1(dev, core, base + kRelaySrcOffset, data);
+                auto& program = programs.try_emplace(asic, CreateProgram()).first->second;
+                const auto kernel = CreateKernel(
+                    program,
+                    "tests/tt_metal/tt_fabric/inter_domain/kernels/inter_domain_sender.cpp",
+                    core,
+                    DataMovementConfig{
+                        .processor = DataMovementProcessor::RISCV_0,
+                        .noc = NOC::RISCV_0_default,
+                        .defines = {{"FABRIC_2D", "1"}}});
+                std::vector<uint32_t> args = {
+                    base + kRelaySrcOffset,
+                    base + kHeaderOffset,
+                    kRelayPackets,
+                    kPacketSize,
+                    behind.has_value(),
+                    behind ? behind->chip_id : 0,
+                    behind ? *behind->mesh_id : 0,
+                    out_cable,
+                    1,  // one destination
+                    to.x,
+                    to.y,
+                    to.addr + slot * kRelayBytes,
+                    to.mesh,
+                    to.chip};
+                connect(program, core, args);
+                SetRuntimeArgs(program, kernel, core, args);
+                streams.push_back(Stream{port.peer_asic, slot});
+                log_info(
+                    tt::LogTest,
+                    "domain {}: asic {} sends slot {} through chan {} plane {} ({})",
+                    *domain,
+                    asic,
+                    slot,
+                    int(port.eth_chan),
+                    port.plane,
+                    port.link_trained ? "live" : "relaying");
+            };
+            add(exit_asic,
+                2 * i,
+                std::nullopt,
+                0,
+                [port](Program& program, const CoreCoord& core, std::vector<uint32_t>& args) {
+                    append_inter_domain_connection_rt_args(port, program, core, args);
+                });
+            for (const auto& [asic, dev] : device_of) {
+                const auto from = node_of.at(asic);
+                const auto out = control_plane.get_forwarding_direction(from, exit);
+                if (asic == exit_asic || !out || control_plane.get_chip_neighbors(from, *out).empty()) {
+                    continue;
+                }
+                add(asic,
+                    2 * i + 1,
+                    exit,
+                    1u << control_plane.routing_direction_to_eth_direction(port.direction),
+                    [&mesh, from, exit, plane = port.plane](
+                        Program& program, const CoreCoord& core, std::vector<uint32_t>& args) {
+                        append_fabric_connection_rt_args(*mesh, from, exit, plane, program, core, args);
+                    });
+                break;  // one chip behind is enough
+            }
+        }
+        {
+            std::ostringstream o;
+            for (const auto& st : streams) {
+                o << st.to << " " << st.slot << "\n";
+            }
+            write_file(mine(std::to_string(round) + ".relay.streams"), o.str());
+        }
+        for (auto& [asic, program] : programs) {
+            distributed::MeshWorkload workload;
+            workload.add_program(distributed::MeshCoordinateRange(coord_of.at(asic)), std::move(program));
+            distributed::EnqueueMeshWorkload(mesh->mesh_command_queue(), workload, true);
+        }
+        step("sent");
+
+        // what the peer sent here
+        std::map<uint64_t, std::vector<uint32_t>> expected;  // my chip -> slots
+        {
+            std::ifstream in(theirs(std::to_string(round) + ".relay.streams"));
+            uint64_t to = 0;
+            uint32_t slot = 0;
+            while (in >> to >> slot) {
+                expected[to].push_back(slot);
+            }
+        }
+        size_t checked = 0;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+        for (const auto& [asic, slots] : expected) {
+            ASSERT_TRUE(device_of.contains(asic)) << "the peer sent to asic " << asic << ", not in this domain";
+            std::map<uint32_t, uint32_t> bad;
+            while (true) {
+                std::vector<uint32_t> got;
+                tt::tt_metal::detail::ReadFromDeviceL1(
+                    device_of.at(asic), kCore, rx.at(asic).addr, kRelayMaxSlots * kRelayBytes, got);
+                bad.clear();
+                for (uint32_t slot : slots) {
+                    for (uint32_t w = 0; w < kRelayBytes / 4; ++w) {
+                        bad[slot] += got[slot * kRelayBytes / 4 + w] != relay_pattern(*peer_domain, slot, round, w);
+                    }
+                }
+                if (std::all_of(bad.begin(), bad.end(), [](const auto& b) { return b.second == 0; }) ||
+                    std::chrono::steady_clock::now() > deadline) {
+                    break;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            for (uint32_t slot : slots) {
+                EXPECT_EQ(bad[slot], 0u) << "round " << round << " asic " << asic << " slot " << slot << ": "
+                                         << bad[slot] << " bad words";
+                ++checked;
+            }
+        }
+        // a worker's stream per peer port into this domain at least, and one from behind where the peer has a chip
+        const auto into_here = std::count_if(peer_routed.begin(), peer_routed.end(), [&](const RoutedPort& q) {
+            return device_of.contains(q.peer_asic);
+        });
+        EXPECT_GE(checked, static_cast<size_t>(into_here));
+        EXPECT_GT(checked, 0u);
+        step("received");
+
+        for (const auto& [port, q] : cables) {
+            disconnect_inter_domain(port);
+            EXPECT_EQ(get_inter_domain_state(port), InterDomainState::DRAIN);
+        }
+        for (const auto& port : ports) {
+            if (!port.link_trained) {
+                EXPECT_EQ(get_inter_domain_state(port), InterDomainState::RELAY);
+            }
+        }
+        step("done");
+    }
+    mesh->close();
+    SetFabricConfig(FabricConfig::DISABLED);
+}
 
 }  // namespace
 }  // namespace tt::tt_fabric::inter_domain_test

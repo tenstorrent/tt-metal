@@ -757,6 +757,12 @@ void ComputeMeshRouterBuilder::connect_to_downstream_channel(
         channel);
 }
 
+void ComputeMeshRouterBuilder::connect_inter_domain_relay(ComputeMeshRouterBuilder& target, uint32_t channel) {
+    auto* target_builder = dynamic_cast<FabricEriscDatamoverBuilder*>(target.get_builder_for_vc_channel(0, channel));
+    TT_FATAL(target_builder != nullptr, "inter-domain relay into a router that is not an ERISC router");
+    erisc_builder_->setup_inter_domain_relay(*target_builder, target.vc_shape_.flat_sender_id(0, channel), channel);
+}
+
 void ComputeMeshRouterBuilder::establish_connections_to_router(ComputeMeshRouterBuilder& downstream_router) {
     // Establish VC connections between this router and the specified downstream router
     // This function does NOT iterate through targets - it connects to the single downstream_router passed in.

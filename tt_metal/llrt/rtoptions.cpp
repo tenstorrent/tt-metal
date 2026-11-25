@@ -113,6 +113,7 @@ enum class EnvVarID {
     TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH,           // Enable experimental VC1 inter-mesh pass-through
     TT_METAL_FABRIC_GRAPH_BUILDER,                      // Build fabric routers from the fabric graph
     TT_METAL_FABRIC_INTER_DOMAIN,                       // Inter-domain routers on unused links leaving the domain
+    TT_METAL_FABRIC_INTER_DOMAIN_DOWN_PLANES,           // Test: treat these perimeter planes' links as down
     TT_METAL_FORCE_REINIT,                              // Force context reinitialization
     TT_METAL_DISABLE_FABRIC_TWO_ERISC,                  // Disable fabric 2-ERISC mode
     TT_METAL_LOG_KERNELS_COMPILE_COMMANDS,              // Log kernel compilation commands
@@ -879,6 +880,22 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false
         // Usage: export TT_METAL_FABRIC_INTER_DOMAIN=1
         case EnvVarID::TT_METAL_FABRIC_INTER_DOMAIN: this->fabric_inter_domain = is_env_enabled(value); break;
+
+        // TT_METAL_FABRIC_INTER_DOMAIN_DOWN_PLANES
+        // TEST ONLY: treat the inter-domain links on these perimeter planes as down, whatever their training state.
+        // Both domains of a link must set the same planes.
+        // Default: none
+        // Usage: export TT_METAL_FABRIC_INTER_DOMAIN_DOWN_PLANES=1,3
+        case EnvVarID::TT_METAL_FABRIC_INTER_DOMAIN_DOWN_PLANES: {
+            this->fabric_inter_domain_down_planes.clear();
+            std::stringstream planes{std::string(value)};
+            for (std::string plane; std::getline(planes, plane, ',');) {
+                if (!plane.empty()) {
+                    this->fabric_inter_domain_down_planes.insert(static_cast<uint32_t>(std::stoul(plane)));
+                }
+            }
+            break;
+        }
 
         // RELIABILITY_MODE
         // Sets the fabric reliability mode (STRICT, RELAXED, or DYNAMIC).
