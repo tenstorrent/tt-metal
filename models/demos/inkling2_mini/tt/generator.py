@@ -44,8 +44,24 @@ class Generator:
     def capture(self):
         """Compile eagerly once (program cache), then capture one full decode step per conv phase."""
         m = self.model
-        m.set_inputs(0, 0)
-        m.step()  # compile
+        # compile, and every conv phase once: the modules' own L1 buffers (some are per phase) are allocated before
+        # the staging's, so that release() leaves the L1 below them free again (a chunked prefill needs it)
+        for ph in range(ShortConv.PHASES):
+            m.set_inputs(0, ph)
+            m.step()
+        self._install(settle=2)
+        ttnn.synchronize_device(self.device)
+        self.trace, self.out = [], []
+        for ph in range(ShortConv.PHASES):
+            m.set_inputs(0, ph)
+            self.trace.append(ttnn.begin_trace_capture(self.device, cq_id=0))
+            self.out.append(m.step())
+            ttnn.end_trace_capture(self.device, self.trace[-1], cq_id=0)
+        ttnn.synchronize_device(self.device)
+
+    def _install(self, settle):
+        """The weight staging (once, until release()), then `settle` eager steps."""
+        m = self.model
         if self.use_overlap and self.overlap is None:
             # stage the next app's w_all into L1 during the single-core residual programs (tt/mk/overlap.py); the
             # attach pattern is periodic from the 2nd eager step on, which the capture needs
@@ -60,25 +76,53 @@ class Generator:
 
             self.router_stage = router_stage.install(m)  # next app's router weights into L1 (rides on the conv)
             try:
-                m.step()
-                m.step()
+                for _ in range(settle):
+                    m.step()
             except Exception:
                 if self.experts is not None:  # a queued prefetch request would hang the device close
                     self.experts.abort(m)
                     self.experts = None
                 raise
-        ttnn.synchronize_device(self.device)
-        self.trace, self.out = [], []
-        for ph in range(ShortConv.PHASES):
-            m.set_inputs(0, ph)
-            self.trace.append(ttnn.begin_trace_capture(self.device, cq_id=0))
-            self.out.append(m.step())
-            ttnn.end_trace_capture(self.device, self.trace[-1], cq_id=0)
-        ttnn.synchronize_device(self.device)
+            return True
+        return False
+
+    # Capture in the middle of a sequence. A chunked prefill (tt/prefill_model.py) needs the L1 the staging holds,
+    # so a process that decodes with the staging calls release() before it; and no step may run afterwards but the
+    # sequence's own (a step can not be undone: the conv histories shift, the local rings lose a position). So the
+    # traces come from the sequence's next steps themselves:
+    #     gen.release(); prefill; gen.begin_live(); then gen.step_live(token, pos) for every step while gen.live
+    # The staging goes in again and its two settle steps are real decode steps, run eagerly (same outputs as a
+    # replay); each of the next four steps captures its conv phase's trace and runs it; from then on step_live
+    # replays.
+    def begin_live(self):
+        self._settle = 2 if self._install(settle=0) else 0
+        self.trace, self.out = [None] * ShortConv.PHASES, [None] * ShortConv.PHASES
+
+    @property
+    def live(self):
+        """True while a conv phase has no trace yet."""
+        return self.trace is not None and any(t is None for t in self.trace)
+
+    def step_live(self, token, pos):
+        """One decode step of the sequence: eager while the staging settles, then captured for its conv phase,
+        a replay once the phase has a trace. Returns the output dict."""
+        m, ph = self.model, pos % ShortConv.PHASES
+        m.set_inputs(token, pos)
+        if self._settle:
+            self._settle -= 1
+            return m.step()
+        if self.trace[ph] is None:  # (a capture records the step's programs; the replay below runs them)
+            ttnn.synchronize_device(self.device)
+            self.trace[ph] = ttnn.begin_trace_capture(self.device, cq_id=0)
+            self.out[ph] = m.step()
+            ttnn.end_trace_capture(self.device, self.trace[ph], cq_id=0)
+        ttnn.execute_trace(self.device, self.trace[ph], cq_id=0, blocking=False)
+        return self.out[ph]
 
     def release(self):
         for t in self.trace or []:
-            ttnn.release_trace(self.device, t)
+            if t is not None:
+                ttnn.release_trace(self.device, t)
         self.trace = None
         if self.router_stage is not None:
             self.router_stage.uninstall()
@@ -89,6 +133,12 @@ class Generator:
         if self.overlap is not None:
             self.overlap.uninstall(self.model)
             self.overlap = self.model.overlap = None
+        # the expert steps' last output rows (L1, one per layer): no trace writes them any more, and a chunked
+        # prefill needs their L1
+        for lay in self.model.layers:
+            free = getattr(getattr(lay.moe, "fused", None), "release_last", None)
+            if free is not None:
+                free()
 
     def decode(self, token, pos, traced=True):
         """One step. Returns device result dict (logits, token)."""
