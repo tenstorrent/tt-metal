@@ -70,6 +70,10 @@ std::vector<std::string> build_gpp_argv(
 // the RPC, where an absolute client-side path would not exist on the server.
 inline constexpr std::string_view NAMED_CT_ARG_MAP_HEADER = "named_ct_arg_map_generated.h";
 
+// In a relocatable cache (see jit_build/path_roots.hpp) the generated kernel wrapper includes a
+// kernel's source file through this define, which the compile recipe sets to the file's path.
+inline constexpr std::string_view KERNEL_SOURCE_FILE_DEFINE = "TT_METAL_KERNEL_SOURCE_FILE";
+
 // Render |named_args| as the initializer body of KERNEL_COMPILE_TIME_ARG_MAP:
 //   {"a",1},{"b",2}
 // Empty when |named_args| is empty. Entries are emitted in ascending key order so the text is

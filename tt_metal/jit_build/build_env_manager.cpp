@@ -86,7 +86,8 @@ std::map<std::string, std::string> initialize_device_kernel_defines(const JitDev
     return device_kernel_defines;
 }
 
-uint64_t compute_build_key(const JitDeviceConfig& config, const llrt::RunTimeOptions& rtoptions) {
+uint64_t compute_build_key(
+    const JitDeviceConfig& config, const llrt::RunTimeOptions& rtoptions, const jit_build::PathRoots& path_roots) {
     // Collect all the parameters that affect the build configuration
     StableHasher hasher;
 
@@ -107,7 +108,8 @@ uint64_t compute_build_key(const JitDeviceConfig& config, const llrt::RunTimeOpt
 
     hasher.update(static_cast<uint32_t>(config.l1_banks_form_selector_run));
 
-    hasher.update(rtoptions.get_compile_hash_string());
+    // Can hold a path: the BRISC firmware header of a firmware variant.
+    hasher.update(path_roots.relocatable_text(rtoptions.get_compile_hash_string()));
 
     return hasher.digest();
 }
@@ -165,9 +167,10 @@ void BuildEnvManager::add_build_env(
     ChipId device_id, const JitDeviceConfig& dev_config, const llrt::RunTimeOptions& rtoptions) {
     const std::lock_guard<std::mutex> lock(this->lock);
     auto& dev_build_env = device_id_to_build_env_[device_id];
-    uint64_t build_key = compute_build_key(dev_config, rtoptions);
+    auto path_roots = jit_build::PathRoots::from_rtoptions(rtoptions);
+    uint64_t build_key = compute_build_key(dev_config, rtoptions, path_roots);
     auto device_kernel_defines = initialize_device_kernel_defines(dev_config);
-    dev_build_env.build_env.init(build_key, dev_config, rtoptions, device_kernel_defines);
+    dev_build_env.build_env.init(build_key, dev_config, rtoptions, device_kernel_defines, std::move(path_roots));
     if (rtoptions.get_disable_precompiled_fw()) {
         dev_build_env.firmware_precompiled = false;
     } else {

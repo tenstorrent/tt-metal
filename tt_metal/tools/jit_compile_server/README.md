@@ -249,6 +249,38 @@ This is the pattern most likely to hit the source-visibility problem in §5: the
 the tt-metal tree, but not necessarily the kernel sources the application generated at
 runtime.
 
+### 4d. Using a warmed client cache at other paths
+
+By default a client's `TT_METAL_CACHE` is tied to absolute paths: the kernel hash, the
+`.build_state` stamp and the dependency sidecars all hold the paths of the cache directory,
+of the tt-metal tree and of the application's kernel sources. A cache copied to a machine
+where any of those sits elsewhere is not reused.
+
+Set `TT_METAL_JIT_RELOCATABLE_CACHE=1` on the job that warms the cache to write those paths
+relative to named roots: the cache directory, the tt-metal runtime root, the SFPI toolchain,
+and any directory named in `TT_METAL_JIT_PATH_ROOTS` (an application names the directory its
+kernel sources live under, for example `APP=/path/to/app`). The cache directory is marked,
+and a process that later opens a marked cache uses it the same way without the variable. It
+must give `TT_METAL_JIT_PATH_ROOTS` the same root names, pointing at its own directories.
+
+```bash
+# Warming job
+export TT_METAL_CACHE=/scratch/warm-cache
+export TT_METAL_JIT_RELOCATABLE_CACHE=1
+export TT_METAL_JIT_PATH_ROOTS=APP=/build/my-app
+python warm_all_kernels.py
+
+# Consumer: the cache, tt-metal and the application can all be somewhere else
+export TT_METAL_CACHE=/data/restored-cache
+export TT_METAL_JIT_PATH_ROOTS=APP=/home/user/my-app
+python my_workload.py
+```
+
+Reuse still requires the same file contents: every dependency is checked by content hash
+at the reader's paths. Do not let checkouts with different sources share a relocatable
+cache while they run at the same time. They now use the same kernel directories, where
+absolute paths used to keep them apart.
+
 ---
 
 ## 5. Limitations
@@ -346,6 +378,8 @@ local ELF.
 | `TT_METAL_JIT_PREPROCESS` | unset (off) | Set (any value) to preprocess on the client and ship self-contained `.ii`. See §5b — use only when the server cannot see your sources. |
 | `TT_METAL_CACHE` | `$HOME/.cache/tt-metal-cache/`; falls back to `/tmp/tt-metal-cache/` when `$HOME` is unset or does not exist | Where the client writes returned ELFs. Concurrent processes on one host may share it. The fallback path collides with the server's default cache root — see §3. |
 | `TT_METAL_FORCE_JIT_COMPILE` | unset | Bypass local JIT reuse, and the preprocess RPC skip in §5b. |
+| `TT_METAL_JIT_RELOCATABLE_CACHE` | unset | `1` makes `TT_METAL_CACHE` relocatable and marks it; a marked cache needs no setting. `0` forces absolute paths. See §4d. |
+| `TT_METAL_JIT_PATH_ROOTS` | unset | `NAME=/abs/dir[:NAME2=/abs/dir2]`: application source roots for a relocatable cache. See §4d. |
 
 ### Server (`jit_compile_server`)
 

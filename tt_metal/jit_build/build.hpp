@@ -15,6 +15,7 @@
 #include <vector>
 
 #include <tt-metalium/vocabulary/hal_types.hpp>
+#include "jit_build/path_roots.hpp"
 #include "jit_build/types.hpp"
 #include "jit_build_options.hpp"
 #include <tt-umd/types/arch.hpp>
@@ -64,7 +65,8 @@ public:
         uint64_t build_key,
         const JitDeviceConfig& config,
         const tt::llrt::RunTimeOptions& rtoptions,
-        const std::map<std::string, std::string>& device_kernel_defines);
+        const std::map<std::string, std::string>& device_kernel_defines,
+        jit_build::PathRoots path_roots = {});
 
     tt::ARCH get_arch() const { return arch_; }
     uint32_t get_max_dfbs() const { return max_dfbs_; };
@@ -77,6 +79,8 @@ public:
         return out_firmware_root_;
     }  // Path to the firmware directory for this device
     uint64_t get_build_key() const { return build_key_; }
+    // Empty unless the cache is relocatable.
+    const jit_build::PathRoots& path_roots() const { return path_roots_; }
 
     // Where firmware binaries are loaded/linked from. Defaults to out_firmware_root_.
     // May differ when binaries are provided from an external source.
@@ -107,6 +111,7 @@ private:
     std::string lflags_;
 
     std::uint64_t build_key_{};
+    jit_build::PathRoots path_roots_;
 };
 
 // All the state used for a build in an abstract base class

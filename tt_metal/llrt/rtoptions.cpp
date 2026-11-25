@@ -124,6 +124,8 @@ enum class EnvVarID {
     TT_METAL_DISABLE_MULTI_AERISC,                      // Disable multi-erisc mode (inverted logic, enabled by default)
     TT_METAL_USE_MGD_2_0,                               // Use mesh graph descriptor 2.0
     TT_METAL_FORCE_JIT_COMPILE,                         // Force JIT compilation
+    TT_METAL_JIT_RELOCATABLE_CACHE,                     // Record JIT cache paths relative to named roots
+    TT_METAL_JIT_PATH_ROOTS,                            // Extra named roots for a relocatable JIT cache
     TT_METAL_DISABLE_SFPLOADMACRO,                      // Disable use of SFPLOADMACRO instructions
     TT_METAL_DRAM_BACKED_CQ,                            // Store command queues in device DRAM
     TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES,            // Simulator tensor preload bypasses FD CQ copies
@@ -932,6 +934,22 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (uses dependency tracking)
         // Usage: export TT_METAL_FORCE_JIT_COMPILE=1
         case EnvVarID::TT_METAL_FORCE_JIT_COMPILE: this->force_jit_compile = true; break;
+
+        // TT_METAL_JIT_RELOCATABLE_CACHE
+        // 1 makes the JIT cache directory relocatable: paths in its keys and dependency records are
+        // written relative to named roots, so the cache can be used from another location of the
+        // cache, of tt-metal and of the application's sources. The directory is marked, and later
+        // processes use a marked cache the same way without this variable. 0 forces absolute paths.
+        // Default: unset (relocatable only if the cache directory is already marked)
+        // Usage: export TT_METAL_JIT_RELOCATABLE_CACHE=1
+        case EnvVarID::TT_METAL_JIT_RELOCATABLE_CACHE: this->jit_relocatable_cache = is_env_enabled(value); break;
+
+        // TT_METAL_JIT_PATH_ROOTS
+        // Named roots for a relocatable JIT cache, in addition to the cache directory and the
+        // tt-metal runtime root. An application names the directories its kernel sources live in.
+        // Default: none
+        // Usage: export TT_METAL_JIT_PATH_ROOTS=APP=/path/to/app[:OTHER=/path/to/other]
+        case EnvVarID::TT_METAL_JIT_PATH_ROOTS: this->jit_path_roots = value; break;
 
         // TT_METAL_FORCE_REINIT
         // Force context reinitialization on each run.

@@ -28,7 +28,7 @@ std::size_t KernelCompileHash(
     tt::StableHasher hasher;
     hasher.update(build_key);
     hasher.update(stable_hash_hlk_desc(build_options.hlk_desc));
-    hasher.update(kernel->compute_hash());
+    hasher.update(kernel->compute_hash(&build_options.build_env.path_roots()));
     std::size_t compile_hash = static_cast<std::size_t>(hasher.digest());
 
 #ifdef GENERATE_HASH_LOG

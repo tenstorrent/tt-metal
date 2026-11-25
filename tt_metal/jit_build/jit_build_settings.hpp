@@ -214,6 +214,8 @@ public:
     // Zone tu-id registry key: identical across runs and across compile-time-arg variants of one source;
     // get_full_kernel_name() embeds a per-variant hash.
     virtual std::string get_observability_event_src_id() const { return this->get_full_kernel_name(); }
+    // Absolute path of a kernel given as a source file; empty for a kernel given as source text.
+    virtual std::string get_kernel_source_file() const { return {}; }
     // Returns the compiler optimization level
     virtual std::string_view get_compiler_opt_level() const = 0;
     // Returns the linker optimization level
