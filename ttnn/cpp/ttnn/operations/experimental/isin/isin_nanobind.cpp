@@ -16,21 +16,23 @@ void bind_isin_operation(nb::module_& mod) {
         R"doc(
             This operator returns a uint32 tensor with the same shape, layout, and memory config as the elements tensor, where elements are filled with 0xFFFFFFFF (true) or 0x00000000 (false) based on their presence in test_elements.
             Parameters:
-                * `elements` (Tensor): Tensor of integers to be checked for presence in test_elements. The output will have 0xFFFFFFFF (true) or 0x00000000 (false) at each position depending on whether the corresponding element is present in test_elements (and the invert flag).
-                * `test_elements` (Tensor): Tensor containing the values to be checked against. If an element from `elements` is present in `test_elements`, the corresponding output value will be 0xFFFFFFFF (unless inverted).
+                * `elements` (Tensor): Tensor of values to be checked for presence in test_elements. The output will have 0xFFFFFFFF (true) or 0x00000000 (false) at each position depending on whether the corresponding element is present in test_elements (and the invert flag).
+                * `test_elements` (Tensor): Tensor containing the values to be checked against. It must have the same dtype as `elements`. If an element from `elements` is present in `test_elements`, the corresponding output value will be 0xFFFFFFFF (unless inverted).
             Keyword Arguments:
                 * `invert` (bool): If True, inverts the output so that elements present in test_elements are marked with 0x00000000 and others with 0xFFFFFFFF.
             Notes:
                 * `assume_unique` (bool): Currently has no effect, but is reserved for potential future optimizations.
-                * The input tensors should be interleaved and in DRAM.
-                * Both input tensors can be of any specification.
+                * Both input tensors must be allocated on a device.
+                * Supported dtypes: bfloat16, float32, int32, uint32, uint16 and uint8.
+                * The input tensors should be interleaved and in DRAM. Sharded tensors are not supported.
+                * If `elements` is empty, nothing runs on the device: the result is an empty uint32 tensor, or `out` if it is given.
 
             Example:
                 >>> device = ttnn.open_device(device_id=0)
-                >>> elements = ttnn.Tensor([[1, 2, 3], [4, 5, 6], [7, 8, 9]], device=device)
-                >>> test_elements = ttnn.Tensor([2, 3, 5, 7], device=device)
+                >>> elements = ttnn.from_torch(torch.tensor([[1, 2, 3], [4, 5, 6], [7, 8, 9]]), dtype=ttnn.int32, device=device)
+                >>> test_elements = ttnn.from_torch(torch.tensor([2, 3, 5, 7]), dtype=ttnn.int32, device=device)
                 >>> output = ttnn.experimental.isin(elements, test_elements)
-                >>> # output is [[False, True, True], [False, True, False], [True, False, False]], use the `invert=True` flag to invert this effect
+                >>> # ttnn.to_torch(output) != 0 is [[False, True, True], [False, True, False], [True, False, False]], use the `invert=True` flag to invert this effect
         )doc";
 
     ttnn::bind_function<"isin", "ttnn.experimental.">(

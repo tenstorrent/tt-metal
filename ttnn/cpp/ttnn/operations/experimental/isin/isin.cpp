@@ -141,8 +141,17 @@ Tensor isin(
 
     // An empty elements tensor gives an empty mask, as in torch.isin
     if (elements.logical_volume() == 0) {
-        return opt_out.has_value() ? *opt_out
-                                   : ttnn::empty_like(elements, ttnn::experimental::prim::OUTPUT_TENSOR_DATA_TYPE);
+        if (!opt_out.has_value()) {
+            return ttnn::empty_like(elements, ttnn::experimental::prim::OUTPUT_TENSOR_DATA_TYPE);
+        }
+        TT_FATAL(
+            opt_out->dtype() == ttnn::experimental::prim::OUTPUT_TENSOR_DATA_TYPE,
+            "Preallocated output should be of uint32 dtype");
+        TT_FATAL(
+            opt_out->logical_volume() == 0,
+            "Preallocated output should be empty when elements is empty, got shape {}",
+            opt_out->logical_shape());
+        return *opt_out;
     }
 
     // Prepare tensors: convert to row-major layout, flatten to 1D, and calculate batch size

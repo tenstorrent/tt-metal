@@ -92,3 +92,19 @@ def test_isin_empty_elements(shape, layout, use_out, device):
     assert result.dtype == ttnn.uint32
     assert result.layout == layout
     assert list(result.shape) == shape
+
+
+@pytest.mark.parametrize(
+    "out_dtype, out_shape, message",
+    [
+        (ttnn.int32, [0], "should be of uint32 dtype"),
+        (ttnn.uint32, [4], "should be empty"),
+    ],
+)
+def test_isin_empty_elements_rejects_unfit_out(out_dtype, out_shape, message, expect_error, device):
+    elements = ttnn.from_torch(torch.zeros([0], dtype=torch.int32), dtype=ttnn.int32, device=device)
+    test_elements = ttnn.from_torch(torch.tensor([0, 1], dtype=torch.int32), dtype=ttnn.int32, device=device)
+    out = ttnn.from_torch(torch.zeros(out_shape, dtype=torch.int64), dtype=out_dtype, device=device)
+
+    with expect_error(RuntimeError, message):
+        ttnn.experimental.isin(elements, test_elements, out=out)
