@@ -76,7 +76,7 @@ void kernel_main() {
     // too.
     const uint32_t sync_core_x = get_arg_val<uint32_t>(arg++);
     const uint32_t sync_core_y = get_arg_val<uint32_t>(arg++);
-    const size_t cores_arg = arg;  // workers x (noc x, noc y)
+    [[maybe_unused]] const size_t cores_arg = arg;  // workers x (noc x, noc y)
     arg += 2 * workers;
 
     // The fabric's next hop, as in the reader, so increments follow the data.
@@ -88,11 +88,12 @@ void kernel_main() {
     const uint32_t headers_l1 = get_write_ptr(kHeaders);
     auto* sem_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(headers_l1);
     const auto output = TensorAccessor(output_args, output_addr, page_bytes);
-    auto* ready_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready_sem);
+    [[maybe_unused]] auto* ready_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready_sem);
     auto* done_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(done_sem);
 
     auto run = [&](auto& mux_conn) {
-        // Start fence.
+    // Start fence (not for the rest part: see the program factory).
+#ifndef SKIP_START_FENCE
         if (link == 0 && sender_index == 0) {
             const uint64_t remote_ready = get_noc_addr(sync_core_x, sync_core_y, ready_sem);
             for (uint32_t requester = 0; requester < num_devices; ++requester) {
@@ -116,6 +117,7 @@ void kernel_main() {
             noc_semaphore_inc(get_noc_addr(ready_sem), uint32_t{0} - 1u);  // reset to zero
             noc_async_atomic_barrier();
         }
+#endif
 
         // Packets: up to kBatch sends in flight, each with its own header slot; one flush retires the batch.
         uint32_t in_flight = 0;

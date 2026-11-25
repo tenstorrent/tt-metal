@@ -304,11 +304,17 @@ tt::tt_metal::ProgramDescriptor SparseKvPushProgramFactory::create_descriptor(
     reader_common.push_back(params.batch_index);
     reader.emplace_common_runtime_args(reader_common);
 
+    // The rest of a requester's rows lands in the buffer its prefix push already filled, which no reader uses until
+    // this step's attention: nothing can still be reading it, so the rest push skips the start fence.
+    auto writer_defines = defines;
+    if (params.part == SparseKvPushPart::kRest) {
+        writer_defines.emplace_back("SKIP_START_FENCE", "1");
+    }
     auto writer = data_movement_kernel(
         kdir + "sparse_push_writer.cpp",
         layout.sender_range,
         writer_compile_args(tensor_args, num_devices, shape, layout, mux),
-        defines,
+        writer_defines,
         tt::tt_metal::WriterConfigDescriptor{});
     tt::tt_metal::KernelDescriptor::RTArgList writer_common;
     writer_common.push_back(tensor_args.output_tensor.buffer());
