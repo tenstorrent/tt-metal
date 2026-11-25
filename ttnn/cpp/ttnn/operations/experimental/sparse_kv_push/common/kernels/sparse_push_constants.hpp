@@ -52,8 +52,8 @@ static_assert(kHeaderWords <= kBitmapOff);
 // indices with compact_page and the push writes rows with it, so they agree by construction.
 // ---------------------------------------------------------------------------------------------------------------------
 
-// Pages an owner's run of `rows` rows takes: whole units of pages_per_packet * banks, so every run starts on a unit,
-// as compact_page needs.
+// Pages an owner's run of `rows` rows takes: whole units of pages_per_packet * banks, so every run starts on a unit and
+// a unit's packets each fill one bank's consecutive addresses.
 template <uint32_t pages_per_packet, uint32_t banks>
 constexpr uint32_t padded_run_pages(uint32_t rows) {
     constexpr uint32_t unit = pages_per_packet * banks;
@@ -61,15 +61,10 @@ constexpr uint32_t padded_run_pages(uint32_t rows) {
 }
 
 // Page of the row with rank `rank` (0-based, in row order) in an owner's run starting at page run_base. The buffer is
-// DRAM-interleaved: page i lives in bank i % banks. Ranks go in packets of pages_per_packet; packet j lands in bank
-// j % banks with its rows banks pages apart, i.e. at consecutive addresses in that bank, so the writer sends each
-// packet as one contiguous write.
-template <uint32_t pages_per_packet, uint32_t banks>
-constexpr uint32_t compact_page(uint32_t run_base, uint32_t rank) {
-    const uint32_t packet = rank / pages_per_packet;
-    const uint32_t row_in_packet = rank % pages_per_packet;
-    return run_base + (packet % banks) + (packet / banks) * pages_per_packet * banks + row_in_packet * banks;
-}
+// DRAM-interleaved (page i in bank i % banks), so consecutive ranks, which neighbouring queries' top-k share, rotate
+// over the banks: attention's row reads spread over every bank instead of queueing on one. The push still sends a
+// packet as one contiguous write: a unit's packet s carries ranks s, s + banks, ..., consecutive addresses in one bank.
+constexpr uint32_t compact_page(uint32_t run_base, uint32_t rank) { return run_base + rank; }
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Push: the reader and writer kernels of each sender core.
@@ -92,7 +87,8 @@ enum Cb : uint32_t {
     kHeaders = 4,  // writer: fabric packet headers
 };
 
-// Reader -> writer, one kMetaEntryBytes entry per packet in kMeta. rows == 0 ends the writer.
+// Reader -> writer, one kMetaEntryBytes entry per packet in kMeta. rows == 0 ends the writer; rows == kSkipRows is a
+// slot with nothing to send (the reader hands a whole unit of slots on at a time, so the slots never wrap the CB).
 struct PacketMeta {
     uint32_t requester;   // chip whose compact buffer the packet goes to
     uint32_t first_page;  // compact-buffer page of its first row (see compact_page)
@@ -101,7 +97,8 @@ struct PacketMeta {
 constexpr uint32_t kMetaEntryBytes = 16;  // a PacketMeta, padded to the 16 B L1 alignment
 static_assert(sizeof(PacketMeta) <= kMetaEntryBytes);
 
-constexpr uint32_t kBatch = 4;                 // packets per reader barrier, and in flight per writer flush
+constexpr uint32_t kSkipRows = 0xFFFFFFFF;
+constexpr uint32_t kBatch = 4;                 // packets in flight per writer flush; divides the bank count
 constexpr uint32_t kHeaderSlots = 1 + kBatch;  // one for semaphore increments, one per packet in flight
 
 // Bitmap windows: the reader fetches each block's bitmap words (at most 64 B) as one kWindowBytes read from the

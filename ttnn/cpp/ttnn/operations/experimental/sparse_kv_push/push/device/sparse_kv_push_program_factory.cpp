@@ -30,7 +30,6 @@ constexpr tt::tt_metal::KernelHandle kReaderKernel = 0;
 constexpr tt::tt_metal::KernelHandle kWriterKernel = 1;
 
 constexpr uint8_t kMuxBuffersPerChannel = 2;
-constexpr uint32_t kPacketSlots = 8;
 constexpr uint32_t kUserIdCbBytes = 64;
 
 // The reader takes the part as the kernels' own PushPart, value for value.
@@ -260,14 +259,16 @@ tt::tt_metal::ProgramDescriptor SparseKvPushProgramFactory::create_descriptor(
     const uint32_t page_bytes = tensor_args.input_tensor.buffer()->aligned_page_size();
     const auto shape = packet_shape(mesh_device, page_bytes);
     const uint32_t packet_bytes = shape.pages_per_packet * page_bytes;
+    // The reader fills a unit (one packet per bank) while the writer sends the previous one.
+    const uint32_t packet_slots = 2 * shape.banks;
 
     using namespace ::sparse_push;
     const struct {
         uint32_t id, page_bytes, pages;
         tt::DataFormat format;
     } cbs[] = {
-        {kData, packet_bytes, kPacketSlots, tt::DataFormat::RawUInt8},
-        {kMeta, kMetaEntryBytes, kPacketSlots, tt::DataFormat::RawUInt32},
+        {kData, packet_bytes, packet_slots, tt::DataFormat::RawUInt8},
+        {kMeta, kMetaEntryBytes, packet_slots, tt::DataFormat::RawUInt32},
         {kTable, kTableCbBytes, 1, tt::DataFormat::RawUInt32},
         {kUserId, kUserIdCbBytes, 1, tt::DataFormat::RawUInt32},
         {kHeaders,
