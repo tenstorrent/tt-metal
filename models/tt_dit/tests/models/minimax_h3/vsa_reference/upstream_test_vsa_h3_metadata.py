@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: © 2026 The FastVideo Authors
 # SPDX-License-Identifier: Apache-2.0
 # Vendored unmodified (except this notice) from https://github.com/hao-ai-lab/FastVideo
 # fastvideo/tests/attention/test_vsa_h3_metadata.py at commit a28f2bab4b41c2e714119ca704db1098a483e4fb (main, 2026-08-31).
