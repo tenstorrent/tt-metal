@@ -50,3 +50,9 @@ jobs:
       enabled-skus: ALL_SKUS_IN_TESTS
       sku-allowlist: "*"
       pytest-markers: "not perf and not nightly and not quasar and not accuracy"
+  llk-quasar-tests:
+    needs: [resolve-docker-pull-refs, build-docker-images]
+    uses: ./.github/workflows/llk-ttsim-pr-gate-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
