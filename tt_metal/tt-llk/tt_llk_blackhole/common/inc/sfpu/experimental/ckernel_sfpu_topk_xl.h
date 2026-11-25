@@ -2796,7 +2796,7 @@ inline void _topk_xl_rebuild_(const std::uint32_t dst_index, const bool ascendin
                 topk_xl_unfused_macro::record_ce_full<indices_offset, 64, 8>(dir);
                 for (int i = 1; i < 8; i++)
                 {
-                    TTIREPLAY(0 /*start*/, 16 /*len*/, 0, 0);
+                    TTI_REPLAY(0 /*start*/, 16 /*len*/, 0, 0);
                 }
 #else
                 window_sort_rows<
