@@ -44,6 +44,14 @@ class BCAST_LAYOUT(TemplateParameter):
 
 
 @dataclass
+class MM_THROTTLE_LEVEL(TemplateParameter):
+    level: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"#define MM_THROTTLE {self.level}"
+
+
+@dataclass
 class REPRO_ROW(TemplateParameter):
     scratch: int = -1
 
@@ -80,11 +88,19 @@ RUNTIME_LAYOUT_CASES = [
     for f, a in (_FMT_ACC[0], _FMT_ACC[2])
     for op in _OPS
 ]
+# MM_THROTTLE > 0 (throttled matmul kernels): the ROW band body ends with an INCRWC instead of the ADDR_MOD_6 store.
+THROTTLE_LAYOUT_CASES = [
+    (f, a, LlkBroadcastType.Row, op, l)
+    for l in ("L210", "L132p0")
+    for f, a in (_FMT_ACC[0], _FMT_ACC[2])
+    for op in _OPS
+]
 
 
 def run_bcast_layout(
     case,
     bcast_l_runtime=0,
+    mm_throttle=0,
     is_perf=False,
     perf_report=None,
     run_types=None,
@@ -122,7 +138,8 @@ def run_bcast_layout(
             F.SFPU_DST_ROUNDING_MODE(),
             F.SIGN_MAGNITUDE_FORMAT(False),
             BCAST_LAYOUT(d, b, o, p, bcast_l_runtime),
-        ],
+        ]
+        + ([MM_THROTTLE_LEVEL(mm_throttle)] if mm_throttle else []),
         "runtimes": [
             F.TILE_COUNT(tile_cnt_A + tile_cnt_B),
             F.NUM_BLOCKS(num_blocks),
@@ -170,6 +187,11 @@ def test_sfpu_binary_bcast_layout(case):
 @parametrize(case=RUNTIME_LAYOUT_CASES)
 def test_sfpu_binary_bcast_layout_runtime_idx(case):
     run_bcast_layout(case[0], bcast_l_runtime=1)
+
+
+@parametrize(case=THROTTLE_LAYOUT_CASES)
+def test_sfpu_binary_bcast_layout_mm_throttle(case):
+    run_bcast_layout(case[0], mm_throttle=1)
 
 
 REPRO_CASES = [
