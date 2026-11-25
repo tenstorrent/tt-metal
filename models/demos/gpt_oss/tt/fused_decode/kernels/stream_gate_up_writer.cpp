@@ -55,7 +55,11 @@ void kernel_main() {
     noc_async_read(s_x.get_noc_addr(0), x_l1, kx * tiny_bytes);
     volatile tt_l1_ptr uint16_t* ones = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(x_l1 + kx * tiny_bytes);
     for (uint32_t i = 0; i < 32; ++i) {
+#if defined(EXPERT_SPLIT) || defined(W_TRANSPOSED)
+        ones[i] = (i == 0 || i == 16) ? 0x3F80 : 0;  // the split streams' two bias terms (mxfp4_split.py)
+#else
         ones[i] = i < nbias ? 0x3F80 : 0;  // BF16 1.0
+#endif
     }
     noc_async_read_barrier();
     cb_push_back(cb_x, kx + 1);

@@ -10,6 +10,11 @@
 // y @ I, y @ T, cos_t @ I and sin_t @ I into DST 0..3 (I, T: exact in BF8), and SFPU ops on the result rows combine
 // them. V columns are packed as computed.
 //
+// QKV_ROPE_EXACT_LITE (fused_decode/config.py, GPT_OSS_QKV_ROPE_EXACT=2): the LoFi loads above keep hidden + 6 mantissa
+// bits of y, cos and sin (SrcB), so each loses its last BF16 bit toward zero. Instead y, cos and sin are copied into
+// DST exactly (unpack A, datacopy); y @ T keeps the one-tile LoFi load (y without its last bit; T is exact): two SrcA
+// format switches per column.
+//
 // runtime args: the output column of each of this core's weight slots (fused_decode/stream.py qkv_column_order)
 
 #include <cstdint>
@@ -19,6 +24,10 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/experimental/custom_mm.h"
 #include "api/compute/pack.h"
+#ifdef QKV_ROPE_EXACT_LITE
+#include "api/compute/reconfig_data_format.h"
+#include "api/compute/tile_move_copy.h"
+#endif
 
 // SFPU ops over the result rows only: a [ROWS, 32] matmul result occupies the first ROWS rows of DST faces 0 and 1
 // (one SFPU iteration covers two face rows; ROWS = 1: 2 iterations as for tile heights <= 4).
@@ -64,7 +73,8 @@ void kernel_main() {
     constexpr uint32_t head_tiles = get_compile_time_arg_val(10);
 
     constexpr bool transpose = false;
-    constexpr auto dest_layout = CustomMmDestLayout::DefaultSplitAcc;
+    constexpr bool split_acc = true;
+    constexpr auto dest_layout = split_acc ? CustomMmDestLayout::DefaultSplitAcc : CustomMmDestLayout::Default;
     custom_mm_block_init<transpose, dest_layout>(cb_in0, cb_w, cb_out);
 
     bool rope_inputs = false;
@@ -86,19 +96,31 @@ void kernel_main() {
         if (!rope) {
             continue;
         }
+        constexpr uint32_t rot_tiles = 2;  // [I, T]
         if (!rope_inputs) {
-            cb_wait_front(cb_rot, 2);
+            cb_wait_front(cb_rot, rot_tiles);
             cb_wait_front(cb_cs, 2 * head_tiles);
             rope_inputs = true;
         }
         const uint32_t t = (n < q_cols ? n : n - q_cols) % head_tiles;
         cb_wait_front(cb_y, 1);
         custom_mm_block_init_short<transpose, dest_layout>(cb_y, cb_rot, cb_out);
+#ifdef QKV_ROPE_EXACT_LITE
+        tile_regs_acquire();
+        custom_mm_block<dest_layout>(cb_y, cb_rot, 0, 1, 1, 1);  // y @ T (LoFi: y without its last bit)
+        reconfig_data_format_srca(cb_rot, cb_y);
+        copy_init(cb_y);
+        copy_tile(cb_y, 0, 0);                // y, exact
+        copy_tile(cb_cs, t, 2);               // cos_t, exact
+        copy_tile(cb_cs, head_tiles + t, 3);  // sin_t, exact
+        reconfig_data_format_srca(cb_y, cb_rot);
+#else
         tile_regs_acquire();
         custom_mm_block<dest_layout>(cb_y, cb_rot, 0, 0, 0, 1);                // y
         custom_mm_block<dest_layout>(cb_y, cb_rot, 0, 1, 1, 1);                // y @ T
         custom_mm_block<dest_layout>(cb_cs, cb_rot, t, 0, 2, 1);               // cos_t
         custom_mm_block<dest_layout>(cb_cs, cb_rot, head_tiles + t, 0, 3, 1);  // sin_t
+#endif
         mul_binary_tile_init();
         mul_rows(0, 2, 0);
         mul_rows(1, 3, 1);
