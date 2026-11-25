@@ -259,7 +259,6 @@ Tensor invoke_impl(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    validate_dtypes(TernaryOpType::WHERE, {condition.dtype()}, output);
     log_debug(tt::LogOp, "Where LLK - TSS");
     return ttnn::where_tss(condition, t_true, t_false, memory_config, output, sub_core_grids);
 }
