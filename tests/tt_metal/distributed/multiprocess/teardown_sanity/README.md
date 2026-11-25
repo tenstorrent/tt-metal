@@ -70,7 +70,9 @@ that turns red (XPASS) when it is fixed:
 launch the raw C++ probe (`sanity_mpi_probe.cpp`) **through tt-run** (no heavy Python import, seconds per row) and assert
 tt-run ends the job correctly: the right exit code, every rank gone, nothing left in `/dev/shm`. The multi-host
 group (D) runs the same probe across hosts on the production `mpirun` line. The install group (E) queries the
-OpenMPI / PRRTE build directly. Files: `test_teardown_sanity_mpi.py`, `sanity_mpi_probe.cpp`,
+OpenMPI / PRRTE build directly. `test_rank_wrapper_sanity.py` runs tt-run-rank under tt-run and under a plain
+mpirun (every ending, the exit order, the stop grace, the peer-exit modes). Files: `test_teardown_sanity_mpi.py`,
+`test_rank_wrapper_sanity.py`, `sanity_mpi_probe.cpp`,
 `sanity_mpi_binding.yaml`, `sanity_common.py`, `run_teardown_multihost_tests.sh`.
 
 ### Group A — fault classes

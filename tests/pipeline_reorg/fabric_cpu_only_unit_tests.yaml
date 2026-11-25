@@ -180,7 +180,7 @@
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group teardown-sanity-mpi
   skus:
     cpu_medium:
-      timeout: 25  # the MPI rows (~8 min) and test_ttrun.py (~2 min); the script's own caps end below it
+      timeout: 35  # the MPI rows (~8 min), the wrapper rows (~5 min) and test_ttrun.py (~2 min); the script's own caps end below it
   team: scaleout
   budget_type: unit
   arch: wormhole_b0

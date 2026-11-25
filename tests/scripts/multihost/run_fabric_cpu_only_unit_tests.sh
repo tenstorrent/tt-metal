@@ -1217,6 +1217,9 @@ if run_group "teardown-sanity-mpi"; then
 # kills what it left; the outer cap only guards the whole directory. See the README next to it.
 TT_FABRIC_TEST_TIMEOUT=1080s run_test python3 -m pytest tests/tt_metal/distributed/multiprocess/teardown_sanity/test_teardown_sanity_mpi.py -v -p no:cacheprovider -p no:benchmark
 
+# tt-run-rank under tt-run and under a plain mpirun: every ending, the exit order, the stop grace, the peer-exit modes.
+TT_FABRIC_TEST_TIMEOUT=900s run_test python3 -m pytest tests/tt_metal/distributed/multiprocess/teardown_sanity/test_rank_wrapper_sanity.py -v -p no:cacheprovider -p no:benchmark
+
 # tt-run in isolation, the whole file: its CLI and launch lines, and (group C of the README) the clock, signal
 # forwarding, leftover sweep, exit-code pass-through and the pre-launch /dev/shm sweep. Pure Python, no device.
 TT_FABRIC_TEST_TIMEOUT=300s run_test python3 -m pytest tests/ttnn/distributed/test_ttrun.py -v -p no:cacheprovider -p no:benchmark

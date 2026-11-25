@@ -229,6 +229,12 @@ Both modes support:
 
 Run `tt-run --help` for the full list.
 
+## Without tt-run
+
+Every rank tt-run starts runs in `tt-run-rank`, which makes a failed rank stop the job gracefully. A plain mpirun gets
+the same with `mpirun --mca mpi_ft_enable 1 ... tt-run-rank -- <cmd>`; Ctrl-C at mpirun stays prterun's kill. See
+[tools/scaleout/README_tt_run_rank.md](../../../tools/scaleout/README_tt_run_rank.md).
+
 ## Launcher Selection and Exit Codes
 
 tt-run looks for `mpirun-ulfm` on `PATH` to find the ULFM-capable Open MPI installation that tt-metal links against, but it launches with that installation's plain `mpirun` (the sibling of the resolved `mpirun-ulfm`). Older Docker images shipped `mpirun-ulfm` as a wrapper that injects `--with-ft ulfm`; under that mode a rank killed by a signal is treated as recoverable and `mpirun` can exit 0 even though ranks crashed. Bypassing the wrapper makes any rank that exits non-zero or dies from a signal abort the whole job, so tt-run exits non-zero. Programs that recover from rank failures themselves can opt in with `--mpi-args "--with-ft ulfm"`.
