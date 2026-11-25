@@ -185,6 +185,16 @@ def aliases(a, b):
         return True
 
 
+def free_unless_view(src, out):
+    """Free ``src`` after an op that returned ``out`` from it, unless ``out`` is a view of ``src``.
+
+    ttnn.pad that adds no tile (the padding fits in ``src``'s tiles) fills the tile padding in place and returns a view
+    of the same buffer. ttnn.deallocate frees a buffer even while a view of it is live, and the next allocations can
+    then land on it before ``out`` is read. The owner of ``out`` frees the shared buffer."""
+    if not aliases(out, src):
+        ttnn.deallocate(src)
+
+
 def _find_largest_divisor(n, max_div=8):
     for d in range(max_div, 0, -1):
         if n % d == 0:
