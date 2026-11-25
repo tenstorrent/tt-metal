@@ -32,6 +32,7 @@
 #include "flat_options.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/moe_block_args.hpp"
 #include "y_row_major.hpp"
+#include "zz_probes.hpp"
 
 void kernel_main() {
     moe_block_args::load();  // (this core's args from the DRAM table, or the runtime args: moe_block_args.hpp)
@@ -135,7 +136,9 @@ void kernel_main() {
             landing[i] = destination(block + i, i);
         }
         for (uint32_t i = 0; i < count; ++i) {
-            noc_async_read(block_source(expert_block(block + i)), landing[i], block_bytes);
+            if constexpr ((zz::iso & 2) == 0) {
+                noc_async_read(block_source(expert_block(block + i)), landing[i], block_bytes);
+            }
         }
         while (!ncrisc_noc_reads_flushed(noc_index)) {
             poll_y();

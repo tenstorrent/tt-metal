@@ -37,6 +37,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "expert_schedule.hpp"
 #include "flat_options.hpp"
+#include "gate_up_weight_read.hpp"
 
 // The h exchange's unicast VC (gate/up -> down heads, the down chains): its own, off the default write VC (1)
 constexpr uint8_t h_vc = 0;
@@ -123,6 +124,33 @@ void kernel_main() {
         }
         *sem(flat_options::gate_up_mailbox_sem) = 1;
     }
+    // (MEASUREMENT FLAT_GU_W_NOC1: this RISC reads the gate/up weights, on NOC1, with the NCRISC's args)
+    constexpr bool w_brisc = get_named_compile_time_arg_val("gate_up_w_brisc") != 0;
+    GateUpWeightReads gr;
+    bool g_done = true;
+    if constexpr (w_brisc) {
+        while (*sem(flat_options::gate_up_mailbox_sem) != 2) {
+            invalidate_l1_cache();
+        }
+        const volatile tt_l1_ptr uint32_t* mb =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(schedule_scratch(ScratchOwner::Ncrisc));
+        const volatile tt_l1_ptr uint32_t* wa = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            schedule_scratch(ScratchOwner::Ncrisc) + flat_options::schedule_scratch_bytes);
+        gr.init_from(
+            wa[0],
+            wa[1],
+            wa[2],
+            wa[3],
+            wa[4],
+            flat_options::gate_up_block_bytes,
+            flat_options::gate_up_blocks_per_expert,
+            flat_options::gate_up_reads_in_flight,
+            mb[0],
+            mb + 1,
+            sem(flat_options::gate_up_grant_sem),
+            sem(data_sem_id));
+        g_done = gr.total == 0;
+    }
     // (FLAT_X_NOC1) the x forwarding: stateful trid writes on the write-register command buffer (the h writes keep
     // write_cmd_buf, with their own transaction id: their flush test must not wait on x writes in flight)
     constexpr uint32_t x_cmd_buf = write_reg_cmd_buf;
@@ -196,6 +224,9 @@ void kernel_main() {
     while (h_sent < num_v || pushed < total_w) {
         invalidate_l1_cache();
         x_step();
+        if (w_brisc && !g_done) {
+            g_done = gr.step();
+        }
         while (granted < total_w && cb_pages_reservable_at_back(in1_cb, (granted - pushed + 1) * slot)) {
             grant(1);
             ++granted;
@@ -292,6 +323,9 @@ void kernel_main() {
     }
     *sem(flat_options::x_consumed_sem) = x_cons;
     *sem(flat_options::x_end_sem) = x_cons + 1;
+    if constexpr (w_brisc) {
+        gr.finish();
+    }
     noc_async_write_barrier();
     noc_async_atomic_barrier();
     if constexpr (x_fwd) {

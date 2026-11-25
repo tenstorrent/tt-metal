@@ -16,7 +16,7 @@ namespace ttnn::operations::experimental::moe_block::flat_routed_expert {
 
 // Each relay's words: its snake's freed word at offset 0 (x_injector_writer zeroes it every launch, the snake head
 // counts the freed x slots into it - gate_up_x_forwarder), in one 16 B slot.
-constexpr uint32_t kRelayWordsBytes = 16;
+constexpr uint32_t kRelayWordsBytes = 256;  // (MEASUREMENT FLAT_X_MCAST: a word per gate/up core)
 
 // The layout / program choices a caller makes for the flat routed expert: part of the plan cache key and of every
 // program hash. -1: unset (the plan's own choice). The plan itself is fixed: every gate/up core reads its own weight

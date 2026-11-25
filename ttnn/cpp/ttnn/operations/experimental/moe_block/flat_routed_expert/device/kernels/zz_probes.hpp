@@ -14,6 +14,8 @@
 
 namespace zz {
 inline constexpr bool on = get_named_compile_time_arg_val("zz_flat_probes") != 0;
+// isolation (host FLAT_ISO): 1 no gate/up weight reads, 2 no down weight reads, 4 no x DRAM reads
+inline constexpr uint32_t iso = get_named_compile_time_arg_val("zz_iso");
 }  // namespace zz
 
 #define ZZ_COUNTER(name) [[maybe_unused]] uint32_t name = 0

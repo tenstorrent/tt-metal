@@ -16,6 +16,7 @@
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/moe_block_args.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "flat_options.hpp"
+#include "zz_probes.hpp"
 
 constexpr uint32_t kGateUpReadArgs = 5;
 constexpr uint32_t kGateUpReadFirstTrid = 8;  // (x forwarding writes use ids 1..; the h writes id 0)
@@ -42,10 +43,39 @@ struct GateUpWeightReads {
         const volatile tt_l1_ptr uint32_t* loads_,
         volatile tt_l1_ptr uint32_t* grant_,
         volatile tt_l1_ptr uint32_t* data_) {
-        base = moe_block_args::arg(a0) + moe_block_args::arg(a0 + 2);
-        bank = moe_block_args::arg(a0 + 1);
-        chunk = moe_block_args::arg(a0 + 3);
-        land = moe_block_args::arg(a0 + 4);
+        init_from(
+            moe_block_args::arg(a0),
+            moe_block_args::arg(a0 + 1),
+            moe_block_args::arg(a0 + 2),
+            moe_block_args::arg(a0 + 3),
+            moe_block_args::arg(a0 + 4),
+            blk_bytes,
+            per_e_,
+            depth_,
+            n_load,
+            loads_,
+            grant_,
+            data_);
+    }
+
+    // (the same from the five args' values: MEASUREMENT FLAT_GU_W_NOC1, the receiver reads with its NCRISC's args)
+    void init_from(
+        uint32_t w_addr,
+        uint32_t bank_,
+        uint32_t first,
+        uint32_t chunk_,
+        uint32_t land_,
+        uint32_t blk_bytes,
+        uint32_t per_e_,
+        uint32_t depth_,
+        uint32_t n_load,
+        const volatile tt_l1_ptr uint32_t* loads_,
+        volatile tt_l1_ptr uint32_t* grant_,
+        volatile tt_l1_ptr uint32_t* data_) {
+        base = w_addr + first;
+        bank = bank_;
+        chunk = chunk_;
+        land = land_;
         blk = blk_bytes;
         per_e = per_e_;
         depth = depth_;
@@ -63,8 +93,14 @@ struct GateUpWeightReads {
             const uint32_t v = loads[l];
             const uint32_t src = base + ((v & 0xFF) * per_e + ce) * chunk + pc * pbytes;
             const uint32_t dst = land + (((v >> 8) & 0xFF) * per_e + ce) * blk + pc * pbytes;
-            noc_async_read_set_trid(kGateUpReadFirstTrid + ri);
-            noc_async_read(get_noc_addr_from_bank_id<true>(bank, src), dst, pbytes);
+            if constexpr ((zz::iso & 1) == 0) {
+                noc_async_read_set_trid(kGateUpReadFirstTrid + ri);
+                noc_async_read(get_noc_addr_from_bank_id<true>(bank, src), dst, pbytes);
+            } else {
+                (void)src;
+                (void)dst;
+                ++done;  // (MEASUREMENT: landed at once)
+            }
             ++iss;
             ri = ri + 1 == depth ? 0 : ri + 1;
             if (++pc == pieces) {
@@ -78,7 +114,7 @@ struct GateUpWeightReads {
         // (the read command buffer drained first: an id's outstanding count covers only requests the NIU has taken)
         while (done < iss && !noc_cmd_buf_ready(noc_index, read_cmd_buf)) {
         }
-        bool moved = false;
+        bool moved = (zz::iso & 1) != 0 && done > 0;
         while (done < iss && ncrisc_noc_read_with_transaction_id_flushed(noc_index, kGateUpReadFirstTrid + rd)) {
             ++done;
             rd = rd + 1 == depth ? 0 : rd + 1;
