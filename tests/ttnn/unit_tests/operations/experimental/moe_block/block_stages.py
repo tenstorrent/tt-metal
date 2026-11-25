@@ -63,6 +63,8 @@ CASES = [
     # (local util sweep: GLM-5.3 at 8 / 16 experts a chip, mean M = chunk / 8 / chunk / 16)
     *[Case("glm53_lb8", "2x4", c) for c in (256, 512, 2560, 4096, 8192)],
     *[Case("glm53_lb16", "2x4", c) for c in (512, 1024, 2560, 5120, 6144, 8192)],
+    # (quantized routed rows: block_cases._quant_cfg)
+    *[Case(m, "2x4", c) for m in ("glm53_lb16_i8", "glm53_lb16_i8b32", "glm53_lb16_f8", "glm53_lb16_i8_big") for c in (5120, 6144)],
     Case("kimi_k3", "8x4", 5120),
     Case("dsv41_flash", "8x4", 5120),
     Case("glm53", "4x4-y", 5120),
@@ -186,15 +188,20 @@ class BlockStages:
             chunk_tokens=case.chunk, num_links=2, combine_snap=SNAP, persist_l1_small=True
         )
         cfg.words_slab_bytes = moe_block_words_slab(model.cfg)
-        # (the routed rows' wire format: MOE_ROUTED_Y_QUANT=fp8|int8, MOE_ROUTED_Y_QUANT_BLOCK=32|64|96; bf16 by default)
-        cfg.routed_y_quant, cfg.routed_y_quant_block = routed_y_quant_config()
+        # (the routed rows' wire format: the model config's ROUTED_Y_QUANT "fp8" / "int8" and ROUTED_Y_QUANT_BLOCK, as
+        # block_cases' quantized LoudBox cases; bf16 by default)
+        cfg.routed_y_quant, cfg.routed_y_quant_block = routed_y_quant_config(
+            getattr(model.cfg, "ROUTED_Y_QUANT", "bf16"), getattr(model.cfg, "ROUTED_Y_QUANT_BLOCK", 0)
+        )
         self.dtypes = moe_block_utils.MoEDtypes()
         self.res = moe_block_utils.MoEBlockResources(mesh, d, cfg, self.dtypes)
         self.block = MoEBlock(mesh, self.res, dtypes=self.dtypes, layout=layout)
         kw = self.block.expert_kw
 
         # (the packed weights follow the flat plan, which the layout's x / h formats can change: one cache entry each)
-        key = f"{case.id}-seed{case.seed}" + (f"-{layout!r}" if layout is not None else "")
+        # (the quantized-row variants share their bf16 model's weights)
+        wid = case.id.replace("_i8b32", "").replace("_i8_big", "").replace("_i8", "").replace("_f8", "")
+        key = f"{wid}-seed{case.seed}" + (f"-{layout!r}" if layout is not None else "")
         if key not in cache:
             cache[key] = HostWeights.build(case, d, self.EPC)
         self.hw = hw = cache[key]

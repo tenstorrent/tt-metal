@@ -126,9 +126,10 @@ def moe_block_enabled(model=None, moe_impl: Optional[str] = None) -> bool:
     return moe_impl_of(model, moe_impl) == BLOCK
 
 
-def moe_block_fabric_payload(emb_dim: int) -> int:
-    """Fabric payload bytes the block's combine needs: one row (emb_dim bf16) plus its trailer, 64-B aligned."""
-    return (2 * emb_dim + 32 + 63) // 64 * 64
+def moe_block_fabric_payload(emb_dim: int, datum_bytes: int = 2, extra_bytes: int = 0) -> int:
+    """Fabric payload bytes the block's combine needs: one row (emb_dim values of datum_bytes: 2 bf16, 1 fp8 e4m3 -
+    MoEBlockConfig.combine_row_format) plus its trailer, 64-B aligned."""
+    return (datum_bytes * emb_dim + extra_bytes + 32 + 63) // 64 * 64
 
 
 def moe_block_fabric_payload_size(model_cfg, fabric_payload: int, moe_impl: Optional[str] = None) -> int:

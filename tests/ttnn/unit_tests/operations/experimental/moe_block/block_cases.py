@@ -85,6 +85,23 @@ class GLM53LoudBox16Config(GLM53Config):
     NUM_ROUTED_EXPERTS = 128
 
 
+class GLM53LoudBox16QuantConfig(GLM53LoudBox16Config):
+    """GLM53LoudBox16Config with quantized routed rows (MoEBlockConfig.routed_y_quant, quantized_row.hpp: [H values]
+    [a 16-B cell a down core][trailer]) and the fabric payload one such row (packet = router slot). (local, not
+    committed)"""
+
+    ROUTED_Y_QUANT = "int8"
+    ROUTED_Y_QUANT_BLOCK = 0  # (the down pass width: 96 for GLM-5.3)
+    FABRIC_DATUM_BYTES = 1
+    FABRIC_ROW_EXTRA_BYTES = 32 * 16  # (the 32 down cores' cells)
+
+
+def _quant_cfg(name, fmt, block, payload_datum_bytes=1):
+    return type(name, (GLM53LoudBox16QuantConfig,), dict(
+        ROUTED_Y_QUANT=fmt, ROUTED_Y_QUANT_BLOCK=block, FABRIC_DATUM_BYTES=payload_datum_bytes,
+        FABRIC_ROW_EXTRA_BYTES=32 * 16 if payload_datum_bytes == 1 else 0))  # fmt: skip
+
+
 class KimiK3LoudBox4x4Config(KimiK3LoudBoxConfig):
     """KimiK3LoudBoxConfig at K3 4x4's 56 experts a chip."""
 
@@ -281,7 +298,9 @@ class BlockModel:
     def mesh_params(self, trace_region: int = 64 << 20) -> dict:
         width = getattr(self.cfg, "ROUTED_EXPERT_HIDDEN_SIZE", None) or self.cfg.EMB_SIZE
         return dict(
-            fabric_payload_size=moe_block_fabric_payload(width),
+            fabric_payload_size=moe_block_fabric_payload(
+                width, getattr(self.cfg, "FABRIC_DATUM_BYTES", 2), getattr(self.cfg, "FABRIC_ROW_EXTRA_BYTES", 0)
+            ),
             worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
             # (the model's L1_SMALL_SIZE, else the block's words' slab and the allocator's 64 B alignment; + the perf
             # test's barrier: its all-gathers' semaphores go in L1_SMALL - DSv4.1's mesh opened with exactly the block's
@@ -316,6 +335,19 @@ MODELS = {
         layer=6,
         x_scale=0.5,
     ),
+    # (GLM-5.3 LoudBox 16 experts a chip, quantized routed rows: int8 / fp8 x pow2 1x96 (the pass) or 1x32 blocks;
+    # "_big": on the bf16 row's fabric payload)
+    **{
+        name: BlockModel(
+            name, K, partial(_glm_weights, K=K), partial(_glm_reference, K=K), pcc=0.982, layer=6, x_scale=0.5
+        )
+        for name, K in (
+            ("glm53_lb16_i8", _quant_cfg("GLM53LoudBox16I8", "int8", 0)),
+            ("glm53_lb16_i8b32", _quant_cfg("GLM53LoudBox16I8B32", "int8", 32)),
+            ("glm53_lb16_f8", _quant_cfg("GLM53LoudBox16F8", "fp8", 0)),
+            ("glm53_lb16_i8_big", _quant_cfg("GLM53LoudBox16I8Big", "int8", 0, 2)),
+        )
+    },
     # (Kimi-K3 on a LoudBox: KimiK3LoudBoxConfig - K3's routed width / experts, no latent, a Galaxy stage's experts a chip)
     "kimi_k3_lb28": BlockModel(
         "kimi_k3_lb28",

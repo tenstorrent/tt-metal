@@ -225,3 +225,25 @@ chunk sizes, `test_decoupled`), `models/demos/glm_ks_expert/tests/test_flat_ref.
 Results so far (GLM 16 experts a chip, M 384, LoudBox 2 x 4, 200G): experts + combine 2556 us; expert work removed
 2432; decoupled 2252; bare all-to-all 1844 (the 2 x 4's cut bound ~1.51-1.61 ms). Decoupled ports: edge chips (4
 ports) ~50% of the call in fabric connection waits, middle chips done after ~1.25 ms.
+
+## Quantized combine rows: flat-expert-quantize on the LoudBox (2026-11-25)
+
+Branch `mstaletovic/flat-expert-quantize` (int8 / fp8 rows x pow2 block scales, quantized on the down cores in fp32
+half sync, the SFPU making the final bytes, a 16-B cell of exponent bytes a down core) replayed onto this branch as
+`mstaletovic/flat-expert-quantize-lb`. Its fused op had never run; two bugs fixed (91132a04732): the output rows were
+written with the quantized row's byte count (half of each bf16 output row: PCC 0.007), and the combine planner sized
+slots and rings for bf16 rows (every format the same, slow time).
+
+GLM-5.3 16 experts a chip, 200G, packet = one quantized row (6720 B), `zz_scratch_util_sweep.py`:
+
+| rows | M 320 | M 384 | PCC | 10 calls |
+|---|---|---|---|---|
+| bf16 | 1940 | 2539 | 0.99840 | identical |
+| int8 1x96 | 1498 | 1732 | 0.99836 | identical |
+| int8 1x32 | 1497 | 1724 | 0.99837 | identical |
+| fp8 1x96 | 1580 | 1751 | 0.99805 | identical |
+| int8 1x96 on the bf16 packet (12352 B) | 1504 | 1738 | | |
+| ours: fp8 fixed x16 (b63fb4e4127) | 1475 | 1740 | 0.99805 | identical |
+| ours: fp8 1x192 scales (WIP branch) | 1537 | 1792 | 0.99801 | NOT identical |
+
+int8 1x96: our fp8's time at bf16's accuracy (1.0% row error vs 2.7%). The packet size barely matters on the 2x4 now.

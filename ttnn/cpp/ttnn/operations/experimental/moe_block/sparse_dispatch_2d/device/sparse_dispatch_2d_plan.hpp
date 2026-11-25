@@ -68,6 +68,15 @@ inline constexpr uint32_t kManifestBatch = 16;
 inline uint32_t default_pack(uint32_t row_bytes, size_t max_payload_bytes) {
     return 2 * static_cast<size_t>(row_bytes) <= max_payload_bytes ? 2 : 1;
 }
+// The bytes a packet of a row carries: the row when it fits the payload, else an equal share of it in as few packets
+// as fit (16 B aligned; e.g. a mesh opened with a payload for the combine's narrower fp8 rows)
+inline uint32_t row_part_bytes(uint32_t row_bytes, size_t max_payload_bytes) {
+    if (row_bytes <= max_payload_bytes) {
+        return row_bytes;
+    }
+    const size_t parts = (row_bytes + max_payload_bytes - 1) / max_payload_bytes;
+    return static_cast<uint32_t>(((row_bytes + parts - 1) / parts + 15) / 16 * 16);
+}
 
 // CB sizes in bytes on every port core.
 struct CbSizes {

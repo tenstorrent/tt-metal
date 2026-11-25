@@ -201,6 +201,8 @@ void send(const SenderArgs& args, CONN& conn) {
     constexpr uint32_t group = get_named_compile_time_arg_val(sparse_dispatch_2d_names::kGroup);
     constexpr uint32_t manifest_batch = get_named_compile_time_arg_val(sparse_dispatch_2d_names::kManifestBatch);
     constexpr uint32_t ROWS_PER_PKT = get_named_compile_time_arg_val(sparse_dispatch_2d_names::kRowsPerPacket);
+    constexpr uint32_t ROW_PART = get_named_compile_time_arg_val(sparse_dispatch_2d_names::kRowPartBytes);
+    static_assert(ROW_PART == row_bytes || ROWS_PER_PKT == 1, "a row in parts: one row a packet");
     constexpr auto out_args = TensorAccessorArgs<0>();
 
     const uint32_t ready_addr = args.ready_addr;
@@ -273,8 +275,21 @@ void send(const SenderArgs& args, CONN& conn) {
                     continue;
                 }
             }
-            linear::to_noc_unicast_write(row_bytes, hdr, lay::kSlot.get(w0), out);
-            fabric_mesh::fabric_unicast_noc_unicast_write_with_state(&conn, hdr, rows_l1 + i * row_bytes);
+            if constexpr (ROW_PART < row_bytes) {
+                // a row wider than the fabric payload: its parts in order on this connection (the entries after the
+                // last vouch for all of them); the header is reused once its previous part has left L1
+                for (uint32_t offset = 0; offset < row_bytes; offset += ROW_PART) {
+                    const uint32_t part = row_bytes - offset < ROW_PART ? row_bytes - offset : ROW_PART;
+                    if (offset != 0) {
+                        noc_async_writes_flushed();
+                    }
+                    linear::to_noc_unicast_write(part, hdr, lay::kSlot.get(w0), out, offset);
+                    fabric_mesh::fabric_unicast_noc_unicast_write_with_state(&conn, hdr, rows_l1 + i * row_bytes + offset);
+                }
+            } else {
+                linear::to_noc_unicast_write(row_bytes, hdr, lay::kSlot.get(w0), out);
+                fabric_mesh::fabric_unicast_noc_unicast_write_with_state(&conn, hdr, rows_l1 + i * row_bytes);
+            }
             follow(stager, neighbour, w0, m);
         }
         noc_async_writes_flushed();

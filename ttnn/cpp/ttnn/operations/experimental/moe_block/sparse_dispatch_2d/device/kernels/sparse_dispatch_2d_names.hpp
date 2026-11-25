@@ -49,5 +49,8 @@ inline constexpr const char* kPlanBytes = "plan_bytes";
 inline constexpr const char* kStageCb = "stage_cb";
 inline constexpr const char* kManifestBatch = "manifest_batch";
 inline constexpr const char* kRowsPerPacket = "rows_per_packet";
+// bytes a fabric packet of a row carries: the row, or (a row wider than the fabric payload, rows_per_packet 1) a part
+// of it - the row then goes as row_bytes / row_part_bytes packets, the last one the rest
+inline constexpr const char* kRowPartBytes = "row_part_bytes";
 
 }  // namespace sparse_dispatch_2d_names

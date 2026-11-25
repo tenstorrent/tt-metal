@@ -33,7 +33,7 @@ def _params():
     out = []
     for p in bs._params((None,)):
         c = p.values[0]
-        if c.model in ("glm53_lb8", "glm53_lb16"):
+        if c.model.startswith(("glm53_lb8", "glm53_lb16")):
             out.append(pytest.param(*p.values, marks=p.marks, id=c.id))
     return out
 
@@ -42,7 +42,7 @@ def _params():
 @pytest.mark.timeout(1800)
 def test_util_sweep(case, routing, mesh_device, device_params, host_weights):
     skip_unless_galaxy()
-    epc = 8 if case.model == "glm53_lb8" else 16
+    epc = 8 if case.model.startswith("glm53_lb8") else 16
     M = case.chunk * 8 // (8 * epc)  # (uniform: chunk x top-8 rows over 8 x epc experts... a chip owns chunk rows)
     op = BlockStages(mesh_device, case, host_weights)
     try:
@@ -135,3 +135,56 @@ def test_decoupled(case, routing, mesh_device, device_params, host_weights):
         op.close()
         os.environ.pop("ZZ_REC_ADDR", None)
         os.environ.pop("ZZ_REC_MODE_ADDR", None)
+
+
+def _det_params():
+    return [p for p in _params() if p.values[0].model.startswith("glm53_lb16") and p.values[0].chunk == 6144]
+
+
+@pytest.mark.parametrize("case, routing, mesh_device, device_params", _det_params(), indirect=["mesh_device", "device_params"])
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("rt", ["uniform", "zipf"])
+def test_q_det(case, routing, mesh_device, device_params, host_weights, rt):
+    """(scratch) accuracy vs torch, and CALLS calls of the same routing against the first (bit identical?)"""
+    import os
+
+    skip_unless_galaxy()
+    calls = int(os.environ.get("ZZ_DET_CALLS", "10"))
+    op = BlockStages(mesh_device, case, host_weights)
+    try:
+        op.route(rt)
+        y = op()
+        first = op.y_on_host(y)
+        op.check(y, f"{case.id} {rt}")
+        diffs = []
+        for i in range(1, calls):
+            d = (op.y_on_host(op()) - first).abs()
+            bad = int((d.amax(1) > 0).sum())
+            rel = float((d.norm(dim=1) / first.norm(dim=1).clamp_min(1e-30)).max())
+            diffs.append((bad, rel))
+        logger.info(f"[det] {case.id} {rt}: {calls} calls, tokens differing from call 0 per call {[b for b, _ in diffs]}, max rel {max(r for _, r in diffs):.3g}")
+    finally:
+        op.close()
+
+
+@pytest.mark.parametrize("case, routing, mesh_device, device_params", _det_params(), indirect=["mesh_device", "device_params"])
+@pytest.mark.timeout(1800)
+def test_q_diag(case, routing, mesh_device, device_params, host_weights):
+    """(scratch) per token: |got| / |want|, cosine, per 192-column segment correlation; got's value stats"""
+    import torch
+
+    skip_unless_galaxy()
+    op = BlockStages(mesh_device, case, host_weights)
+    try:
+        op.route("uniform")
+        got_all = op.y_on_host(op())
+        ids, ws, xin = op.routing_on_host()
+        logger.info(f"[diag] got: abs max {float(got_all.abs().max()):.4g} mean {float(got_all.abs().mean()):.4g} zeros {float((got_all == 0).float().mean()):.1%} nonfinite {int((~torch.isfinite(got_all)).sum())}")
+        for t in [0, 1, 2, op.S, 3 * op.S + 5]:
+            want = op.reference(ids[t : t + 1], ws[t : t + 1], xin[t : t + 1])[0]
+            got = got_all[t]
+            seg = [float(torch.corrcoef(torch.stack([got[s : s + 192], want[s : s + 192]]))[0, 1]) for s in range(0, got.shape[0], 192)]
+            logger.info(f"[diag] t{t}: cos {float(torch.nn.functional.cosine_similarity(got, want, dim=0)):.4f} |got|/|want| {float(got.norm() / want.norm()):.3f} seg corr {[round(v, 2) for v in seg]}")
+            logger.info(f"[diag]   got[:8] {[round(v, 4) for v in got[:8].tolist()]} want[:8] {[round(v, 4) for v in want[:8].tolist()]}")
+    finally:
+        op.close()

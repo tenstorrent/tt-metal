@@ -103,8 +103,9 @@ void SparseDispatch2dDeviceOperation::validate_on_program_cache_miss(
     const uint32_t row_bytes = t.xbuf.buffer()->aligned_page_size();
     const size_t payload = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     TT_FATAL(args.pack == 1 || args.pack == 2, "sparse_dispatch_2d: pack must be 1 or 2, got {}", args.pack);
+    // (a row wider than the payload goes as several packets: row_part_bytes)
     TT_FATAL(
-        args.pack * row_bytes <= payload,
+        args.pack * row_bytes <= payload || (args.pack == 1 && row_part_bytes(row_bytes, payload) <= payload),
         "sparse_dispatch_2d: {} row(s) of {} B a packet exceed the fabric payload {} B",
         args.pack,
         row_bytes,
