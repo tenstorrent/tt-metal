@@ -62,6 +62,17 @@ extern "C" __attribute__((noinline, used)) void reference_run_runtime_count(cons
     lltt::replay(5 /*start*/, count);
 }
 
+// A runtime start index is encoded in a register and issued through the instruction buffer.
+extern "C" __attribute__((noinline, used)) void run_runtime_start(const std::uint32_t start)
+{
+    replay::run(replay::BufferRange {start, 5});
+}
+
+extern "C" __attribute__((noinline, used)) void reference_run_runtime_start(const std::uint32_t start)
+{
+    lltt::replay(start, 5 /*count*/);
+}
+
 extern "C" __attribute__((noinline, used)) std::uint32_t get_operation_max_count()
 {
     return replay::get_operation<replay::BufferRange {4, 28}>();

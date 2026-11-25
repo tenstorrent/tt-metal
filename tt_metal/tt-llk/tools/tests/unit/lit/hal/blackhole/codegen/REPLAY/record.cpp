@@ -177,3 +177,17 @@ extern "C" __attribute__((noinline, used)) void reference_record_runtime_count(c
     }
     reference_enable_gathering();
 }
+
+// A runtime start index is encoded in a register and issued through the instruction buffer.
+extern "C" __attribute__((noinline, used)) void record_runtime_start(const std::uint32_t start)
+{
+    replay::record({start, 1}, [] { scalar::set_low<1>(hal::gpr<1>()); });
+}
+
+extern "C" __attribute__((noinline, used)) void reference_record_runtime_start(const std::uint32_t start)
+{
+    reference_disable_gathering();
+    lltt::record(start, 1 /*count*/);
+    TTI_SETDMAREG(0 /*Payload_SigSelSize*/, 1 /*Payload_SigSel*/, 0 /*SetSignalsMode*/, 2 /*RegIndex16b*/);
+    reference_enable_gathering();
+}

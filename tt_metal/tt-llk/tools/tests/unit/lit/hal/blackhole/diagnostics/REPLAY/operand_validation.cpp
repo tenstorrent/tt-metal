@@ -4,13 +4,9 @@
 
 // clang-format off
 // RUN: %split-file %s %t
-// RUN: not %{blackhole_tensix_compile} %{blackhole_math_thread} -c %t/run-runtime-start.cpp -o %t.o 2>&1 | FileCheck %s --check-prefix=RUNTIME_START
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} -Werror=narrowing %t/operation-int-count.cpp 2>&1 | FileCheck %s --check-prefix=INT_COUNT
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/run-runtime-template-count.cpp 2>&1 | FileCheck %s --check-prefix=RUNTIME_TEMPLATE
 // clang-format on
-
-// The SFPI REPLAY builtin rejects a start index that is not constant after inlining.
-// RUNTIME_START: error: argument {{[0-9]+}} is not a constant
 
 // BufferRange fields are std::uint32_t; tt-metal and LLK builds turn the narrowing
 // warning into an error with -Werror.
@@ -18,16 +14,6 @@
 
 // A value computed from function arguments needs the runtime overload.
 // RUNTIME_TEMPLATE: error: the value of 'count' is not usable in a constant expression
-
-//--- run-runtime-start.cpp
-#include <cstdint>
-
-#include "hal/replay.h"
-
-void probe(const std::uint32_t start)
-{
-    hal::replay::run({start, 5});
-}
 
 //--- operation-int-count.cpp
 #include <cstdint>
