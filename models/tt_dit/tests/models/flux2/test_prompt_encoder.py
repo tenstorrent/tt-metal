@@ -12,6 +12,7 @@ from ....parallel.config import EncoderParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....pipelines.flux2.prompt_encoder import PromptEncoder
 from ....utils.check import assert_quality
+from ....utils.hf_local_mirror import ensure_cached
 from .device_params import prompt_encoder_params_flux2
 
 
@@ -83,7 +84,7 @@ def test_encode(mesh_device: ttnn.MeshDevice, checkpoint_name: str) -> None:
 )
 def test_upsample(mesh_device: ttnn.MeshDevice) -> None:
     tp_axis = 1
-    checkpoint_name = "black-forest-labs/FLUX.2-dev"
+    checkpoint_name = ensure_cached("black-forest-labs/FLUX.2-dev")
     prompts = ["A futuristic city skyline at sunset"]
     temperature = 0.15
 

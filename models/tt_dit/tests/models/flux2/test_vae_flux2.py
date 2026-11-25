@@ -14,6 +14,7 @@ from ....parallel.config import Flux2VaeParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils import tensor
 from ....utils.check import assert_quality
+from ....utils.hf_local_mirror import ensure_cached
 from .device_params import line_params_flux2, single_device_params_flux2
 
 _LAYERS_PER_BLOCK = 1  # pruned from pretrained (2) to keep host run fast
@@ -25,7 +26,7 @@ def _load_pruned_torch_model() -> reference.AutoencoderKLFlux2:
     The mid_block is left intact — it already uses num_layers=1 (2 resnets, 1 attention)
     matching TT's VaeMidBlock default, regardless of layers_per_block.
     """
-    model = reference.AutoencoderKLFlux2.from_pretrained("black-forest-labs/FLUX.2-dev", subfolder="vae")
+    model = reference.AutoencoderKLFlux2.from_pretrained(ensure_cached("black-forest-labs/FLUX.2-dev"), subfolder="vae")
     assert isinstance(model, reference.AutoencoderKLFlux2)
     model.eval()
     keep = _LAYERS_PER_BLOCK + 1
@@ -181,7 +182,9 @@ def test_vae_flux2_encoder(*, mesh_device: ttnn.MeshDevice, height: int, width: 
     tp_axis = 0
     h_axis = 1 - tp_axis
 
-    torch_model = reference.AutoencoderKLFlux2.from_pretrained("black-forest-labs/FLUX.2-dev", subfolder="vae")
+    torch_model = reference.AutoencoderKLFlux2.from_pretrained(
+        ensure_cached("black-forest-labs/FLUX.2-dev"), subfolder="vae"
+    )
     assert isinstance(torch_model, reference.AutoencoderKLFlux2)
     torch_model.eval()
 
