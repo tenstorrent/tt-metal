@@ -54,8 +54,8 @@ inline __attribute__((always_inline)) void vector()
  * @brief Encode a pure-delay unpacker bubble (UNPACR_NOP, delay flavor).
  *
  * @tparam Engine: Unpacker whose queue the bubble occupies.
- * @note The side-effectful UNPACR_NOP flavors (source-bank fill, data-valid publish, stream
- *       pop) are unpacker operations, not NOPs, and belong to @ref hal::unpack.
+ * @note The source-bank clear flavor of UNPACR_NOP, with its optional data-valid handoff, is an
+ *       unpacker operation, not a NOP: use @ref hal::unpack::Unpacker::clear.
  */
 template <hal::unpack::Engine Engine>
 constexpr std::uint32_t unpacker_operation()
