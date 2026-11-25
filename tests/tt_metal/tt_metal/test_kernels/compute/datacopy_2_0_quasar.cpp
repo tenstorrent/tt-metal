@@ -13,6 +13,8 @@
 // 0 = one run, 6 = three runs of 3, 5, 3 sections, re-init between, 7 = two DFB pairs (in0 -> out0 then in1 -> out1,
 // num_tiles / 2 each), 12 = early return by runtime arg skip: 1 = before compute_kernel_hw_startup, 2 = right after
 // it, 3 = after one copied + packed section, inside a second section after its copy; 0 = one run.
+// 20 = one run packed with ReLU (pack_init<Relu::Zero>), 21 = one run with each section packed twice to the same
+// output tiles, the second time with L1 accumulation on (out = 2 x in).
 // LTA (host define): in0 / out0 are resident L1 tensors read through LocalTensorAccessor, with no DFBs and no DM
 // kernels; one run of num_tiles / tiles_per_section full sections (mode is ignored).
 // SEM (host define, with LTA): a DM kernel writes in0 and then signals the shared semaphore `ready`; wait for it first.
@@ -56,8 +58,8 @@ void copy_block(In in, std::uint32_t start_itile) {
     }
 }
 
-// One Dest section of N tiles: in DFB -> copy -> Dest -> pack -> out DFB.
-template <std::uint32_t N, typename In, typename Out, typename DfbIn, typename DfbOut>
+// One Dest section of N tiles: in DFB -> copy -> Dest -> pack -> out DFB. L1_ACC: pack it again, accumulating.
+template <std::uint32_t N, typename In, typename Out, bool L1_ACC = false, typename DfbIn, typename DfbOut>
 void copy_section(DfbIn& in, DfbOut& out) {
     in.wait_front(N);
     out.reserve_back(N);
@@ -66,6 +68,11 @@ void copy_section(DfbIn& in, DfbOut& out) {
     ckernel::tile_regs_commit();
     ckernel::tile_regs_wait();
     ex::pack_block<N, 1>(out.template back<Out>(), 0);
+    if constexpr (L1_ACC) {
+        ex::pack_reconfig_l1_acc(true);
+        ex::pack_block<N, 1>(out.template back<Out>(), 0);
+        ex::pack_reconfig_l1_acc(false);
+    }
     ckernel::tile_regs_release();
     out.push_back(N);
     in.pop_front(N);
@@ -82,14 +89,21 @@ constexpr std::uint32_t block() {
     return b;
 }
 
-template <std::uint32_t NumTiles, typename In, typename Out, typename DfbIn, typename DfbOut>
+template <
+    std::uint32_t NumTiles,
+    typename In,
+    typename Out,
+    ex::Relu RELU = ex::Relu::None,
+    bool L1_ACC = false,
+    typename DfbIn,
+    typename DfbOut>
 void copy_sections(DfbIn& in, DfbOut& out) {
     constexpr std::uint32_t B = block<NumTiles>();
     static_assert(NumTiles % B == 0);
     copy_init(in.template front<In>());
-    ex::pack_init(out.template back<Out>());
+    ex::pack_init<DST_ACCUM_MODE, RELU>(out.template back<Out>());
     for (std::uint32_t i = 0; i < NumTiles / B; ++i) {
-        copy_section<B, In, Out>(in, out);
+        copy_section<B, In, Out, L1_ACC>(in, out);
     }
 }
 
@@ -159,6 +173,10 @@ void kernel_main() {
         copy_sections<num_tiles / 2, In0, Out0>(in0, out0);
         copy_sections<num_tiles / 2, In1, Out1>(in1, out1);
 #endif
+    } else if constexpr (mode == 20) {
+        copy_sections<num_tiles, In0, Out0, ex::Relu::Zero>(in0, out0);
+    } else if constexpr (mode == 21) {
+        copy_sections<num_tiles, In0, Out0, ex::Relu::None, true>(in0, out0);
     } else {
         copy_sections<num_tiles, In0, Out0>(in0, out0);
     }
