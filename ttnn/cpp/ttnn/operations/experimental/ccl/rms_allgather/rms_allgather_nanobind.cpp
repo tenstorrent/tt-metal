@@ -26,7 +26,7 @@ void bind_fused_rms_minimal(nb::module_& mod) {
             it does not reshard inputs/outputs internally, so callers (and compilers) must satisfy
             the layout contract:
 
-            - input_tensor: shape (1, 1, M, N) with M <= 32 and N a multiple of 32; TILE layout;
+            - input_tensor: shape (1, 1, M, N) with M <= 32 and N a positive multiple of 32; TILE layout;
               dtype FLOAT32, BFLOAT16, or BFLOAT8_B. Must be width-sharded in L1 with ROW_MAJOR
               shard orientation, sharded on the same core grid that ``global_semaphore`` was created
               on. Interleaved / DRAM inputs are not accepted (reshard to width-sharded L1 first), and
