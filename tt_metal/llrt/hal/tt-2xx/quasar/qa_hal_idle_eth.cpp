@@ -70,7 +70,7 @@ HalCoreInfoType create_eth_mem_map(HalProgrammableCoreType core_type, bool progr
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::PROFILER)] = GET_IERISC_MAILBOX_ADDRESS_HOST(profiler);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] = MEM_IERISC_KERNEL_CONFIG_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)] =
-        tt::align(MEM_IERISC_ROUTER_UNRESERVED_BASE, max_alignment);
+        tt::align(linked ? MEM_IERISC_ROUTER_UNRESERVED_BASE : MEM_IERISC_UNRESERVED_BASE, max_alignment);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::CORE_INFO)] = GET_IERISC_MAILBOX_ADDRESS_HOST(core_info);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG)] = GET_IERISC_MAILBOX_ADDRESS_HOST(go_messages);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG_INDEX)] =

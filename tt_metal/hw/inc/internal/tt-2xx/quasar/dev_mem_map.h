@@ -497,6 +497,15 @@
 // MEM_PACKET_HEADER_POOL_SIZE with MaxDMProcessorsPerCoreType = MEM_IERISC_LOCAL_HARTS, which a host build of this map
 // cannot see.
 #define MEM_IERISC_PACKET_HEADER_POOL_SIZE (PACKET_HEADER_MAX_SIZE * 6 * 2 * MEM_IERISC_LOCAL_HARTS)
+// The Ethernet link of this CCE, written by the host before launch: EthLink (hostdev/eth_link.h).
+#define MEM_IERISC_FABRIC_ETH_LINK_SIZE 16
+#define MEM_IERISC_FABRIC_ETH_LINK_BASE (MEM_IERISC_PACKET_HEADER_POOL_BASE + MEM_IERISC_PACKET_HEADER_POOL_SIZE)
+// The router's 8-byte staging word of each TX queue for a single-word send on a NOC link (eth_cce_send.h send_dword).
+// Written only through the uncached alias, so no cached line covers it.
+#define MEM_IERISC_FABRIC_NOC_DWORD_STAGE_SIZE 32
+#define MEM_IERISC_FABRIC_NOC_DWORD_STAGE_BASE (MEM_IERISC_FABRIC_ETH_LINK_BASE + MEM_IERISC_FABRIC_ETH_LINK_SIZE)
+// Unreserved L1 of an idle Ethernet core: above the regions both Ethernet slots have.
+#define MEM_IERISC_UNRESERVED_BASE ((MEM_IERISC_FABRIC_ETH_LINK_BASE + MEM_IERISC_FABRIC_ETH_LINK_SIZE + 63) & ~63)
 // Fabric router regions on a linked Keraunos CCE (ACTIVE_ETH), after the routing table. Router state and command
 // alias the routing table head, as on Blackhole.
 #define MEM_IERISC_ROUTING_TABLE_SIZE MEM_ROUTING_TABLE_SIZE
@@ -504,8 +513,7 @@
 #define MEM_IERISC_FABRIC_ROUTER_COMMAND_BASE (MEM_IERISC_ROUTING_TABLE_BASE + 16)
 // sizeof(FabricTelemetry), including the postcode (4 B) and scratch (28 B) words at its end.
 #define MEM_IERISC_FABRIC_TELEMETRY_SIZE 160
-#define MEM_IERISC_FABRIC_TELEMETRY_BASE \
-    ((MEM_IERISC_PACKET_HEADER_POOL_BASE + MEM_IERISC_PACKET_HEADER_POOL_SIZE + 15) & ~15)
+#define MEM_IERISC_FABRIC_TELEMETRY_BASE MEM_IERISC_UNRESERVED_BASE
 #define MEM_IERISC_FABRIC_POSTCODES_SIZE 4
 #define MEM_IERISC_FABRIC_SCRATCH_SIZE 28
 #define MEM_IERISC_FABRIC_POSTCODES_BASE                                                                      \
@@ -515,15 +523,7 @@
     (MEM_IERISC_FABRIC_TELEMETRY_BASE + MEM_IERISC_FABRIC_TELEMETRY_SIZE - MEM_IERISC_FABRIC_SCRATCH_SIZE)
 #define MEM_IERISC_FABRIC_KERNEL_HEARTBEAT_SIZE 16
 #define MEM_IERISC_FABRIC_KERNEL_HEARTBEAT_BASE (MEM_IERISC_FABRIC_TELEMETRY_BASE + MEM_IERISC_FABRIC_TELEMETRY_SIZE)
-// The Ethernet link of this CCE, written by the host before launch: EthLink (hostdev/eth_link.h).
-#define MEM_IERISC_FABRIC_ETH_LINK_SIZE 16
-#define MEM_IERISC_FABRIC_ETH_LINK_BASE \
-    (MEM_IERISC_FABRIC_KERNEL_HEARTBEAT_BASE + MEM_IERISC_FABRIC_KERNEL_HEARTBEAT_SIZE)
-// The router's 8-byte staging word of each TX queue for a single-word send on a NOC link (eth_cce_send.h send_dword).
-// Written only through the uncached alias, so no cached line covers it.
-#define MEM_IERISC_FABRIC_NOC_DWORD_STAGE_SIZE 32
-#define MEM_IERISC_FABRIC_NOC_DWORD_STAGE_BASE (MEM_IERISC_FABRIC_ETH_LINK_BASE + MEM_IERISC_FABRIC_ETH_LINK_SIZE)
-#define MEM_IERISC_FABRIC_ROUTER_END (MEM_IERISC_FABRIC_NOC_DWORD_STAGE_BASE + MEM_IERISC_FABRIC_NOC_DWORD_STAGE_SIZE)
+#define MEM_IERISC_FABRIC_ROUTER_END (MEM_IERISC_FABRIC_KERNEL_HEARTBEAT_BASE + MEM_IERISC_FABRIC_KERNEL_HEARTBEAT_SIZE)
 #define MEM_IERISC_ROUTER_UNRESERVED_BASE ((MEM_IERISC_FABRIC_ROUTER_END + 63) & ~63)
 
 // Offset 0 is the reset-vector register. Every hart starts there.
