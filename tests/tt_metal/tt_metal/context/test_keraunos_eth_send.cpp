@@ -9,7 +9,7 @@
 // KeraunosEthSend/Ordering.*: payload-then-credit on one TX queue, the credit through
 // eth_write_remote_reg() (CmdBuf1) or cce_eth::send_dword() directly (Credit8).
 //
-// Run (after bringup_mmk.py has brought the loopback up in packet mode):
+// Run (once the HSIO0.eth0 <-> HSIO1.eth0 loopback is up in packet mode):
 //   export TT_METAL_EMU_SERVER=<host>:<port>
 //   export TT_METAL_EMU_SOC_DESC=$TT_METAL_HOME/tt_metal/third_party/umd/descriptors/soc_descs/mmk.yaml
 //   export TT_METAL_SLOW_DISPATCH_MODE=1 TT_KERAUNOS_ETH_LOOPBACK=1
@@ -67,7 +67,7 @@ constexpr uint32_t kTxq = 0;
 constexpr uint32_t kPolls = 2'000'000;  // per device wait
 constexpr std::chrono::seconds kHostTimeout{1800};
 
-// TT_KERAUNOS_ETH_LOOPBACK=1: bringup_mmk.py has the loopback up. Unset or 0 skips the suite; any other value throws.
+// TT_KERAUNOS_ETH_LOOPBACK=1: the loopback is up. Unset or 0 skips the suite; any other value throws.
 bool keraunos_loopback_up() {
     const auto value = tt::parse_env<std::string>("TT_KERAUNOS_ETH_LOOPBACK", "0");
     TT_FATAL(value == "0" || value == "1", "TT_KERAUNOS_ETH_LOOPBACK must be 0 or 1, got '{}'", value);
@@ -78,7 +78,7 @@ bool keraunos_loopback_up() {
     do {                                                                                               \
         skip_unless_ethernet_package();                                                                \
         if (!keraunos_loopback_up()) {                                                                 \
-            GTEST_SKIP() << "Set TT_KERAUNOS_ETH_LOOPBACK=1 once bringup_mmk.py has the loopback up."; \
+            GTEST_SKIP() << "Set TT_KERAUNOS_ETH_LOOPBACK=1 once tiles 0 and 1 have the loopback up."; \
         }                                                                                              \
     } while (0)
 

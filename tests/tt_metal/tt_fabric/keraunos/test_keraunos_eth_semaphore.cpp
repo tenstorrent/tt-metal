@@ -45,8 +45,8 @@ namespace {
 
 using tt::tt_fabric::fabric_router_tests::BaseFabricFixture;
 
-// HSIO 0's global window is 0x1204000000 and CCE SRAM begins 0x02800000 above it
-// (Keraunos-E100 Table 14). Same constant as test_mimir_emu.cpp.
+// HSIO 0's global window is 0x1204000000 and CCE SRAM begins 0x02800000 above it.
+// Same constant as test_mimir_emu.cpp.
 constexpr uint64_t kHsioGlobalSramBase = KERAUNOS_HSIO0_SYSTEM_BASE + 0x02800000ULL;
 
 constexpr uint32_t kCounterSem = 0;
