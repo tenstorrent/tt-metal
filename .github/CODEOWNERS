@@ -757,7 +757,7 @@ tests/ttnn/unit_tests/base_functionality/test_reload_host_support.py @razorback3
 tests/ttnn/unit_tests/base_functionality/test_graph_report_device_tensors_unit.py @razorback3 @dongjin-na @bbradelTT
 ttnn/cpp/ttnn-nanobind/pipeline_module_nanobind.* @nsextonTT
 ttnn/cpp/ttnn-nanobind/mcast_host.* @nsextonTT @tenstorrent/metalium-developers-kernel-lib @tenstorrent/metalium-developers-mmfusedreduce
-tests/ttnn/unit_tests/base_functionality/test_mcast_host_bindings.py @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/unit_tests/base_functionality/test_mcast_host_bindings.py @razorback3 @dongjin-na @tenstorrent/metalium-developers-kernel-lib @tenstorrent/metalium-developers-mmfusedreduce
 ttnn/cpp/ttnn-nanobind/profiler.* @nsextonTT
 # The TTNN profiler code itself, and its multi-host smoke test with that test's configs: owned by the profiler's owners.
 ttnn/cpp/tools/profiler/ @mo-tenstorrent @akerteszTT @yusufbashiTT
