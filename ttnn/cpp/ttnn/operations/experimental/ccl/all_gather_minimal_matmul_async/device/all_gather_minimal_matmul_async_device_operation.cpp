@@ -87,6 +87,11 @@ void validate_rows(
             K,
             ag_rows,
             ag.padded_shape()[-1]);
+        TT_FATAL(
+            ag.dtype() == act_tensor.dtype(),
+            "all_gather_minimal_matmul_async persistent_output_buffer dtype ({}) must match the input's ({})",
+            ag.dtype(),
+            act_tensor.dtype());
     }
     if (attributes.fused_ternary_scalar.has_value() && tensor_args.fused_ternary_input_a.has_value() &&
         tensor_args.fused_ternary_input_b.has_value()) {
@@ -513,8 +518,8 @@ AllGatherMinimalMatmulAsyncOp::spec_return_value_t AllGatherMinimalMatmulAsyncOp
     std::vector<tt::tt_metal::TensorSpec> output_specs;
     output_specs.reserve(chunks + 1 + (fsdp_fused ? 1 : 0));
 
-    output_specs.push_back(
-        tt::tt_metal::TensorSpec(intermediate_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config)));
+    output_specs.push_back(tt::tt_metal::TensorSpec(
+        intermediate_shape, TensorLayout(in0_input_tensor.dtype(), PageConfig(Layout::TILE), memory_config)));
 
     if (fsdp_fused) {
         // Gathered weight intermediate: [K_full, N_local] = [K_local * fsdp_ring_size, N_local].

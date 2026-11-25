@@ -423,12 +423,11 @@ public:
     // `device`'s SoC descriptor.
     CoreCoord pick_unused_dram_logical_core(const IDevice* device, uint32_t bank_id) const;
 
-    // Returns the ordered list of DRISC logical cores that drive a bank's DRAM-sender
-    // prefetcher on `device`: element 0 is the free non-endpoint subchannel
-    // (pick_unused_dram_logical_core), element 1 is the bank's NOC1 worker-endpoint
-    // subchannel (idle for NOC0 during matmul). Both run their kernels on NOC0; the
-    // pair lets two DRISC cores share a bank's receiver set. Under
-    // DramSenderPlacement::DispatchEngine a bank has one endpoint, so the list has one element.
+    // tt::tt_metal::dram_sender_logical_cores (impl/buffers/dram_sender_topology.hpp) against
+    // `device`'s SoC descriptor: the DRISC cores that drive a bank's DRAM-sender prefetcher. Both run
+    // their kernels on NOC0 (the NOC1 endpoint is idle for NOC0 during matmul); the pair lets two DRISC
+    // cores share a bank's receiver set. Under DramSenderPlacement::DispatchEngine a bank has one
+    // endpoint, so the list has one element.
     //
     // The result names endpoint roles (see metal_SocDescriptor::dram_bank_endpoint_coords), so a
     // well-formed descriptor set returns the same coords for every `device` in a mesh; the

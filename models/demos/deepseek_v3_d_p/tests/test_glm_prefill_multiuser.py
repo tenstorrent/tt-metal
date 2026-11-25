@@ -796,12 +796,14 @@ def test_glm_packed_presend_matches_inline_push(variant, config_only, mesh_devic
         ids = _token_ids(config, num_users, max(lengths))
         ids_by_slot = {s: ids[s % num_users] for s in range(num_slots)}
         shared_layers = sum(t == "shared" for t in _PRESEND_INDEXER_TYPES)
-        shared_steps = shared_layers * sum(not c.is_empty for chunks in forwards for c in chunks)
+        real_chunks = sum(not c.is_empty for chunks in forwards for c in chunks)
+        shared_steps = shared_layers * real_chunks
 
-        hidden, pushes = {}, {}
+        hidden, pushes, builds = {}, {}, {}
         for presend, offset in ((True, 0), (False, num_users)):
             planner.presend = presend
             planner.pushes.clear()
+            planner.builds = 0
             for chunks in forwards:
                 chunks = [
                     c if c.is_empty else PrefillChunk(c.slot_id + offset, c.actual_start, c.actual_end) for c in chunks
@@ -813,11 +815,17 @@ def test_glm_packed_presend_matches_inline_push(variant, config_only, mesh_devic
                             out, k, FORWARD_CHUNKS, c, sp, chunk_local
                         )
             pushes[presend] = dict(planner.pushes)
-            logger.info(f"[presend={presend}] pushes {pushes[presend]} over {shared_steps} shared steps")
+            builds[presend] = planner.builds
+            logger.info(
+                f"[presend={presend}] pushes {pushes[presend]}, {builds[presend]} plans built over {shared_steps} "
+                "shared steps"
+            )
         planner.presend = True
         # Every shared step got its prefix from the step before it (the first from the last full layer's last chunk).
         assert pushes[True] == {"PREFIX": shared_steps, "REST": shared_steps}, pushes[True]
         assert pushes[False] == {"ALL": shared_steps}, pushes[False]
+        # One plan per chunk of each forward, reused by every shared layer (not rebuilt chunk after chunk per layer).
+        assert builds == {True: real_chunks, False: real_chunks}, builds
 
         failures = []
         for (slot, start), got in hidden.items():
