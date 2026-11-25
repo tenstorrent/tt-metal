@@ -34,7 +34,7 @@ inline void calculate_logical_not() {
 
     // Integer layouts: lz(v) >> 5 is exactly 1 for 0 and 0 otherwise (SFPLZ returns 32 only
     // for 0), with no lane predication. Float: the default is stored first and the taken arm
-    // stored under the predicate, two SFPSTOREs instead of two SFPMOVs and a store.
+    // stored under the predicate.
     auto row = [&](const int r) __attribute__((always_inline)) {
         vType v = sfpi::dst_reg[r].mode<layout>();
         if constexpr (std::is_same_v<vType, sfpi::vFloat>) {

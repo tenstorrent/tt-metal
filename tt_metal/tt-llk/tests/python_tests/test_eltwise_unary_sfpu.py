@@ -1671,6 +1671,76 @@ def test_eltwise_unary_sfpu_compare_zero_bit_patterns(
     )
 
 
+# Integer compare-to-zero edges for the lz / sign-bit paths: zero, one, the sign bit alone,
+# all ones and the carries between the 16-bit halves. Periods 13 and 11 vary every face row.
+# fmt: off
+_INT_ZERO_EDGE_BITS_32 = (
+    0x00000000, 0x00000001, 0x00000002, 0x80000000, 0x80000001, 0x7FFFFFFF, 0xFFFFFFFF,
+    0x0000FFFF, 0x00010000, 0x00008000, 0x00800000, 0x7F800000, 0xDEADBEEF,
+)
+_INT_ZERO_EDGE_BITS_16 = (
+    0x0000, 0x0001, 0x0002, 0x8000, 0x8001, 0x7FFF, 0xFFFF, 0x00FF, 0x0100, 0xFF00, 0xBEEF,
+)
+# fmt: on
+_INT_ZERO_EDGE_CASES = [
+    (DataFormat.Int32, MathOperation.LogicalNot),
+    (DataFormat.UInt16, MathOperation.EqualZero),
+    (DataFormat.UInt16, MathOperation.NotEqualZero),
+    (DataFormat.UInt16, MathOperation.LogicalNot),
+    (DataFormat.UInt32, MathOperation.EqualZero),
+    (DataFormat.UInt32, MathOperation.NotEqualZero),
+    (DataFormat.UInt32, MathOperation.LogicalNot),
+]
+
+
+@wormhole_only
+@pytest.mark.parametrize(
+    "int_format,mathop",
+    _INT_ZERO_EDGE_CASES,
+    ids=[f"{f.name}-{m.name}" for f, m in _INT_ZERO_EDGE_CASES],
+)
+def test_eltwise_unary_sfpu_int_zero_compare_edges(
+    int_format: DataFormat, mathop: MathOperation
+):
+    """logical_not / eqz / nez on integer Dest return exactly 1 or 0 for every edge word."""
+    formats = InputOutputFormat(int_format, int_format)
+    input_dimensions = [64, 64]
+    num_elements = input_dimensions[0] * input_dimensions[1]
+    is_16 = int_format == DataFormat.UInt16
+    bits = _INT_ZERO_EDGE_BITS_16 if is_16 else _INT_ZERO_EDGE_BITS_32
+    words = torch.tensor(bits, dtype=torch.int64)
+    words = words.repeat(num_elements // words.numel() + 1)[:num_elements]
+    raw = words.to(torch.int32).to(torch.int16) if is_16 else words.to(torch.int32)
+
+    res_from_L1 = eltwise_unary_sfpu(
+        formats=formats,
+        dest_acc=dest_acc_for(int_format),
+        approx_mode=ApproximationMode.No,
+        mathop=mathop,
+        fast_mode=FastMode.No,
+        input_dimensions=input_dimensions,
+        src_A=raw.numpy().tobytes(),
+        src_B=raw.numpy().tobytes(),
+        check_golden=False,
+    )
+
+    is_zero = words == 0
+    golden = (~is_zero if mathop == MathOperation.NotEqualZero else is_zero).to(
+        torch.int64
+    )
+    res_tensor = torch.tensor(res_from_L1, dtype=torch.int64) & (
+        0xFFFF if is_16 else UINT32_MASK
+    )
+    assert res_tensor.shape == golden.shape, "Result and golden differ in length"
+    mismatch = torch.nonzero(res_tensor != golden).flatten()
+    assert (
+        mismatch.numel() == 0
+    ), f"{mismatch.numel()} of {golden.numel()} words differ; first: " + ", ".join(
+        f"[{i}] in {int(words[i]):#x} got {int(res_tensor[i]):#x} want {int(golden[i])}"
+        for i in mismatch[:MAX_REPORTED_MISMATCHES].tolist()
+    )
+
+
 # Ops whose behaviour turns on a comparison against a fixed scalar. A random float sweep
 # reaches such a scalar with probability ~0, so the tie -- the one input where a `>` / `>=`
 # slip is visible -- never gets driven. The 0/1 ops are here because their output would

@@ -26,11 +26,9 @@ inline void calculate_unary_ne(std::uint32_t value) {
     for (int d = 0; d < ITERATIONS; d += 2) {
         sfpi::vFloat v0 = sfpi::dst_reg[0];
         sfpi::vFloat v1 = sfpi::dst_reg[1];
-        // Store the default, then overwrite the taken lanes under the predicate: two
-        // SFPSTOREs of the constant registers instead of two SFPMOVs and a store. `s == v`
-        // (not `v == s`) makes v the subtract's destination, so the compiler does not copy
-        // s first; EQ0 of the difference is the same either way. Left inside v_if (not
-        // hoisted like gt below) so a literal non-zero s can still lower to SFPIADD.
+        // Default stored first, taken lanes overwritten under the predicate. `s == v` (not
+        // `v == s`) makes v the subtract's destination, so s is not copied first; EQ0 of the
+        // difference is the same either way.
         sfpi::dst_reg[0] = 1.0f;
         sfpi::dst_reg[1] = 1.0f;
         v_if(s == v0) { sfpi::dst_reg[0] = 0.0f; }
