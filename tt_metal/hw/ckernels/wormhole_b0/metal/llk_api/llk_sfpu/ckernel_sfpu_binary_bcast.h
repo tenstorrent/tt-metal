@@ -50,7 +50,7 @@ namespace sfpu {
 //                rows, then eltwise-combined with the data tile.
 //
 // Implementation strategy (BCAST_COL):
-//   For each 4-row band of the source/dest tiles (two bands at a time, as the
+//   For each 4-row band of the source/dest tiles (full tile: two bands at a time, as the
 //   two interleaved chains of the dual broadcast; see that section below):
 //     (1) Load the band's even-column slot of the bcast tile into a broadcast
 //         LREG. Only "SFPU column 0" in each 8-lane sub-vector carries the
@@ -73,7 +73,8 @@ namespace sfpu {
 //         op against the broadcast value, and store the result.
 //
 // The address-free part of steps (2)-(3) is recorded into the SFPU replay
-// buffer by sfpu_bcast_col_init() and replayed for every band pair.
+// buffer by sfpu_bcast_col_init() and replayed for every band pair (full tile)
+// or every band (VectorMode::R and the single-band entry point).
 //
 // Implementation strategy (BCAST_ROW):
 //   SFPTRANSP + in-place eltwise, with the bcast load hoisted out of the
@@ -122,6 +123,8 @@ constexpr std::uint32_t ODD_COLS_OFFSET = 2;              // addr +2 selects the
 // BCAST_COL path:
 //   LREG_MASK  (LREG6)  - one-time lane mask: all ones in SFPU col 0, zero elsewhere.
 //                         Built once in _sfpu_binary_bcast_init_().
+//   LREG_BCAST (LREG0) / LREG_TMP (LREG2) - single-band paths (VectorMode::R,
+//                         band entry point): broadcast value and rotate-and-add scratch.
 //   LREG_DUAL_A (LREG0) / LREG_DUAL_A_TMP (LREG2) - broadcast value and
 //                         rotate-and-add scratch of the even band of a pair.
 //   LREG_DUAL_B (LREG7) / LREG_DUAL_B_TMP (LREG1 = LREG_DATA0) - the same for
@@ -543,13 +546,11 @@ inline void _process_col_bcast_row_band_(
         TTI_SFPADD(LREG_DATA2, p_sfpu::LCONST_1, LREG_BCAST, LREG_DATA2, 0);
         TTI_SFPADD(LREG_DATA3, p_sfpu::LCONST_1, LREG_BCAST, LREG_DATA3, 0);
     } else if constexpr (BINOP == BinaryOp::SUB) {
-        // data - bcast = data + (-bcast). Negate bcast once into LREG_TMP
-        // (free after the broadcast sequence) then reuse for all 4 adds.
-        TTI_SFPMOV(0, LREG_BCAST, LREG_TMP, 1 /* SFPMOV_MOD1_NEGATE */);
-        TTI_SFPADD(LREG_DATA0, p_sfpu::LCONST_1, LREG_TMP, LREG_DATA0, 0);
-        TTI_SFPADD(LREG_DATA1, p_sfpu::LCONST_1, LREG_TMP, LREG_DATA1, 0);
-        TTI_SFPADD(LREG_DATA2, p_sfpu::LCONST_1, LREG_TMP, LREG_DATA2, 0);
-        TTI_SFPADD(LREG_DATA3, p_sfpu::LCONST_1, LREG_TMP, LREG_DATA3, 0);
+        // data - bcast = bcast * -1 + data, as in the full-tile path.
+        TTI_SFPMAD(LREG_BCAST, p_sfpu::LCONST_neg1, LREG_DATA0, LREG_DATA0, 0);
+        TTI_SFPMAD(LREG_BCAST, p_sfpu::LCONST_neg1, LREG_DATA1, LREG_DATA1, 0);
+        TTI_SFPMAD(LREG_BCAST, p_sfpu::LCONST_neg1, LREG_DATA2, LREG_DATA2, 0);
+        TTI_SFPMAD(LREG_BCAST, p_sfpu::LCONST_neg1, LREG_DATA3, LREG_DATA3, 0);
     } else if constexpr (BINOP == BinaryOp::MUL) {
         TTI_SFPMUL(LREG_DATA0, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA0, 0);
         TTI_SFPMUL(LREG_DATA1, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA1, 0);
