@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdlib>
 #include <map>
 #include <string>
 
@@ -647,7 +648,23 @@ FlatProgramHandles add_flat_routed_expert_program(
                 writer_options(down_options, w_widx),
                 {{"down_weight_cb", 1}, {"weight_tile_bytes", w_tile}, {"down_weight_reads_per_barrier", DW_BATCH}}));
         program.kernels[kr].common_runtime_args = gu_xy;  // (the gate/up cores' xy: the same on every down core)
-        const auto kc = cp("down_compute.cpp", cores, down_options, cfg.down_fp32, cfg.down_fp32);
+        // FP8_Y_PLAN.md M0 / M1 experiments (env, not in the program hash: one setting a process):
+        // TT_FLAT_EXP_DOWN_HALF_SYNC=1 runs the fp32 down compute in half sync; TT_FLAT_EXP_DOWN_PACK_DUMMY=N runs N
+        // dummy SFPU sweeps over the packer's half a pass
+        auto exp_env = [](const char* name) {
+            const char* v = std::getenv(name);
+            return v ? static_cast<uint32_t>(std::strtoul(v, nullptr, 10)) : 0u;
+        };
+        const bool down_full_sync = cfg.down_fp32 && exp_env("TT_FLAT_EXP_DOWN_HALF_SYNC") == 0;
+        const auto kc =
+            cp("down_compute.cpp",
+               cores,
+               with_added(
+                   down_options,
+                   {{"down_pack_dummy", exp_env("TT_FLAT_EXP_DOWN_PACK_DUMMY")},
+                    {"down_pack_quant", exp_env("TT_FLAT_EXP_DOWN_PACK_QUANT")}}),
+               cfg.down_fp32,
+               down_full_sync);
         for (uint32_t d : ds) {
             const CoreCoord dc = p.down_cores[d];
             const uint32_t pred =
