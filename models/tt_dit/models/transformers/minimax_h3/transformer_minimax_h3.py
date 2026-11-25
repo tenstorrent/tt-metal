@@ -709,11 +709,3 @@ class MiniMaxH3Transformer3DModel(Module):
         """Bind one geometry's VSA pre-pass to every block (its constants are shared across layers); None is dense."""
         for block in self.transformer_blocks:
             block.attn.set_vsa_prepass(prepass)
-
-    def release_traces(self) -> None:
-        """Release every captured `run_blocks` trace, across all `tracer_trace_key` buckets."""
-        run_blocks = type(self).run_blocks
-        tracers = [run_blocks._tracers.get(self), *run_blocks._tracers_keyed.get(self, {}).values()]
-        for tracer in tracers:
-            if tracer is not None:
-                tracer.release_trace()
