@@ -338,6 +338,14 @@ void kernel_main() {
     // That halves the multicast bytes (bf8_b vs bf16) and leaves the 10 non-owners
     // with no tilize at all. The TILE path keeps the fixed x sender below.
     constexpr bool tilize_once = x_is_row_major != 0;
+    // Read overlap: the x reads after the ready acks, the next-chunk x prefetch and the cross-expert prefetch (see each
+    // below) run with table-addressed weights only, the gpt-oss-20b path they were measured on. Other callers keep
+    // the order they had: x reads at the start and end of each K-block, every expert's loads at its own start.
+#ifdef WEIGHT_PAGES
+    constexpr bool kOverlapReads = true;
+#else
+    constexpr bool kOverlapReads = false;
+#endif
     constexpr uint32_t cb_x_tilized = get_named_compile_time_arg_val("cb_x_tilized");
     CircularBuffer cb_x_tilized_obj(cb_x_tilized);
     constexpr uint32_t x_stage_cb = cb_in0_x;
@@ -820,6 +828,11 @@ void kernel_main() {
             // tilize_once ownership of this K-block.
             const uint32_t x_owner_gx = x_owner_of(kb);
             const bool is_x_owner = tilize_once && (my_nt_gu == x_owner_gx);
+            if constexpr (tilize_once && !kOverlapReads) {
+                if (owns_x(kb + kAhead)) {
+                    finish_x_rm_block();
+                }
+            }
             x_stage_obj.reserve_back(g_in0_block_tiles_max);
             cb_in1_gate_obj.reserve_back(g_in1_block_num_tiles);
             if constexpr (reader_mcasts_up) {
@@ -865,7 +878,7 @@ void kernel_main() {
             // on gpt-oss-20b's tensor-parallel experts (1/4 of the math per x block of the full experts), the owner
             // waited 3.6 us of every 6.7 us K-block for that one late ack. Issued here, the reads also start one
             // K-block earlier than at the end of the iteration, and the core does them while it waits for block kb.
-            if constexpr (tilize_once) {
+            if constexpr (tilize_once && kOverlapReads) {
                 if (owns_x(kb + kAhead)) {
                     finish_x_rm_block();
                 }
@@ -1122,6 +1135,11 @@ void kernel_main() {
                     cb_in1_up_obj.push_back(g_in1_block_num_tiles);
                 }
             }
+            if constexpr (tilize_once && !kOverlapReads) {
+                if (owns_x(kb + kAhead + 2)) {
+                    issue_x_rm_block(kb + kAhead + 2);
+                }
+            }
         }
 
         // IN1_WRITER_MCAST: drain the decoupled weight-multicast pipeline before phase 4.
@@ -1144,7 +1162,7 @@ void kernel_main() {
         // chunk's first K-block waited for its owner to read the whole block from DRAM on one core (the compute idled
         // ~20 us per chunk there at 1024 tokens per chunk). Only with >= 2 tile-rows per core: with fewer the
         // activation is too short to hide the reads (128 tokens per expert: 3 us). Per-core state only.
-        {
+        if constexpr (kOverlapReads) {
             const bool same_expert = chunk + 1 < effective_chunks;
             if (per_core_M >= 2 && (same_expert || next_expert < experts_per_chip)) {
                 uint32_t nc_tiles = count_tiles, nc_count = count_value, nc_stick = x_start_stick, nc_chunk = chunk + 1;
@@ -1381,7 +1399,7 @@ void kernel_main() {
             // barrier: the next expert's start waits for them and pushes the biases). They land during this expert's
             // down phase instead of in front of the next expert's first K-block, where they cost ~10 us of every
             // expert on gpt-oss-20b's tensor-parallel experts (32 per chip per layer).
-            if (kb == 0 && chunk + 1 == effective_chunks && next_expert < experts_per_chip) {
+            if (kOverlapReads && kb == 0 && chunk + 1 == effective_chunks && next_expert < experts_per_chip) {
                 const uint32_t ne = next_expert;
 #ifdef WEIGHT_PAGES
                 read_pages(ne, ei + 1, /*wait=*/false);

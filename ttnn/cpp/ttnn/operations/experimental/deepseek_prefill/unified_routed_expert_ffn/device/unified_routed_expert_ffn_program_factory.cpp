@@ -342,6 +342,12 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // skips OOB writes for output rows >= M_tiles_full. Avoids the host-side
     // pad/slice round-trip in the composite for non-aligned M.
 
+    // Bias CB depth in experts. weights_from_pages: 2, so the reader loads the next expert's biases while the compute
+    // still holds this expert's (the reader's cross-expert prefetch). Single-buffered, the reader's reserve waited for
+    // the compute to finish the whole expert (down phase included) before it could issue the next expert's bias reads:
+    // 9.6 us per expert on gpt-oss-20b's tensor-parallel experts (32 per chip per layer). Other callers: 1, as before
+    // (the prefetch is off for them, and a second slot would only take L1 from the matmul blocks).
+    const uint32_t bias_slots = from_pages ? 2 : 1;
     // Bias tile size (FUSE_BIAS): all three bias CBs share the gate-bias dtype
     // (enforced in validation). Zero when unused so the L1 footprint estimate
     // (cb_footprint_bytes below) is unchanged on the bias-free path.
@@ -560,9 +566,9 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         total += static_cast<uint64_t>(M * per_core_N_d) * partials_d_tile_size;            // cb_mm_partials_d
         total += static_cast<uint64_t>(cb_out_tiles) * out_tile_size;                       // cb_out
         total += static_cast<uint64_t>(M * in0_block_w_d * 2) * intermed_tile_size;         // cb_in0_down_full
-        // Bias CBs (FUSE_BIAS): double-buffered, per_core_N_gu (gate/up) + per_core_N_d
-        // (down) tiles each. Keep in sync with the CB allocations in the "Bias CBs" section.
-        total += static_cast<uint64_t>(2 * (2 * per_core_N_gu + per_core_N_d)) * bias_ts;
+        // Bias CBs (FUSE_BIAS): bias_slots x (per_core_N_gu (gate/up) + per_core_N_d (down)) tiles.
+        // Keep in sync with the CB allocations in the "Bias CBs" section.
+        total += static_cast<uint64_t>(bias_slots * (2 * per_core_N_gu + per_core_N_d)) * bias_ts;
         total += static_cast<uint64_t>(3) * pages_scratch_bytes;  // cb_pages_reader (2 rows) + cb_pages_writer
         if (has_zero_row) {
             total += rm_out_row_bytes;  // cb_zero_row
@@ -1006,10 +1012,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     make_cb(CB_START_SCRATCH_READER, tt::DataFormat::UInt32, /*tiles=*/1, start_scratch_bytes);
 
     // Bias CBs (FUSE_BIAS): one full per-core N-column slice per expert (read once, reused across all its
-    // chunks), double-buffered: the reader loads the next expert's biases while the compute still holds this
-    // expert's. Single-buffered, the reader's reserve waited for the compute to finish the whole expert (down phase
-    // included) before it could even issue the next expert's bias reads: 9.6 us per expert on gpt-oss-20b's
-    // tensor-parallel experts (32 per chip per layer), with the next expert's x and weights queued behind it.
+    // chunks), bias_slots deep (see its definition).
     // gate/up: per_core_N_gu tiles; down: per_core_N_d tiles. Bias broadcast across rows in the compute kernel.
     const bool fuse_bias = op.fuse_bias;
     if (fuse_bias) {
@@ -1017,9 +1020,9 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         // (and the compute kernel's single unpack reconfig for gate/up) use it safely.
         const tt::DataFormat bias_df = tt::tt_metal::datatype_to_dataformat_converter(t.gate_biases[0].dtype());
         const uint32_t bias_tile_size = tt::tile_size(bias_df);
-        make_cb(CB_GATE_BIAS, bias_df, /*tiles=*/2 * per_core_N_gu, bias_tile_size);
-        make_cb(CB_UP_BIAS, bias_df, /*tiles=*/2 * per_core_N_gu, bias_tile_size);
-        make_cb(CB_DOWN_BIAS, bias_df, /*tiles=*/2 * per_core_N_d, bias_tile_size);
+        make_cb(CB_GATE_BIAS, bias_df, /*tiles=*/bias_slots * per_core_N_gu, bias_tile_size);
+        make_cb(CB_UP_BIAS, bias_df, /*tiles=*/bias_slots * per_core_N_gu, bias_tile_size);
+        make_cb(CB_DOWN_BIAS, bias_df, /*tiles=*/bias_slots * per_core_N_d, bias_tile_size);
     }
     if (has_zero_row) {
         make_cb(CB_ZERO_ROW, tt::DataFormat::Float16_b, /*tiles=*/1, rm_out_row_bytes);
