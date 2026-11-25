@@ -6,7 +6,7 @@
 
 #include <fmt/core.h>
 #include <functional>
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 

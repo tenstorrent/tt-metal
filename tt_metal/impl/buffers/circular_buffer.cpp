@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <buffer.hpp>
-#include <circular_buffer.hpp>
-#include <global_circular_buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer.hpp>
+#include <tt-metalium/memory/cross_program/global_circular_buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <array>
 #include <string>
@@ -12,9 +12,9 @@
 #include <tt_stl/assert.hpp>
 #include "impl/buffers/circular_buffer.hpp"
 #include "impl/buffers/global_circular_buffer_impl.hpp"
-#include "circular_buffer_config.hpp"
-#include "circular_buffer_constants.h"
-#include "tile.hpp"
+#include "tt-metalium/workload/legacy/circular_buffer_config.hpp"
+#include "tt-metalium/workload/legacy/circular_buffer_constants.h"
+#include "tt-metalium/data_formats/tile.hpp"
 
 namespace tt::tt_metal {
 // We use 16 bits to store tiles_received and tiles_acked.

@@ -5,12 +5,12 @@
 #include <bit>
 #include <cmath>
 
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include "ttnn/operations/experimental/quasar/reduction/generic/device/reduce_op.hpp"
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include "welford_reduce_device_operation.hpp"
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 
 namespace ttnn::prim::qsr {
 

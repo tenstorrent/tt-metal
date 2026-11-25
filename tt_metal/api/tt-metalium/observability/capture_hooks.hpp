@@ -18,9 +18,9 @@
 #include <unordered_set>
 #include <vector>
 
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
 
 namespace tt::tt_metal {
 class Buffer;

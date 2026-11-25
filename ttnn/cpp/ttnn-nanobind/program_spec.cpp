@@ -26,7 +26,7 @@
 
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/tensor/tensor_types.hpp>
+#include <tt-metalium/memory/tensor/tensor_types.hpp>
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/strong_type.hpp>
 

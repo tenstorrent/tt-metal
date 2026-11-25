@@ -9,7 +9,7 @@
 #include <tuple>
 #include <utility>
 
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 
 #include "ttnn/core.hpp"
 #include "ttnn/tensor/tensor.hpp"

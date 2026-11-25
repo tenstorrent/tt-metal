@@ -33,12 +33,12 @@
 #include <tt-umd/types/core_coordinates.hpp>
 #include <tt-umd/types/xy_pair.hpp>
 
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include "debug_helpers.hpp"
 #include "dprint_server.hpp"
 #include "dprint_parser.hpp"
 #include "fmt/base.h"
-#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include "hostdev/device_print_common.h"
 #include "hostdev/device_print_structures.h"
 #include "hostdevcommon/dprint_common.h"

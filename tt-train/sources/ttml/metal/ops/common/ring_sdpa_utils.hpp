@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <optional>
 #include <string_view>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt_stl/assert.hpp>
 #include <utility>
 

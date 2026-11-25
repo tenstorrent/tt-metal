@@ -3,12 +3,12 @@
 
 #include "pool_utils.hpp"
 #include <limits>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <tt_stl/assert.hpp>
 
-#include "tt-metalium/constants.hpp"
+#include "tt-metalium/data_formats/tile_constants.hpp"
 
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 namespace ttnn::operations::pool {

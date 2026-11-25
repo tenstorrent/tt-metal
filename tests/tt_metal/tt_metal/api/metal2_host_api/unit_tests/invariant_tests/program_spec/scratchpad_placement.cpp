@@ -8,7 +8,7 @@
 #include <stdexcept>
 #include <vector>
 
-#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
 #include "metal2_host_api/test_helpers/test_helpers.hpp"

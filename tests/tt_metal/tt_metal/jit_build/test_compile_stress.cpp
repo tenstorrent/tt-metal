@@ -62,10 +62,10 @@
 #include <fmt/format.h>
 #include <tt_stl/span.hpp>
 
-#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include "impl/program/program_impl.hpp"
 #include "common/env_lib.hpp"
 #include "common/tt_backend_api_types.hpp"

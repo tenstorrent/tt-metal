@@ -5,7 +5,7 @@
 #pragma once
 
 #include <optional>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 
 #include "adamw_device_operation_types.hpp"
 #include "metal/ttnn_all_includes.hpp"

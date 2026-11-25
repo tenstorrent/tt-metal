@@ -11,11 +11,11 @@
 #include <tt-umd/types/core_coordinates.hpp>
 #include <unordered_map>
 
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 namespace tt::tt_metal {

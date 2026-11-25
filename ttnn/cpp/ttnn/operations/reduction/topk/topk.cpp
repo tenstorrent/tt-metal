@@ -4,7 +4,7 @@
 
 #include "ttnn/operations/reduction/topk/topk.hpp"
 
-#include "tt-metalium/work_split.hpp"
+#include "tt-metalium/utils/work_split.hpp"
 #include "tt_stl/assert.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
 #include "ttnn/operations/data_movement/copy/copy.hpp"

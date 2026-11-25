@@ -7,7 +7,7 @@
 #include <optional>
 #include <vector>
 
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 #include "ttnn/tensor/tensor.hpp"

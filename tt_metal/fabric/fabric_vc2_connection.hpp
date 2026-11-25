@@ -6,8 +6,8 @@
 
 #include <vector>
 #include <cstdint>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 
 namespace tt::tt_fabric {
