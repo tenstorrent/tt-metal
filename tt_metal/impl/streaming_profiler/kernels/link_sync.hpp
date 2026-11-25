@@ -130,18 +130,6 @@ private:
 // What TransmitterPort and ReceiverPort share. Every member starts at zero, so the firmware has no initial values to
 // copy for a port when it loads the kernel. start() sets the nonzero ones.
 struct PortBase {
-    // The refclk ticks from one burst to the next.
-    static constexpr uint32_t kBurstTicks =
-        (kSyncCheck ? kernel_profiler::kLinkSyncCheckRoundTicks : kernel_profiler::kLinkSyncRoundTicks) /
-        kBurstsPerRound;
-    // The furthest ahead a burst or a poll is ever scheduled. next_burst_refclk and next_poll_refclk keep only the low
-    // word, because they are never more than this far ahead.
-    static constexpr uint32_t kMaxLeadTicks = 1u << 20;
-    static_assert(kBurstTicks < kMaxLeadTicks);
-    // The interval between a router's polls of its port: of the receiver always, of the transmitter while a burst is
-    // under way. A poll sends, or takes and echoes, one frame, so a burst is over in about 5 of the 16 intervals.
-    static constexpr uint32_t kBurstPollTicks = kBurstTicks / 16;
-
     eth_ptp::TxHeaderRow<kLinkTxq, kLinkHeaderRow> header;
     eth_ptp::RxStampRule<kLinkTcamRow, kLinkLabel> rule;
     volatile kernel_profiler::LinkSyncL1* l1 = nullptr;
@@ -151,9 +139,6 @@ struct PortBase {
     StampSum egress, ingress;
     uint32_t ring_tail = 0;
     bool stopped = false;
-    // The refclk count at which a router next serves the port. The port sets it each time it is served
-    // (schedule_next_poll). Zero, its start value, reads as passed, so the first poll starts the port.
-    uint32_t next_poll_refclk = 0;
 
     // The frame slots and the ctl and done words must be zero when the port starts, because a stale awaiting_echo would
     // stall the link's clock sync for good.
@@ -180,9 +165,6 @@ struct PortBase {
     static FORCE_INLINE kernel_profiler::LinkSyncCtl ctl() {
         return static_cast<kernel_profiler::LinkSyncCtl>(control_vector()[kernel_profiler::SPSC_LINK_SYNC_CTL]);
     }
-    // Returns whether next_poll_refclk has passed, by the same test as TransmitterPort::due(). This is all a router's
-    // poll costs when the port is not due.
-    FORCE_INLINE bool poll_due() const { return next_poll_refclk - eth_ptp::kRefclkLo.read() > kMaxLeadTicks; }
 
 protected:
     // A burst's frame i uses slot i, at the same L1 address on both ports, so an echo lands on the frame it answers.
@@ -263,6 +245,13 @@ protected:
 };
 
 struct TransmitterPort : PortBase {
+    static constexpr uint32_t kBurstTicks =
+        (kSyncCheck ? kernel_profiler::kLinkSyncCheckRoundTicks : kernel_profiler::kLinkSyncRoundTicks) /
+        kBurstsPerRound;
+    // The furthest ahead a burst is ever scheduled. next_burst_refclk keeps only the low word, because it is never more
+    // than this far ahead.
+    static constexpr uint32_t kMaxLeadTicks = 1u << 20;
+    static_assert(kBurstTicks < kMaxLeadTicks);
     uint32_t next_burst_refclk = 0;
     uint32_t frames_to_send = 0, round_bursts_sent = 0;
 
@@ -292,11 +281,6 @@ struct TransmitterPort : PortBase {
             return;
         }
         burst();
-    }
-    // Schedules when a router next serves the port: one poll interval ahead while a frame waits to be sent or a due
-    // burst waits for its echoes, otherwise at the next burst.
-    FORCE_INLINE void schedule_next_poll() {
-        next_poll_refclk = due() ? eth_ptp::kRefclkLo.read() + kBurstPollTicks : next_burst_refclk;
     }
 
 private:
@@ -345,8 +329,6 @@ struct ReceiverPort : PortBase {
         }
         echo();
     }
-    // Schedules when a router next serves the port: one poll interval ahead.
-    FORCE_INLINE void schedule_next_poll() { next_poll_refclk = eth_ptp::kRefclkLo.read() + kBurstPollTicks; }
 
 private:
     // Takes each frame as it arrives, and the burst's stamps with its last frame, before echoing it. The earlier
@@ -380,16 +362,31 @@ using Port = std::conditional_t<Role == kernel_profiler::LinkSyncRole::Transmitt
 template <kernel_profiler::LinkSyncRole Role>
 struct RouterPort {
     static inline Port<Role> port;
-    // Starts the port the first time. After that, serves it and has it schedule when it is next served.
+    // The interval at which the router serves the port while a burst is under way or expected. Each time, the port
+    // sends, or takes and echoes, one frame, so a burst is over in about 5 of the 16 intervals before the next one.
+    static constexpr uint32_t kBurstPollTicks = TransmitterPort::kBurstTicks / 16;
+    // The refclk count at which the router next serves the port. Zero, its start value, reads as passed, so the first
+    // poll starts the port.
+    static inline uint32_t next_poll_refclk = 0;
+    // The transmitter is next served at its next burst, or one poll interval ahead while a frame waits to be sent or a
+    // due burst waits for its echoes. The receiver is served one poll interval ahead.
+    static FORCE_INLINE void schedule_next_poll() {
+        if constexpr (Role == kernel_profiler::LinkSyncRole::Transmitter) {
+            next_poll_refclk = port.due() ? eth_ptp::kRefclkLo.read() + kBurstPollTicks : port.next_burst_refclk;
+        } else {
+            next_poll_refclk = eth_ptp::kRefclkLo.read() + kBurstPollTicks;
+        }
+    }
+    // Starts the port the first time. After that, serves it and schedules when it is next served.
     __attribute__((noinline, cold)) static void serve_port() {
         if (port.l1 == nullptr) {
             port.start();
-            port.schedule_next_poll();
+            schedule_next_poll();
             return;
         }
         if (port.stopped) {
             // A stopped port is served as rarely as next_poll_refclk allows.
-            port.next_poll_refclk = eth_ptp::kRefclkLo.read() + PortBase::kMaxLeadTicks;
+            next_poll_refclk = eth_ptp::kRefclkLo.read() + TransmitterPort::kMaxLeadTicks;
             return;
         }
         invalidate_l1_cache();
@@ -400,10 +397,11 @@ struct RouterPort {
         if (port.due()) {
             port.serve();
         }
-        port.schedule_next_poll();
+        schedule_next_poll();
     }
+    // Serves the port when next_poll_refclk has passed, by the same test as TransmitterPort::due().
     static FORCE_INLINE void poll() {
-        if (port.poll_due()) [[unlikely]] {
+        if (next_poll_refclk - eth_ptp::kRefclkLo.read() > TransmitterPort::kMaxLeadTicks) [[unlikely]] {
             serve_port();
         }
     }
