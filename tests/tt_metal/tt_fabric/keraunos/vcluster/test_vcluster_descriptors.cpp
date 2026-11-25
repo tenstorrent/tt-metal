@@ -369,7 +369,7 @@ TEST(VclusterDescriptors, Line3) {
         << textproto_canonical(g.mesh_graph_desc);
 }
 
-// "Every other key is copied unchanged": a generated SoC descriptor differs from the package's only in
+// Every other key is copied unchanged: a generated SoC descriptor differs from the package's only in
 // eth, keraunos.cores and dram_views.
 TEST(VclusterDescriptors, SocDescCopiesThePackage) {
     const TempDir out("copies");

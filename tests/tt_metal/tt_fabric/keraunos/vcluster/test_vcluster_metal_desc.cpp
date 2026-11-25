@@ -445,7 +445,7 @@ TEST_F(VclusterMetalDescDeathTest, E6ProgrammableDramViewInTwoChips) {
         "Chips 0 and 1 both list DRAM view \\{");
 }
 
-// E6: "One in no chip's file is allowed", an Ethernet core. Chip 1 gives up 4-2 and the link that used it.
+// E6: one in no chip's file is allowed, an Ethernet core. Chip 1 gives up 4-2 and the link that used it.
 TEST_F(VclusterMetalDescDeathTest, E6EthernetCoreInNoChipOpens) {
     EXPECT_OPENS(
         [](Files& files) {
@@ -466,7 +466,7 @@ TEST_F(VclusterMetalDescDeathTest, E6EthernetCoreInNoChipOpens) {
         });
 }
 
-// E6: "One in no chip's file is allowed", a programmable DRAM view. The chip that holds two gives one up.
+// E6: one in no chip's file is allowed, a programmable DRAM view. The chip that holds two gives one up.
 TEST_F(VclusterMetalDescDeathTest, E6ProgrammableDramViewInNoChipOpens) {
     EXPECT_OPENS([](Files& files) {
         for (const auto& soc_file : files.socs) {

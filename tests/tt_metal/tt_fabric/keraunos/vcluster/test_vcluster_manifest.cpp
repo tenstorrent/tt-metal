@@ -169,7 +169,7 @@ TEST(VclusterManifest, LineLoadsAsWritten) {
 
 TEST(VclusterManifest, LinePasses) { EXPECT_EQ(rows(kLine), Rows{}); }
 
-// "`capture` is optional." Named, it loads; rows 9 to 11 are not judged here.
+// `capture` is optional. Named, it loads; rows 9 to 11 are not judged here.
 TEST(VclusterManifest, CaptureNamedLoads) {
     const Manifest m = load(edit({{"version: 1\n", "version: 1\ncapture: line3.capture\n"}}));
     EXPECT_EQ(m.capture, std::filesystem::path("line3.capture"));
@@ -209,7 +209,7 @@ TEST(VclusterManifest, NocLinksPass) {
         Rows{});
 }
 
-// "A region on a CCE where its device has no slot is allowed."
+// A region on a CCE where its device has no slot is allowed.
 TEST(VclusterManifest, RegionWithoutSlotPasses) {
     const std::string yaml = edit(
         {{"      - {tile: 0, cce: 0, base: 0x0, size: 0x400000}\n",
@@ -359,7 +359,7 @@ TEST(VclusterManifest, Row1EndsBeforeStageB) {
 
 // --- Stage C: rows 3 to 8 and 13 ---------------------------------------------------------------------------------
 
-// Row 3: two slots name one (tile, cce, hart), "reported once for the second and each later slot": two slots on a
+// Row 3: two slots name one (tile, cce, hart), reported once for the second and each later slot: two slots on a
 // hart give one finding, three give two.
 TEST(VclusterManifest, Row3SharedHart) {
     const std::string two = edit(
@@ -557,7 +557,7 @@ TEST(VclusterManifest, LoadErrorVersion) {
     expect_load_error(edit({{"version: 1\n", ""}}), "version");
 }
 
-// "An unknown or missing `version` is reported alone and ends the load": an unknown key beside it is not
+// An unknown or missing `version` is reported alone and ends the load: an unknown key beside it is not
 // reported.
 TEST(VclusterManifest, LoadErrorVersionAlone) {
     expect_load_error(edit({{"version: 1\n", "version: 2\ntopology: line\n"}}), "version");
@@ -727,8 +727,8 @@ TEST(VclusterManifest, LoadErrorUnknownRoleOrBackend) {
     expect_load_error(edit({{"backend: ethernet", "backend: pcie"}}), "pcie");
 }
 
-// "A slot with an unknown `role` is a load error whatever else it holds", a `port` included. Whether the
-// port is a second error is not stated, so only the role's is required.
+// A slot with an unknown `role` is a load error whatever else it holds, a `port` included. Only the role's error is
+// required.
 TEST(VclusterManifest, LoadErrorUnknownRoleWithPort) {
     const auto errors = load_errors(
         edit({{"{tile: 3, cce: 0, hart: 1, role: worker}", "{tile: 3, cce: 0, hart: 1, role: master, port: 1}"}}));
@@ -776,8 +776,8 @@ TEST(VclusterManifest, LoadErrorListsEvery) {
     EXPECT_EQ(names("master"), 1) << joined(errors);
 }
 
-// "The checker asserts that its package facts are usable: a hart count and an SRAM size above 0, and at
-// least one core. Unusable facts are a caller's bug, not a row." The spec names no exception type.
+// The checker asserts that its package facts are usable: a hart count and an SRAM size above 0, and at
+// least one core. Unusable facts are a caller's bug, not a row.
 TEST(VclusterManifest, UnusableFactsThrow) {
     const Manifest m = load(kLine);
     EXPECT_ANY_THROW(check_manifest(m, PackageFacts{}));
