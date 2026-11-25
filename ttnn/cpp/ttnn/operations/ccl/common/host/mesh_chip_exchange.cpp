@@ -22,8 +22,6 @@ namespace ttnn::operations::ccl::common {
 
 namespace {
 
-using tt::tt_metal::distributed::multihost::DistributedContext;
-
 // Each chip's record is preceded by the number of ranks that own it, so the sum can be checked.
 constexpr uint32_t OWNER_WORDS = 1;
 
