@@ -5,10 +5,10 @@
 #include "ttnn/operations/reduction/reduce_op_validation.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include <filesystem>
 
@@ -16,7 +16,7 @@ namespace ttnn::prim {
 
 using namespace tt;
 using namespace tt::tt_metal;
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 using ttnn::device_operation::ProgramArtifacts;
 
 ProgramArtifacts ProdNcDeviceOperation::ProdNcProgramFactory::create_program_artifacts(
@@ -267,6 +267,17 @@ ProgramArtifacts ProdNcDeviceOperation::ProdNcProgramFactory::create_program_art
     }
 
     return ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+}
+
+ttnn::command_list::CmdListBindings ProdNcDeviceOperation::ProdNcProgramFactory::map_cmd_list_parameters(
+    const ProdNcDeviceOperation::operation_attributes_t&,
+    const ProdNcDeviceOperation::tensor_args_t&,
+    const tt::tt_metal::ProgramSpec& spec,
+    const tt::tt_metal::ProgramRunArgs& run_params) {
+    ttnn::command_list::CmdListBinder binder{spec, run_params};
+    binder.tensor(/*invoke_name=*/"input_tensor", /*program_spec_param_name=*/tt::tt_metal::TensorParamName{"input"});
+    binder.tensor(/*invoke_name=*/"output_tensor", /*program_spec_param_name=*/tt::tt_metal::TensorParamName{"output"});
+    return binder.finish();
 }
 
 }  // namespace ttnn::prim

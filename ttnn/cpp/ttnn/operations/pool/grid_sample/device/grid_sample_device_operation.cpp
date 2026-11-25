@@ -5,7 +5,8 @@
 #include "ttnn/operations/pool/grid_sample/device/grid_sample_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace ttnn::prim {
 using namespace tt;
@@ -288,7 +289,7 @@ tt::tt_metal::TensorSpec GridSampleOperation::compute_output_specs(
 
     return tt::tt_metal::TensorSpec(
         output_logical_shape,
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             output_data_type,
             PageConfig(output_layout),
             output_memory_config,

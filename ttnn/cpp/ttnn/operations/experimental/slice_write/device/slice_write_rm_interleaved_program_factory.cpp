@@ -6,15 +6,15 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 
 #include "slice_write_device_operation_types.hpp"
 #include "ttnn/operations/experimental/padded_slice/device/slice_cb_descriptor.hpp"
-#include "tt-metalium/math.hpp"
+#include "tt-metalium/utils/math.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 
 using namespace tt::tt_metal;
@@ -266,7 +266,7 @@ ProgramDescriptor SliceWriteRMInterleavedProgramFactory::create_descriptor(
     KernelDescriptor::Defines writer_defines;
     if (stride[-1] != 1) {
         writer_defines.emplace_back("LAST_DIM_STRIDED", "1");
-        uint32_t output_row_size_bytes = input_padded_shape[-1] * input.element_size();
+        uint32_t output_row_size_bytes = output.padded_shape()[-1] * output.element_size();
         cb_page_size = tt::round_up(output_row_size_bytes, alignment);
         // input/output data_formats should be the same
         desc.cbs.push_back(make_slice_cb_descriptor(

@@ -20,18 +20,22 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import TtIndexer
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import mesh_shard_dims
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import COMPUTE_KERNEL_CONFIG_HIFI2
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.mtp_config import MTPConfig
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.utils import eh_proj_to_tt_layout
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TopologyArg, TtPrefillBlock
+from models.demos.deepseek_v3_d_p.utils.weight_cache_dump import weight_cache_dump_mode
 
 
 class TtFusedMTP(LightweightModule):
     """The MTP input projection: two distributed RMSNorms, a concat, and a TP matmul.
 
     Concatenating two TP-sharded activations leaves each chip a non-contiguous slice of eh_proj's
-    input, so the weight rows are permuted chip-major on the host before sharding.
+    input, so the weight rows are permuted chip-major on the host before sharding. Under TP the
+    matmul and its reduce-scatter run as one fused op.
     """
 
     def __init__(
@@ -44,6 +48,7 @@ class TtFusedMTP(LightweightModule):
         num_links: int = 1,
         topology: TopologyArg = ttnn.Topology.Linear,
         weights_dtype: ttnn.DataType = ttnn.bfloat16,
+        matmul_weights_dtype: ttnn.DataType = ttnn.bfloat8_b,
         compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_HIFI2,
         weight_cache_path: Optional[Path] = None,
         cache_name_prefix: str = "mtp_0",
@@ -52,14 +57,10 @@ class TtFusedMTP(LightweightModule):
         """Build both norms and upload eh_proj.
 
         ``state_dict`` holds enorm/hnorm/eh_proj in HF layout (eh_proj is ``[H, 2H]``, un-transposed);
-        it may be None only when the weights are loaded from ``weight_cache_path``.
+        it may be None only when the weights are loaded from ``weight_cache_path``. ``weights_dtype`` is
+        the cached dtype; ``matmul_weights_dtype`` is what the matmul reads (cast on device after load).
         """
         super().__init__()
-        assert tp_axis == 1, (
-            f"tp_axis={tp_axis} unsupported: TtDistributedRmsNorm shards its weight with a hard-coded "
-            "dims=(None, 2) mapper (tt_distributed_rms_norm.py:_convert_and_cache_weight), so enorm/hnorm "
-            "shard over mesh columns whatever cluster_axis says. tp_axis=0 needs that fixed first."
-        )
         self.mesh_device = mesh_device
         self.mtp_config = mtp_config
         self.hidden_size = mtp_config.hidden_size
@@ -68,6 +69,7 @@ class TtFusedMTP(LightweightModule):
         self.num_links = num_links
         self.topology = topology[tp_axis] if isinstance(topology, tuple) else topology
         self.compute_kernel_config = compute_kernel_config
+        self._is_blackhole = is_blackhole()
 
         if state_dict is None and weight_cache_path is None:
             raise ValueError(
@@ -105,6 +107,11 @@ class TtFusedMTP(LightweightModule):
             cache_name_prefix=cache_name_prefix,
             device=mesh_device,
         )
+        if self.eh_proj.dtype != matmul_weights_dtype:
+            # bfp8 halves the weight read: 0.26 vs 0.34 ms per 5k chunk on Galaxy 8x4, PCC 0.99992 vs bf16.
+            cast = ttnn.typecast(self.eh_proj, matmul_weights_dtype)
+            ttnn.deallocate(self.eh_proj)
+            self.eh_proj = cast
 
     @staticmethod
     def _convert_and_cache_eh_proj(
@@ -124,7 +131,7 @@ class TtFusedMTP(LightweightModule):
         With ``device=None`` this only writes cache files.
         """
         h = hidden_size
-        dims = (None, -2) if tp_axis == 1 else (-2, None)
+        dims = mesh_shard_dims(-2, tp_axis)
 
         def _to_ttnn(tensor: torch.Tensor, name: str) -> ttnn.Tensor:
             mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=dims)
@@ -139,6 +146,7 @@ class TtFusedMTP(LightweightModule):
                 dtype=weights_dtype,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG if device else None,
                 cache_file_name=cache_file_name,
+                cache_dump_mode=weight_cache_dump_mode(),
             )
 
         if eh_proj_weight is not None:
@@ -148,15 +156,19 @@ class TtFusedMTP(LightweightModule):
         return _to_ttnn(w, "eh_proj")
 
     @staticmethod
-    def check_cache_complete(cache_path: Path, cache_name_prefix: str = "mtp_0") -> bool:
-        """Whether the fused-MTP weight cache (both norms + eh_proj) is present."""
+    def check_cache_complete(
+        cache_path: Path, cache_name_prefix: str = "mtp_0", weights_dtype: ttnn.DataType = ttnn.bfloat16
+    ) -> bool:
+        """Whether the fused-MTP weight cache (both norms + eh_proj at ``weights_dtype``, the cached dtype) is present."""
         from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import pattern_exists
 
         if not TtDistributedRmsNorm.check_cache_complete(cache_path, f"{cache_name_prefix}.enorm"):
             return False
         if not TtDistributedRmsNorm.check_cache_complete(cache_path, f"{cache_name_prefix}.hnorm"):
             return False
-        if not pattern_exists(f"{cache_name_prefix}.eh_proj*.tensorbin", "FusedMTP"):
+        # Pinned to the cached dtype; the matmul's bfp8 copy is cast after load.
+        eh_proj_file = f"{cache_name_prefix}.eh_proj_dtype_{weights_dtype.name}_layout_TILE.tensorbin"
+        if not pattern_exists(eh_proj_file, "FusedMTP"):
             logger.debug(f"TTNN cache missing: {cache_name_prefix}.eh_proj")
             return False
         return True
@@ -175,7 +187,12 @@ class TtFusedMTP(LightweightModule):
         """Build the fused-MTP weight cache without copying anything to the device."""
         for name in ("enorm", "hnorm"):
             TtDistributedRmsNorm.build_ttnn_cache(
-                state_dict[name], mtp_config.hidden_size, mesh_device, cache_path, f"{cache_name_prefix}.{name}"
+                state_dict[name],
+                mtp_config.hidden_size,
+                mesh_device,
+                cache_path,
+                f"{cache_name_prefix}.{name}",
+                cluster_axis=tp_axis,
             )
         TtFusedMTP._convert_and_cache_eh_proj(
             state_dict["eh_proj"],
@@ -189,27 +206,65 @@ class TtFusedMTP(LightweightModule):
             device=None,
         )
 
+    # Live L1 bytes per chip allowed for the two norm outputs plus their concat (bf16): a packed pair of 5k chunks
+    # on Galaxy 8x4 (1280 rows x 1536) is 15 MiB.
+    L1_ACT_MAX_BYTES = 16 * 2**20
+
+    def act_memory_config(self, rows_local: int, width_local: int) -> ttnn.MemoryConfig:
+        """Where the norm outputs and concat live: L1 on Blackhole when they fit L1_ACT_MAX_BYTES (0.30 vs 0.34 ms per
+        5k chunk on Galaxy 8x4), else DRAM."""
+        rows = -(-rows_local // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        live_bytes = 8 * rows * width_local  # e and h (2 B x r x w each) live with their concat (2 B x r x 2w), bf16
+        if self._is_blackhole and live_bytes <= self.L1_ACT_MAX_BYTES:
+            return ttnn.L1_MEMORY_CONFIG
+        return ttnn.DRAM_MEMORY_CONFIG
+
     def forward(self, embed: ttnn.Tensor, hidden: ttnn.Tensor) -> ttnn.Tensor:
         """Project the shifted embedding and the previous level's hidden into this level's input.
 
         Both inputs are ``[1, 1, seq_local, H/tp]`` and TP-sharded.
         """
+        rows = embed.shape[-2]
+        mem = self.act_memory_config(rows, embed.shape[-1])
+        self.enorm.output_memcfg = mem
+        self.hnorm.output_memcfg = mem
         e = self.enorm(embed)
         h = self.hnorm(hidden)
 
-        x = ttnn.concat([e, h], dim=-1)
+        x = ttnn.concat([e, h], dim=-1, memory_config=mem)
         ttnn.deallocate(e)
         ttnn.deallocate(h)
-        out_full = ttnn.matmul(x, self.eh_proj, compute_kernel_config=self.compute_kernel_config)
-        ttnn.deallocate(x)
-
-        if self.mesh_device.shape[self.tp_axis] > 1:
+        if self.tp > 1 and rows % ttnn.TILE_SIZE != 0:
+            # The fused op needs whole tiles of rows; keep the separate matmul and reduce-scatter for the rest.
+            out_full = ttnn.matmul(
+                x, self.eh_proj, compute_kernel_config=self.compute_kernel_config, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
             out = ttnn.reduce_scatter(
                 out_full, dim=-1, cluster_axis=self.tp_axis, num_links=self.num_links, topology=self.topology
             )
             ttnn.deallocate(out_full)
-            return out
-        return out_full
+        elif self.tp > 1:
+            out = ttnn.experimental.matmul_reduce_scatter_prefill(
+                x,
+                self.eh_proj,
+                cluster_axis=self.tp_axis,
+                scatter_dim=-1,
+                topology=self.topology,
+                num_links=min(self.num_links, 2),  # the fused op supports 1 or 2 links
+                compute_kernel_config=ttnn.ComputeConfigDescriptor(
+                    math_fidelity=self.compute_kernel_config.math_fidelity
+                ),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                # Ports in a column leave a 10x10 matmul grid (10 tiles per core) instead of ~84 cores at 12:
+                # 0.172 vs 0.197 ms per 5k chunk on Galaxy 8x4, bit-identical.
+                use_column_major_ccl=True,
+            )
+        else:
+            out = ttnn.matmul(
+                x, self.eh_proj, compute_kernel_config=self.compute_kernel_config, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+        ttnn.deallocate(x)
+        return out
 
 
 class TtMTPModule(LightweightModule):
@@ -234,12 +289,14 @@ class TtMTPModule(LightweightModule):
         weights_dtype: ttnn.DataType = ttnn.bfloat16,
         weight_cache_path: Optional[Path] = None,
         cache_name_prefix: str = "mtp_0",
+        kv_only: bool = False,
         **block_kwargs,
     ):
         """Build the fused projection, the decoder layer and ``shared_head.norm``.
 
         ``state_dict`` is ``{"mtp": {enorm, hnorm, eh_proj, shared_head_norm}, "layer": {...}}``, where
         ``"layer"`` is an ordinary ``TtPrefillBlock`` state dict. ``block_kwargs`` passes straight through.
+        ``kv_only`` builds a block that only fills its caches: no query path, FFN/MoE or ``shared_head.norm``.
         """
         super().__init__()
         self.mtp_config = mtp_config or MTPConfig.from_hf_config(config)
@@ -279,20 +336,29 @@ class TtMTPModule(LightweightModule):
             topology=topology,
             tp_axis=tp_axis,
             weight_cache_path=weight_cache_path,
+            kv_only=kv_only,
+            indexer_key_only=kv_only,  # its indexer only writes keys: no wq_b / weights_proj
+            # (the MTP layer's MoE: the model's default (tt/moe_impl.py; GLM-5.3 the MoE block - its gate / shared expert
+            # from the checkpoint's layer mtp_layer_idx, its routed experts from this cache's TtMoe tensorbins) unless the
+            # caller passes moe_impl)
             **block_kwargs,
         )
 
-        self.shared_head_norm = TtDistributedRmsNorm(
-            mesh_device=mesh_device,
-            emb_dim=self.mtp_config.hidden_size,
-            epsilon=self.mtp_config.rms_norm_eps,
-            torch_weight=mtp_weights.get("shared_head_norm"),
-            cluster_axis=tp_axis,
-            num_links=num_links,
-            topology=self.fused.topology,
-            weight_cache_path=weight_cache_path,
-            cache_name_prefix=f"{cache_name_prefix}.shared_head_norm",
-            use_fused=use_fused_rmsnorm,
+        self.shared_head_norm = (
+            None
+            if kv_only
+            else TtDistributedRmsNorm(
+                mesh_device=mesh_device,
+                emb_dim=self.mtp_config.hidden_size,
+                epsilon=self.mtp_config.rms_norm_eps,
+                torch_weight=mtp_weights.get("shared_head_norm"),
+                cluster_axis=tp_axis,
+                num_links=num_links,
+                topology=self.fused.topology,
+                weight_cache_path=weight_cache_path,
+                cache_name_prefix=f"{cache_name_prefix}.shared_head_norm",
+                use_fused=use_fused_rmsnorm,
+            )
         )
 
     @staticmethod
@@ -303,14 +369,28 @@ class TtMTPModule(LightweightModule):
         cache_name_prefix: str = "mtp_0",
         experts_per_chip: int = 8,
         model_cfg: type | None = None,
+        kv_only: bool = False,
+        owns_indexer: bool = True,
     ) -> bool:
-        """Whether the whole module's cache (fused MTP + block + shared_head.norm) is present."""
+        """Whether the module's cache is present: fused MTP + block + shared_head.norm, or with ``kv_only`` what a
+        KV-only build loads (fused MTP, attn_norm, the MLA KV branch). When the layer ``owns_indexer``, also its
+        indexer: every file, or the key side only for ``kv_only``."""
         if not TtFusedMTP.check_cache_complete(cache_path, cache_name_prefix):
             return False
-        if not TtDistributedRmsNorm.check_cache_complete(cache_path, f"{cache_name_prefix}.shared_head_norm"):
+        if kv_only:
+            block_ok = TtPrefillBlock.check_cache_complete(
+                cache_path, layer_idx, is_dense=False, model_cfg=model_cfg, kv_only=True
+            )
+        else:
+            block_ok = TtDistributedRmsNorm.check_cache_complete(
+                cache_path, f"{cache_name_prefix}.shared_head_norm"
+            ) and TtPrefillBlock.check_cache_complete(
+                cache_path, layer_idx, is_dense=False, experts_per_chip=experts_per_chip, model_cfg=model_cfg
+            )
+        if not block_ok:
             return False
-        return TtPrefillBlock.check_cache_complete(
-            cache_path, layer_idx, is_dense=False, experts_per_chip=experts_per_chip, model_cfg=model_cfg
+        return not owns_indexer or TtIndexer.check_cache_complete(
+            cache_path, f"layer_{layer_idx}.mla", key_only=kv_only
         )
 
     def forward(self, embed: ttnn.Tensor, hidden: ttnn.Tensor, rope_tensors: dict, kvpe_cache, **fwd_kwargs):
@@ -318,9 +398,16 @@ class TtMTPModule(LightweightModule):
 
         Returns ``(x, out, out_head_normed, *block_extras)``; ``out_head_normed`` is what the next level
         consumes. Both are None when the level runs kv_only.
+
+        A ``chunks`` keyword (None in the traced packed form) runs the block packed (TtPrefillBlock.forward_packed).
         """
         x = self.fused(embed, hidden)
-        out, *extras = self.layer(x, rope_tensors, kvpe_cache, **fwd_kwargs)
+        packed = "chunks" in fwd_kwargs
+        chunks = fwd_kwargs.pop("chunks", None)
+        if packed:
+            out, *extras = self.layer.forward_packed(x, rope_tensors, kvpe_cache, chunks, **fwd_kwargs)
+        else:
+            out, *extras = self.layer(x, rope_tensors, kvpe_cache, **fwd_kwargs)
         out_head_normed = self.shared_head_norm(out) if out is not None else None
         return (x, out, out_head_normed, *extras)
 
@@ -391,6 +478,8 @@ class TtMTPPredictor(LightweightModule):
         self.index_share = self.mtp_config.index_share_for_mtp_iteration if index_share is None else bool(index_share)
         self.kv_only_last_level = bool(kv_only_last_level)
         self.mesh_device = mesh_device
+        # One KV-only level is the whole replay, so the shared block needs only its cache-filling weights.
+        self.kv_only_module = self.num_levels == 1 and self.kv_only_last_level
 
         self.module = TtMTPModule(
             mesh_device,
@@ -400,6 +489,7 @@ class TtMTPPredictor(LightweightModule):
             self.mtp_config,
             seq_len=seq_len,
             layer_idx=layer_idx,
+            kv_only=self.kv_only_module,
             **module_kwargs,
         )
         self.layer_idx = self.module.layer_idx
@@ -430,6 +520,9 @@ class TtMTPPredictor(LightweightModule):
         for name in _RESERVED_FWD_KWARGS:
             if name in fwd_kwargs:
                 raise TypeError(f"{name} is owned by TtMTPPredictor and must not be passed through fwd_kwargs")
+        assert not (
+            return_indexer_indices and self.kv_only_module
+        ), "a KV-only MTP level computes no top-k; build with kv_only_last_level=False to read it"
         share = self.index_share if index_share is None else bool(index_share)
 
         xs, outs, normeds, per_level_indices = [], [], [], []
@@ -440,7 +533,9 @@ class TtMTPPredictor(LightweightModule):
         for k in range(self.num_levels):
             embed = get_embed(k, h)
             is_last = k == self.num_levels - 1
-            want_indices = return_indexer_indices or (share and k == 0)
+            # Level 1's top-k only matters if a later level reuses it; with one level nothing does.
+            feeds_next_level = share and k == 0 and not is_last
+            want_indices = return_indexer_indices or feeds_next_level
             kwargs = dict(fwd_kwargs)
             kwargs["cache_layer_idx"] = self.first_cache_slot + k
             if layer_ack_base is not None:
@@ -455,7 +550,9 @@ class TtMTPPredictor(LightweightModule):
                 kwargs["return_indexer_indices"] = True
             if is_last and return_kv_cache:
                 kwargs["return_kv_cache"] = True
-            if is_last and self.kv_only_last_level and not (share and k == 0):
+            # The last level only has to fill its KV and index-key slots: prefill discards its output.
+            # With one level this skips the indexer scoring, SDPA, output projection and MoE.
+            if is_last and self.kv_only_last_level:
                 kwargs["force_kv_only"] = True
 
             x, out, out_head_normed, *extras = self.module.forward(embed, h, rope_tensors, kvpe_cache, **kwargs)
@@ -465,7 +562,7 @@ class TtMTPPredictor(LightweightModule):
             else:
                 (kv,) = extras
                 indices = None
-            if share and k == 0:
+            if feeds_next_level:
                 assert indices is not None, "index_share is on but level 1's MLA returned no top-k indices"
                 shared_indices = indices
 
@@ -478,7 +575,10 @@ class TtMTPPredictor(LightweightModule):
             h = out_head_normed
 
         if shared_indices is not None and not return_indexer_indices:
-            ttnn.deallocate(shared_indices)
+            # A packed forward's indices are one tensor per chunk (None for an empty one).
+            for t in shared_indices if isinstance(shared_indices, list) else [shared_indices]:
+                if t is not None:
+                    ttnn.deallocate(t)
 
         return MTPPredictorOutput(
             x=xs,

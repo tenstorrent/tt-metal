@@ -4,12 +4,12 @@
 
 #pragma once
 
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/global_semaphore.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/memory/cross_program/global_semaphore.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
-#include "sub_device.hpp"
+#include "tt-metalium/mesh/sub_device.hpp"
 #include "impl/sub_device/sub_device_impl.hpp"
 
 namespace tt::tt_metal {

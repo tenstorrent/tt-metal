@@ -6,9 +6,9 @@
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include "point_to_point_device_op.hpp"
 
 namespace ttnn::operations::point_to_point {
@@ -152,7 +152,7 @@ tt::tt_metal::ProgramDescriptor send_program_factory(
         // index 8 (semaphore address) become a Buffer* binding and an
         // absolute semaphore address, respectively.
         std::vector<uint32_t> writer_runtime_args = {
-            output_tensors.at(0).buffer()->address(),  // placeholder, replaced via Buffer* below
+            output_tensors.at(0).mesh_buffer().address(),  // placeholder, replaced via Buffer* below
             page_idx_start,
             page_idx_end,
             num_hops,

@@ -5,6 +5,7 @@
 #include "combine_fabric2d_nanobind.hpp"
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
@@ -32,12 +33,16 @@ void bind_experimental_combine_fabric2d_operation(nb::module_& mod) {
             expert_offsets        where each ORIGIN chip's run starts inside each expert's region.
                                   Must be REPLICATED along the dispatch-group axis, since every chip
                                   needs every origin chip's boundaries for the experts it hosts.
-            fwd_reduction         how much smaller than the dense forwarding region to make this op's,
-                                  as a divisor on what the dense region would have cost for this model.
+            fwd_vc_pages          pages one forwarding channel holds, at least 4.
                                   No value can deadlock the ring -- the region is split by movement
                                   class -- so this trades DRAM against throughput and nothing else.
                                   Where that curve bends differs per model, so it comes from the model
-                                  config (COMBINE_FWD_REDUCTION) rather than being fixed here.
+                                  config (MOE_FWD_VC_PAGES) rather than being fixed here.
+            forwarding_buffer     optional DRAM buffer the op relays tokens through, from
+                                  combine_fabric2d_forwarding_buffer. Left to the op, every cached program
+                                  allocates its own at cache miss. Pass it on every call; one sized for more
+                                  links or deeper channels serves a smaller call, and it must be its own
+                                  allocation.
 
         dispatched_buffer and dispatched_metadata are 1 in every dim before the last two, as dispatch
         leaves them, so their second-to-last dim is dispatch's max_dispatch_buffer_token_size. A token
@@ -66,9 +71,27 @@ void bind_experimental_combine_fabric2d_operation(nb::module_& mod) {
         nb::arg("seq_len_per_chip"),
         nb::arg("cluster_axis"),
         nb::arg("num_links"),
-        nb::arg("fwd_reduction"),
+        nb::arg("fwd_vc_pages"),
         nb::arg("topology"),
-        nb::arg("memory_config"));
+        nb::arg("memory_config"),
+        nb::arg("forwarding_buffer") = nb::none());
+
+    ttnn::bind_function<"combine_fabric2d_forwarding_buffer", "ttnn.experimental.deepseek_prefill.">(
+        mod,
+        R"doc(
+        Allocate the forwarding_buffer for combine_fabric2d.
+
+        Create it once per mesh, before the first forward, and pass it on every call. The arguments
+        are the ones those calls pass; emb_dim is the token width. hybrid_routed_expert_moe overlapped
+        with combine takes a buffer of the same spec.
+        )doc",
+        &combine_fabric2d_forwarding_buffer,
+        nb::arg("mesh_device"),
+        nb::kw_only(),
+        nb::arg("emb_dim"),
+        nb::arg("fwd_vc_pages"),
+        nb::arg("cluster_axis") = 0,
+        nb::arg("num_links") = 2);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d::detail

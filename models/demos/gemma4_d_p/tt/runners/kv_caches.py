@@ -53,7 +53,7 @@ def allocate_ring_kv_caches(
     *,
     num_users: int,
     max_seq_len: int,
-    prefill_chunk_size: int = 8192,
+    prefill_chunk_size: int,
     num_layers: int | None = None,
     cache_dtype=ttnn.bfloat8_b,
     bank_aligned: bool = False,

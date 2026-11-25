@@ -6,11 +6,11 @@
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
 #include <bit>
 #include <cmath>
 #include <limits>
@@ -87,7 +87,6 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
     const auto& a = tensor_args.mesh_tensor();
     const auto& output = tensor_return_value.mesh_tensor();
     const bool rm_path = operation_attributes.row_major_h_dense_path;
@@ -952,13 +951,12 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
-tt::tt_metal::experimental::ProgramRunArgs
-ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::override_runtime_arguments(
+tt::tt_metal::ProgramRunArgs ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    using namespace tt::tt_metal::experimental;
+    using namespace tt::tt_metal;
     const auto& a = tensor_args.mesh_tensor();
     const auto& output = tensor_return_value.mesh_tensor();
 

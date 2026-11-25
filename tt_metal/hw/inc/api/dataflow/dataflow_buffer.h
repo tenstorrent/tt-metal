@@ -33,6 +33,8 @@ struct noc_traits_t<DataflowBuffer<Pap, Cap>>;
 template <>
 struct noc_traits_t<DataflowBuffer>;
 #endif
+template <typename DFB>
+struct DataflowBufferReadView;
 #endif
 
 #include "api/dataflow/dfb_binding_token.h"
@@ -120,14 +122,18 @@ public:
     //   DataflowBuffer dfb(my_dfb_name);
 #ifdef ARCH_QUASAR
     // The token carries the pattern pair: DataflowBuffer dfb(dfb::out) deduces it.
-    DataflowBuffer(DFBBindingToken<Pap, Cap> token) : DataflowBuffer(static_cast<uint16_t>(token)) {}
+    DataflowBuffer(DFBBindingToken<Pap, Cap> token) : DataflowBuffer(static_cast<uint16_t>(token)) {
+        store_node_ranges(token.node_ranges(), token.num_node_ranges());
+    }
     // DataflowBuffer<> (UNKNOWN) accepts any token, e.g. std::optional<DataflowBuffer<>>::emplace(token).
     template <
         dfb::AccessPattern TokPap,
         dfb::AccessPattern TokCap,
         bool Agnostic = !pattern_known,
         std::enable_if_t<Agnostic, int> = 0>
-    DataflowBuffer(DFBBindingToken<TokPap, TokCap> token) : DataflowBuffer(static_cast<uint16_t>(token)) {}
+    DataflowBuffer(DFBBindingToken<TokPap, TokCap> token) : DataflowBuffer(static_cast<uint16_t>(token)) {
+        store_node_ranges(token.node_ranges(), token.num_node_ranges());
+    }
     // A known pair rejects any other pair's token (otherwise it would silently convert to an id).
     template <
         dfb::AccessPattern TokPap,
@@ -137,7 +143,9 @@ public:
     DataflowBuffer(DFBBindingToken<TokPap, TokCap>) = delete;
 #else
     template <dfb::AccessPattern TokPap, dfb::AccessPattern TokCap>
-    DataflowBuffer(DFBBindingToken<TokPap, TokCap> token) : DataflowBuffer(static_cast<uint16_t>(token)) {}
+    DataflowBuffer(DFBBindingToken<TokPap, TokCap> token) : DataflowBuffer(static_cast<uint16_t>(token)) {
+        store_node_ranges(token.node_ranges(), token.num_node_ranges());
+    }
 #endif
 
     // Relay local DFB (CrossNode / PrefetcherPipe bridge to compute). Same runtime object;
@@ -154,12 +162,6 @@ public:
 
     // Low-level constructor: prefer DFBBindingToken / RelayDFBBindingToken for new kernel code.
     DataflowBuffer(uint16_t logical_dfb_id);
-
-#ifdef ARCH_QUASAR
-    // Drains outstanding credits (posted == acked) and, on DM, waits for writes out of the DFB to land.
-    // Only the original object drains. Copies passed into helpers never drain; the original must outlive them.
-    ~DataflowBuffer();
-#endif
 
     uint16_t get_id() const { return logical_dfb_id_; }
 
@@ -385,11 +387,13 @@ public:
     T read_tile_value(uint32_t tile_index, uint32_t element_offset);
 #endif
 
-    // Deprecated no-op: on Quasar the drain runs in ~DataflowBuffer(); on WH/BH there is nothing to drain.
+    // Deprecated no-op: on Quasar firmware finishes every DFB once the kernel returns; on WH/BH there is
+    // nothing to drain.
     void finish() {}
 
 #ifndef COMPILE_FOR_TRISC
-    // Deprecated no-op on Quasar: the write barrier runs in ~DataflowBuffer().
+    // Waits for writes out of this DFB to land. On Quasar firmware already does this for implicit-sync
+    // writes at kernel exit; kernels barrier their own explicit writes.
     // On WH/BH this should not be used if the read into/write out of the DFB uses transaction ids because the
     // transaction ids are not tracked. Instead, use noc.async_write_barrier<NocOptions::TXN_ID>({.trid = trid})
     void write_barrier(const Noc& noc) const { write_barrier_impl(noc); }
@@ -466,9 +470,6 @@ private:
     void push_back_impl(uint16_t num_entries);
     void wait_front_impl(uint16_t num_entries);
     void pop_front_impl(uint16_t num_entries);
-#ifdef ARCH_QUASAR
-    void finish_impl();
-#endif
     uint32_t get_write_ptr_impl() const;
     uint32_t get_read_ptr_impl()  const;
 
@@ -484,6 +485,7 @@ private:
 
 #ifndef COMPILE_FOR_TRISC
     friend struct noc_traits_t<DFB_CLASS>;
+    friend struct noc_traits_t<DataflowBufferReadView<DFB_CLASS>>;
 
     void write_barrier_impl(const Noc& noc) const;
 #ifdef ARCH_QUASAR
@@ -502,9 +504,6 @@ private:
     void lock_release_impl(ScopedLockRegion region, uint16_t num_entries);
 
 #ifdef ARCH_QUASAR
-    template <bool is_producer>
-    void handle_final_credits(uint32_t tiles_issued, uint8_t txn_id_index);
-
 #ifndef COMPILE_FOR_TRISC
     friend class Noc;  // grants Noc::async_read/write access to prepare_*/commit_*
     // PrefetcherPipe::pop_front waits on relay consumer acks by calling wait_relay_consumer_caught_up
@@ -529,6 +528,20 @@ private:
 
     uint16_t logical_dfb_id_;
 
+    // Watcher: the nodes this DFB exists on, for checking multicasts into it. Only a DFB built from a binding token
+    // knows them; one built from a bare id is not checked.
+#if defined(DEBUG_SANITIZE_NOC_ENABLED)
+    const DebugNodeRange* node_ranges_ = nullptr;
+    uint32_t num_node_ranges_ = 0;
+#endif
+    void store_node_ranges(
+        [[maybe_unused]] const DebugNodeRange* node_ranges, [[maybe_unused]] uint32_t num_node_ranges) {
+#if defined(DEBUG_SANITIZE_NOC_ENABLED)
+        node_ranges_ = node_ranges;
+        num_node_ranges_ = num_node_ranges;
+#endif
+    }
+
 #if defined(ARCH_QUASAR) && !DFB_IS_COMPUTE_MATH
     uint16_t stride_tiles_cache_ = 1;
     uint16_t peer_share_cache_ = 1;
@@ -551,32 +564,10 @@ private:
     DFBInterface& local_dfb_interface_;
 #endif
 
-#ifdef ARCH_QUASAR
-#ifndef COMPILE_FOR_TRISC
-    // Metadata for implicit sync (DM only)
-    uint16_t ptxn_id_loop_cnt_ = 0;
-    uint8_t ptxn_id_index_ = 0;
-    uint32_t ptiles_read_ = 0;  // running total of tiles read (32-bit so it never wraps in a launch)
-
-    uint16_t ctxn_id_loop_cnt_ = 0;
-    uint8_t ctxn_id_index_ = 0;
-    uint32_t ctiles_written_ = 0;  // running total of tiles written (32-bit so it never wraps in a launch)
-
-    // Implicit sync: position inside the current share and its txn id. A STRIDED side moves one
-    // entry per NoC call; a BLOCKED side moves the whole block, so it stays at 0.
-    uint16_t pshare_pos_ = 0;
-    uint32_t pshare_txn_id_ = 0;
-    uint16_t cshare_pos_ = 0;
-    uint32_t cshare_txn_id_ = 0;
-#endif
-
-    // The implicit copy constructor copies this pointer, so every copy points at the original. Traffic is
-    // recorded on the original, and only the original drains.
-    DataflowBuffer* drain_owner_ = this;
-#ifndef COMPILE_FOR_TRISC
-    // DM only
-    bool has_outbound_writes_ = false;
-#endif
+#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
+    // Implicit-sync progress is kept per DFB per hart, not per object, so every copy and temporary built
+    // from this id advances the same count (see DFBImplicitProgress).
+    DFBImplicitProgress& implicit_progress() const { return g_dfb_progress[logical_dfb_id_]; }
 #endif
 };
 
@@ -607,9 +598,6 @@ struct noc_traits_t<DataflowBuffer> {
         static_assert(
             address_type == Noc::AddressType::LOCAL_L1,
             "DataflowBuffer without mcast range can only be used as L1 source");
-#ifdef ARCH_QUASAR
-        src.drain_owner_->has_outbound_writes_ = true;
-#endif
         // Use cached addresses for NOC APIs
         return src.get_noc_read_addr() + args.offset_bytes;
     }
@@ -626,9 +614,55 @@ struct noc_traits_t<DataflowBuffer> {
         static_assert(
             address_type == Noc::AddressType::NOC, "DataflowBuffer with mcast range cannot be used as L1 destination");
         // Use cached addresses for NOC APIs
-        auto local_addr = dst.get_noc_write_addr() + args.offset_bytes;
+        return multicast_addr(noc, args, dst.get_noc_write_addr());
+    }
+    // The rectangle's multicast address for local_addr, offset_bytes past it; shared with the read-pointer view.
+    static uint64_t multicast_addr(const Noc& noc, const dst_args_mcast_type& args, uint32_t local_addr) {
         return ::get_noc_multicast_addr(
-            args.noc_x_start, args.noc_y_start, args.noc_x_end, args.noc_y_end, local_addr, noc.get_noc_id());
+            args.noc_x_start,
+            args.noc_y_start,
+            args.noc_x_end,
+            args.noc_y_end,
+            local_addr + args.offset_bytes,
+            noc.get_noc_id());
+    }
+    // The nodes the DFB exists on, which Noc::async_write_multicast checks the rectangle against with Watcher.
+    static DebugMulticastNodeSet multicast_node_set([[maybe_unused]] const DFB_CLASS& dst) {
+#if defined(DEBUG_SANITIZE_NOC_ENABLED)
+        return {.ranges = dst.node_ranges_, .num_ranges = dst.num_node_ranges_};
+#else
+        return {};
+#endif
+    }
+};
+
+// A DataflowBuffer as a multicast destination at its read pointer rather than its write pointer, for a block the
+// receivers hold where the sender's read pointer is: read_ptr_view(dfb).
+template <typename DFB>
+struct DataflowBufferReadView {
+    const DFB& dfb;
+};
+
+template <typename DFB>
+constexpr DataflowBufferReadView<DFB> read_ptr_view(const DFB& dfb) {
+    return {dfb};
+}
+
+template <typename DFB>
+struct noc_traits_t<DataflowBufferReadView<DFB>> {
+    using dst_args_mcast_type = typename noc_traits_t<DFB>::dst_args_mcast_type;
+
+    template <Noc::AddressType address_type>
+    static auto dst_addr_mcast(
+        const DataflowBufferReadView<DFB>& dst, const Noc& noc, const dst_args_mcast_type& args) {
+        static_assert(
+            address_type == Noc::AddressType::NOC, "DataflowBuffer with mcast range cannot be used as L1 destination");
+        // Use cached addresses for NOC APIs
+        return noc_traits_t<DFB>::multicast_addr(noc, args, dst.dfb.get_noc_read_addr());
+    }
+    // The address is the DFB's, so it is checked against the DFB's nodes.
+    static DebugMulticastNodeSet multicast_node_set(const DataflowBufferReadView<DFB>& dst) {
+        return noc_traits_t<DFB>::multicast_node_set(dst.dfb);
     }
 };
 

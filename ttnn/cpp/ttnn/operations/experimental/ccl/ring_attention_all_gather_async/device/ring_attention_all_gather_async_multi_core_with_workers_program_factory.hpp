@@ -8,10 +8,10 @@
 #include "kernels/ring_attention_rank_mapping.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/mesh_device_operation_adapter.hpp"
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <cstdint>
-#include <tt-metalium/workload_descriptor.hpp>
+#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
 #include <optional>
 #include <vector>
 
@@ -125,7 +125,20 @@ struct RingAttentionRankMapping {
     ttnn::ccl::snake_ring::Orientation orientation = ttnn::ccl::snake_ring::Orientation::Row;
     uint32_t mesh_rows = 0;
     uint32_t mesh_cols = 0;
+    // Full mesh only: number tensor ranks down the mesh columns (col * rows + row) instead of along the
+    // rows. Split-KV ring MLA with its sequence (SP) on mesh axis 1 lays the KV stripes out that way.
+    bool column_major_ranks = false;
 };
+
+// The kernels' full-mesh rank-mapping compile-time arg, in the kernels' own encoding
+// (ring_attention_rank_mapping.hpp).
+inline uint32_t rank_mapping_compile_time_arg(const RingAttentionRankMapping& mapping) {
+    if (!mapping.full_mesh) {
+        return ring_attention_all_gather::kAxisRankMapping;
+    }
+    return mapping.column_major_ranks ? ring_attention_all_gather::kColumnMajorRankMapping
+                                      : ring_attention_all_gather::kRowMajorRankMapping;
+}
 
 // Sliding attention exchanges one or two predecessor tails into compact output slots.
 struct RingAttentionNeighborHaloConfig {

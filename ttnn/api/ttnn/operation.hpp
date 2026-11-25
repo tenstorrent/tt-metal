@@ -8,9 +8,9 @@
 #include <ttnn/tensor/tensor.hpp>
 #include "ttnn/tensor/tensor_ops.hpp"
 
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include <tt_stl/reflection.hpp>
 
 #include "ttnn/config.hpp"
@@ -90,6 +90,9 @@ struct program_output_helper<ProgramType, false> {
 
 template <typename ProgramType>
 using ProgramOutputTensors = typename program_output_helper<ProgramType>::type;
+
+// Peak DRAM bandwidth in decimal GB/s (1e9 bytes/s) used by OpPerformanceModelGeneral.
+float peak_dram_bandwidth_gb_per_s(tt::ARCH arch);
 
 template <class OutputTensorsT = Tensors>
 struct OpPerformanceModelGeneral {

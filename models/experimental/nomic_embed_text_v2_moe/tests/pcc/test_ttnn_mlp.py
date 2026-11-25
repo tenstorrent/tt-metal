@@ -22,7 +22,7 @@ from models.experimental.nomic_embed_text_v2_moe.tests.pcc.module_common import 
 from models.experimental.nomic_embed_text_v2_moe.tt.common import to_device
 from models.experimental.nomic_embed_text_v2_moe.tt.mlp import TtNomicBertMLP
 from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 pytestmark = [run_for_blackhole(), pytest.mark.use_module_device, pytest.mark.needs_weights]
 
@@ -57,10 +57,10 @@ def test_mlp(device, config, reference, tt_mlp, batch, seqlen):
 def test_gelu_stays_accurate(device, config, reference, tt_mlp, tt_config, state_dict):
     """The LUT GELU is a worse fit than bfloat16 itself, so the module must not use it.
 
-    The module runs the tanh GELU, within 4.7e-4 of exact erf. The LUT variant measures 2.34e-2
-    max-abs against exact erf, above the 1.58e-2 bfloat16 noise floor, so it is not swamped by
-    the dtype. The repo's BERT idiom fused_activation=(ttnn.UnaryOpType.GELU, True) selects that
-    LUT; this is the guard against reaching for it later.
+    The module runs grouped_matmul's polynomial GELU, within 1.3e-3 of exact erf. The LUT variant
+    measures 2.34e-2 max-abs against exact erf, above the 1.58e-2 bfloat16 noise floor, so it is not
+    swamped by the dtype. The repo's BERT idiom fused_activation=(ttnn.UnaryOpType.GELU, True)
+    selects that LUT; this is the guard against reaching for it later.
     """
     x = hidden_states(2, 128, config.hidden_size)
     x_tt = to_device(to_block_layout(x), device)

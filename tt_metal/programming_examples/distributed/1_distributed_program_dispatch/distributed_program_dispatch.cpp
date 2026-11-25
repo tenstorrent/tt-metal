@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/mesh_workload.hpp>
-#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
 
 // Stand-alone example demonstrating usage of native multi-device TT-Metalium APIs
 // for issuing a program dispatch across a mesh of devices.
@@ -18,7 +18,7 @@ int main() {
 
     // In a typical single-device fashion, instantiate a program with
     // an example compute kernel targeting a 2x2 core range.
-    auto example_program = CreateProgram();
+    auto example_program = CreateProgram(*mesh_device);
     auto target_tensix_cores = CoreRange{
         CoreCoord{0, 0} /* start_coord */, CoreCoord{1, 1} /* end_coord */
     };

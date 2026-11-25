@@ -6,10 +6,11 @@
 
 #include <algorithm>
 
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -157,7 +158,7 @@ CbPages cb_pages(const std::vector<Tensor>& input_tensors, const ttnn::prim::Con
         if (input.memory_config().buffer_type() == BufferType::DRAM) {
             cb_alignment = std::max(cb_alignment, tt::tt_metal::hal::get_dram_alignment());
         }
-        max_input_page = std::max(max_input_page, static_cast<uint32_t>(input.buffer()->aligned_page_size()));
+        max_input_page = std::max(max_input_page, static_cast<uint32_t>(input.mesh_buffer().aligned_page_size()));
     }
 
     if (concats_width(input_tensors, attrs)) {

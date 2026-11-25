@@ -26,12 +26,16 @@ static const mailbox_t mailbox_unpack = mailboxes_arr;
 static const mailbox_t mailbox_math   = mailboxes_arr + 1;
 static const mailbox_t mailbox_pack   = mailboxes_arr + 2;
 
-static const mailbox_t profiler_barrier = reinterpret_cast<mailbox_t>(0x16AFF4U);
-
 // A BRISC read of a TRISC's PC buffer returns once that TRISC waits on its own PC buffer read with nothing queued and its
 // Tensix thread is idle, which trisc.cpp does when its kernel is done.
 static const mailbox_t trisc_pc_bufs[] = {
     reinterpret_cast<mailbox_t>(PC_BUF_BASE), reinterpret_cast<mailbox_t>(PC1_BUF_BASE), reinterpret_cast<mailbox_t>(PC2_BUF_BASE)};
+
+// 3 x 64 Tensix GPRs copied below the mailboxes, keep in sync with GPR_DUMP_WORDS in tensix.py.
+constexpr std::uint32_t GPRS_PER_THREAD = 64;
+constexpr std::uint32_t TENSIX_THREADS  = 3;
+constexpr std::uint32_t GPR_DUMP_WORDS  = GPRS_PER_THREAD * TENSIX_THREADS;
+static const mailbox_t gpr_dump         = mailboxes_arr - GPR_DUMP_WORDS;
 
 // One launch per release from soft reset: the host loads the kernels and releases BRISC, BRISC starts the TRISCs, waits
 // on their PC buffers with no L1 traffic (L1 mailboxes on ttsim), marks the launch done for the host on silicon, then puts
@@ -44,16 +48,21 @@ int main()
     commit_store(mailbox_unpack, ckernel::RESET_VAL);
     commit_store(mailbox_pack, ckernel::RESET_VAL);
 
-    commit_store(profiler_barrier, 0U);
-    commit_store(profiler_barrier + 1, 0U);
-    commit_store(profiler_barrier + 2, 0U);
-
     device_setup();
 
     llk_perf::clear_debug_features();
     // Counters on only (empty otherwise, counters.h): set up the counter banks before the TRISCs start.
     llk_perf::configure_from_brisc();
 
+#if defined(ARCH_WORMHOLE) && !defined(TT_METAL_TTSIM)
+    // The L1 port both TRISC1 and TRISC2 fetch through keeps its last grantee until chip reset, and their first fetches
+    // race on it: release TRISC1 first so it takes the port alone, whatever ran on this core before.
+    const std::uint32_t trisc1_released = ckernel::reg_read(RISCV_DEBUG_REG_SOFT_RESET_0) & ~TRISC1_SOFT_RESET_MASK;
+    ckernel::reg_write(RISCV_DEBUG_REG_SOFT_RESET_0, trisc1_released);
+    while (ckernel::reg_read(RISCV_DEBUG_REG_SOFT_RESET_0) != trisc1_released)
+    {
+    }
+#endif
     clear_trisc_soft_reset();
 
 #if defined(TT_METAL_TTSIM) // ttsim models no BRISC reads of the TRISC PC buffers, and nothing there is timed: wait on L1
@@ -68,6 +77,10 @@ int main()
     for (const mailbox_t pc_buf : trisc_pc_bufs)
     {
         (void)ckernel::load_blocking(pc_buf);
+    }
+    for (std::uint32_t i = 0; i < GPR_DUMP_WORDS; i++)
+    {
+        ckernel::store_blocking(gpr_dump + i, ckernel::regfile[i]);
     }
     // The host polls this during the kernel and reads RISCV_DEBUG_REG_SOFT_RESET_0 only once it is marked: polling that
     // register during the kernel moved timings, as it sits in the RISC-V debug register block with the wall clock.
