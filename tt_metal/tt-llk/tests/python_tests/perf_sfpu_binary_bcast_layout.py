@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-# SFPU bcast ROW with constant and runtime (compiler-opaque) dest tile indices.
+# SFPU bcast ROW and COL with constant and runtime (compiler-opaque) dest tile indices.
 
 import pytest
 from helpers.format_config import DataFormat
@@ -11,13 +11,18 @@ from helpers.perf.core import ALL_PERF_RUN_TYPES
 from test_sfpu_binary_bcast_layout import run_bcast_layout
 
 _PERF_CASES = [
-    (fmt, dest_acc, LlkBroadcastType.Row, op, "L012")
+    (fmt, dest_acc, dim, op, "L012")
+    for dim in (LlkBroadcastType.Row, LlkBroadcastType.Column)
     for fmt, dest_acc in (
         (DataFormat.Float16_b, DestAccumulation.No),
         (DataFormat.Float32, DestAccumulation.Yes),
         (DataFormat.Bfp8_b, DestAccumulation.No),
     )
-    for op in (MathOperation.SfpuElwadd, MathOperation.SfpuElwmul)
+    for op in (
+        MathOperation.SfpuElwadd,
+        MathOperation.SfpuElwsub,
+        MathOperation.SfpuElwmul,
+    )
 ]
 
 
