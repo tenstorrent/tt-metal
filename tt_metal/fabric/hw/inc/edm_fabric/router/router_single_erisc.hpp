@@ -65,6 +65,7 @@ __attribute__((noinline)) void run(DownstreamConnections& downstreams) {
             for (size_t n = 0; n < iterations_between_ctx_switch_and_teardown_checks; n++) {
                 receiver_pass(r, rx_loop_copy, downstreams, my_chip);
                 sender_pass(s, round.send_yielded);
+                poll_link_sync();
             }
             sender::after_round<true>(
                 round, s.states.loop_local_progress(), s.states, [] { return receiver::vc0_register_empty(); });

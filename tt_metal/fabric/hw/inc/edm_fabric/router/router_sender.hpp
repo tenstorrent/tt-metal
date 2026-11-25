@@ -1062,6 +1062,7 @@ __attribute__((noinline)) void run() {
             before_round(round, loop_copy, states);
             for (size_t n = 0; n < iterations_between_ctx_switch_and_teardown_checks; n++) {
                 pass(loop_copy, states, channels_in_flight, round.send_yielded);
+                poll_link_sync();
             }
             after_round<false>(round, loop_copy, states, [] { return false; });
         }
