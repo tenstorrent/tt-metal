@@ -27,6 +27,8 @@ namespace tt::tt_metal::experimental {
 namespace {
 
 using test_helpers::MakeMinimalDFB;
+using test_helpers::MakeMinimalGen1ComputeKernel;
+using test_helpers::MakeMinimalGen1DMKernel;
 using test_helpers::MakeMinimalGen1ValidProgramSpec;
 using test_helpers::MakeMinimalGen2ComputeKernel;
 using test_helpers::MakeMinimalGen2DMKernel;
@@ -509,6 +511,24 @@ TEST_F(ProgramSpecTestQuasar, CPU_SfpuPipelineTakesOneSideOfSelfLoop) {
     Program program(*mesh_device_, spec);
     EXPECT_TRUE(DFBConfig(program).pack_on_trisc3);
     EXPECT_FALSE(DFBConfig(program).unpack_on_trisc3);
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_SfpuConsumedDfbIgnoredOnGen1) {
+    auto consumer = MakeMinimalGen1ComputeKernel("consumer");
+    SfpuConfig(consumer).sfpu_pipeline_consumed_dfbs = {DFBSpecName{"dfb"}};
+
+    Program program(
+        *mesh_device_, MakeOneDFBSpec(MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0), consumer));
+    EXPECT_FALSE(DFBConfig(program).unpack_on_trisc3);
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_SfpuProducedDfbIgnoredOnGen1) {
+    auto producer = MakeMinimalGen1ComputeKernel("producer");
+    SfpuConfig(producer).sfpu_pipeline_produced_dfbs = {DFBSpecName{"dfb"}};
+
+    Program program(
+        *mesh_device_, MakeOneDFBSpec(producer, MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1)));
+    EXPECT_FALSE(DFBConfig(program).pack_on_trisc3);
 }
 
 ProgramSpec SfpuConsumedDfb0Spec(tt::DataFormat format) {

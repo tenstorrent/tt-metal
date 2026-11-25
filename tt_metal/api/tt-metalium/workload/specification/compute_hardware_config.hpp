@@ -111,8 +111,8 @@ struct ComputeHardwareConfig {
     // EXPLICITLY specify an UnpackMode for that DFB. (Enforced by validation checks.)
     // On Quasar, a consumed Int16 DFB with enable_32_bit_dest set also requires UnpackToDest.
     // The FPU cannot datacopy Int16 into a 32-bit Dest. UnpackToDest is the SFPU typecast path.
-    // On Quasar, a DFB in config_2xx->sfpu_pipeline_consumed_dfbs needs no unpack_modes entry. Don't give it
-    // UnpackToDest, that would switch the whole kernel to unpack-to-Dest.
+    // On Quasar, a DFB in config_2xx->sfpu_pipeline_consumed_dfbs needs no unpack_modes entry and must not be
+    // given UnpackToDest. (Enforced by validation checks.)
     //
     using ComputeUnpackModes = Table<DFBSpecName, tt::tt_metal::UnpackMode>;
     ComputeUnpackModes unpack_modes;

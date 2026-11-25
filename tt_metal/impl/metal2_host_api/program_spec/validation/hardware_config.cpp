@@ -132,8 +132,15 @@ void ValidateUnpackModes(const KernelSpec& kernel, const CollectedSpecData& coll
         //////////////////////////
         // mode == UnpackToDest
         //////////////////////////
+        TT_FATAL(
+            !(is_gen2 && ComputeKernelUsesSfpuPipeline(kernel, dfb_name, DFBEndpointType::CONSUMER)),
+            "Kernel '{}' unpack_modes gives DFB '{}' UnpackToDest, but the DFB is in "
+            "config_2xx->sfpu_pipeline_consumed_dfbs: the Unpack stage never unpacks it, and UnpackToDest would "
+            "switch the whole kernel to unpack-to-Dest",
+            kernel.unique_id,
+            dfb_name);
         if (!consumed_dfbs.contains(dfb_name)) {
-            continue;  // Not unpacked (producer only, or handed to the SFPU pipeline): tolerated.
+            continue;  // Compute kernel is bound as the DFB Producer: inert, tolerated.
         }
 
         // Compute kernel is the DFB's consumer.
