@@ -268,7 +268,7 @@ TEST_P(MockDeviceSocketFixture, D2HSocketReadsDoNotDeadlockOnMock) {
 INSTANTIATE_TEST_SUITE_P(
     MockArch,
     MockDeviceSocketFixture,
-    ::testing::Values(tt::ARCH::WORMHOLE_B0, tt::ARCH::QUASAR),
+    ::testing::Values(tt::ARCH::WORMHOLE_B0, tt::ARCH::BLACKHOLE, tt::ARCH::QUASAR),
     ::testing::PrintToStringParamName());
 
 class MockDeviceProfilerFixture : public ::testing::TestWithParam<tt::ARCH> {
@@ -338,7 +338,7 @@ TEST_P(MockDeviceProfilerFixture, CPU_DeviceProfilerIsNotStartedOnMockDevice) {
 INSTANTIATE_TEST_SUITE_P(
     MockArch,
     MockDeviceProfilerFixture,
-    ::testing::Values(tt::ARCH::WORMHOLE_B0, tt::ARCH::QUASAR),
+    ::testing::Values(tt::ARCH::WORMHOLE_B0, tt::ARCH::BLACKHOLE, tt::ARCH::QUASAR),
     ::testing::PrintToStringParamName());
 
 }  // namespace tt::tt_metal
