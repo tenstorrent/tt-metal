@@ -503,10 +503,6 @@ __attribute__((always_inline)) inline void pack_reconfig_data_format()
                 pack_reconfig_data_format_gate<is_fp32_dest_acc_en, new_output, true>();
             }
         }
-        else if constexpr (ckernel::IS_BFP_FORMAT(pack_dst_format[new_output]))
-        {
-            pack_reconfig_data_format_gate<is_fp32_dest_acc_en, new_output, false, false, false>();
-        }
         else
         {
             pack_reconfig_data_format_gate<is_fp32_dest_acc_en, new_output, false>();
