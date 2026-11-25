@@ -19,7 +19,8 @@ import torch
 import ttnn
 
 from ttml.trainers.grpo_trainer.remote_rollout import threaded_weight_bridge as twb
-from ttml.trainers.grpo_trainer.remote_rollout.weight_bridge import TTML_RANK, _torch_save_bytes
+from ttml.trainers.grpo_trainer.remote_rollout.transport import _torch_save_bytes
+from ttml.trainers.grpo_trainer.remote_rollout.weight_bridge import TTML_RANK
 
 pytestmark = pytest.mark.requires_device
 

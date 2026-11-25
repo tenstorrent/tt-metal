@@ -10,17 +10,15 @@ can share one MPI context without crosstalk.
 
 from __future__ import annotations
 
-import io
 import json
 from abc import ABC, abstractmethod
 from typing import List, Optional
 
-import torch
 import ttnn
 from ttnn import distributed_context_recv_bytes as _mpi_recv_bytes
 from ttnn import distributed_context_send_bytes as _mpi_send_bytes
 
-from .transport import recv_frame, send_frame
+from .transport import recv_frame, recv_weight_dict, send_frame, send_weight_dict
 
 
 SENDER_RANK: int = 0
@@ -128,9 +126,9 @@ def _recv_manifest(peer_rank: int) -> dict:
     return json.loads(recv_frame(_mpi_recv_bytes, peer_rank, _MANIFEST_LEN_TAG, _MANIFEST_BODY_TAG).decode("utf-8"))
 
 
-def _device0_to_host(tensor: "ttnn.Tensor"):
+def _device0_to_host(tensor: "ttnn.Tensor", cq_id: Optional[int] = None):
     """Bring device 0's (replicated) copy of ``tensor`` to host as torch."""
-    return ttnn.to_torch(ttnn.get_device_tensors(tensor)[0])
+    return ttnn.to_torch(ttnn.get_device_tensors(tensor)[0], cq_id=cq_id)
 
 
 def _replicate_from_host(host_tensor, device: "ttnn.MeshDevice") -> "ttnn.Tensor":
@@ -143,16 +141,6 @@ def _replicate_from_host(host_tensor, device: "ttnn.MeshDevice") -> "ttnn.Tensor
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(device),
     )
-
-
-def _torch_save_bytes(t) -> bytes:
-    buf = io.BytesIO()
-    torch.save(t, buf)
-    return buf.getvalue()
-
-
-def _torch_load_bytes(blob: bytes):
-    return torch.load(io.BytesIO(blob), weights_only=True)
 
 
 class WeightBridge(ABC):
@@ -227,18 +215,17 @@ class HostWeightBridge(WeightBridge):
             raise RuntimeError("HostWeightBridge.send_weights called on a receiver.")
         keys = sorted(weights.keys())
         _send_manifest(self._peer_rank, weights, keys)
-        for k in keys:
-            blob = _torch_save_bytes(_device0_to_host(weights[k]))
-            send_frame(_mpi_send_bytes, blob, self._peer_rank, _WEIGHT_LEN_TAG, _WEIGHT_BLOB_TAG)
+        send_weight_dict(_mpi_send_bytes, weights, _device0_to_host, self._peer_rank, _WEIGHT_LEN_TAG, _WEIGHT_BLOB_TAG)
 
     def receive_weights(self) -> List[dict[str, "ttnn.Tensor"]]:
         if self._role != _ROLE_RECEIVER:
             raise RuntimeError("HostWeightBridge.receive_weights called on a sender.")
         manifest = _recv_manifest(self._peer_rank)
         dicts: List[dict[str, ttnn.Tensor]] = [{} for _ in self._targets]
-        for entry in manifest["entries"]:
-            blob = recv_frame(_mpi_recv_bytes, self._peer_rank, _WEIGHT_LEN_TAG, _WEIGHT_BLOB_TAG)
-            host_tensor = _torch_load_bytes(blob)
+        entries = recv_weight_dict(
+            _mpi_recv_bytes, manifest["entries"], self._peer_rank, _WEIGHT_LEN_TAG, _WEIGHT_BLOB_TAG
+        )
+        for entry, host_tensor in entries:
             for i, target in enumerate(self._targets):
                 dicts[i][entry["key"]] = _replicate_from_host(host_tensor, target)
         return dicts

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import collections
+import functools
 import json
 import threading
 from contextlib import contextmanager
@@ -14,8 +15,8 @@ from typing import Any, Deque, Dict, Iterator, List, Optional, Tuple
 import ttnn
 
 from ..distributed import exit_on_error
-from .transport import duplicate_distributed_context, recv_frame, send_frame
-from .weight_bridge import _manifest_entries, _torch_load_bytes, _torch_save_bytes, _validate_source_tensor
+from .transport import duplicate_distributed_context, recv_frame, recv_weight_dict, send_frame, send_weight_dict
+from .weight_bridge import _device0_to_host, _manifest_entries, _validate_source_tensor
 
 # Tags are matched only within this bridge's own communicator, so they cannot collide with other MPI traffic.
 _TAG_MANIFEST_LEN, _TAG_MANIFEST_BODY, _TAG_WEIGHT_LEN, _TAG_WEIGHT_BODY = 0, 1, 2, 3
@@ -216,9 +217,8 @@ class ThreadedWeightBridge:
         keys = sorted(self._pads)
         manifest = {"weight_version": self._version, "entries": _manifest_entries(self._pads, keys)}
         self._send_blob(json.dumps(manifest).encode("utf-8"), _TAG_MANIFEST_LEN, _TAG_MANIFEST_BODY)
-        for k in keys:
-            blob = _torch_save_bytes(ttnn.to_torch(ttnn.get_device_tensors(self._pads[k])[0], cq_id=1))
-            self._send_blob(blob, _TAG_WEIGHT_LEN, _TAG_WEIGHT_BODY)
+        read = functools.partial(_device0_to_host, cq_id=1)
+        send_weight_dict(self._ctx.send, self._pads, read, self._peer_rank, _TAG_WEIGHT_LEN, _TAG_WEIGHT_BODY)
 
     def _send_blob(self, blob: bytes, len_tag: int, body_tag: int) -> None:
         send_frame(self._ctx.send, blob, self._peer_rank, len_tag, body_tag)
@@ -263,9 +263,9 @@ class ThreadedWeightBridge:
         with _capture_lock:
             for event in self._read_events:
                 ttnn.wait_for_event(1, event)
-        for e in entries:
+        for e, tensor in recv_weight_dict(self._ctx.recv, entries, self._peer_rank, _TAG_WEIGHT_LEN, _TAG_WEIGHT_BODY):
             host = ttnn.from_torch(
-                _torch_load_bytes(self._recv_blob(_TAG_WEIGHT_LEN, _TAG_WEIGHT_BODY)),
+                tensor,
                 dtype=getattr(ttnn.DataType, e["dtype"]),
                 layout=getattr(ttnn.Layout, e["layout"]),
             )

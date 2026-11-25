@@ -73,8 +73,8 @@ from ttml.trainers.grpo_trainer.remote_rollout import (
 from ttml.trainers.grpo_trainer.remote_rollout.async_remote_rollout_batch_source import AsyncRemoteRolloutBatchSource
 from ttml.trainers.grpo_trainer.remote_rollout.rollout_queue import RolloutQueue
 from ttml.trainers.grpo_trainer.remote_rollout.sync_remote_rollout_batch_source import SyncRemoteRolloutBatchSource
-from ttml.trainers.grpo_trainer.remote_rollout.transport import send_frame
-from ttml.trainers.grpo_trainer.remote_rollout.weight_bridge import TTML_RANK, TTT_RANK, _torch_save_bytes
+from ttml.trainers.grpo_trainer.remote_rollout.transport import _torch_save_bytes, send_frame
+from ttml.trainers.grpo_trainer.remote_rollout.weight_bridge import TTML_RANK, TTT_RANK
 from ttml.trainers.grpo_trainer.rollout_batch_source import (
     InProcessRolloutBatchSource,
     RolloutBatchSource,
