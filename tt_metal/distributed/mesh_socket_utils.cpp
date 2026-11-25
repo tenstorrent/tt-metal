@@ -9,6 +9,7 @@
 #include "impl/context/metal_context.hpp"
 #include <internal/service/service_core_manager.hpp>
 #include "impl/context/metal_env_impl.hpp"
+#include "impl/debug/inspector/inspector.hpp"
 #include "tt_metal/distributed/mesh_socket_serialization.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
@@ -286,6 +287,17 @@ std::unordered_map<CoreCoord, uint32_t> config_buffer_core_to_id(
     return config_buffer->get_device_buffer(device_coord)->get_buffer_page_mapping()->core_to_core_id;
 }
 
+std::shared_ptr<MeshBuffer> create_per_core_socket_buffer(
+    const MeshBufferConfig& mesh_buffer_config,
+    const DeviceLocalBufferConfig& device_local_config,
+    MeshDevice& mesh_device,
+    const MeshCoordinate& device_coord) {
+    auto buffer = experimental::per_core_allocation::create_on_single_device(
+        mesh_buffer_config, device_local_config, &mesh_device, device_coord);
+    Inspector::mesh_buffer_allocated(buffer.get());
+    return buffer;
+}
+
 std::shared_ptr<MeshBuffer> create_socket_config_buffer(
     const std::shared_ptr<MeshDevice>& device, const SocketConfig& config, SocketEndpoint socket_endpoint) {
     const auto& socket_connections = config.socket_connection_config;
@@ -323,7 +335,8 @@ std::shared_ptr<MeshBuffer> create_socket_config_buffer(
     // co-owner allocates it (create_socket_pair, mesh-scoped sockets). Only the rank-scoped path
     // skips co-owners; that precondition is checked once in the MeshSocket constructor.
     auto sharding_args = BufferShardingArgs(shard_params, TensorMemoryLayout::HEIGHT_SHARDED);
-    if (socket_endpoint_uses_per_core_allocation(config, socket_endpoint)) {
+    const bool per_core = socket_endpoint_uses_per_core_allocation(config, socket_endpoint);
+    if (per_core) {
         TT_FATAL(
             device->impl().metal_env().get_rtoptions().get_allocator_mode_hybrid(),
             "Per-core socket allocation requires the device to be opened with AllocatorMode::HYBRID "
@@ -350,6 +363,14 @@ std::shared_ptr<MeshBuffer> create_socket_config_buffer(
         .size = total_config_buffer_size,
     };
 
+    if (per_core) {
+        // Per-core requires a single (device, core) for the endpoint, so only that device needs the buffer.
+        const MeshCoreCoord endpoint = *socket_endpoint_cores(config, socket_endpoint).begin();
+        if (device->is_local(endpoint.device_coord)) {
+            return create_per_core_socket_buffer(mesh_buffer_specs, buffer_specs, *device, endpoint.device_coord);
+        }
+    }
+    // A rank that does not drive a per-core endpoint's device keeps MeshBuffer::create, which skips that device.
     return MeshBuffer::create(mesh_buffer_specs, buffer_specs, device.get());
 }
 
@@ -415,6 +436,15 @@ std::shared_ptr<MeshBuffer> create_socket_data_buffer(
         .size = total_data_buffer_size,
     };
 
+    if (per_core) {
+        // The single receiver (device, core) checked above is the only place the FIFO is needed.
+        const auto& receiver_device = config.socket_connection_config.front().receiver_core.device_coord;
+        if (receiver->is_local(receiver_device)) {
+            return create_per_core_socket_buffer(
+                socket_data_mesh_buffer_specs, socket_data_buffer_specs, *receiver, receiver_device);
+        }
+    }
+    // A rank that does not drive a per-core receiver's device keeps MeshBuffer::create, which skips that device.
     return MeshBuffer::create(socket_data_mesh_buffer_specs, socket_data_buffer_specs, receiver.get());
 }
 

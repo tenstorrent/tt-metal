@@ -9,11 +9,21 @@
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <algorithm>
 #include <chrono>
+#include <optional>
 #include <random>
+#include <string>
+#include <unordered_map>
+#include <vector>
 #include "gmock/gmock.h"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/per_core_allocation/allocator_state.hpp>
+#include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
+#include <tt-metalium/experimental/pinned_memory.hpp>
+#include <tt-metalium/experimental/sockets/d2h_socket.hpp>
+#include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
+#include "tt_metal/llrt/tt_cluster.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"
 #include "tt_metal/test_utils/stimulus.hpp"
@@ -2366,6 +2376,172 @@ TEST_F(MeshSocketTest, PerCoreAllocationRejectsMultipleReceiverCores) {
     SocketMemoryConfig mem_config(BufferType::L1, 1024, std::nullopt, std::nullopt, /*per_core_allocation=*/true);
     SocketConfig socket_config(connections, mem_config);
     EXPECT_THROW(MeshSocket::create_socket_pair(md0, md0, socket_config), std::exception);
+}
+
+// ================== Per-Core Allocation Placement (HYBRID) ==================
+// Needs TT_METAL_ALLOCATOR_MODE_HYBRID=1 set before the binary starts; skipped otherwise. Each test puts a socket on
+// one device of the mesh and checks which cores' L1 it takes. A lockstep buffer takes the same bytes on every core of
+// every device; a per-core buffer takes bytes on its own core only.
+
+namespace {
+
+// Occupied L1 bytes on each core of each device.
+using L1Bytes = std::unordered_map<MeshCoordinate, std::unordered_map<CoreCoord, DeviceAddr>>;
+
+L1Bytes occupied_l1_bytes(const MeshDevice& mesh_device) {
+    L1Bytes bytes;
+    for (const auto& coord : MeshCoordinateRange(mesh_device.shape())) {
+        for (const auto& [core, ranges] :
+             experimental::per_core_allocation::get_l1_occupied_ranges(mesh_device, coord)) {
+            DeviceAddr& total = bytes[coord][core];
+            for (const auto& [start, end] : ranges) {
+                total += end - start;
+            }
+        }
+    }
+    return bytes;
+}
+
+// Checks that a socket created between `before` and `after` took L1 per core only on `per_core_cores` of
+// `endpoint_device`. Returns the bytes it took on every core alike: its lockstep buffers, 0 if it has none.
+DeviceAddr expect_per_core_l1_only_on(
+    const L1Bytes& before,
+    const L1Bytes& after,
+    const MeshCoordinate& endpoint_device,
+    const std::vector<CoreCoord>& per_core_cores) {
+    // Read the lockstep part off a core of another device, where no per-core buffer of the socket can be.
+    const MeshCoordinate other_device(0, 0);
+    EXPECT_NE(endpoint_device, other_device);
+    const auto& [reference_core, reference_bytes] = *after.at(other_device).begin();
+    const DeviceAddr lockstep = reference_bytes - before.at(other_device).at(reference_core);
+    for (const auto& [coord, cores] : after) {
+        for (const auto& [core, bytes] : cores) {
+            const DeviceAddr gained = bytes - before.at(coord).at(core);
+            const bool per_core = coord == endpoint_device &&
+                                  std::find(per_core_cores.begin(), per_core_cores.end(), core) != per_core_cores.end();
+            if (per_core) {
+                EXPECT_GT(gained, lockstep) << "device " << coord << " core " << core.str();
+            } else {
+                EXPECT_EQ(gained, lockstep) << "device " << coord << " core " << core.str();
+            }
+        }
+    }
+    return lockstep;
+}
+
+// Why H2D/D2H sockets can't be placed here, or nullopt when they can.
+std::optional<std::string> host_socket_skip_reason(MeshDevice& mesh_device) {
+    if (!MetalContext::instance().rtoptions().get_allocator_mode_hybrid()) {
+        return "Per-core allocation requires TT_METAL_ALLOCATOR_MODE_HYBRID=1.";
+    }
+    if (!experimental::GetMemoryPinningParameters(mesh_device).can_map_to_noc) {
+        return "Mapping host memory to NOC is not supported on this system";
+    }
+    return std::nullopt;
+}
+
+// A device other than (0, 0) that the host can reach over PCIe, as a host socket endpoint needs.
+std::optional<MeshCoordinate> mmio_device_other_than_first(MeshDevice& mesh_device) {
+    const auto& cluster = MetalContext::instance().get_cluster();
+    for (const auto& coord : MeshCoordinateRange(mesh_device.shape())) {
+        const auto device_id = mesh_device.impl().get_device(coord)->id();
+        if (coord != MeshCoordinate(0, 0) && cluster.get_associated_mmio_device(device_id) == device_id) {
+            return coord;
+        }
+    }
+    return std::nullopt;
+}
+
+}  // namespace
+
+// A per-core socket takes L1 only on its endpoint cores: the receiver core (FIFO and receiver config) and the sender
+// core (sender config). Every other core of every device is untouched, and closing the socket frees it.
+TEST_F(MeshSocketTest, PerCoreSocketAllocatesOnlyOnEndpointDevice) {
+    if (!MetalContext::instance().rtoptions().get_allocator_mode_hybrid()) {
+        GTEST_SKIP() << "Per-core socket allocation requires TT_METAL_ALLOCATOR_MODE_HYBRID=1.";
+    }
+    // Not the first device, so the check does not pass by landing on the mesh's reference device.
+    const MeshCoordinate endpoint_device(0, 1);
+    const CoreCoord sender_core(0, 0);
+    const CoreCoord receiver_core(0, 1);
+    constexpr uint32_t fifo_size = 4096;
+
+    const auto before = occupied_l1_bytes(*mesh_device_);
+    {
+        SocketConnection connection(
+            MeshCoreCoord(endpoint_device, sender_core), MeshCoreCoord(endpoint_device, receiver_core));
+        SocketMemoryConfig mem_config(
+            BufferType::L1, fifo_size, std::nullopt, std::nullopt, /*per_core_allocation=*/true);
+        auto [send_socket, recv_socket] =
+            MeshSocket::create_socket_pair(mesh_device_, mesh_device_, SocketConfig({connection}, mem_config));
+
+        const auto after = occupied_l1_bytes(*mesh_device_);
+        EXPECT_EQ(expect_per_core_l1_only_on(before, after, endpoint_device, {sender_core, receiver_core}), 0u);
+        EXPECT_GE(
+            after.at(endpoint_device).at(receiver_core) - before.at(endpoint_device).at(receiver_core), fifo_size);
+
+        // Both configs point at the FIFO.
+        const DeviceAddr fifo_addr = experimental::per_core_allocation::get_per_core_address(
+            *recv_socket.get_data_buffer(), endpoint_device, receiver_core);
+        std::vector<receiver_socket_md> recv_config;
+        ReadShard(mesh_device_->mesh_command_queue(), recv_config, recv_socket.get_config_buffer(), endpoint_device);
+        ASSERT_EQ(recv_config.size(), 1u);
+        EXPECT_EQ(recv_config[0].fifo_addr, fifo_addr);
+
+        std::vector<uint8_t> sender_config;
+        ReadShard(mesh_device_->mesh_command_queue(), sender_config, send_socket.get_config_buffer(), endpoint_device);
+        ASSERT_GE(sender_config.size(), sizeof(sender_socket_md));
+        sender_socket_md sender_md{};
+        std::memcpy(&sender_md, sender_config.data(), sizeof(sender_socket_md));
+        EXPECT_EQ(sender_md.downstream_fifo_addr, fifo_addr);
+        EXPECT_EQ(sender_md.downstream_bytes_sent_addr, recv_socket.get_config_buffer_address());
+    }
+    EXPECT_EQ(occupied_l1_bytes(*mesh_device_), before);
+}
+
+// An H2D socket's per-core FIFO takes L1 only on the receiver core of the receiver device. Its config buffer is
+// lockstep, so it takes the same bytes on every core.
+TEST_F(MeshSocketTest, PerCoreH2DSocketAllocatesOnlyOnReceiverDevice) {
+    if (auto reason = host_socket_skip_reason(*mesh_device_)) {
+        GTEST_SKIP() << *reason;
+    }
+    const auto endpoint_device = mmio_device_other_than_first(*mesh_device_);
+    if (!endpoint_device) {
+        GTEST_SKIP() << "No MMIO-mapped device other than (0, 0) in the mesh";
+    }
+    const MeshCoreCoord recv_core(*endpoint_device, CoreCoord(0, 1));
+    const uint32_t fifo_size = 4 * MetalContext::instance().hal().get_alignment(HalMemType::HOST);
+
+    const auto before = occupied_l1_bytes(*mesh_device_);
+    {
+        H2DSocket socket(mesh_device_, recv_core, BufferType::L1, fifo_size, H2DMode::HOST_PUSH);
+        const auto after = occupied_l1_bytes(*mesh_device_);
+        const DeviceAddr lockstep = expect_per_core_l1_only_on(before, after, *endpoint_device, {recv_core.core_coord});
+        const auto& recv = recv_core.core_coord;
+        EXPECT_GE(after.at(*endpoint_device).at(recv) - before.at(*endpoint_device).at(recv) - lockstep, fifo_size);
+    }
+    EXPECT_EQ(occupied_l1_bytes(*mesh_device_), before);
+}
+
+// A D2H socket has no per-core buffer: its FIFO is in host memory and its config buffer is lockstep, so it takes the
+// same L1 on every core of every device.
+TEST_F(MeshSocketTest, D2HSocketHasNoPerCoreL1) {
+    if (auto reason = host_socket_skip_reason(*mesh_device_)) {
+        GTEST_SKIP() << *reason;
+    }
+    const auto endpoint_device = mmio_device_other_than_first(*mesh_device_);
+    if (!endpoint_device) {
+        GTEST_SKIP() << "No MMIO-mapped device other than (0, 0) in the mesh";
+    }
+    const MeshCoreCoord sender_core(*endpoint_device, CoreCoord(0, 1));
+    const uint32_t fifo_size = 4 * MetalContext::instance().hal().get_alignment(HalMemType::HOST);
+
+    const auto before = occupied_l1_bytes(*mesh_device_);
+    {
+        D2HSocket socket(mesh_device_, sender_core, fifo_size);
+        EXPECT_GT(expect_per_core_l1_only_on(before, occupied_l1_bytes(*mesh_device_), *endpoint_device, {}), 0u);
+    }
+    EXPECT_EQ(occupied_l1_bytes(*mesh_device_), before);
 }
 
 }  // namespace tt::tt_metal::distributed

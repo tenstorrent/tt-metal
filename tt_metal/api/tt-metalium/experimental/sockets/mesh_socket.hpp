@@ -79,8 +79,9 @@ struct SocketMemoryConfig {
     // TODO: Should data cores be on a different sub device?
     std::optional<SubDeviceId> sender_sub_device = std::nullopt;
     std::optional<SubDeviceId> receiver_sub_device = std::nullopt;
-    // TT_METAL_ALLOCATOR_MODE_HYBRID=1 must be set to enable per-core allocation on socket data buffer.
-    // so data buffers are allocated only on the receiver connection cores instead of every worker core.
+    // TT_METAL_ALLOCATOR_MODE_HYBRID=1 must be set to enable per-core allocation on socket data buffer,
+    // so the data buffer is allocated only on the receiver core of the receiver device, instead of every
+    // worker core of every device.
     bool per_core_allocation = false;
 
     // User-provided constructor to make this non-aggregate (prevents ambiguity with Reflectable concept)
@@ -187,8 +188,8 @@ public:
     // Access the config buffer associated with this socket.
     std::shared_ptr<MeshBuffer> get_config_buffer() const;
     // The L1 address of the config buffer, as handed to device kernels and to the peer descriptor.
-    // Not the same as get_config_buffer()->address(): a per-core buffer holds its address on each
-    // device's Buffer and leaves the mesh-level scalar at 0, so that would report 0.
+    // Prefer it to get_config_buffer()->address(): a per-core buffer's address belongs to its one
+    // (device, core), and the mesh-level scalar is 0 on a rank that does not drive that device.
     DeviceAddr get_config_buffer_address() const;
     // Offset of the first downstream's bytes_acked word in a sender core's config buffer.
     static uint32_t sender_bytes_acked_offset(uint32_t l1_alignment);

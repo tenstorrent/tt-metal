@@ -269,8 +269,8 @@ TEST_F(PerCoreAllocationTest, PerCoreSocketDataBufferPlacement) {
     EXPECT_GT(pc_addr, 0u) << "Receiver per-core address should be above the L1 base";
     EXPECT_LT(pc_addr, md->l1_size_per_core()) << "Receiver per-core address exceeds L1 size";
 
-    // A per-core buffer has no single lockstep address.
-    EXPECT_EQ(data_buffer->address(), 0u);
+    // The FIFO sits on one core of one device, so its mesh-level address is that core's address.
+    EXPECT_EQ(data_buffer->address(), pc_addr);
 }
 
 TEST_F(PerCoreAllocationTest, PerCoreSocketCoexistsWithLockstep) {
