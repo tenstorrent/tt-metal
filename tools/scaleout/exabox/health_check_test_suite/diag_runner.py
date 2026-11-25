@@ -56,6 +56,13 @@ from diag.triage import TRIAGE_DIR_ENV, TRIAGE_SUBDIR, default_triage_dir, run_t
 from tiers import DEPRECATED_TIER_ALIASES, TIERS  # noqa: E402
 
 
+def _positive_int(value: str) -> int:
+    n = int(value)
+    if n <= 0:
+        raise argparse.ArgumentTypeError(f"must be > 0, got {value}")
+    return n
+
+
 def build_diag_arg_parser() -> argparse.ArgumentParser:
     """Build the diag CLI parser. Exposed so callers (e.g. run_health_check's
     subprocess wrapper) can introspect the accepted flags and stay in sync."""
@@ -141,6 +148,14 @@ def build_diag_arg_parser() -> argparse.ArgumentParser:
     )
     ap.add_argument(
         "--tt-smi-path", help=f"tt-smi binary or repo path. Default: {DEFAULT_TT_SMI_PROVISIONED} else PATH."
+    )
+    ap.add_argument(
+        "--gddr-mbytes",
+        type=_positive_int,
+        help=(
+            "MB tested per GDDR controller by the GDDR tests (DRAM_TEST_MBYTES). Default: the test's "
+            "own 32 MB of each 4 GB controller. The test clamps it to 4 GB - 16 MB - 2 KB."
+        ),
     )
     ap.add_argument(
         "--tt-metal-path",
@@ -246,6 +261,7 @@ def run_diag(
     input_snapshot: Path | None = None,
     tt_smi_path: str | None = None,
     tt_metal_path: Path | None = None,
+    gddr_mbytes: int | None = None,
     triage_dir: Path | None = None,
     triage_gating: bool = False,
     qsfp_tool_path: str | None = None,
@@ -354,7 +370,12 @@ def run_diag(
     elif not plan.tests:
         test_phase.add(Check(name="tests", status=SKIP, details=f"no tests for tier '{tier}'", ip="other"))
     else:
-        _guarded(test_phase, "tests", FAIL, lambda: run_tests(tt_metal_path, plan.tests, test_phase, dry_run, logs_dir))
+        _guarded(
+            test_phase,
+            "tests",
+            FAIL,
+            lambda: run_tests(tt_metal_path, plan.tests, test_phase, dry_run, logs_dir, gddr_mbytes=gddr_mbytes),
+        )
     # tests phase prints its own per-test lines as they run — no inline summary.
     _finish(report, test_phase, t0, summary=False)
 
@@ -515,6 +536,7 @@ def main() -> int:
         input_snapshot=args.input_snapshot,
         tt_smi_path=args.tt_smi_path,
         tt_metal_path=args.tt_metal_path,
+        gddr_mbytes=args.gddr_mbytes,
         triage_dir=args.triage_dir,
         triage_gating=args.triage_gating,
         qsfp_tool_path=args.qsfp_tool_path,

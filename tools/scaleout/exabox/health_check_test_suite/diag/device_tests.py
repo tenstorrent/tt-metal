@@ -49,10 +49,28 @@ TESTS = {
     "gddr_full": {"filter": "*DramDeployment_*"},
 }
 
-# Every variable any gtest entry overrides. A check's env_overrides reports the
-# value each of them has for that run, ambient or overridden, so a variable
-# inherited from the caller's environment is on the record too.
-GTEST_ENV_KEYS = tuple(dict.fromkeys(k for spec in TESTS.values() for k in spec.get("env", {})))
+# The GDDR entries (the DramDeployment_* gtests).
+GDDR_TESTS = tuple(name for name, spec in TESTS.items() if "DramDeployment_" in spec["filter"])
+
+# Knobs the DramDeployment_* gtests read from the environment (test_dram.cpp).
+# Unset, they test 32 MB at offset 0 of each GDDR controller, once.
+# DRAM_TEST_MBYTES raises the bytes tested per controller (clamped by the test
+# to 4 GB - 16 MB - 2 KB).
+DRAM_TEST_ENV_KEYS = (
+    "DRAM_TEST_MBYTES",
+    "DRAM_TEST_LOOPS",
+    "DRAM_TEST_CHUNK_BYTES",
+    "DRAM_TEST_NOC_MODE",
+    "DRAM_TEST_MAX_CHIPS",
+)
+
+# Every variable any gtest entry overrides, plus the DRAM test knobs. A check's
+# env_overrides reports the value each of them has for that run, ambient or
+# overridden, so a variable inherited from the caller's environment is on the
+# record too.
+GTEST_ENV_KEYS = tuple(
+    dict.fromkeys([*(k for spec in TESTS.values() for k in spec.get("env", {})), *DRAM_TEST_ENV_KEYS])
+)
 
 
 # Pytest-based tests, keyed like TESTS but run through the repo venv's pytest
@@ -239,8 +257,19 @@ def run_pytest_test(
     )
 
 
-def run_tests(tt_metal: Path, names: Sequence[str], phase: Phase, dry_run: bool, logs_dir: Path) -> None:
-    """Run the named TESTS / PYTESTS entries, in order."""
+def run_tests(
+    tt_metal: Path,
+    names: Sequence[str],
+    phase: Phase,
+    dry_run: bool,
+    logs_dir: Path,
+    gddr_mbytes: int | None = None,
+) -> None:
+    """Run the named TESTS / PYTESTS entries, in order.
+
+    gddr_mbytes, if set, is passed to the GDDR entries as DRAM_TEST_MBYTES: the
+    MB tested per GDDR controller, in place of the test's 32 MB default.
+    """
     binary = next(
         (tt_metal / c for c in DEPLOYMENT_BIN_CANDIDATES if (tt_metal / c).is_file()),
         None,
@@ -275,6 +304,8 @@ def run_tests(tt_metal: Path, names: Sequence[str], phase: Phase, dry_run: bool,
         spec = TESTS[name]
         filt = spec["filter"]
         test_env = {**env, **spec.get("env", {})}
+        if gddr_mbytes is not None and name in GDDR_TESTS:
+            test_env["DRAM_TEST_MBYTES"] = str(gddr_mbytes)
         env_overrides = {k: test_env[k] for k in GTEST_ENV_KEYS if k in test_env}
         cmd = [str(binary), f"--gtest_filter={filt}"]
         log_path = logs_dir / f"{name}.log"
