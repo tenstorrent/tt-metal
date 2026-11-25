@@ -133,7 +133,12 @@ class State:
             )
             self._write(m.kvpe, len(m.kv_region), m.kv_region[layer], rows, length)
         if layer in m.index_region:
-            self._write(m.index, len(m.index_region), m.index_region[layer], tensors["index_key"][:length], length)
+            keys = tensors["index_key"][:length].float()
+            if settings.get("INDEXER_HADAMARD"):  # the cache holds the keys rotated, as TtIndexer writes them
+                from models.demos.deepseek_v3_d_p.tt.mistral_large_4.indexer import hadamard_matrix
+
+                keys = keys @ hadamard_matrix(keys.shape[-1])
+            self._write(m.index, len(m.index_region), m.index_region[layer], keys, length)
 
     def _read(self, cache, n_regions: int, region: int, length: int) -> torch.Tensor:
         """[length, W] host rows of one region in natural order: TP column 0's copy of each SP row's shard (rank
