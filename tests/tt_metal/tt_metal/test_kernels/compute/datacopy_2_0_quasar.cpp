@@ -15,6 +15,7 @@
 // it, 3 = after one copied + packed section, inside a second section after its copy; 0 = one run.
 // LTA (host define): in0 / out0 are resident L1 tensors read through LocalTensorAccessor, with no DFBs and no DM
 // kernels; one run of num_tiles / tiles_per_section full sections (mode is ignored).
+// SEM (host define, with LTA): a DM kernel writes in0 and then signals the shared semaphore `ready`; wait for it first.
 
 #include <cstdint>
 
@@ -24,6 +25,7 @@
 #include "api/compute/experimental/2_0/pack.h"
 #include "api/compute/experimental/2_0/tile_move_copy.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/semaphore.h"
 #include "api/llk_operand_from_tokens.h"
 #include "api/tensor/local_tensor_accessor.h"
 #include "experimental/kernel_args.h"
@@ -93,6 +95,10 @@ void copy_sections(DfbIn& in, DfbOut& out) {
 
 #ifdef LTA
 void kernel_main() {
+#ifdef SEM
+    Semaphore<> ready(sem::ready);
+    ready.wait_min(1);  // every thread: the DM has finished writing in0
+#endif
     using In0 = LLKOperandFrom<tensor::in0>;
     using Out0 = LLKOperandFrom<tensor::out0>;
     const In0 in = LocalTensorAccessor<std::uint16_t>(tensor::in0).operand<In0>();

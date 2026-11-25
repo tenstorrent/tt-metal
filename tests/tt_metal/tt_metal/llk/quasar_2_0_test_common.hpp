@@ -8,6 +8,8 @@
 // shows as a wrong tile.
 // ProgramIo::lta: no DM kernels and no DFBs; every input and output is a resident L1 tensor (one shard on the node)
 // bound to the compute kernel as tensor::in<i> / tensor::out<i>, read through LocalTensorAccessor::operand<>().
+// ProgramIo::sem (with lta, one input): a DM kernel reads in0 from DRAM into its L1 tensor, then signals the compute
+// kernel through a semaphore `ready` both bind (DM writes it, compute waits on it).
 
 #pragma once
 
@@ -83,6 +85,7 @@ struct ProgramIo {
     bool fp32_l1 = false;  // every DFB Float32 (needs fp32_dest); Tiles hold (lo, hi) 16-bit halves per element
     std::uint32_t fp32_in_mask = 0;  // input DFBs (bit i = in<i>) that are Float32 even without fp32_l1
     bool lta = false;  // operands are resident L1 tensors (LocalTensorAccessor), not DFBs fed by DM kernels
+    bool sem = false;  // lta, but in0 is written by a DM kernel that signals compute through a semaphore
     // DFB thread pattern: compute and writer threads, and the compute side's pattern on each in<i>. STRIDED: the
     // readers run `threads` threads too, so the compute side's stride_tiles is `threads`. BLOCKED: the same, with
     // blocks of `threads` tiles on in<i> and out<i>, so each STRIDED DM op is one tile. ALL: one reader and every
@@ -159,6 +162,14 @@ inline std::vector<Tiles> run_program(distributed::MeshDevice& mesh_device, cons
     if (io.lta) {
         compute.compiler_options.defines["LTA"] = "1";
     }
+    std::vector<SemaphoreSpec> sems;
+    if (io.sem) {
+        TT_FATAL(io.lta && io.inputs.size() == 1, "ProgramIo::sem needs lta and one input");
+        compute.compiler_options.defines["SEM"] = "1";
+        sems.push_back(SemaphoreSpec{.unique_id = SemaphoreSpecName{"ready"}, .target_nodes = node});
+        compute.semaphore_bindings.push_back(
+            {.semaphore_spec_name = SemaphoreSpecName{"ready"}, .accessor_name = "ready"});
+    }
     auto dfb_spec = [&](const std::string& name, std::uint32_t depth, bool f32) {
         return DataflowBufferSpec{
             .unique_id = DFBSpecName{name},
@@ -176,8 +187,31 @@ inline std::vector<Tiles> run_program(distributed::MeshDevice& mesh_device, cons
         const std::uint32_t tiles = io.inputs[i].size() / tile_halves(f32);
         if (io.lta) {
             const MeshTensor& t = make_tensor(dfb, tiles, f32);
-            slow_dispatch::WriteToBuffer(t.mesh_buffer(), pack32(io.inputs[i]));
             compute.tensor_bindings.push_back({.tensor_parameter_name = TensorParamName{dfb}, .accessor_name = dfb});
+            if (!io.sem) {
+                slow_dispatch::WriteToBuffer(t.mesh_buffer(), pack32(io.inputs[i]));
+                continue;
+            }
+            const KernelSpecName name{"sem_writer"};
+            kernels.push_back(KernelSpec{
+                .unique_id = name,
+                .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/dram_to_l1_tensor_sem_2_0.cpp",
+                .num_threads = 1,
+                .semaphore_bindings = {{.semaphore_spec_name = SemaphoreSpecName{"ready"}, .accessor_name = "ready"}},
+                .tensor_bindings = {{.tensor_parameter_name = TensorParamName{dfb}, .accessor_name = dfb}},
+                .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_bytes"}},
+                .hw_config = DataMovementHardwareConfig{},
+            });
+            names.push_back(name);
+            in_bufs.push_back(make_buffer(tiles, f32));
+            distributed::EnqueueWriteMeshBuffer(cq, in_bufs.back(), pack32(io.inputs[i]), /*blocking=*/true);
+            params.kernel_run_args.push_back(
+                {.kernel = name,
+                 .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+                     node,
+                     {{"src_addr", in_bufs.back()->address()},
+                      {"src_bank_id", 0u},
+                      {"num_bytes", tiles * 2 * tile_halves(f32)}})});
             continue;
         }
         dfbs.push_back(dfb_spec(dfb, io.in_depth[i], f32));
@@ -259,6 +293,7 @@ inline std::vector<Tiles> run_program(distributed::MeshDevice& mesh_device, cons
         .name = "quasar_2_0_op",
         .kernels = kernels,
         .dataflow_buffers = dfbs,
+        .semaphores = sems,
         .tensor_parameters = tensor_params,
         .work_units = {WorkUnitSpec{.name = "main", .kernels = names, .target_nodes = node}},
     };

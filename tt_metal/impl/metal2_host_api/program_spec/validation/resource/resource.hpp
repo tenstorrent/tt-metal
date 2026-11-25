@@ -87,7 +87,7 @@ void ValidateScratchpadsUsed(const ValidationContext& ctx);
 // semaphore.cpp
 void ValidateSemaphoreSpec(const SemaphoreSpec& sem, tt::ARCH arch);
 void ValidateSemaphoreBindings(const KernelSpec& kernel, tt::ARCH arch);
-void ValidateComputeSemaphores(const ValidationContext& ctx);
+void ValidateComputeSemaphores(const ValidationContext& ctx, tt::ARCH arch);
 // no all-used requirement for semaphore
 void ValidateGlobalSemaphoreBindings(const KernelSpec& kernel);
 void ValidateGlobalSemaphoreParametersUsed(const ValidationContext& ctx);

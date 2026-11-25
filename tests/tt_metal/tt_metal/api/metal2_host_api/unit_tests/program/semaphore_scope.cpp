@@ -79,14 +79,14 @@ TEST_F(ProgramSpecTestQuasar, CPU_ComputeBoundSemaphoreResolvesToComputeAtomic) 
     EXPECT_EQ(ResolveScopeFor(mesh_device_->impl().metal_env(), spec, "compute_sem"), SemScope::COMPUTE_ATOMIC);
 }
 
-TEST_F(ProgramSpecTestQuasar, CPU_SemaphoreSharedByComputeAndDMIsRejected) {
+// Quasar: a semaphore shared by one DM binder and a compute kernel is its plain L1 word; the DM is the only
+// writer and compute only reads it.
+TEST_F(ProgramSpecTestQuasar, CPU_SemaphoreSharedByComputeAndDMResolvesToLocalNonatomic) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
     BindSemaphoreToKernels(spec, "shared_sem", {"dm_kernel", "compute_kernel"});
 
-    EXPECT_THAT(
-        [&] { Program(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("bound by both a compute kernel and a data-movement kernel")));
+    EXPECT_EQ(ResolveScopeFor(mesh_device_->impl().metal_env(), spec, "shared_sem"), SemScope::LOCAL_NONATOMIC);
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 }  // namespace

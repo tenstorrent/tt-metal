@@ -37,6 +37,9 @@
  *  - up()/down() are ordered after this thread's engine work (packer/unpacker), and wait()/wait_min()
  *    order this thread's *subsequent engine instructions* after the condition, not RISC loads. A
  *    kernel that reads the buffer with the RISC must poll value() instead.
+ *  - Quasar, a semaphore bound by both a DM and a compute kernel (SemScope::LOCAL_NONATOMIC): its L1 word,
+ *    written only by the one DM binder (up / set). Compute only reads it -- wait(), wait_min(), value() -- by
+ *    polling the word from the RISC on any thread; engine instructions issued after the wait read L1 after it.
  *  - The local-op signatures are present on every compute build for a uniform API, but only Blackhole
  *    and Quasar UNPACK/PACK implement them; on MATH, isolate-SFPU, and other archs every method rejects
  *    at compile time if instantiated (a kernel cannot reach them -- construction already fails there).
@@ -323,13 +326,14 @@ private:
     // DM: the semaphore word's L1 offset. Compute: the Tensix hardware semaphore index (see
     // semaphore_compute_impl.h::sem_l1_offset).
     std::uintptr_t handle_;
-#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
-    // The mechanism the host resolved for this semaphore.
+#if defined(ARCH_QUASAR)
+    // The mechanism the host resolved for this semaphore (compute: COMPUTE_ATOMIC, or LOCAL_NONATOMIC when
+    // shared with a DM kernel). Constructed from a constexpr token, so it folds away.
     SemScope scope_;
     __attribute__((always_inline)) void set_scope(SemScope scope) { scope_ = scope; }
 #else
     // Every other build has exactly one mechanism, so the scope is a constant and costs nothing.
-#ifdef COMPILE_FOR_TRISC
+#if defined(COMPILE_FOR_TRISC)
     static constexpr SemScope scope_ = SemScope::COMPUTE_ATOMIC;
 #else
     static constexpr SemScope scope_ = SemScope::LOCAL_NONATOMIC;

@@ -7,7 +7,8 @@
 // width) and, at 32-bit Dest, Float32 L1 (fp32in: unpack-to-dest, all 32 bits). Checked bit-exact against the input;
 // outputs start as a sentinel. Test names: <S>_<sync>_<dest>, e.g. S3_full_fp32, S3_half_fp32in.
 // _lta: S2 with in/out as resident L1 tensors read through LocalTensorAccessor (no DFBs, no DM kernels), per L1
-// format; the Dest sync is the same as the DFB runs, so SyncHalf only.
+// format; the Dest sync is the same as the DFB runs, so SyncHalf only. _sem: _lta, but a DM kernel writes in from
+// DRAM and then signals the compute kernel through a shared semaphore.
 // X4_t2_<pattern>: two compute threads with the in DFB consumed STRIDED (compute stride_tiles 2), BLOCKED (blocks of
 // 2 in and out) or ALL (one reader, each thread copies every tile); Float16_b, SyncHalf, 16-bit Dest.
 
@@ -24,6 +25,7 @@ struct CopyCase {
     bool fp32;
     bool fp32_in = false;  // Float32 L1 in and out (fp32 Dest only)
     bool lta = false;      // operands via LocalTensorAccessor instead of DFBs
+    bool sem = false;      // lta, with in written by a DM kernel that signals compute through a semaphore
     std::uint8_t threads = 1;  // compute threads; > 1 runs an X4 DFB-pattern case (S is unused)
     DFBAccessPattern pattern = DFBAccessPattern::STRIDED;
 };
@@ -40,7 +42,9 @@ std::string copy_case_name(const ::testing::TestParamInfo<CopyCase>& info) {
            (c.fp32_in ? "_fp32in"
             : c.fp32  ? "_fp32"
                       : "_fp16b") +
-           (c.lta ? "_lta" : "");
+           (c.sem   ? "_sem"
+            : c.lta ? "_lta"
+                    : "");
 }
 
 std::vector<CopyCase> copy_cases() {
@@ -61,6 +65,7 @@ std::vector<CopyCase> copy_cases() {
     cases.push_back({2, false, false, false, true});
     cases.push_back({2, false, true, false, true});
     cases.push_back({2, false, true, true, true});
+    cases.push_back({2, false, false, false, true, true});
     for (DFBAccessPattern pattern : {DFBAccessPattern::STRIDED, DFBAccessPattern::BLOCKED, DFBAccessPattern::ALL}) {
         cases.push_back({.s = 0, .full_sync = false, .fp32 = false, .threads = 2, .pattern = pattern});
     }
@@ -131,6 +136,7 @@ TEST_P(Quasar2_0Datacopy, Run) {
         io.full_sync = c.full_sync;
         io.fp32_l1 = c.fp32_in;
         io.lta = c.lta;
+        io.sem = c.sem;
         const std::uint32_t halves = c.fp32_in ? 2 : 1;  // uint16 halves per element
         io.threads = c.threads;
         io.pattern = c.pattern;
