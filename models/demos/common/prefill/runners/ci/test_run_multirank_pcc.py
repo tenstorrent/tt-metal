@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import types
 import unittest
 from pathlib import Path
@@ -130,6 +131,10 @@ elif args[:1] == ["-m"] and args[1].endswith("prefill_runner"):
         log = Path(os.environ["TEST_RUNNER_LOGS"]) / "1" / "rank.1" / "stderr"
         log.parent.mkdir(parents=True, exist_ok=True)
         log.write_text("Traceback (most recent call last):\nRuntimeError: retrying the D2D connect\n")
+    if os.environ.get("TEST_RUNNER_SLOW_BRINGUP"):
+        # Still in bringup, silently: no table, no traceback; only the harness's wait (or its kill) ends it.
+        while True:
+            time.sleep(0.05)
     if crash != "bringup":
         Path(os.environ["PREFILL_MIGRATION_TABLE_PATH"]).touch()
     if crash:
@@ -261,6 +266,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
             "kimi_k3_1_packed.json",
             "glm53.json",
             "glm53_4x4.json",
+            "glm53_4x4_packed.json",
             "glm53_mtp_kv_share.json",
         ):
             shutil.copyfile(REPO / MANIFESTS / name, manifest_dir / name)
@@ -314,9 +320,9 @@ class MultirankPccHarnessTests(unittest.TestCase):
             "TEST_VERDICT": verdict,
             "TEST_RUNNER_RC": str(runner_rc),
         }
-        # K3.1 demands a throughput measurement (PREFILL_REQUIRE_TPS defaults to 1 for it), so its runs
-        # report one unless a test says otherwise.
-        if model == "kimi_k3_1":
+        # K3.1 and every packed run demand a throughput measurement (PREFILL_REQUIRE_TPS defaults to 1 for them), so
+        # their runs report one unless a test says otherwise.
+        if model == "kimi_k3_1" or "packed" in args:
             env["TEST_TPS"] = "1000"
         env.update(extra_env or {})
         command = ["bash", str(harness), model]
@@ -613,6 +619,22 @@ class MultirankPccHarnessTests(unittest.TestCase):
         self.assertEqual(producer["PREFILL_CHUNK_SIZE"], "2560")
         self.assertIn("PCC GATE PASS", result.stdout)
 
+    def test_packed_runs_are_perf_gated_and_must_measure(self):
+        """--variant packed keeps the perf gate, keyed <model>/<config>_packed in perf_baselines.json, and demands a
+        measurement before a baseline exists; the other variants stay ungated."""
+        packed = dict(config="sc1", hosts=self.SC4_HOSTS[:1], args=["--variant", "packed"])
+        result, _ = self.run_harness("kimi_k3_1", extra_env={"TEST_TPS": ""}, **packed)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("TPS GATE FAIL", result.stdout + result.stderr)
+        result, _ = self.run_harness("kimi_k3_1", **packed)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("PCC GATE PASS", result.stdout)
+        # The stub's verdicts carry no MTP caches, so the PCC gate fails there; only the perf gate is under test.
+        result, _ = self.run_harness(
+            "glm53", config="sc1", args=["--variant", "mtp_kv_share"], extra_env={"TEST_TPS": ""}
+        )
+        self.assertNotIn("TPS GATE", result.stdout + result.stderr)
+
     def test_kimi_k3_1_packed_refuses_the_8x4_configs(self):
         """On the 8x4 layout's 5120-token chunks kimi_k3_1_packed.json's budget (10240) packs two, not the four
         production runs. Refused before anything launches."""
@@ -821,6 +843,41 @@ class MultirankPccHarnessTests(unittest.TestCase):
         self.assertNotIn("PREFILL_STAGE_HOSTS", runner)
         self.assertTrue(runner["PREFILL_MANIFEST"].endswith("manifests/glm53_4x4.json"))
         self.assertIn("PCC GATE PASS", result.stdout)
+
+    def test_glm53_sc1_4x4_packed_runs_two_chunks_per_forward(self):
+        """--variant packed on the 4x4 sc1 leg: glm53_4x4_packed.json's 2560-token chunks, two per forward (budget
+        5120), on the same two tray halves, golden and PCC gate."""
+        result, records = self.run_harness(
+            "glm53", config="sc1_4x4", hosts=self.SC4_HOSTS[:1], args=["--variant", "packed"]
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        runner = self.one_record(records, "runner")["env"]
+        self.assertTrue(runner["PREFILL_MANIFEST"].endswith("manifests/glm53_4x4_packed.json"))
+        manifest = json.loads(Path(runner["PREFILL_MANIFEST"]).read_text())["env"]
+        self.assertEqual(manifest["PREFILL_CHUNK_SIZE"], "2560")
+        self.assertEqual(manifest["PREFILL_FORWARD_TOKENS_BUDGET"], "5120")
+        self.assertNotIn("PREFILL_FORWARD_TOKENS_BUDGET", runner)
+        producer = self.one_record(records, "producer")["env"]
+        self.assertEqual(producer["PREFILL_CHUNK_SIZE"], "2560")
+        self.assertIn("PCC GATE PASS", result.stdout)
+
+    def test_a_job_deadline_caps_the_bringup_wait(self):
+        """PREFILL_JOB_DEADLINE (a CI job's end, set once for its launches): a launch still in bringup gives up with
+        its diagnostic before the job ends, not after the full TABLE_WAIT_SECS."""
+        start = time.monotonic()
+        result, _ = self.run_harness(
+            "glm53",
+            config="sc1_4x4",
+            hosts=self.SC4_HOSTS[:1],
+            extra_env={
+                "TEST_RUNNER_SLOW_BRINGUP": "1",
+                "TABLE_WAIT_SECS": "3600",
+                "PREFILL_JOB_DEADLINE": str(int(time.time()) + 120),
+            },
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("KV table not published within 5s", result.stdout)
+        self.assertLess(time.monotonic() - start, 120)
 
     def test_glm53_4x4_missing_cache_names_the_glm_dir(self):
         result, records = self.run_harness("glm53", config="sc4_4x4", hosts=self.SC4_HOSTS, missing_cache=True)
