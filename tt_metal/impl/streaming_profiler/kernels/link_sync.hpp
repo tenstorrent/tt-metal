@@ -138,8 +138,8 @@ struct PortBase {
     // word, because they are never more than this far ahead.
     static constexpr uint32_t kMaxLeadTicks = 1u << 20;
     static_assert(kBurstTicks < kMaxLeadTicks);
-    // The interval between a router's polls of its port while a burst is under way or expected. A poll sends, or takes
-    // and echoes, one frame, so a burst is over in about 5 of the 16 intervals before the next one is due.
+    // The interval between a router's polls of its port: of the receiver always, of the transmitter while a burst is
+    // under way. A poll sends, or takes and echoes, one frame, so a burst is over in about 5 of the 16 intervals.
     static constexpr uint32_t kBurstPollTicks = kBurstTicks / 16;
 
     eth_ptp::TxHeaderRow<kLinkTxq, kLinkHeaderRow> header;
@@ -295,7 +295,7 @@ struct TransmitterPort : PortBase {
     }
     // Schedules when a router next serves the port: one poll interval ahead while a frame waits to be sent or a due
     // burst waits for its echoes, otherwise at the next burst.
-    FORCE_INLINE void schedule_next_poll(bool /*served*/) {
+    FORCE_INLINE void schedule_next_poll() {
         next_poll_refclk = due() ? eth_ptp::kRefclkLo.read() + kBurstPollTicks : next_burst_refclk;
     }
 
@@ -333,11 +333,7 @@ private:
 };
 
 struct ReceiverPort : PortBase {
-    // A router's receiver expects a burst until it has been served this many times in a row without a frame: a round
-    // period.
-    static constexpr uint32_t kIdlePolls = kBurstsPerRound * (kBurstTicks / kBurstPollTicks);
     uint32_t frames_taken = 0, frames_echoed = 0;
-    uint32_t idle_polls = 0;
 
     FORCE_INLINE bool due() const {
         invalidate_l1_cache();
@@ -349,12 +345,8 @@ struct ReceiverPort : PortBase {
         }
         echo();
     }
-    // Schedules when a router next serves the port: one poll interval ahead while a burst is under way or expected, a
-    // burst period ahead once the transmitter has gone idle. `served` is whether a frame was found this time.
-    FORCE_INLINE void schedule_next_poll(bool served) {
-        idle_polls = served ? 0 : idle_polls + (idle_polls < kIdlePolls);
-        next_poll_refclk = eth_ptp::kRefclkLo.read() + (idle_polls < kIdlePolls ? kBurstPollTicks : kBurstTicks);
-    }
+    // Schedules when a router next serves the port: one poll interval ahead.
+    FORCE_INLINE void schedule_next_poll() { next_poll_refclk = eth_ptp::kRefclkLo.read() + kBurstPollTicks; }
 
 private:
     // Takes each frame as it arrives, and the burst's stamps with its last frame, before echoing it. The earlier
@@ -393,7 +385,7 @@ struct RouterPort {
     __attribute__((noinline, cold)) static void serve_port() {
         if (port.l1 == nullptr) {
             port.start();
-            port.schedule_next_poll(false);
+            port.schedule_next_poll();
             return;
         }
         if (port.stopped) {
@@ -406,11 +398,10 @@ struct RouterPort {
             port.stop();
             return;
         }
-        const bool due = port.due();
-        if (due) {
+        if (port.due()) {
             port.serve();
         }
-        port.schedule_next_poll(due);
+        port.schedule_next_poll();
     }
     static FORCE_INLINE void poll() {
         if (port.poll_due()) [[unlikely]] {
