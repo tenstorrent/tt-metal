@@ -17,7 +17,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     generate_input_dim,
 )
-from helpers.utils import passed_test
+from helpers.utils import assert_exact_widening, passed_test
 
 
 def generate_input_dimensions(max_size: int) -> list[tuple[int, int]]:
@@ -76,33 +76,23 @@ def test_fast_tilize(
         assert_exact_widening(golden_tensor, res_tensor)
 
 
-# Float16_b -> Float32 is an exact widening, so compare bit for bit: the Float32
-# tolerance of passed_test hides garbage in the low 16 bits of each datum (the
-# packer reading 16-bit Dest with a Float32 input format under fp32_dest_acc_en).
+# Quick subset of the Float16_b -> Float32 cases of the test_fast_tilize sweep.
+# The widening is exact, so compare bit for bit: the Float32 tolerance of
+# passed_test hides garbage in the low 16 bits of each datum (the packer reading
+# 16-bit Dest with a Float32 input format under fp32_dest_acc_en).
 @skip_for_blackhole
 @parametrize(
-    formats=[InputOutputFormat(DataFormat.Float16_b, DataFormat.Float32)],
     dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
     dimensions=[(1, 1), (1, 2), (2, 3), (1, 5), (3, 8)],
 )
 def test_fast_tilize_bf16_to_fp32_exact(
-    formats,
     dest_acc,
     dimensions,
 ):
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float32)
     golden_tensor, res_tensor = _run_fast_tilize(formats, dest_acc, dimensions)
 
     assert_exact_widening(golden_tensor, res_tensor)
-
-
-def assert_exact_widening(golden_tensor, res_tensor):
-    golden_bits = golden_tensor.to(torch.float32).view(torch.int32)
-    res_bits = res_tensor.to(torch.float32).view(torch.int32)
-    mismatches = int((golden_bits != res_bits).sum())
-    assert mismatches == 0, (
-        f"{mismatches} of {res_tensor.numel()} datums are not the exact "
-        "Float16_b -> Float32 widening of the input"
-    )
 
 
 def _run_fast_tilize(formats, dest_acc, dimensions):

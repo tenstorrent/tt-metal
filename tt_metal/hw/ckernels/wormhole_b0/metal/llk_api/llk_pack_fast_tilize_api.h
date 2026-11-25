@@ -17,13 +17,16 @@ inline std::uint32_t llk_pack_fast_tilize_use_32bit_dest(const std::uint32_t inp
            pack_src_format[input_id] == (uint)DataFormat::Tf32;
 }
 
-// Packer input format programmed by _llk_pack_fast_tilize_init_: with fp32_dest_acc_en and a 16-bit dest read it
-// switches the packer input to Float16_b, otherwise it keeps the output CB's pack_src_format.
+// Packer input format programmed by _llk_pack_fast_tilize_init_: with fp32_dest_acc_en, a 16-bit dest read and a
+// Float32/Tf32 output CB pack_src_format it switches the packer input to Float16_b, otherwise it keeps pack_src_format.
 template <bool is_fp32_dest_acc_en>
 inline std::uint32_t llk_pack_fast_tilize_pack_src_format(
     const std::uint32_t input_operand, const std::uint8_t output_id) {
-    if (is_fp32_dest_acc_en && !llk_pack_fast_tilize_use_32bit_dest(input_operand)) {
-        return (uint)DataFormat::Float16_b;
+    if constexpr (is_fp32_dest_acc_en) {
+        if (_llk_pack_fast_tilize_switches_pack_src_(
+                llk_pack_fast_tilize_use_32bit_dest(input_operand), pack_src_format[output_id])) {
+            return (uint)DataFormat::Float16_b;
+        }
     }
     return pack_src_format[output_id];
 }
@@ -46,11 +49,17 @@ inline void llk_pack_fast_tilize_init(
         StateDiscard<std::uint32_t>(input_operand)));
 
     _llk_pack_fast_tilize_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>(
-        use_32bit_dest, pack_dst_format[output_id], unit_dim, num_faces);
+        use_32bit_dest,
+        pack_dst_format[output_id],
+        unit_dim,
+        num_faces,
+        TILE_C_DIM * TILE_R_DIM,
+        pack_src_format[output_id]);
 }
 
 template <bool is_fp32_dest_acc_en>
-inline void llk_pack_fast_tilize_uninit(const std::uint32_t pack_output) {
+inline void llk_pack_fast_tilize_uninit(const std::uint32_t input_operand, const std::uint32_t pack_output) {
+    const std::uint32_t use_32bit_dest = llk_pack_fast_tilize_use_32bit_dest(input_operand);
     const std::uint32_t output_id = get_output_id(pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
@@ -65,7 +74,13 @@ inline void llk_pack_fast_tilize_uninit(const std::uint32_t pack_output) {
         StateVal<Operand<Exu::Pack>::NarrowTile>(narrow_tile)));
 
     _llk_pack_fast_tilize_uninit_<DST_SYNC_MODE, is_fp32_dest_acc_en>(
-        pack_src_format[output_id], pack_dst_format[output_id], face_r_dim, num_faces, partial_face, narrow_tile);
+        pack_dst_format[output_id],
+        face_r_dim,
+        num_faces,
+        partial_face,
+        narrow_tile,
+        pack_src_format[output_id],
+        use_32bit_dest);
 
     // The uninit tail-calls _llk_pack_init_, so seat OperationPack on llk_pack_init's num_tiles == 1 path.
     if (partial_face) {

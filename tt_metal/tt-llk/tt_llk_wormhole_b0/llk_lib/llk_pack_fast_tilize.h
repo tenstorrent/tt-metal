@@ -97,6 +97,20 @@ inline void _llk_pack_fast_tilize_mop_config_()
 }
 
 /**
+ * @brief Whether the fast-tilize init switches the packer input format to Float16_b under fp32_dest_acc_en.
+ *
+ * Only a 32-bit packer input format (Float32/Tf32) is incompatible with a 16-bit dest read, so the switch is limited
+ * to that case; other input formats (e.g. Bfp8_b, Float16_b) are kept as configured by the caller.
+ *
+ * @param use_32bit_dest: True if dest is read as 32-bit data (see @ref _llk_pack_fast_tilize_init_).
+ * @param pack_src_format: Packer input format configured by the caller.
+ */
+inline bool _llk_pack_fast_tilize_switches_pack_src_(const std::uint32_t use_32bit_dest, const std::uint32_t pack_src_format)
+{
+    return !use_32bit_dest && (pack_src_format == to_underlying(DataFormat::Float32) || pack_src_format == to_underlying(DataFormat::Tf32));
+}
+
+/**
  * @brief Initialize the packer for a fast-tilize pack op.
  *
  * Sets the 32-bit dest read mode, programs the per-tile L1 address offset, programs the per-packer
@@ -104,8 +118,8 @@ inline void _llk_pack_fast_tilize_mop_config_()
  * configures the ADDR_MODs and MOP. Only DstSync::SyncHalf is supported; supported output formats are
  * FP32, FP16_B, BFP8_B, and BFP4_B.
  *
- * When dest is read as 16-bit data under fp32_dest_acc_en, the packer input format is also switched to
- * Float16_b (the caller's pack_src_format may be Float32), since a 16-bit dest read needs a 16-bit packer input.
+ * When dest is read as 16-bit data under fp32_dest_acc_en and the caller's pack_src_format is Float32/Tf32, the
+ * packer input format is also switched to Float16_b, since a 16-bit dest read needs a 16-bit packer input.
  *
  * @tparam Dst: Destination sync mode, values = <SyncHalf/SyncFull> (only SyncHalf supported)
  * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.
@@ -114,6 +128,8 @@ inline void _llk_pack_fast_tilize_mop_config_()
  * @param unit_dim: Number of tiles processed per iteration, valid values = <1, 2, 3>
  * @param num_faces: Faces per tile, valid values = <2, 4>
  * @param l1_tile_elements: Number of datums per output tile, used to size the per-tile L1 offset.
+ * @param pack_src_format: Packer input format configured by the caller (pass the same value to
+ *        @ref _llk_pack_fast_tilize_uninit_).
  * @note On the unpack thread, pair with @ref _llk_unpack_fast_tilize_init_ and on the math thread with @ref _llk_math_fast_tilize_init_ (same unit_dim).
  * @note Pair with @ref _llk_pack_fast_tilize_uninit_ after the matching @ref _llk_pack_fast_tilize_block_ execute calls.
  */
@@ -123,7 +139,8 @@ inline void _llk_pack_fast_tilize_init_(
     const std::uint32_t pack_dst_format,
     const std::uint32_t unit_dim,
     const std::uint32_t num_faces        = 4,
-    const std::uint32_t l1_tile_elements = TILE_C_DIM * TILE_R_DIM)
+    const std::uint32_t l1_tile_elements = TILE_C_DIM * TILE_R_DIM,
+    const std::uint32_t pack_src_format  = to_underlying(DataFormat::Float16_b))
 {
     LLK_ASSERT(num_faces == 2 || num_faces == 4, "num_faces must be 2 or 4");
     LLK_ASSERT(
@@ -141,9 +158,13 @@ inline void _llk_pack_fast_tilize_init_(
             // but dest holds 16-bit Float16_b data here and the packer does not convert from a 16-bit dest read
             // with In = Float32 (the low 16 bits of each datum come out as garbage)
             // so switch the packer input format (all packers, Dstacc and strides) to Float16_b
+            // other input formats are left alone, so e.g. BFP outputs keep packing exactly as configured
             // _llk_pack_fast_tilize_uninit_ restores the caller's pack_src_format
-            reconfig_packer_data_format<is_fp32_dest_acc_en>(
-                to_underlying(DataFormat::Float16_b), pack_dst_format, SCALE_DATUM_SIZE(pack_dst_format, l1_tile_elements), FACE_R_DIM, num_faces);
+            if (_llk_pack_fast_tilize_switches_pack_src_(use_32bit_dest, pack_src_format))
+            {
+                reconfig_packer_data_format<is_fp32_dest_acc_en>(
+                    to_underlying(DataFormat::Float16_b), pack_dst_format, SCALE_DATUM_SIZE(pack_dst_format, l1_tile_elements), FACE_R_DIM, num_faces);
+            }
         }
         cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_RMW>(0);
     }
@@ -231,30 +252,35 @@ inline void _llk_pack_fast_tilize_init_(
  *
  * @tparam Dst: Destination sync mode, values = <SyncHalf/SyncFull>
  * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.
- * @param pack_src_format: Packer input format to restore (the one the packer was configured with before init).
  * @param pack_dst_format: Destination (L1) data format used to re-run the default packer init.
  * @param face_r_dim: Number of rows per face.
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
  * @param partial_face: True if packing a partial (sub-face-row) face.
  * @param narrow_tile: True if the tile occupies fewer than the full set of packer interfaces.
+ * @param pack_src_format: Packer input format to restore (the same value passed to @ref _llk_pack_fast_tilize_init_).
+ * @param use_32bit_dest: The same value passed to @ref _llk_pack_fast_tilize_init_.
  * @note Call @ref _llk_pack_fast_tilize_init_ before this function.
  */
 template <DstSync Dst, bool is_fp32_dest_acc_en>
 inline void _llk_pack_fast_tilize_uninit_(
-    const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
-    const std::uint32_t face_r_dim = FACE_R_DIM,
-    const std::uint32_t num_faces  = 4,
-    const bool partial_face        = false,
-    const bool narrow_tile         = false)
+    const std::uint32_t face_r_dim      = FACE_R_DIM,
+    const std::uint32_t num_faces       = 4,
+    const bool partial_face             = false,
+    const bool narrow_tile              = false,
+    const std::uint32_t pack_src_format = to_underlying(DataFormat::Float16_b),
+    const std::uint32_t use_32bit_dest  = 0)
 {
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     if constexpr (is_fp32_dest_acc_en)
     {
-        // restore the caller's packer input format (init may have switched it to Float16_b)
-        reconfig_packer_data_format<is_fp32_dest_acc_en>(
-            pack_src_format, pack_dst_format, SCALE_DATUM_SIZE(pack_dst_format, num_faces * face_r_dim * FACE_C_DIM), face_r_dim, num_faces, partial_face);
+        // restore the caller's packer input format if init switched it to Float16_b
+        if (_llk_pack_fast_tilize_switches_pack_src_(use_32bit_dest, pack_src_format))
+        {
+            reconfig_packer_data_format<is_fp32_dest_acc_en>(
+                pack_src_format, pack_dst_format, SCALE_DATUM_SIZE(pack_dst_format, num_faces * face_r_dim * FACE_C_DIM), face_r_dim, num_faces, partial_face);
+        }
     }
     // restore PCK_DEST_RD_CTRL_Read_32b_data to the original value
     cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_RMW>(is_fp32_dest_acc_en);

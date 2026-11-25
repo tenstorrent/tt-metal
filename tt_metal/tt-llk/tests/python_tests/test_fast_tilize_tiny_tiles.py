@@ -18,8 +18,7 @@ from helpers.test_variant_parameters import (
 )
 from helpers.tile_constants import calculate_tile_size_bytes, get_tile_params
 from helpers.tilize_untilize import tilize_block
-from helpers.utils import passed_test
-from test_fast_tilize import assert_exact_widening
+from helpers.utils import assert_exact_widening, passed_test
 from ttexalens.tt_exalens_lib import read_from_device
 
 TILE_DIMENSIONS = [16, 32]

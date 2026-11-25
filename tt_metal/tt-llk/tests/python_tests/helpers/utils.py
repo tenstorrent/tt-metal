@@ -1250,6 +1250,23 @@ def fp32_bits_as_int32(tensor: torch.Tensor) -> torch.Tensor:
     return tensor.to(torch.float32).contiguous().view(torch.int32)
 
 
+def assert_exact_widening(
+    golden_tensor: torch.Tensor, res_tensor: torch.Tensor
+) -> None:
+    """Fail unless every result datum has the same float32 bits as the golden.
+
+    For a widening conversion (e.g. Float16_b -> Float32) the result is exact, so a
+    tolerance-based comparison would hide errors in the low bits.
+    """
+    mismatches = int(
+        (fp32_bits_as_int32(golden_tensor) != fp32_bits_as_int32(res_tensor)).sum()
+    )
+    assert mismatches == 0, (
+        f"{mismatches} of {res_tensor.numel()} datums are not the exact "
+        "widening of the input"
+    )
+
+
 def int32_to_smag32(tensor: torch.Tensor) -> torch.Tensor:
     """Encode a 2's-complement int32 tensor as sign-magnitude 32-bit (SMAG32).
 
