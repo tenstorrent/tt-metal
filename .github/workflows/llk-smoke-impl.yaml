@@ -198,7 +198,6 @@ jobs:
           ${{ matrix.test-group.cmd }}
 
       # Only push runs on main are read back, and a fault must not fail a leg.
-      # A leg that is not split (ULP check) would upload the downloaded table again.
       - name: Upload test durations
         if: github.event_name == 'push' && startsWith(matrix.test-group.name, 'llk_smoke_')
         continue-on-error: true

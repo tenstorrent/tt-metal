@@ -888,19 +888,14 @@ def _store_split_durations(session):
     if reporter is None:
         return
     reports = [
-        report
-        for reports in reporter.stats.values()
-        for report in reports
-        if isinstance(report, pytest.TestReport)
+        r
+        for rs in reporter.stats.values()
+        for r in rs
+        if isinstance(r, pytest.TestReport)
     ]
-    # Scale to the session's wall time: duration / workers assumes every worker is busy
-    # until the end, but a leg of long compiles leaves most of them idle.
-    total = sum(report.duration for report in reports)
+    total = sum(r.duration for r in reports)
     start = getattr(config, "_llk_split_start", None)
-    if start is not None and total:
-        scale = (time.perf_counter() - start) / total
-    else:
-        scale = 1 / workers
+    scale = (time.perf_counter() - start) / total if start and total else 1 / workers
     for report in reports:
         durations[report.nodeid] = (
             durations.get(report.nodeid, 0.0) + report.duration * scale

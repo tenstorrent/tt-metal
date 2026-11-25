@@ -364,8 +364,6 @@ jobs:
       - name: Record the job start
         if: ${{ inputs.shadow-compile-runner != '' || inputs.stage2-baseline-ref != '' }}
         run: echo "JOB_START_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
-      # Only what the legs build and run from; stage 2 archives the same paths from the base.
-      # Not cone mode: the image's git (2.34) reads plain "set" as patterns, without the parents' files.
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20

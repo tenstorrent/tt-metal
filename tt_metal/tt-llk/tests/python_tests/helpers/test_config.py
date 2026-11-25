@@ -1871,10 +1871,6 @@ class TestConfig:
         )
 
     def _compile_kernel_part_once(self, compile_command, source):
-        # build.h holds every parameter of the variant, but a TRISC names only some of them, so variants
-        # often compile a TRISC to the same code. Key on the flags, the source, and the build.h lines the
-        # unit names (directly or through another kept line), and build it once. The names a unit uses
-        # do not depend on the build.h constants, so one preprocessing per flags and source finds them.
         variant_dir = str(TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id)
         command = [
             compile_command[0],

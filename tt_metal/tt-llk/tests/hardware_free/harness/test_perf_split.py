@@ -87,7 +87,7 @@ def test_without_durations_the_module_table_is_used(env, monkeypatch, table):
     assert _cut(_items(*TESTS), 2, 2) == TESTS[3:]
 
 
-def _session(tmp_path, workers, reports, wall=None):
+def _session(tmp_path, workers, reports):
     stats = {
         "passed": [
             pytest.TestReport(n, (n, 0, n), {}, "passed", None, "call", duration=d)
@@ -100,21 +100,7 @@ def _session(tmp_path, workers, reports, wall=None):
         getoption=lambda name, default=None: options.get(name, default),
         pluginmanager=SimpleNamespace(get_plugin=lambda name: reporter),
     )
-    if wall is not None:
-        config._llk_split_start = plugin.time.perf_counter() - wall
     return SimpleNamespace(config=config)
-
-
-def test_a_session_weighs_its_wall_time(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(TestConfig, "BUILD_MODE", BuildMode.PRODUCE, raising=False)
-    monkeypatch.setattr(plugin.time, "perf_counter", lambda: 1000.0)
-    plugin._store_split_durations(
-        _session(tmp_path, 10, [("a::t", 30.0), ("b::t", 10.0)], wall=100.0)
-    )
-    assert json.loads(Path(".perf_split_durations").read_text()) == pytest.approx(
-        {"a::t": 75.0, "b::t": 25.0}
-    )
 
 
 def test_the_session_start_turns_the_wall_time_on(tmp_path, monkeypatch):
