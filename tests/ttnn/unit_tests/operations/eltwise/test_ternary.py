@@ -333,6 +333,41 @@ def test_addcdiv(device, torch_dtype, ttnn_dtype, value, in_data1_shape, in_data
     assert_with_ulp(expected_result=golden_tensor, actual_result=output_tensor, ulp_threshold=1, allow_nonfinite=True)
 
 
+@pytest.mark.parametrize(
+    "a_dtype, b_dtype, c_dtype",
+    [
+        (ttnn.uint32, ttnn.uint32, ttnn.uint32),
+        (ttnn.int32, ttnn.int32, ttnn.int32),
+        (ttnn.bfloat16, ttnn.uint32, ttnn.bfloat16),
+        (ttnn.float32, ttnn.float32, ttnn.int32),
+    ],
+)
+def test_addcdiv_rejects_integer_dtypes(device, expect_error, a_dtype, b_dtype, c_dtype):
+    shape = (1, 1, 32, 32)
+
+    def make(dtype):
+        return ttnn.from_torch(
+            torch.ones(shape, dtype=torch.int32), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
+        )
+
+    with expect_error(RuntimeError, "ADDCDIV does not support"):
+        ttnn.addcdiv(make(a_dtype), make(b_dtype), make(c_dtype), value=1.0)
+
+
+def test_addcdiv_rejects_integer_output(device, expect_error):
+    shape = (1, 1, 32, 32)
+    inputs = [
+        ttnn.from_torch(torch.ones(shape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        for _ in range(3)
+    ]
+    output = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    with expect_error(RuntimeError, "ADDCDIV does not support DataType::UINT32"):
+        ttnn.addcdiv(*inputs, value=1.0, output_tensor=output)
+
+
 _MIXED_INPUT_CASES = [
     (ttnn.bfloat16, ttnn.float32, None),
     (ttnn.float32, ttnn.bfloat16, None),
