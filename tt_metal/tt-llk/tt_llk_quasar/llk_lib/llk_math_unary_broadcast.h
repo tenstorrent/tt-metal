@@ -297,13 +297,11 @@ inline void _llk_math_eltwise_unary_broadcast_(const std::uint32_t tile_idx)
 {
     _set_dst_write_addr_<DstTileShape::Tile32x32>(tile_idx);
 
-    if constexpr (unpack_to_dest)
-    {
-        // Wait condition SRCB_VLD is required as MOVD2B doesn't automatically wait
-        // for SrcB[MatrixUnit.SrcBBank].AllowedClient == SrcClient::MatrixUnit. MATH drains the
-        // preceding math instructions so their source-bank release has landed before SRCB_VLD tests it.
-        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH, p_stall::WAIT_SFPU, p_stall::SRCB_VLD); // TEN-4367 - SrcB sync workaround
-    }
+    // Wait condition SRCB_VLD is required as MOVD2B doesn't automatically wait
+    // for SrcB[MatrixUnit.SrcBBank].AllowedClient == SrcClient::MatrixUnit. MATH drains the
+    // preceding math instructions so their source-bank release has landed before SRCB_VLD tests it.
+    // Separately, when unpacking to SrcB the first FPU read of SrcB can see stale data from the unpacker's last write.
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH, p_stall::WAIT_SFPU, p_stall::SRCB_VLD);
 
     ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
 
