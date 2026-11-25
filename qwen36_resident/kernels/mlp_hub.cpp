@@ -157,8 +157,14 @@ static_assert(!kHubBfp8 || published, "bfp8 slots: the compute sums them");
 // previous one, which the compute reads as the residual; x0 of the token state there first (named arg tok_x0, group g
 // at tok_x0 + g vector_bytes)
 constexpr bool kHubRes = get_named_compile_time_arg_val("hub_res") != 0;
+// O-1d (named arg hub_slots: 2 or 4): sub-round s all-reduces through slot s % kSlots. With bfp8 slots four fit L1, so
+// a round's groups (G <= 4) are all sent before the first is finished — none waits for a slot to be summed. Four
+// slots: the streamers count parities 2 / 3 in a second gather word (named arg sem_gather2)
+constexpr uint32_t kSlots = get_named_compile_time_arg_val("hub_slots");
+constexpr uint32_t sem_gather2 = get_named_compile_time_arg_val("sem_gather2");
 constexpr uint32_t kTokX0 = get_named_compile_time_arg_val("tok_x0");
 static_assert(!kHubRes || (kHubBfp8 && groups > 1), "the hub residual: row groups with bfp8 partials");
+static_assert(kSlots == 2 || (kSlots == 4 && groups > 1), "two slots, or four with row groups");
 // (row groups: the records go to the slots once every sub-round of the step is summed — the streamers wait for the
 // last slots semaphore first — so both parities' slots hold them; bf16 slots fit them in parity 0 alone)
 static_assert(
@@ -317,8 +323,10 @@ FORCE_INLINE void wait_half(volatile tt_l1_ptr uint32_t* sem, uint32_t shift, ui
 void kernel_main() {
     size_t arg_idx = 0;
     const uint32_t arg0 = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t ccl_sem_addr[2] = {get_arg_val<uint32_t>(arg_idx), get_arg_val<uint32_t>(arg_idx + 1)};
-    arg_idx += 2;
+    uint32_t ccl_sem_addr[kSlots];
+    for (uint32_t p = 0; p < kSlots; p++) {
+        ccl_sem_addr[p] = get_arg_val<uint32_t>(arg_idx++);
+    }
     const uint32_t arg3 = get_arg_val<uint32_t>(arg_idx++);
     auto cb_base = [](uint32_t cb) {
         auto& iface = get_local_cb_interface(cb);
@@ -328,8 +336,8 @@ void kernel_main() {
     const uint32_t rects = get_arg_val<uint32_t>(arg_idx++);
     const size_t rect_args = arg_idx;
     arg_idx += 5 * rects;
-    uint32_t argmax_addr = 0, cand_addr = 0, cand_sem_addr = 0, launch_addr = 0, ccl_base_addr[2] = {0, 0};
-    uint32_t free_sem_addr[2] = {0, 0};
+    uint32_t argmax_addr = 0, cand_addr = 0, cand_sem_addr = 0, launch_addr = 0, ccl_base_addr[kSlots] = {};
+    uint32_t free_sem_addr[kSlots] = {};
     uint32_t tok_addr = 0, embed_addr = 0, rope_addr = 0, out_addr = 0, params_addr = 0, peer_tok_addr = 0;
     if constexpr (feed) {
         argmax_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -339,11 +347,13 @@ void kernel_main() {
         if constexpr (groups > 1) {
             // row groups: the launch's sub-rounds vary with its active groups, so each parity's expected CCL count
             // carries over from the previous launch in a word of its own (zeroed with the launch counter)
-            ccl_base_addr[0] = get_arg_val<uint32_t>(arg_idx++);
-            ccl_base_addr[1] = get_arg_val<uint32_t>(arg_idx++);
+            for (uint32_t p = 0; p < kSlots; p++) {
+                ccl_base_addr[p] = get_arg_val<uint32_t>(arg_idx++);
+            }
             // and each parity's slot-free count (the peers' sums done, see the sub-round loop)
-            free_sem_addr[0] = get_arg_val<uint32_t>(arg_idx++);
-            free_sem_addr[1] = get_arg_val<uint32_t>(arg_idx++);
+            for (uint32_t p = 0; p < kSlots; p++) {
+                free_sem_addr[p] = get_arg_val<uint32_t>(arg_idx++);
+            }
         }
         tok_addr = get_arg_val<uint32_t>(arg_idx++);
         embed_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -390,8 +400,8 @@ void kernel_main() {
         next_hdr += (sizeof(PACKET_HEADER_TYPE) + 15) & ~15u;
         return h;
     };
-    volatile PACKET_HEADER_TYPE* hdr[2][packets_per_vector][2];
-    for (uint32_t par = 0; par < 2; par++) {
+    volatile PACKET_HEADER_TYPE* hdr[kSlots][packets_per_vector][2];
+    for (uint32_t par = 0; par < kSlots; par++) {
         for (uint32_t p = 0; p < packets_per_vector; p++) {
             const uint32_t off = p * packet_bytes;
             const uint32_t bytes = off + packet_bytes <= slot_bytes ? packet_bytes : slot_bytes - off;
@@ -425,9 +435,9 @@ void kernel_main() {
         }
     }
     // row groups: per parity a header-only atomic increment of the peers' slot-free count (pipelined sub-rounds)
-    volatile PACKET_HEADER_TYPE* free_hdr[2][2] = {};
+    volatile PACKET_HEADER_TYPE* free_hdr[kSlots][2] = {};
     if constexpr (groups > 1) {
-        for (uint32_t par = 0; par < 2; par++) {
+        for (uint32_t par = 0; par < kSlots; par++) {
             const uint64_t sem = get_noc_addr(my_x[0], my_y[0], free_sem_addr[par]);
             for (uint32_t dir = 0; dir < 2; dir++) {
                 volatile PACKET_HEADER_TYPE* h = allocate();
@@ -449,9 +459,13 @@ void kernel_main() {
     }
 
     volatile tt_l1_ptr uint32_t* gather = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_gather));
-    volatile tt_l1_ptr uint32_t* ccl_sem[2] = {
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ccl_sem_addr[0]),
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ccl_sem_addr[1])};
+    // (parities 2 / 3: the second gather word)
+    volatile tt_l1_ptr uint32_t* gather2 =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(kSlots > 2 ? sem_gather2 : sem_gather));
+    volatile tt_l1_ptr uint32_t* ccl_sem[kSlots];
+    for (uint32_t p = 0; p < kSlots; p++) {
+        ccl_sem[p] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ccl_sem_addr[p]);
+    }
     volatile tt_l1_ptr uint32_t* flag = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(flag_addr);
     auto rect = [&](uint32_t r, uint32_t i) { return get_arg_val<uint32_t>(rect_args + 5 * r + i); };
 
@@ -474,7 +488,7 @@ void kernel_main() {
         noc_async_write_barrier();
     }
 
-    uint32_t expected[2] = {0, 0};
+    uint32_t expected[kSlots] = {};
     uint32_t launch = 0;
     if constexpr (feed) {
         volatile tt_l1_ptr uint32_t* launch_word = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(launch_addr);
@@ -485,8 +499,9 @@ void kernel_main() {
             expected[0] = launch * ((layers + 1) / 2) * (num_chips - 1) * packets_per_vector;
             expected[1] = launch * (layers / 2) * (num_chips - 1) * packets_per_vector;
         } else {
-            expected[0] = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ccl_base_addr[0]);
-            expected[1] = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ccl_base_addr[1]);
+            for (uint32_t p = 0; p < kSlots; p++) {
+                expected[p] = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ccl_base_addr[p]);
+            }
         }
     }
     // row groups: the groups with an active row (active_rows.hpp ActiveGroups), from the token state's active word,
@@ -526,10 +541,13 @@ void kernel_main() {
     // (a round's first partials need the previous round's multicasts, so only within a round), once every peer has
     // freed its slot s & 1 (finished s - 2; each hub signals the others after each sum, free_sem[par])
     constexpr uint32_t kPerSub = num_chips > 1 ? (num_chips - 1) * packets_per_vector : 1;
-    const uint32_t free_base[2] = {expected[0] / kPerSub, expected[1] / kPerSub};
+    uint32_t free_base[kSlots];
+    for (uint32_t p = 0; p < kSlots; p++) {
+        free_base[p] = expected[p] / kPerSub;
+    }
     auto send_sub = [&](uint32_t s) {
         const uint32_t l = s / ag.n, g = ag.g[s % ag.n];
-        const uint32_t par = s & 1;
+        const uint32_t par = s % kSlots;
         const uint32_t base = slots + par * num_chips * slot_bytes;
         if constexpr (groups == 1) {
             noc_semaphore_wait_min(gather, num_streamers * (s + 1));
@@ -538,15 +556,15 @@ void kernel_main() {
             // count would start group g's sum early; the streamers count parity-0 sub-rounds in the low half of the
             // gather word and parity-1 ones in the high half. A parity's next partial needs this round's multicasts
             // of every group first (groups <= 2), so a half never runs ahead of its sub-round.)
-            wait_half(gather, 16 * par, num_streamers * (s / 2 + 1));
+            wait_half(par < 2 ? gather : gather2, 16 * (par & 1), num_streamers * (s / kSlots + 1));
         }
         mark(s, 0);
         if constexpr (num_chips > 1) {
             if constexpr (groups > 1) {
-                if (ag.n > 1 && s >= 2) {
+                if (ag.n > 1 && s >= kSlots) {
                     noc_semaphore_wait_min(
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(free_sem_addr[par]),
-                        (num_chips - 1) * (free_base[par] + s / 2));
+                        (num_chips - 1) * (free_base[par] + s / kSlots));
                 }
             }
             for (uint32_t p = 0; p < packets_per_vector; p++) {
@@ -567,7 +585,7 @@ void kernel_main() {
     };
     auto finish_sub = [&](uint32_t s) {
         const uint32_t l = s / ag.n, g = ag.g[s % ag.n];
-        const uint32_t par = s & 1;
+        const uint32_t par = s % kSlots;
         const uint32_t base = slots + par * num_chips * slot_bytes;
         if constexpr (num_chips > 1) {
             noc_semaphore_wait_min(ccl_sem[par], expected[par]);
@@ -654,13 +672,16 @@ void kernel_main() {
         }
     } else {
         for (uint32_t r = 0; r < layers; r++) {
+            // (two slots: a group's send before the previous one's finish; four: the round's sends first)
             for (uint32_t k = 0; k < ag.n; k++) {
                 send_sub(r * ag.n + k);
-                if (k > 0) {
+                if (kSlots == 2 && k > 0) {
                     finish_sub(r * ag.n + k - 1);
                 }
             }
-            finish_sub(r * ag.n + ag.n - 1);
+            for (uint32_t k = kSlots == 2 ? ag.n - 1 : 0; k < ag.n; k++) {
+                finish_sub(r * ag.n + k);
+            }
         }
     }
     noc_async_write_barrier();
@@ -669,7 +690,8 @@ void kernel_main() {
         if constexpr (groups == 1) {
             noc_semaphore_wait_min(gather, num_streamers * (layers * groups + 1));
         } else {
-            wait_half(gather, 0, num_streamers * ((layers * ag.n + 1) / 2 + 1));  // (the records: the low half)
+            // (the records: the low half — parity 0's count)
+            wait_half(gather, 0, num_streamers * ((layers * ag.n + kSlots - 1) / kSlots + 1));
         }
         invalidate_l1_cache();
         // (row groups: the records are in the parity-0 slots; a peer starts the next launch, whose round 0 writes
@@ -936,8 +958,9 @@ void kernel_main() {
         }
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(launch_addr) = launch + 1;
         if constexpr (groups > 1) {
-            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ccl_base_addr[0]) = expected[0];
-            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ccl_base_addr[1]) = expected[1];
+            for (uint32_t p = 0; p < kSlots; p++) {
+                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ccl_base_addr[p]) = expected[p];
+            }
         }
     } else {
         noc_semaphore_set(ccl_sem[0], 0);

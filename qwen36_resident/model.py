@@ -153,6 +153,10 @@ HUB_RES = os.environ.get("RESIDENT_HUB_RES", "1") == "1"
 # O-2 (default off until validated): row-group builds overlap a layer's attention users (attn_common.hpp kAttnPipe)
 ATTN_PIPE = os.environ.get("RESIDENT_ATTN_PIPE", "0") == "1"
 SEM_m1, SEM_PART1 = 14, 15  # (O-2: the odd iterations' row-max / partial semaphores, attention cores only)
+# O-1d (RESIDENT_HUB_SLOTS 4, with HUB_BFP8 at row groups): the hub all-reduces a round's groups through four slots,
+# all sent before the first is summed (mlp_hub.cpp kSlots); bf16 slots: four do not fit L1
+HUB_SLOTS = int(os.environ.get("RESIDENT_HUB_SLOTS", "2"))
+SEM_GATHER2 = 14  # (O-1d: the second gather word, streamers + hub — not attention cores, which use 14 for O-2)
 KV_ROW = (HD // TILE) * TILE_BYTES[K_DT]  # one position tile of a K cache page (bf8; bfp4 with K_BFP4)
 # Strata S0 step 1 (RESIDENT_KV_V_BFP4, default off): the V caches / pool in bfp4 tiles, K stays bf8 (V tolerates 4-bit
 # mantissas: corpus NLL +0.13% at 8K, within noise at 32K; the pool holds ~34% more tokens per byte)
@@ -775,6 +779,8 @@ class ResidentModel:
         # (O-1c accuracy: with bfp8 hub partials the hub adds the residual; not the fc draft layer, whose first round
         # has none)
         self.hub_res = HUB_BFP8 and HUB_RES and groups > 1 and fc is None
+        self.hub_slots = HUB_SLOTS if HUB_BFP8 and groups > 1 else 2
+        assert self.hub_slots in (2, 4), self.hub_slots
         assert self.attn_tails in (1, 2)
         # with row groups the rows' positions live past the token state's x0 / rope (active_rows.hpp tok_pos_off);
         # one group keeps them in the head's words 1 .. batch
@@ -1223,7 +1229,7 @@ class ResidentModel:
         # the hub's slots are a hub CB; it dumps the last layer's x here (for the host)
         # (row groups: one page per group)
         self.x_t = dram_t(torch.zeros(n * groups, B * HIDDEN), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
-        self.ccl_sems = [ttnn.create_global_semaphore(mesh, hub_grid, 0) for _ in range(2)]  # per slot parity
+        self.ccl_sems = [ttnn.create_global_semaphore(mesh, hub_grid, 0) for _ in range(self.hub_slots)]  # per slot
         # the hubs' all-reduce over RESIDENT_HUB_LINKS fabric links per neighbour where that many trained, else fewer
         # (a cabling or mesh descriptor with one link per neighbour takes the one-link path)
         self.hub_links = 1
@@ -1276,7 +1282,11 @@ class ResidentModel:
             )
             # candidates, launches (row groups: then each parity's CCL count at the last launch's end, mlp_hub.cpp)
             # (and each parity's slot-free count of the pipelined sub-rounds)
-            self.feed_sems = [ttnn.create_global_semaphore(mesh, hub_grid, 0) for _ in range(2 if groups == 1 else 6)]
+            # (cand, launch; row groups: per slot the CCL base and the slot-free count)
+            self.feed_sems = [
+                ttnn.create_global_semaphore(mesh, hub_grid, 0)
+                for _ in range(2 if groups == 1 else 2 + 2 * self.hub_slots)
+            ]
             rope = rope_compact(sts[0].max_pos).view(np.int32)
             self.rope_t = dram_t(torch.from_numpy(rope.copy()), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, rep)
             # (rows mode: per launch, 16 B of out and 16 parameter words per row)
@@ -1484,17 +1494,24 @@ class ResidentModel:
                 cbs.append(cb(36, grid, 3 if R == 2 else n_shift))
             # hub: slots (2 parities x chips) and their sum x (32x32 views), fabric packet headers (2 parities x
             # packets x 2 directions) and a word
-            hub_headers = 4 * -(-HIDDEN * 2 * B // packet_bytes)
+            hub_headers = 2 * self.hub_slots * -(-HIDDEN * 2 * B // packet_bytes)
             x_views = HIDDEN * B // (TILE * TILE)
             # (O-1c: the slots as bfp8 32x32 views of four batch x 32 tiles, streamer_writer.cpp)
-            cbs.append(cb(0, hub_grid, 2 * n * x_views, *((ttnn.bfloat8_b, 1088) if HUB_BFP8 and groups > 1 else ())))
+            cbs.append(
+                cb(
+                    0,
+                    hub_grid,
+                    self.hub_slots * n * x_views,
+                    *((ttnn.bfloat8_b, 1088) if HUB_BFP8 and groups > 1 else ()),
+                )
+            )
             # (hub_res: an x entry per group, each the next round's residual; then the x0-written token: mlp_hub.cpp)
             cbs.append(cb(2, hub_grid, (groups if self.hub_res else 1) * x_views))
             if self.hub_res:
                 cbs.append(cb(5, hub_grid, 1, ttnn.uint32, 16))
             # (the feed: its candidates in fabric packets, mlp_hub.cpp cand_packets)
             cand_packets = -(-4 * self._cand_words // packet_bytes) if self.feed else 0
-            free_headers = 4 if groups > 1 else 0  # (row groups: the slot-free signals, mlp_hub.cpp)
+            free_headers = 2 * self.hub_slots if groups > 1 else 0  # (row groups: the slot-free signals, mlp_hub.cpp)
             cbs.append(cb(1, hub_grid, 1, page=(hub_headers + 2 * cand_packets + free_headers) * 160 + 16))
             if groups > 1:
                 # the hub compute's sub-round count; the streamers' active-group mask (reader -> compute); the mixers'
@@ -1755,6 +1772,8 @@ class ResidentModel:
                 for i in range(SEM_GROUP)
             ]
             sems.append(ttnn.SemaphoreDescriptor(id=SEM_GROUP, core_ranges=head_grid, initial_value=0))
+            if self.hub_slots > 2:  # (O-1d: the streamers count parities 2 / 3 in the hub's second gather word)
+                sems.append(ttnn.SemaphoreDescriptor(id=SEM_GATHER2, core_ranges=grid.merge(hub_grid), initial_value=0))
             if self.attn_pipe:  # (O-2: the odd iterations' row-max / partial counts)
                 sems += [
                     ttnn.SemaphoreDescriptor(id=i, core_ranges=attn_grid, initial_value=0) for i in (SEM_m1, SEM_PART1)
@@ -1783,6 +1802,8 @@ class ResidentModel:
                 ("kv_k_tile", TILE_BYTES[K_DT]),  # (attn_common.hpp kKvTile: the K cache's tile, S0-8)
                 ("hub_bfp8", int(HUB_BFP8 and self.groups > 1)),  # (O-1c: bfp8 hub partials)
                 ("hub_res", int(self.hub_res)),  # (O-1c accuracy: the hub adds the residual, mlp_hub.cpp kHubRes)
+                ("hub_slots", self.hub_slots),  # (O-1d, mlp_hub.cpp kSlots)
+                ("sem_gather2", SEM_GATHER2),
                 ("tok_x0", TOK_X0),
                 ("attn_pipe", int(self.attn_pipe)),  # (attn_common.hpp kAttnPipe, O-2)
                 ("sem_m1", SEM_m1),

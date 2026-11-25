@@ -126,6 +126,10 @@ void kernel_main() {
     const uint32_t act_sem_addr = get_semaphore(sem_act);
     const uint32_t rows_sem_addr = get_semaphore(sem_rows);
     const uint64_t hub_gather_sem = get_noc_addr(hub_x, hub_y, get_semaphore(sem_gather));
+    // (O-1d, mlp_hub.cpp kSlots: four slots — parities 2 / 3 counted in the hub's second gather word)
+    constexpr uint32_t kSlots = get_named_compile_time_arg_val("hub_slots");
+    const uint64_t hub_gather_sem2 = get_noc_addr(
+        hub_x, hub_y, get_semaphore(kSlots > 2 ? get_named_compile_time_arg_val("sem_gather2") : sem_gather));
     const InterleavedAddrGen<true> hist{.bank_base_address = hist_addr, .page_size = kHistSlots * kBlkBytes};
     // the ring step (it picks the history slot to overwrite) comes from the reader: this RISC reads nothing,
     // as the reader's NOC1 weight reads share the read counters of NOC1
@@ -192,9 +196,10 @@ void kernel_main() {
                 hub_slots = *hub_addr_sem;
             }
             const uint32_t sr = round * ag.n + k++;  // the hub's sub-round: the k-th active group of the round
-            if constexpr (groups > 2) {
-                if (sr >= 2) {
-                    noc_semaphore_wait_min(slots_sem, sr - 1);
+            const uint32_t par = sr % kSlots;
+            if constexpr (groups > kSlots) {
+                if (sr >= kSlots) {
+                    noc_semaphore_wait_min(slots_sem, sr - kSlots + 1);
                 }
             }
             if constexpr (kHubBfp8) {
@@ -202,7 +207,7 @@ void kernel_main() {
                 // one bfp8 32x32 tile [64 B exponents | 1024 B mantissas] when their sections are gathered — the hub
                 // sums those 32x32 views as fast as its bf16 ones; the elements map as in the bf16 views)
                 static_assert(kTileBytes == 512 && Ht % 4 == 0, "bfp8 views: batch 8, whole views");
-                const uint32_t base = hub_slots + ((sr & 1) * num_chips + chip) * (Ht / 4) * 1088;
+                const uint32_t base = hub_slots + (par * num_chips + chip) * (Ht / 4) * 1088;
                 const uint32_t src = get_read_ptr(cb_part);
                 for (uint32_t i = 0; i < nd; i++) {
                     const uint32_t t = pout_off + i, view = base + (t / 4) * 1088, at = src + i * kPartTileBytes;
@@ -210,12 +215,13 @@ void kernel_main() {
                     noc_async_write(at + kPartExpPad, get_noc_addr(hub_x, hub_y, view + 64 + (t % 4) * 256), 256);
                 }
             } else {
-                const uint32_t dst = hub_slots + (((sr & 1) * num_chips + chip) * Ht + pout_off) * kTileBytes;
+                const uint32_t dst = hub_slots + ((par * num_chips + chip) * Ht + pout_off) * kTileBytes;
                 noc_async_write(get_read_ptr(cb_part), get_noc_addr(hub_x, hub_y, dst), nd * kTileBytes);
             }
             noc_async_write_barrier();
-            // (row groups: parity-0 sub-rounds count in the gather word's low half, parity 1 in its high half)
-            noc_semaphore_inc(hub_gather_sem, groups == 1 ? 1 : 1u << (16 * (sr & 1)));
+            // (row groups: parity-0 sub-rounds count in the gather word's low half, parity 1 in its high half; parities
+            // 2 / 3 likewise in the second word)
+            noc_semaphore_inc(par < 2 ? hub_gather_sem : hub_gather_sem2, groups == 1 ? 1 : 1u << (16 * (par & 1)));
             cb_pop_front(cb_part, nd_max);
         }
     };
