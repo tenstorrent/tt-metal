@@ -50,3 +50,7 @@ class RoleMismatchError(CheckpointError):
 
 class TopologyError(CheckpointError):
     """A tensor's topology label cannot be used as a layout, or changed when it must not."""
+
+
+class LazyParameterError(CheckpointError):
+    """A parameter has not been materialized."""
