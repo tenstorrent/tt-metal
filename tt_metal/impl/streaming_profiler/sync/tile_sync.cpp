@@ -14,10 +14,10 @@
 
 #include <enchantum/enchantum.hpp>
 #include <fmt/chrono.h>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <tt_stl/indestructible.hpp>
 
 #include "context/metal_context.hpp"

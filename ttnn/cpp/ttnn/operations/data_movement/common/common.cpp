@@ -18,15 +18,15 @@
 
 #include <bit>
 #include <numeric>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
 
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
 
 namespace ttnn::operations::data_movement {
 

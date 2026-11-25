@@ -10,7 +10,7 @@
 #include "ttnn/operations/core/core.hpp"
 
 #include "ttnn/device_operation.hpp"
-#include <tt-metalium/global_circular_buffer.hpp>
+#include <tt-metalium/memory/cross_program/global_circular_buffer.hpp>
 #include <tt-metalium/experimental/program_descriptor_patching.hpp>
 #include "ttnn/distributed/types.hpp"
 #include "update_cache_device_operation_types.hpp"

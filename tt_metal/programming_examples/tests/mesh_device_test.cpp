@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/system_mesh.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/discovery/system_mesh.hpp>
 
 using namespace tt::tt_metal;
 

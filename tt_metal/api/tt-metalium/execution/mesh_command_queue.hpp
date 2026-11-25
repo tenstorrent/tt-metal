@@ -12,15 +12,15 @@
 #include <vector>
 
 #include <tt_stl/span.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/mesh_trace_id.hpp>
-#include <tt-metalium/distributed_host_buffer.hpp>
-#include <tt-metalium/mesh_workload.hpp>
-#include <tt-metalium/shard_data_transfer.hpp>
-#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/vocabulary/mesh_trace_id.hpp>
+#include <tt-metalium/memory/buffer/distributed_host_buffer.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/memory/buffer/shard_data_transfer.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
 
 namespace tt::tt_metal {
 class HostTensor;

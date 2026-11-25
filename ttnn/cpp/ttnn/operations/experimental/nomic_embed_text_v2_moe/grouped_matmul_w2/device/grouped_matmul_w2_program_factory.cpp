@@ -8,11 +8,11 @@
 #include <string>
 #include <utility>
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include "ttnn/operations/experimental/nomic_embed_text_v2_moe/grouped_matmul_w1/device/grouped_matmul_w1_device_operation.hpp"
 
 namespace ttnn::experimental::nomic_embed_text_v2_moe {

@@ -2,18 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <allocator.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
 #include "impl/buffers/buffer_impl.hpp"
-#include <circular_buffer.hpp>
-#include <circular_buffer_config.hpp>
-#include <device.hpp>
-#include <graph_tracking.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/observability/capture_hooks.hpp>
 #include <enchantum/enchantum.hpp>
 #include "tt_metal/detail/reports/memory_reporter.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include <numeric>
 #include <ranges>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -41,29 +41,29 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include "buffer.hpp"
-#include "buffer_types.hpp"
+#include "tt-metalium/memory/buffer/buffer.hpp"
+#include "tt-metalium/memory/buffer/buffer_types.hpp"
 #include "impl/buffers/circular_buffer.hpp"
 #include "impl/dataflow_buffer/cross_node_dfb.hpp"
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
-#include "circular_buffer_constants.h"
-#include <tt-metalium/core_coord.hpp>
+#include "tt-metalium/workload/legacy/circular_buffer_constants.h"
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include "impl/context/metal_context.hpp"
 #include "context/metal_env_accessor.hpp"
 #include "impl/context/context_types.hpp"
-#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include "impl/device/device_impl.hpp"
 #include "impl/memory_tracking/memory_stats_shm.hpp"
-#include "tt-metalium/mesh_buffer.hpp"
-#include "tt-metalium/mesh_device.hpp"
-#include "tt-metalium/mesh_workload.hpp"
-#include "tt-metalium/tensor/mesh_tensor.hpp"
+#include "tt-metalium/memory/buffer/mesh_buffer.hpp"
+#include "tt-metalium/mesh/mesh_device.hpp"
+#include "tt-metalium/workload/mesh_workload.hpp"
+#include "tt-metalium/memory/tensor/mesh_tensor.hpp"
 #include <unistd.h>
 #include "jit_build/build.hpp"
 #include "jit_build/build_cache_telemetry.hpp"
 #include <tt_stl/enum.hpp>
 #include "jit_build/jit_build_options.hpp"
-#include "kernel_types.hpp"
+#include "tt-metalium/workload/legacy/kernel_types.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -71,11 +71,11 @@
 #include "program_device_map.hpp"
 #include "program_impl.hpp"
 #include "slow_dispatch.hpp"
-#include "tt-metalium/program.hpp"
+#include "tt-metalium/workload/program.hpp"
 #include <tt_stl/span.hpp>
 #include <tt_stl/strong_type.hpp>
 #include <tt_stl/overloaded.hpp>
-#include "sub_device_types.hpp"
+#include "tt-metalium/mesh/sub_device_types.hpp"
 #include "tt_memory.h"
 #include "tt_metal/impl/debug/inspector/inspector.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
@@ -89,8 +89,8 @@
 #include "kernel_compile_utils.hpp"
 #include <tt-umd/types/core_coordinates.hpp>
 #include <tt-umd/types/xy_pair.hpp>
-#include "host_api.hpp"
-#include "tt_metal.hpp"  // WriteRuntimeArgsToDevice
+#include "tt-metalium/workload/legacy/host_api.hpp"
+#include "tt-metalium/execution/slow_dispatch.hpp"  // WriteRuntimeArgsToDevice
 #include "kernels/kernel.hpp"
 #include <tt-metalium/experimental/blaze/named_kernel_args.hpp>
 #include <tt-metalium/experimental/op_profiler_support.hpp>

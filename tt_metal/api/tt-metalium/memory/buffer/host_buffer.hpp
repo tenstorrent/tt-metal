@@ -7,7 +7,7 @@
 #include <cstddef>
 #include <tt_stl/span.hpp>
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/memory_pin.hpp>
+#include <tt-metalium/memory/utils/memory_pin.hpp>
 
 #include <memory>
 #include <typeinfo>

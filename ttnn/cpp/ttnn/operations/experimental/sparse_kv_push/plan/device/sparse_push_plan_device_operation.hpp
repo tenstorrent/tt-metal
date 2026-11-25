@@ -9,7 +9,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "sparse_push_plan_device_operation_types.hpp"

@@ -9,7 +9,7 @@
 #include "ttnn/prefetcher_pipe.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
-#include <tt-metalium/global_circular_buffer.hpp>
+#include <tt-metalium/memory/cross_program/global_circular_buffer.hpp>
 
 namespace ttnn::prim {
 
