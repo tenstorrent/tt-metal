@@ -4,7 +4,8 @@
 
 #pragma once
 
-// Id-free (2.0) Quasar LLK API: copy (FPU datacopy and unpack-to-dest), eltwise binary and broadcast, matmul, pack.
+// Id-free (2.0) Quasar LLK API: copy (FPU datacopy and unpack-to-dest), tilize, eltwise binary and broadcast,
+// matmul, pack, pack untilize.
 // New functions only -- the legacy DFB-id LLK API (llk_*_api.h) is untouched. Every function takes the operand's
 // LLKMemDescriptor (L1 format + tile shape) as an NTTP and, where the op reads/writes L1, a buffer-descriptor base
 // (16B units) at init and L1 tile indices relative to it at execute. No DFB id, no host format tables.
@@ -35,6 +36,7 @@
 #include "llk_unpack_unary_operand.h"
 #include "llk_unpack_unary_broadcast_operands.h"
 #include "llk_unpack_unary_operand_to_dest.h"
+#include "llk_unpack_tilize.h"
 #endif
 #ifdef TRISC_MATH
 #include "llk_math_common.h"
@@ -47,6 +49,7 @@
 #ifdef TRISC_PACK
 #include "llk_pack.h"
 #include "llk_pack_common.h"
+#include "llk_pack_untilize.h"
 #endif
 
 namespace llk_2_0 {
@@ -234,6 +237,32 @@ inline void unpack_matmul(
     tdma_guard_note_bd(bd1);
     _llk_unpack_matmul_(ct_dim, rt_dim, kt_dim, tile0, tile1, D0.shape, D1.shape);
 }
+
+/**
+ * @brief Init for unpack-tilize of a row-major block to SrcA: Unp0 descriptor at `bd_base`, SrcA format, tilize
+ * strides and the MOP for `block_ct_dim` tiles (one SrcA tile per datacopy). 32x32 tiles only.
+ * @tparam D: Operand descriptor (the shape of one output tile).
+ * @tparam EN_32BIT_DEST: 32-bit Dest mode.
+ * @param bd_base: Buffer-descriptor base (16B units); rows of @ref unpack_tilize are relative to it.
+ * @param block_ct_dim: Block width in tiles; also the row-major row width.
+ */
+template <LLKMemDescriptor D, bool EN_32BIT_DEST>
+LLK_2_0_NOINLINE void unpack_tilize_init(const std::uint32_t bd_base, const std::uint32_t block_ct_dim) {
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(D.shape, bd_base, static_cast<std::uint32_t>(D.format));
+    constexpr std::uint8_t bfd = ckernel::trisc::BFD_ID_UNP0;
+    _llk_unpack_configure_unary_<p_unpacr::UNP_A>(D.format);
+    _llk_unpack_tilize_init_<p_unpacr::UNP_A, EN_32BIT_DEST>(bfd, block_ct_dim, block_ct_dim, D.shape);
+}
+
+/**
+ * @brief Unpack-tilize `block_ct_dim` tiles (as the init) to SrcA, one tile per SrcA bank, starting at L1 row
+ * `l1_row` (rows of 32 datums, relative to the init's base `bd_base`).
+ */
+template <LLKMemDescriptor D>
+inline void unpack_tilize(const std::uint32_t bd_base, const std::uint32_t l1_row, const std::uint32_t block_ct_dim) {
+    tdma_guard_note_bd(bd_base);
+    _llk_unpack_tilize_<p_unpacr::UNP_A>(l1_row, block_ct_dim, D.shape);
+}
 #endif
 
 #ifdef TRISC_MATH
@@ -371,6 +400,33 @@ template <LLKMemDescriptor D>
 inline void pack(const std::uint32_t bd_base, const std::uint32_t dst_index, const std::uint32_t l1_tile) {
     tdma_guard_note_bd(bd_base);
     _llk_pack_(dst_index, l1_tile, D.shape);
+}
+
+/**
+ * @brief Init for pack untilize: Pack0 descriptor at `bd_base`, packer input format, no ReLU, L1 accumulation off,
+ * untilize strides and MOP for BLOCK_CT Dest tiles into a row-major buffer whose rows are FULL_CT tiles wide. 32x32
+ * tiles only.
+ * @tparam D: Output descriptor.
+ * @param bd_base: Buffer-descriptor base (16B units); rows of @ref pack_untilize are relative to it.
+ */
+template <LLKMemDescriptor D, bool EN_32BIT_DEST, std::uint32_t BLOCK_CT, std::uint32_t FULL_CT>
+LLK_2_0_NOINLINE void pack_untilize_init(const std::uint32_t bd_base) {
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(D.shape, bd_base, static_cast<std::uint32_t>(D.format));
+    constexpr std::uint8_t bfd = ckernel::trisc::BFD_ID_PACK0;
+    _llk_pack_hw_configure_<p_pacr::PACK0, EN_32BIT_DEST>(
+        pack_src_format<D, EN_32BIT_DEST>(), ckernel::ReluConfig::none());
+    _llk_pack_set_l1_acc_<p_pacr::PACK0>(false);
+    _llk_pack_untilize_init_<FULL_CT, BLOCK_CT>(bfd, D.shape);
+}
+
+/**
+ * @brief Pack-untilize Dest tiles dst_index .. dst_index + BLOCK_CT - 1 (BLOCK_CT as the init) into the row-major
+ * buffer, starting at L1 row `l1_row` (rows of 32 datums, relative to the init's base `bd_base`).
+ */
+template <LLKMemDescriptor D>
+inline void pack_untilize(const std::uint32_t bd_base, const std::uint32_t dst_index, const std::uint32_t l1_row) {
+    tdma_guard_note_bd(bd_base);
+    _llk_pack_untilize_(dst_index, l1_row, D.shape);
 }
 
 /** @brief Packer L1 accumulation on/off (the one runtime reconfig of the 2.0 API). */

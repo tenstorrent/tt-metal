@@ -39,8 +39,8 @@ void kernel_main() {
         tile_regs_commit();
 
         tile_regs_wait();
-        experimental::pack_untilize_dest_block<1 /*block_ct_dim*/, 1 /*full_ct_dim*/>(
-            OutOp(out_cb.write_address()), 1 /*block_rt_dim*/);
+        experimental::pack_untilize_dest_block<1 /*block_ct_dim*/, 1 /*full_ct_dim*/, 1 /*block_rt_dim*/>(
+            OutOp(out_cb.write_address()));
         tile_regs_release();
 
         cb0.pop_front(1);
