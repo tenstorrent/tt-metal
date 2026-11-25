@@ -867,8 +867,10 @@ TEST_F(UnitMeshCQTraceFixture, TensixTestSubDeviceSwitchBehindTraceReplay) {
         workload.add_program(device_range_, std::move(program));
         return workload;
     };
-    constexpr uint32_t k_delay_iters = 5000000;  // long enough that the host samples the go message mid-replay
-    auto slow_workload = make_counter_workload(k_delay_iters);
+    // Long enough that the host samples the go message mid-replay. A simulator's clock advances only while the host
+    // polls it, so far fewer iterations outlast the host's switch and sample there.
+    const uint32_t delay_iters = MetalContext::instance().rtoptions().get_simulator_enabled() ? 50000 : 5000000;
+    auto slow_workload = make_counter_workload(delay_iters);
     auto workload_b = make_counter_workload(std::nullopt);
     uint32_t expected_runs = 0;
 
