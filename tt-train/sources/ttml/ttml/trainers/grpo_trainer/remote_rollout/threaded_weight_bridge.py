@@ -73,6 +73,7 @@ class _FifoLock:
 # Race: while thread 0 captures a trace on CQ0, any command that thread 1 sends on CQ1 goes into the trace
 # instead of to the device (https://github.com/tenstorrent/tt-metal/issues/65971). The capture holds this lock;
 # the receiver thread takes it around each device call.
+# TODO(#65971): remove the lock and the trace-capture wrappers once the issue is fixed.
 _capture_lock = _FifoLock()
 _begin_trace_capture, _end_trace_capture = ttnn.begin_trace_capture, ttnn.end_trace_capture
 
