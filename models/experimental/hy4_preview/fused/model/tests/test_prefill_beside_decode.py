@@ -84,7 +84,7 @@ def test_prefill_beside_decode(mesh_device, monkeypatch):
     prompt = [int(t) for t in ids[:N]]
     label = (
         f"prefill stack BESIDE the decode model [{n} layers, P{N}, append {PD.APPEND}, latent_scale {PD.SCALE}, "
-        f"experts {TD.SPLIT}, a prefill pass every {EVERY} steps]"
+        f"experts {TD.SPLIT}, prefill layout {PD.PREFILL_LAYOUT or 'dev'}, a prefill pass every {EVERY} steps]"
     )
     marks = []
 
@@ -102,12 +102,13 @@ def test_prefill_beside_decode(mesh_device, monkeypatch):
             from models.experimental.hy4_preview.fused.kv_store.engine import StackPrefill
 
             # a. the stack in trace mode (the one parameter the bridge does not pass)
+            PD.select_prefill_layout(monkeypatch)
             params = AD.PrefillRunParams
             monkeypatch.setattr(AD, "PrefillRunParams", lambda **kw: params(**dict(kw, use_trace=True)))
             t0 = time.perf_counter()
             bridge = pb.PrefillBridge(mesh, num_layers=n, num_users=ROWS, max_seq_len=PD.MAX_SEQ)
             bridge.build()
-            monkeypatch.undo()
+            monkeypatch.setattr(AD, "PrefillRunParams", params)
             mark("a prefill stack built in trace mode, warmed", t0)
             stores = (bridge.kv_caches.kvpe.storage, bridge.kv_caches.index)
         # b. the reserve
@@ -250,6 +251,7 @@ def test_prefill_beside_decode(mesh_device, monkeypatch):
             f"status {status or 'at rest'}"
         )
         logger.info(f"HY4_PD {label} phases (what, s, DRAM GB per chip): {marks}")
+        logger.info(f"HY4_PD {label} DRAM with both models resident and both traces captured: {pb.dram(mesh)}")
         assert not status, f"phase C: {status}"
         assert not differ, f"a prefill pass between decode steps changed the decode rows: {differ[:6]}"
         assert sum(joined[j] == out[j][0] for j in range(steps)) == steps, "the joined row leaves the others' tokens"

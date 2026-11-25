@@ -12,7 +12,8 @@ selects on the chips over both.
 
 Env (tests/test_decode_model.py's): HY4_DM_LAYERS (6 | 78), HY4_DM_PROMPT (31 | 1000 | 1022 | 3000), HY4_DM_TRACE,
 HY4_DM_SPLIT, HY4_ROPE_PAIRING=interleaved with its HY4_GOLDEN_DIR. Its own: HY4_PD_MAX_SEQ (8192: positions a
-row holds, the prefill caches' max_seq_len), HY4_PD_APPEND (truncate), HY4_PD_LATENT_SCALE (1.0430; "" for none).
+row holds, the prefill caches' max_seq_len), HY4_PD_APPEND (truncate), HY4_PD_LATENT_SCALE (1.0430; "" for none), HY4_PD_PREFILL ("": the bridge's layout, the stack's
+dev layout | tp32: the stack's production layout, every weight sharded once over the 32 chips).
 
 Order (weights swapped, PLAN.md section 25: the two weight sets do not fit side by side at 78 layers):
   1. the prefill stack through tt/prefill_bridge.py, its caches for 8 users
@@ -47,6 +48,27 @@ MAX_SEQ = int(os.environ.get("HY4_PD_MAX_SEQ", "8192"))
 APPEND = os.environ.get("HY4_PD_APPEND", "truncate")
 SCALE = os.environ.get("HY4_PD_LATENT_SCALE", "1.0430")
 SCALE = float(SCALE) if SCALE else None
+PREFILL_LAYOUT = os.environ.get("HY4_PD_PREFILL", "")
+
+
+def select_prefill_layout(monkeypatch):
+    """HY4_PD_PREFILL names the prefill stack's layout for this process (PREFILL_HY4_LAYOUT). tp32 still declares one
+    blocker, the vocab-sharded embedding (#65892): it is about where the embedding table lives (the stack's table is
+    sharded over the hidden and replicated over the other axis meanwhile), not about whether the trunk runs, and is
+    cleared here the way the stack's own tests clear it."""
+    if not PREFILL_LAYOUT:
+        return
+    import dataclasses
+
+    from models.demos.deepseek_v3_d_p.tt.hy4 import layout as hy4_layout
+
+    monkeypatch.setenv(hy4_layout.LAYOUT_ENV, PREFILL_LAYOUT)
+    chosen = hy4_layout.HY4_PREFILL_LAYOUTS[PREFILL_LAYOUT]
+    if chosen.blockers:
+        logger.info(
+            f"HY4_PD prefill layout {PREFILL_LAYOUT}: its declared blockers cleared for this run: {chosen.blockers}"
+        )
+        monkeypatch.setitem(hy4_layout.HY4_PREFILL_LAYOUTS, PREFILL_LAYOUT, dataclasses.replace(chosen, blockers=()))
 
 
 def mock_stores(mesh, layers):
@@ -61,14 +83,14 @@ def mock_stores(mesh, layers):
 
 
 @TD.galaxy
-def test_prefill_then_decode(mesh_device):
+def test_prefill_then_decode(mesh_device, monkeypatch):
     mesh, n = mesh_device, TD.LAYERS
     g = TD.golden_of()
     N, steps, ids = g["meta"]["prompt_len"], g["meta"]["steps"], g["input_ids"]
     assert N + steps <= MAX_SEQ, (N, steps, MAX_SEQ)
     label = (
         f"prefill stack -> decode model [{n} layers, P{N}, {'ONE trace a step' if TD.TRACE else 'untraced'}, "
-        f"append {APPEND}, latent_scale {SCALE}, experts {TD.SPLIT}]"
+        f"append {APPEND}, latent_scale {SCALE}, experts {TD.SPLIT}, prefill layout {PREFILL_LAYOUT or 'dev'}]"
     )
     marks = []
 
@@ -81,6 +103,7 @@ def test_prefill_then_decode(mesh_device):
         if is_mock():
             stores = mock_stores(mesh, n)
         else:
+            select_prefill_layout(monkeypatch)
             t0 = time.perf_counter()
             bridge = pb.PrefillBridge(mesh, num_layers=n, num_users=ROWS, max_seq_len=MAX_SEQ)
             bridge.build()
