@@ -708,6 +708,14 @@ class MultirankPccHarnessTests(unittest.TestCase):
                 # The 8x4 cache, not the 4x4 one: no 4x4 cache check runs.
                 self.assertNotIn("no 4x4 weight cache", result.stdout + result.stderr)
 
+    def test_kimi_checkpoint_with_a_space_reaches_the_runner_whole(self):
+        checkpoint = "/weights/Kimi K3 ckpt"
+        for model in ("kimi_k3", "kimi_k3_1"):
+            with self.subTest(model=model):
+                result, records = self.run_harness(model, config="sc1_8x4", extra_env={"PREFILL_HF_MODEL": checkpoint})
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(self.one_record(records, "runner")["env"]["PREFILL_HF_MODEL"], checkpoint)
+
     def test_kimi_k3_4x4_rejects_interleaved_discovery(self):
         result, records = self.run_harness("kimi_k3", hosts=self.SC4_HOSTS, extra_env={"TEST_TTRUN_INTERLEAVE": "1"})
         self.assertNotEqual(result.returncode, 0)

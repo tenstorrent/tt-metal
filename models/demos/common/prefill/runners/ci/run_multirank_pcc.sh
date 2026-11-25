@@ -233,7 +233,7 @@ case "${MODEL}" in
     # K3's sc4 stays runnable by hand and keeps its perf_baselines.json entry.
     SC1_NUM_LAYERS=24
     K3_CHECKPOINT="${PREFILL_HF_MODEL:-/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized}"
-    RUNNER_ENV="export PREFILL_HF_MODEL=${K3_CHECKPOINT}; \
+    RUNNER_ENV="export PREFILL_HF_MODEL=$(printf %q "${K3_CHECKPOINT}"); \
       export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
     # The sc4 93-layer leg's KV PCC
     # collapsed to ~0 past layer ~24 on run 36717057668 with the Weka trace (it reads 0.900..0.994 on
@@ -275,7 +275,7 @@ case "${MODEL}" in
     # The checkpoint keys the weight cache, so the runner gets the one the pre-launch check keys (tt-run does not
     # forward a caller's PREFILL_HF_MODEL to remote ranks).
     K31_CHECKPOINT="${PREFILL_HF_MODEL:-/mnt/weka/model-weights/llm/moonshotai/Kimi-K3.1-Pro-dequantized}"
-    RUNNER_ENV="export PREFILL_HF_MODEL=${K31_CHECKPOINT}; export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
+    RUNNER_ENV="export PREFILL_HF_MODEL=$(printf %q "${K31_CHECKPOINT}"); export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
     # The cache root is the adapter's ttnn_cache_default and the checkpoint its hf_model_default; 76 slots measured
     # for the 8x4 stage.
     kimi_layout "${PREFILL_TTNN_CACHE:-/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3.1-Cache/Kimi-K3.1-Cache-prefill}" \
