@@ -65,24 +65,25 @@ ttnn::Tensor alias_view(
     // [i * per_slice, (i + 1) * per_slice) cover exactly slice i, with per_slice = banks * range / view page. A dim-0
     // slice of the view must then nest inside one input slice or cover whole input slices.
     //
-    // With check_slices false, only the first rule is kept: input slice i still owns bytes [i * range, (i + 1) * range)
-    // on every bank, but a view page may straddle two slices. The caller then writes only the view pages that lie
-    // wholly inside the slice it owns.
+    // With check_slices false, none of these rules applies: view page q is bytes [(q / banks) * view page,
+    // (q / banks + 1) * view page) of bank q % banks, whether or not input slices spread evenly over the banks (a
+    // power-of-two block on 7 DRAM banks does not). The caller writes only the view pages that lie wholly inside
+    // bytes the slice it writes owns on that bank.
     // Slices come from the input's own shape: an input that is itself a smaller view keeps its source buffer, so
     // owner.num_pages() can exceed the input's pages. The buffer only bounds the view's size, below.
-    const uint32_t slices = tensor.padded_shape()[0];
-    const TensorSpec& input_spec = tensor.tensor_spec();
-    const uint64_t pages_per_slice =
-        input_spec.compute_packed_buffer_size_bytes() / input_spec.compute_page_size_bytes() / slices;
-    TT_FATAL(
-        pages_per_slice % banks == 0,
-        "alias_view: a dim-0 slice of the input has {} pages, not a multiple of the {} banks, so slices of the input "
-        "and of the view would not cover the same bytes",
-        pages_per_slice,
-        banks);
-    const DeviceAddr slice_bytes_per_bank = pages_per_slice / banks * owner_page;
     const uint64_t view_pages = view_spec.compute_packed_buffer_size_bytes() / view_page;
     if (check_slices) {
+        const uint32_t slices = tensor.padded_shape()[0];
+        const TensorSpec& input_spec = tensor.tensor_spec();
+        const uint64_t pages_per_slice =
+            input_spec.compute_packed_buffer_size_bytes() / input_spec.compute_page_size_bytes() / slices;
+        TT_FATAL(
+            pages_per_slice % banks == 0,
+            "alias_view: a dim-0 slice of the input has {} pages, not a multiple of the {} banks, so slices of the "
+            "input and of the view would not cover the same bytes",
+            pages_per_slice,
+            banks);
+        const DeviceAddr slice_bytes_per_bank = pages_per_slice / banks * owner_page;
         TT_FATAL(
             slice_bytes_per_bank % view_aligned_page == 0,
             "alias_view: a dim-0 slice of the input holds {} bytes per bank, not a multiple of the view's {} byte "
