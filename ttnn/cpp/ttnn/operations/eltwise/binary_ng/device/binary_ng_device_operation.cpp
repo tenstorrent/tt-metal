@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "binary_ng_device_operation.hpp"
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_dtype_policy.hpp"
@@ -104,6 +104,7 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         case ISCLOSE:
         // Fused SFPU kernel only: there is no FPU form, so every float dtype routes here.
         case SITU_GLU: return true;
+        case SILU_GLU:
         case GEGLU_TANH: return a == b && (a == BFLOAT16 || a == BFLOAT8_B);
         default: return false;
     }

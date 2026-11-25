@@ -1506,3 +1506,179 @@ def test_eltwise_binary_sfpu_quant_quasar(
         is_perf=is_perf,
         perf_report=perf_report,
     )
+
+
+# ===========================================================================
+# Family 5 — mul_int32_sm_shift23: out = sign * ((|a| * |b|) >> 23), the requant
+# rescale with b a Q0.23 scale. Exact whenever |out| < 2^23. Each random regime
+# stays inside that and reaches one more partial product:
+#   "narrow": |a|, |b| < 2^23          high23(a_lo * b_lo) only
+#   "wide_a": |a| < 2^31, |b| < 2^15   adds low23(a_hi * b_lo)
+#   "wide_b": |a| < 2^15, |b| < 2^31   adds low23(a_lo * b_hi)
+# ===========================================================================
+_SM_SHIFT23_REGIMES = {
+    "narrow": (0, 2**23, 0, 2**23),
+    "wide_a": (2**23, 2**31, 0, 2**15),
+    "wide_b": (0, 2**15, 2**23, 2**31),
+}
+
+# Planted in the first lanes of every regime: zero results with mixed signs must be
+# +0, then the edges of the contract.
+_SM_SHIFT23_EDGES = [
+    (0, -5),
+    (-5, 0),
+    (-1, 1),
+    (-(2**12), 2**10),
+    (2**23 - 1, -(2**23 - 1)),
+    (-(2**31 - 1), 2**15 - 1),
+    (2**15 - 1, -(2**31 - 1)),
+]
+_SMAG32_NEGATIVE_ZERO = -(2**31)  # bit pattern 0x80000000
+
+SM_SHIFT23_SWEEP = dict(
+    regime=list(_SM_SHIFT23_REGIMES),
+    sign_magnitude=[False, True],
+)
+
+
+def _sm_shift23_operands(regime, n, sign_magnitude):
+    """Signed operands for one regime and the exact golden, staged in the Dest encoding."""
+    a_min, a_max, b_min, b_max = _SM_SHIFT23_REGIMES[regime]
+    sgn_a = torch.randint(0, 2, (n,), dtype=torch.int64) * 2 - 1
+    sgn_b = torch.randint(0, 2, (n,), dtype=torch.int64) * 2 - 1
+    a = sgn_a * torch.randint(a_min, a_max, (n,), dtype=torch.int64)
+    b = sgn_b * torch.randint(b_min, b_max, (n,), dtype=torch.int64)
+    edges = torch.tensor(_SM_SHIFT23_EDGES, dtype=torch.int64)
+    a[: len(edges)] = edges[:, 0]
+    b[: len(edges)] = edges[:, 1]
+
+    magnitude = (a.abs() * b.abs()) >> 23
+    golden = torch.where((a < 0) != (b < 0), -magnitude, magnitude).to(torch.int32)
+    a, b = a.to(torch.int32), b.to(torch.int32)
+    if not sign_magnitude:
+        return a, b, golden
+
+    a, b, golden = int32_to_smag32(a), int32_to_smag32(b), int32_to_smag32(golden)
+    # -0 only exists in sign-magnitude; times anything it is +0.
+    a[len(edges)] = _SMAG32_NEGATIVE_ZERO
+    golden[len(edges)] = 0
+    return a, b, golden
+
+
+def _run_mul_int_sm_shift23(
+    regime,
+    tile_indices,
+    sign_magnitude=False,
+    *,
+    run_types=(PerfRunType.L1_TO_L1,),
+    loop_factor=1,
+    is_perf=False,
+    perf_report=None,
+):
+    src0_idx, src1_idx, dst_idx = tile_indices
+    dest_acc = DestAccumulation.Yes  # Int32 operands and result are 32-bit
+    num_faces = MAX_NUM_FACES
+    binary_op = "MUL_SM_SHIFT23"
+
+    a_staged, b_staged, golden_active = _sm_shift23_operands(
+        regime, MAX_TILE_ELEMENTS, sign_magnitude
+    )
+
+    buffer_A, tile_cnt = _stage_binary_operands(
+        a_staged, b_staged, tile_indices, torch.int32
+    )
+
+    golden_tensor = torch.zeros(MAX_TILE_ELEMENTS, dtype=torch.int32)
+    golden_tensor[:_PROCESSED_ELEMS] = golden_active[:_PROCESSED_ELEMS]
+
+    formats = InputOutputFormat(
+        input_format=DataFormat.Int32, output_format=DataFormat.Int32
+    )
+
+    test_config_kwargs = {
+        "test_name": _CPP_SOURCE,
+        "formats": formats,
+        "templates": [
+            SFPU_BINARY_OP(binary_op),
+            APPROX_MODE(),
+            DATA_COPY_TYPE(DataCopyType.A2D),
+            UNPACKER_ENGINE_SEL(UnpackerEngine.UnpDest),
+            DEST_SYNC(),
+            SIGN_MAGNITUDE_FORMAT(sign_magnitude),
+            SFPU_DST_ROUNDING_MODE(),
+            TYPECAST_FORMATS(),
+            BROADCAST_TYPE(BroadcastType.None_),
+        ],
+        "runtimes": [
+            TILE_COUNT(tile_cnt),
+            NUM_FACES(num_faces),
+            TEST_FACE_DIMS(),
+            DEST_INDEX(0),
+            SFPU_TILE_INDICES(src0_idx, src1_idx, dst_idx),
+            LOOP_FACTOR(loop_factor),
+            ZERO_POINT(0),
+        ],
+        "variant_stimuli": StimuliConfig(
+            buffer_A,
+            DataFormat.Int32,
+            buffer_A[:MAX_TILE_ELEMENTS],  # dummy buffer_B (unused by kernel)
+            DataFormat.Int32,
+            DataFormat.Int32,
+            tile_count_A=tile_cnt,
+            tile_count_B=1,
+            tile_count_res=1,
+            num_faces=num_faces,
+            twos_complement=True,  # raw 32-bit identity staging
+        ),
+        "unpack_to_dest": True,
+        "dest_acc": dest_acc,
+    }
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
+    )
+
+    if is_perf:
+        configuration.run(perf_report)
+        return
+
+    res_from_L1 = configuration.run().result
+    assert len(res_from_L1) == len(golden_tensor)
+    res_tensor = torch.tensor(res_from_L1, dtype=torch.int32)
+    assert passed_test(
+        golden_tensor[:_PROCESSED_ELEMS],
+        res_tensor[:_PROCESSED_ELEMS],
+        DataFormat.Int32,
+    ), (
+        f"{binary_op} regime={regime} (sign_magnitude={sign_magnitude}) mismatch "
+        f"(tile_indices={tile_indices})"
+    )
+
+
+@pytest.mark.quasar
+@parametrize(
+    **SM_SHIFT23_SWEEP,
+    tile_indices=runtime(_TILE_INDEX_VARIANTS),
+)
+def test_eltwise_binary_sfpu_mul_int_sm_shift23_quasar(
+    regime,
+    sign_magnitude,
+    tile_indices,
+    *,
+    run_types=(PerfRunType.L1_TO_L1,),
+    loop_factor=1,
+    is_perf=False,
+    perf_report=None,
+):
+    """Fixed-point multiply sign * ((|a| * |b|) >> 23), Int32, in both Dest encodings.
+    Each regime reaches one more partial product; zero results must come back +0."""
+    _run_mul_int_sm_shift23(
+        regime,
+        tile_indices,
+        sign_magnitude,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        is_perf=is_perf,
+        perf_report=perf_report,
+    )

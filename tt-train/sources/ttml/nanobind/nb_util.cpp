@@ -13,7 +13,7 @@
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
-#include "tt-metalium/bfloat16.hpp"
+#include "tt-metalium/data_formats/bfloat16.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/tensor/layout/layout.hpp"
 #include "ttnn/tensor/types.hpp"

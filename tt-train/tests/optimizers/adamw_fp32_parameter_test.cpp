@@ -22,7 +22,7 @@
 #include "optimizers/adamw.hpp"
 #include "test_utils/program_cache.hpp"
 #include "test_utils/random_data.hpp"
-#include "tt-metalium/bfloat16.hpp"
+#include "tt-metalium/data_formats/bfloat16.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "xtensor/core/xtensor_forward.hpp"
 

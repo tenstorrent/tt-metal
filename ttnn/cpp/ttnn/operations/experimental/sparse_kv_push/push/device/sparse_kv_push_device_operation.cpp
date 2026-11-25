@@ -4,7 +4,7 @@
 
 #include "sparse_kv_push_device_operation.hpp"
 
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"

@@ -878,10 +878,10 @@
 
     glm_moe() (
       export MESH_DEVICE=TG
-      # GLM-5.3 256-expert MoE (device gate, DEVICE_FP32) vs the CPU MoE reference; random weights.
+      # GLM-5.3's MoE, the MoE block (its C++ ops), vs the CPU MoE reference; random weights.
       timeout -k 2m 40m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
-        python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_glm_moe -k "torus-xy-8x4" -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/moe_block/test_moe_block_models.py -k "glm53-8x4-5120 and not eager" -vvv --tb=short
       '
     )
 
@@ -2395,7 +2395,9 @@
 
 # [2/2] runs the same 1M request packed: two 5,120-token chunks per forward (glm53_packed.json), traced with D2H acks,
 # against the same golden tail; its KV table and evidence go to their own _packed dirs. [1/2] alone measured 15-19 min
-# in nightly CI and the packed run ~13 min on galaxy 8x4, inside the 80 min bound.
+# in nightly CI and the packed run ~13 min on galaxy 8x4, inside the 60 min bound (20 min of the old 80 went to the
+# GLM-5.3 2x[4,4] and the Kimi-K3.1 L24 SC1 jobs, which each gained a packed run). PREFILL_JOB_DEADLINE keeps each
+# launch's bringup wait inside the job's remaining time.
 - name: "(GLM-5.3-744B) disaggregated prefill KV accuracy 1M tail@5k + perf 1M@5k, SC1"
   cmd: |
     set -euo pipefail
@@ -2404,6 +2406,7 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
+    export PREFILL_JOB_DEADLINE=$(( $(date +%s) + 60 * 60 ))  # the bh_sc1_high_power timeout below
     echo "===== [1/2] (GLM-5.3-744B) prefill KV accuracy 1M tail@5k + perf 1M@5k, one chunk per forward ====="
     bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1 || exit $?
     echo "===== [2/2] (GLM-5.3-744B) packed prefill KV accuracy 1M tail@5k + perf 1M@5k, two chunks per forward ====="
@@ -2414,7 +2417,7 @@
   test_group: disagg_prefill
   skus:
     bh_sc1_high_power:
-      timeout: 80
+      timeout: 60
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
   team: shield
   budget_type: demo
@@ -2425,6 +2428,10 @@
 # bound by tt-run discovery on the intragalaxy descriptor, at one slot (glm53_4x4.json's layout, 2560-token
 # chunks). It tracks the 4x4 layout against the 8x4 SC1 leg above until 4x4 runs in production; there is
 # no SC4 4x4 leg. run_multirank_pcc.sh checks the 4x4 weight cache (glm_5_3_bh_16dev/4x4_sp1) first.
+# [2/2] runs the same request packed: two 2,560-token chunks per forward (glm53_4x4_packed.json), traced with D2H
+# acks, against the same golden tail; perf is gated on glm53/sc1_4x4_packed in perf_baselines.json once it has an
+# entry, and until then must still measure. It measured 8-10 min on exabox
+# (2026-11-20), so the bound grew 40 -> 50, taken from the 8x4 SC1 job above.
 - name: "(GLM-5.3-744B) disaggregated prefill 2x[4,4] KV accuracy 1M tail@2.5k + perf 1M@2.5k, SC1"
   cmd: |
     set -euo pipefail
@@ -2433,13 +2440,18 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
-    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1_4x4
+    export PREFILL_JOB_DEADLINE=$(( $(date +%s) + 50 * 60 ))  # the bh_sc1_high_power timeout below
+    echo "===== [1/2] (GLM-5.3-744B) 2x[4,4] prefill KV accuracy 1M tail@2.5k + perf 1M@2.5k, one chunk per forward ====="
+    bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1_4x4 || exit $?
+    echo "===== [2/2] (GLM-5.3-744B) 2x[4,4] packed prefill KV accuracy 1M tail@2.5k, two chunks per forward ====="
+    bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1_4x4 --variant packed || exit $?
+    echo "===== both runs passed ====="
   test_type: prefill_runner_kv_pcc
-  test_tags: [glm_5_3, runner, kv_cache, glm53_trace]
+  test_tags: [glm_5_3, runner, kv_cache, glm53_trace, glm_packed]
   test_group: disagg_prefill
   skus:
     bh_sc1_high_power:
-      timeout: 40
+      timeout: 50
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
   team: shield
   budget_type: demo
@@ -2576,6 +2588,9 @@
 # ran stages 4-6 (more AttnRes history) out of DRAM by ~16 MB on the first chunk (run 45061518673).
 # K3's 1M request at 2.5k chunks; its golden is an 8192-token vLLM prompt, so the golden's 8k is PCC'd and the
 # rest of the 1M timed, as K3 does at 55k of 1M. Perf is gated against its own kimi_k3_1 sc1 baseline (24 layers are no baseline for 93).
+# [2/2] runs the same request packed: four 2,560-token chunks per forward, the production shape (kimi_k3_1_packed.json,
+# one slot fewer for the traced packed forward's scratch slot), traced with D2H acks, against the same golden, perf
+# gated on kimi_k3_1/sc1_packed in perf_baselines.json. The bound grew 60 -> 70, taken from the 8x4 GLM-5.3 SC1 job.
 - name: "(Kimi-K3.1) disaggregated prefill L24 2x[4,4] KV accuracy 8k@2.5k + perf 1M@2.5k, SC1"
   cmd: |
     set -euo pipefail
@@ -2584,17 +2599,22 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
-    # Below the job timeout, as for K3's leg above.
+    # Below the job timeout, as for K3's leg above; the job deadline caps it further for the second launch.
     export TABLE_WAIT_SECS=2400
-    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3_1 sc1
+    export PREFILL_JOB_DEADLINE=$(( $(date +%s) + 70 * 60 ))  # the bh_sc1_high_power timeout below
+    echo "===== [1/2] (Kimi-K3.1) L24 prefill KV accuracy 8k@2.5k + perf 1M@2.5k, one chunk per forward ====="
+    bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3_1 sc1 || exit $?
+    echo "===== [2/2] (Kimi-K3.1) L24 packed prefill KV accuracy 8k@2.5k + perf 1M@2.5k, four chunks per forward ====="
+    bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3_1 sc1 --variant packed || exit $?
+    echo "===== both runs passed ====="
   test_type: k31_prefill_runner_24l
-  test_tags: [kimi_k3_1, k31_runner, runner, kv_cache]
+  test_tags: [kimi_k3_1, k31_runner, runner, kv_cache, k31_packed]
   test_group: disagg_prefill
   skus:
     bh_sc1_high_power:
-      # K3's 60: its L24 leg was still in bringup at 38 min on CI (run 34831600450), where weight load
-      # is NFS-bound, and it runs the same 1M request (410 chunks).
-      timeout: 60
+      # K3's 60 (its L24 leg was still in bringup at 38 min on CI, run 34831600450, where weight load is
+      # NFS-bound, and it runs the same 1M request, 410 chunks), +10 for the packed run.
+      timeout: 70
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: shield
   budget_type: demo

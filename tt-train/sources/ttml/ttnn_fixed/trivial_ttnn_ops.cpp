@@ -5,7 +5,7 @@
 #include "trivial_ttnn_ops.hpp"
 
 #include <optional>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <vector>
 
 #include "core/compute_kernel_config.hpp"

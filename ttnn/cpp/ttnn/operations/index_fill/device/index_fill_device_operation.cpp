@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "index_fill_device_operation.hpp"
-#include "tt-metalium/buffer_types.hpp"
+#include "tt-metalium/memory/buffer/buffer_types.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"

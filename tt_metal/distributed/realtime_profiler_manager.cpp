@@ -29,17 +29,17 @@
 #include <fmt/core.h>
 #include <tt-logger/tt-logger.hpp>
 
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/mesh_device_view.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/mesh/mesh_device_view.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <internal/mesh_device.hpp>
-#include <tt_metal.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 #include <tt-umd/types/xy_pair.hpp>
 
