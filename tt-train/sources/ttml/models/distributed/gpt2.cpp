@@ -6,7 +6,6 @@
 
 #include "autograd/graph_utils.hpp"
 #include "autograd/tensor.hpp"
-#include "core/distributed/distributed.hpp"
 #include "core/scoped.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "init/tensor_initializers.hpp"
@@ -20,32 +19,6 @@
 #include "ops/unary_ops.hpp"
 
 namespace ttml::models::distributed::gpt2 {
-
-namespace {
-
-void weights_initialization(DistributedTransformer& model) {
-    auto params = model.parameters();
-    for (auto& [name, tensor_ptr] : params) {
-        const auto& tensor = tensor_ptr->get_value();
-        if (name.find("weight") != std::string::npos) {
-            auto* device = &autograd::ctx().get_device();
-            auto placements = core::distributed::placements_per_axis(tensor);
-            auto shape = tensor.logical_shape();
-            for (size_t axis = 0; axis < placements.size(); ++axis) {
-                if (const auto dim = core::distributed::shard_dim(placements[axis], static_cast<int>(shape.rank()))) {
-                    shape[*dim] *= device->shape()[axis];
-                }
-            }
-            const auto mapper = ttnn::distributed::TensorToMesh::create(*device, {.placements = std::move(placements)});
-            tensor_ptr->set_value(ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
-                init::normal_init(shape, {0.F, 0.02F}), device, ttnn::Layout::TILE, &mapper));
-        } else if (name.find("bias") != std::string::npos) {
-            init::constant_init(tensor_ptr, tensor.logical_shape(), 0.F);
-        }
-    }
-}
-
-}  // namespace
 
 DistributedTransformer::DistributedTransformer(const TransformerConfig& config) {
     uint32_t vocab_size = config.vocab_size;
@@ -127,7 +100,7 @@ DistributedTransformer::DistributedTransformer(const TransformerConfig& config) 
         throw std::logic_error("Weight tying is not supported yet for DistributedTransformer!");
     }
 
-    weights_initialization(*this);
+    common::transformer::initialize_weights_gpt2_tensor_parallel(*this);
 }
 
 ttml::autograd::TensorPtr DistributedTransformer::operator()(

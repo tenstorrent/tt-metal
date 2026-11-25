@@ -82,6 +82,9 @@ autograd::TensorPtr memory_efficient_runner(
 }
 
 void initialize_weights_gpt2(ttml::modules::ModuleBase& model);
+// initialize_weights_gpt2 for a model laid out across the device mesh: each weight is drawn whole and keeps its layout,
+// so a replicated weight holds the same values on every device.
+void initialize_weights_gpt2_tensor_parallel(ttml::modules::ModuleBase& model);
 void initialize_weights_he_kaiming_normal(ttml::modules::ModuleBase& model);
 
 RunnerType read_runner_type(const std::string& s);

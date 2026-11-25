@@ -4,6 +4,8 @@
 
 #include "dropout_op.hpp"
 
+#include <mutex>
+#include <tt-logger/tt-logger.hpp>
 #include <ttnn/operations/eltwise/binary/binary.hpp>
 #include <ttnn/operations/eltwise/unary/unary.hpp>
 #include <variant>
@@ -36,13 +38,21 @@ bool dropout_seed_per_device(const ttnn::Tensor& value) {
             std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placements[axis]);
         (is_shard ? sharded : replicated).push_back(axis);
     }
-    TT_FATAL(
-        replicated.empty() || sharded.empty(),
-        "dropout cannot mask a tensor replicated across mesh axis {} and sharded across mesh axis {}: its copies need "
-        "one mask and its shards different ones, which needs a dropout kernel that seeds per mesh axis; set the "
-        "dropout probability to 0",
-        replicated.front(),
-        sharded.front());
+    if (!replicated.empty() && !sharded.empty()) {
+        // The copies need one mask and the shards different ones, which needs a dropout kernel that seeds per mesh
+        // axis. One seed for every device keeps the copies equal, at the cost of the shards dropping the same
+        // positions (#55947).
+        static std::once_flag warned;
+        std::call_once(warned, [&] {
+            log_warning(
+                tt::LogAlways,
+                "dropout draws one mask for a tensor replicated across mesh axis {} and sharded across mesh axis {}, "
+                "so its shards drop the same positions (#55947)",
+                replicated.front(),
+                sharded.front());
+        });
+        return false;
+    }
     return !sharded.empty();
 }
 

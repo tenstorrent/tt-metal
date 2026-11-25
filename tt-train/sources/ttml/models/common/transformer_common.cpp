@@ -4,6 +4,7 @@
 
 #include "transformer_common.hpp"
 
+#include "core/distributed/distributed.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "yaml-cpp/yaml.h"
 
@@ -15,6 +16,28 @@ void initialize_weights_gpt2(ttml::modules::ModuleBase& model) {
         const auto& tensor = tensor_ptr->get_value();
         if (name.find("weight") != std::string::npos) {
             init::normal_init(tensor_ptr, tensor.logical_shape(), {0.F, 0.02F});
+        } else if (name.find("bias") != std::string::npos) {
+            init::constant_init(tensor_ptr, tensor.logical_shape(), 0.F);
+        }
+    }
+}
+
+void initialize_weights_gpt2_tensor_parallel(ttml::modules::ModuleBase& model) {
+    auto params = model.parameters();
+    auto* device = &autograd::ctx().get_device();
+    for (auto& [name, tensor_ptr] : params) {
+        const auto& tensor = tensor_ptr->get_value();
+        if (name.find("weight") != std::string::npos) {
+            auto placements = core::distributed::placements_per_axis(tensor);
+            auto shape = tensor.logical_shape();
+            for (size_t axis = 0; axis < placements.size(); ++axis) {
+                if (const auto dim = core::distributed::shard_dim(placements[axis], static_cast<int>(shape.rank()))) {
+                    shape[*dim] *= device->shape()[axis];
+                }
+            }
+            const auto mapper = ttnn::distributed::TensorToMesh::create(*device, {.placements = std::move(placements)});
+            tensor_ptr->set_value(core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
+                init::normal_init(shape, {0.F, 0.02F}), device, ttnn::Layout::TILE, &mapper));
         } else if (name.find("bias") != std::string::npos) {
             init::constant_init(tensor_ptr, tensor.logical_shape(), 0.F);
         }

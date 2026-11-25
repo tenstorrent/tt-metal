@@ -241,8 +241,8 @@ def sync_gradients(
     """
     if axis_names is not None:
         warnings.warn(
-            "sync_gradients(axis_names=...) is deprecated: sync_gradients(parameters) averages over 'dp' and 'fsdp'; "
-            "use average_gradients(parameters, axis_names) to choose the axes",
+            "sync_gradients(axis_names=...) is deprecated: call sync_gradients(parameters), which averages over 'dp' "
+            "and 'fsdp' and sums the gradients marked partial (ttml.parallel.mark_partial)",
             DeprecationWarning,
             stacklevel=2,
         )

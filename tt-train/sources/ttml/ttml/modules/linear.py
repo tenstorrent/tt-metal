@@ -33,8 +33,10 @@ def replicate_for_tp(x, cluster_axis: int, sequence_parallel: bool):
 
     ``x`` must be replicated across the axis or, under ``sequence_parallel``, sharded along the sequence. A sharded
     ``x`` is gathered."""
+    if ttml.mesh().shape[cluster_axis] == 1:
+        return x
     expected = SEQUENCE_DIM if sequence_parallel else None
-    if ttml.mesh().shape[cluster_axis] > 1 and ttml.sharding.shard_dim(x, cluster_axis) != expected:
+    if ttml.sharding.shard_dim(x, cluster_axis) != expected:
         layout = "sharded along the sequence" if sequence_parallel else "replicated"
         raise _input_layout_error("A column-parallel layer", x, layout, cluster_axis)
     if sequence_parallel:
@@ -60,6 +62,8 @@ def sum_tp_partials(x, cluster_axis: int, sequence_parallel: bool):
     """Add up the partial sums ``x`` holds on the ranks of ``cluster_axis``, such as a row-parallel matmul's outputs.
 
     The result is replicated across the axis or, under ``sequence_parallel``, sharded along the sequence."""
+    if ttml.mesh().shape[cluster_axis] == 1:
+        return x
     if sequence_parallel:
         return ttml.ops.distributed.reduce_scatter(x, SEQUENCE_DIM, cluster_axis)
     return ttml.ops.distributed.all_reduce(x, noop_backward=True, cluster_axis=cluster_axis)

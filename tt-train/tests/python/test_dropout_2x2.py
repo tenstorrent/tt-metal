@@ -7,7 +7,8 @@ device as its input's label says.
 
 Copies of a tensor must draw one mask, so they stay copies; shards must draw their own, or every shard drops the same
 positions. A tensor copied along one axis and sharded along the other, like the residual stream of DP x TP, needs
-masks that ttnn's dropout cannot draw, so it is refused rather than masked wrongly.
+masks that ttnn's dropout cannot draw, so it gets one mask for the whole mesh: its copies stay copies, and its shards
+drop the same positions (#55947).
 
 Every device holds ones, so each output is that device's mask times 1 / (1 - p). Skips on a host with fewer than four
 chips.
@@ -67,7 +68,14 @@ def disagreement(a: np.ndarray, b: np.ndarray) -> float:
 
 
 @pytest.mark.parametrize(
-    "layout, one_mask", [("replicated", True), ("sharded_across_both", False), ("whole_mesh", False)]
+    "layout, one_mask",
+    [
+        ("replicated", True),
+        ("sharded_across_both", False),
+        ("whole_mesh", False),
+        ("sharded_across_dp", True),
+        ("sharded_across_tp", True),
+    ],
 )
 def test_copies_share_a_mask_and_shards_draw_their_own(dp_tp_mesh, layout, one_mask):
     x = ones(layout)
@@ -82,7 +90,7 @@ def test_copies_share_a_mask_and_shards_draw_their_own(dp_tp_mesh, layout, one_m
             assert abs((piece == 0).mean() - PROB) < RATE_TOL, f"{what} dropped {(piece == 0).mean():.3f}"
         for (i, a), (j, b) in itertools.combinations(enumerate(pieces), 2):
             if one_mask:
-                np.testing.assert_array_equal(a, b, err_msg=f"call {call}: devices {i} and {j} hold copies")
+                np.testing.assert_array_equal(a, b, err_msg=f"call {call}: devices {i} and {j} drew different masks")
             else:
                 assert disagreement(a, b) > MIN_DISAGREEMENT, f"call {call}: devices {i} and {j} share a mask"
     for device, (a, b) in enumerate(zip(*outputs)):
@@ -92,19 +100,3 @@ def test_copies_share_a_mask_and_shards_draw_their_own(dp_tp_mesh, layout, one_m
     ttml.ops.unary.mean(first).backward(False)
     for device, (grad, out) in enumerate(zip(device_slices(x.get_grad()), outputs[0])):
         np.testing.assert_array_equal(grad != 0, out != 0, err_msg=f"device {device}")
-
-
-@pytest.mark.parametrize(
-    "layout, replicated_axis, sharded_axis", [("sharded_across_dp", 1, 0), ("sharded_across_tp", 0, 1)]
-)
-def test_copies_along_one_axis_and_shards_along_the_other_are_refused(
-    dp_tp_mesh, expect_error, layout, replicated_axis, sharded_axis
-):
-    x = ones(layout)
-    axes = f"replicated across mesh axis {replicated_axis} and sharded across mesh axis {sharded_axis}"
-    with expect_error(RuntimeError, f"dropout cannot mask a tensor {axes}"):
-        ttml.ops.dropout.dropout(x, PROB)
-    # Probability 0, the way out the error names, passes the tensor through.
-    passed = ttml.ops.dropout.dropout(x, 0.0).get_value()
-    for device, out in enumerate(device_slices(passed)):
-        np.testing.assert_array_equal(out, np.ones_like(out), err_msg=f"device {device}")

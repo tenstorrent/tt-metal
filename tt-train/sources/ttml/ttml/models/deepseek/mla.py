@@ -48,8 +48,7 @@ class MultiHeadLatentAttention(AbstractModuleBase):
         if use_tp:
             tp_size = ttml.mesh().axis_size("tp")
             self.n_heads = config.n_heads // tp_size
-            if tp_size > 1:
-                self._tp_axis = ttml.mesh().axis_index("tp")
+            self._tp_axis = ttml.mesh().axis_index("tp")
         else:
             self.n_heads = config.n_heads
 

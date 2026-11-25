@@ -32,10 +32,13 @@ from sync_gradients_placements_common import (
     is_sharded_on_axis,
 )
 from tp_block import TPBlock, gather_like
-from ttml.models import RunnerType
+from ttml.common.utils import build_causal_mask
+from ttml.models import RunnerType, memory_efficient_runner
 from ttml.models.deepseek import DeepSeek, DeepSeekConfig
 from ttml.models.deepseek.transformer import DeepSeekMLP
-from ttml.modules import LoraConfig, LoraModel
+from ttml.models.llama.transformer import LlamaBlock
+from ttml.modules import AbstractModuleBase, LoraConfig, LoraModel
+from ttml.parallel import SEQUENCE_DIM, TPStrategy
 
 pytestmark = [
     pytest.mark.requires_device,
@@ -192,15 +195,39 @@ def _lora_block():
     return model
 
 
+class _SequenceParallelLlamaBlock(AbstractModuleBase):
+    """A sequence-parallel Llama block between the sequence scatter and gather Llama puts around its blocks, so it
+    takes and returns a stream replicated on "tp" like the other blocks. Its norms are marked partial on "tp"."""
+
+    def __init__(self, runner_type: RunnerType) -> None:
+        super().__init__()
+        rope = ttml.ops.rope.build_rope_params(DIM, DIM // 2)
+        self.block = LlamaBlock(DIM, 2, 2, rope, intermediate_size=DIM, tp_strategy=TPStrategy.TENSOR_SEQUENCE)
+        self.runner_type = runner_type
+
+    def forward(self, x):
+        tp = ttml.mesh().axis_index("tp")
+        x = ttml.ops.distributed.scatter(x, SEQUENCE_DIM, tp)
+        mask = build_causal_mask(DIM, device=True)
+        if self.runner_type == RunnerType.MemoryEfficient:
+            x = memory_efficient_runner(self.block, x, mask)
+        else:
+            x = self.block(x, mask)
+        return ttml.ops.distributed.all_gather(x, SEQUENCE_DIM, tp, ttml.ops.distributed.GradOutputType.REPLICATED)
+
+
 # Each block, and the trainable parameters FSDP leaves whole: "tp" took their only dim larger than one.
 BLOCKS = {
     "linears": (lambda: TPBlock(DIM), ("up/bias",)),
     "lora": (_lora_block, ()),
     "fused_swiglu": (lambda: DeepSeekMLP(DIM, 2 * DIM, tp_axis_name="tp"), ()),
+    "sequence_parallel_llama": (lambda: _SequenceParallelLlamaBlock(RunnerType.Default), ()),
+    "sequence_parallel_llama_memory_efficient": (lambda: _SequenceParallelLlamaBlock(RunnerType.MemoryEfficient), ()),
 }
 STAGES = ("weights", "step 1 gradient", "step 2 gradient", "update")
-# Measured with and without FSDP: the linears and the fused SwiGLU agree bit for bit, LoRA within 4e-4 (relative
-# Frobenius error). At this rate a stale gather would score 0.14 (SwiGLU) to 0.91 (LoRA) at step 2.
+# Measured with and without FSDP: the linears, the fused SwiGLU and the sequence-parallel Llama block (under either
+# runner) agree bit for bit, LoRA within 4e-4 (relative Frobenius error). At this rate a stale gather would score 0.14
+# (SwiGLU) to 0.91 (LoRA) at step 2.
 FSDP_TP_LR = 10.0
 FSDP_TP_TOL = 0.005
 

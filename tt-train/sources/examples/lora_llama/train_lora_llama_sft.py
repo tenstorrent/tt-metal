@@ -24,7 +24,7 @@ from ttml.models.llama import Llama, load_from_safetensors
 from ttml.modules import LoraConfig
 from ttml.trainers import SFTConfig, SFTTrainer, TrainerCallback
 
-from llama_config import PRETRAINED_HELP, fetch_pretrained, llama_config, lora_dropout_on_mesh
+from llama_config import PRETRAINED_HELP, fetch_pretrained, llama_config
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
 
@@ -215,8 +215,6 @@ def main():
         mode = "+".join(filter(None, ["DP" if use_ddp else "", "TP" if use_tp else ""]))
         print(f"{mode} enabled: mesh={dict(zip(mesh.axis_names, mesh.shape))}")
 
-    lora_dropout = lora_dropout_on_mesh(LORA_DROPOUT, use_ddp, use_tp)
-
     # ── Data mapper ───────────────────────────────────────────────────────────
 
     mapper = None
@@ -266,7 +264,7 @@ def main():
         rank=LORA_RANK,
         alpha=LORA_ALPHA,
         target_modules=LORA_TARGET_MODULES,
-        lora_dropout=lora_dropout,
+        lora_dropout=LORA_DROPOUT,
     )
 
     sft_config = SFTConfig(

@@ -76,8 +76,7 @@ def _label_partial_axes_replicated(param_tensor: Any, grad: Any) -> None:
     placements = ttml.core.distributed.placements_per_axis(grad)
     for axis in axes:
         placements[axis] = ttnn.PlacementReplicate()
-    coords = list(grad.tensor_topology().mesh_coords())
-    grad.update_tensor_topology(ttnn.TensorTopology(ttnn.MeshShape(list(mesh.shape)), placements, coords))
+    ttml.core.distributed.set_placements_per_axis(grad, placements)
 
 
 def _is_fsdp_wrapped_module(module: Any) -> bool:

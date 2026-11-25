@@ -294,11 +294,17 @@ Call `ttml.sync_gradients(model.parameters())`, as `SFTTrainer` and
 `GRPOTrainer` do. Axes missing from the mesh are skipped, so the same call
 works for DDP, FSDP and HSDP. Each parameter is filtered per axis:
 
-- FSDP-sharded parameters skip `"fsdp"`, since `backward_post` already
-  reduce-scattered their gradients. Under HSDP they still all-reduce over
-  `"dp"`.
+- A parameter skips every axis its own label shards it on. That covers
+  FSDP-sharded parameters on `"fsdp"`, since `backward_post` already
+  reduce-scattered their gradients; under HSDP they still all-reduce over
+  `"dp"`. It also covers a parameter its model shards on `"dp"`, such as
+  MoE experts placed on that axis.
 - Replicated parameters (from `replicate=`, or ones that couldn't be
   sharded) all-reduce over both axes.
+
+After the average, `sync_gradients` sums the gradients of parameters marked
+with `ttml.parallel.mark_partial` across the axes they are partial on, such
+as the sequence-parallel norms over `"tp"`.
 
 ## Gradient accumulation
 

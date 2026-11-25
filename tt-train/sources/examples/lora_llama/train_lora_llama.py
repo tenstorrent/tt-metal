@@ -26,7 +26,7 @@ from ttml.common.utils import (
 from ttml.models.llama import Llama, load_from_safetensors
 from ttml.modules import LoraConfig, LoraModel
 
-from llama_config import PRETRAINED_HELP, fetch_pretrained, llama_config, lora_dropout_on_mesh
+from llama_config import PRETRAINED_HELP, fetch_pretrained, llama_config
 
 MemoryUsageTracker = ttml.core.utils.MemoryUsageTracker
 
@@ -222,8 +222,6 @@ def main():
         mode = "+".join(filter(None, ["DP" if use_ddp else "", "TP" if use_tp else ""]))
         print(f"{mode} enabled: mesh={dict(zip(mesh.axis_names, mesh.shape))}")
 
-    lora_dropout = lora_dropout_on_mesh(LORA_DROPOUT, use_ddp, use_tp)
-
     # ── Model ─────────────────────────────────────────────────────────────────
     yaml_config = None
     if args.model_config is not None:
@@ -255,7 +253,7 @@ def main():
         target_modules=LORA_TARGET_MODULES,
         is_bias_trainable=LORA_IS_BIAS_TRAINABLE,
         trainable_modules=LORA_TRAINABLE_MODULES,
-        lora_dropout=lora_dropout,
+        lora_dropout=LORA_DROPOUT,
     )
     model = LoraModel(model, lora_config)
 
@@ -319,14 +317,8 @@ def main():
 
         optimizer.zero_grad()
         logits = model(tt_x, None)
-        # When TP is enabled the LoRA-wrapped Llama LM head returns vocab-sharded
-        # logits ([B,1,S,padded_V/tp_size] per device).
-        if use_tp:
-            loss = ttml.ops.distributed.vocab_parallel_cross_entropy_loss(
-                logits, tt_y, cluster_axis=mesh.axis_index("tp")
-            )
-        else:
-            loss = ttml.ops.loss.cross_entropy_loss(logits, tt_y, ttml.ops.ReduceType.MEAN)
+        # Under TP the LoRA-wrapped Llama LM head returns vocab-sharded logits ([B,1,S,padded_V/tp_size] per device).
+        loss = ttml.parallel.cross_entropy_loss(logits, tt_y, ttml.ops.ReduceType.MEAN)
 
         # The loss lives on every device; under TP each holds the same value.
         if use_ddp or use_tp:

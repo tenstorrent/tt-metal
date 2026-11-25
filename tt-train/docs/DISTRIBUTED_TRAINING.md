@@ -487,7 +487,7 @@ device_config:
 
 In the device config, you can specify which parallelism strategies to use:
 
-- **`enable_tp`**: Enable tensor parallelism (shard model parameters). Dropout is refused on activations replicated across TP ranks but sharded across DP ranks, as the residual stream is without `enable_sp`.
+- **`enable_tp`**: Enable tensor parallelism (shard model parameters). With DP and without `enable_sp`, dropout on the residual stream, which is replicated across TP ranks and sharded across DP ranks, draws the same mask on every DP rank until dropout can seed per mesh axis (#55947).
 - **`enable_sp`**: Enable Megatron sequence parallelism on top of TP (norms and residual adds run on a sequence-sharded stream; requires `enable_tp`, Llama only, `examples/train/train.py` only)
 - **`enable_ddp`**: Enable data parallelism (replicate model, shard data)
 - **`enable_pp`**: Enable pipeline parallelism (shard layers sequentially)

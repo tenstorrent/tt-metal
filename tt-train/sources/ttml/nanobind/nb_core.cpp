@@ -10,6 +10,7 @@
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/unique_ptr.h>
+#include <nanobind/stl/variant.h>
 #include <nanobind/stl/vector.h>
 
 #include <iomanip>
@@ -314,6 +315,18 @@ void py_module(nb::module_& m) {
             },
             nb::arg("tensor"),
             "`tensor`'s placement on each mesh axis.");
+        py_distributed.def(
+            "set_placements_per_axis",
+            [](ttnn::Tensor& tensor,
+               const std::vector<tt::tt_metal::distributed::MeshMapperConfig::Placement>& placements) {
+                ttml::core::distributed::set_placements_per_axis(
+                    tensor,
+                    ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>(
+                        placements.begin(), placements.end()));
+            },
+            nb::arg("tensor"),
+            nb::arg("placements"),
+            "Relabels `tensor` with `placements`, one per axis of its device mesh.");
         py_distributed.def(
             "is_sharded_on_axis",
             &ttml::core::distributed::is_sharded_on_axis,

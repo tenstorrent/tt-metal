@@ -30,9 +30,7 @@ class DeepSeekMLP(AbstractModuleBase):
         super().__init__()
         self._tp_axis = None
         if tp_axis_name is not None:
-            mesh = ttml.mesh()
-            if mesh.axis_size(tp_axis_name) > 1:  # a collective over a size-1 axis is an error, not a no-op
-                self._tp_axis = mesh.axis_index(tp_axis_name)
+            self._tp_axis = ttml.mesh().axis_index(tp_axis_name)
             self.w1 = ColumnParallelLinear(
                 dim,
                 inter_dim,
