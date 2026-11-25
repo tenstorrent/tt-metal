@@ -3527,7 +3527,10 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                                    &env = build_env.build_env,
                                    task = std::move(task)] {
                     size_t built = 0;
-                    jit_build_once(kernel_hash, [&] {
+                    // No wait when another thread is already building this kernel: nobody needs this build's
+                    // result, and a worker that waited would keep a pool thread idle. Programs that share a
+                    // kernel queue it once each, so several workers would wait on the same build.
+                    jit_build_once_no_wait(kernel_hash, [&] {
                         jit_build_genfiles_descriptors(env, build_options);
                         task();
                         built = 1;
