@@ -95,7 +95,7 @@ jobs:
       - name: 🤗 Get Hugging Face token (OIDC)
         id: hf-oidc
         timeout-minutes: 5
-        uses: tenstorrent/.github/actions/hf-oidc-token@d31c308a8c85847acb5c6f5f0a48d58ecf962d33 # hf-oidc-token-v1.0.0
+        uses: tenstorrent/.github/actions/hf-oidc-token@hf-oidc-token-v1.0.0 # immutable release, commit d31c308a8c85847acb5c6f5f0a48d58ecf962d33
         with:
           resource: ${{ vars.HF_OIDC_RESOURCE }}
           if-no-token: warn
