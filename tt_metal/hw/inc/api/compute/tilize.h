@@ -324,11 +324,7 @@ ALWI void fast_tilize_uninit(uint32_t icb, uint32_t ocb, uint32_t full_dim) {
 
     UNPACK((llk_unpack_fast_tilize_uninit<is_fp32_dest_acc_en>()));
     MATH((llk_math_fast_tilize_uninit<is_fp32_dest_acc_en>(icb)));
-#ifdef ARCH_BLACKHOLE
-    PACK((llk_pack_fast_tilize_uninit<is_fp32_dest_acc_en>(ocb)));
-#else
     PACK((llk_pack_fast_tilize_uninit<is_fp32_dest_acc_en>(icb, ocb)));
-#endif
 }
 
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>

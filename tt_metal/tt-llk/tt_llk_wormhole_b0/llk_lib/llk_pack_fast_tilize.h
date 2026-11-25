@@ -97,17 +97,27 @@ inline void _llk_pack_fast_tilize_mop_config_()
 }
 
 /**
- * @brief Whether the fast-tilize init switches the packer input format to Float16_b under fp32_dest_acc_en.
+ * @brief Packer input format that the fast-tilize init programs (and the uninit restores from).
  *
- * Only a 32-bit packer input format (Float32/Tf32) is incompatible with a 16-bit dest read, so the switch is limited
- * to that case; other input formats (e.g. Bfp8_b, Float16_b) are kept as configured by the caller.
+ * Under fp32_dest_acc_en, a 16-bit dest read with a 32-bit packer input format (Float32/Tf32) needs a Float16_b
+ * packer input, so that case returns Float16_b. Every other case (no fp32_dest_acc_en, a 32-bit dest read, or
+ * another input format such as Bfp8_b or Float16_b) returns pack_src_format unchanged.
  *
+ * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.
  * @param use_32bit_dest: True if dest is read as 32-bit data (see @ref _llk_pack_fast_tilize_init_).
  * @param pack_src_format: Packer input format configured by the caller.
  */
-inline bool _llk_pack_fast_tilize_switches_pack_src_(const std::uint32_t use_32bit_dest, const std::uint32_t pack_src_format)
+template <bool is_fp32_dest_acc_en>
+inline std::uint32_t _llk_pack_fast_tilize_pack_src_format_(const std::uint32_t use_32bit_dest, const std::uint32_t pack_src_format)
 {
-    return !use_32bit_dest && (pack_src_format == to_underlying(DataFormat::Float32) || pack_src_format == to_underlying(DataFormat::Tf32));
+    if constexpr (is_fp32_dest_acc_en)
+    {
+        if (!use_32bit_dest && (pack_src_format == to_underlying(DataFormat::Float32) || pack_src_format == to_underlying(DataFormat::Tf32)))
+        {
+            return to_underlying(DataFormat::Float16_b);
+        }
+    }
+    return pack_src_format;
 }
 
 /**
@@ -160,10 +170,11 @@ inline void _llk_pack_fast_tilize_init_(
             // so switch the packer input format (all packers, Dstacc and strides) to Float16_b
             // other input formats are left alone, so e.g. BFP outputs keep packing exactly as configured
             // _llk_pack_fast_tilize_uninit_ restores the caller's pack_src_format
-            if (_llk_pack_fast_tilize_switches_pack_src_(use_32bit_dest, pack_src_format))
+            const std::uint32_t fast_tilize_pack_src_format = _llk_pack_fast_tilize_pack_src_format_<is_fp32_dest_acc_en>(use_32bit_dest, pack_src_format);
+            if (fast_tilize_pack_src_format != pack_src_format)
             {
                 reconfig_packer_data_format<is_fp32_dest_acc_en>(
-                    to_underlying(DataFormat::Float16_b), pack_dst_format, SCALE_DATUM_SIZE(pack_dst_format, l1_tile_elements), FACE_R_DIM, num_faces);
+                    fast_tilize_pack_src_format, pack_dst_format, SCALE_DATUM_SIZE(pack_dst_format, l1_tile_elements), FACE_R_DIM, num_faces);
             }
         }
         cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_RMW>(0);
@@ -276,7 +287,7 @@ inline void _llk_pack_fast_tilize_uninit_(
     if constexpr (is_fp32_dest_acc_en)
     {
         // restore the caller's packer input format if init switched it to Float16_b
-        if (_llk_pack_fast_tilize_switches_pack_src_(use_32bit_dest, pack_src_format))
+        if (_llk_pack_fast_tilize_pack_src_format_<is_fp32_dest_acc_en>(use_32bit_dest, pack_src_format) != pack_src_format)
         {
             reconfig_packer_data_format<is_fp32_dest_acc_en>(
                 pack_src_format, pack_dst_format, SCALE_DATUM_SIZE(pack_dst_format, num_faces * face_r_dim * FACE_C_DIM), face_r_dim, num_faces, partial_face);

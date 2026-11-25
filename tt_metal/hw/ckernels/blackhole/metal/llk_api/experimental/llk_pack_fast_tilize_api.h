@@ -25,7 +25,8 @@ inline void llk_pack_fast_tilize_init(
 }
 
 template <bool is_fp32_dest_acc_en>
-inline void llk_pack_fast_tilize_uninit(const std::uint32_t pack_output) {
+// input_operand is unused on BH; it is taken so the call matches the WH API, which derives use_32bit_dest from it.
+inline void llk_pack_fast_tilize_uninit(const std::uint32_t /*input_operand*/, const std::uint32_t pack_output) {
     SAN_HOOK(unsupported());
     const std::uint32_t output_id = get_output_id(pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);

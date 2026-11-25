@@ -17,18 +17,12 @@ inline std::uint32_t llk_pack_fast_tilize_use_32bit_dest(const std::uint32_t inp
            pack_src_format[input_id] == (uint)DataFormat::Tf32;
 }
 
-// Packer input format programmed by _llk_pack_fast_tilize_init_: with fp32_dest_acc_en, a 16-bit dest read and a
-// Float32/Tf32 output CB pack_src_format it switches the packer input to Float16_b, otherwise it keeps pack_src_format.
+// Packer input format programmed by _llk_pack_fast_tilize_init_ (see _llk_pack_fast_tilize_pack_src_format_).
 template <bool is_fp32_dest_acc_en>
 inline std::uint32_t llk_pack_fast_tilize_pack_src_format(
     const std::uint32_t input_operand, const std::uint8_t output_id) {
-    if constexpr (is_fp32_dest_acc_en) {
-        if (_llk_pack_fast_tilize_switches_pack_src_(
-                llk_pack_fast_tilize_use_32bit_dest(input_operand), pack_src_format[output_id])) {
-            return (uint)DataFormat::Float16_b;
-        }
-    }
-    return pack_src_format[output_id];
+    return _llk_pack_fast_tilize_pack_src_format_<is_fp32_dest_acc_en>(
+        llk_pack_fast_tilize_use_32bit_dest(input_operand), pack_src_format[output_id]);
 }
 
 template <bool is_fp32_dest_acc_en>
@@ -53,7 +47,7 @@ inline void llk_pack_fast_tilize_init(
         pack_dst_format[output_id],
         unit_dim,
         num_faces,
-        TILE_C_DIM * TILE_R_DIM,
+        TILE_C_DIM * TILE_R_DIM /*l1_tile_elements*/,
         pack_src_format[output_id]);
 }
 
