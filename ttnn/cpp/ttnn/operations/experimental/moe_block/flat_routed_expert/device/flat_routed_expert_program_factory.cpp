@@ -285,6 +285,8 @@ FlatProgramHandles add_flat_routed_expert_program(
     options["row_pass_rows"] = gu_rp ? std::max(1u, 4 / p.gate_up_weight_tiles_per_row) : 0;
     options["x_ring_blocks"] = p.x_ring_blocks;
     options["y_row_major"] = cfg.y_row_major ? 1 : 0;
+    // (MEASUREMENT ONLY: the kernels' wait probes, kernels/zz_probes.hpp)
+    options["zz_flat_probes"] = std::getenv("FLAT_ZZ_PROBES") != nullptr && std::getenv("FLAT_ZZ_PROBES")[0] == '1';
     options["y_row_major_rows"] = 0;  // (the down kernels': their column width's)
     options["down_core_count"] = ND;
     options["h_arrived_sem"] = HARR;
@@ -384,6 +386,7 @@ FlatProgramHandles add_flat_routed_expert_program(
         kernel_descriptor.core_ranges = rect_ranges(cores);
         kernel_descriptor.named_compile_time_args = {kernel_options.begin(), kernel_options.end()};  // (sorted by name)
         kernel_descriptor.opt_level = KernelBuildOptLevel::O3;  // (ComputeConfig's default)
+        zz_env_defines(kernel_descriptor);                      // (MEASUREMENT ONLY: probes)
         kernel_descriptor.config =
             ComputeConfigDescriptor{.math_fidelity = fidelity, .fp32_dest_acc_en = fp32, .dst_full_sync_en = full_sync};
         return add_kernel(program, std::move(kernel_descriptor));

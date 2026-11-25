@@ -144,6 +144,9 @@ CASES = [
     FlatCase("glm53", "8x4", 10240, "zipf"),
     FlatCase("glm53", "4x4", 5120, "uniform"),
     FlatCase("glm53", "4x4", 7680, "uniform"),
+    # (16 experts a chip at M 320: the 4x4 stage at a 10240 chunk)
+    FlatCase("glm53", "4x4", 10240, "uniform"),
+    FlatCase("glm53", "4x4", 10240, "zipf"),
     # Kimi K3
     *(FlatCase("k3", "8x4", 5120, r) for r in ("uniform", "hot", "zipf", "edges")),
     FlatCase("k3", "8x4", 10240, "uniform"),
