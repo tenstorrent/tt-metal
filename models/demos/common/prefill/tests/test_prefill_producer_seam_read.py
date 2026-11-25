@@ -101,3 +101,23 @@ def test_read_kv_slice_masked_marks_the_other_hosts_rows_unavailable(monkeypatch
     assert available.tolist() == [True] * BANK + [False] * BANK + [True] * BANK
     # A NaN decoded from a chunk that was read stays available, so the mask check rejects it.
     assert torch.isnan(rows[available]).any()
+
+
+def test_read_kv_slice_rejects_rows_on_another_host(monkeypatch, expect_error):
+    from models.demos.minimax_m3.tt.attention.kv_cache import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK as BANK
+
+    monkeypatch.setattr(prefill_producer, "_local_host_name", lambda multi_host: LOCAL)
+    monkeypatch.setattr(prefill_producer, "_read_chunks", lambda *args, **kwargs: [b"a", None, b"c"])
+    decode = lambda raw, head_dim: torch.ones((BANK, head_dim))
+    with expect_error(RuntimeError, f"{BANK} of {3 * BANK} rows lie on another host's chips"):
+        prefill_producer._read_kv_slice(None, None, 0, 0, 0, 3 * BANK, 2, decode)
+
+
+def test_read_kv_slice_masked_placeholder_keeps_the_decoded_dtype(monkeypatch):
+    from models.demos.minimax_m3.tt.attention.kv_cache import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK as BANK
+
+    monkeypatch.setattr(prefill_producer, "_local_host_name", lambda multi_host: LOCAL)
+    monkeypatch.setattr(prefill_producer, "_read_chunks", lambda *args, **kwargs: [b"a", None])
+    decode = lambda raw, head_dim: torch.ones((BANK, head_dim), dtype=torch.bfloat16)
+    rows, _ = prefill_producer._read_kv_slice_masked(None, None, 0, 0, 0, 2 * BANK, 2, decode)
+    assert rows.dtype == torch.bfloat16

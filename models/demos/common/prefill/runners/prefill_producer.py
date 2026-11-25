@@ -907,17 +907,27 @@ def _read_kv_slice_masked(table, device_map, config_id, layer, slot_id, read_len
     )
     rows = [None if raw is None else decode(raw, head_dim) for raw in raws]
     available = torch.tensor([r is not None for r in rows]).repeat_interleave(NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK)
+    dtype = next((r.dtype for r in rows if r is not None), torch.float32)
     rows = [
-        torch.full((NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, head_dim), float("nan")) if r is None else r.float()
+        torch.full((NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, head_dim), float("nan"), dtype=dtype) if r is None else r
         for r in rows
     ]
     return torch.cat(rows, dim=0)[: read_len - start], available[: read_len - start]
 
 
 def _read_kv_slice(table, device_map, config_id, layer, slot_id, read_len, head_dim, decode, *, start=0):
-    return _read_kv_slice_masked(table, device_map, config_id, layer, slot_id, read_len, head_dim, decode, start=start)[
-        0
-    ]
+    """Rows of one cache slice, all of which must be readable from this host's chips. A two-host stage has rows
+    that are not; callers that can score a subset use _read_kv_slice_masked."""
+    rows, available = _read_kv_slice_masked(
+        table, device_map, config_id, layer, slot_id, read_len, head_dim, decode, start=start
+    )
+    if not bool(available.all()):
+        raise RuntimeError(
+            f"_read_kv_slice: config {config_id} layer {layer} slot {slot_id}: "
+            f"{int((~available).sum())} of {available.numel()} rows lie on another host's chips; "
+            "use _read_kv_slice_masked to score the rows this host can read"
+        )
+    return rows
 
 
 def _visible_mask(device_rows: torch.Tensor, available: torch.Tensor, what: str) -> torch.Tensor:
