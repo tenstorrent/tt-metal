@@ -47,11 +47,6 @@ private:
     Struct options {};
 };
 
-namespace detail
-{
-inline constexpr EltwiseOptions::Struct DefaultEltwiseOptions = EltwiseOptions {}.create();
-} // namespace detail
-
 /**
  * @brief Dest[output_index] = functor(Dest[input_index]...), element by element, over the region Shape selects.
  *
@@ -62,12 +57,7 @@ inline constexpr EltwiseOptions::Struct DefaultEltwiseOptions = EltwiseOptions {
  * @tparam Index: Dest tile index type of each input, one per functor argument
  * @note A complete SFPU call: needs nothing around it other than the op's own init.
  */
-template <
-    const TensorShape& Shape,
-    PaddingAgnostic Agnostic,
-    const EltwiseOptions::Struct& Options = detail::DefaultEltwiseOptions,
-    typename Functor,
-    typename... Index>
+template <TensorShape Shape, PaddingAgnostic Agnostic, EltwiseOptions::Struct Options = EltwiseOptions().create(), typename Functor, typename... Index>
 [[gnu::always_inline]] inline void eltwise(const std::uint32_t output_index, Functor&& functor, const Index... input_index)
 {
     static_assert(((std::is_integral_v<Index> && !std::is_same_v<Index, bool>) && ...), "Input index must be a Dest tile index");
@@ -105,21 +95,21 @@ template <
 }
 
 /// Dest[output] = functor(Dest[input]). Pass the same index twice to operate in place.
-template <const TensorShape& Shape, PaddingAgnostic Agnostic, const EltwiseOptions::Struct& Options = detail::DefaultEltwiseOptions, typename Functor>
+template <TensorShape Shape, PaddingAgnostic Agnostic, EltwiseOptions::Struct Options = EltwiseOptions().create(), typename Functor>
 [[gnu::always_inline]] inline void eltwise_unary(const std::uint32_t output, const std::uint32_t input, Functor&& functor)
 {
     eltwise<Shape, Agnostic, Options>(output, std::forward<Functor>(functor), input);
 }
 
 /// Dest[output] = functor(Dest[left], Dest[right]). Any operand may alias another.
-template <const TensorShape& Shape, PaddingAgnostic Agnostic, const EltwiseOptions::Struct& Options = detail::DefaultEltwiseOptions, typename Functor>
+template <TensorShape Shape, PaddingAgnostic Agnostic, EltwiseOptions::Struct Options = EltwiseOptions().create(), typename Functor>
 [[gnu::always_inline]] inline void eltwise_binary(const std::uint32_t output, const std::uint32_t left, const std::uint32_t right, Functor&& functor)
 {
     eltwise<Shape, Agnostic, Options>(output, std::forward<Functor>(functor), left, right);
 }
 
 /// Dest[output] = functor(Dest[first], Dest[second], Dest[third]). Any operand may alias another.
-template <const TensorShape& Shape, PaddingAgnostic Agnostic, const EltwiseOptions::Struct& Options = detail::DefaultEltwiseOptions, typename Functor>
+template <TensorShape Shape, PaddingAgnostic Agnostic, EltwiseOptions::Struct Options = EltwiseOptions().create(), typename Functor>
 [[gnu::always_inline]] inline void eltwise_ternary(
     const std::uint32_t output, const std::uint32_t first, const std::uint32_t second, const std::uint32_t third, Functor&& functor)
 {
