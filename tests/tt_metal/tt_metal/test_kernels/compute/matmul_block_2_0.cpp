@@ -38,14 +38,13 @@ void kernel_main() {
 
     // hw_startup + pack stay legacy CB-id in both kernels; only matmul_block(_init) is id-free here.
     compute_kernel_hw_startup<SrcOrder::Reverse>(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
-    experimental::matmul_block_init(
-        In0Op(in0_cb.read_address()), In1Op(in1_cb.read_address()), false, ct_dim, rt_dim, kt_dim);
+    experimental::matmul_block_init<ct_dim, rt_dim, kt_dim>(In0Op(in0_cb.read_address()), In1Op(in1_cb.read_address()));
 
     tile_regs_acquire();
     cb0.wait_front(in0_block_tile_cnt);
     cb1.wait_front(in1_block_tile_cnt);
-    experimental::matmul_block(
-        In0Op(in0_cb.read_address()), In1Op(in1_cb.read_address()), 0, 0, 0, ct_dim, rt_dim, kt_dim);
+    experimental::matmul_block<ct_dim, rt_dim, kt_dim>(
+        In0Op(in0_cb.read_address()), In1Op(in1_cb.read_address()), 0, 0, 0);
     cb0.pop_front(in0_block_tile_cnt);
     cb1.pop_front(in1_block_tile_cnt);
     tile_regs_commit();

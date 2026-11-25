@@ -31,6 +31,7 @@
 #include "llk_unpack_binary_broadcast_operands.h"
 #include "llk_unpack_binary_operands.h"
 #include "llk_unpack_common.h"
+#include "llk_unpack_matmul.h"
 #include "llk_unpack_unary_operand.h"
 #include "llk_unpack_unary_broadcast_operands.h"
 #include "llk_unpack_unary_operand_to_dest.h"
@@ -40,6 +41,7 @@
 #include "llk_math_eltwise_binary.h"
 #include "llk_math_eltwise_binary_broadcast.h"
 #include "llk_math_eltwise_unary_datacopy.h"
+#include "llk_math_matmul.h"
 #include "llk_math_unary_broadcast.h"
 #endif
 #ifdef TRISC_PACK
@@ -194,6 +196,44 @@ inline void unpack_B_bcast(const std::uint32_t bd_base, const std::uint32_t l1_t
     tdma_guard_note_bd(bd_base);
     _llk_unpack_unary_broadcast_operands_<p_unpacr::UNP_B>(l1_tile);
 }
+
+/**
+ * @brief Init for matmul unpack, in0 -> SrcB (Unp1), in1 -> SrcA (Unp0): descriptors, formats, MOP for a
+ * [rt_dim, ct_dim] output block.
+ * @tparam D0, D1: Descriptors of in0 and in1.
+ * @tparam TRANSPOSE: Transpose each in1 (SrcA) tile; needs a full four-face in1.
+ * @param bd0, bd1: Buffer-descriptor bases (16B units) of in0 and in1.
+ * @param ct_dim, rt_dim, kt_dim: Output block columns / rows and the inner dim.
+ */
+template <LLKMemDescriptor D0, LLKMemDescriptor D1, bool TRANSPOSE>
+LLK_2_0_NOINLINE void unpack_matmul_init(
+    const std::uint32_t bd0,
+    const std::uint32_t bd1,
+    const std::uint32_t ct_dim,
+    const std::uint32_t rt_dim,
+    const std::uint32_t kt_dim) {
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP1>(D0.shape, bd0, static_cast<std::uint32_t>(D0.format));
+    constexpr std::uint8_t bfd0 = ckernel::trisc::BFD_ID_UNP1;
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(D1.shape, bd1, static_cast<std::uint32_t>(D1.format));
+    constexpr std::uint8_t bfd1 = ckernel::trisc::BFD_ID_UNP0;
+    _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(D1.format, D0.format);
+    _llk_unpack_matmul_init_<TRANSPOSE>(bfd0, bfd1, ct_dim, rt_dim, kt_dim, D0.shape, D1.shape);
+}
+
+/** @brief Matmul unpack of one [rt_dim, ct_dim] block step, starting at in0 tile `tile0` and in1 tile `tile1`. */
+template <LLKMemDescriptor D0, LLKMemDescriptor D1>
+inline void unpack_matmul(
+    const std::uint32_t bd0,
+    const std::uint32_t bd1,
+    const std::uint32_t tile0,
+    const std::uint32_t tile1,
+    const std::uint32_t ct_dim,
+    const std::uint32_t rt_dim,
+    const std::uint32_t kt_dim) {
+    tdma_guard_note_bd(bd0);
+    tdma_guard_note_bd(bd1);
+    _llk_unpack_matmul_(ct_dim, rt_dim, kt_dim, tile0, tile1, D0.shape, D1.shape);
+}
 #endif
 
 #ifdef TRISC_MATH
@@ -273,6 +313,23 @@ LLK_2_0_NOINLINE void math_unary_bcast_init() {
 /** @brief Copy the broadcast SrcB tile into Dest tile `dst_index`. */
 inline void math_unary_bcast(const std::uint32_t dst_index) {
     _llk_math_eltwise_unary_broadcast_<false /*unpack_to_dest*/>(dst_index);
+}
+
+/**
+ * @brief Init for matmul Dest += SrcB(in0) x SrcA(in1) over a [rt_dim, ct_dim] block (ALU formats + MOP).
+ */
+template <LLKMemDescriptor D0, LLKMemDescriptor D1, bool EN_32BIT_DEST, ckernel::MathFidelity FIDELITY>
+LLK_2_0_NOINLINE void math_matmul_init(const std::uint32_t ct_dim, const std::uint32_t rt_dim) {
+    math_alu_formats<EN_32BIT_DEST>(D1.format, D0.format);
+    _llk_math_matmul_init_<FIDELITY>(D1.format, D0.format, ct_dim, rt_dim, D0.shape, D1.shape);
+}
+
+/** @brief One-tile matmul into Dest tile `dst_index`. */
+inline void math_matmul_tile(const std::uint32_t dst_index) { _llk_math_matmul_tile_(dst_index); }
+
+/** @brief Block matmul step into Dest tiles [0, ct_dim * rt_dim). */
+inline void math_matmul_block(const std::uint32_t ct_dim, const std::uint32_t rt_dim) {
+    _llk_math_matmul_block_(ct_dim, rt_dim);
 }
 #endif
 
