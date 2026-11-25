@@ -63,7 +63,7 @@ uint32_t _start() {
 
     if (hartid == thread_0_hartid) {
         do_crt1(&tdata_lma[__ldm_tdata_end - __ldm_tdata_start]);
-#ifdef KERAUNOS_CCE
+#ifdef KERAUNOS_CCE_NOC
         // The kernel's globals are zeroed: fill what its NOC calls read of the host records.
         internal_::cce_noc::latch();
 #endif

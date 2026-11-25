@@ -26,8 +26,9 @@
 
 #include "dev_mem_map.h"
 
-// A Keraunos CCE has no NOC endpoint; its NOC calls go through cce_noc.h, and the ones it does not serve stop the hart.
-#ifdef KERAUNOS_CCE
+// A Keraunos CCE has no NOC endpoint; in a kernel built with KERAUNOS_CCE_NOC its NOC calls go through cce_noc.h, and
+// the ones it does not serve stop the hart.
+#ifdef KERAUNOS_CCE_NOC
 #include "internal/tt-2xx/quasar/cce_noc.h"
 #define CCE_NOC_UNSUPPORTED() internal_::cce_noc::unsupported(__LINE__)
 #else
@@ -478,9 +479,9 @@ inline __attribute__((always_inline)) void noc_local_state_init(int noc) {
     noc_posted_writes_num_issued[noc] = posted_writes_num_issued;
 }
 
-// No-op on a Keraunos CCE (Quasar Ethernet): it has no NIU issue/ack counters to read.
+// No-op with KERAUNOS_CCE_NOC: a Keraunos CCE has no NIU issue/ack counters to read.
 inline __attribute__((always_inline)) void ncrisc_noc_counters_init() {
-#if !(defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC))
+#ifndef KERAUNOS_CCE_NOC
     constexpr uint32_t noc = 0;
     // Hide latency of NOC reg reads by reading first, writing second
     uint32_t reads_num_issued = NOC_STATUS_READ_REG(noc, NIU_MST_RD_RESP_RECEIVED);
@@ -498,7 +499,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_counters_init() {
 }
 
 inline __attribute__((always_inline)) bool ncrisc_noc_reads_flushed(uint32_t noc) {
-#ifdef KERAUNOS_CCE
+#ifdef KERAUNOS_CCE_NOC
     return internal_::cce_noc::copies_done();
 #else
     return __builtin_riscv_ttrocc_scmdbuf_tr_ack() == 0;
@@ -507,7 +508,7 @@ inline __attribute__((always_inline)) bool ncrisc_noc_reads_flushed(uint32_t noc
 
 inline __attribute__((always_inline)) bool ncrisc_noc_read_with_transaction_id_flushed(
     uint32_t noc, uint32_t transcation_id) {
-#ifdef KERAUNOS_CCE
+#ifdef KERAUNOS_CCE_NOC
     return internal_::cce_noc::copies_done();
 #else
     return __builtin_riscv_ttrocc_scmdbuf_tr_ack_trid(transcation_id) == 0;
@@ -519,7 +520,7 @@ inline __attribute__((always_inline)) uint32_t noc_available_transactions(uint32
 }
 
 inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_writes_sent(uint32_t noc) {
-#ifdef KERAUNOS_CCE
+#ifdef KERAUNOS_CCE_NOC
     return internal_::cce_noc::copies_done();
 #else
     return __builtin_riscv_ttrocc_scmdbuf_wr_sent() == 0;
@@ -527,7 +528,7 @@ inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_writes_sent(uint
 }
 
 inline __attribute__((always_inline)) bool ncrisc_noc_posted_writes_sent(uint32_t noc) {
-#ifdef KERAUNOS_CCE
+#ifdef KERAUNOS_CCE_NOC
     // A posted write on a CCE awaits its copy (ncrisc_noc_fast_write), so none is in flight.
     return true;
 #else
@@ -536,18 +537,18 @@ inline __attribute__((always_inline)) bool ncrisc_noc_posted_writes_sent(uint32_
 }
 
 inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_writes_flushed(uint32_t noc) {
-#ifdef KERAUNOS_CCE
+#ifdef KERAUNOS_CCE_NOC
     return internal_::cce_noc::copies_done();
 #else
     return __builtin_riscv_ttrocc_scmdbuf_tr_ack() == 0;
 #endif
 }
 
-// Always true on a Keraunos CCE: a write with a transaction id awaits its own copy (ncrisc_noc_fast_write) and the
+// Always true with KERAUNOS_CCE_NOC: a write with a transaction id awaits its own copy (ncrisc_noc_fast_write) and the
 // stateful one halts, so none is outstanding. No hardware read.
 inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_write_with_transaction_id_sent(
     uint32_t noc, uint32_t transcation_id) {
-#ifdef KERAUNOS_CCE
+#ifdef KERAUNOS_CCE_NOC
     return true;
 #else
     return __builtin_riscv_ttrocc_scmdbuf_wr_sent_trid(transcation_id) == 0;
@@ -564,10 +565,10 @@ inline __attribute__((always_inline)) bool noc_nonposted_writes_sent_since(uint3
     return ncrisc_noc_nonposted_write_with_transaction_id_sent(noc, NOC_OVERLAY_TRID_STATIC);
 }
 
-// Always true on a Keraunos CCE, as ncrisc_noc_nonposted_write_with_transaction_id_sent().
+// Always true with KERAUNOS_CCE_NOC, as ncrisc_noc_nonposted_write_with_transaction_id_sent().
 inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_write_with_transaction_id_flushed(
     uint32_t noc, uint32_t transcation_id) {
-#ifdef KERAUNOS_CCE
+#ifdef KERAUNOS_CCE_NOC
     return true;
 #else
     return __builtin_riscv_ttrocc_scmdbuf_tr_ack_trid(transcation_id) == 0;
@@ -575,7 +576,7 @@ inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_write_with_trans
 }
 
 inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_atomics_flushed(uint32_t noc) {
-#ifdef KERAUNOS_CCE
+#ifdef KERAUNOS_CCE_NOC
     // An increment is a CPU load and store, so none is in flight.
     return true;
 #else

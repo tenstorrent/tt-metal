@@ -15,8 +15,8 @@
 
 #include "dev_mem_map.h"
 
-#ifndef KERAUNOS_CCE
-#error "cce_noc.h is for a Keraunos CCE (Quasar Ethernet core) only"
+#if !defined(KERAUNOS_CCE) || !defined(KERAUNOS_CCE_NOC)
+#error "cce_noc.h is for a Keraunos CCE (Quasar Ethernet core) kernel built with KERAUNOS_CCE_NOC"
 #endif
 
 #include "api/debug/assert.h"
@@ -55,8 +55,9 @@ struct Latched {
 };
 inline Latched latched;
 
-// Fills latched from the host records. Kernel start calls it once, on the kernel's first hart, before any other hart
-// of the kernel runs. Never blocks.
+// Fills latched from the host records and sets my_x and my_y to this core's own coordinate (KERAUNOS_NOC_CCE0_X +
+// eth_cce, hsio tile). Kernel start calls it once, on the kernel's first hart, before any other hart of the kernel
+// runs. Never blocks.
 inline void latch() {
     volatile KeraunosNocChannels& r = channels();
     latched.channels.num_channels = r.num_channels;
@@ -70,6 +71,10 @@ inline void latch() {
     }
     latched.hsio = experimental::keraunos::my_hsio();
     latched.channels.valid = r.valid;
+    for (uint32_t n = 0; n < NUM_NOCS; n++) {
+        my_x[n] = KERAUNOS_NOC_CCE0_X + experimental::keraunos::my_eth_cce();
+        my_y[n] = latched.hsio;
+    }
 }
 
 // Stops this hart: records @p fault and @p detail in the channels, where the host reads them, then asserts and spins.

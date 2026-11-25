@@ -37,7 +37,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
     uint32_t len_bytes,
     uint32_t read_req_vc = NOC_OVERLAY_RD_REQ_VC) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
-#ifdef KERAUNOS_CCE
+#ifdef KERAUNOS_CCE_NOC
     internal_::cce_noc::copy(
         internal_::cce_noc::dma_addr(src_addr), internal_::cce_noc::local_dma_addr(dest_addr), len_bytes);
     return;
@@ -79,7 +79,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
     bool posted = false,
     uint32_t trid = 0) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
-#ifdef KERAUNOS_CCE
+#ifdef KERAUNOS_CCE_NOC
     if (mcast) {
         internal_::cce_noc::unsupported(__LINE__);
     }
@@ -265,7 +265,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
     bool posted = false,
     uint32_t customized_src_addr = 0) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
-#ifdef KERAUNOS_CCE
+#ifdef KERAUNOS_CCE_NOC
     if (dst_type == InlineWriteDst::REG || be != 0xF || mcast) {
         internal_::cce_noc::unsupported(__LINE__);
     }
@@ -371,7 +371,7 @@ inline __attribute__((always_inline)) void noc_fast_atomic_increment(
     bool posted = false,
     uint32_t atomic_ret_val = 0) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
-#ifdef KERAUNOS_CCE
+#ifdef KERAUNOS_CCE_NOC
     if (wrap != 31 || linked) {
         internal_::cce_noc::unsupported(__LINE__);
     }
