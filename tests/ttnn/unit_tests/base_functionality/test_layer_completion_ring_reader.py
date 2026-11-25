@@ -243,3 +243,9 @@ def test_a_failed_chunk_is_recorded_and_its_layers_still_complete_it():
         pass
     assert completed == [((0, 0, 128), True), ((0, 0, 128), False)]  # the key's next use starts clean
     assert d.total_layers == 2 * NUM_LAYERS
+
+
+def test_unknown_flags_raise():
+    d = LayerCompletionRingReader(FakeRing([msg(0, 1, flags=CHUNK_FAILED + 1)]), num_layers=NUM_LAYERS)
+    with pytest.raises(ValueError, match="unknown flags 2"):  # allow-pytest.raises: host-only, no device error
+        d.step()

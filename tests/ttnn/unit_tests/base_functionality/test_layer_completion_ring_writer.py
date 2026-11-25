@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Unit tests for the layer-completion sinks (host-only, fake producer)."""
+"""Unit tests for the layer-completion sinks: a fake producer, and a real LayerCompletionQueue for the failed-chunk
+record."""
 
 from models.demos.common.prefill.runners import layer_completion_ring_writer as writer_mod
 

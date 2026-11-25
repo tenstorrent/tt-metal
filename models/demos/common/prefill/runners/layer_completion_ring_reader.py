@@ -29,9 +29,10 @@ from collections import deque, namedtuple
 
 from loguru import logger
 
+from models.demos.common.prefill.runners.layer_completion_ring_writer import CHUNK_FAILED
+
 # Wire order of LayerCompletionQueue.try_pop(); try_pop_with_flags() appends the record's flags.
 Completion = namedtuple("Completion", "slot_id pos_start pos_end layer_start layer_end host_timestamp_ns")
-CHUNK_FAILED = 1  # ttnn._experimental.layer_completion.CHUNK_FAILED, kept here so this module stays ttnn-free
 
 
 def chunk_key(c: Completion) -> tuple:
@@ -163,6 +164,8 @@ class LayerCompletionRingReader:
             logger.warning(f"[ring-reader] chunk {chunk_key(c)} failed")
             self._coverage(c).failed = True
             return True
+        if flags:
+            raise ValueError(f"[ring-reader] chunk {chunk_key(c)}: unknown flags {flags}")
         if self._can_process(c):
             self._process(c)
             self._retry_side_queues()  # processing may have unblocked side-queued messages
