@@ -57,8 +57,12 @@ class EmbeddingCacheIdentityTest(unittest.TestCase):
         env = patch.dict(os.environ, {"TT_DIT_CACHE_DIR": str(self.directory / "cache")})
         env.start()
         self.addCleanup(env.stop)
-        cache_namespace = _load(ROOT / "utils" / "cache.py", {"source_id"}, {"Path": Path})
-        self.cache = SimpleNamespace(source_id=cache_namespace["source_id"], CACHE_VERSION=1)
+        cache_namespace = _load(ROOT / "utils" / "cache.py", {"source_id", "_is_hub_blob", "_legacy_source_id"}, {"Path": Path})
+        self.cache = SimpleNamespace(
+            source_id=cache_namespace["source_id"],
+            _legacy_source_id=cache_namespace["_legacy_source_id"],
+            CACHE_VERSION=1,
+        )
         namespace = {
             "Path": Path,
             "glob": glob,
@@ -70,7 +74,11 @@ class EmbeddingCacheIdentityTest(unittest.TestCase):
         self.identity = _load(ENCODER, {"_gemma_shards", "embedding_cache_identity"}, namespace)[
             "embedding_cache_identity"
         ]
-        self.path_method = _load(PIPELINE, {"_device_embed_cache_path"}, {"os": os, "json": json, "hashlib": hashlib})[
+        self.path_method = _load(
+            PIPELINE,
+            {"_device_embed_cache_path"},
+            {"os": os, "json": json, "hashlib": hashlib, "cache_module": self.cache},
+        )[
             "_device_embed_cache_path"
         ]
 
@@ -153,6 +161,31 @@ class EmbeddingCacheIdentityTest(unittest.TestCase):
                 before = pair.embedding_cache_identity()
                 path.write_bytes(b"changed fixture with different size")
                 self.assertNotEqual(before, pair.embedding_cache_identity())
+
+    def test_a_renamed_checkpoint_keeps_its_prompt_cache(self):
+        pipe = SimpleNamespace(gemma_encoder_pair=self.pair())
+        before = self.path_method(pipe, ["prompt"])
+        renamed = self.directory / "ltx-renamed.safetensors"
+        self.checkpoint.rename(renamed)
+        pipe.gemma_encoder_pair.checkpoint_name = str(renamed)
+        self.assertEqual(before, self.path_method(pipe, ["prompt"]))
+
+    def test_an_entry_under_the_old_source_key_is_linked_not_reencoded(self):
+        pair = self.pair()
+        pipe = SimpleNamespace(gemma_encoder_pair=pair)
+        new = Path(self.path_method(pipe, ["prompt"]))
+        # The path a tree before the rename-stable key wrote for the same prompt and files.
+        legacy_identity = pair.embedding_cache_identity(_source_id=self.cache._legacy_source_id)
+        key = hashlib.sha256(
+            json.dumps({"prompts": ["prompt"], "encoder": legacy_identity}, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        old = new.parent / f"{key}.device.pt"
+        self.assertNotEqual(old, new)
+        old.parent.mkdir(parents=True, exist_ok=True)
+        old.write_bytes(b"embeddings")
+        self.assertEqual(self.path_method(pipe, ["prompt"]), str(new))
+        self.assertEqual(new.read_bytes(), b"embeddings")
+        self.assertTrue(old.exists())
 
     def test_feature_mask_policy_is_separate_and_tracks_loaded_shell(self):
         for tp in (1, 4, 8):

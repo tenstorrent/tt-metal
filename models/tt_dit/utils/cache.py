@@ -69,14 +69,32 @@ def source_id(path: str | Path) -> str:
 
     A HuggingFace hub blob is stored under its own git-lfs sha256, so for the common case the
     resolved filename *is* an exact content hash and costs one `readlink` — no read of the 46GB
-    file. Anything else falls back to size, mtime, ctime and inode. A re-download or a swapped
-    file changes at least one; ctime closes the aliasing gap a plain size+mtime key leaves, since
-    the kernel bumps it on any write and userspace cannot reset it, so even a metadata-preserving
-    copy that restores size and mtime is still caught (its ctime and inode differ).
+    file. Anything else falls back to size and mtime: a re-download or a rewrite in place changes
+    the mtime, so the key still tracks the weights. Neither the file's name, its directory, its
+    ctime nor its inode is part of it, because a rename in place (ltx-server's model_rename) moves
+    the ctime on and keeps the bytes: keying on it made every rename rebuild the cache (~10 min of
+    weight prep per DiT) for weights that had not changed.
     """
     p = Path(path).resolve()
     st = p.stat()
-    if p.parent.name == "blobs" and len(p.name) == 64 and all(c in "0123456789abcdef" for c in p.name):
+    if _is_hub_blob(p):
+        return f"sha256:{p.name}"
+    return f"stat:{st.st_size}:{st.st_mtime_ns}"
+
+
+def _is_hub_blob(p: Path) -> bool:
+    return p.parent.name == "blobs" and len(p.name) == 64 and all(c in "0123456789abcdef" for c in p.name)
+
+
+def _legacy_source_id(path: str | Path) -> str:
+    """`source_id` as trees before the rename-stable key wrote it (size, mtime, ctime, inode).
+
+    Only `_adopt_legacy_keyed` uses it, to find the cache those trees built for an unchanged file,
+    so the key change does not rebuild every cache once on every box.
+    """
+    p = Path(path).resolve()
+    st = p.stat()
+    if _is_hub_blob(p):
         return f"sha256:{p.name}"
     return f"stat:{st.st_size}:{st.st_mtime_ns}:{st.st_ctime_ns}:{st.st_ino}"
 
@@ -98,16 +116,17 @@ def module_signature(module: Module) -> str:
     return hashlib.sha256("\n".join(parts).encode()).hexdigest()
 
 
-def content_key(module: Module, sources: Sequence[str | Path] = ()) -> str:
+def content_key(module: Module, sources: Sequence[str | Path] = (), *, _source_id=None) -> str:
     """Cache-key component binding an artifact to the weights and the code that produced it.
 
     Invalidates when the source checkpoint changes (`source_id`), when the module's weight
     structure or dtype changes (`module_signature`), or when weight-prep code changes values
     under a fixed structure (`CACHE_VERSION`). Every input is O(1) in the weight bytes.
     """
+    sid = _source_id or source_id
     h = hashlib.sha256(f"fmt{CACHE_FORMAT}|v{CACHE_VERSION}".encode())
     for s in sources:
-        h.update(f"|src:{source_id(s)}".encode())
+        h.update(f"|src:{sid(s)}".encode())
     h.update(f"|sig:{module_signature(module)}".encode())
     return h.hexdigest()[:12]
 
@@ -310,6 +329,9 @@ def load_model(
         ttnn.distributed_context_barrier()
         return
 
+    if key is not None and not _cache_is_complete(cache_dir, tt_model, key):
+        _adopt_legacy_keyed(tt_model, sources, key_args, cache_dir, key)
+
     if _cache_is_complete(cache_dir, tt_model, key) and not (
         get_torch_state_dict is not None and _set_aside_if_nonfinite(tt_model, cache_dir)
     ):
@@ -348,7 +370,7 @@ def load_model(
         # weight load; a bad cache costs every run until someone deletes it by hand.
         logger.warning(f"kernel capture-only pass: NOT writing weight cache to '{cache_dir}'")
     elif create_cache:
-        if key is not None:
+        if key is not None and _reclaim_enabled():
             _reclaim_superseded(model_cache_dir(**key_args, content=None, required=False))
         logger.info(f"Writing cache to '{cache_dir}'.")
         _publish_cache(tt_model, cache_dir, key)
@@ -712,19 +734,94 @@ def _structure(tt_model: Module) -> dict:
     }
 
 
-def _reclaim_superseded(legacy_dir: Path | None) -> None:
+def _reclaim_enabled() -> bool:
+    """Whether a new content-keyed build may delete its content-blind predecessor (off by default).
+
+    Off because a cache root is shared by every tree on a box: the tree being prepared beside the
+    served one (a rollout's second slot) builds its keyed leaf while the served tree still reads
+    the content-blind one, and deleting it there made the served tree's next load cold (f202,
+    2026-11-25 01:36 PST: the H3 VAE decoder, a 666 s user wait). This code cannot see which
+    trees still read a leaf; ltx-server's cache_prune can (every load is logged) and removes
+    superseded leaves once nothing uses them. TT_DIT_CACHE_RECLAIM_SUPERSEDED=1 turns it back on
+    for a single-tree checkout whose disk cannot hold both copies.
+    """
+    return os.environ.get("TT_DIT_CACHE_RECLAIM_SUPERSEDED", "0") == "1"
+
+
+# A content-blind leaf touched (read or written) this recently is still in use: never reclaimed.
+RECLAIM_IDLE_HOURS = 72.0
+
+
+def _last_touched(path: Path) -> float:
+    newest = path.stat().st_mtime
+    for f in path.iterdir():
+        try:
+            st = f.stat()
+        except OSError:
+            continue
+        newest = max(newest, st.st_mtime, st.st_atime)
+    return newest
+
+
+def _reclaim_superseded(legacy_dir: Path | None, *, idle_hours: float = RECLAIM_IDLE_HOURS) -> None:
     """Drop the content-blind directory that a content key replaces, before rebuilding over it.
 
-    Once a module keys on content, nothing constructs its old path again, so whatever sits there
-    is unreachable — and for the 22B transformer it is 37GB. Freeing it first makes the one-time
-    migration disk-neutral; leaving it would need room for two copies of a checkpoint that only
-    just fits once. It is not a fallback: an unverifiable artifact is exactly what is being
-    retired, so there is nothing to keep.
+    Only with TT_DIT_CACHE_RECLAIM_SUPERSEDED=1 (`_reclaim_enabled`), and even then a leaf any
+    process read or wrote within `idle_hours` stays: another tree on the box may still serve it.
+    For the 22B transformer it is 37GB, so a disk-tight single-tree checkout frees it here.
     """
     if legacy_dir is None or not legacy_dir.is_dir():
         return
+    if time.time() - _last_touched(legacy_dir) < idle_hours * 3600:
+        logger.info(f"Keeping content-blind cache at '{legacy_dir}': used within {idle_hours:g} h.")
+        return
     logger.info(f"Reclaiming superseded content-blind cache at '{legacy_dir}'.")
     shutil.rmtree(legacy_dir, ignore_errors=True)
+
+
+def _adopt_legacy_keyed(tt_model: Module, sources, key_args: dict, cache_dir: Path, key: str) -> bool:
+    """Make a cache built under the old (ctime/inode) source key readable under the new one.
+
+    The tensorbins are the same bytes: only the key's spelling of the source changed. Each file is
+    hard-linked (copied if a link is refused) into a new leaf with a manifest naming the new key,
+    so no weight is rebuilt and the old leaf, which a tree still on the old key serves, stays as it
+    is. Returns whether the new leaf is now complete.
+    """
+    try:
+        old_key = content_key(tt_model, sources, _source_id=_legacy_source_id)
+    except OSError:
+        return False
+    if old_key == key:
+        return False
+    old_dir = model_cache_dir(**key_args, content=old_key, required=False)
+    if old_dir is None or not _cache_is_complete(old_dir, tt_model, old_key):
+        return False
+
+    cache_dir = Path(cache_dir)
+    staging = cache_dir.parent / f".{cache_dir.name}.staging-{os.getpid()}-{secrets.token_hex(4)}"
+    try:
+        staging.mkdir()
+        for f in old_dir.iterdir():
+            if f.name == CACHE_DICT_FILE or not f.is_file():
+                continue
+            try:
+                os.link(f, staging / f.name)
+            except OSError:
+                shutil.copy2(f, staging / f.name)
+        manifest = json.loads((old_dir / CACHE_DICT_FILE).read_text()) | {"content_key": key}
+        (staging / CACHE_DICT_FILE).write_text(json.dumps(manifest, indent=2, sort_keys=True))
+        if _cache_is_complete(cache_dir, tt_model, key):
+            return True
+        if cache_dir.exists():
+            shutil.rmtree(cache_dir)
+        os.replace(staging, cache_dir)
+    except OSError as err:
+        logger.warning(f"could not adopt '{old_dir}' as '{cache_dir}' ({err}); building it instead.")
+        return _cache_is_complete(cache_dir, tt_model, key)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    logger.info(f"adopted cache at '{old_dir}' as '{cache_dir}' (source key now rename-stable).")
+    return _cache_is_complete(cache_dir, tt_model, key)
 
 
 def _publish_cache(tt_model: Module, cache_dir: str | Path, key: str | None) -> None:

@@ -165,7 +165,7 @@ class GemmaTokenizerEncoderPair:
         self._trace_gate_open = True
         self._trace_captured = False
 
-    def embedding_cache_identity(self) -> dict:
+    def embedding_cache_identity(self, *, _source_id=None) -> dict:
         """Bind prompt outputs to their source weights, tokenizer and compute policy.
 
         This works before modules are loaded, so a dynamic-load cache hit need
@@ -177,8 +177,9 @@ class GemmaTokenizerEncoderPair:
         shards = _gemma_shards(self.gemma_path)
         assert shards, f"no Gemma checkpoint shards in {gemma_dir}"
         assets = sorted(path for path in gemma_dir.iterdir() if path.suffix in (".json", ".model", ".txt"))
-        sources = {"ltx": cache_module.source_id(self.checkpoint_name)}
-        sources.update({f"gemma/{Path(path).name}": cache_module.source_id(path) for path in [*shards, *assets]})
+        sid = _source_id or cache_module.source_id
+        sources = {"ltx": sid(self.checkpoint_name)}
+        sources.update({f"gemma/{Path(path).name}": sid(path) for path in [*shards, *assets]})
         root = Path(__file__).resolve().parents[2]
         code_paths = sorted(Path(__file__).parent.glob("*.py")) + [
             root / "layers" / "normalization.py",
@@ -218,7 +219,7 @@ class GemmaTokenizerEncoderPair:
             "schema": 2,
             "sources": sources,
             "code": code,
-            "native_binary": cache_module.source_id(ttnn._ttnn.__file__),
+            "native_binary": sid(ttnn._ttnn.__file__),
             "weight_cache_version": cache_module.CACHE_VERSION,
             "feature_mask_after_projection": feature_mask_after_projection,
             "model": {

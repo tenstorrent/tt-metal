@@ -20,6 +20,7 @@ import os
 import shutil
 import stat
 import subprocess
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -151,11 +152,8 @@ def test_publish_is_all_or_nothing(checkpoint, monkeypatch, tmp_path, expect_err
     assert not list(cache_dir.parent.glob("*.staging-*")), "staging directory leaked"
 
 
-def test_the_superseded_directory_is_reclaimed(checkpoint, monkeypatch, tmp_path):
-    """Once a module keys on content, its content-blind directory is unreachable — and for the 22B
-    transformer that is 37GB. The migration has to free it, not ask the disk for room for both."""
-    monkeypatch.setenv("TT_DIT_CACHE_DIR", str(tmp_path / "cache"))
-    legacy = cache.model_cache_dir(
+def _legacy_dir():
+    return cache.model_cache_dir(
         model_name="m",
         subfolder="connector",
         parallel_config=SimpleNamespace(_asdict=dict),
@@ -163,13 +161,119 @@ def test_the_superseded_directory_is_reclaimed(checkpoint, monkeypatch, tmp_path
         mesh_device=None,
         content=None,
     )
+
+
+class _LoadableStub(_StubModule):
+    """A stub `load_model` can fill: it records loads and builds instead of touching a device."""
+
+    def __init__(self):
+        super().__init__(_module()._parameters)
+        self.loaded_from = []
+
+    def is_loaded(self):
+        return False
+
+    def load_torch_state_dict(self, state_dict):
+        self.loaded_from.append("torch")
+
+    def load(self, directory):
+        self.loaded_from.append(str(directory))
+
+    def deallocate_weights(self):
+        pass
+
+
+def _fill(module, sources, monkeypatch):
+    monkeypatch.setattr(cache.ttnn, "distributed_context_barrier", lambda: None, raising=False)
+    cache.load_model(
+        module,
+        model_name="m",
+        subfolder="connector",
+        parallel_config=SimpleNamespace(_asdict=dict),
+        mesh_shape=(4, 8),
+        mesh_device=None,
+        sources=sources,
+        get_torch_state_dict=dict,
+    )
+
+
+def test_reclaim_keeps_served(checkpoint, monkeypatch, tmp_path):
+    """cell reclaim-keeps-served. Every tree on a box shares one cache root: the tree a rollout
+    prepares beside the served one builds its content-keyed leaf while the served tree still reads
+    the content-blind one. That fill must leave the served tree's leaf whole (f202, 2026-11-25:
+    deleting it made a user's next load cold for 666 s)."""
+    monkeypatch.setenv("TT_DIT_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.delenv("TT_DIT_CACHE_RECLAIM_SUPERSEDED", raising=False)
+    served = _legacy_dir()
+    _module().save(served)
+    (served / cache.CACHE_DICT_FILE).touch()
+    before = sorted(f.name for f in served.iterdir())
+
+    module = _LoadableStub()
+    _fill(module, [checkpoint], monkeypatch)
+
+    assert module.loaded_from[0] == "torch", "the stub should have missed and built"
+    assert _key(_module(), [checkpoint]).is_dir(), "the new tree's keyed leaf was published"
+    assert sorted(f.name for f in served.iterdir()) == before, "the served tree's leaf was touched"
+
+
+def test_an_opted_in_reclaim_still_keeps_a_leaf_in_use(monkeypatch, tmp_path):
+    """Even a single-tree checkout that opts in (TT_DIT_CACHE_RECLAIM_SUPERSEDED=1) keeps a leaf
+    some process read or wrote within RECLAIM_IDLE_HOURS: another tree may still serve it."""
+    monkeypatch.setenv("TT_DIT_CACHE_DIR", str(tmp_path / "cache"))
+    legacy = _legacy_dir()
     _module().save(legacy)
-    assert legacy.is_dir()
 
     cache._reclaim_superseded(legacy)
+    assert legacy.is_dir()
 
-    assert not legacy.exists()
-    assert legacy != _key(_module(), [checkpoint]), "the content-keyed cache must not be the one reclaimed"
+    old = time.time() - (cache.RECLAIM_IDLE_HOURS + 1) * 3600
+    for f in [*legacy.iterdir(), legacy]:
+        os.utime(f, (old, old))
+    cache._reclaim_superseded(legacy)
+    assert not legacy.exists(), "an idle superseded leaf is reclaimed when opted in"
+
+
+def test_ltx_rename_hits(checkpoint, monkeypatch, tmp_path):
+    """cell ltx-rename-hits. ltx-server's model_rename moves a checkpoint to its code name in place:
+    same bytes, same size and mtime, new name and ctime. Its cache key must not move, or every
+    rename rebuilds a 37GB DiT cache for weights that did not change."""
+    monkeypatch.setenv("TT_DIT_CACHE_DIR", str(tmp_path / "cache"))
+    before = cache.content_key(_module(), [checkpoint])
+
+    time.sleep(0.01)  # a rename after the build moves the ctime on
+    renamed = checkpoint.with_name("q3a.safetensors")
+    os.rename(checkpoint, renamed)
+
+    assert cache.content_key(_module(), [renamed]) == before
+    assert cache.source_id(renamed) == cache.source_id(renamed.resolve())
+
+
+def test_a_cache_built_under_the_old_source_key_is_adopted_not_rebuilt(checkpoint, monkeypatch, tmp_path):
+    """The rename-stable key spells the source differently, so every leaf the previous trees built
+    sits under the old key. A load must adopt it (hard links, new manifest) rather than rebuild,
+    and leave the old leaf, which a tree still on the old key serves, as it was."""
+    monkeypatch.setenv("TT_DIT_CACHE_DIR", str(tmp_path / "cache"))
+    old_key = cache.content_key(_module(), [checkpoint], _source_id=cache._legacy_source_id)
+    old_dir = cache.model_cache_dir(
+        model_name="m",
+        subfolder="connector",
+        parallel_config=SimpleNamespace(_asdict=dict),
+        mesh_shape=(4, 8),
+        mesh_device=None,
+        content=old_key,
+    )
+    cache._publish_cache(_module(), old_dir, old_key)
+    old_manifest = (old_dir / cache.CACHE_DICT_FILE).read_text()
+
+    module = _LoadableStub()
+    _fill(module, [checkpoint], monkeypatch)
+
+    new_dir = _key(_module(), [checkpoint])
+    assert new_dir != old_dir
+    assert module.loaded_from == [str(new_dir)], "a cache hit, with no weight rebuilt"
+    assert (old_dir / cache.CACHE_DICT_FILE).read_text() == old_manifest
+    assert (new_dir / "weight.tensorbin").stat().st_ino == (old_dir / "weight.tensorbin").stat().st_ino
 
 
 def test_a_cache_with_no_manifest_misses(checkpoint, monkeypatch, tmp_path):

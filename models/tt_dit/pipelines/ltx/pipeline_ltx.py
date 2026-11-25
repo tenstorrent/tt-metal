@@ -1519,9 +1519,22 @@ class LTXPipeline:
             # prompt-only key that would serve another model's embeddings.
             logger.warning(f"{type(self.gemma_encoder_pair).__name__} has no cache identity; encoding without it")
             return None
-        identity = {"prompts": prompts, "encoder": identity_of()}
-        key = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        return os.path.join(embed_cache_dir, f"{key}.device.pt")
+        def path_for(encoder: dict) -> str:
+            identity = {"prompts": prompts, "encoder": encoder}
+            key = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+            return os.path.join(embed_cache_dir, f"{key}.device.pt")
+
+        path = path_for(identity_of())
+        if not os.path.exists(path):
+            # An entry written under the old (ctime/inode) source key holds the same embeddings: link it
+            # under the rename-stable key rather than bring Gemma back to encode it again.
+            try:
+                legacy = path_for(identity_of(_source_id=cache_module._legacy_source_id))
+                if legacy != path and os.path.exists(legacy):
+                    os.link(legacy, path)
+            except (OSError, TypeError):
+                pass
+        return path
 
     def encode_prompts(
         self, prompts: list[str], *, use_cache: bool = True
