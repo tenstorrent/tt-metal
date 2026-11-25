@@ -159,10 +159,10 @@ struct D2DStreamConfig {
     // knows how many data-landed increments to await.
     uint32_t max_sender_lanes = 2;
 
-    // Relay mode only: max lanes used by exit relays over inter-mesh cable links (1 or 2).
-    // nullopt => inherits max_sender_lanes (existing behavior). Set max_sender_lanes = 1
-    // and max_cable_lanes = 2 (with cable_mux = true) to run 2 cable lanes while keeping
-    // 1 in-mesh lane per stream.
+    // Relay mode only: override max lanes used by exit relays over inter-mesh cable links (1 or 2).
+    // nullopt (default) => inherits max_sender_lanes (2 by default, giving 2 cable lanes + 2 in-mesh
+    // lanes when both cable_mux and instage_mux are true). Only needed when decoupling cable lanes
+    // from in-mesh lanes (e.g. cable_mux = true with instage_mux = false).
     std::optional<uint32_t> max_cable_lanes = std::nullopt;
 
     // Relay mode only: place a persistent FabricMux on link 0 of each cable chip's cable
