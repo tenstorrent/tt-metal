@@ -414,6 +414,7 @@ public:
 
     // Re-runs UMD topology discovery and rebuilds ethernet_sockets_ and frequent_retrain_cores_.
     // Call after link retraining to allow continued operation without restarting the process.
+    // Cores reserved for fabric routers stay reserved while their link is up. Silicon only.
     void rediscover_ethernet_links();
 
     const std::unordered_map<tt::tt_metal::CoreCoord, EthRouterMode>& get_eth_routing_info(ChipId chip_id) const {

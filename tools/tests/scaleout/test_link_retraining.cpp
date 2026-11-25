@@ -3,18 +3,31 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "tools/scaleout/validation/utils/cluster_validation_utils.hpp"
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
+#include "tt_metal/fabric/link_retrainer.hpp"
 #include "tt_metal/fabric/physical_system_discovery.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include <tt-umd/types/xy_pair.hpp>
 #include <tt-umd/types/wormhole_eth.hpp>
 #include <tt-umd/types/blackhole_eth.hpp>
 #include <factory_system_descriptor/utils.hpp>
+#include "protobuf/factory_system_descriptor.pb.h"
+#include <google/protobuf/text_format.h>
 #include <gtest/gtest.h>
 #include <yaml-cpp/yaml.h>
 #include <fmt/format.h>
+#include <algorithm>
+#include <array>
 #include <cstddef>
+#include <filesystem>
+#include <fstream>
+#include <map>
+#include <memory>
+#include <optional>
+#include <set>
+#include <tuple>
 #include <type_traits>
 
 namespace tt::scaleout_tools {
@@ -367,6 +380,224 @@ TEST_F(DirectedRetrainingFixture, TestLinkRetrainingWithDescriptorRefresh) {
 
     // Validate that the refreshed topology matches the expected cabling
     validate_connectivity(get_physical_system_descriptor(), get_cabling_descriptor_path());
+}
+
+// A factory system descriptor listing exactly the cables live discovery found on this host, so a cable faked
+// down afterwards is the only factory cable missing.
+void write_factory_descriptor_matching_live(
+    const tt::tt_metal::PhysicalSystemDescriptor& live, const std::filesystem::path& path) {
+    using CableEnd = std::tuple<uint32_t, uint32_t, uint32_t>;  // tray, ASIC location, channel
+    std::map<uint32_t, BoardType> tray_board_types;
+    std::set<std::pair<CableEnd, CableEnd>> cables;
+
+    const auto& asics = live.get_asic_descriptors();
+    for (const auto& [src, edges] : live.get_asic_topology(live.my_host_name())) {
+        const auto& src_desc = asics.at(src);
+        tray_board_types[*src_desc.tray_id] = src_desc.board_type;
+        for (const auto& [dst, eth_connections] : edges) {
+            const auto dst_desc = asics.find(dst);
+            if (dst_desc == asics.end()) {
+                continue;
+            }
+            for (const auto& eth_connection : eth_connections) {
+                const CableEnd a{*src_desc.tray_id, *src_desc.asic_location, eth_connection.src_chan};
+                const CableEnd b{*dst_desc->second.tray_id, *dst_desc->second.asic_location, eth_connection.dst_chan};
+                cables.emplace(std::min(a, b), std::max(a, b));
+            }
+        }
+    }
+
+    fsd::proto::FactorySystemDescriptor fsd;
+    fsd.add_hosts()->set_hostname(live.my_host_name());
+    for (const auto& [tray_id, board_type] : tray_board_types) {
+        auto* location = fsd.mutable_board_types()->add_board_locations();
+        location->set_host_id(0);
+        location->set_tray_id(tray_id);
+        location->set_board_type(tt::board_type_to_string(board_type));
+    }
+    const auto set_endpoint = [](fsd::proto::FactorySystemDescriptor::EndPoint* endpoint, const CableEnd& end) {
+        endpoint->set_host_id(0);
+        endpoint->set_tray_id(std::get<0>(end));
+        endpoint->set_asic_location(std::get<1>(end));
+        endpoint->set_chan_id(std::get<2>(end));
+    };
+    for (const auto& [a, b] : cables) {
+        auto* connection = fsd.mutable_eth_connections()->add_connection();
+        set_endpoint(connection->mutable_endpoint_a(), a);
+        set_endpoint(connection->mutable_endpoint_b(), b);
+    }
+
+    std::string text;
+    TT_FATAL(google::protobuf::TextFormat::PrintToString(fsd, &text), "Failed to print the factory system descriptor");
+    std::ofstream(path) << text;
+}
+
+// Retraining factory cables through the control plane. Blackhole silicon on a single host: the control plane is
+// built with auto-discovery, and a cable is faked down by overwriting the training status of both of its ends.
+// FAIL rather than IN_PROGRESS, which UMD discovery would wait out before treating the link as down.
+class FactoryCableRetrainFixture : public ::testing::Test {
+protected:
+    static constexpr uint32_t kEthTrainSuccess = 1;
+    static constexpr uint32_t kEthTrainFail = 2;
+
+    struct LinkEnd {
+        ChipId chip_id;
+        uint8_t channel;
+    };
+
+    tt::tt_metal::MetalContext* context_{};
+    tt::Cluster* cluster_{};
+    std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> distributed_context_;
+    std::unique_ptr<tt::tt_fabric::ClusterLinkRetrainer> retrainer_;
+    std::array<LinkEnd, 2> link_{};
+    std::filesystem::path fsd_path_ = std::filesystem::temp_directory_path() / "factory_cable_retrain_fsd.textproto";
+    std::optional<std::string> saved_fsd_path_;
+
+    void SetUp() override {
+        context_ = &tt::tt_metal::MetalContext::instance();
+        cluster_ = &context_->get_cluster();
+        distributed_context_ = context_->get_distributed_context_ptr();
+
+        if (cluster_->arch() != tt::ARCH::BLACKHOLE ||
+            cluster_->get_target_device_type() != tt::TargetDevice::Silicon ||
+            !cluster_->supports_ethernet_link_retraining()) {
+            GTEST_SKIP() << "Workload link retraining requires Blackhole silicon with ETH FW >= 1.9.0";
+        }
+        if (*distributed_context_->size() != 1) {
+            GTEST_SKIP() << "Control plane auto-discovery is single host only";
+        }
+
+        const auto live = tt::tt_metal::run_physical_system_discovery(
+            *cluster_->get_cluster_desc(), distributed_context_, cluster_->get_target_device_type());
+        const auto cable = find_cable_between_mmio_chips(live);
+        if (!cable.has_value()) {
+            GTEST_SKIP() << "No cable between two MMIO chips on this host";
+        }
+        link_ = *cable;
+        log_info(
+            tt::LogTest,
+            "Faking down the cable between chip {} channel {} and chip {} channel {}",
+            link_[0].chip_id,
+            link_[0].channel,
+            link_[1].chip_id,
+            link_[1].channel);
+
+        write_factory_descriptor_matching_live(live, fsd_path_);
+        auto& rtoptions = context_->rtoptions();
+        saved_fsd_path_ = rtoptions.get_factory_system_descriptor_path();
+        rtoptions.set_factory_system_descriptor_path(fsd_path_.string());
+
+        retrainer_ =
+            std::make_unique<tt::tt_fabric::ClusterLinkRetrainer>(*cluster_, context_->hal(), distributed_context_);
+    }
+
+    void TearDown() override {
+        // Later tests in the process expect the cable up and the cluster to know it.
+        if (retrainer_ != nullptr && !link_trained()) {
+            retrainer_->retrain(link_endpoints());
+            cluster_->rediscover_ethernet_links();
+        }
+        if (saved_fsd_path_.has_value()) {
+            auto& rtoptions = context_->rtoptions();
+            rtoptions.set_factory_system_descriptor_path(*saved_fsd_path_);
+            rtoptions.set_fsd_link_retrain_attempts(0);
+            std::filesystem::remove(fsd_path_);
+        }
+    }
+
+    std::optional<std::array<LinkEnd, 2>> find_cable_between_mmio_chips(
+        const tt::tt_metal::PhysicalSystemDescriptor& live) const {
+        const auto* cluster_desc = cluster_->get_cluster_desc();
+        const auto& asics = live.get_asic_descriptors();
+        for (const auto& [src, edges] : live.get_asic_topology(live.my_host_name())) {
+            const ChipId src_chip = asics.at(src).umd_unique_id;
+            for (const auto& [dst, eth_connections] : edges) {
+                const auto dst_desc = asics.find(dst);
+                if (dst_desc == asics.end() || eth_connections.empty()) {
+                    continue;
+                }
+                const ChipId dst_chip = dst_desc->second.umd_unique_id;
+                if (cluster_desc->is_chip_mmio_capable(src_chip) && cluster_desc->is_chip_mmio_capable(dst_chip)) {
+                    return std::array{
+                        LinkEnd{src_chip, eth_connections.front().src_chan},
+                        LinkEnd{dst_chip, eth_connections.front().dst_chan}};
+                }
+            }
+        }
+        return std::nullopt;
+    }
+
+    std::vector<tt::tt_fabric::EthLinkEndpoint> link_endpoints() const {
+        std::vector<tt::tt_fabric::EthLinkEndpoint> endpoints;
+        for (const auto& end : link_) {
+            endpoints.push_back(
+                {end.chip_id, end.channel, fmt::format("chip {} channel {}", end.chip_id, end.channel)});
+        }
+        return endpoints;
+    }
+
+    void fake_link_down() const {
+        for (const auto& end : link_) {
+            set_link_training_status(
+                *cluster_, end.chip_id, get_eth_core_coord(*cluster_, end.chip_id, end.channel), kEthTrainFail);
+        }
+    }
+
+    bool link_trained() const {
+        return std::all_of(link_.begin(), link_.end(), [this](const LinkEnd& end) {
+            return get_link_training_status(
+                       *cluster_, end.chip_id, get_eth_core_coord(*cluster_, end.chip_id, end.channel)) ==
+                   kEthTrainSuccess;
+        });
+    }
+
+    std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(uint32_t retrain_attempts) {
+        auto& rtoptions = context_->rtoptions();
+        rtoptions.set_fsd_link_retrain_attempts(retrain_attempts);
+        return std::make_unique<tt::tt_fabric::ControlPlane>(
+            *cluster_,
+            rtoptions,
+            context_->hal(),
+            *distributed_context_,
+            tt::tt_metal::FabricSettings{
+                .reliability_mode = tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE},
+            retrainer_.get());
+    }
+
+    static std::size_t missing_link_records(const tt::tt_fabric::ControlPlane& control_plane) {
+        return control_plane.get_downed_links().size() + control_plane.get_unused_downed_links().size();
+    }
+
+    std::filesystem::path unretrainable_channels_report() const {
+        return std::filesystem::path(context_->rtoptions().get_logs_dir()) / "generated" / "fabric" /
+               "unretrainable_channels.yaml";
+    }
+};
+
+TEST_F(FactoryCableRetrainFixture, ControlPlaneRetrainsCableMissingAtStartup) {
+    fake_link_down();
+    cluster_->rediscover_ethernet_links();
+    ASSERT_FALSE(link_trained());
+
+    const auto control_plane = make_control_plane(2);
+
+    EXPECT_TRUE(link_trained());
+    EXPECT_EQ(missing_link_records(*control_plane), 0u);
+    EXPECT_FALSE(std::filesystem::exists(unretrainable_channels_report()));
+}
+
+TEST_F(FactoryCableRetrainFixture, RefreshSeesCableGoDownAndComeBack) {
+    const auto control_plane = make_control_plane(0);
+    ASSERT_EQ(missing_link_records(*control_plane), 0u);
+
+    fake_link_down();
+    control_plane->refresh_connectivity_diff();
+    // One cable, recorded from each of its ends.
+    EXPECT_EQ(missing_link_records(*control_plane), 2u);
+
+    EXPECT_TRUE(retrainer_->retrain(link_endpoints()).empty());
+    control_plane->refresh_connectivity_diff();
+    EXPECT_EQ(missing_link_records(*control_plane), 0u);
 }
 
 }  // namespace tt::scaleout_tools

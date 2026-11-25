@@ -162,7 +162,7 @@ The records in `get_downed_links()` on this host that ethernet also reports down
 
 ### `refresh_connectivity_diff()`
 
-Recomputes both sets against the current PSD. No-op with no FSD. References returned by the getters above are invalid after it returns.
+Rediscovers the ethernet links, then recomputes both sets against what is live now. No-op with no FSD. Every rank must call it. References returned by the getters above are invalid after it returns.
 
 ### `get_link_health()`
 

@@ -1352,13 +1352,35 @@ void Cluster::disable_ethernet_cores_with_retrain() {
 void Cluster::rediscover_ethernet_links() {
     this->driver_->refresh_cluster_description();
 
+    // Fabric keeps the cores it reserved while their link is still up: the control plane can refresh with
+    // fabric configured, and its routers stay on those cores. A link that went down takes both of its
+    // ends out of the active set, so a reservation never survives on one end only.
+    std::vector<std::pair<ChipId, tt::tt_metal::CoreCoord>> fabric_router_cores;
+    for (const auto& [chip_id, eth_cores] : this->device_eth_routing_info_) {
+        for (const auto& [eth_core, mode] : eth_cores) {
+            if (mode == EthRouterMode::FABRIC_ROUTER) {
+                fabric_router_cores.emplace_back(chip_id, eth_core);
+            }
+        }
+    }
+
     // initialize_ethernet_cores_router_mode is insert-only; clear first so stale entries
-    // (gone chips/cores, prior fabric router reservations) don't survive the refresh.
+    // (gone chips/cores) don't survive the refresh.
     this->device_eth_routing_info_.clear();
     this->ethernet_sockets_.clear();
     this->frequent_retrain_cores_.clear();
 
     this->initialize_ethernet_cores_router_mode();
+    for (const auto& [chip_id, eth_core] : fabric_router_cores) {
+        const auto chip = this->device_eth_routing_info_.find(chip_id);
+        if (chip == this->device_eth_routing_info_.end()) {
+            continue;
+        }
+        const auto core = chip->second.find(eth_core);
+        if (core != chip->second.end()) {
+            core->second = EthRouterMode::FABRIC_ROUTER;
+        }
+    }
     this->disable_ethernet_cores_with_retrain();
     this->initialize_ethernet_sockets();
 
