@@ -133,8 +133,8 @@ __attribute__((noinline)) bool end_round(RoundCounters& counters, bool send_atte
 #if defined(PROFILE_STREAMING) && defined(ARCH_BLACKHOLE)
     // The streaming profiler's clock sync port on this link (link_sync.hpp): the host gives one ERISC of a synced link
     // a role (ERISC 0, whatever router program it runs) and every other ERISC a hook that does nothing. The port sends
-    // on a TX queue of its own; it serves a round of stamped frames when one is due, checked every few rounds.
-    link_sync::RouterHook::step(counters.heartbeat);
+    // on a TX queue of its own; it serves a round of stamped frames when one is due, polled here and in the loops.
+    link_sync::RouterHook::poll();
 #endif
     if constexpr (is_context_switch_master) {
         if (IDLE_CONTEXT_SWITCHING && send_attempted) {

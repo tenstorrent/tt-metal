@@ -1060,9 +1060,25 @@ __attribute__((noinline)) void run() {
         restore_worker_credit_presets(loop_copy, states);
         while (next_round()) {
             before_round(round, loop_copy, states);
+#if defined(PROFILE_STREAMING) && defined(ARCH_BLACKHOLE)
+            // The streaming profiler's clock sync port (link_sync.hpp) is polled after every part of a round's passes.
+            // A part is as long as the receiver loop's passes between context-switch checks; without a port, the round.
+            constexpr size_t passes_per_clock_sync_poll =
+                link_sync::RouterHook::kHasPort
+                    ? std::min(iterations_between_ctx_switch_and_teardown_checks, FOLLOW_POLL_PASSES)
+                    : iterations_between_ctx_switch_and_teardown_checks;
+            for (size_t c = 0; c < iterations_between_ctx_switch_and_teardown_checks / passes_per_clock_sync_poll;
+                 c++) {
+                for (size_t n = 0; n < passes_per_clock_sync_poll; n++) {
+                    pass(loop_copy, states, channels_in_flight, round.send_yielded);
+                }
+                link_sync::RouterHook::poll();
+            }
+#else
             for (size_t n = 0; n < iterations_between_ctx_switch_and_teardown_checks; n++) {
                 pass(loop_copy, states, channels_in_flight, round.send_yielded);
             }
+#endif
             after_round<false>(round, loop_copy, states, [] { return false; });
         }
     }
