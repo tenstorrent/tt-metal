@@ -247,6 +247,7 @@ MatmulReduceScatterPrefillParams resolve_params(
         .math_approx_mode = compute_kernel_config.has_value() && compute_kernel_config->math_approx_mode,
         .output_memory_config = out_mem,
         .plan_inputs = plan_inputs,
+        .dedicated_read_noc = false,
     };
 }
 
@@ -264,9 +265,10 @@ Tensor experimental::matmul_reduce_scatter_prefill(
     const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output_tensor,
-    const std::optional<uint32_t>& l1_headroom) {
+    const std::optional<uint32_t>& l1_headroom,
+    bool dedicated_read_noc) {
     using namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill;
-    const MatmulReduceScatterPrefillParams params = resolve_params(
+    MatmulReduceScatterPrefillParams params = resolve_params(
         input_tensor,
         weight,
         cluster_axis,
@@ -277,6 +279,7 @@ Tensor experimental::matmul_reduce_scatter_prefill(
         memory_config,
         l1_headroom,
         output_tensor.has_value());
+    params.dedicated_read_noc = dedicated_read_noc;
     record_last_plan(params);
     return ttnn::prim::matmul_reduce_scatter_prefill(input_tensor, weight, output_tensor, params);
 }

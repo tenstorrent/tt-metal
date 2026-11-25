@@ -39,6 +39,7 @@ Tensor matmul_reduce_scatter_prefill(
     const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& output_tensor = std::nullopt,
-    const std::optional<uint32_t>& l1_headroom = std::nullopt);
+    const std::optional<uint32_t>& l1_headroom = std::nullopt,
+    bool dedicated_read_noc = false);
 
 }  // namespace ttnn::experimental

@@ -31,6 +31,9 @@ struct MatmulReduceScatterPrefillParams {
     // program hash over these 15 scalars keys the program exactly, and a hot call neither copies nor hashes the plan's
     // per-chip schedules. plan() looks the solved plan up.
     detail::PlanInputs plan_inputs;
+    // Opt-in (default false = unchanged program): the reader issues W's DRAM reads on its own NoC0 too, never on the
+    // writer's NoC1. Qwen3.6-27B's bring-up validated with it; other callers keep the measured NoC choice below.
+    bool dedicated_read_noc = false;
 
     const detail::Plan& plan() const { return detail::solve_plan(plan_inputs); }
 };

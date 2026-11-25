@@ -534,7 +534,8 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
     // derived rule (the likely mechanism, each NoC's dimension order funnelling the DRAM responses into the W senders'
     // rows or columns, is unverified). Subject to change as more grid shapes are measured.
     const bool w_noc0_thin_wide = resident && scatter_dim == -1 && !m_on_x && gd.grid_m <= 4 && gd.grid_n >= 10;
-    reader_ct[args::reader_ct::W_READ_NOC] = (resident && !w_noc0_thin_wide) ? 1 : 0;
+    // dedicated_read_noc (opt-in): both operands on NoC0, the reader's own interface; the NoC1 writer owns NoC1.
+    reader_ct[args::reader_ct::W_READ_NOC] = (resident && !w_noc0_thin_wide && !attrs.dedicated_read_noc) ? 1 : 0;
     reader_ct[args::reader_ct::NUM_WAVES] = W;
     reader_ct[args::reader_ct::NUM_CHUNKS] = num_chunks;
     reader_ct[args::reader_ct::N_INNER] = n_inner;
