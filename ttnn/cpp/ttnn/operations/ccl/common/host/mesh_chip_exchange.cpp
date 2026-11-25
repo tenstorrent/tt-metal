@@ -62,9 +62,12 @@ ChipRecords exchange_chip_records(
     uint32_t words_per_chip,
     const std::function<std::vector<uint32_t>(const ttnn::MeshCoordinate&)>& local_record,
     const std::string& config_key) {
+    // Only a mesh shared between hosts pays for a collective; a single-host mesh recomputes its records every call.
+    const bool use_cache = context.has_value() && !config_key.empty();
     const auto cache_key =
-        std::make_pair(static_cast<int>(mesh.id()), cache_signature(mesh, words_per_chip, config_key));
-    if (!config_key.empty()) {
+        use_cache ? std::make_pair(static_cast<int>(mesh.id()), cache_signature(mesh, words_per_chip, config_key))
+                  : std::pair<int, std::string>{};
+    if (use_cache) {
         const std::lock_guard lock(cache_mutex());
         const auto hit = cache().find(cache_key);
         if (hit != cache().end()) {
@@ -124,7 +127,7 @@ ChipRecords exchange_chip_records(
         records[index].assign(all.begin() + base + OWNER_WORDS, all.begin() + base + stride);
     }
 
-    if (!config_key.empty()) {
+    if (use_cache) {
         const std::lock_guard lock(cache_mutex());
         cache().emplace(cache_key, records);
     }
