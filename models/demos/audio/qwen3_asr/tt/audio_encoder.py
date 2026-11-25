@@ -6,7 +6,8 @@
 
 Structure mirrors `reference/audio_encoder_ref.py` (validated PCC=1.0 vs golden):
 `encode_mel`: ttnn.conv2d frontend (on device) -> + sinusoidal PE -> 24 pre-LN transformer
-layers (full bidirectional attention via fused SDPA) -> ln_post -> proj1 -> GELU -> proj2.
+layers (bidirectional attention within 104-token windows, as vLLM serves the model) -> ln_post
+-> proj1 -> GELU -> proj2.
 
 Speed: q/k/v fused into one matmul + `nlp_create_qkv_heads`; attention is the fused
 flash kernel `ttnn.transformer.scaled_dot_product_attention`; FFN keeps activations
@@ -55,7 +56,29 @@ def _to_dev(t, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
 
 
 N_WINDOW = 50
+N_WINDOW_INFER = 800
+TOKENS_PER_CHUNK = 13
+# Attention window in tokens: n_window_infer mel frames = 8 chunks.
+WINDOW_TOKENS = TOKENS_PER_CHUNK * (N_WINDOW_INFER // (N_WINDOW * 2))  # 104
 DS_HIDDEN = 480
+
+
+def feat_out_len(frames: int) -> int:
+    """Audio tokens the model keeps for `frames` mel frames (the partial last chunk keeps fewer than 13)."""
+    leave = int(frames) % 100
+    feat = (leave - 1) // 2 + 1
+    return ((feat - 1) // 2 + 1 - 1) // 2 + 1 + (int(frames) // 100) * TOKENS_PER_CHUNK
+
+
+def window_bounds(n_valid: int, n_total: int) -> list:
+    """cu_window_seqlens for `n_valid` real tokens padded to `n_total`.
+
+    Real tokens attend within 104-token windows. Padded tokens form their own last window,
+    so real tokens never attend to them and they stay finite."""
+    bounds = list(range(0, n_valid, WINDOW_TOKENS)) + [n_valid]
+    if n_total > n_valid:
+        bounds.append(n_total)
+    return bounds
 
 
 def preprocess_conv_weights(w, device):
@@ -74,12 +97,13 @@ def preprocess_conv_weights(w, device):
     return cp
 
 
-def conv_frontend_tt(mel, conv_w, conv_out_w, conv_out_b, device):
-    """mel (num_mel=128, T) -> (n_chunks*13, d_model=1024) on device, pre-PE.
-    Mirrors reference.conv_frontend but the 3 conv2d (+GELU) + conv_out run on TT."""
+def conv_frontend_tt(mel, conv_w, conv_out_w, conv_out_b, device, n=None, chunk=N_WINDOW * 2):
+    """mel (num_mel=128, T) -> (n, tokens_per_chunk, d_model=1024) on device, pre-PE.
+    Mirrors reference.conv_frontend but the 3 conv2d (+GELU) + conv_out run on TT.
+    Chunks are `chunk` mel frames wide (13 tokens at 100). `n` >= ceil(T / chunk) chunks;
+    chunks past the mel are all-zero."""
     nm, T = mel.shape
-    chunk = N_WINDOW * 2  # 100
-    n = (T + chunk - 1) // chunk
+    n = (T + chunk - 1) // chunk if n is None else n
     pieces = []
     for i in range(n):
         seg = mel[:, i * chunk : (i + 1) * chunk]
@@ -100,10 +124,13 @@ def conv_frontend_tt(mel, conv_w, conv_out_w, conv_out_b, device):
     )
     for name in ("conv2d1", "conv2d2", "conv2d3"):
         c = conv_w[name]
-        conv_out, [H, W], [c["weight"], c["bias"]] = ttnn.conv2d(
+        # conv2d returns weights prepared for this batch size's sharding; reusing them at
+        # another batch size fails, so keep one prepared set per input shape.
+        prepared = c.setdefault("prepared", {}).get((n, chunk), (c["weight"], c["bias"]))
+        conv_out, [H, W], c["prepared"][(n, chunk)] = ttnn.conv2d(
             input_tensor=xt,
-            weight_tensor=c["weight"],
-            bias_tensor=c["bias"],
+            weight_tensor=prepared[0],
+            bias_tensor=prepared[1],
             in_channels=c["in_ch"],
             out_channels=c["out_ch"],
             device=device,
@@ -195,11 +222,23 @@ def _sinusoid_pe(per_chunk=13):
 
 def encode_mel(mel, params, device):
     """Full-TT encoder from mel (num_mel, T): TT conv2d frontend -> +PE -> transformer
-    -> projector. Returns audio embeds (S, output_dim) as torch."""
-    conv_d = conv_frontend_tt(mel, params["conv_w"], params["conv_out_w"], None, device)  # (n,13,1024) device RM
-    n = int(conv_d.shape[0])
-    per_chunk = 13
-    pe_key = id(device)
+    -> projector. Returns audio embeds (feat_out_len(T), output_dim) as torch.
+
+    The chunk count is padded to a whole window (8 chunks), so clips up to 32 s use 4
+    shapes. Padded chunks and the padded tokens of a partial last chunk are excluded
+    from attention and dropped from the output. A clip under one chunk runs the conv at
+    its own width, as the model does: there, padding would change its last tokens."""
+    T = int(mel.shape[1])
+    chunk = N_WINDOW * 2
+    if T < chunk:
+        n, chunk = 1, T
+    else:
+        chunks_per_window = WINDOW_TOKENS // TOKENS_PER_CHUNK
+        n_real = (T + chunk - 1) // chunk
+        n = (n_real + chunks_per_window - 1) // chunks_per_window * chunks_per_window
+    conv_d = conv_frontend_tt(mel, params["conv_w"], params["conv_out_w"], None, device, n=n, chunk=chunk)
+    per_chunk = int(conv_d.shape[1])
+    pe_key = (id(device), per_chunk)
     if pe_key not in _PE_TT:
         pe = _sinusoid_pe(per_chunk).view(1, per_chunk, D_MODEL)
         _PE_TT[pe_key] = _from_torch(pe, device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -208,10 +247,19 @@ def encode_mel(mel, params, device):
     S = n * per_chunk
     x = ttnn.reshape(x, (1, 1, S, D_MODEL))
     x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-    return encode(x, params, device, S=S)
+    S_valid = feat_out_len(T)
+    cu = _from_torch(
+        torch.tensor(window_bounds(S_valid, S), dtype=torch.int32),
+        device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+    out = encode(x, params, device, S=S_valid, cu_window_seqlens=cu)
+    ttnn.deallocate(cu)
+    return out
 
 
-def _layer(x, lp, device):
+def _layer(x, lp, device, cu_window_seqlens=None):
     core = ttnn.CoreGrid(y=device.compute_with_storage_grid_size().y, x=device.compute_with_storage_grid_size().x)
     residual = x  # (1,1,S,D)
     h = ttnn.layer_norm(x, weight=lp["ln1_w"], bias=lp["ln1_b"], epsilon=LN_EPS, compute_kernel_config=HIFI4)
@@ -231,6 +279,7 @@ def _layer(x, lp, device):
         v,
         is_causal=False,
         scale=HEAD_DIM**-0.5,
+        cu_window_seqlens=cu_window_seqlens,
     )
     ttnn.deallocate(q)
     ttnn.deallocate(k)
@@ -269,9 +318,10 @@ def _layer(x, lp, device):
     return x
 
 
-def encode(x_in, params, device, S=None):
+def encode(x_in, params, device, S=None, cu_window_seqlens=None):
     """x_in: (S, D_MODEL) torch, or a (1,1,S,D) device tensor with PE already added.
-    Returns (S, output_dim) torch."""
+    Returns the first S rows, (S, output_dim) torch. Attention is over all rows unless
+    `cu_window_seqlens` (device uint32 window bounds) is given."""
     if isinstance(x_in, ttnn.Tensor):
         x = x_in
         if S is None:
@@ -286,7 +336,7 @@ def encode(x_in, params, device, S=None):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # (1,1,S,D)
     for lp in params["layers"]:
-        x = _layer(x, lp, device)
+        x = _layer(x, lp, device, cu_window_seqlens)
     x = ttnn.layer_norm(
         x, weight=params["lnpost_w"], bias=params["lnpost_b"], epsilon=LN_EPS, compute_kernel_config=HIFI4
     )
