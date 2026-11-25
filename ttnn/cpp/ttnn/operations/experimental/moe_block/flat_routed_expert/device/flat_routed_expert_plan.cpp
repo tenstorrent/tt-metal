@@ -393,6 +393,9 @@ FlatRoutedExpertPlan make_plan(
     }
     // the down weight ring: two whole experts with pinning (the pinned schedule's regions), else 1.5
     p.down_weight_ring_experts = cfg.pin ? 2.0f : 1.5f;
+    if (const char* e = std::getenv("FLAT_DOWN_RING"); e != nullptr) {  // (MEASUREMENT ONLY)
+        p.down_weight_ring_experts = std::strtof(e, nullptr);
+    }
 
     // ---- layout ----
     p.bank_anchor_cores = opt;

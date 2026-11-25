@@ -118,21 +118,46 @@ FORCE_INLINE void free_weight_block() {
 }
 
 // The K steps of one x block: x row tiles [rows][x_block_k_tiles] from tile x_index on, times the weight block at
-// w_index. A full sub-block (or pass) takes the compile-time row count FULL, which lets the LLK unroll its per-tile
-// loops; only a short last sub-block runs with the runtime one. The short form is out of line: the TRISCs fetch the K
-// loop's code, and a second inlined copy of the loop slows the common one.
+// w_index (row-major, row_width tiles a K row). One matmul_block_k: the unpacker unpacks the K steps and the math runs
+// them in one LLK call - bit-identical to a matmul_block a step, without the per-step call overhead (the 2 x 2 tile
+// output of a GLM-5.3 row pass is short on math per call). A full sub-block (or pass) takes the compile-time row
+// count FULL, which lets the LLK unroll its per-tile loops; only a short last sub-block runs with the runtime one.
+// The short form is out of line: the TRISCs fetch the K loop's code, and a second inlined copy slows the common one.
+// (MEASUREMENT ONLY: gate_up_k_steps 0 - the per-step matmul_block loop, the A/B)
+constexpr bool k_steps_call = get_named_compile_time_arg_val("gate_up_k_steps") != 0;
 __attribute__((noinline)) void matmul_x_block_short(uint32_t x_index, uint32_t w_index, uint32_t rows) {
-    for (uint32_t k = 0; k < x_block_k_tiles; ++k) {
-        matmul_block(x_cb, weight_cb, x_index + k, w_index + k * row_width, 0, false, row_width, rows, x_block_k_tiles);
+    if constexpr (k_steps_call) {
+        matmul_block_k(
+            x_cb, weight_cb, x_index, w_index, 0, false, row_width, rows, x_block_k_tiles, x_block_k_tiles, row_width);
+    } else {
+        for (uint32_t k = 0; k < x_block_k_tiles; ++k) {
+            matmul_block(
+                x_cb, weight_cb, x_index + k, w_index + k * row_width, 0, false, row_width, rows, x_block_k_tiles);
+        }
     }
 }
 
 template <uint32_t FULL>
 FORCE_INLINE void matmul_x_block(uint32_t x_index, uint32_t w_index, uint32_t rows) {
     if (rows == FULL) [[likely]] {
-        for (uint32_t k = 0; k < x_block_k_tiles; ++k) {
-            matmul_block(
-                x_cb, weight_cb, x_index + k, w_index + k * row_width, 0, false, row_width, FULL, x_block_k_tiles);
+        if constexpr (k_steps_call) {
+            matmul_block_k(
+                x_cb,
+                weight_cb,
+                x_index,
+                w_index,
+                0,
+                false,
+                row_width,
+                FULL,
+                x_block_k_tiles,
+                x_block_k_tiles,
+                row_width);
+        } else {
+            for (uint32_t k = 0; k < x_block_k_tiles; ++k) {
+                matmul_block(
+                    x_cb, weight_cb, x_index + k, w_index + k * row_width, 0, false, row_width, FULL, x_block_k_tiles);
+            }
         }
     } else {
         matmul_x_block_short(x_index, w_index, rows);
@@ -142,7 +167,12 @@ FORCE_INLINE void matmul_x_block(uint32_t x_index, uint32_t w_index, uint32_t ro
 // The activation over DST tiles [0, tiles): each (gate, up) pair becomes its h tile, on the PACK thread's SFPU (after
 // tile_regs_wait). Half-width: tiles t, t + 1 hold [gate | up] of an h tile's left and right 16 columns; both land in
 // the h tile's DST tile.
+// (MEASUREMENT ONLY: gate_up_skip_activation 1 - no activation, h is wrong; the A/B of its cost)
+constexpr bool skip_activation = get_named_compile_time_arg_val("gate_up_skip_activation") != 0;
 FORCE_INLINE void activate(uint32_t tiles) {
+    if constexpr (skip_activation) {
+        return;
+    }
     PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
     if constexpr (half_width) {
         // (one call site: two inlined copies of the SFPU body in this loop make the SFPI compiler's
