@@ -112,9 +112,9 @@ def _prep_reference(q, k, v, g, beta):
     intra = (q @ k.transpose(-1, -2) * l_mask).masked_fill(mask_causal, 0)  # :222
     # :237 — k * exp(decay_last - decay), transposed to [K,C]
     k_dec_t = (k * (decay[..., -1:] - decay).exp().unsqueeze(-1)).transpose(-1, -2)
-    # dl*I: exp(g_sum) on the diagonal of one 32x32 tile (the scan decays each state tile as (dl*I) @ S_tile,
-    # so the tile is a single 32x32 identity block whatever C or K are)
-    dl = decay[..., -1].exp()[..., None, None] * torch.eye(32, dtype=torch.float32)
+    # dl: exp(g_sum) in every element of one 32x32 fp32 tile whatever C or K are (the scan reads it as a
+    # scalar and scales the state by it on the SFPU)
+    dl = decay[..., -1].exp()[..., None, None] * torch.ones(32, 32, dtype=torch.float32)
     return v_beta, nkd, q_decay, intra, k_dec_t, dl, t_inv
 
 
@@ -128,7 +128,7 @@ def _scan_reference(v_beta, nkd, q_decay, intra, k_dec_t, dl, t_inv, s0):
     for c in range(nc):
         v_new = t_inv[:, c] @ (v_beta[:, c] + nkd[:, c] @ S)
         o[:, c] = q_decay[:, c] @ S + intra[:, c] @ v_new  # :229-232
-        S = S * dl[:, c, 0, 0][:, None, None] + k_dec_t[:, c] @ v_new  # :235-238 (dl = the diagonal value)
+        S = S * dl[:, c, 0, 0][:, None, None] + k_dec_t[:, c] @ v_new  # :235-238 (dl = the tile's value)
     return o, S
 
 
@@ -177,7 +177,7 @@ def test_prep_outputs_vs_torch(device, bh, nc, chunk):
     #   intra   1e-3: |q@k^T| <= scale (Cauchy-Schwarz on L2-normalized rows), L_mask <= 1;
     #                 128-term fp32 accumulation + one exp in the mask
     #   k_dec_t 5e-3: |k| <= 1 elementwise, decay factor exp(<=0) <= 1; one exp
-    #   dl      1e-4: dl*I tile; exp(sum g) <= 1 on the diagonal, exact zeros elsewhere; device forms dl as
+    #   dl      1e-4: dl tile; exp(sum g) <= 1 in every element; device forms dl as
     #                 exp(gsum-d0)*exp(d0) (two exps + a mul) vs torch's single exp — pure relative error
     #   t_inv   2.5e-3: both sides are mathematically exact inverses of the same matrix (device:
     #                 quadrant-split bounded Horner; golden: forward substitution); the device's
