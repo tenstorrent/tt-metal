@@ -97,7 +97,8 @@ inline void wait_subordinates() {
 
 thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS] __attribute__((used));
 thread_local uintptr_t g_dfb_config_base_addr __attribute__((used));
-volatile TxnDFBDescriptor g_txn_dfb_descriptor[32] __attribute__((used));
+thread_local uint32_t g_dfb_bound_mask __attribute__((used));
+TxnDFBDescriptor g_txn_dfb_descriptor[32] __attribute__((used));
 volatile KernelBarrier g_kernel_barrier[NUM_KERNEL_BARRIERS] __attribute__((used));
 
 extern "C" uint32_t _start1() {
@@ -197,8 +198,7 @@ extern "C" uint32_t _start1() {
                 my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
 
                 uint32_t tt_l1_ptr* dfb_l1_base =
-                    (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
-                                          launch_msg_address->kernel_config.local_cb_offset);
+                    (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.local_cb_offset);
                 start_subordinate_kernel_run_early(enables);
 
                 uint32_t num_local_dfbs = launch_msg_address->kernel_config.local_cb_mask;
@@ -252,8 +252,8 @@ extern "C" uint32_t _start1() {
 
         uintptr_t kernel_lma = launch_msg->kernel_config.kernel_text_offset[index];
 
-        uint32_t tt_l1_ptr* dfb_l1_base = (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
-                                                                launch_msg->kernel_config.local_cb_offset);
+        uint32_t tt_l1_ptr* dfb_l1_base =
+            (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.local_cb_offset);
         uint32_t num_local_dfbs = launch_msg->kernel_config.local_cb_mask;
 
         setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
