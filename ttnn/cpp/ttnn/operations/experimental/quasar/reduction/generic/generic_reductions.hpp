@@ -9,7 +9,7 @@
 #include <variant>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include "ttnn/types.hpp"
 
 namespace ttnn::operations::experimental::quasar {

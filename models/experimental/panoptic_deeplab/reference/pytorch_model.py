@@ -12,11 +12,11 @@ structure for numerical consistency validation.
 """
 
 import torch
-import pickle
 from typing import Dict, List, Optional, Tuple, Any, Set
 from torch import nn
 from loguru import logger
 
+from models.experimental.panoptic_deeplab.reference.restricted_pickle import load_restricted_pickle
 from models.experimental.panoptic_deeplab.reference.pytorch_semseg import PanopticDeepLabSemSegHead, ShapeSpec
 from models.experimental.panoptic_deeplab.reference.pytorch_insemb import PanopticDeepLabInsEmbedHead
 from models.experimental.panoptic_deeplab.reference.pytorch_postprocessing import get_panoptic_segmentation
@@ -141,7 +141,7 @@ class PytorchPanopticDeepLab(nn.Module):
         logger.info(f"Loading complete model weights from {weights_path}")
         try:
             with open(weights_path, "rb") as f:
-                state_dict = pickle.load(f)
+                state_dict = load_restricted_pickle(f)
             # Check if the state_dict is under the "model" key
             if "model" in state_dict:
                 state_dict = state_dict["model"]

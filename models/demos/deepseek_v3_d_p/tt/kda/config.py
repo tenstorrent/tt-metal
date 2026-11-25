@@ -28,9 +28,10 @@ KDA_PREP_OUTPUT_BF16_MASK = (1 << 1) | (1 << 2) | (1 << 5)
 # core; the rest of L1 holds the summary, prefix and scan buffers that run while the chunk terms are alive.
 # Single-device and longer-sequence geometries exceed the budget and would clash with those buffers.
 KDA_PREPARATION_L1_BYTES_PER_CORE = 320 * 1024
-# With the entry correction, the summary's emitted output terms also live in L1 next to the chunk terms, which then
-# fit Kimi-K3's per-chip workload on 11x10 and 12x10 grids.
-KDA_RELAY_PREPARATION_L1_BYTES_PER_CORE = 280 * 1024
+# With the entry correction, the summary's emitted output terms and the relay's landing buffer also live in L1 next
+# to the chunk terms, which then fit Kimi-K3's per-chip workload on a 12x10 grid (256 KiB per core). On 11x10 its
+# 279 KiB per core would push the emitted terms into the summary's circular buffers: its chunk terms stay in DRAM.
+KDA_RELAY_PREPARATION_L1_BYTES_PER_CORE = 256 * 1024
 # The decay gate stays in interleaved L1 from its projection until chunk preparation has read it when its share of
 # each worker core fits this budget (32 KiB for Kimi-K3 on Galaxy SP8xTP4); larger geometries keep it in DRAM.
 KDA_DECAY_L1_BYTES_PER_CORE = 48 * 1024
@@ -114,8 +115,8 @@ class KDARecurrenceProgramConfig:
     # With sequence parallelism and one group per head, the SP prefix is a relay along the SP axis (RelayChunkScan):
     # each rank applies its own summary to the entry state it receives and forwards the result. The summary also emits
     # each chunk's output terms, from which the relay's program forms the chunk outputs once the entry state lands, all
-    # chunks in parallel (the entry correction). Cores the relay may use (its heads' cores, so the cores per head): its
-    # products count toward the Blackhole di/dt bound.
+    # chunks in parallel (the entry correction). Matmul cores the relay may use (its correction and relay cores, so the
+    # cores per head): their products count toward the Blackhole di/dt bound.
     relay_max_cores: int = 110
 
     def __post_init__(self) -> None:

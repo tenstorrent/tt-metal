@@ -8,7 +8,7 @@
 
 #include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
 #include <tt-metalium/workload/utils/table.hpp>
-#include <tt-metalium/base_types.hpp>  // For MathFidelity, UnpackToDestMode
+#include <tt-metalium/workload/specification/compute_modes.hpp>  // For MathFidelity, UnpackToDestMode
 
 namespace tt::tt_metal {
 

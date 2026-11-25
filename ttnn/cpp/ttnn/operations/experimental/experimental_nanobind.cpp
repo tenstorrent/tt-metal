@@ -62,9 +62,6 @@
 #include "ttnn/operations/experimental/bcast_to/bcast_to_nanobind.hpp"
 #include "ttnn/operations/experimental/multi_scale_deformable_attn/multi_scale_deformable_attn_nanobind.hpp"
 #include "ttnn/operations/experimental/fused_msda/fused_msda_nanobind.hpp"
-#include "ttnn/operations/experimental/nomic_embed_text_v2_moe/routed_combine/routed_combine_nanobind.hpp"
-#include "ttnn/operations/experimental/nomic_embed_text_v2_moe/grouped_matmul/grouped_matmul_nanobind.hpp"
-#include "ttnn/operations/experimental/nomic_embed_text_v2_moe/routing_metadata/routing_metadata_nanobind.hpp"
 #include "ttnn/operations/experimental/modulated_deform_conv2d/modulated_deform_conv2d_nanobind.hpp"
 #include "ttnn/operations/experimental/reshape/view_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_nanobind.hpp"
@@ -84,6 +81,7 @@
 #include "ttnn/operations/experimental/indexer_score/indexer_score_nanobind.hpp"
 #include "ttnn/operations/experimental/gemma4/sliding_ring_sdpa/sliding_ring_sdpa_nanobind.hpp"
 #include "ttnn/operations/experimental/kda/kda_nanobind.hpp"
+#include "ttnn/operations/experimental/gdn/gdn_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/moe_gpt/moe_gpt_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/dispatch_fabric2d/dispatch_fabric2d_nanobind.hpp"
@@ -229,9 +227,6 @@ void py_module(nb::module_& mod) {
     broadcast_to::detail::bind_broadcast_to(mod);
     multi_scale_deformable_attn::detail::bind_multi_scale_deformable_attn(mod);
     fused_msda::detail::bind_fused_msda(mod);
-    ttnn::experimental::nomic_embed_text_v2_moe::bind_routed_combine(mod);
-    ttnn::experimental::nomic_embed_text_v2_moe::bind_grouped_matmul(mod);
-    ttnn::experimental::nomic_embed_text_v2_moe::bind_routing_metadata(mod);
     modulated_deform_conv2d::detail::bind_modulated_deform_conv2d(mod);
 
     minimal_matmul::detail::bind_minimal_matmul(mod);
@@ -247,6 +242,7 @@ void py_module(nb::module_& mod) {
     indexer_score::detail::bind_indexer_score(mod);
     ttnn::experimental::gemma4::bind_sliding_ring_sdpa(mod);
     kda::detail::bind_kda(mod);
+    gdn::detail::bind_gdn(mod);
     moe_gpt::detail::bind_moe_gpt(mod);
 
     // DeepSeek prefill MoE operations

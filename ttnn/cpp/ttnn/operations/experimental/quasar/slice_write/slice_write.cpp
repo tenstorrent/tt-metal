@@ -5,9 +5,9 @@
 #include "slice_write.hpp"
 #include "device/slice_write_device_operation.hpp"
 #include <tt_stl/assert.hpp>
-#include "tt-metalium/constants.hpp"
+#include "tt-metalium/data_formats/tile_constants.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include "tt-metalium/math.hpp"
+#include "tt-metalium/utils/math.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/experimental/quasar/to_layout/to_layout_op.hpp"
