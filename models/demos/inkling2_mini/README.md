@@ -302,21 +302,25 @@ vllm serve ... (as above, with "trace_region_size": 536870912) --no-async-schedu
 
 Chunked prefill (`PREFILL=<tokens>` in `serve.sh`, i.e. `INKLING_VLLM_PREFILL`; off by default): a new prompt of
 at least that many tokens runs through the chunked prefill instead of token by token. The process keeps the one
-PF-layout decode cache: for each expert step the prefill rebuilds the layer's plain expert tensors on the card
-from the PF tensors (`tt/pf_tiles.py`: whole-tile moves, about 10 ms a layer; the rebuilt tensors are the TILE
-cache's byte for byte and the prefill's logits are bit-equal to a TILE-cache process's). The decode traces are
-released around the prefill and the reply's first six steps capture them again (about 0.2 s each).
+PF-layout decode cache: the prefill's expert op reads its expert tensors in place (`gate_up_extra` /
+`down_extra`; a build without them rebuilds the plain tensors per layer with `tt/pf_tiles.py`, about 10 ms a
+layer). The prefill's logits are bit-equal to a TILE-cache process's.
 
-| `--max-model-len` | tokens per pass | first token, 8,424-token prompt | first token, 33,000-token prompt |
-|---|---:|---:|---:|
-| any, token by token | | 126.5 s | about 500 s |
-| 36864 | 8192 (one pass up to 8448) | 2.4 s; 2.1 s when the same length came before | 10.5 s |
-| 131072 | 4096 | 6.7 s; 3.6 s | 13.2 s |
-| 196608 | off: about 0.3 GiB of DRAM short | | |
+Measured through vLLM on one p100a, first token, streamed, greedy, warm (the first prompt of a new pass size
+compiles its kernels: 8.4 s for 8,424 tokens):
 
-- It costs DRAM, so context: 1.05 GiB for the prefill's own tensors, 2 GiB of room for a layer's rebuilt experts,
-  0.26 GiB per 1024 tokens of a pass. By that rule passes of 8192 tokens fit up to about a 94K context, 4096 up to
-  151K, 2048 up to 180K (measured: 36864 and 131072); the server says at start what it uses, or how much is short.
+| launch | `--max-model-len` | tokens per pass | 8,424-token prompt | 33,000-token prompt | reply |
+|---|---:|---:|---:|---:|---:|
+| token by token (no `PREFILL`) | any | | 126.5 s | about 500 s | 64 / 77 tok/s |
+| plain (`SPEC=0`) | 196608 | 4096 | 2.63 s | 16.6 s | 62.3 tok/s; 14.88 ms a step |
+| speculative | 131072 | 2048 | 3.8 to 4.0 s | 29.9 s (first time) | 74 to 81 tok/s |
+| speculative | 163840, 196608 | off: DRAM short | 127.8 s | | 72 to 75 tok/s |
+
+- It costs DRAM: 1.05 GiB for the prefill's own tensors, 1 GiB kept free beside a pass, and 0.26 GiB per 1024
+  tokens of a pass. The server picks the pass size at start and says what it uses, or how much is short. With
+  speculative decode the verify steps take 0.54 GiB more, so the prefill is off from about 160K on.
+- Only a new sequence is prefilled (position 0). A prompt that continues the conversation on the card is fed token
+  by token from where it starts.
 - Decode keeps its speed: speculative decode runs with it (the prefill also writes the drafter's context of the
   prompt), and the decode traces and the expert prefetch stay across a prefill (their L1 is freed and taken back
   at the same addresses): no slow steps after a prefill.
