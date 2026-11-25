@@ -16,7 +16,7 @@
 #include "test_utils/optimizer_state.hpp"
 #include "test_utils/program_cache.hpp"
 #include "test_utils/random_data.hpp"
-#include "tt-metalium/bfloat16.hpp"
+#include "tt-metalium/data_formats/bfloat16.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 
 using namespace ttml;

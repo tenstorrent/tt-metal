@@ -20,7 +20,7 @@
 #include "core/tt_tensor_utils.hpp"
 #include "metal/optimizers/adamw/adamw.hpp"
 #include "test_utils/program_cache.hpp"
-#include "tt-metalium/bfloat16.hpp"
+#include "tt-metalium/data_formats/bfloat16.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "xtensor/containers/xarray.hpp"
 
