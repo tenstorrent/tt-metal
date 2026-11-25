@@ -230,8 +230,9 @@ bool Tl1RingTransport::try_write(uint32_t endpoint_index, const std::vector<uint
                 return false;
             }
         }
-        // Strict ordering: each write completes before the next is issued, so a ring page lands before the count
-        // that covers it. A DRAM core's writes are otherwise relaxed.
+        // Strict ordering asks that a ring page land before the count that covers it; a DRAM core's writes default
+        // to relaxed. UMD's SimulationChip, which every Mimir chip is, drops the ordering, so there it changes
+        // nothing.
         const uint32_t slot = (endpoint.bytes_sent / kRequestPageBytes) % kCceRequestRingSlots;
         write_dram_core_l1(
             mesh_device_,
@@ -729,7 +730,8 @@ private:
         }
     }
 
-    // Zeroes each sender's CQ signal slots, ring meta and status, which the CCE kernel never does.
+    // Zeroes each sender's CQ signal slots, ring meta and status, which the CCE kernel never does. No barrier
+    // follows: UMD's SimulationChip, which every Mimir chip is, has empty barriers.
     static void zero_control_blocks(
         const MeshDevice& mesh_device,
         const std::vector<IDevice*>& devices,
@@ -740,7 +742,6 @@ private:
             for (const CoreCoord& sender_logical : sender_logical_cores) {
                 write_dram_core_l1(mesh_device, device, sender_logical, control_base, zeros);
             }
-            mesh_device.impl().metal_env().get_cluster().l1_barrier(device->id());
         }
     }
 

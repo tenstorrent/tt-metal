@@ -144,9 +144,8 @@ void deliver_chunk(
     // No invalidate before the loads. On the Mimir emulator a CCE re-reading GDDR after each host rewrite saw no stale
     // word in four rounds (2026-10-19). A reference model not checked against the hardware puts these SPAs on the
     // hart's MMIO port, which a Rocket core does not cache; the emulator result fits that but also fits a snooped
-    // cache. The tensor's DRAM writes land before the host releases a WAIT_CQ
-    // (SDMeshCommandQueue::enqueue_write_dram_core_counter) because the host transport acknowledges each write before
-    // sending the next.
+    // cache. The host issues the tensor's DRAM writes before the write that releases a WAIT_SIGNAL; that the Mimir
+    // transport lands them in that order is assumed, not confirmed.
     const uint32_t num_words = bytes / sizeof(uint32_t);
     experimental::cce_gddr_read(
         context.mimir, context.view_offset + view_byte_offset, stage_slot_addr + MEM_L1_UNCACHED_BASE, num_words);
