@@ -3,17 +3,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-``weights_tile_transposed`` of ``unified_routed_expert_moe``: every weight tile is stored transposed within itself
-(same tile grid) and the op's matmuls transpose it back as they unpack it.
+``unified_routed_expert_moe`` with weights in transposed tiles (``ttnn.Tile((32, 32), transpose_tile=True)``): every
+weight tile is stored transposed within itself (same tile grid) and the op's matmuls transpose it back as they unpack
+it, as ``ttnn.matmul`` does. The op reads the setting from the weight tensors' tile.
 
 Why: a bfloat4_b tile shares one exponent per 16 values along a tile row. In the normal (in, out) weight layout those
 16 values are 16 output columns of one input row. gpt-oss's GPTQ expert weights are rounded on the grid whose groups
 are 16 consecutive input rows of one output column (inside one MXFP4 block), so the normal layout re-rounds them.
 Transposing each tile puts the input dimension along the tile rows, where those values are stored exactly.
 
-The host test checks that packing claim (no device). The device test runs the real op on one chip with gpt-oss-20b
-expert shapes: with the flag it must compute the K-grouped weights' FFN (vs an fp32 reference on exactly those
-weights), and more accurately than the normal layout fed the same weights.
+The host test checks that packing claim with ttnn's own transposed-tile packing (no device). The device test runs the
+real op on one chip with gpt-oss-20b expert shapes: with transposed tiles it must compute the K-grouped weights' FFN (vs
+an fp32 reference on exactly those weights), and more accurately than the normal tiles fed the same weights.
 """
 
 import pytest
@@ -23,13 +24,12 @@ from loguru import logger
 
 import ttnn
 from tt_py_test_utils_common.utility_functions import is_blackhole
-from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from tests.ttnn.utils_for_testing import comp_pcc
 
 
 def tile_transpose(w):
-    """w [R, C] (R, C multiples of 32) with every 32x32 tile transposed in place (the layout the op reads with
-    weights_tile_transposed; the same helper as gpt-oss's experts/prefill_routed.py)."""
+    """w [R, C] (R, C multiples of 32) with every 32x32 tile transposed in place: the bytes a transposed-tile tensor
+    holds, built on the host (independent of ttnn's packing)."""
     R, C = w.shape[-2], w.shape[-1]
     assert R % 32 == 0 and C % 32 == 0, f"tile_transpose needs tile-aligned dims, got {tuple(w.shape)}"
     return w.reshape(R // 32, 32, C // 32, 32).transpose(1, 3).reshape(R, C).contiguous()
@@ -46,9 +46,14 @@ SINGLE_CHIP_MESH_PARAMS = [
 ]
 
 
-def _bf4_round_trip(t):
-    """t through a host bfloat4_b TILE pack and unpack (the device stores exactly these values)."""
-    return ttnn.to_torch(ttnn.from_torch(t.contiguous(), dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT)).float()
+TRANSPOSED_TILE = ttnn.Tile((ttnn.TILE_SIZE, ttnn.TILE_SIZE), transpose_tile=True)
+
+
+def _bf4_round_trip(t, tile=None):
+    """t through a host bfloat4_b TILE pack and unpack in `tile` (the device stores exactly these values)."""
+    return ttnn.to_torch(
+        ttnn.from_torch(t.contiguous(), dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, tile=tile)
+    ).float()
 
 
 def k_grouped_bf4(w_hf):
@@ -82,12 +87,14 @@ def test_tile_transpose_round_trip():
 
 
 def test_k_grouped_weights_pack_exactly_tile_transposed():
-    """Host only: K-grouped bfloat4_b values survive the tile-transposed pack bit-exactly; the normal pack re-rounds."""
+    """Host only: K-grouped bfloat4_b values survive ttnn's transposed-tile pack bit-exactly (the same values as the
+    host-built transposed tiles); the normal tile re-rounds them."""
     w = _k_grouped_weights()["gate_proj"]  # (out, in) on the K-grouped grid
-    stored_t = tile_transpose(w.T.contiguous())  # what the routed loader packs with GPT_OSS_PREFILL_GPTQ
-    assert torch.equal(_bf4_round_trip(stored_t), stored_t), "tile-transposed pack changed K-grouped values"
-    stored_n = w.T.contiguous()  # the normal layout
-    changed = (_bf4_round_trip(stored_n) != stored_n).float().mean().item()
+    logical = w.T.contiguous()  # (in, out), as the op reads it
+    stored_t = tile_transpose(logical)
+    assert torch.equal(_bf4_round_trip(stored_t), stored_t), "host-transposed tiles changed K-grouped values"
+    assert torch.equal(_bf4_round_trip(logical, TRANSPOSED_TILE), logical), "transposed-tile pack changed the values"
+    changed = (_bf4_round_trip(logical) != logical).float().mean().item()
     logger.info(f"normal-layout pack re-rounds {changed:.1%} of the K-grouped values")
     assert changed > 0.01, "expected the normal layout to re-round K-grouped values"
 
@@ -99,32 +106,30 @@ def _run_op(mesh_device, x, weights, num_tokens, tile_transposed):
         )
 
     global_idx, counts, offsets = idx([0]), idx([num_tokens]), idx([0])
-    torch_weights = {k: tile_transpose(v) for k, v in weights.items()} if tile_transposed else weights
-    expert = TtRoutedExpert(
-        mesh_device=mesh_device,
-        experts_per_chip=1,
-        global_expert_idx_table=global_idx,
-        emb_dim=EMB_DIM,
-        hidden_dim=HIDDEN_DIM,
-        max_tokens=num_tokens,
-        torch_weights=[torch_weights],
-        activations_dtype=ttnn.bfloat8_b,
-        weights_dtype=ttnn.bfloat4_b,
-        activation=ttnn.RoutedExpertActivation.SwiGluOai,
-    )
+
+    def weight(w_hf):
+        """HF (out, in) -> the op's (in, out) bfloat4_b weight, DRAM interleaved, in transposed tiles or not."""
+        return ttnn.from_torch(
+            w_hf.T.contiguous(),
+            dtype=ttnn.bfloat4_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            tile=TRANSPOSED_TILE if tile_transposed else None,
+        )
+
+    gate, up, down = weight(weights["gate_proj"]), weight(weights["up_proj"]), weight(weights["down_proj"])
     inp = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, device=mesh_device, dtype=ttnn.bfloat8_b)
     out = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
         inp,
         offsets,
         counts,
         global_idx,
-        expert.gate_projs,
-        expert.up_projs,
-        expert.down_projs,
+        [gate],
+        [up],
+        [down],
         max_dispatched_tokens_per_expert=num_tokens,
-        compute_kernel_config=expert.compute_kernel_config,
         activation=ttnn.RoutedExpertActivation.SwiGluOai,
-        weights_tile_transposed=tile_transposed,
     )
     return ttnn.to_torch(out).float().reshape(-1, EMB_DIM)[:num_tokens]
 
