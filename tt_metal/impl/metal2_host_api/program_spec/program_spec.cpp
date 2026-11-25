@@ -5,9 +5,9 @@
 #include <unordered_map>
 
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/mesh_workload.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt_stl/fmt.hpp>
 

@@ -220,6 +220,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(output_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
         constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
+        _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
         _llk_pack_matmul_init_(bfd_pack, rt_block, CT_DIM, 1 /*num_subblocks_c_dim*/, output_shape);
         PROFILER_SYNC();
     }

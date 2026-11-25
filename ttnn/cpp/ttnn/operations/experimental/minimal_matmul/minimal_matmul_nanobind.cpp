@@ -15,7 +15,7 @@
 #include "minimal_matmul.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/types.hpp"
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 
 namespace ttnn::operations::experimental::minimal_matmul::detail {
 

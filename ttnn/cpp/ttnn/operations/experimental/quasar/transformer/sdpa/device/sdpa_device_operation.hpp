@@ -10,8 +10,8 @@
 #include "ttnn/operations/core/core.hpp"
 #include <optional>
 #include <variant>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include "ttnn/metal_v2_artifacts.hpp"
 
 namespace ttnn::prim::qsr {

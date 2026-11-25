@@ -7,15 +7,15 @@
 #include "dispatch/kernel_config/fd_kernel.hpp"
 #include "fabric/fabric_host_utils.hpp"
 #include "fabric/fabric_context.hpp"
-#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include <bit>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/math.hpp>
-#include "tt_metal.hpp"
+#include <tt-metalium/utils/math.hpp>
+#include "tt-metalium/execution/slow_dispatch.hpp"
 #include <tt-umd/types/core_coordinates.hpp>
 #include <algorithm>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 
 namespace tt::tt_metal {
 

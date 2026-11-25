@@ -17,14 +17,14 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include <unordered_map>
 
-#include <tt-metalium/program_cache.hpp>
+#include <tt-metalium/utils/program_cache.hpp>
 #include <tracy/Tracy.hpp>
 #include "tools/profiler/op_profiler_serialize.hpp"  // lightweight; heavy JSON lives in op_profiler_json.cpp
 #include <tt_stl/concepts.hpp>
 #include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/graph/graph_serialization.hpp"  // serialize_tracked_arg<T> definitions, used via track_function_start
 #include "ttnn/distributed/api.hpp"
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <tt-metalium/experimental/allocation_context.hpp>
 #include <tt-metalium/experimental/inspector.hpp>
 #include <tt-metalium/experimental/program_preparation.hpp>
@@ -493,9 +493,7 @@ ProgramCacheLookup look_up_program_cache(
     }
     // The cache key is the 64-bit hash plus an exact canonical encoding; a hash collision is
     // resolved by std::unordered_map's own operator== on the canonical part (issue #45821).
-    lookup.key.hash =
-        mesh_device_operation_t::compute_mesh_workload_hash(mesh_device, operation_attributes, tensor_args);
-    lookup.key.canonical = mesh_device_operation_t::compute_mesh_workload_canonical_key(
+    lookup.key = mesh_device_operation_t::compute_mesh_workload_cache_key(
         mesh_device,
         ttsl::get_type_name<typename mesh_device_operation_t::device_operation_t>(),
         operation_attributes,
@@ -554,6 +552,7 @@ void launch_operation_with_adapter(
     // Skip if operation should be skipped
     if constexpr (HasSkipLaunch<mesh_device_operation_t>) {
         if (mesh_device_operation_t::skip_launch(operation_attributes, tensor_args, tensor_return_value)) {
+            mesh_device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
             return;
         }
     }
@@ -607,6 +606,7 @@ void prepare_operation_with_adapter(
     ttnn::MeshDevice* mesh_device) {
     if constexpr (HasSkipLaunch<mesh_device_operation_t>) {
         if (mesh_device_operation_t::skip_launch(operation_attributes, tensor_args, tensor_return_value)) {
+            mesh_device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
             return;
         }
     }

@@ -11,8 +11,8 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
 
 #include "flat_routed_expert_device_operation_types.hpp"
 

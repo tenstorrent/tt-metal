@@ -28,7 +28,7 @@
 #include <vector>
 
 #include "random_parallel.hpp"
-#include "tt-metalium/bfloat16.hpp"
+#include "tt-metalium/data_formats/bfloat16.hpp"
 
 namespace ttml::core::sse {
 

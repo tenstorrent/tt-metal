@@ -10,7 +10,7 @@
 #include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_program_config_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "tt-metalium/experimental/prefetcher_pipe.hpp"
-#include "tt-metalium/global_circular_buffer.hpp"
+#include "tt-metalium/memory/cross_program/global_circular_buffer.hpp"
 #include "ttnn/prefetcher_pipe.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operation.hpp"  // for DEFAULT_OUTPUT_MEMORY_CONFIG
@@ -42,7 +42,7 @@ struct MatmulParams {
     // attributes so the op stays on the DEFAULT reflection-hash + canonical-key path.
     //
     // A custom compute_program_hash would return only a 64-bit value and, per
-    // mesh_device_operation_adapter.hpp::compute_mesh_workload_canonical_key, OPT THE OP OUT of
+    // mesh_device_operation_adapter.hpp::compute_mesh_workload_cache_key, OPT THE OP OUT of
     // attribute-level canonical-key collision resolution (the canonical key degrades to the
     // op-identity prefix) -- re-exposing exactly the #45821 hash-fold collision. Listing the
     // attributes here instead keeps the exact, collision-free canonical key.

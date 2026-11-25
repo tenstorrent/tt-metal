@@ -18,24 +18,24 @@
 #include <utility>
 #include <vector>
 #include <gtest/gtest.h>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include "tests/tt_metal/tt_metal/api/allocator/hybrid_allocator_fixture.hpp"
 #include <tt-metalium/experimental/per_core_allocation/allocator_state.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt-metalium/vocabulary/node_coord.hpp>
-#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
-#include <tt-metalium/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>
+#include <tt-metalium/memory/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/memory/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/memory/tensor/spec/memory_config/memory_config.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include "tests/tt_metal/tt_metal/common/device_fixture.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
@@ -660,6 +660,36 @@ TEST_F(PerCoreAllocationTest, DeviceBuffersShareMeshBufferUniqueId) {
     ASSERT_TRUE(single_device->unique_id().has_value());
     EXPECT_NE(*single_device->unique_id(), *mesh_buffer->unique_id());
     EXPECT_EQ(single_device->get_device_buffer(coord)->unique_id(), *single_device->unique_id());
+}
+
+// Frees a per-core MeshBuffer of a submesh after the submesh closed, and also after it was destroyed, while its parent
+// keeps the devices open. The free must still release the allocation on the devices, so that the parent can allocate
+// the same address again.
+TEST_F(PerCoreAllocationTest, ClosedSubmeshFreesPerCoreAllocationOnOpenParent) {
+    auto parent = this->devices_[0];
+    const CoreCoord core(0, 0);
+    ShardSpecBuffer shard_spec(CoreRangeSet(CoreRange(core)), {32, 32}, ShardOrientation::ROW_MAJOR, {32, 32}, {1, 1});
+    auto sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED);
+    per_core::set_per_core_allocation(sharding_args, true);
+    const distributed::DeviceLocalBufferConfig local_config{
+        .page_size = PAGE_SIZE, .buffer_type = BufferType::L1, .sharding_args = sharding_args};
+    const distributed::ReplicatedBufferConfig buffer_config{.size = PAGE_SIZE};
+    const distributed::MeshCoordinate coord(0, 0);
+
+    for (const bool destroy_submesh : {false, true}) {
+        SCOPED_TRACE(destroy_submesh ? "submesh destroyed" : "submesh closed");
+        auto submesh = parent->create_submesh(distributed::MeshShape(1, 1));
+        auto stale = distributed::MeshBuffer::create(buffer_config, local_config, submesh.get());
+        const DeviceAddr address = per_core::get_per_core_address(*stale, coord, core);
+        submesh->close();
+        if (destroy_submesh) {
+            submesh.reset();
+        }
+        stale.reset();
+
+        auto reallocated = distributed::MeshBuffer::create(buffer_config, local_config, parent.get());
+        EXPECT_EQ(per_core::get_per_core_address(*reallocated, coord, core), address);
+    }
 }
 
 using OccupiedRangesLockstepModeTest = MeshDeviceSingleCardBufferFixture;
