@@ -1202,6 +1202,21 @@ def test_worker_csv_keeps_every_chunk_of_a_module(tmp_path, worker_plugin):
         assert pd.read_csv(tmp_path / name)["x"].tolist() == [1, 2, 3]
 
 
+def test_worker_csv_of_a_code_position_keeps_only_its_rows(
+    tmp_path, worker_plugin, monkeypatch
+):
+    monkeypatch.setattr(TestConfig, "ARTEFACTS_DIR", tmp_path)
+    # stage 2 (LLK_CODE_SHIFTS) dumps the module once per position: a later position must not carry the earlier ones' rows
+    worker_plugin._dump_perf_report(MODULE, WORKER, _chunk_report([1]))
+    with worker_plugin._shift_output(4):
+        TestConfig.PERF_DATA_DIR.mkdir()
+        worker_plugin._dump_perf_report(MODULE, WORKER, _chunk_report([1]))
+        shifted = TestConfig.PERF_DATA_DIR / WORKER_CSV
+
+    assert pd.read_csv(tmp_path / WORKER_CSV)["x"].tolist() == [1]
+    assert pd.read_csv(shifted)["x"].tolist() == [1]
+
+
 def test_worker_csv_rejects_chunks_with_different_columns(tmp_path, worker_plugin):
     # the schema check covers every chunk of the module and fails before the CSV is rewritten
     worker_plugin._dump_perf_report(MODULE, WORKER, _chunk_report([1]))

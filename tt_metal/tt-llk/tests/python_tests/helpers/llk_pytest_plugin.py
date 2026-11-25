@@ -1321,8 +1321,11 @@ def _dump_perf_report(test_module: str, worker_id: str, report: PerfReport):
     """Write this worker's raw and post-processed CSVs of the module, over every chunk of it the worker ran."""
     # More than one schema means two unrelated tests/ops share this module (split them into separate files) or one
     # test emits inconsistent columns across its sweep.
+    # keyed by the output directory too: each code position (LLK_CODE_SHIFTS) writes its own report
     merged = _module_report(
-        f"{test_module}.{worker_id}", report, f"{test_module} (worker {worker_id})"
+        f"{TestConfig.PERF_DATA_DIR}/{test_module}.{worker_id}",
+        report,
+        f"{test_module} (worker {worker_id})",
     )
     merged.dump_csv(TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.csv")
 
