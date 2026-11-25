@@ -25,7 +25,7 @@ namespace tensor_accessor {
 using ::get_tile_shape;
 }  // namespace tensor_accessor
 
-#if defined(ARCH_BLACKHOLE) && defined(COMPILE_FOR_TRISC)
+#if (defined(ARCH_BLACKHOLE) || defined(ARCH_QUASAR)) && defined(COMPILE_FOR_TRISC)
 
 #include <type_traits>
 
@@ -64,4 +64,4 @@ struct LLKOperandExtractor {
 template <const auto& Token>
 using LLKOperandFrom = typename binding_details::LLKOperandExtractor<Token>::OperandT;
 
-#endif  // defined(ARCH_BLACKHOLE) && defined(COMPILE_FOR_TRISC)
+#endif  // (defined(ARCH_BLACKHOLE) || defined(ARCH_QUASAR)) && defined(COMPILE_FOR_TRISC)
