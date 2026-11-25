@@ -11,7 +11,7 @@ from fuser.fuser_config import GlobalConfig
 from fuser.golden.unpack.matmul import unpack_matmul_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
-from fuser.operand import BfdResource
+from fuser.operand import BfdId
 
 
 class MatmulUnpacker(Unpacker):
@@ -60,11 +60,9 @@ class MatmulUnpacker(Unpacker):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        bfd_program = compute_unit.src_a.bfd_alloc_and_program(
-            BfdResource.UNP1, result_name="bfd_a"
-        ) + compute_unit.src_b.bfd_alloc_and_program(
-            BfdResource.UNP0, result_name="bfd_b"
-        )
+        bfd_program = compute_unit.src_a.program_bfd(
+            BfdId.UNP1, result_name="bfd_a"
+        ) + compute_unit.src_b.program_bfd(BfdId.UNP0, result_name="bfd_b")
         src_b_shape = compute_unit.src_a.tile_shape.cpp_value
         src_a_shape = compute_unit.src_b.tile_shape.cpp_value
         rt_dim = block.block_rows

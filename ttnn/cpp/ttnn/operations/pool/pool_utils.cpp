@@ -109,6 +109,10 @@ std::optional<ParallelConfig> determine_valid_parallel_config(
 }
 
 DataType get_index_data_type(uint32_t in_h, uint32_t in_w) {
+    // Quasar has no UInt16/UInt32 formats and its SFPU integer add is Int32-only.
+    if (tt::tt_metal::hal::get_arch() == tt::ARCH::QUASAR) {
+        return DataType::INT32;
+    }
     uint32_t hw = in_h * in_w;
     if (hw <= std::numeric_limits<uint16_t>::max()) {
         return DataType::UINT16;
@@ -130,13 +134,12 @@ FactoryParameters get_factory_parameters(
     bool return_indices,
     uint32_t in_h,
     uint32_t in_w,
-    const Layout& output_layout,
-    bool single_reader_stream) {
+    const Layout& output_layout) {
     uint32_t multi_buffering_factor = 2;
-    bool split_reader = !single_reader_stream;
-    TT_FATAL((split_reader && return_indices) || !return_indices, "split_reader must be true for MPWI");
     const bool is_quasar = tt::tt_metal::hal::get_arch() == tt::ARCH::QUASAR;
-    TT_FATAL(!(is_quasar && split_reader), "split reader is not supported on Quasar");
+    // Quasar has no split reader: its MPWI reader0/reader1 pair is an input producer plus a writer
+    // sharing one input CB, and non-MPWI uses one multi-threaded reader.
+    const bool split_reader = !is_quasar;
     // SPMD threads per cluster: symmetric STRIDED pairs reader thread i with compute thread i into
     // private (DM, NEO) lanes; Gen1 stays 1. Any per-core stick count is legal — the reader deals
     // sticks round-robin and each compute lane derives its own share, so remainders just shorten
@@ -386,9 +389,7 @@ pool_op_l1_usage calculate_L1_usage(
         return_indices,
         in_h,
         in_w,
-        output_layout,
-        // Quasar runs a single reader stream (split reader is unsupported there); mirror the factory.
-        /*single_reader_stream=*/tt::tt_metal::hal::get_arch() == tt::ARCH::QUASAR);
+        output_layout);
 
     bool one_scalar_per_core = is_pool_op_one_scalar_per_core(
         pool_type, ceil_mode, ceil_pad_h, ceil_pad_w, count_include_pad, pad_h, pad_w, divisor_override);

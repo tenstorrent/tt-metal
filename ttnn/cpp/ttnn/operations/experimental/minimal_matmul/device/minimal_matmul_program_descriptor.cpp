@@ -860,7 +860,6 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
         device->arch(), num_cores, compute_defines, ttnn::get_throttle_level(compute_kernel_config));
 
     auto compute_hw = to_compute_hardware_config(compute_kernel_config);
-    compute_hw.double_buffer_dest = true;
     if (fp32_dest_acc_en) {
         // Metal 2.0 requires an explicit unpack mode for Float32 DFBs when enable_32_bit_dest is set.
         const std::vector<std::pair<DFBSpecName, tt::DataFormat>> compute_consumed{

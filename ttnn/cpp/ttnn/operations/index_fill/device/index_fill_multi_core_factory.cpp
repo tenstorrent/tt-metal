@@ -4,9 +4,10 @@
 
 #include "index_fill_device_operation.hpp"
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::index_fill {
@@ -145,28 +146,26 @@ OutputWriteArgs output_write_args(
     TT_THROW("Index fill: Unknown output write mode");
 }
 
-CBDescriptor make_cb(
-    CBIndex cb_id, uint32_t total_size, DataFormat data_format, uint32_t page_size, const CoreRangeSet& cores) {
-    return CBDescriptor{
-        .total_size = total_size,
-        .core_ranges = cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = cb_id,
-            .data_format = data_format,
-            .page_size = page_size,
-        }}},
-    };
-}
-
 }  // namespace
 
-tt::tt_metal::ProgramDescriptor IndexFillOperation::create_descriptor(
+ttnn::device_operation::ProgramArtifacts IndexFillOperation::IndexFillProgramFactory::create_program_artifacts(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     const ttnn::Tensor& index = tensor_args.index;
     const ttnn::Tensor& input = tensor_args.input;
     uint32_t dim = operation_attributes.dim;
+
+    // Program-scope resource names, declared function-local so the unity build cannot collide them with
+    // other ops' identically named constants.
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const DFBSpecName SRC{"src"};
+    const DFBSpecName INDEX{"index"};
+    const ScratchpadSpecName FILL{"fill"};
+    const TensorParamName INPUT{"input"};
+    const TensorParamName INDEX_TENSOR{"index"};
+    const TensorParamName OUTPUT{"output"};
 
     const auto input_shape = input.padded_shape();
     const auto n = input_shape.rank();
@@ -193,43 +192,87 @@ tt::tt_metal::ProgramDescriptor IndexFillOperation::create_descriptor(
     const WorkSplit split = split_rows_across_cores(input, num_rows);
     const CoreRangeSet& all_cores = split.all_cores;
 
-    ProgramDescriptor desc;
-
-    // Create circular buffers
+    // Create dataflow buffers
     auto input_dataformat = datatype_to_dataformat_converter(input.dtype());
-    auto index_dataformat = datatype_to_dataformat_converter(index.dtype());
 
     uint32_t input_page_size = input.mesh_buffer().aligned_page_size();
     uint32_t index_total_size = index.mesh_buffer().aligned_size();
 
-    uint32_t input_cb_depth = 2;
+    uint32_t input_dfb_depth = 2;
 
-    // Pages from the input tensor
-    desc.cbs.push_back(
-        make_cb(CBIndex::c_0, input_cb_depth * input_page_size, input_dataformat, input_page_size, all_cores));
-    // The entire index tensor
-    desc.cbs.push_back(make_cb(CBIndex::c_1, index_total_size, index_dataformat, index_total_size, all_cores));
-    // An input page filled with fill_value
-    desc.cbs.push_back(make_cb(CBIndex::c_2, input_page_size, input_dataformat, input_page_size, all_cores));
+    Group<DataflowBufferSpec> dataflow_buffers = {
+        // Pages from the input tensor
+        DataflowBufferSpec{
+            .unique_id = SRC,
+            .entry_size = input_page_size,
+            .num_entries = input_dfb_depth,
+            .data_format_metadata = input_dataformat,
+        },
+        // The entire index tensor. No data format: only the DM kernels read it, and Quasar has no UInt32 format.
+        DataflowBufferSpec{
+            .unique_id = INDEX,
+            .entry_size = index_total_size,
+            .num_entries = 1,
+        },
+    };
+
+    // An input page filled with fill_value. Only the writer touches it, so it is a scratchpad rather than a DFB.
+    ScratchpadSpec fill_scratchpad{
+        .unique_id = FILL,
+        .size_per_node = input_page_size,
+    };
 
     const std::string kernels_dir_path = "ttnn/cpp/ttnn/operations/index_fill/device/kernels/";
 
     // Create reader kernel
-    std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)input_page_size,          // input tensor page size
-        (std::uint32_t)index_total_size,         // index tensor total size
-        (std::uint32_t)index.physical_volume(),  // num elements in index array
-        (std::uint32_t)(dim == n - 1)            // is last dim
+    KernelSpec::CompileTimeArgs reader_compile_time_args = {
+        {"input_page_size", (std::uint32_t)input_page_size},     // input tensor page size
+        {"index_total_size", (std::uint32_t)index_total_size},   // index tensor total size
+        {"index_size", (std::uint32_t)index.physical_volume()},  // num elements in index array
+        {"is_last_dim", (std::uint32_t)(dim == n - 1)},          // is last dim
     };
-    tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(index.buffer()).append_to(reader_compile_time_args);
 
-    KernelDescriptor reader_desc{
-        .kernel_source = kernels_dir_path + "reader_index_fill.cpp",
-        .source_type = KernelDescriptor::SourceType::FILE_PATH,
-        .core_ranges = all_cores,
+    KernelSpec reader_spec{
+        .unique_id = READER,
+        .source = kernels_dir_path + "reader_index_fill.cpp",
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = SRC,
+                    .accessor_name = "src",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = INDEX,
+                    .accessor_name = "index",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{
+                    .tensor_parameter_name = INPUT,
+                    .accessor_name = "input",
+                },
+                TensorBinding{
+                    .tensor_parameter_name = INDEX_TENSOR,
+                    .accessor_name = "index",
+                },
+            },
         .compile_time_args = std::move(reader_compile_time_args),
-        .config = ReaderConfigDescriptor{},
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names =
+                    {
+                        "start_row",
+                        "end_row",
+                        "num_rows_in_dim",
+                        "dim_size",
+                        "col_shard_id",
+                        "row_page_stride",
+                    },
+            },
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     const auto out_mem_layout = output.memory_config().memory_layout();
@@ -252,60 +295,141 @@ tt::tt_metal::ProgramDescriptor IndexFillOperation::create_descriptor(
     }
 
     // Create writer kernel
-    std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)input_page_size,          // CB page size (= input shard row size)
-        (std::uint32_t)index.physical_volume(),  // num elements in index array
-        (std::uint32_t)input.element_size(),     // element size in bytes
-        (std::uint32_t)(dim == n - 1)            // is last dim
+    KernelSpec::CompileTimeArgs writer_compile_time_args = {
+        {"in_page_size", (std::uint32_t)input_page_size},        // DFB page size (= input shard row size)
+        {"index_size", (std::uint32_t)index.physical_volume()},  // num elements in index array
+        {"elem_size", (std::uint32_t)input.element_size()},      // element size in bytes
+        {"is_last_dim", (std::uint32_t)(dim == n - 1)},          // is last dim
     };
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
-    KernelDescriptor writer_desc{
-        .kernel_source = kernels_dir_path + "writer_index_fill.cpp",
-        .source_type = KernelDescriptor::SourceType::FILE_PATH,
-        .core_ranges = all_cores,
+    KernelSpec writer_spec{
+        .unique_id = WRITER,
+        .source = kernels_dir_path + "writer_index_fill.cpp",
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = SRC,
+                    .accessor_name = "src",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = INDEX,
+                    .accessor_name = "index",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+            },
+        .scratchpad_bindings =
+            {
+                ScratchpadBinding{
+                    .scratchpad_spec_name = FILL,
+                    .accessor_name = "fill",
+                },
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{
+                    .tensor_parameter_name = OUTPUT,
+                    .accessor_name = "output",
+                },
+            },
         .compile_time_args = std::move(writer_compile_time_args),
-        .config = WriterConfigDescriptor{},
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names =
+                    {
+                        "start_row",
+                        "end_row",
+                        "num_rows_in_dim",
+                        "dim_size",
+                        "fill_value",
+                        "in_col_shard_id",
+                        "out_col_shard_id",
+                        "out_row_page_stride",
+                        "out_col_byte_offset",
+                        "out_num_col_shards",
+                        "out_write_size",
+                    },
+            },
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
+    KernelRunArgs reader_run_args{.kernel = READER};
+    KernelRunArgs writer_run_args{.kernel = WRITER};
     for (const CoreWork& work : split.cores) {
-        reader_desc.emplace_runtime_args(
+        AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values,
             work.core,
             {
-                input.buffer(),        // input tensor address (binding)
-                index.buffer(),        // index tensor address (binding)
-                work.start_row,        // start row
-                work.end_row,          // end row
-                num_rows_in_dim,       // num rows in dim
-                dim_size,              // dim size
-                work.col_shard_id,     // column shard index
-                work.row_page_stride,  // page stride across rows
+                {"start_row", work.start_row},              // start row
+                {"end_row", work.end_row},                  // end row
+                {"num_rows_in_dim", num_rows_in_dim},       // num rows in dim
+                {"dim_size", dim_size},                     // dim size
+                {"col_shard_id", work.col_shard_id},        // column shard index
+                {"row_page_stride", work.row_page_stride},  // page stride across rows
             });
 
         const OutputWriteArgs out = output_write_args(write_mode, work, out_KW, input_page_size);
-        writer_desc.emplace_runtime_args(
+        AddRuntimeArgsForNode(
+            writer_run_args.runtime_arg_values,
             work.core,
             {
-                output.buffer(),    // output tensor address (binding)
-                work.start_row,     // start row
-                work.end_row,       // end row
-                num_rows_in_dim,    // num rows in dim
-                dim_size,           // dim size
-                fill_value,         // fill value
-                work.col_shard_id,  // input col shard (for last-dim bounds check)
+                {"start_row", work.start_row},           // start row
+                {"end_row", work.end_row},               // end row
+                {"num_rows_in_dim", num_rows_in_dim},    // num rows in dim
+                {"dim_size", dim_size},                  // dim size
+                {"fill_value", fill_value},              // fill value
+                {"in_col_shard_id", work.col_shard_id},  // input col shard (for last-dim bounds check)
                 // --- output write params ---
-                out.col_shard_id,     // output col shard base index
-                out.row_page_stride,  // output page stride
-                out.col_byte_offset,  // byte offset within output page
-                out.num_col_shards,   // number of output writes per row
-                out_write_size,       // bytes per output write
+                {"out_col_shard_id", out.col_shard_id},        // output col shard base index
+                {"out_row_page_stride", out.row_page_stride},  // output page stride
+                {"out_col_byte_offset", out.col_byte_offset},  // byte offset within output page
+                {"out_num_col_shards", out.num_col_shards},    // number of output writes per row
+                {"out_write_size", out_write_size},            // bytes per output write
             });
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
+    ProgramSpec spec{
+        .name = "index_fill",
+        .kernels = {std::move(reader_spec), std::move(writer_spec)},
+        .dataflow_buffers = std::move(dataflow_buffers),
+        .scratchpads = {std::move(fill_scratchpad)},
+        .tensor_parameters =
+            {
+                TensorParameter{
+                    .unique_id = INPUT,
+                    .spec = input.mesh_tensor().tensor_spec(),
+                },
+                TensorParameter{
+                    .unique_id = INDEX_TENSOR,
+                    .spec = index.mesh_tensor().tensor_spec(),
+                },
+                TensorParameter{
+                    .unique_id = OUTPUT,
+                    .spec = output.mesh_tensor().tensor_spec(),
+                },
+            },
+        .work_units =
+            {
+                WorkUnitSpec{
+                    .name = "main",
+                    .kernels = {READER, WRITER},
+                    .target_nodes = all_cores,
+                },
+            },
+    };
 
-    return desc;
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args.reserve(2);
+    run_args.kernel_run_args.push_back(std::move(reader_run_args));
+    run_args.kernel_run_args.push_back(std::move(writer_run_args));
+    run_args.tensor_args.emplace(INPUT, input.mesh_tensor());
+    run_args.tensor_args.emplace(INDEX_TENSOR, index.mesh_tensor());
+    run_args.tensor_args.emplace(OUTPUT, output.mesh_tensor());
+
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec),
+        .run_params = std::move(run_args),
+    };
 }
 
 }  // namespace ttnn::operations::index_fill

@@ -10,7 +10,7 @@ limits, image decoding and batching belong to the service; this module enforces 
 `prepare`.
 
 The encoder runs on a (1, 4) ring of Blackhole chips, since attention is ring attention. Every image is padded to
-`max_patches` (65,536) patch rows and `logical_n` is a device tensor, so the one trace captured in `load` serves every
+`max_patches` (67,584) patch rows and `logical_n` is a device tensor, so the one trace captured in `load` serves every
 image size.
 
 ttnn is imported only where the chips are used, in `device_params` and `load`: `prepare`, `expansion` and
@@ -160,8 +160,8 @@ class KimiK3Media:
         """Resize and pad one image on the CPU as HF's processor does, bit for bit (`tt/image_prep.py:resize_image`).
         encode does the rest of HF's processing (normalize, patchify), so the item stays uint8 and pickles small.
 
-        media: non-empty uint8 RGB [height, width, 3]. An image whose grid is over 65,536 patches or 512 patches a
-        side raises ValueError: it is rejected, never shrunk.
+        media: non-empty uint8 RGB [height, width, 3], any size: the largest grid HF's resize makes (67,320
+        patches) fits the device's 67,584 rows.
         """
         if kind not in self.placeholder_token_ids:
             raise ValueError(f"Kimi-K3 does not accept {kind}")

@@ -30,6 +30,7 @@ from ....pipelines.minimax_h3.pipeline_minimax_h3 import (
     _PRESETS_BH,
     _PRESETS_WH,
     MiniMaxH3Pipeline,
+    MiniMaxH3Residency,
     _DenoisePath,
     _requested_audio_t_factor,
     _requested_dynamic_length,
@@ -154,7 +155,8 @@ def test_requested_dynamic_length_precedence(monkeypatch, expect_error):
 def _denoise_path(preset, *, coresident=None, **kwargs):
     """(trace_denoise, bucket_denoise, dynamic_length) for the kwargs given; the rest default to None."""
     kwargs = dict(trace_denoise=None, bucket_denoise=None, bucket_ladder=None, dynamic_length=None) | kwargs
-    coresident = preset.get("coresident", True) if coresident is None else coresident
+    if coresident is None:
+        coresident = "t2va" in preset.get("residency", MiniMaxH3Residency()).coresident_tasks
     path = _resolve_denoise_path(preset, coresident=coresident, **kwargs)
     return path.trace_denoise, path.bucket_denoise, path.dynamic_length
 

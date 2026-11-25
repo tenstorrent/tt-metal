@@ -14,7 +14,7 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
-#include "core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 
 namespace tt::tt_fabric {
 

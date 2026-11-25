@@ -11,7 +11,7 @@
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include "hal.hpp"
+#include <tt-metalium/hal.hpp>
 #include "llrt/rtoptions.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "impl/program/program_impl.hpp"
