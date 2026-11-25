@@ -37,7 +37,8 @@ _MAX_SEQ = 56_320  # the demo context, 11 chunks of 5120
 _MARGIN = 0.05
 
 _BASELINES = [
-    pytest.param("flash", DeepSeekV4FlashConfig, 10_300_000, id="flash"),  # both chunks -> 5.15 ms a chunk
+    # flash: mean of CI runs 44869078419 and 45551006453 (bh_sc1_high_power), 8.92 and 8.89 ms.
+    pytest.param("flash", DeepSeekV4FlashConfig, 8_910_000, id="flash"),  # both chunks -> 4.46 ms a chunk
     pytest.param("pro", DeepSeekV4ProConfig, 18_420_000, id="pro"),  # both chunks -> 9.21 ms a chunk
 ]
 

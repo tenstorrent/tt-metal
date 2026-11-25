@@ -297,57 +297,58 @@ MISTRAL4_UNTRACED_MAX_OUT_OF_BAND = 1
 # is armed; other parametrizations have no key and stay record-only. Values are per-chunk medians
 # from a CI run, not a galaxy box.
 MISTRAL4_TRACED_BASELINE_CHUNK_TIMES_S: dict[tuple[int, int, int], list[float]] = {
-    # Cut on bh_sc1_high_power (run 40610708699 / job 122574403753), with the routed expert overlapped with
-    # combine_fabric2d.
+    # Re-cut on bh_sc1_high_power (run 45551006453 / job 139366590947), 4-8% under the previous cut from run
+    # 40610708699 / job 122574403753, with the routed expert overlapped with combine_fabric2d.
     # On plain bh_sc1 the same rows split into two clusters 1.5x apart depending on the box.
     (36, 20, 10): [
-        0.076,
-        0.081,
-        0.086,
-        0.092,
+        0.070,
+        0.075,
+        0.080,
+        0.087,
+        0.091,
         0.097,
-        0.102,
-        0.110,
-        0.113,
+        0.104,
+        0.108,
+        0.112,
         0.118,
-        0.124,
-        0.131,
+        0.125,
+        0.126,
         0.132,
-        0.138,
-        0.143,
+        0.137,
+        0.142,
         0.148,
-        0.154,
+        0.152,
         0.159,
-        0.166,
-        0.170,
-        0.175,
+        0.164,
+        0.169,
     ],
 }
 MISTRAL4_UNTRACED_BASELINE_CHUNK_TIMES_S: dict[tuple[int, int, int], list[float]] = {
-    # Cut on bh_sc1_high_power (run 41067008100 / job 124125611317), with the routed expert overlapped
-    # with combine_fabric2d. Host-dispatch bound and flat with depth, so this row catches an
-    # eager-dispatch regression and cannot see MLA.
+    # Re-cut on bh_sc1_high_power (run 45551006453 / job 139366590947; run 44869078419 / job 136742508220
+    # measured the same ~0.235 s), ~12% under the previous cut from run 41067008100 / job 124125611317, with
+    # the routed expert overlapped with combine_fabric2d. Host-dispatch bound and flat with depth, so this row
+    # catches an eager-dispatch regression and cannot see MLA.
     (36, 20, 10): [
-        0.266,
-        0.266,
-        0.263,
-        0.263,
-        0.264,
-        0.264,
-        0.260,
-        0.264,
-        0.259,
-        0.261,
-        0.264,
-        0.266,
-        0.263,
-        0.264,
-        0.261,
-        0.262,
-        0.263,
-        0.260,
-        0.260,
-        0.261,
+        0.230,
+        0.236,
+        0.234,
+        0.237,
+        0.236,
+        0.238,
+        0.232,
+        0.232,
+        0.232,
+        0.231,
+        0.231,
+        0.232,
+        0.234,
+        0.233,
+        0.232,
+        0.231,
+        0.231,
+        0.233,
+        0.231,
+        0.232,
     ],
 }
 
