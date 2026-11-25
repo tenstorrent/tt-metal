@@ -20,7 +20,7 @@
 #include <thread>
 
 #include "tools/scaleout/validation/utils/ethernet_link_metrics_serialization.hpp"
-#include "tools/scaleout/validation/utils/ethernet_link_api.hpp"
+#include "tt_metal/fabric/ethernet_link_reset.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include <tt-metalium/hal.hpp>
@@ -1517,6 +1517,18 @@ void log_unretrainable_channels(
         "Unretrainable channels (" + std::to_string(channels.size()) + " endpoints) written to: " + yaml_path.string());
 }
 
+namespace {
+
+// Collective: every rank must call this, see tt::tt_fabric::retrain_ethernet_links.
+bool retrain_links(const std::vector<tt::tt_fabric::EthLinkEndpoint>& endpoints) {
+    auto& context = tt::tt_metal::MetalContext::instance();
+    return tt::tt_fabric::retrain_ethernet_links(
+               context.get_cluster(), context.hal(), context.global_distributed_context(), endpoints)
+        .empty();
+}
+
+}  // namespace
+
 bool reset_local_ethernet_links(
     const PhysicalSystemDescriptor& physical_system_descriptor, const tt::tt_metal::AsicTopology& asic_topology) {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
@@ -1527,7 +1539,7 @@ bool reset_local_ethernet_links(
     }
 
     std::unordered_map<uint64_t, std::set<uint8_t>> reset_cores;
-    std::vector<ResetLink> links_to_reset;
+    std::vector<tt::tt_fabric::EthLinkEndpoint> links_to_reset;
 
     // Collect all links to reset
     for (const auto& [asic_id, asic_connections] : asic_topology) {
@@ -1575,7 +1587,7 @@ bool reset_local_ethernet_links(
     }
 
     // Perform resets on all links in vector
-    return send_reset_msg_to_links(links_to_reset);
+    return retrain_links(links_to_reset);
 }
 
 void get_cross_node_ethernet_links_to_reset(
@@ -1630,7 +1642,7 @@ void get_cross_node_ethernet_links_to_reset(
     forward_link_reset_metadata_from_controller(ordered_exit_nodes, cross_node_links_to_reset);
 }
 
-std::vector<ResetLink> build_cross_node_reset_links(
+std::vector<tt::tt_fabric::EthLinkEndpoint> build_cross_node_reset_links(
     const PhysicalSystemDescriptor& physical_system_descriptor,
     const std::vector<EthChannelIdentifier>& cross_node_links) {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
@@ -1640,7 +1652,7 @@ std::vector<ResetLink> build_cross_node_reset_links(
         asic_id_to_chip_id[asic_id] = chip_id;
     }
 
-    std::vector<ResetLink> reset_links;
+    std::vector<tt::tt_fabric::EthLinkEndpoint> reset_links;
     reset_links.reserve(cross_node_links.size());
     for (const auto& link : cross_node_links) {
         const auto chip_id = asic_id_to_chip_id.at(*link.asic_id);
@@ -1660,7 +1672,7 @@ bool reset_cross_node_ethernet_links(
     const PhysicalSystemDescriptor& physical_system_descriptor,
     const std::vector<EthChannelIdentifier>& cross_node_links_to_reset) {
     const bool reset_ok =
-        send_reset_msg_to_links(build_cross_node_reset_links(physical_system_descriptor, cross_node_links_to_reset));
+        retrain_links(build_cross_node_reset_links(physical_system_descriptor, cross_node_links_to_reset));
 
     // Final barrier ensures all hosts have completed their cross-node ethernet link resets before proceeding
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
@@ -1688,8 +1700,9 @@ bool bring_down_cross_host_ethernet_ports(
         tt::LogDistributed, "Bringing down {} local cross-host Ethernet endpoints", local_cross_host_endpoints.size());
     const auto links = build_cross_node_reset_links(physical_system_descriptor, local_cross_host_endpoints);
     // A killed workload can leave fabric routers on ERISC0, and they never service the port-down message.
-    return_links_to_base_firmware(links);
-    const auto failed_links = send_port_down_msg_to_links(links);
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    tt::tt_fabric::return_links_to_base_firmware(cluster, hal, links);
+    const auto failed_links = tt::tt_fabric::send_port_down_msg_to_links(cluster, hal, links);
     if (!failed_links.empty()) {
         log_error(
             tt::LogDistributed,
