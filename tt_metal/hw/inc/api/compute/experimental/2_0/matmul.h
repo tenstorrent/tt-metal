@@ -116,7 +116,8 @@ ALWI void matmul_tiles(
  * in0_tile_index + r * kt_dim (r < rt_dim), in1 tiles in1_tile_index + c (c < ct_dim). For a full
  * C[rt, ct] = in0[rt, kt] x in1[kt, ct] call it for k < kt_dim with in0_tile_index = k, in1_tile_index = k * ct_dim
  * inside one section. Quasar: idst must be 0 (the block LLK writes from Dest tile 0; LLK_ASSERT). The tiles inside
- * a block step are contiguous, so both operands must have stride_tiles == 1 unless the block is 1x1 (asserted).
+ * a block step are contiguous, so both operands must have stride_tiles == 1 unless the block is 1x1 (asserted):
+ * bind their DFBs BLOCKED or 1:1, since a multi-thread STRIDED binding gives stride_tiles > 1.
  * Pair with matmul_block_init of the same shape. No tails: the kernel picks a block that divides the output.
  *
  * | Param Type | Name                            | Description                               | Type       | Valid Range                     | Required |

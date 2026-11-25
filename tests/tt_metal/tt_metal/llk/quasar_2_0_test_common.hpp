@@ -6,7 +6,7 @@
 // fed by one DRAM reader per input DFB and drained by one DRAM writer per output DFB, all 1 producer x 1 consumer,
 // Float16_b 32x32 tiles (Float32 with ProgramIo::fp32_l1; per-input FPU operand formats with ProgramIo::in_formats).
 // Outputs are pre-filled with a sentinel so a skipped section
-// shows as a wrong tile.
+// shows as a wrong tile. ProgramIo::threads / pattern / readers / writers set multi-thread DFB topologies.
 // ProgramIo::lta: no DM kernels and no DFBs; every input and output is a resident L1 tensor (one shard on the node)
 // bound to the compute kernel as tensor::in<i> / tensor::out<i>, read through LocalTensorAccessor::operand<>().
 // ProgramIo::sem (with lta, one input): a DM kernel reads in0 from DRAM into its L1 tensor, then signals the compute
@@ -134,12 +134,18 @@ struct ProgramIo {
     std::uint32_t fp32_in_mask = 0;  // input DFBs (bit i = in<i>) that are Float32 even without fp32_l1
     bool lta = false;  // operands are resident L1 tensors (LocalTensorAccessor), not DFBs fed by DM kernels
     bool sem = false;  // lta, but in0 is written by a DM kernel that signals compute through a semaphore
-    // DFB thread pattern: compute and writer threads, and the compute side's pattern on each in<i>. STRIDED: the
-    // readers run `threads` threads too, so the compute side's stride_tiles is `threads`. BLOCKED: the same, with
-    // blocks of `threads` tiles on in<i> and out<i>, so each STRIDED DM op is one tile. ALL: one reader and every
-    // compute thread copies every tile, so out<i> holds each input tile `threads` times in a row.
+    // DFB topology: compute / reader / writer threads per DFB; the compute side's pattern on in<i> (pattern) and out<i>
+    // (out_pattern), the DM readers' on in<i>, the DM writers' on out<i>; every BLOCKED side's block. A DM call moves
+    // `block` DRAM pages on a BLOCKED side, one otherwise. An ALL writer writes each tile once per writer, in a row.
     std::uint8_t threads = 1;
+    std::uint8_t readers = 1;
+    std::uint8_t writers = 1;
+    std::uint32_t block = 1;
     DFBAccessPattern pattern = DFBAccessPattern::STRIDED;
+    DFBAccessPattern out_pattern = DFBAccessPattern::STRIDED;
+    DFBAccessPattern reader_pattern = DFBAccessPattern::STRIDED;
+    DFBAccessPattern writer_pattern = DFBAccessPattern::STRIDED;
+    std::uint32_t entry_tiles = 1;           // tiles per entry of every DFB (a DM call moves whole entries)
     std::vector<tt::DataFormat> in_formats;  // FPU operand L1 format of in<i> (overrides the above; Float32 -> Src)
 };
 
@@ -227,10 +233,24 @@ inline std::vector<Tiles> run_program(distributed::MeshDevice& mesh_device, cons
         compute.semaphore_bindings.push_back(
             {.semaphore_spec_name = SemaphoreSpecName{"ready"}, .accessor_name = "ready"});
     }
+    using P = DFBAccessPattern;
+    auto bind = [&](P p, bool producer, const std::string& dfb, const std::string& accessor) {
+        const DFBSpecName n{dfb};
+        if (p == P::BLOCKED) {
+            return producer ? BlockedProducerOf(n, accessor, io.block) : BlockedConsumerOf(n, accessor, io.block);
+        }
+        if (p == P::ALL) {
+            return AllConsumerOf(n, accessor);
+        }
+        return producer ? ProducerOf(n, accessor) : ConsumerOf(n, accessor);
+    };
+    auto set_pages_per_call = [&](KernelSpec& k, P p) {
+        k.compiler_options.defines["PAGES_PER_CALL"] = std::to_string(p == P::BLOCKED ? io.block : 1u);
+    };
     auto dfb_spec = [&](const std::string& name, std::uint32_t depth, tt::DataFormat f) {
         return DataflowBufferSpec{
             .unique_id = DFBSpecName{name},
-            .entry_size = 2 * tile_halves(f),
+            .entry_size = io.entry_tiles * 2 * tile_halves(f),
             .num_entries = depth,
             .data_format_metadata = f,
         };
@@ -272,20 +292,17 @@ inline std::vector<Tiles> run_program(distributed::MeshDevice& mesh_device, cons
             continue;
         }
         dfbs.push_back(dfb_spec(dfb, io.in_depth[i], fmt));
-        compute.dfb_bindings.push_back(
-            io.pattern == DFBAccessPattern::BLOCKED ? BlockedConsumerOf(DFBSpecName{dfb}, dfb, io.threads)
-            : io.pattern == DFBAccessPattern::ALL   ? AllConsumerOf(DFBSpecName{dfb}, dfb)
-                                                    : ConsumerOf(DFBSpecName{dfb}, dfb));
-        const std::uint8_t readers = io.pattern == DFBAccessPattern::ALL ? 1 : io.threads;
+        compute.dfb_bindings.push_back(bind(io.pattern, /*producer=*/false, dfb, dfb));
         const KernelSpecName name{"reader" + std::to_string(i)};
         kernels.push_back(KernelSpec{
             .unique_id = name,
             .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary_2_0.cpp",
-            .num_threads = readers,
-            .dfb_bindings = {ProducerOf(DFBSpecName{dfb}, "out")},
+            .num_threads = io.readers,
+            .dfb_bindings = {bind(io.reader_pattern, /*producer=*/true, dfb, "out")},
             .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
             .hw_config = DataMovementHardwareConfig{},
         });
+        set_pages_per_call(kernels.back(), io.reader_pattern);
         names.push_back(name);
         in_bufs.push_back(make_buffer(std::max(tiles, 1u), fmt));  // 0 tiles: the reader reads nothing
         if (tiles != 0) {
@@ -297,8 +314,8 @@ inline std::vector<Tiles> run_program(distributed::MeshDevice& mesh_device, cons
                  node,
                  {{"src_addr", in_bufs.back()->address()},
                   {"src_bank_id", 0u},
-                  {"num_tiles", tiles / readers},
-                  {"dram_page_stride", 2 * tile_halves(fmt)}})});
+                  {"num_tiles", tiles / io.entry_tiles / io.readers},
+                  {"dram_page_stride", io.entry_tiles * 2 * tile_halves(fmt)}})});
     }
     for (std::size_t i = 0; i < io.out_tiles.size(); ++i) {
         const std::string dfb = "out" + std::to_string(i);
@@ -310,20 +327,21 @@ inline std::vector<Tiles> run_program(distributed::MeshDevice& mesh_device, cons
             continue;
         }
         dfbs.push_back(dfb_spec(dfb, io.out_depth[i], out_format));
-        compute.dfb_bindings.push_back(
-            io.pattern == DFBAccessPattern::BLOCKED ? BlockedProducerOf(DFBSpecName{dfb}, dfb, io.threads)
-                                                    : ProducerOf(DFBSpecName{dfb}, dfb));
+        compute.dfb_bindings.push_back(bind(io.out_pattern, /*producer=*/true, dfb, dfb));
         const KernelSpecName name{"writer" + std::to_string(i)};
         kernels.push_back(KernelSpec{
             .unique_id = name,
             .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary_2_0.cpp",
-            .num_threads = io.threads,
-            .dfb_bindings = {ConsumerOf(DFBSpecName{dfb}, "in")},
+            .num_threads = io.writers,
+            .dfb_bindings = {bind(io.writer_pattern, /*producer=*/false, dfb, "in")},
             .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
             .hw_config = DataMovementHardwareConfig{},
         });
+        set_pages_per_call(kernels.back(), io.writer_pattern);
         names.push_back(name);
-        const std::uint32_t buf_tiles = std::max(io.out_tiles[i], 1u);  // 0 output tiles: the writer reads nothing
+        const bool all_writers =
+            io.writer_pattern == P::ALL;  // each writer writes every tile: writers copies of out<i>
+        const std::uint32_t buf_tiles = std::max(io.out_tiles[i] * (all_writers ? io.writers : 1u), 1u);
         out_bufs.push_back(make_buffer(buf_tiles, out_format));
         distributed::EnqueueWriteMeshBuffer(
             cq, out_bufs.back(), pack32(Tiles(buf_tiles * tile_halves(out_format), SENTINEL)), /*blocking=*/true);
@@ -333,8 +351,8 @@ inline std::vector<Tiles> run_program(distributed::MeshDevice& mesh_device, cons
                  node,
                  {{"dst_addr", out_bufs.back()->address()},
                   {"dst_bank_id", 0u},
-                  {"num_tiles", io.out_tiles[i] / io.threads},
-                  {"dram_page_stride", 2 * tile_halves(out_format)}})});
+                  {"num_tiles", io.out_tiles[i] / io.entry_tiles / (all_writers ? 1u : io.writers)},
+                  {"dram_page_stride", io.entry_tiles * 2 * tile_halves(out_format)}})});
     }
     kernels.push_back(compute);
     names.push_back(compute.unique_id);

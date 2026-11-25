@@ -27,12 +27,19 @@ inline void llk_wait_tiles(const std::int32_t dfb_id, const std::uint32_t num_ti
         // Split: the block belongs to every counter, wait for each one's share.
         const std::uint32_t per_tc = num_tiles / local_dfb_interface.num_tcs_to_rr;
         for (std::uint8_t i = 0; i < local_dfb_interface.num_tcs_to_rr; i++) {
+            LLK_ASSERT(
+                dfb_window_fits_ring(local_dfb_interface, local_dfb_interface.tc_slots[i], per_tc),
+                "llk_wait_tiles: op straddles the DFB ring end");
             TT_WAIT_TILES(
                 ckernel::p_stall::STALL_UNPACK,
                 per_tc,
                 dfb::get_counter_id(local_dfb_interface.tc_slots[i].packed_tile_counter));
         }
     } else {
+        LLK_ASSERT(
+            dfb_window_fits_ring(
+                local_dfb_interface, local_dfb_interface.tc_slots[local_dfb_interface.tc_idx], num_tiles),
+            "llk_wait_tiles: op straddles the DFB ring end");
         std::uint32_t tc_id =
             dfb::get_counter_id(local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].packed_tile_counter);
         TT_WAIT_TILES(ckernel::p_stall::STALL_UNPACK, num_tiles, tc_id);
