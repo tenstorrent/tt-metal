@@ -16,7 +16,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, Optional
 
+import numpy as np
 import ttml
+import ttnn
 from ttml.common.utils import round_up_to_tile
 from ttml.modules import AbstractModuleBase, ColumnParallelLinear, Embedding, LinearLayer, ModuleList
 
@@ -92,11 +94,12 @@ class DeepSeek(AbstractModuleBase):
             self._validate_tp(config, tp_size)
             # The head splits the vocab across TP, so each rank's share must be whole tiles: a multiple of 32 * tp_size.
             self.padded_vocab_size = round_up_to_tile(config.vocab_size, 32 * tp_size)
+            # Not gathered: under TP, train.py and SFTTrainer use the vocab-parallel cross-entropy.
             self.head = ColumnParallelLinear(
                 config.dim,
                 self.padded_vocab_size,
                 has_bias=False,
-                gather_output=True,
+                gather_output=False,
                 axis_name="tp",
             )
         else:
@@ -110,6 +113,7 @@ class DeepSeek(AbstractModuleBase):
         self.blocks = ModuleList([DeepSeekBlock(layer_id, config, rope_params) for layer_id in range(config.n_layers)])
 
         self.norm = RMSNormLayer(config.dim)
+        self._tp_vocab_pad_bias: Optional[ttnn.Tensor] = None
 
     @staticmethod
     def _validate_tp(config: DeepSeekConfig, tp_size: int) -> None:
@@ -148,7 +152,8 @@ class DeepSeek(AbstractModuleBase):
                 forward(input, mask) model interface.
 
         Returns:
-            Logits [B, 1, S, vocab_size]
+            Logits [B, 1, S, vocab_size]. With ``use_tp``, vocab-sharded logits
+            [B, 1, S, padded_vocab_size / tp] per device, padded columns set to -1e4.
         """
 
         # `mask` is unused: MLA is causal-only and generates its causal mask on chip
@@ -165,8 +170,26 @@ class DeepSeek(AbstractModuleBase):
         x = self.norm(x)
         logits = self.head(x)
         if self.padded_vocab_size != self.config.vocab_size:
-            logits = SliceLastDim.apply(logits, self.config.vocab_size)
+            if self.config.use_tp:
+                # Sharded logits can't be sliced: push the padded columns to -1e4 so the
+                # vocab-parallel loss gives them zero probability and zero gradient.
+                logits = ttml.ops.binary.add(
+                    logits, self._vocab_pad_bias(logits.get_value(ttml.autograd.PreferredPrecision.NATIVE).dtype)
+                )
+            else:
+                logits = SliceLastDim.apply(logits, self.config.vocab_size)
         return logits
+
+    def _vocab_pad_bias(self, dtype: ttnn.DataType) -> ttml.autograd.Tensor:
+        """Additive [1, 1, 1, padded_vocab_size] bias in ``dtype``, vocab-sharded on "tp": -1e4 on padded columns."""
+        if self._tp_vocab_pad_bias is None or self._tp_vocab_pad_bias.dtype != dtype:
+            bias = np.zeros((1, 1, 1, self.padded_vocab_size), dtype=np.float32)
+            bias[..., self.config.vocab_size :] = -1e4
+            mapper = ttml.mesh().axis_mapper("tp", tdim=3)
+            self._tp_vocab_pad_bias = ttml.autograd.Tensor.from_numpy(bias, ttnn.Layout.TILE, dtype, mapper).get_value(
+                ttml.autograd.PreferredPrecision.NATIVE
+            )
+        return ttml.autograd.create_tensor(self._tp_vocab_pad_bias, requires_grad=False)
 
     def get_moe_layers(self):
         """Get all MoE layers for external load balance updates."""

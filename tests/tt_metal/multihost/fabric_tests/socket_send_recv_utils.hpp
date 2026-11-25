@@ -13,7 +13,7 @@
 #include <vector>
 #include <random>
 
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 

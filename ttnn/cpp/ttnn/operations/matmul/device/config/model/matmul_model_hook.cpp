@@ -17,8 +17,8 @@
 
 #include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 
 #include "ttnn/config.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -30,7 +30,7 @@
 #include "tt_stl/reflection.hpp"
 #include <tt_stl/assert.hpp>
 #include <tt_stl/indestructible.hpp>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 
 namespace ttnn::operations::matmul::model {
 

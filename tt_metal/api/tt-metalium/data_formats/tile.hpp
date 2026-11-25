@@ -9,8 +9,8 @@
 #include <ostream>
 #include <tuple>
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 
 namespace tt {
 enum class DataFormat : uint8_t;

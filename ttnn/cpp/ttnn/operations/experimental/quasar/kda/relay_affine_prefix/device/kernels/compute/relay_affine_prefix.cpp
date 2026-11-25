@@ -42,9 +42,11 @@ void kernel_main() {
         tile_regs_acquire();
         reconfig_data_format_srca(cb_ein_exact);
         copy_init(cb_ein_exact);
+        tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
         for (uint32_t r = 0; r < kt; ++r) {
             copy_tile(cb_ein_exact, j * kt + r, r);
         }
+        tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
         reconfig_data_format<SrcOrder::Reverse>(cb_e, cb_ein);
         matmul_block_init(cb_e, cb_ein, false, 1, kt, kt);
         for (uint32_t k = 0; k < kt; ++k) {

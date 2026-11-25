@@ -5,6 +5,11 @@
 #pragma once
 
 // DEPRECATED-FORWARDING-HEADER: <tt-metalium/work_split.hpp> moved to <tt-metalium/utils/work_split.hpp>.
-// This header only forwards to the new location; it is deprecated, with a warning and a removal date, in a follow-up change.
+// This forwarding header will be removed after 2027-03-05.
+#ifndef TT_METALIUM_SUPPRESS_DEPRECATED_HEADER_WARNINGS
+// NOLINTNEXTLINE(clang-diagnostic-#warnings,clang-diagnostic-#pragma-messages)
+#warning \
+    "<tt-metalium/work_split.hpp> is deprecated and will be removed after 2027-03-05; include <tt-metalium/utils/work_split.hpp> instead (define TT_METALIUM_SUPPRESS_DEPRECATED_HEADER_WARNINGS to silence this message)"
+#endif
 
 #include <tt-metalium/utils/work_split.hpp>  // IWYU pragma: export

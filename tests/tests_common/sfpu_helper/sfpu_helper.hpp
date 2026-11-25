@@ -13,7 +13,7 @@
 #include <random>
 #include <map>
 
-#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
 
 inline float exponential(float x) { return std::exp(x); }
 

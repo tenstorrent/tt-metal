@@ -31,7 +31,7 @@ while [[ "$#" -gt 0 ]]; do
 done
 
 # copy all files to all machines (pass user and hostfile)
-${TT_METAL_HOME}/tt-train/sources/examples/nano_gpt/3tier/all_machines_copy.sh --run --sync --user "$USER" --hostfile "$HOST_FILE"
+${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/all_machines_copy.sh --run --sync --user "$USER" --hostfile "$HOST_FILE"
 
 CMD="python3 ${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/fabric_minimal_example/example.py -c ${CONFIG_FILE}"
 # use tt-run to run the example script across all machines

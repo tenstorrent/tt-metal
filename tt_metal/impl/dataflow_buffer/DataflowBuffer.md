@@ -173,7 +173,7 @@ On WH/BH, Circular Buffers use **stream registers** for credits:
 | ----------- | -------------------------------------------------------------------------------------------------------- |
 | Model       | Typically **one stream register per CB**; CB id *is* the sync resource                                   |
 | Wormhole    | **32** CBs (TRISC SRAM limit)                                                                            |
-| Blackhole   | **64** CBs unlocked ([circular_buffer_constants.h](../../api/tt-metalium/circular_buffer_constants.h))   |
+| Blackhole   | **64** CBs unlocked ([circular_buffer_constants.h](../../api/tt-metalium/workload/legacy/circular_buffer_constants.h))   |
 | DFB goal    | Quasar DFBs should match BH’s **64**-buffer scale; today `NUM_DFBS` is still **32**                      |
 | Limitations | No multi-threaded access patterns, no remapper, no implicit-sync ISR path                                |
 

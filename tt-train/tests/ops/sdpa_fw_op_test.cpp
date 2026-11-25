@@ -11,8 +11,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include <ttnn/operations/reduction/generic/generic_reductions.hpp>
 #include <ttnn/tensor/shape/shape.hpp>
 #include <ttnn/tensor/tensor.hpp>

@@ -7,10 +7,11 @@
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/observability/profiler/device_profiler.hpp>
 #include <tt-metalium/experimental/profiler.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/profiler/profiler_paths.hpp"
 #include "impl/profiler/tt_metal_profiler.hpp"

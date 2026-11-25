@@ -8,9 +8,9 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
 #include <ttnn/global_semaphore.hpp>
-#include <tt-metalium/global_semaphore.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/workload_descriptor.hpp>
+#include <tt-metalium/memory/cross_program/global_semaphore.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
 
 namespace ttnn::operations::experimental::quasar::deepseek_prefill::combine_fabric2d {
 

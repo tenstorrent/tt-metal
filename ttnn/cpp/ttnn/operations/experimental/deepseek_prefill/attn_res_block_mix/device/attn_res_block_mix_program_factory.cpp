@@ -7,12 +7,12 @@
 #include <algorithm>
 #include <bit>
 
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/circular_buffer_constants.h>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_constants.h>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 

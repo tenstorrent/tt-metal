@@ -8,8 +8,8 @@
 
 #include "ttnn/device_operation.hpp"
 
-#include <tt-metalium/global_semaphore.hpp>
-#include <tt-metalium/workload_descriptor.hpp>
+#include <tt-metalium/memory/cross_program/global_semaphore.hpp>
+#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
 
 #include <utility>
 #include <vector>
