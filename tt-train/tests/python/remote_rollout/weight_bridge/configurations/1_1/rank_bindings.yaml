@@ -1,0 +1,20 @@
+# ThreadedWeightBridge transport test -- 1->1 shape (rank 0 sender, rank 1 receiver).
+#
+# Each P150 card is one PCIe device / one chip.
+#
+# !!! HARDWARE-SPECIFIC TEMPLATE !!!
+# Adjust TT_VISIBLE_DEVICES per machine.
+
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "0"
+  - rank: 1
+    mesh_id: 1
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "1"
+
+mesh_graph_desc_path: "configurations/1_1/mgd.textproto"

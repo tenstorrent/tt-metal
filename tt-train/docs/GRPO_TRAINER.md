@@ -130,6 +130,7 @@ backends are the keys of `ROLLOUT_BACKENDS`:
 |-------------------|--------|-----------------|
 | `"ttml_in_process_sync"` | `python script.py` | One process. `TTMLRolloutSampler` generates with the trainer's own model. |
 | `"ttt_remote_sync"` | `tt-run --rank-binding ... python script.py` | Rank 0 trains. Rank 1 generates with `TTTRolloutSampler` (tt-transformers, traced decode) behind `MPIRolloutServer`. |
+| `"ttt_remote_async"` | `tt-run --rank-binding ... python script.py` | Rank 0 trains on the batches rank 1 sends. Rank 1 generates and scores continuously with `TTTRolloutSampler` behind `AsyncRolloutServer`, using the newest weights it has received. |
 
 The user script is the same in both modes:
 
@@ -186,6 +187,52 @@ Rules and limitations of `ttt_remote_sync`:
   of a cross-rank exchange, prints the traceback and calls `os._exit(1)`.
   Cross-rank calls have no deadlines, so a stuck peer still hangs the other
   rank.
+
+In `ttt_remote_async` the ranks no longer take turns:
+
+- **Rank 0 (trainer)** builds an `AsyncRemoteRolloutBatchSource`. It pops scored
+  batches from a `RolloutQueue`, drops a batch whose weight version is more than
+  `max_staleness` optimizer steps behind the policy, and pushes the policy weights
+  through a `ThreadedWeightBridge` every `weight_sync_every` steps, as version `step`.
+- **Rank 1 (rollout)** also calls `dataset_func`. Its `AsyncRolloutServer` walks the
+  prompts in batches, wrapping around, installs the newest received weights before
+  each batch, generates, scores with the reward functions, and pushes the batch.
+  It waits only for the first weights and stops when rank 0 finishes.
+
+Rules and limitations of `ttt_remote_async`, on top of those of `ttt_remote_sync`:
+
+- **Rewards run on rank 1**, between generations. Reward functions with side
+  effects or state see rank 1's copy of the script. A reward function that
+  raises ends the job from rank 1 with `os._exit(1)`. In `ttt_remote_sync` the
+  reward functions run on rank 0, so the exception is raised there.
+- **Both meshes are opened with 2 command queues.**
+  On rank 0 the training thread copies the weights into staging pads on CQ0,
+  and the bridge thread reads the pads to host on CQ1. On rank 1 the bridge
+  thread writes the received weights on CQ1 while generation uses CQ0.
+- **Staleness is counted in optimizer steps**: the policy step minus the batch's
+  weight version. Each batch advances the step by `num_iterations`, so a batch
+  generated with the newest weights reaches staleness
+  `weight_sync_every - num_iterations` before the next push, and a batch
+  generated one push behind has staleness `weight_sync_every` or more.
+- **`GRPOConfig` requires `weight_sync_every % num_iterations == 0` and
+  `max_staleness >= weight_sync_every - num_iterations`**, and raises
+  `ValueError` otherwise. Rank 0 pushes only between batches, so the first rule
+  keeps the push cadence at `weight_sync_every` steps. With a lower
+  `max_staleness`, rank 0 drops the batches of the newest weights before it
+  reaches the next push, and both ranks wait for each other forever.
+- **Dropped batches don't shorten training.** They are reported as
+  `rollouts_dropped`, and rank 1 keeps generating until rank 0 has trained on
+  the planned number of batches. They change which prompts are trained on:
+  rank 0 never trains on the prompts of a dropped batch, and rank 1 wraps
+  around the dataset, so the prompts from its start are trained on again.
+- **A weight push waits while the previous push has not been consumed.** Rank 1
+  installs weights only between batches, so a push can wait up to one generation.
+  When the rollout queue stays full for 0.5 s, rank 1 drops its batch, installs the
+  newest weights and generates a new batch. It logs a warning the first time.
+  `rollouts_dropped` does not count these drops.
+- **Shutdown waits for rank 1.** Rank 1 checks for the end of training only between
+  batches. So a shutdown on rank 0 can wait for up to two rank 1 generations and one
+  weight transfer.
 
 ---
 
@@ -299,13 +346,14 @@ from ttml.trainers import GRPOConfig
 | `min_lr_rate` | `float \| None` | `None` | `lr_scheduler_kwargs={"min_lr_rate": ...}` | Final LR as a fraction of the base LR; required for `"cosine_with_min_lr"`, ignored otherwise. |
 | `use_clip_grad_norm` | `bool` | `False` | `max_grad_norm > 0` | Clip the gradient norm before `optimizer.step()`. TRL clips by default (`max_grad_norm=1.0`), so a ported config trains unclipped unless this is set. Raises in `_setup` when any parameter is sharded (FSDP/TP). |
 | `clip_grad_norm_max_norm` | `float` | `1.0` | `max_grad_norm` | Maximum gradient norm when `use_clip_grad_norm` is set. |
-| `rollout_backend` | `str` | — | *(no direct equivalent)* | Which sampler generates and where it runs: `"ttml_in_process_sync"` or `"ttt_remote_sync"`; see [Rollout modes](#rollout-modes). Required in `grpo_config`. |
-| `weight_sync_every` | `int` | `1` | *(no direct equivalent)* | `ttt_remote_sync` only: push the policy weights to the rollout rank at a generation-batch boundary once *N* optimizer steps have passed since the last push. |
-| `remote_rollout` | `RemoteRolloutConfig \| None` | `None` | *(no direct equivalent)* | Rollout rank settings, required for `ttt_remote_sync`. `get_grpo_config` reads it from the top-level `remote_rollout_config` YAML section: `mesh_shape`, `max_batch_size` (per tt-transformers model), `max_seq_len`, and optional `top_k` (default 32), `top_p` (default 1.0). |
+| `rollout_backend` | `str` | — | *(no direct equivalent)* | Which sampler generates and where it runs: `"ttml_in_process_sync"`, `"ttt_remote_sync"` or `"ttt_remote_async"`; see [Rollout modes](#rollout-modes). Required in `grpo_config`. |
+| `max_staleness` | `int` | `0` | *(no direct equivalent)* | `ttt_remote_async` only: drop a batch generated with weights more than this many optimizer steps older than the policy. Must be >= `weight_sync_every - num_iterations`. |
+| `weight_sync_every` | `int` | `1` | *(no direct equivalent)* | `ttt_remote_sync` and `ttt_remote_async`: push the policy weights to the rollout rank at a generation-batch boundary once *N* optimizer steps have passed since the last push. On `ttt_remote_async`, must be a multiple of `num_iterations`. |
+| `remote_rollout` | `RemoteRolloutConfig \| None` | `None` | *(no direct equivalent)* | Rollout rank settings, required for `ttt_remote_sync` and `ttt_remote_async`. `get_grpo_config` reads it from the top-level `remote_rollout_config` YAML section: `mesh_shape`, `max_batch_size` (per tt-transformers model), `max_seq_len`, and optional `top_k` (default 32), `top_p` (default 1.0), `rollout_queue_capacity` (`ttt_remote_async` only, default 2). |
 | `output_dir` | `str` | — | `output_dir` | Directory for logs, metrics CSV, and checkpoints. |
 | `checkpointing` | `bool` | — | *(use `save_steps`)* | Whether to save checkpoints during training. |
 | `checkpoint_interval` | `int` | — | *(use `save_steps`)* | Save a checkpoint every *N* optimizer steps (when `checkpointing=True`). |
-| `logging_steps` | `int` | — | `logging_steps` | Cadence (in optimizer steps) at which the built-in `GRPOMonitor` emits a CSV row / wandb log. All callbacks fire every step; metrics are accumulated every step and emitted every *N* steps as an interval-mean (except `min_completion_len`, `max_completion_len` and `logprob_mismatch_max`, `lr` where minimum, maximum, last value is emitted respectively). Set to `0` or negative to disable emission. |
+| `logging_steps` | `int` | — | `logging_steps` | Cadence (in optimizer steps) at which the built-in `GRPOMonitor` emits a CSV row / wandb log. All callbacks fire every step; metrics are accumulated every step and emitted every *N* steps as an interval-mean (except `min_completion_len`, `max_completion_len`, `logprob_mismatch_max` and `rollout_staleness_max`, `lr` where minimum, maximum, last value is emitted respectively). Set to `0` or negative to disable emission. |
 | `log_completions` | `bool` | `False` | `log_completions` | When `True`, the built-in [`GRPOMonitor`](#built-in-grpomonitor) prints a sample of `(prompt, completion, reward)` triples every logging step (and, if `report_to == "wandb"`, logs them as a `wandb.Table`). |
 | `num_completions_to_print` | `int` | `0` | `num_completions_to_print` | Upper bound on how many completions per step the monitor prints when `log_completions=True`. `0` disables the sample dump even when `log_completions` is set (a warning is emitted). |
 | `report_to` | `str` | `"none"` | `report_to` | Where the built-in monitor forwards scalar metrics and the optional completions table. Only `"none"` and `"wandb"` are accepted in this framework (TRL takes a list; here it must be a single string). When `"wandb"` is set, the built-in `GRPOMonitor` calls `wandb.init(...)` itself in `on_train_begin` (matching the TRL / `transformers` `WandbCallback` convention); `project` / `entity` / `mode` come from the `WANDB_PROJECT` / `WANDB_ENTITY` / `WANDB_MODE` env vars, and `name` from `run_name` below. If the caller already opened a wandb run before constructing the trainer, the monitor logs into it and leaves its lifecycle alone. |
@@ -414,7 +462,8 @@ before the next step runs). The columns are a fixed base set —
 ```
 step, reward_mean, reward_std, mean_completion_len, min_completion_len,
 max_completion_len, lr, step_time_s, generation_time_s, reward_time_s,
-rollout_wait_s, weight_sync_time_s, rollout_weight_version,
+rollout_wait_s, weight_sync_time_s, rollout_weight_version, rollouts_dropped,
+rollout_staleness_mean, rollout_staleness_max,
 logprob_mismatch_mean, logprob_mismatch_max, clip_frac
 ```
 
@@ -422,7 +471,11 @@ logprob_mismatch_mean, logprob_mismatch_max, clip_frac
 `rollout_wait_s` the trainer's wait for the batch; `weight_sync_time_s` the
 weight push before the step's batch was generated (including the version-0 push
 before step 1), 0 when there was none; `rollout_weight_version` is the weight
-version that generated the step's batch; `logprob_mismatch_mean` /
+version that generated the step's batch; `rollouts_dropped` is the number of
+stale batches that rank 0 dropped before the step's batch (only
+`ttt_remote_async` drops batches; later mini-epochs report 0);
+`rollout_staleness_mean` / `rollout_staleness_max` are the optimizer steps
+between the policy and that weight version; `logprob_mismatch_mean` /
 `logprob_mismatch_max` are `|log π − log π_old|` over completion tokens;
 `clip_frac` is the fraction of completion tokens whose clipped term is the
 minimum, so they get no gradient.)
@@ -455,7 +508,7 @@ and pushes every numeric scalar in `trainer.metrics` into constant-memory
 running stats. It only emits a CSV row / wandb log once every `logging_steps`
 steps, at which point each metric is aggregated as the interval-mean over the
 window, then the running stats are cleared. Two policy exceptions apply:
-`min_completion_len`, `max_completion_len` and `logprob_mismatch_max` are emitted as the min / max
+`min_completion_len`, `max_completion_len`, `logprob_mismatch_max` and `rollout_staleness_max` are emitted as the min / max
 across the window (a mean of per-step mins is meaningless), and `lr` is
 emitted as the current-step value (matching TRL's `_get_learning_rate`).
 Non-numeric payloads (`prompts` / `completions` / `rewards`) always snapshot
@@ -534,7 +587,7 @@ Two contracts are worth calling out:
 | Hook | Signature | When |
 |------|-----------|------|
 | `on_train_begin` | `(trainer)` | Before the first batch. |
-| `on_step_end` | `(trainer, step, **kwargs)` | Every optimizer step (matches the base `TrainerCallback.on_step_end` contract; not gated by `logging_steps`). Keyword args are the current step's `trainer.metrics`: `reward_mean`, `reward_std`, `mean_completion_len`, `min_completion_len`, `max_completion_len`, `lr`, `generation_time_s`, `reward_time_s`, `rollout_wait_s`, `weight_sync_time_s`, `logprob_mismatch_mean`, `logprob_mismatch_max`, `clip_frac`, and one `<CallbackClassName>_time_s` per non-monitor callback (accumulated for the current step across every hook fired so far — a callback later in the list sees the current-step total for every callback before it). `step_time_s` is only present for `GRPOMonitor`, which runs after the timer is sealed; other callbacks see `trainer.metrics` without it. When `log_completions=True`, truncated `prompts` / `completions` / `rewards` lists are also passed. The built-in `GRPOMonitor` accumulates these values across every step and only emits a CSV / wandb row every `logging_steps` steps (see [Built-in GRPOMonitor](#built-in-grpomonitor)). |
+| `on_step_end` | `(trainer, step, **kwargs)` | Every optimizer step (matches the base `TrainerCallback.on_step_end` contract; not gated by `logging_steps`). Keyword args are the current step's `trainer.metrics`: `reward_mean`, `reward_std`, `mean_completion_len`, `min_completion_len`, `max_completion_len`, `lr`, `generation_time_s`, `reward_time_s`, `rollout_wait_s`, `weight_sync_time_s`, `rollouts_dropped`, `rollout_staleness_mean`, `rollout_staleness_max`, `logprob_mismatch_mean`, `logprob_mismatch_max`, `clip_frac`, and one `<CallbackClassName>_time_s` per non-monitor callback (accumulated for the current step across every hook fired so far — a callback later in the list sees the current-step total for every callback before it). `step_time_s` is only present for `GRPOMonitor`, which runs after the timer is sealed; other callbacks see `trainer.metrics` without it. When `log_completions=True`, truncated `prompts` / `completions` / `rewards` lists are also passed. The built-in `GRPOMonitor` accumulates these values across every step and only emits a CSV / wandb row every `logging_steps` steps (see [Built-in GRPOMonitor](#built-in-grpomonitor)). |
 | `on_before_optimizer_step` | `(trainer)` | After gradient sync, before gradient clipping and `optimizer.step()`, so callbacks see unclipped gradients. |
 | `on_save` | `(trainer, step, path)` | After a checkpoint is saved. `path` is the checkpoint directory. |
 | `on_train_end` | `(trainer)` | After the final batch. |
