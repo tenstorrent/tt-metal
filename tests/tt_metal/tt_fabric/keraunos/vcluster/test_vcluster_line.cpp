@@ -5,7 +5,8 @@
 // The Keraunos line from a manifest: the topology and the link kinds come from the manifest
 // at TT_VCLUSTER_MANIFEST, and the descriptors in the environment must be the ones generated from it (env.emu on the
 // emulator, env.mock on Mock). Run with TT_METAL_SLOW_DISPATCH_MODE=1; skipped when TT_VCLUSTER_MANIFEST is unset. The
-// traffic, the verdict and the path proof (steps 5 and 6) are run_line_unicast()'s; this test adds steps 1 to 4.
+// traffic, the verdict and the path proof are run_line_unicast()'s; this test adds the manifest checks before the open
+// and the cluster and worker checks after it.
 
 #include <gtest/gtest.h>
 
@@ -51,7 +52,7 @@ const vc::Device& device_of_chip(const vc::Manifest& manifest, uint32_t fabric_c
     TT_THROW("the manifest has no device of fabric_chip {}", fabric_chip);
 }
 
-// Step 3: the opened cluster is the manifest's, and the failure names the first difference.
+// The opened cluster is the manifest's, and the failure names the first difference.
 void expect_cluster_is_manifest(const vc::Manifest& manifest, const YAML::Node& package) {
     const auto& control_plane = MetalContext::instance().get_control_plane();
     const auto& cluster = MetalContext::instance().get_cluster();
@@ -111,7 +112,7 @@ void expect_cluster_is_manifest(const vc::Manifest& manifest, const YAML::Node& 
     }
 }
 
-// Step 4: the manifest's idle slots on CCE1 are exactly CCE1 of the tile of the router that faces the line on the first
+// The manifest's idle slots on CCE1 are exactly CCE1 of the tile of the router that faces the line on the first
 // chip and on the last, where the line's two workers run.
 void expect_workers_are_the_lines(const vc::Manifest& manifest) {
     const Line line = line_ends();
@@ -148,7 +149,7 @@ TEST_F(VclusterLine, FromManifest) {
     }
     const std::filesystem::path package = vc::test::package_soc_desc();
 
-    // Step 1, before the devices open: the manifest loads and passes every row, with the package's facts (the
+    // Before the devices open: the manifest loads and passes every row, with the package's facts (the
     // generated per-chip descriptors each hold one chip's cores and cannot give them).
     const vc::Manifest manifest = vc::load_manifest(manifest_path);
     const auto findings = vc::check_manifest(manifest, vc::package_facts(package));
@@ -164,7 +165,8 @@ TEST_F(VclusterLine, FromManifest) {
     ASSERT_EQ(tt::tt_metal::GetNumAvailableDevices(), manifest.devices.size())
         << "the open chips are not the manifest's devices; export the generated env.emu or env.mock";
 
-    // Step 2, with steps 3 and 4 after the open and before any traffic; steps 5 and 6 follow in run_line_unicast().
+    // The open, with the cluster and worker checks after it and before any traffic; the traffic and its checks follow
+    // in run_line_unicast().
     bool checked_after_open = false;
     run_line_unicast(vc::noc_links(manifest), [&] {
         checked_after_open = true;
@@ -178,7 +180,7 @@ TEST_F(VclusterLine, FromManifest) {
         ADD_FAILURE() << "run_line_unicast() skipped off Mock with a manifest set";
     }
     if (!HasFatalFailure()) {
-        EXPECT_TRUE(checked_after_open) << "run_line_unicast() did not run steps 3 and 4";
+        EXPECT_TRUE(checked_after_open) << "run_line_unicast() did not run the checks after the open";
     }
 }
 
