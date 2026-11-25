@@ -43,7 +43,7 @@ public:
 
             // Configure parallelism context for CP (CP axis will be 0)
             ttml::autograd::ctx().initialize_parallelism_context(
-                {.enable_ddp = false, .enable_tp = true, .enable_cp = true});
+                {.enable_ddp = false, .enable_tp = true, .cp = ttml::autograd::ContextParallelConfig{}});
         }
     }
     static void TearDownTestSuite() {
@@ -70,7 +70,7 @@ protected:
             ttml::autograd::ctx().initialize_socket_manager(ttnn::distributed::SocketType::FABRIC);
             // A 1x2 mesh is a line, so CP takes its only non-trivial axis: cp_axis = 1, ring size 2.
             ttml::autograd::ctx().initialize_parallelism_context(
-                {.enable_ddp = false, .enable_tp = false, .enable_cp = true});
+                {.enable_ddp = false, .enable_tp = false, .cp = ttml::autograd::ContextParallelConfig{}});
         }
     }
 };

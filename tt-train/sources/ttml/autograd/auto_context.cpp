@@ -179,9 +179,11 @@ void AutoContext::initialize_socket_manager(ttnn::distributed::SocketType socket
 }
 
 ParallelismContext::ParallelismContext(
-    const ttnn::distributed::MeshDevice& mesh_device, const DistributedConfig& config) {
+    const ttnn::distributed::MeshDevice& mesh_device, const DistributedConfig& config) :
+    m_cp_config(config.cp.value_or(ContextParallelConfig{})) {
+    const bool enable_cp = config.cp.has_value();
     const uint32_t num_enabled_parallelisms =
-        (uint32_t)config.enable_ddp + (uint32_t)config.enable_cp + (uint32_t)config.enable_tp;
+        (uint32_t)config.enable_ddp + (uint32_t)enable_cp + (uint32_t)config.enable_tp;
     const auto& mesh_shape = mesh_device.shape();
 
     // Check if this is a line topology (one dimension is 1, e.g., [1, 32] or [32, 1])
@@ -196,7 +198,7 @@ ParallelismContext::ParallelismContext(
             mesh_shape,
             config.enable_ddp,
             config.enable_tp,
-            config.enable_cp);
+            enable_cp);
 
         // Find the non-trivial axis (the one with size > 1)
         uint32_t active_axis = 0;
@@ -211,7 +213,7 @@ ParallelismContext::ParallelismContext(
         if (config.enable_ddp) {
             m_ddp_axis = active_axis;
             m_num_ddp_devices = mesh_shape[active_axis];
-        } else if (config.enable_cp) {
+        } else if (enable_cp) {
             m_cp_axis = active_axis;
             m_num_cp_devices = mesh_shape[active_axis];
         } else if (config.enable_tp) {
@@ -233,7 +235,7 @@ ParallelismContext::ParallelismContext(
             m_ddp_axis = axis++;
             m_num_ddp_devices = mesh_shape[m_ddp_axis.value()];
         }
-        if (config.enable_cp && mesh_shape[axis] > 1U) {
+        if (enable_cp && mesh_shape[axis] > 1U) {
             m_cp_axis = axis++;
             m_num_cp_devices = mesh_shape[m_cp_axis.value()];
         }

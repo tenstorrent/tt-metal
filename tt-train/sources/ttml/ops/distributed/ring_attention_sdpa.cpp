@@ -132,10 +132,7 @@ autograd::TensorPtr ring_attention_sdpa(
     const autograd::TensorPtr& value,
     const std::optional<autograd::TensorPtr>& mask,
     const ttml::metal::AttentionMaskType mask_type,
-    const bool reuse_forward_kv_requested) {
-    const bool reuse_forward_kv = reuse_forward_kv_requested &&
-                                  autograd::ctx().get_gradient_mode() == autograd::GradMode::ENABLED &&
-                                  autograd::any_requires_grad(query, key, value);
+    const std::optional<bool> reuse_forward_kv_requested) {
     if (!autograd::ctx().is_parallelism_context_initialized() ||
         !autograd::ctx().get_parallelism_context().is_cp_enabled()) {
         return ttml::ops::scaled_dot_product_attention(query, key, value, mask);
@@ -144,6 +141,9 @@ autograd::TensorPtr ring_attention_sdpa(
     const auto& pctx = autograd::ctx().get_parallelism_context();
     const uint32_t cp_axis_value = pctx.get_cp_axis().value();
     const uint32_t ring_size = pctx.get_cp_size();
+    const bool reuse_forward_kv = reuse_forward_kv_requested.value_or(pctx.get_cp_config().reuse_forward_kv) &&
+                                  autograd::ctx().get_gradient_mode() == autograd::GradMode::ENABLED &&
+                                  autograd::any_requires_grad(query, key, value);
     const auto& query_tensor = query->get_value();
     auto* mesh_device = query_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Query tensor must be on a mesh device for ring attention");
